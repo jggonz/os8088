@@ -1,12 +1,16 @@
 ; WireArena's renderer (docs/plans/MULTIPLAYER-FPS-PLAN.md sections 4, 16).
 ;
-; 1. The arena's walls are one-sided segments in a host-built BSP
-;    (tools/arenagen.py), walked FRONT TO BACK: the near side of a node, its
-;    own segments, the far side. A segment facing away is dropped by one
-;    compare; one facing us has its two vertices transformed (two 32-bit adds
-;    each, off per-coordinate products made once a frame - the walls are
-;    axis-aligned) and projected (cached per vertex), is clipped only when a
-;    vertex is outside the view, and is then STEPPED across its columns.
+; 1. The arena's walls are the faces of boxes in a host-built BSP
+;    (tools/arenagen.py), walked FRONT TO BACK (wa_order: the list stands
+;    while the player stays in a cell of the tree's lines). A box is its
+;    SILHOUETTE - the two or three vertices of the faces seen from where the
+;    player stands (wa_sil) - tested against the view on those vertices, with
+;    a one-corner hint while it stays out (wa_render's walk). A vertex is two
+;    sums of per-coordinate products made when the view moves (wa_products -
+;    the walls are axis-aligned) and a column; a face with an end outside the
+;    view takes an end at the screen's edge in its place (wa_vend), and is
+;    then STEPPED across its columns. While the view stands, the products,
+;    the vertices and the columns all do.
 ; 2. A column a nearer wall already drew is CLOSED (wa_cov): a wall is full
 ;    height, so nothing behind it can show there. An open column is drawn on
 ;    the spot - its inverse depth into wa_colz for the figures, the top and
@@ -84,8 +88,14 @@ WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
 WA_VAR wa_ftailp, 2             ; (unused: wa_render still sets it)
 WA_VAR wa_roomf, 1              ; ROOMF: non-zero while the room's faces are
                                 ; drawn at a level with it (wa_render)
-WA_VAR wa_vertp, 2              ; wa_vert or wa_vertr: the level's (wa_lookset)
-WA_VAR wa_lnear, 2              ; the cone test's near margin: the level's
+WA_VAR wa_vtp, 2                ; wa_vte or wa_vtr: the level's (wa_lookset)
+WA_VAR wa_klook, 1              ; ...the wa_look it was chosen for
+WA_VAR wa_kspa, 1               ; ...and the wa_sparse (wa_collook's)
+WA_VAR wa_fspp, 2               ; wa_fspan, or heights' wa_fspanh (wa_face)
+WA_VAR wa_mkp, 2                ; wa_face.mk and .miz, or .mk1 and .miz1
+WA_VAR wa_mizp, 2               ; (wa_render)
+WA_VAR wa_numh, 2               ; .mk1's: wa_numt + wa_numb
+WA_VAR wa_cend, 2               ; the first column x 16 off the right (wa_render)
 WA_POSTMIN equ 8                ; NOPOST: the shortest wall with posts
 WA_VAR wa_left, 2               ; columns still open
 WA_VAR wa_lp, 2                 ; the list's write pointer across spans
@@ -94,15 +104,20 @@ WA_VAR wa_xs, WA_MXV*4          ; one per distinct x of the arena...
 WA_VAR wa_yc, WA_MYV*4          ; ...and per distinct y: a vertex is two
 WA_VAR wa_ys, WA_MYV*4          ; 32-bit adds, not four multiplies
 WA_VAR wa_vst, WA_MVTX*2        ; a vertex's cache stamp (the frame number)
-WA_VAR wa_vok, WA_MVTX*2        ; 1: inside the view, projected below
+WA_VAR wa_vok, WA_MVTX*2+6      ; 1: inside the view, projected below (the
+                                ; scratch ends' too: 3, always - wa_geominit)
 WA_VAR wa_vx, WA_MVTX*2         ; camera space
 WA_VAR wa_vz, WA_MVTX*2
-WA_VAR wa_vpc, WA_MVTX*2        ; projected: column x16, top, bottom,
-WA_VAR wa_vpt, WA_MVTX*2        ; inverse depth
-WA_VAR wa_vpb, WA_MVTX*2
-WA_VAR wa_vpi, WA_MVTX*2
+WA_VS1 equ WA_MVTX*2            ; ...and three more of these four: a face's
+WA_VS2 equ WA_MVTX*2+2          ; ends at the screen's edges (wa_vend), and
+WA_VS3 equ WA_MVTX*2+4          ; a clipped end (wa_face.end)
+WA_VAR wa_vpc, WA_MVTX*2+6      ; projected: column x16, top, bottom,
+WA_VAR wa_vpt, WA_MVTX*2+6      ; inverse depth
+WA_VAR wa_vpb, WA_MVTX*2+6
+WA_VAR wa_vpi, WA_MVTX*2+6
+WA_VAR wa_vu, 2                 ; 1 - c16 / k16, x 65536, for the projection
+WA_VAR wa_vuk, 4                ; (k16, c16) in wa_vuk (wa_render)
 WA_VAR wa_fv, 2
-WA_VAR wa_bvis, 1
 WA_VAR wa_endok, 1
 WA_VAR wa_mbot, 2
 WA_VAR wa_e1, 1                 ; this span's ends are REAL corners (not
@@ -113,8 +128,8 @@ WA_VAR wa_steep, 1              ; the span's edges can step >= 2 half-rows
 WA_VAR wa_crow, 2               ; this box's corner row (wa_corn)
 WA_VAR wa_ce0, 2
 WA_VAR wa_at, 8                 ; this frame's attributes (A_*)
-WA_VAR wa_cos, 2
-WA_VAR wa_sinv, 2
+wa_cos  equ wa_fcs              ; the camera's cos and sin: the frame
+wa_sinv equ wa_fsn              ; block's (the game's wa_sincos)
 WA_VAR wa_cang, 2
 WA_VAR wa_hq, 2                 ; horizon, quarter half-rows
 WA_VAR wa_hh, 2                 ; horizon, half-rows
@@ -124,8 +139,6 @@ WA_VAR wa_x1, 2
 WA_VAR wa_z1, 2
 WA_VAR wa_x2, 2
 WA_VAR wa_z2, 2
-WA_VAR wa_d1, 2
-WA_VAR wa_d2, 2
 WA_VAR wa_c1, 2
 WA_VAR wa_t1, 2
 WA_VAR wa_b1, 2
@@ -136,10 +149,8 @@ WA_VAR wa_b2, 2
 WA_VAR wa_i2, 2
 WA_VAR wa_pht, 2                ; SPANLOOP: the column before's edges, half-
 WA_VAR wa_phb, 2                ; rows (a step's fill)
-WA_VAR wa_ht, 2
 WA_VAR wa_hroff, WA_HR*2         ; a half-row's cell row offset
 WA_VAR wa_hrfb, WA_HR*2          ; ...and its row's place in wa_fbuf
-WA_VAR wa_hb, 2
 WA_VAR wa_cs, 2
 WA_VAR wa_end, 2                ; the span loop's end, column x 2
 WA_VAR wa_ncl, 2                ; ...and the columns it found shut
@@ -209,12 +220,24 @@ WA_VAR wa_fbuf, WA_CELLS*2      ; a figure's sub-pixels by cell offset (0
                                 ; between figures: wa_figure clears its own)
 WA_VAR wa_nwr, 2                ; video writes this frame
 WA_VAR wa_rcp, (WA_ZMAX-WA_NEAR)*2 ; 0x7FFF0 / z, z = NEAR.. (wa_ptbi)
-WA_VAR wa_xk, WA_MXV+1          ; per coordinate: the step from the one
-WA_VAR wa_yk, WA_MYV+1          ; before, as a slot x 8 (wa_products)
+WA_VAR wa_xk, WA_MXV*2+2        ; per coordinate: the step from the one
+WA_VAR wa_yk, WA_MYV*2+2        ; before, as its products' place in wa_mk
 WA_VAR wa_nk, 2                 ; the last slot used, x 8
-WA_VAR wa_sel, 10               ; the cone test's bounds bytes and shifts
-                                ; (wa_products)
-WA_VAR wa_lord, (WA_MBOX+1)*2  ; the leaves front to back (wa_order)...
+WA_VAR wa_lord, WA_MBOX*4+1    ; the boxes front to back, a record each:
+WA_VAR wa_lrec, 2               ; box, a, b, c (wa_order, wa_sil) - the walk's
+WA_VAR wa_kr, 2                 ; place in them, and this frame's corners
+WA_VAR wa_kl, 2                 ; for the hints (wa_render)
+WA_VAR wa_bh, WA_MBOX*4         ; per box x 4: its hint, and at +2 the view
+WA_VAR wa_vcnt, 2               ; its three vertices were made at: [wa_vcnt]
+WA_VAR wa_rview, 2              ; counts the view's moves (wa_moved); the
+                                ; room's four
+WA_VAR wa_pang, 2               ; the view the products were made for
+WA_VAR wa_ppx, 2                ; (wa_products)
+WA_VAR wa_ppy, 2
+WA_VAR wa_mx0, 2                ; the silhouettes' cell, [mx0, mx1) x
+WA_VAR wa_mx1, 2                ; [my0, my1) (wa_sil) - the four adjacent,
+WA_VAR wa_my0, 2                ; as the order's below...
+WA_VAR wa_my1, 2
 WA_VAR wa_rx0, 2                ; ...for a position in [rx0, rx1) x
 WA_VAR wa_rx1, 2                ; [ry0, ry1) - the pairs adjacent: wa_order
 WA_VAR wa_ry0, 2                ; reaches the high end at +2
@@ -277,10 +300,6 @@ wa_render:
     mov cl, 6
     shr ax, cl
     mov [wa_cang], ax
-    mov ax, [wa_fsn]            ; its sin and cos, from the frame block (the
-    mov [wa_sinv], ax           ; game's wa_sincos: the part has no table)
-    mov ax, [wa_fcs]
-    mov [wa_cos], ax
     mov ax, [wa_pitch]
     add ax, WA_HR*2
     mov [wa_hq], ax
@@ -301,6 +320,7 @@ wa_render:
     sub ax, [wa_eye]            ; (3 m less the eye: |90| x 230 at most,
     imul cx                     ; never past 16 bits)
     mov [wa_numt], ax
+    mov byte [wa_nsht], 3
     mov ax, [wa_eye]
     imul cx
     mov bx, dx                  ; THE BOTTOM, eye x kyq, as a (product,
@@ -318,12 +338,47 @@ wa_render:
 .nst:
     mov [wa_numb], ax
     mov [wa_nshb], bl
+    mov word [wa_mkp], wa_face.mk ; a vertex's top and bottom by one multiply
+    mov word [wa_mizp], wa_face.miz ; (wa_face.mk1) where the bottom's
+    cmp bl, 3                   ; numerator less the top's is a 16th of
+    jne .paired                 ; their sum - the standing eye
+    mov dx, [wa_numt]
+    or dx, dx
+    jle .paired
+    mov bx, ax
+    sub bx, dx
+    add ax, dx
+    jc .paired
+    test al, 15
+    jnz .paired
+    mov dx, ax
+    mov cl, 4
+    shr dx, cl
+    cmp dx, bx
+    jne .paired
+    mov [wa_numh], ax
+    mov word [wa_mkp], wa_face.mk1
+    mov word [wa_mizp], wa_face.miz1
 .paired:
     mov word [wa_ftailp], wa_span.ftail ; (wa_fspan's: wa_fspanh sets its own)
-    call wa_lookset             ; the detail level's choices, once a frame
+    mov al, [wa_sparse]         ; the detail level's choices, when it
+    cmp al, [wa_kspa]           ; changes (wa_geominit forgets it) - or L,
+    je .spa                     ; the sparse key, which wa_collook reads too
+    mov [wa_kspa], al
+    mov byte [wa_klook], 0xFF
+.spa:
+    mov al, [wa_look]
+    cmp al, [wa_klook]
+    je .looked
+    call wa_lookset
+.looked:
     xor al, al
+    mov word [wa_fspp], wa_fspan
     cmp byte [wa_hflat], 0
     jne .gen
+    mov word [wa_fspp], wa_fspanh
+    mov word [wa_mkp], wa_face.mk ; (heights: a top per box, two multiplies)
+    mov word [wa_mizp], wa_face.miz
     mov word [wa_ntht], -1      ; (heights: the top per box, wa_hnt, and
     mov di, wa_cclip            ; every span general; the column state,
     mov ax, WA_HR               ; HEIGHTS-PLAN 7.2.5)
@@ -370,48 +425,340 @@ wa_render:
     mov [wa_left], cx
     rep stosw
     call wa_products
-    mov ax, [wa_px]             ; the boxes' order: the same from anywhere in
-    cmp ax, [wa_rx0]            ; the cell of the tree's split lines the
-    jl .order                   ; player stands in, so it is walked again
-    cmp ax, [wa_rx1]            ; only when one is crossed (wa_order)
+    mov ax, [wa_px]             ; THE BOXES' ORDER, and each one's silhouette:
+    cmp ax, [wa_mx0]            ; the same from anywhere in a cell of lines the
+    jl .mout                    ; player stands in, so they are made again
+    cmp ax, [wa_mx1]            ; only when one is crossed. The silhouettes'
+    jge .mout                   ; cell (wa_sil's: the boxes' own lines) is
+    mov ax, [wa_py]             ; inside the order's (wa_order's: the tree's
+    cmp ax, [wa_my0]            ; split lines)
+    jl .mout
+    cmp ax, [wa_my1]
+    jl .ordered
+.mout:
+    mov ax, [wa_px]
+    cmp ax, [wa_rx0]
+    jl .order
+    cmp ax, [wa_rx1]
     jge .order
     mov ax, [wa_py]
     cmp ax, [wa_ry0]
     jl .order
     cmp ax, [wa_ry1]
-    jl .ordered
+    jl .stale
 .order:
     call wa_order
+.stale:
+    call wa_stale
 .ordered:
+    mov ax, [wa_k16]            ; THE VIEW'S EDGES, made again only when the
+    mov bx, [wa_c16]            ; projection changes
+    cmp ax, [wa_vuk]
+    jne .u
+    cmp bx, [wa_vuk+2]
+    je .uok
+.u:
+    mov [wa_vuk], ax
+    mov [wa_vuk+2], bx
+    mov word [wa_vpc+WA_VS1], 0 ; a face's ends there (wa_vend): their
+    mov dx, bx                  ; columns, x 16...
+    shl dx, 1
+    mov [wa_vpc+WA_VS2], dx
+    sub dx, 7                   ; ...the first column past the right, less
+    mov [wa_cend], dx           ; a centre's rounding (the walk)...
+    mov dx, ax
+    xor ax, ax                  ; ...and u = 1 - c16 / k16, x 65536: the
+    sub dx, bx                  ; edge is x = +-(1 - u) z. 0 at 90 degrees
+    jbe .us                     ; (or wider: never); k16 - c16 is under
+    cmp dx, [wa_k16]            ; k16 - no overflow
+    jae .us
+    div word [wa_k16]
+.us:
+    mov [wa_vu], ax
+    call wa_moved               ; (every vertex's column is to make again)
+.uok:
+; THE WALK over wa_order's list, a box a turn. A record is the box (x 4) and
+; the vertices of its SILHOUETTE from where the player stands - a, the left
+; end of the faces seen, b between them where two are seen, c, the right end
+; (wa_sil: made when the box is first tested in a cell of the boxes' lines).
+; THE VIEW TEST is on those vertices, not a cone over the box's bounds: we
+; see a convex box's faces left to right from a to c through less than a half
+; turn, so nothing of it is in the view when a is right of the view's right
+; edge (x > |z|), or c left of its left edge, or both are past the right
+; edge's line (x - z > 0: the box is behind) - at 90 degrees, with a margin
+; for the products' rounding, off the two transforms a kept box needs anyway;
+; and then exactly, at any field of view, by a's and c's columns. A kept box
+; pays nothing but the compares.
+; THE HINT (wa_bh, a box's: it outlives the list and the silhouette): a box
+; dropped that way is nearly always still wholly past the right edge's line
+; (1), or the left's (2) - and that is ONE corner's test, the box's least in
+; x - z (wa_kr) or greatest in x + z (wa_kl: wa_products), on the products'
+; high words (their rounding, or at an exact level their truncation, is
+; inside the margin): four of them, where the full test is two transforms.
+; One dropped by a column - between the 90 degrees of that test and a
+; narrower view's edge - is still off that edge when c is left of the left
+; one (3) or a right of the right one (4): one transform and a multiply. A
+; hint that fails (0x80 with it) is not set again until the box has been in
+; the view; another may be.
+; ...AND A STILL VIEW: a box drawn tall keeps the view's count (wa_vcnt) at
+; +2, and while the view stands goes straight to its faces (.lsame).
     mov si, wa_lord             ; front to back, while any column is open
+    jmp short .lgo
+.leaves:                        ; (after a box that may have drawn)
+    cmp word [wa_left], 0
+    je .lend
+.lnext:
+    mov si, [wa_lrec]
+.lgo:
+    lodsw                       ; AL = the box x 4, AH = a
+    cmp al, 0xFF
+    jne .lbox
+.lend:
+    jmp .walked
+.lbox:
+    inc si
+    inc si
+    xor bx, bx
+    mov bl, al
+    mov dl, [wa_bh+bx]
+    dec dl
+    js .lfull                   ; no hint
+    jz .lhr
+    dec dl
+    jz .lhl
+    dec dl
+    jz .lh3
+    dec dl
+    jnz .lfull                  ; (one that failed)
+    mov [wa_lrec], si           ; 4: a right of the screen's own edge,
+    mov bl, [si-3]              ; x - t z > 0 - t the view's half width in
+    call [wa_vtp]               ; x/z, as 1 - u (wa_vu): x - z + u z
+    mov bx, ax
+    sub bx, cx
+    jmp short .lh34
+.lh3:                           ; 3: c left of the screen's edge, x + t z < 0:
+    mov [wa_lrec], si           ; -(x + z) + u z
+    mov bl, [si-1]
+    call [wa_vtp]
+    mov bx, ax
+    add bx, cx
+    neg bx
+.lh34:
+    mov si, [wa_lrec]
+    cmp cx, WA_NEAR             ; (and ahead of the eye)
+    jl .lmiss
+    mov ax, cx
+    mul word [wa_vu]
+    add bx, dx
+    cmp bx, 3
+    jge .lgo
+    jmp short .lmiss
+.lhl:
+    add bx, [wa_kl]
+    mov bl, [bx]                ; the corner's vertex...
+    xor bh, bh
+    mov bx, [wa_vtx+bx]         ; ...its x and y indices (x 4)
+    mov al, bl
+    cbw
+    mov di, ax
+    mov bl, bh
+    xor bh, bh
+    mov ax, [wa_xs+di+2]        ; x + z
+    add ax, [wa_xc+di+2]
+    add ax, [wa_ys+bx+2]
+    sub ax, [wa_yc+bx+2]
+    cmp ax, -3
+    jle .lgo                    ; still left of the view
+    jmp short .lmiss
+.lhr:
+    add bx, [wa_kr]
+    mov bl, [bx]
+    xor bh, bh
+    mov bx, [wa_vtx+bx]
+    mov al, bl
+    cbw
+    mov di, ax
+    mov bl, bh
+    xor bh, bh
+    mov ax, [wa_xs+di+2]        ; x - z
+    sub ax, [wa_xc+di+2]
+    sub ax, [wa_yc+bx+2]
+    sub ax, [wa_ys+bx+2]
+    cmp ax, 3
+    jge .lgo                    ; still right of the view, or behind
+.lmiss:
+    xor bx, bx
+    mov bl, [si-4]
+    or byte [wa_bh+bx], 0x80
+.lfull:                         ; BX = the box x 4
+    mov [wa_lrec], si
+    mov ax, [wa_vcnt]           ; THE VIEW WHERE IT WAS when this box was last
+    cmp ax, [wa_bh+bx+2]        ; drawn tall: its three vertices stand, and
+    je .lsame                   ; it is in view still
+    mov bl, [si-3]              ; a
+    cmp bl, 0xFE
+    jb .lsil
+    jne .lover                  ; (no face seen: the player over the box)
+    call wa_sil                 ; (its silhouette, in this cell)
+    xor bx, bx
+    mov bl, [si-3]
+    cmp bl, 0xFF
+    jne .lsil
+.lover:                         ; (no face seen: a low box's top, on heights)
     cmp byte [wa_hflat], 0
-    je .hleaves
-.leaves:
-    cmp word [wa_left], 0
-    je .walked
-    lodsw
-    or ax, ax
-    jz .walked
-    push si
-    xchg ax, bx
-    call wa_leaf
-    pop si
+    jne .lnx
+    mov bl, [si-4]
+    mov ax, [wa_bxh+bx]
+    cmp ax, [wa_hmax]
+    jb .llowb
+    cmp ax, [wa_eye]
+    jle .llowb
+.lnx:
+    jmp .lnext
+.lsame:
+    mov cl, 0xFD                ; (their tops and bottoms are the frame's:
+    mov bl, [si-3]              ; the pitch and the eye may have moved)
+    and [wa_vok+bx], cl
+    mov bl, [si-1]
+    and [wa_vok+bx], cl
+    mov bl, [si-2]
+    cmp bl, 0xFF
+    je .ls1
+    and [wa_vok+bx], cl
+.ls1:
+    mov bl, [si-4]
+    jmp .lcok2                  ; (CX not 0)
+.lsil:
+    call [wa_vtp]               ; a: AX = x, CX = z, DI = the vertex
+    mov dx, ax
+    sub dx, cx
+    mov bp, dx                  ; BP = a's x - z
+    cmp dx, 3
+    jl .la
+    mov dx, ax
+    add dx, cx
+    cmp dx, 3
+    jl .la
+    mov dl, 1                   ; a right of the view: all of it is
+    jmp short .lhset
+.la:
+    call wa_vcam                ; a's column: off the screen's right?
+    cmp ax, [wa_cend]
+    jl .lain
+    mov dl, 4
+    jmp short .lhset
+.lain:
+    mov si, [wa_lrec]
+    mov bl, [si-1]              ; (BH = 0 still)
+    call [wa_vtp]               ; c
+    mov dx, ax
+    sub dx, cx
+    cmp dx, -3
+    jg .lc
+    mov bx, ax
+    add bx, cx
+    cmp bx, -3
+    jg .lkeep
+    mov dl, 2                   ; c left of the view: all of it is
+.lhset:                         ; DL = the hint for the next frame - unless
+    mov si, [wa_lrec]           ; it is the one that failed
+    xor bx, bx
+    mov bl, [si-4]
+    mov al, [wa_bh+bx]
+    and al, 0x7F
+    cmp al, dl
+    je .lnx
+    mov [wa_bh+bx], dl
+    jmp .lnext
+.lc:
+    cmp dx, 3
+    jl .lkeep
+    mov dl, 1
+    cmp bp, 3
+    jge .lhset                  ; both past the right edge's line
+.lkeep:
+    call wa_vcam                ; c's column: its last one under 0 is off the
+    cmp ax, 9                   ; left (a vertex behind is no column:
+    jge .lcok                   ; wa_face's)
+    cmp ax, 0x8000
+    je .lcok
+    mov dl, 3
+    jmp .lhset
+.lcok:
+    mov si, [wa_lrec]
+    xor bx, bx
+    mov bl, [si-4]              ; the box x 4
+    mov byte [wa_bh+bx], 0      ; (in the view: a hint may be set again)
+    xor cx, cx
+.lcok2:                         ; (CX not 0: its vertices made, at this view)
+    cmp byte [wa_hflat], 0
+    jne .ltall
+    mov ax, [wa_bxh+bx]         ; HEIGHTS (HEIGHTS-PLAN 7.3.1): a box at the
+    cmp ax, [wa_hmax]           ; arena's tallest, the eye below it, is TALL -
+    jb .llow                    ; today's spans at its own height; any other
+    cmp ax, [wa_eye]            ; is drawn in OUTLINE (wrlow.inc)
+    jle .llow
+    call wa_hnt
+.ltall:
+    shr bx, 1
+    shr bx, 1
+    mov bl, [wa_bcol+bx+1]      ; its colour (the room's is first)
+    mov al, [wa_at+bx]
+    mov [wa_wcol], al
+    or cx, cx
+    jnz .lfaces
+    mov bl, [si-4]
+    mov ax, [wa_vcnt]           ; (its vertices stand while the view does)
+    mov [wa_bh+bx+2], ax
+    mov bl, [si-2]              ; b
+    cmp bl, 0xFF
+    je .lone
+    call [wa_vtp]
+    call wa_vcam
+    mov si, [wa_lrec]
+    jmp short .ltwo
+.lfaces:
+    cmp byte [si-2], 0xFF
+    je .lone
+.ltwo:
+    mov byte [wa_endok], 0      ; (the corner two faces share is the second
+                                ; one's START: drawing both put `││` there)
+    mov ax, [si-3]              ; a -> b
+    call wa_face
+    mov si, [wa_lrec]
+    mov ax, [si-2]              ; b -> c
+    jmp short .llast
+.lone:
+    mov al, [si-3]              ; a -> c
+    mov ah, [si-1]
+.llast:
+    mov byte [wa_endok], 1
+    call wa_face
     jmp .leaves
-.hleaves:                       ; (heights: tall, or wrlow.inc's outline)
-    cmp word [wa_left], 0
-    je .walked
-    lodsw
-    or ax, ax
-    jz .walked
-    push si
-    xchg ax, bx
-    call wa_leafh
-    pop si
-    jmp .hleaves
+.llow:                          ; a and c are made: stamped, for wa_lowbox
+    mov al, [wa_frame]
+    mov bl, [si-3]
+    mov [wa_vst+bx], al
+    mov bl, [si-1]
+    mov [wa_vst+bx], al
+    mov bl, [si-4]
+.llowb:                         ; BX = the box x 4
+    mov di, bx                  ; DI = its record in wa_bxh
+    lea ax, [bx+wa_corn+4]      ; (the room's row is first)
+    mov [wa_crow], ax
+    shl bx, 1
+    lea si, [bx+wa_boxes]
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    mov bl, [wa_bcol+bx+1]
+    mov al, [wa_at+bx]
+    mov [wa_wcol], al
+    call wa_lowbox
+    jmp .leaves
 .walked:
     cmp word [wa_left], 0       ; the room, last: it encloses everything
     je .roomless
-    mov word [wa_crow], wa_corn
     mov al, [wa_bcol]           ; the room's colour
     xor ah, ah
     mov si, ax
@@ -425,18 +772,28 @@ wa_render:
     jne .rflat
     mov ax, [wa_roomh]          ; (heights: the room at its own height)
     call wa_hnt
-    mov ax, (6 << 8) | 0
-    call wa_faceh
-    mov ax, (4 << 8) | 6
-    call wa_faceh
-    mov ax, (2 << 8) | 4
-    call wa_faceh
-    mov ax, (0 << 8) | 2
-    call wa_faceh
-    jmp .roomless
 .rflat:
-    mov ax, (6 << 8) | 0        ; its faces run the other way: c0->c3,
-    call wa_face                ; c3->c2, c2->c1, c1->c0 (vertex x 2)
+    mov ax, [wa_vcnt]           ; its four corners (vertices 0..3) - unless
+    cmp ax, [wa_rview]          ; the view is where it was when they were
+    jne .rmk                    ; last made: then only their tops and
+    mov al, 0xFD                ; bottoms are to make again
+    and [wa_vok], al
+    and [wa_vok+2], al
+    and [wa_vok+4], al
+    and [wa_vok+6], al
+    jmp short .rfaces
+.rmk:
+    mov [wa_rview], ax
+    mov bx, 6
+.rv:
+    call [wa_vtp]
+    call wa_vcam
+    lea bx, [di-2]
+    or bx, bx
+    jns .rv
+.rfaces:
+    mov ax, (6 << 8) | 0        ; ...and its faces, which run the other way:
+    call wa_face                ; c0->c3, c3->c2, c2->c1, c1->c0 (vertex x 2)
     mov ax, (4 << 8) | 6
     call wa_face
     mov ax, (2 << 8) | 4
@@ -467,6 +824,8 @@ wa_render:
 wa_geominit:
     push ds
     pop es
+    mov byte [wa_vok+WA_VS1], 3 ; (an end at the screen's edge is in the
+    mov byte [wa_vok+WA_VS2], 3 ; view, and made: wa_face, wa_flat.steep)
     mov di, wa_rcp              ; 0x7FFF0 / z for every z a point can have:
     mov bx, WA_NEAR             ; exactly what the divide gave
 .r:
@@ -480,6 +839,15 @@ wa_geominit:
     mov word [wa_rx0], 1        ; an empty cell: the first frame orders the
     mov word [wa_rx1], 0        ; boxes (wa_order)
     mov word [wa_keye], 0x8000  ; ...and makes the eye's products
+    mov byte [wa_klook], 0xFF   ; ...and the level's choices (and with them
+                                ; the products: wa_lookset)
+    mov word [wa_mx0], 1        ; ...and each box's silhouette, with no hint
+    mov word [wa_mx1], 0        ; (wa_bh)
+    mov di, wa_bh
+    mov cx, WA_MBOX*2
+    xor ax, ax
+    rep stosw
+    mov [wa_rview], ax
     mov word [wa_nk], 0
     mov si, wa_xv
     mov di, wa_xk
@@ -490,8 +858,9 @@ wa_geominit:
     mov cx, [wa_nyv2]
 .steps:                         ; SI = values, CX = their count x 2, DI = the
     shr cx, 1                   ; axis's steps: per value after the first,
-    dec cx                      ; its step's slot x 8 (from 8), then 0
-.s:
+    dec cx                      ; its step's products' place in wa_mk (slot
+.s:                             ; x 8, from 8), then 0
+    inc di
     inc di
     mov ax, [si+2]
     sub ax, [si]
@@ -509,11 +878,12 @@ wa_geominit:
     mov [wa_kv+bx], ax          ; (arenagen refuses more than WA_MAXKS)
     mov [wa_nk], bx
 .have:
-    mov [di], bl
+    add bx, wa_mk
+    mov [di], bx
     inc si
     inc si
     loop .s
-    mov byte [di+1], 0
+    mov word [di+2], 0
     ret
 
 ; WA_AXIS values, the player's coordinate, steps, cos products, sin products,
@@ -537,13 +907,12 @@ wa_geominit:
 %endif
     mov di, %4
     mov si, %3
-    xor bx, bx
     jmp %%put
 %%next:
-    add ax, [wa_mk+bx]          ; ...and each after it, the step's added
-    adc dx, [wa_mk+bx+2]
-    add bp, [wa_mk+bx+4]
-    adc cx, [wa_mk+bx+6]
+    add ax, [bx]                ; ...and each after it, the step's added
+    adc dx, [bx+2]
+    add bp, [bx+4]
+    adc cx, [bx+6]
 %%put:
 %if %6 == 0
     mov [di], ax
@@ -555,95 +924,124 @@ wa_geominit:
     mov [di+%5-%4+2], cx
     add di, 4
     inc si
-    mov bl, [si]
-    or bl, bl
+    inc si
+    mov bx, [si]
+    or bx, bx
     jnz %%next
 %endmacro
 
 ; wa_products - per distinct coordinate, (v - p) x 4 cos and (v - p) x 4 sin:
 ; x 4 so a vertex's camera z and x are the HIGH words of two 32-bit sums,
-; with no shifts (wa_vert). All of them, every frame: doing it lazily per
-; coordinate was measured SLOWER (19.5 -> 19.0 fps at 40 columns) - nearly
-; every coordinate is used, so the stamp tests were pure cost. But not by a
-; multiply each: the first value of an axis is multiplied, and each after it
-; is the one before plus the products of the STEP between them - an arena
-; has few distinct steps (wa_geominit, at most WA_MAXKS), multiplied here
-; once a frame. 12 multiplies in the full arena, where there were 52; the
-; sums are exact, so every product is the same bits as before
+; with no shifts (wa_vte, wa_vtr). All of them, whenever the view has moved:
+; doing it lazily per coordinate was measured SLOWER (19.5 -> 19.0 fps at 40
+; columns) - nearly every coordinate is used, so the stamp tests were pure
+; cost. But not by a multiply each: the first value of an axis is
+; multiplied, and each after it is the one before plus the products of the
+; STEP between them - an arena has few distinct steps (wa_geominit, at most
+; WA_MAXKS), multiplied here when the angle has moved. 12 multiplies in the
+; full arena, where there were 52; the sums are exact, so every product is
+; the same bits as before. Also the view's count (wa_vcnt) and, with the
+; angle, the hints' corners (wa_kr, wa_kl)
 wa_products:
-    mov si, 8                   ; the steps: slot x 8, from 8
+    mov ax, [wa_cang]           ; THE VIEW WHERE IT WAS - the angle is one of
+    mov bx, [wa_px]             ; 1024, so a slow aim holds it for frames at
+    mov cx, [wa_py]             ; a time: every product stands. The angle
+    cmp ax, [wa_pang]           ; alone where it was (walking a straight
+    jne .ang                    ; line): the steps' products stand
+    cmp bx, [wa_ppx]
+    jne .pos
+    cmp cx, [wa_ppy]
+    jne .pos
+    ret
+.pos:
+    mov [wa_ppx], bx
+    mov [wa_ppy], cx
+    jmp short .kd
+.ang:
+    mov [wa_pang], ax
+    mov [wa_ppx], bx
+    mov [wa_ppy], cx
+    mov ax, [wa_sinv]           ; the corners a box wholly outside the view
+    mov bx, ax                  ; is tested by (wa_render's hints): of its
+    sub ax, [wa_cos]            ; four, the least in x - z and the greatest
+    add bx, [wa_cos]            ; in x + z - by the signs of sin - cos and
+    xor si, si                  ; sin + cos, the same for every box
+    or ax, ax
+    jle .ka
+    inc si
+.ka:
+    or bx, bx
+    jle .kb
+    inc si
+    inc si
+.kb:
+    shl si, 1
+    mov ax, [wa_krt+si]
+    mov [wa_kr], ax
+    mov ax, [wa_klt+si]
+    mov [wa_kl], ax
+    mov si, [wa_nk]             ; the steps: slot x 8, from 8
+    mov bx, [wa_cos]
+    mov cx, [wa_sinv]
+    or si, si
+    jz .kd
 .k:
-    cmp si, [wa_nk]
-    ja .kd
     mov ax, [wa_kv+si]          ; the step x 4
-    imul word [wa_cos]
+    imul bx
     mov [wa_mk+si], ax
     mov [wa_mk+si+2], dx
     mov ax, [wa_kv+si]
-    imul word [wa_sinv]
+    imul cx
     mov [wa_mk+si+4], ax
     mov [wa_mk+si+6], dx
-    add si, 8
-    jmp .k
+    sub si, 8
+    jnz .k
 .kd:
+    inc word [wa_vcnt]          ; (the view has moved: wa_moved)
+    jnz .kv
+    call wa_moved.lap
+.kv:
     test byte [wa_look], LK_ROUND
     jnz .round
     WA_AXIS wa_xv, wa_px, wa_xk, wa_xc, wa_xs, 0
     WA_AXIS wa_yv, wa_py, wa_yk, wa_yc, wa_ys, 0
-    jmp .cone
+    ret
 .round:
     WA_AXIS wa_xv, wa_px, wa_xk, wa_xc, wa_xs, 1
     WA_AXIS wa_yv, wa_py, wa_yk, wa_yc, wa_ys, 1
-.cone:
-    mov cx, [wa_sinv]           ; the cone test's corners (wa_leaf): which
-    mov dx, [wa_cos]            ; end of a box's bounds is the extreme of
-    mov ax, (9 << 8) | 10       ; each sum - the sums are linear in the
-    cmp cx, dx                  ; coordinate
-    jl .p
-    mov ax, (11 << 8) | 8
-.p:
-    mov [wa_sel+2], al          ; right: min x - z over x...
-    mov [wa_sel+5], ah          ; left: max x + z over y
-    mov ax, (8 << 8) | 9
-    mov bx, cx
-    add bx, dx
-    js .q
-    mov ax, (10 << 8) | 11
-.q:
-    mov [wa_sel+3], al          ; right: ...and max over y
-    mov [wa_sel+4], ah          ; left: max over x
-    mov ax, (10 << 8) | 8
-    or dx, dx
-    js .c
-    xchg al, ah
-.c:
-    mov [wa_sel+6], al          ; behind: max z over x...
-    mov [wa_sel], ah            ; (and the nearest: min z)
-    mov ax, (11 << 8) | 9
-    or cx, cx
-    js .s
-    xchg al, ah
-.s:
-    mov [wa_sel+7], al          ; ...and over y
-    mov [wa_sel+1], ah
-    mov bl, [wa_fov]            ; the narrower views' shifts (wa_leaf)
-    xor bh, bh
-    shl bx, 1
-    mov ax, [wa_fush+bx]
-    mov [wa_sel+8], ax
     ret
-wa_fush:    db 0, 0, 3, 1, 2, 2 ; 90 (unused), 75: 7/32, 60: 13/32
+
+; wa_moved - the view has moved (wa_products), or the projection changed:
+; [wa_vcnt] counts them, and a vertex made at an earlier count is to be made
+; again (wa_bh + 2, a box's; wa_rview, the room's). Never 0 - no box's - and
+; when it laps, every box's is forgotten. Clobbers AX, CX, DI.
+wa_moved:
+    inc word [wa_vcnt]
+    jnz .out
+.lap:
+    inc word [wa_vcnt]
+    xor ax, ax
+    mov [wa_rview], ax
+    mov di, wa_bh+2
+    mov cx, WA_MBOX
+.z:
+    mov [di], ax
+    add di, 4
+    loop .z
+.out:
+    ret
 
 ; wa_order - the box tree walked front to back from the player's position
-; into wa_lord (leaf nodes, 0 at the end), and the cell of the split lines
-; that position is in: [rx0, rx1) x [ry0, ry1). The order is a function of
-; the position alone - which side of each split line it is on - so a frame
-; whose position is still in the cell (turning, or moving inside it, which
-; is most frames of play) reuses the list, and a frame walks no inner node.
+; into wa_lord (a record a box: the box x 4 and three bytes for its
+; silhouette; 0xFF at the end), and the cell that position is in:
+; [rx0, rx1) x [ry0, ry1). The order is a function of the position alone -
+; which side of each split line it is on - so a frame whose position is
+; still in the cell (turning, or moving inside it, which is most frames of
+; play) reuses the list, and a frame walks no inner node.
 ; THE PVS (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9.8): an arena may carry, per
 ; cell of a square grid, the boxes that can draw anything from somewhere in
 ; it (tools/arenagen.py, pvs_masks); the rest are left off the list, so a
-; frame never visits them. The order's cell is then the grid's cell too.
+; frame never visits them. The order's cell is then inside the grid's cell.
 wa_order:
     mov ax, 32767
     mov [wa_rx1], ax
@@ -680,8 +1078,8 @@ wa_order:
     mov di, wa_lord
     mov bx, [wa_root]
     call .n
-    xor ax, ax
-    stosw
+    mov al, 0xFF
+    stosb
     ret
 .cell:                          ; AX = a coordinate, SI = its bounds, CL =
     or ax, ax                   ; the shift -> AX = its cell, clamped, and
@@ -726,8 +1124,10 @@ wa_order:
     test [si], al
     jz .out
 .take:
-    mov ax, bx
-    stosw
+    mov al, [bx+1]              ; the box x 8
+    shr al, 1
+    stosb                       ; (its record's: x 4)
+    add di, 3                   ; (its silhouette: wa_stale, wa_sil)
 .out:
     ret
 .split:
@@ -759,132 +1159,123 @@ wa_order:
     pop bx
     jmp .n
 
-; wa_leaf - BX = a leaf of the box tree: its box, unless the view cone
-; drops it.
-wa_lret:    ret                 ; (the cone tests' short way out)
-%macro LEAFBODY 1               ; %1 = 1: heights (tall or low)
-    ; THE VIEW CONE: a box wholly right of x = z, left of x = -z or behind
-    ; the near plane cannot reach the screen (90 degrees, the widest view).
-    ; Each is a sum of the products' high words (wa_products) at the box's
-    ; extreme corner (wa_sel); the margins cover the four truncated words,
-    ; so a box is dropped only when the exact walk would have drawn none of
-    ; it. Only BOXES are tested, not the tree's inner nodes: their bounds
-    ; are most of the room, and over P's poses (and nearly all of B's) not
-    ; one inner test in the full arena dropped anything.
-    ; (Storing the per-coordinate sums with the products measured slower:
-    ; most coordinates' are never read)
-    mov si, wa_sel+2
-    xor ah, ah
-    lodsb
-    xlatb
-    mov di, ax
-    mov cx, [wa_xs+di+2]        ; x - z = (Xs - Xc) - (Yc + Ys) > 1
-    sub cx, [wa_xc+di+2]
-    lodsb
-    xlatb
-    mov di, ax
-    sub cx, [wa_yc+di+2]
-    sub cx, [wa_ys+di+2]
-    cmp cx, 4
-    jge wa_lret
-    lodsb
-    xlatb
-    mov di, ax
-    mov bp, [wa_xs+di+2]        ; x + z = (Xs + Xc) + (Ys - Yc) < -1
-    add bp, [wa_xc+di+2]
-    lodsb
-    xlatb
-    mov di, ax
-    add bp, [wa_ys+di+2]
-    sub bp, [wa_yc+di+2]
-    cmp bp, -5
-    jle wa_lret
-    lodsb
-    xlatb
-    mov di, ax
-    mov dx, [wa_xc+di+2]        ; z = Xc + Ys < NEAR
-    lodsb
-    xlatb
-    mov di, ax
-    add dx, [wa_ys+di+2]
-    cmp dx, [wa_lnear]          ; (NEAR - 2; ROUND's NEAR - 3, its vertex
-                                ; z rounded too: wa_lookset)
-    jle wa_lret
-    ; THE NARROWER VIEWS: the screen's edge is x = t z with t = 0.767 at
-    ; 75 degrees and 0.578 at 60, so a box is also off the screen when
-    ; x - (1 - u) z > 0 everywhere in it, for any u <= 1 - t (or the mirror
-    ; on the left). Over the box that is at least the 90-degree sum's least
-    ; value plus u times the least z - one more corner, and u by shifts:
-    ; 7/32 at 75 degrees, 13/32 at 60 (the shifts round down: smaller
-    ; still). Only for a box the 90-degree cone kept. Over P's poses at 75
-    ; degrees ~0.9 of 6.4 boxes a frame fewer reach wa_box.
-    cmp byte [wa_fov], 0
-    je %%in
-    mov si, wa_sel
-    lodsb
-    xlatb
-    mov di, ax
-    mov dx, [wa_xc+di+2]        ; z = Xc + Ys, least
-    lodsb
-    xlatb
-    mov di, ax
-    add dx, [wa_ys+di+2]
-    mov al, cl
-    mov cl, [wa_sel+8]
-    sar dx, cl                  ; z / 8 (z / 4 at 60)...
-    mov di, dx
-    sar di, 1
-    add dx, di                  ; ...+ z / 16 (z / 8)...
-    mov cl, [wa_sel+9]
-    sar di, cl
-    add dx, di                  ; ...+ z / 32
-    mov cl, al
-    add cx, dx                  ; x - (1 - u) z
-    cmp cx, 4
-    jge %%out
-    sub bp, dx                  ; x + (1 - u) z
-    cmp bp, -5
-    jle %%out
-%%in:
-    xor ah, ah
-    mov al, [bx+1]              ; box x 8
-    mov si, ax
-    mov cl, 3
-    shr si, cl
-    mov al, [wa_bcol+si+1]      ; its colour (the room's is first)
-    mov si, ax
-    mov al, [wa_at+si]
-    mov [wa_wcol], al
-    mov al, [bx+1]
-    mov si, ax
-    add si, wa_boxes
-    shr ax, 1
-%if %1
-    mov di, ax                  ; (DI = box x 4: its record in wa_bxh)
-%endif
-    add ax, wa_corn+4           ; (the room's row is first)
-    mov [wa_crow], ax
-%if %1 == 0
-    jmp wa_box
-%else
-    mov ax, [wa_bxh+di]         ; HEIGHTS (HEIGHTS-PLAN 7.3.1): a box at the
-    cmp ax, [wa_hmax]           ; arena's tallest, the eye below it, is TALL -
-    jb %%low                     ; today's spans at its own height; any other
-    cmp ax, [wa_eye]            ; is drawn in OUTLINE (wrlow.inc)
-    jle %%low
-    call wa_hnt
-    jmp wa_boxh
-%%low:
-    jmp wa_lowbox
-%endif
-%%out:
+; wa_stale - the player has left the silhouettes' cell (or the order is
+; new): every box's silhouette is to be made again (a = 0xFE: wa_sil, when
+; the box is next tested), in a cell that starts as the order's; and a hint
+; that is a silhouette vertex's test (3, 4) goes with it. (ES = DS.)
+wa_stale:
+    mov si, wa_rx0
+    mov di, wa_mx0
+    movsw
+    movsw
+    movsw
+    movsw
+    mov si, wa_lord
+.s:
+    lodsw                       ; AL = the box x 4
+    cmp al, 0xFF
+    je .out
+    mov byte [si-1], 0xFE
+    inc si
+    inc si
+    xor bx, bx
+    mov bl, al
+    mov al, [wa_bh+bx]
+    and al, 0x7F
+    cmp al, 3
+    jb .s
+    mov byte [wa_bh+bx], 0
+    jmp .s
+.out:
     ret
 
-%endmacro
-wa_leaf:
-    LEAFBODY 0
-wa_leafh:
-    LEAFBODY 1
+; wa_sil - SI = past a box's record: its SILHOUETTE from where the player
+; stands, into the record - the vertices (x 2) a, b and c of the faces seen,
+; left to right: one face a -> c (b 0xFF), or two a -> b -> c; none (the
+; player over the box) a 0xFF. Which faces are seen is the position's alone -
+; which side of the box's four lines it is on - so the silhouettes' cell
+; [mx0, mx1) x [my0, my1) is kept inside those lines, and a frame in it
+; chooses no faces and looks up no corners. Keeps SI; clobbers the rest.
+; (ES = DS.)
+wa_sil:
+    xor bx, bx
+    mov bl, [si-4]
+    shl bx, 1
+    mov di, bx                  ; DI = the box x 8
+    mov ax, [wa_py]             ; the faces seen: S 1, E 2, N 4, W 8 (a face
+    lea bx, [di+wa_boxes+2]     ; f runs from corner f to f + 1)
+    mov bp, wa_my0
+    call .side
+    mov bx, .ybit
+    xlatb
+    mov cl, al
+    mov ax, [wa_px]
+    lea bx, [di+wa_boxes]
+    mov bp, wa_mx0
+    call .side
+    mov bx, .xbit
+    xlatb
+    or al, cl
+    mov bx, .sil
+    xlatb                       ; the silhouette's corners, two bits each:
+    mov ah, al                  ; a, b, c - or 0xFF, no face
+    shr di, 1
+    lea bx, [di+wa_corn+4]      ; the box's corners' vertices (the room's
+    lea di, [si-3]              ; row is first)
+    mov cx, 3
+    cmp al, 0xFF
+    je .none
+.v:
+    mov al, ah
+    and al, 3
+    xlatb
+    stosb
+    shr ah, 1
+    shr ah, 1
+    loop .v
+    test ah, 1                  ; (one face: no b)
+    jz .out
+    mov byte [si-2], 0xFF
+.out:
+    ret
+.none:
+    rep stosb
+    ret
+.ybit:      db 1, 0, 4
+.xbit:      db 8, 0, 2
+; by the faces seen: a | b << 2 | c << 4, corner numbers - and 64 for one
+; face (no b); 0xFF none (or two the player cannot be outside of at once)
+.sil:       db 0xFF, 0x50, 0x61, 0x24, 0x72, 0xFF, 0x39, 0xFF
+            db 0x43, 0x13, 0xFF, 0xFF, 0x0E, 0xFF, 0xFF, 0xFF
+.side:                          ; AX = the player's coordinate, BX -> the
+    mov dx, [bx]                ; box's low one (its high at +4), BP -> the
+    cmp ax, dx                  ; cell's pair: AL = 0 below the box, 1
+    jge .s1                     ; beside it, 2 above - and the cell kept on
+    xor al, al                  ; that side of the box's two lines
+.shi:
+    cmp dx, [ds:bp+2]
+    jge .sr
+    mov [ds:bp+2], dx
+.sr:
+    ret
+.s1:
+    call .slo
+    mov dx, [bx+4]
+    inc dx
+    cmp ax, dx
+    mov al, 1
+    jl .shi
+    inc ax
+.slo:
+    cmp dx, [ds:bp]
+    jle .sr
+    mov [ds:bp], dx
+    ret
+; the corner of a box least in x - z, by (sin - cos > 0) + 2 (sin + cos > 0),
+; and the one greatest in x + z (wa_render's hints): its place in a box's
+; row of corners' vertices (the room's row is first)
+wa_krt:     dw wa_corn+4+1, wa_corn+4+0, wa_corn+4+2, wa_corn+4+3
+wa_klt:     dw wa_corn+4+0, wa_corn+4+3, wa_corn+4+1, wa_corn+4+2
 
 ; wa_hnt - AX = a height: wa_numt and wa_nsht its (product, shift) pair,
 ; (h - eye) x kyq - unless they hold it already. Keeps every register but
@@ -924,124 +1315,34 @@ wa_hnum:
     mov bl, 3
     ret
 
-; wa_box - SI = a box (x0, y0, x1, y1), [wa_crow] its corners: the faces
-; the player is outside of - at most two, out of wa_boxf
-%macro BOXBODY 1                ; %1 = the face routine
-    xor bx, bx                  ; BX = the faces we see, x 8: S 8, E 16,
-    mov ax, [wa_py]             ; N 32, W 64
-    cmp ax, [si+2]
-    jge .s1
-    mov bl, 8
-    jmp .ew
-.s1:
-    cmp ax, [si+6]
-    jle .ew
-    mov bl, 32
-.ew:
-    mov ax, [wa_px]
-    cmp ax, [si+4]
-    jle .w1
-    or bl, 16
-    jmp .go
-.w1:
-    cmp ax, [si]
-    jge .go
-    or bl, 64
-.go:
-    add bx, wa_boxf
-    push bx
-    call .face
-    pop bx
-    add bx, 4
-.face:                          ; BX = a slot: from, to (corners), endok
-    mov al, [bx+2]              ; (0xFF: no face)
-    or al, al
-    js .out
-    mov [wa_endok], al
-    mov ax, [bx]
-    mov bx, [wa_crow]           ; corner numbers -> vertex x 2
-    xlatb
-    xchg al, ah
-    xlatb
-    xchg al, ah
-    jmp %1
-.out:
-    ret
-
-%endmacro
-wa_box:
-    BOXBODY wa_face
-wa_boxh:
-    BOXBODY wa_faceh
-
-; wa_boxf - per set of faces seen (S 1, E 2, N 4, W 8), two slots, in the
-; order S E N W: the face's corners and whether its END corner is drawn -
-; only when the next face round is NOT seen, since a corner two faces share
-; is the second one's START, and drawing both put `││` there
-wa_boxf:
-%assign wbf_m 0
-%rep 16
- %assign wbf_n 0
- %assign wbf_f 0
- %rep 4
-  %if ((wbf_m >> wbf_f) & 1) && wbf_n < 2
-   %assign wbf_g (wbf_f + 1) & 3
-    db wbf_f, wbf_g, ((wbf_m >> wbf_g) & 1) ^ 1, 0
-   %assign wbf_n wbf_n + 1
-  %endif
-  %assign wbf_f wbf_f + 1
- %endrep
- %rep 2 - wbf_n
-    db 0, 0, 0xFF, 0
- %endrep
- %assign wbf_m wbf_m + 1
-%endrep
-
-; wa_face - AL = from vertex x 2, AH = to vertex x 2 (a face we see the front
-; of): transform, and unless every column it could reach is already closed,
-; project (clipping only when a vertex is outside the view) and step it.
-; A vertex's column is made with its transform (wa_vert); its top, bottom
-; and inverse depth only here, past the occlusion test, once a frame - a
-; face wholly behind nearer walls never pays for them.
-%macro FACEBODY 1               ; %1 = 1: heights' tall faces, their own height
+; wa_face - AL = from vertex x 2, AH = to vertex x 2, both made this frame
+; (wa_vcam: a box's, the room's - wa_render): a face we see the front of.
+; Unless every column it could reach is already closed, it is projected (an
+; end outside the view made at the screen's edge: wa_vend) and stepped. A
+; vertex's column is made with its transform; its top, bottom and inverse
+; depth only here, past the occlusion test, once a frame - a face wholly
+; behind nearer walls never pays for them.
+; One routine for a flat arena and for heights' tall faces, at the height
+; wa_numt and wa_nsht hold (wa_hnt; a flat arena's from wa_render): the span's
+; way on is [wa_fspp].
+wa_face:
     mov [wa_fv], ax
-    xor bh, bh
-    mov bl, al
-    mov al, [wa_frame]          ; (the cache's stamp test here, not behind
-    cmp [wa_vst+bx], al         ; a call: a third of the vertices a face
-    je .v1                      ; names were made by an earlier face)
-    call [wa_vertp]
-.v1:
-    mov bl, [wa_fv+1]           ; (BH = 0: wa_vert keeps it)
-    mov al, [wa_frame]
-    cmp [wa_vst+bx], al
-    je .v2
-    call [wa_vertp]
-.v2:
+    xor bx, bx
+    mov bl, ah
     mov dx, [wa_vpc+bx]         ; THE PRE-CHECK: the columns it could reach,
-    mov bl, [wa_fv]             ; x 16 (a vertex in view is its own, one
-    mov si, bx                  ; beside the view is beyond that edge, one
-    mov ax, [wa_vpc+bx]         ; behind is anywhere - wa_vert's sentinels)
-    xor bp, bp                  ; (BP = 1: the ends the other way about -
-    cmp ax, dx                  ; with both in the view, no columns at all)
-    jle .lohi
-    xchg ax, dx
-    inc bp
-.lohi:
-    cmp ax, 0x8000              ; (behind: anywhere)
-    je .open
+    mov bl, al                  ; x 16 (a vertex in view is its own, one
+    mov si, bx                  ; beside the view is beyond that edge -
+    mov ax, [wa_vpc+bx]         ; wa_vcam's sentinels - and one BEHIND is
+    cmp ax, dx                  ; beyond the left edge as a face's first end
+    jg .rev                     ; and beyond the right as its second: we see
+.lohi:                          ; a face's front, so it runs left to right)
     mov cl, 4                   ; the first column whose centre is at or past
-    mov ch, al                  ; the near end, (c + 7) >> 4, and the last
+    add ax, 7                   ; the near end, (c + 7) >> 4, and the last
     sar ax, cl                  ; short of the far end, ((c + 7) >> 4) - 1:
-    and ch, 15                  ; EXACTLY wa_span's columns, so a face seen
-    cmp ch, 9                   ; edge-on, between two centres, ends here -
-    sbb ax, -1                  ; not after its tops, bottoms and inverse
-    mov ch, dl                  ; depths (two a frame on the play bench).
-    sar dx, cl                  ; (+7 by the remainder's carry rather than
-    and ch, 15                  ; an add: a sentinel, +-32767, would
-    cmp ch, 9                   ; overflow)
-    sbb dx, 0                   ; (the far end: one less)
-    cmp ax, dx
+    add dx, 7                   ; EXACTLY wa_span's columns, so a face seen
+    sar dx, cl                  ; edge-on, between two centres, ends here -
+    dec dx                      ; not after its tops, bottoms and inverse
+    cmp ax, dx                  ; depths (two a frame on the play bench)
     jg .shut
     or dx, dx                   ; wholly left of the screen, or right: off
     js .shut                    ; it, whatever is open
@@ -1075,39 +1376,70 @@ wa_boxf:
     je .open
 .shut:
     ret                         ; every one closed: nothing more
+.rev:                           ; c1 > c2: the ends the other way about - a
+    cmp dx, 0x8000              ; face seen edge-on, no columns at all -
+    jne .shut                   ; unless the second end is BEHIND
+    mov dx, WA_VOFF
+    jmp .lohi
 .open:                          ; SI = v1 x 2
     mov [wa_cs0], bx
     mov [wa_ce0], dx
-    mov bl, [wa_fv+1]           ; BX = v2 x 2
+    lea ax, [di-2-wa_cov]       ; the first open column (wa_fspan's)
+    mov [wa_cs], ax
+    mov bl, [wa_fv+1]
     xor bh, bh
+    mov di, bx                  ; DI = v2 x 2
     mov al, [wa_vok+si]
     mov [wa_e1], al
-    mov ah, [wa_vok+bx]
+    mov ah, [wa_vok+di]
     and ah, [wa_endok]          ; (the end corner, only on a silhouette)
     mov [wa_e2], ah
-    and al, [wa_vok+bx]
-    jz .clip
-    or bp, bp                   ; BOTH INSIDE THE VIEW: the cache's own
-    jnz .shut                   ; values, and the pre-check's columns
-    lea ax, [di-2-wa_cov]       ; (wa_fspan) - c1 > c2 has none
-    mov [wa_cs], ax
-    mov di, bx                  ; DI = v2 x 2
-    test byte [wa_vok+si], 2    ; their tops, bottoms and inverse depths
-    jnz .h1                     ; made the first time a face of them gets
-    call .mk                    ; this far in a frame
-.h1:
-    test byte [wa_vok+di], 2
-    jnz .h2
+    or al, al
+    jnz .in1
+    xor cx, cx                  ; THE FIRST END OUTSIDE THE VIEW: an end at
+    call wa_vend                ; the screen's left edge in its place
+    jc .clip
+    mov si, WA_VS1
+    call [wa_mizp]
+    jmp short .e2
+.in1:
+    test al, 2                  ; (in the view: its top, bottom and inverse
+    jnz .e2                     ; depth made the first time a face of it
+    call [wa_mkp]               ; gets this far in a frame)
+.e2:
+    mov al, [wa_vok+di]
+    or al, al
+    jnz .in2
+    push si
+    mov si, di
+    mov cx, 2                   ; ...and the second, at the right edge
+    call wa_vend
+    jc .clip1
+    mov si, WA_VS2
+    call [wa_mizp]
+    mov di, si
+    pop si
+    jmp short .go
+.in2:
+    test al, 2
+    jnz .go
     xchg si, di
-    call .mk
+    call [wa_mkp]
     xchg si, di
-.h2:
-%if %1
-    jmp wa_fspanh
-%else
-    jmp wa_fspan
-%endif
-.clip:
+.go:
+    mov ax, si                  ; (wa_fv: the two ends the span HAS, an end
+    mov bx, di                  ; at the screen's edge among them - its steep
+    mov ah, bl                  ; way reads their tops and bottoms back off
+    mov [wa_fv], ax             ; them: wa_flat.steep)
+    jmp [wa_fspp]               ; (wa_fspan, or heights' wa_fspanh)
+.clip1:
+    pop si
+.clip:                          ; (an end the edge cannot stand for - the
+    mov bx, [wa_fv]             ; plane inside the near plane there: the
+    mov si, bx                  ; clip's own way)
+    and si, 0xFF
+    mov bl, bh
+    xor bh, bh
     mov ax, [wa_vx+si]
     mov [wa_x1], ax
     mov ax, [wa_vz+si]
@@ -1132,27 +1464,24 @@ wa_boxf:
     pop bx
     ret
 .end:                           ; SI = a vertex, BX = its clipped (x, z),
-    test byte [wa_vok+si], 1    ; DI = wa_c1 or wa_c2: projected
-    jnz .put
+    test byte [wa_vok+si], 1    ; DI = wa_c1 or wa_c2: projected - as a
+    jnz .put                    ; vertex of its own (WA_VS3)
     mov ax, [bx]
-    mov bx, [bx+2]
-%if %1
-    call wa_projh
-%else
-    call wa_proj
-%endif
-    stosw
-    xchg ax, bx
-    stosw
-    xchg ax, cx
-    stosw
-    xchg ax, dx
-    stosw
-    ret
+    mov cx, [bx+2]              ; (z >= NEAR, |x| <= 8z)
+    imul word [wa_k16]          ; the column, x16: NOT clamped - the span
+    idiv cx                     ; clamps to the screen
+    add ax, [wa_c16]
+    mov si, WA_VS3
+    mov [wa_vpc+si], ax
+    mov bx, cx
+    shl bx, 1
+    mov bx, [wa_rcp+bx-WA_NEAR*2]
+    call [wa_mizp]
+    jmp short .have
 .put:                           ; SI = a vertex in view, DI = wa_c1 or wa_c2:
     test byte [wa_vok+si], 2    ; its column, top, bottom, inverse depth -
     jnz .have                   ; the last three made the first time a face
-    call .mk                    ; of it gets this far in a frame (.mk)
+    call [wa_mkp]               ; of it gets this far in a frame (.mk)
 .have:
     mov ax, [wa_vpc+si]
     stosw
@@ -1165,23 +1494,15 @@ wa_boxf:
     ret
 .mk:                            ; SI = a vertex in view: its top, bottom and
     or byte [wa_vok+si], 2      ; inverse depth, as .put makes them. Clobbers
-    mov bx, [wa_vz+si]          ; AX, BX, CX, DX
-    cmp bx, WA_ZMAX
-    jae .mzdiv
-    shl bx, 1
+    mov bx, [wa_vz+si]          ; AX, BX, CX, DX. (A vertex's z is under
+    shl bx, 1                   ; WA_ZMAX, the room's diagonal: the table's)
     mov bx, [wa_rcp+bx-WA_NEAR*2]
-.miz:
+.miz:                           ; (BX = an inverse depth: an edge end's)
     mov [wa_vpi+si], bx
     mov ax, [wa_numt]
     imul bx
-%if %1
     mov cl, [wa_nsht]
     sar dx, cl
-%else
-    sar dx, 1
-    sar dx, 1
-    sar dx, 1
-%endif
     mov ax, [wa_hq]
     sub ax, dx
     mov [wa_vpt+si], ax
@@ -1192,27 +1513,177 @@ wa_boxf:
     add dx, [wa_hq]
     mov [wa_vpb+si], dx
     ret
-.mzdiv:
-    mov ax, 0xFFF0
-    mov dx, 0x0007
-    div bx
-    mov bx, ax
-    jmp .miz
+; .mk1, .miz1 - .mk and .miz by ONE multiply, where the top and the bottom
+; are 15/32 and 17/32 of the wall's whole height - a flat arena's 3 m wall
+; from the standing eye, 1.6 m: most frames (wa_render chooses: [wa_mkp],
+; [wa_mizp]). [wa_numh] is the two numerators' sum; a quarter half-row's
+; rounding apart, the same values.
+.mk1:
+    or byte [wa_vok+si], 2
+    mov bx, [wa_vz+si]
+    shl bx, 1
+    mov bx, [wa_rcp+bx-WA_NEAR*2]
+.miz1:
+    mov [wa_vpi+si], bx
+    mov ax, [wa_numh]
+    mul bx                      ; DX = the whole height, x 16
+    mov cl, 4
+    mov ax, dx
+    shr ax, cl
+    mov bx, dx
+    add dx, ax                  ; 17/16 of it, / 16: below the horizon
+    shr dx, cl
+    add dx, [wa_hq]
+    mov [wa_vpb+si], dx
+    sub bx, ax                  ; 15/16 of it, / 16: above
+    shr bx, cl
+    mov ax, [wa_hq]
+    sub ax, bx
+    mov [wa_vpt+si], ax
+    ret
 
-%endmacro
-wa_face:
-    FACEBODY 0
-wa_faceh:                       ; (heights: a tall face at [wa_ntht])
-    FACEBODY 1
+; wa_vend - a face's end OUTSIDE the view, made where the face meets the
+; screen's EDGE instead of by a clip. Every wall is axis-aligned, so along a
+; face on the plane x = X the inverse depth depends on the screen column
+; alone: 1/z = (cos + s sin) / (X - px), s the column's x/z - and on y = Y,
+; (sin - s cos) / (Y - py). At the screen's edges s is -t and +t, t the
+; view's half width in x/z (c16 / k16: 1 at 90 degrees), so the end is one
+; multiply for the numerator and one of wa_rcp's 1 / |d| - no lerp, no
+; divide, and nothing off the screen for the span to step over (wa_clip's
+; end is at the guard band, ~150 columns out). t sin is sin - u sin, u =
+; 1 - t as a 16-bit fraction (wa_vu: wa_render).
+; In: SI = the end's vertex x 2, [wa_fv] the face, CX = 0 its first end (the
+; left edge) or 2 its second (the right). Out: CF = 0, BX = the inverse
+; depth there; CF = 1: wa_clip's way - the plane inside the near plane on
+; that ray (the player against the wall, |d| under ~23), or the vertex
+; behind the near plane but AHEAD of the eye, where the face can end in the
+; view. Keeps SI, DI; clobbers AX, CX, DX.
+wa_vend:
+    cmp word [wa_vpc+si], 0x8000
+    jne .side
+    cmp word [wa_vz+si], 0
+    jg .no
+.side:
+    xor bh, bh
+    mov bl, [wa_fv]
+    mov ax, [wa_vtx+bx]         ; its first vertex's x and y indices (x 4)
+    mov bl, [wa_fv+1]
+    cmp al, [wa_vtx+bx]         ; both ends on one x: the plane x = X
+    jne .yp
+    mov bl, al
+    shr bx, 1
+    mov ax, [wa_xv+bx]
+    sub ax, [wa_px]             ; d
+    mov bx, [wa_sinv]           ; cos -+ t sin
+    mov dx, [wa_cos]
+    jmp short .d
+.yp:
+    mov bl, ah
+    shr bx, 1
+    mov ax, [wa_yv+bx]
+    sub ax, [wa_py]
+    mov bx, [wa_cos]            ; sin +- t cos
+    neg bx
+    mov dx, [wa_sinv]
+.d:
+    or cx, cx
+    jnz .r
+    neg bx                      ; (the left edge: s = -t)
+.r:
+    push ax
+    push dx
+    mov ax, bx
+    imul word [wa_vu]
+    sub bx, dx                  ; t x the other function
+    pop cx
+    add cx, bx                  ; CX = the ray's numerator, Q14
+    pop ax                      ; AX = d
+    mov dx, ax
+    xor dx, cx
+    js .no                      ; (the ray never meets the plane ahead)
+    or ax, ax
+    jns .pos
+    neg ax
+    neg cx
+.pos:
+    cmp ax, WA_NEAR
+    jb .no
+    cmp ax, WA_ZMAX
+    jae .no
+    mov bx, ax
+    shl bx, 1
+    mov ax, [wa_rcp+bx-WA_NEAR*2]
+    mul cx                      ; 0x7FFF0 / |d| x |numerator| >> 14
+    cmp dx, 0x2000
+    jae .no                     ; (nearer than the near plane)
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov bx, dx
+    cmp bx, 1                   ; (never 0: a column's "no wall")
+    adc bx, 0                   ; (CF = 0)
+    ret
+.no:
+    stc
+    ret
 
 ; wa_vert - BX = a vertex x 2 (BH = 0) not yet made this frame, AL = the
-; frame: into camera space and, inside the view (the guard band), its
-; column. [wa_vok]: 0 outside, 1 the column made, 3 the rest too (wa_face).
-; Outside, [wa_vpc] is the pre-check's sentinel instead: 0x8000 behind,
-; -32767 beside the view on the left, 32767 on the right. BX is kept;
-; clobbers AX, CX, DX, SI, DI.
+; frame: stamped, into camera space (the level's way: wa_vtp) and, inside
+; the view (the guard band), its column - wa_vcam. BX and BP are kept;
+; clobbers AX, CX, DX, SI, DI. (wrlow.inc's corners: the tall boxes' and the
+; room's are made unstamped, by wa_render.)
 wa_vert:
     mov [wa_vst+bx], al
+    call [wa_vtp]
+    mov bx, di
+; wa_vcam - DI = a vertex x 2, AX = its camera x, CX = its z: kept, and
+; inside the view (the guard band) its column. [wa_vok]: 0 outside, 1 the
+; column made, 3 the rest too (wa_face). Outside, [wa_vpc] is the pre-check's
+; sentinel instead: 0x8000 behind, -WA_VOFF beside the view on the left,
+; WA_VOFF on the right - past any column the guard band holds (under 9,600),
+; and small enough to take a + 7. AX = [wa_vpc]; keeps BX, SI, DI, BP;
+; clobbers CX, DX.
+WA_VOFF equ 16000
+wa_vcam:
+    mov [wa_vz+di], cx
+    mov [wa_vx+di], ax
+    cmp cx, WA_NEAR             ; projectable: z >= NEAR, |x| <= 8z (the
+    jl .behind                  ; guard band - the screen is |x| <= z)
+    mov dx, cx
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    cmp ax, dx
+    jg .right
+    neg dx
+    cmp ax, dx
+    jl .left
+    mov byte [wa_vok+di], 1
+    imul word [wa_k16]          ; the column, x16 (wa_proj)
+    idiv cx
+    add ax, [wa_c16]
+    mov [wa_vpc+di], ax
+    ret
+.behind:
+    mov ax, 0x8000
+    jmp short .out
+.left:
+    mov ax, -WA_VOFF
+    jmp short .out
+.right:
+    mov ax, WA_VOFF
+.out:
+    mov byte [wa_vok+di], 0
+    mov [wa_vpc+di], ax
+    ret
+
+; wa_vte, wa_vtr - BX = a vertex x 2 (BH = 0): AX = its camera x, CX = its
+; z, DI = the vertex. wa_vte from the products' 32-bit sums, exact; wa_vtr
+; at a level with ROUND, their rounded high words alone, a sum each
+; (wa_products). [wa_vtp] is the level's (wa_lookset). BH stays 0; clobbers
+; BX, SI.
+wa_vte:
     mov di, bx                  ; DI = vertex x 2
     mov ax, [wa_vtx+bx]         ; AL = x index x 4, AH = y index x 4
     mov bl, ah
@@ -1226,44 +1697,8 @@ wa_vert:
     sub ax, [wa_yc+bx]
     mov ax, [wa_xs+si+2]
     sbb ax, [wa_yc+bx+2]
-.cam:
-    mov bx, di
-    mov [wa_vz+bx], cx
-    mov [wa_vx+bx], ax
-    cmp cx, WA_NEAR             ; projectable: z >= NEAR, |x| <= 8z (the
-    jl .behind                  ; guard band - the screen is |x| <= z)
-    mov dx, cx
-    shl dx, 1
-    shl dx, 1
-    shl dx, 1
-    cmp ax, dx
-    jg .right
-    neg dx
-    cmp ax, dx
-    jl .left
-    mov byte [wa_vok+bx], 1
-    imul word [wa_k16]          ; the column, x16 (wa_proj)
-    idiv cx
-    add ax, [wa_c16]
-    mov [wa_vpc+bx], ax
     ret
-.behind:
-    mov ax, 0x8000
-    jmp .out
-.left:
-    mov ax, -32767
-    jmp .out
-.right:
-    mov ax, 32767
-.out:
-    mov byte [wa_vok+bx], 0
-    mov [wa_vpc+bx], ax
-    ret
-
-; wa_vertr - wa_vert at a level with ROUND: the products' rounded high
-; words, a sum each (wa_products), then wa_vert's own way
-wa_vertr:
-    mov [wa_vst+bx], al
+wa_vtr:
     mov di, bx
     mov ax, [wa_vtx+bx]
     mov bl, ah
@@ -1273,21 +1708,20 @@ wa_vertr:
     add cx, [wa_ys+bx+2]
     mov ax, [wa_xs+si+2]
     sub ax, [wa_yc+bx+2]
-    jmp wa_vert.cam
+    ret
 
-; wa_lookset - once a frame: the detail level's choices (wa_look) that are
-; made once rather than tested where they act - which wa_vert, the cone
-; test's near margin, a low box's far-top allowance (wrlow.inc)
+; wa_lookset - AL = [wa_look], changed: the detail level's choices that are
+; made once rather than tested where they act - which transform, a low
+; box's far-top allowance (wrlow.inc)
 wa_lookset:
-    mov ax, wa_vert
-    mov cx, WA_NEAR-2
+    mov [wa_klook], al
+    mov byte [wa_pang+1], 0xFF  ; (the products are the level's: made again)
+    mov ax, wa_vte
     test byte [wa_look], LK_ROUND
     jz .r
-    mov ax, wa_vertr
-    dec cx
+    mov ax, wa_vtr
 .r:
-    mov [wa_vertp], ax
-    mov [wa_lnear], cx
+    mov [wa_vtp], ax
     call wa_collook             ; (the columns': wa_flat's level tests)
     xor ax, ax
     test byte [wa_look], LK_FARTOP
@@ -1296,41 +1730,36 @@ wa_lookset:
 .f:
     mov [wl_fartop], ax
     ret
-
-; wa_xform - AX, BX = a world point -> AX = camera x (right), DX = z
-; (ahead). Clobbers BX, CX, SI, DI.
+; wa_xform - AX, BX = a world point (in the room) -> AX = camera x (right),
+; DX = z (ahead): the offsets x 4, so each is its products' high word
+; (wa_products' way). Clobbers BX, CX, SI, DI.
 wa_xform:
     sub ax, [wa_px]
     sub bx, [wa_py]
-    push ax
-    push bx
+    shl ax, 1
+    shl ax, 1
+    shl bx, 1
+    shl bx, 1
+    mov si, ax
+    mov di, bx
     imul word [wa_cos]          ; z = (dx cos + dy sin) >> 14
     mov cx, ax
-    mov si, dx
-    mov ax, bx
+    mov bx, dx
+    mov ax, di
     imul word [wa_sinv]
     add ax, cx
-    adc dx, si
-    shl ax, 1
-    rcl dx, 1
-    shl ax, 1
-    rcl dx, 1
-    mov di, dx
-    pop bx
-    pop ax
+    adc dx, bx
+    push dx
+    mov ax, si
     imul word [wa_sinv]         ; x = (dx sin - dy cos) >> 14
     mov cx, ax
-    mov si, dx
-    mov ax, bx
+    mov bx, dx
+    mov ax, di
     imul word [wa_cos]
     sub cx, ax
-    sbb si, dx
-    shl cx, 1
-    rcl si, 1
-    shl cx, 1
-    rcl si, 1
-    mov ax, si
-    mov dx, di
+    sbb bx, dx
+    mov ax, bx
+    pop dx
     ret
 
 ; wa_clip - the segment (x1,z1)-(x2,z2) against z >= NEAR and the guard
@@ -1423,70 +1852,6 @@ wa_clip:
     sub ax, [si+bx]
     imul bp
     idiv cx
-    ret
-
-; wa_proj - AX = x, BX = z (>= NEAR, |x| <= 8z) -> AX = column x16,
-; BX = top and CX = bottom (quarter half-rows), DX = inverse depth
-wa_projh:                       ; (heights: wa_ptbih's top)
-    imul word [wa_k16]
-    idiv bx
-    add ax, [wa_c16]
-    push ax
-    call wa_ptbih
-    pop ax
-    ret
-wa_proj:
-    imul word [wa_k16]          ; the column, x16: NOT clamped - a vertex in
-    idiv bx                     ; the guard band lands off the screen and
-    add ax, [wa_c16]            ; the span clamps to it. (The CENTRE, 8W -
-    push ax                     ; not the scale, 8Wf: at 90 degrees they are
-    call wa_ptbi                ; one number, and using the scale for both put
-    pop ax                      ; every wall six columns right at 75)
-    ret
-
-; wa_ptbi - BX = z (>= NEAR) -> BX = top, CX = bottom (quarter half-rows),
-; DX = inverse depth, 0x7FFF0 / z (32767 at the near plane) - out of
-; wa_rcp, the same bits the divide gave. Clobbers AX
-wa_ptbi:
-    cmp bx, WA_ZMAX
-    jae .div
-    shl bx, 1
-    mov bx, [wa_rcp+bx-WA_NEAR*2]
-.iz:
-    mov ax, [wa_numt]           ; top = hq - numt / z = hq - (numt x iz) >> 19:
-    imul bx                     ; a multiply where a divide was
-    sar dx, 1
-    sar dx, 1
-    sar dx, 1
-    jmp wa_ptbib
-.div:                           ; (deeper than the room: never, but exact)
-    mov ax, 0xFFF0
-    mov dx, 0x0007
-    div bx
-    mov bx, ax
-    jmp .iz
-wa_ptbih:                       ; (heights: the top at [wa_ntht]'s shift -
-    cmp bx, WA_ZMAX             ; and past the room's diagonal, never, the
-    jae wa_ptbi                 ; flat arena's)
-    shl bx, 1
-    mov bx, [wa_rcp+bx-WA_NEAR*2]
-    mov ax, [wa_numt]
-    imul bx
-    mov cl, [wa_nsht]
-    sar dx, cl
-wa_ptbib:
-    neg dx
-    add dx, [wa_hq]
-    xchg bx, dx                 ; BX = top, DX = iz
-    mov ax, [wa_numb]
-    xchg cx, dx                 ; CX = iz
-    imul cx
-    xchg cx, dx                 ; DX = iz, CX = the product's high word
-    xchg ax, cx
-    mov cl, [wa_nshb]           ; (3, or 1 for a product / 4)
-    sar ax, cl
-    add ax, [wa_hq]
-    xchg cx, ax                 ; CX = bottom
     ret
 
 ; --- spans --------------------------------------------------------------
@@ -2285,8 +2650,8 @@ wa_flat:
 .sgo:
     jmp wa_span.gen1
 
-; wa_collook - once a frame (wa_lookset): wa_flat's level tests, from the
-; detail level
+; wa_collook - when the detail level or the sparse key changes, and after an
+; arena is loaded (wa_lookset): wa_flat's level tests, from the detail level
 wa_collook:
     cmp byte [wa_hflat], 0      ; A FLAT ARENA'S CLIP: the screen's end in
     je .hts                     ; every column, made once (heights clears

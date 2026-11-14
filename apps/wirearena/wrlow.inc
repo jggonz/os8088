@@ -145,8 +145,8 @@ wl_bit:     db 1, 2, 4, 8, 1
     mov al, [wa_frame]
     cmp [wa_vst+bx], al
     je %%c
-    call [wa_vertp]             ; (the level's: wa_vertr at ROUND, where the
-%%c:                            ; products' low words are not even made)
+    call wa_vert                ; (which takes the level's transform, wa_vtp:
+%%c:                            ; at ROUND the products' low words are not made)
     test byte [wa_vok+bx], 1
     jz %%n
     and byte [wl_nvk], ~(1 << %1)
