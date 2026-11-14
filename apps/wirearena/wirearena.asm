@@ -2865,6 +2865,7 @@ wa_pkreset:
     shl al, cl
     dec al
     mov [wa_pkon], al
+    mov [wa_pkall], al          ; (every one: wa_pktick's "none away")
     push es
     push ds
     pop es
@@ -3907,7 +3908,20 @@ wa_pktick:
     cmp byte [wa_pdead], 0
     jne .q
     mov cx, [wa_npk]
-    or cx, cx
+    jcxz .q
+    mov bx, [wa_py]             ; THE PICKUPS WITHIN REACH OF THE PLAYER'S
+    shr bx, 1                   ; CELL (wa_pkgrid: 128 units square, a bit a
+    shr bx, 1                   ; pickup, made when the arena loads) - with
+    shr bx, 1                   ; none of them present and none away
+    and bx, 0x00F0              ; counting down, the usual tick, there is
+    mov ax, [wa_px]             ; nothing to do
+    shl ax, 1
+    or bl, ah
+    mov dh, [wa_pkgrid+bx]      ; DH = them
+    mov al, [wa_pkon]
+    cmp al, [wa_pkall]          ; (every one present: no timer runs)
+    jne .go
+    test dh, al
     jnz .go
 .q:
     ret
@@ -3917,9 +3931,22 @@ wa_pktick:
     mov dl, 1                   ; DL = its bit
 .p:
     cmp word [wa_pkt+bx], 0
-    je .here
+    jne .away
+    test dh, dl                 ; present: in reach?
+    jnz .here
+.n:
+    add si, WA_PKSZ
+    inc bx
+    inc bx
+    shl dl, 1
+    loop .p
+    ret
+.away:
+    cmp byte [wa_lkon], 0
+    je .count
     call wa_lkpkhold            ; (a linked guest: back when the host says)
     je .n
+.count:
     dec word [wa_pkt+bx]
     jnz .n
     or [wa_pkon], dl            ; back - a weapon spawn with its weapon
@@ -3967,14 +3994,64 @@ wa_pktick:
     mov [wa_pkt+bx], ax
     mov byte [wa_ovd], 1
     call wa_lkpktaken           ; (linked: TAKE)
-.n:
+    jmp .n
+
+; wa_pkgridmk - once an arena is loaded: wa_pkgrid, for each 128-unit cell
+; the pickups (a bit each) a player standing somewhere in it could be within
+; WA_PKR of in x and in y - x - (WA_PKR - 1) .. x + (WA_PKR - 1), the same of
+; y: a cell or two each way
+wa_pkgridmk:
+    push es
+    push ds
+    pop es
+    mov di, wa_pkgrid
+    xor ax, ax
+    mov cx, 128
+    cld
+    rep stosw
+    pop es
+    mov cx, [wa_npk]
+    jcxz .out
+    mov si, wa_pks
+    mov dl, 1                   ; DL = the pickup's bit
+.p:
+    push cx
+    mov ax, [si+2]
+    sub ax, WA_PKR - 1
+    call wa_lists.cc
+    mov bl, al                  ; BL = its first row of cells...
+    mov ax, [si+2]
+    add ax, WA_PKR - 1
+    call wa_lists.cc
+    mov bh, al                  ; ...BH its last
+    mov ax, [si]
+    sub ax, WA_PKR - 1
+    call wa_lists.cc
+    mov ch, al                  ; CH = its first column...
+    mov ax, [si]
+    add ax, WA_PKR - 1
+    call wa_lists.cc
+    mov cl, al                  ; ...CL its last
+.row:
+    mov al, bl
+    mov ah, 16
+    mul ah
+    add al, ch
+    mov di, ax                  ; DI = the row's first cell of them
+    mov al, ch
+.cell:
+    or [wa_pkgrid+di], dl
+    inc di
+    inc al
+    cmp al, cl
+    jbe .cell
+    inc bl
+    cmp bl, bh
+    jbe .row
+    pop cx
     add si, WA_PKSZ
-    inc bx
-    inc bx
     shl dl, 1
-    dec cx
-    jz .out
-    jmp .p
+    loop .p
 .out:
     ret
 
@@ -5212,6 +5289,7 @@ wa_loadarena:
     shl ax, cl
     mov [wa_nbox8], ax
     call wa_lists               ; the boxes the floor and the walls read
+    call wa_pkgridmk            ; ...and the cells its pickups reach
     pop ax                      ; ITS ROUTE GRAPH (AI-PLAN 3.1), straight
     push ax                     ; out of the part: descriptor words 38
     call op_seg                 ; and 40, its offset and bytes
@@ -5528,6 +5606,8 @@ WA_VAR wa_ovd,1                  ; the overlay wants rebuilding
 WA_VAR wa_ovat,2                 ; wa_ovnum's attributes
 WA_VAR wa_ovdig,4                ; ...and its digits (3 at most)
 WA_VAR wa_pkt,WA_MPK*2           ; a taken pickup's ticks to its return
+WA_VAR wa_pkall,1                ; wa_pkon with every pickup present
+WA_VAR wa_pkgrid,256             ; the pickups in reach of each 128-unit cell
 WA_VAR wa_rkg,WA_NRK*WA_RKGSZ    ; the rockets' fractions, velocity, life
 WA_VAR wa_rkcp,1                 ; a rocket was live at the last copy
 WA_VAR wa_rkn,1                  ; rockets live (flying or exploding)
