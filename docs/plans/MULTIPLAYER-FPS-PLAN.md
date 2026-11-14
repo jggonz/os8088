@@ -1505,7 +1505,15 @@ is a word with the sparse key, and "none" is 0xFF in that half.
 **Roaming bots** look every other turn, 16 ticks apart; engaged, hunting
 and fetching bots look every eighth tick as before. A sight walk and a
 bearing fewer for each roaming bot: up to about 350 clk a tick by the game
-agent's figures (not re-measured), and up to 0.27 s later to notice.
+agent's figures (not re-measured).
+
+**What it costs in notice, corrected.** 16.9 said "up to 0.27 s later".
+That is the AVERAGE. A roaming bot's looks take turns between the player
+and the next live bot, so it looked at the player every 16 ticks and now
+does every 32: 0.27 s later on average, 0.53 s at worst (1.07 s between
+looks at the player, from 0.53). `tests/wabots.py` held a roaming bot to
+"engaged within 12 ticks" and failed 4 runs in 11 until its wait was 40;
+without the change it passed 6 of 6.
 
 **The PVS's low pass** (`tools/arenagen.py`, `pvs_low`). The PVS of
 HEIGHTS-PLAN 9.8 lets only TALL boxes hide anything, because an eye can see

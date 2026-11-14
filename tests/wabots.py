@@ -173,11 +173,13 @@ def main():
         g.put("wa_diff", 1)
         g.at(1000, 300, 0, ang=0)
         place(0, 1400, 300, ang=512, st=0)
-        for _ in range(6):
-            g.tick(2)
-            place(0, 1400, 300)
-            out_of_play(1)
-            out_of_play(2)
+        for _ in range(20):             # (ROAMING it looks every other turn
+            g.tick(2)                   # of its own, 16 ticks apart, and at
+            place(0, 1400, 300)         # the player every second look: 32
+            out_of_play(1)              # ticks at most - MULTIPLAYER-FPS-PLAN
+            out_of_play(2)              # 16.10; 12 held it while every turn
+            if fb(0, F_BST)[0] == 1:    # was a look)
+                break
         st0 = fb(0, F_BST)[0]
         g.at(64, 1024, 0, ang=0)                # (the back tunnel)
         hunted = goal = None
@@ -321,8 +323,14 @@ def main():
             setb(i, 17, bytes([0, 0]))
             place(i, x, y, ang=0, st=0)
         g.tick(2)
-        g.press("ControlLeft")
+        g.m.key("ControlLeft", up=False)    # (read as the shot is heard, not
+        for _ in range(8):                  # after a press's five ticks: a
+            g.tick(1)                       # hunting bot's next look may be
+            if fb(0, F_BST)[0]:             # its turn at the OTHER bot, and
+                break                       # its target then says so)
         st = (fb(0, F_BST)[0], fb(0, F_BTGT)[0], fb(1, F_BST)[0])
+        g.m.key("ControlLeft", down=False)
+        g.tick(1)
         check(st[0] in (1, 2) and st[1] == 0 and st[2] == 0,
               "HEARING: bot 0 within earshot hunts the player (state %d, "
               "target %d), bot 1 out of it roams on (%d)" % st)
