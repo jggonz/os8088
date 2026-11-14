@@ -69,6 +69,7 @@ WA_VAR wa_ftailp, 2             ; wa_fspan's way on: FLATBODY's tail
 WA_VAR wa_roomf, 1              ; ROOMF: non-zero while the room's faces are
                                 ; drawn at a level with it (wa_render)
 WA_VAR wa_vtp, 2                ; wa_vte or wa_vtr: the level's (wa_lookset)
+WA_VAR wa_klook, 1              ; ...the wa_look it was chosen for
 WA_VAR wa_fspp, 2               ; wa_fspan, or heights' wa_fspanh (wa_face)
 WA_VAR wa_cend, 2               ; the first column x 16 off the right (wa_render)
 WA_POSTMIN equ 8                ; NOPOST: the shortest wall with posts
@@ -103,8 +104,8 @@ WA_VAR wa_chb, WA_MAXW*2
 WA_VAR wa_crow, 2               ; this box's corner row (wa_corn)
 WA_VAR wa_ce0, 2
 WA_VAR wa_at, 8                 ; this frame's attributes (A_*)
-WA_VAR wa_cos, 2
-WA_VAR wa_sinv, 2
+wa_cos  equ wa_fcs              ; the camera's cos and sin: the frame
+wa_sinv equ wa_fsn              ; block's (the game's wa_sincos)
 WA_VAR wa_cang, 2
 WA_VAR wa_hq, 2                 ; horizon, quarter half-rows
 WA_VAR wa_hh, 2                 ; horizon, half-rows
@@ -264,10 +265,6 @@ wa_render:
     mov cl, 6
     shr ax, cl
     mov [wa_cang], ax
-    mov ax, [wa_fsn]            ; its sin and cos, from the frame block (the
-    mov [wa_sinv], ax           ; game's wa_sincos: the part has no table)
-    mov ax, [wa_fcs]
-    mov [wa_cos], ax
     mov ax, [wa_pitch]
     add ax, WA_HR*2
     mov [wa_hq], ax
@@ -308,7 +305,11 @@ wa_render:
     mov [wa_nshb], bl
 .paired:
     mov word [wa_ftailp], wa_span.ftail ; (wa_fspan's: wa_fspanh sets its own)
-    call wa_lookset             ; the detail level's choices, once a frame
+    mov al, [wa_look]           ; the detail level's choices, when it
+    cmp al, [wa_klook]          ; changes (wa_geominit forgets it)
+    je .looked
+    call wa_lookset
+.looked:
     xor al, al
     mov word [wa_fspp], wa_fspan
     cmp byte [wa_hflat], 0
@@ -412,13 +413,10 @@ wa_render:
     inc si
     inc si
 .kb:
-    xor ah, ah
-    mov al, [wa_krt+si]
-    add ax, wa_corn+4           ; (a box's row of corners' vertices: the
-    mov [wa_kr], ax             ; room's is first)
-    mov al, [wa_klt+si]
-    xor ah, ah
-    add ax, wa_corn+4
+    shl si, 1
+    mov ax, [wa_krt+si]
+    mov [wa_kr], ax
+    mov ax, [wa_klt+si]
     mov [wa_kl], ax
 ; THE WALK over wa_order's list, a box a turn. A record is the box (x 4), the
 ; vertices of its SILHOUETTE from where the player stands - a, the left end
@@ -554,9 +552,12 @@ wa_render:
     mov dl, 1                   ; a right of the view: all of it is
     jmp short .lhset
 .la:
-    push di
-    push ax
-    push cx
+    call wa_vcam                ; a's column: off the screen's right?
+    cmp ax, [wa_cend]
+    jl .lain
+    mov dl, 4
+    jmp short .lhset
+.lain:
     mov si, [wa_lrec]
     mov bl, [si-2]              ; (BH = 0 still)
     call [wa_vtp]               ; c
@@ -569,8 +570,6 @@ wa_render:
     cmp bx, -3
     jg .lkeep
     mov dl, 2                   ; c left of the view: all of it is
-.lrej3:
-    add sp, 6
 .lhset:                         ; DL = the hint for the next frame - unless
     mov si, [wa_lrec]           ; it is the one that failed
     mov al, [si-1]
@@ -585,25 +584,16 @@ wa_render:
     jl .lkeep
     mov dl, 1
     cmp bp, 3
-    jge .lrej3                  ; both past the right edge's line
+    jge .lhset                  ; both past the right edge's line
 .lkeep:
-    call wa_vcam                ; c's column...
-    cmp ax, 9                   ; ...its last one under 0: off the left (a
-    jge .lcok                   ; vertex behind is no column: wa_face's)
+    call wa_vcam                ; c's column: its last one under 0 is off the
+    cmp ax, 9                   ; left (a vertex behind is no column:
+    jge .lcok                   ; wa_face's)
     cmp ax, 0x8000
     je .lcok
     mov dl, 3
-    jmp .lrej3
-.lcok:
-    pop cx
-    pop ax
-    pop di
-    call wa_vcam                ; ...and a's: off the right
-    cmp ax, [wa_cend]
-    jl .lin
-    mov dl, 4
     jmp .lhset
-.lin:
+.lcok:
     mov si, [wa_lrec]
     mov byte [si-1], 0          ; (in the view: a hint may be set again)
     xor bx, bx
@@ -735,6 +725,7 @@ wa_geominit:
     mov word [wa_rx0], 1        ; an empty cell: the first frame orders the
     mov word [wa_rx1], 0        ; boxes (wa_order)
     mov word [wa_keye], 0x8000  ; ...and makes the eye's products
+    mov byte [wa_klook], 0xFF   ; ...and the level's choices
     mov word [wa_nk], 0
     mov si, wa_xv
     mov di, wa_xk
@@ -826,20 +817,22 @@ wa_geominit:
 ; once a frame. 12 multiplies in the full arena, where there were 52; the
 ; sums are exact, so every product is the same bits as before
 wa_products:
-    mov si, 8                   ; the steps: slot x 8, from 8
+    mov si, [wa_nk]             ; the steps: slot x 8, from 8
+    mov bx, [wa_cos]
+    mov cx, [wa_sinv]
+    or si, si
+    jz .kd
 .k:
-    cmp si, [wa_nk]
-    ja .kd
     mov ax, [wa_kv+si]          ; the step x 4
-    imul word [wa_cos]
+    imul bx
     mov [wa_mk+si], ax
     mov [wa_mk+si+2], dx
     mov ax, [wa_kv+si]
-    imul word [wa_sinv]
+    imul cx
     mov [wa_mk+si+4], ax
     mov [wa_mk+si+6], dx
-    add si, 8
-    jmp .k
+    sub si, 8
+    jnz .k
 .kd:
     test byte [wa_look], LK_ROUND
     jnz .round
@@ -1057,9 +1050,10 @@ wa_order:
     mov [ds:bp], dx
     ret
 ; the corner of a box least in x - z, by (sin - cos > 0) + 2 (sin + cos > 0),
-; and the one greatest in x + z (wa_render's hints)
-wa_krt:     db 1, 0, 2, 3
-wa_klt:     db 0, 3, 1, 2
+; and the one greatest in x + z (wa_render's hints): its place in a box's
+; row of corners' vertices (the room's row is first)
+wa_krt:     dw wa_corn+4+1, wa_corn+4+0, wa_corn+4+2, wa_corn+4+3
+wa_klt:     dw wa_corn+4+0, wa_corn+4+3, wa_corn+4+1, wa_corn+4+2
 
 ; wa_hnt - AX = a height: wa_numt and wa_nsht its (product, shift) pair,
 ; (h - eye) x kyq - unless they hold it already. Keeps every register but
@@ -1294,10 +1288,8 @@ wa_face:
     ret
 .mk:                            ; SI = a vertex in view: its top, bottom and
     or byte [wa_vok+si], 2      ; inverse depth, as .put makes them. Clobbers
-    mov bx, [wa_vz+si]          ; AX, BX, CX, DX
-    cmp bx, WA_ZMAX
-    jae .mzdiv
-    shl bx, 1
+    mov bx, [wa_vz+si]          ; AX, BX, CX, DX. (A vertex's z is under
+    shl bx, 1                   ; WA_ZMAX, the room's diagonal: the table's)
     mov bx, [wa_rcp+bx-WA_NEAR*2]
 .miz:                           ; (BX = an inverse depth: an edge end's)
     mov [wa_vpi+si], bx
@@ -1315,12 +1307,6 @@ wa_face:
     add dx, [wa_hq]
     mov [wa_vpb+si], dx
     ret
-.mzdiv:
-    mov ax, 0xFFF0
-    mov dx, 0x0007
-    div bx
-    mov bx, ax
-    jmp .miz
 
 ; wa_vend - a face's end OUTSIDE the view, made where the face meets the
 ; screen's EDGE instead of by a clip. Every wall is axis-aligned, so along a
@@ -1486,10 +1472,11 @@ wa_vtr:
     sub ax, [wa_yc+bx+2]
     ret
 
-; wa_lookset - once a frame: the detail level's choices (wa_look) that are
+; wa_lookset - AL = [wa_look], changed: the detail level's choices that are
 ; made once rather than tested where they act - which transform, a low
 ; box's far-top allowance (wrlow.inc)
 wa_lookset:
+    mov [wa_klook], al
     mov ax, wa_vte
     test byte [wa_look], LK_ROUND
     jz .r
@@ -1503,40 +1490,36 @@ wa_lookset:
 .f:
     mov [wl_fartop], ax
     ret
-; wa_xform - AX, BX = a world point -> AX = camera x (right), DX = z
-; (ahead). Clobbers BX, CX, SI, DI.
+; wa_xform - AX, BX = a world point (in the room) -> AX = camera x (right),
+; DX = z (ahead): the offsets x 4, so each is its products' high word
+; (wa_products' way). Clobbers BX, CX, SI, DI.
 wa_xform:
     sub ax, [wa_px]
     sub bx, [wa_py]
-    push ax
-    push bx
+    shl ax, 1
+    shl ax, 1
+    shl bx, 1
+    shl bx, 1
+    mov si, ax
+    mov di, bx
     imul word [wa_cos]          ; z = (dx cos + dy sin) >> 14
     mov cx, ax
-    mov si, dx
-    mov ax, bx
+    mov bx, dx
+    mov ax, di
     imul word [wa_sinv]
     add ax, cx
-    adc dx, si
-    shl ax, 1
-    rcl dx, 1
-    shl ax, 1
-    rcl dx, 1
-    mov di, dx
-    pop bx
-    pop ax
+    adc dx, bx
+    push dx
+    mov ax, si
     imul word [wa_sinv]         ; x = (dx sin - dy cos) >> 14
     mov cx, ax
-    mov si, dx
-    mov ax, bx
+    mov bx, dx
+    mov ax, di
     imul word [wa_cos]
     sub cx, ax
-    sbb si, dx
-    shl cx, 1
-    rcl si, 1
-    shl cx, 1
-    rcl si, 1
-    mov ax, si
-    mov dx, di
+    sbb bx, dx
+    mov ax, bx
+    pop dx
     ret
 
 ; wa_clip - the segment (x1,z1)-(x2,z2) against z >= NEAR and the guard
