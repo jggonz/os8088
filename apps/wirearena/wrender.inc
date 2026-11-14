@@ -2500,18 +2500,25 @@ wa_ls%1%2_s:
 ; wa_stail - SPANLOOP's end, both edges off the screen for good: the rest
 ; of the span's columns opened and counted, nothing drawn; the top one
 ; column on (as its accumulator is where the loop ends: off the screen
-; there as here). SI = the column the loop stood in. Clobbers AX, BX, SI.
+; there as here). SI = the column the loop stood in. Clobbers BX, SI.
 wa_stail:
     add bp, [wa_stl]
     adc cx, [wa_st]
+    inc si
+    inc si
+; wa_openrest - the columns from SI to [wa_end] OPENED where they are open
+; (wa_cov: DH, the span's tag), the shut ones counted (wa_ncl), nothing
+; drawn: a span's columns once its edges have left the screen. Out: SI =
+; the end. Keeps AX, CX, DX, DI and BP; clobbers BX.
+wa_openrest:
+    push ax
     push cx
     mov bx, di                  ; (the list)
-    lea di, [si+wa_cov+2]
+    lea di, [si+wa_cov]
     mov cx, [wa_end]
     sub cx, si
+    jbe .done
     shr cx, 1
-    dec cx
-    jz .done
     xor ax, ax
 .l:
     scasw
@@ -2520,8 +2527,10 @@ wa_stail:
 .n:
     loop .l
 .done:
+    mov si, [wa_end]
     mov di, bx
     pop cx
+    pop ax
     ret
 .s:
     inc word [wa_ncl]
@@ -2661,7 +2670,7 @@ wa_eoff:
     add bx, [wa_fh]
     mov [wa_fh], bx
     cmp bx, WA_HR
-    jae %%off
+    jae %%gone
 %if %3
     mov cx, bx
 %endif
@@ -2712,6 +2721,13 @@ wa_eoff:
 %endif
 %%done:
     ret
+%%gone:                         ; the edge has LEFT the screen: for good (it
+    mov bp, 0xFFFF              ; moves one way) - no borrow for the far
+%if %1                          ; corner's step back, and the rest of the
+    jmp wa_openrest             ; columns opened, no more
+%else
+    ret
+%endif
 %endmacro
 wa_fo:      FLATPASS 1, wa_dt
 wa_fp:      FLATPASS 0, wa_db
