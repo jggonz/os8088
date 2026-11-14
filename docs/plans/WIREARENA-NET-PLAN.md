@@ -161,6 +161,13 @@ The checks are v1's: one length per type, the CRC.
   match goes on, and the newcomer's figure appears to the others at its
   first NSNAP.
 
+### 6.1 PEERS: closing the mesh (added while building)
+
+Joined by address, each player knows only the address it typed. A
+PEERS frame (type 8) on UDP tells each bound peer the identity and
+address of the others, and they HELLO each other directly. Section 9.3
+has the details.
+
 ## 7. Waves
 
 - [x] **N1 the setup window** (the IP field, its address remembered and the
@@ -171,14 +178,19 @@ The checks are v1's: one length per type, the CRC.
   match over them): SPEC.md 72.24, the three verbs, the queue,
   and a host check. Its row: two QEMUs exchanging datagrams through the
   relay, which also answers DHCP.
-- [ ] **N3 protocol v2 and slots**: NSNAP, NSCORE, NEVENT, the
-  generalised codes, hits, acks and silence. Over UDP and over raw frames.
-- [ ] **N4 the lobby v2**: ASK, MATCH, JOIN, the list, Start, joining a
-  match playing, Join IP.
-- [ ] **N5 the rows**: three and four QEMUs on the relay (a hub now): a
-  four-player match (each sees the other three, a kill across machines,
-  the boards agree), 2 players and 2 bots on UDP, Join IP, Find, a player
-  dropped, the host gone. The serial and E1 rows still pass.
+- [x] **N3 slots** - built on v1's frames, not v2's (9.3 says why): the
+  peer table, slots by identity, every frame to each peer, hits into the
+  victim's peer's damage word, acks from every player, LOST and LEFT per
+  peer. Over UDP and raw frames; serial is the table with one record.
+- [ ] **N4 the lobby v2** - half built (9.3): found by broadcast and by
+  address for up to four (PEERS closes the mesh), quiet peers dropped,
+  every peer Ready starts it. Still to do: a match LIST (ASK and MATCH,
+  several hosts on one LAN told apart), joining a match already playing,
+  the host silent ending the match.
+- [ ] **N5 the rows** - `walink4` (four players, then three and a bot)
+  and `walink4ip` (three joined by address) are in; the serial, raw and
+  two-player UDP rows still pass. Still to do: the host gone mid-match,
+  and the list's rows when it lands.
 
 ## 8. Costs to record as they land
 
@@ -279,3 +291,88 @@ them**:
   broadcasts dropped) run walink's whole match, every datagram valid.
 - `walinknet` (no address: raw after ~5 s) and `walink` (serial) still
   pass on the same build.
+
+### 9.3 N3 and half of N4: up to four players (2026-11-14)
+
+**Four machines play one match** - any mix of players and the host's
+bots up to four - found by a broadcast on the LAN or by typing one
+address.
+
+**v1's frames were enough; v2's were not built.** Section 5 planned
+new frame types carrying every slot's damage, attribution and ack in
+one broadcast. What was built instead keeps v1's frames and sends each
+one to each peer (a unicast mesh, at most three copies):
+
+- **The sender's slot is known from where a frame came from**, so it
+  needs no field: each peer has a record (`wa_pt`, three of 32 bytes),
+  found by its address, and its slot is fixed at the match's start.
+- **Every per-peer quantity lives in that record**: the damage dealt to
+  that peer and by whom, the last event applied from it, how far it has
+  acked our queue, when it was last heard, LOST, LEFT. v1's code reads
+  them through `wa_pc`, a working copy loaded for the frame being taken
+  or the peer being sent to, so most of it did not change.
+- **What it costs**: on four players a machine sends three SNAPs where a
+  broadcast would be one - about 0.6 KB/s each way at 10 Hz, nothing to
+  a 10 Mbit card. v2 would matter on raw frames on a busy LAN, or for
+  more than four; neither is planned.
+
+**Slots** (`wa_lkslots`, at the match's start): ids ascending, the
+lowest is slot 0, the host. Each machine counts the identities below its
+own for its own slot, and below each peer's for that peer's. The bots
+take the slots after the players: the host's choice clamped to what is
+left (four players, none; three, one of two).
+
+**Hits** follow v1's rule per peer: a hit on another player's figure
+adds to that peer's damage word, with who dealt it (`WP_ATTR`, a slot).
+A guest's hit on a host bot goes into the bot's byte by its place after
+the players. The event queue pops an event once every peer still in the
+match has acked it. The scoreboard shows the slots the match has, each
+player by its identity's name.
+
+**The lobby**:
+
+- **A quiet peer is dropped** (`wa_pdrop`, every beat, 55 ticks). The
+  host starts only when every peer bound is READY, so a machine that
+  closed WireArena would otherwise block the start for good. Any frame
+  from a bound peer counts as heard: one still in a match sends SNAPs,
+  not HELLOs.
+- **Only a HELLO in the window makes a record.** A stranger's frame in
+  a match would make a peer that never acks, and the event queue would
+  stop.
+- **PEERS** (type 8, 24 bytes with its CRC, UDP only): with every
+  HELLO, each machine tells each bound peer the identity and address of
+  up to two others it knows. A machine with no record of one makes it -
+  an address, no identity - and its HELLOs go there until it binds.
+  Without it, two players who each typed the host's address would each
+  know only the host.
+
+**Two traps on the way**:
+
+1. **A peer table changes what `wa_pc` means** - the last record
+   loaded, and zeroed for the broadcast HELLO. `walink`'s rows read
+   peer state through those names and still passed only because one
+   peer was loaded last. They read record 0 of the table now.
+2. **`tests/wireball.py`'s machines assumed two**: the link port was
+   `1 - index`, so a third QEMU asked for serial port -1. It is the
+   index's parity now.
+
+**Checked** (one scoped soak, 12 rows, all ok):
+
+- `walink4`: four QEMUs on the hub relay. Each binds the other three;
+  slots 0..3 the same everywhere; each player the right figure on the
+  other three; slot 3's pistol kills slot 1, its damage in that peer's
+  record only, and all four tables agree. One switched off, the other
+  three drop it; three players and one bot, synced; a guest's Esc marks
+  that peer alone gone. Red with the damage in `wa_pc`, and red with the
+  quiet-peer drop off. 46 s.
+- `walink4ip`: broadcasts dropped, B and C type A's address; they find
+  each other by PEERS and play a match of three. Red with PEERS never
+  sent. 32 s.
+- `walink`, `walinknet`, `walinkudp`, `walinkip`, and the six MartyPC
+  WireArena rows (`walift`, `waroutes`, `wabots`, `wascore`,
+  `wabotarms`, `waweapons`): unchanged results.
+
+**Bytes**: `wirearena.bin` 23,563 -> 25,258 (+1,695), bss +105 (the
+table and its working copy). The link's cost on the 8088 was not
+measured again: on serial the table is one record, and the new work a
+tick is that record's copy in and out (two 16-word `rep movsw`).

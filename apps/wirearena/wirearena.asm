@@ -3198,24 +3198,30 @@ wa_hurt:
     jne .out
     call wa_lkremote            ; THE OTHER MACHINE'S (LINK-PLAN 3): the
     jne .here                   ; shooter judges - the damage on the wire,
-    cmp di, wa_figs             ; the flinch here, no health changed: the
-    jne .rbot                   ; other player's in the damage word, with
-    push ax                     ; who dealt it
-    xor ah, ah
-    add [wa_lkdout], ax
+    push ax                     ; the flinch here, no health changed: a
+    push bx                     ; player's in its peer's damage word, with
+    push dx                     ; who dealt it (NET-PLAN 4)
+    mov dx, ax
+    call wa_figslot
+    cmp al, [wa_lknp]
+    jae .rbot
+    call wa_slotpeer
+    jc .rx
+    xor dh, dh
+    add [bx+WP_DOUT], dx
     mov al, [wa_killer]
-    mov [wa_lkattr], al
-    pop ax
-    jmp .rfl
+    call wa_lkcanon
+    mov [bx+WP_ATTR], al
+    jmp .rx
 .rbot:
-    push bx                     ; (the guest's hit on a host's bot: that
-    mov bx, di                  ; bot's damage byte)
-    sub bx, wa_figs + F_SIZE
-    jz .b0
-    mov bx, 1
-.b0:
-    add [wa_lkbd+bx], al
+    sub al, [wa_lknp]           ; (a guest's hit on a host's bot: that
+    mov bl, al                  ; bot's damage byte, by its place)
+    xor bh, bh
+    add [wa_lkbd+bx], dl
+.rx:
+    pop dx
     pop bx
+    pop ax
 .rfl:
     mov byte [di+F_FLASH], 5
     jmp .flinch
@@ -4116,10 +4122,13 @@ wa_ovboard:
     xor bp, bp
 .row:
     mov bl, [ds:bp+wa_sord]     ; (DS: BP would address the stack)
-    cmp byte [wa_lkon], 0       ; (linked: YOU and the other player, L1)
-    je .rw
-    cmp bl, 2
-    jae .skip
+    cmp byte [wa_lkon], 0       ; (linked: the slots the match has - its
+    je .rw                      ; players, then its bots: NET-PLAN 4)
+    or bl, bl
+    jz .rw
+    xor bh, bh
+    call wa_lksbname
+    jc .skip
 .rw:
     inc dx
     mov bl, [ds:bp+wa_sord]
@@ -4135,10 +4144,12 @@ wa_ovboard:
     mov ax, 0x1A0F              ; (YOU: bright green, or plain on mono)
     or bx, bx
     jz .nm
-    mov si, wa_lkpnam           ; (linked: the other player's name)
     mov ax, 0x1F70
     cmp byte [wa_lkon], 0
-    jne .nm
+    je .bn
+    call wa_lksbname            ; (linked: its player's name, or its bot's)
+    jmp .nm
+.bn:
     mov al, [wa_bname-1+bx]
     xor ah, ah
     mov cl, 3
@@ -5295,35 +5306,46 @@ WA_VAR wa_lkwant,1                 ; a network wanted: 2 local, 3 by address
 WA_VAR wa_lktries,2                ; ...ticks it has been asked
 WA_VAR rw_blk,RW_SIZE              ; the card (os88raw.inc)
 WA_VAR wa_lknet,1                  ; 1: linking on the card, not the cable
-WA_VAR wa_lkpmac,6                 ; the peer's station address
 WA_VAR wa_lkfrom,6                 ; the last frame's source
 WA_VAR wa_lkpf,1                   ; the frame the cable was last read in
 WA_VAR wa_lkfired,1                ; the guest fired since its last SNAP
+WA_VAR wa_lkwhat,1                 ; wa_lktick: this tick SCOREs (1), SNAPs (2)
+WA_VAR wa_lkfs,1                   ; wa_lkfig: the figure's slot
 WA_VAR wa_lklift,2                 ; the guest: the host's lift's height
-WA_VAR wa_lkid,4                   ; our identity, and the peer bound
-WA_VAR wa_lkpeer,4
+WA_VAR wa_pc,WP_SZ                 ; THE PEER BEING HEARD OR SENT TO: its
+                                   ; record loaded (wa_pload), the names
+WA_VAR wa_pt,WP_SZ*WL_NPEER        ; below its fields; the table of them
+WA_VAR wa_lkp,1                    ; ...which one is loaded; how many there are
+WA_VAR wa_lkpn,1
+WA_VAR wa_lkld,1                   ; 1: a peer is loaded in wa_pc
+wa_lkpeer   equ wa_pc+WP_ID
+wa_lkpmac   equ wa_pc+WP_ADDR
+wa_lkps     equ wa_pc+WP_PS
+wa_lkpheard equ wa_pc+WP_PHEARD
+wa_lkptag   equ wa_pc+WP_PTAG
+wa_lklost   equ wa_pc+WP_LOST
+wa_lkgone   equ wa_pc+WP_GONE
+wa_lkrseen  equ wa_pc+WP_RSEEN
+wa_lkheard  equ wa_pc+WP_HEARD
+wa_lkdin    equ wa_pc+WP_DIN
+wa_lkdout   equ wa_pc+WP_DOUT
+wa_lkin     equ wa_pc+WP_IN
+wa_lkqs     equ wa_pc+WP_QS
+wa_lkqt     equ wa_pc+WP_QT
+wa_lkattr   equ wa_pc+WP_ATTR
+wa_lkbdin   equ wa_pc+WP_BDIN
+wa_lkack    equ wa_pc+WP_ACK
+wa_lkpslot  equ wa_pc+WP_SLOT
+WA_VAR wa_lkid,4                   ; our identity
 WA_VAR wa_lkst,1                   ; our lobby state (0, 1 ready, 2 in), its
-WA_VAR wa_lkps,1
-WA_VAR wa_lkpheard,2               ; OS ticks: its last HELLO; our last sent
-WA_VAR wa_lkbeat,2
+WA_VAR wa_lkbeat,2                 ; OS ticks: our last HELLO
 WA_VAR wa_lkarena,1                ; the match: the host's arena, difficulty,
 WA_VAR wa_lkdiff,1                 ;   tag; the host's tag as the guest heard
 WA_VAR wa_lktag,1                  ;   it; 1: go in (wa_lkstart)
-WA_VAR wa_lkptag,1
-WA_VAR wa_lkgo,1
 WA_VAR wa_lkfull,1                 ; the window's rows all to draw
 WA_VAR wa_lkon,1                   ; 1: in a linked match
-WA_VAR wa_lklost,1                 ; silent WL_QUIET ticks; left; seen yet
-WA_VAR wa_lkgone,1
-WA_VAR wa_lkrseen,1
-WA_VAR wa_lkheard,2                ; sim ticks: its last frame
-WA_VAR wa_lkdin,2                  ; the damage words: its to us, ours to it
-WA_VAR wa_lkdout,2
-WA_VAR wa_lkin,1                   ; events: the last applied, ours next out,
 WA_VAR wa_lkseq,1                  ;   waiting, sent this pass, when
 WA_VAR wa_lkqn,1
-WA_VAR wa_lkqs,1
-WA_VAR wa_lkqt,2
 WA_VAR wa_lkq,WL_EVQ*WL_EVSZ
 WA_VAR wa_lkev,WL_EVSZ
 WA_VAR wa_lkfr,LK_MAXF             ; a body being built
@@ -5331,11 +5353,12 @@ WA_VAR wa_lkr,WR_SZ*WA_NFIG       ; each remote figure as its SNAP said
 WA_VAR wa_lkpkk,1                  ; how we died (0..2)
 WA_VAR wa_lkbots,1                 ; the lobby's bots; the match's
 WA_VAR wa_lknb,1
-WA_VAR wa_lkme,1                   ; who we are on the wire: 0 host, 1 guest
-WA_VAR wa_lkattr,1                 ; who dealt the damage word's last
+WA_VAR wa_lkme,1                   ; our slot on the wire (0: the host)
+WA_VAR wa_lknp,1                   ; the players in the match (slots 0..)
+WA_VAR wa_lkrf,1                   ; the last SNAP's flags (its kill's kind)
+WA_VAR wa_lkbo,1                   ; (the HSNAP's bot, counting)
 WA_VAR wa_lkhby,1                  ; ...and who the other's last says hurt us
 WA_VAR wa_lkbd,2                   ; the guest's hits on the two bots, and
-WA_VAR wa_lkbdin,2                 ;   the host's last seen of them
 WA_VAR wa_lkd,16                   ; deaths by cause: [dead][cause], codes
                                    ;   on the wire
 WA_VAR wa_lkpnam,8                 ; its name
