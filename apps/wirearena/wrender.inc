@@ -1885,22 +1885,24 @@ wa_span:
     cmp cx, 16                  ; whenever the SEGMENT spans more than a
     jbe .e0                     ; column (not the trimmed count)
     xor dx, dx
+    cmp ax, 0x4000
+    jae .eb
+    shl ax, 1
+    shl ax, 1                   ; |change| x 4
+    cmp ax, cx
+    jae .ew
+    xchg ax, dx                 ; (under a half-row: the fraction alone)
+    jmp .ed
+.eb:
     shl ax, 1
     rcl dx, 1
     shl ax, 1
     rcl dx, 1                   ; DX:AX = |change| x 4
-    or dx, dx
-    jnz .ew
-    cmp ax, cx
-    jb .ef
 .ew:
     div cx
     mov si, ax
     mov byte [wa_steep], 1
     xor ax, ax
-    jmp .ed
-.ef:
-    xchg ax, dx                 ; (under a half-row: the fraction alone)
 .ed:
     div cx
     mov bx, ax                  ; SI.BX = |step|
@@ -1954,8 +1956,7 @@ wa_span:
     neg bx
     sbb si, 0
 .e5:
-    add ax, 0x8000              ; + a half + t1 (x 16384)
-    adc dx, 0
+    add di, 2                   ; + t1 + a half: (t1 + 2) / 4
     mov cx, di
     sar cx, 1
     sar cx, 1
