@@ -2539,6 +2539,9 @@ view A; the session's scratch, `r5/walls/lv/vids/`):
 2. **The heights arena's rate:** 11.8–25.9 fps at 40 columns on the
    revised arena (9.7.5). The busy views are still under the forecast.
    9.7.8 has the owner's options; the pillars are the cheap one.
+   *Since:* performance pass 6 (MULTIPLAYER-FPS-PLAN 16.9, 2026-11-14) has
+   the five views at 15.5 / 17.0 / 43.2 / 15.0 / 35.4 fps at 40 columns.
+   The owner ruled there that FARTOP stays at Very Low alone.
 3. **The room corners' views** (9.1), beside the tower's.
 4. **Flights as one object:** settled as ramps (7.1.2, 7.4.2). The stepped
    look is the T option.
