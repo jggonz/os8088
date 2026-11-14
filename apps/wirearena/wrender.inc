@@ -75,7 +75,7 @@ WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
                                 ; (LK_COARSE), else 0 - the bottom's and the
                                 ; top's (0 too where the top is not drawn:
                                 ; the sparse level, ROOMF) - wa_collook
-WA_VAR wa_ftailp, 2             ; wa_fspan's way on: FLATBODY's tail
+WA_VAR wa_ftailp, 2             ; (unused: wa_render still sets it)
 WA_VAR wa_roomf, 1              ; ROOMF: non-zero while the room's faces are
                                 ; drawn at a level with it (wa_render)
 WA_VAR wa_vertp, 2              ; wa_vert or wa_vertr: the level's (wa_lookset)
@@ -1545,8 +1545,8 @@ wa_span:
     je .flat                    ; box has raised one in the range)
     call wa_fclpc
 .flat:
-    call .reg                   ; (a steep edge's way out takes the tag
-    jc .none                    ; back; AX = c1, DX = c2 - c1)
+    call .reg                   ; (AX = c1, DX = c2 - c1)
+    jc .none
     cmp dx, 16                  ; a segment inside one column: no step (the
     ja .dcok                    ; edges are their first ends' - see .edge)
     mov bx, [wa_t1]
@@ -1559,9 +1559,6 @@ wa_span:
     mov si, wa_t1 - wa_vpt      ; (the top's ends, as wa_flat reads them)
     mov di, wa_t2 - wa_vpt
     jmp wa_flat
-.steepm:                        ; wa_flat's steep way out, a clipped span
-    sub word [wa_tag], 2
-    jmp .gen1
 
 ; .ftail - a flat span's passes and corners, its edges made (wa_flat's
 ; general way): the plain passes, or on heights the clip-tested ones where a
@@ -1702,7 +1699,9 @@ wa_span:
     stc
     ret
 
-.gen1:                          ; SPANLOOP's: the last open column too
+; .gen1 - wa_flat's steep way out: SPANLOOP's. The span is registered,
+; wa_dc and wa_fs made (.fgx), wa_t1, wa_t2, wa_b1 and wa_b2 its edges' ends.
+.gen1:                          ; the last open column too
     mov si, [wa_end]
     dec si
     dec si
@@ -1745,11 +1744,7 @@ wa_span:
     mov [wa_vbl], cx
     mov [wa_vb0], bx
     pop bp                      ; the top: CX.BP in the loop
-    push cx
-    call .reg
-    pop cx
-    jc .none
-    mov dh, bl                  ; DH = the tag
+    mov dh, [wa_tag]            ; DH = the tag (registered by the flat way)
     xor ax, ax                  ; AN EDGE MOVING OFF THE SCREEN (or level),
     cmp [wa_sparse], al         ; once off it, is off it for the rest of
     jne .fl                     ; the span - the loops drop it there (wa_tup:
@@ -1985,7 +1980,7 @@ wa_span:
 ; wa_span's own scan - no copy into wa_c1.., no second scan. SI = v1 x 2,
 ; DI = v2 x 2 (made: wa_face.mk); [wa_cs], [wa_end], [wa_cs0], [wa_ce0],
 ; wa_e1 and wa_e2 set by wa_face, and its [wa_fv] still the two vertices (a
-; steep edge's way out reads them back). On heights (wa_fspanh) the passes
+; steep edge's way out, wa_flat.steep, reads them back). On heights (wa_fspanh) the passes
 ; test the column's clip only where a low box has raised one in the range:
 ; with none raised, no low box has a cell there, and the plain passes draw
 ; the same cells.
@@ -2025,7 +2020,7 @@ wa_fspan:
 ; six flat spans in ten on the play bench) - is ONE loop: no divide, no
 ; fraction, a column opened and both its cells in one turn (.l2), the posts
 ; between the same two half-rows at both ends. Anything else is .fgx's: an
-; edge at a time (wa_fedge), two passes by runs (FLATTAIL), SPANLOOP's when
+; edge at a time (wa_fedge), two passes by runs (wa_span.ftail), SPANLOOP's when
 ; one is steep.
 wa_flat:
     mov bx, bp                  ; the bottom's change in -3..3?
@@ -2235,16 +2230,25 @@ wa_flat:
     jmp wa_span.ftail           ; the passes and the corners
 .steep2:
     add sp, 4
-.steep:
-    xor bh, bh                  ; the face's vertices again (wa_face's):
-    mov bl, [wa_fv]             ; one outside the view is a CLIPPED span's,
-    mov si, bx                  ; wa_c1.. holding it (wa_span) - else the
-    mov bl, [wa_fv+1]           ; vertices into wa_c1..
-    mov di, bx
-    mov al, [wa_vok+si]
+.steep:                         ; A STEEP EDGE: SPANLOOP's (wa_span.gen1),
+    xor bh, bh                  ; on the edges' ends in wa_t1.. - a clipped
+    mov bl, [wa_fv]             ; span's are there (wa_span: one of the
+    mov si, bx                  ; face's vertices, wa_face's wa_fv, outside
+    mov bl, [wa_fv+1]           ; the view); else the two vertices' (a
+    mov di, bx                  ; segment inside one column has no step: it
+    mov al, [wa_vok+si]         ; never comes here)
     and al, [wa_vok+di]
-    jz wa_span.steepm
-    jmp wa_fsteep
+    jz .sgo
+    mov ax, [wa_vpt+si]
+    mov [wa_t1], ax
+    mov ax, [wa_vpb+si]
+    mov [wa_b1], ax
+    mov ax, [wa_vpt+di]
+    mov [wa_t2], ax
+    mov ax, [wa_vpb+di]
+    mov [wa_b2], ax
+.sgo:
+    jmp wa_span.gen1
 
 ; wa_collook - once a frame (wa_lookset): wa_flat's level tests, from the
 ; detail level
@@ -2252,7 +2256,7 @@ wa_collook:
     cmp byte [wa_hflat], 0      ; A FLAT ARENA'S CLIP: the screen's end in
     je .hts                     ; every column, made once (heights clears
     cmp byte [wa_cflat], 0      ; its own each frame: wa_render) - so the
-    jne .lv                     ; steep loop, wa_slope and wa_cclp test the
+    jne .lv                     ; steep loop, wa_slope and wa_corner test the
     mov di, wa_cclip            ; clip on any arena, and the screen with it
     mov ax, WA_HR
     mov cx, WA_MAXW
@@ -2306,44 +2310,6 @@ wa_fclpc:
     mov al, 4
 .no:
     mov [wa_fclp], ax
-    ret
-
-; wa_fsteep - a steep edge in wa_fspan's span: the vertices into wa_c1..
-; (with wa_span's one-column rule) and on to SPANLOOP's way, the tag taken
-; back for .reg to take again
-wa_fsteep:
-    call wa_tomem
-    sub word [wa_tag], 2
-    cmp word [wa_dc], 16
-    ja .go
-    mov ax, [wa_t1]
-    mov [wa_t2], ax
-    mov ax, [wa_b1]
-    mov [wa_b2], ax
-.go:
-    jmp wa_span.gen1
-
-; wa_tomem - SI = v1 x 2, DI = v2 x 2 (in the view, made): their column,
-; top, bottom and inverse depth into wa_c1..wa_i2. Clobbers AX, BX, DI
-wa_tomem:
-    mov bx, di
-    mov di, wa_c1
-    mov ax, [wa_vpc+si]
-    stosw
-    mov ax, [wa_vpt+si]
-    stosw
-    mov ax, [wa_vpb+si]
-    stosw
-    mov ax, [wa_vpi+si]
-    stosw
-    mov ax, [wa_vpc+bx]
-    stosw
-    mov ax, [wa_vpt+bx]
-    stosw
-    mov ax, [wa_vpb+bx]
-    stosw
-    mov ax, [wa_vpi+bx]
-    stosw
     ret
 
 ; --- the column loops ---------------------------------------------------------
@@ -2617,19 +2583,26 @@ wa_eoff:
 ; An edge moving UP the screen subtracts it instead, a borrow being the
 ; change; a pass keeps that fraction COMPLEMENTED (~(x - f) = ~x + f, and the
 ; borrow is the carry), so one loop serves both directions. With ONE edge a
-; pass, the fraction and its step stay in registers where SPANLOOP kept the
+; pass, the fraction and its step stay in registers where SPANLOOP keeps the
 ; bottom in memory: pass 1 opens the columns (wa_cov 0 -> the tag) and draws
 ; the top (its column's first cell: no stamp test), pass 2 draws the bottom
-; in the columns pass 1 opened, stamp-tested (a wall under a row tall). The
-; arithmetic and the cells are exactly SPANLOOP's; the list's order is not,
-; and nothing reads it. A shut column costs a step, not a call (wa_gap).
+; in the columns pass 1 opened - untested too where the wall is three
+; half-rows tall or more (wa_flat's .thin: the edges share no cell); a thin
+; wall's pass 2 is the clip's, which tests. The list's order is free: nothing
+; reads it. A shut column costs a step, not a call (wa_gap). An edge that
+; steps OFF the screen is off it for the rest of the span (it moves one way):
+; pass 1 opens the rest (wa_openrest), pass 2 returns - and one off it at the
+; first column and moving further off does so at once.
 ; FLATPASS %1 = 1 the opening pass, 0 the second; %2 = the edge's direction
-; (+1 down the screen, -1 up). In: SI = the first column x 2, BP = the
-; edge's fraction (a pass's form) and [wa_fh] its half-row there, CX = the
-; step's fraction, AH = the attribute, DL = the stamp, DH = the tag, DI = the
-; list, [wa_end] = one past the last column x 2 - which pass 1 must find SHUT
-; (wa_span's sentinel). Out: DI; BP and [wa_fh] one column past the end;
-; pass 1 counts the columns it found shut into wa_ncl. Clobbers AL, BX, SI.
+; (+1 down the screen, -1 up); %3 = 1 the clip's (heights: a cell under a
+; nearer low box's top not drawn, and every cell's stamp tested).
+; In: SI = the first column x 2, BP = the edge's fraction (a pass's form) and
+; [wa_fh] its half-row there, CX = the step's fraction, AH = the attribute,
+; DL = the stamp, DH = the tag, DI = the list, [wa_end] = one past the last
+; column x 2 - which pass 1 must find SHUT (wa_span's sentinel). Out: DI;
+; BP and [wa_fh] one column past the end (an edge gone off the screen: off
+; it, and BP = 0xFFFF); pass 1: SI = the end, and the columns it found shut
+; counted into wa_ncl. Clobbers AL, BX, SI (the clip's: CX too).
 %macro FLATPASS 2-3 0
 %if %3
     mov [wa_fst], cx            ; (the clip's: the step in memory, the edge's
