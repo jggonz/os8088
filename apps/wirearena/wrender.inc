@@ -66,6 +66,8 @@ WA_VAR wa_vb0, 2
 WA_VAR wa_afix, 1               ; the span's shade is one band
 WA_VAR wa_fclp, 1               ; wa_fclpc: 1 the clip-tested passes
 WA_VAR wa_cflat, 1              ; wa_cclip holds a flat arena's (wa_collook)
+WA_VAR wa_tup, 1                ; SPANLOOP: the top moves up the screen or
+WA_VAR wa_bdn, 1                ; not at all, the bottom down (wa_span.gen1)
 WA_VAR wa_lvb, 2                ; wa_flat's LEVEL test: 7 while an edge that
 WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
                                 ; (LK_COARSE), else 0 - the bottom's and the
@@ -1740,14 +1742,56 @@ wa_span:
     call .reg
     pop cx
     jc .none
+    mov dh, bl                  ; DH = the tag
+    xor ax, ax                  ; AN EDGE MOVING OFF THE SCREEN (or level),
+    cmp [wa_sparse], al         ; once off it, is off it for the rest of
+    jne .fl                     ; the span - the loops drop it there (wa_tup:
+    mov bx, [wa_st]             ; the top up; wa_bdn: the bottom down) - but
+    or bx, bx                   ; for the sparse level, whose posts want the
+    js .tu                      ; true top
+    or bx, [wa_stl]
+    jnz .tn
+.tu:
+    inc ax
+.tn:
+    cmp word [wa_sb], 0
+    jl .fl
+    inc ah
+.fl:
+    mov [wa_tup], ax
     mov cx, [wa_vt0]
     mov word [wa_ncl], 0
     mov si, [wa_cs]
     mov di, [wa_lp]
     mov dl, [wa_frame]
-    mov dh, bl                  ; DH = the tag
+.hd:                            ; THE HEAD: columns the wall leaves EMPTY -
+    or cx, cx                   ; its top above the screen and its bottom
+    jns .hgo                    ; under it (a near wall running off the
+    cmp word [wa_vb], WA_HR     ; view): opened and stepped, no more
+    jl .hgo
+    cmp word [wa_cov+si], 0
+    jne .hsh
+    mov [wa_cov+si], dh
+.hst:
+    add bp, [wa_stl]
+    adc cx, [wa_st]
+    mov ax, [wa_sbl]
+    add [wa_vbl], ax
+    mov ax, [wa_sb]
+    adc [wa_vb], ax
+    inc si
+    inc si
+    cmp si, [wa_end]
+    jb .hd
+    jmp .vd                     ; (all of it)
+.hsh:
+    inc word [wa_ncl]
+    jmp .hst
+.hgo:
+    mov word [wa_pht], -1       ; (the column before's, when it was one of
+    mov word [wa_phb], WA_HR    ; those: off the screen)
     mov ah, [wa_wcol]           ; the wall's colour: its ITEM's, not its depth
-    mov bx, wa_ls1              ; which loop: the top drawn, or not -
+    mov bx, wa_ls11             ; which loop: the top drawn, or not -
     cmp byte [wa_roomf], 0      ; (ROOMF: the room's steep span sparse, and
     je .vr                      ; no posts)
     mov byte [wa_e1], 0
@@ -1761,7 +1805,7 @@ wa_span:
     cmp word [wa_t2], -3        ; loop, which draws no top and no top
     jg .v1                      ; fills, draws the same cells - as
 .vs:                            ; wa_fedge's test)
-    mov bx, wa_ls0
+    mov bx, wa_ls01
 .v1:
     call bx
 .vd:
@@ -2263,22 +2307,27 @@ wa_tomem:
     ret
 
 ; --- the column loops ---------------------------------------------------------
-; The steep spans' loop (a flat span is wa_flat's), assembled twice so no
-; column tests a mode: %1 = 1 draws the TOP edge (0: the sparse one, floor
-; lines and corner posts - and a top above the screen).
+; The steep spans' loop (a flat span is wa_flat's), assembled three ways so
+; no column tests a mode: %1 = 1 draws the TOP edge (0: the sparse one,
+; floor lines and corner posts - and a top above the screen), %2 = 1 the
+; BOTTOM (0: under the screen for the rest of the span).
 ; In: SI = first column x 2, [wa_end] = one past the last x 2 (the first
 ; and last are open), CX.BP = the top (whole half-row, rounded, and a
 ; 16-bit fraction), wa_vb.wa_vbl the bottom alike, DL = the stamp, DH = the
 ; span's tag, AH = the wall's attribute, DI = the list. Out: DI, the two
-; accumulators one column past the end, wa_ncl = the columns found shut.
+; accumulators one column past the end (an edge dropped: off the screen as
+; it is there), wa_ncl = the columns found shut.
 ; An edge is ONE test against the column's clip (wa_cclip: the screen's
 ; last half-row + 1 where no low box stands, and on a flat arena throughout
 ; - wa_collook). An edge two half-rows or more from the column before's
 ; (wa_pht, wa_phb; a column that was not ours has none) is a STEP: its cell
 ; and the fill between come from wa_efill, out of line - in a steep span
-; most columns.
-%macro SPANLOOP 1
-%%col:
+; most columns. An edge OFF the screen and moving away from it (wa_tup,
+; wa_bdn) is DROPPED: the loop goes on in the one without it - a near wall's
+; bottom is under the screen for most of a steep span - and with both gone
+; the rest of the span is opened and no more (wa_stail).
+%macro SPANLOOP 2
+wa_ls%1%2:
     cmp word [wa_cov+si], 0
     jne %%shut
     mov [wa_cov+si], dh
@@ -2287,8 +2336,10 @@ wa_tomem:
 %if %1
     mov [wa_pht], cx
 %endif
+%if %2
     mov bx, [wa_vb]
     mov [wa_phb], bx
+%endif
 %%ours:
 %if %1
     mov bx, cx
@@ -2307,6 +2358,8 @@ wa_tomem:
     WPLOT                       ; (a low box's edge may share the cell)
 %%t:
 %endif
+%if %2
+wa_ls%1%2_b:
     mov bx, [wa_vb]
     cmp bx, [wa_cclip+si]
     jae %%bo
@@ -2322,20 +2375,24 @@ wa_tomem:
     add bx, si
     WPLOT                       ; (the top's cell, a wall under a row tall)
 %%b:
+%endif
+wa_ls%1%2_s:
     add bp, [wa_stl]            ; 16.16: the fraction carries
     adc cx, [wa_st]
+%if %2
     mov bx, [wa_sbl]
     add [wa_vbl], bx
     mov bx, [wa_sb]
     adc [wa_vb], bx
+%endif
     inc si
     inc si
     cmp si, [wa_end]
-    jb %%col
+    jb wa_ls%1%2
     ret
 %%shut:                         ; (a nearer wall: wa_gap jumps the run)
     call wa_gap
-    jmp %%col
+    jmp wa_ls%1%2
 %if %1
 %%tf:                           ; the top STEPPED: its cell and the fill
     dec bx                      ; (BX = the last column's top)
@@ -2351,15 +2408,25 @@ wa_tomem:
     cmp bx, [wa_cclip+si]       ; other way
     jb %%tx
     xor bx, cx
-    jns %%t
+    jns %%td
     xor bx, cx
 %%tx:
     push cx
     xchg bx, cx
     call wa_eoff
     pop cx
-    jmp %%t
+%%td:
+    or cx, cx                   ; above the screen, and moving up: for good
+    jns %%t
+    cmp byte [wa_tup], 0
+    je %%t
+  %if %2
+    jmp wa_ls01_b               ; (the bottom alone from here)
+  %else
+    jmp wa_stail
+  %endif
 %endif
+%if %2
 %%bf:
     dec bx
     add bx, [wa_vb]
@@ -2374,7 +2441,7 @@ wa_tomem:
     cmp bx, [wa_cclip+si]
     jb %%bx
     xor bx, [wa_vb]
-    jns %%b
+    jns %%bd
     xor bx, [wa_vb]
 %%bx:
     push cx
@@ -2382,10 +2449,52 @@ wa_tomem:
     mov bx, [wa_vb]
     call wa_eoff
     pop cx
-    jmp %%b
+%%bd:
+    cmp word [wa_vb], WA_HR     ; under the screen, and moving down: for good
+    jl %%b
+    cmp byte [wa_bdn], 0
+    je %%b
+    mov word [wa_vb], 2048      ; (under it wherever the far corner looks)
+  %if %1
+    jmp wa_ls10_s               ; (the top alone from here)
+  %else
+    jmp wa_stail
+  %endif
+%endif
 %endmacro
-wa_ls1:     SPANLOOP 1          ; full
-wa_ls0:     SPANLOOP 0          ; sparse (or a top above the screen)
+    SPANLOOP 1, 1               ; full
+    SPANLOOP 0, 1               ; sparse, or the top above the screen
+    SPANLOOP 1, 0               ; the bottom under it
+
+; wa_stail - SPANLOOP's end, both edges off the screen for good: the rest
+; of the span's columns opened and counted, nothing drawn; the top one
+; column on (as its accumulator is where the loop ends: off the screen
+; there as here). SI = the column the loop stood in. Clobbers AX, BX, SI.
+wa_stail:
+    add bp, [wa_stl]
+    adc cx, [wa_st]
+    push cx
+    mov bx, di                  ; (the list)
+    lea di, [si+wa_cov+2]
+    mov cx, [wa_end]
+    sub cx, si
+    shr cx, 1
+    dec cx
+    jz .done
+    xor ax, ax
+.l:
+    scasw
+    jne .s
+    mov [di-2], dh
+.n:
+    loop .l
+.done:
+    mov di, bx
+    pop cx
+    ret
+.s:
+    inc word [wa_ncl]
+    jmp .n
 
 ; wa_efill - SPANLOOP's STEP: BX = an edge's half-row in the column SI, CX =
 ; its half-row the column before, two or more apart: the edge's cell, and
