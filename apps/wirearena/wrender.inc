@@ -2981,17 +2981,18 @@ wa_figures:
     pop di
     pop bx
     jc .nxt
-    mov [wa_fxs+bx], ax
-    mov [wa_fzs+bx], dx
-    mov [wa_frec+bx], di
     mov cx, dx
     add cx, 64
+    mov si, ax
     or ax, ax
     jns .ax
     neg ax
 .ax:
     cmp ax, cx
     jg .nxt                     ; outside the view, with a body's margin
+    mov [wa_fxs+bx], si
+    mov [wa_fzs+bx], dx
+    mov [wa_frec+bx], di
     mov si, bp                  ; in view: into wa_ford, far to near - an
 .ins:                           ; insertion, so the first of equal depths
     or si, si                   ; stays first, as the old pick had it
@@ -3306,17 +3307,32 @@ wa_figure:
     sub bx, ax                  ; (the wall comes nearer leftward: the first)
     neg ax
 .nr:
-    call wa_wallz
-    cmp bp, [wa_colz+bx]
+    call .wz
     jae .bv
     sub bx, ax                  ; nearer there: the other end - nearer there
-    call wa_wallz               ; too, the run is hidden
-    cmp bp, [wa_colz+bx]
+    call .wz                    ; too, the run is hidden
     jb .bh
     or ax, ax                   ; one of each: every column, from the first
     jns .mix
     add bx, ax
     jmp short .mix
+.wz:                            ; wa_wallz's line for BX's column, the span
+    push ax                     ; in SI: into wa_colz, and CF = 1: nearer
+    push dx                     ; than the figure (BP). Keeps every register
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, 8
+    sub ax, [wa_spcs+si]
+    imul word [wa_spsl+si]
+    idiv word [wa_spsh+si]
+    add ax, [wa_spih+si]
+    mov [wa_colz+bx], ax
+    cmp bp, ax
+    pop dx
+    pop ax
+    ret
 .bh:
     mov bx, cx
     pop cx
@@ -3330,8 +3346,7 @@ wa_figure:
     jnz .run
     jmp short .rd
 .mix:                           ; (the wall passes the figure's depth inside
-    call wa_wallz               ; the run: each column exactly)
-    cmp bp, [wa_colz+bx]
+    call .wz                    ; the run: each column exactly)
     jae .mv
     mov byte [wa_fvis+bx], 1
     inc dh
@@ -4257,8 +4272,8 @@ wa_marker:
     jae .out                    ; (unsigned: off either side)
     mov bx, si
     and bx, 0xFFFE              ; BX = its column x 2: ONE verdict for
-    mov ax, [wa_fiz]            ; the whole bar
-    call wa_occl
+    mov ax, [wa_fiz]            ; the whole bar (the span's ends first:
+    call wa_thocc               ; wa_occl's very answer)
     or al, al
     jz .out                     ; the wall there is nearer
     xor ah, ah                  ; (a platform: the bar ends above its band)
