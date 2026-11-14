@@ -2045,7 +2045,6 @@ wa_flat:
     mov dl, [wa_frame]
     mov dh, [wa_tag]            ; DH = the tag
     mov di, [wa_lp]
-    mov word [wa_ncl], 0
     mov si, [wa_end]            ; the column past the end reads shut (a high
     mov byte [wa_cov+si+1], 1   ; byte: always 0 otherwise)
     mov si, [wa_cs]
@@ -2090,9 +2089,13 @@ wa_flat:
     jmp .l2
 .l2s:
     cmp si, [wa_end]
-    jae .ldone
-    inc word [wa_ncl]
-    jmp .l2a
+    jb .l2a
+    mov byte [wa_cov+si+1], 0   ; (SI = the end)
+    mov ax, di                  ; opened: two cells a column on the list
+    sub ax, [wa_lp]
+    shr ax, 1
+    shr ax, 1
+    jmp .lcnt
 .l1x:
     mov bx, [wa_vt0]
     jmp .l1
@@ -2101,14 +2104,15 @@ wa_flat:
 .l1:                            ; one edge, BX (or none: off the screen):
     mov [wa_fh], bx             ; the opening pass, no step
     xor cx, cx
+    mov [wa_ncl], cx
     mov ah, [wa_wcol]
     call wa_fo
-.ldone:                         ; (SI = the end)
-    mov byte [wa_cov+si+1], 0
+    mov byte [wa_cov+si+1], 0   ; (SI = the end)
     xchg ax, si                 ; opened: the range less the shut ones
     sub ax, [wa_cs]
     shr ax, 1
     sub ax, [wa_ncl]
+.lcnt:
     sub [wa_left], ax
     test byte [wa_look], LK_NOPOST ; (NOPOST: a wall shorter than
     jz .np                      ; WA_POSTMIN half-rows - a far one - has no
@@ -2117,15 +2121,33 @@ wa_flat:
     cmp ax, WA_POSTMIN
     jl .pdone
 .np:
-    cmp byte [wa_e1], 0         ; the corners, at the segment's own ends,
-    je .c2                      ; when this span opened them: a `│` each
-    mov si, [wa_cs]             ; (nothing else is in either column: no
-    cmp si, [wa_cs0]            ; stamp tests)
-    jne .c2
+    cmp word [wa_e1], 0         ; THE POSTS, at the segment's own ends where
+    je .pdone                   ; this span opened them (wa_e1, wa_e2): a `│`
+    mov ax, [wa_vb0]            ; each, between the same two half-rows -
+    sar ax, 1                   ; the rows made once (wa_corner's: stop
+    cmp ax, WA_ROWS             ; before the bottom's row, start under the
+    jle .pb                     ; top's). Nothing else is in either column:
+    mov ax, WA_ROWS             ; no stamp tests
+.pb:
     mov bx, [wa_vt0]
-    mov ax, [wa_vb0]
-    xor cl, cl
-    call wa_corner
+    sar bx, 1
+    inc bx
+    jns .pt
+    xor bx, bx
+.pt:
+    sub ax, bx
+    jle .pdone
+    xchg ax, bp                 ; BP = the rows
+    shl bx, 1
+    mov bx, [wa_rowo2+bx]       ; BX = the first's offset
+    mov al, 0xB3
+    mov ah, [wa_wcol]
+    cmp byte [wa_e1], 0
+    je .c2
+    mov si, [wa_cs]
+    cmp si, [wa_cs0]
+    jne .c2
+    call .post
 .c2:
     cmp byte [wa_e2], 0
     je .pdone
@@ -2134,12 +2156,24 @@ wa_flat:
     jge .pdone
     cmp [wa_cov+si], dh         ; (and opened here)
     jne .pdone
-    mov bx, [wa_vt0]
-    mov ax, [wa_vb0]
-    xor cl, cl
-    call wa_corner
+    call .post
 .pdone:
     mov [wa_lp], di
+    ret
+.post:                          ; SI = the column x 2
+    push bx
+    add bx, si
+    mov cx, bp
+    mov si, [wa_rowo2+2]        ; (a row's offset: row 1's)
+.pr:
+    mov [wa_stamp+bx], dl
+    mov [wa_cur+bx], ax
+    xchg ax, bx
+    stosw
+    xchg ax, bx
+    add bx, si
+    loop .pr
+    pop bx
     ret
 
 .fgx:                           ; an edge that is not level, or the clip's passes
