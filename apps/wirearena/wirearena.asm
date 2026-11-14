@@ -734,10 +734,7 @@ wa_tick:
 .walk:
     or bx, bx
     jz .jump                    ; standing: no step, nothing to collide
-    mov ax, [wa_ang]
-    mov cl, 6
-    shr ax, cl
-    call wa_sincos              ; AX = sin, DX = cos (Q14)
+    call wa_camsc               ; AX = sin, DX = cos (Q14)
     sar ax, 1                   ; Q13, so forward + strafe cannot overflow
     sar dx, 1
     ; vx = fwd*cos + right*sin ; vy = fwd*sin - right*cos
@@ -5055,13 +5052,8 @@ WA_FHW equ WA_FIGHEAD/2
 wa_rframe:
     push ax
     push dx
-    mov ax, [wa_ang]            ; the camera's sin and cos (the part has no
-    mov cl, 6                   ; table): wa_ang's 1024-step angle, as the
-    shr ax, cl                  ; renderer's wa_cang
-    call wa_sincos
-    mov [wa_fsn], ax
-    mov [wa_fcs], dx
-    pop dx
+    call wa_camsc               ; the camera's sin and cos, into FRAME (the
+    pop dx                      ; part has no table)
     pop ax
     mov es, [wa_rds]
     cld
@@ -5094,6 +5086,29 @@ wa_rframe:
     mov cx, WA_NRK*WA_RKSZ/2
     rep movsw
 .norock:
+    ret
+
+; wa_camsc - AX = sin, DX = cos (Q14) of the camera's angle, wa_ang's
+; 1024-step one (the renderer's wa_cang): FRAME's wa_fsn and wa_fcs, made
+; again only when that angle is another (wa_fsa: wa_ang with its fraction's
+; bits set, so never 0, which is "none yet"). A frame and the ticks of the
+; player's walk ask for the same one until the view turns. Keeps all but
+; AX, CL, DX
+wa_camsc:
+    mov ax, [wa_ang]
+    or al, 0x3F
+    cmp ax, [wa_fsa]
+    jne .make
+    mov ax, [wa_fsn]
+    mov dx, [wa_fcs]
+    ret
+.make:
+    mov [wa_fsa], ax
+    mov cl, 6
+    shr ax, cl
+    call wa_sincos
+    mov [wa_fsn], ax
+    mov [wa_fcs], dx
     ret
 
 ; wa_render - a frame: the frame state into the part, the renderer, and back
@@ -5452,8 +5467,7 @@ WA_VAR wa_pxf,2
 WA_VAR wa_pyf,2
 WA_VAR wa_jz,2
 WA_VAR wa_jv,2
-WA_VAR wa_s13,2
-WA_VAR wa_c13,2
+WA_VAR wa_fsa,2                  ; the angle wa_fsn, wa_fcs are for (wa_camsc)
 WA_VAR wa_hits,2
 WA_VAR wa_tmp,2
 WA_VAR wa_last,4
