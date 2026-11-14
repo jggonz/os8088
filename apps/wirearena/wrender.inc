@@ -4231,7 +4231,9 @@ wa_fl_xtab:
     dw wa_fxL00, wa_fxL01, wa_fxL10, wa_fxL11
 
 ; wa_marker - DI = a figure too far for limbs: a one-sub-column bar from
-; head to feet, its attribute already chosen. The trigger's extents too.
+; head to feet, its attribute already chosen. The trigger's extents too -
+; unless its column is off the screen or the wall there is nearer, when it
+; stops at that, not drawn (F_PZ 0), before its height is worked out.
 wa_marker:
     mov ax, [wa_fcx]
     imul word [wa_fs8]
@@ -4240,31 +4242,36 @@ wa_marker:
     add ax, [wa_w]
     mov [di+F_PCX], ax
     mov si, ax                  ; SI = the sub-column
-    mov ax, 112                 ; the head, 1.75 m
-    sub ax, [wa_feye]
-    imul word [wa_fv8]
-    mov al, ah
-    mov ah, dl
-    neg ax
-    add ax, [wa_hh]
-    mov [di+F_PTOP], ax
-    mov cx, ax                  ; CX = top half-row
-    mov ax, [wa_feye]           ; the feet, the floor
-    imul word [wa_fv8]
-    mov al, ah
-    mov ah, dl
-    add ax, [wa_hh]
-    mov [di+F_PBOT], ax
-    mov [wa_mbot], ax
-    mov word [di+F_PWH], 1
     cmp si, [wa_w2]
-    jae .out                    ; (unsigned: off either side)
+    jae .none                   ; (unsigned: off either side)
     mov bx, si
     and bx, 0xFFFE              ; BX = its column x 2: ONE verdict for
     mov ax, [wa_fiz]            ; the whole bar (the span's ends first:
     call wa_thocc               ; wa_occl's very answer)
     or al, al
-    jz .out                     ; the wall there is nearer
+    jz .none                    ; the wall there is nearer
+    mov ch, al                  ; CH = the first half-row a platform hides
+    mov ax, [wa_feye]           ; the feet, the floor: hh + (eye fv8 >> 8)
+    imul word [wa_fv8]
+    mov cl, al                  ; (CL = that product's low byte)
+    mov al, ah
+    mov ah, dl
+    add ax, [wa_hh]
+    mov [di+F_PBOT], ax
+    mov [wa_mbot], ax
+    mov al, 112                 ; the head, 1.75 m: hh - ((112 - eye) fv8
+    mul byte [wa_fv8]           ; >> 8), which is the feet's less ((112 fv8
+    mov dl, cl                  ; - that low byte) >> 8) - a byte multiply
+    xor dh, dh                  ; (fv8 is under 9), the same number
+    sub ax, dx
+    mov al, ah
+    cbw
+    neg ax
+    add ax, [wa_mbot]
+    mov [di+F_PTOP], ax
+    mov word [di+F_PWH], 1
+    mov dx, ax                  ; DX = top half-row
+    mov al, ch
     xor ah, ah                  ; (a platform: the bar ends above its band)
     dec ax
     cmp ax, WA_HR-1
@@ -4276,6 +4283,7 @@ wa_marker:
     mov ax, [wa_mbot]
 .bot:
     mov [wa_mbot], ax           ; the last half-row, clipped
+    mov cx, dx
     or cx, cx
     jns .top
     xor cx, cx
@@ -4309,7 +4317,9 @@ wa_marker:
     jmp .cell
 .done:
     pop di
-.out:
+    ret
+.none:
+    mov word [di+F_PZ], 0       ; not drawn: the trigger has nothing to hit
     ret
 
 ; --- pickups, rockets, explosions (WEAPONS-PLAN 2.4, 2.5) -----------------
