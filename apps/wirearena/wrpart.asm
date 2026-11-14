@@ -327,19 +327,26 @@ wa_loadarena:
     mov di, wa_pkv
     rep movsw
 .nopk:
-    mov word [es:wa_lift], -1   ; its lift, the first of the table: the
-    mov si, [bx+36]             ; sim moves it (arenagen allows one)
-    cmp word [si], 0
-    je .nolift
-    mov al, [si+2]
+    mov si, [bx+36]             ; ITS LIFTS (ARENAS-PLAN 4.1): the sim
+    lodsw                       ; moves each - count; then box, 0, rest,
+    mov [es:wa_nlift], ax       ; raised (arenagen's, at most WA_MLIFT)
+    mov cx, ax
+    jcxz .nolift
+    xor di, di
+.lift:
+    lodsb
     xor ah, ah
     shl ax, 1
     shl ax, 1
-    mov [es:wa_lift], ax
-    mov ax, [si+4]
-    mov [es:wa_lrest], ax
-    mov ax, [si+6]
-    mov [es:wa_ltop], ax
+    mov [es:wa_lift+di], ax
+    lodsb
+    lodsw
+    mov [es:wa_lrest+di], ax
+    lodsw
+    mov [es:wa_ltop+di], ax
+    inc di
+    inc di
+    loop .lift
 .nolift:
     mov byte [es:wa_pvsh], 0    ; ITS PVS (HEIGHTS-PLAN 9.8): the grid's
     mov si, [bx+42]             ; shift and cells a column, and the cells'

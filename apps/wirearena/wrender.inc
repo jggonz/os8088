@@ -125,7 +125,7 @@ WA_VAR wa_cs0, 2
 WA_VAR wa_steep, 1              ; the span's edges can step >= 2 half-rows
 WA_VAR wa_crow, 2               ; this box's corner row (wa_corn)
 WA_VAR wa_ce0, 2
-WA_VAR wa_at, 10                ; this frame's attributes (A_*)
+WA_VAR wa_at, 12                ; this frame's attributes (A_*)
 WA_VAR wa_kfrow, WA_NJ*4*WA_NFIG ; each figure's two keyframe rows, out of
                                 ; the pose part (wa_kfrows)
 wa_cos  equ wa_fcs              ; the camera's cos and sin: the frame
@@ -292,6 +292,7 @@ wa_render:
     mov si, wa_attrm
 .attr:
     mov di, wa_at
+    movsw
     movsw
     movsw
     movsw

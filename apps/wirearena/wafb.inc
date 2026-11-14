@@ -28,7 +28,7 @@
 WR_MAGIC0   equ 'WR'                ; +0: 'WRPART', then the ABI byte and the
 WR_MAGIC1   equ 'PA'                ;     verb count - checked by the primary
 WR_MAGIC2   equ 'RT'                ;     at launch, refused on a mismatch
-WR_ABI      equ 7                   ; (2: the camera's sin/cos in FRAME;
+WR_ABI      equ 8                   ; (2: the camera's sin/cos in FRAME;
                                     ; 3: F_Z, the treads, ARENA's heights;
                                     ; 4: wa_look, the detail level's bits,
                                     ; where wa_hyst was; wa_flod gone;
@@ -37,7 +37,9 @@ WR_ABI      equ 7                   ; (2: the camera's sin/cos in FRAME;
                                     ; OVERLAY, TRACE's cone; 6: F_SIZE
                                     ; 56, the bots' bytes; no patrols in
                                     ; ARENA - AI-PLAN 3.1; 7: wa_look's
-                                    ; bit 7, LK_COARSE2)
+                                    ; bit 7, LK_COARSE2; 8: the lifts'
+                                    ; tables, ARENAS-PLAN 4.1)
+WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WR_H_ABI    equ 6
 WR_H_NV     equ 7
 WR_H_VERB   equ 8                   ; +8: a word per verb, its offset
@@ -127,9 +129,10 @@ WA_FBV wa_ahmax, 2                  ; the tallest height (wa_hmax's copy)
 WA_FBV wa_bxh, WA_MBOX*4            ; per box: height, kind, faces - a
                                     ; lift's height the sim's to move (G
                                     ; writes it into R's every frame)
-WA_FBV wa_lift, 2                   ; the lift: its record's offset in
-WA_FBV wa_lrest, 2                  ; wa_bxh (-1: none), its rest and raised
-WA_FBV wa_ltop, 2                   ; heights (HEIGHTS-PLAN 3.2)
+WA_FBV wa_nlift, 2                  ; THE LIFTS (ARENAS-PLAN 4.1): how many,
+WA_FBV wa_lift, WA_MLIFT*2          ; and per lift its record's offset in
+WA_FBV wa_lrest, WA_MLIFT*2         ; wa_bxh, its rest and raised heights
+WA_FBV wa_ltop, WA_MLIFT*2          ; (HEIGHTS-PLAN 3.2) - a word each
 WA_FBV wa_npk, 2                    ; its pickups (WEAPONS-PLAN 2.4): how
 WA_FBV wa_pks, WA_MPK*WA_PKSZ       ; many, and each's x, y, z, kind
 WA_FBV wa_fb_end, 0

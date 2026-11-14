@@ -55,7 +55,18 @@ STEPUP = 24                     # the most a step may rise and still walk
                                 # (0.375 m, HEIGHTS-PLAN 3.1)
 FRAD = 8                        # a dummy's feet: the square its floor is
                                 # read under (wa_figtick; WA_FRAD)
-SOLID, FLIGHT, LIFT = 0, 1, 2
+SOLID, FLIGHT, LIFT, LINE = 0, 1, 2, 3
+# A LINE (WIREARENA-ARENAS-PLAN 2): a box drawn as the low outline its
+# height makes - a line on the floor - that the game treats as a WALL to
+# feet (wa_hat) and as nothing to shots and to sight: the edge of a walk
+# with no drop modelled beyond it. On the wire to the renderer it is a SOLID
+# with bit 7 of its kind byte set, which only the game reads
+# COLOURS (wa_bcol, wrtab.inc's wa_attrc): 0 the room's blue, 1 an item's
+# cyan, 9 a hedge's green, 10 a platform's red
+COL_ROOM, COL_ITEM, COL_HEDGE, COL_PLAT = 0, 1, 9, 10
+# a pickup's kind (WEAPONS-PLAN 2.4; their table is with the pickups, below)
+PK_SHOTGUN, PK_CHAINGUN, PK_GRENADE, PK_ROCKET, PK_RAIL = 0, 1, 2, 3, 4
+PK_HEALTH, PK_SHIELD = 5, 6
 FACES = "SENW"                  # face order, as everywhere: S E N W
 
 
@@ -160,6 +171,7 @@ HEIGHTS_PATHS = [
 # one, so a bench's dummies walk their old patrols exactly.
 WALK, LIFT_ON, LIFT_UP, DROP = 0, 1, 2, 3
 WA_MGN = 32                     # nodes an arena's graph may have
+WA_MLIFT = 4                    # lifts an arena may have (wafb.inc's)
 HEIGHTS_GRAPH = dict(
     nodes=[(1248, 600), (1248, 1024), (1248, 1450), (1700, 1450),
            (1700, 600),                                 # 0-4: over the ramps
@@ -187,7 +199,7 @@ HEIGHTS_RESPAWNS = [(1024, 480, 256), (250, 1024, 0), (1650, 1850, 768),
                     (1700, 200, 256), (800, 1024, 0)]
 FLAT_RESPAWNS = [(1024, 480, 256), (1024, 1600, 768), (320, 1024, 0),
                  (1750, 1024, 512)]
-ARENA_RESPAWNS = {"a2": HEIGHTS_RESPAWNS}
+ARENA_RESPAWNS = {"a2": HEIGHTS_RESPAWNS}    # (the maze's and twin's: below)
 WA_MRSP = 8
 
 
@@ -250,8 +262,9 @@ def graph_edges(tag, boxes):
         (x0, y0), (x1, y1) = nodes[a], nodes[b_]
         n = max(1, int(math.hypot(x1 - x0, y1 - y0) // SPEED))
         bs = raised if kind == LIFT_UP else boxes
-        walls = [b for b in bs if b.h >= top or (b.kind == LIFT and
-                                                 kind == WALK)]
+        walls = [b for b in boxes if b.kind == LINE or       # (a tall box
+                 (b.h >= top and not climbed(b, boxes)) or  # climbed is a
+                 (b.kind == LIFT and kind == WALK)]         # floor: twin's)
         prev = None if flat else floor_at(x0, y0, bs, FRAD)
         for k in range(n + 1):
             x, y = x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n
@@ -378,8 +391,18 @@ def graph_block(tag, boxes):
     for a, (x, y) in enumerate(nodes):
         o = outs[a] + [0xFF] * (4 - len(outs[a]))
         out += struct.pack('<hh4B', x, y, *o)
+    lifts = [b for b in map(bx, boxes) if b.kind == LIFT]
     for (a, b_, kind, x, y, head, steps, rev) in edges:
-        out += struct.pack('<hhHH4B', x, y, head, steps, b_, kind, rev, 0)
+        k = kind                        # a lift's leg: WHICH lift, bits 4-5
+        if kind in (LIFT_ON, LIFT_UP):  # (ARENAS-PLAN 4.1) - the one under
+            px, py = nodes[b_ if kind == LIFT_ON else a]    # its rider
+            on = [i for i, l in enumerate(lifts)
+                  if l[0] <= px <= l[2] and l[1] <= py <= l[3]]
+            if len(on) != 1:
+                raise SystemExit("arenagen: arena %s: lift leg %d -> %d: its "
+                                 "rider's node is on no lift" % (tag, a, b_))
+            k |= on[0] << 4
+        out += struct.pack('<hhHH4B', x, y, head, steps, b_, k, rev, 0)
     grid = sight_grid(tag, boxes)
     out += grid
     g = 1 << PVS_SHIFT                  # the nearest node each cell's middle
@@ -426,19 +449,268 @@ def graph_block(tag, boxes):
         out.append(near[0] if near else 0xFF)
     if len(out) & 1:
         out.append(0)
+    bench = ARENA_BENCH[tag]            # its play bench's views (ARENAS-PLAN
+    out += struct.pack('<H', len(bench))    # 4.2: x, y, angle, base pitch,
+    for (mark, x, y, a, p, f) in bench:     # floor, HUD mark - wa_pbstart)
+        bxs = list(map(bx, boxes))
+        if inside(x, y, [b for b in bxs if b.kind == LINE or
+                         (b.h >= hmax(bxs) and not climbed(b, bxs))], 24):
+            raise SystemExit("arenagen: arena %s: bench view %s stands in a "
+                             "wall" % (tag, mark))
+        out += struct.pack('<hhHhhH', x, y, a << 6, p, f, ord(mark))
     return bytes(out)
+
+
+# --- THE MAZE (docs/plans/WIREARENA-ARENAS-PLAN.md 1): green hedges in rings
+# round an open centre, a red three-tier stack in it; four exits from the
+# centre and four entrances to the outer ring, offset; past the outer ring
+# a walkable plateau (its wall's top) with a room cut into it at each
+# cardinal - east and west a weapon on a platform, south health or shield
+# on one, north the lift up onto the plateau. Offsets from the middle, all
+# on the 64-unit sight grid where tall.
+C = 1024
+MH = 384                        # a hedge: 6 m, over every eye (the tiers'
+                                # top and the plateau included)
+MP = 128                        # the plateau: the outer ring wall's top
+
+
+def _sym4(x0, y0, x1, y1):
+    """a box given by its offsets from the middle"""
+    return (C + x0, C + y0, C + x1, C + y1)
+
+
+def _mbox(x0, y0, x1, y1, h, col, name, **kw):
+    return Box(*_sym4(x0, y0, x1, y1), h=h, col=col, name=name, **kw)
+
+
+MAZE_BOXES = [
+    # the stack: the top, then two rings, each a jump above the one under it
+    _mbox(-64, -64, 64, 64, 160, COL_PLAT, "stack top"),
+    _mbox(-128, 64, 128, 128, 104, COL_PLAT, "stack middle N"),
+    _mbox(-128, -128, 128, -64, 104, COL_PLAT, "stack middle S"),
+    _mbox(64, -64, 128, 64, 104, COL_PLAT, "stack middle E"),
+    _mbox(-128, -64, -64, 64, 104, COL_PLAT, "stack middle W"),
+    _mbox(-192, 128, 192, 192, 48, COL_PLAT, "stack bottom N"),
+    _mbox(-192, -192, 192, -128, 48, COL_PLAT, "stack bottom S"),
+    _mbox(128, -128, 192, 128, 48, COL_PLAT, "stack bottom E"),
+    _mbox(-192, -128, -128, 128, 48, COL_PLAT, "stack bottom W"),
+    # the centre's hedge: its exits on its east and west sides, by the corners
+    _mbox(-320, 256, 320, 320, MH, COL_HEDGE, "centre hedge N"),
+    _mbox(-320, -320, 320, -256, MH, COL_HEDGE, "centre hedge S"),
+    _mbox(256, -128, 320, 128, MH, COL_HEDGE, "centre hedge E"),
+    _mbox(-320, -128, -256, 128, MH, COL_HEDGE, "centre hedge W"),
+    # the middle hedge: its entrances on its north and south sides, by the
+    # corners - never facing an exit of the centre's
+    _mbox(512, -576, 576, 576, MH, COL_HEDGE, "middle hedge E"),
+    _mbox(-576, -576, -512, 576, MH, COL_HEDGE, "middle hedge W"),
+    _mbox(-384, 512, 384, 576, MH, COL_HEDGE, "middle hedge N"),
+    _mbox(-384, -576, 384, -512, MH, COL_HEDGE, "middle hedge S"),
+    # the outer ring wall, and the rooms cut in it: its NORTH half a plateau,
+    # walked on from the lift round to the east and west rooms (which cut
+    # it - its south half, past them, no one could reach: hedges)
+    _mbox(-1024, 768, -64, 1024, MP, COL_HEDGE, "plateau NW"),
+    _mbox(64, 768, 1024, 1024, MP, COL_HEDGE, "plateau NE"),
+    _mbox(-1024, -1024, -256, -768, MH, COL_HEDGE, "outer hedge SW"),
+    _mbox(256, -1024, 1024, -768, MH, COL_HEDGE, "outer hedge SE"),
+    _mbox(768, 256, 1024, 768, MP, COL_HEDGE, "plateau EN"),
+    _mbox(768, -768, 1024, -256, MH, COL_HEDGE, "outer hedge ES"),
+    _mbox(-1024, 256, -768, 768, MP, COL_HEDGE, "plateau WN"),
+    _mbox(-1024, -768, -768, -256, MH, COL_HEDGE, "outer hedge WS"),
+    _mbox(896, -128, 1024, 128, 48, COL_PLAT, "east room's platform"),
+    _mbox(-1024, -128, -896, 128, 48, COL_PLAT, "west room's platform"),
+    _mbox(-128, -1024, 128, -896, 48, COL_PLAT, "south room's platform"),
+    _mbox(-64, 768, 64, 1024, 16, COL_PLAT, "north room: the lift",
+          kind=LIFT, top=MP),
+]
+
+
+def _mn(x, y):
+    return (C + x, C + y)
+
+
+MAZE_GRAPH = dict(
+    nodes=[_mn(224, 224), _mn(224, -224), _mn(-224, -224), _mn(-224, 224),
+           # 0-3: round the stack
+           _mn(448, 448), _mn(448, 224), _mn(448, -224), _mn(448, -448),
+           _mn(-448, -448), _mn(-448, -224), _mn(-448, 224), _mn(-448, 448),
+           # 4-11: the inner ring
+           _mn(672, 672), _mn(672, 0), _mn(672, -672), _mn(448, -672),
+           _mn(0, -672), _mn(-448, -672), _mn(-672, -672), _mn(-672, 0),
+           _mn(-672, 672), _mn(-448, 672), _mn(0, 672), _mn(448, 672),
+           # 12-23: the outer ring
+           _mn(832, 0), _mn(-832, 0), _mn(0, -832)],
+           # 24-26: the east, west and south rooms
+    legs=[(0, 1), (1, 2), (2, 3), (3, 0),
+          (4, 5), (5, 6), (6, 7), (7, 8), (8, 9), (9, 10), (10, 11), (11, 4),
+          (12, 13), (13, 14), (14, 15), (15, 16), (16, 17), (17, 18),
+          (18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 12),
+          (0, 5), (1, 6), (2, 9), (3, 10),           # the centre's exits
+          (4, 23), (7, 15), (8, 17), (11, 21),       # the middle's entrances
+          (13, 24), (19, 25), (16, 26)],             # the rooms
+    homes=[[4, 5, 6, 7, 8, 9, 10, 11],
+           [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+           [0, 1, 2, 3]])
+MAZE_RESPAWNS = [(C, C - 672, 256), (C, C + 672, 768), (C + 672, C, 512),
+                 (C - 672, C, 0), (C + 448, C, 256), (C - 448, C, 768),
+                 (C + 224, C + 224, 512)]
+MAZE_PICKUPS = [
+    ((PK_ROCKET, PK_GRENADE), C, C),             # the stack's top
+    ((PK_SHOTGUN, PK_CHAINGUN), C + 960, C),     # the east room's platform
+    ((PK_RAIL, PK_SHOTGUN), C - 960, C),         # the west room's
+    ((PK_HEALTH, PK_SHIELD), C, C - 960),        # the south room's
+]
+MAZE_START = (C, C - 672, 256)
+
+# --- TWIN (ARENAS-PLAN 3): two towers across from each other, a railgun on
+# each, a lift up each hidden behind it; between them two walks, one from
+# each tower, that go to its right and come back to join in the middle -
+# everything that is not walk a LINE: seen across, stopped at. A chaingun
+# on the ground beside each tower, health or shield where the walks join.
+# Symmetric through the middle: (x, y) -> (2048 - x, 2048 - y).
+TT = 240                        # a tower: the tallest box, so it hides its
+                                # lift from the ground; the lift raised
+                                # flush with its top
+TL = 8                          # a line: drawn on the floor
+
+
+def _mirror(b, name):
+    x0, y0, x1, y1 = b
+    return Box(2048 - x1, 2048 - y1, 2048 - x0, 2048 - y0, h=b.h,
+               kind=b.kind, col=b.col,
+               toward={"N": "S", "S": "N", "E": "W", "W": "E"}.get(b.toward),
+               treads=b.treads, top=b.top, name=name)
+
+
+# the walk, as rectangles: the south tower's base, its walk (up, right, up,
+# back left along the bar), the bar the two walks share, and their mirrors
+_TW_S = [(768, 0, 1280, 704), (960, 704, 1088, 768), (960, 768, 1600, 896),
+         (1472, 896, 1600, 960)]
+TWIN_WALK = _TW_S + [(2048 - c, 2048 - d, 2048 - a, 2048 - b)
+                     for (a, b, c, d) in _TW_S] + [(448, 960, 1600, 1088)]
+
+
+def _lines(solids):
+    """the room less the walk as LINE boxes: the fewest rectangles a
+    GUILLOTINE partition makes (each cut a straight line across what is left
+    - so the box tree finds its separating lines, which a free-form tiling
+    need not have), by a search over the coordinates. A SOLID in the walk
+    (a tower, a stair) is a region no cut may cross"""
+    rects = TWIN_WALK + [tuple(b) for b in solids]
+    xs = sorted({0, 2048} | {v for r in rects for v in (r[0], r[2])})
+    ys = sorted({0, 2048} | {v for r in rects for v in (r[1], r[3])})
+
+    def kind(i, j):                     # 0 void, 1 walk, 2 + k solid k
+        x, y = xs[i], ys[j]
+        for k, (a, b, c, d) in enumerate(solids):
+            if a <= x < c and b <= y < d:
+                return 2 + k
+        return 1 if any(a <= x < c and b <= y < d
+                        for (a, b, c, d) in TWIN_WALK) else 0
+    memo = {}
+    BAD = [None] * 999
+
+    def best(i0, j0, i1, j1):
+        key = (i0, j0, i1, j1)
+        if key in memo:
+            return memo[key]
+        ks = {kind(i, j) for i in range(i0, i1) for j in range(j0, j1)}
+        r = BAD
+        if ks == {0}:
+            r = [(xs[i0], ys[j0], xs[i1], ys[j1])]
+        elif ks == {1}:
+            r = []
+        elif len(ks) == 1 and tuple(solids[ks.pop() - 2]) == \
+                (xs[i0], ys[j0], xs[i1], ys[j1]):
+            r = []
+        else:
+            for i in range(i0 + 1, i1):
+                c = best(i0, j0, i, j1) + best(i, j0, i1, j1)
+                if len(c) < len(r):
+                    r = c
+            for j in range(j0 + 1, j1):
+                c = best(i0, j0, i1, j) + best(i0, j, i1, j1)
+                if len(c) < len(r):
+                    r = c
+        memo[key] = r
+        return r
+    out = best(0, 0, len(xs) - 1, len(ys) - 1)
+    if len(out) >= len(BAD):
+        raise SystemExit("arenagen: twin: no guillotine partition of its lines")
+    return [Box(*r, h=TL, kind=LINE, col=COL_ROOM, name="line") for r in out]
+
+
+_TWS = [Box(896, 320, 1152, 576, TT, col=COL_ITEM, name="south tower"),
+        Box(960, 128, 1088, 320, 16, LIFT, col=COL_ITEM, top=TT,
+            name="south tower's lift")]
+_TWN = [_mirror(_TWS[0], "north tower"),
+        _mirror(_TWS[1], "north tower's lift")]
+TWIN_BOXES = _TWS + _TWN + _lines(_TWS + _TWN)
+TWIN_GRAPH = dict(                      # (a tower: up its lift, the rail
+    nodes=[(832, 64), (1024, 64), (1216, 64), (1216, 640), (1024, 640),
+           (832, 640),                          # 0-5: round the south tower
+           (1024, 832), (1536, 832), (1536, 1024), (1024, 1024),
+                                                # 6-9: its walk, the middle
+           (1216, 1984), (1024, 1984), (832, 1984), (832, 1408), (1024, 1408),
+           (1216, 1408),                        # 10-15: round the north one
+           (1024, 1216), (512, 1216), (512, 1024),      # 16-18: its walk
+           (1024, 224), (1024, 448),            # 19-20: the south lift, top
+           (1024, 1824), (1024, 1600)],         # 21-22: the north's
+    legs=[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0),
+          (4, 6), (6, 7), (7, 8), (8, 9),
+          (10, 11), (11, 12), (12, 13), (13, 14), (14, 15), (15, 10),
+          (14, 16), (16, 17), (17, 18), (18, 9), (8, 18),
+          (1, 19, LIFT_ON), (19, 20, LIFT_UP), (20, 4, DROP),
+          (11, 21, LIFT_ON), (21, 22, LIFT_UP), (22, 14, DROP)],
+    homes=[[0, 1, 2, 3, 4, 5], [10, 11, 12, 13, 14, 15], [18, 9, 8]])
+                                        # off its front: ARENAS-PLAN 4.1)
+TWIN_RESPAWNS = [(832, 64, 256), (1216, 1984, 768), (1216, 640, 256),
+                 (832, 1408, 768), (1536, 1024, 512), (512, 1024, 0)]
+TWIN_PICKUPS = [
+    (PK_RAIL, 1024, 448), (PK_RAIL, 1024, 1600),     # the towers' tops
+    (PK_CHAINGUN, 832, 480), (PK_CHAINGUN, 1216, 1568),  # beside them
+    ((PK_HEALTH, PK_SHIELD), 1024, 1024),            # where the walks join
+]
+TWIN_START = (1024, 640, 256)
 
 
 def arenas():
     return [("a0", "Arena", BOXES, PLAYER_START),
             ("a1", "Open", OPEN_BOXES, PLAYER_START),
-            ("a2", "Heights", HEIGHTS_BOXES, PLAYER_START)]
+            ("a2", "Heights", HEIGHTS_BOXES, PLAYER_START),
+            ("a3", "Maze", MAZE_BOXES, MAZE_START),
+            ("a4", "Twin", TWIN_BOXES, TWIN_START)]
 
 
 # an arena's own patrols (the rest walk PATHS): every arena's are WA_NFIG
 # loops - an arena with no route graph of its own walks them as one
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
-ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH}
+ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": MAZE_GRAPH, "a4": TWIN_GRAPH}
+ARENA_ROOMCOL = {"a3": COL_HEDGE}
+# arenas let past the visible budget (wamodel.BUDGET_*, HEIGHTS-PLAN 4.2) -
+# the owner's stress tests (ARENAS-PLAN 4.4: "to see how well the system holds
+# up"), each with its own ceiling and its frame rate measured where it is
+# worst. (boxes, outline edges)
+OVER_BUDGET = {"a3": (20, 44)}
+ARENA_RESPAWNS.update({"a3": MAZE_RESPAWNS, "a4": TWIN_RESPAWNS})
+# THE PLAY BENCH'S VIEWS (P, MULTIPLAYER-FPS-PLAN 16.7; ARENAS-PLAN 4.2), an
+# arena's own, each P press the next: mark, x, y, angle (1024ths), base
+# pitch, the floor under the eye. The heights arena's five are HEIGHTS-PLAN
+# 9's A to E; the maze's and the twin's their worst and their landmarks
+_PB = ("P", 224, 800, 32, 0, 0)         # (across the first two rooms)
+ARENA_BENCH = {
+    "a0": [_PB], "a1": [_PB],
+    "a2": [("A", 800, 400, 160, 0, 0), ("B", 1600, 1024, 512, 0, 0),
+           ("C", 1248, 1024, 512, 0, 80), ("D", 1952, 1024, 512, -40, 160),
+           ("E", 600, 1568, 512, 0, 0)],
+    "a3": [("A", 1248, 1248, 640, 0, 0),        # the court, its worst edges
+           ("B", 1700, 1024, 0, 0, 0),          # the east room
+           ("C", 1472, 1472, 768, 0, 0),        # the inner ring's corner
+           ("D", 1024, 1900, 768, 0, 128)],     # on the outer wall, north
+    "a4": [("A", 1024, 640, 256, 0, 0),         # before the south tower
+           ("B", 1024, 448, 256, -40, 240),     # on it, across to the north
+           ("C", 1536, 1024, 512, 0, 0),        # the walks' bar
+           ("D", 864, 96, 256, 0, 0)],          # behind it: the most boxes
+}
 
 
 def height_at(b, x, y, r):
@@ -508,12 +780,30 @@ PVS_MIN = 0.10                  # an arena carries one when it culls at
 PVS_SHIFT = 7                   # the grid: 128 units (2 m) a cell
 
 
+def adjacent(a, b):
+    """Boxes a and b share a stretch of face"""
+    return ((a[2] == b[0] or b[2] == a[0]) and a[1] < b[3] and b[1] < a[3]) \
+        or ((a[3] == b[1] or b[3] == a[1]) and a[0] < b[2] and b[0] < a[2])
+
+
+def climbed(n, boxes):
+    """A tall box n a flight or a lift beside it climbs onto (the twin's
+    towers): stood on, so a floor, not a wall"""
+    return any(b.kind in (FLIGHT, LIFT) and adjacent(b, n) and
+               n.h - max(b.h, b.top or 0) <= STEPUP for b in boxes)
+
+
 def pvs_eyemax(boxes):
     """The highest eye the game allows: the highest floor anything stands
-    on (a low box's top, a lift raised), the eye above it, and a jump"""
+    on (a low box's top, a lift raised, a TALL box a flight or a lift
+    climbs to - the twin's towers, ARENAS-PLAN 3), the eye above it, and a
+    jump"""
     top = hmax(boxes)
     floor = max([0] + [max(b.h, b.top or 0) for b in boxes if b.h < top
-                       or b.kind == LIFT])
+                       or b.kind == LIFT] +
+                [n.h for b in boxes if b.kind in (FLIGHT, LIFT)
+                 for n in boxes if n is not b and n.h >= top and
+                 adjacent(b, n) and n.h - max(b.h, b.top or 0) <= STEPUP])
     src = open(__file__.replace("tools/arenagen.py", "apps/wirearena/waconst.inc")
                if __file__.endswith("tools/arenagen.py") else
                "apps/wirearena/waconst.inc").read()
@@ -841,8 +1131,7 @@ def pvs_points(x0, y0, x1, y1, occ):
 # --- pickups (docs/plans/WIREARENA-WEAPONS-PLAN.md 2.4) ----------------------
 # kind: the renderer's shape and colour (wa_pkdraw's table) and the game's
 # effect (wa_pktake's); a weapon's kind is its weapon number less one
-PK_SHOTGUN, PK_CHAINGUN, PK_GRENADE, PK_ROCKET, PK_RAIL = 0, 1, 2, 3, 4
-PK_HEALTH, PK_SHIELD = 5, 6
+# (PK_* kinds: with the box kinds, at the top - the arenas name them)
 PK_HALF = (24, 28, 20, 32, 40, 16, 12)  # half its width (wa_pkshape's)
 PK_PVSR = 16                    # the square its PVS bit is for: at least
                                 # every half width but the lines' - a line
@@ -862,7 +1151,8 @@ HEIGHTS_PICKUPS = [
     ((PK_SHOTGUN, PK_CHAINGUN, PK_GRENADE), 1248, 1024),
     ((PK_ROCKET, PK_RAIL), 1952, 1024),
 ]
-ARENA_PICKUPS = {"a2": HEIGHTS_PICKUPS}
+ARENA_PICKUPS = {"a2": HEIGHTS_PICKUPS, "a3": MAZE_PICKUPS,
+                 "a4": TWIN_PICKUPS}
 
 
 def pickups(tag, boxes):
@@ -874,14 +1164,18 @@ def pickups(tag, boxes):
     out = []
     for k, x, y in ARENA_PICKUPS.get(tag, []):
         if not (ROOM[0] < x < ROOM[2] and ROOM[1] < y < ROOM[3]) or \
-                any(b[0] < x < b[2] and b[1] < y < b[3] and b.h >= hmax(boxes)
-                    for b in boxes):
+                any(b[0] < x < b[2] and b[1] < y < b[3] and
+                    ((b.h >= hmax(boxes) and not climbed(b, boxes)) or
+                     b.kind == LINE) for b in boxes):
             raise SystemExit("arenagen: arena %s: a pickup at (%d, %d) is in a "
                              "wall" % (tag, x, y))
         ks = k if isinstance(k, tuple) else (k,)
-        if len(ks) > 1 and max(ks) >= PK_HEALTH:
+        if len(ks) > 1 and max(ks) >= PK_HEALTH and \
+                set(ks) != {PK_HEALTH, PK_SHIELD}:
             raise SystemExit("arenagen: arena %s: a spawn at (%d, %d) picks "
-                             "among more than weapons" % (tag, x, y))
+                             "among more than weapons, or health and shield "
+                             "(wa_pkroll takes any choices; the owner's rule "
+                             "keeps the two kinds apart)" % (tag, x, y))
         out.append((ks[0], x, y, floor_at(x, y, boxes, 0),
                     sum(1 << c for c in ks) if len(ks) > 1 else 0))
     if len(out) > WA_MPK:
@@ -1256,10 +1550,22 @@ def face_bits(i, boxes):
             bits |= 1 << k
         if not covered(lo, hi, same):
             bits |= 16 << k
+    if b.kind == LINE:                  # A LINE (ARENAS-PLAN 2): its top's
+        bits &= 0xF0                    # edges alone - no face, so no post
+                                        # and no floor edge under each: one
+                                        # line on the floor, not two
     return bits
 
 
-def kind_byte(b, lifts):
+def kind_byte(b, lifts, boxes=()):
+    """bit 7: a LINE (the game's alone); bit 6: a TALL box a flight or a lift
+    climbs onto - a floor to the player all the same (wa_lists' low tables);
+    the renderer reads neither"""
+    if b.kind == LINE:
+        return SOLID | 0x80
+    if b.kind == SOLID and boxes and b.h >= hmax(boxes) and \
+            climbed(b, boxes):
+        return SOLID | 0x40
     if b.kind == FLIGHT:
         return FLIGHT | FACES.index(b.toward) << 2 | b.treads << 4
     if b.kind == LIFT:
@@ -1284,6 +1590,8 @@ def height_checks(tag, boxes):
                     yield f, n
     reach = set()
     for b in boxes:
+        if b.kind == LINE:
+            continue
         if b.kind == FLIGHT:
             if not 1 <= b.treads <= 15:          # (its nibble, and the
                 raise SystemExit("arenagen: arena %s: %s has %d treads - a "
@@ -1308,6 +1616,24 @@ def height_checks(tag, boxes):
                 raise SystemExit("arenagen: arena %s: %s rises to %d, which "
                                  "meets no neighbour's top" % (tag, b.name, b.top))
             reach |= {id(n) for n in meet}
+    # ...and a platform a JUMP reaches from a neighbour that is reached -
+    # stacked tiers (ARENAS-PLAN 1): within apex - 8 of a reached top beside
+    # it, or of the floor
+    grow = True
+    while grow:
+        grow = False
+        for b in boxes:
+            if b.kind != SOLID or id(b) in reach or b.h <= apex - 8:
+                continue
+            if any(id(n) in reach and n.kind != LINE and
+                   0 <= b.h - max(n.h, n.top or 0) <= apex - 8
+                   for f, n in neighbours(b)):
+                reach.add(id(b))
+                grow = True
+            elif any(n.kind != LINE and n.h <= apex - 8 and
+                     0 <= b.h - n.h <= apex - 8 for f, n in neighbours(b)):
+                reach.add(id(b))
+                grow = True
     for b in boxes:
         if b.kind == SOLID and STEPUP < b.h < top and id(b) not in reach \
                 and b.h > apex - 8:
@@ -1385,19 +1711,24 @@ def arena_tables(w, tag, boxes, start):
     w("                                ; owner's call: colour says WHAT a wall")
     w("                                ; is, not how far (two shades never read")
     w("                                ; as depth, and Hercules has none)")
-    w("    db 0" + "".join(", %d" % b.col for b in boxes))
+    w("    db %d" % ARENA_ROOMCOL.get(tag, COL_ROOM) +
+      "".join(", %d" % b.col for b in boxes))
     w(P + "boxes:                       ; x0, y0, x1, y1")
     for b in boxes:
         w("    dw %d, %d, %d, %d" % b)
     lifts = [b for b in boxes if b.kind == LIFT]
-    if len(lifts) > 1:
-        raise SystemExit("arenagen: arena %s has %d lifts - the sim moves one "
-                         "(HEIGHTS-PLAN 7.4)" % (tag, len(lifts)))
+    if len(lifts) > WA_MLIFT:
+        raise SystemExit("arenagen: arena %s has %d lifts - the sim moves %d "
+                         "(ARENAS-PLAN 4.1)" % (tag, len(lifts), WA_MLIFT))
+    for b in lifts:                     # (the SNAP's byte: height / 4 in six
+        if b.h % 4 or b.top % 4 or b.top > 252:     # bits, wa_lksnap)
+            raise SystemExit("arenagen: arena %s: lift %s: its heights must "
+                             "be multiples of 4, to 252" % (tag, b.name))
     w(P + "bxh:                         ; per box: height (a lift's at rest),")
     w("                                ; kind, faces (HEIGHTS-PLAN 7.2.1)")
     for i, b in enumerate(boxes):
         w("    dw %d" % b.h)
-        w("    db %d, %d" % (kind_byte(b, lifts), face_bits(i, boxes)))
+        w("    db %d, %d" % (kind_byte(b, lifts, boxes), face_bits(i, boxes)))
     w(P + "lifts:                       ; count; box, 0, rest, raised")
     w("    dw %d" % len(lifts))
     for b in lifts:
@@ -1613,7 +1944,11 @@ def arena_part(n, out):
     nx, ny, nv, nb, nn = arena_tables(T.append, tag, boxes, start)
     import wamodel                      # (it reads the arenas from here)
     (kb, kp), (ke, ep) = wamodel.budget(n)
-    if kb > wamodel.BUDGET_BOXES or ke > wamodel.BUDGET_EDGES:
+    ob, oe = OVER_BUDGET.get(tag, (wamodel.BUDGET_BOXES,
+                                   wamodel.BUDGET_EDGES))
+    sys.stderr.write("arenagen: arena %s: at worst %d boxes in view at %r, "
+                     "%d outline edges at %r\n" % (tag, kb, kp, ke, ep))
+    if kb > ob or ke > oe:
         raise SystemExit("arenagen: arena %s is over the visible budget "
                          "(docs/plans/WIREARENA-HEIGHTS-PLAN.md 4.2): %d boxes "
                          "in view at %r, %d outline edges at %r - at most %d "

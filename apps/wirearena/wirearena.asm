@@ -333,8 +333,12 @@ wa_reset:
     mov [wa_kills], ax
     mov [wa_feet], ax
     mov word [wa_eye], WA_EYE
-    mov [wa_lon], ax            ; the lift at rest, nobody on it
-    mov [wa_loff], ax
+%assign wa_i 0                  ; the lifts at rest, nobody on them
+%rep WA_MLIFT
+    mov [wa_lon+wa_i], ax
+    mov [wa_loff+wa_i], ax
+%assign wa_i wa_i+2
+%endrep
     dec ax
     mov [wa_fpx], ax            ; (the floor: read afresh)
     inc ax
@@ -866,8 +870,12 @@ wa_tick:
     je .figs0
     call wa_ptick
 .figs0:
-    mov byte [wa_lbn], 0        ; (the bots on the lift this tick: the
-                                ; lift's riders the next, wa_ltick)
+    xor ax, ax                  ; (the bots on each lift this tick: its
+%assign wa_i 0                  ; riders the next, wa_ltick - a byte a
+%rep WA_MLIFT                   ; lift, a word apart)
+    mov [wa_lbn+wa_i], ax
+%assign wa_i wa_i+2
+%endrep
     mov bx, [wa_tkn]            ; WHOSE TURN TO LOOK (AI-PLAN 4.1): each bot
     and bx, 7                   ; every eighth tick, 0.27 s, on the tick
     shl bx, 1                   ; where tick + (WA_NFIG - its index) x 3 is a
@@ -887,14 +895,20 @@ wa_tick:
     jb .fig
 .figd:
     inc word [wa_tkn]
-    mov al, [wa_lbn]
-    mov [wa_lbot], al
+%assign wa_i 0
+%rep WA_MLIFT
+    mov ax, [wa_lbn+wa_i]
+    mov [wa_lbot+wa_i], ax
+%assign wa_i wa_i+2
+%endrep
 .c_w:                           ; (the labels: tools/watrace.py's stops)
     call wa_wtick               ; the weapon's reload and its next shot,
 .c_rk:                          ; the rockets, the pickups (WEAPONS-PLAN)
     cmp byte [wa_rkn], 0        ; (none live: the usual tick)
     je .c_pk
+    mov byte [wa_hproj], 1      ; (the floors it asks for: a line's own)
     call wa_rktick
+    mov byte [wa_hproj], 0
 .c_pk:
     jmp wa_pktick
 .lfig:
@@ -1145,7 +1159,9 @@ wa_lists:
     jz .take
     mov ax, [wa_bxh+si]
     cmp ax, [wa_ahmax]
-    jae .skip
+    jb .take
+    test byte [wa_bxh+si+2], 0x40 ; (a TALL box a stair or a lift climbs:
+    jz .skip                    ; stood on all the same - ARENAS-PLAN 3)
 .take:
     mov ax, [wa_boxes+bx]
     sub ax, dx
@@ -1257,6 +1273,8 @@ wa_lists:
 ; the divide cannot fault (HEIGHTS-PLAN 9.5)
 wa_hat:
     mov ax, [di]
+    test byte [di+2], 0x80      ; A LINE (WIREARENA-ARENAS-PLAN 2): a wall to
+    jnz .line                   ; feet, its height to shots
     test byte [di+2], 3
     jz .out                     ; (solid, or a lift: its height as it is)
     test byte [di+2], 2
@@ -1320,6 +1338,11 @@ wa_hat:
     pop dx
     pop cx
     pop bx
+    ret
+.line:
+    cmp byte [wa_hproj], 0      ; (a rocket, a grenade: over it)
+    jne .out
+    mov ax, WA_LINEW
 .out:
     ret
 
@@ -1349,8 +1372,11 @@ wa_hjump:
     mov cx, [wa_flrb]           ; (CX, not AX: .read takes AX = x and BX
     or cx, cx                   ; = y. With the record in AX it read the
     js .same                    ; floor at x = the record's offset - the
-    cmp cx, [wa_lift]           ; ground - every other tick a rider stood
-    je .read                    ; still: HEIGHTS-PLAN 9.10)
+    mov si, cx                  ; ground - every other tick a rider stood
+    mov dl, [wa_bxh+si+2]       ; still: HEIGHTS-PLAN 9.10) - a lift's,
+    and dl, 3                   ; any of them (its kind's low bits)
+    cmp dl, 2
+    je .read
 .same:
     mov ax, [wa_flr]
 .have:
@@ -1418,16 +1444,27 @@ wa_hjump:
 WA_LWAIT    equ 10              ; 1/3 s on it before it starts
 WA_LHOLD    equ 45              ; 1.5 s empty before it returns
 WA_LSPD     equ 5               ; units a tick: 144 in ~1 s
-wa_ltick:
-    mov bx, [wa_lift]
-    or bx, bx
-    js .out
+wa_ltick:                       ; EACH LIFT (ARENAS-PLAN 4.1), SI = its
+    mov cx, [wa_nlift]          ; index x 2 into the tables
+    jcxz .ret
+    xor si, si
+.each:
+    push cx
+    call wa_lift1
+    pop cx
+    inc si
+    inc si
+    loop .each
+.ret:
+    ret
+wa_lift1:
+    mov bx, [wa_lift+si]
     cmp byte [wa_lkon], 0       ; LINKED, the guest: the host's lift, as its
     je .ours                    ; SNAPs say, followed at twice its speed
     call wa_lkhost              ; (LINK-PLAN 11.3)
     jnz .ours
     mov ax, [wa_bxh+bx]
-    mov dx, [wa_lklift]
+    mov dx, [wa_lklift+si]
     sub dx, ax
     jz .out
     cmp dx, WA_LSPD * 2
@@ -1441,7 +1478,7 @@ wa_ltick:
     add ax, dx
     jmp .set
 .ours:
-    cmp byte [wa_lbot], 0       ; a bot riding it (AI-PLAN 3.4), or the
+    cmp byte [wa_lbot+si], 0    ; a bot riding it (AI-PLAN 3.4), or the
     jne .on                     ; player on it, on the ground
     mov ax, [wa_jz]
     or ax, [wa_jv]
@@ -1449,40 +1486,45 @@ wa_ltick:
     cmp bx, [wa_flrb]
     jne .empty
 .on:
-    mov word [wa_loff], 0
-    inc word [wa_lon]
-    cmp word [wa_lon], WA_LWAIT
+    mov word [wa_loff+si], 0
+    inc word [wa_lon+si]
+    cmp word [wa_lon+si], WA_LWAIT
     jb .out
     mov ax, [wa_bxh+bx]
     add ax, WA_LSPD
-    cmp ax, [wa_ltop]
+    cmp ax, [wa_ltop+si]
     jle .set
-    mov ax, [wa_ltop]
+    mov ax, [wa_ltop+si]
     jmp .set
 .empty:
-    mov word [wa_lon], 0
-    inc word [wa_loff]
-    cmp word [wa_loff], WA_LHOLD
+    mov word [wa_lon+si], 0
+    inc word [wa_loff+si]
+    cmp word [wa_loff+si], WA_LHOLD
     jb .out
     mov ax, [wa_bxh+bx]
-    cmp ax, [wa_lrest]          ; (at rest already: the usual tick)
+    cmp ax, [wa_lrest+si]       ; (at rest already: the usual tick)
     je .out
     sub ax, WA_LSPD
-    cmp ax, [wa_lrest]
+    cmp ax, [wa_lrest+si]
     jge .set
-    mov ax, [wa_lrest]
+    mov ax, [wa_lrest+si]
 .set:
     mov [wa_bxh+bx], ax
 .out:
     ret
 
-; wa_lset0 - the lift (if any) at its rest height
+; wa_lset0 - the lifts (if any) at their rest heights
 wa_lset0:
-    mov bx, [wa_lift]
-    or bx, bx
-    js .out
-    mov ax, [wa_lrest]
+    mov cx, [wa_nlift]
+    jcxz .out
+    xor si, si
+.l:
+    mov bx, [wa_lift+si]
+    mov ax, [wa_lrest+si]
     mov [wa_bxh+bx], ax
+    inc si
+    inc si
+    loop .l
 .out:
     ret
 
@@ -2564,9 +2606,11 @@ wa_bset:
     mov [di+F_HEAD], ax
     mov ax, [si+8]
     mov [di+F_STEP], ax
-    mov al, [si+WA_GEKIND]      ; a lift's edge: wait for it (wa_bwait)
-    cmp al, 2
-    jbe .k
+    mov al, [si+WA_GEKIND]      ; a lift's edge: wait for it (wa_bwait;
+    mov ah, al                  ; its lift in bits 4-5)
+    and ah, 3
+    cmp ah, 3
+    jne .k
     xor al, al
 .k:
     mov [di+F_BWAIT], al
@@ -2655,23 +2699,31 @@ wa_bnext:
 ; still must (kind 1: the lift not yet at rest; 2: it rides the lift, not
 ; yet at the top - a rider, wa_lbn). Keeps all but AX, BX
 wa_bwait:
-    mov bx, [wa_lift]
-    or bx, bx
-    js .go
+    push si
+    mov bl, [di+F_BWAIT]        ; (its lift: the edge's kind byte's bits
+    xor bh, bh                  ; 4-5, ARENAS-PLAN 4.1 - x 2, the tables'
+    shr bx, 1                   ; index)
+    shr bx, 1
+    shr bx, 1
+    and bx, 6
+    mov si, bx
+    mov bx, [wa_lift+si]
     mov ax, [wa_bxh+bx]
-    cmp byte [di+F_BWAIT], 1
-    jne .up
-    cmp ax, [wa_lrest]
+    test byte [di+F_BWAIT], 2
+    jnz .up
+    cmp ax, [wa_lrest+si]
     jne .wait
 .go:
     mov byte [di+F_BWAIT], 0
+    pop si
     clc
     ret
 .up:
-    inc byte [wa_lbn]
-    cmp ax, [wa_ltop]
+    inc byte [wa_lbn+si]
+    cmp ax, [wa_ltop+si]
     je .go
 .wait:
+    pop si
     stc
     ret
 
@@ -2925,6 +2977,7 @@ WA_GSTEP    equ 8               ; a rolling grenade rides a rise this tall
 WA_SPLR     equ 128             ; the splash's reach, units (2 m)
 WA_HITR     equ 24              ; a rocket inside a figure's square: direct
 WA_RKEYE    equ 8               ; a rocket leaves this far below the eye
+WA_LINEW    equ 4096            ; a LINE's height to feet (wa_hat): a wall
 WA_PCOOL    equ 15              ; the pistol's gap: half a second
 WA_BUCKT    equ 5               ; ...the first ticks of it, the pistol held
                                 ; a row up (its kick: the refire you can see)
@@ -4885,31 +4938,25 @@ wa_bench:
 ; same speed whatever the frame rate. 8 s; the HUD then holds the run's
 ; averages, marked P, until a key. It runs on any machine the game does: the
 ; 5150, 86Box, MartyPC alike.
-WA_PB_X     equ 224
-WA_PB_Y     equ 800
-WA_PB_A     equ 32              ; a little north of east, across the room
 WA_PBT      equ 240             ; ticks: 8 s
 WA_PB_YAW   equ 17 * 64         ; the circle: +-6 degrees of yaw (ang16)...
 WA_PB_PIT   equ 16              ; ...+-2 rows of pitch (quarter half-rows)
 WA_PB_STEP  equ 23              ; ...once round every ~1.5 s (1024 / 45)
 wa_pbstart:
     call wa_mtron
-    xor bx, bx                  ; the pose: P's own in arenas 0 and 1; in
-    cmp byte [wa_arena], 2      ; the heights arena five in turn, A to E
-    jb .pose                    ; (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9)
-    mov bl, [wa_pbsel]
-    inc bx
-    mov al, bl
-    cmp al, WA_PBN
-    jb .nsel
-    xor al, al
-.nsel:
-    mov [wa_pbsel], al
-.pose:
-    mov ax, WA_PBSZ
-    mul bx
-    mov si, ax
-    add si, wa_pbposes
+    mov si, [wa_gpbp]           ; THE ARENA'S VIEWS (ARENAS-PLAN 4.2), the
+    lodsw                       ; next each run: P's one in arenas 0 and 1,
+    mov bl, [wa_pbsel]          ; the heights arena's A to E (HEIGHTS-PLAN
+    cmp bl, al                  ; 9), the maze's and the twin's own -
+    jb .sel                     ; arenagen's
+    xor bl, bl
+.sel:
+    mov bh, bl
+    inc bh
+    mov [wa_pbsel], bh
+    mov al, WA_PBSZ
+    mul bl
+    add si, ax
     lodsw
     mov [wa_px], ax
     lodsw
@@ -4984,14 +5031,7 @@ wa_pbph:    dw 160, 64, 80      ; ticks along each patrol (the host search)
 ; busiest floor view, B the open floor, C on the platform, D on the tower
 ; looking down, E in the annex's north hallway looking west (HEIGHTS-PLAN
 ; 7.4: the revised arena)
-WA_PBSZ     equ 12
-WA_PBN      equ 5
-wa_pbposes: dw WA_PB_X, WA_PB_Y, WA_PB_A << 6, 0, 0, 'P'
-            dw 800, 400, 160 << 6, 0, 0, 'A'
-            dw 1600, 1024, 512 << 6, 0, 0, 'B'
-            dw 1248, 1024, 512 << 6, 0, 80, 'C'
-            dw 1952, 1024, 512 << 6, -40, 160, 'D'
-            dw 600, 1568, 512 << 6, 0, 0, 'E'
+WA_PBSZ     equ 12              ; a view: x, y, angle, pitch, floor, mark
 
 ; wa_pbview - the circle: yaw and pitch at the play bench's clock
 wa_pbview:
@@ -5513,11 +5553,16 @@ wa_rframe:
     rep movsw
 %assign wa_i wa_i+1
 %endrep
-    mov si, [wa_lift]           ; the lift's height, which the sim moves
-    or si, si                   ; (HEIGHTS-PLAN 3.2: ARENA's one word that
-    js .nolift                  ; goes G -> R)
-    mov cx, [wa_bxh+si]
-    mov [es:WA_RAT(wa_bxh)+si], cx
+    mov cx, [wa_nlift]          ; the lifts' heights, which the sim moves
+    jcxz .nolift                ; (HEIGHTS-PLAN 3.2: ARENA's words that
+    mov bx, wa_lift             ; go G -> R)
+.lift:
+    mov si, [bx]
+    mov ax, [wa_bxh+si]
+    mov [es:WA_RAT(wa_bxh)+si], ax
+    inc bx
+    inc bx
+    loop .lift
 .nolift:
     mov cl, [wa_rkn]            ; the rockets, while any is live and once
     mov ch, cl                  ; more after (WEAPONS-PLAN 2.6): no frame
@@ -5681,6 +5726,15 @@ wa_loadarena:
     inc ax
     inc ax
     mov [wa_gpkn], ax
+    mov bx, ax                  ; ...and the play bench's views after
+    add ax, [bx]                ; those - a count, a byte each (word-
+    inc ax                      ; aligned in the block, as the respawns
+    inc ax                      ; are)
+    sub ax, wa_gph
+    inc ax
+    and al, 0xFE
+    add ax, wa_gph
+    mov [wa_gpbp], ax
     call wa_sgrow
     pop ax
     call op_drop
@@ -5803,8 +5857,8 @@ WA_VAR wa_qx,2                   ; wa_floor's square: its middle and r
 WA_VAR wa_qy,2
 WA_VAR wa_qr,2
 WA_VAR wa_nbox8,2                ; the boxes x 8 (wa_lists)
-WA_VAR wa_lon,2                  ; the lift: ticks someone has stood on it,
-WA_VAR wa_loff,2                 ;   ticks it has stood empty
+WA_VAR wa_lon,WA_MLIFT*2         ; per lift: ticks someone has stood on
+WA_VAR wa_loff,WA_MLIFT*2        ;   it, ticks it has stood empty
 WA_VAR wa_allp,WA_LTSZ           ; wa_floor's box tables (wa_lists): every
 WA_VAR wa_lowp,WA_LTSZ           ;   box and the low ones for the player,
 WA_VAR wa_lowf,WA_LTSZ           ;   the low ones for a dummy's feet
@@ -5828,6 +5882,7 @@ WA_VAR wa_sord,4                 ; ...its order
 WA_VAR wa_sbbuf,WA_SBW           ; ...a row of it
 WA_VAR wa_grp,2                  ; the arena's respawn points...
 WA_VAR wa_gpkn,2                 ; ...and its pickups' route nodes
+WA_VAR wa_gpbp,2                 ; ...and its play bench's views
 WA_VAR wa_killer,1               ; whose weapon: 0 the player, 1.. a bot
 WA_VAR wa_bw,1                   ; a bot's shot: its weapon, accuracy,
 WA_VAR wa_bacc2,1                ;   distance
@@ -5858,11 +5913,13 @@ WA_VAR wa_lkfrom,6                 ; the last frame's source
 WA_VAR wa_lkpf,1                   ; the frame the cable was last read in
 WA_VAR wa_lkfired,1                ; the guest fired since its last SNAP
 WA_VAR wa_lkwhat,1                 ; wa_lktick: this tick SCOREs (1), SNAPs (2)
+WA_VAR wa_hproj,1                  ; wa_hat: a projectile asks (a LINE its own height)
 WA_VAR wa_figend,2                 ; alone: past the last bot the setup asked for
 WA_VAR wa_lkclip,1                 ; wa_lkdraw: the clip taken this tick
 WA_VAR wa_lkown,1                  ; wa_lkrows: a repaint of our own (no kernel white)
 WA_VAR wa_lkfs,1                   ; wa_lkfig: the figure's slot
-WA_VAR wa_lklift,2                 ; the guest: the host's lift's height
+WA_VAR wa_lklift,WA_MLIFT*2        ; the guest: the host's lifts' heights
+WA_VAR wa_lkli,1                   ; the host: the lift its next SNAP says
 WA_VAR wa_pc,WP_SZ                 ; THE PEER BEING HEARD OR SENT TO: its
                                    ; record loaded (wa_pload), the names
 WA_VAR wa_pt,WP_SZ*WL_NPEER        ; below its fields; the table of them
@@ -5924,8 +5981,8 @@ WA_VAR wa_tz,2
 WA_VAR wa_sgrid,1024              ; the sight grid, a byte a 64-unit cell
 WA_VAR wa_bshots,2               ; the bots' shots fired, and hits
 WA_VAR wa_bhits,2
-WA_VAR wa_lbn,1                  ; bots on the lift this tick, and the
-WA_VAR wa_lbot,1                 ;   last (wa_ltick's riders)
+WA_VAR wa_lbn,WA_MLIFT*2         ; per lift (a byte, a word apart): bots
+WA_VAR wa_lbot,WA_MLIFT*2        ;   on it this tick, and the last (riders)
 WA_VAR wa_pbsel,1                ; the play bench: the heights arena's pose,
 WA_VAR wa_pba,2                  ;   the angle and pitch it circles round,
 WA_VAR wa_pbp,2                  ;   and its HUD mark

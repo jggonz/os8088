@@ -269,8 +269,9 @@ def render(ar, v, heights=True, outline=True):
                     st["ecols"] += b.treads * ncol
                     clk += b.treads * (CF["edge"] + CF["ecol"] * ncol)
         hh = h if b.kind != A.FLIGHT else h // 2   # (a ramp's mean)
-        for k in fr[:2]:
-            ok = span(*fs[k], hh, "front", tall, cheap)
+        line = getattr(b, "kind", None) == A.LINE   # (a LINE: its top's
+        for k in fr[:2]:                            # edge alone, no face)
+            ok = span(*fs[k], hh, "top" if line else "front", tall, cheap)
             if cheap:
                 continue
             if ok:
@@ -352,7 +353,7 @@ def pose_sets(ar, W=40, fov=75):
 
 
 # the play bench's poses in the heights arena (apps/wirearena/wirearena.asm,
-# wa_pbposes): x, y, angle (1024ths), base pitch, the floor under the eye
+# arenagen.ARENA_BENCH): x, y, angle (1024ths), base pitch, the floor under the eye
 BENCH = [("A, busiest floor", 800, 400, 160, 0, 0), ("B, open floor", 1600, 1024, 512, 0, 0),
          ("C, on the platform", 1248, 1024, 512, 0, 80), ("D, on the tower", 1952, 1024, 512, -40, 160),
          ("E, hallway", 600, 1568, 512, 0, 0)]

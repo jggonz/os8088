@@ -1529,10 +1529,12 @@ wa_lt_st:       dw wa_lt_s0, wa_lt_s1, wa_lt_s2
 wa_lt_s0:       db 'not ready', 0
 wa_lt_s1:       db 'READY', 0
 wa_lt_s2:       db 'in the arena', 0
-wa_lt_anames:   dw wa_lt_a0, wa_lt_a1, wa_lt_a2
+wa_lt_anames:   dw wa_lt_a0, wa_lt_a1, wa_lt_a2, wa_lt_a3, wa_lt_a4
 wa_lt_a0:       db 'full', 0
 wa_lt_a1:       db 'open', 0
 wa_lt_a2:       db 'heights', 0
+wa_lt_a3:       db 'maze', 0
+wa_lt_a4:       db 'twin', 0
 wa_lt_dnames:   dw wa_lt_d0, wa_lt_d1, wa_lt_d2
 wa_lt_d0:       db 'easy', 0
 wa_lt_d1:       db 'normal', 0
@@ -1584,11 +1586,16 @@ wa_lkmstart:
     mov di, wa_lkr              ; nothing heard of anyone
     mov cx, WR_SZ * WA_NFIG / 2
     rep stosw
-    mov bx, [wa_lift]           ; (the guest's lift where it starts, until
-    or bx, bx                   ; the host's SNAPs say)
-    js .nolift
+    mov cx, [wa_nlift]          ; (the guest's lifts where they start,
+    jcxz .nolift                ; until the host's SNAPs say)
+    xor si, si
+.lift:
+    mov bx, [wa_lift+si]
     mov ax, [wa_bxh+bx]
-    mov [wa_lklift], ax
+    mov [wa_lklift+si], ax
+    inc si
+    inc si
+    loop .lift
 .nolift:
     mov di, wa_figs             ; off the board until the other machine
     mov cx, WA_NFIG             ; says where they are: the other player, and
@@ -1909,14 +1916,30 @@ wa_lksnap:
     stosb
     mov al, [wa_ang+1]
     stosb
-    call wa_lkhost              ; byte 8: the host's lift's height / 2, the
-    jz .pitch                   ; guest's pitch / 4 (nobody reads a pitch)
-    xor al, al
-    mov bx, [wa_lift]
-    or bx, bx
-    js .b8
+    call wa_lkhost              ; byte 8: one of the host's lifts, in turn
+    jz .pitch                   ; (ARENAS-PLAN 4.1) - its index x 64 + its
+    xor al, al                  ; height / 4 - the guest's pitch / 4
+    cmp al, [wa_nlift]          ; (nobody reads a pitch)
+    je .b8
+    push bx
+    mov bl, [wa_lkli]
+    inc bl
+    cmp bl, [wa_nlift]
+    jb .li
+    xor bl, bl
+.li:
+    mov [wa_lkli], bl
+    xor bh, bh
+    shl bx, 1
+    mov bx, [wa_lift+bx]
     mov ax, [wa_bxh+bx]
+    shr ax, 1                   ; (arenagen: a lift's heights to 252)
     shr ax, 1
+    mov ah, [wa_lkli]
+    ror ah, 1
+    ror ah, 1
+    or al, ah
+    pop bx
     jmp .b8
 .pitch:
     mov ax, [wa_pitch]
@@ -2196,12 +2219,20 @@ wa_lksnapin:
     mov [si+WR_F], al
     mov [wa_lkrf], al           ; (its flags, for the kill's kind below)
     pop si
-    cmp byte [wa_lkpslot], 0    ; the host's: its lift
-    jne .notlift
+    cmp byte [wa_lkpslot], 0    ; the host's: one of its lifts (index x 64
+    jne .notlift                ; + height / 4, wa_lksnap's)
     mov al, [si+8]
-    xor ah, ah
+    mov bl, al
+    rol bl, 1                   ; (the index: the top two bits)
+    rol bl, 1
+    and bx, 3
+    cmp bl, [wa_nlift]          ; (fenced: a lift the arena has)
+    jae .notlift
+    shl bx, 1                   ; (x 2: a word's)
+    and ax, 63
     shl ax, 1
-    mov [wa_lklift], ax
+    shl ax, 1
+    mov [wa_lklift+bx], ax
 .notlift:
     cmp byte [wa_lkme], 0       ; we the host: its shot, heard by our bots
     jne .lifted
@@ -2925,26 +2956,36 @@ wa_bhear_far:
 wa_lkonlift:
     push ax
     push bx
-    mov bx, [wa_lift]
-    or bx, bx
-    js .out
+    push cx
+    push si
+    mov cx, [wa_nlift]
+    jcxz .out
+    xor si, si
+.each:
+    mov bx, [wa_lift+si]
     mov ax, [di+F_Z]            ; on its top: 40 units' slack, as its
     add ax, 40                  ; height comes a SNAP late while it rises
     cmp ax, [wa_bxh+bx]
-    jl .out
+    jl .next
     shl bx, 1                   ; (its box: x 8)
     mov ax, [di+F_X]
     cmp ax, [wa_boxes+bx]
-    jl .out
+    jl .next
     cmp ax, [wa_boxes+bx+4]
-    jg .out
+    jg .next
     mov ax, [di+F_Y]
     cmp ax, [wa_boxes+bx+2]
-    jl .out
+    jl .next
     cmp ax, [wa_boxes+bx+6]
-    jg .out
-    inc byte [wa_lbn]
+    jg .next
+    inc byte [wa_lbn+si]
+.next:
+    inc si
+    inc si
+    loop .each
 .out:
+    pop si
+    pop cx
     pop bx
     pop ax
     ret

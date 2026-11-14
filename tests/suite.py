@@ -8645,6 +8645,19 @@ SOAK = [
         "off onto the tower, the lift home. Red on e9ca8cff: 14 failures.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("waarenas", "soak", py("tests/waarenas.py"), 60.0,
+        "WIREARENA'S MAZE AND TWIN, AND THE LIMITS THEY RETIRED "
+        "(docs/plans/WIREARENA-ARENAS-PLAN.md 4). On the twin: both lifts "
+        "carry a still rider to the tower's top and go home empty (the sim "
+        "moved one lift), off the raised lift the tower is a floor at 240 "
+        "(kind bit 6), a LINE stops the feet a radius short, and the bots "
+        "ride BOTH lifts within 150 s (a lift leg names its lift); on the "
+        "maze the stack's top is a floor and its lift lands a rider on the "
+        "outer wall; on each, P starts at the arena's OWN first view. Red "
+        "with bit 6 dropped, one lift ticked and the views' pointer a word "
+        "off: 5 failures.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
         "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
         "PLAN 9.4). The owner saw the whole window flash on every click and "

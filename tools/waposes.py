@@ -96,13 +96,18 @@ def poses(arena, n, seed):
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import arenagen as A
     rnd = random.Random(seed * 1000 + arena)
-    boxes = {0: A.BOXES, 1: A.OPEN_BOXES, 2: A.HEIGHTS_BOXES}[arena]
-    hm = A.hmax(boxes) if arena == 2 else 192
+    boxes = [A.bx(b) for b in A.arenas()[arena][2]]   # (any arena: a flat
+    hm = A.hmax(boxes)                  # one's boxes are all at the tallest)
+    nonflat = any(b.h < hm for b in boxes)
+    lines = [tuple(b) for b in boxes if b.kind == A.LINE]
     out = []
-    plats = [A.bx(b) for b in boxes if A.bx(b).h < hm and A.bx(b).kind != A.LIFT and A.bx(b).h > 40] if arena == 2 else []
+    plats = [b for b in boxes if b.h < hm and b.kind not in (A.LIFT, A.LINE)
+             and b.h > 40] if nonflat else []
     for k in range(n):
         feet = 0
-        kind = k % 4 if arena == 2 else 0
+        kind = k % 4 if nonflat else 0
+        if kind == 2 and arena != 2:    # (the heights arena's corners)
+            kind = 0
         if kind == 1 and plats:
             b = rnd.choice(plats)
             px = rnd.randint(b[0] + 16, b[2] - 16); py = rnd.randint(b[1] + 16, b[3] - 16)
@@ -117,7 +122,7 @@ def poses(arena, n, seed):
                     break
         ang = rnd.randint(0, 1023)
         pitch = rnd.choice([0, 0, 0, rnd.randint(-60, 40), rnd.randint(-290, 112)])
-        jump = rnd.choice([0, 0, 0, 0, rnd.randint(1, 60)]) if arena != 2 else 0
+        jump = rnd.choice([0, 0, 0, 0, rnd.randint(1, 60)]) if not nonflat else 0
         figs = []
         import math
         for f in range(3):
@@ -131,7 +136,9 @@ def poses(arena, n, seed):
                     fx, fy = rnd.randint(40, 2008), rnd.randint(40, 2008)
                 if not (30 < fx < 2018 and 30 < fy < 2018):
                     continue
-                if arena == 2:
+                if lines and A.inside(fx, fy, lines, 12):
+                    continue
+                if nonflat:
                     fz = A.floor_at(fx, fy, boxes, 8)
                     if fz >= hm or any(A.bx(b).kind == A.LIFT and b[0] - 12 < fx < b[2] + 12 and b[1] - 12 < fy < b[3] + 12 for b in boxes):
                         continue

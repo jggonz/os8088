@@ -23,8 +23,12 @@ wa_fglyph:  db 0x20, 0xDF, 0xDF, 0xDF, 0xDC, 0xDD, 0xDB, 0xDB
 ; ...and the railgun's kill, struck and dissolving: its beam's bright cyan,
 ; or bright on mono (the owner: "the same color" as the shot)
 ;              room   item   dot    figure flash  cross  shield fire   rail
-wa_attrc:   db 0x01,  0x03,  0x08,  0x0F,  0x0C,  0x0E,  0x0E,  0x0E,  0x0B, 0
-wa_attrm:   db 0x07,  0x07,  0x07,  0x0F,  0x70,  0x0F,  0x07,  0x07,  0x0F, 0
+; ...and two wall colours an arena may give a box (wa_bcol, tools/
+; arenagen.py's COL_*): a hedge's green, a platform's red - normal
+; intensity on mono, as every wall is (WIREARENA-ARENAS-PLAN 1)
+;                                                                    hedge plat
+wa_attrc:   db 0x01,  0x03,  0x08,  0x0F,  0x0C,  0x0E,  0x0E,  0x0E,  0x0B, 0x02, 0x04, 0
+wa_attrm:   db 0x07,  0x07,  0x07,  0x0F,  0x70,  0x0F,  0x07,  0x07,  0x0F, 0x07, 0x07, 0
 A_ROOM  equ 0
 A_ITEM  equ 1
 A_DOT   equ 2
@@ -34,3 +38,5 @@ A_CROSS equ 5
 A_SHLD  equ 6
 A_FIRE  equ 7
 A_RAIL  equ 8
+A_HEDGE equ 9
+A_PLAT  equ 10

@@ -38,7 +38,11 @@ import os88ui
 from os88pkg import PKG_FMT
 F = 4772727
 ITEM = {"P40": (0, 40), "P80": (0, 80), "O40": (1, 40), "H40": (2, 40),
-        "H80": (2, 80)}  # (arena, width)
+        "H80": (2, 80)}  # (arena, width) - or A<n>-<width>, any arena
+import re as _re
+_g = _re.match(r"A(\d+)-(\d+)$", a.what)
+if _g:
+    ITEM[a.what] = (int(_g.group(1)), int(_g.group(2)))
 T = os.path.abspath(a.tree); B = os.path.join(T, "build")
 def amap(path, binp):
     d = tempfile.mkdtemp(); mp, bn = os.path.join(d, "m"), os.path.join(d, "b")

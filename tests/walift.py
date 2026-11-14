@@ -58,17 +58,19 @@ ITEM = "Bots: normal"            # (a Game item: the menu is on the bar)
 def start_keys(m, arena=2, width=40, cpu8088=True):
     """a match ALONE from the setup by its KEYS, no symbol map (the tools
     that boot a tree they do not assemble): Arena from its default, the
-    heights (2) - Right wraps to 0, Left steps to 1 - then Down to Columns,
-    Right once if the width is not the CPU's default (40 on an 8088), Enter"""
+    heights (2), Right a step at a time - wrapping past the last of the
+    arenas arenagen makes - then Down to Columns, Right once if the width
+    is not the CPU's default (40 on an 8088), Enter"""
+    import arenagen
     F = 4772727
-    for k in {0: ["ArrowRight"], 1: ["ArrowLeft"], 2: []}[arena] + \
+    for k in ["ArrowRight"] * ((arena - 2) % len(arenagen.arenas())) + \
             ["ArrowDown"] + (["ArrowRight"] if (width == 40) != cpu8088
                              else []) + ["Enter"]:
         m.key(k)
         m.advance(cycles=F // 8)
 
 
-def start(ui, w, sym, arena=2, w40=True):
+def start(ui, w, sym, arena=2, w40=True, bots=None):
     """a match ALONE from the setup (NET-PLAN 2; the Game menu's Play items
     went, the owner 2026-11-14): the arena and the width poked into the
     setup's own settings, then Enter - the Play button's key"""
@@ -79,6 +81,8 @@ def start(ui, w, sym, arena=2, w40=True):
     p = os88marty.Pkg(m, w)
     p.write(sym["wa_lkarena"], bytes([arena]))
     p.write(sym["wa_want"], bytes([1 if w40 else 0]))
+    if bots is not None:
+        p.write(sym["wa_lkbots"], bytes([bots]))
     m.key("Enter")
     return p
 
