@@ -231,20 +231,30 @@ line on the floor between two of the arena's vertices, at any angle.
   - Both ends in front and inside the guard band: no clip, and their
     columns are the cache's. Else `wa_clip` and a projection.
   - A line wholly off one side of the screen costs a few compares.
-  - A floor line's half-row is linear across its columns (the floor is a
-    plane), so each column's is a 16.16 add, in registers.
-  - A SHALLOW line, under a half-row a column (most), plots each column's
-    cell outright.
-  - A STEEP one fills a step of two half-rows or more down the column.
-  - A line under a column wide is that column's run, `|`.
+  - The floor is a plane, so a floor line's half-row is linear across its
+    columns and its column is linear down its rows. Each step is ONE
+    divide, 8.8 fixed point (under a tenth of a half-row adrift across the
+    widest screen), then a 16.16 add in registers.
+  - A SHALLOW line, under two half-rows a column (most), is walked by
+    COLUMN, a cell each.
+  - A STEEP one is walked by CELL ROW, a cell each. It draws a post's `│`
+    where its column holds, and `\` or `/` where it steps.
+  - The first version filled each column's step with slashes, and a column
+    of slashes read as two parallel lines: the owner's *"weirdly doubled"*,
+    2026-11-14.
 - **What hides it.** A column with nothing drawn in it (no tall face, no
-  depth-stack entry) needs no test.
-  - A TALL face stands on the floor, so a floor point is behind it exactly
-    when it lies at or above the face's foot in that column. The foot comes
-    from the wall's 1/z (`wa_colz`) and one multiply, cached per column once
-    a frame (`wa_fqfr`). The line needs no 1/z of its own.
-  - Only a column with a low box's stack entry (a lift, a tower seen from
-    above) asks `wa_occl`, with the line's 1/z there.
+  depth-stack entry) needs no test: two compares. Any other column has a
+  RECORD (`wa_fqmk`), made once a frame by whichever line asks first:
+  - the foot of its tall face, from the wall's 1/z (`wa_colz`) and one
+    multiply. A tall face stands on the floor, so a floor point is behind
+    it exactly when it lies at or above that row;
+  - up to two depth-stack entries (a lift, a tower seen from above), each
+    as the half-rows it hides a floor point in: from the row it hides from
+    to the floor's row at its own depth. That row is made lazily, the first
+    time a point lies past the row.
+  - A floor point's depth is a function of its row alone. So every test is
+    a compare, and no line needs a 1/z of its own.
+  - More than two entries ask `wa_occl`, with the point's 1/z from its row.
 - **The feet.** `wa_collide` asks `wa_flcross` first. A step that crosses a
   floor line is refused, as a wall's is, and the player slides along it.
   - A line is near only when the new point is within 16 units of its box.
@@ -304,7 +314,8 @@ time in ms:
 | heights | 16.2 (52.6) | 16.9 (48.7) | 43.1 (17.9) | 14.9 (56.3) | 35.2 (23.2) |
 | maze | 10.5 (83.5) | 26.5 (29.8) | 15.8 (53.8) | 45.8 (18.5) | |
 | first twin | 9.3 (91.7) | 8.5 (100.7) | 9.8 (88.1) | 9.2 (96.0) | |
-| **twin as drawn** | **17.2 (50.6)** | **14.5 (61.4)** | **18.2 (47.1)** | **13.8 (63.9)** | |
+| twin as drawn, first floor-line drawer | 17.2 (50.6) | 14.5 (61.4) | 18.2 (47.1) | 13.8 (63.9) | |
+| **twin as drawn, now** | **18.5 (46.7)** | **17.0 (51.7)** | **19.4 (43.7)** | **13.3 (66.3)** | |
 
 The twin's views differ between the two builds (4.2). The first twin's were
 before the south tower, on it, the walks' bar and behind it. The rebuilt
@@ -322,22 +333,36 @@ maze's court to 11.8 and the heights views by up to 3.
 Its 37 edges each crossed most of the screen, about 100 cycles a column.
 
 **What the rebuilt twin's cost is.** `tools/waprof.py --what A4-40 --pose
-N`: the floor lines are roughly a third to a half of a frame. The rest is
-the engine's fixed load in a room where nothing is hidden: three figures,
-every pickup and the present.
-- The first floor-line drawer spent about 235,000 cycles a frame.
-- It now spends roughly 110,000 to 150,000, depending on the view.
-- Three changes took it there:
-  - the half-row is stepped in registers;
-  - occlusion is by the tall face's foot row, cached per column, not by a
-    1/z of the line's own;
-  - a vertex is transformed, and its row made, once a frame.
-- Its worst view is on the tower (B): every line is in view and steep, and
-  the tower's own outline puts a stack entry in its columns.
+1`, the tower-top view (B), was 326,000 cycles a frame and is now 277,000
+(58 ms):
 
-The twin is now as costly as the heights arena, not lighter. What would take
-it further down: fewer lines in view at once, or a cheaper floor-line glyph
-walk.
+| part | cycles a frame | share |
+|---|---|---|
+| floor lines (16; ends, setup, walk, hiding) | 122,898 | 44.9% |
+| boxes (the towers and lifts, the one stood on as an outline) | 35,451 | 13.0% |
+| figures (the bench's three dummies) | 34,548 | 12.6% |
+| pickups | 16,381 | 6.0% |
+| the present | 15,286 | 5.6% |
+| the rest (the view, products, the tick) | 49,157 | 17.8% |
+
+- A floor line costs about 7,700 cycles in that view.
+  - About half of it is fixed: its two ends' transform and projection
+    (divides), the clip where an end is behind the eye, and the walk's set
+    up. The 8088 spends 15 to 25 cycles on an instruction that touches
+    memory, so a hundred-odd instructions of setup are 2,000 cycles.
+  - The rest is its cells on the screen: about 100 to 150 cycles each in a
+    clear column, more in a column a box stands in.
+  - So what costs is a line's LENGTH ON THE SCREEN plus a fixed toll per
+    line. Its length in the arena matters only through how many cells it
+    covers.
+- Why the open arena is faster with more lines: its lines are wall faces.
+  - A face is one span over its columns with its top and bottom stepped in
+    the most-tuned loop in the renderer.
+  - A wall shuts its columns, so nothing behind it is drawn at all.
+  - Its arena is FLAT (no box below the tallest), so no depth stacks and no
+    outlines.
+  - The twin has none of that: nothing occludes, every line is drawn end to
+    end, and its lifts make it a heights arena.
 
 **Size.** The renderer part is 59,041 of its 65,024 bytes: 2,182 more for
 the first round, then 2,505 for floor lines (code, the per-column and

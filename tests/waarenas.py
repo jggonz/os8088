@@ -149,7 +149,11 @@ def main():
             g.m.key("KeyW", up=False)           # line)
             g.m.advance(cycles=F * 2)
             g.m.key("KeyW", down=False)
-            v = g.word("wa_py" if axis else "wa_px")
+            vs = []                             # (the most common of five
+            for _ in range(5):                  # reads: one can land inside
+                vs.append(g.word("wa_py" if axis else "wa_px"))  # a tick,
+                g.m.advance(cycles=TICK // 3)   # its step tried and not yet
+            v = max(set(vs), key=vs.count)      # put back)
             if not lo <= v <= hi:
                 fails.append("twin: walked at %s, now at %d - the line did "
                              "not stop the feet" % (what, v))
