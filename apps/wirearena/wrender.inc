@@ -135,6 +135,32 @@ WA_VAR wa_hq, 2                 ; horizon, quarter half-rows
 WA_VAR wa_hh, 2                 ; horizon, half-rows
 WA_VAR wa_numt, 2
 WA_VAR wa_numb, 2
+WA_VAR wa_fqv, WA_MFL*2         ; the floor lines' vertices x 2 (wa_flines)
+WA_VAR wa_fqk, 2                ; ...the line being drawn x 2, its first
+WA_VAR wa_fqva, 2               ; end's vertex x 2
+WA_VAR wa_fqfn, 2               ; ...the floor's pair (wa_hnum of 0)
+WA_VAR wa_fqfs, 1
+WA_VAR wa_fqatr, 1              ; ...their attribute (the room's colour)
+WA_VAR wa_fqg, 1                ; ...the glyph a run takes
+WA_VAR wa_fqc1, 2               ; ...a line's ends: column x 16, 1/z,
+WA_VAR wa_fqi1, 2               ; quarter half-row
+WA_VAR wa_fqq1, 2
+WA_VAR wa_fqc2, 2
+WA_VAR wa_fqi2, 2
+WA_VAR wa_fqq2, 2
+WA_VAR wa_fqdc, 2               ; ...its columns' span x 16
+WA_VAR wa_fqvs, WA_MVTX*2       ; ...a vertex's 1/z and floor quarter
+WA_VAR wa_fqvi, WA_MVTX*2       ; half-row, and their frame stamp
+WA_VAR wa_fqvq, WA_MVTX*2
+WA_VAR wa_fqfr, WA_MAXW*2       ; ...a column's tall face's foot, half-
+WA_VAR wa_fqfst, WA_MAXW*2      ; rows, and its frame stamp (wa_fqhid)
+WA_VAR wa_fqo, 2
+WA_VAR wa_fqsf, 2               ; ...the half-row's step a column, 16.16
+WA_VAR wa_fqsi, 2
+WA_VAR wa_fqpr, 2               ; ...the column before's half-row (0x8000:
+WA_VAR wa_fqcol, 2              ; none); a run's column x 2, its 1/z, and
+WA_VAR wa_fqiz0, 2              ; its last half-row
+WA_VAR wa_fqre, 2
 WA_VAR wa_x1, 2
 WA_VAR wa_z1, 2
 WA_VAR wa_x2, 2
@@ -755,6 +781,8 @@ wa_render:
 .walked:
     cmp word [wa_left], 0       ; the room, last: it encloses everything
     je .roomless
+    cmp word [wa_roomh], 0      ; (an arena with no room walls: its floor
+    je .roomless                ; lines its edge - ARENAS-PLAN 4.6)
     mov al, [wa_bcol]           ; the room's colour
     xor ah, ah
     mov si, ax
@@ -798,6 +826,7 @@ wa_render:
     call wa_face
 .roomless:
     mov byte [wa_roomf], 0
+    call wa_flines
     call wa_dots
     mov ax, [wa_lp]
     sub ax, [wa_newp]
@@ -3484,6 +3513,597 @@ wa_plotf:
     mov al, [wa_fglyph+bx]
     pop bx
     mov [wa_cur+bx], ax
+    ret
+
+; --- floor lines (docs/plans/WIREARENA-ARENAS-PLAN.md 4.5) ------------------
+; An arena's FLOOR LINES: straight lines on the floor, each between two of
+; its vertices - the twin's walk, its edge where it has no room walls. Drawn
+; after every box and before the floor's dots, in the room's colour. A
+; floor line's half-row is LINEAR across its columns (so is its 1/z: the
+; floor is a plane), so each column's is a 16.16 add from the last, in
+; registers; a column nothing has been drawn in (no tall face, no stack
+; entry: most) plots its cell outright, and only one something has asks
+; wa_occl, with that column's 1/z, whether it is nearer - so a line runs on
+; in front of a tower and is hidden behind it. A step of two half-rows or
+; more between columns is filled down the column. A line under a column
+; wide (pointing at the eye) is that column's run alone, `|`. A line wholly
+; behind the eye, or wholly to one side of the view, costs its two ends'
+; transforms and a few compares; the rest pay wa_clip, two projections and
+; two divides for the step, then the columns.
+wa_flines:
+    cmp word [wa_nfl], 0
+    jne .on
+    ret
+.on:
+    push bp
+    xor ax, ax                  ; the floor's pair: height 0
+    call wa_hnum
+    mov [wa_fqfn], ax
+    mov [wa_fqfs], bl
+    mov bl, [wa_bcol]           ; the room's colour
+    xor bh, bh
+    mov al, [wa_at+bx]
+    mov [wa_fqatr], al
+    mov word [wa_fqk], 0
+.seg:
+    mov si, [wa_fqk]
+    xor bx, bx
+    mov bl, [wa_fqv+si]         ; its ends, through the vertex cache (each
+    call .mk                    ; made once a frame, whichever line or box
+    mov [wa_fqva], bx           ; asks first: its camera x, z and - in the
+    mov si, [wa_fqk]            ; guard band - its column)
+    xor bx, bx
+    mov bl, [wa_fqv+si+1]
+    call .mk
+    mov si, [wa_fqva]           ; SI = one end, BX = the other
+    mov al, [wa_vok+si]         ; BOTH IN FRONT, in the guard band: no clip,
+    and al, [wa_vok+bx]         ; their columns made
+    test al, 1
+    jz .slow
+    mov ax, [wa_vpc+si]         ; (both left of the screen, or both right:
+    mov dx, [wa_vpc+bx]         ; nothing)
+    or ax, ax
+    jns .f1
+    or dx, dx
+    js .next
+.f1:
+    mov cx, [wa_w]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    cmp ax, cx
+    jl .f2
+    cmp dx, cx
+    jge .next
+.f2:
+    mov [wa_fqc1], ax
+    mov [wa_fqc2], dx
+    push bx
+    mov bx, si
+    call .iq
+    mov [wa_fqi1], ax
+    mov [wa_fqq1], bx
+    pop bx
+    call .iq
+    mov [wa_fqi2], ax
+    mov [wa_fqq2], bx
+    call wa_flone.have
+    jmp short .next
+.slow:
+    mov ax, [wa_vx+si]          ; ELSE the clip, and the ends projected
+    mov [wa_x1], ax             ; from it
+    mov ax, [wa_vz+si]
+    mov [wa_z1], ax
+    mov ax, [wa_vx+bx]
+    mov [wa_x2], ax
+    mov cx, [wa_vz+bx]
+    mov [wa_z2], cx
+    mov dx, [wa_z1]             ; (both behind the near plane: nothing)
+    cmp dx, WA_NEAR
+    jge .clip
+    cmp cx, WA_NEAR
+    jl .next
+.clip:
+    call wa_clip                ; (the near plane and the guard band)
+    jc .next
+    call wa_flone
+.next:
+    add word [wa_fqk], 2
+    mov ax, [wa_fqk]
+    shr ax, 1
+    cmp ax, [wa_nfl]
+    jb .seg
+    pop bp
+    ret
+.mk:                            ; BX = a vertex x 2: made this frame
+    mov al, [wa_frame]
+    cmp [wa_vst+bx], al
+    je .mkd
+    call wa_vert                ; (keeps BX)
+.mkd:
+    ret
+.iq:                            ; BX = a vertex x 2 in front: AX = its 1/z,
+    mov al, [wa_frame]          ; BX = its floor's quarter half-row - made
+    cmp [wa_fqvs+bx], al        ; once a frame, whichever of its lines asks
+    je .iqh
+    mov [wa_fqvs+bx], al
+    push bx
+    mov bx, [wa_vz+bx]
+    shl bx, 1
+    mov bx, [wa_rcp+bx-WA_NEAR*2]
+    mov ax, [wa_fqfn]
+    mov cl, [wa_fqfs]
+    imul bx
+    sar dx, cl
+    mov ax, [wa_hq]
+    sub ax, dx
+    mov dx, bx
+    pop bx
+    mov [wa_fqvi+bx], dx
+    mov [wa_fqvq+bx], ax
+.iqh:
+    mov ax, [wa_fqvi+bx]
+    mov bx, [wa_fqvq+bx]
+    ret
+
+; wa_flone - the clipped line (wa_x1, wa_z1)-(wa_x2, wa_z2): drawn
+wa_flone:
+    mov ax, [wa_x1]             ; (after the clip: wholly beside the view)
+    cmp ax, [wa_z1]
+    jle .r1
+    mov ax, [wa_x2]
+    cmp ax, [wa_z2]
+    jg .ret0
+.r1:
+    mov ax, [wa_z1]
+    neg ax
+    cmp [wa_x1], ax
+    jge .r2
+    mov ax, [wa_z2]
+    neg ax
+    cmp [wa_x2], ax
+    jge .r2
+.ret0:
+    ret
+.r2:
+    mov ax, [wa_x1]             ; its ends: column x 16, 1/z, quarter
+    mov cx, [wa_z1]             ; half-row
+    call .proj
+    mov [wa_fqc1], ax
+    mov [wa_fqi1], dx
+    mov [wa_fqq1], bx
+    mov ax, [wa_x2]
+    mov cx, [wa_z2]
+    call .proj
+    mov [wa_fqc2], ax
+    mov [wa_fqi2], dx
+    mov [wa_fqq2], bx
+.have:                          ; (wa_flines' way in: the ends projected)
+    mov ax, [wa_fqc2]
+    cmp ax, [wa_fqc1]           ; (left to right)
+    jge .ord
+    xchg ax, [wa_fqc1]
+    mov [wa_fqc2], ax
+    mov ax, [wa_fqi2]
+    xchg ax, [wa_fqi1]
+    mov [wa_fqi2], ax
+    mov ax, [wa_fqq2]
+    xchg ax, [wa_fqq1]
+    mov [wa_fqq2], ax
+    mov ax, [wa_fqc2]
+.ord:
+    sub ax, [wa_fqc1]
+    mov [wa_fqdc], ax           ; dc, x 16 (>= 0)
+    mov cl, 4
+    mov ax, [wa_fqc1]           ; the first column whose centre is past the
+    add ax, 7                   ; left end, the last short of the right
+    sar ax, cl
+    mov dx, [wa_fqc2]
+    add dx, 7
+    sar dx, cl
+    dec dx
+    cmp ax, dx
+    jle .cols
+    jmp wa_flcol1               ; (no centre between: one column's run)
+.cols:
+    or ax, ax
+    jns .lok
+    xor ax, ax
+.lok:
+    cmp dx, [wa_w]
+    jl .rok
+    mov dx, [wa_w]
+    dec dx
+.rok:
+    sub dx, ax
+    jl .ret0                    ; (off the screen)
+    inc dx
+    push dx                     ; (the columns)
+    mov si, ax
+    shl si, 1                   ; SI = the first column x 2
+    mov ax, si                  ; its centre past the left end, x 16:
+    shl ax, 1                   ; 16 f + 8 - c1
+    shl ax, 1
+    shl ax, 1
+    add ax, 8
+    sub ax, [wa_fqc1]
+    mov [wa_fqo], ax
+    mov cx, [wa_fqdc]           ; THE HALF-ROW there, quarter half-rows
+    mov bx, [wa_fqq2]           ; 16.16: q1 + (q2 - q1)(o) / dc
+    sub bx, [wa_fqq1]
+    imul bx
+    idiv cx
+    add ax, [wa_fqq1]
+    mov dx, ax                  ; DX.BP = it
+    xor bp, bp
+    xor ax, ax                  ; ...and its step a column: (q2 - q1) x 16
+    mov [wa_fqsf], ax           ; / dc, 16.16 (one column alone: none; two
+    mov [wa_fqsi], ax           ; or more, dc >= 16 and its whole part fits)
+    pop cx
+    push cx
+    cmp cx, 1
+    je .go
+    push dx
+    mov ax, bx
+    call .step
+    mov [wa_fqsf], ax
+    mov [wa_fqsi], dx
+    pop dx
+.go:
+    add dx, 2                   ; IN HALF-ROWS, 16.16: the row, rounded (a
+    sar dx, 1                   ; column's half-row is then DX as it
+    rcr bp, 1                   ; stands), and its step
+    sar dx, 1
+    rcr bp, 1
+    mov ax, [wa_fqsf]
+    mov bx, [wa_fqsi]
+    sar bx, 1
+    rcr ax, 1
+    sar bx, 1
+    rcr ax, 1
+    mov [wa_fqsf], ax
+    mov [wa_fqsi], bx
+    pop cx                      ; CX = the columns, SI = the column x 2,
+    mov di, [wa_lp]             ; DX.BP = its half-row, DI = the list
+    inc bx                      ; A SHALLOW LINE (its step under a half-row
+    cmp bx, 1                   ; a column either way: whole part 0 or -1 -
+    ja .steep                   ; most) moves a half-row at most between
+.sh:                            ; columns: no fill, no column before
+    cmp dx, WA_HR
+    jae .sa                     ; (off the screen, above huge unsigned)
+    cmp word [wa_cov+si], 0     ; (a column something stands in: is it
+    jne .sk                     ; nearer?)
+    cmp byte [wa_cstn+si], 0
+    jne .sk
+.sp:
+    mov bx, dx
+    mov al, [wa_hgl+bx]
+    shl bx, 1
+    mov bx, [wa_hroff+bx]
+    add bx, si
+    mov ah, [wa_frame]          ; (WPLOT's, DX being the row: first one
+    cmp [wa_stamp+bx], ah       ; wins)
+    je .sa
+    mov [wa_stamp+bx], ah
+    mov ah, [wa_fqatr]
+    mov [wa_cur+bx], ax
+    xchg ax, bx
+    stosw
+.sa:
+    add bp, [wa_fqsf]
+    adc dx, [wa_fqsi]
+    inc si
+    inc si
+    loop .sh
+    mov [wa_lp], di
+    ret
+.sk:
+    call wa_fqhid               ; (is something nearer there?)
+    jnc .sp
+    jmp short .sa
+.steep:                         ; A STEEP ONE: each column's half-row
+    mov word [wa_fqpr], 0x8000  ; against the last, a step of two or more
+.col:                           ; filled down the column
+    mov ax, dx
+    mov bx, [wa_fqpr]
+    mov [wa_fqpr], ax
+    cmp bx, 0x8000
+    je .one
+    sub bx, ax
+    cmp bx, 1
+    jg .run
+    cmp bx, -1
+    jl .run
+.one:
+    cmp ax, WA_HR
+    jae .adv                    ; (off the screen, above huge unsigned)
+    cmp word [wa_cov+si], 0     ; (a column something stands in: is it
+    jne .ask                    ; nearer?)
+    cmp byte [wa_cstn+si], 0
+    jne .ask
+.plot:
+    mov bx, ax
+    mov al, [wa_hgl+bx]
+    shl bx, 1
+    mov bx, [wa_hroff+bx]
+    add bx, si
+    mov ah, [wa_fqatr]
+    push dx
+    mov dl, [wa_frame]
+    WPLOT
+    pop dx
+.adv:
+    add bp, [wa_fqsf]
+    adc dx, [wa_fqsi]
+    inc si
+    inc si
+    loop .col
+    mov [wa_lp], di
+    ret
+.ask:
+    push ax
+    push dx
+    mov dx, ax
+    call wa_fqhid               ; (keeps neither AX nor BX)
+    pop dx
+    pop ax
+    jnc .plot
+    jmp short .adv
+.run:                           ; a step of two half-rows or more: filled
+    push cx                     ; down the column, from the one after the
+    push dx                     ; last column's (BX = it - this one)
+    push bp
+    add bx, ax                  ; BX = the last column's
+    mov [wa_lp], di
+    mov [wa_fqcol], si
+    mov cl, '/'
+    cmp bx, ax
+    jg .rd
+    mov cl, '\'
+.rd:
+    mov [wa_fqg], cl
+    mov word [wa_fqiz0], 0      ; (its 1/z: made only if the column asks)
+    xchg ax, bx                 ; AX = the last column's, BX = this one's
+    call wa_flrun
+    mov di, [wa_lp]
+    pop bp
+    pop dx
+    pop cx
+    jmp short .adv
+.step:                          ; AX = a change across dc: DX.AX = it x 16
+    cwd                         ; / dc, 16.16
+    mov bx, dx
+    xor ax, dx
+    sub ax, dx
+    mov cx, 16
+    mul cx
+    mov cx, [wa_fqdc]
+    div cx
+    push ax
+    xor ax, ax
+    div cx
+    pop dx
+    or bx, bx
+    jns .stp
+    neg ax
+    adc dx, 0
+    neg dx
+.stp:
+    ret
+.proj:                          ; AX = x, CX = z: AX = column x 16, DX =
+    imul word [wa_k16]          ; 1/z, BX = the quarter half-row
+    idiv cx
+    add ax, [wa_c16]
+    mov bx, cx
+    shl bx, 1
+    mov bx, [wa_rcp+bx-WA_NEAR*2]
+    push ax
+    push bx
+    mov ax, [wa_fqfn]
+    mov cl, [wa_fqfs]
+    imul bx
+    sar dx, cl
+    mov bx, [wa_hq]
+    sub bx, dx
+    pop dx
+    pop ax
+    ret
+
+; wa_fqhid - SI = a column x 2 with something drawn in it, DX = a floor
+; line's half-row there (on the screen): CF = 1 when something nearer hides
+; it. A TALL face stands on the floor, so a floor point is behind it exactly
+; when it lies at or above the face's foot in the column: the face's 1/z
+; there (wa_colz, made once a frame) and one multiply - no 1/z of the
+; line's own. Only a column with a low box's stack entry asks wa_occl, with
+; the line's 1/z there (wa_fqiz). Keeps all but AX, BX
+wa_fqhid:
+    mov bx, [wa_cov+si]
+    or bx, bx
+    jz .low
+    mov al, [wa_frame]          ; (the column's foot: made once a frame)
+    cmp [wa_fqfst+si], al
+    je .have
+    mov [wa_fqfst+si], al
+    mov bx, si
+    call wa_wallz
+    mov ax, [wa_colz+si]
+    push cx
+    push dx
+    imul word [wa_fqfn]
+    mov cl, [wa_fqfs]
+    sar dx, cl
+    mov ax, [wa_hq]
+    sub ax, dx
+    add ax, 2
+    sar ax, 1
+    sar ax, 1                   ; AX = the face's foot, half-rows
+    mov [wa_fqfr+si], ax
+    pop dx
+    pop cx
+.have:
+    cmp dx, [wa_fqfr+si]
+    jle .hid
+.low:
+    cmp byte [wa_cstn+si], 0
+    je .vis
+    call wa_fqiz
+    mov bx, si
+    call wa_occl                ; AL = the first half-row hidden there
+    cmp dl, al
+    jae .hid
+.vis:
+    clc
+    ret
+.hid:
+    stc
+    ret
+
+; wa_fqiz - SI = a column x 2 of the line being drawn: AX = its 1/z there,
+; i1 + (i2 - i1)(16 c + 8 - c1) / dc. Keeps all but AX
+wa_fqiz:
+    push bx
+    push cx
+    push dx
+    mov ax, si
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, 8
+    sub ax, [wa_fqc1]
+    mov bx, [wa_fqi2]
+    sub bx, [wa_fqi1]
+    imul bx
+    mov cx, [wa_fqdc]
+    jcxz .z
+    idiv cx
+    add ax, [wa_fqi1]
+    jmp short .o
+.z:
+    mov ax, [wa_fqi1]
+.o:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; wa_flcol1 - a line under a column wide: its column's run from one end's
+; half-row to the other's, `|`
+wa_flcol1:
+    mov ax, [wa_fqc1]
+    mov cl, 4
+    sar ax, cl
+    cmp ax, [wa_w]
+    jae .ret                    ; (off the screen, either side)
+    shl ax, 1
+    mov [wa_fqcol], ax
+    mov si, ax
+    mov byte [wa_fqg], '|'
+    mov ax, [wa_fqi1]           ; (its 1/z: the nearer end's - a run this
+    cmp ax, [wa_fqi2]           ; short is in front of whatever its far
+    jae .i                      ; end is not)
+    mov ax, [wa_fqi2]
+.i:
+    mov [wa_fqiz0], ax
+    mov ax, [wa_fqq1]
+    add ax, 2
+    sar ax, 1
+    sar ax, 1
+    mov [wa_fqpr], ax
+    mov bx, [wa_fqq2]
+    add bx, 2
+    sar bx, 1
+    sar bx, 1
+    cmp bx, ax
+    je .ret
+    dec ax                      ; (its first end too: the run starts after
+    cmp bx, ax                  ; the half-row it is given)
+    jg .g
+    inc ax
+    inc ax
+.g:
+    jmp wa_flrun
+.ret:
+    ret
+
+; wa_flrun - AX = a half-row, BX = another, [wa_fqcol] the column x 2: the
+; half-rows after AX up to BX, on the screen, each cell [wa_fqg] where
+; nothing nearer than 1/z [wa_fqiz0] hides it (asked once, and only where
+; the column has something in it)
+wa_flrun:
+    mov cx, 0xFF                ; CL = the first half-row hidden: none, in
+    mov si, [wa_fqcol]          ; a column nothing stands in
+    cmp word [wa_cov+si], 0
+    jne .ask
+    cmp byte [wa_cstn+si], 0
+    je .have
+.ask:
+    push ax
+    push bx
+    mov ax, [wa_fqiz0]
+    or ax, ax
+    jnz .iz
+    call wa_fqiz                ; (a run in the columns' loop: its 1/z
+.iz:                            ; here, now it is asked)
+    mov bx, si
+    call wa_occl
+    mov cl, al
+    pop bx
+    pop ax
+.have:
+    cmp bx, ax
+    jl .up
+    inc ax                      ; DOWN: within 0..WA_HR-1
+    jns .d0
+    xor ax, ax
+.d0:
+    cmp bx, WA_HR-1
+    jle .d1
+    mov bx, WA_HR-1
+.d1:
+    cmp ax, bx
+    jg .ret
+    mov dx, 1
+    jmp short .walk
+.up:
+    dec ax
+    cmp ax, WA_HR-1
+    jle .u0
+    mov ax, WA_HR-1
+.u0:
+    or bx, bx
+    jns .u1
+    xor bx, bx
+.u1:
+    cmp ax, bx
+    jl .ret
+    mov dx, -1
+.walk:                          ; AX = the half-row, BX = the last, DX =
+    mov di, [wa_lp]             ; the way, CL = the limit
+    mov [wa_fqre], bx
+.cell:
+    cmp al, cl
+    jae .skip
+    push ax
+    push dx
+    mov bx, ax
+    shl bx, 1
+    mov bx, [wa_hroff+bx]
+    add bx, si
+    mov al, [wa_fqg]
+    mov ah, [wa_fqatr]
+    mov dl, [wa_frame]
+    WPLOT
+    pop dx
+    pop ax
+.skip:
+    cmp ax, [wa_fqre]
+    je .done
+    add ax, dx
+    jmp .cell
+.done:
+    mov [wa_lp], di
+.ret:
     ret
 
 ; --- the floor grid (G) -------------------------------------------------------

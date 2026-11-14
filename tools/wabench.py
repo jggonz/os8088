@@ -54,9 +54,15 @@ def one(w):
         else:
             import arenagen         # (each of its views: arenagen's)
             n = len(arenagen.ARENA_BENCH["a%d" % ITEM[w][0]])
-            for i in range(n):
-                m.key("KeyP"); m.advance(cycles=int(F * 9.2))
-                out.append((w, hud()))
+            for i in range(n):              # (until its averages show:
+                m.key("KeyP")               # 8 s of the sim's clock, which
+                m.advance(cycles=int(F * 8.5))  # a slow frame stretches)
+                for _ in range(12):
+                    h = hud()
+                    if any(c.isdigit() for c in h[3:8]):
+                        break
+                    m.advance(cycles=F // 2)
+                out.append((w, h))
     return out
 if a.one:
     for w, h in one(a.one):

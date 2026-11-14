@@ -13,11 +13,12 @@ each of those on MartyPC, off the game's own variables:
     the tables a second lift's rider stands on a lift that never moves;
   - a TALL box a lift climbs onto is a FLOOR (4.3): off the raised lift onto
     the tower, the feet stay at 240 - without kind bit 6 they fall to 0;
-  - a LINE stops the feet (2): walked at it, the player stops a radius short;
+  - a FLOOR LINE stops the feet (4.5): walked at the west square's straight
+    edge and at the path's sloping one, the player stops at the line;
   - the bots ride BOTH lifts (a lift leg's kind byte names its lift, 4.1):
     with the player out of the way, each lift leaves its rest at least once
     in 150 guest seconds;
-  - the P bench starts at the arena's OWN first view (4.2): (1024, 640),
+  - the P bench starts at the arena's OWN first view (4.2): (640, 1024),
     marked A - it read the heights arena's table, and a wrong offset into
     the new one put a stray byte where the mark is. (Last: the bench makes
     the bots dummies.)
@@ -91,7 +92,7 @@ class G(object):
               flush=True)
 
     def home(self, i, fails, name):
-        self.place(512, 1024, 0)
+        self.place(192, 768, 0)                 # (the west square's corner)
         rest = self.word("wa_lrest", 2 * i)
         for t in range(200):
             self.m.advance(cycles=TICK)
@@ -134,22 +135,28 @@ def main():
                                                 # neither ride nor shoot)
         if g.word("wa_nlift") != 2:
             fails.append("twin: %d lifts, not 2" % g.word("wa_nlift"))
-        g.ride(0, 1024, 224, 0, 224, fails, "twin: south lift, tower")
-        g.home(0, fails, "twin: south lift")
-        g.ride(1, 1024, 1824, 0, -224, fails, "twin: north lift, tower")
-        g.home(1, fails, "twin: north lift")
-        g.place(1200, 1024, 0, 768)             # (768: south, into the void)
-        g.m.advance(cycles=TICK * 4)
-        g.m.key("KeyW", up=False)
-        g.m.advance(cycles=F * 2)
-        g.m.key("KeyW", down=False)
-        y = g.word("wa_py")
-        if not 960 <= y <= 1000:
-            fails.append("twin: walked south off the bar, now at y %d - "
-                         "the line at 960 did not stop the feet" % y)
-        else:
-            print("  %-26s stopped at y %d" % ("twin: a line", y), flush=True)
-        g.place(512, 1024, 0)
+        g.ride(0, 384, 1024, 128, 0, fails, "twin: west lift, tower")
+        g.home(0, fails, "twin: west lift")
+        g.ride(1, 1664, 1024, -128, 0, fails, "twin: east lift, tower")
+        g.home(1, fails, "twin: east lift")
+        for (x, y, a, lo, hi, axis, what) in (
+                (192, 768, 768, 700, 720, 1, "the west square's south edge "
+                 "(y 704)"),
+                (704, 1024, 0, 770, 800, 0, "the path's sloping north edge "
+                 "(x 789 at y 1024)")):
+            g.place(x, y, 0, a)                 # (FLOOR LINES, 4.5: walked
+            g.m.advance(cycles=TICK * 4)        # at, the player stops at the
+            g.m.key("KeyW", up=False)           # line)
+            g.m.advance(cycles=F * 2)
+            g.m.key("KeyW", down=False)
+            v = g.word("wa_py" if axis else "wa_px")
+            if not lo <= v <= hi:
+                fails.append("twin: walked at %s, now at %d - the line did "
+                             "not stop the feet" % (what, v))
+            else:
+                print("  %-26s stopped at %d" % ("twin: a floor line", v),
+                      flush=True)
+        g.place(192, 768, 0)
         g.p.write(g.sym["wa_bdet"], b"\x00")    # (the bots: their own minds)
         rose = [False, False]
         for s in range(150):
@@ -160,13 +167,13 @@ def main():
                 break
         if not all(rose):
             fails.append("twin: in 150 s the bots rode %s"
-                         % ("the south lift alone" if rose[0] else
-                            "the north lift alone" if rose[1] else
+                         % ("the west lift alone" if rose[0] else
+                            "the east lift alone" if rose[1] else
                             "neither lift"))
         else:
             print("  %-26s both, within %d s" % ("twin: the bots' rides",
                                                   s + 1), flush=True)
-        g.bench((1024, 640, ord("A")), fails, "twin: bench view A")
+        g.bench((640, 1024, ord("A")), fails, "twin: bench view A")
     with boot() as ui:
         g = match(ui, 3)
         g.p.write(g.sym["wa_bdet"], b"\x01")
@@ -185,7 +192,7 @@ def main():
         for f in fails:
             print("  " + f)
         sys.exit(1)
-    print("waarenas: ok - both lifts, the towers, the line, the bots' rides, "
+    print("waarenas: ok - both lifts, the towers, the floor lines, the bots' rides, "
           "the stack, the maze's lift, each arena's bench")
 
 

@@ -213,6 +213,9 @@ def respawns(tag, boxes, nodes, grid):
                 inside(x, y, [b for b in boxes if b.h > 0], 24):
             raise SystemExit("arenagen: arena %s: a respawn point at (%d, %d) "
                              "is not on free floor" % (tag, x, y))
+        if not in_walk(tag, x, y, 24):
+            raise SystemExit("arenagen: arena %s: a respawn point at (%d, %d) "
+                             "is outside its floor lines" % (tag, x, y))
         d = sorted(range(len(nodes)), key=lambda k: math.hypot(
             nodes[k][0] - x, nodes[k][1] - y))
         seen = [k for k in d if sight_clear(grid, (x, y), nodes[k])]
@@ -271,6 +274,10 @@ def graph_edges(tag, boxes):
             if inside(x, y, walls, 12):
                 raise SystemExit("arenagen: arena %s: route leg %d -> %d runs "
                                  "into a wall near (%d, %d)" % (tag, a, b_, x, y))
+            if not in_walk(tag, x, y, 12):
+                raise SystemExit("arenagen: arena %s: route leg %d -> %d leaves "
+                                 "the floor lines near (%d, %d)"
+                                 % (tag, a, b_, x, y))
             if flat:
                 continue
             f = floor_at(x, y, bs, FRAD)
@@ -457,6 +464,9 @@ def graph_block(tag, boxes):
                          (b.h >= hmax(bxs) and not climbed(b, bxs))], 24):
             raise SystemExit("arenagen: arena %s: bench view %s stands in a "
                              "wall" % (tag, mark))
+        if not in_walk(tag, x, y, 24):
+            raise SystemExit("arenagen: arena %s: bench view %s is outside "
+                             "its floor lines" % (tag, mark))
         out += struct.pack('<hhHhhH', x, y, a << 6, p, f, ord(mark))
     return bytes(out)
 
@@ -561,116 +571,55 @@ MAZE_PICKUPS = [
 ]
 MAZE_START = (C, C - 672, 256)
 
-# --- TWIN (ARENAS-PLAN 3): two towers across from each other, a railgun on
-# each, a lift up each hidden behind it; between them two walks, one from
-# each tower, that go to its right and come back to join in the middle -
-# everything that is not walk a LINE: seen across, stopped at. A chaingun
-# on the ground beside each tower, health or shield where the walks join.
-# Symmetric through the middle: (x, y) -> (2048 - x, 2048 - y).
+# --- TWIN (ARENAS-PLAN 3, the owner's drawing of 2026-11-14): one of the
+# LIGHT arenas by design - two squares of floor joined by a path that dips
+# to the middle and back, drawn as FLOOR LINES alone (4.5; no room walls, 4.6; no
+# boxes for them), and nothing above the floor but the two towers and the
+# lift hidden behind each. A railgun on each tower, a chaingun beside each,
+# health or shield where the path bottoms out; the flags of a CTF to come
+# behind each lift (TWIN_FLAGS: not yet in the game).
 TT = 240                        # a tower: the tallest box, so it hides its
-                                # lift from the ground; the lift raised
+                                # lift from the path; the lift raised
                                 # flush with its top
-TL = 8                          # a line: drawn on the floor
-
-
-def _mirror(b, name):
-    x0, y0, x1, y1 = b
-    return Box(2048 - x1, 2048 - y1, 2048 - x0, 2048 - y0, h=b.h,
-               kind=b.kind, col=b.col,
-               toward={"N": "S", "S": "N", "E": "W", "W": "E"}.get(b.toward),
-               treads=b.treads, top=b.top, name=name)
-
-
-# the walk, as rectangles: the south tower's base, its walk (up, right, up,
-# back left along the bar), the bar the two walks share, and their mirrors
-_TW_S = [(768, 0, 1280, 704), (960, 704, 1088, 768), (960, 768, 1600, 896),
-         (1472, 896, 1600, 960)]
-TWIN_WALK = _TW_S + [(2048 - c, 2048 - d, 2048 - a, 2048 - b)
-                     for (a, b, c, d) in _TW_S] + [(448, 960, 1600, 1088)]
-
-
-def _lines(solids):
-    """the room less the walk as LINE boxes: the fewest rectangles a
-    GUILLOTINE partition makes (each cut a straight line across what is left
-    - so the box tree finds its separating lines, which a free-form tiling
-    need not have), by a search over the coordinates. A SOLID in the walk
-    (a tower, a stair) is a region no cut may cross"""
-    rects = TWIN_WALK + [tuple(b) for b in solids]
-    xs = sorted({0, 2048} | {v for r in rects for v in (r[0], r[2])})
-    ys = sorted({0, 2048} | {v for r in rects for v in (r[1], r[3])})
-
-    def kind(i, j):                     # 0 void, 1 walk, 2 + k solid k
-        x, y = xs[i], ys[j]
-        for k, (a, b, c, d) in enumerate(solids):
-            if a <= x < c and b <= y < d:
-                return 2 + k
-        return 1 if any(a <= x < c and b <= y < d
-                        for (a, b, c, d) in TWIN_WALK) else 0
-    memo = {}
-    BAD = [None] * 999
-
-    def best(i0, j0, i1, j1):
-        key = (i0, j0, i1, j1)
-        if key in memo:
-            return memo[key]
-        ks = {kind(i, j) for i in range(i0, i1) for j in range(j0, j1)}
-        r = BAD
-        if ks == {0}:
-            r = [(xs[i0], ys[j0], xs[i1], ys[j1])]
-        elif ks == {1}:
-            r = []
-        elif len(ks) == 1 and tuple(solids[ks.pop() - 2]) == \
-                (xs[i0], ys[j0], xs[i1], ys[j1]):
-            r = []
-        else:
-            for i in range(i0 + 1, i1):
-                c = best(i0, j0, i, j1) + best(i, j0, i1, j1)
-                if len(c) < len(r):
-                    r = c
-            for j in range(j0 + 1, j1):
-                c = best(i0, j0, i1, j) + best(i0, j, i1, j1)
-                if len(c) < len(r):
-                    r = c
-        memo[key] = r
-        return r
-    out = best(0, 0, len(xs) - 1, len(ys) - 1)
-    if len(out) >= len(BAD):
-        raise SystemExit("arenagen: twin: no guillotine partition of its lines")
-    return [Box(*r, h=TL, kind=LINE, col=COL_ROOM, name="line") for r in out]
-
-
-_TWS = [Box(896, 320, 1152, 576, TT, col=COL_ITEM, name="south tower"),
-        Box(960, 128, 1088, 320, 16, LIFT, col=COL_ITEM, top=TT,
-            name="south tower's lift")]
-_TWN = [_mirror(_TWS[0], "north tower"),
-        _mirror(_TWS[1], "north tower's lift")]
-TWIN_BOXES = _TWS + _TWN + _lines(_TWS + _TWN)
-TWIN_GRAPH = dict(                      # (a tower: up its lift, the rail
-    nodes=[(832, 64), (1024, 64), (1216, 64), (1216, 640), (1024, 640),
-           (832, 640),                          # 0-5: round the south tower
-           (1024, 832), (1536, 832), (1536, 1024), (1024, 1024),
-                                                # 6-9: its walk, the middle
-           (1216, 1984), (1024, 1984), (832, 1984), (832, 1408), (1024, 1408),
-           (1216, 1408),                        # 10-15: round the north one
-           (1024, 1216), (512, 1216), (512, 1024),      # 16-18: its walk
-           (1024, 224), (1024, 448),            # 19-20: the south lift, top
-           (1024, 1824), (1024, 1600)],         # 21-22: the north's
+TWIN_WALK = [[                  # the walk's edge, one closed line: the west
+    (704, 1088), (704, 1344), (64, 1344), (64, 704),        # square, the
+    (704, 704), (704, 960),                                 # path's south
+    (960, 768), (1088, 768), (1344, 960),                   # edge, the east
+    (1344, 704), (1984, 704), (1984, 1344), (1344, 1344),   # square, the
+    (1344, 1088), (1088, 896), (960, 896)]]                 # path's north
+TWIN_BOXES = [
+    Box(448, 896, 576, 1152, TT, col=COL_ITEM, name="west tower"),
+    Box(320, 960, 448, 1088, 16, LIFT, col=COL_ITEM, top=TT,
+        name="west tower's lift"),
+    Box(1472, 896, 1600, 1152, TT, col=COL_ITEM, name="east tower"),
+    Box(1600, 960, 1728, 1088, 16, LIFT, col=COL_ITEM, top=TT,
+        name="east tower's lift")]
+TWIN_FLAGS = [(192, 1024), (1856, 1024)]        # (CTF, the owner's red)
+TWIN_GRAPH = dict(
+    nodes=[(256, 800), (640, 800), (640, 1024), (640, 1248), (256, 1248),
+           (256, 1024),                         # 0-5: round the west tower
+           (384, 1024), (512, 1024),            # 6-7: its lift, its top
+           (1792, 1248), (1408, 1248), (1408, 1024), (1408, 800),
+           (1792, 800), (1792, 1024),           # 8-13: round the east one
+           (1664, 1024), (1536, 1024),          # 14-15: its lift, its top
+           (736, 1024), (960, 856), (1088, 856), (1312, 1024),
+           (1088, 808), (960, 808)],            # 16-21: the path, two ways
     legs=[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0),
-          (4, 6), (6, 7), (7, 8), (8, 9),
-          (10, 11), (11, 12), (12, 13), (13, 14), (14, 15), (15, 10),
-          (14, 16), (16, 17), (17, 18), (18, 9), (8, 18),
-          (1, 19, LIFT_ON), (19, 20, LIFT_UP), (20, 4, DROP),
-          (11, 21, LIFT_ON), (21, 22, LIFT_UP), (22, 14, DROP)],
-    homes=[[0, 1, 2, 3, 4, 5], [10, 11, 12, 13, 14, 15], [18, 9, 8]])
-                                        # off its front: ARENAS-PLAN 4.1)
-TWIN_RESPAWNS = [(832, 64, 256), (1216, 1984, 768), (1216, 640, 256),
-                 (832, 1408, 768), (1536, 1024, 512), (512, 1024, 0)]
+          (8, 9), (9, 10), (10, 11), (11, 12), (12, 13), (13, 8),
+          (16, 17), (17, 18), (18, 19), (19, 20), (20, 21), (21, 16),
+          (2, 16), (19, 10),
+          (5, 6, LIFT_ON), (6, 7, LIFT_UP), (7, 2, DROP),
+          (13, 14, LIFT_ON), (14, 15, LIFT_UP), (15, 10, DROP)],
+    homes=[[0, 1, 2, 3, 4, 5], [8, 9, 10, 11, 12, 13],
+           [16, 17, 18, 19, 20, 21]])
+TWIN_RESPAWNS = [(192, 768, 0), (640, 1280, 0), (192, 1280, 0),
+                 (1856, 1280, 512), (1408, 768, 512), (1856, 768, 512)]
 TWIN_PICKUPS = [
-    (PK_RAIL, 1024, 448), (PK_RAIL, 1024, 1600),     # the towers' tops
-    (PK_CHAINGUN, 832, 480), (PK_CHAINGUN, 1216, 1568),  # beside them
-    ((PK_HEALTH, PK_SHIELD), 1024, 1024),            # where the walks join
+    (PK_RAIL, 512, 1024), (PK_RAIL, 1536, 1024),     # the towers' tops
+    (PK_CHAINGUN, 512, 800), (PK_CHAINGUN, 1536, 1248),  # beside them
+    ((PK_HEALTH, PK_SHIELD), 1024, 832),             # the path's bottom
 ]
-TWIN_START = (1024, 640, 256)
+TWIN_START = (640, 800, 0)
 
 
 def arenas():
@@ -686,6 +635,51 @@ def arenas():
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
 ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": MAZE_GRAPH, "a4": TWIN_GRAPH}
 ARENA_ROOMCOL = {"a3": COL_HEDGE}
+# FLOOR LINES (ARENAS-PLAN 4.5): an arena's closed lines on the floor, the
+# feet's edge - and its room's height, 0 for no room walls at all
+ARENA_FLINES = {"a4": TWIN_WALK}
+ARENA_ROOMH = {"a4": 0}
+WA_MFL = 24                             # (wafb.inc's)
+
+
+def flines(tag):
+    """an arena's floor lines as segments (x0, y0, x1, y1)"""
+    out = []
+    for poly in ARENA_FLINES.get(tag, []):
+        out += [poly[i] + poly[(i + 1) % len(poly)] for i in range(len(poly))]
+    return out
+
+
+def fl_cross(p, q, segs):
+    """does the step p -> q touch or cross any of segs (wa_flcross's rule,
+    with touching counted)"""
+    def cr(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    for (x0, y0, x1, y1) in segs:
+        a, b = (x0, y0), (x1, y1)
+        d1, d2 = cr(a, b, p), cr(a, b, q)
+        d3, d4 = cr(p, q, a), cr(p, q, b)
+        if (d1 < 0) != (d2 < 0) and (d3 == 0 or d4 == 0 or
+                                     (d3 < 0) != (d4 < 0)):
+            return True
+    return False
+
+
+def in_walk(tag, x, y, r=0):
+    """inside the arena's floor lines (any point, with none), and r clear of
+    every one of them"""
+    segs = flines(tag)
+    if not segs:
+        return True
+    n = 0
+    for (x0, y0, x1, y1) in segs:
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            n += 1
+        dx, dy = x1 - x0, y1 - y0
+        t = max(0, min(1, ((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy)))
+        if math.hypot(x - x0 - t * dx, y - y0 - t * dy) < r:
+            return False
+    return n & 1 == 1
 # arenas let past the visible budget (wamodel.BUDGET_*, HEIGHTS-PLAN 4.2) -
 # the owner's stress tests (ARENAS-PLAN 4.4: "to see how well the system holds
 # up"), each with its own ceiling and its frame rate measured where it is
@@ -706,10 +700,10 @@ ARENA_BENCH = {
            ("B", 1700, 1024, 0, 0, 0),          # the east room
            ("C", 1472, 1472, 768, 0, 0),        # the inner ring's corner
            ("D", 1024, 1900, 768, 0, 128)],     # on the outer wall, north
-    "a4": [("A", 1024, 640, 256, 0, 0),         # before the south tower
-           ("B", 1024, 448, 256, -40, 240),     # on it, across to the north
-           ("C", 1536, 1024, 512, 0, 0),        # the walks' bar
-           ("D", 864, 96, 256, 0, 0)],          # behind it: the most boxes
+    "a4": [("A", 640, 1024, 0, 0, 0),           # at the path, east along it
+           ("B", 512, 1024, 0, -40, 240),       # on the west tower
+           ("C", 1024, 832, 0, 0, 0),           # the path's bottom
+           ("D", 192, 1024, 0, 0, 0)],          # behind the lift: the flag
 }
 
 
@@ -1166,9 +1160,9 @@ def pickups(tag, boxes):
         if not (ROOM[0] < x < ROOM[2] and ROOM[1] < y < ROOM[3]) or \
                 any(b[0] < x < b[2] and b[1] < y < b[3] and
                     ((b.h >= hmax(boxes) and not climbed(b, boxes)) or
-                     b.kind == LINE) for b in boxes):
+                     b.kind == LINE) for b in boxes) or not in_walk(tag, x, y):
             raise SystemExit("arenagen: arena %s: a pickup at (%d, %d) is in a "
-                             "wall" % (tag, x, y))
+                             "wall, or outside its floor lines" % (tag, x, y))
         ks = k if isinstance(k, tuple) else (k,)
         if len(ks) > 1 and max(ks) >= PK_HEALTH and \
                 set(ks) != {PK_HEALTH, PK_SHIELD}:
@@ -1648,6 +1642,9 @@ def arena_tables(w, tag, boxes, start):
     if inside(start[0], start[1], boxes, 20):
         raise SystemExit("arenagen: arena %s starts the player INSIDE a wall "
                          "at %r - every step would collide" % (tag, start))
+    if not in_walk(tag, start[0], start[1], 24):
+        raise SystemExit("arenagen: arena %s starts the player outside its "
+                         "floor lines" % tag)
     height_checks(tag, boxes)
     graph_edges(tag, boxes)             # (the routes' checks: AI-PLAN 3.1)
     nodes = []
@@ -1655,6 +1652,16 @@ def arena_tables(w, tag, boxes, start):
     pts = []
     for (a, b, c, d) in [ROOM] + boxes:
         pts += [(a, b), (c, b), (c, d), (a, d)]
+    segs = flines(tag)                  # (a floor line's ends: vertices too,
+    if len(segs) > WA_MFL:              # made by the frame's cache)
+        raise SystemExit("arenagen: arena %s: %d floor lines - at most %d"
+                         % (tag, len(segs), WA_MFL))
+    for (x0, y0, x1, y1) in segs:
+        if not (ROOM[0] <= min(x0, x1) and max(x0, x1) <= ROOM[2] and
+                ROOM[1] <= min(y0, y1) and max(y0, y1) <= ROOM[3]):
+            raise SystemExit("arenagen: arena %s: a floor line outside the "
+                             "room" % tag)
+        pts += [(x0, y0), (x1, y1)]
     xs = sorted({p[0] for p in pts})
     ys = sorted({p[1] for p in pts})
     verts, vix = [], {}
@@ -1729,6 +1736,12 @@ def arena_tables(w, tag, boxes, start):
     for i, b in enumerate(boxes):
         w("    dw %d" % b.h)
         w("    db %d, %d" % (kind_byte(b, lifts, boxes), face_bits(i, boxes)))
+    w(P + "fl:                          ; floor lines: count; x0, y0, x1, y1,")
+    w("                                ; its two vertices x 2 (ARENAS-PLAN 4.5)")
+    w("    dw %d" % len(segs))
+    for (x0, y0, x1, y1) in segs:
+        w("    dw %d, %d, %d, %d" % (x0, y0, x1, y1))
+        w("    db %d, %d" % (vix[(x0, y0)] * 2, vix[(x1, y1)] * 2))
     w(P + "lifts:                       ; count; box, 0, rest, raised")
     w("    dw %d" % len(lifts))
     for b in lifts:
@@ -1963,7 +1976,8 @@ def arena_part(n, out):
                                                          P),
          "    dw %sboxes, %d, %sbsp, %d, %d, %d, %sbcol, %d" % (
              P, nb, P, start[0], start[1], start[2], P, nn),
-         "    dw %sbxh, %d, %d, %slifts" % (P, room_h(boxes), hmax(boxes), P)]
+         "    dw %sbxh, %d, %d, %slifts" % (P, ARENA_ROOMH.get(tag, WALL_H),
+                                         hmax(boxes), P)]
     gb = graph_block(tag, boxes)
     L += ["    dw %s, %d                ; its route graph: offset, bytes "
           "(AI-PLAN 3.1)" % (P + "graph", len(gb))]
@@ -1976,7 +1990,9 @@ def arena_part(n, out):
     pkv = pvs_pickups(tag, boxes, pk)
     L += ["    dw %s, %s               ; its pickups (0: none), and their PVS "
           "bytes (0: none - every pickup tested)" % (
-              P + "pks" if pk else "0", P + "pkv" if pkv else "0")] + T
+              P + "pks" if pk else "0", P + "pkv" if pkv else "0"),
+          "    dw %s                    ; its floor lines (ARENAS-PLAN 4.5)" % (
+              P + "fl")] + T
     if pk:
         L.append(P + "pks:                     ; count; x, y, z, kind, choices")
         L.append("    dw %d" % len(pk))

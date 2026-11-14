@@ -3,7 +3,9 @@
 **STATUS: BUILT** (2026-11-14), on branch `multiplayer-fps`. Both arenas play
 on every adapter the game runs on. Section 5 gives the measured frame times,
 section 6 the parts of the brief that changed on the way, and section 7 the
-checklist.
+checklist. The Twin was rebuilt the same day from the owner's drawing
+(section 3): two squares and a path drawn as FLOOR LINES, with no room walls
+(4.5, 4.6).
 
 The owner's brief, 2026-11-14:
 
@@ -62,9 +64,13 @@ The graph has 27 route nodes:
 
 There are 7 respawn points.
 
-## 2. LINES (the twin's walk)
+## 2. LINE boxes (the first twin's walk)
 
-A LINE is a new kind of box: the boundary of the walk.
+A LINE is a kind of box: the boundary of a walk. The first twin was built
+from twelve of them. The rebuilt twin (section 3) uses FLOOR LINES instead
+(4.5), which draw a diagonal and cost a fraction of the frame. The LINE kind
+stays in the engine for an arena that wants an axis-aligned box the feet stop
+at and nothing else sees.
 
 - **What it does.**
   - It stops a player's feet like a wall.
@@ -76,8 +82,8 @@ A LINE is a new kind of box: the boundary of the walk.
   - `wa_hat` answers a line's height as `WA_LINEW` (4096) for feet. While
     `wa_hproj` is set, around the rocket tick, it answers the line's own
     height (8).
-  - The void beside the walk is cut into the FEWEST LINE boxes a GUILLOTINE
-    partition gives (`_lines`). The box tree needs straight separating cuts,
+  - The first twin cut the void beside its walk into the FEWEST LINE boxes a
+    GUILLOTINE partition gives. The box tree needs straight separating cuts,
     which a free-form tiling need not have.
 - **How it is drawn.**
   - A LINE's face bits are its top edges only, with no face. The outline path
@@ -85,32 +91,44 @@ A LINE is a new kind of box: the boundary of the walk.
     no posts and no floor edge under each top edge.
   - Edges between two LINE boxes are already hidden by HEIGHTS-PLAN 7.2.1's
     same-height rule.
-  - So exactly the walk's outline is drawn: the brief's *"one line"*.
-  - This took the twin's worst view from 56 outline edges to 37.
+  - So exactly the walk's outline is drawn.
+  - This took the first twin's worst view from 56 outline edges to 37.
 
 ## 3. The Twin (arena 4)
 
-Two towers face each other across the room. They are mirrored through its
-middle.
+The owner, on the first build:
 
-- **The towers.**
-  - Each is 256 square and 240 tall, the arena's tallest box, so from the
-    ground it hides what stands behind it.
+> *"Twin should be the one of the lighter arenas in the game by design,
+> basically two boxes and ground lines only. ... All blue is single line
+> height - no walls around the edges, nothing above ground level except the
+> two towers and the lifts behind them."*
+
+with a drawing: two squares joined by a path that dips to the middle and
+back. The arena is that drawing, made even and mirrored about the middle.
+
+- **The floor.** Two 640-unit squares, (64, 704)-(704, 1344) and
+  (1344, 704)-(1984, 1344). The path leaves each from the middle of its
+  inner side, 128 wide, and runs down to a short flat bottom at the middle.
+  - The whole edge is ONE closed line of 16 FLOOR LINES (4.5), in the room's
+    blue.
+  - There are no room walls (4.6).
+- **The towers.** One in each square, 128 by 256 and 240 tall, its long side
+  toward the path.
   - Each top carries a RAILGUN.
-  - Behind each tower, on the side away from the middle, is a LIFT. It rises
-    from 16 to 240, flush with the top, and is hidden entirely from the
-    ground in front.
-- **Beside each tower** is a CHAINGUN on the ground.
-- **The walk.** From each tower's base a walk goes out toward the middle,
-  turns to its RIGHT, comes back along a bar the two walks share, and joins
-  the other. Where they join, in the middle, is HEALTH or SHIELD.
-- **The lines.** Everything that is not walk is LINE (section 2): 12 boxes.
-- **Bots.**
-  - Bots ride the lifts: a lift leg up, then a drop off the tower's front.
-  - They take the railgun on the way when they FETCH it.
+  - Behind each tower, on the side away from the path, is a LIFT: 128 by
+    128, rising from 16 to 240, flush with the top, hidden from the path.
+- **A CHAINGUN** stands on the ground beside each tower: south of the west
+  one, north of the east one, as drawn.
+- **HEALTH or SHIELD** sits at the path's bottom.
+- **The flags of a CTF to come** stand behind each lift, at (192, 1024) and
+  (1856, 1024): `TWIN_FLAGS`, recorded and not yet in the game.
+- **Bots.** They walk round each tower and along the path, two ways, one
+  lane each. They ride a lift up, take the railgun, and drop off the tower's
+  front.
 
-The graph has 23 route nodes, including the two lift legs and two drops.
-There are 6 respawn points.
+The graph has 22 route nodes, including the two lift legs and two drops.
+There are 6 respawn points. Nothing above the floor but four boxes: the
+towers and the lifts.
 
 ## 4. The engine: limits the first arenas set
 
@@ -159,8 +177,8 @@ and the twin's lines.
 - **Views per arena:**
   - the maze: the court (its worst outline-edge count), the east room, the
     inner ring's corner, and the plateau;
-  - the twin: before the south tower, on top of it, the walks' bar, and
-    behind it (its most boxes in view).
+  - the twin: at the path looking east, on the west tower, the path's bottom,
+    and behind the west lift (the flag's place).
 - **The tools.** `tools/wabench.py` and `tools/waprof.py` take `A<n>-<width>`
   for any arena. `tests/walift.py`'s `start_keys` counts the arena drop-down
   off `arenagen.arenas()`. With five arenas, *"Right wraps to 0"* was wrong.
@@ -184,14 +202,72 @@ it. The twin's towers are the tallest boxes, and they must be stood on.
 
 `wamodel`'s visible budget (HEIGHTS-PLAN 4.2) is 20 boxes and 40 outline
 edges in any view.
-- The twin is inside it: 16 boxes and 37 edges at worst.
+- The twin is inside it: 4 boxes and 15 edges at worst, its floor lines
+  counted an edge each.
 - The maze's court reaches 42 edges at (1248, 1248), its worst view.
   `OVER_BUDGET` lets one arena past with its own ceiling, (20, 44) for the
   maze. Its cost is measured, in section 5, where it is worst.
 
 `wamodel` also now counts a LINE's top edge as one edge, not a face's two.
 
-### 4.5 Limits still standing (not met by these arenas)
+### 4.5 Floor lines
+
+Every line the engine drew was a box's edge, and every box is axis-aligned,
+so a diagonal could only be a staircase of boxes. A FLOOR LINE is a straight
+line on the floor between two of the arena's vertices, at any angle.
+
+- **Data.** `arenagen.ARENA_FLINES` gives an arena closed lines as point
+  lists. At most `WA_MFL` (24) segments.
+  - Their ends join the arena's vertices, so the frame's vertex cache makes
+    them.
+  - The arena part carries a table at header +48: a count, then each line's
+    x0, y0, x1, y1 and its two vertices.
+  - The renderer part copies the ends into the frame block (`wa_nfl`,
+    `wa_fl`, for the game) and the vertex pairs into its own `wa_fqv`.
+    `WR_ABI` is 9.
+- **Drawing** (`wa_flines`, after every box and before the floor's dots, in
+  the room's colour).
+  - A line's ends come through the vertex cache.
+  - Both ends in front and inside the guard band: no clip, and their
+    columns are the cache's. Else `wa_clip` and a projection.
+  - A line wholly off one side of the screen costs a few compares.
+  - A floor line's half-row is linear across its columns (the floor is a
+    plane), so each column's is a 16.16 add, in registers.
+  - A SHALLOW line, under a half-row a column (most), plots each column's
+    cell outright.
+  - A STEEP one fills a step of two half-rows or more down the column.
+  - A line under a column wide is that column's run, `|`.
+- **What hides it.** A column with nothing drawn in it (no tall face, no
+  depth-stack entry) needs no test.
+  - A TALL face stands on the floor, so a floor point is behind it exactly
+    when it lies at or above the face's foot in that column. The foot comes
+    from the wall's 1/z (`wa_colz`) and one multiply, cached per column once
+    a frame (`wa_fqfr`). The line needs no 1/z of its own.
+  - Only a column with a low box's stack entry (a lift, a tower seen from
+    above) asks `wa_occl`, with the line's 1/z there.
+- **The feet.** `wa_collide` asks `wa_flcross` first. A step that crosses a
+  floor line is refused, as a wall's is, and the player slides along it.
+  - A line is near only when the new point is within 16 units of its box.
+  - Then two 32-bit cross products ask whether the step's ends lie either
+    side of the line, and two more whether the line's ends lie either side of
+    the step (or on it). That last test lets a step pass the open end of a
+    line, through the path's gap.
+- **Bots and arenagen.** `arenagen` refuses:
+  - a route leg that leaves the floor lines;
+  - a respawn, a pickup, a bench view or the start outside them (point in
+    polygon, with a margin).
+
+  `wamodel` counts a floor line in view as one edge.
+
+### 4.6 An arena with no room walls
+
+`ARENA_ROOMH` sets an arena's room height, and 0 means NO ROOM WALLS. The
+renderer skips the room's four faces when the height is 0. The game still
+keeps the player inside the room (an invisible bound the floor lines sit well
+within), and `wamodel` skips the room as the renderer does. The twin uses it:
+its floor lines are its edge.
+
+### 4.7 Limits still standing (not met by these arenas)
 
 | limit | where | why it stands |
 |---|---|---|
@@ -201,6 +277,8 @@ edges in any view.
 | 8 respawns, 8 pickups | their tables | 7 and 5 used |
 | 3 home loops | one per figure, `WA_NFIG` | |
 | 4 lifts, heights multiples of 4 to 252 | `WA_MLIFT`, SNAP byte 8 (4.1) | |
+| 24 floor lines | `WA_MFL`, the frame block (4.5) | the twin uses 16 |
+| 8 distinct steps between coordinate values | `MAXKS`, `wa_products` | the twin's coordinates sit on a 64 grid: 5 steps |
 
 ## 5. Measured
 
@@ -213,8 +291,9 @@ cycles a pose:
 |---|---|---|
 | heights | 34.0 | |
 | maze | 36.5 | 15 boxes, 42 edges |
-| twin, lines as low boxes (two edges each) | 69.8 | 16 boxes, 56 edges |
-| twin, lines as one edge (section 2) | 64.0 | 16 boxes, 37 edges |
+| first twin, LINE boxes as low boxes (two edges each) | 69.8 | 16 boxes, 56 edges |
+| first twin, LINE boxes as one edge (section 2) | 64.0 | 16 boxes, 37 edges |
+| **twin as drawn: floor lines, no room walls** | **35.6** | 4 boxes, 15 edges |
 
 **`tools/wabench.py`**, the P bench: every pickup present, three dummies
 walking, 8 s per view, the HUD's averages. Frames a second, and the render
@@ -224,24 +303,45 @@ time in ms:
 |---|---|---|---|---|---|
 | heights | 16.2 (52.6) | 16.9 (48.7) | 43.1 (17.9) | 14.9 (56.3) | 35.2 (23.2) |
 | maze | 10.5 (83.5) | 26.5 (29.8) | 15.8 (53.8) | 45.8 (18.5) | |
-| twin | 9.3 (91.7) | 8.5 (100.7) | 9.8 (88.1) | 9.2 (96.0) | |
+| first twin | 9.3 (91.7) | 8.5 (100.7) | 9.8 (88.1) | 9.2 (96.0) | |
+| **twin as drawn** | **17.2 (50.6)** | **14.5 (61.4)** | **18.2 (47.1)** | **13.8 (63.9)** | |
 
-The Very Low detail level (F1) moves the twin by under 1 fps (8.8 to 10.2),
-the maze's court to 11.8 and the heights views by up to 3.
+The twin's views differ between the two builds (4.2). The first twin's were
+before the south tower, on it, the walks' bar and behind it. The rebuilt
+twin's are at the path, on the west tower, the path's bottom and behind the
+west lift.
 
-**What the twin's cost is.** `tools/waprof.py --what A4-40 --live 3`:
-- the outline path's top-edge walk `wl_rtop` is 18.5% of a frame;
-- `wa_lowbox` is 10.6%;
-- `wl_draw` is 6.6%.
+The Very Low detail level (F1) moved the first twin by under 1 fps, the
+maze's court to 11.8 and the heights views by up to 3.
 
-Each of the 37 edges crosses most of the screen in an open room, at about
-100 cycles a column with its plot, clip test and depth-stack entry. So the
-twin is the cost of drawing a long boundary in a room nothing occludes. No
-detail level removes that. A narrower view, or fewer turns in the walk,
-would.
+**What the first twin's cost was.** `tools/waprof.py --what A4-40 --live 3`:
+- the outline path's top-edge walk `wl_rtop` was 18.5% of a frame;
+- `wa_lowbox` 10.6%;
+- `wl_draw` 6.6%.
 
-**Size.** The renderer part is 56,536 of its 65,024 bytes, 2,182 more than
-before this round.
+Its 37 edges each crossed most of the screen, about 100 cycles a column.
+
+**What the rebuilt twin's cost is.** `tools/waprof.py --what A4-40 --pose
+N`: the floor lines are roughly a third to a half of a frame. The rest is
+the engine's fixed load in a room where nothing is hidden: three figures,
+every pickup and the present.
+- The first floor-line drawer spent about 235,000 cycles a frame.
+- It now spends roughly 110,000 to 150,000, depending on the view.
+- Three changes took it there:
+  - the half-row is stepped in registers;
+  - occlusion is by the tall face's foot row, cached per column, not by a
+    1/z of the line's own;
+  - a vertex is transformed, and its row made, once a frame.
+- Its worst view is on the tower (B): every line is in view and steep, and
+  the tower's own outline puts a stack entry in its columns.
+
+The twin is now as costly as the heights arena, not lighter. What would take
+it further down: fewer lines in view at once, or a cheaper floor-line glyph
+walk.
+
+**Size.** The renderer part is 59,041 of its 65,024 bytes: 2,182 more for
+the first round, then 2,505 for floor lines (code, the per-column and
+per-vertex caches) and no room.
 - Almost all of it is tables sized to the LARGEST arena: the maze's 92
   vertices against the heights arena's 51 (82 bytes per vertex table), its
   PVS at four mask bytes a cell (+512), and its box tree (+384).
@@ -256,27 +356,38 @@ before this round.
 - **Maze, which sides.** The brief fixed only the offset between exits and
   entrances. The centre's exits are on its east and west sides, the middle
   ring's entrances on its north and south.
-- **Twin, lifts not stairs.** The first build had stairs behind the towers,
-  because of the one-lift limit. Section 4.1 removed the limit, and the twin
-  now has the lifts the brief asked for.
+- **Twin, the first build.** The first build read the brief's walk as a path
+  that turns right and back, built from LINE boxes inside room walls. The
+  owner's drawing replaced it (section 3).
+- **Twin, lifts not stairs.** The very first build had stairs behind the
+  towers, because of the one-lift limit. Section 4.1 removed the limit.
+- **Twin, symmetry.** The drawing is mirrored left to right in its path, and
+  its chainguns are turned about the middle (south of the west tower, north
+  of the east). The arena keeps both, as drawn.
 - **Twin, bots.** Bots ride up and drop off the front; they do not patrol a
   tower's top. The sight grid counts a tall box's cells as solid, so a bot
   standing on a tower would neither see nor be seen by the grid. It fetches
   the railgun and comes down.
 - **Twin, falling.** As the brief allowed, nobody falls off the walk: the
-  line stops them.
+  floor line stops them.
 
 ## 7. Checklist
 
 - [x] The maze: hedges, the stack, exits and entrances, four rooms, the
   north lift onto the plateau; green and red on colour cards.
-- [x] The twin: towers with railguns, a hidden lift behind each, the walk as
-  one line, chainguns beside, health or shield in the middle.
+- [x] The twin as drawn: two squares and a dipping path as floor lines, no
+  room walls, towers with railguns, a hidden lift behind each, chainguns
+  beside, health or shield at the path's bottom, the CTF flags' places
+  recorded.
+- [x] Floor lines: data, drawing with occlusion, the feet, `arenagen`'s
+  checks (4.5); no room walls (4.6).
 - [x] Several lifts: sim, renderer, link, bots, `arenagen` (4.1).
 - [x] The bench's views per arena; the tools take any arena (4.2).
 - [x] Tall boxes as floors (4.3); LINE boxes (2).
 - [x] Measured: `waposes` and the P bench on every arena (5).
-- [x] Row `waarenas` (soak): both lifts, the towers, the line, the bots'
-  rides, the maze's stack and lift, each arena's bench view. It was red with
-  bit 6 dropped, one lift ticked and the views' pointer a word off: 5
-  failures.
+- [x] Row `waarenas` (soak): both lifts, the towers, the floor lines (a
+  straight edge and the path's sloping one), the bots' rides, the maze's
+  stack and lift, each arena's bench view.
+  - It was red with bit 6 dropped, one lift ticked and the views' pointer a
+    word off: 5 failures (the first twin).
+  - It was red with `wa_flcross` answering "clear": both floor-line checks.

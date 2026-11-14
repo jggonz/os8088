@@ -348,6 +348,27 @@ wa_loadarena:
     inc di
     loop .lift
 .nolift:
+    mov word [es:wa_nfl], 0     ; ITS FLOOR LINES (ARENAS-PLAN 4.5): each
+    mov si, [bx+48]             ; one's ends - the game's, in the frame
+    or si, si                   ; block - and its two vertices, the
+    jz .nofl                    ; renderer's (wa_flines)
+    lodsw
+    mov [es:wa_nfl], ax
+    mov cx, ax
+    jcxz .nofl
+    mov di, wa_fl
+    mov dx, wa_fqv
+.fl:
+    movsw
+    movsw
+    movsw
+    movsw
+    lodsw
+    xchg di, dx
+    stosw
+    xchg di, dx
+    loop .fl
+.nofl:
     mov byte [es:wa_pvsh], 0    ; ITS PVS (HEIGHTS-PLAN 9.8): the grid's
     mov si, [bx+42]             ; shift and cells a column, and the cells'
     or si, si                   ; masks (arenagen bounds them by WA_PVSN x

@@ -74,7 +74,8 @@ class Arena:
         self.boxes = [A.bx(b) for b in boxes]
         self.hts = [(b.top if (b.kind == A.LIFT and lifts_raised) else b.h)
                     for b in self.boxes]
-        self.room_h = A.room_h(self.boxes)
+        self.room_h = A.ARENA_ROOMH.get(tag, A.WALL_H)   # (0: no walls)
+        self.flines = A.flines(tag)
         self.hmax = A.hmax(self.boxes)
         self.nodes = []
         A.box_tree(list(range(len(self.boxes))), self.nodes, self.boxes)
@@ -291,7 +292,12 @@ def render(ar, v, heights=True, outline=True):
                 ok = span(p2, p1, hh, "top", False, cheap)
                 if not cheap:
                     clk += C["face_box_drew"] if ok else C["face_box_end"]
-    if not all(shut):
+    for (x0, y0, x1, y1) in ar.flines:      # (a floor line in the view: an
+        (xa, za), (xb, zb) = v.cam((x0, y0)), v.cam((x1, y1))   # edge)
+        if (za >= NEAR or zb >= NEAR) and not (xa > za and xb > zb) and \
+                not (xa < -za and xb < -zb):
+            st["edges"] += 1
+    if not all(shut) and ar.room_h:
         r = A.ROOM
         rc = [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]
         for p1, p2 in ((rc[0], rc[3]), (rc[3], rc[2]), (rc[2], rc[1]), (rc[1], rc[0])):
@@ -375,7 +381,7 @@ def budget_poses(ar, W=40):
     out = []
     for x in range(96, 2048, 192):
         for y in range(96, 2048, 192):
-            if not A.inside(x, y, ar.boxes, 24):
+            if not A.inside(x, y, ar.boxes, 24) and A.in_walk(ar.tag, x, y):
                 out += yaws(x, y, EYE, 8, W=W)
     for b, h in zip(ar.boxes, ar.hts):
         if h < ar.hmax:

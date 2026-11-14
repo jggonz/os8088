@@ -807,6 +807,10 @@ wa_tick:
     sub si, ax
     add di, dx
 .apply:
+    mov ax, [wa_px]             ; (where the step starts: wa_flcross)
+    mov [wa_ox], ax
+    mov ax, [wa_py]
+    mov [wa_oy], ax
     or si, si
     jz .ymove                   ; (no x step: the x position cannot collide)
     mov ax, si
@@ -823,6 +827,8 @@ wa_tick:
 .ymove:
     or di, di
     jz .jump
+    mov ax, [wa_px]             ; (the x step taken or not: from there)
+    mov [wa_ox], ax
     mov ax, di
     mov cx, WA_MSPD
     imul cx
@@ -936,6 +942,8 @@ wa_blkt:                        ; the figure that looks, by the tick's low
 ; the air: above the feet at all). Keeps CX, DI, BP (its two callers' own:
 ; the tick's steps in x and in y); clobbers AX, BX, DX, SI.
 wa_collide:
+    call wa_flcross             ; (a floor line crossed: ARENAS-PLAN 4.5)
+    jc .hit
     mov ax, [wa_px]
     mov bx, [wa_py]
     cmp ax, WA_ROOM_X0 + WA_RAD
@@ -966,6 +974,127 @@ wa_collide:
     jz .clear
 .hit:
     stc
+    ret
+
+; wa_flcross - CF = 1 when the player's step from (wa_ox, wa_oy) to (wa_px,
+; wa_py) crosses one of the arena's FLOOR LINES (docs/plans/WIREARENA-
+; ARENAS-PLAN.md 4.5): a line the feet stop at, as the twin's walk's edge.
+; A line is near only when the new point is within 16 units of its box (a
+; step is under 11); then the step's ends lie either side of the line, and
+; the line's ends either side of the step (or on it) - two cross products
+; each, 32 bits. Keeps CX, DI, BP; clobbers AX, BX, DX, SI.
+wa_flcross:
+    cmp word [wa_nfl], 0
+    jne .on
+    clc
+    ret
+.on:
+    push cx
+    push di
+    push bp
+    mov si, wa_fl
+    mov cx, [wa_nfl]
+.seg:
+    mov ax, [si]                ; NEAR: the new point and the line's box
+    mov dx, [si+4]
+    cmp ax, dx
+    jle .x
+    xchg ax, dx
+.x:
+    mov bx, [wa_px]
+    sub ax, 16
+    cmp bx, ax
+    jl .next
+    add dx, 16
+    cmp bx, dx
+    jg .next
+    mov ax, [si+2]
+    mov dx, [si+6]
+    cmp ax, dx
+    jle .y
+    xchg ax, dx
+.y:
+    mov bx, [wa_py]
+    sub ax, 16
+    cmp bx, ax
+    jl .next
+    add dx, 16
+    cmp bx, dx
+    jg .next
+    mov ax, [wa_ox]             ; THE STEP'S ENDS either side of the line
+    mov bx, [wa_oy]             ; (a point on it counts with the side its
+    call .side                  ; sign bit is clear on)
+    mov bp, dx
+    mov ax, [wa_px]
+    mov bx, [wa_py]
+    call .side
+    xor dx, bp
+    jns .next
+    mov ax, [si]                ; ...and THE LINE'S ENDS either side of the
+    mov bx, [si+2]              ; step, or on it
+    call .stp
+    mov bp, dx
+    or dx, ax
+    jz .hit
+    mov ax, [si+4]
+    mov bx, [si+6]
+    call .stp
+    mov bx, dx
+    or bx, ax
+    jz .hit
+    xor dx, bp
+    js .hit
+.next:
+    add si, 8
+    loop .seg
+    clc
+    jmp short .out
+.hit:
+    stc
+.out:
+    pop bp
+    pop di
+    pop cx
+    ret
+.side:                          ; AX, BX = a point: DX:AX = (x1 - x0)(y -
+    sub ax, [si]                ; y0) - (y1 - y0)(x - x0)
+    sub bx, [si+2]
+    push ax
+    mov ax, [si+4]
+    sub ax, [si]
+    imul bx
+    pop bx
+    push dx
+    push ax
+    mov ax, [si+6]
+    sub ax, [si+2]
+    imul bx
+    pop bx
+    sub bx, ax
+    pop ax
+    sbb ax, dx
+    mov dx, ax
+    mov ax, bx
+    ret
+.stp:                           ; AX, BX = a point: DX:AX = (px - ox)(y -
+    sub ax, [wa_ox]             ; oy) - (py - oy)(x - ox)
+    sub bx, [wa_oy]
+    push ax
+    mov ax, [wa_px]
+    sub ax, [wa_ox]
+    imul bx
+    pop bx
+    push dx
+    push ax
+    mov ax, [wa_py]
+    sub ax, [wa_oy]
+    imul bx
+    pop bx
+    sub bx, ax
+    pop ax
+    sbb ax, dx
+    mov dx, ax
+    mov ax, bx
     ret
 
 ; --- heights: the floor, the step, the fall, the lift (HEIGHTS-PLAN 3) -----
@@ -5857,6 +5986,8 @@ WA_VAR wa_qx,2                   ; wa_floor's square: its middle and r
 WA_VAR wa_qy,2
 WA_VAR wa_qr,2
 WA_VAR wa_nbox8,2                ; the boxes x 8 (wa_lists)
+WA_VAR wa_ox,2                   ; where the player's step starts (wa_flcross)
+WA_VAR wa_oy,2
 WA_VAR wa_lon,WA_MLIFT*2         ; per lift: ticks someone has stood on
 WA_VAR wa_loff,WA_MLIFT*2        ;   it, ticks it has stood empty
 WA_VAR wa_allp,WA_LTSZ           ; wa_floor's box tables (wa_lists): every
