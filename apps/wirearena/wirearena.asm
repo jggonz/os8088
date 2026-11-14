@@ -679,6 +679,8 @@ wa_keys:
     ret
 
 wa_tick:
+    cmp byte [wa_lkon], 0
+    je .c_lk
     call wa_lktick              ; (a linked match: the cable, LINK-PLAN 4.2)
 .c_lk:                          ; (tools' stop: the link's cost)
     mov al, [wa_frame]          ; this frame's first tick polls the keys
@@ -845,6 +847,8 @@ wa_tick:
 .c_w:                           ; (the labels: tools/watrace.py's stops)
     call wa_wtick               ; the weapon's reload and its next shot,
 .c_rk:                          ; the rockets, the pickups (WEAPONS-PLAN)
+    cmp byte [wa_rkn], 0        ; (none live: the usual tick)
+    je .c_pk
     call wa_rktick
 .c_pk:
     jmp wa_pktick
@@ -1272,13 +1276,12 @@ wa_hat:
 ; wa_fabs - DX = the feet's height: the floor they stood on plus the jump,
 ; whole units (wa_jz is 8.8 above wa_feet). Keeps every other register.
 wa_fabs:
-    push ax
+    xchg ax, dx                 ; (AX kept in DX the while)
     mov ax, [wa_jz]
     mov al, ah
     cbw
     add ax, [wa_feet]
-    mov dx, ax
-    pop ax
+    xchg ax, dx
     ret
 
 ; wa_hjump - the tick's vertical: the floor under the player (wa_flr, and
@@ -1411,6 +1414,8 @@ wa_ltick:
     cmp word [wa_loff], WA_LHOLD
     jb .out
     mov ax, [wa_bxh+bx]
+    cmp ax, [wa_lrest]          ; (at rest already: the usual tick)
+    je .out
     sub ax, WA_LSPD
     cmp ax, [wa_lrest]
     jge .set
@@ -2992,18 +2997,11 @@ wa_wready:
 ; shots, a reload - which at its end tops the magazine up from the reserve
 ; - and the chaingun, which fires while the trigger is held
 wa_wtick:
-    cmp byte [wa_phit], 0       ; the heart's flash, a hit taken
-    je .h
-    dec byte [wa_phit]
-    jnz .h
-    mov byte [wa_ovd], 1
-.h:
-    cmp byte [wa_beam], 0
-    je .b
-    dec byte [wa_beam]
-    jnz .b
-    mov byte [wa_ovd], 1        ; (the beam gone from the overlay)
-.b:
+    cmp word [wa_phit], 0       ; (the heart's flash or - its high byte,
+    jne .hb                     ; wa_beam - the beam: neither, the usual
+.b:                             ; tick; and no reload or gap, wa_rld and
+    cmp word [wa_rld], 0        ; its high byte wa_cool)
+    je .auto
     cmp byte [wa_cool], 0
     je .c
     dec byte [wa_cool]
@@ -3041,6 +3039,19 @@ wa_wtick:
     cmp byte [wa_pdead], 0
     jne .out
     jmp wa_fire
+.hb:
+    cmp byte [wa_phit], 0       ; the heart's flash, a hit taken
+    je .h
+    dec byte [wa_phit]
+    jnz .h
+    mov byte [wa_ovd], 1
+.h:
+    cmp byte [wa_beam], 0
+    je .b
+    dec byte [wa_beam]
+    jnz .b
+    mov byte [wa_ovd], 1        ; (the beam gone from the overlay)
+    jmp .b
 
 ; wa_reload - R: the weapon held reloads now, if its magazine is not full
 ; and it has a reserve (the pistol's is endless) - not again while it does
@@ -3716,17 +3727,13 @@ wa_rktick:
 ; that axis moved by its speed, 8.8 into the whole and the fraction.
 ; Clobbers AX, DX
 wa_rkmv:
-    mov ax, [di+RG_VX+bx]
-    mov dl, ah
-    mov dh, 0
-    or dl, dl
-    jns .pos
-    mov dh, 0xFF                ; DX = v >> 8, AX = (v & 255) << 8
-.pos:
-    mov ah, al
-    xor al, al
-    add [di+RG_XF+bx], ax
-    adc [si+WA_RKX+bx], dx
+    mov dx, [di+RG_VX+bx]
+    mov al, dh
+    cbw                         ; AX = v >> 8, DX = (v & 255) << 8
+    mov dh, dl
+    xor dl, dl
+    add [di+RG_XF+bx], dx
+    adc [si+WA_RKX+bx], ax
     ret
 
 ; wa_rkhit - SI = a rocket or a grenade: a live figure inside its square
@@ -3741,25 +3748,25 @@ wa_rkhit:
 .f:
     cmp byte [di+F_DEAD], 0
     jne .fn
-    call wa_bidx
-    inc al
-    cmp al, [wa_killer]
-    je .fn
-    mov ax, [si+WA_RKX]
-    sub ax, [di+F_X]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .fn
+    mov ax, [si+WA_RKX]         ; (|dx| < WA_HITR: dx + (WA_HITR - 1) below
+    sub ax, [di+F_X]            ; 2 WA_HITR - 1, unsigned - and the same of
+    add ax, WA_HITR - 1         ; y; the distances first: most figures are
+    cmp ax, 2*WA_HITR - 1       ; nowhere near)
+    jae .fn
     mov ax, [si+WA_RKY]
     sub ax, [di+F_Y]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .fn
+    add ax, WA_HITR - 1
+    cmp ax, 2*WA_HITR - 1
+    jae .fn
     mov ax, [si+WA_RKZ]
     sub ax, [di+F_Z]
     js .fn
     cmp ax, 120
     jg .fn
+    call wa_bidx                ; (not its owner)
+    inc al
+    cmp al, [wa_killer]
+    je .fn
     call wa_lkremote            ; (the other machine's: it goes off, and
     je .met                     ; that machine judges it - LINK-PLAN 3)
     mov ah, 2
@@ -3785,14 +3792,14 @@ wa_rkhitp:
     jne .no
     mov ax, [si+WA_RKX]
     sub ax, [wa_px]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .no
+    add ax, WA_HITR - 1         ; (|dx| < WA_HITR, as wa_rkhit asks it)
+    cmp ax, 2*WA_HITR - 1
+    jae .no
     mov ax, [si+WA_RKY]
     sub ax, [wa_py]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .no
+    add ax, WA_HITR - 1
+    cmp ax, 2*WA_HITR - 1
+    jae .no
     call wa_fabs                ; DX = the feet
     mov ax, [si+WA_RKZ]
     sub ax, dx
@@ -5482,7 +5489,6 @@ WA_VAR wa_ghp,2
 WA_VAR wa_tkn,2                  ; ticks, for the bots' turns to look
 WA_VAR wa_blook,2                ; ...the figure whose turn this tick is (0: none)
 WA_VAR wa_diff,1                 ; the bots' difficulty: 0 easy..2 hard
-WA_VAR wa_phit,1                 ; ticks of the heart's hit flash
 WA_VAR wa_pdead,1                ; THE PLAYER DEAD: ticks to the respawn
 WA_VAR wa_peye,2                 ;   (AI-PLAN 5), the eye sinking
 WA_VAR wa_hurtby,1               ; who hurt the player: 0 itself, 1.. a bot
@@ -5596,12 +5602,14 @@ WA_VAR wa_wpn,1                  ; the weapon held (0..2)...
 WA_VAR wa_own,1                  ; ...those had, a bit each...
 WA_VAR wa_mag,6                  ; ...each's magazine...
 WA_VAR wa_res,6                  ; ...and reserve (the pistol's unused)
-WA_VAR wa_beam,1                 ; ticks the railgun's beam has left
+WA_VAR wa_phit,1                 ; ticks of the heart's hit flash, and - ITS
+WA_VAR wa_beam,1                 ;   HIGH BYTE - those the railgun's beam has
+                                 ;   left: wa_wtick asks both in one compare
 WA_VAR wa_lt,1                   ; wa_launch's type: 0 rocket, 1 grenade
 WA_VAR wa_seed,2                 ; the weapon spawns' dice
 WA_VAR wa_pkdet,1                ; 1: each spawn its first choice (benches)
-WA_VAR wa_rld,1                  ; ticks of a reload left (0: none)
-WA_VAR wa_cool,1                 ; ticks before the next shot
+WA_VAR wa_rld,1                  ; ticks of a reload left (0: none), and - ITS
+WA_VAR wa_cool,1                 ;   HIGH BYTE - ticks before the next shot
 WA_VAR wa_ovd,1                  ; the overlay wants rebuilding
 WA_VAR wa_ovat,2                 ; wa_ovnum's attributes
 WA_VAR wa_ovdig,4                ; ...and its digits (3 at most)
