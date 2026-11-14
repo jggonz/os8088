@@ -3612,8 +3612,9 @@ RG_LIFE     equ 12
 RG_OWN      equ 14              ; who fired it: 0 the player, 1.. a bot
 WA_RKGSZ    equ 16
 
-; WA_RKMV axis - wa_rkmv for the axis named (0 x, 2 y, 4 z), in line: a
-; rocket's three, every tick it flies. Clobbers AX, DX
+; WA_RKMV axis - SI, DI = a rocket's records: the axis named (0 x, 2 y, 4 z)
+; moved by its speed, 8.8 into the whole and the fraction - in line, a
+; rocket's three every tick it flies. Clobbers AX, DX
 %macro WA_RKMV 1
     mov dx, [di+RG_VX+%1]
     mov al, dh
@@ -3730,9 +3731,17 @@ wa_rktick:
     sub [di+RG_VY], ax
     jmp .hit
 .gax:                           ; BX = an axis, x 2 (0 x, 2 y): moved, and
-    push word [si+WA_RKX+bx]    ; back with its speed turned and halved if
-    push word [di+RG_XF+bx]     ; that put it in a wall
-    call wa_rkmv
+    mov dx, [di+RG_VX+bx]       ; back with its speed turned and halved if
+    or dx, dx                   ; that put it in a wall. With no speed along
+    jz .gret                    ; it nothing moves, and a wall would turn
+    push word [si+WA_RKX+bx]    ; nothing: not asked (a grenade at rest)
+    push word [di+RG_XF+bx]
+    mov al, dh                  ; (WA_RKMV, by the axis in BX)
+    cbw
+    mov dh, dl
+    xor dl, dl
+    add [di+RG_XF+bx], dx
+    adc [si+WA_RKX+bx], ax
     mov ax, [si+WA_RKX]
     cmp ax, WA_ROOM_X0 + WA_RAD
     jle .gwall
@@ -3756,6 +3765,7 @@ wa_rktick:
     mov bp, ax                  ; (clear: and this is the floor where it is)
     pop ax
     pop ax
+.gret:
     ret
 .gw2:
     pop bx
@@ -3780,19 +3790,6 @@ wa_rktick:
     jae .done
     jmp .r
 .done:
-    ret
-
-; wa_rkmv - SI, DI = a rocket's records, BX = an axis x 2 (0 x, 2 y, 4 z):
-; that axis moved by its speed, 8.8 into the whole and the fraction.
-; Clobbers AX, DX
-wa_rkmv:
-    mov dx, [di+RG_VX+bx]
-    mov al, dh
-    cbw                         ; AX = v >> 8, DX = (v & 255) << 8
-    mov dh, dl
-    xor dl, dl
-    add [di+RG_XF+bx], dx
-    adc [si+WA_RKX+bx], ax
     ret
 
 ; wa_rkhit - SI = a rocket or a grenade: a live figure inside its square
