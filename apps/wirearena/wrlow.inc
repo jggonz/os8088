@@ -55,11 +55,15 @@ WA_VAR wl_h, 2                  ; its height (a flight's, its top tread's)
 WA_VAR wl_kind, 1               ; its kind byte and faces byte (wa_bxh)
 WA_VAR wl_lom, 1                ; a ramp's low face's bit (else 0): drawn
                                 ; as one edge, its top on the floor
+WA_VAR wl_nt, 2                 ; a flight's treads (0: a ramp, or no flight:
+                                ; cleared with wl_lom, its low byte)
 WA_VAR wl_faces, 1
 WA_VAR wl_seen, 1               ; the faces the player is outside of: bits
 WA_VAR wl_front, 1              ; ...of them, those drawn (posts, floors)
 WA_VAR wl_topb, 1               ; the faces' top bits
 WA_VAR wl_need, 1               ; the corners projected: bits
+WA_VAR wl_abv, 1                ; ...and 1: the eye above the box (wl_need's
+                                ; high byte)
 WA_VAR wl_fneed, 1              ; ...of them, those with a floor row
 WA_VAR wl_m, 1                  ; a mask being walked
 WA_VAR wl_pm, 1                 ; ...and the faces given a pass
@@ -70,7 +74,7 @@ WA_VAR wl_ffr, 1
 WA_VAR wl_hn, 2                 ; the box's height's
 WA_VAR wl_hs, 1
 WA_VAR wl_hh, 2                 ; ...that height (-1: none this frame)
-WA_VAR wl_vk, 1                 ; the corners projected in the view: bits
+WA_VAR wl_nvk, 1                ; the corners NOT projected in the view: bits
 WA_VAR wl_two, 1                ; ...and draws a floor edge with its top
 WA_VAR wl_n1, 2                 ; a clipped edge's ends' pairs
 WA_VAR wl_s1, 1
@@ -94,9 +98,9 @@ WA_VAR wl_col0, 2               ; a pass's first column x 2
 WA_VAR wl_sc, 2                 ; the loops' DX: the stamp, the pass's columns
 WA_VAR wl_prev, 2               ; the column before's half-row (a steep step)
 WA_VAR wl_tag, 1
-WA_VAR wl_k, 2                  ; a flight: the treads left, the count, the
-WA_VAR wl_nt, 2                 ; rise, the low and high faces, and a
-WA_VAR wl_rise, 2               ; tread's step along each side, camera
+WA_VAR wl_k, 2                  ; a flight: the treads left, the
+WA_VAR wl_rise, 2               ; rise, the low and high faces, and a
+                                ; tread's step along each side, camera
 WA_VAR wl_lo, 1                 ; space
 WA_VAR wl_hi, 1
 WA_VAR wl_dxa, 2
@@ -127,7 +131,8 @@ wl_crn:
 wl_bit:     db 1, 2, 4, 8, 1
 
 ; WLCORNER %1 = a corner: wa_lowbox's, for one corner (BP = the corner
-; indices; clobbers AX, BX, CX, DX, SI, DI)
+; indices; clobbers AX, BX, CX, DX, SI, DI). Its inverse depth is wa_rcp's:
+; a box's corner is inside the room, never as deep as WA_ZMAX (arenagen)
 %macro WLCORNER 1
     test byte [wl_need], 1 << %1
     jz %%n
@@ -141,15 +146,12 @@ wl_bit:     db 1, 2, 4, 8, 1
 %%c:                            ; products' low words are not even made)
     test byte [wa_vok+bx], 1
     jz %%n
-    or byte [wl_vk], 1 << %1
+    and byte [wl_nvk], ~(1 << %1)
     mov ax, [wa_vpc+bx]
     mov [wl_c+%1*WL_REC+WL_KC], ax
     mov bx, [wa_vz+bx]
-    cmp bx, WA_ZMAX             ; (wl_iz, inline)
-    jae %%div
     shl bx, 1
     mov bx, [wa_rcp+bx-WA_NEAR*2]
-%%iz:
     mov [wl_c+%1*WL_REC+WL_KI], bx
     mov ax, [wl_c+%1*WL_REC+WL_CN]
     mov cl, [wl_c+%1*WL_REC+WL_CS]
@@ -167,47 +169,44 @@ wl_bit:     db 1, 2, 4, 8, 1
     mov ax, [wa_hq]
     sub ax, dx
     mov [wl_c+%1*WL_REC+WL_KF], ax
-    jmp short %%n
-%%div:
-    call wl_iz.div
-    jmp short %%iz
 %%n:
 %endmacro
 
-; WLPOST, WLPASS2, WLPASS3 %1 = a face: wa_lowbox's three walks over the
-; faces, one face each (r5): its posts; its seen pass, with the floor edge
-; where [wl_m] has its bit; its far top's pass. [wl_pm] the faces given a
-; pass
-%macro WLPOST 1
-    test byte [wl_front], 1 << %1
+; WLSEEN, WLFAR %1 = a face: wa_lowbox's two walks over the faces, one face
+; each (r5), where [wl_pm] has its bit. WLSEEN: a seen face - its posts
+; where it is drawn ([wl_front]: its start corner's, and its end's where
+; the next face round is not seen - wa_boxf's rule), then its pass, with the
+; floor edge where [wl_m] has its bit. The posts stand in the pass's own
+; first and last columns, which no other seen face's pass reaches, so each
+; is still drawn against the clip as it stood before the box. WLFAR: its
+; top alone, the far side of the box's top.
+%macro WLSEEN 1
+    test byte [wl_pm], 1 << %1
     jz %%n
+    test byte [wl_front], 1 << %1
+    jz %%p
     mov si, %1 * WL_REC         ; its start corner's
     mov cx, 7
     call wl_post
     test byte [wl_seen], 1 << ((%1 + 1) & 3)
-    jnz %%n
+    jnz %%p
     mov si, ((%1 + 1) & 3) * WL_REC
     mov cx, 7-16                ; ...and its end's
     call wl_post
-%%n:
-%endmacro
-%macro WLPASS2 1
-    test byte [wl_pm], 1 << %1
-    jz %%n
+%%p:
     mov al, [wl_m]
     and al, 1 << %1
     mov [wl_two], al
-    mov si, %1 * WL_REC
-    mov di, ((%1 + 1) & 3) * WL_REC
-    mov al, (1 << %1) | (1 << ((%1 + 1) & 3))
-    call wl_face
+    WLFAR %1, 0
 %%n:
 %endmacro
-%macro WLPASS3 1
+%macro WLFAR 1-2 1
+%if %2
     test byte [wl_pm], 1 << %1
     jz %%n
-    mov si, %1 * WL_REC
-    mov di, ((%1 + 1) & 3) * WL_REC
+%endif
+    mov si, wl_c + %1 * WL_REC + WL_KC
+    mov di, wl_c + ((%1 + 1) & 3) * WL_REC + WL_KC
     mov al, (1 << %1) | (1 << ((%1 + 1) & 3))
     call wl_face
 %%n:
@@ -221,15 +220,15 @@ wa_lowbox:
     mov [wl_h], ax
     mov ax, [wa_bxh+di+2]
     mov [wl_faces], ah
-    mov ah, al                  ; the kind: only a FLIGHT (kind 1) keeps it -
-    and ah, 3                   ; every flight test below is "kind & 3 is
-    cmp ah, 1                   ; not 0", and a LIFT (kind 2, its index in
-    je .kind                    ; bits 4-7) taken for one divided its height
-    xor al, al                  ; by that index as a tread count: lift 0's
-.kind:                          ; divide fault, every frame it was in view
-    mov [wl_kind], al           ; (HEIGHTS-PLAN 9.5). A lift draws as the
+    test al, 2                  ; the kind: only a FLIGHT (kind 1) keeps it -
+    jz .kind                    ; every flight test below is "kind & 3 is
+    xor al, al                  ; not 0", and a LIFT (kind 2, its index in
+.kind:                          ; bits 4-7) taken for one divided its height
+    mov [wl_kind], al           ; by that index as a tread count: lift 0's
+                                ; divide fault, every frame it was in view
+                                ; (HEIGHTS-PLAN 9.5). A lift draws as the
                                 ; low box it is at its current height
-    mov byte [wl_lom], 0
+    mov word [wl_lom], 0        ; (and no treads: wl_nt's low byte)
     xor bl, bl                  ; the faces seen, as wa_box chooses them
     mov ax, [wa_py]             ; (S 1, E 2, N 4, W 8)
     cmp ax, [si+2]
@@ -262,18 +261,19 @@ wa_lowbox:
     mov cl, 4
     shr al, cl
     mov [wl_topb], al
-    mov al, 15                  ; THE CORNERS WANTED: all four with the eye
-    mov cx, [wa_eye]            ; above the top (its far side is drawn) or
-    sub cx, [wl_fartop]         ; (FARTOP: n units above it)
+    mov ax, 0x010F              ; THE CORNERS WANTED: all four with the eye
+    mov cx, [wa_eye]            ; above the top (its far side is drawn: AH,
+    sub cx, [wl_fartop]         ; wl_abv - FARTOP: n units above it) or
     cmp cx, [wl_h]              ; for a flight (its treads span it), else
     jg .need                    ; only the seen faces'
+    dec ah
     test byte [wl_kind], 3
     jnz .need
     mov al, [wl_seen]
     xlatb
 .need:
-    mov [wl_need], al
-    mov byte [wl_vk], 0
+    mov [wl_need], ax
+    mov byte [wl_nvk], 15
     mov al, [wa_frame]          ; the floor's pair, once a frame (wa_render
     mov [wl_sc], al             ; (the loops' stamp)
     cmp al, [wl_ffr]            ; clears wl_ffr) - and the box's own
@@ -308,7 +308,7 @@ wa_lowbox:
     call wl_flight0
     test byte [wa_look], LK_RAMP2 ; (RAMP2: a ramp, not stepped, without
     jz .cor                     ; its low end's floor line - its high end's
-    cmp word [wl_nt], 2         ; top stays: it closes the slope's columns,
+    cmp byte [wl_nt], 2         ; top stays: it closes the slope's columns,
     jae .cor                    ; and without it the platform's face behind
     mov bl, [wl_lo]             ; showed through - the owner, 2026-11-14)
     xor bh, bh
@@ -327,20 +327,10 @@ wa_lowbox:
     WLCORNER 1
     WLCORNER 2
     WLCORNER 3
-.posts:
-    ; 1. POSTS, against the clip as it stood: a drawn face's start corner,
-    ; and its end where the next face round is not seen (wa_boxf's rule).
-    ; (r5: each of the three walks over the faces unrolled, its masks made
-    ; once)
-    WLPOST 0
-    WLPOST 1
-    WLPOST 2
-    WLPOST 3
-.p1d:
-    ; 2. THE SEEN FACES, a pass each: the floor edge, then the top raising
-    ; the clip - and a seen face hidden against a taller neighbour still
-    ; shows its top's crease where its top bit says. A ramp's low face is
-    ; its one edge
+    ; 1, 2. THE SEEN FACES, each its posts and then its pass: the floor
+    ; edge, then the top raising the clip - and a seen face hidden against
+    ; a taller neighbour still shows its top's crease where its top bit
+    ; says. A ramp's low face is its one edge
     mov al, [wl_front]
     mov ah, al
     not ah
@@ -355,50 +345,47 @@ wa_lowbox:
     mov [wl_m], al
     or ah, al
     mov [wl_pm], ah             ; the seen faces given a pass
-    WLPASS2 0
-    WLPASS2 1
-    WLPASS2 2
-    WLPASS2 3
+    WLSEEN 0
+    WLSEEN 1
+    WLSEEN 2
+    WLSEEN 3
     ; (a flight seen from its low end: its inner treads are nearer than the
     ; far side of its top, and the depth stack keeps its entries in order)
+    cmp byte [wl_nt], 2
+    jb .p3s
     call wl_lowseen
     jz .p3s
     call wl_treads
 .p3s:
     ; 3. THE FAR SIDE OF ITS TOP, with the eye above the box
-    mov ax, [wa_eye]
-    sub ax, [wl_fartop]         ; (FARTOP)
-    cmp ax, [wl_h]
-    jle .p3d
+    cmp byte [wl_abv], 0
+    je .p3d
     mov al, [wl_seen]           ; (the faces not seen whose tops are drawn)
     not al
     and al, [wl_topb]
     mov [wl_pm], al
     mov byte [wl_two], 0
-    WLPASS3 0
-    WLPASS3 1
-    WLPASS3 2
-    WLPASS3 3
+    WLFAR 0
+    WLFAR 1
+    WLFAR 2
+    WLFAR 3
 .p3d:
     ; 4. A FLIGHT'S INNER TREADS, seen from anywhere but its low end
-    test byte [wl_kind], 3
-    jz .done
+    cmp byte [wl_nt], 2
+    jb .done
     call wl_lowseen
     jnz .done
-    call wl_treads
+    jmp wl_treads
 .done:
     ret
 
-; wl_lowseen - ZF = 0 when the box is a flight and the player stands past
-; its low end. Clobbers AL, CL
+; wl_lowseen - a flight: ZF = 0 when the player stands past its low end.
+; Clobbers AL, CL
 wl_lowseen:
-    test byte [wl_kind], 3
-    jz .out
     mov al, [wl_seen]
     mov cl, [wl_lo]
     shr al, cl
     test al, 1
-.out:
     ret
 
 ; wl_ends - BX = a face (0 S, 1 E, 2 N, 3 W): SI, DI = its start and end
@@ -411,28 +398,51 @@ wl_ends:
     and di, 3*WL_REC
     ret
 
-; wl_face - SI, DI = a face's start and end corners' records (offsets into
-; wl_c), AL their two bits, [wl_two] 1 its floor edge too: its pass, raising
-; the clip
+; wl_face - SI, DI = a face's start and end corners' quads (their records
+; at WL_KC), AL their two bits, [wl_two] 1 its floor edge too: its pass,
+; raising the clip
 wl_face:
-    mov ah, al
-    and ah, [wl_vk]
-    cmp ah, al
-    jne .clip
-    add si, wl_c+WL_KC          ; both corners in the view: the two
-    add di, wl_c+WL_KC          ; records' projections, in place (wl_draw
-    jmp wl_draw                 ; culls a pass hidden in all its columns)
+    test [wl_nvk], al
+    jnz .clip
+    jmp wl_draw                 ; both corners in the view: the two
+                                ; records' projections, in place (wl_draw
+                                ; culls a pass hidden in all its columns)
 .clip:
-    mov ax, [wl_c+si+WL_CN]     ; a corner out of the view: the edge clipped,
-    mov [wl_n1], ax             ; its ends projected at their corners'
-    mov ax, [wl_c+di+WL_CN]     ; heights
+    ; A corner out of the view: the edge clipped, its ends projected at
+    ; their corners' heights. But first: a LEVEL edge under the eye is
+    ; lower on the screen the nearer it comes, so with its FARTHER end's
+    ; top (made: in the view) under the screen's last half-row all of it
+    ; is - the edges of the box the player stands on, passing under the
+    ; view - and it needs no clip, no projection, no pass
+    mov bx, [si+WL_CV-WL_KC]
+    mov bp, [di+WL_CV-WL_KC]
+    mov ax, [si+WL_CN-WL_KC]
+    cmp ax, [di+WL_CN-WL_KC]
+    jne .cut                    ; (a ramp's side: its ends at two heights)
+    or ax, ax
+    jns .cut                    ; (the eye at or under it)
+    mov ax, [wa_vz+bx]
+    sub ax, [ds:wa_vz+bp]
+    mov cx, [si+WL_KT-WL_KC]
+    jge .far
+    xchg bx, bp
+    mov cx, [di+WL_KT-WL_KC]
+.far:
+    test byte [wa_vok+bx], 1
+    jz .cut
+    cmp cx, 4*WA_HR-1
+    jge .under
+.cut:
+    mov ax, [si+WL_CN-WL_KC]
+    mov [wl_n1], ax
+    mov ax, [di+WL_CN-WL_KC]
     mov [wl_n2], ax
-    mov al, [wl_c+si+WL_CS]
+    mov al, [si+WL_CS-WL_KC]
     mov [wl_s1], al
-    mov al, [wl_c+di+WL_CS]
+    mov al, [di+WL_CS-WL_KC]
     mov [wl_s2], al
-    mov bx, [wl_c+si+WL_CV]
-    mov si, [wl_c+di+WL_CV]
+    mov bx, [si+WL_CV-WL_KC]
+    mov si, [di+WL_CV-WL_KC]
     mov ax, [wa_vx+bx]
     mov [wa_x1], ax
     mov ax, [wa_vz+bx]
@@ -442,6 +452,8 @@ wl_face:
     mov ax, [wa_vz+si]
     mov [wa_z2], ax
     jmp wl_xedge
+.under:
+    ret
 
 ; wl_post - SI = a corner's record (an offset into wl_c), CX = 7 for a
 ; face's start corner (the first column whose centre is past it) or 7 - 16
@@ -504,21 +516,6 @@ wl_post:
 .out:
     ret
 
-; wl_iz - BX = z (>= NEAR) -> BX = the inverse depth (wa_rcp's). Clobbers
-; AX, DX
-wl_iz:
-    cmp bx, WA_ZMAX
-    jae .div
-    shl bx, 1
-    mov bx, [wa_rcp+bx-WA_NEAR*2]
-    ret
-.div:
-    mov ax, 0xFFF0              ; (BX >= WA_ZMAX > 7 = DX: no fault, and the
-    mov dx, 0x0007              ; quotient fits)
-    div bx
-    mov bx, ax
-    ret
-
 ; wl_xedge - [wa_x1],[wa_z1] - [wa_x2],[wa_z2] in camera space, [wl_n1]/
 ; [wl_s1] and [wl_n2]/[wl_s2] the ends' heights' pairs, [wl_two]:
 ; clipped (the near plane, the guard band), projected and drawn
@@ -554,7 +551,8 @@ wl_proj:
     idiv bx                     ; (z >= NEAR: no fault; |x| <= 8z: it fits)
     add ax, [wa_c16]
     stosw
-    call wl_iz
+    shl bx, 1                   ; (its inverse depth: wa_rcp's, the point
+    mov bx, [wa_rcp+bx-WA_NEAR*2] ; on a box's edge, inside the room)
     mov ax, si
     mov cl, ch
     imul bx
@@ -1171,8 +1169,6 @@ wl_flight0:
 ; ends and height are the last's plus a step, the same bits as k - 1 goings
 ; and k rises made afresh
 wl_treads:
-    cmp word [wl_nt], 2
-    jb .out
     xor bh, bh
     mov bl, [wl_lo]
     call wl_ends                ; SI = A, DI = B (records)
