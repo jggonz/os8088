@@ -276,7 +276,7 @@ def main():
             sys.exit("brgifems: BROWSER.O88 did not open a window")
         bw = wins2[-1]
         rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[dispcp.W_SEG] | (rec[dispcp.W_SEG + 1] << 8)
         say("browser at %04X" % pseg)
 
         def rb(name, off=0):

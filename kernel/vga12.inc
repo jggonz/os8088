@@ -676,10 +676,9 @@ gfx_disp_run:
     sub cx, [di+VID_CTX_VX]
     sub bx, [di+VID_CTX_VY]
     sub dx, [di+VID_CTX_VY]
-    push ax                     ; activate it (vid_ctx_act keeps DI, SI, BP)
-    mov ax, bp
-    call vid_ctx_act
-    pop ax
+    xchg ax, bp                 ; activate it (vid_ctx_act keeps DI, SI, BP
+    call vid_ctx_act            ; and AX): AL = the index, and both back after
+    xchg ax, bp                 ; (kernel size pass 20, -2, a push/pop fewer)
     call word [si+8]            ; [gfx_dfn]: the raw body keeps every register
 .next:
     inc bp
@@ -1045,21 +1044,9 @@ vga_p4built db 0
 %endif
 %endif
 
-; -----------------------------------------------------------------------------
-; gfx_pixel - plot one pixel in [gfx_color]
-; in:       CX = x, DX = y
-; out:      -
-; clobbers: flags
-; -----------------------------------------------------------------------------
-gfx_pixel:
-    push ax
-    push bx
-    mov ax, cx                  ; a pixel is a 1x1 solid rect (CX/DX already
-    mov bx, dx                  ; hold x2/y2); gfx_fill clips and back-
-    call gfx_fill               ; buffer-dispatches itself
-    pop bx
-    pop ax
-    ret
+; (gfx_pixel, the preserving pixel, is gone: its two callers were
+; OSAPI_GFX_PIXEL and gfx_points' slow arm, and both enter gfx_pixel_n above
+; gfx_fill now - SPEC.md 5.7.3)
 
 ; -----------------------------------------------------------------------------
 ; gfx_hline - horizontal line in [gfx_color], inclusive endpoints
@@ -1136,14 +1123,12 @@ PT_2ND      equ 2               ; ...and the second pass has been spent
     mov bx, [cs:gfx_pt_rtab]
 %endmacro
 %else
-%define gfx_ls_d1   gfx_ls_zero
-%define gfx_ls_d3   gfx_ls_zero
+; gfx_ls_d1 and gfx_ls_d3 are ZERO here and are not words at all: gfx_ls_box
+; writes and clamps against a register 0 (kernel size pass 20 - gfx_ls_zero,
+; the word that held it, went with its three readers)
 %define gfx_ls_d2   vid_cwm1
 %define gfx_ls_d4   vid_chm1
 %define gfx_pt_rmax vid_rowmax
-gfx_ls_zero dw 0                ; .text with a real initialiser: -f bin zeroes
-                                ; nothing, and the clamp above reads it before
-                                ; anything on this build ever writes one
 %macro GFXPT_RTAB 0
     mov bx, vid_rowtab          ; one display, so the table is never biased
 %endmacro
@@ -1306,6 +1291,11 @@ gfx_pt_miss:
     ret
 
 %endif
+    nop                         ; PARITY, never executed (both kernels end a
+                                ; `ret` above): gfx_points' hide below went
+                                ; from CURUNLAZY's ten bytes to a three-byte
+                                ; call, an odd 7 that put every hot routine
+                                ; after it at the wrong parity (t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; gfx_points - draw a set of pixels the CALLER computed (SPEC.md 5.6.9)
@@ -1333,10 +1323,18 @@ gfx_points:
                                 ; conditional jump on an 8086 is rel8 and the
                                 ; body below is longer than one reaches
 .work:
-    CURUNLAZY                   ; this may write any pixel on the screen, so
-                                ; the deferred hide is owed (SPEC.md 7.1.4) -
-                                ; and owed HERE, above everything that reads
-                                ; state the arrow's removal could change
+    call fnt_unlazy             ; UNARMED this may write any pixel on the
+                                ; screen and the deferred hide is owed; ARMED,
+                                ; gfx_ls_box confines every point to the
+                                ; region, which wm_clip_set already asked
+                                ; cur_lazyck about - a glyph's contract, so
+                                ; the glyph's test (SPEC.md 7.1.4). Spent
+                                ; unconditionally it hid an arrow parked on
+                                ; the OTHER display of an extended desktop on
+                                ; every explosion a game drew (tests/
+                                ; dispmcfs.py). Owed HERE, above everything
+                                ; that reads state the arrow's removal could
+                                ; change
     push ax
     push bx
     push cx
@@ -1412,7 +1410,10 @@ gfx_points:
                                 ; pass 9)
     mov dx, [es:bp+2]
     add bp, 4
-    call gfx_pixel
+    call gfx_pixel_n            ; AX and BX are this loop's to lose (the
+                                ; prologue banked them): the non-preserving
+                                ; pixel, ~80 clocks a point under the old
+                                ; push/pop wrapper (SPEC.md 5.7.3)
     dec si
     jnz .sp
     jmp .out
@@ -1609,12 +1610,11 @@ gfx_ls_box:
                                 ; unarmed ones, none of which writes the box
 %else
     jne .armed
-    mov ax, [gfx_ls_d1]
-    mov [gfx_ls_bx1], ax
+    xor ax, ax                  ; gfx_ls_d1 and d3 are 0 on this build: a
+    mov [gfx_ls_bx1], ax        ; register zero, not a load of a zero word
+    mov [gfx_ls_by1], ax        ; (kernel size pass 20, -4 and faster)
     mov ax, [gfx_ls_d2]
     mov [gfx_ls_bx2], ax
-    mov ax, [gfx_ls_d3]
-    mov [gfx_ls_by1], ax
     mov ax, [gfx_ls_d4]
     mov [gfx_ls_by2], ax
     jmp short .oobck
@@ -1646,9 +1646,15 @@ gfx_ls_box:
     ; clamps below are what the old code's two gfx_ls_lx calls and two
     ; cwm1/chm1 compares already cost.
     mov ax, [bx + WCR_X1]
+%ifdef KERN_BIG
     cmp ax, [gfx_ls_d1]
     jge .x1ok
     mov ax, [gfx_ls_d1]
+%else
+    or ax, ax                   ; gfx_ls_d1 is 0 here: max(AX, 0) as a sign test
+    jns .x1ok                  ; (kernel size pass 20, -3 and no load)
+    xor ax, ax
+%endif
 .x1ok:
     mov [gfx_ls_bx1], ax
     mov ax, [bx + WCR_X2]
@@ -1658,9 +1664,15 @@ gfx_ls_box:
 .x2ok:
     mov [gfx_ls_bx2], ax
     mov ax, [bx + WCR_Y1]
+%ifdef KERN_BIG
     cmp ax, [gfx_ls_d3]
     jge .y1ok
     mov ax, [gfx_ls_d3]
+%else
+    or ax, ax                   ; gfx_ls_d3 is 0 here: max(AX, 0) as a sign test
+    jns .y1ok                  ; (kernel size pass 20, -3 and no load)
+    xor ax, ax
+%endif
 .y1ok:
     mov [gfx_ls_by1], ax
     mov ax, [bx + WCR_Y2]
@@ -3016,11 +3028,17 @@ gfx_blitp_v:
     mov al, 2
     out dx, ax                  ; SEQ2: Map Mask = this plane alone
     mov dx, bx
+%ifdef KHP_VGABLITP
+    mov cx, [ss:vga_pr_n]       ; the width in a register for the advance and
+    mov ax, [ss:vga_pr_rs]      ; the test (-1 byte, ~8 clocks a plane, the
+    sub ax, cx                  ; size pass that turned the knob on for
+                                ; kern_big); AX = a row's source advance
+    cmp cx, 8                   ; WIDE rows go as words, chosen once a plane
+    jae .wrow1                  ; (kernel hot-paths pass 1, SPEC.md 5.4.3.7),
+                                ; entered past the first row's reload
+%else
     mov ax, [ss:vga_pr_rs]
     sub ax, [ss:vga_pr_n]       ; AX = a row's source advance past it
-%ifdef KHP_VGABLITP
-    cmp word [ss:vga_pr_n], 8   ; WIDE rows go as words, chosen once a plane
-    jae .wrow                   ; (kernel hot-paths pass 1, SPEC.md 5.4.3.7)
 %endif
 .frow:
     mov cx, [ss:vga_pr_n]
@@ -3052,6 +3070,7 @@ gfx_blitp_v:
     jmp short .fpe
 .wrow:                          ; ...and from 8 bytes the words win: `rep
     mov cx, [ss:vga_pr_n]       ; movsw` is 25 clocks a word against `rep
+.wrow1:
     shr cx, 1                   ; movsb`'s 17 a byte, a Map Mask'd plane
     rep movsw                   ; takes a word write's two CPU bytes as they
     jnc .weven                  ; stand, and the odd byte is the carry the
@@ -3287,11 +3306,10 @@ gfx_blit_run:
 ; gfx_xor_rect's verticals; gfx_xor_strips draws them as fills now.
 ; -----------------------------------------------------------------------------
 gfx_vline:
-    push cx
-    mov cx, ax                  ; rect (x,y1)-(x,y2)
-    call gfx_fill
-    pop cx
-    ret
+    push cx                     ; the kernel's own, preserving: the package's
+    call gfx_vline_n            ; cell enters gfx_vline_n itself, and this is
+    pop cx                      ; that plus the one register it spends - the
+    ret                         ; same instructions as before, two bytes less
 
 %ifdef GFX_VGA
 ; vga_solid_rect's two rare arms, placed ABOVE gfx_fill so the common path
@@ -3327,6 +3345,34 @@ vga_sr_dq:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
     GFXCLIP_ARM gfx_fill
+; -----------------------------------------------------------------------------
+; gfx_pixel_n / gfx_hline_n / gfx_vline_n - the LINE CELLS' entries
+;           (SPEC.md 5.7.3): OSAPI_GFX_PIXEL, _HLINE and _VLINE land here
+; in:       pixel CX = x, DX = y; hline AX = x1, BX = x2, DX = y; vline AX = x,
+;           BX = y1, DX = y2 - each a 1-pixel solid rect for gfx_fill
+; out:      -
+; clobbers: pixel AX, BX; hline BX, CX; vline CX (the cells' contract says
+;           AX..DX, which leaves the kernel room); flags
+;
+; The preserving gfx_hline and gfx_vline banked the registers they turned
+; into a rect and CALLED gfx_fill: a push/pop pair or two and a call/ret
+; around the one instruction pair that is the work. A package's line now
+; JUMPS into the fill with its registers spent - ~80 clocks off a pixel, ~65
+; off an hline and ~55 off a vline on the 8088, PREDICTED from the
+; instruction tables (PERFORMANCE.md Part 2), of a ~2,300-clock call. The
+; kernel's own callers keep the preserving pair: gfx_hline unchanged,
+; gfx_vline a wrapper round gfx_vline_n, which FALLS INTO gfx_fill.
+; -----------------------------------------------------------------------------
+gfx_pixel_n:
+    mov ax, cx                  ; a pixel is a 1x1 solid rect: CX/DX already
+    mov bx, dx                  ; hold x2/y2
+    jmp short gfx_fill
+gfx_hline_n:
+    mov cx, bx                  ; rect (x1,y)-(x2,y)
+    mov bx, dx
+    jmp short gfx_fill
+gfx_vline_n:
+    mov cx, ax                  ; rect (x,y1)-(x,y2), and into gfx_fill
     GFXCLIP gfx_fill
 gfx_fill_d:
     GFXDISP gfx_fill_raw
@@ -3456,7 +3502,14 @@ vga_solid_rect_v:               ; 2,405-cycle floor, +0.6% PREDICTED
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
+%ifdef KHP_VGAEDGE
+    mov dx, cx                  ; DX = the row step LESS what the rep advances
+                                ; DI by, so one add ends the row (SPEC.md
+                                ; 5.7.1) - CX still holds the step the edge
+                                ; columns used (-1 byte, -2 clocks)
+%else
     mov dx, ROW_BYTES           ; DX = the row step LESS what the rep advances
+%endif
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
     cmp byte [vga_xorm], 0
     jne .xrow
@@ -3792,10 +3845,12 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
 section .vga                    ; 2): VIDEXTM above is its door, and on a
     nop                         ; PARITY, never executed (kernel hot-paths
                                 ; pass 1, kernel-hotpaths-lean): vga-4's +3 in
-                                ; vga_solid_rect_v above, without the fill
-                                ; rewrites that balanced it, put this body and
-                                ; the save/restore pair at an odd shift
-gfx_fill_gray_raw_v:     ; machine with neither card never falls here
+                                ; vga_solid_rect_v above put this body and the
+                                ; save/restore pair at an odd shift. With the
+                                ; four VGA knobs on (kern_big since 2026-11-10)
+                                ; and their size pass's -8 above, it still
+                                ; keeps the three where t_hotpar pins them
+gfx_fill_gray_raw_v:
 %endif
     push ax
     push bx
@@ -3805,7 +3860,13 @@ gfx_fill_gray_raw_v:     ; machine with neither card never falls here
     push di
     push es
     call gfx_rect_setup
-    jc .done
+%ifdef COLD_SLIDE                ; clipped away: out through vga_solid_rect's
+    jc vga_solid_rect_v.done    ; .done, the same seven pops in the same
+%else                           ; order a few bytes above, which a SHORT jc
+    jc vga_solid_rect.done      ; reaches - this body's own is 142 bytes on,
+%endif                          ; a `jnc +3 / jmp near` pair that every fill
+                                ; that draws paid as a TAKEN jump (-3 bytes,
+                                ; -12 clocks a gray fill)
     mov bl, 0xAA                ; pattern for the top clipped row
     test byte [gfx_ry1], 1
     jz .parity
@@ -3854,35 +3915,34 @@ gfx_fill_gray_raw_v:     ; machine with neither card never falls here
     mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
     sub dx, bx
 %ifdef KHP_VGAFILL
-    shr bx, 1                   ; WORDS, vga_solid_rect's shape (SPEC.md
-    jc .orow                    ; 5.7.2): a row is ONE dither byte, so AL =
-.irow:                          ; AH is the word, and the odd byte is the
-    mov al, ah                  ; loop's, chosen once
-%else
-.irow:
-    mov al, ah
-%endif
-    mov cx, bx
-%ifdef KHP_VGAFILL
-    rep stosw
-%else
-    rep stosb
-%endif
-    add di, dx
-    not ah
+    mov al, ah                  ; WORDS, vga_solid_rect's shape (SPEC.md
+    shr bx, 1                   ; 5.7.2): a row is ONE dither byte, so AL =
+    jc .orow                    ; AH is the word, and the odd byte is the
+.irow:                          ; loop's, chosen once. AX is the word for
+    mov cx, bx                  ; good: `not ax` turns both halves a row,
+    rep stosw                   ; where a `mov al, ah` a row copied it back
+    add di, dx                  ; (the size pass that turned the knob on
+    not ax                      ; for kern_big: -2 bytes, 8 cycles a row)
     dec si
     jnz .irow
-%ifdef KHP_VGAFILL
     jmp short .reset
 .orow:
-    mov al, ah
     mov cx, bx
     rep stosw
     stosb
     add di, dx
-    not ah
+    not ax
     dec si
     jnz .orow
+%else
+.irow:
+    mov al, ah
+    mov cx, bx
+    rep stosb
+    add di, dx
+    not ah
+    dec si
+    jnz .irow
 %endif
 .reset:                         ; its OWN teardown, and not vga_solid_rect's
     call vga_gc_reset           ; through a jump (-5) as gfx_fill_pat's is:
@@ -3926,7 +3986,7 @@ section .text
 ; the wrong PLACE.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; osapi_gfx_fill_pat - API slot 0x0222's X body (SPEC.md 20.9)
+; osapi_gfx_fill_pat - API slot 0x0134's X body (SPEC.md 20.9)
 ; in:  AX/BX/CX/DX = the rect, ES:SI = the caller's 8 pattern bytes
 ; out: nothing; SI preserved
 ;
@@ -4595,13 +4655,8 @@ gfx_sub_ps  dw 0                ; ...and past each plane
 ; every refusal has a correct fallback one branch away.
 ; -----------------------------------------------------------------------------
 gfx_sub_arm:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp: per restore,
+                                ; never per row (kernel size pass 20, -4)
     cmp ax, [si]                ; inside the saved rect on all four sides, or
     jl .no                      ; the arithmetic below indexes outside the
     cmp bx, [si+2]              ; buffer - which is a claim of a few KB, so it
@@ -4615,50 +4670,38 @@ gfx_sub_arm:
     cmp bx, dx
     jg .no
 
-    ; EVERY TERM IS DERIVED IN REGISTERS (size pass 10). This parked S.x1, S.x2
-    ; and S.y2 in the three result words and read them back, because CL has
-    ; to be the shift count (an 8086 shifts by 1 or by CL) - but only CL, so
-    ; S.x2 moves to BX first, and DX, which holds S.y2, is not touched until
-    ; the first `mul`. 19 bytes, and three stores and three loads.
-    push bx                     ; S.y1
-    mov bx, cx                  ; BX = S.x2, so CL is free for the count
+    ; EVERY TERM IS DERIVED IN REGISTERS (size pass 10), and the rows FIRST
+    ; (kernel size pass 20, -13 with the bank above): the rows need no shift,
+    ; so BX and DX are spent on them before CL becomes the count (an 8086
+    ; shifts by 1 or by CL), and nothing is parked on the stack.
+    sub bx, [si+2]              ; BX = the sub-rect's first row as an offset
+                                ; into the buffer
+    neg dx                      ; DX = the saved rows this rect does NOT
+    add dx, [si+6]              ; cover: (S2.y2 - y2) + (y1 - S2.y1), which is
+    add dx, bx                  ; the saved height less sub_rows
+    mov bp, cx                  ; BP = S.x2, so CL is free for the count
     mov cl, 3
     shr ax, cl                  ; AX = S.x1's byte column
-    shr bx, cl
-    mov bp, bx                  ; BP = sub_row, the bytes to move per row
-    sub bp, ax
-    inc bp
-    mov di, [si+4]              ; DI = full_row, the buffer's bytes per row;
-    shr di, cl                  ; BX = the saved rect's own left byte column
-    mov bx, [si]
-    shr bx, cl
-    sub ax, bx                  ; AX = the sub-rect's byte column within a
-    sub di, bx                  ; buffer row
-    inc di
-
-    pop bx                      ; CX = sub_rows, BX = the sub-rect's first row
-    mov cx, dx                  ; as an offset into the buffer. (CL was the
-    sub cx, bx                  ; shift count and every shift is done.)
-    inc cx
-    sub bx, [si+2]
-
-    push ax                     ; start = that row x full_row + that column.
-    mov ax, bx                  ; No overflow to worry about: wm_su_kb has
-    mul di                      ; already refused a buffer bigger than one
-    pop bx                      ; segment, so every offset in it fits a word
-    add ax, bx
-    mov [gfx_sub_st], ax
-
+    shr bp, cl
+    sub bp, ax                  ; BP = sub_row - 1, the bytes moved per row
+    mov di, [si+4]              ; DI = full_row - 1, the buffer's bytes per
+    shr di, cl                  ; row; SI = the saved rect's own left byte
+    mov si, [si]                ; column
+    shr si, cl
+    sub ax, si                  ; AX = the sub-rect's byte column within a
+    sub di, si                  ; buffer row
+    xchg ax, si                 ; (SI = it)
     mov ax, di                  ; row_skip: what the row loop must step past
-    sub ax, bp                  ; after each rep movsb
-    mov [gfx_sub_rs], ax
-
-    mov ax, [si+6]              ; plane_skip: the saved rows this rect does not
-    sub ax, [si+2]              ; cover, one whole buffer row each
-    inc ax
-    sub ax, cx
-    mul di
+    sub ax, bp                  ; after each rep movsb - full_row - sub_row,
+    mov [gfx_sub_rs], ax        ; which the two "- 1"s leave alone
+    inc di                      ; DI = full_row
+    xchg ax, dx                 ; plane_skip: the uncovered rows, one whole
+    mul di                      ; buffer row each
     mov [gfx_sub_ps], ax
+    xchg ax, bx                 ; start = the first row x full_row + the
+    mul di                      ; column. No overflow to worry about: wm_su_kb
+    add ax, si                  ; has already refused a buffer bigger than one
+    mov [gfx_sub_st], ax        ; segment, so every offset in it fits a word
     CLC_OR_STC .no              ; (kernel size pass 15: its one caller reads
 .out:                           ; CF alone)
     jmp kret_bp
@@ -5131,10 +5174,14 @@ gfx_lock:
     mov ah, al                  ; this one outlives the hold (SPEC 7.3) - and
     mov al, 1                   ; the flag and the owner go in ONE word store
     mov [gfx_lock_flag], ax     ; (the pair is adjacent: toast_now's %error),
-    pop ax                      ; inside the cli window, so they can never
+                                ; inside the cli window, so they can never
                                 ; disagree (kernel size pass 17, -1)
-    sti
-    mov byte [cur_lazy], 1      ; PROMISE the hide (SPEC.md 7.1.4) - the ISR
+    mov [cur_lazy], al          ; PROMISE the hide (SPEC.md 7.1.4) - AL is
+                                ; the 1 just stored, and the promise now lands
+                                ; inside the same cli window as the flag
+                                ; (kernel size pass 20, -2 and 4 clocks)
+    pop ax
+    sti                         ; - the ISR
     CURLOG 'L'
     ret                         ; will not move the arrow while the flag is
                                 ; set, so it is frozen where it is until
@@ -5361,7 +5408,7 @@ gfx_unlock:
 %endif
 
 ; -----------------------------------------------------------------------------
-; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x018A)
+; gfx_scroll - vertical scroll blit (SPEC.md 5.5; OSAPI_GFX_SCROLL)
 ;
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
 ;           coords), SI = dy SIGNED: positive moves the rect's content UP dy
@@ -5414,12 +5461,14 @@ gfx_scroll:
     jns .pos
     neg di
 .pos:
-    push dx
-    sub dx, bx
-    inc dx                      ; DX = height
-    cmp di, dx
-    pop dx
-    jae .no
+    neg di                      ; DI = rows to copy = height - |dy|, formed
+    add di, dx                  ; ONCE: none left (|dy| >= height) is the
+    sub di, bx                  ; refusal, on the `inc`'s own flags (kernel
+    inc di                      ; size pass 20: it was a compare against the
+    jle .no                     ; height here and the same sum again below,
+    mov [vgas_rows], di         ; -6). Stored before the clip test - scratch
+                                ; under the gfx lock that nothing reads on a
+                                ; refusal
     call wm_clip_test           ; whole-shape clip (SPEC.md 11.3): CF=1 =
     jc .no                      ; armed and not wholly inside one fragment
     mov [vgas_sdy], si
@@ -5432,11 +5481,6 @@ gfx_scroll:
     shr ax, cl
     sub ax, [vgas_col]
     mov [vgas_nb], ax            ; bytes per row
-    mov ax, dx
-    sub ax, bx
-    inc ax
-    sub ax, di
-    mov [vgas_rows], ax          ; rows to copy = height - |dy|
     mov [vgas_ydst], bx          ; up: dest rows y1..y2-|dy|, walked top-down
     mov ax, 1                   ; (source below destination - forward-safe)
 %ifdef KERN_SMALL
@@ -6960,7 +7004,10 @@ gfx_b4piece:
     cmp ch, cl
     je .clen
 .cemit:
-    call KERNEL_SEG:apic_gfx_vline  ; AX = x, BX..DX inclusive
+    mov cx, ax                  ; a 1-px FILL, not the vline CELL: the line
+    call KERNEL_SEG:cw_gfx_fill ; cells clobber AX..DX (SPEC.md 5.7.3) and
+                                ; the loop keeps x in AX and the run in DX;
+                                ; CX is dead until .crun reloads it
     mov bx, dx
     inc bx                      ; the next run's first row
     or di, di

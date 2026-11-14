@@ -710,8 +710,9 @@ wd_entry:
     mov [wd_cseg], dx               ; so wd_arg's load can zero it; a refusal
                                     ; aborts the launch and ld_unreserve frees
                                     ; the text claim with the region
-    mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 68.3):
-    call OSAPI_MEM_CLAIM            ; 256 x 4 bytes, session-lived. Zeroed by
+    mov ax, 1 * 64                       ; ...and the PAP dictionary (SPEC.md 68.3):
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; 256 x 4 bytes, session-lived. Zeroed by
     jc .nomem                       ; hand - a claim arrives dirty and entry 0
     mov [wd_pseg], dx               ; must BE Normal, all zero
     push cx
@@ -744,18 +745,13 @@ wd_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
     jc .out                         ; table full: nothing to flag
-    push ax
-    mov al, 1                       ; resizable (SPEC.md 11.1/27): wd_paint
-    call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-    mov al, 1                       ; so the next repaint re-wraps for free
-    call OSAPI_WM_SAVEU             ; ...and it PROMISES its content stands
-                                    ; still while it is not drawing, so a
-                                    ; raise puts the old pixels back instead
-                                    ; of lettering 464 cells (SPEC.md 11.96.1).
-                                    ; True of this app: everything that draws
-                                    ; goes through wd_redraw or wd_paint, and
-                                    ; the worker's two background drawers ask
-                                    ; OSAPI_WM_OBSCURED first
+%ifdef OS88UI_SBDRAG
+    pushf                           ; the entry still owes the loader
+    cmp al, WC_ONDRAG + 1           ; wm_create's CF (SPEC.md 13.10.7.1). AL =
+    sbb al, al                      ; the class slots this kernel dispatches:
+    mov [wd_nodrag], al             ; no drag edge on kern_small (11.104)
+    popf
+%endif
     push cx                         ; ...and a FLOOR under the grow box: two
     push dx                         ; strips of fixed-position chrome cannot be
     mov cx, WD_MIN_W                ; expressed by WMIN_W, which is 96 for the
@@ -767,20 +763,8 @@ wd_entry:
     mov si, wd_pref                 ; which this window has never used more
     call OSAPI_WM_PREFER            ; than 600 (SPEC.md 11.100.1). A page is
     pop si                          ; the one thing that is always glad of them
-    mov al, 1
-    call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
-    pop ax                          ; every keystroke redraws a row of text and
-                                    ; an aligned cell writes ONE framebuffer
-                                    ; byte where an unaligned one writes two.
-                                    ; TRUE ON VGA TOO - mode 12h is 8 pixels
-                                    ; to a byte per plane - and measured, this
-                                    ; window was the worked example: it used
-                                    ; to open at content x = 61 there, skew 5,
-                                    ; which typebench prices at 9.4% of every
-                                    ; keystroke (SPEC.md 11.94)
-    push si
-    mov si, wd_habout               ; NO kernel menus (SPEC.md 68.2): the
-    call OSAPI_ABOUT_SET            ; nine-menu bar is drawn in the window.
+    push si                         ; NO kernel menus (SPEC.md 68.2): the
+                                    ; nine-menu bar is drawn in the window.
     mov si, wd_menus0               ; The kernel bar carries only the app
     call OSAPI_MENU_SET             ; name pull-down - an EMPTY set (count 0)
     pop si                          ; whose AM_NAME makes the bar read
@@ -826,31 +810,6 @@ wd_entry:
     ; those runs declaring nothing - measured, by the row that reads
     ; MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
-    push ax                         ; SPEC.md 54.10: the kernel calls this once
-    mov ax, wd_onwake               ; our window is on the glass, and the launch
-    call OSAPI_WM_ONWAKE            ; document loads in front of it. BX is still
-                                    ; the window, and the slot preserves the
-                                    ; flags the CF we owe the loader rides in
-    mov ax, wd_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls
-    call OSAPI_WM_ONWHEEL           ; the document; flags preserved too, and
-    pop ax                          ; on kern_small the cell does nothing
-%ifdef OS88UI_SBDRAG
-    pushf                           ; the entry still owes the loader
-    push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
-    mov ax, wd_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
-    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
-                                ; below captures OSAPI_WM_ONDRAG's OWN
-                                ; CF and a third install after it would
-                                ; answer for the wrong slot
-    mov ax, wd_onup                 ; SPEC.md 13.10.6.4: these two are the
-    call OSAPI_WM_ONMOUSEUP         ; THUMB's alone. wd_mtrack's poll loop
-    mov ax, wd_ondrag               ; (27.8.1) owns a gesture that cannot be
-    call OSAPI_WM_ONDRAG            ; live at the same time as a bar drag - the
-    sbb al, al                      ; menu runs modally INSIDE W_ONCLICK, and
-    mov [wd_nodrag], al             ; the kernel's arm is not set until that
-    pop ax                          ; returns - so 13.7's no-mixing rule is
-    popf                            ; satisfied by "not at the same time"
-%endif
     pushf                           ; the visual break exists for the machine
     push ax                         ; that cannot repaint a screenful between
     call OSAPI_CPU_INFO             ; keystrokes, and nowhere else: on anything
@@ -5801,8 +5760,9 @@ wd_itinit:
                                     ; the whole of its pass, and the claim
                                     ; below may compact. The one claim this
                                     ; program makes with a segment in hand
-    mov ax, WD_ITKB                 ; the table AND the staging area
-    call OSAPI_MEM_CLAIM
+    mov ax, WD_ITKB * 64                 ; the table AND the staging area
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .let
     mov [wd_iseg], dx
 .let:
@@ -6349,13 +6309,13 @@ wd_drawrun:
     add dx, [wd_gh1]                       ; the cell's last row
     test byte [wd_runa], WDAT_UL
     jz .nul
-    call OSAPI_GFX_HLINE
+    call .hl
 .nul:
     test byte [wd_runa], WDAT_DUL
     jz .ndul
-    call OSAPI_GFX_HLINE            ; double underline: rows 7 and 6
+    call .hl                        ; double underline: rows 7 and 6
     dec dx
-    call OSAPI_GFX_HLINE
+    call .hl
     inc dx
 .ndul:
     test byte [wd_runa], WDAT_WUL
@@ -6380,10 +6340,19 @@ wd_drawrun:
     mov bx, ax                      ; BX = x2, the span's last column
     mov ax, di
     call wd_cx                      ; AX = x1
-    call OSAPI_GFX_HLINE
+    call .hl
 .wnext:
     inc si
     jmp short .ws
+.hl:                                ; the line cell takes AX..DX (SPEC.md
+    push ax                         ; 5.7.3): every rule here is drawn off
+    push bx                         ; the same x pair or the same row
+    push dx
+    call OSAPI_GFX_HLINE
+    pop dx
+    pop bx
+    pop ax
+    ret
 .done:
     jmp wd_rdisdcba
 
@@ -8315,7 +8284,11 @@ wd_curshow:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     pop ax
+    push ax
+    push cx
     call OSAPI_GFX_VLINE
+    pop cx
+    pop ax
     and ax, 0xFFF8                  ; the byte column it stands in, which is
     mov [wd_csx], ax                ; what a bank is taken at
     mov ax, [wd_cury]
@@ -8905,7 +8878,7 @@ wd_stghold:
     push ax
     push cx                         ; CL is the shift count below, and the
     push dx                         ; header promises every other register
-    mov ax, WD_DOCCAP               ; the WHOLE ceiling, not a size computed
+    mov ax, WD_DOCCAP * 64          ; the WHOLE ceiling, not a size computed
                                     ; from the document: a real Word file is
                                     ; the text plus FKP pages, and how many
                                     ; pages it needs is what the writer finds
@@ -8914,7 +8887,10 @@ wd_stghold:
                                     ; write - so taking it whole costs the
                                     ; machine nothing between saves
 .kb:
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=0 and DX = the base segment
+    pop bx
     jc .no
     mov [wd_stgseg], dx
     mov es, dx
@@ -9068,8 +9044,9 @@ wd_upc:
 wd_load:
     call wd_sv6
     push es
-    mov ax, WD_LSTGKB           ; the staging claim, transient across the read
-    call OSAPI_MEM_CLAIM
+    mov ax, WD_LSTGKB * 64           ; the staging claim, transient across the read
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [wd_stgseg], dx
     call wd_goto                ; the folder dance on the way in
@@ -13489,7 +13466,6 @@ wd_ugrow:
     jbe .yes
     cmp word [wd_useg], 0
     jne .re
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no
@@ -16477,7 +16453,9 @@ wd_ribbon:
     add bx, 5
     mov dx, di
     add dx, 11
+    push ax
     call OSAPI_GFX_VLINE
+    pop ax
 .sync:
     mov byte [wd_rbold], 0          ; every cell was just drawn UNPRESSED:
     mov byte [wd_rbok], 1           ; re-invert the ones the caret's attrs
@@ -16609,37 +16587,41 @@ wd_rbstat:
 ; in:  AX = centre x, DX = top row (3 rows tall); preserves all registers
 ; -----------------------------------------------------------------------------
 wd_rmkd:
-    push ax
-    push bx
-    push dx
-    mov bx, ax
-    sub ax, 2
-    add bx, 2
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc ax
-    dec bx
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc ax
-    dec bx
-    call OSAPI_GFX_HLINE
-    jmp wd_rdba
+    push si
+    push di
+    mov si, 2                       ; half-widths 2, 1, 0 down the rows
+    mov di, -1
+    jmp short wd_rmk
 wd_rmku:
+    push si
+    push di
+    xor si, si                      ; half-widths 0, 1, 2
+    mov di, 1
+wd_rmk:
     push ax
     push bx
+    push cx
     push dx
+.row:
+    push ax                         ; the line cells clobber AX..DX (SPEC.md
+    push dx                         ; 5.7.3): centre and row ride the stack
     mov bx, ax
+    sub ax, si
+    add bx, si
     call OSAPI_GFX_HLINE
+    pop dx
+    pop ax
     inc dx
-    dec ax
-    inc bx
-    call OSAPI_GFX_HLINE
-    inc dx
-    dec ax
-    inc bx
-    call OSAPI_GFX_HLINE
-    jmp wd_rdba
+    add si, di                      ; -1 and 3 are both above 2 unsigned:
+    cmp si, 2                       ; three rows either way
+    jbe .row
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop di
+    pop si
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wd_pgcol - in Page view, narrow the text column to the sheet
@@ -16722,9 +16704,15 @@ wd_sheet:
     add bx, [wd_ctop]
     mov dx, [wd_bot]
     mov ax, [wd_shl]
+    push bx                         ; the line cell takes AX..DX (5.7.3)
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
     mov ax, [wd_shr]
+    push ax
     call OSAPI_GFX_VLINE
+    pop ax
     call wd_pgmarks
     pop si
     pop dx
@@ -16769,7 +16757,9 @@ wd_pgmarks:
     sub ax, 4
     mov bx, [wd_shl]
     dec bx
+    push dx                         ; the line cell takes AX..DX (5.7.3)
     call OSAPI_GFX_HLINE
+    pop dx
     mov ax, [wd_shr]                ; ...and the right margin's
     inc ax
     mov bx, ax
@@ -16869,7 +16859,11 @@ wd_ruler:
     xor bh, bh
     add ax, bx
     pop bx
+    push cx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
+    pop cx
     pop bx
     pop ax
     add dx, 2
@@ -16924,7 +16918,11 @@ wd_ruler:
     add bx, 9
     mov dx, di
     add dx, 7
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 9
     call OSAPI_GFX_HLINE
@@ -16941,7 +16939,11 @@ wd_ruler:
     add bx, 9
     mov dx, di
     add dx, 5
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 11
     call OSAPI_GFX_HLINE
@@ -16991,7 +16993,9 @@ wd_ruler:
     add cx, 8
     mov dx, di
     add dx, 5
+    push ax
     call OSAPI_GFX_PIXEL
+    pop ax
     pop cx
 .tbn:
     add si, 3
@@ -17860,7 +17864,11 @@ wd_status:
     mov dx, [wd_ct]
     add dx, [wd_ch]
     sub dx, WD_STATUS_H
+    push ax
+    push dx
     call OSAPI_GFX_HLINE            ; the rule over the strip
+    pop dx
+    pop ax
     push ax
     mov al, CWHITE
     call OSAPI_SET_COLOR
@@ -19062,7 +19070,7 @@ wd_doclose:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wd_habout - the OSAPI_ABOUT_SET handler: SI = our window, lock held
+; wd_habout - the WC_ABOUT handler: SI = our window, lock held
 ; -----------------------------------------------------------------------------
 wd_habout:
     call wd_bounds                  ; the kernel bar path arrives without a
@@ -21297,7 +21305,7 @@ wd_s_abou4: db 'Ported by Jorge Gonzalez', 0
 wd_s_ok:    db 'OK', 0
 TOASTSTR wd_m_noclose, 'Close refused, try again'
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; A word processor's frame, not a note pad's: 600x440 at the 640x480
 ; reference, clamped onto smaller adapters by wm_create (SPEC.md 11). The
 ; chrome strips cost 60px of content, so a small frame would leave the
@@ -21317,12 +21325,27 @@ TOASTSTR wd_m_noclose, 'Close refused, try again'
 
 wd_tpl:
     dw 20, 24, 600, 440
-    dw wd_wttl, wd_paint, wd_onkey, wd_onclick
+    dw wd_wttl, wd_cls
                                     ; the TITLE is the bss buffer wd_compttl
                                     ; composes - 'Microsoft Word - <NAME>' -
                                     ; before wm_create banks the pointer, and
                                     ; wd_settitle recomposes it on every name
                                     ; change (SPEC.md 68.2)
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with -
+; scribe.asm's sc_cls, the same window, says why each one is here
+%ifdef OS88UI_SBDRAG
+  %define WD_C_TIMER wd_ontimer
+  %define WD_C_UP wd_onup
+  %define WD_C_DRAG wd_ondrag
+%else
+  %define WD_C_TIMER 0
+  %define WD_C_UP 0
+  %define WD_C_DRAG 0
+%endif
+    OS88_CLASS wd_cls, WF_SIZABLE | WF_SAVEU, PAINT, wd_paint, \
+               ONKEY, wd_onkey, ONCLICK, wd_onclick, ABOUT, wd_habout, \
+               ONWAKE, wd_onwake, ONMOUSEUP, WD_C_UP, ONTIMER, WD_C_TIMER, \
+               ONDRAG, WD_C_DRAG, ONWHEEL, wd_onwheel
 
 ; The EMPTY kernel menu set (SPEC.md 12.2): zero menus, but its AM_NAME puts
 ; 'Microsoft Word' in the kernel bar instead of the 15-char header name. The

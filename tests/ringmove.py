@@ -419,9 +419,7 @@ def main():
               "%d of %d" % (len(decl), len(w0)))
 
         # --- 2..4: a compaction posted from outside -------------------------
-        wptr = geom.winptr(r.m, r.win, r.S)
-        r.m.write(r.S("mem_cpq_lvl"), bytes([0xFC]))
-        r.m.write(r.S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+        geom.post_compact(r.m, r.win, 0xFC, r.S)
         r.until(lambda: u16(r.m.read(r.S("mem_cpq"), 2)) == 0,
                 "the posted compaction", limit=30)
         r.quiet()

@@ -150,9 +150,14 @@ rt_rstwait:
 ; -----------------------------------------------------------------------------
 rt_claim:
     push dx
+    cmp word [rt_seg], 0        ; ALREADY HELD: a WAKE's find (SPEC.md
+    jne .out                    ; 51.2.5) - SLEEP kept the ring, pinned and
+                                ; where RBSTART will be pointed again, so it
+                                ; is not claimed twice (CF = 0: the `cmp`
+                                ; borrowed nothing, and `pop` keeps it)
     mov ax, OS88_BYTES_PARA(RT_CLAIM)
-    mov cx, MEMP_CONV           ; no head, and below 1MB
-    mov bl, MEMP_CLAIM | MEMP_CPU
+    xor cx, cx                  ; no head, and below 1MB
+    mov bl, MEMP_CLAIM | MEMP_CPU | MEMP_CONV
     call OSAPI_MEM_P            ; DX = the base
     jc  .out
     mov [rt_seg], dx
@@ -323,20 +328,21 @@ rt_rxreset:
 ;
 ; The DMA stops BEFORE the memory is freed: a card left running writes into
 ; whatever the heap gives that memory to next. Spends AX, BX, CX and DX:
-; eth_detach, nic_stop's one caller, has banked everything (os88_ent)
+; eth_detach and eth_wake's refusal, nic_stop's callers, have banked
+; everything (os88_ent)
+;
+; rt_halt is its first half ALONE - DRVV_SLEEP's (nic_sleep, SPEC.md
+; 51.2.5): the bus master off and the chip reset BEFORE the picture is
+; taken, and the ring, its window and its claim KEPT. WAKE's rt_claim finds
+; [rt_seg] standing and claims nothing, and rt_init points RBSTART at the
+; same ring. It was a free here and a fresh claim at the wake, which on
+; kern_mega leaked a ring per trip: a boot claim is named by its PARAGRAPH
+; and the free below cannot find it under protected mode. The ring is
+; pinned and conventional (rt_claim), so it is in every picture and no
+; compaction moves it while the card is asleep
 ; -----------------------------------------------------------------------------
 rt_stop:
-    mov al, RT_IMR
-    call rt_port
-    xor ax, ax
-    out dx, ax
-    mov al, RT_CR
-    call rt_port
-    xor al, al
-    out dx, al                  ; receiver and transmitter off
-    mov al, RTC_RST
-    out dx, al                  ; ...and the chip reset
-    call rt_rstwait
+    call rt_halt
     mov dx, [rt_win]            ; rt_es's window, if protected mode made one
     or  dx, dx
     jz  .nowin
@@ -356,6 +362,19 @@ rt_stop:
                                 ; card was silenced above, so nothing writes it
 .out:
     ret
+
+rt_halt:
+    mov al, RT_IMR
+    call rt_port
+    xor ax, ax
+    out dx, ax
+    mov al, RT_CR
+    call rt_port
+    xor al, al
+    out dx, al                  ; receiver and transmitter off
+    mov al, RTC_RST
+    out dx, al                  ; ...and the chip reset
+    jmp rt_rstwait              ; ...and waited out (its tail is our ret)
 
 ; -----------------------------------------------------------------------------
 ; rt_rx - take ONE frame off the ring (nic_rx)
@@ -540,4 +559,4 @@ rt_tx:
     ret
 
 rt_name:    db 'RTL8139', 0
-rt_vtab:    dw rt_claim, rt_init, rt_rx, rt_tx, rt_stop
+rt_vtab:    dw rt_claim, rt_init, rt_rx, rt_tx, rt_stop, rt_halt

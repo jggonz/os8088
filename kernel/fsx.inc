@@ -129,8 +129,10 @@ FSIF_BANKED equ 4
 fsx_caps:
     push bx
 %ifdef KERN_BIG
-    cmp bx, 16                  ; BX = 1..15 ASKS ABOUT DISPLAY BX-1 (SPEC.md
-    jae .ask                    ; 53.1.2) - no window pointer is that small -
+    or bh, bh                   ; BX = 1..15 ASKS ABOUT DISPLAY BX-1 (SPEC.md
+    jnz .ask                    ; 53.1.2) - no window pointer is below 256, so
+                                ; BH = 0 is the test (a byte against `cmp bx,
+                                ; 16`, kernel size pass 19) -
     cmp [vid_ndisp], bl         ; and CF = 1 is "BX-1 is past the last one":
     jb .out                     ; the refusal's own carry, out through the one
                                 ; `pop bx`. BX = 0 (the frontmost) compares
@@ -165,9 +167,8 @@ fsx_caps:
                                 ; OSAPI_VIDEO's and OSAPI_WM_DISPLAY's DH
     mov bl, dl
     xor bh, bh
-    shl bx, 1
+    shl bx, 1                   ; (CF = 0: BX is a kind, 0..4)
     mov ax, [bx+fsx_capstab]
-    clc
 .out:
     pop bx                      ; `pop` writes no flag: either answer's CF
     ret
@@ -192,7 +193,7 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
 %endif
 
 ; -----------------------------------------------------------------------------
-; fsx_run - the bracket (SPEC.md 53.1, slot 0x0235 via X stub)
+; fsx_run - the bracket (SPEC.md 53.1, a door cell via X stub)
 ;
 ; in:       AX = near entry inside the caller's image, BX = the caller's own
 ;           window ptr, CL = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
@@ -604,8 +605,8 @@ fsx_mode:
     jne fsx_mfail
     cmp al, FSXM_COUNT
     jae fsx_mfail
-    mov bl, [vid_kind]          ; the caps bit - the same predicate the
-%ifdef KERN_BIG                 ; app's greying used (SPEC.md 47), and for
+%ifdef KERN_BIG                 ; the caps bit - the same predicate the
+    mov bl, [vid_kind]          ; app's greying used (SPEC.md 47), and for
     mov ah, EXTF_KIND           ; THE DISPLAY THIS BRACKET IS ON rather than
     EXTCALL EXT_FSX             ; the primary (SPEC.md 39.18.3/39.18.2). Once
                                 ; the collapse below has run there is only one
@@ -613,10 +614,16 @@ fsx_mode:
                                 ; second fsx_mode call keeps BL - as does one
                                 ; display, mod_gone's answer. AH is free: the
                                 ; id is AL, and AX is restored at .out
-%endif
     xor bh, bh
     shl bx, 1
     mov bx, [bx+fsx_capstab]    ; the mask itself, in BX...
+%else
+    push ax                     ; ...which on kern_small IS fsx_caps' answer,
+    xor bx, bx                  ; one card and no window to ask about: BX = 0
+    call fsx_caps               ; asks, AX = the mask and DL = the kind (DX
+    xchg ax, bx                 ; is kent_di's to restore). The routine, not
+    pop ax                      ; its four lines again (kernel size pass 20,
+%endif                          ; -4; a call dearer, once a mode set)
     mov cl, al
     shr bx, cl                  ; ...the id's bit down to bit 0...
     shr bx, 1                   ; ...and into CF. TWO shifts, not one variable
@@ -767,7 +774,7 @@ fsx_mode:
     jmp kret_di
 
 ; -----------------------------------------------------------------------------
-; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x0304)
+; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x0172)
 ;
 ; in:       nothing. Bracket-only, exclusive task only.
 ; out:      CF=0 with AX = x, BX = y, CX = w, DX = h - the surface the app may
@@ -1528,8 +1535,7 @@ fsx_rprepf:
     pusha
     mov bx, di
     sub bx, inst_tab
-    mov cl, 5
-    shr bx, cl                  ; BX = the slot: every claim is the
+    shr bx, 5                   ; BX = the slot: every claim is the
     mov [ss:fsx_rown], bx       ; instance's, so a teardown frees what an exit
                                 ; did not
     mov ax, [di+I_SPTR]
@@ -1721,8 +1727,7 @@ fsx_rmvck:
     jnz .sl
     mov bx, di                  ; AL = 0: DI's slot (fsx_rprepf's own
     sub bx, inst_tab            ; derivation, which stores it there again)
-    mov cl, 5
-    shr bx, cl
+    shr bx, 5
     mov [ss:fsx_rown], bx
 .sl:
     mov dx, MEGA_SEL_PSCR
@@ -2153,14 +2158,16 @@ fsx_rdrvf:
     mov [es:bp+RMD_CLS], bl
     mov [es:bp+RMD_SEL], dx
     mov word [es:bp+RMD_DSP], PKG_DISP
-    mov ax, [drv_fptr7]         ; DRVC_EMS: its door in drv_fptr7's offset
-    cmp bl, DRVC_EMS            ; half, and no service table
-    je .pk
     push dx
+    push es
     mov al, bl
-    call COLD_SEG:drvf_drv_cls_svc  ; DI = the class's table
-    pop dx
+    call COLD_SEG:drvf_drv_cls_svc  ; ES:DI = the class's table - in place,
+    mov si, es                  ; SOUND's the kernel's copy (kernel size pass
+    pop es                      ; 19) - and ES the row's again (mov and pop
+    pop dx                      ; write no flag)
     jc .nx
+    push ds
+    mov ds, si
     mov ax, [di+DSV_BLK]
     mov [es:bp+RMD_BLK], ax
     mov ax, [di+DSV_TICK]       ; (a disk driver's are 0: never read)
@@ -2168,7 +2175,7 @@ fsx_rdrvf:
     mov ax, [di+DSV_STREAM]
     mov [es:bp+RMD_STR], ax
     mov ax, [di+DSV_PKGCALL]
-.pk:
+    pop ds
     mov [es:bp+RMD_PKG], ax
     push ds
     mov ds, dx
@@ -2528,6 +2535,14 @@ fsx_rdownf:
 .kn:
     or bx, bx
     jnz .keep
+    mov byte [os88_door.lim+2], RD_P + RD_RK ; ...and THE RARE DOOR answers
+                                ; only the published block's first RD_RK
+                                ; (OSAPI_SND_CAPS, _FONT_GLYPHS, _FSX_MODE,
+                                ; .text bodies real mode can run) and the
+                                ; kernel's own below them, which no code the
+                                ; bracket runs reaches; every other index
+                                ; refuses - its body names `.cold` or the
+                                ; kernel's selectors (SPEC.md 20.3.4, 53.2.3)
     mov al, 0x8D                ; NMI off across the switch, LAST
     out 0x70, al
     mov byte [mega_drop], 2     ; ...landing at fsx_rland
@@ -2729,11 +2744,9 @@ fsx_rsndup:
 fsx_rkeep:
     dw rmk_1, rmk_1e - rmk_1, 0     ; OSAPI_WM_CONTENT
     dw rmk_2, rmk_2e - rmk_2, 0     ; OSAPI_GET_TICKS, _SET_COLOR, _MOUSE
-    dw rmk_3, rmk_3e - rmk_3, 0     ; OSAPI_SND_CAPS
     dw rmk_4, rmk_4e - rmk_4, 0     ; OSAPI_VIDEO
     dw rmk_5, rmk_5e - rmk_5, 0     ; OSAPI_CPU_INFO
-    dw rmk_6, rmk_6e - rmk_6, 0     ; OSAPI_FONT_GLYPHS
-    dw rmk_7, rmk_7e - rmk_7, 0     ; OSAPI_FSX_MODE, _FSX_WAIT
+    dw rmk_7, rmk_7e - rmk_7, 0     ; OSAPI_FSX_WAIT
     dw rmk_8, rmk_8e - rmk_8, 0     ; OSAPI_KEY_DOWN, _FSX_SURF
     dw rmk_9, rmk_9e - rmk_9, 0     ; OSAPI_WM_WAKE
     dw rmk_10, rmk_10e - rmk_10, 0  ; OSAPI_FSX_PAGE
@@ -2981,6 +2994,7 @@ fsx_rupf:
     mov ds, ax
     rep movsb
     pop ds
+    mov byte [os88_door.lim+2], RD_N   ; ...and the rare door's bound
 %ifdef VID_EXT
     mov ax, [ss:fsx_rvxep]      ; ...and the VESA hook
     mov [vx_ep], ax
@@ -3605,8 +3619,7 @@ rms_xfer:
     mov cx, si
 .t1:
     xchg bh, bl                 ; CH = the cylinder's low 8 bits, CL bits 6-7
-    ror bl, 1                   ; its 8-9, bits 0-5 the sector
-    ror bl, 1
+    ror bl, 2                   ; its 8-9, bits 0-5 the sector
     inc dx
     or bl, dl
     mov [rms_xcx], bx
@@ -4097,11 +4110,8 @@ rms_sstr:
     cmp al, 9                   ; (verb 9 answers in DX as verb 3 does)
     je .st
     push dx
-    cmp al, 0
-    je .rate
-    cmp al, 4
-    jne .go
-.rate:
+    test al, ~4 & 0xFF          ; the open verbs, 0 and 4: ZF = 1
+    jnz .go
     mov bx, dx                  ; the open verbs: BX the rate, DH the slot
 .go:
     call .svc

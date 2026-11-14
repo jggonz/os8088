@@ -173,7 +173,7 @@ ui_task:
     xchg ax, [mou_whl]
     or ax, ax
     jz .events
-    mov di, W_ONWH
+    mov bp, WC_ONWHEEL
     jmp short .kdisp
 %else
     jz .events                  ; nothing latched and is most of them
@@ -227,9 +227,10 @@ ui_task:
     jc .events                  ; while Locator owns the bar (SPEC.md 26.8.5).
 %endif                          ; With the lock FREE: an open locks itself
 %ifdef KERN_BIG
-    mov di, W_ONKEY             ; WHICH record word: the wheel joins below
-.kdisp:                         ; with W_ONWH (SPEC.md 10.4), and nothing
-%endif                          ; from here to the read spends DI
+    mov bp, WC_ONKEY            ; WHICH class slot: the wheel joins below
+.kdisp:                         ; with WC_ONWHEEL (SPEC.md 10.4), and nothing
+%endif                          ; from here to the read spends BP (kernel
+                                ; size pass 19: DI's `mov bp, di` went, -2)
     call gfx_lock               ; handler draws; it runs under the lock
     KFZ 5                       ; 5: WE HAVE THE GFX LOCK. A bar that stops at
                                 ;    4 is a mutex nobody released
@@ -240,15 +241,11 @@ ui_task:
     or bx, bx
     jz .key_done
     mov si, bx                  ; W_ONKEY contract: AL=ascii, AH=scan, SI=win
-%ifdef KERN_BIG
-    mov bp, [bx + di]           ; W_ONKEY, or W_ONWH for the wheel (BX = SI)
-%else
-    mov bp, [si + W_ONKEY]      ; wm_pkgcall: record in SI (where the
+%ifndef KERN_BIG                ; (kern_big's BP is WC_ONKEY or WC_ONWHEEL,
+    mov bp, WC_ONKEY            ; loaded above)
 %endif
-    or bp, bp                   ; contract already puts it), offset in BP -
-    jz .key_done                ; and 0 = the window may not take keys, asked
-                                ; of the register rather than of the record
-                                ; first (kernel size pass 10, -2)
+    call wm_hnd                 ; out of the window's class (SPEC.md 11.104):
+    jz .key_done                ; ZF = the window may not take keys
     KFZ 7                       ; 7: about to far-call the package. HERE and
                                 ; not inside ui_bill: the ladder exists to
                                 ; locate a freeze that reaches no package, and
@@ -404,8 +401,8 @@ ui_task:
     jmp short .mup_done         ; hides - its dock tile inverts (SPEC.md 30)
 
 .mup_pkg:                       ; SPEC.md 13.7 - the package's release
-    mov bp, [si + W_ONMOUSEUP]
-    or bp, bp
+    mov bp, WC_ONMOUSEUP
+    call wm_hnd
     jz .mup_done                ; the package never asked for releases, which
     call ui_bill                ; is every shipped package today
 .mup_done:                      ; ONE unlock for all three species
@@ -585,8 +582,8 @@ ui_task:
                                 ; CX/DX = mousedown x/y
 
 .content_front:
-    mov bp, [si + W_ONCLICK]
-    or bp, bp
+    mov bp, WC_ONCLICK
+    call wm_hnd
     jz .yj1                     ; window does not take clicks
 %ifdef KERN_BIG
     mov [ui_dragx], cx          ; ...the point the tracking edge measures
@@ -829,14 +826,14 @@ ui_task:
     xor dx, dx                  ; (a timer has no point - SPEC.md 13.9)
     call gfx_lock
 .tp_locked:                        ; (tests/timerrace.py's breakpoint)
-    test byte [si+W_FLAGS], 1   ; ...AND ASKED AGAIN UNDER THE LOCK (13.9.2):
-    jz .tp_gone                    ; gfx_lock can block on a dying WORKER, which
-    mov bp, [si+W_ONTIMER]      ; destroys this record under it and frees the
-    or bp, bp                   ; region straight after - the test above was
-    jz .tp_gone                    ; then of a window that no longer exists, and
-                                ; the handler word is read again for the same
-                                ; reason (a record re-used meanwhile is
-                                ; another window's)
+    mov bp, WC_ONTIMER          ; ...AND ASKED AGAIN UNDER THE LOCK (13.9.2):
+    call wm_hnd                 ; gfx_lock can block on a dying WORKER, which
+    jz .tp_gone                 ; destroys this record under it and frees the
+                                ; region straight after - wm_hnd's liveness
+                                ; test is the one that answers that now
+                                ; (SPEC.md 11.104, BR-28), and the class is
+                                ; read again for the same reason (a record
+                                ; re-used meanwhile is another window's)
     call ui_bill
 .tp_gone:
     call gfx_unlock
@@ -897,10 +894,12 @@ ui_task:
     and [wm_clreq], ax          ; spent BEFORE the close
     test byte [bx+W_FLAGS], 1   ; still a live record? A minimized window is
     jz .cl_spent                ; closable, so this is bit 0 and not bit 1
-    mov word [bx+W_ONCL], 0     ; retire the negotiator: the request IS its
-                                ; answer (see wm_close_req) - wm_onclose's
-                                ; store, written here (kernel size pass 14)
-    call app_close_win          ; (which preserves every register)
+    call app_close_now          ; the request IS the negotiator's answer (see
+                                ; wm_close_req), so it is not asked again -
+                                ; app_close_win without the ask (SPEC.md
+                                ; 11.104: the negotiator is a class slot, no
+                                ; record word to retire). Preserves every
+                                ; register
 .cl_spent:
     call gfx_unlock             ; the lock again for the next, so a burst of
     jmp short .cl_next          ; closes does not hold it across all of them
@@ -1359,8 +1358,8 @@ ui_arm_trk:                     ; ui_task tests [ui_armw] before calling
                                 ; is the ONLY thing between here and a dispatch
                                 ; through a freed record (SPEC.md 13.7's rule,
                                 ; and its reasoning transfers exactly)
-    mov bp, [si + W_ONDRAG]
-    or bp, bp
+    mov bp, WC_ONDRAG
+    call wm_hnd
     jz .ret                     ; the package never asked for tracking, which
                                 ; is every shipped package but Calculator
     jmp ui_rdown.lock           ; lock, bill, dispatch, unlock: ui_rdown's own
@@ -1576,13 +1575,13 @@ ui_rdown:                       ; CX = press x, DX = press y, loaded by
 
                                 ; A WINDOW THAT ASKED FOR THE RIGHT BUTTON
                                 ; ITSELF (SPEC.md 13.11) gets it before any of
-    mov bp, [bx+W_ONRC]         ; the below, and instead of it: the handler is
+    mov bp, WC_ONRCLICK         ; the below, and instead of it: the handler is
                                 ; a record word, so a window that never
                                 ; installed one costs this path one read. BX
                                 ; is already SI - the compare above is what
                                 ; brought us here - so wm_rch_slot's input is
                                 ; loaded and there is nothing to set up
-    or bp, bp
+    call wm_hnd                 ; (SI = BX, SPEC.md 11.104)
     jz .ctxwin
 .lock:                          ; (ui_arm_trk's drag dispatch joins here)
     call gfx_lock               ; W_ONCLICK's environment exactly - CX = x,
@@ -2434,7 +2433,7 @@ ui_grow_clamp:
 ;   AH = 0                  the System menu - identical in every
 ;                           application; cmd = CMD_ABOUT + item
 ;   AM_ONCMD = 0            a kernel-dispatched set, i.e. Locator;
-;                           cmd = ui_loc_base[cell] + item
+;                           cmd = CMD_CLOSE + item (cell 1, File)
 ;   otherwise               the active application's own handler, called
 ;                           exactly like W_ONCLICK: under the gfx lock, on
 ;                           this task, billed to the owning instance
@@ -2535,15 +2534,15 @@ ui_dispatch:
     pop es
     jne .app
 .kernel:
-    mov bl, ah                  ; cmd = the cell's base + the item index
-    xor bh, bh
-    cmp bx, UI_LOC_N            ; ui_loc_base's own length (two cells on
-    jae .ret                    ; kern_small, SPEC.md 14.6); a set with more
-                                ; cells must have had a handler
-    shl bx, 1
-    cbw                         ; AH = 0: AL is an item index, below the
-    add ax, [ui_loc_base + bx]  ; 16 a popup holds (kernel size pass 18, -1)
-    jmp ui_cmd
+    cmp ah, 1                   ; cmd = the cell's base + the item index, for
+    ja .ret                     ; the two kernel-dispatched cells (SPEC.md
+    jb .sys                     ; 14.6); a set with more cells must have had
+    add al, CMD_CLOSE - CMD_ABOUT ; a handler. Locator's File is CMD_CLOSE's,
+.sys:                           ; the System menu CMD_ABOUT's - the base as
+    cbw                         ; arithmetic, where it was a two-word table
+    inc ax                      ; and its index (kernel size pass 20, -9).
+    jmp ui_cmd                  ; AH = 0: AL is an item index, below the 16 a
+                                ; popup holds, and CMD_ABOUT is the `inc`
 .ret:
     ret
 
@@ -2570,8 +2569,9 @@ ui_dispatch:
                                 ; window can be destroyed by a command
                                 ; picked from its own bar while the lock
                                 ; was down - and a package's own worker
-                                ; (SPEC.md 20.6) can tear its window down
-                                ; from inst_task_die in that same gap.
+                                ; (SPEC.md 20.6) could tear its window down
+                                ; from inst_task_die in that same gap (until
+                                ; BR-4 posted that teardown to this task).
                                 ; wm_destroy clears the bit under the lock
                                 ; we hold, and only the UI task (us) calls
                                 ; wm_create, so the slot cannot be recycled
@@ -2592,8 +2592,10 @@ ui_dispatch:
 .handler:
     mov si, bx                  ; the handler's contract: AL = item,
                                 ; AH = menu, SI = window, BX = the set
-    mov cx, [bx + W_ABOUT]      ; the About handler wm_about_set registered,
-    mov bx, [menu_set]          ; read off [menu_win] (gfx_lock preserves BX)
+    mov bp, WC_ABOUT            ; the About handler the window's class
+    call wm_hnd                 ; names (SPEC.md 11.104), read off [menu_win]
+    mov cx, bp                  ; (gfx_lock preserves BX; BP is spent below)
+    mov bx, [menu_set]
     or dl, dl                   ; ahead of the test, which only decides
     jnz .cbok                   ; whether the name cell's is the one called -
                                 ; not AM_ONCMD. It was wm_about_get, a
@@ -2618,12 +2620,14 @@ ui_dispatch:
     jmp gfx_unlock
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
-; System menu, then Locator's File. There is no Builtins cell on either
-; build (SPEC.md 14.6, 14.8): its two launches are packages now and its
-; third, Disk, is the desktop's own drive zones
-ui_loc_base:
-    dw CMD_ABOUT, CMD_CLOSE
-UI_LOC_N equ 2
+; System menu, CMD_ABOUT, then Locator's File, CMD_CLOSE - ui_dispatch's
+; `.kernel` arithmetic, which was a table here (ui_loc_base) until kernel size
+; pass 20. There is no Builtins cell on either build (SPEC.md 14.6, 14.8): its
+; two launches are packages now and its third, Disk, is the desktop's own
+; drive zones
+%if CMD_ABOUT != 1 || CMD_CLOSE <= CMD_ABOUT + MENU_LOGO_N - 1 || CMD_CLOSE - CMD_ABOUT > 127
+  %error "ui_dispatch's .kernel builds cmd as item + 1 (CMD_ABOUT) and adds CMD_CLOSE - CMD_ABOUT to AL for Locator's File cell"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; [ui_pcmd] - one of the kernel's own menu commands, DEFERRED (SPEC.md 13)
@@ -3041,8 +3045,8 @@ ui_cmd:
                                 ; (SPEC.md 12.3)
 
 .tab:                           ; data in .text, reached only by the indirect
-                                ; jump above - ui_loc_base's pattern, and
-                                ; fm_jmp's. os88ovlchk cannot see an indirect
+                                ; jump above - fm_jmp's pattern too.
+                                ; os88ovlchk cannot see an indirect
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef OS88_SHORTCUTS
@@ -3183,7 +3187,7 @@ ui_rb_go:                       ; the last instruction of the GUI, and a name
 %endif
 
 ; -----------------------------------------------------------------------------
-; ui_reboot_post - API slot 0x0298 (SPEC.md 20.10). AL in, no answer.
+; ui_reboot_post - a door cell (SPEC.md 20.10). AL in, no answer.
 ;
 ; AL = 0 restart the way the System menu does, flushing the Control Panel's
 ; settings on the way out; AL non-0 restart WITHOUT going near a disk. The
@@ -3341,8 +3345,9 @@ section .text
 ;      volume_popup (drivers/sound/volume.inc), the one caller, holds nothing
 ;      in any of them across a bridge call: kernel size pass 14 took the five
 ;      pushes off (10 bytes). A second caller that needs one banks it itself
-ui_volume_bridge: dw ui_volume_service, KERNEL_SEG
-ui_volume_service:
+ui_volume_service:                  ; (SOUND.DRV far-calls KERNEL_SEG:this - DI
+                                ; at SNDV_MIXPOP is its offset, R3: the 4-byte
+                                ; far pointer it was went, kernel size pass 19)
     push ds
     KDS
     KES
@@ -3405,7 +3410,7 @@ ui_clkcell:
     mov dx, [menu_mixx]         ; DX = the speaker's left x, CX the press's
     push ds
     pop es
-    mov di, ui_volume_bridge
+    mov di, ui_volume_service   ; the bridge, KERNEL_SEG's (R3)
     mov bx, DRVC_SOUND*256 + SNDV_MIXPOP ; SNDV_MIXPOP, no graphics lock held
     call drv_pkg_call_x
     jnc .r                      ; the speaker's: the popup has run (or said

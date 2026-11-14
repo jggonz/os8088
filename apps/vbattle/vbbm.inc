@@ -59,13 +59,11 @@ vb_bmbuild:
 %ifndef VB_NOMAP                    ; (the A/B: the same package, no map)
     call vb_rmap
 %endif
-    mov ax, bx                      ; a cluster's scratch: its KB, at least 1
-    mov cl, 10
+    mov ax, bx                      ; a cluster's scratch: its paragraphs
+    mov cl, 4
     shr ax, cl
-    jnz .kb
-    inc ax
-.kb:
-    call OSAPI_MEM_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [vb_bmseg], dx
     xor bx, bx                      ; the targets: every clip's head, then

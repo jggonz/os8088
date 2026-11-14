@@ -80,8 +80,6 @@ ft_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [ft_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; the content origin on a multiple of 8,
     clc                             ; which is what ty_flush's x wants
 .out:
     pop si
@@ -331,7 +329,10 @@ ft_onclick:
 
 ft_tpl:
     dw 7, 40, 632, 120
-    dw ft_ttl, ft_paint, ft_onkey, ft_onclick
+    dw ft_ttl, ft_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ft_cls, 0, PAINT, ft_paint, ONKEY, ft_onkey, \
+               ONCLICK, ft_onclick
 
 ft_ttl:     db 'Face Test', 0
 ft_fname:   db 'CHARTER.F88', 0

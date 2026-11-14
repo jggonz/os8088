@@ -492,7 +492,6 @@ mrl_load:
     mov word [mr_fpara], 0
 .free:
     push bx
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; DX = the segment, AX = granted
     pop bx
@@ -594,7 +593,8 @@ mrl_ffind:
     push ds
     pop es
     mov di, mrl_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     pop es
     ret
 

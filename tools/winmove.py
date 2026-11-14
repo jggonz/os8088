@@ -56,7 +56,7 @@ CLK = 4772727.0
 QUIET = int(0.40 * CLK)
 
 PRIMS = os.environ.get('SYMS', '').split(',') if os.environ.get('SYMS') else [
-         'gfx_pixel', 'gfx_hline', 'gfx_vline', 'gfx_fill', 'gfx_frame',
+         'gfx_pixel_n', 'gfx_hline', 'gfx_vline', 'gfx_fill', 'gfx_frame',
          'gfx_fill_gray', 'gfx_xor_rect', 'gfx_xor_fill', 'gfx_blit4',
          'font_char', 'font_run', 'gfx_line', 'gfx_restore', 'gfx_save',
          'wm_su_try', 'wm_su_bank', 'wm_draw_win']

@@ -14,9 +14,10 @@ n_pcm_open:
     jz .claim
     or byte [n_pcmflags],3 << SND_OPENF_BLKSH
 .claim:
-    mov ax,13
-    mov cx,13
-    call OSAPI_MEM_CLAIM_DMA_HI
+    mov ax,13 * 64
+    mov cx,13 * 64
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
+    call OSAPI_MEM_P
     jc .out
     mov [n_pcmseg],dx
     ; Optional, and fetched inside the bracket: ask first, so a busy heap is

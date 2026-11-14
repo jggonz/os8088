@@ -663,8 +663,8 @@ eu_nib:
 eu_s_card:  db 'Card', 0       ; THE SEVEN ROW LABELS, in row order and end to
             db 'Id', 0          ; end: eth_cp_paint walks them as one list
             db 'Addr', 0
-            db 'Router', 0
-            db 'Name', 0
+eu_s_rtr:   db 'Router', 0     ; (the Setup window's labels for its
+eu_s_name:  db 'Name', 0       ; last two fields are these: ethcfg.inc)
             db 'Dhcp', 0
             db 'Rx', 0
 EU_NLAB     equ 7
@@ -685,7 +685,7 @@ eu_s_bound: db 'Bound', 0
 eu_s_nosrv: db 'No server', 0
 eu_s_renew: db 'Renew', 0
 eu_s_setup: db 'Set Up', 0
-eu_s_manual: db 'Manual', 0
+eu_s_manual: db 'Manual', 0     ; ...and the Setup window's radio's
 eu_s_b1:    db 'Buf 1K', 0    ; the socket rings (SPEC.md 72.13.2): the
 eu_s_b4:    db 'Buf 4K', 0    ; LIVE size while the pool is held, so a
 eu_s_b8:    db 'Buf 8K', 0    ; machine that could not fund what was asked

@@ -1,11 +1,23 @@
 {
  "DRV_VER": {
-  "fingerprint": "2b81e577ee229534d3d5272b0ea0f1bbe0f58c5702033444ec41dd161085d321",
-  "version": 12
+  "fingerprint": "656c4d3e833541a611013b08fcb90cc38806ad506fedec67f45aebef1324010f",
+  "version": 14
+ },
+ "HD_ABI_VER": {
+  "fingerprint": "6334dfeda1fd56beca273195d029dd1b3e31b9270359bd11435a1d77fa174bdf",
+  "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "9dac927c840ce0d1a390f143af39abfd8220a0cecd6c3ed5f0796a5ccfa6a53a",
-  "version": 10
+  "fingerprint": "3aa521518ca9666207043f9bb9ab4301d88bf99a85d47317f1d6423962921241",
+  "version": 13
+ },
+ "VX_ABI_VER": {
+  "fingerprint": "b26a7f8a6dfbab464ffa1b307794abd27e804282c5747840eb468f25b429d984",
+  "version": 5
+ },
+ "XM_ABI_VER": {
+  "fingerprint": "114f77439b31382fb16b939b64cda26da58be28cebac546af3f9223102db339b",
+  "version": 2
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
  "history": [
@@ -41,14 +53,14 @@
    "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
    "from": 8,
    "guard": "PKG_FMT",
-   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x0467); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x03E5); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 8
   },
   {
    "fingerprint": "acbc5cdf8628e40b6dd72ad8a9e3e9a8bf0aff2464e7294cac97e0ce311210cd",
    "from": 9,
    "guard": "DRV_VER",
-   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x0467); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x03E5); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 9
   },
   {
@@ -97,14 +109,14 @@
    "fingerprint": "d6927629077962e494f119851ecea36972deaf327cfcd23c976e2781e2edca54",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x03F3 (SPEC.md 37.96), OSAPI_WM_DESK 0x03F9 and OSAPI_GFX_DESK 0x03FF (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
    "to": 10
   },
   {
    "fingerprint": "9b0a00f1f978abdfcf17b98e442435c737ebc3de1e2bfb245346700d60f18d91",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x03F3 (SPEC.md 37.96), OSAPI_WM_DESK 0x03F9 and OSAPI_GFX_DESK 0x03FF (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
    "to": 11
   },
   {
@@ -209,14 +221,14 @@
    "fingerprint": "1b54119e966a2494d5b90e15a31d51708f5865657efcde14953e16ddaacc6243",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_ASSOC_FLUSH (0x0493) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
+   "reason": "OSAPI_ASSOC_FLUSH (0x040B) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
    "to": 10
   },
   {
    "fingerprint": "76db0c6485a05e20cc6aa5649c86ed0430710447cfb672128736b5dfeb5757e8",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "OSAPI_ASSOC_FLUSH (0x0493) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
+   "reason": "OSAPI_ASSOC_FLUSH (0x040B) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
    "to": 11
   },
   {
@@ -713,14 +725,14 @@
    "fingerprint": "df5d549daceacc518900ebf0163664e5b2fd224c384d27f9ec7c1a031e796d95",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (0x049F) and OSAPI_DRV_USE (0x04A5) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
+   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (0x0411) and OSAPI_DRV_USE (0x0417) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
    "to": 10
   },
   {
    "fingerprint": "470e0c6bea8a4da7b9317ed0cf627db339712236a424fdf86fac6be435b14f5a",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (0x049F) and OSAPI_DRV_USE (0x04A5) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
+   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (0x0411) and OSAPI_DRV_USE (0x0417) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
    "to": 11
   },
   {
@@ -1112,14 +1124,14 @@
    "fingerprint": "b7e236b01c23c3a477cd8a0ffcc4f69aa9be41db14578917a93fd9eb6ae810a6",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_SEG (0x04E3): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
+   "reason": "OSAPI_SEG (0x0455): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
    "to": 10
   },
   {
    "fingerprint": "a58c69b62a367c2a1b7fe61fede83599ff230eabdc0910c60a8b822b47518b93",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "OSAPI_SEG (0x04E3): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
+   "reason": "OSAPI_SEG (0x0455): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
    "to": 11
   },
   {
@@ -1968,6 +1980,286 @@
    "guard": "DRV_VER",
    "reason": "merge of elendilon (kern_mega MEGA-HUGE/14.17x-14.187) into the-big-review: both sides' SDK changes combined - elendilon's additions and clarifications and the big review's comment corrections; no cell moved or re-contracted, so no bump",
    "to": 12
+  },
+  {
+   "fingerprint": "9dac927c840ce0d1a390f143af39abfd8220a0cecd6c3ed5f0796a5ccfa6a53a",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "Kernel size pass 19 opens the flag day (docs/plans/completed/ksp19/BRIEF.md, docs/plans/ABI-BREAK-LIST.md 13.3): the table renumbers (T5's software-interrupt door for the rare cells), the window class moves into the package (R14), the KB memory doors and duplicate file doors are withdrawn (C1, C2, C4'), and further re-contracts follow on this branch. Nothing built at PKG_FMT 10 or DRV_VER 12 runs on this kernel. 11 and 12 are drivers' numbers, so packages go to 13 and drivers to 14 (SPEC.md 20.2.0).",
+   "to": 13
+  },
+  {
+   "fingerprint": "9c1432e0917b82e7d3b0e80c116cc8db02ca6c4c68be48e0dc1dda704edfb347",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "Kernel size pass 19 opens the flag day (docs/plans/completed/ksp19/BRIEF.md, docs/plans/ABI-BREAK-LIST.md 13.3): the table renumbers (T5's software-interrupt door for the rare cells), the window class moves into the package (R14), the KB memory doors and duplicate file doors are withdrawn (C1, C2, C4'), and further re-contracts follow on this branch. Nothing built at PKG_FMT 10 or DRV_VER 12 runs on this kernel. 11 and 12 are drivers' numbers, so packages go to 13 and drivers to 14 (SPEC.md 20.2.0).",
+   "to": 14
+  },
+  {
+   "fingerprint": "e9fa2b1da740f9cd39a789c6ecca321efc4443edab7e1c4a36c88b2f936c196b",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "39d211e7700ff33a7fc299a04cdf8da8fe3905cce356659ee3628df4121d69d3",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "b26a7f8a6dfbab464ffa1b307794abd27e804282c5747840eb468f25b429d984",
+   "from": null,
+   "guard": "VX_ABI_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 5
+  },
+  {
+   "fingerprint": "114f77439b31382fb16b939b64cda26da58be28cebac546af3f9223102db339b",
+   "from": null,
+   "guard": "XM_ABI_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 2
+  },
+  {
+   "fingerprint": "6334dfeda1fd56beca273195d029dd1b3e31b9270359bd11435a1d77fa174bdf",
+   "from": null,
+   "guard": "HD_ABI_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 7
+  },
+  {
+   "fingerprint": "59953a422e5c9401114aa19d7e3fbf351818ec7d00bb11436e6588ee7efb04bd",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of recon's re-contracts (R2 snapshots bounded by CX, R12 FSX_CAPS display index in CH, C10 desk item by record, V2 yield cell) onto the flag day (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "fb4f170d35af45ea44b4930f3c5a1c278050042b2f2160c35c450b3e04888933",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of recon's re-contracts (R2 snapshots bounded by CX, R12 FSX_CAPS display index in CH, C10 desk item by record, V2 yield cell) onto the flag day (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "68c6a489be5a0a90f7c4b0bccc9fa8125e9e5233969a3a22f52dab478b38a762",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of drvtab: service tables read in place (histsys-7), DSV/FSV floors (D4) with the 28-byte fallbacks gone (N1), the volume bridge in DI (R3), MEGA_WTN 64 (R2-3) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "9da9cd52f736ab24bef100cd3c5349dbec15dd6f4f50960c79ec7bca59c1527b",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of memdoors: the KB memory doors (C1), FILE_APPEND (C2), FILE_APPEND_SYS (C4') withdrawn and REHOME's bytes form gone (R1); the table renumbered down by the deleted cells (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "8cc6f812296e88ce173197f2a3892b95e3abf8ec3d4653b1f17ac4b6a3838868",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of memdoors: the KB memory doors (C1), FILE_APPEND (C2), FILE_APPEND_SYS (C4') withdrawn and REHOME's bytes form gone (R1); the table renumbered down by the deleted cells (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "941fdd7ee8dfdcfa6b92c6dac9d35f97a3f0d8d1f010d995c3166a4e20c186a0",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of memdoors (C1, C2, C4', R1): cell kinds block regenerated (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "2d6367972129e748a459b4d5a261d0f1a76e1e26902e8d1b3035efdd7d328bf7",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of memdoors (C1, C2, C4', R1): cell kinds block regenerated (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "2c4bf7d45d17d389de213ebe638f1570c9f0663e2bb18545f1089f7271956f5f",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of door: OS88_RARE (vector 81h) and the rare door's contract, rare cells keep the caller's IF (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "b02b1802b9e7b4c90bb9842e54cc336ad0a7fd2d1d1fae9b33eb44cf72050800",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of door: OS88_RARE (vector 81h) and the rare door's contract, rare cells keep the caller's IF (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "dadff3810ea1339a7d9fb06e12cf01f301aca5519f6d005706c6dd3e80a26699",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "kernel size pass 19 R14/K17-2: the window class (W_CLASS, WT_CLASS, WC_*, OS88_CLASS), OSAPI_WM_FLAG and WFB_*, the record re-laid out; the ten handler setters, OSAPI_ABOUT_SET and six flag setters withdrawn and the table renumbered (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "a839d7b5832ab499831a6eda39390d99e3e62822d2fd3645b35d9653d88bc924",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "kernel size pass 19 R14/K17-2: the window class (W_CLASS, WT_CLASS, WC_*, OS88_CLASS), OSAPI_WM_FLAG and WFB_*, the record re-laid out; the ten handler setters, OSAPI_ABOUT_SET and six flag setters withdrawn and the table renumbered (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "a30d12c8964bda78ff48da7f3499de7ed615c6036e21ba1c80b24a22e3ab0e21",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of class (R14, K17-2) (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "c1856dfa99aa7f508b69ab13815ec498bb15fc8ba46b17f078ed12fc05850c77",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of class (R14, K17-2) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "389b2781880f70fb628234212b4ad79e29cfb0cbd6c3c8a9060f94ab9f1ee5c2",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of nogrow: R2 and R12 reverted, the snapshots' unread AX answers withdrawn, OSAPI_MEM_P's KB arm (MEMP_KB/MEMP_KBH) (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "7fbe4cf0f313a3fea9ebc6c65b32e21d41a24743f06b41f6824a510d70fb7fcf",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of nogrow: R2 and R12 reverted, the snapshots' unread AX answers withdrawn, OSAPI_MEM_P's KB arm (MEMP_KB/MEMP_KBH) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "f8e71ac81b2dc8bfad54ab02fc4ece5d0b126aecb1024a68c9330d9e2b45fe63",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_P in paragraphs alone: the KB arm (MEMP_KB/MEMP_KBH), OS88KB_BODIES and the MEMKB_* macros withdrawn, MEMP_CONV a verb bit (CX the head only under it), MEMP_AVAIL keeps CX, os88_mem_gran gone (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "acf0022aa8f960eee373590808be26cbd831b2e96dcf5ddbe08532b9d7778d73",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_P in paragraphs alone: the KB arm (MEMP_KB/MEMP_KBH), OS88KB_BODIES and the MEMKB_* macros withdrawn, MEMP_CONV a verb bit (CX the head only under it), MEMP_AVAIL keeps CX, os88_mem_gran gone (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "01601fb9d201a43de2f95838c56d8f99bd16473a994d5457cc65022cd5106680",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of kbpara (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "9daa4ddbd3cfdf34fc730f8e45f13bb7014932e1792964b4f325bc9961460394",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of kbpara (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "e525a39b56edeb56b4f7c0cf5fb738304ec24afcaa94d76c27adf287d8d874db",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of megacmp (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "c3fc6e3e13b55af13e0b5eac6a40aa8ed467ff559bd50654479c827a296031da",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of megacmp (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "68d57da65a57d22f09c314b45aedc4c6f1ee35006ebabef606e6dc74b4a5d997",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "d62dfebc1a2ff2ccb7be307d06558fe9af881595783f794e0edd466ba5df2a88",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "e2a353505b8ef808efb6ef4f794620d8b7bbc3f4c4fee716a97dfbc26b4823db",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "f5f3bb71478db1c09b4dfab7ff722e7a631a8dd7d10cdb449b02745579b5c09f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "6b8e77467249e6f7b16dce2e8d3c06fe5309e075989a3e7ea49d8b9c9133e76b",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge: V1 line cells and FILE_FIND_SEQ onto the module cache's MOD_H_SCR / MEM_P_MOD (both this unreleased round)",
+   "to": 13
+  },
+  {
+   "fingerprint": "a9e905fe4c29606e74dac42d36200281c08cd898708e03905395827e1a869aca",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "merge: V1 line cells and FILE_FIND_SEQ onto the module cache's MOD_H_SCR / MEM_P_MOD (both this unreleased round)",
+   "to": 14
+  },
+  {
+   "fingerprint": "20ba54b666de9c12b726c842b323f501c3b2dc594b7b42f6c75c20015377387b",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "B4: DRVV_SLEEP (5) / DRVV_WAKE (6) and OS88_DRV_WAKES (bit 15 of header +10, the written-not-read FSV word) - opt-in verbs every older driver already refuses (SPEC.md 51.2.2, 51.2.5); DRV_VER 14 is unreleased, so no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "9cf163fa5251d2493ec9eb4d9854898576ff734685e668bbce89a8313856d825",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "MEM_K_SEAM (kern_mega's huge-read seam claim tag) mirrored into the SDK for the Task Manager's heap page; a constant added, nothing built before changes",
+   "to": 13
+  },
+  {
+   "fingerprint": "84f3034b8d7a05ec9b438400a8ff83895e7523919554d79bdaa6a3c89046b226",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "MEM_K_SEAM (kern_mega's huge-read seam claim tag) mirrored into the SDK for the Task Manager's heap page; a constant added, nothing built before changes",
+   "to": 14
+  },
+  {
+   "fingerprint": "f6c2cf20149faee82be3681877c01727821c71336bbcd768c3f24ac704cec33d",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 50.6.13.2: two owner tags added (MEM_P_ICO_SM, MEM_P_DIRW_SM), kern_small's spellings of the icon store's and the read-ahead's tags for the Task Manager; nothing built before changes meaning, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "656c4d3e833541a611013b08fcb90cc38806ad506fedec67f45aebef1324010f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 50.6.13.2: two owner tags added (MEM_P_ICO_SM, MEM_P_DIRW_SM), kern_small's spellings of the icon store's and the read-ahead's tags for the Task Manager; nothing built before changes meaning, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "3aa521518ca9666207043f9bb9ab4301d88bf99a85d47317f1d6423962921241",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge of origin/main 7b802356 (PageDesk, Browser 1.7): the C SDK gains os88_gfx_blit1_seg, os88_file_read_seq, os88_file_write_seq, os88_vol_kind and os88_ferr_text (thunks over existing cells) and crt0's optional CC_OVL_ROOM/CC_OVL_FAIL hooks - additions within this unreleased PKG_FMT 13 round, nothing built before changes meaning, no bump",
+   "to": 13
   }
  ]
 }

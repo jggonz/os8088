@@ -114,6 +114,7 @@ dhcp_tmo:   dw 0
 dhcp_xid:   times 4 db 0
 dhcp_off:   times 4 db 0
 dhcp_srv:   times 4 db 0
+dhcp_wk:    db 0                ; 1 = the REQUEST out is a wake's (72.5.3)
 dns_sk:     db 0xFF
 dns_try:    db 0
 dns_id:     dw 0

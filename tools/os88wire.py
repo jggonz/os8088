@@ -120,22 +120,32 @@ WIRE_SCMAX = 32
 WIRE_LEVEL = 7
 # THE CELL FENCE (SPEC.md 92.2): (first cell, level) rows. A record whose
 # package far-calls a cell at or past a row's cell needs that row's level.
-# Each row's cell is the table end of the OLDEST kernel the level fences -
-# v1.0.20261014's 0x046D for level 3, the older of the two kernels at PKG_FMT
-# 10 - and not last release's. Level 4's 0x04A5 is v1.0.20261020's table end,
-# the one level-3 Wire there is, level 5's 0x04D7 is v1.0.20261025's, the
-# one level-4 Wire, level 6's 0x04E3 is v1.0.20261026's, the one level-5
-# Wire, and level 7's 0x04E9 is the level-6 Wire's: every package carrying the
-# parts library claims through OSAPI_MEM_P (0x04E9) since SPEC.md 20.12.14,
-# and every package that reports one operation as one bar calls OSAPI_FS_OP
-# (0x04EF), the parts library among them.
-WIRE_CELL_LEVELS = ((0x046D, 3), (0x04A5, 4), (0x04D7, 5), (0x04E3, 6),
-                    (0x04E9, 7))
+# Each row's cell is the table end of the OLDEST RELEASED kernel the level
+# fences, AT THIS PKG_FMT - a new PKG_FMT starts a new generation, every older
+# package refused by WC_PKGFMT anyway, so the rows describe only kernels
+# released at it. PKG_FMT 13 (kernel size pass 19's flag day, which also put
+# every rare cell behind the door and renumbered the table) has none yet, so
+# there are no rows: the first release at 13 is the fence's floor, and the
+# release that first adds a cell after it adds the first row.
+WIRE_CELL_LEVELS = ()
 # The end of the API table the TOP level's kernel has (kernel.asm's
-# osapi_table_end). A call at or past it is newer than any Wire in the field
-# can be told about, so --verify refuses it: the release that first publishes
-# one adds a row, moves this, and raises WIRE_LEVEL here and in wcat.inc.
-WIRE_TABLE_END = 0x04F5
+# osapi_table_end) - at PKG_FMT 13, the flag day's table. A call at or past it
+# is newer than any Wire in the field can be told about, so --verify refuses
+# it: the release that first publishes one adds a row, moves this, and raises
+# WIRE_LEVEL here and in wcat.inc. 0x0236 since OSAPI_FILE_FIND_SEQ (SPEC.md
+# 19.7.1.1) was appended at 0x0233: no kernel at PKG_FMT 13 has been released,
+# so the flag day's table is not in the field yet and the new cell joins the
+# same unreleased generation - the end moves, and no row or level is cut.
+WIRE_TABLE_END = 0x0236
+# ...and the DOOR's (SPEC.md 20.3.4): a rare cell is `int 81h` and an index
+# byte, and a kernel that has no word for an index REFUSES it - CF = 1, AX =
+# 1, the caller's registers kept - rather than jumping anywhere. So a package
+# calling a door cell an older kernel at the same PKG_FMT lacks is told
+# "refused", which it must already handle (SPEC.md 47), and no level is
+# needed for it; door_top() reports the highest index for --verify's line, and
+# fences nothing. (It cannot fence: images that carry data - C64's ROMs, a
+# texture - spell `CD 81 FF` by chance.)
+WIRE_DOOR_VEC = 0x81            # OS88_RARE (apps/os88api.inc)
 # 0x100000, one megabyte: the reader's sanity bound on an ARCHIVE record's
 # WC_SIZE. WIRE_FILEMAX is the wrong bound there and refusing on it is what
 # the machine did to the site's real RUNCPM record at 231,463 bytes - an
@@ -252,15 +262,9 @@ _FARCALL = re.compile(re.escape(b"\x9a") + b"(..)" + re.escape(
     struct.pack("<H", KERNEL_SEG)), re.S)
 
 
-def api_calls(blob):
-    """Every API cell a published .O88 far-calls, or None outside an OS tree.
-
-    The image is unpacked (SPEC.md 20.13) and so is every code part (20.12),
-    because a cell called from an overlay crashes the same machine. Needs
-    tools/os88pkg.py and tools/os88lz.py beside this file; the website's
-    checkout has neither, which is why the manifest DECLARES the level and
-    this side checks it (SPEC.md 92.2's cell fence).
-    """
+def _pieces(blob):
+    """The image and every code part of a published .O88, unpacked (the
+    far-call and door scans' input), or None outside an OS tree."""
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import os88pkg
@@ -268,7 +272,7 @@ def api_calls(blob):
     except ImportError:
         return None
     if pkg_fmt(blob) == 0:
-        return set()
+        return []
     img = os88pkg.image_unwrap(blob)
     pieces = [img]
     if blob[3] & O88_F_PARTS:
@@ -287,8 +291,41 @@ def api_calls(blob):
                                                     fid, ulen))
                 else:
                     pieces.append(blob[start:start + ulen])
+    return pieces
+
+
+def api_calls(blob):
+    """Every API cell a published .O88 far-calls, or None outside an OS tree.
+
+    The image is unpacked (SPEC.md 20.13) and so is every code part (20.12),
+    because a cell called from an overlay crashes the same machine. Needs
+    tools/os88pkg.py and tools/os88lz.py beside this file; the website's
+    checkout has neither, which is why the manifest DECLARES the level and
+    this side checks it (SPEC.md 92.2's cell fence).
+    """
+    pieces = _pieces(blob)
+    if pieces is None:
+        return None
     return {struct.unpack("<H", m.group(1))[0]
             for piece in pieces for m in _FARCALL.finditer(piece)}
+
+
+_DOORCALL = re.compile(re.escape(bytes([0xCD, WIRE_DOOR_VEC])) + b"(.)", re.S)
+
+
+def door_top(blobs):
+    """The highest DOOR index (SPEC.md 20.3.4) any of these packages' images
+    or code parts carries - `CD 81 nn` - or None with none, or outside an OS
+    tree. Like the far-call scan it reads every byte, so data that spells a
+    door site counts too: an upper bound, which is why it fences nothing
+    (WIRE_DOOR_VEC's note)."""
+    top = None
+    for b in blobs:
+        for piece in _pieces(b) or ():
+            for m in _DOORCALL.finditer(piece):
+                v = m.group(1)[0]
+                top = v if top is None or v > top else top
+    return top
 
 
 def cell_level(blobs):

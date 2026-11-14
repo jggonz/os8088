@@ -122,7 +122,10 @@ for name, (enc, pw, osm) in FIX.items():
             check(r.returncode == 0 and b'No syntax or stream encoding errors' in r.stdout and b'WARNING' not in r.stderr + r.stdout,
                   '%s %s: qpdf --check clean%s' % (tag, s_, '' if r.returncode == 0 else ' ' + (r.stdout + r.stderr).decode()[-300:]))
             r = run('mutool', 'draw', '-p', pw, '-o', os.path.join(d, s_ + '.png'), '-r', '40', f, '1-2')
-            bad = [l for l in r.stderr.decode().splitlines() if re.search(r'invalid string length|encryption|error:|warning:|cannot|decrypt|password', l, re.I)]
+            # (a MuPDF built without lcms - Debian's mupdf-tools - says so on
+            # every draw: a fact about the reader, not about the file)
+            bad = [l for l in r.stderr.decode().splitlines() if re.search(r'invalid string length|encryption|error:|warning:|cannot|decrypt|password', l, re.I)
+                   and 'ICC support is not available' not in l]
             check(r.returncode == 0 and not bad, '%s %s: mutool draw, no complaint%s' % (tag, s_, ' ' + '; '.join(bad[:3]) if bad else ''))
         # the source is the output's prefix; the update is classic with /Prev, /Encrypt and the whole ID[0]
         sb = open(os.path.join(d, 'SRC.PDF'), 'rb').read(); ob = open(os.path.join(d, 'S1.PDF'), 'rb').read()

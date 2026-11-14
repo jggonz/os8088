@@ -1,0 +1,374 @@
+# B4: drivers stay in the image, and SLEEP/WAKE re-arms them
+
+> **STATUS (2026-11-11): BUILT, not yet run on the emulator rows or the
+> iron.** The owner took tier 1 with the USB mouse's PicoMEM path, plus
+> HTTPFS and VMMOUSE, in one batch; SOUND is deferred. SPEC.md §51.2.5 is
+> the contract, §72.5.3 the lease, §87.6 steps 4b-6 the wake order. *What
+> landed* below is the record; the costing under it is kept as written on
+> `ba063985` except where *What landed* says the build overrode it, and its
+> tier-3 verdict is rewritten on the owner's principle. Linked from
+> docs/plans/HIBER-RESUME-PLAN.md §5.
+
+## What landed
+
+Six commits on `speed-and-fix` after `256b0cac`:
+
+1. **The mechanism** - `DRVV_SLEEP` (5), `DRVV_WAKE` (6) and
+   `OS88_DRV_WAKES` (bit 15 of header +10) in `drivers/os88drv.inc`, the
+   mirrored `equ`s in `kernel/driver.inc`; `hbm_sweep`'s keep branch (DL = 0
+   only) into the module's `[hbm_kept]`, `hbm_wakem` at both reload sites
+   (`hbm_wake`, `hbm_reload`'s unwind), a refused WAKE `drv_unload_x` and
+   joining the reload. ABI lock re-recorded, `DRV_VER` 14 unreleased, no
+   bump. `t_drvverb` (fast): a declared driver must not refuse the pair, an
+   undeclared one must, and the `WAKES` list pins who declares it.
+2. **ETHER/PCIETHER** - as costed, with three changes the code asked for:
+   the MAC is banked over `dhcp_off`/`dhcp_srv` (no new state); PCIETHER's
+   wake find is `pce_find`, not a bare `pci_probe`, **because SLEEP's
+   `rt_stop` gives the ring's claim back** - the prototype's WAKE would have
+   started the bus master on freed memory; and a refused wake stops what
+   `nic_init` started on the wrong card and leaves `[eth_up]` 0, so DETACH
+   touches no port. The REQUEST is the INIT-REBOOT form (no option 54, +7
+   bytes); `dhcp_wk` is cleared by any DISCOVER, and a NAK clears the whole
+   16-byte address block.
+3. **USBMOUSE** - the PicoMEM path (SLEEP `um_pmdetach`, WAKE
+   `um_pmattach`, `[um_pm]` stepped down first, `[um_alive]` = 1 so a refused
+   wake's DETACH touches nothing). The CH375 path first refused SLEEP and
+   was unloaded as before (ESTIMATED 45-55 bytes and a worker parked
+   mid-transaction); **7. below took it, at +57 bytes.**
+4. **HTTPFS, VMMOUSE** - HTTPFS's WAKE **forgets its connection and KEEPS its
+   index**, against the costing's "drop the index": `hf_fetch` starts from
+   the root and the kernel moves inside a volume without an `FSV_CHDIR`, so a
+   dropped index put the driver at the root under a window standing in a
+   folder. VMMOUSE's WAKE is its attach again and **never refuses**: before
+   B4 the sweep unloaded the row while `[vmm_on]` stayed 1 and the reload
+   attached nothing, so a resumed QEMU's reset backdoor was never re-enabled;
+   a refusal would reopen that window.
+5. **The wake order** - the kept drivers are woken BEFORE `wm_paint_all`, and
+   the busy pointer (`cur_busy_on`) goes up on the frame the paint finished,
+   covering the deletes and every load still owed; `gfx_unlock` takes it off.
+   Every kernel's `hbm_wake`, kern_mega's included.
+6. **The rows** - `b4ether`, `b4ethswap`, `b4lease` (tests/b4wake.py, below).
+7. **USBMOUSE's CH375 path** (the owner: *"it's one specific machine so it
+   matters less than others, but if it can work without costing a ton of
+   bytes it should"*; soft ceiling ~60). **Not a parked worker - a dead
+   one.** SLEEP raises DETACH's stop byte, so the worker leaves at a
+   transaction boundary by the path a detach already proves (`um_wait` and
+   `um_enum` give up on the byte; `.die` releases a held button, `ABORT_NAK`,
+   `RESET_ALL`), and then brings the byte back DOWN under the IF = 0 that
+   carries it into `drv_task`'s exit; SLEEP naps until it reads 0. The
+   picture then holds no task inside the image and a chip with nothing in
+   flight, and there is no park state to get wrong across a POST. WAKE is a
+   full re-init: `ABORT_NAK`, `CHECK_EXIST` (moved out of attach into a
+   resident `um_exist` both share - attach's code is `um_buf`), a READY
+   device refused so the reload's attach judges it as today (a BIOS's boot
+   flash drive), `US_IDLE` with `[um_nenum]` 0, and a new worker through
+   READY's own spawn (`um_alive` now a `mov`, not an `inc`, so trips cannot
+   wrap it). The declaration stays per driver (`OS88_DRV_WAKES`, header bit
+   15) and `t_drvverb`'s `WAKES` list already names USBMOUSE: both paths now
+   answer the pair, so nothing refuses at run time. **Bytes, MEASURED**:
+   1,464 -> **1,521 (+57)**, still 3 sectors (`DRVM_IMG_USBM`, 15 bytes of
+   slack); kernel 0. Attach's `.ok` moved above `.live` to keep `um_buf`'s
+   75 bytes clear of the code attach returns to. **Not on any emulator**:
+   none here carries a CH375 - the `usbmouse` row drives `ch375sim.inc` on
+   MartyPC, and no row hibernates that disk; the field is the first to see a
+   CH375 WAKE.
+
+**kern_mega took the same route afterwards** (the owner: *"Mega needs
+general feature parity; the driver reloads need to [go] there too"*; SPEC.md
+51.2.5). The batch had left it on the old one (`HBM_KEEPS` undefined) for
+two reasons, and each was answered rather than accepted - see *kern_mega*
+below. `HBM_KEEPS` is now defined on every kernel with a hibernate.
+
+### Bytes, MEASURED against `256b0cac`
+
+| | before | after | |
+|---|---|---|---|
+| kernel resident, kern_big / kern_small / kern_emu / kern_mega | | | **0** (`kernsize --json` identical; `kernel.bin` the same length on all four, the build number apart) |
+| ETHER.DRV image + bss | 17,345 | 17,510 | **+165**; file 11,040 -> 11,152. **The claim crossed its rung, 34 -> 35 sectors** (`DRVM_IMG_ETH`) - and the trim below took it to **17,389, 34 sectors again** (19 bytes under the rung; -121 against 17,510) |
+| PCIETHER.DRV image + bss | 17,014 | 17,179 | +165, 34 sectors; **17,058** after the trim (-121), **17,074** with the kept ring (+16) |
+| USBMOUSE.DRV | 1,431 | 1,464 | +33, 3 sectors; the CH375 path (7.) 1,521, +57 more, still 3 |
+| HTTPFS.DRV image + bss | 5,539 | 5,553 | +14, 11 sectors |
+| VMMOUSE.DRV (kern_emu) | 362 | 375 | +13, 1 sector |
+| HIBER.DRV kern_big / kern_emu | 7,567 | 7,715 | +148 (keep branch, `hbm_wakem`, the clock), 22 sectors |
+| HIBER.DRV kern_mega | 11,346 | 11,354 | +8 (the clock alone) |
+
+### The ETHER trim (the owner: "Try to trim ether")
+
+Cold code only, every one behaviour-neutral, measured on `ether.bin`
+(image + bss) against 17,510; PCIETHER.DRV takes every line (shared source):
+
+| change | bytes |
+|---|---|
+| `OS88LINE_NORESYNC` - `os88line_resync` was assembled and never called (SPEC.md 83.4) | -43 |
+| one copy of `Manual`, `Router`, `Name` (the pane's and the Setup window's) | -19 |
+| `sk_rst` - the RST `eth_dropall` and `eth_v_gone` each carried, entering `tcp_ack`'s tail; `eth_dropall`'s slot in AL | -40 |
+| DHCP: the OFFER's server copy once from either source; a NAK's dead `DH_IDLE` store; `dhcp_timer`'s two live states in one compare, BOUND/FAIL by `adc` | -25 |
+| `ec_apply`: the mode stored and ARP flushed once for both arms | -6 |
+| **total** | **-121 -> 17,389, 34 sectors** |
+
+Nothing on the per-packet paths moved: `tcp_ack` (per segment) runs the same
+instructions in a different order, and `dhcp_timer` (per pump) runs fewer.
+The option the brief named and this did not need - code moved past a
+`DRV_H_KEEP` point and given back after attach - was costed and is worse
+here: WAKE re-runs `NIC_WAKE_FIND` and `nic_init`, so only `eth_attach`'s own
+body (~107 bytes) and READY could go, and the 96 (PCIETHER 272) bss bytes the
+loader makes today would have to move before the cut and ship as zeros.
+
+### kern_mega (the parity round)
+
+**What a kept driver costs each route there, read off the code:**
+
+- **The DOS park** (`hbm_dosrun`'s `.parked`/`.held`): the pool is never
+  copied - the park claims its arena out of what is FREE, saves the HMA and
+  conventional memory, and since `[mega_dparked]` `hbm_down` skips
+  `drv_shutdown`. A kept driver's image, claims and LDT selectors are simply
+  where SLEEP left them when the trip comes home to `hbm_wake`, and nothing
+  runs a sleeping driver's code to move the in-place sum the park checks.
+  **Cost: 0.** The previous reading - "the park restores nothing a wake
+  would save" - was wrong: the return still READ every swept driver back
+  (`hbm_reload_m`), DHCP wait included.
+- **The image** (a hibernate, a `Save the session` trip, or a park with no
+  room): every pool block in use rides the extended section. A kept
+  `ETHER.DRV` is its image (17,389 bytes, 17KB) plus its socket pool (held
+  while a package uses the network: up to 33 half-KB, ~16.5KB) - **~34KB
+  more written, Fletcher-summed and read back per trip, ~0.1-0.3 s
+  PREDICTED on a 286's hard disk** - against the reload it replaces: an
+  11KB file, its decode, the probe and READY's DHCP wait (0.2-6 s). Not
+  measured; the field's Victory 286 is the machine to time it on.
+- **Runs**: one per `mx_tab` block was the old list, against `HBX_HMAX` = 62
+  where twelve programs are ~60 (`MX_NBLK`'s note) - a kept NIC was up to
+  two more. **`hbm_xplan` now lists contiguous SPANS**: a block another
+  block ends exactly at is that run's tail, so only a span's head starts a
+  run, grown block by block until nothing starts where it ends. Two passes
+  over the 96-entry table per head (~96 x 96 reads, milliseconds on a 286,
+  once a hibernate). It helps every kern_mega hibernate, kept drivers or
+  not; the stub (megares.inc) and `hbm_xruns` already took any whole-KB run
+  inside the pool, and the head's format is unchanged. The cap was not
+  raised: the head is one sector, and spans make it moot.
+- **PCIETHER's ring**: SLEEP no longer frees it on ANY kernel. `nic_sleep`
+  (a new optional seam name, `nic_stop` when undefined) is `rt_halt` - the
+  bus master off and the chip reset, the claim, `[rt_seg]` and `[rt_win]`
+  kept - and WAKE's `rt_claim` returns at once when `[rt_seg]` stands, so
+  `rt_init` re-points RBSTART at the same ring. The ring is `MEMP_CONV` and
+  pinned (`rt_claim`), so it is in every picture and no compaction moves it;
+  a PCI bus master has no 64KB-page rule. A refused wake's DETACH frees it
+  as before (and `drv_release` sweeps it where a paragraph name cannot be
+  found under protected mode). ETHER.DRV's 8390 holds no memory: its
+  `nic_sleep` is `nic_stop`, byte for byte.
+
+**Bytes, MEASURED against `a84b3933`** (after the trim commit):
+
+| | before | after | |
+|---|---|---|---|
+| kernel resident, all four kernels | | | **0** (`kernsize --json` identical; `kernel.bin` the same length) |
+| HIBER.DRV kern_mega, image + bss | 14,602 | 14,829 | **+227** (file 9,131 -> 9,296): the keep branch, `hbm_wakem` and the span lister; a module, read when asked for |
+| HIBER.DRV kern_big | 10,963 | 10,963 | 0 |
+| PCIETHER.DRV image + bss | 17,058 | 17,074 | **+16** (`rt_halt`'s vector and its door, `rt_claim`'s test), 34 sectors |
+| ETHER.DRV | 17,389 | 17,389 | 0 |
+
+**Rows** (NOT run here; the final pass names them): kern_mega's are Bochs
+or 86Box - QEMU lets code write through CS and never runs kern_mega's 286
+reset path (docs/BOCHS.md, docs/86BOX.md): `megahiber`, `megahibfull`
+(the span lister against a pool covered by pinned records), `megap2hiber`,
+`megahma`, `megadosroom` (the image route of a trip), `megakbtrip` (the
+park route), `megadosp`. On QEMU: `pciether` and `pcibig` (the attach and
+the claim), and `b4ether`/`b4ethswap`/`b4lease` (kern_big, ETHER.DRV).
+**Not covered by any row**: a kept NIC on kern_mega (no Bochs or 86Box
+harness here pairs kern_mega with a NIC: Bochs's ne2k and the
+`pentium-pciether` 86Box machine are the candidates), and PCIETHER's
+SLEEP/WAKE on any kernel (a `b4wake.py` arm on the `pentium-pciether`
+profile, or QEMU's `-device rtl8139` beside `pciether.py`'s machine).
+
+### Seconds saved, PREDICTED
+
+Per kept driver, on BOTH routes (the resume and the DOS return run the same
+`hbm_wake`), against the reload it replaces: the file (`int 13h` calls at
+~400 ms each off a floppy, a few tens of ms off a hard disk), its LZ4 decode
+(~40 cycles a byte at 4.77 MHz), the probe, and READY.
+
+| driver | hard disk | floppy-booted |
+|---|---|---|
+| ETHER / PCIETHER | **~0.3-0.5 s + the DHCP wait** (READY's `eth_dhcp_wait`: typically 0.2-2 s, up to `DHCP_WAIT` 6.0 s with no server - never measured on the iron) | ~1.0-1.3 s + the DHCP wait |
+| USBMOUSE (PicoMEM, and the CH375 since 7.; the CH375's re-enumeration is the worker's, after the desktop, as at a reload) | ~0.05-0.1 s | ~0.4-0.8 s |
+| HTTPFS | ~0.1-0.15 s (a 3.6KB file, ~0.03 s decode) | ~0.4-0.8 s |
+| VMMOUSE (kern_emu, a VM) | negligible - and the pointer now works after a resume | |
+
+On top of that, the stall moves: what is still read (SOUND, a
+refused wake, a suspend's rows) is read behind the busy pointer rather than
+behind a desktop that looks ready.
+
+### Rows
+
+New (soak, QEMU - the closed list, entry 5; NOT run by the batch, the final
+pass runs them; `secs` estimated, not measured): **`b4ether`** (kept,
+woken, no DISCOVER, one INIT-REBOOT REQUEST; red arm `--red` clears the
+header bit in the running driver), **`b4ethswap`** (another MAC: refused,
+reloaded, a DISCOVER), **`b4lease`** (ACK / NAK / silence against the row's
+own DHCP server, behind `-netdev socket`). **Not written**: `kdreturnnet` -
+no QEMU harness drives the DOS handoff (`kdreturn` is MartyPC's, which has
+no NIC), and the DOS return runs the very `hbm_wake` the three rows drive;
+`b4usbm` - nothing in the tree models the PicoMEM's USB mouse. Existing rows
+the change reaches: `hibernate`, `hibernatedrv`, `hibernatem`, `hibsumok`,
+`hibsumbad`, `hmahiber`, `p2hiber`, `win16hiber`, `stikhiber`, `kdreturn`,
+`kdreturnf`, `hmadosret`, `megahiber`, `megap2hiber`, `ethernet`,
+`pciether`, `ethcfg`, `httpmount*`, `usbmouse`, `vmmouse`, and fast
+`drvverb`, `drvmem`, `abilock`, `cswrite`.
+
+## What the sweep takes today
+
+`hbm_sweep` skips DISK, FILE, FILE2, CD, EMS (and VESA's row). So it unloads,
+and the wake (and the DOS return, after `wm_paint_all`, input locked)
+reloads: **SOUND** (row 0), **ETHER/PCIETHER** (DRVC_NET), **USBMOUSE**
+(DRVC_POINT), **HTTPFS** (DRVC_HTTP), **VMMOUSE** (an OVL row, kern_emu).
+**NET.DRV is DRVC_FILE and is already kept** — tier 2 owes it nothing.
+
+## Mechanism (all tiers)
+
+- **Declared opt-in**: bit 15 of header +10 (the FSV_SIZE word, "written and
+  not read"; +15 is full). `OS88_DRV_WAKES` sets it. Verbs `DRVV_SLEEP` (5)
+  and `DRVV_WAKE` (6) in os88drv.inc; mirrored `equ`s in driver.inc.
+- **HIBER.DRV**: in `hbm_sweep`'s `.take`, when DL = 0 (the two hibernate
+  callers; `hbm_drvsusp` always passes DRVC_NET, so OSAPI_DRV_SUSPEND is
+  untouched), a flagged row is sent SLEEP and noted in a module word
+  `hbm_kept` instead of `[hb_drvmask]`; a SLEEP refusal is today's unload.
+  `hbm_reload_m` first spends `hbm_kept`: WAKE each; **CF=1 → `drv_unload_x`
+  and the row joins DX**, so today's `hdl_load` re-probe is the fallback. The
+  failure unwind (`hbm_reload`) gets it for free. Split so the WAKEs run
+  **before** the DOS return's `wm_paint_all` (ms), the remaining reloads after.
+- **ABI**: unreleased DRV_VER 14, so `abilock.py --update` without a bump
+  (the prototype trips abilock exactly as predicted). An old driver has bit
+  15 clear and is unloaded as today.
+
+## Tier 1 — ETHER (and PCIETHER, same ethdrv.inc)
+
+SLEEP: `eth_busy`=1 (held until WAKE), `eth_dropall` (RST every socket),
+`nic_stop` — PCIETHER's bus-master ring must stop before the picture. WAKE:
+bank the MAC, re-find at the same place (NE2000: `ne_probe` at `[eth_base]`;
+RTL8139: `pci_probe`, the BAR may move after POST, no re-claim), `nic_init`,
+**MAC compare → CF=1 on a different card**, ARP cache flushed, mutex freed,
+then the **lease bypass**: if `DH_BOUND` and not manual, `dhcp_off`=`eth_ip`,
+`dhcp_try`=0, `dhcp_wk`=1, `dhcp_request` — non-blocking. ACK keeps (clears
+`dhcp_wk`); NAK zeroes `eth_ip` and goes to the existing DISCOVER;
+`dhcp_timer` turns a wake REQUEST's DH_FAIL into DH_BOUND (silence keeps).
+Note `dhcp_request` sends option 54 (the SELECTING form); RFC 2131's
+INIT-REBOOT omits it (+~6 bytes for a flag) — most servers ACK either.
+
+| | bytes |
+|---|---|
+| kernel resident, every kernel | **0** (equs; `DRVM_IMG_ETH` 34→35 is a constant) |
+| ETHER.DRV image+bss | **17,345 → 17,509 (+164) MEASURED**; packed 11,040 → 11,146 (+106). All resident (no DRV_H_KEEP). **Crosses a granule**: 63 bytes of slack, so the claim goes 34→35 sectors |
+| PCIETHER.DRV | **17,014 → 17,181 (+167) MEASURED**, packed +129, stays 34 sectors |
+| HIBER.DRV | ESTIMATED **+110–140** (sweep branch ~58, wake loop ~62, `hbm_kept` 2): kern_big 7,565 → ~7,690, kern_mega 11,344 → ~11,470; transient (module) |
+| kern_mega | 0 conventional; but a kept HIGHOK image (~17KB) and its HICLAIM socket pool (up to ~16KB) now ride the image's **extended section**, written and read each time (~+0.1–0.3 s PREDICTED on a 286 HDD) |
+| kern_big image | 0 (the image is 0..`[mem_top]`) |
+
+Time saved per resume and per DOS return (the same reload on both routes):
+the ETHER reload is a 22-sector file (2–3 `int 13h` calls; ~1 s off a floppy),
+an LZ4 decode of ~17KB (~0.15 s at 4.77 MHz at the boot decoder's 40
+cycles/byte, §20.13), the probe (~20 ms), and **`eth_ready`'s blocking DHCP —
+up to DHCP_WAIT = 6.0 s, never measured on the iron**.
+
+| machine | resume | DOS return |
+|---|---|---|
+| (a) 5150 #1 (ST-225, no NIC) | **0** — no ETHER row | 0 |
+| (b) PicoMEM 5150 #2 | **~0.5–2.5 s** typical; **~6.3 s** with no DHCP answer | same; it is the post-paint stall |
+| (c) Victory 286 (kern_big, pmsys720) | **~0.4–2.2 s**; +~0.6–1 s more if booted off A: | same |
+
+Risk: **moderate** — one polled driver, no IRQ, identity is a MAC. The new
+failure is a server that ACKs nothing and silence keeping a stale address on a
+moved machine (the NAK path covers a server that answers).
+
+## Tier 2 — + SOUND, USBMOUSE
+
+**USBMOUSE** (ESTIMATED **+40–55**, image 1,431, stays 3 sectors, all
+resident): the PicoMEM path's SLEEP is `um_pmdetach` and WAKE `um_pmattach`
+(detect, hook int 33h, enable) — both already resident; SLEEP **must** unhook
+int 33h for the DOS handoff. The CH375 path needs a park byte the worker
+honours and a re-enumerate (CHECK_EXIST echo, `um_state` reset).
+
+**SOUND** (ESTIMATED **+110–170**, nearly all **below `snd_keep`, so resident
+on every SOUND machine**; image 10,478, keep 5,828 / 8,644): SLEEP = the
+DRVV_TIER off-leg (`sbl_detach`: DSP halt, worker out, vector off, claims
+freed) plus the OPL key-off factored out of `snd_detach`; WAKE = `sbl_attach`
+(reset at the settled base + the 12KB page-safe claim, resident because
+DRVV_TIER uses it) + a DSP-version compare (identity), a minimal OPL re-init
+(`opl_init` is attach-only, 185 B, given back), MPU UART re-entry, mixer
+re-apply. **The PicoMEM switches its Sound Blaster OFF on every reset**
+(picomem.inc), and `pm_init` (227 B) is given back after attach: a re-enable
+from banked port/IRQ/DMA is ~40–60 B in PM_RES (resident on PicoMEM machines
+only), or +227 to keep `pm_init` whole. HIBER.DRV: 0 more.
+
+Time (incremental): (a) 0; (b) ~0.3–0.5 s (SOUND ~0.2–0.4: 9KB file,
+~0.09 s decode, PM BIOS calls, IRQ discovery; USB ~0.05–0.1); (c) ~0.1–0.2 s
+HD, +~1–1.5 s floppy-booted. Risk: **high** — a stream mid-play (handled as a
+Control Panel tier switch mid-stream), the 8237 reset by POST (nothing kept:
+the next open programs it), hiber-14's masks (SLEEP closes the line first),
+and on the DOS return (no POST) a program that renegotiated the PicoMEM's IRQ.
+
+## Tier 3 — the rest, and a generic mechanism
+
+**Rewritten on the owner's principle** - *"We are not targeting my machines
+only, we are building an OS"*: a driver is judged by its bytes and its risk,
+never by whether the owner's three machines run it. The costing's first
+verdict ("~0 s on the owner's machines, do not build") answered the wrong
+question.
+
+**HTTPFS and VMMOUSE: TAKEN, on bytes and risk.** HTTPFS owns no hardware,
+so its wake is a few bytes with nothing to get wrong (the kept connection
+forgotten - its socket died with the card's sleep - and the index kept, see
+*What landed*); every machine with a Web drive mounted skips a reload and the
+drive's zone is never withdrawn and re-added. VMMOUSE is kern_emu's, so every
+VM user's: its wake is its own attach, 13 bytes, and it FIXES a resume that
+came back with the pointer dead (the reload never re-attached the backdoor).
+
+**A generic "re-attach in place": REFUSED, for reasons that hold on every
+machine.** A default WAKE that re-runs the attach without re-reading the file
+fails three ways whoever owns the machine: a driver that gives its attach
+code back (`DRV_H_KEEP`, SOUND) has nothing to re-run - keeping it is
+1.8-4.6 KB of heap all session; every attach assumes a freshly loaded image
+(OS88_STATE zero, `DRVE_TWICE`) and the kernel does not know a driver's state
+span to re-zero it; and an attach + READY re-runs ETHER's DHCP wait - the one
+cost worth saving. A per-driver verb is an audit each driver passes on its
+own terms, which is what this batch did.
+
+**SOUND: DEFERRED, on resident bytes and risk.** Its wake is ~110-170 bytes
+nearly all below `snd_keep` - resident on EVERY Sound Blaster machine, not
+only the ones that hibernate - plus the PicoMEM's per-reset re-negotiation
+(~40-60 B of `PM_RES`, or +227 to keep `pm_init`), and it is the
+highest-risk wake in the tree: a stream mid-play, the 8237 reset by POST, a
+DOS program that renegotiated the card's IRQ. It is worth its bytes only once
+the field says the ~0.2-0.4 s SOUND reload is felt.
+
+## Rows (as costed)
+
+Existing: `hibernate`, `hibernatedrv`, `hibernatem`, `hibsumok`,
+`hibsumbad`, `hmahiber`, `p2hiber`, `kdreturn`, `kdreturnf`, `kdreturnm`,
+`megahiber`, `megahibfull`, `megap2hiber`, `ethernet`, `pciether`, `ethcfg`,
+`netcoexist`, `netpromise`, `wire`, `httpmount`, `drvclaim`, `stikhiber`,
+`win16hiber`; fast `drvverb`, `drvmem`, `abilock`; tier 2 adds `sound`,
+`sndkeep`, `sndonce`, `sndmove`, `dossnd`, `picomem`, `usbmouse`, `emspico`.
+New: **`b4ether`** (QEMU, ETHER is on the closed list: hibernate with a lease
+and an open socket, resume; the row's segment unchanged, no DISCOVER, one
+REQUEST for the same address; red arm: the header bit cleared → reloaded),
+**`b4ethswap`** (another `-nic mac=` at resume → CF=1 → reload),
+**`b4lease`** (silence keeps; NAK → DISCOVER, needs a host DHCP fixture
+since slirp never NAKs), **`kdreturnnet`** (DOS return: WAKE before the
+paint, no stall); tier 2 **`b4sound`** (MartyPC SB machine, a stream playing
+at hibernate), **`b4pmsnd`** (`os8088_5150_herc_pm2_gla`: the SB re-enabled
+after reset), **`b4usbm`**; and `t_drvverb` extended: a flagged driver must
+not refuse SLEEP/WAKE.
+
+## Recommendation (as costed; tier 3 superseded above)
+
+1. **Tier 1: take it, with the USB mouse's PicoMEM path folded in** (it is
+   only routing), when the DOS return's stall is fixed — it is that stall on
+   both network machines. About +270 B shipped plus HIBER.DRV, 0 resident
+   kernel bytes; ETHER's +164 costs a heap granule (+512 while loaded), so
+   decide that byte count on its merits. Ask the field first for the one
+   number the saving rests on: ETHER's DHCP time on the PicoMEM.
+2. **Tier 2 (SOUND): defer** until tier 1 is on the iron and the field says
+   the ~0.2–0.4 s SOUND reload is felt; ~150 resident bytes on every SOUND
+   machine plus the PicoMEM's per-boot negotiation, at high risk.
+3. ~~**Tier 3: do not build**, generic or per driver: ~0 s on the owner's
+   machines.~~ Superseded: HTTPFS and VMMOUSE taken on bytes and risk, the
+   generic mechanism refused on reasons every machine shares (*Tier 3*).

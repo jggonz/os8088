@@ -39,6 +39,7 @@ import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+import modstate                                    # noqa: E402
 import dispcp                                               # noqa: E402
 
 S = os88sym.linear
@@ -52,9 +53,11 @@ def b(m, name):
 
 
 def row(m, eq):
-    """mod_tab's MOD_EXT row: dw seg, dw file. The segment is the claim."""
-    return int.from_bytes(m.read(S("mod_tab") + eq["MOD_EXT"] * 4, 2),
-                          "little")
+    """mod_tab's MOD_EXT row: dw seg, dw file. The segment is the claim -
+    while it is LIVE: a drop on kern_big KEEPS the image (SPEC.md 2.8.3),
+    the row naming it and its slots on mod_gone, and that reads 0 here as
+    the "dropped" every arm below means (modstate.py)"""
+    return modstate.live(m, "MOD_EXT")
 
 
 def state(m, eq):

@@ -85,8 +85,7 @@ def _pat_row(m, seg, row, col=4):
     from something else.
     """
     base = _w(m, seg, "pt_base")
-    off = int.from_bytes(m.read(_boff(seg, "pt_rowoff") + row * 2, 2), "little")
-    sg = int.from_bytes(m.read(_boff(seg, "pt_rowseg") + row * 2, 2), "little")
+    off, sg = dispapps.pt_row(m, lambda n: _boff(seg, n), row)
     return m.read((sg << 4) + off + col, 1)[0]
 
 

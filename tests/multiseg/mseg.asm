@@ -560,10 +560,12 @@ ms_hex4:
     pop di
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) -------------------------
 ms_tpl:
     dw 120, 84, 304, 94             ; x, y, w, h
-    dw ms_title, ms_paint, ms_onkey, 0
+    dw ms_title, ms_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ms_cls, 0, PAINT, ms_paint, ONKEY, ms_onkey
 
 ms_title:  db 'MSEG '
 ms_t_n:    db '0'

@@ -228,7 +228,8 @@ ty_scan:
 .f2:
     mov [ty_ord], cx
     mov di, ty_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .end
     mov [ty_ord], cx
     cmp word [ty_find + TY_FIND_TY], OSAPI_FT_DIR
@@ -606,7 +607,8 @@ ty_dive:
     xor cx, cx
 .f:
     mov di, ty_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .no
     mov [ty_ord], cx
     cmp word [ty_find + TY_FIND_TY], OSAPI_FT_DIR
@@ -779,10 +781,15 @@ ty_open:
 .sized:                             ; size's high word): the old ceiling
     cmp dx, TY_FACE_KB
     ja .rderr                       ; past the ceiling: what the old 8KB read
-    mov ax, dx                      ; answered for it, FERR_BIG and TYE_READ
-    mov cx, dx                      ; all of it is the read's (CLAIM_DMA's
-    push ax                         ; 64KB question)
-    call OSAPI_MEM_CLAIM_DMA
+    push dx                         ; answered for it, FERR_BIG and TYE_READ
+    mov ax, dx                      ; all of it is the read's (CLAIM_DMA's
+    mov cl, 6                       ; 64KB question), in paragraphs
+    shl ax, cl
+    mov cx, ax
+    push bx
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call OSAPI_MEM_P
+    pop bx
     pop cx                          ; CX = the KB claimed
     jnc .got
     mov al, TYE_NOMEM
@@ -1210,10 +1217,13 @@ ty_cache:
     call OSAPI_MEM_FREE             ; face reuses it. A taller one gives it
     mov word [ty_psseg], 0          ; back and claims again
 .claim:
-    call OSAPI_MEM_CLAIM            ; AX = KB, preserved
+    mov [ty_pskb], al               ; (read only while [ty_psseg] names a claim)
+    mov cl, 6
+    shl ax, cl                      ; the KB, in paragraphs
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [ty_psseg], dx
-    mov [ty_pskb], al
 .have:
     mov al, [ty_curface]
     mov [ty_psface], al

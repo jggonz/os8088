@@ -143,6 +143,11 @@ tp_entry:                       ; (an entry proc answers BX = its window and
     mov si, tp_tpl
     call OSAPI_WM_CREATE
     jc .out
+%ifdef OS88UI_SBDRAG
+    cmp al, WC_ONDRAG + 1       ; AL = the class slots this kernel dispatches
+    sbb al, al                  ; (SPEC.md 11.104): CF = 1 on kern_small, no
+    mov [tp_nodrag], al         ; tracking edge, so no thumb gesture either
+%endif                          ; (13.10.7.1). CF is the `clc` below
     mov si, tp_menus
     call OSAPI_MENU_SET
     mov [tp_win], bx
@@ -154,48 +159,6 @@ tp_entry:                       ; (an entry proc answers BX = its window and
     ; The proc is a bare `ret` of ours: nothing here holds a segment of
     ; its own region.
     OS88_REGION_MOVABLE tp_seg_ok
-    mov ax, tp_onclose          ; SPEC.md 75.1: every way of closing us asks
-    call OSAPI_WM_ONCLOSE       ; first, so an edited document is never lost
-    mov ax, tp_onup             ; SPEC.md 13.7/13.8.1: the bar's seven fire on
-    call OSAPI_WM_ONMOUSEUP     ; the RELEASE and follow the pointer between
-    mov ax, tp_ondrag           ; the edges. Not template words, so they are
-    call OSAPI_WM_ONDRAG        ; set after wm_create like MENU_SET above
-%ifdef OS88UI_SBDRAG
-    sbb al, al                  ; CF = 1 on kern_small (SPEC.md 13.10.7.1): no
-    mov [tp_nodrag], al         ; tracking edge, so no thumb gesture either -
-    mov ax, tp_ontimer          ; read off OSAPI_WM_ONDRAG's own CF, so nothing
-    call OSAPI_WM_ONTIMER       ; goes between. Then 13.10.5.4.2's PAUSE commit
-%endif
-    mov ax, tp_onwheel          ; SPEC.md 13.18: the mouse wheel scrolls the
-    call OSAPI_WM_ONWHEEL       ; pane under the pointer (does nothing on
-                                ; kern_small, which has no wheel)
-    mov al, 1
-    call OSAPI_WM_SIZABLE
-    mov al, 1
-    call OSAPI_WM_SNAP
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
-    call OSAPI_WM_SAVEU         ; ...AND IT PROMISES, WITH NOTHING TO REMEMBER
-                                ; (SPEC.md 11.96.1). This app has NO WORKER at
-                                ; all - tp_onwake is a one-shot the kernel
-                                ; calls once the window is on the glass, not a
-                                ; background painter - and the window ABI has
-                                ; no periodic hook, so its content cannot
-                                ; change while it is not drawing. There is no
-                                ; mode to toggle and no br_promise to write.
-                                ;
-                                ; ...AND IT IS TWO COLOURS (SPEC.md 11.96.17),
-                                ; which is not a claim to make lightly and is
-                                ; simply true here: CBLACK and CWHITE and
-                                ; nothing else in 43 uses, this being a
-                                ; black-and-white TeX pad. That is what gets
-                                ; it a cache AT ALL on a VGA - 628x400 is the
-                                ; largest window in the system and its content
-                                ; is 123,458 bytes at four planes, past
-                                ; wm_su_kb's 64,512 ceiling and refused;
-                                ; 30,875 at one, and taken. The repaint it
-                                ; skips is source text beside a typeset
-                                ; preview, which is more lettering than any
-                                ; other window has
     mov cx, TP_MIN_W            ; ...AND A FLOOR UNDER THE GROW BOX (SPEC.md
     mov dx, TP_MIN_H            ; 11.100.2). Two panes with minimums cannot be
     call OSAPI_WM_MINSIZE       ; expressed by WMIN_W, which is one number for
@@ -205,8 +168,6 @@ tp_entry:                       ; (an entry proc answers BX = its window and
                                 ; one window in the tree with somewhere to put
                                 ; them: the split stays where it is and every
                                 ; extra column goes to the page
-    mov si, tp_onabout
-    call OSAPI_ABOUT_SET
     call tp_rgn_all             ; the preview region is bss, and bss is ZERO -
                                 ; which as a region means "nothing is
                                 ; drawable". Every painter sets it, but this
@@ -241,10 +202,7 @@ tp_entry:                       ; (an entry proc answers BX = its window and
 .ready:
     mov byte [tp_needttl], 1
     mov byte [tp_needset], 1
-    mov bx, [tp_win]            ; SPEC.md 54.10: the kernel calls this once our
-    mov ax, tp_onwake           ; window is on the glass, and the launch .TEX
-    call OSAPI_WM_ONWAKE        ; loads in front of it rather than inside the
-                                ; repaint that is still putting it there
+    mov bx, [tp_win]
     clc                         ; entry CF=1 means launch failed
 .out:
     pop si
@@ -329,7 +287,7 @@ tp_deferred_ld:
 ; still the document's ceiling and the status strip still says so.
 tp_claim_src:
     mov ax, TP_SRC_KB0 * 64     ; in PARAGRAPHS, as tp_srcpara regrows it
-    xor cx, cx                  ; (SPEC.md 50.3.7)
+                                ; (SPEC.md 50.3.7)
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     jc .bad
@@ -943,12 +901,20 @@ tp_seg:
     cmp bx, dx
     jne .nh
     mov bx, cx                  ; hline: AX=x1, BX=x2, DX=y
+    push cx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
+    pop cx
     ret
 .nh:
     cmp ax, cx
     jne .fr
+    push cx
+    push dx
     call OSAPI_GFX_VLINE        ; AX=x, BX=y1, DX=y2, which is what the clip
+    pop dx
+    pop cx
     ret                         ; already left behind
 .fr:
     call OSAPI_GFX_FRAME
@@ -1395,7 +1361,9 @@ tp_draw_stat:
     mov bx, [tp_ox]
     add bx, [tp_cw]
     dec bx
+    push ax
     call OSAPI_GFX_HLINE
+    pop ax
     mov di, tp_nbuf
     push di
     call tp_fmt_stat
@@ -5610,7 +5578,31 @@ tp_u16_di:
 ; -----------------------------------------------------------------------------
 tp_tpl:
     dw 6, 22, TP_WIN_W, TP_WIN_H
-    dw tp_s_name, tp_paint, tp_onkey, tp_onclick
+    dw tp_s_name, tp_cls
+; ...and its CLASS (SPEC.md 11.104). Every way of closing us asks first, so an
+; edited document is never lost (75.1); the bar's seven fire on the RELEASE
+; and follow the pointer between the edges (13.7/13.8.1); 13.10.5.4.2's PAUSE
+; commit is the timer; the wheel scrolls the pane under the pointer (13.18);
+; the kernel calls the wake once our window is on the glass, and the launch
+; .TEX loads in front of it (54.10).
+;
+; ...AND IT PROMISES, WITH NOTHING TO REMEMBER (SPEC.md 11.96.1). This app has
+; NO WORKER at all - tp_onwake is a one-shot, not a background painter - and
+; the window ABI has no periodic hook, so its content cannot change while it
+; is not drawing. ...AND IT IS TWO COLOURS (SPEC.md 11.96.17), which is simply
+; true here: CBLACK and CWHITE and nothing else in 43 uses. That is what gets
+; it a cache AT ALL on a VGA - 628x400 is the largest window in the system and
+; its content is 123,458 bytes at four planes, past wm_su_kb's 64,512 ceiling;
+; 30,875 at one, and taken
+%ifdef OS88UI_SBDRAG
+  %define TP_C_TIMER tp_ontimer
+%else
+  %define TP_C_TIMER 0
+%endif
+    OS88_CLASS tp_cls, WF_SIZABLE | WF_SAVEU | WF_1BPP, PAINT, tp_paint, \
+               ONKEY, tp_onkey, ONCLICK, tp_onclick, ABOUT, tp_onabout, \
+               ONWAKE, tp_onwake, ONCLOSE, tp_onclose, ONMOUSEUP, tp_onup, \
+               ONTIMER, TP_C_TIMER, ONDRAG, tp_ondrag, ONWHEEL, tp_onwheel
 
     OS88_MENUSET tp_menus, tp_s_name, tp_oncmd
         OS88_MENU tp_m_file, tp_i_file, 6

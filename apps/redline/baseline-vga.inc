@@ -1,22 +1,22 @@
 ; Generated from actual MartyPC measurements; SPEC.md 103.3.
 ; Provenance and trials: apps/redline/reference-vga.json.
 rl_baseline_vga:
-    dd 64045
-    dd 62662
-    dd 100572
-    dd 141933
-    dd 92960
-    dd 400883
-    dd 129681
-    dd 251241
-    dd 431774
-    dd 1179648
-    dd 89973
-    dd 465282
-    dd 27983872
-    dd 19857408
-    dd 12648448
+    dd 53870
+    dd 58996
+    dd 92364
+    dd 127495
+    dd 93481
+    dd 386078
+    dd 95220
+    dd 238220
+    dd 363647
+    dd 1048576
+    dd 90110
+    dd 451190
+    dd 26301781
+    dd 18961749
+    dd 12277077
     dd 1114112
-    dd 373642
-    dd 6881280
-    dd 5898240
+    dd 374009
+    dd 6422528
+    dd 5286570

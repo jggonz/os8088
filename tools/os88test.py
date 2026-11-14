@@ -1264,6 +1264,153 @@ def _whole_tier_refusal(rows):
         % (total, hours))
 
 
+# THE INPUT-HASH CACHE (`fast` only). A row that declares `inputs=` in
+# tests/suite.py is skipped as "cached ok" when it last PASSED against a key
+# that still matches: the row's own command, needs and declarations, the
+# CONTENTS (never mtimes) of its script, of every repo-local module the script
+# imports (transitively), of every `*.txt` registry its sources name, of every
+# file its `inputs=` globs match, and the version of each tool it uses (Python
+# always, nasm when it needs or names it). `full` and `soak` ignore the cache
+# and run everything; a row with no `inputs=` always runs; `--no-cache` (or
+# OS88_TESTCACHE=0) reruns every row. The record lives in build/testcache/,
+# so `make clean` drops it, and a failure deletes the row's entry.
+#
+# THE RISK IS A STALE PASS: a row that reads a file its declaration does not
+# name is not rerun when that file changes. So a declaration is WIDE (all of
+# apps/**/*.inc, not the three files the row happens to care about today),
+# and a row that reads build/ artefacts or `git ls-files` is not declared.
+CACHE_DIR = os.path.join(ROOT, "build", "testcache")
+CACHE_FILE = os.path.join(CACHE_DIR, "fast.json")
+_HASHES = {}
+_HASH_LOCK = threading.Lock()
+_TOOLVER = {}
+
+
+def _file_digest(path):
+    import hashlib
+    with _HASH_LOCK:
+        got = _HASHES.get(path)
+    if got is None:
+        try:
+            with open(path, "rb") as f:
+                got = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            got = "-"
+        with _HASH_LOCK:
+            _HASHES[path] = got
+    return got
+
+
+def _tool_version(name):
+    if name not in _TOOLVER:
+        try:
+            r = subprocess.run([name, "-v"], capture_output=True, text=True,
+                               timeout=30)
+            _TOOLVER[name] = (r.stdout + r.stderr).strip()
+        except (OSError, subprocess.SubprocessError):
+            _TOOLVER[name] = None
+    return _TOOLVER[name]
+
+
+_IMPORT = None
+_TXT = None
+
+
+def _local_closure(scripts):
+    """The scripts plus every repo-local .py they import, transitively, plus
+    every `*.txt` file their text names that exists under tests/ or at that
+    repo-relative path. Repo-local means tools/, tests/ or tests/unit/."""
+    import re
+    global _IMPORT, _TXT
+    if _IMPORT is None:
+        _IMPORT = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w., ]+))",
+                             re.M)
+        _TXT = re.compile(r"\.txt\b")
+    dirs = [os.path.join(ROOT, d) for d in ("tools", "tests",
+                                             os.path.join("tests", "unit"))]
+    seen, todo, txts = set(), list(scripts), set()
+    while todo:
+        f = todo.pop()
+        if f in seen or not os.path.isfile(f):
+            continue
+        seen.add(f)
+        try:
+            src = open(f, errors="replace").read()
+        except OSError:
+            continue
+        for m in _TXT.finditer(src):
+            k = m.start()
+            while k > 0 and (src[k - 1].isalnum() or src[k - 1] in "_./-"):
+                k -= 1
+            name = src[k:m.end()]
+            for c in (os.path.join(ROOT, name),
+                      os.path.join(ROOT, "tests", os.path.basename(name))):
+                if os.path.isfile(c):
+                    txts.add(c)
+        if not f.endswith(".py"):
+            continue
+        for m in _IMPORT.finditer(src):
+            for mod in (m.group(1) or m.group(2)).split(","):
+                mod = mod.strip().split(" as ")[0].strip().split(".")[0]
+                for d in dirs:
+                    c = os.path.join(d, mod + ".py")
+                    if os.path.isfile(c):
+                        todo.append(c)
+    return sorted(seen | txts)
+
+
+def cache_key(row):
+    """The row's cache key, or None when it declares no inputs."""
+    import glob
+    import hashlib
+    inputs = getattr(row, "inputs", ())
+    if not inputs:
+        return None
+    h = hashlib.sha256(repr((row.cmd, row.needs, inputs,
+                             sys.version_info[:3])).encode())
+    cmd = [row.cmd] if isinstance(row.cmd, str) else list(row.cmd)
+    scripts = [os.path.join(ROOT, a) for a in cmd
+               if a.endswith(".py") and os.path.isfile(os.path.join(ROOT, a))]
+    files = set(_local_closure(scripts))
+    for g in inputs:
+        for f in glob.glob(os.path.join(ROOT, g), recursive=True):
+            if os.path.isfile(f):
+                files.add(f)
+    py = [f for f in files if f.endswith(".py")]
+    files |= set(_local_closure(py))
+    names_nasm = "nasm" in row.needs
+    for f in sorted(files):
+        d = _file_digest(f)
+        h.update(os.path.relpath(f, ROOT).encode() + b"\0" + d.encode())
+        if f.endswith(".py") and not names_nasm and f in scripts:
+            try:
+                names_nasm = "nasm" in open(f, errors="replace").read()
+            except OSError:
+                pass
+    if names_nasm:
+        h.update(repr(_tool_version("nasm")).encode())
+    return h.hexdigest()
+
+
+def cache_load():
+    import json
+    try:
+        with open(CACHE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def cache_save(store):
+    import json
+    import tempfile
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    fd, t = tempfile.mkstemp(dir=CACHE_DIR)
+    with os.fdopen(fd, "w") as f:
+        json.dump(store, f, indent=1, sort_keys=True)
+    os.replace(t, CACHE_FILE)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Run the os8088 regression suite.",
@@ -1318,6 +1465,14 @@ def main():
                     help="report the tier budget but do not fail on it")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="print every row's output, not just the failures")
+    ap.add_argument("--no-cache", action="store_true", dest="no_cache",
+                    help="rerun every row. Without it, `fast` skips a row "
+                         "that declares `inputs=` as 'cached ok' when it last "
+                         "PASSED and its script, imports, registries, "
+                         "declared inputs and tool versions hash identical "
+                         "(contents, not mtimes; kept in build/testcache/). "
+                         "`full` and `soak` never use the cache. "
+                         "OS88_TESTCACHE=0 does the same as this flag.")
     a = ap.parse_args()
     scratch_tmpdir()
 
@@ -1382,6 +1537,26 @@ def main():
 
     t0 = time.time()
     results = []
+    # THE CACHE (see cache_key): fast only, and only for declared rows. Keys
+    # are taken BEFORE anything runs, so an edit made while the tier runs is
+    # a miss next time rather than a pass recorded against the new bytes.
+    use_cache = (a.tier == "fast" and not a.no_cache
+                 and os.environ.get("OS88_TESTCACHE", "1") != "0")
+    store = cache_load() if use_cache else {}
+    keys, hits = {}, []
+    if use_cache:
+        for r in want:
+            k = cache_key(r)
+            if k is None:
+                continue
+            keys[r.name] = k
+            if store.get(r.name) == k and not (set(r.needs) - caps):
+                hits.append(r)
+        if hits:
+            names = set(r.name for r in hits)
+            want = [r for r in want if r.name not in names]
+            for r in hits:
+                results.append(Result(r, True, False, 0.0, "", "cached", 0.0))
     par = [r for r in want if not r.serial and not r.builds]
     ser = [r for r in want if r.serial or r.builds]
     # ...`builds` keeps a row OUT of the shared lane whatever the row says
@@ -1419,6 +1594,10 @@ def main():
                  if nb and bpc > 1 else ""))
 
     def report(res):
+        if res.reason == "cached" and res.ok:
+            print("%s ok %s %-28s %scached%s" % (GREEN, OFF, res.row.name,
+                                                 DIM, OFF))
+            return
         if res.skipped:
             print("%sSKIP%s %-28s %s(%s)%s" % (YELLOW, OFF, res.row.name, DIM, res.reason, OFF))
         elif res.ok:
@@ -1458,6 +1637,8 @@ def main():
             for line in res.output.rstrip().splitlines():
                 print("       | " + line)
 
+    for res in list(results):           # the cache hits, reported first
+        report(res)
     # The host-side rows fan out; the emulator rows share one lane behind
     # them, for the port reason in the header.
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.j)) as ex:
@@ -1482,13 +1663,30 @@ def main():
             report(res)
 
     wall = time.time() - t0
+    if use_cache:
+        store = cache_load()            # (another runner may have written)
+        for res in results:
+            n = res.row.name
+            if n not in keys or res.skipped:
+                continue
+            if res.ok:
+                store[n] = keys[n]
+            else:
+                store.pop(n, None)
+        try:
+            cache_save(store)
+        except OSError:
+            pass
+    ncached = sum(1 for r in results if r.ok and r.reason == "cached")
     failed = [r for r in results if not r.ok]
     skipped = [r for r in results if r.skipped]
     cost = charge(results, par, ser, conc, max(1, a.j), mj)
     print()
-    print("os88test: %d passed, %d failed, %d skipped in %.1fs, %.1fs charged "
+    print("os88test: %d passed%s, %d failed, %d skipped in %.1fs, %.1fs charged "
           "(budget %s)"
-          % (len(results) - len(failed) - len(skipped), len(failed), len(skipped),
+          % (len(results) - len(failed) - len(skipped),
+             (" (%d cached)" % ncached) if ncached else "",
+             len(failed), len(skipped),
              wall, cost, ("%ds" % cap) if cap else "none"))
 
     over = cap is not None and cost > cap

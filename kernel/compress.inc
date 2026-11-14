@@ -81,7 +81,7 @@ CMZ_PSTEP   equ 512             ; source bytes between progress reports - the
                                 ; widget's own unit (SPEC.md 12.8.1), so a
                                 ; report is a compare until the bar's pixel
                                 ; extent actually moves
-CMZ_XPROG   equ apic_fpg_stepb          ; OSAPI_FS_PROG. The cloner's idiom (SPEC.md
+%define CMZ_XPROG   fpg_stepb          ; OSAPI_FS_PROG. The cloner's idiom (SPEC.md
                                 ; 18.99.4): an OSAPI_SLOT is
                                 ; `push ds / push cs / pop ds / call <body> /
                                 ; pop ds / retf`, which is a far-callable
@@ -90,7 +90,7 @@ CMZ_XPROG   equ apic_fpg_stepb          ; OSAPI_FS_PROG. The cloner's idiom (SPE
                                 ; with the SOURCE in DS and needs neither a
                                 ; cw_ shim nor a callback in its own ABI
 
-CMZ_XTOAST  equ apic_toast_show          ; OSAPI_TOAST, and it is what lets this
+%define CMZ_XTOAST  toast_show          ; OSAPI_TOAST, and it is what lets this
                                 ; image carry its own VERDICT STRINGS: the
                                 ; slot takes ES:SI rather than DS:SI (the text
                                 ; is often in a heap claim, and a module image
@@ -142,6 +142,41 @@ CMZFP       equ CLFP + 4        ; the cloner's SECOND entry (SPEC.md 20.15.3):
 section .modl                   ; the cloner's image (SPEC.md 2.8, 18.99) -
                                 ; diskops.inc has already laid the header, and
                                 ; kernel.asm's modl_end comes after this
+
+%ifdef KERN_MEGA
+; KSEG's near helpers for this image (kernel.asm's macro), HERE at the
+; head of its code and not at the image's end: the end is the SCRATCH TAIL,
+; which a kept image's drop zeroes (MOD_H_SCR, SPEC.md 2.8.3) - helpers
+; there were zeroed with it on kern_mega (tests/modkeep.py's host leg) - and
+; not beside cmz_buf, whose sentences are written in place: ES or DS = a selector
+; over the REAL paragraph in AX through scratch slot <slot>, mega_kaimf's
+; answer. Each row sets DI to its slot and joins its register's tail; DI and
+; FLAGS kept (mega_kaimf keeps FLAGS), AX clobbered - the site saves it.
+; KSG_ROW is kernel.asm's, beside KSEG
+    KSG_ROW es, MEGA_SEL_K0
+    KSG_ROW es, MEGA_SEL_K1
+    KSG_ROW es, MEGA_SEL_K3
+    KSG_ROW es, MEGA_SEL_K4
+ksg_es_MEGA_SEL_K5:
+    push di
+    mov di, MEGA_SEL_K5
+.go:
+    call COLD_SEG:mega_kaimf
+    mov es, ax
+    pop di
+    ret
+    KSG_ROW ds, MEGA_SEL_K0
+    KSG_ROW ds, MEGA_SEL_K1
+    KSG_ROW ds, MEGA_SEL_K4
+ksg_ds_MEGA_SEL_K5:
+    push di
+    mov di, MEGA_SEL_K5
+.go:
+    call COLD_SEG:mega_kaimf
+    mov ds, ax
+    pop di
+    ret
+%endif
 
 %ifndef NOCURDISK
 ; -----------------------------------------------------------------------------
@@ -1099,12 +1134,12 @@ cmz_rearm:
     jnz .big
     or ax, ax
     jz .out
-    call KERNEL_SEG:CMZ_XPROG
+    KDOOR CMZ_XPROG
     jmp short .out
 .big:
     push ax
     mov ax, 0x8000
-    call KERNEL_SEG:CMZ_XPROG
+    KDOOR CMZ_XPROG
     pop ax
     sub ax, 0x8000
     sbb dx, 0
@@ -1134,7 +1169,7 @@ cmz_prog:
     CMZ_TRACK 0                 ; the step PAINTS the trough
     push ax
     mov ax, CMZ_PSTEP
-    call KERNEL_SEG:CMZ_XPROG
+    KDOOR CMZ_XPROG
     pop ax
     CMZ_TRACK 1
     ret
@@ -1524,7 +1559,7 @@ cmz_sizes:
     CSDO_OFF
     mov ax, cx
     mov cl, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
-    sub cl, DSK_CZ_MARK             ; 20.14.1): 0x5A and 0x5B pass
+    sub cl, DSK_CZ_MARK             ; 20.14.1): 0xA4 and 0xA5 pass
     cmp cl, LZ_LZB
     jbe .cz
     mov cl, 0xFF                ; no hint: what it occupies is what it
@@ -2474,7 +2509,7 @@ cmz_jloop:
     mov dx, [cs:cmz_jtot+2]     ; 12.8.10): one bar from part 1 to the verdict,
     shl cx, 1                   ; PARKED across every 'Put SET.002 in A:'
     rcl dx, 1                   ; instead of rescaling per part. Twice the
-    call KERNEL_SEG:apic_fs_op  ; original: it is written once and the parts
+    KDOOR osapi_fs_op           ; original: it is written once and the parts
     jc .noop                    ; read once, and a part is no bigger than what
     CSDO mov byte [CSEG cmz_jop], 1 ; it rebuilds, so an OVER-estimate that
 .noop:                          ; ends a little short. Owned as 0FFh, so only
@@ -2663,7 +2698,7 @@ cmz_jexit:
     push dx                     ; here: the verdict, a refusal, Esc and an
     xor cx, cx                  ; abandoned prompt (cmz_jdisp's .abort)
     xor dx, dx
-    call KERNEL_SEG:apic_fs_op
+    KDOOR osapi_fs_op
     pop dx
 .noop:
 %endif
@@ -3406,7 +3441,7 @@ cmz_say:
     mov si, ax
 .tail:
     xor cx, cx                  ; TOAST_TICKS, the default life
-    call KERNEL_SEG:CMZ_XTOAST
+    KDOOR CMZ_XTOAST
     pop es
     pop si
     pop cx
@@ -3917,6 +3952,17 @@ cmz_jtok:   dw 0                ; the result's WRITE_SEQ token (18.4.9).
                                 ; Never reset: it is only a generation, and
                                 ; a new temporary is a WRITE, which leaves
                                 ; the last one stale
+%ifdef KERN_MEGA
+%ifdef DSK_RUN
+    ; READ_SEQ COPIES FSEQ_XSIZE BYTES IN (dwf_dskw_read_seq: a 16-byte
+    ; cursor's 6 past it are read and ignored), and on kern_mega the cursor
+    ; is read through the image's selector, whose LIMIT is the image's end:
+    ; 22 bytes from here ran 4 past it - a #GP the KSEG helpers after this
+    ; hid until they moved below the scratch tail (SPEC.md 2.8.3.3,
+    ; mega-czto). Zeros, in the tail
+    times FSEQ_XSIZE - ($ - cmz_jcur) db 0
+%endif
+%endif
 %endif
 
 section .text

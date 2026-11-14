@@ -157,7 +157,7 @@ toast_scov:  db 0               ; and 1 = it is over the CLOCK and hides the
                                 ; any init routine of ours
 
 ; -----------------------------------------------------------------------------
-; toast_show - say one line in the menu bar for a few seconds (API 0x02AA)
+; toast_show - say one line in the menu bar for a few seconds (a door cell)
 ; in:       ES:SI = a NUL string, CX = ticks to live (0 = TOAST_TICKS)
 ; out:      CF = 0 taken, CF = 1 refused - and NOTHING refuses today, the
 ;           widget interlock below having been the only one. The flag stays in
@@ -210,10 +210,13 @@ toast_show:
                                 ; Free of side effects: the pushf above and the
                                 ; popf on both exits restore the caller's DF
                                 ; exactly as they restore its IF
-    or cx, cx
-    jnz .ttl
-    mov cx, TOAST_TICKS
-.ttl:
+%if TOAST_TICKS > 0xFF
+  %error "toast_show's default TTL is loaded into CL alone (CH is 0 there)"
+%endif
+    jcxz .ttl                   ; CX = 0, the default: CH is 0, so CL is the
+    SKIPF2                      ; whole store - and any other CX steps over it
+.ttl:                           ; (test ax, imm16: flags only, -2, kernel size
+    mov cl, TOAST_TICKS         ; pass 20)
     or ch, ch                   ; toast_pass measures expiry with a SIGNED
     jns .ttlok                  ; subtract (the modular-clock compare), so a
     mov cx, 0x7FFF              ; TTL past 32767 ticks would read as already
@@ -608,10 +611,10 @@ toast_pass:
     pop di
     pop si
     pop cx
-.nq:
-    popf
-    or al, al                   ; (AX is toast_pass's: banked at its head)
-    jnz .up
+    popf                        ; ...and up it goes: the `jz` above already
+    jmp short .up               ; asked, so the arm says so itself (kernel
+.nq:                            ; size pass 20, -1: the second `or` / `jnz`,
+    popf                        ; which the pass with no queue no longer runs)
 %endif
 .chk:                           ; ...and FALLS INTO the test, where it used to
                                 ; step over `.up` with a `jmp short`. `.up` is

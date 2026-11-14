@@ -25,6 +25,7 @@
 ; package door, where it is the CALLING PACKAGE's (SPEC.md 20.11).
 ; =============================================================================
 
+%define OS88_DRV_WAKES          ; kept across a hibernate (SPEC.md 51.2.5)
 %include "os88drv.inc"
 %include "netpkg.inc"           ; the socket verbs, as a CLIENT: NET_CLASS is
                                 ; os88sock.inc's [net_cls], not a constant
@@ -110,17 +111,29 @@ hf_entry:
     je hf_detach
     cmp al, DRVV_READY
     je hf_ready
-    cmp al, DRVV_HWINFO         ; nothing to say: CF = 1 from HWINFO up
-    cmc
-    ret
-%if DRVV_DETACH != 1 || DRVV_TIER != 2 || DRVV_READY != 3 || DRVV_HWINFO != 4
-  %error "hf_entry's cmc answers CF = 0 below DRVV_HWINFO and CF = 1 from it"
-%endif
+    cmp al, DRVV_WAKE
+    je hf_wake
+    cmp al, DRVV_SLEEP
+    je hf_ok                    ; no hardware, no vector: nothing to quiesce
+    stc                         ; TIER, HWINFO and any later verb: REFUSED,
+    ret                         ; with nothing to say (SPEC.md 51.2.2)
 
 ; DRVV_ATTACH - nothing to find: it owns no hardware. out: CF=0, SI = svc
 hf_attach:
     mov si, hf_svc
+hf_ok:
     clc
+    ret
+
+; DRVV_WAKE (SPEC.md 51.2.5) - the connection is FORGOTTEN, not aborted: the
+; card's own sleep reset every socket and freed its slot, which may be
+; somebody else's by now. hf_sock and hf_live are one word, and `and` is
+; CF = 0. The INDEX STAYS, with the folder the user stands in: dropping it
+; would put hf_cwd back at the root under a window standing in a folder
+; (hf_fetch starts from the root, and the kernel moves inside a volume
+; without a chdir), and an index a trip old is no staler than a long session's
+hf_wake:
+    and word [hf_sock], 0
     ret
 
 ; -----------------------------------------------------------------------------
@@ -384,6 +397,9 @@ hf_path:    times HF_PATHMAX db 0
 hf_lbuf:    times HF_LINEMAX db 0
 hf_sock:    db 0                ; the socket handle, 0 = none
 hf_live:    db 0                ; 1 = it is KEPT, idle, for the next GET
+%if hf_live - hf_sock != 1
+  %error "httpfs: hf_wake clears hf_sock and hf_live as one word"
+%endif
 hf_kept:    db 0                ; 1 = this GET rides a kept connection
 hf_keep:    db 0                ; 1 = this reply's server agreed to keep it
 hf_reqn:    dw 0                ; the request's length, for a resend

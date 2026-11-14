@@ -189,10 +189,7 @@ def arm(m, label, name, w, want_fast, refuse=False):
         want = expect(w)
         bad = 0
         for y in range(min(ch, H)):
-            roff = int.from_bytes(m.read(off(seg, "pt_rowoff") + y * 2, 2),
-                                  "little")
-            rseg = int.from_bytes(m.read(off(seg, "pt_rowseg") + y * 2, 2),
-                                  "little")
+            roff, rseg = dispapps.pt_row(m, lambda n: off(seg, n), y)
             row = m.read((rseg << 4) + roff, stride)
             for x in range(min(cw, w)):
                 if ((row[x >> 3] >> (7 - (x & 7))) & 1) != want[y][x]:

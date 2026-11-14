@@ -139,7 +139,7 @@ _MIRROR = {
     # kernel with the OTHER arm's %ifdef folded out rather than taking the
     # first `equ` in the file - which is what it did, and which made the guard
     # agree with itself while every kern_small script decoded garbage.
-    "WIN_SIZE": ("kernel/wm.inc", {"big": 74, "small": 65}),
+    "WIN_SIZE": ("kernel/wm.inc", {"big": 50, "small": 47}),
     "MAX_WIN": ("kernel/wm.inc", {"big": 12, "small": 6}),
     # kernel/driver.inc - a driver row (SPEC.md 51.2). DRVR_SEG is "is it
     # loaded", which is the only way a host-side script can SEE a driver
@@ -182,8 +182,8 @@ _MIRROR = {
     "WN_BTY": ("kernel/winmod.inc", 2),
     "WN_BTH": ("kernel/winmod.inc", 14),
     "THM_WIN": ("kernel/vga12.inc", 3),
-    "W_MENUS": ("kernel/wm.inc", 18),
-    "W_SEG": ("kernel/wm.inc", 22),
+    "W_MENUS": ("kernel/wm.inc", 14),
+    "W_SEG": ("kernel/wm.inc", 18),
     "WF_SIZABLE": ("kernel/wm.inc", 4),
     "WF_FULL": ("kernel/wm.inc", 8),
     "WF_NOSNAP": ("kernel/wm.inc", 16),
@@ -340,7 +340,7 @@ _MIRROR = {
     "TOAST_MAX": ("kernel/kernel.asm", 24),
     "KERNEL_SEG": ("kernel/kernel.asm", 0x0060),
     # kernel/memory.inc - the claim table (SPEC.md 50)
-    # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK
+    # PER ARM (docs/plans/retired/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK
     # keeps the LARGER value, so a package over-allocates rather than
     # the kernel overflowing what it was handed (SPEC.md 51.0.0).
     "MEM_MAX": ("kernel/memory.inc", {"big": 32, "small": 16}),
@@ -446,7 +446,7 @@ _MIRROR = {
     # 14 with docs/plans/completed/STACK-SLOTS-PLAN.md and tests/saverate.py's copy did not,
     # so sch_cycles was read six slots short; the test reads os88sym now and
     # this entry is what makes the next copy a t_mirror failure.
-    # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small has SIX worker slices and the UI task. The SDK
+    # PER ARM (docs/plans/retired/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small has SIX worker slices and the UI task. The SDK
     # keeps the LARGER value, so a package over-allocates rather than
     # the kernel overflowing what it was handed (SPEC.md 51.0.0).
     "MAX_TASKS": ("kernel/sched.inc", {"big": 14, "small": 5}),
@@ -924,9 +924,36 @@ def windows(m, sym=None):
 
 
 def winptr(m, win, sym=None):
-    """The kernel address of a window record - what wm_top answers with."""
+    """The LINEAR address of a window record, to READ it by - what top()
+    answers with. NOT what the kernel holds: hand the guest kptr()/winoff()."""
     i = win.i if hasattr(win, "i") else win
     return _sym(m, sym)("wm_wins") + i * WIN_SIZE
+
+
+def kptr(lin):
+    """A linear address in KERNEL_SEG as the kernel holds it: the DS offset."""
+    return (lin - KERNEL_SEG * 16) & 0xFFFF
+
+
+def winoff(m, win, sym=None):
+    """The window pointer AS THE KERNEL HOLDS IT (SI/BX in wm_*, [mem_cpq])."""
+    return kptr(winptr(m, win, sym))
+
+
+def post_compact(m, win, lvl=0xFC, sym=None, poke=None):
+    """Post OSAPI_MEM_COMPACT's request from outside (SPEC.md 66.4.3): the
+    rank into [mem_cpq_lvl], then the window to WAKE into [mem_cpq] - its
+    OFFSET. wm_wake_disp takes that word as SI, and the linear winptr() woke
+    a 'window' 0x600 past the record: a .bss word that was no window until a
+    one-byte .bss shift made it one, and the UI task far-called 2020:2020
+    (rdgmove, 1a42e398). Fifteen rows posted it that way. `poke(addr, data)`
+    for a machine that is not a Marty (QEMU's HMP); `win` is a slot or a Win.
+    """
+    S = _sym(m, sym)
+    w = poke or m.write
+    p = winoff(m, win, sym)
+    w(S("mem_cpq_lvl"), bytes([lvl]))
+    w(S("mem_cpq"), bytes([p & 0xFF, p >> 8]))
 
 
 def win_rect(m, slot, sym=None):

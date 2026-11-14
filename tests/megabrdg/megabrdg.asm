@@ -117,8 +117,9 @@ mb_entry:
 .nb2:
     call mb_free
 .nb3:
-    mov ax, 80                      ; --- a conventional claim under it ---
-    call OSAPI_MEM_CLAIM            ; (over 64KB: never the pool's)
+    mov ax, 80 * 64                      ; --- a conventional claim under it ---
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; (over 64KB: never the pool's)
     jc .nob1
     mov [mb_b1], dx
     call mb_lin
@@ -751,7 +752,9 @@ mb_legs_end:
 
 mb_tpl:
     dw 8, 400, 200, 40
-    dw mb_ttl, mb_paint, 0, 0
+    dw mb_ttl, mb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mb_cls, 0, PAINT, mb_paint
 mb_ttl:     db 'MegaBrdg', 0
 mb_s_e9:    db 'MEGABRDG: ', 0
 mb_s_e90:   db 'MEGABRDG0: ', 0

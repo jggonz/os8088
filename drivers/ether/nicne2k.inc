@@ -31,6 +31,12 @@ eth_fixed:  dw ETH_BASE
 ; --- NIC_ATTACH_FIND found, none: pin, fixed base or sweep. Jumps to `none` when
 ; no card answers and FALLS THROUGH to `found`, which must follow it (the labels
 ; are arguments so that the includer's own text mentions them) ---
+; --- NIC_WAKE_FIND gone: DRVV_WAKE's find (SPEC.md 51.2.5) - the card at the
+; base attach found it at, and nowhere else: a card that moved is another card
+%macro NIC_WAKE_FIND 1
+    call ne_probe
+    jc  %1
+%endmacro
 %macro NIC_ATTACH_FIND 2
     call os88_pin               ; THE PORTS PAGE FIRST (SPEC.md 51.9.2): a
     or  al, al                  ; pinned card is probed at its one address and

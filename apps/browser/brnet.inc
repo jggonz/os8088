@@ -147,13 +147,12 @@ br_promise:
     jb .say                         ; BN_IDLE - nothing fetched yet, so still
     cmp byte [br_nstate], BN_DONE
     jb .say                         ; BN_OPEN..BN_BODY: AL stays 0
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
-                                    ; BN_DONE / BN_ERR: the page has settled -
-                                    ; and it is two colours, which is what
-                                    ; gets it under wm_su_kb's 64,512 ceiling
-                                    ; on a VGA (SPEC.md 11.96.17)
+    inc ax                          ; BN_DONE / BN_ERR: the page has settled
+                                    ; (it is two colours for good: br_cls is
+                                    ; born WF_1BPP, SPEC.md 11.96.17)
 .say:
-    call OSAPI_WM_SAVEU
+    mov ah, WFB_SAVEU
+    call OSAPI_WM_FLAG
 .out:
     pop bx
     pop ax
@@ -327,13 +326,10 @@ br_go:
     push ax                         ; ...AND THE PROMISE IS WITHDRAWN HERE, at
     push bx                         ; the transition and UNCONDITIONALLY, not
     mov bx, [br_win]                ; by re-reading [br_nstate] on the way out
-    xor al, al                      ; (SPEC.md 71.11). BX IS THE WINDOW and is
-    call OSAPI_WM_SAVEU             ; not optional: without it wm_saveu's own
-    pop bx                          ; bounds check refuses the call and the
-    pop ax                          ; withdrawal silently does not happen -
-                                    ; SPEC.md 11.96.11.4's guard earning its
-                                    ; keep a second time, and the reason this
-                                    ; is not `whatever BX held`.
+    mov ax, WFB_SAVEU * 256         ; (SPEC.md 71.11). BX IS THE WINDOW and is
+    call OSAPI_WM_FLAG              ; not optional: OSAPI_WM_FLAG writes the
+    pop bx                          ; record BX names, and `whatever BX held`
+    pop ax                          ; is somebody else's
                                     ;
                                     ; THAT WAS A BUG AND tests/brpromise.py
                                     ; FOUND IT. The worker does not need the

@@ -106,7 +106,10 @@ EC_COK      equ 1               ; ...and their control ids (SPEC.md 13.8.4):
 EC_CCANCEL  equ 2               ; what a press ARMS and a release fires
 EC_NF       equ 4               ; Address, Subnet, Router, Name
 
-ec_tpl:     dw 60, 30, EC_FW, EC_FH, ec_s_title, ec_paint, ec_key, ec_click
+ec_tpl:     dw 60, 30, EC_FW, EC_FH, ec_s_title, ec_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ec_cls, 0, PAINT, ec_paint, ONKEY, ec_key, ONCLICK, ec_click, \
+               ONMOUSEUP, ec_up, ONDRAG, ec_drag
 ec_s_title: db 'Ethernet Setup', 0
 
 ; -----------------------------------------------------------------------------
@@ -160,10 +163,6 @@ eth_cfg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [ec_win], bx
-    mov ax, ec_up               ; SPEC.md 13.7/13.8.1: NOT template words, so a
-    call OSAPI_WM_ONMOUSEUP     ; window installs them itself after create
-    mov ax, ec_drag
-    call OSAPI_WM_ONDRAG
     mov byte [ec_down], 0       ; a window reopened mid-gesture must not come
     xor ax, ax                  ; up with one armed for the next release to
     call os88ui_arm             ; fire
@@ -652,7 +651,8 @@ eth_cfg_reap:
 ; -----------------------------------------------------------------------------
 ec_apply:
     call os88_ent               ; push ax..di, and bp: out by ep_bp
-    cmp byte [ec_mode], ECM_MAN
+    mov al, [ec_mode]           ; AL = the mode to the end: ip_parse, mem_copy,
+    cmp al, ECM_MAN             ; mem_zero and arp_flush all keep it
     jne .auto
 
     xor bx, bx                  ; the field, times two
@@ -680,21 +680,23 @@ ec_apply:
     mov di, eth_ip
     mov cx, 16
     call mem_copy
-    mov byte [eth_mode], ECM_MAN
     mov byte [dhcp_st], DH_BOUND
     mov word [dhcp_tmo], 0
-    call arp_flush              ; the router may be a different box now, and a
-                                ; cached MAC for it is a black hole
-    jmp short .live
+    jmp short .mode
 .auto:
-    mov byte [eth_mode], ECM_DHCP
     mov di, eth_ip              ; the old address goes with the mode: a machine
     mov cx, 16                  ; that is asking has no address yet, and a page
     call mem_zero               ; still showing the last one is a page that
                                 ; says it succeeded
-    call arp_flush              ; ...and BEFORE the exchange, not after: the
+.mode:
+    mov [eth_mode], al          ; ECM_MAN or ECM_DHCP, what the radios said
+    call arp_flush              ; the router may be a different box now, and a
+                                ; cached MAC for it is a black hole - and for
+                                ; DHCP BEFORE the exchange, not after: the
                                 ; server is reached through the gateway entry
                                 ; this is throwing away
+    cmp al, ECM_MAN
+    je  .live
     call eth_dhcp_wait          ; and WAIT for an address: no package is
                                 ; polling here, so nothing else would ever
                                 ; drain the reply (SPEC.md 72.2.1)
@@ -959,7 +961,8 @@ eth_cp_close:
 ; --- strings and state --------------------------------------------------------
 ec_s_file:   db 'ETHER.CFG', 0
 ec_s_auto:   db 'Automatic', 0
-ec_s_man:    db 'Manual', 0
+ec_s_man     equ eu_s_manual  ; ONE COPY of each string the pane also
+                             ; draws (etherui.inc, included above)
 ec_s_ok:     db 'Ok', 0
 ec_s_cancel: db 'Cancel', 0
 ec_s_ready:  db 'Needs Address and Subnet', 0
@@ -975,8 +978,8 @@ ec_s_badgw:  db 'Router?', 0
 ec_s_baddns: db 'Name server?', 0
 ec_s_l0:     db 'Address', 0
 ec_s_l1:     db 'Subnet', 0
-ec_s_l2:     db 'Router', 0
-ec_s_l3:     db 'Name', 0
+ec_s_l2      equ eu_s_rtr
+ec_s_l3      equ eu_s_name
 
 ec_labels:   dw ec_s_l0, ec_s_l1, ec_s_l2, ec_s_l3
 ec_errs:     dw ec_s_badip, ec_s_badmask, ec_s_badgw, ec_s_baddns

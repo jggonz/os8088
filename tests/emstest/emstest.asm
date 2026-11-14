@@ -253,7 +253,9 @@ et_paint:
 ; --- window template (SPEC.md 11) ---------------------------------------------
 et_tpl:
     dw 160, 100, 240, 60
-    dw et_ttl, et_paint, 0, 0
+    dw et_ttl, et_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS et_cls, 0, PAINT, et_paint
 
 et_ttl:      db 'EmsTest', 0
 et_s_first:  db 'Holding 3 pages, 4 quarters', 0

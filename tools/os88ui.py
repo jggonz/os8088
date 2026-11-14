@@ -14,8 +14,8 @@ does, every one of them has been written out by hand a hundred times, and each
 has a way of going wrong that produces NO ERROR at the point of failure:
 
   * **boot and wait for the desktop** - 175 of 231 scripts open with the same
-    three lines, and 171 of the 206 that launch never turn the screen saver
-    off;
+    three lines, and 171 of the 206 that launch never turned the screen
+    saver off (os88marty.launch does it for them now);
   * **open a Disk window on drive X** - a click at a remembered zone, on a
     machine whose B: was retired by SPEC.md 18.97's probe, lands on bare
     desktop;
@@ -215,7 +215,7 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
         kw.setdefault("boot", False)
     cm = os88marty.launch(image, apps=apps,
                           machine=os88marty.machine(machine, why_ibm),
-                          card=card, **kw)
+                          card=card, saver=saver, **kw)
     return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit,
                    settle=settle, quick=quick and not kw.get("boot"))
 
@@ -1819,7 +1819,7 @@ class UI:
     def _bar_has(self, menu, item, limit=10.0):
         """KERN_MEGA'S SHIMS ONLY (tools/os88megabochs.py, and
         os88mega86box.py, whose 286 shows a Disk window on a 1.2MB A: before
-        its bar - tests/wimgtrip.py): wait, in host seconds, for the bar to
+        its bar - tests/wimgtrip.py): wait, in GUEST seconds, for the bar to
         carry `menu` -> `item` before menu_pick reads it once.
 
         A package's window is VISIBLE - which is all `open`/`path` confirm -
@@ -1833,8 +1833,13 @@ class UI:
         if isinstance(menu, int) or isinstance(item, int):
             return
         mw, iw = menu.upper(), item.upper()
-        end = time.time() + limit
-        while time.time() < end:
+        # GUEST seconds (`limit` of them): a host deadline gave the guest
+        # less of its own time to build the bar exactly when the box was
+        # busy, and the pick then read the half-built one. A guest that
+        # stops, or a spent budget, falls through as the deadline did.
+        prog = os88marty._Progress(self.m, "the menu bar to carry %s > %s"
+                                   % (menu, item), limit)
+        while True:
             try:
                 cells = self.menus()
             except Exception:                       # noqa: BLE001
@@ -1844,6 +1849,10 @@ class UI:
                         s.upper().lstrip(" *").startswith(iw)
                         for s, _ in items):
                     return
+            try:
+                prog.check()
+            except os88marty.MartyError:
+                return
             time.sleep(0.2)
 
     def menu_pick(self, menu, item, limit=T_MENU):

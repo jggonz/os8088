@@ -224,7 +224,7 @@ FIXTURE = {
         # it: assertion 4 counts what that filter shows, and a tier-3 archive
         # would leave the two assertions reading each other's fixture.
         # needs_wire 7: the tree carries build/mseg.o88, whose parts library
-        # calls OSAPI_MEM_P (0x04E9) and OSAPI_FS_OP (0x04EF, SPEC.md 12.8.10)
+        # calls OSAPI_MEM_P (a door cell) and OSAPI_FS_OP (a door cell, SPEC.md 12.8.10)
         # - the cell fence (SPEC.md 92.2), declared as the site's own entries
         # declare it, and what this tree's Wire (WIRE_LEVEL 7) installs
         {"stem": "TREEONE", "title": "A whole tree", "kind": 0, "tier": 0,
@@ -616,7 +616,7 @@ def zstr(m, sym, n):
     return m.read(S(sym), n).split(b"\0")[0].decode("latin1", "replace")
 
 
-W_SEG = 22                              # the package's own segment, and
+W_SEG = 18                              # the package's own segment, and
                                         # os88geom stops at W_TITLE
 
 
@@ -774,9 +774,8 @@ def post(m, win):
     the root walk, and B:'s FAT window - a MED cache - landed directly under
     the catalog: nothing could move and assertions 17 and 18 proved nothing.
     What they prove is the relocation procs, which this rank still drives."""
-    wp = os88geom.winptr(m, win, S)
-    os88qemu.poke(m.hmp, S("mem_cpq_lvl"), bytes([0xFE]))
-    os88qemu.poke(m.hmp, S("mem_cpq"), bytes([wp & 0xFF, (wp >> 8) & 0xFF]))
+    os88geom.post_compact(m, win, 0xFE, S,
+                          poke=lambda a, d: os88qemu.poke(m.hmp, a, d))
     return os88qemu.acted(m, lambda: u16(m.read(S("mem_cpq"), 2)) == 0,
                           secs=10, what="the posted compaction", poll=0.1)
 
@@ -1079,11 +1078,25 @@ def main():
             sys.exit("thewire: the Wire zone opened no window")
         ww = wins2[-1]
         rec = m.read(S("wm_wins") + ww * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = u16(rec, 22)
+        pseg = u16(rec, dispcp.W_SEG)
         say("The Wire at %04X, image %d bytes" % (pseg, img))
 
+        def wseg():
+            """The Wire's segment NOW, out of its window record's W_SEG.
+
+            **NOT `pseg`, READ ONCE.** The Wire's region is declared movable
+            (OS88_REGION_MOVABLE_NOKEEP, and its worker restartable - SPEC.md
+            66.6.1, 66.6.2), and assertions 17 and 18 POST compactions at
+            MEM_PG_HIGH, which move it. A segment banked at launch then reads
+            the bytes the region left behind: wr_sel, wr_grey and wr_msg came
+            back as plausible junk (wr_sel 13961, wr_grey 255, a status cell
+            of bitmap bytes) and every assertion after the archive chain
+            failed about the Wire rather than about the row."""
+            return u16(m.read(S("wm_wins") + ww * dispcp.WIN_SIZE
+                              + dispcp.W_SEG, 2))
+
         def b(name, n=1):
-            return m.readseg(pseg, img + off[name], n)
+            return m.readseg(wseg(), img + off[name], n)
 
         def w(name):
             return u16(b(name, 2))
@@ -1132,7 +1145,7 @@ def main():
         # the machine's own wr_count. Reading it is reading what the LIST says
         # rather than what the catalog holds.
         def shown():
-            return u16(m.readseg(pseg, img + off["wr_sb"] + 8, 2))
+            return u16(m.readseg(wseg(), img + off["wr_sb"] + 8, 2))
 
         say("the list shows %d of %d" % (shown(), n))
         if shown() != NREC:
@@ -1224,7 +1237,7 @@ def main():
             missed the Load Program button by nothing visible and reported
             OSAPI_PKG_START as broken.
             """
-            return [u16(m.readseg(pseg, img + off[name] + i * 2, 2))
+            return [u16(m.readseg(wseg(), img + off[name] + i * 2, 2))
                     for i in range(4)]
 
         def press(name):
@@ -1826,7 +1839,7 @@ def main():
         # THE STATUS CELL IS READ ON BOTH ARMS, and the failing one needs it
         # more: wr_pkgrun writes the LD_* code into it in words, because `it
         # did not start` with no number is a bug report nobody can act on.
-        msg = m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
+        msg = m.readseg(wseg(), w("wr_msg"), 48).split(b"\0")[0]
         say("the status cell says %r" % msg.decode("latin1", "replace"))
         if len(after) <= len(before):
             no("Load Program on the archive opened no window, and the tree "
@@ -1869,7 +1882,7 @@ def main():
                    "<title> from the Wire`" % msg)
 
         def cell():
-            return m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
+            return m.readseg(wseg(), w("wr_msg"), 48).split(b"\0")[0]
 
         # --- 14: A PACKAGE FOR A NEWER os8088, GREYED (SPEC.md 92.2) -------
         # The catalog's WC_PKGFMT is one past ours, so both buttons grey on

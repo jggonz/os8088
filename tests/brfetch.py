@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
@@ -177,7 +178,7 @@ def main():
             sys.exit("brfetch: BROWSER.O88 did not open a window")
         bw = wins2[-1]
         rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         say("browser at %04X" % pseg)
 
         # THE BROWSER'S OWN STATE, at bss offsets derived from the image
@@ -263,8 +264,17 @@ def main():
                  by0 + dispcp.TITLE_H + 1 + BR_LPAD + BR_TBH + BR_TBG
                  + BR_LBAR // 2)
         os88marty.settle(m)
-        m.type_text("\b" * 12 + url)
-        os88marty.settle(m)
+        # TYPED WITH THE MACHINE PAUSED (text_taken), never m.type_text on a
+        # running guest. Keys pressed into a RUNNING MartyPC arrive as fast as
+        # the host sends them, and ui_task takes ONE key a pass (SPEC.md
+        # 67.11.2) - a pass per key IRQ while they trickle in, then one a TICK
+        # once they stop arriving. 42 keys at socket speed is a burst no hand
+        # makes: the 15-entry BIOS ring fills and SPEC.md 9.8's guard drops
+        # the NEWEST, so the bar held 'neth' on one run and 'netm' on the next
+        # (kbd_ovn = 3, the overrun beeps spent) - the host's speed deciding
+        # the result. Queued while paused, MartyPC's keyboard model paces them
+        # in EMULATED time, and the count of entries taken is guest state.
+        os88marty.text_taken(m, "\b" * 12 + url)
         typed = field(b"http://127.0.0.1")
         say("location bar holds %r" % typed)
         if typed is None:

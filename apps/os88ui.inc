@@ -1859,43 +1859,35 @@ os88ui_armw: dw 0               ; a package's: DATA, inline, for the reason
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; os88ui_btninit - adopt a window, and INSTALL THE GESTURE'S TWO SLOTS
+; os88ui_btninit - adopt a window: link its button record
 ;
-; A PACKAGE'S ONLY (%ifndef OS88UI_KERNEL below). OSAPI_WM_ONMOUSEUP and
-; OSAPI_WM_ONDRAG are API-table slots that os88api.inc publishes to programs;
-; inside the kernel they are not symbols at all, and a kernel window reaches
-; the same two callbacks through wm_pkgcall's near dispatch on a W_SEG of 0
-; with a .text thunk apiece (SPEC.md 13.8.3). So the kernel sets its record's
-; OS88UI_BT_WIN itself and installs nothing here.
+; A PACKAGE'S ONLY (%ifndef OS88UI_KERNEL below): a kernel window sets its
+; record's OS88UI_BT_WIN itself.
 ; in:  BX = the record, AX = the window (after wm_create),
-;      SI = your W_ONMOUSEUP proc, DI = your W_ONDRAG proc,
 ;      DX = your own W_ONCLICK proc, or 0 if the buttons are all this window
-;      has (near ptrs, this segment)
+;      has (a near ptr, this segment)
 ; out: nothing; all registers preserved
 ;
-; THE INSTALL IS THE LIBRARY'S JOB AND THAT IS THE MOST IMPORTANT LINE IN THIS
-; FILE. W_ONMOUSEUP and W_ONDRAG are deliberately not template words (SPEC.md
-; 13.7), so a package that never installed them got NO ERROR of any kind - it
-; got a button that fired on the press, looked finished, and photographed
-; identically to a correct one. That is how twenty-five call sites went wrong.
+; THE GESTURE'S THREE SLOTS ARE YOUR CLASS'S (SPEC.md 11.104), and naming them
+; is the line that matters: the window's class names WC_ONCLICK =
+; os88ui_btnclick - the library sees the press FIRST and chains to
+; OS88UI_BT_ONCLK when it was not a button's, so no click path can skip the
+; buttons (SPEC.md 20.5.1.3.3) - and your own WC_ONMOUSEUP and WC_ONDRAG
+; procs:
 ;
-; IT TAKES YOUR TWO PROCS RATHER THAN INSTALLING DEFAULTS OF ITS OWN, and that
-; is deliberate to the point of being the design. A version of this installed
-; a pair of `ret` thunks so that the "common case needed no proc at all" - and
-; that version reintroduces the whole defect one layer in: a package that
-; installs its own handler BEFORE calling this would have it silently
-; overwritten by a no-op, and a package that never writes one at all gets a
-; button that does nothing, which is the same "no error of any kind" with a
-; different symptom. Passing them means the caller cannot fail to have thought
-; about them. What this removes is the REMEMBERING, not the writing.
+;     OS88_CLASS my_cls, 0, PAINT, my_paint, ONCLICK, os88ui_btnclick, \
+;                ONMOUSEUP, my_onup, ONDRAG, my_ondrag
 ;
-; THE DRAG SLOT'S CF IS IGNORED ON PURPOSE. OSAPI_WM_ONDRAG answers CF = 1 on
-; kern_small (SPEC.md 13.8.2), where the record simply never sees a drag edge:
-; the press arms and draws down, the release fires or cancels, and the control
-; does not un-draw while the pointer slides off it. That is strictly better
-; than what shipped before and is exactly what the kernel's own dialogs do
-; there, so a package must not have to ask - and one that did ask would be
-; writing a kern_small special case into every application in the tree.
+; This used to install them (OSAPI_WM_ONMOUSEUP / _ONDRAG / _ONCLICK), because
+; they were not template words and a package that forgot them got NO ERROR of
+; any kind - a button that fired on the press and photographed identically to
+; a correct one, which is how twenty-five call sites went wrong. A class names
+; every handler in one declaration beside the template, so the forgetting has
+; one place to happen and one place to be read; the library's half is the
+; link. kern_small dispatches no drag (WC_ONDRAG is past its WC_NDISP): the
+; press arms and draws down, the release fires or cancels, and the control
+; does not un-draw while the pointer slides off it - exactly what the
+; kernel's own dialogs do there, so a package need not ask.
 ; -----------------------------------------------------------------------------
 %ifndef OS88UI_NOBTNINIT
 ; -----------------------------------------------------------------------------
@@ -1917,7 +1909,6 @@ os88ui_btninit:
     push bx
     mov [bx+OS88UI_BT_WIN], ax
     mov [bx+OS88UI_BT_ONCLK], dx
-    push ax                     ; the window, for the three slot calls
     push si
     mov si, os88ui_btlist - OS88UI_BT_NEXT
 .seen:                          ; ONCE ONLY: Sheet re-inits a dialog's static
@@ -1941,16 +1932,9 @@ os88ui_btninit:
     mov [bx+OS88UI_BT_NEXT], ax ; belonging to the window it was handed
 .linked:
     pop si
-    pop bx                      ; BX = the window, every slot call's argument
-    mov ax, si                  ; - and every slot keeps every register it does
-    call OSAPI_WM_ONMOUSEUP     ; not document (SPEC.md 20.3), so it is loaded
-    mov ax, di                  ; once
-    call OSAPI_WM_ONDRAG        ; CF = 1 on kern_small: deliberately unread
-    mov ax, os88ui_btnclick     ; **AND THE PRESS IS OURS** (SPEC.md
-    call OSAPI_WM_ONCLICK       ; 20.5.1.3.3): the library sees it first and
-    pop bx                      ; chains to OS88UI_BT_ONCLK when it was not a
-    pop ax                      ; button's, so no click path can skip the
-    ret                         ; buttons
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; os88ui_btnclick - W_ONCLICK, the LIBRARY's (SPEC.md 20.5.1.3.3)
@@ -2270,9 +2254,13 @@ os88ui_sbar:
     mov dx, [di+6]
     UI_FRAME
                                 ; --- the two arrow-cell rules: AX is still
-    lea dx, [bx+OS88UI_SBCELL]  ; x1 and CX x2, a primitive keeping its four
-    mov bx, cx                  ; registers
-    UI_HLINE
+    lea dx, [bx+OS88UI_SBCELL]  ; x1 and CX x2 (UI_FRAME keeps its four
+    mov bx, cx                  ; registers; a LINE cell does not, SPEC.md
+    UI_HLINE                    ; 5.7.3, so the second rule reloads them)
+%ifndef OS88UI_KERNEL           ; ...except in the KERNEL, whose line is
+    mov ax, [di+0]              ; gfx_hline_n (vga12.inc), clobbering BX and
+%endif                          ; CX alone by its header: AX and DX come back
+    mov bx, [di+4]              ; as they went (kernel size pass 20, -3)
     mov dx, [di+6]
     sub dx, OS88UI_SBCELL
     UI_HLINE
@@ -2284,13 +2272,9 @@ os88ui_sbar:
     sub cx, 3                   ; two rows of a pass being the same width -
     xor bp, bp                  ; 1, 3, 5, 7, 9. Same rows, same pixels, half
 .ar:                            ; the loop
-    mov ax, si
-    sub ax, bp
-    mov bx, si
-    add bx, bp
-    UI_HLINE                    ; the up glyph's row...
+    call .arrow                 ; the up glyph's row...
     xchg dx, cx
-    UI_HLINE                    ; ...and the down glyph's
+    call .arrow                 ; ...and the down glyph's
     xchg dx, cx
     inc dx
     dec cx
@@ -2327,6 +2311,22 @@ os88ui_sbar:
     pop ax
     ret
 %endif
+
+.arrow:                         ; one glyph row at DX, SI +/- BP. The line
+    push cx                     ; cell takes AX..DX (SPEC.md 5.7.3), so the
+%ifndef OS88UI_KERNEL           ; pair is rebuilt a row and CX/DX kept here -
+    push dx                     ; DX only in a package: the kernel's line
+%endif                          ; gives DX back (the rule above, -2)
+    mov ax, si
+    sub ax, bp
+    mov bx, si
+    add bx, bp
+    UI_HLINE
+%ifndef OS88UI_KERNEL
+    pop dx
+%endif
+    pop cx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; os88ui_sbcx - the arrow glyphs' centre column (internal)
@@ -2596,7 +2596,7 @@ os88ui_sbupdw:
 ; -----------------------------------------------------------------------------
 ; os88ui_sbwheel - where the WHEEL takes this bar (SPEC.md 13.10.8)
 ; in:  BX -> the bar's block, FILLED as for any os88ui_sb* call; AX = the
-;      notches OSAPI_WM_ONWHEEL handed you; CX = ONE LINE of your view in the
+;      notches your WC_ONWHEEL was handed; CX = ONE LINE of your view in the
 ;      block's units - 1 for a row-unit view, the line height for a pixel one
 ; out: AX = the new pos, clamped to 0 .. total - fit; CF = 1 when that is the
 ;      pos already there, so a wheel turned against an end draws nothing.
@@ -3074,8 +3074,8 @@ os88ui_sbd_id:   dw 0, 0
 ; --- THE WINDOW IS UNBOUND, WHICH IS WHAT MAKES IT A DIALOG ------------------
 ; It belongs to no instance (SPEC.md 20.2's second window, ModPlug's Setup
 ; pane), so it has no dock tile, no Task Manager row and no callback billing,
-; and its close box reduces to wm_hide. os88ui_aclose is installed on it with
-; OSAPI_WM_ONCLOSE, so that hide is intercepted and turned into the CANCEL
+; and its close box reduces to wm_hide. os88ui_aclose is its class's
+; WC_ONCLOSE (SPEC.md 11.104), so that hide is intercepted and turned into the CANCEL
 ; answer - the close negotiation of SPEC.md 75.1 serving a package's own
 ; dialog, which is why that half of the feature is in the kernel and this
 ; half is not.
@@ -3084,8 +3084,8 @@ os88ui_sbd_id:   dw 0, 0
 ; with its alert up leaves nothing behind.
 ;
 ; --- AND IT DOES NOT ZOOM OPEN (SPEC.md 11.99.2.1) --------------------------
-; os88ui_ask calls OSAPI_WM_NOANIM before it shows the window. Your own second
-; window may want the same: the flag is for a DIALOG, something opened and
+; The alert's class is born WF_NOANIM. Your own second window may want the
+; same style bit: the flag is for a DIALOG, something opened and
 ; dismissed over and over or arriving in answer to a click that meant
 ; something else. It is not for your main window - whether the system animates
 ; at all is the user's choice, in Control Panel -> Theme.
@@ -3128,7 +3128,12 @@ OS88UI_ABTNY equ 46             ; ...and the button row's
 
 ; --- state, INLINE DATA and not bss, for os88ui_armw's reason ----------------
 os88ui_atpl:  dw 0, 0, OS88UI_AW, OS88UI_AH   ; x and y are centred at open
-              dw 0, os88ui_apaint, os88ui_akey, os88ui_aclick
+              dw 0, os88ui_acls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS os88ui_acls, WF_NOANIM, PAINT, os88ui_apaint, \
+               ONKEY, os88ui_akey, ONCLICK, os88ui_aclick, \
+               ONCLOSE, os88ui_aclose, ONMOUSEUP, os88ui_aup, \
+               ONDRAG, os88ui_adrag
 os88ui_awin:  dw 0               ; the live alert, 0 = none. THE GATE: one at
                                  ; a time, fdlg_win's single word
 os88ui_acb:   dw 0               ; your completion
@@ -3254,28 +3259,6 @@ os88ui_ask:
     call OSAPI_WM_CREATE        ; BX = window ptr, CF = the table is full
     jc .refuse
     mov byte [os88ui_adown], 0FFh
-    mov ax, os88ui_aup
-    call OSAPI_WM_ONMOUSEUP     ; the buttons fire on the RELEASE (SPEC.md
-    mov ax, os88ui_adrag        ; 13.6), they TRACK between the press and it
-    call OSAPI_WM_ONDRAG        ; (SPEC.md 13.8.2/75.3.0 - CF = 1 on
-                                ; kern_small, which installs nothing and
-                                ; degrades to the release re-testing the
-                                ; button under it), and the close box is
-    mov ax, os88ui_aclose       ; intercepted
-    call OSAPI_WM_ONCLOSE       ; (SPEC.md 75.1) so it can be the CANCEL
-    call OSAPI_WM_NOANIM        ; ...AND IT DOES NOT ZOOM OPEN (SPEC.md
-                                ; 11.99.2.1). The Standard File dialog and the
-                                ; notice window already declined and this is
-                                ; the third of the same species - except that
-                                ; the argument is stronger here, because the
-                                ; other two answer a command the user picked
-                                ; and this one answers a click on the CLOSE
-                                ; BOX: it arrives INSTEAD OF the close that
-                                ; was asked for, and a third of a second of
-                                ; outline in front of an interruption reads as
-                                ; the machine making a show of getting in the
-                                ; way. BX is still the window - the four slots
-                                ; above all take it and preserve it
     mov [os88ui_awin], bx       ; take the gate LAST: until this store the
     call OSAPI_WM_SHOW          ; window is an ordinary one
     clc
@@ -3701,7 +3684,7 @@ os88ui_akey:
 ; all three.
 ;
 ; --- WHY THERE ARE TWO ENTRIES ----------------------------------------------
-; `os88ui_about` is for the HANDLER - the proc you gave OSAPI_ABOUT_SET.
+; `os88ui_about` is for the HANDLER - the proc your class names as WC_ABOUT.
 ; NOTHING HAS ARMED A CLIP REGION THERE: ui_dispatch takes the gfx lock and
 ; far-calls you, and the kernel arms a clip for a W_PAINT and for nothing else
 ; (SPEC.md 11.3), so a card drawn without one lands on top of whatever window
@@ -3722,7 +3705,7 @@ os88ui_akey:
 ;   my_ab2: db 0                ; an EMPTY string is a blank line
 ;   my_ab3: db 'Contributed by Someone', 0
 ;
-;   my_about:                   ; ...registered with OSAPI_ABOUT_SET
+;   my_about:                   ; ...your class's WC_ABOUT (SPEC.md 11.104)
 ;       mov byte [my_abon], 1
 ;       mov bx, [my_win]
 ;       mov si, my_ablines
@@ -4859,7 +4842,13 @@ os88ui_drbox:
     sub ax, OS88UI_DRAW
     inc bx
     dec dx
+    push ax
+    push bx
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
+    pop ax
     add dx, bx                  ; ...and the triangle, four rows about the
     shr dx, 1                   ; box's middle, 7 wide at the top - (y1+1 +
     dec dx                      ; y2-1) / 2 is the middle the record gives
@@ -4867,7 +4856,13 @@ os88ui_drbox:
     mov bx, ax
     add bx, 6
 .tri:
+    push ax
+    push bx
+    push dx
     UI_HLINE
+    pop dx
+    pop bx
+    pop ax
     inc ax
     dec bx
     inc dx
@@ -5025,7 +5020,6 @@ os88ui_drbank:
     shl dx, cl
     add ax, dx                  ; AX = paragraphs, rounded up (ZF = none)
     jz .none
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     jc .none
@@ -5897,7 +5891,9 @@ os88ui_mndraw:
     dec bx
     mov dx, di
     add dx, 2
+    push cx
     call OSAPI_GFX_HLINE
+    pop cx
     add di, OS88UI_MN_SH
     jmp .next
 .norm:
@@ -6268,7 +6264,6 @@ os88ui_mnbank:
     shl dx, cl
     add ax, dx                  ; AX = paragraphs, rounded up (ZF = none)
     jz .no
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; out CF=0, DX = base segment
     jc .no

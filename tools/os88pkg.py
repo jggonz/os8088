@@ -27,13 +27,14 @@ kernel into its data on the first paint. Any failure exits 1 with a message
 on stderr; OUT.o88 is not written on failure.
 """
 import argparse
+import importlib
 import os
 import struct
 import sys
 
 HEADER_SIZE = 32
 MAGIC = 0x384F            # 'O','8' little-endian
-PKG_FMT = 10              # the format byte, and it is the API TABLE'S
+PKG_FMT = 13              # the format byte, and it is the API TABLE'S
                           # (SPEC.md 20.2.0): mirrors kernel/loader.inc and
                           # apps/os88api.inc, held by tests/unit/t_mirror.py
 VERSION = PKG_FMT
@@ -294,6 +295,12 @@ def main() -> int:
         fail(f"flags bit 0 set but image is {image} bytes; the embedded "
              f"icon needs at least {ICON_END}")
 
+    # THE SURVIVING-FAR-CALL GATE (SPEC.md 20.3.3): every far call into
+    # KERNEL_SEG in the image and its parts lands on a published cell, and -
+    # once T5's door is switched on - on no rare one.
+    farcall_gate([args.input] + list(args.part),
+                 [a] + [read_file(p) for p in args.part])
+
     out = bytearray(a)
     if args.compress and args.compress_if:
         fail("--compress and --compress-if are the same decision taken two "
@@ -352,6 +359,24 @@ PKG_COMP_FMT   = 0x10           # flags bit 4: 0 = LZ4, 1 = LZB
                                 # file) and the stream's own raw tail is what
                                 # makes that enough (SPEC.md 20.13.7).
                                 # os88lz.in_place_margin asserts it below
+
+
+def farcall_gate(labels, blobs) -> None:
+    """Refuse a far call tools/os88cells.py's gate refuses (SPEC.md 20.3.3).
+    Outside an OS tree - no os88cells beside this file, no apps/os88api.inc -
+    there is nothing to check against, and nothing is refused."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        # importlib, not `import`: os88vbundle.closure follows every import
+        # statement, and os88cells reaches os88build and the emulator tools
+        # behind it - which the encoder, battle-builder and precompiler
+        # bundles must not carry. The gate needs apps/os88api.inc anyway.
+        os88cells = importlib.import_module("os88cells")
+        bad = os88cells.farcall_problems(dict(zip(labels, blobs)))
+    except (ImportError, OSError):
+        return
+    if bad:
+        fail("; ".join(bad))
 
 
 def roundup(v: int, n: int) -> int:

@@ -306,22 +306,12 @@ mr_entry:
     push bx                         ; (btninit keeps every register; the
     xchg ax, bx                     ; window is all the rest of us reads)
     mov bx, mru_btrec
-    mov si, mr_onup
-    mov di, mr_ondrag
     mov dx, mr_onclick              ; OUR click work: the library takes the
     call os88ui_btninit             ; press first and chains here
     pop bx
     OS88_REGION_MOVABLE mr_nop      ; (a bare ret: nothing points inside us)
     mov si, mr_menus
     call OSAPI_MENU_SET
-    mov si, mr_about
-    call OSAPI_ABOUT_SET
-    mov ax, mr_onwake
-    call OSAPI_WM_ONWAKE
-    mov ax, mr_onclose
-    call OSAPI_WM_ONCLOSE
-    mov ax, mr_onwheel              ; the WHEEL scrolls the playlist
-    call OSAPI_WM_ONWHEEL           ; (SPEC.md 13.18)
     mov word [mr_msg], mr_s_ready
     mov byte [mr_state], MR_ST_STOP
     mov byte [mr_first_paint], 1    ; the settled repaint, and the playlist,
@@ -360,7 +350,12 @@ OS88SPK_PRING   equ mrk_pring
 ; =============================================================================
 mr_tpl:
     dw 8, 24, 624, 300              ; x, y, w, h (wm_fit clamps; the preference
-    dw mr_ttl, mr_paint, mr_onkey, mr_onclick   ; below reshapes per screen)
+    dw mr_ttl, mr_cls                           ; below reshapes per screen)
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mr_cls, 0, PAINT, mr_paint, ONKEY, mr_onkey, \
+               ONCLICK, os88ui_btnclick, ABOUT, mr_about, ONWAKE, mr_onwake, \
+               ONCLOSE, mr_onclose, ONMOUSEUP, mr_onup, ONDRAG, mr_ondrag, \
+               ONWHEEL, mr_onwheel
 mr_ttl:     db 'MIDIRack', 0
 
     OS88_PREFER mr_prefer, 628, 330,  718, 330,  638, 300
@@ -595,8 +590,11 @@ mra_load:
     and bx, ~511                    ; than for a part on a sector
     push ax
     push dx
-    mov ax, MRA_CLAIM / 1024
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    mov ax, (MRA_CLAIM / 1024) * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the segment
+    pop bx
     mov bp, dx
     pop dx
     pop ax

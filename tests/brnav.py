@@ -303,7 +303,9 @@ def main():
     dispcp.open_named(m, Mouse(), S, settle, wx, wy, "BROWSER.O88")
     bw = dispcp.win_list(m, S)[-1]
     rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    pseg = u16(rec[22:24])
+    # W_SEG BY NAME (os88geom reads it off kernel/wm.inc): a literal 22 went
+    # stale when kernel size pass 19 moved it to 18, and read W_PREF instead
+    pseg = u16(rec[dispcp.W_SEG:dispcp.W_SEG + 2])
     print("browser at %04X" % pseg)
     sys.stdout.flush()
 
@@ -814,6 +816,10 @@ def main():
     fetch(URL_FS)
     st = wait_done("the frameset")
     doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
+    # the line count BEFORE the table's size: layout runs on after BN_DONE
+    # and grows the table before it writes a line, so this order is the one
+    # in which the two readings can be compared at all
+    nlines = rw("br_nlines")
     linekb = rw("br_linekb")
     ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
     print("after fs: state %d, msg %04X, doclen %d, lines %d/%d KB, title %r, "
@@ -829,9 +835,9 @@ def main():
     if len(doc) <= 16 * 1024:
         fails.append("the frameset output is only %d bytes; this fixture must "
                      "exercise aggregate output growth beyond 16 KB" % len(doc))
-    if linekb * 1024 < rw("br_nlines") * 10 or linekb > 62:
+    if linekb * 1024 < nlines * 10 or linekb > 62:
         fails.append("the frameset needs the full safe line table; got %d KB "
-                     "for %d lines" % (linekb, rw("br_nlines")))
+                     "for %d lines" % (linekb, nlines))
     for mark in (b"Hesperus", b"Phosphorus"):
         if mark not in doc:
             fails.append("the frameset's document lacks %r - the child that "

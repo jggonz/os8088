@@ -328,16 +328,15 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; baked table would be dead code on every machine that ever runs it, and a
 ; baked table kept behind a probe would never be the thing being tested.
 ;
-; IN `.boot2`, THE BLOB, ON kern_big, kern_emu AND kern_mega (SPEC.md 6.0.1,
-; 2.9.15), reached by B2CALL from kmain_o before spl_finish - its one caller.
-; It was the blob's (SPEC.md 6.0.1 grew the blob to ten sectors for exactly
-; this body), went to `.boot3` in BOOT3-PLAN wave 1, and came BACK in
-; BOOT3-PLAN 16.16: `.boot3` is inside the packed KERNEL.SYS and the blob is
-; not, so the move took 208 bytes off the file and kept the 360KB/720KB stage
-; 2 at 11 int 13h calls after the elendilon merge. It costs no resident byte
-; and no window byte; the blob's slack pays for it. ON kern_small it stays in
-; `.boot3` (B3CALL): those disks read 7 calls either way, and the blob there
-; holds no residue body (tests/blobbodies.txt, BOOT3-PLAN 16.17).
+; IN `.boot3` ON EVERY KERNEL (SPEC.md 6.0.1, 2.9.14.2), reached by B3CALL
+; from kmain_o before spl_finish - its one caller. It was the blob's (SPEC.md
+; 6.0.1 grew the blob to ten sectors for exactly this body), went to `.boot3`
+; in BOOT3-PLAN wave 1, came BACK to the blob on the three big kernels in
+; BOOT3-PLAN 16.16 to keep the 360KB/720KB stage 2 at 11 int 13h calls, and
+; left it again (2026-11-10) when the plain-MDA probe (SPEC.md 39.1) needed
+; the blob's room: kernel size pass 19 had given the packed file back more
+; than its 236 bytes, so stage 2's calls do not move (tests/unit/t_blobruns.py
+; holds them). It costs no resident byte and no window byte.
 ;
 ; THE TABLE IS READ IN PLACE (SPEC.md 6) - unless even the fastest candidate
 ; FONT_PICK timed is slower than RAM by more than a quarter. Then the 760
@@ -357,11 +356,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; on an AT bus, crosses it by multiples. `make FONTSLOW=1` takes the copy on
 ; any machine, so the copy path has a row.
 ; -----------------------------------------------------------------------------
-%ifndef KERN_SMALL
-section .boot2                  ; the blob on kern_big, kern_emu and kern_mega
-%else                           ; ...and `.boot3` on kern_small, as since wave
-B3SECT                          ; 1: its disks read 7 calls either way, and its
-%endif                          ; blob holds no residue (BOOT3-PLAN 16.17)
+B3SECT                          ; `.boot3`, every kernel (SPEC.md 2.9.14.2)
 font_init:
     push ax
     push bx
@@ -413,10 +408,9 @@ font_init:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain_o's B2CALL (B3CALL on kern_small)
+    retf                        ; FAR: kmain_o's B3CALL
     FONT_TIMERS .fi             ; LOCAL (font_init.fi_time, .fi_pit): the
-                                ; body's own clock, so the blob's register
-                                ; (tests/blobbodies.txt) files ONE body
+                                ; body's own clock, beside it in `.boot3`
 section .text
 %endif
 
@@ -778,7 +772,9 @@ font_char_bb:
     mov ax, dx                  ; goes. Three single shifts cost 6 bytes to
     call gfx_rowbase            ; `mov cl,3 / shr ax,cl`'s 4 and win in place
     add ax, bx                  ; because four other moves go with them
-    mov di, ax                  ; (~121.9 -> 100.9 clocks). DX is dead here.
+    xchg ax, di                 ; (~121.9 -> 100.9 clocks). DX is dead here,
+                                ; and so is AX: `xchg` for `mov` (kernel size
+                                ; pass 20, -1 and a clock)
     pop cx
     and cl, 7                   ; CL = right shift for the 16-bit window; CH is
                                 ; x's high byte and is overwritten by
@@ -824,33 +820,11 @@ font_char_bb:
     test ch, 1                  ; this plane's ink, decided ONCE rather than
     jnz .srow                   ; once per row - and so is the disabled
     cmp byte [cs:font_dith], 0  ; dither, which is mono-only and therefore
-    jne .dstart                 ; always on the clear-bits side
-    jmp short .crow
-.srow:
-    mov ah, [es:si]             ; glyph row in the window's high byte
-%ifdef KERN_BIG
-    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
-%endif                          ; KERN_BIG only, so the floor machine's glyph
-                                ; loops are byte-identical (11.3.4.1)
-    inc si
-    or ah, ah                   ; a blank row ors in nothing, whatever the
-    jz .snext                   ; shift does to it
-    xor al, al
-    shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
-    or [di], ah
-    or al, al                   ; ...and nothing spilled into the second byte
-    jz .snext                   ; at all when x is byte-aligned
-    or [di+1], al
-.snext:
-    add di, dx                  ; gfx_nextrow, inlined (see the note above),
-    test di, bp                 ; out of DX and BP
-    jz .snw
-    add di, [cs:vid_wrapfix]
-.snw:
-    dec bh
-    jnz .srow
-    pop bp
-    ret                         ; one plane, so the cell is finished
+    jne .dstart                 ; always on the clear-bits side - and the
+                                ; CLEAR loop is the one that follows, so ink
+                                ; 0 reaches it falling through where it took
+                                ; a `jmp short` (kernel size pass 20, -2 and
+                                ; ~15 clocks a black-ink glyph)
 .crow:
     mov ah, [es:si]
 %ifdef KERN_BIG
@@ -890,6 +864,31 @@ font_char_bb:
 ; always the cell's first (SPEC.md 11.3.2): a clip edge cutting a cell biases
 ; both the glyph pointer and the screen row, and an unbiased seed would flip
 ; the checkerboard's phase against the rows drawn either side of it.
+.srow:
+    mov ah, [es:si]             ; glyph row in the window's high byte
+%ifdef KERN_BIG
+    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
+%endif                          ; KERN_BIG only, so the floor machine's glyph
+                                ; loops are byte-identical (11.3.4.1)
+    inc si
+    or ah, ah                   ; a blank row ors in nothing, whatever the
+    jz .snext                   ; shift does to it
+    xor al, al
+    shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
+    or [di], ah
+    or al, al                   ; ...and nothing spilled into the second byte
+    jz .snext                   ; at all when x is byte-aligned
+    or [di+1], al
+.snext:
+    add di, dx                  ; gfx_nextrow, inlined (see the note above),
+    test di, bp                 ; out of DX and BP
+    jz .snw
+    add di, [cs:vid_wrapfix]
+.snw:
+    dec bh
+    jnz .srow
+    pop bp
+    ret                         ; one plane, so the cell is finished
 .dstart:
     mov ch, 0xAA                ; CH is the checkerboard: the ink was decided
     test byte [cs:wm_clip_r0], 1 ; by the `test ch, 1` above and is not read
@@ -1022,10 +1021,9 @@ font_ink:
     mov [font_dith], al         ; AL = 0 on the `jz` here: cleared on the VGA
     jmp short .out              ; path too - the glyph loop reads it, so it
 %endif                          ; is stored on every path, not assumed
-%ifdef KERN_SMALL
-    nop                         ; PARITY, never executed (kernel size pass
-%endif                          ; 13): font_ink's test and font_str leave font_run_x
-                                ; an odd 17 bytes up on kern_small
+                                ; (kern_small's PARITY nop that stood here went
+                                ; with font_char_bb's odd -3, kernel size pass
+                                ; 20: font_run_x is back at its measured parity)
 %ifndef KERN_SMALL
     nop                         ; PARITY, never executed (kernel hot-paths
 %endif                          ; pass 1): font_ink and font_char_bb came out
@@ -1157,7 +1155,7 @@ font_run:
     GFXAUDIT_HOOK
     push es                     ; the deferred hide is spent in font_run_x and
     push ds                     ; NOT here, which is SPEC.md 6.1.9: this entry
-    pop es                      ; is the kernel's, and the API slot 0x01E5 is
+    pop es                      ; is the kernel's, and the API slot 0x012D is
     call font_run_x             ; an X STUB straight to font_run_x - so a hide
     pop es                      ; owed here was owed by kernel callers only
     ret
@@ -1197,7 +1195,7 @@ font_run:
 font_run_x:
     SNAPAUDIT_TALLY snap_hrun, snap_krun
     call fnt_unlazy             ; SPEC.md 6.1.9: HERE, not at font_run above,
-                                ; because slot 0x01E5's X cell names THIS
+                                ; because slot 0x012D's X cell names THIS
                                 ; label - so every package's opaque run drew
                                 ; over the mouse pointer with gfx_lock's
                                 ; promised hide unspent, and gfx_unlock then

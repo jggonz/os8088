@@ -1810,7 +1810,8 @@ pu_done:
     xor cx, cx                      ; the folder's names: is it one?
 .n:
     mov di, px_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .new
     mov si, px_find
     mov di, px_sname
@@ -1857,7 +1858,14 @@ pu_start:
     cbw
     or ax, ax
     jz .r
-    call OSAPI_MEM_CLAIM            ; (all but DX kept)
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    pop cx
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; (all but DX kept)
+    pop bx
     jc .no
     mov [px_ewseg], dx
 .r:
@@ -2307,6 +2315,7 @@ pu_tnum:
     pop dx
     pop bx
     ret
+
 
 pu_tdig:    times 5 db 0
 pu_ctext:   times 128 db 0          ; the line, before it is put

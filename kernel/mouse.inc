@@ -1586,9 +1586,8 @@ osapi_mouse:
     je .live                        ; the IRQ: every ordinary caller stops here
     push ax
     push bx
-    push si
-    push di
-    push es
+    push di                         ; (no SI bank: DI becomes the vector's
+    push es                         ; pointer below - kernel size pass 20)
     mov bl, [mou_port]
     cmp bl, MOU_PEND                ; the PS/2 row (and the driver row) are not
     jae .done                       ; a UART and index no serial table
@@ -1599,7 +1598,11 @@ osapi_mouse:
     inc di                          ; (two `inc`s, not `mov di, 2`: a byte
     inc di                          ; less and no slower on an 8088, kernel
 .row:                               ; size pass 18 - the re-hook arm only)
-    mov si, [di+mou_ivecs]
+    mov dx, [di+mou_isrs]           ; DX = our ISR and DI = the vector, the row
+    mov di, [di+mou_ivecs]          ; index spent: DX and CX are this call's
+                                    ; outputs, loaded at .live, so neither needs
+                                    ; a bank and SI's push and pop went (kernel
+                                    ; size pass 20, -2 and ~10 clocks a pass)
 %ifdef KERN_MEGA
     MEGA_SEG0 es                  ; segment 0 is the NULL selector (and no
 %else                           ; zero: AX is popped or reloaded below)
@@ -1607,13 +1610,12 @@ osapi_mouse:
     mov es, ax
 %endif
     mov cx, cs
-    cmp [es:si+2], cx               ; still ours? ONE compare, which is what
+    cmp [es:di+2], cx               ; still ours? ONE compare, which is what
     je .done                        ; every pass but a theft pays
     pushf                           ; ...and one critical section over the
     cli                             ; vector AND the mask, not two
-    mov [es:si+2], cx
-    mov ax, [di+mou_isrs]
-    mov [es:si], ax
+    mov [es:di+2], cx
+    mov [es:di], dx
     mov ax, 0x040B                  ; MCR: DTR|RTS|OUT2 - a program that took
     call mou_pout                   ; the vector took the UART with it, and
     mov ax, 0x0101                  ; Battle Chess leaves MCR = 08h, which is a
@@ -1627,7 +1629,6 @@ osapi_mouse:
 .done:
     pop es
     pop di
-    pop si
     pop bx
     pop ax
     jmp short .live
@@ -1708,17 +1709,13 @@ mou_p2wr:
 %ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovl
 %else
-B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
-                                ; this arm is NEVER ASSEMBLED - the KERN_BIG
-                                ; conditional that opens above mou_p2wr
-                                ; encloses all of it. It is written anyway
-                                ; because tools/os88ovlchk.py cannot evaluate
-                                ; either conditional and mouse_init near-calls
-                                ; mou_p2_init: the two blocks have to land in
-                                ; ONE section in its model or that call reads
-                                ; as a crossing. On kern_big both really are
-                                ; `.ovl`, so the model's `.boot3 -> .boot3` is the
-                                ; same answer about the same pair of bodies
+B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE: the
+                                ; HB_EARLY kernels' arm (kern_big, kern_emu -
+                                ; mouse_init runs after the hibernation
+                                ; probe's mount, so from `.boot3`; kernel.asm's
+                                ; HB_EARLY block). mouse_init near-calls
+                                ; mou_p2_init, so the two blocks land in ONE
+                                ; section on every build
 %endif
                                 ; ...and the PS/2 half's first (see the block
                                 ; above mou_uart). mou_p2rd is read-only on the
@@ -1798,17 +1795,13 @@ mou_p2dw:
 %ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovl
 %else
-B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
-                                ; this arm is NEVER ASSEMBLED - the KERN_BIG
-                                ; conditional that opens above mou_p2wr
-                                ; encloses all of it. It is written anyway
-                                ; because tools/os88ovlchk.py cannot evaluate
-                                ; either conditional and mouse_init near-calls
-                                ; mou_p2_init: the two blocks have to land in
-                                ; ONE section in its model or that call reads
-                                ; as a crossing. On kern_big both really are
-                                ; `.ovl`, so the model's `.boot3 -> .boot3` is the
-                                ; same answer about the same pair of bodies
+B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE: the
+                                ; HB_EARLY kernels' arm (kern_big, kern_emu -
+                                ; mouse_init runs after the hibernation
+                                ; probe's mount, so from `.boot3`; kernel.asm's
+                                ; HB_EARLY block). mouse_init near-calls
+                                ; mou_p2_init, so the two blocks land in ONE
+                                ; section on every build
 %endif
                                 ; ...and the overlay's last three: mou_p2dev,
                                 ; mou_p2flush and mou_p2_init, all of which only
@@ -2166,15 +2159,29 @@ mou_p2_init:
 ; 0. Inside mou_p2_init's 0xAD window, so 60h is the device's. Overlay bytes:
 ; none of it is resident.
 ; in: nothing; out: AL spent, SI spent (mou_p2_init banks it), the rest kept
+;
+; WHERE THE TABLE IS READ FROM follows where this body is: `.ovl` at FAT_SEG
+; on a kern_small knob build, inside DS's 64K, so DS = KERNEL_SEG reaches it
+; at a shifted offset; kern_mega's `.ovl` (past DS's 64K) and the HB_EARLY
+; kernels' `.boot3` (kern_big, kern_emu - SPEC.md 87.5, where mouse_init runs
+; after the probe's mount) are reached through CS. The DS spelling on a
+; `.boot3` body read KERNEL_SEG's bytes as the knock: the wheel stayed off on
+; every IntelliMouse (tests/p2hiber.py's precondition, mou_p2wz 0).
 ; -----------------------------------------------------------------------------
+%ifdef KERN_MEGA
+ %define MOU_P2KNK_CS 1
+%elifdef MOU_IN_BLOB
+ %define MOU_P2KNK_CS 1
+%endif
 mou_p2knock:
     mov si, MOU_P2KNK_DS        ; THE TABLE THROUGH DS, which is KERNEL_SEG:
 .knock:                         ; this body runs at CS = FAT_SEG, and lodsb
-%ifdef KERN_MEGA
-    cs lodsb                    ; (kern_mega: its overlay is past DS's 64K,
-%else                           ; so the table is read through CS instead)
-    lodsb                       ; with the overlay's own offset read the
-%endif
+%ifdef MOU_P2KNK_CS
+    cs lodsb                    ; (kern_mega: its overlay is past DS's 64K;
+%else                           ; HB_EARLY kernels: this body is `.boot3`'s,
+    lodsb                       ; not FAT_SEG's - so the table is read through
+%endif                          ; CS instead) with the overlay's own offset
+                                ; read the
     call mou_p2dev              ; kernel's bytes there instead - garbage
     jc .out                     ; commands, the knock failing safe to three
     cmp si, MOU_P2KNK_DS + mou_p2knk_n  ; bytes, found by tests/wheelps2.py.
@@ -2188,7 +2195,7 @@ mou_p2knock:
 
 mou_p2knk   db 0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2
 mou_p2knk_n equ $ - mou_p2knk
-%ifdef KERN_MEGA
+%ifdef MOU_P2KNK_CS
 MOU_P2KNK_DS equ mou_p2knk      ; (read through CS: see .knock)
 %else
 MOU_P2KNK_DS equ mou_p2knk + (FAT_SEG - KERNEL_SEG) * 16 ; the same bytes, as
@@ -2965,13 +2972,12 @@ KSC_ALT     equ 0x38            ; to name. Spelled as apps/os88api.inc spells
 kbd_bit:
     push cx
     mov bl, al
-    and bl, 0x7F                ; make and break index the SAME bit
-    mov cl, bl
-    and cl, 7
-    shr bl, 1                   ; 8086: no shr reg, imm - and three of these is
-    shr bl, 1                   ; smaller than loading CL to shift by 3
-    shr bl, 1
-    mov bh, 0
+    and bx, 0x7F                ; make and break index the SAME bit - and BH
+    mov cl, bl                  ; is cleared by the same `and` (a sign-extended
+    and cl, 7                   ; imm8, as short as the byte form: kernel size
+    shr bl, 1                   ; pass 20, its `mov bh, 0` went, -2). 8086: no
+    shr bl, 1                   ; shr reg, imm - and three of these is smaller
+    shr bl, 1                   ; than loading CL to shift by 3
     mov ah, 1
     shl ah, cl
     pop cx
@@ -3028,7 +3034,7 @@ kbd_track:
     ret
 
 ; -----------------------------------------------------------------------------
-; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x02FC)
+; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x016A)
 ; in:  AL = a make scancode (0x4B left, 0x4D right, 0x39 space, ...)
 ; out: CF = 1 down, CF = 0 up; every register preserved
 ;
@@ -3325,6 +3331,7 @@ kbmi_hdr:                       ; the module header (MOD_H_*, SPEC.md 2.8.2):
     db MOD_VER, MOD_KBM         ; reader finds a module where it looks
     dw MOD_BNUM, MOD_STAMP      ; (BUILD_NUM as an equ: mod.inc)
     dw kbmi_end, KBM_NENT
+    dw 0                        ; MOD_H_SCR: no file to come back from
     dw kbm_key, kbm_p5spend, kbm_ui
 %if KBM_E_P5 != 4 * 1 || KBM_E_UI != 4 * 2
   %error "KBM_E_* are the header's entry order, four bytes a slot"
@@ -3562,7 +3569,7 @@ kbm_move:
     add ax, [mouse_y]
     mov bx, ax
     pop ax
-    call KERNEL_SEG:cw_mou_clamp
+    KDOOR mou_clamp
     mov [mouse_x], ax
     mov [mouse_y], bx
     mov byte [cur_shchk], 1     ; THE POINTER MOVED (SPEC.md 7.2.1.1)
@@ -3679,10 +3686,10 @@ kbm_ui:                         ; FAR, slot 2 (KBM_E_UI). ui_task tests
     call KERNEL_SEG:cw_gfx_lock ; (the cells are the doors, SPEC.md 2.8.8)
     mov cx, [mouse_x]
     mov dx, [mouse_y]
-    call KERNEL_SEG:cw_wm_hit   ; BX = the window under the pointer, 0 = none
+    KDOOR wm_hit                ; BX = the window under the pointer, 0 = none
     or bx, bx
     jz .unlock
-    call KERNEL_SEG:apic_wm_front ; ...which activates it too, so the menu bar
+    KDOOR wm_front                ; ...which activates it too, so the menu bar
 .unlock:                        ; and the keyboard end up on the same window
     call KERNEL_SEG:cw_gfx_unlock
 .relax:
@@ -4141,7 +4148,7 @@ mou_byte:
     jmp mou_apply               ; ...which ends in the ret this needs
 
 ; -----------------------------------------------------------------------------
-; osapi_mouse_feed - slot 0x0449: one relative report from a DRIVER (SPEC.md
+; osapi_mouse_feed - slot 0x01FF: one relative report from a DRIVER (SPEC.md
 ;                    9.12.1)
 ;
 ; in:  AX = dx, BX = dy, signed, POSITIVE dy IS DOWN; CL = the buttons in
@@ -4799,7 +4806,7 @@ section .vga                    ; COLD-PLAN 2): VIDEXTM above is the door, and
 ; to force on the shared routine.
 ; in:       [cur_off], [cur_rows], [cur_cellx], [cur_b1ok] - the drawn cell's,
 ;           as cur_geom banked them; the GC/Sequencer in their default state
-; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
+; clobbers: ax, bx, cx, dx, si, di, bp, es
 %else
 ; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
 ;                VRAM-direct (SPEC.md 32) - the cursor lives on the screen
@@ -4810,13 +4817,21 @@ section .vga                    ; COLD-PLAN 2): VIDEXTM above is the door, and
 ; -----------------------------------------------------------------------------
 cur_restoreu:
 %ifdef KHP_VGASAVE
-    mov ch, [cur_rows]
-    or ch, ch
-    jz .out                     ; wholly off the bottom: nothing was saved
-%endif
+    call cur_vspan              ; BL = second byte?, BP = the row step, CH =
+    jz .out                     ; the rows - none: wholly off the bottom,
+                                ; nothing was saved
+                                ; ES IS SPENT, NOT BANKED (kernel size pass
+                                ; 20, -2 here and -2 in cur_saveu, and a push
+                                ; and a pop off every planar packet): every
+                                ; caller's contract already clobbers it -
+                                ; cur_put_1 and cur_move_1 load it again in
+                                ; cur_draw, cur_vis banks it, cur_move_mono
+                                ; spends it on the 1bpp arm of the same
+                                ; doors - and nothing between reads it
+%else
     push es
+%endif
 %ifdef KHP_VGASAVE
-    call cur_vspan              ; BL = second byte?, BP = the row step
     mov si, cur_save
     mov di, [cur_off]
     VSEG ax, VGA_SEG
@@ -4840,8 +4855,8 @@ cur_restoreu:
     shl ah, 1                   ; next plane bit
     cmp ah, 0x10
     jb .plane
-    mov ax, 0x0F02              ; SEQ2: Map Mask back to all planes
-    out dx, ax
+    mov ah, 0x0F                ; SEQ2: Map Mask back to all planes (AL is
+    out dx, ax                  ; still 2: one byte shorter than the word)
 %else
     push word [vga_pn]          ; **AND THE POINTER IS ALWAYS FOUR PLANES**
     call cur_rect               ; (SPEC.md 11.96.17, 32 - cur_rect disarms the
@@ -4862,8 +4877,8 @@ cur_restoreu:
                                 ; branch is inside vga_restore_vram, below this
     call vga_restore_vram
     pop word [vga_pn]           ; ...and the caller's arm is its own again
-%endif
     pop es
+%endif
 %ifdef KHP_VGASAVE
 .out:
 %endif
@@ -4918,7 +4933,7 @@ section .vga                    ; cur_put_1 and cur_move_1 reach them through
 ;             for the same reason (vga_save_vram's rect machinery was 5,800
 ;             cycles a save on the XT's VGA). The buffer is the layout
 ;             vga_save_vram wrote and cur_restoreu reads.
-; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
+; clobbers: ax, bx, cx, dx, si, di, bp, es
 %else
 ; cur_saveu - copy the cell under (cur_drawn_x, cur_drawn_y) into cur_save via
 ;             vga_save_vram. vga_save_vram clips the rect at the screen edges
@@ -4929,13 +4944,12 @@ section .vga                    ; cur_put_1 and cur_move_1 reach them through
 ; -----------------------------------------------------------------------------
 cur_saveu:
 %ifdef KHP_VGASAVE
-    mov ch, [cur_rows]
-    or ch, ch
-    jz .out
-%endif
+    call cur_vspan              ; (CH = the rows, ZF = none)
+    jz .out                     ; (ES spent, not banked: cur_restoreu's reason)
+%else
     push es
+%endif
 %ifdef KHP_VGASAVE
-    call cur_vspan
     push ds
     pop es
     mov di, cur_save            ; movsb dest = the buffer, in kernel .bss
@@ -4960,10 +4974,10 @@ cur_saveu:
     jnz .row
     pop si
     inc ah
-    cmp ah, 4
+    cmp ah, al                  ; four planes: AL is GC4's index, 4
     jb .plane
-    mov ax, 0x0004              ; GC4 back to plane 0 (default)
-    out dx, ax
+    mov ah, 0                   ; GC4 back to plane 0 (default); AL is
+    out dx, ax                  ; still 4
     pop ds
 %else
     push word [vga_pn]          ; four planes, cur_restoreu's reason exactly -
@@ -4971,8 +4985,8 @@ cur_saveu:
                                 ; the restore disagree about the buffer
     call vga_save_vram
     pop word [vga_pn]
-%endif
     pop es
+%endif
 %ifdef KHP_VGASAVE
 .out:
 %endif
@@ -4985,21 +4999,25 @@ cur_saveu:
 ; took the second, which is cur_geom's [cur_b1ok] answer for the same cell.
 ; One place for the save and the restore, because the two disagreeing by a
 ; byte smears the arrow (cur_rect's reason, before it).
-; out: BL = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken;
-;      clobbers AX
+; out: BX = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken,
+;      CH = [cur_rows] and ZF = it is 0 (wholly off the bottom: nothing to
+;      walk) - the test both callers made first, written once here (the size
+;      pass that turned KHP_VGASAVE on for kern_big, -6 bytes; a cell off the
+;      bottom now pays the span too, which no on-screen packet does);
+;      BH = 0. Preserves AX
 %if CUR_GW != 8
   %error "cur_vspan assumes an 8px cell: one byte aligned, two otherwise"
 %endif
 cur_vspan:
-    mov bl, [cur_cellx]
-    and bl, 7
+    xor bx, bx                  ; BH = 0 for the subtract below: BX is the
+    test byte [cur_cellx], 7    ; flag as a word, where AL/cbw made one (-3)
     jz .one                     ; aligned: x2 lands in the same byte
-    mov bl, [cur_b1ok]
+    mov bl, [cur_b1ok]          ; (0 or 1: cur_geom's sbb/inc)
 .one:
-    mov al, bl
-    cbw
     mov bp, ROW_BYTES - 1
-    sub bp, ax
+    sub bp, bx
+    mov ch, [cur_rows]
+    or ch, ch
 %else
 ; cur_rect - the cell the two above save and restore, as a rect. ONE place,
 ; because a save and a restore that disagree about it by a byte smear the
@@ -5250,11 +5268,10 @@ cur_lazyck:
     pop ax
     jmp short cur_unlazy
 .clear:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp kret_si                 ; the same five pops and the `ret` (kernel
+                                ; size pass 20, -2; a jump, ~15 clocks, on a
+                                ; wm_clip_set whose region misses the arrow -
+                                ; once a window paint, never per rect)
 %endif
 %else
     cmp word [wm_clip_n], 0
@@ -5561,7 +5578,7 @@ cur_shape_set:
 ; sectors of disk. That is the whole measurable cost of the feature.
 ; -----------------------------------------------------------------------------
 
-; cur_busy    - slot 0x040B, the PACKAGE's door: it must hold the lock ITSELF
+; cur_busy    - slot 0x01F7, the PACKAGE's door: it must hold the lock ITSELF
 ; cur_busy_on - ...and the KERNEL's, inside fpg_arm, which need not (SPEC.md
 ;               12.8.4: the one painter in the machine that draws lock-free)
 ;
@@ -5765,28 +5782,27 @@ cur_busy_on:
 cur_move_multi:
     push cx
     push dx
-    mov dl, [vid_cur]           ; the display to come back to...
-    mov dh, [cur_disp]          ; ...and the one the arrow is on
-    mov [cur_dprev], dl
-    push ax
+    mov dh, [vid_cur]           ; the display to come back to...
+    mov dl, [cur_disp]          ; ...and the one the arrow is on - in DL, so
+    mov [cur_dprev], dh         ; that an `xchg ax, dx` hands it to
+    push ax                     ; vid_ctx_act below (kernel size pass 20)
     call vid_disp_of            ; AL = the display the NEW position is on
     mov cl, al
     pop ax
-    cmp cl, dh
+    cmp cl, dl
     jne .jump
 
-    push ax                     ; --- same display: the fused pass ----------
-    mov al, dh
-    call vid_ctx_act
-    pop ax
-    call cur_move_1
+    xchg ax, dx                 ; --- same display: the fused pass ----------
+    call vid_ctx_act            ; AL = the arrow's display, and AX back after
+    xchg ax, dx                 ; (vid_ctx_act keeps both): -2, and a push
+    call cur_move_1             ; and a pop fewer a packet
     jmp short .out
 
 .jump:                          ; --- erase whole, then draw whole ----------
     mov [cur_drawn_x], ax       ; the new position FIRST: cur_get_1 reads the
     mov [cur_drawn_y], bx       ; OLD cell out of cur_geom's bank, not these
     push cx                     ; (size pass 9: AX/BX need no banking)
-    mov al, dh
+    mov al, dl
     call vid_ctx_act
     call cur_get_1              ; the arrow leaves the display it was on...
     pop cx

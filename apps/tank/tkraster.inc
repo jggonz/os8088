@@ -124,20 +124,26 @@ tk_r_setup:
                                     ; compactor and its next Play must not be
                                     ; refused by a heap it no longer owns
 %ifdef APP_SMALL
-    mov ax, TK_SHKB                 ; THE LADDER (SPEC.md 85.3.5.1): the rung
-    call OSAPI_MEM_CLAIM            ; it would like, then the two it will
+    mov ax, TK_SHKB * 64                 ; THE LADDER (SPEC.md 85.3.5.1): the rung
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; it would like, then the two it will
     jnc .got                        ; settle for. The kernel frees the claim
-    mov ax, TK_SHKB2                ; with the instance (SPEC.md 50.3), so
-    call OSAPI_MEM_CLAIM            ; there is no teardown hook of our own -
+    mov ax, TK_SHKB2 * 64                ; with the instance (SPEC.md 50.3), so
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; there is no teardown hook of our own -
     jnc .got                        ; which is what makes the reuse above the
-    mov ax, TK_SHKB3                ; whole of the lifetime
-    call OSAPI_MEM_CLAIM
+    mov ax, TK_SHKB3 * 64                ; whole of the lifetime
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .noshadow
 .got:
+    mov cl, 6                       ; (granted in paragraphs: the KB)
+    shr ax, cl
     mov [tk_shkb], al               ; the rung, for tk_tmcap below
 %else
-    mov ax, TK_SHKB
-    call OSAPI_MEM_CLAIM            ; 32KB, and the kernel frees it with the
+    mov ax, TK_SHKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; 32KB, and the kernel frees it with the
     jc .noshadow                    ; instance (SPEC.md 50.3) - no teardown
 %endif                              ; hook of our own
     test dl, 4                      ; A SELECTOR - kern_mega put the claim
@@ -186,10 +192,13 @@ tk_r_setup:
     push dx
 %ifdef APP_SMALL
     sub ax, 15                      ; AX = the rung's KB: its pool, the claim
-%else                               ; less TK_SHSEG, rounded up to a KB
-    mov ax, TK_TMKB
+    mov cl, 6                       ; less TK_SHSEG, rounded up to a KB - in
+    shl ax, cl                      ; paragraphs
+%else
+    mov ax, (TK_SHSEG + 15) / 16
 %endif
-    call OSAPI_MEM_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov ax, dx                      ; AX = the template's own segment
     pop dx                          ; DX = the shadow again
     jnc .tmat

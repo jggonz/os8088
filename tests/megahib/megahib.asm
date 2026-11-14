@@ -228,7 +228,9 @@ mz_s_held:  db 'MEGAHIB: held ', 0
 mz_s_ok:    db 'MEGAHIB: ok', 0
 mz_s_no:    db 'MEGAHIB: no ', 0
 mz_s_bad:   db 'MEGAHIB: bad ', 0
-mz_tpl:     dw 40, 300, 200, 60, mz_ttl, mz_paint, mz_onkey, 0
+mz_tpl:     dw 40, 300, 200, 60, mz_ttl, mz_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mz_cls, 0, PAINT, mz_paint, ONKEY, mz_onkey
 mz_ttl:     db 'MEGAHIB', 0
 
     OS88_BSS 4 + MZ_CHUNK

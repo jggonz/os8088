@@ -73,25 +73,14 @@ rl_entry:
     mov [rl_win], bx
     OS88_REGION_MOVABLE_NOKEEP      ; nothing kept: AX and DX are set below
                                     ; before they are read, CF is the `clc`
-    mov ax, ru_timer
-    call OSAPI_WM_ONTIMER
-    mov al, 1
-    call OSAPI_WM_SNAP
     mov si, rl_menus
     call OSAPI_MENU_SET
-    mov si, rl_about
-    call OSAPI_ABOUT_SET
     mov ax, bx
-    mov bx, ru_buttons
-    mov si, ru_mouseup
-    mov di, ru_drag
-    xor dx, dx
+    mov bx, ru_buttons              ; (the press - ru_press, which refreshes
+    xor dx, dx                      ; geometry and enters the SDK - and the
+                                    ; gesture's release and drag are rl_cls's)
     call os88ui_btninit
     mov bx, [rl_win]
-    mov ax, ru_press
-    call OSAPI_WM_ONCLICK           ; refresh geometry, then enter SDK dispatch
-    mov ax, ru_wheel                ; SPEC.md 13.18: the mouse wheel scrolls
-    call OSAPI_WM_ONWHEEL           ; the pane under the pointer
     mov si, rl_intro
     call bl_sline
     mov si, rl_credit
@@ -1074,7 +1063,11 @@ OS88_PARTS_BEGIN 1
 OS88_PARTS_END
 RI_MPART equ 0
 
-rl_tpl: dw 7, 22, 632, 448, rl_title, rl_paint, rl_key, rl_click
+rl_tpl: dw 7, 22, 632, 448, rl_title, rl_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rl_cls, 0, PAINT, rl_paint, ONKEY, rl_key, ONCLICK, ru_press, \
+               ABOUT, rl_about, ONMOUSEUP, ru_mouseup, ONTIMER, ru_timer, \
+               ONDRAG, ru_drag, ONWHEEL, ru_wheel
 rl_title: db 'REDLINE', 0
 rl_menu: db 'Bench', 0
 rl_menuitems: dw rl_runitem, rl_saveitem, ru_summary, ru_detailed, ru_compare

@@ -38,16 +38,22 @@ import os, re, sys, glob
 CALL = re.compile(r'\b(?:call|jmp|j[a-z]{1,3}|loop[a-z]{0,2})\s+'
                   r'(?:(?:near|short)\s+)?(?:(\w+):)?([A-Za-z_]\w*)\b')
 # an API cell macro whose body near-calls its LAST argument
-CELL = re.compile(r'^\s*OSAPI_(?:SLOT|JSLOT|NSTUB|XSTUB|XCELL|RSLOT|RXCELL|JCELL)'
+CELL = re.compile(r'^\s*(?:OSAPI_(?:SLOT|JSLOT|NSTUB|XSTUB|XCELL|JCELL)'
                   r'\s+(?:\w+\s*,\s*)?'
-                  r'([A-Za-z_]\w*)\s*(?:,\s*\d+\s*)?$')
+                  r'([A-Za-z_]\w*)\s*(?:,\s*\d+\s*)?'
+                  # ...and THE DOOR's near kinds (SPEC.md 20.3.4): rd_tab's
+                  # RS and RX words name a `.text` routine `call bp` reaches
+                  r'|RD(?:ENT|PUB)\s+RDK_R[SX]\s*,\s*([A-Za-z_]\w*)\s*(?:,\s*\w+\s*)?(?:;.*)?)$')
 # ...and the cells whose argument is a `.cold` BODY (SPEC.md 20.3.2): the rare
 # cold shapes reach it through api_far as COLD_SEG:target, and OSAPI_FCELL
 # far-calls it, so the target must live in `.cold` whatever section the table
 # sits in. The hit is checked as if made FROM `.cold`, which reports a target
 # left in `.text` - a far call into the cold segment at a resident offset.
-CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
-                   r'([A-Za-z_]\w*)\s*$')
+CCELL = re.compile(r'^\s*(?:OSAPI_(?:NCELL|FCELL)\s+'
+                   r'([A-Za-z_]\w*)\s*'
+                   # ...and the door's far kinds: RCS, RCX and RN reach a
+                   # `.cold` body through api_far as COLD_SEG:word
+                   r'|RD(?:ENT|PUB)\s+RDK_R(?:CS|CX|N)\s*,\s*([A-Za-z_]\w*)\s*(?:,\s*\w+\s*)?(?:;.*)?)$')
 # ...and the two-or-three-argument cells DEFINE their first argument, as `%1:`
 # inside the macro body.  A `name:` scan cannot see that, so the 45 OSAPI_JSLOT
 # targets were not merely untested above - they were not in the label map at
@@ -188,9 +194,15 @@ ENDMACRO = _Pct(r'^\s*%endmacro')
 ENDMACRO_B = _Pct(r'^\s*%endmacro\b')
 LABEL = re.compile(r'^([A-Za-z_]\w*):')
 LABEL_DOT = re.compile(r'^[A-Za-z_.]\w*:')
-DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL|B3CALL)\s+drv_boot_x\b')
+DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL|B3CALL)\s+(?:drv_boot_x|hb_probe_x)\b')
 # (B3CALL since BOOT3-PLAN wave 2: drv_boot_x is `.boot3`'s on every kernel
 # with drivers, and kern_small's one-byte rung is still the blob's BLOBCALL)
+# ...AND hb_probe_x, whichever comes FIRST (SPEC.md 87.5, HIBER-RESUME-PLAN
+# B2): kern_big and kern_emu probe for a hibernation BEFORE drv_boot, and the
+# probe mounts the root it looks in - so on those kernels the first mount is
+# the probe's, and every `.ovl` call has to be above it. On kern_mega the probe
+# is after drv_boot and drv_boot_x is the first; the source carries both arms
+# and the earlier line is the stricter model, which is the safe direction
 OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL|OVSCALL)\s+(\w+)')
 # ...and OVSCALL, OVBCALL's mirror (SPEC.md 2.5.3.2): it IS an OVLCALL on
 # kern_small, the model's build, since BOOT3-PLAN wave 3 gave it the clock
@@ -599,10 +611,10 @@ def main():
                              if c.group(2) in pasted]
             m = CELL.match(line)
             if m:
-                hits.append((None, m.group(1)))
+                hits.append((None, m.group(1) or m.group(2)))
             m = CCELL.match(line)
             if m:
-                hits.append(('.cold', m.group(1)))
+                hits.append(('.cold', m.group(1) or m.group(2)))
             for seg, tgt in hits:
                 tsect = where.get(tgt)
                 if tsect is None:
@@ -1150,7 +1162,8 @@ def main():
                  "rule 2e cannot say what runs after the first mount, so it "
                  "refuses rather than passing (SPEC.md 2.5.3)")
     for f, n, sym in late:
-        print("%s:%d: OVLCALL %s is AFTER drv_boot_x - the first mount has "
+        print("%s:%d: OVLCALL %s is AFTER the first mount (drv_boot_x, or "
+              "hb_probe_x where it comes first) - the mount has "
               "already taken the FAT window those bytes are in"
               % (f, n, sym), file=sys.stderr)
     if late:
@@ -1325,7 +1338,7 @@ def main():
     # --- and a module's data is its HEADER, at its head, and nothing else ---
     # A module (SPEC.md 2.8) runs with CS = a heap claim and DS = KERNEL_SEG,
     # so rule 1 binds it exactly as it binds .cold - with ONE exception, which
-    # is the 12-byte header plus its entry table: those bytes are read through
+    # is the 14-byte header plus its entry table: those bytes are read through
     # ES by mod_need, never through DS by the module, and they have to be at
     # offset 0 because that is where the loader looks.
     #

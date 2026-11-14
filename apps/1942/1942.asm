@@ -37,29 +37,24 @@ OS88_ICON16_END
 n_entry:
     call op_load                    ; SI is the kernel's: the name, FIRST.
                                     ; Every part is lazy, so this is the copy
-    mov ax, N_CANVAS_KB             ; The sprite banks are fetched on the way
-    call OSAPI_MEM_CLAIM            ; into fullscreen and dropped on the way
+    mov ax, N_CANVAS_KB * 64             ; The sprite banks are fetched on the way
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; into fullscreen and dropped on the way
     jc .out                         ; out (n_loadgfx, n_dropgfx), so the
     mov [n_canvas], dx              ; desktop holds the canvas and nothing else
     mov ax, n_canvasmv              ; ...and on the desktop it MOVES (SPEC.md
     call OSAPI_MEM_MOVABLE          ; 101.2.1): n_launch pins it for the bracket
     mov si, n_tpl
-    call OSAPI_WM_CREATE
-    jc .out
+    call OSAPI_WM_CREATE            ; ...and AL = the class slots this kernel
+    jc .out                         ; dispatches (SPEC.md 11.104): no timer on
+    cmp al, WC_ONTIMER + 1          ; kern_small, so the front end is static
+    sbb al, al                      ; there (n_frontstatic 1)
+    neg al
+    mov [n_frontstatic], al
     mov [n_win], bx
     OS88_REGION_MOVABLE
     mov si,n_pref
     call OSAPI_WM_PREFER
-    mov al,1
-    call OSAPI_WM_SNAP
-    mov ax,n_fronttimer
-    call OSAPI_WM_ONTIMER
-    mov byte [n_frontstatic],0
-    jnc .timer
-    inc byte [n_frontstatic]
-.timer:
-    mov si, n_about
-    call OSAPI_ABOUT_SET
     call OSAPI_GET_TICKS
     or ax, 1
     mov [n_seed], ax
@@ -296,7 +291,9 @@ n_exit:
     mov byte [n_infs], 0
     ret
 
-n_tpl: dw 52,32,452,284,n_title,n_paint,n_key,n_click
+n_tpl: dw 52,32,452,284,n_title,n_cls
+    OS88_CLASS n_cls, 0, PAINT, n_paint, ONKEY, n_key, ONCLICK, n_click, \
+               ABOUT, n_about, ONTIMER, n_fronttimer
 OS88_PREFER n_pref,452,284,452,284,452,154
 n_title: db '1942',0
 n_errmsg: db 'Fullscreen requires a VGA or CGA display.',0

@@ -72,7 +72,7 @@ CLIP_MAXKB equ 32               ; the ceiling, KB. Not arbitrary: the largest
                                 ; which is what the length check compares
 
 ; -----------------------------------------------------------------------------
-; clip_put - replace the clipboard's contents (API slot 0x0268)
+; clip_put - replace the clipboard's contents (a door cell)
 ;
 ; in:       ES:SI = the text, CX = its length in bytes. CX = 0 EMPTIES the
 ;           clipboard, which is a real operation and not an error
@@ -166,7 +166,7 @@ clip_put:
     jmp kret_bp
 
 ; -----------------------------------------------------------------------------
-; clip_get - copy the clipboard into the caller's buffer (API slot 0x026E)
+; clip_get - copy the clipboard into the caller's buffer (a door cell)
 ;
 ; in:       ES:DI = the destination, CX = its capacity in bytes
 ; out:      CF = 1 the clipboard is empty (AX = CX = 0); CF = 0 with
@@ -203,7 +203,9 @@ clip_get:
                                 ; two lines down. A `push cs / pop ds` here
                                 ; wrote a register nobody read
     pop cx                      ; CF = 0 from the `xor si, si` above: neither
-    jmp short .out              ; `rep movsb` nor a pop writes a flag
+    SKIPF2                      ; `rep movsb` nor a pop writes a flag - and
+                                ; nor does test ax, imm16 over .empty's mov
+                                ; write CF (kernel size pass 20, -1)
 .empty:
     mov cx, ax                  ; 0 - clip_size's AX - and CF is still its 1:
 .out:                           ; `mov` writes no flag (kernel size pass 17, -1)
@@ -213,7 +215,7 @@ clip_get:
     ret
 
 ; -----------------------------------------------------------------------------
-; clip_size - how much text the clipboard holds (API slot 0x0274)
+; clip_size - how much text the clipboard holds (a door cell)
 ;
 ; in:       nothing
 ; out:      CF = 1 and AX = 0 when it is empty; else CF = 0 and AX = the

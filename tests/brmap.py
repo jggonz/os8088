@@ -134,7 +134,7 @@ def main():
     dispcp.open_named(m, mo, S, settle, wx, wy, "BROWSER.O88")
     bw = dispcp.win_list(m, S)[-1]
     rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    pseg = u16(rec[22:24])
+    pseg = u16(rec[dispcp.W_SEG:dispcp.W_SEG + 2])
 
     def rb(n, off=0):
         return m.readseg(pseg, sy[n] + off, 1)[0]

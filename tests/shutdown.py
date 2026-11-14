@@ -48,6 +48,24 @@ def run(card, machine, image):
             return (mseg != 0 and seg() == mseg and
                     m.readseg(seg(), offsets["sd_active"], 1) == b"\x01")
 
+        def live():
+            # CTRL.DRV is LIVE while its slots name its row's segment. A row
+            # that still holds one with the slots on mod_gone is a dropped
+            # image KEPT for the next open (SPEC.md 2.8.3, kern_big), which
+            # is the release this row asks about, not a retention
+            mseg = word(m, "mod_tab")
+            return mseg != 0 and seg() == mseg
+
+        def seg_kept(where, at):
+            # the row still names the patched image (kept, not freed): its
+            # bytes are what the next mod_need re-adopts
+            mseg = word(m, "mod_tab")
+            if not mseg:
+                return False
+            base = (m.lin(mseg, 0) if getattr(m, "bochs", False)
+                    else mseg * 16)     # (kern_mega keeps its pool pair)
+            return where == base + at
+
         def prompt():
             ui.menu_pick(0, "Shut Down...")
             M.until(m, lambda _: active(), "shutdown confirmation", limit=60)
@@ -55,13 +73,12 @@ def run(card, machine, image):
         def cancelled(retained=False):
             # The prompt closes before a confirmed shutdown flushes settings.
             # Wait for the returning thunk to finish releasing its module too.
-            M.until(m, lambda _: not active() and
-                    bool(word(m, "mod_tab")) == retained,
+            M.until(m, lambda _: not active() and live() == retained,
                     "shutdown cancellation and module lifetime", limit=30)
             before = word(m, "ticks")
             M.guest_sleep(m, .5)
             assert word(m, "ticks") != before, "Cancel stopped the scheduler"
-            assert bool(word(m, "mod_tab")) == retained, "Incorrect CTRL.DRV lifetime"
+            assert live() == retained, "Incorrect CTRL.DRV lifetime"
 
         prompt()
         w, h, rgb = m.fbuf()
@@ -91,7 +108,7 @@ def run(card, machine, image):
         cancelled(retained=True)
         assert m.read(S.linear("cp_wdirty"), 1) == b"\x01"
         ui.close(panel)
-        M.until(m, lambda _: word(m, "mod_tab") == 0, "panel module release", limit=30)
+        M.until(m, lambda _: not live(), "panel module release", limit=30)
 
         if not SMALL:
             # Only the big kernel persists SYSTEM.CFG (SPEC.md 51.5.3). The
@@ -105,19 +122,49 @@ def run(card, machine, image):
             # core, so five bytes there wrote two over the first of the next
             # image section's (docs/plans/completed/ksp12/ctrl.md). cpc_save opens on six
             # one-byte pushes with no label among them, and the assert says so.
-            error = eq["FERR_WPROT"]
-            patch = bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3))
-            at = offsets["cpc_save"]
-            inside = [v for k, v in offsets.items()
-                      if k.startswith("cpc_save.") and v >= at]
-            assert not inside or min(inside) >= at + len(patch), \
-                "the injected writer would overwrite a label inside cpc_save"
-            m.write(m.lin(seg(), at) if getattr(m, "bochs", False)
-                    else seg() * 16 + at, patch)   # (a selector: kern_mega)
+            #
+            # UNDER BOCHS (kern_mega, tests/megaport.txt) THE FAILURE IS
+            # INJECTED THROUGH DATA, NOT CODE. Bochs caches decoded
+            # instructions per physical page and a debugger write does not
+            # invalidate them (docs/BOCHS.md), and cpc_save has RUN by now:
+            # closing the panel above flushed the dirty settings through it.
+            # Since kern_mega KEEPS a dropped image and re-adopts it in place
+            # (SPEC.md 2.8.3.3) this prompt runs the very bytes Bochs already
+            # decoded. Measured: the five patched bytes read back in place,
+            # yet [cp_wdirty] went to 0 and the machine sat on the terminal
+            # splash - the ORIGINAL writer ran, the save succeeded and Shut
+            # Down went through, which read as a module never released. So
+            # there the system disk's NAME is what breaks: cpc_save's own
+            # dskw_stat of KERNEL.SYS finds nothing and the writer answers
+            # FERR_NOENT, a refusal the same path carries - cp_wdirty kept,
+            # cp_dsave set, the desktop back.
+            if getattr(m, "bochs", False):
+                at = offsets["cpc_sysname"]
+                assert m.readseg(seg(), at, 10) == b"KERNEL.SYS", \
+                    "cpc_sysname is not where the map says"
+                patch = b"KERNEL.SYQ"
+            else:
+                error = eq["FERR_WPROT"]
+                patch = bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3))
+                at = offsets["cpc_save"]
+                inside = [v for k, v in offsets.items()
+                          if k.startswith("cpc_save.") and v >= at]
+                assert not inside or min(inside) >= at + len(patch), \
+                    "the injected writer would overwrite a label inside cpc_save"
+            where = (m.lin(seg(), at) if getattr(m, "bochs", False)
+                     else seg() * 16 + at)          # (a selector: kern_mega)
+            original = m.read(where, len(patch))
+            m.write(where, patch)
             m.key("Enter")
             cancelled()
             assert m.read(S.linear("cp_wdirty"), 1) == b"\x01", "Failed save was forgotten"
             assert m.read(S.linear("cp_dsave"), 1) != b"\x00", "Failed save was not reported"
+            # ...AND THE IMAGE PUT BACK: the drop KEEPS it (SPEC.md 2.8.3,
+            # kern_mega's pool pair 2.8.3.3), so the next Shut Down re-adopts THESE bytes rather than
+            # reading the file - the patched writer would fail the real flush
+            # below. The claim is kept where it was (nothing claimed since)
+            if seg_kept(where, at):
+                m.write(where, original)
 
         # Pending settings must be written before stopping the OS.
         m.write(S.linear("cp_wdirty"), b"\x01")

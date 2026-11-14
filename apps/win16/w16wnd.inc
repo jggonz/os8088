@@ -771,9 +771,7 @@ w16_newosw:
 .yt:
     mov [w16_otpl + 2], ax
     mov [w16_otpl + 6], cx
-    mov word [w16_otpl + 10], w16_paint
-    mov word [w16_otpl + 12], w16_onkey
-    mov word [w16_otpl + 14], w16_onclick
+    mov word [w16_otpl + WT_CLASS], w16_ocls
     push bx
     mov si, w16_otpl
     call OSAPI_WM_CREATE            ; BX = the os8088 window, hidden
@@ -783,21 +781,7 @@ w16_newosw:
     mov [bx + W16W_OSW], ax
     mov si, [w16_otpl + 8]          ; the title buffer names its window
     mov [si - 2], ax
-    push bx
-    mov bx, ax
-    mov ax, w16_onclose
-    call OSAPI_WM_ONCLOSE
-    mov ax, w16_onup
-    call OSAPI_WM_ONMOUSEUP
-    mov ax, w16_ondrag
-    call OSAPI_WM_ONDRAG
-    mov ax, w16_onrclick
-    call OSAPI_WM_ONRCLICK
-    mov al, 1                       ; W_PAINT paints every pixel
-    call OSAPI_WM_OWNBG
-    call OSAPI_WM_NOANIM            ; a dialog does not zoom open (SPEC.md
-    pop bx                          ;   11.99.2.1)
-    clc
+    clc                             ; (its handlers and flags are w16_ocls's)
     jmp short .out
 .ffree:
     call w16_ttlfree
@@ -1107,8 +1091,8 @@ w16_mkwnd:
     mov word [w16_titleptr], w16_wtitle
     call w16_lock
     mov bx, [w16_win]
-    mov al, 1                       ; W_PAINT paints every pixel (SPEC.md 124.8)
-    call OSAPI_WM_OWNBG
+    mov ax, WFB_OWNBG * 256 + 1     ; W_PAINT paints every pixel (SPEC.md 124.8)
+    call OSAPI_WM_FLAG
     mov ax, w16_wtitle
     call OSAPI_WM_TITLE
     call w16_unlock

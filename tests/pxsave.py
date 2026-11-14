@@ -119,7 +119,6 @@ def save(fmt, m, w, h, pal, mode, chunk=8192, nslot=2):
 
 def copy_info(sel, pick):
     """WV_UCOPY on a faked package: the line it puts on the clipboard."""
-    from unicorn import UC_HOOK_CODE
     from unicorn.x86_const import UC_X86_REG_ES, UC_X86_REG_SI, UC_X86_REG_CX
     p = pxpartemu.PxPart("build/pxwrite.bin")
     gate = 0x0F40
@@ -127,13 +126,11 @@ def copy_info(sel, pick):
     p.w16("px_svgp", gate)
     put = []
 
-    def clip(mu, addr, size, _):
-        if addr - pxpartemu.KSEG * 16 == p.cells["OSAPI_CLIP_PUT"]:
-            es, si = mu.reg_read(UC_X86_REG_ES), mu.reg_read(UC_X86_REG_SI)
-            n = mu.reg_read(UC_X86_REG_CX)
-            put.append(bytes(mu.mem_read(es * 16 + si, n)))
-    p.mu.hook_add(UC_HOOK_CODE, clip, begin=pxpartemu.KSEG * 16,
-                  end=pxpartemu.KSEG * 16 + 0xFFFF)
+    def clip(mu):                       # OSAPI_CLIP_PUT: a DOOR since T5
+        es, si = mu.reg_read(UC_X86_REG_ES), mu.reg_read(UC_X86_REG_SI)
+        n = mu.reg_read(UC_X86_REG_CX)
+        put.append(bytes(mu.mem_read(es * 16 + si, n)))
+    p.doors[p.door_ix["OSAPI_CLIP_PUT"]] = clip
     iv = 24                                     # PX_IVSZ
     p.wbytes("px_ival", b"CITY.PCX\0")
     p.wbytes("px_ival", b"PCX\0", 3 * iv)

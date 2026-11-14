@@ -222,6 +222,7 @@ dhcp_start:
     push cx
     push si
     push di
+    mov byte [dhcp_wk], 0               ; a DISCOVER is nobody's wake (72.5.3)
     mov byte [dns_cnm], 0               ; a new lease: names asked again
     call OSAPI_RAND                     ; a fresh transaction: a reply to the
     mov [dhcp_xid], ax                  ; PREVIOUS one must not be mistaken for
@@ -247,11 +248,14 @@ dhcp_request:
     mov si, dhcp_off
     mov cx, 4
     call dh_emitn
-    mov si, dh_o_sid
-    call dh_emit
+    cmp byte [dhcp_wk], 0       ; A WAKE'S IS INIT-REBOOT (SPEC.md 72.5.3):
+    jne .reboot                 ; no server is being chosen, so option 54
+    mov si, dh_o_sid            ; goes - RFC 2131 4.3.2, the form a server
+    call dh_emit                ; may NAK
     mov si, dhcp_srv
     mov cx, 4
     call dh_emitn
+.reboot:
     mov al, DH_REQUEST
     ; ...and fall through
 
@@ -379,8 +383,14 @@ dhcp_in:
     je  .nak
     jmp .out
 .nak:
-    mov byte [dhcp_st], DH_IDLE         ; start over rather than sit refused
-    call dhcp_start
+    mov di, eth_ip                      ; REFUSED - and a wake's address goes
+    mov cx, 16                          ; with it, the router and the name
+    call mem_zero                       ; server too (SPEC.md 72.5.3): the
+                                        ; machine is on another network, or
+                                        ; the lease was given away
+    call dhcp_start                     ; start over rather than sit refused:
+                                        ; DISCOVER, which dhcp_send stores
+                                        ; over the state (no IDLE between)
     jmp .out
 .offer:
     cmp byte [dhcp_st], DH_DISCOVER
@@ -390,16 +400,13 @@ dhcp_in:
     call mem_cp4
     mov al, 54
     call dh_opt4
-    jc  .srvsi
-    jne .srvsi
-    mov di, dhcp_srv
-    call mem_cp4
-    jmp short .req
+    jc  .srvsi                          ; (CF first: ZF means nothing then)
+    je  .srv
 .srvsi:
     mov si, eth_rxb + IP_PAY + UD_HLEN + BP_SIADDR
-    mov di, dhcp_srv
+.srv:
+    mov di, dhcp_srv                    ; ONE copy for either source
     call mem_cp4
-.req:
     call dhcp_request
     jmp short .out
 .ack:
@@ -448,11 +455,10 @@ dhcp_timer:
                                 ; where these four sit twenty bytes into the
                                 ; chain. Pushing a save DOWN to a shallow
                                 ; callee is free depth
-    cmp byte [dhcp_st], DH_DISCOVER
-    je  .live
-    cmp byte [dhcp_st], DH_REQUEST
-    jne .out
-.live:
+    mov al, [dhcp_st]           ; DISCOVER or REQUEST, 1 or 2: one compare
+    dec ax                      ; (IDLE wraps to FFh, BOUND and FAIL stay
+    cmp al, DH_REQUEST - 1      ; above it; AH is spent below anyway)
+    ja  .out
     call OSAPI_GET_TICKS
     sub ax, [dhcp_tmo]
     js  .out
@@ -460,8 +466,14 @@ dhcp_timer:
     mov al, [dhcp_try]
     cmp al, DHCP_TRIES
     jb  .again
-    mov byte [dhcp_st], DH_FAIL         ; the page says so, and `make ETHIP=`
-    jmp short .out                      ; is the answer on a LAN with no server
+    mov al, DH_BOUND            ; a wake's REQUEST nobody answered keeps
+    cmp byte [dhcp_wk], 1       ; the address it asked for (SPEC.md 72.5.3);
+    adc al, 0                   ; any other is DH_FAIL - the page says so, and
+    mov [dhcp_st], al           ; `make ETHIP=` is the answer on a LAN with no
+    jmp short .out              ; server. [dhcp_wk] is 0 or 1, so CF = !wk
+%if DH_FAIL != DH_BOUND + 1 || DH_DISCOVER != 1 || DH_REQUEST != 2 || DH_IDLE != 0
+  %error "dhcp_timer's arithmetic reads the DH_* order"
+%endif
 .again:
     cmp byte [dhcp_st], DH_REQUEST
     je  .rereq

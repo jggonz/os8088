@@ -32,7 +32,7 @@
 ;   once it has read your header and does not grow anything (SPEC.md 51.1.2,
 ;   50.2.1). Anything bulk
 ;   (a DMA buffer,
-;   a ring) is still your own OSAPI_MEM_CLAIM at attach, freed at detach: the
+;   a ring) is still your own OSAPI_MEM_P claim at attach, freed at detach: the
 ;   header's byte caps a bss at 255 paragraphs.
 ;
 ; - **You have no window, no instance and no menu.** You are not an app: no
@@ -153,6 +153,13 @@ os88_drv_foot equ 1
 %endmacro
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
+; A VERB YOU DO NOT IMPLEMENT IS REFUSED: CF = 1, no work done, AL not read
+; (SPEC.md 51.2.2). CF = 0 means "I did it" and the kernel acts on it - TIER's
+; re-publishes SI, HWINFO's becomes a suspend record - so a default `clc` is a
+; false yes to every verb a later kernel adds. Name each verb you handle, then
+; refuse. The two every driver is sent are the exceptions: DETACH cannot fail,
+; and READY with nothing to do answers CF = 0 (its CF = 1 is banked as your
+; row's DRVE_*). tests/unit/t_drvverb.py walks every built driver's dispatch.
 ; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---
 DQ_CLASS     equ 0              ; db: the DRVC_* this record is about
 DQ_FLAGS     equ 1              ; db: bit 0 = it went
@@ -204,7 +211,23 @@ DRVV_HWINFO  equ 4              ; "WHERE IS YOUR HARDWARE?" (SPEC.md 51.11.2).
                                 ; this into something a program acts on - a
                                 ; BLASTER= - and one naming a card that is
                                 ; absent is worse than none at all.
-DRVV_TIER    equ 2              ; in AH = how much of yourself the user wants
+DRVV_SLEEP   equ 5              ; THE MACHINE IS GOING AWAY AND COMING BACK
+                                ; (SPEC.md 51.2.5): a hibernate's picture, or
+                                ; the DOS handoff. Sent ONLY to a driver that
+                                ; says OS88_DRV_WAKES, and only by those two.
+                                ; Stop the hardware and unhook every vector -
+                                ; a DOS program gets the machine next - and
+                                ; STAY LOADED: your image and your claims are
+                                ; in the picture. out CF=0; CF=1 = "unload me
+                                ; as before", and nothing was done
+DRVV_WAKE    equ 6              ; ...and it came back: the same image, after a
+                                ; POST or a DOS program. Find the hardware
+                                ; again where SLEEP left it and re-arm it.
+                                ; out CF=0; CF=1 = it is not there, or not the
+                                ; same one, and the kernel then sends DETACH,
+                                ; frees you and loads a fresh copy off the disk
+                                ; - so a refusal must leave DETACH safe to run
+DRVV_TIER    equ 2             ; in AH = how much of yourself the user wants
                                 ; (SPEC.md 34.8); out CF=0 and SI = your
                                 ; service table, which the kernel RE-COPIES
                                 ; because a tier change alters it; CF=1 and
@@ -421,6 +444,17 @@ DSV_SIZE     equ 36
 %if DSV_SIZE > 0x3F
   %error "os88drv: the +15 byte's DSV length is 6 bits - bits 7 and 6 are OS88_DRV_HIGHOK and OS88_DRV_HICLAIM"
 %endif
+; THE FLOOR (SPEC.md 51.2, kernel size pass 19): EVERY driver this DRV_VER
+; admits carries a WHOLE table, DSV_FLOOR bytes - OS88_DRV_END refuses a
+; shorter one - so the kernel reads a cell below the floor IN YOUR SEGMENT, in
+; place and with no length test, for as long as your services are published.
+; Your table must therefore STAY where DRVV_ATTACH (or DRVV_TIER) said it was
+; and stay readable until DRVV_DETACH: not in attach-only memory you reuse,
+; not in code a drop takes away. Only the SOUND class's is still copied (the
+; tick reads it inside IRQ0). DRVC_POINT's is never read (SPEC.md 9.12.5.4).
+; A cell appended past the floor is a cell the kernel must length-test
+; against +15 - or a DRV_VER bump that raises this.
+DSV_FLOOR    equ 36
 
 ; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
 ; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -
@@ -555,6 +589,11 @@ FSV_RMTREE   equ 28             ; SI = a folder's name in the CURRENT folder:
                                 ; is, and what is protected, are questions
                                 ; only your side can answer
 FSV_SIZE     equ 30
+FSV_FLOOR    equ 30             ; ...and its FLOOR, DSV_FLOOR's rule: every
+                                ; DRVC_FILE-family table carries every verb
+                                ; up to here (a 0 for one you decline), and
+                                ; the kernel reads a verb's cell with no
+                                ; length test (SPEC.md 62.9.1.1)
 
 ; PUT A `%if` ON YOUR TABLE'S OWN LENGTH. A trailing backslash in a NASM
 ; comment is a LINE CONTINUATION, so an ASCII-art brace drawn down the right
@@ -632,7 +671,7 @@ BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
 ;      before it frees your image; a worker that never exits leaves the
 ;      image claimed and the row loaded - a leak, never a free under a CS
 ;      that still points into it.
-%define OSAPI_DRV_TASK      KERNEL_SEG:0x01D9
+%define OSAPI_DRV_TASK      OS88_DOOR        
 
 ; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------
 ; A volume is a small INDEX - 0 = A:, 1 = B:, 2 = C: - and the desktop zone,
@@ -696,11 +735,11 @@ BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
 ; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------
 ; Everything in the app SDK's memory section applies to you unchanged - your
 ; IMAGE segment is your owner word, exactly as a package's region is its own -
-; so OSAPI_MEM_CLAIM and OSAPI_MEM_FREE need no driver variant. One thing does:
+; so OSAPI_MEM_P and OSAPI_MEM_FREE need no driver variant. One thing does:
 ; a buffer the ISA DMA controller addresses must not cross a 64KB PHYSICAL
 ; boundary, because the 8237 has no register for address bits 16..19 and never
 ; carries into the page port that does. Ask for that up front with
-; OSAPI_MEM_CLAIM_DMA (AX = KB, CX = KB of the head the chip will see) rather
+; OSAPI_MEM_P's head (CX = the paragraphs of the head the chip will see) rather
 ; than claiming, testing the address, and claiming again while holding the
 ; block that failed - that pattern can hold four buffers to find one, and
 ; refuse on a machine that had the room all along.
@@ -709,7 +748,7 @@ BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
 ; re-contracted in place, 9 until the RAM disk's class moved, 11 until the
 ; heap's granule became 512 bytes and the strip rung with it (SPEC.md 50.2.1),
 ; 12 now. Mirrored in kernel/driver.inc and tools/os88drv.py.
-DRV_VER equ 12
+DRV_VER equ 14
 
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry [, dsvlen] - open the driver and emit its
@@ -718,22 +757,16 @@ DRV_VER equ 12
 ; that OS88_DRV_END resolves.
 ;
 ; DSVLEN IS YOUR SERVICE TABLE'S REAL LENGTH, in bytes, and it goes in the
-; header's +15 (SPEC.md 51.2). Leave it out and it is DSV_SIZE, which is what
-; every driver had before the argument existed - so the table must then be
-; padded out to DSV_SIZE. Give it, and the table ENDS WHERE ITS LAST CELL
-; DOES: write a label after that cell and pass `my_svc_end - my_svc`. Nothing
-; past the length is read, because drv_publish zeroes the class's whole copy
-; first and then copies only as far as +15 says - so a table that stops at
-; DSV_CPDRAG publishes DSV_PKGCALL as 0 (no package door), exactly as an
-; explicit `dw 0` would. A forward reference is fine; OS88_DRV_END checks it
-; is EVEN (the copy is by words), at least 2 (0 at +15 means DSV_TAB0, a
-; pre-byte driver) and at most DSV_SIZE.
-;
-; It saves only TRAILING zero cells - a cell's offset is the ABI, so a 0 in
-; the middle of the table still has to be there. DSV_PKGCALL is the last cell
-; and every driver with a package door publishes it, so the saving is the
-; doorless drivers' (HDD.DRV's 2 bytes today), and the length is the guard
-; that makes a short table safe rather than the pad that used to be.
+; header's +15 (SPEC.md 51.2). Leave it out and it is DSV_SIZE - so the table
+; must then be padded out to DSV_SIZE. Give it (`my_svc_end - my_svc`, a
+; forward reference is fine) and OS88_DRV_END CHECKS it: the table is the
+; FLOOR, DSV_FLOOR bytes, or the build fails (kernel size pass 19, ABI-BREAK-
+; LIST D4). It used to be the guard that made a SHORT table safe - the kernel
+; zeroed its copy and copied only this far - and every driver in the tree had
+; carried a whole table for two DRV_VER bumps when the kernel stopped copying
+; at all: it reads the cells IN PLACE now (DSV_FLOOR's note), so a short table
+; would hand it whatever follows. A 0 for a cell you do not have is the
+; table's own `dw 0`, never its end.
 ; -----------------------------------------------------------------------------
 %ifndef DRV_ORG
   %define DRV_ORG 0         ; THE SHIPPED IMAGE IS ORG 0, ALWAYS. The Makefile
@@ -755,7 +788,7 @@ DRV_VER equ 12
 ; of +15, which every kernel masks or clamps to its own table length, so the
 ; bit is invisible to a kernel that does not place drivers high.
 ; OS88_DRV_HICLAIM - %define it as well to say that the driver's own claims
-; of 64KB or less (OSAPI_MEM_CLAIM / _CLAIM_HI, never the DMA cells) may be
+; of 64KB or less (OSAPI_MEM_P with no head, never with one) may be
 ; pool SELECTORS above 1MB, as a package's are under OS88_HIGHMEM: no
 ; paragraph arithmetic on one, no BIOS call or DMA engine handed one, and a
 ; relocation proc on any it declares movable, because the kernel MOVES those
@@ -768,6 +801,17 @@ OS88_DRV_HIBIT equ 0x80
  %endif
 %else
 OS88_DRV_HIBIT equ 0
+%endif
+; OS88_DRV_WAKES - %define it BEFORE OS88_DRIVER / OS88_OVERLAY to say that
+; this driver answers DRVV_SLEEP and DRVV_WAKE (SPEC.md 51.2.5), so a
+; hibernate or a DOS handoff KEEPS it loaded rather than unloading it and
+; reading it off the disk again at the wake. It is bit 15 of +10, the word
+; written and not read - except by HIBER.DRV, for this bit. Undefined, the
+; header is byte for byte what it was, and the driver is unloaded as ever
+%ifdef OS88_DRV_WAKES
+OS88_DRV_WAKEBIT equ 0x8000
+%else
+OS88_DRV_WAKEBIT equ 0
 %endif
 
 %macro OS88_DRIVER 3-4 DSV_SIZE
@@ -785,25 +829,23 @@ OS88_DRV_HIBIT equ 0
                             ;     or, in a copy the HMA runs, where it runs
     dw (%3) - $$            ; +6  entry offset
     dw OS88_DRV_SIZE        ; +8  image size = the whole file, data included
-    dw FSV_SIZE             ; +10 THE FSV_* TABLE LENGTH THIS DRIVER WAS BUILT
-                            ;     WITH (SPEC.md 62.9.1.1). Every class writes
-                            ;     it and only DRVC_FILE is read: the kernel
-                            ;     refuses a verb past it instead of reading
-                            ;     whatever follows your table. Was reserved
-                            ;     (0), which the kernel reads as 28 - the
-                            ;     length every driver before this word had
+    dw FSV_SIZE | OS88_DRV_WAKEBIT ; +10 THE FSV_* TABLE LENGTH THIS DRIVER WAS
+                            ;     BUILT WITH (SPEC.md 62.9.1.1) - and bit 15,
+                            ;     OS88_DRV_WAKES (51.2.5), the one bit of it
+                            ;     anything reads. The length is written and NOT READ
+                            ;     since kernel size pass 19: every file table
+                            ;     is FSV_FLOOR long, so no verb is length-
+                            ;     tested (D4). Kept because the header is 32
+                            ;     bytes either way and a hex dump says which
+                            ;     SDK built the file
     db 0FFh, 0D5h           ; +12 THE DISPATCHER: `call bp`...
     db 0CBh                 ; +14 ...`retf`. The kernel far-calls this fixed
                             ;     offset with BP = the proc it wants.
     db OS88_DSV_LEN | OS88_DRV_HIBIT ; +15 THE DSV_* TABLE LENGTH THIS DRIVER WAS BUILT
-                            ;     WITH (SPEC.md 51.2) - the FSV word's rule one
-                            ;     level up. drv_publish copies only this many
-                            ;     bytes and publishes 0 for the cells past it,
-                            ;     instead of reading whatever you put after
-                            ;     your table. Was the dispatcher's pad byte
-                            ;     (0), which the kernel reads as 28 - the
-                            ;     length every driver before it had. DSV_SIZE
-                            ;     unless the fourth argument says otherwise
+                            ;     WITH (SPEC.md 51.2): DSV_FLOOR, which
+                            ;     OS88_DRV_END holds it to - the kernel reads
+                            ;     bits 7 and 6 (OS88_DRV_HIGHOK, _HICLAIM) and
+                            ;     not the length, the floor being the length
     %strlen %%len %1
     %if %%len > 15
         %error "OS88_DRIVER: name must be at most 15 characters"
@@ -843,7 +885,9 @@ OS88_DRV_HIBIT equ 0
     dw 0                    ; +4  link base: 0
     dw (%3) - $$            ; +6  entry offset
     dw OS88_DRV_SIZE        ; +8  image size = the whole file
-    dw %2                   ; +10 the private ABI version its owner checks
+    dw (%2) | OS88_DRV_WAKEBIT ; +10 the private ABI version its owner checks,
+                            ;     and bit 15 OS88_DRV_WAKES for an overlay with
+                            ;     a drv_tab row (VMMOUSE.DRV, SPEC.md 51.2.5)
     db 0FFh, 0D5h           ; +12 the dispatcher: `call bp`...
     db 0CBh                 ; +14 ...`retf`
     db OS88_DRV_HIBIT       ; +15 bit 7: OS88_DRV_HIGHOK, as a driver's
@@ -867,9 +911,12 @@ OS88_DRV_SIZE equ os88_drv_end - $$
     %endif
     %ifdef OS88_DSV_LEN
         ; OS88_DRIVER's fourth argument, checked here because it may be a
-        ; forward reference: EVEN, 2..DSV_SIZE. A `times` of -1 is NASM's
-        ; "TIMES value -1 is negative", which is the error; 0 emits nothing.
-        times -(((OS88_DSV_LEN) & 1) | ((OS88_DSV_LEN) < 2) | ((OS88_DSV_LEN) > DSV_SIZE)) db 0
+        ; forward reference: the FLOOR, exactly (D4) - not shorter, because
+        ; the kernel reads below the floor in place with no length test, and
+        ; not longer, because a cell past DSV_SIZE is one no kernel knows.
+        ; A `times` of -1 is NASM's "TIMES value -1 is negative", which is
+        ; the error (the message names this line); 0 emits nothing.
+        times -((OS88_DSV_LEN) != DSV_FLOOR) db 0
     %endif
     %ifdef OS88_STATE_OPEN
 OS88_STATE_LEN equ os88_drv_end - os88_state
@@ -1068,3 +1115,12 @@ os88_r_si:  pop si              ; stack walker (see above)
             pop ax
             ret
 %endmacro
+
+; ---- BEGIN CELL KINDS (SPEC.md 20.3.3) -----------------------------------------
+; Generated by tools/os88cells.py --write from build/kernel.bin's rd_tab -
+; never edit by hand. tests/unit/t_api_abi.py (fast tier) fails `make`
+; when this block and the kernel disagree. Each line routes `call OSAPI_X`
+; to the door with the cell's INDEX (OS88_RARE_CALL, above) - SPEC.md
+; 20.3.3, 20.3.4. Sorted by index: RS, RCS, RX, RCX, RN.
+%xdefine OSAPI_DRV_TASK __OSAPI_RARE 0x45 ; RCX
+; ---- END CELL KINDS -------------------------------------------------------------

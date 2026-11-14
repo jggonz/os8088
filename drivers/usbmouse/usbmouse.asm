@@ -41,6 +41,7 @@
 ; reports through OSAPI_MOUSE_FEED and calls none of its services.
 ; =============================================================================
 
+%define OS88_DRV_WAKES          ; SLEEP/WAKE on both paths (51.2.5)
 %include "os88drv.inc"
 
     OS88_DRIVER 'USB Mouse', DRVC_POINT, um_entry
@@ -125,11 +126,13 @@ um_entry:
     cmp al, DRVV_DETACH
     jb um_attach                ; DRVV_ATTACH, which is 0
     je um_detach
+    cmp al, DRVV_SLEEP
+    je um_dsleep
+    cmp al, DRVV_WAKE
+    je um_dwake
     cmp al, DRVV_READY
-    je um_ready
-um_ok:
-    CLC_OR_STC um_no            ; a verb we do not implement is not an error
-    ret
+    jne um_no                   ; any other verb is REFUSED: CF = 0 is "I did
+                                ; it" (SPEC.md 51.2.2)
 
 ; -----------------------------------------------------------------------------
 ; DRVV_READY - the earliest point OSAPI_DRV_TASK's fence answers (SPEC.md
@@ -139,16 +142,81 @@ um_ok:
 um_ready:
     cmp byte [um_pm], 0         ; a PicoMEM's mouse arrives by interrupt: no
     jne um_ok                   ; chip to poll, so no worker (SPEC.md 9.12.7)
+um_spawn:                       ; ...and a CH375 WAKE's last step
     mov ax, um_worker
     xor dx, dx
     call OSAPI_DRV_TASK
     mov al, DRVE_MEM
     jc um_no
-    inc byte [um_alive]         ; 0 -> 1, HERE and not in the worker: a
-    ret                         ; detach between the spawn and its first
-                                ; instruction must know a worker exists and
-                                ; leave the chip to it. CF = 0 from the spawn:
-                                ; neither `mov` nor `inc` writes CF
+    mov byte [um_alive], 1      ; HERE and not in the worker: a detach
+    ret                         ; between the spawn and its first instruction
+                                ; must know a worker exists and leave the chip
+                                ; to it. A `mov`, not an `inc`: a WAKE spawns
+                                ; again, and 256 trips would wrap a count to 0.
+                                ; CF = 0 from the spawn: `mov` writes no flag
+um_ok:
+    CLC_OR_STC um_no
+    ret
+
+; -----------------------------------------------------------------------------
+; DRVV_SLEEP / DRVV_WAKE - a hibernate or a DOS trip (SPEC.md 51.2.5), on
+; both paths
+;
+; THE PICOMEM: SLEEP is detach's PicoMEM half - the card's mouse off and
+; int 33h given back, which a DOS handoff needs, since the program gets the
+; vector table - and the image kept. WAKE is attach's: the card detected again
+; (a POST or a DOS program re-hooked or re-masked its line), int 33h hooked,
+; the mouse on. um_pmattach's own `inc` re-arms [um_pm]; a refusal leaves it
+; 0 and [um_alive] 1, so the DETACH that follows takes the CH375 arm and finds
+; a "worker" to leave the chip to - it touches nothing.
+;
+; THE CH375: SLEEP is detach's CH375 half and then the WAIT drv_unload would
+; do. The stop byte goes up and the worker leaves at a TRANSACTION BOUNDARY,
+; by the path a detach already proves - um_wait and um_enum give up on the
+; byte, the loop sees it, and .die releases a held button and leaves the chip
+; ABORT_NAK + RESET_ALL: device mode, bus released, nothing in flight, before
+; the picture is taken. The worker's last act is the byte coming back DOWN,
+; under the IF=0 that carries it into its exit, so a 0 here means no
+; instruction of the worker is left to run but drv_task's exit. Not a parked
+; worker: a dead one, so the picture holds no task inside this image.
+;
+; WAKE is a FULL re-init, whatever came between - a POST, or a DOS program
+; that may have reset or used the chip: ABORT_NAK (a chip left retrying a NAK
+; hears no other command), CHECK_EXIST as the identity, and attach's own
+; question - a device the chip calls READY was configured by somebody (a BIOS
+; serving a boot flash drive), so it is refused and the reload's attach, which
+; reads the descriptor, decides. Then the state back to US_IDLE with a fresh
+; set of attempts and a new worker, which sets host mode and enumerates. A
+; refusal leaves [um_alive] 1 and no worker, so the DETACH that follows
+; touches nothing.
+; -----------------------------------------------------------------------------
+um_dsleep:
+    cmp byte [um_pm], 0
+    je .ch
+    jmp um_pmdetach             ; CF = 0
+.ch:
+    inc byte [um_stop]          ; a worker exists: a loaded CH375 row is one
+.wait:                          ; whose READY spawned it, and a refused WAKE
+    call um_nap                 ; is unloaded, never put to sleep again
+    cmp byte [um_stop], 0
+    jne .wait
+    ret                         ; CF = 0: `cmp` with 0 never sets it
+um_dwake:
+    cmp byte [um_pm], 0
+    je .ch
+    dec byte [um_pm]
+    mov byte [um_alive], 1
+    jmp um_pmattach
+.ch:
+    mov al, CMD_ABORT_NAK
+    call ch_cmd
+    call um_exist
+    jne um_no
+    call um_conn
+    cmp al, INT_USB_READY
+    je um_no
+    mov word [um_state], US_IDLE    ; ...and [um_nenum] = 0
+    jmp short um_spawn
 
 ; -----------------------------------------------------------------------------
 ; DRVV_DETACH - cannot fail (SPEC.md 51.6)
@@ -179,6 +247,18 @@ um_reset:
     mov al, CMD_RESET_ALL       ; no gap after it for a tick to land in
     jmp ch_cmd
 
+; um_exist - CHECK_EXIST: out ZF = 1 a CH375 echoed. Attach's question and
+; WAKE's, so resident: attach's own code is um_buf once it has returned
+um_exist:
+    mov ax, CMD_CHECK_EXIST * 256 + 0x57
+    pushf                       ; the echo is read inside the command's own
+    cli                         ; IF=0 window
+    call um_cwi
+    call ch_rd
+    popf
+    cmp al, 0xA8                ; ~0x57. An undriven 0x260 floats to 0xFF
+    ret
+
 ; um_gst - GET_STATUS: out AL = the interrupt status, and INT# cleared
 um_gst:
     mov ah, CMD_GET_STATUS
@@ -200,7 +280,8 @@ um_drain:
 ;
 ; The code from here to um_attach.live runs ONCE PER IMAGE: drv_load reads the
 ; image off the disk and attaches it, nothing sends DRVV_ATTACH to an image
-; twice (a reload, hibernate's included, is a fresh read), and um_entry is the
+; twice (a reload is a fresh read, and a WAKE re-runs none of this: its
+; CHECK_EXIST is um_exist, resident), and um_entry is the
 ; only way in. So once attach has returned, those bytes are free, and they are
 ; where the driver keeps
 ;   um_buf      the 64-byte descriptor and report buffer, and after it
@@ -251,13 +332,7 @@ um_spinwait:
 ; byte of state below is still its assembled value: there is nothing to reset.
 ; -----------------------------------------------------------------------------
 um_attach:
-    mov ax, CMD_CHECK_EXIST * 256 + 0x57
-    pushf                       ; the echo is read inside the command's own
-    cli                         ; IF=0 window
-    call um_cwi
-    call ch_rd
-    popf
-    cmp al, 0xA8                ; ~0x57. An undriven 0x260 floats to 0xFF
+    call um_exist
     jne um_pmattach             ; ...so it is not a CH375: is it a PicoMEM's
                                 ; USB mouse instead? (SPEC.md 9.12.7)
 
@@ -283,15 +358,18 @@ um_attach:
     call um_cw
     call um_spinwait            ; attach may run before the scheduler: no yield
     cmp al, INT_SUCCESS
-    jne .ok                     ; nothing answered: nobody we can see is using it
+    je .rd
+.ok:                            ; nothing answered: nobody we can see is using
+    clc                         ; it. HERE, before .live and inside um_buf, and
+    ret                         ; not after it: no path that comes here has
+                                ; read into um_buf, and it moves .live the two
+                                ; bytes um_exist's move out of attach cost
+.rd:
     call um_rdata               ; ...WHICH WRITES OVER ALL OF THE ABOVE
 .live:                          ; (um_buf): from here on it must be intact
     call um_parse               ; CF is the walk's: a mouse is ours, and
     mov al, DRVE_BUSY           ; anything else - a flash drive, a keyboard -
     ret                         ; is the BIOS's
-.ok:
-    clc
-    ret
 
 ; UM_PMB - a PicoMEM BIOS function (int 13h AX = 60xxh, DX = 1234h): the
 ; card's ROM, or under -DPMSIM the gate's model of it (pmsim.inc)
@@ -528,7 +606,12 @@ um_worker:
 .die:                           ; [um_alive] stays 1: only detach reads it, and
     call um_release             ; detach is what raised the stop byte. A button
     call um_reset               ; held down must not outlive us
-    xor ax, ax                  ; AX = 0: this worker is exiting (SPEC.md
+    cli                         ; THE STOP BYTE DOWN under the IF=0 drv_task's
+    dec byte [um_stop]          ; exit keeps to task_exit: SLEEP waits on it,
+    xor ax, ax                  ; and no tick can run SLEEP's caller between
+                                ; the two. (A detach's raise needs it down
+                                ; never: drv_unload waits on [drv_wcnt].)
+                                ; AX = 0: this worker is exiting (SPEC.md
     call OSAPI_DRV_TASK         ; 51.7). NEVER RETURNS
 
 ; um_pass - one pass of whichever state the worker is in: a tail jump into

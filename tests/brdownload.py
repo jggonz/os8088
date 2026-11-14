@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import brclick                                      # noqa: E402
 import dispcp                                       # noqa: E402
+import os88geom  # noqa: E402
 import ethernet                                     # noqa: E402
 import os88build                                    # noqa: E402
 import os88fixture                                  # noqa: E402
@@ -282,8 +283,8 @@ def main():
                     continue
                 r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE,
                            dispcp.WIN_SIZE)
-                if r[22] | r[23] << 8:
-                    return slot, r[22] | r[23] << 8
+                if r[os88geom.W_SEG] | r[os88geom.W_SEG + 1] << 8:
+                    return slot, r[os88geom.W_SEG] | r[os88geom.W_SEG + 1] << 8
             return None
         # THE BROWSER'S WINDOW, waited for: open_named's QEMU path clicks and
         # settles, and a launch on kern_mega's 4M-instruction Bochs outlasts

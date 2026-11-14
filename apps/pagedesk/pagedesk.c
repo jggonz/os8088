@@ -235,6 +235,19 @@ static const char *pdu_abtext[] = {
 #include "pduauth.c"            /* auth: the password prompt, R6 question (20.22.6) */
 #include "pdovl.c"              /* the overlay's tenants (ovl_*) */
 
+/* THE WINDOW'S CLASS (SPEC.md 11.104): every handler pagedesk.asm's CC_HAS_*
+ * names, and the flags the window is born with - resizable (17.1 lays out
+ * from the live content box) and OWNBG (we paint every pixel: damage rects).
+ * The content origin on a multiple of 8 is the default (11.94). The release
+ * and the timer are nav's gestures (pdunav.c); the close tells a save in
+ * flight to abort first; the wake is the job scheduler (15.1). */
+static struct os88_class pdu_cls = {
+    OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWNBG,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    os88_t_onclose, os88_t_onmouseup, os88_t_onresize, 0, 0, os88_t_ontimer,
+    0, os88_t_onwheel
+};
+
 /* ============================================================================
  * THE ENTRY (SPEC.md 20.2): runs before the window is on the glass
  * ==========================================================================*/
@@ -253,7 +266,7 @@ void *os88_main(void)
     w = pdu_vid.w;
     h = pdu_vid.dock_top - OS88_MBAR_H;
     os88_strcpy(pdu_title, "PageDesk", sizeof(pdu_title));
-    win = os88_wm_create(x, y, w, h, pdu_title);
+    win = os88_wm_create(x, y, w, h, pdu_title, &pdu_cls);
     if (win == 0)
         return 0;
     pdu_win = win;
@@ -276,18 +289,8 @@ void *os88_main(void)
     if (pdu_mod_launch() != 0)
         return 0;                       /* toasted; the loader unwinds */
 
-    os88_wm_snap(win, 1);               /* x on a multiple of 8 (11.94) */
-    os88_wm_sizable(win, 1);
-    os88_wm_ownbg(win, 1);              /* we paint every pixel: damage rects */
-    os88_wm_minsize(win, 320, 120);
-    os88_wm_onresize(win);
-    os88_wm_onwake(win);
-    os88_wm_onclose(win);               /* a save is told to abort first */
-    os88_wm_onwheel(win);
-    os88_wm_onmouseup(win);             /* nav: the gestures' release... */
-    os88_wm_ontimer(win);               /* ...and the poll that tracks them */
+    os88_wm_minsize(win, 320, 120);     /* the handlers are pdu_cls's */
     os88_wm_cursor(win, OS88_CUR_ARROW);
-    os88_about_set(win);
     os88_assoc_set("PDF", "PAGEDESK");
 
     pdu_want_side[PDU_L_FULL] = 1;

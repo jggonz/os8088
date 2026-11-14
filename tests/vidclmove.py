@@ -357,7 +357,6 @@ def main():
                 wait(lambda mm: not any(c.own == aseg or c.seg == aseg
                                         for c in claims().values()),
                      "A's claims to be freed")
-                wptr = geom.winptr(m, pb.w.i, S)
                 # MEM_PG_HIGH: a posted pass sheds only what is CHEAPER than
                 # its rank (SPEC.md 66.4.3.3), and a purgeable claim is shed,
                 # never moved (18.8.4). At 0xFC (LOW) B:'s FAT window - a MED
@@ -365,8 +364,7 @@ def main():
                 # 20000..21400, so the profile had no ground below it and
                 # 'did not move' was the kernel being right. HIGH is the rank
                 # DOS posts at for that same window (tests/thewire.py's post)
-                m.write(S("mem_cpq_lvl"), bytes([0xFE]))
-                m.write(S("mem_cpq"), struct.pack("<H", wptr))
+                geom.post_compact(m, pb.w.i, 0xFE, S)
                 wait(lambda mm: u16(m.read(S("mem_cpq"), 2)) == 0,
                      "the posted compaction", 30.0)
                 os88marty.ui_done(m)

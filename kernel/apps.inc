@@ -23,7 +23,10 @@
 ; The callbacks are the `.cold` BODIES: a kernel window's callbacks are
 ; dispatched into the cold segment by wm_pkgcall (SPEC.md 2.6.3), so they need
 ; no resident thunk and none has one.
-app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint_x, 0, 0
+app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_cls_about
+app_cls_about:  dw 6, 0, app_about_paint_x  ; its CLASS (SPEC.md 11.104): a
+                                ; paint and nothing else, so the length stops
+                                ; at WC_PAINT's slot
 
 app_ttl_about:  db 'About os8088', 0
 
@@ -83,7 +86,7 @@ section .cold
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; Four black lines, each centered in the content. The third line's
-; scheduling word tracks the live mode (sched_mode_get) and the fourth names
+; scheduling word tracks the live mode ([sch_coop]) and the fourth names
 ; the video adapter the boot probe found (SPEC.md 39.1). app_about_center
 ; re-measures every string, so unequal lengths are fine.
 ; -----------------------------------------------------------------------------
@@ -104,9 +107,10 @@ app_about_paint_x:
     mov si, app_about_s2
     call app_about_center_x
     mov si, app_about_s3p       ; third line follows the live scheduler mode
-    call KERNEL_SEG:sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
-    or al, al
-    jz .s3
+    cmp byte [sch_coop], 0      ; 0 pre-emptive, 1 cooperative: the byte
+    je .s3                      ; itself, through DS, where a far call to
+                                ; the deleted sched_mode_get read it (kernel
+                                ; size pass 20, -2)
     mov si, app_about_s3c
 .s3:
     call app_about_center_x

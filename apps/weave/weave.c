@@ -46,6 +46,22 @@
  * ==========================================================================*/
 
 #include "os88.h"
+
+/* THE WINDOW'S CLASS (SPEC.md 11.104). Resizable; the content origin on a
+ * multiple of 8 is the default (7.1.2's whole reason: every cell column is
+ * too, and every os88_font_run() takes the single-store path on both 1bpp
+ * adapters). The resize notice tells us when the box moves without anyone
+ * proposing it. And THE FOUR THAT MAKE WAVE 3 HAPPEN, each one a slot a
+ * missing name would leave silent: 13.7's RELEASE - the only place a <button>
+ * fires (WEAVE-SPEC 6.5) - 74.1's kick, the only place a WVM slice may run
+ * (4.10), 13.9's one-shot, 6.7's caret and 8.2's timer() multiplexed, and
+ * 13.18's wheel, a <list>'s view under the pointer. */
+static struct os88_class w_cls = {
+    OS88_CLASS_LEN, OS88_WF_SIZABLE,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    0, os88_t_onmouseup, os88_t_onresize, 0, 0, os88_t_ontimer, 0,
+    os88_t_onwheel
+};
 #include "weave.h"
 
 /* ============================================================================
@@ -818,20 +834,12 @@ void *os88_main(void)
      * (SPEC.md 39). */
     os88_video(&v);
     win = os88_wm_create(0, OS88_MBAR_H, v.w,
-                         v.dock_top - OS88_MBAR_H - 1, "Weave");
+                         v.dock_top - OS88_MBAR_H - 1, "Weave", &w_cls);
     if (win == 0)
         return 0;                       /* the window table is full: abort */
     w_win = win;
 
     os88_menu_set(win, &w_menus);
-    os88_about_set(win);
-    os88_wm_sizable(win, 1);
-
-    /* 7.1.2's whole reason: with the content origin on a multiple of 8, every
-     * cell column is too, and every os88_font_run() in the family takes the
-     * single-store fast path on both 1bpp adapters. A no-op on VGA, so it is
-     * set unconditionally rather than after asking. */
-    os88_wm_snap(win, 1);
 
     /* 7.4's floor, DECLARED rather than negotiated (SPEC.md 11.100.2): the
      * family's minimum content is 32x12 cells, and this slot takes the OUTER
@@ -839,26 +847,6 @@ void *os88_main(void)
      * the line under it. Every path that reduces a size honours it, including
      * the ones no negotiator is consulted by. */
     os88_wm_minsize(win, 32 * 8 + 2, 12 * 8 + OS88_TITLE_H + 1);
-
-    /* ...and TELL US when the box moves without anyone proposing it. */
-    os88_wm_onresize(win);
-
-    /* THE THREE THAT MAKE WAVE 3 HAPPEN, and every one of them is a template
-     * word the kernel does not fill in for you (os88.h: "call from
-     * os88_main() after os88_wm_create(); they are not template words"). A
-     * missing install is the quietest failure in this file: the C compiles,
-     * the %define in the shim is satisfied, the callback exists - and the
-     * kernel simply never calls it. Verified as exactly that: a button drew
-     * its down state on the press and stayed down for ever, because
-     * W_ONMOUSEUP was never installed and the release reached nobody. */
-    os88_wm_onmouseup(win);             /* 13.7's RELEASE - the only place a
-                                         * <button> fires (WEAVE-SPEC 6.5) */
-    os88_wm_onwake(win);                /* 74.1's kick - the only place a WVM
-                                         * slice may run (4.10) */
-    os88_wm_ontimer(win);               /* 13.9's one-shot - 6.7's caret and
-                                         * 8.2's timer(), multiplexed */
-    os88_wm_onwheel(win);               /* 13.18's wheel - a <list>'s view,
-                                         * the one under the pointer */
 
     /* THE LAUNCH DOCUMENT (SPEC.md 54.5). Read-and-clear, so it is banked here
      * and spent in the first paint. os88_arg_file() cannot hand back the name

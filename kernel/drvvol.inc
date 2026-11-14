@@ -152,16 +152,28 @@ drv_vol_bank:
 drv_vol_back:
     pushf
     push ax
-    push dx
-    mov ax, [drv_vol_cwd]       ; dsk_chdir's arguments, loaded before the
-    mov dl, [drv_vol_drv]       ; compare because they ARE the compare
-    cmp dl, [disk_drive]        ; still where the user left us? then there is
+    push bx
+    mov bx, [drv_vol_cwd]       ; dsk_goto's arguments, loaded before the
+    mov al, [drv_vol_drv]       ; compare because they ARE the compare
+    cmp al, [disk_drive]        ; still where the user left us? then there is
     jne .go                     ; nothing to undo, and the remount is the
-    cmp ax, [dsk_cwd]           ; whole cost
+    cmp bx, [dsk_cwd]           ; whole cost
     je .out
 .go:
-    call dsk_chdir_q_x            ; CF = the remount failed; swallowed by the
+    call dsk_goto               ; CF = the move failed; swallowed by the
                                 ; popf below, deliberately.
+                                ;
+                                ; dsk_goto, NOT dsk_chdir_q: a bracket that
+                                ; stood in a FOLDER of the volume it came
+                                ; back to (the Sticky Apps menu's STIKAPPS\)
+                                ; differs from the banked cwd only by the
+                                ; cluster, and dsk_chdir_q answers that with a
+                                ; whole remount - a boot sector read every
+                                ; press, with the motor still spinning from
+                                ; the scan (SPEC.md 18.9.1.1). dsk_goto moves
+                                ; inside one volume with no I/O when the
+                                ; medium cannot have changed, and is
+                                ; dsk_chdir_q itself otherwise
                                 ;
                                 ; QUIET (SPEC.md 18.9), because putting the
                                 ; user's VOLUME back is not the same as
@@ -171,7 +183,7 @@ drv_vol_back:
                                 ; global snapshot, and whoever reads it next
                                 ; pays for the rebuild if it is ever needed
 .out:
-    pop dx
+    pop bx
     pop ax
     popf
     ret

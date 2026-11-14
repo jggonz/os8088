@@ -707,8 +707,8 @@ op_claim:
     ; carve head slack. The hole SURVIVED a posted compaction, which is an
     ; open question and not this routine's - SPEC.md 20.12.10.8.1 has the
     ; three measurements and the repro.
-    mov cx, MEMP_CONV           ; THE PARAGRAPH DOOR, TOP-DOWN, WITH NO HEAD
-    mov bl, MEMP_CLAIM_HI       ; (SPEC.md 50.3.7): the claim to the granule
+    xor cx, cx                  ; THE PARAGRAPH DOOR, TOP-DOWN, WITH NO HEAD
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV ; (SPEC.md 50.3.7): the claim to the granule
     call OSAPI_MEM_P            ; and not to a KB - the run is a sector count
     jc .no                      ; and the scratch whole KB, so a KB claim
                                 ; carried up to 1KB the carve never touched.
@@ -1239,8 +1239,8 @@ op_xload:
     mov [op_xcap], ax
     mov cl, 4                   ; ...in PARAGRAPHS, exact: whole clusters are
     shr ax, cl                  ; whole sectors, so OSAPI_MEM_P's granule
-    mov cx, MEMP_CONV           ; rounding adds nothing to it where the KB
-    mov bl, MEMP_CLAIM          ; door rounded a 512-byte cluster's buffer up
+    xor cx, cx                  ; rounding adds nothing to it where the KB
+    mov bl, MEMP_CLAIM + MEMP_CONV ; door rounded a 512-byte cluster's buffer up
     call OSAPI_MEM_P            ; to 1KB. CONVENTIONAL on every kernel, as a
     jc .free                    ; buffer a disk read lands in should be
     mov [op_xstg], dx
@@ -1967,9 +1967,9 @@ op_fetch:
     pop bx
     cmp ax, bx
     jb .nomem
-    xchg ax, bx                 ; AX = the paragraphs, BL = MEMP_CLAIM (0):
-    xor bx, bx                  ; OSAPI_MEM_P, CONVENTIONAL on every kernel
-    mov cx, MEMP_CONV           ; whatever the header says, as the fetch
+    xchg ax, bx                 ; AX = the paragraphs, BL = MEMP_CLAIM +
+    mov bx, MEMP_CONV           ; MEMP_CONV: CONVENTIONAL on every kernel
+    xor cx, cx                  ; whatever the header says, as the fetch
 %ifdef OP_WANT_ASSETHI          ; below adds paragraphs to the base - which
     cmp byte [si+OP_R_KIND], OP_ASSET   ; is why it was the DMA door with no
     jne .lodoor                 ; head and not OSAPI_MEM_CLAIM. A LAZY ASSET
@@ -2216,7 +2216,7 @@ op_fetch:
 ;      into, when that claim is ABOVE 1MB - kern_mega, a package whose header
 ;      says OS88_HIGHMEM and a pool with room - with the first one freed; AX
 ;      unchanged everywhere else, which is every real-mode kernel
-; clobbers: CX, DX, DI, flags
+; clobbers: BX, CX, DX, DI, flags
 ;
 ; op_fetch reads and expands in a conventional claim because both are paragraph
 ; arithmetic on the claim (R up it, the slack down it); this moves the result
@@ -2235,15 +2235,14 @@ op_hilift:
     jz .out                     ; real mode: no claim is above 1MB
     push ax
     mov ax, [si+OP_R_LEN]
-    add ax, 1023
+    add ax, 15
     rcr ax, 1
-    mov cl, 9
-    shr ax, cl                  ; AX = the part's KB. THE ONE KB DOOR LEFT,
-                                ; and on purpose: OSAPI_MEM_P is the
-                                ; conventional heap, and what this wants is
-                                ; the plain door's pool block above 1MB, which
-                                ; counts in KB anyway (SPEC.md 50.3.7)
-    call OSAPI_MEM_CLAIM        ; DX = a claim, and is it ABOVE 1MB? Every
+    mov cl, 3
+    shr ax, cl                  ; AX = the part's paragraphs: a plain claim,
+                                ; no MEMP_CONV, so the pool's block above 1MB
+                                ; (SPEC.md 50.3.7)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = a claim, and is it ABOVE 1MB? Every
     pop ax                      ; claim is a selector there (MC7), so its
     jc .out                     ; linear base says
     push ax

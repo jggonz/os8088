@@ -421,9 +421,7 @@ def roundtrip(a):
         rec = [c for c in claims(m, S) if c[0] == s0]
         bad += check(1, bool(rec) and rec[0][3] != 0,
                      "the staging is declared", "(%r)" % (rec,))
-        wptr = os88geom.winptr(m, sh_win.i, S)
-        m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-        m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+        os88geom.post_compact(m, sh_win.i, 0xFC, S)
         os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                         "the posted compaction", poll=0.2, limit=30)
         os88marty.ui_done(m)

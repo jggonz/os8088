@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
@@ -189,7 +190,7 @@ def main():
         # and every bss read below returns a stale copy.
         def ps():
             r = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-            return r[22] | (r[23] << 8)
+            return r[os88geom.W_SEG] | (r[os88geom.W_SEG + 1] << 8)
         say("browser at %04X" % ps())
 
         # THE BROWSER'S OWN STATE, at bss offsets derived from the image
@@ -269,8 +270,10 @@ def main():
                  by0 + dispcp.TITLE_H + 1 + BR_LPAD + BR_TBH + BR_TBG
                  + BR_LBAR // 2)
         os88marty.settle(m)
-        m.type_text("\b" * 12 + url)
-        os88marty.settle(m)
+        # Typed PAUSED (text_taken), as brfetch: a socket-speed burst into a
+        # running guest overruns the 15-entry BIOS ring (SPEC.md 9.8) and the
+        # host's speed decides which keys survive.
+        os88marty.text_taken(m, "\b" * 12 + url)
         typed = field(b"http://127.0.0.1")
         say("location bar holds %r" % typed)
         if typed is None:

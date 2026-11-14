@@ -187,6 +187,29 @@ WAIT_STOP_NAP = float(os.environ.get("OS88_WAIT_STOP_NAP", "0.004"))
 # one knob for the whole A/B.
 SETTLE_UI = os.environ.get("OS88_SETTLE_UI", "1") != "0"
 SETTLE_UI_QUIET = 0.2
+# ...AND A UI THAT WAKES ON A CLOCK GETS THE SHORT WINDOW A BOUNDED NUMBER OF
+# TIMES. A long window is cut the moment the UI goes idle, and a cut window
+# proves nothing (run = 0) - so a UI task that sleeps and wakes every tick
+# while the screen sits still (a DOS program in its window polling INT 33h
+# and INT 16h: ~half the samples read T_STATE 1) re-cut every window for
+# ever. Under SETTLE_DET the samples land at the same guest phase every time,
+# so it was not slow but NEVER: doswmouse spent its 360 guest seconds on a
+# still screen. After this many cuts the UI is taken for one that does not
+# idle, and the settle spends whole windows on the screen alone, as it
+# always has for an animating worker.
+SETTLE_UI_CUTS = 3
+
+# SETTLE'S WINDOW IS RUN, NOT WAITED. `pace` spends AT LEAST its guest seconds
+# and polls to see that it has, so each interval overshot by however long the
+# host took to look (a 10 ms nap is ~45 guest ms at 4.5x, more on a loaded
+# box) - and the capture after it was taken from a guest still RUNNING while
+# the screen was read. Two captures of a screen that animates on a guest
+# clock (a stopwatch, a seconds field) therefore landed at host-chosen guest
+# moments, and whether they matched depended on the box's load. With this on,
+# settle PAUSES the machine, reads, `advance`s exactly the window, reads
+# again - every capture at a guest position fixed by the guest alone - and
+# resumes it at the end. OS88_SETTLE_DET=0 is the polled path, for an A/B.
+SETTLE_DET = os.environ.get("OS88_SETTLE_DET", "1") != "0"
 
 
 def pace(m, secs):
@@ -223,6 +246,7 @@ def pace(m, secs):
             return got
     st = m.status()
     c0 = int(st.get("cycles", 0))
+    _saver_guard(m, c0)                 # launch's saver-off, when due
     t0 = time.time()
     while True:
         spent = (int(st.get("cycles", 0)) - c0) / GUEST_HZ
@@ -321,6 +345,9 @@ class Marty:
             except OSError:
                 pass
         self.pid = r.get("pid")
+        # does `advance` drain MARTYPC_WAV's sinks (debug_server.rs)? settle
+        # spends its windows in `advance`, so under a capture it needs this
+        self.advance_drains = bool(r.get("advance_drains"))
 
     def __enter__(self):
         return self
@@ -2548,9 +2575,11 @@ def no_saver(m):
     armed caught a SAVER shape instead of Paint's canvas. Neither symptom
     named the saver.
 
-    Not done in `launch`: tests/saver.py is a gate ABOUT the saver, and a
-    harness that silently disabled the feature under test would be worse than
-    the failure this prevents.
+    `launch` now does this by default, through `_saver_guard` (the block
+    above `kernel_up`), unless the row passes `saver=True` - which
+    tests/saver.py and every other row ABOUT the saver does, since a harness
+    that silently disabled the feature under test would be worse than the
+    failure this prevents. Calling it by hand as well is harmless.
     """
     S = _syms().linear
     # NOT BEFORE THE BOOT HAS APPLIED ITS SETTINGS. `drv_boot_x` loads
@@ -2580,6 +2609,111 @@ def no_saver(m):
         mins = None
     if mins is not None:
         m.write(mins, b"\0")
+
+
+# --- THE SAVER IS OFF BY DEFAULT, at launch --------------------------------
+#
+# SPEC.md 79's saver comes up after five GUEST minutes with no input, and a
+# row that gets there compares a starfield. os88ui.boot always turned it off;
+# a raw `launch` did not, and about a hundred rows start with one (81 in
+# tests/megaport.txt alone). Whether they reached five idle guest minutes was
+# a matter of how long their own waits ran - so `launch` now arms this guard
+# unless the row passes `saver=True`, which the rows ABOUT the saver do.
+#
+# A GUARD, not a write at launch, because there is nothing to write until the
+# kernel has applied SYSTEM.CFG (no_saver's own note: `ss_mins2idle` runs late
+# in kmain_o and rewrites [ss_idle]) and a `boot=False` row runs its own boot.
+# So every guest-time wait (`_Progress.check`: until, settle, ui_done,
+# quiesce, wait_stop...) and every `pace` looks - at every poll until it has
+# written, then every SAVER_LOOK guest seconds: once the boot is over - desk_rows written, [spl_live] = 0,
+# the same test no_saver makes - it writes no_saver's two bytes, ONCE PER
+# BOOT. It does not keep them at zero: a row that turns the saver on later
+# (dotdelpen's last leg) is left alone. A boot that is seen not finished
+# re-arms it, so a reboot inside a row gets the saver off again too.
+#
+# AND ONLY ON THE KERNEL THE MAP DESCRIBES. A raw launch can boot kern_small,
+# a knob kernel, DOS - a machine whose [ss_idle] is not where os88sym says. So
+# before writing, the 32 code bytes at `blk_pass` (which address [ss_idle] in
+# their own encoding) are read off the guest and compared with kernel.bin's;
+# a machine that does not match is not written to. Anything that cannot be
+# resolved disarms the guard quietly: it is a convenience, and a convenience
+# that raises would be a new way for a row to fail.
+SAVER_LOOK = 2.0
+
+
+class _SaverGuard(object):
+    __slots__ = ("next", "done", "a", "ident")
+
+    def __init__(self):
+        self.next, self.done, self.a, self.ident = 0, False, None, None
+
+
+def _saver_arm(m, on=True):
+    """Arm (or disarm) launch's saver guard on `m`."""
+    m._saver_g = _SaverGuard() if on else None
+
+
+def _saver_guard(m, c=None, force=False):
+    """The saver guard's look: see the block above. `c` is the guest clock
+    the caller already read (cycles), so a look costs no extra round trip
+    until it is due; `force` looks now."""
+    g = getattr(m, "_saver_g", None)
+    if g is None:
+        return
+    if not force:
+        if c is None or c < g.next:
+            return
+    # UNTIL IT HAS WRITTEN, IT LOOKS AT EVERY WAIT'S EVERY POLL (two reads):
+    # the boot's end is a moment, and a row that pokes [ss_idle] itself just
+    # after its own boot wait must find the guard already done, not arriving
+    # a look later to undo it. Once done (or on a kernel that is not the
+    # map's) it looks every SAVER_LOOK guest seconds, for a reboot.
+    later = (c + int(SAVER_LOOK * GUEST_HZ)) if c is not None else 0
+    g.next = 0
+    try:
+        if g.a is None:
+            S = _syms().linear
+            try:
+                mins = S("ss_mins")
+            except KeyError:
+                mins = None
+            g.a = (S("desk_rows"), S("spl_live"), S("ss_idle"), mins)
+        desk, spl, idle, mins = g.a
+        if m.read(desk, 2) == b"\0\0" or m.read(spl, 1)[0] != 0:
+            g.done = False                  # not up yet, or rebooting
+            return
+        if g.done:
+            g.next = later
+            return
+        if not _saver_ident(m, g):
+            g.next = later
+            return                          # not the kernel the map is of
+        m.write(idle, b"\0\0")
+        if mins is not None:
+            m.write(mins, b"\0")
+        g.done = True
+        g.next = later
+    except Exception:
+        m._saver_g = None
+
+
+def _saver_ident(m, g):
+    """Is the RUNNING kernel the one os88sym's map describes? `blk_pass`'s
+    first 32 bytes, guest against image. kern_mega's map is its own build's
+    (os88sym._mega_map) and its machine always runs that build, so it is
+    taken as read there."""
+    if os.environ.get("OS88_MEGA"):
+        return True
+    if g.ident is None:
+        import os88sym
+        with open(os88sym.kernel_image(), "rb") as f:
+            f.seek(os88sym.file_offset("blk_pass"))
+            want = f.read(32)
+        if len(want) != 32:
+            raise MartyError("kernel.bin is shorter than blk_pass")
+        g.ident = (m.sym("blk_pass"), want)
+    at, want = g.ident
+    return bytes(m.read(at, 32)) == want
 
 
 def kernel_up(m, guest=120.0, what="the kernel to reach the desktop"):
@@ -2735,6 +2869,7 @@ class _Progress:
     def check(self):
         now = time.time()
         c = self._cycles()
+        _saver_guard(self.m, c)             # launch's saver-off, when due
         if c != self.last_c:
             self.last_c, self.last_move = c, now
         elif now - self.last_move > GUEST_STALL:
@@ -2918,6 +3053,29 @@ def quiesce(m, read, guest=0.5, stable=2, budget=30.0,
     """
     prog = _Progress(m, what, budget)
     last, run = object(), 0
+    if _settle_det_ok(m):
+        # AS SETTLE (SETTLE_DET): read a PAUSED guest, then run exactly
+        # `guest` of its time, so two readings are a fixed guest interval
+        # apart and a value that moves on a guest clock is sampled at the
+        # same guest moments on any box. Resumed at the end.
+        m.pause()
+        resume = True
+        try:
+            while True:
+                prog.check()
+                cur = read()
+                run = run + 1 if cur == last else 0
+                if run >= stable:
+                    prog.done("quiesce")
+                    return cur
+                last = cur
+                _gadvance(m, guest)
+        except _SettleStopped:
+            resume = False
+            raise
+        finally:
+            if resume:
+                m.run()
     while True:
         cur = read()
         run = run + 1 if cur == last else 0
@@ -3772,6 +3930,139 @@ def text_taken(m, text, ui=True, cap=0.675, what="the guest to take that text"):
         m.pause()
     return prog.spent()
 
+def _settle_spent(m, prog, budget, gate, seen, t0):
+    """settle's answer to a `_Progress.check` that raised: re-raise a STOPPED
+    guest as it is, and say which of three things a SPENT budget was."""
+    if prog.spent() <= budget:
+        raise                                # the guest stopped: its own
+    spent, host = prog.spent(), time.time() - t0
+    if gate is not None and seen is not None and not gate(seen):
+        raise MartyError(
+            "the os8088 desktop never appeared in %.0f GUEST seconds "
+            "(%.0fs of host time) - the last screen was %s, against a "
+            "desktop's 93+/0/96. This machine never finished booting, "
+            "so nothing below would mean what it says. The budget is "
+            "the guest's own clock, so this is not the box being busy. "
+            "See the MartyPC log." % (spent, host, seen)) from None
+    if saver_running(m):
+        raise MartyError(
+            "the screen was still changing after %.0f GUEST seconds "
+            "because SPEC.md 79's SCREEN SAVER IS RUNNING - [blk_on] "
+            "is set. It draws, so this can never settle, and anything "
+            "else this gate armed is now watching the saver rather "
+            "than the machine. launch() turns it off unless the row "
+            "passed saver=True; os88marty.no_saver(m) turns it off "
+            "by hand." % spent) from None
+    raise MartyError(
+        "the screen was still changing after %.0f GUEST seconds "
+        "(%.0fs of host time at %.2fx real): the machine never "
+        "finished booting, or something on it is animating - in which "
+        "case pass boot=<seconds> instead. The budget is the guest's "
+        "own clock, so a loaded box does not shorten it."
+        % (spent, host, prog.rate())) from None
+
+
+def _settle_det_ok(m):
+    """May this settle run its windows as `advance`s (SETTLE_DET)?
+
+    Not under a `bp_trace` pump, which owns the resumes; not on a guest that
+    is not RUNNING at entry - the polled path's stall report is the answer
+    there, as it always was; and not on a MartyPC recording MARTYPC_WAV whose
+    server predates `advance_drains` (an `advance` there drops the capture's
+    samples - docs/MARTYPC-DEBUG.md, Audio capture), where the polled path is
+    the one that keeps the file whole."""
+    if not SETTLE_DET or getattr(m, "_pumping", 0):
+        return False
+    if getattr(m, "_wav", False) and not getattr(m, "advance_drains", False):
+        return False
+    try:
+        return m.status().get("state", "running") == "running"
+    except (MartyError, OSError):
+        return False
+
+
+def _gadvance(m, secs):
+    """Run a PAUSED guest exactly `secs` of its own time and leave it paused.
+    A breakpoint (or a halt) that ends it early is raised: nothing a settle
+    watches can change on a stopped machine, which is what the polled path's
+    stall arm said two host seconds later."""
+    st = m.advance(cycles=max(1, int(round(secs * GUEST_HZ))))
+    state = st.get("state", "paused")
+    if state != "paused":
+        raise _SettleStopped(
+            "the guest STOPPED while a settle/quiesce window was running - it is "
+            "%r at %04X:%04X. A breakpoint still armed, or a halted CPU: a "
+            "stopped machine can never show a settled screen."
+            % (state, st.get("cs", 0), st.get("ip", 0)))
+    return st
+
+
+class _SettleStopped(MartyError):
+    pass
+
+
+def _settle_det(m, quiet, stable, gate, card, prog, budget, t0):
+    """`settle`'s loop with every window RUN rather than waited: see
+    SETTLE_DET. The guest is paused for the reads, so a capture, the
+    `_ui_mark` beside it and the gate all describe ONE guest instant, and the
+    window between two captures is exactly the guest time asked for - on an
+    idle box, a loaded one, MartyPC, Bochs or 86Box alike. The decision
+    (settled or not) is therefore a function of the guest alone. The guest is
+    RESUMED at the end, as the polled path leaves it, unless something
+    stopped it."""
+    per = GUEST_PACE if GUEST_PACE > 0 else 4.5
+    m.pause()
+    resume = True
+    try:
+        last, run, seen = None, 0, None
+        fast, lastmark, cuts = False, None, 0
+        while True:
+            try:
+                prog.check()
+            except MartyError:
+                _settle_spent(m, prog, budget, gate, seen, t0)
+            try:
+                cur = _Screen(m, card)
+            except MartyError:
+                cur = None
+            if cur is not None and gate is not None and not gate(cur):
+                seen, last, run = cur, None, 0   # not up yet: stillness before
+                fast = False                     # the gate means nothing
+                _gadvance(m, quiet * per)
+                continue
+            mark = _ui_mark(m)
+            same = (cur is not None and last is not None
+                    and cur.bytes == last.bytes
+                    and (not fast or _ui_same(lastmark, mark)))
+            run = run + 1 if same else 0
+            if run >= stable:
+                prog.done("settle")
+                return time.time() - t0
+            last, lastmark = cur, mark
+            # the same three windows as the polled path, below
+            fast = mark is not None and cuts < SETTLE_UI_CUTS
+            if fast:
+                _gadvance(m, SETTLE_UI_QUIET)
+            elif not SETTLE_UI:
+                _gadvance(m, quiet * per)
+            else:
+                want, spent = quiet * per, 0.0
+                while spent < want:
+                    step = min(SETTLE_UI_QUIET, want - spent)
+                    _gadvance(m, step)
+                    spent += step
+                    if cuts < SETTLE_UI_CUTS and _ui_mark(m) is not None:
+                        cuts += 1
+                        last, run = None, 0
+                        break
+    except _SettleStopped:
+        resume = False
+        raise
+    finally:
+        if resume:
+            m.run()
+
+
 def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
            guest=None):
     """Run until the SCREEN STOPS CHANGING, and answer how long that took.
@@ -3875,8 +4166,10 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
     # the end of the deadline.
     budget = guest if guest is not None else limit * GUEST_BUDGET_RATIO
     prog = _Progress(m, "the screen to stop changing", budget)
+    if _settle_det_ok(m):
+        return _settle_det(m, quiet, stable, gate, card, prog, budget, t0)
     last, run, seen = None, 0, None
-    fast, lastmark = False, None
+    fast, lastmark, cuts = False, None, 0
     chg = t0
     while True:
         # A STOPPED guest is reported by `check` at once; a SPENT budget is
@@ -3886,32 +4179,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
         try:
             prog.check()
         except MartyError:
-            if prog.spent() <= budget:
-                raise                            # the guest stopped: its own
-            spent, host = prog.spent(), time.time() - t0
-            if gate is not None and seen is not None and not gate(seen):
-                raise MartyError(
-                    "the os8088 desktop never appeared in %.0f GUEST seconds "
-                    "(%.0fs of host time) - the last screen was %s, against a "
-                    "desktop's 93+/0/96. This machine never finished booting, "
-                    "so nothing below would mean what it says. The budget is "
-                    "the guest's own clock, so this is not the box being busy. "
-                    "See the MartyPC log." % (spent, host, seen)) from None
-            if saver_running(m):
-                raise MartyError(
-                    "the screen was still changing after %.0f GUEST seconds "
-                    "because SPEC.md 79's SCREEN SAVER IS RUNNING - [blk_on] "
-                    "is set. It draws, so this can never settle, and anything "
-                    "else this gate armed is now watching the saver rather "
-                    "than the machine. Call os88marty.no_saver(m) once after "
-                    "the desktop is up." % spent) from None
-            raise MartyError(
-                "the screen was still changing after %.0f GUEST seconds "
-                "(%.0fs of host time at %.2fx real): the machine never "
-                "finished booting, or something on it is animating - in which "
-                "case pass boot=<seconds> instead. The budget is the guest's "
-                "own clock, so a loaded box does not shorten it."
-                % (spent, host, prog.rate())) from None
+            _settle_spent(m, prog, budget, gate, seen, t0)
         try:
             cur = _Screen(m, card)
         except MartyError:
@@ -3949,7 +4217,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
         # draw (SETTLE_UI above). The next capture only counts as "the same"
         # if the UI was still idle and the drive still unmoved at its end, so
         # a short interval can never be the one that hides a load.
-        fast = mark is not None
+        fast = mark is not None and cuts < SETTLE_UI_CUTS
         if fast:
             pace(m, SETTLE_UI_QUIET / (GUEST_PACE or 4.5))
         elif not SETTLE_UI or GUEST_PACE <= 0:
@@ -3971,7 +4239,8 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
             while (prog._cycles() - c0) / GUEST_HZ < want:
                 if pace(m, SETTLE_UI_QUIET / GUEST_PACE) < SETTLE_UI_QUIET / 2:
                     break                   # the guest stopped: pace's rule
-                if _ui_mark(m) is not None:
+                if cuts < SETTLE_UI_CUTS and _ui_mark(m) is not None:
+                    cuts += 1               # (SETTLE_UI_CUTS: a UI on a clock)
                     last, run = None, 0
                     break
 
@@ -4876,8 +5145,15 @@ def emulator():
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
-           card=None, label=None, detach=False, rom=None):
+           card=None, label=None, detach=False, rom=None, saver=False):
     """Start a FRESH martypc_headless on `image` and return a booted Marty.
+
+    **THE SCREEN SAVER IS TURNED OFF** unless `saver=True` - the rows whose
+    subject is the saver pass that, and nothing else should. It is off the
+    way os88ui.boot turns it off (no_saver's two bytes), applied by a guard
+    the row's own waits run once the boot is over, once per boot and only on
+    the kernel os88sym describes: see `_saver_guard`. That holds on every
+    backend - MartyPC, Bochs and 86Box alike.
 
     `image` and `apps` are paths to floppy images (fd:0 and fd:1). `boot` is
     True to run until the screen settles (`settle`, the right answer on any
@@ -4927,6 +5203,19 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     one just started, and a machine already part-way through its boot are all
     errors with a sentence each.
     """
+    m = _launch(image, apps=apps, machine=machine, addr=addr,
+                run_dir=run_dir, boot=boot, timeout=timeout, extra=extra,
+                card=card, label=label, detach=detach, rom=rom)
+    _saver_arm(m, not saver)
+    if boot is True:                    # up and settled: no wait need come
+        _saver_guard(m, force=True)     # first
+    return m
+
+
+def _launch(image, apps=None, machine="os8088_5150_cga", addr=None,
+            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
+            card=None, label=None, detach=False, rom=None):
+    """`launch` less the saver: the backend chosen, the machine started."""
     import subprocess
     import time
 
@@ -5202,6 +5491,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     m.port = port
     m.run_dir = run_dir
     m.pid = proc.pid
+    # a MARTYPC_WAV capture: settle's windows need `advance_drains` then
+    m._wav = bool(env.get("MARTYPC_WAV"))
     if boot:
         try:
             m.run()

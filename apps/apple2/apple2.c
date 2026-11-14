@@ -100,6 +100,16 @@
 
 #include "os88.h"
 
+/* THE WINDOW'S CLASS (SPEC.md 11.104): the content x is on a cell boundary
+ * (the default - blit1 and gfx_scroll both want it), we paint every pixel
+ * (OWNBG), the wake is the slice driver's entry (74.1) and the timer the flash
+ * phase's heartbeat (13.9). */
+static struct os88_class a2_cls = {
+    OS88_CLASS_LEN, OS88_WF_OWNBG,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    0, 0, 0, 0, 0, os88_t_ontimer, 0, 0
+};
+
 /* --- the callbacks the shim declares (apple2.asm's CC_HAS_*) -------------- */
 void *os88_main(void);
 void  os88_paint(void *win);
@@ -1555,7 +1565,7 @@ static void a2_fast_go(void)
      * refuses it, and the fast core never ran on kern_mega. The image is
      * only ever data, so it may go above 1MB */
     code = a2f_claimcode();
-    img = code ? os88_mem_claim(64) : 0;
+    img = code ? os88_mem_claim_p(4096) : 0;
     if (img == 0) {
         if (code)
             os88_mem_free(code);
@@ -2583,7 +2593,7 @@ void *os88_main(void)
     int wh, i, j;
 
     /* --- the claims (APPLE2-SPEC section 3.1) ----------------------------- */
-    a2_m.ramseg = os88_mem_claim(A2_RAMKB); /* the Apple's address space is its
+    a2_m.ramseg = os88_mem_claim_p(A2_RAMKB * 64); /* the Apple's address space is its
                                              * own segment, up to the scratch
                                              * page's last byte */
     if (a2_m.ramseg == 0) {
@@ -2728,19 +2738,13 @@ void *os88_main(void)
         wh = vid.dock_top - A2_W_Y;
     if (wh < OS88_TITLE_H + A2_STATH + 16)
         wh = OS88_TITLE_H + A2_STATH + 16;
-    win = os88_wm_create(A2_W_X, A2_W_Y, A2_W_W, wh, a2_title);
+    win = os88_wm_create(A2_W_X, A2_W_Y, A2_W_W, wh, a2_title, &a2_cls);
     if (win == 0) {
         os88_mem_free(a2_m.ramseg);
         return 0;
     }
     a2_win = win;
-    os88_wm_snap(win, 1);                   /* the content x on a cell
-                                             * boundary: blit1 and gfx_scroll
-                                             * both want it */
-    os88_wm_ownbg(win, 1);                  /* we paint every pixel */
     os88_menu_set(win, (struct os88_menuset *)&a2_menus);
-    os88_about_set(win);
-    os88_wm_onwake(win);                    /* the slice driver's entry (74.1) */
     /* ...and the document a double-click named (SPEC.md 54.5). BANKED, not
      * read: the wake is where the floppy is touched and where an ovl_ can be
      * reached at all. */
@@ -2752,7 +2756,6 @@ void *os88_main(void)
      * the arm is a TEST: kern_small carries WM_TIMER's slot and not its body,
      * so a refusal here is what puts the phase back on the wake's poll
      * (a2_wants_wake). One-shot, re-armed inside os88_ontimer. */
-    os88_wm_ontimer(win);
     a2_tmr_ok = os88_wm_timer(win, A2_FLASH_TICKS) == 0;
     /* ...AND THE 6502 IS ALREADY OUT OF RESET (a2_power_on above), so the
      * state is set here rather than at the poke: a2_menu_state has already run

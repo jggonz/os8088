@@ -434,9 +434,8 @@ typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
  * os88_wm_create() and return it; return 0 to abort the launch, which the
  * runtime turns into the CF the loader is owed.
  *
- * You MAY: os88_wm_create, os88_menu_set, os88_about_set, the wm_* flag
- * setters, os88_mem_claim (this is where an app sizes itself), the file
- * slots, os88_arg_file. You may NOT draw, show your window or spawn your
+ * You MAY: os88_wm_create, os88_menu_set, os88_wm_flag, os88_mem_claim (this
+ * is where an app sizes itself), the file slots, os88_arg_file. You may NOT draw, show your window or spawn your
  * worker - the loader shows the window for you, and os88_task_spawn refuses
  * because your instance is not published yet. */
 void *os88_main(void);
@@ -456,14 +455,14 @@ void os88_onfile(int mode, const char *name,
                  unsigned size_lo, unsigned size_hi, void *win);
 
 /* os88_ontimer - W_ONTIMER (SPEC.md 13.9), armed by os88_wm_timer() and
- * installed by os88_wm_ontimer(). ONE-SHOT: it disarms itself before this
+ * your class's ontimer slot (os88_t_ontimer). ONE-SHOT: it disarms itself before this
  * runs, so re-arm inside it for a repeat (a blinking caret) and do nothing
  * for a single shot. W_ONCLICK's environment exactly - UI task, gfx lock
  * HELD, billed to you - so it may draw. It fires while you are MINIMIZED
  * too; ask os88_wm_geom() if that matters. Needs `%define CC_HAS_ONTIMER`. */
 void os88_ontimer(void *win);
 
-/* os88_onwake - W_ONWAKE (SPEC.md 74.1), installed by os88_wm_onwake() and
+/* os88_onwake - W_ONWAKE (SPEC.md 74.1), your class's onwake slot, and
  * posted by os88_wm_wake(). THE ONE CALLBACK THAT RUNS WITHOUT THE GFX LOCK:
  * on the UI task, billed to your instance, lock free. So it may call the file
  * slots (they are UI-task-only, and this IS the UI task), and it may take the
@@ -494,11 +493,11 @@ void os88_onwake(void *win);
  * the lock and must not take long. It is never asked about itself while it is
  * running, so raising a dialog from inside one cannot recurse.
  *
- * Needs CC_HAS_ONCLOSE, and os88_wm_onclose() to install it. */
+ * Needs CC_HAS_ONCLOSE, and os88_t_onclose in your class's onclose slot. */
 int os88_onclose(void *win);
 
 /* os88_onwheel - the mouse WHEEL (SPEC.md 13.18), installed by
- * os88_wm_onwheel(). `notches` is SIGNED and POSITIVE TOWARD THE USER: scroll
+ * your class's onwheel slot. `notches` is SIGNED and POSITIVE TOWARD THE USER: scroll
  * the view DOWN, the top row increasing. It is os88_onkey()'s environment
  * exactly - the UI task, the gfx lock HELD, billed to you - and it reaches the
  * window a KEY would reach (the front one), WHEREVER THE POINTER IS; ask
@@ -606,8 +605,8 @@ void os88_gfx_blit4(const void *pix, int stride, int x, int y, int w, int h);
  * bitplanes, one rep movsb a plane a row, and nothing worked out on the way
  * (SPEC.md 5.4.3). `planes` points at plane 0's first row, `plane_step` is the
  * distance to plane 1, `stride` the bytes per row inside one; x must be a
- * MULTIPLE OF 8 (free for a window - os88_wm_snap() already puts the content
- * origin on one), w is in pixels. Returns 0 taken, -1 REFUSED.
+ * MULTIPLE OF 8 (free for a window - snapped by default, its content origin
+ * is on one), w is in pixels. Returns 0 taken, -1 REFUSED.
  *
  * IT REFUSES MORE THAN IT ACCEPTS, so TEST THE ANSWER and keep the second
  * path: a 1bpp adapter, an unaligned x, a block off the screen, a REAL armed
@@ -646,13 +645,90 @@ void os88_font_run(int x, int y, const char *s, int ink, int paper);
 
 /* --- your window (SPEC.md 11) --------------------------------------------- */
 
+/* THE WINDOW CLASS (SPEC.md 11.104) - every handler your window has, and the
+ * flags it is born with, in ONE static declaration you hand os88_wm_create().
+ * The kernel reads it at every dispatch, so it must OUTLIVE the window (a
+ * static, never an automatic - and a C rule besides) and a write to one of
+ * its slots changes that handler from the next event on.
+ *
+ * Each slot is a TRAMPOLINE, os88_t_<callback>, crt0.asm's register-to-C
+ * bridge for the function of the same name above - or 0 for "no handler".
+ * A trampoline exists only when the shim's CC_HAS_<CALLBACK> asked for it, so
+ * naming one it did not is nasm's undefined-symbol error naming it: the two
+ * halves still cannot drift. `len` is always OS88_CLASS_LEN (the whole
+ * struct); `style` is OS88_WF_* bits.
+ *
+ *   static struct os88_class my_cls = {
+ *       OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWNBG,
+ *       os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about,
+ *       0, 0, 0, 0, 0, 0, 0, 0, 0 };
+ *
+ * The last three slots are kern_big's alone: kern_small has no timer, no drag
+ * tracking and no wheel and simply never calls them (os88_wm_timer() still
+ * answers -1 there, which is the test to make). */
+struct os88_class {
+    unsigned len;                   /* OS88_CLASS_LEN */
+    unsigned style;                 /* OS88_WF_*: the window is BORN so */
+    void (*paint)(void);            /* os88_t_paint, always */
+    void (*onkey)(void);            /* os88_t_onkey      - CC_HAS_ONKEY */
+    void (*onclick)(void);          /* os88_t_onclick    - CC_HAS_ONCLICK */
+    void (*about)(void);            /* os88_t_about      - CC_HAS_ABOUT (12.2) */
+    void (*onwake)(void);           /* os88_t_onwake     - CC_HAS_ONWAKE */
+    void (*onclose)(void);          /* os88_t_onclose    - CC_HAS_ONCLOSE */
+    void (*onmouseup)(void);        /* os88_t_onmouseup  - CC_HAS_ONMOUSEUP */
+    void (*onresize)(void);         /* os88_t_onresize   - CC_HAS_ONRESIZE */
+    void (*onrclick)(void);         /* (no C trampoline yet: 0) */
+    void (*onsize)(void);           /* (no C trampoline yet: 0) */
+    void (*ontimer)(void);          /* os88_t_ontimer    - CC_HAS_ONTIMER */
+    void (*ondrag)(void);           /* (no C trampoline yet: 0) */
+    void (*onwheel)(void);          /* os88_t_onwheel    - CC_HAS_ONWHEEL */
+};
+#define OS88_CLASS_LEN 30           /* = sizeof(struct os88_class) */
+void os88_t_paint(void);            /* the trampolines, by the names a class */
+void os88_t_onkey(void);            /* writes - NEVER call one: each takes */
+void os88_t_onclick(void);          /* its arguments in the kernel's */
+void os88_t_about(void);            /* registers, not on the stack */
+void os88_t_onwake(void);
+void os88_t_onclose(void);
+void os88_t_onmouseup(void);
+void os88_t_onresize(void);
+void os88_t_ontimer(void);
+void os88_t_onwheel(void);
+
+/* The style word's bits (= os88api.inc's WF_*) and, for os88_wm_flag(), the
+ * same bits by NUMBER (WFB_*). */
+#define OS88_WF_SIZABLE 0x0004      /* resizable: lay out from the LIVE geometry
+                                     * every paint (11.1) */
+#define OS88_WF_NOSNAP  0x0010      /* do NOT keep my content origin on a
+                                     * multiple of 8 - snapped is the default
+                                     * (11.94) */
+#define OS88_WF_SAVEU   0x0020      /* a PROMISE: my content does not change
+                                     * while I am not drawing (11.96.1) */
+#define OS88_WF_OWNBG   0x0040      /* I paint every pixel, skip the kernel's
+                                     * white fill (11.90.1) */
+#define OS88_WF_KEEPH   0x0080      /* my layout is FIXED: hang me over the
+                                     * dock rather than shorten me (11.93) */
+#define OS88_WF_QUIET   0x1000      /* while I am up, an idle screen BLANKS
+                                     * rather than animates (79.10) */
+#define OS88_WF_1BPP    0x2000      /* my content is two colours (11.96.17) */
+#define OS88_WF_NOANIM  0x4000      /* I do not zoom open (11.99.2.1) */
+#define OS88_WFB_SIZABLE 2
+#define OS88_WFB_NOSNAP  4
+#define OS88_WFB_SAVEU   5
+#define OS88_WFB_OWNBG   6
+#define OS88_WFB_KEEPH   7
+#define OS88_WFB_QUIET   12
+#define OS88_WFB_1BPP    13
+
 /* os88_wm_create - call it from os88_main() and return what it gives you.
  * The frame is authored against the 640x480 reference screen and clamped onto
  * the live one, so an oversized window is placed and clipped rather than
- * lost. The title string must OUTLIVE the window: point it at a literal or a
- * static, never at a buffer you reuse. Returns 0 if the window table is full,
- * which os88_main() should return straight on as its abort. */
-void *os88_wm_create(int x, int y, int w, int h, const char *title);
+ * lost. The title string and the class must OUTLIVE the window: point them
+ * at a literal or a static, never at a buffer you reuse. Returns 0 if the
+ * window table is full, which os88_main() should return straight on as its
+ * abort. */
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls);
 
 void os88_wm_show(void *win);
 void os88_wm_hide(void *win);
@@ -700,18 +776,14 @@ void os88_wm_display(void *win, struct os88_video *v);
 void os88_wm_title(void *win, const char *s);    /* redraws the caption strip
                                                   * and NOTHING else: 17 rows.
                                                   * The bytes must outlive it */
-void os88_wm_sizable(void *win, int on);         /* then lay out from the LIVE
-                                                  * geometry every paint */
-void os88_wm_snap(void *win, int on);            /* keep my content origin on
-                                                  * a multiple of 8 (11.94) */
-void os88_wm_keeph(void *win, int on);           /* my layout is FIXED: hang
-                                                  * me over the dock rather
-                                                  * than shorten me (11.93) */
-void os88_wm_ownbg(void *win, int on);           /* I paint every pixel, skip
-                                                  * the kernel's white fill */
-void os88_wm_saveu(void *win, int on);           /* a PROMISE: my content does
-                                                  * not change while I am not
-                                                  * drawing (11.96.1) */
+void os88_wm_flag(void *win, int bit, int on);  /* a style bit at RUN time:
+                                                  * OS88_WFB_*, 0 clear /
+                                                  * non-zero set (11.104.3).
+                                                  * Withdrawing SAVEU drops
+                                                  * the cache; a window is
+                                                  * BORN with its class's
+                                                  * style, so this is the
+                                                  * change only */
 void os88_wm_grow(void *win);                    /* a resizable window's own
                                                   * repaint must END with this
                                                   * - the white fill erased
@@ -738,7 +810,7 @@ void os88_wm_cursor(void *win, int shape);       /* OS88_CUR_*, over your
  * fills r with your whole content, or 0 and fills r with the part that
  * actually needs drawing - which may be EMPTY (x1 > x2), meaning draw
  * nothing. An empty rect is safe to hand any primitive. Requires
- * os88_wm_ownbg(win, 1): without it the kernel has already whitened your
+ * OS88_WF_OWNBG in your class's style: without it the kernel has already whitened your
  * content and the only correct answer is "whole" (11.90.2). */
 int os88_wm_damage(void *win, struct os88_rect *r);
 
@@ -783,9 +855,8 @@ int os88_win_h(void *win);
  * kernel does not repaint for you afterwards. */
 void os88_menu_set(void *win, struct os88_menuset *set);
 
-/* os88_about_set - add 'About <Name>' above the 'Close' the kernel already
- * puts in your name's pull-down. Needs CC_HAS_ABOUT. */
-void os88_about_set(void *win);
+/* 'About <Name>' above the 'Close' the kernel already puts in your name's
+ * pull-down is your class's `about` slot: os88_t_about, with CC_HAS_ABOUT. */
 
 /* os88_about_card - draw the STANDARD About card (SPEC.md 20.5.1.1): a white
  * card, a black frame and your lines centred in it, measured from the strings
@@ -803,39 +874,10 @@ void os88_about_set(void *win);
 void os88_about_card(void *win, const char **lines);
 void os88_about_card_d(void *win, const char **lines);
 
-/* Install the two optional window callbacks. Call from os88_main() after
- * os88_wm_create(); they are not template words. Each needs its %define. */
-void os88_wm_onmouseup(void *win);               /* 13.7 - the RELEASE half of
-                                                  * a content click. It
-                                                  * arrives even outside your
-                                                  * window, so range-test it */
-void os88_wm_onresize(void *win);                /* 11.98 - your content box
-                                                  * CHANGED and you did not
-                                                  * ask (an adapter change).
-                                                  * You must NOT draw in it */
-void os88_wm_ontimer(void *win);                 /* install the handler
-                                                  * above, after wm_create */
-int  os88_wm_timer(void *win, int ticks);        /* ...and arm it: ticks from
-                                                  * now at 18.2 Hz, 0 cancels.
-                                                  * 0 = armed, -1 = REFUSED
-                                                  * (kern_small carries the
-                                                  * slot and not the body) -
-                                                  * TEST IT and have a second
-                                                  * path (SPEC.md 13.8.2) */
-/* os88_wm_onclose - install the close negotiator above (SPEC.md 75.1). Call
- * it once from os88_main(), after os88_wm_create(), the way os88_wm_onwake()
- * is called. A side table, not a template word: the kernel clears it when the
- * window dies. Needs CC_HAS_ONCLOSE. */
-void os88_wm_onclose(void *win);
-
-void os88_wm_onwake(void *win);                  /* 74.1 - install
-                                                  * os88_onwake(); needs
-                                                  * CC_HAS_ONWAKE */
-void os88_wm_onwheel(void *win);                 /* 13.18 - install
-                                                  * os88_onwheel(); needs
-                                                  * CC_HAS_ONWHEEL. Does
-                                                  * nothing on kern_small,
-                                                  * which has no wheel */
+/* os88_wm_timer - arm your class's ontimer: ticks from now at 18.2 Hz, 0
+ * cancels. 0 = armed, -1 = REFUSED (kern_small has no timer) - TEST IT and
+ * have a second path (SPEC.md 13.8.2). Needs CC_HAS_ONTIMER. */
+int  os88_wm_timer(void *win, int ticks);
 
 /* os88_wm_wake - post the kick (SPEC.md 74.1): os88_onwake() runs on the UI
  * task, lock free, a few event-loop passes later. Any context - a callback,
@@ -1158,6 +1200,13 @@ int os88_ferr(void);
  * find-first/find-next state to be destroyed. */
 int os88_file_find(int ordinal, struct os88_find *f);
 
+/* os88_file_find_seq - the same walk by TOKEN (19.7.1.1): ask for 0, then for
+ * what it returns; -1 = the end. LINEAR where os88_file_find is N(N+1)/2
+ * entry visits over a listing. The token is a POSITION in the current folder
+ * and not an ordinal: start again from 0 when the folder changes, and count
+ * entries yourself. */
+int os88_file_find_seq(int token, struct os88_find *f);
+
 unsigned os88_disk_free_kb(void);                /* the 32-bit answer, shifted
                                                   * into KB in assembly */
 int os88_disk_cluster_sectors(void);             /* chunk sizes are multiples
@@ -1235,13 +1284,22 @@ void os88_batch_end(void);
  * is a claim: os88_mem_claim() answers a SEGMENT, which the _seg file calls
  * take and os88_peek()/os88_poke() reach a byte at a time. The kernel frees
  * your claims when your instance dies, so there is no teardown to write.
- * Size yourself from os88_mem_largest_kb(), never from int 12h. */
+ * Size yourself from os88_mem_largest_kb(), never from int 12h. The kernel
+ * counts in PARAGRAPHS alone since kernel size pass 19 (SPEC.md 50.3.7):
+ * these KB forms shift in their thunk, so a size you know as a CONSTANT is
+ * cheaper as os88_mem_claim_p(KB * 64) below, and a package that uses only
+ * the _p forms carries no shift at all. */
 unsigned os88_mem_claim(int kb);                 /* 0 = refused */
 int      os88_mem_free(unsigned seg);
 unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
                                                   * claim is untouched;
                                                   * otherwise the base NOW,
-                                                  * which may have MOVED */
+                                                  * which may have MOVED.
+                                                  * kb >= 1024 is an
+                                                  * os88_mem_huge claim's,
+                                                  * above 1MB on kern_mega
+                                                  * (MEMH_REGROW, SPEC.md
+                                                  * 50.3.5) */
 /* os88_mem_huge - a claim of ANY size (SPEC.md 50.3.5): 0 = refused, else its
  * first segment or selector; os88_mem_huge_step() is what to add to it for
  * each 64KB - 0x1000 on a real-mode kernel, 8 under kern_mega's protected
@@ -1290,9 +1348,9 @@ unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len);
  * would have served. One claim over 64KB: os88_mem_huge_ask() */
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
-/* ...and the same heap counted in PARAGRAPHS (SPEC.md 50.3.7). Every claim is
- * rounded to the heap's granule - os88_mem_gran() paragraphs, 512 bytes
- * today - so the KB calls above can never ask for less than a KB, and a size
+/* ...and the same heap counted in PARAGRAPHS (SPEC.md 50.3.7), the kernel's
+ * own unit. Every claim is rounded to the heap's granule - 32 paragraphs,
+ * 512 bytes, today - so the KB calls above can never ask for less than a KB, and a size
  * that is really a byte count pays half a granule more on average through
  * them. OS88_BYTES_PARA(n) is the paragraphs to ask for n bytes. A claim
  * from either is freed by os88_mem_free and declared by os88_mem_movable. */
@@ -1301,7 +1359,6 @@ unsigned os88_mem_claim_p(unsigned paras);       /* 0 = refused */
 unsigned os88_mem_regrow_p(unsigned seg, unsigned paras); /* as _regrow */
 unsigned os88_mem_largest_p(void);  /* the CONVENTIONAL heap's, exact to the
                                      * granule, on every kernel */
-unsigned os88_mem_gran(void);
 
 /* --- letting the compactor MOVE a claim (SPEC.md 66) ----------------------
  * A claim is born PINNED, and a pinned claim sitting in the middle of the

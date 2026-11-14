@@ -401,8 +401,9 @@ rw_aclaim:
     cmp al, ah
     jae .r
     push ax
-    mov ax, 64
-    call OSAPI_MEM_CLAIM_HI         ; DX = its segment
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = its segment
     pop ax
     jc .r
     mov bl, [rw_anseg]
@@ -807,14 +808,12 @@ rw_abounce:
     mov [rw_abcap], ax
 .dma:
     mov ax, [rw_abcap]
-    mov dl, ah
-    shr dl, 1
-    shr dl, 1
-    mov al, dl
-    xor ah, ah
     push cx
+    mov cl, 4                       ; its paragraphs
+    shr ax, cl
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA        ; DX = its segment, conventional
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; DX = its segment, conventional
     pop cx
     jc .r
     mov [rw_abseg], dx
@@ -835,12 +834,12 @@ rw_abounce:
 .own:
     mov ax, [rw_aclb]
     mov [rw_abcap], ax
-    mov dl, ah                      ; KB = bytes / 1024
-    shr dl, 1
-    shr dl, 1
-    mov al, dl
-    xor ah, ah
-    call OSAPI_MEM_CLAIM            ; DX = its segment
+    shr ax, 1                       ; paragraphs = bytes / 16
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = its segment
     jc .r
     mov [rw_abseg], dx
     mov byte [rw_abown], 1

@@ -112,7 +112,7 @@ CELLS = cells()
 
 
 # apps/os88api.inc STKL_LE: the library's entry table in the block
-STKL_LE = 110
+STKL_LE = 100
 
 
 def segs_of(m, seg):

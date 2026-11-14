@@ -36,8 +36,6 @@ rl_lab_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [rl_labwin], bx
-    mov al, 1
-    call OSAPI_WM_SIZABLE
     mov cx, 280
     mov dx, [rl_labmin]
     call OSAPI_WM_MINSIZE
@@ -78,7 +76,10 @@ rl_lab_paint:
     ret
 rl_lab_key:
     ret                            ; the benchmark owns its temporary container
-rl_labtpl: dw 20,80,288,114,rl_labtitle,rl_lab_paint,rl_lab_key,rl_lab_key
+rl_labtpl: dw 20, 80, 288, 114, rl_labtitle, rl_labcls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rl_labcls, WF_SIZABLE, PAINT, rl_lab_paint, ONKEY, rl_lab_key, \
+               ONCLICK, rl_lab_key
 rl_labtitle: db 'REDLINE Graphics Lab', 0
 rl_laberror: db 'No window slot/memory for the graphics lab; close other apps.', 0
 rl_labwin: dw 0
@@ -108,7 +109,9 @@ rl_lines_many:
     mov ax, [rl_x]
     mov bx, ax
     add bx, 255
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     add dx, 4
     dec si
     jnz .row
@@ -503,7 +506,11 @@ rl_line:
 .pixel:
     mov cx, [rl_lx]
     mov dx, [rl_ly]
+    push cx
+    push dx
     call OSAPI_GFX_PIXEL
+    pop dx
+    pop cx
     cmp cx, [rl_lendx]
     jne .advance
     cmp dx, [rl_lendy]

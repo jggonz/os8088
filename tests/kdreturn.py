@@ -107,9 +107,11 @@ the region a few KB:
           so the image needs nothing and the 2KB list needs the move
 
 Everything else is filled with PINNED claims under a tombstone tag, and the
-two caches are retagged pinned and unpurgeable too - a compaction DROPS a
+caches are retagged pinned and unpurgeable too - a compaction DROPS a
 cache before it moves anything, so a heap that still has one never needs the
-region to move.  They stand in for any other program's claims.  A ceiling
+region to move. A KEPT MODULE (SPEC.md 2.8.3: HIBER.DRV, dropped after the
+windowed run and kept directly under the region) is SHED instead, as
+mem_shed_one would, or the image arm's load would be a cache hit.  They stand in for any other program's claims.  A ceiling
 wall is placed before DOS opens and taken away at the stop, because a
 region claimed top-down packs to the ceiling and there must be ground on BOTH
 sides of it.  The heap and the window's own state are then left to the
@@ -297,17 +299,33 @@ def shape(m, arm, seg):
 
     Called with the guest stopped at `hbf_perform`: the post is made and
     nothing of the handoff has claimed yet. Every free run but the holes the
-    arm needs is walled, and both caches become walls (a compaction drops a
-    cache before it moves a region, so a heap with one never needs the move).
+    arm needs is walled, and the caches become walls (a compaction drops a
+    cache before it moves a region, so a heap with one never needs the move)
+    - all but a KEPT MODULE, which is shed outright (see below).
     """
     mod_kb = -(-len(os88drv.image_unwrap(
         open(os88build.at("build/hiber.drv"), "rb").read())) // 1024)
     tab = os88sym.linear("mem_tab")
     raw = bytes(m.read(tab, os88geom.MEM_MAX * os88geom.MC_SIZE))
+    eq = os88sym.equates(())
+    kept0 = eq["MEM_P_MOD"]
+    kept1 = kept0 + 2 * eq["MEM_P_MOD_N"]
     for i in range(os88geom.MEM_MAX):
         b, _, own, _, _ = struct.unpack_from("<HHHHH", raw,
                                              i * os88geom.MC_SIZE)
-        if b and 0xF000 <= own < 0xFF00:        # MEM_P_*: a purgeable cache
+        if b and kept0 <= own < kept1:
+            # **A KEPT MODULE IS SHED, NOT WALLED** (SPEC.md 2.8.3). Since
+            # MOD_CACHE a dropped module stays as a purgeable image - here
+            # HIBER.DRV, which the DOS window's run loaded and dropped - and
+            # it lands top-down DIRECTLY UNDER the region. Walled there it
+            # leaves no free run under DOS at all, and the `module` arm's
+            # load would be a cache HIT in hbf_perform and never claim. So it
+            # goes the way mem_shed_one takes it: mem_pg_forget's word (the
+            # row's MODR_SEG, at mod_tab + 4 x the id = 2 x (owner - tag))
+            # zeroed first, then the record. Its slots already read mod_gone
+            m.write(os88sym.linear("mod_tab") + (own - kept0) * 2, bytes(2))
+            m.write(tab + i * os88geom.MC_SIZE, bytes(2))
+        elif b and 0xF000 <= own < 0xFF00:      # MEM_P_*: a purgeable cache
             m.write(tab + i * os88geom.MC_SIZE + 4,
                     struct.pack("<HHH", WALL, 0, 0))
     cl = sorted(claims(m))

@@ -1077,8 +1077,12 @@ assoc_sweep:
                                 ; 4.77MHz machine those are seconds
     mov al, 1                   ; AL = the row's pass: 1 until shown otherwise
     mov ah, [bx+DV_KIND]
-    cmp ah, DVK_BIOS
-    jne .two
+    test ah, ah                 ; DVK_BIOS, which is 0 (disk.inc, included
+    jne .two                    ; after this file, so no %if can pin it here:
+                                ; kernel size pass 20, -1 - with .rfno's -3
+                                ; below, an EVEN -4: dsk_xfer and its hot
+                                ; neighbours sit behind this in .cold,
+                                ; t_hotpar)
     test byte [bx+DV_UNIT], 0x80 ; dsk_media_ok's test, for its reason: the
     jz .kind                    ; KIND says the transport, the UNIT the medium
 .two:                           ; ONE `inc` for both 2s, and a BIOS fixed disk
@@ -1087,16 +1091,15 @@ assoc_sweep:
 %ifdef OS88_REDIR
     cmp ah, DVK_FILE
     jne .kind
-    push ax                     ; THIS ROW's class (SPEC.md 62.9.19): two
-    push di                     ; file classes, and only one of them is
-    mov al, [bx+DV_CLASS]       ; memory
-    call drv_cls_svc_x          ; CLSCF: a DVK_FILE row's class is a copied one - dsk_vol_add derives the kind FROM the class, 5 or 8
-    test byte [di+DSV_CAPS], FSCAP_LOCAL
-    pop di
-    pop ax                      ; (pop writes no flag)
-    jnz .kind                   ; ...a redirected one whose reads are MEMORY
-    mov al, 0                   ; (62.9.2.2) too, and any other is the cable
-%endif
+    mov al, [bx+DV_CLASS]       ; THIS ROW's class (SPEC.md 62.9.19): two
+    push es                     ; file classes, and only one of them is memory
+    call drv_cls_svc_x          ; CLSCF: a DVK_FILE row's class is a published one - dsk_vol_add derives the kind FROM the class, 5 or 8, and drv_release drops a class's rows with it
+    mov al, [es:di+DSV_CAPS]    ; ...read in place (kernel size pass 19), and
+    and al, FSCAP_LOCAL         ; the PASS is the bit: 2 for a redirected one
+    shl al, 1                   ; whose reads are MEMORY (62.9.2.2), 0 for any
+    pop es                      ; other, which is the cable. DI is this loop's
+%endif                          ; to clobber (the proc answers in it).
+                                ; FSCAP_LOCAL is 1: driver.inc says so
 .kind:
     cmp al, ch
     jne .volnext                ; ...not this pass's
@@ -1256,8 +1259,8 @@ assoc_run_x:
                                 ; Nothing downstream needs the globals to be
                                 ; this folder: assoc_locate navigates itself,
                                 ; assoc_back comes back to what is banked
-                                ; here, and files_refresh paints from the
-                                ; WINDOW's cache (SPEC.md 22.1)
+                                ; here, and every Disk window paints from
+                                ; its own cache (SPEC.md 22.1)
 .curvol:
     mov dx, [dsk_cwd]           ; no poster and no locator, so the
     mov al, [disk_drive]        ; volume the machine is on IS the home
@@ -1332,11 +1335,12 @@ assoc_run_x:
     push ds
     pop es                      ; ld_run_body's failure exits leave ES adrift
     call assoc_back             ; the user's volume FIRST, then the window
-    cmp byte [ld_painted], 0
-    je .refresh                 ; ld_run_body's wm_show drew the new window
-                                ; and the poster's own window was never
-                                ; written on by this load at all (SPEC.md
-                                ; 22.17), so nothing here is owed a repaint
+    cmp byte [ld_painted], 0    ; no window, so no document to hand over -
+    je .out                     ; and no repaint either: a failed load drew
+                                ; nothing, a refusing entry proc's windows
+                                ; went through wm_destroy's damage pass, and
+                                ; the poster's own window was never written
+                                ; on by this load at all (SPEC.md 22.17.1)
 .handover:                      ; ...and the DOCUMENT is a second phase, now
                                 ; that there is something to look at while it
                                 ; loads (SPEC.md 54.10) - ASSOC_HANDOVER,
@@ -1361,7 +1365,7 @@ assoc_run_x:
     mov al, LD_EBAD             ; verdict ('Load failed'), which is what this
     call ld_say_status          ; double-click answered before the search
     jmp short .out              ; ...and, like that route's failed load, owes
-                                ; the screen nothing (ld_owed, SPEC.md 22.17)
+                                ; the screen nothing (SPEC.md 22.17.1)
 .nofile:
     ; THE PROGRAM THIS EXTENSION NAMES IS NOWHERE (SPEC.md 54.4.2.4). Once a
     ; run, before saying so: it may have been DELETED, with another package
@@ -1409,15 +1413,13 @@ assoc_run_x:
     push ds                     ; found" alone leaves the user with no way to
     pop es                      ; know WHICH program a document wanted - which
     xor cx, cx                  ; is exactly the report that found this
-    call KERNEL_SEG:cw_toast_show ; (SPEC.md 54.4.1). A TOAST since size pass
+    KDOOR toast_show              ; (SPEC.md 54.4.1). A TOAST since size pass
                                 ; 4, as every other failed launch is; ES and
                                 ; CX come back through kretfc_es. The name is
                                 ; assoc_fnb AS assoc_locate LEFT IT - built
                                 ; for this very slot and not rebuilt since -
                                 ; so the toast is the six bytes in front of it
                                 ; and nothing is composed here (size pass 5)
-.refresh:                       ; ...and both routes end at the one repaint
-    call files_refresh_x
 .out:
     pop ax                      ; the extra word this routine banked itself...
     jmp kretfc_es               ; ...and then the canonical eight (kernel.asm)
@@ -1477,16 +1479,13 @@ assoc_ownex:
     call assoc_slot_of          ; AL = the extension's slot
     pop bx                      ; BL = the caller's (POP keeps CF)
     jc .r
-    cmp al, bl
-    je .r                       ; (equal: CF = 0)
-    stc
-.r:
-    xchg ax, bx                 ; AX = the caller's again (XCHG keeps CF)
-    ret                         ; (NO PARITY PAD: the two that stood here, for
-                                ; dsk_xfer and its hot neighbours behind this
-                                ; in .cold, went with .banked's -3 and this
-                                ; routine's -1 - an even -6 in all, kernel
-                                ; size pass 18. t_hotpar holds the parity)
+    xor al, bl                  ; 0 when they are equal (CF = 0)...
+    add al, 0FFh                ; ...and CF = 1 from any other (kernel size
+.r:                             ; pass 20, -1 - which took the parity pad
+    xchg ax, bx                 ; that stood after the `ret` with it: dsk_xfer
+    ret                         ; and its hot neighbours behind this in .cold
+                                ; stay at an even shift, t_hotpar)
+                                ; AX = the caller's again (XCHG keeps CF)
 
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
@@ -1496,9 +1495,9 @@ assoc_ownex:
 ; followed by the epilogue - so this one is argued site by site rather than by
 ; assoc_handover's rule: AX and BX are dead at both. After the first, the only
 ; instructions before .out are `cmp byte [ld_painted],0` and a call to
-; assoc_handover (no register inputs) or files_refresh_x (takes none, clobbers
-; nothing). After the second, `pop ax` kills AX before any read, and
-; assoc_progname takes AL and preserves everything; BX is unread throughout.
+; assoc_handover (no register inputs), or nothing. After the second, `pop ax`
+; kills AX before any read, and assoc_progname takes AL and preserves
+; everything; BX is unread throughout.
 ;
 ; dsk_goto and not dsk_chdir_q, for assoc_go's reason: when the program was
 ; found on the document's own volume, coming back is a folder move inside a
@@ -2042,9 +2041,13 @@ asc_use_x:
     shl ax, cl                  ; overflow: AX = what the file actually is
     sub ax, ASC_HDR
     cmp bx, ax
-    ja .out                     ; short: the clean "no cache" answer - asc_drop
-                                ; at .out zeroes both counts, and every lookup
-                                ; already answers an empty cache with a miss
+    ja .rfno                    ; the clean "no cache" answer - asc_drop at
+                                ; .out zeroes both counts, and every lookup
+                                ; already answers an empty cache with a miss.
+                                ; Through .rfno's `jmp .out`, BACK and short:
+                                ; .out is past a short jump's reach and NASM
+                                ; had relaxed this to five bytes (kernel
+                                ; size pass 20, -3)
 .parse:
     ; THE DECLARATIONS THIS VOLUME KNOWS ABOUT, then WHERE each of them is
     ; (SPEC.md 54.7.1), what it LOOKS like (54.7.3) and its BODY into the

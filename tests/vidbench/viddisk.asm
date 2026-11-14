@@ -883,9 +883,12 @@ vk_claim:
     push ax
     push cx
     push dx
-    mov ax, VK_BUFKB
-    mov cx, VK_BUFKB
-    call OSAPI_MEM_CLAIM_DMA
+    mov ax, VK_BUFKB * 64
+    mov cx, VK_BUFKB * 64
+    push bx
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call OSAPI_MEM_P
+    pop bx
     jc .no
     mov [vk_buf], dx
 .no:
@@ -1234,7 +1237,8 @@ vk_wrun:
 .app:
     cmp byte [vk_wmode], 0
     jne .seq
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; WRITE_AT at the END: the append
+    call OSAPI_FILE_WRITE_AT
     jmp short .wrote
 .seq:
     mov di, [vk_wtok]               ; ES:BX = the bytes, DI = the token
@@ -1731,8 +1735,11 @@ vk_xconv:
 .claim:
     cmp bx, VK_XCN * 2
     jae .run
-    mov ax, 64
-    call OSAPI_MEM_CLAIM            ; DX = the block
+    mov ax, 64 * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the block
+    pop bx
     jc .run
     mov [vk_xcsegs + bx], dx
     inc bx
@@ -4409,7 +4416,10 @@ vk_b_lide:
 
 vk_tpl:
     dw 7, 22, 632, 300
-    dw vk_ttl, vk_paint, vk_onkey, vk_onclick
+    dw vk_ttl, vk_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vk_cls, 0, PAINT, vk_paint, ONKEY, vk_onkey, \
+               ONCLICK, vk_onclick
 
 vk_ttl:       db 'Video Disk Bench', 0
 vk_f_names:   db 'STREAM.DAT', 0, 'BADAPPLE.V88', 0, 'BAPPLE.V88', 0, 0

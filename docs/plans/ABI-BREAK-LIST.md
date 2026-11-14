@@ -174,7 +174,7 @@ value ranking and is otherwise unchanged.
 
 | id | what changes | who it breaks | what it buys | source | status |
 |---|---|---|---|---|---|
-| **L1** | **The FAT window and `dsk_secbuf` move BELOW the kernel image**: ten sectors at 0x0060, `KERNEL_SEG` at 0x01A0, `.text`+`.bss` no longer rounded to 512 - one rounding left, the heap base's | `KERNEL_SEG equ 0x0060` is assembled into every package, every driver, `crt0.asm`, DOS (`apps/dos/`, `kerndos/`), the hard-disk loader and both boot paths, hibernate images, the ROMs and `COLDHMA.SYS`, and every host tool and test that names 0x0060 (`tools/os88sym.py` first). ES = KERNEL_SEG on callback entry is contract too. **Both numbers bump** | the image's pad: **165 bytes at build 477, 0-511 depending on the day, ~256 on average**, on every kernel - a one-off, not a rate; and it is the first step to an unaligned heap base | LAST-DROP-BYTES.md 7.13 ("WAITING FOR THE NEXT ABI BREAK", the owner's call) | **proposed - the owner has said to take it at the next break**. kern_mega note (this audit): 0x0060 is also kern_mega's GDT index 12, the readable-code descriptor every package's far calls land on (KERN-MEGA-PLAN 2.5); 0x01A0 is GDT index 52, which already exists - kern_mega's GDT is the identity map of every segment up to `COLD_SEG` (`kernel/mega.inc`, `MEGA_GDT_ID`) - so the row moves which identity entry is the readable-CODE one and which the FAT window's, and costs the table nothing; what kern_mega's own ladder pads below 1MB after the switch is the figure to measure before quoting the saving there |
+| **L1** | **The FAT window and `dsk_secbuf` move BELOW the kernel image**: ten sectors at 0x0060, `KERNEL_SEG` at 0x01A0, `.text`+`.bss` no longer rounded to 512 - one rounding left, the heap base's | `KERNEL_SEG equ 0x0060` is assembled into every package, every driver, `crt0.asm`, DOS (`apps/dos/`, `kerndos/`), the hard-disk loader and both boot paths, hibernate images, the ROMs and `COLDHMA.SYS`, and every host tool and test that names 0x0060 (`tools/os88sym.py` first). ES = KERNEL_SEG on callback entry is contract too. **Both numbers bump** | the image's pad: **165 bytes at build 477, 0-511 depending on the day, ~256 on average**, on every kernel - a one-off, not a rate; and it is the first step to an unaligned heap base | LAST-DROP-BYTES.md 7.13 ("WAITING FOR THE NEXT ABI BREAK", the owner's call) | **SUPERSEDED - its saving TAKEN WITHOUT A BREAK (kernel size pass 19, `docs/plans/completed/ksp19/l1.md`)**: the two fixed windows only need not straddle a 64KB page, which guard 6 now proves at assembly time, so `KIMG_PARA` rounds to the paragraph with `KERNEL_SEG` left at 0x0060: -208 kern_big, -128 kern_small, 0 kern_mega at that build. The row as written would have cost kern_small about +576. kern_mega note (this audit): 0x0060 is also kern_mega's GDT index 12, the readable-code descriptor every package's far calls land on (KERN-MEGA-PLAN 2.5); 0x01A0 is GDT index 52, which already exists - kern_mega's GDT is the identity map of every segment up to `COLD_SEG` (`kernel/mega.inc`, `MEGA_GDT_ID`) - so the row moves which identity entry is the readable-CODE one and which the FAT window's, and costs the table nothing; what kern_mega's own ladder pads below 1MB after the switch is the figure to measure before quoting the saving there |
 | **L2** | Ring 3 on kern_mega: every cell its own call gate selector, IOPL or an I/O permission policy for the 22 packages that program video inside fsx brackets | every package reassembled | protection, not bytes | KERN-MEGA-PLAN.md 2.5 and its later-waves table | **recorded - a later wave**, a flag day of its own |
 | **L3** | **kern_mega's protected-mode fixups made unnecessary by contract**: `mega_gpfix` (an image far-calling another image by the DATA segment it was handed - `HDD.DRV` <-> `HDDTOOL.DRV`), `mega_gpw` (writes through a code selector: `[cs:x]` stores in packages, writes through callback ES = 0x60), `mega_null0` + `mega_db` (a driver hooking its IRQ through segment 0 - `SB.DRV`, `USBMOUSE.DRV`). The contract would be: an IRQ is hooked through a cell, a far target is named by its code selector (`OSAPI_MEM_CODESEL` exists), callbacks get the data alias in ES, and a package does not store through CS | every package that stores through CS (many - the per-write #GP is what kern_mega pays today), the two IRQ-hooking drivers, `HDD.DRV`/`HDDTOOL.DRV`, every package writing through callback ES (4 in Paint, 2 in `os88stik.inc` per KERN-MEGA-PLAN 2.5) | **up to ~1,190 bytes of `.mega`** (MEASURED spans: `mega_gpfix` 593, `mega_gpw` 526, `mega_null0` 74, plus part of `mega_db` 69) - above 1MB, not conventional - and a #GP a write wherever a package still does it | this audit; KERN-MEGA-PLAN.md 2.5, items 46-50 | **proposed - TOP OF THE OWNER'S LIST, blocked on The Wire serving kern_mega builds** (section 1). LARGE: the per-package half is the bulk and the fixups must stay until the last old binary is gone, so it is a programming-model change rather than a row. The `PKG_MEGA` arms (SPEC.md 20.18) are where it would start |
 | **L4** | `OS88_HUGE_INCR` stops being a constant: a claim above 1MB with consecutive LDT selectors at a step the kernel answers | `OSAPI_MEM_HUGE` callers (RealDMG, the C SDK, six tests) | flexibility; no consumer yet | KERN-MEGA-PLAN.md item 50 | **recorded** - "an ABI decision", nobody needs it |
@@ -242,7 +242,7 @@ copied: **T2-2** (section 10) is one, trading kern_big's 52-cycle inline
 | id | what changes | who it breaks | what it buys (cycles, ms, bytes) | source | status |
 |---|---|---|---|---|---|
 | **V1** | Let `OSAPI_GFX_FILL`, `_PIXEL`, `_HLINE`, `_VLINE` and `_FRAME` **clobber AX..DX** instead of "clobbers: flags" (SPEC.md 5.7's last paragraph is why `sw_rect` pushes eight registers) | every package that keeps a coordinate in AX..DX across a drawing call (+2..4 bytes a site there) | drops four push/pop pairs from every rect primitive: **~120 cycles, ~25 us of a ~510 us small call (~5%)** on the 5150; kernel -8 bytes. MEASURED call, PREDICTED total | khp1/gfxcall.md 5 | **proposed** - the largest per-call lever found, and the one the 756 us floor is partly made of |
-| **V2** | `OSAPI_TASK_YIELD` (0x009E) as a cell that enters the yield directly, building `task_yield`'s frame under the far return instead of the 8-byte SLOT's `push ds / push cs / pop ds` and near call | every cell after 0x009E moves (renumber); every package that yields | **~60 cycles, 13 us of a 283 us yield (4.5%)**, after this pass's sched-1 made the yield 644 -> 283 us | khp1/sched.md 5 | **proposed, low** - fold into any flag day, not worth one |
+| **V2** | `OSAPI_TASK_YIELD` (0x0086) as a cell that enters the yield directly, building `task_yield`'s frame under the far return instead of the 8-byte SLOT's `push ds / push cs / pop ds` and near call | every cell after 0x009E moves (renumber); every package that yields | **~60 cycles, 13 us of a 283 us yield (4.5%)**, after this pass's sched-1 made the yield 644 -> 283 us | khp1/sched.md 5 | **proposed, low** - fold into any flag day, not worth one |
 | **V3** | Promote `OSAPI_XMEM_RUN`, `_WALK` and `_SEL` (0x04B3..0x04CB) from rare 6-byte cells to hot 8-byte SLOTs at the next renumbering | the renumber | ~85 cycles a call; a player streaming from XMS at a few calls a frame: ~0.1 ms a second; +6 bytes `.text` | khp1/sched.md 5 | **recorded** - only with a renumber (T1 is one) |
 | **V4** | `OSAPI_GFX_SAVE`'s buffer stored in bank order on the 1bpp adapters, so `sw_xfer` walks banks as mono-1's rect walk does, without a per-row wrap test | any caller that indexes its own save buffer (none found in `apps/`, but the layout is published, SPEC.md 5) | ~20 cycles a row, ~4% of `sw_xfer`, **~2 ms of a CGA raise**, for ~+40 bytes. PREDICTED | khp1/mono.md 5 | **recorded, low value** - so nobody re-derives it |
 | **V5** (addition, no bump) | A **batched rect call**: N fills or frames in one far call, the clip-region and display questions asked once | none (a new slot at the end) | per extra primitive the far cell (~165 cycles) and the head (~300): a Calc or Minesweeper redraw of ~30 cells **~14k cycles, ~3 ms**; ~60-80 bytes `.text`. PREDICTED | khp1/gfxcall.md 5 | **proposed as an addition** - wants a package that would use it first |
@@ -372,7 +372,7 @@ private version). Ids continue this list's sequences.
 | **N1** | **proposed - Phase 1** | only the FSV fallback (7, `drv_fs_call`) is resident; the DSV one is in `DRV_ATTACH`, expanded in `.boot2`, CTRL.DRV and HIBER.DRV |
 | **D1** | **superseded once histsys-7 and D4 land** (both no bump) | one copied table left, so `drv_svcix` has nothing to index; drivers-9 is moot with it |
 | **F2-1** | **superseded - BUILT** | SPEC.md 20.13.9 (`LZ_ESC`), no container change, no bump |
-| **L1** | **proposed for kern_big; kern_small and kern_mega need more** | MEASURED pads: kern_big -384 bytes paragraph-exact. kern_small: one `KERNEL_SEG` on every kernel, but kern_small's FAT is 2 sectors against 9, so the ten-sector region is ~3,584 bytes too big for it: +924 to +3,280 as written. kern_mega: no `LADDER_PACK`, 512-byte rungs, so 0 conv unless its ladder is packed (then up to -128, its 128-byte selector granule). Packages: ~150 `mov ax, KERNEL_SEG` sites rebuild |
+| **L1** | **SUPERSEDED (pass 19): the pad is gone with no ABI change** - see the L row; the figures below are the flag-day form's | MEASURED pads: kern_big -384 bytes paragraph-exact. kern_small: one `KERNEL_SEG` on every kernel, but kern_small's FAT is 2 sectors against 9, so the ten-sector region is ~3,584 bytes too big for it: +924 to +3,280 as written. kern_mega: no `LADDER_PACK`, 512-byte rungs, so 0 conv unless its ladder is packed (then up to -128, its 128-byte selector granule). Packages: ~150 `mov ax, KERNEL_SEG` sites rebuild |
 | **L3** | **proposed - still blocked on The Wire**; figures restated | MEASURED: -1,271 `.mega` (`mega_gpfix` 602, `mega_gpw` 526, `mega_null0` 74, `mega_db` 69), -1,627 with `mega_strcal_gp`/`mega_strcal`/`mega_strfix`, plus -17 conv (`mega_tramp`) to ~-60. Its staged road is L7, D8 and mc-10's counter |
 | **R2-1** | **proposed**, restated | `mega_hibnc` is 235 `.mega` today (MEASURED) |
 | **P2** | **strengthened** | the VX/XM/HD versions should be fingerprinted by `abilock.py` (drivers-16) |
@@ -517,3 +517,53 @@ against the rule that no release carries kern_mega's disks.
 `data/*.json`; `synth/flagday.md` (the final plan), `synth/phase1.md`,
 `synth/bugs.md`; and the three lenses `synth/challenge-truth.json`,
 `challenge-cost.json`, `challenge-fit.json`.
+
+## 14. Kernel size pass 19's no-growth rule (BRIEF.md 0.0, agent `nogrow`)
+
+The owner, 2026-11-10: *"We're doing a size pass, so why are we growing bytes
+at all?"* A row stays only if it is net smaller - resident bytes on every
+kernel it reaches and the packages' total. What wave A took that grew was
+reverted or reworked; the rows below are **deferred to the additions pass**,
+with their prices (docs/plans/completed/ksp19/nogrow.md has the measurements).
+
+| row | status | price, MEASURED at ksp19's wave-A tip |
+|---|---|---|
+| **R2** | **deferred to the additions pass** (reverted) | +6 `.cold` every kernel (`osapi_sys_snapshot_x` +4, `mmf_osapi_claim_snapshot` +2), packages +14 (Task Manager +9, RedLine +3, WIN16, WaveRack, megaown +1 each). A correctness row: a kernel with more records than the package's SDK still overruns its buffer, as before |
+| R2's AX answers | **taken instead** | `OSAPI_SYS_SNAPSHOT`'s AX = MAX_TASKS (no reader) and `OSAPI_CLAIM_SNAPSHOT`'s AX = MEM_MAX (megaown alone) withdrawn: -3 `.cold` each, every kernel; megaown +1 |
+| **R12** | **reverted** | kernel -5 kern_big/emu/mega, -2 kern_small, EXTD.DRV -1, against +78 at 39 window-asking package sites (`mov ch, 0`). No net-negative form: no site had CH provably 0 without reading each, and the window askers outnumber the display walkers 39 to 5. WireFleet's fix (it asked with WM_DISPLAY's height) kept, -5. `fsx_caps` and EXTD.DRV test BH = 0 instead of `cmp bx, 16` (no window pointer is below 256): -1 each |
+| **R2-3** | **deferred to the additions pass** (reverted) | `MEGA_WTN` 64: +128 bytes of the tables' block above 1MB, no saving |
+| **C1** | **taken; its TOTAL is still positive - the owner's** | memdoors' form: kernel -90 kern_big/emu, -92 kern_small (FILECP.DRV +4), -90 kern_mega (-36 conventional) against packages **+1,037**. `nogrow` added OSAPI_MEM_P's KB arm (`MEMP_KB`/`MEMP_KBH`, +50 `.cold` a kernel, +51 kern_mega above 1MB), which took the packages to about **+330**: C1 now about kernel -40/-38/-40/-39, packages +330, **total about +170**. Under T5 a withdrawn KB door would have been a 3-byte `CD 81 nn` site like the near call, so the -2 a site the helper buys today vanishes there and C1 is about **+770** against keeping the doors as door indices |
+
+## 15. What kernel size pass 19 took (the flag day, 2026-11-10)
+
+`PKG_FMT` 10 -> **13**, `DRV_VER` 12 -> **14**; branch `kernel-size-19`;
+record `docs/plans/completed/HANDOFF-KERNEL-SIZE-P20.md`, agent notes
+`docs/plans/completed/ksp19/`. The owner's rulings (BRIEF.md 0.0): no row grows bytes;
+small package growth that buys resident bytes is fine; inside the flag day
+nothing is frozen - smaller and not slower is taken, ABI or not.
+
+| row | status after pass 19 | where |
+|---|---|---|
+| **T5** + V7's promotion | **TAKEN** - 96 published cells behind `int 81h` + index byte; 77 hot cells; `OSAPI_GFX_DESK` promoted | t5.md, door.md |
+| **T6** | **TAKEN** (mechanism: `%imacro call` on the CELL KINDS block; renames not taken) | gates.md |
+| **P4** | **TAKEN** (the kernel's `cw_` shims on the door, `KDOOR`) | door.md |
+| **T1 / K17-1** | superseded by T5 | - |
+| **R14** + **K17-2** | **TAKEN** (class in the package, one `OSAPI_WM_FLAG`); `wm_hnd` then made a far-pointer read by wmrec (+158 clocks a callback over pre-R14, was +214) | class.md, wmrec.md |
+| **C1** | **TAKEN**, then every package site converted to paragraphs (kbpara) and the KB arm deleted; kern_mega's pool DMA heads restored as `MEMP_DMAPOOL` (40h, a verb bit) and huge regrow as `OSAPI_MEM_HUGE`'s `MEMH_REGROW` | memdoors.md, kbpara.md, megacmp.md, mcmerge.md |
+| **C2**, **C4'**, **R1** | **TAKEN** | memdoors.md |
+| **N1**, **D4**, histsys-7 | **TAKEN** (service tables read in place; D1/drivers-9 moot) | drvtab.md |
+| **R3**, **F1**, **F3** | **TAKEN** (F3 straight to the A4h/A5h mark, no dual reader) | drvtab.md |
+| **C10**, **V2** | **TAKEN** | recon.md |
+| R2's unread AX answers | **TAKEN** | nogrow.md |
+| **L1** | **superseded without a flag day**: the image pad went by proving the two fixed windows inside one 64KB page (guard 6); `KERNEL_SEG` stays 0x0060 | l1.md |
+| **R2**, **R2-3** | **deferred to the additions pass** (section 14) | nogrow.md |
+| **R12** | **reverted** (no net-negative form) | nogrow.md |
+| **R15**, R16, V1 | **deferred to the additions pass** (grow, or need a hot-path tuning pass) | recon.md |
+| **R2-4**, **R2-5** | **refused** (R2-4 grows; R2-5 clobbers SI for every bracket) | recon.md |
+| **R2-1** | **refused**: since KERN-MEGA-PLAN 14.156 `mega_hibnc` bounces the first floppy read after every disk swap | drvtab.md |
+| `OSAPI_BATCH_END` withdrawn | **WANTS THE OWNER** (-18 resident; SPEC.md 20.3.1 rule 1 names it as optional by design) | recon.md |
+| `W_DISP` offset dropped (far call built on the stack) | **WANTS THE OWNER** - about -20 resident, about +47 clocks a callback | wmrec.md |
+| RCS door entry for `call COLD_SEG:x` | **recorded** - 395 sites, -2 a site +2 a target, ~+190 clocks a call | swdrv.md |
+| `OSAPI_GFX_PIXEL` withdrawn | **recorded** - the 8-byte cell against +4 at 7 callers | recon.md |
+| KB counts >= 1,024 not refused (`mem_claim_x`'s HUGE arm) | **recorded** - +6 `.cold` a kernel to refuse | megacmp.md, swmem.md |
+| L3, L7, D8, R6, R9's universal value | out of this pass (13.3, "Out of it") | - |

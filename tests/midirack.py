@@ -449,7 +449,7 @@ def arm_sbmem(ui, p):
     run = None
     for _ in range(8):
         fl_round("KeyA")
-        run = fp.w("fl_run")
+        run = fp.w("fl_run") // 64     # paragraphs, since kernel size pass 19
         if run < MRB_KB:
             break
     reach = heap(m)[1]

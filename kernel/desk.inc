@@ -13,8 +13,9 @@
 ; the pixels are 2.4:1 tall and a drive is its 14-row picture (SPEC.md 26.4);
 ; [desk_zh1] is that box, SPEC.md 26.5's gap and the label band, minus one.
 ;
-; desk_paint runs under the caller's gfx lock (from wm_paint_all, right
-; after the desktop fill, before any window). desk_click runs with NO lock
+; The zones are drawn by the damage pass under the caller's gfx lock
+; (wm_paint_dmg, and wm_paint_all through it: after the desktop fill, before
+; any window - SPEC.md 11.91.6/11.91.7). desk_click runs with NO lock
 ; held and takes gfx_lock/gfx_unlock itself around the zones it redraws.
 ; =============================================================================
 
@@ -988,7 +989,7 @@ desk_zones_paint_x:
                                 ; zone whole, [wm_dmg_zb] owes those windows
     mov byte [wm_dmg_npro], 1   ; ...and so nothing was PROMOTED: the front
                                 ; window is the one it was. Both kernels
-    call KERNEL_SEG:cw_wm_paint_dmg
+    KDOOR wm_paint_dmg
 .n:
     inc si
     cmp si, DSL_SLOT            ; ...and "no cell" is never painted
@@ -1171,74 +1172,47 @@ desk_caprect:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; desk_paint - draw every shown zone. Called by wm_paint_all after the desktop
-;              fill; caller holds the gfx lock. All registers preserved.
 ; desk_paint_mask - draw the zones desk_dmg_zones collected into [desk_dmgm];
 ;              AX (wm.inc's "any" word) is not read. Lock held. On kern_big
 ;              wm_dmg_gray has already drawn them into its region and emptied
 ;              the mask (desk_zones_r, SPEC.md 11.91.6), so what is left here
-;              is drawn whole; wm_paint_all's pass draws them whole too, the
-;              painter's algorithm putting every window back over them.
+;              is drawn whole and its box grown (below). All
+;              registers preserved. (desk_paint, every zone whole, was the
+;              layered wm_paint_all's, and went with it: SPEC.md 11.91.7.)
 ; -----------------------------------------------------------------------------
-desk_paint_x:
-    push ax
-    mov ax, 0xFFFF
-    mov [desk_dmgm], ax
-    mov [desk_dmgm+2], ax
-%ifdef KERN_BIG
-    mov ax, desk_draw_zone      ; the routine each set bit is handed to
-%endif
-    jmp short desk_pm_body
 desk_paint_mask_x:
     push ax
-%ifdef KERN_BIG
-    mov ax, desk_zone_whole     ; what desk_zones_r left in the mask
-%endif
-desk_pm_body:
     push bx
     push cx
     push dx
-%ifdef KERN_BIG
-    xchg ax, dx                 ; DX = it, for the whole walk
-%endif
     xor cx, cx
 .next:
+%if DESK_NZ > 16
     shl word [desk_dmgm], 1     ; zone CL's bit, top of the dword first:
     rcl word [desk_dmgm+2], 1   ; desk_dmg_zones rotated zone 0 in LAST
+%else
+    shl word [desk_dmgm], 1     ; ...of the WORD, on a kernel with 16 zones
+%endif                          ; or fewer (kern_small's four: size pass 20)
     jnc .skip
     mov al, cl
-%ifdef KERN_BIG
-    call dx                     ; both preserve every register
-%else
     call desk_draw_zone         ; a zone not shown draws nothing
+%ifdef KERN_BIG
+    ; ...and on kern_big, what desk_zones_r left in the mask - a touched zone
+    ; wm_dmg_gray could not draw into its region (Color's ground, or an
+    ; overflow) - is drawn WHOLE, so its box is grown and every window over
+    ; it is owed a repaint (11.91's per-window test): the old answer, kept
+    ; for those. (desk_zone_whole, written at its one call: kernel size pass
+    ; 20. desk_draw_zone keeps AL, the zone desk_zone_rect reads.)
+    push cx                     ; the zone counter: the rect takes CX
+    call desk_zone_rect
+    call KERNEL_SEG:cw_wm_dmg_zadd
+    pop cx
 %endif
 .skip:
     inc cx
     cmp cl, DESK_NZ
     jb .next
     jmp kretfc_dx
-
-%ifdef KERN_BIG
-; -----------------------------------------------------------------------------
-; desk_zone_whole - a touched zone wm_dmg_gray could not draw into its region
-;                   (desk_zones_r: Color's ground, or an overflow), drawn WHOLE
-;                   and its box grown so every window over it is owed a repaint
-;                   (11.91's per-window test) - the old answer, kept for those
-; in:  AL = a zone desk_dmg_zones marked; the gfx lock held
-; out: nothing; keeps CX and DX, the two its one caller's loop reads after
-;      `call dx` (the zone counter and this routine's own address) - AX is
-;      reloaded from CL and BX is not read (kernel size pass 17)
-; -----------------------------------------------------------------------------
-desk_zone_whole:
-    call desk_draw_zone         ; (the box is read by the window pass, after)
-    push cx
-    push dx
-    call desk_zone_rect
-    call KERNEL_SEG:cw_wm_dmg_zadd
-    pop dx
-    pop cx
-    ret
-%endif
 
 ; -----------------------------------------------------------------------------
 ; desk_dmg_zones - which zones does the damage rect touch?
@@ -1294,8 +1268,12 @@ desk_dmg_zones_x:
     stc
 %endif
 .r:
+%if DESK_NZ > 16
     rcr word [desk_dmgm+2], 1
     rcr word [desk_dmgm], 1
+%else
+    rcr word [desk_dmgm], 1     ; (one word holds them all: desk_paint_mask)
+%endif
     or di, di
     jnz .zone
     pop di
@@ -1543,7 +1521,7 @@ desk_zone_redraw:
     jmp short .done
 .full:
     pop ax
-    call KERNEL_SEG:cw_wm_paint_all
+    KDOOR wm_paint_all
     jmp short .done
 .nonep:
     pop ax
@@ -1774,10 +1752,10 @@ desk_pic:
     stc
     jne .kern                   ; only a file class's DSV_CAPS means FSCAP_*
     mov al, [bx+DV_CLASS]
-    call drv_cls_svc_x          ; CLSCF: DI = its copied table
-    jc .kern
-    test byte [di+DSV_CAPS], FSCAP_ICON
-    stc
+    call drv_cls_svc_x          ; CLSCF: ES:DI = its table, in place. ES is
+    jc .kern                    ; this routine's to clobber, and the X cell
+    test byte [es:di+DSV_CAPS], FSCAP_ICON ; below makes it our DS first
+    stc                         ; (api_x)
     jz .kern
     mov bh, al
     mov bl, DRV_ICONV
@@ -2188,15 +2166,16 @@ desk_learn_x:
 
 %ifndef KERN_SMALL
 ; -----------------------------------------------------------------------------
-; osapi_desk_item - slot 0x03F8: put an ITEM on the desktop, or take one off
+; osapi_desk_item - a door cell: put an ITEM on the desktop, or take one off
 ;                   (SPEC.md 26.9)
 ; in:  AL = 1 add / 0 remove; ES = the caller's segment (an X cell)
 ;      add, from a DRIVER:  ES:SI -> a DSV_R_SIZE service record (SPEC.md
 ;                           26.7), whose +39 is the cell it would like
 ;      add, from a PACKAGE: ES:SI -> an SC_REC link record (SPEC.md 26.8.1),
 ;                           whose +1 is the cell it would like
-;      remove: a driver its own service item; a package the link in zone AH,
-;               ES:SI -> the record it added, which the row must still match
+;      remove: a driver its own service item; a package the link ES:SI ->
+;               the record it added, found by volume and path (a Sticky App
+;               record by its path's final component) - no zone (C10)
 ;      0xFF as the cell is "the first free one". A package calls this from a
 ;      window callback - the UI task, the gfx lock held - and never from a
 ;      worker: a link is PERSISTED, which writes SYSTEM.CFG (SPEC.md 20.6 r7)
@@ -2283,13 +2262,16 @@ osapi_desk_item_x:
     je .no
     jmp short .ok
 .pdel:
-    cmp ah, DESK_SC0            ; a link's zone or nothing: and never 0,
-    jb .no                      ; which is the module's "removed"
-    mov al, ah                  ; the zone AND the record, DX:CX: CTRL.DRV
-    mov ah, SC_OP_PDEL          ; removes the row only if it is still THIS
-    call sc_modcall             ; link - a zone is reused, and renumbered at
-    or al, al                   ; boot. AL = 0 removed; the zone back is a
-    jnz .no                     ; refusal, or no disk to read the module from
+    mov ax, (SC_OP_PDEL << 8) | 0xFF ; THE RECORD ALONE, DX:CX (ABI-BREAK-LIST C10,
+    call sc_modcall             ; kernel size pass 19): CTRL.DRV finds the row
+    or al, al                   ; by it - a zone is reused, and renumbered at
+    jnz .no                     ; boot, so it named nothing the record did not.
+                                ; AL = 0xFF going in: a module that cannot be
+                                ; read (no system disk) answers nothing, and
+                                ; that is a REFUSAL - 0 was "removed", and a
+                                ; Sticky App closed with its row stranded
+                                ; AL = 0 removed; 0xFF is a refusal, or no disk
+                                ; to read the module from
 .ok:
     CLC_OR_STC .no              ; (kernel size pass 15: OSAPI_DESK_ITEM's
 .out:                           ; answer is CF)
@@ -2362,7 +2344,11 @@ desk_zdirty  resb 1             ; 1 = [desk_cdirty] holds cells that owe a
 desk_cdirty  resb (DSL_SLOT + 1) / 8    ; ...one bit a cell
 desk_zslot   resb DESK_NZ       ; THE TABLE: one byte a zone (SPEC.md 26.9).
                                 ; desk_init fills it with 0xFF, "nothing"
+%if DESK_NZ > 16
 desk_dmgm    resw 2             ; desk_dmg_zones -> desk_paint_mask, a dword
+%else
+desk_dmgm    resw 1             ; ...a word, with 16 zones or fewer
+%endif
 desk_sel     resb 1             ; selected ZONE index, 0xFF = none
 desk_clkt    resw 1             ; click birth tick (EV_C) of the last zone click
 desk_zy      resw 1             ; desk_draw_zone: current zone top

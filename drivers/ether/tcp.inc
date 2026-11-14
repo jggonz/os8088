@@ -807,16 +807,7 @@ eth_v_gone:
     jnz .orph
     cmp [bx+SKO_OWN], ah
     jne .next
-    cmp byte [bx+SKO_TS], TS_ESTAB
-    jb  .kill
-    push ax                     ; eth_dropall's reset, one socket
-    push cx
-    mov al, TF_RST | TF_ACK
-    mov dx, [bx+SKO_TXS]
-    xor cx, cx
-    call tcp_out
-    pop cx
-    pop ax
+    call sk_rst                 ; eth_dropall's reset, one socket
     jmp short .kill
 .orph:
     cmp word [eth_users], 0     ; closed already: TCP finishes it while
@@ -976,7 +967,7 @@ sk_try:
                                     ; that run is the one a compaction and a
                                     ; shed would leave, so a rung under it can
                                     ; still move the heap inside this verb
-    xor cx, cx                      ; no DMA head: the CPU moves every byte
+                                    ; no DMA head: the CPU moves every byte
     mov bl, MEMP_CLAIM_HI           ; (and no MEMP_CPU: nothing is gained by
     call OSAPI_MEM_P                ; it at a 512 granule, and the class is
                                     ; the safe default for a heap buffer)
@@ -1530,16 +1521,35 @@ tcp_out:
     ret
 
 ; -----------------------------------------------------------------------------
+; sk_rst - socket BX is going: if it has a peer, tell it with a RESET
+;
+; A RESET rather than a FIN, because whoever calls this cannot wait for
+; anything (a detach, a sleep, a package's teardown). It carries SND.NXT, as
+; tcp_ack's ACK does - a peer takes a reset at no other sequence number
+; (RFC 5961). Every register kept. COLD: eth_dropall and eth_v_gone only.
+; -----------------------------------------------------------------------------
+sk_rst:
+    cmp byte [bx+SKO_TS], TS_ESTAB
+    jb  .no
+    push ax
+    mov al, TF_RST | TF_ACK
+    jmp short tcp_ackf
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
 ; tcp_ack - a bare acknowledgement for socket BX
 ; -----------------------------------------------------------------------------
 tcp_ack:
     push ax
-    push cx
+    mov al, TF_ACK
+tcp_ackf:                               ; (sk_rst's way in: AX banked, AL the
+    push cx                             ; flags)
     push dx
     mov dx, [bx+SKO_TXS]                ; past what is in flight: a bare ACK
-    mov al, TF_ACK                      ; carries SND.NXT, which is SND.UNA
-    xor cx, cx                          ; whenever one segment was the most
-    call tcp_out                        ; that could be out
+    xor cx, cx                          ; carries SND.NXT, which is SND.UNA
+    call tcp_out                        ; whenever one segment was the most
+                                        ; that could be out
     pop dx
     pop cx
     pop ax

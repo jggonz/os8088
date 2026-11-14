@@ -62,8 +62,6 @@ mb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [mb_win], bx
-    mov ax, mb_tick
-    call OSAPI_WM_ONTIMER
     mov ax, MB_WAIT
     call OSAPI_WM_TIMER
     clc
@@ -404,7 +402,9 @@ mb_hex2:
 
 mb_tpl:
     dw 8, 300, 200, 40
-    dw mb_ttl, mb_paint, 0, 0
+    dw mb_ttl, mb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mb_cls, 0, PAINT, mb_paint, ONTIMER, mb_tick
 %ifdef MB_LOW
 mb_ttl:     db 'MegaRMB low', 0
 mb_name:    db 'MEGARMBL: ', 0

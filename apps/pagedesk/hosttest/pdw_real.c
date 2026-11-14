@@ -10,6 +10,12 @@
  * branch. argv[1] is the source PDF (default: samples/MARKUP.PDF). Outputs
  * R1.PDF and R2.PDF land in the current directory.
  * ==========================================================================*/
+/* The tree's root, for the scripts and samples this harness names: the
+ * Makefile passes $(CURDIR), so a $(BUILD) at any depth (os88soak's
+ * private trees are three deep) finds them; "../.." is BUILD=build's */
+#ifndef PDW_ROOT
+#define PDW_ROOT "../.."
+#endif
 #include "../pdwrt.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -128,8 +134,8 @@ int main(int argc, char **argv)
     static struct pdxb_annot an[32]; int n, i, k; pdw r, noteobj = 0, hlobj = 0, hlgen = 0, notegen = 0;
     pdh_cluster = 1; pdw_host_clu = 512;
     remove("R1.PDF"); remove("R2.PDF"); remove("P1.PDF"); remove("X1.PDF"); remove("N1.PDF"); remove("P2.PDF"); remove("X2.PDF"); remove("I1.PDF"); remove("I2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
-    cp(argc > 1 ? argv[1] : "../../apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
-    if (system("python3 ../../apps/pagedesk/hosttest/pdw_nest.py NEST.PDF")) { printf("FAIL: pdw_nest.py\n"); return 2; }
+    cp(argc > 1 ? argv[1] : PDW_ROOT "/apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
+    if (system("python3 " PDW_ROOT "/apps/pagedesk/hosttest/pdw_nest.py NEST.PDF")) { printf("FAIL: pdw_nest.py\n"); return 2; }
     /* round A: four new marks on a real sample */
     CK(eng_open("DOC.PDF") == 0, "PDENG opens %s", argv[1]);
     wrt_init(); es_reset();
@@ -166,7 +172,7 @@ int main(int argc, char **argv)
        /MediaBox and /Resources) against the real engine ---- */
     {   unsigned map[12]; int np; struct pdxb_pageinfo pi[12]; int j;
         unsigned srcobj[8];
-        cp(argc > 2 ? argv[2] : "../../apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
+        cp(argc > 2 ? argv[2] : PDW_ROOT "/apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF");
         for (j = 0; j < 8; j++) {
             pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &pi[j], sizeof pi[j]); srcobj[j] = pi[j].objnum;
@@ -207,7 +213,7 @@ int main(int argc, char **argv)
     }
     /* ---- Extract: pages 5, 1, a blank and 3 (rotated) of XTGUIDE.PDF into a fresh document ---- */
     {   unsigned map[4]; int j; static struct pdxb_pageinfo q;
-        cp(argc > 3 ? argv[3] : "../../apps/pagedesk/samples/XTGUIDE.PDF", "DOC.PDF");
+        cp(argc > 3 ? argv[3] : PDW_ROOT "/apps/pagedesk/samples/XTGUIDE.PDF", "DOC.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens XTGUIDE.PDF");
         map[0] = PDM_MK(PDM_SRC, 0, 4); map[1] = PDM_MK(PDM_SRC, 0, 0); map[2] = PDM_MK(PDM_BLANK, 0, 0); map[3] = PDM_MK(PDM_SRC, 1, 2);
         map_set(map, 4); g_extract = 1; wrt_init(); es_reset();
@@ -224,7 +230,7 @@ int main(int argc, char **argv)
     }
     /* ---- what the glass did: rotate page 1, a blank after it, page 2 deleted ---- */
     {   unsigned map[8]; int j;
-        cp(argc > 2 ? argv[2] : "../../apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
+        cp(argc > 2 ? argv[2] : PDW_ROOT "/apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF again");
         map[0] = PDM_MK(PDM_SRC, 1, 0); map[1] = PDM_MK(PDM_BLANK, 0, 0);
         for (j = 2; j < 8; j++) map[j] = PDM_MK(PDM_SRC, 0, j);
@@ -270,7 +276,7 @@ int main(int argc, char **argv)
 
     {
         /* F30: a create refused by the volume (a name it cannot hold; here a folder that is not there) is a WRITE failure, not a read one */
-        cp(argc > 1 ? argv[1] : "../../apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
+        cp(argc > 1 ? argv[1] : PDW_ROOT "/apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF for the write-failure check"); wrt_init(); es_reset();
         es_new(PDA_NOTE, 0, 10, 10, 20, 20); E.colour = PDC_RED; es_text("x"); es_add();
         r = save("NODIR/Z.PDF");
@@ -281,9 +287,9 @@ int main(int argc, char **argv)
     {   unsigned map[12]; static struct pdxb_pageinfo q; int j; char cwd[200];
         static const int hasf[1] = { 0 };
         (void)hasf;
-        if (system("python3 ../../apps/pagedesk/hosttest/pdw_foreign.py FOREIGN.PDF && mkdir -p FD && cp FOREIGN.PDF FD/FOREIGN2.PDF")) { printf("FAIL: pdw_foreign.py\n"); return 2; }
+        if (system("python3 " PDW_ROOT "/apps/pagedesk/hosttest/pdw_foreign.py FOREIGN.PDF && mkdir -p FD && cp FOREIGN.PDF FD/FOREIGN2.PDF")) { printf("FAIL: pdw_foreign.py\n"); return 2; }
         if (!getcwd(cwd, sizeof cwd)) return 2;
-        cp(argc > 2 ? argv[2] : "../../apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
+        cp(argc > 2 ? argv[2] : PDW_ROOT "/apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
         cp("DOC.PDF", "DOCKEEP.PDF"); cp("FOREIGN.PDF", "FOREIGNKEEP.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF for Insert");
         /* S0, F(0):1, F(0):3, S1, F(1):2 turned, F(0):0, S2..S7 */
@@ -335,7 +341,7 @@ int main(int argc, char **argv)
                    fail for want of it), and until it does the job must REFUSE rather than save a blank page (F12) */
                 if (zz < 3) CK(r == PDE_OK, "Insert from an encrypted foreign file (%s, stored streams) answers %u", fn[v], r);
                 else CK(r == PDE_OK || (r == PDE_FLATE && access("IE.PDF", F_OK) != 0), "Insert from an encrypted foreign file (%s, Flate streams) saves or refuses cleanly (%u)", fn[v], r);
-                if (r == PDE_OK) CK(system("python3 ../../apps/pagedesk/hosttest/pdw_cmppages.py IE.PDF I1.PDF") == 0, "(%s) every inserted page has the plain control's content stream and annotation strings", fn[v]);
+                if (r == PDE_OK) CK(system("python3 " PDW_ROOT "/apps/pagedesk/hosttest/pdw_cmppages.py IE.PDF I1.PDF") == 0, "(%s) every inserted page has the plain control's content stream and annotation strings", fn[v]);
             }
             cp("DOCKEEP.PDF", "DOC.PDF");
         }
@@ -352,7 +358,7 @@ int main(int argc, char **argv)
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); wrt_init();
         r = save("I2.PDF");
         CK(r != PDE_OK && access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && g_lastdetail == 20, "a missing foreign file is refused with %u, names the file (detail %u) and writes nothing", r, g_lastdetail);
-        cp("../../apps/pagedesk/samples/ACROFORM.PDF", "FORM.PDF");
+        cp(PDW_ROOT "/apps/pagedesk/samples/ACROFORM.PDF", "FORM.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); map_set(map, 9); ins_slot(0, "FORM.PDF", 0, 1); wrt_init();
         r = save("I2.PDF");
         CK(r == PDE_LIMIT && g_lastdetail == 18 && access(PDW_TEMPNAME, F_OK) != 0, "a page with form fields is refused (%u, detail %u)", r, g_lastdetail);

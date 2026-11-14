@@ -1109,20 +1109,13 @@ tm_entry:
     mov si, tm_tpl
     call OSAPI_WM_CREATE        ; BX = window ptr, CF = the table is full
     jc .out
-    mov al, 1                   ; **WE PAINT EVERY PIXEL** (SPEC.md 11.90.1,
-    call OSAPI_WM_OWNBG         ; 28.10): the kernel's white fill was the first
-                                ; layer of a double draw on a window whose
-                                ; W_PAINT is ~450 ms, so the content went white
-                                ; and re-lettered on every repaint. It also
-                                ; unlocks OSAPI_WM_DAMAGE, which answers
-                                ; "whole" without this flag (SPEC.md 11.90.2's
-                                ; interlock)
-    mov si, tm_about            ; 'About Task Manager' above the Close the
-    call OSAPI_ABOUT_SET        ; kernel already puts in our pull-down
-                                ; (SPEC.md 12.2) - BX is still the window and
-                                ; the slot preserves the flags. AX and SI are
-                                ; scratch here: the entry proc's own push/pop
-                                ; of SI is what it owes the loader
+%ifdef TMF_HEAP
+    pushf                       ; ...and the THUMB is dragged (SPEC.md
+    cmp al, WC_ONDRAG + 1       ; 28.4.4.1) where this kernel dispatches a
+    sbb al, al                  ; tracking edge - AL is the class slots it
+    mov [tm_nodrag], al         ; does (11.104); FFh: none, so the thumb pages.
+    popf                        ; Inside a pushf: the CF our ret owes the
+%endif                          ; loader is wm_create's
 
     ; --- bind the window and ask for the byte-aligned content origin --------
     ; (this was tm_kinit, called once, from here). The loader zeroes our bss,
@@ -1148,32 +1141,6 @@ tm_entry:
                                 ; one-column could never become two - and the
                                 ; kernel is the only thing that may resize a
                                 ; window at a moment when drawing is safe
-    mov ax, tm_onresize         ; tell us when the box moves under us and we
-    call OSAPI_WM_ONRESIZE      ; did not ask - an adapter change (SPEC.md
-                                ; 11.98). BX is the window, which is what this
-                                ; routine was handed
-    mov al, 1                   ; every row this window draws is an opaque
-    call OSAPI_WM_SNAP          ; text run, so it asks for its content origin
-                                ; on a multiple of 8 and every one of them
-                                ; reaches font_run's single-store path
-                                ; (SPEC.md 11.94/6.1). EVERY adapter: this was
-                                ; mono-only until VGA was measured and gained
-                                ; more (verified aligned there - content
-                                ; origin 248). It PRESERVES FLAGS, so the CF
-                                ; our ret owes the loader is the one above
-%ifdef TMF_HEAP
-    mov ax, tm_onwheel          ; the WHEEL scrolls the heap page's list
-    call OSAPI_WM_ONWHEEL       ; (SPEC.md 13.18); flags preserved too, and
-                                ; kern_small's cell does nothing
-    pushf                       ; ...and the THUMB is dragged (SPEC.md
-    mov ax, tm_onup             ; 28.4.4.1): the release, then the tracking
-    call OSAPI_WM_ONMOUSEUP     ; edge, whose own CF says whether this kernel
-    mov ax, tm_ondrag           ; has one - inside a pushf, because the CF our
-    call OSAPI_WM_ONDRAG        ; ret owes the loader is wm_create's
-    sbb al, al
-    mov [tm_nodrag], al         ; FFh: no tracking edge, so the thumb pages
-    popf
-%endif
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
     ; exists, and not beside any worker's declaration: a package with
     ; NO worker is the case that moves most easily, and putting it at
@@ -1219,7 +1186,6 @@ tm_hire:
 .out:
     ret
 
-; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
     OS88_PREFER tm_pref, TM_PREF_W1, TM_PREF_H,  TM_PREF_W1, TM_PREF_H,  TM_PREF_W2, TM_PREF_H
 
 ; =============================================================================
@@ -1232,7 +1198,7 @@ tm_hire:
 ; over the whole of it.
 
 ; -----------------------------------------------------------------------------
-; tm_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; tm_about - the WC_ABOUT handler (tm_cls, SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -1281,7 +1247,25 @@ tm_ab1:     db 'Task Manager for os8088', 0
 tm_ab2:     db 0
 tm_ab3:     db 'Contributed by Elendilon', 0
 
-tm_tpl:     dw 250, 100, 232, 312, tm_ttl, tm_paint, 0, tm_click
+tm_tpl:     dw 250, 100, 232, 312, tm_ttl, tm_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; **WE PAINT EVERY PIXEL** (SPEC.md 11.90.1, 28.10): the kernel's white fill
+; was the first layer of a double draw on a window whose W_PAINT is ~450 ms,
+; and it unlocks OSAPI_WM_DAMAGE (11.90.2's interlock). Every row is an opaque
+; text run, so the content origin is snapped (the default, 11.94). The heap
+; page's list scrolls on the WHEEL (13.18) and its thumb is dragged (28.4.4.1)
+%ifdef TMF_HEAP
+  %define TM_C_WHEEL tm_onwheel
+  %define TM_C_UP tm_onup
+  %define TM_C_DRAG tm_ondrag
+%else
+  %define TM_C_WHEEL 0
+  %define TM_C_UP 0
+  %define TM_C_DRAG 0
+%endif
+    OS88_CLASS tm_cls, WF_OWNBG, PAINT, tm_paint, ONCLICK, tm_click, \
+               ABOUT, tm_about, ONMOUSEUP, TM_C_UP, ONRESIZE, tm_onresize, \
+               ONDRAG, TM_C_DRAG, ONWHEEL, TM_C_WHEEL
 tm_ttl:     db 'Task Manager', 0
 
 tm_s_cpu:   db 'CPU ', 0
@@ -1551,6 +1535,9 @@ tm_s_twsav: db 'WinSave', 0
 ; MEM_P_WSAVE is NOT here: it
 ; is a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests
 ; it before it walks this. Why some rows are here at all:
+;   MEM_P_DIRW_SM, MEM_P_ICO_SM - kern_small's tags for the read-ahead and
+;                 the icon store (SPEC.md 50.6.13.2): the same two claims,
+;                 ranked the other way round there
 ;   MEM_P_ICO   - the machine-wide icon store (SPEC.md 25.9), one row per
 ;                 DISTINCT body, claimed at the first mount that harvests one
 ;                 and alive until purged: leaving it out put a permanent hex
@@ -1604,10 +1591,13 @@ tm_ktab:
     dw MEM_K_SC,    'Shortcut'
     dw MEM_K_IMG,   'Disk img'
     dw MEM_K_MTBL,  'DescTbl'
+    dw MEM_K_SEAM,  'HugeSeam'
     dw MEM_P_DIRW,  'DirRead'
     dw MEM_P_RAHB,  'RdLand', 0
     dw MEM_P_FLIST, 'FileClp'
     dw MEM_P_ICO,   'Icons', 0
+    dw MEM_P_DIRW_SM, 'DirRead'
+    dw MEM_P_ICO_SM, 'Icons', 0
     dw 0
 TMK_REC     equ 10              ; owner word + an eight-byte name
 %if ($ - tm_ktab - 2) % TMK_REC
@@ -1688,8 +1678,9 @@ tm_pats:
 ;      through OSAPI_TASK_ALIVE when the close box is clicked.
 ;
 ; The order of the loop is the contract of SPEC.md 20.6 rule 4:
-; OSAPI_TASK_ALIVE with the lock NOT held, because it takes the lock itself
-; and gfx_lock is not reentrant. It is also the only teardown path - as a
+; OSAPI_TASK_ALIVE with the lock NOT held, because a worker that leaves
+; holding it leaves it held, and the close it posts for the UI task then
+; waits on it for ever. It is also the only way out - as a
 ; built-in this read I_STATE off its own instance record and far-jumped to
 ; inst_task_die, which is the same operation with the kernel's side of it
 ; exposed.
@@ -2720,7 +2711,7 @@ tm_iname:
 ; NO DEPTH CLAIM: wm_su_1bpp refuses a banded window, so this is four planes -
 ; 32,874 bytes for a 232x265 content, inside wm_su_kb's 64,512 ceiling.
 ;
-; ES IS PRESERVED: OSAPI_WM_BAND and OSAPI_WM_SAVEU are X stubs and leave the
+; ES IS PRESERVED: OSAPI_WM_BAND and OSAPI_WM_FLAG are X stubs and leave the
 ; CALLER's segment in ES, and every [es:bx+W_*] read in this file needs
 ; KERNEL_SEG (TM_ES_DATA exists for exactly that).
 ; -----------------------------------------------------------------------------
@@ -2764,12 +2755,12 @@ tm_promise:
     xor al, al                  ; edge 0 = left, the whole content
     call OSAPI_WM_BAND
     jc .no                      ; wider than 255, or the kernel declined
-    mov al, 1
-    call OSAPI_WM_SAVEU         ; ...and the promise is 28.11's, not 11.96.1's:
+    mov ax, WFB_SAVEU * 256 + 1
+    call OSAPI_WM_FLAG          ; ...and the promise is 28.11's, not 11.96.1's:
     jmp short .out              ; "I will make the restored pixels right"
 .no:
-    xor al, al
-    call OSAPI_WM_SAVEU         ; withdraw, and wm_saveu drops the cache
+    mov ax, WFB_SAVEU * 256
+    call OSAPI_WM_FLAG          ; withdraw, and the kernel drops the cache
     xor al, al
     xor cx, cx
     call OSAPI_WM_BAND          ; ...and retire the band with it, or a later
@@ -5080,8 +5071,13 @@ tm_htype:
     jmp short .put
 .kern:                          ; (each range's name is loaded BEFORE its
                                 ; test, so a hit goes straight to .put)
+    mov dx, ax                  ; ...and a module KEPT by its drop (SPEC.md
+    sub dx, MEM_P_MOD           ; 2.8.3), a range by id, named the same way:
+    cmp dx, MEM_P_MOD_N         ; its file, with LOW in the TIER column to
+    jb .mod                     ; say it is a cache
     cmp ax, MEM_K_MOD           ; a module's image: its file's name, 'CTRL',
     jne .kn                     ; rather than 'ModImg' (KERN-MEGA-PLAN
+.mod:
     push ax                     ; 14.70.3) - a module has no group to be
     push bx                     ; named by, so the TYPE column is where
     xchg ax, bx                 ; it says which
@@ -7789,7 +7785,9 @@ tm_gapcol:
     mov dx, bx
     add bx, TM_GF_Y1 + 1
     add dx, TM_GF_Y2 - 1
+    push cx
     call OSAPI_GFX_VLINE
+    pop cx
 
     pop dx
     pop bx

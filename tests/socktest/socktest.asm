@@ -505,7 +505,10 @@ sk_req_end:
 ; --- window template (SPEC.md 11) -------------------------------------------
 sk_tpl:
     dw 160, 180, 320, 94
-    dw sk_ttl, sk_paint, sk_onkey, sk_onclick
+    dw sk_ttl, sk_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sk_cls, 0, PAINT, sk_paint, ONKEY, sk_onkey, \
+               ONCLICK, sk_onclick
 
 sk_ttl:     db 'Socket Test', 0
 sk_r1:      db 'State: .. free . handle .', 0    ; [+7] [+15] [+24]

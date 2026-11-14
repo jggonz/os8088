@@ -148,36 +148,6 @@ mn_entry:
                                      ; nobody - CF is put right below
     mov si, mn_menus
     call OSAPI_MENU_SET              ; BX = the window, SI = our set
-    mov si, mn_about                 ; ...and 'About Mines' above the Close the
-    call OSAPI_ABOUT_SET             ; kernel already puts in our pull-down
-                                     ; (SPEC.md 12.2). Flags preserved, like
-                                     ; menu_win_set above
-    mov ax, mn_onrclick              ; ...and it takes the RIGHT button in its
-    call OSAPI_WM_ONRCLICK           ; content (SPEC.md 13.11): a side table,
-                                     ; not a template word, so it is installed
-                                     ; here beside the menus and for the same
-                                     ; reason - BX is still the fresh window.
-                                     ; Flags preserved, like menu_win_set
-    mov al, 1                        ; ...and it PROMISES its content stands
-    call OSAPI_WM_SAVEU              ; still while it is not drawing (SPEC.md
-                                     ; 11.96.1): no worker, and NO GAME CLOCK -
-                                     ; the only OSAPI_GET_TICKS in here seeds
-                                     ; the mine placement. The board changes
-                                     ; when the player clicks it and at no
-                                     ; other time
-                                     ; ...and its 164 content rows are 9 x 16
-    call OSAPI_WM_KEEPH              ; plus a 20px strip, none of which can give
-                                     ; a pixel up: the cells are 16px because
-                                     ; the mine, the flag and the digits are
-                                     ; drawn for a 16px cell. A CGA's desktop
-                                     ; band is 155, so without this the frame is
-                                     ; clamped to it, mn_draw_board goes on
-                                     ; drawing all nine rows through the bottom
-                                     ; of the frame, and the two rows below the
-                                     ; cut can be SEEN and not played - the
-                                     ; clicks land on the dock (SPEC.md 11.93).
-                                     ; AL is still SAVEU's 1: every slot keeps
-                                     ; what it does not answer in (SPEC.md 20.3)
     clc                              ; OSAPI_MEM_MOVABLE's CF is not ours to pass
 .full:                               ; (no window: nothing to hang menus on,
     ret                              ; and wm_create's CF=1 goes back as it is)
@@ -869,7 +839,7 @@ mn_draw_status:
 ; every background task for as long as the reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; mn_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; mn_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; clobbers AX-SI, like a menu command (SPEC.md 12.2)
 ;
@@ -908,10 +878,13 @@ mn_abdismiss:
     stc
 .none:
     ret
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 mn_tpl:
     dw 240, 120, 146, 183           ; x, y, w, h -> content 144 x 164
-    dw mn_ttl, mn_paint, mn_onkey, mn_onclick
+    dw mn_ttl, mn_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mn_cls, WF_KEEPH | WF_SAVEU, PAINT, mn_paint, ONKEY, mn_onkey, \
+               ONCLICK, mn_onclick, ABOUT, mn_about, ONRCLICK, mn_onrclick
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
 ; One menu, and only commands the game already had: the bar is the same two

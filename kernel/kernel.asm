@@ -262,11 +262,13 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
 ; Each knob selects the rewritten body of a hot path; undefined, the source
 ; assembles to the body it replaced, byte for byte. kern_mega carries the
-; first eleven: it runs on a 286 or 386, almost always with VGA or EGA, its
+; first ten: it runs on a 286 or 386, almost always with VGA or EGA, its
 ; `.cold` lives above 1MB, and its conventional budget had room. kern_big (and
-; kern_emu, which is kern_big) carries KHP_LZ alone, at the owner's word: the
-; decoders' saving is CPU, the same on every medium, and on a hard disk it is
-; most of a launch. kern_small carries none; its machines are floppy-only.
+; kern_emu, which is kern_big) carries KHP_LZ and the four VGA knobs, at the
+; owner's word: the decoders' saving is CPU, the same on every medium, and on
+; a hard disk it is most of a launch; the VGA four are `.vga` bytes, which
+; only a VGA or EGA machine keeps. kern_small carries none; it assembles no
+; planar body at all.
 ; Enabling another for kern_big is a %define below and a re-measure.
 ; tools/os88knob.py is how a rewrite is put behind a knob (and checked);
 ; docs/plans/khp1/patches/tools/equivalence/ holds each knob's harness.
@@ -278,7 +280,6 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   KHP_VGABLITP  gfx_blitp's wide rows by words (vga-5)
 ;   KHP_FRAME     gfx_frame's clip questions once a frame (gfxcall-3)
 ;   KHP_FPG       fpg_finish's unarmed unlock answered first (gfxcall-4)
-;   KHP_RELIT     blk_relit by the damage pass: fullscreen exit (wm-4)
 ;   KHP_CAPTION   the title bar's caption: no gap fill on an inactive bar,
 ;                 one font_run_x when unclipped (wm-2, wm-3)
 ;   KHP_DMGSTALE  a vacated strip under another window draws nothing (wm-6)
@@ -300,20 +301,19 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   KHP_STRRUN     font_str_run, a transparent string in one pass (text-6)
 ;   KHP_LAZYEND    cur_lazyend's early "not moved" (pointer-6; pays with O4)
 %ifdef KERN_MEGA
- %define KHP_VGASAVE
- %define KHP_VGAFILL
- %define KHP_VGAEDGE
- %define KHP_VGABLITP
  %define KHP_FRAME
  %define KHP_FPG
- %define KHP_RELIT
  %define KHP_CAPTION
  %define KHP_DMGSTALE
  %define KHP_RAISEOL
 %endif
 %ifdef KERN_BIG                 ; kern_big, kern_emu and kern_mega
  %define KHP_LZ                 ; (+190 .cold: LAST-DROP-PERF.md 7.1 row 1)
-%endif
+ %define KHP_VGASAVE            ; the four VGA items, at the owner's word
+ %define KHP_VGAFILL            ; (2026-11-10, "size pass it as well"): all
+ %define KHP_VGAEDGE            ; in the `.vga` rung, which a CGA, Hercules
+ %define KHP_VGABLITP           ; or MDA machine slides `.cold` over (7.1
+%endif                          ; rows 3, 6, 8, 9; LOG L.6)
 ; MEGA_DIAG (MEGADIAG=1) is kern_mega's FIELD READINGS on the menu bar - the
 ; NMI, the 286 reset's floppy bytes, the 765 resets, the IRQ reflections' rate,
 ; the PicoMEM's queue, the DOS trip's times, the native floppy's fallbacks and
@@ -509,10 +509,18 @@ TOAST_MAX   equ 24
 ; arithmetic on a register KSEG loaded (KERN-MEGA-MEMORY-PLAN MC7.6)
 ; IN DISKOPS.DRV (`.modl`, fifty of the tree's fifty-four sites) the slot and
 ; the segment-register load are a NEAR helper's, ksg_<sreg>_<slot> at the
-; image's end (below, before modl_end): the site is `push ax / mov ax, src /
+; image's end (compress.inc, below its scratch tail): the site is `push ax / mov ax, src /
 ; call / pop ax`, eight bytes or so against seventeen, and the helper keeps DI
 ; and FLAGS as the inline form does (kern_mega size pass 1). A combination no
 ; helper exists for is an undefined label at assembly - add its row there
+; KSG_ROW sreg, slot - one of those helpers: DI = the slot, then the
+; register's tail (compress.inc emits them, below DISKOPS.DRV's scratch tail)
+%macro KSG_ROW 2
+ksg_%1_%2:
+    push di
+    mov di, %2
+    jmp short ksg_%1_MEGA_SEL_K5.go
+%endmacro
 %macro KSEG 3
 %ifdef KERN_MEGA
  %ifidni __?SECT?__, [section .modl]
@@ -828,29 +836,8 @@ TOAST_MAX   equ 24
 %%back:
  cpu 8086
 %endmacro
-; MEGA_ICWB field - the body of a five-byte INLINE cell that installs a
-; handler: `mov [byte cs:bx+field], ax`, BX = the window, AX = the proc. The
-; same shape as MEGA_ICW one step along: kern_mega jumps to a stub that does
-; the store through the data alias (kernel/mega.inc).
-%macro MEGA_ICWB 1
- %ifdef KERN_MEGA
-    jmp strict near mega_icwb_%1
-    nop
- %else
-    mov [byte cs:bx+%1], ax
- %endif
-%endmacro
-; MEGA_ICWBW field - MEGA_ICWB with a WORD displacement, for the SIX-byte
-; cell (the wheel's, kept even for t_hotpar's parity)
-%macro MEGA_ICWBW 1
- %ifdef KERN_MEGA
-    jmp strict near mega_icwb_%1
-    nop
-    nop
- %else
-    mov [word cs:bx+%1], ax
- %endif
-%endmacro
+; (MEGA_ICWB and MEGA_ICWBW, the handler setters' inline bodies, went with
+; the setters in kernel size pass 19: SPEC.md 11.104)
 %macro KES 0
  %ifnidni __?SECT?__, [section .text]
   %ifnidni __?SECT?__, [section .vga] ; (the VGA rung is KERNEL_SEG's too)
@@ -982,7 +969,7 @@ TOAST_MAX   equ 24
 %endif
 
 ; SPEC.md 51's LOADABLE DRIVERS are kern_big's too (SPEC.md 51.0). It is the
-; largest single item in docs/plans/KERN-SMALL-CUT-PLAN.md's hardware group and the
+; largest single item in docs/plans/retired/KERN-SMALL-CUT-PLAN.md's hardware group and the
 ; only one there that is not a device - it is the ABILITY to load one - so it
 ; is the one that needed a product decision rather than a measurement. The
 ; decision is the owner's, in their words: *"remove the drivers from the OS
@@ -1009,7 +996,7 @@ TOAST_MAX   equ 24
 %endif
 
 ; ...and with them go the sound layer's CARD tiers (SPEC.md 34.0). This is
-; the half of docs/plans/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
+; the half of docs/plans/retired/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
 ; made unreachable rather than merely unwanted: every route to an OPL2 or a
 ; Sound Blaster is a `[drv_svc + DSV_*]` read, and on a build that can load no
 ; driver that table is zero for the life of the machine. The PC SPEAKER is
@@ -1108,6 +1095,58 @@ TOAST_MAX   equ 24
   %define OS88_COMPACT 1
 %endif
 
+; MOD_CACHE - a DROPPED module stays in memory as a purgeable claim, and the
+; next mod_need for it is a hit with no disk read (SPEC.md 2.8.3). kern_big,
+; kern_emu and kern_mega - and kern_small, below (owner decision O5 settled
+; 2026-11-12, on top of SPEC.md 50.6.13). ON kern_mega IN PROTECTED MODE THE
+; IMAGE IS KEPT WHEREVER IT IS (SPEC.md 2.8.3.3): above 1MB the pool pair
+; mod_hi copied it to, its block a purgeable kernel cache (MX_FPURGE,
+; mega_modkeepf) that mx_alloc's shed takes back through the same mem_pg_own
+; row; below 1MB (a pool that refused it) the mem_tab claim every other
+; kernel keeps, whose pair moves with it. In real mode it is freed.
+; Resolved here for OS88_ASSOC's reason: memory.inc, above mod.inc, names the
+; tag's row
+%ifdef KERN_BIG
+    %define MOD_CACHE 1
+    %define MODC_KEEP 1         ; ...CTRL.DRV's kept copy with it: its scratch
+%endif                          ; tail is `.modcb`, which is OS88_DRIVERS's
+; ...AND kern_small, since SPEC.md 50.6.13 made a kept image unable to wall
+; anything (owner decisions O5, A + C, 2026-11-12): a pinned claim that wants
+; its room EVICTS it, so keeping it costs nothing but the rank it sheds at.
+; PURGEABLE ONLY - nothing moves on this kernel (SPEC.md 66.0), so mod_drop
+; declares no relocation proc there - and only the images that name a scratch
+; tail are kept: FDLG.DRV and FILECP.DRV (their whole bss), FORMAT.DRV,
+; DISKOPS.DRV and SERIAL.DRV (theirs, as on kern_big) - and CTRL.DRV, whose
+; scratch tail `.modcb` is kern_small's too since SPEC.md 2.8.3.4.1: the
+; Floppy page's two bytes and the shutdown question's, with no cpc_buf
+%ifdef KERN_SMALL
+    %define MOD_CACHE 1
+    %define MODC_KEEP 1
+%endif
+
+; MEM_EVICT - a claim that is not itself a cache PLACES as if every cache it
+; outranks were free, and evicts the ones its block lands on (SPEC.md
+; 50.6.13). kern_small only: with no compactor (SPEC.md 66.0) a pinned claim
+; placed AROUND a cache is a wall the shed cannot take down - the cache goes
+; and its room stays split - so there the cache must lose its PLACE, not
+; only its bytes. kern_big, kern_emu and kern_mega dissolve such a barrier
+; under pressure instead (SPEC.md 66.10). Resolved here for OS88_ASSOC's
+; reason: memory.inc reads it
+%ifdef KERN_SMALL
+    %define MEM_EVICT 1
+%endif
+; SCR_B / SCR_W - one byte or word of a module's SCRATCH (SPEC.md 2.8.3):
+; under MOD_CACHE it is declared in the image's nobits bss tail (`res*`),
+; which a KEPT image's drop zeroes, so the next use finds it as a load
+; would; elsewhere it is a zero `db`/`dw` where it always was
+%ifdef MODC_KEEP
+  %define SCR_B resb 1
+  %define SCR_W resw 1
+%else
+  %define SCR_B db 0
+  %define SCR_W dw 0
+%endif
+
 ; SPEC.md 22.3-22.5's Cut/Copy/Paste is an ON-DEMAND MODULE on kern_small
 ; (SPEC.md 2.8, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1) and stays resident
 ; `.cold` on kern_big, which keeps its speed and its one contiguous boot read:
@@ -1191,8 +1230,8 @@ TOAST_MAX   equ 24
 ; `.cold` and `.vgabuf` round to the PARAGRAPH (a segment is all either needs)
 ; and KERN_END alone rounds to 512, once, where it was three roundings to
 ; make one number aligned - and every heap floor rounds up at run time
-; (mem_floor_ax). The image rung and the FAT window stay whole: FAT_SEG and
-; LOW_SEG sit on them. kern_mega keeps its rungs - COLD_SEG is a selector
+; (mem_floor_ax). Since kernel size pass 19 the image does not round to 512
+; either (KIMG_PARA below), so on these kernels KERN_END is the ONLY rounding. kern_mega keeps its rungs - COLD_SEG is a selector
 ; there, a multiple of 8 paragraphs. NO_LADDER_PACK is the A/B
 %ifdef ROM_ADOPT
   %ifndef NO_LADDER_PACK
@@ -1288,6 +1327,27 @@ DRV_HMA_SEG equ 0xF000
 %ifndef KERN_KNOB
   %define MOU_IN_BLOB 1
 %endif
+%endif
+
+; HB_EARLY - the hibernation probe runs BEFORE the drivers and the mouse
+; (SPEC.md 87.5, docs/plans/HIBER-RESUME-PLAN.md B2): kern_big and kern_emu.
+; kmain_o probes right after the last `.ovl` call (P1), then sets the mouse up,
+; loads drv_boot's PASS 1 (the classes a hibernate keeps, HB_KEEPSET), probes
+; again (P2) if P1 could not settle it, and only then loads pass 2 - so a boot
+; that resumes never runs mouse_init's waits or loads a driver the image would
+; only shut down. kern_mega keeps the late probe: its protected-mode images
+; are judged after mega_enter (87.9). kern_small has no hibernate.
+;
+; IT TAKES mouse_init OUT OF `.ovl` ON THOSE KERNELS: the probe mounts, the
+; mount takes the FAT window `.ovl` was read onto (SPEC.md 2.5.3), and the
+; mouse now runs after it - so its body is `.boot3`'s there, kern_small's
+; arrangement (MOU_IN_BLOB). `.ovl` sheds ~0.8KB and `.boot3` gains it: both
+; transient, neither resident.
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define HB_EARLY 1
+  %define MOU_IN_BLOB 1
+ %endif
 %endif
 
 ; SPEC.md 30.5-30.6's Dock PLACEMENT and AUTO-HIDE - the left and right
@@ -1549,7 +1609,7 @@ MEGA_BOOT_KB    equ 640         ; conventional and extended, and the
 DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ; instead of 4,608, and the largest volume it
                                 ; will mount is a 360KB floppy
-                                ; (docs/plans/KERN-SMALL-CUT-PLAN.md D2).
+                                ; (docs/plans/retired/KERN-SMALL-CUT-PLAN.md D2).
                                 ;
                                 ; It is an ACCEPTANCE threshold like the value
                                 ; below, so this is not a buffer that might
@@ -1563,7 +1623,7 @@ DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ; volume any host mounts.
                                 ;
                                 ; IT COULD NOT HAVE BEEN TAKEN BEFORE SPEC.md
-                                ; 37.0.1. docs/plans/KERN-SMALL-CUT-PLAN.md 7 is the
+                                ; 37.0.1. docs/plans/retired/KERN-SMALL-CUT-PLAN.md 7 is the
                                 ; floor: `.ovl` is loaded ONTO this window and
                                 ; spills through the mount buffers, so it has
                                 ; to fit FAT_PARA*16 + DSK_WIN_BYTES. At 2
@@ -1684,18 +1744,34 @@ VIEW_KB     equ 2               ; each cache: 1,536 bytes of entries and 64 of
 ; of this file, which is legal because a segment VALUE never changes an
 ; instruction's length - `mov ax, imm16` is `mov ax, imm16` whatever the
 ; immediate turns out to be, so NASM converges on the second pass.
-; The image rounds up to a whole 512 BYTES, not to a paragraph, and that is
-; not tidiness - it is what keeps every rung above it 512-aligned. int 13h
-; moves one sector per call, which bounds a transfer to 512 bytes but does
-; NOT stop one from straddling a 64KB physical boundary: only starting on a
-; 512-byte boundary does that, and the DMA controller answers a straddle with
-; error 09h. Every base below is an int 13h target - the FAT snapshot, the
-; disk buffers, a package image, a package's file buffer out of the heap -
-; and FAT_PARA (288) and LOW_PARA are both multiples of 32
-; paragraphs, so aligning this one rung aligns the whole ladder. Guard 6
-; proves it. It used to hold by luck: every base in the map was a round
-; constant like 0x0300 or 0x2A00, and nothing said why that mattered.
-KIMG_PARA   equ ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 32   ; image + scratch
+; The image rounds to the PARAGRAPH (kernel size pass 19), and the two rungs
+; above it - the FAT window and LOW_SEG, whose first 512 bytes are dsk_secbuf -
+; therefore start wherever the image happens to end. That is safe because
+; what int 13h refuses is a transfer that STRADDLES a 64KB physical page
+; (error 09h), and a 512-byte base is only one way to rule that out: the way
+; for a base nobody knows until run time, such as a heap claim (guard 6 keeps
+; HEAP_SEG and every claim on it). These two bases are ASSEMBLY-TIME
+; CONSTANTS, so guard 6 proves the stronger fact directly - neither window
+; crosses a page - and the 0-511-byte pad a 512-byte image rung carried is
+; gone, with KERNEL_SEG where it always was and no ABI moved (ABI-BREAK-LIST
+; L1's saving, without its flag day: docs/plans/completed/ksp19/l1.md). It used to round
+; to 512, and before THAT every base in the map was a round constant like
+; 0x0300 or 0x2A00 and nothing said why that mattered. kern_mega still rounds
+; to 512: its ladder is unpacked, so the heap base above it would otherwise
+; lose guard 6's alignment (docs/plans/completed/ksp19/l1.md).
+%ifdef KERN_MEGA
+KIMG_PARA   equ ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 32   ; image + scratch,
+                                ; still to 512 on kern_mega: its ladder is not
+                                ; packed (LADDER_PACK), so the rungs above the
+                                ; image - and HEAP_SEG, which guard 6 holds to
+                                ; 512 - inherit this rounding. A 128-byte
+                                ; granule here broke guard 6 the first time
+                                ; .bss moved by a non-multiple of 512 (the
+                                ; drvtab merge, kernel size pass 19)
+%else
+KIMG_PARA   equ (KTEXT_SIZE + KBSS_SIZE + 15) / 16           ; image + scratch,
+                                ; to the PARAGRAPH (kernel size pass 19)
+%endif
 %ifdef ROM_COLD
 %ifdef COLD_SLIDE
 ; THE VGA RUNG (docs/plans/MOVABLE-COLD-PLAN.md 2): `.vga`, the code only a
@@ -2304,7 +2380,7 @@ section .modu    follows=.modc vfollows=.modc align=1 valign=1
                                 ; in `.modc`; `.modc` may name NOTHING in
                                 ; `.modu` (tools/os88ovlchk.py), because on a
                                 ; core-only load it is not there
-%ifdef OS88_DRIVERS
+%ifdef MODC_KEEP
 section .modcb   nobits vstart=MODC_IMG ; CTRL.DRV's own scratch: the
                                 ; SYSTEM.CFG writer's file buffer (driver.inc,
                                 ; CFG_DATA cpc), at the image's end and NOT
@@ -2568,8 +2644,8 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 ; **A CELL WHOSE ROUTINE IS `.cold` NAMES THE COLD BODY** (SPEC.md 20.3.2).
 ; It used to name a resident thunk - `foo: call COLD_SEG:foo_x / ret`, six
 ; bytes of .text - and forty of those thunks were reached by NOTHING but their
-; own cell. The rare cold shapes below (RCXCELL, RNCELL, RCSLOT) reach the
-; cold body through `api_far` instead, one trampoline that builds COLD_SEG:BP
+; own cell. The door's cold kinds (RCS, RCX, RN - SPEC.md 20.3.4) and the
+; NCELL reach the cold body through `api_far` instead, one trampoline that builds COLD_SEG:BP
 ; on the caller's stack the way drv_pkg_disp builds a driver's far call: the
 ; body's own `retf` returns through the far frame the `call KERNEL_SEG:
 ; api_far` pushed. `push` and `retf` touch no flags, so a CF answer still
@@ -2599,26 +2675,15 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 ; survives. `OSAPI_XCELL` additionally sets ES = the caller's DS and restores
 ; it, which for a module is ES = KERNEL_SEG - what a kernel-owned template
 ; wants, and what the one XCELL caller here used to do by hand.
-; ---- the RARE cells (SPEC.md 20.3): six bytes, the target behind the call ----
-%macro OSAPI_RCELL 2                ; 6 bytes: push bp / call <kind> / dw target
-    push bp
-    call %1
-    dw %2
-%endmacro
-%macro OSAPI_RSLOT 1
-    OSAPI_RCELL api_rs, %1
-%endmacro
-%macro OSAPI_RXCELL 1
-    OSAPI_RCELL api_rx, %1
-%endmacro
-%macro OSAPI_RCXCELL 1
-    OSAPI_RCELL api_rxc, %1
-%endmacro
-%macro OSAPI_RNCELL 1
-    OSAPI_RCELL api_rn, %1
-%endmacro
-%macro OSAPI_RCSLOT 1
-    OSAPI_RCELL api_rsc, %1
+; ---- the RARE cells (SPEC.md 20.3.4) live behind the door, rd_tab below ------
+; (kernel size pass 19's T5: the six-byte `push bp / call api_r<kind> / dw
+; target` cells and their five bodies are gone. A cell the real-mode FSX
+; bracket keeps is a table cell of a hot shape instead - OSAPI_XMEM_CAPS,
+; OSAPI_FSX_SPK and OSAPI_SEG XCELLs, OSAPI_FILE_READ_SEQ the NCELL below.)
+%macro OSAPI_NCELL 1                ; 7 bytes: the XCELL's shape, jumping to
+    push bp                         ; the N body's cell entry (api_nc): %1 is
+    mov bp, %1                      ; a .cold file door whose name crosses at
+    jmp strict near api_nc          ; DS:SI (SPEC.md 20.3, OSAPI_FILE_READ_SEQ)
 %endmacro
 %macro OSAPI_JCELL 1
     jmp strict near %1
@@ -2695,7 +2760,7 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 %endmacro
 ; OSAPI_XREFUSE - kern_mega's protected-mode cells answered on every other
 ; kernel, INLINE: AX = 1, CF = 1, every other register kept - the refusal
-; OSAPI_XMEM_SEL (0x04B3) and OSAPI_XMEM_RUN (0x04CB) publish for "no
+; OSAPI_XMEM_SEL (a door cell) and OSAPI_XMEM_RUN (a door cell) publish for "no
 ; protected mode here". It was a six-byte .text body behind two rare cells;
 ; the cell IS that body now, and is faster for it (kernel size pass 14).
 ; Six bytes: `cmp al, 2` borrows exactly as `stc` sets CF, and is the length
@@ -2705,6 +2770,22 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
     mov ax, 1
     cmp al, 2
     OSAPI_IEND
+%endmacro
+
+; ---- THE RARE DOOR (SPEC.md 20.3.4) -----------------------------------------
+; A call through the door is `int OS88_RARE` and the INDEX byte after it -
+; three bytes where a far call is five - and the kernel keeps a two-byte word
+; per index (rd_tab, below the includes, with the door itself). KDOOR is the
+; kernel's own spelling: `KDOOR app_launch` reaches the routine rd_tab
+; declares as `RDENT RDK_RS, app_launch`. The index is the symbol rix_<name>
+; the RDENT makes, so a site naming a routine with no RDENT fails to assemble
+; rather than far-calling a wild offset. OS88_RARE is mirrored in
+; apps/os88api.inc (tests/unit/t_mirror.py pairs the two).
+OS88_RARE   equ 0x81            ; SPEC.md 20.3.4: 81h-85h are BASIC's
+                                ; reserved block, which nothing else uses
+%macro KDOOR 1
+    int OS88_RARE
+    db (rix_%1 - RD_P) & 0xFF   ; the door adds RD_P back (rd_tab's two blocks)
 %endmacro
 
 ; ---- CLC_OR_STC .label: THE CF-RETURN TAIL IN TWO BYTES (size pass 9) -------
@@ -2750,17 +2831,20 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 %macro SKIPAX2 0                ; mov ax, imm16 over two bytes: AX, no flag
     db 0xB8
 %endmacro
+%macro SKIPCY1 0                ; jnc rel8 over ONE byte, and only where
+    db 0x73                     ; CF = 1 is PROVED: never taken, so it writes
+%endmacro                       ; no register and NO flag (kernel size pass 20)
 
 osapi_table:
 apic_gfx_lock:
     OSAPI_SLOT gfx_lock           ; 0x0010
 apic_gfx_unlock:
     OSAPI_SLOT gfx_unlock         ; 0x0018
-    OSAPI_SLOT gfx_pixel          ; 0x0020
-apic_gfx_hline:
-    OSAPI_SLOT gfx_hline          ; 0x0028
-apic_gfx_vline:
-    OSAPI_SLOT gfx_vline          ; 0x0030
+    OSAPI_SLOT gfx_pixel_n        ; 0x0020 - the three LINE cells enter their
+apic_gfx_hline:                   ; non-preserving shims (SPEC.md 5.7.3): a
+    OSAPI_SLOT gfx_hline_n        ; 0x0028   package's line clobbers AX..DX,
+apic_gfx_vline:                   ; and the kernel's own callers keep the
+    OSAPI_SLOT gfx_vline_n        ; 0x0030   preserving gfx_hline/gfx_vline
 apic_gfx_fill:
     OSAPI_SLOT gfx_fill           ; 0x0038
     OSAPI_SLOT gfx_frame          ; 0x0040
@@ -2773,48 +2857,60 @@ apic_gfx_xor_fill:
 apic_font_str:
     OSAPI_XCELL font_str_x      ; 0x0068  X: the string is package data
     OSAPI_XCELL font_width_x    ; 0x006F  X
-apic_wm_create:
-    OSAPI_RXCELL wm_create     ; 0x0076  X: so is the template
-apic_wm_show:
-    OSAPI_RSLOT wm_show            ; 0x007C
-    OSAPI_RSLOT wm_hide            ; 0x0082
-apic_wm_front:                    ; DOCK.DRV's door (SPEC.md 30.4)
-    OSAPI_RSLOT wm_front           ; 0x0088
 
 apic_wm_content:                  ; cw_wm_content's door (kernel size pass 13)
 rmk_1:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_SLOT wm_content         ; 0x008E
+    OSAPI_SLOT wm_content         ; 0x0076
 rmk_1e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_SLOT wm_obscured        ; 0x0096
+    OSAPI_SLOT wm_obscured        ; 0x007E
 apic_task_yield:
-    OSAPI_SLOT task_yield         ; 0x009E
-    OSAPI_SLOT task_sleep         ; 0x00A6
+%ifdef KERN_EMU
+    OSAPI_SLOT task_yield         ; 0x0086 - kern_emu keeps the SLOT: its
+                                  ;          task_yield polls the VMware
+                                  ;          pointer BEFORE the frame (9.11.3)
+%else
+    ; 0x009E - THE CELL ENTERS THE YIELD ITSELF (ABI-BREAK-LIST V2, kernel
+    ; size pass 19). It builds task_yield's int 08h frame UNDER the caller's
+    ; far return - pushf / cli / push cs / call .save - so the scheduler's
+    ; iret resumes at the `retf` below and goes straight back to the package.
+    ; The SLOT it was paid push ds / push cs / pop ds, a near call and ret
+    ; and a pop ds round the same frame: .save banks the caller's DS on the
+    ; frame and KDS loads the kernel's, so none of that bought anything.
+    ; ~95 clocks a yield (PREDICTED). Seven bytes of eight: the length is
+    ; the ABI, so the eighth is a nop nothing reaches. kern_mega too - the
+    ; frame is the near task_yield's own, which its scheduler already irets.
+    ; STKBALANCE-OK: the int 08h frame task_yield fabricates, as there
+    pushf                         ; FLAGS slot - carries the caller's IF
+    cli
+    push cs                       ; CS slot
+    call task_yield.save          ; IP slot: the iret resumes at the retf
+    retf
+    nop
+%endif
+    OSAPI_SLOT task_sleep         ; 0x008E
 rmk_2:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_ICELL 5                 ; 0x00AE
+    OSAPI_ICELL 5                 ; 0x0096
     mov ax, [cs:ticks]
     OSAPI_IEND
 apic_osapi_set_color:
-    OSAPI_ICELL 5                 ; 0x00B3
+    OSAPI_ICELL 5                 ; 0x009B
     MEGA_ICW gfx_color, al
     OSAPI_IEND
-    OSAPI_SLOT osapi_mouse        ; 0x00B8
+    OSAPI_SLOT osapi_mouse        ; 0x00A0
 rmk_2e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_ICELL 5                 ; 0x00C0
+    OSAPI_ICELL 5                 ; 0x00A8
     MEGA_ICW osapi_seed, ax
     OSAPI_IEND
-    OSAPI_SLOT osapi_rand         ; 0x00C5
-rmk_3:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RSLOT osapi_snd_caps     ; 0x00CD - sound (SPEC.md 34): what the PC
+    OSAPI_SLOT osapi_rand         ; 0x00AD
 apic_osapi_snd_tone:
-rmk_3e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_SLOT osapi_snd_tone     ; 0x00D3   speaker can do, a tone, and a
-    OSAPI_SLOT osapi_snd_play     ; 0x00DB   clip out of the caller's buffer
-    OSAPI_XCELL osapi_snd_fm_x        ; 0x00E3 - FM verbs (SPEC.md 34.2). X: a
+    OSAPI_SLOT osapi_snd_tone     ; 0x00B5   speaker can do, a tone, and a
+    OSAPI_SLOT osapi_snd_play     ; 0x00BD   clip out of the caller's buffer
+    OSAPI_XCELL osapi_snd_fm_x        ; 0x00C5 - FM verbs (SPEC.md 34.2). X: a
                                   ;          patch-load's 11 bytes are the
                                   ;          caller's, and only live while a
                                   ;          sound DRIVER is loaded (51.4)
 rmk_sstr:          ; (a real-mode bracket's twin: fsx_rkeepm)
-    OSAPI_XCELL osapi_snd_stream    ; 0x00EA - PCM_BG streams (SPEC.md 34.5),
+    OSAPI_XCELL osapi_snd_stream    ; 0x00CC - PCM_BG streams (SPEC.md 34.5),
                                   ;          likewise the driver's. Both
                                   ;          answer CF=1 with no driver, which
                                   ;          is the same thing the held cells
@@ -2822,58 +2918,31 @@ rmk_sstr:          ; (a real-mode bracket's twin: fsx_rkeepm)
                                   ;          34.6). The two numbers are held
                                   ;          rather than reused, which is what
                                   ;          fixes every slot below them
-    OSAPI_RSLOT wm_sizable         ; 0x00F1 - window features (SPEC.md 11.1)
-    OSAPI_RSLOT wm_fullscreen      ; 0x00F7 - fullscreen (SPEC.md 11.2)
-apic_wm_grow_paint:
-    OSAPI_RSLOT wm_grow_paint      ; 0x00FD - grow-box restore (SPEC.md 11.1)
-    OSAPI_RNCELL dwf_dskw_write ; 0x0103 - files (SPEC.md 18.4/20.3): N,
-    OSAPI_RNCELL dwf_dskw_read ; 0x0109   because ES:BX is the data buffer
-                                  ;          - and DX:CX its 32-bit count, so
-                                  ;          these two are the WHOLE read/write
-                                  ;          surface (SPEC.md 18.4.1). DX is
-                                  ;          an argument to both and an output
-                                  ;          of the read, and the N stub keeps
-                                  ;          its hands off it
-    OSAPI_RNCELL dwf_dskw_delete ; 0x010F   and the name still has to cross
-    OSAPI_JCELL api_file_rename   ; 0x0115   (two names, this one)
-    OSAPI_RSLOT osapi_file_dfree   ; 0x0118 - free space on the CALLING
-                                  ;          INSTANCE's volume (SPEC.md
-                                  ;          19.2.1), which is the only
-                                  ;          volume its writes can reach
-    OSAPI_RSLOT menu_win_set       ; 0x011E - app menus (SPEC.md 12.2): the
-                                  ;          set's segment comes from the
-                                  ;          window, so no stub is needed
-    OSAPI_JCELL api_fdlg_open     ; 0x0124 - the Standard File dialog
+    OSAPI_JCELL api_file_rename   ; 0x00D3   (two names, this one)
+    OSAPI_JCELL api_fdlg_open     ; 0x00D6 - the Standard File dialog
                                   ;          (SPEC.md 38.6): N, for the
                                   ;          default name
 rmk_4:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_SLOT osapi_video        ; 0x0127 - runtime screen geometry (39.2)
+    OSAPI_SLOT osapi_video        ; 0x00D9 - runtime screen geometry (39.2)
 rmk_4e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RXCELL inst_pkg_spawn     ; 0x012F - worker tasks (SPEC.md 20.6): X,
-                                  ;          the ownership fence needs to
-                                  ;          know which segment is calling
-    OSAPI_SLOT inst_pkg_alive     ; 0x0135
-    OSAPI_SLOT wm_clip_set        ; 0x013D - the clip region (SPEC.md 11.3)
+    OSAPI_SLOT inst_pkg_alive     ; 0x00E1
+    OSAPI_SLOT wm_clip_set        ; 0x00E9 - the clip region (SPEC.md 11.3)
 apic_wm_clip_clear:
-    OSAPI_SLOT wm_clip_clear      ; 0x0145
+    OSAPI_SLOT wm_clip_clear      ; 0x00F1
 apic_wm_clip_test:
-    OSAPI_SLOT wm_clip_test       ; 0x014D
+    OSAPI_SLOT wm_clip_test       ; 0x00F9
 rmk_5:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_ICELL 5                 ; 0x0155 - CPU tiers and memory above 1MB
+    OSAPI_ICELL 5                 ; 0x0101 - CPU tiers and memory above 1MB
     mov ax, [cs:cpu_tier]
     OSAPI_IEND
 apic_xm_caps:
 rmk_5e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RSLOT xm_caps            ; 0x015A   (SPEC.md 41): each body already
-apic_xm_alloc:
-    OSAPI_RSLOT xm_alloc           ; 0x0160   answers its SPEC.md 20.3 contract
-apic_xm_free:
-    OSAPI_RSLOT xm_free            ; 0x0166   exactly, so the slots call
+    OSAPI_XCELL xm_caps            ; 0x0106   (SPEC.md 41): each body already
 apic_xm_copy:
-    OSAPI_SLOT xm_copy            ; 0x016C   straight at them - and xm_copy's
+    OSAPI_SLOT xm_copy            ; 0x010D   straight at them - and xm_copy's
                                   ;          ES:SI is the caller's own choice,
                                   ;          so no X stub is involved either
-    OSAPI_SLOT wm_geom            ; 0x0174 - content size + visibility
+    OSAPI_SLOT wm_geom            ; 0x0115 - content size + visibility
                                   ;          (SPEC.md 11): content size
                                   ;          without touching the record
 ; --- the v3 arena's three cells were WITHDRAWN (SPEC.md 20.3.1) -------------
@@ -2888,116 +2957,18 @@ apic_xm_copy:
     ; (dropped) OSAPI_CXCELL osapi_cm_free_x    ; 0x01C0 - AX = a base segment you own; X
     ; (dropped) OSAPI_CSLOT osapi_cm_caps_x   ; 0x01C8 - AX/DX = largest/total free
                                   ;          PARAGRAPHS, BL = free records
-    OSAPI_RSLOT osapi_wm_resize    ; 0x017C - resize a window (SPEC.md 11.1):
-                                  ;          BX = win, CX = w, DX = h; lock
-                                  ;          held or not (11.1.2). Retires the last liberty
-                                  ;          in docs/plans/completed/PAINT-NOTES.md - an app
-                                  ;          writing W_W/W_H itself
 api_gfx_blit4:                    ; (named: SPEC.md 5.4.1.5's walk far-calls it)
-    OSAPI_SLOT gfx_blit4          ; 0x0182 - packed 4bpp block (SPEC.md 5.4):
+    OSAPI_SLOT gfx_blit4          ; 0x011D - packed 4bpp block (SPEC.md 5.4):
                                   ;          ES:SI = source, BP = stride,
                                   ;          AX/BX = dest, CX/DX = w/h. ES is
                                   ;          the caller's own choice here, so
                                   ;          no stub is needed
-    OSAPI_RSLOT wm_about_set       ; 0x018A - the app-name pull-down (12.2):
-                                  ;          BX = win, SI = your About handler
-    OSAPI_RCSLOT osapi_vol_kind_x  ; 0x0190 - AL = a volume index. CF=1 = there
-                                  ;          is no such volume; CF=0 with AL =
-                                  ;          VK_REMOVABLE / VK_FIXED and AH =
-                                  ;          VT_BIOS / VT_DRIVER (SPEC.md
-                                  ;          18.7.2). The MEDIUM and the
-                                  ;          TRANSPORT are two questions, and
-                                  ;          a package asking "is this a hard
-                                  ;          disk" wants the first.
-                                  ;          WAS readbig (SPEC.md 18.4.1),
-                                  ;          retired when dskw_read lost its
-                                  ;          64KB ceiling - SPEC.md 20.3.1's
-                                  ;          free list, and taking it cost the
-                                  ;          table nothing where an append
-                                  ;          would have been eight bytes
-apic_wm_onmouseup:
-%ifdef KERN_MEGA
-    OSAPI_RSLOT wm_onmouseup       ; 0x0196 - BX = window, AX = a near proc in
-%else                             ; (INLINE off kern_mega, OSAPI_WM_ONWHEEL's
-    OSAPI_ICELL 6                 ; word displacement for the cell's six
-    mov [word cs:bx+W_ONMOUSEUP], ax ; bytes; kern_mega's store needs the data
-    OSAPI_IEND                    ; alias, so it keeps the rare cell and its
-%endif                            ; body - kernel size pass 14)
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          release half of a content click
-                                  ;          (SPEC.md 13.7). Call it after
-                                  ;          OSAPI_WM_CREATE, like
-                                  ;          OSAPI_WM_ONSIZE - W_ONMOUSEUP is
-                                  ;          not a template word.
-                                  ;
-                                  ;          THIS CELL IS REUSED, and it is
-                                  ;          the worked example of SPEC.md
-                                  ;          20.3.1's free list: it held the
-                                  ;          RETIRED gfx_dbuf_gone (32), whose
-                                  ;          contract was withdrawn, whose SDK
-                                  ;          name was removed, and which
-                                  ;          therefore had no caller that
-                                  ;          could exist. Reuse cost the table
-                                  ;          nothing where an append would
-                                  ;          have grown it
-    OSAPI_SLOT gfx_scroll         ; 0x019C - vertical scroll blit (SPEC.md
+    OSAPI_SLOT gfx_scroll         ; 0x0125 - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
                                   ;          are the caller's to repaint
 ; --- and from here on, the slots added since ----------------------------------
-    OSAPI_RCXCELL mmf_osapi_mem_claim ; 0x01A4 - the claim heap (SPEC.md 50.3):
-    OSAPI_RCXCELL mmf_osapi_mem_free ; 0x01AA   X, same fence as the spawn
-apic_osapi_mem_avail:
-    OSAPI_RCSLOT mmf_osapi_mem_avail ; 0x01B0
-rmk_6:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RSLOT osapi_font_glyphs  ; 0x01B6 - the kernel's 8x8 glyph table
-                                  ;          (SPEC.md 6): out DX:SI = the
-                                  ;          table (it lives in LOW_SEG now -
-                                  ;          the one-time amendment at the
-                                  ;          body below), AL = first code,
-                                  ;          AH = last, CX = bytes per glyph
-rmk_6e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_ICELL 5                 ; 0x01BC - install the resize negotiator
-                                  ;          (SPEC.md 11.1): BX = win, AX =
-                                  ;          near proc. The other half of
-                                  ;          docs/plans/completed/PAINT-NOTES.md's resize
-                                  ;          complaint - wm_resize is the app
-                                  ;          asking, this is the app answering
-    MEGA_ICWB W_ONSIZE
-    OSAPI_IEND
-    OSAPI_RSLOT osapi_file_here    ; 0x01C1 - where the file API's names
-                                  ;          resolve (SPEC.md 18.4/19.2)
-    OSAPI_RSLOT osapi_file_goto    ; 0x01C7 - ...and how to put it back
-    OSAPI_RCXCELL osapi_mem_regrow_x ; 0x01CD - resize a claim you already hold
-                                  ;          (SPEC.md 50.3): X, same owner
-                                  ;          fence as the claim itself. In
-                                  ;          place when the paragraphs above
-                                  ;          are free, which is what stops a
-                                  ;          grow needing old + new at once
-apic_wm_title_set:
-    OSAPI_RSLOT wm_title_set       ; 0x01D3 - retitle a window and redraw ONLY
-                                  ;          its caption (SPEC.md 11.92): BX =
-                                  ;          win, AX = the new string (0 = the
-                                  ;          bytes W_TITLE names changed in
-                                  ;          place). Not an X cell: the string
-                                  ;          is read through W_SEG, which is
-                                  ;          already the caller's segment
-    OSAPI_RCXCELL drv_task_x   ; 0x01D9 - a DRIVER's worker task (SPEC.md
-                                  ;          51.7): AX = a near entry in its
-                                  ;          own segment, or 0 = "this IS the
-                                  ;          worker, and it is exiting". X,
-                                  ;          because the fence is an identity
-                                  ;          test on the caller's segment
-    OSAPI_RCXCELL mmf_osapi_mem_claim_dma ; 0x01DF - a claim an ISA DMA controller can
-                                  ;          reach (SPEC.md 50.3): AX = KB,
-                                  ;          CX = KB of the HEAD that must not
-                                  ;          cross a 64KB physical boundary.
-                                  ;          X, the claim's own owner fence.
-                                  ;          A separate cell and not a CX on
-                                  ;          mem_claim, because every existing
-                                  ;          caller passes garbage there and
-                                  ;          the failure would be silent
-    OSAPI_XCELL font_run_x      ; 0x01E5 - one OPAQUE text run (SPEC.md 6.1):
+    OSAPI_XCELL font_run_x      ; 0x012D - one OPAQUE text run (SPEC.md 6.1):
                                   ;          CX = x, DX = y, SI = ASCIIZ,
                                   ;          AL = ink, AH = background. Draws
                                   ;          the cells' background AND their
@@ -3013,55 +2984,6 @@ apic_wm_title_set:
                                   ;          been held empty are filled now
                                   ;          (SPEC.md 20.8), and everything
                                   ;          above them moved 24 bytes up
-apic_wm_top:                       ; EXTD.DRV's and DOCK.DRV's door (SPEC.md 39.19.6.2, 30.5)
-    OSAPI_RSLOT wm_top             ; 0x01EC - out BX = the frontmost VISIBLE
-                                  ;          window, 0 if none. The one thing
-                                  ;          a package could not find out: it
-                                  ;          learns it HAS focus (W_ONCLICK)
-                                  ;          and never that it LOST it, so a
-                                  ;          real-time app had no way to pause
-                                  ;          when another window came forward
-                                  ;          (SPEC.md 44.8). Compare against
-                                  ;          your own window ptr; W_FLAGS bit1
-                                  ;          only says VISIBLE, which a wholly
-                                  ;          covered window still is
-apic_wm_snap:
-    OSAPI_RSLOT wm_snap            ; 0x01F2 - BX = window, AL = 0 clear / non-0
-                                  ;          set: keep this window's CONTENT
-                                  ;          ORIGIN on a multiple of 8, so its
-                                  ;          text can take font_run's
-                                  ;          single-store path (SPEC.md
-                                  ;          11.94/6.1). Content, not frame:
-                                  ;          the border makes them differ by
-                                  ;          one and the kernel owns that
-                                  ;          pixel. Mono only - it is a no-op
-                                  ;          on VGA, so an app may set it
-                                  ;          unconditionally
-    OSAPI_RCXCELL osapi_vol_add_x    ; 0x01F8 - X: a DRVC_DISK driver registers
-                                  ;          one mounted volume (SPEC.md
-                                  ;          18.7/51.8). in AL = its own
-                                  ;          volume handle, CX = the volume's
-                                  ;          sector count, DX = a listing
-                                  ;          claim's segment (0 = the .lowbss
-                                  ;          floor and a 32-entry listing),
-                                  ;          SI = a NUL desktop label in the
-                                  ;          CALLER's segment (0 = derive
-                                  ;          'Disk X'). out CF=0 and AL = the
-                                  ;          volume index, CF=1 = no free row.
-                                  ;          The desktop zone and the drive
-                                  ;          letter both fall out of the index
-    OSAPI_RCXCELL osapi_vol_del_x    ; 0x01FE - X: in AL = a volume index this
-                                  ;          driver registered. Drops the
-                                  ;          zone, and if that volume was the
-                                  ;          mounted one falls back to A: with
-                                  ;          the write gate shut. Cannot fail
-    OSAPI_RCXCELL osapi_vol_mount_x  ; 0x0204 - X: in AL = a volume index; mount it
-                                  ;          and list it (SPEC.md 18.3), which
-                                  ;          is what a driver's Mount button
-                                  ;          does after osapi_vol_add. out
-                                  ;          CF=1 = it is not a readable
-                                  ;          FAT12/16 volume. UI-task context
-                                  ;          only, like every other file slot
     ; (dropped) OSAPI_CSLOT osapi_vol_paint_x ; 0x0288 - repaint the desktop's drive zones
                                   ;          (SPEC.md 26). A driver that has
                                   ;          just added or dropped a volume
@@ -3071,56 +2993,13 @@ apic_wm_snap:
                                   ;          that already holds it - post it
                                   ;          the way a page click posts a
                                   ;          repaint
-    OSAPI_RCXCELL osapi_drv_cfg_x    ; 0x020A - X: the driver's own settings blob
-                                  ;          inside SYSTEM.CFG (SPEC.md 51.9).
-                                  ;          in AL = 0 read / 1 write / 2 write
-                                  ;          and flush now, ES:SI = the driver's
-                                  ;          buffer, CX = bytes. out CF=1 = not
-                                  ;          a published driver, or a write past
-                                  ;          DRV_BLOB_SZ. The kernel carries the
-                                  ;          bytes and never reads them, so a
-                                  ;          never-written blob reads back as
-                                  ;          zeroes and the driver's own version
-                                  ;          byte is what recognises it
-    OSAPI_RCSLOT osapi_sys_snapshot_x ; 0x0210 - the scheduler AND the instance
-                                  ;          table, in ONE cli window
-                                  ;          (SPEC.md 28.2). in ES:DI = a
-                                  ;          SYS_SNAPSHOT_SIZE buffer; out AX =
-                                  ;          MAX_TASKS, BX = INST_MAX. ES:DI
-                                  ;          is the caller's own choice, so
-                                  ;          no X stub is involved. It is one
-                                  ;          call and not two because
-                                  ;          task_exit frees an instance
-                                  ;          record atomically with its task
-                                  ;          slot (SPEC.md 8): read in two
-                                  ;          windows, a slot can be gone from
-                                  ;          one half and live in the other,
-                                  ;          and the cycle diffs that CPU% is
-                                  ;          built from go quietly wrong
-    OSAPI_RCSLOT mmf_osapi_claim_snapshot ; 0x0216 - the claim table (SPEC.md 50.5),
-                                  ;          all MEM_MAX records into ES:DI
-                                  ;          as CLS_RECSZ triples; out AX =
-                                  ;          MEM_MAX. WHOLE-TABLE rather than
-                                  ;          per record, and it steps mem_tab
-                                  ;          itself: the memory map walks
-                                  ;          every record to draw it and
-                                  ;          hashes every record to decide
-                                  ;          whether to
-    OSAPI_RCSLOT osapi_sys_kb_x    ; 0x021C - what the KERNEL occupies and what
-                                  ;          the heap holds, in KB, into ES:DI
-                                  ;          (SK_* below). Every term used to
-                                  ;          be an assembly-time constant of
-                                  ;          the kernel's own, which is
-                                  ;          exactly what a package cannot
-                                  ;          have: the kernel's footprint
-                                  ;          moves with every build
-    OSAPI_XCELL osapi_gfx_fill_pat  ; 0x0222 - a patterned fill (SPEC.md 5):
+    OSAPI_XCELL osapi_gfx_fill_pat  ; 0x0134 - a patterned fill (SPEC.md 5):
                                   ;          AX/BX/CX/DX = the rect, SI = 8
                                   ;          row bytes. X, because those eight
                                   ;          bytes are the caller's and
                                   ;          gfx_pat_stage reads them through
                                   ;          DS
-    OSAPI_ICELL 6                 ; 0x0229 - out BX = the window owning the
+    OSAPI_ICELL 6                 ; 0x013B - out BX = the window owning the
                                   ;          menu bar, 0 = Locator. "Am I the
                                   ;          ACTIVE APPLICATION?" - which
                                   ;          wm_top above cannot answer,
@@ -3130,23 +3009,8 @@ apic_wm_snap:
                                   ;          no lock: a worker may ask
     mov bx, [cs:menu_win]
     OSAPI_IEND
-    OSAPI_RSLOT fsx_caps           ; 0x022F - fullscreen exclusive (SPEC.md
-                                  ;          53): AX = the FSXM bitmask the
-                                  ;          display of window BX (BX = 1..15:
-                                  ;          display BX-1) can set, DL = its kind.
-                                  ;          Any context - it is how an app
-                                  ;          greys its mode menu (SPEC.md 47)
-    OSAPI_RXCELL fsx_run       ; 0x0235 - the bracket (SPEC.md 53.1): AX =
-                                  ;          near entry, BX = own window, CX =
-                                  ;          flags. X - the ownership fence is
-                                  ;          inst_pkg_spawn's identity test on
-                                  ;          the caller's DS. Does NOT return
-                                  ;          until the app's proc does
 rmk_7:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RSLOT fsx_mode           ; 0x023B - a foreign mode + its FSI info
-                                  ;          block (SPEC.md 53.4): AL = FSXM
-                                  ;          id, ES:DI = the caller's buffer
-    OSAPI_SLOT fsx_wait           ; 0x0241 - frame clock (SPEC.md
+    OSAPI_SLOT fsx_wait           ; 0x0141 - frame clock (SPEC.md
                                   ;          53.5): AL = 0 tick / 1 retrace / 2 frame
     ; (dropped) OSAPI_SLOT gfx_line           ; 0x02E0 - RETIRED (SPEC.md 5.12.7). The
                                   ;          cell stays - a slot number is a
@@ -3155,57 +3019,18 @@ rmk_7:            ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          is apps/os88gfx.inc's GFXE_LINE
                                   ;          now, committed through gfx_blit1
 rmk_7e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RCSLOT osapi_arg_file_x  ; 0x0249 - the document this instance was
-                                  ;          launched to open (SPEC.md 54.5):
-                                  ;          out CF=1 none; CF=0 with SI = its
-                                  ;          NUL 8.3 name in KERNEL_SEG (read
-                                  ;          it through ES), DX = its directory
-                                  ;          cluster and BL = its volume, the
-                                  ;          pair OSAPI_FILE_GOTO takes.
-                                  ;          READ-AND-CLEAR: a second instance
-                                  ;          cannot inherit it
-    OSAPI_RCXCELL osapi_assoc_set_x  ; 0x024F - X: claim an extension for a
-                                  ;          program (SPEC.md 54.5). ES:SI =
-                                  ;          3 extension bytes then 8 stem
-                                  ;          bytes, both space-padded; out
-                                  ;          CF=1 = the tables are full.
-                                  ;          Repoints an extension somebody
-                                  ;          else claimed - that is the ask,
-                                  ;          not an oversight - and marks it
-                                  ;          sticky so a header declaration
-                                  ;          cannot take it back
-    OSAPI_ICELL 5                 ; 0x0255 - how long this machine took to
+    OSAPI_ICELL 5                 ; 0x0149 - how long this machine took to
                                   ;          boot, in system ticks (SPEC.md
                                   ;          15.4): the boot sector's first
                                   ;          instruction to the first desktop
                                   ;          frame. 0xFFFF = unknown
     mov ax, [cs:boot_ticks]
     OSAPI_IEND
-    OSAPI_RCSLOT osapi_dsk_cache_x ; 0x025A - COMMAND THE READ-AHEAD CACHE'S
-                                  ;          WIDTH (SPEC.md 18.95.8), for a
-                                  ;          program about to take the arena.
-                                  ;          AL = 0 hold nothing / 1..7 hold
-                                  ;          at most that many 4.5KB chunks /
-                                  ;          DSK_RAH_AUTO (0xFF) no ceiling of
-                                  ;          mine. Out CF=0 with AX = the
-                                  ;          width held now, 0 = none; CF=1 =
-                                  ;          AL was neither.
-                                  ;          **A REUSED CELL** - this was
-                                  ;          OSAPI_GFX_LINIT, retired by
-                                  ;          5.12.7 with the rest of the walk,
-                                  ;          and 0x0580 went the same way this
-                                  ;          cycle. The table does not grow,
-                                  ;          and the SDK name that is gone was
-                                  ;          gone already: a retired cell
-                                  ;          answers CF=1 and every caller of
-                                  ;          one has to test CF, so there is
-                                  ;          no program that reaches this
-                                  ;          number and would notice
     ; (dropped) OSAPI_XCELL gfx_lstep     ; 0x0308  RETIRED (SPEC.md 5.12.7): stc/ret.
                                   ;          gfxe_wstep draws the walk's next
                                   ;          CX pixels into the package's band
 apic_gfx_pen_cf:
-    OSAPI_SLOT gfx_pen_cf         ; 0x0260 - CF = 0 live / 1 disabled, and it
+    OSAPI_SLOT gfx_pen_cf         ; 0x014E - CF = 0 live / 1 disabled, and it
                                   ;          sets [gfx_color] AND [gfx_dis]
                                   ;          together (SPEC.md 47 rule 3), so
                                   ;          a package's disabled TEXT
@@ -3220,21 +3045,7 @@ apic_gfx_pen_cf:
                                   ;          gfxe_wstepv is the batch form and
                                   ;          gfx_points (0x0538) is what a
                                   ;          package commits a point set with
-    OSAPI_RSLOT clip_put           ; 0x0268 - the system clipboard (SPEC.md
-                                  ;          55): ES:SI = text, CX = bytes
-                                  ;          (0 = empty it); out CF=1 refused.
-                                  ;          ES:SI and not the caller's DS
-                                  ;          because a document is usually a
-                                  ;          heap claim of its own, not the
-                                  ;          package's image
-    OSAPI_RSLOT clip_get           ; 0x026E - ES:DI = the caller's buffer, CX =
-                                  ;          its capacity; out CF=1 empty,
-                                  ;          else AX = the whole length and
-                                  ;          CX = the bytes copied
-    OSAPI_RSLOT clip_size          ; 0x0274 - out CF=1 and AX=0 when empty,
-                                  ;          else AX = the length. What a
-                                  ;          paste asks BEFORE it makes room
-    OSAPI_ICELL 6                 ; 0x027A - out AX = events still queued.
+    OSAPI_ICELL 6                 ; 0x0156 - out AX = events still queued.
                                   ;          "Is there another one of these
                                   ;          right behind me?", so a handler
                                   ;          can drop a redraw it is about to
@@ -3243,7 +3054,7 @@ apic_gfx_pen_cf:
     mov al, [cs:evq_count]
     cbw
     OSAPI_IEND
-    OSAPI_JCELL api_file_write_sys ; 0x0280 - N, and the ONE cell in this table
+    OSAPI_JCELL api_file_write_sys ; 0x015C - N, and the ONE cell in this table
                                   ;          a package may not call: dskw_write
                                   ;          for a file that belongs to the
                                   ;          KERNEL (SPEC.md 19.6.1). Fenced on
@@ -3251,118 +3062,14 @@ apic_gfx_pen_cf:
                                   ;          so 19.6's rule - a package cannot
                                   ;          make a file the user can neither
                                   ;          see nor delete - stands unchanged
-    OSAPI_JCELL api_file_find     ; 0x0283  X: ES:DI is the caller's buffer.
+    OSAPI_JCELL api_file_find     ; 0x015F  X: ES:DI is the caller's buffer.
                                   ;         List the current directory by
                                   ;         ORDINAL (SPEC.md 19.7.1) - the
                                   ;         one file operation the API had no
                                   ;         way to express, so a package could
                                   ;         read a file by name and never find
                                   ;         out what was there
-    OSAPI_RNCELL dwf_dskw_append ; 0x0286  N: SI = name, ES:BX = bytes, CX =
-                                  ;         count. Add to the END of a file
-                                  ;         (SPEC.md 18.4.4). Its precondition
-                                  ;         is the file's current size being a
-                                  ;         whole number of clusters, which is
-                                  ;         what a chunked write already is -
-                                  ;         and it is dskw_write_at's body with
-                                  ;         the size for an offset (18.4.7.3)
-    OSAPI_RNCELL dwf_dskw_read_at ; 0x028C  N: ...and the read half. DX:AX =
-                                  ;         the byte offset, CX = capacity;
-                                  ;         out DX:AX = bytes delivered, 0 at
-                                  ;         the end. Stateless, so a copy loop
-                                  ;         may write between two reads
-    OSAPI_RNCELL dwf_dskw_mkdir ; 0x0292  N: SI = name. Create a folder in
-                                  ;         the current directory (SPEC.md
-                                  ;         18.5). The routine is the file
-                                  ;         manager's own - its three callers
-                                  ;         were all cold-segment, so it had
-                                  ;         never needed a .text thunk, which
-                                  ;         is the whole reason it looked
-                                  ;         unpublished
-    OSAPI_RSLOT ui_reboot_post     ; 0x0298  AL = 0 flush the Control Panel's
-                                  ;         settings on the way out / non-0 do
-                                  ;         not go near a disk at all. No
-                                  ;         answer: POST a restart, which
-                                  ;         ui_task spends with no lock held
-                                  ;         (SPEC.md 20.10). The System menu's
-                                  ;         Restart, reachable from a callback
-                                  ;         - which cannot do it inline,
-                                  ;         because that path takes the gfx
-                                  ;         lock the caller is holding and
-                                  ;         waits on workers that need to be
-                                  ;         scheduled. AL non-0 is for a caller
-                                  ;         that has just asked the user to
-                                  ;         take the floppy OUT
-    OSAPI_RSLOT osapi_file_goto_q  ; 0x029E  DX = folder cluster, BL = volume.
-                                  ;         GOTO's quiet twin (SPEC.md 19.2.2):
-                                  ;         same volume = a word, another one =
-                                  ;         a quiet mount. For a caller about to
-                                  ;         read or write BY NAME rather than to
-                                  ;         list - which is every copy loop
-apic_wm_saveu:
-    OSAPI_RSLOT wm_saveu           ; 0x02A4 - BX = window, AL = 0 clear / non-0
-                                  ;          set. "My content does not change
-                                  ;          while I am not drawing", which
-                                  ;          lets the raise cache put its old
-                                  ;          pixels back instead of calling
-                                  ;          W_PAINT (SPEC.md 11.96.1)
-apic_toast_show:
-    OSAPI_RSLOT toast_show         ; 0x02AA - ES:SI = a NUL line, CX = ticks to
-                                  ;          live (0 = ~3s). Says it in the
-                                  ;          menu bar and takes it down on its
-                                  ;          own (SPEC.md 59). An EMPTY string
-                                  ;          retires whatever is up. ES:SI for
-                                  ;          clip_put's reason: the text is
-                                  ;          often not in the caller's image
-    OSAPI_RCSLOT dkf_dsk_batch_begin ; 0x02B0  no arguments, no answer. "The
-                                  ;         interface is frozen and the disk is
-                                  ;         the same disk" (SPEC.md 18.9.3), so
-                                  ;         a floppy may reuse its banked BPB
-                                  ;         instead of re-reading LBA 0 at every
-                                  ;         volume switch. Nests
-    OSAPI_RCSLOT dsk_batch_end_x   ; 0x02B6  ...and the other end. Optional: any
-                                  ;         gfx_unlock ends the batch anyway,
-                                  ;         which is what makes an unclosed one
-                                  ;         impossible rather than merely rare
-apic_wm_destroy:
-    OSAPI_RSLOT wm_destroy         ; 0x02BC  BX = a window of YOURS; the gfx lock
-                                  ;         is HELD - unlike OSAPI_WM_HIDE,
-                                  ;         which takes it itself. Frees the RECORD, where
-                                  ;         hide only takes the pixels down.
-                                  ;
-                                  ;         For the unowned species (SPEC.md
-                                  ;         38.1) - a driver's windows, and a
-                                  ;         package's second one - because
-                                  ;         those have no instance teardown to
-                                  ;         free the slot for them. Closing one
-                                  ;         is a hide, so the record survives
-                                  ;         holding a W_SEG, and an image that
-                                  ;         is then unloaded leaves that record
-                                  ;         naming memory the next claim takes
-                                  ;         (SPEC.md 52.11.3)
-    OSAPI_JCELL api_file_append_sys ; 0x02C2 - N, and the SECOND fenced cell
-                                  ;         (SPEC.md 19.6.1): dskw_append for a
-                                  ;         file that is already hidden +
-                                  ;         system. The same arguments as
-                                  ;         OSAPI_FILE_APPEND and the same
-                                  ;         precondition; the only thing it
-                                  ;         forgives is the two bits
-                                  ;         OSAPI_FILE_WRITE_SYS stamped. It
-                                  ;         cannot CREATE one - an append needs
-                                  ;         an entry that is already there - so
-                                  ;         19.6's rule is unmoved, and this is
-                                  ;         what lets a system file too big for
-                                  ;         the caller's buffer be finished at
-                                  ;         all (SPEC.md 18.4.4)
-    OSAPI_RSLOT wm_ownbg           ; 0x02C5 - BX = window, AL = 0 clear / non-0
-                                  ;          set. "I paint every pixel of my
-                                  ;          content myself", which skips
-                                  ;          wm_draw_win's white fill for it
-                                  ;          (SPEC.md 11.90.1). A window that
-                                  ;          sets it and leaves a pixel unwritten
-                                  ;          shows whatever was there before -
-                                  ;          after a move, another window's
-    OSAPI_SLOT wm_damage          ; 0x02CB - BX = your window, inside your own
+    OSAPI_SLOT wm_damage          ; 0x0162 - BX = your window, inside your own
                                   ;          W_PAINT. CF=1 = draw the whole
                                   ;          content (AX/BX/CX/DX = it); CF=0 =
                                   ;          draw AX/BX/CX/DX only, absolute and
@@ -3371,113 +3078,8 @@ apic_wm_destroy:
                                   ;          Answers "whole" unless WF_OWNBG is
                                   ;          set, because without it the kernel
                                   ;          has already whitened the content
-    OSAPI_RSLOT wm_band            ; 0x02D3 - BX = window, AL = edge (0 left,
-                                  ;          1 right, 2 top, 3 bottom), CX = the
-                                  ;          band's extent in pixels 0..255, 0
-                                  ;          retires that edge. One call per
-                                  ;          edge and all four may be named.
-                                  ;          "Cache THESE of my content and
-                                  ;          tell me about the rest" (SPEC.md
-                                  ;          11.96.11). CF = 0 taken, CF = 1
-                                  ;          refused - and an app MUST read it,
-                                  ;          because the reason to name a band
-                                  ;          is that a cache over the whole
-                                  ;          content is unaffordable, so a
-                                  ;          caller that promises WF_SAVEU
-                                  ;          anyway has promised the thing it
-                                  ;          was trying to avoid
-    OSAPI_RCXCELL osapi_fs_ent_x     ; 0x02D9 - X: a DRVC_FILE driver appends ONE
-                                  ;          entry to the listing being built
-                                  ;          (SPEC.md 62.9.1). ES:SI -> a
-                                  ;          DSK_DE_SIZE-byte staged SPEC.md
-                                  ;          19.1 entry in YOUR segment: name
-                                  ;          at 0 (NUL-terminated 8.3), type at
-                                  ;          16 (0 file / 1 package / 2 folder,
-                                  ;          never 3 - the parent link is the
-                                  ;          kernel's), YOUR OPAQUE HANDLE at
-                                  ;          18, size at 20. out CF=0 and AX =
-                                  ;          the index it landed at; CF=1 = the
-                                  ;          listing is full.
-                                  ;          LEGAL ONLY FROM INSIDE FSV_LIST -
-                                  ;          the kernel raises the gate around
-                                  ;          that call and lowers it after, and
-                                  ;          it still SORTS (19.4) and still
-                                  ;          synthesizes '..' (19.5), so do
-                                  ;          neither
-apic_fpg_stepb:
-    OSAPI_RSLOT fpg_stepb          ; 0x02DF - AX = bytes moved SINCE YOUR LAST
-                                  ;          REPORT, and a DRVC_FILE driver's
-                                  ;          (SPEC.md 12.8.1/62.9.1): step
-                                  ;          SPEC.md 12.8's file-activity bar
-                                  ;          from inside FSV_READ/FSV_WRITE.
-                                  ;          The kernel armed it from
-                                  ;          FSV_STAT's size and is one far
-                                  ;          call deep and blind until the verb
-                                  ;          returns, so only you can move it.
-                                  ;          Unarmed it is a compare and a
-                                  ;          return, so call it
-                                  ;          unconditionally; it DRAWS, so the
-                                  ;          gfx lock must already be held -
-                                  ;          which it is, inside a file
-                                  ;          operation (SPEC.md 18)
-    OSAPI_RSLOT wm_cursor          ; 0x02E5 - BX = window, AL = OSAPI_CUR_*.
-                                  ;          The picture the pointer wears over
-                                  ;          THIS window's content, and nowhere
-                                  ;          else (SPEC.md 7.2). Takes effect on
-                                  ;          the next UI pass rather than now:
-                                  ;          the pointer may not be over you,
-                                  ;          and only the kernel knows. Chrome -
-                                  ;          the title bar and its boxes - stays
-                                  ;          the arrow, because it is the
-                                  ;          kernel's to draw and to click
-    OSAPI_ICELL 5                 ; 0x02EB - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it). Your
-                                  ;          content box CHANGED and you did
-                                  ;          not ask - the machine changed
-                                  ;          adapter under you (SPEC.md
-                                  ;          39.11.2), or your window crossed
-                                  ;          the seam onto a shorter display
-                                  ;          (39.16.3). Called SI = window,
-                                  ;          CX/DX = the NEW content size, gfx
-                                  ;          lock HELD, and MUST NOT DRAW: a
-                                  ;          full repaint follows and this is
-                                  ;          your chance to be laid out
-                                  ;          correctly before it. The other
-                                  ;          half of OSAPI_WM_ONSIZE, which
-                                  ;          asks BEFORE and takes an answer
-                                  ;          (SPEC.md 11.98)
-    MEGA_ICWB W_ONSZ
-    OSAPI_IEND
-    OSAPI_RSLOT wm_keeph           ; 0x02F0 - BX = window, AL = 0 clear / non-0
-                                  ;          set. "My layout is FIXED: if I
-                                  ;          will not fit the desktop band,
-                                  ;          hang me over the dock rather than
-                                  ;          shorten me" (SPEC.md 11.93). Only
-                                  ;          you know whether a row can be
-                                  ;          given up - shortened, your content
-                                  ;          is still drawn and simply outside
-                                  ;          the frame, so it takes no clicks.
-                                  ;          Call it from your entry proc,
-                                  ;          right after OSAPI_WM_CREATE: it
-                                  ;          re-fits from the size you asked
-                                  ;          for, and preserves the flags so
-                                  ;          the CF you owe the loader survives
-    OSAPI_RCSLOT osapi_vol_at_x    ; 0x02F6 - DL = an int 13h drive number,
-                                  ;          BX:CX = a partition's 32-bit base
-                                  ;          LBA. out CF=0 and AL = the volume
-                                  ;          index already covering it, CF=1 =
-                                  ;          none is (SPEC.md 52.10.3). What a
-                                  ;          DRVC_DISK driver asks BEFORE
-                                  ;          osapi_vol_add, because on an
-                                  ;          installed machine the kernel has
-                                  ;          already adopted the partition it
-                                  ;          booted from and the driver cannot
-                                  ;          see that from its own table.
-                                  ;          Answers about BIOS-transport rows
-                                  ;          alone: a driver's own rows are
-                                  ;          the driver's to recognise
 rmk_8:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_SLOT kbd_down           ; 0x02FC - AL = a make scancode. out CF = 1
+    OSAPI_SLOT kbd_down           ; 0x016A - AL = a make scancode. out CF = 1
                                   ;          that key is DOWN right now, CF = 0
                                   ;          it is up; every register kept.
                                   ;          int 16h answers what was TYPED,
@@ -3497,7 +3099,7 @@ rmk_8:            ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          "up", and a key already held when
                                   ;          it arms is not seen until it is
                                   ;          pressed again
-    OSAPI_SLOT fsx_surf           ; 0x0304 - no arguments. Bracket-only. out
+    OSAPI_SLOT fsx_surf           ; 0x0172 - no arguments. Bracket-only. out
                                   ;          CF=0 with AX = x, BX = y, CX = w,
                                   ;          DX = h: THE RECT THIS BRACKET
                                   ;          OWNS, in the coordinates the
@@ -3510,54 +3112,7 @@ rmk_8:            ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          display's own origin when the
                                   ;          bracket is over there
 rmk_8e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RCXCELL osapi_mem_movable_x ; 0x030C - X: DX = a claim of yours, AX = a
-                                  ;          near proc in YOUR segment (0 pins
-                                  ;          it again). out CF = 1 = no such
-                                  ;          claim, or not yours.
-                                  ;          DECLARES THE CLAIM RELOCATABLE
-                                  ;          (SPEC.md 66.2): the heap compactor
-                                  ;          may then slide it down to close a
-                                  ;          hole, and calls your proc through
-                                  ;          your own dispatcher afterwards
-                                  ;          with BX = the old base segment and
-                                  ;          DX = the new one, the bytes having
-                                  ;          already moved. An ordinary near
-                                  ;          proc with a near `ret`, like
-                                  ;          W_PAINT.
-                                  ;          THE DEFAULT IS PINNED, so a claim
-                                  ;          nobody declares behaves exactly as
-                                  ;          every claim did before this
-                                  ;          existed - which is what lets a
-                                  ;          package adopt it one buffer at a
-                                  ;          time. Your proc must put right
-                                  ;          EVERY pointer you derived from the
-                                  ;          base, not just the word you keep
-                                  ;          it in, and must not claim, free or
-                                  ;          resize anything (SPEC.md 66.3)
-    OSAPI_RXCELL inst_parksafe_set  ; 0x0312 - X: AL = 1 declare / 0 withdraw.
-                                  ;          out CF = 1 = you are not a live
-                                  ;          package instance.
-                                  ;          "THE KERNEL MAY PARK ME WHILE I
-                                  ;          AM BLOCKED IN IT" (SPEC.md
-                                  ;          66.5.4), which today means while
-                                  ;          a worker of yours is waiting on
-                                  ;          the gfx lock. Without it a worker
-                                  ;          parks only at OSAPI_TASK_ALIVE -
-                                  ;          and a worker that DRAWS is
-                                  ;          usually blocked on the lock
-                                  ;          exactly when a compaction wants
-                                  ;          it, so its claims never move.
-                                  ;          WHAT YOU ARE ASSERTING is that no
-                                  ;          register or stack slot of yours
-                                  ;          holds a pointer DERIVED from one
-                                  ;          of your movable claims across a
-                                  ;          call that can yield. Re-read your
-                                  ;          base after any such call and this
-                                  ;          is true by construction.
-                                  ;          The default is NOT declared, and
-                                  ;          forgetting costs a missed
-                                  ;          compaction and never memory
-    OSAPI_SLOT inst_task_park     ; 0x0318 - a DRIVER's worker parks here for
+    OSAPI_SLOT inst_task_park     ; 0x017A - a DRIVER's worker parks here for
                                   ;          a heap compaction (SPEC.md
                                   ;          66.5.5), the way a package's
                                   ;          parks at OSAPI_TASK_ALIVE. Call
@@ -3572,7 +3127,7 @@ rmk_8e:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          compacted, because the kernel
                                   ;          cannot tell a running service
                                   ;          task from an idle one
-    OSAPI_SLOT gfx_blit1          ; 0x0320 - ES:SI = a 1bpp band in the
+    OSAPI_SLOT gfx_blit1          ; 0x0182 - ES:SI = a 1bpp band in the
                                   ;          framebuffer's own bit order,
                                   ;          BP = its stride, AX = x and
                                   ;          CX = width, BOTH multiples of 8,
@@ -3582,7 +3137,7 @@ rmk_8e:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          (SPEC.md 5.4.2). out CF=1 =
                                   ;          refused and nothing drawn, which
                                   ;          is also every kern_small
-    OSAPI_ICELL 6                 ; 0x0328 - out BL = the volume the machine
+    OSAPI_ICELL 6                 ; 0x018A - out BL = the volume the machine
                                   ;          BOOTED from, which is where its
                                   ;          system resources live (SPEC.md
                                   ;          19.7). No disk I/O; every other
@@ -3596,74 +3151,16 @@ rmk_8e:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          nowhere else
     mov bl, [cs:dsk_bootvol]
     OSAPI_IEND
-    OSAPI_RCXCELL osapi_drv_dlg_x    ; 0x032E - X: the Standard File dialog, for a
-                                  ;          DRIVER's Control Panel page
-                                  ;          (SPEC.md 51.10). AL = FDLG_OPEN /
-                                  ;          FDLG_SAVE, ES:SI = a default name
-                                  ;          or 0, DI = your own near
-                                  ;          completion proc. out CF=1 refused.
-                                  ;          fdlg_open fences on a live
-                                  ;          INSTANCE owning the window it is
-                                  ;          handed (SPEC.md 38.1) and a driver
-                                  ;          has neither, so this borrows the
-                                  ;          panel's - which is the window the
-                                  ;          page is drawn in anyway
-apic_wm_ondrag_c:
-%ifdef KERN_MEGA                  ; kern_mega: its cell cannot store through CS
-    OSAPI_RSLOT wm_ondrag_c        ; 0x0334 - BX = window, AX = a near proc in
-%else
- %ifdef KERN_BIG                  ; INLINE on kern_big and kern_emu: the store,
-    OSAPI_ICELL 6                 ; and CF = 0, the ANSWER (the shim it was
-    mov [cs:bx+W_ONDRAG], ax      ; said so below) - kernel size pass 14
-    clc                           ; 0x0334 - BX = window, AX = a near proc in
-    OSAPI_IEND
- %else
-    OSAPI_RSLOT wm_ondrag_c        ; 0x0334 - BX = window, AX = a near proc in
- %endif
-%endif
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          pointer MOVED while your press
-                                  ;          was armed (SPEC.md 13.8.2).
-                                  ;          CX = x, DX = y, SI = window, the
-                                  ;          same environment W_ONCLICK and
-                                  ;          W_ONMOUSEUP are dispatched in.
-                                  ;          Between the two edges of one
-                                  ;          gesture, only when the point
-                                  ;          CHANGED, and outside the window
-                                  ;          as freely as the release - which
-                                  ;          is the whole point, because a
-                                  ;          control cannot un-draw itself as
-                                  ;          the pointer leaves if nothing
-                                  ;          tells it. Call it AFTER wm_create
 apic_wm_timer_c:
-    OSAPI_SLOT wm_timer_c         ; 0x033A - BX = window, AX = TICKS from now
+    OSAPI_SLOT wm_timer_c         ; 0x0190 - BX = window, AX = TICKS from now
                                   ;          (0 cancels). Arms the one-shot
                                   ;          timer (SPEC.md 13.9); W_ONTIMER
                                   ;          runs when it expires and the
                                   ;          timer disarms itself FIRST, so a
                                   ;          handler wanting a repeat re-arms
                                   ;          inside itself. 18.2 ticks a second
-%ifdef KERN_MEGA
-    OSAPI_RSLOT wm_ontimer_c       ; 0x0342 - BX = window, AX = a near proc in
-%else
- %ifdef KERN_BIG                  ; INLINE on kern_big and kern_emu, as 0x0334
-    OSAPI_ICELL 6
-    mov [cs:bx+W_ONTIMER], ax     ; 0x0342 - BX = window, AX = a near proc in
-    clc
-    OSAPI_IEND
- %else
-    OSAPI_RSLOT wm_ontimer_c       ; 0x0342 - BX = window, AX = a near proc in
- %endif
-%endif
-                                  ;          YOUR segment (0 clears it): what
-                                  ;          the timer above calls. CX = DX = 0
-                                  ;          (a timer has no point), SI = the
-                                  ;          window, under the gfx lock and
-                                  ;          billed to you - W_ONCLICK's
-                                  ;          environment. Call it AFTER
-                                  ;          wm_create
 apic_drv_pkg_call:
-    OSAPI_XCELL drv_pkg_call_x      ; 0x0348 - a PACKAGE calls a DRIVER (SPEC.md
+    OSAPI_XCELL drv_pkg_call_x      ; 0x0198 - a PACKAGE calls a DRIVER (SPEC.md
                                   ;          20.11). BH = the DRVC_* class, BL
                                   ;          = a verb THAT DRIVER defines, and
                                   ;          the kernel knows nothing about
@@ -3694,7 +3191,7 @@ apic_drv_pkg_call:
 apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ; 66.4.3): the cell IS the shim, so no cw_
 rmk_9:            ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_SLOT wm_wake            ; 0x034F - BX = a window of yours: post an
+    OSAPI_SLOT wm_wake            ; 0x019F - BX = a window of yours: post an
                                   ;          EVT_WAKE for it (SPEC.md 74.1).
                                   ;          Any context - ISR- and worker-
                                   ;          safe. out CF=0 a wake is queued
@@ -3705,122 +3202,8 @@ rmk_9:            ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          calls the handler below WITHOUT
                                   ;          the gfx lock
 rmk_9e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_ICELL 5                 ; 0x0357 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          WAKE handler. Called SI = your
-                                  ;          window, on the UI task, lock NOT
-                                  ;          held, billed to your instance -
-                                  ;          it may call the file slots and
-                                  ;          may take the lock for a burst it
-                                  ;          can state. Install it after
-                                  ;          OSAPI_WM_CREATE like
-                                  ;          OSAPI_WM_ONRESIZE - a side table,
-                                  ;          not a template word
-    MEGA_ICWB W_ONWK
-    OSAPI_IEND
-    OSAPI_RSLOT osapi_file_goto_qm ; 0x035C - DX = folder cluster, BL = volume:
-                                  ;          OSAPI_FILE_GOTO_Q's quiet stand
-                                  ;          AND THEN inst_vol_mark, so the
-                                  ;          calling instance now believes it
-                                  ;          lives there and the next file
-                                  ;          cell's inst_vol_enter does not
-                                  ;          undo the move (SPEC.md 74.1,
-                                  ;          19.2.2). Same answers as GOTO_Q
-                                  ;
-                                  ;          **THESE THREE WERE 0x0428/0x0430/
-                                  ;          0x0438 AND MOVED HERE IN A MERGE**,
-                                  ;          the same way api_drv_call moved
-                                  ;          above and for the same reason: both
-                                  ;          trees appended to one tail in one
-                                  ;          round, so main's wm_wake met this
-                                  ;          branch's OSAPI_DRV_DLG, wm_onwake
-                                  ;          met WM_ONDRAG and file_goto_qm met
-                                  ;          WM_TIMER. TWO OF THE THREE MERGED
-                                  ;          WITH NO CONFLICT MARKER AT ALL -
-                                  ;          different names, one address - and
-                                  ;          nothing would have said so until a
-                                  ;          package called one and got the
-                                  ;          other. Sort the %defines by address
-                                  ;          after every merge from main
-%ifdef KERN_MEGA
-    OSAPI_RSLOT wm_onclose         ; 0x0362 - BX = window, AX = a near proc in
-%else                             ; (INLINE off kern_mega, as 0x0196 above -
-    OSAPI_ICELL 6                 ; kernel size pass 14)
-    mov [word cs:bx+W_ONCL], ax   ; 0x0362 - BX = window, AX = a near proc in
-    OSAPI_IEND
-%endif
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          CLOSE NEGOTIATOR (SPEC.md 75.1).
-                                  ;          Called SI = your window, on the UI
-                                  ;          task, gfx lock HELD - W_ONCLICK's
-                                  ;          environment - when anything at all
-                                  ;          tries to close you: the close box,
-                                  ;          the app-name menu's Close, the
-                                  ;          dock tile's context menu. Answer
-                                  ;          CF = 0 to let the close happen and
-                                  ;          CF = 1 to REFUSE it, in which case
-                                  ;          nothing happens at all and you owe
-                                  ;          the user a way out. Install it
-                                  ;          after OSAPI_WM_CREATE like
-                                  ;          OSAPI_WM_ONWAKE - a side table,
-                                  ;          not a template word
-    OSAPI_RSLOT wm_close_req       ; 0x0368 - BX = a window of yours: close it
-                                  ;          (SPEC.md 75.2). DEFERRED to the
-                                  ;          next UI pass, because the caller
-                                  ;          is standing in the segment the
-                                  ;          close is about to free - so this
-                                  ;          RETURNS, and your window is gone a
-                                  ;          moment later. It does NOT ask your
-                                  ;          negotiator again: this is the
-                                  ;          answer to the question it asked
-    OSAPI_RSLOT wm_prefer          ; 0x036E - BX = window, SI = the offset IN
-                                  ;          THIS WINDOW'S OWN SEGMENT of a
-                                  ;          12-byte table: three (w, h) frame
-                                  ;          sizes in VID_VGA / VID_HERC /
-                                  ;          VID_CGA order, so the adapter kind
-                                  ;          indexes it. SI = 0 withdraws it, a
-                                  ;          (0,0) pair means "nothing to say
-                                  ;          about that adapter". Registers AND
-                                  ;          applies, FLAGS PRESERVED
-                                  ;          (SPEC.md 11.100.1)
-apic_wm_minsize:
-    OSAPI_RSLOT wm_minsize         ; 0x0374 - BX = window, CX = minimum outer
-                                  ;          width, DX = minimum outer height;
-                                  ;          0/0 withdraws. The floor every
-                                  ;          path that REDUCES a size honours,
-                                  ;          itself capped at the display's own
-                                  ;          extent so it can never cost a
-                                  ;          window its title bar. Registers AND
-                                  ;          applies, FLAGS PRESERVED
-                                  ;          (SPEC.md 11.100.2)
-    OSAPI_RSLOT wm_display         ; 0x037A - BX = window; out AX = width, BX =
-                                  ;   height, CX = the first row the DOCK owns,
-                                  ;   SI = the first usable row, DL = kind, DH =
-                                  ;   bpp - OSAPI_VIDEO for the display THIS
-                                  ;   WINDOW is on (SPEC.md 39.16.4)
-    OSAPI_ICELL 5                 ; 0x0380 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          RIGHT-CLICK handler (SPEC.md
-                                  ;          13.11). Called CX = x, DX = y,
-                                  ;          SI = your window, on the UI task,
-                                  ;          gfx lock HELD - W_ONCLICK's
-                                  ;          environment exactly - when the
-                                  ;          RIGHT button is pressed in the
-                                  ;          content of your FRONTMOST window.
-                                  ;          Press edge only; there is no
-                                  ;          release half. Install it after
-                                  ;          OSAPI_WM_CREATE like
-                                  ;          OSAPI_WM_ONWAKE - a side table,
-                                  ;          not a template word
-    MEGA_ICWB W_ONRC
-    OSAPI_IEND
-    OSAPI_RNCELL dwf_dskw_rmany ; 0x0385  N: SI = a NUL 8.3 name, AL = 0 an
-                                  ;         EMPTY folder only / non-zero the
-                                  ;         whole tree under it (SPEC.md 18.6).
-                                  ;         The AL survives the N stub because
-                                  ;         api_copyname banks AX
 apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
-    OSAPI_SLOT drv_pkg_call_x     ; 0x038B - OSAPI_DRV_CALL WITH ES LEFT ALONE
+    OSAPI_SLOT drv_pkg_call_x     ; 0x01A7 - OSAPI_DRV_CALL WITH ES LEFT ALONE
                                   ;          (SPEC.md 20.11.2). The same
                                   ;          routine behind the same fence: the
                                   ;          only difference is the stub. The
@@ -3830,7 +3213,7 @@ apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
                                   ;          in a heap claim is reachable and a
                                   ;          package stops having to grow its
                                   ;          own segment to feed a driver
-    OSAPI_ICELL 5                 ; 0x0393 - AL = ink (what a SET bit in the
+    OSAPI_ICELL 5                 ; 0x01AF - AL = ink (what a SET bit in the
                                   ;          next gfx_blit1's band becomes),
                                   ;          AH = paper (a CLEAR one). SPEC.md
                                   ;          5.4.2.2. Dies with the gfx lock,
@@ -3868,7 +3251,7 @@ apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
     nop
 %endif
     OSAPI_IEND
-    OSAPI_ICELL 5                 ; 0x0398 - AL = the colour the NEXT
+    OSAPI_ICELL 5                 ; 0x01B4 - AL = the colour the NEXT
                                   ;          OSAPI_ICON_DRAW's MASK rows lay
                                   ;          down, AH = the colour its DATA
                                   ;          rows draw over them. ONE-SHOT:
@@ -3877,7 +3260,7 @@ apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
                                   ;          tint the next icon (SPEC.md 25.6)
     MEGA_ICW ico_c1, ax
     OSAPI_IEND
-    OSAPI_XCELL icon_draw_x     ; 0x039D - CX = x, DX = y, SI -> a masked
+    OSAPI_XCELL icon_draw_x     ; 0x01B9 - CX = x, DX = y, SI -> a masked
                                   ;          1bpp record in YOUR segment: a
                                   ;          two-byte header (words a row,
                                   ;          rows), then that many mask words
@@ -3893,7 +3276,7 @@ apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
                                   ;          and sixteen rows at the outside
                                   ;          (SPEC.md 25.6.1)
 api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
-    OSAPI_SLOT gfx_blitp          ; 0x03A4 - ES:SI = plane 0's first row of a
+    OSAPI_SLOT gfx_blitp          ; 0x01C0 - ES:SI = plane 0's first row of a
                                   ;          block that is ALREADY FRAMEBUFFER
                                   ;          BYTES, DI = the step to the next
                                   ;          plane, BP = the row stride inside
@@ -3909,21 +3292,7 @@ api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
                                   ;          the answer to every one of them is
                                   ;          OSAPI_GFX_BLIT4, which still works
                                   ;          (SPEC.md 5.4.3)
-    OSAPI_RCXCELL mmf_osapi_mem_claim_hi ; 0x03AC - X: AX = KB, BX unused. THE SAME
-                                  ;          CLAIM FROM THE OTHER END (SPEC.md
-                                  ;          50.3.2), for a buffer the HARDWARE
-                                  ;          holds the address of and which can
-                                  ;          therefore never move. A driver's
-                                  ;          ring in the data arena is 50.3's
-                                  ;          own warning - "one long-lived data
-                                  ;          claim landing mid-heap permanently
-                                  ;          splits the space a package has to
-                                  ;          load into" - and this is the door
-                                  ;          it lacked
-    OSAPI_RCXCELL mmf_osapi_mem_claim_dma_hi ; 0x03B2 - ...and with CX = the 64KB
-                                  ;          page-safe HEAD, which is what a
-                                  ;          sound card's DMA ring wants
-    OSAPI_XCELL gfx_spans     ; 0x03B8 - X: AX = the first row, ES:SI = CX
+    OSAPI_XCELL gfx_spans     ; 0x01C8 - X: AX = the first row, ES:SI = CX
                                   ;          records of {x1, x2} - ONE INTERVAL
                                   ;          A ROW, on CONSECUTIVE rows, x1 > x2
                                   ;          being an empty one. Fills them all
@@ -3935,20 +3304,8 @@ api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
                                   ;          kern_small - and the answer to all
                                   ;          three is a GFX_FILL a row, which
                                   ;          draws the identical pixels
-    OSAPI_RSLOT wm_ownseg          ; 0x03BF - AL = a window SLOT; out CF = 1 no
-                                  ;          live window there, else DX = the
-                                  ;          segment that owns it (KERNEL_SEG
-                                  ;          for a window the kernel made).
-                                  ;          SPEC.md 11.96.3.1: the only way to
-                                  ;          read back the slot a raise cache's
-                                  ;          owner tag carries. IT ASKED FOR
-                                  ;          0x04D8 AND SO DID gfx_spans, on
-                                  ;          another branch, in the same cycle
-                                  ;          - the collision CLAUDE.md asks to
-                                  ;          be checked by hand, caught by the
-                                  ;          merge and then by t_api_abi
 rmk_10:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_SLOT fsx_page           ; 0x03C5 - AL = a page index; shows it, and
+    OSAPI_SLOT fsx_page           ; 0x01CF - AL = a page index; shows it, and
                                   ;          waits for the retrace that latches
                                   ;          it. Bracket-only, exclusive task
                                   ;          only, graphics modes with more
@@ -3961,27 +3318,7 @@ rmk_10:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          allows it, and neither is
                                   ;          derivable from the info block
 rmk_10e:          ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RSLOT wm_noanim          ; 0x03CD - BX = a window of yours, between
-                                  ;          OSAPI_WM_CREATE and
-                                  ;          OSAPI_WM_SHOW: it does NOT zoom
-                                  ;          open (SPEC.md 11.99.2.1). No AL
-                                  ;          and no clear - the five sibling
-                                  ;          flag slots (wm_sizable, wm_snap,
-                                  ;          wm_keeph, wm_ownbg, wm_saveu) all
-                                  ;          take AL = 0 clear / non-zero set
-                                  ;          and this one deliberately does
-                                  ;          not, the bit
-                                  ;          being read in one place and only
-                                  ;          on the wm_show of a window that
-                                  ;          is not yet visible. THE CELL IS
-                                  ;          IN BOTH KERNELS and the body is
-                                  ;          not %ifdef'd: a slot that exists
-                                  ;          in one build and not another is
-                                  ;          an ABI that depends on a knob
-                                  ;          (SPEC.md 20.8 rule 4), and on
-                                  ;          kern_small the bit is simply set
-                                  ;          and never read
-    OSAPI_FCELL lzf_decomp      ; 0x03D3 - expand a compressed block
+    OSAPI_FCELL lzf_decomp      ; 0x01D7 - expand a compressed block
                                   ;          (docs/plans/O88-COMPRESSION-PLAN.md
                                   ;          12.1). A JSLOT and not an X or N
                                   ;          cell: BOTH segment registers are
@@ -3999,13 +3336,13 @@ rmk_10e:          ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          answer, not whether the cell is
                                   ;          there, and a format this build
                                   ;          lacks is refused with CF
-    OSAPI_JCELL api_file_find_raw ; 0x03D9 - OSAPI_FILE_FIND, answering what
+    OSAPI_JCELL api_file_find_raw ; 0x01DD - OSAPI_FILE_FIND, answering what
                                   ;          the file OCCUPIES rather than
                                   ;          what it expands to (SPEC.md
                                   ;          20.14.3). The cell a COPIER wants:
                                   ;          OSAPI_FILE_READ_AT is already raw,
                                   ;          and this is the size to go with it
-    OSAPI_SLOT api_gfx_save       ; 0x03DC - AX/BX/CX/DX = an inclusive rect,
+    OSAPI_SLOT api_gfx_save       ; 0x01E0 - AX/BX/CX/DX = an inclusive rect,
                                   ;          ES:DI = your buffer. Bank the
                                   ;          pixels under a thing you are about
                                   ;          to draw over (SPEC.md 5.3), so
@@ -4013,82 +3350,10 @@ rmk_10e:          ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          instead of a repaint. CF = 1
                                   ;          REFUSED - the rect straddles two
                                   ;          displays - and nothing is written
-    OSAPI_SLOT api_gfx_rest       ; 0x03E4 - ...and put it back: same rect,
+    OSAPI_SLOT api_gfx_rest       ; 0x01E8 - ...and put it back: same rect,
                                   ;          ES:SI = the buffer the save filled
-    OSAPI_RXCELL inst_restart_set  ; 0x03EC - X: AX = a near offset in YOUR own
-                                  ;          image, 0 to withdraw. out CF = 1 =
-                                  ;          you are not a live package
-                                  ;          instance.
-                                  ;          "IF YOU HAVE TO MOVE MY REGION,
-                                  ;          THROW MY WORKER'S STACK AWAY AND
-                                  ;          RE-ENTER IT HERE" (SPEC.md
-                                  ;          66.6.2). The one way past 66.6.1's
-                                  ;          limit - a worker's stack carries
-                                  ;          its own segment at depths nothing
-                                  ;          can find, so the answer is not to
-                                  ;          find them but to arrange for the
-                                  ;          stack not to matter.
-                                  ;          IT IS A WINDOW, NOT A PROPERTY,
-                                  ;          and the asymmetry against
-                                  ;          OSAPI_MEM_PARKSAFE is the thing to
-                                  ;          weigh: parksafe declared wrongly
-                                  ;          costs a missed optimisation, this
-                                  ;          costs a lost loop iteration - and
-                                  ;          if the worker was holding
-                                  ;          something, correctness
-    OSAPI_RNCELL ldf_ld_pkg_start  ; 0x03F2  N: START THE PACKAGE CALLED NAME
-                                  ;         (SPEC.md 21.5). SI = a NUL 8.3
-                                  ;         name in YOUR segment, resolved in
-                                  ;         the folder you are standing in.
-                                  ;         DX:CX = the length of an image you
-                                  ;         are HOLDING at ES:DI, or ZERO
-                                  ;         meaning you hold none and the
-                                  ;         kernel is to READ THE FILE. Out
-                                  ;         CF=0 AL=0 running; CF=1 AL=LD_*.
-                                  ;         ONE DOOR: it was two for a cycle -
-                                  ;         this taking an image and 0x05A0 a
-                                  ;         name - which is the successor slot
-                                  ;         beside a no-consumer path that
-                                  ;         SPEC.md 20.8 rule 4 names as the
-                                  ;         worse spec. 0x05A0 is WITHDRAWN.
-                                  ;         N, and it is the N stub that makes
-                                  ;         the merge cheap: it stages the
-                                  ;         name AND hands the body the
-                                  ;         caller's ES and DI untouched, so
-                                  ;         one contract carries both forms.
-                                  ;         The PARTS refusal lives on the
-                                  ;         image arm, where it is true: with
-                                  ;         no file there is nothing for
-                                  ;         op_load to read a part out of
-    OSAPI_RCXCELL osapi_desk_item_x  ; 0x03F8 - X: put an ITEM on the
-                                  ;          desktop, or take one off
-                                  ;          (SPEC.md 26.9). in AL = 1 add /
-                                  ;          0 remove, ES:SI = a record in
-                                  ;          the caller's own segment: a
-                                  ;          DRIVER's is the 40-byte service
-                                  ;          record (26.7), a PACKAGE's a
-                                  ;          128-byte link (26.8.1), and each
-                                  ;          names the cell it would like.
-                                  ;          out CF=0 AL = the zone. It was
-                                  ;          OSAPI_DESK_SVC, a driver's door
-                                  ;          only. kern_small's body refuses
-                                  ;          (SPEC.md 20.8 rule 4: the cell
-                                  ;          is in both kernels)
-    OSAPI_RCXCELL osapi_pkg_rehome_x ; 0x03FE - X: a LOADER hands its identity to
-                                  ;          one of its own parts (SPEC.md
-                                  ;          20.12.10). in DX = the segment the
-                                  ;          program's image starts at, AX =
-                                  ;          the bytes available there.
-                                  ;          out CF=1 refused - not the entry
-                                  ;          proc of the launch in flight, a
-                                  ;          second call, or DX = 0.
-                                  ;          IT ONLY RECORDS: the loader is
-                                  ;          still running in the region this
-                                  ;          frees, so the work is ld_start's
-                                  ;          step 8a, one instruction after
-                                  ;          this returns
 apic_gfx_points:                  ; os88ui_gring's corners from CTRL.DRV
-    OSAPI_XCELL gfx_points        ; 0x0404 - X: draw a set of pixels the CALLER
+    OSAPI_XCELL gfx_points        ; 0x01F0 - X: draw a set of pixels the CALLER
                                   ;          computed (SPEC.md 5.6.9). ES:SI =
                                   ;          CX records of two words each, x
                                   ;          then y; CX = how many, 0 legal.
@@ -4096,7 +3361,7 @@ apic_gfx_points:                  ; os88ui_gring's corners from CTRL.DRV
                                   ;          lock is held. Preserves every
                                   ;          register; a point outside every
                                   ;          clip rect is SKIPPED, not refused
-    OSAPI_SLOT cur_busy        ; 0x040B - I AM ABOUT TO GO QUIET FOR A WHILE
+    OSAPI_SLOT cur_busy        ; 0x01F7 - I AM ABOUT TO GO QUIET FOR A WHILE
                                   ;          (SPEC.md 7.5). No argument. The
                                   ;          pointer becomes a CLOCK for
                                   ;          the rest of the gfx-lock hold the
@@ -4112,65 +3377,6 @@ apic_gfx_points:                  ; os88ui_gring's corners from CTRL.DRV
                                   ;          and a refusal costs the caller
                                   ;          nothing but the picture, so there
                                   ;          is nothing for it to act on
-apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
-    OSAPI_RSLOT inst_minimize      ; 0x0413 - SEND MY OWN WINDOW TO THE DOCK
-                                  ;          (SPEC.md 29.6). BX = a window of
-                                  ;          yours, the gfx lock held - the
-                                  ;          minimize box's own environment,
-                                  ;          which is W_ONCLICK's. The tile
-                                  ;          inverts, the window hides, and a
-                                  ;          click on the tile brings it back.
-                                  ;          OSAPI_WM_HIDE IS NOT THIS and is
-                                  ;          a trap in its place: a plain hide
-                                  ;          leaves I_FLAGS bit0 clear, so the
-                                  ;          tile is drawn LIVE, dock_click
-                                  ;          takes its wm_front arm, and
-                                  ;          wm_front never sets the visible
-                                  ;          bit on an invisible window - a
-                                  ;          tile that does nothing and an
-                                  ;          instance with no way back.
-                                  ;          A FULLSCREEN window may call it:
-                                  ;          wm_hide drops the latch and
-                                  ;          restores the windowed geometry
-                                  ;          (SPEC.md 11.2), so the app must
-                                  ;          fix up its OWN idea of being
-                                  ;          fullscreen first, and neither zoom
-                                  ;          is drawn (SPEC.md 11.99.5).
-                                  ;          Preserves every register
-    OSAPI_RCXCELL drv_suspend_x  ; 0x0419 - THE MACHINE, OUT OF MY WAY
-                                  ;          (SPEC.md 51.11): AL = 1 suspend
-                                  ;          the hardware drivers, ES:DI = a
-                                  ;          DQ_SIZE-record buffer or DI = 0,
-                                  ;          out CX = records written; AL = 0
-                                  ;          put them back; AL = 2 hand the
-                                  ;          WHOLE machine to kern_dos, ES:SI
-                                  ;          = a KDH_* record (96.40). X
-                                  ;          because the buffer and the record
-                                  ;          are the CALLER's. The bodies are
-                                  ;          HIBER.DRV's - the same sweep the
-                                  ;          hibernate detaches with - and the
-                                  ;          resident part is the thunk
-    OSAPI_RXCELL api_file_path   ; 0x041F - WHERE AM I STANDING? (SPEC.md
-                                  ;          19.2.4). ES:DI = your buffer,
-                                  ;          CX = its size; out CF=0 with a
-                                  ;          NUL `\DIR\DIR` in it and CX its
-                                  ;          length, else AX = FERR_*. X
-                                  ;          because the buffer is the
-                                  ;          CALLER's - and a slot at all
-                                  ;          because dsk_find drops the dot
-                                  ;          links, so no package can walk up
-    OSAPI_RCSLOT mmf_osapi_mem_floor ; 0x0425 - "COMPACT THE DISK CACHE, DO NOT
-                                  ;          DESTROY IT" (SPEC.md 50.6.6). AL =
-                                  ;          a purge level, and it is THIS
-                                  ;          TASK's floor from here on: every
-                                  ;          claim it makes sheds and drops only
-                                  ;          caches strictly BELOW it, and
-                                  ;          OSAPI_MEM_AVAIL answers net of the
-                                  ;          same rule. MEM_LVL_TOP lifts it,
-                                  ;          and so does the instance's own
-                                  ;          teardown. Preserves every register
-                                  ;          AND the flags, so it can sit
-                                  ;          between a claim and its `jnc`
     ; (dropped) OSAPI_SLOT gfx_line           ; 0x0568 - RETIRED (SPEC.md 50.6.6.1): it was
                                   ;          OSAPI_MEM_CLAIM_LVL, a claim with
                                   ;          the floor as an argument, and the
@@ -4178,84 +3384,7 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          sixty bytes of body for nothing.
                                   ;          stc/ret, and the ONE package that
                                   ;          ever called it is in this tree
-    OSAPI_RSLOT osapi_vol_stat     ; 0x042B - THE VOLUME YOU ARE STANDING ON,
-                                  ;          in four registers (SPEC.md
-                                  ;          18.4.6): out CF=0 with AX =
-                                  ;          sectors per cluster, BX = free
-                                  ;          clusters, CX = bytes per sector,
-                                  ;          DX = total clusters; CF=1 with
-                                  ;          AX = FERR_NODISK. DOS AH=36h's own
-                                  ;          shape, DOS.O88 being its one
-                                  ;          caller - it was a 12-byte record
-                                  ;          until the size pass found no
-                                  ;          caller read more than these four
-    OSAPI_RNCELL fcpf_fcp_door     ; 0x0431 - COPY OR MOVE ONE ENTRY, source
-                                  ;          folder to destination (SPEC.md
-                                  ;          22.24). SI = its 8.3 name, AL =
-                                  ;          the verb (OSAPI_FCP_COPY or
-                                  ;          OSAPI_FCP_MOVE), BL/DX the source
-                                  ;          drive and folder cluster, BH/CX
-                                  ;          the destination's - the pair
-                                  ;          OSAPI_FILE_HERE answers. Out CF=0
-                                  ;          AX=0, else AX = FERR_*. N, because
-                                  ;          the name is package data and the
-                                  ;          stage is what api_n does. It is
-                                  ;          the file manager's OWN engine
-                                  ;          entered where a Paste enters it:
-                                  ;          a move is a Cut - re-linked on
-                                  ;          one volume, copied and deleted
-                                  ;          where the re-link declines - and
-                                  ;          a copy streams through a buffer
-                                  ;          the engine claims and undoes a
-                                  ;          partial destination on failure
-    OSAPI_RCSLOT osapi_drv_classk_x ; 0x0437 - WHAT ONE DRIVER CLASS HOLDS
-                                  ;          (SPEC.md 51.12). AL = a DRVC_*.
-                                  ;          Out CF=0 with AX = the KB its
-                                  ;          LOADED rows hold - bit 15 =
-                                  ;          DRVM_PLUS, "and a store the user
-                                  ;          sizes" - and CX = how many
-                                  ;          answered; CF=1 with AX=0 CX=0,
-                                  ;          nothing of that class is loaded.
-                                  ;          One walk answers both halves a
-                                  ;          caller needs: CF greys the
-                                  ;          checkbox and AX is the figure
-                                  ;          beside it (SPEC.md 47 rule 5).
-                                  ;          A SLOT - no caller segment is
-                                  ;          involved - and it took the
-                                  ;          RETIRED cell that stood here,
-                                  ;          OSAPI_FILE_MOVE's, so the table
-                                  ;          gains no byte and 20.3.1's free
-                                  ;          list is empty again
-    OSAPI_RNCELL dwf_dskw_write_at ; 0x043D  N: SI = name, ES:BX = bytes, CX =
-    OSAPI_RCXCELL osapi_mem_compact_x ; 0x0443 - X: MY OWN REGION IN THE PASS
-                                  ;          (SPEC.md 66.4.3): one door, the
-                                  ;          verb in AH. AH=0 THE WHAT-IF:
-                                  ;          OSAPI_MEM_AVAIL_LVL's answer (AL =
-                                  ;          the level, out AX/BX) planned as
-                                  ;          if YOUR OWN REGION moved too. A
-                                  ;          MEASUREMENT AND NOT A PROMISE:
-                                  ;          claiming it refuses, because you
-                                  ;          really are standing in your
-                                  ;          region. AH=1 THE POST: "compact
-                                  ;          everything you can, INCLUDING MY
-                                  ;          REGION, then wake me" - BX = a
-                                  ;          window of yours, AL = the shed
-                                  ;          rank the pass is to respect. Out
-                                  ;          CF=0 posted - return from your
-                                  ;          callback and claim in your wake
-                                  ;          handler, where plain OSAPI_MEM_AVAIL
-                                  ;          has become the what-if; CF=1 a
-                                  ;          post is already standing.
-                                  ;          OSAPI_PKG_REHOME's shape: it only
-                                  ;          RECORDS, because you are executing
-                                  ;          in the region it is going to move.
-                                  ;          X because the what-if excuses the
-                                  ;          caller's segment and the stub
-                                  ;          already puts it in ES. On
-                                  ;          kern_small the what-if IS the
-                                  ;          plain answer and the post refuses
-                                  ;          (SPEC.md 66.0)
-    OSAPI_XCELL osapi_mouse_feed  ; 0x0449 - X: ONE RELATIVE REPORT from a
+    OSAPI_XCELL osapi_mouse_feed  ; 0x01FF - X: ONE RELATIVE REPORT from a
                                   ;          pointing device the kernel does
                                   ;          not drive itself (SPEC.md 9.12):
                                   ;          AX = dx, BX = dy (positive is
@@ -4276,19 +3405,8 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          tree had already spent, and took
                                   ;          the tail cell the size pass freed
                                   ;          (OSAPI_MEM_COMPACT_WAKE's)
-    OSAPI_ICELL 5                 ; 0x0450 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          PRESS half of a content click.
-                                  ;          W_ONCLICK is a template word and
-                                  ;          this is the only way to write it
-                                  ;          late, which os88ui_btninit needs
-                                  ;          so the button control can see a
-                                  ;          press before the package does
-                                  ;          (SPEC.md 20.5.1.3.3)
-    MEGA_ICWB W_ONCLICK
-    OSAPI_IEND
 rmk_rseq:         ; (a real-mode bracket's twin: fsx_rkeepm)
-    OSAPI_RNCELL dwf_dskw_read_seq ; 0x0455  N: A STREAMING READ (SPEC.md
+    OSAPI_NCELL dwf_dskw_read_seq ; 0x0206  N: A STREAMING READ (SPEC.md
                                   ;          18.4.8): SI = name, DX:BX = the
                                   ;          buffer, CX = capacity (clusters),
                                   ;          ES:DI = the caller's 16-byte
@@ -4301,32 +3419,14 @@ rmk_rseq:         ; (a real-mode bracket's twin: fsx_rkeepm)
                                   ;          anything remounted or wrote.
                                   ;          kern_big; the small door refuses
 rmk_spk:           ; (a real-mode bracket's twin: fsx_rkeepm)
-    OSAPI_RSLOT osapi_fsx_spk     ; 0x045B - THE SPEAKER AT A SAMPLE RATE
+    OSAPI_XCELL osapi_fsx_spk     ; 0x020D - THE SPEAKER AT A SAMPLE RATE
                                   ;          (SPEC.md 34.11), inside your own
                                   ;          FSXF_RATE bracket: AL = 0 open
                                   ;          (DX = N, SI = your sample ISR),
                                   ;          out AX = K, DX:BX = the chain;
                                   ;          AL = 1 close. kern_big; the
                                   ;          small body refuses AX = 1
-    OSAPI_RNCELL dwsf_dskw_write_seq ; 0x0461 N: A STREAMING APPEND (SPEC.md
-                                  ;          18.4.9): SI = name, DX:BX = the
-                                  ;          bytes, CX = the count (0 closes),
-                                  ;          ES:DI = the caller's 16-byte
-                                  ;          cursor, +3 bit 0 = HELD. APPEND
-                                  ;          without the lookup and the walk;
-                                  ;          HELD commits the FAT and the
-                                  ;          size once, at the close or when
-                                  ;          the UI unlocks. kern_big; the
-                                  ;          small door refuses
-    OSAPI_RSLOT osapi_ferr_text   ; 0x0467 - AX = a FERR_*, out ES:SI = the
-                                  ;          kernel's own NUL text for it -
-                                  ;          the Disk window's status-line
-                                  ;          table, so a package toasts a
-                                  ;          refusal without carrying the
-                                  ;          words (SPEC.md 18.4.11). 0x0467
-                                  ;          was OSAPI_VOL_TAKE for one cycle
-                                  ;          and never shipped (52.1.1)
-    OSAPI_ICELL 8                  ; 0x046D - AL = THM_BRIGHT/DARK/COLOR/WIN
+    OSAPI_ICELL 8                  ; 0x0214 - AL = THM_BRIGHT/DARK/COLOR/WIN
                                    ; (SPEC.md 76, 76.14.14): adopts it as the
                                    ; theme, repaints the chrome and owes the
                                    ; settings write. An unknown value, or
@@ -4356,84 +3456,18 @@ rmk_spk:           ; (a real-mode bracket's twin: fsx_rkeepm)
     nop
     OSAPI_IEND
 %endif
-    OSAPI_RCSLOT osapi_clk_get_x  ; 0x0475 - THE DATE AND TIME (SPEC.md
-                                  ;          37.96): out CX = year, DH:DL =
-                                  ;          month:day, BH:BL = hour:minute,
-                                  ;          AH = second, AL = bit 0 RTC
-                                  ;          found / bit 1 12-hour; the live
-                                  ;          fields under cli. Both kernels
-    OSAPI_RCSLOT osapi_wm_desk_x  ; 0x047B - THE DESK LAYER (SPEC.md 11.103.9):
-                                  ;          AL = 0 QUERY, 1 MAKE BX = a hidden
-                                  ;          window, 2 DRAG (W2), 3 RELEASE
-                                  ;          the bar. CF = 1 refused, and every
-                                  ;          verb refuses on kern_small
 apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
 %ifdef OS88_THEME                 ; (vga12.inc's %define of thm_desk on a
-    OSAPI_RSLOT thm_desk          ; build with no themes comes later than this)
+    OSAPI_SLOT thm_desk           ; build with no themes comes later than this)
 %else
-    OSAPI_RSLOT gfx_fill_gray
-%endif                            ; 0x0481 - THE DESKTOP'S GROUND over AX,BX
+    OSAPI_SLOT gfx_fill_gray
+%endif                            ; 0x021C - THE DESKTOP'S GROUND over AX,BX
                                   ;          .. CX,DX, lock held (SPEC.md
                                   ;          11.103.9, 76.2): the theme's, per
                                   ;          display; [gfx_color] is the theme's
                                   ;          after on Dark/Color/Windows. kern_small's
                                   ;          thm_desk IS gfx_fill_gray
-    OSAPI_RCXCELL osapi_mem_hma_x ; 0x0487 - X: A DRIVER'S BUFFER IN THE HMA
-                                  ;          (SPEC.md 2.10.8): AX = bytes ->
-                                  ;          DX = segment, AX = its first
-                                  ;          offset; AX = 0, DX = a block ->
-                                  ;          given back. kern_big with the HMA
-                                  ;          holding `.cold`; refuses elsewhere
-    OSAPI_RSLOT wm_quiet          ; 0x048D - BX = a window of yours, AL = 0
-                                  ;          clear / non-zero set: while it is
-                                  ;          up, an idle session BLANKS rather
-                                  ;          than animates (SPEC.md 79.10). In
-                                  ;          both kernels (20.8 rule 4); read
-                                  ;          only by kern_big's saver
-    OSAPI_RCSLOT osapi_assoc_flush_x ; 0x0493 - DL = a volume, AL = 0
-                                  ;          incremental / 1 full: bring its
-                                  ;          ASSOC.DAT up to date with the
-                                  ;          packages on it (SPEC.md 54.5,
-                                  ;          54.7.6). Out CF=0 = it describes
-                                  ;          them now; CF=1, AX = FERR_* = it
-                                  ;          could not. Synchronous; a worker
-                                  ;          may not. kern_small refuses
-    OSAPI_ICELL 6                 ; 0x0499 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          WHEEL handler (SPEC.md 13.18),
-                                  ;          OSAPI_WM_ONRCLICK's shape. Called
-                                  ;          AX = signed notches, POSITIVE
-                                  ;          TOWARD THE USER (scroll DOWN), SI
-                                  ;          = your window, gfx lock HELD, on
-                                  ;          the FRONT window - where a key
-                                  ;          goes. FLAGS PRESERVED; on
-                                  ;          kern_small, which has no wheel,
-                                  ;          the cell does nothing at all.
-                                  ;          SIX bytes and not five, the
-                                  ;          word displacement deliberate:
-                                  ;          every .text byte after the table
-                                  ;          moves by the cell, and an odd
-                                  ;          shift puts the hot routines at
-                                  ;          the wrong parity (t_hotpar)
-%ifdef KERN_BIG
-    MEGA_ICWBW W_ONWH             ; (kern_mega: the store through the data
-%else                             ; alias, kernel/mega.inc)
-    times 5 nop
-%endif
-    OSAPI_IEND
-    OSAPI_RXCELL osapi_serial     ; 0x049F - desktop serial lease (SPEC.md 115)
-    OSAPI_RCSLOT osapi_drv_use_x  ; 0x04A5 - THE DRIVERS PAGE'S TICK, AS A
-                                  ;          DOOR (SPEC.md 117.3). AH = 0 UP
-                                  ;          (AL = a DRVC_*): load and attach
-                                  ;          that class's driver with
-                                  ;          CTRL.DRV's own cdl_load, record
-                                  ;          nothing; AH = 1 DONE: the panel
-                                  ;          close's notifier, unless a
-                                  ;          Control Panel is open; AH = 2
-                                  ;          CALL: OSAPI_DRV_CALL_AT asked as
-                                  ;          the MACHINE (51.2.3). kern_small
-                                  ;          refuses
-    OSAPI_SLOT gfx_blitd          ; 0x04AB - A PACKAGE'S BLOCK AT THE DISPLAY'S
+    OSAPI_SLOT gfx_blitd          ; 0x0224 - A PACKAGE'S BLOCK AT THE DISPLAY'S
                                   ;          DEPTH (SPEC.md 120.7): ES:SI the
                                   ;          pixels as the mode packs them, BP
                                   ;          the stride, AX/BX x/y, CX/DX w/h;
@@ -4444,109 +3478,27 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          display (VID_VESA): the sixteen
                                   ;          colours through BLIT4 are the
                                   ;          fallback
-%ifdef KERN_MEGA
-    OSAPI_RSLOT osapi_xmem_sel    ; 0x04B3 - DX:AX = an address inside an
-%else
-    OSAPI_XREFUSE                 ; 0x04B3 - DX:AX = an address inside an
-%endif
-                                  ;          OSAPI_XMEM_ALLOC block you own, CX
-                                  ;          = bytes (0 = 64KB) -> AX = a DATA
-                                  ;          selector over exactly that window
-                                  ;          (KERN-MEGA-PLAN 12.2). kern_mega in
-                                  ;          protected mode only; CF=1, AX = 1
-                                  ;          on every other kernel
-%ifdef KERN_MEGA
-    OSAPI_RSLOT osapi_mem_codesel ; 0x04B9 - DX = a claim's segment (or
-%else
-    OSAPI_ICELL 6                 ; 0x04B9 - DX = a claim's segment (or
-    mov ax, dx                    ;          selector) -> AX = the selector to
-    cmp ax, 1                     ;          far call code in it: the segment
-    OSAPI_IEND                    ;          itself in real mode, its LDT code
-%endif                            ;          alias on kern_mega. CF=1 = none:
-                                  ;          INLINE off kern_mega, where the
-                                  ;          answer is DX and the compare's
-                                  ;          borrow (kernel size pass 14)
-    OSAPI_RSLOT osapi_xmem_walk   ; 0x04BF - ES:DI = CX records of 6 bytes ->
-                                  ;          AX = the extended pool's blocks
-                                  ;          written, each {KB offset, KB,
-                                  ;          owner, 0} (KERN-MEGA-PLAN 13.6).
-                                  ;          kern_mega in protected mode and
-                                  ;          kern_big with a store; CF=1, AX = 1
-                                  ;          with no pool
-    OSAPI_RCXCELL mmf_osapi_mem_huge ; 0x04C5 - AX = KB -> DX = the claim's
-                                  ;          first segment or selector, CX =
-                                  ;          the step to its next 64KB (1000h
-                                  ;          conventional, 8 a run above 1MB on
-                                  ;          kern_mega, KERN-MEGA-PLAN 14.1)
-%ifdef KERN_MEGA
-    OSAPI_RSLOT osapi_xmem_run    ; 0x04CB - DX:AX = an OSAPI_XMEM_ALLOC block
-%else
-    OSAPI_XREFUSE                 ; 0x04CB - DX:AX = an OSAPI_XMEM_ALLOC block
-%endif
-                                  ;          of yours -> DX = a run of DATA
-                                  ;          selectors, one every 32KB and each
-                                  ;          a 64KB window, CX = their step (8)
-                                  ;          (KERN-MEGA-PLAN 14.16). kern_mega
-                                  ;          in protected mode only; CF=1, AX =
-                                  ;          1 on every other kernel
-    OSAPI_RCXCELL osapi_mem_subseg ; 0x04D1 - AX = a PARAGRAPH offset into
-                                  ;          your own region, BL bit 0 = you
-                                  ;          will far-call it -> CF=0, DX = a
-                                  ;          DATA selector based there (its
-                                  ;          CODE twin DX - 8), freed with the
-                                  ;          region (KERN-MEGA-PLAN 14.44).
-                                  ;          CF=1, every register kept = use
-                                  ;          your segment + AX: every kernel
-                                  ;          but kern_mega, and kern_mega for
-                                  ;          a region below 1MB
-    OSAPI_RCSLOT osapi_img_name   ; 0x04D7 - AX = a driver's or module's image
-                                  ;          segment (BX = 0), or a pool
-                                  ;          block's KB offset above 1MB (BX =
-                                  ;          1, kern_mega) -> CF=0 and its 8.3
-                                  ;          file name at ES:DI, AL = 0 a
-                                  ;          driver / 1 a module (KERN-MEGA-
-                                  ;          PLAN 14.70.3). kern_small refuses
-    OSAPI_RCSLOT osapi_arg_text_x ; 0x04DD - a link's parameter for the program
-                                  ;          it started (SPEC.md 26.10.7): out
-                                  ;          CF=1 none; CF=0 with DX:SI the NUL
-                                  ;          text, valid in the entry proc.
-                                  ;          kern_small refuses
+; (OSAPI_XMEM_SEL, OSAPI_MEM_CODESEL and OSAPI_XMEM_RUN are behind the
+; rare door since kernel size pass 19's T5 - rd_tab, below the includes)
 rmk_seg:          ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RCXCELL osapi_seg       ; 0x04E3 - BL = a SEG_* verb: a segment's or
+    OSAPI_XCELL api_seg           ; 0x022C - BL = a SEG_* verb: a segment's or
                                   ;          selector's linear base, its real
                                   ;          segment, a window over physical
                                   ;          memory, a selector inside a claim
                                   ;          (KERN-MEGA-MEMORY-PLAN MC7). Every
                                   ;          real-mode kernel answers what the
                                   ;          caller's own arithmetic would
-    OSAPI_RCXCELL osapi_mem_p     ; 0x04E9 - X: BL = a MEMP_* verb: the
-                                  ;          claim heap in PARAGRAPHS (SPEC.md
-                                  ;          50.3.7) - a claim either way up,
-                                  ;          a regrow and the free figures,
-                                  ;          each answering what was granted
-                                  ;          and the granule
-apic_fs_op:                       ; (the cell's own address, for the kernel's
-                                  ; modules: the clone, the join - SPEC.md 12.8.10)
-%ifdef FPG_PARK
-    OSAPI_RSLOT osapi_fs_op       ; 0x04EF - DX:CX = the bytes ONE operation
-                                  ;          of yours will move, every chunk
-                                  ;          and every lock hold of it; 0 =
-                                  ;          it is over. CF=1 refused (another
-                                  ;          package holds the widget, or it
-                                  ;          could not arm). SPEC.md 12.8.
-%else
-    OSAPI_XREFUSE                 ; 0x04EF - OSAPI_FS_OP, refused here
-%endif
-%ifdef OS88_FSCK
-    OSAPI_RCSLOT osapi_vol_check  ; 0x04F5 - CHECK, REPAIR OR DEFRAGMENT the
-                                  ;          volume you stand on (SPEC.md
-                                  ;          118.14.2): AL = FSK_* verb, ES =
-                                  ;          FSCHECK.DRV's image as YOU loaded
-                                  ;          it, DX = your workspace claim
-%else
-    OSAPI_XREFUSE                 ; 0x04F5 - OSAPI_VOL_CHECK, refused here
-%endif
-osapi_table_end:                  ; 0x04FB today (0x04F5 before OSAPI_VOL_CHECK,
+; (OSAPI_FS_OP and OSAPI_VOL_CHECK too - each kernel that has no body for
+; one answers its index with a refusal entry, SPEC.md 20.3.4)
+    OSAPI_JCELL api_file_find_seq ; 0x0233 - OSAPI_FILE_FIND by TOKEN (SPEC.md
+                                  ;          19.7.1.1): CX resumes the walk at
+                                  ;          the slot after the last answer,
+                                  ;          so a listing is linear, not
+                                  ;          N(N+1)/2; AL = 1 the raw size
+osapi_table_end:                  ; 0x0236 today (0x0233 before FIND_SEQ;
+                                  ; 0x046D before kernel size
+                                  ; pass 19's withdrawals, 0x04F5 before
+                                  ; OSAPI_VOL_CHECK,
                                   ; 0x04EF before OSAPI_FS_OP,
                                   ; 0x04E9 before OSAPI_MEM_P,
                                   ; 0x04E3 before OSAPI_SEG,
@@ -4591,9 +3543,18 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 119*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x04EB bytes: 44 SLOT (8), 11 XCELL (7), 119 rare (6, OSAPI_FS_OP and OSAPI_VOL_CHECK XREFUSE ICELLs of the same 6 where they are off), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 45*8 + 15*7 + 6*3 + 6 + 7*5 + 3*6 + 8
+%error "os8088 API jump table must be exactly 0x0226 bytes: 45 SLOT (8, the yield's YSLOT among them), 15 XCELL (7, OSAPI_FILE_READ_SEQ's NCELL among them), 6 JCELL (3, OSAPI_FILE_FIND_SEQ the last), 1 FCELL (6), 11 ICELL (7 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19's T5 moved every RARE cell behind the door (SPEC.md 20.3.4) - the table holds no six-byte cell any more - and promoted OSAPI_GFX_DESK to a SLOT (V7)"
 %endif
+                                ; (THE PARITY PAD kernel size pass 19 left
+                                ; here went with OSAPI_FILE_FIND_SEQ's three
+                                ; bytes, SPEC.md 19.7.1.1: the flag day's
+                                ; withdrawals took 142 bytes out of the table
+                                ; on kern_big, and an ODD shift in front of
+                                ; every hot routine costs a 16-bit bus a
+                                ; second cycle on each of their word operands
+                                ; - tests/unit/t_hotpar.py. The table is EVEN
+                                ; again with the cell and without the pad)
 
 %ifdef KERN_MEGA
 ; kern_mega's DATA SEGMENT WORD (KDS/KES above, kernel/mega.inc), and it is
@@ -4678,7 +3639,7 @@ dbg_reg:
 %endif
     dw 0                            ; end of list
 
-; The three snapshot cells above (0x0210..0x021C) each fill a buffer the
+; The three snapshot cells above (0x01F8..0x0204) each fill a buffer the
 ; CALLER owns, and their layouts are ABI like the slot numbers themselves.
 ; They are declared with the tables they copy - SS_*/SSI_* in instance.inc,
 ; CLS_* and SK_* in memory.inc - because every one of those layouts is
@@ -4691,11 +3652,8 @@ dbg_reg:
 ; =============================================================================
 
 ; X: ES = the caller's DS, so the kernel routine can reach package data.
-; ONE body for every X cell whose routine is .text, entered with BP = the
-; routine to call...
-api_rx:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
-    pop bp                      ; the cell's return address = its target word
-    mov bp, [cs:bp]
+; ONE body for every XCELL, entered with BP = the routine to call and the
+; caller's BP under the far return (the cell's `push bp`).
 api_x:
     push ds                     ; the caller's DS...
     push es                     ; ...and its ES
@@ -4711,51 +3669,46 @@ api_x:
     retf                        ; and RETF touch no flags, so the routine's
                                 ; CF answer still survives the return
 
-; ...and ONE for every X cell whose routine is .cold (OSAPI_CXCELL), the same
-; frame with the near `call bp` replaced by api_far's far one. The prologue
-; is six bytes and is written twice rather than shared, because it PUSHES for
-; the body that follows it and a subroutine cannot push on its caller's
-; behalf; the epilogue is api_x's own.
-api_rxc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
-    pop bp
-    mov bp, [cs:bp]
-                                ; (was api_xc: the cold X body, reached only by falling through from api_rxc)
-    push ds
-    push es
-    push ds
-    pop es                      ; ES = the caller's DS
-    KDS
-                                ; DS = KERNEL_SEG (api_far reads its word by it)
-    push cs                     ; COLD_SEG:BP, and the body's retf lands here:
-    call api_far                ; the far frame is CS and a near call (-1 a
-                                ; site on `call KERNEL_SEG:`, kernel size pass 17)
-    jmp short api_x.done
-
-; The rare SLOT bodies (OSAPI_RCSLOT for a .cold routine, OSAPI_RSLOT for a
-; .text one): DS = KERNEL and NOTHING else changed, which is the plain SLOT's
-; contract. The cell is `push bp / call api_rs[c] / dw target`, so the return
-; address the call pushed IS the address of the target word: pop it, read
-; the word through CS, and the BP the cell pushed is what the `pop bp` before
-; the retf gives back. BP is an INPUT to no cell of this shape.
-api_rsc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
-    pop bp
-    mov bp, [cs:bp]
-    push ds
-    KDS
-    push cs                     ; COLD_SEG:BP (the far frame as api_rxc's)
+; api_seg - OSAPI_SEG's XCELL target (kernel size pass 19's T5): osapi_seg
+; is a `.cold` body that wants api_x's frame - DS = KERNEL, ES = the caller's
+; DS - which was the rare RCX cell's, and the cell stays in the table because
+; kern_mega's real-mode bracket writes its twin over it (fsx_rkeep). Eight
+; bytes here against the sixteen of the RCX body it was the last user of.
+api_seg:  ; STKBALANCE-OK: `push cs / call api_far` is ONE far call - the cold body's retf takes both words
+    mov bp, osapi_seg
+    push cs                     ; COLD_SEG:BP, the far frame as the door's
     call api_far
-    jmp short api_rs.tail       ; api_rs's own three-instruction tail (kernel
-                                ; size pass 17, -1: a rare cell's jump)
-api_rs:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
-    pop bp
-    mov bp, [cs:bp]
-    push ds
-    KDS
-    call bp
-.tail:
-    pop ds
-    pop bp
-    retf
+    ret
+
+; THE DOOR'S REFUSAL ENTRIES (SPEC.md 20.3.4): a published cell a kernel has
+; no body for still holds its index in rd_tab, answering what OSAPI_XREFUSE
+; answered in the table - CF = 1, AX = 1, every other register kept - so
+; one package binary reaches the same index on every kernel. kern_small's
+; xm_copy is those bytes already; kern_small's one RCS refusal
+; (OSAPI_VOL_CHECK) needs a `.cold` copy, the kind's far return.
+%ifndef KERN_MEGA
+ %ifdef KERN_SMALL
+api_refuse  equ xm_copy         ; mov ax, 1 / stc / ret (xmem.inc's kern_small)
+section .cold
+api_refusec:
+    mov ax, 1                   ; `cmp al, 2` borrows as `stc` sets CF, and
+    cmp al, 2                   ; is the byte that keeps `.cold`'s hot dsk_*
+    retf                        ; routines after it at their parity (t_hotpar)
+section .text
+ %else
+api_refuse:                     ; OSAPI_XMEM_SEL's and _XMEM_RUN's index here
+    mov ax, 1
+    stc
+    ret
+ %endif
+%ifndef FPG_PARK
+osapi_fs_op equ api_refuse      ; kern_small: OSAPI_FS_OP refused, and DISKOPS's
+%endif                          ; and the cloner's KDOOR sites answered so
+osapi_mem_codesel:              ; ...and OSAPI_MEM_CODESEL's real-mode answer:
+    mov ax, dx                  ; the segment is its own code selector; CF iff
+    cmp ax, 1                   ; DX = 0 (the INLINE cell it was until kernel
+    ret                         ; size pass 19's T5)
+%endif
 
 ; api_far - the far call to COLD_SEG:BP, built on the CALLER'S stack the way
 ; driver.inc's drv_pkg_disp builds a driver's (SPEC.md 20.3.2). The 8086 has
@@ -4843,11 +3796,17 @@ rom_vgabw   equ rom_vgabw0      ; data labels off the source, both arms, and
 ; reason there is why this body cannot serve it: every one of these names is
 ; MANDATORY, so the stage is unconditional too.
 ; The caller's DS and SI stay banked across the far call, IN THAT ORDER:
-; dwsf_dskw_write_seq reads the DS there for WSEQF_SYS's fence (18.4.9).
-api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
-    pop bp
-    mov bp, [cs:bp]
-                                ; (was api_n: the N body, reached only by falling through from api_rn)
+; dwsf_dskw_write_seq reads the DS there for WSEQF_SYS's fence (18.4.9), at
+; API_RN_DSOFF past its own BP once it has pushed BX and BP - the frame is
+; BP, BX, api_far's IP and CS, the caller's SI, the caller's DS. The rare
+; door's RN body (rd_k4) builds the same frame, so one number serves both
+; (abi-4, kernel size pass 19).
+API_RN_DSOFF equ 10
+api_nc:                         ; THE NCELL's entry (OSAPI_FILE_READ_SEQ, the
+    call api_nb                 ; one N cell a real-mode bracket keeps): BP =
+    pop bp                      ; the .cold door, the caller's BP under the
+    retf                        ; far return; the door's RN kind calls api_nb
+api_nb:  ; STKBALANCE-OK: `push cs / call api_far` is ONE far call - the cold body's retf takes both words (the door's RN kind and api_nc call this, so the frame above is one frame)
     push ds
     push si
     call api_cpname             ; caller DS:SI -> KERNEL:api_name, <= 13 bytes;
@@ -4858,15 +3817,14 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
     call inst_vol_enter         ; this instance's own folder (SPEC.md 19.2.1);
     mov si, api_name            ; preserves every register and the flags
     push cs                     ; COLD_SEG:BP, the cold file door (the far
-    call api_far                ; frame as api_rxc's)
+    call api_far                ; frame as api_seg's)
     pop si
-    jmp short api_rs.tail       ; pop ds / pop bp / retf: api_rs's own (kernel
-                                ; size pass 18, -1, paired with kmain's -1 for
-                                ; gfx_blit4's parity; a file call is ~400 ms)
+    pop ds
+    ret
 
 ; -----------------------------------------------------------------------------
-; api_fdlg_open - slot 0x0124. The N stub's shape with ONE difference, and it
-; is why this cannot be an N cell (api_rn): every other N cell's name is an
+; api_fdlg_open - slot 0x00D6. The N stub's shape with ONE difference, and it
+; is why this cannot be an N cell (api_nb): every other N cell's name is an
 ; argument the operation cannot run without, and THIS one's is optional -
 ; SPEC.md 38.6 publishes SI as "a default name, or 0", and fdlg_open_x tests
 ; it (`or si, si / jnz .setname`) to choose between the caller's default and
@@ -4946,7 +3904,7 @@ api_gfx_rest:
     ret
 
 ; -----------------------------------------------------------------------------
-; api_file_find - slot 0x0283 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
+; api_file_find - slot 0x015F (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
 ; buffer; out CF=0 with it filled and CX = the next ordinal (SPEC.md 19.7.1)
 ;
 ; An X stub because the buffer is the caller's, and it is the same fence as
@@ -4962,7 +3920,7 @@ api_gfx_rest:
 ; enumerate one folder and open files from another.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; api_file_find_raw - slot 0x03D9, and api_file_find's twin in one respect
+; api_file_find_raw - slot 0x01DD, and api_file_find's twin in one respect
 ;
 ; **THE SIZE, AND NOTHING ELSE.** A compressed file has two of them (SPEC.md
 ; 20.14.3): what it occupies and what it expands to. `api_file_find` answers
@@ -4985,12 +3943,16 @@ api_gfx_rest:
 ; a package, on this cell exactly as on the other one (SPEC.md 19.6.1).
 ; -----------------------------------------------------------------------------
 api_file_find_raw:
-    mov al, 1                   ; AL is not an input here (CX and ES:DI are)
+    mov ax, 1                   ; AL is not an input here (CX and ES:DI are)
     jmp short api_ff_go         ; and the fence below spends it anyway, so it
-                                ; carries the raw flag across the one prologue
-
+                                ; carries the raw flag across the one prologue;
+                                ; AH = 0 the ORDINAL walk
+api_file_find_seq:              ; SPEC.md 19.7.1.1: AL is the CALLER's raw
+    mov ah, 1                   ; choice, AH = 1 the TOKEN walk - dsk_find_x
+    db 0xA9                     ; reads it, the fence leaves AH alone. `test
+                                ; ax, imm16` over the `xor` below
 api_file_find:
-    xor al, al
+    xor ax, ax                  ; AL = 0 the expanded size, AH = 0 by ordinal
 api_ff_go:
     push ds
     push si
@@ -5025,7 +3987,7 @@ api_ff_go:
     retf
 
 ; -----------------------------------------------------------------------------
-; api_file_path - slot 0x041F (X). in ES:DI = the caller's buffer, CX = its
+; api_file_path - a door cell (X). in ES:DI = the caller's buffer, CX = its
 ; size; out CF=0 with the path written and CX its length, else AX = FERR_*
 ;
 ; An X cell (not a JSLOT like api_file_find, which does its own segment work):
@@ -5063,7 +4025,7 @@ api_file_path:
 %endif
 
 ; -----------------------------------------------------------------------------
-; api_file_write_sys - slot 0x0280, and the ONE fenced cell (SPEC.md 19.6.1)
+; api_file_write_sys - slot 0x015C, and the ONE fenced cell (SPEC.md 19.6.1)
 ;
 ; dskw_write for a file that belongs to the KERNEL: hidden, system and (bar
 ; SYSTEM.CFG) read-only, which is what makes an installed volume a SYSTEM
@@ -5088,43 +4050,20 @@ api_file_path:
 ; BX is banked across it because BX is the caller's DATA BUFFER offset here -
 ; the fence needs a register and that one is live.
 ;
-; api_file_append_sys - slot 0x02C2 - is the SAME cell with a different tail,
-; and it shares this body rather than copying it because the fence is the
-; whole of the interesting part and two copies of a fence is one that can be
-; got wrong. [api_sysfp] IS which dskw_ entry point runs - the offset half
-; of a COLD_SEG far pointer, so the tail is one `call far` and not a
-; compare between two (size pass 10: it was a byte flag, [api_sysap]); it is
-; written through CS because DS is still the CALLER's here, and it is set on
-; both paths rather than only the append one - a word left set by an append
-; would silently turn the next driver's write into an append.
+; Its other half, OSAPI_FILE_APPEND_SYS, was the SAME cell with a different
+; tail - a far pointer in .text, [api_sysfp], naming which dskw_ verb ran - and
+; it had no caller left: HDD.DRV's installer appends through
+; OSAPI_FILE_WRITE_SEQ with WSEQF_SYS, behind this same fence (SPEC.md
+; 18.4.9). Kernel size pass 19 withdrew it (SPEC.md 20.3.1), and with one verb
+; there is no pointer to choose it: the tail is a direct far call.
 ; -----------------------------------------------------------------------------
 %ifndef OS88_DRIVERS
-api_file_append_sys:            ; kern_small: the fence refuses EVERY caller,
-api_file_write_sys:             ; no segment being a driver's - so the two
-    mov ax, FERR_PROT           ; cells are .refuse's answer and nothing else,
-    stc                         ; every register .refuse gave back untouched
-    retf                        ; (kernel size pass 11)
-%else
-%ifndef KERN_MEGA
-api_file_append_sys:
-    mov word [cs:api_sysfp], dwf_dskw_append_sys    ; ...the same fence, the
-    jmp short api_file_sysc                         ; other verb (18.4.4)
+api_file_write_sys:             ; kern_small: the fence refuses EVERY caller,
+    mov ax, FERR_PROT           ; no segment being a driver's - so the cell
+    stc                         ; is .refuse's answer and nothing else, every
+    retf                        ; register .refuse gave back untouched
+%else                           ; (kernel size pass 11)
 api_file_write_sys:
-    mov word [cs:api_sysfp], dwf_dskw_write_sys
-%else                           ; kern_mega: code is read-only, so through
-api_file_append_sys:            ; the kernel's data alias instead
-    push ds
-    KDS
-    mov word [api_sysfp], dwf_dskw_append_sys
-    pop ds
-    jmp short api_file_sysc
-api_file_write_sys:
-    push ds
-    KDS
-    mov word [api_sysfp], dwf_dskw_write_sys
-    pop ds
-%endif
-api_file_sysc:
     push ds
     push si
     push bx                     ; the caller's buffer offset: live, and
@@ -5136,7 +4075,7 @@ api_file_sysc:
     pop ds                      ; switched and never switched back - so it
                                 ; staged 13 bytes of KERNEL image as the file
                                 ; name and handed that to dskw_write_sys.
-                                ; api_rn (the N body) avoids it by copying BEFORE it
+                                ; api_nb (the N body) avoids it by copying BEFORE it
                                 ; touches DS; this one has to put it back
     pop bx
     jc .refuse
@@ -5148,7 +4087,7 @@ api_file_sysc:
                                 ; the volume it is building and must not have
                                 ; its own instance's folder put underneath it
     mov si, api_name
-    call far [api_sysfp]        ; COLD_SEG:the verb the entry chose
+    call COLD_SEG:dwf_dskw_write_sys
 .out:
     pop si
     pop ds
@@ -5234,7 +4173,7 @@ ovw_band_init:      call band_init
 ; (ovw_dock_geom went in kernel size pass 13: vid_init, in the blob, reaches
 ; dock_geom through spw_near with the BP it already banks)
 ; ...and the MOUSE's (SPEC.md 9.4.7). mouse_init's boot half is in the
-; overlay and everything mou_hotplug or mouse_unhook can reach stayed resident,
+; overlay (`.boot3` on kern_small, kern_big and kern_emu - HIBER-RESUME-PLAN B2) and everything mou_hotplug or mouse_unhook can reach stayed resident,
 ; so the port writers the probe uses and the round counter it resets are edges
 ; that cross. They had five shims here; they go through viddet.inc's spw_near
 ; now, from overlay-side stubs in mouse.inc (kernel size pass 8), and what is
@@ -5312,7 +4251,12 @@ api_copyname:
     pop ax
     ret
 
-api_name:   times 13 db 0       ; staged names (.text, not .bss: the file
+api_name:                       ; ...and the STACK-OVERFLOW PANEL's two
+sch_dpcol:  dw 0                ; words (SPEC.md 8.8): the pen x and one hex
+sch_dphc:   db 0, 0             ; digit as a string. The panel ends in `hlt`
+            times 13 - 4 db 0   ; with nothing after it to stage a name, so
+                                ; they live here and not in .bss (kernel size
+                                ; pass 20, -4). Staged names (.text, not .bss: the file
 api_name2:  times 13 db 0       ; slots are not reached before kmain, and
                                 ; by then .bss is zero as well)
 ; THE BLOB'S FAR POINTER, and there is exactly one of it (SPEC.md 2.9.6). The
@@ -5356,13 +4300,6 @@ spl_fseg:   dw 0
 spl_ifp:    dw mod_gone
 spl_ifseg:  dw 0
 
-%ifdef OS88_DRIVERS
-api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
-            dw COLD_SEG         ; dskw_write_sys or dskw_append_sys, as the
-                                ; far pointer it calls. .text for api_name's
-                                ; reason, and written through CS because the
-                                ; stub still has the caller's DS when it lands
-%endif
 
 ; =============================================================================
 ; Boot (SPEC.md 15)
@@ -5955,14 +4892,9 @@ kmain_o:
                                 ; int 10h and no F000:FA6E, and the machine's
                                 ; own ROM font is not consulted at all
 %else
-%ifndef KERN_SMALL
-    B2CALL    font_init          ; needs int 10h, so after the mode is set;
-                                ; `.boot2` on kern_big, kern_emu and kern_mega
-                                ; (SPEC.md 6.0.1, 2.9.15), before spl_finish
-%else
-    B3CALL    font_init          ; ...and `.boot3` on kern_small (BOOT3-PLAN
-                                ; 16.17; the kern_small arm LAST, the model's)
-%endif
+    B3CALL    font_init          ; needs int 10h, so after the mode is set;
+                                ; `.boot3` on every kernel (SPEC.md 6.0.1,
+                                ; 2.9.14.2), before spl_finish
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface
@@ -5992,6 +4924,8 @@ kmain_o:
     mov [mdg_n0], ax
 %endif
     MARKW 18
+%ifndef HB_EARLY                ; (kern_big and kern_emu set the mouse up after
+                                ; the hibernation probe, below)
     B2CALL   ovl_spl_msg_mouse  ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
                                 ; notch, which is what raises [spl_live]:
                                 ; composed before it, the line is never drawn
@@ -6010,6 +4944,7 @@ kmain_o:
     mov ax, [ticks]             ; SPEC.md 9.4.6.1: the bar's own 6%% frame
     mov [mdg_n1], ax
 %endif
+%endif                          ; HB_EARLY
     MARKW 20
     B2CALL   ovl_spl_msg_fdd    ; ...and the SECOND stall the hard disk exposed
                                 ; (SPEC.md 15.6.4): desk_init asks SPEC.md
@@ -6062,6 +4997,29 @@ kmain_o:
     mov [mdg_n2], ax
 %endif
     MARKW 28
+%ifdef HB_EARLY
+    ; --- P1: IS THERE A HIBERNATION TO RESUME, BEFORE ANY OF THE REST? -------
+    ; (SPEC.md 87.5) The last `.ovl` call is above, so the mount this makes is
+    ; allowed (os88ovlchk rule 2e's first mount is here now). On a hard-disk
+    ; boot the boot partition IS the volume a hibernate writes to, and a valid
+    ; image is resumed from inside this call - no mouse waits, no driver, no
+    ; paint. Anything it cannot judge yet (`.cold` in the HMA, an adapter
+    ; SYSTEM.CFG switches to) is DEFERRED to P2, never deleted; a floppy boot
+    ; has no fixed volume here and pays eight compares
+    B3CALL   hb_probe_x
+    B2CALL   ovl_spl_msg_mouse  ; ...the mouse, AFTER the probe (SPEC.md 9.4,
+                                ; 15.6.4): its two waits are the largest phase
+                                ; of a boot that is not the disk, and a resume
+                                ; re-arms the IMAGE's mouse (96.45.2)
+    B3CALL   mouse_init         ; `.boot3` here (MOU_IN_BLOB): `.ovl` is dead
+    MARKW 19
+    BPMARKW 5
+    B2CALL   splf_step
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6.1 (after the 12%% frame here)
+    mov [mdg_n1], ax
+%endif
+%endif
 
 %ifdef KERN_MEGA
     B3CALL   mega_wrprobe       ; a DOS session the machine was RESET out of
@@ -6073,6 +5031,13 @@ kmain_o:
                                 ; `.boot3` on every kernel: kern_big's since
                                 ; BOOT3-PLAN wave 2, kern_small's one-byte
                                 ; `retf` rung since wave 4)
+%ifdef HB_EARLY                 ; ...which was PASS 1 here, the keep-set
+    B3CALL   hb_probe_x         ; P2: only if P1 did not settle it - a floppy
+                                ; boot with the image on HDD.DRV's volume, or
+                                ; one P1 deferred - with XMEM.DRV and the disk
+                                ; drivers now attached (SPEC.md 87.5)
+    B3CALL   drv_boot2_x        ; ...and PASS 2, the rest (SPEC.md 51.3.4)
+%endif
 %ifdef KERN_EMU
     B3CALL   vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
@@ -6100,12 +5065,15 @@ kmain_o:
                                 ; settings file did not ask for - a driver is
                                 ; several seconds of floppy on this machine
     MARKW 29
-%ifdef KERN_BIG
+%ifdef KERN_MEGA
     B3CALL   hb_probe_x         ; ...and is there a hibernation to resume?
-                                ; (SPEC.md 87.5) After drv_boot, so a driver
-                                ; volume is mounted to be looked at; before
-                                ; the first paint, because the answer is a
-                                ; window ui_task's first pass puts up
+                                ; (SPEC.md 87.5, 87.9) kern_mega's LATE probe:
+                                ; after drv_boot, so a driver volume is
+                                ; mounted to be looked at, and posting the
+                                ; check for ui_task's first pass after
+                                ; mega_enter, where a protected-mode image can
+                                ; be judged. kern_big and kern_emu probe at
+                                ; P1 and P2 above (HB_EARLY)
 %endif
     call     kbm_adopt          ; ...and NO POINTER HAS SPOKEN: the keyboard
                                 ; mouse's pointer half out of `.boot3m` into a
@@ -6390,7 +5358,7 @@ section .text
 
 ; osapi_mouse lives in kernel/mouse.inc beside the IRQ it re-arms (SPEC.md 9.13).
 
-; ---- osapi_xmem_sel - API slot 0x04B3 (KERN-MEGA-PLAN 12.2) ----------------
+; ---- osapi_xmem_sel - a door cell (KERN-MEGA-PLAN 12.2) ----------------
 ; in:  DX:AX = a linear address inside an OSAPI_XMEM_ALLOC block YOU own,
 ;      CX = the window's bytes (0 = 65,536)
 ; out: CF = 0, AX = a DATA selector whose descriptor covers exactly that
@@ -6424,7 +5392,7 @@ osapi_xmem_selc:
 section .text
 %endif
 
-; ---- osapi_xmem_run - API slot 0x04CB (KERN-MEGA-PLAN 14.16) ----------------
+; ---- osapi_xmem_run - a door cell (KERN-MEGA-PLAN 14.16) ----------------
 ; in:  DX:AX = the token of an OSAPI_XMEM_ALLOC block YOU own (its base)
 ; out: CF = 0, DX = the first of a RUN of DATA selectors and CX = the step
 ;      between them (8): selector k is the 64KB window from 32KB x k into the
@@ -6445,7 +5413,7 @@ osapi_xmem_run:                 ; (eleven bytes of .text: the segment binds
     ret
 %endif
 
-; ---- osapi_mem_subseg - API slot 0x04D1 (KERN-MEGA-PLAN 14.44) -------------
+; ---- osapi_mem_subseg - a door cell (KERN-MEGA-PLAN 14.44) -------------
 ; in:  AX = a paragraph offset into the CALLER's own region (the X cell's ES =
 ;      its DS), BL bit 0 = it will be far-called, BL bit 1 = CX is the
 ;      window's length in paragraphs (0 = to the end)
@@ -6464,7 +5432,7 @@ osapi_xmem_run:                 ; (eleven bytes of .text: the segment binds
 ; and BT parts the next (KERN-MEGA-PLAN 14.38.4 S6)
 %ifdef KERN_MEGA
 section .cold
-osapi_mem_subseg:               ; (api_rxc's far body: DS = KDATA)
+osapi_mem_subseg:               ; (the door's RCX kind's far body: DS = KDATA)
     cmp byte [mega_on], 0
     je .no
     call MEGA_SEL_CODE:mega_subsegf ; (`.mega`: KERN-MEGA-SEGMENTS-PLAN)
@@ -6480,7 +5448,7 @@ osapi_mem_subseg equ mod_gone   ; `stc / retf`: CF = 1, every register kept
 osapi_arg_text_x equ mod_gone   ; no links on kern_small, so no parameter
 %endif                          ; (SPEC.md 26.10.7): CF = 1
 
-; ---- osapi_seg - API slot 0x04E3 (KERN-MEGA-MEMORY-PLAN MC7) ----------------
+; ---- osapi_seg - API slot 0x022C (KERN-MEGA-MEMORY-PLAN MC7) ----------------
 ; BL = the verb, the X cell's ES = the caller's DS (SPEC.md 50.6.11):
 ;   SEG_LIN  DX = a segment or selector -> DX:AX = its linear base
 ;   SEG_REAL DX = a segment or selector -> DX = a real-mode segment with the
@@ -6531,7 +5499,7 @@ SEG_HND     equ 12              ; kern_mega's handle descriptor (124.31.3), and 
 SEG_TYPE    equ 13              ; kern_mega's code/data retype of a window (124.31.6), and too
 SEG_LOW     equ 14              ; kern_mega's own region down to conventional memory (50.6.11), and too
 section .cold
-osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
+osapi_seg:                      ; (the door's RCX kind's far body: DS = KDATA)
 %ifdef KERN_MEGA
     cmp byte [mega_on], 0
     je .rm
@@ -6553,8 +5521,19 @@ osapi_segr:
     je .sub                     ; ...a pair's data half: the same sum
     cmp bl, SEG_BWIN
     ja .no                      ; SEG_AIM is protected mode's alone - a real-
+%if SEG_LIN != 0
+  %error "osapi_seg tests SEG_LIN as BL = 0"
+%endif
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define SEG_LIN_CMP           ; (kern_big and kern_emu: gfx_blit1_x follows
+ %endif                         ; in `.cold`, and this byte is its parity)
+%endif
+%ifdef SEG_LIN_CMP
     cmp bl, SEG_LIN             ; mode caller's own sum is its answer - and
-                                ; an unknown verb is refused
+%else                           ; an unknown verb is refused. SEG_LIN is 0,
+    test bl, bl                 ; so a test (kernel size pass 20, -1)
+%endif
     jne .ok                     ; SEG_REAL, SEG_WIN, SEG_BWIN: the value is
     push cx                     ; the answer, and SEG_FREE has nothing to free
     mov ax, dx
@@ -6563,22 +5542,12 @@ osapi_segr:
     mov cl, 12
     shr dx, cl                  ; DX:AX = DX x 16
     pop cx
-%ifdef KERN_BIG                 ; (kern_small: the old shape, for the parity
-    SKIPF2                      ; of gfx_blit1_x right after this routine)
-.sub:                           ; test ax, imm16 over .sub's add: flags only,
-    add dx, ax                  ; and the clc below is the answer (kernel size
-.ok:                            ; pass 15: one `clc / retf` for both)
-    clc
-    retf
-%else
-.ok:
-    clc
-    retf
-.sub:
-    add dx, ax
-    clc
-    retf
-%endif
+    SKIPF2                      ; (every kernel since kernel size pass 20:
+.sub:                           ; kern_small's old shape was its parity pad,
+    add dx, ax                  ; and the test above is the other byte)
+.ok:                            ; test ax, imm16 over .sub's add: flags only,
+    clc                         ; and the clc below is the answer (kernel size
+    retf                        ; pass 15: one `clc / retf` for both)
 .no:
     stc
     retf                        ; (an EVEN body: dsk_xfer, dsk_runcap,
@@ -6586,7 +5555,7 @@ osapi_segr:
                                 ; in `.cold` keep their measured parity)
 section .text
 
-; ---- osapi_img_name - API slot 0x04D7 (KERN-MEGA-PLAN 14.70.3) -------------
+; ---- osapi_img_name - a door cell (KERN-MEGA-PLAN 14.70.3) -------------
 ; in:  AX = the segment a driver's or module's image is loaded at - what the
 ;      claim table gives as the base of a MEM_K_DRV or MEM_K_MOD claim - with
 ;      BX = 0; or, BX = 1, a block's XMW_OFF in the pool above 1MB
@@ -6603,7 +5572,7 @@ section .text
 ; ships no memory view to ask
 %ifdef KERN_BIG
 section .cold
-osapi_img_name:                 ; (api_rsc's far body: DS = KDATA)
+osapi_img_name:                 ; (the door's RCS kind's far body: DS = KDATA)
     push cx
     push si
     or bx, bx
@@ -6681,7 +5650,7 @@ section .text
 osapi_img_name equ mod_gone     ; `stc / retf`: CF = 1, every register kept
 %endif
 
-; ---- osapi_xmem_walk - API slot 0x04BF (KERN-MEGA-PLAN 13.6) ---------------
+; ---- osapi_xmem_walk - a door cell (KERN-MEGA-PLAN 13.6) ---------------
 ; in:  ES:DI = room for CX records of XMW_SIZE (6) bytes; BX = XMW_FIXED asks
 ;      kern_mega for the fixed areas under the pool too (below)
 ; out: CF = 0, AX = records written: every block the extended pool holds,
@@ -6723,7 +5692,7 @@ osapi_xmem_walk equ xm_copy     ; kern_small: no extended memory, and its
                                 ; osapi_fsx_spk already borrows it (snd.inc)
 %endif                          ; (kern_big's is XMEM.DRV's table, xmem.inc)
 
-; ---- osapi_mem_codesel - API slot 0x04B9 (KERN-MEGA-PLAN 12.2, 10.3 item 51)
+; ---- osapi_mem_codesel - a door cell (KERN-MEGA-PLAN 12.2, 10.3 item 51)
 ; in:  DX = the segment (or selector) a claim of yours is named by
 ; out: CF = 0, AX = the selector to FAR CALL code in it: DX itself on a
 ;      real-mode kernel, its LDT code alias on kern_mega (and a pair's code
@@ -6972,7 +5941,7 @@ osapi_file_goto_qm:
 ;      desktop is rows MBAR_H..CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
 ;      DH = bits per pixel, 4 or 1
 ; -----------------------------------------------------------------------------
-; osapi_vol_kind_x - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x0190)
+; osapi_vol_kind_x - what KIND of volume is this? (SPEC.md 18.7.2, a door cell)
 ; in:  AL = a volume index (0 = A:, 1 = B:, ...)
 ; out: CF=1 = no such volume; CF=0 with AL = VK_* and AH = VT_*
 ; clobbers: AX (the output), flags
@@ -7112,8 +6081,6 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; -----------------------------------------------------------------------------
 %ifdef KERN_BIG
   %define ct_cw_wm_clip_test KERNEL_SEG:cw_wm_clip_test ; 2 sites (small: 3)
-%else
-  %define ct_cw_snd_beep KERNEL_SEG:cw_snd_beep         ; 2 sites (big: 4)
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -7276,11 +6243,14 @@ EXTF_CAPS   equ 4               ;   fsx_caps: DL = window BX's display's kind
 EXT_DISPLAY equ 7               ; wm_display's secondary arm, behind its gate
 EXT_SPAN    equ 8               ; wm_disp_span: registers kept = the primary
 EXT_FSRECT  equ 9               ; wm_fs_setrect's arm: CF = 1 one display
-EXT_DESK    equ 10              ; vid_disp_desk: CF = 1 nothing painted
+EXT_PHASE   equ 10              ; ui_drag_phase's arm, UNGATED: registers kept
+                                ; (10 was EXT_DESK, retired with its one caller
+                                ; - SPEC.md 11.91.7 - and EXT_PHASE, the last
+                                ; entry, took its slot: the slot block is 4
+                                ; bytes of .bss an entry - kernel size pass 20)
 EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 EXT_DEAD    equ 14              ; ui_drag_dead, UNGATED: registers kept (12 and
                                 ; 13 are the seam cuts, font.inc/vga12.inc)
-EXT_PHASE   equ 15              ; ui_drag_phase's arm, UNGATED: registers kept
 %macro EXTCALL 1
     call far [EXFP + %1*4]
 %endmacro
@@ -7938,7 +6908,8 @@ MARK_FNVEC  equ $ - mark_fvec
 ; OSAPI cell, which for a caller whose DS is already KERNEL_SEG IS the shim's
 ; semantics - the cell's push/pop of DS and its `retf` touch no flag and no
 ; other register. Four bytes each. What it costs is the cell's DS switch, ~50
-; cycles a call on an 8088 for a SLOT cell and ~130 for a rare (RSLOT) one,
+; cycles a call on an 8088 for a SLOT cell (a rare cell's alias is a KDOOR
+; site since kernel size pass 19's T5),
 ; and two or four bytes more of stack - so it is taken only where every
 ; caller is a dialog, a window being built, the Control Panel or a hibernate
 ; step, and NOT for the drawing shims a repaint calls by the dozen
@@ -7948,21 +6919,14 @@ MARK_FNVEC  equ $ - mark_fvec
 ; (task_sleep, task_yield, wm_clip_set, wm_content: the Bounce task's). No
 ; kind has a task now.
 ; =============================================================================
-cw_app_launch:          call app_launch
-                    retf
-%ifndef KERN_SMALL              ; (kern_small: FDLG.DRV's fdt_go, kernel size
-cw_app_close_win:       call app_close_win  ; pass 13) the Standard File chooser's
-%endif
-cw_kretf:           retf                ; close (SPEC.md 38.7) - AND cw_kretf,
-                                        ; THE .text `retf` an image's hand-built
+cw_kretf:           retf                ; THE .text `retf` an image's hand-built
                                         ; far hop lands a near `ret` on: DOCK.DRV's
                                         ; dkk_* stubs, EXTD.DRV's exk_go and
-                                        ; CTRL.DRV's cp_kgo. It was a byte of its
-                                        ; own, kern_big's alone (DOCK_OPT); this
-                                        ; one is on both kernels and costs none
-                                        ; (kernel size pass 13). Nothing may go
-                                        ; between the call and it: cw_app_close_win
-                                        ; IS the near call and this retf
+                                        ; CTRL.DRV's cp_kgo. It was the tail of
+                                        ; cw_app_close_win until that shim went
+                                        ; behind the rare door (kernel size pass
+                                        ; 19, P4 - SPEC.md 20.3.4), and is a
+                                        ; byte of its own again
 cw_clk_snapshot:        call clk_snapshot
                     retf
 
@@ -7982,20 +6946,8 @@ cw_cur_lazyrect:        call cur_lazyrect   ; ...and SPEC.md 7.1.4.5's rect
 ; brackets a session with: the arrow has to be off the glass for as long as
 ; something is drawing over it, and every gfx_lock/gfx_unlock inside a frame
 ; then nests underneath and draws nothing (SPEC.md 79.6). kern_big's, like the
-; saver itself.
-cw_cursor_hide:         call cursor_hide
-                    retf
-cw_cursor_show:         call cursor_show
-                    retf
-%endif                                      ; so kern_small pays for none of
-cw_evq_mup:             call evq_mup        ; them out of its 75-byte rung.
-                    retf                    ; THE WHOLE LOOP and not its two
-                                            ; halves: cw_evq_pop and
-                                            ; cw_wm_wake_eaten were reached
-                                            ; only from fm_drag's two `.cold`
-                                            ; track loops, which now call this
-                                            ; instead - so two cells died here
-                                            ; and one was born (SPEC.md 74.1.1)
+; saver itself. (Both are behind the rare door since kernel size pass 19.)
+%endif
 cw_font_run:            call font_run
                     retf
 %ifdef KERN_BIG                 ; ...and gfx_disp_enter is dual display's
@@ -8025,11 +6977,8 @@ cw_gfx_clip_query:      call gfx_clip_query ; CLIPQF: shared region query
 ; the dock, so nothing in it has ever been able to touch either (SPEC.md 12.9,
 ; 30.3.2) - and a saver session has drawn over both. fsx_restore is the other
 ; caller that has to say so, and for the identical reason: an app that owned
-; the whole screen really did overdraw them.
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_blk_relit:           call blk_relit
-                    retf
-%endif
+; the whole screen really did overdraw them. (Behind the rare door since
+; kernel size pass 19 - rd_tab, below.)
 cw_gfx_frame:           call gfx_frame
                     retf
 cw_gfx_hline equ apic_gfx_hline ; THE CELL IS THE DOOR (size pass 9)
@@ -8048,55 +6997,22 @@ cw_icon_draw_ix:        call icon_draw_ix   ; the INDEXED kind (SPEC.md 25.7),
                                             ; other caller in the tree
 cw_icon_draw16:         call icon_draw16
                     retf
-cw_inst_find_kind:      call inst_find_kind
-                    retf
-%ifndef KERN_SMALL              ; (kern_small: FDLG.DRV's FDKT hop)
-cw_inst_fhome_idx:      call inst_fhome_idx
-                    retf
-%endif
-cw_inst_win_owner:      call inst_win_owner
-                    retf
-; ...and the instance store's. (apps.inc's three kinds had three more here -
+; (...and the instance store's went behind the rare door in kernel size pass
+; 19 - rd_tab, below. apps.inc's three kinds had three more here -
 ; cw_inst_of_win, cw_task_sleep and cw_inst_task_die - until Timer and Bounce
 ; became packages, SPEC.md 14.8; About reaches nothing in the store.)
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_inst_ptr:            call inst_ptr
-                    retf
-%endif
 cw_mem_disp equ spw_near        ; `call bp` / `retf` - viddet.inc's splash door
                                 ; is the same three bytes, and it stays where
                                 ; SPL_RESIDENT needs it (size pass 10)
-%ifndef KERN_SMALL              ; (kern_small: FDLG.DRV's FDKT hop - and so
-cw_menu_activate:       call menu_activate  ; are menu_draw_bar and wm_pkgcall
-                    retf                    ; below; DESK.DRV and DOCK.DRV
-%endif                                      ; keep them on kern_big)
-; ...and menu_kbnav's two, which went cold with it (SPEC.md 12.10)
-cw_menu_item_dis:       call menu_item_dis
-                    retf
-cw_mou_clamp:           call mou_clamp
-                    retf
-; (...and the BOOT OVERLAY's: menu_init's one outbound call, cw_menu_relayout,
-; is spw_near's `call bp` since kernel size pass 13 - and dock_init has none,
+; (the menu's five - menu_activate, menu_draw_bar, menu_popup and
+; menu_kbnav's two - are behind the rare door since kernel size pass 19. And
+; the BOOT OVERLAY's: menu_init's one outbound call, cw_menu_relayout, is
+; spw_near's `call bp` since kernel size pass 13 - and dock_init has none,
 ; what it asked cw_dock_force for being two words it writes itself)
-%ifndef KERN_SMALL
-cw_menu_draw_bar:       call menu_draw_bar
-                    retf
-%endif
-cw_menu_popup:          call menu_popup
-                    retf
-cw_snd_beep:            call snd_beep
-                    retf
-cw_snd_disp_set:        call snd_disp_set
-                    retf
 %ifdef KERN_BIG                 ; its callers are kern_big only
 cw_task_exit equ task_exit      ; NEVER RETURNS - cw_inst_task_die's reason
 %endif
-%ifndef KERN_SMALL              ; (drv_task_x's; kern_small's one caller,
-cw_task_spawn:           call task_spawn ; sch_idle_start, uses spw_near)
-                     retf
-%endif
 cw_task_yield equ apic_task_yield ; THE CELL IS THE DOOR (size pass 13)
-cw_toast_show equ apic_toast_show ; THE CELL IS THE DOOR (size pass 9)
 %ifdef KERN_BIG
 ; (cw_ui_svc_open, the service zone's double-click, is ui.inc's own far body
 ; since kernel size pass 13 - SPEC.md 26.7)
@@ -8121,9 +7037,8 @@ cw_vga_xor_rect_vram:   call vga_xor_rect_vram
 ; ...and EXTD.DRV's one hop that is on OSAPI_WM_DISPLAY's path (wm_disp_now's
 ; one-display arm, SPEC.md 39.19.6.2). Four bytes here where the image carried
 ; a twelve-byte stub of its own, and a near call + RETF where the stub built
-; the frame by hand and returned through cw_kretf
-cw_vid_disp_of:         call vid_disp_of
-                    retf
+; the frame by hand and returned through cw_kretf - behind the rare door
+; since kernel size pass 19
 %endif
 cw_wm_clip_clear equ apic_wm_clip_clear ; THE CELL IS THE DOOR (size pass 9)
 cw_wm_clip_rows:        call wm_clip_rows
@@ -8138,17 +7053,7 @@ cw_wm_content equ apic_wm_content ; THE CELL IS THE DOOR (kernel size pass
                                 ; layout, its self-repaint fill and its click
                                 ; conversion, the Control Panel and the
                                 ; hibernate card - once an operation each
-cw_wm_minsize equ apic_wm_minsize ; THE CELL IS THE DOOR (size pass 9)
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_wm_snap equ apic_wm_snap ; THE CELL IS THE DOOR (size pass 9)
-                                ; app_tmr_kinit asks for the snap
-                                ; (SPEC.md 11.94), and Timer is
-%endif                                  ; kern_big's alone (SPEC.md 14.6)
 %ifdef KERN_BIG
-cw_wm_onmouseup equ apic_wm_onmouseup ; THE CELL IS THE DOOR (size pass 9)
-cw_wm_ondrag equ apic_wm_ondrag_c ; THE CELL IS THE DOOR (size pass 13): it
-                                ; answers CF = 0 as well, and fm_kinit_x reads
-                                ; no flag after it
 cw_wm_timer equ apic_wm_timer_c ; SPEC.md 13.10.5.4.2's PAUSE commit: the
                                 ; kernel ARMS the same one-shot a package
                                 ; does, through the same cell since size pass
@@ -8170,31 +7075,1136 @@ cw_wm_dmg_hit:           call wm_dmg_hit
 cw_wm_zone_r:            call wm_zone_r      ; is any of a zone revealed?
                      retf                    ; (SPEC.md 11.91.6)
 %endif
-cw_wm_dmg_wins:         call wm_dmg_wins
-                    retf
-cw_wm_grow_paint equ apic_wm_grow_paint ; THE CELL IS THE DOOR (size pass 9)
-cw_wm_hit:              call wm_hit
-                    retf
-cw_wm_idx2ptr:          call wm_idx2ptr
-                    retf
-cw_wm_paint_all:        call wm_paint_all
-                    retf
-cw_wm_paint_dmg:         call wm_paint_dmg
-                     retf
 %ifndef KERN_SMALL
 cw_wm_pkgcall:          call wm_pkgcall
                     retf
 %endif
-cw_wm_show equ apic_wm_show ; THE CELL IS THE DOOR (size pass 9)
-%ifdef WM_ANIM
-cw_inst_unmin:          call inst_unmin
-                    retf
+
+; =============================================================================
+; THE RARE DOOR (SPEC.md 20.3.4, kernel size pass 19)
+;
+; A rare call is `int OS88_RARE` and the INDEX byte after it: three bytes at
+; the site where a far call is five, and a two-byte word here where a rare
+; cell is six. The `int` pushes FLAGS, CS and an IP that names the index
+; byte, and clears IF and TF. The door then
+;
+;   1. puts the caller's FLAGS back (`push [bp+6]`, then a `popf` in each
+;      kind after its last compare) - IF as the caller had it, and the flags
+;      a body that preserves them returns (kernel size pass 19's T5: P4's
+;      door restored them at the top and its compares then wrote CF and ZF,
+;      which no kernel-private caller read and OSAPI_MENU_SET's did). Rare cells ARE called with IF = 0: OSAPI_FSX_SPK inside
+;      os88spk.inc's pushf/cli window, OSAPI_MEM_COMPACT and OSAPI_MEM_P in
+;      the Task Manager's one-moment snapshot, and the kernel's own
+;      drv_task_x spawn (SPEC.md 20.3.4's audit), so the lean door's `sti`
+;      would open three critical sections. Four bytes against its one;
+;   2. reads the index through the caller's CS:IP and steps the stacked IP
+;      past it, so the `retf 2` lands on the instruction after the site;
+;   3. refuses an index this kernel has no word for: CF = 1 and AX = 1,
+;      everything else kept - OSAPI_XREFUSE's answer (SPEC.md 20.3.4);
+;   4. loads BP with the index's word and enters the BODY of the index's
+;      KIND, which the index's RANGE names: rd_tab is written in kind order
+;      (RDENT refuses anything else), so no kind byte is stored anywhere.
+;
+; The bodies are the five the six-byte rare cells reached (api_rs, _rsc,
+; _rx, _rxc, _rn - deleted with the last such cell, kernel size pass 19's
+; T5) past their `pop bp / mov bp, [cs:bp]` heads, with the caller's BP
+; under the frame, and each ends in `retf 2`: the FLAGS slot is dropped
+; and the BODY's flags - its CF answer - are what the caller gets. Only the
+; kinds rd_tab has entries for are assembled.
+;
+; CYCLES (8088 clocks, each instruction at max(its clocks, 4 x its bytes),
+; PREDICTED; docs/plans/completed/ksp19/door.md has the table): the RS path is 420
+; clocks around the routine - `int`, the door, the body's DS bank and
+; `call bp`, its tail and `retf 2` - against 227 for the six-byte rare cell
+; it replaces (+193, 40 us at 4.77 MHz) and 93 for a far call to a `cw_`
+; shim (+327, 69 us). Each kind the index's range passes on the way costs
+; one more compare and branch, +20. T5's `add bl, rd_p` (the published
+; block's offset, rd_tab below) is three more bytes fetched: +12, so a
+; package's RS call is 432 - +205 over the rare cell it replaced.
+; =============================================================================
+%define RDK_RS  0               ; DS = KERNEL, a .text routine
+%define RDK_RCS 1               ; ...a .cold routine, through api_far
+%define RDK_RX  2               ; and ES = the caller's DS, .text
+%define RDK_RCX 3               ; ...a .cold routine
+%define RDK_RN  4               ; the name at DS:SI staged, .cold (api_nb)
+%assign rd_n 0
+%assign rd_k 0
+%assign rd_c0 0
+%assign rd_c1 0
+%assign rd_c2 0
+%assign rd_c3 0
+%assign rd_c4 0
+%macro RDENT0 2                 ; one word, in KIND order (no name)
+ %assign rd_kk %1
+ %if rd_kk < rd_k
+  %error "rd_tab: an entry out of KIND order - the door names the kind by the index's range (SPEC.md 20.3.4)"
+ %endif
+ %assign rd_k rd_kk
+    dw %2
+ %assign rd_n rd_n + 1
+ %assign rd_c%[rd_kk] rd_c%[rd_kk] + 1
+%endmacro
+%macro RDENT 2                  ; %1 = RDK_*, %2 = the routine: its index is
+rix_%2 equ rd_n                 ; rix_<routine>, which KDOOR names
+    RDENT0 %1, %2
+%endmacro
+%macro RDPUB 3                  ; ...a PUBLISHED cell: %3 is its SDK name less
+rdp_%3 equ rd_n - rd_p          ; OSAPI_, and rdp_<name> the index a package's
+    RDENT %1, %2                ; site carries (tools/os88cells.py writes the
+%endmacro                       ; SDK's from these, never a hand)
+%macro RDREF 3                  ; ...a published cell THIS kernel refuses: a
+rdp_%3 equ rd_n - rd_p          ; refusal routine several share, so no rix_
+    RDENT0 %1, %2
+%endmacro
+
+; THE TABLE. Two blocks, in this order on every kernel:
+;
+;   1. THE KERNEL'S OWN (P4, kernel size pass 19): the `cw_` shims' routines
+;      that only kernel code reaches, by KDOOR. They differ per kernel - and
+;      they come FIRST, at absolute indices 0 .. RD_P - 1, so that
+;   2. THE PUBLISHED CELLS (T5) have the same index on every kernel: a site
+;      carries the cell's index less RD_P, and the door adds RD_P back before
+;      anything else (SPEC.md 20.3.4). A cell a kernel has no body for holds
+;      its index with a refusal entry (RDREF), so the next cell's does not
+;      move. Within the block the kinds run RS, RCS, RX, RCX, RN.
+;
+; Kernel size pass 19 (P4) put the kernel's own `cw_` shims here - the
+; rehearsal of T5 on traffic nothing outside the kernel sees: a shim was
+; `call X / retf`, four bytes, and its every far call site five. The ones
+; left as shims above are the drawing doors a repaint calls by the dozen
+; (gfx_fill, gfx_frame, font_run, the icons, the clip rows ...), where the
+; door's ~69 us a call would be paid per primitive; one that takes BP as an
+; input (wm_pkgcall), which the door cannot carry; and clk_snapshot, which
+; kern_dos's disk layer reaches with a stub of its own.
+rd_tab:
+    RDENT RDK_RS, app_launch
+%ifndef KERN_SMALL
+    RDENT RDK_RS, app_close_win
+    RDENT RDK_RS, inst_fhome_idx
+    RDENT RDK_RS, menu_activate
+    RDENT RDK_RS, menu_draw_bar
+    RDENT RDK_RS, task_spawn
 %endif
-cw_xm_release_rec:      call xm_release_rec
-                    retf
-cw_wm_title_set equ apic_wm_title_set ; THE CELL IS THE DOOR (size pass 9)
-cw_wm_win_rect:         call wm_win_rect
-                    retf
+%ifdef KERN_BIG
+    RDENT RDK_RS, cursor_hide
+    RDENT RDK_RS, cursor_show
+    RDENT RDK_RS, blk_relit
+    RDENT RDK_RS, inst_ptr
+    RDENT RDK_RS, vid_disp_of
+%endif
+%ifdef WM_ANIM
+    RDENT RDK_RS, inst_unmin
+%endif
+    RDENT RDK_RS, evq_mup
+    RDENT RDK_RS, inst_find_kind
+    RDENT RDK_RS, inst_win_owner
+    RDENT RDK_RS, menu_item_dis
+    RDENT RDK_RS, menu_popup
+    RDENT RDK_RS, mou_clamp
+    RDENT RDK_RS, snd_beep
+    RDENT RDK_RS, snd_disp_set
+    RDENT RDK_RS, wm_dmg_wins
+    RDENT RDK_RS, wm_hit
+    RDENT RDK_RS, wm_idx2ptr
+    RDENT RDK_RS, wm_paint_all
+    RDENT RDK_RS, wm_paint_dmg
+    RDENT RDK_RS, wm_rect_empty     ; fm_paste_res's union (kernel size pass
+    RDENT RDK_RS, wm_runion         ; 20: its own seed and compares were 30)
+    RDENT RDK_RS, xm_release_rec
+    RDENT RDK_RS, wm_win_rect
+%assign rd_p rd_n
+RD_P        equ rd_p            ; the published block's first index (the
+                                ; door's `add`, KDOOR's subtraction)
+; ---- RS: DS = KERNEL, a .text routine. THE FIRST THREE ARE THE REAL-MODE
+; BRACKET'S (SPEC.md 53.2.3): kern_mega's fsx_rdownf bounds the door at
+; RD_P + RD_RK, so these and nothing after them answer inside it
+    RDPUB RDK_RS, osapi_snd_caps, SND_CAPS ; sound (SPEC.md 34): what the PC
+    RDPUB RDK_RS, osapi_font_glyphs, FONT_GLYPHS ; the kernel's 8x8 glyph table
+                                  ;          (SPEC.md 6): out DX:SI = the
+                                  ;          table (it lives in LOW_SEG now -
+                                  ;          the one-time amendment at the
+                                  ;          body below), AL = first code,
+                                  ;          AH = last, CX = bytes per glyph
+    RDPUB RDK_RS, fsx_mode, FSX_MODE ; a foreign mode + its FSI info
+                                  ;          block (SPEC.md 53.4): AL = FSXM
+                                  ;          id, ES:DI = the caller's buffer
+RD_RK       equ 3               ; (fsx_rdownf's bound, past the private block)
+    RDPUB RDK_RS, wm_show, WM_SHOW ; 
+    RDPUB RDK_RS, wm_hide, WM_HIDE ; 
+    RDPUB RDK_RS, wm_front, WM_FRONT ; 
+    RDPUB RDK_RS, wm_flag, WM_FLAG ; BX = window, AH = a W_FLAGS bit NUMBER (WFB_*), AL = 0 clear / non-zero set (SPEC.md 11.104.3)
+    RDPUB RDK_RS, wm_fullscreen, FULLSCREEN ; fullscreen (SPEC.md 11.2)
+    RDPUB RDK_RS, wm_grow_paint, WM_GROW ; grow-box restore (SPEC.md 11.1)
+    RDPUB RDK_RS, osapi_file_dfree, FILE_DFREE ; free space on the CALLING
+                                  ;          INSTANCE's volume (SPEC.md
+                                  ;          19.2.1), which is the only
+                                  ;          volume its writes can reach
+    RDPUB RDK_RS, menu_win_set, MENU_SET ; app menus (SPEC.md 12.2): the
+                                  ;          set's segment comes from the
+                                  ;          window, so no stub is needed
+    RDPUB RDK_RS, xm_alloc, XMEM_ALLOC ; answers its SPEC.md 20.3 contract
+    RDPUB RDK_RS, xm_free, XMEM_FREE ; exactly, so the slots call
+    RDPUB RDK_RS, osapi_wm_resize, WM_RESIZE ; resize a window (SPEC.md 11.1):
+                                  ;          BX = win, CX = w, DX = h; lock
+                                  ;          held or not (11.1.2). Retires the last liberty
+                                  ;          in docs/plans/completed/PAINT-NOTES.md - an app
+                                  ;          writing W_W/W_H itself
+    RDPUB RDK_RS, osapi_file_here, FILE_HERE ; where the file API's names
+                                  ;          resolve (SPEC.md 18.4/19.2)
+    RDPUB RDK_RS, osapi_file_goto, FILE_GOTO ; ...and how to put it back
+    RDPUB RDK_RS, wm_title_set, WM_TITLE ; retitle a window and redraw ONLY
+                                  ;          its caption (SPEC.md 11.92): BX =
+                                  ;          win, AX = the new string (0 = the
+                                  ;          bytes W_TITLE names changed in
+                                  ;          place). Not an X cell: the string
+                                  ;          is read through W_SEG, which is
+                                  ;          already the caller's segment
+    RDPUB RDK_RS, wm_top, WM_TOP ; out BX = the frontmost VISIBLE
+                                  ;          window, 0 if none. The one thing
+                                  ;          a package could not find out: it
+                                  ;          learns it HAS focus (W_ONCLICK)
+                                  ;          and never that it LOST it, so a
+                                  ;          real-time app had no way to pause
+                                  ;          when another window came forward
+                                  ;          (SPEC.md 44.8). Compare against
+                                  ;          your own window ptr; W_FLAGS bit1
+                                  ;          only says VISIBLE, which a wholly
+                                  ;          covered window still is
+    RDPUB RDK_RS, fsx_caps, FSX_CAPS ; fullscreen exclusive (SPEC.md
+                                  ;          53): AX = the FSXM bitmask the
+                                  ;          display of window BX (BX = 1..15:
+                                  ;          display BX-1) can set, DL = its kind.
+                                  ;          Any context - it is how an app
+                                  ;          greys its mode menu (SPEC.md 47)
+    RDPUB RDK_RS, clip_put, CLIP_PUT ; the system clipboard (SPEC.md
+                                  ;          55): ES:SI = text, CX = bytes
+                                  ;          (0 = empty it); out CF=1 refused.
+                                  ;          ES:SI and not the caller's DS
+                                  ;          because a document is usually a
+                                  ;          heap claim of its own, not the
+                                  ;          package's image
+    RDPUB RDK_RS, clip_get, CLIP_GET ; ES:DI = the caller's buffer, CX =
+                                  ;          its capacity; out CF=1 empty,
+                                  ;          else AX = the whole length and
+                                  ;          CX = the bytes copied
+    RDPUB RDK_RS, clip_size, CLIP_SIZE ; out CF=1 and AX=0 when empty,
+                                  ;          else AX = the length. What a
+                                  ;          paste asks BEFORE it makes room
+    RDPUB RDK_RS, ui_reboot_post, REBOOT ; AL = 0 flush the Control Panel's
+                                  ;         settings on the way out / non-0 do
+                                  ;         not go near a disk at all. No
+                                  ;         answer: POST a restart, which
+                                  ;         ui_task spends with no lock held
+                                  ;         (SPEC.md 20.10). The System menu's
+                                  ;         Restart, reachable from a callback
+                                  ;         - which cannot do it inline,
+                                  ;         because that path takes the gfx
+                                  ;         lock the caller is holding and
+                                  ;         waits on workers that need to be
+                                  ;         scheduled. AL non-0 is for a caller
+                                  ;         that has just asked the user to
+                                  ;         take the floppy OUT
+    RDPUB RDK_RS, osapi_file_goto_q, FILE_GOTO_Q ; DX = folder cluster, BL = volume.
+                                  ;         GOTO's quiet twin (SPEC.md 19.2.2):
+                                  ;         same volume = a word, another one =
+                                  ;         a quiet mount. For a caller about to
+                                  ;         read or write BY NAME rather than to
+                                  ;         list - which is every copy loop
+    RDPUB RDK_RS, toast_show, TOAST ; ES:SI = a NUL line, CX = ticks to
+                                  ;          live (0 = ~3s). Says it in the
+                                  ;          menu bar and takes it down on its
+                                  ;          own (SPEC.md 59). An EMPTY string
+                                  ;          retires whatever is up. ES:SI for
+                                  ;          clip_put's reason: the text is
+                                  ;          often not in the caller's image
+    RDPUB RDK_RS, wm_destroy, WM_DESTROY ; BX = a window of YOURS; the gfx lock
+                                  ;         is HELD - unlike OSAPI_WM_HIDE,
+                                  ;         which takes it itself. Frees the RECORD, where
+                                  ;         hide only takes the pixels down.
+                                  ;
+                                  ;         For the unowned species (SPEC.md
+                                  ;         38.1) - a driver's windows, and a
+                                  ;         package's second one - because
+                                  ;         those have no instance teardown to
+                                  ;         free the slot for them. Closing one
+                                  ;         is a hide, so the record survives
+                                  ;         holding a W_SEG, and an image that
+                                  ;         is then unloaded leaves that record
+                                  ;         naming memory the next claim takes
+                                  ;         (SPEC.md 52.11.3)
+    RDPUB RDK_RS, wm_band, WM_BAND ; BX = window, AL = edge (0 left,
+                                  ;          1 right, 2 top, 3 bottom), CX = the
+                                  ;          band's extent in pixels 0..255, 0
+                                  ;          retires that edge. One call per
+                                  ;          edge and all four may be named.
+                                  ;          "Cache THESE of my content and
+                                  ;          tell me about the rest" (SPEC.md
+                                  ;          11.96.11). CF = 0 taken, CF = 1
+                                  ;          refused - and an app MUST read it,
+                                  ;          because the reason to name a band
+                                  ;          is that a cache over the whole
+                                  ;          content is unaffordable, so a
+                                  ;          caller that promises WF_SAVEU
+                                  ;          anyway has promised the thing it
+                                  ;          was trying to avoid
+    RDPUB RDK_RS, fpg_stepb, FS_PROG ; AX = bytes moved SINCE YOUR LAST
+                                  ;          REPORT, and a DRVC_FILE driver's
+                                  ;          (SPEC.md 12.8.1/62.9.1): step
+                                  ;          SPEC.md 12.8's file-activity bar
+                                  ;          from inside FSV_READ/FSV_WRITE.
+                                  ;          The kernel armed it from
+                                  ;          FSV_STAT's size and is one far
+                                  ;          call deep and blind until the verb
+                                  ;          returns, so only you can move it.
+                                  ;          Unarmed it is a compare and a
+                                  ;          return, so call it
+                                  ;          unconditionally; it DRAWS, so the
+                                  ;          gfx lock must already be held -
+                                  ;          which it is, inside a file
+                                  ;          operation (SPEC.md 18)
+    RDPUB RDK_RS, wm_cursor, WM_CURSOR ; BX = window, AL = OSAPI_CUR_*.
+                                  ;          The picture the pointer wears over
+                                  ;          THIS window's content, and nowhere
+                                  ;          else (SPEC.md 7.2). Takes effect on
+                                  ;          the next UI pass rather than now:
+                                  ;          the pointer may not be over you,
+                                  ;          and only the kernel knows. Chrome -
+                                  ;          the title bar and its boxes - stays
+                                  ;          the arrow, because it is the
+                                  ;          kernel's to draw and to click
+    RDPUB RDK_RS, osapi_file_goto_qm, FILE_GOTO_QM ; DX = folder cluster, BL = volume:
+                                  ;          OSAPI_FILE_GOTO_Q's quiet stand
+                                  ;          AND THEN inst_vol_mark, so the
+                                  ;          calling instance now believes it
+                                  ;          lives there and the next file
+                                  ;          cell's inst_vol_enter does not
+                                  ;          undo the move (SPEC.md 74.1,
+                                  ;          19.2.2). Same answers as GOTO_Q
+                                  ;
+                                  ;          **THESE THREE WERE 0x0428/0x0430/
+                                  ;          0x0438 AND MOVED HERE IN A MERGE**,
+                                  ;          the same way api_drv_call moved
+                                  ;          above and for the same reason: both
+                                  ;          trees appended to one tail in one
+                                  ;          round, so main's wm_wake met this
+                                  ;          branch's OSAPI_DRV_DLG, wm_onwake
+                                  ;          met WM_ONDRAG and file_goto_qm met
+                                  ;          WM_TIMER. TWO OF THE THREE MERGED
+                                  ;          WITH NO CONFLICT MARKER AT ALL -
+                                  ;          different names, one address - and
+                                  ;          nothing would have said so until a
+                                  ;          package called one and got the
+                                  ;          other. Sort the %defines by address
+                                  ;          after every merge from main
+    RDPUB RDK_RS, wm_close_req, WM_CLOSE ; BX = a window of yours: close it
+                                  ;          (SPEC.md 75.2). DEFERRED to the
+                                  ;          next UI pass, because the caller
+                                  ;          is standing in the segment the
+                                  ;          close is about to free - so this
+                                  ;          RETURNS, and your window is gone a
+                                  ;          moment later. It does NOT ask your
+                                  ;          negotiator again: this is the
+                                  ;          answer to the question it asked
+    RDPUB RDK_RS, wm_prefer, WM_PREFER ; BX = window, SI = the offset IN
+                                  ;          THIS WINDOW'S OWN SEGMENT of a
+                                  ;          12-byte table: three (w, h) frame
+                                  ;          sizes in VID_VGA / VID_HERC /
+                                  ;          VID_CGA order, so the adapter kind
+                                  ;          indexes it. SI = 0 withdraws it, a
+                                  ;          (0,0) pair means "nothing to say
+                                  ;          about that adapter". Registers AND
+                                  ;          applies, FLAGS PRESERVED
+                                  ;          (SPEC.md 11.100.1)
+    RDPUB RDK_RS, wm_minsize, WM_MINSIZE ; BX = window, CX = minimum outer
+                                  ;          width, DX = minimum outer height;
+                                  ;          0/0 withdraws. The floor every
+                                  ;          path that REDUCES a size honours,
+                                  ;          itself capped at the display's own
+                                  ;          extent so it can never cost a
+                                  ;          window its title bar. Registers AND
+                                  ;          applies, FLAGS PRESERVED
+                                  ;          (SPEC.md 11.100.2)
+    RDPUB RDK_RS, wm_display, WM_DISPLAY ; BX = window; out AX = width, BX =
+                                  ;   height, CX = the first row the DOCK owns,
+                                  ;   SI = the first usable row, DL = kind, DH =
+                                  ;   bpp - OSAPI_VIDEO for the display THIS
+                                  ;   WINDOW is on (SPEC.md 39.16.4)
+    RDPUB RDK_RS, wm_ownseg, WM_OWNSEG ; AL = a window SLOT; out CF = 1 no
+                                  ;          live window there, else DX = the
+                                  ;          segment that owns it (KERNEL_SEG
+                                  ;          for a window the kernel made).
+                                  ;          SPEC.md 11.96.3.1: the only way to
+                                  ;          read back the slot a raise cache's
+                                  ;          owner tag carries. IT ASKED FOR
+                                  ;          0x04D8 AND SO DID gfx_spans, on
+                                  ;          another branch, in the same cycle
+                                  ;          - the collision CLAUDE.md asks to
+                                  ;          be checked by hand, caught by the
+                                  ;          merge and then by t_api_abi
+    RDPUB RDK_RS, inst_minimize, WM_MINIMIZE ; SEND MY OWN WINDOW TO THE DOCK
+                                  ;          (SPEC.md 29.6). BX = a window of
+                                  ;          yours, the gfx lock held - the
+                                  ;          minimize box's own environment,
+                                  ;          which is W_ONCLICK's. The tile
+                                  ;          inverts, the window hides, and a
+                                  ;          click on the tile brings it back.
+                                  ;          OSAPI_WM_HIDE IS NOT THIS and is
+                                  ;          a trap in its place: a plain hide
+                                  ;          leaves I_FLAGS bit0 clear, so the
+                                  ;          tile is drawn LIVE, dock_click
+                                  ;          takes its wm_front arm, and
+                                  ;          wm_front never sets the visible
+                                  ;          bit on an invisible window - a
+                                  ;          tile that does nothing and an
+                                  ;          instance with no way back.
+                                  ;          A FULLSCREEN window may call it:
+                                  ;          wm_hide drops the latch and
+                                  ;          restores the windowed geometry
+                                  ;          (SPEC.md 11.2), so the app must
+                                  ;          fix up its OWN idea of being
+                                  ;          fullscreen first, and neither zoom
+                                  ;          is drawn (SPEC.md 11.99.5).
+                                  ;          Preserves every register
+    RDPUB RDK_RS, osapi_vol_stat, VOL_STAT ; THE VOLUME YOU ARE STANDING ON,
+                                  ;          in four registers (SPEC.md
+                                  ;          18.4.6): out CF=0 with AX =
+                                  ;          sectors per cluster, BX = free
+                                  ;          clusters, CX = bytes per sector,
+                                  ;          DX = total clusters; CF=1 with
+                                  ;          AX = FERR_NODISK. DOS AH=36h's own
+                                  ;          shape, DOS.O88 being its one
+                                  ;          caller - it was a 12-byte record
+                                  ;          until the size pass found no
+                                  ;          caller read more than these four
+    RDPUB RDK_RS, osapi_ferr_text, FERR_TEXT ; AX = a FERR_*, out ES:SI = the
+                                  ;          kernel's own NUL text for it -
+                                  ;          the Disk window's status-line
+                                  ;          table, so a package toasts a
+                                  ;          refusal without carrying the
+                                  ;          words (SPEC.md 18.4.11). 0x0467
+                                  ;          was OSAPI_VOL_TAKE for one cycle
+                                  ;          and never shipped (52.1.1)
+    RDPUB RDK_RS, osapi_xmem_walk, XMEM_WALK ; ES:DI = CX records of 6 bytes ->
+                                  ;          AX = the extended pool's blocks
+                                  ;          written, each {KB offset, KB,
+                                  ;          owner, 0} (KERN-MEGA-PLAN 13.6).
+                                  ;          kern_mega in protected mode and
+                                  ;          kern_big with a store; CF=1, AX = 1
+                                  ;          with no pool
+; ...and the cells only some kernels answer with a body: every kernel holds
+; the index, a refusal entry where it has no body (SPEC.md 20.3.4), so one
+; package binary reaches the same entry on all four
+%ifdef KERN_MEGA
+    RDPUB RDK_RS, osapi_xmem_sel, XMEM_SEL ; DX:AX = an address inside an
+                                  ;          OSAPI_XMEM_ALLOC block you own, CX
+                                  ;          = bytes (0 = 64KB) -> AX = a DATA
+                                  ;          selector over exactly that window
+                                  ;          (KERN-MEGA-PLAN 12.2). kern_mega in
+                                  ;          protected mode only
+    RDPUB RDK_RS, osapi_mem_codesel, MEM_CODESEL ; DX = a claim's segment (or
+                                  ;          selector) -> AX = the selector to
+                                  ;          far call code in it: the segment
+                                  ;          itself in real mode, its LDT code
+                                  ;          alias on kern_mega. CF=1 = none
+    RDPUB RDK_RS, osapi_xmem_run, XMEM_RUN ; DX:AX = an OSAPI_XMEM_ALLOC block
+                                  ;          of yours -> DX = a run of DATA
+                                  ;          selectors (KERN-MEGA-PLAN 14.16)
+%else
+    RDREF RDK_RS, api_refuse, XMEM_SEL ; CF=1, AX = 1 off kern_mega
+    RDPUB RDK_RS, osapi_mem_codesel, MEM_CODESEL ; AX = DX, CF iff DX = 0
+    RDREF RDK_RS, api_refuse, XMEM_RUN ; CF=1, AX = 1 off kern_mega
+%endif
+%ifdef FPG_PARK
+    RDPUB RDK_RS, osapi_fs_op, FS_OP ; DX:CX = the bytes ONE operation
+                                  ;          of yours will move, every chunk
+                                  ;          and every lock hold of it; 0 =
+                                  ;          it is over. CF=1 refused (another
+                                  ;          package holds the widget, or it
+                                  ;          could not arm). SPEC.md 12.8.
+%else
+    RDPUB RDK_RS, osapi_fs_op, FS_OP ; refused here (kern_small): api_refuse,
+                                  ;          named for the kernel's KDOOR sites
+%endif
+; ---- RCS: DS = KERNEL, a .cold routine through api_far
+    RDPUB RDK_RCS, osapi_vol_kind_x, VOL_KIND ; AL = a volume index. CF=1 = there
+                                  ;          is no such volume; CF=0 with AL =
+                                  ;          VK_REMOVABLE / VK_FIXED and AH =
+                                  ;          VT_BIOS / VT_DRIVER (SPEC.md
+                                  ;          18.7.2). The MEDIUM and the
+                                  ;          TRANSPORT are two questions, and
+                                  ;          a package asking "is this a hard
+                                  ;          disk" wants the first.
+                                  ;          WAS readbig (SPEC.md 18.4.1),
+                                  ;          retired when dskw_read lost its
+                                  ;          64KB ceiling - SPEC.md 20.3.1's
+                                  ;          free list, and taking it cost the
+                                  ;          table nothing where an append
+                                  ;          would have been eight bytes
+    RDPUB RDK_RCS, osapi_sys_snapshot_x, SYS_SNAPSHOT ; the scheduler AND the instance
+                                  ;          table, in ONE cli window
+                                  ;          (SPEC.md 28.2). in ES:DI = a
+                                  ;          SYS_SNAPSHOT_SIZE buffer; out BX =
+                                  ;          INST_MAX, AX clobbered. ES:DI
+                                  ;          is the caller's own choice, so
+                                  ;          no X stub is involved. It is one
+                                  ;          call and not two because
+                                  ;          task_exit frees an instance
+                                  ;          record atomically with its task
+                                  ;          slot (SPEC.md 8): read in two
+                                  ;          windows, a slot can be gone from
+                                  ;          one half and live in the other,
+                                  ;          and the cycle diffs that CPU% is
+                                  ;          built from go quietly wrong
+    RDPUB RDK_RCS, mmf_osapi_claim_snapshot, CLAIM_SNAPSHOT ; the claim table (SPEC.md 50.5),
+                                  ;          all MEM_MAX records into ES:DI
+                                  ;          as CLS_RECSZ triples; every
+                                  ;          register kept. WHOLE-TABLE rather than
+                                  ;          per record, and it steps mem_tab
+                                  ;          itself: the memory map walks
+                                  ;          every record to draw it and
+                                  ;          hashes every record to decide
+                                  ;          whether to
+    RDPUB RDK_RCS, osapi_sys_kb_x, SYS_KB ; what the KERNEL occupies and what
+                                  ;          the heap holds, in KB, into ES:DI
+                                  ;          (SK_* below). Every term used to
+                                  ;          be an assembly-time constant of
+                                  ;          the kernel's own, which is
+                                  ;          exactly what a package cannot
+                                  ;          have: the kernel's footprint
+                                  ;          moves with every build
+    RDPUB RDK_RCS, osapi_arg_file_x, ARG_FILE ; the document this instance was
+                                  ;          launched to open (SPEC.md 54.5):
+                                  ;          out CF=1 none; CF=0 with SI = its
+                                  ;          NUL 8.3 name in KERNEL_SEG (read
+                                  ;          it through ES), DX = its directory
+                                  ;          cluster and BL = its volume, the
+                                  ;          pair OSAPI_FILE_GOTO takes.
+                                  ;          READ-AND-CLEAR: a second instance
+                                  ;          cannot inherit it
+    RDPUB RDK_RCS, osapi_dsk_cache_x, DSK_CACHE ; COMMAND THE READ-AHEAD CACHE'S
+                                  ;          WIDTH (SPEC.md 18.95.8), for a
+                                  ;          program about to take the arena.
+                                  ;          AL = 0 hold nothing / 1..7 hold
+                                  ;          at most that many 4.5KB chunks /
+                                  ;          DSK_RAH_AUTO (0xFF) no ceiling of
+                                  ;          mine. Out CF=0 with AX = the
+                                  ;          width held now, 0 = none; CF=1 =
+                                  ;          AL was neither.
+                                  ;          **A REUSED CELL** - this was
+                                  ;          OSAPI_GFX_LINIT, retired by
+                                  ;          5.12.7 with the rest of the walk,
+                                  ;          and 0x0580 went the same way this
+                                  ;          cycle. The table does not grow,
+                                  ;          and the SDK name that is gone was
+                                  ;          gone already: a retired cell
+                                  ;          answers CF=1 and every caller of
+                                  ;          one has to test CF, so there is
+                                  ;          no program that reaches this
+                                  ;          number and would notice
+    RDPUB RDK_RCS, dkf_dsk_batch_begin, BATCH_BEGIN ; no arguments, no answer. "The
+                                  ;         interface is frozen and the disk is
+                                  ;         the same disk" (SPEC.md 18.9.3), so
+                                  ;         a floppy may reuse its banked BPB
+                                  ;         instead of re-reading LBA 0 at every
+                                  ;         volume switch. Nests
+    RDPUB RDK_RCS, dsk_batch_end_x, BATCH_END ; ...and the other end. Optional: any
+                                  ;         gfx_unlock ends the batch anyway,
+                                  ;         which is what makes an unclosed one
+                                  ;         impossible rather than merely rare
+    RDPUB RDK_RCS, osapi_vol_at_x, VOL_AT ; DL = an int 13h drive number,
+                                  ;          BX:CX = a partition's 32-bit base
+                                  ;          LBA. out CF=0 and AL = the volume
+                                  ;          index already covering it, CF=1 =
+                                  ;          none is (SPEC.md 52.10.3). What a
+                                  ;          DRVC_DISK driver asks BEFORE
+                                  ;          osapi_vol_add, because on an
+                                  ;          installed machine the kernel has
+                                  ;          already adopted the partition it
+                                  ;          booted from and the driver cannot
+                                  ;          see that from its own table.
+                                  ;          Answers about BIOS-transport rows
+                                  ;          alone: a driver's own rows are
+                                  ;          the driver's to recognise
+    RDPUB RDK_RCS, mmf_osapi_mem_floor, MEM_FLOOR ; "COMPACT THE DISK CACHE, DO NOT
+                                  ;          DESTROY IT" (SPEC.md 50.6.6). AL =
+                                  ;          a purge level, and it is THIS
+                                  ;          TASK's floor from here on: every
+                                  ;          claim it makes sheds and drops only
+                                  ;          caches strictly BELOW it, and
+                                  ;          OSAPI_MEM_AVAIL answers net of the
+                                  ;          same rule. MEM_LVL_TOP lifts it,
+                                  ;          and so does the instance's own
+                                  ;          teardown. Preserves every register
+                                  ;          AND the flags, so it can sit
+                                  ;          between a claim and its `jnc`
+    RDPUB RDK_RCS, osapi_drv_classk_x, DRV_CLASSK ; WHAT ONE DRIVER CLASS HOLDS
+                                  ;          (SPEC.md 51.12). AL = a DRVC_*.
+                                  ;          Out CF=0 with AX = the KB its
+                                  ;          LOADED rows hold - bit 15 =
+                                  ;          DRVM_PLUS, "and a store the user
+                                  ;          sizes" - and CX = how many
+                                  ;          answered; CF=1 with AX=0 CX=0,
+                                  ;          nothing of that class is loaded.
+                                  ;          One walk answers both halves a
+                                  ;          caller needs: CF greys the
+                                  ;          checkbox and AX is the figure
+                                  ;          beside it (SPEC.md 47 rule 5).
+                                  ;          A SLOT - no caller segment is
+                                  ;          involved - and it took the
+                                  ;          RETIRED cell that stood here,
+                                  ;          OSAPI_FILE_MOVE's, so the table
+                                  ;          gains no byte and 20.3.1's free
+                                  ;          list is empty again
+    RDPUB RDK_RCS, osapi_clk_get_x, CLK_GET ; THE DATE AND TIME (SPEC.md
+                                  ;          37.96): out CX = year, DH:DL =
+                                  ;          month:day, BH:BL = hour:minute,
+                                  ;          AH = second, AL = bit 0 RTC
+                                  ;          found / bit 1 12-hour; the live
+                                  ;          fields under cli. Both kernels
+    RDPUB RDK_RCS, osapi_wm_desk_x, WM_DESK ; THE DESK LAYER (SPEC.md 11.103.9):
+                                  ;          AL = 0 QUERY, 1 MAKE BX = a hidden
+                                  ;          window, 2 DRAG (W2), 3 RELEASE
+                                  ;          the bar. CF = 1 refused, and every
+                                  ;          verb refuses on kern_small
+    RDPUB RDK_RCS, osapi_assoc_flush_x, ASSOC_FLUSH ; DL = a volume, AL = 0
+                                  ;          incremental / 1 full: bring its
+                                  ;          ASSOC.DAT up to date with the
+                                  ;          packages on it (SPEC.md 54.5,
+                                  ;          54.7.6). Out CF=0 = it describes
+                                  ;          them now; CF=1, AX = FERR_* = it
+                                  ;          could not. Synchronous; a worker
+                                  ;          may not. kern_small refuses
+    RDPUB RDK_RCS, osapi_drv_use_x, DRV_USE ; THE DRIVERS PAGE'S TICK, AS A
+                                  ;          DOOR (SPEC.md 117.3). AH = 0 UP
+                                  ;          (AL = a DRVC_*): load and attach
+                                  ;          that class's driver with
+                                  ;          CTRL.DRV's own cdl_load, record
+                                  ;          nothing; AH = 1 DONE: the panel
+                                  ;          close's notifier, unless a
+                                  ;          Control Panel is open; AH = 2
+                                  ;          CALL: OSAPI_DRV_CALL_AT asked as
+                                  ;          the MACHINE (51.2.3). kern_small
+                                  ;          refuses
+    RDPUB RDK_RCS, osapi_img_name, IMG_NAME ; AX = a driver's or module's image
+                                  ;          segment (BX = 0), or a pool
+                                  ;          block's KB offset above 1MB (BX =
+                                  ;          1, kern_mega) -> CF=0 and its 8.3
+                                  ;          file name at ES:DI, AL = 0 a
+                                  ;          driver / 1 a module (KERN-MEGA-
+                                  ;          PLAN 14.70.3). kern_small refuses
+    RDPUB RDK_RCS, osapi_arg_text_x, ARG_TEXT ; a link's parameter for the program
+                                  ;          it started (SPEC.md 26.10.7): out
+                                  ;          CF=1 none; CF=0 with DX:SI the NUL
+                                  ;          text, valid in the entry proc.
+                                  ;          kern_small refuses
+%ifdef OS88_FSCK
+    RDPUB RDK_RCS, osapi_vol_check, VOL_CHECK ; CHECK, REPAIR OR DEFRAGMENT the
+                                  ;          volume you stand on (SPEC.md
+                                  ;          118.14.2): AL = FSK_* verb, ES =
+                                  ;          FSCHECK.DRV's image as YOU loaded
+                                  ;          it, DX = your workspace claim
+%else
+    RDREF RDK_RCS, api_refusec, VOL_CHECK ; refused here (kern_small)
+%endif
+; ---- RX: ES = the caller's DS, a .text routine
+    RDPUB RDK_RX, wm_create, WM_CREATE ; X: so is the template
+    RDPUB RDK_RX, inst_pkg_spawn, TASK_SPAWN ; worker tasks (SPEC.md 20.6): X,
+                                  ;          the ownership fence needs to
+                                  ;          know which segment is calling
+    RDPUB RDK_RX, fsx_run, FSX_RUN ; the bracket (SPEC.md 53.1): AX =
+                                  ;          near entry, BX = own window, CX =
+                                  ;          flags. X - the ownership fence is
+                                  ;          inst_pkg_spawn's identity test on
+                                  ;          the caller's DS. Does NOT return
+                                  ;          until the app's proc does
+    RDPUB RDK_RX, inst_parksafe_set, MEM_PARKSAFE ; X: AL = 1 declare / 0 withdraw.
+                                  ;          out CF = 1 = you are not a live
+                                  ;          package instance.
+                                  ;          "THE KERNEL MAY PARK ME WHILE I
+                                  ;          AM BLOCKED IN IT" (SPEC.md
+                                  ;          66.5.4), which today means while
+                                  ;          a worker of yours is waiting on
+                                  ;          the gfx lock. Without it a worker
+                                  ;          parks only at OSAPI_TASK_ALIVE -
+                                  ;          and a worker that DRAWS is
+                                  ;          usually blocked on the lock
+                                  ;          exactly when a compaction wants
+                                  ;          it, so its claims never move.
+                                  ;          WHAT YOU ARE ASSERTING is that no
+                                  ;          register or stack slot of yours
+                                  ;          holds a pointer DERIVED from one
+                                  ;          of your movable claims across a
+                                  ;          call that can yield. Re-read your
+                                  ;          base after any such call and this
+                                  ;          is true by construction.
+                                  ;          The default is NOT declared, and
+                                  ;          forgetting costs a missed
+                                  ;          compaction and never memory
+    RDPUB RDK_RX, inst_restart_set, TASK_RESTARTABLE ; X: AX = a near offset in YOUR own
+                                  ;          image, 0 to withdraw. out CF = 1 =
+                                  ;          you are not a live package
+                                  ;          instance.
+                                  ;          "IF YOU HAVE TO MOVE MY REGION,
+                                  ;          THROW MY WORKER'S STACK AWAY AND
+                                  ;          RE-ENTER IT HERE" (SPEC.md
+                                  ;          66.6.2). The one way past 66.6.1's
+                                  ;          limit - a worker's stack carries
+                                  ;          its own segment at depths nothing
+                                  ;          can find, so the answer is not to
+                                  ;          find them but to arrange for the
+                                  ;          stack not to matter.
+                                  ;          IT IS A WINDOW, NOT A PROPERTY,
+                                  ;          and the asymmetry against
+                                  ;          OSAPI_MEM_PARKSAFE is the thing to
+                                  ;          weigh: parksafe declared wrongly
+                                  ;          costs a missed optimisation, this
+                                  ;          costs a lost loop iteration - and
+                                  ;          if the worker was holding
+                                  ;          something, correctness
+    RDPUB RDK_RX, api_file_path, FILE_PATH ; WHERE AM I STANDING? (SPEC.md
+                                  ;          19.2.4). ES:DI = your buffer,
+                                  ;          CX = its size; out CF=0 with a
+                                  ;          NUL `\DIR\DIR` in it and CX its
+                                  ;          length, else AX = FERR_*. X
+                                  ;          because the buffer is the
+                                  ;          CALLER's - and a slot at all
+                                  ;          because dsk_find drops the dot
+                                  ;          links, so no package can walk up
+    RDPUB RDK_RX, osapi_serial, SERIAL ; desktop serial lease (SPEC.md 115)
+; ---- RCX: ...and a .cold routine
+    RDPUB RDK_RCX, mmf_osapi_mem_free, MEM_FREE ; X, same fence as the spawn
+    RDPUB RDK_RCX, drv_task_x, DRV_TASK ; a DRIVER's worker task (SPEC.md
+                                  ;          51.7): AX = a near entry in its
+                                  ;          own segment, or 0 = "this IS the
+                                  ;          worker, and it is exiting". X,
+                                  ;          because the fence is an identity
+                                  ;          test on the caller's segment
+    RDPUB RDK_RCX, osapi_vol_add_x, VOL_ADD ; X: a DRVC_DISK driver registers
+                                  ;          one mounted volume (SPEC.md
+                                  ;          18.7/51.8). in AL = its own
+                                  ;          volume handle, CX = the volume's
+                                  ;          sector count, DX = a listing
+                                  ;          claim's segment (0 = the .lowbss
+                                  ;          floor and a 32-entry listing),
+                                  ;          SI = a NUL desktop label in the
+                                  ;          CALLER's segment (0 = derive
+                                  ;          'Disk X'). out CF=0 and AL = the
+                                  ;          volume index, CF=1 = no free row.
+                                  ;          The desktop zone and the drive
+                                  ;          letter both fall out of the index
+    RDPUB RDK_RCX, osapi_vol_del_x, VOL_DEL ; X: in AL = a volume index this
+                                  ;          driver registered. Drops the
+                                  ;          zone, and if that volume was the
+                                  ;          mounted one falls back to A: with
+                                  ;          the write gate shut. Cannot fail
+    RDPUB RDK_RCX, osapi_vol_mount_x, VOL_MOUNT ; X: in AL = a volume index; mount it
+                                  ;          and list it (SPEC.md 18.3), which
+                                  ;          is what a driver's Mount button
+                                  ;          does after osapi_vol_add. out
+                                  ;          CF=1 = it is not a readable
+                                  ;          FAT12/16 volume. UI-task context
+                                  ;          only, like every other file slot
+    RDPUB RDK_RCX, osapi_drv_cfg_x, DRV_CFG ; X: the driver's own settings blob
+                                  ;          inside SYSTEM.CFG (SPEC.md 51.9).
+                                  ;          in AL = 0 read / 1 write / 2 write
+                                  ;          and flush now, ES:SI = the driver's
+                                  ;          buffer, CX = bytes. out CF=1 = not
+                                  ;          a published driver, or a write past
+                                  ;          DRV_BLOB_SZ. The kernel carries the
+                                  ;          bytes and never reads them, so a
+                                  ;          never-written blob reads back as
+                                  ;          zeroes and the driver's own version
+                                  ;          byte is what recognises it
+    RDPUB RDK_RCX, osapi_assoc_set_x, ASSOC_SET ; X: claim an extension for a
+                                  ;          program (SPEC.md 54.5). ES:SI =
+                                  ;          3 extension bytes then 8 stem
+                                  ;          bytes, both space-padded; out
+                                  ;          CF=1 = the tables are full.
+                                  ;          Repoints an extension somebody
+                                  ;          else claimed - that is the ask,
+                                  ;          not an oversight - and marks it
+                                  ;          sticky so a header declaration
+                                  ;          cannot take it back
+    RDPUB RDK_RCX, osapi_fs_ent_x, FS_ENT ; X: a DRVC_FILE driver appends ONE
+                                  ;          entry to the listing being built
+                                  ;          (SPEC.md 62.9.1). ES:SI -> a
+                                  ;          DSK_DE_SIZE-byte staged SPEC.md
+                                  ;          19.1 entry in YOUR segment: name
+                                  ;          at 0 (NUL-terminated 8.3), type at
+                                  ;          16 (0 file / 1 package / 2 folder,
+                                  ;          never 3 - the parent link is the
+                                  ;          kernel's), YOUR OPAQUE HANDLE at
+                                  ;          18, size at 20. out CF=0 and AX =
+                                  ;          the index it landed at; CF=1 = the
+                                  ;          listing is full.
+                                  ;          LEGAL ONLY FROM INSIDE FSV_LIST -
+                                  ;          the kernel raises the gate around
+                                  ;          that call and lowers it after, and
+                                  ;          it still SORTS (19.4) and still
+                                  ;          synthesizes '..' (19.5), so do
+                                  ;          neither
+    RDPUB RDK_RCX, osapi_mem_movable_x, MEM_MOVABLE ; X: DX = a claim of yours, AX = a
+                                  ;          near proc in YOUR segment (0 pins
+                                  ;          it again). out CF = 1 = no such
+                                  ;          claim, or not yours.
+                                  ;          DECLARES THE CLAIM RELOCATABLE
+                                  ;          (SPEC.md 66.2): the heap compactor
+                                  ;          may then slide it down to close a
+                                  ;          hole, and calls your proc through
+                                  ;          your own dispatcher afterwards
+                                  ;          with BX = the old base segment and
+                                  ;          DX = the new one, the bytes having
+                                  ;          already moved. An ordinary near
+                                  ;          proc with a near `ret`, like
+                                  ;          W_PAINT.
+                                  ;          THE DEFAULT IS PINNED, so a claim
+                                  ;          nobody declares behaves exactly as
+                                  ;          every claim did before this
+                                  ;          existed - which is what lets a
+                                  ;          package adopt it one buffer at a
+                                  ;          time. Your proc must put right
+                                  ;          EVERY pointer you derived from the
+                                  ;          base, not just the word you keep
+                                  ;          it in, and must not claim, free or
+                                  ;          resize anything (SPEC.md 66.3)
+    RDPUB RDK_RCX, osapi_drv_dlg_x, DRV_DLG ; X: the Standard File dialog, for a
+                                  ;          DRIVER's Control Panel page
+                                  ;          (SPEC.md 51.10). AL = FDLG_OPEN /
+                                  ;          FDLG_SAVE, ES:SI = a default name
+                                  ;          or 0, DI = your own near
+                                  ;          completion proc. out CF=1 refused.
+                                  ;          fdlg_open fences on a live
+                                  ;          INSTANCE owning the window it is
+                                  ;          handed (SPEC.md 38.1) and a driver
+                                  ;          has neither, so this borrows the
+                                  ;          panel's - which is the window the
+                                  ;          page is drawn in anyway
+    RDPUB RDK_RCX, osapi_desk_item_x, DESK_ITEM ; X: put an ITEM on the
+                                  ;          desktop, or take one off
+                                  ;          (SPEC.md 26.9). in AL = 1 add /
+                                  ;          0 remove, ES:SI = a record in
+                                  ;          the caller's own segment: a
+                                  ;          DRIVER's is the 40-byte service
+                                  ;          record (26.7), a PACKAGE's a
+                                  ;          128-byte link (26.8.1), and each
+                                  ;          names the cell it would like.
+                                  ;          out CF=0 AL = the zone. It was
+                                  ;          OSAPI_DESK_SVC, a driver's door
+                                  ;          only. kern_small's body refuses
+                                  ;          (SPEC.md 20.8 rule 4: the cell
+                                  ;          is in both kernels)
+    RDPUB RDK_RCX, osapi_pkg_rehome_x, PKG_REHOME ; X: a LOADER hands its identity to
+                                  ;          one of its own parts (SPEC.md
+                                  ;          20.12.10). in DX = the segment the
+                                  ;          program's image starts at, CX =
+                                  ;          the paragraphs it keeps there.
+                                  ;          out CF=1 refused - not the entry
+                                  ;          proc of the launch in flight, a
+                                  ;          second call, or DX = 0.
+                                  ;          IT ONLY RECORDS: the loader is
+                                  ;          still running in the region this
+                                  ;          frees, so the work is ld_start's
+                                  ;          step 8a, one instruction after
+                                  ;          this returns
+    RDPUB RDK_RCX, drv_suspend_x, DRV_SUSPEND ; THE MACHINE, OUT OF MY WAY
+                                  ;          (SPEC.md 51.11): AL = 1 suspend
+                                  ;          the hardware drivers, ES:DI = a
+                                  ;          DQ_SIZE-record buffer or DI = 0,
+                                  ;          out CX = records written; AL = 0
+                                  ;          put them back; AL = 2 hand the
+                                  ;          WHOLE machine to kern_dos, ES:SI
+                                  ;          = a KDH_* record (96.40). X
+                                  ;          because the buffer and the record
+                                  ;          are the CALLER's. The bodies are
+                                  ;          HIBER.DRV's - the same sweep the
+                                  ;          hibernate detaches with - and the
+                                  ;          resident part is the thunk
+    RDPUB RDK_RCX, osapi_mem_compact_x, MEM_COMPACT ; X: MY OWN REGION IN THE PASS
+                                  ;          (SPEC.md 66.4.3): one door, the
+                                  ;          verb in AH. AH=0 THE WHAT-IF:
+                                  ;          OSAPI_MEM_AVAIL_LVL's answer (AL =
+                                  ;          the level, out AX/BX) planned as
+                                  ;          if YOUR OWN REGION moved too. A
+                                  ;          MEASUREMENT AND NOT A PROMISE:
+                                  ;          claiming it refuses, because you
+                                  ;          really are standing in your
+                                  ;          region. AH=1 THE POST: "compact
+                                  ;          everything you can, INCLUDING MY
+                                  ;          REGION, then wake me" - BX = a
+                                  ;          window of yours, AL = the shed
+                                  ;          rank the pass is to respect. Out
+                                  ;          CF=0 posted - return from your
+                                  ;          callback and claim in your wake
+                                  ;          handler, where plain OSAPI_MEM_AVAIL
+                                  ;          has become the what-if; CF=1 a
+                                  ;          post is already standing.
+                                  ;          OSAPI_PKG_REHOME's shape: it only
+                                  ;          RECORDS, because you are executing
+                                  ;          in the region it is going to move.
+                                  ;          X because the what-if excuses the
+                                  ;          caller's segment and the stub
+                                  ;          already puts it in ES. On
+                                  ;          kern_small the what-if IS the
+                                  ;          plain answer and the post refuses
+                                  ;          (SPEC.md 66.0)
+    RDPUB RDK_RCX, osapi_mem_hma_x, MEM_HMA ; X: A DRIVER'S BUFFER IN THE HMA
+                                  ;          (SPEC.md 2.10.8): AX = bytes ->
+                                  ;          DX = segment, AX = its first
+                                  ;          offset; AX = 0, DX = a block ->
+                                  ;          given back. kern_big with the HMA
+                                  ;          holding `.cold`; refuses elsewhere
+    RDPUB RDK_RCX, mmf_osapi_mem_huge, MEM_HUGE ; AX = KB -> DX = the claim's
+                                  ;          first segment or selector, CX =
+                                  ;          the step to its next 64KB (1000h
+                                  ;          conventional, 8 a run above 1MB on
+                                  ;          kern_mega, KERN-MEGA-PLAN 14.1)
+    RDPUB RDK_RCX, osapi_mem_subseg, MEM_SUBSEG ; AX = a PARAGRAPH offset into
+                                  ;          your own region, BL bit 0 = you
+                                  ;          will far-call it -> CF=0, DX = a
+                                  ;          DATA selector based there (its
+                                  ;          CODE twin DX - 8), freed with the
+                                  ;          region (KERN-MEGA-PLAN 14.44).
+                                  ;          CF=1, every register kept = use
+                                  ;          your segment + AX: every kernel
+                                  ;          but kern_mega, and kern_mega for
+                                  ;          a region below 1MB
+    RDPUB RDK_RCX, osapi_mem_p, MEM_P ; X: BL = a MEMP_* verb: the
+                                  ;          claim heap in PARAGRAPHS (SPEC.md
+                                  ;          50.3.7) - a claim either way up,
+                                  ;          a regrow and the free figures,
+                                  ;          each answering what was
+                                  ;          granted; MEMP_CONV a verb bit
+; ---- RN: the name at the caller's DS:SI staged first, a .cold file door
+    RDPUB RDK_RN, dwf_dskw_write, FILE_WRITE ; files (SPEC.md 18.4/20.3): N,
+    RDPUB RDK_RN, dwf_dskw_read, FILE_READ ; because ES:BX is the data buffer
+                                  ;          - and DX:CX its 32-bit count, so
+                                  ;          these two are the WHOLE read/write
+                                  ;          surface (SPEC.md 18.4.1). DX is
+                                  ;          an argument to both and an output
+                                  ;          of the read, and the N stub keeps
+                                  ;          its hands off it
+    RDPUB RDK_RN, dwf_dskw_delete, FILE_DELETE ; and the name still has to cross
+    RDPUB RDK_RN, dwf_dskw_read_at, FILE_READ_AT ; N: ...and the read half. DX:AX =
+                                  ;         the byte offset, CX = capacity;
+                                  ;         out DX:AX = bytes delivered, 0 at
+                                  ;         the end. Stateless, so a copy loop
+                                  ;         may write between two reads
+    RDPUB RDK_RN, dwf_dskw_mkdir, FILE_MKDIR ; N: SI = name. Create a folder in
+                                  ;         the current directory (SPEC.md
+                                  ;         18.5). The routine is the file
+                                  ;         manager's own - its three callers
+                                  ;         were all cold-segment, so it had
+                                  ;         never needed a .text thunk, which
+                                  ;         is the whole reason it looked
+                                  ;         unpublished
+    RDPUB RDK_RN, dwf_dskw_rmany, FILE_RMDIR ; N: SI = a NUL 8.3 name, AL = 0 an
+                                  ;         EMPTY folder only / non-zero the
+                                  ;         whole tree under it (SPEC.md 18.6).
+                                  ;         The AL survives the N stub because
+                                  ;         api_copyname banks AX
+    RDPUB RDK_RN, ldf_ld_pkg_start, PKG_START ; N: START THE PACKAGE CALLED NAME
+                                  ;         (SPEC.md 21.5). SI = a NUL 8.3
+                                  ;         name in YOUR segment, resolved in
+                                  ;         the folder you are standing in.
+                                  ;         DX:CX = the length of an image you
+                                  ;         are HOLDING at ES:DI, or ZERO
+                                  ;         meaning you hold none and the
+                                  ;         kernel is to READ THE FILE. Out
+                                  ;         CF=0 AL=0 running; CF=1 AL=LD_*.
+                                  ;         ONE DOOR: it was two for a cycle -
+                                  ;         this taking an image and 0x05A0 a
+                                  ;         name - which is the successor slot
+                                  ;         beside a no-consumer path that
+                                  ;         SPEC.md 20.8 rule 4 names as the
+                                  ;         worse spec. 0x05A0 is WITHDRAWN.
+                                  ;         N, and it is the N stub that makes
+                                  ;         the merge cheap: it stages the
+                                  ;         name AND hands the body the
+                                  ;         caller's ES and DI untouched, so
+                                  ;         one contract carries both forms.
+                                  ;         The PARTS refusal lives on the
+                                  ;         image arm, where it is true: with
+                                  ;         no file there is nothing for
+                                  ;         op_load to read a part out of
+    RDPUB RDK_RN, fcpf_fcp_door, FILE_COPY ; COPY OR MOVE ONE ENTRY, source
+                                  ;          folder to destination (SPEC.md
+                                  ;          22.24). SI = its 8.3 name, AL =
+                                  ;          the verb (OSAPI_FCP_COPY or
+                                  ;          OSAPI_FCP_MOVE), BL/DX the source
+                                  ;          drive and folder cluster, BH/CX
+                                  ;          the destination's - the pair
+                                  ;          OSAPI_FILE_HERE answers. Out CF=0
+                                  ;          AX=0, else AX = FERR_*. N, because
+                                  ;          the name is package data and the
+                                  ;          stage is what api_n does. It is
+                                  ;          the file manager's OWN engine
+                                  ;          entered where a Paste enters it:
+                                  ;          a move is a Cut - re-linked on
+                                  ;          one volume, copied and deleted
+                                  ;          where the re-link declines - and
+                                  ;          a copy streams through a buffer
+                                  ;          the engine claims and undoes a
+                                  ;          partial destination on failure
+    RDPUB RDK_RN, dwf_dskw_write_at, FILE_WRITE_AT ; N: SI = name, ES:BX = bytes, CX =
+    RDPUB RDK_RN, dwsf_dskw_write_seq, FILE_WRITE_SEQ ; N: A STREAMING APPEND (SPEC.md
+                                  ;          18.4.9): SI = name, DX:BX = the
+                                  ;          bytes, CX = the count (0 closes),
+                                  ;          ES:DI = the caller's 16-byte
+                                  ;          cursor, +3 bit 0 = HELD. APPEND
+                                  ;          without the lookup and the walk;
+                                  ;          HELD commits the FAT and the
+                                  ;          size once, at the close or when
+                                  ;          the UI unlocks. kern_big; the
+                                  ;          small door refuses
+%if rd_n > 128
+ %error "rd_tab: the door compares index x 2 in one byte, so 128 entries at most"
+%endif
+RD_N        equ rd_n            ; os88_door.lim's immediate (fsx_rupf puts it back)
+%assign rd_b1 rd_c0             ; each kind's first index
+%assign rd_b2 rd_b1 + rd_c1
+%assign rd_b3 rd_b2 + rd_c2
+%assign rd_b4 rd_b3 + rd_c3
+RD_B1       equ rd_b1           ; ...and as equates, for the decoders that
+RD_B2       equ rd_b2           ; read a kernel's map (tests/unit/t_api_abi.py,
+RD_B3       equ rd_b3           ; tools/os88cells.py): absolute index < RD_B1
+RD_B4       equ rd_b4           ; is RS, < RD_B2 RCS, < RD_B3 RX, < RD_B4 RCX,
+                                ; < RD_N RN
+
+os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP are the frame, the door banks DS and BX over the BP it pushes and each kind pops what it needs before a body that ends in `retf 2`
+    push bp                     ; the caller's BP, under the frame: every
+    mov bp, sp                  ; body's tail pops it
+    push ds
+    push bx
+    lds bx, [bp+2]              ; DS:BX = the index byte
+    inc word [bp+2]             ; ...and the return steps past it
+    mov bl, [bx]
+    add bl, rd_p                ; the published block starts at RD_P (KDOOR's
+    mov bh, 0                   ; private indices wrap round to below it)
+    push word [bp+6]            ; [bp+2] IP, [bp+4] CS, [bp+6] FLAGS: the
+                                ; caller's, which every kind POPS after its
+                                ; last compare (step 1 above) - IF as the
+                                ; caller had it, and the FLAGS a body that
+                                ; preserves them hands back (OSAPI_MENU_SET,
+                                ; OSAPI_WM_PREFER, ... SPEC.md 20.3)
+.lim:                         ; kern_mega's real-mode FSX bracket writes
+    cmp bl, rd_n                ; RD_P + RD_RK over this immediate
+    jae .ref                  ; (fsx_rdownf), SPEC.md 53.2.3
+.in:
+    add bx, bx
+%ifdef RARE_COUNTERS            ; `make RARECNT=1` (kernel size pass 19, V7):
+    add word [ss:bx+rd_clo], 1  ; one 32-bit count an index
+    adc word [ss:bx+rd_chi], 0
+%endif
+    mov bp, [cs:bx+rd_tab]      ; BP = the routine
+%if rd_c0
+ %if rd_n > rd_b1
+    cmp bl, rd_b1 * 2
+    jae .k1
+ %endif
+    popf
+    pop bx                      ; RS: the caller's DS is already where the
+    KDS                         ; body's `push ds` would put it
+    call bp
+%endif
+.tail:
+    pop ds
+    pop bp
+    retf 2
+.ref:
+%ifdef KERN_MEGA
+    popf
+    pop bx
+    pop ds
+    pop bp
+    mov ax, 1                   ; OSAPI_XREFUSE's answer
+    stc
+    retf 2
+%else
+    mov bl, RD_P + rdp_XMEM_SEL ; ...AS THE REFUSED CELL ITS INDEX IS ON
+    jmp short .in               ; EVERY KERNEL BUT kern_mega: api_refuse's
+                                ; RS entry answers OSAPI_XREFUSE's CF = 1,
+                                ; AX = 1, every other register and DS kept -
+                                ; the exit this spelled out a second time
+                                ; (kernel size pass 20, -7). Off the hot
+                                ; path: `jae` is still not taken there
+%if RD_P + rdp_XMEM_SEL >= rd_c0
+  %error "the door's .ref borrows XMEM_SEL's index, which must be an RS entry"
+%endif
+%endif
+.k1:
+%if rd_c1                       ; RCS: COLD_SEG:BP through api_far
+ %if rd_n > rd_b2
+    cmp bl, rd_b2 * 2
+    jae .k2
+ %endif
+    popf
+    pop bx
+    KDS
+    push cs
+    call api_far
+    jmp short .tail
+%endif
+.k2:
+%if rd_c2                       ; RX: ES = the caller's DS
+ %if rd_n > rd_b3
+    cmp bl, rd_b3 * 2
+    jae .k3
+ %endif
+    popf
+    pop bx
+    pop ds
+    push ds
+    push es
+    push ds
+    pop es
+    KDS
+    call bp
+.xtail:
+    pop es
+    pop ds
+    pop bp
+    retf 2
+%endif
+.k3:
+%if rd_c3                       ; RCX: ...and the routine .cold
+ %if rd_n > rd_b4
+    cmp bl, rd_b4 * 2
+    jae .k4
+ %endif
+    popf
+    pop bx
+    pop ds
+    push ds
+    push es
+    push ds
+    pop es
+    KDS
+    push cs
+    call api_far
+ %if rd_c2
+    jmp short .xtail
+ %else
+    pop es
+    pop ds
+    pop bp
+    retf 2
+ %endif
+%endif
+.k4:
+%if rd_c4                       ; RN: api_nb, the frame API_RN_DSOFF names -
+    popf                        ; the NCELL's body too (api_nc)
+    pop bx
+    pop ds
+    call api_nb
+    pop bp
+    retf 2
+%endif
+%ifdef RARE_COUNTERS
+section .lowbss
+rd_clo: resw 128                ; low and high words of each index's count,
+rd_chi: resw 128                ; read off LOW_SEG by the V7 reading
+section .text
+%endif
 
 ; --- COLD-SIDE TRAMPOLINES (SPEC.md 2.6.2) -----------------------------------
 ; A call out of `.cold` into `.text` is five bytes (`call KERNEL_SEG:x`) where
@@ -8213,7 +8223,9 @@ cw_wm_win_rect:         call wm_win_rect
 ; whose CALL count falls to 2 is paying for its trampoline and goes back to
 ; the plain far call (3 is a wash) - on that build alone, through the
 ; %define block above the includes. ct_cw_font_run's are mostly TAILS, which
-; a far call cannot replace for less, so it stays at 2.
+; a far call cannot replace for less, so it stays at 2 on kern_big; on
+; kern_small its one caller, fm_brun, makes the far call itself (kernel size
+; pass 20).
 section .cold
 osapi_vol_kind_x:               ; (see osapi_vol_kind's header above)
     push bx
@@ -8228,8 +8240,10 @@ ct_cw_gfx_unlock:   call KERNEL_SEG:cw_gfx_unlock
                     ret                     ; 11 / 8 sites
 ct_cw_gfx_lock:     call KERNEL_SEG:cw_gfx_lock
                     ret                     ; 12 / 8 sites
+%ifndef KERN_SMALL
 ct_cw_font_run:     call KERNEL_SEG:cw_font_run
-                    ret                     ; 2 / 3 sites
+                    ret                     ; 2 / - sites
+%endif
 ct_cw_wm_content:   call KERNEL_SEG:cw_wm_content
                     ret                     ; 3 / 3 sites
 ct_cw_mem_disp:     call KERNEL_SEG:cw_mem_disp
@@ -8242,17 +8256,14 @@ ct_font_width:      call KERNEL_SEG:font_width
                     ret                     ; 3 / 4 sites
 ct_fpg_begin:       call KERNEL_SEG:fpg_begin
                     ret                     ; 4 / 3 sites
-ct_cw_inst_win_owner: call KERNEL_SEG:cw_inst_win_owner
-                    ret                     ; 5 / 4 sites
 ct_cw_gfx_xor_fill: call KERNEL_SEG:cw_gfx_xor_fill
                     ret                     ; 3 / 3 sites
 %ifndef KERN_BIG                ; (kern_big: the far call itself - above)
 ct_cw_wm_clip_test: call KERNEL_SEG:cw_wm_clip_test
                     ret                     ; - / 3 sites
-%else                           ; (kern_small: the far call itself - above)
-ct_cw_snd_beep:     call KERNEL_SEG:cw_snd_beep
-                    ret                     ; 4 / - sites
-%endif
+%endif                          ; (ct_cw_snd_beep and ct_cw_inst_win_owner
+                                ; went in kernel size pass 19: a near call
+                                ; is the 3 bytes the rare door's site is)
 ct_fpg_end:         call KERNEL_SEG:fpg_end
                     ret                     ; 3 / 3 sites
 ; (ct_cw_task_yield went in kernel size pass 13: 3 / 2 sites, a wash on
@@ -8321,23 +8332,12 @@ gfx_blit1:            call COLD_SEG:gbz_gfx_blit1
 ; since kernel size pass 14, so their shims are kern_mega's alone; 0x033A's
 ; routine is more than a store and keeps its shim on both big builds.
 %ifdef KERN_BIG
-%ifdef KERN_MEGA
-wm_ondrag_c:          call wm_ondrag
-                  clc             ; CF = 0 is the ANSWER, not the caller's own
-                  ret             ; carry coming back: the bodies write no flag
-%endif
 wm_timer_c equ wm_timer         ; ...and the timer's states its CF = 0 itself
                                 ; (wm.inc; kernel size pass 18, -4)
-%ifdef KERN_MEGA
-wm_ontimer_c:         call wm_ontimer
-                  clc
-                  ret
-%endif
 %else
-wm_ondrag_c:                    ; THREE LABELS, ONE BODY - the cells are what
-wm_timer_c:                     ; cost, and a refusal has nothing to say about
-wm_ontimer_c:         stc       ; which of the three it is refusing
-                  ret
+wm_timer_c:           stc       ; kern_small has no timer (SPEC.md 13.9): the
+                  ret             ; one refusal left of three (kernel size
+                                ; pass 19: the two installers went with R14)
 %endif
 
 ; --- ...and the file modules': loader.inc, diskw.inc, files.inc (SPEC.md 2.6).
@@ -8481,7 +8481,7 @@ drv_suspend_x:    xor cx, cx    ; three verbs answer here. The suspend and the
                   cmc           ; nothing had to get out of the way - because
                   retf          ; a caller does not test CF for a condition
 section .text                   ; that is not an error
-                                ; (docs/plans/KERN-SMALL-CUT-PLAN.md 10); the
+                                ; (docs/plans/retired/KERN-SMALL-CUT-PLAN.md 10); the
                                 ; handoff REFUSES, the published meaning of a
                                 ; slot that cannot do what was asked (20.8) -
                                 ; dos_mem_whole greys the arm on the part
@@ -8755,6 +8755,9 @@ KBLD_DBG_SPAN equ ($ - kbld_dbg_span)
 ; =============================================================================
 kernel_text_end:
 KTEXT_SIZE equ kernel_text_end - $$
+%if KTEXT_SIZE + WM_KCLS_BIAS > 0x10000 ; every kernel window's class is
+  %error "a kernel class's W_CLASS is its offset from segment 0 (wm_hnd, SPEC.md 11.104.1): .text must end below 64KB of linear memory"
+%endif                          ; .text, and its W_CLASS a 16-bit linear offset
 
 ; ...AND THE ONE SPEC.md 15 SAYS IS "on spw_resident_end", WHICH HAD NO CODE.
 ; The label was defined in viddet.inc and referenced by nothing in the tree -
@@ -8977,7 +8980,8 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 ; binds kern_big again. A KNOB
 ; build has DSK_OVLPAD's 1,024 more here, and 2.5.3.3.1 is what spends it.
 %ifdef KERN_BIG
-%ifndef KERN_MEGA               ; (kern_mega reads it through CS instead)
+%ifndef MOU_P2KNK_CS            ; (kern_mega and the HB_EARLY kernels read it
+                                ; through CS instead: mouse.inc)
 %if (FAT_SEG - KERNEL_SEG) * 16 + OVL_SIZE > 0x10000
   %error "mou_p2knock (mouse.inc) reads its table through DS = KERNEL_SEG as MOU_P2KNK_DS, so the boot overlay must lie inside KERNEL_SEG's 64K (SPEC.md 9.9.8)"
 %endif
@@ -9072,6 +9076,7 @@ MODMAP_START equ MODSER_START + SER_IMAGE_SIZE
 
 %ifdef KERN_BIG
 section .modx
+    EXT_SCRATCH                 ; its scratch tail, LAST (extmod.inc)
 modx_end:
 MODX_SIZE equ modx_end - $$
 section .modwb
@@ -9099,6 +9104,7 @@ MODN_SIZE equ modn_end - $$
 %endif
 %ifdef DOCK_OPT
 section .modk
+    DOCK_SCRATCH                ; its scratch tail, LAST (dockmod.inc)
 modk_end:
 MODK_SIZE equ modk_end - $$
 %if MODK_SIZE > MOD_MAX_KB*1024
@@ -9106,10 +9112,29 @@ MODK_SIZE equ modk_end - $$
 %endif
 %endif
 
-%ifdef OS88_DRIVERS
+%ifdef MODC_KEEP                ; (kern_big's OS88_DRIVERS implies it)
 section .modcb
+; CTRL.DRV'S SCRATCH TAIL (SPEC.md 2.8.3), at the head of its bss: every byte
+; the core and the panel write in their own image that a later use could read
+; - the core's gesture state and the Floppy page's two bytes (cps_scr ..
+; cps_scre, which the core's own entry zeroes too, modc_e_sc, because a
+; core-only read stops short of this tail), then the shutdown question's.
+; MOD_H_SCR is the WHOLE bss, cpc_buf with it, so a kept copy of EITHER row
+; is zeroed back to the file's own at its drop
+cps_scr:
+%ifmacro SC_SCRATCH             ; (OS88_SHORTCUTS's: not on kern_small)
+    SC_SCRATCH
+%endif
+%ifmacro CPC_SCRATCH            ; (OS88_DRIVERS's: not on kern_small)
+    CPC_SCRATCH
+%endif
+cps_scre:
+    SD_SCRATCH
 modcb_end:
 MODC_BSS equ modcb_end - $$
+%endif
+%if sd_down - sd_arm != 1
+%error "shutdown: sd_arm and sd_down are cleared and set with one word store"
 %endif
 
 section .modc
@@ -9117,7 +9142,7 @@ section .modc
 mods_end:
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
-%ifdef OS88_DRIVERS
+%ifdef MODC_KEEP
 MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
     times MODC_BSS db 0         ; vfollows the core, so the image's length is
 %endif                          ; both halves and not this section's own $$.
@@ -9126,49 +9151,26 @@ MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
                                 ; (SPEC.md 2.8.7), though the read stops short
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
+%ifdef MODC_KEEP                ; ...and CTRL.DRV's MOD_H_SCR, on the disk:
+MODC_SCR equ MODC_BSS           ; its whole bss tail, for both rows
+%else
+MODC_SCR equ 0
+%endif
 MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
                                 ; ends of `.modu`, so there is no pad between
 
 section .modf
+%ifndef OS88_ASSOC
+modf_scr:   db 0                ; FORMAT.DRV's scratch tail where it has no
+%endif                          ; ascw (SPEC.md 2.8.3.4.1): one zero, so a
+                                ; dropped image is KEPT
 modf_end:
 MODF_SIZE equ modf_end - $$
 
-section .modl
-%ifdef KERN_MEGA
-; KSEG's near helpers for this image (the macro above): ES or DS = a selector
-; over the REAL paragraph in AX through scratch slot <slot>, mega_kaimf's
-; answer. Each row sets DI to its slot and joins its register's tail; DI and
-; FLAGS kept (mega_kaimf keeps FLAGS), AX clobbered - the site saves it
-%macro KSG_ROW 2
-ksg_%1_%2:
-    push di
-    mov di, %2
-    jmp short ksg_%1_MEGA_SEL_K5.go
-%endmacro
-    KSG_ROW es, MEGA_SEL_K0
-    KSG_ROW es, MEGA_SEL_K1
-    KSG_ROW es, MEGA_SEL_K3
-    KSG_ROW es, MEGA_SEL_K4
-ksg_es_MEGA_SEL_K5:
-    push di
-    mov di, MEGA_SEL_K5
-.go:
-    call COLD_SEG:mega_kaimf
-    mov es, ax
-    pop di
-    ret
-    KSG_ROW ds, MEGA_SEL_K0
-    KSG_ROW ds, MEGA_SEL_K1
-    KSG_ROW ds, MEGA_SEL_K4
-ksg_ds_MEGA_SEL_K5:
-    push di
-    mov di, MEGA_SEL_K5
-.go:
-    call COLD_SEG:mega_kaimf
-    mov ds, ax
-    pop di
-    ret
-%endif
+section .modl                   ; (kern_mega's KSEG helpers are compress.inc's,
+                                ; BELOW the scratch tail: a kept image's drop
+                                ; zeroes everything from cmz_ovl on, SPEC.md
+                                ; 2.8.3.3)
 modl_end:
 MODL_SIZE equ modl_end - $$
 
@@ -9603,12 +9605,22 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 %if 4 * (MENU_POPMAX*MENU_ITEM_H + 2) * (MENU_MAXW/8 + 2) > MENU_SAVE_KB*1024
 %error "menu save-under can overflow its claim - lower MENU_POPMAX/MENU_MAXW"
 %endif
-; 6. every base an int 13h transfer can land on is 512-byte aligned, or a
-;    single-sector read can still straddle a 64KB DMA boundary and fail with
-;    error 09h (see KIMG_PARA above). A segment is 512-aligned when it is a
-;    multiple of 32 paragraphs.
-%if (KERNEL_SEG % 32) || (FAT_SEG % 32) || (LOW_SEG % 32)
-%error "a disk-buffer segment is not 512-byte aligned - see KIMG_PARA"
+; 6. no int 13h transfer can straddle a 64KB DMA page, which fails with error
+;    09h (SPEC.md 2.1.1). A base known only at run time - KERNEL_SEG's boot
+;    reads, HEAP_SEG and every claim on it - is 512-byte aligned (a multiple
+;    of 32 paragraphs), the one way to rule it out for a sector at any
+;    address. The two FIXED windows, the FAT snapshot and dsk_secbuf, are
+;    proved directly instead: each lies inside one page (see KIMG_PARA above,
+;    kernel size pass 19). If the image ever grows far enough to push one
+;    across 0x10000, round FAT_SEG up to the page rather than the image to 512.
+%if KERNEL_SEG % 32
+%error "KERNEL_SEG is not 512-byte aligned - the boot reads land on it"
+%endif
+%if (FAT_SEG * 16) >> 16 != (FAT_SEG * 16 + FAT_PARA * 16 - 1) >> 16
+%error "the FAT window straddles a 64KB DMA page - see KIMG_PARA (SPEC.md 2.1.1)"
+%endif
+%if (LOW_SEG * 16) >> 16 != (LOW_SEG * 16 + DSK_WIN_BYTES - 1) >> 16
+%error "dsk_secbuf straddles a 64KB DMA page - see KIMG_PARA (SPEC.md 2.1.1)"
 %endif
 %if HEAP_SEG % 32
 %error "the heap base is not 512-byte aligned - see KIMG_PARA"

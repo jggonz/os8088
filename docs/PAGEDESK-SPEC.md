@@ -671,7 +671,7 @@ Save / Discard / Cancel (20.17.8).
 
 PageDesk runs no worker task. Every long operation (open, render, search,
 thumbnail, save, extract) is a **job**: a resumable state machine stepped by
-the primary's `OSAPI_WM_ONWAKE` handler, one bounded slice per wake, each
+the primary's wake handler (its class's `WC_ONWAKE`, SPEC.md 11.104), one bounded slice per wake, each
 slice re-posting `OSAPI_WM_WAKE` until done. Mouse and keyboard events
 interleave with the slices in the event queue, so Escape and clicks are seen
 between slices. File I/O is legal in every slice (UI task), and overlay and
@@ -2026,7 +2026,7 @@ save that needs more answers `PDE_LIMIT`. Extract (wave 2) sizes it from the
 page count: 4,096 objects = 36 KiB.
 
 *Flush policy.* The cluster is `os88_disk_cluster_sectors() * 512`. The output
-region is written to the temp file in WHOLE CLUSTERS only (OSAPI_FILE_APPEND's
+region is written to the temp file in WHOLE CLUSTERS only (an append's
 rule, SPEC.md 18.4.7); the tail below one cluster stays at the head of the
 region and moves down. The first flush creates the file (`OSAPI_FILE_WRITE`);
 later ones are `OSAPI_FILE_WRITE_SEQ` with `WSEQF_HELD`, so the FAT and the
@@ -2427,7 +2427,7 @@ says `Could not open <name>` and the `PDE_*` sentence).
 #### 20.6.4 Layouts and metrics
 
 The layout is a pure function of the content box (`pdu_layout`), recomputed on
-every `OSAPI_WM_ONRESIZE` and display change. Metrics (`pdu.h`): bar rows 16
+every resize (the class's `WC_ONRESIZE`, SPEC.md 11.98) and display change. Metrics (`pdu.h`): bar rows 16
 (FULL/MID) and 12 (COMPACT); status line 12 / 10; Pages sidebar 136, Notes
 panel 160; scroll bar 16; desk margin 8; the canvas's left edge and right
 edge + 1 are on the 8-pixel grid (the `gfx_scroll` contract); a panel folds
@@ -3136,7 +3136,7 @@ the other had.
 
 #### 20.10.5 Gestures, history and the idle ladder
 
-The kernel has a tracking edge (`OSAPI_WM_ONDRAG`, SPEC.md 13.8.2) but the C
+The kernel has a tracking edge (a class's `WC_ONDRAG`, SPEC.md 13.8.2) but the C
 SDK carries no callback for it (`crt0.asm` has no `CC_HAS_ONDRAG`; ASK, an SDK
 change outside nav's files), so a press that needs one arms the
 window's one-shot timer (`os88_wm_timer`, 1 tick) and POLLS `os88_mouse()` until
@@ -4050,8 +4050,9 @@ every engine call, make every frame static - was withdrawn for this one.
    `vid_rowtab`, `evq_push`'s ring; `os88api.inc`: SS = `LOW_SEG` is a
    requirement of every OSAPI call). Each module includes `pdkgate.inc`
    (one line, after its compiled C and before `cc/os88thunk.asm`), which
-   re-defines every slot a module calls from `KERNEL_SEG:0xNNNN` to a near
-   **slot** - `call pdk_up` / the original far call / `jmp pdk_dn` - so
+   re-defines every slot a module calls from `KERNEL_SEG:0xNNNN` (or a RARE
+   cell's door, `int 81h` and its index, SPEC.md 20.3.4) to a near
+   **slot** - `call pdk_up` / the original call / `jmp pdk_dn` - so
    `apps/cc/` is unchanged for everyone. `pdk_up` decides from SS:SP alone,
    with no register and no segment load: **SP below `PD_DSTK_BYTES`** (task
    0's stack is on top of `.lowbss`, so its SP is never below 2 KiB) **and
@@ -4064,10 +4065,11 @@ every engine call, make every frame static - was withdrawn for this one.
    the UI stack, so a re-entered module cannot overwrite it. A slot is
    assembled only when the C names a thunk that makes that call (the
    `CC_U_` gating `os88thunk.asm` uses), and **after the table `KERNEL_SEG`
-   is re-defined to an undefined symbol**, so a module calling a slot the
-   table does not list does not assemble. `tests/unit/t_pdkgate.py` holds
-   the BUILT modules to it: every `9A off 60 00` is in a slot, one `pdk_up`
-   and one `pdk_dn` per module.
+   is re-defined to an undefined symbol and the door's `OS88_RARE_CALL` to an
+   `%error`**, so a module calling a slot the table does not list does not
+   assemble, whichever spelling the cell has. `tests/unit/t_pdkgate.py` holds
+   the BUILT modules to it: every `9A off 60 00` and every `CD 81 index` is
+   in a slot, one `pdk_up` and one `pdk_dn` per module.
 5. **An overrun is loud.** A failed check sets `pdu_stkbad`, answers the verb
    CF = 1, AX = `PDE_STACK` (35), posts ONE wake, and from then on
    `pdu_mcall` refuses every verb `PDE_STACK` except the three that let go

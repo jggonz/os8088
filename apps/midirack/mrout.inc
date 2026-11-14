@@ -897,9 +897,10 @@ mrb_start:
     mov byte [mrb_grant], 0
     cmp word [mrb_seg], 0
     jne .have
-    mov ax, (MRB_RL + 16 + 1023) / 1024
+    mov ax, ((MRB_RL + 16 + 1023) / 1024) * 64
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
+    call OSAPI_MEM_P
     jc .have                        ; REFUSED: no external ring, [mrb_seg]
     mov [mrb_seg], dx               ; still 0 - the grant ring plays (.grant)
 .have:
@@ -1319,8 +1320,9 @@ mrk_start:
 .isr:
     cmp word [mrk_seg], 0
     jne .have
-    mov ax, (MRK_RL + 272 + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    mov ax, ((MRK_RL + 272 + 1023) / 1024) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov word [mr_msg], mr_s_spkmem
     jc .no
     mov [mrk_seg], dx

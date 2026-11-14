@@ -86,23 +86,12 @@ mods_ser_header:
     db MOD_VER, MOD_SER
     dw BUILD_NUM, MOD_STAMP
     dw mods_ser_end, SER_NENT
+    dw mods_ser_end - srl_base  ; MOD_H_SCR: its lease, the image's last
+                                ; bytes (2.8.3) - KEPT
     dw srl_api,srl_irq,srl_release
 
 ; DS=kernel; data owned by the image is always CS-relative. No ring lives
 ; in this module: the pinned caller's buffer holds all producer/consumer data.
-srl_base: dw 0
-srl_seg: dw 0
-srl_buf: dw 0
-srl_owner: db 0xff
-srl_lcr: db 0
-srl_ier: db 0
-srl_dll: db 0
-srl_dlm: db 0
-srl_mcr: db 0
-srl_div: db 12
-srl_pic: db 0
-srl_mask: db 0
-srl_seen: db 0                 ; [mou_seen] when the lease was taken
 SRL_O_SEG   equ srl_seg         ; three OFFSETS in the image, for code that
 SRL_O_BUF   equ srl_buf         ; holds the image's own DATA selector -
 SRL_O_MASK  equ srl_mask        ; fsx.inc's real-mode bracket (SPEC.md 53.2.3,
@@ -489,6 +478,8 @@ srl_release:
     push dx
     pushf
     cli
+    cmp word [cs:srl_base], 0   ; NO LEASE: nothing to close, and srl_owner
+    je .no                      ; is not one (it is read only under a lease)
     cmp al, 0xff
     je .close
     cmp al, [cs:srl_owner]
@@ -506,6 +497,24 @@ srl_release:
     pop ax
     stc
     retf
+; THE LEASE: the image's SCRATCH TAIL, its last bytes and zeros in the file,
+; so a KEPT image's drop zeroes it back to what a load brings in (SPEC.md
+; 2.8.3). srl_base = 0 is "no lease", and nothing else here is read without
+; it: srl_open writes every cell before it sets srl_base, srl_body and
+; srl_open test it first, and srl_release does now as well
+srl_base: dw 0
+srl_seg: dw 0
+srl_buf: dw 0
+srl_owner: db 0                ; read only while srl_base is non-zero
+srl_lcr: db 0
+srl_ier: db 0
+srl_dll: db 0
+srl_dlm: db 0
+srl_mcr: db 0
+srl_div: db 0                  ; srl_open's, before it is read (0 asked is 12)
+srl_pic: db 0
+srl_mask: db 0
+srl_seen: db 0                 ; [mou_seen] when the lease was taken
 mods_ser_end:
 SER_IMAGE_SIZE equ mods_ser_end - $$
 section .text

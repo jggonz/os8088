@@ -1093,8 +1093,8 @@ w16_wndfree:
     push bx
     call w16_lock
     mov bx, [w16_win]
-    xor al, al
-    call OSAPI_WM_OWNBG
+    mov ax, WFB_OWNBG * 256
+    call OSAPI_WM_FLAG
     call w16_unlock
     pop bx
     pop ax

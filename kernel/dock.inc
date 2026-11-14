@@ -17,8 +17,8 @@
 ; 30.4): a minimized one restores, an ACTIVE one minimizes, any other comes
 ; to the front.
 ;
-; dock_paint runs inside wm_paint_all right after desk_paint, under the
-; caller's gfx lock - windows paint over the dock exactly like they cover
+; dock_paint runs inside the damage pass right after the zones (wm_paint_dmg,
+; and wm_paint_all through it), under the caller's gfx lock - windows paint over the dock exactly like they cover
 ; the desktop icons (SPEC.md 26/30). dock_click is called by the UI task
 ; with no lock held, only after wm_hit declined the click, and takes the
 ; lock itself around wm calls.
@@ -249,7 +249,8 @@ dkb_geom:
     mov [dock_lc1], ax
     inc ax
     mov [dock_fc1], ax
-    add ax, 2
+    inc ax                      ; (two incs, a byte under `add ax, 2` in
+    inc ax                      ; each of the two images - kernel size pass 19)
     mov [dock_c0], ax
     mov word [dock_thk], DOCK_H
     %2 dock_band                ; (each image's own hop: no resident shim -
@@ -1229,7 +1230,8 @@ db_click:
 ;
 ; **The record's STATE does not survive the tracker; its address does.**
 ; menu_popup holds the button and yields (SPEC.md 12.4), so a package worker
-; can reach inst_task_die and free the very record this menu is about. The
+; can reach inst_task_die and leave the record this menu is about (it is
+; freed by the UI task's close pass since BR-4, after this menu). The
 ; pointer itself is a slot of the static inst_tab (inst_ptr is arithmetic
 ; and nothing else), held in DI, which menu_popup preserves - so what is
 ; re-tested afterwards is I_STATE = 1, before anything is done to it. (It

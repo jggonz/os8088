@@ -256,8 +256,24 @@ void os88_font_str_xparent(int x, int y, const char *s)
     }
 }
 
-void *os88_wm_create(int x, int y, int w, int h, const char *title)
+/* the trampolines a class names (SPEC.md 11.104) - addresses, never called
+ * here */
+void os88_t_paint(void) {}
+void os88_t_onkey(void) {}
+void os88_t_onclick(void) {}
+void os88_t_about(void) {}
+void os88_t_onwake(void) {}
+void os88_t_onclose(void) {}
+void os88_t_onmouseup(void) {}
+void os88_t_onresize(void) {}
+void os88_t_ontimer(void) {}
+void os88_t_onwheel(void) {}
+static struct os88_class *h_cls;        /* what os88_wm_create was handed */
+void os88_wm_flag(void *win, int bit, int on) { (void)win; (void)bit; (void)on; }
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls)
 {
+    h_cls = cls;
     win_x = x; win_y = y; win_w = w; win_h = h;
     cont_x = ((x + 1) + 7) & ~7;        /* snapped to a multiple of 8 */
     cont_y = y + 18;
@@ -271,18 +287,14 @@ int  os88_wm_geom(void *win, struct os88_size *s) { (void)win; s->w = cont_w; s-
 int  os88_wm_obscured(void *win) { (void)win; return obscured; }
 void os88_wm_title(void *win, const char *s)
 { (void)win; strncpy(last_title, s, sizeof(last_title) - 1); }
-void os88_wm_snap(void *win, int on) { (void)win; (void)on; }
 void os88_menu_set(void *win, struct os88_menuset *set) { (void)win; (void)set; }
-void os88_about_set(void *win) { (void)win; }
 
 /* The API the Word port added on top of what the demonstrator used. The
  * mouse, the tasks and the BIOS byte are stubbed to a machine where nothing
  * moves and nothing is pressed, which is what a keystroke harness wants: the
  * press-drag-release tracker returns immediately and the worker never runs. */
-void os88_wm_sizable(void *win, int on) { (void)win; (void)on; }
 void os88_wm_destroy(void *win) { (void)win; }
 void os88_wm_hide(void *win) { (void)win; }
-void os88_wm_onmouseup(void *win) { (void)win; }
 void os88_mouse(struct os88_mouse *m) { m->x = 0; m->y = 0; m->btn = 0; }
 void os88_task_yield(void) { }
 void os88_gfx_lock(void) { }
@@ -354,7 +366,6 @@ int os88_arg_file(char *name13, struct os88_place *p)
 { (void)name13; (void)p; return -1; }
 int os88_file_goto(struct os88_place *p) { (void)p; return 0; }
 int os88_file_goto_q_mark(unsigned clus, int vol) { (void)clus; (void)vol; return 0; }
-void os88_wm_onwake(void *win) { (void)win; }
 int os88_assoc_set(const char *e, const char *s) { (void)e; (void)s; return 0; }
 
 static char clipbuf[4096];
@@ -392,6 +403,7 @@ void cw_memmove(void *dst, const void *src, unsigned n) { memmove(dst, src, n); 
 static unsigned char farmem[9 * 1024];
 static int n_claims;
 unsigned os88_mem_claim(int kb) { n_claims++; return kb <= 9 ? 1 : 0; }
+unsigned os88_mem_claim_p(unsigned paras) { return os88_mem_claim((int)(paras >> 6)); }
 int os88_mem_movable(unsigned seg, int on) { (void)seg; (void)on; return 0; }
 void cw_farput(const void *src, unsigned seg, unsigned off, unsigned n)
 { (void)seg; memcpy(farmem + off, src, n); }

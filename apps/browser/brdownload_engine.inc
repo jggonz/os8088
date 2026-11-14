@@ -877,19 +877,8 @@ br_dl_openwin:
     call OSAPI_WM_CREATE
     jc .failed
     mov [br_dl_win], bx
-    mov ax, br_dl_onwake
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONWAKE
-    mov ax, br_dl_managerclose
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONCLOSE
-    mov ax, br_dl_timer
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONTIMER
-    mov ax, [br_dl_win]
-    mov bx, br_dl_btrec
-    mov si, br_dl_onup
-    mov di, br_dl_ondrag
+    mov ax, bx                      ; the handlers are br_dl_cls's (SPEC.md
+    mov bx, br_dl_btrec             ; 11.104); btninit only links the record
     mov dx, br_dl_onclick
     call far [br_dl_r_uibtninit]
     mov bx, [br_dl_win]
@@ -1338,7 +1327,8 @@ br_dlx_onwake:
     mov cx, [br_dl_fill]
     xor ax, ax
     call far [br_dl_r_pagepin]                 ; pinned for the call, as above
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
     call far [br_dl_r_pageunpin]
     jc .writefail
     jmp .wrote

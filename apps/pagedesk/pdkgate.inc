@@ -11,7 +11,8 @@
 ; the UI task's stack for the call and down again after it.
 ;
 ; HOW A CALL IS ROUTED HERE. Every slot named below is re-defined, for the
-; rest of the module's assembly, from `KERNEL_SEG:0xNNNN` to a near label
+; rest of the module's assembly, from `KERNEL_SEG:0xNNNN` (or a RARE cell's
+; door, SPEC.md 20.3.4) to a near label
 ; `pdk_k_<SLOT>`, so apps/cc/os88thunk.asm's `call OSAPI_<SLOT>` - and
 ; pdrprim.inc's own - land on a three-instruction slot here. NOTHING in
 ; apps/cc/ changes, for PageDesk or anyone else. A slot is assembled only
@@ -210,5 +211,14 @@ PDK_SLOT DECOMP,         _pdr_lzdec        ; pdrprim.inc: DS staged (20.22.14)
 PDK_SLOT SET_COLOR,      _pds_stub
 PDK_SLOT GFX_HLINE,      _pds_stub
 
-; ...and from here on, an unlisted slot does not assemble (see the header)
+; ...and from here on, an unlisted slot does not assemble (see the header).
+; Both spellings of a kernel call are closed: a table cell's far call names
+; KERNEL_SEG, and a RARE cell's door (`int OS88_RARE` + its index, SPEC.md
+; 20.3.4) names no segment at all, so os88api.inc's OS88_RARE_CALL - which
+; every rare `call OSAPI_X` expands through - is re-defined to refuse. The
+; slots above expanded theirs already
 %define KERNEL_SEG pdk_UNWRAPPED_KERNEL_CALL_add_its_slot_to_pdkgate_inc
+%unimacro OS88_RARE_CALL 1
+%imacro OS88_RARE_CALL 1
+  %error "a RARE kernel cell called outside its gate slot: add its slot to pdkgate.inc"
+%endmacro

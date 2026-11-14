@@ -245,8 +245,24 @@ int os88_font_width(const char *s) { return (int)strlen(s) * 8; }
 /* --- the window ------------------------------------------------------------ */
 static int h_win_tag = 0x4C454D;
 
-void *os88_wm_create(int x, int y, int w, int h, const char *title)
+/* the trampolines a class names (SPEC.md 11.104) - addresses, never called
+ * here */
+void os88_t_paint(void) {}
+void os88_t_onkey(void) {}
+void os88_t_onclick(void) {}
+void os88_t_about(void) {}
+void os88_t_onwake(void) {}
+void os88_t_onclose(void) {}
+void os88_t_onmouseup(void) {}
+void os88_t_onresize(void) {}
+void os88_t_ontimer(void) {}
+void os88_t_onwheel(void) {}
+static struct os88_class *h_cls;        /* what os88_wm_create was handed */
+void os88_wm_flag(void *win, int bit, int on) { (void)win; (void)bit; (void)on; }
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls)
 {
+    h_cls = cls;
     (void)x; (void)y; (void)w; (void)h; (void)title;
     return &h_win_tag;
 }
@@ -264,10 +280,6 @@ int os88_wm_geom(void *win, struct os88_size *s)
     return 0;
 }
 void os88_wm_minsize(void *w, int a, int b) { (void)w; (void)a; (void)b; }
-void os88_wm_sizable(void *w, int on) { (void)w; (void)on; }
-void os88_wm_snap(void *w, int on) { (void)w; (void)on; }
-void os88_wm_onresize(void *w) { (void)w; }
-void os88_wm_onwake(void *w) { (void)w; }
 
 /* THE KICK IS COUNTED, because two of this program's errands are DEFERRED to
  * os88_onwake() - the rating file and the progress write - and a deferral that
@@ -290,7 +302,6 @@ static int h_timer;                     /* ticks armed, 0 = disarmed */
 static int h_timer_arms;
 static int h_clips;
 
-void os88_wm_ontimer(void *w) { (void)w; }
 
 int os88_wm_timer(void *w, int ticks)
 {
@@ -309,7 +320,6 @@ int os88_wm_clip_set(void *w)
     return 0;
 }
 void os88_menu_set(void *w, struct os88_menuset *s) { (void)w; (void)s; }
-void os88_about_set(void *w) { (void)w; }
 
 static const char **h_about;
 void os88_about_card(void *w, const char **lines) { (void)w; h_about = lines; }
@@ -677,6 +687,13 @@ int os88_file_find(int ordinal, struct os88_find *f)
     } else
         return -1;
     return 1;                           /* a next ordinal; -1 ends the walk */
+}
+
+/* SPEC.md 19.7.1.1: the token walk. In this model the token IS the ordinal,
+ * which is exactly kern_small's answer - same loop, same entries */
+int os88_file_find_seq(int token, struct os88_find *f)
+{
+    return os88_file_find(token, f);
 }
 
 void os88_file_here(struct os88_place *p) { p->clus = 0; p->vol = 1; }

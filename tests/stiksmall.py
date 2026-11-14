@@ -61,7 +61,10 @@ import os88stik    # noqa: E402
 MACHINE = "os8088_5150_cga_128k"
 TITLE = "Desk Calendar"
 TODAY = (2026, 10, 14)
-TONE_CELL = 0x0060 * 16 + 0x00D3        # OSAPI_SND_TONE (os88api.inc)
+TONE_CELL = 0x0060 * 16 + int(__import__("re").search(   # OSAPI_SND_TONE,
+    r"^%define\s+OSAPI_SND_TONE\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)",   # off the SDK
+    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps",
+                      "os88api.inc")).read(), __import__("re").M).group(1), 16)
 D = os88stik
 STIK_ST = D.stik_st_off(D.DESKCAL_STIK_BSS, D.DESKCAL_PAYLEN)
 HDR = D.stik_hdr_off(D.DESKCAL_STIK_BSS)

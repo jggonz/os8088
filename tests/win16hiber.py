@@ -119,11 +119,9 @@ def main():
         check(ok, "both files are on the disk after power-off", got=have)
         with H.boot(False) as m:
             mo = Mouse(marty=m)
-            M.until(m, lambda mm: H.byte(mm, "hb_mode") == H.HB_M_RESUME,
-                    "the fresh boot to ask the question", poll=0.05, limit=240)
-            H.quiet(m)
-            H.answer(m, mo, "[hb_resumes] to reach 1",
-                     lambda mm: H.word(mm, "hb_resumes") == 1)
+            # NO QUESTION (SPEC.md 87.5): the boot resumes by itself
+            M.until(m, lambda mm: H.word(mm, "hb_resumes") == 1,
+                    "[hb_resumes] to reach 1", poll=0.05, guest=240)
             H.quiet(m)
             seg2, st2 = win16(m, S)
             check(seg2 == seg, "WIN16 came back where it was", got=seg2, want=seg)
