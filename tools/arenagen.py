@@ -36,6 +36,7 @@ descriptor (WIREARENA-PARTS-PLAN 7.5, HEIGHTS-PLAN 7.2.1).
     python3 tools/arenagen.py --arena N build/waaN.asm   (arena N as a part)
 """
 import math
+import os
 import re
 import struct
 import sys
@@ -618,11 +619,198 @@ def pvs_build(tag, boxes):
             col.append(vis)
             cut += bin(full & ~vis).count("1")
         out.append(col)
+    low = 0                             # (what the LOW boxes hide as well -
+    if os.environ.get("WA_PVSLOW", "1") != "0":   # WA_PVSLOW=0: the A/B, the
+        low = pvs_low(boxes, out, occ)            # tall boxes' test alone)
+    cut += low
     share = cut / float(len(boxes) * len(out) * len(out[0]))
-    sys.stderr.write("arenagen: arena %s: the PVS culls %.1f%% of box-cells%s\n"
-                     % (tag, 100 * share, "" if share >= PVS_MIN else
+    sys.stderr.write("arenagen: arena %s: the PVS culls %.1f%% of box-cells "
+                     "(%.1f%% behind low boxes)%s\n"
+                     % (tag, 100 * share, 100.0 * low /
+                        (len(boxes) * len(out) * len(out[0])),
+                        "" if share >= PVS_MIN else
                         " - under %d%%, none carried" % (100 * PVS_MIN)))
     return out if share >= PVS_MIN else None
+
+
+# ...AND WHAT THE LOW BOXES HIDE (docs/plans/MULTIPLAYER-FPS-PLAN.md 16.10: the
+# owner, "data in the map that tells us ahead of time what you can't see").
+# The tall boxes' test above is flat: a box below the arena's tallest hides
+# nothing in it, because an eye can see over it. But how MUCH it can see over
+# depends on how high the eye is, and that is known per cell: the boxes are a
+# HEIGHTFIELD, and over a heightfield a higher eye sees everything a lower one
+# does - the sight line to any point only rises. So from a cell, at the
+# HIGHEST eye a player can have there (pvs_eyes), a box that no sight line
+# reaches is drawn from nowhere in the cell: the ramp behind the platform,
+# from the floor, cost ~10,700 clk a frame of view A to draw nothing.
+# Along one ray from the eye a box's top spans [tin, tout]; its best chance
+# is the end of that with the steeper sight line (a level top's far end from
+# above, its near end from below; a ramp's either), and it is hidden when a
+# nearer box's top stands at least as steep - its near end from below, its
+# far end from above. Rays are cast from pvs_points' points across the box's
+# whole angle, no more than PVS_LSTEP units apart at the box.
+# This is the geometry's answer with no margin, where the tall test is
+# conservative against the renderer's rounding: a box the low test drops is
+# HIDDEN, or touches what hides it (a ramp's top edge along the platform's),
+# so the most the picture can lose is a cell the rounding had let through.
+# A lift hides at its REST height and is looked for at its raised one; the
+# room's walls hide nothing. Only boxes BELOW the tallest are looked for
+# here - a tall box is the flat test's alone, margins and all - and a tall
+# box in the way hides with those same margins.
+PVS_LSTEP = 6.0                 # rays across a box: this far apart at it
+PVS_LMAX = 64                   # ...and no more than this many
+PVS_LPTS = 2                    # every this-many'th of pvs_points' points
+
+
+def pvs_top(b, x, y, raised):
+    """Box b's top over (x, y): a ramp's slope there (arenagen's height_at
+    without its square), a lift's raised height or its rest one"""
+    if b.kind == FLIGHT:
+        x0, y0, x1, y1 = b
+        f = {"N": (y - y0) / float(y1 - y0), "S": (y1 - y) / float(y1 - y0),
+             "E": (x - x0) / float(x1 - x0), "W": (x1 - x) / float(x1 - x0)}[b.toward]
+        return b.h * min(1.0, max(0.0, f))
+    if b.kind == LIFT and raised:
+        return max(b.h, b.top or 0)
+    return b.h
+
+
+def pvs_eyes(boxes, n):
+    """-> [ix][iy], the highest eye a player can have in each cell: the eye
+    over the highest floor a square of the player's radius can stand on in
+    the cell, a jump more - or what is left of a jump off a higher floor k
+    cells away, by the time its fall has covered the k - 1 cells between
+    (the game's own gravity and jump, off waconst.inc; a step along one axis
+    is at most the move's speed x sqrt 2)"""
+    src = open(__file__.replace("tools/arenagen.py", "apps/wirearena/waconst.inc")
+               if __file__.endswith("tools/arenagen.py") else
+               "apps/wirearena/waconst.inc").read()
+    k = lambda name: int(re.search(name + r"\s+equ\s+(\d+)", src).group(1))
+    eye, rad = k("WA_EYE"), k("WA_RAD")
+    v, g = k("WA_JUMPV") / 256.0, k("WA_GRAV") / 256.0
+    speed = k("WA_MSPD") / 8.0 * math.sqrt(2)   # (Q13 x WA_MSPD: units a tick)
+    cell = 1 << PVS_SHIFT
+    top = hmax(boxes)
+    floor = [[0] * n for _ in range(n)]
+    for b in boxes:
+        if b.h >= top and b.kind != LIFT:
+            continue
+        h = max(b.h, b.top or 0)
+        for ix in range(max(0, (b[0] - rad) // cell), min(n - 1, (b[2] + rad) // cell) + 1):
+            for iy in range(max(0, (b[1] - rad) // cell), min(n - 1, (b[3] + rad) // cell) + 1):
+                floor[ix][iy] = max(floor[ix][iy], h)
+    apex = jump_apex()
+
+    def rise(kc):
+        t = max(0, kc - 1) * cell / speed       # ticks to cover the cells between
+        return apex if t <= v / g else v * t - g * t * t / 2
+    out = [[0] * n for _ in range(n)]
+    for ix in range(n):
+        for iy in range(n):
+            out[ix][iy] = max(floor[jx][jy] + eye + rise(max(abs(ix - jx), abs(iy - jy)))
+                              for jx in range(n) for jy in range(n))
+    return out
+
+
+def pvs_span(px, py, ux, uy, b):
+    """The ray's (t in, t out) through box b's footprint, or None"""
+    t0, t1 = -1e18, 1e18
+    for o, u, lo, hi in ((px, ux, b[0], b[2]), (py, uy, b[1], b[3])):
+        if abs(u) < 1e-12:
+            if not lo <= o <= hi:
+                return None
+            continue
+        ta, tb = (lo - o) / u, (hi - o) / u
+        if ta > tb:
+            ta, tb = tb, ta
+        if ta > t0:
+            t0 = ta
+        if tb < t1:
+            t1 = tb
+    return (t0, t1) if t0 <= t1 and t1 > 0 else None
+
+
+def pvs_lowseen(p, e, i, boxes, top):
+    """A sight line from p, the eye e high, reaches box i over the others. A
+    TALL box in the way hides only inside its angle NARROWED as the flat test
+    narrows it (PVS_EPS, PVS_EPSD: the renderer's columns round), so nothing
+    is dropped here for a sliver the flat test would have kept"""
+    px, py = p
+    B = boxes[i]
+    if B[0] - 1 <= px <= B[2] + 1 and B[1] - 1 <= py <= B[3] + 1:
+        return True                     # (on it, or against it)
+    cd = math.atan2((B[1] + B[3]) / 2.0 - py, (B[0] + B[2]) / 2.0 - px)
+    ts = [(math.atan2(y - py, x - px) - cd + math.pi) % (2 * math.pi) - math.pi
+          for (x, y) in ((B[0], B[1]), (B[2], B[1]), (B[2], B[3]), (B[0], B[3]))]
+    lo, hi = min(ts) + 1e-7, max(ts) - 1e-7
+    far = max(math.hypot(x - px, y - py)
+              for (x, y) in ((B[0], B[1]), (B[2], B[1]), (B[2], B[3]), (B[0], B[3])))
+    n = int(min(PVS_LMAX, max(2, math.ceil((hi - lo) * far / PVS_LSTEP))))
+    occ = []
+    for j, o in enumerate(boxes):
+        if j == i or not pvs_front(p, o, B):
+            continue
+        if o.h < top:
+            occ.append((o, None))
+            continue
+        oi = pvs_interval(p, o, cd)
+        if oi is not None:
+            f = PVS_EPS + PVS_EPSD / max(oi[2], 1.0)
+            if oi[0] + f < oi[1] - f:
+                occ.append((o, (oi[0] + f, oi[1] - f)))
+    for kk in range(n + 1):
+        ar = lo + (hi - lo) * kk / n
+        a = cd + ar
+        ux, uy = math.cos(a), math.sin(a)
+        sp = pvs_span(px, py, ux, uy, B)
+        if sp is None:
+            continue
+        best = -1e18                    # the box's steepest sight line
+        for t in sp:
+            if t > 1e-6:
+                best = max(best, (pvs_top(B, px + ux * t, py + uy * t, True) - e) / t)
+        hid = False
+        for o, within in occ:
+            if within is not None and not any(
+                    within[0] < ar + w < within[1]
+                    for w in (-2 * math.pi, 0, 2 * math.pi)):
+                continue
+            so = pvs_span(px, py, ux, uy, o)
+            if so is None or so[0] >= sp[0] - 1e-6 and so[0] > 1e-6:
+                continue                # (missed, or behind the box)
+            for t in so:
+                if t <= 1e-6:
+                    continue            # (under the eye: its far end only)
+                if (pvs_top(o, px + ux * t, py + uy * t, False) - e) / t >= best - 1e-9:
+                    hid = True
+                    break
+            if hid:
+                break
+        if not hid:
+            return True
+    return False
+
+
+def pvs_low(boxes, masks, occ):
+    """Take out of masks every box the low test hides from the whole of its
+    cell; -> how many box-cells it took"""
+    g = 1 << PVS_SHIFT
+    eyes = pvs_eyes(boxes, len(masks))
+    top = hmax(boxes)
+    cut = 0
+    for ix, col in enumerate(masks):
+        for iy, vis in enumerate(col):
+            pts = pvs_points(ix * g, iy * g, ix * g + g, iy * g + g, occ)
+            pts = pts[::PVS_LPTS] + pts[-1:]
+            for i in range(len(boxes)):
+                if boxes[i].h >= top:
+                    continue            # (a tall box: the flat test's alone)
+                if vis >> i & 1 and not any(pvs_lowseen(p, eyes[ix][iy], i, boxes, top)
+                                            for p in pts):
+                    vis &= ~(1 << i)
+                    cut += 1
+            col[iy] = vis
+    return cut
 
 
 def pvs_points(x0, y0, x1, y1, occ):
@@ -1379,7 +1567,9 @@ def arena_part(n, out):
     gb = graph_block(tag, boxes)
     L += ["    dw %s, %d                ; its route graph: offset, bytes "
           "(AI-PLAN 3.1)" % (P + "graph", len(gb))]
-    pv = wamodel.A.pvs_masks(tag, boxes)    # (the budget's walk made them)
+    pv = wamodel.A.pvs_masks(tag, boxes)    # (the budget's walk made them -
+    _PVS[tag] = pv                          # in wamodel's copy of this module:
+                                            # ours takes them, not makes them)
     L += ["    dw %s                    ; its PVS (0: none): grid shift, cells "
           "a column, masks" % (P + "pvs" if pv else "0")]
     pk = pickups(tag, boxes)

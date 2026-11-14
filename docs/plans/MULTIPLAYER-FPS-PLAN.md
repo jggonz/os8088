@@ -1464,26 +1464,95 @@ step cached by angle.
 - **FARTOP stays at Very Low alone** (the owner, 2026-11-14): it removes
   perspective, notably half of a ramp seen from the side — "most speed,
   least recognizable geometry". Not to be proposed for Medium again.
-- Open, each measured or estimated by the agent that raised it:
-  1. **Far figures as markers sooner** (below fv8 12, now 9): P 40
-     20.4 → 21.2 fps on the figures branch alone. A dead body at that range
-     stands up as a bar.
-  2. **J (five straight limbs) for larger figures** (below fv8 20 or 24,
-     now 16): about +0.2 fps. The owner rejected "below 20" once.
-  3. **A wider COARSE** (edges moving under 1.5 or 2 half-rows drawn
-     level): +0.7 to +1.7% on the flat arena; long shallow wall lines lose
-     their single step.
-  4. **Roaming bots look every 16th tick, not every 8th:** up to about 350
-     clk a tick; a far bot notices up to 0.27 s later.
-  5. **The link's cable read skipped on the frame after an empty one:**
-     about 1,400 clk a frame linked, for up to a frame of latency.
-  6. **The meter's R and P sampled one frame in four:** about 620 clk a
-     frame.
-  7. **A floor-eye PVS in which low boxes occlude** (arenagen): the ramp
-     behind the platform at view A draws nothing and costs about 10.7k clk a
-     frame.
+- The rest of the list, and what the owner made of each, is 16.10.
 
 **Where a frame goes now** (P bench, 40 columns, 169,124 clk): the level
 spans' loop 16%, `wa_face` 12%, present 11%, the frame's fixed setup 7.5%,
 figures about 18%, vertices 6%, products 3.6%, the game about 6%. On
 heights view A (304,478 clk) the low boxes are still about a third.
+
+### 16.10 The owner's rulings on pass 6's open list, and what was built (2026-11-14)
+
+| 16.9 raised | the owner | so |
+|---|---|---|
+| far figures as markers sooner; five-limb figures at closer range | "We tried a variant of these earlier and they didn't work very well" | **declined**; not to be raised again |
+| a wider COARSE (edges moving under 1.5 or 2 half-rows drawn level) | "Lets put it on low and very low" | **built**: `LK_COARSE2` |
+| roaming bots look every 16th tick, not every 8th | "This seems good" | **built** |
+| the link's cable read skipped on the frame after an empty one | "I'd need to test this, keep it on the list, but not yet" | **open**, not built |
+| the meter's R and P sampled one frame in four | "Lets put the entire fps/render line on a key, F10; nothing shown or sampled by default" | **built**: the meter is off until asked for |
+| a floor-eye PVS in which low boxes occlude | "data in the map that tells us ahead of time what you can't see? That is a great optimization" | **built**: the PVS's low pass |
+| FARTOP at Medium | no: "most speed, least recognizable geometry" | stays at **Very Low alone** |
+
+**The meter on F10.** Row 24 shows nothing as shipped. A frame sums nothing
+and reads the clock once, for the sim. F10 cycles: the frame rate alone
+(`FPS nnn.n`), every number (the row as it was: fps, frame, render and
+present ms, video writes, and the view, level, sparse and grid marks; three
+clock reads a frame), off. The B and P benches turn every number on
+themselves, because their result is that row. `make wirearenadisk
+WAMETER=1|2` builds a game that starts with it on (a stamped knob, for a
+benchmark build). `tests/waweapons.py` checks the cycle from off.
+
+**`LK_COARSE2`**, `wa_look`'s bit 7, on Low and Very Low: with COARSE, an
+edge that moves under TWO half-rows along a wall (seven quarter half-rows
+or fewer) is drawn level at its middle, where COARSE alone takes under one.
+Measured on the posed sets, render clk a pose: Low, the full arena −2.0%
+and heights −0.6%; Very Low −0.3% and −0.2% (its room has no tops
+already). Medium and up are identical. A long shallow wall line loses its
+single step: 383 cells differ in 22 of 60 Low poses on the full arena.
+`WR_ABI` is 7. Very Low's `wa_look` is now 0xFF, so the level's change key
+is a word with the sparse key, and "none" is 0xFF in that half.
+
+**Roaming bots** look every other turn, 16 ticks apart; engaged, hunting
+and fetching bots look every eighth tick as before. A sight walk and a
+bearing fewer for each roaming bot: up to about 350 clk a tick by the game
+agent's figures (not re-measured), and up to 0.27 s later to notice.
+
+**The PVS's low pass** (`tools/arenagen.py`, `pvs_low`). The PVS of
+HEIGHTS-PLAN 9.8 lets only TALL boxes hide anything, because an eye can see
+over a low one. How much it sees over depends on the eye's height, and that
+is bounded per cell:
+
+- The boxes are a heightfield, and over a heightfield a higher eye sees
+  everything a lower one does. So one test per cell, at the HIGHEST eye a
+  player can have there, covers every eye.
+- That eye (`pvs_eyes`) is the eye over the highest floor in reach of the
+  cell, a jump more, or what is left of a jump off a higher floor some
+  cells away by the time its fall has covered the cells between, by the
+  game's own gravity, jump and speed out of `waconst.inc`.
+- From each of the cell's test points, rays are cast across the box's whole
+  angle. Along a ray the box's top is hidden when a nearer box's top stands
+  at least as steep from the eye.
+- Only boxes below the tallest are looked for; a tall box stays the flat
+  test's, margins and all, and a tall box in the way hides with those same
+  margins. The low test itself has NO margin: it is the geometry's answer,
+  so that a ramp whose top edge runs along the platform's (equal, in exact
+  arithmetic) is dropped.
+
+On the heights arena it drops each ramp from the 38 cells where it lies
+behind the platform: 2.3% of box-cells more, 33.7% in all. It costs 1.7 s
+of build time, nothing at run time and no byte (the table's size is
+unchanged). `WA_PVSLOW=0` in the environment builds without it, for the A/B.
+
+Measured (MartyPC `os8088_5150_cga`, Medium):
+
+| | before | with the low pass |
+|---|---|---|
+| heights view A, 40 / 80 columns | 15.5 / 12.2 fps | **16.2 / 12.7** |
+| the other four views | | unchanged |
+| 900 poses in the culled cells, turned toward the culled ramp, the eye standing, jumping and at the cell's highest; render clk a pose | 232,602 | 218,084 (−6.2%) |
+| the same, 400 poses at 80 columns | 282,031 | 266,862 (−5.4%) |
+
+**Its picture:** of those 900 poses 873 are identical with and without it;
+27 differ by one or two cells (29 in all; 11 of 400 at 80 columns, 16
+cells). Each is a `_` the hidden ramp's top edge used to leave on the
+platform's far edge line, where rounding had let one cell of it through;
+the line is now the platform's own. 0 divide faults.
+
+**Checked:** the twelve WireArena suite rows on the final build (below);
+`waweapons` goes red with the level table's bit or F10's cycle changed.
+
+**Still open:** the link's cable read (above); the hints of 16.9's agents
+that were interface changes between areas and not taken (a byte-wide
+`wa_fbuf`, `wa_face` handing its columns to the span code in registers, a
+"clip raised" flag for the tall spans on heights).
+

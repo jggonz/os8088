@@ -28,7 +28,8 @@ The pose list is a function of (arena, n, seed) alone, never of the build, so
 two builds' recordings compare pose for pose:
 
   python3 tools/waposes.py record --arena 0|1|2 --width 40|80 [--level 1..5]
-          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still] [--tree DIR] --out f.json
+          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still] [--poses LIST.json]
+          [--tree DIR] --out f.json
   python3 tools/waposes.py compare base.json new.json [--list] [--show N]
   python3 tools/waposes.py show f.json N
   python3 tools/waposes.py sets OUTDIR [--tree DIR]     the eight reference sets
@@ -172,7 +173,7 @@ def record(a):
     src = open(os.path.join(T, "apps/wirearena/waconst.inc")).read()
     FO = {k: int(v) for k, v in re.findall(r"^(F_[A-Z]+)\s+equ\s+(\d+)", src, re.M)}
     item = {0: "Play, %d columns", 1: "Open arena, %d columns", 2: "Heights arena, %d columns"}[a.arena] % W
-    ps = poses(a.arena, a.n, a.seed)
+    ps = json.load(open(a.poses)) if a.poses else poses(a.arena, a.n, a.seed)
     frames = []; faults = 0
     with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena360.img", verbose=False) as ui:
         m = ui.m
@@ -268,6 +269,7 @@ r.add_argument("--seed", type=int, default=1)
 r.add_argument("--keys", default=""); r.add_argument("--tree", default=ROOT)
 r.add_argument("--out", required=True)
 r.add_argument("--still", action="store_true", help="a standing view: the renderer's still-view work kept")
+r.add_argument("--poses", default="", help="a JSON list of poses to use instead of the seeded set (poses()'s own shape)")
 c = sub.add_parser("compare")
 c.add_argument("base"); c.add_argument("new"); c.add_argument("--list", action="store_true")
 c.add_argument("--show", type=int, default=None)

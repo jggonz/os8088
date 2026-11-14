@@ -2147,6 +2147,11 @@ The part's descriptor gains a word at 42 (WIREARENA-PARTS-PLAN 7.5).
 `WRV_ARENA` copies the masks into `wa_pvs`, 512 bytes of BSS
 (`WA_PVSN` × `WA_PVSB`).
 
+*Since (MULTIPLAYER-FPS-PLAN 16.10, 2026-11-14): the PVS has a second, LOW
+pass - what the boxes below the tallest hide, at the highest eye a cell can
+have - which drops each ramp from the cells where it lies behind the
+platform.*
+
 **9.8.3 Measured** (MartyPC `os8088_5150_cga`, the games' own benches):
 
 Both columns were taken on the same harness and system disk; "before" is
