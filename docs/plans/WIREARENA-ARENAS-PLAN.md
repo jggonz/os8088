@@ -261,6 +261,26 @@ line on the floor between two of the arena's vertices, at any angle.
   - A floor point's depth is a function of its row alone. So every test is
     a compare, and no line needs a 1/z of its own.
   - More than two entries ask `wa_occl`, with the point's 1/z from its row.
+  - A tall face's foot is linear across its columns (the floor's row is
+    linear in 1/z, and 1/z in the column). So `wa_fqspf` makes each wall
+    span's FOOT LINE once a frame, its first row and an 8.8 step, and a
+    column's foot is one multiply. Before, it was `wa_wallz`'s divide and a
+    multiply. The stack entries' feet read the same lines.
+- **Considered and not built: drawing floor lines inside the box walk.**
+  - The idea: each line cut where the box tree's split lines and each box's
+    faces cross it, every piece drawn at its place in the front-to-back
+    walk. The column clip alone would then hide it, as it hides a wall, and
+    no record would be needed.
+  - The owner asked for it on 2026-11-14. Measured against the tower-top
+    frame, it does not pay:
+    - the records and tests it removes are about 25,000 cycles;
+    - the twin's 16 lines become about 50 pieces;
+    - each piece needs its cut points projected (a transform and a divide)
+      and a walk set up of its own, about 2,100 cycles a piece - more than
+      all the floor lines cost now.
+  - Per-line setup is the larger part (about 56,000), and it is a wall
+    edge's arithmetic: a divide and a multiply for each end, a divide for
+    the step.
 - **The feet.** `wa_collide` asks `wa_flcross` first. A step that crosses a
   floor line is refused, as a wall's is, and the player slides along it.
   - A line is near only when the new point is within 16 units of its box.
