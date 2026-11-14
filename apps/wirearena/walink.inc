@@ -1514,13 +1514,8 @@ wa_lkabsent:
     cmp di, wa_figs
     je .here
     push ax
-    push dx
-    mov ax, di
-    sub ax, wa_figs             ; (AH = 0: under 256)
-    mov dl, F_SIZE
-    div dl                      ; AL = its index, 1 or 2
+    call wa_bidx                ; AL = its index, 1 or 2
     cmp al, [wa_lknb]
-    pop dx
     pop ax
     jbe .here
     cmp al, al                  ; (ZF = 1)
