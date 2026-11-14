@@ -194,10 +194,15 @@ WA_VAR wa_rcp, (WA_ZMAX-WA_NEAR)*2 ; 0x7FFF0 / z, z = NEAR.. (wa_ptbi)
 WA_VAR wa_xk, WA_MXV+1          ; per coordinate: the step from the one
 WA_VAR wa_yk, WA_MYV+1          ; before, as a slot x 8 (wa_products)
 WA_VAR wa_nk, 2                 ; the last slot used, x 8
-WA_VAR wa_lord, WA_MBOX*5+1    ; the boxes front to back, a record each:
-WA_VAR wa_lrec, 2               ; box, a, b, c, hint (wa_order) - the walk's
+WA_VAR wa_lord, WA_MBOX*4+1    ; the boxes front to back, a record each:
+WA_VAR wa_lrec, 2               ; box, a, b, c (wa_order, wa_sil) - the walk's
 WA_VAR wa_kr, 2                 ; place in them, and this frame's corners
-WA_VAR wa_kl, 2                 ; for the hints (wa_render)...
+WA_VAR wa_kl, 2                 ; for the hints (wa_render)
+WA_VAR wa_bh, WA_MBOX*4         ; per box x 4: its hint
+WA_VAR wa_mx0, 2                ; the silhouettes' cell, [mx0, mx1) x
+WA_VAR wa_mx1, 2                ; [my0, my1) (wa_sil) - the four adjacent,
+WA_VAR wa_my0, 2                ; as the order's below...
+WA_VAR wa_my1, 2
 WA_VAR wa_rx0, 2                ; ...for a position in [rx0, rx1) x
 WA_VAR wa_rx1, 2                ; [ry0, ry1) - the pairs adjacent: wa_order
 WA_VAR wa_ry0, 2                ; reaches the high end at +2
@@ -361,18 +366,31 @@ wa_render:
     mov [wa_left], cx
     rep stosw
     call wa_products
-    mov ax, [wa_px]             ; the boxes' order: the same from anywhere in
-    cmp ax, [wa_rx0]            ; the cell of the tree's split lines the
-    jl .order                   ; player stands in, so it is walked again
-    cmp ax, [wa_rx1]            ; only when one is crossed (wa_order)
+    mov ax, [wa_px]             ; THE BOXES' ORDER, and each one's silhouette:
+    cmp ax, [wa_mx0]            ; the same from anywhere in a cell of lines the
+    jl .mout                    ; player stands in, so they are made again
+    cmp ax, [wa_mx1]            ; only when one is crossed. The silhouettes'
+    jge .mout                   ; cell (wa_sil's: the boxes' own lines) is
+    mov ax, [wa_py]             ; inside the order's (wa_order's: the tree's
+    cmp ax, [wa_my0]            ; split lines)
+    jl .mout
+    cmp ax, [wa_my1]
+    jl .ordered
+.mout:
+    mov ax, [wa_px]
+    cmp ax, [wa_rx0]
+    jl .order
+    cmp ax, [wa_rx1]
     jge .order
     mov ax, [wa_py]
     cmp ax, [wa_ry0]
     jl .order
     cmp ax, [wa_ry1]
-    jl .ordered
+    jl .stale
 .order:
     call wa_order
+.stale:
+    call wa_stale
 .ordered:
     mov ax, [wa_k16]            ; THE VIEW'S EDGES, made again only when the
     mov bx, [wa_c16]            ; projection changes
@@ -388,7 +406,7 @@ wa_render:
     shl dx, 1
     mov [wa_vpc+WA_VS2], dx
     sub dx, 7                   ; ...the first column past the right, less
-    mov [wa_cend], dx           ; a centre's rounding (.leaves)...
+    mov [wa_cend], dx           ; a centre's rounding (the walk)...
     mov dx, ax
     xor ax, ax                  ; ...and u = 1 - c16 / k16, x 65536: the
     sub dx, bx                  ; edge is x = +-(1 - u) z. 0 at 90 degrees
@@ -418,10 +436,10 @@ wa_render:
     mov [wa_kr], ax
     mov ax, [wa_klt+si]
     mov [wa_kl], ax
-; THE WALK over wa_order's list, a box a turn. A record is the box (x 4), the
-; vertices of its SILHOUETTE from where the player stands - a, the left end
-; of the faces seen, b between them where two are seen, c, the right end -
-; and a hint.
+; THE WALK over wa_order's list, a box a turn. A record is the box (x 4) and
+; the vertices of its SILHOUETTE from where the player stands - a, the left
+; end of the faces seen, b between them where two are seen, c, the right end
+; (wa_sil: made when the box is first tested in a cell of the boxes' lines).
 ; THE VIEW TEST is on those vertices, not a cone over the box's bounds: we
 ; see a convex box's faces left to right from a to c through less than a half
 ; turn, so nothing of it is in the view when a is right of the view's right
@@ -430,16 +448,18 @@ wa_render:
 ; for the products' rounding, off the two transforms a kept box needs anyway;
 ; and then exactly, at any field of view, by a's and c's columns. A kept box
 ; pays nothing but the compares.
-; THE HINT: a box dropped that way last frame is nearly always still wholly
-; past the right edge's line (1), or the left's (2) - and that is ONE corner's
-; test, the box's least in x - z (wa_kr) or greatest in x + z (wa_kl), on the
-; products' high words (their rounding, or at an exact level their
-; truncation, is inside the margin): four of them, where the full test is
-; two transforms. One dropped by a column - between the 90 degrees of that
-; test and a narrower view's edge - is still off that edge when c is left of
-; the left one (3) or a right of the right one (4): one transform and a
-; multiply. A hint that fails (0x80 with it) is not set again until the box
-; has been in the view; another may be.
+; THE HINT (wa_bh, a box's: it outlives the list and the silhouette): a box
+; dropped that way is nearly always still wholly past the right edge's line
+; (1), or the
+; left's (2) - and that is ONE corner's test, the box's least in x - z
+; (wa_kr) or greatest in x + z (wa_kl), on the products' high words (their
+; rounding, or at an exact level their truncation, is inside the margin):
+; four of them, where the full test is two transforms. One dropped by a
+; column - between the 90 degrees of that test and a narrower view's edge -
+; is still off that edge when c is left of the left one (3) or a right of
+; the right one (4): one transform and a multiply. A hint that fails (0x80
+; with it) is not set again until the box has been in the view; another may
+; be.
     mov si, wa_lord             ; front to back, while any column is open
     jmp short .lgo
 .leaves:                        ; (after a box that may have drawn)
@@ -454,10 +474,11 @@ wa_render:
 .lend:
     jmp .walked
 .lbox:
-    add si, 3
-    mov dl, [si-1]
+    inc si
+    inc si
     xor bx, bx
     mov bl, al
+    mov dl, [wa_bh+bx]
     dec dl
     js .lfull                   ; no hint
     jz .lhr
@@ -468,33 +489,27 @@ wa_render:
     dec dl
     jnz .lfull                  ; (one that failed)
     mov [wa_lrec], si           ; 4: a right of the screen's own edge,
-    mov bl, [si-4]              ; x - t z > 0 - t the view's half width in
+    mov bl, [si-3]              ; x - t z > 0 - t the view's half width in
     call [wa_vtp]               ; x/z, as 1 - u (wa_vu): x - z + u z
-    cmp cx, WA_NEAR
-    jl .lmiss2
     mov bx, ax
     sub bx, cx
+    jmp short .lh34
+.lh3:                           ; 3: c left of the screen's edge, x + t z < 0:
+    mov [wa_lrec], si           ; -(x + z) + u z
+    mov bl, [si-1]
+    call [wa_vtp]
+    mov bx, ax
+    add bx, cx
+    neg bx
+.lh34:
+    mov si, [wa_lrec]
+    cmp cx, WA_NEAR             ; (and ahead of the eye)
+    jl .lmiss
     mov ax, cx
     mul word [wa_vu]
     add bx, dx
     cmp bx, 3
-    jge .lnext
-    jmp short .lmiss2
-.lh3:                           ; 3: c left of the screen's edge, x + t z < 0
-    mov [wa_lrec], si
-    mov bl, [si-2]
-    call [wa_vtp]
-    cmp cx, WA_NEAR
-    jl .lmiss2
-    mov bx, ax
-    add bx, cx
-    mov ax, cx
-    mul word [wa_vu]
-    sub bx, dx
-    cmp bx, -3
-    jle .lnext
-.lmiss2:
-    mov si, [wa_lrec]
+    jge .lgo
     jmp short .lmiss
 .lhl:
     add bx, [wa_kl]
@@ -530,14 +545,20 @@ wa_render:
     cmp ax, 3
     jge .lgo                    ; still right of the view, or behind
 .lmiss:
-    or byte [si-1], 0x80
+    xor bx, bx
+    mov bl, [si-4]
+    or byte [wa_bh+bx], 0x80
 .lfull:
     mov [wa_lrec], si
     xor bx, bx
-    mov bl, [si-4]              ; a
-    cmp bl, 0xFF                ; (no face seen: the player over the box)
-    jne .lsil
-    jmp .lover
+    mov bl, [si-3]              ; a
+    cmp bl, 0xFE
+    jb .lsil
+    je .lmake
+    jmp .lover                  ; (no face seen: the player over the box)
+.lmake:
+    call wa_sil                 ; (its silhouette, in this cell)
+    jmp .lfull
 .lsil:
     call [wa_vtp]               ; a: AX = x, CX = z, DI = the vertex
     mov dx, ax
@@ -559,7 +580,7 @@ wa_render:
     jmp short .lhset
 .lain:
     mov si, [wa_lrec]
-    mov bl, [si-2]              ; (BH = 0 still)
+    mov bl, [si-1]              ; (BH = 0 still)
     call [wa_vtp]               ; c
     mov dx, ax
     sub dx, cx
@@ -572,13 +593,15 @@ wa_render:
     mov dl, 2                   ; c left of the view: all of it is
 .lhset:                         ; DL = the hint for the next frame - unless
     mov si, [wa_lrec]           ; it is the one that failed
-    mov al, [si-1]
+    xor bx, bx
+    mov bl, [si-4]
+    mov al, [wa_bh+bx]
     and al, 0x7F
     cmp al, dl
-    je .lgo1
-    mov [si-1], dl
-.lgo1:
-    jmp .lgo
+    je .lnx
+    mov [wa_bh+bx], dl
+.lnx:
+    jmp .lnext
 .lc:
     cmp dx, 3
     jl .lkeep
@@ -595,9 +618,9 @@ wa_render:
     jmp .lhset
 .lcok:
     mov si, [wa_lrec]
-    mov byte [si-1], 0          ; (in the view: a hint may be set again)
     xor bx, bx
-    mov bl, [si-5]              ; the box x 4
+    mov bl, [si-4]              ; the box x 4
+    mov byte [wa_bh+bx], 0      ; (in the view: a hint may be set again)
     cmp byte [wa_hflat], 0
     jne .ltall
     mov ax, [wa_bxh+bx]         ; HEIGHTS (HEIGHTS-PLAN 7.3.1): a box at the
@@ -612,43 +635,42 @@ wa_render:
     mov bl, [wa_bcol+bx+1]      ; its colour (the room's is first)
     mov al, [wa_at+bx]
     mov [wa_wcol], al
-    mov bl, [si-3]              ; b
+    mov bl, [si-2]              ; b
     cmp bl, 0xFF
     je .lone
     call [wa_vtp]
     call wa_vcam
     mov byte [wa_endok], 0      ; (the corner two faces share is the second
     mov si, [wa_lrec]           ; one's START: drawing both put `││` there)
-    mov ax, [si-4]              ; a -> b
+    mov ax, [si-3]              ; a -> b
     call wa_face
     mov si, [wa_lrec]
-    mov ax, [si-3]              ; b -> c
+    mov ax, [si-2]              ; b -> c
     jmp short .llast
 .lone:
-    mov al, [si-4]              ; a -> c
-    mov ah, [si-2]
+    mov al, [si-3]              ; a -> c
+    mov ah, [si-1]
 .llast:
     mov byte [wa_endok], 1
     call wa_face
     jmp .leaves
 .lover:                         ; (no face seen: a low box's top, on heights)
     cmp byte [wa_hflat], 0
-    jne .lnx2
-    mov bl, [si-5]
+    jne .lnx
+    mov bl, [si-4]
     mov ax, [wa_bxh+bx]
     cmp ax, [wa_hmax]
     jb .llowb
     cmp ax, [wa_eye]
     jle .llowb
-.lnx2:
     jmp .lnext
 .llow:                          ; a and c are made: stamped, for wa_lowbox
     mov al, [wa_frame]
+    mov bl, [si-3]
+    mov [wa_vst+bx], al
+    mov bl, [si-1]
+    mov [wa_vst+bx], al
     mov bl, [si-4]
-    mov [wa_vst+bx], al
-    mov bl, [si-2]
-    mov [wa_vst+bx], al
-    mov bl, [si-5]
 .llowb:                         ; BX = the box x 4
     mov di, bx                  ; DI = its record in wa_bxh
     lea ax, [bx+wa_corn+4]      ; (the room's row is first)
@@ -733,6 +755,12 @@ wa_geominit:
     mov word [wa_rx1], 0        ; boxes (wa_order)
     mov word [wa_keye], 0x8000  ; ...and makes the eye's products
     mov byte [wa_klook], 0xFF   ; ...and the level's choices
+    mov word [wa_mx0], 1        ; ...and each box's silhouette, with no hint
+    mov word [wa_mx1], 0        ; (wa_bh)
+    mov di, wa_bh
+    mov cx, WA_MBOX*2
+    xor ax, ax
+    rep stosw
     mov word [wa_nk], 0
     mov si, wa_xv
     mov di, wa_xk
@@ -852,18 +880,12 @@ wa_products:
     ret
 
 ; wa_order - the box tree walked front to back from the player's position
-; into wa_lord (a record a box, 0xFF at the end), and the cell that position
-; is in: [rx0, rx1) x [ry0, ry1). The order is a function of the position
-; alone - which side of each split line it is on - so a frame whose position
-; is still in the cell (turning, or moving inside it, which is most frames
-; of play) reuses the list, and a frame walks no inner node.
-; A RECORD is the box (x 4), its SILHOUETTE from there - the vertices (x 2)
-; a, b and c of the faces seen, left to right: one face a -> c (b 0xFF), or
-; two a -> b -> c; none (the player over the box) a 0xFF - and a hint, the
-; walk's own (wa_render: 0 from here). Which
-; faces are seen is also the position's alone - which side of the box's four
-; lines it is on - so the cell is kept inside those lines too, and a frame
-; chooses no faces and looks up no corners (wa_render's walk).
+; into wa_lord (a record a box: the box x 4 and three bytes for its
+; silhouette; 0xFF at the end), and the cell that position is in:
+; [rx0, rx1) x [ry0, ry1). The order is a function of the position alone -
+; which side of each split line it is on - so a frame whose position is
+; still in the cell (turning, or moving inside it, which is most frames of
+; play) reuses the list, and a frame walks no inner node.
 ; THE PVS (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9.8): an arena may carry, per
 ; cell of a square grid, the boxes that can draw anything from somewhere in
 ; it (tools/arenagen.py, pvs_masks); the rest are left off the list, so a
@@ -951,53 +973,11 @@ wa_order:
     jz .out
 .take:
     mov al, [bx+1]              ; the box x 8
-    xor ah, ah
-    mov si, ax
     shr al, 1
     stosb                       ; (its record's: x 4)
-    mov ax, [wa_py]             ; the faces seen: S 1, E 2, N 4, W 8 (a face
-    lea bx, [si+wa_boxes+2]     ; f runs from corner f to f + 1)
-    mov bp, wa_ry0
-    call .side
-    mov bx, .ybit
-    xlatb
-    push ax
-    mov ax, [wa_px]
-    lea bx, [si+wa_boxes]
-    mov bp, wa_rx0
-    call .side
-    mov bx, .xbit
-    xlatb
-    pop bx
-    or bl, al
-    xor bh, bh
-    mov al, [bx+.sil]           ; its silhouette's corners, two bits each:
-    mov bx, si                  ; a, b, c - and 0xFF, no face
-    shr bx, 1
-    add bx, wa_corn+4           ; the box's corners' vertices (the room's
-    mov cx, 3                   ; row is first)
-    mov ah, al
-    cmp al, 0xFF
-    je .none
-.v:
-    mov al, ah
-    and al, 3
-    xlatb
-    stosb
-    shr ah, 1
-    shr ah, 1
-    loop .v
-    test ah, 1                  ; (one face: no b)
-    jz .hint
-    mov byte [di-2], 0xFF
-.hint:
-    xor al, al                  ; (no hint yet)
-    stosb
+    add di, 3                   ; (its silhouette: wa_stale, wa_sil)
 .out:
     ret
-.none:
-    rep stosb
-    jmp .hint
 .split:
     mov si, [bx+4]              ; near = low, far = high...
     mov dx, [bx+6]
@@ -1026,6 +1006,89 @@ wa_order:
     call .n
     pop bx
     jmp .n
+
+; wa_stale - the player has left the silhouettes' cell (or the order is
+; new): every box's silhouette is to be made again (a = 0xFE: wa_sil, when
+; the box is next tested), in a cell that starts as the order's; and a hint
+; that is a silhouette vertex's test (3, 4) goes with it. (ES = DS.)
+wa_stale:
+    mov si, wa_rx0
+    mov di, wa_mx0
+    movsw
+    movsw
+    movsw
+    movsw
+    mov si, wa_lord
+.s:
+    lodsw                       ; AL = the box x 4
+    cmp al, 0xFF
+    je .out
+    mov byte [si-1], 0xFE
+    inc si
+    inc si
+    xor bx, bx
+    mov bl, al
+    mov al, [wa_bh+bx]
+    and al, 0x7F
+    cmp al, 3
+    jb .s
+    mov byte [wa_bh+bx], 0
+    jmp .s
+.out:
+    ret
+
+; wa_sil - SI = past a box's record: its SILHOUETTE from where the player
+; stands, into the record - the vertices (x 2) a, b and c of the faces seen,
+; left to right: one face a -> c (b 0xFF), or two a -> b -> c; none (the
+; player over the box) a 0xFF. Which faces are seen is the position's alone -
+; which side of the box's four lines it is on - so the silhouettes' cell
+; [mx0, mx1) x [my0, my1) is kept inside those lines, and a frame in it
+; chooses no faces and looks up no corners. Keeps SI; clobbers the rest.
+; (ES = DS.)
+wa_sil:
+    xor bx, bx
+    mov bl, [si-4]
+    shl bx, 1
+    mov di, bx                  ; DI = the box x 8
+    mov ax, [wa_py]             ; the faces seen: S 1, E 2, N 4, W 8 (a face
+    lea bx, [di+wa_boxes+2]     ; f runs from corner f to f + 1)
+    mov bp, wa_my0
+    call .side
+    mov bx, .ybit
+    xlatb
+    mov cl, al
+    mov ax, [wa_px]
+    lea bx, [di+wa_boxes]
+    mov bp, wa_mx0
+    call .side
+    mov bx, .xbit
+    xlatb
+    or al, cl
+    mov bx, .sil
+    xlatb                       ; the silhouette's corners, two bits each:
+    mov ah, al                  ; a, b, c - or 0xFF, no face
+    shr di, 1
+    lea bx, [di+wa_corn+4]      ; the box's corners' vertices (the room's
+    lea di, [si-3]              ; row is first)
+    mov cx, 3
+    cmp al, 0xFF
+    je .none
+.v:
+    mov al, ah
+    and al, 3
+    xlatb
+    stosb
+    shr ah, 1
+    shr ah, 1
+    loop .v
+    test ah, 1                  ; (one face: no b)
+    jz .out
+    mov byte [si-2], 0xFF
+.out:
+    ret
+.none:
+    rep stosb
+    ret
 .ybit:      db 1, 0, 4
 .xbit:      db 8, 0, 2
 ; by the faces seen: a | b << 2 | c << 4, corner numbers - and 64 for one
