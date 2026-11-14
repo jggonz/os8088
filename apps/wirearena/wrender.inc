@@ -1771,26 +1771,37 @@ wa_span:
     mov si, [wa_cs]
     mov di, [wa_lp]
     mov dl, [wa_frame]
-.hd:                            ; THE HEAD: columns the wall leaves EMPTY -
+    mov bx, [wa_vb]             ; THE HEAD: columns the wall leaves EMPTY -
     or cx, cx                   ; its top above the screen and its bottom
     jns .hgo                    ; under it (a near wall running off the
-    cmp word [wa_vb], WA_HR     ; view): opened and stepped, no more
-    jl .hgo
+    cmp bx, WA_HR               ; view): opened and stepped, no more - the
+    jl .hgo                     ; bottom BX.AX while they last
+    mov ax, [wa_vbl]
+.hd:
     cmp word [wa_cov+si], 0
     jne .hsh
     mov [wa_cov+si], dh
 .hst:
     add bp, [wa_stl]
     adc cx, [wa_st]
-    mov ax, [wa_sbl]
-    add [wa_vbl], ax
-    mov ax, [wa_sb]
-    adc [wa_vb], ax
+    add ax, [wa_sbl]
+    adc bx, [wa_sb]
     inc si
     inc si
     cmp si, [wa_end]
-    jb .hd
-    jmp .vd                     ; (all of it)
+    jae .hall
+    or cx, cx
+    jns .hend
+    cmp bx, WA_HR
+    jge .hd
+.hend:
+    mov [wa_vbl], ax
+    mov [wa_vb], bx
+    jmp .hgo
+.hall:                          ; (all of it)
+    mov [wa_vbl], ax
+    mov [wa_vb], bx
+    jmp .vd
 .hsh:
     inc word [wa_ncl]
     jmp .hst
