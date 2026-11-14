@@ -949,27 +949,24 @@ wa_floor:
     push si
     push di
     push bp
-    push cx
-    mov di, [si+WA_LR]
-    mov [wa_qr], di             ; (its r, for a ramp's reach)
     xor bp, bp                  ; BP = the floor so far, DX its record
-    mov dx, -1
     mov di, bx                  ; THE CELL: its row (y >> 7) x 16 cells x 8
     cmp di, WA_ROOM_Y1          ; bytes is y's bits 7..10 as they are
     jae .yout
     and di, 0x0780
 .yc:
-    mov cx, ax                  ; ...and its column (x >> 7) x 8
-    cmp cx, WA_ROOM_X1
+    mov dx, ax                  ; ...and its column (x >> 7) x 8
+    cmp dx, WA_ROOM_X1
     jae .xout
-    shr cx, 1
-    shr cx, 1
-    shr cx, 1
-    shr cx, 1
-    and cl, 0x78
+    shr dx, 1
+    shr dx, 1
+    shr dx, 1
+    shr dx, 1
+    and dl, 0x78
 .xc:
-    add di, cx
+    add di, dx
     add di, si                  ; DI = the cell
+    mov dx, -1
     mov si, [di]
     cmp si, 1
     jbe .few                    ; (nothing here - or more than three)
@@ -985,8 +982,12 @@ wa_floor:
     mov [wa_qx], ax
     mov [wa_qy], bx
     push di
-    mov di, [si+10]
-    mov si, [si+8]
+    mov di, [si+8]              ; DI = its box: the entry is the box widened
+    mov ax, [di]                ; by the table's r (for a ramp's reach)
+    sub ax, [si]
+    mov [wa_qr], ax
+    mov si, [si+10]
+    xchg si, di                 ; SI = the box, DI = its record
     add di, wa_bxh
     call wa_hat                 ; AX = its height there (AX was x: again
     sub di, wa_bxh              ; after)
@@ -1005,7 +1006,6 @@ wa_floor:
     jnz .box
 .done:
     mov ax, bp
-    pop cx
     pop bp
     pop di
     pop si
@@ -1017,17 +1017,20 @@ wa_floor:
     xor di, di
     jmp .yc
 .xout:
-    mov cx, 0x0078
+    mov dx, 0x0078
     or ax, ax
     jns .xc
-    xor cx, cx
+    xor dx, dx
     jmp .xc
 .few:
     jb .done
+    push cx
     mov di, sp                  ; A CROWDED CELL: every entry of the table
     mov si, [ss:di+6]           ; (SI as it came in)
     mov [wa_qx], ax
     mov [wa_qy], bx
+    mov cx, [si+WA_LR]
+    mov [wa_qr], cx
     mov cx, [si+WA_LN]
     add si, WA_LE
 .wbox:
@@ -1055,6 +1058,7 @@ wa_floor:
 .wnext:
     add si, WA_LTE
     loop .wbox
+    pop cx
     jmp .done
 
 ; wa_lists - once an arena is loaded: its box tables (wa_floor's), every box
@@ -3637,18 +3641,23 @@ wa_rktick:
     dec word [di+RG_LIFE]       ; axis in turn - a wall (or a rise over
     jz .boom                    ; WA_GSTEP) sends it back at half its
     sub word [di+RG_VZ], WA_GRAV ; speed; the floor bounces it at half,
-    xor bx, bx                  ; and rubs a quarter off its roll
-    call .gax
+    mov bp, -1                  ; and rubs a quarter off its roll. BP = the
+    xor bx, bx                  ; floor where it is, once a step that held
+    call .gax                   ; has asked for it (.gax)
     mov bx, 2
     call .gax
     mov bx, 4
     call wa_rkmv
+    mov ax, bp                  ; AX = the floor under it: as its last step
+    or ax, ax                   ; that held found it, or (neither did)
+    jns .gfl                    ; asked now
     mov ax, [si+WA_RKX]
     mov bx, [si+WA_RKY]
     push si
     mov si, wa_allp
-    call wa_floor               ; AX = the floor under it
+    call wa_floor
     pop si
+.gfl:
     cmp [si+WA_RKZ], ax
     jg .hit
     mov [si+WA_RKZ], ax         ; on it
@@ -3692,10 +3701,12 @@ wa_rktick:
     call wa_floor
     pop si
     pop bx
-    sub ax, WA_GSTEP
-    cmp ax, [si+WA_RKZ]
+    mov dx, ax
+    sub dx, WA_GSTEP
+    cmp dx, [si+WA_RKZ]
     jg .gwall
-    pop ax                      ; (clear)
+    mov bp, ax                  ; (clear: and this is the floor where it is)
+    pop ax
     pop ax
     ret
 .gw2:
