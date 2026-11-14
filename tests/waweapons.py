@@ -44,9 +44,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 from os88fixture import need                                   # noqa: E402
-from walift import Game, amap, SYS, APPS                       # noqa: E402
+from walift import Game, start, amap, SYS, APPS, ITEM  # noqa: E402
 
-ITEM = "Heights arena, 40 columns"
 FS = 56                         # F_SIZE (apps/wirearena/waconst.inc)
 
 
@@ -186,11 +185,7 @@ def main():
                      quick=True) as ui:
         m = ui.m
         w = ui.path("B:/WARENA.O88")
-        os88marty.until(m, lambda _: any(c[0] == "Game" and any(
-            i[0] == ITEM for i in c[3]) for c in ui.menus()),
-            "WireArena's Game menu on the bar", guest=10)
-        ui.menu_pick("Game", ITEM)
-        p = os88marty.Pkg(m, w)
+        p = start(ui, w, sym)
         f0 = p.byte(sym["wa_frame"])
         os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,
                         "the Heights arena's first frames", guest=20)

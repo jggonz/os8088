@@ -182,15 +182,18 @@ has the details.
   peer table, slots by identity, every frame to each peer, hits into the
   victim's peer's damage word, acks from every player, LOST and LEFT per
   peer. Over UDP and raw frames; serial is the table with one record.
-- [ ] **N4 the lobby v2** - half built (9.3): found by broadcast and by
-  address for up to four (PEERS closes the mesh), quiet peers dropped,
-  every peer Ready starts it. Still to do: a match LIST (ASK and MATCH,
-  several hosts on one LAN told apart), joining a match already playing,
-  the host silent ending the match.
-- [ ] **N5 the rows** - `walink4` (four players, then three and a bot)
-  and `walink4ip` (three joined by address) are in; the serial, raw and
-  two-player UDP rows still pass. Still to do: the host gone mid-match,
-  and the list's rows when it lands.
+- [x] **N4 the lobby v2** - as built (9.3, 9.4): found by broadcast and
+  by address for up to four (PEERS closes the mesh), quiet peers dropped,
+  every peer Ready starts it, HOST LEFT when the host goes. **Dropped by
+  the owner (2026-11-14)**: the match LIST - "there are not going to be
+  multiple matches on a local network at once" - and more than two on the
+  serial cable, a null modem having two ends.
+- [ ] **N6 joining a match already playing** - wanted "only if it doesn't
+  cost much in performance or size"; 9.4 has the estimate, for the owner.
+- [x] **N5 the rows** - `walink4` (four players, then three and a bot, a
+  guest and then the host leaving), `walink4ip` (three joined by address),
+  `wasetup` (the setup on the glass); the serial, raw and two-player UDP
+  rows still pass.
 
 ## 8. Costs to record as they land
 
@@ -376,3 +379,100 @@ player by its identity's name.
 table and its working copy). The link's cost on the 8088 was not
 measured again: on serial the table is one record, and the new work a
 tick is that record's copy in and out (two 16-word `rep movsw`).
+
+### 9.4 The setup made of the system's controls; the flash (2026-11-14)
+
+The owner, on the N1 window: *"The whole window is flashing every time I
+click or type anything. Please check the interface standards, and use at
+least the standard buttons for the buttons, and the text box for the IP
+entry (you can hide that line if the mode is not internet)."* And: 40
+columns the default on an 8088, 80 on a 286 or better; the Game menu's
+"Play X" items gone.
+
+**The flash was measured before it was fixed** (MartyPC, 5150 CGA, the
+flicker instrument): one Down key took **33 flashing frames, 617
+transient pixels, unsettled after 50 frames**. Two causes:
+
+1. **Every click and key set "draw everything"**: all fourteen rows and
+   both buttons, and a button is erased and redrawn by its library (the
+   600-pixel transient). The rows already had a cache that draws only a
+   changed row; every input defeated it.
+2. **Every timer tick took the window's clip** whether or not anything
+   would be drawn. Arming a clip spends the pointer's deferred hide
+   (SPEC.md 7.1.4), so the pointer over the window blinked about three
+   times a second with the window idle. The clip is now taken by the first
+   thing that actually draws (`wa_lkclipon`).
+
+After: Down settles in 2 frames with only the pointer lifted while the
+row under it is drawn (40 px); with the pointer off the window, **0
+transient pixels** (`wasetup`). VGA measured the same.
+
+**Every control is the system's own now**:
+
+- Arena, Columns, Bots, Skill and Play are **drop-downs** (`OS88UI_DROP`,
+  SPEC.md 13.14) - banked lists, the Macintosh popup's gesture. A joined
+  player's Arena, Bots and Skill are greyed and show the host's.
+- The address is **os88line's text field** (SPEC.md 83), right of Play,
+  there only while Play is internet. Picking internet with the mouse puts
+  the focus in it.
+- **Play/Ready and Keys** stay os88ui buttons. Keys - and the system
+  menu's About, which WireArena did not answer before - put the key list
+  up as the standard **About card** (SPEC.md 12.2, `OS88UI_ABFIT` and
+  `OS88UI_ABLEFT` for thirteen lines on a CGA's content box).
+- Row 0 says what the link is doing, and on the network our own address
+  ("On the network at 10.7.0.20"), for a host to give to players joining
+  by address. Rows 1 to 5 are the players.
+
+**Each control draws only when it changed** - its pick, its greying, the
+focus marker, the field's presence - against a small cache, as the rows
+do. **The painter is opaque by construction**, WireFleet's shape (SPEC.md
+114): each element draws its own ground and `wa_sground` fills only the
+27 gaps between them, so taking the About card down, or a list that could
+not bank, repaints every pixel once with no white first. `wasetup` holds
+that: the window pixel-identical after the card and after a list.
+
+**Two bugs the rows caught**: the field took keys only once a timer tick
+had given it the focus, so an address typed faster than a tick was lost;
+and with the field focused, Space was swallowed as "not a digit" instead
+of meaning Ready, as it does everywhere else on the page.
+
+**One found by looking**: with no network card, Internet asked the driver
+every tick, and each refusal loaded ETHER.DRV off the disk again - an
+hourglass for as long as the window stayed open. A refusal other than "no
+address yet" now says so once and stops.
+
+**HOST LEFT**: the host's Esc already told the others (its HELLO says it
+is back in the window); the line says HOST LEFT now when the peer that left
+is slot 0, and the host's bots leave the board with it.
+
+**Bytes**: `wirearena.bin` 25,258 -> 28,218 (+2,960): the drop-down
+(with its bank), the About card, os88line and the setup's own code; the
+key list moved from the window to the card. bss 7,104 -> 6,851: the rows'
+cache shrank from 14 x 38 to 6 x 40.
+
+**Checked**: `wasetup` (new; red with the old full redraw: 11 frames, 192
+transient pixels), `walink`, `walinknet`, `walinkudp`, `walinkip`,
+`walink4` (now with HOST LEFT), `walink4ip`, and the six MartyPC
+WireArena rows, which start their matches from the setup now (a shared
+`start()` in `tests/walift.py`) since the Game menu's Play items went.
+Looked at on the 5150 CGA, the XT VGA and the 5150 Hercules.
+
+**Joining a match already playing - the estimate (N6)**. What it needs:
+
+1. the host announcing a running match (a HELLO each beat from inside the
+   match - one 20-byte datagram every half second, nothing on serial);
+2. a lobby machine showing it and sending Ready to the host;
+3. the host taking a HELLO from an unknown address in a match (refused
+   today, deliberately) when a slot is free, and answering with a JOIN
+   frame: the tag, the settings, the slot it gave, the other peers'
+   addresses and slots, the pickups;
+4. the others told of the newcomer, and each peer's event sequence
+   started where it stands rather than at 1;
+5. **slots no longer "players, then bots"**: a free slot is after the
+   bots, so the boundary `wa_lknp` stands for becomes a per-slot kind
+   (`wa_lkremote`, `wa_lkabsent`, the bot ordinals in HSNAP and GSNAP,
+   the scoreboard) - the riskiest part.
+
+Estimated **~1 KB of package** (3-4% of it) and **no measurable cost in
+a frame** (one datagram every half second from the host). Not built:
+the owner's condition was the cost, so it is theirs to weigh.

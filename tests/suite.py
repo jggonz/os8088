@@ -8645,6 +8645,19 @@ SOAK = [
         "off onto the tower, the lift home. Red on e9ca8cff: 14 failures.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
+        "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
+        "PLAN 9.4). The owner saw the whole window flash on every click and "
+        "key: every row and both buttons were redrawn per input. On the "
+        "5150 with a CGA, the pointer off the window: Down settles within "
+        "6 frames with 0 transient pixels; Up again leaves the window "
+        "pixel-identical; K's About card (the keys) and a key taking it "
+        "down leave it pixel-identical (the page's opaque repaint, no white "
+        "first); a drop-down's list opened and dismissed by a click outside "
+        "the same, with no pick. Red with the old full redraw on a focus "
+        "move: 11 frames, 192 transient pixels.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waroutes", "soak", py("tests/waroutes.py"), 50.0,
         "WIREARENA'S BOTS WALK THE ROUTE GRAPH (docs/plans/WIREARENA-AI-"
         "PLAN.md 3). arenagen's graph replaced the dummies' three patrol "

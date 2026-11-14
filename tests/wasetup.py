@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""WireArena's match setup on the glass (docs/plans/WIREARENA-NET-PLAN.md
+9.4), MartyPC's 5150 with a CGA, the shipped package.
+
+The owner saw the whole window flash on every click and key: every row and
+both buttons were redrawn for each input. This row holds the fix in the
+flicker instrument's units (PERFORMANCE.md 3.1), with the pointer parked
+outside the window so it is not counted:
+
+  - A KEY: Down moves the focus - the screen settles within 6 frames and no
+    pixel is TRANSIENT (drawn and then drawn again);
+  - THE SAME PICTURE BACK: Up again, and the window is pixel-identical to
+    the first capture (nothing left over, nothing missing);
+  - THE KEYS CARD: K puts the About card up, a key takes it down, and the
+    window is pixel-identical again - the page's own repaint covers every
+    pixel the card was on, with no white first (the ground fills only the
+    gaps between controls);
+  - A DROP-DOWN: a click on Arena's box drops its list (the
+    record says open), a click outside it takes it down without a pick,
+    and the window is pixel-identical again.
+
+Registered as wasetup in soak; make wirearenadisk first.
+"""
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [os.path.join(ROOT, 'tools'), os.path.join(ROOT, 'tests')]
+import os88marty                                                # noqa: E402
+import os88ui                                                   # noqa: E402
+from os88fixture import need                                    # noqa: E402
+from walift import amap, SYS, APPS                              # noqa: E402
+
+fails = []
+
+
+def check(ok, what):
+    print('  %s %s' % ('ok  ' if ok else 'FAIL', what), flush=True)
+    if not ok:
+        fails.append(what)
+
+
+def main():
+    need(APPS)
+    sym = amap()
+    with os88ui.boot(SYS, apps=APPS, machine="os8088_5150_cga",
+                     quick=True) as ui:
+        m = ui.m
+        w = ui.path("B:/WARENA.O88")
+        p = os88marty.Pkg(m, w)
+        wa = [x for x in ui.windows() if x.title == 'WireArena'][0]
+        ui.mo.to(4, 190)                    # (the pointer off the window)
+        ui.settle()
+
+        def region():
+            W, H, d = m.fbuf()
+            out = bytearray()
+            for y in range(wa.y, wa.y + wa.h):
+                o = (y * W + wa.x) * 3
+                out += d[o:o + wa.w * 3]
+            return bytes(out)
+        base = region()
+
+        m.pause()
+        m.key("ArrowDown")
+        r = m.flicker(frames=60)
+        m.go()
+        moved = [i for i, f in enumerate(r['per_frame']) if f['changed']]
+        check(r['settled'] and r['worst_transient'] == 0 and moved and
+              moved[-1] <= 6, 'A KEY: Down settles in %s frames, %d '
+              'transient pixels (was every row and both buttons)'
+              % (moved[-1] if moved else None, r['worst_transient']))
+        check(p.byte(sym['wa_sfoc']) == 1, 'A KEY: the focus on Columns')
+        m.key("ArrowUp")
+        ui.settle()
+        check(region() == base, 'THE SAME PICTURE BACK: Up again, the window '
+              'pixel-identical')
+
+        m.key("KeyK")
+        ui.settle()
+        check(p.byte(sym['wa_abon']) == 1 and region() != base,
+              'THE KEYS CARD: K puts it up')
+        m.key("KeyX")
+        ui.settle()
+        check(p.byte(sym['wa_abon']) == 0 and region() == base,
+              'THE KEYS CARD: a key takes it down, the window pixel-'
+              'identical')
+
+        ox, oy = wa.x + 1, wa.y + 18
+        dr = sym['wa_sdr_a']
+        ui.mo.click(ox + 120, oy + 14 + 8)
+        os88marty.until(m, lambda _: p.byte(dr + 16) == 1,
+                        'the Arena list open', guest=5)
+        check(p.byte(dr + 16) == 1, 'A DROP-DOWN: a click drops its list')
+        ui.mo.click(ox + 300, oy + 120)
+        os88marty.until(m, lambda _: p.byte(dr + 16) == 0,
+                        'the Arena list down', guest=5)
+        ui.mo.to(4, 190)
+        ui.settle()
+        check(p.byte(sym['wa_lkarena']) == 2 and region() == base,
+              'A DROP-DOWN: a click outside takes it down, no pick, the '
+              'window pixel-identical')
+    if fails:
+        print('wasetup: FAIL - %d of its checks' % len(fails))
+        sys.exit(1)
+    print('wasetup: ok - the match setup draws what changed, once')
+
+
+if __name__ == '__main__':
+    main()

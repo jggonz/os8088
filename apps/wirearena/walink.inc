@@ -59,9 +59,10 @@ WP_BDIN     equ 28
 WP_ACK      equ 30
 WP_SLOT     equ 31
 WP_SZ       equ 32
-WL_ROWS     equ 14              ; the window's rows of text (the setup's
-                                ; buttons over rows 7 and 8, WS_BTNY)
-WL_COLS     equ 38
+WL_ROWS     equ 6               ; the window's rows of text: what the link is
+                                ; doing, then the players (wasetup.inc's
+                                ; controls between, WS_LOBY)
+WL_COLS     equ 40
 
 %include "os88cable.inc"
 RW_ETYPE    equ 0x88B5          ; IEEE 802's local experimental EtherType
@@ -154,7 +155,6 @@ ud_take:
 ; go; the card is the window's tick's to open (wa_lknettry), as UDP waits
 ; for an address
 wa_lknetgo:
-    mov byte [wa_lkfull], 1
     push ax
     call lk_disconnect
     call wa_lkcable
@@ -175,11 +175,12 @@ wa_lknettry:
     mov byte [wa_lknet], 2
     mov byte [wa_lkwant], 0
     mov word [lk_blk+LK_MSG], wa_lm_udp
-    mov byte [wa_lkfull], 1
 .out:
     ret
 .not:
-    inc word [wa_lktries]
+    cmp ax, NETE_NOLINK         ; REFUSED (no card, no driver): said once,
+    jne .stop                   ; not asked again a tick - each ask loads
+    inc word [wa_lktries]       ; the driver off the disk again
     cmp byte [wa_lkwant], 3     ; (by address: UDP or nothing)
     je .out
     cmp word [wa_lktries], 90
@@ -189,11 +190,19 @@ wa_lknettry:
     jc .none
     mov byte [wa_lknet], 1
     mov word [lk_blk+LK_MSG], wa_lm_neth
-    mov byte [wa_lkfull], 1
     ret
+.stop:
+    cmp byte [wa_lkwant], 3     ; (local: raw frames may still be had)
+    mov byte [wa_lkwant], 0
+    jne .raw
 .none:
     mov word [lk_blk+LK_MSG], wa_lm_nonet
-    mov byte [wa_lkfull], 1
+    ret
+.raw:
+    call rw_open
+    jc .none
+    mov byte [wa_lknet], 1
+    mov word [lk_blk+LK_MSG], wa_lm_neth
     ret
 
 ; wa_pptr - AL = a peer's index: BX = its record in the table. Keeps all
@@ -655,7 +664,6 @@ wa_lkpeer1:
     pop si
     call OSAPI_GET_TICKS
     mov [bx+WP_PHEARD], ax
-    mov byte [wa_lkfull], 1
 .out:
     ret
 
@@ -833,7 +841,6 @@ wa_lkstart:
     inc ax
 .t:
     mov [wa_lktag], al
-    mov byte [wa_lkfull], 1
     ret
 .tagged:
     or dl, dl
@@ -919,7 +926,6 @@ wa_lkplay:
 ; wa_lkcmd - the Link menu: AL = Automatic, COM1, COM2, Disconnect, Ready,
 ; then No bots, One bot, Two bots (the host's)
 wa_lkcmd:
-    mov byte [wa_lkfull], 1
     cmp al, 8
     jne .nnet
     mov byte [wa_splay], 2
@@ -1078,7 +1084,6 @@ wa_lkhtake:
     mov [wa_lkpeer+2], ax
     mov byte [wa_lkps], 0
     mov byte [wa_lkptag], 0
-    mov byte [wa_lkfull], 1
 .peer:
     push si                     ; (on the card: where it is, to answer it)
     push di
@@ -1125,16 +1130,20 @@ wa_lkhtake:
 
 ; wa_lkdraw - the window's rows that changed since they were drawn (all of
 ; them after a paint or a mode change): the link's line, then the help or
-; the lobby. Under the lock (ONTIMER)
+; the lobby. Under the lock (ONTIMER). THE CLIP IS TAKEN ONLY WHEN A ROW OR
+; A BUTTON CHANGED: taken every tick, it blinked the pointer over the
+; window three times a second with nothing to draw
 wa_lkdraw:
+    cmp byte [wa_abon], 0       ; (the About card up: nothing under it)
+    jne wa_lkrows.out
     mov bx, [wa_win]
     test word [es:bx+W_FLAGS], 2
     jz wa_lkrows.out
-    call OSAPI_WM_CLIP_SET
-    jc wa_lkrows.out
+    mov byte [wa_lkclip], 0
     ; (falls through)
 ; wa_lkrows - every row, drawn if it changed or [wa_lkfull]: the paint's
-; body (wa_lkpaint) and the tick's (wa_lkdraw)
+; body (wa_lkpaint) and the tick's (wa_lkdraw). A paint skips a blank row:
+; the kernel filled the content white before it (SPEC.md 11)
 wa_lkrows:
     push bp
     xor bp, bp                  ; BP = the row
@@ -1146,7 +1155,7 @@ wa_lkrows:
     add ax, wa_lkcache
     mov di, ax
     cmp byte [wa_lkfull], 0
-    jne .draw
+    jne .full
     mov si, wa_lkln
     mov cx, WL_COLS
     push di
@@ -1155,6 +1164,25 @@ wa_lkrows:
     repe cmpsb
     pop di
     je .next
+    call wa_lkclipon
+    jc .gone
+    jmp .draw
+.full:
+    cmp byte [wa_lkown], 0      ; (our own repaint: every row)
+    jne .draw
+    mov si, wa_lkln             ; (a paint: a blank row is the kernel's
+    mov cx, WL_COLS             ; white already)
+.blank:
+    lodsb
+    cmp al, ' '
+    loope .blank
+    jne .draw
+    mov si, wa_lkln
+    mov cx, WL_COLS
+    push ds
+    pop es
+    rep movsb
+    jmp .next
 .draw:
     mov si, wa_lkln
     mov cx, WL_COLS
@@ -1166,15 +1194,50 @@ wa_lkrows:
     inc bp
     cmp bp, WL_ROWS
     jb .row
-    call wa_sbtns               ; (the setup's buttons, where they changed)
+    call wa_sdraw               ; (the setup's controls and buttons, where
+    jc .gone                    ; they changed)
+    call wa_sbtns
     mov byte [wa_lkfull], 0
     pop bp
+    cmp byte [wa_abon], 0       ; (a paint with the card up: the card last,
+    je .out                     ; over everything it is opaque about)
+    mov bx, [wa_win]
+    mov si, wa_ablines
+    call os88ui_about_d
 .out:
+    ret
+.gone:
+    mov byte [wa_lkfull], 1     ; (no clip: all of it next tick)
+    pop bp
+    ret
+
+; wa_lkclipon - the window's clip, once a tick, the first time something
+; is drawn: CF = 1 refused (then nothing is drawn, and the next tick draws
+; it all). Keeps all but the flags
+wa_lkclipon:
+    cmp byte [wa_lkclip], 0
+    jne .ok
+    push ax
+    push bx
+    push es
+    mov bx, [wa_win]
+    call OSAPI_WM_CLIP_SET
+    pop es
+    pop bx
+    pop ax
+    jc .no
+    mov byte [wa_lkclip], 1
+.ok:
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; wa_lkpaint - PAINT: every row (the kernel has set the clip)
 wa_lkpaint:
     mov byte [wa_lkfull], 1
+    mov byte [wa_lkclip], 1
     jmp wa_lkrows
 
 ; wa_lkput - BP = a row: wa_lkln drawn there, ground and glyphs in one pass
@@ -1183,17 +1246,18 @@ wa_lkput:
     call OSAPI_WM_CONTENT       ; AX = left, DX = top
     mov cx, ax
     add cx, 8
-    mov ax, bp
+    mov ax, bp                  ; row 0 at 4, the players' from WS_LOBY
+    or ax, ax
+    jz .r0
+    dec ax
     mov bl, 10
     mul bl
-    add ax, 6
+    add ax, WS_LOBY - 4
+.r0:
+    add ax, 4
     add dx, ax
     mov si, wa_lkln
     mov ax, (CWHITE << 8) | CBLACK
-    cmp byte [si], '>'          ; (the setup's focused row: inverted)
-    jne .ink
-    mov ax, (CBLACK << 8) | CWHITE
-.ink:
     call OSAPI_FONT_RUN
     ret
 
@@ -1211,7 +1275,13 @@ wa_lkline:
     jnz .body
     mov si, [lk_blk+LK_MSG]     ; row 0: what the link is doing
     call wa_lklinked
-    jz .copy
+    jnz .linked
+    cmp si, wa_lm_udp           ; (on the network: where, for a host to
+    jne .copy                   ; give out to players joining by address)
+    call wa_lkcpy
+    mov si, ud_blk+UD_IP
+    jmp wa_lkip
+.linked:
     cmp byte [wa_lknet], 0
     je .com
     mov si, wa_lt_onet
@@ -1238,42 +1308,15 @@ wa_lkline:
     stosb
     ret
 .body:
-    cmp bp, 1
-    je .out
-    cmp byte [wa_keysv], 0      ; KEYS: the key list, row 2 its first line
-    jne .help
-    cmp bp, WS_LAST             ; the settings (wasetup.inc), then once
-    ja .players                 ; linked the players
-    jmp wa_sline
-.players:
-    call wa_lklinked
+    call wa_lklinked            ; rows 1..: the players, once linked
     jnz .lobby
-    ret
-.help:
-    cmp bp, WL_ROWS - 1         ; (its last row: the way back)
-    jne .hl
-    mov si, wa_lt_back
-    jmp wa_lkcpy
-.hl:
-    mov si, wa_help
-    mov cx, bp
-    sub cx, 2
-    jcxz .copy
-.skip:
-    lodsb
-    or al, al
-    jnz .skip
-    cmp byte [si], 0
-    je .out
-    loop .skip
-.copy:
-    jmp wa_lkcpy
 .out:
     ret
+.copy:
+    jmp wa_lkcpy
 .lobby:
-    mov dx, bp                  ; rows 10..: YOU, each peer bound, then the
-    sub dx, 10                  ; hint (NET-PLAN 4: three peers at most)
-    jb .out
+    mov dx, bp                  ; rows 1..: YOU, each peer bound, then the
+    dec dx                      ; hint (NET-PLAN 4: three peers at most)
     jz wa_lkrow.you
     xor cx, cx
 .p:
@@ -1324,36 +1367,6 @@ wa_lkrow:
     jmp wa_lkcpy
 .o3:
     ret
-.arena:
-    mov si, wa_lt_arena
-    call wa_lkcpy
-    mov bl, [wa_lkarena]
-    xor bh, bh
-    shl bx, 1
-    mov si, [wa_lt_anames+bx]
-    call wa_lkcpy
-    mov di, wa_lkln+17
-    mov si, wa_lt_bots
-    call wa_lkcpy
-    mov al, [wa_lkbots]
-    add al, '0'
-    stosb
-    mov al, ','
-    stosb
-    mov al, ' '
-    stosb
-    mov bl, [wa_lkdiff]
-    xor bh, bh
-    shl bx, 1
-    mov si, [wa_lt_dnames+bx]
-    jmp wa_lkcpy
-.width:
-    mov si, wa_lt_w40
-    cmp byte [wa_want], 0
-    jne .w
-    mov si, wa_lt_w80
-.w:
-    jmp wa_lkcpy
 .hint:
     mov si, wa_lt_hhost
     call wa_lkhost
@@ -1470,12 +1483,11 @@ wa_lkpname:
     ret
 
 wa_lt_on1:      db 'Linked on COM', 0
-wa_lt_back:     db 'A key or a click: back.', 0
 wa_ms_setup:    db 'WireArena - match setup', 0
 wa_lt_onet:     db 'Linked on Ethernet', 0
 wa_lt_oudp:     db 'Linked with ', 0
 wa_lm_addr:     db 'Asking the network for an address...', 0
-wa_lm_udp:      db 'On the network: ready to find or host', 0
+wa_lm_udp:      db 'On the network at ', 0
 wa_lm_neth:     db 'Looking on Ethernet...', 0
 wa_lm_nonet:    db 'No Ethernet card (ETHER.DRV)', 0
 wa_lt_you:      db 'YOU', 0
@@ -1484,18 +1496,14 @@ wa_lt_st:       dw wa_lt_s0, wa_lt_s1, wa_lt_s2
 wa_lt_s0:       db 'not ready', 0
 wa_lt_s1:       db 'READY', 0
 wa_lt_s2:       db 'in the arena', 0
-wa_lt_arena:    db 'Arena: ', 0
 wa_lt_anames:   dw wa_lt_a0, wa_lt_a1, wa_lt_a2
 wa_lt_a0:       db 'full', 0
 wa_lt_a1:       db 'open', 0
 wa_lt_a2:       db 'heights', 0
-wa_lt_bots:     db 'Bots: ', 0
 wa_lt_dnames:   dw wa_lt_d0, wa_lt_d1, wa_lt_d2
 wa_lt_d0:       db 'easy', 0
 wa_lt_d1:       db 'normal', 0
 wa_lt_d2:       db 'hard', 0
-wa_lt_w40:      db 'You play 40 columns (Game menu)', 0
-wa_lt_w80:      db 'You play 80 columns (Game menu)', 0
 wa_lt_hhost:    db 'Ready on both, and the match starts.', 0
 wa_lt_hguest:   db 'Ready, and the host starts the match.', 0
 
@@ -3003,7 +3011,8 @@ wa_lkmsg:
     cmp byte [wa_lkon], 0
     je .out
     xor dx, dx                  ; over every peer bound: DL bit 0 one left,
-    xor cx, cx                  ; 1 one lost, 2 one not heard from yet
+    xor cx, cx                  ; 1 one lost, 2 one not heard from yet, 3
+                                ; the one that left the host (slot 0)
 .p:
     cmp cl, [wa_lkpn]
     jae .say
@@ -3015,7 +3024,10 @@ wa_lkmsg:
     cmp byte [bx+WP_GONE], 0
     je .g
     or dl, 1
-    jmp .p                      ; (one that left: not lost, not waited for)
+    cmp byte [bx+WP_SLOT], 0
+    jne .p                      ; (one that left: not lost, not waited for)
+    or dl, 8
+    jmp .p
 .g:
     cmp byte [bx+WP_LOST], 0
     je .l
@@ -3031,6 +3043,9 @@ wa_lkmsg:
     jnz .put
     mov si, wa_lm_wait
     test dl, 4
+    jnz .put
+    mov si, wa_lm_hleft         ; (the host gone: its bots with it, and
+    test dl, 8                  ; the match is over in all but name)
     jnz .put
     mov si, wa_lm_gone
     test dl, 1
@@ -3054,5 +3069,6 @@ wa_lkmsg:
     ret
 wa_lm_gone: db '   OPPONENT LEFT    '
 wa_lm_left: db '   A PLAYER LEFT    '
+wa_lm_hleft: db '     HOST LEFT      '
 wa_lm_lost: db '     LINK LOST      '
 wa_lm_wait: db 'WAITING FOR OPPONENT'

@@ -30,7 +30,7 @@ import arenagen                                                 # noqa: E402
 import os88marty                                                # noqa: E402
 import os88ui                                                   # noqa: E402
 from os88fixture import need                                    # noqa: E402
-from waweapons import Arena, amap, SYS, APPS, FS, ITEM          # noqa: E402
+from waweapons import Arena, start, amap, SYS, APPS, FS, ITEM          # noqa: E402
 
 GESZ = 12
 
@@ -54,11 +54,7 @@ def main():
                      quick=True) as ui:
         m = ui.m
         w = ui.path("B:/WARENA.O88")
-        os88marty.until(m, lambda _: any(c[0] == "Game" and any(
-            i[0] == ITEM for i in c[3]) for c in ui.menus()),
-            "WireArena's Game menu on the bar", guest=10)
-        ui.menu_pick("Game", ITEM)
-        p = os88marty.Pkg(m, w)
+        p = start(ui, w, sym)
         f0 = p.byte(sym["wa_frame"])
         os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,
                         "the Heights arena's first frames", guest=20)

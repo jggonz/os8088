@@ -9,7 +9,7 @@ wa_cross and wa_present; the P bench runs, and the cycles between stops are
 summed per piece. A span's cost is fitted as a + b x the columns it opened.
 Run from the worktree root, on the split build:
 
-    python3 tools/watrace.py "Play, 40 columns" 30 out.json [keys...]
+    python3 tools/watrace.py ARENA,WIDTH 30 out.json [keys...]   (e.g. 0,40)
     python3 tools/watrace.py --analyse out.json
 """
 import sys
@@ -65,7 +65,9 @@ if len(sys.argv) == 3 and sys.argv[1] == "--analyse":
 
 import sys, os, re, struct, subprocess, tempfile, json
 sys.path.insert(0, 'tools')
+sys.path.insert(0, 'tests')
 import os88ui
+import walift                                   # (its start(): the setup)
 from os88pkg import PKG_FMT
 F = 4772727
 item, nfr, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
@@ -87,8 +89,10 @@ NAMES = ["G.render", "wa_render", "wa_render.walked", "wa_render.roomless", "wa_
          "wa_span", "wa_figures", "wa_cross", "wa_present"]
 with os88ui.boot("build/os8088-360.img", apps="build/warena360.img") as ui:
     m = ui.m
-    ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
-    ui.menu_pick("Game", item); m.advance(cycles=F)
+    w = ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
+    ar, wd = (int(x) for x in item.split(","))
+    walift.start(ui, w, walift.amap(), arena=ar, w40=(wd == 40))
+    m.advance(cycles=F)
     for k in pre:
         m.key(k); m.advance(cycles=F // 4)
     buf = m.read(0x10000, 0x90000)

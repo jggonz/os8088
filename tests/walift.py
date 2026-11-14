@@ -52,7 +52,22 @@ SYS = "build/os8088-360.img"
 APPS = "build/warena360.img"
 F = 4772727                     # the 5150's clock: guest cycles a second
 TICK = F // 30                  # the sim's tick (wa_tick runs at 30 Hz)
-ITEM = "Heights arena, 40 columns"
+ITEM = "Bots: normal"            # (a Game item: the menu is on the bar)
+
+
+def start(ui, w, sym, arena=2, w40=True):
+    """a match ALONE from the setup (NET-PLAN 2; the Game menu's Play items
+    went, the owner 2026-11-14): the arena and the width poked into the
+    setup's own settings, then Enter - the Play button's key"""
+    m = ui.m
+    os88marty.until(m, lambda _: any(c[0] == "Game" and any(
+        i[0] == ITEM for i in c[3]) for c in ui.menus()),
+        "WireArena's Game menu on the bar", guest=10)
+    p = os88marty.Pkg(m, w)
+    p.write(sym["wa_lkarena"], bytes([arena]))
+    p.write(sym["wa_want"], bytes([1 if w40 else 0]))
+    m.key("Enter")
+    return p
 
 # The arena's lift and tower (tools/arenagen.py HEIGHTS_BOXES): the lift is
 # x 1920..2048, y 1152..1280, the tower's face it rises to is y = 1152.
@@ -240,11 +255,7 @@ def main():
         m = ui.m
         w = ui.path("B:/WARENA.O88")
         # the window is up before its entry proc has set its menus
-        os88marty.until(m, lambda _: any(c[0] == "Game" and any(
-            i[0] == ITEM for i in c[3]) for c in ui.menus()),
-            "WireArena's Game menu on the bar", guest=10)
-        ui.menu_pick("Game", ITEM)
-        p = os88marty.Pkg(m, w)
+        p = start(ui, w, sym)
         f0 = p.byte(sym["wa_frame"])
         os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0
                         and p.word(sym["wa_lift"]) < 0x8000,

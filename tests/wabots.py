@@ -39,7 +39,7 @@ import arenagen                                                 # noqa: E402
 import os88marty                                                # noqa: E402
 import os88ui                                                   # noqa: E402
 from os88fixture import need                                    # noqa: E402
-from waweapons import Arena, amap, SYS, APPS, FS, ITEM, A_, anims  # noqa
+from waweapons import Arena, start, amap, SYS, APPS, FS, ITEM, A_, anims  # noqa
 
 F_BST, F_BSEE, F_BGOAL, F_BTGT = 46, 49, 51, 55
 
@@ -71,7 +71,7 @@ def main():
         p = os88marty.Pkg(m, w)
         check(p.byte(sym["wa_diff"]) == 2, "THE MENU: 'Bots: hard' sets the "
               "difficulty (%d)" % p.byte(sym["wa_diff"]))
-        ui.menu_pick("Game", ITEM)
+        p = start(ui, w, sym)
         f0 = p.byte(sym["wa_frame"])
         os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,
                         "the Heights arena's first frames", guest=20)

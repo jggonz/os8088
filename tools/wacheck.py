@@ -51,6 +51,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import arenagen as A                      # noqa: E402
 import os88ui                             # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+import walift                             # noqa: E402  (its start())
 from os88pkg import PKG_FMT              # noqa: E402
 
 W = 40
@@ -220,7 +222,6 @@ def main_heights(a, off):
     hmax = A.hmax(A.HEIGHTS_BOXES)
     random.seed(a.seed)
     F = 4772727
-    item = "Heights arena, %d columns" % W
     plats = [A.bx(b) for b in A.HEIGHTS_BOXES       # (and the ramps)
              if A.bx(b).h < hmax and A.bx(b).kind != A.LIFT and A.bx(b).h > 40]
     stats = dict(poses=0, bad=0, badnf=0, cols=0, off=0, offnf=0, faults=0)
@@ -228,10 +229,10 @@ def main_heights(a, off):
                      apps=os.path.join(ROOT, "build/warena360.img"),
                      machine=a.machine) as ui:
         m = ui.m
-        ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WARENA.O88")
         m.advance(cycles=F // 2)
         m.go()
-        ui.menu_pick("Game", item)
+        walift.start(ui, w, walift.amap(), w40=(W == 40))
         m.advance(cycles=F * 2)
         if a.level:
             m.key("Digit%d" % a.level)
@@ -342,10 +343,10 @@ def main():
                      apps=os.path.join(ROOT, "build/warena360.img"),
                      machine=a.machine) as ui:
         m = ui.m
-        ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WARENA.O88")
         m.advance(cycles=F // 2)
         m.go()
-        ui.menu_pick("Game", "Play, 40 columns")
+        walift.start(ui, w, walift.amap(), arena=0)
         m.advance(cycles=F * 2)
         if a.level:
             m.key("Digit%d" % a.level)

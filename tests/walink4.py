@@ -19,7 +19,7 @@ which answers DHCP (10.7.0.20 to .23). The shipped package, real datagrams.
   - 3 + 1: Space on the three - three players, and of the host's two bots
     the one slot left; the bot where the host has it on both guests;
   - ONE LEAVES THE MATCH: a guest's Esc - the others mark that peer alone
-    as gone;
+    as gone; then the host's - HOST LEFT, its bot off the board;
   - THE WIRE: every datagram of ours any machine sent, parsed by an
     independent decoder, is a frame of a known type and length.
 
@@ -301,6 +301,15 @@ def run(ms, cable):
                    {({0, 1} - {s}).pop(): 0, 2: 1},
                    'ONE LEAVES THE MATCH: slot %d marks slot 2 alone as gone'
                    % s, secs=6)
+
+    # HOST LEFT: then the host's Esc - slot 1 marks slot 0 gone, which is
+    # what its line says HOST LEFT on (and its bot is off the board)
+    by[0].key('esc')
+    m = by[1]
+    m.wait_for(lambda: {p['slot']: p['gone'] for p in peers(m)} ==
+               {0: 1, 2: 1}, 'HOST LEFT: slot 1 marks the host gone', secs=6)
+    m.wait_for(lambda: figof(m, 3)['dead'] == 250, 'HOST LEFT: its bot off '
+               'slot 1\'s board', secs=3)
 
     wire(cable, {1, 2, 3, 5, 6, 8})
 
