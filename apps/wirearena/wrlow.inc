@@ -186,13 +186,11 @@ wl_bit:     db 1, 2, 4, 8, 1
     test byte [wl_front], 1 << %1
     jz %%p
     mov si, %1 * WL_REC         ; its start corner's
-    mov cx, 7
     call wl_post
     test byte [wl_seen], 1 << ((%1 + 1) & 3)
     jnz %%p
     mov si, ((%1 + 1) & 3) * WL_REC
-    mov cx, 7-16                ; ...and its end's
-    call wl_post
+    call wl_poste               ; ...and its end's
 %%p:
     mov al, [wl_m]
     and al, 1 << %1
@@ -455,15 +453,20 @@ wl_face:
 .under:
     ret
 
-; wl_post - SI = a corner's record (an offset into wl_c), CX = 7 for a
-; face's start corner (the first column whose centre is past it) or 7 - 16
-; for its end (the last short of it): its post, `│` in the rows between its
-; top's and its floor's, against the clip - every cell tested (first one
-; wins). Clobbers AX, BX, CX, DX, SI, DI
+; wl_post - SI = a corner's record (an offset into wl_c), a face's start
+; corner (its column the first whose centre is past it: CX = 7), or
+; wl_poste - its end (the last short of it: 7 - 16): its post, `│` in the
+; rows between its top's and its floor's, against the clip - every cell
+; tested (first one wins). Clobbers AX, BX, CX, DX, SI, DI
+wl_poste:
+    mov cx, 7-16
+    jmp short wl_post.go
 wl_post:
+    mov cx, 7
+.go:
     mov bx, [wl_c+si+WL_CV]
     test byte [wa_vok+bx], 1
-    jz .out                     ; (not in the view: off the screen, or behind)
+    jz wl_face.under            ; (not in the view: off the screen, or behind)
     mov ax, [wl_c+si+WL_KF]
     add ax, 2
     sar ax, 1
@@ -628,7 +631,6 @@ wl_draw:
     mov [wl_sc+1], dl
     mov cx, dx
     shl bx, 1                   ; (the first x 2 from here)
-    push ax
     mov dx, [si+2]              ; THE CULL: the highest half-row the top
     cmp dx, [di+2]              ; reaches (an end's, rounded as the loops
     jle .c1                     ; round)...
@@ -646,14 +648,13 @@ wl_draw:
 .snext:
     loop .scan
     pop si
-    pop ax
 .none:
     ret                         ; (hidden throughout: nothing to do)
 .hit:
     cmp word [si+wa_cov-wa_cclip-2], 0
     jne .snext                  ; (a shut column shows nothing either)
     pop si
-    pop cx                      ; CX = the left end
+    mov cx, [si]                ; CX = the left end
     mov [wa_dc], bp
     mov [wl_col0], bx           ; (the first column x 2)
     mov ax, bx                  ; the first centre past the left end, x 16
@@ -821,25 +822,52 @@ wl_run:
 wl_ltop:    dw wl_l01s, wl_rtop
 wl_lfloor:  dw wl_f1, wl_rfloor
 
-; wl_rtop - a pass's TOP edge, shallow (wl_edge's): its columns from SI (x 2),
+; wl_rtop - a pass's TOP edge, shallow (wl_run's): its columns from SI (x 2),
 ; DH of them, at [wl_hr] and BP stepping by [wl_ks]; CL the pass's tag, AH the
 ; colour, DL the stamp, DI the list. The edge keeps its half-row for a RUN
 ; of columns (FLATPASS's way): the glyph, the cell and the stack's entry -
 ; CX, the tag and the row - are made once a run, the cell stepped, and the
-; half-row moves on at a carry. In a column the top is above the clip (one
-; byte test: the clip is 0..WA_HR) and the column not shut: the cell
-; plotted, the clip raised and an entry pushed - the column's count tested
-; in place, no index made - or, full, merged into the deepest (the nearer
-; tag kept, so a figure between the two can only be hidden a frame too
-; soon). A half-row off the screen, or its top one, goes a column at a time
-; (.odd): under the screen nothing; at or over its top the column shut
-; (wl_shutc), the top half-row's cell drawn first.
+; half-row moves on at a carry, in CH. In a column the top is above the
+; clip (one byte test: the clip is 0..WA_HR) and the column not shut: the
+; cell plotted, the clip raised and an entry pushed - the column's count
+; tested in place, no index made - or, full, merged into the deepest (the
+; nearer tag kept, so a figure between the two can only be hidden a frame
+; too soon). A half-row off the screen, or its top one, goes a column at a
+; time (wl_rodd, [wl_hr] the half-row there): under the screen nothing; at
+; or over its top the column shut (wl_shutc), the top half-row's cell drawn
+; first.
+wl_rodd:
+    inc bx                      ; BX = the half-row
+    mov [wl_hr], bx
+    cmp bx, [wa_cclip+si]
+    jge .next                   ; (under the clip, as all under the screen)
+    cmp byte [wa_cov+si], 0
+    jne .next
+    or bx, bx
+    jnz .shut                   ; (over the screen's top: nothing drawn)
+    mov al, [wa_hgl]
+    mov bx, [wa_hroff]
+    add bx, si
+    WPLOT
+.shut:
+    call wl_shutc
+.next:
+    inc si
+    inc si
+    dec dh
+    jz wl_rtop.done
+    add bp, [wl_ks]
+    jnc wl_rtop
+    sub bp, [wl_dcm]
+    mov bx, [wl_dir]
+    add bx, [wl_hr]
+    jmp short wl_rtop.run2
 wl_rtop:
-.run:
     mov bx, [wl_hr]
+.run2:
     dec bx
     cmp bx, WA_HR-1
-    jae .odd
+    jae wl_rodd
     inc bx
     mov ch, bl
     mov al, [wa_hgl+bx]
@@ -867,11 +895,14 @@ wl_rtop:
     jz .done
     add bp, [wl_ks]
     jnc .col
-.turn:
-    sub bp, [wl_dcm]
-    mov bx, [wl_dir]
-    add [wl_hr], bx
-    jmp .run
+    sub bp, [wl_dcm]            ; the next half-row (CH: 1..47 here, so the
+    add ch, [wl_dir]            ; next is 0..48 - a byte)
+    mov bl, ch
+    xor bh, bh
+    jmp .run2
+.done:
+    mov [wa_lp], di
+    ret
 .p1:
     ja .p2
     mov [wa_cst+2*WA_MAXW+si], cx
@@ -888,40 +919,29 @@ wl_rtop:
 .full:
     mov [wa_cst+(WA_CSTK-1)*2*WA_MAXW+si+1], ch
     jmp .next
-.odd:
-    inc bx                      ; BX = the half-row
-    cmp bx, [wa_cclip+si]
-    jge .onext                  ; (under the clip, as all under the screen)
-    cmp byte [wa_cov+si], 0
-    jne .onext
-    or bx, bx
-    jnz .oshut                  ; (over the screen's top: nothing drawn)
-    mov al, [wa_hgl]
-    mov bx, [wa_hroff]
-    add bx, si
-    WPLOT
-.oshut:
-    call wl_shutc
-.onext:
-    inc si
-    inc si
-    dec dh
-    jz .done
-    add bp, [wl_ks]
-    jnc .run
-    jmp .turn
-.done:
-    mov [wa_lp], di
-    ret
 
 ; wl_rfloor - a pass's FLOOR edge alone, shallow (wl_draw's, r5): wl_rtop's
 ; walk, each cell plotted where it is above the column's clip and the
-; column not shut; nothing raised. A run off the screen is stepped through.
+; column not shut; nothing raised. A run off the screen is stepped through
+; (wl_rfoff, [wl_hr] the half-row there).
+wl_rfoff:
+    mov [wl_hr], bx
+.col:
+    inc si
+    inc si
+    dec dh
+    jz wl_rfloor.done
+    add bp, [wl_ks]
+    jnc .col
+    sub bp, [wl_dcm]
+    mov bx, [wl_dir]
+    add bx, [wl_hr]
+    jmp short wl_rfloor.run
 wl_rfloor:
-.run:
     mov bx, [wl_hr]
+.run:
     cmp bx, WA_HR
-    jae .off
+    jae wl_rfoff
     mov ch, bl
     mov al, [wa_hgl+bx]
     shl bx, 1
@@ -942,19 +962,13 @@ wl_rfloor:
     jz .done
     add bp, [wl_ks]
     jnc .col
-.turn:
-    sub bp, [wl_dcm]
-    mov bx, [wl_dir]
-    add [wl_hr], bx
+    sub bp, [wl_dcm]            ; the next half-row (CH: 0..47 here)
+    add ch, [wl_dir]
+    mov bl, ch
+    mov bh, 0
+    jns .run
+    dec bh                      ; (-1: over the screen's top)
     jmp .run
-.off:
-    inc si
-    inc si
-    dec dh
-    jz .done
-    add bp, [wl_ks]
-    jnc .off
-    jmp .turn
 .done:
     mov [wa_lp], di
     ret
@@ -1001,16 +1015,13 @@ wl_l01s:
     WPLOT
     jcxz .over                  ; (the top row: shut)
     mov [wa_cclip+si], cx
-    mov bx, [wa_cstn+si]        ; the depth stack: (tag, row) on top, or,
-    cmp bl, WA_CSTK             ; full, merged into the deepest
-    jae .full
-    inc bx
-    mov [wa_cstn+si], bx
-    shl bx, 1
-    mov bx, [wl_k160-2+bx]
-    mov al, [wl_tag]
-    mov [wa_cst+bx+si], al
-    mov [wa_cst+bx+si+1], cl
+    mov bh, cl                  ; the depth stack: (tag, row) on top, or,
+    mov bl, [wl_tag]            ; full, merged into the deepest (wl_rtop's
+    cmp byte [wa_cstn+si], 1    ; ladder)
+    jae .p1
+    mov [wa_cst+si], bx
+.inc:
+    inc byte [wa_cstn+si]
 .next:
     add bp, [wl_stf]
     adc cx, [wl_stw]
@@ -1021,6 +1032,19 @@ wl_l01s:
     jnz .col
     mov [wa_lp], di
     ret
+.p1:
+    ja .p2
+    mov [wa_cst+2*WA_MAXW+si], bx
+    jmp .inc
+.p2:
+    cmp byte [wa_cstn+si], 3
+    ja .full
+    je .p3
+    mov [wa_cst+4*WA_MAXW+si], bx
+    jmp .inc
+.p3:
+    mov [wa_cst+6*WA_MAXW+si], bx
+    jmp .inc
 .full:
     mov [wa_cst+(WA_CSTK-1)*2*WA_MAXW+si+1], cl
     jmp .next
