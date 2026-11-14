@@ -2701,8 +2701,9 @@ wa_eoff:
 %endif
     jmp %%adv
 %%off0:                         ; off the screen at the first column: and
-    xor bx, [%2]                ; moving further off (above it and going
-    jns %%gone                  ; up, or under it and down)?
+    jcxz %%gone                 ; level, or moving further off (above it
+    xor bx, [%2]                ; and going up, or under it and down)?
+    jns %%gone
 %%off:                          ; (the edge is off the screen here)
 %if %1
     cmp word [wa_cov+si], 0
