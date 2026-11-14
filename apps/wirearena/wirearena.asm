@@ -661,20 +661,50 @@ WA_K_SPACE  equ 256
 %endmacro
 
 ; wa_keys - the held keys into [wa_kbits] (WA_K_*), and the whole map into
-; wa_kmap for wa_frame_input's trigger. Keeps all but the flags.
+; wa_kmap for wa_frame_input's trigger. The map's bytes the keys are in are
+; taken into AX a word at a time - W with S and A, the arrows together - so
+; seven of the nine tests are of a register. Keeps all but AX and the flags.
+%define WA_KB(s) ((s) >> 3)             ; a scancode's byte in the map...
+%define WA_KM(s) (1 << ((s) & 7))       ; ...and its bit there
+%if WA_KB(0x1F) != WA_KB(0x11)+1 || WA_KB(0x1E) != WA_KB(0x1F) || WA_KB(KSC_LEFT) != WA_KB(KSC_UP) || WA_KB(KSC_RIGHT) != WA_KB(KSC_UP) || WA_KB(KSC_DOWN) != WA_KB(KSC_UP)+1
+ %error "wa_keys: the scancodes are not where its two words expect them"
+%endif
 wa_keys:
     push bx
     push di
     mov di, wa_kmap
     call OSAPI_KEY_MAP          ; every key at once (and the first call arms)
     xor bx, bx
-    WA_KBIT KSC_LEFT, WA_K_LEFT
-    WA_KBIT KSC_RIGHT, WA_K_RIGHT
-    WA_KBIT KSC_UP, WA_K_UP
-    WA_KBIT KSC_DOWN, WA_K_DOWN
-    WA_KBIT 0x11, WA_K_W
-    WA_KBIT 0x1F, WA_K_S
-    WA_KBIT 0x1E, WA_K_A
+    mov ax, [wa_kmap+WA_KB(KSC_UP)] ; AL: up, left, right; AH: down
+    test al, WA_KM(KSC_LEFT)
+    jz .l
+    or bl, WA_K_LEFT
+.l:
+    test al, WA_KM(KSC_RIGHT)
+    jz .r
+    or bl, WA_K_RIGHT
+.r:
+    test al, WA_KM(KSC_UP)
+    jz .u
+    or bl, WA_K_UP
+.u:
+    test ah, WA_KM(KSC_DOWN)
+    jz .d
+    or bl, WA_K_DOWN
+.d:
+    mov ax, [wa_kmap+WA_KB(0x11)] ; AL: W; AH: S and A
+    test al, WA_KM(0x11)
+    jz .w
+    or bl, WA_K_W
+.w:
+    test ah, WA_KM(0x1F)
+    jz .s
+    or bl, WA_K_S
+.s:
+    test ah, WA_KM(0x1E)
+    jz .a
+    or bl, WA_K_A
+.a:
     WA_KBIT 0x20, WA_K_D
     WA_KBIT KSC_SPACE, WA_K_SPACE
     mov [wa_kbits], bx
@@ -1312,7 +1342,14 @@ wa_hjump:
     je .read                    ; still: HEIGHTS-PLAN 9.10)
 .same:
     mov ax, [wa_flr]
-    jmp .have
+.have:
+    mov cx, [wa_jz]
+    or cx, [wa_jv]
+    jnz .air
+    test byte [wa_kbits+1], WA_K_SPACE >> 8
+    jz .walk
+    mov word [wa_jv], WA_JUMPV
+    jmp .air
 .read:
     mov [wa_fpx], ax
     mov [wa_fpy], bx
@@ -1320,18 +1357,12 @@ wa_hjump:
     call wa_floor
     mov [wa_flr], ax
     mov [wa_flrb], dx
-.have:
-    mov cx, [wa_jz]
-    or cx, [wa_jv]
-    jnz .air
-    test word [wa_kbits], WA_K_SPACE
-    jz .walk
-    mov word [wa_jv], WA_JUMPV
-    jmp .air
+    jmp .have
 .walk:
-    mov dx, [wa_feet]           ; the step: up (wa_hcollide let no more
+    mov dx, [wa_feet]           ; the step: up (wa_collide let no more
     cmp ax, dx                  ; than a step through), or down a step -
-    jge .onto                   ; past that, a fall
+    je wa_ltick                 ; past that, a fall (on the same floor as
+    jg .onto                    ; before: the usual tick)
     sub dx, ax
     cmp dx, WA_STEPUP
     ja .air
@@ -2763,7 +2794,9 @@ wa_figtick:
     shl ax, 1
     shl ax, 1                   ; quarter keyframes in the cycle
     cmp [di+F_PH], ax
-    jb .out
+    jae .end
+    ret
+.end:
     cmp byte [di+F_LOOP], 0
     je .hold
     mov word [di+F_PH], 0
@@ -3577,6 +3610,18 @@ RG_LIFE     equ 12
 RG_OWN      equ 14              ; who fired it: 0 the player, 1.. a bot
 WA_RKGSZ    equ 16
 
+; WA_RKMV axis - wa_rkmv for the axis named (0 x, 2 y, 4 z), in line: a
+; rocket's three, every tick it flies. Clobbers AX, DX
+%macro WA_RKMV 1
+    mov dx, [di+RG_VX+%1]
+    mov al, dh
+    cbw                         ; AX = v >> 8, DX = (v & 255) << 8
+    mov dh, dl
+    xor dl, dl
+    add [di+RG_XF+%1], dx
+    adc [si+WA_RKX+%1], ax
+%endmacro
+
 ; wa_rktick - each rocket a tick: an explosion's count; a flight's step, and
 ; what it meets - out of the room (gone over the walls, or into them), the
 ; floor or a box under it (wa_floor over every box, the player's radius
@@ -3607,12 +3652,9 @@ wa_rktick:
 .rocket:
     dec word [di+RG_LIFE]
     jz .gone
-    xor bx, bx
-    call wa_rkmv
-    mov bx, 2
-    call wa_rkmv
-    mov bx, 4
-    call wa_rkmv
+    WA_RKMV 0
+    WA_RKMV 2
+    WA_RKMV 4
     mov ax, [si+WA_RKX]
     mov bx, [si+WA_RKY]
     cmp ax, WA_ROOM_X0
@@ -3651,8 +3693,7 @@ wa_rktick:
     call .gax                   ; has asked for it (.gax)
     mov bx, 2
     call .gax
-    mov bx, 4
-    call wa_rkmv
+    WA_RKMV 4
     mov ax, bp                  ; AX = the floor under it: as its last step
     or ax, ax                   ; that held found it, or (neither did)
     jns .gfl                    ; asked now
