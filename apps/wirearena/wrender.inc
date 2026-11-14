@@ -147,8 +147,7 @@ WA_VAR wa_tha, 1
 WA_VAR wa_thhb, 1               ;   a column's quadrant bits
 WA_VAR wa_pkm, 1                ;   the pickups still to draw
 WA_VAR wa_thz, 2                ;   its z
-WA_VAR wa_thdx, 2               ;   its offset from the eye, x and y
-WA_VAR wa_thdy, 2
+WA_VAR wa_thdx, 2               ;   its offset from the eye, x (wa_view)
 WA_VAR wa_ovoldn, 2             ; the overlay's cells as it last came in:
 WA_VAR wa_ovold, WA_MOV*2       ;   how many, and each's offset
 WA_VAR wa_thiz, 2               ;   its inverse depth
@@ -2977,14 +2976,14 @@ wa_figures:
     push di
     mov ax, [di+F_X]
     mov bx, [di+F_Y]
-    call wa_xform
+    mov cx, 32                  ; (half a metre: too close to draw - and
+    call wa_view                ; behind the eye: half the multiplies)
     pop di
     pop bx
+    jc .nxt
     mov [wa_fxs+bx], ax
     mov [wa_fzs+bx], dx
     mov [wa_frec+bx], di
-    cmp dx, 32                  ; half a metre: too close to draw
-    jl .nxt
     mov cx, dx
     add cx, 64
     or ax, ax
@@ -3455,10 +3454,19 @@ wa_fjdone:                      ; (wa_fjl comes back here)
     WA_LIMB 20, 12
     mov si, [wa_jsx]            ; the head
     mov di, [wa_jsy]
-    call wa_fpix
-.head:
     cmp word [wa_fv8], 40       ; big enough for a 2x2 head
-    jb wa_femit
+    jae .head2
+    call wa_fpix
+    jmp wa_femit
+.head2:
+    cmp byte [wa_foff], 0
+    jne .headc
+    call wa_fpair               ; (all of it on the screen: two cell
+    dec di                      ; lookups, not four clipped sub-pixels)
+    call wa_fpair
+    jmp wa_femit
+.headc:
+    call wa_fpix
     inc si
     call wa_fpix
     dec di
@@ -3472,7 +3480,7 @@ wa_fjdone:                      ; (wa_fjl comes back here)
     WA_LIMB 2, 8
     WA_LIMB 4, 10
     WA_LIMB 4, 12
-    jmp .head
+    jmp wa_femit                ; (no head: under a sub-pixel)
 .gib:                           ; GIB (WEAPONS-PLAN 2.3): each joint alone,
     mov cx, WA_NJ               ; a 2x2 block when near (the head's) - the
     cmp byte [wa_fsub], 4       ; bits; the box allows for the reach, as for
@@ -3948,6 +3956,33 @@ wa_fpix:
     WA_FPIXI
     ret
 
+; wa_fpair - SI = sub-column, DI = half-row: that sub-pixel and the one to
+; its right into wa_fbuf, both on the screen (the head's 2x2, a row of it).
+; Keeps SI and DI; clobbers AX, BX.
+wa_fpair:
+    mov bx, di
+    shl bx, 1
+    mov bx, [wa_hrfb+bx]
+    mov ax, si
+    and al, 0xFE
+    add bx, ax                  ; BX = the cell
+    mov ax, di
+    shr ax, 1
+    mov al, 3                   ; an upper half-row: the cell's upper
+    jnc .u                      ; quadrants... or its lower
+    mov al, 12
+.u:
+    test si, 1
+    jz .put
+    and al, 0x0A                ; the cell's right half, and the next
+    or [bx], al                 ; cell's left
+    shr al, 1
+    inc bx
+    inc bx
+.put:
+    or [bx], al
+    ret
+
 ; wa_fline - (CX,DX) to (AX,BX), sub-pixels: a limb into wa_fbuf. Clobbers
 ; AX, BX, CX, DX, SI, DI, BP.
 ;
@@ -4355,6 +4390,13 @@ wa_thshape:
 ; wa_rockets - after the figures: each rocket a bright dot, each explosion a
 ; block growing over its ticks, yellow and red by turns
 wa_rockets:
+    mov al, [wa_rks+WA_RKST]    ; (none in flight, none exploding: nearly
+%assign wa_i 1                  ; every frame)
+%rep WA_NRK-1
+    or al, [wa_rks+wa_i*WA_RKSZ+WA_RKST]
+%assign wa_i wa_i+1
+%endrep
+    jz .ret
     mov si, wa_rks
 .r:
     mov al, [si+WA_RKST]
@@ -4404,6 +4446,7 @@ wa_rockets:
     add si, WA_RKSZ
     cmp si, wa_rks + WA_NRK*WA_RKSZ
     jb .r
+.ret:
     ret
 wa_rkshape:
     dw 6, -5, 5                 ; a rocket in flight: a bright dot
@@ -4417,38 +4460,9 @@ wa_gnshape:
 ; Clobbers every register.
 wa_thing:
     mov [wa_thz], cx
-    sub ax, [wa_px]             ; wa_xform's sums, z first: one behind the
-    sub bx, [wa_py]             ; eye (half of them, turning round) costs
-    mov [wa_thdx], ax           ; two multiplies, not four
-    mov [wa_thdy], bx
-    imul word [wa_cos]          ; z = (dx cos + dy sin) >> 14
-    mov cx, ax
-    mov si, dx
-    mov ax, bx
-    imul word [wa_sinv]
-    add ax, cx
-    adc dx, si
-    shl ax, 1
-    rcl dx, 1
-    shl ax, 1
-    rcl dx, 1
-    cmp dx, 24
-    jl .out                     ; (at the eye, or behind it)
-    mov di, dx
-    mov ax, [wa_thdx]           ; x = (dx sin - dy cos) >> 14
-    imul word [wa_sinv]
-    mov cx, ax
-    mov si, dx
-    mov ax, [wa_thdy]
-    imul word [wa_cos]
-    sub cx, ax
-    sbb si, dx
-    shl cx, 1
-    rcl si, 1
-    shl cx, 1
-    rcl si, 1
-    mov ax, si
-    mov dx, di                  ; AX = camera x, DX = z
+    mov cx, 24
+    call wa_view                ; AX = camera x, DX = z
+    jc .out                     ; (at the eye, or behind it)
     mov bx, ax
     or bx, bx
     jns .ax
@@ -4597,6 +4611,50 @@ wa_thing:
     mov al, ah
     mov ah, dl
     add ax, [wa_hh]
+    ret
+
+; wa_view - AX, BX = a world point, CX = the least z worth having: its place
+; in view space, z FIRST - one behind the eye (half of them, turning round)
+; costs two multiplies, not four. CF = 1: its z is under CX; else AX =
+; camera x (right), DX = z (ahead), wa_xform's very numbers. Clobbers BX,
+; CX, SI, DI.
+wa_view:
+    sub ax, [wa_px]
+    sub bx, [wa_py]
+    mov [wa_thdx], ax
+    mov di, cx
+    imul word [wa_cos]          ; z = (dx cos + dy sin) >> 14
+    mov cx, ax
+    mov si, dx
+    mov ax, bx
+    imul word [wa_sinv]
+    add ax, cx
+    adc dx, si
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    cmp dx, di
+    jl .out
+    mov di, dx
+    mov ax, [wa_thdx]           ; x = (dx sin - dy cos) >> 14
+    imul word [wa_sinv]
+    mov cx, ax
+    mov si, dx
+    mov ax, bx
+    imul word [wa_cos]
+    sub cx, ax
+    sbb si, dx
+    shl cx, 1
+    rcl si, 1
+    shl cx, 1
+    rcl si, 1
+    mov ax, si
+    mov dx, di
+    clc
+    ret
+.out:
+    stc
     ret
 
 ; wa_thocc - BX = a column x 2, AX = an inverse depth: wa_occl's answer (AL
