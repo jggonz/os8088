@@ -35,8 +35,6 @@ WA_MAXSP equ 127                ; spans a frame the table holds (a tag x 2
                                 ; boxes register an edge each top
 %macro WR_BSS 0
 WA_VAR wa_colz, WA_MAXW*2       ; nearest face's inverse depth (0 = none)
-WA_VAR wa_colt, WA_MAXW*2       ; its top, quarter half-rows
-WA_VAR wa_colb, WA_MAXW*2       ; its bottom
 WA_VAR wa_covpad, 2             ; (0: what column -1 reads in a steep test)
 WA_VAR wa_cov, WA_MAXW*2+2      ; the tag of the span that drew a column
                                 ; (+1: the flat passes' end sentinel)
@@ -85,7 +83,6 @@ WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
                                 ; (LK_COARSE), else 0 - the bottom's and the
                                 ; top's (0 too where the top is not drawn:
                                 ; the sparse level, ROOMF) - wa_collook
-WA_VAR wa_ftailp, 2             ; (unused: wa_render still sets it)
 WA_VAR wa_roomf, 1              ; ROOMF: non-zero while the room's faces are
                                 ; drawn at a level with it (wa_render)
 WA_VAR wa_vtp, 2                ; wa_vte or wa_vtr: the level's (wa_lookset)
@@ -360,7 +357,6 @@ wa_render:
     mov word [wa_mkp], wa_face.mk1
     mov word [wa_mizp], wa_face.miz1
 .paired:
-    mov word [wa_ftailp], wa_span.ftail ; (wa_fspan's: wa_fspanh sets its own)
     mov al, [wa_sparse]         ; the detail level's choices, when it
     cmp al, [wa_kspa]           ; changes (wa_geominit forgets it) - or L,
     je .spa                     ; the sparse key, which wa_collook reads too
@@ -1730,38 +1726,6 @@ wa_lookset:
 .f:
     mov [wl_fartop], ax
     ret
-; wa_xform - AX, BX = a world point (in the room) -> AX = camera x (right),
-; DX = z (ahead): the offsets x 4, so each is its products' high word
-; (wa_products' way). Clobbers BX, CX, SI, DI.
-wa_xform:
-    sub ax, [wa_px]
-    sub bx, [wa_py]
-    shl ax, 1
-    shl ax, 1
-    shl bx, 1
-    shl bx, 1
-    mov si, ax
-    mov di, bx
-    imul word [wa_cos]          ; z = (dx cos + dy sin) >> 14
-    mov cx, ax
-    mov bx, dx
-    mov ax, di
-    imul word [wa_sinv]
-    add ax, cx
-    adc dx, bx
-    push dx
-    mov ax, si
-    imul word [wa_sinv]         ; x = (dx sin - dy cos) >> 14
-    mov cx, ax
-    mov bx, dx
-    mov ax, di
-    imul word [wa_cos]
-    sub cx, ax
-    sbb bx, dx
-    mov ax, bx
-    pop dx
-    ret
-
 ; wa_clip - the segment (x1,z1)-(x2,z2) against z >= NEAR and the guard
 ; band x >= -8z, x <= 8z. CF = 1: nothing left. An end inside all three is
 ; never moved. A cut at the near plane sets z to NEAR (the interpolation
@@ -5506,7 +5470,7 @@ wa_thing:
 ; wa_view - AX, BX = a world point, CX = the least z worth having: its place
 ; in view space, z FIRST - one behind the eye (half of them, turning round)
 ; costs two multiplies, not four. CF = 1: its z is under CX; else AX =
-; camera x (right), DX = z (ahead), wa_xform's very numbers. Clobbers BX,
+; camera x (right), DX = z (ahead), the walls' own arithmetic. Clobbers BX,
 ; CX, SI, DI.
 wa_view:
     sub ax, [wa_px]
