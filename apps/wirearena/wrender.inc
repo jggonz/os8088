@@ -4133,87 +4133,104 @@ wa_flgo:
 ; a row's bytes. A block plots its quadrant's bit and moves the pen: a
 ; half-row down from a bottom quadrant is the next row's top (BX += AX), a
 ; sub-column right from a right quadrant is the next cell's left (BX += 2).
-%macro WA_FYS 5                 ; steep: %1 R/L, %2 r, %3 c, %4 the state
-wa_fy%1%2%3:                    ; after a sideways step too, %5 without
-    or byte [bx], 1 << (%3 + 2*%2)
+; The blocks lie in the order the pen USUALLY takes them - a steep line goes
+; down its column's upper quadrant into its lower, a shallow one along its
+; row's - so the usual step falls through and only the minor axis's step,
+; out of line, jumps.
+%macro WA_FYP 2                 ; steep: %1 R/L, %2 c - the column's two
+wa_fy%{1}0%{2}:                     ; quadrants, upper then lower
+    or byte [bx], 1 << %2
     dec cx
-    jz wa_fy%1ret
+    jz wa_fy%{1}ret
     sub bp, si
-  %if %2 == 0
-    jns %5
-  %else
-    jns %%down
-  %endif
+    js %%s0                     ; (a sideways step too)
+wa_fy%{1}1%{2}:
+    or byte [bx], 4 << %2
+    dec cx
+    jz wa_fy%{1}ret
+    sub bp, si
+    js %%s1
+    add bx, ax                  ; down: the next row's upper quadrant
+    jmp wa_fy%{1}0%{2}
+%%s0:
     add bp, di
-  %ifidn %1, R
-    %if %3 == 1
-    inc bx
-    inc bx
-    %endif
+    WA_FSIDE %1, %2
+  %if %2
+    jmp wa_fy%{1}10
   %else
-    %if %3 == 0
-    dec bx
-    dec bx
-    %endif
+    jmp wa_fy%{1}11
   %endif
-  %if %2 == 1
+%%s1:
+    add bp, di
+    WA_FSIDE %1, %2
     add bx, ax
-  %endif
-    jmp %4
-  %if %2 == 1
-%%down:
-    add bx, ax
-    jmp %5
+  %if %2
+    jmp wa_fy%{1}00
+  %else
+    jmp wa_fy%{1}01
   %endif
 %endmacro
-%macro WA_FXS 5                 ; shallow: %4 the state after a step down
-wa_fx%1%2%3:                    ; too, %5 without
-    or byte [bx], 1 << (%3 + 2*%2)
-    dec cx
-    jz wa_fx%1ret
-  %ifidn %1, R
-    %if %3 == 1
+%macro WA_FSIDE 2               ; a sub-column on, %1 R/L, from column half %2:
+  %ifidn %1, R                  ; into the next cell from its outer half
+    %if %2 == 1
     inc bx
     inc bx
     %endif
   %else
-    %if %3 == 0
+    %if %2 == 0
     dec bx
     dec bx
     %endif
   %endif
+%endmacro
+%macro WA_FXP 4                 ; shallow: %1 R/L, %2 r, %3 the half the pen
+wa_fx%{1}%{2}%{3}:                    ; enters a cell by, %4 the other - the
+    or byte [bx], 1 << (%3 + 2*%2) ; row's two quadrants in its order
+    dec cx
+    jz wa_fx%{1}ret
     sub bp, si
-    jns %5
+    js %%d0                     ; (a step down too)
+wa_fx%{1}%{2}%{4}:
+    or byte [bx], 1 << (%4 + 2*%2)
+    dec cx
+    jz wa_fx%{1}ret
+    WA_FSIDE %1, %4             ; ...on into the next cell
+    sub bp, si
+    js %%d1
+    jmp wa_fx%{1}%{2}%{3}
+%%d0:
     add bp, di
-  %if %2 == 1
+  %if %2
     add bx, ax
+    jmp wa_fx%{1}0%{4}
+  %else
+    jmp wa_fx%{1}1%{4}
   %endif
-    jmp %4
+%%d1:
+    add bp, di
+  %if %2
+    add bx, ax
+    jmp wa_fx%{1}0%{3}
+  %else
+    jmp wa_fx%{1}1%{3}
+  %endif
 %endmacro
 wa_fyRret:
     ret
-    WA_FYS R, 0, 0, wa_fyR11, wa_fyR10
-    WA_FYS R, 0, 1, wa_fyR10, wa_fyR11
-    WA_FYS R, 1, 0, wa_fyR01, wa_fyR00
-    WA_FYS R, 1, 1, wa_fyR00, wa_fyR01
+    WA_FYP R, 0
+    WA_FYP R, 1
 wa_fyLret:
     ret
-    WA_FYS L, 0, 0, wa_fyL11, wa_fyL10
-    WA_FYS L, 0, 1, wa_fyL10, wa_fyL11
-    WA_FYS L, 1, 0, wa_fyL01, wa_fyL00
-    WA_FYS L, 1, 1, wa_fyL00, wa_fyL01
+    WA_FYP L, 0
+    WA_FYP L, 1
 wa_fxRret:
     ret
-    WA_FXS R, 0, 0, wa_fxR11, wa_fxR01
-    WA_FXS R, 0, 1, wa_fxR10, wa_fxR00
-    WA_FXS R, 1, 0, wa_fxR01, wa_fxR11
-    WA_FXS R, 1, 1, wa_fxR00, wa_fxR10
+    WA_FXP R, 0, 0, 1
+    WA_FXP R, 1, 0, 1
 wa_fxLret:
     ret
-    WA_FXS L, 0, 0, wa_fxL11, wa_fxL01
-    WA_FXS L, 0, 1, wa_fxL10, wa_fxL00
-    WA_FXS L, 1, 0, wa_fxL01, wa_fxL11
-    WA_FXS L, 1, 1, wa_fxL00, wa_fxL10
+    WA_FXP L, 0, 1, 0
+    WA_FXP L, 1, 1, 0
 wa_fl_ytab:                     ; by (r x 2 + c) x 2, leftward + 8
     dw wa_fyR00, wa_fyR01, wa_fyR10, wa_fyR11
     dw wa_fyL00, wa_fyL01, wa_fyL10, wa_fyL11
