@@ -201,7 +201,10 @@ WA_VAR wa_lord, WA_MBOX*4+1    ; the boxes front to back, a record each:
 WA_VAR wa_lrec, 2               ; box, a, b, c (wa_order, wa_sil) - the walk's
 WA_VAR wa_kr, 2                 ; place in them, and this frame's corners
 WA_VAR wa_kl, 2                 ; for the hints (wa_render)
-WA_VAR wa_bh, WA_MBOX*4         ; per box x 4: its hint
+WA_VAR wa_bh, WA_MBOX*4         ; per box x 4: its hint, and at +2 the view
+WA_VAR wa_view, 2               ; its three vertices were made at: [wa_view]
+WA_VAR wa_rview, 2              ; counts the view's moves (wa_moved); the
+                                ; room's four
 WA_VAR wa_pang, 2               ; the view the products were made for
 WA_VAR wa_ppx, 2                ; (wa_products)
 WA_VAR wa_ppy, 2
@@ -445,6 +448,7 @@ wa_render:
     div word [wa_k16]
 .us:
     mov [wa_vu], ax
+    call wa_moved               ; (every vertex's column is to make again)
 .uok:
     mov ax, [wa_sinv]           ; the corners a box wholly outside the view
     mov bx, ax                  ; is tested by (the hints, below): of its
@@ -577,17 +581,44 @@ wa_render:
     xor bx, bx
     mov bl, [si-4]
     or byte [wa_bh+bx], 0x80
-.lfull:
+.lfull:                         ; BX = the box x 4
     mov [wa_lrec], si
-    xor bx, bx
+    mov ax, [wa_view]           ; THE VIEW WHERE IT WAS when this box was last
+    cmp ax, [wa_bh+bx+2]        ; drawn tall: its three vertices stand, and
+    je .lsame                   ; it is in view still
     mov bl, [si-3]              ; a
     cmp bl, 0xFE
     jb .lsil
-    je .lmake
-    jmp .lover                  ; (no face seen: the player over the box)
-.lmake:
+    jne .lover                  ; (no face seen: the player over the box)
     call wa_sil                 ; (its silhouette, in this cell)
-    jmp .lfull
+    xor bx, bx
+    mov bl, [si-3]
+    cmp bl, 0xFF
+    jne .lsil
+.lover:                         ; (no face seen: a low box's top, on heights)
+    cmp byte [wa_hflat], 0
+    jne .lnx
+    mov bl, [si-4]
+    mov ax, [wa_bxh+bx]
+    cmp ax, [wa_hmax]
+    jb .llowb
+    cmp ax, [wa_eye]
+    jle .llowb
+.lnx:
+    jmp .lnext
+.lsame:
+    mov cl, 0xFD                ; (their tops and bottoms are the frame's:
+    mov bl, [si-3]              ; the pitch and the eye may have moved)
+    and [wa_vok+bx], cl
+    mov bl, [si-1]
+    and [wa_vok+bx], cl
+    mov bl, [si-2]
+    cmp bl, 0xFF
+    je .ls1
+    and [wa_vok+bx], cl
+.ls1:
+    mov bl, [si-4]
+    jmp .lcok2                  ; (CX not 0)
 .lsil:
     call [wa_vtp]               ; a: AX = x, CX = z, DI = the vertex
     mov dx, ax
@@ -629,7 +660,6 @@ wa_render:
     cmp al, dl
     je .lnx
     mov [wa_bh+bx], dl
-.lnx:
     jmp .lnext
 .lc:
     cmp dx, 3
@@ -650,6 +680,8 @@ wa_render:
     xor bx, bx
     mov bl, [si-4]              ; the box x 4
     mov byte [wa_bh+bx], 0      ; (in the view: a hint may be set again)
+    xor cx, cx
+.lcok2:                         ; (CX not 0: its vertices made, at this view)
     cmp byte [wa_hflat], 0
     jne .ltall
     mov ax, [wa_bxh+bx]         ; HEIGHTS (HEIGHTS-PLAN 7.3.1): a box at the
@@ -664,13 +696,22 @@ wa_render:
     mov bl, [wa_bcol+bx+1]      ; its colour (the room's is first)
     mov al, [wa_at+bx]
     mov [wa_wcol], al
+    or cx, cx
+    jnz .lfaces
+    mov bl, [si-4]
+    mov ax, [wa_view]           ; (its vertices stand while the view does)
+    mov [wa_bh+bx+2], ax
     mov bl, [si-2]              ; b
     cmp bl, 0xFF
     je .lone
     call [wa_vtp]
     call wa_vcam
+    mov si, [wa_lrec]
+.lfaces:
+    cmp byte [si-2], 0xFF
+    je .lone
     mov byte [wa_endok], 0      ; (the corner two faces share is the second
-    mov si, [wa_lrec]           ; one's START: drawing both put `││` there)
+                                ; one's START: drawing both put `││` there)
     mov ax, [si-3]              ; a -> b
     call wa_face
     mov si, [wa_lrec]
@@ -683,16 +724,6 @@ wa_render:
     mov byte [wa_endok], 1
     call wa_face
     jmp .leaves
-.lover:                         ; (no face seen: a low box's top, on heights)
-    cmp byte [wa_hflat], 0
-    jne .lnx
-    mov bl, [si-4]
-    mov ax, [wa_bxh+bx]
-    cmp ax, [wa_hmax]
-    jb .llowb
-    cmp ax, [wa_eye]
-    jle .llowb
-    jmp .lnext
 .llow:                          ; a and c are made: stamped, for wa_lowbox
     mov al, [wa_frame]
     mov bl, [si-3]
@@ -731,13 +762,25 @@ wa_render:
     mov ax, [wa_roomh]          ; (heights: the room at its own height)
     call wa_hnt
 .rflat:
-    mov bx, 6                   ; its four corners (vertices 0..3)...
+    mov ax, [wa_view]           ; its four corners (vertices 0..3) - unless
+    cmp ax, [wa_rview]          ; the view is where it was when they were
+    jne .rmk                    ; last made: then only their tops and
+    mov al, 0xFD                ; bottoms are to make again
+    and [wa_vok], al
+    and [wa_vok+2], al
+    and [wa_vok+4], al
+    and [wa_vok+6], al
+    jmp short .rfaces
+.rmk:
+    mov [wa_rview], ax
+    mov bx, 6
 .rv:
     call [wa_vtp]
     call wa_vcam
     lea bx, [di-2]
     or bx, bx
     jns .rv
+.rfaces:
     mov ax, (6 << 8) | 0        ; ...and its faces, which run the other way:
     call wa_face                ; c0->c3, c3->c2, c2->c1, c1->c0 (vertex x 2)
     mov ax, (4 << 8) | 6
@@ -791,6 +834,7 @@ wa_geominit:
     mov cx, WA_MBOX*2
     xor ax, ax
     rep stosw
+    mov [wa_rview], ax
     mov word [wa_nk], 0
     mov si, wa_xv
     mov di, wa_xk
@@ -917,6 +961,7 @@ wa_products:
     sub si, 8
     jnz .k
 .kd:
+    call wa_moved
     test byte [wa_look], LK_ROUND
     jnz .round
     WA_AXIS wa_xv, wa_px, wa_xk, wa_xc, wa_xs, 0
@@ -925,6 +970,25 @@ wa_products:
 .round:
     WA_AXIS wa_xv, wa_px, wa_xk, wa_xc, wa_xs, 1
     WA_AXIS wa_yv, wa_py, wa_yk, wa_yc, wa_ys, 1
+    ret
+
+; wa_moved - the view has moved (wa_products), or the projection changed:
+; [wa_view] counts them, and a vertex made at an earlier count is to be made
+; again (wa_bh + 2, a box's; wa_rview, the room's). Never 0 - no box's - and
+; when it laps, every box's is forgotten. Clobbers AX, CX, DI.
+wa_moved:
+    inc word [wa_view]
+    jnz .out
+    inc word [wa_view]
+    xor ax, ax
+    mov [wa_rview], ax
+    mov di, wa_bh+2
+    mov cx, WA_MBOX
+.z:
+    mov [di], ax
+    add di, 4
+    loop .z
+.out:
     ret
 
 ; wa_order - the box tree walked front to back from the player's position
