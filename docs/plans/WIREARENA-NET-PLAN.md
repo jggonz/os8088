@@ -230,3 +230,52 @@ The checks are v1's: one length per type, the CRC.
   does not drive WireArena's buttons yet; the link rows drive the setup by
   its keys.
 
+
+### 9.2 N2 and the first half of N3: UDP, two players (2026-11-14)
+
+The match is found by broadcast and by address; three and four players
+are next.
+
+- **The setup's Play row** is alone, serial cable, local network or
+  internet.
+  - **Local network** asks ETHER.DRV for an address (`ud_open`, retried
+    from the window's tick). With an address it binds UDP port 30088.
+    With none in ~5 s it falls back to raw frames (E1), LAN only.
+  - **Internet** needs an address, and joins the one typed into the
+    Address row (row 7: digits, dots, Backspace). On the local network
+    that row shows our own address, for the host to give out.
+- **`apps/os88udp.inc`** is the carrier: os88raw.inc's twin.
+  - HELLO goes to 255.255.255.255 while unbound (or to the typed
+    address, joining by address), and to the peer once bound.
+  - Everything else goes to the peer's six bytes: its IP and port,
+    learned from its HELLO as raw learns a station address. A host on
+    UDP is found both ways at once.
+- **The relay** in `tests/walink.py` is a hub now and answers DHCP
+  (10.7.0.20 up) in the UDP modes. With `--udp-ip` it drops broadcasts to
+  port 30088, as a router would. With `--net` it gives no address, so
+  the machines fall back to raw.
+
+**The verbs' first caller found three bugs in them, and one in reading
+them**:
+
+1. **`NETV_UDPRX` took a pointer in `BX`**, which `OSAPI_DRV_CALL` uses
+   for the class and the verb. The source's six bytes come first in the
+   buffer now (SPEC.md 72.24 says why).
+2. **`eth_pump` saves only CX and BP**, and `NETV_UDPRX` pumped, then
+   copied through the caller's DI. It wrote the datagram at an offset in
+   the package nobody chose. Found because the package's own counters
+   read zero.
+3. **The queue's store wrote the source over the slot's length**, so
+   every datagram claimed 1,802 bytes and the package skipped it as too
+   long.
+4. **CF = 0 with AX = `NETE_BUSY` is not success** (ETHER.DRV's
+   dispatcher, while its own timers hold the card). A raw consumer
+   rarely met it, as the claim stops those timers; a UDP one met it
+   constantly. os88udp.inc and os88raw.inc clear AX before every call
+   and test it after.
+
+**Checked**:
+- `walinkudp` (found by broadcast) and `walinkip` (joined by address,
+  broadcasts dropped) run walink's whole match, every datagram valid.
+- `walinknet` (no address: raw after ~5 s) and `walink` (serial) still
+  pass on the same build.

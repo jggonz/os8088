@@ -775,18 +775,29 @@ eth_v_udptx:
     stc
     ret
 
-; --- NETV_UDPRX: DI = a buffer, CX = its capacity, BX = 6 bytes ------------
+; --- NETV_UDPRX: DI = a buffer, CX = its capacity ----------------------------
 ; The ring pumped first (this verb is all the service a polling game gives
-; the card), then the oldest queued datagram out
+; the card), then the oldest queued datagram out: its SOURCE's six bytes at
+; DI (BX is the door's class and verb, so it cannot carry a pointer), its
+; payload after them. CX = the payload's TRUE length
 eth_v_udprx:
     push ax
     push si
     push di
-    call eth_pump
+    push bx                     ; **eth_pump SAVES ONLY CX AND BP**
+    push dx                     ; (eth_pump_i's STKDEPTH-NOSAVE): without
+    call eth_pump               ; these the caller's DI - where the datagram
+    pop dx                      ; goes - was the pump's, and the copy landed
+    pop bx                      ; at an offset in the package nobody chose
+    pop di                      ; (WIREARENA-NET-PLAN 9.2)
+    push di
     cmp word [eth_uqh], 0
     je  .none
-    mov si, eth_uq              ; the oldest: slot 0
-    mov ax, [si+UQ_LEN]
+    sub cx, 6                   ; (the room past the source)
+    jae .room
+    xor cx, cx
+.room:
+    mov ax, [eth_uq+UQ_LEN]
     push ax                     ; (the TRUE length, the answer)
     cmp ax, cx
     jae .cap
@@ -796,11 +807,13 @@ eth_v_udprx:
     jbe .fit
     mov cx, UQ_DATA
 .fit:
-    add si, UQ_PAY
-    call usr_write              ; SI ours, DI theirs
-    mov di, bx
+    push cx
     mov si, eth_uq + UQ_SRC
     mov cx, 6
+    call usr_write              ; SI ours, DI theirs
+    pop cx
+    add di, 6
+    mov si, eth_uq + UQ_PAY
     call usr_write
     push es                     ; the rest down a slot
     push ds
@@ -843,7 +856,8 @@ udp_queue:
     push ds
     pop es
     mov [di+UQ_LEN], cx
-    mov si, eth_rxb + IP_OFF + IPO_SRC
+    add di, UQ_SRC              ; (past the length: the source, then the
+    mov si, eth_rxb + IP_OFF + IPO_SRC ; payload)
     movsw
     movsw
     mov si, eth_rxb + IP_PAY + UDO_SP

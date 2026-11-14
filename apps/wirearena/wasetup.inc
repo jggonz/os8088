@@ -12,9 +12,9 @@
 ; says so (wa_t_host).
 
 WS_FIRST    equ 2               ; the settings' rows
-WS_LAST     equ 6
-WS_BTNY     equ 6 + 7 * 10 + 2  ; the buttons' row, from the content's top:
-                                ; under the settings (rows 7 and 8 kept
+WS_LAST     equ 7               ; (row 7: Address)
+WS_BTNY     equ 6 + 8 * 10 + 2  ; the buttons' row, from the content's top:
+                                ; under the settings (rows 8 and 9 kept
                                 ; blank), the players after them - all of it
                                 ; above a CGA's dock
 WS_BTNW     equ 104
@@ -33,6 +33,7 @@ wa_sinit:
 wa_sline:
     cmp bp, WS_LAST
     ja .out
+    je wa_saline                ; (Address: a field, not a choice)
     mov al, ' '                 ; the focus: a marker, and the row inverted
     cmp bp, [wa_sfoc]           ; (wa_lkput reads it)
     jne .m
@@ -108,10 +109,98 @@ wa_sv_p:
 
 wa_sw_40:       db '40 columns', 0
 wa_sw_80:       db '80 columns', 0
-wa_sp_names:    dw wa_sp_0, wa_sp_1, wa_sp_2
+wa_sp_names:    dw wa_sp_0, wa_sp_1, wa_sp_2, wa_sp_3
 wa_sp_0:        db 'alone', 0
 wa_sp_1:        db 'serial cable', 0
-wa_sp_2:        db 'Ethernet', 0
+wa_sp_2:        db 'local network', 0
+wa_sp_3:        db 'internet', 0
+wa_sn_ad:       db 'Address', 0
+wa_sn_you:      db '(yours)', 0
+
+; wa_saline - row 7: joining by address, the address being typed (the
+; focus there: digits, dots, Backspace); on the network, ours; else blank
+wa_saline:
+    mov al, ' '
+    cmp bp, [wa_sfoc]
+    jne .m
+    mov al, '>'
+.m:
+    stosb
+    inc di
+    mov si, wa_sn_ad
+    call wa_lkcpy
+    mov di, wa_lkln+13
+    cmp byte [wa_splay], 3
+    jne .ours
+    mov si, wa_saddr
+    jmp wa_lkcpy
+.ours:
+    cmp byte [wa_lknet], 2
+    jne .out
+    mov si, ud_blk+UD_IP
+    call wa_lkip
+    inc di
+    mov si, wa_sn_you
+    jmp wa_lkcpy
+.out:
+    ret
+
+; wa_saddkey - AL = a key typed on the Address row (joining by address):
+; a digit or a dot added, Backspace one taken off; the six bytes it names
+; (wa_saddr6: the IP address and our port) parsed again
+wa_saddkey:
+    mov bl, [wa_saddrn]
+    xor bh, bh
+    cmp al, 8
+    je .bs
+    cmp al, '.'
+    je .add
+    cmp al, '0'
+    jb .out
+    cmp al, '9'
+    ja .out
+.add:
+    cmp bx, 15
+    jae .out
+    mov [wa_saddr+bx], al
+    mov byte [wa_saddr+bx+1], 0
+    inc byte [wa_saddrn]
+    jmp .parse
+.bs:
+    or bx, bx
+    jz .out
+    dec bx
+    mov byte [wa_saddr+bx], 0
+    mov [wa_saddrn], bl
+.parse:
+    mov byte [wa_lkfull], 1
+    mov si, wa_saddr            ; four numbers, dots between
+    mov di, wa_saddr6
+    mov cx, 4
+.n:
+    xor ax, ax
+.d:
+    mov bl, [si]
+    sub bl, '0'
+    jb .end
+    cmp bl, 9
+    ja .end
+    mov bh, 10
+    mul bh
+    add al, bl
+    inc si
+    jmp .d
+.end:
+    mov [di], al
+    inc di
+    cmp byte [si], '.'
+    jne .last
+    inc si
+.last:
+    loop .n
+    mov word [wa_saddr6+4], UD_PORT
+.out:
+    ret
 
 ; wa_sset - AL = the setting's row, AH = -1 or +1: it changes
 wa_sset:
@@ -158,20 +247,24 @@ wa_ssets:   dw .arena, .bots, .skill, .width, .play
     ret
 .play:
     mov bx, wa_splay
-    mov cl, 3
+    mov cl, 4
     call .wrap
     mov al, [wa_splay]          ; ALONE: neither carrier; SERIAL: the
-    or al, al                   ; cable's search; ETHERNET: the card
-    jnz .linked
+    or al, al                   ; cable's search; the LOCAL NETWORK or the
+    jnz .linked                 ; INTERNET: the card (wa_lknetgo)
     call wa_lkcable
-    jmp lk_disconnect
+    call lk_disconnect
+    mov word [lk_blk+LK_MSG], wa_ms_setup
+    ret
 .linked:
     cmp byte [wa_lkbots], 2     ; (linked: two bots at most)
     jbe .b
     mov byte [wa_lkbots], 2
 .b:
     cmp al, 1
-    jne wa_lknetgo
+    je .ser
+    jmp wa_lknetgo
+.ser:
     call wa_lkcable
     call lk_disconnect
     call lk_auto
@@ -226,6 +319,22 @@ wa_skey:
     stc
     ret
 .set:
+    cmp byte [wa_sfoc], WS_LAST ; (the Address row, joining by address: its
+    jne .nav                    ; keys)
+    cmp byte [wa_splay], 3
+    jne .nav
+    cmp al, 8
+    je .typed
+    cmp al, '.'
+    je .typed
+    cmp al, '0'
+    jb .nav
+    cmp al, '9'
+    ja .nav
+.typed:
+    call wa_saddkey
+    jmp .done
+.nav:
     cmp ah, 0x48
     je .up
     cmp ah, 0x50
@@ -261,6 +370,8 @@ wa_skey:
     mov ah, 1
 .chg:
     mov al, [wa_sfoc]
+    cmp al, WS_LAST             ; (the Address row is typed, not chosen)
+    je .done
     call wa_sset
     jmp .done
 .enter:
@@ -303,6 +414,8 @@ wa_sclick:
     ja .done
     mov [wa_sfoc], al
     mov byte [wa_lkfull], 1
+    cmp al, WS_LAST             ; (the Address row: the focus only)
+    je .done
     sub dx, 8
     jb .done
     shr dx, 1

@@ -115,6 +115,72 @@ class NetCable:
             t.start()
             self.threads.append(t)
 
+    DHCP_SRV = bytes([10, 7, 0, 1])
+    SRV_MAC = bytes.fromhex('525400b400fe')
+    drop_bcast = False                  # --udp-ip: a router's view
+
+    @staticmethod
+    def csum(b):
+        if len(b) % 2:
+            b += b'\0'
+        t = sum(struct.unpack('!%dH' % (len(b) // 2), b))
+        while t >> 16:
+            t = (t & 0xFFFF) + (t >> 16)
+        return ~t & 0xFFFF
+
+    def dhcp(self, k, f):
+        """DISCOVER -> OFFER, REQUEST -> ACK: machine k is 10.7.0.(20+k)"""
+        ihl = (f[14] & 15) * 4
+        bp = f[14 + ihl + 8:]
+        if len(bp) < 240 or bp[0] != 1:
+            return
+        i, o = 240, {}
+        while i < len(bp) and bp[i] != 255:
+            if bp[i] == 0:
+                i += 1
+                continue
+            o[bp[i]] = bp[i + 2:i + 2 + bp[i + 1]]
+            i += 2 + bp[i + 1]
+        if 53 not in o:
+            return
+        typ = {1: 2, 3: 5}.get(o[53][0])
+        if not typ:
+            return
+        yi = bytes([10, 7, 0, 20 + k])
+        r = bytearray(240)
+        r[0], r[1], r[2] = 2, 1, 6
+        r[4:8], r[10] = bp[4:8], 0x80
+        r[16:20], r[20:24], r[28:34] = yi, self.DHCP_SRV, bp[28:34]
+        r[236:240] = b'\x63\x82\x53\x63'
+        r += bytes([53, 1, typ, 54, 4]) + self.DHCP_SRV
+        r += (bytes([51, 4]) + struct.pack('!I', 86400) +
+              bytes([1, 4, 255, 255, 255, 0, 3, 4]) + self.DHCP_SRV)
+        r += b'\xff'
+        udp = struct.pack('!HHHH', 67, 68, 8 + len(r), 0) + bytes(r)
+        ip = bytearray(struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(udp),
+                                   0, 0, 64, 17, 0, self.DHCP_SRV,
+                                   b'\xff' * 4))
+        ip[10:12] = struct.pack('!H', self.csum(bytes(ip)))
+        fr = b'\xff' * 6 + self.SRV_MAC + b'\x08\x00' + bytes(ip) + udp
+        self.send(k, fr + bytes(max(0, 60 - len(fr))))
+
+    def route(self, k, fr):
+        """machine k's frame: DHCP answered here; a broadcast to our port
+        dropped in drop_bcast; the rest to every other machine (a hub)"""
+        if fr[12:14] == b'\x08\x00' and len(fr) > 42 and fr[23] == 17:
+            ihl = (fr[14] & 15) * 4
+            dport = struct.unpack('!H', fr[14 + ihl + 2:14 + ihl + 4])[0]
+            if dport == 67:             # (--net: a LAN with no DHCP
+                if UDP:                 # server, so no address - raw)
+                    self.dhcp(k, fr)
+                return
+            if (self.drop_bcast and dport == 30088 and
+                    fr[30:34] == b'\xff' * 4):
+                return
+        for j in range(len(self.socks)):
+            if j != k and self.socks[j]:
+                self.send(j, fr)
+
     def run(self, k):
         sk = self.socks[k]
         buf = b''
@@ -134,16 +200,26 @@ class NetCable:
                 self.counts[k] += n
                 self.observed[k].append(fr)
                 if self.enabled:
-                    self.send(1 - k, fr)
+                    self.route(k, fr)
 
     def send(self, k, fr):
         with self.lock:
             self.socks[k].sendall(len(fr).to_bytes(4, 'big') + fr)
 
     def inject(self, k, data):
-        """a garbage frame of our EtherType to machine k"""
-        fr = (b'\xff' * 6 + b'\x02\x00\x00\x00\x00\x09' + b'\x88\xb5' +
-              bytes([len(data)]) + data)
+        """garbage to machine k: a frame of our EtherType, or on UDP a
+        datagram to our port (from nobody in the match)"""
+        if UDP:
+            udp = struct.pack('!HHHH', 30088, 30088, 8 + len(data), 0) + data
+            ip = bytearray(struct.pack('!BBHHHBBH4s4s', 0x45, 0,
+                                       20 + len(udp), 0, 0, 64, 17, 0,
+                                       bytes([10, 7, 0, 99]), b'\xff' * 4))
+            ip[10:12] = struct.pack('!H', self.csum(bytes(ip)))
+            fr = (b'\xff' * 6 + b'\x02\x00\x00\x00\x00\x09' + b'\x08\x00' +
+                  bytes(ip) + udp)
+        else:
+            fr = (b'\xff' * 6 + b'\x02\x00\x00\x00\x00\x09' + b'\x88\xb5' +
+                  bytes([len(data)]) + data)
         self.send(k, fr + bytes(max(0, 60 - len(fr))))
 
     def close(self):
@@ -155,12 +231,18 @@ class NetCable:
 
 
 def net_frames(frs):
-    """(type, body) of each frame of ours; bad ones as (None, frame)"""
+    """(type, body) of each frame of ours - raw (88B5h) or a UDP datagram
+    to or from port 30088; bad ones as (None, frame)"""
     for fr in frs:
-        if fr[12:14] != b'\x88\xb5':
+        if fr[12:14] == b'\x88\xb5':
+            n = fr[14]
+            out = fr[15:15 + n]
+        elif (fr[12:14] == b'\x08\x00' and len(fr) > 42 and fr[23] == 17
+              and 30088 in struct.unpack('!HH', fr[34:38])):
+            n = struct.unpack('!H', fr[38:40])[0] - 8
+            out = fr[42:42 + n]
+        else:
             continue
-        n = fr[14]
-        out = fr[15:15 + n]
         if (len(out) == n and out and LENS.get(out[0]) == n and
                 binascii.crc_hqx(bytes(out[:-2]), 0xffff) ==
                 int.from_bytes(out[-2:], 'little')):
@@ -234,7 +316,9 @@ class Arena(W.Machine):
         Q.pace(self, .25)
 
 
-NET = '--net' in sys.argv
+UDP = '--udp' in sys.argv or '--udp-ip' in sys.argv
+UDPIP = '--udp-ip' in sys.argv
+NET = '--net' in sys.argv or UDP
 
 
 def main():
@@ -251,12 +335,24 @@ def main():
             b = Arena(d, 1, net=cable)
             t.join(30)
             cable.start()
-            for m in (a, b):            # the setup: Play, Ethernet
-                m.setup_play(2)
-            for m in (a, b):
-                m.wait_for(lambda m=m: m.v('wa_lknet') == 1 and m.v(
-                    'rw_blk', 8) >> 48 & 0xFF == 1, 'ETHERNET: %s claimed '
-                    'its card (E)' % ('A' if m is a else 'B'), secs=20)
+            cable.drop_bcast = UDPIP
+            want = 2 if UDP else 1      # (no DHCP on --net: raw after ~5 s)
+            a.setup_play(2)             # the setup: Play, local network
+            a.wait_for(lambda: a.v('wa_lknet') == want, 'NETWORK: A on the '
+                       '%s' % ('UDP port' if UDP else 'card, raw (no address)'),
+                       secs=25)
+            if UDPIP:                   # B: Play, internet, A's address
+                b.setup_play(3)
+                b.key('down')
+                ip = a.readseg(a.seg, a.sy['ud_blk'], 4)
+                for ch in '.'.join(str(x) for x in ip):
+                    b.key('dot' if ch == '.' else ch)
+                Q.pace(b, .3)
+            else:
+                b.setup_play(2)
+            b.wait_for(lambda: b.v('wa_lknet') == want, 'NETWORK: B on the '
+                       '%s' % ('UDP port' if UDP else 'card, raw (no address)'),
+                       secs=25)
         else:
             a, b = Arena(d, 0), Arena(d, 1)
             cable = W.Cable([a, b])

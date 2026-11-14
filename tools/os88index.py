@@ -348,6 +348,14 @@ INCLUDES = [
      "The claim stops the driver's own pump: hold it only while linking. "
      "WireArena carries os88cable.inc's bodies on it "
      "(docs/plans/WIREARENA-LINK-PLAN.md 12)."),
+    ("os88udp.inc", "72.24",
+     "A GAME'S DATAGRAMS ON ETHER.DRV's UDP VERBS: `ud_open` attaches the "
+     "driver if need be, asks our IP address (NETE_NOLINK until DHCP has "
+     "bound: ask again) and binds your `UD_PORT`; `ud_send` to six bytes - an "
+     "IP address and a port - or everyone (255.255.255.255); `ud_poll` "
+     "drains datagrams to your `ud_take` with their source. os88raw.inc's "
+     "twin, for a network with an address: a host on UDP is found by a "
+     "broadcast and by its address at once (docs/plans/WIREARENA-NET-PLAN.md)."),
     ("os88inflate.inc", "106.18",
      "INFLATE for a raw DEFLATE stream held WHOLE: `inflate` takes DS:SI, "
      "writes exactly CX bytes at ES:DI and sets carry on a bad stream. zlib's "

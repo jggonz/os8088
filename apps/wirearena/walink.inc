@@ -44,23 +44,28 @@ WL_COLS     equ 38
 %include "os88cable.inc"
 RW_ETYPE    equ 0x88B5          ; IEEE 802's local experimental EtherType
 %include "os88raw.inc"          ; ...and over the card (LINK-PLAN 12)
+UD_PORT     equ 30088           ; WireArena's UDP port (NET-PLAN 3)
+%include "os88udp.inc"          ; ...or on UDP, by broadcast and by address
 
-; wa_lkup - ZF = 0 when a carrier is up: the cable's lease, or the card's
-; claim. Keeps every register
+; wa_lkup - ZF = 0 when a carrier is up: the cable's lease, the card's raw
+; claim, or the UDP port. Keeps every register
 wa_lkup:
     push ax
     mov al, [lk_blk+LK_OPEN]
-    cmp byte [wa_lknet], 0
-    je .c
+    cmp byte [wa_lknet], 1
+    jb .c
     mov al, [rw_blk+RW_ON]
+    je .c
+    mov al, [ud_blk+UD_ON]
 .c:
     or al, al
     pop ax
     ret
 
 ; wa_lksend - SI = a body, CL = its length without its CRC: on whichever
-; carrier is up - framed into the cable, or sealed and sent on the card
-; (HELLO to everyone, the rest to the peer's station address)
+; carrier is up - framed into the cable, or sealed and sent on the card. A
+; HELLO goes to the peer once bound, else to everyone - or, joining by
+; address, to that address (NET-PLAN 6); the rest to the peer
 wa_lksend:
     cmp byte [wa_lknet], 0
     jne .card
@@ -70,23 +75,42 @@ wa_lksend:
     mov di, wa_lkpmac
     cmp byte [si], WL_HELLO
     jne .to
+    mov ax, [wa_lkpeer]
+    or ax, [wa_lkpeer+2]
+    jnz .to                     ; (bound: to the peer)
+    mov di, wa_saddr6
+    cmp byte [wa_splay], 3      ; (by address)
+    je .to
     mov di, rw_blk+RW_BCAST
+    cmp byte [wa_lknet], 1
+    je .to
+    mov di, ud_blk+UD_BCAST
 .to:
+    cmp byte [wa_lknet], 1
+    jne .udp
     jmp rw_send
+.udp:
+    jmp ud_send
 
 ; wa_lkpoll - CX = at most this many bytes (the cable): what came, framed
-; and handed to lk_take - on the card, up to 8 frames
+; and handed to lk_take - on the card, up to 8 frames or datagrams
 wa_lkpoll:
     cmp byte [wa_lknet], 0
     jne .card
     jmp lk_poll
 .card:
     mov cx, 8
+    cmp byte [wa_lknet], 1
+    jne .udp
     jmp rw_poll
+.udp:
+    jmp ud_poll
 
-; rw_take - a body off the card (os88raw.inc): SI, CL its length, BX its
-; source - which a HELLO's binding keeps - then checked as the cable's are
+; rw_take, ud_take - a body off the card (os88raw.inc, os88udp.inc): SI, CL
+; its length, BX its source - which a HELLO's binding keeps - then checked
+; as the cable's are
 rw_take:
+ud_take:
     push si
     push di
     mov si, bx
@@ -102,23 +126,58 @@ rw_take:
     pop si
     jmp lk_frame
 
-; wa_lknetgo - Link > Ethernet (or E): the cable let go, the card claimed
+; wa_lknetgo - Play: local network (AL = 2) or internet (3): the cable let
+; go; the card is the window's tick's to open (wa_lknettry), as UDP waits
+; for an address
 wa_lknetgo:
     mov byte [wa_lkfull], 1
+    push ax
     call lk_disconnect
-    call rw_open
-    jc .no
-    mov byte [wa_lknet], 1
-    mov word [lk_blk+LK_MSG], wa_lm_neth
-    ret
-.no:
-    mov word [lk_blk+LK_MSG], wa_lm_nonet
+    call wa_lkcable
+    pop ax
+    mov [wa_lkwant], al
+    mov word [wa_lktries], 0
+    mov word [lk_blk+LK_MSG], wa_lm_addr
     ret
 
-; wa_lkcable - back to the cable (or nothing): the card's claim given back
+; wa_lknettry - the window's tick, a network wanted and not up: UDP, once
+; the stack has an address; on the local network, raw frames if no address
+; comes in ~5 s (no DHCP, no static address: NET-PLAN 1)
+wa_lknettry:
+    cmp byte [wa_lkwant], 0
+    je .out
+    call ud_open
+    jc .not
+    mov byte [wa_lknet], 2
+    mov byte [wa_lkwant], 0
+    mov word [lk_blk+LK_MSG], wa_lm_udp
+    mov byte [wa_lkfull], 1
+.out:
+    ret
+.not:
+    inc word [wa_lktries]
+    cmp byte [wa_lkwant], 3     ; (by address: UDP or nothing)
+    je .out
+    cmp word [wa_lktries], 90
+    jb .out
+    mov byte [wa_lkwant], 0
+    call rw_open
+    jc .none
+    mov byte [wa_lknet], 1
+    mov word [lk_blk+LK_MSG], wa_lm_neth
+    mov byte [wa_lkfull], 1
+    ret
+.none:
+    mov word [lk_blk+LK_MSG], wa_lm_nonet
+    mov byte [wa_lkfull], 1
+    ret
+
+; wa_lkcable - back to the cable (or nothing): the card given back
 wa_lkcable:
     call rw_close
+    call ud_close
     mov byte [wa_lknet], 0
+    mov byte [wa_lkwant], 0
     ret
 
 ; --- the window -------------------------------------------------------------
@@ -152,6 +211,7 @@ wa_lknewid:
 wa_lkclose:
     push si
     call rw_close
+    call ud_close
     call lk_disconnect
     pop si
     clc
@@ -186,6 +246,7 @@ wa_lktimer:
     jne .card
     call lk_tick
 .card:
+    call wa_lknettry            ; (a network wanted: opened when it can be)
     mov cx, 64
     call wa_lkpoll
     call wa_lkhello
@@ -330,7 +391,11 @@ wa_lkplay:
 wa_lkcmd:
     mov byte [wa_lkfull], 1
     cmp al, 8
-    je wa_lknetgo
+    jne .nnet
+    mov byte [wa_splay], 2
+    mov al, 2
+    jmp wa_lknetgo
+.nnet:
     cmp al, 5
     jb .link
     sub al, 5
@@ -598,6 +663,13 @@ wa_lkline:
     cmp byte [wa_lknet], 0
     je .com
     mov si, wa_lt_onet
+    cmp byte [wa_lknet], 1
+    je .raw
+    mov si, wa_lt_oudp
+    call wa_lkcpy
+    mov si, wa_lkpmac
+    jmp wa_lkip
+.raw:
     jmp wa_lkcpy
 .com:
     mov si, wa_lt_on1
@@ -788,6 +860,9 @@ wa_lt_on1:      db 'Linked on COM', 0
 wa_lt_back:     db 'A key or a click: back.', 0
 wa_ms_setup:    db 'WireArena - match setup', 0
 wa_lt_onet:     db 'Linked on Ethernet', 0
+wa_lt_oudp:     db 'Linked with ', 0
+wa_lm_addr:     db 'Asking the network for an address...', 0
+wa_lm_udp:      db 'On the network: ready to find or host', 0
 wa_lm_neth:     db 'Looking on Ethernet...', 0
 wa_lm_nonet:    db 'No Ethernet card (ETHER.DRV)', 0
 wa_lt_you:      db 'YOU', 0
@@ -1904,6 +1979,49 @@ wa_lkonlift:
 .out:
     pop bx
     pop ax
+    ret
+
+; wa_lkip - SI = an IP address (4 bytes): dotted, at DI (wa_lkln's room)
+wa_lkip:
+    mov cx, 4
+.b:
+    lodsb
+    push cx
+    xor ah, ah
+    mov bl, 100                 ; (up to three digits, no leading zeros)
+    div bl
+    mov ch, ah
+    or al, al
+    jz .t
+    add al, '0'
+    stosb
+    mov al, ch
+    xor ah, ah
+    mov bl, 10
+    div bl
+    add al, '0'
+    stosb
+    jmp .u
+.t:
+    mov al, ch
+    xor ah, ah
+    mov bl, 10
+    div bl
+    or al, al
+    jz .u
+    add al, '0'
+    stosb
+.u:
+    mov al, ah
+    add al, '0'
+    stosb
+    pop cx
+    cmp cx, 1
+    je .end
+    mov al, '.'
+    stosb
+.end:
+    loop .b
     ret
 
 ; wa_lkhalf - AX = a distance: half of it, the whole within 2 (so it ends)

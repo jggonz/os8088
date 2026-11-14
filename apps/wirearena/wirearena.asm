@@ -5287,6 +5287,12 @@ WA_VAR wa_splay,1                  ;   Play (0 alone, 1 serial, 2 Ethernet),
 WA_VAR wa_keysv,1                  ;   1: the key list shown, the buttons'
 WA_VAR wa_sblab,4                  ;   labels as drawn, their rects
 WA_VAR wa_sbrects,16
+WA_VAR wa_saddr,16                 ;   the address being typed, its length,
+WA_VAR wa_saddrn,1                 ;   and what it names: IP, port
+WA_VAR wa_saddr6,6
+WA_VAR ud_blk,UD_SIZE              ; UDP (os88udp.inc)
+WA_VAR wa_lkwant,1                 ; a network wanted: 2 local, 3 by address
+WA_VAR wa_lktries,2                ; ...ticks it has been asked
 WA_VAR rw_blk,RW_SIZE              ; the card (os88raw.inc)
 WA_VAR wa_lknet,1                  ; 1: linking on the card, not the cable
 WA_VAR wa_lkpmac,6                 ; the peer's station address

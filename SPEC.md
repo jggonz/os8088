@@ -135543,8 +135543,11 @@ DNS). What these verbs add is a **package's port** and a queue for it.
 |---|---|---|
 | `NETV_UDP` 18 | `AL` = 1 bind `CX` = a port, 0 release | CF=0. CF=1 `AX=NETE_BUSY` (another port is bound: one at a time) or `NETE_ARG` (port 0) |
 | `NETV_UDPTX` 19 | `SI` = the payload, `CX` = its length (<= 512), `DI` = six bytes: the IP address, then the port (a little-endian word) | CF=0 sent. CF=1 `AX=NETE_NOLINK`: no port bound, or no ARP answer yet (a request has gone out: send again on the next tick) |
-| `NETV_UDPRX` 20 | `DI` = a buffer, `CX` = its capacity, `BX` = six bytes for the source (as `UDPTX`'s `DI`) | CF=0 `CX` = the datagram's **true** length (72.22.2's rule) and the source at `BX`; CF=1 = none queued |
+| `NETV_UDPRX` 20 | `DI` = a buffer, `CX` = its capacity | CF=0: the source's six bytes (as `UDPTX`'s `DI`) at `DI`, the payload after them, and `CX` = the payload's **true** length (72.22.2's rule); CF=1 = none queued |
 
+- **The source comes first in the buffer** because `OSAPI_DRV_CALL` takes
+  the class and the verb in `BX`, so no verb can take a pointer there.
+  (The first draft of this table did, and its first caller found it.)
 - **The destination 255.255.255.255 is a broadcast**: `ip_start` already
   sends it to the broadcast station address with no ARP (DHCP needs that
   before there is an address at all).

@@ -8730,6 +8730,24 @@ SOAK = [
         "Red with the peer's station address never recorded.",
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=220),
+    Row("walinkudp", "soak", py("tests/walink.py", "--udp"), 40.0,
+        "WIREARENA ON UDP, FOUND BY BROADCAST (docs/plans/WIREARENA-NET-"
+        "PLAN.md 3): walink's match on two QEMU NE2000s behind a relay that "
+        "is a hub and a DHCP server. Play: local network in the setup gets "
+        "an address and binds ETHER.DRV's UDP port (SPEC.md 72.24); the "
+        "HELLOs go to 255.255.255.255 and the match to the peer's address. "
+        "Every datagram on port 30088 parses with binascii's CRC; garbage "
+        "datagrams are dropped and counted.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/os8088.img"), timeout=240),
+    Row("walinkip", "soak", py("tests/walink.py", "--udp-ip"), 40.0,
+        "WIREARENA JOINED BY ADDRESS (WIREARENA-NET-PLAN 6): as walinkudp, "
+        "but the relay drops every broadcast to WireArena's port, as a "
+        "router would, and B picks Play: internet and types A's address in "
+        "the setup's Address row. B's HELLO reaches A only by address, and "
+        "the whole match follows.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/os8088.img"), timeout=240),
     Row("waweapons", "soak", py("tests/waweapons.py"), 26.0,
         "WIREARENA'S WEAPONS AND PICKUPS (docs/plans/WIREARENA-WEAPONS-"
         "PLAN.md). One boot into the Heights arena, every piece checked off "

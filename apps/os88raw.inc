@@ -124,8 +124,14 @@ rw_send:
     xor dx, dx                  ; (our own segment)
     mov bh, DRVC_NET
     mov bl, NETV_RAWTX
+    xor ax, ax
     call OSAPI_DRV_CALL
     pop bx
+    jc .sent
+    cmp ax, NETE_BUSY           ; (busy: not sent)
+    jne .sent
+    stc
+.sent:
     ret
 .no:
     stc
@@ -144,8 +150,11 @@ rw_poll:
     xor dx, dx
     mov bh, DRVC_NET
     mov bl, NETV_RAWRX
+    xor ax, ax
     call OSAPI_DRV_CALL
     jc .empty
+    cmp ax, NETE_BUSY           ; (CF = 0 AX = NETE_BUSY: the card busy -
+    je .empty                   ; nothing this time, os88udp.inc's note)
     cmp cx, RW_FRMAX            ; (longer than any of ours: not ours)
     ja .n
     cmp cx, 15

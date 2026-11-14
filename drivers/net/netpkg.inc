@@ -358,9 +358,10 @@ NETV_UDPTX   equ 19             ; SI = the payload, CX = its length (<= 512),
                                 ; DI = 6 bytes: the IP address, then the port
                                 ; (a little-endian word). CF=1 AX =
                                 ; NETE_NOLINK: no ARP answer yet - try again
-NETV_UDPRX   equ 20             ; DI = a buffer, CX = its capacity, BX = 6
-                                ; bytes for the source (as UDPTX's DI). CF=0
-                                ; CX = the TRUE length; CF=1 empty
+NETV_UDPRX   equ 20             ; DI = a buffer, CX = its capacity: the
+                                ; source's 6 bytes (as UDPTX's DI) first,
+                                ; the payload after them. CF=0 CX = the
+                                ; payload's TRUE length; CF=1 empty
 NETV_MAX     equ 20             ; ...and anything above it is refused. A verb
                                 ; table indexed by an unchecked verb is a wild
                                 ; near call inside the driver
