@@ -86,12 +86,13 @@ WA_VAR wa_vst, WA_MVTX*2        ; a vertex's cache stamp (the frame number)
 WA_VAR wa_vok, WA_MVTX*2        ; 1: inside the view, projected below
 WA_VAR wa_vx, WA_MVTX*2         ; camera space
 WA_VAR wa_vz, WA_MVTX*2
-WA_VS1 equ WA_MVTX*2            ; ...and two more of these four: a face's
-WA_VS2 equ WA_MVTX*2+2          ; ends at the screen's edges (wa_vend)
-WA_VAR wa_vpc, WA_MVTX*2+4      ; projected: column x16, top, bottom,
-WA_VAR wa_vpt, WA_MVTX*2+4      ; inverse depth
-WA_VAR wa_vpb, WA_MVTX*2+4
-WA_VAR wa_vpi, WA_MVTX*2+4
+WA_VS1 equ WA_MVTX*2            ; ...and three more of these four: a face's
+WA_VS2 equ WA_MVTX*2+2          ; ends at the screen's edges (wa_vend), and
+WA_VS3 equ WA_MVTX*2+4          ; a clipped end (wa_face.end)
+WA_VAR wa_vpc, WA_MVTX*2+6      ; projected: column x16, top, bottom,
+WA_VAR wa_vpt, WA_MVTX*2+6      ; inverse depth
+WA_VAR wa_vpb, WA_MVTX*2+6
+WA_VAR wa_vpi, WA_MVTX*2+6
 WA_VAR wa_vu, 2                 ; 1 - c16 / k16, x 65536, for the projection
 WA_VAR wa_vuk, 4                ; (k16, c16) in wa_vuk (wa_render)
 WA_VAR wa_fv, 2
@@ -1429,19 +1430,20 @@ wa_face:
     pop bx
     ret
 .end:                           ; SI = a vertex, BX = its clipped (x, z),
-    test byte [wa_vok+si], 1    ; DI = wa_c1 or wa_c2: projected
-    jnz .put
+    test byte [wa_vok+si], 1    ; DI = wa_c1 or wa_c2: projected - as a
+    jnz .put                    ; vertex of its own (WA_VS3)
     mov ax, [bx]
-    mov bx, [bx+2]
-    call wa_proj
-    stosw
-    xchg ax, bx
-    stosw
-    xchg ax, cx
-    stosw
-    xchg ax, dx
-    stosw
-    ret
+    mov cx, [bx+2]              ; (z >= NEAR, |x| <= 8z)
+    imul word [wa_k16]          ; the column, x16: NOT clamped - the span
+    idiv cx                     ; clamps to the screen
+    add ax, [wa_c16]
+    mov si, WA_VS3
+    mov [wa_vpc+si], ax
+    mov bx, cx
+    shl bx, 1
+    mov bx, [wa_rcp+bx-WA_NEAR*2]
+    call [wa_mizp]
+    jmp short .have
 .put:                           ; SI = a vertex in view, DI = wa_c1 or wa_c2:
     test byte [wa_vok+si], 2    ; its column, top, bottom, inverse depth -
     jnz .have                   ; the last three made the first time a face
@@ -1816,51 +1818,6 @@ wa_clip:
     imul bp
     idiv cx
     ret
-
-; wa_proj - AX = x, BX = z (>= NEAR, |x| <= 8z) -> AX = column x16,
-; BX = top and CX = bottom (quarter half-rows), DX = inverse depth: wa_clip's
-; ends (wa_face.clip)
-wa_proj:
-    imul word [wa_k16]          ; the column, x16: NOT clamped - a vertex in
-    idiv bx                     ; the guard band lands off the screen and
-    add ax, [wa_c16]            ; the span clamps to it. (The CENTRE, 8W -
-    push ax                     ; not the scale, 8Wf: at 90 degrees they are
-    call wa_ptbi                ; one number, and using the scale for both put
-    pop ax                      ; every wall six columns right at 75)
-    ret
-
-; wa_ptbi - BX = z (>= NEAR) -> BX = top, CX = bottom (quarter half-rows),
-; DX = inverse depth, 0x7FFF0 / z (32767 at the near plane) - out of
-; wa_rcp, the same bits the divide gave. Clobbers AX
-wa_ptbi:
-    cmp bx, WA_ZMAX
-    jae .div
-    shl bx, 1
-    mov bx, [wa_rcp+bx-WA_NEAR*2]
-.iz:
-    mov ax, [wa_numt]           ; top = hq - numt / z = hq - (numt x iz) >> 19:
-    imul bx                     ; a multiply where a divide was
-    mov cl, [wa_nsht]           ; (3, or 1 for a product / 4)
-    sar dx, cl
-    neg dx
-    add dx, [wa_hq]
-    xchg bx, dx                 ; BX = top, DX = iz
-    mov ax, [wa_numb]
-    xchg cx, dx                 ; CX = iz
-    imul cx
-    xchg cx, dx                 ; DX = iz, CX = the product's high word
-    xchg ax, cx
-    mov cl, [wa_nshb]
-    sar ax, cl
-    add ax, [wa_hq]
-    xchg cx, ax                 ; CX = bottom
-    ret
-.div:                           ; (deeper than the room: never, but exact)
-    mov ax, 0xFFF0
-    mov dx, 0x0007
-    div bx
-    mov bx, ax
-    jmp .iz
 
 ; --- spans --------------------------------------------------------------
 ; The hot loop of a frame. Plotting is INLINE (WPLOT): DL = the frame's
