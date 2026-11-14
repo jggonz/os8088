@@ -66,6 +66,7 @@ WA_VAR wa_vb0, 2
 WA_VAR wa_afix, 1               ; the span's shade is one band
 WA_VAR wa_fclp, 2               ; wa_fclpc: 4 the clip-tested passes, else 0
 WA_VAR wa_p2i, 2                ; ...and pass 2's (4 too for a thin wall's)
+WA_VAR wa_fst, 2                ; a clip-tested pass's step (its fraction)
 WA_VAR wa_cflat, 1              ; wa_cclip holds a flat arena's (wa_collook)
 WA_VAR wa_tup, 1                ; SPANLOOP: the top moves up the screen or
 WA_VAR wa_bdn, 1                ; not at all, the bottom down (wa_span.gen1)
@@ -2611,9 +2612,15 @@ wa_eoff:
 ; (wa_span's sentinel). Out: DI; BP and [wa_fh] one column past the end;
 ; pass 1 counts the columns it found shut into wa_ncl. Clobbers AL, BX, SI.
 %macro FLATPASS 2-3 0
+%if %3
+    mov [wa_fst], cx            ; (the clip's: the step in memory, the edge's
+%endif                          ; half-row in CX - a column's clip test)
     mov bx, [wa_fh]             ; (wa_fcell, inline)
     cmp bx, WA_HR
     jae %%off
+%if %3
+    mov cx, bx
+%endif
     mov al, [wa_hgl+bx]
     shl bx, 1
     mov bx, [wa_hroff+bx]
@@ -2628,13 +2635,8 @@ wa_eoff:
     jne %%shut
 %endif
 %if %3
-    push ax                     ; (heights: under a nearer low box's top?)
-    mov ax, [wa_fh]
-    cmp ax, [wa_cclip+si]
-    pop ax
+    cmp cx, [wa_cclip+si]       ; (heights: under a nearer low box's top?)
     jae %%adv
-%endif
-%if %3
     cmp [wa_stamp+bx], dl       ; (a low box's edge may share the cell, or
     je %%adv                    ; the top's: a wall under a row tall)
 %endif
@@ -2648,13 +2650,20 @@ wa_eoff:
     inc bx
     inc si
     inc si
+%if %3
+    add bp, [wa_fst]
+%else
     add bp, cx
+%endif
     jnc %%col
     mov bx, [%2]                ; the next half-row (wa_fcell, inline)
     add bx, [wa_fh]
     mov [wa_fh], bx
     cmp bx, WA_HR
     jae %%off
+%if %3
+    mov cx, bx
+%endif
     mov al, [wa_hgl+bx]
     shl bx, 1
     mov bx, [wa_hroff+bx]
@@ -2679,12 +2688,19 @@ wa_eoff:
 %%oadv:
     inc si
     inc si
+%if %3
+    add bp, [wa_fst]
+%else
     add bp, cx
+%endif
     jnc %%off
     mov bx, [%2]
     add [wa_fh], bx
     call wa_fcell
     jc %%off
+%if %3
+    mov cx, [wa_fh]
+%endif
     jmp %%col
 %if %1
 %%oshut:
