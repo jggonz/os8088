@@ -2555,27 +2555,6 @@ wa_wallz:
 .out:
     ret
 
-; wa_occl - BX = column x 2, AX = an inverse depth: AL = the first half-row
-; something nearer hides in that column - 0 the whole column (its tall face
-; is nearer: wa_wallz), 0xFF none - the one query the figures, the pistol's
-; ray and the floor grid ask (docs/plans/WIREARENA-HEIGHTS-PLAN.md 7.2.5).
-; On a flat arena that is wa_wallz's test and nothing more. Keeps every
-; register but AL.
-wa_occl:
-    push cx
-    call wa_wallz
-    xor cl, cl
-    cmp [wa_colz+bx], ax
-    ja .out                     ; the column's tall face is nearer
-    mov cl, 0xFF
-    cmp byte [wa_hflat], 0
-    jne .out
-    call wa_occlow
-.out:
-    mov al, cl
-    pop cx
-    ret
-
 ; wa_occlow - BX = column x 2, AX = an inverse depth, CL = a half-row: CL
 ; lowered to the row the column's depth stack hides from at that depth -
 ; its entries front to back while they are nearer (wa_cst). Keeps every
@@ -4686,6 +4665,7 @@ wa_view:
 ; none), with the figures' BOUND first (wa_figure): the column's tall face
 ; lies between its span's ends' inverse depths, so a thing nearer than both,
 ; or farther than both, needs no divide to say so. Keeps all but AL
+wa_occl:
 wa_thocc:
     push dx
     push si
