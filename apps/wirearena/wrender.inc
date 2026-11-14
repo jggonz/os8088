@@ -78,6 +78,7 @@ WA_VAR wa_cflat, 1              ; wa_cclip holds a flat arena's (wa_collook)
 WA_VAR wa_tup, 1                ; SPANLOOP: the top moves up the screen or
 WA_VAR wa_bdn, 1                ; not at all, the bottom down (wa_span.gen1:
                                 ; ONE word's store - keep the two together)
+WA_VAR wa_lvo, 2                ; ...its k: 3, or 7 at Low and Very Low
 WA_VAR wa_lvb, 2                ; wa_flat's LEVEL test: 7 while an edge that
 WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
                                 ; (LK_COARSE), else 0 - the bottom's and the
@@ -86,8 +87,8 @@ WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
 WA_VAR wa_roomf, 1              ; ROOMF: non-zero while the room's faces are
                                 ; drawn at a level with it (wa_render)
 WA_VAR wa_vtp, 2                ; wa_vte or wa_vtr: the level's (wa_lookset)
-WA_VAR wa_klook, 1              ; ...the wa_look it was chosen for
-WA_VAR wa_kspa, 1               ; ...and the wa_sparse (wa_collook's)
+WA_VAR wa_klook, 1              ; ...the wa_look it was chosen for and - ITS
+WA_VAR wa_kspa, 1               ; HIGH BYTE - the wa_sparse (0xFF: neither)
 WA_VAR wa_fspp, 2               ; wa_fspan, or heights' wa_fspanh (wa_face)
 WA_VAR wa_mkp, 2                ; wa_face.mk and .miz, or .mk1 and .miz1
 WA_VAR wa_mizp, 2               ; (wa_render)
@@ -357,15 +358,10 @@ wa_render:
     mov word [wa_mkp], wa_face.mk1
     mov word [wa_mizp], wa_face.miz1
 .paired:
-    mov al, [wa_sparse]         ; the detail level's choices, when it
-    cmp al, [wa_kspa]           ; changes (wa_geominit forgets it) - or L,
-    je .spa                     ; the sparse key, which wa_collook reads too
-    mov [wa_kspa], al
-    mov byte [wa_klook], 0xFF
-.spa:
-    mov al, [wa_look]
-    cmp al, [wa_klook]
-    je .looked
+    mov al, [wa_look]           ; the detail level's choices, when it
+    mov ah, [wa_sparse]         ; changes - or L, the sparse key, which
+    cmp ax, [wa_klook]          ; wa_collook reads too (one word, wa_klook
+    je .looked                  ; and wa_kspa; wa_geominit forgets it)
     call wa_lookset
 .looked:
     xor al, al
@@ -835,7 +831,7 @@ wa_geominit:
     mov word [wa_rx0], 1        ; an empty cell: the first frame orders the
     mov word [wa_rx1], 0        ; boxes (wa_order)
     mov word [wa_keye], 0x8000  ; ...and makes the eye's products
-    mov byte [wa_klook], 0xFF   ; ...and the level's choices (and with them
+    mov byte [wa_kspa], 0xFF    ; ...and the level's choices (and with them
                                 ; the products: wa_lookset)
     mov word [wa_mx0], 1        ; ...and each box's silhouette, with no hint
     mov word [wa_mx1], 0        ; (wa_bh)
@@ -1710,7 +1706,7 @@ wa_vtr:
 ; made once rather than tested where they act - which transform, a low
 ; box's far-top allowance (wrlow.inc)
 wa_lookset:
-    mov [wa_klook], al
+    mov [wa_klook], ax          ; (and AH = [wa_sparse]: wa_kspa)
     mov byte [wa_pang+1], 0xFF  ; (the products are the level's: made again)
     mov ax, wa_vte
     test byte [wa_look], LK_ROUND
@@ -2356,14 +2352,14 @@ wa_fspan:
 ; edge at a time (wa_fedge), two passes by runs (wa_span.ftail), SPANLOOP's when
 ; one is steep.
 wa_flat:
-    mov bx, bp                  ; the bottom's change in -3..3?
+    mov bx, bp                  ; the bottom's change in -k..k (wa_collook)?
     sub bx, cx
-    add bx, 3
+    add bx, [wa_lvo]
     cmp bx, [wa_lvb]
     jae .fgx
     mov bx, [wa_vpt+di]         ; ...and the top's
     sub bx, [wa_vpt+si]
-    add bx, 3
+    add bx, [wa_lvo]
     cmp bx, [wa_lvt]
     jae .fgx
     cmp byte [wa_fclp], 0       ; (heights, a column's clip raised in the
@@ -2634,8 +2630,15 @@ wa_collook:
                                 ; otherwise - wa_fclpc)
     test byte [wa_look], LK_COARSE
     jz .b
+    mov al, 3                   ; LEVEL: an edge moving under a half-row
+    test byte [wa_look], LK_COARSE2 ; (|change| <= 3 quarter half-rows) - at
+    jz .b1                      ; Low and Very Low under two (<= 7)
     mov al, 7
-.b:
+.b1:
+    mov [wa_lvo], ax
+    shl ax, 1
+    inc ax                      ; 2 k + 1: change + k under it, or
+.b:                             ; |change| x 2 (wa_fedge) - 0: no level test
     mov [wa_lvb], ax
     test byte [wa_look], LK_ROOMF ; (no top drawn: .fgl's way throughout)
     jnz .z

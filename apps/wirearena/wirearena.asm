@@ -21,6 +21,9 @@
 %include "watab.inc"               ; its constants (the data comes later)
 %include "wafb.inc"                ; the renderer part's ABI
 
+%ifndef WA_METER                ; THE METER'S ROW AT THE START: 0 nothing (what
+ %define WA_METER 0             ; ships), 1 the frame rate, 2 every number - a
+%endif                          ; benchmark build's, `make WAMETER=2`; F10 cycles
 wa_entry:
     clc                         ; kern_small refuses the relative mouse, and
     call OSAPI_MOUSE_REL        ; WireArena refuses kern_small (the owner,
@@ -32,6 +35,7 @@ wa_entry:
     mov al, OP_CARVE            ; ...and its claim may move: wa_partsmv
     call op_movable             ; re-reads the two words wa_rbind banked
     mov byte [wa_fov], 1        ; 75 degrees: the owner's pick of the three
+    mov byte [wa_mtr], WA_METER ; the meter: off, unless the build says so
     mov byte [wa_diff], 1       ; the bots: normal (AI-PLAN 4.3)
     call OSAPI_CPU_INFO         ; THE DETAIL LEVEL (HEIGHTS-PLAN 9.11): Medium
     cmp al, CPU_8086            ; on the target machine, High (Medium and the
@@ -162,8 +166,11 @@ wa_main:
     sbb dx, [wa_last+2]
     mov [wa_last], bx
     mov [wa_last+2], cx
+    cmp byte [wa_mtr], 0        ; (the meter off: nothing summed)
+    je .nsum
     add [wa_tfr], ax            ; frame time, summed for the meter
     adc [wa_tfr+2], dx
+.nsum:
     add ax, [wa_acc]
     adc dx, [wa_acc+2]
     cmp dx, (WA_TICK*4) >> 16   ; more than four ticks behind: drop the
@@ -197,6 +204,20 @@ wa_main:
     call wa_frame_input
     cmp byte [wa_quit], 0
     jne .out
+    cmp byte [wa_mtr], 2        ; THE METER (F10): only with every number
+    jae .timed                  ; asked for are render and present timed -
+    call wa_render              ; three clock reads a frame; else the frame
+    cmp byte [wa_vsync], 0      ; reads the clock once, for the sim
+    je .pr1
+    mov al, FSXW_VSYNC
+    call OSAPI_FSX_WAIT
+.pr1:
+    call wa_present
+    call pit_now
+    cmp byte [wa_mtr], 0
+    jne .mtr
+    jmp .loop
+.timed:
     call pit_now                ; THE METER'S SUMS, as the clock's readings
     sub [wa_trn], ax            ; themselves: render's less its start and
     sbb [wa_trn+2], dx          ; plus its end, present's the same - whole
@@ -216,6 +237,7 @@ wa_main:
     call pit_now
     add [wa_tpr], ax
     adc [wa_tpr+2], dx
+.mtr:
     push dx
     push ax
     call wa_meter
@@ -268,19 +290,8 @@ wa_setmode:
     call wa_rcall
     push ds
     pop es
-    xor ax, ax
-    mov [wa_frame], al
-    mov [wa_tfr], ax            ; and the meter starts again
-    mov [wa_tfr+2], ax
-    mov [wa_trn], ax
-    mov [wa_trn+2], ax
-    mov [wa_tpr], ax
-    mov [wa_tpr+2], ax
-    mov [wa_nfr], ax
-    mov [wa_ncells], ax
-    mov [wa_ncells+2], ax
-    mov si, wa_hudtpl           ; the HUD's fixed text
-    call wa_hudfix
+    mov byte [wa_frame], 0
+    call wa_mtrinit             ; and the meter's row starts again
     mov byte [wa_ovd], 1        ; (the overlay's cells move with the width,
     mov word [wa_spk], -1       ; the weapon's kept ones too)
     clc
@@ -566,6 +577,18 @@ wa_frame_input:
     call wa_reload
     jmp .drain
 .bn:
+    cmp ah, 0x44                ; F10: THE METER - nothing, the frame rate,
+    jne .bf                     ; every number, nothing again (the owner,
+    mov al, [wa_mtr]            ; pass 6: off until asked for, so a frame of
+    inc ax                      ; play reads no clock but its own and sums
+    cmp al, 3                   ; nothing)
+    jb .bm
+    xor al, al
+.bm:
+    mov [wa_mtr], al
+    call wa_mtrinit
+    jmp .drain
+.bf:
     mov al, ah                  ; F1..F5: the DETAIL LEVEL (HEIGHTS-PLAN
     sub al, 0x3B                ; 9.11; WEAPONS-PLAN 2.1)
     cmp al, WA_NLEV
@@ -1563,7 +1586,15 @@ wa_bthink:
     mov [di+F_BTGT], ah
     jmp .tgt
 .pick:
+    cmp byte [di+F_BST], WA_BROAM ; ROAMING it looks every OTHER turn, 16
+    jne .pk                     ; ticks apart (the owner, pass 6: up to
+    test al, 8                  ; 0.27 s later to notice - and a sight walk
+    jnz .acted                  ; and a bearing fewer, ~350 clk a tick)...
+    test al, 16                 ; ...the player one look and the next live
+    jmp short .pk2              ; bot the next, by the looks it takes
+.pk:
     test al, 8                  ; else the player one look and the next live
+.pk2:
     jnz .bots                   ; bot the next - one sight walk a look, as
     mov byte [di+F_BTGT], 0     ; ever
     jmp .tgt
@@ -4710,6 +4741,7 @@ wa_ovnum:
 ; runs compare. The HUD then holds its averages until the next 16 frames.
 WA_BENCHN equ 64
 wa_bench:
+    call wa_mtron
     push word [wa_px]
     push word [wa_py]
     push word [wa_ang]
@@ -4807,6 +4839,7 @@ WA_PB_YAW   equ 17 * 64         ; the circle: +-6 degrees of yaw (ang16)...
 WA_PB_PIT   equ 16              ; ...+-2 rows of pitch (quarter half-rows)
 WA_PB_STEP  equ 23              ; ...once round every ~1.5 s (1024 / 45)
 wa_pbstart:
+    call wa_mtron
     xor bx, bx                  ; the pose: P's own in arenas 0 and 1; in
     cmp byte [wa_arena], 2      ; the heights arena five in turn, A to E
     jb .pose                    ; (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9)
@@ -5046,6 +5079,8 @@ wa_meter:
     mov di, 4
     call wa_put10
     pop ax
+    cmp byte [wa_mtr], 2        ; (the frame rate alone: F10's first press)
+    jb .rate
     mov di, 12
     call wa_put10
     mov si, wa_trn
@@ -5063,6 +5098,10 @@ wa_meter:
     mov di, 33
     mov cx, 3
     call wa_putn
+    call .zero
+    jmp .marks
+.rate:
+.zero:
     xor ax, ax
     mov [wa_nfr], ax
     mov [wa_tfr], ax
@@ -5073,6 +5112,8 @@ wa_meter:
     mov [wa_tpr+2], ax
     mov [wa_ncells], ax
     mov [wa_ncells+2], ax
+    ret
+.marks:
     mov bl, [wa_fov]            ; the field of view: 9, 7 or 6 (tens)
     xor bh, bh
     mov al, [wa_fovc+bx]
@@ -5200,6 +5241,41 @@ wa_putc:
     inc di
     ret
 
+; wa_mtrinit - the meter's row for [wa_mtr] - 0 nothing, 1 the frame rate, 2
+; every number: blanked, its fixed text, and the sums started again.
+; wa_mtron - every number, if not already: a bench's result is its row
+wa_mtron:
+    cmp byte [wa_mtr], 2
+    je wa_mtrinit.out
+    mov byte [wa_mtr], 2
+wa_mtrinit:
+    xor ax, ax
+    mov [wa_tfr], ax
+    mov [wa_tfr+2], ax
+    mov [wa_trn], ax
+    mov [wa_trn+2], ax
+    mov [wa_tpr], ax
+    mov [wa_tpr+2], ax
+    mov [wa_nfr], ax
+    mov [wa_ncells], ax
+    mov [wa_ncells+2], ax
+    mov [wa_hold], al
+    xor di, di
+    mov cx, [wa_w]
+    mov al, ' '
+.b:
+    call wa_putc
+    loop .b
+    mov si, wa_hudfps
+    cmp byte [wa_mtr], 1
+    jb .out
+    je wa_hudfix
+    mov si, wa_hudtpl
+    jmp wa_hudfix
+.out:
+    ret
+wa_hudfps:  db 'FPS', 0
+
 wa_hudfix:                      ; SI = the HUD's template, NUL-terminated
     xor di, di
 .c:
@@ -5308,9 +5384,9 @@ wa_rretv:   dw wa_rret
 ; an option between levels is a change to this table and nothing else.
 WA_NLEV equ 5
 wa_levtab:
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0
                                                                     ; 1 Very Low
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_NOPOST|LK_RAMP2, 0, 0           ; 2 Low
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_RAMP2, 0, 0 ; 2 Low
     db LK_FEW|LK_ROUND|LK_COARSE, 0, 0                              ; 3 Medium
     db LK_FEW|LK_ROUND|LK_COARSE, 1, 0                              ; 4 High
     db 0, 1, 1                                                      ; 5 Very High
@@ -5609,8 +5685,8 @@ wa_help:                        ; (the Keys view: eleven rows)
     db 'Tab: scores. -/+: 40/80 columns.', 0
     db 'F1-F5 detail. F: view. V: vsync.', 0
     db 'G: floor grid. T: treads. L: tops.', 0
-    db 'B, P: benches (HUD: fps, frame,', 0
-    db 'render, present ms, writes).', 0
+    db 'F10: fps; all the stats; off.', 0
+    db 'B, P: benches (the stats on).', 0
     db 'Esc leaves the arena.', 0
     db 0
 
@@ -5815,6 +5891,8 @@ WA_VAR wa_pbon,1
 WA_VAR wa_pbtk,2
 WA_VAR wa_pbfr,2
 WA_VAR wa_hold,1
+WA_VAR wa_mtr,1                  ; the meter (F10): 0 off, 1 the frame rate, 2
+                                 ; every number
 WA_VAR wa_rowoff,(WA_ROWS+1)*2
 WA_VAR wa_hudp,4                 ; the HUD's row in text memory, offset:segment
 WA_VAR wa_kbits,2                ; the held keys this frame (wa_keys)

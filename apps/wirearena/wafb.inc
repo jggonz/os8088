@@ -28,7 +28,7 @@
 WR_MAGIC0   equ 'WR'                ; +0: 'WRPART', then the ABI byte and the
 WR_MAGIC1   equ 'PA'                ;     verb count - checked by the primary
 WR_MAGIC2   equ 'RT'                ;     at launch, refused on a mismatch
-WR_ABI      equ 6                   ; (2: the camera's sin/cos in FRAME;
+WR_ABI      equ 7                   ; (2: the camera's sin/cos in FRAME;
                                     ; 3: F_Z, the treads, ARENA's heights;
                                     ; 4: wa_look, the detail level's bits,
                                     ; where wa_hyst was; wa_flod gone;
@@ -36,7 +36,8 @@ WR_ABI      equ 6                   ; (2: the camera's sin/cos in FRAME;
                                     ; F_SIZE 44, the pickups, the rockets,
                                     ; OVERLAY, TRACE's cone; 6: F_SIZE
                                     ; 56, the bots' bytes; no patrols in
-                                    ; ARENA - AI-PLAN 3.1)
+                                    ; ARENA - AI-PLAN 3.1; 7: wa_look's
+                                    ; bit 7, LK_COARSE2)
 WR_H_ABI    equ 6
 WR_H_NV     equ 7
 WR_H_VERB   equ 8                   ; +8: a word per verb, its offset
