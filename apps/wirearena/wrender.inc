@@ -2512,11 +2512,16 @@ wa_eoff:
     inc si
     add bp, cx
     jnc %%col
-    mov bx, [%2]                ; the next half-row
-    add [wa_fh], bx
-    call wa_fcell
-    jnc %%col
-    jmp %%off
+    mov bx, [%2]                ; the next half-row (wa_fcell, inline)
+    add bx, [wa_fh]
+    mov [wa_fh], bx
+    cmp bx, WA_HR
+    jae %%off
+    mov al, [wa_hgl+bx]
+    shl bx, 1
+    mov bx, [wa_hroff+bx]
+    add bx, si
+    jmp %%col
 %%shut:
     cmp si, [wa_end]
     jae %%done
