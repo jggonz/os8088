@@ -64,7 +64,7 @@ WA_VAR wa_sbl, 2
 WA_VAR wa_vbl, 2
 WA_VAR wa_vb0, 2
 WA_VAR wa_afix, 1               ; the span's shade is one band
-WA_VAR wa_fclp, 1               ; wa_fclpc: 1 the clip-tested passes
+WA_VAR wa_fclp, 2               ; wa_fclpc: 4 the clip-tested passes, else 0
 WA_VAR wa_cflat, 1              ; wa_cclip holds a flat arena's (wa_collook)
 WA_VAR wa_tup, 1                ; SPANLOOP: the top moves up the screen or
 WA_VAR wa_bdn, 1                ; not at all, the bottom down (wa_span.gen1)
@@ -1498,125 +1498,6 @@ wa_ptbib:
 %%skip:
 %endmacro
 
-; FLATTAIL - a flat span's passes and corners, its edges made (wa_flat's
-; general way): %1, %2 the passes, %3 = 1 the heights clip's, %4 the label.
-%macro FLATTAIL 4
-%%lev:                          ; the top level: on the screen?
-    cmp word [wa_fh], WA_HR
-    jb %%p1
-    push word [wa_dt]           ; OFF it (a near wall's, or the sparse
-    mov bx, [wa_db]             ; level's): ONE pass, the bottom's, opens
-    mov [wa_dt], bx             ; the columns
-    mov bx, [wa_vb0]
-    mov [wa_fh], bx
-    mov bp, [wa_qb]
-    mov cx, [wa_fb]
-    call %1
-    pop word [wa_dt]
-    mov byte [wa_cov+si+1], 0
-    jmp %%bp
-%4:                             ; (BX = the tag; SI.BP, CX, DI the top's)
-    mov [wa_vt0], si            ; (for the corners)
-    mov [wa_qt], bp
-    mov [wa_ft], cx
-    mov [wa_dt], di
-    mov [wa_fh], si
-    cmp byte [wa_sparse], 0     ; the sparse level draws no top: pass 1
-    je %%full1                  ; only opens
-    mov word [wa_fh], -1
-    xor cx, cx
-%%full1:
-    mov dh, bl                  ; DH = the tag
-    mov dl, [wa_frame]
-    mov di, [wa_lp]
-    mov ah, [wa_wcol]           ; the wall's colour: its ITEM's, not its depth
-    mov word [wa_ncl], 0
-    mov si, [wa_end]            ; the column past the end reads shut to pass
-    mov byte [wa_cov+si+1], 1   ; 1 (a high byte: always 0 otherwise)
-    mov si, [wa_cs]
-    jcxz %%lev
-%%p1:
-    call %1                     ; pass 1: open, and the top (SI = the end)
-    mov byte [wa_cov+si+1], 0
-    mov bx, [wa_vb0]            ; pass 2: the bottom - unless it is off the
-    mov [wa_fh], bx             ; screen and stays there
-    mov bp, [wa_qb]
-    mov cx, [wa_fb]
-    jcxz %%bz
-%%b2:
-    mov si, [wa_cs]
-    call %2
-    jmp %%bp
-%%bz:
-    cmp bx, WA_HR
-    jb %%b2
-%%bp:
-    mov ax, [wa_end]            ; opened: the range less the shut ones
-    sub ax, [wa_cs]
-    shr ax, 1
-    sub ax, [wa_ncl]
-    sub [wa_left], ax
-    test byte [wa_look], LK_NOPOST ; (NOPOST: a wall shorter than
-    jz %%np                     ; WA_POSTMIN half-rows at its first column -
-    mov ax, [wa_vb0]            ; a far one - has no corner posts)
-    sub ax, [wa_vt0]
-    cmp ax, WA_POSTMIN
-    jl %%fdone
-%%np:
-    mov si, [wa_cs]             ; the corners, at the segment's own ends,
-    cmp si, [wa_cs0]            ; when this span opened them: a `│` each
-    jne %%fc2                   ; (nothing else is in either column: no
-    cmp byte [wa_e1], 0         ; stamp tests)
-    je %%fc2
-    mov bx, [wa_vt0]
-    mov ax, [wa_vb0]
-%if %3
-    call wa_cclp                ; (heights: the post ends at the clip,
-    mov cl, 1                   ; and its cells are tested)
-%else
-    xor cl, cl
-%endif
-    call wa_corner
-%%fc2:
-    cmp byte [wa_e2], 0
-    je %%fdone
-    mov si, [wa_ce0]
-    cmp si, [wa_end]            ; (on the screen)
-    jge %%fdone
-    mov al, [wa_tag]
-    cmp [wa_cov+si], al         ; (and opened here)
-    jne %%fdone
-    sub si, [wa_cs]             ; the last column's edges: the top's from
-    shr si, 1                   ; its start (a carry a half-row; in a pass's
-    xchg ax, si                 ; form, either way), the bottom's a step
-    mul word [wa_ft]            ; back from one column past the end (a
-    add ax, [wa_qt]             ; borrow)
-    adc dx, 0
-    mov bx, [wa_vt0]
-    cmp word [wa_dt], 0
-    jg %%ft
-    neg dx
-%%ft:
-    add bx, dx
-    mov ax, [wa_fh]
-    cmp bp, [wa_fb]
-    jnc %%fb
-    sub ax, [wa_db]
-%%fb:
-    mov si, [wa_ce0]
-    mov dl, [wa_frame]          ; (the multiply took DX)
-%if %3
-    call wa_cclp                ; (heights: the post ends at the clip,
-    mov cl, 1                   ; and its cells are tested)
-%else
-    xor cl, cl
-%endif
-    call wa_corner
-%%fdone:
-    mov [wa_lp], di
-    ret
-%endmacro
-
 ; wa_span - the projected segment (c1,t1,b1,i1)-(c2,t2,b2,i2): stepped
 ; across its columns, drawn into the open ones, which it then closes.
 wa_span:
@@ -1679,8 +1560,116 @@ wa_span:
 .steepm:                        ; wa_flat's steep way out, a clipped span
     sub word [wa_tag], 2
     jmp .gen1
-    FLATTAIL wa_fo, wa_fp, 0, .ftail
-    FLATTAIL wa_foc, wa_fpc, 1, .ftailc
+
+; .ftail - a flat span's passes and corners, its edges made (wa_flat's
+; general way): the plain passes, or on heights the clip-tested ones where a
+; low box has raised a column's clip in the range (wa_fclp, wa_ptab). BX =
+; the tag; SI.BP, CX, DI the top's (wa_fedge's).
+.ftlev:                         ; the top level: on the screen?
+    cmp word [wa_fh], WA_HR
+    jb .p1
+    push word [wa_dt]           ; OFF it (a near wall's, or the sparse
+    mov bp, [wa_db]             ; level's): ONE pass, the bottom's, opens
+    mov [wa_dt], bp             ; the columns
+    mov bp, [wa_vb0]
+    mov [wa_fh], bp
+    mov bp, [wa_qb]
+    mov cx, [wa_fb]
+    call [wa_ptab+bx]
+    pop word [wa_dt]
+    mov byte [wa_cov+si+1], 0
+    jmp .bp
+.ftail:
+    mov [wa_vt0], si            ; (for the corners)
+    mov [wa_qt], bp
+    mov [wa_ft], cx
+    mov [wa_dt], di
+    mov [wa_fh], si
+    cmp byte [wa_sparse], 0     ; the sparse level draws no top
+    je .full1
+    mov word [wa_fh], -1
+    xor cx, cx
+.full1:
+    mov dh, bl                  ; DH = the tag
+    mov dl, [wa_frame]
+    mov di, [wa_lp]
+    mov ah, [wa_wcol]           ; the wall's colour: its ITEM's, not its depth
+    mov word [wa_ncl], 0
+    mov si, [wa_end]            ; the column past the end reads shut to pass
+    mov byte [wa_cov+si+1], 1   ; 1 (a high byte: always 0 otherwise)
+    mov si, [wa_cs]
+    mov bx, [wa_fclp]           ; (which passes: 0, or 4 the clip's)
+    jcxz .ftlev
+.p1:
+    call [wa_ptab+bx]           ; pass 1: open, and the top (SI = the end)
+    mov byte [wa_cov+si+1], 0
+    mov bx, [wa_vb0]            ; pass 2: the bottom - unless it is off the
+    mov [wa_fh], bx             ; screen and stays there
+    mov bp, [wa_qb]
+    mov cx, [wa_fb]
+    jcxz .bz
+.b2:
+    mov si, [wa_cs]
+    mov bx, [wa_fclp]
+    call [wa_ptab+bx+2]
+    jmp .bp
+.bz:
+    cmp bx, WA_HR
+    jb .b2
+.bp:
+    mov ax, [wa_end]            ; opened: the range less the shut ones
+    sub ax, [wa_cs]
+    shr ax, 1
+    sub ax, [wa_ncl]
+    sub [wa_left], ax
+    test byte [wa_look], LK_NOPOST ; (NOPOST: a wall shorter than
+    jz .fnp                     ; WA_POSTMIN half-rows at its first column -
+    mov ax, [wa_vb0]            ; a far one - has no corner posts)
+    sub ax, [wa_vt0]
+    cmp ax, WA_POSTMIN
+    jl .fdone
+.fnp:
+    mov si, [wa_cs]             ; the corners, at the segment's own ends,
+    cmp si, [wa_cs0]            ; when this span opened them: a `│` each
+    jne .fc2                    ; (plain: nothing else is in either column,
+    cmp byte [wa_e1], 0         ; no stamp tests; the clip's: a low box's
+    je .fc2                     ; cells can be, and the post ends at the
+    mov bx, [wa_vt0]            ; clip - wa_vedge)
+    mov ax, [wa_vb0]
+    mov cl, [wa_fclp]
+    call wa_corner
+.fc2:
+    cmp byte [wa_e2], 0
+    je .fdone
+    mov si, [wa_ce0]
+    cmp si, [wa_end]            ; (on the screen)
+    jge .fdone
+    cmp [wa_cov+si], dh         ; (and opened here)
+    jne .fdone
+    sub si, [wa_cs]             ; the last column's edges: the top's from
+    shr si, 1                   ; its start (a carry a half-row; in a pass's
+    xchg ax, si                 ; form, either way), the bottom's a step
+    mul word [wa_ft]            ; back from one column past the end (a
+    add ax, [wa_qt]             ; borrow)
+    adc dx, 0
+    mov bx, [wa_vt0]
+    cmp word [wa_dt], 0
+    jg .fft
+    neg dx
+.fft:
+    add bx, dx
+    mov ax, [wa_fh]
+    cmp bp, [wa_fb]
+    jnc .ffb
+    sub ax, [wa_db]
+.ffb:
+    mov si, [wa_ce0]
+    mov dl, [wa_frame]          ; (the multiply took DX)
+    mov cl, [wa_fclp]
+    call wa_corner
+.fdone:
+    mov [wa_lp], di
+    ret
 
 ; .reg - register the span: wa_cov will hold its TAG (x 2, from 2: a byte,
 ; the word's high byte staying 0) in every column it opens, and the table
@@ -1845,7 +1834,6 @@ wa_span:
     je .c2
     mov bx, [wa_vt0]
     mov ax, [wa_vb0]
-    call wa_cclp
     push cx
     mov cl, [wa_gen]            ; (nothing else is in this column yet - but
     call wa_corner              ; a low box can be)
@@ -1865,7 +1853,6 @@ wa_span:
     sub ax, [wa_sbl]
     mov ax, [wa_vb]
     sbb ax, [wa_sb]
-    call wa_cclp
     mov cl, [wa_gen]            ; (a steep step's fill can be in this column
     or cl, [wa_steep]           ; too, and wins)
     call wa_corner
@@ -2038,9 +2025,9 @@ wa_flat:
     sub bx, [wa_vpt+si]
     add bx, 3
     cmp bx, [wa_lvt]
-    jae .fgl
-    cmp word [wa_ftailp], wa_span.ftail ; (heights, a column's clip raised
-    jne .fgl                    ; in the range: the clip-tested passes)
+    jae .fgx
+    cmp byte [wa_fclp], 0       ; (heights, a column's clip raised in the
+    jne .fgx                    ; range: the clip-tested passes)
     add cx, bp                  ; e1 + change / 2, rounded to a half-row:
     add cx, 4                   ; (e1 + e2 + 4) >> 3
     sar cx, 1
@@ -2154,26 +2141,7 @@ wa_flat:
     mov [wa_lp], di
     ret
 
-.fgl:                           ; the bottom LEVEL, the top not (or not
-    add cx, bp                  ; drawn, or the clip's passes)
-    add cx, 4
-    sar cx, 1
-    sar cx, 1
-    sar cx, 1
-    mov [wa_vb0], cx
-    mov word [wa_fb], 0
-    mov [wa_dc], dx             ; (wa_fedge's, and a steep edge's)
-    mov bx, [wa_cs]             ; the first open centre past c1, x16
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    add bx, 8
-    sub bx, ax
-    mov [wa_fs], bx
-    mov ax, [wa_vpt+si]
-    mov bx, [wa_vpt+di]
-    jmp .ftop
-.fgx:                           ; the bottom NOT level
+.fgx:                           ; an edge that is not level, or the clip's passes
     mov [wa_dc], dx             ; (wa_fedge's, and a steep edge's)
     mov bx, [wa_cs]             ; the first open centre past c1, x16
     shl bx, 1
@@ -2204,9 +2172,7 @@ wa_flat:
     jc .steep
 .td:
     mov bx, [wa_tag]
-    jmp [wa_ftailp]             ; FLATTAIL's passes and corners (on heights
-                                ; the clip-tested ones where a low box has
-                                ; raised a column's clip: wa_fclpc)
+    jmp wa_span.ftail           ; the passes and the corners
 .steep2:
     add sp, 4
 .steep:
@@ -2236,6 +2202,8 @@ wa_collook:
     mov [wa_cflat], al
 .lv:
     xor ax, ax
+    mov [wa_fclp], ax           ; (the plain passes: heights' spans say
+                                ; otherwise - wa_fclpc)
     test byte [wa_look], LK_COARSE
     jz .b
     mov al, 7
@@ -2262,10 +2230,9 @@ wa_rnotop:
     mov byte [wa_e2], 0
     ret
 
-; wa_fclpc - heights: [wa_fclp] = 1 when a column of [wa_cs, wa_end) is
-; under a low box's top (its clip raised), else 0 - and wa_flat's general
-; way on, [wa_ftailp], the clip-tested tail or the plain one. Clobbers AX,
-; CX, DI
+; wa_fclpc - heights: [wa_fclp] = 4 when a column of [wa_cs, wa_end) is
+; under a low box's top (its clip raised: the clip-tested passes, wa_ptab),
+; else 0. Clobbers AX, CX, DI
 wa_fclpc:
     mov cx, [wa_end]
     mov di, [wa_cs]
@@ -2274,14 +2241,11 @@ wa_fclpc:
     add di, wa_cclip
     mov ax, WA_HR
     repe scasw
-    mov al, 0
-    mov cx, wa_span.ftail
+    mov ax, 0
     je .no
-    inc ax
-    mov cx, wa_span.ftailc
+    mov al, 4
 .no:
-    mov [wa_fclp], al
-    mov [wa_ftailp], cx
+    mov [wa_fclp], ax
     ret
 
 ; wa_fsteep - a steep edge in wa_fspan's span: the vertices into wa_c1..
@@ -2687,6 +2651,7 @@ wa_fo:      FLATPASS 1, wa_dt
 wa_fp:      FLATPASS 0, wa_db
 wa_foc:     FLATPASS 1, wa_dt, 1    ; (heights: against the column's clip)
 wa_fpc:     FLATPASS 0, wa_db, 1
+wa_ptab:    dw wa_fo, wa_fp, wa_foc, wa_fpc ; (by wa_fclp)
 
 ; wa_fcell - [wa_fh] in the column SI: AL = its glyph, BX = its cell, CF = 0;
 ; CF = 1 off the screen
@@ -3027,15 +2992,6 @@ wa_slope:
     pop bp
     ret
 
-; wa_cclp - heights: AX (a post's bottom, half-rows) no lower than SI's
-; column clip - a nearer low box hides the rest. Keeps every register but AX
-wa_cclp:
-    cmp ax, [wa_cclip+si]
-    jle .out
-    mov ax, [wa_cclip+si]
-.out:
-    ret
-
 ; wa_corner - BX = top, AX = bottom (half-rows), SI = column x 2, CL = 0
 ; when no cell between them can have been drawn this frame: `│` between
 ; them, the cell stepped by a row; CL = 0 skips the stamp tests. Keeps SI,
@@ -3058,8 +3014,13 @@ wa_corner:
     pop bp
 .out:
     ret
-; wa_vedge - the same, every cell tested (first one wins)
+; wa_vedge - the same, every cell tested (first one wins), and no lower than
+; the column's clip (heights: a nearer low box hides the rest)
 wa_vedge:
+    cmp ax, [wa_cclip+si]
+    jle .cl
+    mov ax, [wa_cclip+si]
+.cl:
     call wa_vrows
     jcxz .out
     push bp
