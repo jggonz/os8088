@@ -273,7 +273,8 @@ wa_setmode:
     mov [wa_ncells+2], ax
     mov si, wa_hudtpl           ; the HUD's fixed text
     call wa_hudfix
-    mov byte [wa_ovd], 1        ; (the overlay's cells move with the width)
+    mov byte [wa_ovd], 1        ; (the overlay's cells move with the width,
+    mov word [wa_spk], -1       ; the weapon's kept ones too)
     clc
 .out:
     ret
@@ -4145,6 +4146,7 @@ wa_pktake:
 ; it reloads); the health and the shield at row 23's left; the magazine and
 ; the reserve at its right.
 ; A sprite: row, column from W/2 + 3, glyph, colour attribute; 0xFF ends it
+WA_SPMAX    equ 16              ; a sprite's most cells (the rocket launcher's)
 wa_spr:     dw wa_spr0, wa_spr1, wa_spr2, wa_spr3, wa_spr4, wa_spr5
 wa_spr0:                        ; the pistol
     db 21, 1, 0xDC, 0x0F
@@ -4184,8 +4186,11 @@ wa_spr4:                        ; the rocket launcher: a green tube
 
 wa_ovbuild:
     mov byte [wa_ovd], 0
-    mov word [wa_ovfresh], 1    ; (the renderer shows it, then clears this)
-    mov word [wa_ovn], 0
+    mov es, [wa_rds]            ; ES = the part, DI = its cells so far, x 2:
+    xor di, di                  ; wa_ovput's, kept through every builder
+    cld
+    mov word [es:WA_RAT(wa_ovfresh)], 1 ; (the renderer shows it, then clears
+                                ; this)
     cmp byte [wa_sbon], 0       ; Tab held: the scoreboard (AI-PLAN 5)
     je .nosb
     call wa_ovboard
@@ -4195,36 +4200,85 @@ wa_ovbuild:
     call wa_ovrsp
 .alive:
     call wa_lkmsg               ; (linked: WAITING, LINK LOST, LEFT)
-    mov bl, [wa_wpn]            ; the weapon
+    mov al, [wa_wpn]            ; THE WEAPON: its cells as they were made
+    xor ah, ah                  ; the last time (wa_spc, wa_spg) while it is
+    cmp byte [wa_rld], 0        ; the same weapon, up or down a row for its
+    je .key                     ; reload, at the same width
+    inc ah
+.key:
+    cmp ax, [wa_spk]
+    je .sprcp
+    mov [wa_spk], ax
+    push di
+    mov bl, al
     xor bh, bh
     shl bx, 1
     mov si, [wa_spr+bx]
     mov cx, [wa_w]
     shr cx, 1
     add cx, 3                   ; CX = its column 0
+    xor di, di                  ; DI = its cells, x 2
 .spr:
     lodsb
     cmp al, 0xFF
-    je .status
-    xor dh, dh
-    mov dl, al
-    cmp byte [wa_rld], 0
-    je .up
-    inc dx                      ; (reloading: a row lower)
-.up:
-    lodsb
-    xor bh, bh
+    je .sprd
     mov bl, al
-    add bx, cx
-    lodsw
-    cmp dx, WA_ROWS-1
-    ja .spr
+    add bl, ah                  ; (reloading: a row lower)
+    xor bh, bh                  ; BX = the row
+    lodsb
+    mov dl, al
+    xor dh, dh
+    add dx, cx                  ; DX = the column
+    lodsb
+    cmp bx, WA_ROWS-1
+    ja .sprn
+    cmp dx, [wa_w]
+    jae .sprn
+    cmp di, WA_SPMAX*2
+    jae .sprn
+    shl bx, 1
+    add dx, [wa_rowoff+bx]      ; the cell, and x 2: the renderer's offset
+    shl dx, 1
+    mov [wa_spc+di], dx
+    mov bl, [si]
     cmp byte [wa_mono], 0
     je .sp
-    mov ah, 0x07
+    mov bl, 0x07
 .sp:
-    call wa_ovput
+    mov [wa_spg+di], al
+    mov [wa_spg+di+1], bl
+    inc di
+    inc di
+.sprn:
+    inc si                      ; (past its attribute)
     jmp .spr
+.sprd:
+    shr di, 1
+    mov [wa_spn], di
+    pop di
+.sprcp:
+    mov cx, WA_MOV*2            ; as many of them as the overlay has room
+    sub cx, di                  ; for (the rest dropped, as wa_ovput drops)
+    jbe .status
+    shr cx, 1
+    cmp cx, [wa_spn]
+    jbe .fit
+    mov cx, [wa_spn]
+.fit:
+    jcxz .status
+    mov bx, cx
+    mov dx, di
+    mov si, wa_spc
+    add di, WA_RAT(wa_ov)
+    rep movsw
+    mov cx, bx
+    mov si, wa_spg
+    mov di, dx
+    add di, WA_RAT(wa_ovg)
+    rep movsw
+    mov di, dx
+    shl bx, 1
+    add di, bx
 .status:
     cmp byte [wa_beam], 0       ; THE RAILGUN'S BEAM, its few ticks: from
     je .nobeam                  ; the barrel's mouth to the crosshair (a
@@ -4283,12 +4337,17 @@ wa_ovbuild:
     jnz .res
     mov ax, 0x0FEC              ; (infinity)
     call wa_ovatt
-    jmp wa_ovput
+    call wa_ovput
+    jmp short .built
 .res:
     mov al, [wa_res+si]
     xor ah, ah
     mov cx, 3
-    jmp wa_ovnum
+    call wa_ovnum
+.built:
+    shr di, 1                   ; its cells, counted
+    mov [es:WA_RAT(wa_ovn)], di
+    ret
 
 ; THE SCOREBOARD (AI-PLAN 5), while Tab is held: a box 20 cells wide over
 ; the view's middle, a header and a row each (YOU and the three robots), by
@@ -4344,6 +4403,8 @@ wa_ovboard:
     inc dx
     mov bl, [ds:bp+wa_sord]
     xor bh, bh
+    push di                     ; (the overlay's cursor and the part, kept
+    push es                     ; while the row's text is made)
     mov di, wa_sbbuf
     push ds
     pop es
@@ -4378,6 +4439,8 @@ wa_ovboard:
     mov di, wa_sbbuf+14
     call wa_sbnum
     pop ax
+    pop es
+    pop di
     mov si, wa_sbbuf
     call wa_ovrow
 .skip:
@@ -4402,25 +4465,41 @@ wa_sbnum:
     ret
 
 ; wa_ovrow - SI = WA_SBW characters, AH = their colour, AL = their mono
-; attribute: a row of the board at DX, centred
+; attribute: a row of the board at DX, centred - straight onto the overlay
+; (ES, DI: wa_ovput's), its cells one after the other, those past WA_MOV
+; dropped. Clobbers AX, BX, CX, SI
 wa_ovrow:
     cmp byte [wa_mono], 0
     je .c
     mov ah, al
 .c:
-    mov bx, [wa_w]
-    sub bx, WA_SBW
-    shr bx, 1
+    mov bx, dx
+    shl bx, 1
+    mov bx, [wa_rowoff+bx]
+    mov cx, [wa_w]
+    sub cx, WA_SBW
+    shr cx, 1
+    add bx, cx
+    shl bx, 1                   ; BX = its first cell's offset
     mov cx, WA_SBW
 .r:
-    mov al, [si]
-    inc si
-    call wa_ovput
+    cmp di, WA_MOV*2
+    jae .full
+    lodsb
+    mov [es:WA_RAT(wa_ovg)+di], ax
+    mov [es:WA_RAT(wa_ov)+di], bx
+    inc di
+    inc di
+    inc bx
+    inc bx
     loop .r
+.full:
     ret
 
 ; wa_ovrsp - dead: "RESPAWN n" over the view's middle, n its seconds
 wa_ovrsp:
+    push di                     ; (the overlay's cursor and the part, kept)
+    push es
     mov si, wa_rsptx
     mov di, wa_sbbuf
     push ds
@@ -4428,6 +4507,8 @@ wa_ovrsp:
     mov cx, 10
     cld
     rep movsb
+    pop es
+    pop di
     mov al, [wa_pdead]
     xor ah, ah
     add ax, 29
@@ -4458,61 +4539,56 @@ wa_ovatt:
     ret
 
 ; wa_ovput - AL = a glyph, AH = its attribute, at row DX, column BX: onto
-; the overlay (past the screen's edge or WA_MOV cells, dropped); BX moves on.
-; Keeps every other register
+; the overlay, in the part (ES; DI = its cells so far x 2, which moves on) -
+; past the screen's edge or WA_MOV cells, dropped; BX moves on. Keeps every
+; other register
 wa_ovput:
     cmp bx, [wa_w]
     jae .skip
-    push di
-    mov di, [wa_ovn]
-    cmp di, WA_MOV
-    jae .full
-    inc word [wa_ovn]
-    shl di, 1
-    mov [wa_ovg+di], ax
+    cmp di, WA_MOV*2
+    jae .skip
+    mov [es:WA_RAT(wa_ovg)+di], ax
     push bx
     push si
     mov si, dx
     shl si, 1
     add bx, [wa_rowoff+si]      ; the cell, and x 2: the renderer's offset
     shl bx, 1
-    mov [wa_ov+di], bx
+    mov [es:WA_RAT(wa_ov)+di], bx
     pop si
     pop bx
-.full:
-    pop di
+    inc di
+    inc di
 .skip:
     inc bx
     ret
 
-; wa_ovnum - AX = a number, CX = its digits, at row DX from column BX (BX
-; moves on past them), [wa_ovat] its attributes (colour high, mono low):
-; leading zeros are left as the view behind them. Clobbers AX, CX
+; wa_ovnum - AX = a number, CX = its digits (3 at most), at row DX from
+; column BX (BX moves on past them), [wa_ovat] its attributes (colour high,
+; mono low): leading zeros are left as the view behind them. Clobbers AX, CX
 wa_ovnum:
     push si
-    push di
-    push dx
-    mov di, cx
-    mov si, 10
-.mk:
-    dec di
-    xor dx, dx
-    div si
-    add dl, '0'
-    mov [wa_ovdig+di], dl
-    or di, di
-    jnz .mk
-    pop dx
+    or ah, ah
+    jnz .big
+    aam                         ; under 256 (as ever in play): three digits
+    add al, '0'                 ; by two AAMs, not three 16-bit divides
+    mov [wa_ovdig+3], al
+    mov al, ah
+    aam
+    add ax, '00'
+    mov [wa_ovdig+2], al
+    mov [wa_ovdig+1], ah
+.made:
+    mov si, 4
+    sub si, cx                  ; SI = its first digit's place in wa_ovdig
     mov ax, [wa_ovat]
     cmp byte [wa_mono], 0
     jne .m
     mov al, ah
 .m:
     mov ah, al                  ; AH = the attribute
-    xor si, si
-    dec cx                      ; CX = the last digit's index
 .lead:
-    cmp si, cx
+    cmp si, 3
     jae .p                      ; (the last digit always shows)
     cmp byte [wa_ovdig+si], '0'
     jne .p
@@ -4523,11 +4599,27 @@ wa_ovnum:
     mov al, [wa_ovdig+si]
     call wa_ovput
     inc si
-    cmp si, cx
-    jbe .p
-    pop di
+    cmp si, 4
+    jb .p
     pop si
     ret
+.big:                           ; (a test's 30000: its low digits, by divides)
+    push bx
+    push dx
+    push cx
+    mov bx, 10
+    mov si, 4
+.mk:
+    dec si
+    xor dx, dx
+    div bx
+    add dl, '0'
+    mov [wa_ovdig+si], dl
+    loop .mk
+    pop cx
+    pop dx
+    pop bx
+    jmp .made
 
 ; --- the bench --------------------------------------------------------------
 ; B: 64 frames from the arena's middle, turning 1/64 of a circle each, the
@@ -5232,15 +5324,9 @@ wa_camsc:
 ; projection itself stays in the part, where TRACE reads it. ES = DS out, as
 ; the renderer left it.
 wa_render:
-    cmp byte [wa_ovd], 0        ; the overlay, rebuilt and copied across
-    je .ov                      ; only when something it shows changed
+    cmp byte [wa_ovd], 0        ; the overlay, rebuilt (straight into the
+    je .ov                      ; part) only when something it shows changed
     call wa_ovbuild
-    mov es, [wa_rds]
-    mov si, wa_fb_ovl
-    mov di, WA_RAT(wa_fb_ovl)
-    mov cx, (wa_fb_oend - wa_fb_ovl) / 2
-    cld
-    rep movsw
 .ov:
     call wa_rframe
     mov bx, WRV_RENDER
@@ -5623,7 +5709,11 @@ WA_VAR wa_rld,1                  ; ticks of a reload left (0: none), and - ITS
 WA_VAR wa_cool,1                 ;   HIGH BYTE - ticks before the next shot
 WA_VAR wa_ovd,1                  ; the overlay wants rebuilding
 WA_VAR wa_ovat,2                 ; wa_ovnum's attributes
-WA_VAR wa_ovdig,4                ; ...and its digits (3 at most)
+WA_VAR wa_ovdig,4                ; ...and its digits (3 at most, from +1)
+WA_VAR wa_spk,2                  ; the weapon's cells kept (wa_ovbuild): the
+WA_VAR wa_spn,2                  ;   weapon and its reload they are for, how
+WA_VAR wa_spc,WA_SPMAX*2         ;   many, their offsets and their glyphs
+WA_VAR wa_spg,WA_SPMAX*2
 WA_VAR wa_pkt,WA_MPK*2           ; a taken pickup's ticks to its return
 WA_VAR wa_pkall,1                ; wa_pkon with every pickup present
 WA_VAR wa_pkgrid,256             ; the pickups in reach of each 128-unit cell
