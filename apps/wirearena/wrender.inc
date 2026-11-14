@@ -71,6 +71,9 @@ WA_VAR wa_roomf, 1              ; ROOMF: non-zero while the room's faces are
 WA_VAR wa_vtp, 2                ; wa_vte or wa_vtr: the level's (wa_lookset)
 WA_VAR wa_klook, 1              ; ...the wa_look it was chosen for
 WA_VAR wa_fspp, 2               ; wa_fspan, or heights' wa_fspanh (wa_face)
+WA_VAR wa_mkp, 2                ; wa_face.mk and .miz, or .mk1 and .miz1
+WA_VAR wa_mizp, 2               ; (wa_render)
+WA_VAR wa_numh, 2               ; .mk1's: wa_numt + wa_numb
 WA_VAR wa_cend, 2               ; the first column x 16 off the right (wa_render)
 WA_POSTMIN equ 8                ; NOPOST: the shortest wall with posts
 WA_VAR wa_left, 2               ; columns still open
@@ -308,6 +311,27 @@ wa_render:
 .nst:
     mov [wa_numb], ax
     mov [wa_nshb], bl
+    mov word [wa_mkp], wa_face.mk ; a vertex's top and bottom by one multiply
+    mov word [wa_mizp], wa_face.miz ; (wa_face.mk1) where the bottom's
+    cmp bl, 3                   ; numerator less the top's is a 16th of
+    jne .paired                 ; their sum - the standing eye
+    mov dx, [wa_numt]
+    or dx, dx
+    jle .paired
+    mov bx, ax
+    sub bx, dx
+    add ax, dx
+    jc .paired
+    test al, 15
+    jnz .paired
+    mov dx, ax
+    mov cl, 4
+    shr dx, cl
+    cmp dx, bx
+    jne .paired
+    mov [wa_numh], ax
+    mov word [wa_mkp], wa_face.mk1
+    mov word [wa_mizp], wa_face.miz1
 .paired:
     mov word [wa_ftailp], wa_span.ftail ; (wa_fspan's: wa_fspanh sets its own)
     mov al, [wa_look]           ; the detail level's choices, when it
@@ -320,6 +344,8 @@ wa_render:
     cmp byte [wa_hflat], 0
     jne .gen
     mov word [wa_fspp], wa_fspanh
+    mov word [wa_mkp], wa_face.mk ; (heights: a top per box, two multiplies)
+    mov word [wa_mizp], wa_face.miz
     mov word [wa_ntht], -1      ; (heights: the top per box, wa_hnt, and
     mov di, wa_cclip            ; every span general; the column state,
     mov ax, WA_HR               ; HEIGHTS-PLAN 7.2.5)
@@ -1248,12 +1274,12 @@ wa_face:
     call wa_vend                ; the screen's left edge in its place
     jc .clip
     mov si, WA_VS1
-    call .miz
+    call [wa_mizp]
     jmp short .e2
 .in1:
     test al, 2                  ; (in the view: its top, bottom and inverse
     jnz .e2                     ; depth made the first time a face of it
-    call .mk                    ; gets this far in a frame)
+    call [wa_mkp]               ; gets this far in a frame)
 .e2:
     mov al, [wa_vok+di]
     or al, al
@@ -1264,7 +1290,7 @@ wa_face:
     call wa_vend
     jc .clip1
     mov si, WA_VS2
-    call .miz
+    call [wa_mizp]
     mov di, si
     pop si
     jmp short .go
@@ -1272,7 +1298,7 @@ wa_face:
     test al, 2
     jnz .go
     xchg si, di
-    call .mk
+    call [wa_mkp]
     xchg si, di
 .go:
     jmp [wa_fspp]               ; (wa_fspan, or heights' wa_fspanh)
@@ -1324,7 +1350,7 @@ wa_face:
 .put:                           ; SI = a vertex in view, DI = wa_c1 or wa_c2:
     test byte [wa_vok+si], 2    ; its column, top, bottom, inverse depth -
     jnz .have                   ; the last three made the first time a face
-    call .mk                    ; of it gets this far in a frame (.mk)
+    call [wa_mkp]               ; of it gets this far in a frame (.mk)
 .have:
     mov ax, [wa_vpc+si]
     stosw
@@ -1355,6 +1381,34 @@ wa_face:
     sar dx, cl
     add dx, [wa_hq]
     mov [wa_vpb+si], dx
+    ret
+; .mk1, .miz1 - .mk and .miz by ONE multiply, where the top and the bottom
+; are 15/32 and 17/32 of the wall's whole height - a flat arena's 3 m wall
+; from the standing eye, 1.6 m: most frames (wa_render chooses: [wa_mkp],
+; [wa_mizp]). [wa_numh] is the two numerators' sum; a quarter half-row's
+; rounding apart, the same values.
+.mk1:
+    or byte [wa_vok+si], 2
+    mov bx, [wa_vz+si]
+    shl bx, 1
+    mov bx, [wa_rcp+bx-WA_NEAR*2]
+.miz1:
+    mov [wa_vpi+si], bx
+    mov ax, [wa_numh]
+    mul bx                      ; DX = the whole height, x 16
+    mov cl, 4
+    mov ax, dx
+    shr ax, cl
+    mov bx, dx
+    add dx, ax                  ; 17/16 of it, / 16: below the horizon
+    shr dx, cl
+    add dx, [wa_hq]
+    mov [wa_vpb+si], dx
+    sub bx, ax                  ; 15/16 of it, / 16: above
+    shr bx, cl
+    mov ax, [wa_hq]
+    sub ax, bx
+    mov [wa_vpt+si], ax
     ret
 
 ; wa_vend - a face's end OUTSIDE the view, made where the face meets the
