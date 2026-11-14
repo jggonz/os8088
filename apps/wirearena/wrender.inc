@@ -1891,24 +1891,37 @@ wa_span:
     shl ax, 1                   ; |change| x 4
     cmp ax, cx
     jae .ew
-    xchg ax, dx                 ; (under a half-row: the fraction alone)
-    jmp .ed
+    xchg ax, dx                 ; under a half-row a column: the fraction
+    div cx                      ; alone
+    mov bx, ax                  ; BX = |step|
+    mul word [wa_fs]            ; x off: DX:AX
+    shr dx, 1                   ; / 16
+    rcr ax, 1
+    shr dx, 1
+    rcr ax, 1
+    shr dx, 1
+    rcr ax, 1
+    shr dx, 1
+    rcr ax, 1
+    jmp .e4
+.e0:
+    xor bx, bx                  ; (no step: the start is t1's)
+    xor ax, ax
+    cwd
+    jmp .e4
 .eb:
     shl ax, 1
     rcl dx, 1
     shl ax, 1
     rcl dx, 1                   ; DX:AX = |change| x 4
-.ew:
-    div cx
+.ew:                            ; a half-row a column or more: the step's
+    div cx                      ; whole part too
     mov si, ax
     mov byte [wa_steep], 1
     xor ax, ax
-.ed:
     div cx
     mov bx, ax                  ; SI.BX = |step|
-    mul word [wa_fs]            ; x off: DX:AX (a steep step: and above)
-    or si, si
-    jz .e3
+    mul word [wa_fs]            ; x off: DX:AX, and above
     push di
     mov cx, ax
     mov di, dx
@@ -1931,21 +1944,6 @@ wa_span:
     xchg ax, cx
     mov dx, di
     pop di
-    jmp .e4
-.e0:
-    xor bx, bx                  ; (no step: the start is t1's)
-    xor ax, ax
-    cwd
-    jmp .e4
-.e3:
-    shr dx, 1
-    rcr ax, 1
-    shr dx, 1
-    rcr ax, 1
-    shr dx, 1
-    rcr ax, 1
-    shr dx, 1
-    rcr ax, 1
 .e4:
     or bp, bp                   ; the sign onto both
     jz .e5
