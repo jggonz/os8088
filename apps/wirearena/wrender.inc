@@ -2557,36 +2557,26 @@ wa_wallz:
 
 ; wa_occlow - BX = column x 2, AX = an inverse depth, CL = a half-row: CL
 ; lowered to the row the column's depth stack hides from at that depth -
-; its entries front to back while they are nearer (wa_cst). Keeps every
-; register but CL.
+; its entries front to back while they are nearer (wa_cst). Keeps AX, BX
+; and BP; clobbers CH, DX, SI, DI (its askers have those saved, or free).
 wa_occlow:
-    cmp byte [wa_cstn+bx], 0    ; (no entries: nothing to lower it - most
-    je .none                    ; columns)
-    push ax
-    push dx
-    push si
-    push di
+    mov ch, [wa_cstn+bx]        ; CH = the entries (none: nothing to lower
+    or ch, ch                   ; it - most columns)
+    jz .none
     push bp
     mov bp, ax                  ; BP = the depth asked about
-    mov dl, [wa_cstn+bx]        ; DL = the entries
     mov di, bx                  ; DI = entry k's place, less wa_cst
 .e:
-    or dl, dl
-    jz .done
-    mov si, [wa_cst+di]
-    mov dh, [wa_cst+di+1]       ; DH = the row it hides from
-    and si, 0xFF                ; SI = its span's tag
+    mov ax, [wa_cst+di]         ; AL = its span's tag, AH = the row it
+    mov dh, ah                  ; hides from
+    xor ah, ah
+    mov si, ax
     mov ax, [wa_spih+si]        ; its inverse depth here lies between its
     cmp ax, bp                  ; ends' (the entry is in one of its
     jbe .lo                     ; columns), so the ends often settle it:
     add ax, [wa_spsl+si]        ; both nearer...
     cmp ax, bp
     ja .near
-    jmp .exact
-.lo:
-    add ax, [wa_spsl+si]        ; ...or neither
-    cmp ax, bp
-    jbe .done
 .exact:
     mov ax, bx                  ; else as wa_wallz makes it
     shl ax, 1
@@ -2594,29 +2584,30 @@ wa_occlow:
     shl ax, 1
     add ax, 8
     sub ax, [wa_spcs+si]
-    push dx
     imul word [wa_spsl+si]
     idiv word [wa_spsh+si]
-    pop dx
     add ax, [wa_spih+si]
     cmp ax, bp
     jbe .done                   ; not nearer: nor is any after it
+    mov dh, [wa_cst+di+1]       ; (the row again: the divide took DX)
 .near:
     cmp dh, cl
     jae .next
     mov cl, dh
 .next:
     add di, 2*WA_MAXW
-    dec dl
-    jmp .e
+    dec ch
+    jnz .e
 .done:
+    mov ax, bp
     pop bp
-    pop di
-    pop si
-    pop dx
-    pop ax
 .none:
     ret
+.lo:
+    add ax, [wa_spsl+si]        ; ...or neither
+    cmp ax, bp
+    ja .exact
+    jmp .done
 
 ; wa_slope - AX = this column's edge, CX = the last column's (half-rows),
 ; SI = column x 2: a step of two half-rows or more is filled down it,
@@ -3749,10 +3740,16 @@ wa_fthrs:
     cmp byte [wa_fvis+bx], 0
     jne .n                      ; (its tall face hid it)
     push cx
+    push dx
+    push si
+    push di
     mov cl, 0xFF
     mov ax, si
     call wa_occlow
     mov al, cl
+    pop di
+    pop si
+    pop dx
     pop cx
     inc al
     jz .n                       ; (0xFF: nothing hidden)
@@ -4703,12 +4700,12 @@ wa_thocc:
     cmp dx, ax
     ja .hid                     ; the tall face there is nearer
 .open:
-    push cx                     ; nothing tall: what a platform hides
-    mov cl, 0xFF
+    mov al, 0xFF                ; nothing tall: what a platform hides
     cmp byte [wa_hflat], 0
-    jne .flat
+    jne .out
+    push cx
+    mov cl, al
     call wa_occlow
-.flat:
     mov al, cl
     pop cx
     jmp .out
