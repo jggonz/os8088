@@ -65,6 +65,7 @@ WA_VAR wa_vbl, 2
 WA_VAR wa_vb0, 2
 WA_VAR wa_afix, 1               ; the span's shade is one band
 WA_VAR wa_fclp, 2               ; wa_fclpc: 4 the clip-tested passes, else 0
+WA_VAR wa_p2i, 2                ; ...and pass 2's (4 too for a thin wall's)
 WA_VAR wa_cflat, 1              ; wa_cclip holds a flat arena's (wa_collook)
 WA_VAR wa_tup, 1                ; SPANLOOP: the top moves up the screen or
 WA_VAR wa_bdn, 1                ; not at all, the bottom down (wa_span.gen1)
@@ -1610,7 +1611,7 @@ wa_span:
     jcxz .bz
 .b2:
     mov si, [wa_cs]
-    mov bx, [wa_fclp]
+    mov bx, [wa_p2i]            ; (the plain pass, or the testing one)
     call [wa_ptab+bx+2]
     jmp .bp
 .bz:
@@ -2150,8 +2151,22 @@ wa_flat:
     add bx, 8
     sub bx, ax
     mov [wa_fs], bx
-    push word [wa_vpt+si]       ; the top's ends, for after the bottom's
-    push word [wa_vpt+di]
+    mov ax, 4                   ; PASS 2 tests its cell for the top's (the
+    mov bx, [wa_vpt+si]         ; clip's pass does) unless the wall is three
+    push bx                     ; half-rows tall or more at both ends - so
+    neg bx                      ; at every column, and its edges share no
+    add bx, cx                  ; cell: the plain pass, no test
+    cmp bx, 12
+    mov bx, [wa_vpt+di]         ; (the top's ends, for after the bottom's)
+    push bx
+    jl .thin
+    neg bx
+    add bx, bp
+    cmp bx, 12
+    jl .thin
+    mov ax, [wa_fclp]
+.thin:
+    mov [wa_p2i], ax
     xchg ax, cx
     mov bx, bp
     call wa_fedge
@@ -2585,9 +2600,9 @@ wa_eoff:
     pop ax
     jae %%adv
 %endif
-%if %1 == 0 || %3
-    cmp [wa_stamp+bx], dl       ; (a low box's edge may share the cell)
-    je %%adv
+%if %3
+    cmp [wa_stamp+bx], dl       ; (a low box's edge may share the cell, or
+    je %%adv                    ; the top's: a wall under a row tall)
 %endif
     mov [wa_stamp+bx], dl
     mov [wa_cur+bx], ax
