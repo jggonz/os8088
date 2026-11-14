@@ -69,7 +69,8 @@ WA_VAR wa_p2i, 2                ; ...and pass 2's (4 too for a thin wall's)
 WA_VAR wa_fst, 2                ; a clip-tested pass's step (its fraction)
 WA_VAR wa_cflat, 1              ; wa_cclip holds a flat arena's (wa_collook)
 WA_VAR wa_tup, 1                ; SPANLOOP: the top moves up the screen or
-WA_VAR wa_bdn, 1                ; not at all, the bottom down (wa_span.gen1)
+WA_VAR wa_bdn, 1                ; not at all, the bottom down (wa_span.gen1:
+                                ; ONE word's store - keep the two together)
 WA_VAR wa_lvb, 2                ; wa_flat's LEVEL test: 7 while an edge that
 WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
                                 ; (LK_COARSE), else 0 - the bottom's and the
@@ -2157,13 +2158,14 @@ wa_flat:
     cmp ax, WA_POSTMIN
     jl .pdone
 .np:
-    cmp word [wa_e1], 0         ; THE POSTS, at the segment's own ends where
-    je .pdone                   ; this span opened them (wa_e1, wa_e2): a `│`
-    mov ax, [wa_vb0]            ; each, between the same two half-rows -
-    sar ax, 1                   ; the rows made once (wa_corner's: stop
-    cmp ax, WA_ROWS             ; before the bottom's row, start under the
-    jle .pb                     ; top's). Nothing else is in either column:
-    mov ax, WA_ROWS             ; no stamp tests
+    mov al, [wa_e1]             ; THE POSTS, at the segment's own ends where
+    or al, [wa_e2]              ; this span opened them (wa_e1, wa_e2): a `│`
+    jz .pdone                   ; each, between the same two half-rows - the
+    mov ax, [wa_vb0]            ; rows made once (wa_corner's: stop before
+    sar ax, 1                   ; the bottom's row, start under the top's).
+    cmp ax, WA_ROWS             ; Nothing else is in either column: no stamp
+    jle .pb                     ; tests
+    mov ax, WA_ROWS
 .pb:
     mov bx, [wa_vt0]
     sar bx, 1
