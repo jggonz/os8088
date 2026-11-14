@@ -2992,49 +2992,22 @@ wa_slope:
     pop bp
     ret
 
-; wa_corner - BX = top, AX = bottom (half-rows), SI = column x 2, CL = 0
-; when no cell between them can have been drawn this frame: `│` between
-; them, the cell stepped by a row; CL = 0 skips the stamp tests. Keeps SI,
-; DI and DL; clobbers AX, BX, CX.
+; wa_corner - BX = top, AX = bottom (half-rows), SI = column x 2: `│` in the
+; rows between them, the cell stepped by a row. CL = 0 when no cell there
+; can have been drawn this frame: no stamp tests. Else (wa_vedge) every
+; cell is tested, first one wins, and the post ends at the column's clip
+; (heights: a nearer low box hides the rest). Keeps DI's list and DX;
+; clobbers AX, BX, CX, SI.
+wa_vedge:
 wa_corner:
     or cl, cl
-    jnz wa_vedge
-    call wa_vrows
-    jcxz .out
-    push bp
-    mov bp, [wa_rowo2+2]        ; (a row's offset: row 1's)
-.row:
-    mov [wa_stamp+bx], dl
-    mov [wa_cur+bx], ax
-    xchg ax, bx
-    stosw
-    xchg ax, bx
-    add bx, bp
-    loop .row
-    pop bp
-.out:
-    ret
-; wa_vedge - the same, every cell tested (first one wins), and no lower than
-; the column's clip (heights: a nearer low box hides the rest)
-wa_vedge:
+    jz .rows
     cmp ax, [wa_cclip+si]
-    jle .cl
+    jle .rows
     mov ax, [wa_cclip+si]
-.cl:
-    call wa_vrows
-    jcxz .out
-    push bp
-    mov bp, [wa_rowo2+2]
-.row:
-    WPLOT
-    add bx, bp
-    loop .row
-    pop bp
-.out:
-    ret
-wa_vrows:                       ; -> BX = the first cell, CX = rows (0:
-    sar ax, 1                   ; none), AX = the glyph. The bottom's row:
-    cmp ax, WA_ROWS             ; stop before it
+.rows:
+    sar ax, 1                   ; the bottom's row: stop before it
+    cmp ax, WA_ROWS
     jle .bok
     mov ax, WA_ROWS
 .bok:
@@ -3043,17 +3016,31 @@ wa_vrows:                       ; -> BX = the first cell, CX = rows (0:
     jns .tok
     xor bx, bx
 .tok:
-    mov cx, ax
-    sub cx, bx
-    jg .some
-    xor cx, cx
-    ret
-.some:
+    sub ax, bx
+    jle .out
     shl bx, 1
     mov bx, [wa_rowo2+bx]
     add bx, si
+    mov si, [wa_rowo2+2]        ; (a row's offset: row 1's)
+    or cl, cl
+    xchg ax, cx                 ; CX = the rows
     mov al, 0xB3
     mov ah, [wa_wcol]
+    jnz .tst
+.row:
+    mov [wa_stamp+bx], dl
+    mov [wa_cur+bx], ax
+    xchg ax, bx
+    stosw
+    xchg ax, bx
+    add bx, si
+    loop .row
+.out:
+    ret
+.tst:
+    WPLOT
+    add bx, si
+    loop .tst
     ret
 
 wa_list:                        ; BX = cell, onto this frame's list
