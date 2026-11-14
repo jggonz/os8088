@@ -173,8 +173,6 @@ WA_VAR wa_fxs, WA_NFIG*2        ; camera x and z per figure this frame
 WA_VAR wa_fzs, WA_NFIG*2
 WA_VAR wa_ford, WA_NFIG*2       ; those in view, far to near (x 2)
 WA_VAR wa_frec, WA_NFIG*2       ; ...and each one's record
-WA_VAR wa_lx1, 2
-WA_VAR wa_ly1, 2
 WA_VAR wa_ldx, 2
 WA_VAR wa_ldy, 2
 WA_VAR wa_lsx, 2
