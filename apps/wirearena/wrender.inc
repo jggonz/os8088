@@ -194,8 +194,8 @@ WA_VAR wa_fbuf, WA_CELLS*2      ; a figure's sub-pixels by cell offset (0
                                 ; between figures: wa_figure clears its own)
 WA_VAR wa_nwr, 2                ; video writes this frame
 WA_VAR wa_rcp, (WA_ZMAX-WA_NEAR)*2 ; 0x7FFF0 / z, z = NEAR.. (wa_ptbi)
-WA_VAR wa_xk, WA_MXV+1          ; per coordinate: the step from the one
-WA_VAR wa_yk, WA_MYV+1          ; before, as a slot x 8 (wa_products)
+WA_VAR wa_xk, WA_MXV*2+2        ; per coordinate: the step from the one
+WA_VAR wa_yk, WA_MYV*2+2        ; before, as its products' place in wa_mk
 WA_VAR wa_nk, 2                 ; the last slot used, x 8
 WA_VAR wa_lord, WA_MBOX*4+1    ; the boxes front to back, a record each:
 WA_VAR wa_lrec, 2               ; box, a, b, c (wa_order, wa_sil) - the walk's
@@ -829,8 +829,9 @@ wa_geominit:
     mov cx, [wa_nyv2]
 .steps:                         ; SI = values, CX = their count x 2, DI = the
     shr cx, 1                   ; axis's steps: per value after the first,
-    dec cx                      ; its step's slot x 8 (from 8), then 0
-.s:
+    dec cx                      ; its step's products' place in wa_mk (slot
+.s:                             ; x 8, from 8), then 0
+    inc di
     inc di
     mov ax, [si+2]
     sub ax, [si]
@@ -848,11 +849,12 @@ wa_geominit:
     mov [wa_kv+bx], ax          ; (arenagen refuses more than WA_MAXKS)
     mov [wa_nk], bx
 .have:
-    mov [di], bl
+    add bx, wa_mk
+    mov [di], bx
     inc si
     inc si
     loop .s
-    mov byte [di+1], 0
+    mov word [di+2], 0
     ret
 
 ; WA_AXIS values, the player's coordinate, steps, cos products, sin products,
@@ -876,13 +878,12 @@ wa_geominit:
 %endif
     mov di, %4
     mov si, %3
-    xor bx, bx
     jmp %%put
 %%next:
-    add ax, [wa_mk+bx]          ; ...and each after it, the step's added
-    adc dx, [wa_mk+bx+2]
-    add bp, [wa_mk+bx+4]
-    adc cx, [wa_mk+bx+6]
+    add ax, [bx]                ; ...and each after it, the step's added
+    adc dx, [bx+2]
+    add bp, [bx+4]
+    adc cx, [bx+6]
 %%put:
 %if %6 == 0
     mov [di], ax
@@ -894,8 +895,9 @@ wa_geominit:
     mov [di+%5-%4+2], cx
     add di, 4
     inc si
-    mov bl, [si]
-    or bl, bl
+    inc si
+    mov bx, [si]
+    or bx, bx
     jnz %%next
 %endmacro
 
