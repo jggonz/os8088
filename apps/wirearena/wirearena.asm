@@ -829,11 +829,10 @@ wa_tick:
     call wa_hjump               ; lift (HEIGHTS-PLAN 3.1, 3.2)
     jmp .grounded
 .flatj:
-    cmp word [wa_jz], 0
-    jne .air
-    cmp word [wa_jv], 0
-    jne .air
-    test word [wa_kbits], WA_K_SPACE
+    mov ax, [wa_jz]
+    or ax, [wa_jv]
+    jnz .air
+    test byte [wa_kbits+1], WA_K_SPACE >> 8
     jz .grounded
     mov word [wa_jv], WA_JUMPV
 .air:
@@ -891,7 +890,10 @@ wa_tick:
     jmp wa_pktick
 .lfig:
     call wa_figtick
+    cmp byte [wa_bdet], 0       ; (a bench's dummies do not think)
+    jne .lnb
     call wa_bthink
+.lnb:
     add di, F_SIZE
     cmp di, wa_figs + WA_NFIG*F_SIZE
     jb .lfig
