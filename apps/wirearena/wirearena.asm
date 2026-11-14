@@ -850,20 +850,18 @@ wa_tick:
 .c_pk:
     jmp wa_pktick
 
-; wa_collide - CF = 1 when the player at [wa_px],[wa_py] is inside a wall.
-; Keeps every register. The player's square is widened once (x +- R, y +-
-; R), so a box is four compares against its own corners.
+; wa_collide - CF = 1 when the player at [wa_px],[wa_py] may not stand
+; there: outside the room; on a FLAT arena inside a wall (every box there is
+; as tall as the tallest, so the floor under the player's square - wa_floor
+; over every box, each widened by the radius - is above 0 exactly there);
+; on the heights where that floor is more than a step above the feet (in
+; the air: above the feet at all). Keeps every register.
 wa_collide:
-    cmp byte [wa_aflat], 0
-    jne .flat
-    jmp wa_hcollide
-.flat:
+wa_hcollide:
     push ax
     push bx
-    push cx
     push dx
     push si
-    push bp
     mov ax, [wa_px]
     mov bx, [wa_py]
     cmp ax, WA_ROOM_X0 + WA_RAD
@@ -874,35 +872,29 @@ wa_collide:
     jl .hit
     cmp bx, WA_ROOM_Y1 - WA_RAD
     jg .hit
-    mov dx, ax
-    add dx, WA_RAD              ; DX = x + R, AX = x - R
-    sub ax, WA_RAD
-    mov bp, bx
-    add bp, WA_RAD              ; BP = y + R, BX = y - R
-    sub bx, WA_RAD
-    mov si, wa_boxes
-    mov cx, [wa_nbox]
-.box:
-    cmp dx, [si]                ; inside x0 - R < x < x1 + R, and the same
-    jle .next                   ; for y
-    cmp ax, [si+4]
-    jge .next
-    cmp bp, [si+2]
-    jle .next
-    cmp bx, [si+6]
-    jl .hit
-.next:
-    add si, 8
-    loop .box
+    mov si, wa_allp
+    call wa_floor
+    cmp byte [wa_aflat], 0
+    jne .flat
+    call wa_fabs                ; DX = the feet, units: on the ground a
+    mov si, [wa_jz]             ; step more, in the air nothing more - a
+    or si, [wa_jv]              ; jump reaches what its feet clear (the
+    jnz .air                    ; back room's 48, not the platform's 80)
+    add dx, WA_STEPUP
+.air:
+    cmp ax, dx
+    jg .hit
+.clear:
     clc
     jmp .out
+.flat:
+    or ax, ax
+    jz .clear
 .hit:
     stc
 .out:
-    pop bp
     pop si
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -924,22 +916,54 @@ wa_collide:
 ; (x 4, into wa_bxh) of the box it is, -1 the ground. Each entry holds its
 ; box WIDENED by r, so overlapping it is the point inside: four compares
 ; against registers. Keeps BX, CX, SI, DI, BP.
+;
+; THE GRID: a walk over every entry was the sim's largest cost (1,400 clk a
+; call, four calls a tick with the player walking and a grenade in the
+; air). A table opens with 16 x 16 cells of 128 units, each the addresses
+; of the entries whose widened box reaches into it, in the table's order
+; (so a tie is the same box's), 0 after the last: the point's cell names
+; the one or two to try. A cell that more than three reach holds 1, and
+; walks them all. The edge cells take everything beyond the room, so any
+; x and y get the whole table's answer.
 WA_LTE      equ 12              ; a table's entry: x0-r, y0-r, x1+r, y1+r,
                                 ; box x 8 (wa_boxes), box x 4 (wa_bxh)
+WA_LGC      equ 8               ; a cell: three entries' addresses and a 0
+WA_LG       equ 256*WA_LGC      ; the grid, at the table's start
+WA_LN       equ WA_LG           ; ...then its entries' count, its r, and
+WA_LR       equ WA_LG+2         ; the entries
+WA_LE       equ WA_LG+4
+WA_LTSZ     equ WA_LE+WA_MBOX*WA_LTE
+%if WA_ROOM_X0 != 0 || WA_ROOM_Y0 != 0 || WA_ROOM_X1 != 2048 || WA_ROOM_Y1 != 2048
+ %error "wa_floor's grid is 16 x 16 cells of 128 units over a room 0..2048"
+%endif
 wa_floor:
     push si
     push di
     push bp
     push cx
-    mov [wa_qx], ax
-    mov [wa_qy], bx
-    mov cx, [si]                ; CX = its entries
-    mov di, [si+2]
+    mov di, [si+WA_LR]
     mov [wa_qr], di             ; (its r, for a ramp's reach)
-    add si, 4
     xor bp, bp                  ; BP = the floor so far, DX its record
     mov dx, -1
-    jcxz .done
+    mov di, bx                  ; THE CELL: its row (y >> 7) x 16 cells x 8
+    cmp di, WA_ROOM_Y1          ; bytes is y's bits 7..10 as they are
+    jae .yout
+    and di, 0x0780
+.yc:
+    mov cx, ax                  ; ...and its column (x >> 7) x 8
+    cmp cx, WA_ROOM_X1
+    jae .xout
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    and cl, 0x78
+.xc:
+    add di, cx
+    add di, si                  ; DI = the cell
+    mov si, [di]
+    cmp si, 1
+    jbe .few                    ; (nothing here - or more than three)
 .box:
     cmp ax, [si]
     jle .next
@@ -949,22 +973,27 @@ wa_floor:
     jle .next
     cmp bx, [si+6]
     jge .next
+    mov [wa_qx], ax
+    mov [wa_qy], bx
+    push di
     mov di, [si+10]
-    push si
     mov si, [si+8]
     add di, wa_bxh
     call wa_hat                 ; AX = its height there (AX was x: again
     sub di, wa_bxh              ; after)
-    pop si
     cmp ax, bp
     jbe .again
     mov bp, ax
     mov dx, di
 .again:
+    pop di
     mov ax, [wa_qx]
 .next:
-    add si, WA_LTE
-    loop .box
+    inc di
+    inc di
+    mov si, [di]
+    or si, si
+    jnz .box
 .done:
     mov ax, bp
     pop cx
@@ -972,10 +1001,56 @@ wa_floor:
     pop di
     pop si
     ret
+.yout:                          ; beyond the room: the edge's cells
+    mov di, 0x0780
+    or bx, bx
+    jns .yc
+    xor di, di
+    jmp .yc
+.xout:
+    mov cx, 0x0078
+    or ax, ax
+    jns .xc
+    xor cx, cx
+    jmp .xc
+.few:
+    jb .done
+    mov di, sp                  ; A CROWDED CELL: every entry of the table
+    mov si, [ss:di+6]           ; (SI as it came in)
+    mov [wa_qx], ax
+    mov [wa_qy], bx
+    mov cx, [si+WA_LN]
+    add si, WA_LE
+.wbox:
+    cmp ax, [si]
+    jle .wnext
+    cmp ax, [si+4]
+    jge .wnext
+    cmp bx, [si+2]
+    jle .wnext
+    cmp bx, [si+6]
+    jge .wnext
+    mov di, [si+10]
+    push si
+    mov si, [si+8]
+    add di, wa_bxh
+    call wa_hat
+    sub di, wa_bxh
+    pop si
+    cmp ax, bp
+    jbe .wagain
+    mov bp, ax
+    mov dx, di
+.wagain:
+    mov ax, [wa_qx]
+.wnext:
+    add si, WA_LTE
+    loop .wbox
+    jmp .done
 
 ; wa_lists - once an arena is loaded: its box tables (wa_floor's), every box
 ; for the player's collision and the low ones (below the tallest height,
-; and the lift) for the player's floor and a dummy's
+; and the lift) for the player's floor and a dummy's - each with its grid
 wa_lists:
     mov di, wa_allp
     mov dx, WA_RAD
@@ -990,8 +1065,16 @@ wa_lists:
     ; (falls through)
 .one:                           ; DI = the table, DX = r, BP = 1 low only
     push di
-    mov [di+2], dx
-    add di, 4
+    mov [di+WA_LR], dx
+    push es
+    push ds
+    pop es
+    xor ax, ax                  ; its grid: empty
+    mov cx, WA_LG/2
+    cld
+    rep stosw
+    pop es
+    add di, 4                   ; (DI = its entries)
     xor bx, bx                  ; BX = box x 8
     xor cx, cx                  ; CX = its entries
 .b:
@@ -1027,7 +1110,84 @@ wa_lists:
     jmp .b
 .end:
     pop di
-    mov [di], cx
+    mov [di+WA_LN], cx
+    jcxz .gdone
+    lea si, [di+WA_LE]          ; THE GRID: each entry, in order, into every
+.ge:                            ; cell a point inside it can be in - the
+    push cx                     ; cells of x0 + 1 .. x1 - 1, the same of y
+    mov ax, [si+2]
+    inc ax
+    call .cc
+    mov dl, al                  ; DL = its first row of cells...
+    mov ax, [si+6]
+    dec ax
+    call .cc
+    mov dh, al                  ; ...DH its last
+    mov ax, [si]
+    inc ax
+    call .cc
+    mov ch, al                  ; CH = its first column...
+    mov ax, [si+4]
+    dec ax
+    call .cc
+    mov cl, al                  ; ...CL its last
+.grow:
+    mov al, dl
+    mov ah, 16
+    mul ah
+    add al, ch
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, di                  ; BX = the row's first cell of them
+    mov al, ch                  ; AL = the column
+.gcell:
+    cmp word [bx], 1
+    je .gnext                   ; (crowded already: it walks them all)
+    push bx
+    cmp word [bx], 0
+    je .gput
+    inc bx
+    inc bx
+    cmp word [bx], 0
+    je .gput
+    inc bx
+    inc bx
+    cmp word [bx], 0
+    je .gput
+    pop bx
+    mov word [bx], 1            ; a fourth: crowded
+    jmp .gnext
+.gput:
+    mov [bx], si
+    pop bx
+.gnext:
+    add bx, WA_LGC
+    inc al
+    cmp al, cl
+    jbe .gcell
+    inc dl
+    cmp dl, dh
+    jbe .grow
+    pop cx
+    add si, WA_LTE
+    loop .ge
+.gdone:
+    ret
+.cc:                            ; AX = a coordinate: AL = its cell, 0..15,
+    or ax, ax                   ; the edge's beyond the room
+    jns .ccp
+    xor ax, ax
+.ccp:
+    cmp ax, WA_ROOM_X1 - 1
+    jbe .ccin
+    mov ax, WA_ROOM_X1 - 1
+.ccin:
+    push cx
+    mov cl, 7
+    shr ax, cl
+    pop cx
     ret
 
 ; wa_hat - SI = a box (wa_boxes), DI = its record, the square overlapping it
@@ -1102,47 +1262,6 @@ wa_hat:
     pop cx
     pop bx
 .out:
-    ret
-
-; wa_hcollide - CF = 1 when the player at [wa_px],[wa_py] stands where the
-; floor is more than a step above the feet (in the air: above the feet at
-; all), or outside the room. Keeps every register.
-wa_hcollide:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov ax, [wa_px]
-    mov bx, [wa_py]
-    cmp ax, WA_ROOM_X0 + WA_RAD
-    jl .hit
-    cmp ax, WA_ROOM_X1 - WA_RAD
-    jg .hit
-    cmp bx, WA_ROOM_Y0 + WA_RAD
-    jl .hit
-    cmp bx, WA_ROOM_Y1 - WA_RAD
-    jg .hit
-    mov si, wa_allp
-    call wa_floor
-    call wa_fabs                ; DX = the feet, units: on the ground a
-    mov cx, [wa_jz]             ; step more, in the air nothing more - a
-    or cx, [wa_jv]              ; jump reaches what its feet clear (the
-    jnz .air                    ; back room's 48, not the platform's 80)
-    add dx, WA_STEPUP
-.air:
-    cmp ax, dx
-    jg .hit
-    clc
-    jmp .out
-.hit:
-    stc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; wa_fabs - DX = the feet's height: the floor they stood on plus the jump,
@@ -5238,9 +5357,9 @@ WA_VAR wa_qr,2
 WA_VAR wa_nbox8,2                ; the boxes x 8 (wa_lists)
 WA_VAR wa_lon,2                  ; the lift: ticks someone has stood on it,
 WA_VAR wa_loff,2                 ;   ticks it has stood empty
-WA_VAR wa_allp,4+WA_MBOX*WA_LTE  ; wa_floor's box tables (wa_lists): every
-WA_VAR wa_lowp,4+WA_MBOX*WA_LTE  ;   box and the low ones for the player,
-WA_VAR wa_lowf,4+WA_MBOX*WA_LTE  ;   the low ones for a dummy's feet
+WA_VAR wa_allp,WA_LTSZ           ; wa_floor's box tables (wa_lists): every
+WA_VAR wa_lowp,WA_LTSZ           ;   box and the low ones for the player,
+WA_VAR wa_lowf,WA_LTSZ           ;   the low ones for a dummy's feet
 WA_VAR wa_gph,WA_GPHSZ           ; the arena's route graph (AI-PLAN 3.1)...
 WA_VAR wa_gnp,2                  ; ...its nodes...
 WA_VAR wa_gep,2                  ; ...and its edges
