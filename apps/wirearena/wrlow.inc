@@ -52,12 +52,11 @@ WL_REC      equ 16
 
 %macro WL_BSS 0
 WA_VAR wl_h, 2                  ; its height (a flight's, its top tread's)
-WA_VAR wl_kind, 1               ; its kind byte and faces byte (wa_bxh)
+WA_VAR wl_kind, 1               ; its kind byte (wa_bxh), a flight's alone
 WA_VAR wl_lom, 1                ; a ramp's low face's bit (else 0): drawn
                                 ; as one edge, its top on the floor
 WA_VAR wl_nt, 2                 ; a flight's treads (0: a ramp, or no flight:
                                 ; cleared with wl_lom, its low byte)
-WA_VAR wl_faces, 1
 WA_VAR wl_seen, 1               ; the faces the player is outside of: bits
 WA_VAR wl_front, 1              ; ...of them, those drawn (posts, floors)
 WA_VAR wl_topb, 1               ; the faces' top bits
@@ -102,7 +101,6 @@ WA_VAR wl_k, 2                  ; a flight: the treads left, the
 WA_VAR wl_rise, 2               ; rise, the low and high faces, and a
                                 ; tread's step along each side, camera
 WA_VAR wl_lo, 1                 ; space
-WA_VAR wl_hi, 1
 WA_VAR wl_dxa, 2
 WA_VAR wl_dza, 2
 WA_VAR wl_dxb, 2
@@ -217,7 +215,7 @@ wa_lowbox:
     mov ax, [wa_bxh+di]
     mov [wl_h], ax
     mov ax, [wa_bxh+di+2]
-    mov [wl_faces], ah
+    mov dl, ah                  ; DL = its faces byte
     test al, 2                  ; the kind: only a FLIGHT (kind 1) keeps it -
     jz .kind                    ; every flight test below is "kind & 3 is
     xor al, al                  ; not 0", and a LIFT (kind 2, its index in
@@ -250,12 +248,12 @@ wa_lowbox:
 .sd:
     mov [wl_seen], bl
     mov al, bl
-    and al, [wl_faces]
+    and al, dl
     mov [wl_front], al          ; the faces drawn: their posts, floor edges
     mov bx, wl_crn
     xlatb
     mov [wl_fneed], al          ; ...and the corners that need a floor row
-    mov al, [wl_faces]
+    mov al, dl
     mov cl, 4
     shr al, cl
     mov [wl_topb], al
@@ -468,19 +466,19 @@ wl_post:
     test byte [wa_vok+bx], 1
     jz wl_face.under            ; (not in the view: off the screen, or behind)
     mov ax, [wl_c+si+WL_KF]
+    mov bx, [wl_c+si+WL_KT]
+    mov dx, ax                  ; (a row between its top's and its floor's
+    sub dx, bx                  ; takes three half-rows: nine quarters at
+    cmp dx, 9                   ; least - a ramp's low corners, on the
+    jl wl_face.under            ; floor, and every short post)
     add ax, 2
     sar ax, 1
     sar ax, 1                   ; AX = the floor, half-rows, rounded
-    mov bx, [wl_c+si+WL_KT]
     add bx, 2
     sar bx, 1
     sar bx, 1
     sar bx, 1
     inc bx                      ; BX = the row under the top's
-    mov dx, ax                  ; (no cell between them, whatever the clip:
-    sar dx, 1                   ; the floor's row at most one under the
-    cmp dx, bx                  ; top's - a ramp's low corners, on the
-    jle .out                    ; floor, and every short post - r5)
     mov di, [wl_c+si+WL_KC]     ; its column: as wa_span's corners
     add di, cx
     mov cl, 4
@@ -1145,14 +1143,13 @@ wl_shutc:
 
 ; --- flights --------------------------------------------------------------
 ; wl_flight0 - a flight's corners: the low end's two take its first tread's
-; height's pair, its high end's its top's (wa_lowbox's). [wl_lo], [wl_hi]
-; the two ends' faces; [wl_nt], [wl_rise] its treads and their rise
+; height's pair, its high end's its top's (wa_lowbox's). [wl_lo] its low
+; end's face; [wl_nt], [wl_rise] its treads and their rise
 wl_flight0:
     mov al, [wl_kind]
     mov cl, 2
     shr al, cl
     and al, 3                   ; the face it rises TOWARD
-    mov [wl_hi], al
     xor al, 2
     mov [wl_lo], al
     xor bh, bh                  ; the low face's two corners
@@ -1160,7 +1157,7 @@ wl_flight0:
     call wl_ends
     cmp byte [wa_treads], 0     ; A RAMP (the default, HEIGHTS-PLAN 7.4.2):
     jne .steps                  ; its low face's corners on the floor, its
-    mov word [wl_nt], 0         ; sides straight from there to its top, no
+                                ; sides straight from there to its top, no
     mov al, [wl_bit+bx]         ; treads, and that face drawn as its one
     mov [wl_lom], al            ; edge (its top IS its floor edge)
     mov ax, [wl_fn]
