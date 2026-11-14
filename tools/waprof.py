@@ -30,6 +30,9 @@ ap.add_argument("--level", type=int, default=0)
 ap.add_argument("--warm", type=float, default=2.0)
 ap.add_argument("--detail", default="")
 ap.add_argument("--out", default="")
+ap.add_argument("--poke", action="append", default=[],
+                help="R:SYM=BYTE (the renderer's) or G:SYM=BYTE (the game's), "
+                     "written before the profile - an A/B on a flag")
 ap.add_argument("--live", type=float, default=0.0, help="no bench: profile live play after this many guest seconds (bots think and shoot)")
 a = ap.parse_args()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -84,6 +87,12 @@ with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena36
         for i in range(a.pose + 1):
             m.key("KeyP"); m.advance(cycles=int(F * (9.2 if i < a.pose else a.warm)))
     rs = struct.unpack('<H', m.read(b + g["wa_rds"], 2))[0] * 16
+    for pk in a.poke:
+        where, rest = pk.split(":", 1)
+        sname, val = rest.split("=")
+        m.write((rs + r[sname]) if where == "R" else (b + g[sname]),
+                bytes([int(val, 0)]))
+        m.advance(cycles=F // 4)
     gimg = os.path.getsize(B + "/wirearena.bin"); rimg = os.path.getsize(B + "/wrpart.bin")
     # run to the game's wa_render entry
     ent = b + g["wa_render"]

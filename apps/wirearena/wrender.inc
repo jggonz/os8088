@@ -307,6 +307,12 @@ wa_render:
     mov di, wa_vst              ; ...and the vertex cache's with them
     mov cx, WA_MVTX
     rep stosw
+    mov di, wa_fqvs             ; ...and the floor lines' (a vertex's row,
+    mov cx, WA_MVTX             ; a column's record)
+    rep stosw
+    mov di, wa_fqcc
+    mov cx, WA_MAXW*4
+    rep stosw
     mov byte [wa_frame], 1
 .stamped:
     mov word [wa_newn], 0
@@ -3519,7 +3525,7 @@ wa_plotf:
 ; An arena's FLOOR LINES: straight lines on the floor, each between two of
 ; its vertices - the twin's walk, its edge where it has no room walls. Drawn
 ; after every box and before the floor's dots, in the room's colour.
-; A SHALLOW line (under two half-rows a column) is walked by COLUMN, a cell
+; A SHALLOW line (under a half-row a column) is walked by COLUMN, a cell
 ; each, its half-row a 16.16 add in registers (the floor is a plane: the
 ; row is linear across the columns). A STEEP one is walked by CELL ROW, a
 ; cell each, its column the 16.16 add - a post's `│` where the column holds,
@@ -3684,17 +3690,18 @@ wa_flone:
     mov [wa_fqi2], dx
     mov [wa_fqq2], bx
 .have:
-    mov ax, [wa_fqc2]           ; STEEP (two half-rows a column or more:
-    sub ax, [wa_fqc1]           ; 2 |dq| >= |dc|, the column x 16 and the
-    cwd                         ; quarter half-row) or shallow
-    xor ax, dx
-    sub ax, dx
+    mov ax, [wa_fqc2]           ; STEEP (a half-row a column or more:
+    sub ax, [wa_fqc1]           ; 4 |dq| >= |dc|, the column x 16 and the
+    cwd                         ; quarter half-row - past that a line of
+    xor ax, dx                  ; dashes reads as steps, not a slope: the
+    sub ax, dx                  ; owner) or shallow
     mov bx, ax
     mov ax, [wa_fqq2]
     sub ax, [wa_fqq1]
     cwd
     xor ax, dx
     sub ax, dx
+    shl ax, 1
     shl ax, 1
     cmp ax, bx
     jb .shallow
@@ -3747,16 +3754,19 @@ wa_flone:
     mov [wa_fqo], ax
     mov ax, [wa_fqq2]           ; ITS STEP a column, quarter half-rows 8.8:
     sub ax, [wa_fqq1]           ; (q2 - q1) x 16 x 256 / dc - one divide
-    mov cx, 4096                ; (shallow: under 8, so under 2048 here;
+    mov cx, 4096                ; (shallow: under 4, so under 1024 here;
     imul cx                     ; a 256th a column, under a tenth of a
     idiv word [wa_fqdc]         ; half-row across the widest screen)
     mov bx, ax
     imul word [wa_fqo]          ; THE HALF-ROW at the first column, 16.16:
-    mov cx, 4                   ; q1 + step x o / 16 (o, x 16)
-.o4:
+    shl ax, 1                   ; q1 + step x o / 16 (o, x 16)
+    rcl dx, 1
     shl ax, 1
     rcl dx, 1
-    loop .o4
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
     add dx, [wa_fqq1]
     mov bp, ax                  ; DX.BP = it
     mov ax, bx                  ; ...and the step, 16.16
@@ -3893,7 +3903,7 @@ wa_flsteep:
     mov bp, ax
     push dx
     mov ax, bx                  ; ...and its step a row, the column x 2:
-    mov cx, 256                 ; dc / dq, 8.8 - one divide (at most 2:
+    mov cx, 256                 ; dc / dq, 8.8 - one divide (at most 4:
     imul cx                     ; steep) - then 16.16
     idiv word [wa_fqdq]
     mov bx, ax

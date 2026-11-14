@@ -235,13 +235,19 @@ line on the floor between two of the arena's vertices, at any angle.
     columns and its column is linear down its rows. Each step is ONE
     divide, 8.8 fixed point (under a tenth of a half-row adrift across the
     widest screen), then a 16.16 add in registers.
-  - A SHALLOW line, under two half-rows a column (most), is walked by
-    COLUMN, a cell each.
+  - A SHALLOW line, under a half-row a column, is walked by COLUMN, a cell
+    each, in dashes.
   - A STEEP one is walked by CELL ROW, a cell each. It draws a post's `│`
     where its column holds, and `\` or `/` where it steps.
   - The first version filled each column's step with slashes, and a column
     of slashes read as two parallel lines: the owner's *"weirdly doubled"*,
     2026-11-14.
+  - The steep threshold was two half-rows a column. Past one, a line of
+    dashes read as steps: the owner's *"horizontally stacked"*. It is one
+    now.
+  - The renderer's frame stamp laps every 127 frames. The floor lines'
+    caches (a vertex's row, a column's record) are cleared with the cell
+    stamps and the vertex cache when it does.
 - **What hides it.** A column with nothing drawn in it (no tall face, no
   depth-stack entry) needs no test: two compares. Any other column has a
   RECORD (`wa_fqmk`), made once a frame by whichever line asks first:
@@ -361,8 +367,15 @@ Its 37 edges each crossed most of the screen, about 100 cycles a column.
   - A wall shuts its columns, so nothing behind it is drawn at all.
   - Its arena is FLAT (no box below the tallest), so no depth stacks and no
     outlines.
-  - The twin has none of that: nothing occludes, every line is drawn end to
-    end, and its lifts make it a heights arena.
+  - The twin has none of that: nothing occludes, and every line is drawn
+    end to end.
+- **What the heights machinery costs** (its lifts make the twin a heights
+  arena). `tools/waprof.py --what A4-40 --pose 0` measured the bench's view
+  A at 261,286 cycles a frame. With `--poke R:wa_hflat=1`, the renderer told
+  the arena is flat, it is 242,041: 7%.
+  - A first experiment read 25 fps against 70. That was wrong: the game's
+    frame counter laps every 127 frames, and a second that spanned a lap
+    counted it as frames.
 
 **Size.** The renderer part is 59,041 of its 65,024 bytes: 2,182 more for
 the first round, then 2,505 for floor lines (code, the per-column and
