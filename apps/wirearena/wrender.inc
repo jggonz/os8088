@@ -88,8 +88,8 @@ WA_VAR wa_vpc, WA_MVTX*2+4      ; projected: column x16, top, bottom,
 WA_VAR wa_vpt, WA_MVTX*2+4      ; inverse depth
 WA_VAR wa_vpb, WA_MVTX*2+4
 WA_VAR wa_vpi, WA_MVTX*2+4
-WA_VAR wa_vu, 2                 ; wa_vend: 1 - c16 / k16, x 65536, for the
-WA_VAR wa_vuk, 4                ; projection (k16, c16) in wa_vuk
+WA_VAR wa_vu, 2                 ; 1 - c16 / k16, x 65536, for the projection
+WA_VAR wa_vuk, 4                ; (k16, c16) in wa_vuk (wa_render)
 WA_VAR wa_fv, 2
 WA_VAR wa_endok, 1
 WA_VAR wa_mbot, 2
@@ -373,10 +373,31 @@ wa_render:
 .order:
     call wa_order
 .ordered:
-    mov ax, [wa_c16]            ; the first column x 16 past the screen's
-    shl ax, 1                   ; right, less a centre's rounding (.leaves)
-    sub ax, 7
-    mov [wa_cend], ax
+    mov ax, [wa_k16]            ; THE VIEW'S EDGES, made again only when the
+    mov bx, [wa_c16]            ; projection changes
+    cmp ax, [wa_vuk]
+    jne .u
+    cmp bx, [wa_vuk+2]
+    je .uok
+.u:
+    mov [wa_vuk], ax
+    mov [wa_vuk+2], bx
+    mov word [wa_vpc+WA_VS1], 0 ; a face's ends there (wa_vend): their
+    mov dx, bx                  ; columns, x 16...
+    shl dx, 1
+    mov [wa_vpc+WA_VS2], dx
+    sub dx, 7                   ; ...the first column past the right, less
+    mov [wa_cend], dx           ; a centre's rounding (.leaves)...
+    mov dx, ax
+    xor ax, ax                  ; ...and u = 1 - c16 / k16, x 65536: the
+    sub dx, bx                  ; edge is x = +-(1 - u) z. 0 at 90 degrees
+    jbe .us                     ; (or wider: never); k16 - c16 is under
+    cmp dx, [wa_k16]            ; k16 - no overflow
+    jae .us
+    div word [wa_k16]
+.us:
+    mov [wa_vu], ax
+.uok:
     mov ax, [wa_sinv]           ; the corners a box wholly outside the view
     mov bx, ax                  ; is tested by (the hints, below): of its
     sub ax, [wa_cos]            ; four, the least in x - z and the greatest
@@ -416,8 +437,11 @@ wa_render:
 ; test, the box's least in x - z (wa_kr) or greatest in x + z (wa_kl), on the
 ; products' high words (their rounding, or at an exact level their
 ; truncation, is inside the margin): four of them, where the full test is
-; two transforms. A hint that fails is not set again until the box has been
-; in the view (0x80).
+; two transforms. One dropped by a column - between the 90 degrees of that
+; test and a narrower view's edge - is still off that edge when c is left of
+; the left one (3) or a right of the right one (4): one transform and a
+; multiply. A hint that fails (0x80 with it) is not set again until the box
+; has been in the view; another may be.
     mov si, wa_lord             ; front to back, while any column is open
     jmp short .lgo
 .leaves:                        ; (after a box that may have drawn)
@@ -440,7 +464,41 @@ wa_render:
     js .lfull                   ; no hint
     jz .lhr
     dec dl
+    jz .lhl
+    dec dl
+    jz .lh3
+    dec dl
     jnz .lfull                  ; (one that failed)
+    mov [wa_lrec], si           ; 4: a right of the screen's own edge,
+    mov bl, [si-4]              ; x - t z > 0 - t the view's half width in
+    call [wa_vtp]               ; x/z, as 1 - u (wa_vu): x - z + u z
+    cmp cx, WA_NEAR
+    jl .lmiss2
+    mov bx, ax
+    sub bx, cx
+    mov ax, cx
+    mul word [wa_vu]
+    add bx, dx
+    cmp bx, 3
+    jge .lnext
+    jmp short .lmiss2
+.lh3:                           ; 3: c left of the screen's edge, x + t z < 0
+    mov [wa_lrec], si
+    mov bl, [si-2]
+    call [wa_vtp]
+    cmp cx, WA_NEAR
+    jl .lmiss2
+    mov bx, ax
+    add bx, cx
+    mov ax, cx
+    mul word [wa_vu]
+    sub bx, dx
+    cmp bx, -3
+    jle .lnext
+.lmiss2:
+    mov si, [wa_lrec]
+    jmp short .lmiss
+.lhl:
     add bx, [wa_kl]
     mov bl, [bx]                ; the corner's vertex...
     xor bh, bh
@@ -474,7 +532,7 @@ wa_render:
     cmp ax, 3
     jge .lgo                    ; still right of the view, or behind
 .lmiss:
-    mov byte [si-1], 0x80
+    or byte [si-1], 0x80
 .lfull:
     mov [wa_lrec], si
     xor bx, bx
@@ -513,10 +571,12 @@ wa_render:
     mov dl, 2                   ; c left of the view: all of it is
 .lrej3:
     add sp, 6
-.lhset:                         ; DL = the hint for the next frame
-    mov si, [wa_lrec]
-    cmp byte [si-1], 0
-    jne .lgo1
+.lhset:                         ; DL = the hint for the next frame - unless
+    mov si, [wa_lrec]           ; it is the one that failed
+    mov al, [si-1]
+    and al, 0x7F
+    cmp al, dl
+    je .lgo1
     mov [si-1], dl
 .lgo1:
     jmp .lgo
@@ -532,16 +592,18 @@ wa_render:
     jge .lcok                   ; vertex behind is no column: wa_face's)
     cmp ax, 0x8000
     je .lcok
-    add sp, 6
-.lnx:
-    jmp .lnext
+    mov dl, 3
+    jmp .lrej3
 .lcok:
     pop cx
     pop ax
     pop di
     call wa_vcam                ; ...and a's: off the right
     cmp ax, [wa_cend]
-    jge .lnx
+    jl .lin
+    mov dl, 4
+    jmp .lhset
+.lin:
     mov si, [wa_lrec]
     mov byte [si-1], 0          ; (in the view: a hint may be set again)
     xor bx, bx
@@ -1269,7 +1331,7 @@ wa_face:
 ; multiply for the numerator and one of wa_rcp's 1 / |d| - no lerp, no
 ; divide, and nothing off the screen for the span to step over (wa_clip's
 ; end is at the guard band, ~150 columns out). t sin is sin - u sin, u =
-; 1 - t as a 16-bit fraction, made again only when the projection changes.
+; 1 - t as a 16-bit fraction (wa_vu: wa_render).
 ; In: SI = the end's vertex x 2, [wa_fv] the face, CX = 0 its first end (the
 ; left edge) or 2 its second (the right). Out: CF = 0, BX = the inverse
 ; depth there; CF = 1: wa_clip's way - the plane inside the near plane on
@@ -1282,13 +1344,6 @@ wa_vend:
     cmp word [wa_vz+si], 0
     jg .no
 .side:
-    mov ax, [wa_k16]
-    cmp ax, [wa_vuk]
-    jne .u
-    mov ax, [wa_c16]
-    cmp ax, [wa_vuk+2]
-    jne .u
-.uok:
     xor bh, bh
     mov bl, [wa_fv]
     mov ax, [wa_vtx+bx]         ; its first vertex's x and y indices (x 4)
@@ -1352,25 +1407,7 @@ wa_vend:
 .no:
     stc
     ret
-.u:                             ; the projection changed: u, and the two
-    mov ax, [wa_k16]            ; ends' columns - the screen's own edges,
-    mov bx, [wa_c16]            ; x 16
-    mov [wa_vuk], ax
-    mov [wa_vuk+2], bx
-    mov word [wa_vpc+WA_VS1], 0
-    mov dx, bx
-    shl dx, 1
-    mov [wa_vpc+WA_VS2], dx
-    mov dx, ax
-    xor ax, ax
-    sub dx, bx                  ; k16 - c16: 0 at 90 degrees (or under:
-    jbe .us                     ; never), and under k16 - no overflow
-    cmp dx, [wa_k16]
-    jae .us
-    div word [wa_k16]
-.us:
-    mov [wa_vu], ax
-    jmp .uok
+
 ; wa_vert - BX = a vertex x 2 (BH = 0) not yet made this frame, AL = the
 ; frame: stamped, into camera space (the level's way: wa_vtp) and, inside
 ; the view (the guard band), its column - wa_vcam. BX and BP are kept;
