@@ -2213,9 +2213,9 @@ wa_bshoot:
     cmp byte [di+F_BTGT], 0
     je .player
     mov bl, [wa_bw]             ; A BOT HIT: its damage, the shotgun's
-    xor bh, bh                  ; flat 35 (its kill the red collapse)
-    mov al, [wa_bwdmg+bx]
-    xor ah, ah
+    xor bh, bh                  ; flat 35 (its kill the red collapse); its
+    mov al, [wa_bwdmg+bx]       ; kill the weapon's (the railgun's bolt)
+    mov ah, [wa_wdie+bx]
     cmp bl, 1
     jne .bdmg
     mov ax, 0x0123
@@ -2240,6 +2240,8 @@ wa_bshoot:
     mov byte [wa_phit], 6
     mov bl, [wa_bw]
     xor bh, bh
+    mov al, [wa_wdie+bx]        ; (our death as the other machines draw it:
+    mov [wa_lkpkk], al          ; by this weapon)
     mov al, [wa_bwdmg+bx]
     cmp bl, 1
     jne .dmg
@@ -2858,9 +2860,10 @@ wa_figtick:
     dec ax
     mov [di+F_PH], ax
     cmp byte [di+F_ANIM], WA_A_GIB
-    jne .hf
-    mov byte [di+F_NFR], 0      ; blown to bits: gone until it respawns (the
-    ret                         ; renderer skips it, WEAPONS-PLAN 2.3)
+    jb .hf
+    mov byte [di+F_NFR], 0      ; blown to bits, or dissolved: gone until it
+    ret                         ; respawns (the renderer skips it, WEAPONS-
+                                ; PLAN 2.3)
 .hf:
     cmp byte [di+F_ANIM], WA_A_FLINCH
     jne .out
@@ -2882,6 +2885,7 @@ wa_figtick:
     je .live
     dec byte [di+F_DEAD]
     jz .resp
+    call wa_zapgo               ; (the railgun's bolt over: the dissolve)
     cmp byte [di+F_DEAD], WA_BDEADT - WA_BBODYT
     jne .body                   ; (its body lies 3 s, then is gone - no
     mov byte [di+F_NFR], 0      ; drawing for the rest)
@@ -2921,16 +2925,24 @@ WA_GSTEP    equ 8               ; a rolling grenade rides a rise this tall
 WA_SPLR     equ 128             ; the splash's reach, units (2 m)
 WA_HITR     equ 24              ; a rocket inside a figure's square: direct
 WA_RKEYE    equ 8               ; a rocket leaves this far below the eye
+WA_PCOOL    equ 15              ; the pistol's gap: half a second
+WA_BUCKT    equ 5               ; ...the first ticks of it, the pistol held
+                                ; a row up (its kick: the refire you can see)
+WA_ZAPT     equ 15              ; the railgun's kill: the bolt's ticks, then
+                                ; the dissolve's keyframes (wa_zapgo)
 WA_BEAMT    equ 6               ; ticks the railgun's beam shows (0.2 s: two or
                                 ; three frames on the 8088)
 ;            pistol shotgun chaingun grenades rockets railgun
-wa_wmag:  db 6,     3,      30,      4,       3,      1  ; magazine
-wa_wrld:  db 15,    36,     40,      60,      75,     60 ; reload
-wa_wcool: db 4,     15,     4,       15,      18,     24 ; between shots
-wa_wgive: db 0,     6,      60,      8,       6,      5  ; a pickup gives
-wa_wcap:  db 0,     24,     120,     24,      24,     15 ; the reserve's cap
-wa_wdie:  db 0,     1,      0,       2,       2,      0  ; its kill: the fall,
-                                ; the red collapse, the bits
+wa_wmag:  db 6,     3,      50,      4,       3,      1  ; magazine
+wa_wrld:  db 30,    36,     40,      60,      75,     60 ; reload
+wa_wcool: db WA_PCOOL, 15,  4,       15,      18,     24 ; between shots
+wa_wgive: db 0,     6,      100,     8,       6,      5  ; a pickup gives
+wa_wcap:  db 0,     24,     200,     24,      24,     15 ; the reserve's cap
+wa_wdie:  db 0,     1,      0,       2,       2,      3  ; its kill: the fall,
+                                ; the red collapse, the bits, the bolt
+; (the owner, 2026-11-14: the pistol was "a better chain gun than the chain
+; gun" - half a second between its shots and twice its reload; the chaingun
+; half as much again in its magazine and its pickups)
 wa_pkresp:  dw 300, 300, 300, 300, 300, 600, 900 ; a pickup's respawn, by
                                 ; kind (s 10 the weapons, 20 health, 30
                                 ; the shield)
@@ -3099,6 +3111,11 @@ wa_wtick:
     cmp byte [wa_cool], 0
     je .c
     dec byte [wa_cool]
+    cmp byte [wa_cool], WA_PCOOL - WA_BUCKT ; (the pistol's kick over: the
+    jne .c                      ; overlay, its row back)
+    cmp byte [wa_wpn], 0
+    jne .c
+    mov byte [wa_ovd], 1
 .c:
     cmp byte [wa_rld], 0
     je .auto
@@ -3279,7 +3296,7 @@ wa_frail:
     jnc .n
     push cx
     push dx
-    mov ax, WA_RDMG             ; (AH 0: the fall)
+    mov ax, 3 << 8 | WA_RDMG    ; (AH 3: the bolt, then the dissolve)
     call wa_hurt
     pop dx
     pop cx
@@ -3520,15 +3537,37 @@ wa_dieanim:
     mov ah, WA_N_DEATH
     cmp byte [di+F_KILL], 1
     jb .set
+    je .shg
     mov al, WA_A_GIB
     mov ah, WA_N_GIB
-    ja .set
+    cmp byte [di+F_KILL], 3
+    jb .set
+    mov al, WA_A_ZAP            ; the railgun's: struck, shaking (it loops),
+    mov ah, WA_N_ZAP            ; then dissolving (wa_zapgo)
+    mov byte [di+F_LOOP], 1
+    jmp short .set
+.shg:
     mov byte [di+F_FLASH], 90   ; the shotgun's: red all the while
     mov al, WA_A_COLLAPSE
     mov ah, WA_N_COLLAPSE
 .set:
     mov [di+F_ANIM], al
     mov [di+F_NFR], ah
+    ret
+
+; wa_zapgo - DI = a dead figure: the railgun's bolt over (WA_ZAPT ticks
+; struck), it dissolves - head to toe, as its joints alone. Keeps every
+; register
+wa_zapgo:
+    cmp byte [di+F_ANIM], WA_A_ZAP
+    jne .out
+    cmp byte [di+F_DEAD], WA_BDEADT - WA_ZAPT
+    ja .out
+    mov byte [di+F_ANIM], WA_A_DISSOLVE
+    mov byte [di+F_NFR], WA_N_DISSOLVE
+    mov byte [di+F_LOOP], 0
+    mov word [di+F_PH], 0
+.out:
     ret
 
 ; wa_phurt - AL = damage to the player (their own rockets' splash, until
@@ -4315,9 +4354,16 @@ wa_ovbuild:
     call wa_lkmsg               ; (linked: WAITING, LINK LOST, LEFT)
     mov al, [wa_wpn]            ; THE WEAPON: its cells as they were made
     xor ah, ah                  ; the last time (wa_spc, wa_spg) while it is
-    cmp byte [wa_rld], 0        ; the same weapon, up or down a row for its
-    je .key                     ; reload, at the same width
-    inc ah
+    cmp byte [wa_rld], 0        ; the same weapon in the same place: two rows
+    je .kick                    ; down and two right while it reloads (the
+    mov ah, 2                   ; owner: one row was hard to see), a row up
+    jmp .key                    ; the first WA_BUCKT ticks after the
+.kick:                          ; pistol's shot (its kick)
+    or al, al
+    jnz .key
+    cmp byte [wa_cool], WA_PCOOL - WA_BUCKT
+    jbe .key
+    dec ah
 .key:
     cmp ax, [wa_spk]
     je .sprcp
@@ -4330,6 +4376,10 @@ wa_ovbuild:
     mov cx, [wa_w]
     shr cx, 1
     add cx, 3                   ; CX = its column 0
+    cmp ah, 2                   ; (reloading: tipped away, two right)
+    jne .spr
+    inc cx
+    inc cx
     xor di, di                  ; DI = its cells, x 2
 .spr:
     lodsb

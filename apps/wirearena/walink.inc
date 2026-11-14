@@ -2247,15 +2247,20 @@ wa_lksnapin:
     jne .out
     mov bl, [wa_lkhby]          ; (whose: figure 0's, or a host's bot's)
     mov [wa_hurtby], bl
-    mov bl, [wa_lkrf]           ; its kill: the shotgun's collapse, else the
-    shr bl, 1                   ; fall
-    shr bl, 1
+    mov bl, [wa_lkrf]           ; its kill by the sender's weapon: the
+    shr bl, 1                   ; shotgun's collapse (1), the railgun's
+    shr bl, 1                   ; bolt (3), else the fall (0)
     shr bl, 1
     and bl, 7
+    mov bh, 3
+    cmp bl, 5
+    je .kw
+    mov bh, 1
     cmp bl, 1
-    mov bl, 0
-    jne .kk
-    inc bx
+    je .kw
+    mov bh, 0
+.kw:
+    mov bl, bh
 .kk:
     mov [wa_lkpkk], bl
     mov byte [wa_phit], 6
@@ -2555,6 +2560,7 @@ wa_lkfig:
     jb .lie
     dec byte [di+F_DEAD]
 .lie:
+    call wa_zapgo               ; (the railgun's bolt over: the dissolve)
     cmp byte [di+F_DEAD], WA_BDEADT - WA_BBODYT
     ja .body
     mov byte [di+F_NFR], 0
@@ -2880,12 +2886,17 @@ wa_lkbhits:
     pop ax
     call wa_lkabsent
     je .n
-    mov ah, [wa_lkrf]           ; its kill by the guest's weapon
-    shr ah, 1
-    shr ah, 1
+    mov ah, [wa_lkrf]           ; its kill by the guest's weapon: the
+    shr ah, 1                   ; shotgun's collapse, the railgun's bolt,
+    shr ah, 1                   ; else the fall
     shr ah, 1
     and ah, 7
-    cmp ah, 1
+    cmp ah, 5
+    mov ah, 3
+    je .k
+    mov ah, [wa_lkrf]
+    and ah, 0x38
+    cmp ah, 1 << 3
     mov ah, 0
     jne .k
     inc ah

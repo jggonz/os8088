@@ -10,7 +10,8 @@ choice of each spawn comes up, nothing else does, and the renderer's copy
 of the kind follows the game's.
 
   - the start: the pistol, 6 loaded, 100 health, four pickups;
-  - the pistol: three shots kill, by the fall; R reloads at any time;
+  - the pistol: three shots kill, by the fall, half a second apart; R
+    reloads at any time;
   - the shotgun: taken, held, 3 and 3; one close shot kills, red as long as
     it lies, by COLLAPSE; and at MEDIUM range nothing of the collapse is
     drawn above the figure (the narrow path's unsigned multiply once drew
@@ -234,17 +235,45 @@ def main():
             g.face(1, 300)
             g.press("ControlLeft")
             n += 1
+            g.tick(11)              # (its gap: half a second, WA_PCOOL)
         f = g.fig(1)
         check(f["dead"] and n == 3 and f["kill"] == 0
               and f["anim"] == A["DEATH"],
               "the pistol: three shots kill, by the fall (%d shots, %r)"
               % (n, f))
         check(g.arms()["mag"][0] == 3, "the pistol: three spent of six")
+
         g.press("KeyR")
         r = g.arms()["rld"]
-        g.tick(16)
+        g.tick(32)                  # (its reload: a second, wa_wrld)
         check(r > 0 and g.arms()["mag"][0] == 6,
               "R: the pistol reloads with three still in it (to 6)")
+        # ITS KICK, AND THE RELOAD'S POSE (the owner: the refire easy to see,
+        # cheaply; the reload more pronounced). The pistol's top cell (0xDC)
+        # is at row 21, column W/2 + 4: a row up for the gap's first ticks,
+        # back after; two rows down and two right while it reloads
+        def top_at(r, c):
+            d = m.read(0xB8000 + (r * 40 + c) * 2, 1)
+            return d[0] == 0xDC
+        rest = top_at(21, 24)
+        g.face(1, 300)
+        m.key("ControlLeft", up=False)
+        up = False
+        for _ in range(6):
+            g.tick(1)
+            up = up or top_at(20, 24)
+        m.key("ControlLeft", down=False)
+        g.tick(14)
+        check(rest and up and top_at(21, 24) and not top_at(20, 24),
+              "the pistol's kick: at rest row 21 (%s), a row up after the "
+              "shot (%s), back at row 21 by the next (%s)"
+              % (rest, up, top_at(21, 24)))
+        g.press("KeyR")
+        g.tick(2)
+        check(top_at(23, 26) and not top_at(21, 24),
+              "the reload: two rows down and two right (%s)" % top_at(23, 26))
+        g.tick(32)
+        check(top_at(21, 24), "the reload over: back where it was")
         shot("01-pistol-kill")
 
         g.respawn(2, 0)
@@ -285,7 +314,7 @@ def main():
         for _ in range(2):
             g.face(1, 300)
             g.press("ControlLeft")
-            g.tick(4)
+            g.tick(11)              # (the pistol's gap: WA_PCOOL)
         g.press("Digit2")
         g.tick(12)
         g.face(1, 260)
@@ -362,9 +391,9 @@ def main():
         g.at(1248, 1000, 80, ang=256)
         g.tick(6)                   # (taken at a frame's first tick)
         s = g.arms()
-        check(s["own"] & 4 and s["wpn"] == 2 and s["mag"][2] == 30
-              and s["res"][2] == 30,
-              "the chaingun: taken, held, 30 and 30 (%r)" % s)
+        check(s["own"] & 4 and s["wpn"] == 2 and s["mag"][2] == 50
+              and s["res"][2] == 50,
+              "the chaingun: taken, held, 50 and 50 (%r)" % s)
         g.alive(1)
         g.face(1, 250)
         m.key("ControlLeft", up=False)
@@ -376,7 +405,7 @@ def main():
         m.key("ControlLeft", down=False)
         g.tick(1)
         f = g.fig(1)
-        spent = 30 - g.arms()["mag"][2]
+        spent = 50 - g.arms()["mag"][2]
         check(f["dead"] and f["kill"] == 0 and spent >= 9,
               "the chaingun: held, %d rounds, a kill by the fall (%r)"
               % (spent, f))
@@ -456,8 +485,35 @@ def main():
         check(beam > 0 and cells >= 4, "the railgun's beam: %d cells "
               "showing, %d ticks at most" % (cells, beam))
         shot("09-railgun")
+        # ITS KILL (the owner, 2026-11-14): struck by lightning, then
+        # dissolving head to toe, in the beam's cyan - ZAP, then DISSOLVE
+        # (joints alone) WA_ZAPT ticks after, then gone
+        check(f1["kill"] == 3 and f2["kill"] == 3 and
+              f1["anim"] == A["ZAP"] and f2["anim"] == A["ZAP"],
+              "the railgun's kill: the bolt (kill %d, anim %d; ZAP is %d)"
+              % (f1["kill"], f1["anim"], A["ZAP"]))
+        d = m.read(0xB8000, 40 * 25 * 2)
+        cyan = sum(1 for i in range(1, 40 * 22 * 2, 2) if d[i] in (0x0B,
+                                                               0x0F))
+        check(cyan > 0, "the bolt drawn: %d cells in its cyan or its white"
+              % cyan)
         g.tick(8)
         check(g.arms()["beam"] == 0, "the beam gone after its ticks")
+        seen = set()
+        for _ in range(16):
+            g.tick(1)
+            seen.add(g.fig(1)["anim"])
+            if g.fig(1)["anim"] == A["DISSOLVE"]:
+                d = m.read(0xB8000, 40 * 25 * 2)
+                cyan = max(cyan, sum(1 for i in range(1, 40 * 22 * 2, 2)
+                                     if d[i] == 0x0B))
+        shot("10-dissolve")
+        check(A["DISSOLVE"] in seen, "the bolt over: it dissolves (anims "
+              "%r)" % sorted(seen))
+        g.tick(24)
+        check(g.fig(1)["nfr"] == 0 and g.fig(2)["nfr"] == 0 and
+              g.fig(1)["dead"], "dissolved: gone, still dead (%r)"
+              % g.fig(1))
 
         g.at(64, 1050, 0, ang=768)
         g.tick(6)                   # (taken at a frame's first tick)

@@ -560,3 +560,61 @@ own custom key after that."*
   A and D, 0.5 at B. Medium and above draw as before.
 - `waweapons` checks F1–F5 set RAMP2 on Very Low and Low alone, and that Y
   does nothing.
+
+### 6.8 The owner's balance, the railgun's kill, the held weapon (2026-11-14)
+
+The owner: *"the pistol is one of the most powerful weapons because of its
+low reload time and rate of fire. Its a better chain gun than the chain
+gun."* And a death of the railgun's own - *"struck by lightning then
+dissolve from head to toe quickly"*, in the shot's blue - a pistol that
+"bucks up" on a shot, cheaply, and a reload pose easier to see.
+
+**Balance** (`wa_wmag` and its neighbours): the pistol's gap 4 -> 15 ticks
+(half a second, `WA_PCOOL`), its reload 15 -> 30; the chaingun's magazine
+30 -> 50, a pickup's 60 -> 100, its reserve's cap 120 -> 200. The bots'
+own gaps (`wa_bgap`, `wa_bwgap`) were already slower and are unchanged.
+
+**The railgun's kill is kill kind 3** (`wa_wdie`, which nothing read until
+now - the bots' hitscan kills take it from there too, so a bot's railgun
+zaps): two animations either side of GIB in `tools/arenagen.py`'s ANIMS,
+because the renderer draws every animation from GIB on as its joints
+alone.
+
+- **ZAP** (before GIB: limbs): stiff, arched, the arms flung up, every
+  joint shaking - two keyframes looping for `WA_ZAPT` (15 ticks, half a
+  second), drawn in the beam's bright cyan flickering to white frame by
+  frame: the bolt.
+- **DISSOLVE** (after GIB: joints alone): three keyframes, each a cut
+  lower - every joint above it gone into the foot below it - then
+  nothing (0.4 s). `wa_zapgo` switches one to the other, on our figures
+  and on a remote one (`wa_lkfig`).
+- **Its colour** is a ninth attribute, `A_RAIL` (0x0B, bright on mono),
+  chosen by the figure's animation in `wa_figures` - a few compares a
+  figure a frame.
+- **Over the link** the kind rides the two bits it always had (SNAP's
+  "how the sender died", HSNAP's bots): a remote player killed by our
+  railgun dissolves on our screen, and so do the host's bots.
+
+**The pistol's kick**: for the first 5 ticks of its gap (`WA_BUCKT`, a
+third of it - three ticks could fall between two frames at 4.77 MHz) the
+held pistol is drawn a row up. The overlay is cached, so the cost is the
+rebuild at the shot (which happened anyway) and one more when the kick
+ends. **The reload pose**: two rows down and two columns right, tipped
+away, where one row down read as nothing.
+
+**Bytes**: `wirearena.bin` +132. **The renderer part +2,192**, the five
+keyframes and their tables - and the part has a hard cap, 65,024 bytes
+with its bss (`wrpart.asm`'s guard): it stands at **63,909, 1,115 under**.
+ZAP and DISSOLVE were cut from 3 + 5 keyframes to 2 + 3 for that; the
+first build left 35 bytes.
+
+**Checked**: `waweapons` grew the railgun's kill (kill 3, ZAP, its cyan on
+the screen, DISSOLVE once the bolt is over, gone after it), the kick (a
+row up after the shot, back by the next) and the reload pose (two down,
+two right, back after) - red with the kick taken out and with the
+railgun's kill the fall. Its pistol and chaingun checks follow the new
+numbers; `wascore`'s pistol waits its gap, and `walink`'s shots wait on
+the shooter's own gap (`wa_cool`) rather than the host's clock. All
+thirteen WireArena rows pass. `walinkudp` failed once in a three-lane run
+before its match began - the harness could not get a key into the guest
+- and passed alone.

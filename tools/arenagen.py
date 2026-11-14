@@ -1062,13 +1062,55 @@ def gib_frame(i, n):
     return out
 
 
+def zap_frame(i, n):
+    """The railgun's kill, its first half (the owner, 2026-11-14: "struck
+    by lightning, then dissolve from head to toe quickly"): stiff and
+    arched, the arms flung up, every joint shaking - two keyframes that
+    loop for the bolt's half second while the renderer draws it in the
+    beam's cyan, flickering white"""
+    sw = math.sin(i * 2.1 + 0.4)
+    pts = pose(hipL=14, kneeL=4, hipR=-14, kneeR=4,
+               shL=118 + 14 * sw, elL=-12, shR=118 - 14 * sw, elR=-12,
+               lean=-14, bob=0.03)
+    out = []
+    for j, (x, y, z) in enumerate(pts):
+        out.append((x + 0.035 * math.sin(j * 2.1 + i * 2.7),
+                    min(JTOP - 0.02, max(0.02, y + 0.02 * math.sin(j * 1.3
+                                                                + i * 1.9))),
+                    z + 0.035 * math.cos(j * 1.7 + i * 3.1)))
+    return out
+
+
+def dissolve_frame(i, n):
+    """...and its second: drawn as its joints alone (after GIB in ANIMS),
+    the zapped body goes from the head down - each keyframe a cut lower,
+    every joint above it gone into the foot below it, the rest still
+    crackling - until only the feet are left, and then nothing"""
+    pts = zap_frame(0, 2)
+    top = max(p[1] for p in pts)
+    cut = top * (1 - (i + 1) / n) + 0.01     # (a third gone, then two
+                                # thirds, then all but the feet: the whole
+                                # body is ZAP's last keyframe, just before)
+    fL, fR = pts[8], pts[10]
+    out = []
+    for j, (x, y, z) in enumerate(pts):
+        if y > cut:
+            out.append(fL if x < 0 else fR)
+        else:
+            out.append((x + 0.03 * math.sin(j * 2.9 + i * 1.7), y,
+                        z + 0.03 * math.cos(j * 2.3 + i * 2.1)))
+    return out
+
+
 ANIMS = [                       # name, keyframes, builder, loops
     ("IDLE", 4, idle_frame, True),
     ("RUN", 8, run_frame, True),
     ("FLINCH", 3, flinch_frame, False),
     ("DEATH", 8, death_frame, False),
     ("COLLAPSE", 6, collapse_frame, False),
-    ("GIB", 6, gib_frame, False),
+    ("ZAP", 2, zap_frame, True),         # (before GIB: drawn as limbs)
+    ("GIB", 6, gib_frame, False),        # (GIB and after: the joints alone,
+    ("DISSOLVE", 3, dissolve_frame, False),  # wrender.inc's figures)
 ]
 
 

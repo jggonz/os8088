@@ -326,10 +326,14 @@ class Arena(W.Machine):
         Q.pace(self, .3)
 
     def fire(self):
+        """one shot, and the pistol's gap after it (half a second, the
+        owner's balance: WA_PCOOL)"""
+        Q.acted(self, lambda: self.v('wa_cool') == 0, secs=3,
+                what='the gap over')    # (the guest's clock, not ours)
         self.key_state('ctrl', True)
         Q.pace(self, .15)
         self.key_state('ctrl', False)
-        Q.pace(self, .25)
+        Q.pace(self, .1)
 
 
 UDP = '--udp' in sys.argv or '--udp-ip' in sys.argv
@@ -445,7 +449,7 @@ def run(a, b, cable):
     # A KILL: A's pistol, three shots, B at 100 health
     b.put([('hp', 100, 2), ('sh', 0, 2)])
     Q.pace(a, .3)
-    for _ in range(3):
+    for _ in range(5):
         a.fire()
         if b.v('wa_pdead'):
             break

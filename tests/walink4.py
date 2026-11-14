@@ -241,7 +241,7 @@ def run(ms, cable):
     shooter.at(1000, 300, 0)
     shooter.wait_for(lambda: near(shooter, 1, 1100, 300), 'A KILL: slot 1 '
                      'where slot 3 sees it')
-    for _ in range(3):
+    for _ in range(5):
         shooter.fire()
         if victim.v('wa_pdead'):
             break

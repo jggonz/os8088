@@ -93,6 +93,8 @@ def main():
         park(2)
         n = 0
         while n < 4 and not fig(1)["dead"]:
+            if n:
+                g.tick(11)              # (the pistol's gap: WA_PCOOL)
             g.face(1, 300)
             g.press("ControlLeft")
             n += 1

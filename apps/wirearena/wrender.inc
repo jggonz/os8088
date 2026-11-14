@@ -125,7 +125,7 @@ WA_VAR wa_cs0, 2
 WA_VAR wa_steep, 1              ; the span's edges can step >= 2 half-rows
 WA_VAR wa_crow, 2               ; this box's corner row (wa_corn)
 WA_VAR wa_ce0, 2
-WA_VAR wa_at, 8                 ; this frame's attributes (A_*)
+WA_VAR wa_at, 10                ; this frame's attributes (A_*)
 wa_cos  equ wa_fcs              ; the camera's cos and sin: the frame
 wa_sinv equ wa_fsn              ; block's (the game's wa_sincos)
 WA_VAR wa_cang, 2
@@ -290,6 +290,7 @@ wa_render:
     mov si, wa_attrm
 .attr:
     mov di, wa_at
+    movsw
     movsw
     movsw
     movsw
@@ -3904,10 +3905,20 @@ wa_figure:
     xor dx, dx
     div si
     mov [wa_fv8], ax
-    mov bx, A_FIG               ; its attribute - the far marker's too, which
-    cmp byte [di+F_FLASH], 0    ; used to draw in the last near figure's
-    je .att                     ; (a hit far one did not flash, and a near
-    mov bl, A_FLASH             ; one's flash coloured the far ones)
+    mov bx, A_RAIL              ; its attribute - the far marker's too. The
+    cmp byte [di+F_ANIM], WA_A_DISSOLVE ; railgun's kill: its beam's cyan,
+    jae .att                    ; dissolving; struck, flickering to white
+    cmp byte [di+F_ANIM], WA_A_ZAP ; frame by frame - the bolt
+    jne .fgl
+    test byte [wa_frame], 1
+    jnz .att
+    mov bl, A_FIG
+    jmp short .att
+.fgl:
+    mov bl, A_FIG               ; (the last near figure's colour used to draw
+    cmp byte [di+F_FLASH], 0    ; the far marker: a hit far one did not
+    je .att                     ; flash, and a near one's flash coloured the
+    mov bl, A_FLASH             ; far ones)
     test byte [di+F_FLASH], 0x80 ; (a bot firing: yellow, AI-PLAN 4.3)
     jz .att
     mov bl, A_FIRE
