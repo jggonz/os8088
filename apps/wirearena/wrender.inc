@@ -138,8 +138,6 @@ WA_VAR wa_shi, 2
 WA_VAR wa_vb, 2
 WA_VAR wa_vil, 2
 WA_VAR wa_vih, 2
-WA_VAR wa_fgib, 1               ; the figure being drawn: its bits alone
-WA_VAR wa_fshl, 1               ;   (GIB), its chest yellow (a shield)
 WA_VAR wa_thw, 2                ; wa_thing's shape: half width, from and
 WA_VAR wa_th0, 2                ;   to above its z, units; attribute
 WA_VAR wa_th1, 2
@@ -3089,21 +3087,14 @@ wa_figure:
     div si
     jmp .izok
 .near:
-    mov al, [di+F_SH]           ; a shield: the chest yellow (WEAPONS-PLAN
-    mov [wa_fshl], al           ; 2.3)...
-    xor al, al
-    cmp byte [di+F_ANIM], WA_A_GIB
-    jb .ngib
-    inc ax                      ; ...GIB: its joints alone, the bits
-.ngib:
-    mov [wa_fgib], al
-    mov ax, [di+F_ANG]          ; facing, relative to the view, of 16
-    sub ax, [wa_cang]
+    mov ax, [di+F_ANG]          ; facing, relative to the view, of 16 (x 2:
+    sub ax, [wa_cang]           ; >> 5, as << 3 and the high byte)
     add ax, 32
-    mov cl, 6
-    shr ax, cl
-    and ax, 15
     shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    mov al, ah
+    and ax, 30
     xchg ax, bx
     mov si, [wa_fcl+bx]         ; SI = the facing's row of reaches (wa_krch)
     mov bx, [wa_fco+bx]         ; BX = facing's offset in a frame
@@ -3417,26 +3408,30 @@ wa_fjdone:                      ; (wa_fjl comes back here)
     mov ax, [wa_jsy+12]
 .b:
     mov [di+F_PBOT], ax
-    mov ax, [wa_fs8]            ; (20 units: fs8 x 5 / 64)
+    mov ax, [wa_fs8]            ; (20 units: fs8 x 20 / 256)
     mov cx, ax
     shl ax, 1
     shl ax, 1
     add ax, cx
-    mov cl, 6
-    shr ax, cl
+    shl ax, 1
+    shl ax, 1
+    mov al, ah
+    xor ah, ah
+    or al, al
     jnz .w
     inc ax
 .w:
     mov [di+F_PWH], ax
     push di
-    mov word [wa_flfn], wa_fline
+    mov ax, wa_fline
     cmp byte [wa_foff], 0
     jne .limbs
-    mov word [wa_flfn], wa_flinef
+    mov ax, wa_flinef
 .limbs:
-    cmp byte [wa_fgib], 0
-    jne .gib
-    cmp byte [wa_fshl], 0
+    mov [wa_flfn], ax
+    cmp byte [di+F_ANIM], WA_A_GIB
+    jae .gib                    ; GIB: its joints alone, the bits
+    cmp byte [di+F_SH], 0
     je .limbs0
     call .body                  ; A SHIELD (WEAPONS-PLAN 2.3): the figure
     jmp wa_fchest               ; swept as ever, then its chest recoloured
