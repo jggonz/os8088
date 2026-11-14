@@ -170,51 +170,49 @@ wa_main:
     mov ax, (WA_TICK*4) & 0xFFFF
     mov dx, (WA_TICK*4) >> 16
 .owe:
+    xor cx, cx                  ; CX = the ticks owed (four at most): the
+.cnt:                           ; debt's whole ticks, counted in registers -
+    sub ax, WA_TICK             ; the rest of it is the next frame's
+    sbb dx, 0
+    jc .cntd
+    inc cx
+    jmp .cnt
+.cntd:
+    add ax, WA_TICK
+    adc dx, 0
     mov [wa_acc], ax
     mov [wa_acc+2], dx
+    jcxz .simmed
 .sim:
-    cmp word [wa_acc+2], 0
-    jne .step
-    cmp word [wa_acc], WA_TICK
-    jb .simmed
-.step:
-    sub word [wa_acc], WA_TICK
-    sbb word [wa_acc+2], 0
+    push cx
     call wa_tick
-    jmp .sim
+    pop cx
+    loop .sim
 .simmed:
     call wa_frame_input
     cmp byte [wa_quit], 0
     jne .out
-    call pit_now
-    mov [wa_t0], ax
-    mov [wa_t0+2], dx
-    call wa_render
-    call pit_now
-    mov bx, ax
-    mov cx, dx
-    sub ax, [wa_t0]
-    sbb dx, [wa_t0+2]
+    call pit_now                ; THE METER'S SUMS, as the clock's readings
+    sub [wa_trn], ax            ; themselves: render's less its start and
+    sbb [wa_trn+2], dx          ; plus its end, present's the same - whole
+    call wa_render              ; again once the frame is over, which is
+    call pit_now                ; when wa_meter reads them
     add [wa_trn], ax
     adc [wa_trn+2], dx
-    mov [wa_t0], bx
-    mov [wa_t0+2], cx
     cmp byte [wa_vsync], 0
     je .present
     mov al, FSXW_VSYNC
     call OSAPI_FSX_WAIT
     call pit_now
-    mov [wa_t0], ax
-    mov [wa_t0+2], dx
 .present:
+    sub [wa_tpr], ax
+    sbb [wa_tpr+2], dx
     call wa_present
     call pit_now
-    push dx
-    push ax
-    sub ax, [wa_t0]
-    sbb dx, [wa_t0+2]
     add [wa_tpr], ax
     adc [wa_tpr+2], dx
+    push dx
+    push ax
     call wa_meter
     pop ax
     pop dx
@@ -581,6 +579,7 @@ wa_frame_input:
     jc .nomouse                 ; kern_small refuses: keys only
     mov bl, al                  ; the buttons
     sub [wa_pitch], dx          ; pitch: down is +dy, the horizon rises
+    jcxz .clamp                 ; (the hand still: no turn)
     mov ax, cx                  ; yaw: right is clockwise, angle falls
     mov cx, 96
     imul cx
@@ -589,13 +588,17 @@ wa_frame_input:
 .nomouse:
     xor bl, bl
 .clamp:                         ; 112 quarter half-rows up, 290 down: 33
-    cmp word [wa_pitch], WA_PITCHU ; and 59 degrees at 75, the same reach
-    jle .lo                     ; from the tower and its foot (HEIGHTS-
-    mov word [wa_pitch], WA_PITCHU ; PLAN 7.1.1; down is a falling pitch)
-.lo:
-    cmp word [wa_pitch], -WA_PITCHD
+    mov ax, [wa_pitch]          ; and 59 degrees at 75, the same reach
+    cmp ax, WA_PITCHU           ; from the tower and its foot (HEIGHTS-
+    jg .cu                      ; PLAN 7.1.1; down is a falling pitch)
+    cmp ax, -WA_PITCHD
     jge .fire
-    mov word [wa_pitch], -WA_PITCHD
+    mov ax, -WA_PITCHD
+    jmp .cs
+.cu:
+    mov ax, WA_PITCHU
+.cs:
+    mov [wa_pitch], ax
 .fire:
     xor al, al                  ; TAB HELD: the scoreboard over the view
     KEYMAP_TEST wa_kmap, 0x0F   ; (AI-PLAN 5), rebuilt as it comes and goes
@@ -768,13 +771,13 @@ wa_tick:
     mov ax, si
     mov cx, WA_MSPD
     imul cx                     ; DX:AX = the step, 16.16 units
-    mov bx, [wa_px]
+    mov bp, [wa_px]
     mov cx, [wa_pxf]
     add [wa_pxf], ax
     adc [wa_px], dx
-    call wa_collide
+    call wa_collide             ; (keeps CX, DI, BP)
     jnc .ymove
-    mov [wa_px], bx
+    mov [wa_px], bp
     mov [wa_pxf], cx
 .ymove:
     or di, di
@@ -782,13 +785,13 @@ wa_tick:
     mov ax, di
     mov cx, WA_MSPD
     imul cx
-    mov bx, [wa_py]
+    mov bp, [wa_py]
     mov cx, [wa_pyf]
     add [wa_pyf], ax
     adc [wa_py], dx
     call wa_collide
     jnc .jump
-    mov [wa_py], bx
+    mov [wa_py], bp
     mov [wa_pyf], cx
 .jump:
     cmp byte [wa_aflat], 0      ; HEIGHTS: the floor under the feet, the
@@ -835,13 +838,16 @@ wa_tick:
     mov ax, [wa_blkt+bx]        ; multiple of 8 - so no two on one tick
     mov [wa_blook], ax
     mov di, wa_figs
-.fig:
-    call wa_figtick
-    call wa_bthink              ; (AI-PLAN 4: sees, faces, shoots)
+    cmp word [wa_bdet], 0       ; (a bench or - its high byte, wa_lkon - a
+    jne .lfig                   ; linked match: each figure is asked which)
+.fig:                           ; THE USUAL MATCH: each figure is ours, and
+    call wa_figtick.solo        ; has its own mind
+    call wa_bthink.mine         ; (AI-PLAN 4: sees, faces, shoots)
 .c_bt:                          ; (tools' stop: its cost, by breakpoints)
     add di, F_SIZE
     cmp di, wa_figs + WA_NFIG*F_SIZE
     jb .fig
+.figd:
     inc word [wa_tkn]
     mov al, [wa_lbn]
     mov [wa_lbot], al
@@ -853,6 +859,13 @@ wa_tick:
     call wa_rktick
 .c_pk:
     jmp wa_pktick
+.lfig:
+    call wa_figtick
+    call wa_bthink
+    add di, F_SIZE
+    cmp di, wa_figs + WA_NFIG*F_SIZE
+    jb .lfig
+    jmp .figd
 
 %if WA_NFIG != 3
  %error "wa_blkt and wa_bidx are written for three figures"
@@ -865,13 +878,9 @@ wa_blkt:                        ; the figure that looks, by the tick's low
 ; as tall as the tallest, so the floor under the player's square - wa_floor
 ; over every box, each widened by the radius - is above 0 exactly there);
 ; on the heights where that floor is more than a step above the feet (in
-; the air: above the feet at all). Keeps every register.
+; the air: above the feet at all). Keeps CX, DI, BP (its two callers' own:
+; the tick's steps in x and in y); clobbers AX, BX, DX, SI.
 wa_collide:
-wa_hcollide:
-    push ax
-    push bx
-    push dx
-    push si
     mov ax, [wa_px]
     mov bx, [wa_py]
     cmp ax, WA_ROOM_X0 + WA_RAD
@@ -896,17 +905,12 @@ wa_hcollide:
     jg .hit
 .clear:
     clc
-    jmp .out
+    ret
 .flat:
     or ax, ax
     jz .clear
 .hit:
     stc
-.out:
-    pop si
-    pop dx
-    pop bx
-    pop ax
     ret
 
 ; --- heights: the floor, the step, the fall, the lift (HEIGHTS-PLAN 3) -----
