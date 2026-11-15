@@ -27,21 +27,21 @@ lz4-packed file, with trailing bss off the disk.
 | HDDTOOL.DRV | 16,508 → 16,153 (−355) | 12,216 → 12,116 (−100) | 33 → 32 granules | hdd |
 | SOUND.DRV | 10,478 → 10,265 (−213) | 8,988 → 8,889 (−99) | kept after attach −44 to −139 | sound |
 | THMPAL.DRV | 2,575 → 2,402 (−173) | 2,259 → 2,133 (−126) | 6 → 5 granules | saver |
-| NET.DRV | 4,185 → 4,071 (−114) | 3,473 → 3,394 (−79) | 9 → 8 granules | netfs |
+| NET.DRV | 4,185 → 4,161 (−24) | 3,473 → 3,471 (−2) | | netfs (the transport rewrite reverted, section 2.1) |
 | HTTPFS.DRV | 5,553 → 5,513 (−40) | 3,606 → 3,584 (−22) | | netfs |
 | XMEM.DRV | 2,037 → 2,015 (−22) | 1,878 → 1,864 (−14) | | vesa |
 | HTTPPAGE.DRV | 2,350 → 2,339 (−11) | 2,005 → 1,995 (−10) | | netfs |
 | HDD.DRV | 4,096 → 4,096 (resident span −32) | 3,571 → 3,558 (−13) | | hdd |
 | EMS.DRV | 785 → 783 (−2) | 717 → 715 (−2) | | vesa |
-| **drivers, total** | **−4,886** | **−3,061** | | |
-| OS88NET.COM | unpacked 14,959 → 13,727 (−1,232) | 10,784 → 10,260 (−524) | | netfs + ether |
+| **drivers, total** | **−4,796** | **−2,984** | | |
+| OS88NET.COM | unpacked 14,959 → 13,870 (−1,089) | 10,784 → 10,319 (−465) | | netfs + ether |
 | RAMDISK, RAMPAGE, USBMOUSE, VMMOUSE | unchanged | unchanged | | cdram, vesa |
 | the eleven kern_big modules | unchanged | unchanged | | kmod |
 
 **Disk.** The 360KB system disk went from **37 to 41 free clusters**:
 SAVER −2, VESA −1 and HTTPFS −1. On the disks that carry OS88NET.COM
 (`network360`, `util360`, and the 720KB, 1.2MB and 1.44MB apps disks) it is
-524 bytes smaller and stays at 11 clusters at 360KB. `python3
+465 bytes smaller and stays at 11 clusters at 360KB. `python3
 tools/os88diskuse.py --diff docs/plans/dsp1/baseline.json` reproduces these
 figures.
 
@@ -52,9 +52,9 @@ this pass: `kmod` proved every kernel and module byte-identical across the
 pass at one commit.
 
 **Kernel.** Every kernel's resident image is byte-identical to the base,
-with four exceptions: the Drivers page's per-driver memory figures in
+with one exception: the Drivers page's per-driver memory figures in
 `kernel/driver.inc`, which the fast-tier gate `drvmem` checks against each
-image. NET went 9 → 8, ETHER 34 → 33, PCIETHER 34 → 33, VESA 16 → 15 and
+image. ETHER went 34 → 33, PCIETHER 34 → 33, VESA 16 → 15 and
 CDROM 18 → 17. `DRVM_CEIL_NET` went 34 → 33 in the kernel and in its SDK
 mirror, `apps/os88api.inc`. That last one is a caption's ceiling, not a
 cell, so `tools/abilock.py --update` ran **without a `DRV_VER` bump**,
@@ -87,6 +87,39 @@ Not fixed (WANTS THE OWNER):
    768x576, 1024x576), so the Display page's mode walk answers garbage for
    them. The fix costs about +6 bytes and changes what Auto picks on such a
    card.
+
+### 2.1 A regression the pass made, and gave back
+
+**netfs's rewrite of the cable transport (`drivers/net/lplink.inc`, with
+`lplslv.inc`) made `doscable` intermittent.** It was the one failure in the
+final pass. The symptom: os8088's DOS connects over the cable through
+NET.DRV, but its request never reaches the far side and it takes no
+listener.
+
+`tools/os88bisect.py sample` placed it:
+
+| point | `doscable` failed |
+|---|---|
+| base | 0/3 |
+| hdd's tip | 0/4 |
+| netfs's tip | 1/4, then 2/6 |
+| hdd + netfs merged | 3/4 |
+| netfs's tip with NET.DRV's own code back at base | 2/6 |
+| netfs's tip with the transport back at base | 0/6 |
+| the merged tip with the transport back at base | 0/6 |
+
+netfs's harness had proved the transport identical against a scripted
+partner on 22 scenarios, so what it changed is TIMING against MartyPC's
+cable model. The likely cause is the shorter poll loop and the faster byte
+send, a window the harness's partner never closes. Note that netfs could
+not reproduce the failure in five of its own runs at its tip.
+
+**Taken out:** the transport is back at its base. NET.DRV's own cold-path
+savings stay. That gives back NET.DRV image +90 and file +77, and
+OS88NET.COM +59. `DRVM_IMG_NET` is back at 9. **For a next pass:** the
+rewrite (`ade2f28d`'s `lplink.inc` hunks) is worth about 77 file bytes, but
+it needs a harness whose partner holds the real cable's timing, and a
+sampled `doscable` (n ≥ 6) before it lands.
 
 ## 3. WANTS THE OWNER
 
