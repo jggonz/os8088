@@ -155,7 +155,24 @@ lp_rbyte_w:
     pop bx
     ret
 
+; Zeroed, and a macro for lplink.inc's LPL_ZSTATE reason: OS88NET.COM puts
+; them in its reserved block (`%define LSLV_ZLATER`, `LSLV_ZSTATE res`), and
+; tests/lptlink takes the default, here
+%macro LSLV_ZSTATE 1
+  %ifidn %1, db
 win_lo:     dw 0
 win_hi:     dw 0
 dl_hunt:    dw 0
 slv_abort:  db 0
+  %elifidn %1, res
+win_lo:     resw 1
+win_hi:     resw 1
+dl_hunt:    resw 1
+slv_abort:  resb 1
+  %else
+    %error "LSLV_ZSTATE: db or res"
+  %endif
+%endmacro
+%ifndef LSLV_ZLATER
+    LSLV_ZSTATE db
+%endif

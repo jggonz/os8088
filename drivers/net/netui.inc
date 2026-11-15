@@ -285,8 +285,6 @@ net_brect:
 ; pointed at whichever rect the caller staged. The GESTURE here is the
 ; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
 ; release-fired; what changed is that the DRAW goes through the control.
-nu_btlbl: dw 0
-nu_btflg: dw 0
     OS88UI_BTNREC nu_btrec, 0, nu_btlbl, nu_btflg, 1
 
 net_draw_btn:                   ; clobbers AX, BX, SI, DI (a page verb's)
@@ -419,11 +417,6 @@ s_files:    db 'Files', 0
 s_filesro:  db 'Files, read only', 0
 s_conn:     db 'Connect', 0
 s_disc:     db 'Disconnect', 0
-net_cbuf:   db 0,0            ; the dead command's letter, as a string
-net_buf:    db 0,0,0,0,0      ; net_hex's four digits and a NUL
-net_rc:     dw 0,0,0,0       ; the button's rect, built by net_brect
-net_down:   db 0             ; 1 = it is drawn PRESSED (SPEC.md 13.8.4).
-                             ; net_setdown is its one writer and net_draw_btn
-                             ; is its one reader, so a repaint mid-press shows
-                             ; the same thing an edge does
-net_pgbody: dw 0             ; net_pgent's: the verb body it is running
+; The page's zeroed cells - net_cbuf, net_buf, net_rc, net_down, net_pgbody,
+; nu_btlbl and nu_btflg - are in net.asm's state block, past the driver's one
+; nonzero cell, where they are bss and off the file (os88drv.inc)
