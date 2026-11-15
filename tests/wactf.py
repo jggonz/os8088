@@ -199,7 +199,7 @@ def main():
               "time runs out", g.flag(1, WC_ST))
         g.ticks(100)                            # (alive again)
 
-        def shoot_at(i):                        # NO FRIENDLY FIRE: figure i
+        def shoot_at(i, wpn=0, ticks=6):        # NO FRIENDLY FIRE: figure i
             base = sym["wa_figs"] + i * F_SIZE   # stood 120 ahead of us in
             def stand():                        # the west square, every tick
                 g.p.write(base + F_X, struct.pack('<hh', 420, 800))  # of the
@@ -211,15 +211,15 @@ def main():
                 stand()
                 g.ticks(1)                      # (the last shot's cooldown
             hp0 = g.fig(i, F_HP, 1)             # over; drawn there: the shot
-            mag0 = g.p.byte(sym["wa_mag"])      # traces what was drawn)
+            mag0 = g.p.byte(sym["wa_mag"] + wpn)  # traces what was drawn)
             g.m.key("ControlLeft", up=False)
-            for _ in range(6):
+            for _ in range(ticks):
                 stand()
                 g.ticks(1)
             g.m.key("ControlLeft", down=False)
             g.ticks(2)
             return (hp0, g.fig(i, F_HP, 1), g.fig(i, F_DEAD, 1),
-                    mag0 - g.p.byte(sym["wa_mag"]))
+                    mag0 - g.p.byte(sym["wa_mag"] + wpn))
         g.p.write(sym["wa_pkon"], b"\x00")      # (no pickup in the way)
         mate = shoot_at(1)
         foe = shoot_at(0)
@@ -228,6 +228,23 @@ def main():
               "nothing", mate)
         check(foe[3] == 1 and (foe[1] < foe[0] or foe[2] != 0),
               "...and the same shot at the foe (bot 1) hurts it", foe)
+
+        def launcher():                         # (the rocket launcher, its
+            g.p.write(sym["wa_own"], bytes([1 | 16]))   # magazine full, held,
+            g.p.write(sym["wa_mag"] + 4, bytes([3]))    # nothing in the way)
+            g.p.write(sym["wa_wpn"], bytes([4]))
+            g.p.write(sym["wa_rld"], b"\x00")
+        launcher()
+        mate = shoot_at(1, wpn=4, ticks=24)
+        launcher()
+        foe = shoot_at(0, wpn=4, ticks=24)
+        check(mate[3] == 1 and mate[1] == mate[0] and mate[2] == 0,
+              "NO FRIENDLY FIRE: a ROCKET at our teammate flies on through it "
+              "and its splash spares it - a direct hit once killed any figure "
+              "but its owner (wa_rkhit)", mate)
+        check(foe[3] == 1 and (foe[1] == 0 or foe[2] != 0),
+              "...and the same rocket kills the foe outright (its health 0: "
+              "stand() holds the body up)", foe)
         g.p.write(sym["wa_caps"], bytes([2, 0]))  # THE WIN (Win at 3,
         g.place(BLUE[0], BLUE[1], 0)            # the default)
         g.ticks(4)

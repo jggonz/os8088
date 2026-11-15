@@ -1666,11 +1666,19 @@ a pointer to where it came from, after the owner's rulings below.
 Built, on the owner's list (`apps/wirearena/wirearena.asm` unless named):
 
 - [x] **Spawn protection** (`WA_PROTT`, 60 ticks): for 2 s after a spawn
-  or a respawn - or to its first shot - nothing hurts the figure. The
-  player's (`wa_pprot`) is judged in `wa_phurt`, which a linked player's
-  damage reaches on its own machine, so it holds linked too; its heart is
-  cyan while it lasts. Each bot's (`wa_bprot`) in `wa_hurt`. The link
-  rows clear it on a player they set up to be shot.
+  or a respawn - or to the first shot - nothing hurts a PLAYER (`wa_pprot`,
+  judged in `wa_phurt`, which a linked player's damage reaches on its own
+  machine, so it holds linked too); the heart is cyan while it lasts. The
+  link rows clear it on a player they set up to be shot. **Bots have none**
+  (the owner: "they are computers, they don't need it" - it was built for
+  them too and taken out the same day).
+- [x] **No friendly fire from a rocket's or a grenade's DIRECT hit** (found
+  in play, king of the hill): `wa_rkhit` killed any figure but the
+  projectile's owner, teammates included - the splash (`wa_boom`, through
+  `wa_hurt` and `wa_phurt`) and the hitscan weapons were team-checked, the
+  direct hit was not. In a team mode it now flies on through the owner's
+  teammates. `wactf`'s NO FRIENDLY FIRE fires a rocket at the teammate and
+  at the foe as well as the pistol; without the fix the teammate died.
 - [x] **The score against the goal** on the HUD row, five cells left of
   the weapon digits: `12/20`, or the score alone with no Win at;
   free-for-all our kills, white; a team mode our team's in its colour
@@ -1687,7 +1695,13 @@ Built, on the owner's list (`apps/wirearena/wirearena.asm` unless named):
   the question red - "Leave the match? Y/N" - Y leaves, N or Esc stays;
   nothing else typed is taken while it is up. Offline Esc leaves at once.
   `walink` and `walink4` press Y after their Esc.
-- [x] **The hit's direction, a PROTOTYPE for the owner to try**: hurt by a
+- [x] **Mode's item "KingOfTheHill"** (the owner: "king of the hill" did
+  not fit its drop-down's box).
+- [x] **The hit's direction, a PROTOTYPE for the owner to try** - about 190
+  bytes of code (`wa_hitdir` 115, its overlay cell ~56, the tick's count
+  ~18, the call 3) and 2 of BSS; a tick costs one compare when no cue is
+  up; a hit off the screen one bearing (a divide, a multiply) and the
+  overlay rebuilt once more when the cue goes: hurt by a
   figure that is OFF the screen (outside the view's 37.5 degrees either
   side), a red arrow left or right of the crosshair, or under it from
   behind, for 20 ticks (`wa_hitdir`, off `wa_bear`). In view: nothing.

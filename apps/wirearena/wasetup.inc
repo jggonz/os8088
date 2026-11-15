@@ -1620,7 +1620,7 @@ wa_si_mode:     dw wa_smd_0, wa_smd_2, wa_smd_1, wa_smd_3
 wa_smd_0:       db 'free-for-all', 0
 wa_smd_1:       db 'capture flag', 0
 wa_smd_2:       db 'team deathmatch', 0
-wa_smd_3:       db 'king of the hill', 0
+wa_smd_3:       db 'KingOfTheHill', 0   ; (the box's width: the owner's spelling)
 WA_NMODES       equ 4
 wa_smodes:      db 0, 2, 1, 3   ; (the list's order to wa_gmode's numbers)
 wa_amodes:                      ; each arena's modes, a bit each (arenagen)
