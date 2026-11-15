@@ -502,13 +502,19 @@ the table above: the first drawer's last tuning came between.)
   - The moved view pays about 0.3% for both: a set-up walk goes on through
     a vector (so a still frame's first can keep it), and the view's key is
     read in two parts.
-- **A dashed line: a trial, `make wirearenadisk WADASH=1`** (2: a steep
-  line's every other row too). The same character in half the cells: a
-  shallow line's odd columns are left out. The owner judges the look; the
-  shipped build draws every cell.
-  - It buys less than its half. In the bench's views, moved: 5,700, 3,900,
-    3,200 and 1,600 cycles a frame (`WADASH=2`: 5,900, 5,000, 4,900,
-    1,500); over the 40 poses 28.29 -> 27.91 ms, 1.3%.
+- **Dashed lines at Low and Very Low** (`wa_dash`, the detail level's:
+  HEIGHTS-PLAN 9.11). The same character in half the cells: at Low a
+  shallow line's odd columns are left out, at Very Low a steep line's odd
+  rows too. It was a trial build first (`WADASH`, a knob since removed);
+  the owner: *"Dashes: actually look surprisingly fine. Lets add dash2 to
+  very low, and dash to low."*
+  - The dashed walks are walkers of their own (`wa_flshd`, `wa_flstd`),
+    chosen when `wa_dash` changes: Medium and up run the whole walks as
+    they were, and pay nothing.
+  - It buys less than its half. In the bench's views, moved, at Low: 5,600,
+    3,900, 3,200 and 1,400 cycles a frame (Very Low: 5,900, 4,800, 4,800,
+    1,300); over the 40 poses 28.19 -> 27.82 ms at Low, 1.3%, and 28.38 ->
+    27.97 at Very Low, 1.4%.
   - A cell left out still costs its step: the walk's error and, in a column
     something stands in, its test. What is saved is the plot - the stamp,
     the glyph, the list - about 110 cycles of a cell's 180 to 300, on half
@@ -519,8 +525,8 @@ drawer. It was 59,041 after the two arenas: 2,182 more for the first round,
 then 2,505 for floor lines (code, the per-column and per-vertex caches) and
 no room. The second drawer is 1,101 bytes more: its code is about twice the
 first's, its tables smaller. The kept walk and the rows' pass are 791 more
-(288 of them the lines' records), on a part the hedge had taken to 62,233:
-63,024 now.
+(288 of them the lines' records), on a part the hedge had taken to 62,233,
+and the dashed walkers 706: 63,730 now.
 - Almost all of it is tables sized to the LARGEST arena: the maze's 92
   vertices against the heights arena's 51 (82 bytes per vertex table), its
   PVS at four mask bytes a cell (+512), and its box tree (+384).
@@ -582,4 +588,6 @@ first's, its tables smaller. The kept walk and the rows' pass are 791 more
   `waflines` holds a still view and a nod to the moved view's cells.
   - It was red with the kept walk's error not loaded and with the rows'
     pass keeping the old rows.
-- [x] `WADASH`, the dashed lines' trial build (5).
+- [x] The floor lines dashed at Low, and steep ones too at Very Low
+  (`wa_dash`; 5); row `waflines` holds Very Low's picture to it.
+  - It was red with `wa_dash` not read.

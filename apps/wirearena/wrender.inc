@@ -199,11 +199,14 @@ WA_VAR wa_fqk2, 1               ; their vertices, and the line
 WA_VAR wa_fqva, 2
 WA_VAR wa_fqvb, 2
 WA_VAR wa_fqr, 2
-WA_VAR wa_fqdp, 1               ; ...WA_DASH's steep lines: the row's parity
+WA_VAR wa_fqdp, 1               ; ...a dashed steep line: the row's parity
+WA_VAR wa_fqkd, 1               ; ...the wa_dash the walkers were chosen for
+WA_VAR wa_fqwsh, 2              ; ...the frame's walkers: wa_flsh or its
+WA_VAR wa_fqwst, 2              ; dashed wa_flshd, wa_flst or wa_flstd
 WA_VAR wa_fqcap, 2              ; ...the line whose walk is being kept
                                 ; (wa_flines' still pass), and where a
-WA_VAR wa_fqvsh, 2              ; set-up walk goes: wa_flsh and wa_flst, or
-WA_VAR wa_fqvst, 2              ; their .keep on a still frame's first
+WA_VAR wa_fqvsh, 2              ; set-up walk goes: the walkers, or wa_flshk
+WA_VAR wa_fqvst, 2              ; and wa_flstk on a still frame's first
 WA_VAR wa_fqe1, 6               ; ...its ends in camera space: x, z, and
 WA_VAR wa_fqe2, 6               ; the cut's coordinate x 4 (wa_flmake.cz)
 WA_VAR wa_fqn4, 4               ; ...eye kyq x 4 (a side cut's row)
@@ -3648,7 +3651,7 @@ wa_plotf:
 ; It is DRAWN from them every frame (wa_fldraw) - while the view stands,
 ; that is all a line costs, and from its second still frame on not its
 ; walk's setup either: the first keeps what each walk is entered with
-; (wa_flsh.keep, wa_flst.keep). Where the ROWS ALONE moved - the pitch, the
+; (wa_flshk, wa_flstk). Where the ROWS ALONE moved - the pitch, the
 ; eye - the vertices' camera space, sides and columns stand, and only the
 ; two depths are asked again (wa_flmake.vs).
 ; Its walk is set up WITHOUT A DIVIDE, as an error
@@ -3737,8 +3740,7 @@ wa_plotf:
 ; view made. Clobbers AX, BX, CX, SI, DI.
 wa_flinit:
     mov word [wa_fqkey], 0      ; (no view: wa_vcnt is never 0)
-    mov word [wa_fqvsh], wa_flsh
-    mov word [wa_fqvst], wa_flst
+    mov byte [wa_fqkd], 0xFF    ; (...and no walkers chosen: wa_flines)
     mov di, wa_cstn             ; (a flat arena never clears its columns'
     xor ax, ax                  ; stacks: none there, for wa_flhid)
     mov cx, WA_MAXW
@@ -3793,6 +3795,24 @@ wa_flines:
     ret
 .on:
     push bp
+    mov al, [wa_dash]           ; THE WALKERS, when the detail level's dashes
+    cmp al, [wa_fqkd]           ; change: whole, a shallow line dashed (1:
+    je .walkers                 ; Low), a steep one too (2: Very Low)
+    mov [wa_fqkd], al
+    mov bx, wa_flsh
+    mov cx, wa_flst
+    or al, al
+    jz .w1
+    mov bx, wa_flshd
+    cmp al, 2
+    jb .w1
+    mov cx, wa_flstd
+.w1:
+    mov [wa_fqwsh], bx
+    mov [wa_fqvsh], bx
+    mov [wa_fqwst], cx
+    mov [wa_fqvst], cx
+.walkers:
     mov bl, [wa_bcol]           ; the room's colour
     xor bh, bh
     mov al, [wa_at+bx]
@@ -3884,8 +3904,8 @@ wa_flines:
     jz .sn                      ; (nothing of it to draw)
     mov byte [si+FL_W], FW_OFF  ; not set up yet: now, kept by the walk it
     mov [wa_fqcap], si          ; reaches (none: nothing to draw)
-    mov word [wa_fqvsh], wa_flsh.keep
-    mov word [wa_fqvst], wa_flst.keep
+    mov word [wa_fqvsh], wa_flshk
+    mov word [wa_fqvst], wa_flstk
     mov bx, [si+FL_A]
     mov di, [si+FL_B]
     cmp byte [si+FL_K], 1
@@ -3896,8 +3916,10 @@ wa_flines:
     push si
     call wa_fldraw
     pop si
-    mov word [wa_fqvsh], wa_flsh
-    mov word [wa_fqvst], wa_flst
+    mov ax, [wa_fqwsh]
+    mov [wa_fqvsh], ax
+    mov ax, [wa_fqwst]
+    mov [wa_fqvst], ax
     jmp .sn
 .ssh:
     push si
@@ -3918,7 +3940,7 @@ wa_flines:
     mov bp, [si+FL_WS+4]
     mov cx, [si+FL_WS+6]
     mov si, [si+FL_WS+2]
-    call wa_flsh.go
+    call [wa_fqwsh]
     pop si
     jmp .sn
 .sst:
@@ -3956,7 +3978,7 @@ wa_flines:
     mov al, ah
     xor ah, ah
     mov si, ax
-    call wa_flst.go
+    call [wa_fqwst]
     pop si
 .sn:
     add si, FL_SIZE
@@ -4564,7 +4586,7 @@ wa_fldraw:
     shl cx, 1
     shl cx, 1
     shl cx, 1                   ; CX = 16 |dq|
-    jmp [wa_fqvsh]              ; (wa_flsh - or, a still frame's first, wa_flsh.keep)
+    jmp [wa_fqvsh]              ; (the frame's walker - or, a still frame's first, wa_flshk)
 .steep:                         ; AX = dc, CX = dq, DX = |dc|
     or cx, cx
     jz .none                    ; (a point)
@@ -4662,7 +4684,7 @@ wa_fldraw:
     sub ax, bp
     mov bp, ax                  ; BP = the error, less M
     mov cx, [wa_fqrn]
-    jmp [wa_fqvst]              ; (wa_flst, or wa_flst.keep)
+    jmp [wa_fqvst]              ; (the frame's walker, or wa_flstk)
 
 ; wa_flsh - a SHALLOW line's walk: BX = its first half-row, SI = its first
 ; column x 2, BP = the error less M and CX = a column's step; wa_fqm = M,
@@ -4677,8 +4699,10 @@ wa_fldraw:
 ; (.tslow), else wa_flhid. A half-row
 ; on is the other dash, and the next row when the dash is the upper one
 ; (falling) or the lower (rising).
-wa_flsh:
-.go:
+; FLSHW %1 = 1 is the DASHED walk (wa_flshd: the detail level's, wa_dash) -
+; the same dash in every other cell, a line's odd columns left out. A cell
+; left out still takes its step; what is saved is its plot.
+%macro FLSHW 1
     mov dh, [wa_fqn]
     mov al, dh
     xor ah, ah
@@ -4701,10 +4725,10 @@ wa_flsh:
     mov dl, [wa_frame]
     mov di, [wa_lp]
 .tcol:
-%ifdef WA_DASH
-    test bl, 2                  ; (DASHED, the build's trial: an odd column
-    jnz .tadv                   ; is left out - a row's offset is a
-%endif                          ; multiple of 4, so the cell's bit 1 says)
+%if %1
+    test bl, 2                  ; (DASHED: an odd column is left out - a
+    jnz .tadv                   ; row's offset is a multiple of 4, so the
+%endif                          ; cell's bit 1 says)
     cmp word [wa_cov+si], 0     ; (a column something stands in: is it
     jne .task                   ; nearer?)
     cmp cl, [wa_cclip+si]
@@ -4844,7 +4868,7 @@ wa_flsh:
     mov dl, [wa_frame]
     mov di, [wa_lp]
 .pcol:
-%ifdef WA_DASH
+%if %1
     test bl, 2
     jnz .padv
 %endif
@@ -4872,9 +4896,15 @@ wa_flsh:
     jne .pnx
     add bx, [wa_fqrs]
     jmp .pnx
+%endmacro
+wa_flsh:    FLSHW 0
+wa_flshd:   FLSHW 1
 
-.keep:                          ; A STILL FRAME'S FIRST (wa_flines' still
-    mov di, [wa_fqcap]          ; pass): the walk kept, as it is entered
+; wa_flshk, wa_flstk - a set-up walk's way on a STILL FRAME'S FIRST
+; (wa_flines' still pass: wa_fqvsh, wa_fqvst): the walk kept in the line
+; wa_fqcap, as it is entered, then walked - the frame's walker
+wa_flshk:
+    mov di, [wa_fqcap]
     mov byte [di+FL_W], FW_SH
     mov al, bl
     mov ah, [wa_fqn]
@@ -4886,7 +4916,7 @@ wa_flsh:
     mov [di+FL_WS+8], ax
     mov ax, [wa_fqd]
     mov [di+FL_WS+10], ax
-    jmp .go
+    jmp [wa_fqwsh]
 
 ; wa_flst - a STEEP line's walk: BX = its first column x 2, SI = its first
 ; row x 2, CX = its rows, BP = the error less M; wa_fqst a row's step,
@@ -4895,15 +4925,14 @@ wa_flsh:
 ; a row: plain (.prow: BX = the cell, AL = its glyph - a post's, or the
 ; step's where its column moved - DL = the stamp, DH = the post, SI = a
 ; row's stride, DI = the list), else tested (.trow: SI = the column x 2)
-wa_flst:
-.go:
-%ifdef WA_DASH
-  %if WA_DASH >= 2
-    mov ax, si                  ; (DASHED at 2: a steep line's odd rows left
-    shr al, 1                   ; out too - wa_fqdp the row's parity)
+; FLSTW %1 = 1 is the dashed walk (wa_flstd: wa_dash 2) - its odd rows left
+; out.
+%macro FLSTW 1
+%if %1
+    mov ax, si                  ; (DASHED: an odd row is left out - wa_fqdp
+    shr al, 1                   ; the row's parity)
     and al, 1
     mov [wa_fqdp], al
-  %endif
 %endif
     mov dl, [wa_frame]
     mov dh, 0xB3
@@ -4915,11 +4944,9 @@ wa_flst:
     add bx, [wa_rowo2+si]       ; BX = the cell
     mov si, [wa_w2]
 .prow:
-%ifdef WA_DASH
-  %if WA_DASH >= 2
+%if %1
     xor byte [wa_fqdp], 1
     jz .pdup
-  %endif
 %endif
     cmp [wa_stamp+bx], dl
     je .pdup
@@ -4955,11 +4982,9 @@ wa_flst:
     xchg bx, si                 ; SI = the column x 2
     add bx, si                  ; BX = the cell
 .trow:
-%ifdef WA_DASH
-  %if WA_DASH >= 2
+%if %1
     xor byte [wa_fqdp], 1
     jz .tdup
-  %endif
 %endif
     cmp word [wa_cov+si], 0
     jne .task
@@ -5000,8 +5025,11 @@ wa_flst:
     call wa_flhid
     jnc .tput
     jmp .tdup
+%endmacro
+wa_flst:    FLSTW 0
+wa_flstd:   FLSTW 1
 
-.keep:
+wa_flstk:
     mov di, [wa_fqcap]          ; (a still frame's first: the walk kept)
     mov byte [di+FL_W], FW_ST
     mov ax, si
@@ -5043,7 +5071,7 @@ wa_flst:
     mov ah, bl
     mov [di+FL_WS+10], ax
     pop bx
-    jmp .go
+    jmp [wa_fqwst]
 
 ; wa_flhid - SI = a column x 2 something stands in, [wa_fqh] = a floor
 ; point's half-row there (on the screen): CF = 1 when something nearer

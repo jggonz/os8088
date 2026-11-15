@@ -21304,12 +21304,7 @@ $(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/
 # (MULTIPLAYER-FPS-PLAN 16.10). The B and P benches turn it on themselves.
 # Stamped, like every knob: `make wirearenadisk WAMETER=2` after a plain build
 # must rebuild the game, and a plain build after it must take it out again.
-#> [Knobs] WADASH=1|2 :: WireArena's floor lines DASHED, a trial - 1 a shallow line's every other column, 2 a steep line's every other row too (whole as shipped)
-# WADASH: a TRIAL build's (docs/plans/WIREARENA-ARENAS-PLAN.md 5, the second
-# drawer): a floor line's cost is its cells', so a dashed one is drawn in
-# half of them. The owner judges the look; the shipped build draws every
-# cell. Stamped with WAMETER, and the renderer part takes the stamp too.
-WASTAMP := $(BUILD)/.wapkg$(if $(WAMETER),-m$(WAMETER))$(if $(WADASH),-d$(WADASH))
+WASTAMP := $(BUILD)/.wapkg$(if $(WAMETER),-m$(WAMETER))
 $(WASTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.wapkg*
 	@touch $@
@@ -21319,8 +21314,8 @@ $(BUILD)/watab.inc: tools/arenagen.py apps/wirearena/waconst.inc | $(BUILD)
 	python3 tools/arenagen.py $@
 $(BUILD)/wirearena.bin: apps/wirearena/wirearena.asm apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc apps/os88api.inc apps/os88pit.inc apps/os88parts.inc apps/os88partsbody.inc apps/wirearena/walink.inc apps/wirearena/wasetup.inc apps/os88cable.inc apps/os88raw.inc apps/os88udp.inc apps/os88ui.inc drivers/net/netpkg.inc $(WASTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(if $(WAMETER),-DWA_METER=$(WAMETER)) -I apps/ -I apps/wirearena/ -I drivers/net/ -I $(BUILD)/ -l $(BUILD)/wirearena.lst -o $@ $<
-$(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/wirearena/wrlow.inc apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wrtab.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc $(WASTAMP) | $(BUILD)
-	$(NASM) -f bin -w+error $(if $(WADASH),-DWA_DASH=$(WADASH)) -I apps/ -I apps/wirearena/ -I $(BUILD)/ -l $(BUILD)/wrpart.lst -o $@ $<
+$(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/wirearena/wrlow.inc apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wrtab.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -l $(BUILD)/wrpart.lst -o $@ $<
 # ...and each arena a part of its own (WIREARENA-PARTS-PLAN 7.5), in
 # arenagen's order: one row per arena in wirearena.asm's table (WA_NARENA).
 # Arena 2 is the heights demo, on the Game menu since wave 2
