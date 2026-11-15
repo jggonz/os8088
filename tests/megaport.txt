@@ -22,7 +22,7 @@
 # - and was seen to go red when the thing it checks was broken - or once its
 # failure is a kern_mega defect that is fixed in the same change.
 
-sheetbtn secs=60   # Sheet's dialog buttons (Goto/Format) open, close and reuse their slot
+sheetbtn secs=75   # Sheet's dialog buttons (Goto/Format) open, close and reuse their slot
 uilayer secs=120   # every os88ui verb confirmed off guest state, and confirm-vs-settle
 
 # DOS, CP/M AND THE NETWORK
@@ -103,12 +103,12 @@ recorder secs=45   # RECORDER on Bochs's SB16: PCM_BG plays and retires, the spe
 weavesmoke secs=120   # WEAVE opens FORM.WAB at the standard rect with weavesim's VGA cell grid (80x52), title, edges, ink in bands - on the glass, thresholded (VGA leg only)
 weavepack secs=200   # LOOM packs every demo and template ON kern_mega byte-identical to weavesim --pack, read back off the guest's floppy
 weavesession secs=70   # a scripted WEAVE session (type, click, script, formula) against weavesim's oracle, VGA leg
-chartread secs=150   # CHART's SYLK, DIF and BIFF readers draw one chart (CHART and SHEET above 1MB)
+chartread secs=110   # CHART's SYLK, DIF and BIFF readers draw one chart (CHART and SHEET above 1MB)
 ovlhigh secs=60   # CWORD's overlay part claimed TOP-DOWN, packed under the ceiling, MOVABLE - unchanged on kern_mega's conventional arena
-sheetfmt secs=300   # SHEET's three file formats round-trip what they mean; the CGA-pinned menu/chooser/folder points moved by their windows' measured dy on Bochs's VGA (sheetfmt.mega_y)
-sheetfunc secs=70   # all 48 text/information/transcendental functions, saved and read back on the host
-sheeteval secs=80   # what SHEET's evaluator answers, 102 checks by the host
-sheetxl2 secs=90   # SHEET opens Excel 2.1's own BIFF2 files (arm A; arm B skips without the archive, as on MartyPC)
+sheetfmt secs=140   # SHEET's three file formats round-trip what they mean; the CGA-pinned menu/chooser/folder points moved by their windows' measured dy on Bochs's VGA (sheetfmt.mega_y)
+sheetfunc secs=45   # all 48 text/information/transcendental functions, saved and read back on the host
+sheeteval secs=50   # what SHEET's evaluator answers, 102 checks by the host
+sheetxl2 secs=60   # SHEET opens Excel 2.1's own BIFF2 files (arm A; arm B skips without the archive, as on MartyPC)
 scsize secs=130   # SCRIBE's parts and claims (heapmap's kern_mega pool: the region and its three claims above 1MB), round trips, picture, TOOBIG, sort, undo
 gbsave secs=160   # RealDMG's ARM: battery RAM and MBC3 clock saved on close (GBSAVE.SAV) and read back on a second boot; red with rw_onclose answering without writing
 gbship secs=90   # RealDMG's ARM opens the SHIPPED packed MEDIA/GBDEMO.GB off megaapps.img and the game runs (rw_czprobe: a packed cart never takes the in-place bank cache's raw READ_SEQ); red with the base's megaapps.img (--apps): 'not a GB ROM', no frame
@@ -118,7 +118,7 @@ wamodes secs=185   # WireArena's modes on one machine: the setup's arena lists b
 waroutes secs=160   # WireArena's bots walk the Heights arena's route graph - a branch at every node, the lift ridden - at the detail level a 386 picks (High, by CPU_INFO); red: the base row's
 wabots secs=185   # WireArena's bots see, face, shoot and hunt under protected mode; red: the base row's
 wabotarms secs=145   # WireArena's bots arm themselves and use their arms; red: the base row's
-chartgal secs=600   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
+chartgal secs=100   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
 
 # WINDOW MANAGER AND INPUT
 dispclose secs=45   # closing ASKS: W_ONCLOSE, the deferred OSAPI_WM_CLOSE, os88ui_ask's alert through every branch, NOTES.TXT read off the floppy (VGA leg); red: Note Pad re-assembled with np_onclose's `jnc .go` a `jmp .go` (a dirty note closes unasked)
@@ -254,7 +254,7 @@ vesashut secs=40   # Shut Down on the VESA desktop: every driver detached (vx_de
 # block" are asked of the paragraph under each word (sheetmove.seg_key).
 regmove secs=100 @OS88_BOCHS_MEGS=1   # Note Pad's REGION moves in the descending pass: its selector rebased, W_SEG/I_SPTR/owners naming the new paragraph, image and picture intact (found tests/filler's BX: 14.90)
 rdmove secs=90 @OS88_BOCHS_MEGS=1   # the RAM disk's STORE ([rd_arena], a selector: its paragraph read through the LDT) slides DOWN into the hole heapfrag A leaves, bytes hashed the same, and D: still mounts; red on a HEAPCOMPACT=0 kern_mega (OS88_MEGA_BUILD=its tree): 'arena moved NO'
-sheetmove secs=95 @OS88_BOCHS_MEGS=1   # a LIVE Sheet's six declared claims (~99KB, the tree's largest holder) slide down under it: every word follows (the paragraph under each selector), hashes, sh_noteseg's carve, the staging, the repaint and the grow box; red on a HEAPCOMPACT=0 kern_mega: 'a declared claim moved NO'
+sheetmove secs=100 @OS88_BOCHS_MEGS=1   # a LIVE Sheet's six declared claims (~99KB, the tree's largest holder) slide down under it: every word follows (the paragraph under each selector), hashes, sh_noteseg's carve, the staging, the repaint and the grow box; red on a HEAPCOMPACT=0 kern_mega: 'a declared claim moved NO'
 paintmove secs=90 @OS88_BOCHS_MEGS=1   # a LIVE Paint canvas slides down under it: the paragraph under [pt_base] follows, the bytes hash the same, the row table's deltas and the undo delta hold, and the raise repaints the same picture off the glass (Paint shoved clear of heapfrag on 640x480); red on a HEAPCOMPACT=0 kern_mega: 'canvas moved NO'. Check 5 reads the glass here: with heapfrag's old paint, a figure line drawn below its frame, it goes red at x 154..191, y 284..290 - as kern_big on os8088_xt_vga does
 drvmove secs=45 @OS88_BOCHS_MEGS=1   # the RAM disk's IMAGE moves; no kernel word names the old paragraph, and int 33h planted as a REAL vector follows it (mem_ivt_relocf, 14.90)
 sndmove secs=70 @OS88_BOCHS_MEGS=1   # SOUND.DRV's image moves on Bochs's SB16: the IVT's IRQ5 rows (0Dh and 25h) follow it - they did not before 14.90 - and the IDT gate lands the image's distance on
@@ -308,14 +308,14 @@ deskwhole secs=190 +--machine +os8088_xt_vga   # wm_dmg_gray's .whole reached on
 clipgrow secs=90   # a caption beside a covering window's corner keeps every row (the Calculator covers on a 640 glass)
 dockpos secs=90 ---cga   # the Dock on every edge and hidden: band, rule, glass against a repaint, the hover strip and its linger (DOCK.DRV's claim found in the pool by linear base; the CGA leg is a 200-row question)
 btnall secs=200   # every converted button driven: aimed after a paint, sane rects, a press arms, a slide-off un-arms (DOS_MEGA / PKG_MEGA maps)
-sheetmtailvga secs=100   # SHEET's pulldown save-under on the four-plane path, and the repaint fallback beside it
+sheetmtailvga secs=60   # SHEET's pulldown save-under on the four-plane path, and the repaint fallback beside it
 czto secs=260   # Uncompress To...: the join asks for each floppy, swapped under the running machine (the shim's `mount`), refusals, a CRC error by `setreg flags`
 imgswap secs=60   # an image on a floppy is swapped WITH that floppy: the stand re-reads it off the other disk and the write goes nowhere
 lzcomp secs=270   # File > Compress byte for byte against the host's LZB; an uncompressed package compressed and launched in protected mode too (KERN-MEGA-PLAN 14.116), an already-packed one 'Already compressed' (14.100)
 rdup secs=130   # the RAM disk's page acts on the RELEASE: +, Load, Mount, Preserve As
 rdpreserve secs=240   # the RAM disk's Preserve and Load round-tripped and read from the host (RAMDISK.DRV and its store through selectors)
 lzmod-dialog secs=40   # BEVERLY.MOD through Tracker's file dialog: the module claim holds all 116,085 bytes
-sheetdel secs=100   # SHEET's File > Delete: No keeps the file, Yes deletes it, the open document untouched (the CGA points moved to Bochs's VGA)
+sheetdel secs=70   # SHEET's File > Delete: No keeps the file, Yes deletes it, the open document untouched (the CGA points moved to Bochs's VGA)
 msegz secs=30   # the seven parts with two COMPRESSED: op_unpack through kern_mega's selectors, the same three proofs a part
 mseglzslack secs=30   # a compressed lazy part keeps its own length at its claim's base (claims keyed by selector), and the drop gives it back
 pkgbig secs=110   # a package past 64KB is typed by PKG_FILE_HI and the loader reads 32 bits of its size
@@ -377,12 +377,12 @@ tankspawn secs=80   # no TANK round starts inside a piece, and a player poked in
 timerbounce secs=50   # TIMER and BOUNCE as packages: seconds advance, digits on the glass, Stop/Start, Bounce's worker and square
 cycplay secs=40   # a kill scores what cy_kindsc says, the zapper recharges and says so, a death keeps the wave; red with shl bx,1 out (tanker 25,600) - the spawn tick patched at the TITLE on Bochs
 tgui secs=60 +--card +vga   # TameGram's every key, both menus and both panels, read out of its bss through m.lin
-chartname secs=100   # CHART charts the range Sheet NAMED (Data > a name), not the lowest column (CHART above 1MB)
+chartname secs=60   # CHART charts the range Sheet NAMED (Data > a name), not the lowest column (CHART above 1MB)
 isotronrules secs=60   # six-tier seeded games round for round against tools/isotronsim.py, the script and the keyboard; the model's other rule must disagree (its own negative control)
-sheetsize secs=90   # SHEET resizes and its grid re-lays itself to the new box, the floor, and back
-sheetask secs=70   # SHEET asks before closing modified work, and Discard closes
-sheetsort secs=300   # Sort orders every kind of constant and an error constant stays one; Edit and Data at sheetfmt.mega_y
-sheetundo secs=300   # Edit > Undo and Redo, one level as Excel 2.1, read off the VGA glass and a SYLK save; Edit at sheetfmt.mega_y
+sheetsize secs=75   # SHEET resizes and its grid re-lays itself to the new box, the floor, and back
+sheetask secs=60   # SHEET asks before closing modified work, and Discard closes
+sheetsort secs=155   # Sort orders every kind of constant and an error constant stays one; Edit and Data at sheetfmt.mega_y
+sheetundo secs=165   # Edit > Undo and Redo, one level as Excel 2.1, read off the VGA glass and a SYLK save; Edit at sheetfmt.mega_y
 gbkeys secs=80 +--only +vga   # RealDMG's ARM: the key map rebinds, refuses a reserved key, swaps, saves to REALDMG.CFG and the game reads it
 gbstate secs=160 +--package   # RealDMG's ARM: F5/F8 save states in the window and full screen, CLOCK0.SS3/.SS7 read back off the floppy
 fmpatch secs=40   # OSAPI_SND_FM verb 2 hands the driver the channel it names (a .cold breakpoint above 1MB)

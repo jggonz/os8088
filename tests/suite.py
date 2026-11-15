@@ -7673,7 +7673,7 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88",
                "build/os8088-360.img")),
-    Row("sheetbtn", "soak", py("tests/sheetbtn.py"), 40.0,
+    Row("sheetbtn", "soak", py("tests/sheetbtn.py"), 45.0,
         "A stale button record must not answer a REUSED window slot "
         "(SPEC.md 20.5.1.3.3). Sheet's Goto, then its Format dialog, then "
         "Goto again, all on one slot through Sheet's own in-window bar: the "
@@ -11376,7 +11376,7 @@ SOAK = [
         needs=("marty",),
         wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
-    Row("sheetdel", "soak", py("tests/sheetdel.py"), 120.0,
+    Row("sheetdel", "soak", py("tests/sheetdel.py"), 35.0,
         "SPEC.md 81.79: File > Delete, and the No that must not delete. The "
         "kernel file dialog has only OPEN and SAVE modes, so the picker is an "
         "Open and a flag tells sh_ondlg what was meant by it - which makes "
@@ -11390,7 +11390,7 @@ SOAK = [
         "over the file just deleted. Read off the VOLUME, because 'is the "
         "file gone' is a question about the disk",
         needs=("marty",), serial=True),
-    Row("sheetcalc", "soak", py("tests/sheetcalc.py"), 120.0,
+    Row("sheetcalc", "soak", py("tests/sheetcalc.py"), 30.0,
         "SPEC.md 81.78: Calculation: Manual really leaves a formula STALE, "
         "and Options > Calculate Now catches it up. sh_drawgrid re-evaluates "
         "every formula cell on EVERY repaint, so Manual is not a label on a "
@@ -21216,7 +21216,7 @@ SOAK = [
         "18.8.2.1), different from the source's and from the other clone's "
         "- red on all three with DSK_VOLID emptied",
         needs=("marty",), serial=True),
-    Row("sheetfmt", "soak", py("tests/sheetfmt.py"), 180.0,
+    Row("sheetfmt", "soak", py("tests/sheetfmt.py"), 90.0,
         "SPEC.md 81.38: do SHEET's three file formats say what they mean? "
         "The host authors a SYLK file from the published grammar, the guest "
         "opens it by ASSOCIATION and saves it as BIFF3, SYLK and DIF, and "
@@ -21226,7 +21226,7 @@ SOAK = [
         "inside, because in both cases the writer and the reader made the "
         "SAME mistake and cancelled it",
         needs=("marty",), serial=True),
-    Row("sheetdec", "soak", py("tests/sheetdec.py"), 600.0,
+    Row("sheetdec", "soak", py("tests/sheetdec.py"), 80.0,
         "SPEC.md 81.10.10: a formula saved in Normal format comes back as a "
         "FORMULA. SHEET's own round trip - SYLK in, Normal out (checked by "
         "the host's decode_rpn against the document's function table), "
@@ -21236,7 +21236,7 @@ SOAK = [
         "three of them cached with a result that is not a number at all. "
         "It found IF losing a text branch on its way to passing",
         needs=("marty",), serial=True),
-    Row("sheeteval", "soak", py("tests/sheeteval.py"), 240.0,
+    Row("sheeteval", "soak", py("tests/sheeteval.py"), 30.0,
         "SPEC.md 81.49-81.52: what SHEET's evaluator answers, checked by the "
         "host - the row an evaluator parity gap goes into when it closes. "
         "CHOOSE returning the value it picked (it was an integer function: "
@@ -21247,7 +21247,7 @@ SOAK = [
         "totals, and IF keeping a text branch. Each "
         "fix fails its own cases against the binary before it",
         needs=("marty",), serial=True),
-    Row("sheetbool", "soak", py("tests/sheetbool.py"), 300.0,
+    Row("sheetbool", "soak", py("tests/sheetbool.py"), 55.0,
         "SPEC.md 81.51: what SHEET's readers make of a LOGICAL value. The "
         "host authors a DIF, a CSV, a dBASE and a BIFF3 file holding TRUE "
         "and FALSE, SHEET opens each and saves Normal, and the BOOLERR "
@@ -21255,7 +21255,7 @@ SOAK = [
         "TRUE indicator left the cell blank, and CSV and dBASE made labels "
         "of them - ten of its checks fail against that binary",
         needs=("marty",), serial=True),
-    Row("sheetxl2", "soak", py("tests/sheetxl2.py"), 420.0,
+    Row("sheetxl2", "soak", py("tests/sheetxl2.py"), 35.0,
         "SPEC.md 81.52: SHEET opens EXCEL 2.1's OWN FILES. Excel 2.1 saves "
         "BIFF2 and the reader took BIFF3/4 only, so one opened empty. Arm A "
         "is a BIFF2 file the host authors - every cell record, tAttr's one-"
@@ -21266,7 +21266,7 @@ SOAK = [
         "the host reads in Excel's file. Arm B found a fold defect: a SUM "
         "over formula cells that fold ranges of their own lost its range",
         needs=("marty",), serial=True),
-    Row("sheetspill", "soak", py("tests/sheetspill.py"), 180.0,
+    Row("sheetspill", "soak", py("tests/sheetspill.py"), 20.0,
         "SPEC.md 81.54: a label wider than its column runs on into the "
         "EMPTY cells to its right, as Excel draws it, and stops at the first "
         "that holds anything; a formula's text RESULT runs on too. Read off "
@@ -21274,7 +21274,7 @@ SOAK = [
         "inside each cell. Five of its checks fail against the binary that "
         "clipped every label to its own cell",
         needs=("marty",), serial=True),
-    Row("sheetnumfmt", "soak", py("tests/sheetnumfmt.py"), 300.0,
+    Row("sheetnumfmt", "soak", py("tests/sheetnumfmt.py"), 70.0,
         "SPEC.md 81.55: Excel 2.1d's twenty-one number formats. SHEET had "
         "four, and a date showed as its serial. The host writes a BIFF3 file "
         "of twenty cells in different formats; each cell's TEXT is read off "
@@ -21283,7 +21283,7 @@ SOAK = [
         "every format and writes Excel's 21 FORMAT records. 24 of its 27 "
         "checks fail against the binary before",
         needs=("marty",), serial=True),
-    Row("sheetcolw", "soak", py("tests/sheetcolw.py"), 360.0,
+    Row("sheetcolw", "soak", py("tests/sheetcolw.py"), 70.0,
         "SPEC.md 81.56: each column its own width. SHEET had one for the "
         "whole sheet and skipped a file's COLWIDTH records. The host's SYLK "
         "sets A to 20 and C to 3; the grid's lines are measured off the "
@@ -21291,21 +21291,21 @@ SOAK = [
         "land there, Column Width widens only its column, SYLK and Normal "
         "carry the widths, and Insert Column moves them with their columns",
         needs=("marty",), serial=True),
-    Row("sheetundo", "soak", py("tests/sheetundo.py"), 360.0,
+    Row("sheetundo", "soak", py("tests/sheetundo.py"), 70.0,
         "SPEC.md 81.57: Edit > Undo and Redo, Excel 2.1's one level. An "
         "entry undone and redone, a paste, a clear through its dialog and an "
         "inserted column each undone, and a format after a paste ending Undo "
         "rather than letting it put the paste back - read off the glass, "
         "then the saved document checked whole",
         needs=("marty",), serial=True),
-    Row("sheetside", "soak", py("tests/sheetside.py"), 300.0,
+    Row("sheetside", "soak", py("tests/sheetside.py"), 35.0,
         "SPEC.md 81.58: Insert and Delete Row move a cell's BORDERS with it "
         "(and its notes, by the same routine). They moved the cells alone. "
         "With gridlines off a border is the only ink on an edge: an insert "
         "must carry it down, a delete bring it back, deleting its own row "
         "take it away, and the saved file keep it on its cell",
         needs=("marty",), serial=True),
-    Row("sheetrowh", "soak", py("tests/sheetrowh.py"), 400.0,
+    Row("sheetrowh", "soak", py("tests/sheetrowh.py"), 45.0,
         "SPEC.md 81.60: each row its own height, in points as Excel keeps "
         "it. A BIFF3 file's ROW records set the rows the glass then measures "
         "(a default-flagged one ignored), the tall row's text sits low, a "
@@ -21314,14 +21314,14 @@ SOAK = [
         "twips back, Insert and Undo carry them, and scrolling onto a tall "
         "row shows it whole with no blit by the standard height",
         needs=("marty",), serial=True),
-    Row("sheetsort", "soak", py("tests/sheetsort.py"), 400.0,
+    Row("sheetsort", "soak", py("tests/sheetsort.py"), 70.0,
         "SPEC.md 81.61: Data > Sort orders every constant as Excel does - "
         "numbers, labels in any case, logicals, errors, formulas by their "
         "results - where labels, logicals and errors sat the sort out; and "
         "an error constant survives Fill Right, Copy/Paste and typing, "
         "which stored 0, pasted 0 and made a label",
         needs=("marty",), serial=True),
-    Row("sheetmsub", "soak", py("tests/sheetmsub.py"), 400.0,
+    Row("sheetmsub", "soak", py("tests/sheetmsub.py"), 25.0,
         "SPEC.md 81.84: subroutines - a defined name called like a function "
         "runs from that cell, ARGUMENT binds in the order it EXECUTES, and "
         "RETURN's value comes back by evaluating the calling cell a second "
@@ -21331,7 +21331,7 @@ SOAK = [
         "design review caught losing the call until a pending call outranked "
         "every other control in the step",
         needs=("marty",), serial=True),
-    Row("sheetmref", "soak", py("tests/sheetmref.py"), 400.0,
+    Row("sheetmref", "soak", py("tests/sheetmref.py"), 25.0,
         "SPEC.md 81.85: the reference family - OFFSET, ABSREF, RELREF, "
         "REFTEXT, TEXTREF, DEREF, SELECTION, CALLER, and ACTIVE.CELL as a "
         "reference. A reference function answers its top-left VALUE and "
@@ -21340,21 +21340,21 @@ SOAK = [
         "subroutine, the manual's own #REF! for TEXTREF, and an expression "
         "refused as a target",
         needs=("marty",), serial=True),
-    Row("sheetmctl", "soak", py("tests/sheetmctl.py"), 900.0,
+    Row("sheetmctl", "soak", py("tests/sheetmctl.py"), 45.0,
         "SPEC.md 81.86: macro control - ERROR(FALSE) and ERROR(TRUE,ref), "
         "RESTART(1) two subroutines deep, ALERT's type 1 answering OK and "
         "Cancel, the Single Step dialog (Step, then Continue), Esc raising it "
         "mid-loop and Halt ending the run, CANCEL.KEY(FALSE) ignoring Esc, "
         "WAIT on the timer, and a run's dialog being modal to the sheet",
         needs=("marty",), serial=True),
-    Row("sheetminfo", "soak", py("tests/sheetminfo.py"), 400.0,
+    Row("sheetminfo", "soak", py("tests/sheetminfo.py"), 25.0,
         "SPEC.md 81.87: macro information - thirty rows of GET.CELL, "
         "GET.FORMULA, GET.NAME, GET.DEF, GET.NOTE, NAMES, GET.DOCUMENT, "
         "GET.WINDOW, GET.WORKSPACE and DIRECTORY against a fixture that fixes "
         "each answer, including a DIRECTORY walk into a folder and a refused "
         "one that must leave the instance where it stood",
         needs=("marty",), serial=True),
-    Row("sheetmcmd", "soak", py("tests/sheetmcmd.py"), 400.0,
+    Row("sheetmcmd", "soak", py("tests/sheetmcmd.py"), 40.0,
         "SPEC.md 81.88: command equivalents, slice 3a - Format (ALIGNMENT, "
         "FORMAT.FONT, FORMAT.NUMBER, BORDER, CELL.PROTECTION, COLUMN.WIDTH, "
         "ROW.HEIGHT), Edit (FILL.DOWN, INSERT, EDIT.DELETE, PASTE.SPECIAL, "
@@ -21362,46 +21362,46 @@ SOAK = [
         "SET.DATABASE, each read back through the GET.* functions 81.87 "
         "verified",
         needs=("marty",), serial=True),
-    Row("sheetmcmd2", "soak", py("tests/sheetmcmd2.py"), 400.0,
+    Row("sheetmcmd2", "soak", py("tests/sheetmcmd2.py"), 30.0,
         "SPEC.md 81.89: command equivalents, slice 3b - FORMULA.GOTO/FIND/"
         "FIND.NEXT, DEFINE/SET/DELETE.NAME, NOTE, SORT, RUN as a subroutine, "
         "VSCROLL/VLINE/HSCROLL, SELECT.END both ways, UNLOCKED.NEXT/PREV "
         "wrapping, SELECT.LAST.CELL, and FIND.PREV refused into ERROR's ref",
         needs=("marty",), serial=True),
-    Row("sheetmcmd3", "soak", py("tests/sheetmcmd3.py"), 400.0,
+    Row("sheetmcmd3", "soak", py("tests/sheetmcmd3.py"), 30.0,
         "SPEC.md 81.90: command equivalents, slice 3c - FORMULA.FILL moving "
         "relative references both ways, DATA.SERIES linear and growth, "
         "FILE.DELETE (off the volume itself) and its refusal, SAVE.AS "
         "writing the very file the answers are read from, and OPEN ending "
         "the run with the other document in the window",
         needs=("marty",), serial=True),
-    Row("sheetmfile", "soak", py("tests/sheetmfile.py"), 400.0,
+    Row("sheetmfile", "soak", py("tests/sheetmfile.py"), 25.0,
         "SPEC.md 81.91: macro text files - FOPEN/FREADLN/FREAD/FPOS/FSIZE over "
         "a file the host wrote, a read-only channel refusing FWRITE, "
         "FWRITELN/FWRITE and an FPOS overwrite checked as BYTES off the "
         "volume, and #N/A for a missing file and for one bigger than a "
         "channel's share of the module claim's tail",
         needs=("marty",), serial=True),
-    Row("sheetmevt", "soak", py("tests/sheetmevt.py"), 400.0,
+    Row("sheetmevt", "soak", py("tests/sheetmevt.py"), 30.0,
         "SPEC.md 81.92: ON.KEY - Ctrl+Q and F7 bound to counting macros and "
         "PRESSED with no run going, F7 unbound again, and x bound to nothing "
         "so that typing it over a cell leaves the cell empty",
         needs=("marty",), serial=True),
-    Row("sheetmmenu", "soak", py("tests/sheetmmenu.py"), 400.0,
+    Row("sheetmmenu", "soak", py("tests/sheetmmenu.py"), 30.0,
         "SPEC.md 81.95: custom menus - a menu after Help built from a range, "
         "a command added, ticked, greyed and renamed, then USED with the "
         "mouse (the renamed one runs, the greyed one does not); a menu too "
         "wide for the bar refused; the custom bar made, shown and picked "
         "from, and SHOW.BAR()/DELETE.BAR/DELETE.MENU putting SHEET's own back",
         needs=("marty",), serial=True),
-    Row("sheetmdbox", "soak", py("tests/sheetmdbox.py"), 400.0,
+    Row("sheetmdbox", "soak", py("tests/sheetmdbox.py"), 40.0,
         "SPEC.md 81.96: DIALOG.BOX - a dialog described by a range, typed "
         "at, clicked and Tabbed through, then Entered: the text, check box, "
         "option group and number box results in the seventh column and the "
         "answer 1; Esc and Cancel answering FALSE; OK by the mouse; and a "
         "list box refused",
         needs=("marty",), serial=True),
-    Row("chartname", "soak", py("tests/chartname.py"), 300.0,
+    Row("chartname", "soak", py("tests/chartname.py"), 20.0,
         "SPEC.md 82.15: CHART charts the range Sheet NAMED, not the lowest "
         "column - THE FIRST TEST CHART HAS EVER HAD, and it exists because "
         "of what that cost: the filter NEVER RAN, ct_reset_series having "
@@ -21417,7 +21417,7 @@ SOAK = [
         "the same scaled words and only [ch_e10] would differ",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
-    Row("chartread", "soak", py("tests/chartread.py"), 300.0,
+    Row("chartread", "soak", py("tests/chartread.py"), 35.0,
         "SPEC.md 82.18: CHART's THREE readers are one reader. Check 0 "
         "(82.14.2): before any file the canvas is WHITE - ct_entry copied "
         "only the header into a claim nobody zeroes, so the window showed "
@@ -21453,7 +21453,7 @@ SOAK = [
         "Fixed in the same commit; restoring it fails 8 alone",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
-    Row("chartgal", "soak", py("tests/chartgal.py"), 600.0,
+    Row("chartgal", "soak", py("tests/chartgal.py"), 45.0,
         "SPEC.md 82.4/82.6: the Gallery actually DRAWS seven different "
         "charts - THE FIRST CHART ROW THAT LOOKS AT PIXELS. chartname and "
         "chartread both read numbers out of bss, and no amount of that can "
@@ -21479,7 +21479,7 @@ SOAK = [
         "MUTATION on one run. Both comparisons are exact again",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
-    Row("chart2ser", "soak", py("tests/chart2ser.py"), 300.0,
+    Row("chart2ser", "soak", py("tests/chart2ser.py"), 35.0,
         "SPEC.md 82.8/82.8.1: CHART keeps the TWO lowest columns, and "
         "DEMOTES. chartgal proves Scatter and Combination draw differently "
         "from the other five; this is the data model under them, which 82.8 "
@@ -21503,7 +21503,7 @@ SOAK = [
         "which this row first reported as a shared maximum",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
-    Row("chartexp", "soak", py("tests/chartexp.py"), 300.0,
+    Row("chartexp", "soak", py("tests/chartexp.py"), 40.0,
         "SPEC.md 82.13: the series' decimal exponent, at both ends and in "
         "the middle. ch_scale picks one E per series to fit signed words, "
         "capped at CH_E10_MAX 4 and CH_E10_MIN -9, and [ch_e10] is how the "
@@ -21522,7 +21522,7 @@ SOAK = [
         "because scaling an empty second series writes ch_e10 too",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
-    Row("sheettable", "soak", py("tests/sheettable.py"), 400.0,
+    Row("sheettable", "soak", py("tests/sheettable.py"), 30.0,
         "SPEC.md 81.114: Data > Table, the last menu command Excel 2.1d has "
         "that SHEET did not. A result cell is the governing formula "
         "evaluated with an input value substituted into an input cell "
@@ -21542,7 +21542,7 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88",
                "build/os8088-360.img")),
-    Row("sheettbl2", "soak", py("tests/sheettbl2.py"), 520.0,
+    Row("sheettbl2", "soak", py("tests/sheettbl2.py"), 50.0,
         "SPEC.md 81.114.7: a Data > Table is PROTECTED and clears "
         "all-or-nothing. sheettable proves the numbers; this proves the "
         "thing that makes them a table - the Reference Guide's 'you cannot "
@@ -21569,7 +21569,7 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88",
                "build/os8088-360.img")),
-    Row("sheettblbiff", "soak", py("tests/sheettblbiff.py"), 520.0,
+    Row("sheettblbiff", "soak", py("tests/sheettblbiff.py"), 25.0,
         "SPEC.md 81.114.10: a Data > Table survives SAVE AND LOAD. Until "
         "this stage a table saved to any format kept its NUMBERS and "
         "silently stopped being a table. Excel writes one as a FORMULA "
@@ -21594,7 +21594,7 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88",
                "build/os8088-360.img")),
-    Row("sheettblshift", "soak", py("tests/sheettblshift.py"), 560.0,
+    Row("sheettblshift", "soak", py("tests/sheettblshift.py"), 50.0,
         "SPEC.md 81.114.9: a Data > Table's stored RECTANGLE follows the "
         "grid. Insert/Delete Row/Column move the cells and move a result "
         "cell's MARK with them for free - it is a bit in the border byte, "
@@ -21619,7 +21619,7 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88",
                "build/os8088-360.img")),
-    Row("sheettblcalc", "soak", py("tests/sheettblcalc.py"), 520.0,
+    Row("sheettblcalc", "soak", py("tests/sheettblcalc.py"), 50.0,
         "SPEC.md 81.114.8: a Data > Table RECALCULATES, and Excel's three "
         "modes decide when. A result cell holds a STORED value, so this "
         "app's whole recalculation - advance [sh_pass] and let sh_eval_cell "
@@ -21649,7 +21649,7 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88",
                "build/os8088-360.img")),
-    Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
+    Row("sheetsize", "soak", py("tests/sheetsize.py"), 25.0,
         "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
         "to the new box. The grow box dragged in 160x24 and back out, with "
         "the kernel's W_W/W_H, the package's sh_cw/sh_ch and the walk counts "
@@ -21662,13 +21662,13 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88",
                "build/os8088-360.img")),
-    Row("sheetmkind", "soak", py("tests/sheetmkind.py"), 400.0,
+    Row("sheetmkind", "soak", py("tests/sheetmkind.py"), 45.0,
         "SPEC.md 81.97: the reader half - a host-written BIFF2 macro sheet "
         "(BOF dt 0040H) whose formulas are a ptg-58H command, a variable and "
         "a fixed extension function and RETURN, saved Normal: dt 0040H and "
         "all four formulas back; a worksheet opened next saves as 0010H",
         needs=("marty",), serial=True),
-    Row("sheetmtail", "soak", py("tests/sheetmtail.py"), 400.0,
+    Row("sheetmtail", "soak", py("tests/sheetmtail.py"), 25.0,
         "SPEC.md 81.98: the pulldown leaves nothing behind it - Data's panel "
         "hangs past the window over the dock, is banked, and closing it "
         "leaves every row below the window as it was; with the window "
@@ -21676,54 +21676,54 @@ SOAK = [
         "bank clips at the last row",
         needs=("marty",), serial=True),
     Row("sheetmtailvga", "soak", py("tests/sheetmtail.py", "--card", "vga"),
-        400.0,
+        35.0,
         "SPEC.md 81.98.1: the pulldown's save-under on the FOUR-PLANE path "
         "(os8088_xt_vga, 640x480): the bank is taken, closing changes nothing "
         "the panel covered, and the bank path lands on the same pixels as a "
         "full repaint - the A/B that caught the stale status line",
         needs=("marty",), serial=True),
-    Row("sheetmsep", "soak", py("tests/sheetmsep.py"), 400.0,
+    Row("sheetmsep", "soak", py("tests/sheetmsep.py"), 35.0,
         "SPEC.md 81.109: every built-in pulldown carries Excel's group "
         "separators as a hairline at row_top + 10, exactly where sh_msep "
         "says and nowhere else, and no panel grew - 12 * n + 4, so no row "
         "moved",
         needs=("marty",), serial=True),
-    Row("sheetrefcyc", "soak", py("tests/sheetrefcyc.py"), 400.0,
+    Row("sheetrefcyc", "soak", py("tests/sheetrefcyc.py"), 25.0,
         "SPEC.md 81.108: Formula > Reference and F4, Excel's own - the "
         "reference at the caret round A1 > $A$1 > A$1 > $A1 > A1, by key and "
         "by menu, live only mid-formula, and a function's name left alone",
         needs=("marty",), serial=True),
-    Row("sheetopts", "soak", py("tests/sheetopts.py"), 400.0,
+    Row("sheetopts", "soak", py("tests/sheetopts.py"), 30.0,
         "SPEC.md 81.106: the Options menu in Excel's order off the glass, "
         "Display... (kind 1: Formulas, Gridlines) and Workspace... (kind 2: "
         "R1C1, the reference box then reads R1C1) setting their flags, and "
         "Formula > Reference greyed",
         needs=("marty",), serial=True),
-    Row("sheetclip", "soak", py("tests/sheetclip.py"), 400.0,
+    Row("sheetclip", "soak", py("tests/sheetclip.py"), 25.0,
         "SPEC.md 81.105 (upstream issue #152): sh_repaint arms its own clip "
         "region - Data > Chart Column opens the Chart over SHEET and then "
         "repaints SHEET, and SHEET's ink stays out of the Chart and its "
         "FRAME is whole (37 of 398 edge pixels without the clip)",
         needs=("marty",), serial=True),
-    Row("sheetstatus", "soak", py("tests/sheetstatus.py"), 400.0,
+    Row("sheetstatus", "soak", py("tests/sheetstatus.py"), 20.0,
         "SPEC.md 81.104: the status bar in Excel's shape on the 1bpp CGA - "
         "a divider down the strip at right - SH_SB_DIVX, and the indicator "
         "INVERTED in a solid 1px-ringed black box (its gaps black), the "
         "message still black on white",
         needs=("marty",), serial=True),
-    Row("sheettitle", "soak", py("tests/sheettitle.py"), 400.0,
+    Row("sheettitle", "soak", py("tests/sheettitle.py"), 25.0,
         "SPEC.md 81.103: the window names the document - 'Sheet - <NAME>' "
         "from the first frame for a double-clicked document (composed at "
         "entry, never in a paint, 11.92), renamed by File > New, and the "
         "caption strip really redrawn",
         needs=("marty",), serial=True),
-    Row("sheetkeys", "soak", py("tests/sheetkeys.py"), 400.0,
+    Row("sheetkeys", "soak", py("tests/sheetkeys.py"), 60.0,
         "SPEC.md 81.101: the modern keyboard shortcuts on the cycle-accurate "
         "CGA - the captions the pulldowns draw, Ctrl+C/V copy, Ctrl+Z undo, "
         "Ctrl+X move, Ctrl+D fill, nothing pasted mid-entry, F3/Shift+F3/"
         "Ctrl+G/F5/Ctrl+F/Ctrl+N open their dialogs, and Ctrl+S saves",
         needs=("marty",), serial=True),
-    Row("sheetnote", "soak", py("tests/sheetnote.py"), 300.0,
+    Row("sheetnote", "soak", py("tests/sheetnote.py"), 30.0,
         "SPEC.md 81.119: a cell NOTE survives a save. 81.38's shape with the "
         "ends swapped - the host cannot author a NOTE record, so the GUEST "
         "writes the file and the HOST reads it with a ten-line parser that "
@@ -21731,20 +21731,20 @@ SOAK = [
         "reader-only mutation fails ONE check while the host still finds the "
         "record, which is what the independent parser is for",
         needs=("marty",), serial=True),
-    Row("sheetask", "soak", py("tests/sheetask.py"), 300.0,
+    Row("sheetask", "soak", py("tests/sheetask.py"), 25.0,
         "SPEC.md 81.118: SHEET asks before it throws a workbook away - "
         "[sh_modified] 0 on open, 1 on an entry, 0 on a save that kept "
         "everything and 1 again after; then the CLOSE BOX refuses and puts "
         "75.3's Save/Discard/Cancel up, and Discard closes it. The four "
         "flag readings are what stop a stuck 1 passing the close test",
         needs=("marty",), serial=True),
-    Row("sheetdlgclose", "soak", py("tests/sheetdlgclose.py"), 400.0,
+    Row("sheetdlgclose", "soak", py("tests/sheetdlgclose.py"), 45.0,
         "SPEC.md 81.100: a dialog's CLOSE BOX leaves its engine usable - the "
         "list (Format Number) and input (Goto) dialogs closed by their boxes "
         "clear their window words, and Paste Function and Define Name then "
         "open; the kernel only HIDES an unowned window (75.1)",
         needs=("marty",), serial=True),
-    Row("sheetdlgcga", "soak", py("tests/sheetdlgcga.py"), 400.0,
+    Row("sheetdlgcga", "soak", py("tests/sheetdlgcga.py"), 35.0,
         "SPEC.md 81.100: SHEET's tall fixed dialogs keep their height on a "
         "CGA (WF_KEEPH, 11.93) - Gallery 169 and Border 159 rows against a "
         "155-row band, still on the display, and closing each leaves "
@@ -21752,12 +21752,12 @@ SOAK = [
         "and Data Form as controls",
         needs=("marty",), serial=True),
     Row("sheetmtailherc", "soak",
-        py("tests/sheetmtail.py", "--card", "herc"), 400.0,
+        py("tests/sheetmtail.py", "--card", "herc"), 25.0,
         "SPEC.md 81.98.1: the same save-under photographs on the Hercules "
         "machine (os8088_5150_herc_gla, 720x348): one plane, but the "
         "four-bank interleave and 90-byte row are its own",
         needs=("marty",), serial=True),
-    Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
+    Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 20.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "
         "value and the macro was gone. Byte-level on purpose: SELECT and "
@@ -21766,7 +21766,7 @@ SOAK = [
         "and both be wrong - which is why 81.68 refused to guess. Both "
         "tables and both ptgs, and a dotted name through the lexer",
         needs=("marty",), serial=True),
-    Row("sheetparse", "soak", py("tests/sheetparse.py"), 400.0,
+    Row("sheetparse", "soak", py("tests/sheetparse.py"), 35.0,
         "SPEC.md 81.82: Data > Parse splits one column at FIXED CHARACTER "
         "POSITIONS, not at a delimiter. 'New York' must survive as one "
         "field - Guess's rule is two spaces - and the boundaries guessed "
@@ -21775,20 +21775,20 @@ SOAK = [
         "typed by their spelling as a CSV field is, and no brackets is a "
         "refusal rather than a no-op that eats the column",
         needs=("marty",), serial=True),
-    Row("sheetjust", "soak", py("tests/sheetjust.py"), 400.0,
+    Row("sheetjust", "soak", py("tests/sheetjust.py"), 30.0,
         "SPEC.md 81.81: Format > Justify re-wraps a paragraph down the left "
         "column at the width of the WHOLE selection, a blank cell divides "
         "the range into sections justified inside their own rows, and a "
         "value in the left column refuses the block rather than being "
         "skipped - with a marker cell proving the save that shows it landed",
         needs=("marty",), serial=True),
-    Row("sheetfunc", "soak", py("tests/sheetfunc.py"), 400.0,
+    Row("sheetfunc", "soak", py("tests/sheetfunc.py"), 25.0,
         "SPEC.md 81.62: all 48 text, information and transcendental "
         "functions, each evaluated from a formula cached with a wrong value "
         "and read back from SHEET's SYLK save - the gate the move of the "
         "three families into the chart module was checked against, on both builds",
         needs=("marty",), serial=True),
-    Row("sheetmacro", "soak", py("tests/sheetmacro.py"), 400.0,
+    Row("sheetmacro", "soak", py("tests/sheetmacro.py"), 35.0,
         "SPEC.md 81.63: the macro language - FOR/NEXT nested and stepping "
         "down, WHILE with ACTIVE.CELL and SELECT(\"R[1]C\"), IF with GOTO "
         "and BREAK (the branch not taken runs no command), FORMULA, "
@@ -21796,7 +21796,7 @@ SOAK = [
         "ALERT then INPUT pausing a run - started from Macro > Run by name "
         "and by reference; and a macro command in a worksheet formula inert",
         needs=("marty",), serial=True),
-    Row("sheetdb", "soak", py("tests/sheetdb.py"), 400.0,
+    Row("sheetdb", "soak", py("tests/sheetdb.py"), 30.0,
         "SPEC.md 81.65: the eleven DATABASE functions - DAVERAGE DCOUNT "
         "DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP - each "
         "evaluated from a formula cached with a wrong value and read back "
@@ -21807,7 +21807,7 @@ SOAK = [
         "DCOUNTA counting anything non-blank, over a Fruit row whose own "
         "Amount is deliberately the text \"N/A\"",
         needs=("marty",), serial=True),
-    Row("sheetcell", "soak", py("tests/sheetcell.py"), 300.0,
+    Row("sheetcell", "soak", py("tests/sheetcell.py"), 20.0,
         "SPEC.md 81.66: CELL's nine attributes - width row col protect "
         "address contents format prefix type - checked against the real "
         "text of Microsoft Excel Functions and Macros. type_of_info matched "
@@ -21816,7 +21816,7 @@ SOAK = [
         "cell answers (\"format\" is \"G\", \"prefix\" is \"\", \"protect\" "
         "is 1)",
         needs=("marty",), serial=True),
-    Row("sheetmatrix", "soak", py("tests/sheetmatrix.py"), 300.0,
+    Row("sheetmatrix", "soak", py("tests/sheetmatrix.py"), 25.0,
         "SPEC.md 81.67: TRANSPOSE MMULT MDETERM MINVERSE, each publishing "
         "only its array's top-left element (Sheet has no array-formula "
         "entry) - TRANSPOSE on a label and a number, MMULT and MDETERM on "
@@ -21829,7 +21829,7 @@ SOAK = [
         "exponential curve, the const=FALSE arm through the origin, and a "
         "non-positive y answering #VALUE! out of fp_ln",
         needs=("marty",), serial=True),
-    Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
+    Row("sheetfin", "soak", py("tests/sheetfin.py"), 35.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "
         "Every formula is authored with a WRONG cached value, so a pass means "
@@ -21839,7 +21839,7 @@ SOAK = [
         "off the glass (81.48), and MIRR discounted from the wrong period - "
         "which SPEC's own reference table had done too",
         needs=("marty",), serial=True),
-    Row("sheetdbcmd", "soak", py("tests/sheetdbcmd.py"), 450.0,
+    Row("sheetdbcmd", "soak", py("tests/sheetdbcmd.py"), 45.0,
         "SPEC.md 81.71: Data > Find, Extract and Delete - 81.65's criteria "
         "engine driven from the MENU, over 81.69's two defined names. Find "
         "selecting the first matching record whole and then stepping to the "
@@ -21848,7 +21848,7 @@ SOAK = [
         "fields, and Delete compacting the database while the cell one row "
         "below it stays put - which is what separates it from Edit > Delete",
         needs=("marty",), serial=True),
-    Row("sheetrecord", "soak", py("tests/sheetrecord.py"), 450.0,
+    Row("sheetrecord", "soak", py("tests/sheetrecord.py"), 45.0,
         "SPEC.md 81.74 and 81.107: the macro recorder, and Start Recorder "
         "greyed until a range exists and continuing the same macro over "
         "Stop's own RETURN(). 81.68 is titled \"the way the "
@@ -21859,7 +21859,7 @@ SOAK = [
         "absolute R1C1, Stop writing its own RETURN(), and a redundant click "
         "recording nothing at all",
         needs=("marty",), serial=True),
-    Row("sheethide", "soak", py("tests/sheethide.py"), 400.0,
+    Row("sheethide", "soak", py("tests/sheethide.py"), 35.0,
         "SPEC.md 81.73: a hidden row and a hidden column - Format > Column "
         "Width 0, Excel's own way, on the line that used to refuse it. What "
         "this really gates is the MAPPING hiding broke: a visible slot's "
@@ -21871,7 +21871,7 @@ SOAK = [
         "heading drag rides with it: the edge moves 24px and widens ONE "
         "column by exactly that",
         needs=("marty",), serial=True),
-    Row("sheetseries", "soak", py("tests/sheetseries.py"), 450.0,
+    Row("sheetseries", "soak", py("tests/sheetseries.py"), 50.0,
         "SPEC.md 81.72: Data > Series - two dialogs in sequence (the type as "
         "a radio column, the step as a text field) over a direction derived "
         "from the selection's shape. Linear with a FRACTIONAL step of 2.5, "
@@ -21880,7 +21880,7 @@ SOAK = [
         "column whose first cell is a label skipped whole while the one "
         "beside it in the same selection still fills",
         needs=("marty",), serial=True),
-    Row("sheetform", "soak", py("tests/sheetform.py"), 450.0,
+    Row("sheetform", "soak", py("tests/sheetform.py"), 30.0,
         "SPEC.md 81.71.5: Data > Form - one record at a time, the sixth "
         "dialog engine and the first one that lives in the chart module behind "
         "resident thunks, so this gates that arrangement as much as the "
@@ -21889,7 +21889,7 @@ SOAK = [
         "user's own selection back rather than leaving it on the last field "
         "edited. It found `Veg` drawn over `Fruit` reading `Vegit`",
         needs=("marty",), serial=True),
-    Row("sheetfreeze", "soak", py("tests/sheetfreeze.py"), 400.0,
+    Row("sheetfreeze", "soak", py("tests/sheetfreeze.py"), 30.0,
         "SPEC.md 81.70: Options > Freeze Panes. Nothing a file holds can "
         "show a freeze, so every assertion is a cell's text read off the "
         "glass with the kernel's own glyphs: the split refused on A1 in its "

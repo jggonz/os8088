@@ -33,4 +33,58 @@ default `launch` settle followed by a second settle.
 
 ## Measured
 
-(filled in after the 09:05 verification pass)
+**Guest seconds per row** (load-independent; each MartyPC instance's cycle
+count at close, `.scratch-agent`'s wrapper round `Marty.close`). Before is
+`git show` of the starting commit's script, run with `OS88_FIXCACHE=0`;
+both on the same loaded box (8 agents, 4 cores), all green both ways:
+
+| row | before guest s | after guest s | |
+|---|---|---|---|
+| sheetrowh | 132.7 | 105.7 | -20% (eight menu presses' hidden 3 s caps, the boot settle) |
+| sheetmctl | 172.4 | 114.6 | -34% (the fixed 40 s, the caps, the per-key paces) |
+| sheetdec | 194.6 | 178.1 | -8% (four opens and four saves: the floppy IS the row) |
+| chartgal | 140.6 | 96.0 | -32%; host wall beside it 230 -> 138 s: the host-paced canvas/screen polls (unlogged, `fbuf` + md5 every 0.25 s) were ~120 of the old row's host seconds |
+
+sheetmtail's two held-menu settles were 27.1 of its 64 waited guest s
+before (`OS88_WAITLOG`); `SF.held` is ~2-3 guest s a hold.
+
+**The scoped soak** (`os88soak.py start -k 'sheet*' -k 'chart*' -k
+'mega-sheet*' -k 'mega-chart*' -x sheetmove -x sheetmove-rt -x
+sheetovlmove -x sheetxbench --marty-jobs 1`, both batches): **83 / 83 ok**,
+2,419 s wall for the run. The rows had been DECLARED at 28,145 s (7.8 h)
+between them; they ran in 2,419 s of row wall (0.67 h) on a box that had
+quietened by then. The four excluded rows ran green in the batch-1 soak
+(sheetmove 62 s, sheetmove-rt 57, sheetovlmove 59, sheetxbench 430) and use
+none of batch 2's helpers.
+
+**`secs=` re-declared** for all 82 emulator rows of that run (suite.py and
+megaport.txt): 1.5x the measured wall rounded up to 5 s, floor 20 -
+the set now declares 4,280 s where it declared 28,145. The timeout
+(`4 * secs + 30`, CPU-charged) stays well above the loaded runs measured
+here (sheetrowh 74-119 s wall standalone under load against a 210 s
+timeout). Most of the old figure was never the rows: the sheet rows were
+declared at 300-900 s and none ran past 60 s.
+
+## Not done / next
+
+1. **One boot for many sheet rows.** Boot (~14 guest s with kernel_up) and
+   SHEET's launch off the floppy (~11 guest s, `dispcp.py:746`) are now the
+   largest fixed costs left in every sheet row - about a quarter of a
+   typical one. 60 rows boot the same system disk on the same machine;
+   `os88marty.Forks` after the desktop, then `Marty.mount` of each row's own
+   B: in the restored machine, would pay one boot instead of 60. Needs each
+   row as a callable leg and a check that a swapped B: is read afresh
+   (SPEC.md 18.9.1's motor-off rule).
+2. **`settle(m)` after a mouse verb -> `ui_done`** in the rows that read
+   only `m.vram` (VRAM is the framebuffer, which `ui_done` covers): 141
+   sites in 30 non-macro rows counted, ~0.3-0.5 guest s each - ~1 min of
+   the family's run. Not done: low value against touching every row again.
+3. **os88mouse's PRESS_GUEST cap** is paid by EVERY `mo.menu` on any bar
+   whose tracking yields (the kernel's own menu_track polls a level too),
+   unlogged. SF.menu fixes it for SHEET; the general fix belongs in
+   os88mouse (a `pressed=` predicate, or `menu_dropd`/`menu_y1` for the
+   kernel's bar, as os88ui.menu_pick already does) and would reach every
+   row that uses `mo.menu` directly. A capped `ui_done` writing nothing to
+   OS88_WAITLOG is why it was invisible: logging the cap would show it.
+4. sheetdec's own Save As spells the menu over two lines and kept its three
+   intermediate settles (~1.3 guest s a save).
