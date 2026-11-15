@@ -74,18 +74,41 @@ class Box(tuple):
     """A box: the 4-tuple every geometry routine reads, plus its height
     (units above the floor; a lift's REST height), its kind, its colour (0 a
     boundary, 1 an item - wa_bcol), and for a flight the face it rises
-    TOWARD and its tread count, for a lift its raised height."""
+    TOWARD and its tread count, for a lift its raised height. ON: the box it
+    STANDS on (HEDGES-PLAN 8) - the one just before it in the arena's list,
+    both low solids, it strictly inside that one's footprint and taller: its
+    faces rise from that box's top. The ground is the tallest box over a
+    point, so everything that reads heights takes a stack as it is."""
     def __new__(cls, x0, y0, x1, y1, h=WALL_H, kind=SOLID, col=1, toward=None,
-                treads=0, top=None, name=""):
+                treads=0, top=None, name="", on=None):
         b = tuple.__new__(cls, (x0, y0, x1, y1))
         b.h, b.kind, b.col, b.toward, b.treads = h, kind, col, toward, treads
-        b.top, b.name = top, name
+        b.top, b.name, b.on = top, name, on
         return b
 
 
 def bx(b):
     """Any box as a Box: a bare 4-tuple is a 3 m solid item."""
     return b if isinstance(b, Box) else Box(*b)
+
+
+def jump_gap():
+    """The widest gap between two tops of one height that is a SAFE jump,
+    units: half the ground a running jump covers (the game's own speed,
+    jump and gravity, off waconst.inc) - the other half a margin for a
+    take-off short of the edge, or off the square"""
+    src = open(__file__.replace("tools/arenagen.py", "apps/wirearena/waconst.inc")
+               if __file__.endswith("tools/arenagen.py") else
+               "apps/wirearena/waconst.inc").read()
+    k = lambda name: int(re.search(name + r"\s+equ\s+(\d+)", src).group(1))
+    v, g, z, t = k("WA_JUMPV"), k("WA_GRAV"), 0, 0
+    while True:
+        z += v
+        v -= g
+        t += 1
+        if z <= 0:
+            break
+    return t * k("WA_MSPD") // 8 // 2
 
 
 def jump_apex():
@@ -622,18 +645,123 @@ TWIN_PICKUPS = [
 TWIN_START = (640, 800, 0)
 
 
+# --- THE HEDGE (docs/plans/WIREARENA-HEDGES-PLAN.md): the owner's redrawing
+# of the maze, 2026-11-14 - chosen over a second drawing with four gaps a
+# ring for its play: the gaps' offsets tell you where you are. The same rings
+# - a court with the red stack, an inner ring, an outer ring - but the court
+# larger, every corridor 2 m (128) wide, every gap in a hedge 2 m and never
+# facing the next one out, and past the outer ring a 1 m WALL (the outer
+# wall's top, MP high) walked round the whole map, its gaps narrow enough to
+# jump. The three rooms stand OUTSIDE that wall, west, east and south, each a
+# 4 x 8 m pocket off a gap, a platform in it; the lift is in the north gap
+# and rises to the wall's top. Tall fills round the rooms are the EDGE, in
+# the room's blue as the room's own walls are (the owner's drawing): a tall
+# box is the cheap one to draw and the one that hides.
+# Absolute coordinates; the main square x 256..1792, y 256..2048, the
+# court's middle (1024, 1152). The court's hedge is open N and S at the
+# middle; the middle hedge W by its north end and E by its south end.
+def _hedge():
+    H, G = MH, COL_HEDGE
+    STK0 = Box(832, 960, 1216, 1344, 48, col=COL_PLAT, name="stack bottom")
+    bx_ = [
+        # the stack, as the maze's - 384, 256 and 128 square - but three
+        # boxes, each STANDING on the one under it (HEDGES-PLAN 8), not nine
+        STK0,
+        Box(896, 1024, 1152, 1280, 104, col=COL_PLAT, name="stack middle",
+            on=STK0),
+    ]
+    bx_ += [
+        Box(960, 1088, 1088, 1216, 160, col=COL_PLAT, name="stack top",
+            on=bx_[-1]),
+        # the court's hedge, x 640..1408, y 640..1664, 1 m thick: its gaps
+        # x 960..1088, N and S
+        Box(640, 640, 704, 1664, H, col=G, name="inner hedge W"),
+        Box(1344, 640, 1408, 1664, H, col=G, name="inner hedge E"),
+        Box(704, 1600, 960, 1664, H, col=G, name="inner hedge N-W"),
+        Box(1088, 1600, 1344, 1664, H, col=G, name="inner hedge N-E"),
+        Box(704, 640, 960, 704, H, col=G, name="inner hedge S-W"),
+        Box(1088, 640, 1344, 704, H, col=G, name="inner hedge S-E"),
+        # the middle hedge, x 448..1600, y 448..1856: a side a box, each past
+        # a corner, so a gap is where one side stops short of the next - W
+        # y 1664..1792, E y 512..640
+        Box(448, 1792, 1600, 1856, H, col=G, name="middle hedge N"),
+        Box(1536, 640, 1600, 1792, H, col=G, name="middle hedge E"),
+        Box(512, 448, 1600, 512, H, col=G, name="middle hedge S"),
+        Box(448, 448, 512, 1664, H, col=G, name="middle hedge W"),
+        # the outer wall, 1 m thick and MP high, walked round: its gaps 2 m,
+        # into the rooms and (north) the lift's
+        Box(256, 256, 320, 1088, MP, col=G, name="wall W-S"),
+        Box(256, 1216, 320, 2048, MP, col=G, name="wall W-N"),
+        Box(1728, 256, 1792, 1088, MP, col=G, name="wall E-S"),
+        Box(1728, 1216, 1792, 2048, MP, col=G, name="wall E-N"),
+        Box(320, 256, 960, 320, MP, col=G, name="wall S-W"),
+        Box(1088, 256, 1728, 320, MP, col=G, name="wall S-E"),
+        Box(320, 1984, 960, 2048, MP, col=G, name="wall N-W"),
+        Box(1088, 1984, 1728, 2048, MP, col=G, name="wall N-E"),
+        Box(960, 1984, 1088, 2048, 16, col=COL_PLAT, kind=LIFT, top=MP,
+            name="the lift"),
+        # the edge: tall fills round the three rooms (W and E 4 x 8 m, y
+        # 896..1408; S 8 x 4 m, x 768..1280), and each room's platform
+        Box(0, 0, 256, 896, H, col=COL_ROOM, name="fill W-S"),
+        Box(0, 1408, 256, 2048, H, col=COL_ROOM, name="fill W-N"),
+        Box(1792, 0, 2048, 896, H, col=COL_ROOM, name="fill E-S"),
+        Box(1792, 1408, 2048, 2048, H, col=COL_ROOM, name="fill E-N"),
+        Box(256, 0, 768, 256, H, col=COL_ROOM, name="fill S-W"),
+        Box(1280, 0, 1792, 256, H, col=COL_ROOM, name="fill S-E"),
+        Box(64, 1088, 192, 1216, 48, col=COL_PLAT, name="west room's platform"),
+        Box(1856, 1088, 1984, 1216, 48, col=COL_PLAT, name="east room's platform"),
+        Box(960, 64, 1088, 192, 48, col=COL_PLAT, name="south room's platform")]
+    # the route graph: the court round the stack, the inner ring, the outer
+    # ring, the three rooms (their nodes before the platforms, as the maze's)
+    court = [(768, 832), (1024, 832), (1280, 832), (1280, 1472),
+             (1024, 1472), (768, 1472)]                             # 0-5
+    inner = [(576, 576), (1024, 576), (1472, 576), (1472, 1728),
+             (1024, 1728), (576, 1728)]                             # 6-11
+    outer = [(384, 384), (1024, 384), (1664, 384), (1664, 576),
+             (1664, 1152), (1664, 1920), (1024, 1920), (384, 1920),
+             (384, 1728), (384, 1152)]                              # 12-21
+    nodes = court + inner + outer + [(1824, 1152), (224, 1152), (1024, 224)]
+    legs = [(i, (i + 1) % 6) for i in range(6)] + \
+           [(6 + i, 6 + (i + 1) % 6) for i in range(6)] + \
+           [(12 + i, 12 + (i + 1) % 10) for i in range(10)] + \
+           [(1, 7), (4, 10),                        # the court's gaps
+            (11, 20), (8, 15),                      # the middle's
+            (16, 22), (21, 23), (13, 24)]           # the rooms
+    homes = [list(range(6, 12)), list(range(12, 22)), list(range(0, 6))]
+    graph = dict(nodes=nodes, legs=legs, homes=homes)
+    resp = [(1024, 384, 256), (384, 1152, 0), (1664, 1152, 512),
+            (1024, 1920, 768), (576, 1152, 768), (1472, 1152, 256),
+            (768, 832, 256)]
+    pks = [((PK_ROCKET, PK_GRENADE), 1024, 1152),        # the stack's top
+           ((PK_SHOTGUN, PK_CHAINGUN), 1920, 1152),      # the east room's
+           ((PK_RAIL, PK_SHOTGUN), 128, 1152),           # the west room's
+           ((PK_HEALTH, PK_SHIELD), 1024, 128)]          # the south room's
+    start = (1024, 384, 256)
+    bench = [("A", 768, 832, 128, 0, 0),         # the court, at the stack
+             ("B", 1664, 1152, 0, 0, 0),         # into the east room
+             ("C", 576, 576, 256, 0, 0),         # the inner ring's corner
+             ("D", 288, 1600, 768, 0, MP)]       # on the outer wall, west
+    return bx_, graph, resp, pks, start, bench
+
+
+HEDGE_BOXES, HEDGE_GRAPH, HEDGE_RESPAWNS, HEDGE_PICKUPS, HEDGE_START, \
+    HEDGE_BENCH = _hedge()
+
+
 def arenas():
     return [("a0", "Arena", BOXES, PLAYER_START),
             ("a1", "Open", OPEN_BOXES, PLAYER_START),
             ("a2", "Heights", HEIGHTS_BOXES, PLAYER_START),
             ("a3", "Maze", MAZE_BOXES, MAZE_START),
-            ("a4", "Twin", TWIN_BOXES, TWIN_START)]
+            ("a4", "Twin", TWIN_BOXES, TWIN_START),
+            ("a5", "Hedge", HEDGE_BOXES, HEDGE_START)]
 
 
 # an arena's own patrols (the rest walk PATHS): every arena's are WA_NFIG
 # loops - an arena with no route graph of its own walks them as one
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
-ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": MAZE_GRAPH, "a4": TWIN_GRAPH}
+ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": MAZE_GRAPH, "a4": TWIN_GRAPH,
+                "a5": HEDGE_GRAPH}
 ARENA_ROOMCOL = {"a3": COL_HEDGE}
 # FLOOR LINES (ARENAS-PLAN 4.5): an arena's closed lines on the floor, the
 # feet's edge - and its room's height, 0 for no room walls at all
@@ -684,8 +812,9 @@ def in_walk(tag, x, y, r=0):
 # the owner's stress tests (ARENAS-PLAN 4.4: "to see how well the system holds
 # up"), each with its own ceiling and its frame rate measured where it is
 # worst. (boxes, outline edges)
-OVER_BUDGET = {"a3": (20, 44)}
-ARENA_RESPAWNS.update({"a3": MAZE_RESPAWNS, "a4": TWIN_RESPAWNS})
+OVER_BUDGET = {"a3": (20, 44), "a5": (20, 44)}
+ARENA_RESPAWNS.update({"a3": MAZE_RESPAWNS, "a4": TWIN_RESPAWNS,
+                       "a5": HEDGE_RESPAWNS})
 # THE PLAY BENCH'S VIEWS (P, MULTIPLAYER-FPS-PLAN 16.7; ARENAS-PLAN 4.2), an
 # arena's own, each P press the next: mark, x, y, angle (1024ths), base
 # pitch, the floor under the eye. The heights arena's five are HEIGHTS-PLAN
@@ -704,6 +833,7 @@ ARENA_BENCH = {
            ("B", 512, 1024, 0, -40, 240),       # on the west tower
            ("C", 1024, 832, 0, 0, 0),           # the path's bottom
            ("D", 192, 1024, 0, 0, 0)],          # behind the lift: the flag
+    "a5": HEDGE_BENCH,
 }
 
 
@@ -910,6 +1040,14 @@ def pvs_build(tag, boxes):
     if os.environ.get("WA_PVSLOW", "1") != "0":   # WA_PVSLOW=0: the A/B, the
         low = pvs_low(boxes, out, occ)            # tall boxes' test alone)
     cut += low
+    for i in range(len(boxes) - 1, -1, -1):   # A STACK is drawn from its
+        b = boxes[i]                    # bottom's leaf, each box from the one
+        if b.on is not None:            # it stands on (wl_child): a box that
+            r = i - 1                   # can be seen keeps every box under
+            for col in out:             # it (HEDGES-PLAN 8 - a tall tier
+                for k in range(len(col)):   # over a hedge its bottom is not),
+                    if col[k] >> i & 1:     # top down, so the bottom takes
+                        col[k] |= 1 << r    # them all
     share = cut / float(len(boxes) * len(out) * len(out[0]))
     sys.stderr.write("arenagen: arena %s: the PVS culls %.1f%% of box-cells "
                      "(%.1f%% behind low boxes)%s\n"
@@ -1065,7 +1203,9 @@ def pvs_lowseen(p, e, i, boxes, top):
             so = pvs_span(px, py, ux, uy, o)
             if so is None or so[0] >= sp[0] - 1e-6 and so[0] > 1e-6:
                 continue                # (missed, or behind the box)
-            for t in so:
+            if so[1] > sp[0]:           # (only what is IN FRONT of it can
+                so = (so[0], sp[0])     # hide it: a stack's box under it
+            for t in so:                # runs on past it - HEDGES-PLAN 8)
                 if t <= 1e-6:
                     continue            # (under the eye: its far end only)
                 if (pvs_top(o, px + ux * t, py + uy * t, False) - e) / t >= best - 1e-9:
@@ -1146,7 +1286,7 @@ HEIGHTS_PICKUPS = [
     ((PK_ROCKET, PK_RAIL), 1952, 1024),
 ]
 ARENA_PICKUPS = {"a2": HEIGHTS_PICKUPS, "a3": MAZE_PICKUPS,
-                 "a4": TWIN_PICKUPS}
+                 "a4": TWIN_PICKUPS, "a5": HEDGE_PICKUPS}
 
 
 def pickups(tag, boxes):
@@ -1564,7 +1704,53 @@ def kind_byte(b, lifts, boxes=()):
         return FLIGHT | FACES.index(b.toward) << 2 | b.treads << 4
     if b.kind == LIFT:
         return LIFT | lifts.index(b) << 4
-    return SOLID
+    k = SOLID                           # A STACK (HEDGES-PLAN 8): bit 2 it
+    if boxes:                           # carries the next box, bit 3 it
+        i = next(j for j, x in enumerate(boxes) if x is b)  # (stands on
+                                        # the one before)
+        if i + 1 < len(boxes) and boxes[i + 1].on is b:
+            k |= 0x04
+        if b.on is not None:
+            k |= 0x08
+    return k
+
+
+WA_MSTK = 3                     # boxes a stack may have (wa_lowbox's saves)
+
+
+def stacks(tag, boxes):
+    """A stack's rules (HEDGES-PLAN 8), refused where broken; -> the ROOTS'
+    indices, the boxes the tree holds (a stack is its bottom's leaf)"""
+    for i, b in enumerate(boxes):
+        if b.on is None:
+            continue
+        a = b.on
+        if i == 0 or boxes[i - 1] is not a:
+            raise SystemExit("arenagen: arena %s: %s stands on %s, which is "
+                             "not just before it" % (tag, b.name, a.name))
+        top = hmax(boxes)
+        if b.kind != SOLID or a.kind != SOLID or b.h >= top or b.h <= a.h:
+            raise SystemExit("arenagen: arena %s: %s on %s - a stack is low "
+                             "solids, each taller than the one under it"
+                             % (tag, b.name, a.name))
+        if not (a[0] < b[0] and b[2] < a[2] and a[1] < b[1] and b[3] < a[3]):
+            raise SystemExit("arenagen: arena %s: %s is not strictly inside "
+                             "%s, which it stands on" % (tag, b.name, a.name))
+        n, c = 1, b
+        while c.on is not None:
+            n, c = n + 1, c.on
+        if n > WA_MSTK:
+            raise SystemExit("arenagen: arena %s: a stack of more than %d "
+                             "boxes (%s)" % (tag, WA_MSTK, b.name))
+    return [i for i, b in enumerate(boxes) if b.on is None]
+
+
+def stack_root(boxes, i):
+    """box i's stack's bottom"""
+    b = boxes[i]
+    while b.on is not None:
+        b = b.on
+    return next(j for j, x in enumerate(boxes) if x is b)
 
 
 def height_checks(tag, boxes):
@@ -1582,6 +1768,23 @@ def height_checks(tag, boxes):
                 nax, nv, nlo, nhi = face_line(n, opp)
                 if n is not b and nax == ax and nv == v and nhi > lo and nlo < hi:
                     yield f, n
+    def across(b):
+        """the boxes facing b over a gap: (box, gap) - parallel faces, their
+        stretches overlapping"""
+        x0, y0, x1, y1 = b
+        for n in boxes:
+            if n is b:
+                continue
+            if n[0] < x1 and x0 < n[2]:
+                if n[1] >= y1:
+                    yield n, n[1] - y1
+                elif n[3] <= y0:
+                    yield n, y0 - n[3]
+            if n[1] < y1 and y0 < n[3]:
+                if n[0] >= x1:
+                    yield n, n[0] - x1
+                elif n[2] <= x0:
+                    yield n, x0 - n[2]
     reach = set()
     for b in boxes:
         if b.kind == LINE:
@@ -1628,6 +1831,15 @@ def height_checks(tag, boxes):
                      0 <= b.h - n.h <= apex - 8 for f, n in neighbours(b)):
                 reach.add(id(b))
                 grow = True
+            elif b.on is not None and (id(b.on) in reach or
+                                       b.on.h <= apex - 8) and \
+                    b.h - b.on.h <= apex - 8:
+                reach.add(id(b))        # (a stack's: a jump off the box it
+                grow = True             # stands on, HEDGES-PLAN 8)
+            elif any(id(n) in reach and n.kind == SOLID and n.h == b.h and
+                     0 < gap <= jump_gap() for n, gap in across(b)):
+                reach.add(id(b))        # (across a gap a run-up jumps:
+                grow = True             # the hedges' outer wall, HEDGES-PLAN)
     for b in boxes:
         if b.kind == SOLID and STEPUP < b.h < top and id(b) not in reach \
                 and b.h > apex - 8:
@@ -1648,7 +1860,7 @@ def arena_tables(w, tag, boxes, start):
     height_checks(tag, boxes)
     graph_edges(tag, boxes)             # (the routes' checks: AI-PLAN 3.1)
     nodes = []
-    box_tree(list(range(len(boxes))), nodes, boxes)
+    box_tree(stacks(tag, boxes), nodes, boxes)
     pts = []
     for (a, b, c, d) in [ROOM] + boxes:
         pts += [(a, b), (c, b), (c, d), (a, d)]
@@ -1669,9 +1881,12 @@ def arena_tables(w, tag, boxes, start):
         if p not in vix:
             vix[p] = len(verts)
             verts.append(p)
-    if len(verts) * 2 > 255 or len(boxes) * 8 > 255 or len(xs) * 4 > 255 \
-            or len(ys) * 4 > 255:
-        raise SystemExit("arenagen: the arena outgrew a byte index")
+    if len(verts) * 2 > 255 or len(boxes) * 4 > 255 or len(xs) * 4 > 255 \
+            or len(ys) * 4 > 255:             # (a leaf holds its box x 4:
+        raise SystemExit("arenagen: arena %s outgrew a byte index: %d "
+                         "vertices (127), %d boxes (63), %d x and %d y "
+                         "values (63)" % (tag, len(verts), len(boxes),
+                                          len(xs), len(ys)))
     # wa_products makes a coordinate's products from the one before it, by
     # adding the products of the STEP between them, made once a frame: so
     # the distinct steps an arena has are few, and each fits x 4 in 16 bits
@@ -1696,7 +1911,7 @@ def arena_tables(w, tag, boxes, start):
     for (a, b, c, d) in [ROOM] + boxes:
         w("    db " + ", ".join(str(vix[p] * 2) for p in
                                 [(a, b), (c, b), (c, d), (a, d)]))
-    w(P + "bsp:                         ; kind (0 x, 1 y, 2 leaf), box x 8 (a")
+    w(P + "bsp:                         ; kind (0 x, 1 y, 2 leaf), box x 4 (a")
     w("                                ; leaf's, into wa_boxes), value, low,")
     w("                                ; high (0 = none) - ADDRESSES in the image")
     w("                                ; this is assembled into: walked in place")
@@ -1708,7 +1923,7 @@ def arena_tables(w, tag, boxes, start):
     for (kind, box, v, lo, hi, ids) in nodes:
         bb = (min(boxes[i][0] for i in ids), min(boxes[i][1] for i in ids),
               max(boxes[i][2] for i in ids), max(boxes[i][3] for i in ids))
-        w("    db %d, %d" % (kind, box * 8))
+        w("    db %d, %d" % (kind, box * 4))
         w("    dw %d, %s, %s" % (v, P + "bsp+%d" % (lo * 12) if lo >= 0 else "0",
                               P + "bsp+%d" % (hi * 12) if hi >= 0 else "0"))
         w("    db %d, %d, %d, %d" % (xs.index(bb[0]) * 4, ys.index(bb[1]) * 4,
@@ -1819,6 +2034,7 @@ def main(out):
     w("WA_GPHSZ equ %d" % ((max(len(graph_block(t, bs)) for t, _, bs, _
                                 in arenas()) + 1) & ~1))
     w("WA_MGN equ %d" % WA_MGN)
+    w("%%assign WA_MSTK %d" % WA_MSTK)    # (a stack's boxes: wl_child's saves)
     # poses
     first = 0
     for name, n, _, _ in ANIMS:

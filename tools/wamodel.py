@@ -78,7 +78,7 @@ class Arena:
         self.flines = A.flines(tag)
         self.hmax = A.hmax(self.boxes)
         self.nodes = []
-        A.box_tree(list(range(len(self.boxes))), self.nodes, self.boxes)
+        A.box_tree(A.stacks(tag, self.boxes), self.nodes, self.boxes)
         self.flat = all(h >= self.hmax for h in self.hts)
         self.pvs = A.pvs_masks(tag, boxes)    # (HEIGHTS-PLAN 9.8: wa_order's)
 
@@ -93,6 +93,11 @@ class Arena:
             if k == 2:
                 if m >> box & 1:
                     out.append(box)
+                    j = box + 1         # (a stack: its boxes after its
+                    while j < len(self.boxes) and \
+                            self.boxes[j].on is self.boxes[j - 1]:
+                        out.append(j)   # bottom - each counted as a low box
+                        j += 1          # from the floor, which over-counts)
                 return
             p = px if k == 0 else py
             a, b = (lo, hi) if p < v else (hi, lo)

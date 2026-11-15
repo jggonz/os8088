@@ -456,8 +456,14 @@ wa_render:
     xor ax, ax
     mov cx, [wa_w]
     rep stosw
-    mov [wl_ffr], al            ; (the outline path's floor pair: anew)
-    inc ax
+    call wa_hnum                ; (the outline path's floor pair, once a
+    mov [wl_fn], ax             ; frame - and no box height's pair made
+    mov [wl_fs], bl             ; yet: wa_lowbox's)
+    mov [wl_gfn], ax
+    mov [wl_gfs], bl
+    mov word [wl_hh], -1
+    mov byte [wl_lvl], 0
+    mov ax, 1
 .gen:
     mov [wa_gen], al
     mov ax, 128                 ; (eye at most 128 and hh 61: 128 x 127 +
@@ -625,9 +631,9 @@ wa_render:
     add bx, [wa_kl]
     mov bl, [bx]                ; the corner's vertex...
     xor bh, bh
-    mov bx, [wa_vtx+bx]         ; ...its x and y indices (x 4)
-    mov al, bl
-    cbw
+    mov bx, [wa_vtx+bx]         ; ...its x and y indices (x 4: to 252,
+    mov al, bl                  ; unsigned - 63 x values, HEDGES-PLAN 2)
+    mov ah, 0
     mov di, ax
     mov bl, bh
     xor bh, bh
@@ -644,7 +650,7 @@ wa_render:
     xor bh, bh
     mov bx, [wa_vtx+bx]
     mov al, bl
-    cbw
+    mov ah, 0
     mov di, ax
     mov bl, bh
     xor bh, bh
@@ -807,8 +813,45 @@ wa_render:
     mov al, [wa_frame]
     mov bl, [si-3]
     mov [wa_vst+bx], al
+    mov dx, [wa_vpc+bx]         ; DX = a's column x 16
     mov bl, [si-1]
     mov [wa_vst+bx], al
+    mov ax, [wa_vpc+bx]         ; AX = c's
+    ; THE SHUT TEST (HEDGES-PLAN 7.1): a column is a direction, the same at
+    ; every height, so every cell of the box - posts, edges, its top's far
+    ; side - lies in the columns from a's to c's. Shut, all of them, by
+    ; nearer tall faces, it can draw nothing and raise nothing: its corners,
+    ; heights and passes are not made at all. (A vertex behind the eye has
+    ; no column - 0x8000: the box is drawn as it comes.)
+    cmp dx, 0x8000
+    je .lscan0
+    cmp ax, 0x8000
+    je .lscan0
+    mov cl, 4
+    add dx, 7                   ; its first column, less one (a post at its
+    sar dx, cl                  ; start corner stands in the column past it)
+    dec dx
+    jns .ls0
+    xor dx, dx
+.ls0:
+    add ax, 7                   ; ...its last
+    sar ax, cl
+    cmp ax, [wa_w]
+    jl .ls1c
+    mov ax, [wa_w]
+    dec ax
+.ls1c:
+    sub ax, dx
+    jl .lscan0
+    inc ax
+    mov cx, ax                  ; CX = the columns
+    mov di, dx
+    shl di, 1
+    add di, wa_cov
+    xor ax, ax
+    repne scasw                 ; an open one?
+    jne .lshut
+.lscan0:
     mov bl, [si-4]
 .llowb:                         ; BX = the box x 4
     mov di, bx                  ; DI = its record in wa_bxh
@@ -823,6 +866,7 @@ wa_render:
     mov al, [wa_at+bx]
     mov [wa_wcol], al
     call wa_lowbox
+.lshut:
     jmp .leaves
 .walked:
     cmp word [wa_left], 0       ; the room, last: it encloses everything
@@ -1179,15 +1223,14 @@ wa_order:
     cmp al, 2
     jne .split
     cmp byte [wa_pvsh], 0       ; a leaf: onto the list - with a PVS, if
-    je .take                    ; its box is in the cell's (box x 8: its
-    mov al, [bx+1]              ; byte x 64, its bit x 8)
-    mov cl, 6
+    je .take                    ; its box is in the cell's (box x 4, so up
+    mov al, [bx+1]              ; to 63 boxes: its byte x 32, its bit x 4)
+    mov cl, 5
     shr al, cl
     cbw
     mov si, ax
     add si, [wa_pvp]
     mov cl, [bx+1]
-    shr cl, 1
     shr cl, 1
     shr cl, 1
     and cl, 7
@@ -1196,9 +1239,8 @@ wa_order:
     test [si], al
     jz .out
 .take:
-    mov al, [bx+1]              ; the box x 8
-    shr al, 1
-    stosb                       ; (its record's: x 4)
+    mov al, [bx+1]              ; the box x 4: its record's
+    stosb
     add di, 3                   ; (its silhouette: wa_stale, wa_sil)
 .out:
     ret

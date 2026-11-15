@@ -327,7 +327,7 @@ its floor lines are its edge.
 
 | limit | where | why it stands |
 |---|---|---|
-| 31 boxes | the box index x 8 is a byte | the maze uses 29 |
+| 63 boxes (31 until [HEDGES-PLAN](WIREARENA-HEDGES-PLAN.md) 2) | a tree leaf's box x 4 is a byte | the maze uses 29, hedge B 40 |
 | boxes separable by axis lines | `box_tree` | guillotine partitions meet it (section 2) |
 | 32 route nodes, 4 ways out each | `WA_MGN`, the node record | the maze uses 27 |
 | 8 respawns, 8 pickups | their tables | 7 and 5 used |

@@ -21322,7 +21322,7 @@ $(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/w
 # (docs/plans/WIREARENA-HEIGHTS-PLAN.md 7.3); arenagen refuses an arena over
 # the visible budget, which tools/wamodel.py prices
 WAARENAS := $(BUILD)/waa0.bin $(BUILD)/waa1.bin $(BUILD)/waa2.bin \
-            $(BUILD)/waa3.bin $(BUILD)/waa4.bin
+            $(BUILD)/waa3.bin $(BUILD)/waa4.bin $(BUILD)/waa5.bin
 $(BUILD)/waa%.asm: tools/arenagen.py tools/wamodel.py apps/wirearena/waconst.inc | $(BUILD)
 	python3 tools/arenagen.py --arena $* $@
 $(BUILD)/waa%.bin: $(BUILD)/waa%.asm | $(BUILD)
