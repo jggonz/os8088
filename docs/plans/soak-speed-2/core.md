@@ -75,7 +75,8 @@ techniques are cited as "SOAK-SPEED n".
    already set it). A request is one write, so this is insurance against a
    thread writing between a request and its reply.
 
-6. **`Marty.restore` polls 10 ms** for the restored machine (was 100):
+6. **The greeting `ping` sets `_pipeline`**, so a Marty's first `batch` is
+   not preceded by a second ping. **`Marty.restore` polls 10 ms** for the restored machine (was 100):
    every `Forks.restore()`.
 
 7. **OS88_WAITLOG's `between` lines and `os88marty.py waitlog FILE`.** Each

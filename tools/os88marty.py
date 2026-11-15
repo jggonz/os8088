@@ -351,6 +351,8 @@ class Marty:
             except OSError:
                 pass
         self.pid = r.get("pid")
+        # the greeting answers `batch`'s question too: one ping, not two
+        self._pipeline = bool(r.get("pipeline"))
         # does `advance` drain MARTYPC_WAV's sinks (debug_server.rs)? settle
         # spends its windows in `advance`, so under a capture it needs this
         self.advance_drains = bool(r.get("advance_drains"))
