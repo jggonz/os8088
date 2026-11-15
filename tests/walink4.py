@@ -76,6 +76,7 @@ def lobby_again(ms):
     for m in ms:
         if m.v('wa_lkon'):
             m.key('esc')
+            m.key('y')                 # (a linked match asks: Y leaves, NET-PLAN 9.11)
     for m in ms:
         m.wait_for(lambda m=m: m.v('wa_lkon') == 0, 'back in the window',
                    secs=6)
@@ -295,6 +296,7 @@ def run(ms, cable):
 
     # ONE LEAVES THE MATCH: slot 2's Esc
     by[2].key('esc')
+    by[2].key('y')                 # (a linked match asks: Y leaves, NET-PLAN 9.11)
     for s in (0, 1):
         m = by[s]
         m.wait_for(lambda m=m: {p['slot']: p['gone'] for p in peers(m)} ==
@@ -305,6 +307,7 @@ def run(ms, cable):
     # HOST LEFT: then the host's Esc - slot 1 marks slot 0 gone, which is
     # what its line says HOST LEFT on (and its bot is off the board)
     by[0].key('esc')
+    by[0].key('y')                 # (a linked match asks: Y leaves, NET-PLAN 9.11)
     m = by[1]
     m.wait_for(lambda: {p['slot']: p['gone'] for p in peers(m)} ==
                {0: 1, 2: 1}, 'HOST LEFT: slot 1 marks the host gone', secs=6)

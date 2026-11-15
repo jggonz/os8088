@@ -451,7 +451,7 @@ def run(a, b, cable):
           % a.fig(0)['ang'])
 
     # A KILL: A's pistol, three shots, B at 100 health
-    b.put([('hp', 100, 2), ('sh', 0, 2)])
+    b.put([('hp', 100, 2), ('sh', 0, 2), ('pprot', 0, 1)])  # (no spawn protection)
     Q.pace(a, .3)
     for _ in range(5):
         a.fire()
@@ -473,7 +473,7 @@ def run(a, b, cable):
     # figure 0, whose kill it is
     b.wait_for(lambda: b.v('wa_pdead') == 0, 'B respawns', secs=6)
     b.at(1100, 300, 512)
-    b.put([('hp', 50, 2), ('sh', 0, 2)])
+    b.put([('hp', 50, 2), ('sh', 0, 2), ('pprot', 0, 1)])  # (no spawn protection)
     a.at(1000, 300, 0)
     a.wait_for(lambda: near(a, 1100, 300), 'A ROCKET: B where A sees it')
     k0 = b.v('wa_kills', 2) >> 8
@@ -551,6 +551,7 @@ def run(a, b, cable):
 
     # ESC: B leaves; A says so
     b.key('esc')
+    b.key('y')                 # (a linked match asks: Y leaves, NET-PLAN 9.11)
     b.wait_for(lambda: b.v('wa_lkon') == 0, 'ESC: B back in its window',
                secs=5)
     a.wait_for(lambda: a.v('wa_lkgone') == 1, 'ESC: A says OPPONENT LEFT',
@@ -558,6 +559,7 @@ def run(a, b, cable):
 
     # L2: THE HOST'S BOTS - A back in its window too, two bots, again
     a.key('esc')
+    a.key('y')                 # (a linked match asks: Y leaves, NET-PLAN 9.11)
     a.wait_for(lambda: a.v('wa_lkon') == 0, 'L2: A back in its window too',
                secs=5)
     host.put([('lkbots', 2, 1)])
