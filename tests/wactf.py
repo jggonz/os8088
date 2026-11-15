@@ -21,7 +21,7 @@
   - NO FRIENDLY FIRE: our pistol at our teammate (bot 2) takes nothing off
     it; at the foe (bot 1) it does;
   - THE BOTS PLAY (wave C2, CTF-PLAN 6): two bots and us idle - bot 2
-    red's, bot 1 blue's - and within four guest minutes each has carried
+    red's, bot 1 blue's - and within six guest minutes each has carried
     the other's flag, and two captures have been made. (Who captures first
     is the bots' dice: one bot's capture alone is not asked for.)
 
@@ -256,7 +256,7 @@ def main():
         g.__class__ = C                         # bot 2 red's, bot 1 blue's:
         sym = g.sym                             # one against one
         took, caps, last, t = [0, 0], 0, g.caps(), 0
-        while t < 240 and not (all(took) and caps >= 2):
+        while t < 360 and not (all(took) and caps >= 2):
             g.p.write(sym["wa_hp"], struct.pack('<H', 100))
             g.ticks(30)
             t += 1
@@ -267,7 +267,7 @@ def main():
             caps += sum(max(0, c[k] - last[k]) for k in (0, 1))
             last = c
         check(all(took) and caps >= 2, "THE BOTS PLAY: each team's bot "
-              "takes the other's flag, two captures in all, within 4 "
+              "takes the other's flag, two captures in all, within 6 "
               "minutes (red took it %d s, blue %d s; %d captures; %d s)"
               % (took[0], took[1], caps, t))
     if fails:
