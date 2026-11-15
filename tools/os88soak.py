@@ -1293,14 +1293,41 @@ def build_slot(slot, targets, num):
     for k in ("OS88_TREE", "OS88_BUILD", "OS88_DEFINES", "OS88_SRC",
               "OS88_PREBUILT", "MAKEFLAGS", "MAKELEVEL", "MFLAGS"):
         env.pop(k, None)
-    cmd = (["make"] + os88build.NO_GATES
-           + os88build._goals("build", targets))
-    r = subprocess.run(cmd, cwd=slot, env=env, capture_output=True,
-                       text=True)
-    if r.returncode:
-        raise RuntimeError("`%s` failed in %s:\n%s"
-                           % (" ".join(cmd), slot,
-                              os88build._why(r.stdout, r.stderr)))
+    # A DECLARED INPUT NO RULE MAKES (a ROM or archive the box has not
+    # fetched - arcimport's `build/arcade-rom/gunfight.zip`) is DROPPED, not
+    # fatal: the rows that want it find it missing in the tree and SKIP,
+    # which is what os88test's own prebuild does with it outside a freeze.
+    # One `make` for the union stops at the first such goal, so each one is
+    # named and dropped in turn; any other failure still fails the freeze.
+    targets = list(targets)
+    dropped = []
+    norule = re.compile(r"No rule to make target '([^']+)'"
+                        r"(?:, needed by '([^']+)')?")
+    while True:
+        cmd = (["make"] + os88build.NO_GATES
+               + os88build._goals("build", targets))
+        r = subprocess.run(cmd, cwd=slot, env=env, capture_output=True,
+                           text=True)
+        if not r.returncode:
+            break
+        m = norule.search(r.stderr or "")
+        hit = None
+        if m:
+            for name in (m.group(1), m.group(2)):
+                if name and name.startswith("build/") and \
+                        name[len("build/"):] in targets:
+                    hit = name[len("build/"):]
+                    break
+        if hit is None or len(dropped) >= 32:
+            raise RuntimeError("`%s` failed in %s:\n%s"
+                               % (" ".join(cmd), slot,
+                                  os88build._why(r.stdout, r.stderr)))
+        targets.remove(hit)
+        dropped.append(hit)
+    if dropped:
+        print("%sos88soak: %d declared artefact(s) have no rule here and were "
+              "left out - the rows wanting them will SKIP: %s%s"
+              % (YELLOW, len(dropped), " ".join(dropped), OFF))
     os88build._carry_inputs(D)
 
 
