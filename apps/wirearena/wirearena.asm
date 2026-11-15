@@ -658,6 +658,9 @@ wa_frame_input:
     cmp byte [wa_paused], 0     ; (paused: the hand's motion drained, and
     jne .held                   ; nothing looks or fires)
     mov bl, al                  ; the buttons
+    mov ax, cx                  ; (the hand still, the usual frame: no
+    or ax, dx                   ; factor, no product - a multiply and a
+    jz .clamp                   ; shift of 0 by 0)
     push cx
     mov al, [wa_msens]          ; the sensitivity's level (-4..4, 0 the
     cbw                         ; first one's): its factors
