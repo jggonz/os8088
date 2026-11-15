@@ -238,15 +238,18 @@ wc_pos:
     mov dx, [wa_feet]
     stc
     ret
-.fig:
-    push di
-    dec ax
-    mov ah, F_SIZE
-    mul ah
-    add ax, wa_figs
-    mov di, ax
-    call wa_lkabsent            ; (ZF: not in this match)
-    je .nof
+.fig:                           ; (the flags and the hill ask it of each
+    push di                     ; of us every tick: no product, and alone
+    dec ax                      ; wa_lkabsent's test made of the index it
+    xor ah, ah                  ; was asked by - not again of the record)
+    mov bx, ax
+    shl bx, 1
+    mov di, [wc_figp+bx]        ; DI = its record
+    cmp byte [wa_lkon], 0
+    jne .lk
+    cmp al, [wa_lknb]           ; ALONE: the setup's count of bots
+    jae .nof
+.in:
     cmp byte [di+F_DEAD], 0
     jne .nof
     mov ax, [di+F_X]
@@ -255,28 +258,41 @@ wc_pos:
     pop di
     stc
     ret
+.lk:
+    call wa_lkabsent            ; (ZF: not in this match)
+    jne .in
 .nof:
     pop di
 .no:
     clc
     ret
+%if WA_NFIG != 3
+ %error "wc_figp names three figures"
+%endif
+wc_figp:    dw wa_figs, wa_figs + F_SIZE, wa_figs + 2*F_SIZE
 
 ; wc_near - AX, BX = a place, DX its floor, SI = a flag: CF = 1 within its
 ; reach (WA_FLR across, WC_DZ up or down). Keeps every register
-wc_near:
-    push ax
+wc_near:                        ; (the distances' signs off the subtracts
+    push ax                     ; themselves: wa_abs's test, not its call)
     sub ax, [si+WC_X]
-    call wa_abs
+    jns .x
+    neg ax
+.x:
     cmp ax, WA_FLR
     jae .no
     mov ax, bx
     sub ax, [si+WC_Y]
-    call wa_abs
+    jns .y
+    neg ax
+.y:
     cmp ax, WA_FLR
     jae .no
     mov ax, dx
     sub ax, [si+WC_Z]
-    call wa_abs
+    jns .z
+    neg ax
+.z:
     cmp ax, WC_DZ
     jae .no
     pop ax
