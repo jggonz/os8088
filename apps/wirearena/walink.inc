@@ -378,6 +378,7 @@ wa_lknewid:
 ; wa_lkclose - the window closes: the port let go. CF = 0 (it may close)
 wa_lkclose:
     push si
+    call wa_rdone               ; (the rotation's window with ours)
     call rw_close
     call ud_close
     call lk_disconnect

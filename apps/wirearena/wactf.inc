@@ -746,12 +746,16 @@ wc_hgoal:
 ; bots keep their names. An arena that cannot be had ends the match (its
 ; toast says why, once the desktop is back)
 wc_next:
-    mov cl, [wa_gmode]
+    mov bl, [wa_gmode]
+    xor bh, bh
+    mov dh, [wa_srot+bx]        ; DH = the mode's rotation (the setup's)
+    mov cl, bl
     mov dl, 1
     shl dl, cl                  ; DL = the mode's bit
     mov al, [wa_arena]          ; BL = this one's item (wa_sarmap is its
     call wa_sarmap              ; own inverse)
     mov bl, al
+    mov ch, WA_NARENA           ; (round once at most: this one again)
 .n:
     inc bx
     cmp bl, WA_NARENA
@@ -763,7 +767,17 @@ wc_next:
     mov si, ax
     and si, 0x00FF
     test [wa_amodes+si], dl
-    jz .n                       ; (this one plays it: the loop ends)
+    jz .k
+    mov cl, al
+    mov ah, 1
+    shl ah, cl
+    test dh, ah
+    jnz .got                    ; (in the mode and its rotation)
+.k:
+    dec ch
+    jnz .n
+    mov al, [wa_arena]
+.got:
     mov [wa_lkarena], al        ; (the setup, after: where the match was)
     cmp al, [wa_arena]
     je .same

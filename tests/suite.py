@@ -8696,7 +8696,11 @@ SOAK = [
         "kills anew and the bots' names kept, our fifth there shows YOU WIN "
         "and the next is the heights; team deathmatch at Win at 10 - the "
         "teams' tops are their players' kills (9 no win), the tenth shows "
-        "RED WINS and after 10 s the Twin, us on red's side; king of the "
+        "RED WINS and after 10 s - the Twin taken out of team "
+        "deathmatch's rotation first (wave M3: R opens its window, the "
+        "hedge and the Twin both checked, the Twin unchecked, the hedge, "
+        "the last, refused unchecking, Esc closes it) - the hedge again, "
+        "the scores anew, us on red's side; king of the "
         "hill (wave M2) - its list the heights, the hedge and the Twin, on "
         "the hedge its hill at the stack's foot, nobody's; we run over it, "
         "red's (WE HAVE THE HILL); both teams on it, it stays; the foe alone, "
@@ -8705,7 +8709,8 @@ SOAK = [
         "on its platform); then two bots, one a team, each take the hill "
         "within two guest minutes (29 to 50 s measured). Red with "
         "wa_sarlist's mode test inverted (3 checks), wc_score's team test "
-        "inverted (2), wc_next keeping the arena (the next never comes) and "
+        "inverted (2), wc_next keeping the arena (the next never comes), "
+        "wc_next ignoring the rotation (the Twin next, not the hedge) and "
         "wc_hgoal returning at once (blue never takes the hill in two "
         "minutes).",
         needs=("marty", "nasm"),
