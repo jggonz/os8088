@@ -1,7 +1,8 @@
 # WireArena: capture the flag, teams and side spawns
 
-**STATUS: C1 BUILT** (2026-11-15): the rules on one machine (section 11).
-C2 (the bots), C3 (linked) and C4 (team deathmatch) are next. Written to
+**STATUS: C1 AND C2 BUILT** (2026-11-15): the rules on one machine and the
+bots that play for the flag (section 11). C3 (linked) and C4 (team
+deathmatch) are next. Written to
 the owner's brief below, before any code. Section 9 lists the defaults this plan chose where the brief left
 a choice; each is one constant or one line of data to change.
 
@@ -194,7 +195,7 @@ soak rows and `test-full` run once after the last (CLAUDE.md).
   *Checked by:* a new soak row `wactf`, off the game's variables: a take,
   a drop on death, a return by touch and by time, a capture only with your
   own flag home, the win at 3, side spawns, no damage between teammates.
-- [ ] **C2 The bots play for the flag** (section 6).
+- [x] **C2 The bots play for the flag** (section 6).
   *Outcome:* bots take your flag, carry it home and score; they return
   their own.
   *Checked by:* `wactf`: in N minutes of bots only, a capture by each
@@ -256,3 +257,26 @@ check stayed green with the home test dropped - it had dropped our flag
 far from the base, where no capture could have happened anyway - and now
 stages the case that bites: our flag carried by a foe standing at our
 base.
+
+### 11.2 C2: the bots play for the flag (2026-11-15)
+
+`wc_bgoal`, called where a bot ends a leg (`wa_bnext`), sets its FETCH
+goal as section 6 orders it: carrying their flag, its own base's node;
+its own flag dropped, the node nearest where it lies (`wa_bcell`); their
+flag at home, their base's node, or dropped, the node nearest it; carried
+by a teammate, nothing (it roams and fights). A bot that fights (engaged,
+hunting) and carries nothing fights on; a carrier heads home whatever it
+was doing. Its base node is within a flag's reach (arenagen's rule), so a
+bot that gets there touches the flag; FETCH's arrival turns it back to
+roaming, and the next leg's end picks the next goal.
+
+**Measured** (MartyPC, the Twin, three bots and us idle): blue's two bots
+captured three times and won at 131 guest seconds; after the round's
+restart red's one bot captured at 199 s. One against one (two bots), two
+captures came at 79 to 132 s over four runs, and once none by blue in
+240 s: the bots' dice decide who scores first.
+
+**The row** asks what does not depend on those dice: each bot carries the
+other's flag, and two captures are made in all, within four guest
+minutes. With `wc_bgoal` returning at once the bots roam the graph at
+random, and one capture came in four minutes: red. `wactf` is now 28 s.

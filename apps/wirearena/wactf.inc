@@ -488,6 +488,82 @@ wc_rspick:
     pop di
     ret
 
+; wc_bgoal - DI = a bot at the end of a leg, at node BL (wa_bnext), in CTF:
+; its goal (CTF-PLAN 6), FETCHed as a pickup is - carrying their flag, its
+; own base; its own flag dropped, the node nearest it; theirs at home or
+; dropped and no teammate carrying it, there. A bot that fights (engaged,
+; hunting) and carries nothing fights on. Keeps all but AX
+wc_bgoal:
+    cmp byte [wa_gmode], 1
+    jne .out0
+    push bx
+    push cx
+    push dx
+    push si
+    mov dh, bl                  ; DH = the node it is at
+    call wa_bidx
+    inc ax
+    mov cl, al                  ; CL = it, a local index
+    mov bl, al
+    xor bh, bh
+    mov ch, [wa_tm+bx]          ; CH = its team
+    mov si, wa_cfl              ; SI = THEIR flag
+    or ch, ch
+    jnz .th
+    add si, WC_SZ
+.th:
+    cmp byte [si+WC_ST], WC_CAR ; 1. carrying theirs: home
+    jne .nc
+    cmp [si+WC_CARR], cl
+    jne .nc
+    mov bl, ch
+    jmp .base
+.nc:
+    cmp byte [di+F_BST], WA_BENG ; (fighting, carrying nothing: on)
+    je .done
+    cmp byte [di+F_BST], WA_BHUNT
+    je .done
+    push si                     ; 2. its own flag dropped: to it
+    mov si, wa_cfl
+    or ch, ch
+    jz .ow
+    add si, WC_SZ
+.ow:
+    cmp byte [si+WC_ST], WC_DROP
+    pop ax
+    je .lies
+    mov si, ax
+    mov al, [si+WC_ST]          ; 3. theirs: at home, to their base; lying
+    cmp al, WC_DROP             ; dropped, to it; carried (by a teammate):
+    je .lies                    ; as it was
+    cmp al, WC_HOME
+    jne .done
+    mov bl, ch
+    xor bl, 1
+.base:                          ; BL = a team: its base's node
+    mov al, 6
+    mul bl
+    mov bx, ax
+    add bx, [wa_gflp]
+    mov al, [bx+6]
+    jmp .goal
+.lies:                          ; SI = a flag lying dropped: the node
+    mov ax, [si+WC_X]           ; nearest it
+    mov bx, [si+WC_Y]
+    call wa_bcell
+.goal:
+    cmp al, dh
+    je .done                    ; (there: wa_bnext's roam takes it on)
+    mov [di+F_BGOAL], al
+    mov byte [di+F_BST], WA_BFETCH
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.out0:
+    ret
+
 ; wa_ovctf - the overlay's CTF (wa_ovbuild; ES, DI its cursor): the flag
 ; line at the top - each team's name, its captures and where its flag is
 ; (# at home, ! carried, _ dropped) - and a message under the middle

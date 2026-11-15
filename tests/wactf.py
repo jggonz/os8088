@@ -17,11 +17,16 @@
   - THE WIN: at 2 captures, a third shows RED WINS, and the round starts
     again - nobody's captures, both flags home;
   - NO FRIENDLY FIRE: our pistol at our teammate (bot 2) takes nothing off
-    it; at the foe (bot 1) it does.
+    it; at the foe (bot 1) it does;
+  - THE BOTS PLAY (wave C2, CTF-PLAN 6): two bots and us idle - bot 2
+    red's, bot 1 blue's - and within four guest minutes each has carried
+    the other's flag, and two captures have been made. (Who captures first
+    is the bots' dice: one bot's capture alone is not asked for.)
 
 Red with: the touch's team test inverted (we take our own flag, a capture
 never comes), the capture's home test dropped (a capture with our own flag
-away), wa_hurt's teammate guard taken out (bot 2 hurt).
+away), wa_hurt's teammate guard taken out (bot 2 hurt), wc_bgoal
+returning at once (the bots roam: no capture in four minutes).
 """
 import os
 import struct
@@ -212,6 +217,25 @@ def main():
               "nothing", mate)
         check(foe[3] == 1 and (foe[1] < foe[0] or foe[2] != 0),
               "...and the same shot at the foe (bot 1) hurts it", foe)
+    with boot() as ui:                          # C2: THE BOTS PLAY FOR IT
+        g = match(ui, 4, 2)                     # (CTF-PLAN 6) - us idle,
+        g.__class__ = C                         # bot 2 red's, bot 1 blue's:
+        sym = g.sym                             # one against one
+        took, caps, last, t = [0, 0], 0, g.caps(), 0
+        while t < 240 and not (all(took) and caps >= 2):
+            g.p.write(sym["wa_hp"], struct.pack('<H', 100))
+            g.ticks(30)
+            t += 1
+            for k in (0, 1):                    # (flag k carried: the other
+                if g.flag(k, WC_ST) == CAR and g.flag(k, WC_CARR) != 0:
+                    took[1 - k] += 1            # team's bot has it)
+            c = g.caps()
+            caps += sum(max(0, c[k] - last[k]) for k in (0, 1))
+            last = c
+        check(all(took) and caps >= 2, "THE BOTS PLAY: each team's bot "
+              "takes the other's flag, two captures in all, within 4 "
+              "minutes (red took it %d s, blue %d s; %d captures; %d s)"
+              % (took[0], took[1], caps, t))
     if fails:
         print("wactf: FAIL - %d of the checks:" % len(fails))
         for f in fails:

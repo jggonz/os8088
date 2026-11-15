@@ -2795,6 +2795,7 @@ wa_bnext:
     jne .goal                   ; weapon with the pistol alone
     call wa_bfetch
 .goal:
+    call wc_bgoal               ; (CTF: the flags first - CTF-PLAN 6)
     cmp byte [di+F_BST], WA_BHUNT ; HUNTING or FETCHING (AI-PLAN 3.2): the
     jb .roam                    ; next hop toward the goal - there, it
     mov al, [di+F_BGOAL]        ; roams again

@@ -8662,9 +8662,10 @@ SOAK = [
         "checks).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
-    Row("wactf", "soak", py("tests/wactf.py"), 10.0,
+    Row("wactf", "soak", py("tests/wactf.py"), 40.0,
         "WIREARENA'S CAPTURE THE FLAG, ONE MACHINE "
-        "(docs/plans/WIREARENA-CTF-PLAN.md 2, wave C1), on the twin off "
+        "(docs/plans/WIREARENA-CTF-PLAN.md 2, 6, waves C1 and C2), on the "
+        "twin off "
         "the game's own variables: the setup's Mode makes a CTF match, the "
         "teams are the slots' parity, both flags start at their bases, we "
         "spawn on red's side at the start and after three deaths; standing "
@@ -8673,9 +8674,13 @@ SOAK = [
         "scores, dying drops the flag where we fell and its time sends it "
         "home, the third capture shows RED WINS and the round starts again, "
         "and a pistol shot that fires at our teammate takes nothing while "
-        "the same shot hurts the foe. Red with the touch's team test "
-        "inverted (6 checks), the capture's home test dropped (4) and "
-        "wa_hurt's teammate guard out (1).",
+        "the same shot hurts the foe; then a bots' match, one against one, "
+        "in which each bot carries the other's flag and two captures are "
+        "made within four guest minutes (the guest time varies with the "
+        "bots' dice: 79 to 132 s measured). Red with the touch's team test "
+        "inverted (6 checks), the capture's home test dropped (4), "
+        "wa_hurt's teammate guard out (1) and wc_bgoal returning at once "
+        "(one capture in four minutes).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waflines", "soak", py("tests/waflines.py"), 11.0,
