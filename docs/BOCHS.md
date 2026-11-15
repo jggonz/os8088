@@ -205,7 +205,7 @@ does. A ROW's machine (`os88megabochs.launch`) runs at
 (slirp and the host behind it, the waveout mixer thread) keeping host time;
 `os88bochs.py boot` and a standalone row's own `Box` stay at 1.
 `$OS88_BOCHS_RATE` sets every one of them (1 is the old cap, the A/B), and
-os88test's lane divides `--bochs-per-core`'s default by it. Past real time
+os88test's lane divides `--bochs-per-core`'s default by its square root (2 a core at 4). Past real time
 the VGA timer is the guest's (`vga: realtime=0`), and a look at a RUNNING
 guest (`m.fbuf()`) runs it exactly 0.12 guest seconds on a time breakpoint
 and dumps the window STOPPED, where it slept `GLASS` host seconds

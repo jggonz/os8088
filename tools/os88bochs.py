@@ -173,7 +173,7 @@ IPS = "cpu: ips=%d\n" % IPS_N
 # moves: a Bochs row was the one emulator held BELOW real time on a box
 # that could run it faster (MartyPC runs its 8088 at ~3.4x). Under it the
 # VGA update timer is the GUEST's (`vga: realtime=0`), so the glass is
-# painted on guest time too, and os88test's lane weighs a Bochs row RATE
+# painted on guest time too, and os88test's lane weighs a Bochs row sqrt(RATE)
 # times what it did (`_default_bpc`). 1 is the cap at real time as it was.
 # Needs the preload: with OS88_BXCLOCK=0 the rate is 1.
 #
