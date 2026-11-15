@@ -1167,6 +1167,7 @@ class Box(object):
         plus 30 s names a machine that stopped running."""
         want = int(secs * self.ips)
         t0, end = self.ptime(), time.time() + 30 + 10 * secs
+        poll /= self.rate               # (a poll's overshoot, in GUEST time)
         while True:
             time.sleep(poll)
             if self.ptime() - t0 >= want:
