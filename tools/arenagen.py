@@ -2114,6 +2114,60 @@ def face_bits(i, boxes):
     return bits
 
 
+def buried_byte(i, boxes):
+    """A LOW box's outline inside its neighbours (the owner, 2026-11-15:
+    the Pit's ring corner "showing through as if the wall were
+    transparent"): bits 0-3 the faces S E N W whose FLOOR EDGE is buried,
+    bits 4-7 the corners c0..c3 whose POST is. wa_lowbox draws neither; a
+    face's top edge, and the posts and edges that can show, stay.
+      - A post - its corner, from the box's floor to its top - is buried
+        when every quadrant round the corner outside the box is solid at
+        least as high as the box (a box standing on the floor or on
+        another, a lift at its rest height - it only rises - but no ramp,
+        whose top runs down to the floor, and no line, which is drawn as
+        its outline) or is outside the room, where no eye is and through
+        which no ray from one passes. Lower in any one, and its top shows
+        over it: an outer corner, or a post above a lower neighbour, stays.
+      - A floor edge - a box standing on the floor's, along the whole face
+        - is buried when the face's outer side is covered along its whole
+        length by boxes standing on the floor (solids and lifts, any
+        height: the edge is at their foot, inside them)
+    Only plain solids: a ramp's corners and low face are its slope's, a
+    lift's faces move, a line has no faces."""
+    b = boxes[i]
+    if b.kind != SOLID or b.h >= hmax(boxes):
+        return 0
+
+    def solid(n):
+        return n.kind in (SOLID, LIFT)
+
+    def filled(x, y):
+        if not (ROOM[0] < x < ROOM[2] and ROOM[1] < y < ROOM[3]):
+            return True
+        return any(n is not b and solid(n) and n.h >= b.h and
+                   n[0] < x < n[2] and n[1] < y < n[3] for n in boxes)
+    out = 0
+    x0, y0, x1, y1 = b
+    for k, (x, y) in enumerate(((x0, y0), (x1, y0), (x1, y1), (x0, y1))):
+        sx, sy = (1 if x == x0 else -1), (1 if y == y0 else -1)  # (into b)
+        if all(filled(x + qx * 0.5, y + qy * 0.5)
+               for qx in (-1, 1) for qy in (-1, 1) if (qx, qy) != (sx, sy)):
+            out |= 16 << k
+    if b.on is None:
+        for k, f in enumerate(FACES):
+            ax, v, lo, hi = face_line(b, f)
+            opp = {"S": "N", "N": "S", "E": "W", "W": "E"}[f]
+            foot = []
+            for n in boxes:
+                nax, nv, nlo, nhi = face_line(n, opp)
+                if n is not b and n.on is None and solid(n) and \
+                        nax == ax and nv == v and nhi > lo and nlo < hi:
+                    foot.append((nlo, nhi))
+            if covered(lo, hi, foot):
+                out |= 1 << k
+    return out
+
+
 def tall_inner(tag, boxes):
     """A TALL box's faces byte is read by the renderer's wa_sil as well as
     the outline path's: a face whose bit is clear (bits 0-3) is left out of
@@ -2712,7 +2766,14 @@ def arena_part(n, out):
           "bytes (0: none - every pickup tested)" % (
               P + "pks" if pk else "0", P + "pkv" if pkv else "0"),
           "    dw %s                    ; its floor lines (ARENAS-PLAN 4.5)" % (
-              P + "fl")] + T
+              P + "fl"),
+          "    dw %s                    ; its boxes' buried outline (WR_ABI 17)"
+          % (P + "bur")] + T
+    bxs = [bx(b) for b in boxes]
+    L += [P + "bur:                     ; per box: faces' floor edges, "
+          "corners' posts inside the solid (buried_byte)",
+          "    db " + ", ".join(str(buried_byte(i, bxs))
+                                for i in range(len(bxs)))]
     if pk:
         L.append(P + "pks:                     ; count; x, y, z, kind, choices")
         L.append("    dw %d" % len(pk))

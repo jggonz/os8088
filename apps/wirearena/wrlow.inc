@@ -63,6 +63,7 @@ WL_REC      equ 16
 
 %macro WL_BSS 0
 WA_VAR wl_pvc, 2                ; the view's count last frame
+WA_VAR wl_bur, 1                ; the box's buried outline (wa_bbur)
 WA_VAR wl_vp, 2                 ; this frame's corner maker: wa_vert, wl_vert
 WA_VAR wl_h, 2                  ; its height (a flight's, its top tread's)
 WA_VAR wl_kind, 1               ; its kind byte (wa_bxh), a flight's alone
@@ -191,8 +192,9 @@ wl_bit:     db 1, 2, 4, 8, 1
 ; WLSEEN, WLFAR %1 = a face: wa_lowbox's two walks over the faces, one face
 ; each (r5), where [wl_pm] has its bit. WLSEEN: a seen face - its posts
 ; where it is drawn ([wl_front]: its start corner's, and its end's where
-; the next face round is not seen - wa_boxf's rule), then its pass, with the
-; floor edge where [wl_m] has its bit. The posts stand in the pass's own
+; the next face round is not seen - wa_boxf's rule; never one inside its
+; neighbours, [wl_bur]'s), then its pass, with the floor edge where [wl_m]
+; has its bit. The posts stand in the pass's own
 ; first and last columns, which no other seen face's pass reaches, so each
 ; is still drawn against the clip as it stood before the box. WLFAR: its
 ; top alone, the far side of the box's top.
@@ -201,9 +203,14 @@ wl_bit:     db 1, 2, 4, 8, 1
     jz %%n
     test byte [wl_front], 1 << %1
     jz %%p
+    test byte [wl_bur], 16 << %1    ; (a post inside its neighbours: none)
+    jnz %%e
     mov si, %1 * WL_REC         ; its start corner's
     call wl_post
+%%e:
     test byte [wl_seen], 1 << ((%1 + 1) & 3)
+    jnz %%p
+    test byte [wl_bur], 16 << ((%1 + 1) & 3)
     jnz %%p
     mov si, ((%1 + 1) & 3) * WL_REC
     call wl_poste               ; ...and its end's
@@ -244,7 +251,12 @@ wl_vert:
 ; [wa_crow] its corners, [wa_wcol] its colour (ES = DS, as all through the
 ; frame)
 wa_lowbox:
-    mov ax, [wa_bxh+di]
+    mov bx, di                  ; ITS OUTLINE INSIDE ITS NEIGHBOURS (the
+    shr bx, 1                   ; owner, 2026-11-15: the Pit's ring corner
+    shr bx, 1                   ; "showing through as if the wall were
+    mov al, [wa_bbur+bx]        ; transparent"): the floor edges (bits 0-3,
+    mov [wl_bur], al            ; a face's) and posts (4-7, a corner's) no
+    mov ax, [wa_bxh+di]         ; eye can see (arenagen's buried_byte)
     mov [wl_h], ax
     mov ax, [wa_bxh+di+2]
     mov dl, ah                  ; DL = its faces byte
@@ -365,9 +377,12 @@ wa_lowbox:
     and al, dl                  ; AL = the faces drawn with a floor edge
     and al, [wl_seen]
     and ah, [wl_seen]
-    mov [wl_m], al
     or ah, al
-    mov [wl_pm], ah             ; the seen faces given a pass
+    mov [wl_pm], ah             ; the seen faces given a pass...
+    mov dl, [wl_bur]
+    not dl
+    and al, dl
+    mov [wl_m], al              ; ...and their floor edges, but the buried
     WLSEEN 0
     WLSEEN 1
     WLSEEN 2

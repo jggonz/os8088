@@ -389,6 +389,10 @@ wa_loadarena:
     mov di, wa_pvs
     rep movsb
 .nopvs:
+    mov si, [bx+50]             ; ITS BOXES' BURIED OUTLINE (WR_ABI 17): a
+    mov cx, [bx+16]             ; byte a box, arenagen's buried_byte - the
+    mov di, wa_bbur             ; floor edges and posts inside the solid
+    rep movsb                   ; (wa_lowbox)
     mov si, [bx+18]             ; the tree: a leaf 2 bytes (db kind 2, box
     mov dx, wa_bsp              ; x 4), a split 8 (db kind, 0; dw value,
     sub dx, si                  ; low, high) - DX = what each link moves by
@@ -444,6 +448,7 @@ WA_VAR wa_yv,WA_MYV*2
 WA_VAR wa_vtx,WA_MVTX*2
 WA_VAR wa_corn,(WA_MBOX+1)*4
 WA_VAR wa_bcol,WA_MBOX+2
+WA_VAR wa_bbur,WA_MBOX           ; ...and its buried floor edges and posts
 WA_VAR wa_bsp,WA_MBSP            ; the tree, rebased (wa_loadarena)
 WA_VAR wa_pvsh,1                 ; the PVS: the grid's shift (0: none)...
 WA_VAR wa_pvsn,1                 ; ...its cells a column...
