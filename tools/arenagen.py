@@ -2054,6 +2054,45 @@ def face_bits(i, boxes):
     return bits
 
 
+def tall_inner(tag, boxes):
+    """A TALL box's faces byte is read by the renderer's wa_sil as well as
+    the outline path's: a face whose bit is clear (bits 0-3) is left out of
+    its silhouette - never drawn, kept or dropped by - because its tall
+    neighbours wholly cover it, so it is inside the solid and draws nothing
+    (the neighbour, on the player's side of the line they share, is walked
+    first). Refused where that is not so: a face covered by a ramp or a lift
+    (a slope or a moving top leaves part of it showing), or a tall box with
+    a covered face where an eye can rise to the tallest height - there it
+    may be drawn as an OUTLINE, whose shut test reads the silhouette's ends
+    as the whole box's (HEDGES-PLAN 7.1)"""
+    top = hmax(boxes)
+    inner = []
+    for i, b in enumerate(boxes):
+        if b.h < top:
+            continue
+        bits = face_bits(i, boxes)
+        for k, f in enumerate(FACES):
+            ax, v, lo, hi = face_line(b, f)
+            if bits >> k & 1 or v in ((ROOM[0], ROOM[2]) if ax == 0 else
+                                      (ROOM[1], ROOM[3])):
+                continue
+            inner.append(b.name or str(i))
+            opp = {"S": "N", "N": "S", "E": "W", "W": "E"}[f]
+            for n in boxes:
+                nax, nv, nlo, nhi = face_line(n, opp)
+                if n is not b and nax == ax and nv == v and nhi > lo and \
+                        nlo < hi and n.h >= top and n.kind != SOLID:
+                    raise SystemExit("arenagen: arena %s: %s's %s face is "
+                                     "covered by %s, not a solid - wa_sil "
+                                     "would leave it out" % (tag, b.name, f,
+                                                             n.name))
+    if inner and pvs_eyemax(boxes) >= top:
+        raise SystemExit("arenagen: arena %s: an eye can rise to the tallest "
+                         "height, and %s has a face its neighbours cover - "
+                         "wa_sil leaves it out of a box that may be drawn in "
+                         "outline" % (tag, inner[0]))
+
+
 def kind_byte(b, lifts, boxes=()):
     """bit 7: a LINE (the game's alone); bit 6: a TALL box a flight or a lift
     climbs onto - a floor to the player all the same (wa_lists' low tables);
@@ -2322,6 +2361,7 @@ def arena_tables(w, tag, boxes, start):
         if b.h % 4 or b.top % 4 or b.top > 252:     # bits, wa_lksnap)
             raise SystemExit("arenagen: arena %s: lift %s: its heights must "
                              "be multiples of 4, to 252" % (tag, b.name))
+    tall_inner(tag, boxes)
     w(P + "bxh:                         ; per box: height (a lift's at rest),")
     w("                                ; kind, faces (HEIGHTS-PLAN 7.2.1)")
     for i, b in enumerate(boxes):
