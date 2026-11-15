@@ -3816,8 +3816,8 @@ def ui_done(m, what="the UI to finish with that input", hold=0.06,
         # At least `hold` guest seconds AND one kernel tick: the tick is
         # ui_task's own periodic wake having come and gone, and the proof
         # that it is THIS kernel's bytes being read (see `_ui_mark`).
-        if (prog._cycles() - c0) / GUEST_HZ < hold:
-            prog.check()
+        prog.check()                    # (its status IS the clock read:
+        if (prog.last_c - c0) / GUEST_HZ < hold:    # one round trip, not 2)
             time.sleep(0.005)
             continue
         got = _ui_settled(m, idle, k0, r0)
