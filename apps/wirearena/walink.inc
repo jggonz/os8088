@@ -34,6 +34,11 @@ EV_ROLL     equ 3               ; (the host's) a pickup back: index, kind
 EV_FLAG     equ 4               ; (the host's) a CTF flag: its team, state,
                                 ; carrier's slot, both teams' captures, the
                                 ; win, x, y, z (CTF-PLAN 7: wactf.inc)
+EV_GAME     equ 5               ; (the host's) the teams' scores, the win (0,
+                                ; or 1 + the winner's slot or team), the
+                                ; hill's holder (MODES-PLAN 8: wactf.inc)
+EV_NEXT     equ 6               ; (the host's) the next arena: every machine
+                                ; on to it (MODES-PLAN 8)
 WL_PSNAP    equ 3               ; sim ticks a SNAP, no bots: 10 Hz
 WL_PSNAPB   equ 5               ; ...with bots: 6 Hz (LINK-PLAN 2, 11.2)
 WR_X        equ 0               ; a remote figure's record (wa_lkr, ten bytes
@@ -741,9 +746,14 @@ wa_lkhello1:
     stosb
     mov al, [wa_lkarena]
     stosb
-    mov al, [wa_lkgmode]        ; (the difficulty, and in its high nibble
-    mov cl, 4                   ; the mode - the host's, CTF-PLAN 7)
-    shl al, cl
+    mov bl, [wa_lkgmode]        ; (the difficulty, Win at's pick for the
+    xor bh, bh                  ; mode - bits 2 to 4 - and the mode, bits
+    mov al, [wa_sgoal+bx]       ; 5 and 6: the host's, CTF-PLAN 7 and
+    shl al, 1                   ; MODES-PLAN 8)
+    shl al, 1
+    mov cl, 5
+    shl bl, cl
+    or al, bl
     or al, [wa_lkdiff]
     stosb
     mov al, [wa_lkbots]         ; (the host's: L2)
@@ -1184,12 +1194,23 @@ wa_lkhtake:
     mov [wa_lkarena], al        ; difficulty and its tag
     mov al, [si+14]
     mov ah, al
-    and al, 0x0F
+    and al, 3
     mov [wa_lkdiff], al
-    mov cl, 4
+    mov al, ah
+    mov cl, 5
     shr ah, cl
     and ah, 3                   ; (free-for-all, CTF, team deathmatch,
     mov [wa_lkgmode], ah        ; king of the hill: MODES-PLAN 1)
+    shr al, 1                   ; ...and its Win at, the host's pick
+    shr al, 1
+    and al, 7
+    cmp al, WA_NGOAL
+    jb .gl
+    mov al, WA_NGOAL - 1
+.gl:
+    mov bl, ah
+    xor bh, bh
+    mov [wa_sgoal+bx], al
     call wa_sarlist             ; (the mode's arenas and Win at)
     mov al, [si+15]
     cmp al, 2
@@ -1695,6 +1716,59 @@ wa_lkmstart:
     inc bx
     inc bx
     loop .g
+    ret
+
+; wa_lkround - a new arena in a linked match (wc_go, MODES-PLAN 8): the
+; board anew, the lifts where they start, the absent off the board, the
+; pickups - the host owes their rolls (wc_rolls), the guest waits for them -
+; and the win held off while the old board's rows may still come in. The
+; event queue and its sequence go on as they were
+wa_lkround:
+    xor ax, ax
+    push ds
+    pop es
+    mov di, wa_lkd              ; nobody dead yet
+    mov cx, 8
+    rep stosw
+    call wa_lkboard
+    mov cx, [wa_nlift]
+    jcxz .nolift
+    xor si, si
+.lift:
+    mov bx, [wa_lift+si]
+    mov ax, [wa_bxh+bx]
+    mov [wa_lklift+si], ax
+    inc si
+    inc si
+    loop .lift
+.nolift:
+    mov di, wa_figs
+    mov cx, WA_NFIG
+.f:
+    call wa_lkabsent
+    jne .nf
+    mov byte [di+F_DEAD], 250
+    mov byte [di+F_NFR], 0
+.nf:
+    add di, F_SIZE
+    loop .f
+    mov word [wc_grace], 150
+    call wa_prespawn
+    mov cx, [wa_npk]
+    call wa_lkhost
+    jz .guest
+    mov [wc_rowe], cl
+    ret
+.guest:
+    mov byte [wa_pkon], 0
+    jcxz .out
+    xor bx, bx
+.g:
+    mov word [wa_pkt+bx], 1
+    inc bx
+    inc bx
+    loop .g
+.out:
     ret
 
 ; wa_lkslots - the match's slots by identity, lowest first: ours
@@ -2447,6 +2521,10 @@ wa_lkevin:
     je .take
     cmp al, EV_FLAG
     je .flag
+    cmp al, EV_GAME
+    je wc_gin
+    cmp al, EV_NEXT
+    je wc_nin
     cmp al, EV_ROLL
     jne .out
     xor bx, bx                  ; ROLL: a pickup back, with its kind
