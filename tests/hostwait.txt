@@ -891,14 +891,13 @@ tests/vidxdisp.py                  poll        2  # pre-gate census 2026-11-15 (
 tests/vidxip.py                    deadline    1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/waverack.py                  deadline    3  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-tests/waverack.py                  sleep       9  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/waverack.py                  sleep       7  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/waverackdisk.py              poll        4  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/waverackdisk.py              poll        3  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/waverackedit.py              sleep      21  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/waverackedit.py              sleep      14  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/waverackplay.py              deadline    1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-tests/waverackplay.py              sleep      16  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/waverackplay.py              sleep      15  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/waverackrec.py               poll       10  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 tests/waverackrec.py               sleep       1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
@@ -973,7 +972,7 @@ tests/wmchrome.py                  poll        1  # pre-gate census 2026-11-15 (
 
 tests/x3mega.py                    poll        4  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/xtmp3eng.py                  sleep       3  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/xtmp3eng.py                  sleep       2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/xtmp3xt.py                   poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 

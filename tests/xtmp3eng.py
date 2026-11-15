@@ -1899,7 +1899,7 @@ def leg_covox():
         n0 = _covox_writes(tr)
         t0 = time.time()
         while (_covox_writes(tr) - n0 < 2 * 11025 + 2048 and
-               time.time() - t0 < 240):
+               time.time() - t0 < 240):   # host: a ceiling on QEMU's trace FILE; the pass is the count
             time.sleep(1.0)
         check(leg, "no granule decoded while it plays",   # what it played
               r.w("x3_grans") == g0)        # meanwhile is held
