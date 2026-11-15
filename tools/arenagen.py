@@ -1237,8 +1237,11 @@ HEIGHTS_PICKUPS = [
     ((PK_SHOTGUN, PK_CHAINGUN, PK_GRENADE), 1248, 1024),
     ((PK_ROCKET, PK_RAIL), 1952, 1024),
 ]
-ARENA_PICKUPS = {"a2": HEIGHTS_PICKUPS, "a3": HEDGE_PICKUPS,
-                 "a4": TWIN_PICKUPS}
+# the open arena: one spawn in the middle, between the four pillars, that
+# is health or a shield (the owner, 2026-11-15)
+OPEN_PICKUPS = [((PK_HEALTH, PK_SHIELD), 1024, 1024)]
+ARENA_PICKUPS = {"a1": OPEN_PICKUPS, "a2": HEIGHTS_PICKUPS,
+                 "a3": HEDGE_PICKUPS, "a4": TWIN_PICKUPS}
 
 
 def pickups(tag, boxes):

@@ -179,6 +179,7 @@ wa_main:
     call wa_frame_input
     cmp byte [wa_quit], 0
     jne .out
+    call wa_hudrow              ; (the HUD row's weapons and message)
     cmp byte [wa_mtr], 2        ; THE METER (F10): only with every number
     jae .timed                  ; asked for are render and present timed -
     call wa_render              ; three clock reads a frame; else the frame
@@ -356,6 +357,9 @@ wa_reset:
     mov [wa_deaths], ax
     mov [wa_deaths+2], ax
     mov [wa_pdead], al
+    mov [wa_hmsl], ax           ; (no message from the last match)
+    mov [wa_hmsgt], al
+    mov byte [wa_hmsgd], 1
     mov bx, wa_bname
 .nm:
     call wa_rand8
@@ -740,6 +744,13 @@ wa_keys:
     ret
 
 wa_tick:
+    cmp byte [wa_hmsgt], 0      ; the HUD's message running out
+    je .c_msg
+    dec byte [wa_hmsgt]
+    jnz .c_msg
+    mov word [wa_hmsl], 0
+    mov byte [wa_hmsgd], 1
+.c_msg:
     cmp byte [wa_lkon], 0
     je .c_lk
     call wa_lktick              ; (a linked match: the cable, LINK-PLAN 4.2)
@@ -2795,6 +2806,7 @@ wa_bnext:
     jne .goal                   ; weapon with the pistol alone
     call wa_bfetch
 .goal:
+    call wc_bgoal               ; (CTF: the flags first - CTF-PLAN 6)
     cmp byte [di+F_BST], WA_BHUNT ; HUNTING or FETCHING (AI-PLAN 3.2): the
     jb .roam                    ; next hop toward the goal - there, it
     mov al, [di+F_BGOAL]        ; roams again
@@ -3741,6 +3753,13 @@ wa_kill:
     xchg ax, si
     inc byte [wa_deaths+1+si]
     xchg ax, si
+    cmp byte [wa_lkon], 0       ; (alone: the HUD says who; linked, the
+    jne .lk                     ; board's count does - wa_lkcount)
+    inc ax
+    mov ah, al
+    mov al, [wa_killer]
+    call wa_hudkill
+.lk:
     pop cx
     pop ax
     ; (falls through)
@@ -3840,6 +3859,12 @@ wa_phurt:
 .credit:
     inc byte [wa_kills+bx]
 .tone:
+    cmp byte [wa_lkon], 0       ; (alone: the HUD says who)
+    jne .lkd
+    mov al, bl
+    xor ah, ah
+    call wa_hudkill
+.lkd:
     call wa_lkdeath             ; (linked: the deaths by cause, the board)
     mov ax, 90
     mov cx, 6
@@ -4772,6 +4797,38 @@ WA_NNAME    equ 8
 wa_names:   db 'COG     ', 'RIVET   ', 'SERVO   ', 'SPROCKET'
             db 'DIODE   ', 'PISTON  ', 'BOLT    ', 'GEAR    '
 wa_you:     db 'YOU     '
+
+; wa_fname - BL = a figure's code here (0 the player, 1..3 the figures): SI
+; = its name, WA_NNAME characters - the player's nick (YOU without one), a
+; linked player's as its machine sent it, a bot's its robot name. Keeps all
+; but SI
+wa_fname:
+    push ax
+    push bx
+    xor bh, bh
+    or bl, bl
+    jnz .fig
+    mov si, wa_nick
+    cmp byte [si], ' '
+    ja .out
+    mov si, wa_you
+    jmp .out
+.fig:
+    cmp byte [wa_lkon], 0
+    je .bot
+    call wa_lksbname
+    jnc .out
+.bot:
+    mov al, [wa_bname-1+bx]
+    and ax, WA_NNAME - 1
+    mov cl, 3
+    shl ax, cl
+    add ax, wa_names
+    mov si, ax
+.out:
+    pop bx
+    pop ax
+    ret
 wa_sbhead:  db ' NAME       K    D  '
 wa_ovboard:
     xor bx, bx                  ; the order: by kills, most first
@@ -4829,7 +4886,7 @@ wa_ovboard:
     mov cx, WA_SBW
     cld
     rep stosb
-    mov si, wa_you
+    call wa_fname               ; (the player's nick, or YOU)
     mov ax, 0x1A0F              ; (YOU: bright green, or plain on mono)
     or bx, bx
     jz .nm
@@ -5542,6 +5599,8 @@ wa_mtron:
     je wa_mtrinit.out
     mov byte [wa_mtr], 2
 wa_mtrinit:
+    mov word [wa_hwsig], 0xFFFF ; (the row blanked: the HUD's own fields
+    mov byte [wa_hmsgd], 1      ; written again, wa_hudrow)
     xor ax, ax
     mov [wa_tfr], ax
     mov [wa_tfr+2], ax
@@ -5578,6 +5637,185 @@ wa_hudfix:                      ; SI = the HUD's template, NUL-terminated
     call wa_putc
     jmp .c
 .out:
+    ret
+
+; --- the HUD row's own fields -------------------------------------------------
+; Row 24 is the meter's when F10 asks for every number. Otherwise it carries
+; THE WEAPONS at its right - 1 to 6, each in its pickup's colour where the
+; player has it, dark grey where not, the one held inverse - and, with the
+; meter off altogether, THE LAST KILL at its left ("COG killed YOU") for
+; WA_HMSGT ticks. Each is written straight into text memory, as the meter's
+; numbers are, and only when it changed: the weapons on a new (had, held),
+; the message when one is posted or runs out. wa_mtrinit blanks the row and
+; marks both to be written again.
+WA_HMSGN    equ 26              ; the message's cells (8 + 8 + 8 and two)
+WA_HMSGT    equ 120             ; its ticks: four seconds
+;              pistol shotgun chaingun grenades rockets railgun
+wa_hwcol:   db 0x0F,  0x06,   0x07,    0x0D,    0x0A,   0x0B
+wa_hwinv:   db 0x70,  0x60,   0x70,    0x50,    0x20,   0x30
+wa_hk_kill: db ' killed ', 0
+wa_hk_died: db ' died', 0
+
+; wa_hudrow - once a frame, before the render: the row's fields that
+; changed. Clobbers AX, BX, CX, SI, DI
+wa_hudrow:
+    cmp byte [wa_mtr], 2
+    jae .out
+    mov al, [wa_own]
+    mov ah, [wa_wpn]
+    cmp ax, [wa_hwsig]
+    je .msg
+    mov [wa_hwsig], ax
+    call wa_hudwpn
+.msg:
+    cmp byte [wa_hmsgd], 0
+    je .out
+    mov byte [wa_hmsgd], 0
+    cmp byte [wa_mtr], 0        ; (the frame rate there: no message)
+    jne .out
+    xor di, di
+    xor si, si
+.c:
+    mov ax, 0x0720
+    cmp si, [wa_hmsl]
+    jae .p
+    mov al, [wa_hmsg+si]
+    mov ah, [wa_hmsa+si]
+.p:
+    call wa_putca
+    inc si
+    cmp si, WA_HMSGN
+    jb .c
+.out:
+    ret
+
+; wa_hudwpn - the six weapons, at the row's last six columns. Clobbers AX,
+; BX, CX, DI
+wa_hudwpn:
+    mov di, [wa_w]
+    sub di, WA_NWPN
+    xor bx, bx
+.w:
+    mov al, '1'
+    add al, bl
+    mov cl, bl
+    mov ch, 1
+    shl ch, cl
+    test [wa_own], ch
+    jnz .have
+    mov ah, 0x08                ; not had: dark grey (on mono, nothing)
+    cmp byte [wa_mono], 0
+    je .p
+    mov al, ' '
+    jmp .p
+.have:
+    mov ah, [wa_hwcol+bx]
+    cmp bl, [wa_wpn]
+    jne .m
+    mov ah, [wa_hwinv+bx]       ; held: inverse, in its colour
+.m:
+    cmp byte [wa_mono], 0
+    je .p
+    and ah, 0x70                ; (mono: plain, or inverse held)
+    jnz .p
+    mov ah, 0x07
+.p:
+    call wa_putca
+    inc bx
+    cmp bx, WA_NWPN
+    jb .w
+    ret
+
+; wa_putca - AL at HUD column DI in the attribute AH; DI moves on. Off the
+; 40-column screen it is dropped.
+wa_putca:
+    cmp di, [wa_w]
+    jae .skip
+    push es
+    push bx
+    les bx, [wa_hudp]
+    add bx, di
+    add bx, di
+    mov [es:bx], ax
+    pop bx
+    pop es
+.skip:
+    inc di
+    ret
+
+; wa_hudkill - AL = the killer's code here, AH = the dead one's (0 the
+; player, 1..3 the figures; the same code twice, a suicide): "KILLER killed
+; DEAD" - or "DEAD died" - the HUD's message for the next WA_HMSGT ticks,
+; the player's own name green. Keeps every register
+wa_hudkill:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    xor di, di                  ; DI = the cells so far
+    cmp al, ah
+    je .self
+    push ax
+    mov bl, al
+    call wa_hudname
+    mov si, wa_hk_kill
+    call wa_hudtext
+    pop ax
+    mov bl, ah
+    call wa_hudname
+    jmp .set
+.self:
+    mov bl, ah
+    call wa_hudname
+    mov si, wa_hk_died
+    call wa_hudtext
+.set:
+    mov [wa_hmsl], di
+    mov byte [wa_hmsgt], WA_HMSGT
+    mov byte [wa_hmsgd], 1
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+wa_hudtext:                     ; SI = text (NUL), grey, at DI
+    lodsb
+    or al, al
+    jz .out
+    mov [wa_hmsg+di], al
+    mov byte [wa_hmsa+di], 0x07
+    inc di
+    jmp wa_hudtext
+.out:
+    ret
+wa_hudname:                     ; BL = a code: its name at DI, its trailing
+    push bx                     ; spaces left off - the player's green,
+    call wa_fname               ; the rest bright white
+    pop bx
+    mov ah, 0x0F
+    or bl, bl
+    jnz .a
+    mov ah, 0x0A
+.a:
+    cmp byte [wa_mono], 0
+    je .a1
+    mov ah, 0x0F
+.a1:
+    mov cx, WA_NNAME            ; CX = its length, the trailing blanks off
+.t:
+    mov bx, cx
+    cmp byte [si+bx-1], ' '
+    ja .c
+    loop .t
+    ret
+.c:
+    lodsb
+    mov [wa_hmsg+di], al
+    mov [wa_hmsa+di], ah
+    inc di
+    loop .c
     ret
 
 ; --- the renderer part (docs/plans/WIREARENA-PARTS-PLAN.md section 7) --------
@@ -6029,7 +6267,6 @@ TOASTSTR wa_t_small, 'Needs kern_big or mega'
 TOASTSTR wa_t_part, 'Renderer part mismatch'
 TOASTSTR wa_t_host, 'The host picks the arena'
 TOASTSTR wa_t_ctfa, 'This arena has no flags'
-TOASTSTR wa_t_ctfl, 'CTF is not linked yet'
 TOASTSTR wa_t_be, 'Bots: easy'
 TOASTSTR wa_t_bn, 'Bots: normal'
 TOASTSTR wa_t_bh, 'Bots: hard'
@@ -6128,10 +6365,13 @@ WA_VAR wa_sdsel,WS_NDR             ;   drop-down, the focus and the field
 WA_VAR wa_sddis,WS_NDR             ;   were drawn as (0FFh: not yet)
 WA_VAR wa_sdfoc,1
 WA_VAR wa_sdfld,1
+WA_VAR wa_sdnk,1                   ;   (the nick's field as drawn)
 WA_VAR wa_sorg,4                   ;   the content's origin, as placed
 WA_VAR wa_sfld,OS88LINE_SZ         ;   the address field, its text, and what
 WA_VAR wa_saddr,16                 ;   it names: IP, port
 WA_VAR wa_saddr6,6
+WA_VAR wa_snfld,OS88LINE_SZ        ;   the nick's field and its text
+WA_VAR wa_snick,WS_NKMAX
 WA_VAR ud_blk,UD_SIZE              ; UDP (os88udp.inc)
 WA_VAR wa_lkwant,1                 ; a network wanted: 2 local, 3 by address
 WA_VAR wa_lktries,2                ; ...ticks it has been asked
@@ -6244,6 +6484,14 @@ WA_VAR wa_mtr,1                  ; the meter (F10): 0 off, 1 the frame rate, 2
                                  ; every number
 WA_VAR wa_rowoff,(WA_ROWS+1)*2
 WA_VAR wa_hudp,4                 ; the HUD's row in text memory, offset:segment
+WA_VAR wa_hwsig,2                ; ...its weapons as written (had, held)
+WA_VAR wa_hmsl,2                 ; ...its message: cells, ticks left, to be
+WA_VAR wa_hmsgt,1                ;   written again, characters, attributes
+WA_VAR wa_hmsgd,1
+WA_VAR wa_hmsg,WA_HMSGN
+WA_VAR wa_hmsa,WA_HMSGN
+WA_VAR wa_nick,WA_NNAME          ; THE PLAYER'S NICK, space-padded (the
+                                 ;   setup's field: blank, YOU)
 WA_VAR wa_kbits,2                ; the held keys this frame (wa_keys)
 WA_VAR wa_kfr,1                  ; ...polled in this frame
 WA_VAR wa_kmap,KEYMAP_BYTES      ; ...and the whole map they came from

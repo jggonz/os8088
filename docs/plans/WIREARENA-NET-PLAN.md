@@ -517,3 +517,48 @@ explained.
 **Checked**: `walink`, `walinknet`, `walinkudp`, `walinkip`, `walink4`
 (three passes), `walink4ip`, `wasetup`, `wabotarms`, and before the
 lobby change `walift`, `waroutes`, `wabots`, `wascore`, `waweapons`.
+
+### 9.6 A nick; the HUD row's weapons and kill message (2026-11-15)
+
+The owner: a **Nick** entry on the match setup, sent to the other players
+and used on the Tab board and in kill messages; and the bottom row, when
+the meter is off, as a weapon hint and a message bar.
+
+- **The nick** is a third os88line field (SPEC.md 83), the right half of
+  the row Mode has (CTF-PLAN 7: `WS_Y4`, the window 174 tall): a ` Nick `
+  label and the field from x 232 to the right margin. Up to eight
+  characters, letters in upper case, no Space (Space is Ready anywhere on
+  the page). It is the last focus stop, 7, after Mode's 6 - reading order.
+  `wa_nick` is the typed text space-padded.
+- **On the wire** it is HELLO's bytes 18..25 (LINK-PLAN 4.1, protocol
+  version 2): every HELLO carries it, so a peer has it long before START,
+  in its record (`WP_NICK`, the record 42 bytes). A peer with a nick shows
+  it on the lobby's rows (no identity digits after it), on the Tab board and
+  in the HUD; one without keeps its robot name. Our own row says the nick,
+  or YOU.
+- **The HUD row** (row 24) is the meter's when F10 asks for every number.
+  Otherwise its last six columns are **the weapons**, 1 to 6 in the
+  pickups' colours where had, dark grey where not, the held one inverse
+  (mono: plain, inverse, blank); with the meter off altogether its left is
+  **the last kill**, "KILLER killed DEAD" or "DEAD died", four seconds, the
+  player's name green. Each is written into text memory only when it
+  changed (`wa_hudrow`: the weapons on a new had/held pair, the message
+  when posted or run out). Alone, `wa_kill` and `wa_phurt` post it; linked,
+  every rise in the deaths-by-cause table does - our own count
+  (`wa_lkcount`) at once, another machine's with its SCORE, a second at
+  most later - so every machine says every kill.
+
+- **The Arena list** (the owner, the same day): Open first, then
+  **Columns** - the arena the list called "full" - then the rest. The
+  arenas keep their numbers (the benches, the poses, the rows and the wire
+  name them); `wa_sarmap` swaps items 0 and 1 where the list is read and
+  picked. The default stays the heights.
+
+**Bytes**: `wirearena.bin` 29,831 -> 30,736 (+905): the HUD row and
+its names ~520, the nick's field, row and protocol the rest.
+
+**Checked on the glass** (a MartyPC 5150, CGA): the setup's Nick row and
+its field, typed "zed-9" -> `ZED-9`; the match's row 24 `123456` with the
+pistol inverse and the rest grey; F10 once keeps the weapons beside the
+frame rate, twice gives the row to the meter; the player at 1 health,
+killed by a bot: `COG killed ZED-9`, the nick green.

@@ -45,6 +45,10 @@ WA_VAR wa_cmsgt,1               ; colour
 WA_VAR wa_cmsga,1
 WA_VAR wa_ctfcp,1               ; the teams' block copied to the renderer
                                 ; (wa_rframe): 1 every frame, 80h once
+WA_VAR wc_sst,2                 ; LINKED (CTF-PLAN 7): what the host last
+WA_VAR wc_scar,2                ; sent of each flag - its state, carrier -
+WA_VAR wc_scap,2                ; and of the captures and the win
+WA_VAR wc_swin,1
 WA_VAR wc_rst,2                 ; wc_rspick's team and who; its nearest
 WA_VAR wc_rmin,2                ; foe so far
 %endmacro
@@ -52,11 +56,7 @@ WA_VAR wc_rmin,2                ; foe so far
 ; wa_ctfstart - a match starts (wa_main): its mode, the teams, the flags at
 ; home and nobody's captures; in CTF everyone on their own side
 wa_ctfstart:
-    mov al, [wa_lkgmode]
-    cmp byte [wa_lkon], 0       ; (linked: free-for-all until the link
-    je .m                       ; carries the mode - CTF-PLAN wave C3)
-    xor al, al
-.m:
+    mov al, [wa_lkgmode]        ; (linked: the host's, its HELLO's)
     mov si, [wa_gflp]
     cmp word [si], 2
     je .md
@@ -97,15 +97,12 @@ wa_ctfstart:
     je .out
     mov byte [wa_ctfcp], 1      ; (a team match: every frame)
     call wc_reset
-    call wa_prespawn            ; EVERYONE ON THEIR SIDE (CTF-PLAN 2)
-    mov di, wa_figs
-.b:
-    cmp di, [wa_figend]
-    jae .bd
-    call wa_brespawn
-    add di, F_SIZE
-    jmp .b
-.bd:
+    xor ax, ax                  ; (nothing sent yet: both home, nobody's)
+    mov [wc_sst], ax
+    mov [wc_scar], ax
+    mov [wc_scap], ax
+    mov [wc_swin], al
+    call wc_side                ; EVERYONE ON THEIR SIDE (CTF-PLAN 2)
     call wc_frame
 .out:
     mov byte [wa_ovd], 1
@@ -234,6 +231,20 @@ wa_ctick:
     jnz .m
     mov byte [wa_ovd], 1        ; (the message gone)
 .m:
+    cmp byte [wa_lkon], 0       ; A GUEST (CTF-PLAN 7): the host's rules,
+    je .rules                   ; told by its FLAG events - here the win's
+    cmp byte [wa_lkme], 0       ; time shown, and the flags carried kept
+    je .rules                   ; over their carriers
+    cmp word [wa_cwin], 0
+    je .gw
+    dec word [wa_cwin]
+.gw:
+    mov si, wa_cfl
+    call .follow
+    mov si, wa_cfl + WC_SZ
+    call .follow
+    jmp wc_frame
+.rules:
     cmp word [wa_cwin], 0
     je .play
     dec word [wa_cwin]
@@ -246,24 +257,225 @@ wa_ctick:
     mov si, wa_cfl + WC_SZ
     inc bp
     call wc_flag
+    call wc_send
     jmp wc_frame
 .out:
     ret
+.follow:                        ; SI = a flag: carried, over its carrier
+    cmp byte [si+WC_ST], WC_CAR
+    jne .out
+    mov al, [si+WC_CARR]
+    call wc_pos
+    jnc .out
+    mov [si+WC_X], ax
+    mov [si+WC_Y], bx
+    mov [si+WC_Z], dx
+    ret
 
-; wc_round - a win shown: the captures and the flags anew, everyone back on
-; their side (the kills and deaths on Tab go on)
+; wc_send - THE HOST, linked (CTF-PLAN 7): a FLAG event for each flag whose
+; state or carrier changed since it was last sent - both, when the
+; captures or the win did. Keeps BP
+wc_send:
+    cmp byte [wa_lkon], 0
+    je .out
+    cmp byte [wa_lkme], 0
+    jne .out
+    xor al, al
+    cmp word [wa_cwin], 0
+    je .w
+    inc ax
+.w:
+    cmp al, [wc_swin]
+    jne .both
+    mov ax, [wa_caps]
+    cmp ax, [wc_scap]
+    jne .both
+    xor bx, bx
+    call .if
+    mov bl, 1
+.if:                            ; BX = a flag: sent if it changed
+    mov si, bx
+    mov al, WC_SZ
+    mul bl
+    add ax, wa_cfl
+    xchg ax, si                 ; SI = the flag, AX = BX
+    mov al, [si+WC_ST]
+    cmp al, [wc_sst+bx]
+    jne .one
+    mov al, [si+WC_CARR]
+    cmp al, [wc_scar+bx]
+    jne .one
+.out:
+    ret
+.both:
+    xor bx, bx
+    call .one0
+    mov bl, 1
+.one0:
+    mov si, bx
+    mov al, WC_SZ
+    mul bl
+    add ax, wa_cfl
+    mov si, ax
+.one:                           ; SI = flag BX: FLAG queued, and noted
+    mov byte [wa_lkev], EV_FLAG
+    mov [wa_lkev+1], bl
+    mov al, [si+WC_ST]
+    mov [wa_lkev+2], al
+    mov [wc_sst+bx], al
+    mov al, [si+WC_CARR]
+    mov [wc_scar+bx], al
+    call wa_lkcanon             ; (the carrier by its slot, on the wire)
+    mov [wa_lkev+3], al
+    mov ax, [wa_caps]
+    mov [wa_lkev+4], ax
+    mov [wc_scap], ax
+    xor al, al
+    cmp word [wa_cwin], 0
+    je .ws
+    inc ax
+.ws:
+    mov [wa_lkev+6], al
+    mov [wc_swin], al
+    mov ax, [si+WC_X]
+    mov [wa_lkev+7], ax
+    mov ax, [si+WC_Y]
+    mov [wa_lkev+9], ax
+    mov ax, [si+WC_Z]
+    mov [wa_lkev+11], ax
+    jmp wa_lkqueue
+
+; wc_evin - SI = a FLAG event (wa_lkevin's: its payload from SI+4), on a
+; guest: the flag as the host says, the captures and the win - and the
+; message what changed says, as the host's own rules say it there
+wc_evin:
+    cmp byte [wa_gmode], 1
+    jne .ret
+    xor bx, bx
+    mov bl, [si+4]
+    cmp bl, 1
+    ja .ret
+    push bp
+    push si
+    mov bp, bx                  ; BP = its team
+    mov al, WC_SZ
+    mul bl
+    add ax, wa_cfl
+    mov di, ax                  ; DI = the flag
+    mov ch, [di+WC_ST]          ; CH = its state before
+    mov al, [si+5]
+    mov [di+WC_ST], al
+    mov al, [si+6]
+    call wa_lklocal
+    mov [di+WC_CARR], al
+    mov ax, [si+10]
+    mov [di+WC_X], ax
+    mov ax, [si+12]
+    mov [di+WC_Y], ax
+    mov ax, [si+14]
+    mov [di+WC_Z], ax
+    mov word [wa_cwin], 0
+    cmp byte [si+9], 0
+    je .nw
+    mov word [wa_cwin], WC_WINT
+.nw:
+    mov byte [wa_ovd], 1
+    mov dx, [wa_caps]           ; DX = the captures before
+    mov al, [si+7]
+    mov ah, [si+8]
+    mov [wa_caps], ax
+    cmp ax, dx
+    je .nocap
+    or ax, ax
+    jnz .cap
+    call wa_prespawn            ; the round again: our player on our side
+    jmp .out
+.cap:
+    xor bx, bx                  ; BX = the team that scored
+    cmp al, dl
+    ja .sc
+    inc bx
+.sc:
+    push bx
+    mov ax, 2400
+    mov cx, 6
+    mov dl, 0x40
+    call OSAPI_SND_TONE
+    pop bx
+    mov al, bl
+    call wc_tatt
+    mov dl, al
+    shl bx, 1
+    mov ax, [wc_m_sc+bx]
+    cmp word [wa_cwin], 0
+    je .say
+    mov ax, [wc_m_win+bx]
+.say:
+    call wc_say
+    jmp .out
+.nocap:
+    mov al, [di+WC_ST]
+    cmp al, ch
+    je .out
+    cmp al, WC_CAR
+    je .take
+    cmp al, WC_DROP
+    je .down
+    mov ax, wc_m_ohome          ; home again
+    mov dx, wc_m_thome
+    call wc_sayk
+    jmp .out
+.down:
+    mov ax, wc_m_odown
+    mov dx, wc_m_tdown
+    call wc_sayk
+    jmp .out
+.take:
+    mov ax, 1800
+    mov cx, 3
+    mov dl, 0x40
+    call OSAPI_SND_TONE
+    cmp byte [di+WC_CARR], 0
+    jne .tk
+    mov ax, wc_m_you
+    mov dl, 0x0F
+    call wc_say
+    jmp .out
+.tk:
+    mov ax, wc_m_they
+    mov dx, wc_m_we
+    call wc_sayk
+.out:
+    pop si
+    pop bp
+.ret:
+    ret
+
+; wc_round - a win shown (the host's, or alone): the captures and the flags
+; anew, everyone back on their side (the kills and deaths on Tab go on) -
+; the guests told, and putting their own players back themselves
 wc_round:
     call wc_reset
+    call wc_side
+    call wc_send
+    jmp wc_frame
+
+; wc_side - our player and the bots this machine runs (alone, or the
+; host's) back on their sides. Keeps nothing
+wc_side:
     call wa_prespawn
     mov di, wa_figs
 .b:
-    cmp di, [wa_figend]
-    jae .bd
+    call wa_lkabsent            ; (not in the match)
+    je .n
+    call wa_lkremote            ; (another machine's)
+    je .n
     call wa_brespawn
+.n:
     add di, F_SIZE
-    jmp .b
-.bd:
-    jmp wc_frame
+    cmp di, wa_figs + WA_NFIG*F_SIZE
+    jb .b
+    ret
 
 ; wc_flag - SI = a flag, BP = its team (0 red's, 1 blue's): this tick's
 ; rules for it (CTF-PLAN 2). Keeps SI, BP
@@ -486,6 +698,82 @@ wc_rspick:
     loop .p
     mov si, di
     pop di
+    ret
+
+; wc_bgoal - DI = a bot at the end of a leg, at node BL (wa_bnext), in CTF:
+; its goal (CTF-PLAN 6), FETCHed as a pickup is - carrying their flag, its
+; own base; its own flag dropped, the node nearest it; theirs at home or
+; dropped and no teammate carrying it, there. A bot that fights (engaged,
+; hunting) and carries nothing fights on. Keeps all but AX
+wc_bgoal:
+    cmp byte [wa_gmode], 1
+    jne .out0
+    push bx
+    push cx
+    push dx
+    push si
+    mov dh, bl                  ; DH = the node it is at
+    call wa_bidx
+    inc ax
+    mov cl, al                  ; CL = it, a local index
+    mov bl, al
+    xor bh, bh
+    mov ch, [wa_tm+bx]          ; CH = its team
+    mov si, wa_cfl              ; SI = THEIR flag
+    or ch, ch
+    jnz .th
+    add si, WC_SZ
+.th:
+    cmp byte [si+WC_ST], WC_CAR ; 1. carrying theirs: home
+    jne .nc
+    cmp [si+WC_CARR], cl
+    jne .nc
+    mov bl, ch
+    jmp .base
+.nc:
+    cmp byte [di+F_BST], WA_BENG ; (fighting, carrying nothing: on)
+    je .done
+    cmp byte [di+F_BST], WA_BHUNT
+    je .done
+    push si                     ; 2. its own flag dropped: to it
+    mov si, wa_cfl
+    or ch, ch
+    jz .ow
+    add si, WC_SZ
+.ow:
+    cmp byte [si+WC_ST], WC_DROP
+    pop ax
+    je .lies
+    mov si, ax
+    mov al, [si+WC_ST]          ; 3. theirs: at home, to their base; lying
+    cmp al, WC_DROP             ; dropped, to it; carried (by a teammate):
+    je .lies                    ; as it was
+    cmp al, WC_HOME
+    jne .done
+    mov bl, ch
+    xor bl, 1
+.base:                          ; BL = a team: its base's node
+    mov al, 6
+    mul bl
+    mov bx, ax
+    add bx, [wa_gflp]
+    mov al, [bx+6]
+    jmp .goal
+.lies:                          ; SI = a flag lying dropped: the node
+    mov ax, [si+WC_X]           ; nearest it
+    mov bx, [si+WC_Y]
+    call wa_bcell
+.goal:
+    cmp al, dh
+    je .done                    ; (there: wa_bnext's roam takes it on)
+    mov [di+F_BGOAL], al
+    mov byte [di+F_BST], WA_BFETCH
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.out0:
     ret
 
 ; wa_ovctf - the overlay's CTF (wa_ovbuild; ES, DI its cursor): the flag

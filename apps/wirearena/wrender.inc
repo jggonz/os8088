@@ -3051,53 +3051,16 @@ wa_openrest:
     jmp .n
 
 ; wa_efill - SPANLOOP's STEP: BX = an edge's half-row in the column SI, CX =
-; its half-row the column before, two or more apart: the edge's cell, and
-; the step between filled down this column - `/` under an edge that rose,
-; `\` over one that fell - a cell a row, stepped from the edge's own (no row
-; looked up; wa_slope's rows less the edge's own cell, which the edge took
-; first). BX is on the screen and over the clip (off it: wa_eoff). Keeps
+; its half-row the column before, two or more apart: the step drawn down
+; this column by wa_slope, the edge's own cell its last - so a steep edge is
+; ONE cell a row, never a level dash beside a slash (the floor lines' rule,
+; wa_flst). BX is on the screen and over the clip (off it: wa_eoff). Keeps
 ; SI, DX, AH and BP, moves DI on; clobbers AL, BX, CX.
 wa_efill:
-    push bp
-    mov bp, bx                  ; BP = the edge
-    mov al, [wa_hgl+bx]
-    shl bx, 1
-    mov bx, [wa_hroff+bx]
-    add bx, si
-    WPLOT
-    cmp cx, bp
-    jl .fall
-    cmp cx, [wa_cclip+si]       ; it rose: the rows under its own to the last
-    jle .r1                     ; column's - no lower than the clip (the
-    mov cx, [wa_cclip+si]       ; screen's end)
-.r1:
-    dec cx
-    shr cx, 1
-    shr bp, 1
-    sub cx, bp
-    jle .out
-    mov al, '/'
-    mov bp, [wa_rowo2+2]        ; (a row's offset: row 1's)
-    jmp .rows
-.fall:
-    inc cx                      ; it fell: the rows over its own from the last
-    sar cx, 1                   ; column's - no higher than the screen's top
-    jns .f1
-    xor cx, cx
-.f1:
-    shr bp, 1
-    sub bp, cx
-    jle .out
-    mov cx, bp
-    mov al, 0x5C
-    mov bp, [wa_rowo2+2]
-    neg bp
-.rows:
-    add bx, bp
-    WPLOT
-    loop .rows
-.out:
-    pop bp
+    push ax
+    mov ax, bx
+    call wa_slope
+    pop ax
     ret
 ; wa_eoff - SPANLOOP's edge BX OFF the screen (or under the clip) in the
 ; column SI, CX = its half-row the column before, on the screen or off it
@@ -3521,49 +3484,79 @@ wa_occlow:
     jmp .done
 
 ; wa_slope - AX = this column's edge, CX = the last column's (half-rows),
-; SI = column x 2: a step of two half-rows or more is filled down it,
-; `\` falling to the right and `/` rising - one cell a row, the cell
-; stepped by a row rather than looked up. Keeps SI, DI's list pointer and
-; DL; clobbers AX, BX, CX.
+; two half-rows or more apart, SI = column x 2: the step drawn down THIS
+; column BY CELL ROW, as a steep floor line is (wa_flst) - the rows after
+; the last column's row through this one's own, the first `\` (fell) or `/`
+; (rose), the rest a post's `│`. The last column's row is not this column's
+; (a slash beside its dash read as a second, furry line), and this one's own
+; cell is the run's, so a caller's plot of it after this finds it stamped.
+; Clipped to the screen and the column's clip (a row cut off at the slash's
+; end starts with `│`). Keeps SI, DI's list, DX and BP; AH = the wall's
+; colour; clobbers AL, BX, CX.
 wa_slope:
     push bp
-    mov bp, '\'
+    push dx
+    mov bp, [wa_cclip+si]       ; BP = the last row the clip shows
+    dec bp
+    sar bp, 1
+    cmp bp, WA_ROWS-1
+    jle .k
+    mov bp, WA_ROWS-1
+.k:
+    sar ax, 1                   ; AX = this column's row
+    sar cx, 1                   ; CX = the last one's
     cmp ax, cx
-    jg .fall
-    mov bp, '/'
-    xchg ax, cx                 ; AX = the lower edge, CX = the higher
-.fall:
-    cmp ax, [wa_cclip+si]       ; (heights: no lower than the column's clip)
-    jle .cl
-    mov ax, [wa_cclip+si]
-.cl:
-    inc cx                      ; half-rows CX+1 .. AX-1, as rows
-    sar cx, 1
-    jns .c0
+    jl .rise
+    inc cx                      ; FELL: from the row after the last's, down
+    mov dh, 0x5C                ; to this one's
+    or cx, cx
+    jns .f1
     xor cx, cx
-.c0:
-    dec ax
-    sar ax, 1
-    cmp ax, WA_ROWS-1
-    jle .c1
-    mov ax, WA_ROWS-1
-.c1:
-    sub ax, cx
+    mov dh, 0xB3
+.f1:
+    cmp ax, bp
+    jle .f2
+    mov ax, bp
+.f2:
+    sub ax, cx                  ; the rows less one
     jl .out
+    mov bp, [wa_rowo2+2]        ; (a row's offset: row 1's)
+    jmp .go
+.rise:
+    dec cx                      ; ROSE: from the row before the last's, up
+    mov dh, '/'                 ; to this one's
+    cmp cx, bp
+    jle .r1
+    mov cx, bp
+    mov dh, 0xB3
+.r1:
+    or ax, ax
+    jns .r2
+    xor ax, ax
+.r2:
+    neg ax
+    add ax, cx                  ; the rows less one
+    jl .out
+    mov bp, [wa_rowo2+2]
+    neg bp
+.go:
     inc ax
+    shl cx, 1
     mov bx, cx
-    shl bx, 1
     mov bx, [wa_rowo2+bx]
     add bx, si
-    mov cx, ax
-    mov ax, bp
+    xchg ax, cx                 ; CX = the rows
+    mov al, dh
     mov ah, [wa_wcol]
 .row:
     WPLOT
-    add bx, [wa_rowo2+2]        ; (a row's offset: row 1's)
+    mov al, 0xB3
+    add bx, bp
     loop .row
 .out:
+    pop dx
     pop bp
+    mov ah, [wa_wcol]
     ret
 
 ; wa_corner - BX = top, AX = bottom (half-rows), SI = column x 2: `│` in the

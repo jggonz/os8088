@@ -339,6 +339,21 @@ line on the floor between two of the arena's vertices, at any angle.
 Row `waflines` (soak) holds the drawer's picture to an exact referee: the
 game's integer camera space, then the line's image in exact rationals.
 
+**A wall's steep edge, the same rule (2026-11-15).** The owner saw the
+floor lines' old fault on the WALLS: a box's foot or top stepping a row a
+column drew its own level dash (`─`, `_`) AND a slash in the row it left -
+two cells a column, a staircase of dashes beside a line of slashes ("furry").
+`wa_slope` now draws a step BY CELL ROW as `wa_flst` does: the rows after the
+last column's row through this one's own, the first `\` or `/`, the rest
+`│`; `wa_efill` is that, and the low boxes' passes (`wl_l01s`, `wl_f1`) find
+their own cell already stamped. `waposes`, 16 seeded poses: arena 0 one pose
+changed (22 cells), +0.20% render; arena 2 six (54 cells), +0.30%.
+
+**Open's spawn (2026-11-15).** The open arena had no pickups; it has one
+now, the owner's: a spawn in the middle (1024, 1024), between the four
+pillars, that rolls health or a shield (`OPEN_PICKUPS`, arenagen's
+health-or-shield choice). Its play bench and poses see it from then on.
+
 ### 4.6 An arena with no room walls
 
 `ARENA_ROOMH` sets an arena's room height, and 0 means NO ROOM WALLS. The
