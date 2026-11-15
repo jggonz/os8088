@@ -3645,26 +3645,31 @@ wa_list:                        ; BX = cell, onto this frame's list
 
 ; wa_plotf - BX = cell offset, DL = sub-cell bit(s), AH = attribute: a figure's
 ; sub-pixels, OR'd into whatever of the figure layer the cell has, over any
-; wall glyph. Clobbers AX, DX.
+; wall glyph. Its stamp against the frame's in one XOR (wa_femit's test: 0
+; a wall's cell this frame, 0x80 a figure's), the list's append inline, and
+; stamp and mask one word. Clobbers AX, DX.
 wa_plotf:
-    mov al, [wa_frame]
-    or al, 0x80
-    cmp [wa_stamp+bx], al
-    je .have                    ; a figure cell already: add the bit
-    and al, 0x7F
-    cmp [wa_stamp+bx], al
-    je .listed                  ; a wall cell this frame: already listed
-    call wa_list
-.listed:
-    or al, 0x80
-    mov [wa_stamp+bx], al
-    jmp .put
-.have:
-    or dl, [wa_fmask+bx]
+    mov al, [wa_stamp+bx]
+    xor al, [wa_frame]
+    shl al, 1
+    jz .this                    ; drawn this frame already
+    push di                     ; a new cell: onto this frame's list
+    mov di, [wa_newp]
+    add di, [wa_newn]
+    mov [di], bx
+    add word [wa_newn], 2
+    pop di
+    jmp short .put
+.this:
+    jnc .put                    ; a wall cell this frame: already listed
+    or dl, [wa_fmask+bx]        ; a figure cell already: add the bits
 .put:
-    mov [wa_fmask+bx], dl
+    mov dh, dl
+    mov dl, [wa_frame]
+    or dl, 0x80
+    mov [wa_stamp+bx], dx       ; its stamp, and its mask (the odd byte)
     push bx
-    mov bl, dl
+    mov bl, dh
     and bx, 15
     mov al, [wa_fglyph+bx]
     pop bx
