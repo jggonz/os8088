@@ -221,3 +221,30 @@ from floor. The crossing (and pillars, open) take phase 1; the game's
 `wa_ovmm` and `wa_mmcell` pair by it. `waarenas` checks the arm open; red
 with the phase held at 0.
 
+**The Ziggurat's ramps on the glass** (the owner, 2026-11-15, two
+screenshots: *"the ramp completely disappears when straight on, and the
+pillars behind the ramp are not occluded, and the ramp to the left has
+become a straight line out instead of a ramp ... the second half of the
+ramp disappears when viewed at an angle"*). Two renderer faults, both in
+the outline path (`wrlow.inc`), neither reachable by the heights' ramps:
+
+1. **A flight's far side was drawn only with the eye above it.** A ramp's
+   slopes are its side faces' top edges; the ones the eye is outside of
+   are drawn as seen faces, the rest - both, straight on; the far one, at
+   an angle - only in the far-side pass, which ran with the eye above the
+   box. The heights' ramps (80) are always under the eye; the Ziggurat's
+   (288) never are. A flight rising over the eye now takes the far-side
+   pass too: its slopes and high end drawn, raising the clip - which is
+   what hides the pillars behind it.
+2. **A flight's rising face read as a STACK.** A flight keeps the face it
+   rises toward in bits 2-3 of its kind byte; the renderer's stack test
+   read bit 2 without asking the kind, so a ramp rising east or west (1
+   or 3) drew the NEXT box in the list as standing on its top - the line
+   at the top's height and the corrupted far side. The heights' ramps rise
+   north and south (0, 2). The test asks the kind first.
+
+The heights' and the hedge's pictures are byte-identical across both (60
+poses each, +0.01% and +0.04% cycles); the Ziggurat renders at **231,545**
+clk a frame (it was 226,405 drawn wrong). `waarenas` checks both views,
+red with either fix out.
+
