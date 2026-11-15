@@ -21363,10 +21363,11 @@ $(BUILD)/waa%.bin: $(BUILD)/waa%.asm | $(BUILD)
 	$(NASM) -f bin -w+error -o $@ $<
 $(BUILD)/wapose.bin: apps/wirearena/wapose.asm apps/wirearena/waconst.inc $(BUILD)/watab.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -o $@ $<
-# The keyframes ride the file DELTA-coded (tools/wadelta.py: a byte less the
-# one a facing row and a keyframe before, which packs to under half), and
-# wa_rbind undoes it at entry: the .bin is the image the game then holds -
-# what the tools that map a build read - and the .dlt only what is packed
+# The keyframes ride the file CODED (tools/wadelta.py: the mirrored half of
+# the facings as zeros, the rows and keyframes as differences - a quarter of
+# their LZ size), and wa_rbind undoes it at entry: the .bin is the image the
+# game then holds - what the tools that map a build read - and the .dlt only
+# what is packed
 $(BUILD)/wrpart.dlt: $(BUILD)/wrpart.bin tools/wadelta.py $(BUILD)/watab.inc
 	python3 tools/wadelta.py --tab $(BUILD)/watab.inc --part $< $@
 $(BUILD)/wapose.dlt: $(BUILD)/wapose.bin tools/wadelta.py $(BUILD)/watab.inc

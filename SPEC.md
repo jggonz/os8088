@@ -251381,11 +251381,14 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
     there is a word per verb, its offset, and at +20 (`WR_H_POSE`) the
     offset of the hot keyframes (`wa_pose0`). The primary refuses a
     mismatch at launch with *Renderer part mismatch*.
-  - **The keyframes are shipped DELTA-coded**: the renderer part's hot ones
-    (at `WR_H_POSE`) and the whole of the pose part, each byte less the one
-    a facing row (`WA_NJ` x 2) and then a keyframe (`WA_FRAMESZ`) before it
-    (`tools/wadelta.py`), which packs them to under half. `wa_rbind` undoes
-    both in place at launch (`wa_undelta`), so the parts hold the
+  - **The keyframes are shipped CODED** (`tools/wadelta.py`): the renderer
+    part's hot ones (at `WR_H_POSE`) and the whole of the pose part. Facing
+    k + NFACE/2 is facing k mirrored (x negated, y the same), so a
+    keyframe's second half is shipped as zeros; its first half's rows are
+    each less the row before (`WA_NJ` x 2 bytes), and the whole keyframe is
+    less the one before (`WA_FRAMESZ`). That packs them to under a third,
+    and a keyframe that is not its own mirror fails the build. `wa_rbind`
+    undoes both in place at launch (`wa_undelta`), so the parts hold the
     assembler's bytes from then on, and `build/wrpart.bin` and
     `build/wapose.bin` are those bytes; only the `.dlt` copies are packed.
   - **The verbs**: `WRV_INIT` (after a mode set), `WRV_GEOM`, `WRV_ARENA`

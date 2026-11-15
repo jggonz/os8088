@@ -47,7 +47,7 @@ WR_ABI      equ 15                  ; (2: the camera's sin/cos in FRAME;
                                     ; wa_sparse gone, 9.10; 14: wa_flodv,
                                     ; where CONFIG's pad was; 15:
                                     ; WR_H_POSE, the hot keyframes
-                                    ; shipped delta-coded)
+                                    ; shipped coded)
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-
                                     ; PLAN 4.5; arenagen's)
@@ -59,10 +59,10 @@ WR_H_NV     equ 7
 WR_H_VERB   equ 8                   ; +8: a word per verb, its offset
 WR_H_POSE   equ 20                  ; +20: wa_pose0's offset, the hot
                                     ; keyframes - which the FILE carries
-                                    ; delta-coded (tools/wadelta.py: they
-                                    ; pack to ~3/4 of their LZ size so)
-                                    ; and wa_rbind undoes once, as it does
-                                    ; the pose part's
+                                    ; coded (tools/wadelta.py: the mirror
+                                    ; and the deltas, a quarter of their
+                                    ; LZ size) and wa_rbind undoes once,
+                                    ; as it does the pose part's
 WR_FB       equ 32                  ; the frame block's offset in the part
 
 ; the verbs: index x 2. In: DS = the part's data (the primary's glue sets

@@ -6591,8 +6591,8 @@ wa_rbind:
     xor al, al
     call op_cseg
     mov [wa_rcs], ax
-    mov ax, es                  ; THE KEYFRAMES come DELTA-coded (tools/
-    mov si, [es:WR_H_POSE]      ; wadelta.py: ~5KB fewer on the disk):
+    mov ax, es                  ; THE KEYFRAMES come CODED (tools/
+    mov si, [es:WR_H_POSE]      ; wadelta.py: ~7KB fewer on the disk):
     mov cx, WA_KHOT*WA_FRAMESZ  ; the hot ones in the renderer's data...
     call wa_undelta
     mov al, WA_PPOSE            ; the keyframes' part: its segment, for the
@@ -6615,49 +6615,68 @@ wa_rbind:
     ret
 
 ; wa_undelta - AX = a segment, SI = an offset in it, CX = the bytes of
-; keyframes there: tools/wadelta.py's coding undone in place. A keyframe
-; is NFACE rows of NJ (x, y) byte pairs, and a joint moves little from one
-; facing to the next and from one keyframe to the next, so the file holds
-; each byte less the one a row (WA_NJ*2) before it, and that again less the
-; one a keyframe (WA_FRAMESZ) before - which LZ packs to under half. The
-; two differences commute, so the two sums come back in either order. Once,
-; at entry (~40 clk a byte a pass: ~0.24 s on a 4.77 MHz 8088 for both
-; parts, against ~5.5KB the floppy does not have to give). CX is whole
-; keyframes. Keeps all but AX and the flags
+; keyframes there (whole ones, two or more): tools/wadelta.py's coding
+; undone in place. A keyframe is NFACE facing rows of NJ (x, y) byte pairs;
+; the file holds each keyframe less the one before, and in each, the first
+; half's rows each less the row before and the second half as zeros - it is
+; the first MIRRORED (the view turned half round: x negated, y the same,
+; which wadelta checks). LZ packs that to under a third. So: the keyframes'
+; running sum, then a keyframe at a time the rows' and the mirror. Once, at
+; entry (~70 clk a byte: ~0.2 s on a 4.77 MHz 8088 for both parts, against
+; ~7KB the floppy does not have to give). Keeps all but AX and the flags
 wa_undelta:
     push cx
     push dx
     push si
     push di
     push ds
+    push es
     mov ds, ax
+    mov es, ax
     cld
-    mov dx, WA_NJ*2             ; a row, then a keyframe
-.pass:
-    push cx
+    mov dx, si
+    add dx, cx                  ; DX = the end
     push si
-    mov di, si
-    add di, dx                  ; DI = the byte, SI = the one it is less
-    sub cx, dx
-    shr cx, 1                   ; (a pair a loop: both strides are even,
-.b:                             ; so the two bytes read are decoded
-    lodsw                       ; already - ~40 clk a byte, not ~55)
-    add [di], al
-    inc di
-    add [di], ah
-    inc di
-    loop .b
+    mov di, si                  ; every keyframe plus the one before
+    add di, WA_FRAMESZ
+    sub cx, WA_FRAMESZ
+    shr cx, 1
+    call .sum
     pop si
-    pop cx
-    cmp dx, WA_FRAMESZ
-    mov dx, WA_FRAMESZ
-    jne .pass
+.f:
+    mov di, si                  ; its first half: each row plus the one
+    add di, WA_NJ*2             ; before
+    push si
+    mov cx, (WA_FRAMESZ/2 - WA_NJ*2) / 2
+    call .sum
+    pop si                      ; (DI = its second half)
+    mov cx, WA_FRAMESZ / 4
+.m:
+    lodsw                       ; ...the first's mirror
+    neg al
+    stosw
+    loop .m
+    mov si, di
+    cmp si, dx
+    jb .f
+    pop es
     pop ds
     pop di
     pop si
     pop dx
     pop cx
     ret
+.sum:                           ; CX pairs: [DI] += [SI], both on. A pair
+    lodsw                       ; a loop: the strides are even, so the
+    add [di], al                ; two bytes read are summed already (~40
+    inc di                      ; clk a byte, not ~55)
+    add [di], ah
+    inc di
+    loop .sum
+    ret
+%if WA_KHOT < 2 || WA_NFRAMES - WA_KHOT < 2 || WA_FRAMESZ != WA_NFACE*WA_NJ*2
+ %error "wa_undelta: two keyframes or more a part, NFACE rows of NJ pairs"
+%endif
 
 ; wa_partsmv - the parts standard's hook (OP_ONMOVE, SPEC.md 20.12.12): the
 ; carve moved, op_seg is right again, and the two words wa_rbind banked are
