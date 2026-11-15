@@ -69,7 +69,8 @@ def canvases():
     return out
 
 
-def main():
+def main(argv=None, boot=None):
+    """one row, or with `boot` (tests/vidshare.py) one leg of a shared boot"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--layout", choices=("herc", "cga"), default="herc")
     ap.add_argument("--machine", default="os8088_5150_herc_gla")
@@ -77,7 +78,7 @@ def main():
                     help="PLAIN.V88's keys IN PARTS (98.1.3.8), a read of "
                     "this many bytes each: its lap cannot join through key 0 "
                     "inside the hook, and goes on from the stream's start")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     shadow = a.layout != "herc"
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
@@ -106,8 +107,9 @@ def main():
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
                         "--size", "360", pkg, lp, pl], check=True,
                        capture_output=True)
-        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine, quick=True) as ui:
+        with (boot or os88ui.boot)(os88build.at("build/os8088-360.img"),
+                                   apps=disk, machine=a.machine,
+                                   quick=True) as ui:
             m = ui.m
 
             def opened(name):
@@ -295,4 +297,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--shared"]:   # ONE BOOT, SEVERAL ROWS' LEGS
+        import vidshare
+        sys.exit(vidshare.run(main, sys.argv[2:]))
     sys.exit(main())

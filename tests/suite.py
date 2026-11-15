@@ -23337,6 +23337,8 @@ SOAK = _shared(SOAK, (
     ("videmssh", 200, ("videms", "videmshyb", "videmsslow", "videmswrap")),
     ("vidpalsh", 170, ("vidpal", "vidpallayer", "vidpalloop",
                        "vidpalrep0")),
+    ("vidrepeatsh", 140, ("vidrepeat", "vidrepeatshd", "vidkpartrep")),
+    ("vidprevhercsh", 170, ("vidprevherc", "vidprevshd", "vidkpartpv")),
 ))
 
 
