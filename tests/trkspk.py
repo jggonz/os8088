@@ -63,6 +63,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build                   # noqa: E402
+import os88deadline                                  # noqa: E402
 import os88geom as geom                               # noqa: E402
 from cycweb import pkg_syms                           # noqa: E402
 
@@ -151,8 +152,8 @@ class Trk:
                 cyc.append(rec["cycles"])
         with os88marty.bp_trace(self.m, {"type": "io", "addr": port},
                                 k_dry, on_hit=hit):
-            t0 = time.time()
-            while len(cyc) < n and time.time() - t0 < 600:
+            gd = os88deadline.Guest(self.m, 600)    # the guest's clock
+            while len(cyc) < n and gd:
                 time.sleep(0.2)
         if len(cyc) < 2:
             return 0.0, dry[0]
@@ -272,15 +273,19 @@ class TrkCovox(Trk):
         self.base = (rec[geom.W_SEG] | rec[geom.W_SEG + 1] << 8) << 4
 
     def writes(self, port, n, limit=60.0):
-        """the rate of n writes to PORT - or, n = 0, how many in `limit`
-        guest-blind seconds of wall clock (a stop does not say WHICH port
-        it was, so the two ports are counted one at a time)"""
+        """the rate of n writes to PORT - or, n = 0, how many in a window of
+        `limit` idle-box seconds, spent as GUEST time (limit x GUEST_PACE):
+        it was wall clock, so a loaded soak watched a fifth of the guest time
+        an idle box did and a "none" count proved less (a stop does not say
+        WHICH port it was, so the two ports are counted one at a time)"""
         cyc = []
         with os88marty.bp_trace(self.m, {"type": "io", "addr": port},
                                 on_hit=lambda mm, rec: cyc.append(
                                     rec["cycles"])):
-            t0 = time.time()
-            while (not n or len(cyc) < n) and time.time() - t0 < limit:
+            gd = (os88deadline.Guest(self.m, limit) if n else
+                  os88deadline.Guest(self.m, limit,
+                                     guest=limit * os88marty.GUEST_PACE))
+            while (not n or len(cyc) < n) and gd:
                 time.sleep(0.2)
         if not n:
             return len(cyc)

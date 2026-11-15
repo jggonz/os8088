@@ -319,6 +319,23 @@ FAST = [
         "int 19h they existed to read it at, and passed. m.sym() follows the "
         "slide; a deliberate unslid use is a line in tests/coldsym.txt. "
         "VERIFIED TO FAIL on the three rows' old forms"),
+    Row("hostwait", "soak", py("tests/unit/t_hostwait.py"), 7.0,
+        "SOAK (owner, 2026-11-11): about the suite's own harness, not the OS "
+        "- and fast/full need the owner's line in tests/tierlock.txt, which "
+        "this has not got (it is ~3 s idle, ~7 s at a load of 30). "
+        "A ROW DOES NOT PACE THE GUEST IN HOST SECONDS, AS A RATCHET: every "
+        "tests/*.py is walked (AST, so comments never count) for time.sleep "
+        "outside a poll, time.time()/monotonic() deadlines, fixed ports and "
+        "/tmp paths - the four that go red under a loaded soak and green "
+        "alone - and for the guest-clock waste (launch boot=N, click "
+        "settle=N, advance(frames=), poll > 0.05, required=False). Each "
+        "(file, kind) count must EQUAL tests/hostwait.txt's line: above is a "
+        "new host wait, below is a stale line, and `--update` lowers it in "
+        "one command (it never raises one without --raise and a reason). "
+        "VERIFIED TO FAIL: a time.sleep(2) after a click in tests/dispcp.py "
+        "names the file, kind and line; a `# host:` mark removed from "
+        "tests/hibernate.py names its deadline; a line left one high says "
+        "to --update (docs/plans/soak-speed-2/flake.md)"),
     Row("bochssleep", "soak", py("tests/unit/t_bochssleep.py"), 1.5,
         "SOAK (owner, 2026-11-11): about the suite's own harness and "
         "fixtures, not the OS - the release soak runs every row "

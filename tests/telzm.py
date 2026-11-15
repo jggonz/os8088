@@ -530,8 +530,7 @@ def main():
         sizes = {}
         srv = os88bbs.BBSServer(port=PORT, files=[small, big], zwait=0.5,
                                 timeout=300.0, once=True, bin32=True)
-        srv.start()
-        time.sleep(0.3)
+        srv.start()   # (bound and listening in __init__: no pause)
         press_connect()
         if not connected():
             fails.append("session 2 never reached TS_UP (te_state %d)"
@@ -627,8 +626,7 @@ def main():
         try:
             srv = os88bbs.BBSServer(port=PORT, files=[lfile], zwait=0.5,
                                     timeout=200.0, once=True)
-            srv.start()
-            time.sleep(0.3)
+            srv.start()   # (bound and listening in __init__: no pause)
             press_connect()
             if not connected():
                 fails.append("session 3 never reached TS_UP (te_state %d)"
@@ -683,8 +681,7 @@ def main():
         open(afile, "wb").write(adata)
         srv = os88bbs.BBSServer(port=PORT, files=[cfile, afile], zwait=0.5,
                                 timeout=200.0, once=True)
-        srv.start()
-        time.sleep(0.3)
+        srv.start()   # (bound and listening in __init__: no pause)
         press_connect()
         if not connected():
             fails.append("session 4 never reached TS_UP (te_state %d)"
@@ -775,8 +772,7 @@ def main():
             batch = make_files(tmp)
             srv = os88bbs.BBSServer(port=PORT, files=[p for p, _, _ in batch],
                                     zwait=0.5, timeout=240.0, once=True)
-            srv.start()
-            time.sleep(0.3)
+            srv.start()   # (bound and listening in __init__: no pause)
             press_connect()
             if not connected():
                 srv.stop()

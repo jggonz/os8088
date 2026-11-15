@@ -497,8 +497,7 @@ def main():
             seed = 3 if name != "torture" else 13
             srv = os88bbs.BBSServer(port=PORT, fixture=data, frag=seed,
                                     fragdelay=0.01, timeout=40.0, once=True)
-            srv.start()
-            time.sleep(0.3)
+            srv.start()   # (bound and listening in __init__: no pause)
             press_connect()
             if not connected():
                 srv.stop()
@@ -535,7 +534,7 @@ def main():
                 hung_up()
                 srv.stop()
                 logs[name] = srv.log_dict()
-                time.sleep(0.6)             # the HOST's port (see below)
+                time.sleep(0.6)             # host: the HOST's port (see below)
                 continue
             bad = diff_report(scr, want)
             say("%-8s %5d bytes, %d fed  %s"
@@ -570,7 +569,7 @@ def main():
             hung_up()                       # so this asks and does not do
             srv.stop()
             logs[name] = srv.log_dict()
-            time.sleep(0.6)                 # ...before the port is bound again
+            time.sleep(0.6)                 # host: ...before the port is bound again
 
         # --- 3 and 4: the negotiation and the subnegotiations ---------------
         log = logs.get(fixtures[0], {})
@@ -655,13 +654,13 @@ class MirrorServer(threading.Thread):
         self.rx = bytearray()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        end = time.time() + wait
+        end = time.time() + wait      # host: the bind's own retry budget
         while True:
             try:
                 self.sock.bind(("0.0.0.0", port))
                 break
             except OSError:
-                if time.time() >= end:
+                if time.time() >= end:  # host: (the bind)
                     raise
                 time.sleep(0.25)
         self.sock.listen(2)
@@ -685,7 +684,7 @@ class MirrorServer(threading.Thread):
             conn.sendall(bytes([IAC, DO, OPT_LINEMODE,
                                 IAC, WILL, OPT_XDISPLOC]))
             conn.settimeout(0.5)
-            end = time.time() + 12.0
+            end = time.time() + 12.0  # host: the server's read of the guest's reply
             while time.time() < end:
                 try:
                     d = conn.recv(256)
@@ -725,8 +724,7 @@ MIRROR = (("WONT LINEMODE", bytes([IAC, WONT, OPT_LINEMODE])),
 
 def check_mirror(press_connect, connected, fails, m, hung_up):
     srv = MirrorServer(PORT)
-    srv.start()
-    time.sleep(0.3)
+    srv.start()   # (bound and listening in __init__: no pause)
     press_connect()
     if not connected():
         srv.stop()
@@ -818,8 +816,7 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
     """SPEC.md 70.8.7: 80x25 onto 80x25, all of it, no status line."""
     srv = os88bbs.BBSServer(port=PORT, fixture=stream, frag=5, fragdelay=0.01,
                             timeout=90.0, once=True)
-    srv.start()
-    time.sleep(0.3)
+    srv.start()   # (bound and listening in __init__: no pause)
     press_connect()
     if not connected():
         srv.stop()

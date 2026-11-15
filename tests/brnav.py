@@ -224,7 +224,7 @@ class TwoPages(threading.Thread):
 
     def _slow(self, c):
         try:
-            time.sleep(SLOW_SECS)
+            time.sleep(SLOW_SECS)      # host: the SERVER's hold is the subject (71.8)
             c.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
                       b"Content-Length: %d\r\n\r\n" % len(PAGE_A) + PAGE_A)
         except OSError:

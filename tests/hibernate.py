@@ -283,12 +283,12 @@ def wrote(names, secs=20.0):
     with the twist that the thing here is not the guest's, so the budget is
     the HOST's and there is nothing else it could be.
     """
-    end = time.time() + secs
+    end = time.time() + secs   # host: the HOST file's flush, see above
     while True:
         have = [n for n in names if root_has(n)]
         if len(have) == len(names):
             return True, have
-        if time.time() >= end:
+        if time.time() >= end:     # host: (wrote's flush budget)
             return False, have
         time.sleep(0.5)
 
@@ -524,6 +524,7 @@ def damage_image(linear, n):
     else's bytes under the program that was there. Read and written with a
     FAT reader that is not the kernel's."""
     import instdeep
+    # host: the emulator's last writes reach the host file on its own time
     end = time.time() + 30.0            # the emulator's last writes reach the
     while True:                         # host file on its own schedule (wrote)
         blob = bytearray(open(VHD, "rb").read())
@@ -532,6 +533,7 @@ def damage_image(linear, n):
         ent = [e for e in vol.entries(0) if e[0] == "HIBERNAT.IMG"][0]
         chain = vol.chain(ent[2])
         clus = vol.bps * vol.spc
+        # host: (that flush budget)
         if len(chain) * clus >= ent[3] or time.time() >= end:
             break
         time.sleep(0.5)

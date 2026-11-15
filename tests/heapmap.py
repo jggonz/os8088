@@ -227,6 +227,7 @@ def sample_mega(limit=60.0):
     whole = False
     while True:
         t = (m.status()["cycles"] - c0) / os88megabochs.GUEST_HZ
+        # host: a backstop 10x out; the window is guest time (t)
         if t >= limit or time.time() - t0 >= 10 * limit:
             break
         if not whole:
