@@ -307,8 +307,9 @@ def main():
         g.place(256, 1024, 192)
         g.p.write(g.sym["wa_bdet"], b"\x00")
         rode, ring = False, False
-        for s_ in range(240):
-            g.put("wa_hp", 100)
+        for s_ in range(480):           # (four minutes: the bots' dice -
+            g.put("wa_hp", 100)         # 7 to 65 s measured alone, and once
+                                        # past two minutes in a 4-lane run)
             g.m.advance(cycles=F // 2)
             rode = rode or any(g.lift(i) > g.word("wa_lrest", 2 * i)
                                for i in (0, 1))
@@ -317,7 +318,7 @@ def main():
             if rode and ring:
                 break
         if not (rode and ring):
-            fails.append("pit: in 120 s the bots %s"
+            fails.append("pit: in 240 s the bots %s"
                          % ("rode no lift" if not rode else
                             "hopped onto no ring"))
         else:
