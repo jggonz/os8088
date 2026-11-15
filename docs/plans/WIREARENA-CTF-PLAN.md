@@ -1,7 +1,9 @@
 # WireArena: capture the flag, teams and side spawns
 
-**STATUS: PLAN** (2026-11-15). Written to the owner's brief below, before
-any code. Section 9 lists the defaults this plan chose where the brief left
+**STATUS: CTF BUILT** (2026-11-15): waves C1 to C3 - the rules, the bots
+that play for the flag, and linked matches (section 11). C4, team
+deathmatch, is the one wave left. Written to
+the owner's brief below, before any code. Section 9 lists the defaults this plan chose where the brief left
 a choice; each is one constant or one line of data to change.
 
 The owner, 2026-11-15:
@@ -136,9 +138,9 @@ as for a player: a bot at the node walks within reach.
   (`Team deathmatch` with wave C4), beside the arena. CTF with an arena
   that has no bases is refused at Play with a line in the window: *"This
   arena has no flags: pick the Twin or the hedge"*.
-- **Linked**: the mode is the host's, as the arena is - HELLO's byte 17
-  (reserved today) carries it, and a guest echoes it. Old builds send 0:
-  free-for-all.
+- **Linked**: the mode is the host's, as the arena is - HELLO's byte 14,
+  the difficulty's, carries it in its high nibble (byte 17, reserved when
+  this was written, had since become the peers bound: NET-PLAN 4).
 - **THE HOST RUNS THE RULES.** It already has every position: its own
   player's, each remote player's from their SNAPs, and its bots'. Each
   tick it applies section 2 to all of them and sends a **FLAG** event (a
@@ -184,7 +186,7 @@ cell. Not done here, because CTF fits; measured when something needs it.
 Each ends with its outcome on the glass, the rows that cover it named; the
 soak rows and `test-full` run once after the last (CLAUDE.md).
 
-- [ ] **C1 Teams, flags and the rules, one machine.** arenagen's bases,
+- [x] **C1 Teams, flags and the rules, one machine.** arenagen's bases,
   sides and their nodes; the Mode drop-down; teams; side spawns; no
   friendly fire; figures and flags in team colours; take, carry, drop,
   return, capture, win; the flag line and the messages.
@@ -193,12 +195,12 @@ soak rows and `test-full` run once after the last (CLAUDE.md).
   *Checked by:* a new soak row `wactf`, off the game's variables: a take,
   a drop on death, a return by touch and by time, a capture only with your
   own flag home, the win at 3, side spawns, no damage between teammates.
-- [ ] **C2 The bots play for the flag** (section 6).
+- [x] **C2 The bots play for the flag** (section 6).
   *Outcome:* bots take your flag, carry it home and score; they return
   their own.
   *Checked by:* `wactf`: in N minutes of bots only, a capture by each
   team.
-- [ ] **C3 Linked.** The mode in HELLO; the host's FLAG events; a guest
+- [x] **C3 Linked.** The mode in HELLO; the host's FLAG events; a guest
   draws them.
   *Checked by:* `walink`'s pattern - two machines, a guest's take and
   capture seen on both.
@@ -207,4 +209,120 @@ soak rows and `test-full` run once after the last (CLAUDE.md).
 
 ## 11. As built
 
-(Filled in as each wave lands.)
+### 11.1 C1: the rules on one machine (2026-11-15)
+
+**Where it lives.** `apps/wirearena/wactf.inc` (the game's): the mode and
+the team table, made when a match starts (`wa_ctfstart`); the rules each
+tick (`wa_ctick`, before the pickups); a side's respawn point
+(`wc_rspick`, which `wa_prespawn` and `wa_brespawn` take in a team mode);
+FRAME's flags (`wc_frame`); the flag line and the messages (`wa_ovctf`).
+`tools/arenagen.py`: `ARENA_FLAGS`, a respawn point's side, the bases'
+nodes after the bench's views (`flag_bases` refuses a base off the floor,
+one with no route node within reach, an arena with fewer than two points
+a side). The Twin's graph gained a spur node at each base.
+The renderer: `wa_flagsd` and the team colours in `wa_figure`.
+
+**As section 2 to 7 had it, with these differences:**
+- **Linked, CTF was refused at Ready** with a toast until C3 (11.3).
+- **The teams' block is not in FRAME.** In FRAME, its 24 bytes were copied
+  every frame of every match: +0.4 to +0.7% on free-for-all. It is a block
+  of its own after the rockets, copied every frame of a team match and
+  once as a match starts (`wa_ctfcp`), and the renderer tests one byte
+  (`wa_ctfon`) before the flags and before a figure's team colour.
+- **The setup grew a fourth row** for Mode (`free-for-all`, `capture
+  flag`), under Play; the window is 18 px taller (338 x 174). The keys'
+  focus goes in the window's reading order: the first five drop-downs,
+  the address field beside Play (while Play is internet), then Mode. Its
+  first version put Mode before the field, and the final pass's
+  `walinkip` and `walink4ip` caught it: Down from Play no longer reached
+  the field, so an address typed there went nowhere.
+- **Teams by slot parity**, as 9 has it: alone, us red, bot 1 blue, bot 2
+  red, bot 3 blue.
+
+**Measured.** `waposes` against the commit before, seven sets (the hedge
+with and without figures, at 40 and 80; heights at 40 and 80; the Twin;
+the flat arena): every free-for-all picture byte-identical, and +0.09% to
++0.19% a frame (about 100 to 230 clk: the one-byte tests). Bytes: the
+game's image 29,831 -> 31,494; the renderer part 62,233 -> 62,385 (2,639
+free); the Twin's arena part 2,253 -> 2,423, the hedge's 4,926 -> 4,940.
+No buffer had to move.
+
+**Looked at** on CGA (colour) and Hercules (mono), on the Twin: the flag
+line (`RED 0 #   BLUE 0 #`, each in its colour - on Hercules ours normal,
+theirs bright), blue's flag a tall blue block at its base, a blue foe and
+a red teammate before it; carrying it, `YOU HAVE THE FLAG` and blue's
+status `!`.
+
+**The row: `wactf`** (soak, 10 s) - section 10's checks for C1, all 16
+passing. Broken on purpose, each went red: the touch's team test inverted
+(6 checks), the capture's "own flag home" test dropped (4), `wa_hurt`'s
+teammate guard taken out (1). A first version of its "no capture away"
+check stayed green with the home test dropped - it had dropped our flag
+far from the base, where no capture could have happened anyway - and now
+stages the case that bites: our flag carried by a foe standing at our
+base.
+
+### 11.2 C2: the bots play for the flag (2026-11-15)
+
+`wc_bgoal`, called where a bot ends a leg (`wa_bnext`), sets its FETCH
+goal as section 6 orders it: carrying their flag, its own base's node;
+its own flag dropped, the node nearest where it lies (`wa_bcell`); their
+flag at home, their base's node, or dropped, the node nearest it; carried
+by a teammate, nothing (it roams and fights). A bot that fights (engaged,
+hunting) and carries nothing fights on; a carrier heads home whatever it
+was doing. Its base node is within a flag's reach (arenagen's rule), so a
+bot that gets there touches the flag; FETCH's arrival turns it back to
+roaming, and the next leg's end picks the next goal.
+
+**Measured** (MartyPC, the Twin, three bots and us idle): blue's two bots
+captured three times and won at 131 guest seconds; after the round's
+restart red's one bot captured at 199 s. One against one (two bots), two
+captures came at 79 to 132 s over four runs, and once none by blue in
+240 s: the bots' dice decide who scores first.
+
+**The row** asks what does not depend on those dice: each bot carries the
+other's flag, and two captures are made in all, within four guest
+minutes. With `wc_bgoal` returning at once the bots roam the graph at
+random, and one capture came in four minutes: red. `wactf` is now 28 s.
+
+### 11.3 C3: linked (2026-11-15)
+
+- **The mode** rides HELLO's byte 14 (the difficulty's high nibble), the
+  host's; a guest's setup shows it greyed, as the arena.
+- **The host runs the rules** (`wa_ctick`'s, unchanged) over every live
+  player and bot it has: its own player, each remote player's figure (its
+  SNAP's place; `F_DEAD` set from its alive flag) and its bots. After them
+  each tick, `wc_send` queues a **FLAG** event (EVENT kind 4) for each flag
+  whose state or carrier changed since it last sent one - both, when the
+  captures or the win changed. Its payload: the flag's team, its state,
+  its carrier by SLOT (`wa_lkcanon`), both teams' captures, the win, and
+  x, y, z: 12 of the event's 13 bytes. The queue's acks and resends are
+  the link's own (LINK-PLAN 4.2).
+- **A guest runs no rule.** `wc_evin` applies a FLAG event - the carrier
+  back to a local index (`wa_lklocal`) - and says what changed as the host
+  would: a capture (the captures went up), a take, a drop, a flag home;
+  the captures both 0 again after a win is the round anew, and the guest
+  puts its own player back on its side. Each tick a carried flag follows
+  its carrier there.
+- **A round's restart** (`wc_side`) puts back our player and only the bots
+  this machine runs; each guest puts back its own.
+- **Not run**: four players on UDP (NET-PLAN). The events are the link's,
+  per peer, as every event is; no row plays CTF with four.
+
+**The row: `wactflink`** (soak, 23 s; QEMU, walink's harness): the mode by
+HELLO, the teams by slot, side spawns, the guest's take decided by the
+host and told by its event, the guest's capture on both machines, the
+host's take seen on the guest with the flag over its figure. Red with the
+guest's events ignored (`wc_evin` returning at once) and with the host's
+sending off (`wc_send`): 4 checks each.
+
+### 11.4 The final pass (2026-11-15)
+
+`make` (the gates and the fast tier), then the seventeen WireArena soak
+rows once - `walift waarenas wasetup waroutes wabots wascore wabotarms
+walink walinknet walinkudp walinkip walink4 walink4ip waweapons waflines
+wactf wactflink`. Thirteen passed. `walinkip` and `walink4ip` failed on
+the setup's focus order (11.1), fixed; `waflines` and `wasetup` failed
+because the setup's source was being edited while they ran (each
+assembles it, and it did not assemble at that moment). The four re-run
+after the fix: all pass.

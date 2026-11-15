@@ -31,6 +31,9 @@ EV_FIRE     equ 1               ; a projectile: its kind | its owner << 4, x,
                                 ; y, z, and its velocity, as it left
 EV_TAKE     equ 2               ; a pickup taken: its index
 EV_ROLL     equ 3               ; (the host's) a pickup back: index, kind
+EV_FLAG     equ 4               ; (the host's) a CTF flag: its team, state,
+                                ; carrier's slot, both teams' captures, the
+                                ; win, x, y, z (CTF-PLAN 7: wactf.inc)
 WL_PSNAP    equ 3               ; sim ticks a SNAP, no bots: 10 Hz
 WL_PSNAPB   equ 5               ; ...with bots: 6 Hz (LINK-PLAN 2, 11.2)
 WR_X        equ 0               ; a remote figure's record (wa_lkr, ten bytes
@@ -737,7 +740,10 @@ wa_lkhello1:
     stosb
     mov al, [wa_lkarena]
     stosb
-    mov al, [wa_lkdiff]
+    mov al, [wa_lkgmode]        ; (the difficulty, and in its high nibble
+    mov cl, 4                   ; the mode - the host's, CTF-PLAN 7)
+    shl al, cl
+    or al, [wa_lkdiff]
     stosb
     mov al, [wa_lkbots]         ; (the host's: L2)
     stosb
@@ -1176,7 +1182,13 @@ wa_lkhtake:
     mov al, [si+13]             ; a guest takes the host's arena, its
     mov [wa_lkarena], al        ; difficulty and its tag
     mov al, [si+14]
+    mov ah, al
+    and al, 0x0F
     mov [wa_lkdiff], al
+    mov cl, 4
+    shr ah, cl
+    and ah, 1
+    mov [wa_lkgmode], ah
     mov al, [si+15]
     cmp al, 2
     jbe .nb
@@ -2429,6 +2441,8 @@ wa_lkevin:
     je .fire
     cmp al, EV_TAKE
     je .take
+    cmp al, EV_FLAG
+    je .flag
     cmp al, EV_ROLL
     jne .out
     xor bx, bx                  ; ROLL: a pickup back, with its kind
@@ -2480,6 +2494,8 @@ wa_lkevin:
     ret
 .fire:
     jmp wa_lkspawn
+.flag:
+    jmp wc_evin
 
 ; wa_lkspawn - SI = a FIRE: its projectile flies here too, its owner the
 ; figure that is its owner here (LINK-PLAN 3)

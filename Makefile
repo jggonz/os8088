@@ -21312,7 +21312,7 @@ $(WASTAMP): | $(BUILD)
 wirearena: $(BUILD)/warena.o88
 $(BUILD)/watab.inc: tools/arenagen.py apps/wirearena/waconst.inc | $(BUILD)
 	python3 tools/arenagen.py $@
-$(BUILD)/wirearena.bin: apps/wirearena/wirearena.asm apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc apps/os88api.inc apps/os88pit.inc apps/os88parts.inc apps/os88partsbody.inc apps/wirearena/walink.inc apps/wirearena/wasetup.inc apps/os88cable.inc apps/os88raw.inc apps/os88udp.inc apps/os88ui.inc drivers/net/netpkg.inc $(WASTAMP) | $(BUILD)
+$(BUILD)/wirearena.bin: apps/wirearena/wirearena.asm apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc apps/os88api.inc apps/os88pit.inc apps/os88parts.inc apps/os88partsbody.inc apps/wirearena/walink.inc apps/wirearena/wasetup.inc apps/wirearena/wactf.inc apps/os88cable.inc apps/os88raw.inc apps/os88udp.inc apps/os88ui.inc drivers/net/netpkg.inc $(WASTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(if $(WAMETER),-DWA_METER=$(WAMETER)) -I apps/ -I apps/wirearena/ -I drivers/net/ -I $(BUILD)/ -l $(BUILD)/wirearena.lst -o $@ $<
 $(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/wirearena/wrlow.inc apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wrtab.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -l $(BUILD)/wrpart.lst -o $@ $<

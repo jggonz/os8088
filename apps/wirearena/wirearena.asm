@@ -126,6 +126,7 @@ wa_main:
 .alone:
     call wa_bpark               ; (alone: the bots the setup did not ask for)
 .go2:
+    call wa_ctfstart            ; (the mode, the teams, the flags: CTF-PLAN)
     call OSAPI_MOUSE_REL        ; the desktop's motion is not ours: discard
     xor ax, ax
     mov [wa_acc], ax
@@ -439,6 +440,20 @@ wa_brespawn:
     cmp byte [wa_bdet], 0
     jne wa_spawn
     push si
+    cmp byte [wa_gmode], 0      ; A TEAM MODE: its side's points alone,
+    je .ffa                     ; the farthest from its nearest foe
+    call wa_bidx                ; (CTF-PLAN 2)
+    inc ax
+    mov bl, al
+    xor bh, bh
+    mov ah, al
+    mov al, [wa_tm+bx]
+    push bp
+    call wc_rspick
+    pop bp
+    mov bx, si
+    jmp .placed
+.ffa:
     mov si, [wa_grp]
     lodsw
     mov cx, ax
@@ -460,6 +475,7 @@ wa_brespawn:
 .np:
     add si, 8
     loop .p
+.placed:
     mov al, [bx+6]              ; its node's first edge out
     xor ah, ah
     mov cl, 3
@@ -927,6 +943,7 @@ wa_tick:
     call wa_rktick
     mov byte [wa_hproj], 0
 .c_pk:
+    call wa_ctick               ; (CTF: the flags' rules, CTF-PLAN 2)
     jmp wa_pktick
 .lfig:
     call wa_figtick
@@ -1920,6 +1937,20 @@ wa_btpos:
     mov bl, [di+F_BTGT]
     ; (falls through)
 wa_btpbl:                       ; BL = the target (0 the player, 1.. a bot)
+    cmp byte [wa_gmode], 0      ; A TEAM MODE: a teammate is no target
+    je .ff                      ; (CTF-PLAN 2)
+    push ax
+    push bx
+    call wa_bidx
+    inc ax
+    xor bh, bh
+    mov ah, [wa_tm+bx]          ; (the target's team)
+    mov bl, al
+    cmp ah, [wa_tm+bx]          ; (and this bot's)
+    pop bx
+    pop ax
+    je .none
+.ff:
     or bl, bl
     jnz .bot
     cmp byte [wa_pdead], 0
@@ -2775,6 +2806,7 @@ wa_bnext:
     jne .goal                   ; weapon with the pistol alone
     call wa_bfetch
 .goal:
+    call wc_bgoal               ; (CTF: the flags first - CTF-PLAN 6)
     cmp byte [di+F_BST], WA_BHUNT ; HUNTING or FETCHING (AI-PLAN 3.2): the
     jb .roam                    ; next hop toward the goal - there, it
     mov al, [di+F_BGOAL]        ; roams again
@@ -3637,6 +3669,21 @@ wa_launch:
 wa_hurt:
     cmp byte [di+F_DEAD], 0
     jne .out
+    cmp byte [wa_gmode], 0      ; A TEAM MODE: no hurt between teammates
+    je .ff                      ; (CTF-PLAN 2) - [wa_killer] the shooter
+    push ax
+    push bx
+    call wa_bidx
+    inc ax
+    mov bl, al
+    xor bh, bh
+    mov al, [wa_tm+bx]
+    mov bl, [wa_killer]
+    cmp al, [wa_tm+bx]
+    pop bx
+    pop ax
+    je .out
+.ff:
     call wa_lkremote            ; THE OTHER MACHINE'S (LINK-PLAN 3): the
     jne .here                   ; shooter judges - the damage on the wire,
     push ax                     ; the flinch here, no health changed: a
@@ -3774,6 +3821,19 @@ wa_zapgo:
 ; there are other players): the shield first, then the health; at 0 they
 ; start again at the arena's start with the pistol alone. Clobbers AX, BX
 wa_phurt:
+    cmp byte [wa_gmode], 0      ; A TEAM MODE: a teammate's splash hurts
+    je .ff                      ; nothing (CTF-PLAN 2); our own still does
+    cmp byte [wa_hurtby], 0
+    je .ff
+    push bx
+    mov bl, [wa_hurtby]
+    xor bh, bh
+    mov bl, [wa_tm+bx]
+    cmp bl, [wa_tm]
+    pop bx
+    jne .ff
+    ret
+.ff:
     xor ah, ah
     mov byte [wa_ovd], 1
     sub [wa_sh], ax
@@ -3845,6 +3905,14 @@ wa_ptick:
 ; the axis distances) from the nearest live bot
 wa_prespawn:
     push di
+    cmp byte [wa_gmode], 0      ; A TEAM MODE: our side's points alone,
+    je .ffa                     ; the farthest from our nearest foe
+    mov al, [wa_tm]             ; (CTF-PLAN 2)
+    xor ah, ah
+    call wc_rspick
+    mov di, si
+    jmp .placed
+.ffa:
     mov si, [wa_grp]
     lodsw
     mov cx, ax                  ; CX = the points
@@ -3878,6 +3946,7 @@ wa_prespawn:
 .np:
     add si, 8
     loop .p
+.placed:
     mov ax, [di]
     mov [wa_px], ax
     mov ax, [di+2]
@@ -4558,6 +4627,7 @@ wa_ovbuild:
     call wa_ovrsp
 .alive:
     call wa_lkmsg               ; (linked: WAITING, LINK LOST, LEFT)
+    call wa_ovctf               ; (CTF: the flag line, its messages)
     mov al, [wa_wpn]            ; THE WEAPON: its cells as they were made
     xor ah, ah                  ; the last time (wa_spc, wa_spg) while it is
     cmp byte [wa_rld], 0        ; the same weapon in the same place: two rows
@@ -5947,6 +6017,16 @@ wa_rframe:
     mov cx, WA_NRK*WA_RKSZ/2
     rep movsw
 .norock:
+    cmp byte [wa_ctfcp], 0      ; THE TEAMS' BLOCK (CTF-PLAN 4): every frame
+    je .noctf                   ; of a team match, once more as one starts
+    jns .ctf                    ; or ends (wa_ctfstart: 80h once, 1 always)
+    mov byte [wa_ctfcp], 0
+.ctf:
+    mov si, wa_fb_ctf
+    mov di, WA_RAT(wa_fb_ctf)
+    mov cx, (wa_fb_cend - wa_fb_ctf) / 2
+    rep movsw
+.noctf:
     ret
 
 ; wa_camsc - AX = sin, DX = cos (Q14) of the camera's angle, wa_ang's
@@ -6107,6 +6187,14 @@ wa_loadarena:
     and al, 0xFE
     add ax, wa_gph
     mov [wa_gpbp], ax
+    mov bx, ax                  ; ...and the flags' bases after the views:
+    mov ax, [bx]                ; a count, 12 bytes a view (CTF-PLAN 3)
+    mov cl, 12
+    mul cl
+    add ax, bx
+    inc ax
+    inc ax
+    mov [wa_gflp], ax
     call wa_sgrow
     pop ax
     call op_drop
@@ -6122,6 +6210,7 @@ wa_loadarena:
 %include "watab.inc"
 
 %include "walink.inc"           ; two machines over a null modem (LINK-PLAN)
+%include "wactf.inc"            ; capture the flag, and its teams (CTF-PLAN)
 %include "wasetup.inc"          ; the opening window: the match setup
 %define OS88UI_DROP             ; the setup's drop-downs (SPEC.md 13.14)
 %define OS88UI_ABOUT            ; the About card: the keys (SPEC.md 12.2)
@@ -6177,6 +6266,7 @@ wa_hudtpl:  db 'FPS       MS      R      P      N       ', 0
 TOASTSTR wa_t_small, 'Needs kern_big or mega'
 TOASTSTR wa_t_part, 'Renderer part mismatch'
 TOASTSTR wa_t_host, 'The host picks the arena'
+TOASTSTR wa_t_ctfa, 'This arena has no flags'
 TOASTSTR wa_t_be, 'Bots: easy'
 TOASTSTR wa_t_bn, 'Bots: normal'
 TOASTSTR wa_t_bh, 'Bots: hard'
@@ -6248,6 +6338,7 @@ WA_VAR wa_diff,1                 ; the bots' difficulty: 0 easy..2 hard
 WA_VAR wa_pdead,1                ; THE PLAYER DEAD: ticks to the respawn
 WA_VAR wa_peye,2                 ;   (AI-PLAN 5), the eye sinking
 WA_VAR wa_hurtby,1               ; who hurt the player: 0 itself, 1.. a bot
+WC_BSS                          ; (CTF-PLAN: wactf.inc's)
 WA_VAR wa_kills,4                ; THE SCORE: kills, deaths - YOU, the
 WA_VAR wa_deaths,4               ;   three bots
 WA_VAR wa_bname,4                ; the bots' names (wa_names' index)

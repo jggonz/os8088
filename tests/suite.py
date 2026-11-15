@@ -8662,6 +8662,27 @@ SOAK = [
         "checks).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wactf", "soak", py("tests/wactf.py"), 40.0,
+        "WIREARENA'S CAPTURE THE FLAG, ONE MACHINE "
+        "(docs/plans/WIREARENA-CTF-PLAN.md 2, 6, waves C1 and C2), on the "
+        "twin off "
+        "the game's own variables: the setup's Mode makes a CTF match, the "
+        "teams are the slots' parity, both flags start at their bases, we "
+        "spawn on red's side at the start and after three deaths; standing "
+        "at blue's base takes its flag, nothing scores at our base while a "
+        "foe carries ours, our dropped flag touched goes home, a capture "
+        "scores, dying drops the flag where we fell and its time sends it "
+        "home, the third capture shows RED WINS and the round starts again, "
+        "and a pistol shot that fires at our teammate takes nothing while "
+        "the same shot hurts the foe; then a bots' match, one against one, "
+        "in which each bot carries the other's flag and two captures are "
+        "made within four guest minutes (the guest time varies with the "
+        "bots' dice: 79 to 132 s measured). Red with the touch's team test "
+        "inverted (6 checks), the capture's home test dropped (4), "
+        "wa_hurt's teammate guard out (1) and wc_bgoal returning at once "
+        "(one capture in four minutes).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waflines", "soak", py("tests/waflines.py"), 11.0,
         "WIREARENA'S FLOOR LINES AGAINST AN EXACT REFEREE "
         "(docs/plans/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "
@@ -8753,6 +8774,20 @@ SOAK = [
         "and the fetch) or a bot's rocket passing through the player.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wactflink", "soak", py("tests/wactflink.py"), 25.0,
+        "WIREARENA'S CAPTURE THE FLAG LINKED (docs/plans/"
+        "WIREARENA-CTF-PLAN.md 7, wave C3): two QEMUs on a socket cable, "
+        "the shipped package, walink's harness. The host's Mode reaches the "
+        "guest in its HELLO and both play CTF on the twin; the host is red "
+        "and the guest blue, each spawned on its own side; the guest's "
+        "player at red's base is given red's flag by the HOST's rules (its "
+        "SNAP) and told by a FLAG event (YOU HAVE THE FLAG), and at its own "
+        "base blue has 1 on both with red's flag home on both; the host's "
+        "take of blue's flag shows on the guest as figure 0 carrying it. "
+        "Red with the guest ignoring FLAG events (wc_evin returning at "
+        "once) and with the host not sending them (wc_send): 4 checks each.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/os8088.img"), timeout=200),
     Row("walink", "soak", py("tests/walink.py"), 32.0,
         "WIREARENA OVER A NULL MODEM (docs/plans/WIREARENA-LINK-PLAN.md, "
         "L1): two QEMUs on a socket cable, the shipped package. Each window "

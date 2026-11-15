@@ -947,6 +947,10 @@ wa_render:
     sub ax, [wa_newp]
     mov [wa_newn], ax
 .c_pk:                          ; (the labels: tools/watrace.py's stops)
+    cmp byte [wa_ctfon], 0      ; (CTF-PLAN 4: the flags, as pickups are -
+    je .c_pk1                   ; a team match's)
+    call wa_flagsd
+.c_pk1:
     call wa_pickups             ; (WEAPONS-PLAN 2.4, 2.5: under the figures,
 .c_fig:                         ; the rockets over them, the overlay over
     call wa_figures             ; everything but the crosshair)
@@ -5649,14 +5653,37 @@ wa_figure:
 .fgl:
     mov bl, A_FIG               ; (the last near figure's colour used to draw
     cmp byte [di+F_FLASH], 0    ; the far marker: a hit far one did not
-    je .att                     ; flash, and a near one's flash coloured the
+    je .team                    ; flash, and a near one's flash coloured the
     mov bl, A_FLASH             ; far ones)
     test byte [di+F_FLASH], 0x80 ; (a bot firing: yellow, AI-PLAN 4.3)
-    jz .att
+    jz .team
     mov bl, A_FIRE
+    jmp short .att
+.team:                          ; A TEAM MODE (CTF-PLAN 4): its team's colour
+    cmp byte [wa_ctfon], 0      ; where it is white - and white where it
+    je .att
+    mov cl, [wa_fcol]
+    cmp di, wa_figs + F_SIZE    ; flashes, on a colour card, which red
+    jb .tc                      ; would hide (CL: AX is the half-rows a
+    mov cl, [wa_fcol+1]         ; unit, which .att's caller tests)
+    cmp di, wa_figs + 2*F_SIZE
+    jb .tc
+    mov cl, [wa_fcol+2]
+.tc:
+    or cl, cl
+    jz .att
+    cmp bl, A_FIG
+    je .tset
+    cmp byte [wa_mono], 0
+    jne .att
+    mov bl, A_FIG
 .att:
     mov bl, [wa_at+bx]
     mov [wa_fatt], bl
+    jmp short .attd
+.tset:
+    mov [wa_fatt], cl
+.attd:
     cmp ax, 9                   ; FAR: under ~4 half-rows tall. Nine limbs of
     jae .near                   ; a sub-pixel or two each read as a blob
     jmp wa_marker               ; anyway - draw that blob directly
@@ -7075,6 +7102,33 @@ wa_pickups:
     add si, WA_PKSZ
     or al, al
     jnz .p
+.out:
+    ret
+
+; wa_flagsd - the two flags (CTF-PLAN 4): each the game shows, a THING - a
+; tall narrow block, its span and its attribute FRAME's (wa_flags)
+WA_FLHW     equ 10                  ; a flag's half width, units
+wa_flagsd:
+    mov si, wa_flags
+    call .one
+    mov si, wa_flags + WA_FLSZ
+.one:
+    cmp byte [si+FL_ON], 0
+    je .out
+    mov word [wa_thw], WA_FLHW
+    mov al, [si+FL_FROM]
+    xor ah, ah
+    mov [wa_th0], ax
+    mov al, [si+FL_TO]
+    mov [wa_th1], ax
+    mov al, [si+FL_ATT]
+    mov [wa_tha], al
+    push si
+    mov ax, [si+FL_X]
+    mov bx, [si+FL_Y]
+    mov cx, [si+FL_Z]
+    call wa_thing
+    pop si
 .out:
     ret
 

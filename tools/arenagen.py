@@ -231,7 +231,8 @@ def respawns(tag, boxes, nodes, grid):
     or off the floor; the node is the nearest the point sees"""
     boxes = [bx(b) for b in boxes]
     out = []
-    for (x, y, a) in ARENA_RESPAWNS.get(tag, FLAT_RESPAWNS):
+    for r in ARENA_RESPAWNS.get(tag, FLAT_RESPAWNS):
+        (x, y, a), side = r[:3], (r[3] if len(r) > 3 else 0)
         if inside(x, y, boxes, 24) and floor_at(x, y, boxes, 24) != 0 or \
                 inside(x, y, [b for b in boxes if b.h > 0], 24):
             raise SystemExit("arenagen: arena %s: a respawn point at (%d, %d) "
@@ -242,7 +243,7 @@ def respawns(tag, boxes, nodes, grid):
         d = sorted(range(len(nodes)), key=lambda k: math.hypot(
             nodes[k][0] - x, nodes[k][1] - y))
         seen = [k for k in d if sight_clear(grid, (x, y), nodes[k])]
-        out.append((x, y, a, (seen or d)[0]))
+        out.append((x, y, a, (seen or d)[0], side))
     if not 1 <= len(out) <= WA_MRSP:
         raise SystemExit("arenagen: arena %s: %d respawn points - 1 to %d"
                          % (tag, len(out), WA_MRSP))
@@ -467,8 +468,8 @@ def graph_block(tag, boxes):
         out.append(0)
     rs = respawns(tag, boxes, nodes, grid)
     out += struct.pack('<H', len(rs))
-    for (x, y, a, n) in rs:
-        out += struct.pack('<hhHBB', x, y, a, n, 0)
+    for (x, y, a, n, side) in rs:       # (its SIDE: 0 neither, 1 red, 2
+        out += struct.pack('<hhHBB', x, y, a, n, side)  # blue - CTF-PLAN 3)
     # each pickup's route node, where a bot takes it (AI-PLAN 3.3): one
     # within WA_PKR (the player's reach) of it, or 0xFF - none walks there
     pk = pickups(tag, boxes)
@@ -491,7 +492,49 @@ def graph_block(tag, boxes):
             raise SystemExit("arenagen: arena %s: bench view %s is outside "
                              "its floor lines" % (tag, mark))
         out += struct.pack('<hhHhhH', x, y, a << 6, p, f, ord(mark))
+    fl = flag_bases(tag, boxes, nodes)  # THE FLAGS' BASES (CTF-PLAN 3): a
+    out += struct.pack('<H', len(fl))   # count, 0 or 2 - red's, blue's -
+    for (x, y, n) in fl:                # then each one's place and route node
+        out += struct.pack('<hhBB', x, y, n, 0)
     return bytes(out)
+
+
+WA_FLR = 40                     # a flag is touched within this of it, in x
+                                # and in y (the game's WA_FLR; a pickup's 40)
+
+
+def flag_bases(tag, boxes, nodes):
+    """An arena's flag bases (CTF-PLAN 3): [(x, y, node)], red then blue, or
+    [] - refused off the free floor, without a route node within reach, or
+    with either side short of two respawn points"""
+    fl = ARENA_FLAGS.get(tag, [])
+    if not fl:
+        return []
+    if len(fl) != 2:
+        raise SystemExit("arenagen: arena %s: %d flag bases - CTF takes two"
+                         % (tag, len(fl)))
+    boxes = [bx(b) for b in boxes]
+    out = []
+    for (x, y) in fl:
+        if inside(x, y, [b for b in boxes if b.h > 0], 24) or \
+                floor_at(x, y, boxes, 24) != 0 or not in_walk(tag, x, y, 24):
+            raise SystemExit("arenagen: arena %s: a flag base at (%d, %d) is "
+                             "not on free floor" % (tag, x, y))
+        near = [i for i, (nx, ny) in enumerate(nodes)
+                if abs(nx - x) < WA_FLR and abs(ny - y) < WA_FLR]
+        if not near:
+            raise SystemExit("arenagen: arena %s: no route node within %d of "
+                             "the flag base at (%d, %d) - a bot could not "
+                             "take it" % (tag, WA_FLR, x, y))
+        out.append((x, y, near[0]))
+    sides = [r[3] if len(r) > 3 else 0
+             for r in ARENA_RESPAWNS.get(tag, FLAT_RESPAWNS)]
+    for t in (1, 2):
+        if sides.count(t) < 2:
+            raise SystemExit("arenagen: arena %s has flags and %d respawn "
+                             "points on side %d - a team mode wants two at "
+                             "least" % (tag, sides.count(t), t))
+    return out
 
 
 # --- THE HEDGES' HEIGHTS: a hedge 6 m, over every eye (a tier's top and the
@@ -507,7 +550,7 @@ MP = 128
 # boxes for them), and nothing above the floor but the two towers and the
 # lift hidden behind each. A railgun on each tower, a chaingun beside each,
 # health or shield where the path bottoms out; the flags of a CTF to come
-# behind each lift (TWIN_FLAGS: not yet in the game).
+# behind each lift (TWIN_FLAGS: CTF's bases, ARENA_FLAGS).
 TT = 240                        # a tower: the tallest box, so it hides its
                                 # lift from the path; the lift raised
                                 # flush with its top
@@ -533,17 +576,20 @@ TWIN_GRAPH = dict(
            (1792, 800), (1792, 1024),           # 8-13: round the east one
            (1664, 1024), (1536, 1024),          # 14-15: its lift, its top
            (736, 1024), (960, 856), (1088, 856), (1312, 1024),
-           (1088, 808), (960, 808)],            # 16-21: the path, two ways
+           (1088, 808), (960, 808),             # 16-21: the path, two ways
+           (192, 1024), (1856, 1024)],          # 22-23: the flags' bases
     legs=[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0),
           (8, 9), (9, 10), (10, 11), (11, 12), (12, 13), (13, 8),
           (16, 17), (17, 18), (18, 19), (19, 20), (20, 21), (21, 16),
           (2, 16), (19, 10),
           (5, 6, LIFT_ON), (6, 7, LIFT_UP), (7, 2, DROP),
-          (13, 14, LIFT_ON), (14, 15, LIFT_UP), (15, 10, DROP)],
+          (13, 14, LIFT_ON), (14, 15, LIFT_UP), (15, 10, DROP),
+          (5, 22), (13, 23)],                   # (spurs to the bases)
     homes=[[0, 1, 2, 3, 4, 5], [8, 9, 10, 11, 12, 13],
            [16, 17, 18, 19, 20, 21]])
-TWIN_RESPAWNS = [(192, 768, 0), (640, 1280, 0), (192, 1280, 0),
-                 (1856, 1280, 512), (1408, 768, 512), (1856, 768, 512)]
+TWIN_RESPAWNS = [(192, 768, 0, 1), (640, 1280, 0, 1), (192, 1280, 0, 1),
+                 (1856, 1280, 512, 2), (1408, 768, 512, 2),
+                 (1856, 768, 512, 2)]  # (the west square red, the east blue)
 TWIN_PICKUPS = [
     (PK_RAIL, 512, 1024), (PK_RAIL, 1536, 1024),     # the towers' tops
     (PK_CHAINGUN, 512, 800), (PK_CHAINGUN, 1536, 1248),  # beside them
@@ -636,9 +682,9 @@ def _hedge():
             (16, 22), (21, 23), (13, 24)]           # the rooms
     homes = [list(range(6, 12)), list(range(12, 22)), list(range(0, 6))]
     graph = dict(nodes=nodes, legs=legs, homes=homes)
-    resp = [(1024, 384, 256), (384, 1152, 0), (1664, 1152, 512),
-            (1024, 1920, 768), (576, 1152, 768), (1472, 1152, 256),
-            (768, 832, 256)]
+    resp = [(1024, 384, 256), (384, 1152, 0, 1), (1664, 1152, 512, 2),
+            (1024, 1920, 768), (576, 1152, 768, 1), (1472, 1152, 256, 2),
+            (768, 832, 256)]            # (the west half red, the east blue)
     pks = [((PK_ROCKET, PK_GRENADE), 1024, 1152),        # the stack's top
            ((PK_SHOTGUN, PK_CHAINGUN), 1920, 1152),      # the east room's
            ((PK_RAIL, PK_SHOTGUN), 128, 1152),           # the west room's
@@ -668,6 +714,9 @@ def arenas():
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
 ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": HEDGE_GRAPH, "a4": TWIN_GRAPH}
 ARENA_ROOMCOL = {}                      # (a room's walls not the room's blue)
+# CTF's BASES (CTF-PLAN 3), red's then blue's, on a route node: the twin's
+# two flag places, behind its lifts; the hedge's west and east rooms
+ARENA_FLAGS = {"a3": [(224, 1152), (1824, 1152)], "a4": TWIN_FLAGS}
 # FLOOR LINES (ARENAS-PLAN 4.5): an arena's closed lines on the floor, the
 # feet's edge - and its room's height, 0 for no room walls at all
 ARENA_FLINES = {"a4": TWIN_WALK}
@@ -1937,6 +1986,7 @@ def main(out):
                                 in arenas()) + 1) & ~1))
     w("WA_MGN equ %d" % WA_MGN)
     w("%%assign WA_MSTK %d" % WA_MSTK)    # (a stack's boxes: wl_child's saves)
+    w("WA_FLR equ %d" % WA_FLR)           # (a flag's reach: CTF-PLAN 2)
     # poses
     first = 0
     for name, n, _, _ in ANIMS:
