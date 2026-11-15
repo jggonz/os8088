@@ -443,19 +443,19 @@ wa_lowbox:
 ; and the lower part of that neighbour's face against it, which is drawn
 ; where it shows past this box (the owner, 2026-11-15: a low wall's bottom
 ; "shows through from above when it should be occluded", the Hedge's outer
-; wall). Each is drawn as the far side's top is - raising the clip and
-; pushing its depth entry - and its cells are then taken back: off the
-; list, their stamps to an earlier frame's, so a farther thing still
-; draws there and present treats them as not drawn this frame. Clobbers
-; everything.
+; wall). Each is the far side's top pass (wl_two 0x80: wl_draw's .seam)
+; walked by wl_sseam and wl_s01s - the top loops' own steps, so every
+; column's clip, shut and depth entry are what a drawn top's would be - with
+; nothing plotted: no cell to take back, and a farther thing still draws
+; in them. Clobbers everything.
 wl_seams:
     xor bx, bx                  ; BX = the face
+    mov byte [wl_two], 0x80
 .k:
     shr al, 1
     jnc .nx
     push ax
     push bx
-    push word [wa_lp]           ; (the list as it stood)
     mov cl, 4
     mov si, bx
     shl si, cl
@@ -466,25 +466,13 @@ wl_seams:
     add di, wl_c + WL_KC
     mov al, [.m+bx]
     call wl_face
-    pop si
-    mov cx, [wa_lp]
-    mov [wa_lp], si
-    mov dl, [wa_frame]
-    dec dl
-.u:
-    cmp si, cx
-    jae .ud
-    lodsw
-    xchg ax, bx
-    mov [wa_stamp+bx], dl
-    jmp short .u
-.ud:
     pop bx
     pop ax
 .nx:
     inc bx
     or al, al
     jnz .k
+    mov byte [wl_two], 0
     ret
 .m:         db 3, 6, 12, 9      ; (a face's two corners: wl_nvk's bits)
 
@@ -934,7 +922,7 @@ wl_prows:                       ; (wl_send's: BX the inverse depth, SI and
     mov ax, bx
     stosw
     cmp byte [wl_two], 0
-    je .nof                     ; (no floor edge: the word is not read)
+    jle .nof                    ; (no floor edge: the word is not read)
     mov ax, [wl_fn]
     mov cl, [wl_fs]
     imul bx
@@ -1051,6 +1039,7 @@ wl_draw:
     push word [di+2]
     cmp byte [wl_two], 0        ; THE FLOOR EDGE first, a loop of its own
     je .top                     ; (r5): it is drawn against the clip as it
+    jl .seam                    ; (0x80: a seam - wl_seams' - no floor)
     mov ax, [si+6]              ; stood, which the top raises only after it
     mov bx, [di+6]              ; in each column - and each column is its
     mov dx, ax                  ; own, so all the floor's cells and then all
@@ -1088,6 +1077,11 @@ wl_draw:
     pop bx                      ; THE TOP, raising the clip
     pop ax
     mov cx, wl_ltop
+    jmp wl_run
+.seam:
+    pop bx                      ; A SEAM's top: raising the clip, nothing
+    pop ax                      ; drawn (wl_sseam, wl_s01s)
+    mov cx, wl_lseam
     jmp wl_run
 .full:
     mov word [wa_left], 0       ; (more spans than the table holds: drawing
@@ -1215,6 +1209,7 @@ wl_run:
     jmp .go
 wl_ltop:    dw wl_l01s, wl_rtop
 wl_lfloor:  dw wl_f1, wl_rfloor
+wl_lseam:   dw wl_s01s, wl_sseam
 
 ; wl_rtop - a pass's TOP edge, shallow (wl_run's): its columns from SI (x 2),
 ; DH of them, at [wl_hr] and BP stepping by [wl_ks]; CL the pass's tag, AH the
@@ -1457,6 +1452,115 @@ wl_l01s:
 .over:
     call wl_shutc
     jmp .next
+
+; wl_sseam, wl_s01s - a SEAM's top (wl_seams'): wl_rtop's and wl_l01s's
+; walks, the same registers in, each column's top tested against its clip
+; and its shut as theirs are - raised, an entry pushed, at or over the
+; screen's top the column shut - with no cell plotted and no step filled
+; (wa_slope plots and raises nothing), so the clip and the depth stack are
+; what the drawn top's would leave, and the cells are untouched.
+wl_sseam:                       ; shallow: [wl_hr], BP, [wl_ks], CL the tag
+    mov bx, [wl_hr]
+.run2:
+    dec bx
+    cmp bx, WA_HR-1
+    jae .odd                    ; (off the screen, or its top half-row)
+    inc bx
+    mov ch, bl
+.col:
+    cmp ch, [wa_cclip+si]
+    jae .next
+    cmp byte [wa_cov+si], 0
+    jne .next
+    mov [wa_cclip+si], ch
+    mov bl, [wa_cstn+si]        ; (wl_rtop's ladder: CX the entry)
+    cmp bl, 3
+    ja .full
+    inc byte [wa_cstn+si]
+    xor bh, bh
+    shl bx, 1
+    mov bx, [wl_k160+bx]
+    mov [wa_cst+bx+si], cx
+.next:
+    inc si
+    inc si
+    dec dh
+    jz .done
+    add bp, [wl_ks]
+    jnc .col
+    sub bp, [wl_dcm]
+    add ch, [wl_dir]
+    mov bl, ch
+    xor bh, bh
+    jmp short .run2
+.full:
+    mov [wa_cst+(WA_CSTK-1)*2*WA_MAXW+si+1], ch
+    jmp short .next
+.done:
+    ret
+.odd:                           ; (wl_rodd's: BX the half-row)
+    inc bx
+    cmp bx, 0
+    jg .under
+.over:
+    cmp byte [wa_cov+si], 0
+    jne .onext
+    push bx
+    call wl_shutc
+    pop bx
+.onext:
+    inc si
+    inc si
+    dec dh
+    jz .done
+    add bp, [wl_ks]
+    jnc .over
+    jmp short .step
+.under:
+    inc si
+    inc si
+    dec dh
+    jz .done
+    add bp, [wl_ks]
+    jnc .under
+.step:
+    sub bp, [wl_dcm]
+    add bx, [wl_dir]
+    jmp .run2
+wl_s01s:                        ; steep: CX.BP, [wl_stw].[wl_stf]
+    cmp byte [wa_cov+si], 0
+    jne .next
+    cmp cx, [wa_cclip+si]
+    jge .next
+    cmp cx, 0
+    jle .over                   ; (at or over the screen's top: shut)
+    mov [wa_cclip+si], cx
+    mov bh, cl
+    mov bl, [wl_tag]
+    mov al, [wa_cstn+si]
+    cmp al, 3
+    ja .full
+    inc byte [wa_cstn+si]
+    push bx
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov bx, [wl_k160+bx]
+    pop word [wa_cst+bx+si]
+.next:
+    add bp, [wl_stf]
+    adc cx, [wl_stw]
+    inc si
+    inc si
+    dec dh
+    jnz wl_s01s
+    ret
+.full:
+    mov [wa_cst+(WA_CSTK-1)*2*WA_MAXW+si+1], cl
+    jmp short .next
+.over:
+    call wl_shutc
+    jmp short .next
 
 ; wl_f1 - a pass's FLOOR edge alone, STEEP: its columns from SI, DH of
 ; them, CX.BP its value, [wl_stw].[wl_stf] its step; each cell plotted where

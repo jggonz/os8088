@@ -1924,9 +1924,15 @@ by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
   the joined tops goes too. The owner, on the pictures: *"looks awesome
   (in both cases)"*. It costs the Pit +0.77% a pose on its reference set
   and up to +1.84% on poses aimed at the joins, the Hedge +0.07-0.15%,
-  the rest nothing; +136 bytes of the renderer part. A dedicated
-  clip-raise routine could take most of the Pit's back for ~60-100 bytes:
-  not built.
+  the rest nothing; +136 bytes of the renderer part. Then, the owner:
+  *"get as much performance as we know about; go for the dedicated
+  routine"*: a seam's top is walked by loops of its own (`wl_sseam`,
+  `wl_s01s`), the top loops' steps with nothing plotted and nothing taken
+  back - the picture identical on every set, the Pit 0.18-0.25% back. Net,
+  the fix costs the Pit +0.53% a pose (a7w40) and +1.62% at its joins, the
+  Hedge +0.06-0.09%; +355 bytes of the renderer part in all. The gain was
+  smaller than estimated: each seam still pays its edge setup, its span
+  entry and its walk.
 
 **After the first release** (the owner, 2026-11-15: *after*, for the turn
 acceleration and for all the test and measurement debt):
