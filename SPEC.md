@@ -251306,7 +251306,8 @@ disagree, this section and the source win.
     pushed far return enters it (`wa_rcall`), so no vector is read
     through CS;
   - part 1, `OP_ASSET`, `OP_COMP`: the POSE part, the figures'
-    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`);
+    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`),
+    delta-coded in the file (128.3);
   - parts 2.., `OP_ASSET`, `OP_LAZY | OP_COMP`: one ARENA each (128.4),
     fetched when a match needs it.
 - **Moves.** The region is `OS88_REGION_MOVABLE`, and the carve is
@@ -251376,9 +251377,17 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The renderer part's ABI** is `apps/wirearena/wafb.inc`, which both
   halves include, so the FRAME BLOCK is one layout:
   - **The part's header**: `'WRPART'`, then at +6 the ABI byte
-    (`WR_ABI`, 14) and at +7 the verb count (`WR_NVERB`, 6). From +8
-    there is a word per verb, its offset. The primary refuses a mismatch at
-    launch with *Renderer part mismatch*.
+    (`WR_ABI`, 15) and at +7 the verb count (`WR_NVERB`, 6). From +8
+    there is a word per verb, its offset, and at +20 (`WR_H_POSE`) the
+    offset of the hot keyframes (`wa_pose0`). The primary refuses a
+    mismatch at launch with *Renderer part mismatch*.
+  - **The keyframes are shipped DELTA-coded**: the renderer part's hot ones
+    (at `WR_H_POSE`) and the whole of the pose part, each byte less the one
+    a facing row (`WA_NJ` x 2) and then a keyframe (`WA_FRAMESZ`) before it
+    (`tools/wadelta.py`), which packs them to under half. `wa_rbind` undoes
+    both in place at launch (`wa_undelta`), so the parts hold the
+    assembler's bytes from then on, and `build/wrpart.bin` and
+    `build/wapose.bin` are those bytes; only the `.dlt` copies are packed.
   - **The verbs**: `WRV_INIT` (after a mode set), `WRV_GEOM`, `WRV_ARENA`
     (AL = an arena), `WRV_RENDER` (out AL = the frame number), `WRV_PRESENT`
     (out AX = cells written) and `WRV_TRACE` (a shot's cone; out the nearest
