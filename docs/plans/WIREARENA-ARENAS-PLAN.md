@@ -338,6 +338,11 @@ last column's row through this one's own, the first `\` or `/`, the rest
 their own cell already stamped. `waposes`, 16 seeded poses: arena 0 one pose
 changed (22 cells), +0.20% render; arena 2 six (54 cells), +0.30%.
 
+**Open's spawn (2026-11-15).** The open arena had no pickups; it has one
+now, the owner's: a spawn in the middle (1024, 1024), between the four
+pillars, that rolls health or a shield (`OPEN_PICKUPS`, arenagen's
+health-or-shield choice). Its play bench and poses see it from then on.
+
 ### 4.6 An arena with no room walls
 
 `ARENA_ROOMH` sets an arena's room height, and 0 means NO ROOM WALLS. The

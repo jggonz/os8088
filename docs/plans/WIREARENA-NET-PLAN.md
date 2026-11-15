@@ -548,6 +548,12 @@ the meter is off, as a weapon hint and a message bar.
   (`wa_lkcount`) at once, another machine's with its SCORE, a second at
   most later - so every machine says every kill.
 
+- **The Arena list** (the owner, the same day): Open first, then
+  **Columns** - the arena the list called "full" - then the rest. The
+  arenas keep their numbers (the benches, the poses, the rows and the wire
+  name them); `wa_sarmap` swaps items 0 and 1 where the list is read and
+  picked. The default stays the heights.
+
 **Bytes**: `wirearena.bin` 29,831 -> 30,736 (+905): the HUD row and
 its names ~520, the nick's field, row and protocol the rest.
 

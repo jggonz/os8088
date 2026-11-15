@@ -109,6 +109,7 @@ wa_sval:
     jmp [wa_svals+bx]
 .arena:
     mov al, [wa_lkarena]
+    call wa_sarmap
     mov ah, WA_NARENA
     jmp .out
 .cols:
@@ -145,6 +146,7 @@ wa_svals:   dw wa_sval.arena, wa_sval.cols, wa_sval.bots, wa_sval.skill
 wa_spick:
     jmp [wa_spicks+bx]
 .arena:
+    call wa_sarmap
     mov [wa_lkarena], al
     ret
 .cols:
@@ -185,6 +187,17 @@ wa_spick:
     ret
 wa_spicks:  dw wa_spick.arena, wa_spick.cols, wa_spick.bots, wa_spick.skill
             dw wa_spick.play, wa_spick.mode
+
+; wa_sarmap - AL = an arena, or the Arena list's item: the other. The list
+; puts Open (arena 1) first and Columns (arena 0, once "full") second - the
+; owner's order - and the arenas keep their numbers (the benches, the poses,
+; the rows and the wire all name them). Keeps all but AL
+wa_sarmap:
+    cmp al, 2
+    jae .out
+    xor al, 1
+.out:
+    ret
 
 ; wa_sset - BX = a drop-down x 2, AH = -1 or +1: its pick one along, round
 ; (Left and Right on the focused control). A greyed one says whose it is
