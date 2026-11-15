@@ -21,7 +21,8 @@ taken more than the 2.03 guest seconds after the boot's last access, so the
 first B: access in every restore reads the new disk's boot sector. Two
 volumes are told apart by their serial (os88disk.py derives it from the
 content), so a leg whose disk has the boot disk's serial is refused here
-rather than run against the first disk's cached directory.
+rather than run against the first disk's cached directory (a leg whose
+disk is the boot disk byte for byte has nothing to swap, and keeps it).
 """
 import contextlib
 import os
@@ -41,6 +42,12 @@ def serial(path):
     """the BPB's volume serial: bytes 39..42 of the boot sector"""
     with open(path, "rb") as f:
         return f.read(43)[39:43]
+
+
+def digest(path):
+    import hashlib
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).digest()
 
 
 class Shared(object):
@@ -68,7 +75,7 @@ class Shared(object):
             # the first B: access after a swap reads the new disk
             ui.m.advance(cycles=MOTOR)
             self.fk = self.stack.enter_context(os88marty.Forks(ui.m))
-            self.key, self.ser = key, serial(apps)
+            self.key, self.ser, self.dig = key, serial(apps), digest(apps)
             print("   [shared boot: %s, %.1f host s]"
                   % (machine, time.time() - t0))
         elif key != self.key:
@@ -76,8 +83,8 @@ class Shared(object):
                              "%r - give it a row of its own" % (key, self.key))
         self.legs += 1
         with self.fk.restore() as r:
-            if not first:
-                if serial(apps) == self.ser:
+            if not first and digest(apps) != self.dig:  # (the same bytes:
+                if serial(apps) == self.ser:                # nothing to swap)
                     raise SystemExit("vidshare: this leg's disk has the boot "
                                      "disk's serial, so the swap would go "
                                      "unseen")

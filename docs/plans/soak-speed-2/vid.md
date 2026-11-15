@@ -74,6 +74,8 @@ group's own.
 | vidcgahercsh | vidtextherc vidtexthercno | 50 | 40 (predicted) |
 | vidscreensh | vidscreen vidscreeno | 300 | 280 (predicted) |
 | vidscreennsh | vidscreenb vidscreenn vidscreennc vidscreenno | 195 | 170 (predicted) |
+| videmssh | videms videmshyb videmsslow videmswrap | 260 | 200 (predicted) |
+| vidpalsh | vidpal vidpallayer vidpalloop vidpalrep0 | 220 | 170 (predicted) |
 
 Groups are sized so no row is past ~6 minutes declared: a merged row costs
 the lanes some packing granularity, which is the price of a boot.
