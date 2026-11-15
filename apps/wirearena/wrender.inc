@@ -7080,29 +7080,46 @@ wa_flgo:
     jmp dx
 ; The fast walk's states. Registers: BX = the cell in wa_fbuf, CX =
 ; sub-pixels left, BP = the error, SI = the minor step, DI = the major, AX =
-; a row's bytes. A block plots its quadrant's bit and moves the pen: a
+; a row's bytes. A block moves the pen and plots its quadrant's bit: a
 ; half-row down from a bottom quadrant is the next row's top (BX += AX), a
 ; sub-column right from a right quadrant is the next cell's left (BX += 1).
 ; The blocks lie in the order the pen USUALLY takes them - a steep line goes
 ; down its column's upper quadrant into its lower, a shallow one along its
 ; row's - so the usual step falls through and only the minor axis's step,
-; out of line, jumps.
+; out of line, jumps. A pen that takes a cell's two quadrants in that usual
+; order plots them with ONE `or` (5 << c down a column, 3 << 2r along a
+; row): its steps are decided first, and the bits are the same, OR'd at
+; once - 22 clk a pair fewer, nearly every cell of a limb.
 %macro WA_FYP 2                 ; steep: %1 R/L, %2 c - the column's two
-wa_fy%{1}0%{2}:                     ; quadrants, upper then lower
-    or byte [bx], 1 << %2
+wa_fy%{1}0%{2}:                 ; quadrants, upper then lower
     dec cx
-    jz wa_fy%{1}ret
+    jz %%u                      ; (the last sub-pixel: the upper alone)
     sub bp, si
     js %%s0                     ; (a sideways step too)
-wa_fy%{1}1%{2}:
-    or byte [bx], 4 << %2
     dec cx
-    jz wa_fy%{1}ret
+    jz %%ul                     ; (the lower the last)
     sub bp, si
     js %%s1
+    or byte [bx], 5 << %2       ; both, and down: the next row's upper
+    add bx, ax
+    jmp wa_fy%{1}0%{2}
+wa_fy%{1}1%{2}:                 ; (the lower alone: after a sideways step)
+    or byte [bx], 4 << %2
+    dec cx
+    jz %%r
+    sub bp, si
+    js %%s1b
     add bx, ax                  ; down: the next row's upper quadrant
     jmp wa_fy%{1}0%{2}
+%%ul:
+    or byte [bx], 5 << %2
+%%r:
+    ret
+%%u:
+    or byte [bx], 1 << %2
+    ret
 %%s0:
+    or byte [bx], 1 << %2
     add bp, di
     WA_FSIDE %1, %2
   %if %2
@@ -7111,6 +7128,8 @@ wa_fy%{1}1%{2}:
     jmp wa_fy%{1}11
   %endif
 %%s1:
+    or byte [bx], 5 << %2
+%%s1b:
     add bp, di
     WA_FSIDE %1, %2
     add bx, ax
@@ -7132,21 +7151,35 @@ wa_fy%{1}1%{2}:
   %endif
 %endmacro
 %macro WA_FXP 4                 ; shallow: %1 R/L, %2 r, %3 the half the pen
-wa_fx%{1}%{2}%{3}:                    ; enters a cell by, %4 the other - the
-    or byte [bx], 1 << (%3 + 2*%2) ; row's two quadrants in its order
-    dec cx
-    jz wa_fx%{1}ret
+wa_fx%{1}%{2}%{3}:              ; enters a cell by, %4 the other - the
+    dec cx                      ; row's two quadrants in its order
+    jz %%a                      ; (the last sub-pixel: the first alone)
     sub bp, si
     js %%d0                     ; (a step down too)
-wa_fx%{1}%{2}%{4}:
+    dec cx
+    jz %%ab                     ; (the second the last)
+    or byte [bx], 3 << (2*%2)   ; both...
+    WA_FSIDE %1, %4             ; ...and on into the next cell
+    sub bp, si
+    js %%d1
+    jmp wa_fx%{1}%{2}%{3}
+wa_fx%{1}%{2}%{4}:              ; (the second alone: after a step down)
     or byte [bx], 1 << (%4 + 2*%2)
     dec cx
-    jz wa_fx%{1}ret
+    jz %%r
     WA_FSIDE %1, %4             ; ...on into the next cell
     sub bp, si
     js %%d1
     jmp wa_fx%{1}%{2}%{3}
+%%ab:
+    or byte [bx], 3 << (2*%2)
+%%r:
+    ret
+%%a:
+    or byte [bx], 1 << (%3 + 2*%2)
+    ret
 %%d0:
+    or byte [bx], 1 << (%3 + 2*%2)
     add bp, di
   %if %2
     add bx, ax
@@ -7163,20 +7196,12 @@ wa_fx%{1}%{2}%{4}:
     jmp wa_fx%{1}1%{3}
   %endif
 %endmacro
-wa_fyRret:
-    ret
     WA_FYP R, 0
     WA_FYP R, 1
-wa_fyLret:
-    ret
     WA_FYP L, 0
     WA_FYP L, 1
-wa_fxRret:
-    ret
     WA_FXP R, 0, 0, 1
     WA_FXP R, 1, 0, 1
-wa_fxLret:
-    ret
     WA_FXP L, 0, 1, 0
     WA_FXP L, 1, 1, 0
 wa_fl_ytab:                     ; by (r x 2 + c) x 2, leftward + 8
