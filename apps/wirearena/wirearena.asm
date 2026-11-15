@@ -979,10 +979,10 @@ wa_tick:
 .figs0:
     xor ax, ax                  ; (the bots on each lift this tick: its
 %assign wa_i 0                  ; riders the next, wa_ltick - a byte a
-%rep WA_MLIFT                   ; lift, a word apart)
-    mov [wa_lbn+wa_i], ax
-%assign wa_i wa_i+2
-%endrep
+%rep WA_MLIFT                   ; lift, a word apart - counted straight
+    mov [wa_lbot+wa_i], ax      ; into wa_lbot: its one reader, wa_lift1,
+%assign wa_i wa_i+2             ; ran already this tick, so no second
+%endrep                         ; table and no copy at the loop's end)
     mov bx, [wa_tkn]            ; WHOSE TURN TO LOOK (AI-PLAN 4.1): each bot
     and bx, 7                   ; every eighth tick, 0.27 s, on the tick
     shl bx, 1                   ; where tick + (WA_NFIG - its index) x 3 is a
@@ -1002,12 +1002,6 @@ wa_tick:
     jb .fig
 .figd:
     inc word [wa_tkn]
-%assign wa_i 0
-%rep WA_MLIFT
-    mov ax, [wa_lbn+wa_i]
-    mov [wa_lbot+wa_i], ax
-%assign wa_i wa_i+2
-%endrep
 .c_w:                           ; (the labels: tools/watrace.py's stops)
     call wa_wtick               ; the weapon's reload and its next shot,
 .c_rk:                          ; the rockets, the pickups (WEAPONS-PLAN)
@@ -2945,7 +2939,7 @@ wa_bnext:
 
 ; wa_bwait - DI = a figure waiting at its edge's start: CF = 1 while it
 ; still must (kind 1: the lift not yet at rest; 2: it rides the lift, not
-; yet at the top - a rider, wa_lbn). Keeps all but AX, BX
+; yet at the top - a rider, wa_lbot). Keeps all but AX, BX
 wa_bwait:
     push si
     mov bl, [di+F_BWAIT]        ; (its lift: the edge's kind byte's bits
@@ -2967,7 +2961,7 @@ wa_bwait:
     clc
     ret
 .up:
-    inc byte [wa_lbn+si]
+    inc byte [wa_lbot+si]
     cmp ax, [wa_ltop+si]
     je .go
 .wait:
@@ -7202,8 +7196,9 @@ WA_VAR wa_tz,2
 WA_VAR wa_sgrid,1024              ; the sight grid, a byte a 64-unit cell
 WA_VAR wa_bshots,2               ; the bots' shots fired, and hits
 WA_VAR wa_bhits,2
-WA_VAR wa_lbn,WA_MLIFT*2         ; per lift (a byte, a word apart): bots
-WA_VAR wa_lbot,WA_MLIFT*2        ;   on it this tick, and the last (riders)
+WA_VAR wa_lbot,WA_MLIFT*2        ; per lift (a byte, a word apart): bots
+                                 ;   on it (riders), counted by the tick's
+                                 ;   figures, read by the next's wa_lift1
 WA_VAR wa_pbsel,1                ; the play bench: the heights arena's pose,
 WA_VAR wa_pba,2                  ;   the angle and pitch it circles round,
 WA_VAR wa_pbp,2                  ;   and its HUD mark
