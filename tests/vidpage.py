@@ -119,6 +119,7 @@ FLIPS = (20, 45)
 STOPS = (18, 19, 20, 21, 22, 44, 45, 46, NF)
 KSTOPS = (31, 45, 46)
 KSECS = [2.0]                   # (--pool: keys every half second)
+_STOPS0, _KSECS0 = STOPS, list(KSECS)   # (--shared: each leg from these)
 
 
 def u16(b, i=0):
@@ -496,7 +497,20 @@ def hostile(tmp, layout, mk=None, base=None):
     return lp, nk
 
 
-def main():
+_SYMS = {}
+
+
+def _pkg_syms(*k):
+    """pkg_syms once a process: every --shared leg asks for the same"""
+    if k not in _SYMS:
+        _SYMS[k] = pkg_syms(*k)
+    return _SYMS[k]
+
+
+def main(argv=None, boot=None):
+    """one row, or with `boot` (tests/vidshare.py) one leg of a shared boot"""
+    global STOPS
+    STOPS, KSECS[:] = _STOPS0, _KSECS0
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine")
     ap.add_argument("--layout", choices=("lin80", "modex", "herc"),
@@ -539,8 +553,11 @@ def main():
     ap.add_argument("--refused", action="store_true",
                     help="herc: on a machine with a colour card beside the "
                     "Hercules, the play must REFUSE (98.3.8.3)")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     os.chdir(ROOT)
+    if boot is not None and (a.xip or MEGA):
+        sys.exit("vidpage: --shared is MartyPC's: --xip and kern_mega legs "
+                 "boot a machine of their own")
     if a.pool:
         KSECS[0] = 0.5
     lay = vid.LAYOUT_BY_NAME[a.layout]
@@ -559,10 +576,9 @@ def main():
     if scr and a.screen:
         SW, SH = vid.SCREENS[scr][1], vid.SCREENS[scr][2]
     if a.pages > 2 and not a.fpage:
-        global STOPS
         STOPS = tuple(sorted(set(n for F, p in mflips(a.pages)
                                  for n in (F - 1, F, F + 1)) | {NF}))
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",), MEGA_DEFS)
+    syms, _ = _pkg_syms("apps/video/video.asm", ("apps/",), MEGA_DEFS)
     pkg = os88build.at(VIDEO_O88)
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
@@ -673,7 +689,7 @@ def main():
         # (--xip: the 1.44 MB system disk, whose XMEM.DRV gives the pool -
         # the 360 KB one carries none)
         sysimg = "build/os8088.img" if a.xip else "build/os8088-360.img"
-        with os88ui.boot(os88build.at(sysimg), apps=disk,
+        with (boot or os88ui.boot)(os88build.at(sysimg), apps=disk,
                          machine=a.machine, quick=True) as ui:
             m = ui.m
             # --- 0: THE ONE THE PLAYER MUST REFUSE, at its open
@@ -979,4 +995,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--shared"]:   # ONE BOOT, SEVERAL ROWS' LEGS
+        import vidshare
+        sys.exit(vidshare.run(main, sys.argv[2:]))
     sys.exit(main())

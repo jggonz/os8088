@@ -71,6 +71,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
+import os88fixture                                            # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
 MEM_MAX = 32                            # (kernel/memory.inc, heapcheck's)
@@ -264,15 +265,22 @@ ENC = {
 
 def encclip(tmp, args):
     """a 4-second test card through the encoder, version 2, verified"""
-    src = os.path.join(tmp, "src.mp4")
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-                    "-i", "testsrc2=size=320x240:rate=15:duration=4",
-                    src], check=True)
     out = os.path.join(tmp, "V2CLIP.V88")
-    subprocess.run([sys.executable, "tools/os88venc.py", src, out,
-                    "--blocks", os.environ.get("OS88_V2_BLOCKS", "on"),
-                    "--audio", "none"] + list(args),
-                   check=True, capture_output=True)
+    blocks = os.environ.get("OS88_V2_BLOCKS", "on")
+
+    def make(out):
+        src = os.path.join(tmp, "src.mp4")
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+                        "-i", "testsrc2=size=320x240:rate=15:duration=4",
+                        src], check=True)
+        subprocess.run([sys.executable, "tools/os88venc.py", src, out,
+                        "--blocks", blocks, "--audio", "none"] + list(args),
+                       check=True, capture_output=True)
+    # THE ENCODE ONCE PER INPUT (SOAK-SPEED 16, os88fixture.cached): ~45
+    # host s of a --enc row under load was this encode, the same bytes
+    # every run - keyed on the arguments, the encoder's sources and ffmpeg
+    os88fixture.cached(out, ("vidv2", "testsrc2=320x240:15:4", blocks,
+                             tuple(args)), make, tools=("ffmpeg",))
     vid.verify_v88(out)
     return out
 
@@ -350,7 +358,18 @@ def refuse(machine):
     return 1 if bad else 0
 
 
-def main():
+_SYMS = {}
+
+
+def _pkg_syms(*k):
+    """pkg_syms once a process: every --shared leg asks for the same"""
+    if k not in _SYMS:
+        _SYMS[k] = pkg_syms(*k)
+    return _SYMS[k]
+
+
+def main(argv=None, boot=None):
+    """one row, or with `boot` (tests/vidshare.py) one leg of a shared boot"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--layout", choices=("lin320", "modex", "vga4", "cga",
@@ -364,7 +383,9 @@ def main():
     ap.add_argument("--refuse", action="store_true",
                     help="a CGA XT: the part fetched, one bit played and "
                          "one bit's seam refused")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
+    if a.refuse and boot is not None:
+        sys.exit("vidv2: --refuse boots a machine of its own, not --shared")
     if a.refuse:
         return refuse(a.machine if a.machine != "os8088_xt_vga" else
                       "os8088_5150_cga_gla")
@@ -386,7 +407,7 @@ def main():
               vid.LAY_LIN80: (640, 480), vid.LAY_CGA: (640, 200),
               vid.LAY_HERC: (720, 348)}[lay] if not enc else enc[2]
     os.chdir(ROOT)
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
+    syms, _ = _pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
     bad = []
     pal = vid.STD16 if v4 else palette()
@@ -411,7 +432,8 @@ def main():
                         "--size", "360", pkg, v88], check=True,
                        capture_output=True)
         ty0, tx0 = (SH - CH) // 2, (SW - CW) // 2
-        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
+        with (boot or os88ui.boot)(os88build.at("build/os8088-360.img"),
+                                   apps=disk,
                          machine=a.machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/V2CLIP.V88")
@@ -618,4 +640,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--shared"]:   # ONE BOOT, SEVERAL ROWS' LEGS
+        import vidshare
+        sys.exit(vidshare.run(main, sys.argv[2:]))
     sys.exit(main())

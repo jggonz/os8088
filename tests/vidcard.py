@@ -119,7 +119,7 @@ def main():
 
             os88marty.until(m, lambda mm: u16(m.read(base + syms["vp_ploads"],
                                                      2)) >= 1,
-                            "the poster", poll=0.3, limit=300, guest=60)
+                            "the poster", poll=0.05, limit=300, guest=60)
             x0, y0, w0, h0 = rect()
             # 418 wide: 45 characters, so 'Video Player - ' + 35 does not fit
             says("Video - " + TITLE, "at %d wide" % w0)
@@ -135,7 +135,7 @@ def main():
             m.type_text("i")
             os88marty.until(m, lambda mm: rb("vp_card") == 1 and
                             rect()[2] > w0, "the card open and the window "
-                            "grown", poll=0.3, limit=120, guest=20)
+                            "grown", poll=0.05, limit=120, guest=20)
             os88marty.pace(m, 2.0)
             x1, y1, w1, h1 = rect()
             says("Video Player - " + TITLE, "at %d wide" % w1)
@@ -155,11 +155,11 @@ def main():
             # the pointer far away
             m.type_text("i")
             os88marty.until(m, lambda mm: rb("vp_card") == 0 and
-                            rect()[2] == w0, "the card closed", poll=0.3,
+                            rect()[2] == w0, "the card closed", poll=0.05,
                             limit=120, guest=20)
             m.type_text("i")
             os88marty.until(m, lambda mm: rb("vp_card") == 1 and
-                            rect()[2] == w1, "the card open again", poll=0.3,
+                            rect()[2] == w1, "the card open again", poll=0.05,
                             limit=120, guest=20)
             os88marty.pace(m, 2.0)
             _, _, ref = m.vram(None)

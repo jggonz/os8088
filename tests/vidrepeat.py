@@ -125,7 +125,7 @@ def main():
 
             def wait(cond, what, guest=60.0):
                 try:
-                    os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                    os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                     guest=guest)
                 except os88marty.MartyError as e:
                     raise Stop("%s never happened (%s)"
