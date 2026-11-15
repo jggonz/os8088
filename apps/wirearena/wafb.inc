@@ -28,7 +28,7 @@
 WR_MAGIC0   equ 'WR'                ; +0: 'WRPART', then the ABI byte and the
 WR_MAGIC1   equ 'PA'                ;     verb count - checked by the primary
 WR_MAGIC2   equ 'RT'                ;     at launch, refused on a mismatch
-WR_ABI      equ 12                  ; (2: the camera's sin/cos in FRAME;
+WR_ABI      equ 13                  ; (2: the camera's sin/cos in FRAME;
                                     ; 3: F_Z, the treads, ARENA's heights;
                                     ; 4: wa_look, the detail level's bits,
                                     ; where wa_hyst was; wa_flod gone;
@@ -43,7 +43,8 @@ WR_ABI      equ 12                  ; (2: the camera's sin/cos in FRAME;
                                     ; where FRAME's pad was; 11: the
                                     ; teams' colours and the flags,
                                     ; CTF-PLAN 4; 12: the minimap's
-                                    ; block in OVERLAY, NET-PLAN 9.7)
+                                    ; block in OVERLAY, NET-PLAN 9.7; 13:
+                                    ; wa_sparse gone, 9.10)
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-
                                     ; PLAN 4.5; arenagen's)
@@ -133,7 +134,6 @@ WA_FBV wa_fcs, 2                    ; >> 6 (G: wa_rframe, from its wa_sincos)
 WA_FBV wa_fov, 1
 WA_FBV wa_look, 1                   ; the detail level's options, LK_*
 WA_FBV wa_grid, 1
-WA_FBV wa_sparse, 1
 WA_FBV wa_mflash, 1
 WA_FBV wa_treads, 1                 ; a ramp drawn as stepped treads (T: the
                                     ; graphics option, HEIGHTS-PLAN 7.4.2)

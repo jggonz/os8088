@@ -5698,12 +5698,6 @@ wa_meter:
     mov al, [wa_level]          ; the detail level, 1..5
     add al, '1'
     call wa_putc
-    mov al, 'F'                 ; the detail level
-    cmp byte [wa_sparse], 0
-    je .det
-    mov al, 'S'
-.det:
-    call wa_putc
     mov al, '-'                 ; G: the floor grid
     cmp byte [wa_grid], 0
     je .g
