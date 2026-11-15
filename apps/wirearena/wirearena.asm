@@ -348,8 +348,6 @@ wa_reset:
     mov [wa_paused], al         ; (nor a pause, a question, a cue)
     mov [wa_ask], al
     mov [wa_hdirt], al
-    mov [wa_bprot], ax
-    mov [wa_bprot+2], al
     mov byte [wa_pprot], WA_PROTT
     mov [wa_hmsgt], al
     mov byte [wa_hmsgd], 1
@@ -477,13 +475,6 @@ wa_brespawn:
     mov si, ax
     mov al, [si+4]
     pop si
-    push ax                     ; (SPAWN PROTECTION: WA_PROTT ticks, or to
-    push bx                     ; its first shot)
-    call wa_bidx
-    mov bx, ax
-    mov byte [wa_bprot+bx], WA_PROTT
-    pop bx
-    pop ax
     jmp wa_spawne
 
 wa_runanim:
@@ -802,17 +793,6 @@ wa_tick:
     jnz .c_pp
     mov byte [wa_ovd], 1
 .c_pp:
-    push bx                     ; (the bots' too)
-    mov bx, wa_bprot
-.c_bp:
-    cmp byte [bx], 0
-    je .c_bn
-    dec byte [bx]
-.c_bn:
-    inc bx
-    cmp bx, wa_bprot + WA_NFIG
-    jb .c_bp
-    pop bx
     cmp byte [wa_hdirt], 0      ; the hit's direction going
     je .c_hd
     dec byte [wa_hdirt]
@@ -2415,13 +2395,6 @@ wa_bwacc:  db 0,     15,     -10,     0,       0,      0
 wa_bwtone: dw 900,   220,    700,     300,     150,    2400
 
 wa_bshoot:
-    push ax                     ; (a shot ends its spawn's protection)
-    push bx
-    call wa_bidx
-    mov bx, ax
-    mov byte [wa_bprot+bx], 0
-    pop bx
-    pop ax
     inc word [wa_bshots]        ; (the bots' shots and hits: the score's,
     mov byte [di+F_FLASH], 0x86 ; and tests/wabots.py's) - its cue, five
     mov bl, [di+F_BWPN]         ; ticks, so a 10 fps frame at 80 columns
@@ -3844,14 +3817,6 @@ wa_hurt:
     mov byte [di+F_FLASH], 5
     jmp .flinch
 .here:
-    push ax                     ; SPAWN PROTECTION: a bot just back takes
-    push bx                     ; nothing
-    call wa_bidx
-    mov bx, ax
-    cmp byte [wa_bprot+bx], 0
-    pop bx
-    pop ax
-    jne .out
     call wa_bstruck             ; (AI-PLAN 8.6: it turns on whoever shot it)
     inc word [wa_hits]
     mov byte [di+F_FLASH], 5
@@ -4081,7 +4046,8 @@ wa_hitdir:
 ; pistol alone and full health. Keeps all but AX, BX, CX, DX, SI
 WA_PDEADT   equ 90              ; 3 s
 WA_PROTT    equ 60              ; SPAWN PROTECTION: 2 s, or to the first
-                                ; shot - nothing hurts a figure just back
+                                ; shot - nothing hurts a PLAYER just back
+                                ; (the bots are computers: none, the owner's)
 WA_PFLOOR   equ 20              ; the eye on the floor
 wa_ptick:
     mov word [wa_kbits], 0      ; (no move, no jump)
@@ -4398,6 +4364,17 @@ wa_rkhit:
     inc al
     cmp al, [wa_killer]
     je .fn
+    cmp byte [wa_gmode], 0      ; (A TEAM MODE: nor its owner's teammate -
+    je .foe                     ; it flies on through; its splash, wa_boom
+    push bx                     ; through wa_hurt, spares them too)
+    mov bl, al
+    xor bh, bh
+    mov ah, [wa_tm+bx]
+    mov bl, [wa_killer]
+    cmp ah, [wa_tm+bx]
+    pop bx
+    je .fn
+.foe:
     call wa_lkremote            ; (the other machine's: it goes off, and
     je .met                     ; that machine judges it - LINK-PLAN 3)
     mov ah, 2
@@ -7214,7 +7191,7 @@ WA_VAR wa_msens,1                ; the mouse's sensitivity: -4..4 about the
 WA_VAR wa_paused,1               ; P: offline, the sim stands
 WA_VAR wa_ask,1                  ; Esc in a linked match: "Leave?" up
 WA_VAR wa_pprot,1                ; SPAWN PROTECTION: the player's ticks of
-WA_VAR wa_bprot,WA_NFIG          ;   it, and each bot's (by its index)
+                                 ;   it (the bots have none: the owner's)
 WA_VAR wa_hdir,1                 ; THE HIT'S DIRECTION (a prototype): its
 WA_VAR wa_hdirt,1                ;   glyph's index (1 left, 2 right, 3
                                  ;   behind) and ticks left
