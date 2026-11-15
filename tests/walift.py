@@ -52,7 +52,8 @@ SYS = "build/os8088-360.img"
 APPS = "build/warena360.img"
 F = 4772727                     # the 5150's clock: guest cycles a second
 TICK = F // 30                  # the sim's tick (wa_tick runs at 30 Hz)
-ITEM = "Bots: normal"            # (a Game item: the menu is on the bar)
+MENU, ITEM = "Link", "Automatic"   # (the menu bar's one menu: its first
+                                   # item there says the game is up)
 
 
 def start_keys(m, arena=2, width=40, cpu8088=True):
@@ -75,9 +76,9 @@ def start(ui, w, sym, arena=2, w40=True, bots=None):
     went, the owner 2026-11-14): the arena and the width poked into the
     setup's own settings, then Enter - the Play button's key"""
     m = ui.m
-    os88marty.until(m, lambda _: any(c[0] == "Game" and any(
+    os88marty.until(m, lambda _: any(c[0] == MENU and any(
         i[0] == ITEM for i in c[3]) for c in ui.menus()),
-        "WireArena's Game menu on the bar", guest=10)
+        "WireArena's Link menu on the bar", guest=10)
     p = os88marty.Pkg(m, w)
     p.write(sym["wa_lkarena"], bytes([arena]))
     p.write(sym["wa_want"], bytes([1 if w40 else 0]))
@@ -98,15 +99,28 @@ VARS = ("wa_px", "wa_py", "wa_feet", "wa_jz", "wa_jv", "wa_flrb", "wa_lon",
         "wa_loff")
 
 
-def amap():
+def bench_build():
+    """THE BENCHES' BUILD: B and P are a test build's since NET-PLAN 9.9
+    (`make WABENCH=1`), so a row or tool that presses them builds a private
+    tree with them (or reuses it) and points this process at it - every
+    `build/...` it then names, os88build.at's. -> the tree's directory; read
+    the game's symbols with amap(bench=True)."""
+    t = os88build.tree("WABENCH=1",
+                       targets=("os8088-360.img", "warena360.img")).apply()
+    return t.dir
+
+
+def amap(bench=False):
     """The game's own symbol offsets: wirearena.asm assembled with a map, and
     refused unless it is byte-identical to the build's (a stale map reads the
-    wrong words and reports a plausible wrong ride)."""
+    wrong words and reports a plausible wrong ride). bench: the build is a
+    WABENCH=1 one (bench_build)."""
     bdir = os.path.join(ROOT, os88build.at("build/"))
     d = tempfile.mkdtemp()
     mp, bn = os.path.join(d, "m"), os.path.join(d, "b")
     subprocess.check_call(
-        ["nasm", "-f", "bin", "-I", os.path.join(ROOT, "apps/"),
+        ["nasm", "-f", "bin"] + (["-DWA_BENCH"] if bench else []) +
+        ["-I", os.path.join(ROOT, "apps/"),
          "-I", os.path.join(ROOT, "apps/wirearena/"),
          "-I", os.path.join(ROOT, "drivers/net/"), "-I", bdir + "/",
          "--before", "[map all %s]" % mp, "-o", bn,

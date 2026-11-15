@@ -82,36 +82,9 @@ wa_paint:                       ; the link's line, then the help or the
     cld
     ret
 
-wa_oncmd:                       ; Game menu: the bots' difficulty (AI-PLAN
-    cmp ah, 1                   ; 4.3) - a match is started from the setup
-    jne .game                   ; (NET-PLAN 2). The Link menu is walink.inc's
-    jmp wa_lkcmd
-.game:
-    call wa_lklinked            ; LINKED: the host's choice for the match,
-    jz .diff                    ; the guest told it is the host's
-    call wa_lkhost
-    jz .hosts
-    mov [wa_lkdiff], al
-    ret
-.diff:
-    mov [wa_diff], al
-    mov [wa_lkdiff], al
-    xor ah, ah
-    shl ax, 1
-    mov bx, ax
-    mov si, [wa_t_diff+bx]
-    push ds
-    pop es
-    xor cx, cx
-    call OSAPI_TOAST
-    ret
-.hosts:
-    mov si, wa_t_host
-    push ds
-    pop es
-    xor cx, cx
-    call OSAPI_TOAST
-    ret
+wa_oncmd:                       ; the menu bar: the Link menu alone
+    jmp wa_lkcmd                ; (walink.inc) - a match's settings are the
+                                ; setup's (NET-PLAN 2, 9.9)
 
 ; --- the bracket ----------------------------------------------------------
 wa_main:
@@ -541,41 +514,21 @@ wa_frame_input:
     jne .b
     xor byte [wa_vsync], 1
     jmp .drain
-.b:
-    cmp ah, 0x21                ; F: the field of view, 90 -> 75 -> 60
-    jne .bg
-    inc byte [wa_fov]
-    cmp byte [wa_fov], 3
-    jb .fov
-    mov byte [wa_fov], 0
-.fov:
-    call wa_setfov
-    jmp .drain
-.bg:
-    cmp ah, 0x22                ; G: the floor grid
-    jne .bl
-    xor byte [wa_grid], 1
-    jmp .drain
-.bl:
-    cmp ah, 0x26                ; L: the walls' tops off (sparse): a debug
-    jne .bb                     ; key, in no detail level
-    xor byte [wa_sparse], 1
-    jmp .drain
-.bb:
+.b:                             ; (F, G, T and L - the field of view, the
+                                ; floor grid, treads, the walls' tops - are
+                                ; the detail levels' now, F1-F5: the owner,
+                                ; 2026-11-15)
+%ifdef WA_BENCH                 ; THE BENCHES, a TEST build's (WABENCH=1):
     cmp ah, 0x30                ; B: the bench
     jne .bp
     call wa_bench
     jmp .drain
 .bp:
-    cmp ah, 0x14                ; T: a ramp drawn as stepped treads (the
-    jne .bpb                    ; graphics option, HEIGHTS-PLAN 7.4.2)
-    xor byte [wa_treads], 1
-    jmp .drain
-.bpb:
     cmp ah, 0x19                ; P: the PLAY bench
     jne .bk
     call wa_pbstart
     jmp .drain
+%endif
 .bk:
     cmp ah, 0x13                ; R: reload, at any time (WEAPONS-PLAN 6)
     jne .bn
@@ -608,10 +561,12 @@ wa_frame_input:
     call wa_wsel
     jmp .drain
 .typed:
+%ifdef WA_BENCH
     cmp byte [wa_pbon], 0
     je .live
     call OSAPI_MOUSE_REL        ; (the hand's motion is not the test's)
     jmp wa_pbview
+%endif
 .live:
     call OSAPI_MOUSE_REL
     jc .nomouse                 ; kern_small refuses: keys only
@@ -768,10 +723,12 @@ wa_tick:
     mov [wa_kfr], al
     call wa_keys
 .polled:
+%ifdef WA_BENCH
     cmp byte [wa_pbon], 0
     je .live
     inc word [wa_pbtk]           ; the play bench: its clock, and no keys
     mov word [wa_kbits], 0
+%endif
 .live:
     cmp byte [wa_pdead], 0      ; (dead: no keys)
     je .keys
@@ -3377,8 +3334,10 @@ wa_wtick:
     je .out
     cmp byte [wa_cool], 0
     jne .out
+%ifdef WA_BENCH
     cmp byte [wa_pbon], 0
     jne .out
+%endif
     cmp byte [wa_pdead], 0
     jne .out
     jmp wa_fire
@@ -4343,8 +4302,10 @@ wa_reach:
 ; helps. Not during a bench
 WA_PKR      equ 40
 wa_pktick:
+%ifdef WA_BENCH
     cmp byte [wa_pbon], 0
     jne .q
+%endif
     cmp byte [wa_pdead], 0
     jne .q
     mov cx, [wa_npk]
@@ -5355,6 +5316,7 @@ wa_ovnum:
     pop bx
     jmp .made
 
+%ifdef WA_BENCH                 ; (B and P: a test build's, WABENCH=1)
 ; --- the bench --------------------------------------------------------------
 ; B: 64 frames from the arena's middle, turning 1/64 of a circle each, the
 ; dummies frozen - the SAME work on every build and in either width, so two
@@ -5643,17 +5605,22 @@ wa_avgn:
     div cx
     ret
 
+%endif
+
 ; --- the meter ------------------------------------------------------------
 ; Every 16 frames: average frame, render and present times, and cells
 ; written, into the HUD row.
 wa_meter:
+%ifdef WA_BENCH
     cmp byte [wa_pbon], 0
     je .norm
     jmp wa_pbmeter
+%endif
 .norm:
     mov ax, [wa_nwr]            ; video writes this frame
     add [wa_ncells], ax
     adc word [wa_ncells+2], 0
+%ifdef WA_BENCH
     cmp byte [wa_benched], 0
     je .count
     mov byte [wa_benched], 0
@@ -5661,6 +5628,7 @@ wa_meter:
     mov byte [wa_hold], 1       ; and keep them there until a key moves on
     jmp .show                   ; the bench's sums, as they stand
 .count:
+%endif
     cmp byte [wa_hold], 0
     je .live
     ret
@@ -5743,11 +5711,13 @@ wa_meter:
 .g:
     call wa_putc
     mov al, 'N'                 ; B: these are the bench's figures
+%ifdef WA_BENCH
     cmp byte [wa_benchm], 0
     je .bm
     mov al, 'B'
 .bm:
     mov byte [wa_benchm], 0
+%endif
     mov di, 32
     call wa_putc
     ret
@@ -6529,31 +6499,19 @@ wa_tpl:
                ONCLICK, os88ui_btnclick, ONMOUSEUP, wa_sbtnup, \
                ONDRAG, wa_sbtndrag, ABOUT, wa_about
 
-    OS88_MENUSET wa_menus, wa_name, wa_oncmd
-        OS88_MENU wa_m_game, wa_i_game, 3
-        OS88_MENU wa_m_link, wa_i_link, 9
-    OS88_MENUSET_END wa_menus
+    OS88_MENUSET wa_menus, wa_name, wa_oncmd ; (the Link menu alone: the
+        OS88_MENU wa_m_link, wa_i_link, 4   ; rest - Ready, the bots, their
+    OS88_MENUSET_END wa_menus               ; skill, Ethernet - is the
+                                            ; setup's, NET-PLAN 9.9)
 
 wa_name:
 wa_ttl:     db 'WireArena', 0
-wa_m_game:  db 'Game', 0
 wa_m_link:  db 'Link', 0
-wa_i_link:  dw wa_il_auto, wa_il_c1, wa_il_c2, wa_il_off, wa_il_rdy
-            dw wa_il_b0, wa_il_b1, wa_il_b2, wa_il_net
-wa_il_net:  db 'Ethernet', 0
-wa_il_b0:   db 'No bots', 0
-wa_il_b1:   db 'One bot', 0
-wa_il_b2:   db 'Two bots', 0
+wa_i_link:  dw wa_il_auto, wa_il_c1, wa_il_c2, wa_il_off
 wa_il_auto: db 'Automatic', 0
 wa_il_c1:   db 'Connect COM1', 0
 wa_il_c2:   db 'Connect COM2', 0
 wa_il_off:  db 'Disconnect', 0
-wa_il_rdy:  db 'Ready', 0
-wa_i_game:  dw wa_it_be, wa_it_bn, wa_it_bh
-wa_it_be:   db 'Bots: easy', 0
-wa_it_bn:   db 'Bots: normal', 0
-wa_it_bh:   db 'Bots: hard', 0
-wa_t_diff:  dw wa_t_be, wa_t_bn, wa_t_bh
 
 
 ;               0         1         2         3
@@ -6565,9 +6523,6 @@ TOASTSTR wa_t_part, 'Renderer part mismatch'
 TOASTSTR wa_t_host, 'The host picks the arena'
 TOASTSTR wa_t_ctfa, 'This arena has no flags'
 TOASTSTR wa_t_rone, 'One arena stays in'
-TOASTSTR wa_t_be, 'Bots: easy'
-TOASTSTR wa_t_bn, 'Bots: normal'
-TOASTSTR wa_t_bh, 'Bots: hard'
 
 ; --- the parts (SPEC.md 20.12.3): the renderer, with its BSS as zeros
 ; neither stored nor decoded (OP_ZFILL, 20.12.7.5), and an arena a row, read

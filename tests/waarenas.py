@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 from os88fixture import need                                   # noqa: E402
-from walift import start, amap, SYS, APPS                      # noqa: E402
+from walift import start, amap, bench_build, SYS, APPS         # noqa: E402
 
 F = 4772727
 TICK = F // 30
@@ -120,7 +120,7 @@ def boot():
 
 
 def match(ui, arena, bots=None):
-    sym = amap()
+    sym = amap(bench=True)
     w = ui.path("B:/WARENA.O88")
     p = start(ui, w, sym, arena=arena, bots=bots)
     f0 = p.byte(sym["wa_frame"])
@@ -130,7 +130,8 @@ def match(ui, arena, bots=None):
 
 
 def main():
-    need(APPS)
+    bench_build()                       # (P, the play bench: a test build's -
+    need(APPS)                          # its own tree, NET-PLAN 9.9)
     fails = []
     with boot() as ui:
         g = match(ui, 4, bots=3)

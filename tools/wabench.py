@@ -30,13 +30,22 @@ for _w in a.what + [a.one or ""]:                   # (or A<n>-<width>: any aren
     if _w.startswith("A"):          # bench, at each of its own views)
         _n, _wd = _w[1:].split("-")
         ITEM[_w] = (int(_n), int(_wd))
+if os.path.abspath(a.tree) == ROOT:    # (B and P: a test build's since
+    sys.path.insert(0, os.path.join(ROOT, "tests"))    # NET-PLAN 9.9 - this
+    sys.path.insert(0, os.path.join(ROOT, "tools"))    # checkout's WABENCH=1
+    import walift                       # tree; another checkout's build/
+    APPS = os.path.join(walift.bench_build(), "warena360.img")  # made with it)
+else:
+    APPS = os.path.join(a.tree, "build/warena360.img")
+
+
 def one(w):
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import os88ui
     W = 40 if w.endswith("40") else 80
     out = []
     with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"),
-                     apps=os.path.join(a.tree, "build/warena360.img"), verbose=False) as ui:
+                     apps=APPS, verbose=False) as ui:
         m = ui.m
         ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
         sys.path.insert(0, os.path.join(ROOT, "tests"))

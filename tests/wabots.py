@@ -7,7 +7,8 @@ the Game menu), then, off the game's own variables (its symbols from
 wirearena.asm assembled with a map, refused unless byte-identical to the
 build):
 
-  - THE MENU: "Bots: hard" makes the difficulty 2;
+  - THE SETUP: Skill hard (the setup's drop-down, from the keyboard)
+    makes the difficulty 2;
   - SIGHT: a bot stood at 40 random free points, the player at another each
     time: its verdict (F_BSEE) is the host's walk of the same sight grid
     (arenagen.sight_clear) every time;
@@ -39,7 +40,7 @@ import arenagen                                                 # noqa: E402
 import os88marty                                                # noqa: E402
 import os88ui                                                   # noqa: E402
 from os88fixture import need                                    # noqa: E402
-from waweapons import Arena, start, amap, SYS, APPS, FS, ITEM, A_, anims  # noqa
+from waweapons import Arena, start, amap, SYS, APPS, FS, ITEM, MENU, A_, anims  # noqa
 
 F_BST, F_BSEE, F_BGOAL, F_BTGT = 46, 49, 51, 55
 
@@ -64,12 +65,14 @@ def main():
                      quick=True) as ui:
         m = ui.m
         w = ui.path("B:/WARENA.O88")
-        os88marty.until(m, lambda _: any(c[0] == "Game" and any(
+        os88marty.until(m, lambda _: any(c[0] == MENU and any(
             i[0] == ITEM for i in c[3]) for c in ui.menus()),
-            "WireArena's Game menu on the bar", guest=10)
-        ui.menu_pick("Game", "Bots: hard")
+            "WireArena's Link menu on the bar", guest=10)
+        for k in ("ArrowDown", "ArrowDown", "ArrowDown", "ArrowRight"):
+            m.key(k)                    # (the setup's Skill: normal -> hard)
+        ui.settle()
         p = os88marty.Pkg(m, w)
-        check(p.byte(sym["wa_diff"]) == 2, "THE MENU: 'Bots: hard' sets the "
+        check(p.byte(sym["wa_diff"]) == 2, "THE SETUP: Skill hard sets the "
               "difficulty (%d)" % p.byte(sym["wa_diff"]))
         p = start(ui, w, sym)
         f0 = p.byte(sym["wa_frame"])
