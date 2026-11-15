@@ -4021,8 +4021,8 @@ api_ff_go:
 ; caller is already standing inside, and a package that could not see its own
 ; folder's name could not have been launched from it.
 ; -----------------------------------------------------------------------------
-api_file_path:
 %ifndef KERN_SMALL
+api_file_path:
     call inst_vol_enter         ; preserves everything, including the flags
     call COLD_SEG:dsk_path_x    ; ...and this banks every register it does
                                 ; not answer in, so the stub banks none
@@ -4035,9 +4035,16 @@ api_file_path:
                                 ; presented as a second window whose title
                                 ; read as machine code
 %else
-    mov ax, FERR_NODISK         ; kern_small carries the cell and no walker
-    stc                         ; (SPEC.md 19.2.4.3): no package on its disks
-    ret                         ; calls this, and every caller tests CF
+api_file_path equ xm_copy       ; kern_small carries the cell and no walker
+                                ; (SPEC.md 19.2.4.3): no package on its disks
+                                ; calls this, and every caller tests CF. Its
+                                ; answer, AX = FERR_NODISK (1) and CF = 1 from
+                                ; a near `ret`, IS xm_copy's bytes, so it is
+                                ; that routine rather than a second copy of it
+                                ; (api_refuse's precedent; -5 on kern_small)
+    nop                         ; ...and ONE byte back, never executed, so
+                                ; every hot routine after this keeps its
+                                ; parity (tests/unit/t_hotpar.py)
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -9565,6 +9572,27 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 %endif
 %elif KERN_SIZE > KERN_BUDGET + KERN_GRACE
 %error "kernel too big: past KERN_BUDGET's branch grace - see docs/KERNEL-MEMORY.md"
+%endif
+%endif
+; 1b. kern_small's HEAP RUNG - LOCKED (the owner, 2026-11-15). The 128KB
+;    machine's heap is 70.5KB: HEAP_SEG at or under 0x0E60 (57.5KB of kernel
+;    below it), and the kernel may not grow past that line, with NO branch
+;    grace. KERN_BUDGET (64,000) cannot see it - there were 6KB "spare" there
+;    while the heap had already lost 512 bytes: OSAPI_MOUSE_REL's ten bytes
+;    and OSAPI_KEY_MAP's 34 took .text past a rung that had 3 to spare, the
+;    heap base rounded up to 0x0E80, and the read-ahead Paint's launch moves
+;    stopped fitting its hole (tests/smallfrag.py's dirwmove/dirwserve, red
+;    from 37071f2a until both were taken off kern_small). A knob kernel is
+;    exempt, for guard 1's reason.
+KERN_SMALL_HEAP_SEG equ 0x0E60  ; 128KB - 70.5KB = 57.5KB = 0x0E60 paragraphs
+%ifndef KERN_KNOB
+%ifdef KERN_SMALL
+%if FERR_NODISK != 1             ; (api_file_path IS xm_copy there, which
+ %error "api_file_path is xm_copy on kern_small only while FERR_NODISK is 1"
+%endif                          ; answers AX = 1)
+%if HEAP_SEG > KERN_SMALL_HEAP_SEG
+%error "kern_small's heap rung is LOCKED at 70.5KB on 128KB (HEAP_SEG <= 0x0E60, guard 1b): .text+.bss+.cold grew past it - take the bytes back, do not move the line (the owner, 2026-11-15)"
+%endif
 %endif
 %endif
 ; 2. KERN_CODE_MAX - the SEGMENT. The kernel's own segment is 64KB like any

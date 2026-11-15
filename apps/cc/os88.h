@@ -1038,7 +1038,9 @@ int  os88_key_down(int scan);
  * os88_key_down is one EACH: a loop asking three keys or more is ahead. map
  * must be static (SPEC.md 73: never the address of an automatic). It ARMS the
  * map as os88_key_down does, so the first answer is all up, and it is the
- * same advice, not an oracle. */
+ * same advice, not an oracle. kern_small REFUSES it and leaves map as it
+ * was - a static starts all up - so a program that runs there polls
+ * os88_key_down instead. */
 #define OS88_KEYMAP_BYTES 16
 #define OS88_KEYMAP_HELD(map, s) ((map)[(s) >> 3] & (1 << ((s) & 7)))
 void os88_key_map(unsigned char *map);

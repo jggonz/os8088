@@ -17779,19 +17779,24 @@ The decisions, and what each cost:
   each byte whole, so a key landing mid-copy is either in the snapshot or
   not: every copy is a state the map really held. (`rep movsw` with no
   segment override is also safe to interrupt on the 8088.)
-- **Every kernel has it, kern_small included** — unlike `OSAPI_MOUSE_REL`
-  (§9.14), and decided by the bytes rather than by that precedent. The full
-  body is 32 bytes; a refusal is 6, so gating would save kern_small **26
-  bytes** — and would cost every adopter a second path (the per-key loop it
-  was replacing) in its own image, on the machine where a frame's cycles are
-  dearest. Measured from the maps against the parent commit at one build
-  number:
+- **kern_small REFUSES it** (the owner, 2026-11-15), like `OSAPI_MOUSE_REL`
+  (§9.14): `CF = 1`, `AX = 1`, the caller's 16 bytes untouched. It landed on
+  every kernel first, decided by the bytes - the body is 32, and gating
+  would cost an adopter a second path (the per-key loop it replaces) - but
+  kern_small is LOCKED under its 70.5KB heap rung (guard 1b, §24.5.7's 128KB
+  machine), which had 3 bytes of slack before `MOUSE_REL` and none after
+  this: its 34 took the heap base up a 512-byte step and broke the read-ahead
+  move Paint's launch relies on (`tests/smallfrag.py`). Both cells now land
+  on ONE four-byte refusal there, `call xm_copy / retf`, and no package that
+  runs on kern_small calls either (WireArena, the one user, refuses that
+  kernel). Measured, as it first landed, from the maps against the parent
+  commit at one build number:
 
   | kernel | `.text` | `.bss` | other |
   |---|---|---|---|
   | kern_big | **+34** (the 32-byte body, the 3-byte cell, and §20.3's parity pad OUT again: the table is even with both `MOUSE_REL`'s cell and this one) | +0 | — |
   | kern_emu | +34 | +0 | — |
-  | kern_small | +34 | +0 | — |
+  | kern_small | +34, and -32 at the gate (2026-11-15) | +0 | — |
   | kern_mega | +38 (`KDS` is `mov ds, [cs:k_dsel]`, 5 bytes) | +0 | `.mega` +6: `fsx_rkeep`'s row, above 1MB |
 
   The body reads `[kbd_armed]` as `[si - 1]` — the flag is the byte below the
@@ -19875,12 +19880,14 @@ whose arrows a game reads as keys anyway. The VMware absolute pointer
 the backdoor live the words do not move: an absolute device has no motion to
 report, and a package wanting one there differences `OSAPI_MOUSE`.
 
-**kern_small refuses it** (the owner, 2026-11-12: that kernel's 64KB
-budget is held below a rung the 38 bytes would cross). Its cell is still at
-0x0236 — a table cell's position is ABI on every kernel — and jumps to a
-six-byte body answering CF = 1, AX = 1 (§20.3.4's refusal); the accumulator
-and its words are compiled out. Ten bytes of `.text` there, against 38 on the
-others. If a size pass ever makes room, the gate comes off.
+**kern_small refuses it** (the owner, 2026-11-12: that kernel's budget is held
+below a rung the 38 bytes would cross; and since 2026-11-15 it is LOCKED under
+its 70.5KB heap rung, guard 1b). Its cell is still at 0x0236 — a table cell's
+position is ABI on every kernel — and jumps to a four-byte body, `call
+xm_copy / retf`, answering CF = 1, AX = 1 (§20.3.4's refusal), which
+`OSAPI_KEY_MAP`'s cell shares there (§9.7.3); the accumulator and its words
+are compiled out. Seven bytes of `.text` there, the cell and the shared body,
+against 38 on the others. If a size pass ever makes room, the gate comes off.
 
 **The cell** is a jump cell at the table's end (the `OSAPI_FILE_FIND_SEQ`
 shape, §19.7.1.1), in every kernel:
