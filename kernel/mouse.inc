@@ -1647,6 +1647,38 @@ osapi_mouse:
     mov al, [mouse_btn]
     ret
 
+%ifndef KERN_SMALL
+; osapi_mouse_rel - OSAPI_MOUSE_REL (0x0236, SPEC.md 9.14), a JUMP cell: the
+; caller's far call lands here with its own DS. Out CX = dx, DX = dy, the raw
+; mickeys since the last call, each taken and zeroed by one xchg; AL =
+; mouse_btn. Flags and every other register kept (popf restores the caller's).
+; NO cli: a report landing between the two xchgs has its dy answered by the
+; next call instead of this one - delayed a frame, never lost - and the 22
+; bytes stay EVEN, which every hot routine assembled after this one needs
+; (tests/unit/t_hotpar.py)
+osapi_mouse_rel:
+    push ds
+    KDS
+    pushf
+    xor cx, cx
+    xchg cx, [mou_rx]
+    xor dx, dx
+    xchg dx, [mou_ry]
+    mov al, [mouse_btn]
+    popf
+    pop ds
+    retf
+%else
+; kern_small: OSAPI_MOUSE_REL REFUSES (SPEC.md 9.14) - the owner gated the
+; accumulator out of the 64KB machine's budget. The cell stays where every
+; kernel has it and lands here: AX = 1, CF = 1 (`cmp al, 2` borrows as `stc`
+; sets it, and makes the body six bytes, EVEN, for t_hotpar)
+osapi_mouse_rel:
+    mov ax, 1
+    cmp al, 2
+    retf
+%endif
+
 %ifdef KERN_BIG
 ; =============================================================================
 ; The PS/2 mouse (SPEC.md 9.9)
@@ -3067,6 +3099,51 @@ kbd_down:
     mov byte [kbd_armed], 1     ; ...and only NOW may the ISR write here
     jmp short .go
 
+; -----------------------------------------------------------------------------
+; osapi_key_map - OSAPI_KEY_MAP (0x0239, SPEC.md 9.7.3), a JUMP cell: the
+; caller's far call lands here with its own DS.
+; in:  DS:DI = KBD_MAPSZ (16) bytes of the caller's
+; out: those bytes = the map, bit (s & 7) of byte (s >> 3) set while make
+;      scancode s is held; CF = 0; every register kept
+;
+; ONE far call for every key a frame asks about, where kbd_down is one EACH -
+; ~540 clk apiece on the 8088 (SPEC.md 97's table), so a game polling nine
+; keys paid ~5,000 a frame. A COPY and not a pointer: the caller's own DS is
+; a selector on kern_mega and a real segment again inside a FSXF_REAL
+; bracket, right in both, where a pointer into KERNEL_SEG would be a
+; different word in each - and a package's stray write through it would land
+; in the ISR's own state.
+;
+; NO cli: one IRQ1 changes ONE bit of ONE byte, and each byte is read whole,
+; so a key landing mid-copy is either in the snapshot or not - never a torn
+; map. Arms the map on the first call as kbd_down does, THROUGH kbd_down, and
+; CF is 0 on both paths: `cmp [..], 0` never borrows, and the arm's first
+; answer is always "up". No `cld`: DF = 0 on entry (SPEC.md 1). 32 bytes, 35
+; on kern_mega (KDS), EVEN on every real-mode kernel for t_hotpar
+; -----------------------------------------------------------------------------
+osapi_key_map:
+    push si
+    push di
+    push cx
+    push es
+    push ds
+    pop es                      ; ES:DI = the caller's 16 bytes
+    KDS
+    mov si, kbd_dnmap
+    cmp byte [si - 1], 0        ; [kbd_armed], the byte below the map: a
+    jne .copy                   ; byte shorter than naming it, which keeps
+    call kbd_down               ; the body EVEN (t_hotpar). THE ARM (any
+.copy:                          ; AL): the map cleared, CF = 0
+    mov cx, KBD_MAPSZ / 2
+    rep movsw
+    push es
+    pop ds                      ; the caller's DS back
+    pop es
+    pop cx
+    pop di
+    pop si
+    retf
+
 ; =============================================================================
 ; The overrun guard (SPEC.md 9.8) - A FULL BIOS BUFFER IS A HANG, NOT A BEEP
 ;
@@ -3832,6 +3909,9 @@ kbd_armed   db 0                ; SPEC.md 9.7: has anything ever ASKED for key
                                 ; kbd_down has not cleared yet
 kbd_dnmap   times KBD_MAPSZ db 0 ; ...and the bit per key. Zeroed again at the
                                 ; arm, so this initialiser is belt and braces
+%if kbd_dnmap - kbd_armed != 1
+  %error "osapi_key_map reads [kbd_armed] as the byte below kbd_dnmap"
+%endif
 kbd_ovn     db 0                ; SPEC.md 9.8: beeps this overrun burst has
                                 ; already spent, reset when the buffer next
                                 ; reads empty
@@ -4345,6 +4425,12 @@ mou_apply:
                                 ; awake all night. One store, no register - the
                                 ; UI task spends it, so nothing in an ISR
                                 ; touches a video port or reads a clock
+%ifndef KERN_SMALL
+    add [mou_rx], ax            ; THE MICKEYS, before the clamp can eat them
+    add [mou_ry], bx            ; (SPEC.md 9.14): OSAPI_MOUSE_REL's two words.
+%endif                          ; kern_big and kern_mega: the owner gated
+                                ; kern_small out (its 64KB budget), whose cell
+                                ; refuses
     add ax, [mouse_x]           ; STAGED, not stored: the clamp is 2-D on a
     add bx, [mouse_y]           ; machine with two displays (SPEC.md 39.15.4)
                                 ; and cannot answer about x until y is known -
@@ -6876,6 +6962,11 @@ mou_whl     resw 1              ; the WHEEL, notches owed, signed, positive
                                 ; every backend ADDS to and ui_task takes with
                                 ; one xchg, so a spin is one scroll however fast
                                 ; it comes and can never flood the event ring
+%endif
+%ifndef KERN_SMALL
+mou_rx      resw 1              ; raw dx and dy summed since the last
+mou_ry      resw 1              ; OSAPI_MOUSE_REL (SPEC.md 9.14): signed,
+                                ; unclamped, unscaled, wrapping at 16 bits
 %endif
 cur_lazy    resb 1              ; gfx_lock deferred the hide (SPEC.md 7.1.4):
                                 ; the arrow is still on screen this hold

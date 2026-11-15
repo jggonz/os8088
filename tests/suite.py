@@ -8537,6 +8537,22 @@ SOAK = [
         "4 (an 8042); MartyPC's 8255 keeps the peek. 8s is 5.1 measured",
         needs=("qemu",), serial=True,
         wants=("build/os8088.img", "build/apps.img")),
+    Row("keymap", "soak", py("tests/keymap.py"), 1.0,
+        "OSAPI_KEY_MAP (0x0239) COPIES THE WHOLE KEY-STATE MAP (SPEC.md 9.7.3). "
+        "Each built kernel's own bytes under Unicorn - the jump cell, kbd_track "
+        "(the int 09h writer) and the kbd_down slot: the cell jumps to the body "
+        "and the table ends at 0x023C; with the map unarmed and poisoned one "
+        "call ARMS it and answers 16 zero bytes; scancodes fed through "
+        "kbd_track (makes, breaks, E0-prefixed grey keys on the keypad bits) "
+        "copy out as bit s&7 of byte s>>3 into an odd offset of a foreign DS, "
+        "sentinels untouched, CF = 0, every register kept; kbd_down agrees "
+        "with the copy on all 128 make codes; on kern_mega fsx_rkeep keeps the "
+        "cell for a FSXF_REAL bracket. kern_big required; smallk, megak and "
+        "emuk when built. A negative control patches the copy one word short "
+        "and must see it. RED with the arm's `call kbd_down` dropped (the "
+        "poison comes back) and with fsx_rkeep's row taken out. 1s is 0.3 "
+        "measured",
+        needs=("unicorn",), wants=("build/kernel.map",)),
     Row("kdkbd", "soak", py("tests/kdkbd.py"), 50.0,
         "KERN_DOS KEEPS THE BIOS KEY BUFFER OFF FULL (SPEC.md 96.50). "
         "Reported off an 86Box 386: hold a direction key in Prince of Persia "
@@ -8641,6 +8657,455 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/doscom360.img",
                "build/kerndos.bin")),
+    Row("walift", "soak", py("tests/walift.py"), 18.0,
+        "WIREARENA'S LIFT CARRIES A RIDER WHO STANDS STILL "
+        "(docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 3.2, 9.10). `wa_hjump`'s "
+        "cached floor read branched to `.read` with the lift's RECORD in AX "
+        "where `.read` takes x, so a still rider's floor was read at x = 40 "
+        "every other tick: the feet went 16, 0, 16, 0, the lift's count "
+        "reset, and it never left the floor - the owner's 'jitters me in "
+        "place' on the pc5150. Nine scripted rides on the Heights arena, "
+        "each ending STILL on the lift (keys up, the mouse turning, W held "
+        "into the tower, a jump, each edge, off mid-rise, back on from the "
+        "tower, onto it coming down), checked tick by tick off the game's "
+        "own variables: up to its raised height with no drop of the feet, "
+        "off onto the tower, the lift home. Red on e9ca8cff: 14 failures.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("warotcga", "soak", py("tests/warotcga.py"), 14.0,
+        "WIRE ARENA'S ROTATION WINDOW STAYS ABOVE THE DOCK (SPEC.md 128.6; "
+        "the owner, 2026-11-15: free-for-all's ran into the dock on a CGA). "
+        "MartyPC's 5150 CGA, the dock from vid_dock_y0: free-for-all's eight "
+        "arenas in two columns of four, the frame above the dock and every "
+        "box inside it, the fifth beside the first; Right and Left move "
+        "between the columns and Space toggles the far column's arena; team "
+        "deathmatch's five stay one column. Red with the window held to one "
+        "column (three failures).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wahudset", "soak", py("tests/wahudset.py"), 12.0,
+        "WIREARENA SAYS A SETTING WHEN A KEY CHANGES IT (SPEC.md 128.2; the "
+        "owner, 2026-11-15: 'right now I just have to see what changes'). "
+        "A match alone on MartyPC's 5150 CGA: F2, F5, F3, V twice, + and - "
+        "each put 'Detail Low', 'Detail Very High', 'Detail Medium', "
+        "'Vsync on', 'Vsync off', 'Columns 80', 'Columns 40' in the HUD's "
+        "message - read out of wa_hmsg AND off row 24 of text memory, the "
+        "setting itself agreeing; the width's message drawn on the new "
+        "screen. Red with the detail keys' wa_hudset call taken out (three "
+        "failures).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wamono", "soak", py("tests/wamono.py"), 9.0,
+        "WIREARENA ON A HERCULES DRAWS MONOCHROME ATTRIBUTES. wa_setmode "
+        "chose the mono table by FSI_SEG == B000h, and on kern_mega that "
+        "word is a SELECTOR (fsx.inc's VSEG, KERN-MEGA-MEMORY-PLAN MC7.4), "
+        "so a 286 with a Hercules played in the COLOUR table: an MDA page "
+        "reads 01h as underline, and 134 wall cells were underlined. Now "
+        "the display's kind, OSAPI_FSX_CAPS's DL. A match at 80 columns on "
+        "MartyPC's 5150 Hercules: [wa_mono] 1, no glyph in a colour-only "
+        "attribute and no underline at B000h, a frame there to judge. "
+        "Red with the test aimed at VID_CGA ([wa_mono] 0, 01h x134); its "
+        "kern_mega port, mega-wamono on 86Box's mr286 with a Hercules, red "
+        "on the shipped source before the fix.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("waarenas", "soak", py("tests/waarenas.py"), 60.0,
+        "WIREARENA'S HEDGE AND TWIN, AND THE LIMITS THEY RETIRED "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md "
+        "8). On the twin: both lifts "
+        "carry a still rider to the tower's top and go home empty (the sim "
+        "moved one lift), off the raised lift the tower is a floor at 240 "
+        "(kind bit 6), a FLOOR LINE stops the feet - the west square's "
+        "straight edge and the path's sloping one (4.5) - and the bots ride "
+        "BOTH lifts within 150 s (a lift leg names its lift); on the hedge "
+        "the stack's top is a floor at 160 and its middle tier, a box "
+        "STANDING on a box, one at 104, and its lift lands a rider on the "
+        "outer wall; the CROSSING (THREE-ARENAS-PLAN 1) is a flat arena "
+        "and its minimap at 40 columns pairs a sample on (phase 1), so its "
+        "north-south arm shows open between its walls (red with the phase "
+        "held at 0 - the owner's report); "
+        "up the ZIGGURAT's south ramp (12 treads) the feet reach the tower's "
+        "top at 288 (red with wa_hat reading a flight's treads as a LINE), "
+        "and its ramps are drawn as ramps on the glass: straight on, the "
+        "south ramp's sides slope up to the tower (red with a flight's far "
+        "side drawn only with the eye above it - the owner's first "
+        "screenshot), and from the south the west ramp's side is a slope, "
+        "not a line at its top (red with the renderer reading a flight's "
+        "rising face, bits 2-3, as a STACK - the owner's second); "
+        "in THE PIT the start stands on the layer at 192, CTF's flags stand "
+        "at the ring's 240 (red with the base's height dropped), the west "
+        "lift carries a rider out of the pit, a hop off the layer lands on "
+        "the ring at 240, and the bots ride a lift and hop onto the ring "
+        "within four minutes (7 to 65 s measured alone, once past two in a "
+        "4-lane run: the bots' dice); "
+        "on each, P starts at the arena's OWN first view. Red with bit "
+        "6 dropped, one lift ticked and the views' pointer a word off (5 "
+        "failures), and with wa_flcross answering 'clear' (both floor-line "
+        "checks).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wactf", "soak", py("tests/wactf.py"), 40.0,
+        "WIREARENA'S CAPTURE THE FLAG, ONE MACHINE "
+        "(docs/plans/completed/WIREARENA-CTF-PLAN.md 2, 6, waves C1 and C2), on the "
+        "twin off "
+        "the game's own variables: the setup's Mode makes a CTF match, the "
+        "teams are the slots' parity, both flags start at their bases, we "
+        "spawn on red's side at the start and after three deaths; standing "
+        "at blue's base takes its flag, nothing scores at our base while a "
+        "foe carries ours, our dropped flag touched goes home, a capture "
+        "scores, dying drops the flag where we fell and its time sends it "
+        "home, the third capture (Win at 3, its default) shows RED WINS and "
+        "after its 10 s the match goes on in the pit, the next CTF arena, "
+        "nobody's captures and both flags home at its bases, "
+        "and a pistol shot that fires at our teammate takes nothing while "
+        "the same shot hurts the foe; then a bots' match, one against one, "
+        "in which each bot carries the other's flag and two captures are "
+        "made within six guest minutes (the guest time varies with the "
+        "bots' dice and every build moves them: 59 to 226 s measured over "
+        "fifteen runs of five builds, two past four minutes). Red with the touch's team test "
+        "inverted (6 checks), the capture's home test dropped (4), "
+        "wa_hurt's teammate guard out (1) and wc_bgoal returning at once "
+        "(one capture in four minutes). And THE WEAPON'S SPRITE under "
+        "CTF's lines: the overlay holds the flag line before the weapon's "
+        "cells, and wa_ovbuild makes a sprite's cells from none - the "
+        "shotgun's 12 (its stock's 8 brown ones on the glass), then the "
+        "pistol's 7. Red with the index cleared for the reload's arm alone "
+        "(16 counted both times, 1 brown cell): the owner's stray blocks "
+        "after a respawn.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wamodes", "soak", py("tests/wamodes.py"), 25.0,
+        "WIREARENA'S MODES, ONE MACHINE (docs/plans/completed/WIREARENA-MODES-PLAN.md "
+        "2, 3, 5, wave M1), off the game's own variables: Mode at team "
+        "deathmatch lists only the arenas with sides (the hedge, the Twin) "
+        "and moves the arena off the heights, Win at's items are the "
+        "mode's, and free-for-all lists all five again, open first; a "
+        "free-for-all at Win at 5 - a bot's fifth kill shows its name WINS, "
+        "after 10 s the match goes on in pillars (next after open) with the "
+        "kills anew and the bots' names kept, our fifth there shows YOU WIN "
+        "and the next is the heights; team deathmatch at Win at 10 - the "
+        "teams' tops are their players' kills (9 no win), the tenth shows "
+        "RED WINS and after 10 s - the Twin taken out of team "
+        "deathmatch's rotation first (wave M3: R opens its window, the "
+        "hedge and the Twin both checked, the Twin unchecked, the hedge, "
+        "the last, refused unchecking, Esc closes it) - the hedge again, "
+        "the scores anew, us on red's side; king of the "
+        "hill (wave M2) - its list the heights, the hedge and the Twin, on "
+        "the hedge its hill at the stack's foot, nobody's; we run over it, "
+        "red's (WE HAVE THE HILL); both teams on it, it stays; the foe alone, "
+        "blue's (THEY HAVE THE HILL); 10 s held, blue's point, its third "
+        "BLUE WINS, then the Twin and, round, the heights (no sides, the hill "
+        "on its platform); then two bots, one a team, each take the hill "
+        "within two guest minutes (29 to 50 s measured). Red with "
+        "wa_sarlist's mode test inverted (3 checks), wc_score's team test "
+        "inverted (2), wc_next keeping the arena (the next never comes), "
+        "wc_next ignoring the rotation (the Twin next, not the hedge) and "
+        "wc_hgoal returning at once (blue never takes the hill in two "
+        "minutes).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("waflines", "soak", py("tests/waflines.py"), 11.0,
+        "WIREARENA'S FLOOR LINES AGAINST AN EXACT REFEREE "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "
+        "line at the screen's edges in camera space and walks it by an "
+        "error term, no divide; this row holds its picture to a referee "
+        "that shares none of that arithmetic - the game's integer camera "
+        "space, then the line's image in exact rationals. Ten poses of "
+        "the twin through wa_render at a poked camera (tools/waposes.py), "
+        "text VRAM read back: no floor-line cell more than a cell off the "
+        "referee's lines, none missing where no box is in the view, none "
+        "drawn through the tower from behind the west lift (wa_flhid and "
+        "the run it steps over), none missing BEFORE the east tower where "
+        "both a line's ends lie in the tower's columns (the whole-line "
+        "skip), 85 in 100 the referee's own cell and "
+        "dash (90 measured), and no divide fault. The same poses as a "
+        "STILL view (drawn from the walk its first still frame kept) and "
+        "as a NOD (the pitch alone moved: the rows' pass) must draw the "
+        "moved view's cells, every one; and at VERY LOW (wa_dash 2) a "
+        "shallow line's dashes stand in the even columns alone and a steep "
+        "line's cells in the even rows, on the referee's lines, about half "
+        "of Medium's cells - four emulators side by side. "
+        "Red with the shallow walk's error a modulus out (67 in 100, 3 "
+        "poses), a side cut's end left where it was (3 poses), a steep "
+        "line that never steps (4 poses), a tall face's columns not asked "
+        "about (55 cells through the tower), the kept walk's error not "
+        "loaded (62 cells), the rows' pass keeping the old rows (297), "
+        "wa_dash not read (142 cells in odd columns and rows), the "
+        "whole-line skip not asking the line's row (3 cells before the "
+        "tower), and the direct cut's side sign turned or its bottom cut "
+        "16 units out (4 checks each).",
+        needs=("marty", "nasm"), cpus=4,
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wafiglod", "soak", py("tests/wafiglod.py"), 52.0,
+        "WIREARENA'S SMALL FIGURE BEGINS WHERE THE DETAIL LEVEL SAYS "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
+        "figure small on the screen is drawn as seven joints and five "
+        "straight limbs (LK_FEW); how small is the level's (wa_flodv, "
+        "CONFIG's: wa_levtab's last column) - from 464 units ahead at "
+        "Medium and below, from 696 at High, never at Very High; the "
+        "owner chose it on trial builds. One figure before the eye in the "
+        "open arena 400, 560 and 760 units ahead, through "
+        "tools/waposes.py at Low, Medium, High and Very High, an emulator "
+        "each, the still frame single-stepped: the limbs walked (wa_flgo: "
+        "9 a whole figure, 5 a small one) must be 19, 19, 23 and 27. The "
+        "level is set by its key in a running match. Red with the "
+        "threshold a constant (23 at Low and Medium) and with the level's "
+        "key not syncing CONFIG (19 at High).",
+        needs=("marty", "nasm"), cpus=4,
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wastill", "soak", py("tests/wastill.py"), 40.0,
+        "WIREARENA'S STANDING VIEW DRAWS THE MOVING VIEW'S PICTURE "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5). The renderer keeps work "
+        "while the view stands - a floor line's walk, a low box's corners "
+        "(wl_vert: the vertices stamped last frame), a pickup's place on "
+        "the screen (wa_pickups' records) - and each is a chance to draw "
+        "last frame's picture. Twelve seeded poses each of the heights "
+        "arena and the twin through wa_render at a poked camera "
+        "(tools/waposes.py), four ways, an emulator each: MOVED (the view's "
+        "key forgotten: everything made), STILL, a NOD (the pitch alone "
+        "moved) and a RISE (the eye's height alone, which also changes the "
+        "corners a low box wants). Rows 0..22 of text VRAM must be the "
+        "moved view's in the other three, every cell; and the still frame, "
+        "single-stepped, must enter neither wa_thing (a pickup made again) "
+        "nor wa_vert (a corner made again) while wl_vert is asked and "
+        "pickup cells are plotted - the kept paths are the ones that ran. "
+        "And a BLINK, three poses of the twin before the path's health "
+        "pack: no pickup there on the frame the view moves, all back on "
+        "the next - the kept places' key counts the view's changes on a "
+        "frame that draws none too. "
+        "Red with the pickups' key not reading the eye and the pitch (11 "
+        "cells, the twin's rise), wl_vert taking a corner never stamped "
+        "(49 cells, the heights' rise), the frame's corner maker always "
+        "wa_vert (both arenas' kept check) and the key counted only where "
+        "a pickup is drawn (the blink: the pack where the pose before saw "
+        "it).",
+        needs=("marty", "nasm"), cpus=4,
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
+        "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
+        "PLAN 9.4). Alone, the drop-downs centred between row 0 and the "
+        "bottom row (Nick, Play, Keys, 4 from the bottom). "
+        "With the focus in the nick, the Arena list drops over "
+        "it as over nothing, and once it goes the window is pixel-identical "
+        "to the start - no caret left (red with the pass drawing while a "
+        "list is down: the field drawn back over the list, its caret "
+        "restored by the list's bank - the owner, before release). "
+        "The owner saw the whole window flash on every click and "
+        "key: every row and both buttons were redrawn per input. On the "
+        "5150 with a CGA, the pointer off the window: Down settles within "
+        "6 frames with 0 transient pixels; Up again leaves the window "
+        "pixel-identical; K's About card (the keys) and a key taking it "
+        "down leave it pixel-identical (the page's opaque repaint, no white "
+        "first); a drop-down's list opened and dismissed by a click outside "
+        "the same, with no pick. Red with the old full redraw on a focus "
+        "move: 11 frames, 192 transient pixels.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("waroutes", "soak", py("tests/waroutes.py"), 50.0,
+        "WIREARENA'S BOTS WALK THE ROUTE GRAPH (docs/plans/completed/WIREARENA-AI-"
+        "PLAN.md 3). arenagen's graph replaced the dummies' three patrol "
+        "loops: a branch taken at every node, the lift ridden. Two minutes "
+        "of the Heights arena's sim, sampled every 8 ticks: every bot leaves "
+        "its home loop, most of the graph's edges are walked, no figure "
+        "stands in a tall box, and each stands on the floor under it on "
+        "every climbing edge. Then bot 0 at the lift's foot: it waits, "
+        "rides it up (a rider: the lift rises under it), walks onto the "
+        "tower, drops off, and the lift goes home. Red with the branch "
+        "never taken (4 checks) or the bot not counted as a rider.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wabots", "soak", py("tests/wabots.py"), 40.0,
+        "WIREARENA'S BOTS SEE, FACE AND SHOOT BACK (docs/plans/completed/WIREARENA-"
+        "AI-PLAN.md 4). The Game menu sets the difficulty; a bot's look "
+        "agrees with the host's walk of the same sight grid at 40 random "
+        "placements; in a staged duel at each difficulty it turns onto the "
+        "player, fires at its gap, shows its cue and hits at its accuracy "
+        "(45/60/75%, within 15 points), and each hit flashes the HUD's "
+        "heart; a bot that loses the player hunts the node nearest where it "
+        "saw them, gets there and roams again. Red with the turn's sign "
+        "reversed (no turn, no shot) or a wrong accuracy table.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wascore", "soak", py("tests/wascore.py"), 16.0,
+        "WIREARENA'S DEATHS, RESPAWNS AND SCORE (docs/plans/completed/WIREARENA-AI-"
+        "PLAN.md 5). Three robots' names, all different; a pistol kill is "
+        "the player's kill and the bot's death; a killed bot comes back at "
+        "the respawn point farthest from the player; a bot's kill of the "
+        "player is the bot's - dead, W and the trigger do nothing, the eye "
+        "sinks, RESPAWN counts on the screen, then the player is back at "
+        "the point farthest from the nearest live bot, whole, the pistol "
+        "alone; the player's own rocket is a death and a kill less; Tab "
+        "held shows the board with the names, let go it is gone; - and + "
+        "set 40 and 80 columns. Red with the chooser taking the first point "
+        "or a bot's kill not credited.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wabotarms", "soak", py("tests/wabotarms.py"), 30.0,
+        "WIREARENA'S BOTS ARM THEMSELVES (docs/plans/completed/WIREARENA-AI-PLAN.md "
+        "3.3, B4). A bot reaching the ramp platform's spawn takes what is "
+        "there (its weapon, a pickup's rounds, the spawn empty); a roaming "
+        "bot at 30 health FETCHES the health pack by its node and takes it; "
+        "a bot's rocket is its own (the owner byte), hurts the player, "
+        "spares the bot in its own splash and credits the bot with the kill; "
+        "the chaingun fires at its own short gap, a railgun hit is 100 and a "
+        "close shotgun hit 60. Red with nothing taken at nodes (the spawn "
+        "and the fetch) or a bot's rocket passing through the player.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("wactflink", "soak", py("tests/wactflink.py"), 25.0,
+        "WIREARENA'S CAPTURE THE FLAG LINKED (docs/plans/"
+        "completed/WIREARENA-CTF-PLAN.md 7, wave C3): two QEMUs on a socket cable, "
+        "the shipped package, walink's harness. The host's Mode reaches the "
+        "guest in its HELLO and both play CTF on the twin; the host is red "
+        "and the guest blue, each spawned on its own side; the guest's "
+        "player at red's base is given red's flag by the HOST's rules (its "
+        "SNAP) and told by a FLAG event (YOU HAVE THE FLAG), and at its own "
+        "base blue has 1 on both with red's flag home on both; the host's "
+        "take of blue's flag shows on the guest as figure 0 carrying it. "
+        "Red with the guest ignoring FLAG events (wc_evin returning at "
+        "once) and with the host not sending them (wc_send): 4 checks each.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=200),
+    Row("wamodeslink", "soak", py("tests/wamodeslink.py"), 32.0,
+        "WIREARENA'S MODES LINKED (docs/plans/completed/WIREARENA-MODES-PLAN.md 8, "
+        "wave M4): two QEMUs on a socket cable, the shipped package, "
+        "walink's harness. The host's Mode (king of the hill) and its Win "
+        "at pick (3 points) reach the guest in the HELLO; the guest on the "
+        "Twin's hill is given it by the HOST's rules and told by a GAME "
+        "event (WE HAVE THE HILL); the hill's 10 s on the host make blue 1 "
+        "on both; blue's third point shows BLUE WINS on both; after the "
+        "10 s a NEXT event takes both machines to the pit, the scores "
+        "anew and the hill nobody's on both, the link still up and the "
+        "guest's pickups the host's rolls. Red with the guest ignoring GAME "
+        "and NEXT (wc_gin, wc_nin returning at once): 8 checks.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=200),
+    Row("walink", "soak", py("tests/walink.py"), 32.0,
+        "WIREARENA OVER A NULL MODEM (docs/plans/completed/WIREARENA-LINK-PLAN.md, "
+        "L1): two QEMUs on a socket cable, the shipped package. Each window "
+        "finds and binds the other, the lower identity hosts, Space on both "
+        "starts the host's arena on both; a player put on one machine is "
+        "figure 0 on the other; three pistol shots kill the other machine's "
+        "player there and both scoreboards agree after a SCORE; a rocket's "
+        "FIRE flies on the victim's machine, owned by figure 0, and kills "
+        "there; a pickup taken on the host goes on the guest (TAKE) and "
+        "comes back on the host's ROLL; garbage is dropped and counted; a "
+        "pulled cable says LINK LOST and the match resumes; Esc on one says "
+        "OPPONENT LEFT on the other; every byte either way parses as a "
+        "valid frame (binascii's CRC); the bytes a sim second each way, "
+        "no bots and two, under 2400 baud's 240; an older SERIAL.DRV (no "
+        "block verbs, SPEC.md 115.1.2) falls back to a byte a call. L2: a "
+        "second match with two bots - the host's bots on the guest where "
+        "the host has them, the guest's pistol kills one (both boards "
+        "agree), a host's bot shoots the guest and the hurt is that bot's. "
+        "Red with the damage word ignored, TAKE unsent, the guest's bot "
+        "hits ignored or the damage word's attribution dropped.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=200),
+    Row("walinknet", "soak", py("tests/walink.py", "--net"), 35.0,
+        "WIREARENA OVER ETHERNET (docs/plans/completed/WIREARENA-LINK-PLAN.md 12, "
+        "E1): walink's whole match - lobby, SNAP, kills on both boards, a "
+        "rocket, pickups, faults, Esc, two host bots, hearing, the lift - "
+        "on two QEMUs' ne2k_isa cards whose -netdev socket ends are a "
+        "Python relay (the cable's analogue: counted, pullable, a garbage "
+        "frame injected). E in each window claims its card through "
+        "ETHER.DRV's raw verbs (SPEC.md 72.22, attached on demand); every "
+        "frame of the EtherType on the wire parses with binascii's CRC. "
+        "Red with the peer's station address never recorded.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=220),
+    Row("walinkudp", "soak", py("tests/walink.py", "--udp"), 40.0,
+        "WIREARENA ON UDP, FOUND BY BROADCAST (docs/plans/completed/WIREARENA-NET-"
+        "PLAN.md 3): walink's match on two QEMU NE2000s behind a relay that "
+        "is a hub and a DHCP server. Play: local network in the setup gets "
+        "an address and binds ETHER.DRV's UDP port (SPEC.md 72.24); the "
+        "HELLOs go to 255.255.255.255 and the match to the peer's address. "
+        "Every datagram on port 30088 parses with binascii's CRC; garbage "
+        "datagrams are dropped and counted.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=240),
+    Row("walinkip", "soak", py("tests/walink.py", "--udp-ip"), 40.0,
+        "WIREARENA JOINED BY ADDRESS (WIREARENA-NET-PLAN 6): as walinkudp, "
+        "but the relay drops every broadcast to WireArena's port, as a "
+        "router would, and B picks Play: internet and types A's address in "
+        "the setup's Address row. B's HELLO reaches A only by address, and "
+        "the whole match follows.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=240),
+    Row("walinkmega", "soak", py("tests/walink.py", "--mega"), 60.0,
+        "WIREARENA LINKED ON kern_mega (WIREARENA-LINK-PLAN L3.3): walink's "
+        "whole match with BOTH machines kern_mega - plain QEMU on "
+        "build/mega.img, as tests/pciether.py runs it, the shipped "
+        "WIRERENA.O88 in B:, the region and its carve LDT selectors read "
+        "through pciether's MQemu. The null modem through SERIAL.DRV's "
+        "verbs under protected mode and the older driver's byte-a-call "
+        "fallback, the kill, the rocket, the pickups, the faults, the "
+        "host's bots, the lift, every frame on the wire valid. Its checks "
+        "are walink's, red with walink's breaks; this leg adds the kernel.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
+    Row("walinkmeganet", "soak", py("tests/walink.py", "--mega", "--net"),
+        60.0,
+        "walinkmega on raw Ethernet: ETHER.DRV's raw verbs on two kern_mega "
+        "NE2000s (walinknet's relay), the frames staged in the region's "
+        "own selector (SPEC.md 77.10).",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
+    Row("walinkmegaudp", "soak", py("tests/walink.py", "--mega", "--udp"),
+        60.0,
+        "walinkmega on UDP, found by broadcast: DHCP and ETHER.DRV's UDP "
+        "port on two kern_mega machines (walinkudp's hub).",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
+    Row("walinkmegaip", "soak", py("tests/walink.py", "--mega", "--udp-ip"),
+        60.0,
+        "walinkmega joined by address: walinkip's router drops the "
+        "broadcasts, and the kern_mega guest types the host's address.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
+    Row("walink4", "soak", py("tests/walink4.py"), 46.0,
+        "WIREARENA, FOUR MACHINES (WIREARENA-NET-PLAN 4): four QEMU NE2000s "
+        "on walinkudp's hub. Each binds the other three by broadcast; one "
+        "match with slots 0..3 by identity everywhere and no room for the "
+        "host's bots; each player the right figure on the other three; a "
+        "kill dealt into the one peer's damage word and on all four tables; "
+        "a machine switched off dropped from the lobbies; then three "
+        "players and one host bot, synced; a guest's Esc marks that peer "
+        "alone as gone. Red with the damage in the shared working record, "
+        "and with the lobby's quiet-peer drop off.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=420),
+    Row("walink4ip", "soak", py("tests/walink4.py", "--ip"), 31.0,
+        "WIREARENA, THREE JOINED BY ADDRESS (WIREARENA-NET-PLAN 6.1): "
+        "walink4's relay dropping every broadcast to WireArena's port; B "
+        "and C each type A's address and nothing else. A's PEERS frames "
+        "name each to the other, they bind each other directly, and one "
+        "match of three follows with every player seen by both others. Red "
+        "with PEERS never sent.",
+        needs=("qemu", "nasm"),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=240),
+    Row("waweapons", "soak", py("tests/waweapons.py"), 26.0,
+        "WIREARENA'S WEAPONS AND PICKUPS (docs/plans/completed/WIREARENA-WEAPONS-"
+        "PLAN.md). One boot into the Heights arena, every piece checked off "
+        "the game's own variables: the weapon spawns' dice (every choice of "
+        "each, nothing else, the renderer's copy the same); the pistol kills "
+        "in three by the fall; R reloads at any time and tops a magazine up; "
+        "the shotgun kills close, red, by its COLLAPSE, and at medium range "
+        "draws nothing above the figure (the narrow path's unsigned multiply "
+        "once drew two lines into the sky); a rocket kills the shielded "
+        "dummy into bits, then it is gone, and its splash hurts the player; "
+        "the chaingun fires while held; a grenade comes back off a wall, "
+        "bounces and goes off on its fuse, and kills a dummy it meets; the "
+        "railgun pierces two dummies in line and shows its beam; the health "
+        "and shield packs; a pickup's return; F1-F5, RAMP2 on Very Low and "
+        "Low alone. Red with the dice "
+        "fixed, R dead, the reach broken or a death mapped wrong.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("kdmix", "soak", py("tests/kdmix.py"), 40.0,
         "A 1.44MB FLOPPY IN B: UNDER kern_dos (SPEC.md 96.40.5). Every other "
         "kd* row boots two 360KB drives - not by choice, but because every "

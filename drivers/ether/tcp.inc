@@ -743,8 +743,8 @@ eth_user:
     pop ax
     ret
 
-%if NETV_RAW + 2 != NETV_MAX || NETV_RAWRX != NETV_MAX
-  %error "eth_user takes every verb from NETV_RAW up as a raw one"
+%if NETV_RAW + 5 != NETV_MAX || NETV_UDPRX != NETV_MAX
+  %error "eth_user takes every verb from NETV_RAW up as one needing no socket pool (raw, then UDP)"
 %endif
 
 ; --- sk_idle - give the pool back if nobody is using it ----------------------
@@ -789,6 +789,12 @@ eth_v_gone:
     push dx
     cmp al, 16
     jae .out                    ; never counted, never an owner we can match
+%ifndef ETH_NORAW
+    cmp al, [eth_uslot]         ; (its UDP port too, SPEC.md 72.24)
+    jne .nou
+    mov word [eth_uport], 0
+.nou:
+%endif
     mov cl, al
     mov bx, 1
     shl bx, cl

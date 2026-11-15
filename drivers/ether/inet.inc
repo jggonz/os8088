@@ -760,6 +760,13 @@ udp_in:
     je  .dhcp
     cmp ax, [dns_lport]
     je  .dns
+%ifndef ETH_NORAW
+    or  ax, ax                  ; a PACKAGE's port (SPEC.md 72.23): queued
+    jz  .out                    ; for NETV_UDPRX
+    cmp ax, [eth_uport]
+    jne .out
+    call udp_queue
+%endif
     jmp short .out
 .dhcp:
     call dhcp_in

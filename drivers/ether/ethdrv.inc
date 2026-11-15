@@ -543,6 +543,9 @@ eth_vtab:
     dw eth_v_raw                ; 15 NETV_RAW   - the wire is mine (72.22)
     dw eth_v_rawtx              ; 16 NETV_RAWTX - one frame out
     dw eth_v_rawrx              ; 17 NETV_RAWRX - one frame in
+    dw eth_v_udp                ; 18 NETV_UDP   - a package's port (72.24)
+    dw eth_v_udptx              ; 19 NETV_UDPTX - one datagram out
+    dw eth_v_udprx              ; 20 NETV_UDPRX - one datagram in
 eth_vtab_end:
 %if (eth_vtab_end - eth_vtab) / 2 != NETV_MAX + 1
   %error "ether: the verb table and NETV_MAX disagree"

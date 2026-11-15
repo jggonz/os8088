@@ -1031,6 +1031,18 @@ void os88_mouse(struct os88_mouse *m);
  * reading down until it is pressed again. Bound what a "yes" makes you do. */
 int  os88_key_down(int scan);
 
+/* os88_key_map - every key at once (SPEC.md 9.7.3): the kernel's whole
+ * key-state map copied into map[OS88_KEYMAP_BYTES], bit (s & 7) of byte
+ * (s >> 3) set while make scancode s is held - OS88_KEYMAP_HELD(map, s) asks
+ * one key of the copy. ONE kernel crossing for every key a frame reads, where
+ * os88_key_down is one EACH: a loop asking three keys or more is ahead. map
+ * must be static (SPEC.md 73: never the address of an automatic). It ARMS the
+ * map as os88_key_down does, so the first answer is all up, and it is the
+ * same advice, not an oracle. */
+#define OS88_KEYMAP_BYTES 16
+#define OS88_KEYMAP_HELD(map, s) ((map)[(s) >> 3] & (1 << ((s) & 7)))
+void os88_key_map(unsigned char *map);
+
 /* ALT+ENTER, THE FULL-SCREEN KEY (SPEC.md 11.2.1.1). os88_onkey is handed
  * ascii 0 with OS88_SCAN_ENTER for it - the code an enhanced ROM gives, and
  * the code the kernel SYNTHESISES on every ROM that does not, which is most

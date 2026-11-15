@@ -2751,6 +2751,7 @@ fsx_rkeep:
     dw rmk_9, rmk_9e - rmk_9, 0     ; OSAPI_WM_WAKE
     dw rmk_10, rmk_10e - rmk_10, 0  ; OSAPI_FSX_PAGE
     dw rmk_seg, 0, osapi_segr       ; OSAPI_SEG: the twin
+    dw rmk_11, rmk_11e - rmk_11, 0  ; OSAPI_KEY_MAP (SPEC.md 9.7.3)
 fsx_rkeep_end:
 ; fsx_rkeepm - ...and the service area's (W3): {dw the cell, dw the twin in
 ; `.mega`'s numbering}, a far jump to [fsx_rmsseg]:twin - the claim the twins
