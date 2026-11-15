@@ -276,6 +276,9 @@ WA_VAR wa_thz, 2                ;   its z
 WA_VAR wa_thdx, 2               ;   its offset from the eye, x (wa_view)
 WA_VAR wa_ovoldn, 2             ; the overlay's cells as it last came in:
 WA_VAR wa_ovold, WA_MOV*2       ;   how many, and each's stamp's place
+WA_VAR wa_mmoo, 2               ; the minimap's block as it last came in:
+WA_VAR wa_mmow, 2               ;   its first cell, its cells across and its
+                                ;   rows (0: none)
 WA_VAR wa_thiz, 2               ;   its inverse depth
 WA_VAR wa_thfs, 2               ;   sub-columns a unit, 8.8
 WA_VAR wa_thl0, 2               ;   its sub-columns, first and last
@@ -7802,6 +7805,7 @@ wa_overlay:
     mov dl, [wa_frame]
     cmp byte [wa_ovfresh], 0
     jne .fresh
+    call wa_mmkeep              ; (the minimap's block first: the list wins)
     mov cx, [wa_ovoldn]         ; (the overlay's cells, as it came in)
     jcxz .out
     mov si, wa_ovold            ; ...each's STAMP's place
@@ -7824,6 +7828,7 @@ wa_overlay:
 .fresh:
     mov di, [wa_newp]
     add di, [wa_newn]           ; DI = this frame's list's end
+    call wa_mmback              ; (the last minimap's cells back too)
     mov cx, [wa_ovoldn]         ; the last overlay's cells, back to the view:
     jcxz .new                   ; listed and blank, unless the view drew them
     mov si, wa_ovold
@@ -7841,6 +7846,7 @@ wa_overlay:
 .on:
     loop .o
 .new:
+    call wa_mmnew               ; (this minimap's block, then the list's)
     mov cx, [wa_ovn]            ; ...then this one's, every cell listed
     mov [wa_ovoldn], cx
     jcxz .done
@@ -7868,8 +7874,149 @@ wa_overlay:
     mov byte [wa_ovfresh], 0
     ret
 
+; THE MINIMAP's BLOCK (NET-PLAN 9.7): the Tab screen's floor plan, a
+; rectangle of cells the game sends as a byte each (wa_mma: the attribute
+; under the glyph every cell shares, or on mono the glyph under its one
+; attribute - wa_mmfix, wa_mmhi) and three marks over it. Its cells are the
+; list's in every way but their storage - stamped every frame, given their
+; glyph again where the view drew, listed when the block comes or goes - so
+; the overlay's six bytes a cell are one here. DL = the frame, and DI the
+; list (wa_mmback, wa_mmnew: a fresh overlay's).
+; wa_mmkeep - a frame the overlay did not change. Clobbers AX, BX, CX, SI
+wa_mmkeep:
+    mov bx, [wa_mmoo]
+    cmp byte [wa_mmow+1], 0     ; (no rows: no block)
+    je wa_mmmark.out
+    push es
+    mov es, [wa_mmseg]          ; ES:SI = its bytes, in the game
+    mov si, [wa_mmp]
+    mov ch, [wa_mmow+1]
+.r:
+    push bx
+    mov cl, [wa_mmow]
+.c:
+    mov al, [wa_stamp+bx]
+    and al, 0x7F
+    cmp al, dl
+    je .put                     ; the view drew here: ours again
+    mov [wa_stamp+bx], dl
+    jmp short .n
+.put:
+    call wa_mmcell
+    mov [wa_cur+bx], ax
+.n:
+    inc si
+    inc bx
+    inc bx
+    dec cl
+    jnz .c
+    pop bx
+    add bx, [wa_rowo2+2]
+    dec ch
+    jnz .r
+    pop es
+; wa_mmmark - the three marks over the block. Clobbers AX, BX, SI
+wa_mmmark:
+    mov si, wa_mmk
+.m:
+    lodsw
+    xchg ax, bx
+    lodsw
+    cmp bx, 0xFFFF
+    je .nm
+    mov [wa_cur+bx], ax
+.nm:
+    cmp si, wa_mmk + 12
+    jb .m
+.out:
+    ret
+; wa_mmcell - ES:SI = a cell's byte: AX = its glyph and attribute
+wa_mmcell:
+    mov ax, [wa_mmfix]
+    cmp byte [wa_mmhi], 0
+    je .lo
+    mov ah, [es:si]
+    ret
+.lo:
+    mov al, [es:si]
+    ret
+; wa_mmback - a fresh overlay: the last block's cells back to the view,
+; listed and blank unless the view drew them. Clobbers AX, BX, CX
+wa_mmback:
+    mov bx, [wa_mmoo]
+    cmp byte [wa_mmow+1], 0
+    je .out
+    mov ch, [wa_mmow+1]
+.r:
+    push bx
+    mov cl, [wa_mmow]
+.c:
+    mov al, [wa_stamp+bx]
+    and al, 0x7F
+    cmp al, dl
+    je .n
+    mov [wa_stamp+bx], dl
+    mov [di], bx
+    inc di
+    inc di
+    mov word [wa_cur+bx], WA_BLANK
+.n:
+    inc bx
+    inc bx
+    dec cl
+    jnz .c
+    pop bx
+    add bx, [wa_rowo2+2]
+    dec ch
+    jnz .r
+.out:
+    ret
+; wa_mmnew - a fresh overlay: this block's cells, every one listed, and
+; the marks. Clobbers AX, BX, CX, SI
+wa_mmnew:
+    mov bx, [wa_mmo]
+    mov [wa_mmoo], bx
+    mov ax, [wa_mmbw]
+    mov [wa_mmow], ax
+    or ah, ah                   ; (no rows: none)
+    jz wa_mmmark.out
+    push es
+    mov es, [wa_mmseg]          ; ES:SI = its bytes, in the game
+    mov si, [wa_mmp]
+    mov ch, ah
+.r:
+    push bx
+    mov cl, [wa_mmow]
+.c:
+    mov al, [wa_stamp+bx]
+    and al, 0x7F
+    cmp al, dl
+    je .put
+    mov [wa_stamp+bx], dl
+    mov [di], bx
+    inc di
+    inc di
+.put:
+    call wa_mmcell
+    mov [wa_cur+bx], ax
+    inc si
+    inc bx
+    inc bx
+    dec cl
+    jnz .c
+    pop bx
+    add bx, [wa_rowo2+2]
+    dec ch
+    jnz .r
+    pop es
+    jmp wa_mmmark
+
 ; --- the crosshair ----------------------------------------------------------
 wa_cross:
+    cmp byte [wa_mmbh], 0       ; (the Tab screen's minimap up: no
+    je .go                      ; crosshair in it)
+    ret
+.go:
     mov bx, [wa_w]              ; column W/2, as an offset: W
     add bx, [wa_rowo2+WA_ROWS]  ; row 12 (WA_ROWS/2 rows x 2 bytes in)
     mov al, '+'

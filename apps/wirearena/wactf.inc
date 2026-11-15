@@ -51,6 +51,14 @@ WA_VAR wa_caps,2                ; each team's captures (team deathmatch:
                                 ; its kills)
 WA_VAR wa_ggoal,1               ; the score that wins, 0 none (Win at)
 WA_VAR wc_wbuf,WA_NNAME+6       ; "<NAME> WINS"
+WA_VAR wc_wby,1                 ; the win, as GAME says it: 0 none, else 1 +
+                                ; the winner's slot (free-for-all) or team
+WA_VAR wc_sgame,4               ; LINKED (MODES-PLAN 8): what the host last
+                                ; sent in GAME - the scores, the win, the
+                                ; hill
+WA_VAR wc_grace,2               ; ticks a new arena's win waits (the old
+                                ; board's rows may still come in)
+WA_VAR wc_rowe,1                ; the host's: a new arena's rolls owed
 WA_VAR wa_cwin,2                ; ticks of a win still shown (0: playing)
 WA_VAR wa_cmsg,2                ; a message: its text, its ticks left, its
 WA_VAR wa_cmsgt,1               ; colour
@@ -94,10 +102,13 @@ wa_ctfstart:
     mov bx, ax
     mov al, [wa_sgval+bx]
     mov [wa_ggoal], al
-    xor ax, ax                  ; nobody's score, no win, no message
-    mov [wa_caps], ax
-    mov [wa_cwin], ax
+    xor ax, ax                  ; nobody's score, no win, no message (and,
+    mov [wa_caps], ax           ; linked, none of it sent: the guests start
+    mov [wa_cwin], ax           ; there too)
     mov [wa_cmsgt], al
+    mov [wc_wby], al
+    mov [wc_sgame], ax
+    mov [wc_sgame+2], ax
     xor cx, cx                  ; THE TEAMS: by slot, its parity
 .t:
     mov al, cl
@@ -282,42 +293,44 @@ wa_ctick:
     jnz .m
     mov byte [wa_ovd], 1        ; (the message gone)
 .m:
-    cmp byte [wa_gmode], 1
-    je .ctf
-    cmp byte [wa_lkon], 0       ; FREE-FOR-ALL, TEAM DEATHMATCH (MODES-
-    jne .out                    ; PLAN 2, 3), alone: a win's time, then the
-    cmp word [wa_cwin], 0       ; next arena; else the scores (king of
-    je .score                   ; the hill: the hill's rules)
-    dec word [wa_cwin]
-    jnz .out
-    jmp wc_next
-.score:
-    cmp byte [wa_gmode], 3
-    je wc_hill
-    jmp wc_score
-.ctf:
-    cmp byte [wa_lkon], 0       ; A GUEST (CTF-PLAN 7): the host's rules,
-    je .rules                   ; told by its FLAG events - here the win's
-    cmp byte [wa_lkme], 0       ; time shown, and the flags carried kept
-    je .rules                   ; over their carriers
+    cmp word [wc_grace], 0      ; (linked: a new arena's first seconds)
+    je .gr
+    dec word [wc_grace]
+.gr:
+    cmp byte [wa_lkon], 0       ; A GUEST (CTF-PLAN 7, MODES-PLAN 8): the
+    je .rules                   ; host's rules, told by its events - here
+    cmp byte [wa_lkme], 0       ; the win's time shown, and CTF's flags
+    je .host                    ; carried kept over their carriers
     cmp word [wa_cwin], 0
     je .gw
     dec word [wa_cwin]
 .gw:
+    cmp byte [wa_gmode], 1
+    jne .out
     mov si, wa_cfl
     call .follow
     mov si, wa_cfl + WC_SZ
     call .follow
     jmp wc_frame
-.rules:
-    cmp word [wa_cwin], 0
+.host:
+    call wc_rolls               ; (a new arena's pickups said, in turn)
+.rules:                         ; ALONE, OR THE HOST: a win's time, then
+    cmp word [wa_cwin], 0       ; the next arena; else the mode's rules
     je .play
     dec word [wa_cwin]
     jnz .out
-    cmp byte [wa_lkon], 0       ; (alone: the next arena; linked, this one
-    je wc_next                  ; again - MODES-PLAN 8's M4)
-    jmp wc_round
+    jmp wc_next
 .play:
+    cmp byte [wa_gmode], 1
+    je .ctf
+    cmp byte [wa_gmode], 3
+    jne .sc
+    call wc_hill                ; (king of the hill)
+    jmp wc_gsend
+.sc:
+    call wc_score               ; (free-for-all, team deathmatch)
+    jmp wc_gsend
+.ctf:
     mov si, wa_cfl
     xor bp, bp
     call wc_flag
@@ -537,16 +550,58 @@ wc_score:
     je .tdm
     or ah, ah                   ; FREE-FOR-ALL: the first with as many
     jz .out                     ; kills
+    cmp word [wc_grace], 0      ; (linked, a new arena: the old board's
+    jne .out                    ; rows may still come in)
 .f:
     cmp [wa_kills+bx], ah
-    jae .fwin
+    jae wc_fwin
     inc bx
     cmp bx, WA_NFIG + 1
     jb .f
 .out:
     ret
-.fwin:
+.tdm:                           ; TEAM DEATHMATCH: DL red's, DH blue's
+    xor dx, dx
+.t:
+    mov al, [wa_kills+bx]
+    cmp byte [wa_tm+bx], 0
+    jne .bl
+    add dl, al
+    jmp short .tn
+.bl:
+    add dh, al
+.tn:
+    inc bx
+    cmp bx, WA_NFIG + 1
+    jb .t
+    cmp dx, [wa_caps]
+    je .tw
+    mov [wa_caps], dx
+    mov byte [wa_ovd], 1
+.tw:
+    or ah, ah
+    jz .out
+    cmp word [wc_grace], 0
+    jne .out
+    xor bx, bx
+    cmp dl, ah
+    jae wc_twin
+    inc bx
+    cmp dh, ah
+    jb .out
+    jmp wc_twin
+
+; wc_fwin - BX = a local index: its free-for-all win shown (and, the host,
+; said: wc_wby). Keeps nothing
+wc_fwin:
     mov word [wa_cwin], WC_WINT
+    mov al, bl
+    cmp byte [wa_lkon], 0       ; (its slot, on the wire)
+    je .sl
+    call wa_lkcanon
+.sl:
+    inc ax
+    mov [wc_wby], al
     call wc_wtone
     mov ax, wc_m_youw           ; (ours: green; theirs: its name, white)
     mov dl, 0x0A
@@ -578,35 +633,12 @@ wc_score:
     mov dl, 0x0F
 .sa:
     jmp wc_say
-.tdm:                           ; TEAM DEATHMATCH: DL red's, DH blue's
-    xor dx, dx
-.t:
-    mov al, [wa_kills+bx]
-    cmp byte [wa_tm+bx], 0
-    jne .bl
-    add dl, al
-    jmp short .tn
-.bl:
-    add dh, al
-.tn:
-    inc bx
-    cmp bx, WA_NFIG + 1
-    jb .t
-    cmp dx, [wa_caps]
-    je .tw
-    mov [wa_caps], dx
-    mov byte [wa_ovd], 1
-.tw:
-    or ah, ah
-    jz .out
-    xor bx, bx
-    cmp dl, ah
-    jae .twin
-    inc bx
-    cmp dh, ah
-    jb .out
-.twin:
+
+; wc_twin - BX = a team: its win shown (and said). Keeps nothing
+wc_twin:
     mov word [wa_cwin], WC_WINT
+    mov [wc_wby], bl
+    inc byte [wc_wby]
     call wc_wtone
     mov al, bl
     call wc_tatt
@@ -692,14 +724,7 @@ wc_hill:
     pop bx
     jmp short .f
 .win:
-    mov word [wa_cwin], WC_WINT
-    call wc_wtone
-    mov al, bl
-    call wc_tatt
-    mov dl, al
-    shl bx, 1
-    mov ax, [wc_m_win+bx]
-    call wc_say
+    call wc_twin
 .f:
     jmp wc_frame
 
@@ -778,6 +803,22 @@ wc_next:
     jnz .n
     mov al, [wa_arena]
 .got:
+    cmp byte [wa_lkon], 0       ; THE HOST: NEXT queued for every machine
+    je wc_go                    ; first (MODES-PLAN 8) - a full queue, the
+    cmp byte [wa_lkqn], WL_EVQ  ; next tick
+    jb .q
+    mov word [wa_cwin], 1
+    ret
+.q:
+    push ax
+    mov byte [wa_lkev], EV_NEXT
+    mov [wa_lkev+1], al
+    call wa_lkqueue
+    pop ax
+    ; (falls through)
+; wc_go - AL = an arena: the match on in it (wc_next's, and a guest's on
+; the host's NEXT), the scores anew, everyone on their side
+wc_go:
     mov [wa_lkarena], al        ; (the setup, after: where the match was)
     cmp al, [wa_arena]
     je .same
@@ -796,10 +837,136 @@ wc_next:
     pop word [wa_bname]
     pop ax
     mov [wa_bname+2], al
+    cmp byte [wa_lkon], 0
+    jne .lk
     call wa_bpark
+    jmp wa_ctfstart
+.lk:
+    call wa_lkround             ; (linked: the link's side of a new arena)
     jmp wa_ctfstart
 .fail:
     mov byte [wa_quit], 1
+    ret
+
+; wc_gsend - THE HOST, linked, a tick (MODES-PLAN 8): GAME queued when the
+; teams' scores, the win or the hill changed since it was last sent - the
+; free-for-all's, team deathmatch's and king of the hill's (CTF's are its
+; FLAG events)
+wc_gsend:
+    cmp byte [wa_lkon], 0
+    je .out
+    cmp byte [wa_lkme], 0
+    jne .out
+    mov ax, [wa_caps]
+    mov dl, [wc_wby]
+    xor dh, dh
+    cmp byte [wa_gmode], 3
+    jne .h
+    mov dh, [wa_cfl+WC_ST]
+.h:
+    cmp ax, [wc_sgame]
+    jne .send
+    cmp dx, [wc_sgame+2]
+    je .out
+.send:
+    cmp byte [wa_lkqn], WL_EVQ  ; (a full queue: the next tick)
+    jae .out
+    mov [wc_sgame], ax
+    mov [wc_sgame+2], dx
+    mov byte [wa_lkev], EV_GAME
+    mov [wa_lkev+1], ax
+    mov [wa_lkev+3], dx
+    jmp wa_lkqueue
+.out:
+    ret
+
+; wc_gin - SI = a GAME event (wa_lkevin's: its payload from SI+4), on a
+; guest: the scores, the hill and the win as the host says them
+wc_gin:
+    mov ax, [si+4]              ; THE SCORES
+    cmp ax, [wa_caps]
+    je .c
+    mov [wa_caps], ax
+    mov byte [wa_ovd], 1
+.c:
+    mov al, [si+7]              ; THE HILL
+    cmp byte [wa_gmode], 3
+    jne .w
+    cmp al, 2
+    ja .w
+    cmp al, [wa_cfl+WC_ST]
+    je .w
+    mov [wa_cfl+WC_ST], al
+    push si
+    or al, al
+    jz .hf
+    xor ah, ah
+    dec ax
+    mov bp, ax
+    mov ax, 1800
+    mov cx, 3
+    mov dl, 0x40
+    call OSAPI_SND_TONE
+    mov ax, wc_m_hwe
+    mov dx, wc_m_hthey
+    call wc_sayk
+.hf:
+    call wc_frame
+    pop si
+.w:
+    mov al, [si+6]              ; THE WIN, once
+    or al, al
+    jz .out
+    cmp word [wa_cwin], 0
+    jne .out
+    dec ax
+    cmp byte [wa_gmode], 0
+    jne .team
+    call wa_lklocal             ; (its slot: who, here)
+    cmp al, WA_NFIG
+    ja .out
+    xor ah, ah
+    mov bx, ax
+    jmp wc_fwin
+.team:
+    cmp al, 1
+    ja .out
+    xor ah, ah
+    mov bx, ax
+    jmp wc_twin
+.out:
+    ret
+
+; wc_nin - SI = a NEXT event, on a guest: the host's next arena, now (the
+; events after it are the new arena's: its pickups' rolls)
+wc_nin:
+    mov al, [si+4]
+    cmp al, WA_NARENA
+    jae .out
+    jmp wc_go
+.out:
+    ret
+
+; wc_rolls - THE HOST, a tick: a new arena's pickups said (ROLL), one a tick
+; while the queue has room (wa_lkround owes them)
+wc_rolls:
+    mov al, [wc_rowe]
+    or al, al
+    jz .out
+    cmp byte [wa_lkqn], WL_EVQ
+    jae .out
+    dec ax
+    mov [wc_rowe], al
+    xor ah, ah
+    mov bx, ax
+    mov cl, WA_PKSZ
+    mul cl
+    add ax, wa_pks
+    mov si, ax
+    mov ah, [si+6]
+    mov al, bl
+    jmp wa_lkqroll
+.out:
     ret
 
 ; wc_side - our player and the bots this machine runs (alone, or the

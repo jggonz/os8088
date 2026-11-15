@@ -8859,6 +8859,20 @@ SOAK = [
         "once) and with the host not sending them (wc_send): 4 checks each.",
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=200),
+    Row("wamodeslink", "soak", py("tests/wamodeslink.py"), 32.0,
+        "WIREARENA'S MODES LINKED (docs/plans/WIREARENA-MODES-PLAN.md 8, "
+        "wave M4): two QEMUs on a socket cable, the shipped package, "
+        "walink's harness. The host's Mode (king of the hill) and its Win "
+        "at pick (3 points) reach the guest in the HELLO; the guest on the "
+        "Twin's hill is given it by the HOST's rules and told by a GAME "
+        "event (WE HAVE THE HILL); the hill's 10 s on the host make blue 1 "
+        "on both; blue's third point shows BLUE WINS on both; after the "
+        "10 s a NEXT event takes both machines to the heights, the scores "
+        "anew and the hill nobody's on both, the link still up and the "
+        "guest's pickups the host's rolls. Red with the guest ignoring GAME "
+        "and NEXT (wc_gin, wc_nin returning at once): 8 checks.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/os8088.img"), timeout=200),
     Row("walink", "soak", py("tests/walink.py"), 32.0,
         "WIREARENA OVER A NULL MODEM (docs/plans/WIREARENA-LINK-PLAN.md, "
         "L1): two QEMUs on a socket cable, the shipped package. Each window "

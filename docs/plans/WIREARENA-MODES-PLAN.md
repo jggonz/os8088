@@ -1,6 +1,6 @@
 # WireArena: the score to win, team deathmatch, king of the hill, and arenas in rotation
 
-**STATUS: IN PROGRESS** (2026-11-15): M1, M2 and M3 built. Written to the owner's
+**STATUS: BUILT** (2026-11-15): M1 to M4. Written to the owner's
 brief below, before any code; section 8 is the waves and section 9 what was
 built.
 
@@ -130,7 +130,7 @@ code is needed, so nothing moves this round. The game segment has ~18 KB.
   deathmatch and CTF, the 10 s, the next arena loaded and played.
 - [x] **M2 King of the hill** - alone, the bots too. Checked by `wamodes`.
 - [x] **M3 The rotation's window.** Checked by `wamodes`.
-- [ ] **M4 Linked**: the win and the next arena from the host; team
+- [x] **M4 Linked**: the win and the next arena from the host; team
   deathmatch's and king of the hill's scores on the wire. Checked by
   `wactflink`'s pattern.
 
@@ -211,3 +211,30 @@ code is needed, so nothing moves this round. The game segment has ~18 KB.
   `wc_next` takes the next arena of the mode that is in it, round; with one
   checked it is that one again.
 - **Checked by** `wamodes`.
+
+**M4** (2026-11-15):
+
+- **Win at on the wire**: the HELLO's byte 14 is the difficulty (bits 0-1),
+  Win at's pick for the mode (bits 2-4) and the mode (bits 5-6); a guest
+  takes the host's pick into its own table, so its setup shows the host's.
+- **The host's rules for every mode**: free-for-all's and team
+  deathmatch's scores (off the board every machine shares) and king of
+  the hill's hill run on the host as alone. A **GAME** event (`EV_GAME`,
+  5) carries the teams' scores, the win (1 + the winner's slot, or team)
+  and the hill's holder whenever one changes (`wc_gsend`); a guest shows
+  them (`wc_gin`) - the same messages, its own `YOU WIN` when the slot is
+  its own. CTF keeps its FLAG events.
+- **The next arena**: when the win's 10 s are over the host queues a
+  **NEXT** event (`EV_NEXT`, 6) with the arena - a full queue waits a tick -
+  and goes on to it (`wc_go`); a guest goes on to it as it applies the
+  event, so every event after it is the new arena's. `wa_lkround` is the
+  link's half: the board anew, the lifts, the absent parked, our player
+  respawned, the host's pickups ROLLed one a tick as the queue has room
+  (`wc_rolls`) and the guest's waiting for them. The event queue and its
+  sequence carry on: nothing of the link restarts. A win is held off for
+  5 s in a new arena (`wc_grace`), while a peer still on the old one may
+  send its old board's rows.
+- **Checked by** `wamodeslink` (soak, QEMU: king of the hill's hill, a
+  point, the win and the next arena on both machines). Free-for-all's and
+  team deathmatch's linked wins share the path but are not driven by a
+  row of their own.

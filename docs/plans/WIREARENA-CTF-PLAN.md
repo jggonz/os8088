@@ -53,6 +53,9 @@ WireArena is `apps/wirearena/`. Its plans: the parent
 - **The first team to 3 captures wins.** The board shows the winner for
   5 s; then the captures, the flags and every player start again (the kills
   and deaths on Tab go on).
+  *Since [WIREARENA-MODES-PLAN](WIREARENA-MODES-PLAN.md): the captures to
+  win are the setup's Win at (3 by default), the win shows for 10 s, and
+  the match goes on in the next CTF arena of the rotation.*
 - **No friendly fire** in a team mode: a hitscan, a projectile or a splash
   does nothing to a teammate (the shooter's own splash still hurts them, as
   today). A bot never picks a teammate as its target.

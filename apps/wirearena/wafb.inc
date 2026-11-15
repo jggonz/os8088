@@ -28,7 +28,7 @@
 WR_MAGIC0   equ 'WR'                ; +0: 'WRPART', then the ABI byte and the
 WR_MAGIC1   equ 'PA'                ;     verb count - checked by the primary
 WR_MAGIC2   equ 'RT'                ;     at launch, refused on a mismatch
-WR_ABI      equ 11                  ; (2: the camera's sin/cos in FRAME;
+WR_ABI      equ 12                  ; (2: the camera's sin/cos in FRAME;
                                     ; 3: F_Z, the treads, ARENA's heights;
                                     ; 4: wa_look, the detail level's bits,
                                     ; where wa_hyst was; wa_flod gone;
@@ -42,7 +42,8 @@ WR_ABI      equ 11                  ; (2: the camera's sin/cos in FRAME;
                                     ; floor lines, 4.5; 10: wa_dash,
                                     ; where FRAME's pad was; 11: the
                                     ; teams' colours and the flags,
-                                    ; CTF-PLAN 4)
+                                    ; CTF-PLAN 4; 12: the minimap's
+                                    ; block in OVERLAY, NET-PLAN 9.7)
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-
                                     ; PLAN 4.5; arenagen's)
@@ -100,6 +101,11 @@ FL_ATT      equ 8
 FL_ON       equ 9
 WA_MOV      equ 160                 ; OVERLAY's most cells (the scoreboard's
                                     ; 100 among them: AI-PLAN 5)
+WA_MMCAP    equ WA_MMW * WA_MMH / 2 ; ...and the MINIMAP's block, a byte a
+                                    ; cell (NET-PLAN 9.7: 416 at 80 columns,
+                                    ; kept in the GAME's segment - as the
+                                    ; list's six bytes a cell, or even as one
+                                    ; in the part, they would not fit it)
 
 ; --- the block: WA_FBLOCK, expanded where the includer keeps it -------------
 %macro WA_FBLOCK 0
@@ -137,6 +143,9 @@ WA_FBV wa_dash, 1                   ; (WEAPONS-PLAN 2.4) - and the floor
                                     ; every other column, 2 a steep one's
                                     ; every other row too (ARENAS-PLAN 4.5:
                                     ; the detail level's, wa_levtab)
+WA_FBV wa_mmseg, 2                  ; the GAME's segment: the minimap's
+                                    ; bytes are there (OVERLAY's wa_mmp) -
+                                    ; set each frame, the region movable
 WA_FBV wa_figs, F_SIZE*WA_NFIG      ; FIGS (follows FRAME: one copy)
 WA_FBV wa_fb_arn, 0                 ; ARENA
 WA_FBV wa_sx, 2
@@ -165,6 +174,15 @@ WA_FBV wa_ovfresh, 2                ; when it is rebuilt: 1 (R clears it
 WA_FBV wa_ovn, 2                    ; once it has shown it), cells, each's
 WA_FBV wa_ov, WA_MOV*2              ; offset (x 2), and its glyph and
 WA_FBV wa_ovg, WA_MOV*2             ; attribute
+WA_FBV wa_mmo, 2                    ; THE MINIMAP's BLOCK (NET-PLAN 9.7): its
+WA_FBV wa_mmbw, 1                   ; first cell (x 2), cells across and rows
+WA_FBV wa_mmbh, 1                   ; (0: no block), the half every cell
+WA_FBV wa_mmfix, 2                  ; shares (glyph low, attribute high) and
+WA_FBV wa_mmhi, 2                   ; which half a cell's byte is (1 the
+WA_FBV wa_mmk, 12                   ; attribute), three marks over it (a
+WA_FBV wa_mmp, 2                    ; cell x 2 or FFFFh, its glyph and
+                                    ; attribute), and where its bytes are -
+                                    ; a byte a cell, at wa_mmseg:wa_mmp
 WA_FBV wa_fb_oend, 0
 WA_FBV wa_rks, WA_NRK*WA_RKSZ       ; ROCKETS: G -> R by wa_rframe while any
                                     ; flies or explodes, and once more after:
