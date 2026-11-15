@@ -632,3 +632,6 @@ Three of the owner's:
   each name in its team's colour, the player's own too (red or blue,
   `wa_tm`); free-for-all keeps the player green. Checked on the glass:
   capture the flag on the twin, `COG killed YOU`, COG blue and YOU red.
+- **A package icon** (the owner: WARENA had none): `OS88_ICON16`, the
+  corridor the game draws - a square frame, its corners running in to the
+  far wall, the crosshair's dot - white with black lines (SPEC.md 20.2).

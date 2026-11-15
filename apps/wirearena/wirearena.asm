@@ -11,10 +11,17 @@
 ; 80 and 40 columns, V waits for vertical retrace before presenting, B runs
 ; the bench (64 frames, a fixed spin - section 16 of the plan), Esc leaves.
 %include "os88api.inc"
-    OS88_HEADER 'WARENA', wa_entry, OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
+    OS88_HEADER 'WARENA', wa_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 %define OP_WANT_CSEG            ; the renderer part is far-called through its
 %define OP_ONMOVE wa_partsmv    ; CODE selector, and its claim MOVES (SPEC.md
 %include "os88parts.inc"        ; 20.12.12): wa_partsmv re-reads both words
+    OS88_ICON16                 ; ITS ICON: the corridor the game draws - a
+    dw 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+    dw 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+    dw 0xffff, 0xc003, 0xa005, 0x9009, 0x8811, 0x87e1, 0x8421, 0x85a1
+    dw 0x85a1, 0x8421, 0x87e1, 0x8811, 0x9009, 0xa005, 0xc003, 0xffff
+    OS88_ICON16_END             ; frame, its corners running in to the far
+                                ; wall, and the crosshair (mask, then lines)
 
 %include "netpkg.inc"           ; ETHER.DRV's verbs (the raw ones, LINK-PLAN 12)
 %include "waconst.inc"
