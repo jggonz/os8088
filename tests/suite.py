@@ -8662,6 +8662,22 @@ SOAK = [
         "checks).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wactf", "soak", py("tests/wactf.py"), 10.0,
+        "WIREARENA'S CAPTURE THE FLAG, ONE MACHINE "
+        "(docs/plans/WIREARENA-CTF-PLAN.md 2, wave C1), on the twin off "
+        "the game's own variables: the setup's Mode makes a CTF match, the "
+        "teams are the slots' parity, both flags start at their bases, we "
+        "spawn on red's side at the start and after three deaths; standing "
+        "at blue's base takes its flag, nothing scores at our base while a "
+        "foe carries ours, our dropped flag touched goes home, a capture "
+        "scores, dying drops the flag where we fell and its time sends it "
+        "home, the third capture shows RED WINS and the round starts again, "
+        "and a pistol shot that fires at our teammate takes nothing while "
+        "the same shot hurts the foe. Red with the touch's team test "
+        "inverted (6 checks), the capture's home test dropped (4) and "
+        "wa_hurt's teammate guard out (1).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waflines", "soak", py("tests/waflines.py"), 10.0,
         "WIREARENA'S FLOOR LINES AGAINST AN EXACT REFEREE "
         "(docs/plans/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "

@@ -1,7 +1,8 @@
 # WireArena: capture the flag, teams and side spawns
 
-**STATUS: PLAN** (2026-11-15). Written to the owner's brief below, before
-any code. Section 9 lists the defaults this plan chose where the brief left
+**STATUS: C1 BUILT** (2026-11-15): the rules on one machine (section 11).
+C2 (the bots), C3 (linked) and C4 (team deathmatch) are next. Written to
+the owner's brief below, before any code. Section 9 lists the defaults this plan chose where the brief left
 a choice; each is one constant or one line of data to change.
 
 The owner, 2026-11-15:
@@ -184,7 +185,7 @@ cell. Not done here, because CTF fits; measured when something needs it.
 Each ends with its outcome on the glass, the rows that cover it named; the
 soak rows and `test-full` run once after the last (CLAUDE.md).
 
-- [ ] **C1 Teams, flags and the rules, one machine.** arenagen's bases,
+- [x] **C1 Teams, flags and the rules, one machine.** arenagen's bases,
   sides and their nodes; the Mode drop-down; teams; side spawns; no
   friendly fire; figures and flags in team colours; take, carry, drop,
   return, capture, win; the flag line and the messages.
@@ -207,4 +208,51 @@ soak rows and `test-full` run once after the last (CLAUDE.md).
 
 ## 11. As built
 
-(Filled in as each wave lands.)
+### 11.1 C1: the rules on one machine (2026-11-15)
+
+**Where it lives.** `apps/wirearena/wactf.inc` (the game's): the mode and
+the team table, made when a match starts (`wa_ctfstart`); the rules each
+tick (`wa_ctick`, before the pickups); a side's respawn point
+(`wc_rspick`, which `wa_prespawn` and `wa_brespawn` take in a team mode);
+FRAME's flags (`wc_frame`); the flag line and the messages (`wa_ovctf`).
+`tools/arenagen.py`: `ARENA_FLAGS`, a respawn point's side, the bases'
+nodes after the bench's views (`flag_bases` refuses a base off the floor,
+one with no route node within reach, an arena with fewer than two points
+a side). The Twin's graph gained a spur node at each base.
+The renderer: `wa_flagsd` and the team colours in `wa_figure`.
+
+**As section 2 to 7 had it, with these differences:**
+- **Linked, CTF is refused at Ready** with a toast (*"CTF is not linked
+  yet"*) until C3; a linked match plays free-for-all.
+- **The teams' block is not in FRAME.** In FRAME, its 24 bytes were copied
+  every frame of every match: +0.4 to +0.7% on free-for-all. It is a block
+  of its own after the rockets, copied every frame of a team match and
+  once as a match starts (`wa_ctfcp`), and the renderer tests one byte
+  (`wa_ctfon`) before the flags and before a figure's team colour.
+- **The setup grew a fourth row** for Mode (`free-for-all`, `capture
+  flag`), under Play; the window is 18 px taller (338 x 174).
+- **Teams by slot parity**, as 9 has it: alone, us red, bot 1 blue, bot 2
+  red, bot 3 blue.
+
+**Measured.** `waposes` against the commit before, seven sets (the hedge
+with and without figures, at 40 and 80; heights at 40 and 80; the Twin;
+the flat arena): every free-for-all picture byte-identical, and +0.09% to
++0.19% a frame (about 100 to 230 clk: the one-byte tests). Bytes: the
+game's image 29,831 -> 31,494; the renderer part 62,233 -> 62,385 (2,639
+free); the Twin's arena part 2,253 -> 2,423, the hedge's 4,926 -> 4,940.
+No buffer had to move.
+
+**Looked at** on CGA (colour) and Hercules (mono), on the Twin: the flag
+line (`RED 0 #   BLUE 0 #`, each in its colour - on Hercules ours normal,
+theirs bright), blue's flag a tall blue block at its base, a blue foe and
+a red teammate before it; carrying it, `YOU HAVE THE FLAG` and blue's
+status `!`.
+
+**The row: `wactf`** (soak, 10 s) - section 10's checks for C1, all 16
+passing. Broken on purpose, each went red: the touch's team test inverted
+(6 checks), the capture's "own flag home" test dropped (4), `wa_hurt`'s
+teammate guard taken out (1). A first version of its "no capture away"
+check stayed green with the home test dropped - it had dropped our flag
+far from the base, where no capture could have happened anyway - and now
+stages the case that bites: our flag carried by a foe standing at our
+base.

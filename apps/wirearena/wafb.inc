@@ -28,7 +28,7 @@
 WR_MAGIC0   equ 'WR'                ; +0: 'WRPART', then the ABI byte and the
 WR_MAGIC1   equ 'PA'                ;     verb count - checked by the primary
 WR_MAGIC2   equ 'RT'                ;     at launch, refused on a mismatch
-WR_ABI      equ 9                   ; (2: the camera's sin/cos in FRAME;
+WR_ABI      equ 10                  ; (2: the camera's sin/cos in FRAME;
                                     ; 3: F_Z, the treads, ARENA's heights;
                                     ; 4: wa_look, the detail level's bits,
                                     ; where wa_hyst was; wa_flod gone;
@@ -39,7 +39,8 @@ WR_ABI      equ 9                   ; (2: the camera's sin/cos in FRAME;
                                     ; ARENA - AI-PLAN 3.1; 7: wa_look's
                                     ; bit 7, LK_COARSE2; 8: the lifts'
                                     ; tables, ARENAS-PLAN 4.1; 9: the
-                                    ; floor lines, 4.5)
+                                    ; floor lines, 4.5; 10: the teams'
+                                    ; colours and the flags, CTF-PLAN 4)
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-
                                     ; PLAN 4.5; arenagen's)
@@ -84,6 +85,14 @@ WA_RKTYP    equ 7                   ; 0 a rocket, 1 a grenade
 WA_RKFLY    equ 1                   ; state: flying; 2..: exploding
 WA_RKBOOM   equ 8                   ; an explosion's first state (7 ticks)
 WA_PKSZ     equ 8                   ; ARENA's pickup: x, y, z, kind, 0
+WA_FLSZ     equ 10                  ; FRAME's flag: x, y, z (words), from,
+FL_X        equ 0                   ; to (above z), attribute, shown (bytes)
+FL_Y        equ 2
+FL_Z        equ 4
+FL_FROM     equ 6
+FL_TO       equ 7
+FL_ATT      equ 8
+FL_ON       equ 9
 WA_MOV      equ 160                 ; OVERLAY's most cells (the scoreboard's
                                     ; 100 among them: AI-PLAN 5)
 
@@ -154,4 +163,13 @@ WA_FBV wa_rks, WA_NRK*WA_RKSZ       ; ROCKETS: G -> R by wa_rframe while any
                                     ; flying, 2.. an explosion's ticks left)
                                     ; and type (0 rocket, 1 grenade:
                                     ; WEAPONS-PLAN 2.2, 2.5, 6)
+WA_FBV wa_fb_ctf, 0                 ; TEAMS (CTF-PLAN 4): G -> R every frame
+WA_FBV wa_ctfon, 1                  ; of a team match, and once when one
+WA_FBV wa_fbpad4, 1                 ; starts (wa_rframe, wa_ctfstart) - so a
+                                    ; free-for-all's frame pays one byte's test
+                                    ; for each of them, no copy: ON, then
+WA_FBV wa_fcol, WA_NFIG             ; each figure's attribute where it is
+WA_FBV wa_fbpad5, 4 - (WA_NFIG & 3) ; drawn white, the adapter's (0: white),
+WA_FBV wa_flags, 2*WA_FLSZ          ; and the flags: each's x, y, z, from and
+WA_FBV wa_fb_cend, 0                ; to above z, attribute, shown
 %endmacro

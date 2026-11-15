@@ -22,11 +22,11 @@
 ; that could not bank) writes each pixel once, with no white first. A
 ; kernel PAINT skips the ground: the kernel filled the content white.
 
-WS_W        equ 336             ; the content box (the template: 338 x 156)
+WS_W        equ 336             ; the content box (the template: 338 x 174)
 WS_RM       equ 328             ; ...and its right margin, past every
                                 ; control and row (the owner: the drop-downs
                                 ; off the edge, as the left's 8 px are)
-WS_H        equ 137
+WS_H        equ 155
 WS_LX       equ 0               ; the left column: a marker cell and a
 WS_LDX1     equ 56              ; label (seven cells), then its drop-down
 WS_LDX2     equ 183
@@ -36,16 +36,17 @@ WS_RDX2     equ 327
 WS_Y1       equ 14              ; the three rows of controls, 16 high
 WS_Y2       equ 32
 WS_Y3       equ 50
+WS_Y4       equ 68              ; (the fourth: Mode, CTF-PLAN 7)
 WS_DH       equ 16
 WS_FX1      equ 192             ; the address field, right of Play
 WS_FX2      equ 327
-WS_BTNY     equ 69              ; the buttons
+WS_BTNY     equ 87              ; the buttons
 WS_BTNW     equ 104
 WS_BTNH     equ 16
 WS_B2X      equ 129
-WS_LOBY     equ 88              ; the players' rows (walink.inc), 10 apart
-WS_NDR      equ 5               ; the drop-downs; the focus's sixth stop is
-WS_FLD      equ 5               ; the field
+WS_LOBY     equ 106             ; the players' rows (walink.inc), 10 apart
+WS_NDR      equ 6               ; the drop-downs; the focus's seventh stop
+WS_FLD      equ 6               ; is the field
 
 ; wa_sinit - the window is open: the controls' records
 wa_sinit:
@@ -118,11 +119,15 @@ wa_sval:
 .play:
     mov al, [wa_splay]
     mov ah, 4
+    jmp .out
+.mode:
+    mov al, [wa_lkgmode]        ; (the host's, as the arena is)
+    mov ah, 2
 .out:
     pop bx
     ret
 wa_svals:   dw wa_sval.arena, wa_sval.cols, wa_sval.bots, wa_sval.skill
-            dw wa_sval.play
+            dw wa_sval.play, wa_sval.mode
 
 ; wa_spick - BX = a drop-down x 2, AL = its new pick: the setting it names
 ; set, and whatever that implies
@@ -158,6 +163,9 @@ wa_spick:
     cmp al, 1
     je .ser
     jmp wa_lknetgo
+.mode:
+    mov [wa_lkgmode], al
+    ret
 .ser:
     call wa_lkcable
     call lk_disconnect
@@ -165,7 +173,7 @@ wa_spick:
     mov word [lk_blk+LK_MSG], lk_m_search
     ret
 wa_spicks:  dw wa_spick.arena, wa_spick.cols, wa_spick.bots, wa_spick.skill
-            dw wa_spick.play
+            dw wa_spick.play, wa_spick.mode
 
 ; wa_sset - BX = a drop-down x 2, AH = -1 or +1: its pick one along, round
 ; (Left and Right on the focused control). A greyed one says whose it is
@@ -272,17 +280,20 @@ wa_srects:  dw WS_LDX1, WS_Y1, WS_LDX2, WS_Y1 + WS_DH - 1
             dw WS_LDX1, WS_Y2, WS_LDX2, WS_Y2 + WS_DH - 1
             dw WS_RDX1, WS_Y2, WS_RDX2, WS_Y2 + WS_DH - 1
             dw WS_LDX1, WS_Y3, WS_LDX2, WS_Y3 + WS_DH - 1
+            dw WS_LDX1, WS_Y4, WS_LDX2, WS_Y4 + WS_DH - 1
 ; ...each one's label: its cell's x and y, its text (a marker cell first)
 wa_slabs:   dw WS_LX, WS_Y1 + 4, wa_sl_a
             dw WS_RX, WS_Y1 + 4, wa_sl_c
             dw WS_LX, WS_Y2 + 4, wa_sl_b
             dw WS_RX, WS_Y2 + 4, wa_sl_s
             dw WS_LX, WS_Y3 + 4, wa_sl_p
+            dw WS_LX, WS_Y4 + 4, wa_sl_m
 wa_sl_a:    db ' Arena ', 0
 wa_sl_c:    db ' Columns ', 0
 wa_sl_b:    db ' Bots  ', 0
 wa_sl_s:    db ' Skill   ', 0
 wa_sl_p:    db ' Play  ', 0
+wa_sl_m:    db ' Mode  ', 0
 
 ; THE GROUND: every rect of the content no control and no row covers
 ; (content coordinates, inclusive). The last is the field's place, which
@@ -303,7 +314,11 @@ wa_sgnd:    dw 0, 0, WS_RM - 1, 3
             dw 0, WS_Y3, WS_LDX1 - 1, WS_Y3 + 3
             dw 0, WS_Y3 + 12, WS_LDX1 - 1, WS_Y3 + 15
             dw WS_LDX2 + 1, WS_Y3, WS_FX1 - 1, WS_Y3 + 15
-            dw 0, WS_Y3 + 16, WS_RM - 1, WS_BTNY - 1
+            dw 0, WS_Y3 + 16, WS_RM - 1, WS_Y4 - 1
+            dw 0, WS_Y4, WS_LDX1 - 1, WS_Y4 + 3
+            dw 0, WS_Y4 + 12, WS_LDX1 - 1, WS_Y4 + 15
+            dw WS_LDX2 + 1, WS_Y4, WS_RM - 1, WS_Y4 + 15
+            dw 0, WS_Y4 + 16, WS_RM - 1, WS_BTNY - 1
             dw 0, WS_BTNY, 7, WS_BTNY + WS_BTNH - 1
             dw 8 + WS_BTNW, WS_BTNY, WS_B2X - 1, WS_BTNY + WS_BTNH - 1
             dw WS_B2X + WS_BTNW, WS_BTNY, WS_RM - 1, WS_BTNY + WS_BTNH - 1
@@ -926,6 +941,13 @@ wa_sbtndrag:
 
 ; wa_sstart - Play (alone: the arena now) or Ready (linked)
 wa_sstart:
+    cmp byte [wa_lkgmode], 0    ; CTF (CTF-PLAN 7): not linked yet (wave
+    je .go                      ; C3), and only on an arena with bases
+    cmp byte [wa_splay], 0
+    je .go
+    mov si, wa_t_ctfl
+    jmp .toast
+.go:
     cmp byte [wa_splay], 0
     jne wa_lkready
     mov al, [wa_lkarena]
@@ -936,6 +958,19 @@ wa_sstart:
     mov [wa_lknb], al
     call wa_loadarena
     jc .out
+    cmp byte [wa_lkgmode], 0
+    je .run
+    mov si, [wa_gflp]
+    cmp word [si], 2
+    je .run
+    mov si, wa_t_ctfa
+.toast:
+    push ds
+    pop es
+    xor cx, cx
+    call OSAPI_TOAST
+    ret
+.run:
     mov ax, wa_main
     mov bx, [wa_win]
     xor cx, cx
@@ -946,7 +981,7 @@ wa_sstart:
 
 ; --- data ---------------------------------------------------------------------
 
-wa_sdrs:    dw wa_sdr_a, wa_sdr_c, wa_sdr_b, wa_sdr_s, wa_sdr_p
+wa_sdrs:    dw wa_sdr_a, wa_sdr_c, wa_sdr_b, wa_sdr_s, wa_sdr_p, wa_sdr_m
 %macro WA_SDROP 3                ; a drop-down's record: its items, how many
 %1:         dw 0, 0, 0, 0, %2, %3, 0, 0
             db 0, 0FFh
@@ -957,6 +992,7 @@ WA_SDROP wa_sdr_c, wa_si_cols, 2
 WA_SDROP wa_sdr_b, wa_si_bots, 4
 WA_SDROP wa_sdr_s, wa_lt_dnames, 3
 WA_SDROP wa_sdr_p, wa_sp_names, 4
+WA_SDROP wa_sdr_m, wa_si_mode, 2
 
 wa_si_cols:     dw wa_sw_40, wa_sw_80
 wa_sw_40:       db '40', 0
@@ -971,6 +1007,9 @@ wa_sp_0:        db 'alone', 0
 wa_sp_1:        db 'serial cable', 0
 wa_sp_2:        db 'local network', 0
 wa_sp_3:        db 'internet', 0
+wa_si_mode:     dw wa_smd_0, wa_smd_1   ; (CTF-PLAN 7)
+wa_smd_0:       db 'free-for-all', 0
+wa_smd_1:       db 'capture flag', 0
 
 wa_sb_play:     db 'Play', 0
 wa_sb_rdy:      db 'Ready', 0
