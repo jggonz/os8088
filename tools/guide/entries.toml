@@ -608,6 +608,13 @@ summary = "Pong full screen. Play another computer over a null modem cable, or p
 short = "Full-screen Pong, two players"
 needs = "A null modem cable and a second machine for two players"
 
+["WARENA.O88"]
+title = "WireArena"
+kind = "program"
+summary = "A first-person arena shooter drawn in text, fast enough for an IBM PC. Eight arenas, six weapons, bots, and free-for-all, team deathmatch, capture the flag and king of the hill, alone or with up to four players over a serial cable or a network."
+short = "Text-mode arena shooter"
+needs = "The standard system disk; a mouse to aim; a null modem cable or a network card to play others"
+
 ["WIREFLET.O88"]
 title = "WireFleet"
 kind = "program"

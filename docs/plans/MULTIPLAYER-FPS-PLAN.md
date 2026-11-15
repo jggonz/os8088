@@ -1763,8 +1763,11 @@ by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
   changes."* Built: F1..F5, V and `-`/`+` put `Detail Medium`, `Vsync on`,
   `Columns 80` in the HUD's message for four seconds, as `[`/`]` already
   did for the mouse (SPEC.md 128.2, `wahudset`). +174 bytes.
-- **A player's guide**, asked for at the same time: `docs/wirearena-guide/`
-  (17.7).
+- **A player's guide**, asked for at the same time - and `test-full`'s
+  `guidelock-full` said the same (WARENA.O88 shipped with no page in the
+  project guide): `tools/guide/manuals/WARENA_O88.md`, its line in
+  `tools/guide/entries.toml` and its eight shots by
+  `tools/guide/capture/WARENA_O88.py`, stamped in the guide lock.
 
 **After the first release** (the owner, 2026-11-15: *after*, for the turn
 acceleration and for all the test and measurement debt):

@@ -1336,6 +1336,15 @@
   "strings": "4095e5c86a5e295a",
   "why": "the driver passes wheel notches to the kernel (SPEC.md 9.12.8), so the wheel scrolls the front window"
  },
+ "WARENA_O88": {
+  "sources": [
+   "apps/wirearena",
+   "tools/arenagen.py"
+  ],
+  "stamped": "66bc2f6a",
+  "strings": "f1c8c994a882bd7a",
+  "why": "first page: every setup row, key, weapon, mode, arena, message and link step read off apps/wirearena (its strings and key handlers) and SPEC.md 128; eight shots by capture/WARENA_O88.py on the VGA XT, each looked at"
+ },
  "WAVERACK_O88": {
   "sources": [
    "apps/waverack"
