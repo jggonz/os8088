@@ -425,7 +425,17 @@ def leg_drop(bad):
             # and the clock going on rather than jumping. mkmod's song
             # changes its own tempo (Fxx), so the invariant is read, not
             # rows a second
-            spt, bpm = t.rw("mp_spt"), t.rb("mp_bpm")
+            # A CONSISTENT PAIR: the two are two reads while the guest runs,
+            # and the song's own Fxx can land between them - a loaded soak
+            # read spt 96 (BPM 125's) beside BPM 120. Re-read until two
+            # pairs in a row agree; a wrong spt still fails, every time.
+            pair = None
+            for _ in range(8):
+                now = (t.rw("mp_spt"), t.rb("mp_bpm"))
+                if now == pair:
+                    break
+                pair = now
+            spt, bpm = pair
             want = 4800 * 5 // (2 * max(bpm, 32))
             print("   tempo: %d samples a tick at BPM %d, 4,800 Hz's %d"
                   % (spt, bpm, want))
