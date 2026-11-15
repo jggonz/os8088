@@ -189,7 +189,7 @@ wa_spicks:  dw wa_spick.arena, wa_spick.cols, wa_spick.bots, wa_spick.skill
             dw wa_spick.play, wa_spick.mode
 
 ; wa_sarmap - AL = an arena, or the Arena list's item: the other. The list
-; puts Open (arena 1) first and Columns (arena 0, once "full") second - the
+; puts Open (arena 1) first and Pillars (arena 0, once "full") second - the
 ; owner's order - and the arenas keep their numbers (the benches, the poses,
 ; the rows and the wire all name them). Keeps all but AL
 wa_sarmap:

@@ -1584,7 +1584,7 @@ wa_lt_s2:       db 'in the arena', 0
 wa_lt_anames:   dw wa_lt_a1, wa_lt_a0, wa_lt_a2, wa_lt_a3, wa_lt_a4
                                 ; (the setup's order, Open first: an item
                                 ; is an arena through wa_sarmap)
-wa_lt_a0:       db 'columns', 0
+wa_lt_a0:       db 'pillars', 0
 wa_lt_a1:       db 'open', 0
 wa_lt_a2:       db 'heights', 0
 wa_lt_a3:       db 'hedge', 0
