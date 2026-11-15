@@ -976,9 +976,9 @@ wa_lkplay:
     mov byte [wa_lkfull], 1
     ret
 
-; wa_lkcmd - the Link menu: AL = Automatic, COM1, COM2, Disconnect, Ready,
-; then No bots, One bot, Two bots (the host's)
-wa_lkcmd:                       ; (Automatic, COM1, COM2, Disconnect)
+; wa_lkcmd - the Link menu: AL = Automatic, COM1, COM2, Disconnect (the
+; rest is the setup's: NET-PLAN 9.9)
+wa_lkcmd:
     push ax
     call wa_lkcable             ; (Automatic, COM1, COM2, Disconnect: the
     pop ax                      ; card's claim given back)

@@ -8764,7 +8764,7 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wafiglod", "soak", py("tests/wafiglod.py"), 52.0,
         "WIREARENA'S SMALL FIGURE BEGINS WHERE THE DETAIL LEVEL SAYS "
-        "(docs/plans/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
         "figure small on the screen is drawn as seven joints and five "
         "straight limbs (LK_FEW); how small is the level's (wa_flodv, "
         "CONFIG's: wa_levtab's last column) - from 464 units ahead at "

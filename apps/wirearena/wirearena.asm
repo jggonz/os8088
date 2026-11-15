@@ -1,15 +1,17 @@
-; WireArena - Wave 0 of docs/plans/MULTIPLAYER-FPS-PLAN.md: the renderer
-; spike. A text-mode first-person arena: thin dim wall edges on black, solid
-; bright stick figures, presented as changed cells only. It exists to answer
-; the plan's first question on the glass - 80 or 40 columns - and to measure
-; what a frame costs, so the HUD carries the meter.
-;
-; Not a game yet: three dummies run patrols, the pistol knocks them down
-; (flinch, death, respawn), and there is no network and no opponent AI.
-; Controls: mouse look (OSAPI_MOUSE_REL, SPEC.md 9.14), W/A/S/D move,
-; arrows turn and pitch, Space jumps, left button or Ctrl fires, Tab swaps
-; 80 and 40 columns, V waits for vertical retrace before presenting, B runs
-; the bench (64 frames, a fixed spin - section 16 of the plan), Esc leaves.
+; WireArena - a text-mode first-person ARENA SHOOTER (docs/plans/
+; MULTIPLAYER-FPS-PLAN.md; what was built and why: docs/plans/completed/
+; WIREARENA-*.md). Thin wall edges on black, solid stick figures, presented
+; as changed cells only; 40 or 80 columns on CGA, Hercules, MDA or VGA.
+; Six weapons, health and a shield; up to three bots at three skills; free-
+; for-all, capture the flag, team deathmatch and king of the hill on the
+; arenas of arenagen; two to four players over a serial cable, a local
+; network or the internet - set up in the opening window (wasetup.inc).
+; Keys: mouse look (OSAPI_MOUSE_REL, SPEC.md 9.14), W/A/S/D move, arrows
+; turn and pitch, Space jumps, left button or Ctrl fires, R reloads, 1-6 and
+; Q/E the weapon, Tab the board and the minimap, - and + 40 or 80 columns,
+; F1-F5 the detail level, F10 the meter, V vertical retrace, [ and ] the
+; mouse, P pause (offline), Esc leaves (linked: asked). B and P as benches
+; are a test build's (WABENCH=1).
 %include "os88api.inc"
     OS88_HEADER 'WARENA', wa_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 %define OP_WANT_CSEG            ; the renderer part is far-called through its
@@ -622,8 +624,8 @@ wa_frame_input:
     call wa_rsync
     jmp .drain
 .bw:
-    mov al, ah                  ; 1..3: a weapon (WEAPONS-PLAN 2.1; 4 and 5
-    sub al, 0x02                ; are the next ones')
+    mov al, ah                  ; 1..6: a weapon (WEAPONS-PLAN 2.1)
+    sub al, 0x02
     cmp al, WA_NWPN
     jae .drain
     call wa_wsel
@@ -6596,8 +6598,8 @@ wa_rretv:   dw wa_rret
 ; field-of-view change). Keeps every register but the flags.
 ; THE DETAIL LEVELS (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 9.11): per level,
 ; Very Low to Very High, the options it turns on - wa_look's LK_ bits, then
-; the floor grid (G) and the stepped treads (T),
-; which their keys still override until the next level is chosen, and the
+; the floor grid and the stepped treads (their G and T keys gone: NET-PLAN
+; 9.9), and the
 ; floor lines' DASHES (wa_dash, ARENAS-PLAN 4.5: 1 a shallow line's every
 ; other column, 2 a steep one's every other row too - the owner's, on the
 ; trial build: "actually look surprisingly fine"). Moving

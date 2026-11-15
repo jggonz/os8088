@@ -1661,21 +1661,49 @@ a pointer to where it came from, after the owner's rulings below.
 - **The field run on the 5150** is the owner's, at home, after the arena
   work (17.3).
 
-### 17.2 In progress, this session (the release)
+### 17.2 The release round (2026-11-15)
 
-- spawn protection;
-- the score against the goal on the HUD row;
-- pause when offline;
-- mouse sensitivity;
-- Q and E, the previous and next weapon;
-- Esc asks Y/N in a linked match;
-- a hit-direction prototype;
-- **WireArena onto shipped disks**: a second 360KB games disk, the 720KB
-  more disk, and the 1.2MB and 1.44MB apps disks if it fits - and with it
-  out of `apps/RETIRED.txt`'s instruments.
-- Another session is building the Ziggurat and the Pit
-  ([WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md), waves A2
-  and A3).
+Built, on the owner's list (`apps/wirearena/wirearena.asm` unless named):
+
+- [x] **Spawn protection** (`WA_PROTT`, 60 ticks): for 2 s after a spawn
+  or a respawn - or to its first shot - nothing hurts the figure. The
+  player's (`wa_pprot`) is judged in `wa_phurt`, which a linked player's
+  damage reaches on its own machine, so it holds linked too; its heart is
+  cyan while it lasts. Each bot's (`wa_bprot`) in `wa_hurt`. The link
+  rows clear it on a player they set up to be shot.
+- [x] **The score against the goal** on the HUD row, five cells left of
+  the weapon digits: `12/20`, or the score alone with no Win at;
+  free-for-all our kills, white; a team mode our team's in its colour
+  (`wa_hudsc`, written when it changed).
+- [x] **Pause**: P, offline only - the main loop owes no ticks, the mouse
+  and the trigger are drained, PAUSED over the view. (In a `WABENCH=1`
+  build P is the play bench.)
+- [x] **Mouse sensitivity**: `[` and `]`, nine levels about the factors the
+  game shipped with (yaw 96 a count, pitch 1), the session's (persistence
+  declined, 17.1); "Mouse sensitivity N" on the HUD's message.
+- [x] **Q and E**: the weapon before and after, of those had and loaded
+  (`wa_wcycle`, through `wa_wsel`'s own test).
+- [x] **Esc in a linked match asks**: an outlined box, its frame white and
+  the question red - "Leave the match? Y/N" - Y leaves, N or Esc stays;
+  nothing else typed is taken while it is up. Offline Esc leaves at once.
+  `walink` and `walink4` press Y after their Esc.
+- [x] **The hit's direction, a PROTOTYPE for the owner to try**: hurt by a
+  figure that is OFF the screen (outside the view's 37.5 degrees either
+  side), a red arrow left or right of the crosshair, or under it from
+  behind, for 20 ticks (`wa_hitdir`, off `wa_bear`). In view: nothing.
+- The About card gains "Q/E: weapon. [/]: mouse. P: pause." (13 lines).
+
+Checked on a MartyPC 5150 CGA: the protection's countdown and heart,
+`0/20` on row 24, E E E Q Q stepping 1 2 3 2 1, `]` and `[`, P stopping
+the ticks (0 a second, 31 again after), the box drawn and N and Y, and all
+three arrows - the player turned to keep the nearest bot behind: 52 hits,
+each cue seen.
+
+**In progress**: WireArena onto shipped disks - a second 360KB games disk,
+the 720KB more disk, and the 1.2MB and 1.44MB apps disks if it fits - and
+with it out of `apps/RETIRED.txt`'s instruments. Another session builds
+the Ziggurat and the Pit
+([WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md)).
 
 ### 17.3 Open, after the rulings
 
