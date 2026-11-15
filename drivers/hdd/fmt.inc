@@ -142,12 +142,10 @@ hd_fmt_spc0:
     mov ax, 4
     cmp word [hd_fsecs+2], 0    ; past 32MB the walk goes on up from 2KB by
     jne .out                    ; doubling - which lands on DOS's own row for
-    mov ax, 2                   ; every size to 2GB (SPEC.md 18.7.5), so the
+                                ; every size to 2GB (SPEC.md 18.7.5), so the
     cmp word [hd_fsecs], 32680  ; table needs no more rows
-    ja .four
-    ret
-.four:
-    mov ax, 4
+    ja .out                     ; ...over 16MB: the 4 already in AX
+    mov al, 2                   ; AH is the 0 of the 4 above
 .out:
     ret
 
@@ -165,6 +163,8 @@ hd_fmt_layout:
     mov cl, 8
     shl bx, cl                  ; 256 * SecPerClus (<= 32,768)
     add bx, HF_NFATS            ; TmpVal2
+.ceil:                          ; (hd_fmt_layout12 joins here, its own TmpVal2
+                                ; in BX and TmpVal1 in DX:AX)
     add ax, bx                  ; the ceiling in THIRTY-TWO bits: TmpVal1 is
     adc dx, 0                   ; wraps a word for every cluster size there
     sub ax, 1                   ; is - which read as "no layout fits" for
@@ -185,30 +185,17 @@ hd_fmt_layout:
 hd_fmt_layout12:
     call os88_ent
     call hd_fmt_tmp1
-    jc .no
-    mov bx, [hd_fspc]
+    jc hd_fmt_layout.no
+    mov ax, [hd_fspc]
     mov cl, 9
-    shl bx, cl                  ; 512 * SecPerClus
-    mov cx, bx
-    mov ax, cx
+    shl ax, cl                  ; 512 * SecPerClus
     xor dx, dx
     mov bx, 3
     div bx                      ; (512 * SecPerClus) / 3 - two FAT12 entries
-    mov bx, ax                  ; to three bytes
+    xchg bx, ax                 ; to three bytes
     add bx, HF_NFATS            ; TmpVal2
-    call hd_fmt_tmp1            ; ...and the same 32-bit ceiling
-    add ax, bx
-    adc dx, 0
-    sub ax, 1
-    sbb dx, 0
-    div bx
-    or ax, ax
-    jz .no
-    mov [hd_ffatsz], ax
-    call hd_fmt_clusters
-    jc .no
-    CLC_OR_STC .no
-    jmp os88_r_bp
+    call hd_fmt_tmp1            ; ...and the same 32-bit ceiling, and the rest
+    jmp short hd_fmt_layout.ceil ; is hd_fmt_layout's, from the same frame
 
 ; -----------------------------------------------------------------------------
 ; hd_fmt_tmp1 - DX:AX = [hd_fsecs] less the reserved sector and the root

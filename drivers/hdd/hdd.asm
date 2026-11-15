@@ -55,6 +55,13 @@
 %include "os88drv.inc"
 
     OS88_DRIVER 'Hard Drive', DRVC_DISK, hd_entry, hd_svc_end - hd_services
+hd_s_page    equ $$ + 16        ; DSV_CPNAME's 'Hard Drive' IS the header's
+                                ; name field (+16), NUL-padded to +31 and so
+                                ; terminated by +26 - the page title and the
+                                ; driver's name are one string, and the kernel
+                                ; reads that field nowhere (driver.inc has no
+                                ; DRV_H_ name offset) and writes only +4. The
+                                ; second copy was 11 bytes (driver size pass 1)
 
 
 
@@ -841,7 +848,6 @@ hd_ide_setparams:
     pop bx
     ret
 
-hd_s_page:   db 'Hard Drive', 0
 
 ; =============================================================================
 ; Data. A driver has no bss - its zeroed data ships inside the image
