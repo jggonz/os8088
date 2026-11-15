@@ -74,20 +74,31 @@ MI_BSIZE    equ 35
 MI_BPOS     equ 36
 
 ; --- the mode table (SPEC.md 120.2.2): one 16-byte record an offered mode -------
+; IN THE MODE INFORMATION BLOCK'S OWN ORDER where it has one (driver size
+; pass 1): BytesPerScanLine, X and Y are three words there and here, and the
+; three fields' size-then-position six bytes, so vx_offer copies two runs
+; with `movsw` where it moved a field at a time, and vx_mkpal reads a
+; field's size and position as one word
 VM_MODE     equ 0               ; dw: the VBE mode number
-VM_X        equ 2               ; dw
-VM_Y        equ 4               ; dw
-VM_BPSL     equ 6               ; dw: bytes per scan line
+VM_BPSL     equ 2               ; dw: bytes per scan line   } MI_BPSL's
+VM_X        equ 4               ; dw                        } three words,
+VM_Y        equ 6               ; dw                        } in order
 VM_BPP      equ 8               ; db: 8 or 16 (15 is stored as 15, drawn as 16)
 VM_WSH      equ 9               ; db: window shift: a 64KB page number << this
                                 ;     is the window number 4F05h wants
-VM_RPOS     equ 10              ; db: the red field's position and size...
-VM_RSIZE    equ 11
-VM_GPOS     equ 12              ; ...green...
-VM_GSIZE    equ 13
-VM_BPOS     equ 14              ; ...and blue, for the 16bpp packing
-VM_BSIZE    equ 15
+VM_RSIZE    equ 10              ; db: the red field's size and position...
+VM_RPOS     equ 11              ;     } MI_RSIZE's six bytes, in order
+VM_GSIZE    equ 12              ; ...green...
+VM_GPOS     equ 13
+VM_BSIZE    equ 14              ; ...and blue, for the 16bpp packing
+VM_BPOS     equ 15
 VM_SIZE     equ 16
+%if VM_X - VM_BPSL != MI_XRES - MI_BPSL || VM_Y - VM_BPSL != MI_YRES - MI_BPSL
+  %error "vx_offer copies MI_BPSL's three words as one run"
+%endif
+%if VM_BPOS - VM_RSIZE != MI_BPOS - MI_RSIZE || VM_RPOS != VM_RSIZE + 1
+  %error "vx_offer copies MI_RSIZE's six bytes as one run, vx_mkpal reads size and position as a word"
+%endif
 VX_NMODES   equ 16              ; the most this image offers
 VX_LISTMAX  equ 64              ; the most mode numbers it walks
 
@@ -126,7 +137,11 @@ vx_entry:
     cmp al, VXV_PM
     je vx_pm
     cmp ax, (VX_ABI_VER << 8) | DRVV_ATTACH
-    je vx_attach                ; ATTACH from a kernel of this vintage (AH),
+    jne .no                     ; ATTACH from a kernel of this vintage (AH),
+    cmp byte [vx_nmodes], 0     ; ONCE PER IMAGE: a successful attach leaves
+    jne .no                     ; a mode in the table and its own code zeroed
+    jmp vx_attach               ; (vx_once), and a refused one is freed
+.no:
     stc                         ; everything else - a newer kernel's verb, or
     ret                         ; an ATTACH from another vintage - refused
 
@@ -158,209 +173,22 @@ vx_detach:
     ret
 
 ; -----------------------------------------------------------------------------
-; vx_attach - DRVV_ATTACH: is there a VBE, and which of its modes is ours?
-; out: CF = 0 and SI = vx_tab (the VXS_* answer, in this segment); CF = 1 and
-;      AL = DRVE_HW when there is no VBE 1.2+, or no mode this image accepts
-; clobbers: everything but the segment registers it does not own
-;
-; Nothing is hooked and no mode is set - the kernel switches after it has
-; armed the far pointer, and a refusal frees this image with nothing to undo.
+; vx_attok - vx_attach's tail once a mode is offered, RESIDENT: it zeroes the
+; region attach ran from (vx_once) and lays the int 10h stack over it
 ; -----------------------------------------------------------------------------
-vx_attach:
-    push es
-    push bx                     ; PRESERVE BX: the kernel reads the row through
-                                ; it on return (SPEC.md 51.2), and the probe
-                                ; below spends it
-    mov [vx_want], cl           ; the class SYSTEM.CFG asks for (120.2.3),
-                                ; one byte, 0 = Auto
-    push ds
-    pop es                      ; ES = ours for the BIOS's buffers
-    mov word [vx_vbe], 'VB'     ; the pre-signature a VBE 2.0 BIOS answers
-    mov word [vx_vbe+2], 'E2'   ; with the 512-byte form
-    mov ax, VBE_INFO
-    mov di, vx_vbe
-    call vx_int10               ; on our own stack (vx_int10)
-    cmp ax, VBE_OK
-    jne .nohw
-    cmp word [vx_vbe+VI_SIG], 'VE'
-    jne .nohw
-    cmp word [vx_vbe+VI_SIG+2], 'SA'
-    jne .nohw
-    cmp word [vx_vbe+VI_VER], 0x0102
-    jb .nohw                    ; 1.0 and 1.1: no direct-colour fields, no
-                                ; reliable window attributes (SPEC.md 120.2.1)
-
-    ; --- copy the mode list OUT before any 4F01h can overwrite it ------------
-    ; (a 1.x BIOS may point it inside the very buffer just filled)
-    push ds
-    lds si, [vx_vbe+VI_MODES]   ; DS:SI = the BIOS's list
-    mov di, vx_list             ; ES:DI = our copy (ES = CS)
-    mov cx, VX_LISTMAX
-    cld
-.lcopy:
-    lodsw
-    stosw
-    cmp ax, 0xFFFF
-    je .lend
-    loop .lcopy
-    mov ax, 0xFFFF              ; a list longer than we walk ends here
-    stosw                       ; (the copy has VX_LISTMAX+1 words for this)
-.lend:
-    pop ds
-
-    ; --- ask about each, and keep the ones this image can draw ---------------
-    mov byte [vx_nmodes], 0
-    mov si, vx_list
-.mode:
-    lodsw
-    cmp ax, 0xFFFF
-    je .chosen
-    mov cx, ax
-    push si
-    mov ax, VBE_MINFO
-    mov di, vx_minfo
-    call vx_int10
-    pop si
-    cmp ax, VBE_OK
-    jne .mode
-    call vx_offer               ; CX = the mode: appended if acceptable
-    cmp byte [vx_nmodes], VX_NMODES
-    jb .mode
-
-    ; --- the class asked for, else Auto (SPEC.md 120.2.3) ------------------------
-.chosen:
-    mov word [vx_stktop], vx_vbe + 512 ; the probe's buffers are dead now:
-    push es                     ; every later BIOS call (4F02h, 4F05h) runs
-    push ds                     ; on them instead of on the scroll's bounce,
-    pop es                      ; zeroed so a watermark can be read off them
-    mov di, vx_minfo            ; (tests/megavesa.py)
-    mov cx, (256 + 512) / 2
-    xor ax, ax
-    cld
-    rep stosw
-    pop es
-    cmp byte [vx_nmodes], 0
-    je .nohw
+vx_attok:
+    mov word [vx_stktop], vx_stkend ; the probe's code and its VBE buffer are
+    mov di, vx_once             ; dead now: every later BIOS call (4F02h,
+    mov cx, VX_STK / 2          ; 4F05h) runs on them instead of on the
+    xor ax, ax                  ; scroll's bounce, zeroed so a watermark can
+    cld                         ; be read off them (tests/megavesa.py). ES is
+    rep stosw                   ; still ours: it has been since the top
     call vx_select              ; [vx_cur] = the record
     call vx_publish             ; ...and vx_tab, the geometry, the palette
     mov si, vx_tab
     pop bx
     pop es
     clc
-    ret
-.nohw:
-    pop bx
-    pop es
-    mov al, DRVE_HW
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; vx_offer - is the mode in vx_minfo one this image draws? Append it if so.
-; in:  CX = the mode number, [vx_minfo] filled by 4F01h
-; clobbers: ax, bx, dx, di
-; -----------------------------------------------------------------------------
-vx_offer:
-    mov ax, [vx_minfo+MI_ATTR]
-    and al, 0x19                ; supported, colour, graphics
-    cmp al, 0x19
-    jne .no
-    mov al, [vx_minfo+MI_WINA]
-    and al, 0x05                ; window A exists and is writable
-    cmp al, 0x05
-    jne .no
-    cmp word [vx_minfo+MI_SEGA], VX_WSEG
-    jne .no
-    cmp word [vx_minfo+MI_WSIZE], 64
-    jne .no
-    ; the granularity: a power of two, 1..64 KB, as a shift
-    mov ax, [vx_minfo+MI_GRAN]
-    or ax, ax
-    jz .no
-    cmp ax, 64
-    ja .no
-    xor bl, bl                  ; BL = log2(granularity KB)
-.g:
-    test al, 1
-    jnz .gdone
-    shr ax, 1
-    inc bl
-    jmp short .g
-.gdone:
-    cmp ax, 1
-    jne .no                     ; not a power of two
-    mov bh, 6
-    sub bh, bl                  ; BH = 6 - log2(gran) = the window shift: a
-                                ; 64KB page is 64/gran windows
-    ; the depth and the model
-    mov al, [vx_minfo+MI_BPP]
-    mov ah, [vx_minfo+MI_MODEL]
-    cmp al, 8
-    jne .notp
-    cmp ah, 4                   ; 8bpp: packed pixel
-    jne .no
-    jmp short .depthok
-.notp:
-    cmp ah, 6                   ; 15/16bpp: direct colour
-    jne .no
-    cmp al, 15
-    je .depthok
-    cmp al, 16
-    jne .no
-.depthok:
-    ; the geometry
-    mov ax, [vx_minfo+MI_XRES]
-    test al, 7
-    jnz .no                     ; a multiple of 8 (SPEC.md 11.94)
-    cmp ax, VX_XMIN
-    jb .no
-    cmp ax, VX_XMAX
-    ja .no
-    mov ax, [vx_minfo+MI_YRES]
-    cmp ax, VX_YMIN
-    jb .no
-    cmp ax, VX_YMAX
-    ja .no
-    mov ax, [vx_minfo+MI_BPSL]
-    cmp ax, VX_BPSLMAX
-    ja .no
-    mov dx, [vx_minfo+MI_XRES]
-    cmp byte [vx_minfo+MI_BPP], 8
-    je .bpsl8
-    add dx, dx                  ; two bytes a pixel
-.bpsl8:
-    cmp ax, dx
-    jb .no                      ; a stride shorter than a row
-    ; --- accept: append the record -------------------------------------------------
-    mov al, [vx_nmodes]
-    mov ah, VM_SIZE
-    mul ah
-    mov di, ax
-    add di, vx_modes
-    mov [di+VM_MODE], cx
-    mov ax, [vx_minfo+MI_XRES]
-    mov [di+VM_X], ax
-    mov ax, [vx_minfo+MI_YRES]
-    mov [di+VM_Y], ax
-    mov ax, [vx_minfo+MI_BPSL]
-    mov [di+VM_BPSL], ax
-    mov al, [vx_minfo+MI_BPP]
-    mov [di+VM_BPP], al
-    mov [di+VM_WSH], bh
-    mov al, [vx_minfo+MI_RPOS]
-    mov [di+VM_RPOS], al
-    mov al, [vx_minfo+MI_RSIZE]
-    mov [di+VM_RSIZE], al
-    mov al, [vx_minfo+MI_GPOS]
-    mov [di+VM_GPOS], al
-    mov al, [vx_minfo+MI_GSIZE]
-    mov [di+VM_GSIZE], al
-    mov al, [vx_minfo+MI_BPOS]
-    mov [di+VM_BPOS], al
-    mov al, [vx_minfo+MI_BSIZE]
-    mov [di+VM_BSIZE], al
-    inc byte [vx_nmodes]
-.no:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -377,25 +205,25 @@ vx_select:
 
 ; vx_decode - CL = a class byte -> DL = X/8, DH = Y/8, CL = bpp (8 or 16);
 ;             CF = 1 for Auto (0), with the three 0
-; clobbers: bx, flags
+; clobbers: ax, bx, flags
 vx_decode:
     test cl, VXC_SET
     jz .auto
-    mov bl, cl
-    and bl, VXC_XMASK
-    xor bh, bh
-    mov dl, [bx+vxc_x8tab]
-    mov bl, cl
-    and bl, VXC_YMASK
-    shr bl, 1
-    shr bl, 1
-    mov dh, [bx+vxc_y8tab]
-    test cl, VXC_D16
-    mov cl, 8
-    jz .d
-    mov cl, 16
-.d:
-    clc
+    mov bx, vxc_x8tab
+    mov al, cl
+    and al, VXC_XMASK
+    xlat
+    mov dl, al
+    mov al, cl
+    and al, VXC_YMASK
+    shr al, 1
+    shr al, 1
+    add al, vxc_y8tab - vxc_x8tab
+    xlat
+    mov dh, al
+    and cl, VXC_D16             ; 0 or 16...
+    shr cl, 1
+    add cl, 8                   ; ...8 or 16, and CF = 0
     ret
 .auto:
     xor dx, dx
@@ -407,121 +235,99 @@ vx_decode:
 ;             byte cannot name (not offered: vx_offer refuses it first)
 ; clobbers: ax, bx, flags
 vx_encode:
-    mov ax, [si+VM_X]
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
     mov bx, vxc_x8tab
+    mov ax, [si+VM_X]
     call .idx
     jc .no
     mov cl, al
-    mov ax, [si+VM_Y]
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
     mov bx, vxc_y8tab
+    mov ax, [si+VM_Y]
     call .idx
     jc .no
     shl al, 1
     shl al, 1
+    or al, VXC_SET
     or cl, al
-    or cl, VXC_SET
     cmp byte [si+VM_BPP], 8
-    je .ok
-    or cl, VXC_D16
-.ok:
-    clc
-    ret
+    je .no                      ; CF = 0 off the equal compare...
+    or cl, VXC_D16              ; ...and off the `or`
 .no:
-    stc
     ret
-.idx:                           ; AL = X/8 or Y/8 against the four at BX ->
-    push cx                     ; AL = its index, CF = 1 none
-    xor cx, cx
+.idx:                           ; AX = X or Y against the four X/8 or Y/8 at
+    shr ax, 1                   ; BX -> AL = its index, CF = 1 none. X/8 and
+    shr ax, 1                   ; Y/8 are under 256 (X <= 1024, Y <= 768),
+    shr ax, 1                   ; so AH is 0 here and counts the index
 .i:
     cmp al, [bx]
-    je .hit
+    je .hit                     ; (CF = 0 off the equal compare)
     inc bx
-    inc cx
-    cmp cl, 4
+    inc ah
+    cmp ah, 4
     jb .i
-    pop cx
     stc
     ret
 .hit:
-    mov al, cl
-    pop cx
-    clc
+    mov al, ah
     ret
 
     VXC_TABLES                  ; vxc_x8tab / vxc_y8tab, vxabi.inc's
+%if vxc_y8tab - vxc_x8tab != 4
+  %error "vx_decode reads the Y table as four bytes past the X table's start"
+%endif
 
 ; vx_find - the offered record whose class byte is CL: out SI, or CF = 1
 ;           (Auto included: it names no record). A 15bpp record answers for
-;           the 16 bit
+;           the 16 bit - which vx_encode's D16 already says, so a record
+;           matches when its encoding is CL's set bits (bits 5 and 6 are no
+;           field and vx_decode never read them). A record the byte cannot
+;           name matches no class
 ; clobbers: ax, bx, cx, dx, si, di, flags
 vx_find:
-    call vx_decode              ; DL = X/8, DH = Y/8, CL = bpp
-    jc .none
+    test cl, VXC_SET
+    jz .none
+    mov dl, cl
+    and dl, VXC_SET | VXC_D16 | VXC_YMASK | VXC_XMASK
     mov si, vx_modes
     mov di, [vx_nmodes_w]       ; (the count as a word: the byte and a 0)
 .n:
     or di, di
     jz .none
-    mov ax, [si+VM_X]           ; X/8 is the word shifted: 1024 -> 128
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    cmp al, dl
-    jne .next
-    mov ax, [si+VM_Y]
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    cmp al, dh
-    jne .next
-    mov al, [si+VM_BPP]
-    cmp al, cl
-    je .hit
-    cmp al, 15                  ; a 15bpp record is "16" to the class
-    jne .next
-    cmp cl, 16
-    jne .next
-.hit:
-    clc
-    ret
+    call vx_encode              ; CL = the record's class
+    jc .next
+    cmp cl, dl
+    je .out                     ; (CF = 0 off the equal compare)
 .next:
     add si, VM_SIZE
     dec di
     jmp short .n
 .none:
     stc
+.out:
     ret
 
 ; vx_publish - [vx_cur] into vx_tab and the geometry this image draws by
 ; clobbers: ax, bx, cx, dx, si, di
 vx_publish:
     mov si, [vx_cur]
-    mov ax, [si+VM_X]
+    cld
+    lodsw                       ; VM_MODE
+    mov [vx_tab+VXS_MODE], ax
+    lodsw                       ; VM_BPSL
+    mov [vx_bpsl], ax
+    lodsw                       ; VM_X
     mov [vx_tab+VXS_X], ax
     mov [vx_x], ax
-    mov ax, [si+VM_Y]
+    lodsw                       ; VM_Y
     mov [vx_tab+VXS_Y], ax
     mov [vx_y], ax
-    mov ax, [si+VM_MODE]
-    mov [vx_tab+VXS_MODE], ax
-    mov ax, [si+VM_BPSL]
-    mov [vx_bpsl], ax
-    mov al, [si+VM_BPP]
-    mov [vx_depth], al          ; 8, 15 or 16: the mode's own
+    lodsw                       ; VM_BPP, VM_WSH: the mode's own depth (8,
+    mov [vx_depth], ax          ; 15 or 16) and the window shift, one word
     cmp al, 8
     je .d8
     mov al, 16                  ; ...and what the kernel is told: 15 draws as 16
 .d8:
     mov [vx_tab+VXS_BPP], al
     mov [vx_bpp], al
-    mov al, [si+VM_WSH]
-    mov [vx_wsh], al
     jmp vx_mkpal                ; the 16-entry RGB table for a direct mode
 
 ; -----------------------------------------------------------------------------
@@ -532,34 +338,33 @@ vx_publish:
 ; -----------------------------------------------------------------------------
 vx_choose:
     mov si, vx_modes
-    mov [vx_cur], si
-    mov cl, [vx_nmodes]
-    xor ch, ch
+    mov di, si                  ; DI = the pick so far
+    mov cx, [vx_nmodes_w]
 .n:
-    mov di, [vx_cur]
-    mov ax, [si+VM_X]
-    mul word [si+VM_Y]          ; DX:AX = SI's area, <= 1024 x 768
-    mov [vx_a1], ax
-    mov [vx_a1+2], dx
+    push cx
     mov ax, [di+VM_X]
-    mul word [di+VM_Y]          ; DX:AX = the current pick's
-    cmp [vx_a1+2], dx
+    mul word [di+VM_Y]
+    xchg ax, bx
+    mov cx, dx                  ; CX:BX = the pick's area, <= 1024 x 768
+    mov ax, [si+VM_X]
+    mul word [si+VM_Y]          ; DX:AX = SI's
+    cmp dx, cx
     jb .keep
     ja .take
-    cmp [vx_a1], ax
+    cmp ax, bx
     jb .keep
     ja .take
     mov al, [si+VM_BPP]         ; the same size: the deeper one
     cmp al, [di+VM_BPP]
     jbe .keep
 .take:
-    mov [vx_cur], si
+    mov di, si
 .keep:
+    pop cx
     add si, VM_SIZE
     loop .n
+    mov [vx_cur], di
     ret
-
-; -----------------------------------------------------------------------------
 ; vx_mkpal - the 16-entry RGB word table for a direct-colour mode, from the
 ;            DAC table and the mode's field layout. At 8bpp nothing to do.
 ; clobbers: ax, bx, cx, dx, si, di
@@ -567,50 +372,40 @@ vx_choose:
 vx_mkpal:
     cmp byte [vx_depth], 8
     je .out
-    mov si, [vx_cur]
+    mov si, vx_dac16            ; 16 x (r, g, b), 6-bit
     mov di, vx_pal16
-    mov bx, vx_dac16            ; 16 x (r, g, b), 6-bit
-    mov cx, 16
+    cld
 .e:
-    push cx
     xor dx, dx                  ; DX = the word being built
-    mov al, [bx]                ; red
-    mov cl, [si+VM_RSIZE]
-    mov ch, [si+VM_RPOS]
-    call .field
-    mov al, [bx+1]              ; green
-    mov cl, [si+VM_GSIZE]
-    mov ch, [si+VM_GPOS]
-    call .field
-    mov al, [bx+2]              ; blue
-    mov cl, [si+VM_BSIZE]
-    mov ch, [si+VM_BPOS]
-    call .field
+    mov bx, [vx_cur]
+    add bx, VM_RSIZE            ; the record's (size, position) words
+    call .field                 ; red
+    call .field                 ; green
+    call .field                 ; blue
     mov [di], dx
     inc di
     inc di
-    add bx, 3
-    pop cx
-    loop .e
+    cmp di, vx_pal16 + 32
+    jb .e
 .out:
     ret
-; .field - AL = a 6-bit gun, CL = the field's size, CH = its position: OR the
-;          gun's top CL bits into DX at bit CH
+; .field - [SI] = a 6-bit gun, [BX] = the field's size then its position:
+;          OR the gun's top `size` bits into DX at bit `position`; SI and
+;          BX step on to the next gun and field
 .field:
-    push cx
-    push bx
-    xor ah, ah
-    mov bl, 6
-    sub bl, cl                  ; BL = 6 - size: a 5- or 6-bit field keeps the
-    jbe .pos                    ; gun's top bits; a wider one (none offered)
-    xchg cl, bl                 ; takes it whole
+    lodsb
+    cbw                         ; (a 6-bit gun: AH = 0)
+    mov cx, [bx]                ; CL = the size, CH = the position
+    inc bx
+    inc bx
+    sub cl, 6                   ; a 5- or 6-bit field keeps the gun's top
+    jnc .pos                    ; bits; a wider one (none offered) takes it
+    neg cl                      ; whole
     shr ax, cl
 .pos:
     mov cl, ch
     shl ax, cl
     or dx, ax
-    pop bx
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -622,34 +417,28 @@ vx_mkpal:
 ; out: CF = 0; CF = 1 = a block of another vintage, nothing banked
 ; -----------------------------------------------------------------------------
 vx_init:
-    push ds
-    mov ds, dx                  ; DS:SI = the block, in the kernel's `.boot3`
-    cmp word [si+VXB_VER], VX_ABI_VER
-    jne .bad
-    pop ds
-    mov [vx_kseg], es
-    push si
     push es
     push ds
+    pop es                      ; ES = ours: the bank
     push ds
-    pop es                      ; ES = ours (DS still is): the bank
-    mov ds, dx
-    mov di, vx_p_tabrow         ; the pointer words, in VXB_* order from +2
-    inc si
-    inc si
-    mov cx, (VXB_SIZE - 2) / 2
+    mov ds, dx                  ; DS:SI = the block, in the kernel's `.boot3`
     cld
+    lodsw                       ; VXB_VER, and SI on to the pointers
+    cmp ax, VX_ABI_VER
+    jne .bad
+    mov di, vx_p_tabrow         ; the pointer words, in VXB_* order from +2
+    mov cx, (VXB_SIZE - 2) / 2
     rep movsw
     pop ds
     pop es
-    pop si
-    call vx_geom
-    mov word [vx_win], 0xFFFF   ; no window is current until a mode set
-    mov byte [vx_cursaved], 0
-    clc
-    ret
+    mov [vx_kseg], es
+    call vx_geom                ; ([vx_win] is no window and [vx_cursaved]
+    clc                         ; 0 already: the image's own, which nothing
+    ret                         ; before the first body writes)
 .bad:
     pop ds
+    pop es
+.stc:                           ; (vx_pick's refusal too)
     stc
     ret
 
@@ -693,26 +482,27 @@ vx_pm:
 
 ; vx_geom - vid_tab row VID_VESA (SPEC.md 39.2's nine words) and the kernel's
 ;           vx_bpp, from the chosen record (after INIT banked the kernel)
-; clobbers: ax, di, es
+; clobbers: ax, bx, cx, si, di, es, flags (DF clear)
 vx_geom:
     mov es, [vx_kseg]
     mov di, [vx_p_tabrow]
+    cld
     mov ax, [vx_wsel]           ; seg: A000h, or kern_mega's selector over
-    mov [es:di], ax             ; it once VXV_PM has run
+    stosw                       ; it once VXV_PM has run
     mov ax, [vx_bpsl]
-    mov [es:di+2], ax           ; stride
+    stosw                       ; stride
     xor ax, ax
-    mov [es:di+4], ax           ; bmask
-    mov [es:di+6], ax           ; bshift
+    stosw                       ; bmask
+    stosw                       ; bshift
     mov ax, [vx_bpsl]
-    mov [es:di+8], ax           ; rowadd
+    stosw                       ; rowadd
     xor ax, ax
-    mov [es:di+10], ax          ; wrapbit
-    mov [es:di+12], ax          ; wrapfix
+    stosw                       ; wrapbit
+    stosw                       ; wrapfix
     mov ax, [vx_x]
-    mov [es:di+14], ax          ; cw
+    stosw                       ; cw
     mov ax, [vx_y]
-    mov [es:di+16], ax          ; ch
+    stosw                       ; ch
     mov di, [vx_p_ep]
     mov al, [vx_bpp]
     xor ah, ah
@@ -729,7 +519,7 @@ vx_geom:
 ; -----------------------------------------------------------------------------
 vx_pick:
     cmp word [vx_kseg], 0
-    je .bad
+    je vx_init.stc
     push ax                     ; the caller is CTRL.DRV's page handler, whose
     push bx                     ; DI and BP are the pane it goes on to paint
     push cx                     ; (SPEC.md 1's register discipline: nothing
@@ -747,9 +537,6 @@ vx_pick:
     pop bx
     pop ax
     clc
-    ret
-.bad:
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -780,23 +567,18 @@ vx_next:
     call vx_find
     jc .firstc                  ; not offered: the first, and say so
     add si, VM_SIZE             ; the one after it...
-    mov ax, si
-    sub ax, vx_modes
-    mov di, ax
-    mov al, [vx_nmodes]
-    mov ah, VM_SIZE
-    mul ah                      ; AX = the table's end
-    cmp di, ax
+    mov al, VM_SIZE
+    mul byte [vx_nmodes]
+    add ax, vx_modes            ; AX = the table's end
+    cmp si, ax
     jb .answer                  ; ...or Auto after the last
 .none:
     xor dx, dx
-    xor cx, cx
-    clc
+    xor cx, cx                  ; (CF = 0)
     ret
 .firstc:
-    mov si, vx_modes
-    call .class
-    stc
+    call .first                 ; the first record's answer...
+    stc                         ; ...and CF = 1
     ret
 .first:
     mov si, vx_modes
@@ -807,10 +589,11 @@ vx_next:
 ; .class - SI = a record -> CL = its class byte, DL/DH = X/8, Y/8, CH = bpp
 .class:
     call vx_encode              ; CL (CF = 1 cannot happen: vx_offer refused it)
-    mov [vx_tmpc], cl
+    push cx
     call vx_decode              ; DL/DH = X/8, Y/8, CL = bpp
     mov ch, cl
-    mov cl, [vx_tmpc]           ; CL = the class byte, CH = the depth
+    pop ax
+    mov cl, al                  ; CL = the class byte, CH = the depth
     ret
 
 ; =============================================================================
@@ -869,18 +652,15 @@ vx_prim:
     mov [bp+2], bx              ; pops the hooked body's own return
 .on:
     and al, VX_SELM
-    mov [vx_sel], al
-    mov ax, [bp+F_AX]           ; the two registers the read spent, back
-    mov bx, [bp+F_BX]
-    cmp byte [vx_sel], VX_NSEL
+    cmp al, VX_NSEL
     jae .refuse
-    push bx
-    mov bl, [vx_sel]
-    xor bh, bh
-    add bx, bx
+    cbw                         ; (VX_SELM: AH = 0)
+    add ax, ax
+    xchg ax, bx
     mov bx, [vx_jt+bx]
     mov [vx_tgt], bx
-    pop bx
+    mov ax, [bp+F_AX]           ; the two registers the read spent, back
+    mov bx, [bp+F_BX]
     call [vx_tgt]               ; the body: CF is its answer
     jmp short .out
 .refuse:
@@ -918,10 +698,6 @@ vx_jt:
 %if ($ - vx_jt) / 2 != VX_NSEL
   %error "vx_jt has drifted from vxabi.inc's selectors"
 %endif
-
-vxp_refuse:
-    stc
-    ret
 
 ; =============================================================================
 ; THE WINDOW (SPEC.md 120.8)
@@ -1078,40 +854,36 @@ vx_addr:
 ; clobbers: ax, cx, di, flags
 ; -----------------------------------------------------------------------------
 vx_rowfill:
+    push bx
     cmp byte [cs:vx_bpp], 8
     jne .w16
-    ; bytes: does DI + CX carry?
-    mov ah, al
-    push bx
-    mov bx, di
+    mov bx, di                  ; bytes: does DI + CX carry?
     add bx, cx
     jnc .one8
-    ; straddle: BX = bytes past the edge, CX - BX = bytes before it
+    ; straddle: BX = bytes past the edge, CX - BX = bytes before it. AL is
+    ; the colour throughout: `rep stosb` and vx_nextwin keep it
     push bx
     sub cx, bx
-    mov al, ah
     rep stosb
     call vx_nextwin
     xor di, di
     pop cx
 .one8:
-    mov al, ah
     rep stosb
     pop bx
     ret
 .w16:
-    push bx
     xor ah, ah
     mov bx, ax
     add bx, bx
     mov ax, [cs:vx_pal16+bx]    ; AX = the RGB word
-    mov bx, di
-    add bx, cx
-    add bx, cx                  ; DI + 2*CX
-    jnc .one16
-    push bx
-    shr bx, 1                   ; words past the edge
-    sub cx, bx
+    mov bx, cx                  ; DI + 2*CX, as 2*CX first: CX is at most
+    add bx, bx                  ; 1,024 pixels, so only the add of DI can
+    add bx, di                  ; carry. (DI + CX first lost the carry of a
+    jnc .one16                  ; run more than half past the edge, which
+    push bx                     ; then wrapped onto the window's own first
+    shr bx, 1                   ; bytes - until driver size pass 1)
+    sub cx, bx                  ; words past the edge, and before it
     rep stosw
     call vx_nextwin
     xor di, di
@@ -1190,7 +962,9 @@ vx_skip:
 ; -----------------------------------------------------------------------------
 ; vx_clip - clip the rect AX/BX/CX/DX (x1,y1,x2,y2 inclusive, signed) to the
 ;           display
-; out: CF = 1 nothing left; else the rect clipped, CF = 0
+; out: CF = 1 nothing left; else CF = 0, AX/BX = the clipped x1/y1, and
+;      DX = [vx_rows] = its rows, CX = [vx_w] = its pixels a row - the six
+;      instructions each of its four callers ran after it, run here once
 ; -----------------------------------------------------------------------------
 vx_clip:
     or ax, ax
@@ -1215,7 +989,12 @@ vx_clip:
     jg .none
     cmp bx, dx
     jg .none
-    clc
+    sub dx, bx
+    inc dx
+    mov [vx_rows], dx           ; DX = rows
+    sub cx, ax                  ; (CF = 0: 0 <= x1 <= x2, so no borrow)
+    inc cx
+    mov [vx_w], cx              ; CX = pixels a row
     ret
 .none:
     stc
@@ -1243,17 +1022,9 @@ vxp_fill:
     and al, 15
     mov [vx_ink], ax
     pop ax
-    sub dx, bx
-    inc dx                      ; DX = rows
-    mov [vx_rows], dx
-    sub cx, ax
-    inc cx
-    mov [vx_w], cx              ; CX = pixels a row
 .row:
-    push ax
-    push bx
+    push ax                     ; (vx_addr keeps BX and CX)
     call vx_addr                ; ES:DI = (x1, y)
-    pop bx
     pop ax
     mov cx, [vx_w]
     cmp byte [vx_ink+1], 0
@@ -1318,19 +1089,11 @@ vx_rgb2ix:
 ; VX_GRAY - gfx_fill_gray_raw: (x+y) even = white, odd = black (SPEC.md 5)
 ; -----------------------------------------------------------------------------
 vxp_gray:
-    call vx_clip
+    call vx_clip                ; [vx_rows], [vx_w]
     jc .out
-    sub dx, bx
-    inc dx
-    mov [vx_rows], dx
-    sub cx, ax
-    inc cx
-    mov [vx_w], cx
 .row:
-    push ax
-    push bx
+    push ax                     ; (vx_addr keeps BX and CX)
     call vx_addr
-    pop bx
     pop ax
     mov cx, [vx_w]
     mov dx, ax
@@ -1358,11 +1121,10 @@ vxp_gray:
 ;          takes byte (y & 7), bit 7 is x = 0 mod 8, a set bit is WHITE
 ; -----------------------------------------------------------------------------
 vxp_pat:
-    call vx_clip
-    jc .out
-    push cx                     ; x2: the copy's count spends CX, and a width
-    push ds                     ; cut from the leftover 0 was -103 pixels, which
-    push es                     ; the row loop drew as 65,433 across the desktop
+    call vx_clip                ; [vx_rows], [vx_w] - BEFORE the copy spends
+    jc .out                     ; CX: a width cut from its leftover 0 was -103
+    push ds                     ; pixels, which the row loop drew as 65,433
+    push es                     ; across the desktop
     push ds
     pop es                      ; ES = ours, the copy's destination
     mov si, [vx_p_pat]
@@ -1374,18 +1136,9 @@ vxp_pat:
     rep movsw                   ; copied, so the row loop reads them through CS
     pop es
     pop ds
-    pop cx
-    sub dx, bx
-    inc dx
-    mov [vx_rows], dx
-    sub cx, ax
-    inc cx
-    mov [vx_w], cx
 .row:
-    push ax
-    push bx
+    push ax                     ; (vx_addr keeps BX and CX)
     call vx_addr
-    pop bx
     pop ax
     mov cx, [vx_w]
     mov si, bx
@@ -1432,9 +1185,8 @@ vxp_save:
     mov si, [bp+F_DI]           ; the buffer cursor (ES = the caller's)
     mov [vx_buf], si
 .row:
-    push ax
-    push bx
-    push es
+    push ax                     ; (vx_addr keeps BX, and the row's loops
+    push es                     ; do not touch it)
     call vx_addr                ; ES:DI = the row's first pixel in VRAM
     mov si, di
     mov ax, es
@@ -1488,7 +1240,6 @@ vxp_save:
 .rdone:
     pop ds
     mov [vx_buf], di
-    pop bx
     pop ax
     inc bx
     dec word [vx_rows]
@@ -1528,8 +1279,7 @@ vxp_restore:
     mov [vx_buf], si
     mov ax, [vx_x1]             ; x1 again: the arithmetic above spent AX
 .row:
-    push ax
-    push bx
+    push ax                     ; (vx_addr, vx_rowcopy and vx_px keep BX)
     call vx_addr                ; ES:DI = VRAM
     push ds
     mov ds, [bp+F_ES]           ; DS:SI = the buffer
@@ -1564,7 +1314,6 @@ vxp_restore:
     add si, [cs:vx_rs]
     pop ds
     mov [vx_buf], si
-    pop bx
     pop ax
     inc bx
     dec word [vx_rows]
@@ -1585,15 +1334,9 @@ vxp_restore:
 vx_sr_setup:
     and al, 0xF8
     or cl, 7
-    call vx_clip
+    call vx_clip                ; [vx_rows], [vx_w]
     jc .out
     mov [vx_x1], ax
-    sub dx, bx
-    inc dx
-    mov [vx_rows], dx
-    sub cx, ax
-    inc cx
-    mov [vx_w], cx
     push ds
     mov ds, [vx_kseg]
     mov si, [cs:vx_p_pn]
@@ -1640,10 +1383,8 @@ vxp_fontchar:
     mov ax, cx
     mov bx, dx
 .row:
-    push ax
-    push bx
+    push ax                     ; (vx_addr keeps BX and CX)
     call vx_addr
-    pop bx
     pop ax
     push ds
     mov ds, [vx_fseg]
@@ -1738,14 +1479,12 @@ vxp_icon:
     js .next
     cmp ax, [vx_x]
     jae .next
-    push ax
-    push bx
+    push ax                     ; (vx_addr and vx_px keep BX)
     push dx
     call vx_addr
     pop dx
     mov al, [vx_pcol]
     call vx_px
-    pop bx
     pop ax
 .next:
     inc ax
@@ -1851,8 +1590,7 @@ vx_cursave:
     mov dx, [vx_ch]
 .row:
     mov ax, [vx_cx]
-    push bx
-    push dx
+    push dx                     ; (vx_addr keeps BX)
     call vx_addr                ; ES:DI = VRAM
     mov si, di
     push ds
@@ -1876,7 +1614,6 @@ vx_cursave:
     mov [es:vx_buf], di
     pop ds
     pop dx
-    pop bx
     inc bx
     dec dx
     jnz .row
@@ -1897,8 +1634,7 @@ vx_currest:
     mov dx, [vx_sch]
 .row:
     mov ax, [vx_scx]
-    push bx
-    push dx
+    push dx                     ; (vx_addr keeps BX)
     push si
     call vx_addr                ; ES:DI = VRAM
     pop si
@@ -1916,7 +1652,6 @@ vx_currest:
     loop .w
 .d:
     pop dx
-    pop bx
     inc bx
     dec dx
     jnz .row
@@ -1930,8 +1665,7 @@ vx_curdraw:
     mov [vx_glyph], si
 .row:
     mov ax, [vx_cx]
-    push bx
-    push dx
+    push dx                     ; (vx_addr, vx_px and vx_skip keep BX)
     call vx_addr
     push ds
     mov ds, [vx_kseg]
@@ -1959,7 +1693,6 @@ vx_curdraw:
 .n:
     loop .px
     pop dx
-    pop bx
     inc bx
     dec dx
     jnz .row
@@ -2055,9 +1788,7 @@ vxp_blit4:
     cmp bx, [vx_y]
     jae .out                    ; off the bottom: the rest is too
     mov ax, [vx_bxs]
-    push bx
-    call vx_addr                ; ES:DI = (xs, y)
-    pop bx
+    call vx_addr                ; ES:DI = (xs, y) (BX kept)
     mov si, [vx_bxs]
     sub si, [vx_bx0]            ; SI = pixels into the block
     mov cx, si
@@ -2150,9 +1881,7 @@ vxp_blitd:
     cmp bx, [vx_y]
     jae .out                    ; off the bottom: the rest is too
     mov ax, [vx_bxs]
-    push bx
-    call vx_addr                ; ES:DI = (xs, y)
-    pop bx
+    call vx_addr                ; ES:DI = (xs, y) (BX kept)
     mov si, [vx_bxs]
     sub si, [vx_bx0]            ; SI = pixels into the block...
     cmp byte [vx_bpp], 8
@@ -2263,9 +1992,7 @@ vxp_blit1:
     je .out
 .row:
     mov ax, [vx_bx0]
-    push bx
-    call vx_addr                ; ES:DI = (x, y)
-    pop bx
+    call vx_addr                ; ES:DI = (x, y) (BX kept)
     mov si, [vx_bsrc]
     mov cx, [vx_bnb]
     push ds
@@ -2375,9 +2102,7 @@ vxp_scroll:
     pop ds
     pop bx
     mov ax, [vx_bx0]
-    push bx
-    call vx_addr                ; ES:DI = the destination
-    pop bx
+    call vx_addr                ; ES:DI = the destination (BX kept)
     mov si, vx_rowbuf           ; DS:SI = the bounce (DS = CS)
     mov cx, [vx_w]
     cmp byte [vx_bpp], 8
@@ -2446,11 +2171,9 @@ vxp_spans:
     sub dx, cx
     inc dx                      ; DX = pixels
     mov ax, cx
-    push bx
-    call vx_addr
-    pop bx
-    mov cx, dx
-    mov al, [vx_ink]
+    mov cx, dx                  ; ...into CX BEFORE vx_addr, which spends DX
+    call vx_addr                ; (on the window number: the width was that,
+    mov al, [vx_ink]            ; until driver size pass 1) and keeps BX, CX
     call vx_rowfill
 .next:
     inc bx
@@ -2525,11 +2248,9 @@ vxp_fontrun:
     mov dh, 8                   ; rows
 .grow:
     mov ax, [vx_bx0]
-    push bx
-    push dx
+    push dx                     ; (vx_addr keeps BX)
     call vx_addr
     pop dx
-    pop bx
     push ds
     mov ds, [vx_fseg]
     mov si, [cs:vx_glyph]
@@ -2581,17 +2302,211 @@ vx_tab:                         ; the attach answer (VXS_*)
 
 vx_win      dw 0xFFFF           ; the window 4F05h last set (none)
 vx_bpp      db 8                ; what the kernel is told: 8 or 16
-vx_depth    db 8                ; the mode's own: 8, 15 or 16
-vx_wsh      db 0                ; the window shift
-vx_sel      db 0
 vx_wsel     dw VX_WSEG          ; window A as the CPU loads it: A000h, or the
                                 ; selector kern_mega hands VXV_PM
 vx_dispi    db 0                ; 1: banked through the dispi port (vx_pm)
 vx_onstk    db 0                ; 1: an int 10h is out on our stack (vx_int10)
 vx_stktop   dw vx_rowbuf + 2048 ; ...whose top: the bounce while attach
-                                ; probes, the probe's buffers after it
+                                ; probes, vx_stkend after it
+
+; =============================================================================
+; vx_once - THE ATTACH-ONLY CODE, and the int 10h stack that replaces it
+; (driver size pass 1; XMEM.DRV's xm_once and USBMOUSE.DRV's um_buf shape)
+;
+; vx_attach and vx_offer run once per image - vx_entry admits an ATTACH only
+; while [vx_nmodes] is 0, a success leaves it 1 or more and a refusal frees
+; the image - and then vx_attok, outside the region, zeroes VX_STK bytes from
+; here and points [vx_stktop] at their end: the stack every later int 10h
+; hops onto (vx_int10). VX_STK is the 768 bytes of the probe's two buffers
+; that stack used to be plus the 130 of the mode list's copy below them,
+; which it could run into before reaching anything live - the same depth,
+; and nothing live under it.
+;
+; While attach runs, the VBE info block is the zeroed tail of the region and
+; the mode-information block and the list's copy are the foot of the
+; scroll's bounce, whose top is the stack the probe's int 10h calls hop onto
+; (1,662 bytes of it): the bounce holds nothing until a mode is set.
+; =============================================================================
+VX_STK      equ 898
+vx_once:
+; -----------------------------------------------------------------------------
+; vx_attach - DRVV_ATTACH: is there a VBE, and which of its modes is ours?
+; out: CF = 0 and SI = vx_tab (the VXS_* answer, in this segment); CF = 1 and
+;      AL = DRVE_HW when there is no VBE 1.2+, or no mode this image accepts
+; clobbers: everything but the segment registers it does not own
+;
+; Nothing is hooked and no mode is set - the kernel switches after it has
+; armed the far pointer, and a refusal frees this image with nothing to undo.
+; -----------------------------------------------------------------------------
+vx_attach:
+    push es
+    push bx                     ; PRESERVE BX: the kernel reads the row through
+                                ; it on return (SPEC.md 51.2), and the probe
+                                ; below spends it
+    mov [vx_want], cl           ; the class SYSTEM.CFG asks for (120.2.3),
+                                ; one byte, 0 = Auto
+    push ds
+    pop es                      ; ES = ours for the BIOS's buffers
+    mov di, vx_vbe
+    mov word [di], 'VB'         ; the pre-signature a VBE 2.0 BIOS answers
+    mov word [di+2], 'E2'       ; with the 512-byte form
+    mov ax, VBE_INFO
+    call vx_int10               ; on our own stack (vx_int10)
+    cmp ax, VBE_OK
+    jne .nohw
+    mov si, vx_vbe              ; (no register but AX is trusted across it)
+    cmp word [si+VI_SIG], 'VE'
+    jne .nohw
+    cmp word [si+VI_SIG+2], 'SA'
+    jne .nohw
+    cmp word [si+VI_VER], 0x0102
+    jb .nohw                    ; 1.0 and 1.1: no direct-colour fields, no
+                                ; reliable window attributes (SPEC.md 120.2.1)
+
+    ; --- copy the mode list OUT before any 4F01h can overwrite it ------------
+    ; (a 1.x BIOS may point it inside the very buffer just filled)
+    push ds
+    lds si, [si+VI_MODES]       ; DS:SI = the BIOS's list
+    mov di, vx_list             ; ES:DI = our copy (ES = CS)
+    mov cx, VX_LISTMAX
+    cld
+.lcopy:
+    lodsw
+    stosw
+    cmp ax, 0xFFFF
+    je .lend
+    loop .lcopy
+    mov ax, 0xFFFF              ; a list longer than we walk ends here
+    stosw                       ; (the copy has VX_LISTMAX+1 words for this)
+.lend:
+    pop ds
+
+    ; --- ask about each, and keep the ones this image can draw ---------------
+    mov si, vx_list             ; ([vx_nmodes] is 0: vx_entry's guard)
+.mode:
+    lodsw
+    cmp ax, 0xFFFF
+    je .chosen
+    mov cx, ax
+    push si
+    mov ax, VBE_MINFO
+    mov di, vx_minfo
+    call vx_int10
+    cmp ax, VBE_OK
+    jne .skip
+    call vx_offer               ; CX = the mode: appended if acceptable
+.skip:
+    pop si                      ; (vx_offer spends SI on its copy)
+    cmp byte [vx_nmodes], VX_NMODES
+    jb .mode
+
+    ; --- the class asked for, else Auto (SPEC.md 120.2.3) ------------------------
+.chosen:
+    cmp byte [vx_nmodes], 0
+    jne vx_attok                ; out of the region, which it zeroes
+.nohw:
+    pop bx
+    pop es
+    mov al, DRVE_HW
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; vx_offer - is the mode in vx_minfo one this image draws? Append it if so.
+; in:  CX = the mode number, [vx_minfo] filled by 4F01h, ES = ours
+; clobbers: ax, bx, cx, dx, si, di
+; -----------------------------------------------------------------------------
+vx_offer:
+    mov ax, [vx_minfo+MI_ATTR]
+    and al, 0x19                ; supported, colour, graphics
+    cmp al, 0x19
+    jne .no
+    mov al, [vx_minfo+MI_WINA]
+    and al, 0x05                ; window A exists and is writable
+    cmp al, 0x05
+    jne .no
+    cmp word [vx_minfo+MI_SEGA], VX_WSEG
+    jne .no
+    cmp word [vx_minfo+MI_WSIZE], 64
+    jne .no
+    ; the granularity: a power of two, 1..64 KB, as the window shift BH =
+    ; 6 - log2(granularity KB) - a 64KB page is 64/gran windows. The lowest
+    ; set bit is shifted out at BH's count; a bit above it (ZF clear) is not
+    ; a power of two, and none by bit 6 (BH below 0) is 0 or past 64
+    mov ax, [vx_minfo+MI_GRAN]
+    mov bh, 6
+.g:
+    shr ax, 1
+    jc .gbit
+    dec bh
+    jns .g
+.no:
+    ret
+.gbit:
+    jnz .no                     ; not a power of two
+    ; the depth and the model: 8 with packed pixel (4), 15 or 16 with direct
+    ; colour (6), as one word each
+    mov al, [vx_minfo+MI_BPP]
+    mov ah, [vx_minfo+MI_MODEL]
+    cmp ax, 0x0408
+    je .depthok
+    cmp ax, 0x060F
+    je .depthok
+    cmp ax, 0x0610
+    jne .no
+.depthok:
+    mov dx, [vx_minfo+MI_XRES]  ; DX = the bytes a row needs (AL = the depth)
+    cmp al, 8
+    je .bpsl8
+    add dx, dx                  ; two bytes a pixel
+.bpsl8:
+    ; the geometry
+    mov ax, [vx_minfo+MI_XRES]
+    test al, 7
+    jnz .no                     ; a multiple of 8 (SPEC.md 11.94)
+    sub ax, VX_XMIN
+    cmp ax, VX_XMAX - VX_XMIN
+    ja .no                      ; (unsigned: below VX_XMIN wraps above it)
+    mov ax, [vx_minfo+MI_YRES]
+    sub ax, VX_YMIN
+    cmp ax, VX_YMAX - VX_YMIN
+    ja .no
+    mov ax, [vx_minfo+MI_BPSL]
+    cmp ax, VX_BPSLMAX
+    ja .no
+    cmp ax, dx
+    jb .no                      ; a stride shorter than a row
+    ; --- accept: append the record, the two runs vx_minfo has in our order --
+    mov al, VM_SIZE
+    mul byte [vx_nmodes]
+    add ax, vx_modes
+    xchg ax, di                 ; DI = the record
+    xchg ax, cx                 ; AX = the mode number
+    cld
+    stosw                       ; VM_MODE
+    mov si, vx_minfo+MI_BPSL
+    movsw                       ; VM_BPSL
+    movsw                       ; VM_X
+    movsw                       ; VM_Y
+    mov al, [vx_minfo+MI_BPP]
+    mov ah, bh
+    stosw                       ; VM_BPP, VM_WSH
+    mov si, vx_minfo+MI_RSIZE
+    movsw                       ; VM_RSIZE, VM_RPOS
+    movsw                       ; VM_GSIZE, VM_GPOS
+    movsw                       ; VM_BSIZE, VM_BPOS
+    inc byte [vx_nmodes]
+    ret
+
+vx_once_end:
 
     OS88_STATE
+vx_vbe      times 512 db 0      ; 4F00h's buffer while attach runs (above)
+            times VX_STK - ($ - vx_once) db 0
+vx_stkend:
+%if vx_stkend - vx_once != VX_STK || (VX_STK & 1)
+  %error "vx_once's code and vx_vbe outgrew VX_STK"
+%endif
 vx_oss      dw 0                ; vx_int10's banked SS:SP and FLAGS
 vx_osp      dw 0
 vx_ofl      dw 0
@@ -2634,9 +2549,13 @@ vx_p_null   dw 0                ; ...and the kernel's draw-nothing entry
 vx_x        dw 0                ; the chosen mode's geometry
 vx_y        dw 0
 vx_bpsl     dw 0
+vx_depth    db 0                ; the mode's own depth: 8, 15 or 16 } ONE WORD:
+vx_wsh      db 0                ; ...and the window shift          } vx_publish
+%if vx_wsh != vx_depth + 1 || VM_WSH != VM_BPP + 1
+  %error "vx_publish copies VM_BPP and VM_WSH into vx_depth and vx_wsh as one word"
+%endif
 vx_cur      dw 0                ; -> the chosen record
 vx_want     db 0                ; the class byte asked for (0 = Auto)
-vx_tmpc     db 0
 vx_nmodes_w:                    ; ...the count, as a word (the byte then a 0)
 vx_nmodes   db 0
             db 0
@@ -2668,7 +2587,6 @@ vx_scw      dw 0
 vx_sch      dw 0
 vx_ctab     dw 0
 vx_x1       dw 0
-vx_a1       dd 0
 vx_bx0      dw 0                ; the S2 bodies' scratch
 vx_bxs      dw 0
 vx_bsrc     dw 0
@@ -2684,10 +2602,12 @@ vx_fbase    dw 0
 vx_patbuf   times 8 db 0
 vx_pal16    times 16 dw 0       ; the 16 desktop colours as RGB words (16bpp)
 vx_cursave_b times CUR_GW * CUR_GH * 2 db 0
-vx_rowbuf   times 2048 db 0     ; one row at the widest and deepest mode, the
-                                ; scroll's bounce
 vx_modes    times VX_NMODES * VM_SIZE db 0
-vx_list     times (VX_LISTMAX + 1) * 2 db 0
-vx_minfo    times 256 db 0
-vx_vbe      times 512 db 0
+vx_rowbuf   times 2048 db 0     ; one row at the widest and deepest mode, the
+                                ; scroll's bounce - and while attach runs,
+vx_minfo    equ vx_rowbuf       ; 4F01h's 256 bytes at its foot,
+vx_list     equ vx_rowbuf + 256 ; the mode list's copy over them (vx_once)
+%if (vx_list + (VX_LISTMAX + 1) * 2) - vx_rowbuf > 2048 - 1024
+  %error "the probe's buffers leave the attach's int 10h too little of the bounce"
+%endif
     OS88_DRV_END

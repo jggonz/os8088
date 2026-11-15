@@ -1672,7 +1672,7 @@ DRVM_IMG_USBM equ 3             ; ceil(build/usbmouse.drv / 512)
 DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 18              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
-DRVM_IMG_VESA equ 16             ; ceil(build/vesa.drv / 512)
+DRVM_IMG_VESA equ 15             ; ceil(build/vesa.drv / 512)
 DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512): 17,074
                                 ; (ETHER.DRV's SLEEP/WAKE crossed ITS rung,
                                 ; 17,345 -> 17,510, and the size pass that

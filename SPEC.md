@@ -236082,8 +236082,8 @@ three-byte pixel defeats every word-wide inner loop and a 1024x768x32 fill is
 3 MB through a 64KB window.
 
 The accepted modes are kept in a table in the driver's bss, at most **16**
-(`VX_NMODES`), each a 12-byte record: mode number, X, Y, bpp,
-BytesPerScanLine, granularity shift and the two colour-field layouts.
+(`VX_NMODES`), each a 16-byte record: mode number, BytesPerScanLine, X, Y,
+bpp, granularity shift and the three colour fields' size and position.
 
 #### 120.2.3 Which one is used — Auto, and the `VE` key
 
@@ -236337,8 +236337,11 @@ reads its frame through BP.
 is a deep call: Bochs's vgabios took `4F01h` some 650 bytes below the boot's
 frame, through task 0's 512-byte stack and into `mem_tab`'s tail, and the
 next compaction called a "relocation proc" at a pushed register. `vx_int10`
-hops SS:SP onto the scroll's 2KB bounce while attach probes and onto the
-probe's own 768 bytes of buffers after it. It is not nested (a hook that
+hops SS:SP onto the scroll's 2KB bounce while attach probes - 1,662 bytes
+of it, the `4F01h` block and the mode list's copy sitting at its foot - and
+after it onto 898 bytes of its own: the attach-only code (`vx_once`) and
+the `4F00h` buffer, zeroed once attach has chosen (driver size pass 1;
+the probe's two buffers were that stack's 768 bytes before). It is not nested (a hook that
 arrives inside a hop runs on the stack it has) and it does not hop in
 protected mode, where the reflection has a stack of its own. The kernel
 already treats a foreign SS as a ROM's: `sch_switch` will not switch tasks
