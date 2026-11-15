@@ -210,9 +210,9 @@
   "sources": [
    "drivers/cdrom"
   ],
-  "stamped": "dda3902c",
-  "strings": "c3a141853e1e7543",
-  "why": "Which system disks carry it: the 360KB one leaves it out (SPEC.md 119.6.7)"
+  "stamped": "805fccbe",
+  "strings": "f49184823d03297f",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "CHARTER_F88": {
   "sources": [],
@@ -561,17 +561,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "98a487a2",
-  "strings": "e6fb502f9e95b17d",
-  "why": "Format window rows use the install engine's State words (SPEC.md 52.2.2.1); page updated"
+  "stamped": "805fccbe",
+  "strings": "9d5f6081625c240a",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "98a487a2",
-  "strings": "e6fb502f9e95b17d",
-  "why": "HDDTOOL.DRV-side change only; nothing the page describes"
+  "stamped": "805fccbe",
+  "strings": "9d5f6081625c240a",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "HELLO_O88": {
   "sources": [
@@ -605,17 +605,17 @@
   "sources": [
    "drivers/httpfs"
   ],
-  "stamped": "cbabc048",
-  "strings": "3c04230d6d85ba66",
-  "why": "new pages, written from SPEC.md 120 and the drivers' own strings"
+  "stamped": "805fccbe",
+  "strings": "abf0c15953e0eb90",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "HTTPPAGE_DRV": {
   "sources": [
    "drivers/httpfs"
   ],
-  "stamped": "cbabc048",
-  "strings": "3c04230d6d85ba66",
-  "why": "new pages, written from SPEC.md 120 and the drivers' own strings"
+  "stamped": "805fccbe",
+  "strings": "abf0c15953e0eb90",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "INCONSOL_F88": {
   "sources": [],
@@ -771,9 +771,9 @@
   "sources": [
    "drivers/net"
   ],
-  "stamped": "9deeee7d",
-  "strings": "9bf50a723a7a10f7",
-  "why": "checked: only OS88NET.COM's /? help column moved (the /N line's indent); nothing the NET.DRV page says"
+  "stamped": "805fccbe",
+  "strings": "1540787f65a7f214",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "NOTEPAD_O88": {
   "sources": [
@@ -819,9 +819,9 @@
   "sources": [
    "drivers/net/os88net.asm"
   ],
-  "stamped": "9deeee7d",
-  "strings": "ea878454d744fb04",
-  "why": "checked: the /N line of the /? text gained the space that lines its description up with the others; the page's option table is unchanged"
+  "stamped": "805fccbe",
+  "strings": "c0be4d0f1d521357",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "PACCMAN": {
   "sources": [],
@@ -1443,9 +1443,9 @@
    "apps/wirearena",
    "tools/arenagen.py"
   ],
-  "stamped": "f4a4e8a2",
-  "strings": "cd83557002e8d201",
-  "why": "the page for WIRERENA.O88 (the file renamed from WARENA.O88 and the title made 'Wire Arena' by the owner): every setup row, key, weapon, mode, arena, message and link step read off apps/wirearena and SPEC.md 128; shots retaken under the new ids"
+  "stamped": "c5c88829c",
+  "strings": "6136f95b083a4c1c",
+  "why": "Detail drop-down in the setup (the slot right of Play, the address field's under Internet); Very High the 286 default with vsync"
  },
  "WORD": {
   "sources": [],

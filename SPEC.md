@@ -87392,6 +87392,15 @@ round: unicorn starts with MSW, IDTR and GDTR all ZERO, so a field the
 borrow never wrote read back equal to the reference. It seeds them now, and
 an IDT left unwritten fails it.
 
+**Driver size pass 1 (2026-11-15): 2,037 -> 2,015 bytes of image** (1,878 ->
+1,864 on the disk), no behaviour change: `xm_hma` banks only BX, DX and ES,
+the ones `xm_attach` holds across it, and far-calls COLDHMA.SYS through a
+pointer pushed on the stack rather than a dword in the image; `xm_arm` keeps
+no AX nobody reads; `xm_ltrip`'s leg banks SI rather than flipping it back.
+The region's code went 221 -> 207 bytes against the 208-byte scratch, so the
+SCRATCH is the bound now, by one byte, and the next byte of attach-only code
+taken out of the region buys nothing.
+
 ### 41.13 Tier 1 copies by LOADALL (2026-10-15)
 
 **On a 286, `XMV_COPY` moves its bytes with the 286's LOADALL instead of
@@ -110981,10 +110990,14 @@ technique:
   load this image can send them. They fall to the refusal with any unknown verb.
 
 **The pad in front of the sector buffers is TUNED, not fixed.** `hdsec.inc`
-aligns `hd_mbr` to 512, and three of `hddtool.asm`'s own routines sit after the
-buffers so that the code in front ends on the boundary (the comment there says
-how to re-tune it). A byte more in front costs 511 bytes of pad; the cure is
-moving a routine across the buffers, never padding.
+aligns `hd_mbr` to 512, and what sits after the buffers is chosen so that the
+code in front ends on the boundary (the comment in `hddtool.asm` says how to
+re-tune it). A byte more in front costs 511 bytes of pad; the cure is moving a
+routine or a string across the buffers, never padding. Since driver size pass
+1 the controls (`os88ui.inc`) and `ipkg.inc`'s code are what sit after them,
+and three routines and the install log's strings were moved in front to take
+a pad of 319 to 0: the image 16,508 -> 16,153, a 16,896-byte claim -> 16,384
+(docs/plans/completed/dsp1/hdd.md).
 
 ### 52.12 Every label on both surfaces is one opaque run
 
@@ -121700,12 +121713,14 @@ finds it); greedy costs about 3% here.
 
 #### 62.12.3 It needs no memory the program did not already need
 
-The staged body runs `0x3ACA..0x6426` (it was `0x4A01..0x76CD` before
-§62.12.6's size pass). `os88net.asm`'s own reserved buffers already run to
-`net_bss1` = **`0x995C`** (§62.11.7; `0x9F89` before the same pass took 1,581
-bytes of code and block mode's bss out from under them), so every machine with
-the room to run the unpacked program has the room to unpack this one, with
-**13,622 bytes to spare**. `tools/os88sfx.py` asserts the ceiling and refuses in a
+The staged body runs `0x37FE..0x6085` (it was `0x4A01..0x76CD` before
+§62.12.6's size pass, and `0x3B6F..0x6524` before driver size pass 1).
+`os88net.asm`'s own reserved buffers already run to `net_bss1` =
+**`0x9726`** (§62.11.7; `0x9F89` before §62.12.6's pass took 1,581 bytes of
+code and block mode's bss out from under them, and `0x9A01` before driver
+size pass 1 took 881 more and reserved 150 bytes of zeroed state the image
+had carried), so every machine with the room to run the unpacked program has
+the room to unpack this one, with **13,985 bytes to spare**. `tools/os88sfx.py` asserts the ceiling and refuses in a
 sentence if it is ever crossed, and `net_bss_clear` zeroes the staged body along
 with everything else above the image — by which time it has been read.
 
@@ -134750,11 +134765,13 @@ when the card has gone away.
 ### 72.3 Big-endian is the wire's and little-endian is ours
 
 `drivers/ether/inet.inc` — Ethernet framing, ARP, IP, ICMP echo, UDP and the
-checksums. There is not one `mov ax, [bx+IPO_LEN]` in it: a header word is
-fetched a byte at a time into AH then AL (`be_get`) or stored the same way
-(`be_put`), because a plain word access assembles, runs, and is wrong by a
-factor of 256 — which for a length means a packet either enormous or empty and
-for a port a socket nobody can find.
+checksums. No header word in it is used as it is loaded: it is turned round
+with `xchg ah, al` before it means anything and again before it is stored, or
+compared in place against a constant `BE16()` turned round at assembly time
+(the `be_get`/`be_put` pair, a byte at a time behind a call, until driver size
+pass 1), because a plain word access used as it stands assembles, runs, and is
+wrong by a factor of 256 — which for a length means a packet either enormous or
+empty and for a port a socket nobody can find.
 
 **The checksum is the one deliberate exception.** The one's complement sum of a
 byte-swapped stream is the byte swap of the sum, so ordinary word loads plus a
@@ -145408,6 +145425,20 @@ settings window drives its buttons through arm/fire itself), the mode procs'
 register banking deleted — `sv_entry` already banks every register the
 contract preserves — and the cube's per-frame vertex copy, which fed only the
 erase path §79.5.6.1 deleted, removed with it.
+
+**Driver size pass 1 took it to image 8,933 bytes, file 6,009** (from 10,247
+and 7,108), every picture unchanged frame for frame
+(docs/plans/completed/dsp1/saver.md). Two things there change what this section
+describes. **Only the sine table's first quarter ships**: `sv_do_start`
+mirrors entries 0..64 into the other 191 at every session start, and the
+build reads `apps/wire/wiresin.inc` itself and refuses one whose symmetry the
+mirror would not reproduce, so the table is still WIREFRAME's. And routines
+with one caller are written into it, so several names in §79.5's accounts -
+`sv_clear`, `sv_cube_proj`/`compose`/`put`, `sv_bnd_build`/`sv_bnd_shift`,
+`sv_fish_one`/`where`, `sv_star_plot` - now name the PARTS of `sv_pick`,
+`sv_cube_step`, `sv_fish_blit`, `sv_fish_step` and `sv_star_step`, each still
+headed by its old comment. `sv_step` survives as a label, because
+`tests/fishfit.py` and `tests/fishedge.py` break on it.
 
 ### 79.3 The five verbs
 
@@ -236296,8 +236327,8 @@ three-byte pixel defeats every word-wide inner loop and a 1024x768x32 fill is
 3 MB through a 64KB window.
 
 The accepted modes are kept in a table in the driver's bss, at most **16**
-(`VX_NMODES`), each a 12-byte record: mode number, X, Y, bpp,
-BytesPerScanLine, granularity shift and the two colour-field layouts.
+(`VX_NMODES`), each a 16-byte record: mode number, BytesPerScanLine, X, Y,
+bpp, granularity shift and the three colour fields' size and position.
 
 #### 120.2.3 Which one is used — Auto, and the `VE` key
 
@@ -236551,8 +236582,11 @@ reads its frame through BP.
 is a deep call: Bochs's vgabios took `4F01h` some 650 bytes below the boot's
 frame, through task 0's 512-byte stack and into `mem_tab`'s tail, and the
 next compaction called a "relocation proc" at a pushed register. `vx_int10`
-hops SS:SP onto the scroll's 2KB bounce while attach probes and onto the
-probe's own 768 bytes of buffers after it. It is not nested (a hook that
+hops SS:SP onto the scroll's 2KB bounce while attach probes - 1,662 bytes
+of it, the `4F01h` block and the mode list's copy sitting at its foot - and
+after it onto 898 bytes of its own: the attach-only code (`vx_once`) and
+the `4F00h` buffer, zeroed once attach has chosen (driver size pass 1;
+the probe's two buffers were that stack's 768 bytes before). It is not nested (a hook that
 arrives inside a hop runs on the stack it has) and it does not hop in
 protected mode, where the reflection has a stack of its own. The kernel
 already treats a foreign SS as a ROM's: `sch_switch` will not switch tasks
@@ -238250,8 +238284,8 @@ Measured at one build number against the tree before it:
 | | `kern_big` | `kern_small` |
 |---|---|---|
 | resident | **81 bytes**: `.text` +43 - `drv_tab`'s row (16), its two strings (22), `drv_fptr10`'s pair (4), `drv_svcix`'s byte (1) - and `.bss` +38, `drv_owner`'s word and the class's 36-byte service-table copy. `DRVC_CD`'s shape (§119.5), five bytes of longer name over it. No rung crossed (the image rung 409 -> 316 left). `.boot2` +1, `drv_cfgbit`'s byte, is not resident | 0 - byte-identical |
-| `HTTPFS.DRV` | **5,557 bytes of image, a 6 KB claim while attached; 3,658 on the floppy** (8 clusters at 360 KB), LZ4 - 7,927 / 5,653 with the page in it. The 1 KB reader is most of its bss | none |
-| `HTTPPAGE.DRV` | **2,357 bytes of image, a 3 KB claim while the panel shows the page; 2,030 on the floppy** - four 512-byte clusters, and under 2 KB as split. Half of it is the shared field (`os88line.inc`, 775) and button (`os88ui.inc`, 299) | none |
+| `HTTPFS.DRV` | **5,513 bytes of image, a 6 KB claim while attached; 3,584 on the floppy** (7 clusters at 360 KB), LZ4 - 7,927 / 5,653 with the page in it. The 1 KB reader is most of its bss. (5,557 / 3,658 when this was measured; driver size pass 1 took it to these) | none |
+| `HTTPPAGE.DRV` | **2,339 bytes of image, a 3 KB claim while the panel shows the page; 1,995 on the floppy** - four 512-byte clusters, and under 2 KB as split. Half of it is the shared field (`os88line.inc`, 775) and button (`os88ui.inc`, 299). (2,357 / 2,030 when this was measured) | none |
 | while mounted | the index's claim: `ceil((16 + 18 x records) / 1024)` KB - **2 KB for a system disk's 70 records**, 16 KB at `HF_MAXREC` | none |
 
 **On every `kern_big` system disk, the 360 KB one included**: §24.3.1.6
@@ -248920,16 +248954,16 @@ leaves the slot free for `PCIETHER.DRV`). What the row's builds add is the words
 `DRVE_CLASS`, `Class already in use`, in place of `DRVE_TWICE`'s
 `Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** on every
 build that has the row (§125.8 item 2), so one settings file means the same
-on all three. Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (34
-half-KB: 17,153 bytes with its bss) + `DRVM_RT_PCIETH` (23: `rt_claim`'s
+on all three. Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (35
+half-KB: 17,432 bytes with its bss, the UDP verbs of §72.24 included) + `DRVM_RT_PCIETH` (23: `rt_claim`'s
 ring, slack, overrun and transmit buffer, `RT_CLAIM` = 11,280 bytes, held
 from attach to detach) + `DRVM_SK_PCIETH` (21: the socket pool at the
 **middle** rung, because `sk_cardcap` holds a rung to the 8KB ring less
-`SK_RINGSLK` and `SK_RXMAX` never fits) = **78 half-KB, 39 KB** — against
-`ETHER.DRV`'s 67. The two are alternatives, so the big builds' `DRVC_NET`
-ceiling is the larger and not their sum: `DRVM_CEIL_NET_PCI` = 39, which every
+`SK_RINGSLK` and `SK_RXMAX` never fits) = **79 half-KB, 40 KB** — against
+`ETHER.DRV`'s 68. The two are alternatives, so the big builds' `DRVC_NET`
+ceiling is the larger and not their sum: `DRVM_CEIL_NET_PCI` = 40, which every
 `DOS.O88` quotes (the shipped one and kern_mega's `-DDOS_MEGA` copy), while
-`DRVM_CEIL_NET` stays 34 for kern_small, which has no PCI row and no DOS
+`DRVM_CEIL_NET` is 34 (35 with §72.24's UDP before driver size pass 1) for kern_small, which has no PCI row and no DOS
 (§51.12.1; `tests/unit/t_drvmem.py` re-derives every term from
 `drivers/pciether/`). Not wanted by default (§51.3). When both rows are
 wanted, `drv_boot` walks the table in row order, so `ETHER.DRV` (row 2) is
@@ -251426,7 +251460,8 @@ disagree, this section and the source win.
     pushed far return enters it (`wa_rcall`), so no vector is read
     through CS;
   - part 1, `OP_ASSET`, `OP_COMP`: the POSE part, the figures'
-    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`);
+    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`),
+    delta-coded in the file (128.3);
   - parts 2.., `OP_ASSET`, `OP_LAZY | OP_COMP`: one ARENA each (128.4),
     fetched when a match needs it.
 - **Moves.** The region is `OS88_REGION_MOVABLE`, and the carve is
@@ -251462,8 +251497,9 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
   (`wa_attrc`). On an MDA-class page 01h is an underline and 08h is nothing,
   so the colour table there is wrong. (Before 17.6 the test was `FSI_SEG ==
   B000h`, which is never true on kern_mega: `tests/wamono.py`.)
-- **Presentation** writes only the cells that changed. V waits for the
-  vertical retrace before presenting (`OSAPI_FSX_WAIT`).
+- **Presentation** writes only the cells that changed. With vsync on it
+  waits for the vertical retrace before presenting (`OSAPI_FSX_WAIT`):
+  V turns it on and off, and a detail level sets it (Very High's alone).
 - **A setting a key changes SAYS SO** in the HUD's message cell for four
   seconds (`WA_HMSGT`, 120 ticks): the name grey, what it is now bright -
   `Detail Medium`, `Vsync on`, `Columns 80` (`wa_hudset`), and `Mouse
@@ -251472,8 +251508,11 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The detail levels** are F1..F5: Very Low, Low, Medium, High, Very
   High. Each is one row of `wa_levtab`: the renderer's `LK_*` options, the
   floor grid, stepped treads, dashed floor lines and the small-figure
-  threshold. Moving an option between levels is a change to that table and
-  nothing else. The default is Medium on an 8086/8088 and High on a 286 or better.
+  threshold, and last vsync - Very High's alone, because a 286 runs Very
+  High past the monitor's refresh (the owner, 2026-11-15). Moving an
+  option between levels is a change to that table and nothing else. The
+  default is Medium on an 8086/8088 and Very High (vsync on) on a 286 or
+  better; the setup's Detail drop-down shows it and picks one too (128.6).
 
 ### 128.3 The simulation, the input and the renderer part
 
@@ -251496,9 +251535,23 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The renderer part's ABI** is `apps/wirearena/wafb.inc`, which both
   halves include, so the FRAME BLOCK is one layout:
   - **The part's header**: `'WRPART'`, then at +6 the ABI byte
-    (`WR_ABI`, 14) and at +7 the verb count (`WR_NVERB`, 6). From +8
-    there is a word per verb, its offset. The primary refuses a mismatch at
-    launch with *Renderer part mismatch*.
+    (`WR_ABI`, 16) and at +7 the verb count (`WR_NVERB`, 6). From +8
+    there is a word per verb, its offset, and at +20 (`WR_H_POSE`) the
+    offset of the hot keyframes (`wa_pose0`). The primary refuses a
+    mismatch at launch with *Renderer part mismatch*.
+  - **The keyframes are shipped CODED** (`tools/wadelta.py`): the renderer
+    part's hot ones (at `WR_H_POSE`) and the whole of the pose part. Facing
+    k + NFACE/2 is facing k mirrored (x negated, y the same), so a
+    keyframe's second half is shipped as zeros; its first half's rows are
+    each less the row before (`WA_NJ` x 2 bytes), and the whole keyframe is
+    less the one before (`WA_FRAMESZ`). That packs them to under a third,
+    and a keyframe that is not its own mirror fails the build. `wa_rbind`
+    undoes both in place at launch (`wa_undelta`), so the parts hold the
+    assembler's bytes from then on, and `build/wrpart.bin` and
+    `build/wapose.bin` are those bytes; only the `.dlt` copies are packed.
+    The primary's quarter-wave sine table (`wa_sin`) is shipped the same
+    way, as its second difference (`wadelta.py --sin`), and `wa_sinmk`
+    rebuilds it at entry before anything reads it.
   - **The verbs**: `WRV_INIT` (after a mode set), `WRV_GEOM`, `WRV_ARENA`
     (AL = an arena), `WRV_RENDER` (out AL = the frame number), `WRV_PRESENT`
     (out AX = cells written) and `WRV_TRACE` (a shot's cone; out the nearest
@@ -251560,7 +251613,24 @@ the arenas the chosen mode can play.
   the vertices and corners, the boxes and their BSP, the start (x, y, its
   facing), the colours, the box heights and kinds, the room height, the
   tallest box, the lifts, the route graph (AI-PLAN 3.1), the PVS, the
-  pickups and their PVS, and the floor lines. `wa_loadarena` copies one into the
+  pickups and their PVS, and the floor lines. The tree is rows of two sizes,
+  followed by its links and never counted: a leaf is 2 bytes (kind 2, its
+  box x 4), a split 8 (its kind, 0, its value, its low and high links), and
+  the descriptor's word 28 is the tree's length in bytes (`WR_ABI` 16).
+  In the route graph, the next hop of each (node, goal) pair is two bits,
+  four to a byte: which of the node's four ways out a bot takes first.
+  Word 50 (`WR_ABI` 18) names a word a box. Its low byte holds the floor
+  edges (bits 0-3, by face) and posts (bits 4-7, by corner) of a low box that
+  lie inside its neighbours, which the renderer does not draw - a corner
+  whose every quadrant outside the box is solid at least as high, or outside
+  the room; a face whose foot is covered along its length (arenagen's
+  `buried_byte`). Its high byte holds the far faces whose top is a SEAM (bits
+  0-3, by face): a neighbour of the same height runs the top on, so no edge
+  is drawn there, but that neighbour's face against it is longer and drawn,
+  and the top must still hide its lower part from an eye above. The
+  renderer raises the column clip along each seam without drawing a cell
+  (arenagen's `seam_bits`, `wl_seams`).
+  `wa_loadarena` copies one into the
   working tables and REBASES the tree's links. `arena_part()` in
   arenagen.py is this layout's single writer, and the renderer's
   `wa_loadarena` its single reader.
@@ -251578,9 +251648,10 @@ the arenas the chosen mode can play.
 
 - **Free-for-all, team deathmatch, capture the flag, king of the hill**
   (`wa_gmode`: 0 free-for-all, 1 capture the flag, 2 team deathmatch, 3
-  king of the hill; the setup's Mode list reads `free-for-all`, `team
-  deathmatch`, `capture flag`, `KingOfTheHill`).
-- **Win at**: each mode has its own list of scores, and `no limit`. A win shows
+  king of the hill; the setup's Mode list reads `Free-for-All`, `Team
+  Deathmatch`, `Capture the Flag`, `King of the Hill`).
+- **Win at**: each mode has its own list of scores (`20 Kills`, `3
+  Captures`, `10 Points`...), and `No Limit`. A win shows
   for 10 s (`WC_WINT`, 300 ticks) and the match goes on in the next arena
   of the mode's ROTATION. That is `wa_srot`, a bit for each arena for each
   mode, all of them by default. The setup's Rotation window (R) changes it,
@@ -251601,11 +251672,24 @@ The window is made of the system's controls (§13.8 buttons, §13.15 check
 boxes, the drop-downs and §83's line editor). It draws only what changed
 and uses `font_run` for text:
 
-- **Drop-downs**: Arena, Columns, Bots, Skill, Play, Mode and Win at.
-  Play is `offline`, `serial cable`, `local network` or `internet`.
+- **Drop-downs**: Arena, Columns, Bots, Skill, Play, Detail, Mode and Win
+  at. Play is `Offline`, `Serial Cable`, `Local Network` or `Internet`. Every
+  value a drop-down shows is title-cased (`The Pit`, `Easy`, `None`,
+  `Rotation...`: the owner, 2026-11-15); the left column's drop-downs are
+  sixteen cells wide, which `Capture the Flag` and `King of the Hill` need
+  (`WS_LDX2`; the content 408 wide).
   On a guest, what only the host chooses (the arena, the bots, the skill)
   is refused with *The host picks the arena*.
-- **An address field** (for internet) and a **Nick** (eight characters).
+- **THE SLOT right of Play** is Detail's while Play is not `Internet` and
+  the address field's while it is (the owner, 2026-11-15): one focus stop
+  (`WS_FLD`), between Play and Mode, whichever holds it. Detail is the
+  level `wa_level` names - the CPU tier's from the start (128.2) - and a
+  pick is `wa_setlevel`'s, as F1..F5 are; it is each player's own, so a
+  guest is never refused it. When the slot changes hands only the ground
+  the newcomer's own draw does not cover is filled (`WS_GROUND`'s rects
+  either side of its table), so nothing of the other is left
+  (`tests/wasetup.py`).
+- **An address field** (for Internet) and a **Nick** (eight characters).
   They are in-session only: persistence was declined (MULTIPLAYER-FPS-PLAN
   17.1).
 - **Buttons**: Play (or Ready, when linked) and Keys, which puts up the
@@ -251635,7 +251719,7 @@ typed bodies:
   broadcast, and everything else goes to the peer's station address.
 - **UDP**: `apps/os88udp.inc` on ETHER.DRV's UDP verbs (§72.24), port
   **30088**. HELLO is broadcast to 255.255.255.255 and also sent to a typed
-  address. Play's `local network` takes UDP and falls back to raw frames
+  address. Play's `Local Network` takes UDP and falls back to raw frames
   when there is no address.
 
 **A body**: byte 0 is the TYPE. The last two bytes are CRC-16/CCITT-FALSE

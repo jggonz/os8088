@@ -142,118 +142,14 @@ sv_entry:
     pop bx
     ret
 
+; THE VERBS ARE ORDERED BY THEIR NUMBERS, so one compare against SSV_FRAME
+; answers three of them (driver size pass 1): equal is the frame, BELOW is
+; SSV_START (0), and the compare against SSV_CFG then splits SSV_STOP (2, below
+; it) from SSV_CFG itself. The frame is not a jump at all - sv_do_frame is the
+; FALL-THROUGH, which is the one verb that arrives on every UI pass.
 sv_disp:
-    cmp al, SSV_FRAME           ; FIRST: it is the one that arrives eighteen
-    je sv_do_frame              ; times a second and the other four twice a
-    cmp al, SSV_START           ; session
-    je sv_do_start
-    cmp al, SSV_STOP
-    je sv_do_stop
-    cmp al, SSV_CFG
-    je sv_do_cfg
-    cmp al, SSV_BUSY
-    je sv_do_busy
-    stc                         ; a verb from a kernel we were not built with
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_do_busy - may our image be freed? (SPEC.md 79.8)
-; out: CF = 1 = no
-;
-; The settings window's W_PAINT is a near pointer INTO THIS SEGMENT, so an
-; image freed under it is a paint into whatever claims that memory next. The
-; kernel asks; we never volunteer, because the call in which we said "I have
-; finished" would be answered by freeing the code it has to return into
-; (SPEC.md 52.11.7's rule, one overlay over).
-; -----------------------------------------------------------------------------
-sv_do_busy:
-    cmp word [sv_win], 0
-    je .free
-    stc
-    ret
-.free:
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_do_start - a session begins (SPEC.md 79.1)
-; in:  SI = the settings block's offset in KERNEL_SEG; THE GFX LOCK IS HELD
-; out: CF = 0 we have the screen; CF = 1 the kernel should blank the signal
-;
-; **THE KERNEL HOLDS THE LOCK ACROSS THIS ONE**, which is SSV_CFG's rule and
-; not SSV_FRAME's, and the reason is on the kernel's side: ss_start_x has just
-; READ THIS IMAGE OFF A FLOPPY, and a file read arms the menu bar's progress
-; widget (SPEC.md 12.8) with only gfx_unlock able to take it down again
-; (SPEC.md 12.8.3, "nothing anywhere has to call fpg_finish and nothing may").
-; So the read had to be made inside a hold.
-;
-; **AND THAT IS WHY THE FIRST THING HERE IS AN UNLOCK.** fpg_finish does not
-; merely disarm: it PAINTS THE WIDGET'S 80-PIXEL SPAN BACK in the bar's own
-; ground and re-letters the text band, and it does that at the END of the
-; hold. Clear the screen inside the same hold and the restore lands on a black
-; screen a moment later - measured on a 5150-class machine, a WHITE BLOCK 80
-; pixels wide sat in the menu bar for the whole session, drawn over and around
-; by every mode. So the hold the READ was made in is ended here, over the
-; desktop that is still intact, and a fresh one is taken for the clear.
-;
-; The kernel released nothing and expects the lock back, which is why this is
-; an unlock/lock PAIR and not a plain unlock. What it can cost is one
-; scheduling window: SPEC.md 7.3 makes a task that unlocks and re-locks inside
-; one slice yield to a waiter, which on the UI task is ordinary and free.
-;
-; It can still refuse - a machine whose adapter reports a screen we cannot
-; draw on - and a refusal here is the blanker, silently.
-; -----------------------------------------------------------------------------
-sv_do_start:
-    mov [sv_pub], si
-    call OSAPI_GFX_UNLOCK       ; the READ's hold ends HERE, over a desktop
-    call OSAPI_GFX_LOCK         ; that is still on the glass - see the header
-    call OSAPI_VIDEO            ; AX = w, BX = h, DH = bits per pixel
-    mov [sv_w], ax
-    mov [sv_h], bx
-    mov byte [sv_monoff], 0
-    cmp dh, 1                   ; SPEC.md 39.4: one bit per pixel, so every
-    jne .col                    ; ink comes out of the second column
-    mov byte [sv_monoff], 4
-.col:
-    cmp ax, SV_MINW             ; a screen nothing can be drawn on. No adapter
-    jb .no                      ; SPEC.md 39 knows is anywhere near it - the
-    cmp bx, SV_MINH             ; smallest is CGA's 640x200 - and it is two
-    jb .no                      ; compares that stop every `sub cx, margin`
-                                ; below from going NEGATIVE and arriving at
-                                ; sv_rndn as a bound of 65,000
-
-    call OSAPI_GET_TICKS        ; the RNG is seeded from the CLOCK, so two
-    call OSAPI_SRAND            ; sessions on one machine do not run the same
-                                ; shapes past the same fish
-    mov byte [sv_mode], SV_NONE
-    call sv_pick                ; ...which clears the screen and inits a mode,
-    CLC_OR_STC .no              ; under the lock the kernel is already holding
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_do_stop - the session is over (SPEC.md 79.6)
-;
-; NOTHING IS ERASED AND NOTHING IS PUT BACK. ss_stop_x repaints the whole
-; desktop the moment this returns, so an erase here would be pixels written
-; twice - PERFORMANCE.md rule 2, in the one place where the second writer is
-; in another module and cannot be seen from this one.
-;
-; What it DOES do is forget the frame on the glass, so a session that starts
-; again does not try to erase a cube the desktop is now standing on.
-; -----------------------------------------------------------------------------
-sv_do_stop:
-    mov byte [sv_mode], SV_NONE
-    cmp byte [sc_testing], 0    ; A TEST ENDED, so the kernel is owed the post
-    je .out                     ; the Test button deliberately did not raise
-    mov byte [sc_testing], 0    ; (SPEC.md 79.7): it re-derives [ss_idle] from
-    mov bx, [sv_pub]            ; [ss_mins] - putting the real period back,
-    or bx, bx                   ; including the 0 that means off - and marks
-    jz .out                     ; SYSTEM.CFG owed for the settings Test applied
-    mov byte [es:bx + SS_P_POST], 1
-.out:
-    clc
-    ret
+    cmp al, SSV_FRAME           ; FIRST: it is the one that arrives on every
+    jne sv_disp_x               ; pass, and the other four twice a session
 
 ; -----------------------------------------------------------------------------
 ; sv_do_frame - one frame, IF one is due (SPEC.md 79.5)
@@ -293,6 +189,10 @@ sv_do_stop:
 ; The answer reaches the kernel because nothing on the way writes a flag: the
 ; seven pops in sv_entry (SPEC.md 79.3) and ssf_frame's retf both leave CF
 ; alone, which is the property SPEC.md 20.3's API cell is built on.
+;
+; THE DEADLINE'S TWO ARMS SHARE ONE ADD (driver size pass 1): CX starts as
+; now, which is the re-anchor, and is replaced by the old deadline when the
+; machine is keeping up - so the only jump is the one the rare arm takes.
 ; -----------------------------------------------------------------------------
 SV_LAG      equ 4
 
@@ -300,76 +200,175 @@ sv_do_frame:
     call OSAPI_GET_TICKS        ; AX = [ticks]
     mov bx, ax
     sub ax, [sv_due]            ; modular: negative until the deadline passes
-    js .out
+    js .idle
+    mov cx, bx                  ; the re-anchor: from NOW...
     cmp ax, SV_LAG
     ja .anchor
-    mov ax, [sv_due]
-    add al, [sv_ival]
-    adc ah, 0
-    mov [sv_due], ax
-    jmp short .go
+    mov cx, [sv_due]            ; ...or, keeping up, from the deadline missed
 .anchor:
-    mov ax, bx
-    add al, [sv_ival]
-    adc ah, 0
-    mov [sv_due], ax
-.go:
+    add cl, [sv_ival]
+    adc ch, 0
+    mov [sv_due], cx
     mov ax, bx                  ; ...and has this mode had its turn?
     sub ax, [sv_mt]
     cmp ax, [sv_mdue]
     jb .draw
-    call sv_lone                ; ONE mode ticked: leave it alone (79.5.3)
-    jc .draw
+    mov bx, [sv_pub]            ; ONE mode ticked: leave it alone (79.5.3).
+    mov al, [es:bx + SS_P_MODES]    ; `Change every` is how often to change to
+    mov ah, al                  ; a DIFFERENT mode, and with one ticked there
+    dec ah                      ; is none: the pick would land on the same
+    test al, ah                 ; mode and re-init it, which clears the screen
+    jz .draw                    ; and starts the picture again - a visible
+                                ; reset every thirty seconds for nothing.
+                                ; `x & (x - 1)` is zero for zero bits and for
+                                ; one, which is the whole test, and zero ticked
+                                ; cannot start a session at all (ss_start_x
+                                ; refuses it), so the two answers it folds
+                                ; together never both arise. It was sv_lone, a
+                                ; routine with this one caller
     call OSAPI_GFX_LOCK
     call sv_pick
     call OSAPI_GFX_UNLOCK
+.idle:
     clc
     ret
 .draw:
     call OSAPI_GFX_LOCK
-    call sv_step
+    mov bl, [sv_mode]           ; the running mode's frame. sv_step was a
+    mov bh, 0                   ; routine of its own with this one caller; the
+    shl bx, 1                   ; label stays, alone on its line, because
+                                ; tests/fishfit.py and tests/fishedge.py find
+                                ; it in a listing and break on it once a frame
+sv_step:
+    call [bx + sv_stepp]
     call OSAPI_GFX_UNLOCK
     call OSAPI_GET_TICKS        ; ...and RE-READ the clock: the frame above is
     sub ax, [sv_due]            ; the thing that may have spent a whole tick,
-    js .out                     ; so the answer is worthless taken before it
+    js sv_do_frame.idle         ; so the answer is worthless taken before it
     stc                         ; the next frame is already late: SAY SO, and
     ret                         ; the UI task goes round instead of sleeping
-.out:
-    clc
+
+; --- ...and the other four ----------------------------------------------------
+sv_disp_x:
+    jb sv_do_start              ; below SSV_FRAME is SSV_START
+    cmp al, SSV_CFG
+    jb sv_do_stop               ; between them is SSV_STOP
+    je sv_do_cfg
+    cmp al, SSV_BUSY
+    je sv_do_busy
+    stc                         ; a verb from a kernel we were not built with
     ret
 
 ; -----------------------------------------------------------------------------
-; sv_lone - is at most ONE mode ticked? (module internal)
-; in:  ES = KERNEL_SEG; out: CF = 1 = yes, so nothing may be picked
-; out: all registers preserved
+; sv_do_busy - may our image be freed? (SPEC.md 79.8)
+; out: CF = 1 = no
 ;
-; `Change every` is how often to change to a DIFFERENT mode, and with one
-; ticked there is no different one: the pick would land on the same mode and
-; re-init it, which clears the screen and starts the picture again. That is a
-; visible reset every thirty seconds in return for nothing, and a user who
-; ticked one box asked for one thing rather than for that thing restarted.
+; The settings window's W_PAINT is a near pointer INTO THIS SEGMENT, so an
+; image freed under it is a paint into whatever claims that memory next. The
+; kernel asks; we never volunteer, because the call in which we said "I have
+; finished" would be answered by freeing the code it has to return into
+; (SPEC.md 52.11.7's rule, one overlay over).
 ;
-; `x & (x - 1)` is zero for zero bits and for one, which is the whole test.
-; Zero ticked cannot start a session at all (`ss_start_x` refuses it), so the
-; two answers this folds together never both arise.
-;
-; POP DOES NOT WRITE FLAGS on an 8086, which is what lets the result of the
-; AND survive to the caller's `jc` through two of them.
+; `neg` sets CF exactly when its operand is not zero, which IS the answer;
+; AX is the one register sv_entry does not preserve.
 ; -----------------------------------------------------------------------------
-sv_lone:
-    push ax
-    push bx
-    mov bx, [sv_pub]
-    mov al, [es:bx + SS_P_MODES]
-    mov ah, al
-    dec ah
-    and al, ah
-    pop bx
-    pop ax
-    jnz .many
-    stc
+sv_do_busy:
+    mov ax, [sv_win]
+    neg ax
     ret
-.many:
+
+; -----------------------------------------------------------------------------
+; sv_do_start - a session begins (SPEC.md 79.1)
+; in:  SI = the settings block's offset in KERNEL_SEG; THE GFX LOCK IS HELD
+; out: CF = 0 we have the screen; CF = 1 the kernel should blank the signal
+;
+; **THE KERNEL HOLDS THE LOCK ACROSS THIS ONE**, which is SSV_CFG's rule and
+; not SSV_FRAME's, and the reason is on the kernel's side: ss_start_x has just
+; READ THIS IMAGE OFF A FLOPPY, and a file read arms the menu bar's progress
+; widget (SPEC.md 12.8) with only gfx_unlock able to take it down again
+; (SPEC.md 12.8.3, "nothing anywhere has to call fpg_finish and nothing may").
+; So the read had to be made inside a hold.
+;
+; **AND THAT IS WHY THE FIRST THING HERE IS AN UNLOCK.** fpg_finish does not
+; merely disarm: it PAINTS THE WIDGET'S 80-PIXEL SPAN BACK in the bar's own
+; ground and re-letters the text band, and it does that at the END of the
+; hold. Clear the screen inside the same hold and the restore lands on a black
+; screen a moment later - measured on a 5150-class machine, a WHITE BLOCK 80
+; pixels wide sat in the menu bar for the whole session, drawn over and around
+; by every mode. So the hold the READ was made in is ended here, over the
+; desktop that is still intact, and a fresh one is taken for the clear.
+;
+; The kernel released nothing and expects the lock back, which is why this is
+; an unlock/lock PAIR and not a plain unlock. What it can cost is one
+; scheduling window: SPEC.md 7.3 makes a task that unlocks and re-locks inside
+; one slice yield to a waiter, which on the UI task is ordinary and free.
+;
+; It can still refuse - a machine whose adapter reports a screen we cannot
+; draw on - and a refusal here is the blanker, silently.
+; -----------------------------------------------------------------------------
+sv_do_start:
+    mov [sv_pub], si
+    call OSAPI_GFX_UNLOCK       ; the READ's hold ends HERE, over a desktop
+    call OSAPI_GFX_LOCK         ; that is still on the glass - see the header
+    call OSAPI_VIDEO            ; AX = w, BX = h, DH = bits per pixel
+    mov [sv_w], ax
+    mov [sv_h], bx
+    mov cl, 0
+    cmp dh, 1                   ; SPEC.md 39.4: one bit per pixel, so every
+    jne .col                    ; ink comes out of the second column
+    mov cl, 4
+.col:
+    mov [sv_monoff], cl
+    cmp ax, SV_MINW             ; a screen nothing can be drawn on. No adapter
+    jb .no                      ; SPEC.md 39 knows is anywhere near it - the
+    cmp bx, SV_MINH             ; smallest is CGA's 640x200 - and it is two
+    jb .no                      ; compares that stop every `sub cx, margin`
+                                ; below from going NEGATIVE and arriving at
+                                ; sv_rndn as a bound of 65,000
+
+    mov si, sv_sintab + 129     ; THE SINE TABLE'S OTHER THREE QUARTERS, out of
+    mov di, sv_sintab + 255     ; the first (see sv_sintab): t[128-i] = t[i]
+.sin:                           ; and t[128+i] = t[256-i] = -t[i], i = 1..64.
+    mov al, [si - 128]          ; SI walks t[128+i] up and DI t[256-i] down,
+    mov [di - 128], al          ; so each reaches its other quarter as -128,
+    neg al                      ; which is a byte displacement. Every start,
+    mov [si], al                ; because it is ~4,500 cycles once a session
+    mov [di], al                ; and a flag saying "done" would be bytes of
+    inc si                      ; its own; and before sv_pick, which is the
+    dec di                      ; first thing that can read it (a shape's
+    cmp si, di                  ; attitude). The settings window never does
+    jbe .sin
+
+    call OSAPI_GET_TICKS        ; the RNG is seeded from the CLOCK, so two
+    call OSAPI_SRAND            ; sessions on one machine do not run the same
+                                ; shapes past the same fish
+    mov byte [sv_mode], SV_NONE
+    call sv_pick                ; ...which clears the screen and inits a mode,
+    CLC_OR_STC .no              ; under the lock the kernel is already holding
+    ret
+
+; -----------------------------------------------------------------------------
+; sv_do_stop - the session is over (SPEC.md 79.6)
+;
+; NOTHING IS ERASED AND NOTHING IS PUT BACK. ss_stop_x repaints the whole
+; desktop the moment this returns, so an erase here would be pixels written
+; twice - PERFORMANCE.md rule 2, in the one place where the second writer is
+; in another module and cannot be seen from this one.
+;
+; What it DOES do is forget the frame on the glass, so a session that starts
+; again does not try to erase a cube the desktop is now standing on.
+; -----------------------------------------------------------------------------
+sv_do_stop:
+    mov byte [sv_mode], SV_NONE
+    mov al, 0                   ; A TEST ENDED, so the kernel is owed the post
+    xchg al, [sc_testing]       ; the Test button deliberately did not raise
+    or al, al                   ; (SPEC.md 79.7): it re-derives [ss_idle] from
+    jz .out                     ; [ss_mins] - putting the real period back,
+    mov bx, [sv_pub]            ; including the 0 that means off - and marks
+    or bx, bx                   ; SYSTEM.CFG owed for the settings Test applied.
+    jz .out                     ; The xchg reads the flag and clears it in one
+    mov byte [es:bx + SS_P_POST], 1
+.out:
     clc
     ret
 
@@ -378,21 +377,21 @@ sv_lone:
 ; in:  the gfx lock is HELD (or we are inside SSV_START, which takes it)
 ; out: nothing; CLOBBERS every register but DS and ES
 ;
-; THE MODE PROCS DO NOT BANK REGISTERS, and neither do sv_pick, sv_step and
-; sv_clear: their only callers are sv_do_start and sv_do_frame, which return
+; THE MODE PROCS DO NOT BANK REGISTERS, and neither does sv_pick: its only
+; callers are sv_do_start and sv_do_frame, which return
 ; straight to sv_entry - and sv_entry already banks every register the
 ; overlay contract preserves (SPEC.md 79.3). Each mode's init and step used to
 ; push and pop four to seven of them again, inside that, for nobody: 108
 ; bytes, and six or seven pairs off every frame. What they still owe is ES, which
-; sv_secs/sv_lone read the settings block through - a mode that changes it
-; puts it back, as each always has.
+; this routine and sv_do_frame read the settings block through - a mode that
+; changes it puts it back, as each always has.
 ;
 ; **IT NEVER PICKS THE ONE ALREADY RUNNING WHEN THERE IS ANOTHER**, which is
 ; not a nicety: with two modes ticked a fair coin repeats about half the time,
 ; and a "screen saver that changes every thirty seconds" that visibly does
 ; nothing every other change reads as broken. With ONE mode ticked it still
 ; answers that mode - the walk finds it - which is what the FIRST pick of a
-; session needs; every pick after that is refused by sv_lone above, so a
+; session needs; every pick after that is refused by sv_do_frame, so a
 ; single-mode session is not restarted every n seconds (SPEC.md 79.5.3).
 ;
 ; The walk is a rotation and not a retry loop: start one past the current mode
@@ -403,36 +402,38 @@ sv_lone:
 sv_pick:
     call OSAPI_RAND
     and ah, 3                   ; AH and NOT AL: the low bits of the kernel's
-    mov cl, ah                  ; LCG are a counter (sv_rndn's header), and a
+    inc ah                      ; LCG are a counter (sv_rndn's header), and a
                                 ; walk distance that cycles 4-long is a mode
-                                ; ORDER that repeats every four changes
-                                ; CL = how far to walk past the current mode
-    inc cl                      ; ...at least one, so it moves
+                                ; ORDER that repeats every four changes.
+                                ; AH = how far to walk past the current mode,
+                                ; and at least one, so it moves
     mov al, [sv_mode]
     cmp al, SV_NONE
     jne .have
     xor al, al                  ; a fresh session starts the walk at mode 0
 .have:
-    mov ch, SS_NMODE * 4        ; THE BOUND IS cl TURNS OF THE WHEEL AND NOT
+    mov bx, [sv_pub]            ; DL = the ticked modes, read once for the walk
+    mov dl, [es:bx + SS_P_MODES]
+    mov ch, SS_NMODE * 4        ; THE BOUND IS ah TURNS OF THE WHEEL AND NOT
                                 ; TWO, which is the difference between working
                                 ; and mostly working: with ONE mode ticked the
-                                ; walk passes it once per turn, so a cl of 3 or
-                                ; 4 ran out of tries and fell through to the
+                                ; walk passes it once per turn, so a count of 3
+                                ; or 4 ran out of tries and fell through to the
                                 ; `xor al, al` below - mode 0, the cube. Every
                                 ; picture in a starfield-only session was a
                                 ; cube, half the time, and with all four
                                 ; ticked (the default) nothing was wrong at
-                                ; all. cl is at most SS_NMODE, so SS_NMODE
-                                ; turns is the exact bound
+                                ; all. The count is at most SS_NMODE, so
+                                ; SS_NMODE turns is the exact bound
 .walk:
-    inc al
-    cmp al, SS_NMODE
-    jb .test
-    xor al, al
-.test:
-    call sv_enabled
-    jc .next
-    dec cl
+    inc ax                      ; AL is 0..3 here, so AH sees no carry, and
+    and al, SS_NMODE - 1        ; SS_NMODE is a power of two: the AND is the wrap
+    mov cl, al
+    mov bl, dl
+    shr bl, cl                  ; the mode INDEX is the bit position, which is
+    shr bl, 1                   ; what SS_M_CUBE..SS_M_FISH being 1,2,4,8 in
+    jnc .next                   ; SV_CUBE..SV_FISH order buys
+    dec ah
     jz .got
 .next:
     dec ch
@@ -444,11 +445,25 @@ sv_pick:
                                 ; than running off the end of the table
 .got:
     mov [sv_mode], al
+    cbw                         ; AL is 0..3: AX = the mode, BX its table index
+    add ax, ax
+    push ax
     mov byte [sv_ival], SV_FTICK
-    call sv_clear
-    mov bl, [sv_mode]
-    mov bh, 0
-    shl bx, 1
+
+    xor ax, ax                  ; --- the whole screen to the ground ink. ONE
+    call sv_pen                 ; gfx_fill for the lot, which on VGA is four
+    xor bx, bx                  ; plane writes of a rectangle and on the 1bpp
+    mov cx, [sv_w]              ; adapters one `rep stosb` a row - about 12ms
+    dec cx                      ; on the field machine either way, twice a
+    mov dx, [sv_h]              ; minute. It is the ONE place this file paints
+    dec dx                      ; more than it changed, and PERFORMANCE.md rule
+    call OSAPI_GFX_FILL         ; 1's exemption applies for the reason
+                                ; ss_stop_x's repaint does: the whole screen
+                                ; really did change. (sv_clear, a routine with
+                                ; this one caller. sv_pen keeps AX, so the 0 it
+                                ; was handed is the fill's x1 too)
+
+    pop bx
     call [bx + sv_initp]        ; the mode's init proc, which may raise
                                 ; [sv_ival]
 
@@ -456,94 +471,20 @@ sv_pick:
     mov [sv_mt], ax             ; the session's, or the first mode of every
     mov [sv_due], ax            ; session would be cut short by however long
                                 ; the load took
-    call sv_secs                ; DX = its turn, in ticks
-    mov [sv_mdue], dx
-    ret
 
-; -----------------------------------------------------------------------------
-; sv_step - one frame of the running mode (module internal)
-; in:  the gfx lock is HELD
-; -----------------------------------------------------------------------------
-sv_step:
-    mov bl, [sv_mode]
-    mov bh, 0
-    shl bx, 1
-    jmp [bx + sv_stepp]         ; ...whose own ret is this one's
-
-; -----------------------------------------------------------------------------
-; sv_enabled - is mode AL ticked? (module internal)
-; in:  AL = SV_*; ES = KERNEL_SEG
-; out: CF = 0 yes, CF = 1 no; AL kept
-; -----------------------------------------------------------------------------
-sv_enabled:
-    push bx
-    push cx
-    mov bx, [sv_pub]
-    mov ch, [es:bx + SS_P_MODES]
-    mov cl, al
-    shr ch, cl                  ; the mode INDEX is the bit position, which is
-    test ch, 1                  ; what SS_M_CUBE..SS_M_FISH being 1,2,4,8 in
-    jz .no                      ; SV_CUBE..SV_FISH order buys
-    pop cx
-    pop bx
-    clc
-    ret
-.no:
-    pop cx
-    pop bx
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_secs - how long the current mode runs, in TICKS (module internal)
-; out: DX = ticks; every other register preserved
-;
-; 18 ticks a second and not 18.2065, which loses about a second per minute and
-; is a screen saver: the setting is "roughly this often" and the alternative
-; is a multiply by 1092 and a divide by 60 to be wrong by less than nobody can
-; measure. The clamp is what stops a zero - from a settings file this kernel
-; did not write, or a future one - re-picking a mode on every frame.
-; -----------------------------------------------------------------------------
-sv_secs:
-    push ax
-    push bx
-    mov bx, [sv_pub]
-    mov al, [es:bx + SS_P_SECS]
-    cmp al, SV_MINSEC
-    jae .lo
-    mov al, SV_MINSEC
-.lo:
-    cmp al, SV_MAXSEC
-    jbe .hi
-    mov al, SV_MAXSEC
-.hi:
+    mov bx, [sv_pub]            ; --- and its turn, in TICKS: 18 a second and
+    mov al, [es:bx + SS_P_SECS] ; not 18.2065, which loses about a second per
+    cmp al, SV_MINSEC           ; minute and is a screen saver - the setting is
+    jae .lo                     ; "roughly this often", and the alternative is
+    mov al, SV_MINSEC           ; a multiply by 1092 and a divide by 60 to be
+.lo:                            ; wrong by less than nobody can measure. The
+    cmp al, SV_MAXSEC           ; clamp is what stops a zero - from a settings
+    jbe .hi                     ; file this kernel did not write, or a future
+    mov al, SV_MAXSEC           ; one - re-picking a mode on every frame.
+.hi:                            ; (sv_secs, a routine with this one caller)
     mov ah, 18
     mul ah                      ; AX = ticks, at most 4,500
-    mov dx, ax
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_clear - the whole screen to the ground ink (module internal)
-; in:  the gfx lock is HELD
-;
-; ONE gfx_fill for the lot, which on VGA is four plane writes of a rectangle
-; and on the 1bpp adapters one `rep stosb` a row - about 12ms on the field
-; machine either way, twice a minute. It is the ONE place this file paints
-; more than it changed, and PERFORMANCE.md rule 1's exemption applies for the
-; same reason ss_stop_x's repaint does: the whole screen really did change.
-; -----------------------------------------------------------------------------
-sv_clear:
-    mov al, SV_GROUND
-    call sv_pen
-    xor ax, ax
-    xor bx, bx
-    mov cx, [sv_w]
-    dec cx
-    mov dx, [sv_h]
-    dec dx
-    call OSAPI_GFX_FILL
+    mov [sv_mdue], ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -564,21 +505,20 @@ sv_clear:
 ; OSAPI_GFX_BLIT1_PEN sets for that one band (SPEC.md 5.4.2.2). So the table
 ; read and the SET_COLOR are separable, and a second copy of the table read is
 ; exactly the thing this file must not grow.
+;
+; The index is mode * 8 + column + ink, at most 3 * 8 + 4 + 3 = 31, so it is
+; summed in a BYTE and looked up with `xlat`; AH is left as it was.
 ; -----------------------------------------------------------------------------
 sv_ink:
     push bx
-    push cx
     mov bl, [sv_mode]
-    mov bh, 0
-    mov cl, 3
-    shl bx, cl                  ; eight bytes a mode: four inks, twice
-    mov cl, [sv_monoff]
-    mov ch, 0
-    add bx, cx
-    mov ah, 0
-    add bx, ax
-    mov al, [bx + sv_inks]
-    pop cx
+    shl bl, 1
+    shl bl, 1
+    shl bl, 1                   ; eight bytes a mode: four inks, twice
+    add bl, [sv_monoff]
+    add al, bl
+    mov bx, sv_inks
+    xlat
     pop bx
     ret
 
@@ -630,31 +570,79 @@ sv_rndn:
     ret
 
 ; -----------------------------------------------------------------------------
-; sv_sin / sv_cos - AL = an angle, 256 to the turn -> AL = the value, +-127
-; clobbers: AL, flags (BX is banked)
+; sv_rndxy - somewhere a figure of radius BX fits on the screen
+; in:  BX = the margin, DI -> two words, x then y
+; out: [DI] = BX + rndn(w - 2BX), [DI+2] = BX + rndn(h - 2BX), x drawn FIRST
+; clobbers: AX, CX, DX, SI, DI, flags
+;
+; The cube's centre and a figure's were each this arithmetic written out twice
+; (driver size pass 1). It needs sv_h to follow sv_w, which is asserted there,
+; and calls its own second half the way sv_rotset does.
 ; -----------------------------------------------------------------------------
+sv_rndxy:
+    mov si, sv_w
+    call .one
+.one:
+    lodsw                       ; [sv_w], then [sv_h]
+    sub ax, bx
+    sub ax, bx
+    xchg ax, cx
+    call sv_rndn
+    add ax, bx
+    mov [di], ax
+    inc di
+    inc di
+    ret
+
+; -----------------------------------------------------------------------------
+; sv_sin / sv_cos - AL = an angle, 256 to the turn -> AL = the value, +-127
+; clobbers: AL, flags (BX is banked; AH is kept)
+;
+; A cosine is the sine a quarter turn on, so sv_cos is one add that FALLS INTO
+; sv_sin rather than jumping to it.
+; -----------------------------------------------------------------------------
+sv_cos:
+    add al, 64
 sv_sin:
     push bx
-    mov bl, al
-    mov bh, 0
-    mov al, [bx + sv_sintab]
+    mov bx, sv_sintab
+    xlat
     pop bx
     ret
 
-sv_cos:
-    add al, 64
-    jmp short sv_sin
-
 ; -----------------------------------------------------------------------------
+; sv_rsin  - AL = an angle, AH = a radius -> AL = (AH * sin AL) >> 7, signed
+; sv_rcos  - ...and the cosine
 ; sv_mulsh - AL = (AL * BL) >> 7, signed (module internal)
-; clobbers: AX, flags
+; sv_sh7   - AL = DI >> 7, signed
+; clobbers: AX, flags, and BL for the first three
+;
+; sv_rsin is `call sv_sin / mov bl, al / mov al, <radius> / call sv_mulsh`,
+; which the geometry wrote out four times and the sea twice: it FALLS INTO
+; sv_mulsh, so a caller spends the same two calls it always did.
 ;
 ; The projection's inner step, wire.asm's wr_sh7 (SPEC.md 78.2): `sar ax,7` is
 ; 8 + 4*7 = 36 clocks on an 8088 and one doubling plus a byte move is five,
 ; because the wanted bits land in AH.
+;
+; ONE TAIL FOR BOTH: sv_mulsh's `db 0x3D` is `cmp ax, imm16`, whose immediate
+; is sv_sh7's two-byte `mov ax, di` - so the multiply steps OVER that move and
+; into the shared shift, and only the flags see it. Four cycles, and the `imul`
+; before it has long since filled the queue with them; every caller of
+; sv_mulsh on a frame path reads sv_sin first, which `xlat` made cheaper by
+; more than that (driver size pass 1).
 ; -----------------------------------------------------------------------------
+sv_rcos:
+    add al, 64
+sv_rsin:
+    call sv_sin
+    mov bl, al
+    mov al, ah
 sv_mulsh:
     imul bl                     ; AX = the signed product, |AX| <= 16,129
+    db 0x3D                     ; cmp ax, imm16 - the imm16 is the next line
+sv_sh7:
+    mov ax, di
     add ax, ax
     mov al, ah
     ret
@@ -662,9 +650,8 @@ sv_mulsh:
 ; -----------------------------------------------------------------------------
 ; sv_rotset - stage the four sines a 3D mode rotates through
 ; sv_rot3   - one model vertex through both rotations (SPEC.md 78.2)
-; sv_sh7    - AL = DI >> 7, signed
 ;
-; sv_rotset: AL = the angle about y, AH = the angle about x. Clobbers AX.
+; sv_rotset: AL = the angle about y, AH = the angle about x. Clobbers AX, DI.
 ; sv_rot3:   SI -> three SIGNED BYTES (x, y, z) -> [sv_rx], [sv_ry].
 ;            Clobbers AX, BL, DI, flags.
 ;
@@ -686,21 +673,18 @@ sv_mulsh:
 ; is here rather than in either of them, and neither owns the four sines.
 ; -----------------------------------------------------------------------------
 sv_rotset:
-    push ax
-    mov al, ah                  ; the angle about x first, so AH is spent
-    push ax
-    call sv_sin
-    mov [sv_rsb], al
-    pop ax
-    call sv_cos
-    mov [sv_rcb], al
-    pop ax
+    mov di, sv_rsa              ; the four are sin a, cos a, sin b, cos b, IN
+    call .pair                  ; THAT ORDER (asserted at sv_rsa), so one pair
+    mov al, ah                  ; of stores serves both angles: AL's first,
+.pair:                          ; then AH's - which sv_sin and sv_cos both keep
     push ax
     call sv_sin
-    mov [sv_rsa], al
+    mov [di], al
+    inc di
     pop ax
     call sv_cos
-    mov [sv_rca], al
+    mov [di], al
+    inc di
     ret
 
 sv_rot3:
@@ -732,17 +716,13 @@ sv_rot3:
     mov [sv_ry], al
     ret
 
-; `sar di,7` is 36 clocks on an 8088 and this is five (SPEC.md 78.2).
-sv_sh7:
-    mov ax, di
-    add ax, ax
-    mov al, ah
-    ret
-
 sv_rsa:     db 0                ; the four sines, staged once a figure or once
 sv_rca:     db 0                ; a frame by whichever mode is running
 sv_rsb:     db 0
 sv_rcb:     db 0
+%if sv_rca - sv_rsa != 1 || sv_rsb - sv_rsa != 2 || sv_rcb - sv_rsa != 3
+ %error "saver: sv_rotset stores the four sines in sv_rsa, rca, rsb, rcb order"
+%endif
 sv_rx:      db 0                ; sv_rot3's two outputs
 sv_ry:      db 0
 
@@ -777,6 +757,9 @@ sv_ry:      db 0
 %define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard button, glyph and press latch
 %define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
+%define OS88LINE_NORESYNC       ; ...nor os88line_resync: every field is filled
+                                ; through os88line_set (sc_seed), so none is
+                                ; ever written behind its back (os88line.inc)
 %include "os88line.inc"         ; ...and the one-line field the two numbers use
 
 %include "svcfg.inc"            ; ...and the settings window (SPEC.md 79.7)
@@ -827,12 +810,61 @@ sv_inks:
 ; is the second reader of it. Included rather than copied: it is 256 bytes of
 ; numbers nobody can proof-read, and a second copy is a second thing that can
 ; be regenerated at a different amplitude.
+;
+; ONLY ITS FIRST QUARTER SHIPS (driver size pass 1). A sine is symmetric about
+; a quarter turn and antisymmetric about a half, so entries 0..64 decide the
+; other 191 - t[128-i] = t[i], t[128+i] = t[256-i] = -t[i] - and sv_do_start
+; writes them at every session's start. The other 191 bytes are zeros in the
+; image, which the packed file carries almost for nothing.
+;
+; IT IS STILL wiresin.inc, line for line: each of its sixteen `db` rows is
+; read through SV_SINROW below, which emits the first quarter and only RECORDS
+; the rest - and then checks, at assembly time, that every recorded entry is
+; exactly what the mirror loop will write. So the table WIREFRAME draws with
+; and the one this image runs with cannot come apart: a wiresin.inc regenerated
+; without those symmetries fails this build rather than drawing a different
+; cube. NASM's `db` is redefined for the length of the include and nothing
+; else.
+%assign sv_sinn 0
+%macro SV_SINROW 1-*
+ %rep %0
+  %assign sv_sin_%[sv_sinn] %1
+  %if sv_sinn <= 64
+    DB %1
+  %else
+    DB 0
+  %endif
+  %assign sv_sinn sv_sinn + 1
+  %rotate 1
+ %endrep
+%endmacro
 sv_sintab:
+%define db SV_SINROW
 %include "wiresin.inc"
+%undef db
+%if sv_sinn != 256
+ %error "saver: wiresin.inc is not 256 entries"
+%endif
+%assign sv_i 1
+%rep 64
+ %assign sv_j 128 - sv_i
+ %assign sv_k 128 + sv_i
+ %assign sv_l 256 - sv_i
+ %if sv_sin_%[sv_j] != sv_sin_%[sv_i] || sv_sin_%[sv_k] != -sv_sin_%[sv_i] || sv_sin_%[sv_l] != -sv_sin_%[sv_i]
+  %error "saver: wiresin.inc is not mirrored the way sv_do_start rebuilds it"
+ %endif
+ %assign sv_i sv_i + 1
+%endrep
+%if sv_sin_0 != 0 || sv_sin_128 != 0
+ %error "saver: wiresin.inc must be 0 at 0 and at a half turn - sv_do_start writes neither"
+%endif
 
 sv_pub:     dw 0                ; the settings block, in KERNEL_SEG
 sv_w:       dw 0                ; the screen this machine actually has
 sv_h:       dw 0
+%if sv_h - sv_w != 2
+ %error "saver: sv_rndxy reads sv_w and sv_h as a pair"
+%endif
 sv_monoff:  db 0                ; 0 or 4: sv_inks' column (SPEC.md 39.4)
 sv_mode:    db SV_NONE
 sv_ival:    db SV_FTICK         ; ticks between frames, the mode's to raise
@@ -880,6 +912,17 @@ absolute sv_union
 absolute sv_union
     SV_FISH_STATE
     times sv_un_end - $ resb 1
+
+; ...and the pairs that are read or written as one (driver size pass 1)
+%if sv_cb - sv_ca != 1 || sv_ccy - sv_ccx != 2 || sv_hcy - sv_hcx != 2
+ %error "saver: sv_ca/sv_cb, sv_ccx/sv_ccy and sv_hcx/sv_hcy must be pairs"
+%endif
+%if sv_soy - sv_sox != 2 || sv_sovy - sv_sovx != 2 || sv_hlph - sv_hlrr != 1
+ %error "saver: sv_sox/sv_soy, sv_sovx/sv_sovy and sv_hlrr/sv_hlph must be pairs"
+%endif
+%if sv_opy - sv_opx != 2 * SV_NSTAR || sv_ow - sv_opx != 4 * SV_NSTAR || sv_spy - sv_spx != 2 * SV_NSTAR || sv_sw - sv_spx != 4 * SV_NSTAR
+ %error "saver: the starfield banks sv_spx/spy/sw into sv_opx/opy/ow as ONE block"
+%endif
 
 section .text
     times SV_UNSZ db 0

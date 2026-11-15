@@ -130,45 +130,80 @@ SV_HP_ERASE equ 3
 ; -----------------------------------------------------------------------------
 ; sv_shape_init - both figures, decorrelated
 ; in:  the gfx lock is HELD and the screen has just been cleared
+;
+; ...and the SECOND slot waits half a figure's life before it starts, because
+; two spawned a dozen frames apart bloom together for minutes. Everything after
+; this is decorrelated by their own lengths, which now differ by shape as well
+; as by size. SV_HNF is two, so the walk over the figures is written out: one
+; call of the tail below for figure 0, and a fall into it for figure 1 - which
+; sv_shape_step does too (driver size pass 1).
 ; -----------------------------------------------------------------------------
+%if SV_HNF != 2
+ %error "svshape.inc: sv_shape_init and sv_shape_step are written for two figures"
+%endif
 sv_shape_init:
     mov byte [sv_ival], SV_HIVAL
-    xor al, al
-.fig:
-    push ax
-    call sv_hbase
-    call sv_hspawn
-    pop ax
-    push ax                     ; ...and the SECOND slot waits half a figure's
-    or al, al                   ; life before it starts, because two spawned a
-    jz .nostag                  ; dozen frames apart bloom together for
-    mov bl, al                  ; minutes. Everything after this is decorrelated
-    xor bh, bh                  ; by their own lengths, which now differ by
-    mov byte [sv_hhd + bx], SV_HSTAG    ; shape as well as by size
-.nostag:
-    pop ax
-    inc al
-    cmp al, SV_HNF
-    jb .fig
-
+    xor ax, ax
+    call .fig
+    mov al, 1
+    call .fig
+    mov byte [sv_hhd + 1], SV_HSTAG
     ret
+.fig:
+    call sv_hbase
+    jmp sv_hspawn
 
 ; -----------------------------------------------------------------------------
 ; sv_shape_step - one frame of every figure
 ; in:  the gfx lock is HELD
 ; -----------------------------------------------------------------------------
 sv_shape_step:
-    xor al, al
+    xor ax, ax
+    call .fig
+    mov al, 1
 .fig:
-    push ax
     call sv_hbase
-    call sv_hfig
-    pop ax
-    inc al
-    cmp al, SV_HNF
-    jb .fig
+    ; ...and FALLS INTO sv_hfig, whose ret is this one's
 
+; -----------------------------------------------------------------------------
+; sv_hfig - one frame of the selected figure (module internal)
+; -----------------------------------------------------------------------------
+sv_hfig:
+    mov bx, [sv_hf]
+    mov al, [sv_hph + bx]
+    cmp al, SV_HP_HOLD
+    je .hold
+    ja .erase
+    or al, al
+    jnz .grow
+    dec byte [sv_hhd + bx]      ; WAIT: nothing is on the glass yet
+    jnz .out
+    mov byte [sv_hph + bx], SV_HP_GROW
+.out:
     ret
+.grow:
+    mov al, [sv_hik + bx]
+    call sv_hrun
+    jnc .out
+    mov bx, [sv_hf]
+    mov byte [sv_hph + bx], SV_HP_HOLD
+    mov byte [sv_hhd + bx], SV_HHOLD
+    ret
+.hold:
+    dec byte [sv_hhd + bx]
+    jnz .out
+    call sv_hinitw              ; the SAME endpoints in the SAME order, which
+    mov bx, [sv_hf]             ; is all 5.6.7 asks for the erase to agree
+    mov byte [sv_hph + bx], SV_HP_ERASE
+    ret
+.erase:
+    mov al, SV_GROUND
+    call sv_hrun
+    jnc .out
+    jmp sv_hspawn               ; ...and somewhere else entirely
+%if SV_HP_WAIT != 0 || SV_HP_GROW != 1 || SV_HP_HOLD != 2 || SV_HP_ERASE != 3
+ %error "svshape.inc: sv_hfig's dispatch is written for the phases 0..3 in order"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sv_hbase - select figure AL (module internal)
@@ -177,11 +212,12 @@ sv_shape_step:
 ; THREE BASES AND NOT ONE, because the three array families are indexed
 ; differently: the vertices by word, the per-edge bytes by byte, and the walk
 ; blocks by GLS_SZ. Computing them once a figure is what keeps every loop
-; below down to an add.
+; below down to an add. [sv_hf] is a WORD whose high byte is 0, so every
+; per-figure array is indexed by one load of it.
 ; -----------------------------------------------------------------------------
 sv_hbase:
-    mov [sv_hf], al
     mov ah, 0
+    mov [sv_hf], ax
     mov bx, ax
     mov ax, SV_HNV * 2
     mul bx
@@ -196,47 +232,6 @@ sv_hbase:
     ret
 
 ; -----------------------------------------------------------------------------
-; sv_hfig - one frame of the selected figure (module internal)
-; -----------------------------------------------------------------------------
-sv_hfig:
-    mov bl, [sv_hf]
-    xor bh, bh
-    mov al, [sv_hph + bx]
-    cmp al, SV_HP_GROW
-    je .grow
-    cmp al, SV_HP_HOLD
-    je .hold
-    cmp al, SV_HP_ERASE
-    je .erase
-    dec byte [sv_hhd + bx]      ; WAIT: nothing is on the glass yet
-    jnz .out
-    mov byte [sv_hph + bx], SV_HP_GROW
-.out:
-    ret
-.grow:
-    mov al, [sv_hik + bx]
-    call sv_hrun
-    jnc .out
-    mov bl, [sv_hf]
-    xor bh, bh
-    mov byte [sv_hph + bx], SV_HP_HOLD
-    mov byte [sv_hhd + bx], SV_HHOLD
-    ret
-.hold:
-    dec byte [sv_hhd + bx]
-    jnz .out
-    call sv_hinitw              ; the SAME endpoints in the SAME order, which
-    mov bl, [sv_hf]             ; is all 5.6.7 asks for the erase to agree
-    xor bh, bh
-    mov byte [sv_hph + bx], SV_HP_ERASE
-    ret
-.erase:
-    mov al, SV_GROUND
-    call sv_hrun
-    jnc .out
-    jmp sv_hspawn               ; ...and somewhere else entirely
-
-; -----------------------------------------------------------------------------
 ; sv_hrun - spend this figure's frame in pen AL (module internal)
 ; in:  AL = the ink, the figure selected
 ; out: CF = 1 = every edge is spent, so the phase is over
@@ -246,68 +241,62 @@ sv_hfig:
 ; into `sv_hdsc` and handed over together. A descriptor carries no colour, so
 ; the pen is set once above the batch - which is also why a growing figure and
 ; an erasing one cannot share a call.
+;
+; IN REGISTERS (driver size pass 1): DL is the edge in hand and DH how many the
+; figure has, SI this figure's run of sv_hln and BX the edge within it, DI the
+; descriptor being built and BP the walk block it names.
 ; -----------------------------------------------------------------------------
 sv_hrun:
-    push es
     call sv_pen
-
-    mov bl, [sv_hf]
-    xor bh, bh
-    mov al, [sv_hne + bx]
-    mov [sv_hnn], al
-    mov al, [sv_hcur + bx]
-    mov [sv_hci], al
+    mov bx, [sv_hf]
+    mov dh, [sv_hne + bx]
+    mov dl, [sv_hcur + bx]
+    mov si, sv_hln
+    add si, [sv_hbe]
+    mov bh, 0
 
 .retire:                        ; the front walks past every spent edge, so
-    mov al, [sv_hci]            ; the window below is always live work
-    cmp al, [sv_hnn]
+    cmp dl, dh                  ; the window below is always live work
     jae .fin
-    mov bl, al
-    xor bh, bh
-    add bx, [sv_hbe]
-    cmp byte [sv_hln + bx], 0
+    mov bl, dl
+    cmp byte [bx + si], 0
     jne .front
-    inc byte [sv_hci]
+    inc dl
     jmp short .retire
+.fin:
+    stc
+    ret
 
 .front:
-    mov al, [sv_hci]            ; bank it: next frame starts here
-    mov bl, [sv_hf]
-    xor bh, bh
-    mov [sv_hcur + bx], al
-    mov al, [sv_hci]
-    xor ah, ah
-    mov bx, GLS_SZ
-    mul bx                      ; < 48 * 14, so DX is 0 and the walk pointer
-    add ax, [sv_hbw]            ; can simply run forward from here
+    mov bx, [sv_hf]             ; bank it: next frame starts here
+    mov [sv_hcur + bx], dl
+    mov al, GLS_SZ
+    mul dl                      ; < 48 * 14, and the walk pointer can simply
+    add ax, [sv_hbw]            ; run forward from here
     add ax, sv_hwk
     mov bp, ax
 
-    mov si, sv_hdsc
+    mov di, sv_hdsc
     xor cx, cx                  ; CX = descriptors built
-    mov dl, [sv_hci]
-    xor dh, dh
+    mov bh, 0
 .scan:
     cmp cx, SV_HACT
     jae .spend
-    mov al, [sv_hnn]
-    cmp dl, al
+    cmp dl, dh
     jae .spend
     mov bl, dl
-    xor bh, bh
-    add bx, [sv_hbe]
-    mov al, [sv_hln + bx]       ; pixels this edge still owes
+    mov al, [bx + si]           ; pixels this edge still owes
     or al, al
     jz .next
     cmp al, SV_HPX
     jbe .cap                    ; ...the last of it, and no further
     mov al, SV_HPX
 .cap:
-    sub [sv_hln + bx], al
+    sub [bx + si], al
     cbw                         ; 1..SV_HPX, so AH = 0 - the count is a word
-    mov [si], bp                ; BP is DATA here, not an address: SI does the
-    mov [si+2], ax              ; addressing and BP addresses SS (SPEC.md 1)
-    add si, 4
+    mov [di], bp                ; BP is DATA here, not an address: DI does the
+    mov [di + 2], ax            ; addressing and BP addresses SS (SPEC.md 1)
+    add di, 4
     inc cx
 .next:
     add bp, GLS_SZ
@@ -316,16 +305,11 @@ sv_hrun:
 
 .spend:
     jcxz .none
-    mov si, sv_hdsc             ; the array, in our own segment. SI is dead
-    call gfxe_wstepv            ; here - it built the array above - and the
-    call gfxe_pput              ; WALK is ours now (SPEC.md 5.12.5), so what
-.none:                          ; reaches the kernel is the pixels it stepped
+    mov si, sv_hdsc             ; the array, in our own segment, and the WALK
+    call gfxe_wstepv            ; is ours now (SPEC.md 5.12.5), so what reaches
+    call gfxe_pput              ; the kernel is the pixels it stepped
+.none:
     clc
-    pop es
-    ret
-.fin:
-    stc
-    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -335,78 +319,54 @@ sv_hrun:
 ; Called twice a figure - once to draw it and once to take it up - and the
 ; second call is why it takes its endpoints from the stored vertices rather
 ; than from anything the first call left behind.
+;
+; The count is the walk's length, max(|dx|, |dy|) + 1, which is Bresenham's
+; major axis - and gfxe_winit has just written |dx| and |dy| into the block,
+; so it is read back out of it rather than worked out a second time. A figure
+; always has edges (K >= 4 in three or more waves), so the walk tests its
+; count at the bottom.
 ; -----------------------------------------------------------------------------
 sv_hinitw:
-    push es
-    push ds
-    pop es
-
-    mov bl, [sv_hf]
-    xor bh, bh
+    mov bx, [sv_hf]
     mov al, [sv_hne + bx]
-    mov [sv_hnn], al
+    mov [sv_hci], al            ; the edges left to arm
     mov byte [sv_hcur + bx], 0
-    mov byte [sv_hci], 0
-    mov bp, sv_hwk
+    mov si, [sv_hbe]            ; SI = the edge, in the per-edge byte arrays
+    mov bp, sv_hwk              ; BP = its walk block
     add bp, [sv_hbw]
 .one:
-    mov al, [sv_hci]
-    cmp al, [sv_hnn]
-    jae .done
-    mov bl, al
-    xor bh, bh
-    add bx, [sv_hbe]
-
-    mov al, [sv_hea + bx]
+    mov al, [sv_hea + si]
     call sv_hvpt
-    mov [sv_hx1], ax
-    mov [sv_hy1], dx
-    mov al, [sv_heb + bx]
+    push ax
+    push dx
+    mov al, [sv_heb + si]
     call sv_hvpt
-    mov [sv_hx2], ax
-    mov [sv_hy2], dx
-
-    mov ax, [sv_hx2]            ; the walk's length is max(|dx|,|dy|) + 1,
-    sub ax, [sv_hx1]            ; which is Bresenham's major axis
-    jns .adx
-    neg ax
-.adx:
-    mov cx, [sv_hy2]
-    sub cx, [sv_hy1]
-    jns .ady
-    neg cx
-.ady:
+    mov cx, ax                  ; CX/DX = the far end...
+    pop bx                      ; ...AX/BX the near one
+    pop ax
+    mov di, bp
+    call gfxe_winit             ; SPEC.md 5.12.5: the block is ours, and every
+    mov ax, [di + GLS_DX]       ; register comes back
+    mov cx, [di + GLS_DY]
     cmp ax, cx
     jae .have
     mov ax, cx
 .have:
     inc ax                      ; < 256 - see sv_hln
-    mov bl, [sv_hci]
-    mov bh, 0
-    add bx, [sv_hbe]
-    mov [sv_hln + bx], al
-
-    mov ax, [sv_hx1]
-    mov bx, [sv_hy1]
-    mov cx, [sv_hx2]
-    mov dx, [sv_hy2]
-    mov di, bp
-    call gfxe_winit                 ; SPEC.md 5.12.5: the block is ours
-
+    mov [sv_hln + si], al
     add bp, GLS_SZ
-    inc byte [sv_hci]
-    jmp short .one
-.done:
-    pop es
+    inc si
+    dec byte [sv_hci]
+    jnz .one
     ret
 
 ; sv_hvpt - vertex AL of the selected figure -> AX = x, DX = y
-; clobbers AX, DX, DI, flags
+; clobbers AX, DX, DI, flags. AL < SV_HNV, so `cbw` is the zero extension
 sv_hvpt:
-    xor ah, ah
+    cbw
     add ax, ax
-    add ax, [sv_hbv]
-    mov di, ax
+    xchg ax, di
+    add di, [sv_hbv]
     mov dx, [sv_hvy + di]
     mov ax, [sv_hvx + di]
     ret
@@ -422,8 +382,8 @@ sv_hvpt:
 ; -----------------------------------------------------------------------------
 sv_hspawn:
     mov cx, SV_HNK              ; --- the SHAPE, and everything else off it
-    call sv_rndn
-    mov bl, SV_HKD_SZ
+    call sv_rndn                ; (sv_rndn keeps BX, which every step below
+    mov bl, SV_HKD_SZ           ; leans on)
     mul bl
     add ax, sv_hkd
     mov [sv_hkp], ax
@@ -433,13 +393,11 @@ sv_hspawn:
     mov al, [bx + SV_HKD_NW]
     mov [sv_hnw], al
 
-    mov al, [bx + SV_HKD_KMAX]  ; ...and the ring size IT allows, which for a
-    sub al, [bx + SV_HKD_KMIN]  ; cube is four and only four
-    xor ah, ah
-    inc ax
-    mov cx, ax
+    mov cl, [bx + SV_HKD_KMAX]  ; ...and the ring size IT allows, which for a
+    sub cl, [bx + SV_HKD_KMIN]  ; cube is four and only four
+    mov ch, 0
+    inc cx
     call sv_rndn
-    mov bx, [sv_hkp]
     add al, [bx + SV_HKD_KMIN]
     mov [sv_hkk], al
 
@@ -455,52 +413,32 @@ sv_hspawn:
 .rok:
     mov [sv_hrr], ax
 
-    mov bx, [sv_hrr]            ; a centre the whole figure fits at
-    add bx, bx                  ; BX = the diameter
-    mov cx, [sv_w]
-    sub cx, bx
-    call sv_rndn
-    add ax, [sv_hrr]
-    mov [sv_hcx], ax
-    mov bx, [sv_hrr]
-    add bx, bx
-    mov cx, [sv_h]
-    sub cx, bx
-    call sv_rndn
-    add ax, [sv_hrr]
-    mov [sv_hcy], ax
+    mov bx, ax                  ; a centre the whole figure fits at
+    mov di, sv_hcx
+    call sv_rndxy
 
     call OSAPI_RAND             ; the attitude, both angles at once
     call sv_rotset
 
     mov cx, 3                   ; one of the three inks (SPEC.md 39.4)
     call sv_rndn
-    inc al
-    mov bl, [sv_hf]
-    xor bh, bh
+    inc ax
+    mov bx, [sv_hf]
     mov [sv_hik + bx], al
 
     mov al, [sv_hkk]            ; K edges in each of this shape's waves
-    xor ah, ah
-    mov bl, [sv_hnw]
-    xor bh, bh
-    mul bx
-    mov bl, [sv_hf]
-    xor bh, bh
+    mul byte [sv_hnw]
     mov [sv_hne + bx], al
     mov byte [sv_hph + bx], SV_HP_WAIT
 
-    push bx
     mov cx, SV_HWAIT
     call sv_rndn
-    inc al                      ; never zero: the counter is a `dec`/`jnz`
-    pop bx
+    inc ax                      ; never zero: the counter is a `dec`/`jnz`
     mov [sv_hhd + bx], al
 
     call sv_hverts
     call sv_hedges
-    call sv_hinitw
-    ret
+    jmp sv_hinitw
 
 ; -----------------------------------------------------------------------------
 ; sv_hverts - every vertex, in three dimensions and then on the glass
@@ -512,6 +450,12 @@ sv_hspawn:
 ; is vertex 1 + l*K + p, and the second ring is TWISTED half a step so its
 ; points sit between the first ring's - which is what makes the struts between
 ; them slant instead of lying flat along a meridian.
+;
+; THE WALK IS IN REGISTERS where it can be (driver size pass 1): BP counts the
+; vertex - 3 + l*K + p is one more each point - and DX is the ring's offset
+; into the shape's row on entry to .ring, which is called for ring A and
+; fallen into for ring B. CL carries theta and CH the spike across the
+; multiplies, which keep CX; sv_hput spends the rest.
 ; -----------------------------------------------------------------------------
 sv_hverts:
     mov di, [sv_hbv]            ; --- the hub, which IS the rotated origin
@@ -520,24 +464,25 @@ sv_hverts:
     mov ax, [sv_hcy]
     mov [sv_hvy + di], ax
 
-    mov word [sv_hm], 0         ; --- the two poles, at -R and +R on y. BYTE,
-    mov byte [sv_hm + 2], 0     ; because sv_hm is THREE bytes and a word store
-                                ; at +2 reaches +3, which is sv_hne's first
-                                ; entry - slot 0 then had nought edges for ever
-                                ; and only slot 1 ever drew
-    mov byte [sv_hm + 1], -SV_HMR
+    mov word [sv_hm], (-SV_HMR & 0FFh) << 8  ; --- the two poles, at -R and +R
+    mov byte [sv_hm + 2], 0     ; on y. A BYTE at +2, because sv_hm is THREE
+                                ; bytes and a word store at +2 reaches +3,
+                                ; which is another variable: slot 0 once had
+                                ; nought edges for ever that way and only slot
+                                ; 1 ever drew
     mov al, 1
     call sv_hput
     mov byte [sv_hm + 1], SV_HMR
     mov al, 2
     call sv_hput
 
-    mov byte [sv_hli], 0        ; --- and the two rings
-.layer:
-    mov bl, [sv_hli]
-    xor bh, bh
-    add bx, bx
-    add bx, [sv_hkp]            ; the shape's row: ring A's pair, then B's
+    mov bp, 3                   ; --- and the two rings
+    xor dx, dx
+    call .ring                  ; ring A...
+    mov dx, 2                   ; ...and B, whose pair is 2 bytes on in the row
+.ring:
+    mov bx, [sv_hkp]            ; the shape's row: ring A's pair, then B's
+    add bx, dx
     mov al, [bx + SV_HKD_RAP]   ; the phase first, while BX still names the
     mov [sv_hlph], al           ; row - the scale's load spends BL
     mov al, SV_HMR
@@ -546,114 +491,80 @@ sv_hverts:
     mov [sv_hlrr], al
 
     xor al, al                  ; the twist: none on ring A, the shape's own
-    cmp byte [sv_hli], 0        ; half-step on ring B
-    je .tw
+    or dx, dx                   ; half-step on ring B
+    jz .tw
     mov bx, [sv_hkp]
     cmp byte [bx + SV_HKD_TW], 0
     je .tw
-    mov al, 128
-    xor ah, ah
-    mov bl, [sv_hkk]
-    xor bh, bh
-    div bl
+    mov ax, 128
+    div byte [sv_hkk]
 .tw:
     mov [sv_hltw], al
 
     mov byte [sv_hpi], 0
 .point:
-    mov bx, [sv_hkp]            ; --- this point's own radius and latitude
-    mov al, [sv_hlrr]
-    mov ah, [sv_hlph]
-    cmp byte [bx + SV_HKD_SPK], SV_HSP_IN
-    jne .zig
-    test byte [sv_hpi], 1       ; every other one pulled IN, which is what
-    jz .full                    ; makes a ring a star
+    mov bx, [sv_hkp]            ; --- theta = p * 256 / K, plus the ring's
+    mov ah, [sv_hpi]            ; twist and the shape's own offset - which is
+    xor al, al                  ; what puts a four-point ring's corners at 45
+    div byte [sv_hkk]           ; degrees, where a cube's are. p < K, so the
+    add al, [sv_hltw]           ; quotient is under 256 and a byte divide
+    add al, [bx + SV_HKD_TH0]   ; holds it
+    mov cl, al                  ; CL = theta
+    mov ch, [bx + SV_HKD_SPK]   ; CH = the spike, before BL is spent
+
+    mov ax, [sv_hlrr]           ; --- this point's own radius and latitude:
+    test byte [sv_hpi], 1       ; AL = [sv_hlrr], AH = [sv_hlph]. Every other
+    jz .full                    ; one is pulled IN, which is what makes a ring
+    dec ch                      ; a star...
+    jnz .zig
     mov bl, SV_HSPK
     call sv_mulsh
     jmp short .full
 .zig:
-    cmp byte [bx + SV_HKD_SPK], SV_HSP_ZIG
-    jne .full
-    test byte [sv_hpi], 1       ; ...or every other one RAISED, which is what
-    jz .full                    ; makes a rim a three-dimensional star
+    dec ch                      ; ...or RAISED, which is what makes a rim a
+    jnz .full                   ; three-dimensional star
     add ah, SV_HZIG
 .full:
-    mov [sv_hpr], al
-    mov [sv_hlph2], ah
-
-    mov al, [sv_hlph2]          ; y = r * sin(phi)
-    call sv_sin
-    mov bl, al
-    mov al, [sv_hpr]
-    call sv_mulsh
+    xchg al, ah                 ; AL = phi, AH = r
+    push ax
+    call sv_rsin                ; y = r * sin(phi)
     mov [sv_hm + 1], al
-
-    mov al, [sv_hlph2]          ; ...and the radius left in the xz plane
-    call sv_cos
-    mov bl, al
-    mov al, [sv_hpr]
-    call sv_mulsh
-    mov [sv_hpc], al
-
-    mov al, [sv_hpi]            ; theta = p * 256 / K, plus the ring's twist
-    mov ah, al                  ; and the shape's own offset - which is what
-    xor al, al                  ; puts a four-point ring's corners at 45
-    xor dx, dx                  ; degrees, where a cube's are
-    mov bl, [sv_hkk]
-    xor bh, bh
-    div bx
-    add al, [sv_hltw]
-    mov bx, [sv_hkp]
-    add al, [bx + SV_HKD_TH0]
-    mov [sv_hth], al
-
-    call sv_cos                 ; x = rc * cos(theta)
-    mov bl, al
-    mov al, [sv_hpc]
-    call sv_mulsh
+    pop ax
+    call sv_rcos                ; ...and the radius left in the xz plane
+    mov ah, al
+    mov al, cl                  ; AL = theta, AH = that radius
+    push ax
+    call sv_rcos                ; x = rc * cos(theta)
     mov [sv_hm], al
-    mov al, [sv_hth]            ; z = rc * sin(theta)
-    call sv_sin
-    mov bl, al
-    mov al, [sv_hpc]
-    call sv_mulsh
+    pop ax
+    call sv_rsin                ; z = rc * sin(theta)
     mov [sv_hm + 2], al
 
-    mov al, [sv_hli]            ; vertex index = 3 + l*K + p
-    xor ah, ah
-    mov bl, [sv_hkk]
-    xor bh, bh
-    mul bx
-    add al, [sv_hpi]
-    adc ah, 0
-    add ax, 3
+    mov ax, bp                  ; vertex 3 + l*K + p
     call sv_hput
+    inc bp
 
     inc byte [sv_hpi]
     mov al, [sv_hpi]
     cmp al, [sv_hkk]
     jb .point
-    inc byte [sv_hli]
-    cmp byte [sv_hli], SV_HNL
-    jb .layer
     ret
 
 ; -----------------------------------------------------------------------------
 ; sv_hput - the model vertex in [sv_hm] through the attitude, onto the glass,
 ;           and stored as vertex AL
-; in:  AX = the vertex index, [sv_hm] = three signed bytes
-; out: nothing; clobbers AX, BX, DI, flags
+; in:  AL = the vertex index, [sv_hm] = three signed bytes
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI, flags
 ; -----------------------------------------------------------------------------
 sv_hput:
-    push si
     push ax
     mov si, sv_hm
     call sv_rot3
     pop ax
-    xor ah, ah
+    cbw                         ; the index is < SV_HNV
     add ax, ax
-    add ax, [sv_hbv]
-    mov di, ax
+    xchg ax, di
+    add di, [sv_hbv]
     mov al, [sv_rx]             ; ...and to the size it is drawn at, in 16 bits
     cbw                         ; so a big figure is not a coarse one
     imul word [sv_hrr]
@@ -664,37 +575,31 @@ sv_hput:
     mov al, [sv_ry]
     cbw
     imul word [sv_hrr]
-    mov cl, 6
-    sar ax, cl
+    sar ax, cl                  ; CL is still 6: `imul` keeps CX
     mov bx, [sv_hcy]
     sub bx, ax                  ; screen y grows DOWN and the model's up
     mov [sv_hvy + di], bx
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------
 ; sv_hedges - the six waves, in the order they bloom
 ; in:  the figure selected and [sv_hkk] set; out: [sv_hea]/[sv_heb] filled
+;
+; SI walks the shape's wave table four bytes a wave and [sv_hwi] counts the
+; waves down; sv_hvi keeps both.
 ; -----------------------------------------------------------------------------
 sv_hedges:
     mov di, [sv_hbe]
-    mov byte [sv_hwi], 0
+    mov si, [sv_hwp]
+    mov al, [sv_hnw]
+    mov [sv_hwi], al
 .wave:
     mov byte [sv_hpi], 0
 .point:
-    mov bl, [sv_hwi]            ; the wave's two descriptors
-    xor bh, bh
-    add bx, bx
-    add bx, bx
-    add bx, [sv_hwp]            ; ...out of THIS shape's table
-    mov al, [bx]
-    mov ah, [bx + 1]
-    push bx
+    mov ax, [si]                ; the wave's two descriptors
     call sv_hvi
-    pop bx
     mov [sv_hea + di], al
-    mov al, [bx + 2]
-    mov ah, [bx + 3]
+    mov ax, [si + 2]
     call sv_hvi
     mov [sv_heb + di], al
     inc di
@@ -703,40 +608,32 @@ sv_hedges:
     mov al, [sv_hpi]
     cmp al, [sv_hkk]
     jb .point
-    inc byte [sv_hwi]
-    mov al, [sv_hwi]
-    cmp al, [sv_hnw]
-    jb .wave
+    add si, 4
+    dec byte [sv_hwi]
+    jnz .wave
     ret
 
 ; -----------------------------------------------------------------------------
 ; sv_hvi - a wave descriptor and [sv_hpi] -> AL = a vertex index
 ; in:  AL = the ring (0 = the hub, 1 or 2 = a ring), AH = the step around it
-; out: AL; clobbers AX, BX, CX, flags
+; out: AL; clobbers AX, DL, flags
 ; -----------------------------------------------------------------------------
 sv_hvi:
-    cmp al, SV_HV_RA
-    jae .ring
-    xor ah, ah                  ; hub, bottom pole, top pole: AL already IS
-    ret                         ; the index, and the step says nothing
-.ring:
-    push dx
+    cmp al, SV_HV_RA            ; hub, bottom pole, top pole: AL already IS
+    jb .out                     ; the index, and the step says nothing
     mov dl, al                  ; DL = which ring
     mov al, ah                  ; (p + step) mod K. The step is signed and the
     add al, [sv_hpi]            ; sum is done in a BYTE, so -1 + p + K lands
     add al, [sv_hkk]            ; clear of zero before the fold
     mov ah, 0
-    mov bl, [sv_hkk]
-    xor bh, bh
-    div bl
+    div byte [sv_hkk]
     mov al, ah
     cmp dl, SV_HV_RB            ; ring A starts at 3, ring B at 3 + K
     jne .base
     add al, [sv_hkk]
 .base:
     add al, 3
-    xor ah, ah
-    pop dx
+.out:
     ret
 
 ; The waves, four bytes each: the vertex class and step of the first end, then
@@ -796,35 +693,25 @@ sv_hkd:
 ; - for both figures before the first frame reads one, so nothing here needs
 ; a load-time value.
 %macro SV_SHAPE_STATE 0
-sv_hf:      resb 1               ; the figure being worked, and its three bases
-sv_hbv:     resw 1
+sv_hf:      resw 1               ; the figure being worked - a WORD, high byte
+sv_hbv:     resw 1               ; 0, so it indexes - and its three bases
 sv_hbe:     resw 1
 sv_hbw:     resw 1
 
-sv_hci:     resb 1               ; sv_hrun / sv_hinitw: the edge in hand
-sv_hnn:     resb 1               ; ...and how many the figure has
-sv_hx1:     resw 1
-sv_hy1:     resw 1
-sv_hx2:     resw 1
-sv_hy2:     resw 1
+sv_hci:     resb 1               ; sv_hinitw: the edges left to arm
 
 sv_hcx:     resw 1               ; sv_hspawn / sv_hverts: ONE figure at a time,
 sv_hcy:     resw 1               ; which is what lets these be single copies
 sv_hrr:     resw 1               ; the radius ON THE GLASS
 sv_hkk:     resb 1
-sv_hli:     resb 1
 sv_hpi:     resb 1
 sv_hwi:     resb 1
 sv_hkp:     resw 1           ; the shape in hand, and its wave table
 sv_hwp:     resw 1
 sv_hnw:     resb 1
-sv_hlph2:   resb 1
-sv_hlrr:    resb 1
-sv_hlph:    resb 1
+sv_hlrr:    resb 1           ; a ring's radius and latitude, IN THAT ORDER:
+sv_hlph:    resb 1           ; sv_hverts loads the pair as one word
 sv_hltw:    resb 1
-sv_hpr:     resb 1
-sv_hpc:     resb 1
-sv_hth:     resb 1
 sv_hm:      resb 3             ; the model vertex handed to sv_rot3
 
 sv_hne:     resb SV_HNF       ; per figure

@@ -82,6 +82,8 @@ with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/wirerena
     m.advance(cycles=F)
     if a.level:
         m.key("F%d" % a.level); m.advance(cycles=F // 4)
+    if a.level == 5:          # (Very High turns vsync on: off again,
+        m.key("KeyV"); m.advance(cycles=F // 4)   # so its numbers compare)
     buf = m.read(0x10000, 0x90000)
     b = [0x10000 + o for o in range(0, len(buf) - 32, 16)
          if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 26] == b'Wire Arena'][-1]

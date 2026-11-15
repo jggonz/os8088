@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "9d0e1ac4c0bf2be40587166b3b495cefe5f7ff61a9e8b68c19fed9f8fecd7d0e",
+  "fingerprint": "0fd0ab8da4ae02ad816d1bebacbfba699ecf13e6c1368ebbac1e72bb466b3126",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "d21931c13e5ad37ffa9aa8d87d89152f7499b09e087dbe4d8be66ea2c4564d11",
+  "fingerprint": "eb3ade0bf9b0259bfe62a93adc923aa6690fc7e09d9769ba09987617bddf7a9c",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2322,6 +2322,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "ETHER.DRV gains UDP for packages (NETV_UDP 18, NETV_UDPTX 19, NETV_UDPRX 20, SPEC.md 72.23) and grows ~1KB: DRVM_CEIL_NET 34->35, DRVM_CEIL_NET_PCI 39->40. Additive; earlier packages run unchanged",
+   "to": 14
+  },
+  {
+   "fingerprint": "eb3ade0bf9b0259bfe62a93adc923aa6690fc7e09d9769ba09987617bddf7a9c",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge of elendilon into driver size pass 1: DRVM_CEIL_NET 35 -> 34 (ETHER.DRV with UDP is 35 sectors, not 36, after the pass) - a caption's ceiling, no cell moved, no DRV_VER bump (driver size pass 1)",
+   "to": 13
+  },
+  {
+   "fingerprint": "0fd0ab8da4ae02ad816d1bebacbfba699ecf13e6c1368ebbac1e72bb466b3126",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "merge of elendilon into driver size pass 1: DRVM_CEIL_NET 35 -> 34 (ETHER.DRV with UDP is 35 sectors, not 36, after the pass) - a caption's ceiling, no cell moved, no DRV_VER bump (driver size pass 1)",
    "to": 14
   }
  ]

@@ -1626,6 +1626,124 @@ that were interface changes between areas and not taken (a byte-wide
 `wa_fbuf`, `wa_face` handing its columns to the span code in registers, a
 "clip raised" flag for the tall spans on heights).
 
+### 16.11 The final speed pass - six agents, merged and measured together (2026-11-15)
+
+The owner: *"run 6 agents on a final speed pass. They can look deep; we've
+done many speed passes already so what is left to find might not be huge
+gaps. If they can shrink size, that often equates to speed (and helps the
+file on disk sometimes)."*
+
+**How it was run.** One baseline, recorded once by the coordinator off
+`86e0e026` (`tools/waposes.py`: the eight reference sets, and Crossing, the
+Ziggurat and the Pit at 40 columns, which no reference set covered). Six
+agents, each in a worktree of its own with one area and one brief: the
+low-box outlines (`wrlow.inc`), the walls (`wrender.inc`'s geometry, faces,
+spans and columns), the things (figures, pickups, projectiles, flags, the
+overlay, the floor grid, the present), the game (the frame's glue, the sim,
+bots, CTF and the hill, the HUD, the link's tick), size (the cold paths and
+the file on disk) and data (what `tools/arenagen.py` emits). Each candidate
+was measured and kept only as a win; the picture held byte-identical except
+where the owner ruled. The branches were merged one at a time into
+`speed/merge`; walls and things had built the same lever (the attribute
+table made once, not copied every frame) and the walls' form was kept;
+size and data each took `WR_ABI` 15, reconciled to 15 and 16, and the seam
+fix took 17.
+
+**Measured, merged** (render clk a pose, a MOVED view, MartyPC's 5150 with
+a CGA; "before" is `86e0e026`, the Hedge's before off the same tree):
+
+| set | before | after | |
+|---|---|---|---|
+| open, 40 columns | 107,357 | 105,532 | -1.7% |
+| pillars, 40 / 80 | 124,488 / 146,041 | 121,454 / 140,925 | -2.4% / -3.5% |
+| pillars, Very High | 153,096 | 149,436 | -2.4% |
+| Crossing, 40 | 134,954 | 131,315 | -2.7% |
+| heights, 40 / 80 | 157,715 / 198,411 | 153,962 / 192,410 | -2.4% / -3.0% |
+| heights, Very Low / Very High | 153,919 / 200,089 | 150,437 / 195,148 | -2.3% / -2.5% |
+| the Hedge, 40 | 180,216 | 173,364 | -3.8% |
+| the Ziggurat, 40 | 221,363 | 216,113 | -2.4% |
+| **the Pit, 40** | **235,316** | **218,942** | **-7.0%** |
+
+The game's own work, per tick, off seeded matches compared tick by tick
+(identical game state in all seven): the Twin's CTF 25,601 -> 19,883 clk
+(-22.3%), the heights' king of the hill -9.0%, its free-for-all walking
+-3.7%.
+
+**The file on disk**: WIRERENA.O88 68,034 -> 59,221 bytes (-13%), 71 -> 62
+of `games2-360.img`'s 354 clusters. The renderer part 64,066 -> 62,519
+bytes (2.5 KB under its 65,024 limit, where it was 958).
+
+**What it was made of** (each agent's commits carry its own numbers):
+
+- low boxes: a floor edge culled as its top is; the clip tested first; the
+  previous column in a register; a clipped edge projects only its end
+  outside the view; the stamp set once a frame; a plain solid skips the
+  treads' and stack's tests - the Pit -3.7%;
+- walls: a flat pass skips a run of shut columns at once; the hot
+  conditional jumps short; the corner and face pre-checks leaner; the
+  attribute table made at INIT;
+- things: the figure scratch a byte a cell (-1.9 KB of the renderer's BSS);
+  the camera's product in three multiplies; present by STOSW; a limb's two
+  quadrants in one OR; the floor grid's view test by single shifts;
+- game: the floor lines by a 128-unit grid (-4,600 clk a tick on the Twin);
+  `wc_pos`/`wc_near` without a product or a call; the lift riders counted
+  in place; the free-for-all win test unrolled; a still mouse multiplies
+  nothing;
+- size: the keyframes shipped delta-coded and their mirrored half as zeros,
+  the sine table as its second difference (`tools/wadelta.py`; undone in
+  place at entry, about 0.2 s on the XT, estimated); three SDK opt-outs;
+- data: a tall box's covered faces out of its silhouette; the PVS tested
+  only from where an eye can be; the PVS on the full arena too; the BSP
+  tree in rows of two sizes; the route graph's next hops two bits a pair.
+
+**Two bugs found and fixed**:
+
+- **A bot on the Ziggurat's top was drawn (and hit) 256 units low**: FRAME
+  is 23 bytes, and `wa_rframe` halved it before adding figure 0's head, so
+  `F_Z`'s high byte never crossed to the renderer (the game agent).
+- **The see-through corner** (the owner: *"its the inner corner of the top
+  wall, showing through as if the wall were transparent. We should fix that
+  even if it wasn't a speed boost"*): where low boxes meet each other or the
+  room's edge, a corner post inside solid geometry was drawn top to floor -
+  the Pit's ring and layer seams and the Hedge's doubled outer-wall posts.
+  arenagen's `buried_byte` marks each box's buried posts and floor edges
+  (descriptor word 50, `WR_ABI` 17) and `wa_lowbox` skips them: 8 posts
+  and 6 floor edges on the Pit, 10 posts and 2 floor edges on the Hedge,
+  none elsewhere. Every changed cell is a wrong `│` going away; the Pit
+  gains 1.4-1.6%, arenas with low boxes and nothing buried pay 0.1-0.2%.
+
+**The owner's rulings on the picture**:
+
+- **A clipped low box's edge ends at the screen's edge** as the walls' have
+  since pass 6 (*"the tall walls don't noticeably have any issues and they
+  already do it right"*; and on the screenshots, *"in the third red set it
+  looks better, the slope continues more naturally ... lets take it"*):
+  the Pit -0.9%, +224 bytes; edges' half-row steps move a column near the
+  screen's edge, and a long steep edge leaving it can shift whole.
+- The see-through corner, above.
+
+**Tried and reverted, with numbers** (so nobody tries them again): word-wide
+keyframe deltas (+423 packed bytes); a per-tick table of the four players
+for the CTF flags (+951 clk a tick); a pass counted down by DH (+129 bytes
+for heights' 0); opening an all-open span at once (+0.11%); the shut-run
+helper inline (-0.1% for +110 bytes); a cached floor-cull start (+0.01%);
+send-only-beside-the-view (+0.44% on the Pit: such ends never occur); the
+PVS as a dictionary (raw -3.9 KB, packed +89); XOR/SHL in the overlay's
+stamp loops (+2/+11 clk); the buried masks precomputed per box (+0.26% on
+the Ziggurat, +96 packed bytes).
+
+**Left, measured or estimated and not taken**: a tall wall's shut columns
+setting their clip to 0 so the outlines drop a per-column test (~1.2% on
+the Pit, a span-code change); `wa_vend` cheaper for the Ziggurat's
+behind-the-eye ends (its +0.04%); a second low-box path for boxes with
+something buried (~150 bytes to take the 0.1-0.2% back); the pose part's
+mirror copied at entry (-4.9 KB of heap, the disk already has it); the
+route graph coded for the packer (arenas are 22% of the file); `wa_lktick`'s
+two divides by counters (~250 clk a link tick); the hot keyframes into the
+pose part (17.3, ~1% for 4 KB). The walls are about 55% of a posed frame and
+near the 8088's fetch floor; the low boxes' shallow loops are register-
+bound. Another pass would be smaller than this one.
+
 ## 17. Rulings, work in progress, and what is open (2026-11-15)
 
 The plans that built WireArena were swept on 2026-11-15 and filed under
@@ -1776,6 +1894,45 @@ by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
   are `wirerena*.img`. The source keeps `apps/wirearena/` and `wa_`. Text
   written before the rename (16, the completed plans) keeps the old file
   name as history.
+- **Detail in the setup** (the owner, 2026-11-15: *"we don't have a
+  dropdown for Detail. We have one open dropdown slot ... make sure it
+  reflects the detail level the cpu tier gets"*). Detail is the slot right
+  of Play, and the address field takes that slot while Play is Internet
+  (the owner's pick of three layouts); one focus stop between Play and
+  Mode, whichever holds it. It shows `wa_level`, and a pick goes through
+  `wa_setlevel` as F1..F5 do (SPEC.md 128.6). And with it, the owner's
+  *"a 286 can do Very High, its pegged over the monitor's refresh rate. So
+  we can add VSync to that detail level as well"*: `wa_levtab` gains a
+  vsync column, on at Very High alone, and a 286 or better starts at Very
+  High (SPEC.md 128.2). `wasetup` (the drop-down at Medium on the 8088, a
+  pick, the slot changing hands both ways with nothing left behind - red
+  on each of three breaks), `wahudset` (F5's vsync), `wamodes` and
+  `mega-wamodes` (the level by the tier: Medium on MartyPC's 8088, Very
+  High with vsync on Bochs). `wabench` and `waprof` turn vsync off after
+  F5 so their Very High numbers compare. +201 bytes of the primary
+  (37,601 to 37,802).
+- **A low wall's foot through its top** (the owner, 2026-11-15: *"wall
+  part shows through from above when it should be occluded ... the
+  bottom part of a low wall"*, the Hedge's outer wall). Where two low
+  boxes of one height meet, the shared top edge is not drawn (the top
+  runs on), so nothing raised the clip there and the neighbour's face,
+  drawn later, showed its floor edge, slopes and posts through the top.
+  arenagen's `seam_bits` marks those faces (the high byte of the
+  descriptor's word 50, WR_ABI 18) and `wl_seams` draws each as a far top
+  edge would be, then takes its cells back: the clip raised, no line. The
+  Hedge's four outer corners and eight joins in the Pit; the line across
+  the joined tops goes too. The owner, on the pictures: *"looks awesome
+  (in both cases)"*. It costs the Pit +0.77% a pose on its reference set
+  and up to +1.84% on poses aimed at the joins, the Hedge +0.07-0.15%,
+  the rest nothing; +136 bytes of the renderer part. Then, the owner:
+  *"get as much performance as we know about; go for the dedicated
+  routine"*: a seam's top is walked by loops of its own (`wl_sseam`,
+  `wl_s01s`), the top loops' steps with nothing plotted and nothing taken
+  back - the picture identical on every set, the Pit 0.18-0.25% back. Net,
+  the fix costs the Pit +0.53% a pose (a7w40) and +1.62% at its joins, the
+  Hedge +0.06-0.09%; +355 bytes of the renderer part in all. The gain was
+  smaller than estimated: each seam still pays its edge setup, its span
+  entry and its walk.
 
 **After the first release** (the owner, 2026-11-15: *after*, for the turn
 acceleration and for all the test and measurement debt):

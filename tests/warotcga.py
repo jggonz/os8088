@@ -53,8 +53,9 @@ def main():
 
         def opened(mode, want_rows, n):
             if mode:                    # (the mode as a user picks it: the
-                for _ in range(5):      # focus down to Mode, Right - the
-                    m.key("ArrowDown")  # setup's Arena list follows it)
+                for _ in range(6):      # focus down to Mode - past Detail,
+                    m.key("ArrowDown")  # the slot's - Right: the setup's
+                                        # Arena list follows it)
                 m.key("ArrowRight")
             m.key("KeyR")
             os88marty.until(m, lambda _: p.word(sym["wa_rwin"]) != 0,

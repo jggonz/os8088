@@ -42,6 +42,13 @@ WA_FBLOCK
 wr_hdr:
     db 'WRPART', WR_ABI, WR_NVERB
     dw wr_v_init, wr_v_geom, wr_v_arena, wr_v_render, wr_v_present, wr_v_trace
+wr_hpose:
+    dw wa_pose0                     ; (WR_H_POSE: the hot keyframes, which
+                                    ; the file holds coded and the
+                                    ; primary's wa_rbind decodes once)
+%if wr_hpose - wr_hdr != WR_H_POSE || WR_H_POSE != WR_H_VERB + WR_NVERB*2
+    %error "wrpart: WR_H_POSE is the word after the verbs"
+%endif
 %if ($ - $$) > WR_FB
     %error "wrpart: the header runs into the frame block"
 %endif
@@ -73,8 +80,7 @@ wr_v_arena:                     ; DX = the arena part's segment
 ; cleared (the frame number restarts, so an old stamp could match), the lists
 ; emptied
 wr_v_init:
-    push ds
-    pop es
+    call wa_atset               ; (and ES = DS)
     xor bx, bx
     mov si, wa_rowo2
     mov di, wa_hroff
@@ -93,11 +99,12 @@ wr_v_init:
     inc si
     inc si
     loop .rows
-    mov si, wa_hroff            ; ...and in wa_fbuf (wa_flgo's start)
-    mov di, wa_hrfb
+    mov si, wa_hroff            ; ...and in wa_fbuf (wa_flgo's start), a
+    mov di, wa_hrfb             ; byte a cell
     mov cx, WA_HR
 .fb:
     lodsw
+    shr ax, 1
     add ax, wa_fbuf
     stosw
     loop .fb
@@ -382,35 +389,35 @@ wa_loadarena:
     mov di, wa_pvs
     rep movsb
 .nopvs:
-    mov si, [bx+18]             ; the tree, WA_ROW bytes a node
-    mov dx, wa_bsp
-    sub dx, si                  ; DX = what each link moves by
-    mov cx, [bx+28]
-    mov bx, cx                  ; BX = its nodes
-    shl cx, 1
-    add cx, bx
-    shl cx, 1                   ; x 6: words
+    mov si, [bx+50]             ; ITS BOXES' BURIED OUTLINE (WR_ABI 18): a
+    mov cx, [bx+16]             ; word a box, arenagen's buried_byte - the
+    mov di, wa_bbur             ; floor edges and posts inside the solid -
+    rep movsw                   ; and its seams (wa_lowbox, wl_seams)
+    mov si, [bx+18]             ; the tree: a leaf 2 bytes (db kind 2, box
+    mov dx, wa_bsp              ; x 4), a split 8 (db kind, 0; dw value,
+    sub dx, si                  ; low, high) - DX = what each link moves by
+    mov cx, [bx+28]             ; its bytes
+    mov bx, cx
+    shr cx, 1
     mov di, wa_bsp
     rep movsw
     push es
     pop ds                      ; ours again
     mov word [wa_root], wa_bsp  ; the root is the first node
     mov si, wa_bsp
-    mov cx, bx
+    add bx, si                  ; BX = the tree's end
 .node:
-    cmp word [si+4], 0          ; low and high, 0 = none
-    je .lo
-    add [si+4], dx
-.lo:
-    cmp word [si+6], 0
-    je .hi
+    cmp byte [si], 2
+    je .leaf
+    add [si+4], dx              ; (a split has both links)
     add [si+6], dx
-.hi:
-    add si, WA_BSPROW
-    loop .node
+    add si, 6
+.leaf:
+    inc si
+    inc si
+    cmp si, bx
+    jb .node
     ret
-WA_BSPROW equ 12                ; a node: db kind, box; dw value, low, high;
-                                ; db its boxes' bounds x 4
 
 %include "wrender.inc"
 %include "wrlow.inc"
@@ -441,7 +448,8 @@ WA_VAR wa_yv,WA_MYV*2
 WA_VAR wa_vtx,WA_MVTX*2
 WA_VAR wa_corn,(WA_MBOX+1)*4
 WA_VAR wa_bcol,WA_MBOX+2
-WA_VAR wa_bsp,WA_MNODE*WA_BSPROW  ; the tree, rebased (wa_loadarena)
+WA_VAR wa_bbur,WA_MBOX*2         ; ...and its buried floor edges and posts, and seams
+WA_VAR wa_bsp,WA_MBSP            ; the tree, rebased (wa_loadarena)
 WA_VAR wa_pvsh,1                 ; the PVS: the grid's shift (0: none)...
 WA_VAR wa_pvsn,1                 ; ...its cells a column...
 WA_VAR wa_pvp,2                  ; ...this cell's mask (wa_order)...

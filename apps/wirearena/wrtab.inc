@@ -4,6 +4,7 @@
 ; a wall edge's glyph by half-row: upper half the middle line, lower the
 ; bottom one
 wa_hgl:     times WA_HR/2 db 0xC4, '_'
+WA_HGLX equ 0xC4 ^ '_'          ; (a half-row on: FLATPASS's glyph by XOR)
 ; the figure layer's glyph for each 2x2 occupancy mask: bit 0 top-left,
 ; 1 top-right, 2 bottom-left, 3 bottom-right
 wa_fglyph:  db 0x20, 0xDF, 0xDF, 0xDF, 0xDC, 0xDD, 0xDB, 0xDB

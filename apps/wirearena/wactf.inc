@@ -238,15 +238,18 @@ wc_pos:
     mov dx, [wa_feet]
     stc
     ret
-.fig:
-    push di
-    dec ax
-    mov ah, F_SIZE
-    mul ah
-    add ax, wa_figs
-    mov di, ax
-    call wa_lkabsent            ; (ZF: not in this match)
-    je .nof
+.fig:                           ; (the flags and the hill ask it of each
+    push di                     ; of us every tick: no product, and alone
+    dec ax                      ; wa_lkabsent's test made of the index it
+    xor ah, ah                  ; was asked by - not again of the record)
+    mov bx, ax
+    shl bx, 1
+    mov di, [wc_figp+bx]        ; DI = its record
+    cmp byte [wa_lkon], 0
+    jne .lk
+    cmp al, [wa_lknb]           ; ALONE: the setup's count of bots
+    jae .nof
+.in:
     cmp byte [di+F_DEAD], 0
     jne .nof
     mov ax, [di+F_X]
@@ -255,28 +258,41 @@ wc_pos:
     pop di
     stc
     ret
+.lk:
+    call wa_lkabsent            ; (ZF: not in this match)
+    jne .in
 .nof:
     pop di
 .no:
     clc
     ret
+%if WA_NFIG != 3
+ %error "wc_figp names three figures"
+%endif
+wc_figp:    dw wa_figs, wa_figs + F_SIZE, wa_figs + 2*F_SIZE
 
 ; wc_near - AX, BX = a place, DX its floor, SI = a flag: CF = 1 within its
 ; reach (WA_FLR across, WC_DZ up or down). Keeps every register
-wc_near:
-    push ax
+wc_near:                        ; (the distances' signs off the subtracts
+    push ax                     ; themselves: wa_abs's test, not its call)
     sub ax, [si+WC_X]
-    call wa_abs
+    jns .x
+    neg ax
+.x:
     cmp ax, WA_FLR
     jae .no
     mov ax, bx
     sub ax, [si+WC_Y]
-    call wa_abs
+    jns .y
+    neg ax
+.y:
     cmp ax, WA_FLR
     jae .no
     mov ax, dx
     sub ax, [si+WC_Z]
-    call wa_abs
+    jns .z
+    neg ax
+.z:
     cmp ax, WC_DZ
     jae .no
     pop ax
@@ -534,15 +550,6 @@ wc_evin:
 .ret:
     ret
 
-; wc_round - a win shown (the host's, or alone): the captures and the flags
-; anew, everyone back on their side (the kills and deaths on Tab go on) -
-; the guests told, and putting their own players back themselves
-wc_round:
-    call wc_reset
-    call wc_side
-    call wc_send
-    jmp wc_frame
-
 ; wc_score - FREE-FOR-ALL and TEAM DEATHMATCH, alone, a tick: team
 ; deathmatch's teams' kills (each its players', a suicide a kill less as on
 ; the board); the first to Win at's score wins. Keeps nothing
@@ -555,12 +562,18 @@ wc_score:
     jz .out                     ; kills
     cmp word [wc_grace], 0      ; (linked, a new arena: the old board's
     jne .out                    ; rows may still come in)
-.f:
-    cmp [wa_kills+bx], ah
-    jae wc_fwin
+%if WA_NFIG != 3
+ %error "wc_score's free-for-all test is written for four players"
+%endif
+%assign wc_i 0                  ; (four tests in a row, no loop: every
+%rep WA_NFIG + 1                ; tick of a match with a goal asks them)
+    cmp [wa_kills+wc_i], ah
+    jae wc_fwin                 ; (BX = the index, as wc_fwin takes it)
+ %if wc_i < WA_NFIG
     inc bx
-    cmp bx, WA_NFIG + 1
-    jb .f
+ %endif
+%assign wc_i wc_i+1
+%endrep
 .out:
     ret
 .tdm:                           ; TEAM DEATHMATCH: DL red's, DH blue's

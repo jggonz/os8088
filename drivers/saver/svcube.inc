@@ -72,73 +72,44 @@ SV_CBHY     equ SV_CBH / 2
 ; -----------------------------------------------------------------------------
 sv_cube_init:
     call OSAPI_RAND             ; the two angles, so a re-pick is not the same
-    mov [sv_ca], al             ; cube in the same attitude
-    mov [sv_cb], ah
+    mov [sv_ca], ax             ; cube in the same attitude: AL to sv_ca, AH to
+                                ; sv_cb, which is the next byte
 
-    mov cx, [sv_w]              ; a centre anywhere the whole figure fits
-    sub cx, SV_CR * 2
-    call sv_rndn
-    add ax, SV_CR
-    mov [sv_ccx], ax
-    mov cx, [sv_h]
-    sub cx, SV_CR * 2
-    call sv_rndn
-    add ax, SV_CR
-    mov [sv_ccy], ax
+    mov bx, SV_CR               ; a centre anywhere the whole figure fits
+    mov di, sv_ccx
+    call sv_rndxy
 
     mov word [sv_cvx], 3        ; ...and a direction. The two speeds are
     mov word [sv_cvy], 2        ; coprime for the header's reason; only the
     call OSAPI_RAND             ; SIGNS are random, because a slow cube that
-    test ah, 1                  ; happens to start along a diagonal would
-    jz .sx                      ; retrace it for the whole of its turn. AH and
+    shr ah, 1                   ; happens to start along a diagonal would
+    jnc .sx                     ; retrace it for the whole of its turn. AH and
     neg word [sv_cvx]           ; not AL: bit 0 of the kernel's LCG alternates
 .sx:                            ; and bit 1 has period 4, so the low byte gave
-    test ah, 2                  ; four attitudes on a loop (sv_rndn's header)
-    jz .sy
-    neg word [sv_cvy]
+    shr ah, 1                   ; four attitudes on a loop (sv_rndn's header).
+    jnc .sy                     ; Two shifts read AH's bits 0 and 1, in that
+    neg word [sv_cvy]           ; order, out of CF
 .sy:
     ret
 
 ; -----------------------------------------------------------------------------
 ; sv_cube_step - one frame
 ; in:  the gfx lock is HELD
+;
+; ONE ROUTINE, IN FOUR PARTS, which used to be four routines with this one
+; caller (driver size pass 1): the move, the projection, the composite and the
+; put. ES is OURS from the mask's clear to the BLIT1 at the end - nothing in
+; between reads the kernel's segment - so it is set once and put back once.
 ; -----------------------------------------------------------------------------
 sv_cube_step:
-    call sv_cube_move
-    call sv_cube_proj
-
-    call sv_cube_compose        ; --- the composite (SPEC.md 79.5.6), and
-    call sv_cube_put            ; SINCE 79.5.6.1 IT IS THE ONLY PATH. It used
-                                ; to be guarded by [sv_cbok] with the
-                                ; edge-at-a-time orders behind it as insurance
-                                ; against a BLIT1 refusal - and gfx_blit1_x
-                                ; refuses four things, of which this call makes
-                                ; none: x is forced onto the byte grid, and the
-                                ; width and the rows are SV_CBW and SV_CBH,
-                                ; constants of 128. kern_small carries the body
-                                ; too since SPEC.md 5.4.2.5.1, so there is no
-                                ; machine left where the insurance can fire.
-                                ; The copy of this frame's vertices that
-                                ; followed it fed THAT path's erase and
-                                ; nothing else, so it went with it
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_cube_move - advance the tumble and the centre (module internal)
-;
-; The bounce is a REFLECTION AND A CLAMP, not a reflection alone: a centre put
-; down by sv_cube_init one pixel outside the band - which cannot happen, and
-; would be permanent if it did - would reverse on every frame and sit there
-; vibrating. Clamping first makes the state legal and the reversal then makes
-; it leave.
-; -----------------------------------------------------------------------------
-sv_cube_move:
-    mov al, [sv_ca]
-    add al, SV_CASTEP
-    mov [sv_ca], al
-    mov al, [sv_cb]
-    add al, SV_CBSTEP
-    mov [sv_cb], al
+    ; --- THE MOVE: advance the tumble and the centre ------------------------
+    ; The bounce is a REFLECTION AND A CLAMP, not a reflection alone: a centre
+    ; put down by sv_cube_init one pixel outside the band - which cannot
+    ; happen, and would be permanent if it did - would reverse on every frame
+    ; and sit there vibrating. Clamping first makes the state legal and the
+    ; reversal then makes it leave.
+    add byte [sv_ca], SV_CASTEP
+    add byte [sv_cb], SV_CBSTEP
 
     mov ax, [sv_ccx]
     mov dx, [sv_cvx]
@@ -159,7 +130,99 @@ sv_cube_move:
     call sv_bounce
     mov [sv_ccy], ax
     mov [sv_cvy], dx
-    ret
+
+    ; --- THE BOX, forced onto the byte grid (SPEC.md 79.5.6). AND on a
+    ; negative x rounds toward minus infinity, which is the direction that
+    ; keeps the figure inside the band. Taken BEFORE the projection now, so
+    ; the vertices are projected straight into MASK coordinates: x lands DX =
+    ; ccx - cbx0 into the box and y SV_CBHY - y' down it, which is exactly
+    ; what the screen coordinate less the box's origin was
+    sub ax, SV_CBHY
+    mov [sv_cby0], ax
+    mov ax, [sv_ccx]
+    sub ax, SV_CBHX
+    mov dx, ax
+    and ax, 0FFF8h
+    mov [sv_cbx0], ax
+    sub dx, ax
+    add dx, SV_CBHX             ; DX = ccx - cbx0, for every vertex below
+
+    ; --- THE PROJECTION: every vertex into sv_cpx / sv_cpy -----------------
+    ; Four sines fetched ONCE for the frame rather than per vertex, which is
+    ; eight table reads saved out of thirty-two. sv_rot3 keeps SI, CX and DX,
+    ; so the walk banks DI alone
+    mov ax, [sv_ca]             ; AL = sv_ca, AH = sv_cb: the four sines, in
+    call sv_rotset              ; saver.asm because the geometry rotates too
+    mov si, sv_cube_v
+    xor di, di
+    mov cx, SV_CNV
+.vert:
+    push di
+    call sv_rot3                ; -> [sv_rx], [sv_ry]
+    pop di
+    mov al, [sv_rx]
+    cbw
+    add ax, dx
+    mov [sv_cpx + di], ax
+    mov al, [sv_ry]
+    cbw
+    mov bx, SV_CBHY
+    sub bx, ax                  ; screen y grows DOWN and the model's up
+    mov [sv_cpy + di], bx
+    inc di
+    inc di
+    add si, 3
+    loop .vert
+
+    ; --- THE COMPOSITE: the whole figure into the mask (SPEC.md 79.5.6) ----
+    push es
+    push ds                     ; ...and a clean mask to draw into. ES stays
+    pop es                      ; ours until the put below
+    mov di, sv_cmask
+    mov cx, SV_CBSZ / 2
+    xor ax, ax
+    cld
+    rep stosw
+
+    mov si, sv_cube_e           ; the edge list, two vertex bytes an edge, and
+.edge:                          ; its END is the loop's bound
+    lodsb
+    call sv_cube_mpt
+    push ax
+    push dx
+    lodsb
+    call sv_cube_mpt
+    xchg ax, cx                 ; CX/BX = the far end
+    mov bx, dx
+    pop dx                      ; AX/DX = the near one
+    pop ax
+    push si
+    call sv_cml
+    pop si
+    cmp si, sv_cube_e + SV_CNE * 2
+    jb .edge
+
+    ; --- THE PUT: the band onto the glass, one arrival (SPEC.md 5.4.2) -----
+    mov si, sv_cmask            ; ES:SI = the band, which is ours
+    mov bp, SV_CBST
+    mov ax, [sv_cbx0]
+    mov bx, [sv_cby0]
+    mov cx, SV_CBW
+    mov dx, SV_CBH
+    call OSAPI_GFX_BLIT1        ; ...and SINCE 79.5.6.1 IT IS THE ONLY PATH.
+    pop es                      ; It used to be guarded by [sv_cbok] with the
+    ret                         ; edge-at-a-time orders behind it as insurance
+                                ; against a BLIT1 refusal - and gfx_blit1_x
+                                ; refuses four things, of which this call
+                                ; makes none: x is forced onto the byte grid,
+                                ; and the width and the rows are SV_CBW and
+                                ; SV_CBH, constants of 128. kern_small carries
+                                ; the body too since SPEC.md 5.4.2.5.1, so
+                                ; there is no machine left where the insurance
+                                ; can fire. The copy of this frame's vertices
+                                ; that followed it fed THAT path's erase and
+                                ; nothing else, so it went with it. `pop`
+                                ; writes no flag, so BLIT1's CF is the answer
 
 ; -----------------------------------------------------------------------------
 ; sv_bounce - keep AX inside [CX, BX], reversing the velocity at each end
@@ -187,124 +250,20 @@ sv_bounce:
     neg dx
     ret
 
-; -----------------------------------------------------------------------------
-; sv_cube_proj - every vertex into sv_cpx / sv_cpy (module internal)
-;
-; Four sines fetched ONCE for the frame rather than per vertex, which is eight
-; table reads saved out of thirty-two.
-; -----------------------------------------------------------------------------
-sv_cube_proj:
-    mov al, [sv_ca]             ; the four sines, in saver.asm because the
-    mov ah, [sv_cb]             ; geometry mode rotates through them too
-    call sv_rotset
-
-    mov si, sv_cube_v
-    mov di, 0
-    mov cx, SV_CNV
-.vert:
-    push cx
-    push si
-    push di
-    call sv_rot3                ; -> [sv_rx], [sv_ry]
-    pop di
-    mov al, [sv_rx]
-    cbw
-    add ax, [sv_ccx]
-    mov [sv_cpx + di], ax
-    mov al, [sv_ry]
-    cbw
-    mov bx, [sv_ccy]
-    sub bx, ax                  ; screen y grows DOWN and the model's up
-    mov [sv_cpy + di], bx
-    add di, 2
-    pop si
-    add si, 3
-    pop cx
-    dec cx
-    jnz .vert
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_cube_compose - the whole figure into the mask (SPEC.md 79.5.6)
-; in:  [sv_cpx]/[sv_cpy] projected; out: [sv_cmask], [sv_cbx0]/[sv_cby0]
-; clobbers: AX, BX, CX, DX, SI, DI, BP
-; -----------------------------------------------------------------------------
-sv_cube_compose:
-    push es
-    mov ax, [sv_ccx]            ; the box, forced onto the byte grid. AND on a
-    sub ax, SV_CBHX             ; negative x rounds toward minus infinity,
-    and ax, 0FFF8h              ; which is the direction that keeps the figure
-    mov [sv_cbx0], ax           ; inside the band
-    mov ax, [sv_ccy]
-    sub ax, SV_CBHY
-    mov [sv_cby0], ax
-
-    push ds                     ; ...and a clean mask to draw into
-    pop es
-    mov di, sv_cmask
-    mov cx, SV_CBSZ / 2
-    xor ax, ax
-    cld
-    rep stosw
-    pop es
-
-    mov si, sv_cube_e
-    mov cx, SV_CNE
-.edge:
-    push cx
-    push si
-    mov al, [si]
-    call sv_cube_mpt
-    mov [sv_cmx1], ax
-    mov [sv_cmy1], dx
-    pop si
-    push si
-    mov al, [si+1]
-    call sv_cube_mpt
-    mov [sv_cmx2], ax
-    mov [sv_cmy2], dx
-    call sv_cml
-    pop si
-    add si, 2
-    pop cx
-    dec cx
-    jnz .edge
-    ret
-
-; sv_cube_mpt - vertex AL -> AX/DX = its place in the MASK
-; clobbers AX, DX, DI, flags
+; sv_cube_mpt - vertex AL -> AX/DX = its place in the MASK, which is what
+; sv_cpx/sv_cpy hold now; clobbers AX, DX, DI, flags. AL is 0..7, so `cbw`
+; is the zero extension
 sv_cube_mpt:
-    xor ah, ah
+    cbw
     add ax, ax
-    mov di, ax
+    xchg ax, di
     mov dx, [sv_cpy + di]
-    sub dx, [sv_cby0]
     mov ax, [sv_cpx + di]
-    sub ax, [sv_cbx0]
     ret
-
-; -----------------------------------------------------------------------------
-; sv_cube_put - the band onto the glass, one arrival (SPEC.md 5.4.2)
-; out: CF = 1 = REFUSED, nothing drawn
-; -----------------------------------------------------------------------------
-sv_cube_put:
-    push es
-    push ds
-    pop es                      ; ES:SI = the band, which is ours
-    mov si, sv_cmask
-    mov bp, SV_CBST
-    mov ax, [sv_cbx0]
-    mov bx, [sv_cby0]
-    mov cx, SV_CBW
-    mov dx, SV_CBH
-    call OSAPI_GFX_BLIT1
-    pop es                      ; `pop` writes no flag, so BLIT1's CF is still
-    ret                         ; the caller's answer
-
 
 ; -----------------------------------------------------------------------------
 ; sv_cml - one edge into the mask, in MASK coordinates
-; in:  [sv_cmx1]/[sv_cmy1] -> [sv_cmx2]/[sv_cmy2]
+; in:  AX = x1, DX = y1, CX = x2, BX = y2
 ; out: nothing; clobbers AX, BX, CX, DX, SI, DI, BP
 ;
 ; ORDERED LEFT TO RIGHT FIRST, so the x step is always +1 and only the y step
@@ -318,113 +277,94 @@ sv_cube_put:
 ; so. The test is here because the failure without it is not a wrong line, it
 ; is a write through DI into whatever of the overlay's own image lies past the
 ; mask - and that is silent until the rotted byte is something we execute.
+; It is ONE test of the four ends OR-ed together: a word is inside 0..127
+; exactly when none of bits 7..15 is set, negatives included.
+;
+; THE WALK IS IN REGISTERS (driver size pass 1): the pixel bit in AL, the
+; byte in DI, the count in CX, the error in BP, its two steps in SI and DX and
+; the row step in BX - where the error steps and the row step used to be read
+; out of memory at every pixel. The bit moves with `ror`, which carries the
+; rightmost pixel's bit round to the next byte's leftmost and says so in CF.
 ; -----------------------------------------------------------------------------
 sv_cml:
-    mov ax, [sv_cmx1]           ; --- inside the box, both ends?
-    or ax, [sv_cmx2]
-    js .out
-    mov ax, [sv_cmy1]
-    or ax, [sv_cmy2]
-    js .out
-    cmp word [sv_cmx1], SV_CBW
-    jae .out
-    cmp word [sv_cmx2], SV_CBW
-    jae .out
-    cmp word [sv_cmy1], SV_CBH
-    jae .out
-    cmp word [sv_cmy2], SV_CBH
-    jb .go
-.out:
-    ret
-.go:
-    mov ax, [sv_cmx1]           ; --- left to right
-    mov cx, [sv_cmx2]
-    cmp ax, cx
+    mov si, ax                  ; --- inside the box, all four?
+    or si, dx
+    or si, cx
+    or si, bx
+    test si, 0FF80h
+    jnz .out
+    cmp ax, cx                  ; --- left to right
     jle .ord
-    mov [sv_cmx1], cx
-    mov [sv_cmx2], ax
-    mov ax, [sv_cmy1]
-    mov cx, [sv_cmy2]
-    mov [sv_cmy1], cx
-    mov [sv_cmy2], ax
+    xchg ax, cx
+    xchg dx, bx
 .ord:
-    mov ax, [sv_cmx2]
-    sub ax, [sv_cmx1]
-    mov [sv_cmdx], ax
-    mov ax, [sv_cmy2]
-    sub ax, [sv_cmy1]
-    mov word [sv_cmsy], SV_CBST
+    sub cx, ax                  ; CX = dx, never negative
+    sub bx, dx                  ; BX = dy, and the row step carries its sign
+    mov bp, SV_CBST
     jns .dy
-    neg ax
-    mov word [sv_cmsy], -SV_CBST
+    neg bx
+    neg bp
 .dy:
-    mov [sv_cmdy], ax
-
-    mov ax, [sv_cmy1]           ; --- the first byte, and the bit in it
+    mov si, cx                  ; --- the first byte, and the bit in it
+    mov di, dx
     mov cl, 4
-    shl ax, cl                  ; y * SV_CBST, which is why the stride is 16
-    mov di, ax
-    mov ax, [sv_cmx1]
-    mov bx, ax
-    mov cl, 3
-    shr bx, cl
-    add di, bx
-    and al, 7
+    shl di, cl                  ; y * SV_CBST, which is why the stride is 16
     mov cl, al
-    mov bl, 80h
-    shr bl, cl
+    and cl, 7
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+    mov al, 80h
+    shr al, cl
+    mov cx, si                  ; CX = dx again, BX = dy, BP = the row step
 
-    mov ax, [sv_cmdx]
-    cmp ax, [sv_cmdy]
+    cmp cx, bx
     jl .majy
 
-    mov si, ax                  ; --- x is the major axis
-    inc si
-    mov bp, [sv_cmdy]
-    add bp, bp
-    mov [sv_cme1], bp
-    sub bp, ax
-    add ax, ax
-    mov [sv_cme2], ax
+    xchg bx, bp                 ; --- x is the major axis: BX = the row step,
+    add bp, bp                  ; BP = 2dy
+    mov si, bp                  ; SI = 2dy, the error's every step
+    sub bp, cx                  ; BP = 2dy - dx, the error
+    mov dx, cx
+    add dx, dx                  ; DX = 2dx, its step back
+    inc cx                      ; dx + 1 pixels
 .mx:
-    or [sv_cmask + di], bl
-    shr bl, 1
-    jnz .mx1
-    mov bl, 80h
+    or [sv_cmask + di], al
+    ror al, 1
+    jnc .mx1
     inc di
 .mx1:
-    add bp, [sv_cme1]
+    add bp, si
     jle .mx2
-    sub bp, [sv_cme2]
-    add di, [sv_cmsy]
+    sub bp, dx
+    add di, bx
 .mx2:
-    dec si
-    jnz .mx
+    loop .mx
+.out:
     ret
 
 .majy:                          ; --- ...or y is
-    mov si, [sv_cmdy]
-    inc si
-    mov bp, [sv_cmdx]
-    add bp, bp
-    mov [sv_cme1], bp
-    sub bp, [sv_cmdy]
-    mov ax, [sv_cmdy]
-    add ax, ax
-    mov [sv_cme2], ax
+    mov si, cx
+    add si, si                  ; SI = 2dx, the error's every step
+    mov dx, bx
+    add dx, dx                  ; DX = 2dy, its step back
+    mov cx, bx
+    inc cx                      ; dy + 1 pixels
+    xchg bx, bp                 ; BX = the row step, BP = dy
+    neg bp
+    add bp, si                  ; BP = 2dx - dy, the error
 .my:
-    or [sv_cmask + di], bl
-    add di, [sv_cmsy]
-    add bp, [sv_cme1]
+    or [sv_cmask + di], al
+    add di, bx
+    add bp, si
     jle .my2
-    sub bp, [sv_cme2]
-    shr bl, 1
-    jnz .my2
-    mov bl, 80h
+    sub bp, dx
+    ror al, 1
+    jnc .my2
     inc di
 .my2:
-    dec si
-    jnz .my
+    loop .my
     ret
 
 ; --- the solid, and it is the only one: a screen saver has no View menu ------
@@ -454,18 +394,9 @@ sv_ccx:     resw 1              ; the centre, and where it is going
 sv_ccy:     resw 1
 sv_cvx:     resw 1
 sv_cvy:     resw 1
-sv_cpx:     resw SV_CNV         ; this frame's screen coordinates
+sv_cpx:     resw SV_CNV         ; this frame's coordinates, in the MASK
 sv_cpy:     resw SV_CNV
 sv_cbx0:    resw 1              ; the band's origin on the glass
 sv_cby0:    resw 1
-sv_cmx1:    resw 1              ; sv_cml's endpoints, in the mask
-sv_cmy1:    resw 1
-sv_cmx2:    resw 1
-sv_cmy2:    resw 1
-sv_cmdx:    resw 1
-sv_cmdy:    resw 1
-sv_cmsy:    resw 1              ; the row step, which carries the sign
-sv_cme1:    resw 1
-sv_cme2:    resw 1
 sv_cmask:   resb SV_CBSZ        ; the band itself
 %endmacro

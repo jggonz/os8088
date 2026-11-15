@@ -199,7 +199,7 @@ sv_fish_init:
     xor si, si
 .sw:
     mov byte [sv_fon + si], 0   ; nothing on the glass from a past session
-    call sv_fish_born
+    call sv_fish_born           ; ...which leaves DI = SI * 2
     mov cx, [sv_w]              ; ...and the first lot start ON the screen
     call sv_rndn                ; rather than all queued at one edge
     and al, 0FEh                ; EVEN, which the band no longer needs and the
@@ -210,8 +210,6 @@ sv_fish_init:
                                 ; because every speed is even. It costs one
                                 ; instruction and it keeps every frame of a
                                 ; session on the same column grid
-    mov di, si
-    add di, di
     mov [sv_fx + di], ax
     inc si
     cmp si, SV_NFISH
@@ -220,11 +218,9 @@ sv_fish_init:
     xor si, si
 .bu:
     mov byte [sv_bon + si], 0
-    call sv_bub_born
+    call sv_bub_born            ; ...which leaves DI = SI * 2 too
     mov cx, [sv_h]
     call sv_rndn
-    mov di, si
-    add di, di
     mov [sv_by + di], ax
     inc si
     cmp si, SV_NBUB
@@ -234,7 +230,8 @@ sv_fish_init:
 
 ; -----------------------------------------------------------------------------
 ; sv_fish_born - swimmer SI gets a new kind, size, lane and heading
-; in:  SI = the swimmer; out: nothing kept; clobbers AX, BX, CX, DX, DI
+; in:  SI = the swimmer; out: DI = SI * 2, nothing else kept; clobbers AX, BX,
+;      CX, DX, DI
 ;
 ; IT IS ROLLED WHOLE, not nudged: kind, scale, ink, speed and direction all
 ; change together, so the sea after ten minutes is not the sea it started as
@@ -246,18 +243,14 @@ sv_fish_init:
 ; header: an odd x offset into a 4bpp buffer is half a byte.
 ; -----------------------------------------------------------------------------
 sv_fish_born:
-    push si
     mov cx, 2                   ; a fish or a jellyfish
     call sv_rndn
-    mov di, si
-    mov [sv_fk + di], al
+    mov [sv_fk + si], al
     mov bl, al
 
-    mov cx, 2                   ; ...at one of two sizes
-    call sv_rndn
-    inc al
-    mov di, si
-    mov [sv_fs + di], al
+    call sv_rndn                ; ...at one of two sizes (sv_rndn keeps CX)
+    inc ax
+    mov [sv_fs + si], al
     mov bh, al                  ; BH = the scale, for the lane below
 
     mov al, SV_MAIN             ; a fish is the warm ink and a jellyfish the
@@ -266,17 +259,13 @@ sv_fish_born:
     mov al, SV_DIM              ; SPEC.md 39.4 leaves us
 .ink:
     call sv_ink                 ; ...and the COLOUR, banked: the sprite builder
-    mov di, si                  ; paints it into the block and never sets a pen
-    mov [sv_fi + di], al
+    mov [sv_fi + si], al        ; paints it into the block and never sets a pen
 
-    mov al, bh                  ; the lane: anywhere a whole swimmer fits
-    mov ah, 0
-    mov bl, SV_FHU
-    mul bl                      ; AX = the drawn height
-    add ax, SV_FBOB * 2
-    mov bx, ax
+    mov al, SV_FHU              ; the lane: anywhere a whole swimmer fits
+    mul bh                      ; AX = the drawn height
     mov cx, [sv_h]
-    sub cx, bx
+    sub cx, ax
+    sub cx, SV_FBOB * 2
     call sv_rndn
     add ax, SV_FBOB
     mov di, si
@@ -285,124 +274,69 @@ sv_fish_born:
 
     mov cx, 2                   ; ...and how fast: 2 or 4, never odd
     call sv_rndn
+    inc ax
     add ax, ax
-    add ax, 2
-    mov dx, ax
+    xchg ax, dx
     call OSAPI_RAND             ; ...in one of two directions. THE SIGN BIT and
     or ax, ax                   ; not bit 0: bit 0 of the kernel's LCG is a
     jns .heading                ; counter, and reading it here put thirty-odd
     neg dx                      ; consecutive swimmers on the same heading -
 .heading:                       ; which is what "they only come from one side"
-                                ; was. Measured in sv_rndn's header
-    mov di, si
-    add di, di
-    mov [sv_fvx + di], dx
-    call sv_fish_edge           ; ...starting off the edge it swims from
+    mov [sv_fvx + di], dx       ; was. Measured in sv_rndn's header
+
+    or dx, dx                   ; ...starting off the edge it swims from
+    js .fromright
+    mov al, SV_FWU              ; heading right: born off the LEFT edge, one
+    mul bh                      ; drawn width out
+    neg ax
+    jmp short .edge
+.fromright:
+    mov ax, [sv_w]
+.edge:
+    mov [sv_fx + di], ax
 
     call OSAPI_RAND
     mov [sv_fph + si], ah        ; AH: the tail phase is the top three bits of
-    pop si                       ; this byte, and AL's are the low half of an
-    ret                          ; LCG word (sv_rndn's header)
-
-; sv_fish_edge - put swimmer SI just off the edge its heading comes from
-; in:  SI; clobbers AX, BX, DI, flags
-sv_fish_edge:
-    mov di, si
-    add di, di
-    mov al, [sv_fs + si]
-    mov ah, 0
-    mov bl, SV_FWU
-    mul bl                      ; AX = the drawn width
-    mov bx, ax
-    cmp word [sv_fvx + di], 0
-    jl .fromright
-    neg bx                      ; heading right: born off the LEFT edge
-    mov [sv_fx + di], bx
-    ret
-.fromright:
-    mov ax, [sv_w]
-    mov [sv_fx + di], ax
-    ret
+    ret                          ; this byte, and AL's are the low half of an
+                                 ; LCG word (sv_rndn's header)
 
 ; -----------------------------------------------------------------------------
 ; sv_fish_step - one frame
 ; in:  the gfx lock is HELD
+;
+; Each swimmer moves, is reborn if it has left the screen entirely, and is
+; put down - and each bubble rises - in the two walks below, which were
+; sv_fish_one, sv_fish_gone, sv_fish_where and sv_bub_one, each with one
+; caller (driver size pass 1).
 ; -----------------------------------------------------------------------------
 sv_fish_step:
     xor si, si
 .sw:
-    call sv_fish_one
-    inc si
-    cmp si, SV_NFISH
-    jb .sw
-
-    xor si, si
-.bu:
-    call sv_bub_one
-    inc si
-    cmp si, SV_NBUB
-    jb .bu
-
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_fish_one - move and redraw ONE swimmer (module internal)
-; in:  SI = the swimmer; the gfx lock is HELD
-; out: nothing; clobbers AX, BX, CX, DX, DI
-; -----------------------------------------------------------------------------
-sv_fish_one:
     mov di, si
     add di, di
-    mov ax, [sv_fx + di]        ; swim...
-    add ax, [sv_fvx + di]
-    mov [sv_fx + di], ax
-    mov al, [sv_fph + si]       ; ...and bob. The step is coprime with 256, so
-    add al, 11                  ; the bob does not lock to the frame rate
-    mov [sv_fph + si], al
+    mov ax, [sv_fvx + di]       ; swim...
+    add [sv_fx + di], ax
+    add byte [sv_fph + si], 11  ; ...and bob. The step is coprime with 256, so
+                                ; the bob does not lock to the frame rate
 
-    call sv_fish_gone
-    jnc .place
+    or ax, ax                   ; --- has it left the screen entirely?
+    mov ax, [sv_fx + di]
+    js .left
+    cmp ax, [sv_w]              ; heading right: gone when its LEFT edge is
+    jl .place                   ; past the last column
+    jmp short .reborn
+.left:
+    mov bl, [sv_fs + si]        ; heading left: gone when its RIGHT edge is
+    mov bh, 0                   ; past column 0. x and the width are both a
+    mov cl, 4                   ; few hundred at most, so the add cannot
+    shl bx, cl                  ; overflow and its own flags are the test
+    add ax, bx
+    jg .place
+.reborn:
     call sv_fish_off            ; a crossing ends: the old box goes, because a
     call sv_fish_born           ; reborn swimmer shares no pixels with it
 .place:
-    call sv_fish_where          ; [sv_fdx]/[sv_fdy] = where it is NOW
-    call sv_fish_blit
-    ret
-
-; sv_fish_gone - has swimmer SI left the screen entirely?
-; in: SI; out: CF = 1 yes; clobbers AX, BX, DI, flags
-sv_fish_gone:
-    mov di, si
-    add di, di
-    mov al, [sv_fs + si]
-    mov ah, 0
-    mov bl, SV_FWU
-    mul bl
-    mov bx, ax                  ; BX = the drawn width
-    mov ax, [sv_fx + di]
-    cmp word [sv_fvx + di], 0
-    jl .left
-    cmp ax, [sv_w]              ; heading right: gone when its LEFT edge is
-    jl .here                    ; past the last column
-    stc
-    ret
-.left:
-    add ax, bx                  ; heading left: gone when its RIGHT edge is
-    or ax, ax                   ; past column 0
-    jg .here
-    stc
-    ret
-.here:
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_fish_where - swimmer SI's drawn top-left, into the scratch
-; in:  SI; out: [sv_fdx], [sv_fdy]; clobbers AX, BX, DI, flags
-; -----------------------------------------------------------------------------
-sv_fish_where:
-    mov di, si
-    add di, di
+    ; --- where it is NOW, into [sv_fdx]/[sv_fdy]. DI is SI * 2 on both roads
     mov ax, [sv_fx + di]
     and al, 0FEh                ; EVEN, HERE, WHATEVER THE CALLER STORED - and
                                 ; since SPEC.md 79.5.8 this is a CONVENTION
@@ -410,25 +344,91 @@ sv_fish_where:
                                 ; block packed two pixels to a byte, so a left
                                 ; cut of an odd number of them was half a byte
                                 ; and lost the trailing column that does the
-                                ; erasing; a band is one bit a pixel and
-                                ; sv_bnd_shift takes any offset at all. It is
-                                ; kept because the union offset, the block
-                                ; origin and the box banked for the next frame
-                                ; are all derived from this one word, and a
-                                ; sea on one column grid is the sea that was
+                                ; erasing; a band is one bit a pixel and the
+                                ; shift takes any offset at all. It is kept
+                                ; because the union offset, the block origin
+                                ; and the box banked for the next frame are
+                                ; all derived from this one word, and a sea on
+                                ; one column grid is the sea that was
                                 ; measured. It rounds DOWN, which is what keeps
                                 ; a negative x rounding the same way as a
                                 ; positive one
     mov [sv_fdx], ax
     mov al, [sv_fph + si]       ; the bob: +-SV_FBOB about its lane
-    call sv_sin
-    mov bl, al
-    mov al, SV_FBOB
-    call sv_mulsh
+    mov ah, SV_FBOB
+    call sv_rsin
     cbw
     add ax, [sv_fy + di]
     mov [sv_fdy], ax
+    call sv_fish_blit
+    inc si
+    cmp si, SV_NFISH
+    jb .sw
+
+    ; --- THE BUBBLES: TWO CALLS EACH, and the NEW one is drawn FIRST. A
+    ; bubble rises at least two pixels a frame and is two tall, so the old
+    ; block and the new one never share a row - which is what makes
+    ; draw-then-erase safe here where it is not safe for a swimmer, and it is
+    ; why the bubbles never blinked even in the first draft's worst frame.
+    ; Where it IS is banked on the stack across the move, so the erase can
+    ; go there after the new one is on the glass
+    xor si, si
+.bu:
+    mov di, si
+    add di, di
+    push word [sv_bx + di]
+    mov ax, [sv_by + di]
+    push ax
+    mov cl, [sv_bph + si]
+    push cx
+
+    sub ax, [sv_bv + di]        ; y is a few hundred and the speed 2..4, so
+    mov [sv_by + di], ax        ; the subtract's own flags are the test
+    jg .wob
+    call sv_bub_born            ; (which keeps DI = SI * 2)
+    jmp short .draw
+.wob:
+    add byte [sv_bph + si], 9   ; the wobble is a re-derived OFFSET and never
+                                ; an accumulated one: a bubble whose x drifted
+                                ; would eventually leave the screen sideways
+.draw:
+    mov al, SV_HOT
+    call sv_pen
+    mov ax, [sv_bx + di]
+    mov bx, [sv_by + di]
+    mov cl, [sv_bph + si]
+    call sv_bub_blot
+    pop cx                      ; the old blot: phase, y and x
+    pop bx
+    pop dx
+    cmp byte [sv_bon + si], 0
+    je .up
+    mov al, SV_GROUND           ; ...and only NOW does the old one go
+    call sv_pen
+    xchg ax, dx
+    call sv_bub_blot
+.up:
+    mov byte [sv_bon + si], 1
+    inc si
+    cmp si, SV_NBUB
+    jb .bu
     ret
+
+; -----------------------------------------------------------------------------
+; sv_fsz - a swimmer of scale AL -> CX = its drawn width, DX = its height
+; clobbers AX, flags. Scales are 1 and 2, so the zero extension is `cbw`
+; -----------------------------------------------------------------------------
+sv_fsz:
+    cbw
+    mov cl, 3
+    shl ax, cl                  ; SV_FHU = 8 rows a unit...
+    mov dx, ax
+    add ax, ax                  ; ...and SV_FWU = 16 columns
+    xchg ax, cx
+    ret
+%if SV_FHU != 8 || SV_FWU != 16
+ %error "svfish.inc: sv_fsz is written for 16 x 8 bitmaps"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sv_fish_off - the box swimmer SI last occupied, to the ground ink
@@ -442,24 +442,12 @@ sv_fish_off:
     je .out
     mov al, SV_GROUND
     call sv_pen
+    mov al, [sv_fos + si]
+    call sv_fsz
     mov di, si
     add di, di
     mov ax, [sv_fox + di]
     mov bx, [sv_foy + di]
-    push ax
-    push bx
-    mov al, [sv_fos + si]
-    mov ah, 0
-    mov bl, SV_FWU
-    mul bl
-    mov cx, ax
-    mov al, [sv_fos + si]
-    mov ah, 0
-    mov bl, SV_FHU
-    mul bl
-    mov dx, ax
-    pop bx
-    pop ax
     add cx, ax
     dec cx
     add dx, bx
@@ -472,7 +460,7 @@ sv_fish_off:
 ; -----------------------------------------------------------------------------
 ; sv_fish_blit - build the union block and put it down in ONE call
 ; in:  SI = the swimmer, [sv_fdx]/[sv_fdy] = where it is now; lock held
-; out: nothing; clobbers AX, BX, CX, DX, DI
+; out: nothing; clobbers AX, BX, CX, DX, DI, BP
 ;
 ; The block's origin is the corner nearest the origin of the two boxes, its
 ; size is the sprite plus however far it moved, and the sprite is painted into
@@ -484,18 +472,19 @@ sv_fish_off:
 ; buffer is sized for a MOVE.
 ; -----------------------------------------------------------------------------
 sv_fish_blit:
-    call sv_fish_size           ; [sv_fbw]/[sv_fbh] = the sprite on the glass
-    mov word [sv_fbox], 0       ; ...and assume no trail: the block IS it
-    mov word [sv_fboy], 0
     cmp byte [sv_fon + si], 0
-    je .build
+    je .alone                   ; nothing on the glass yet: the block IS it
     mov di, si
     add di, di
     mov al, [sv_fos + si]
     cmp al, [sv_fs + si]
     jne .fresh                  ; the scale changed: not a move
 
-    mov ax, [sv_fdx]            ; --- the union, one axis at a time
+    mov al, [sv_fs + si]        ; --- the union, one axis at a time
+    call sv_fsz
+    mov [sv_fbw], cx
+    mov [sv_fbh], dx
+    mov ax, [sv_fdx]
     mov bx, [sv_fox + di]
     call sv_fun
     jc .fresh
@@ -510,9 +499,14 @@ sv_fish_blit:
     jmp short .build
 .fresh:                         ; not a move at all: the old box goes on its
     call sv_fish_off            ; own and the block is the sprite alone
-    call sv_fish_size
-    mov word [sv_fbox], 0
-    mov word [sv_fboy], 0
+.alone:
+    mov al, [sv_fs + si]
+    call sv_fsz
+    mov [sv_fbw], cx
+    mov [sv_fbh], dx
+    xor ax, ax
+    mov [sv_fbox], ax
+    mov [sv_fboy], ax
 .build:
     mov ax, [sv_fdx]            ; the block's origin: the lower of the two
     sub ax, [sv_fbox]           ; corners in each axis. BEFORE the band is
@@ -521,136 +515,64 @@ sv_fish_blit:
     sub ax, [sv_fboy]           ; is shifted into it by the remainder
     mov [sv_fby0], ax
 
-    call sv_bnd_build
-
-    mov ax, [sv_hlim]           ; SPEC.md 79.5.10's strip, and NOTHING on a
-    or ax, ax                   ; screen that has none: CGA and VGA hand the
-    jz .edgeok                  ; whole band over and the kernel's own right
-    mov bx, [sv_bnx0]           ; clip is still the only one that cuts it
-    cmp bx, ax
-    jge .gone                   ; wholly inside the strip - and nothing was
-                                ; ever drawn there to erase, because this cut
-                                ; has applied to every frame before it
-    mov cx, bx
-    add cx, [sv_bnw]
-    cmp cx, ax
-    jle .edgeok
-    sub ax, bx                  ; both are multiples of 8, so the width the
-    mov [sv_bnw], ax            ; blit meets still is (SPEC.md 5.4.2)
-.edgeok:
-
-    mov al, [sv_fi + si]        ; the swimmer's colour on ink, black on paper.
-    mov ah, CBLACK              ; CBLACK is 0 and 0 is a subset of every
-    call OSAPI_GFX_BLIT1_PEN    ; colour, so the pair is never the one 5.4.2.2
-                                ; refuses. NOT READ on a 1bpp adapter, where
-                                ; sv_bnd_build's dither carries the fish /
-                                ; jellyfish distinction instead
-
-    push si                     ; SI IS THE SWIMMER EVERYWHERE ELSE IN THIS
-    push es                     ; FILE and is the SOURCE for exactly one call
-    push ds
-    pop es                      ; ES:SI = OUR band (see the file header)
-    mov si, sv_bnd              ; ...and the whole of it: the kernel's own
-                                ; right clip is what cuts it (SPEC.md 79.5.9)
-    mov ax, [sv_bnx0]
-    mov bx, [sv_fby0]
-    mov cx, [sv_bnw]
-    mov dx, [sv_fbh]
-    mov bp, SV_BNST
-    call OSAPI_GFX_BLIT1        ; ...which CLIPS, in both axes and exactly:
-    pop es                      ; every extent it meets is a multiple of 8 and
-    pop si                      ; so is the band. `pop` touches no flag, so the
-    jc .norun                   ; CF it answers in survives both of them -
-                                ; SPEC.md 20.3's API cell is built on the same
-                                ; property, and a clipped-away band is CF = 0
-                                ; ("drawn, and nothing drawn"), so this tests
-                                ; for a kernel and not for a screen edge
-.gone:
-
-    mov di, si                  ; the box now on the glass, for the next frame.
-    add di, di                  ; DI is RE-DERIVED: sv_bnd_build spends it
-    mov ax, [sv_fdx]
-    mov [sv_fox + di], ax
-    mov ax, [sv_fdy]
-    mov [sv_foy + di], ax
-    mov al, [sv_fs + si]
-    mov [sv_fos + si], al
-    mov byte [sv_fon + si], 1
-    ret
-.norun:                         ; A KERNEL WITH NO gfx_blit1 - kern_small, whose
-    call sv_fish_off            ; slot is stc/retf (SPEC.md 5.4.2). It cannot be
-    ret                         ; this one: the Makefile's SMALLDRIVERS filters
-                                ; saver.drv out of both small floppies, exactly
-                                ; as it filters xmem.drv, so no kernel that
-                                ; refuses this call has the file to load. The
-                                ; guard is here because "unreachable" and
-                                ; "leaves the last frame standing for the rest
-                                ; of the session" are a bad pair to be wrong
-                                ; about: the old box goes and the sea is empty
-                                ; rather than littered
-
-; -----------------------------------------------------------------------------
-; sv_bnd_build - the union BAND: ground everywhere but the swimmer
-; in:  SI = the swimmer; [sv_fbw]/[sv_fbh] = the block, [sv_fbox]/[sv_fboy] =
-;      where the sprite sits inside it, [sv_fbx0]/[sv_fby0] = the block on the
-;      glass
-; out: sv_bnd filled, [sv_bnx0] = the band's x (a multiple of 8), [sv_bnw] =
-;      its width in pixels (ditto); clobbers AX, BX, CX, DX, DI
-;
-; ONE BIT A PIXEL, high bit leftmost, 1 = the swimmer - which is the
-; framebuffer's own way up (SPEC.md 5.4.2), so the DEFAULT pen already draws
-; it right and nothing here is complemented. The ground is 0 and is laid by a
-; `rep stosb` of SV_BNSZ, which is 120 bytes against the 4bpp block's 360.
-;
-; WHY THE BAND, AND WHY IT IS THE WHOLE OF THIS MODE'S FRAME RATE. Measured on
-; MartyPC, a cycle-accurate 4.77MHz 8088 with a CGA: `gfx_blit4` charged
-; **2,863 cycles a ROW** for a 36-pixel row and the width barely entered it -
-; a row of it is `sw_blit_row`'s pair walk plus a `gfx_rowbase` multiply and
-; nine pushes - so a scale-2 swimmer's 18 rows were **10.2 ms** and four of
-; them were 41 of a 73 ms frame. `gfx_blit1` is a `rep movsw` a row over a
-; source that is already 1bpp: five bytes, not eighteen, and no per-pixel
-; decode at either end. SPEC.md 79.5.8 has the table.
-;
-; THE THREE THINGS THAT MAKE IT WORK -----------------------------------------
-;
-;   * **A BAND STARTS ON THE BYTE GRID AND THE SWIMMER DOES NOT.** gfx_blit1
-;     refuses an x or a width off it, and a swimmer moves 2 or 4 pixels a
-;     frame. So the band is the block rounded DOWN to the grid and widened to
-;     it, and the sprite is SHIFTED into it by the remainder - which is why
-;     SV_BNST carries `+ 7 + 7` and not `+ 0`.
-;
-;   * **THE SHIFT IS A BYTE PAIR, NOT A 32-BIT ROTATE.** `sv_bnd_shift` walks
-;     the row a byte at a time carrying the bits that fell off the last one,
-;     so a shift of 0 costs the same as a shift of 7 and neither needs a
-;     special case: an 8086 `shr r8, cl` with CL = 0 does nothing and `shl
-;     r8, cl` with CL = 8 clears it, both of which are the answers this wants.
-;
-;   * **A JELLYFISH IS DITHERED AND A BAND HAS NO GREY.** SPEC.md 5.4.2.2: on
-;     a 1bpp adapter the pen is NOT READ - a set bit is lit and nothing a
-;     caller does changes that - so the mono column's CLGRAY cannot arrive
-;     through it. The dither is composed here instead, and it has to be the
-;     kernel's own: `sw_parity` lays 0xAA on an even screen row and 0x55 on an
-;     odd one, bit 7 being the leftmost pixel, so a pixel is lit when (x + y)
-;     is even (SPEC.md 39.4). A band starts on the byte grid, so its rows take
-;     that mask unshifted.
-; -----------------------------------------------------------------------------
-sv_bnd_build:
-    push si
+    ; --- THE UNION BAND: ground everywhere but the swimmer -----------------
+    ; ONE BIT A PIXEL, high bit leftmost, 1 = the swimmer - which is the
+    ; framebuffer's own way up (SPEC.md 5.4.2), so the DEFAULT pen already
+    ; draws it right and nothing here is complemented. The ground is 0 and is
+    ; laid by a `rep stosb` of SV_BNSZ, which is 120 bytes against the 4bpp
+    ; block's 360. Into: sv_bnd filled, [sv_bnx0] = the band's x (a multiple
+    ; of 8), [sv_bnw] = its width in pixels (ditto). It was sv_bnd_build, with
+    ; this one caller (driver size pass 1).
+    ;
+    ; WHY THE BAND, AND WHY IT IS THE WHOLE OF THIS MODE'S FRAME RATE.
+    ; Measured on MartyPC, a cycle-accurate 4.77MHz 8088 with a CGA:
+    ; `gfx_blit4` charged **2,863 cycles a ROW** for a 36-pixel row and the
+    ; width barely entered it - a row of it is `sw_blit_row`'s pair walk plus
+    ; a `gfx_rowbase` multiply and nine pushes - so a scale-2 swimmer's 18 rows
+    ; were **10.2 ms** and four of them were 41 of a 73 ms frame. `gfx_blit1`
+    ; is a `rep movsw` a row over a source that is already 1bpp: five bytes,
+    ; not eighteen, and no per-pixel decode at either end. SPEC.md 79.5.8 has
+    ; the table.
+    ;
+    ;   * **A BAND STARTS ON THE BYTE GRID AND THE SWIMMER DOES NOT.**
+    ;     gfx_blit1 refuses an x or a width off it, and a swimmer moves 2 or 4
+    ;     pixels a frame. So the band is the block rounded DOWN to the grid
+    ;     and widened to it, and the sprite is SHIFTED into it by the
+    ;     remainder - which is why SV_BNST carries `+ 7 + 7` and not `+ 0`.
+    ;
+    ;   * **THE SHIFT IS A BYTE PAIR, NOT A 32-BIT ROTATE**: a byte walk with
+    ;     one carry, so a shift of 0 costs the same as a shift of 7 and
+    ;     neither needs a special case - an 8086 `shr r8, cl` with CL = 0 does
+    ;     nothing and `shl r8, cl` with CL = 8 clears it (an 8086 uses CL
+    ;     whole; the 5-bit mask arrived with the 186), both of which are the
+    ;     answers this wants.
+    ;
+    ;   * **A JELLYFISH IS DITHERED AND A BAND HAS NO GREY.** SPEC.md 5.4.2.2:
+    ;     on a 1bpp adapter the pen is NOT READ - a set bit is lit and nothing
+    ;     a caller does changes that - so the mono column's CLGRAY cannot
+    ;     arrive through it. The dither is composed here instead, and it has
+    ;     to be the kernel's own: `sw_parity` lays 0xAA on an even screen row
+    ;     and 0x55 on an odd one, bit 7 being the leftmost pixel, so a pixel
+    ;     is lit when (x + y) is even (SPEC.md 39.4). A band starts on the
+    ;     byte grid, so its rows take that mask unshifted.
+    ;
+    ; ES IS OURS FROM HERE TO THE BLIT: `stosb` and `movsb` have no other
+    ; option, every write below is into our own image, and nothing between
+    ; here and the BLIT1 reads the kernel's segment through it - the one
+    ; kernel call on the way, OSAPI_GFX_BLIT1_PEN, is a store through CS
     push es
     push ds
-    pop es                      ; `stosb` and `movsb` have no other option, and
-                                ; every write below is into our own image
+    pop es
+    push si                     ; THE SWIMMER, over the bitmap cursor below
 
     ; --- WHICH BITMAP: kind, heading, then the animation frame -------------
     ; Twelve of them, in that order: fish right, fish left, jelly right, jelly
     ; left, three frames each. A bitmap cannot be mirrored for free the way
     ; the first draft's unit coordinates could, so the heading is an INDEX
     ; here rather than a subtraction at every use.
-    mov al, [sv_fk + si]
-    mov ah, 0
-    mov bl, SV_FNFR * 2         ; six a kind: two headings of three
-    mul bl
-    mov di, ax
+    mov al, SV_FNFR * 2         ; six a kind: two headings of three
+    mul byte [sv_fk + si]
+    xchg ax, di
     mov bx, si
     add bx, bx
     cmp word [sv_fvx + bx], 0
@@ -658,16 +580,11 @@ sv_bnd_build:
     add di, SV_FNFR
 .right:
     mov bl, [sv_fph + si]       ; the phase's top three bits...
-    shr bl, 1
-    shr bl, 1
-    shr bl, 1
-    shr bl, 1
-    shr bl, 1
-    and bl, 7
+    mov cl, 5
+    shr bl, cl
     mov bh, 0
     mov bl, [bx + sv_fseq]      ; ...through a sequence, so the wag goes out
-    mov bh, 0                   ; and BACK rather than snapping round
-    add di, bx
+    add di, bx                  ; and BACK rather than snapping round
     mov ax, di
     mov cl, 4                   ; sixteen bytes a bitmap
     shl ax, cl
@@ -693,48 +610,42 @@ sv_bnd_build:
     shr ax, cl
     mov [sv_bnbo], ax           ; ...as whole bytes...
     and bl, 7
-    mov [sv_bnsh], bl           ; ...and the shift left over
+    mov bh, 8                   ; ...and the shift left over, with 8 less it
+    sub bh, bl                  ; beside it: CL and CH of the shift below
+    mov [sv_bnsh], bx
 
     mov al, SV_BNST             ; --- and the whole of it to ground: 120 bytes
-    mov ah, 0                   ; where the 4bpp block was 360
-    mov bl, [sv_fbh]            ; (a block is never taller than SV_BNDH = 20)
-    mul bl
-    mov cx, ax
+    mul byte [sv_fbh]           ; where the 4bpp block was 360 (a block is
+    xchg ax, cx                 ; never taller than SV_BNDH = 20)
     mov di, sv_bnd
     xor al, al
     cld
     rep stosb
 
     ; --- the dither, which is the MONO jellyfish's and nothing else's ------
-    mov byte [sv_bndx], 0       ; a solid swimmer: the mask never moves...
-    mov byte [sv_bndm], 0FFh    ; ...and passes every bit
+    mov word [sv_bndm], 0FFh    ; a solid swimmer: the mask passes every bit
+                                ; and its step [sv_bndx], the byte after, is 0
     cmp byte [sv_monoff], 0
     je .msk                     ; a colour adapter: the pen carries it
     cmp byte [sv_fk + si], SV_FK_JELLY
     jne .msk
-    mov byte [sv_bndx], 0FFh    ; ...and 0xAA and 0x55 are each other's
-    mov al, 0AAh                ; complement, so one XOR steps the rows
-    mov bx, [sv_fby0]
+    mov ax, 0FFAAh              ; ...and 0xAA and 0x55 are each other's
+    mov bx, [sv_fby0]           ; complement, so one XOR steps the rows
     add bx, [sv_fboy]           ; sw_parity's byte for the sprite's FIRST
     test bl, 1                  ; screen row (SPEC.md 39.4)
     jz .mset
     mov al, 55h
 .mset:
-    mov [sv_bndm], al
+    mov [sv_bndm], ax
 .msk:
 
-    mov al, 2                   ; the bytes a bitmap row becomes BEFORE the
-    mov ah, [sv_fs + si]        ; shift: two, or four once doubled
-    cmp ah, 2
-    jne .n1
-    mov al, 4
-.n1:
-    mov [sv_bnn], al
-    mov [sv_bnsc], ah           ; ...and the band rows one bitmap row fills
+    mov al, [sv_fs + si]        ; the bytes a bitmap row becomes BEFORE the
+    mov ah, al                  ; shift - two, or four once doubled - and the
+    add al, al                  ; band rows one bitmap row fills, in the two
+    mov [sv_bnn], ax            ; bytes [sv_bnn] and [sv_bnsc]
 
-    mov ax, [sv_fboy]           ; DI = the first band row's sprite byte
-    mov bl, SV_BNST
-    mul bl
+    mov al, SV_BNST             ; DI = the first band row's sprite byte
+    mul byte [sv_fboy]
     add ax, [sv_bnbo]
     add ax, sv_bnd
     mov di, ax
@@ -742,79 +653,33 @@ sv_bnd_build:
     mov byte [sv_bnrc], SV_FHU  ; eight bitmap rows, whatever the scale
 .row:
     push di
+    mov di, sv_bnexp
     cmp byte [sv_bnsc], 2
     je .two
-    mov di, sv_bnexp            ; scale 1: the row IS its two bitmap bytes
-    movsb
+    movsb                       ; scale 1: the row IS its two bitmap bytes
     movsb
     jmp short .shift
 .two:
-    mov di, sv_bnexp            ; scale 2: each bitmap byte doubles into two
-    mov cx, 2
+    mov cx, 2                   ; scale 2: each bitmap byte doubles into two
 .dbl:
     lodsb
     mov bl, al
     xor bh, bh
     shl bx, 1
     mov ax, [bx + sv_dbl]
-    mov [di], ah                ; the leftmost eight pixels first, which is the
-    mov [di + 1], al            ; order a band reads in
-    add di, 2
+    xchg al, ah                 ; the leftmost eight pixels first, which is the
+    stosw                       ; order a band reads in
     loop .dbl
 .shift:
+    ; --- the row, shifted right [sv_bnsh] bits ONCE, however many band rows
+    ; it is about to be stored into: the bits that fall off a byte are the top
+    ; bits of the next one, so the whole shift is a byte walk with one carry
+    ; (it was sv_bnd_shift, with this one caller)
     push si                     ; the bitmap cursor, over the shift's own walk
-    mov si, sv_bnexp            ; ...and the row is shifted ONCE, however many
-    mov di, sv_bnsft            ; band rows it is about to be stored into
-    mov cl, [sv_bnsh]
-    mov ch, 8
-    sub ch, cl
+    mov si, sv_bnexp
+    mov di, sv_bnsft
+    mov cx, [sv_bnsh]           ; CL = the shift, CH = 8 - CL
     mov bh, [sv_bnn]
-    call sv_bnd_shift
-    pop si
-    pop di
-
-    mov dh, [sv_bnsc]           ; ...into one band row a scale, each under the
-.emit:                          ; mask its own screen parity asks for
-    push di
-    mov bx, sv_bnsft
-    mov cl, [sv_bnn]
-    inc cl                      ; the shift makes one byte more than it took
-    mov dl, [sv_bndm]
-.byte:
-    mov al, [bx]
-    and al, dl
-    mov [di], al
-    inc bx
-    inc di
-    dec cl
-    jnz .byte
-    pop di
-    add di, SV_BNST
-    mov al, [sv_bndx]           ; the row below is the other parity - or, for
-    xor [sv_bndm], al           ; a solid swimmer, the same 0xFF
-    dec dh
-    jnz .emit
-
-    dec byte [sv_bnrc]
-    jnz .row
-
-    pop es
-    pop si
-    ret
-
-
-; -----------------------------------------------------------------------------
-; sv_bnd_shift - BH source bytes at DS:SI, shifted right CL bits, into BH + 1
-;                bytes at ES:DI (module internal)
-; in:  CL = the shift 0..7, CH = 8 - CL, BH = source bytes; ES = DS
-; out: nothing; clobbers AX, DL, BH, SI, DI, flags
-;
-; The bits that fall off a byte are the top bits of the next one, so the whole
-; shift is a byte walk with one carry - no 32-bit rotate, no case for 0 and
-; none for 7. An 8086 uses CL whole (the 5-bit mask arrived with the 186), so
-; `shl ah, cl` with CL = 8 really is zero, which is what the CL = 0 case needs.
-; -----------------------------------------------------------------------------
-sv_bnd_shift:
     xor dl, dl                  ; what fell off the byte before this one
 .b:
     lodsb
@@ -829,23 +694,100 @@ sv_bnd_shift:
     dec bh
     jnz .b
     mov [di], dl                ; ...and the tail, which is why the band is one
-    ret                         ; byte wider than the block
+    pop si                      ; byte wider than the block
+    pop di
 
+    mov dh, [sv_bnsc]           ; ...into one band row a scale, each under the
+.emit:                          ; mask its own screen parity asks for
+    push di
+    mov bx, sv_bnsft
+    mov cl, [sv_bnn]
+    inc cl                      ; the shift makes one byte more than it took
+    mov dl, [sv_bndm]
+.byte:
+    mov al, [bx]
+    inc bx
+    and al, dl
+    stosb
+    dec cl
+    jnz .byte
+    pop di
+    add di, SV_BNST
+    mov al, [sv_bndx]           ; the row below is the other parity - or, for
+    xor [sv_bndm], al           ; a solid swimmer, the same 0xFF
+    dec dh
+    jnz .emit
 
-; sv_fish_size - swimmer SI's drawn size into [sv_fbw]/[sv_fbh]
-; in:  SI; clobbers AX, BX, flags
-sv_fish_size:
+    dec byte [sv_bnrc]
+    jnz .row
+    pop si                      ; THE SWIMMER again
+
+    mov ax, [sv_hlim]           ; SPEC.md 79.5.10's strip, and NOTHING on a
+    or ax, ax                   ; screen that has none: CGA and VGA hand the
+    jz .edgeok                  ; whole band over and the kernel's own right
+    mov bx, [sv_bnx0]           ; clip is still the only one that cuts it
+    cmp bx, ax
+    jge .gone0                  ; wholly inside the strip - and nothing was
+                                ; ever drawn there to erase, because this cut
+                                ; has applied to every frame before it
+    mov cx, bx
+    add cx, [sv_bnw]
+    cmp cx, ax
+    jle .edgeok
+    sub ax, bx                  ; both are multiples of 8, so the width the
+    mov [sv_bnw], ax            ; blit meets still is (SPEC.md 5.4.2)
+.edgeok:
+
+    mov al, [sv_fi + si]        ; the swimmer's colour on ink, black on paper.
+    mov ah, CBLACK              ; CBLACK is 0 and 0 is a subset of every
+    call OSAPI_GFX_BLIT1_PEN    ; colour, so the pair is never the one 5.4.2.2
+                                ; refuses. NOT READ on a 1bpp adapter, where
+                                ; the band's dither carries the fish /
+                                ; jellyfish distinction instead
+
+    push si                     ; SI IS THE SWIMMER EVERYWHERE ELSE IN THIS
+                                ; FILE and is the SOURCE for exactly one call:
+                                ; ES:SI = OUR band (see the file header)
+    mov si, sv_bnd              ; ...and the whole of it: the kernel's own
+                                ; right clip is what cuts it (SPEC.md 79.5.9)
+    mov ax, [sv_bnx0]
+    mov bx, [sv_fby0]
+    mov cx, [sv_bnw]
+    mov dx, [sv_fbh]
+    mov bp, SV_BNST
+    call OSAPI_GFX_BLIT1        ; ...which CLIPS, in both axes and exactly:
+    pop si                      ; every extent it meets is a multiple of 8 and
+    pop es                      ; so is the band. `pop` touches no flag, so the
+    jc .norun                   ; CF it answers in survives both of them -
+                                ; SPEC.md 20.3's API cell is built on the same
+                                ; property, and a clipped-away band is CF = 0
+                                ; ("drawn, and nothing drawn"), so this tests
+                                ; for a kernel and not for a screen edge
+.gone:
+    mov di, si                  ; the box now on the glass, for the next frame.
+    add di, di                  ; DI is RE-DERIVED: the band build spends it
+    mov ax, [sv_fdx]
+    mov [sv_fox + di], ax
+    mov ax, [sv_fdy]
+    mov [sv_foy + di], ax
     mov al, [sv_fs + si]
-    mov ah, 0
-    mov bl, SV_FWU
-    mul bl
-    mov [sv_fbw], ax
-    mov al, [sv_fs + si]
-    mov ah, 0
-    mov bl, SV_FHU
-    mul bl
-    mov [sv_fbh], ax
+    mov [sv_fos + si], al
+    mov byte [sv_fon + si], 1
     ret
+.gone0:
+    pop es
+    jmp short .gone
+.norun:                         ; A KERNEL WITH NO gfx_blit1 - kern_small, whose
+    jmp sv_fish_off             ; slot is stc/retf (SPEC.md 5.4.2). It cannot be
+                                ; this one: the Makefile's SMALLDRIVERS filters
+                                ; saver.drv out of both small floppies, exactly
+                                ; as it filters xmem.drv, so no kernel that
+                                ; refuses this call has the file to load. The
+                                ; guard is here because "unreachable" and
+                                ; "leaves the last frame standing for the rest
+                                ; of the session" are a bad pair to be wrong
+                                ; about: the old box goes and the sea is empty
+                                ; rather than littered
 
 ; -----------------------------------------------------------------------------
 ; sv_fun - one axis of the union block (module internal)
@@ -858,39 +800,27 @@ sv_fish_size:
 ; whole routine: written as `call abs / cmp / ja / jnc`, the `cmp` writes the
 ; carry the `jnc` was reading, so a swimmer heading left put its sprite at the
 ; wrong end of its own block - visible as the fish jumping backwards by its
-; own speed every frame while the trail was erased in front of it.
+; own speed every frame while the trail was erased in front of it. Here the
+; bound's own compare IS the answer, turned round by `cmc`: below SV_FMAXD + 1
+; borrows, and a borrow is a union that fits.
 ; -----------------------------------------------------------------------------
 sv_fun:
     sub ax, bx
+    mov dx, ax                  ; moved on: it sits |delta| into the block...
     jns .fwd
     neg ax
+    xor dx, dx                  ; ...moved back: it is at the block's own
+.fwd:                           ; origin and the trail is to its right
     mov cx, ax
-    xor dx, dx                  ; moved back: the sprite is at the block's own
-    jmp short .ck               ; origin and the trail is to its right
-.fwd:
-    mov cx, ax
-    mov dx, ax                  ; moved on: it sits |delta| into the block
-.ck:
-    cmp cx, SV_FMAXD
-    ja .no
-    clc
-    ret
-.no:
-    stc
+    cmp ax, SV_FMAXD + 1
+    cmc
     ret
 
 ; -----------------------------------------------------------------------------
-; sv_bub_born / sv_bub_one - the bubbles (module internal)
+; sv_bub_born / sv_bub_blot - the bubbles (module internal)
 ; in:  SI = the bubble
-;
-; TWO CALLS EACH, and the NEW one is drawn FIRST. A bubble rises at least two
-; pixels a frame and is two tall, so the old block and the new one never share
-; a row - which is what makes draw-then-erase safe here where it is not safe
-; for a swimmer, and it is why the bubbles never blinked even in the first
-; draft's worst frame.
 ; -----------------------------------------------------------------------------
-sv_bub_born:
-    push si
+sv_bub_born:                    ; out: DI = SI * 2; clobbers AX, CX, DX
     mov cx, [sv_w]
     call sv_rndn
     mov di, si
@@ -904,86 +834,35 @@ sv_bub_born:
     mov cx, 3
     call sv_rndn
     add ax, 2
-    mov di, si
-    add di, di
     mov [sv_bv + di], ax
     call OSAPI_RAND
     mov [sv_bph + si], ah       ; AH, for sv_fish_born's reason
-    pop si
-    ret
-
-sv_bub_one:
-    mov di, si
-    add di, di
-    mov ax, [sv_bx + di]        ; bank where it IS, so the erase below can go
-    mov [sv_bex], ax            ; there after the new one is on the glass
-    mov ax, [sv_by + di]
-    mov [sv_bey], ax
-    mov al, [sv_bph + si]
-    mov [sv_beph], al
-
-    mov ax, [sv_by + di]
-    sub ax, [sv_bv + di]
-    mov [sv_by + di], ax
-    or ax, ax
-    jg .wob
-    call sv_bub_born
-    jmp short .draw
-.wob:
-    mov al, [sv_bph + si]       ; the wobble is a re-derived OFFSET and never
-    add al, 9                   ; an accumulated one: a bubble whose x drifted
-    mov [sv_bph + si], al       ; would eventually leave the screen sideways
-.draw:
-    mov al, SV_HOT
-    call sv_pen
-    mov di, si
-    add di, di
-    mov ax, [sv_bx + di]
-    mov bx, [sv_by + di]
-    mov cl, [sv_bph + si]
-    call sv_bub_blot
-    cmp byte [sv_bon + si], 0
-    je .up
-    mov al, SV_GROUND           ; ...and only NOW does the old one go
-    call sv_pen
-    mov ax, [sv_bex]
-    mov bx, [sv_bey]
-    mov cl, [sv_beph]
-    call sv_bub_blot
-.up:
-    mov byte [sv_bon + si], 1
     ret
 
 ; sv_bub_blot - the 2x2 at (AX, BX) swayed by phase CL, in the current pen
-; in:  AX = x, BX = y, CL = the phase; clobbers AX, BX, CX, DX
+; in:  AX = x, BX = y, CL = the phase; clobbers AX, BX, CX, DX, DI
 sv_bub_blot:
-    push si
     push bx
     push ax
     mov al, cl
-    call sv_sin
-    mov bl, al
-    mov al, 3
-    call sv_mulsh               ; +-3 pixels of sway
+    mov ah, 3
+    call sv_rsin                ; +-3 pixels of sway
     cbw
-    mov si, ax
-    pop ax
-    add ax, si
+    pop cx
+    add ax, cx
     pop bx
     mov cx, ax
     inc cx
     mov dx, bx
     inc dx
-    cmp word [sv_hlim], 0       ; SPEC.md 79.5.10 again, and a bubble needs no
-    je .fill                    ; band arithmetic: a fill takes any x, so the
-    push ax                     ; blot is simply cut at the strip
-    mov ax, [sv_hlim]
-    dec ax                      ; AX = the last column a bubble may light
-    cmp cx, ax
+    mov di, [sv_hlim]           ; SPEC.md 79.5.10 again, and a bubble needs no
+    or di, di                   ; band arithmetic: a fill takes any x, so the
+    jz .fill                    ; blot is simply cut at the strip
+    dec di                      ; DI = the last column a bubble may light
+    cmp cx, di
     jbe .xok
-    mov cx, ax
+    mov cx, di
 .xok:
-    pop ax
     cmp ax, cx
     ja .none                    ; ...and the whole blot is inside the strip.
                                 ; The ERASE takes this same road with the same
@@ -992,7 +871,6 @@ sv_bub_blot:
 .fill:
     call OSAPI_GFX_FILL
 .none:
-    pop si
     ret
 
 ; =============================================================================
@@ -1124,17 +1002,16 @@ sv_fsrc:    resw 1                      ; sv_bnd_build's chosen bitmap
 sv_bnx0:    resw 1                      ; the BAND: where it goes and how wide it
 sv_bnw:     resw 1                      ; is, both multiples of 8 (SPEC.md 5.4.2)
 sv_bnbo:    resw 1                      ; ...and where the sprite sits in it, as
-sv_bnsh:    resb 1                      ; whole bytes plus a shift of 0..7
+sv_bnsh:    resb 2                      ; whole bytes plus a shift of 0..7, and 8
+                                        ; less it: CL and CH of the band's shift
 sv_bnn:     resb 1                      ; bytes a bitmap row becomes before the
-sv_bnsc:    resb 1                      ; shift, and band rows it then fills
+sv_bnsc:    resb 1                      ; shift, and band rows it then fills -
+                                        ; a pair, stored as one word
 sv_bnrc:    resb 1                      ; bitmap rows left
 sv_bndm:    resb 1                      ; the dither mask this band row takes...
 sv_bndx:    resb 1                      ; ...and the XOR that steps it to the next
 sv_hlim:    resw 1                      ; SPEC.md 79.5.10: one PAST the last column
                                         ; this mode may light, or 0 for "all of it"
-sv_bex:     resw 1                      ; a bubble's PREVIOUS blot, banked across
-sv_bey:     resw 1                      ; the move so the erase can follow the draw
-sv_beph:    resb 1
 sv_bnexp:   resb 4                      ; one bitmap row, doubled but not yet
 sv_bnsft:   resb 8                      ; shifted - and then shifted
 sv_bnd:     resb SV_BNSZ                ; the union band itself

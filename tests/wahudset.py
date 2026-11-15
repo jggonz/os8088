@@ -10,7 +10,7 @@ and off the glass (text memory's row 24), so a message composed and never
 drawn is red too:
 
   - F2, F5, F3: "Detail Low", "Detail Very High", "Detail Medium" - and the
-    level is the one named (`wa_level`);
+    level is the one named (`wa_level`), vsync on with Very High alone;
   - V twice: "Vsync on", then "Vsync off" (`wa_vsync` agreeing);
   - + then -: "Columns 80", then "Columns 40" - the width is a mode set,
     and the message is drawn on the NEW screen.
@@ -67,8 +67,10 @@ def main():
                   % (key, want, msg, glass.strip()))
 
         press("F2", "Detail Low", lambda: p.byte(sym["wa_level"]) == 1)
-        press("F5", "Detail Very High", lambda: p.byte(sym["wa_level"]) == 4)
-        press("F3", "Detail Medium", lambda: p.byte(sym["wa_level"]) == 2)
+        press("F5", "Detail Very High", lambda: p.byte(sym["wa_level"]) == 4
+              and p.byte(sym["wa_vsync"]) == 1)
+        press("F3", "Detail Medium", lambda: p.byte(sym["wa_level"]) == 2
+              and p.byte(sym["wa_vsync"]) == 0)
         press("KeyV", "Vsync on", lambda: p.byte(sym["wa_vsync"]) == 1)
         press("KeyV", "Vsync off", lambda: p.byte(sym["wa_vsync"]) == 0)
         press("Equal", "Columns 80", lambda: p.word(sym["wa_w"]) == 80)

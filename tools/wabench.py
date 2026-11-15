@@ -54,6 +54,8 @@ def one(w):
         m.advance(cycles=F)
         if a.level:
             m.key("F%d" % a.level); m.advance(cycles=F // 4)
+        if a.level == 5:          # (Very High turns vsync on: off again,
+            m.key("KeyV"); m.advance(cycles=F // 4)   # so its numbers compare)
         def hud():
             b = m.read(0xB8000 + 24 * W * 2, W * 2)
             return bytes(b[0::2]).decode("cp437")

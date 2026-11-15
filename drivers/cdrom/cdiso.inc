@@ -29,18 +29,24 @@ CDR_NAME     equ 33
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; cd_dopen - DX:AX = an extent, CX:BX = its length in bytes: the walk starts
-;            at its first record. clobbers: nothing
+; cd_sopen - SI = an extent then its length (two dwords): the walk starts at
+;            its first record. clobbers: AX, BX, CX, DX
+; cd_dopen - DX:AX = an extent, CX:BX = its length in bytes: the same.
+;            clobbers: AX, BX, CX, DX
+;
+; NEITHER BANKS A REGISTER: cd_cwdopen banks all four for its callers, and
+; cd_parent and cd_enum hold nothing in them across the call.
 ; -----------------------------------------------------------------------------
+cd_sopen:
+    mov ax, [si]
+    mov dx, [si+2]
+    mov bx, [si+4]
+    mov cx, [si+6]
 cd_dopen:
-    push ax
-    push bx
-    push cx
-    push dx
     mov [cd_it_lba], ax
     mov [cd_it_lba+2], dx
-    mov ax, bx
-    mov dx, cx
+    xchg ax, bx                 ; DX:AX = the length (CX:BX is spent)
+    xchg dx, cx
     add ax, 2047
     adc dx, 0
     mov cl, 11
@@ -49,11 +55,8 @@ cd_dopen:
     shl dx, cl
     or ax, dx                   ; sectors: a directory is far under 64K of them
     mov [cd_it_n], ax
-    mov word [cd_it_off], 0
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    xor ax, ax
+    mov [cd_it_off], ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -85,14 +88,13 @@ cd_dnext:
     cmp ax, 2048
     ja .nextsec                 ; a record across the sector: not a disc
     mov [cd_it_off], ax
-    add si, cd_sbuf
-    clc
+    add si, cd_sbuf             ; CF = 0: the sum is far inside the segment
     jmp short .out
 .nextsec:
     dec word [cd_it_n]
     add word [cd_it_lba], 1
     adc word [cd_it_lba+2], 0
-    mov word [cd_it_off], 0
+    and word [cd_it_off], 0
     jmp short .sec
 .end:
     xor ax, ax
@@ -119,17 +121,12 @@ cd_vnext:
     cmp byte [si+CDR_NAME], 1
     jbe cd_vnext
 .named:
-    push ax                     ; a name that runs past its record is no
-    push dx                     ; record: listed it would be read from the
-    mov al, [si+CDR_NLEN]       ; bytes after it (the next record, or past
-    xor ah, ah                  ; cd_sbuf's end)
-    add ax, CDR_NAME
-    mov dl, [si+CDR_LEN]
-    xor dh, dh
-    cmp ax, dx
-    pop dx
-    pop ax
-    ja cd_vnext
+    mov al, [si+CDR_LEN]        ; a name that runs past its record is no
+    sub al, CDR_NAME            ; record: listed it would be read from the
+    cmp al, [si+CDR_NLEN]       ; bytes after it (the next record, or past
+    jb cd_vnext                 ; cd_sbuf's end). A record is at least 34
+                                ; bytes (cd_dnext), so length - 33 is 1..222
+                                ; and the compare cannot wrap a byte
     call cd_hof
     jc cd_vnext
 .out:
@@ -170,15 +167,6 @@ cd_hof:
 ; NAMES (SPEC.md 119.3.2) - tools/os88cdiso.py's mangle() is the reference
 ; =============================================================================
 
-; CD_NCH - AL = the name's DIth byte (SI = the name). [si+di] is not an 8086
-; address, so BX carries the index for the one load
-%macro CD_NCH 0
-    push bx
-    mov bx, di
-    mov al, [bx+si]
-    pop bx
-%endmacro
-
 ; cd_upper - AL -> upper case. clobbers: nothing
 cd_upper:
     cmp al, 'a'
@@ -189,9 +177,11 @@ cd_upper:
 .out:
     ret
 
-; cd_legal - AL (upper case) -> CF = 0 a FAT short-name character: A-Z, 0-9
-;            and the kernel's own dskw_syms. clobbers: nothing
+; cd_legal - AL -> upper case, and CF = 0 a FAT short-name character: A-Z,
+;            0-9 and the kernel's own dskw_syms. clobbers: nothing but AL's
+;            case. Every caller upper-cased first, so it is done here, once
 cd_legal:
+    call cd_upper
     cmp al, 'A'
     jb .notalpha
     cmp al, 'Z'
@@ -223,24 +213,22 @@ cd_legal:
 cd_syms:    db '$', '%', 0x27, '-', '_', '@', '~', 0x60
             db '!', '(', ')', '{', '}', '^', '#', '&', 0
 
-; cd_put - AL -> the next byte of cd_nm (internal). clobbers: nothing
-cd_put:
-    push di
-    mov di, [cd_opos]
-    mov [di], al
-    inc di
-    mov [cd_opos], di
-    pop di
-    ret
-
 ; -----------------------------------------------------------------------------
-; cd_mangle - SI = a record -> cd_nm, its 8.3 name, NUL-ended
-; clobbers: nothing
+; cd_mangle - SI = a record, DI = where its 8.3 name goes (cd_nm, or cd_ent
+;             itself) -> the name, NUL-ended
+; out: DI = one past the NUL; every other register kept
 ;
 ; The ;version and trailing dots go; letters are upper-cased; a name that is
 ; then legal 8.3 is used as it is. Otherwise: six legal characters of the
 ; base, `~`, one character of the stripped name's byte sum mod 36, and three
 ; legal characters of the last extension behind a dot.
+;
+; THE REGISTERS ARE THE WHOLE STATE: SI = the name, BX = the index into it
+; ([bx+si] is an 8086 address where [si+di] is not), BP = L, its stripped
+; length, DX = where the base ends, CX = where the extension starts, AH a
+; count, and DI the output through `stosb`. The hash rides the STACK from
+; where it is computed to the one path that writes it, and the plain path
+; drops it.
 ; -----------------------------------------------------------------------------
 cd_mangle:
     push ax
@@ -248,8 +236,11 @@ cd_mangle:
     push cx
     push dx
     push si
-    push di
-    mov word [cd_opos], cd_nm
+    push bp
+    push es
+    push ds
+    pop es                      ; ES:DI = the output, ours
+    cld
     mov cl, [si+CDR_NLEN]
     xor ch, ch
     add si, CDR_NAME            ; SI = the name, CX = its length
@@ -257,162 +248,156 @@ cd_mangle:
 .scan:
     cmp bx, cx
     jae .trim
-    cmp byte [si+bx], ';'
+    cmp byte [bx+si], ';'
     je .trim
     inc bx
     jmp short .scan
 .trim:
     or bx, bx
     jz .trimmed
-    cmp byte [si+bx-1], '.'
+    cmp byte [bx+si-1], '.'
     jne .trimmed
     dec bx
     jmp short .trim
 .trimmed:
+    mov bp, bx                  ; BP = L
     xor dx, dx                  ; DX = the byte sum, upper-cased
-    mov word [cd_dot], 0xFFFF   ; ...and where the last dot is
-    xor di, di
+    mov cx, 0xFFFF              ; ...and CX where the last dot is
+    xor bx, bx
 .h:
-    cmp di, bx
+    cmp bx, bp
     jae .hd
-    CD_NCH
+    mov al, [bx+si]
     call cd_upper
     xor ah, ah
     add dx, ax
     cmp al, '.'
     jne .hn
-    mov [cd_dot], di
+    mov cx, bx
 .hn:
-    inc di
+    inc bx
     jmp short .h
 .hd:
-    mov ax, dx
+    xchg ax, dx
     xor dx, dx
-    mov cx, 36
-    div cx                      ; DX = the sum mod 36
-    mov al, dl
+    mov bx, 36
+    div bx                      ; DX = the sum mod 36
+    xchg ax, dx
     add al, '0'
     cmp al, '9'
     jbe .hc
     add al, 'A' - '9' - 1
 .hc:
-    mov [cd_hash], al
-    mov dx, bx                  ; DX = where the base ends...
-    mov cx, bx                  ; ...CX = where the extension starts
-    mov ax, [cd_dot]
-    cmp ax, 0xFFFF
-    je .split
-    mov dx, ax
-    mov cx, ax
-    inc cx
+    push ax                     ; THE HASH, until .tilde or .plain pops it
+    mov dx, cx                  ; DX = where the base ends: the dot...
+    inc cx                      ; ...CX = where the extension starts, past it
+    jnz .split                  ; (no dot was 0FFFFh, and wraps to 0)
+    mov dx, bp                  ; no dot: the base is all of it, and the
+    mov cx, bp                  ; extension starts (and ends) at L
 .split:
     or dx, dx                   ; a legal 8.3 name as it stands?
     jz .mangle
     cmp dx, 8
     ja .mangle
-    mov ax, bx
+    mov ax, bp
     sub ax, cx
     cmp ax, 3
     ja .mangle
-    xor di, di
+    xor bx, bx
 .lb:
-    cmp di, dx
+    cmp bx, dx
     jae .le0
-    CD_NCH
-    call cd_upper
+    mov al, [bx+si]
     call cd_legal
     jc .mangle
-    inc di
+    inc bx
     jmp short .lb
 .le0:
-    mov di, cx
+    mov bx, cx
 .le:
-    cmp di, bx
+    cmp bx, bp
     jae .plain
-    CD_NCH
-    call cd_upper
+    mov al, [bx+si]
     call cd_legal
     jc .mangle
-    inc di
+    inc bx
     jmp short .le
 .plain:                         ; the base, and the extension behind a dot
-    xor di, di
+    pop ax                      ; (the hash: not wanted here)
+    xor bx, bx
 .pb:
-    cmp di, dx
+    cmp bx, dx
     jae .pe0
-    CD_NCH
+    mov al, [bx+si]
     call cd_upper
-    call cd_put
-    inc di
+    stosb
+    inc bx
     jmp short .pb
 .pe0:
-    cmp cx, bx
+    cmp cx, bp
     jae .done
     mov al, '.'
-    call cd_put
-    mov di, cx
+    stosb
+    mov bx, cx
 .pe:
-    cmp di, bx
+    cmp bx, bp
     jae .done
-    CD_NCH
+    mov al, [bx+si]
     call cd_upper
-    call cd_put
-    inc di
+    stosb
+    inc bx
     jmp short .pe
 .mangle:                        ; six legal characters of the base...
-    xor di, di
+    xor bx, bx
     xor ah, ah                  ; AH = how many went in
 .mb:
-    cmp di, dx
+    cmp bx, dx
     jae .mbd
     cmp ah, 6
     jae .mbd
-    CD_NCH
-    call cd_upper
+    mov al, [bx+si]
     call cd_legal
     jc .mbn
-    call cd_put
+    stosb
     inc ah
 .mbn:
-    inc di
+    inc bx
     jmp short .mb
 .mbd:
     or ah, ah
     jnz .tilde
     mov al, '_'                 ; ...or one that stands for none
-    call cd_put
+    stosb
 .tilde:
     mov al, '~'
-    call cd_put
-    mov al, [cd_hash]
-    call cd_put
-    mov di, cx                  ; ...and three of the extension
+    stosb
+    pop ax                      ; the hash
+    stosb
+    mov bx, cx                  ; ...and three of the extension
     xor ah, ah
 .me:
-    cmp di, bx
+    cmp bx, bp
     jae .done
     cmp ah, 3
     jae .done
-    CD_NCH
-    call cd_upper
+    mov al, [bx+si]
     call cd_legal
     jc .men
     or ah, ah
     jnz .mep
-    push ax
-    mov al, '.'
-    call cd_put
-    pop ax
+    mov byte [di], '.'
+    inc di
 .mep:
-    call cd_put
+    stosb
     inc ah
 .men:
-    inc di
+    inc bx
     jmp short .me
 .done:
     xor al, al
-    call cd_put
-    pop di
+    stosb
+    pop es
+    pop bp
     pop si
     pop dx
     pop cx
@@ -425,33 +410,22 @@ cd_mangle:
 ; hands over
 ; =============================================================================
 
-; cd_ezero - cd_ent all zero, ES left alone. clobbers: nothing
+; cd_ezero - cd_ent all zero, ES left alone. clobbers: CX, DI (AX kept)
 cd_ezero:
-    push ax
-    push cx
-    push di
-    push es
-    push ds
-    pop es
     mov di, cd_ent
-    xor ax, ax
     mov cx, 16
-    cld
-    rep stosw
-    pop es
-    pop di
-    pop cx
-    pop ax
-    ret
+    jmp cd_wzero
 
 ; -----------------------------------------------------------------------------
-; cd_stage - SI = a record, AX = its handle -> cd_ent. clobbers: nothing
+; cd_stage - SI = a record, AX = its handle -> cd_ent
+; clobbers: AX, BX, CX, DI - its two callers want none of them back: cd_list
+;           banks every register round its walk, and cd_enum hands the entry
+;           over and reloads AX itself
+;
+; THE NAME IS MANGLED STRAIGHT INTO cd_ent, which is what cd_mangle's DI is
+; for: the name used to go to cd_nm and be copied across a byte at a time.
 ; -----------------------------------------------------------------------------
 cd_stage:
-    push ax
-    push bx
-    push si
-    push di
     call cd_ezero
     mov [cd_ent+18], ax         ; @18: the handle
     mov bl, [si+CDR_FLAGS]
@@ -462,15 +436,8 @@ cd_stage:
     mov ax, [si+CDR_SIZE+2]
     mov [cd_ent+22], ax
 .nosize:
-    call cd_mangle
-    mov si, cd_nm               ; @0: the name
-    mov di, cd_ent
-.cp:
-    lodsb
-    mov [di], al
-    inc di
-    or al, al
-    jnz .cp
+    mov di, cd_ent              ; @0: the name
+    call cd_mangle              ; DI = one past its NUL
     mov ax, 2                   ; @16: 2 a folder...
     test bl, 2
     jnz .type
@@ -484,10 +451,6 @@ cd_stage:
     inc ax
 .type:
     mov [cd_ent+16], ax
-    pop di
-    pop si
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -501,98 +464,64 @@ cd_isaudio:
     ja .no
     push si
     call cd_tdesc
-    test byte [si+1], CDT_DATA
+    test byte [si+1], CDT_DATA  ; CF = 0 off the `test`, which `pop` keeps
     pop si
     jnz .no
-    clc
     ret
 .no:
     stc
     ret
 
-; cd_cdaname - AL = a track -> cd_nm = 'TRACKnn.CDA'. clobbers: nothing
+; cd_cdaname - AL = a track, DI = 12 bytes -> 'TRACKnn.CDA'. clobbers: nothing
 cd_cdaname:
     push ax
-    push di
-    mov di, cd_nm
     mov word [di], 'TR'
     mov word [di+2], 'AC'
     mov byte [di+4], 'K'
-    xor ah, ah
-    push cx
-    mov cl, 10
-    div cl                      ; AL = tens, AH = units
-    pop cx
+    aam                         ; AH = tens, AL = units (the track is <= 99)
+    xchg al, ah
     add ax, '00'
     mov [di+5], ax
     mov word [di+7], '.C'
     mov word [di+9], 'DA'
     mov byte [di+11], 0
-    pop di
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; cd_stagecda - AL = an audio track -> cd_ent: TRACKnn.CDA, 44 bytes, type 0
-; clobbers: nothing
+; clobbers: CX, DI - AX is kept, being both callers' loop counter
 ; -----------------------------------------------------------------------------
 cd_stagecda:
-    push ax
-    push cx
-    push si
-    push di
     call cd_ezero
-    call cd_cdaname
+    mov di, cd_ent
+    call cd_cdaname             ; @0: the name, straight into the entry
+    push ax
     xor ah, ah
     add ax, CD_HCDA
     mov [cd_ent+18], ax
-    mov word [cd_ent+20], 44
-    push es
-    push ds
-    pop es
-    mov si, cd_nm
-    mov di, cd_ent
-    mov cx, 12
-    cld
-    rep movsb
-    pop es
-    pop di
-    pop si
-    pop cx
     pop ax
+    mov word [cd_ent+20], 44
     ret
 
 ; -----------------------------------------------------------------------------
-; cd_mkcda - [cd_r_cda]'s 44 bytes into cd_cda (119.3.5). clobbers: nothing
+; cd_mkcda - [cd_r_cda]'s 44 bytes into cd_cda (119.3.5)
+; clobbers: AX, BX, CX, DX, DI - its one caller is cd_bytes, which holds none
+;           of them across it (and its callers bank them all)
+;
+; Bytes 0-21 are cd_cda's own load-time value and are never written
+; (cdrom.asm); bytes 23, 39 and 43 are 0 from the load and never written.
 ; -----------------------------------------------------------------------------
 cd_mkcda:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov word [cd_cda], 'RI'     ; every one of the 44 bytes is written below
-    mov word [cd_cda+2], 'FF'
-    mov word [cd_cda+4], 36
-    mov word [cd_cda+6], 0
-    mov word [cd_cda+8], 'CD'
-    mov word [cd_cda+10], 'DA'
-    mov word [cd_cda+12], 'fm'
-    mov word [cd_cda+14], 't '
-    mov word [cd_cda+16], 24
-    mov word [cd_cda+18], 0
-    mov word [cd_cda+20], 1
     mov al, [cd_r_cda]
-    xor ah, ah
-    mov [cd_cda+22], ax         ; the track
+    mov [cd_cda+22], al         ; the track
     mov al, [cd_last]           ; the disc id: the lead-out, xor the track
     inc ax                      ; count in its top byte
     call cd_tstart
-    mov cl, [cd_last]
-    sub cl, [cd_first]
-    inc cl
-    xor dh, cl
+    mov cx, [cd_first]          ; CL = the first track, CH = the last
+    sub ch, cl
+    inc ch
+    xor dh, ch
     mov [cd_cda+24], ax
     mov [cd_cda+26], dx
     mov al, [cd_r_cda]
@@ -620,37 +549,52 @@ cd_mkcda:
     pop dx
     pop ax
     mov di, cd_cda + 40
-    call cd_msfle
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+                                ; ...and the length's, the tail call
+
+; cd_msfle - DX:AX frames -> [DI] = F, S, M (the fourth byte, M's pad, is the
+;            caller's: both of cd_mkcda's are 0 and never written).
+;            clobbers: AX, CX, DX
+cd_msfle:
+    xor cx, cx                  ; no lead-in to add
+    call cd_mcore
+    mov [di], ah
+    mov [di+1], al
+    mov [di+2], cl
     ret
 
-; cd_msfle - DX:AX frames -> [DI] = F, S, M, 0. clobbers: AX, DX
-cd_msfle:
-    push cx
-    or dx, dx                   ; cd_msf's two clamps, for the divide's sake
+; -----------------------------------------------------------------------------
+; cd_mcore - DX:AX frames, plus CX frames of lead-in, -> CL = minutes, AL =
+;            seconds, AH = frames, and DX = the frames past the minute - the
+;            value the two routines this replaced left there, which CDV_PLAY
+;            hands back (cd_cmd keeps DX). clobbers: CH
+;
+; THE TWO CLAMPS GUARD THE DIVIDE (INT 0 on an overflow, and nothing here
+; handles one): a negative address is the disc's start, and a quotient past
+; 4,499 minutes does not fit. The lead-in is added BETWEEN them - after the
+; negative clamp, so a pregap address still reads as the disc's start plus
+; two seconds, and BEFORE the high one, which is what makes the high one
+; hold: cd_msf used to add its 150 after clamping, and an address at
+; 4,499:FF6Ah or above carried into 4,500 and faulted (DEFECTS, dsp1/cdram.md).
+; Below that the answer is the one it always was, cd_msf's and cd_msfle's.
+; -----------------------------------------------------------------------------
+cd_mcore:
+    or dx, dx
     jns .pos
     xor ax, ax
-    xor dx, dx
+    cwd
 .pos:
+    add ax, cx
+    adc dx, 0
     cmp dx, 4500
     jb .ok
     mov dx, 4499
 .ok:
     mov cx, 4500                ; frames a minute
     div cx                      ; AX = minutes, DX = the rest
-    mov [di+2], al
-    mov byte [di+3], 0
-    mov ax, dx
-    mov cl, 75
-    div cl                      ; AL = seconds, AH = frames
-    mov [di+1], al
-    mov [di], ah
-    pop cx
+    xchg ax, cx                 ; CL = minutes
+    mov ax, dx                  ; AX = the rest
+    mov ch, 75
+    div ch                      ; AL = seconds, AH = frames
     ret
 
 ; =============================================================================
@@ -661,7 +605,10 @@ cd_msfle:
 ; cd_resolve - AX = a handle -> what it names
 ; out: CF = 0 and [cd_r_lba], [cd_r_len], [cd_r_fl], [cd_r_cda]; CF = 1 and
 ;      AX = a FERR_*
-; clobbers: AX (on a refusal)
+; clobbers: AX - on a refusal, and to the TRACK on a TRACKnn.CDA's handle. A
+;      record's handle comes back in AX as it went in, which cd_chdir and
+;      cd_enum both read straight after (DEFECTS, docs/plans/completed/dsp1/cdram.md:
+;      the copy out of the record used to go through AX)
 ; -----------------------------------------------------------------------------
 cd_resolve:
     push bx
@@ -685,7 +632,7 @@ cd_resolve:
     mov word [cd_r_len], 44
     mov word [cd_r_len+2], 0
     mov byte [cd_r_fl], 0
-    jmp .ok
+    jmp .out              ; CF = 0 off the `jc`
 .rec:
     cmp byte [cd_iso], 0
     je .noent
@@ -708,80 +655,69 @@ cd_resolve:
     pop ax
     jc .io
     xor si, si
+    mov cl, 5                   ; (the slot's shift, the same every record)
 .w:
     cmp si, 2048 - 34
     ja .noent
-    mov cl, [cd_sbuf+si]
-    xor ch, ch
-    cmp cl, 34
+    mov dl, [cd_sbuf+si]
+    xor dh, dh
+    cmp dl, 34
     jb .noent
     mov di, si
-    push cx
-    mov cl, 5
     shr di, cl
-    pop cx
     cmp di, bx
     je .found
     ja .noent
-    add si, cx
+    add si, dx
     jmp short .w
 .found:
     add si, cd_sbuf
-    mov dl, [si+CDR_NLEN]       ; a name that runs past the record is no record
-    xor dh, dh
-    add dx, CDR_NAME
-    push ax
-    mov al, [si+CDR_LEN]        ; ...compared in 16 bits: a 223-byte name
-    xor ah, ah                  ; plus 33 wraps a byte
-    cmp dx, ax
-    pop ax
-    ja .noent
+    mov dl, [si+CDR_LEN]        ; a name that runs past the record is no
+    sub dl, CDR_NAME            ; record - and the length is at least 34
+    cmp dl, [si+CDR_NLEN]       ; (above), so less 33 it is 1..222 and the
+    jb .noent                   ; byte compare cannot wrap
     mov dl, [si+CDR_FLAGS]
-    push ax                     ; the handle, into the next cache row
-    push si
-    mov al, [cd_hcnext]
+    push ax                     ; the handle, into the next cache row: the
+    mov al, [cd_hcnext]         ; counter is taken MOD CD_HC_N where it is
+    inc byte [cd_hcnext]        ; read, so it may simply count
+    and al, CD_HC_N - 1
     mov ah, CD_HC_SZ
     mul ah
     add ax, cd_hcache
     xchg di, ax
-    pop si
     pop ax
-    mov [di], ax
-    mov bx, [si+CDR_EXT]
-    mov [di+2], bx
-    mov bx, [si+CDR_EXT+2]
-    mov [di+4], bx
-    mov bx, [si+CDR_SIZE]
-    mov [di+6], bx
-    mov bx, [si+CDR_SIZE+2]
-    mov [di+8], bx
-    mov [di+10], dl
-    inc byte [cd_hcnext]
-    and byte [cd_hcnext], CD_HC_N - 1
-    lea si, [di+2]
+    push es
+    push ds
+    pop es
+    cld
+    stosw                       ; the handle...
+    inc si
+    inc si
+    movsw                       ; ...the extent (CDR_EXT)...
+    movsw
+    add si, CDR_SIZE - CDR_EXT - 4
+    movsw                       ; ...the length (CDR_SIZE)...
+    movsw
+    pop es
+    mov [di], dl                ; ...and the flags
+    lea si, [di-8]              ; SI = the row's extent then length
     jmp short .take
 .hit:
     mov dl, [si+10]
     add si, 2
 .take:                          ; SI = extent then length, DL = the flags
-    mov ax, [si]
-    mov [cd_r_lba], ax
-    mov ax, [si+2]
-    mov [cd_r_lba+2], ax
-    mov ax, [si+4]
-    mov [cd_r_len], ax
-    mov ax, [si+6]
-    mov [cd_r_len+2], ax
-    mov [cd_r_fl], dl
-.ok:
-    clc
+    mov di, cd_r_lba            ; ...copied out by a routine that keeps AX
+    mov cx, 4
+    call cd_wcopy
+    mov [cd_r_fl], dl           ; (CF = 0: the last arithmetic was an `add`,
+    clc                         ; a `lea` or a `jmp` - said, not assumed)
     jmp short .out
 .io:
     mov ax, FERR_IO
-    stc
-    jmp short .out
+    jmp short .fail
 .noent:
     mov ax, FERR_NOENT
+.fail:
     stc
 .out:
     pop di
@@ -799,9 +735,21 @@ cd_resolve:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; cd_ferr - AX = a CDE_* -> the FERR_* a verb answers: an empty drive is
-;           FERR_NODISK, the rest FERR_IO. CF = 1, DX = 0 (a READ's count)
+; cd_mediak - cd_media for an FSV_* verb: AX KEPT when the disc answers (ZF
+;             still cd_media's stale flag), and a refusal turned into the
+;             verb's own answer by cd_ferr below - FERR_*, DX = 0, CF = 1. It
+;             was the same seven instructions in four verbs
+; cd_ferr   - AX = a CDE_* -> the FERR_* a verb answers: an empty drive is
+;             FERR_NODISK, the rest FERR_IO. CF = 1, DX = 0 (a READ's count)
 ; -----------------------------------------------------------------------------
+cd_mediak:
+    push ax
+    call cd_media
+    jc .no
+    pop ax                      ; (`pop` keeps the flags)
+    ret
+.no:
+    pop dx                      ; the caller's AX, dropped: AX is the CDE_*
 cd_ferr:
     cmp ax, CDE_NODISC
     mov ax, FERR_NODISK
@@ -832,11 +780,10 @@ cd_cwdopen:
     push bx
     push cx
     push dx
-    mov ax, [cd_cwdlba]
-    mov dx, [cd_cwdlba+2]
-    mov bx, [cd_cwdlen]
-    mov cx, [cd_cwdlen+2]
-    call cd_dopen
+    push si
+    mov si, cd_cwdlba
+    call cd_sopen
+    pop si
     pop dx
     pop cx
     pop bx
@@ -855,14 +802,8 @@ cd_chdir:
     push cx
     push si
     push di
-    push ax
-    call cd_media
-    jnc .known
-    pop cx                      ; the handle, dropped: AX is the CDE_*
-    call cd_ferr
-    jmp short .out
-.known:
-    pop ax
+    call cd_mediak
+    jc .out
     or ax, ax
     jz .root
     cmp byte [cd_stale], 0
@@ -871,9 +812,9 @@ cd_chdir:
     jc .out
     test byte [cd_r_fl], 2
     jz .noent                   ; nothing chdirs into a file
-    mov [cd_cwd], ax
-    mov si, cd_r_lba
-    call cd_setcwd
+    mov [cd_cwd], ax            ; the HANDLE: cd_resolve keeps AX (and it
+    mov si, cd_r_lba            ; did not, which is DEFECTS 1 in
+    call cd_setcwd              ; docs/plans/completed/dsp1/cdram.md)
     call cd_parent              ; DX = the parent's handle
     clc
     jmp short .out
@@ -882,8 +823,7 @@ cd_chdir:
     mov [cd_cwd], ax
     mov si, cd_rlba
     call cd_setcwd
-    xor dx, dx                  ; the root's parent is never read
-    clc
+    xor dx, dx                  ; the root's parent is never read - and CF = 0
     jmp short .out
 .noent:
     mov ax, FERR_NOENT
@@ -896,22 +836,11 @@ cd_chdir:
     ret
 
 ; cd_setcwd - SI = an extent then a length (8 bytes) -> the current folder's
+;             clobbers: CX, SI, DI - cd_chdir, the one caller, banks them
 cd_setcwd:
-    push ax
-    push cx
-    push di
-    push es
-    push ds
-    pop es
     mov di, cd_cwdlba
     mov cx, 4
-    cld
-    rep movsw
-    pop es
-    pop di
-    pop cx
-    pop ax
-    ret
+    jmp cd_wcopy
 
 ; -----------------------------------------------------------------------------
 ; cd_parent - the current folder's parent's handle, into DX (119.3.3)
@@ -923,10 +852,8 @@ cd_setcwd:
 ; a `..` that goes one level too high is a folder the user can still leave.
 ; -----------------------------------------------------------------------------
 cd_parent:
-    push ax
-    push bx
-    push cx
-    push si
+    push ax                     ; (BX, CX and SI are spent too: cd_chdir, the
+                                ; one caller, banks them round the call)
     mov ax, [cd_cwdlba]
     mov dx, [cd_cwdlba+2]
     call cd_dotdot              ; DX:AX = the parent's extent
@@ -940,8 +867,6 @@ cd_parent:
     mov [cd_tmp+2], dx
     call cd_dotdot              ; the grandparent's extent
     jc .root
-    mov [cd_tmp2], ax
-    mov [cd_tmp2+2], dx
     call cd_rdsec               ; its `.` record carries its length
     jc .root
     mov bx, [cd_sbuf+CDR_SIZE]
@@ -970,34 +895,25 @@ cd_parent:
 .root:
     xor dx, dx
 .out:
-    pop si
-    pop cx
-    pop bx
     pop ax
     ret
 
 ; cd_dotdot - DX:AX = a directory's extent -> DX:AX = its parent's, out of the
 ;             second record of its first sector; CF = 1 unreadable
-;             clobbers: SI
+;             clobbers: AX, DX on a refusal (cd_parent then answers the
+;             root, reading neither), SI
 cd_dotdot:
     call cd_rdsec
     jc .out
     mov si, cd_sbuf
-    push ax
     mov al, [si]
     xor ah, ah
     cmp al, 34
-    jb .bad
-    add si, ax
-    pop ax
+    jb .out                     ; CF = 1 off the compare: unreadable
+    add si, ax                  ; (CF = 0: the sum is inside cd_sbuf)
     mov ax, [si+CDR_EXT]
     mov dx, [si+CDR_EXT+2]
-    clc
 .out:
-    ret
-.bad:
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1014,8 +930,7 @@ cd_list:
     push di
     call cd_media
     jc .out
-    cmp byte [cd_stale], 0
-    jne .out
+    jne .out                    ; stale (cd_media's ZF)
     cmp byte [cd_iso], 0
     je .tracks
     call cd_cwdopen
@@ -1068,21 +983,15 @@ cd_enum:
     push di
     mov [cd_bseg], dx
     mov [cd_boff], bx
-    mov [cd_ord], cx
-    push ax
-    call cd_media
-    jnc .known
-    pop cx
-    call cd_ferr
-    jmp .out
-.known:
-    pop ax
+    mov di, cx                  ; DI = the ordinal: nothing below spends it
+    call cd_mediak              ; until the entry is staged
+    jc .out
     mov si, cd_rlba
     or ax, ax
     jz .walk
     cmp byte [cd_stale], 0
     jne .noent
-    call cd_resolve
+    call cd_resolve             ; AX kept: it is the folder's handle
     jc .out
     test byte [cd_r_fl], 2
     jz .noent
@@ -1091,11 +1000,7 @@ cd_enum:
     push ax                     ; the folder: 0 is the root, whose tracks
     cmp byte [cd_iso], 0        ; follow its records
     je .tracks
-    mov ax, [si]
-    mov dx, [si+2]
-    mov bx, [si+4]
-    mov cx, [si+6]
-    call cd_dopen
+    call cd_sopen
 .rec:
     call cd_vnext
     jnc .counted
@@ -1105,11 +1010,8 @@ cd_enum:
     call cd_ferr                ; "past the end" - a copy would stop early and
     jmp short .out              ; call that success (SPEC.md 62.9.7)
 .counted:
-    cmp word [cd_ord], 0
-    je .stage
-    dec word [cd_ord]
-    jmp short .rec
-.stage:
+    sub di, 1                   ; this one, or one fewer to step over: the
+    jnc .rec                    ; borrow is "the ordinal was 0"
     call cd_stage
     pop ax
     jmp short .give
@@ -1121,9 +1023,8 @@ cd_enum:
 .t:
     call cd_isaudio
     jc .tn
-    cmp word [cd_ord], 0
-    je .cda
-    dec word [cd_ord]
+    sub di, 1
+    jc .cda
 .tn:
     inc al
     cmp al, [cd_last]
@@ -1136,8 +1037,7 @@ cd_enum:
     call cd_stagecda
 .give:
     push es
-    mov es, [cd_bseg]
-    mov di, [cd_boff]
+    les di, [cd_boff]           ; [cd_bseg]:[cd_boff], one load
     mov si, cd_ent
     mov cx, DSK_DE_SIZE / 2
     cld
@@ -1177,13 +1077,9 @@ cd_stat:
     loop .c
     mov byte [di], 0
 .staged:
-    call cd_media
-    jnc .known
-    call cd_ferr
-    jmp .out
-.known:
-    cmp byte [cd_stale], 0
-    jne .noent
+    call cd_mediak
+    jc .out
+    jne .noent                  ; stale (cd_media's ZF)
     cmp byte [cd_iso], 0
     je .cda
     call cd_cwdopen
@@ -1195,32 +1091,28 @@ cd_stat:
     call cd_ferr                ; a READ that failed is not "no such name"
     jmp short .out
 .rec:
+    mov di, cd_nm
     call cd_mangle
-    push si
-    mov si, cd_nm
     call cd_wantis
-    pop si
     jne .w
     mov cx, [si+CDR_SIZE]
     mov dx, [si+CDR_SIZE+2]
     xor bl, bl
     test byte [si+CDR_FLAGS], 2
-    jz .found
+    jz .out                     ; CF = 0 off the `test`
     mov bl, 0x10                ; a folder: size 0, as its listing says
     xor cx, cx
-    xor dx, dx
-.found:
-    clc
+    xor dx, dx                  ; (CF = 0)
     jmp short .out
 .cda:
     cmp word [cd_cwd], 0
     jne .noent
     mov al, [cd_first]
+    mov di, cd_nm
 .t:
     call cd_isaudio
     jc .tn
     call cd_cdaname
-    mov si, cd_nm
     call cd_wantis
     je .tfound
 .tn:
@@ -1236,18 +1128,18 @@ cd_stat:
     add ax, CD_HCDA
     mov cx, 44
     xor dx, dx
-    xor bl, bl
-    clc
+    xor bl, bl                  ; (CF = 0)
 .out:
     pop di
     pop si
     ret
 
-; cd_wantis - SI = a name in our DS -> ZF = 1 it is cd_want. clobbers: flags
+; cd_wantis - ZF = 1 cd_nm is cd_want. clobbers: flags
 cd_wantis:
     push ax
     push si
     push di
+    mov si, cd_nm
     mov di, cd_want
 .c:
     mov al, [si]
@@ -1272,15 +1164,9 @@ cd_wantis:
 cd_open:
     mov [cd_bseg], dx
     mov [cd_boff], bx
-    push ax
-    call cd_media
-    jnc .known
-    pop dx
-    jmp cd_ferr
-.known:
-    pop ax
-    cmp byte [cd_stale], 0
-    jne .noent
+    call cd_mediak
+    jc .out
+    jne .noent                  ; stale (cd_media's ZF)
     call cd_resolve
     jc .fail
     test byte [cd_r_fl], 2
@@ -1355,7 +1241,7 @@ cd_readat:
     push si
     push di
     call cd_open
-    jc .out
+    jc cd_read.out
     mov [cd_pos], si
     mov [cd_pos+2], di
     mov ax, [cd_r_len]          ; what is left past the offset, 32 bits
@@ -1378,28 +1264,21 @@ cd_readat:
     push ax
     call cd_bytes
     pop dx
-    jc .io
+    jc cd_read.io               ; cd_read's tail, which is this one's too:
     xchg ax, dx                 ; AX = the count
-    jmp short .zhi
+    jmp short .zhi              ; the same frame, the same refusal
 .eof:
     xor ax, ax
 .zhi:
     xor dx, dx                  ; ...which also leaves CF = 0
-    jmp short .out
-.io:
-    call cd_ferr
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    ret
+    jmp short cd_read.out
 
 ; -----------------------------------------------------------------------------
 ; cd_bytes - [cd_left] bytes of the resolved file, from [cd_pos], to
 ;            [cd_bseg]:[cd_boff] (119.3.4)
 ; out: CF = 0; CF = 1 and AX = a CDE_*
-; clobbers: AX
+; clobbers: AX, BX, CX, DX, SI, DI - cd_read and cd_readat, the two callers,
+;           bank BX, CX, SI and DI round it and write DX after it
 ;
 ; A run of whole sectors goes straight into the buffer, CD_RUN to a READ (10);
 ; a partial first or last sector goes through cd_sbuf, whose tag means the
@@ -1407,13 +1286,8 @@ cd_readat:
 ; every piece, so a run never wraps its segment.
 ; -----------------------------------------------------------------------------
 cd_bytes:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call cd_bnorm
+    push es                     ; (BX, CX, DX, SI and DI are spent: its two
+    call cd_bnorm               ; callers bank or overwrite every one)
 .loop:
     mov ax, [cd_left]
     or ax, [cd_left+2]
@@ -1427,11 +1301,10 @@ cd_bytes:
     mov cl, 11
     shr ax, cl
     mov bx, dx
+    shr dx, cl                  ; (the high word's share, while CL is 11)
     mov cl, 5
     shl bx, cl
     or ax, bx
-    mov cl, 11
-    shr dx, cl
     add ax, [cd_r_lba]
     adc dx, [cd_r_lba+2]
     or si, si
@@ -1477,8 +1350,7 @@ cd_bytes:
     add si, cd_sbuf
 .copyfrom:                      ; AX bytes from DS:SI to the destination
     mov cx, ax
-    mov es, [cd_bseg]
-    mov di, [cd_boff]
+    les di, [cd_boff]           ; [cd_bseg]:[cd_boff], one load
     cld
     rep movsb
 .adv:                           ; AX = the bytes this piece moved
@@ -1491,7 +1363,7 @@ cd_bytes:
     cmp byte [cd_prog], 0
     je .loop
     call OSAPI_FS_PROG          ; AX = since the last report; it keeps every
-    jmp .loop             ; register and the flags
+    jmp .loop                   ; register and the flags
 .cda:                           ; a TRACKnn.CDA: composed, then copied
     call cd_mkcda               ; (the callers clamp to its 44 bytes)
     mov si, [cd_pos]
@@ -1502,11 +1374,6 @@ cd_bytes:
     clc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; cd_bnorm - [cd_bseg]:[cd_boff] with the offset under 128. clobbers: nothing

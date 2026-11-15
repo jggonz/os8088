@@ -472,7 +472,8 @@ def graph_block(tag, boxes):
     """The route graph as the arena's part carries it and the game copies it
     (wa_loadarena): nodes, edges, each figure's home edge; then the bots'
     tables (AI-PLAN 3.1, 4.1): the sight grid, the nearest node to each PVS
-    cell, and for each node and goal the edge to take first -> bytes"""
+    cell, and for each node and goal which of its ways out to take first, two
+    bits -> bytes"""
     nodes, edges, homes = graph_edges(tag, boxes)
     out = bytearray([len(nodes), len(edges)] + homes)
     if len(out) & 1:
@@ -524,8 +525,24 @@ def graph_block(tag, boxes):
                         dist[u] = nd
                         hop[u][goal] = i
                         todo.append(u)
+    # ...each as the SLOT of the node's way out it is (0..3, the node
+    # record's four), two bits, four to a byte in (node, goal) order: the
+    # bot reads the edge out of the node's record (wa_bnext). A node's own
+    # goal is never read (the bot is there); no other pair may be cut off
+    slots = []
     for a in range(nn):
-        out += bytes(hop[a])
+        for g_ in range(nn):
+            if hop[a][g_] == 0xFF:
+                if a != g_:
+                    raise SystemExit("arenagen: arena %s: node %d cannot "
+                                     "reach node %d" % (tag, a, g_))
+                slots.append(0)
+            else:
+                slots.append(outs[a].index(hop[a][g_]))
+    slots += [0] * (-len(slots) % 4)
+    for k in range(0, len(slots), 4):
+        out.append(slots[k] | slots[k + 1] << 2 | slots[k + 2] << 4 |
+                   slots[k + 3] << 6)
     if len(out) & 1:
         out.append(0)
     rs = respawns(tag, boxes, nodes, grid)
@@ -1128,6 +1145,7 @@ ARENA_ROOMH = {"a3": MH, "a4": 0, "a6": ZH, "a7": 0}      # (the hedge's edge al
                                         # room's walls - HEDGES-PLAN 9)
 WA_MFL = 24                             # (wafb.inc's)
 WA_MFV = 24                             # (wafb.inc's: their distinct ends)
+WA_FLGC = 4                             # (wirearena.asm's: lines near a cell)
 
 
 def flines(tag):
@@ -1257,8 +1275,14 @@ PVS_EPS = 0.003
 PVS_EPSD = 5.0
 PVS_STEP = 4
 PVS_GRIDP = 16
-PVS_MIN = 0.10                  # an arena carries one when it culls at
-                                # least this share of its box-cells
+PVS_MIN = 0.02                  # an arena carries one when it culls at
+                                # least this share of its box-cells: the
+                                # masks cost its part ~1 KB (~110 bytes
+                                # packed) and a frame nothing but a bit a
+                                # leaf when the order is made, and the
+                                # full arena's 2.6% measured -0.4% render
+                                # at 40 columns (pass 7, the data's) - the
+                                # open arena's 0% carries none
 PVS_SHIFT = 7                   # the grid: 128 units (2 m) a cell
 
 
@@ -1377,6 +1401,19 @@ def pvs_build(tag, boxes):
         return None                     # (an eye over the tallest: no occluder)
     tall = [i for i, b in enumerate(boxes) if b.h >= top]
     occ = [boxes[i] for i in tall]
+    m = pvs_reach()                     # (every place the game puts an eye
+    for (x, y) in ([tuple(arenas()[[t for t, _, _, _ in arenas()].index(tag)]
+                          [3][:2]), (1024, 700)] +      # without walking -
+                   [tuple(r[:2]) for r in ARENA_RESPAWNS.get(  # the start,
+                       tag, FLAT_RESPAWNS)] +           # the B bench, the
+                   [tuple(v[1:3]) for v in ARENA_BENCH.get(tag, [])]):  # re-
+        if not (ROOM[0] + m <= x <= ROOM[2] - m and     # spawns, the P
+                ROOM[1] + m <= y <= ROOM[3] - m) or any(  # bench's views -
+                a - m < x < c + m and b - m < y < d + m     # is in the cells'
+                for (a, b, c, d) in occ):                   # reach, pvs_points)
+            raise SystemExit("arenagen: arena %s: an eye placed at (%d, %d), "
+                             "within %d of a tall box or the wall - outside "
+                             "what the PVS is made for" % (tag, x, y, m))
     g = 1 << PVS_SHIFT
     if (ROOM[2] - ROOM[0]) % g or (ROOM[3] - ROOM[1]) % g or ROOM[0] or ROOM[1]:
         raise SystemExit("arenagen: the PVS grid wants the room at 0, 0 in "
@@ -1598,10 +1635,33 @@ def pvs_low(boxes, masks, occ):
     return cut
 
 
+def pvs_reach():
+    """How near a tall box or the room's wall an eye can be, units: the
+    player's square of WA_RAD collides with every box widened by it and
+    keeps it off the wall (wa_collide, wa_lists), less 2 for the exact
+    bounds of those compares"""
+    src = open(__file__.replace("tools/arenagen.py", "apps/wirearena/waconst.inc")
+               if __file__.endswith("tools/arenagen.py") else
+               "apps/wirearena/waconst.inc").read()
+    return int(re.search(r"WA_RAD\s+equ\s+(\d+)", src).group(1)) - 2
+
+
 def pvs_points(x0, y0, x1, y1, occ):
     """The points a cell's visibility is tested from, sorted (pvs_build's
     comment): its outline and the occluders' inside it every PVS_STEP, and
-    a PVS_GRIDP grid - none inside an occluder (no one stands in a wall)"""
+    a PVS_GRIDP grid - none inside an occluder (no one stands in a wall).
+    THE REACHABLE PART of the cell: an eye is never within pvs_reach() of a
+    tall box or of the room's wall (the player's square collides first),
+    so the cell is cut to the room less that, and each occluder widened by
+    it - and what a point there sees is what the cell can (a ray from an
+    eye, run backwards, leaves that region through its outline as it
+    would leave the cell)"""
+    m = pvs_reach()
+    x0, y0 = max(x0, ROOM[0] + m), max(y0, ROOM[1] + m)
+    x1, y1 = min(x1, ROOM[2] - m), min(y1, ROOM[3] - m)
+    if x0 > x1 or y0 > y1:
+        return []
+    occ = [(a - m + 1, b - m + 1, c + m - 1, d + m - 1) for (a, b, c, d) in occ]
     pts = set()
 
     def edge(ax, ay, bx_, by):
@@ -2054,6 +2114,130 @@ def face_bits(i, boxes):
     return bits
 
 
+def buried_byte(i, boxes):
+    """A LOW box's outline inside its neighbours (the owner, 2026-11-15:
+    the Pit's ring corner "showing through as if the wall were
+    transparent"): bits 0-3 the faces S E N W whose FLOOR EDGE is buried,
+    bits 4-7 the corners c0..c3 whose POST is. wa_lowbox draws neither; a
+    face's top edge, and the posts and edges that can show, stay.
+      - A post - its corner, from the box's floor to its top - is buried
+        when every quadrant round the corner outside the box is solid at
+        least as high as the box (a box standing on the floor or on
+        another, a lift at its rest height - it only rises - but no ramp,
+        whose top runs down to the floor, and no line, which is drawn as
+        its outline) or is outside the room, where no eye is and through
+        which no ray from one passes. Lower in any one, and its top shows
+        over it: an outer corner, or a post above a lower neighbour, stays.
+      - A floor edge - a box standing on the floor's, along the whole face
+        - is buried when the face's outer side is covered along its whole
+        length by boxes standing on the floor (solids and lifts, any
+        height: the edge is at their foot, inside them)
+    Only plain solids: a ramp's corners and low face are its slope's, a
+    lift's faces move, a line has no faces."""
+    b = boxes[i]
+    if b.kind != SOLID or b.h >= hmax(boxes):
+        return 0
+
+    def solid(n):
+        return n.kind in (SOLID, LIFT)
+
+    def filled(x, y):
+        if not (ROOM[0] < x < ROOM[2] and ROOM[1] < y < ROOM[3]):
+            return True
+        return any(n is not b and solid(n) and n.h >= b.h and
+                   n[0] < x < n[2] and n[1] < y < n[3] for n in boxes)
+    out = 0
+    x0, y0, x1, y1 = b
+    for k, (x, y) in enumerate(((x0, y0), (x1, y0), (x1, y1), (x0, y1))):
+        sx, sy = (1 if x == x0 else -1), (1 if y == y0 else -1)  # (into b)
+        if all(filled(x + qx * 0.5, y + qy * 0.5)
+               for qx in (-1, 1) for qy in (-1, 1) if (qx, qy) != (sx, sy)):
+            out |= 16 << k
+    if b.on is None:
+        for k, f in enumerate(FACES):
+            ax, v, lo, hi = face_line(b, f)
+            opp = {"S": "N", "N": "S", "E": "W", "W": "E"}[f]
+            foot = []
+            for n in boxes:
+                nax, nv, nlo, nhi = face_line(n, opp)
+                if n is not b and n.on is None and solid(n) and \
+                        nax == ax and nv == v and nhi > lo and nlo < hi:
+                    foot.append((nlo, nhi))
+            if covered(lo, hi, foot):
+                out |= 1 << k
+    return out
+
+
+def seam_bits(i, boxes):
+    """A LOW box's far faces whose top edge is a SEAM (the owner, 2026-11-15:
+    the bottom of a low wall showing "through from above when it should be
+    occluded", the Hedge's outer wall): bits 0-3, the faces S E N W whose
+    top bit face_bits cleared - a neighbour of exactly its height runs the
+    top on, so no edge is drawn there - where that neighbour's face against
+    it IS drawn, being longer: its floor edge and posts run on under this
+    box's top, and with no edge raising the column's clip there, an eye
+    above saw them through it. wl_seams raises the clip along each such
+    seam, drawing nothing. (A neighbour's face it covers whole draws
+    nothing, and a taller or lower one leaves this top's edge drawn.)"""
+    b = boxes[i]
+    if b.h >= hmax(boxes) or b.kind == LINE:
+        return 0
+    fb = face_bits(i, boxes)
+    out = 0
+    for k, f in enumerate(FACES):
+        if fb >> (4 + k) & 1:
+            continue
+        ax, v, lo, hi = face_line(b, f)
+        o = {"S": "N", "N": "S", "E": "W", "W": "E"}[f]
+        for j, n in enumerate(boxes):
+            if j == i or n.h != b.h or n.kind == LIFT:
+                continue
+            nax, nv, nlo, nhi = face_line(n, o)
+            if nax == ax and nv == v and nhi > lo and nlo < hi and \
+                    face_bits(j, boxes) >> FACES.index(o) & 1:
+                out |= 1 << k
+    return out
+
+
+def tall_inner(tag, boxes):
+    """A TALL box's faces byte is read by the renderer's wa_sil as well as
+    the outline path's: a face whose bit is clear (bits 0-3) is left out of
+    its silhouette - never drawn, kept or dropped by - because its tall
+    neighbours wholly cover it, so it is inside the solid and draws nothing
+    (the neighbour, on the player's side of the line they share, is walked
+    first). Refused where that is not so: a face covered by a ramp or a lift
+    (a slope or a moving top leaves part of it showing), or a tall box with
+    a covered face where an eye can rise to the tallest height - there it
+    may be drawn as an OUTLINE, whose shut test reads the silhouette's ends
+    as the whole box's (HEDGES-PLAN 7.1)"""
+    top = hmax(boxes)
+    inner = []
+    for i, b in enumerate(boxes):
+        if b.h < top:
+            continue
+        bits = face_bits(i, boxes)
+        for k, f in enumerate(FACES):
+            ax, v, lo, hi = face_line(b, f)
+            if bits >> k & 1 or v in ((ROOM[0], ROOM[2]) if ax == 0 else
+                                      (ROOM[1], ROOM[3])):
+                continue
+            inner.append(b.name or str(i))
+            opp = {"S": "N", "N": "S", "E": "W", "W": "E"}[f]
+            for n in boxes:
+                nax, nv, nlo, nhi = face_line(n, opp)
+                if n is not b and nax == ax and nv == v and nhi > lo and \
+                        nlo < hi and n.h >= top and n.kind != SOLID:
+                    raise SystemExit("arenagen: arena %s: %s's %s face is "
+                                     "covered by %s, not a solid - wa_sil "
+                                     "would leave it out" % (tag, b.name, f,
+                                                             n.name))
+    if inner and pvs_eyemax(boxes) >= top:
+        raise SystemExit("arenagen: arena %s: an eye can rise to the tallest "
+                         "height, and %s has a face its neighbours cover - "
+                         "wa_sil leaves it out of a box that may be drawn in "
+                         "outline" % (tag, inner[0]))
+
+
 def kind_byte(b, lifts, boxes=()):
     """bit 7: a LINE (the game's alone); bit 6: a TALL box a flight or a lift
     climbs onto - a floor to the player all the same (wa_lists' low tables);
@@ -2236,6 +2420,16 @@ def arena_tables(w, tag, boxes, start):
     if len(segs) > WA_MFL:              # made by the frame's cache)
         raise SystemExit("arenagen: arena %s: %d floor lines - at most %d"
                          % (tag, len(segs), WA_MFL))
+    flg = {}                            # (the game's grid of them, wa_flgmk:
+    for (x0, y0, x1, y1) in segs:       # a 128-unit cell holds the lines whose
+        def cc(v):                      # box widened by 16 reaches into it -
+            return min(max(v, 0), 2047) >> 7  # WA_FLGC at most)
+        for r in range(cc(min(y0, y1) - 16), cc(max(y0, y1) + 16) + 1):
+            for c in range(cc(min(x0, x1) - 16), cc(max(x0, x1) + 16) + 1):
+                flg[(r, c)] = flg.get((r, c), 0) + 1
+    if flg and max(flg.values()) > WA_FLGC:
+        raise SystemExit("arenagen: arena %s: %d floor lines near one cell "
+                         "- at most %d" % (tag, max(flg.values()), WA_FLGC))
     ends = {(x0, y0) for (x0, y0, x1, y1) in segs} | \
            {(x1, y1) for (x0, y0, x1, y1) in segs}
     if len(ends) > WA_MFV:              # (wa_flinit's records: wa_fqvx)
@@ -2287,23 +2481,26 @@ def arena_tables(w, tag, boxes, start):
     for (a, b, c, d) in ([] if roomless else [ROOM]) + boxes:
         w("    db " + ", ".join(str(vix[p] * 2) for p in
                                 [(a, b), (c, b), (c, d), (a, d)]))
+    # THE TREE, rows of two sizes: a LEAF is its kind and its box x 4 (2
+    # bytes), a split its kind, 0, its value and its low and high links (8)
+    # - wa_order reads no more of either, and follows the links rather than
+    # counting rows, so a leaf needs no room for links it has not got
+    # (the splits' bounds, which wa_node's view-cone test read, went with
+    # it: 2,544 bytes of rows over the eight arenas were 1,036)
+    off, at = [], 0
+    for nd in nodes:
+        off.append(at)
+        at += 2 if nd[0] == 2 else 8
     w(P + "bsp:                         ; kind (0 x, 1 y, 2 leaf), box x 4 (a")
-    w("                                ; leaf's, into wa_boxes), value, low,")
-    w("                                ; high (0 = none) - ADDRESSES in the image")
-    w("                                ; this is assembled into: walked in place")
-    w("                                ; there, or rebased by the renderer's")
-    w("                                ; ARENA verb out of an arena part - and")
-    w("                                ; the bounds of the boxes under it, x0")
-    w("                                ; y0 x1 y1 as coordinate indices x 4,")
-    w("                                ; for wa_node's view-cone test")
+    w("                                ; leaf's, into wa_boxes; a split's 0)")
+    w("                                ; - and a split's value, low, high:")
+    w("                                ; ADDRESSES in the part, rebased by the")
+    w("                                ; renderer's ARENA verb")
     for (kind, box, v, lo, hi, ids) in nodes:
-        bb = (min(boxes[i][0] for i in ids), min(boxes[i][1] for i in ids),
-              max(boxes[i][2] for i in ids), max(boxes[i][3] for i in ids))
         w("    db %d, %d" % (kind, box * 4))
-        w("    dw %d, %s, %s" % (v, P + "bsp+%d" % (lo * 12) if lo >= 0 else "0",
-                              P + "bsp+%d" % (hi * 12) if hi >= 0 else "0"))
-        w("    db %d, %d, %d, %d" % (xs.index(bb[0]) * 4, ys.index(bb[1]) * 4,
-                                    xs.index(bb[2]) * 4, ys.index(bb[3]) * 4))
+        if kind != 2:
+            w("    dw %d, %s, %s" % (v, P + "bsp+%d" % off[lo],
+                                  P + "bsp+%d" % off[hi]))
     w(P + "bcol:                        ; per box (the room first): its colour")
     w("                                ; - 0 a boundary wall, 1 an item. The")
     w("                                ; owner's call: colour says WHAT a wall")
@@ -2322,6 +2519,7 @@ def arena_tables(w, tag, boxes, start):
         if b.h % 4 or b.top % 4 or b.top > 252:     # bits, wa_lksnap)
             raise SystemExit("arenagen: arena %s: lift %s: its heights must "
                              "be multiples of 4, to 252" % (tag, b.name))
+    tall_inner(tag, boxes)
     w(P + "bxh:                         ; per box: height (a lift's at rest),")
     w("                                ; kind, faces (HEIGHTS-PLAN 7.2.1)")
     for i, b in enumerate(boxes):
@@ -2342,7 +2540,7 @@ def arena_tables(w, tag, boxes, start):
                      "vertices, %d x and %d y values\n"
                      % (tag, len(boxes), len(nodes), len(verts), len(xs),
                         len(ys)))
-    return len(xs), len(ys), len(verts), len(boxes), len(nodes)
+    return len(xs), len(ys), len(verts), len(boxes), at
 
 
 def bsp_tables(w):
@@ -2366,7 +2564,7 @@ def bsp_tables(w):
     w("WA_MYV equ %d" % max(c[1] for c in counts))
     w("WA_MVTX equ %d" % max(c[2] for c in counts))
     w("WA_MBOX equ %d" % max(c[3] for c in counts))
-    w("WA_MNODE equ %d" % max(c[4] for c in counts))
+    w("WA_MBSP equ %d" % max(c[4] for c in counts))    # (a tree's bytes)
     w("WA_MAXKS equ %d" % MAXKS)
     w("WA_MPK equ %d" % WA_MPK)
     w("WA_PVSB equ %d" % pvs_bytes())   # (a cell's mask, and the most cells)
@@ -2557,7 +2755,7 @@ def arena_part(n, out):
     """Arena N as an OP_ASSET part of WIRERENA.O88, assembled at org 0
     (docs/plans/completed/WIREARENA-PARTS-PLAN.md 7.5): wa_arenas' descriptor row at
     offset 0 - every table offset relative to the part, the tree's links too
-    - plus the tree's node count, then the tables it names."""
+    - plus the tree's length in bytes, then the tables it names."""
     tag, name, boxes, start = arenas()[n]
     T = []
     nx, ny, nv, nb, nn = arena_tables(T.append, tag, boxes, start)
@@ -2599,7 +2797,15 @@ def arena_part(n, out):
           "bytes (0: none - every pickup tested)" % (
               P + "pks" if pk else "0", P + "pkv" if pkv else "0"),
           "    dw %s                    ; its floor lines (ARENAS-PLAN 4.5)" % (
-              P + "fl")] + T
+              P + "fl"),
+          "    dw %s                    ; its boxes' buried outline and seams"
+          " (WR_ABI 18)" % (P + "bur")] + T
+    bxs = [bx(b) for b in boxes]
+    L += [P + "bur:                     ; per box: faces' floor edges, "
+          "corners' posts inside the solid (buried_byte); far faces' seams "
+          "(seam_bits, the high byte)",
+          "    dw " + ", ".join(str(buried_byte(i, bxs) | seam_bits(i, bxs) << 8)
+                                for i in range(len(bxs)))]
     if pk:
         L.append(P + "pks:                     ; count; x, y, z, kind, choices")
         L.append("    dw %d" % len(pk))
