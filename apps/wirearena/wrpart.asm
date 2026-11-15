@@ -73,8 +73,7 @@ wr_v_arena:                     ; DX = the arena part's segment
 ; cleared (the frame number restarts, so an old stamp could match), the lists
 ; emptied
 wr_v_init:
-    push ds
-    pop es
+    call wa_atset               ; (and ES = DS)
     xor bx, bx
     mov si, wa_rowo2
     mov di, wa_hroff

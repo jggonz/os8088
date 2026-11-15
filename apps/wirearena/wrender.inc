@@ -400,19 +400,8 @@ wa_render:
     mov word [wa_newn], 0
     mov ax, [wa_newp]
     mov [wa_lp], ax
-    mov si, wa_attrc
-    cmp byte [wa_mono], 0
-    je .attr
-    mov si, wa_attrm
-.attr:
-    mov di, wa_at
-    movsw
-    movsw
-    movsw
-    movsw
-    movsw
-    movsw
-    mov ax, [wa_ang]
+    mov ax, [wa_ang]            ; (this frame's attributes, wa_at: the
+                                ; adapter's, made by INIT - wa_atset)
     mov cl, 6
     shr ax, cl
     mov [wa_cang], ax
@@ -985,6 +974,22 @@ wa_render:
     call wa_overlay
 .c_cr:
     call wa_cross
+    ret
+
+; wa_atset - the attributes (wa_at) for the display's kind, wa_mono: by
+; INIT, after every mode set - the only time wa_mono changes - rather than
+; copied every frame (12 bytes, ~480 clk a frame). Clobbers CX, SI, DI.
+wa_atset:
+    push ds
+    pop es
+    mov si, wa_attrc
+    cmp byte [wa_mono], 0
+    je .c
+    mov si, wa_attrm
+.c:
+    mov di, wa_at
+    mov cx, 6
+    rep movsw
     ret
 
 ; wa_geominit - once an arena is loaded (wa_main): the reciprocal table
