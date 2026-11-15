@@ -126,12 +126,12 @@ WA_VAR wa_lvb, 2                ; wa_flat's LEVEL test: 7 while an edge that
 WA_VAR wa_lvt, 2                ; moves under a half-row is drawn level
                                 ; (LK_COARSE), else 0 - the bottom's and the
                                 ; top's (0 too where the top is not drawn:
-                                ; the sparse level, ROOMF) - wa_collook
+                                ; ROOMF) - wa_collook
 WA_VAR wa_roomf, 1              ; ROOMF: non-zero while the room's faces are
                                 ; drawn at a level with it (wa_render)
 WA_VAR wa_vtp, 2                ; wa_vte or wa_vtr: the level's (wa_lookset)
 WA_VAR wa_klook, 1              ; ...the wa_look it was chosen for and - ITS
-WA_VAR wa_kspa, 1               ; HIGH BYTE - the wa_sparse (0xFF: neither)
+WA_VAR wa_kspa, 1               ; HIGH BYTE - 0, or 0xFF: chosen for none
 WA_VAR wa_fspp, 2               ; wa_fspan, or heights' wa_fspanh (wa_face)
 WA_VAR wa_mkp, 2                ; wa_face.mk and .miz, or .mk1 and .miz1
 WA_VAR wa_mizp, 2               ; (wa_render)
@@ -477,9 +477,9 @@ wa_render:
     mov word [wa_mizp], wa_face.miz1
 .paired:
     mov al, [wa_look]           ; the detail level's choices, when it
-    mov ah, [wa_sparse]         ; changes - or L, the sparse key, which
-    cmp ax, [wa_klook]          ; wa_collook reads too (one word, wa_klook
-    je .looked                  ; and wa_kspa; wa_geominit forgets it)
+    xor ah, ah                  ; changes (one word, wa_klook and wa_kspa:
+    cmp ax, [wa_klook]          ; wa_geominit forgets it with an FFh there)
+    je .looked
     call wa_lookset
 .looked:
     xor al, al
@@ -1896,7 +1896,7 @@ wa_vtr:
 ; made once rather than tested where they act - which transform, a low
 ; box's far-top allowance (wrlow.inc)
 wa_lookset:
-    mov [wa_klook], ax          ; (and AH = [wa_sparse]: wa_kspa)
+    mov [wa_klook], ax          ; (and AH = 0: wa_kspa)
     mov byte [wa_pang+1], 0xFF  ; (the products are the level's: made again)
     mov ax, wa_vte
     test byte [wa_look], LK_ROUND
@@ -2086,8 +2086,8 @@ wa_span:
 .ftlev:                         ; the top level: on the screen?
     cmp word [wa_fh], WA_HR
     jb .p1
-    push word [wa_dt]           ; OFF it (a near wall's, or the sparse
-    mov bp, [wa_db]             ; level's): ONE pass, the bottom's, opens
+    push word [wa_dt]           ; OFF it (a near wall's): ONE pass, the
+    mov bp, [wa_db]             ; bottom's, opens
     mov [wa_dt], bp             ; the columns
     mov bp, [wa_vb0]
     mov [wa_fh], bp
@@ -2103,11 +2103,6 @@ wa_span:
     mov [wa_ft], cx
     mov [wa_dt], di
     mov [wa_fh], si
-    cmp byte [wa_sparse], 0     ; the sparse level draws no top
-    je .full1
-    mov word [wa_fh], -1
-    xor cx, cx
-.full1:
     mov dh, bl                  ; DH = the tag
     mov dl, [wa_frame]
     mov di, [wa_lp]
@@ -2265,11 +2260,11 @@ wa_span:
     pop bp                      ; the top: CX.BP in the loop
     mov dh, [wa_tag]            ; DH = the tag (registered by the flat way)
     xor ax, ax                  ; AN EDGE MOVING OFF THE SCREEN (or level),
-    cmp [wa_sparse], al         ; once off it, is off it for the rest of
-    jne .fl                     ; the span - the loops drop it there (wa_tup:
-    mov bx, [wa_st]             ; the top up; wa_bdn: the bottom down) - but
-    or bx, bx                   ; for the sparse level, whose posts want the
-    js .tu                      ; true top
+                                ; once off it, is off it for the rest of
+                                ; the span - the loops drop it there (wa_tup:
+    mov bx, [wa_st]             ; the top up; wa_bdn: the bottom down)
+    or bx, bx
+    js .tu
     or bx, [wa_stl]
     jnz .tn
 .tu:
@@ -2330,10 +2325,8 @@ wa_span:
     mov byte [wa_e2], 0
     jmp .vs
 .vr:
-    cmp byte [wa_sparse], 0
-    jne .vs
     cmp word [wa_t1], -3        ; (a top above the screen at both ends is
-    jg .v1                      ; above it in every column: the sparse
+    jg .v1                      ; above it in every column: the topless
     cmp word [wa_t2], -3        ; loop, which draws no top and no top
     jg .v1                      ; fills, draws the same cells - as
 .vs:                            ; wa_fedge's test)
@@ -2800,7 +2793,7 @@ wa_flat:
 .sgo:
     jmp wa_span.gen1
 
-; wa_collook - when the detail level or the sparse key changes, and after an
+; wa_collook - when the detail level changes, and after an
 ; arena is loaded (wa_lookset): wa_flat's level tests, from the detail level
 wa_collook:
     cmp byte [wa_hflat], 0      ; A FLAT ARENA'S CLIP: the screen's end in
@@ -2831,10 +2824,7 @@ wa_collook:
 .b:                             ; |change| x 2 (wa_fedge) - 0: no level test
     mov [wa_lvb], ax
     test byte [wa_look], LK_ROOMF ; (no top drawn: .fgl's way throughout)
-    jnz .z
-    cmp [wa_sparse], ah
-    je .t
-.z:
+    jz .t
     xor ax, ax
 .t:
     mov [wa_lvt], ax
@@ -2871,8 +2861,8 @@ wa_fclpc:
 
 ; --- the column loops ---------------------------------------------------------
 ; The steep spans' loop (a flat span is wa_flat's), assembled three ways so
-; no column tests a mode: %1 = 1 draws the TOP edge (0: the sparse one,
-; floor lines and corner posts - and a top above the screen), %2 = 1 the
+; no column tests a mode: %1 = 1 draws the TOP edge (0: none - ROOMF's
+; room, and a top above the screen), %2 = 1 the
 ; BOTTOM (0: under the screen for the rest of the span).
 ; In: SI = first column x 2, [wa_end] = one past the last x 2 (the first
 ; and last are open), CX.BP = the top (whole half-row, rounded, and a
@@ -3026,7 +3016,7 @@ wa_ls%1%2_s:
 %endif
 %endmacro
     SPANLOOP 1, 1               ; full
-    SPANLOOP 0, 1               ; sparse, or the top above the screen
+    SPANLOOP 0, 1               ; ROOMF, or the top above the screen
     SPANLOOP 1, 0               ; the bottom under it
 
 ; wa_stail - SPANLOOP's end, both edges off the screen for good: the rest

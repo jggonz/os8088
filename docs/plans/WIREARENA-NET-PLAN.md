@@ -661,3 +661,14 @@ space if they take it up"*.
 
 **Bytes**: `wirearena.bin` 36,614 -> 35,425 (-1,189); a WABENCH=1 build is
 829 more.
+
+### 9.10 The sparse tops out of the renderer (2026-11-15)
+
+L gone (9.9), `wa_sparse` could only be 0, so it is gone from the frame
+block (`WR_ABI` 13) and from the renderer: the flat tail's no-top branch,
+the steep setup's true-top exception, the steep loop's choice and
+`wa_collook`'s level test; the meter loses its F/S mark. The topless steep
+loop stays: ROOMF's room and a top above the screen use it. The renderer
+part 64,077 -> 64,040 (-37), the game -14. `waposes`, 12 seeded poses on
+the heights and the hedge against the tree before: every picture
+identical, the render 0.06-0.10% fewer cycles.
