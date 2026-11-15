@@ -132,6 +132,26 @@ class Pump:
 
     def dblclick(self, x, y):
         self.to(x, y)
+        m = self.m
+        if getattr(m, "bochs", False):
+            import os88bochs
+            if os88bochs.MOUSE != "serial":
+                # KERN_MEGA UNDER BOCHS: the four edges QUEUED on a stopped
+                # guest, read in one pass of its GUI (os88megabochs.
+                # queued_input), as os88mouse.dblclick sends them - a stop met
+                # on the way is serviced here as `serve` would. Edge by edge,
+                # each went out on HOST time while the pump ran the guest, so
+                # at the 4x guest rate (os88bochs.ROW_RATE) the two presses
+                # fell outside the double-click window: mega-zoomsave's
+                # un-zoom never landed, red at rate 4 and green at rate 1.
+                def svc(_st):
+                    r = m.regs()
+                    at = ((r["cs"] & 0xFFFF) << 4) + (r["ip"] & 0xFFFF)
+                    if at in self.at:
+                        self.on_stop(r, self.at[at])
+                m.queued_input("mousedown", 1, "mouseup", 1, "mousedown", 1,
+                               "mouseup", 1, service=svc)
+                return True
         return (self.edge(True) and self.edge(False)
                 and self.edge(True) and self.edge(False))
 
