@@ -1917,7 +1917,7 @@ class UI:
                 prog.check()
             except os88marty.MartyError:
                 return
-            time.sleep(0.2)
+            time.sleep(0.05)     # (was 0.2: SOAK-SPEED 8, soak-speed-2/core)
 
     def menu_pick(self, menu, item, limit=T_MENU):
         """Press a menu title, highlight an item BY NAME, release.

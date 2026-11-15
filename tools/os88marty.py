@@ -3041,7 +3041,13 @@ def guest_sleep(m, secs, poll=0.02):
     p = _Progress(m, "guest_sleep(%g)" % secs, secs + 30.0)
     while p.spent() < secs:
         p.check()
-        time.sleep(poll)
+        if p.spent() >= secs:
+            break
+        # never nap past what is left at the idle rate: still()'s three
+        # frames are ~11 host ms idle and paid a whole 20 ms poll
+        # (soak-speed-2/core.md)
+        time.sleep(min(poll, max(0.001, (secs - p.spent())
+                                 / (GUEST_PACE or 4.5))))
     p.done("guest_sleep")
     return p.spent()
 

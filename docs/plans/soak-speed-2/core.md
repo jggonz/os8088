@@ -104,6 +104,10 @@ techniques are cited as "SOAK-SPEED n".
     was a flat 10): a mouse packet's 0.054-guest-second pace overshot by up
     to its whole nap.
 
+    `guest_sleep` naps the same way (still()'s 0.05 guest s paid a whole
+    20 ms poll), and `menu_pick`'s wait for a menu bar to carry the item
+    polls 50 ms (was 200).
+
 11. **The debug server's hex encoder is a table, not a `format!` a byte**
     (`tools/martypc/debug_server.rs` `hex_encode`): every `read`, `fbuf`,
     `planes` and `vram` answer is hex, and a VGA frame is 921,600 bytes.
