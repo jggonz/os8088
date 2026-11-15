@@ -1286,22 +1286,21 @@ wl_fillc:
 
 ; wl_shutc - SI = a column x 2: the column covered from the screen's top -
 ; shut, wa_cov holding the tag as a wall's does - its clip 0, and its stack
-; entry pushed (row 0), or merged into the deepest. Clobbers AL, BX
+; entry pushed (row 0), or merged into the deepest. Clobbers AL, BX.
+; (The column is open, so wa_cov's high byte is 0 already - its spans'
+; one-past-the-end mark is theirs alone - and a clip's always is: a byte
+; store each.)
 wl_shutc:
-    mov bl, [wl_tag]
-    xor bh, bh
-    mov [wa_cov+si], bx
+    mov al, [wl_tag]
+    mov [wa_cov+si], al
     dec word [wa_left]
-    xor bx, bx
-    mov [wa_cclip+si], bx
+    mov byte [wa_cclip+si], 0
     mov bx, [wa_cstn+si]
     cmp bl, WA_CSTK
     jae .full
-    inc bx
-    mov [wa_cstn+si], bx
+    inc byte [wa_cstn+si]
     shl bx, 1
-    mov bx, [wl_k160-2+bx]
-    mov al, [wl_tag]
+    mov bx, [wl_k160+bx]
     mov [wa_cst+bx+si], al
     mov byte [wa_cst+bx+si+1], 0
     ret
