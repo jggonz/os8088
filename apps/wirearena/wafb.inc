@@ -47,7 +47,8 @@ WR_ABI      equ 15                  ; (2: the camera's sin/cos in FRAME;
                                     ; wa_sparse gone, 9.10; 14: wa_flodv,
                                     ; where CONFIG's pad was; 15: an arena
                                     ; part's tree in rows of two sizes, its
-                                    ; descriptor's word 28 their bytes -
+                                    ; descriptor's word 28 their bytes, and
+                                    ; its next hops two bits a pair -
                                     ; SPEC.md 128.4)
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-

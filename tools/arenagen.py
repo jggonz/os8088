@@ -472,7 +472,8 @@ def graph_block(tag, boxes):
     """The route graph as the arena's part carries it and the game copies it
     (wa_loadarena): nodes, edges, each figure's home edge; then the bots'
     tables (AI-PLAN 3.1, 4.1): the sight grid, the nearest node to each PVS
-    cell, and for each node and goal the edge to take first -> bytes"""
+    cell, and for each node and goal which of its ways out to take first, two
+    bits -> bytes"""
     nodes, edges, homes = graph_edges(tag, boxes)
     out = bytearray([len(nodes), len(edges)] + homes)
     if len(out) & 1:
@@ -524,8 +525,24 @@ def graph_block(tag, boxes):
                         dist[u] = nd
                         hop[u][goal] = i
                         todo.append(u)
+    # ...each as the SLOT of the node's way out it is (0..3, the node
+    # record's four), two bits, four to a byte in (node, goal) order: the
+    # bot reads the edge out of the node's record (wa_bnext). A node's own
+    # goal is never read (the bot is there); no other pair may be cut off
+    slots = []
     for a in range(nn):
-        out += bytes(hop[a])
+        for g_ in range(nn):
+            if hop[a][g_] == 0xFF:
+                if a != g_:
+                    raise SystemExit("arenagen: arena %s: node %d cannot "
+                                     "reach node %d" % (tag, a, g_))
+                slots.append(0)
+            else:
+                slots.append(outs[a].index(hop[a][g_]))
+    slots += [0] * (-len(slots) % 4)
+    for k in range(0, len(slots), 4):
+        out.append(slots[k] | slots[k + 1] << 2 | slots[k + 2] << 4 |
+                   slots[k + 3] << 6)
     if len(out) & 1:
         out.append(0)
     rs = respawns(tag, boxes, nodes, grid)

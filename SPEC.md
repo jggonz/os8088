@@ -251444,6 +251444,8 @@ the arenas the chosen mode can play.
   followed by its links and never counted: a leaf is 2 bytes (kind 2, its
   box x 4), a split 8 (its kind, 0, its value, its low and high links), and
   the descriptor's word 28 is the tree's length in bytes (`WR_ABI` 15).
+  In the route graph, the next hop of each (node, goal) pair is two bits,
+  four to a byte: which of the node's four ways out a bot takes first.
   `wa_loadarena` copies one into the
   working tables and REBASES the tree's links. `arena_part()` in
   arenagen.py is this layout's single writer, and the renderer's

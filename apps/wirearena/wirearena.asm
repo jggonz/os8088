@@ -2892,10 +2892,23 @@ wa_bnext:
     mov al, [wa_gph]
     mul dl
     add al, [di+F_BGOAL]
-    adc ah, 0
+    adc ah, 0                   ; AX = the pair's: which of the node's ways
+    mov cl, al                  ; out, two bits, four a byte (arenagen's
+    shr ax, 1                   ; graph_block)
+    shr ax, 1
     mov si, ax
     add si, [wa_ghp]
     mov al, [si]
+    and cl, 3
+    shl cl, 1
+    shr al, cl
+    and ax, 3
+    xor bh, bh
+    mov cl, 3
+    shl bx, cl
+    add bx, [wa_gnp]
+    add bx, ax
+    mov al, [bx+4]              ; ...its edge
     jmp .take
 .there:
     mov byte [di+F_BST], WA_BROAM
@@ -6906,9 +6919,12 @@ wa_loadarena:
     add ax, WA_PVSN
     mov [wa_ghp], ax
     mov bx, ax                  ; ...and the respawn points after the next
-    mov al, [wa_gph]            ; hops, word-aligned IN THE BLOCK (wa_gph
-    mul al                      ; itself may sit at an odd address: the
-    add ax, bx                  ; rounding is of the offset from it)
+    mov al, [wa_gph]            ; hops (four a byte), word-aligned IN THE
+    mul al                      ; BLOCK (wa_gph itself may sit at an odd
+    add ax, 3                   ; address: the rounding is of the offset
+    shr ax, 1                   ; from it)
+    shr ax, 1
+    add ax, bx
     sub ax, wa_gph
     inc ax
     and al, 0xFE
