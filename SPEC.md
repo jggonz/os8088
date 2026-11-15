@@ -248720,10 +248720,10 @@ ring, slack, overrun and transmit buffer, `RT_CLAIM` = 11,280 bytes, held
 from attach to detach) + `DRVM_SK_PCIETH` (21: the socket pool at the
 **middle** rung, because `sk_cardcap` holds a rung to the 8KB ring less
 `SK_RINGSLK` and `SK_RXMAX` never fits) = **78 half-KB, 39 KB** — against
-`ETHER.DRV`'s 67. The two are alternatives, so the big builds' `DRVC_NET`
+`ETHER.DRV`'s 66. The two are alternatives, so the big builds' `DRVC_NET`
 ceiling is the larger and not their sum: `DRVM_CEIL_NET_PCI` = 39, which every
 `DOS.O88` quotes (the shipped one and kern_mega's `-DDOS_MEGA` copy), while
-`DRVM_CEIL_NET` stays 34 for kern_small, which has no PCI row and no DOS
+`DRVM_CEIL_NET` is 33 (34 until driver size pass 1) for kern_small, which has no PCI row and no DOS
 (§51.12.1; `tests/unit/t_drvmem.py` re-derives every term from
 `drivers/pciether/`). Not wanted by default (§51.3). When both rows are
 wanted, `drv_boot` walks the table in row order, so `ETHER.DRV` (row 2) is

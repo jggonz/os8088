@@ -3600,7 +3600,7 @@ PKGV_IDENT   equ 0              ; **VERB 0 OF EVERY PACKAGE DOOR IS IDENTIFY**
 ; the ANSWER here and derives nothing, which is what makes it different from
 ; the per-driver copy 51.12.1 refuses.
 DRVM_CEIL_DISK equ 4           ; DRVC_DISK's ceiling, in KB
-DRVM_CEIL_NET  equ 34          ; ...and DRVC_NET's on kern_small, which has
+DRVM_CEIL_NET  equ 33          ; ...and DRVC_NET's on kern_small, which has
                                 ; no PCIETHER.DRV row
 DRVM_CEIL_NET_PCI equ 39       ; ...and DRVC_NET's on kern_big, kern_emu and
                                 ; kern_mega, whose PCIETHER.DRV (SPEC.md
