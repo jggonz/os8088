@@ -581,6 +581,15 @@ wa_srect:
 ; of them with [wa_lkfull]); the clip is taken first through wa_lkclipon
 ; (a tick's) or is the paint's. CF = 1: no clip, nothing drawn
 wa_sdraw:
+    cmp byte [wa_lkfull], 0     ; A LIST DOWN: nothing of ours drawn while
+    jne .go                     ; it is - the controls under it are its to
+    push bx                     ; cover (the owner: with the focus in the
+    call wa_sopen               ; nick, a click on a drop-down drew the
+    pop bx                      ; field back over its list, and the list's
+    jc .go                      ; bank put its caret back when it went).
+    clc                         ; Their records stay as last drawn, so the
+    ret                         ; first pass after it catches up on them
+.go:
     call wa_splace
     xor bx, bx                  ; THE DROP-DOWNS
 .d:
@@ -1631,7 +1640,7 @@ wa_si_mode:     dw wa_smd_0, wa_smd_2, wa_smd_1, wa_smd_3
 wa_smd_0:       db 'free-for-all', 0
 wa_smd_1:       db 'capture flag', 0
 wa_smd_2:       db 'team deathmatch', 0
-wa_smd_3:       db 'king of the hill', 0
+wa_smd_3:       db 'KingOfTheHill', 0   ; (the box's width: the owner's spelling)
 WA_NMODES       equ 4
 wa_smodes:      db 0, 2, 1, 3   ; (the list's order to wa_gmode's numbers)
 wa_amodes:                      ; each arena's modes, a bit each (arenagen)

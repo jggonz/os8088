@@ -103,6 +103,8 @@ def main():
                         'the Arena list open', guest=5)
         check(p.byte(dr + 16) == 1, 'A DROP-DOWN: a click drops its list')
         ui.settle()
+        nrect = (ox + 57, oy + 14 + 18, ox + 182, oy + 86 + 16)
+        listpic = under(*nrect)         # (down to the nick's row, for the
         rows = sum(a != b for a, b in zip(under(*lrect), closed))
         check(p.byte(dr + 16) == 1 and rows >= 30,
               'A DROP-DOWN: the list still OPEN and ON THE GLASS once the '
@@ -118,6 +120,30 @@ def main():
         check(p.byte(sym['wa_lkarena']) == 2 and region() == base,
               'A DROP-DOWN: a click outside takes it down, no pick, the '
               'window pixel-identical')
+
+        # THE NICK UNDER A LIST (the owner, before release): with the focus
+        # in the nick, a click on the Arena box drew the field back over its
+        # list, and the list's bank put the field's caret back when it went
+        ui.mo.click(ox + 120, oy + 86 + 8)
+        os88marty.until(m, lambda _: p.byte(sym['wa_sfoc']) == 8,
+                        'the nick focused', guest=5)
+        ui.mo.to(4, 190)
+        ui.settle()
+        ui.mo.click(ox + 120, oy + 14 + 8)
+        os88marty.until(m, lambda _: p.byte(dr + 16) == 1,
+                        'the Arena list open again', guest=5)
+        ui.settle()
+        check(under(*nrect) == listpic,
+              'THE NICK UNDER A LIST: the Arena list over the focused nick '
+              'as it is over nothing (the field not drawn back over it)')
+        ui.mo.click(ox + 300, oy + 120)
+        os88marty.until(m, lambda _: p.byte(dr + 16) == 0,
+                        'the Arena list down again', guest=5)
+        ui.mo.to(4, 190)
+        ui.settle()
+        check(p.byte(sym['wa_sfoc']) == 0 and region() == base,
+              'THE NICK UNDER A LIST: the list down, the focus on Arena and '
+              'the window pixel-identical - no caret left in the nick')
 
         # ONE BOT MEANS ONE: Bots to 1 from the keyboard (Arena, Columns,
         # Bots; 3, 2, 1), Enter - and for ten guest seconds only figure 0

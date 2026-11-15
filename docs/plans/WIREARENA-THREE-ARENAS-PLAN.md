@@ -1,6 +1,6 @@
 # WireArena: Crossing, the Pit and the Ziggurat
 
-**STATUS: BUILT** (2026-11-15): A1 to A3; the Pit's cost is the owner's to weigh (section 8, A3). Written to the owner's three drawings below,
+**STATUS: BUILT** (2026-11-15): A1 to A3; the owner accepted the Pit's cost - *"it would play fine on a V20 or above, and I think its ok to have one heavier map for first release"* (2026-11-15); the Ziggurat's ramp fixes (section 8) wait on the owner's look. Written to the owner's three drawings below,
 before any code; section 7 is the waves and section 8 what was built.
 
 The owner, 2026-11-15, with three MS Paint drawings (*"not perfectly to
@@ -209,6 +209,18 @@ The cuts, the owner's to choose: the ring the layer's height (flags and
 spawns on the layer, no hop) takes six boxes out of every outline pass; a
 single-piece layer band each side (the dividers standing on it) takes four
 more.
+
+*Measured after (2026-11-15), and declined*: the owner kept the three
+levels (one layer would make it *"just a hole in the center"*) and asked
+for the single-piece bands if they were a free win. They are not. A
+stack's upper box must stand strictly inside the one under it and both be
+low, and the dividers are the arena's tallest boxes and run the band's
+whole depth - the thing that stops a walk round them - so the format
+cannot take it as drawn. Its upper bound, the north and south bands one
+box each with the inner dividers DELETED rather than stood on them: **1.4%**
+(241,126 -> 237,707 clk a frame, 120 poses). The low-box cost is the
+outlines of what is under the eye, not the count of pieces. The Pit stays
+as built, the one heavier map.
 
 **The Crossing's minimap** (the owner, 2026-11-15: *"the minimap is showing
 the vertical pathway as filled"*): at 40 columns a minimap cell is two
