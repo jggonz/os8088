@@ -1114,10 +1114,10 @@ wl_rfloor:
     mov bx, [wa_hroff+bx]
     add bx, si
 .col:
+    cmp ch, [wa_cclip+si]       ; (the clip first: it hides more of a floor
+    jae .next                   ; edge than shut columns do)
     cmp byte [wa_cov+si], 0
     jne .next                   ; (shut)
-    cmp ch, [wa_cclip+si]
-    jae .next
     WPLOT
 .next:
     inc bx
