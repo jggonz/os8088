@@ -88,12 +88,14 @@ def main():
     sym = pkg_syms("apps/sheet/sheet.asm")
     saved, reloaded, ncells, sel = None, None, None, None
 
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         SF.open_shin(m, mo, NAME)
         M.settle(m, limit=240)
         sl = dispcp.win_list(m, S, check=False)[-1]
@@ -129,8 +131,8 @@ def main():
         SF.menu_pick(m, mo, seg, sym, "sh_i_formula", "note")
         M.settle(m, limit=180)
         for ch in NOTE:
-            m.type_text(ch)
-            M.guest_sleep(m, 0.3)
+            M.text_taken(m, ch, ui=False, cap=0.3)
+            # (SOAK-SPEED 9: taken when read, the old pace the cap)
         M.settle(m)
         t = top()
         if t is not None and t != sl:

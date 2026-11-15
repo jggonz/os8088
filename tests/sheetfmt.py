@@ -620,11 +620,14 @@ def display_toggle(m, mo, box, title=OPTIONS_MENU, row=0):
 
 def main():
     build_disk()
-    with M.launch(SYS, apps=DISK, machine=MACHINE) as m:
-        M.settle(m)
+    with M.launch(SYS, apps=DISK, machine=MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
+        M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         mo.dblclick(*APPS_FOLDER)
         M.settle(m)
         open_shin(m, mo)                # the ASSOCIATION opens it
