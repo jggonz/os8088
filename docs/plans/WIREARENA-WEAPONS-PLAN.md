@@ -201,6 +201,16 @@ At most 32 cells.
 - **The weapon in front of the player**, right of centre at the bottom of the
   view: the pistol 7 cells, the shotgun 12, the rocket launcher 16, each in
   its pickup's colour. While it reloads it sits a row lower.
+  - The sprite's cells are kept between builds (`wa_spc`, `wa_spg`,
+    `wa_spn`) and made again when the weapon or its place changes - from
+    cell 0, whatever the overlay already holds. The reload's arm once
+    stood before that reset, so a sprite made while the overlay held other
+    cells first (CTF's flag line, a message, the respawn's count) began
+    past them: the shotgun came out 5 cells of 12, and `wa_spn` counted
+    cells that were never the sprite's - past its table under a long
+    message, which drew stray blocks about the screen after a respawn (the
+    owner, 2026-11-15). Row `wactf` holds the shotgun's 12 and the pistol's
+    7 under the flag line.
 - **Row 23, left**: `♥` and the health; `♦` and the shield when there is one
   (yellow).
 - **Row 23, right**: the magazine, and the reserve or `∞`.

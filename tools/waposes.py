@@ -28,7 +28,7 @@ The pose list is a function of (arena, n, seed) alone, never of the build, so
 two builds' recordings compare pose for pose:
 
   python3 tools/waposes.py record --arena 0|1|2 --width 40|80 [--level 1..5]
-          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still | --nod | --rise] [--poses LIST.json]
+          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still | --nod | --rise | --blink] [--poses LIST.json]
           [--tree DIR] [--profile p.json [--detail PREFIX]] --out f.json
   python3 tools/waposes.py compare base.json new.json [--list] [--show N]
   python3 tools/waposes.py show f.json N
@@ -211,7 +211,7 @@ def record(a):
         # moved view's (--still keeps it: what a standing player's frame costs).
         pang = None
         rmap = {}
-        if a.nod or a.rise: a.still = True
+        if a.nod or a.rise or a.blink: a.still = True
         if not a.still or a.profile:
             mp2, bn2 = os.path.join(d, "m2"), os.path.join(d, "b2")
             subprocess.check_call(["nasm", "-f", "bin", "-w+error"] + ["-D" + x for x in a.define]
@@ -270,7 +270,9 @@ def record(a):
                 w16("wa_eye", 102 + p["feet"] + p["jump"])
                 w16("wa_pbtk", 0)
                 lap = m.read(b + g["wa_frame"], 1)[0] >= 126   # the stamps lap next frame: 28k clk of clears
-                m.write(b + g["wa_pkon"], pkon); m.write(b + g["wa_pdead"], bytes(1))
+                # (--blink: no pickup there on the pose's first render, the one its view moves on)
+                m.write(b + g["wa_pkon"], bytes(1) if a.blink and rep == 0 else pkon)
+                m.write(b + g["wa_pdead"], bytes(1))
                 w16("wa_hp", 100)
                 for fi, f in enumerate(p["figs"]):
                     fb = b + g["wa_figs"] + fi * FO["F_SIZE"]
@@ -360,6 +362,7 @@ r.add_argument("--out", required=True)
 r.add_argument("--still", action="store_true", help="a standing view: the renderer's still-view work kept")
 r.add_argument("--nod", action="store_true", help="a standing view whose PITCH alone moved since the frame before")
 r.add_argument("--rise", action="store_true", help="a standing view whose EYE HEIGHT alone moved since the frame before")
+r.add_argument("--blink", action="store_true", help="a standing view whose pickups were all gone on the frame the view moved, and are back")
 r.add_argument("--poses", default="", help="a JSON list of poses to use instead of the seeded set (poses()'s own shape)")
 c = sub.add_parser("compare")
 c.add_argument("base"); c.add_argument("new"); c.add_argument("--list", action="store_true")

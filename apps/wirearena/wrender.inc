@@ -7293,17 +7293,16 @@ WA_PKSH equ 8
 wa_pickups:
     cmp word [wa_npk], 0
     je .out
-    mov si, [wa_pkvp]
-    mov al, [si]                ; the ones this cell may see...
-    and al, [wa_pkon]           ; ...that are there
-    jz .out
     ; A PICKUP STANDS WHILE THE VIEW DOES (ARENAS-PLAN 5): its place on the
     ; screen is a function of the view, the pitch and the eye's height, so
     ; with all three where they were last frame its columns, rows and
     ; inverse depth are kept (wa_pkc, a record a pickup, made the first
     ; such frame) and it goes straight to its cells - no transform, none of
     ; its ten multiplies. What hides it is asked again every frame. AH = 1
-    ; on such a frame; [wa_pkg] counts the changes, a record's its key.
+    ; on such a frame; [wa_pkg] counts the changes, a record's its key -
+    ; counted on EVERY frame, one that draws no pickup too: a view that
+    ; moved while none was there to draw, and stood when one came back,
+    ; would find its record of the view before still keyed.
     xor ah, ah
     cmp word [wl_vp], wl_vert   ; (the view where it was: wa_render's)
     jne .gen
@@ -7323,6 +7322,10 @@ wa_pickups:
     jnz .same
     call wa_pkclr               ; (lapped: no record's key is 0)
 .same:
+    mov si, [wa_pkvp]
+    mov al, [si]                ; the ones this cell may see...
+    and al, [wa_pkon]           ; ...that are there
+    jz .out
     mov si, wa_pks
 .p:                             ; AL = the pickups still to draw, a bit each
     shr al, 1

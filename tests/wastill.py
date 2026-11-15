@@ -17,9 +17,14 @@ through tools/waposes.py four ways, an emulator each -
   nod     the pitch alone moved since the frame before
   rise    the eye's height alone moved since the frame before (a jump, a
           lift's ride) - which also changes the corners a low box wants
+  blink   (the twin, three poses before the path's health pack, one pitch
+          and height) no pickup there on the frame the view moved, all of
+          them back on the next: a pickup's kept place is keyed by a count
+          of the view's changes, which a frame that draws none must count
+          too - or the pack is drawn where the pose before saw it
 
   picture  rows 0..22 of text VRAM, every cell, the same as the moved
-           view's in each of the other three
+           view's in each of the others
   kept     the still view's frame, single-stepped: no pickup goes through
            wa_thing's transform (its cells are drawn - wa_plotf runs), and
            no low-box corner through wa_vert (wl_vert is asked for them) -
@@ -36,6 +41,10 @@ N, SEED = 12, 7                 # the seeded poses (waposes' own, per arena)
 ARENAS = ((2, "heights"), (4, "twin"))
 MODES = (("moved", []), ("still", ["--still"]), ("nod", ["--nod"]), ("rise", ["--rise"]))
 LANES = 4                       # emulators side by side
+AWAY = dict(x=1024, y=80, z=0, ang=0, anim=4, nfr=8, ph=0, flash=0, dead=0)
+BLINK = [dict(px=x, py=832, ang=0, pitch=0, feet=0, jump=0, figs=[AWAY] * 3)
+         for x in (600, 680, 760)]      # the health pack at (1024, 832) ahead
+A_HEALTH = 0x0C                 # its colour on a colour card (wa_pkshape)
 
 
 def main():
@@ -50,6 +59,14 @@ def main():
             if mode == "still":     # (and its frame once more, stepped)
                 cmd += ["--profile", os.path.join(d, "%s_prof.json" % an)]
             jobs.append([an, mode, out, cmd, None, ""])
+    bp = os.path.join(d, "blink.json")
+    json.dump(BLINK, open(bp, "w"))
+    for mode, flag in (("blink-moved", []), ("blink", ["--blink"])):
+        out = os.path.join(d, "twin_%s.json" % mode)
+        jobs.append(["twin", mode, out,
+                     [sys.executable, os.path.join(ROOT, "tools/waposes.py"), "record",
+                      "--arena", "4", "--width", str(W), "--poses", bp, "--out", out] + flag,
+                     None, ""])
     todo, live = list(jobs), []
     while todo or live:
         while todo and len(live) < LANES:
@@ -114,12 +131,31 @@ def main():
               % ("FAIL" if bad else "ok", an, c("wl_vert"), c("wa_vert"), c("wa_thing"),
                  c("wa_plotf"), "".join("\n          " + b for b in bad)))
         fails += bool(bad)
+    # THE BLINK: the pack is in each moved picture, and where it is there in
+    # the blinked one
+    a, b = rec[("twin", "blink-moved")], rec[("twin", "blink")]
+    packs = [sum(1 for k in range(0, 20 * W * 2, 2)
+                 if bytes.fromhex(f["vram"])[k + 1] == A_HEALTH
+                 and bytes.fromhex(f["vram"])[k] != 0x20) for f in a]
+    diff = sum(1 for fa, fb in zip(a, b) for k in range(0, 23 * W * 2, 2)
+               if bytes.fromhex(fa["vram"])[k:k + 2] != bytes.fromhex(fb["vram"])[k:k + 2])
+    bad = []
+    if min(packs) < 1 or len(set(f["vram"] for f in a)) < len(a):
+        bad.append("the health pack's cells a pose: %r - the poses ask nothing" % packs)
+    if diff:
+        bad.append("%d cell(s) are not the moved view's: a pickup drawn where another "
+                   "view saw it" % diff)
+    print("  %-4s  the twin, blink: no pickup on the frame the view moved, then the moved "
+          "view's picture (the pack's cells a pose: %r)%s"
+          % ("FAIL" if bad else "ok", packs, "".join("\n          " + x for x in bad)))
+    fails += bool(bad)
     if fails:
         print("wastill: FAIL - %d check(s)" % fails)
         return 1
     print("wastill: ok - the heights arena and the twin, %d poses each: a still view, a nod "
           "and a rise draw the moved view's picture cell for cell; a still frame makes no "
-          "pickup's place and no low box's corner again; no divide fault" % N)
+          "pickup's place and no low box's corner again; a pickup back after a frame with "
+          "none is drawn where it is; no divide fault" % N)
     return 0
 
 

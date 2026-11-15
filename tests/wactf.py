@@ -128,6 +128,26 @@ def main():
             xs.append(g.word("wa_px"))
         check(all(x < 1024 for x in xs), "SIDE SPAWNS: on red's side, at "
               "the start and three respawns", xs)
+        # THE WEAPON'S SPRITE UNDER CTF'S LINES: the overlay holds the flag
+        # line before the weapon's cells, and the sprite's own cells are
+        # made from none - not from where the overlay stood. Begun there,
+        # the shotgun came out 5 cells of 12 and wa_spn counted cells that
+        # were never its, past its table under a long message: stray blocks
+        # mid-screen after a respawn (the owner, 2026-11-15)
+        spn = []
+        for wpn in (1, 0):                      # the shotgun, then the pistol
+            g.p.write(sym["wa_wpn"], bytes([wpn]))
+            g.p.write(sym["wa_ovd"], b"\x01")
+            g.ticks(4)
+            spn.append(g.word("wa_spn"))
+            if wpn == 1:
+                vr = bytes(g.m.read(0xB8000, 40 * 24 * 2))
+                brown = sum(1 for k in range(0, len(vr), 2)
+                            if vr[k + 1] == 0x06 and vr[k] != 0x20)
+        check(spn == [12, 7] and brown == 8, "THE WEAPON'S SPRITE, the "
+              "flag line before it in the overlay: the shotgun's 12 cells "
+              "(its stock's 8 brown ones on the glass), the pistol's 7",
+              (spn, brown))
 
         g.place(BLUE[0], BLUE[1], 0)            # A TAKE
         g.ticks(4)

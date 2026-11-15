@@ -4652,11 +4652,15 @@ wa_ovbuild:
     mov cx, [wa_w]
     shr cx, 1
     add cx, 3                   ; CX = its column 0
+    xor di, di                  ; DI = its cells, x 2 - from none, whatever
+                                ; the overlay holds already (the pushed DI):
+                                ; left for the reload's arm alone, a sprite
+                                ; made after CTF's lines began past them and
+                                ; wa_spn counted cells that were never its
     cmp ah, 2                   ; (reloading: tipped away, two right)
     jne .spr
     inc cx
     inc cx
-    xor di, di                  ; DI = its cells, x 2
 .spr:
     lodsb
     cmp al, 0xFF
