@@ -95,7 +95,7 @@ def eligible(machine, kw):
     for v in ("OS88_ROM", "MARTYPC_WAV", "OS88_MARTY_BIN", "OS88_MEGA"):
         if os.environ.get(v):
             return "$%s is set" % v
-    if re.search(r"hdd|ide|_pm[12]|wire|ne2k", machine or "", re.I):
+    if re.search(r"hdd|ide|_pm[12]|wire|ne2k|lpt", machine or "", re.I):
         return "machine %s has a written-through disk or a device" % machine
     for k, v in kw.items():
         if k == "boot" and v is False:
