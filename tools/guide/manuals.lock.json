@@ -1443,9 +1443,9 @@
    "apps/wirearena",
    "tools/arenagen.py"
   ],
-  "stamped": "f4a4e8a2",
-  "strings": "cd83557002e8d201",
-  "why": "the page for WIRERENA.O88 (the file renamed from WARENA.O88 and the title made 'Wire Arena' by the owner): every setup row, key, weapon, mode, arena, message and link step read off apps/wirearena and SPEC.md 128; shots retaken under the new ids"
+  "stamped": "c5c88829c",
+  "strings": "6136f95b083a4c1c",
+  "why": "Detail drop-down in the setup (the slot right of Play, the address field's under Internet); Very High the 286 default with vsync"
  },
  "WORD": {
   "sources": [],

@@ -1602,18 +1602,18 @@ wa_lt_anames:                   ; (the setup's order: an item is an arena
                 dw wa_lt_a%[wa_o]
  %assign wa_i wa_i+1
 %endrep
-wa_lt_a0:       db 'pillars', 0
-wa_lt_a1:       db 'open', 0
-wa_lt_a2:       db 'heights', 0
-wa_lt_a3:       db 'hedge', 0
-wa_lt_a4:       db 'twin', 0
-wa_lt_a5:       db 'crossing', 0
-wa_lt_a6:       db 'ziggurat', 0
-wa_lt_a7:       db 'the pit', 0
+wa_lt_a0:       db 'Pillars', 0
+wa_lt_a1:       db 'Open', 0
+wa_lt_a2:       db 'Heights', 0
+wa_lt_a3:       db 'Hedge', 0
+wa_lt_a4:       db 'Twin', 0
+wa_lt_a5:       db 'Crossing', 0
+wa_lt_a6:       db 'Ziggurat', 0
+wa_lt_a7:       db 'The Pit', 0
 wa_lt_dnames:   dw wa_lt_d0, wa_lt_d1, wa_lt_d2
-wa_lt_d0:       db 'easy', 0
-wa_lt_d1:       db 'normal', 0
-wa_lt_d2:       db 'hard', 0
+wa_lt_d0:       db 'Easy', 0
+wa_lt_d1:       db 'Normal', 0
+wa_lt_d2:       db 'Hard', 0
 wa_lt_hhost:    db 'Ready on both, and the match starts.', 0
 wa_lt_hguest:   db 'Ready, and the host starts the match.', 0
 
@@ -3151,7 +3151,7 @@ wa_bhear_far:
     jmp wa_bheara
 
 ; wa_lkonlift - DI = figure 0 on the host: one of the lift's riders when it
-; stands on top of it (wa_lbn, which wa_ltick counts) - so the lift rises
+; stands on top of it (wa_lbot, which wa_ltick counts) - so the lift rises
 ; for the guest as it does for anyone here. Keeps every register
 wa_lkonlift:
     push ax
@@ -3178,7 +3178,7 @@ wa_lkonlift:
     jl .next
     cmp ax, [wa_boxes+bx+6]
     jg .next
-    inc byte [wa_lbn+si]
+    inc byte [wa_lbot+si]
 .next:
     inc si
     inc si

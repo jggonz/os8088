@@ -106,9 +106,9 @@ def capture(ui, shot):
     ui.settle()
 
     # the Rotation window, team deathmatch's arenas: the focus to Mode
-    # (Arena, Columns, Bots, Skill, Play, Mode - the address field is no
-    # stop while Play is offline)
-    for _ in range(5):
+    # (Arena, Columns, Bots, Skill, Play, Detail, Mode - Detail has the
+    # slot right of Play while Play is offline)
+    for _ in range(6):
         m.key("ArrowDown")
     m.key("ArrowRight")                 # (team deathmatch)
     m.key("KeyR")

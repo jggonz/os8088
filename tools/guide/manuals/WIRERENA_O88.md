@@ -36,20 +36,23 @@ the one marked with `>`.
 |---|---|
 | Arena | where you play, out of those the mode can use |
 | Columns | 40 or 80 characters across |
-| Bots | none to three computer players |
-| Skill | how well the bots aim and react: easy, normal or hard |
-| Play | offline, serial cable, local network or internet |
-| Mode | free-for-all, team deathmatch, capture flag or KingOfTheHill |
-| Win at | the score that ends the match, or no limit |
+| Bots | None to three computer players |
+| Skill | how well the bots aim and react: Easy, Normal or Hard |
+| Play | Offline, Serial Cable, Local Network or Internet |
+| Detail | how much of the arena is drawn, Very Low to Very High |
+| Mode | Free-for-All, Team Deathmatch, Capture the Flag or King of the Hill |
+| Win at | the score that ends the match, or No Limit |
 | Nick | your name, up to eight characters, for other players to see |
 
 **Play** (or `Enter`) starts the match. **Keys** (or `K`) shows the list of
-keys. Columns starts at 40 on an IBM PC or XT and at 80 on a 286 or newer.
-A Hercules card always plays at 80.
+keys. Columns starts at 40 on an IBM PC or XT and at 80 on a 286 or newer,
+and Detail at Medium and Very High. A Hercules card always plays at 80.
+When Play is *Internet*, the address box takes Detail's place; `F1` to `F5`
+still set the detail during the match.
 
 ![The Arena list, dropped.](shot:wirerena-arenas){left}
 
-The last item of the Arena list, **rotation...** (or `R`), opens the
+The last item of the Arena list, **Rotation...** (or `R`), opens the
 Rotation window. It lists the arenas the chosen mode can use, each with a
 check box. When a match is won, the next one starts in the next checked
 arena. At least one arena stays checked (*One arena stays in*).
@@ -93,13 +96,13 @@ hand highlighted, and the rounds it has left.
 
 ## Ways to play
 
-- **Free-for-all**: every player and bot for themselves. Each kill scores.
-- **Team deathmatch**: red against blue. Your team's kills score, and your
+- **Free-for-All**: every player and bot for themselves. Each kill scores.
+- **Team Deathmatch**: red against blue. Your team's kills score, and your
   shots and blasts do not hurt a teammate.
-- **Capture flag**: take the other team's flag from its base and carry it
+- **Capture the Flag**: take the other team's flag from its base and carry it
   to your own base while your flag is at home. A dropped flag goes home by
   itself after a while, or at once when one of its team touches it.
-- **KingOfTheHill**: red against blue for the hill. A team alone on it
+- **King of the Hill**: red against blue for the hill. A team alone on it
   takes it, and the team holding it scores a point every few seconds.
 
 The score against the goal shows at the bottom right, for example `0/20`.
@@ -112,17 +115,17 @@ goes on in the next arena of the rotation.
 
 | Arena | What it is like |
 |---|---|
-| open | one room with nothing in the way |
-| pillars | a room of pillars to hide behind |
-| crossing | two corridors that cross, weapons in each corner |
-| heights | a tower, a lift up to it and a ramp; the default |
-| hedge | low hedges and platforms between two team sides |
-| twin | two matching halves, a base on each side |
-| the pit | a deep pit with a ring above it and a lift out on each side |
-| ziggurat | a tall stepped tower with four ramps to its top |
+| Open | one room with nothing in the way |
+| Pillars | a room of pillars to hide behind |
+| Crossing | two corridors that cross, weapons in each corner |
+| Heights | a tower, a lift up to it and a ramp; the default |
+| Hedge | low hedges and platforms between two team sides |
+| Twin | two matching halves, a base on each side |
+| The Pit | a deep pit with a ring above it and a lift out on each side |
+| Ziggurat | a tall stepped tower with four ramps to its top |
 
-Some arenas cannot play every mode: capture flag needs bases, and team
-deathmatch needs a side for each team. The Arena list offers only the
+Some arenas cannot play every mode: Capture the Flag needs bases, and Team
+Deathmatch needs a side for each team. The Arena list offers only the
 arenas the chosen mode can use.
 
 ## Settings while you play
@@ -137,12 +140,14 @@ example *Detail High*.
 |---|---|
 | `F1` to `F5` | the detail: Very Low, Low, Medium, High, Very High |
 | `-` and `+` | 40 or 80 columns |
-| `V` | waits for the screen's refresh before drawing (Vsync on or off) |
+| `V` | waits for the screen's refresh before drawing (Vsync on or off); Very High turns it on and the other levels off |
 | `[` and `]` | how far the view turns for a move of the mouse |
 | `F10` | a frame rate counter, then every figure, then off |
 
 Lower detail draws fewer lines and runs faster. The game picks Medium on an
-IBM PC or XT and High on a 286 or newer. 40 columns runs faster than 80.
+IBM PC or XT and Very High on a 286 or newer, which is fast enough there to
+outrun the screen's refresh, so Very High also turns Vsync on. 40 columns
+runs faster than 80.
 
 ![The same match at 80 columns.](shot:wirerena-wide){full}
 
@@ -152,14 +157,14 @@ Up to four people can play one match, each on their own machine. Bots fill
 the places the players leave, if the host asks for them.
 
 **Over a serial cable**: connect two machines with a null modem cable on
-COM1 or COM2 and set **Play** to *serial cable* on both. Each machine finds
+COM1 or COM2 and set **Play** to *Serial Cable* on both. Each machine finds
 the other by itself, on whichever port the mouse does not use. The **Link**
 menu's **Automatic**, **Connect COM1**, **Connect COM2** and **Disconnect**
 choose the port by hand. A serial cable links two machines.
 
 **Over a network**: each machine needs a network card. Set **Play** to
-*local network* to find the other players on the same network, or to
-*internet* and type the host's address in the box beside it.
+*Local Network* to find the other players on the same network, or to
+*Internet* and type the host's address in the box beside it.
 
 The players' list shows who is there. Click **Ready** when you are set. The
 host is chosen by the game, and its arena, bots, skill and mode are the

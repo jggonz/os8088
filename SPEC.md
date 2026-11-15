@@ -251426,7 +251426,8 @@ disagree, this section and the source win.
     pushed far return enters it (`wa_rcall`), so no vector is read
     through CS;
   - part 1, `OP_ASSET`, `OP_COMP`: the POSE part, the figures'
-    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`);
+    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`),
+    delta-coded in the file (128.3);
   - parts 2.., `OP_ASSET`, `OP_LAZY | OP_COMP`: one ARENA each (128.4),
     fetched when a match needs it.
 - **Moves.** The region is `OS88_REGION_MOVABLE`, and the carve is
@@ -251462,8 +251463,9 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
   (`wa_attrc`). On an MDA-class page 01h is an underline and 08h is nothing,
   so the colour table there is wrong. (Before 17.6 the test was `FSI_SEG ==
   B000h`, which is never true on kern_mega: `tests/wamono.py`.)
-- **Presentation** writes only the cells that changed. V waits for the
-  vertical retrace before presenting (`OSAPI_FSX_WAIT`).
+- **Presentation** writes only the cells that changed. With vsync on it
+  waits for the vertical retrace before presenting (`OSAPI_FSX_WAIT`):
+  V turns it on and off, and a detail level sets it (Very High's alone).
 - **A setting a key changes SAYS SO** in the HUD's message cell for four
   seconds (`WA_HMSGT`, 120 ticks): the name grey, what it is now bright -
   `Detail Medium`, `Vsync on`, `Columns 80` (`wa_hudset`), and `Mouse
@@ -251472,8 +251474,11 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The detail levels** are F1..F5: Very Low, Low, Medium, High, Very
   High. Each is one row of `wa_levtab`: the renderer's `LK_*` options, the
   floor grid, stepped treads, dashed floor lines and the small-figure
-  threshold. Moving an option between levels is a change to that table and
-  nothing else. The default is Medium on an 8086/8088 and High on a 286 or better.
+  threshold, and last vsync - Very High's alone, because a 286 runs Very
+  High past the monitor's refresh (the owner, 2026-11-15). Moving an
+  option between levels is a change to that table and nothing else. The
+  default is Medium on an 8086/8088 and Very High (vsync on) on a 286 or
+  better; the setup's Detail drop-down shows it and picks one too (128.6).
 
 ### 128.3 The simulation, the input and the renderer part
 
@@ -251496,9 +251501,23 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The renderer part's ABI** is `apps/wirearena/wafb.inc`, which both
   halves include, so the FRAME BLOCK is one layout:
   - **The part's header**: `'WRPART'`, then at +6 the ABI byte
-    (`WR_ABI`, 14) and at +7 the verb count (`WR_NVERB`, 6). From +8
-    there is a word per verb, its offset. The primary refuses a mismatch at
-    launch with *Renderer part mismatch*.
+    (`WR_ABI`, 16) and at +7 the verb count (`WR_NVERB`, 6). From +8
+    there is a word per verb, its offset, and at +20 (`WR_H_POSE`) the
+    offset of the hot keyframes (`wa_pose0`). The primary refuses a
+    mismatch at launch with *Renderer part mismatch*.
+  - **The keyframes are shipped CODED** (`tools/wadelta.py`): the renderer
+    part's hot ones (at `WR_H_POSE`) and the whole of the pose part. Facing
+    k + NFACE/2 is facing k mirrored (x negated, y the same), so a
+    keyframe's second half is shipped as zeros; its first half's rows are
+    each less the row before (`WA_NJ` x 2 bytes), and the whole keyframe is
+    less the one before (`WA_FRAMESZ`). That packs them to under a third,
+    and a keyframe that is not its own mirror fails the build. `wa_rbind`
+    undoes both in place at launch (`wa_undelta`), so the parts hold the
+    assembler's bytes from then on, and `build/wrpart.bin` and
+    `build/wapose.bin` are those bytes; only the `.dlt` copies are packed.
+    The primary's quarter-wave sine table (`wa_sin`) is shipped the same
+    way, as its second difference (`wadelta.py --sin`), and `wa_sinmk`
+    rebuilds it at entry before anything reads it.
   - **The verbs**: `WRV_INIT` (after a mode set), `WRV_GEOM`, `WRV_ARENA`
     (AL = an arena), `WRV_RENDER` (out AL = the frame number), `WRV_PRESENT`
     (out AX = cells written) and `WRV_TRACE` (a shot's cone; out the nearest
@@ -251560,7 +251579,24 @@ the arenas the chosen mode can play.
   the vertices and corners, the boxes and their BSP, the start (x, y, its
   facing), the colours, the box heights and kinds, the room height, the
   tallest box, the lifts, the route graph (AI-PLAN 3.1), the PVS, the
-  pickups and their PVS, and the floor lines. `wa_loadarena` copies one into the
+  pickups and their PVS, and the floor lines. The tree is rows of two sizes,
+  followed by its links and never counted: a leaf is 2 bytes (kind 2, its
+  box x 4), a split 8 (its kind, 0, its value, its low and high links), and
+  the descriptor's word 28 is the tree's length in bytes (`WR_ABI` 16).
+  In the route graph, the next hop of each (node, goal) pair is two bits,
+  four to a byte: which of the node's four ways out a bot takes first.
+  Word 50 (`WR_ABI` 18) names a word a box. Its low byte holds the floor
+  edges (bits 0-3, by face) and posts (bits 4-7, by corner) of a low box that
+  lie inside its neighbours, which the renderer does not draw - a corner
+  whose every quadrant outside the box is solid at least as high, or outside
+  the room; a face whose foot is covered along its length (arenagen's
+  `buried_byte`). Its high byte holds the far faces whose top is a SEAM (bits
+  0-3, by face): a neighbour of the same height runs the top on, so no edge
+  is drawn there, but that neighbour's face against it is longer and drawn,
+  and the top must still hide its lower part from an eye above. The
+  renderer raises the column clip along each seam without drawing a cell
+  (arenagen's `seam_bits`, `wl_seams`).
+  `wa_loadarena` copies one into the
   working tables and REBASES the tree's links. `arena_part()` in
   arenagen.py is this layout's single writer, and the renderer's
   `wa_loadarena` its single reader.
@@ -251578,9 +251614,10 @@ the arenas the chosen mode can play.
 
 - **Free-for-all, team deathmatch, capture the flag, king of the hill**
   (`wa_gmode`: 0 free-for-all, 1 capture the flag, 2 team deathmatch, 3
-  king of the hill; the setup's Mode list reads `free-for-all`, `team
-  deathmatch`, `capture flag`, `KingOfTheHill`).
-- **Win at**: each mode has its own list of scores, and `no limit`. A win shows
+  king of the hill; the setup's Mode list reads `Free-for-All`, `Team
+  Deathmatch`, `Capture the Flag`, `King of the Hill`).
+- **Win at**: each mode has its own list of scores (`20 Kills`, `3
+  Captures`, `10 Points`...), and `No Limit`. A win shows
   for 10 s (`WC_WINT`, 300 ticks) and the match goes on in the next arena
   of the mode's ROTATION. That is `wa_srot`, a bit for each arena for each
   mode, all of them by default. The setup's Rotation window (R) changes it,
@@ -251601,11 +251638,24 @@ The window is made of the system's controls (§13.8 buttons, §13.15 check
 boxes, the drop-downs and §83's line editor). It draws only what changed
 and uses `font_run` for text:
 
-- **Drop-downs**: Arena, Columns, Bots, Skill, Play, Mode and Win at.
-  Play is `offline`, `serial cable`, `local network` or `internet`.
+- **Drop-downs**: Arena, Columns, Bots, Skill, Play, Detail, Mode and Win
+  at. Play is `Offline`, `Serial Cable`, `Local Network` or `Internet`. Every
+  value a drop-down shows is title-cased (`The Pit`, `Easy`, `None`,
+  `Rotation...`: the owner, 2026-11-15); the left column's drop-downs are
+  sixteen cells wide, which `Capture the Flag` and `King of the Hill` need
+  (`WS_LDX2`; the content 408 wide).
   On a guest, what only the host chooses (the arena, the bots, the skill)
   is refused with *The host picks the arena*.
-- **An address field** (for internet) and a **Nick** (eight characters).
+- **THE SLOT right of Play** is Detail's while Play is not `Internet` and
+  the address field's while it is (the owner, 2026-11-15): one focus stop
+  (`WS_FLD`), between Play and Mode, whichever holds it. Detail is the
+  level `wa_level` names - the CPU tier's from the start (128.2) - and a
+  pick is `wa_setlevel`'s, as F1..F5 are; it is each player's own, so a
+  guest is never refused it. When the slot changes hands only the ground
+  the newcomer's own draw does not cover is filled (`WS_GROUND`'s rects
+  either side of its table), so nothing of the other is left
+  (`tests/wasetup.py`).
+- **An address field** (for Internet) and a **Nick** (eight characters).
   They are in-session only: persistence was declined (MULTIPLAYER-FPS-PLAN
   17.1).
 - **Buttons**: Play (or Ready, when linked) and Keys, which puts up the
@@ -251635,7 +251685,7 @@ typed bodies:
   broadcast, and everything else goes to the peer's station address.
 - **UDP**: `apps/os88udp.inc` on ETHER.DRV's UDP verbs (§72.24), port
   **30088**. HELLO is broadcast to 255.255.255.255 and also sent to a typed
-  address. Play's `local network` takes UDP and falls back to raw frames
+  address. Play's `Local Network` takes UDP and falls back to raw frames
   when there is no address.
 
 **A body**: byte 0 is the TYPE. The last two bytes are CRC-16/CCITT-FALSE
