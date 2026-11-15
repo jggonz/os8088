@@ -59,9 +59,39 @@ build is paid at most twice per checkout, and consecutive runs that finish
 normally reuse the same slot. Knob trees (`build/trees/*`) are per slot too,
 so a slot's first `builds`-heavy run pays them once.
 
-## Verification
+## Verification (2026-11-15, after 09:05 UTC; wall times under load ~40)
 
-See the end of this file (filled in after the 09:05 run).
+Host: `tests/unit/t_soaksnap.py` green, and red on each of three deliberate
+breaks (snapshot without the temporary index -> check 2; `pin_instruments`
+linking run/ instead of copying -> check 7; `_reserved` ignoring `latest` ->
+check 6). `checkdocs`, `t_registry`, `os88help --check` and `make` green.
+`os88test.py --frozen fast -k stkclass` green from inside the snapshot.
+
+**Run 1** (`20261115-090514`): `start -k martyfork -k postboot -k tickzero
+-k blobsum -k soaksnap --marty-jobs 1`. At 09:05:20, with `soaksnap` reported
+and `martyfork` in flight, a script prepended `raise SystemExit("SABOTAGE")`
+to every selected row's script and to `tools/os88marty.py`, `tools/os88ui.py`
+and `tests/suite.py`, COMMITTED it, ran `make`, and swapped the worktree's
+`build/martypc` symlink to an empty directory. The three rows that started
+after it (`blobsum`, `postboot`, `tickzero`) passed: **5/5 ok**.
+
+**Run 2** (`20261115-091040`): 10 MartyPC rows plus `soaksnap`. At 09:10:40,
+before the first emulator row booted: `build/martypc` swapped to an empty
+directory, the same sabotage extended to all ten scripts and
+`tools/os88sym.py`, committed - and then a KNOB HAMMER, `make VIDEO=cga
+build/os8088-360.img` in the live `build/`, which rewrote `build/kernel.bin`
+with a CGA kernel at 09:11:51 while `tnest` and `kerndos` were still to run.
+**11/11 ok**, 83.9 s; the run finished at 09:12:04. (The same sabotaged tree
+is what made the hammer's own `make` fail at `build/boothd.bin`: it imported
+the sabotaged `os88sym.py` - the live checkout really was broken.)
+
+`start --resume` afterwards reused the run's own snapshot unrebuilt and
+reported nothing left (exit 0). Both sabotage commits were reset off the
+branch afterwards; `build/martypc` restored.
+
+Under §14.2's freeze each of those sabotages alone would have failed every
+row started after it: the scripts and `tools/*.py` were read live, and
+`build/martypc` was the live symlink.
 
 ## Left for the next pass
 
@@ -73,5 +103,8 @@ See the end of this file (filled in after the 09:05 run).
 2. **Hardlink the 400 MB of demo videos** into new slots instead of writing
    them: git never rewrites a blob in place, but an editor could, so it would
    unfreeze those files. Saves ~10 s and 400 MB per slot.
-3. `check` still reports on the checkout's `build/`, which a frozen `start` no
-   longer reads; it could report on the slot it would use.
+3. `check` still reports on the checkout's `build/` (its kernel-map line),
+   which a frozen `start` no longer reads; it could report on the slot it
+   would use.
+4. `os88soak.py status` could list the slots and their sizes
+   (`build/soak/src/`), and a `prune` verb could drop them on request.
