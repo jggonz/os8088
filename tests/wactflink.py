@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WireArena's CAPTURE THE FLAG LINKED, wave C3 (docs/plans/
-WIREARENA-CTF-PLAN.md 7): two QEMUs on a socket cable, the shipped package,
+completed/WIREARENA-CTF-PLAN.md 7): two QEMUs on a socket cable, the shipped package,
 walink's harness (tests/walink.py: MartyPC cannot link two instances).
 
   - THE MODE: the host's Mode at CTF reaches the guest in its HELLO, and

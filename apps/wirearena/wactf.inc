@@ -1,5 +1,5 @@
 ; wactf.inc - CAPTURE THE FLAG, and the teams it plays in (docs/plans/
-; WIREARENA-CTF-PLAN.md). Included by the game (wirearena.asm).
+; completed/WIREARENA-CTF-PLAN.md). Included by the game (wirearena.asm).
 ;
 ; THE TEAMS: a player's or a bot's team is its slot's parity (CTF-PLAN 2) -
 ; wa_tm, by LOCAL index (0 our player, 1.. figure 0..), made when a match

@@ -1,11 +1,29 @@
 # A multiplayer first-person shooter for the 5150, in text mode: investigation
 
-**STATUS: WAVE 0 BUILT (the renderer spike, `apps/wirearena/`), measured in
-section 16.** The owner's answers to section 14 (2026-11-12): prototype to
-decide 40 vs 80 columns; spend the relative-mouse bytes (done, SPEC.md 9.14 -
-38 resident bytes on kern_big and kern_mega, refused on kern_small for its
-budget); raw Ethernet pausing TCP is acceptable; kern_small decided once the
-size is known.
+**STATUS (2026-11-15): A GAME, ON ITS OWN DISK; RELEASE WORK IN PROGRESS.**
+WireArena (`apps/wirearena/`, `WARENA.O88`, `make wirearenadisk`) is a
+text-mode arena shooter for kern_big and kern_mega (kern_small refuses it):
+mouse look, six weapons and pickups, bots that route, shoot and play for the
+flag, free-for-all, team deathmatch, capture the flag and king of the hill
+with a score to win and a rotation, six arenas (open, pillars, crossing,
+heights, hedge, twin), and up to four participants over a serial cable,
+raw Ethernet or UDP, all chosen in the match setup window. It is still on an
+on-demand disk of its own and listed as an `instrument` in
+`apps/RETIRED.txt`; section 17.2's release work puts it on shipped disks.
+
+This document began as the investigation (sections 1-15, proposals as
+written on 2026-11-12) and is now WireArena's umbrella: section 16 is the
+record of Wave 0 and the renderer passes, and **section 17 holds the owner's
+rulings, what is in progress, what is open and the ideas for after 1.0**.
+The plans that built each part are in `docs/plans/completed/` (17.5 lists
+them); WireArena has no SPEC.md section yet, so those plans and this one are
+its contract.
+
+The owner's answers to section 14 (2026-11-12): prototype to decide 40 vs 80
+columns; spend the relative-mouse bytes (done, SPEC.md 9.14 - 38 resident
+bytes on kern_big and kern_mega, refused on kern_small for its budget); raw
+Ethernet pausing TCP is acceptable; kern_small decided once the size is
+known (refused: PARTS-PLAN 6).
 
 The owner asked for this on 2026-11-12, on branch `multiplayer-fps` (cut from
 `elendilon` at `9f5c3c9c`):
@@ -23,7 +41,9 @@ This document is the answer. It separates three kinds of claim:
 - **Measured** means a number was taken. Each one cites its source.
 - **Predicted** means arithmetic from PERFORMANCE.md's unit costs. Nothing
   has run it.
-- **Proposed** means a design choice. None of it is built.
+- **Proposed** means a design choice. None of it is built. *(As written,
+  2026-11-12. Since then most of it is built - section 17.5 lists the
+  plans that built it.)*
 
 The working title used below is **WireArena**. It follows the house naming
 for link games (WireBall §109, WireFleet §114) and is the owner's to change.
@@ -43,7 +63,7 @@ for link games (WireBall §109, WireFleet §114) and is the owner's to change.
 | computer opponent | **Yes, cheaply** (section 9). It can reuse Pixelstein's line-of-sight walk and Tank's aim, and runs as a "virtual remote player". |
 | pistol, plus arcing and slow projectiles | **Yes.** Projectiles are cheap to draw (one glyph each) and almost free to network (a spawn event; the flight is deterministic). Section 6. |
 | fluid movement, hit and death animations | **Yes, within a cell grid.** Keyframes are pre-projected on the host and interpolated on the guest at about 4k clk per visible figure (predicted). The motion is as fluid as an 80x25 grid can show; section 5 is honest about that limit. |
-| Ethernet | **Plausible, with a caveat.** No package can reach UDP. The route is `NETV_RAW` broadcast frames (section 8.2). **MartyPC has no NIC**, so development runs on QEMU and 86Box. On the owner's own hardware, 5150 #2 (the PicoMEM's NE2000) is the only XT that can play. |
+| Ethernet | **Plausible, with a caveat.** No package can reach UDP *(since 2026-11-14 one can: `NETV_UDP`, SPEC.md 72.24)*. The route is `NETV_RAW` broadcast frames (section 8.2). **MartyPC has no NIC**, so development runs on QEMU and 86Box. On the owner's own hardware, 5150 #2 (the PicoMEM's NE2000) is the only XT that can play. |
 | serial | **Plausible for two players at 2400 baud** (the practical XT ceiling, SPEC.md 114.3), using owner-authority state sync. **But 5150 #1's one COM port is the mouse's**, so a serial match there is keyboard-aimed. |
 
 ---
@@ -354,7 +374,7 @@ This is arithmetic and not a measurement. Wave 0 measures it.
 ## 6. Weapons and projectiles (proposed)
 
 *The first round is built: the pistol, the shotgun and the rocket launcher,
-with pickups - [WIREARENA-WEAPONS-PLAN](WIREARENA-WEAPONS-PLAN.md).*
+with pickups - [WIREARENA-WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md).*
 
 | weapon | kind | what makes it interesting here |
 |---|---|---|
@@ -384,7 +404,7 @@ Facts (SPEC.md 9, 53.1, 96.10.2, 97.11):
   coordinates, clamped to the desktop**.
 - `mou_apply` keeps **no accumulator**, so motion against an edge is lost.
 - There is **no relative-mouse slot**. `OSAPI_MOUSE_REL` is named as "not
-  taken" in §97.11.
+  taken" in §97.11. *(Since built: SPEC.md 9.14, way A below.)*
 - There is no warp call. Pixelstein steers by "offset from centre", which is
   not modern aiming.
 - The serial mouse reports ~40 times a second (1200 baud, 3-byte packets),
@@ -451,7 +471,9 @@ cannot tolerate.
 ### 8.2 Ethernet (proposed: raw broadcast frames)
 
 - **No package can reach UDP.** The package verbs are TCP plus
-  `NETV_RAW`/`RAWTX`/`RAWRX` (SPEC.md 72.22).
+  `NETV_RAW`/`RAWTX`/`RAWRX` (SPEC.md 72.22). *(Since 2026-11-14 they
+  include UDP, SPEC.md 72.24, and a match on a network with an address
+  uses it; raw frames are the fallback - WIREARENA-NET-PLAN 1.)*
 - **TCP is wrong for a shooter.** A lost segment stalls every later snapshot
   behind it.
 - **The route is a RAW claim with a private EtherType:**
@@ -471,7 +493,8 @@ cannot tolerate.
   - Calls must come from the foreground, never from a rate hook.
 - **A gap to settle in SPEC first:** §53.7's list of legal calls does not
   name `OSAPI_DRV_CALL`. `FSXL_DRV` and DOS's packet driver imply it is
-  legal, and the game should not rest on an implication.
+  legal, and the game should not rest on an implication. *(Settled:
+  §53.7 names it now - WIREARENA-LINK-PLAN 12.2.)*
 - **Cards:** NE1000 (8-bit ISA, so it fits an XT) and NE2000, including the
   PicoMEM's.
 - **Where it can be tested:**
@@ -508,7 +531,7 @@ cannot tolerate.
 
 ## 9. The computer opponent (proposed)
 
-*Replaced by [WIREARENA-AI-PLAN](WIREARENA-AI-PLAN.md), to the owner's brief
+*Replaced by [WIREARENA-AI-PLAN](completed/WIREARENA-AI-PLAN.md), to the owner's brief
 of 2026-11-14: fast more than good - routes with branches, a time to shoot
 and an accuracy. Its section 1 records the owner's rulings on everything
 left.*
@@ -544,7 +567,8 @@ of the machine at 5.5 kHz (§34.11.4), so it is out.
 
 Use **`OSAPI_SND_TONE` effects**, as Pixelstein does: shot, hit, death, jump,
 pickup. An opponent's footsteps are clicks whose rate follows their speed,
-which is a positional cue a speaker can give.
+which is a positional cue a speaker can give. *(Footsteps were tried and
+removed: 17.1.)*
 
 On machines with a Sound Blaster or AdLib, SOUND.DRV's FM can play richer
 effects, behind the usual refusal.
@@ -564,7 +588,7 @@ Memory: code ~20-30 KB, the animation tables ~14 KB, arenas 4-8 KB each, and
 shadows 8 KB. The code fits one segment, and the arenas and animations are
 PARTS. The region must follow §66.6.1.1, `OS88_REGION_MOVABLE`.
 
-**Superseded by [WIREARENA-PARTS-PLAN](WIREARENA-PARTS-PLAN.md)** (2026-11-13):
+**Superseded by [WIREARENA-PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md)** (2026-11-13):
 it measured the segment, forecast +35 to +80 KB still to come, and split the
 game into a renderer part, the game in the primary, keyframes as an asset
 and arenas fetched per match. Its section 6 records the owner's answers:
@@ -600,6 +624,9 @@ kern_big and kern_mega only (kern_small refuses), at most three figures, and
    - **Open question:** whether an FSX bracket can own BOTH cards. §53 is
      written for one display, and §39.11's extended desktop is where two-card
      work already lives.
+   - *Dropped by the owner (2026-11-15, 17.1): it would need a 286 or
+     better, which is unlikely to carry a Hercules card, and the game plays
+     best on CGA anyway.*
 2. **Deterministic replay and kill-cam.** Fixed-step integer sim plus
    recorded inputs replays exactly. A 3-second "kill-cam" from the killer's
    view is cheap, and so are demo files.
@@ -638,14 +665,18 @@ kern_big and kern_mega only (kern_small refuses), at most three figures, and
 2. **The relative-mouse cell.** It costs ~10 resident bytes plus a cell on
    every kernel, and INT 33h wants it too. Approve, or should the package
    borrow the UART?
+   *Approved and built (SPEC.md 9.14).*
 3. **Ethernet by raw frames.** A match stops TCP and DHCP while it runs. Is
    that acceptable? And §53.7 should name `OSAPI_DRV_CALL` explicitly.
+   *Acceptable; §53.7 names it (WIREARENA-LINK-PLAN 12.2). UDP came later
+   and raw frames are now the fallback (WIREARENA-NET-PLAN 1).*
 4. **kern_small:** a reduced build, or a clean refusal?
+   *Refusal (WIREARENA-PARTS-PLAN 6).*
 5. **The glyph palette.** It is decided by looking at the CGA 8x8 and MDA
    9x14 fonts on the glass in Wave 0. The table in section 4.4 is a starting
    point.
 6. **The two-monitor local mode** needs a ruling on whether a bracket may
-   own both cards.
+   own both cards. *Dropped by the owner (2026-11-15, 17.1).*
 
 ## 15. A first cut of the waves (draft — to be rewritten as stories when approved)
 
@@ -674,8 +705,19 @@ kern_big and kern_mega only (kern_small refuses), at most three figures, and
 
 ## 16. Wave 0 — what was built and what it measured
 
+> **Read this section as a log** (since 2026-11-15). What it calls "the
+> full arena" is **pillars** on the setup's list (arena 0); the keys F (field
+> of view, now fixed at 75 degrees), G (floor grid), H (held edges), L
+> (sparse tops), T (treads) and J are gone - the grid and treads are the
+> detail levels' (F1-F5), H and the sparse level were removed - and B and P
+> exist only in a `make WABENCH=1` build (WIREARENA-NET-PLAN 9.9, 9.10).
+> There is no Game menu: the match setup window chooses everything (NET-PLAN
+> 9.4, 9.9).
+
 **Built:** `apps/wirearena/` (`WARENA.O88`, `make wirearenadisk`). It is an
-on-demand `instrument` in `apps/RETIRED.txt` until it is a game. The package
+on-demand `instrument` in `apps/RETIRED.txt` until it is a game. *(Since
+2026-11-15 it is one, still on its own disk and still listed there until
+the release work of 17.2 ships it.)* The package
 has these parts:
 
 - `wirearena.asm`: the shell, the loop, input and the 30 Hz sim.
@@ -692,7 +734,8 @@ What the prototype contains:
   hit flash, and respawn after three seconds.
 - Mouse look through `OSAPI_MOUSE_REL`, WASD, jumping, and pitch by y-shear.
 - **Tab** swaps between 80 and 40 columns, live. **V** presents after
-  vertical retrace. **B** runs the BENCH.
+  vertical retrace. **B** runs the BENCH. *(Since: `-` and `+` set the
+  width, Tab held is the board and minimap, B is a test build's.)*
 - A HUD meter showing fps, frame ms, render ms, present ms and video writes
   a frame.
 
@@ -862,7 +905,8 @@ per coordinate per frame, measured SLOWER: 19.5 -> 19.0 fps. Nearly every
 coordinate is used, so the stamp tests were pure cost. The note is at
 `wa_products`.
 
-**The sparse detail level (L)** draws floor lines and corner posts — no top
+**The sparse detail level (L)** *(removed 2026-11-15: WIREARENA-NET-PLAN
+9.9, 9.10)* draws floor lines and corner posts — no top
 edges and no top slope fills. It is about 40% fewer video writes (80
 columns: 149 against 240 a frame), and the posts still carry the walls'
 height. The HUD shows F or S.
@@ -882,7 +926,8 @@ mostly fixed per frame and does not shrink with the width:
 The owner ran WARENA on 5150 #1's CGA (2026-11-12):
 
 - **40 columns:** "looks fine, as the default for CGA". It is now first in
-  the Game menu.
+  the Game menu. *(Since: no Game menu; 40 columns is the default on an
+  8088, in the setup's Columns drop-down.)*
 - **The rate in play** — moving the camera, three dummies, shooting — was
   **10.4–11.7 fps**: "still too low to be playable".
 - **The sparse level:** makes the room "a lot harder to read" and "doesn't
@@ -907,7 +952,8 @@ The owner ran WARENA on 5150 #1's CGA (2026-11-12):
 play.** It should be re-taken.
 
 **A second, sparser ARENA.** The menu now offers "Open arena": the same
-room, only the four pillars, beside the full one. The question it answers is
+room, only the four pillars, beside the full one. *(Since: both are on the
+setup's Arena list, as "open" and "pillars".)* The question it answers is
 how much of a frame is the scene's own complexity. Arenas are host-built
 (`arenas()`), copied into working tables at launch (`wa_loadarena`); each
 tree is walked where it was assembled.
@@ -958,7 +1004,9 @@ at 40 columns.
 | **H: held far edges.** An edge keeps last frame's half-row until the true position is a quarter half-row past the boundary, per column. Against cause 3's flicker on slow turns | `EDGE`; `SPANLOOP` is assembled eight ways now | 20.1 -> 19.3 fps |
 | **G: a floor grid**, a dark dot every 2 m within ~6 m, behind walls and under figures | one divide and three multiplies a dot | 20.1 -> 15.9 fps |
 
-Each toggle shows at the HUD's tail: view (9/7/6), H, F/S, G. Rejected: a
+*(Since 2026-11-15 the F, H and G keys are gone: the view is 75 degrees,
+H was dropped (WIREARENA-HEIGHTS-PLAN 9.11) and the grid is the High and
+Very High levels'.)* Each toggle shows at the HUD's tail: view (9/7/6), H, F/S, G. Rejected: a
 true-distance (cylindrical) projection — it bends straight walls and is
 slower.
 
@@ -1045,7 +1093,9 @@ look. With the fix, at 75 degrees, 6 of 30 poses have one such column.
   is narrow.
 - 60 has a jump bug: the screen squashes at the top of a jump. This is very
   likely `eye x kyq` passing 16 bits at 60 degrees with the eye raised.
-  Deferred until stairs and platforms make jumps matter.
+  Deferred until stairs and platforms make jumps matter. *(Fixed by
+  WIREARENA-HEIGHTS-PLAN 1.6; and since 2026-11-15 the view is fixed at 75
+  degrees.)*
 
 **How the pass was run.** One read-only reviewer was asked whether there is
 a better core technique. Three implementers worked in isolated worktrees —
@@ -1287,7 +1337,8 @@ for everything else, with ~6.6 KB to spare.
    five straight limbs below `fv8` 20 and rejected it: mid-range figures lose
    the legs and arm that make them read as men.
 3. **A kernel slot returning the key-state map** would save ~0.4 ms a frame.
-   It is an SDK/ABI change.
+   It is an SDK/ABI change. *(Since built: `OSAPI_KEY_MAP`, which the game
+   calls once a frame.)*
 
 **Next, by the agents' estimates:**
 
@@ -1444,7 +1495,8 @@ running"), fixed there before the merge.
 
 - The geometry pass makes the level's choices only when the level changes;
   the columns' `wa_collook` hangs off that, and reads the sparse key too, so
-  the sparse key became a second change key (`wa_kspa`).
+  the sparse key became a second change key (`wa_kspa`). *(Both gone since
+  2026-11-15: WIREARENA-NET-PLAN 9.10.)*
 - The columns' steep way reads a span's ends back off the face's vertices
   (`wa_fv`); a face with an end at the screen's edge keeps it in a scratch
   vertex, so `wa_face` now leaves the ends the span HAS in `wa_fv`.
@@ -1488,12 +1540,15 @@ heights view A (304,478 clk) the low boxes are still about a third.
 | a floor-eye PVS in which low boxes occlude | "data in the map that tells us ahead of time what you can't see? That is a great optimization" | **built**: the PVS's low pass |
 | FARTOP at Medium | no: "most speed, least recognizable geometry" | stays at **Very Low alone** |
 
-**The meter on F10.** Row 24 shows nothing as shipped. A frame sums nothing
+**The meter on F10.** Row 24 shows nothing as shipped *(since 2026-11-15
+it shows the weapons and the last kill while the meter is off, and every
+number replaces them: WIREARENA-NET-PLAN 9.6)*. A frame sums nothing
 and reads the clock once, for the sim. F10 cycles: the frame rate alone
 (`FPS nnn.n`), every number (the row as it was: fps, frame, render and
 present ms, video writes, and the view, level, sparse and grid marks; three
 clock reads a frame), off. The B and P benches turn every number on
-themselves, because their result is that row. `make wirearenadisk
+themselves, because their result is that row. *(Since 2026-11-15 the
+sparse mark is gone and the benches are a `WABENCH=1` build's.)* `make wirearenadisk
 WAMETER=1|2` builds a game that starts with it on (a stamped knob, for a
 benchmark build). `tests/waweapons.py` checks the cycle from off.
 
@@ -1505,7 +1560,8 @@ and heights −0.6%; Very Low −0.3% and −0.2% (its room has no tops
 already). Medium and up are identical. A long shallow wall line loses its
 single step: 383 cells differ in 22 of 60 Low poses on the full arena.
 `WR_ABI` is 7. Very Low's `wa_look` is now 0xFF, so the level's change key
-is a word with the sparse key, and "none" is 0xFF in that half.
+is a word with the sparse key, and "none" is 0xFF in that half. *(The
+sparse key is gone since `WR_ABI` 13: WIREARENA-NET-PLAN 9.10.)*
 
 **Roaming bots** look every other turn, 16 ticks apart; engaged, hunting
 and fetching bots look every eighth tick as before. A sight walk and a
@@ -1564,8 +1620,228 @@ the line is now the platform's own. 0 divide faults.
 **Checked:** the twelve WireArena suite rows on the final build (below);
 `waweapons` goes red with the level table's bit or F10's cycle changed.
 
-**Still open:** the link's cable read (above); the hints of 16.9's agents
+**Still open** (carried to 17.3)**:** the link's cable read (above); the hints of 16.9's agents
 that were interface changes between areas and not taken (a byte-wide
 `wa_fbuf`, `wa_face` handing its columns to the span code in registers, a
 "clip raised" flag for the tall spans on heights).
 
+## 17. Rulings, work in progress, and what is open (2026-11-15)
+
+The plans that built WireArena were swept on 2026-11-15 and filed under
+`docs/plans/completed/` (17.5). Everything they still had open is here, with
+a pointer to where it came from, after the owner's rulings below.
+
+### 17.1 The owner's rulings (2026-11-15)
+
+- **Settings surviving a restart: not wanted.** A player should not reopen
+  into the last match's settings, and saving costs time. The setup's
+  settings, the nick and the typed address are in-session only
+  (WIREARENA-NET-PLAN 2 and N1, annotated there).
+- **Joining a match in progress** (NET-PLAN N6) **and evicting a bot** for a
+  joiner: deferred until a hosted server browser exists.
+- **Two players on one system: dropped** from every plan. It would need a
+  286 or better, which is unlikely to carry a Hercules card, and the game
+  plays best on CGA anyway.
+- **Jump pads and teleporters: not in this release**, since no arena is
+  built around them. Possibly the next release, or a single-player campaign
+  reusing the engine, where teleporting between areas makes levels longer
+  with no work on the old areas.
+- **A double or quad damage power-up:** maybe the next round (untuned).
+- **Closed, not parked:**
+  - **footsteps**: tried and removed. They do not work on a PC speaker,
+    there is no directional sound, and too much noise is just noise;
+  - **the other players' held weapons drawn on their figures**: tried in an
+    early prototype and thrown away - seen only up close, and it costs
+    performance (WIREARENA-LINK-PLAN 6's "Its weapon is not drawn" stays
+    so);
+  - **a hit marker**: not needed - the struck figure already flashes red.
+- **kern_mega** is another session's now: its linked match, SERIAL.DRV's
+  verbs run there and its soak rows are that session's (17.3 lists them
+  for the hand-over).
+- **The field run on the 5150** is the owner's, at home, after the arena
+  work (17.3).
+
+### 17.2 The release round (2026-11-15)
+
+Built, on the owner's list (`apps/wirearena/wirearena.asm` unless named):
+
+- [x] **Spawn protection** (`WA_PROTT`, 60 ticks): for 2 s after a spawn
+  or a respawn - or to its first shot - nothing hurts the figure. The
+  player's (`wa_pprot`) is judged in `wa_phurt`, which a linked player's
+  damage reaches on its own machine, so it holds linked too; its heart is
+  cyan while it lasts. Each bot's (`wa_bprot`) in `wa_hurt`. The link
+  rows clear it on a player they set up to be shot.
+- [x] **The score against the goal** on the HUD row, five cells left of
+  the weapon digits: `12/20`, or the score alone with no Win at;
+  free-for-all our kills, white; a team mode our team's in its colour
+  (`wa_hudsc`, written when it changed).
+- [x] **Pause**: P, offline only - the main loop owes no ticks, the mouse
+  and the trigger are drained, PAUSED over the view. (In a `WABENCH=1`
+  build P is the play bench.)
+- [x] **Mouse sensitivity**: `[` and `]`, nine levels about the factors the
+  game shipped with (yaw 96 a count, pitch 1), the session's (persistence
+  declined, 17.1); "Mouse sensitivity N" on the HUD's message.
+- [x] **Q and E**: the weapon before and after, of those had and loaded
+  (`wa_wcycle`, through `wa_wsel`'s own test).
+- [x] **Esc in a linked match asks**: an outlined box, its frame white and
+  the question red - "Leave the match? Y/N" - Y leaves, N or Esc stays;
+  nothing else typed is taken while it is up. Offline Esc leaves at once.
+  `walink` and `walink4` press Y after their Esc.
+- [x] **The hit's direction, a PROTOTYPE for the owner to try**: hurt by a
+  figure that is OFF the screen (outside the view's 37.5 degrees either
+  side), a red arrow left or right of the crosshair, or under it from
+  behind, for 20 ticks (`wa_hitdir`, off `wa_bear`). In view: nothing.
+- The About card gains "Q/E: weapon. [/]: mouse. P: pause." (13 lines).
+
+Checked on a MartyPC 5150 CGA: the protection's countdown and heart,
+`0/20` on row 24, E E E Q Q stepping 1 2 3 2 1, `]` and `[`, P stopping
+the ticks (0 a second, 31 again after), the box drawn and N and Y, and all
+three arrows - the player turned to keep the nearest bot behind: 52 hits,
+each cue seen.
+
+- [x] **WireArena on the shipped disks** (the Makefile's `WA_SHIP`):
+  - at 360KB, `games2-360.img`, the second games disk (SPEC.md 24.6), the
+    package at its root, 71 of 354 clusters. It would have fitted
+    `games360.img` with one cluster spare, and a game disk at its last
+    cluster cannot save a high score;
+  - `GAMES/` on the 1.44MB and 1.2MB apps disks (147KB and 152KB free
+    before it) and on `more720.img` (126KB; SPEC.md 24.7). `apps720.img`,
+    with 25KB free, leaves it off;
+  - the live media through `$(ALLAPPSARGS)`;
+  - off `apps/RETIRED.txt`'s instruments;
+  - the gates that walk the shipped images (`t_image`, `t_diskverify`,
+    `t_catdisk`, `t_retired`, `t_noovl`, `t_stik`, `abicompat`) and the
+    release zip (`360K/GAMES2.IMG`) know the new disk;
+  - kern_mega's apps disks are the kern_mega session's to place. Another session builds
+the Ziggurat and the Pit
+([WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md)).
+
+### 17.3 Open, after the rulings
+
+**The game and its contract**
+
+- **WireArena has no SPEC.md section.** Its contract is these plans,
+  most now in `completed/`; a section of its own (the frame block, the
+  arena part, the link's frames, the setup) is owed before or at the
+  release. (CLAUDE.md, *Building an app or game in waves*, step 3.)
+- **Keyboard turn acceleration**: the arrows turn at one fixed rate. The
+  owner asked for it (AI-PLAN 1, "Adjust it"); mouse sensitivity (17.2) is
+  the other half. ([AI-PLAN](completed/WIREARENA-AI-PLAN.md) 1, 1.1)
+- **The heights plan's interpretations** of the owner's placements (the
+  lift platform as the tower's top, the back tunnel) were never confirmed.
+  ([WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) 3.4)
+- **The detail levels**, for the owner to re-review from the videos;
+  moving an option is one line of `wa_levtab`.
+  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.3 item 6)
+- **The room corners' views** were to be named to the owner beside the
+  tower's; probably moot since performance pass 6, to close or drop.
+  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.1, 9.3 item 3)
+- **The divide-fault panel** in the shipped kernels: the owner's call, and
+  the kernel's rather than WireArena's.
+  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.3 item 5, 7.1.2)
+
+**The link**
+
+- **The cable read skipped on the frame after an empty one**: "keep it on
+  the list, but not yet". (16.10)
+- **WireFleet onto `apps/os88cable.inc`**, so the copy does not stay two.
+  ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) L3.1)
+- **The 86Box XT pair** at 2400 baud, for the byte loss QEMU cannot show:
+  `tools/wireball-pair.py --game wirearena` exists, no result is recorded.
+  ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) L3.2)
+- **What the card costs on an 8088** (raw and UDP), unmeasured: MartyPC has
+  no NIC, so `vm/xt-wire` or the iron.
+  ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) 12.5,
+  [NET-PLAN](completed/WIREARENA-NET-PLAN.md) 8)
+
+**Rows not yet written**
+
+- capture the flag with four players on UDP
+  ([CTF-PLAN](completed/WIREARENA-CTF-PLAN.md) 11.3);
+- free-for-all's and team deathmatch's linked wins
+  ([MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) 9, M4);
+- the setup's buttons in `tests/btnall.py`
+  ([NET-PLAN](completed/WIREARENA-NET-PLAN.md) 9.1);
+- the ramp walks of HEIGHTS-PLAN 9.7.3, still scratch scripts
+  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.12);
+- a launch row, a refusal row (too little memory) and a move row
+  (`tests/pkgmove.py`'s pattern) for the parts
+  ([PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 4.2);
+- `tools/wacheck.py`'s host reference still leaves lifts out
+  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.12).
+
+**For the kern_mega session** (17.1): a linked match on kern_mega and
+SERIAL.DRV's verbs run there ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md)
+L3.3, 11.2); kern_mega soak rows of WireArena's own
+([AI-PLAN](completed/WIREARENA-AI-PLAN.md) 1, 1.1;
+[PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 4.2's kern_mega row); the
+umbrella's Wave 6 "kern_mega rows" (15).
+
+**The owner's, after the arena work** (17.1): the field run on 5150 #1, the
+CGA questions and the PERFORMANCE.md set that follows from it (15, Wave 7).
+
+**Renderer levers, measured or estimated and not taken** (internal; each
+under a few percent):
+
+- 16.9's interface hints between areas: a byte-wide `wa_fbuf`, `wa_face`
+  handing its columns over in registers, a "clip raised" flag (16.10);
+- the frame block's version 2, ~0.25%; the hot keyframes into the pose
+  part for 4 KB at ~1% of render; a smaller `wa_rcp`
+  ([PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 8.2, 8.4, 8.6);
+- a low box whose top is above the eye drawn as FACES - asked for, and 7
+  built the shut test instead ([HEDGES-PLAN](completed/WIREARENA-HEDGES-PLAN.md)
+  4.1, 7);
+- a pickup's single occlusion verdict, the overlay's cost, the PVS margin
+  by the annex ([WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) 4);
+- posts, a culled pass, shut runs in `FLATPASS`; merged edges; a 64-unit
+  PVS ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.7.8, 9.8).
+
+### 17.4 After 1.0: ideas
+
+None is promised; each is where it was proposed.
+
+- **Joining a match in progress** and **evicting a bot** for a joiner, once
+  a hosted browser exists (17.1; [NET-PLAN](completed/WIREARENA-NET-PLAN.md)
+  9.4 has the estimate, ~1 KB).
+- **A central server browser** on os8088.com (NET-PLAN 1).
+- **Host migration**: today the host leaving ends the match (NET-PLAN 5).
+- **More than four participants**, "a 286+ thing later" (AI-PLAN 7.1).
+- **Jump pads and teleporters**, the next release or a single-player
+  campaign (17.1; AI-PLAN 1, 13.6).
+- **A double or quad damage power-up** (17.1).
+- **Last stand**: waves of bots, solo - the owner's "yes to all" modes
+  (AI-PLAN 1, 1.1; CTF-PLAN 1; 13.5). **One-flag capture** (13.5).
+- **A match time limit** beside Win at's score (AI-PLAN 5).
+- **Replay, kill-cam and demo files** off the fixed-step sim (AI-PLAN 1;
+  13.2).
+- **A radar strip** in the HUD row, a prototype first; the Tab minimap is a
+  plan of the arena, not a radar (AI-PLAN 1; 13.7).
+- **More sounds** (a jump, a pickup, a death; footsteps are closed, 17.1),
+  and FM effects on a Sound Blaster or AdLib (AI-PLAN 1.1; 10).
+- **More animations**: strafe, jump and land, shoot, a flinch from behind,
+  a fall that follows the shot (5).
+- **More weapons**: plasma, a slow dodgeable bolt (6); proximity mines
+  (WEAPONS-PLAN 5); armour (6).
+- **An os8088-to-os8088 parallel cable**, the one link 5150 #1 can use
+  without giving up its mouse (8.4).
+- **Larger, multi-area levels** with an area-to-area visibility cut
+  (HEIGHTS-PLAN 7.1, 9.8 item 6), and a door on the heights arena's back
+  room for feel (HEIGHTS-PLAN 9.7.8).
+- **Page flipping on a 286**, only if it makes the game faster
+  (PARTS-PLAN 6, Q4).
+
+### 17.5 Where the plans went
+
+| plan | what it built | now |
+|---|---|---|
+| [WIREARENA-PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) | the renderer part, the pose part, an arena a lazy part | completed |
+| [WIREARENA-HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) | stairs, platforms, lifts, the heights arena, the PVS, the detail levels | completed |
+| [WIREARENA-WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) | six weapons, pickups, weapon spawns, the deaths | completed |
+| [WIREARENA-AI-PLAN](completed/WIREARENA-AI-PLAN.md) | bots: routes, sight, shooting, death and respawn, Tab's board | completed |
+| [WIREARENA-LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) | two machines over a cable (protocol v1), then raw Ethernet | completed |
+| [WIREARENA-NET-PLAN](completed/WIREARENA-NET-PLAN.md) | UDP, up to four, the match setup window, the nick, the minimap | completed |
+| [WIREARENA-ARENAS-PLAN](completed/WIREARENA-ARENAS-PLAN.md) | the Twin (the Maze, since retired), floor lines, several lifts | completed |
+| [WIREARENA-HEDGES-PLAN](completed/WIREARENA-HEDGES-PLAN.md) | the hedge, 63 boxes, a box standing on a box | completed |
+| [WIREARENA-CTF-PLAN](completed/WIREARENA-CTF-PLAN.md) | teams, side spawns, capture the flag | completed |
+| [WIREARENA-MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) | Win at, team deathmatch, king of the hill, the rotation | completed |
+| [WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md) | Crossing built; the Ziggurat and the Pit | **in progress** |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena's weapons and pickups (docs/plans/WIREARENA-WEAPONS-PLAN.md).
+"""WireArena's weapons and pickups (docs/plans/completed/WIREARENA-WEAPONS-PLAN.md).
 
 One boot into the Heights arena at 40 columns, then each piece checked off
 the game's own variables (its symbols from wirearena.asm assembled with a

@@ -82,4 +82,3 @@ local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
                        # stories (fetched the same way) do ride the live media.
                        # `make lemmings` / `make lemmingsdisk` build it standalone,
                        # `make xt-lemmings` / `make 386-lemmings` boot it in 86Box.
-instrument wirearena  # Wave 0 of docs/plans/MULTIPLAYER-FPS-PLAN.md: the text-mode arena renderer SPIKE, with its frame meter and B bench - not yet a game. Rides its own on-demand disk (make wirearenadisk) until it is one; then it ships and this line goes

@@ -60296,8 +60296,8 @@ release carries the 128 KB machine at 360 KB and 720 KB. `osrom-small`
 ### 24.6 THE CATEGORY DISKS — a floppy per subject, at 360KB alone
 
 `build/office360.img`, `build/network360.img`, `build/games360.img`,
-`build/emu360.img` and `build/util360.img` are five data floppies built by
-`all` beside the system, apps and media disks.
+`build/games2-360.img`, `build/emu360.img` and `build/util360.img` are six
+data floppies built by `all` beside the system, apps and media disks.
 Each carries **one category of application at the root of the volume**, the
 documents those applications open in `MEDIA/`, and a pre-made
 `SYSTEM/APPDATA/`.
@@ -60324,6 +60324,7 @@ everything on it and gain nothing from three.
 | `office360` | ArtfulType, Calculator, Chart, Font Viewer, Paint, PiXEL, Sheet, TeXPad, Word | `PAPER.TEX`, `GUIDE.TEX`, `SALES.SLK`, `WRITING.MD`, `WELCOME.DOC`, `SAMPLE.BMP` (no `LAKE.JPG` since 2026-10-22, §24.6.1) |
 | `network360` | Browser, FTPD, Telnet, The Wire (+ `SYSTEM/DOS/OS88NET.COM`) | `BROWSER.HTM` |
 | `games360` | every package in the apps disk's `GAMES/` | — |
+| `games2-360` | WireArena (`WARENA.O88`: 67,537 bytes, 66 clusters - `games360` had 67 free, and a game disk at its last cluster cannot save a high score); the next game too big for `games360` (2026-11-15, the owner's) | — |
 | `emu360` | RealDMG | `GBDEMO.GB` |
 | `util360` | System Check, Redline, Task Manager (+ `SYSTEM/DOS/OS88NET.COM`, `OS88CZ.COM`) (§24.3.1.7) | — |
 
@@ -60607,7 +60608,7 @@ contents are DERIVED from those omissions rather than listed again:
 | Folder | Carries |
 |---|---|
 | `APPS/` | `PIXEL.O88`; `MIDIRACK.O88`, a second copy |
-| `GAMES/` | `REALDMG.O88`, `DRMARCO.O88` |
+| `GAMES/` | `REALDMG.O88`, `DRMARCO.O88`, `WARENA.O88` (2026-11-15: `apps720.img` had 25 KB free) |
 | `MEDIA/` | `GBDEMO.GB` (packed), `OS8088.V88`, and in `MIDI/` the eight songs `apps720.img` does not carry |
 | `PICTURES/` | PiXEL's 360 KB gallery selection, five pictures (§106.7) |
 | `SYSTEM/APPDATA/` | empty, §19.9 |
@@ -135569,7 +135570,7 @@ DNS). What these verbs add is a **package's port** and a queue for it.
 - **The parallel cable refuses all three** (`NET.DRV`): `nwire.inc` has no
   datagram, as it has no raw frame (72.22.3).
 
-WireArena is the first user (docs/plans/WIREARENA-NET-PLAN.md 3).
+WireArena is the first user (docs/plans/completed/WIREARENA-NET-PLAN.md 3).
 
 ## 73. The C toolchain — compiling C into an `.o88` package
 
@@ -231151,7 +231152,7 @@ Verbs 4 and 5 move a run of bytes in one call. A Write or Read is one
 call per byte, and on a 4.77 MHz 8088 that call is ~2,700 cycles through
 the X cell, the module's banking and `srl_pump`. A game sending a 24-byte
 snapshot six times a second and receiving as many spent ~110,000 cycles a
-frame there (docs/plans/WIREARENA-LINK-PLAN.md 11.2), about a quarter of
+frame there (docs/plans/completed/WIREARENA-LINK-PLAN.md 11.2), about a quarter of
 the frame. A block verb pays that once a run and ~40 cycles a byte.
 
 - A run is stored, then its index is published once: the producer index

@@ -1,5 +1,5 @@
 ; WireArena's OUTLINE path: boxes lower than the arena's tallest
-; (docs/plans/WIREARENA-HEIGHTS-PLAN.md 1.3, 7.3.3, 7.3.4). Included by the
+; (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 1.3, 7.3.3, 7.3.4). Included by the
 ; renderer part after wrender.inc, whose vertex cache, span table, column
 ; state and plotting it shares.
 ;

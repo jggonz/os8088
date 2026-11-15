@@ -105,7 +105,7 @@ SYS_IMG = "os8088-360.img"
 # where the parted packages are - Sheet, Word, Pixel, RealDMG, WIN16, ...
 LAUNCH_DISKS = (("apps360.img", ("APPS", "GAMES")),
                 ("office360.img", ("",)), ("network360.img", ("",)),
-                ("games360.img", ("",)), ("util360.img", ("",)),
+                ("games360.img", ("",)), ("games2-360.img", ("",)), ("util360.img", ("",)),
                 ("emu360.img", ("",)), ("media360.img", ("",)))
 
 RESULTS = []

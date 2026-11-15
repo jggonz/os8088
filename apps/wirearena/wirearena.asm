@@ -1,15 +1,17 @@
-; WireArena - Wave 0 of docs/plans/MULTIPLAYER-FPS-PLAN.md: the renderer
-; spike. A text-mode first-person arena: thin dim wall edges on black, solid
-; bright stick figures, presented as changed cells only. It exists to answer
-; the plan's first question on the glass - 80 or 40 columns - and to measure
-; what a frame costs, so the HUD carries the meter.
-;
-; Not a game yet: three dummies run patrols, the pistol knocks them down
-; (flinch, death, respawn), and there is no network and no opponent AI.
-; Controls: mouse look (OSAPI_MOUSE_REL, SPEC.md 9.14), W/A/S/D move,
-; arrows turn and pitch, Space jumps, left button or Ctrl fires, Tab swaps
-; 80 and 40 columns, V waits for vertical retrace before presenting, B runs
-; the bench (64 frames, a fixed spin - section 16 of the plan), Esc leaves.
+; WireArena - a text-mode first-person ARENA SHOOTER (docs/plans/
+; MULTIPLAYER-FPS-PLAN.md; what was built and why: docs/plans/completed/
+; WIREARENA-*.md). Thin wall edges on black, solid stick figures, presented
+; as changed cells only; 40 or 80 columns on CGA, Hercules, MDA or VGA.
+; Six weapons, health and a shield; up to three bots at three skills; free-
+; for-all, capture the flag, team deathmatch and king of the hill on the
+; arenas of arenagen; two to four players over a serial cable, a local
+; network or the internet - set up in the opening window (wasetup.inc).
+; Keys: mouse look (OSAPI_MOUSE_REL, SPEC.md 9.14), W/A/S/D move, arrows
+; turn and pitch, Space jumps, left button or Ctrl fires, R reloads, 1-6 and
+; Q/E the weapon, Tab the board and the minimap, - and + 40 or 80 columns,
+; F1-F5 the detail level, F10 the meter, V vertical retrace, [ and ] the
+; mouse, P pause (offline), Esc leaves (linked: asked). B and P as benches
+; are a test build's (WABENCH=1).
 %include "os88api.inc"
     OS88_HEADER 'WARENA', wa_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 %define OP_WANT_CSEG            ; the renderer part is far-called through its
@@ -137,6 +139,11 @@ wa_main:
     mov ax, (WA_TICK*4) & 0xFFFF
     mov dx, (WA_TICK*4) >> 16
 .owe:
+    cmp byte [wa_paused], 0     ; (PAUSED: nothing owed, nothing kept)
+    je .owe2
+    xor ax, ax
+    cwd
+.owe2:
     xor cx, cx                  ; CX = the ticks owed (four at most): the
 .cnt:                           ; debt's whole ticks, counted in registers -
     sub ax, WA_TICK             ; the rest of it is the next frame's
@@ -338,6 +345,12 @@ wa_reset:
     mov [wa_deaths+2], ax
     mov [wa_pdead], al
     mov [wa_hmsl], ax           ; (no message from the last match)
+    mov [wa_paused], al         ; (nor a pause, a question, a cue)
+    mov [wa_ask], al
+    mov [wa_hdirt], al
+    mov [wa_bprot], ax
+    mov [wa_bprot+2], al
+    mov byte [wa_pprot], WA_PROTT
     mov [wa_hmsgt], al
     mov byte [wa_hmsgd], 1
     mov bx, wa_bname
@@ -464,6 +477,13 @@ wa_brespawn:
     mov si, ax
     mov al, [si+4]
     pop si
+    push ax                     ; (SPAWN PROTECTION: WA_PROTT ticks, or to
+    push bx                     ; its first shot)
+    call wa_bidx
+    mov bx, ax
+    mov byte [wa_bprot+bx], WA_PROTT
+    pop bx
+    pop ax
     jmp wa_spawne
 
 wa_runanim:
@@ -483,8 +503,27 @@ wa_frame_input:
     xor ah, ah
     int 16h
     mov byte [wa_hold], 0       ; any typed key frees the meter
+    cmp byte [wa_ask], 0        ; LEAVE THE MATCH? asked: Y leaves, N or
+    je .noask                   ; Esc stays, nothing else is taken
+    cmp ah, 0x15                ; (Y)
+    je .quit
+    cmp ah, 0x31                ; (N)
+    je .stay
+    cmp ah, KSC_ESC
+    jne .drain
+.stay:
+    mov byte [wa_ask], 0
+    mov byte [wa_ovd], 1
+    jmp .drain
+.noask:
     cmp ah, KSC_ESC
     jne .tab
+    cmp byte [wa_lkon], 0       ; (a linked match: asked first - one key
+    je .quit                    ; would end your part in it)
+    mov byte [wa_ask], 1
+    mov byte [wa_ovd], 1
+    jmp .drain
+.quit:
     mov byte [wa_quit], 1
     jmp .drain
 .tab:
@@ -531,8 +570,36 @@ wa_frame_input:
 %endif
 .bk:
     cmp ah, 0x13                ; R: reload, at any time (WEAPONS-PLAN 6)
-    jne .bn
+    jne .bq
     call wa_reload
+    jmp .drain
+.bq:
+    mov al, -1                  ; Q, E: the weapon before, the one after
+    cmp ah, 0x10                ; (one the player has and can fire)
+    je .cyc
+    mov al, 1
+    cmp ah, 0x12
+    jne .bpa
+.cyc:
+    call wa_wcycle
+    jmp .drain
+.bpa:
+    cmp ah, 0x19                ; P: PAUSE - offline only (a linked match
+    jne .bms                    ; runs on the other machines)
+    cmp byte [wa_lkon], 0
+    jne .drain
+    xor byte [wa_paused], 1
+    mov byte [wa_ovd], 1
+    jmp .drain
+.bms:
+    mov al, -1                  ; [ and ]: the mouse's sensitivity, a
+    cmp ah, 0x1A                ; level down or up (in the session)
+    je .ms
+    mov al, 1
+    cmp ah, 0x1B
+    jne .bn
+.ms:
+    call wa_msset
     jmp .drain
 .bn:
     cmp ah, 0x44                ; F10: THE METER - nothing, the frame rate,
@@ -557,8 +624,8 @@ wa_frame_input:
     call wa_rsync
     jmp .drain
 .bw:
-    mov al, ah                  ; 1..3: a weapon (WEAPONS-PLAN 2.1; 4 and 5
-    sub al, 0x02                ; are the next ones')
+    mov al, ah                  ; 1..6: a weapon (WEAPONS-PLAN 2.1)
+    sub al, 0x02
     cmp al, WA_NWPN
     jae .drain
     call wa_wsel
@@ -573,15 +640,28 @@ wa_frame_input:
 .live:
     call OSAPI_MOUSE_REL
     jc .nomouse                 ; kern_small refuses: keys only
+    cmp byte [wa_paused], 0     ; (paused: the hand's motion drained, and
+    jne .held                   ; nothing looks or fires)
     mov bl, al                  ; the buttons
-    sub [wa_pitch], dx          ; pitch: down is +dy, the horizon rises
+    push cx
+    mov al, [wa_msens]          ; the sensitivity's level (-4..4, 0 the
+    cbw                         ; first one's): its factors
+    shl ax, 1
+    mov si, ax
+    mov ax, dx                  ; pitch: down is +dy, the horizon rises -
+    imul word [wa_mspit+8+si]   ; x the level's / 64
+    mov cl, 6
+    sar ax, cl
+    sub [wa_pitch], ax
+    pop cx
     jcxz .clamp                 ; (the hand still: no turn)
     mov ax, cx                  ; yaw: right is clockwise, angle falls
-    mov cx, 96
-    imul cx
+    imul word [wa_msyaw+8+si]
     sub [wa_ang], ax
     jmp .clamp
 .nomouse:
+    cmp byte [wa_paused], 0
+    jne .held
     xor bl, bl
 .clamp:                         ; 112 quarter half-rows up, 290 down: 33
     mov ax, [wa_pitch]          ; and 59 degrees at 75, the same reach
@@ -716,6 +796,29 @@ wa_tick:
     mov word [wa_hmsl], 0
     mov byte [wa_hmsgd], 1
 .c_msg:
+    cmp byte [wa_pprot], 0      ; spawn protection running out (the heart
+    je .c_pp                    ; back to red: the overlay)
+    dec byte [wa_pprot]
+    jnz .c_pp
+    mov byte [wa_ovd], 1
+.c_pp:
+    push bx                     ; (the bots' too)
+    mov bx, wa_bprot
+.c_bp:
+    cmp byte [bx], 0
+    je .c_bn
+    dec byte [bx]
+.c_bn:
+    inc bx
+    cmp bx, wa_bprot + WA_NFIG
+    jb .c_bp
+    pop bx
+    cmp byte [wa_hdirt], 0      ; the hit's direction going
+    je .c_hd
+    dec byte [wa_hdirt]
+    jnz .c_hd
+    mov byte [wa_ovd], 1
+.c_hd:
     cmp byte [wa_lkon], 0
     je .c_lk
     call wa_lktick              ; (a linked match: the cable, LINK-PLAN 4.2)
@@ -972,7 +1075,7 @@ wa_collide:
     ret
 
 ; wa_flcross - CF = 1 when the player's step from (wa_ox, wa_oy) to (wa_px,
-; wa_py) crosses one of the arena's FLOOR LINES (docs/plans/WIREARENA-
+; wa_py) crosses one of the arena's FLOOR LINES (docs/plans/completed/WIREARENA-
 ; ARENAS-PLAN.md 4.5): a line the feet stop at, as the twin's walk's edge.
 ; A line is near only when the new point is within 16 units of its box (a
 ; step is under 11); then the step's ends lie either side of the line, and
@@ -1654,7 +1757,7 @@ wa_lset0:
 .out:
     ret
 
-; --- the bots: seeing, facing, shooting (docs/plans/WIREARENA-AI-PLAN.md 4) -----
+; --- the bots: seeing, facing, shooting (docs/plans/completed/WIREARENA-AI-PLAN.md 4) -----
 ; Fast more than good (the owner): every fourth tick a bot looks along a
 ; 64-unit grid of the tall boxes to the player (wa_sight); seen, it ENGAGES -
 ; faces the player by a cross product's sign as it walks its edge, and after
@@ -2312,6 +2415,13 @@ wa_bwacc:  db 0,     15,     -10,     0,       0,      0
 wa_bwtone: dw 900,   220,    700,     300,     150,    2400
 
 wa_bshoot:
+    push ax                     ; (a shot ends its spawn's protection)
+    push bx
+    call wa_bidx
+    mov bx, ax
+    mov byte [wa_bprot+bx], 0
+    pop bx
+    pop ax
     inc word [wa_bshots]        ; (the bots' shots and hits: the score's,
     mov byte [di+F_FLASH], 0x86 ; and tests/wabots.py's) - its cue, five
     mov bl, [di+F_BWPN]         ; ticks, so a 10 fps frame at 80 columns
@@ -2715,7 +2825,7 @@ wa_btake:
     pop bx
     ret
 
-; --- routes (docs/plans/WIREARENA-AI-PLAN.md 3) --------------------------------
+; --- routes (docs/plans/completed/WIREARENA-AI-PLAN.md 3) --------------------------------
 ; The arena's route graph (tools/arenagen.py graph_block), copied whole into
 ; wa_gph by wa_loadarena: a byte of nodes, of edges, a figure's home edge
 ; each; then a node a WA_GNSZ (x, y, its four edges out, 0xFF none), an edge
@@ -3096,7 +3206,7 @@ wa_figtick:
     mov ax, dx
     ret
 
-; --- weapons (docs/plans/WIREARENA-WEAPONS-PLAN.md 2.2, 6) --------------------
+; --- weapons (docs/plans/completed/WIREARENA-WEAPONS-PLAN.md 2.2, 6) --------------------
 ; Six, keys 1..6: the pistol (hitscan), the shotgun (a hitscan CONE, its
 ; damage the figure's inverse depth), the chaingun (hitscan while the
 ; trigger is held), the grenade launcher (a lob that bounces, on a fuse),
@@ -3264,6 +3374,54 @@ wa_wsel:
 .out:
     ret
 
+; wa_wcycle - AL = -1 or +1 (Q, E): the weapon before or after the one
+; held, round, the first the player has and can fire (wa_wsel's test).
+; Clobbers AX, BX, CX, DX
+wa_wcycle:
+    mov dl, al
+    mov dh, [wa_wpn]
+    mov ch, WA_NWPN - 1
+.n:
+    add dh, dl
+    jns .lo
+    mov dh, WA_NWPN - 1
+.lo:
+    cmp dh, WA_NWPN
+    jb .t
+    xor dh, dh
+.t:
+    mov al, dh
+    push dx
+    push cx
+    call wa_wsel
+    pop cx
+    pop dx
+    cmp dh, [wa_wpn]
+    je .out                     ; (taken)
+    dec ch
+    jnz .n
+.out:
+    ret
+
+; wa_msset - AL = -1 or +1 ([, ]): the mouse's sensitivity a level down or
+; up, -4..4 about the first one (the factors the game shipped with), and
+; "Mouse sensitivity N" on the HUD's message (1..9). Clobbers AX, SI
+wa_msset:
+    add al, [wa_msens]
+    cmp al, -4
+    jl .out
+    cmp al, 4
+    jg .out
+    mov [wa_msens], al
+    add al, '5'
+    mov si, wa_hk_mouse
+    jmp wa_hudsay
+.out:
+    ret
+;           1   2   3   4   5   6    7    8    9   (5 the first: 96, 64)
+wa_msyaw:   dw 40, 52, 64, 80, 96, 116, 140, 168, 200 ; yaw x count
+wa_mspit:   dw 27, 35, 43, 53, 64, 77,  93,  112, 133 ; pitch x count / 64
+
 ; wa_wset - AL = a weapon, held now: any reload of the last is dropped, a
 ; short gap before its first shot, and one that is empty starts to reload
 wa_wset:
@@ -3384,6 +3542,7 @@ wa_reload:
 ; wa_fire - the trigger, pressed (one shot a press): the weapon held fires if
 ; it is loaded, not reloading and past its gap; an empty one reloads
 wa_fire:
+    mov byte [wa_pprot], 0      ; (a shot ends the spawn's protection)
     mov byte [wa_killer], 0     ; (the player's shots: the player's kills)
     cmp byte [wa_rld], 0
     jne .out
@@ -3685,6 +3844,14 @@ wa_hurt:
     mov byte [di+F_FLASH], 5
     jmp .flinch
 .here:
+    push ax                     ; SPAWN PROTECTION: a bot just back takes
+    push bx                     ; nothing
+    call wa_bidx
+    mov bx, ax
+    cmp byte [wa_bprot+bx], 0
+    pop bx
+    pop ax
+    jne .out
     call wa_bstruck             ; (AI-PLAN 8.6: it turns on whoever shot it)
     inc word [wa_hits]
     mov byte [di+F_FLASH], 5
@@ -3792,6 +3959,8 @@ wa_zapgo:
 ; there are other players): the shield first, then the health; at 0 they
 ; start again at the arena's start with the pistol alone. Clobbers AX, BX
 wa_phurt:
+    cmp byte [wa_pprot], 0      ; SPAWN PROTECTION: nothing hurts
+    jne wa_hurt.out
     cmp byte [wa_gmode], 0      ; A TEAM MODE: a teammate's splash hurts
     je .ff                      ; nothing (CTF-PLAN 2); our own still does
     cmp byte [wa_hurtby], 0
@@ -3805,6 +3974,7 @@ wa_phurt:
     jne .ff
     ret
 .ff:
+    call wa_hitdir              ; (the hit's direction: a prototype)
     xor ah, ah
     mov byte [wa_ovd], 1
     sub [wa_sh], ax
@@ -3844,11 +4014,74 @@ wa_phurt:
 .out:
     ret
 
+; wa_hitdir - the player hurt by [wa_hurtby] (a figure's code; 0 itself):
+; where it is, OFF the screen - beside the crosshair a ◄ (left) or ► (right),
+; or under it a ▼ (behind), for WA_HDIRT ticks. On the screen, nothing: the
+; one who shot is in view. A PROTOTYPE, the owner's to try. Keeps every
+; register
+WA_HDIRT    equ 20              ; two thirds of a second
+WA_HDFOV    equ 107             ; half the view, 1024ths (37.5 degrees)
+wa_hitdir:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, [wa_hurtby]
+    or al, al
+    jz .out
+    dec ax
+    mov ah, F_SIZE
+    mul ah
+    add ax, wa_figs
+    mov di, ax                  ; DI = who
+    push word [wa_tx]
+    push word [wa_ty]
+    mov ax, [wa_px]
+    mov [wa_tx], ax
+    mov ax, [wa_py]
+    mov [wa_ty], ax
+    call wa_bear                ; AX = its bearing to us...
+    pop word [wa_ty]
+    pop word [wa_tx]
+    add ax, 512                 ; ...ours to it, less where we face: 0
+    mov bx, [wa_ang]            ; ahead, 256 to the left
+    mov cl, 6
+    shr bx, cl
+    sub ax, bx
+    and ax, 1023
+    cmp ax, WA_HDFOV            ; (in view: no cue)
+    jbe .out
+    cmp ax, 1024 - WA_HDFOV
+    jae .out
+    mov cl, 1                   ; left
+    cmp ax, 384
+    jb .set
+    inc cx                      ; right
+    cmp ax, 640
+    ja .set
+    inc cx                      ; behind
+.set:
+    mov [wa_hdir], cl
+    mov byte [wa_hdirt], WA_HDIRT
+    mov byte [wa_ovd], 1
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; wa_ptick - the dead player's tick: the view sinks to the floor, the
 ; respawn timer counts (the HUD's second rebuilt), and at its end the player
 ; is back at the respawn point farthest from the nearest live bot, with the
 ; pistol alone and full health. Keeps all but AX, BX, CX, DX, SI
 WA_PDEADT   equ 90              ; 3 s
+WA_PROTT    equ 60              ; SPAWN PROTECTION: 2 s, or to the first
+                                ; shot - nothing hurts a figure just back
 WA_PFLOOR   equ 20              ; the eye on the floor
 wa_ptick:
     mov word [wa_kbits], 0      ; (no move, no jump)
@@ -3938,6 +4171,7 @@ wa_prespawn:
     mov [wa_pitch], ax
     mov word [wa_fpx], -1
     mov word [wa_eye], WA_EYE
+    mov byte [wa_pprot], WA_PROTT ; (SPAWN PROTECTION: to its first shot)
     ret
 
 ; --- rockets (WEAPONS-PLAN 2.2) -----------------------------------------------
@@ -4602,6 +4836,7 @@ wa_ovbuild:
     call wa_ovrsp
 .alive:
     call wa_lkmsg               ; (linked: WAITING, LINK LOST, LEFT)
+    call wa_ovextra             ; (pause, the leave question, the hit's side)
     call wa_ovctf               ; (CTF: the flag line, its messages)
     mov al, [wa_wpn]            ; THE WEAPON: its cells as they were made
     xor ah, ah                  ; the last time (wa_spc, wa_spg) while it is
@@ -4718,9 +4953,13 @@ wa_ovbuild:
     mov dx, WA_ROWS-1           ; row 23: the health
     xor bx, bx
     mov ax, 0x0C03              ; (a heart, red - and white on red while a
-    cmp byte [wa_phit], 0       ; hit is fresh: AI-PLAN 4.3)
-    je .heart
+    cmp byte [wa_phit], 0       ; hit is fresh: AI-PLAN 4.3; cyan while
+    je .hp                      ; the spawn's protection lasts)
     mov ah, 0x4F
+.hp:
+    cmp byte [wa_pprot], 0
+    je .heart
+    mov ah, 0x0B
 .heart:
     call wa_ovatt
     call wa_ovput
@@ -5211,6 +5450,108 @@ wa_ovrow:
     loop .r
 .full:
     ret
+
+; wa_ovextra - the overlay's rest (ES, DI: wa_ovput's): PAUSED; the leave
+; question in its outlined box; the hit's side beside the crosshair.
+; Clobbers AX, BX, CX, DX, SI
+wa_ovextra:
+    cmp byte [wa_paused], 0     ; PAUSED, over the middle
+    je .np
+    mov si, wa_pausetx
+    mov dx, 10
+    mov ah, 0x0F
+    call wa_ovtext
+.np:
+    cmp byte [wa_ask], 0        ; THE QUESTION (a linked match's Esc): a
+    je .na                      ; box, its frame white, the question red
+    mov dx, 9
+    mov si, wa_asktop
+    mov ah, 0x0F
+    call wa_ovtext
+    inc dx                      ; (its middle row in one pass: frame,
+    mov bx, [wa_w]              ; question, frame)
+    sub bx, WA_ASKW
+    shr bx, 1
+    mov ax, 0x0FB3
+    call wa_ovatt
+    call wa_ovput
+    mov si, wa_asktx
+    mov ah, 0x0C
+    cmp byte [wa_mono], 0
+    je .q
+    mov ah, 0x0F
+.q:
+    lodsb
+    or al, al
+    jz .qd
+    call wa_ovput
+    jmp .q
+.qd:
+    mov ax, 0x0FB3
+    call wa_ovatt
+    call wa_ovput
+    inc dx
+    mov si, wa_askbot
+    mov ah, 0x0F
+    call wa_ovtext
+.na:
+    cmp byte [wa_hdirt], 0      ; THE HIT'S SIDE
+    je .out
+    mov bx, [wa_w]
+    shr bx, 1                   ; BX = the crosshair's column, DX its row
+    mov dx, WA_ROWS / 2
+    mov al, 0x11                ; ◄
+    sub bx, 3
+    cmp byte [wa_hdir], 1
+    je .h
+    mov al, 0x10                ; ►
+    add bx, 6
+    cmp byte [wa_hdir], 2
+    je .h
+    sub bx, 3                   ; ▼, under it
+    add dx, 2
+    mov al, 0x1F
+.h:
+    mov ah, 0x0C
+    call wa_ovatt
+    call wa_ovput
+.out:
+    ret
+
+; wa_ovtext - SI = text (NUL), AH = its attribute: centred at row DX onto
+; the overlay. Clobbers AL, BX, CX, SI
+wa_ovtext:
+    call wa_ovatt
+    push si
+    xor cx, cx
+.l:
+    lodsb
+    or al, al
+    jz .ld
+    inc cx
+    jmp .l
+.ld:
+    pop si
+    mov bx, [wa_w]
+    sub bx, cx
+    shr bx, 1
+.c:
+    lodsb
+    or al, al
+    jz .out
+    call wa_ovput
+    jmp .c
+.out:
+    ret
+WA_ASKW     equ 24              ; the question's box, its frame included
+wa_pausetx: db 'PAUSED - P plays on', 0
+wa_asktop:  db 0xDA
+            times WA_ASKW - 2 db 0xC4
+            db 0xBF, 0
+wa_askbot:  db 0xC0
+            times WA_ASKW - 2 db 0xC4
+            db 0xD9, 0
+wa_asktx:   db ' Leave the match? Y/N ', 0 ; (WA_ASKW - 2 cells)
 
 ; wa_ovrsp - dead: "RESPAWN n" over the view's middle, n its seconds
 wa_ovrsp:
@@ -5842,7 +6183,8 @@ wa_mtron:
     je wa_mtrinit.out
     mov byte [wa_mtr], 2
 wa_mtrinit:
-    mov word [wa_hwsig], 0xFFFF ; (the row blanked: the HUD's own fields
+    mov word [wa_hscsig], 0xFFFF ; (the row blanked: the HUD's own fields
+    mov word [wa_hwsig], 0xFFFF
     mov byte [wa_hmsgd], 1      ; written again, wa_hudrow)
     xor ax, ax
     mov [wa_tfr], ax
@@ -5920,6 +6262,7 @@ wa_hudrow:
     mov [wa_hwsig], ax
     call wa_hudwpn
 .msg:
+    call wa_hudsc               ; (the score against the goal)
     cmp byte [wa_hmsgd], 0
     je .out
     mov byte [wa_hmsgd], 0
@@ -5940,6 +6283,80 @@ wa_hudrow:
     jb .c
 .out:
     ret
+
+; wa_hudsc - THE SCORE AGAINST THE GOAL, five cells left of the weapons:
+; "12/20" - or with no goal (Win at none) the score alone. Free-for-all
+; our kills, white; a team mode our team's score in its colour. Written
+; when one of them changed. Clobbers AX, BX, CX, DX, DI
+wa_hudsc:
+    mov al, [wa_kills]          ; AL = the score, AH = its colour
+    mov ah, 0x0F
+    cmp byte [wa_gmode], 0
+    je .g
+    mov bl, [wa_tm]
+    xor bh, bh
+    mov al, [wa_caps+bx]
+    mov ah, 0x0C
+    or bl, bl
+    jz .g
+    mov ah, 0x09
+.g:
+    cmp byte [wa_mono], 0
+    je .m
+    mov ah, 0x0F
+.m:
+    mov dl, [wa_ggoal]          ; DL = the goal
+    xor dh, dh
+    cmp ax, [wa_hscsig]
+    jne .draw
+    cmp dx, [wa_hscsig+2]
+    je .out
+.draw:
+    mov [wa_hscsig], ax
+    mov [wa_hscsig+2], dx
+    mov bl, ah                  ; BL = the colour
+    mov di, [wa_w]
+    sub di, WA_NWPN + 6
+    or dl, dl
+    jnz .goal
+    mov cx, 0x0720              ; (no goal: three blanks, then the score)
+    xchg ax, cx
+    call wa_putca
+    call wa_putca
+    call wa_putca
+    xchg ax, cx
+    jmp short .sc
+.goal:
+    push dx
+    call wa_put2                ; the score...
+    mov ax, 0x072F              ; ...a slash...
+    call wa_putca
+    pop ax                      ; ...the goal
+.sc:
+    call wa_put2
+.out:
+    ret
+; wa_put2 - AL = 0..99 (more: 99), BL = the attribute: two cells at HUD
+; column DI, the tens blank under 10. Clobbers AX
+wa_put2:
+    cmp al, 99
+    jbe .a
+    mov al, 99
+.a:
+    aam                         ; AH = tens, AL = units
+    push ax
+    mov al, ah
+    add al, '0'
+    or ah, ah
+    jnz .t
+    mov al, ' '
+.t:
+    mov ah, bl
+    call wa_putca
+    pop ax
+    add al, '0'
+    mov ah, bl
+    jmp wa_putca
 
 ; wa_hudwpn - the six weapons, at the row's last six columns. Clobbers AX,
 ; BX, CX, DI
@@ -6033,6 +6450,24 @@ wa_hudkill:
     pop bx
     pop ax
     ret
+; wa_hudsay - SI = a message (NUL), AL = a character after it: the HUD's
+; message for WA_HMSGT ticks, as a kill's is. Keeps every register but AX
+wa_hudsay:
+    push di
+    xor di, di
+    push ax
+    call wa_hudtext
+    pop ax
+    mov [wa_hmsg+di], al
+    mov byte [wa_hmsa+di], 0x0F
+    inc di
+    mov [wa_hmsl], di
+    mov byte [wa_hmsgt], WA_HMSGT
+    mov byte [wa_hmsgd], 1
+    pop di
+    ret
+wa_hk_mouse: db 'Mouse sensitivity ', 0
+
 wa_hudtext:                     ; SI = text (NUL), grey, at DI
     lodsb
     or al, al
@@ -6079,7 +6514,7 @@ wa_hudname:                     ; BL = a code: its name at DI, its trailing
     loop .c
     ret
 
-; --- the renderer part (docs/plans/WIREARENA-PARTS-PLAN.md section 7) --------
+; --- the renderer part (docs/plans/completed/WIREARENA-PARTS-PLAN.md section 7) --------
 ; The renderer is part 0 of this file, apps/wirearena/wrpart.asm: its own
 ; segment, its own data, entered by far call with DS = that data. The names
 ; this file always called it by - wa_render, wa_present, wa_geominit,
@@ -6177,10 +6612,10 @@ wa_rretv:   dw wa_rret
 
 ; wa_rsync - the CONFIG section into the renderer part (after a mode set, a
 ; field-of-view change). Keeps every register but the flags.
-; THE DETAIL LEVELS (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9.11): per level,
+; THE DETAIL LEVELS (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 9.11): per level,
 ; Very Low to Very High, the options it turns on - wa_look's LK_ bits, then
-; the floor grid (G) and the stepped treads (T),
-; which their keys still override until the next level is chosen, and the
+; the floor grid and the stepped treads (their G and T keys gone: NET-PLAN
+; 9.9), and the
 ; floor lines' DASHES (wa_dash, ARENAS-PLAN 4.5: 1 a shallow line's every
 ; other column, 2 a steep one's every other row too - the owner's, on the
 ; trial build: "actually look surprisingly fine"). Moving
@@ -6774,6 +7209,16 @@ WA_VAR wa_hmsgt,1                ;   written again, characters, attributes
 WA_VAR wa_hmsgd,1
 WA_VAR wa_hmsg,WA_HMSGN
 WA_VAR wa_hmsa,WA_HMSGN
+WA_VAR wa_msens,1                ; the mouse's sensitivity: -4..4 about the
+                                 ;   first one (the session's: [ and ])
+WA_VAR wa_paused,1               ; P: offline, the sim stands
+WA_VAR wa_ask,1                  ; Esc in a linked match: "Leave?" up
+WA_VAR wa_pprot,1                ; SPAWN PROTECTION: the player's ticks of
+WA_VAR wa_bprot,WA_NFIG          ;   it, and each bot's (by its index)
+WA_VAR wa_hdir,1                 ; THE HIT'S DIRECTION (a prototype): its
+WA_VAR wa_hdirt,1                ;   glyph's index (1 left, 2 right, 3
+                                 ;   behind) and ticks left
+WA_VAR wa_hscsig,4               ; the HUD's score as written
 WA_VAR wa_nick,WA_NNAME          ; THE PLAYER'S NICK, space-padded (the
                                  ;   setup's field: blank, YOU)
 WA_VAR wa_kbits,2                ; the held keys this frame (wa_keys)

@@ -3,10 +3,12 @@
 **STATUS: BUILT** (2026-11-14), round two too (section 6: six weapons, the
 weapon spawns, R). Section 2 is round one's contract as built; section 3
 records what was measured, what it cost and what was done about it; section 4
-what is open.
+what is open. Filed under `completed/` (2026-11-15): section 4's items are
+renderer levers, carried in [MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md)
+17.3, except 4.4, which the bots closed.
 
 WireArena is `apps/wirearena/`. Its history is
-[MULTIPLAYER-FPS-PLAN](MULTIPLAYER-FPS-PLAN.md) §16 and
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) §16 and
 [WIREARENA-HEIGHTS-PLAN](WIREARENA-HEIGHTS-PLAN.md) §9. Its two segments are
 described in [WIREARENA-PARTS-PLAN](WIREARENA-PARTS-PLAN.md) §7–8.
 
@@ -130,6 +132,8 @@ rockets fly at once.
   Hercules and MDA, normal intensity against the body's bright). No second
   sweep: a few compares a row. Dummy 0 starts every life with a full shield, so the chest and
   the second pool have something to show until there are other players.
+  *(Since AI-PLAN 8.6 only a bench keeps that fixture; a live bot spawns
+  shielded one time in five on normal and hard.)*
 - `F_SIZE` grows from 42 to 44. **WR_ABI is 5.**
 
 **The deaths**, a keyframe animation each, made by `tools/arenagen.py`:
@@ -181,7 +185,9 @@ pack costs one AND a frame.
 | rocket launcher | (1952, 1024) | the tower's top, 160 up: the platform the lift goes to | 10 s |
 
 The flat arenas (0 and 1) carry no pickups, so their frames are unchanged:
-the pistol alone there.
+the pistol alone there. *(Since: the open arena has a health-or-shield
+spawn (ARENAS-PLAN 4.5) and every later arena its own pickups; pillars,
+arena 0, still has none.)*
 
 **Taken** when the player's square is within 40 of it (the player's radius
 and the pickup's) and the feet within 8
@@ -215,7 +221,9 @@ At most 32 cells.
   (yellow).
 - **Row 23, right**: the magazine, and the reserve or `∞`.
 
-Row 24 stays the meter, untouched: it is the owner's instrument.
+Row 24 stays the meter, untouched: it is the owner's instrument. *(Since
+2026-11-15, with the meter off, row 24 shows the weapons 1 to 6 and the last
+kill: WIREARENA-NET-PLAN 9.6.)*
 
 **Rockets and explosions** are drawn after the figures, through the pickups'
 routine: a rocket a 2×2 sub-pixel bright dot, an explosion a block that grows
@@ -329,10 +337,12 @@ same bench frames, `04ae112` against now):
   behind the annex: the pickup sits opposite the back room's mouth.
 - **"Turns the player's chest blocks yellow"**: there is no other player
   yet, so dummy 0 lives with a shield to show it. The renderer draws any
-  figure with a shield this way; a networked player's will be one.
+  figure with a shield this way; a networked player's will be one. *(Since:
+  bots and linked players carry shields; dummy 0's is a bench's.)*
 - **The flat arenas carry no pickups**: the owner's placement is the Heights
-  arena's. Weapons other than the pistol are there only.
-- **A reload is automatic**: R is RAMP2's (HEIGHTS-PLAN 9.11).
+  arena's. Weapons other than the pistol are there only. *(Since: see 2.4.)*
+- **A reload is automatic**: R is RAMP2's (HEIGHTS-PLAN 9.11). *(Since 6.4
+  R reloads at any time, and RAMP2 has no key, 6.7.)*
 
 ### 3.5 Two red lines into the sky (fixed, 2026-11-14)
 
@@ -377,6 +387,7 @@ and counts red cells in the view's top third over the whole collapse:
    occluded, not culled.
 4. **Dummies do not shoot back**, so only the player's own rockets hurt the
    player: health and the shield pack matter once there are opponents.
+   *(Closed: the bots shoot back, WIREARENA-AI-PLAN B2.)*
 
 ## 5. Proposed: the next weapons (for the owner, 2026-11-14)
 

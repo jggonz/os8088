@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena's CAPTURE THE FLAG, wave C1 (docs/plans/WIREARENA-CTF-PLAN.md
+"""WireArena's CAPTURE THE FLAG, wave C1 (docs/plans/completed/WIREARENA-CTF-PLAN.md
 2, 10): the rules on one machine, off the game's own variables, on the Twin.
 
   - THE MODE AND THE TEAMS: the setup's Mode at CTF makes a CTF match; the

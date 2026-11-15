@@ -336,7 +336,7 @@ INCLUDES = [
      "from the window, and `lk_poll`/`lk_send` - legal inside a SPEC.md 53 "
      "bracket - carry typed frames of up to 32 bytes: 7Eh/7Dh framing, "
      "CRC-16/CCITT-FALSE, a length per type from your `lk_lens`. WireArena "
-     "is the user (docs/plans/WIREARENA-LINK-PLAN.md); WireFleet's own copy "
+     "is the user (docs/plans/completed/WIREARENA-LINK-PLAN.md); WireFleet's own copy "
      "moves onto it later."),
     ("os88raw.inc", "72.22",
      "A GAME'S FRAMES OVER THE ETHERNET CARD, on ETHER.DRV's raw verbs: "
@@ -347,7 +347,7 @@ INCLUDES = [
      "byte before the body, as a padded frame does not say where it ends. "
      "The claim stops the driver's own pump: hold it only while linking. "
      "WireArena carries os88cable.inc's bodies on it "
-     "(docs/plans/WIREARENA-LINK-PLAN.md 12)."),
+     "(docs/plans/completed/WIREARENA-LINK-PLAN.md 12)."),
     ("os88udp.inc", "72.24",
      "A GAME'S DATAGRAMS ON ETHER.DRV's UDP VERBS: `ud_open` attaches the "
      "driver if need be, asks our IP address (NETE_NOLINK until DHCP has "
@@ -355,7 +355,7 @@ INCLUDES = [
      "IP address and a port - or everyone (255.255.255.255); `ud_poll` "
      "drains datagrams to your `ud_take` with their source. os88raw.inc's "
      "twin, for a network with an address: a host on UDP is found by a "
-     "broadcast and by its address at once (docs/plans/WIREARENA-NET-PLAN.md)."),
+     "broadcast and by its address at once (docs/plans/completed/WIREARENA-NET-PLAN.md)."),
     ("os88inflate.inc", "106.18",
      "INFLATE for a raw DEFLATE stream held WHOLE: `inflate` takes DS:SI, "
      "writes exactly CX bytes at ES:DI and sets carry on a bad stream. zlib's "

@@ -121,6 +121,7 @@ MEDIAIMG360 := $(BUILD)/media360.img
 OFFICEIMG360  := $(BUILD)/office360.img
 NETWORKIMG360 := $(BUILD)/network360.img
 GAMESIMG360   := $(BUILD)/games360.img
+GAMES2IMG360  := $(BUILD)/games2-360.img
 EMUIMG360     := $(BUILD)/emu360.img
 UTILIMG360    := $(BUILD)/util360.img
 # ...and the 720KB geometry's SECOND apps disk (SPEC.md 24.7): what the 720KB
@@ -156,7 +157,7 @@ ARCRELIMG360  := $(BUILD)/arcrel360.img
 SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
-            $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) \
+            $(GAMES2IMG360) $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) \
             $(SMALLIMG360) $(SMALLIMG720) \
             $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360) \
             $(ARCRELIMG) $(ARCRELIMG120) $(ARCRELIMG720) $(ARCRELIMG360) \
@@ -17649,7 +17650,17 @@ $(BUILD)/os88cz.com: dostools/os88cz.asm kernel/lz.inc kernel/lzfilt.inc | $(BUI
 os88cz: $(BUILD)/os88cz.com
 .PHONY: os88cz
 
-APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
+# WIREARENA (docs/plans/MULTIPLAYER-FPS-PLAN.md 17.2, the owner's of
+# 2026-11-15): a game now, off apps/RETIRED.txt's instruments. 67,537 bytes
+# packed - 66 of 360KB's clusters, which games360.img has with one to
+# spare, and a game disk at its last cluster is a high score that cannot be
+# saved - so at 360KB it is games2-360.img's, the second games disk. The
+# 1.44MB and 1.2MB apps disks carry it in GAMES/ (147KB and 152KB free
+# before it) and so does more720.img, the 720KB apps disk's other half
+# (126KB free); apps720.img (25KB free) leaves it off. kern_mega's apps disks
+# are the kern_mega session's to decide (MEGAAPPSARGS does not name it).
+WA_SHIP := $(BUILD)/warena.o88
+APPS := $(APPS_TOOLS) $(APPS_GAMES) $(WA_SHIP) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
         $(APPS_DOSCZ) $(MIDISONGS) $(RDG_SHIP) $(RDG_DEMO)
 # ...and the 360KB disk's list, which is that one less what the media disk
 # carries. Kept as its own variable rather than reusing $(APPS): a rule whose
@@ -17778,7 +17789,7 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS)
 # collected, so os88disk.py answered "unrecognized arguments: SYSTEM/DOS:..."
 # for the packages that followed it.
 APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
-            $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP)) \
+            $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(WA_SHIP)) \
             $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) $(LOGOVIDARG) \
             $(MIDISONGARGS) \
             $(APPSYSARGS) \
@@ -17828,11 +17839,11 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # exists. The 1.44MB and 1.2MB apps disks carry it; no 360KB disk does since
 # wave 3 left media360.img (SPEC.md 123.13's 360 KB note, 2026-10-27).
 APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
-             $(RDG_SHIP) $(RDG_DEMO),$(APPS))
+             $(RDG_SHIP) $(RDG_DEMO) $(WA_SHIP),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
                  APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
                  APPS:$(BUILD)/waverack.o88 \
-                 GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
+                 GAMES:$(RDG_SHIP) GAMES:$(WA_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 # ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
 # the single largest thing on the disk, bigger than SHEET and its chart module
@@ -18004,10 +18015,10 @@ $(APPSIMG720): $(APPS720) tools/os88disk.py
 # the owner places it (24.7's note). The order of what goes where is expected
 # to change - 24.6.1's rule, a decision with a date on it.
 MORE720_SONGS := $(filter-out $(MIDISONGS720),$(MIDISONGS))
-MORE720 := $(BUILD)/pixel.o88 $(BUILD)/midirack.o88 $(RDG_SHIP) $(DM_SHIP) $(RDG_DEMO) $(LOGOVID) \
+MORE720 := $(BUILD)/pixel.o88 $(BUILD)/midirack.o88 $(RDG_SHIP) $(DM_SHIP) $(WA_SHIP) $(RDG_DEMO) $(LOGOVID) \
            $(MORE720_SONGS) $(PX_SAMPLES_360)
 MOREARGS720 := APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/midirack.o88 \
-               $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP)) \
+               $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP) $(WA_SHIP)) \
                MEDIA:$(RDG_DEMO) $(LOGOVIDARG) \
                $(addprefix MEDIA/MIDI:,$(MORE720_SONGS)) \
                $(PX_GALLERY_360) $(APPDATAFOLDER)
@@ -18160,6 +18171,18 @@ $(NETWORKIMG360): $(NETWORK360) tools/os88disk.py
 
 $(GAMESIMG360): $(GAMES360) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(GAMESARGS360)
+
+# --- games2-360 -------------------------------------------------------------
+# THE SECOND GAMES DISK (SPEC.md 24.6, the owner's of 2026-11-15): the games
+# games360.img has no room for, a category disk in every way - the packages
+# at the root, MEDIA/ and SYSTEM/APPDATA/ made. WireArena first (WA_SHIP,
+# above); the next game too big for games360 goes here rather than off it.
+GAMES2_PKGS := $(WA_SHIP)
+GAMES2360 := $(GAMES2_PKGS)
+GAMES2ARGS360 := $(GAMES2_PKGS) $(MEDIAFOLDER) $(APPDATAFOLDER)
+
+$(GAMES2IMG360): $(GAMES2360) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(GAMES2ARGS360)
 
 # --- util360 -----------------------------------------------------------------
 # THE UTILITIES' DISK (SPEC.md 24.3.1.7 and 24.6, the owner's of 2026-10-22):
@@ -18455,7 +18478,8 @@ ALLAPPS := $(ALLAPPSFILES) $(PX_SAMPLES_360) $(BUILD)/runcpm-src.stamp tools/get
 ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88 \
                                  $(BUILD)/MIDIRACK.BNK) \
-               $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(N1942LIVE)) \
+               $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(N1942LIVE) \
+                                  $(WA_SHIP)) \
                $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) \
                $(addprefix WORD:,$(BUILD)/word.o88 $(BUILD)/WELCOME.DOC) \
                $(addprefix CWORD:,$(CWORDDISK)) \
@@ -21293,7 +21317,7 @@ $(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/
 # four geometries - on no shipped disk until it is a game. Its tables (sine,
 # arena, patrols, the pre-projected stick-figure keyframes) are built by
 # tools/arenagen.py into $(BUILD)/watab.inc. Two segments in one file
-# (docs/plans/WIREARENA-PARTS-PLAN.md 7): wirearena.bin is the primary - the
+# (docs/plans/completed/WIREARENA-PARTS-PLAN.md 7): wirearena.bin is the primary - the
 # game - and wrpart.bin the renderer, its part 0 (OP_SEG, OP_COMP|OP_ZFILL),
 # far-called with its own data; each assembles the watab.inc blocks it reads.
 #> [Applications] wirearena :: WARENA.O88, the text-mode arena shooter's renderer prototype (docs/plans/MULTIPLAYER-FPS-PLAN.md)
@@ -21324,7 +21348,7 @@ $(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/w
 # ...and each arena a part of its own (WIREARENA-PARTS-PLAN 7.5), in
 # arenagen's order: one row per arena in wirearena.asm's table (WA_NARENA).
 # Arena 2 is the heights demo, on the Game menu since wave 2
-# (docs/plans/WIREARENA-HEIGHTS-PLAN.md 7.3); arenagen refuses an arena over
+# (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 7.3); arenagen refuses an arena over
 # the visible budget, which tools/wamodel.py prices
 WAARENAS := $(BUILD)/waa0.bin $(BUILD)/waa1.bin $(BUILD)/waa2.bin \
             $(BUILD)/waa3.bin $(BUILD)/waa4.bin $(BUILD)/waa5.bin \

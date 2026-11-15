@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WireArena's bots walk the arena's ROUTE GRAPH (docs/plans/
-WIREARENA-AI-PLAN.md 3): a branch taken at every node, the lift ridden.
+completed/WIREARENA-AI-PLAN.md 3): a branch taken at every node, the lift ridden.
 
 One boot into the Heights arena at 40 columns, then, off the game's own
 variables (its symbols from wirearena.asm assembled with a map, refused

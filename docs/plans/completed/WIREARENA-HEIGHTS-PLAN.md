@@ -4,7 +4,13 @@
 them (wave 3 with the owner's revised arena, ramps and the one lift, 7.4
 and 9.7); waves 4 and 5 landed item by item in the plans after this one,
 and 9.12 says where. Open of this plan: the host reference's raised lift in
-`tools/wacheck.py`, and the ramp walks of 9.7.3 as suite rows. Written first for discussion with the owner, it answers the
+`tools/wacheck.py`, and the ramp walks of 9.7.3 as suite rows - both carried,
+with 9.3's owner items, in [MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md)
+17.3 when this plan was filed under `completed/` (2026-11-15). Since that
+day there is no Game menu (the match setup chooses the arena) and the keys
+F, G, T and L are gone: the grid and the treads are the detail levels'
+(F1-F5), and the field of view is 75 degrees (WIREARENA-NET-PLAN 9.9).
+Written first for discussion with the owner, it answers the
 owner's note of 2026-11-13:
 
 > *"Lets start on stairs, platforms, and moving platforms; with a more
@@ -23,7 +29,7 @@ owner's note of 2026-11-13:
 the owner asked for.
 
 WireArena is `apps/wirearena/`. Its history is
-[MULTIPLAYER-FPS-PLAN](MULTIPLAYER-FPS-PLAN.md) §16. Its two segments are
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) §16. Its two segments are
 described in [WIREARENA-PARTS-PLAN](WIREARENA-PARTS-PLAN.md) §7–8.
 
 This plan was written on branch `heights-plan`, cut from `multiplayer-fps`
@@ -1206,7 +1212,7 @@ into the deepest.
 - **`wa_feet`** is the floor under the player, zero until wave 3, and
   `eye = jz + WA_EYE + feet`.
 - **The Game menu** gains "Heights arena, 40 columns" and "Heights arena,
-  80 columns".
+  80 columns". *(Since NET-PLAN 9.4: the setup's Arena list.)*
 - **The play bench** run in the heights arena cycles five poses, A to E,
   marked on the HUD (`wa_pbposes`: position, heading, base pitch, feet).
   Its tower and platform poses set `wa_feet`, so the raised eye is the
@@ -1527,7 +1533,8 @@ bytes.
 
 ### 9.4 Wave 2: heights drawn (static)
 
-Built to 7.3. Arena 2 is on the Game menu at both widths. Its heights are
+Built to 7.3. Arena 2 is on the Game menu at both widths *(the setup's
+Arena list since NET-PLAN 9.4, and its default)*. Its heights are
 fixed: the lifts rest at 16 and the player's eye is the floor's, except at
 the bench's poses (7.3.5).
 
@@ -1847,7 +1854,7 @@ are in the session's scratch directory, `w3/`.
   patrols (7.4.5).
 - **Ramps** for flights, drawn and walked (7.4.2):
   - the stepped look is the T option, one byte test per ramp a frame when
-    off;
+    off *(since 2026-11-15 no key: Very High's, 9.11)*;
   - a ramp's high-end top edge is always drawn.
 - **The sim** (7.4.3):
   - the floor;
@@ -2404,7 +2411,8 @@ before and after, one frame a sim tick, from MartyPC.
 ### 9.11 Detail levels (2026-11-13, branch `detail` from `e9ca8cff`)
 
 Round 5's look options are now five **detail levels**, chosen at run time
-by keys **1 to 5**. The HUD shows the level at column 37, where H's mark
+by keys **1 to 5** *(F1 to F5 since WIREARENA-WEAPONS-PLAN 2.1; 1 to 6 are
+the weapons)*. The HUD shows the level at column 37, where H's mark
 was. They follow the owner's verdicts on the round-5 videos.
 
 **The levels** (`wa_levtab` in `wirearena.asm`: a row per level, the
@@ -2460,7 +2468,9 @@ The options, a bit each in `wa_look` (LK_ in `waconst.inc`):
 - **H**, the held edges (no visible difference, and not repeatable): the
   hold code, its four loops and its 320 bytes of BSS are gone.
 
-**Kept as keys:**
+**Kept as keys:** *(until 2026-11-15, when G, T and L went - the grid
+and the treads are set by the level alone: WIREARENA-NET-PLAN 9.9, and the
+walls' tops' branch left the renderer, 9.10)*
 
 - **G** and **T** are manual overrides. Choosing a level sets both; either
   key then flips its own until the next level is chosen.
@@ -2549,6 +2559,9 @@ view A; the session's scratch, `r5/walls/lv/vids/`):
 
 ### 9.3 Open, for the owner and the next waves
 
+*What of this is still open is carried in MULTIPLAYER-FPS-PLAN 17.3
+(2026-11-15).*
+
 1. **The symmetric dead ground** is decided (7.1.1) and built in wave 3:
    up 112, down 290 (7.4.7), the bands as derived (9.7.3). The owner
    judges the limits by play; they are two constants.
@@ -2566,7 +2579,7 @@ view A; the session's scratch, `r5/walls/lv/vids/`):
    The owner ruled there that FARTOP stays at Very Low alone.
 3. **The room corners' views** (9.1), beside the tower's.
 4. **Flights as one object:** settled as ramps (7.1.2, 7.4.2). The stepped
-   look is the T option.
+   look is the T option *(Very High's since the T key went, 2026-11-15)*.
 5. **Any package's divide fault, on an IBM ROM, kills the machine's IRQs**
    (9.5). The shipped kernels leave int 0 to the BIOS. CLAUDE.md's rule
    keeps the divide-fault panel behind a knob "until a field report says it

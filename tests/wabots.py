@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena's bots see, face and shoot back (docs/plans/WIREARENA-AI-PLAN.md
+"""WireArena's bots see, face and shoot back (docs/plans/completed/WIREARENA-AI-PLAN.md
 4): fast more than good.
 
 One boot into the Heights arena at 40 columns (the difficulty first set from

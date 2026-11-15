@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WireArena's HEDGE and TWIN, and what the engine had to stop assuming to
-carry them (docs/plans/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md).
+carry them (docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md).
 
 The two arenas were the owner's stress test ("to see how well the system
 holds up before we do ctf mode"), and each needed the engine to drop a limit

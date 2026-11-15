@@ -1,5 +1,5 @@
 ; apps/os88raw.inc - a game's frames over the Ethernet card: ETHER.DRV's
-; raw verbs (SPEC.md 72.22), written once. docs/plans/WIREARENA-LINK-PLAN.md
+; raw verbs (SPEC.md 72.22), written once. docs/plans/completed/WIREARENA-LINK-PLAN.md
 ; section 12 is why it exists; WireArena is its first user, and it carries
 ; the same bodies apps/os88cable.inc carries on a serial cable.
 ;

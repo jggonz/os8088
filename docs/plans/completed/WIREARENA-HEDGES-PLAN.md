@@ -6,7 +6,12 @@ arenas 5 and 6 beside it. The owner chose A, `hedge`, for its PLAY - *"the
 offsets hint where you are"* - and B went (section 6); then the Maze itself
 went, and the hedge took its place as arena 3 (section 9). Section 3 is
 what the drawings measured; section 4 what would make them faster, of which
-the owner asked for 4.1 (section 7) and 4.2 (section 8).
+the owner asked for 4.1 (section 7) and 4.2 (section 8). **"Arenas 5 and 6"
+below are the trial's numbers: arena 5 is Crossing now**
+([WIREARENA-THREE-ARENAS-PLAN](../WIREARENA-THREE-ARENAS-PLAN.md)), and the
+hedge is arena 3. Filed under `completed/` (2026-11-15); 4.1's faces, which
+section 7 did not build, are carried as a renderer lever in
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.3.
 
 The owner's brief, 2026-11-14, with two drawings (not to scale):
 
@@ -57,7 +62,9 @@ court's middle is (1024, 1152).
 
 The graph walks the court, both rings and the three rooms (31 nodes in B, 25
 in A); the bots do not use the wall's top. Seven respawns, the four pickups,
-the start at the south room's gap facing north. The P bench's views: the
+the start at the south room's gap facing north *(as drawn; since
+2026-11-15 arenagen's `facing()` turns a spawn that faces a wall, and the
+hedge's start and its four axis respawns were turned - NET-PLAN 9.8)*. The P bench's views: the
 court beside the stack, into the east room, the inner ring's SW corner, on
 the wall's top.
 
@@ -91,7 +98,8 @@ drawn. Its NE corner is a box of its own (`middle hedge NE`): 5 boxes, not 4.
 gap from a reached box of the same height, the gap at most `jump_gap()`:
 half the ground a running jump covers, off `WA_JUMPV`, `WA_GRAV` and
 `WA_MSPD` (27 ticks at 10 units: 270, so 135 allowed; the gaps are 128).
-Computed, not yet tried in the game.
+Computed, not yet tried in the game. *(Tried since and confirmed by the
+owner: section 5.)*
 
 **Size.** The renderer part grew 1,655 bytes (61,957 of its 65,024): the
 tables sized to the largest arena - B's 124 vertices against the Maze's
@@ -172,7 +180,9 @@ In order of what it buys:
    near the tall wall's 80 kclk while the wall stays walkable. It helps
    every arena with a low box seen from beside it (the Maze's plateau, the
    heights arena's platforms). It is a change to the heights renderer's
-   column clip (`wrlow.inc`), and is not started.
+   column clip (`wrlow.inc`), and is not started. *(Section 7 answered
+   the owner's 4.1 with the shut test instead; the faces are still not
+   built.)*
 2. **The stack.** Nine boxes is what three tiers cost when no box may
    stand on another. A tier standing on a tier would be 3 boxes; it touches
    collision, the depth stack, the PVS's low pass and the bots. A design

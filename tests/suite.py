@@ -8632,7 +8632,7 @@ SOAK = [
                "build/kerndos.bin")),
     Row("walift", "soak", py("tests/walift.py"), 18.0,
         "WIREARENA'S LIFT CARRIES A RIDER WHO STANDS STILL "
-        "(docs/plans/WIREARENA-HEIGHTS-PLAN.md 3.2, 9.10). `wa_hjump`'s "
+        "(docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 3.2, 9.10). `wa_hjump`'s "
         "cached floor read branched to `.read` with the lift's RECORD in AX "
         "where `.read` takes x, so a still rider's floor was read at x = 40 "
         "every other tick: the feet went 16, 0, 16, 0, the lift's count "
@@ -8647,7 +8647,7 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waarenas", "soak", py("tests/waarenas.py"), 60.0,
         "WIREARENA'S HEDGE AND TWIN, AND THE LIMITS THEY RETIRED "
-        "(docs/plans/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md "
         "8). On the twin: both lifts "
         "carry a still rider to the tower's top and go home empty (the sim "
         "moved one lift), off the raised lift the tower is a floor at 240 "
@@ -8681,7 +8681,7 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wactf", "soak", py("tests/wactf.py"), 40.0,
         "WIREARENA'S CAPTURE THE FLAG, ONE MACHINE "
-        "(docs/plans/WIREARENA-CTF-PLAN.md 2, 6, waves C1 and C2), on the "
+        "(docs/plans/completed/WIREARENA-CTF-PLAN.md 2, 6, waves C1 and C2), on the "
         "twin off "
         "the game's own variables: the setup's Mode makes a CTF match, the "
         "teams are the slots' parity, both flags start at their bases, we "
@@ -8710,7 +8710,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wamodes", "soak", py("tests/wamodes.py"), 25.0,
-        "WIREARENA'S MODES, ONE MACHINE (docs/plans/WIREARENA-MODES-PLAN.md "
+        "WIREARENA'S MODES, ONE MACHINE (docs/plans/completed/WIREARENA-MODES-PLAN.md "
         "2, 3, 5, wave M1), off the game's own variables: Mode at team "
         "deathmatch lists only the arenas with sides (the hedge, the Twin) "
         "and moves the arena off the heights, Win at's items are the "
@@ -8741,7 +8741,7 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waflines", "soak", py("tests/waflines.py"), 11.0,
         "WIREARENA'S FLOOR LINES AGAINST AN EXACT REFEREE "
-        "(docs/plans/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "
         "line at the screen's edges in camera space and walks it by an "
         "error term, no divide; this row holds its picture to a referee "
         "that shares none of that arithmetic - the game's integer camera "
@@ -8773,7 +8773,7 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wafiglod", "soak", py("tests/wafiglod.py"), 52.0,
         "WIREARENA'S SMALL FIGURE BEGINS WHERE THE DETAIL LEVEL SAYS "
-        "(docs/plans/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
         "figure small on the screen is drawn as seven joints and five "
         "straight limbs (LK_FEW); how small is the level's (wa_flodv, "
         "CONFIG's: wa_levtab's last column) - from 464 units ahead at "
@@ -8790,7 +8790,7 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wastill", "soak", py("tests/wastill.py"), 40.0,
         "WIREARENA'S STANDING VIEW DRAWS THE MOVING VIEW'S PICTURE "
-        "(docs/plans/WIREARENA-ARENAS-PLAN.md 5). The renderer keeps work "
+        "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5). The renderer keeps work "
         "while the view stands - a floor line's walk, a low box's corners "
         "(wl_vert: the vertices stamped last frame), a pickup's place on "
         "the screen (wa_pickups' records) - and each is a chance to draw "
@@ -8830,7 +8830,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waroutes", "soak", py("tests/waroutes.py"), 50.0,
-        "WIREARENA'S BOTS WALK THE ROUTE GRAPH (docs/plans/WIREARENA-AI-"
+        "WIREARENA'S BOTS WALK THE ROUTE GRAPH (docs/plans/completed/WIREARENA-AI-"
         "PLAN.md 3). arenagen's graph replaced the dummies' three patrol "
         "loops: a branch taken at every node, the lift ridden. Two minutes "
         "of the Heights arena's sim, sampled every 8 ticks: every bot leaves "
@@ -8843,7 +8843,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wabots", "soak", py("tests/wabots.py"), 40.0,
-        "WIREARENA'S BOTS SEE, FACE AND SHOOT BACK (docs/plans/WIREARENA-"
+        "WIREARENA'S BOTS SEE, FACE AND SHOOT BACK (docs/plans/completed/WIREARENA-"
         "AI-PLAN.md 4). The Game menu sets the difficulty; a bot's look "
         "agrees with the host's walk of the same sight grid at 40 random "
         "placements; in a staged duel at each difficulty it turns onto the "
@@ -8855,7 +8855,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wascore", "soak", py("tests/wascore.py"), 16.0,
-        "WIREARENA'S DEATHS, RESPAWNS AND SCORE (docs/plans/WIREARENA-AI-"
+        "WIREARENA'S DEATHS, RESPAWNS AND SCORE (docs/plans/completed/WIREARENA-AI-"
         "PLAN.md 5). Three robots' names, all different; a pistol kill is "
         "the player's kill and the bot's death; a killed bot comes back at "
         "the respawn point farthest from the player; a bot's kill of the "
@@ -8869,7 +8869,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wabotarms", "soak", py("tests/wabotarms.py"), 30.0,
-        "WIREARENA'S BOTS ARM THEMSELVES (docs/plans/WIREARENA-AI-PLAN.md "
+        "WIREARENA'S BOTS ARM THEMSELVES (docs/plans/completed/WIREARENA-AI-PLAN.md "
         "3.3, B4). A bot reaching the ramp platform's spawn takes what is "
         "there (its weapon, a pickup's rounds, the spawn empty); a roaming "
         "bot at 30 health FETCHES the health pack by its node and takes it; "
@@ -8882,7 +8882,7 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wactflink", "soak", py("tests/wactflink.py"), 25.0,
         "WIREARENA'S CAPTURE THE FLAG LINKED (docs/plans/"
-        "WIREARENA-CTF-PLAN.md 7, wave C3): two QEMUs on a socket cable, "
+        "completed/WIREARENA-CTF-PLAN.md 7, wave C3): two QEMUs on a socket cable, "
         "the shipped package, walink's harness. The host's Mode reaches the "
         "guest in its HELLO and both play CTF on the twin; the host is red "
         "and the guest blue, each spawned on its own side; the guest's "
@@ -8895,7 +8895,7 @@ SOAK = [
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=200),
     Row("wamodeslink", "soak", py("tests/wamodeslink.py"), 32.0,
-        "WIREARENA'S MODES LINKED (docs/plans/WIREARENA-MODES-PLAN.md 8, "
+        "WIREARENA'S MODES LINKED (docs/plans/completed/WIREARENA-MODES-PLAN.md 8, "
         "wave M4): two QEMUs on a socket cable, the shipped package, "
         "walink's harness. The host's Mode (king of the hill) and its Win "
         "at pick (3 points) reach the guest in the HELLO; the guest on the "
@@ -8909,7 +8909,7 @@ SOAK = [
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=200),
     Row("walink", "soak", py("tests/walink.py"), 32.0,
-        "WIREARENA OVER A NULL MODEM (docs/plans/WIREARENA-LINK-PLAN.md, "
+        "WIREARENA OVER A NULL MODEM (docs/plans/completed/WIREARENA-LINK-PLAN.md, "
         "L1): two QEMUs on a socket cable, the shipped package. Each window "
         "finds and binds the other, the lower identity hosts, Space on both "
         "starts the host's arena on both; a player put on one machine is "
@@ -8931,7 +8931,7 @@ SOAK = [
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=200),
     Row("walinknet", "soak", py("tests/walink.py", "--net"), 35.0,
-        "WIREARENA OVER ETHERNET (docs/plans/WIREARENA-LINK-PLAN.md 12, "
+        "WIREARENA OVER ETHERNET (docs/plans/completed/WIREARENA-LINK-PLAN.md 12, "
         "E1): walink's whole match - lobby, SNAP, kills on both boards, a "
         "rocket, pickups, faults, Esc, two host bots, hearing, the lift - "
         "on two QEMUs' ne2k_isa cards whose -netdev socket ends are a "
@@ -8943,7 +8943,7 @@ SOAK = [
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=220),
     Row("walinkudp", "soak", py("tests/walink.py", "--udp"), 40.0,
-        "WIREARENA ON UDP, FOUND BY BROADCAST (docs/plans/WIREARENA-NET-"
+        "WIREARENA ON UDP, FOUND BY BROADCAST (docs/plans/completed/WIREARENA-NET-"
         "PLAN.md 3): walink's match on two QEMU NE2000s behind a relay that "
         "is a hub and a DHCP server. Play: local network in the setup gets "
         "an address and binds ETHER.DRV's UDP port (SPEC.md 72.24); the "
@@ -8982,7 +8982,7 @@ SOAK = [
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=240),
     Row("waweapons", "soak", py("tests/waweapons.py"), 26.0,
-        "WIREARENA'S WEAPONS AND PICKUPS (docs/plans/WIREARENA-WEAPONS-"
+        "WIREARENA'S WEAPONS AND PICKUPS (docs/plans/completed/WIREARENA-WEAPONS-"
         "PLAN.md). One boot into the Heights arena, every piece checked off "
         "the game's own variables: the weapon spawns' dice (every choice of "
         "each, nothing else, the renderer's copy the same); the pistol kills "

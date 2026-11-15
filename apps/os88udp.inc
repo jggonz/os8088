@@ -1,5 +1,5 @@
 ; apps/os88udp.inc - a game's datagrams on ETHER.DRV's UDP verbs (SPEC.md
-; 72.24), written once: the network carrier docs/plans/WIREARENA-NET-PLAN.md
+; 72.24), written once: the network carrier docs/plans/completed/WIREARENA-NET-PLAN.md
 ; section 1 chose, for matches found by a broadcast and by an address. It
 ; is apps/os88raw.inc's twin: the same three calls, an address of six
 ; bytes (an IP address, then a port as a little-endian word) where that one

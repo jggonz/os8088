@@ -112,7 +112,7 @@ def main():
     if args.game == 'wirefleet':
         TITLE, APP_IMAGE, APP_DISK = 'WireFleet', 'wireflet360.img', 'wireflet.img'
         PAIR = BUILD / '86box-wirefleet-pair'
-    if args.game == 'wirearena':     # (docs/plans/WIREARENA-LINK-PLAN.md L3.2:
+    if args.game == 'wirearena':     # (docs/plans/completed/WIREARENA-LINK-PLAN.md L3.2:
         TITLE, APP_IMAGE, APP_DISK = 'WireArena', 'warena360.img', 'warena.img'
         PAIR = BUILD / '86box-wirearena-pair'  # 2400 baud on two 4.77 MHz XTs)
     if sys.platform not in ('darwin', 'linux'):

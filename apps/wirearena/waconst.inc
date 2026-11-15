@@ -1,5 +1,5 @@
 ; WireArena's shared constants and the figure record (docs/plans/
-; WIREARENA-PARTS-PLAN.md). Included by the primary (wirearena.asm) and,
+; completed/WIREARENA-PARTS-PLAN.md). Included by the primary (wirearena.asm) and,
 ; from the split on, by the renderer part (wrpart.asm): one definition of
 ; every number both halves agree on.
 
@@ -73,7 +73,7 @@ F_VX    equ 38                  ;   (0: none yet): a tick's step, units
 F_VY    equ 40
 F_HP    equ 42                  ; byte: its health (the game's alone)
 F_KILL  equ 43                  ; byte: the weapon that killed it (0..2)
-; ...and the BOT's, the game's alone (docs/plans/WIREARENA-AI-PLAN.md)
+; ...and the BOT's, the game's alone (docs/plans/completed/WIREARENA-AI-PLAN.md)
 F_HOME  equ 44                  ; byte: its home loop's first edge
 F_BWAIT equ 45                  ; byte: waiting to walk its edge (its kind:
                                 ; 1 the lift down, 2 the lift up), 0 not

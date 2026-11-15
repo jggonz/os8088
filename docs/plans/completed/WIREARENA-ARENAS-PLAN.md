@@ -31,7 +31,7 @@ the first three arenas had set and that these two ran into, and how each was
 made general. Section 5 gives the measurements and section 6 the deviations.
 
 WireArena is `apps/wirearena/`. The parent plan is
-[MULTIPLAYER-FPS-PLAN](MULTIPLAYER-FPS-PLAN.md). The arena format is
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md). The arena format is
 [WIREARENA-HEIGHTS-PLAN](WIREARENA-HEIGHTS-PLAN.md) section 7, and the parts
 layout is [WIREARENA-PARTS-PLAN](WIREARENA-PARTS-PLAN.md).
 
@@ -128,7 +128,8 @@ back. The arena is that drawing, made even and mirrored about the middle.
   one, north of the east one, as drawn.
 - **HEALTH or SHIELD** sits at the path's bottom.
 - **The flags of a CTF to come** stand behind each lift, at (192, 1024) and
-  (1856, 1024): `TWIN_FLAGS`, recorded and not yet in the game.
+  (1856, 1024): `TWIN_FLAGS`, recorded and not yet in the game. *(Since:
+  `ARENA_FLAGS`, the Twin's bases in capture the flag - CTF-PLAN 3.)*
 - **Bots.** They walk round each tower and along the path, two ways, one
   lane each. They ride a lift up, take the railgun, and drop off the tower's
   front.
@@ -374,7 +375,7 @@ coordinates went from 23 to 19, each about 300 cycles of every moved frame.
 | 63 boxes (31 until [HEDGES-PLAN](WIREARENA-HEDGES-PLAN.md) 2) | a tree leaf's box x 4 is a byte | the maze uses 29, hedge B 40 |
 | boxes separable by axis lines | `box_tree` | guillotine partitions meet it (section 2) |
 | 32 route nodes, 4 ways out each | `WA_MGN`, the node record | the maze uses 27 |
-| 8 respawns, 8 pickups | their tables | 7 and 5 used |
+| 8 respawns, 8 pickups | their tables | 7 and 5 used (the Maze's, since deleted) |
 | 3 home loops | one per figure, `WA_NFIG` | |
 | 4 lifts, heights multiples of 4 to 252 | `WA_MLIFT`, SNAP byte 8 (4.1) | |
 | 24 floor lines | `WA_MFL`, the frame block (4.5) | the twin uses 16 |

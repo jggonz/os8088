@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """wafiglod - WireArena's SMALL FIGURE begins where the detail level says
-(docs/plans/WIREARENA-ARENAS-PLAN.md 5, WIREARENA-HEIGHTS-PLAN.md 9.11).
+(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5, WIREARENA-HEIGHTS-PLAN.md 9.11).
 
 A figure small on the screen is drawn as J: seven joints, five straight
 limbs, no head (LK_FEW). How small is the detail level's (wa_flodv, CONFIG's:

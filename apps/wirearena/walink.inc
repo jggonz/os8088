@@ -1,5 +1,5 @@
 ; walink.inc - WireArena over a null modem: the lobby in the window and the
-; match in the bracket (docs/plans/WIREARENA-LINK-PLAN.md; protocol v1 is
+; match in the bracket (docs/plans/completed/WIREARENA-LINK-PLAN.md; protocol v1 is
 ; its section 4). The port, the frames and their CRC are apps/os88cable.inc's.
 ;
 ; In the window (UI task, its one-tick timer): the search, HELLO every
@@ -976,9 +976,9 @@ wa_lkplay:
     mov byte [wa_lkfull], 1
     ret
 
-; wa_lkcmd - the Link menu: AL = Automatic, COM1, COM2, Disconnect, Ready,
-; then No bots, One bot, Two bots (the host's)
-wa_lkcmd:                       ; (Automatic, COM1, COM2, Disconnect)
+; wa_lkcmd - the Link menu: AL = Automatic, COM1, COM2, Disconnect (the
+; rest is the setup's: NET-PLAN 9.9)
+wa_lkcmd:
     push ax
     call wa_lkcable             ; (Automatic, COM1, COM2, Disconnect: the
     pop ax                      ; card's claim given back)

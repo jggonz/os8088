@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena's match setup on the glass (docs/plans/WIREARENA-NET-PLAN.md
+"""WireArena's match setup on the glass (docs/plans/completed/WIREARENA-NET-PLAN.md
 9.4), MartyPC's 5150 with a CGA, the shipped package.
 
 The owner saw the whole window flash on every click and key: every row and

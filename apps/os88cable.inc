@@ -1,6 +1,6 @@
 ; apps/os88cable.inc - a null-modem link over the desktop serial lease
 ; (SPEC.md 115), written once for any package that links two machines:
-; the port search, a framer and its CRC. docs/plans/WIREARENA-LINK-PLAN.md
+; the port search, a framer and its CRC. docs/plans/completed/WIREARENA-LINK-PLAN.md
 ; section 1 is why it exists; WireArena is its first user, and WireFleet's
 ; own copy (apps/wirefleet/wflink.inc, SPEC.md 114.6 and 114.9) moves onto
 ; it in that plan's story L3.1.
