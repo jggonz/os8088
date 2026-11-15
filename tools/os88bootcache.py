@@ -251,8 +251,7 @@ def _make(k, parts, image, apps, machine, card, saver):
         inst["owner_pid"] = None
         inst["detached"] = True
         os88marty._write_record(inst)
-    m.close()
-    return rec
+    return rec, m               # the connection: the first restore uses it
 
 
 class CachedMarty(Marty):
@@ -303,8 +302,24 @@ def _free_port():
     return port
 
 
-def _restore(rec, image, apps, machine, saver, label):
-    reg = Marty("127.0.0.1:%d" % rec["port"])
+def _registry(rec, secs=10.0):
+    """A connection to the registry. The server takes ONE client and notices
+    a departed one only when it next looks at that socket, so a connection
+    closed a moment ago (the last row's, a miss's own) can still be "its
+    client" for a few milliseconds: retry that refusal, briefly."""
+    end = time.time() + secs
+    while True:
+        try:
+            return Marty("127.0.0.1:%d" % rec["port"])
+        except MartyError as e:
+            if "already has a client" not in str(e) or time.time() > end:
+                raise
+            time.sleep(0.02)
+
+
+def _restore(rec, image, apps, machine, saver, label, reg=None):
+    if reg is None:
+        reg = _registry(rec)
     try:
         last = None
         for _ in range(3):
@@ -393,10 +408,12 @@ def launch(image, apps=None, machine="os8088_5150_cga", card=None,
     with _Lock(path + ".lock"):
         rec = _read(path)
         hit = _alive(rec)
+        reg = None
         if not hit:
             _kill(rec)
-            rec = _make(k, parts, image, apps, machine, card, saver)
-        r = _restore(rec, image, apps, machine, saver, label)
+            rec, reg = _make(k, parts, image, apps, machine, card, saver)
+            _write(path, rec)   # NOW: a failed restore must not leak it
+        r = _restore(rec, image, apps, machine, saver, label, reg=reg)
         rec["used"] = time.time()
         rec["uses"] = rec.get("uses", 0) + 1
         _write(path, rec)

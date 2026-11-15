@@ -119,6 +119,16 @@ techniques are cited as "SOAK-SPEED n".
     before. **Needs the emulator rebuilt** (`tools/martypc/build.sh` /
     `make marty`; incremental, ~15 s) - until then the client falls back.
 
+12. **The debug server answers a talking client within a FINE batch**
+    (`run_loop`): a request waits for the batch in flight, a 60th of a guest
+    second (3.7 host ms idle, ~14 loaded), so a running machine's round trip
+    averaged 5.6 host ms - cProfile of fmarrows: 11 of 19 host s in
+    `recv_into`. While a command arrived within the last 100 ms the batch is
+    a tenth of that (`MARTYPC_DEBUG_FINE`, 1 = off); a machine nobody is
+    asking runs whole batches. A batch boundary is where requests are
+    served, not a guest event, so the guest is cycle-exact either way.
+    Needs the rebuild, as 11.
+
 ## Measurements
 
 (after 09:05 UTC; see below)

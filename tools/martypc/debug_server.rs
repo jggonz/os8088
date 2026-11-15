@@ -486,7 +486,23 @@ impl DebugServer {
         exec.set_state(ExecutionState::Paused);
 
         let batch = ((machine.get_cpu_mhz() * 1_000_000.0) / BATCH_DIVISOR) as u32;
-        log::info!("Debug server: {} cycles per batch", batch);
+        // A REQUEST WAITS FOR THE BATCH IN FLIGHT. A batch is a 60th of a
+        // guest second - 3.7 host ms on an idle box, ~14 under a four-wide
+        // soak - so every request to a RUNNING machine paid half of one on
+        // average: measured, 5.6 host ms a round trip, and 11 of a row's 19
+        // host seconds in recv (docs/plans/soak-speed-2/core.md). While a
+        // client is talking - a command within CHATTY of the last - batches
+        // are FINE times smaller, so a poll loop's reads are answered within
+        // a fraction of a millisecond; a machine nobody is asking runs whole
+        // batches as before. The guest is cycle-exact either way: a batch
+        // boundary is where requests are served, not a guest event.
+        // MARTYPC_DEBUG_FINE=1 is the old behaviour, for an A/B.
+        let fine = std::env::var("MARTYPC_DEBUG_FINE").ok()
+            .and_then(|v| v.parse::<u32>().ok()).unwrap_or(10).max(1);
+        let small = (batch / fine).max(1000);
+        const CHATTY: Duration = Duration::from_millis(100);
+        log::info!("Debug server: {} cycles per batch ({} while a client talks)",
+                   batch, small);
 
         // When paused, a client stepping through commands (a stopped
         // breakpoint's reads, a register set, a resume) sends the next one
@@ -504,7 +520,8 @@ impl DebugServer {
 
             log_pass(machine, &mut exec);   // a resume that stepped onto one
             if matches!(exec.get_state(), ExecutionState::Running) {
-                machine.run(batch, &mut exec);
+                let n = if last_cmd.elapsed() < CHATTY { small } else { batch };
+                machine.run(n, &mut exec);
                 log_pass(machine, &mut exec);
                 note_state(&exec);       // the stop sequence number, above
                 // Drain after every batch, not on a timer: the channels are
