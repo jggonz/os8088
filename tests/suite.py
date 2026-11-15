@@ -8833,7 +8833,12 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
         "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
-        "PLAN 9.4). The owner saw the whole window flash on every click and "
+        "PLAN 9.4). With the focus in the nick, the Arena list drops over "
+        "it as over nothing, and once it goes the window is pixel-identical "
+        "to the start - no caret left (red with the pass drawing while a "
+        "list is down: the field drawn back over the list, its caret "
+        "restored by the list's bank - the owner, before release). "
+        "The owner saw the whole window flash on every click and "
         "key: every row and both buttons were redrawn per input. On the "
         "5150 with a CGA, the pointer off the window: Down settles within "
         "6 frames with 0 transient pixels; Up again leaves the window "

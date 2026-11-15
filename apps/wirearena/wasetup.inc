@@ -581,6 +581,15 @@ wa_srect:
 ; of them with [wa_lkfull]); the clip is taken first through wa_lkclipon
 ; (a tick's) or is the paint's. CF = 1: no clip, nothing drawn
 wa_sdraw:
+    cmp byte [wa_lkfull], 0     ; A LIST DOWN: nothing of ours drawn while
+    jne .go                     ; it is - the controls under it are its to
+    push bx                     ; cover (the owner: with the focus in the
+    call wa_sopen               ; nick, a click on a drop-down drew the
+    pop bx                      ; field back over its list, and the list's
+    jc .go                      ; bank put its caret back when it went).
+    clc                         ; Their records stay as last drawn, so the
+    ret                         ; first pass after it catches up on them
+.go:
     call wa_splace
     xor bx, bx                  ; THE DROP-DOWNS
 .d:
