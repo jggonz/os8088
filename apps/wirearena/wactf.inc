@@ -24,6 +24,10 @@ WC_TMR      equ 8
 WC_RET      equ 900             ; a dropped flag's ticks to go home: 30 s
 WC_WINT     equ 300             ; the win shown: 10 s (MODES-PLAN 2)
 WC_MSGT     equ 90              ; a message shown: 3 s
+WC_HOLD     equ 300             ; the hill held a point's time: 10 s
+WC_NONE     equ 0               ; THE HILL (king of the hill, MODES-PLAN 4):
+                                ; flag 0's record, its state the holder -
+                                ; none, or 1 + a team; WC_TMR its time held
 WC_DZ       equ 64              ; a flag's reach in height
 WC_FBASE0   equ 24              ; a flag at rest: from 24 to 104 above its
 WC_FBASE1   equ 104             ; floor; carried, over its carrier's head
@@ -32,7 +36,12 @@ WC_FCAR1    equ 152
 
 %macro WC_BSS 0
 WA_VAR wa_gmode,1                ; THE MATCH'S MODE: 0 free-for-all, 1 CTF,
-                                 ; 2 team deathmatch (MODES-PLAN 1)
+                                 ; 2 team deathmatch, 3 king of the hill
+                                 ; (MODES-PLAN 1)
+WA_VAR wa_gside,1                ; ...a team mode on an arena with sides:
+                                 ; its spawns on them
+WA_VAR wa_ghlp,2                 ; -> the arena's hill: a count, 0 or 1,
+                                 ; then x, y, z, node a, node b (arenagen)
 WA_VAR wa_lkgmode,1              ; ...the setup's pick (kept between matches)
 WA_VAR wa_tm,4                  ; each local index's team: 0 red, 1 blue
 WA_VAR wa_gflp,2                ; -> the arena's bases: a count, 0 or 2,
@@ -70,6 +79,13 @@ wa_ctfstart:
     xor al, al
 .md:
     mov [wa_gmode], al
+    mov byte [wa_gside], 0      ; (sides: a team mode where team deathmatch
+    or al, al                   ; plays - each side has its respawns)
+    jz .ns
+    test byte [wa_amodes+bx], 1 << 2
+    jz .ns
+    mov byte [wa_gside], 1
+.ns:
     mov bl, al                  ; THE SCORE TO WIN: Win at's, for the mode
     xor bh, bh                  ; (wasetup.inc's tables)
     mov al, WA_NGOAL
@@ -115,6 +131,22 @@ wa_ctfstart:
     or al, al                   ; deathmatch once, its colours)
     je .out
     call wc_side                ; EVERYONE ON THEIR SIDE (CTF-PLAN 2)
+    cmp byte [wa_gmode], 3
+    jne .nk
+    mov byte [wa_ctfcp], 1      ; (king of the hill: every frame, its flag)
+    mov si, [wa_ghlp]           ; THE HILL: its flag there, nobody's
+    mov di, wa_cfl
+    mov ax, [si+2]
+    mov [di+WC_X], ax
+    mov ax, [si+4]
+    mov [di+WC_Y], ax
+    mov ax, [si+6]
+    mov [di+WC_Z], ax
+    mov byte [di+WC_ST], WC_NONE
+    mov word [di+WC_TMR], 0
+    call wc_frame
+    jmp .out
+.nk:
     cmp byte [wa_gmode], 1
     jne .out
     mov byte [wa_ctfcp], 1      ; (CTF: every frame, the flags)
@@ -254,11 +286,15 @@ wa_ctick:
     je .ctf
     cmp byte [wa_lkon], 0       ; FREE-FOR-ALL, TEAM DEATHMATCH (MODES-
     jne .out                    ; PLAN 2, 3), alone: a win's time, then the
-    cmp word [wa_cwin], 0       ; next arena; else the scores
-    je wc_score
+    cmp word [wa_cwin], 0       ; next arena; else the scores (king of
+    je .score                   ; the hill: the hill's rules)
     dec word [wa_cwin]
     jnz .out
     jmp wc_next
+.score:
+    cmp byte [wa_gmode], 3
+    je wc_hill
+    jmp wc_score
 .ctf:
     cmp byte [wa_lkon], 0       ; A GUEST (CTF-PLAN 7): the host's rules,
     je .rules                   ; told by its FLAG events - here the win's
@@ -587,6 +623,122 @@ wc_wtone:                       ; the win's tone. Keeps BX
     pop bx
     ret
 
+; wc_hill - KING OF THE HILL, alone, a tick (MODES-PLAN 4): the teams on the
+; hill - one team alone on it, not its holder, takes it (both: it stays as
+; it is); its holder scores a point each WC_HOLD ticks it holds it, and
+; Win at's wins. Keeps nothing
+wc_hill:
+    mov si, wa_cfl
+    xor cx, cx
+    xor bp, bp                  ; BP = the teams on it: bit 0 red, 1 blue
+.e:
+    mov al, cl
+    call wc_pos
+    jnc .en
+    call wc_near
+    jnc .en
+    mov bx, cx
+    mov al, 1
+    add al, [wa_tm+bx]
+    xor ah, ah
+    or bp, ax
+.en:
+    inc cx
+    cmp cx, WA_NFIG + 1
+    jb .e
+    or bp, bp
+    jz .hold
+    cmp bp, 3
+    je .hold                    ; (both: contested, as it is)
+    mov ax, bp                  ; (1 red, 2 blue: its state)
+    cmp al, [si+WC_ST]
+    je .hold
+    mov [si+WC_ST], al          ; TAKEN
+    mov word [si+WC_TMR], 0
+    dec ax
+    mov bp, ax                  ; BP = the team
+    mov ax, 1800
+    mov cx, 3
+    mov dl, 0x40
+    call OSAPI_SND_TONE
+    mov ax, wc_m_hwe
+    mov dx, wc_m_hthey
+    call wc_sayk
+    jmp wc_frame
+.hold:
+    mov al, [si+WC_ST]
+    or al, al
+    jz .f
+    inc word [si+WC_TMR]        ; HELD: a point each WC_HOLD
+    cmp word [si+WC_TMR], WC_HOLD
+    jb .f
+    mov word [si+WC_TMR], 0
+    xor bh, bh
+    mov bl, al
+    dec bx                      ; BX = the holders
+    inc byte [wa_caps+bx]
+    mov byte [wa_ovd], 1
+    mov al, [wa_ggoal]
+    or al, al
+    jz .pt
+    cmp [wa_caps+bx], al
+    jae .win
+.pt:
+    push bx
+    mov ax, 2400
+    mov cx, 3
+    mov dl, 0x40
+    call OSAPI_SND_TONE
+    pop bx
+    jmp short .f
+.win:
+    mov word [wa_cwin], WC_WINT
+    call wc_wtone
+    mov al, bl
+    call wc_tatt
+    mov dl, al
+    shl bx, 1
+    mov ax, [wc_m_win+bx]
+    call wc_say
+.f:
+    jmp wc_frame
+
+; wc_hgoal - DI = a bot at the end of a leg, at node BL, in king of the
+; hill (wc_bgoal's): its team not the holder and it not fighting, over the
+; hill - to its node a, or from a to b, the route that crosses it. Keeps
+; all but AX
+wc_hgoal:
+    push bx
+    push dx
+    push si
+    mov dl, bl                  ; DL = its node
+    call wa_bidx
+    inc ax
+    mov bx, ax
+    mov al, [wa_tm+bx]
+    inc ax
+    cmp al, [wa_cfl+WC_ST]
+    je .done                    ; (its team's: it roams, and fights)
+    cmp byte [di+F_BST], WA_BENG
+    je .done
+    cmp byte [di+F_BST], WA_BHUNT
+    je .done
+    mov si, [wa_ghlp]
+    mov al, [si+8]
+    cmp al, dl
+    jne .go
+    mov al, [si+9]
+    cmp al, dl
+    je .done                    ; (one node: it is there)
+.go:
+    mov [di+F_BGOAL], al
+    mov byte [di+F_BST], WA_BFETCH
+.done:
+    pop si
+    pop dx
+    pop bx
+    ret
+
 ; wc_next - ALONE, a win's 10 s over (MODES-PLAN 5): the match on in the
 ; next arena of the rotation - the next after this one, round, of the
 ; setup's list that plays the mode - read inside the bracket (SPEC.md
@@ -791,6 +943,30 @@ wc_say:
 ; its base or its carrier's head, in its team's colour - the one our player
 ; carries not drawn (the HUD says so)
 wc_frame:
+    cmp byte [wa_gmode], 3      ; KING OF THE HILL: its flag, white while
+    jne .ctf                    ; nobody's, else its holders' colour
+    mov si, wa_cfl
+    mov di, wa_flags
+    mov ax, [si+WC_X]
+    mov [di+FL_X], ax
+    mov ax, [si+WC_Y]
+    mov [di+FL_Y], ax
+    mov ax, [si+WC_Z]
+    mov [di+FL_Z], ax
+    mov word [di+FL_FROM], WC_FBASE0 | (WC_FBASE1 << 8)
+    mov byte [di+FL_ON], 1
+    mov byte [di+WA_FLSZ+FL_ON], 0
+    mov al, 0x0F
+    mov ah, [si+WC_ST]
+    or ah, ah
+    jz .hc
+    mov al, ah
+    dec ax
+    call wc_tatt
+.hc:
+    mov [di+FL_ATT], al
+    ret
+.ctf:
     mov si, wa_cfl
     mov di, wa_flags
     xor bx, bx
@@ -885,6 +1061,8 @@ wc_rspick:
 ; dropped and no teammate carrying it, there. A bot that fights (engaged,
 ; hunting) and carries nothing fights on. Keeps all but AX
 wc_bgoal:
+    cmp byte [wa_gmode], 3
+    je wc_hgoal
     cmp byte [wa_gmode], 1
     jne .out0
     push bx
@@ -1031,6 +1209,15 @@ wa_ovctf:
     mov ah, ch
     call wa_ovput
     inc bx
+    cmp byte [wa_gmode], 3      ; (king of the hill: # by its holders)
+    jne .nkh
+    mov al, cl
+    inc ax
+    cmp al, [wa_cfl+WC_ST]
+    jne .out
+    mov al, '#'
+    jmp wa_ovput
+.nkh:
     cmp byte [wa_gmode], 1      ; (CTF: where its flag is)
     jne .out
     xor si, si
@@ -1053,6 +1240,8 @@ wc_m_win:   dw wc_m_rwin, wc_m_bwin
 wc_m_rsc:   db 'RED SCORES', 0
 wc_m_bsc:   db 'BLUE SCORES', 0
 wc_m_youw:  db 'YOU WIN', 0
+wc_m_hwe:   db 'WE HAVE THE HILL', 0
+wc_m_hthey: db 'THEY HAVE THE HILL', 0
 wc_m_wins:  db ' WINS', 0
 wc_m_rwin:  db 'RED WINS', 0
 wc_m_bwin:  db 'BLUE WINS', 0

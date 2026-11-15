@@ -579,7 +579,7 @@ positions, or current flag positions"* - a plan of the arena, not a radar.
   never lost. Packed two samples to a cell (top and bottom half) and two
   cells to a byte, 208 bytes, it ends the route-graph block the game
   already copies out of the arena's part (`wa_gmmp`, after the flags'
-  bases); `minimap_text()` prints it on the host.
+  bases and the hill); `minimap_text()` prints it on the host.
 - **On the guest** it is turned into cells only when the overlay is rebuilt
   with Tab held: rows 1 to 13, centred, 32 cells at 80 columns and 16 at 40
   (two samples a cell, the larger kind - a wall wins), each the upper

@@ -8685,7 +8685,7 @@ SOAK = [
         "(one capture in four minutes).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
-    Row("wamodes", "soak", py("tests/wamodes.py"), 12.0,
+    Row("wamodes", "soak", py("tests/wamodes.py"), 25.0,
         "WIREARENA'S MODES, ONE MACHINE (docs/plans/WIREARENA-MODES-PLAN.md "
         "2, 3, 5, wave M1), off the game's own variables: Mode at team "
         "deathmatch lists only the arenas with sides (the hedge, the Twin) "
@@ -8696,9 +8696,18 @@ SOAK = [
         "kills anew and the bots' names kept, our fifth there shows YOU WIN "
         "and the next is the heights; team deathmatch at Win at 10 - the "
         "teams' tops are their players' kills (9 no win), the tenth shows "
-        "RED WINS and after 10 s the Twin, us on red's side. Red with "
+        "RED WINS and after 10 s the Twin, us on red's side; king of the "
+        "hill (wave M2) - its list the heights, the hedge and the Twin, on "
+        "the hedge its hill at the stack's foot, nobody's; we run over it, "
+        "red's (WE HAVE THE HILL); both teams on it, it stays; the foe alone, "
+        "blue's (THEY HAVE THE HILL); 10 s held, blue's point, its third "
+        "BLUE WINS, then the Twin and, round, the heights (no sides, the hill "
+        "on its platform); then two bots, one a team, each take the hill "
+        "within two guest minutes (29 to 50 s measured). Red with "
         "wa_sarlist's mode test inverted (3 checks), wc_score's team test "
-        "inverted (2) and wc_next keeping the arena (the next never comes).",
+        "inverted (2), wc_next keeping the arena (the next never comes) and "
+        "wc_hgoal returning at once (blue never takes the hill in two "
+        "minutes).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waflines", "soak", py("tests/waflines.py"), 11.0,
