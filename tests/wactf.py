@@ -240,7 +240,10 @@ def main():
         g.m.go()
         os88marty.until(g.m, lambda _: g.p.byte(sym["wa_arena"]) == 3 and
                         g.word("wa_cwin") == 0, "the hedge next", guest=20)
-        g.ticks(4)
+        f0 = g.p.byte(sym["wa_frame"])          # (wa_arena is set before
+        os88marty.until(g.m, lambda _: g.p.byte(sym["wa_frame"]) != f0,
+                        "its frames", guest=10)  # the read: a frame of the
+        g.ticks(4)                              # loop's is the match on)
         check(g.caps() == (0, 0) and g.flag(0, WC_ST) == HOME and
               g.flag(1, WC_ST) == HOME and (g.flag(0, WC_X, 2),
                                             g.flag(0, WC_Y, 2)) == HEDGE_RED
