@@ -1,7 +1,10 @@
 # WireArena with heights: stairs, platforms and lifts
 
-**STATUS: waves 0 to 3 BUILT** (section 9; wave 3 with the owner's revised
-arena, ramps and the one lift, 7.4 and 9.7); waves 4 and 5 are the plan. Written first for discussion with the owner, it answers the
+**STATUS: BUILT** (reconciled 2026-11-15). Waves 0 to 3 as section 9 has
+them (wave 3 with the owner's revised arena, ramps and the one lift, 7.4
+and 9.7); waves 4 and 5 landed item by item in the plans after this one,
+and 9.12 says where. Open of this plan: the host reference's raised lift in
+`tools/wacheck.py`, and the ramp walks of 9.7.3 as suite rows. Written first for discussion with the owner, it answers the
 owner's note of 2026-11-13:
 
 > *"Lets start on stairs, platforms, and moving platforms; with a more
@@ -2566,3 +2569,18 @@ view A; the session's scratch, `r5/walls/lv/vids/`):
    host reference's raised lift. The walking runs of 9.7.3 are scratch
    scripts; as suite rows they belong in `soak`
    (docs/WRITING-TESTS.md).
+
+### 9.12 Waves 4 and 5: where each item landed (reconciled 2026-11-15)
+
+| item (section 6) | where it landed |
+|---|---|
+| lift heights in the frame block; the trigger, rise, hold, return; riding | wave 3 (7.4.4) for the one lift; every lift's, a table a lift (WIREARENA-ARENAS-PLAN 4.1) |
+| dummies on lifts | the bots ride them (WIREARENA-AI-PLAN 8.1); a lift leg names its lift (ARENAS-PLAN 4.1) |
+| more than one lift | up to four (ARENAS-PLAN 4.1) |
+| the host reference's raised lift | **open**: `tools/wacheck.py` still leaves lifts out of its reference |
+| patrols across the platform | wave 3 (7.4.5), then the route graph (AI-PLAN 3) |
+| the start | each arena's own (`arenagen`'s `*_START`) |
+| a heights play bench | not an `H` key: the P bench takes each arena's own views, the heights arena's A to E (ARENAS-PLAN 4.2) |
+| measured against 2.4's forecast | 9.7.5, and performance pass 6 (MULTIPLAYER-FPS-PLAN 16.9) |
+| the levers of 2.5 the owner chose | flights as ramps (7.4.2); the detail levels (9.11); the owner's rulings in 16.10 |
+| the walking runs as suite rows | partly: lifts and tops are `walift` and `waarenas`; the ramp walks of 9.7.3 are still scratch scripts |
