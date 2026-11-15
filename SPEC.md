@@ -110837,10 +110837,14 @@ technique:
   load this image can send them. They fall to the refusal with any unknown verb.
 
 **The pad in front of the sector buffers is TUNED, not fixed.** `hdsec.inc`
-aligns `hd_mbr` to 512, and three of `hddtool.asm`'s own routines sit after the
-buffers so that the code in front ends on the boundary (the comment there says
-how to re-tune it). A byte more in front costs 511 bytes of pad; the cure is
-moving a routine across the buffers, never padding.
+aligns `hd_mbr` to 512, and what sits after the buffers is chosen so that the
+code in front ends on the boundary (the comment in `hddtool.asm` says how to
+re-tune it). A byte more in front costs 511 bytes of pad; the cure is moving a
+routine or a string across the buffers, never padding. Since driver size pass
+1 the controls (`os88ui.inc`) and `ipkg.inc`'s code are what sit after them,
+and three routines and the install log's strings were moved in front to take
+a pad of 319 to 0: the image 16,508 -> 16,153, a 16,896-byte claim -> 16,384
+(docs/plans/dsp1/hdd.md).
 
 ### 52.12 Every label on both surfaces is one opaque run
 

@@ -133,9 +133,9 @@ hd_tool_need:
                                 ; read below never runs in the user's folder
 
     mov ax, HDTOOL_PARA         ; PARAGRAPHS (SPEC.md 50.3.7): the image is
-    xor cx, cx                  ; a byte count, 16,510 today, and a KB door
+    xor cx, cx                  ; a byte count, 16,153 today, and a KB door
     mov bl, MEMP_CLAIM_HI       ; held 17KB of heap for it while the page was
-    call OSAPI_MEM_P            ; open where the granule holds 16.5. CX = 0,
+    call OSAPI_MEM_P            ; open where the granule holds 16. CX = 0,
                                 ; no DMA head; the DISK class, because the
                                 ; tool's own sector buffers take int 13h
     jc .fail                    ; owner = our segment, so drv_release sweeps
