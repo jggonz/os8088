@@ -13,6 +13,12 @@ This follows [WIREARENA-LINK-PLAN.md](WIREARENA-LINK-PLAN.md), whose
 sections 4 (protocol v1) and 12 (Ethernet E1) are what it builds on.
 Section 9 records what was built against it.
 
+**Filed under `completed/` (2026-11-15):** N1 to N5 are built, and 9.6 to
+9.10 are the last of the day's changes. Sections 2, 5 and 6 are the plan as
+written: what was built differs (9.1, 9.3, 9.4) and is noted at each. N6 is
+deferred by the owner, and what is open is carried in
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.
+
 ## 1. Decisions
 
 - **Four participants at most: players and bots together.** WireArena has
@@ -42,7 +48,11 @@ Section 9 records what was built against it.
 ## 2. The match setup window
 
 The opening window's text (every key the game knows, a debug list) is
-replaced by the match setup:
+replaced by the match setup *(as planned; as built it is the system's
+drop-downs - Arena, Columns, Bots, Skill, Play (offline, serial cable,
+local network, internet), Mode, Win at - the address field, a Nick field
+and the Play/Ready and Keys buttons, 9.4 and after; there is no match
+list, N4)*:
 
 ```
   WireArena
@@ -66,12 +76,15 @@ replaced by the match setup:
   Keys..., which opens the help as a dialog. The key list leaves the
   opening window but not the game.
 - **The IP field is os88line's** (SPEC.md 83): the address typed there,
-  remembered for next time in `SYSTEM\APPDATA` (SPEC.md 19.9).
+  remembered for next time in `SYSTEM\APPDATA` (SPEC.md 19.9). *In-session
+  only: persistence was declined by the owner (2026-11-15) - a player
+  should not reopen into the last match's settings, and saving costs time.*
 - **What a joined player cannot change is greyed with why**: the arena,
   bots and skill are the host's ("The host picks").
 - **The Game and Link menus keep their items** as a second way to the
   same settings: the menus still work, and the window shows what they
-  set.
+  set. *(Not since 9.4 and 9.9: there is no Game menu, and the Link menu is
+  Automatic, Connect COM1, Connect COM2 and Disconnect.)*
 - **The width** stays each player's own, as in v1.
 
 ## 3. UDP for packages (ETHER.DRV, SPEC.md 72.24 - 72.23 was taken)
@@ -111,6 +124,10 @@ replaced by the match setup:
 
 ## 5. Protocol v2 (the network)
 
+*Not built: v1's frames were kept and sent to each peer (9.3). This
+"protocol v2" is not the HELLO's protocol version 2 of LINK-PLAN 4.1, which
+added the nick (9.6).*
+
 Every v2 body starts with the type, the match tag and the sender's slot.
 The checks are v1's: one length per type, the CRC.
 
@@ -144,6 +161,10 @@ The checks are v1's: one length per type, the CRC.
 
 ## 6. Finding a match: the lobby v2
 
+*As built, matches are found by HELLO, broadcast or by address, with PEERS
+(9.3, 6.1); MATCH, JOIN and ASK were not built, and the match list was
+dropped by the owner (N4).*
+
 - **MATCH** (type 11, from a host, once a second, broadcast and to anyone
   who asked): the tag, the arena, the bots, the skill, the slots' players
   (identity and ready), and whether it has started.
@@ -172,7 +193,8 @@ has the details.
 
 - [x] **N1 the setup window** (the IP field, its address remembered and the
   match list come with N4, where they have something to do): the lines, the buttons, Keys..., the IP
-  field, the settings remembered. Alone and Serial work as now (Serial is
+  field, the settings remembered (in-session only: persistence declined
+  by the owner, 2026-11-15). Alone and Serial work as now (Serial is
   v1's lobby, shown in the window).
 - [x] **N2 UDP for packages** (the verbs; their row is N3's, which runs the
   match over them): SPEC.md 72.24, the three verbs, the queue,
@@ -190,6 +212,8 @@ has the details.
   serial cable, a null modem having two ends.
 - [ ] **N6 joining a match already playing** - wanted "only if it doesn't
   cost much in performance or size"; 9.4 has the estimate, for the owner.
+  **Deferred by the owner (2026-11-15)**, with evicting a bot for a
+  joiner, until a hosted server browser exists (MULTIPLAYER-FPS-PLAN 17.4).
 - [x] **N5 the rows** - `walink4` (four players, then three and a bot, a
   guest and then the host leaving), `walink4ip` (three joined by address),
   `wasetup` (the setup on the glass); the serial, raw and two-player UDP
@@ -209,14 +233,17 @@ has the details.
 
 - **`apps/wirearena/wasetup.inc`**:
   - Five settings, Arena, Bots, Skill, Width and Play (alone, serial
-    cable, Ethernet), each a value between `<` and `>`.
+    cable, Ethernet), each a value between `<` and `>`. *(Drop-downs since
+    9.4; Play's items since 9.2 and 9.8: offline, serial cable, local
+    network, internet.)*
   - Up and Down move the focus, which is drawn as an inverted row; Left
     and Right change the value, and so does a click on either half of the
     row.
   - Two os88ui buttons: Play (alone) or Ready / Not ready (linked), and
     Keys.
   - Keys fills the rows with the key list (eleven lines, from the old
-    fifteen) and hides the buttons; a key or a click goes back.
+    fifteen) and hides the buttons; a key or a click goes back. *(Since
+    9.4 the About card; 12 lines since 9.9.)*
 - **The rows are walink.inc's**: built as text, compared, and drawn with
   `font_run` only where they changed. The buttons are redrawn only when a
   label changes. The players' rows (YOU and the other) sit under the
@@ -235,7 +262,8 @@ has the details.
   of text, below the dock, where a CGA could not show them. The font has
   no triangles, hence `<` and `>`.
 - **The Game and Link menus keep their items.** The solo rows still start
-  from the Game menu, and it starts with the setup's bot count.
+  from the Game menu, and it starts with the setup's bot count. *(Until
+  9.4: the Play items went there, and the Game menu in 9.9.)*
 - **Found on the way**: the CRC's table was built only when a serial port
   opened. With the window no longer opening one, both machines on
   Ethernet computed CRCs from an empty table and agreed with each other.
@@ -252,7 +280,7 @@ The match is found by broadcast and by address; three and four players
 are next.
 
 - **The setup's Play row** is alone, serial cable, local network or
-  internet.
+  internet. *("offline" for "alone" since 9.8.)*
   - **Local network** asks ETHER.DRV for an address (`ud_open`, retried
     from the window's tick). With an address it binds UDP port 30088.
     With none in ~5 s it falls back to raw frames (E1), LAN only.
@@ -418,7 +446,8 @@ transient pixels** (`wasetup`). VGA measured the same.
 - **Play/Ready and Keys** stay os88ui buttons. Keys - and the system
   menu's About, which WireArena did not answer before - put the key list
   up as the standard **About card** (SPEC.md 12.2, `OS88UI_ABFIT` and
-  `OS88UI_ABLEFT` for thirteen lines on a CGA's content box).
+  `OS88UI_ABLEFT` for thirteen lines on a CGA's content box; twelve
+  since 9.9).
 - Row 0 says what the link is doing, and on the network our own address
   ("On the network at 10.7.0.20"), for a host to give to players joining
   by address. Rows 1 to 5 are the players.
@@ -460,7 +489,8 @@ Looked at on the 5150 CGA, the XT VGA and the 5150 Hercules.
 **Joining a match already playing - the estimate (N6)**. What it needs:
 
 1. the host announcing a running match (a HELLO each beat from inside the
-   match - one 20-byte datagram every half second, nothing on serial);
+   match - one 20-byte datagram every half second, nothing on serial;
+   28 bytes since HELLO's version 2, 9.6);
 2. a lobby machine showing it and sending Ready to the host;
 3. the host taking a HELLO from an unknown address in a match (refused
    today, deliberately) when a slot is free, and answering with a JOIN
@@ -524,11 +554,13 @@ The owner: a **Nick** entry on the match setup, sent to the other players
 and used on the Tab board and in kill messages; and the bottom row, when
 the meter is off, as a weapon hint and a message bar.
 
-- **The nick** is a third os88line field (SPEC.md 83), the right half of
-  the row Mode has (CTF-PLAN 7: `WS_Y4`, the window 174 tall): a ` Nick `
-  label and the field from x 232 to the right margin. Up to eight
+- **The nick** is a third os88line field (SPEC.md 83), in the left
+  column of the row under Mode (`WS_Y5`; the window 174 tall): a ` Nick `
+  label and the field from x 56, where the left column's drop-downs start
+  (`WS_NKX`), with the Play/Ready and Keys buttons right of it. Up to eight
   characters, letters in upper case, no Space (Space is Ready anywhere on
-  the page). It is the last focus stop, 7, after Mode's 6 - reading order.
+  the page). It is the last focus stop, 8, after Win at's 7 - reading
+  order (`WS_NICK`, `wasetup.inc`).
   `wa_nick` is the typed text space-padded.
 - **On the wire** it is HELLO's bytes 18..25 (LINK-PLAN 4.1, protocol
   version 2): every HELLO carries it, so a peer has it long before START,

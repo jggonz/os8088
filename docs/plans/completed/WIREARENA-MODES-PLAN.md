@@ -2,7 +2,9 @@
 
 **STATUS: BUILT** (2026-11-15): M1 to M4. Written to the owner's
 brief below, before any code; section 8 is the waves and section 9 what was
-built.
+built. Filed under `completed/` the same day; the one gap it left (no row
+of its own for free-for-all's and team deathmatch's linked wins, M4) is
+carried in [MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.3.
 
 The owner, 2026-11-15, after capture the flag
 ([WIREARENA-CTF-PLAN](WIREARENA-CTF-PLAN.md)):
@@ -87,6 +89,8 @@ their foes.
   Twin (the path's bottom). On the hedge the hill is the court's floor at
   the stack's south foot, not the stack's top as first planned: no route
   climbs the stack, so a bot could never take a hill there (section 9).
+  *(Since: Crossing, arena 5, plays all four modes, its hill at the centre -
+  [WIREARENA-THREE-ARENAS-PLAN](../WIREARENA-THREE-ARENAS-PLAN.md) 1.)*
 
 ## 5. Arenas by mode, and the rotation
 
@@ -139,7 +143,8 @@ code is needed, so nothing moves this round. The game segment has ~18 KB.
 **M1** (2026-11-15):
 
 - **The setup** (`apps/wirearena/wasetup.inc`): Mode's items are
-  free-for-all, team deathmatch, capture flag (`wa_smodes` maps the list to
+  free-for-all, team deathmatch, capture flag (king of the hill the fourth
+  since M2) (`wa_smodes` maps the list to
   `wa_gmode`'s numbers). `Win at` is the seventh drop-down, right of Mode;
   the nick moved under Mode, with Play and Keys beside it. **The window grew
   from 338 to 402 wide**: "team deathmatch" and "10 captures" did not fit

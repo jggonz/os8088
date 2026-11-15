@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena's deaths, respawns and score (docs/plans/WIREARENA-AI-PLAN.md 5).
+"""WireArena's deaths, respawns and score (docs/plans/completed/WIREARENA-AI-PLAN.md 5).
 
 One boot into the Heights arena at 40 columns, then, off the game's own
 variables (its symbols from wirearena.asm assembled with a map, refused

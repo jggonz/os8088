@@ -28,9 +28,9 @@ scale ... take them as general layout"*):
 > railgun at the top. Chaingun, rocket launcher at the four corner spawns
 > hidden behind the pillars out of view from the zigg."*
 
-The arena format is [WIREARENA-HEIGHTS-PLAN](WIREARENA-HEIGHTS-PLAN.md)
+The arena format is [WIREARENA-HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md)
 section 7 and `tools/arenagen.py`; the modes each arena plays come from its
-data ([WIREARENA-MODES-PLAN](WIREARENA-MODES-PLAN.md) section 6). All three
+data ([WIREARENA-MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) section 6). All three
 are DATA in `tools/arenagen.py`, plus the engine work section 5 names.
 
 Coordinates are world units (64 a metre), the room 2048 square, y north.

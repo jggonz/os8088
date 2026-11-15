@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """wabench - WireArena's own benches on MartyPC, read off its HUD row
 (docs/plans/MULTIPLAYER-FPS-PLAN.md 16.1 the B bench, 16.7 the P bench;
-WIREARENA-HEIGHTS-PLAN.md 9 the heights views A to E).
+completed/WIREARENA-HEIGHTS-PLAN.md 9 the heights views A to E).
 
 A DEVELOPMENT INSTRUMENT, not a suite row: the numbers the owner quotes
 (FPS, ms a frame, R render, P present, N video writes a frame), one line a

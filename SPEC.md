@@ -135569,7 +135569,7 @@ DNS). What these verbs add is a **package's port** and a queue for it.
 - **The parallel cable refuses all three** (`NET.DRV`): `nwire.inc` has no
   datagram, as it has no raw frame (72.22.3).
 
-WireArena is the first user (docs/plans/WIREARENA-NET-PLAN.md 3).
+WireArena is the first user (docs/plans/completed/WIREARENA-NET-PLAN.md 3).
 
 ## 73. The C toolchain — compiling C into an `.o88` package
 
@@ -231151,7 +231151,7 @@ Verbs 4 and 5 move a run of bytes in one call. A Write or Read is one
 call per byte, and on a 4.77 MHz 8088 that call is ~2,700 cycles through
 the X cell, the module's banking and `srl_pump`. A game sending a 24-byte
 snapshot six times a second and receiving as many spent ~110,000 cycles a
-frame there (docs/plans/WIREARENA-LINK-PLAN.md 11.2), about a quarter of
+frame there (docs/plans/completed/WIREARENA-LINK-PLAN.md 11.2), about a quarter of
 the frame. A block verb pays that once a run and ~40 cycles a byte.
 
 - A run is stored, then its index is published once: the producer index

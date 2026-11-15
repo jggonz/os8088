@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WireArena's lift carries whoever stands on it, however they got there
-(docs/plans/WIREARENA-HEIGHTS-PLAN.md 3.2, 7.4.4, 9.10).
+(docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 3.2, 7.4.4, 9.10).
 
 The owner, on the pc5150 in the Heights arena: "The lift just 'jitters' me in
 place when I stand on it, never lifting me up to the tower." The cause was in
@@ -294,7 +294,7 @@ def main():
         m.pause()
         # (the bots on their home loops and holding their fire, as in the
         # benches: this row is about the lift, and a bot's shot kills the
-        # rider - docs/plans/WIREARENA-AI-PLAN.md)
+        # rider - docs/plans/completed/WIREARENA-AI-PLAN.md)
         p.write(sym["wa_bdet"], b"\x01")
         g = Game(ui, w, sym, a.frames)
         if g.ltop <= g.lrest or g.lift < 0:

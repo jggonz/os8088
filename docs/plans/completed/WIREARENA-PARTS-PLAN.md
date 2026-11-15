@@ -3,14 +3,17 @@
 **STATUS: BUILT** (section 8, 2026-11-13; reconciled 2026-11-15): the
 renderer is part 0, the figures' cold keyframes a part of their own (8.6),
 and each arena a lazy part (7.5). Sections 1 to 7 are the plan as it was
-argued. This document answers the owner's note of 2026-11-13:
+argued. Filed under `completed/` (2026-11-15): 4.2's rows not yet written
+and 8.4's levers are carried in
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.3. This document
+answers the owner's note of 2026-11-13:
 
 > *"I really doubt this entire game will fit in the remaining few kb. We can
 > optimize for size later too, but almost certainly we are going to need
 > more than one part."*
 
 WireArena is `apps/wirearena/`, the text-mode arena shooter of
-[MULTIPLAYER-FPS-PLAN](MULTIPLAYER-FPS-PLAN.md). This plan was written on
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md). This plan was written on
 branch `parts-plan`, cut from `multiplayer-fps` at `d30f8d30` (the `P` play
 bench, MULTIPLAYER-FPS-PLAN §16.7). Five agents are tuning `wirearena.asm`
 and `wrender.inc` in parallel, so the migration in section 4 starts with a
@@ -551,7 +554,8 @@ if step 3's number says so.**
 
 - `ARENA` copies the walk tables into R.
 - G reads collision and nav data from the arena's segment.
-- The fetch happens from the Game menu command, before `OSAPI_FSX_RUN`, so
+- The fetch happens from the Game menu command *(the setup's Play since
+  NET-PLAN 9.4)*, before `OSAPI_FSX_RUN`, so
   the disk read sits in a loading moment and not inside a frame. Mem and
   file slots are legal in a bracket anyway (SPEC.md §53.7).
 - The arena is dropped when the match ends; the shadow makes a re-fetch
@@ -596,7 +600,10 @@ Per the Testing rules in CLAUDE.md:
 
 `tests/suite.py` has **no WireArena row today**. WireArena is an on-demand
 `instrument` (`apps/RETIRED.txt:85`). Once it ships, docs/WRITING-TESTS.md
-applies, and these are the rows the split itself makes worth having:
+applies, and these are the rows the split itself makes worth having
+*(since: about twenty `wa*` soak rows exist, none of these four; it is
+still listed as an instrument until the release, MULTIPLAYER-FPS-PLAN
+17.2)*:
 
 - **a launch row**: `op_load`, R and POSE present, banked segments
   non-zero;
@@ -906,7 +913,8 @@ figure access in the sim, which other branches are editing.
 - **kern_mega** (Bochs, 386, 16 MB): the region above 1MB (`OS88_HIGH`), the
   part a conventional selector pair through `op_seg`/`op_cseg`, the arena
   fetched as a selector, the bracket in protected mode (no `FSXF_REAL`),
-  the full arena drawn with its figures, Tab to 80 columns, Esc back; no
+  the full arena drawn with its figures, Tab to 80 columns *(`+` since
+  AI-PLAN 8.3)*, Esc back; no
   fault and no `kern_mega CLOSED`. kern_mega WORKS; no `PKG_MEGA` arm.
 - **kern_small**: refused at entry, before a sector of the parts is read,
   with the toast *Needs kern_big or mega* (`OSAPI_MOUSE_REL`'s refusal,
@@ -914,8 +922,10 @@ figure access in the sim, which other branches are editing.
 
 ### 8.4 Left over
 
-- The frame-phase dependence above, for the renderer's owners.
-- The game is an `instrument` (`apps/RETIRED.txt`) with no suite row. Once
+- The frame-phase dependence above, for the renderer's owners. *(Moot:
+  it was the held edges', and H is gone, HEIGHTS-PLAN 9.11.)*
+- The game is an `instrument` (`apps/RETIRED.txt`) with no suite row
+  *(rows exist since; the instrument listing stays until the release)*. Once
   it ships, the rows section 4.2 names; `pins`, `megapkg`, `partoff`,
   `stkapps` and `pkgdeps` already cover what this branch touched.
 - Section 3.4's version 2, if a later measurement wants the ~0.25%.
@@ -952,7 +962,8 @@ costs speed.
   - The commit message's "740 posed frames identical" overstated it; this
     is the accurate account.
   - H made no visible difference in the owner's field run (16.4), and it is
-    a candidate when the toggles are tidied.
+    a candidate when the toggles are tidied. *(Dropped: HEIGHTS-PLAN
+    9.11.)*
 
 ### 8.6 The cold keyframes, a part of their own (2026-11-14)
 

@@ -5,9 +5,12 @@ of play notes (section 8). Section 1 records the owner's rulings on what
 was left of WireArena (2026-11-14), and 1.1 where each one stands now;
 sections 2–6 are the bots and the match flow, priced; section 7 the
 questions and the owner's answers; section 8 what was built and measured.
+Filed under `completed/` on 2026-11-15: what 1.1 left open, after the
+owner's rulings of that day, is carried in
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.
 
 WireArena is `apps/wirearena/`. Its history is
-[MULTIPLAYER-FPS-PLAN](MULTIPLAYER-FPS-PLAN.md) §16,
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) §16,
 [WIREARENA-HEIGHTS-PLAN](WIREARENA-HEIGHTS-PLAN.md) §9 and
 [WIREARENA-WEAPONS-PLAN](WIREARENA-WEAPONS-PLAN.md). The computer opponent
 was proposed in MULTIPLAYER-FPS-PLAN §9; this plan replaces that section's
@@ -48,12 +51,18 @@ method given), **Derived** (arithmetic from measured unit costs) and
   mode. **Team deathmatch** joins the list, and it and capture the flag
   spawn a player on their own SIDE only. Capture the flag is next:
   [WIREARENA-CTF-PLAN](WIREARENA-CTF-PLAN.md). Last stand is still to
-  come.
+  come. *(Since: capture the flag, team deathmatch and king of the hill are
+  built - CTF-PLAN, [WIREARENA-MODES-PLAN](WIREARENA-MODES-PLAN.md); last
+  stand is an idea for after 1.0, MULTIPLAYER-FPS-PLAN 17.4.)*
 - **Open, not started**: kern_mega's linked match and its soak rows
   (LINK-PLAN L3.3); keyboard turn acceleration; jump pads and teleporters;
   replay and kill-cam; a radar prototype; footsteps and more sounds; two
   players on one 5150. More arenas come last, after every change that
   affects performance.
+  *Since the owner's rulings (2026-11-15, MULTIPLAYER-FPS-PLAN 17.1):
+  kern_mega is another session's; jump pads and teleporters are not in this
+  release; footsteps were tried and removed; two players on one system is
+  dropped. The rest is MULTIPLAYER-FPS-PLAN 17.3 and 17.4.*
 
 ## 2. The shape: a bot is a figure that walks a ROUTE and rolls dice
 
@@ -414,7 +423,8 @@ test a figure a tick.
 | accuracy at 4 m | 45% | 60% | 75% |
 
 The Game menu has three items, **Bots: easy, normal, hard**, each with a
-toast. A bench (and `walift`, `waweapons`) runs with `wa_bdet` set: the
+toast. *(Since 2026-11-15 there is no Game menu: the match setup's Skill
+drop-down is the one place - WIREARENA-NET-PLAN 9.9.)* A bench (and `walift`, `waweapons`) runs with `wa_bdet` set: the
 bots walk their home loops and do not think.
 
 **What it costs, measured** (MartyPC `os8088_5150_cga`, a breakpoint trace
@@ -476,11 +486,12 @@ bots on their home loops: a bot's shot killed the rider.
   PISTON, BOLT, GEAR.
 - **The board, while Tab is held**, over the live view, as the owner asked:
   - a 20-cell box over the middle: a header, then YOU and the robots by
-    kills, most first;
+    kills, most first *(since 2026-11-15 on rows 14 to 18, under the
+    arena's minimap on rows 1 to 13 - WIREARENA-NET-PLAN 9.7)*;
   - white on blue (inverse on mono), the header yellow, YOU bright green;
   - the overlay's (`WA_MOV` 160), rebuilt as it comes and goes.
 - **The width moves to - and +** (and the keypad's), Clear Skies' keys. The
-  help says so.
+  help says so *(the help is now the About card, the setup's Keys)*.
 
 **Readable**: on CGA at 40 columns, yes (looked at). **What it costs**: the
 P bench with Tab held all through it is **53.3 ms a frame against 49.9 at

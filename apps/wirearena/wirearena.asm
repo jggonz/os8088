@@ -1070,7 +1070,7 @@ wa_collide:
     ret
 
 ; wa_flcross - CF = 1 when the player's step from (wa_ox, wa_oy) to (wa_px,
-; wa_py) crosses one of the arena's FLOOR LINES (docs/plans/WIREARENA-
+; wa_py) crosses one of the arena's FLOOR LINES (docs/plans/completed/WIREARENA-
 ; ARENAS-PLAN.md 4.5): a line the feet stop at, as the twin's walk's edge.
 ; A line is near only when the new point is within 16 units of its box (a
 ; step is under 11); then the step's ends lie either side of the line, and
@@ -1750,7 +1750,7 @@ wa_lset0:
 .out:
     ret
 
-; --- the bots: seeing, facing, shooting (docs/plans/WIREARENA-AI-PLAN.md 4) -----
+; --- the bots: seeing, facing, shooting (docs/plans/completed/WIREARENA-AI-PLAN.md 4) -----
 ; Fast more than good (the owner): every fourth tick a bot looks along a
 ; 64-unit grid of the tall boxes to the player (wa_sight); seen, it ENGAGES -
 ; faces the player by a cross product's sign as it walks its edge, and after
@@ -2818,7 +2818,7 @@ wa_btake:
     pop bx
     ret
 
-; --- routes (docs/plans/WIREARENA-AI-PLAN.md 3) --------------------------------
+; --- routes (docs/plans/completed/WIREARENA-AI-PLAN.md 3) --------------------------------
 ; The arena's route graph (tools/arenagen.py graph_block), copied whole into
 ; wa_gph by wa_loadarena: a byte of nodes, of edges, a figure's home edge
 ; each; then a node a WA_GNSZ (x, y, its four edges out, 0xFF none), an edge
@@ -3199,7 +3199,7 @@ wa_figtick:
     mov ax, dx
     ret
 
-; --- weapons (docs/plans/WIREARENA-WEAPONS-PLAN.md 2.2, 6) --------------------
+; --- weapons (docs/plans/completed/WIREARENA-WEAPONS-PLAN.md 2.2, 6) --------------------
 ; Six, keys 1..6: the pistol (hitscan), the shotgun (a hitscan CONE, its
 ; damage the figure's inverse depth), the chaingun (hitscan while the
 ; trigger is held), the grenade launcher (a lob that bounces, on a fuse),
@@ -6491,7 +6491,7 @@ wa_hudname:                     ; BL = a code: its name at DI, its trailing
     loop .c
     ret
 
-; --- the renderer part (docs/plans/WIREARENA-PARTS-PLAN.md section 7) --------
+; --- the renderer part (docs/plans/completed/WIREARENA-PARTS-PLAN.md section 7) --------
 ; The renderer is part 0 of this file, apps/wirearena/wrpart.asm: its own
 ; segment, its own data, entered by far call with DS = that data. The names
 ; this file always called it by - wa_render, wa_present, wa_geominit,
@@ -6589,7 +6589,7 @@ wa_rretv:   dw wa_rret
 
 ; wa_rsync - the CONFIG section into the renderer part (after a mode set, a
 ; field-of-view change). Keeps every register but the flags.
-; THE DETAIL LEVELS (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9.11): per level,
+; THE DETAIL LEVELS (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 9.11): per level,
 ; Very Low to Very High, the options it turns on - wa_look's LK_ bits, then
 ; the floor grid (G) and the stepped treads (T),
 ; which their keys still override until the next level is chosen, and the

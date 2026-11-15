@@ -1,4 +1,4 @@
-; wapose.asm - WireArena's POSE part (docs/plans/WIREARENA-PARTS-PLAN.md
+; wapose.asm - WireArena's POSE part (docs/plans/completed/WIREARENA-PARTS-PLAN.md
 ; 8.6): the figures' COLD keyframes - a flinch and the deaths, tools/
 ; arenagen.py's wa_pose1 - alone in an OP_ASSET at org 0, NFACE x NJ x 2
 ; bytes a keyframe. The hot ones (IDLE, RUN) stay in the renderer part and

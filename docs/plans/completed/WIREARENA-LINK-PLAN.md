@@ -1,10 +1,18 @@
 # WireArena over a null modem: plan
 
 Two machines, one arena, a serial cable. This is wave 4 of
-[MULTIPLAYER-FPS-PLAN.md](MULTIPLAYER-FPS-PLAN.md) section 15 ("the serial
+[MULTIPLAYER-FPS-PLAN.md](../MULTIPLAYER-FPS-PLAN.md) section 15 ("the serial
 link, with the owner-authority model"), and its section 8.1 and 8.3 are
 where the model was first proposed. What is written here is the contract;
 section 9 records what was built against it, wave by wave.
+
+**Filed under `completed/` (2026-11-15):** L1, L2 and E1 are built;
+three and four players, the match setup and UDP are
+[WIREARENA-NET-PLAN](WIREARENA-NET-PLAN.md)'s. L3's stories are carried in
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.3 (L3.3, kern_mega,
+for the session that owns it). Since that day the lobby, the bots and the
+arena are chosen in the match setup window, not on menus (NET-PLAN 9.4,
+9.9): section 5's menus are the record of how L1 began.
 
 ## 0. The owner's rulings (2026-11-14)
 
@@ -114,7 +122,7 @@ ticks while the window is open and the port is leased:
 | 8..11 | the peer I have bound, or 0 |
 | 12 | my state: 0 in the lobby, 1 ready, 2 in the match |
 | 13 | the arena (the host's choice; a guest echoes the host's) |
-| 14 | the difficulty (host's), 15 the bots (L2: 0..2, host's) |
+| 14 | the host's: the difficulty (bits 0-1), Win at's pick for the mode (bits 2-4, MODES-PLAN M4), the mode (bits 5-6, CTF-PLAN 7); 15 the bots (L2: 0..2, host's) |
 | 16 | the match tag (host's, nonzero once START is sent) |
 | 17 | peers I have bound (WIREARENA-NET-PLAN 9.5) |
 | 18..25 | my nick: eight characters, space-padded, blank for none (NET-PLAN 9.6; a byte under 32 or over 126 reads as a space) |
@@ -183,7 +191,8 @@ events wait, and a ninth waits for room.
 ## 5. The lobby
 
 The window's content becomes the lobby whenever the port is leased; with
-no link it shows the help text as now.
+no link it shows the help text as now. *(Since NET-PLAN 9.1 the window is
+the match setup in every mode, its players' rows under the controls.)*
 
 ```
   WireArena  -  linked on COM2
@@ -196,16 +205,19 @@ no link it shows the help text as now.
 - **Link menu**: *Automatic* (the default: the search starts when the
   window opens, as WireFleet's does), *Connect COM1*, *Connect COM2*,
   *Disconnect*, and *Ready* (a toggle). Space or Enter in the window also
-  toggles Ready.
+  toggles Ready. *(Since 2026-11-15 the Link menu is Automatic, Connect
+  COM1, Connect COM2 and Disconnect: Ready is the setup's button, Space or
+  Enter - NET-PLAN 9.9.)*
 - **The host's Game menu chooses** the arena and the bots' difficulty while
-  linked. Its Play items no longer start a game; they set the arena, and
+  linked *(since: the host's setup drop-downs; there is no Game menu)*. Its Play items no longer start a game; they set the arena, and
   the lobby says so. A guest's arena items set its width and toast "The
   host picks the arena".
 - **The width** (40 or 80) stays each player's own. A machine plays the
   width it picked last.
 - **The opponent's name** is a robot name from the bots' list plus four hex
   digits of its identity, so two machines' names differ. Entering names is
-  later work.
+  later work. *(Built: the setup's Nick, HELLO bytes 18..25 - 4.1,
+  NET-PLAN 9.6. A peer with no nick keeps its robot name.)*
 - The lobby redraws only the lines that changed (PERFORMANCE.md rule 1).
   `font_run` draws them (CLAUDE.md: text is `font_run`).
 
@@ -221,7 +233,9 @@ no link it shows the help text as now.
   it stands.
 - **Firing**: the firing flag lights the figure's yellow cue (AI-PLAN 4.3,
   `F_FLASH` 86h), so the other player's shots are visible as the bots' are.
-- **Its weapon** is not drawn (no figure holds one yet). Its shield flag
+- **Its weapon** is not drawn (no figure holds one yet; held weapons on
+  figures were tried in an early prototype and thrown away - seen only up
+  close, and it costs performance: the owner, 2026-11-15). Its shield flag
   makes its chest yellow, as a shielded bot's is (WEAPONS-PLAN 2.3).
 - **Death**: the alive flag falling starts the death animation of the kill
   kind in bits 6..7. The figure lies for 3 s (8.5's rule) and is gone until
@@ -314,6 +328,10 @@ places ride the host's snapshot instead of being walked on the guest.)*
 
 ### L3: after
 
+*Open when this plan was filed (2026-11-15), and carried in
+MULTIPLAYER-FPS-PLAN 17.3: L3.1 and L3.2 there, L3.3 with the session that
+owns kern_mega.*
+
 - [ ] **L3.1 WireFleet onto `os88cable.inc`**: its search and framer
   replaced by the shared include, its rows (`wirefleetlink`,
   `wirefleetsystem`, `wirefleetnomouse`) the check.
@@ -358,6 +376,8 @@ already belongs to the `.LNK` links and autostart include (SPEC.md
   (`font_run`, ground and glyph in one pass).
 - **Automatic from the start**, as WireFleet's is: opening the window looks
   for the cable. With no peer, the Game menu plays alone as before.
+  *(Since NET-PLAN 9.1 the window opens on no carrier, and the setup's
+  Play starts every match.)*
 - **The match**: `wa_lktick` at the head of every sim tick polls the cable
   (24 bytes at most) and sends a SNAP on every third tick, otherwise the
   next waiting event; a SCORE every 30. In a match, figure 0 is the other
@@ -402,7 +422,8 @@ judged from FIRE, not from the word.
 
 **Not yet**: names entered by the players (a robot name and four hex
 digits for now), the 86Box pair (L3.2), kern_mega (L3.3), WireFleet on the
-shared include (L3.1).
+shared include (L3.1). *(Names: built, NET-PLAN 9.6. The rest:
+MULTIPLAYER-FPS-PLAN 17.3.)*
 
 ### 11.2 L2: the host's bots, and what the link costs (2026-11-14)
 
@@ -438,7 +459,8 @@ lift moves for its own riders). The budget showed it was not needed:
   this table's first row.
 - **Bots: 0, 1 or 2**, the host's choice on the Link menu (No bots, One
   bot, Two bots; 2 by default), shown in the lobby. The difficulty is the
-  host's Game menu choice, as in L1.
+  host's Game menu choice, as in L1. *(Since: both are the host's setup
+  drop-downs, Bots and Skill - NET-PLAN 9.4, 9.9.)*
 
 **What the link cost, and what was done about it** (MartyPC, the 5150 on
 CGA, a host match with two bots faked on one machine: the lease open on
@@ -557,7 +579,8 @@ proposal; this is what E1 builds on it.
   their CRC. Only the carrier differs. The CRC is redundant on Ethernet,
   whose FCS covers the frame, but keeping it means one validator for both
   carriers (`lk_frame`, factored out of `os88cable.inc`'s framer).
-- **Not yet three or four players.** That is E2. Section 4's protocol is a
+- **Not yet three or four players.** That is E2 *(built:
+  NET-PLAN 9.3)*. Section 4's protocol is a
   host and a guest throughout: one damage word, one remote player, the
   codes 0 to 3. Four players need the protocol generalised, and E1 does
   not pretend otherwise.
@@ -592,7 +615,9 @@ proposal; this is what E1 builds on it.
 ### 12.3 The lobby
 
 Link > **Ethernet** (or E in the window) leaves the serial port and
-claims the card. Row 0 says "Looking on Ethernet..." and then "Linked on
+claims the card. *(Since: the setup's Play, "local network", which takes
+UDP and falls back to raw frames with no address - NET-PLAN 9.2. The Link
+menu has no Ethernet item since NET-PLAN 9.9, and there is no E key.)* Row 0 says "Looking on Ethernet..." and then "Linked on
 Ethernet". Everything after binding is section 4.1's. Link > Automatic
 returns to the cable; Disconnect lets both go.
 
@@ -613,7 +638,8 @@ Built as 12.1 to 12.4 say:
   `lk_seal` appends the CRC for a carrier that sends whole bodies.
 - **WireArena switches carriers in one place each**: `wa_lksend`,
   `wa_lkpoll` and `wa_lkup`. Link > Ethernet (or E) claims the card;
-  Automatic, COM1, COM2 and Disconnect give it back. Closing the window
+  Automatic, COM1, COM2 and Disconnect give it back. *(Since: the setup's
+  Play claims and releases it.)* Closing the window
   gives back both.
 - **HELLO goes to everyone; the rest goes to the peer**, whose station
   address `wa_lkhtake` records from each HELLO of its bound peer.

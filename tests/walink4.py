@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena, four machines on one network (docs/plans/WIREARENA-NET-PLAN.md
+"""WireArena, four machines on one network (docs/plans/completed/WIREARENA-NET-PLAN.md
 section 4): four QEMUs with an NE2000 each on tests/walink.py's hub relay,
 which answers DHCP (10.7.0.20 to .23). The shipped package, real datagrams.
 

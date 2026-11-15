@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """wastill - WireArena's STANDING VIEW draws the moving view's picture
-(docs/plans/WIREARENA-ARENAS-PLAN.md 5, "What a standing view keeps").
+(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5, "What a standing view keeps").
 
 The renderer keeps work across frames while the view stands: a floor line's
 walk (wa_flines), a low box's corners (wl_vert: the vertices stamped last
