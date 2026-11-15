@@ -5178,10 +5178,13 @@ wa_mmcell:
     jbe .y1
     mov dx, 2047
 .y1:
-    mov cl, 6                   ; a column: 64 units (80), 128 (40)
-    cmp word [wa_w], 40
+    mov cl, 6                   ; a column: 64 units (80), 128 (40) - a
+    cmp word [wa_w], 40         ; sample on at phase 1
     jne .c
     inc cx
+    cmp byte [wa_mmph], 0
+    je .c
+    add ax, 64
 .c:
     shr ax, cl
     push ax
@@ -5203,9 +5206,10 @@ wa_mmcell:
 wa_ovmm:
     push di
     mov al, WA_MMW              ; its cells across: a sample each at 80
-    cmp word [wa_w], 40         ; columns, two at 40
-    jne .w
+    cmp word [wa_w], 40         ; columns, two at 40 (a cell more at phase
+    jne .w                      ; 1: a sample alone at either end)
     shr al, 1
+    add al, [wa_mmph]
 .w:
     mov [wa_mmw], al
     mov [es:WA_RAT(wa_mmbw)], al
@@ -5281,30 +5285,42 @@ wa_ovmm:
     and ah, 3                   ; AH = the bottom's
     jmp short .kk
 .k40:
-    mov bx, ax                  ; 40: a byte a cell, each half the larger
-    mov al, [si+bx]             ; of its two
-    mov cl, al
-    mov ch, al
-    and al, 3
-    shr ch, 1
-    shr ch, 1
-    shr ch, 1
-    shr ch, 1
-    and ch, 3
-    cmp al, ch
-    jae .t
-    mov al, ch
-.t:
-    mov ah, cl
-    shr ah, 1
-    shr ah, 1
-    and ah, 3
-    mov ch, cl
-    mov cl, 6
-    shr ch, cl
-    cmp ah, ch
-    jae .kk
-    mov ah, ch
+    mov bx, ax                  ; 40: two samples a cell - 2c and 2c+1, or
+    shl bl, 1                   ; at phase 1 2c-1 and 2c - each half the
+    sub bl, [wa_mmph]           ; larger kind of the pair's (BL past the
+    xor ax, ax                  ; map, 0FFh or 32: no sample)
+    call .samp
+    inc bl
+    call .samp
+    jmp short .kk
+.samp:                          ; BL = a sample: AL, AH the larger kinds
+    cmp bl, WA_MMW              ; (keeps BX)
+    jae .sr
+    push bx
+    mov dl, bl
+    shr bl, 1
+    mov dh, [si+bx]
+    test dl, 1
+    jz .se
+    mov cl, 4
+    shr dh, cl
+.se:
+    mov dl, dh
+    and dl, 3                   ; (its top's)
+    cmp al, dl
+    jae .s1
+    mov al, dl
+.s1:
+    shr dh, 1
+    shr dh, 1
+    and dh, 3                   ; (its bottom's)
+    cmp ah, dh
+    jae .s2
+    mov ah, dh
+.s2:
+    pop bx
+.sr:
+    ret
 .kk:
     pop cx
     call wa_mmglyph             ; AL = the glyph, AH = its attribute
@@ -6897,6 +6913,9 @@ wa_loadarena:
     inc ax
     inc ax
     mov [wa_gmmp], ax
+    mov bx, ax                  ; ...and its phase at 40 columns, after it
+    mov al, [bx + WA_MMW / 2 * WA_MMH / 2]
+    mov [wa_mmph], al
     call wa_sgrow
     pop ax
     call op_drop
@@ -7180,6 +7199,7 @@ WA_VAR wa_gmmp,2                 ; -> the arena's minimap (in wa_gph)
 WA_VAR wa_mmkey,2                ; ...the player's cell on it, as drawn
 WA_VAR wa_mmf,4                  ; ...the bases' (FFFFh: none shown)
 WA_VAR wa_mmw,1                  ; ...its cells across
+WA_VAR wa_mmph,1                 ; ...its phase at 40 columns (arenagen's)
 WA_VAR wa_mmo0,2                 ; ...its first cell (x 2)
 WA_VAR wa_mma,WA_MMCAP           ; ...and its block's bytes (the renderer
                                  ; reads them here: wafb.inc's wa_mmseg)

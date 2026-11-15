@@ -16,7 +16,7 @@
     by itself when its time runs out;
   - THE WIN (Win at 3, its default): at 2 captures, a third shows RED
     WINS, and after its 10 s the match goes on in the next CTF arena of the
-    rotation, the hedge - nobody's captures, both flags home at its bases,
+    rotation, the pit - nobody's captures, both flags home at its bases,
     us on our side (WIREARENA-MODES-PLAN 5);
   - NO FRIENDLY FIRE: our pistol at our teammate (bot 2) takes nothing off
     it; at the foe (bot 1) it does;
@@ -47,7 +47,7 @@ F_SIZE, F_X, F_Y, F_DEAD, F_HP = 56, 0, 2, 17, 42
 WC_SZ, WC_ST, WC_CARR, WC_X, WC_Y, WC_TMR = 10, 0, 1, 2, 4, 8
 HOME, CAR, DROP = 0, 1, 2
 RED, BLUE = (192, 1024), (1856, 1024)
-HEDGE_RED = (224, 1152)
+PIT_RED = (64, 1024)            # (on the ring, 240 up)
 
 
 def match(ui, arena, bots):
@@ -238,17 +238,17 @@ def main():
               "THE WIN: red's third capture shows RED WINS",
               (g.caps(), g.word("wa_cwin")))
         g.m.go()
-        os88marty.until(g.m, lambda _: g.p.byte(sym["wa_arena"]) == 3 and
-                        g.word("wa_cwin") == 0, "the hedge next", guest=20)
+        os88marty.until(g.m, lambda _: g.p.byte(sym["wa_arena"]) == 7 and
+                        g.word("wa_cwin") == 0, "the pit next", guest=20)
         f0 = g.p.byte(sym["wa_frame"])          # (wa_arena is set before
         os88marty.until(g.m, lambda _: g.p.byte(sym["wa_frame"]) != f0,
                         "its frames", guest=10)  # the read: a frame of the
         g.ticks(4)                              # loop's is the match on)
         check(g.caps() == (0, 0) and g.flag(0, WC_ST) == HOME and
               g.flag(1, WC_ST) == HOME and (g.flag(0, WC_X, 2),
-                                            g.flag(0, WC_Y, 2)) == HEDGE_RED
+                                            g.flag(0, WC_Y, 2)) == PIT_RED
               and g.word("wa_px") < 1024,
-              "THE WIN: after its 10 s the next CTF arena, the hedge - no "
+              "THE WIN: after its 10 s the next CTF arena, the pit - no "
               "captures, both flags home at its bases, us on our side",
               (g.caps(), g.word("wa_px")))
     with boot() as ui:                          # C2: THE BOTS PLAY FOR IT

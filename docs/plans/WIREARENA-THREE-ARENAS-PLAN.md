@@ -210,3 +210,14 @@ spawns on the layer, no hop) takes six boxes out of every outline pass; a
 single-piece layer band each side (the dividers standing on it) takes four
 more.
 
+**The Crossing's minimap** (the owner, 2026-11-15: *"the minimap is showing
+the vertical pathway as filled"*): at 40 columns a minimap cell is two
+samples (128 units), the larger kind of the pair - a wall wins - and the
+crossing's north-south arm, 2 m between 1 m walls, straddles a pair's
+boundary at x 1024, so both its cells were wall. arenagen now writes a
+PHASE byte after each minimap: pairs (2c, 2c+1), or (2c-1, 2c) with a
+sample alone at either end and a cell more, whichever splits fewer walls
+from floor. The crossing (and pillars, open) take phase 1; the game's
+`wa_ovmm` and `wa_mmcell` pair by it. `waarenas` checks the arm open; red
+with the phase held at 0.
+
