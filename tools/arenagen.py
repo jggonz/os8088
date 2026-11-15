@@ -74,12 +74,16 @@ class Box(tuple):
     """A box: the 4-tuple every geometry routine reads, plus its height
     (units above the floor; a lift's REST height), its kind, its colour (0 a
     boundary, 1 an item - wa_bcol), and for a flight the face it rises
-    TOWARD and its tread count, for a lift its raised height."""
+    TOWARD and its tread count, for a lift its raised height. ON: the box it
+    STANDS on (HEDGES-PLAN 8) - the one just before it in the arena's list,
+    both low solids, it strictly inside that one's footprint and taller: its
+    faces rise from that box's top. The ground is the tallest box over a
+    point, so everything that reads heights takes a stack as it is."""
     def __new__(cls, x0, y0, x1, y1, h=WALL_H, kind=SOLID, col=1, toward=None,
-                treads=0, top=None, name=""):
+                treads=0, top=None, name="", on=None):
         b = tuple.__new__(cls, (x0, y0, x1, y1))
         b.h, b.kind, b.col, b.toward, b.treads = h, kind, col, toward, treads
-        b.top, b.name = top, name
+        b.top, b.name, b.on = top, name, on
         return b
 
 
@@ -658,17 +662,17 @@ TWIN_START = (640, 800, 0)
 # middle; the middle hedge W by its north end and E by its south end.
 def _hedge():
     H, G = MH, COL_HEDGE
+    STK0 = Box(832, 960, 1216, 1344, 48, col=COL_PLAT, name="stack bottom")
     bx_ = [
-        # the stack, as the maze's: 384, 256 and 128 square
-        Box(960, 1088, 1088, 1216, 160, col=COL_PLAT, name="stack top"),
-        Box(896, 1216, 1152, 1280, 104, col=COL_PLAT, name="stack middle N"),
-        Box(896, 1024, 1152, 1088, 104, col=COL_PLAT, name="stack middle S"),
-        Box(1088, 1088, 1152, 1216, 104, col=COL_PLAT, name="stack middle E"),
-        Box(896, 1088, 960, 1216, 104, col=COL_PLAT, name="stack middle W"),
-        Box(832, 1280, 1216, 1344, 48, col=COL_PLAT, name="stack bottom N"),
-        Box(832, 960, 1216, 1024, 48, col=COL_PLAT, name="stack bottom S"),
-        Box(1152, 1024, 1216, 1280, 48, col=COL_PLAT, name="stack bottom E"),
-        Box(832, 1024, 896, 1280, 48, col=COL_PLAT, name="stack bottom W"),
+        # the stack, as the maze's - 384, 256 and 128 square - but three
+        # boxes, each STANDING on the one under it (HEDGES-PLAN 8), not nine
+        STK0,
+        Box(896, 1024, 1152, 1280, 104, col=COL_PLAT, name="stack middle",
+            on=STK0),
+    ]
+    bx_ += [
+        Box(960, 1088, 1088, 1216, 160, col=COL_PLAT, name="stack top",
+            on=bx_[-1]),
         # the court's hedge, x 640..1408, y 640..1664, 1 m thick: its gaps
         # x 960..1088, N and S
         Box(640, 640, 704, 1664, H, col=G, name="inner hedge W"),
@@ -1036,6 +1040,14 @@ def pvs_build(tag, boxes):
     if os.environ.get("WA_PVSLOW", "1") != "0":   # WA_PVSLOW=0: the A/B, the
         low = pvs_low(boxes, out, occ)            # tall boxes' test alone)
     cut += low
+    for i in range(len(boxes) - 1, -1, -1):   # A STACK is drawn from its
+        b = boxes[i]                    # bottom's leaf, each box from the one
+        if b.on is not None:            # it stands on (wl_child): a box that
+            r = i - 1                   # can be seen keeps every box under
+            for col in out:             # it (HEDGES-PLAN 8 - a tall tier
+                for k in range(len(col)):   # over a hedge its bottom is not),
+                    if col[k] >> i & 1:     # top down, so the bottom takes
+                        col[k] |= 1 << r    # them all
     share = cut / float(len(boxes) * len(out) * len(out[0]))
     sys.stderr.write("arenagen: arena %s: the PVS culls %.1f%% of box-cells "
                      "(%.1f%% behind low boxes)%s\n"
@@ -1191,7 +1203,9 @@ def pvs_lowseen(p, e, i, boxes, top):
             so = pvs_span(px, py, ux, uy, o)
             if so is None or so[0] >= sp[0] - 1e-6 and so[0] > 1e-6:
                 continue                # (missed, or behind the box)
-            for t in so:
+            if so[1] > sp[0]:           # (only what is IN FRONT of it can
+                so = (so[0], sp[0])     # hide it: a stack's box under it
+            for t in so:                # runs on past it - HEDGES-PLAN 8)
                 if t <= 1e-6:
                     continue            # (under the eye: its far end only)
                 if (pvs_top(o, px + ux * t, py + uy * t, False) - e) / t >= best - 1e-9:
@@ -1690,7 +1704,53 @@ def kind_byte(b, lifts, boxes=()):
         return FLIGHT | FACES.index(b.toward) << 2 | b.treads << 4
     if b.kind == LIFT:
         return LIFT | lifts.index(b) << 4
-    return SOLID
+    k = SOLID                           # A STACK (HEDGES-PLAN 8): bit 2 it
+    if boxes:                           # carries the next box, bit 3 it
+        i = next(j for j, x in enumerate(boxes) if x is b)  # (stands on
+                                        # the one before)
+        if i + 1 < len(boxes) and boxes[i + 1].on is b:
+            k |= 0x04
+        if b.on is not None:
+            k |= 0x08
+    return k
+
+
+WA_MSTK = 3                     # boxes a stack may have (wa_lowbox's saves)
+
+
+def stacks(tag, boxes):
+    """A stack's rules (HEDGES-PLAN 8), refused where broken; -> the ROOTS'
+    indices, the boxes the tree holds (a stack is its bottom's leaf)"""
+    for i, b in enumerate(boxes):
+        if b.on is None:
+            continue
+        a = b.on
+        if i == 0 or boxes[i - 1] is not a:
+            raise SystemExit("arenagen: arena %s: %s stands on %s, which is "
+                             "not just before it" % (tag, b.name, a.name))
+        top = hmax(boxes)
+        if b.kind != SOLID or a.kind != SOLID or b.h >= top or b.h <= a.h:
+            raise SystemExit("arenagen: arena %s: %s on %s - a stack is low "
+                             "solids, each taller than the one under it"
+                             % (tag, b.name, a.name))
+        if not (a[0] < b[0] and b[2] < a[2] and a[1] < b[1] and b[3] < a[3]):
+            raise SystemExit("arenagen: arena %s: %s is not strictly inside "
+                             "%s, which it stands on" % (tag, b.name, a.name))
+        n, c = 1, b
+        while c.on is not None:
+            n, c = n + 1, c.on
+        if n > WA_MSTK:
+            raise SystemExit("arenagen: arena %s: a stack of more than %d "
+                             "boxes (%s)" % (tag, WA_MSTK, b.name))
+    return [i for i, b in enumerate(boxes) if b.on is None]
+
+
+def stack_root(boxes, i):
+    """box i's stack's bottom"""
+    b = boxes[i]
+    while b.on is not None:
+        b = b.on
+    return next(j for j, x in enumerate(boxes) if x is b)
 
 
 def height_checks(tag, boxes):
@@ -1771,6 +1831,11 @@ def height_checks(tag, boxes):
                      0 <= b.h - n.h <= apex - 8 for f, n in neighbours(b)):
                 reach.add(id(b))
                 grow = True
+            elif b.on is not None and (id(b.on) in reach or
+                                       b.on.h <= apex - 8) and \
+                    b.h - b.on.h <= apex - 8:
+                reach.add(id(b))        # (a stack's: a jump off the box it
+                grow = True             # stands on, HEDGES-PLAN 8)
             elif any(id(n) in reach and n.kind == SOLID and n.h == b.h and
                      0 < gap <= jump_gap() for n, gap in across(b)):
                 reach.add(id(b))        # (across a gap a run-up jumps:
@@ -1795,7 +1860,7 @@ def arena_tables(w, tag, boxes, start):
     height_checks(tag, boxes)
     graph_edges(tag, boxes)             # (the routes' checks: AI-PLAN 3.1)
     nodes = []
-    box_tree(list(range(len(boxes))), nodes, boxes)
+    box_tree(stacks(tag, boxes), nodes, boxes)
     pts = []
     for (a, b, c, d) in [ROOM] + boxes:
         pts += [(a, b), (c, b), (c, d), (a, d)]
@@ -1969,6 +2034,7 @@ def main(out):
     w("WA_GPHSZ equ %d" % ((max(len(graph_block(t, bs)) for t, _, bs, _
                                 in arenas()) + 1) & ~1))
     w("WA_MGN equ %d" % WA_MGN)
+    w("%%assign WA_MSTK %d" % WA_MSTK)    # (a stack's boxes: wl_child's saves)
     # poses
     first = 0
     for name, n, _, _ in ANIMS:

@@ -254,3 +254,69 @@ and the scan were paid for nothing. The setup ate the gain.
 **7.3 The floor's pair once a frame.** `wa_render` makes the outline
 path's floor pair where it clears the column state, and `wa_lowbox` no
 longer tests the frame for it.
+
+## 8. A box standing on a box (4.2, the owner's item 3)
+
+*"Stackable boxes will help in future arenas too, so lets try it."*
+
+**The model.** `Box(..., on=lower)`: a box STANDS on the box just before
+it in the arena's list - both low solids, it strictly inside that one's
+footprint and taller - and its faces rise from that box's top. A stack is
+at most `WA_MSTK` (3) boxes. The ground is the tallest box over a point, so
+everything that reads heights (`wa_floor`, `wa_hat`, the low tables, the
+routes, the pickups' z) takes a stack as it is, and the game is unchanged.
+The kind byte's bits 2 (it carries the next box) and 3 (it stands on the
+one before) mark it: free on a solid, and every reader masks them off. The
+hedge's stack is three boxes where it was nine: 31 boxes in all, 104
+vertices.
+
+**Drawing it.** The box tree holds a stack's bottom alone; `wa_lowbox`
+draws the box standing on it between its own NEAR faces and the FAR side
+of its top (`wl_child`), recursively, with its floor - its posts and floor
+edges - at the lower box's top. Every ray from the eye crosses the lower
+box's near faces first and its far edge last, so that order is right from
+any eye, the player standing on a tier included. With the eye above the
+lower box its far side is drawn after, on its corners, so those and its
+faces' bits are saved round the call (74 bytes a level, `rep movsw`).
+
+What `wl_child` tests before drawing, each MEASURED:
+- **`wa_left`**: a lower box whose near faces shut every column ends the
+  stack, as the walk's own stop would have.
+- **The walk's hint corners** (a box wholly past the right edge's line or
+  behind, or wholly left): the stack's upper boxes were drawn with no view
+  test at first, so a player on the bottom tier set up the tiers behind
+  him. Pose 125, standing on the bottom tier: 106 -> 155 kclk, fixed.
+- **A tier's own PVS bit - tried and taken out.** It bought nothing
+  (+0.07%). Its first version seemed to save 5%: a slip skipped tiers
+  that should have been drawn, and the picture comparison caught it.
+
+**The PVS.** A box that can be seen keeps every box it stands on (its bits
+ORed down the stack): a tall tier over a hedge can show where its base
+cannot. And the low pass (`pvs_lowseen`) let a nearer box hide a farther
+one by its whole span along a ray, which for boxes that never overlap is
+all in front; a stack's bottom runs on PAST the tier on it, and its far
+edge was counted as hiding that tier. Only the part of a box in front of
+another can hide it now. Every other arena's part is byte-identical.
+
+**Measured** (the hedge's 200 poses, figures out, against the nine-box
+stack; every other arena's pictures identical and its cost within 0.01%):
+
+| region | nine boxes | stacked | |
+|---|---|---|---|
+| court | 138.5 | 117.1 | -15.4% |
+| court, on a tier (48, 104, 160) | 152, 155, 125 | 132, 131, 110 | -12 to -15% |
+| inner ring | 94.1 | 89.5 | -4.8% |
+| outer ring, rooms | | | +0.1% |
+| **all** | **131.3** | **122.7** | **-6.5%** |
+
+22 of the 200 pictures differ, in 246 cells: the nine boxes' seams - a
+doubled post where ring pieces met, a broken crease - and an edge that
+steps a column differently now that it is one edge, not a piece's. A few
+frames are dearer (+15 to +18 kclk, looking steeply down at the bottom
+tier): there a ring piece's far edge shut every column before the others
+came up, while a tier standing on a box is drawn before that far edge,
+which it may hide.
+
+Not yet tried in the game: walking and jumping the tiers. The game reads
+the stack as the ground's heights, unchanged; the soak rows `waarenas`
+and `walift` are the ones to run.

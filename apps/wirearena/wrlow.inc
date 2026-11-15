@@ -55,6 +55,8 @@ WL_KT       equ 8
 WL_KI       equ 10
 WL_KF       equ 12
 WL_REC      equ 16
+%assign WL_SV 74                ; a stack's save slot (wl_child): wl_seen ..
+                                ; wl_c's end, then wl_nvk
 
 %macro WL_BSS 0
 WA_VAR wl_h, 2                  ; its height (a flight's, its top tread's)
@@ -73,8 +75,12 @@ WA_VAR wl_fneed, 1              ; ...of them, those with a floor row
 WA_VAR wl_m, 1                  ; the seen faces drawn with a floor edge
 WA_VAR wl_pm, 1                 ; ...and the faces given a pass
 WA_VAR wl_c, 4*WL_REC           ; its corners (WL_*)
-WA_VAR wl_fn, 2                 ; the floor's pair (made each frame:
-WA_VAR wl_fs, 1                 ; wa_render)
+WA_VAR wl_fn, 2                 ; the floor's pair: the ground's, or a
+WA_VAR wl_fs, 1                 ; stacked box's, its floor's (wl_child)
+WA_VAR wl_gfn, 2                ; ...the ground's, made each frame
+WA_VAR wl_gfs, 1                ; (wa_render)
+WA_VAR wl_lvl, 1                ; a stack's level being drawn (wl_child)
+WA_VAR wl_save, WL_SV*(WA_MSTK-1) ; ...and its saves
 WA_VAR wl_hn, 2                 ; the box's height's
 WA_VAR wl_hs, 1
 WA_VAR wl_hh, 2                 ; ...that height (-1: none this frame)
@@ -119,6 +125,9 @@ WA_VAR wl_th, 2
 WA_VAR wl_hst, 2
 WA_VAR wl_back, 1
 WA_VAR wl_fartop, 2             ; FARTOP: 0, or WL_FARTOPV (wa_lookset)
+%if wl_c + 4*WL_REC - wl_seen != WL_SV - 2
+ %error "wl_child saves wl_seen .. wl_c's end as one block"
+%endif
 %endmacro
 
 ; wl_crn - per set of faces (S 1, E 2, N 4, W 8): the corners they run
@@ -348,6 +357,10 @@ wa_lowbox:
     jz .p3s
     call wl_treads
 .p3s:
+    test byte [wl_kind], 4      ; A STACK (HEDGES-PLAN 8): the box standing
+    jz .p3go                    ; on this one, between this one's near
+    call wl_child               ; faces and the far side of its top
+.p3go:
     ; 3. THE FAR SIDE OF ITS TOP, with the eye above the box
     cmp byte [wl_abv], 0
     je .p3d
@@ -368,6 +381,114 @@ wa_lowbox:
     jnz .done
     jmp wl_treads
 .done:
+    ret
+
+; wl_child - a STACK (HEDGES-PLAN 8): the box standing on this one, the next
+; in wa_boxes, drawn whole - with any standing on it - as a low box whose
+; floor is this one's top: its posts and its floor edges there. Drawn after
+; this one's near faces, which are nearer than anything of it, and before
+; this one's far side, which it may hide: every ray from the eye crosses
+; this one's near faces first and its far edge last. That far side is drawn
+; on this one's corners, so with the eye above (wl_abv) they and the faces'
+; bits are saved round the call, a slot a level (WA_MSTK - 1 of them).
+; The floor's pair is the ground's again after. Clobbers everything.
+wl_child:
+    cmp word [wa_left], 0       ; (this box's near faces shut every column:
+    je .gone                    ; the walk's own stop, as it would have)
+    mov bx, [wa_crow]
+    sub bx, wa_corn             ; BX = its record x 4
+                                ; ITS VIEW TEST, the walk's hints' (it has no
+                                ; silhouette of its own): wholly past the
+    mov si, bx                  ; right edge's line or behind - its least
+    add bx, [wa_kr]             ; x - z - or the left's, its greatest x + z,
+    call .corner                ; on the products' high words. Its own
+    sub ax, [wa_xc+di+2]        ; and what stands on it are drawn or not
+    sub ax, [wa_yc+bx+2]        ; together: they are inside it
+    sub ax, [wa_ys+bx+2]
+    cmp ax, 3
+    jge .gone
+    lea bx, [si+0]
+    add bx, [wa_kl]
+    call .corner
+    add ax, [wa_xc+di+2]
+    add ax, [wa_ys+bx+2]
+    sub ax, [wa_yc+bx+2]
+    cmp ax, -3
+    jg .seen
+.gone:
+    ret
+.corner:                        ; BX = its corner's place in wa_corn: DI =
+    mov bl, [bx]                ; its x index x 4, BX its y's, AX = its
+    xor bh, bh                  ; x's [wa_xs] high word
+    mov bx, [wa_vtx+bx]
+    mov al, bl
+    mov ah, 0
+    mov di, ax
+    mov bl, bh
+    xor bh, bh
+    mov ax, [wa_xs+di+2]
+    ret
+.seen:
+    push word [wa_crow]         ; (this box's corners)
+    push word [wa_wcol]         ; (its colour: the far side's)
+    mov al, [wl_abv]
+    push ax
+    or al, al
+    jz .go
+    call .slot
+    mov si, wl_seen             ; this box's far side's state, saved
+    mov cx, (WL_SV - 2) / 2
+    rep movsw
+    mov al, [wl_nvk]
+    stosb
+.go:
+    inc byte [wl_lvl]
+    mov ax, [wl_hn]             ; ITS FLOOR: this box's top
+    mov [wl_fn], ax
+    mov al, [wl_hs]
+    mov [wl_fs], al
+    mov ax, [wa_crow]
+    add ax, 4
+    mov [wa_crow], ax
+    sub ax, wa_corn+4
+    mov di, ax                  ; DI = its record x 4 (wa_bxh)
+    mov si, ax
+    shl si, 1
+    add si, wa_boxes            ; SI = the box
+    mov bx, ax
+    shr bx, 1
+    shr bx, 1
+    mov bl, [wa_bcol+bx+1]
+    xor bh, bh
+    mov al, [wa_at+bx]
+    mov [wa_wcol], al
+    call wa_lowbox
+    dec byte [wl_lvl]
+    mov ax, [wl_gfn]            ; (the ground's pair again)
+    mov [wl_fn], ax
+    mov al, [wl_gfs]
+    mov [wl_fs], al
+    pop ax
+    or al, al
+    jz .out
+    call .slot
+    mov si, di
+    mov di, wl_seen
+    mov cx, (WL_SV - 2) / 2
+    rep movsw
+    lodsb
+    mov [wl_nvk], al
+.out:
+    pop ax
+    mov [wa_wcol], al
+    pop word [wa_crow]
+    ret
+.slot:                          ; DI = this level's slot (wl_lvl)
+    mov al, [wl_lvl]
+    mov ah, WL_SV
+    mul ah
+    add ax, wl_save
+    mov di, ax
     ret
 
 ; wl_lowseen - a flight: ZF = 0 when the player stands past its low end.

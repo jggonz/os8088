@@ -424,8 +424,11 @@ wa_render:
     rep stosw
     call wa_hnum                ; (the outline path's floor pair, once a
     mov [wl_fn], ax             ; frame - and no box height's pair made
-    mov [wl_fs], bl             ; yet: wa_lowbox, and .llow's clip test)
+    mov [wl_fs], bl             ; yet: wa_lowbox's)
+    mov [wl_gfn], ax
+    mov [wl_gfs], bl
     mov word [wl_hh], -1
+    mov byte [wl_lvl], 0
     mov ax, 1
 .gen:
     mov [wa_gen], al
@@ -594,9 +597,9 @@ wa_render:
     add bx, [wa_kl]
     mov bl, [bx]                ; the corner's vertex...
     xor bh, bh
-    mov bx, [wa_vtx+bx]         ; ...its x and y indices (x 4)
-    mov al, bl
-    cbw
+    mov bx, [wa_vtx+bx]         ; ...its x and y indices (x 4: to 252,
+    mov al, bl                  ; unsigned - 63 x values, HEDGES-PLAN 2)
+    mov ah, 0
     mov di, ax
     mov bl, bh
     xor bh, bh
@@ -613,7 +616,7 @@ wa_render:
     xor bh, bh
     mov bx, [wa_vtx+bx]
     mov al, bl
-    cbw
+    mov ah, 0
     mov di, ax
     mov bl, bh
     xor bh, bh
