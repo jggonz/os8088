@@ -584,6 +584,11 @@ the table above: the first drawer's last tuning came between.)
     every frame. A frame where the pitch or the eye alone moved keeps
     nothing: making a record costs about 700 cycles, for one that may never
     be read.
+    The records' key is a count of those changes, and it counts on a
+    frame that draws no pickup too. It first counted only where one was
+    drawn: a view that moved while none was there, and stood when one came
+    back, would have drawn it where the view before saw it (`wastill`'s
+    blink).
   - **What the others pay.** A moved view pays about 0.35% for the two
     kept paths: the frame's choice of corner maker and two instructions a
     pickup. The other arenas' moved views are +0.1% to +0.25%; the heights
@@ -689,8 +694,9 @@ free.
   behind a tower not set up, and the common cut by itself (5); row `wastill`
   (soak), and a tenth pose in `waflines` (a line before the east tower).
   - `wastill` was red with the pickups' key not reading the eye and the
-    pitch, with `wl_vert` taking a corner never stamped, and with the
-    frame's corner maker always `wa_vert`.
+    pitch, with `wl_vert` taking a corner never stamped, with the frame's
+    corner maker always `wa_vert`, and with the key counted only where a
+    pickup is drawn.
   - `waflines` was red with the whole-line skip not asking the line's row,
     with the direct cut's side sign turned, and with its bottom cut 16
     units out.
