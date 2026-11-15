@@ -8645,6 +8645,17 @@ SOAK = [
         "off onto the tower, the lift home. Red on e9ca8cff: 14 failures.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/wirerena360.img")),
+    Row("warotcga", "soak", py("tests/warotcga.py"), 14.0,
+        "WIRE ARENA'S ROTATION WINDOW STAYS ABOVE THE DOCK (SPEC.md 128.6; "
+        "the owner, 2026-11-15: free-for-all's ran into the dock on a CGA). "
+        "MartyPC's 5150 CGA, the dock from vid_dock_y0: free-for-all's eight "
+        "arenas in two columns of four, the frame above the dock and every "
+        "box inside it, the fifth beside the first; Right and Left move "
+        "between the columns and Space toggles the far column's arena; team "
+        "deathmatch's five stay one column. Red with the window held to one "
+        "column (three failures).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wahudset", "soak", py("tests/wahudset.py"), 12.0,
         "WIREARENA SAYS A SETTING WHEN A KEY CHANGES IT (SPEC.md 128.2; the "
         "owner, 2026-11-15: 'right now I just have to see what changes'). "

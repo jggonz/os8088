@@ -251491,7 +251491,11 @@ and uses `font_run` for text:
 - **Buttons**: Play (or Ready, when linked) and Keys, which puts up the
   About card (§12.2): the same card the system menu's About shows.
 - **The Link menu**: Automatic, Connect COM1, Connect COM2 and Disconnect.
-- **The Rotation window**: one check box for each arena the mode plays.
+- **The Rotation window**: one check box for each arena the mode plays,
+  in ONE column when it ends above the dock's first row (`OSAPI_VIDEO`'s
+  CX) and in TWO otherwise (`wa_rrows`, the first column the taller):
+  free-for-all's eight on a CGA, whose dock starts at row 176. Left and
+  Right move the focus between the columns (`tests/warotcga.py`).
   Its paint keeps SI and DF, as `W_PAINT` owes (§11), and its click keeps
   SI, as `W_ONCLICK` owes. Before 17.6 it did not, and kern_mega's fault
   reporter found it.
@@ -251553,8 +251557,8 @@ another tag is dropped.
 
 - MartyPC (the 5150 with a CGA): `walift`, `waarenas`, `wactf`, `wamodes`,
   `waflines`, `wafiglod`, `wastill`, `wasetup`, `waroutes`, `wabots`,
-  `wascore`, `wabotarms`, `waweapons`, `wahudset`; on its Hercules,
-  `wamono`.
+  `wascore`, `wabotarms`, `waweapons`, `wahudset`, `warotcga`; on its
+  Hercules, `wamono`.
 - The link, on QEMU (no NIC on MartyPC, and two machines): `walink`,
   `walinknet`, `walinkudp`, `walinkip`, `walink4`, `walink4ip`,
   `wactflink`, `wamodeslink`; with kern_mega at both ends, `walinkmega`,

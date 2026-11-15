@@ -1439,6 +1439,29 @@ wa_ropen:
     dec ax                      ; (the list but Rotation...)
     mov [wa_rn], al
     mov byte [wa_rfoc], 0
+    push cx                     ; ONE COLUMN, OR TWO WHEN ONE WOULD REACH THE
+    push dx                     ; DOCK (the owner, 2026-11-15: free-for-all's
+    mov [wa_rrows], al          ; eight ran into it on a CGA, whose dock
+    mov word [wa_rtpl+WT_W], WR_W + 2 ; starts at row 176): the rows a
+    push ax                     ; column holds, and the width
+    call OSAPI_VIDEO            ; CX = the dock's first row
+    pop ax
+    push ax
+    mov ah, WR_DY
+    mul ah
+    add ax, WR_Y0 + 4 + 19
+    add ax, [wa_rtpl+WT_Y]      ; (its bottom, from where it opens)
+    cmp ax, cx
+    pop ax
+    jbe .one
+    inc ax                      ; two columns: half the rows, rounded up,
+    shr al, 1                   ; the first the taller
+    mov [wa_rrows], al
+    mov word [wa_rtpl+WT_W], 2 * WR_W + 2
+.one:
+    pop dx
+    pop cx
+    mov al, [wa_rrows]
     mov ah, WR_DY
     mul ah
     add ax, WR_Y0 + 4 + 19      ; (the template's: the title bar's 19 with
@@ -1497,6 +1520,16 @@ wa_rplace:
     mov ax, si
     cmp al, [wa_rn]
     jae .out
+    or al, al                   ; the first box of the second column: one
+    jz .x                       ; column right, and back to the top
+    cmp al, [wa_rrows]
+    jne .x
+    add cx, WR_W
+    mov al, [wa_rrows]
+    mov ah, WR_DY
+    mul ah
+    sub dx, ax
+.x:
     mov ax, cx
     add ax, WR_BX
     mov [di+OS88UI_CK_RECT], ax
@@ -1652,6 +1685,10 @@ wa_rkey:
     je .up
     cmp ah, 0x50
     je .down
+    cmp ah, 0x4B                ; Left and Right: the other column's box on
+    je .left                    ; the same row, when there are two
+    cmp ah, 0x4D
+    je .right
     cmp al, ' '
     jne .no
     mov al, OS88UI_CK_SIZE      ; SPACE: the focused one toggled
@@ -1671,6 +1708,15 @@ wa_rkey:
     jmp short .f
 .down:
     inc bx
+    cmp bl, [wa_rn]
+    jae .yes
+    jmp short .f
+.left:
+    sub bl, [wa_rrows]          ; (one column: below 0, nothing)
+    jb .yes
+    jmp short .f
+.right:
+    add bl, [wa_rrows]          ; (one column: past the last, nothing)
     cmp bl, [wa_rn]
     jae .yes
 .f:
@@ -1849,6 +1895,7 @@ wa_sybase:      dw 0, 0, 0, 0, 0, 0     ; the ground's y bases: 0, the group,
 wa_rwin:        dw 0            ; its window, 0 none; how many boxes, the
 wa_rn:          db 0            ; focus's, its marker's text
 wa_rfoc:        db 0
+wa_rrows:       db 0            ; rows a column holds (wa_rn: one column)
 wa_rmk:         db ' ', 0
 WR_CKSZ         equ 12          ; (os88ui's OS88UI_CK_SIZE, included after:
                                 ; wirearena.asm checks the two agree)
