@@ -193,6 +193,10 @@ HEIGHTS_PATHS = [
 # loop: the benches walk it, and a node's first leg out is its loop's next
 # one, so a bench's dummies walk their old patrols exactly.
 WALK, LIFT_ON, LIFT_UP, DROP = 0, 1, 2, 3
+HOP = 4                         # (THREE-ARENAS-PLAN 5.2) a hop up onto a box
+                                # a step cannot climb and the jump clears (its
+                                # apex less 8): one way; on the wire a WALK -
+                                # the bot's height follows the floor onto it
 WA_MGN = 32                     # nodes an arena's graph may have
 WA_MLIFT = 4                    # lifts an arena may have (wafb.inc's)
 HEIGHTS_GRAPH = dict(
@@ -268,6 +272,20 @@ def facing(tag, boxes, x, y, a):
                key=lambda c: (clear_run(tag, boxes, x, y, c), -off(c)))
 
 
+def on_top(x, y, boxes, r):
+    """(x, y) stands on the floor or a box's top, the square (x +- r) over
+    the one height alone (THREE-ARENAS-PLAN 5.1: the Pit's spawns and flags):
+    no box over it taller, none under part of it lower - and no LINE"""
+    f = floor_at(x, y, boxes, r)
+    if floor_at(x, y, boxes, 0) != f:
+        return False
+    for b in boxes:
+        if b[0] < x + r and x - r < b[2] and b[1] < y + r and y - r < b[3]:
+            if b.kind == LINE or b.h > f or (b.h < f and b.kind != FLIGHT):
+                return False
+    return True
+
+
 def respawns(tag, boxes, nodes, grid):
     """An arena's respawn points: [(x, y, facing, node)] - refused in a wall
     or off the floor; the node is the nearest the point sees"""
@@ -275,8 +293,7 @@ def respawns(tag, boxes, nodes, grid):
     out = []
     for r in ARENA_RESPAWNS.get(tag, FLAT_RESPAWNS):
         (x, y, a), side = r[:3], (r[3] if len(r) > 3 else 0)
-        if inside(x, y, boxes, 24) and floor_at(x, y, boxes, 24) != 0 or \
-                inside(x, y, [b for b in boxes if b.h > 0], 24):
+        if not on_top(x, y, boxes, 24):     # (a platform's top will do:
             raise SystemExit("arenagen: arena %s: a respawn point at (%d, %d) "
                              "is not on free floor" % (tag, x, y))
         if not in_walk(tag, x, y, 24):
@@ -348,7 +365,8 @@ def graph_edges(tag, boxes):
             if flat:
                 continue
             f = floor_at(x, y, bs, FRAD)
-            if f - prev > STEPUP or (prev - f > STEPUP and kind != DROP):
+            up = jump_apex() - 8 if kind == HOP else STEPUP
+            if f - prev > up or (prev - f > STEPUP and kind != DROP):
                 raise SystemExit("arenagen: arena %s: route leg %d -> %d steps "
                                  "%d at (%d, %d) - a walk takes %d"
                                  % (tag, a, b_, f - prev, x, y, STEPUP))
@@ -467,7 +485,8 @@ def graph_block(tag, boxes):
         out += struct.pack('<hh4B', x, y, *o)
     lifts = [b for b in map(bx, boxes) if b.kind == LIFT]
     for (a, b_, kind, x, y, head, steps, rev) in edges:
-        k = kind                        # a lift's leg: WHICH lift, bits 4-5
+        k = WALK if kind == HOP else kind  # (a hop: a walk to the game)
+                                        # a lift's leg: WHICH lift, bits 4-5
         if kind in (LIFT_ON, LIFT_UP):  # (ARENAS-PLAN 4.1) - the one under
             px, py = nodes[b_ if kind == LIFT_ON else a]    # its rider
             on = [i for i, l in enumerate(lifts)
@@ -537,8 +556,8 @@ def graph_block(tag, boxes):
         out += struct.pack('<hhHhhH', x, y, a << 6, p, f, ord(mark))
     fl = flag_bases(tag, boxes, nodes)  # THE FLAGS' BASES (CTF-PLAN 3): a
     out += struct.pack('<H', len(fl))   # count, 0 or 2 - red's, blue's -
-    for (x, y, n) in fl:                # then each one's place and route node
-        out += struct.pack('<hhBB', x, y, n, 0)
+    for (x, y, n, z) in fl:             # then each one's place, route node
+        out += struct.pack('<hhBB', x, y, n, z >> 1)    # and height / 2
     hl = hill(tag, boxes, nodes)        # THE HILL (MODES-PLAN 4): a count, 0
     out += struct.pack('<H', len(hl))   # or 1, then its place, its floor and
     for (x, y, z, a, b) in hl:          # the route's two nodes a bot crosses
@@ -636,7 +655,7 @@ def arena_modes(tag):
 # overlooks the hill); the Twin's path at its bottom, between its lanes
 ARENA_HILL = {"a2": (1248, 1024, 1, 1), "a3": (1024, 832, 1, 1),
               "a4": (1024, 832, 17, 18), "a5": (1024, 1024, 12, 12),
-              "a6": (1024, 1024, 12, 12)}
+              "a6": (1024, 1024, 12, 12), "a7": (1024, 1024, 6, 6)}
 WA_FLR = 40                     # a flag is touched within this of it, in x
                                 # and in y (the game's WA_FLR; a pickup's 40)
 
@@ -678,17 +697,20 @@ def flag_bases(tag, boxes, nodes):
     boxes = [bx(b) for b in boxes]
     out = []
     for (x, y) in fl:
-        if inside(x, y, [b for b in boxes if b.h > 0], 24) or \
-                floor_at(x, y, boxes, 24) != 0 or not in_walk(tag, x, y, 24):
+        if not on_top(x, y, boxes, 24) or not in_walk(tag, x, y, 24):
             raise SystemExit("arenagen: arena %s: a flag base at (%d, %d) is "
                              "not on free floor" % (tag, x, y))
+        z = floor_at(x, y, boxes, 24)
+        if z & 1 or z > 510:            # (its record's byte: z / 2)
+            raise SystemExit("arenagen: arena %s: a flag base %d up - its "
+                             "byte holds an even height to 510" % (tag, z))
         near = [i for i, (nx, ny) in enumerate(nodes)
                 if abs(nx - x) < WA_FLR and abs(ny - y) < WA_FLR]
         if not near:
             raise SystemExit("arenagen: arena %s: no route node within %d of "
                              "the flag base at (%d, %d) - a bot could not "
                              "take it" % (tag, WA_FLR, x, y))
-        out.append((x, y, near[0]))
+        out.append((x, y, near[0], z))
     sides = [r[3] if len(r) > 3 else 0
              for r in ARENA_RESPAWNS.get(tag, FLAT_RESPAWNS)]
     for t in (1, 2):
@@ -982,6 +1004,80 @@ ZIGG_BOXES, ZIGG_GRAPH, ZIGG_RESPAWNS, ZIGG_PICKUPS, ZIGG_START, \
     ZIGG_BENCH = _ziggurat()
 
 
+# --- THE PIT (THREE-ARENAS-PLAN 2, the owner's drawing of 2026-11-15): three
+# levels - the pit's floor (0), the second layer round it (PS, deeper than
+# an eye: from the pit its sides are walls) and the top ring round that (PR,
+# a hop above the second layer) - and no room walls: the arena stands in the
+# dark. Tall dividers north and south across the ring and the second layer
+# leave the pit the one way from the west half to the east. A lift on the
+# pit's west and east sides out; no health - the four spawns on the second
+# layer are any weapon.
+PS = 192                        # the second layer
+PR = 240                        # the top ring (48 up: the jump's 69 clears)
+PW = 448                        # the dividers
+
+
+def _pit():
+    S, R, P, W = COL_ROOM, COL_ITEM, COL_PLAT, COL_HEDGE
+    bx_ = [
+        Box(0, 0, 128, 2048, PR, col=S, name="ring W"),
+        Box(1920, 0, 2048, 2048, PR, col=S, name="ring E"),
+        Box(128, 1920, 576, 2048, PR, col=S, name="ring N-W"),
+        Box(1472, 1920, 1920, 2048, PR, col=S, name="ring N-E"),
+        Box(128, 0, 576, 128, PR, col=S, name="ring S-W"),
+        Box(1472, 0, 1920, 128, PR, col=S, name="ring S-E"),
+        Box(576, 1920, 1472, 2048, PW, col=W, name="divider N, the ring's"),
+        Box(576, 0, 1472, 128, PW, col=W, name="divider S, the ring's"),
+        Box(128, 128, 384, 1920, PS, col=P, name="layer W"),
+        Box(1664, 128, 1920, 1920, PS, col=P, name="layer E"),
+        Box(384, 1536, 896, 1920, PS, col=P, name="layer N-W"),
+        Box(1152, 1536, 1664, 1920, PS, col=P, name="layer N-E"),
+        Box(384, 128, 896, 512, PS, col=P, name="layer S-W"),
+        Box(1152, 128, 1664, 512, PS, col=P, name="layer S-E"),
+        Box(896, 1536, 1152, 1920, PW, col=W, name="divider N, the layer's"),
+        Box(896, 128, 1152, 512, PW, col=W, name="divider S, the layer's"),
+        Box(384, 896, 448, 1152, 16, LIFT, col=R, top=PS, name="lift W"),
+        Box(1600, 896, 1664, 1152, 16, LIFT, col=R, top=PS, name="lift E")]
+    pit = [(512, 640), (1536, 640), (1536, 1024), (1536, 1408),
+           (512, 1408), (512, 1024), (1024, 1024)]      # 0-6 (6 the centre)
+    west = [(192, 512), (320, 512), (320, 1024), (320, 1536), (192, 1536),
+            (192, 1024)]                                # 7-12
+    east = [(1856, 512), (1728, 512), (1728, 1024), (1728, 1536),
+            (1856, 1536), (1856, 1024)]                 # 13-18
+    more = [(640, 320), (640, 1728), (1408, 320), (1408, 1728),   # 19-22
+            (64, 1024), (1984, 1024),                   # 23-24 the flags
+            (416, 1024), (1632, 1024)]                  # 25-26 the lifts
+    nodes = pit + west + east + more
+    legs = [(i, (i + 1) % 6) for i in range(6)] + \
+           [(7 + i, 7 + (i + 1) % 6) for i in range(6)] + \
+           [(13 + i, 13 + (i + 1) % 6) for i in range(6)] + \
+           [(6, 5), (6, 2),                              # (the centre)
+            (8, 19), (10, 20), (14, 21), (16, 22),       # (the layer's ends)
+            (19, 0, DROP), (20, 4, DROP),                # (down into the pit)
+            (21, 1, DROP), (22, 3, DROP),
+            (5, 25, LIFT_ON), (25, 9, LIFT_UP),          # (out by the lifts)
+            (2, 26, LIFT_ON), (26, 15, LIFT_UP),
+            (12, 23, HOP), (23, 12, DROP),               # (onto the ring, to
+            (18, 24, HOP), (24, 18, DROP)]               # the flags)
+    homes = [list(range(6)), list(range(7, 13)), list(range(13, 19))]
+    graph = dict(nodes=nodes, legs=legs, homes=homes)
+    resp = [(256, 768, 0, 1), (256, 1280, 0, 1), (64, 512, 0, 1),
+            (1792, 768, 512, 2), (1792, 1280, 512, 2), (1984, 1536, 512, 2)]
+    any_ = (PK_SHOTGUN, PK_CHAINGUN, PK_GRENADE, PK_ROCKET, PK_RAIL)
+    pks = [(any_, 768, 320), (any_, 1280, 320),
+           (any_, 768, 1728), (any_, 1280, 1728)]
+    start = (256, 1024, 0)
+    bench = [("A", 256, 1024, 0, -40, PS),          # the west layer, east
+             ("B", 64, 1024, 0, -40, PR),           # the red flag, the ring
+             ("C", 1024, 1024, 0, 0, 0),            # the pit's centre, east
+             ("D", 640, 1728, 0, -40, PS)]          # the north layer, east
+    return bx_, graph, resp, pks, start, bench
+
+
+PIT_BOXES, PIT_GRAPH, PIT_RESPAWNS, PIT_PICKUPS, PIT_START, \
+    PIT_BENCH = _pit()
+
+
 def arenas():
     return [("a0", "Arena", BOXES, PLAYER_START),
             ("a1", "Open", OPEN_BOXES, PLAYER_START),
@@ -989,29 +1085,31 @@ def arenas():
             ("a3", "Hedge", HEDGE_BOXES, HEDGE_START),
             ("a4", "Twin", TWIN_BOXES, TWIN_START),
             ("a5", "Crossing", CROSS_BOXES, CROSS_START),
-            ("a6", "Ziggurat", ZIGG_BOXES, ZIGG_START)]
+            ("a6", "Ziggurat", ZIGG_BOXES, ZIGG_START),
+            ("a7", "Pit", PIT_BOXES, PIT_START)]
 
 
 # THE SETUP'S LIST (THREE-ARENAS-PLAN 4): the arenas in the order the Arena
 # drop-down shows them - an arena keeps its number (the benches, the poses,
 # the rows and the wire all name them); WA_ORD<item> is the item's arena
-ARENA_ORDER = ["a1", "a0", "a5", "a2", "a3", "a4", "a6"]
+ARENA_ORDER = ["a1", "a0", "a5", "a2", "a3", "a4", "a7", "a6"]
 
 
 # an arena's own patrols (the rest walk PATHS): every arena's are WA_NFIG
 # loops - an arena with no route graph of its own walks them as one
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
 ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": HEDGE_GRAPH, "a4": TWIN_GRAPH,
-                "a5": CROSS_GRAPH, "a6": ZIGG_GRAPH}
+                "a5": CROSS_GRAPH, "a6": ZIGG_GRAPH, "a7": PIT_GRAPH}
 ARENA_ROOMCOL = {}                      # (a room's walls not the room's blue)
 # CTF's BASES (CTF-PLAN 3), red's then blue's, on a route node: the twin's
 # two flag places, behind its lifts; the hedge's west and east rooms
 ARENA_FLAGS = {"a3": [(224, 1152), (1824, 1152)], "a4": TWIN_FLAGS,
-               "a5": [(192, 1024), (1856, 1024)]}
+               "a5": [(192, 1024), (1856, 1024)],
+               "a7": [(64, 1024), (1984, 1024)]}
 # FLOOR LINES (ARENAS-PLAN 4.5): an arena's closed lines on the floor, the
 # feet's edge - and its room's height, 0 for no room walls at all
 ARENA_FLINES = {"a4": TWIN_WALK}
-ARENA_ROOMH = {"a3": MH, "a4": 0, "a6": ZH}      # (the hedge's edge all of a height,
+ARENA_ROOMH = {"a3": MH, "a4": 0, "a6": ZH, "a7": 0}      # (the hedge's edge all of a height,
                                         # the owner's: its fills' and its
                                         # room's walls - HEDGES-PLAN 9)
 WA_MFL = 24                             # (wafb.inc's)
@@ -1062,7 +1160,8 @@ def in_walk(tag, x, y, r=0):
 # worst. (boxes, outline edges)
 OVER_BUDGET = {}
 ARENA_RESPAWNS.update({"a3": HEDGE_RESPAWNS, "a4": TWIN_RESPAWNS,
-                       "a5": CROSS_RESPAWNS, "a6": ZIGG_RESPAWNS})
+                       "a5": CROSS_RESPAWNS, "a6": ZIGG_RESPAWNS,
+                       "a7": PIT_RESPAWNS})
 # THE PLAY BENCH'S VIEWS (P, MULTIPLAYER-FPS-PLAN 16.7; ARENAS-PLAN 4.2), an
 # arena's own, each P press the next: mark, x, y, angle (1024ths), base
 # pitch, the floor under the eye. The heights arena's five are HEIGHTS-PLAN
@@ -1074,7 +1173,7 @@ ARENA_BENCH = {
            ("C", 1248, 1024, 512, 0, 80), ("D", 1952, 1024, 512, -40, 160),
            ("E", 600, 1568, 512, 0, 0)],
     "a3": HEDGE_BENCH,                  # (the hedge's: its _hedge)
-    "a5": CROSS_BENCH, "a6": ZIGG_BENCH,
+    "a5": CROSS_BENCH, "a6": ZIGG_BENCH, "a7": PIT_BENCH,
     "a4": [("A", 640, 1024, 0, 0, 0),           # at the path, east along it
            ("B", 512, 1024, 0, -40, 240),       # on the west tower
            ("C", 1024, 832, 0, 0, 0),           # the path's bottom
@@ -1535,7 +1634,8 @@ HEIGHTS_PICKUPS = [
 OPEN_PICKUPS = [((PK_HEALTH, PK_SHIELD), 1024, 1024)]
 ARENA_PICKUPS = {"a1": OPEN_PICKUPS, "a2": HEIGHTS_PICKUPS,
                  "a3": HEDGE_PICKUPS, "a4": TWIN_PICKUPS,
-                 "a5": CROSS_PICKUPS, "a6": ZIGG_PICKUPS}
+                 "a5": CROSS_PICKUPS, "a6": ZIGG_PICKUPS,
+                 "a7": PIT_PICKUPS}
 
 
 def pickups(tag, boxes):
@@ -2100,7 +2200,8 @@ def height_checks(tag, boxes):
 def arena_tables(w, tag, boxes, start):
     """One arena's tables, every label prefixed wa_<tag>_; -> its counts."""
     boxes = [bx(b) for b in boxes]
-    if inside(start[0], start[1], boxes, 20):
+    if not on_top(start[0], start[1], boxes, 20):     # (a platform's top
+                                                        # will do: the Pit's)
         raise SystemExit("arenagen: arena %s starts the player INSIDE a wall "
                          "at %r - every step would collide" % (tag, start))
     if not in_walk(tag, start[0], start[1], 24):

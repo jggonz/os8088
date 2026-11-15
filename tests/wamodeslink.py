@@ -11,7 +11,7 @@
   - A POINT: the hill held its 10 s on the host, blue 1 on both;
   - THE WIN: blue's third point - BLUE WINS on both machines;
   - THE NEXT ARENA: after the 10 s, NEXT takes both machines on to the
-    heights (the next king of the hill arena after the Twin, round) - the
+    pit (the next king of the hill arena after the Twin) - the
     scores anew and the hill nobody's on both, the link still up, and the
     guest's pickups the host's (its ROLLs, after the NEXT).
 
@@ -108,9 +108,9 @@ def run(a, b):
           guest.v('wa_cmsg', 2) == guest.sy['wc_m_bwin'],
           'THE WIN: BLUE WINS on both')
     for m in (host, guest):             # THE NEXT ARENA
-        m.wait_for(lambda m=m: m.v('wa_arena') == 2 and
+        m.wait_for(lambda m=m: m.v('wa_arena') == 7 and
                    m.v('wa_cwin', 2) == 0,
-                   'THE NEXT ARENA: the heights on the %s'
+                   'THE NEXT ARENA: the pit on the %s'
                    % ('host' if m is host else 'guest'), secs=20)
     Q.pace(host, 2.0)
     check(caps(host) == (0, 0) and caps(guest) == (0, 0) and

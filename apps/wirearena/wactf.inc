@@ -196,7 +196,10 @@ wc_home:
     mov [si+WC_X], ax
     mov ax, [bx+4]
     mov [si+WC_Y], ax
-    mov word [si+WC_Z], 0
+    mov al, [bx+7]              ; (its height, halved: a base on a platform
+    xor ah, ah                  ; - the Pit's ring, THREE-ARENAS-PLAN 5.3)
+    shl ax, 1
+    mov [si+WC_Z], ax
     pop bx
     mov byte [wa_ovd], 1
     ret

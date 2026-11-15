@@ -1,6 +1,6 @@
 # WireArena: Crossing, the Pit and the Ziggurat
 
-**STATUS: IN PROGRESS** (2026-11-15): A1 and A2 built. Written to the owner's three drawings below,
+**STATUS: BUILT** (2026-11-15): A1 to A3; the Pit's cost is the owner's to weigh (section 8, A3). Written to the owner's three drawings below,
 before any code; section 7 is the waves and section 8 what was built.
 
 The owner, 2026-11-15, with three MS Paint drawings (*"not perfectly to
@@ -133,7 +133,7 @@ cut (a lower ring, fewer boxes) before going further.
   fitting eight. Checked by `waarenas` (its rows' new checks) and
   `wamodes`' lists; measured.
 - [x] **A2 The Ziggurat**. Checked by `waarenas`; measured.
-- [ ] **A3 The Pit** with sections 5.1 to 5.3. Checked by `waarenas` (a
+- [x] **A3 The Pit** with sections 5.1 to 5.3. Checked by `waarenas` (a
   lift out of the pit, a hop to the ring, the bots' ride and hop) and
   `wactf` on its flags; measured.
 
@@ -175,4 +175,38 @@ instead of three, **207,356**. No routine dominates the profile - it is the
 box and vertex count, the ramps' outlines and the tower over the eye. Two
 steps would save 8% at the octagon's look; three were kept, the owner's to
 call.
+
+**A3** (2026-11-15): the Pit is arena 7, `_pit()`: 18 boxes - the ring at
+240 in six pieces, the layer at 192 in six, four dividers at 448, two lifts
+- 27 route nodes, six spawns (three a side, on the layer and the ring), four
+pickups each any weapon, all four modes (the flags on the ring, the hill at
+the pit's centre). No room walls (`ARENA_ROOMH` 0); the collision's room
+test keeps the feet in.
+
+- **5.1, spawns on a platform**: arenagen's `on_top` - the square over one
+  height alone, no taller box over it and no lower one under part of it -
+  takes the respawns, the start and the flag bases. The game needed
+  nothing: a spawn's feet start at 0 and the first tick's floor read steps
+  them onto the box (`wa_hjump`'s `.onto`).
+- **5.2, HOP**: arenagen's leg kind 4, one way, rising at most the jump's
+  apex less 8 (61); emitted as a WALK, so on the guest the bot's height
+  follows the floor onto the ring (`wa_figz`); the way back a DROP.
+- **5.3, a base's height**: the byte after the base's node is its height
+  halved; `wc_home` stands the flag there.
+- **Checked by** `waarenas`: the start on the layer, CTF's flags at the
+  ring's 240 (red with the height dropped), a lift out of the pit, a hop
+  onto the ring, and the bots riding a lift and hopping onto the ring
+  within two minutes; `wamodes` and `wamodeslink` take the new rotation
+  (after the Twin, king of the hill goes to the pit, then the ziggurat).
+
+**Measured** (120 poses, 40 columns, the 5150 with CGA): the Pit **242,017**
+clk a frame (51 ms) against the hedge's **167,164** and the Ziggurat's
+226,405 - the dearest arena by 7%. The profile names the cost: the
+low-box outline path (`wa_lowbox`, `wl_rtop`, `wl_rfloor`, `wl_draw`,
+`wl_run`, `wa_occlow`) is about 75,000 clk a frame, 31% - from the ring and
+the layer nearly everything is below the eye, so it is drawn as outlines.
+The cuts, the owner's to choose: the ring the layer's height (flags and
+spawns on the layer, no hop) takes six boxes out of every outline pass; a
+single-piece layer band each side (the dividers standing on it) takes four
+more.
 

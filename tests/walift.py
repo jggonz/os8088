@@ -59,12 +59,14 @@ MENU, ITEM = "Link", "Automatic"   # (the menu bar's one menu: its first
 def start_keys(m, arena=2, width=40, cpu8088=True):
     """a match ALONE from the setup by its KEYS, no symbol map (the tools
     that boot a tree they do not assemble): Arena from its default, the
-    heights (2), Right a step at a time - wrapping past the last of the
-    arenas arenagen makes - then Down to Columns, Right once if the width
+    heights (2), Right a step at a time in the list's order - wrapping
+    past its last - then Down to Columns, Right once if the width
     is not the CPU's default (40 on an 8088), Enter"""
     import arenagen
     F = 4772727
-    for k in ["ArrowRight"] * ((arena - 2) % len(arenagen.arenas())) + \
+    tags = [t[0] for t in arenagen.arenas()]   # (the list's order: arenagen's
+    item = [tags.index(t) for t in arenagen.ARENA_ORDER].index  # ARENA_ORDER)
+    for k in ["ArrowRight"] * ((item(arena) - item(2)) % len(tags)) + \
             ["ArrowDown"] + (["ArrowRight"] if (width == 40) != cpu8088
                              else []) + ["Enter"]:
         m.key(k)
