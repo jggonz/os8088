@@ -6774,14 +6774,15 @@ wa_fthrs:
     jb .j%2%1
     jmp wa_fjdone
 %endmacro
-%macro WA_FJN 3                 ; narrow, %1 = q: SI = A, BX = B - A, DI =
-.j1%2:                          ; the joint's place in wa_jsx (%2 the label,
-                                ; %3 the joints)
+%macro WA_FJN 3                 ; narrow, %1 = q: SI = A, BX = B - A - 2
+.j1%2:                          ; (LODSW's step taken), DI = the joint's
+                                ; place in wa_jsx (%2 the label, %3 the
+                                ; joints)
     lodsw                       ; AL, AH = A's lateral and height
   %if %1 == 0
     mov dh, ah
   %else
-    mov dx, [si+bx-2]           ; DL, DH = B's
+    mov dx, [si+bx]             ; DL, DH = B's
     %if %1 == 3
     sub al, dl                  ; B + (A - B) / 4
     sar al, 1
@@ -6808,10 +6809,10 @@ wa_fthrs:
   %endif
     add al, 0x80                ; (the lateral + 128, unsigned: K is less
     mul cl                      ; 128 fs8 to match, and fs8 may be to 255)
-    add ax, [wa_fk]
-    mov al, ah
-    xor ah, ah
-    add ax, bp
+    add al, [wa_fk]             ; Klo's carry into the high byte - which
+    mov al, ah                  ; is under 255 (the product is at most
+    mov ah, 0                   ; 255 x 255) - taken by the ADC: a MOV
+    adc ax, bp                  ; keeps the flags
     stosw                       ; x
     mov al, dh
     mul ch
@@ -6850,7 +6851,9 @@ wa_fjl:
     sbb bp, ax
     mov ax, [.tab+8+bx]
     mov bx, [wa_pb]
-    sub bx, si                  ; BX = B - A
+    sub bx, si
+    dec bx
+    dec bx                      ; BX = B - A - 2
     mov di, wa_jsx
     jmp ax
 .wide:
