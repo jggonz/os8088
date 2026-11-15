@@ -144,8 +144,11 @@ WA_VAR wa_xc, WA_MXV*4          ; per frame: (x - px) cos and sin, 32 bits,
 WA_VAR wa_xs, WA_MXV*4          ; one per distinct x of the arena...
 WA_VAR wa_yc, WA_MYV*4          ; ...and per distinct y: a vertex is two
 WA_VAR wa_ys, WA_MYV*4          ; 32-bit adds, not four multiplies
-WA_VAR wa_vst, WA_MVTX*2        ; a vertex's cache stamp (the frame number)
-WA_VAR wa_vok, WA_MVTX*2+6      ; 1: inside the view, projected below (the
+WA_VAR wa_vst, WA_MVTX*2+6      ; a vertex's cache stamp (the frame number),
+wa_vok equ wa_vst+1             ; a byte at its index x 2 - and in the odd
+                                ; bytes between, wa_vok (so a clear of the
+                                ; stamps writes every other byte):
+                                ; 1: inside the view, projected below (the
                                 ; scratch ends' too: 3, always - wa_geominit)
 WA_VAR wa_vx, WA_MVTX*2         ; camera space
 WA_VAR wa_vz, WA_MVTX*2
@@ -230,8 +233,9 @@ WA_VAR wa_fqle, 2               ; lines', and the records (FV_*, FL_*)
 WA_VAR wa_fqvx, WA_MFV*FV_SIZE   ; (a record a distinct end: arenagen's cap)
 WA_VAR wa_fqln, WA_MFL*FL_SIZE
 WA_VAR wa_fqps, WA_MAXSP*2      ; ...a span's feet (wa_flfeet), a byte each
-WA_VAR wa_fqpf, WA_MAXSP*2      ; at its tag: its frame stamp, the least
-WA_VAR wa_fqpk, WA_MAXSP*2      ; half-row and the greatest
+wa_fqpf equ wa_fqps+1           ; at its tag: its frame stamp, the least
+WA_VAR wa_fqpk, WA_MAXSP*2      ; half-row (the stamp's odd byte: a tag is
+                                ; even) and the greatest
 WA_VAR wa_x1, 2
 WA_VAR wa_z1, 2
 WA_VAR wa_x2, 2
@@ -385,9 +389,7 @@ wa_render:
     xor ax, ax
     mov cx, WA_CELLS
     rep stosw
-    mov di, wa_vst              ; ...and the vertex cache's with them
-    mov cx, WA_MVTX
-    rep stosw
+    call wa_vstclr              ; ...and the vertex cache's with them
     mov [wl_pvc], ax            ; (and no corner stands: the view's count
                                 ; is never 0)
     mov di, wa_fqps             ; ...and the floor lines' spans' feet
@@ -1793,6 +1795,19 @@ wa_vend:
     ret
 .no:
     stc
+    ret
+
+; wa_vstclr - AL = 0: every vertex's stamp cleared - every other byte, the
+; ones between being wa_vok, which a box made at this view still reads
+; (wa_bh + 2). Keeps AX; clobbers CX, DI.
+wa_vstclr:
+    mov di, wa_vst
+    mov cx, WA_MVTX
+.z:
+    mov [di], al
+    inc di
+    inc di
+    loop .z
     ret
 
 ; wa_vert - BX = a vertex x 2 (BH = 0) not yet made this frame, AL = the

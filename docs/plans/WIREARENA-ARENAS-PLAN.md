@@ -613,6 +613,45 @@ the table above: the first drawer's last tuning came between.)
   - Row `wastill` (soak) holds a still view, a nod and a rise to the moved
     view's whole picture, in the heights arena and the twin.
 
+- **Room in the part, and where a figure's cycles go** (the owner's asks,
+  2026-11-15, after the round above).
+  - **The cell lists do not leave the part cheaply.** They were named as
+    the cheapest 7,680 bytes to move to a claim of their own, being
+    written with `stosw`. But ES is the renderer's one spare segment
+    register and it is DS all through a frame: some 25 scans and copies of
+    the part's own tables go through it (`repne scasw` over `wa_cov` in
+    every wall's and low box's test, over `wa_fbuf` in a figure's sweep,
+    the pickups' records). A list in another segment means ES is that
+    segment for the frame and each of those is wrapped or its table moved
+    with an override on every read: about 100 sites and an estimated 1% to
+    2% of every frame. A stack of the part's own (lists reached off SS) is
+    out: the scheduler keeps a task's SP alone. Not done; the owner's call.
+  - **459 bytes at no cost instead**: two byte tables indexed by an even
+    number lay in tables of their own, half of each unused. `wa_vok` now
+    sits in `wa_vst`'s odd bytes (a clear of the stamps writes every other
+    byte: `wa_vstclr`) and `wa_fqpf` in `wa_fqps`'s. Every picture the
+    same, the cycles the same to 0.01%.
+  - **A figure** is about 24,000 cycles drawn at mid range (20 poses of the
+    open arena, 1.5 figures drawn a pose): its sweep and cells 6,100
+    (`wa_femit`), its eleven joints 4,300 (`wa_fjl`), its box, scales and
+    columns 4,000 (`wa_figure`), its nine limbs' walks 4,200, their calls
+    and the head 2,000, its place in the view 2,000, and 1,000 for a
+    shield's chest. Each step has had a round of its own already - byte
+    multiplies, a walk whose state is its place in the code, a sweep four
+    cells a turn - and nothing in it is drawn twice or asked twice. What
+    is left at the same picture is a few hundred cycles a figure.
+  - **The lever that is left changes the look**: J, a small figure's seven
+    joints and five straight limbs, with no head and no blend (`LK_FEW`,
+    under `WA_FLODV` half-rows a unit x 256: 16 today, a figure under
+    about seven half-rows tall, some 650 units away). A figure J takes in
+    costs 3,600 to 5,800 cycles less. Trial builds at 24 (from about 430
+    units) and 32 (from about 325) went to the owner to look at
+    (`-DWA_FLODV=n`); nothing is changed until they say.
+  - **The smaller items, measured and left**: a pickup's shape copied
+    after its view test would save about 200 cycles a pickup turned away
+    and cost 60 a pickup drawn, 0.2% of a frame; the whole-line skip's two
+    compares a line are the least that test can be.
+
 **Size.** The renderer part was 61,403 of its 65,024 bytes with the second
 drawer. It was 59,041 after the two arenas: 2,182 more for the first round,
 then 2,505 for floor lines (code, the per-column and per-vertex caches) and
@@ -623,8 +662,9 @@ and the dashed walkers 706: 63,730. Capture the flag took it to 63,882.
 The standing view's keeps and the cuts are 757 more (134 of them the
 pickups' records), and the lines' vertex records gave back 336 - a record a
 distinct end, `WA_MFV`, where there were two a line: 64,303 - and 64,243
-with the walls' steep edge, which landed beside it and is 60 smaller: 781
-free.
+with the walls' steep edge, which landed beside it and is 60 smaller. The
+two packed byte tables gave back 459: 63,784, 1,240 free (before the
+minimap, which is 293).
 - Almost all of it is tables sized to the LARGEST arena: the maze's 92
   vertices against the heights arena's 51 (82 bytes per vertex table), its
   PVS at four mask bytes a cell (+512), and its box tree (+384).
