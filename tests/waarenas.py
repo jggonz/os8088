@@ -241,6 +241,25 @@ def main():
         else:
             print("  %-26s up in %d ticks" % ("ziggurat: the south ramp",
                                               2 * (t + 1)), flush=True)
+        def red(x, y, a):               # THE RAMPS ON THE GLASS (the owner's
+            g.place(x, y, 0, ang=a)     # two screenshots): the text screen's
+            g.put("wa_pitch", 0)        # red cells, the ramps' and tower's
+            g.m.advance(cycles=TICK * 8)
+            v = bytes(g.m.read(0xB8000, 40 * 25 * 2))
+            return lambda r, c: (v[(r * 40 + c) * 2 + 1] & 0x0F) in (4, 12) \
+                and v[(r * 40 + c) * 2] not in (0, 32)
+        cell = red(1024, 300, 256)      # straight at the south ramp: its
+        slope = any(cell(r, c) for r in range(18, 22) for c in (12, 13))
+        cell = red(700, 300, 256)       # sides' slopes; the west ramp from
+        top = next((r for r in range(25) if cell(r, 20)), 25)   # its south:
+        if not slope or top < 8:        # a slope, not a line at its top
+            fails.append("ziggurat: the ramps drawn wrong - straight on, the "
+                         "south ramp's slopes %s; the west ramp's side at "
+                         "row %d in column 20 (a slope: 8 or more)"
+                         % ("there" if slope else "missing", top))
+        else:
+            print("  %-26s slopes, from in front and the side"
+                  % "ziggurat: the ramps", flush=True)
         g.bench((1024, 256, ord("A")), fails, "ziggurat: bench view A")
     with boot() as ui:                  # THE PIT (THREE-ARENAS-PLAN 2, 5)
         g = match(ui, 7, mode=1)        # (CTF: its flags on the ring)
@@ -288,8 +307,9 @@ def main():
         g.place(256, 1024, 192)
         g.p.write(g.sym["wa_bdet"], b"\x00")
         rode, ring = False, False
-        for s_ in range(240):
-            g.put("wa_hp", 100)
+        for s_ in range(480):           # (four minutes: the bots' dice -
+            g.put("wa_hp", 100)         # 7 to 65 s measured alone, and once
+                                        # past two minutes in a 4-lane run)
             g.m.advance(cycles=F // 2)
             rode = rode or any(g.lift(i) > g.word("wa_lrest", 2 * i)
                                for i in (0, 1))
@@ -298,7 +318,7 @@ def main():
             if rode and ring:
                 break
         if not (rode and ring):
-            fails.append("pit: in 120 s the bots %s"
+            fails.append("pit: in 240 s the bots %s"
                          % ("rode no lift" if not rode else
                             "hopped onto no ring"))
         else:

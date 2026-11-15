@@ -291,9 +291,15 @@ wa_lowbox:
     sub cx, [wl_fartop]         ; wl_abv - FARTOP: n units above it) or
     cmp cx, [wl_h]              ; for a flight (its treads span it), else
     jg .need                    ; only the seen faces'
-    dec ah
     test byte [wl_kind], 3
-    jnz .need
+    jz .nfl
+    mov cx, [wa_eye]            ; A FLIGHT RISING OVER THE EYE: its far side
+    cmp cx, [wl_h]              ; - its slopes and its high end - is its
+    jle .need                   ; outline from in front (THREE-ARENAS-PLAN,
+    dec ah                      ; the ziggurat's ramps)
+    jmp short .need
+.nfl:
+    dec ah
     mov al, [wl_seen]
     xlatb
 .need:
@@ -373,6 +379,9 @@ wa_lowbox:
     jz .p3s
     call wl_treads
 .p3s:
+    test byte [wl_kind], 3      ; (a flight's bits 2-3 are the face it rises
+    jnz .p3go                   ; toward, not a stack's: an east- or west-
+                                ; rising ramp drew the next box on its top)
     test byte [wl_kind], 4      ; A STACK (HEDGES-PLAN 8): the box standing
     jz .p3go                    ; on this one, between this one's near
     call wl_child               ; faces and the far side of its top
