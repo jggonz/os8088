@@ -11,7 +11,7 @@ result, each bench in an emulator of its own, four at a time.
 
 WHAT: P40 P80 (the play bench), B40 B80 (the spin), O40 (the open arena's
 play bench), H40 H80 (the heights arena's five views), A<n>-<width> (any
-arena's play bench at each of its views: A3-40 the maze, A4-40 the twin). --tree is the checkout
+arena's play bench at each of its views: A3-40 the hedge, A4-40 the twin). --tree is the checkout
 whose build/warena360.img is measured (default: this one); the system disk
 and MartyPC are this checkout's.
 """

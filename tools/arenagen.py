@@ -222,7 +222,7 @@ HEIGHTS_RESPAWNS = [(1024, 480, 256), (250, 1024, 0), (1650, 1850, 768),
                     (1700, 200, 256), (800, 1024, 0)]
 FLAT_RESPAWNS = [(1024, 480, 256), (1024, 1600, 768), (320, 1024, 0),
                  (1750, 1024, 512)]
-ARENA_RESPAWNS = {"a2": HEIGHTS_RESPAWNS}    # (the maze's and twin's: below)
+ARENA_RESPAWNS = {"a2": HEIGHTS_RESPAWNS}    # (the hedge's and twin's: below)
 WA_MRSP = 8
 
 
@@ -494,105 +494,12 @@ def graph_block(tag, boxes):
     return bytes(out)
 
 
-# --- THE MAZE (docs/plans/WIREARENA-ARENAS-PLAN.md 1): green hedges in rings
-# round an open centre, a red three-tier stack in it; four exits from the
-# centre and four entrances to the outer ring, offset; past the outer ring
-# a walkable plateau (its wall's top) with a room cut into it at each
-# cardinal - east and west a weapon on a platform, south health or shield
-# on one, north the lift up onto the plateau. Offsets from the middle, all
-# on the 64-unit sight grid where tall.
-C = 1024
-MH = 384                        # a hedge: 6 m, over every eye (the tiers'
-                                # top and the plateau included)
-MP = 128                        # the plateau: the outer ring wall's top
-
-
-def _sym4(x0, y0, x1, y1):
-    """a box given by its offsets from the middle"""
-    return (C + x0, C + y0, C + x1, C + y1)
-
-
-def _mbox(x0, y0, x1, y1, h, col, name, **kw):
-    return Box(*_sym4(x0, y0, x1, y1), h=h, col=col, name=name, **kw)
-
-
-MAZE_BOXES = [
-    # the stack: the top, then two rings, each a jump above the one under it
-    _mbox(-64, -64, 64, 64, 160, COL_PLAT, "stack top"),
-    _mbox(-128, 64, 128, 128, 104, COL_PLAT, "stack middle N"),
-    _mbox(-128, -128, 128, -64, 104, COL_PLAT, "stack middle S"),
-    _mbox(64, -64, 128, 64, 104, COL_PLAT, "stack middle E"),
-    _mbox(-128, -64, -64, 64, 104, COL_PLAT, "stack middle W"),
-    _mbox(-192, 128, 192, 192, 48, COL_PLAT, "stack bottom N"),
-    _mbox(-192, -192, 192, -128, 48, COL_PLAT, "stack bottom S"),
-    _mbox(128, -128, 192, 128, 48, COL_PLAT, "stack bottom E"),
-    _mbox(-192, -128, -128, 128, 48, COL_PLAT, "stack bottom W"),
-    # the centre's hedge: its exits on its east and west sides, by the corners
-    _mbox(-320, 256, 320, 320, MH, COL_HEDGE, "centre hedge N"),
-    _mbox(-320, -320, 320, -256, MH, COL_HEDGE, "centre hedge S"),
-    _mbox(256, -128, 320, 128, MH, COL_HEDGE, "centre hedge E"),
-    _mbox(-320, -128, -256, 128, MH, COL_HEDGE, "centre hedge W"),
-    # the middle hedge: its entrances on its north and south sides, by the
-    # corners - never facing an exit of the centre's
-    _mbox(512, -576, 576, 576, MH, COL_HEDGE, "middle hedge E"),
-    _mbox(-576, -576, -512, 576, MH, COL_HEDGE, "middle hedge W"),
-    _mbox(-384, 512, 384, 576, MH, COL_HEDGE, "middle hedge N"),
-    _mbox(-384, -576, 384, -512, MH, COL_HEDGE, "middle hedge S"),
-    # the outer ring wall, and the rooms cut in it: its NORTH half a plateau,
-    # walked on from the lift round to the east and west rooms (which cut
-    # it - its south half, past them, no one could reach: hedges)
-    _mbox(-1024, 768, -64, 1024, MP, COL_HEDGE, "plateau NW"),
-    _mbox(64, 768, 1024, 1024, MP, COL_HEDGE, "plateau NE"),
-    _mbox(-1024, -1024, -256, -768, MH, COL_HEDGE, "outer hedge SW"),
-    _mbox(256, -1024, 1024, -768, MH, COL_HEDGE, "outer hedge SE"),
-    _mbox(768, 256, 1024, 768, MP, COL_HEDGE, "plateau EN"),
-    _mbox(768, -768, 1024, -256, MH, COL_HEDGE, "outer hedge ES"),
-    _mbox(-1024, 256, -768, 768, MP, COL_HEDGE, "plateau WN"),
-    _mbox(-1024, -768, -768, -256, MH, COL_HEDGE, "outer hedge WS"),
-    _mbox(896, -128, 1024, 128, 48, COL_PLAT, "east room's platform"),
-    _mbox(-1024, -128, -896, 128, 48, COL_PLAT, "west room's platform"),
-    _mbox(-128, -1024, 128, -896, 48, COL_PLAT, "south room's platform"),
-    _mbox(-64, 768, 64, 1024, 16, COL_PLAT, "north room: the lift",
-          kind=LIFT, top=MP),
-]
-
-
-def _mn(x, y):
-    return (C + x, C + y)
-
-
-MAZE_GRAPH = dict(
-    nodes=[_mn(224, 224), _mn(224, -224), _mn(-224, -224), _mn(-224, 224),
-           # 0-3: round the stack
-           _mn(448, 448), _mn(448, 224), _mn(448, -224), _mn(448, -448),
-           _mn(-448, -448), _mn(-448, -224), _mn(-448, 224), _mn(-448, 448),
-           # 4-11: the inner ring
-           _mn(672, 672), _mn(672, 0), _mn(672, -672), _mn(448, -672),
-           _mn(0, -672), _mn(-448, -672), _mn(-672, -672), _mn(-672, 0),
-           _mn(-672, 672), _mn(-448, 672), _mn(0, 672), _mn(448, 672),
-           # 12-23: the outer ring
-           _mn(832, 0), _mn(-832, 0), _mn(0, -832)],
-           # 24-26: the east, west and south rooms
-    legs=[(0, 1), (1, 2), (2, 3), (3, 0),
-          (4, 5), (5, 6), (6, 7), (7, 8), (8, 9), (9, 10), (10, 11), (11, 4),
-          (12, 13), (13, 14), (14, 15), (15, 16), (16, 17), (17, 18),
-          (18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 12),
-          (0, 5), (1, 6), (2, 9), (3, 10),           # the centre's exits
-          (4, 23), (7, 15), (8, 17), (11, 21),       # the middle's entrances
-          (13, 24), (19, 25), (16, 26)],             # the rooms
-    homes=[[4, 5, 6, 7, 8, 9, 10, 11],
-           [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
-           [0, 1, 2, 3]])
-MAZE_RESPAWNS = [(C, C - 672, 256), (C, C + 672, 768), (C + 672, C, 512),
-                 (C - 672, C, 0), (C + 448, C, 256), (C - 448, C, 768),
-                 (C + 224, C + 224, 512)]
-MAZE_PICKUPS = [
-    ((PK_ROCKET, PK_GRENADE), C, C),             # the stack's top
-    ((PK_SHOTGUN, PK_CHAINGUN), C + 960, C),     # the east room's platform
-    ((PK_RAIL, PK_SHOTGUN), C - 960, C),         # the west room's
-    ((PK_HEALTH, PK_SHIELD), C, C - 960),        # the south room's
-]
-MAZE_START = (C, C - 672, 256)
+# --- THE HEDGES' HEIGHTS: a hedge 6 m, over every eye (a tier's top and the
+# outer wall's included); the outer wall's top walked round (HEDGES-PLAN 1).
+# The first maze (WIREARENA-ARENAS-PLAN 1) was retired for the hedge, the
+# owner's redrawing of it, 2026-11-15
+MH = 384
+MP = 128
 
 # --- TWIN (ARENAS-PLAN 3, the owner's drawing of 2026-11-14): one of the
 # LIGHT arenas by design - two squares of floor joined by a path that dips
@@ -752,21 +659,21 @@ def arenas():
     return [("a0", "Arena", BOXES, PLAYER_START),
             ("a1", "Open", OPEN_BOXES, PLAYER_START),
             ("a2", "Heights", HEIGHTS_BOXES, PLAYER_START),
-            ("a3", "Maze", MAZE_BOXES, MAZE_START),
-            ("a4", "Twin", TWIN_BOXES, TWIN_START),
-            ("a5", "Hedge", HEDGE_BOXES, HEDGE_START)]
+            ("a3", "Hedge", HEDGE_BOXES, HEDGE_START),
+            ("a4", "Twin", TWIN_BOXES, TWIN_START)]
 
 
 # an arena's own patrols (the rest walk PATHS): every arena's are WA_NFIG
 # loops - an arena with no route graph of its own walks them as one
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
-ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": MAZE_GRAPH, "a4": TWIN_GRAPH,
-                "a5": HEDGE_GRAPH}
-ARENA_ROOMCOL = {"a3": COL_HEDGE}
+ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": HEDGE_GRAPH, "a4": TWIN_GRAPH}
+ARENA_ROOMCOL = {}                      # (a room's walls not the room's blue)
 # FLOOR LINES (ARENAS-PLAN 4.5): an arena's closed lines on the floor, the
 # feet's edge - and its room's height, 0 for no room walls at all
 ARENA_FLINES = {"a4": TWIN_WALK}
-ARENA_ROOMH = {"a4": 0}
+ARENA_ROOMH = {"a3": MH, "a4": 0}      # (the hedge's edge all of a height,
+                                        # the owner's: its fills' and its
+                                        # room's walls - HEDGES-PLAN 9)
 WA_MFL = 24                             # (wafb.inc's)
 
 
@@ -812,28 +719,23 @@ def in_walk(tag, x, y, r=0):
 # the owner's stress tests (ARENAS-PLAN 4.4: "to see how well the system holds
 # up"), each with its own ceiling and its frame rate measured where it is
 # worst. (boxes, outline edges)
-OVER_BUDGET = {"a3": (20, 44), "a5": (20, 44)}
-ARENA_RESPAWNS.update({"a3": MAZE_RESPAWNS, "a4": TWIN_RESPAWNS,
-                       "a5": HEDGE_RESPAWNS})
+OVER_BUDGET = {}
+ARENA_RESPAWNS.update({"a3": HEDGE_RESPAWNS, "a4": TWIN_RESPAWNS})
 # THE PLAY BENCH'S VIEWS (P, MULTIPLAYER-FPS-PLAN 16.7; ARENAS-PLAN 4.2), an
 # arena's own, each P press the next: mark, x, y, angle (1024ths), base
 # pitch, the floor under the eye. The heights arena's five are HEIGHTS-PLAN
-# 9's A to E; the maze's and the twin's their worst and their landmarks
+# 9's A to E; the hedge's and the twin's their worst and their landmarks
 _PB = ("P", 224, 800, 32, 0, 0)         # (across the first two rooms)
 ARENA_BENCH = {
     "a0": [_PB], "a1": [_PB],
     "a2": [("A", 800, 400, 160, 0, 0), ("B", 1600, 1024, 512, 0, 0),
            ("C", 1248, 1024, 512, 0, 80), ("D", 1952, 1024, 512, -40, 160),
            ("E", 600, 1568, 512, 0, 0)],
-    "a3": [("A", 1248, 1248, 640, 0, 0),        # the court, its worst edges
-           ("B", 1700, 1024, 0, 0, 0),          # the east room
-           ("C", 1472, 1472, 768, 0, 0),        # the inner ring's corner
-           ("D", 1024, 1900, 768, 0, 128)],     # on the outer wall, north
+    "a3": HEDGE_BENCH,                  # (the hedge's: its _hedge)
     "a4": [("A", 640, 1024, 0, 0, 0),           # at the path, east along it
            ("B", 512, 1024, 0, -40, 240),       # on the west tower
            ("C", 1024, 832, 0, 0, 0),           # the path's bottom
            ("D", 192, 1024, 0, 0, 0)],          # behind the lift: the flag
-    "a5": HEDGE_BENCH,
 }
 
 
@@ -1285,8 +1187,8 @@ HEIGHTS_PICKUPS = [
     ((PK_SHOTGUN, PK_CHAINGUN, PK_GRENADE), 1248, 1024),
     ((PK_ROCKET, PK_RAIL), 1952, 1024),
 ]
-ARENA_PICKUPS = {"a2": HEIGHTS_PICKUPS, "a3": MAZE_PICKUPS,
-                 "a4": TWIN_PICKUPS, "a5": HEDGE_PICKUPS}
+ARENA_PICKUPS = {"a2": HEIGHTS_PICKUPS, "a3": HEDGE_PICKUPS,
+                 "a4": TWIN_PICKUPS}
 
 
 def pickups(tag, boxes):

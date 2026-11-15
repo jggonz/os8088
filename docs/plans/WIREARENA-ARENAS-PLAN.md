@@ -8,6 +8,12 @@ checklist. The Twin was rebuilt the same day from the owner's drawing
 (4.5, 4.6). The floor lines' drawer was rebuilt on 2026-11-15 (4.5; section
 5, *The second drawer*).
 
+**The Maze is RETIRED** (2026-11-15, the owner: *"the new one is better"*).
+Arena 3 is now the HEDGE, the owner's redrawing of it -
+[WIREARENA-HEDGES-PLAN](WIREARENA-HEDGES-PLAN.md). What section 1 and the
+measurements below say of the Maze is the record of how it was built; its
+data is gone from `tools/arenagen.py`.
+
 The owner's brief, 2026-11-14:
 
 > *"Lets do a couple more arenas to see how well the system holds up before

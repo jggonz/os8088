@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""WireArena's MAZE and TWIN, and what the engine had to stop assuming to
-carry them (docs/plans/WIREARENA-ARENAS-PLAN.md 4).
+"""WireArena's HEDGE and TWIN, and what the engine had to stop assuming to
+carry them (docs/plans/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md).
 
 The two arenas were the owner's stress test ("to see how well the system
 holds up before we do ctf mode"), and each needed the engine to drop a limit
@@ -22,10 +22,13 @@ each of those on MartyPC, off the game's own variables:
     marked A - it read the heights arena's table, and a wrong offset into
     the new one put a stray byte where the mark is. (Last: the bench makes
     the bots dummies.)
-  MAZE (arena 3)
-  - the top of the red stack is a floor at 160, and its lift carries a rider
-    to the outer ring's wall (128) and off onto it;
-  - the P bench's first view is the court's, (1248, 1248).
+  HEDGE (arena 3; the maze it replaced was the first arena here)
+  - the red stack's top is a floor at 160, and its MIDDLE tier one at 104 -
+    a box STANDING on a box (HEDGES-PLAN 8): its floor is the tallest box
+    under the feet, so a tier read as anything else is red;
+  - its lift, in the outer wall's north gap, carries a rider to the wall's
+    top (128) and off onto it;
+  - the P bench's first view is the court's, (768, 832).
 """
 import os
 import struct
@@ -181,23 +184,25 @@ def main():
     with boot() as ui:
         g = match(ui, 3)
         g.p.write(g.sym["wa_bdet"], b"\x01")
-        g.place(1024, 1024, 160)
-        g.m.advance(cycles=TICK * 10)
-        f = g.word("wa_feet")
-        if f != 160:
-            fails.append("maze: on the stack's top, the feet at %d, not 160"
-                         % f)
-        else:
-            print("  %-26s feet %d" % ("maze: the stack's top", f), flush=True)
-        g.ride(0, 1024, 1900, 112, 0, fails, "maze: the lift, the wall")
-        g.bench((1248, 1248, ord("A")), fails, "maze: bench view A")
+        for (x, y, want, what) in ((1024, 1152, 160, "the stack's top"),
+                                   (920, 1150, 104, "its middle tier")):
+            g.place(x, y, want)
+            g.m.advance(cycles=TICK * 10)
+            f = g.word("wa_feet")
+            if f != want:
+                fails.append("hedge: on %s, the feet at %d, not %d"
+                             % (what, f, want))
+            else:
+                print("  %-26s feet %d" % ("hedge: " + what, f), flush=True)
+        g.ride(0, 1024, 2016, 112, 0, fails, "hedge: the lift, the wall")
+        g.bench((768, 832, ord("A")), fails, "hedge: bench view A")
     if fails:
         print("waarenas: FAIL - %d:" % len(fails))
         for f in fails:
             print("  " + f)
         sys.exit(1)
     print("waarenas: ok - both lifts, the towers, the floor lines, the bots' rides, "
-          "the stack, the maze's lift, each arena's bench")
+          "the stack's tiers, the hedge's lift, each arena's bench")
 
 
 if __name__ == "__main__":

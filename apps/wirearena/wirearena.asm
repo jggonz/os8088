@@ -5076,7 +5076,7 @@ wa_pbstart:
     mov si, [wa_gpbp]           ; THE ARENA'S VIEWS (ARENAS-PLAN 4.2), the
     lodsw                       ; next each run: P's one in arenas 0 and 1,
     mov bl, [wa_pbsel]          ; the heights arena's A to E (HEIGHTS-PLAN
-    cmp bl, al                  ; 9), the maze's and the twin's own -
+    cmp bl, al                  ; 9), the hedge's and the twin's own -
     jb .sel                     ; arenagen's
     xor bl, bl
 .sel:

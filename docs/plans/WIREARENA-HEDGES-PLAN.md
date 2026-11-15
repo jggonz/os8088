@@ -1,11 +1,12 @@
 # WireArena: the Hedges, the maze redrawn for speed
 
-**STATUS: BUILT, A CHOSEN** (2026-11-15), on branch `multiplayer-fps`. The
-owner's two redrawings of the Maze were built as arenas 5 and 6 beside the
-Maze (arena 3), which is unchanged. The owner chose A, `hedge`, for its PLAY
-- *"the offsets hint where you are"* - and B is gone (section 6). Section 3
-is what they measured; section 4 what would make them faster, of which the
-owner asked for 4.1 and 4.2.
+**STATUS: BUILT; THE HEDGE IS ARENA 3** (2026-11-15), on branch
+`multiplayer-fps`. The owner's two redrawings of the Maze were built as
+arenas 5 and 6 beside it. The owner chose A, `hedge`, for its PLAY - *"the
+offsets hint where you are"* - and B went (section 6); then the Maze itself
+went, and the hedge took its place as arena 3 (section 9). Section 3 is
+what the drawings measured; section 4 what would make them faster, of which
+the owner asked for 4.1 (section 7) and 4.2 (section 8).
 
 The owner's brief, 2026-11-14, with two drawings (not to scale):
 
@@ -332,3 +333,29 @@ wascore wabotarms walink walinknet walinkudp walinkip walink4 walink4ip
 waweapons` - all pass. `walink4` (four machines on UDP, wall-clock
 deadlines) failed once with the other rows' emulators sharing the host
 (142 s) and passed alone (47 s).
+
+## 9. The owner's rulings, the second round (2026-11-15)
+
+> *"Lets make all of the outer outer walls (the ones now blue) the full
+> height, if that doesn't cost performance, so we don't have some higher
+> and some lower. Original maze: Lets delete it, the new one is better."*
+
+- **The edge is all of one height.** The fills round the rooms were the
+  hedges' 384 already; the room's own walls (the north edge, behind the
+  wall's north side) were 192, and are 384 now (`ARENA_ROOMH`). It does
+  not cost - it SAVES: the hedge's 200 poses 122,740 -> 122,210 clk (-0.4%)
+  at 40 columns, 60 seeded poses 202,840 -> 201,271 (-0.8%) at 80. The
+  room is now as tall as the tallest box: its faces take the tall path,
+  and from the wall's top the eye no longer sees over them.
+- **The Maze is deleted; the hedge is arena 3** in its place, `hedge` on
+  the setup's list, so the Twin stays arena 4 and nothing else renumbers.
+  Its data, its bench views, its over-budget allowance (the hedge is
+  inside the visible budget) and its arena part are gone. `waarenas` now
+  checks the hedge where it checked the Maze: the stack's top a floor at
+  160, its middle tier - a box standing on a box - one at 104, its lift
+  onto the wall, and its first bench view.
+- **On "a second outer wall".** The owner's drawing has none: the walkway
+  is the outer wall, and beyond it only the edge. This arena keeps the
+  tall fills as that edge round the rooms, which the owner likes the look
+  of; the tall-wall test of section 3 raised the WALKWAY itself, not a
+  second wall.
