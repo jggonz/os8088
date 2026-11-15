@@ -926,6 +926,34 @@ vx_rowcopy:
     ret
 
 ; -----------------------------------------------------------------------------
+; vx_rowread - vx_rowcopy for a READ: CX BYTES from DS:SI, the window, to
+;              ES:DI, with the window edge the SOURCE's (driver size pass 1:
+;              the save and the scroll's read half moved a byte or word and
+;              tested the edge after each, which crossed it at the same byte -
+;              the same bytes, the same window switches, an edge ending the
+;              row included). NOT the arrow's: its save-under and restore
+;              keep their byte loops, which reach vx_nextwin six bytes
+;              shallower on the mouse ISR's private stack (SPEC.md 120.3.3)
+; in:  DS:SI set off vx_addr, ES:DI the destination, CX = bytes (> 0)
+; clobbers: cx, si, di, flags
+; -----------------------------------------------------------------------------
+vx_rowread:
+    push bx
+    mov bx, si
+    add bx, cx
+    jnc .one                    ; SI + CX does not carry: one run
+    push bx                     ; BX = bytes past the edge
+    sub cx, bx
+    call vx_rowcopy.run
+    call vx_nextwin             ; (DS is the window: it reads through CS)
+    xor si, si
+    pop cx
+.one:
+    call vx_rowcopy.run
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; vx_px - put colour AL at ES:DI, advancing DI (and the window) one pixel
 ; in:  AL = the colour index; ES:DI the pixel
 ; clobbers: flags (AX kept)
@@ -1198,16 +1226,10 @@ vxp_save:
     cmp byte [cs:vx_one], 0
     jne .one
     cmp byte [cs:vx_bpp], 8
-    jne .w16
-.b8:
-    movsb
-    VXWS
-    loop .b8
-    jmp short .rdone
-.w16:
-    movsw
-    VXWS
-    loop .w16
+    je .cb
+    add cx, cx                  ; bytes a row
+.cb:
+    call vx_rowread             ; one rep to the edge, the next window, the rest
     jmp short .rdone
 .one:                           ; 8 pixels -> 1 byte, bit 7 the leftmost
     mov dl, 0
@@ -2088,17 +2110,10 @@ vxp_scroll:
     mov di, vx_rowbuf           ; ES:DI = the bounce
     mov cx, [cs:vx_w]
     cmp byte [cs:vx_bpp], 8
-    jne .r16
-.r8:
-    movsb
-    VXWS
-    loop .r8
-    jmp short .rd
-.r16:
-    movsw
-    VXWS
-    loop .r16
-.rd:
+    je .rb
+    add cx, cx                  ; bytes a row
+.rb:
+    call vx_rowread
     pop ds
     pop bx
     mov ax, [vx_bx0]
@@ -2106,17 +2121,10 @@ vxp_scroll:
     mov si, vx_rowbuf           ; DS:SI = the bounce (DS = CS)
     mov cx, [vx_w]
     cmp byte [vx_bpp], 8
-    jne .w16
-.w8:
-    movsb
-    VXW
-    loop .w8
-    jmp short .wd
-.w16:
-    movsw
-    VXW
-    loop .w16
-.wd:
+    je .wb
+    add cx, cx                  ; bytes a row
+.wb:
+    call vx_rowcopy
     add bx, [vx_sstep]
     dec word [vx_rows]
     jnz .row
