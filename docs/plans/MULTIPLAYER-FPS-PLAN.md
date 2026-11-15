@@ -1699,9 +1699,20 @@ the ticks (0 a second, 31 again after), the box drawn and N and Y, and all
 three arrows - the player turned to keep the nearest bot behind: 52 hits,
 each cue seen.
 
-**In progress**: WireArena onto shipped disks - a second 360KB games disk,
-the 720KB more disk, and the 1.2MB and 1.44MB apps disks if it fits - and
-with it out of `apps/RETIRED.txt`'s instruments. Another session builds
+- [x] **WireArena on the shipped disks** (the Makefile's `WA_SHIP`):
+  - at 360KB, `games2-360.img`, the second games disk (SPEC.md 24.6), the
+    package at its root, 71 of 354 clusters. It would have fitted
+    `games360.img` with one cluster spare, and a game disk at its last
+    cluster cannot save a high score;
+  - `GAMES/` on the 1.44MB and 1.2MB apps disks (147KB and 152KB free
+    before it) and on `more720.img` (126KB; SPEC.md 24.7). `apps720.img`,
+    with 25KB free, leaves it off;
+  - the live media through `$(ALLAPPSARGS)`;
+  - off `apps/RETIRED.txt`'s instruments;
+  - the gates that walk the shipped images (`t_image`, `t_diskverify`,
+    `t_catdisk`, `t_retired`, `t_noovl`, `t_stik`, `abicompat`) and the
+    release zip (`360K/GAMES2.IMG`) know the new disk;
+  - kern_mega's apps disks are the kern_mega session's to place. Another session builds
 the Ziggurat and the Pit
 ([WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md)).
 
