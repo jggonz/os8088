@@ -6586,8 +6586,8 @@ wa_femit:
     pop di
     ret
 .found:                         ; DI = the cell's place in wa_fbuf, + 2
-    mov dh, [di-2]              ; DH = its sub-pixels, taken out of the
-    mov [di-2], ah              ; scratch (AX is 0)
+    xchg ah, [di-2]             ; DH = its sub-pixels, taken out of the
+    mov dh, ah                  ; scratch (AH was 0: one exchange)
     mov al, [di+WA_FSTO]
     xor al, dl                  ; (its stamp against DL: 0 a figure's cell
     shl al, 1                   ; this frame, 0x80 a wall's - one test for
