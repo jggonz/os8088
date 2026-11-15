@@ -187,9 +187,11 @@ In order of what it buys:
 - [x] Up to 63 boxes an arena: leaf byte box x 4, `wa_order`
 - [x] `height_checks`: a gap a running jump clears (`jump_gap`)
 - [x] Measured: as drawn, and five variants of A (section 3)
-- [ ] The jump across a wall gap tried in the game
-- [ ] The owner's choice: which layout stays, and whether section 4's items
-  are wanted
+- [x] The jump across a wall gap tried in the game - and the stack's
+  tiers: the owner, 2026-11-15, *"The tier jumps work fine, and the gaps
+  as well."*
+- [x] The owner's choice: A, for its play (section 6); section 4's 4.1 and
+  4.2 asked for and built (sections 7, 8)
 - [x] Suite rows: the fourteen WireArena soak rows (section 8)
 
 ## 6. The owner's rulings, 2026-11-15
@@ -317,8 +319,8 @@ tier): there a ring piece's far edge shut every column before the others
 came up, while a tier standing on a box is drawn before that far edge,
 which it may hide.
 
-Not yet tried in the game by hand: walking and jumping the hedge's tiers.
-The game reads the stack as the ground's heights, unchanged.
+Tried in the game by the owner (2026-11-15): the tiers' jumps and the
+wall's gaps both work.
 
 **What was left alone in the outline path**, and why. Its per-column loops
 test a column both against its clip and for being SHUT; were a shut

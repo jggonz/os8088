@@ -1,9 +1,10 @@
 # WireArena: bots that shoot back, and the match around them
 
-**STATUS: building, wave by wave.** Section 1 records the owner's rulings
-on what is left of WireArena (2026-11-14); sections 2–6 are the bots and the
-match flow, priced; section 7 the questions and the owner's answers;
-section 8 what was built and measured, wave by wave.
+**STATUS: BUILT** (reconciled 2026-11-15): waves B1 to B4 and two rounds
+of play notes (section 8). Section 1 records the owner's rulings on what
+was left of WireArena (2026-11-14), and 1.1 where each one stands now;
+sections 2–6 are the bots and the match flow, priced; section 7 the
+questions and the owner's answers; section 8 what was built and measured.
 
 WireArena is `apps/wirearena/`. Its history is
 [MULTIPLAYER-FPS-PLAN](MULTIPLAYER-FPS-PLAN.md) §16,
@@ -34,6 +35,25 @@ method given), **Derived** (arithmetic from measured unit costs) and
 | **Footsteps, more sounds** | Maybe |
 | **Radar** | Maybe: a prototype first. Maps are small and will stay small |
 | **Two players on one 5150** | Too slow on a 5150; a bonus after everything else |
+
+### 1.1 Where each stands (2026-11-15)
+
+- **Built**: bots that shoot back (this plan, 8); death, respawn and Tab's
+  board (8.3); dummies on lifts (8.1); the serial link, then Ethernet and
+  the lobby ([WIREARENA-LINK-PLAN](WIREARENA-LINK-PLAN.md),
+  [WIREARENA-NET-PLAN](WIREARENA-NET-PLAN.md)); real-CGA snow - the player
+  picks 40 or 80 columns in the setup.
+- **Game modes** (the owner, 2026-11-15): duel and free-for-all are what
+  the game plays already - a duel is one other bot, free-for-all the main
+  mode. **Team deathmatch** joins the list, and it and capture the flag
+  spawn a player on their own SIDE only. Capture the flag is next:
+  [WIREARENA-CTF-PLAN](WIREARENA-CTF-PLAN.md). Last stand is still to
+  come.
+- **Open, not started**: kern_mega's linked match and its soak rows
+  (LINK-PLAN L3.3); keyboard turn acceleration; jump pads and teleporters;
+  replay and kill-cam; a radar prototype; footsteps and more sounds; two
+  players on one 5150. More arenas come last, after every change that
+  affects performance.
 
 ## 2. The shape: a bot is a figure that walks a ROUTE and rolls dice
 

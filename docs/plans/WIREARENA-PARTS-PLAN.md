@@ -1,7 +1,9 @@
 # WireArena in parts: what goes in which segment
 
-**STATUS: PLAN.** No code has changed. This document answers the owner's
-note of 2026-11-13:
+**STATUS: BUILT** (section 8, 2026-11-13; reconciled 2026-11-15): the
+renderer is part 0, the figures' cold keyframes a part of their own (8.6),
+and each arena a lazy part (7.5). Sections 1 to 7 are the plan as it was
+argued. This document answers the owner's note of 2026-11-13:
 
 > *"I really doubt this entire game will fit in the remaining few kb. We can
 > optimize for size later too, but almost certainly we are going to need
