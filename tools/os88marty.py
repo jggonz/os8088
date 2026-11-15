@@ -3758,6 +3758,8 @@ def ui_done(m, what="the UI to finish with that input", hold=0.06,
     is then NOT promised finished - settle before a capture.
     """
     idle = (lambda mm: ui_idle(mm, False)) if not lock else ui_idle
+    if not lock:
+        idle._ui_lock = False           # (for _ui_settled1's batched look)
     prog = _Progress(m, what, limit * GUEST_BUDGET_RATIO)
     c0 = r0 = k0 = None
     while True:
@@ -3837,6 +3839,47 @@ _UI_STEPS = 24                          # PIT counts, 4 CPU clocks each) - and
                                         # 24 of them are three ticks
 
 
+_SLOW = object()
+
+
+def _ui_settled1(m, idle, k0, r0):
+    """`_ui_settled`'s look as ONE pipelined round trip - the drive's read
+    count, [ticks], [ui_lastt] and ui_idle's five spans in one `batch` (eight
+    serial round trips before; soak-speed-2/core.md). The guest is PAUSED
+    around every look but the pump's, so the values are the same ones the
+    serial reads saw. `_SLOW` where it is not on offer: not a Marty, a
+    server that does not pipeline, an `idle` that is not one of ui_done's
+    two, or a symbol not resolved yet - the caller then reads serially."""
+    if not isinstance(m, Marty) or not m._pipeline:
+        return _SLOW
+    lock = getattr(idle, "_ui_lock", None)
+    if idle is ui_idle:
+        lock = True
+    a = getattr(m, "_ui_idle_syms", None)
+    kt = getattr(m, "_ktick_sym", None)
+    lt = getattr(m, "_ui_lastt_sym", None)
+    if lock is None or a is None or kt is None:
+        return _SLOW
+    if lt is None:
+        lt = m._ui_lastt_sym = m.sym("ui_lastt")
+    rd = [(kt, 2), (lt, 2), (a[0], 1), (a[1], 1), (a[2], 1), (a[3], 1),
+          (BIOS_KBUF, 4)]
+    try:
+        out = m.batch([{"cmd": "disk"}] +
+                      [{"cmd": "read", "addr": x, "len": n} for x, n in rd])
+    except MartyError:
+        return _SLOW
+    if out[0].get("reads") != r0:
+        return None
+    b = [bytes.fromhex(r["data"]) for r in out[1:]]
+    k = b[0][0] | (b[0][1] << 8)
+    if k == k0 or (b[1][0] | (b[1][1] << 8)) != k:
+        return False
+    st, q, wk, lk, kb = b[2:]
+    return (st[0] == UI_ASLEEP and not q[0] and not wk[0]
+            and not (lock and lk[0]) and kb[0:2] == kb[2:4])
+
+
 def _ui_settled(m, idle, k0, r0):
     """True when ui_task's pass for the current tick is FINISHED, a tick later
     than `k0`, with no read since `r0`; False when three ticks of guest time
@@ -3844,6 +3887,9 @@ def _ui_settled(m, idle, k0, r0):
     Under a breakpoint pump the guest is not ours to stop, so it is one
     snapshot taken running."""
     def ok():
+        got = _ui_settled1(m, idle, k0, r0)
+        if got is not _SLOW:
+            return got
         if m.disk().get("reads") != r0:
             return None
         k = _ktick(m)

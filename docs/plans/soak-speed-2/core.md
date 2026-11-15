@@ -59,6 +59,11 @@ techniques are cited as "SOAK-SPEED n".
    window look many times a wait. Falls back to the serial reads on a
    non-Marty object or a server that does not pipeline.
 
+   `ui_done`'s confirmation look (`_ui_settled`, stepped on a paused guest
+   up to 24 times) is one batch too - the read count, [ticks], [ui_lastt]
+   and the idle spans: eight round trips a look before (`_ui_settled1`;
+   checked equal to the serial look on 6,000 random memory states).
+
 5. **TCP_NODELAY on the client socket too** (SOAK-SPEED 17; the server
    already set it). A request is one write, so this is insurance against a
    thread writing between a request and its reply.
@@ -95,7 +100,7 @@ techniques are cited as "SOAK-SPEED n".
 2. The same cache for raw `launch(boot=False)` + `kernel_up` callers (~85
    call sites) - it needs the caller's `boot=` semantics kept, which
    `os88ui.boot` already pins.
-3. `_ui_settled`'s `ok()` and `ui_done`'s hold loop as one batch (disk,
-   ticks, ui_lastt and the idle bytes): ~8 round trips a look today.
+3. `ui_done`'s hold loop (two `disk` calls and a tick read a pass) and
+   `key_taken`'s look as batches, like `_ui_settled1`.
 4. A server-side `wait` verb (86Box has `wait_mem`): the poll loops then cost
    one round trip a wait rather than one per look.
