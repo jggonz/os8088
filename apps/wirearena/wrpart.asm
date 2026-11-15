@@ -389,35 +389,31 @@ wa_loadarena:
     mov di, wa_pvs
     rep movsb
 .nopvs:
-    mov si, [bx+18]             ; the tree, WA_ROW bytes a node
-    mov dx, wa_bsp
-    sub dx, si                  ; DX = what each link moves by
-    mov cx, [bx+28]
-    mov bx, cx                  ; BX = its nodes
-    shl cx, 1
-    add cx, bx
-    shl cx, 1                   ; x 6: words
+    mov si, [bx+18]             ; the tree: a leaf 2 bytes (db kind 2, box
+    mov dx, wa_bsp              ; x 4), a split 8 (db kind, 0; dw value,
+    sub dx, si                  ; low, high) - DX = what each link moves by
+    mov cx, [bx+28]             ; its bytes
+    mov bx, cx
+    shr cx, 1
     mov di, wa_bsp
     rep movsw
     push es
     pop ds                      ; ours again
     mov word [wa_root], wa_bsp  ; the root is the first node
     mov si, wa_bsp
-    mov cx, bx
+    add bx, si                  ; BX = the tree's end
 .node:
-    cmp word [si+4], 0          ; low and high, 0 = none
-    je .lo
-    add [si+4], dx
-.lo:
-    cmp word [si+6], 0
-    je .hi
+    cmp byte [si], 2
+    je .leaf
+    add [si+4], dx              ; (a split has both links)
     add [si+6], dx
-.hi:
-    add si, WA_BSPROW
-    loop .node
+    add si, 6
+.leaf:
+    inc si
+    inc si
+    cmp si, bx
+    jb .node
     ret
-WA_BSPROW equ 12                ; a node: db kind, box; dw value, low, high;
-                                ; db its boxes' bounds x 4
 
 %include "wrender.inc"
 %include "wrlow.inc"
@@ -448,7 +444,7 @@ WA_VAR wa_yv,WA_MYV*2
 WA_VAR wa_vtx,WA_MVTX*2
 WA_VAR wa_corn,(WA_MBOX+1)*4
 WA_VAR wa_bcol,WA_MBOX+2
-WA_VAR wa_bsp,WA_MNODE*WA_BSPROW  ; the tree, rebased (wa_loadarena)
+WA_VAR wa_bsp,WA_MBSP            ; the tree, rebased (wa_loadarena)
 WA_VAR wa_pvsh,1                 ; the PVS: the grid's shift (0: none)...
 WA_VAR wa_pvsn,1                 ; ...its cells a column...
 WA_VAR wa_pvp,2                  ; ...this cell's mask (wa_order)...

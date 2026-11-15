@@ -1404,10 +1404,26 @@ wa_sil:
     mov bx, .xbit
     xlatb
     or al, cl
+    shr di, 1                   ; DI = the box x 4
+    mov dx, [wa_bxh+di]         ; A TALL box's face its tall neighbours
+    cmp dx, [wa_hmax]           ; wholly cover (its bit clear in its faces
+    jb .sall                    ; byte, tools/arenagen.py's face_bits) is
+    mov cl, al                  ; inside the solid: never seen, so not in
+    and al, [wa_bxh+di+3]       ; the silhouette - the box is kept, dropped
+    mov ah, cl                  ; and drawn by the faces that can show. But
+    xor ah, al                  ; not the SECOND of two: the first is then
+    jz .sall                    ; drawn last, and a last face puts its end
+    mov bx, .sec                ; post where the neighbour's own stands
+    xchg al, cl                 ; (`││`)
+    xlatb
+    cmp al, ah
+    mov al, cl
+    jne .sall
+    or al, ah
+.sall:
     mov bx, .sil
     xlatb                       ; the silhouette's corners, two bits each:
     mov ah, al                  ; a, b, c - or 0xFF, no face
-    shr di, 1
     lea bx, [di+wa_corn+4]      ; the box's corners' vertices (the room's
     lea di, [si-3]              ; row is first)
     mov cx, 3
@@ -1435,6 +1451,9 @@ wa_sil:
 ; face (no b); 0xFF none (or two the player cannot be outside of at once)
 .sil:       db 0xFF, 0x50, 0x61, 0x24, 0x72, 0xFF, 0x39, 0xFF
             db 0x43, 0x13, 0xFF, 0xFF, 0x0E, 0xFF, 0xFF, 0xFF
+; ...and of two faces seen, the second (b -> c, .sil's order): S E, E N, W
+; S, N W - 0 by any other
+.sec:       db 0, 0, 0, 2, 0, 0, 4, 0, 0, 1, 0, 0, 8
 .side:                          ; AX = the player's coordinate, BX -> the
     mov dx, [bx]                ; box's low one (its high at +4), BP -> the
     cmp ax, dx                  ; cell's pair: AL = 0 below the box, 1

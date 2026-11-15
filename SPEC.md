@@ -251377,7 +251377,7 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The renderer part's ABI** is `apps/wirearena/wafb.inc`, which both
   halves include, so the FRAME BLOCK is one layout:
   - **The part's header**: `'WRPART'`, then at +6 the ABI byte
-    (`WR_ABI`, 15) and at +7 the verb count (`WR_NVERB`, 6). From +8
+    (`WR_ABI`, 16) and at +7 the verb count (`WR_NVERB`, 6). From +8
     there is a word per verb, its offset, and at +20 (`WR_H_POSE`) the
     offset of the hot keyframes (`wa_pose0`). The primary refuses a
     mismatch at launch with *Renderer part mismatch*.
@@ -251455,7 +251455,13 @@ the arenas the chosen mode can play.
   the vertices and corners, the boxes and their BSP, the start (x, y, its
   facing), the colours, the box heights and kinds, the room height, the
   tallest box, the lifts, the route graph (AI-PLAN 3.1), the PVS, the
-  pickups and their PVS, and the floor lines. `wa_loadarena` copies one into the
+  pickups and their PVS, and the floor lines. The tree is rows of two sizes,
+  followed by its links and never counted: a leaf is 2 bytes (kind 2, its
+  box x 4), a split 8 (its kind, 0, its value, its low and high links), and
+  the descriptor's word 28 is the tree's length in bytes (`WR_ABI` 16).
+  In the route graph, the next hop of each (node, goal) pair is two bits,
+  four to a byte: which of the node's four ways out a bot takes first.
+  `wa_loadarena` copies one into the
   working tables and REBASES the tree's links. `arena_part()` in
   arenagen.py is this layout's single writer, and the renderer's
   `wa_loadarena` its single reader.
