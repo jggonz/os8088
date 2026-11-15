@@ -318,7 +318,7 @@ WA_VAR wa_fbw, 2                ; wa_figure's box: width in cells,
 WA_VAR wa_fbc, 2                ;   left column x 2, last row x 2
 WA_VAR wa_fbr, 2
 WA_VAR wa_frow, 2
-WA_VAR wa_fnr, 2                ;   rows left to sweep
+WA_VAR wa_fend, 2               ;   the sweep's last row's end in wa_fbuf
 WA_VAR wa_fvis, WA_MAXW*2       ;   per column x 2: 0, or the first half-row
                                 ;   hidden there + 1 (all 0 between figures)
 WA_VAR wa_fnh, 1                ;   its columns with something hidden
@@ -6564,11 +6564,14 @@ wa_femit:
     add di, [wa_fbc]
     shr di, 1
     add di, wa_fbuf             ; DI = the box's first cell in wa_fbuf
-    mov ax, [wa_fbr]
-    sub ax, bx
+    mov bx, [wa_fbr]
+    mov ax, [wa_rowo2+bx]
+    add ax, [wa_fbc]
     shr ax, 1
-    inc ax
-    mov [wa_fnr], ax            ; rows
+    add ax, wa_fbuf
+    add ax, [wa_fbw]
+    mov [wa_fend], ax           ; ...and its last row's end: a row's sweep
+                                ; ends at its end, so one compare a row
     mov ax, [wa_w]
     sub ax, [wa_fbw]
     mov [wa_fsk], ax            ; from the box's end to its start a row on
@@ -6584,8 +6587,8 @@ wa_femit:
     repe scasb
     jne .found
 .nrow:
-    dec word [wa_fnr]
-    jnz .row
+    cmp di, [wa_fend]
+    jb .row
     sub si, [wa_newp]
     mov [wa_newn], si
     pop di
