@@ -14,8 +14,10 @@
   - A CAPTURE: then at our base, red has 1 and blue's flag is home;
   - A DROP: carrying, we die - blue's flag lies where we fell, and goes home
     by itself when its time runs out;
-  - THE WIN: at 2 captures, a third shows RED WINS, and the round starts
-    again - nobody's captures, both flags home;
+  - THE WIN (Win at 3, its default): at 2 captures, a third shows RED
+    WINS, and after its 10 s the match goes on in the next CTF arena of the
+    rotation, the hedge - nobody's captures, both flags home at its bases,
+    us on our side (WIREARENA-MODES-PLAN 5);
   - NO FRIENDLY FIRE: our pistol at our teammate (bot 2) takes nothing off
     it; at the foe (bot 1) it does;
   - THE BOTS PLAY (wave C2, CTF-PLAN 6): two bots and us idle - bot 2
@@ -45,6 +47,7 @@ F_SIZE, F_X, F_Y, F_DEAD, F_HP = 56, 0, 2, 17, 42
 WC_SZ, WC_ST, WC_CARR, WC_X, WC_Y, WC_TMR = 10, 0, 1, 2, 4, 8
 HOME, CAR, DROP = 0, 1, 2
 RED, BLUE = (192, 1024), (1856, 1024)
+HEDGE_RED = (224, 1152)
 
 
 def match(ui, arena, bots):
@@ -173,21 +176,6 @@ def main():
               "time runs out", g.flag(1, WC_ST))
         g.ticks(100)                            # (alive again)
 
-        g.p.write(sym["wa_caps"], bytes([2, 0]))  # THE WIN
-        g.place(BLUE[0], BLUE[1], 0)
-        g.ticks(4)
-        g.place(RED[0], RED[1], 0)
-        g.ticks(4)
-        check(g.caps() == (3, 0) and g.word("wa_cwin") > 0 and
-              g.word("wa_cmsg") == sym["wc_m_rwin"],
-              "THE WIN: red's third capture shows RED WINS",
-              (g.caps(), g.word("wa_cwin")))
-        g.ticks(160)
-        check(g.caps() == (0, 0) and g.flag(0, WC_ST) == HOME and
-              g.flag(1, WC_ST) == HOME and g.word("wa_px") < 1024,
-              "THE WIN: the round again - no captures, both flags home, us "
-              "on our side", (g.caps(), g.word("wa_px")))
-
         def shoot_at(i):                        # NO FRIENDLY FIRE: figure i
             base = sym["wa_figs"] + i * F_SIZE   # stood 120 ahead of us in
             def stand():                        # the west square, every tick
@@ -217,6 +205,26 @@ def main():
               "nothing", mate)
         check(foe[3] == 1 and (foe[1] < foe[0] or foe[2] != 0),
               "...and the same shot at the foe (bot 1) hurts it", foe)
+        g.p.write(sym["wa_caps"], bytes([2, 0]))  # THE WIN (Win at 3,
+        g.place(BLUE[0], BLUE[1], 0)            # the default)
+        g.ticks(4)
+        g.place(RED[0], RED[1], 0)
+        g.ticks(4)
+        check(g.caps() == (3, 0) and g.word("wa_cwin") > 0 and
+              g.word("wa_cmsg") == sym["wc_m_rwin"],
+              "THE WIN: red's third capture shows RED WINS",
+              (g.caps(), g.word("wa_cwin")))
+        g.m.go()
+        os88marty.until(g.m, lambda _: g.p.byte(sym["wa_arena"]) == 3 and
+                        g.word("wa_cwin") == 0, "the hedge next", guest=20)
+        g.ticks(4)
+        check(g.caps() == (0, 0) and g.flag(0, WC_ST) == HOME and
+              g.flag(1, WC_ST) == HOME and (g.flag(0, WC_X, 2),
+                                            g.flag(0, WC_Y, 2)) == HEDGE_RED
+              and g.word("wa_px") < 1024,
+              "THE WIN: after its 10 s the next CTF arena, the hedge - no "
+              "captures, both flags home at its bases, us on our side",
+              (g.caps(), g.word("wa_px")))
     with boot() as ui:                          # C2: THE BOTS PLAY FOR IT
         g = match(ui, 4, 2)                     # (CTF-PLAN 6) - us idle,
         g.__class__ = C                         # bot 2 red's, bot 1 blue's:

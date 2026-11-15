@@ -25,36 +25,43 @@
 ; that could not bank) writes each pixel once, with no white first. A
 ; kernel PAINT skips the ground: the kernel filled the content white.
 
-WS_W        equ 336             ; the content box (the template: 338 x 174)
-WS_RM       equ 328             ; ...and its right margin, past every
+WS_W        equ 400             ; the content box (the template: 402 x 174 -
+                                ; wide for team deathmatch and Win at's
+                                ; "10 captures", MODES-PLAN 2)
+WS_RM       equ 392             ; ...and its right margin, past every
                                 ; control and row (the owner: the drop-downs
                                 ; off the edge, as the left's 8 px are)
 WS_H        equ 155
 WS_LX       equ 0               ; the left column: a marker cell and a
 WS_LDX1     equ 56              ; label (seven cells), then its drop-down
-WS_LDX2     equ 183
-WS_RX       equ 184             ; the right column: marker and label (nine
-WS_RDX1     equ 256             ; cells), then its drop-down
-WS_RDX2     equ 327
+WS_LDX2     equ 199
+WS_RX       equ 200             ; the right column: marker and label (nine
+WS_RDX1     equ 272             ; cells), then its drop-down
+WS_RDX2     equ 391
 WS_Y1       equ 14              ; the three rows of controls, 16 high
 WS_Y2       equ 32
 WS_Y3       equ 50
-WS_Y4       equ 68              ; (the fourth: Mode, CTF-PLAN 7)
+WS_Y4       equ 68              ; (the fourth: Mode, CTF-PLAN 7; and Win
+                                ; at, MODES-PLAN 2)
+WS_Y5       equ 86              ; (the fifth: the nick, the buttons)
 WS_DH       equ 16
-WS_FX1      equ 192             ; the address field, right of Play
-WS_FX2      equ 327
-WS_BTNY     equ 87              ; the buttons
-WS_BTNW     equ 104
+WS_FX1      equ 208             ; the address field, right of Play
+WS_FX2      equ 391
+WS_BTNY     equ WS_Y5           ; the buttons, right of the nick
+WS_BTNW     equ 96              ; (Play: "Not ready" fits)
+WS_B1X      equ 208
+WS_BTNW2    equ 80              ; (Keys)
 WS_BTNH     equ 16
-WS_B2X      equ 129
+WS_B2X      equ 312
 WS_LOBY     equ 106             ; the players' rows (walink.inc), 10 apart
-WS_NDR      equ 6               ; the drop-downs. THE FOCUS'S STOPS, in the
+WS_NDR      equ 7               ; the drop-downs. THE FOCUS'S STOPS, in the
 WS_FLD      equ 5               ; window's reading order: the first five
 WS_FMODE    equ 6               ; drop-downs, the field beside Play (while
                                 ; it is there), then Mode (drop-down 5,
                                 ; the row under Play: CTF-PLAN 7), then
-WS_NICK     equ 7               ; the nick's field, right of Mode
-WS_NKX      equ 232             ; ...its left (its label six cells)
+WS_FGOAL    equ 7               ; Win at (drop-down 6, right of Mode), then
+WS_NICK     equ 8               ; the nick's field, under Mode
+WS_NKX      equ WS_LDX1         ; ...its left (its label seven cells)
 WS_NKMAX    equ 9               ; ...its buffer: eight and the NUL
 
 ; wa_sinit - the window is open: the controls' records
@@ -75,7 +82,68 @@ wa_sinit:
     mov bx, wa_sbrec
     mov dx, wa_sclick
     call os88ui_btninit
+    call wa_sarlist
     call wa_sforget
+    ret
+
+; wa_sarlist - the mode's lists (MODES-PLAN 2, 5): the Arena drop-down's
+; items the arenas that play the mode, in the setup's order (and the
+; arena each item is: wa_salx), the current one moved to the first of them
+; if it does not; Win at's items the mode's. Keeps all but the flags
+wa_sarlist:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cl, [wa_lkgmode]
+    mov dl, 1
+    shl dl, cl                  ; DL = the mode's bit
+    xor bx, bx                  ; BX = an item of the whole list, in order
+    xor di, di                  ; DI = the filtered list's count
+    mov ch, 0FFh                ; CH = the current arena's place in it
+.i:
+    mov al, bl
+    call wa_sarmap              ; AL = its arena
+    mov si, ax
+    and si, 0x00FF
+    test [wa_amodes+si], dl
+    jz .n
+    mov [wa_salx+di], al
+    cmp al, [wa_lkarena]
+    jne .a
+    mov ax, di
+    mov ch, al
+.a:
+    mov si, bx
+    shl si, 1
+    mov ax, [wa_lt_anames+si]
+    mov si, di
+    shl si, 1
+    mov [wa_salp+si], ax
+    inc di
+.n:
+    inc bx
+    cmp bx, WA_NARENA
+    jb .i
+    mov [wa_sdr_a+OS88UI_DR_N], di
+    cmp ch, 0FFh
+    jne .have
+    mov al, [wa_salx]           ; (not this mode's: its first)
+    mov [wa_lkarena], al
+.have:
+    mov bl, [wa_lkgmode]        ; Win at's items
+    xor bh, bh
+    shl bx, 1
+    mov ax, [wa_sglist+bx]
+    mov [wa_sdr_g+OS88UI_DR_ITEMS], ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; wa_sforget - nothing drawn yet: every control drawn by the next pass
@@ -108,9 +176,18 @@ wa_sval:
 .mine:
     jmp [wa_svals+bx]
 .arena:
+    mov ah, [wa_sdr_a+OS88UI_DR_N] ; (the mode's arenas: wa_sarlist)
+    xor bx, bx
     mov al, [wa_lkarena]
-    call wa_sarmap
-    mov ah, WA_NARENA
+.ax:
+    cmp [wa_salx+bx], al
+    je .af
+    inc bx
+    cmp bl, ah
+    jb .ax
+    xor bx, bx
+.af:
+    mov al, bl
     jmp .out
 .cols:
     mov al, [wa_want]           ; (40 is 1 there, item 0 here)
@@ -133,20 +210,46 @@ wa_sval:
     mov ah, 4
     jmp .out
 .mode:
-    mov al, [wa_lkgmode]        ; (the host's, as the arena is)
-    mov ah, 2
+    mov al, [wa_lkgmode]        ; (the host's, as the arena is) - the list's
+    mov bx, wa_smodes           ; order free-for-all, team deathmatch, CTF
+    call .find
+    mov ah, WA_NMODES
+    jmp .out
+.goal:
+    mov bl, [wa_lkgmode]        ; (the host's too) - the mode's own pick
+    xor bh, bh
+    mov al, [wa_sgoal+bx]
+    mov ah, WA_NGOAL
+    jmp .out
+.find:                          ; AL = a value, BX = a table: AL = its place
+    push cx
+    xor cx, cx
+.fl:
+    cmp [bx], al
+    je .ff
+    inc bx
+    inc cx
+    cmp cx, WA_NMODES
+    jb .fl
+    xor cx, cx
+.ff:
+    mov al, cl
+    pop cx
+    ret
 .out:
     pop bx
     ret
 wa_svals:   dw wa_sval.arena, wa_sval.cols, wa_sval.bots, wa_sval.skill
-            dw wa_sval.play, wa_sval.mode
+            dw wa_sval.play, wa_sval.mode, wa_sval.goal
 
 ; wa_spick - BX = a drop-down x 2, AL = its new pick: the setting it names
 ; set, and whatever that implies
 wa_spick:
     jmp [wa_spicks+bx]
 .arena:
-    call wa_sarmap
+    xor bh, bh                  ; (the mode's list: wa_sarlist's)
+    mov bl, al
+    mov al, [wa_salx+bx]
     mov [wa_lkarena], al
     ret
 .cols:
@@ -177,7 +280,18 @@ wa_spick:
     je .ser
     jmp wa_lknetgo
 .mode:
+    xor bh, bh                  ; (the list's order to the game's numbers)
+    mov bl, al
+    mov al, [wa_smodes+bx]
     mov [wa_lkgmode], al
+    call wa_sarlist             ; (its arenas, its Win at)
+    mov byte [wa_sdsel], 0FFh   ; (the Arena and Win at drawn again)
+    mov byte [wa_sdsel+6], 0FFh
+    ret
+.goal:
+    mov bl, [wa_lkgmode]
+    xor bh, bh
+    mov [wa_sgoal+bx], al
     ret
 .ser:
     call wa_lkcable
@@ -186,7 +300,7 @@ wa_spick:
     mov word [lk_blk+LK_MSG], lk_m_search
     ret
 wa_spicks:  dw wa_spick.arena, wa_spick.cols, wa_spick.bots, wa_spick.skill
-            dw wa_spick.play, wa_spick.mode
+            dw wa_spick.play, wa_spick.mode, wa_spick.goal
 
 ; wa_sarmap - AL = an arena, or the Arena list's item: the other. The list
 ; puts Open (arena 1) first and Pillars (arena 0, once "full") second - the
@@ -277,14 +391,14 @@ wa_splace:
     mov cx, ax                  ; the nick's field, right of Mode
     add cx, WS_NKX
     mov [wa_snfld+LN_X1], cx
-    add cx, WS_RDX2 - WS_NKX
+    add cx, WS_LDX2 - WS_NKX
     mov [wa_snfld+LN_X2], cx
     mov cx, dx
-    add cx, WS_Y4
+    add cx, WS_Y5
     mov [wa_snfld+LN_Y1], cx
     add cx, WS_DH - 1
     mov [wa_snfld+LN_Y2], cx
-    add ax, 8                   ; the buttons
+    add ax, WS_B1X              ; the buttons, right of the nick
     add dx, WS_BTNY
     mov [wa_sbrects], ax
     mov [wa_sbrects+2], dx
@@ -292,11 +406,11 @@ wa_splace:
     mov [wa_sbrects+4], ax
     add dx, WS_BTNH - 1
     mov [wa_sbrects+6], dx
-    add ax, WS_B2X - 8 - WS_BTNW + 1
+    add ax, WS_B2X - WS_B1X - WS_BTNW + 1
     mov [wa_sbrects+8], ax
     sub dx, WS_BTNH - 1
     mov [wa_sbrects+10], dx
-    add ax, WS_BTNW - 1
+    add ax, WS_BTNW2 - 1
     mov [wa_sbrects+12], ax
     add dx, WS_BTNH - 1
     mov [wa_sbrects+14], dx
@@ -315,6 +429,7 @@ wa_srects:  dw WS_LDX1, WS_Y1, WS_LDX2, WS_Y1 + WS_DH - 1
             dw WS_RDX1, WS_Y2, WS_RDX2, WS_Y2 + WS_DH - 1
             dw WS_LDX1, WS_Y3, WS_LDX2, WS_Y3 + WS_DH - 1
             dw WS_LDX1, WS_Y4, WS_LDX2, WS_Y4 + WS_DH - 1
+            dw WS_RDX1, WS_Y4, WS_RDX2, WS_Y4 + WS_DH - 1
 ; ...each one's label: its cell's x and y, its text (a marker cell first)
 wa_slabs:   dw WS_LX, WS_Y1 + 4, wa_sl_a
             dw WS_RX, WS_Y1 + 4, wa_sl_c
@@ -322,14 +437,16 @@ wa_slabs:   dw WS_LX, WS_Y1 + 4, wa_sl_a
             dw WS_RX, WS_Y2 + 4, wa_sl_s
             dw WS_LX, WS_Y3 + 4, wa_sl_p
             dw WS_LX, WS_Y4 + 4, wa_sl_m
-            dw WS_RX, WS_Y4 + 4, wa_sl_n     ; (the nick's: WS_NICK)
+            dw WS_RX, WS_Y4 + 4, wa_sl_g     ; (Win at's: WS_FGOAL)
+            dw WS_LX, WS_Y5 + 4, wa_sl_n     ; (the nick's: WS_NICK)
 wa_sl_a:    db ' Arena ', 0
 wa_sl_c:    db ' Columns ', 0
 wa_sl_b:    db ' Bots  ', 0
 wa_sl_s:    db ' Skill   ', 0
 wa_sl_p:    db ' Play  ', 0
 wa_sl_m:    db ' Mode  ', 0
-wa_sl_n:    db ' Nick ', 0
+wa_sl_n:    db ' Nick  ', 0
+wa_sl_g:    db ' Win at  ', 0
 
 ; THE GROUND: every rect of the content no control and no row covers
 ; (content coordinates, inclusive). The last is the field's place, which
@@ -353,13 +470,14 @@ wa_sgnd:    dw 0, 0, WS_RM - 1, 3
             dw 0, WS_Y3 + 16, WS_RM - 1, WS_Y4 - 1
             dw 0, WS_Y4, WS_LDX1 - 1, WS_Y4 + 3
             dw 0, WS_Y4 + 12, WS_LDX1 - 1, WS_Y4 + 15
-            dw WS_RX, WS_Y4, WS_NKX - 1, WS_Y4 + 3
-            dw WS_RX, WS_Y4 + 12, WS_NKX - 1, WS_Y4 + 15
-            dw 0, WS_Y4 + 16, WS_RM - 1, WS_BTNY - 1
-            dw 0, WS_BTNY, 7, WS_BTNY + WS_BTNH - 1
-            dw 8 + WS_BTNW, WS_BTNY, WS_B2X - 1, WS_BTNY + WS_BTNH - 1
-            dw WS_B2X + WS_BTNW, WS_BTNY, WS_RM - 1, WS_BTNY + WS_BTNH - 1
-            dw 0, WS_BTNY + WS_BTNH, WS_RM - 1, WS_LOBY - 1
+            dw WS_RX, WS_Y4, WS_RDX1 - 1, WS_Y4 + 3
+            dw WS_RX, WS_Y4 + 12, WS_RDX1 - 1, WS_Y4 + 15
+            dw 0, WS_Y4 + 16, WS_RM - 1, WS_Y5 - 1
+            dw 0, WS_Y5, WS_LDX1 - 1, WS_Y5 + 3
+            dw 0, WS_Y5 + 12, WS_LDX1 - 1, WS_Y5 + 15
+            dw WS_LDX2 + 1, WS_Y5, WS_B1X - 1, WS_Y5 + 15
+            dw WS_B1X + WS_BTNW, WS_Y5, WS_B2X - 1, WS_Y5 + 15
+            dw 0, WS_Y5 + 16, WS_RM - 1, WS_LOBY - 1
             dw 0, WS_LOBY, 7, WS_H - 1
             dw 8, WS_LOBY + 8, WS_RM - 1, WS_LOBY + 9
             dw 8, WS_LOBY + 18, WS_RM - 1, WS_LOBY + 19
@@ -1107,8 +1225,8 @@ wa_sstart:
     mov [wa_lknb], al
     call wa_loadarena
     jc .out
-    cmp byte [wa_lkgmode], 0
-    je .run
+    cmp byte [wa_lkgmode], 1    ; (CTF: an arena with its bases - the
+    jne .run                    ; list offers no other, MODES-PLAN 5)
     mov si, [wa_gflp]
     cmp word [si], 2
     je .run
@@ -1131,17 +1249,19 @@ wa_sstart:
 ; --- data ---------------------------------------------------------------------
 
 wa_sdrs:    dw wa_sdr_a, wa_sdr_c, wa_sdr_b, wa_sdr_s, wa_sdr_p, wa_sdr_m
+            dw wa_sdr_g
 %macro WA_SDROP 3                ; a drop-down's record: its items, how many
 %1:         dw 0, 0, 0, 0, %2, %3, 0, 0
             db 0, 0FFh
             dw 0, 0, 0, 0
 %endmacro
-WA_SDROP wa_sdr_a, wa_lt_anames, WA_NARENA
+WA_SDROP wa_sdr_a, wa_salp, WA_NARENA     ; (the mode's: wa_sarlist)
 WA_SDROP wa_sdr_c, wa_si_cols, 2
 WA_SDROP wa_sdr_b, wa_si_bots, 4
 WA_SDROP wa_sdr_s, wa_lt_dnames, 3
 WA_SDROP wa_sdr_p, wa_sp_names, 4
-WA_SDROP wa_sdr_m, wa_si_mode, 2
+WA_SDROP wa_sdr_m, wa_si_mode, WA_NMODES
+WA_SDROP wa_sdr_g, wa_sg_ffa, WA_NGOAL   ; (the mode's: wa_sarlist)
 
 wa_si_cols:     dw wa_sw_40, wa_sw_80
 wa_sw_40:       db '40', 0
@@ -1156,9 +1276,58 @@ wa_sp_0:        db 'alone', 0
 wa_sp_1:        db 'serial cable', 0
 wa_sp_2:        db 'local network', 0
 wa_sp_3:        db 'internet', 0
-wa_si_mode:     dw wa_smd_0, wa_smd_1   ; (CTF-PLAN 7)
+wa_si_mode:     dw wa_smd_0, wa_smd_2, wa_smd_1  ; (CTF-PLAN 7, MODES-PLAN 1)
 wa_smd_0:       db 'free-for-all', 0
 wa_smd_1:       db 'capture flag', 0
+wa_smd_2:       db 'team deathmatch', 0
+WA_NMODES       equ 3
+wa_smodes:      db 0, 2, 1      ; (the list's order to wa_gmode's numbers)
+wa_amodes:                      ; each arena's modes, a bit each (arenagen)
+%assign wa_i 0
+%rep WA_NARENA
+                db WA_AM%[wa_i]
+%assign wa_i wa_i+1
+%endrep
+wa_salp:        times WA_NARENA dw 0    ; the Arena list, the mode's
+wa_salx:        times WA_NARENA db 0    ; ...and each item's arena
+; WIN AT (MODES-PLAN 2): by mode (wa_gmode's numbers), its items, the
+; values they name (0: no limit) and the pick, which each mode keeps
+WA_NGOAL        equ 7
+wa_sglist:      dw wa_sg_ffa, wa_sg_ctf, wa_sg_tdm, wa_sg_kh
+wa_sgval:       db 0, 5, 10, 15, 20, 25, 30     ; free-for-all: kills
+                db 0, 1, 2, 3, 5, 7, 10         ; CTF: captures
+                db 0, 10, 15, 20, 25, 30, 50    ; team deathmatch: kills
+                db 0, 3, 5, 10, 15, 20, 30      ; king of the hill: points
+wa_sgoal:       db 4, 3, 5, 3   ; the picks: 20 kills, 3 captures, 30
+                                ; kills, 10 points
+wa_sg_ffa:      dw wa_sgn, wa_sgk5, wa_sgk10, wa_sgk15, wa_sgk20, wa_sgk25
+                dw wa_sgk30
+wa_sg_ctf:      dw wa_sgn, wa_sgc1, wa_sgc2, wa_sgc3, wa_sgc5, wa_sgc7
+                dw wa_sgc10
+wa_sg_tdm:      dw wa_sgn, wa_sgk10, wa_sgk15, wa_sgk20, wa_sgk25, wa_sgk30
+                dw wa_sgk50
+wa_sg_kh:       dw wa_sgn, wa_sgp3, wa_sgp5, wa_sgp10, wa_sgp15, wa_sgp20
+                dw wa_sgp30
+wa_sgn:         db 'no limit', 0
+wa_sgk5:        db '5 kills', 0
+wa_sgk10:       db '10 kills', 0
+wa_sgk15:       db '15 kills', 0
+wa_sgk20:       db '20 kills', 0
+wa_sgk25:       db '25 kills', 0
+wa_sgk30:       db '30 kills', 0
+wa_sgk50:       db '50 kills', 0
+wa_sgc1:        db '1 capture', 0
+wa_sgc2:        db '2 captures', 0
+wa_sgc3:        db '3 captures', 0
+wa_sgc5:        db '5 captures', 0
+wa_sgc7:        db '7 captures', 0
+wa_sgc10:       db '10 captures', 0
+wa_sgp3:        db '3 points', 0
+wa_sgp5:        db '5 points', 0
+wa_sgp10:       db '10 points', 0
+wa_sgp15:       db '15 points', 0
+wa_sgp20:       db '20 points', 0
+wa_sgp30:       db '30 points', 0
 
 wa_sb_play:     db 'Play', 0
 wa_sb_rdy:      db 'Ready', 0

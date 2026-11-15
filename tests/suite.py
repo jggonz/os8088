@@ -8672,7 +8672,9 @@ SOAK = [
         "at blue's base takes its flag, nothing scores at our base while a "
         "foe carries ours, our dropped flag touched goes home, a capture "
         "scores, dying drops the flag where we fell and its time sends it "
-        "home, the third capture shows RED WINS and the round starts again, "
+        "home, the third capture (Win at 3, its default) shows RED WINS and "
+        "after its 10 s the match goes on in the hedge, the next CTF arena, "
+        "nobody's captures and both flags home at its bases, "
         "and a pistol shot that fires at our teammate takes nothing while "
         "the same shot hurts the foe; then a bots' match, one against one, "
         "in which each bot carries the other's flag and two captures are "
@@ -8681,6 +8683,22 @@ SOAK = [
         "inverted (6 checks), the capture's home test dropped (4), "
         "wa_hurt's teammate guard out (1) and wc_bgoal returning at once "
         "(one capture in four minutes).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wamodes", "soak", py("tests/wamodes.py"), 12.0,
+        "WIREARENA'S MODES, ONE MACHINE (docs/plans/WIREARENA-MODES-PLAN.md "
+        "2, 3, 5, wave M1), off the game's own variables: Mode at team "
+        "deathmatch lists only the arenas with sides (the hedge, the Twin) "
+        "and moves the arena off the heights, Win at's items are the "
+        "mode's, and free-for-all lists all five again, open first; a "
+        "free-for-all at Win at 5 - a bot's fifth kill shows its name WINS, "
+        "after 10 s the match goes on in pillars (next after open) with the "
+        "kills anew and the bots' names kept, our fifth there shows YOU WIN "
+        "and the next is the heights; team deathmatch at Win at 10 - the "
+        "teams' tops are their players' kills (9 no win), the tenth shows "
+        "RED WINS and after 10 s the Twin, us on red's side. Red with "
+        "wa_sarlist's mode test inverted (3 checks), wc_score's team test "
+        "inverted (2) and wc_next keeping the arena (the next never comes).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waflines", "soak", py("tests/waflines.py"), 11.0,

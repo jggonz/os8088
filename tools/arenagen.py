@@ -499,6 +499,27 @@ def graph_block(tag, boxes):
     return bytes(out)
 
 
+# THE MODES an arena plays (WIREARENA-MODES-PLAN 1, 6), a bit each by the
+# game's numbers (wa_gmode): free-for-all always; capture the flag where it
+# has bases; team deathmatch where each side has two respawn points; king
+# of the hill where it has a hill
+MODE_FFA, MODE_CTF, MODE_TDM, MODE_KOTH = 0, 1, 2, 3
+
+
+def arena_modes(tag):
+    sides = [r[3] if len(r) > 3 else 0
+             for r in ARENA_RESPAWNS.get(tag, FLAT_RESPAWNS)]
+    m = 1 << MODE_FFA
+    if ARENA_FLAGS.get(tag):
+        m |= 1 << MODE_CTF
+    if sides.count(1) >= 2 and sides.count(2) >= 2:
+        m |= 1 << MODE_TDM
+    if ARENA_HILL.get(tag):
+        m |= 1 << MODE_KOTH
+    return m
+
+
+ARENA_HILL = {}                 # (king of the hill: MODES-PLAN 4, wave M2)
 WA_FLR = 40                     # a flag is touched within this of it, in x
                                 # and in y (the game's WA_FLR; a pickup's 40)
 
@@ -2003,6 +2024,9 @@ def main(out):
     w("WA_MGN equ %d" % WA_MGN)
     w("%%assign WA_MSTK %d" % WA_MSTK)    # (a stack's boxes: wl_child's saves)
     w("WA_FLR equ %d" % WA_FLR)           # (a flag's reach: CTF-PLAN 2)
+    for i, (tag, name, boxes, start) in enumerate(arenas()):
+        w("WA_AM%d equ %d" % (i, arena_modes(tag)))  # (MODES-PLAN 6: the
+                                        # modes it plays, a bit each)
     # poses
     first = 0
     for name, n, _, _ in ANIMS:
