@@ -739,12 +739,6 @@ wl_draw:
     xchg si, di                 ; (left to right)
     xchg ax, bp
 .ord:                           ; AX = the left end, BP = the right
-    mov dx, 4*WA_HR-1           ; a top wholly under the screen (both ends
-    cmp [si+2], dx              ; past the last half-row, with the walk's
-    jl .walk                    ; rounding to spare: its columns lie
-    cmp [di+2], dx              ; between them) draws and raises nothing,
-    jge .none                   ; and nor does the floor edge under it
-.walk:
     mov cl, 4
     mov bx, ax
     add bx, 7
@@ -777,6 +771,8 @@ wl_draw:
     add dx, 2
     sar dx, 1
     sar dx, 1
+    cmp dx, WA_HR               ; (a top wholly under the screen - no clip
+    jge .none                   ; is past WA_HR: the scan's answer at once)
     push si
     lea si, [wa_cclip+bx]
 .scan:
