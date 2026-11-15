@@ -3445,23 +3445,20 @@ wa_occlow:
     mov ch, [wa_cstn+bx]        ; CH = the entries (none: nothing to lower
     or ch, ch                   ; it - most columns)
     jz .none
-    push bp
-    mov bp, ax                  ; BP = the depth asked about
     mov di, bx                  ; DI = entry k's place, less wa_cst
 .e:
-    mov ax, [wa_cst+di]         ; AL = its span's tag, AH = the row it
-    mov dh, ah                  ; hides from
-    xor ah, ah
-    mov si, ax
-    mov ax, [wa_spih+si]        ; its inverse depth here lies between its
-    cmp ax, bp                  ; ends' (the entry is in one of its
+    mov si, [wa_cst+di]         ; SI = its span's tag (the entry's low
+    and si, 0xFF                ; byte; the row it hides from is its high)
+    mov dx, [wa_spih+si]        ; its inverse depth here lies between its
+    cmp dx, ax                  ; ends' (the entry is in one of its
     jbe .lo                     ; columns), so the ends often settle it:
-    add ax, [wa_spsl+si]        ; both nearer...
-    cmp ax, bp
+    add dx, [wa_spsl+si]        ; both nearer...
+    cmp dx, ax
     ja .near
 .exact:
-    mov ax, bx                  ; else as wa_wallz makes it
-    shl ax, 1
+    push ax                     ; else as wa_wallz makes it (the depth
+    mov ax, bx                  ; asked about kept in AX throughout: no
+    shl ax, 1                   ; register saved round the walk)
     shl ax, 1
     shl ax, 1
     add ax, 8
@@ -3469,10 +3466,12 @@ wa_occlow:
     imul word [wa_spsl+si]
     idiv word [wa_spsh+si]
     add ax, [wa_spih+si]
-    cmp ax, bp
-    jbe .done                   ; not nearer: nor is any after it
-    mov dh, [wa_cst+di+1]       ; (the row again: the divide took DX)
+    pop dx
+    cmp ax, dx
+    xchg ax, dx                 ; (the depth in AX again: the flags stand)
+    jbe .none                   ; not nearer: nor is any after it
 .near:
+    mov dh, [wa_cst+di+1]       ; (the row it hides from)
     cmp dh, cl
     jae .next
     mov cl, dh
@@ -3480,16 +3479,13 @@ wa_occlow:
     add di, 2*WA_MAXW
     dec ch
     jnz .e
-.done:
-    mov ax, bp
-    pop bp
 .none:
     ret
 .lo:
-    add ax, [wa_spsl+si]        ; ...or neither
-    cmp ax, bp
+    add dx, [wa_spsl+si]        ; ...or neither
+    cmp dx, ax
     ja .exact
-    jmp .done
+    ret
 
 ; wa_slope - AX = this column's edge, CX = the last column's (half-rows),
 ; two half-rows or more apart, SI = column x 2: the step drawn down THIS
