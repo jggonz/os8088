@@ -205,7 +205,7 @@ None. `netpkg.inc` and `hfpkg.inc` are untouched.
    -231 there, file a few bytes.
 4. **`os88net.asm` includes ether's `ethsock/tcp/inet/dns/...`**: any
    bytes agent ether takes there also shrink OS88NET.COM.
-5. **Attach-only code** (§0.2): NET.DRV's net_attach 25 + net_pick 44 +
+5. **Attach-only code** (BRIEF section 0.2): NET.DRV's net_attach 25 + net_pick 44 +
    lp_latch 57 + cand_add 74 + lpl_scan 103 = **303 bytes** run only at
    attach. `DRV_H_KEEP` (SPEC.md 51.1.3) already lets a driver give a tail
    back, but the tail would have to be last, past the trailing state that
