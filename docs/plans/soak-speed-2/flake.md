@@ -117,6 +117,13 @@ the merge run `python3 tests/unit/t_hostwait.py --update` once.
   host waits; telansi's MirrorServer 12-s read of the guest's reply is a
   host deadline on guest output. wirechat's 20-s hold and brnav's
   SLOW_SECS are genuine host waits (servers' holds) to mark `# host:`.
+- **chuge-big**: the poll for CHUGE.TXT on the guest's clock (`Guest`).
+- **bootsmoke** (full tier): the same still-executing check as smallboot.
+- **mouerrq** (QEMU): a fixed 1-s sleep before connecting QMP is a poll for
+  the socket (telansi's `Qemu` retries the connect too, so it was margin).
+- **hdmap**: three `click(settle=2.0)` (9 guest s each, blind) are
+  `settle=0` + `ui_done(cap=9)` - SOAK-SPEED 13; `look()` still settles.
+- **socktest**: leases its fixed port across runners (section 4).
 - Marked as genuine host waits: hibernate (the host FILE's flush),
   dispreboot/dispcold/dotdelpen (stall detectors),
   heapmap/stikhiber (10x backstops on guest windows), vbthold (glass sample

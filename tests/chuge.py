@@ -156,8 +156,9 @@ def leg_big(keep):
         ui.open_drive("B")
         ui.open("CHUGE.O88", expect="refusal")   # os88_main answers 0
         fl = os88flush.Flush(marty=ui.m)
-        end = time.time() + 600
-        while time.time() < end:
+        import os88deadline             # the guest's clock (flake.md)
+        gd = os88deadline.Guest(ui.m, 600)
+        while gd:
             try:
                 txt = fl.volume(1).read("CHUGE.TXT")
             except Exception:
@@ -171,7 +172,7 @@ def leg_big(keep):
         if l:
             print("chuge big: " + l)
     if not lines:
-        fails.append("no CHUGE.TXT on B: in 600s")
+        fails.append("no CHUGE.TXT on B: (%s)" % gd.why())
     got = parse(lines)
     if "f6 refuse" not in got:
         fails.append("F6 on 640KB: %s - no conventional heap holds 704KB"
