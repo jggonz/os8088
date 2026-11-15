@@ -549,7 +549,8 @@ the meter is off, as a weapon hint and a message bar.
   most later - so every machine says every kill.
 
 - **The Arena list** (the owner, the same day): Open first, then
-  **Columns** - the arena the list called "full" - then the rest. The
+  **Pillars** - the arena the list called "full" (named Columns for an
+  hour, which read as the 40/80 control beside it) - then the rest. The
   arenas keep their numbers (the benches, the poses, the rows and the wire
   name them); `wa_sarmap` swaps items 0 and 1 where the list is read and
   picked. The default stays the heights.
