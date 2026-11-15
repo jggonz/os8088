@@ -266,7 +266,7 @@ def main():
                 if cv in frames:
                     hits += 1
                     seen.add(cv)
-                time.sleep(0.15)
+                time.sleep(0.15)    # host: the SAMPLE spacing of a glass read
             if os.environ.get("VBTH_DBG"):
                 q.hmp("stop")
                 open(os.path.join(os.environ.get("VBTH_DIR", "."),
@@ -301,7 +301,7 @@ def main():
                 if g in title:
                     hits += 1
                     seen.add(g)
-                time.sleep(0.15)
+                time.sleep(0.15)    # host: the SAMPLE spacing of a glass read
             ok(hits >= 8 and len(seen) >= 3, a.arm + ": the title read IN "
                "PLACE is the host's decode on the glass, going round (%d of "
                "16 looks exact, %d frames)" % (hits, len(seen)))

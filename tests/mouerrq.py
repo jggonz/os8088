@@ -55,7 +55,10 @@ def leg_qemu():
             '-qmp', f'unix:{qmp},server=on,wait=off']
     p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        time.sleep(1)
+        for _ in range(1500):           # the QMP socket appearing (a fixed
+            if Path(qmp).exists():      # 1-s sleep was a race at a load of
+                break                   # 40), up to 30 host s
+            time.sleep(0.02)
         m = Qemu(qmp)
         b = lambda n: m.read(S(n), 1)[0]
         w = lambda n, i=0: struct.unpack_from('<H', m.read(S(n) + i, 2))[0]

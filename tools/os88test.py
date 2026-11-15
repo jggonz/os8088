@@ -508,6 +508,101 @@ def _qemu_cpu(qdir, seen):
     return sum(seen.values())
 
 
+def _timeout_note(p, which, wall, cpu, limit, charged):
+    """Say WHICH limit ended a timed-out row, on `p.os88_timeout` as (short,
+    long) - so a TIMEOUT line tells "the host was slow" from "it hung".
+
+    THE TWO ARE DIFFERENT FIXES (docs/plans/soak-speed-2/flake.md). The CPU
+    limit trips only on work actually done: the row's tree spent more CPU
+    than its timeout, which a loaded box cannot cause - a guest that spins
+    in a hang, or a row that really costs more than declared. The WALL
+    limit (WALL_BACKSTOP x wider) trips on a row that was not given the CPU
+    or was blocked on something that never answered: with the box's load
+    beside it, a timeout at a load past the core count with little CPU
+    spent is the host's, not the row's. Advisory only - nothing here
+    changes when a row is stopped."""
+    if getattr(p, "os88_timeout", None):
+        return                          # (the terminate's own reap: keep
+    try:                                # the limit that ended the row)
+        la = os.getloadavg()[0]
+    except OSError:
+        la = -1.0
+    n = os.cpu_count() or 1
+    cpu_s = "?" if cpu is None else "%.0f" % cpu
+    # THE RUN QUEUE IS THE WITNESS (/proc/<pid>/schedstat: ns on a CPU, ns
+    # RUNNABLE and waiting for one), over the row's live process tree: a row
+    # the host starved waited on the queue; a row that hung waited on
+    # nothing the scheduler knows about. Load alone cannot tell them apart -
+    # a sleeping row on a box at load 30 is still a hung row.
+    qwait = _tree_runq(p.pid)
+    if which == "cpu":
+        short = "CPU-bound (%s CPU s > %s)" % (cpu_s, limit)
+        long = ("the row's process tree spent %s CPU seconds, past its %s "
+                "budget, in %.0f wall s: it did that much WORK - a guest "
+                "spinning in a hang, or a row slower than its declared secs. "
+                "Host load does not cause this one." % (cpu_s, limit, wall))
+    else:
+        if qwait is not None:
+            starved = qwait > 0.25 * wall
+        else:
+            starved = la > n and (cpu is None or limit is None or
+                                  cpu < 0.5 * limit)
+        short = ("wall %.0fs, %s CPU s, %s s queued for a CPU, load "
+                 "%.1f/%d: %s"
+                 % (wall, cpu_s, "?" if qwait is None else "%.0f" % qwait,
+                    la, n, "HOST-STARVED" if starved else "blocked/hung"))
+        long = ("the WALL limit ended the row after %.0f s having spent %s "
+                "CPU s%s and %s s RUNNABLE waiting for a CPU (its live "
+                "processes' schedstat); the box's 1-min load was %.1f on %d "
+                "cpus. %s"
+                % (wall, cpu_s, "" if charged else " (CPU not charged here)",
+                   "?" if qwait is None else "%.0f" % qwait, la, n,
+                   "A load past the core count with little CPU spent is the "
+                   "HOST being slow, not the row hanging - re-run it alone "
+                   "before believing it." if starved else
+                   "Little CPU and a box with cores to spare: the row was "
+                   "WAITING on something that never answered (a socket, a "
+                   "lock, a machine that stopped)."))
+    try:
+        p.os88_timeout = (short, long)
+    except AttributeError:
+        pass
+
+
+def _tree_runq(root):
+    """Seconds the live process tree under ROOT has spent RUNNABLE but not
+    running (/proc/<pid>/schedstat's second field, summed over every thread
+    of every descendant), or None where /proc cannot say."""
+    try:
+        kids = {}
+        for d in os.listdir("/proc"):
+            if d.isdigit():
+                try:
+                    raw = open("/proc/%s/stat" % d).read()
+                except OSError:
+                    continue
+                kids.setdefault(int(raw[raw.rindex(")") + 2:].split()[1]),
+                                []).append(int(d))
+        total, todo, seen = 0, [root], False
+        while todo:
+            q = todo.pop()
+            todo.extend(kids.get(q, ()))
+            try:
+                tids = os.listdir("/proc/%d/task" % q)
+            except OSError:
+                continue
+            for t in tids:
+                try:
+                    f = open("/proc/%d/task/%s/schedstat" % (q, t)).read()
+                    total += int(f.split()[1])
+                    seen = True
+                except (OSError, ValueError, IndexError):
+                    pass
+        return total / 1e9 if seen else None
+    except OSError:
+        return None
+
+
 def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     """Popen.communicate, but REAPED WITH wait4 so the row's CPU is kept.
 
@@ -573,6 +668,8 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
             # gets there), so the declared timeout is the wall limit.
             lim = wall if (not cpu or qdir is None or qseen) else blind
             if lim is not None and time.time() - t0 > lim:
+                _timeout_note(p, "wall", time.time() - t0, spent_cpu(),
+                              limit, cpu)
                 return None
             n += 1
             if cpu and limit is not None and n % 50 == 0:
@@ -580,6 +677,8 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
                 if spent is None:
                     cpu, wall = False, blind    # unmeasurable: wall it is
                 elif spent > limit:
+                    _timeout_note(p, "cpu", time.time() - t0, spent, limit,
+                                  cpu)
                     return None
             time.sleep(0.02)
 
@@ -761,6 +860,10 @@ def run_row(row, caps, strict, verbose, unbuilt=(), shared=False):
     reason = "" if ok else "exit %d" % p.returncode
     if timed_out:
         ok, reason = False, "TIMEOUT after %ds" % row.timeout
+        why = getattr(p, "os88_timeout", None)
+        if why:
+            reason += " - " + why[0]
+            out += "\nos88test: " + why[1] + "\n"
         if "qemu" in row.needs:
             out += _sweep_qemu(qdir, legacy=not shared)
     if qdir:

@@ -151,6 +151,7 @@ def guest_window(m, secs):
         c = m.status()["cycles"]
         if c != last:
             last, moved = c, time.time()
+        # host: a STALL detector - the cycle count standing still
         elif time.time() - moved > os88marty.GUEST_STALL:
             raise os88marty.MartyError("the guest clock stopped at cycle %d "
                                        "in a %gs sampling window" % (c, secs))
@@ -444,7 +445,7 @@ def leg_f(ui, p, say, tries=4):
             m.pause()
             no_hazard(m, p)
             m.go()
-            time.sleep(0.1)
+            time.sleep(0.1)             # host: the sample interval of a guest window
         m.pause()
         tile = m.read((p.seg << 4) + p.names["dd_grid"] + pr * 28 + pc, 1)[0]
         st = p.b("dd_state")
