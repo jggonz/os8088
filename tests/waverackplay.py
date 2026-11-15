@@ -442,7 +442,11 @@ def leg_close(pr):
     xmcheck.click(pr.sock, cx, cy)
     check("the window closes", until(lambda: pr.wrseg()[0] is None,
                                       "the close", 15))
-    WRT.idle(1)
+    # THE CLAIMS GOING, not the UI idling: the close's frees land after
+    # ui_task sleeps, so `idle(1)` (ui_done) read them all still there
+    # every run where the host sleep it replaced did not. A leak still
+    # fails - the claims never go, and the 5 guest s run out.
+    until(lambda: pr.heap() == [], "the closed region's claims freed", 5)
     left = pr.heap()                    # (claims still owned by its segment)
     check("no claim of the closed region left (%s)" % left, left == [])
     pr.seg = None
