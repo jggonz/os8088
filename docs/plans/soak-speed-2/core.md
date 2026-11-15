@@ -23,7 +23,7 @@ techniques are cited as "SOAK-SPEED n".
      mtime), the gate card, the saver choice. Not cached (`eligible` says why
      and the row boots fresh): any `launch` keyword but `label`/`timeout`
      (`extra`, `rom`, `run_dir`, `addr`, `detach`, a `boot=` number),
-     `$OS88_ROM`, `$MARTYPC_WAV`, `$OS88_MARTY_BIN`, `$OS88_MEGA`, a non-Marty
+     `$OS88_ROM`, `$MARTYPC_WAV`, `$OS88_MEGA`, a non-Marty
      emulator, and a machine whose name says it has a disk or device that is
      written THROUGH rather than held in RAM, or a device writing a host file (`hdd`, `ide`, PicoMEM, NIC, `lpt`) - a
      fork does not roll a VHD back.

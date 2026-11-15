@@ -92,7 +92,7 @@ def eligible(machine, kw):
             return "not MartyPC"
     except MartyError as e:
         return str(e)
-    for v in ("OS88_ROM", "MARTYPC_WAV", "OS88_MARTY_BIN", "OS88_MEGA"):
+    for v in ("OS88_ROM", "MARTYPC_WAV", "OS88_MEGA"):
         if os.environ.get(v):
             return "$%s is set" % v
     if re.search(r"hdd|ide|_pm[12]|wire|ne2k|lpt", machine or "", re.I):
@@ -119,7 +119,8 @@ def key(image, apps, machine, card=None, saver=False):
              "saver": bool(saver),
              "image": os88marty._sha1(_build.at(image)) if image else None,
              "apps": os88marty._sha1(_build.at(apps)) if apps else None,
-             "bin": _stamp(os.path.join(base, "martypc_headless"))}
+             "bin": _stamp(os.environ.get("OS88_MARTY_BIN")
+                           or os.path.join(base, "martypc_headless"))}
     tree = []
     for sub in ("configs", os.path.join("media", "roms")):
         top = os.path.join(base, sub)
