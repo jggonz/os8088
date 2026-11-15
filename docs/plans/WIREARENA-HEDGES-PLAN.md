@@ -189,8 +189,7 @@ In order of what it buys:
 - [ ] The jump across a wall gap tried in the game
 - [ ] The owner's choice: which layout stays, and whether section 4's items
   are wanted
-- [ ] Suite rows to run once the layout is chosen: `waarenas` and `walift`
-  (the setup's arena count comes off `arenagen.arenas()`)
+- [x] Suite rows: the fourteen WireArena soak rows (section 8)
 
 ## 6. The owner's rulings, 2026-11-15
 
@@ -285,7 +284,7 @@ What `wl_child` tests before drawing, each MEASURED:
 - **The walk's hint corners** (a box wholly past the right edge's line or
   behind, or wholly left): the stack's upper boxes were drawn with no view
   test at first, so a player on the bottom tier set up the tiers behind
-  him. Pose 125, standing on the bottom tier: 106 -> 155 kclk, fixed.
+  them. Pose 125, standing on the bottom tier: 106 -> 155 kclk, fixed.
 - **A tier's own PVS bit - tried and taken out.** It bought nothing
   (+0.07%). Its first version seemed to save 5%: a slip skipped tiers
   that should have been drawn, and the picture comparison caught it.
@@ -317,6 +316,19 @@ tier): there a ring piece's far edge shut every column before the others
 came up, while a tier standing on a box is drawn before that far edge,
 which it may hide.
 
-Not yet tried in the game: walking and jumping the tiers. The game reads
-the stack as the ground's heights, unchanged; the soak rows `waarenas`
-and `walift` are the ones to run.
+Not yet tried in the game by hand: walking and jumping the hedge's tiers.
+The game reads the stack as the ground's heights, unchanged.
+
+**What was left alone in the outline path**, and why. Its per-column loops
+test a column both against its clip and for being SHUT; were a shut
+column's clip always 0, the clip alone would answer both. But the tall
+path, which closes nearly every column of a frame, would have to store
+that 0 in five places - about 40 stores a frame to save about 70 compares:
+some 0.5%, in the renderer's most-tuned loops. Not taken.
+
+**The final pass, 2026-11-15**: `make` (the gates and the fast tier), and
+the fourteen WireArena soak rows - `walift waarenas wasetup waroutes wabots
+wascore wabotarms walink walinknet walinkudp walinkip walink4 walink4ip
+waweapons` - all pass. `walink4` (four machines on UDP, wall-clock
+deadlines) failed once with the other rows' emulators sharing the host
+(142 s) and passed alone (47 s).
