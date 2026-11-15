@@ -145220,6 +145220,20 @@ register banking deleted — `sv_entry` already banks every register the
 contract preserves — and the cube's per-frame vertex copy, which fed only the
 erase path §79.5.6.1 deleted, removed with it.
 
+**Driver size pass 1 took it to image 8,933 bytes, file 6,009** (from 10,247
+and 7,108), every picture unchanged frame for frame
+(docs/plans/dsp1/saver.md). Two things there change what this section
+describes. **Only the sine table's first quarter ships**: `sv_do_start`
+mirrors entries 0..64 into the other 191 at every session start, and the
+build reads `apps/wire/wiresin.inc` itself and refuses one whose symmetry the
+mirror would not reproduce, so the table is still WIREFRAME's. And routines
+with one caller are written into it, so several names in §79.5's accounts -
+`sv_clear`, `sv_cube_proj`/`compose`/`put`, `sv_bnd_build`/`sv_bnd_shift`,
+`sv_fish_one`/`where`, `sv_star_plot` - now name the PARTS of `sv_pick`,
+`sv_cube_step`, `sv_fish_blit`, `sv_fish_step` and `sv_star_step`, each still
+headed by its old comment. `sv_step` survives as a label, because
+`tests/fishfit.py` and `tests/fishedge.py` break on it.
+
 ### 79.3 The five verbs
 
 `AL` on the far call into the image's entry proc, `drv_call`'s own contract.
