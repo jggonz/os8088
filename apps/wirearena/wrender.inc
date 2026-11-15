@@ -330,8 +330,9 @@ WA_VAR wa_fkh, 2                ;   Khi: the feet's line, sub-columns
 WA_VAR wa_fk, 2                 ; wa_fjl's narrow sums: Klo (fcx fs8 + 256 W:
                                 ;   a byte, its high byte left 0),
 WA_VAR wa_fe, 2                 ;   eye fv8 + 256 hh + 255
-WA_VAR wa_fbuf, WA_CELLS*2      ; a figure's sub-pixels by cell offset (0
-                                ; between figures: wa_figure clears its own)
+WA_VAR wa_fbuf, WA_CELLS        ; a figure's sub-pixels, a BYTE a cell -
+                                ; cell offset / 2 (0 between figures:
+                                ; wa_figure clears its own)
 WA_VAR wa_nwr, 2                ; video writes this frame
 WA_VAR wa_rcp, (WA_ZMAX-WA_NEAR)*2 ; 0x7FFF0 / z, z = NEAR.. (wa_ptbi)
 WA_VAR wa_xk, WA_MXV*2+2        ; per coordinate: the step from the one
@@ -6538,19 +6539,17 @@ wa_fchest:
     pop di
     ret
 
-; wa_femit - pass 3: the box swept with `repe scasw`, a row at a time. Each
-; cell the limbs touched is taken out of wa_fbuf and plotted - the old
-; wa_plotf inline, every array addressed off DI (the cell's place in
-; wa_fbuf, + 2) by a constant displacement: the stamp to match in DL and the
-; cell's sub-pixels in DH (one word store: wa_fmask is the stamp's odd
-; byte), the glyph by XLAT off BX, the attribute in BP's high byte (its low
-; one the box's width), the list's end in SI. The sweep asks nothing about depth: what a nearer wall
+; wa_femit - pass 3: the box swept with `repe scasb`, a row at a time (a
+; byte a cell: 15 clk a cell scanned, where a word was 19 - and the scratch
+; half the size). Each cell the limbs touched is taken out of wa_fbuf and
+; plotted - the old wa_plotf inline, every array addressed off BP (the cell:
+; its place in wa_fbuf x 2, made once a cell found) by a constant
+; displacement: the stamp to match in DL and the cell's sub-pixels in DH
+; (one word store: wa_fmask is the stamp's odd byte), the glyph by XLAT off
+; BX, the attribute in AH, the list's end in SI. The sweep asks nothing about depth: what a nearer wall
 ; or platform hides was taken out of wa_fbuf first (wa_fhide), and only
 ; when some column of the box had a verdict at all. Ends wa_figure: pops
 ; its DI.
-WA_FSTO equ wa_stamp - wa_fbuf - 2
-WA_FMSO equ wa_fmask - wa_fbuf - 2
-WA_FCUO equ wa_cur - wa_fbuf - 2
 wa_femit:
     cmp byte [wa_fnh], 0
     je .sweep
@@ -6563,6 +6562,7 @@ wa_femit:
     mov bx, [wa_frow]
     mov di, [wa_rowo2+bx]
     add di, [wa_fbc]
+    shr di, 1
     add di, wa_fbuf             ; DI = the box's first cell in wa_fbuf
     mov ax, [wa_fbr]
     sub ax, bx
@@ -6571,20 +6571,17 @@ wa_femit:
     mov [wa_fnr], ax            ; rows
     mov ax, [wa_w]
     sub ax, [wa_fbw]
-    shl ax, 1
     mov [wa_fsk], ax            ; from the box's end to its start a row on
-    mov ah, [wa_fatt]
-    mov al, [wa_fbw]
-    mov bp, ax                  ; BP = the attribute, and the box's width
     mov bx, wa_fglyph
-    xor ax, ax
+    mov ah, [wa_fatt]           ; AH = the attribute, AL = 0 (the scan's),
+    xor al, al                  ; DH = 0 (the exchange's)
+    mov dh, al
     jmp short .first
 .row:
     add di, [wa_fsk]
 .first:
-    mov cx, bp
-    xor ch, ch
-    repe scasw                  ; (only a cell's even byte is ever set)
+    mov cx, [wa_fbw]
+    repe scasb
     jne .found
 .nrow:
     dec word [wa_fnr]
@@ -6593,31 +6590,31 @@ wa_femit:
     mov [wa_newn], si
     pop di
     ret
-.found:                         ; DI = the cell's place in wa_fbuf, + 2
-    xchg ah, [di-2]             ; DH = its sub-pixels, taken out of the
-    mov dh, ah                  ; scratch (AH was 0: one exchange)
-    mov al, [di+WA_FSTO]
+.found:                         ; DI = the cell's place in wa_fbuf, + 1
+    xchg dh, [di-1]             ; DH = its sub-pixels, taken out of the
+    lea bp, [di-1-wa_fbuf]      ; scratch (DH was 0: one exchange)
+    shl bp, 1                   ; BP = the cell
+    mov al, [ds:bp+wa_stamp]
     xor al, dl                  ; (its stamp against DL: 0 a figure's cell
     shl al, 1                   ; this frame, 0x80 a wall's - one test for
     jz .drawn                   ; the two, and the usual cell is neither)
-    lea ax, [di-2-wa_fbuf]      ; the cell, onto this frame's list
-    mov [si], ax
+    mov [si], bp                ; the cell, onto this frame's list
     inc si
     inc si
 .listed:
-    mov [di+WA_FSTO], dx        ; its stamp and its mask
-    mov ax, bp
+    mov [ds:bp+wa_stamp], dx    ; its stamp and its mask
     mov al, dh
     xlat
-    mov [di+WA_FCUO], ax
-    xor ax, ax
+    mov [ds:bp+wa_cur], ax
+    xor al, al
+    mov dh, al
     jcxz .nrow
-    repe scasw
+    repe scasb
     jne .found
     jmp .nrow
 .drawn:
     jc .listed                  ; a wall cell this frame: already listed
-    or dh, [di+WA_FMSO]         ; (a cell two figures share: add the bits)
+    or dh, [ds:bp+wa_fmask]     ; (a cell two figures share: add the bits)
     jmp .listed
 
 ; wa_fhide - a figure's limbs are in wa_fbuf: out of it again the cells a
@@ -6646,8 +6643,10 @@ wa_fhide:
     inc dx                      ; DX = rows
     mov si, ax
     mov si, [wa_rowo2+si]
-    lea si, [si+bx+wa_fbuf]     ; SI = the column's first hidden cell
-    mov ax, [wa_w2]
+    add si, bx
+    shr si, 1
+    add si, wa_fbuf             ; SI = the column's first hidden cell
+    mov ax, [wa_w]
 .z:
     mov byte [si], 0
     add si, ax
@@ -6889,11 +6888,11 @@ wa_fjl:
     mov dl, [wa_qbit+bx]
     mov bx, di
     shl bx, 1
-    mov bx, [wa_hroff+bx]
+    mov bx, [wa_hrfb+bx]
     mov ax, si
-    and al, 0xFE
+    shr ax, 1
     add bx, ax
-    or [wa_fbuf+bx], dl
+    or [bx], dl
 %%out:
 %endmacro
 wa_qbit:    db 1, 2, 4, 8
@@ -6912,7 +6911,7 @@ wa_fpair:
     shl bx, 1
     mov bx, [wa_hrfb+bx]
     mov ax, si
-    and al, 0xFE
+    shr ax, 1
     add bx, ax                  ; BX = the cell
     mov ax, di
     shr ax, 1
@@ -6925,7 +6924,6 @@ wa_fpair:
     and al, 0x0A                ; the cell's right half, and the next
     or [bx], al                 ; cell's left
     shr al, 1
-    inc bx
     inc bx
 .put:
     or [bx], al
@@ -7043,7 +7041,6 @@ wa_flgo:
     shr cx, 1
     rcl dx, 1
     shl dx, 1
-    shl cx, 1
     add di, cx                  ; DI = the start's cell in wa_fbuf
     or ax, ax
     jns .r
@@ -7063,7 +7060,7 @@ wa_flgo:
     mov bp, bx
     shr bp, 1                   ; BP = the error, half the major...
     xchg bx, di                 ; BX = the cell, DI = the major
-    mov ax, [wa_w2]             ; AX = a row's bytes (2W)
+    mov ax, [wa_w]              ; AX = a row's bytes (W)
 .walky:
     jmp dx
 .ycut:
@@ -7078,14 +7075,14 @@ wa_flgo:
     shr bp, 1
     xchg ax, di                 ; DI = the major (dx), AX = the cell
     xchg ax, bx                 ; BX = the cell
-    mov ax, [wa_w2]
+    mov ax, [wa_w]
 .walkx:
     jmp dx
 ; The fast walk's states. Registers: BX = the cell in wa_fbuf, CX =
 ; sub-pixels left, BP = the error, SI = the minor step, DI = the major, AX =
 ; a row's bytes. A block plots its quadrant's bit and moves the pen: a
 ; half-row down from a bottom quadrant is the next row's top (BX += AX), a
-; sub-column right from a right quadrant is the next cell's left (BX += 2).
+; sub-column right from a right quadrant is the next cell's left (BX += 1).
 ; The blocks lie in the order the pen USUALLY takes them - a steep line goes
 ; down its column's upper quadrant into its lower, a shallow one along its
 ; row's - so the usual step falls through and only the minor axis's step,
@@ -7127,11 +7124,9 @@ wa_fy%{1}1%{2}:
   %ifidn %1, R                  ; into the next cell from its outer half
     %if %2 == 1
     inc bx
-    inc bx
     %endif
   %else
     %if %2 == 0
-    dec bx
     dec bx
     %endif
   %endif
