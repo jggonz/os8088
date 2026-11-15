@@ -5849,23 +5849,27 @@ wa_rretv:   dw wa_rret
 ; THE DETAIL LEVELS (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9.11): per level,
 ; Very Low to Very High, the options it turns on - wa_look's LK_ bits, then
 ; the floor grid (G) and the stepped treads (T),
-; which their keys still override until the next level is chosen. Moving
+; which their keys still override until the next level is chosen, and the
+; floor lines' DASHES (wa_dash, ARENAS-PLAN 4.5: 1 a shallow line's every
+; other column, 2 a steep one's every other row too - the owner's, on the
+; trial build: "actually look surprisingly fine"). Moving
 ; an option between levels is a change to this table and nothing else.
 WA_NLEV equ 5
 wa_levtab:
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0, 2
                                                                     ; 1 Very Low
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_RAMP2, 0, 0 ; 2 Low
-    db LK_FEW|LK_ROUND|LK_COARSE, 0, 0                              ; 3 Medium
-    db LK_FEW|LK_ROUND|LK_COARSE, 1, 0                              ; 4 High
-    db 0, 1, 1                                                      ; 5 Very High
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_RAMP2, 0, 0, 1 ; 2 Low
+    db LK_FEW|LK_ROUND|LK_COARSE, 0, 0, 0                           ; 3 Medium
+    db LK_FEW|LK_ROUND|LK_COARSE, 1, 0, 0                           ; 4 High
+    db 0, 1, 1, 0                                                   ; 5 Very High
 
 ; wa_setlevel - AL = a level, 0..WA_NLEV-1: its options into the frame
 ; block. Clobbers AX, BX
 wa_setlevel:
     mov [wa_level], al
-    mov bl, 3
-    mul bl
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1                   ; (four bytes a level)
     xchg ax, bx
     mov al, [wa_levtab+bx]
     mov [wa_look], al
@@ -5873,6 +5877,8 @@ wa_setlevel:
     mov [wa_grid], al
     mov al, [wa_levtab+bx+2]
     mov [wa_treads], al
+    mov al, [wa_levtab+bx+3]
+    mov [wa_dash], al
     ret
 
 wa_rsync:

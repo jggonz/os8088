@@ -347,9 +347,9 @@ r.add_argument("--level", type=int, default=0); r.add_argument("--n", type=int, 
 r.add_argument("--seed", type=int, default=1)
 r.add_argument("--keys", default=""); r.add_argument("--tree", default=ROOT)
 r.add_argument("--build", default="", help="the build directory measured (default: TREE/build) - a knob build's "
-               "private one, `make BUILD=dir wirearenadisk WADASH=1`")
+               "private one, `make BUILD=dir wirearenadisk WAMETER=1`")
 r.add_argument("--define", action="append", default=[], help="a define the renderer part of --build was "
-               "assembled with (WA_DASH=1), for its map")
+               "assembled with (NAME=VALUE), for its map")
 r.add_argument("--profile", default="", help="also each pose rendered once more SINGLE-STEPPED: the "
                "renderer's cycles by routine over the set, into this JSON (and printed) - ~2 host s a pose")
 r.add_argument("--detail", default="", help="with --profile: by every label under routines named so")

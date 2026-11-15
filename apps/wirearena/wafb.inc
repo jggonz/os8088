@@ -28,7 +28,7 @@
 WR_MAGIC0   equ 'WR'                ; +0: 'WRPART', then the ABI byte and the
 WR_MAGIC1   equ 'PA'                ;     verb count - checked by the primary
 WR_MAGIC2   equ 'RT'                ;     at launch, refused on a mismatch
-WR_ABI      equ 9                   ; (2: the camera's sin/cos in FRAME;
+WR_ABI      equ 10                  ; (2: the camera's sin/cos in FRAME;
                                     ; 3: F_Z, the treads, ARENA's heights;
                                     ; 4: wa_look, the detail level's bits,
                                     ; where wa_hyst was; wa_flod gone;
@@ -39,7 +39,8 @@ WR_ABI      equ 9                   ; (2: the camera's sin/cos in FRAME;
                                     ; ARENA - AI-PLAN 3.1; 7: wa_look's
                                     ; bit 7, LK_COARSE2; 8: the lifts'
                                     ; tables, ARENAS-PLAN 4.1; 9: the
-                                    ; floor lines, 4.5)
+                                    ; floor lines, 4.5; 10: wa_dash,
+                                    ; where FRAME's pad was)
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-
                                     ; PLAN 4.5; arenagen's)
@@ -118,7 +119,11 @@ WA_FBV wa_mflash, 1
 WA_FBV wa_treads, 1                 ; a ramp drawn as stepped treads (T: the
                                     ; graphics option, HEIGHTS-PLAN 7.4.2)
 WA_FBV wa_pkon, 1                   ; the pickups present, a bit each
-WA_FBV wa_fbpad3, 1                 ; (WEAPONS-PLAN 2.4)
+WA_FBV wa_dash, 1                   ; (WEAPONS-PLAN 2.4) - and the floor
+                                    ; lines DASHED: 1 a shallow line's
+                                    ; every other column, 2 a steep one's
+                                    ; every other row too (ARENAS-PLAN 4.5:
+                                    ; the detail level's, wa_levtab)
 WA_FBV wa_figs, F_SIZE*WA_NFIG      ; FIGS (follows FRAME: one copy)
 WA_FBV wa_fb_arn, 0                 ; ARENA
 WA_FBV wa_sx, 2

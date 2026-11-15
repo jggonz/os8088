@@ -25,6 +25,9 @@ read back):
             still frame kept) and as a NOD (the pitch alone moved: the rows'
             pass, the vertices' camera space kept) draw the moved view's
             floor-line cells, every one
+  dashed    at Very Low (F1: wa_dash 2) a shallow line's dashes stand in the
+            even columns alone and a steep line's cells in the even rows,
+            still on the referee's lines, about half of Medium's cells
   faults    no divide fault in any render (waposes reads the BIOS's flag)
 
 A floor-line cell is one of the five line glyphs in the room's colour; the
@@ -180,12 +183,13 @@ def main():
     # MOVED view (every render makes the lines' ends anew), a STILL one (the
     # third render on: drawn from the walk the first still frame kept) and a
     # NOD (the pitch alone moved since the render before: the rows' pass)
-    outs = [pout, os.path.join(d, "still.json"), os.path.join(d, "nod.json")]
+    outs = [pout, os.path.join(d, "still.json"), os.path.join(d, "nod.json"),
+            os.path.join(d, "verylow.json")]
     runs = [subprocess.Popen([sys.executable, os.path.join(ROOT, "tools/waposes.py"), "record",
                               "--arena", str(ARENA), "--width", str(W), "--poses", pin,
                               "--out", o] + flag, cwd=ROOT, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True)
-            for o, flag in zip(outs, ([], ["--still"], ["--nod"]))]
+            for o, flag in zip(outs, ([], ["--still"], ["--nod"], ["--level", "1"]))]
     logs = [q.communicate()[0] for q in runs]
     for q, o, log in zip(runs, outs, logs):
         if q.returncode or not os.path.exists(o):
@@ -222,6 +226,39 @@ def main():
             fails += 1
         else:
             print("  ok    the %s: the moved view's %d cells" % (what, n))
+    # VERY LOW (F1) draws the lines DASHED (wa_dash 2): a shallow line's
+    # dashes in the even columns alone, a steep line's cells in the even
+    # rows - and still on the referee's lines, and in the open views every
+    # cell of them that the dashes keep
+    low = json.load(open(outs[3]))
+    nd = odd = off = gap = 0
+    for (name, x, y, a, p, f, ask), fr in zip(POSES, low["frames"]):
+        vram = bytes.fromhex(fr["vram"])
+        drawn, other = {}, set()
+        for row in range(23):
+            for col in range(W):
+                ch, at = vram[(row * W + col) * 2], vram[(row * W + col) * 2 + 1]
+                if at == A_ROOM and ch in GLYPHS:
+                    drawn[(row, col)] = GLYPHS[ch]
+                elif ch != 0x20:
+                    other.add((row, col))
+        R = referee(View(x, y, a, p, f))
+        nd += len(drawn)
+        odd += sum(1 for (r, c), g in drawn.items() if (c if g != "S" else r) & 1)
+        off += sum(1 for c in drawn if not near(c, R))
+        if ask == "cover":
+            gap += sum(1 for c, g in R.items() if c[0] < 22 and c not in other
+                       and not ((c[1] if g != "S" else c[0]) & 1) and not near(c, drawn))
+    bad = []
+    if odd:
+        bad.append("%d cell(s) in an odd column (a dash) or an odd row (a steep line)" % odd)
+    if off:
+        bad.append("%d cell(s) off every line" % off)
+    if gap:
+        bad.append("%d cell(s) the dashes keep, not drawn" % gap)
+    print("  %-4s  Very Low, the lines dashed: %d cells%s"
+          % ("FAIL" if bad else "ok", nd, "".join("\n          " + b for b in bad)))
+    fails += bool(bad)
     boxes = [A.bx(b) for b in A.arenas()[ARENA][2]]
     total = exact = 0
     for (name, x, y, a, p, f, ask), fr in zip(POSES, rec["frames"]):
@@ -266,6 +303,9 @@ def main():
               % ("FAIL" if bad else "ok", name, len(drawn), len(R),
                  "".join("\n          " + b for b in bad)))
         fails += bool(bad)
+    if not total * 3 <= nd * 10 <= total * 7:
+        print("  FAIL  Very Low draws %d cells where Medium draws %d: not about half" % (nd, total))
+        fails += 1
     if total < 200:
         print("  FAIL  %d floor-line cells over the nine poses - under 200: the "
               "colour or the glyphs this row reads are not the drawer's" % total)
@@ -280,7 +320,8 @@ def main():
         return 1
     print("waflines: ok - nine poses of the twin, %d floor-line cells: %d in 100 the "
           "referee's own, none off its lines, none missing where nothing stands, none "
-          "through the tower; a still view and a nod draw the same; no divide fault"
+          "through the tower; a still view and a nod draw the same; Very Low's are "
+          "dashed; no divide fault"
           % (total, exact * 100 // total))
     return 0
 

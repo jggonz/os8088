@@ -8662,7 +8662,7 @@ SOAK = [
         "checks).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
-    Row("waflines", "soak", py("tests/waflines.py"), 10.0,
+    Row("waflines", "soak", py("tests/waflines.py"), 11.0,
         "WIREARENA'S FLOOR LINES AGAINST AN EXACT REFEREE "
         "(docs/plans/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "
         "line at the screen's edges in camera space and walks it by an "
@@ -8677,13 +8677,17 @@ SOAK = [
         "dash (90 measured), and no divide fault. The same poses as a "
         "STILL view (drawn from the walk its first still frame kept) and "
         "as a NOD (the pitch alone moved: the rows' pass) must draw the "
-        "moved view's cells, every one - three emulators side by side. "
+        "moved view's cells, every one; and at VERY LOW (wa_dash 2) a "
+        "shallow line's dashes stand in the even columns alone and a steep "
+        "line's cells in the even rows, on the referee's lines, about half "
+        "of Medium's cells - four emulators side by side. "
         "Red with the shallow walk's error a modulus out (67 in 100, 3 "
         "poses), a side cut's end left where it was (3 poses), a steep "
         "line that never steps (4 poses), a tall face's columns not asked "
         "about (55 cells through the tower), the kept walk's error not "
-        "loaded (62 cells) and the rows' pass keeping the old rows (297).",
-        needs=("marty", "nasm"), cpus=3,
+        "loaded (62 cells), the rows' pass keeping the old rows (297) and "
+        "wa_dash not read (142 cells in odd columns and rows).",
+        needs=("marty", "nasm"), cpus=4,
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
         "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
