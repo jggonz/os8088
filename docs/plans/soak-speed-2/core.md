@@ -45,6 +45,13 @@ techniques are cited as "SOAK-SPEED n".
    - `check` is the self-check: a cached and a fresh boot of the same key,
      compared on the desktop's state words and the rendered frame.
 
+   **`os88marty.launch(..., boot="up")`** is the same cache for a raw
+   launch: `launch(boot=False)` + `m.run()` + `kernel_up(m)` as one call,
+   which is the shape ~85 rows open with and the one spelling a cache can
+   serve without guessing what the row does next (a row arming a boot-time
+   breakpoint keeps `boot=False` and is never touched). Converted as worked
+   examples: multiseg, rehome, rehomeabort, mediadisk, drvup.
+
 2. **`launch`'s start-up polls** - the port file every 20 ms (was 0.25 s)
    and the first answer every 50 ms (was 0.5 s), on the same deadlines (60
    s, 40 s). Paid on every launch of every row.
@@ -97,9 +104,8 @@ techniques are cited as "SOAK-SPEED n".
 
 1. Make the boot cache the DEFAULT once a soak has run with it on and the
    rows' results match: ~430 scripts boot through `os88ui.boot`.
-2. The same cache for raw `launch(boot=False)` + `kernel_up` callers (~85
-   call sites) - it needs the caller's `boot=` semantics kept, which
-   `os88ui.boot` already pins.
+2. Convert the rest of the `launch(boot=False)` + `m.run()` +
+   `kernel_up(m)` openers (222 files call `kernel_up`) to `boot="up"`.
 3. `ui_done`'s hold loop (two `disk` calls and a tick read a pass) and
    `key_taken`'s look as batches, like `_ui_settled1`.
 4. A server-side `wait` verb (86Box has `wait_mem`): the poll loops then cost
