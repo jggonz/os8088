@@ -796,8 +796,16 @@ def lane_locks(row):
     tail."""
     script = next((c for c in row.cmd
                    if c.startswith("tests/") and c.endswith(".py")), None)
-    return tuple(getattr(row, "locks", ())) + (
-        ("script:" + script,) if script else ())
+    own = tuple(getattr(row, "locks", ()))
+    # `locks=("script:private",)` OPTS OUT: a script whose every scratch is
+    # private (tempfile.mkdtemp, os88marty.launch's run dir) and which is
+    # split into one row a leg so the lane can run the legs AT ONCE - the
+    # lock would otherwise put them end to end again (waverackrec*,
+    # docs/plans/soak-speed-2/games.md). Say so only after checking the
+    # script writes no fixed path
+    if "script:private" in own:
+        return tuple(k for k in own if k != "script:private")
+    return own + (("script:" + script,) if script else ())
 
 
 # **A BOCHS ROW IS A FRACTION OF A CORE** (docs/plans/SOAK-PARALLEL.md 19).

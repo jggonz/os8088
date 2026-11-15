@@ -100,14 +100,42 @@ def mouse(sock, *a):
                     sock] + [str(x) for x in a], capture_output=True, cwd=ROOT)
 
 
+CLOCK = [None]                          # the QEMU whose clock budgets until
+
+
+def clock(q):
+    """Budget every `until` from here on in Q's GUEST seconds (SOAK-SPEED
+    11/12: os88qemu.acted). A host-second budget is the guest's own on an
+    idle box and a fraction of it on a loaded soak, where a 10 s wait for
+    a menu or a dialog ran out while the starved guest was still drawing it
+    (docs/plans/soak-speed-2/games.md). Set where each WR/PR/ED makes its
+    QEMU; a machine that has gone away falls back to host seconds"""
+    CLOCK[0] = q
+    return q
+
+
 def until(cond, what, secs=30.0, poll=0.1):
+    def c():
+        try:
+            return bool(cond())
+        except Exception:                                   # noqa: BLE001
+            return False
+    q = CLOCK[0]
+    if q is not None:
+        try:
+            if os88qemu.acted(q, c, secs=secs, what=what, poll=poll):
+                return True
+            say("     (timed out waiting for %s)" % what)
+            return False
+        except os88qemu.GuestStopped:
+            say("     (the guest stopped while waiting for %s)" % what)
+            return False
+        except (OSError, SystemExit):
+            pass                        # (no machine to clock it: host time)
     t = time.time()
     while time.time() - t < secs:
-        try:
-            if cond():
-                return True
-        except Exception:                                   # noqa: BLE001
-            pass
+        if c():
+            return True
         time.sleep(poll)
     say("     (timed out waiting for %s)" % what)
     return False
@@ -122,7 +150,7 @@ class WR(object):
         bimg = os.path.join(tmp, "b.img")
         shutil.copy(os88build.at("build/os8088.img"), sysimg)
         shutil.copy(os88build.at("build/wrfix.img"), bimg)
-        self.q = Q(tmp, sysimg, bimg, 4)
+        self.q = clock(Q(tmp, sysimg, bimg, 4))
         self.sock = self.q.sock
         os88qemu.acted(self.q, lambda: os.path.exists(self.sock), secs=30,
                        what="the QMP socket")
@@ -175,6 +203,14 @@ class WR(object):
     def key(self, k):
         xmcheck.qmp(self.sock, "sendkey " + k)
 
+    def done(self, cap):
+        """the old fixed pause after a KEY or a state wait, ended as soon as
+        the UI has gone idle for two guest ticks (os88qemu.ui_done: capped at
+        the pause it replaces, guest-timed - SOAK-SPEED 4). Not after a
+        MOUSE gesture: a packet still in the serial line is invisible to
+        ui_idle, so those pauses stay (docs/plans/soak-speed-2/games.md)"""
+        os88qemu.ui_done(self.q, xmcheck.sym, cap=cap)
+
     def wrseg(self):
         n = xmcheck.sym("wm_wins")
         for i in range(geom.MAX_WIN):
@@ -214,7 +250,7 @@ class WR(object):
             return False
         if not until(disk, "Disk B"):
             return False
-        time.sleep(1)
+        self.done(1.0)
         w = box["w"]
         i, _ = self.ui.entry("WAVERACK.O88", w)
         for _ in range(3):
@@ -457,7 +493,7 @@ def main():
         wr = WR(tmp, syms, img)
         if not check("WaveRack launches off B:", wr.launch()):
             return 1
-        time.sleep(1)
+        wr.done(1.0)
         order = sorted(n for n in fx if fx[n][1] == "GOOD") + \
             sorted(n for n in fx if fx[n][1] == "BAD") + ["LONG.WAV"]
         say("waverack: %d fixtures, each through File > Open" % len(order))

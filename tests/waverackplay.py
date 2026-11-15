@@ -108,10 +108,10 @@ class PR(WRT.WR):
                         os88build.at("build/mixercfg/SYSTEM.CFG")],
                        check=True, capture_output=True)  # SOUND.DRV wanted
         shutil.copy(os88build.at("build/wrfix.img"), bimg)
-        self.q = Q(tmp, sysimg, bimg, 4, extra=[
+        self.q = WRT.clock(Q(tmp, sysimg, bimg, 4, extra=[
             "-device", "sb16,audiodev=a0" + sbopt, "-audiodev",
             "wav,id=a0,path=%s,out.frequency=%d,out.channels=2,"
-            "out.format=s16" % (self.wav, afreq)])
+            "out.format=s16" % (self.wav, afreq)]))
         self.sock = self.q.sock
         os88qemu.acted(self.q, lambda: os.path.exists(self.sock), secs=30,
                        what="the QMP socket")

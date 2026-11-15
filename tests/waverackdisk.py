@@ -191,9 +191,11 @@ def snap(m, read):
 
 
 def guest_wait(m, secs, what):
+    # (poll 0.5 -> 0.05: a host half-second a look overran every wait by up
+    # to ~1.7 guest s at MartyPC's idle speed - a look is a status round trip)
     c0 = cyc(m)
     os88marty.until(m, lambda mm: cyc(mm) - c0 >= secs * os88marty.GUEST_HZ,
-                    what, poll=0.5, guest=secs + 30)
+                    what, poll=0.05, guest=secs + 30)
 
 
 def open_doc(ui, rk, name, scan_s):
