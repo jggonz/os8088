@@ -7076,6 +7076,7 @@ wa_loadarena:
 %define OS88UI_ABOUT            ; the About card: the keys (SPEC.md 12.2)
 %define OS88UI_ABFIT            ; (thirteen lines on a CGA's content box)
 %define OS88UI_ABLEFT           ; (the key table at the card's left margin)
+%define OS88UI_ABPACK           ; (its lines end to end: no pointer table)
 %include "os88ui.inc"           ; (its buttons)
 %define OS88LINE_NOSET          ; (the field is typed into, never set,
 %define OS88LINE_NORESYNC       ;  never written behind its back)
