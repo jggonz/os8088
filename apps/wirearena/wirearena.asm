@@ -6961,8 +6961,13 @@ wa_rframe:
     cld
     mov si, wa_fb_frm
     mov di, WA_RAT(wa_fb_frm)
-    mov cx, (wa_figs - wa_fb_frm) / 2 + WA_FHW
-    rep movsw
+    mov cx, (wa_figs - wa_fb_frm + WA_FIGHEAD + 1) / 2 ; FRAME is ODD
+    rep movsw                   ; (23 bytes), so figure 0's head is reached
+                                ; by rounding the WHOLE run up: halving
+                                ; FRAME first stopped a byte short of it,
+                                ; and F_Z's high byte never crossed - a
+                                ; bot on the Ziggurat's top (279..288) was
+                                ; drawn, and hit, 256 units low
 %assign wa_i 1
 %rep WA_NFIG-1
     mov si, wa_figs + wa_i*F_SIZE
