@@ -1911,6 +1911,22 @@ by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
   High with vsync on Bochs). `wabench` and `waprof` turn vsync off after
   F5 so their Very High numbers compare. +201 bytes of the primary
   (37,601 to 37,802).
+- **A low wall's foot through its top** (the owner, 2026-11-15: *"wall
+  part shows through from above when it should be occluded ... the
+  bottom part of a low wall"*, the Hedge's outer wall). Where two low
+  boxes of one height meet, the shared top edge is not drawn (the top
+  runs on), so nothing raised the clip there and the neighbour's face,
+  drawn later, showed its floor edge, slopes and posts through the top.
+  arenagen's `seam_bits` marks those faces (the high byte of the
+  descriptor's word 50, WR_ABI 18) and `wl_seams` draws each as a far top
+  edge would be, then takes its cells back: the clip raised, no line. The
+  Hedge's four outer corners and eight joins in the Pit; the line across
+  the joined tops goes too. The owner, on the pictures: *"looks awesome
+  (in both cases)"*. It costs the Pit +0.77% a pose on its reference set
+  and up to +1.84% on poses aimed at the joins, the Hedge +0.07-0.15%,
+  the rest nothing; +136 bytes of the renderer part. A dedicated
+  clip-raise routine could take most of the Pit's back for ~60-100 bytes:
+  not built.
 
 **After the first release** (the owner, 2026-11-15: *after*, for the turn
 acceleration and for all the test and measurement debt):

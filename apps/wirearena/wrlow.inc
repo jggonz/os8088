@@ -255,7 +255,7 @@ wl_vert:
 wa_lowbox:
     mov bx, di                  ; ITS OUTLINE INSIDE ITS NEIGHBOURS (the
     shr bx, 1                   ; owner, 2026-11-15: the Pit's ring corner
-    shr bx, 1                   ; "showing through as if the wall were
+                                ; "showing through as if the wall were
     mov al, [wa_bbur+bx]        ; transparent"): the floor edges (bits 0-3,
     mov [wl_bur], al            ; a face's) and posts (4-7, a corner's) no
     mov ax, [wa_bxh+di]         ; eye can see (arenagen's buried_byte)
@@ -418,6 +418,15 @@ wa_lowbox:
     WLFAR 1
     WLFAR 2
     WLFAR 3
+    mov bx, [wa_crow]           ; ...and its SEAMS: a far face whose top
+    sub bx, wa_corn+4           ; edge is not drawn - a neighbour of its
+    shr bx, 1                   ; height runs the top on - where that
+    mov al, [wa_bbur+bx+1]      ; neighbour's face against it is drawn
+    mov ah, [wl_seen]           ; (wa_bbur's high byte, arenagen's
+    not ah                      ; seam_bits): the top still hides what is
+    and al, ah                  ; under it (wl_seams)
+    jz .p3d
+    call wl_seams
 .p3d:
     ; 4. A FLIGHT'S INNER TREADS, seen from anywhere but its low end
     cmp byte [wl_nt], 2
@@ -427,6 +436,57 @@ wa_lowbox:
     jmp wl_treads
 .done:
     ret
+
+; wl_seams - AL = a box's far faces (bits 0-3) whose top is a SEAM: no edge
+; is drawn there, as the top runs on into the neighbour of its height, but
+; the top still hides what lies under it from an eye above - the floor edge
+; and the lower part of that neighbour's face against it, which is drawn
+; where it shows past this box (the owner, 2026-11-15: a low wall's bottom
+; "shows through from above when it should be occluded", the Hedge's outer
+; wall). Each is drawn as the far side's top is - raising the clip and
+; pushing its depth entry - and its cells are then taken back: off the
+; list, their stamps to an earlier frame's, so a farther thing still
+; draws there and present treats them as not drawn this frame. Clobbers
+; everything.
+wl_seams:
+    xor bx, bx                  ; BX = the face
+.k:
+    shr al, 1
+    jnc .nx
+    push ax
+    push bx
+    push word [wa_lp]           ; (the list as it stood)
+    mov cl, 4
+    mov si, bx
+    shl si, cl
+    add si, wl_c + WL_KC
+    lea di, [bx+1]
+    and di, 3
+    shl di, cl
+    add di, wl_c + WL_KC
+    mov al, [.m+bx]
+    call wl_face
+    pop si
+    mov cx, [wa_lp]
+    mov [wa_lp], si
+    mov dl, [wa_frame]
+    dec dl
+.u:
+    cmp si, cx
+    jae .ud
+    lodsw
+    xchg ax, bx
+    mov [wa_stamp+bx], dl
+    jmp short .u
+.ud:
+    pop bx
+    pop ax
+.nx:
+    inc bx
+    or al, al
+    jnz .k
+    ret
+.m:         db 3, 6, 12, 9      ; (a face's two corners: wl_nvk's bits)
 
 ; wl_child - a STACK (HEDGES-PLAN 8): the box standing on this one, the next
 ; in wa_boxes, drawn whole - with any standing on it - as a low box whose

@@ -251465,11 +251465,17 @@ the arenas the chosen mode can play.
   the descriptor's word 28 is the tree's length in bytes (`WR_ABI` 16).
   In the route graph, the next hop of each (node, goal) pair is two bits,
   four to a byte: which of the node's four ways out a bot takes first.
-  Word 50 (`WR_ABI` 17) names a byte a box: the floor edges (bits 0-3, by
-  face) and posts (bits 4-7, by corner) of a low box that lie inside its
-  neighbours, which the renderer does not draw - a corner whose every
-  quadrant outside the box is solid at least as high, or outside the room;
-  a face whose foot is covered along its length (arenagen's `buried_byte`).
+  Word 50 (`WR_ABI` 18) names a word a box. Its low byte holds the floor
+  edges (bits 0-3, by face) and posts (bits 4-7, by corner) of a low box that
+  lie inside its neighbours, which the renderer does not draw - a corner
+  whose every quadrant outside the box is solid at least as high, or outside
+  the room; a face whose foot is covered along its length (arenagen's
+  `buried_byte`). Its high byte holds the far faces whose top is a SEAM (bits
+  0-3, by face): a neighbour of the same height runs the top on, so no edge
+  is drawn there, but that neighbour's face against it is longer and drawn,
+  and the top must still hide its lower part from an eye above. The
+  renderer raises the column clip along each seam without drawing a cell
+  (arenagen's `seam_bits`, `wl_seams`).
   `wa_loadarena` copies one into the
   working tables and REBASES the tree's links. `arena_part()` in
   arenagen.py is this layout's single writer, and the renderer's

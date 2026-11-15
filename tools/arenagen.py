@@ -2168,6 +2168,37 @@ def buried_byte(i, boxes):
     return out
 
 
+def seam_bits(i, boxes):
+    """A LOW box's far faces whose top edge is a SEAM (the owner, 2026-11-15:
+    the bottom of a low wall showing "through from above when it should be
+    occluded", the Hedge's outer wall): bits 0-3, the faces S E N W whose
+    top bit face_bits cleared - a neighbour of exactly its height runs the
+    top on, so no edge is drawn there - where that neighbour's face against
+    it IS drawn, being longer: its floor edge and posts run on under this
+    box's top, and with no edge raising the column's clip there, an eye
+    above saw them through it. wl_seams raises the clip along each such
+    seam, drawing nothing. (A neighbour's face it covers whole draws
+    nothing, and a taller or lower one leaves this top's edge drawn.)"""
+    b = boxes[i]
+    if b.h >= hmax(boxes) or b.kind == LINE:
+        return 0
+    fb = face_bits(i, boxes)
+    out = 0
+    for k, f in enumerate(FACES):
+        if fb >> (4 + k) & 1:
+            continue
+        ax, v, lo, hi = face_line(b, f)
+        o = {"S": "N", "N": "S", "E": "W", "W": "E"}[f]
+        for j, n in enumerate(boxes):
+            if j == i or n.h != b.h or n.kind == LIFT:
+                continue
+            nax, nv, nlo, nhi = face_line(n, o)
+            if nax == ax and nv == v and nhi > lo and nlo < hi and \
+                    face_bits(j, boxes) >> FACES.index(o) & 1:
+                out |= 1 << k
+    return out
+
+
 def tall_inner(tag, boxes):
     """A TALL box's faces byte is read by the renderer's wa_sil as well as
     the outline path's: a face whose bit is clear (bits 0-3) is left out of
@@ -2767,12 +2798,13 @@ def arena_part(n, out):
               P + "pks" if pk else "0", P + "pkv" if pkv else "0"),
           "    dw %s                    ; its floor lines (ARENAS-PLAN 4.5)" % (
               P + "fl"),
-          "    dw %s                    ; its boxes' buried outline (WR_ABI 17)"
-          % (P + "bur")] + T
+          "    dw %s                    ; its boxes' buried outline and seams"
+          " (WR_ABI 18)" % (P + "bur")] + T
     bxs = [bx(b) for b in boxes]
     L += [P + "bur:                     ; per box: faces' floor edges, "
-          "corners' posts inside the solid (buried_byte)",
-          "    db " + ", ".join(str(buried_byte(i, bxs))
+          "corners' posts inside the solid (buried_byte); far faces' seams "
+          "(seam_bits, the high byte)",
+          "    dw " + ", ".join(str(buried_byte(i, bxs) | seam_bits(i, bxs) << 8)
                                 for i in range(len(bxs)))]
     if pk:
         L.append(P + "pks:                     ; count; x, y, z, kind, choices")
