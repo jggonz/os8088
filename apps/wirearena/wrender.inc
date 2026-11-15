@@ -422,8 +422,11 @@ wa_render:
     xor ax, ax
     mov cx, [wa_w]
     rep stosw
-    mov [wl_ffr], al            ; (the outline path's floor pair: anew)
-    inc ax
+    call wa_hnum                ; (the outline path's floor pair, once a
+    mov [wl_fn], ax             ; frame - and no box height's pair made
+    mov [wl_fs], bl             ; yet: wa_lowbox, and .llow's clip test)
+    mov word [wl_hh], -1
+    mov ax, 1
 .gen:
     mov [wa_gen], al
     mov ax, 128                 ; (eye at most 128 and hh 61: 128 x 127 +
@@ -773,8 +776,45 @@ wa_render:
     mov al, [wa_frame]
     mov bl, [si-3]
     mov [wa_vst+bx], al
+    mov dx, [wa_vpc+bx]         ; DX = a's column x 16
     mov bl, [si-1]
     mov [wa_vst+bx], al
+    mov ax, [wa_vpc+bx]         ; AX = c's
+    ; THE SHUT TEST (HEDGES-PLAN 7.1): a column is a direction, the same at
+    ; every height, so every cell of the box - posts, edges, its top's far
+    ; side - lies in the columns from a's to c's. Shut, all of them, by
+    ; nearer tall faces, it can draw nothing and raise nothing: its corners,
+    ; heights and passes are not made at all. (A vertex behind the eye has
+    ; no column - 0x8000: the box is drawn as it comes.)
+    cmp dx, 0x8000
+    je .lscan0
+    cmp ax, 0x8000
+    je .lscan0
+    mov cl, 4
+    add dx, 7                   ; its first column, less one (a post at its
+    sar dx, cl                  ; start corner stands in the column past it)
+    dec dx
+    jns .ls0
+    xor dx, dx
+.ls0:
+    add ax, 7                   ; ...its last
+    sar ax, cl
+    cmp ax, [wa_w]
+    jl .ls1c
+    mov ax, [wa_w]
+    dec ax
+.ls1c:
+    sub ax, dx
+    jl .lscan0
+    inc ax
+    mov cx, ax                  ; CX = the columns
+    mov di, dx
+    shl di, 1
+    add di, wa_cov
+    xor ax, ax
+    repne scasw                 ; an open one?
+    jne .lshut
+.lscan0:
     mov bl, [si-4]
 .llowb:                         ; BX = the box x 4
     mov di, bx                  ; DI = its record in wa_bxh
@@ -789,6 +829,7 @@ wa_render:
     mov al, [wa_at+bx]
     mov [wa_wcol], al
     call wa_lowbox
+.lshut:
     jmp .leaves
 .walked:
     cmp word [wa_left], 0       ; the room, last: it encloses everything

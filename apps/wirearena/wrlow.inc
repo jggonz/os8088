@@ -73,9 +73,8 @@ WA_VAR wl_fneed, 1              ; ...of them, those with a floor row
 WA_VAR wl_m, 1                  ; the seen faces drawn with a floor edge
 WA_VAR wl_pm, 1                 ; ...and the faces given a pass
 WA_VAR wl_c, 4*WL_REC           ; its corners (WL_*)
-WA_VAR wl_fn, 2                 ; the floor's pair (made in the frame
-WA_VAR wl_fs, 1                 ; wl_ffr)
-WA_VAR wl_ffr, 1
+WA_VAR wl_fn, 2                 ; the floor's pair (made each frame:
+WA_VAR wl_fs, 1                 ; wa_render)
 WA_VAR wl_hn, 2                 ; the box's height's
 WA_VAR wl_hs, 1
 WA_VAR wl_hh, 2                 ; ...that height (-1: none this frame)
@@ -275,22 +274,13 @@ wa_lowbox:
 .need:
     mov [wl_need], ax
     mov byte [wl_nvk], 15
-    mov al, [wa_frame]          ; the floor's pair, once a frame (wa_render
+    mov al, [wa_frame]
     mov [wl_sc], al             ; (the loops' stamp)
-    cmp al, [wl_ffr]            ; clears wl_ffr) - and the box's own
-    je .hpair                   ; height's, kept for the next box of that
-    mov [wl_ffr], al            ; height in the frame
-    xor ax, ax
-    call wa_hnum
-    mov [wl_fn], ax
-    mov [wl_fs], bl
-    mov word [wl_hh], -1
-.hpair:
-    mov ax, [wl_h]              ; the box's own height's, every corner's -
-    cmp ax, [wl_hh]             ; but a flight's low end's (wl_flight0)
-    je .hhave
-    mov [wl_hh], ax
-    call wa_hnum
+    mov ax, [wl_h]              ; the box's own height's pair, every corner's
+    cmp ax, [wl_hh]             ; - kept for the next box of that height in
+    je .hhave                   ; the frame (the floor's: wa_render's, once a
+    mov [wl_hh], ax             ; frame)
+    call wa_hnum                ; (but a flight's low end's: wl_flight0)
     mov [wl_hn], ax
     mov [wl_hs], bl
 .hhave:

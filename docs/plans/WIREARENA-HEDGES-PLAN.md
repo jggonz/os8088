@@ -217,3 +217,40 @@ In order of what it buys:
 - **Section 4.1 (low boxes as faces) and 4.2 (a box standing on a box)
   are asked for**, 4.1 with *"push a bit on it ... a lot of setup that can
   be optimized, reduced or even removed"*.
+
+## 7. Faster low boxes (4.1, the owner's item 2)
+
+**Instrument.** `tools/waposes.py record --profile p.json [--detail
+PREFIX]`: each pose rendered once more single-stepped, the renderer's
+cycles charged by routine over the whole set - a profile of 200 poses
+rather than of four bench views. A change that must not change the picture
+is checked by `waposes compare` on eight sets (the hedge with and without
+figures at 40 and 80 columns, the Maze, heights at 40 and 80, the Twin, the
+flat arena): every pose's text screen byte for byte, and its cycles.
+
+**Where a low box goes** (the hedge, 200 poses, figures out: 133 kclk a
+pose). The outline path is about a quarter of the frame, and its larger
+half is SETUP, not drawing: `wa_lowbox` 4,600 clk a box before any edge
+(the four corners' projections, two multiplies each, ~2,100; the faces,
+heights and corners chosen, ~1,600; the passes' dispatch ~700),
+`wl_draw` ~1,000 a pass (its cull's scan, its tag) and `wl_run` ~700 an
+edge. The per-column loops are the rest. Every arena has the same shape.
+
+**7.1 The shut test - kept.** A column is a direction, the same at every
+height, so every cell of a low box lies between its silhouette's end
+columns, which the walk has already made. When every column there is SHUT
+by nearer tall faces it can draw nothing, and `wa_render` skips it with one
+`repne scasw` before any corner is projected. The picture is identical in
+all eight sets; Maze -2.0%, hedge -1.4%, Twin -1.2%, heights +0.2% (the
+test's own cost, where nothing tall hides a low box).
+
+**7.2 A clip test - tried and taken out.** Seen from below its top, a low
+box's highest row is its top at its nearest silhouette vertex: one
+multiply, then a scan for a column whose clip lies under that row. It made
+every set slower than 7.1 alone (hedge -1.1% against -1.4%, heights +0.5%):
+a low box in view wholly behind nearer LOW ones is rare, so the multiply
+and the scan were paid for nothing. The setup ate the gain.
+
+**7.3 The floor's pair once a frame.** `wa_render` makes the outline
+path's floor pair where it clears the column state, and `wa_lowbox` no
+longer tests the frame for it.

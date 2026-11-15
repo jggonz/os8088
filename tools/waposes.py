@@ -29,7 +29,7 @@ two builds' recordings compare pose for pose:
 
   python3 tools/waposes.py record --arena 0|1|2 --width 40|80 [--level 1..5]
           [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still] [--poses LIST.json]
-          [--tree DIR] --out f.json
+          [--tree DIR] [--profile p.json [--detail PREFIX]] --out f.json
   python3 tools/waposes.py compare base.json new.json [--list] [--show N]
   python3 tools/waposes.py show f.json N
   python3 tools/waposes.py sets OUTDIR [--tree DIR]     the eight reference sets
@@ -209,7 +209,8 @@ def record(a):
         # play seldom is. Forgetting the key before every render makes each a
         # moved view's (--still keeps it: what a standing player's frame costs).
         pang = None
-        if not a.still:
+        rmap = {}
+        if not a.still or a.profile:
             mp2, bn2 = os.path.join(d, "m2"), os.path.join(d, "b2")
             subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/wirearena/",
                                    "-I", B + "/", "--before", "[map all %s]" % mp2, "-o", bn2,
@@ -218,9 +219,29 @@ def record(a):
                 raise SystemExit("waposes: %s/wrpart.bin is not its source - make wirearenadisk first" % B)
             for line in open(mp2):
                 f = line.split()
-                if len(f) == 3 and f[2] == "wa_pang":
-                    pang = struct.unpack('<H', m.read(b + g["wa_rds"], 2))[0] * 16 + int(f[0], 16)
+                if len(f) == 3 and re.match(r'^[0-9A-F]+$', f[0]) and re.match(r'^[0-9A-F]+$', f[1]):
+                    rmap[f[2]] = int(f[0], 16)
+            if not a.still:
+                pang = struct.unpack('<H', m.read(b + g["wa_rds"], 2))[0] * 16 + rmap["wa_pang"]
         e_r, e_p, e_m = b + g["wa_render"], b + g["wa_present"], b + g["wa_meter"]
+        prof = None
+        if a.profile:                   # (--profile: the routines' cycles,
+            import bisect, collections  # single-stepped, waprof's way)
+            rs = struct.unpack('<H', m.read(b + g["wa_rds"], 2))[0] * 16
+            rimg = os.path.getsize(B + "/wrpart.bin")
+            glob = lambda k: "." not in k and not k.startswith("..@")
+            rt = sorted((v, k) for k, v in rmap.items() if glob(k))
+            rtd = sorted((v, k) for k, v in rmap.items())
+            rA, rN = [x[0] for x in rt], [x[1] for x in rt]
+            rAd, rNd = [x[0] for x in rtd], [x[1] for x in rtd]
+            rEnt = {v: k for v, k in rt}
+            prof = dict(excl=collections.Counter(), cnt=collections.Counter(),
+                        det=collections.Counter(), n=0)
+            def rname(lin, d):
+                if rs <= lin < rs + rimg:
+                    A, N = (rAd, rNd) if d else (rA, rN)
+                    return N[bisect.bisect_right(A, lin - rs) - 1]
+                return "G:/kernel"
         def run_to(addr):
             m.bp_exec(addr); m.go()
             if m.wait_stop(60) is None: raise SystemExit("no stop")
@@ -256,6 +277,32 @@ def record(a):
                         last = c1 - c0
                         break
                     dirty.append(c1 - c0)
+            if prof is not None:        # once more, stepped (its own render:
+                run_to(e_r)             # the timed one stays exact)
+                w16("wa_px", p["px"]); w16("wa_py", p["py"]); w16("wa_ang", p["ang"] << 6)
+                w16("wa_pitch", p["pitch"]); w16("wa_feet", p["feet"]); w16("wa_jz", 0); w16("wa_jv", 0)
+                w16("wa_eye", 102 + p["feet"] + p["jump"]); w16("wa_pbtk", 0)
+                for fi, f in enumerate(p["figs"]):
+                    fb = b + g["wa_figs"] + fi * FO["F_SIZE"]
+                    m.write(fb + FO["F_X"], struct.pack('<HHH', f["x"], f["y"], f["ang"]))
+                    m.write(fb + FO["F_ANIM"], bytes([f["anim"], f["nfr"], 1]) + struct.pack('<H', f["ph"])
+                            + bytes([f["flash"], f["dead"]]) + struct.pack('<H', f["z"]))
+                if pang is not None: m.write(pang, b"\xff\xff")
+                st = m.status(); prev = (int(st["cs"]) << 4) + int(st["ip"]); pc = int(st["cycles"])
+                while True:
+                    st = m.step(1)
+                    lin = (int(st["cs"]) << 4) + int(st["ip"]); c = int(st["cycles"])
+                    nm = rname(prev, False)
+                    prof["excl"][nm] += c - pc
+                    if a.detail and nm.startswith(a.detail):
+                        prof["det"][rname(prev, True)] += c - pc
+                    if rs <= lin < rs + rimg and (lin - rs) in rEnt:
+                        prof["cnt"][rEnt[lin - rs]] += 1
+                    prev, pc = lin, c
+                    if lin == e_p:
+                        break
+                prof["n"] += 1
+                run_to(e_m)
             flt = m.read(0x46B, 1)[0]
             if flt:
                 faults += 1
@@ -265,6 +312,18 @@ def record(a):
                                 pres=c2 - c1, fault=flt))
         m.bp_exec()
     json.dump(dict(arena=a.arena, width=W, level=a.level, seed=a.seed, poses=ps, frames=frames), open(a.out, "w"))
+    if prof is not None:
+        json.dump(prof, open(a.profile, "w"))
+        tot = sum(prof["excl"].values())
+        print("PROFILE over %d poses, %.0f clk a pose stepped (the game's own part of the frame "
+              "block's copy is G:/kernel):" % (prof["n"], tot / prof["n"]))
+        for k, v in prof["excl"].most_common(40):
+            print("  %-22s %8.0f clk/pose %5.1f%%  calls/pose %6.2f" % (k, v / prof["n"], 100.0 * v / tot,
+                                                                     prof["cnt"][k] / prof["n"]))
+        if a.detail:
+            print("--- detail", a.detail)
+            for k, v in prof["det"].most_common(50):
+                print("  %-40s %8.0f clk/pose" % (k, v / prof["n"]))
     n = len(frames)
     print("%s: %d poses, %d DIVIDE FAULTS, render %.0f clk/pose (%.2f ms), still-frame present %.0f" % (
         a.out, n, faults, sum(f["cyc"] for f in frames) / n, sum(f["cyc"] for f in frames) / n / 4772.727,
@@ -277,6 +336,9 @@ r.add_argument("--arena", type=int, default=0); r.add_argument("--width", type=i
 r.add_argument("--level", type=int, default=0); r.add_argument("--n", type=int, default=60)
 r.add_argument("--seed", type=int, default=1)
 r.add_argument("--keys", default=""); r.add_argument("--tree", default=ROOT)
+r.add_argument("--profile", default="", help="also each pose rendered once more SINGLE-STEPPED: the "
+               "renderer's cycles by routine over the set, into this JSON (and printed) - ~2 host s a pose")
+r.add_argument("--detail", default="", help="with --profile: by every label under routines named so")
 r.add_argument("--out", required=True)
 r.add_argument("--still", action="store_true", help="a standing view: the renderer's still-view work kept")
 r.add_argument("--poses", default="", help="a JSON list of poses to use instead of the seeded set (poses()'s own shape)")
