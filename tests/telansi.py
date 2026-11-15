@@ -516,14 +516,26 @@ def main():
             reports."""
             clk = os88qemu.Clock(m)
             last, since = -1, 0.0
+            at = None
             while True:
                 t = clk.secs()
                 if t >= timeout or clk.stalled():
                     break
                 off = rw("te_soff")
                 drained = rw("te_rxi") >= rw("te_rxn") and rb("te_pndn") == 0
+                # ...AND STILL SO A TICK LATER: te_pbyte advances [te_soff]
+                # BEFORE the byte acts (apps/telnet/teansi.inc), so the
+                # instant it reads `want` the last byte - a wrap's scroll -
+                # may not have touched con_scr yet. A 0.25 s poll hid that;
+                # at 0.05 'wrap' read the screen one scroll early, 1 run in 3
                 if drained and want is not None and off == want:
-                    return off
+                    n = clk.step()
+                    if at is None:
+                        at = n
+                    elif n > at:
+                        return off
+                else:
+                    at = None
                 if off != last:
                     last, since = off, t
                 elif drained and t - since >= still:
