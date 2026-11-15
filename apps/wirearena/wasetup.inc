@@ -6,6 +6,9 @@
 ;     the host's to choose (and showing the host's);
 ;   - one TEXT FIELD (apps/os88line.inc, SPEC.md 83) for the address,
 ;     beside Play and only while Play is internet;
+;   - a second for the player's NICK, its own row under Play: up to eight
+;     characters, upper case, sent in every HELLO (walink.inc) and shown on
+;     the lobby's rows, the scoreboard and the HUD's kill message;
 ;   - two BUTTONS (os88ui): Play alone / Ready linked, and Keys - which
 ;     puts the key list up as the standard ABOUT CARD (SPEC.md 12.2), the
 ;     same card the system menu's About shows.
@@ -26,7 +29,7 @@ WS_W        equ 336             ; the content box (the template: 338 x 156)
 WS_RM       equ 328             ; ...and its right margin, past every
                                 ; control and row (the owner: the drop-downs
                                 ; off the edge, as the left's 8 px are)
-WS_H        equ 137
+WS_H        equ 155
 WS_LX       equ 0               ; the left column: a marker cell and a
 WS_LDX1     equ 56              ; label (seven cells), then its drop-down
 WS_LDX2     equ 183
@@ -36,16 +39,19 @@ WS_RDX2     equ 327
 WS_Y1       equ 14              ; the three rows of controls, 16 high
 WS_Y2       equ 32
 WS_Y3       equ 50
+WS_Y4       equ 68              ; the nick's row: its label and field
 WS_DH       equ 16
 WS_FX1      equ 192             ; the address field, right of Play
 WS_FX2      equ 327
-WS_BTNY     equ 69              ; the buttons
+WS_BTNY     equ 87              ; the buttons
 WS_BTNW     equ 104
 WS_BTNH     equ 16
 WS_B2X      equ 129
-WS_LOBY     equ 88              ; the players' rows (walink.inc), 10 apart
+WS_LOBY     equ 106             ; the players' rows (walink.inc), 10 apart
 WS_NDR      equ 5               ; the drop-downs; the focus's sixth stop is
-WS_FLD      equ 5               ; the field
+WS_NICK     equ 5               ; the nick's field, the seventh the address's
+WS_FLD      equ 6               ; (while Play is internet)
+WS_NKMAX    equ 9               ; the nick's buffer: eight and the NUL
 
 ; wa_sinit - the window is open: the controls' records
 wa_sinit:
@@ -60,6 +66,8 @@ wa_sinit:
     jb .d
     mov word [wa_sfld+LN_BUF], wa_saddr
     mov word [wa_sfld+LN_MAX], 16
+    mov word [wa_snfld+LN_BUF], wa_snick
+    mov word [wa_snfld+LN_MAX], WS_NKMAX
     mov bx, wa_sbrec
     mov dx, wa_sclick
     call os88ui_btninit
@@ -72,7 +80,7 @@ wa_sforget:
     pop es
     mov di, wa_sdsel            ; (sel, greying for each; the focus; the
     mov al, 0FFh                ; field's place)
-    mov cx, WS_NDR * 2 + 2
+    mov cx, WS_NDR * 2 + 3      ; (and the nick's)
     rep stosb
     ret
 
@@ -242,6 +250,16 @@ wa_splace:
     mov [wa_sfld+LN_Y1], cx
     add cx, WS_DH - 1
     mov [wa_sfld+LN_Y2], cx
+    mov cx, ax                  ; the nick's field, where the left column's
+    add cx, WS_LDX1             ; drop-downs are
+    mov [wa_snfld+LN_X1], cx
+    add cx, WS_LDX2 - WS_LDX1
+    mov [wa_snfld+LN_X2], cx
+    mov cx, dx
+    add cx, WS_Y4
+    mov [wa_snfld+LN_Y1], cx
+    add cx, WS_DH - 1
+    mov [wa_snfld+LN_Y2], cx
     add ax, 8                   ; the buttons
     add dx, WS_BTNY
     mov [wa_sbrects], ax
@@ -278,11 +296,13 @@ wa_slabs:   dw WS_LX, WS_Y1 + 4, wa_sl_a
             dw WS_LX, WS_Y2 + 4, wa_sl_b
             dw WS_RX, WS_Y2 + 4, wa_sl_s
             dw WS_LX, WS_Y3 + 4, wa_sl_p
+            dw WS_LX, WS_Y4 + 4, wa_sl_n     ; (the nick's: WS_NICK)
 wa_sl_a:    db ' Arena ', 0
 wa_sl_c:    db ' Columns ', 0
 wa_sl_b:    db ' Bots  ', 0
 wa_sl_s:    db ' Skill   ', 0
 wa_sl_p:    db ' Play  ', 0
+wa_sl_n:    db ' Nick  ', 0
 
 ; THE GROUND: every rect of the content no control and no row covers
 ; (content coordinates, inclusive). The last is the field's place, which
@@ -303,7 +323,11 @@ wa_sgnd:    dw 0, 0, WS_RM - 1, 3
             dw 0, WS_Y3, WS_LDX1 - 1, WS_Y3 + 3
             dw 0, WS_Y3 + 12, WS_LDX1 - 1, WS_Y3 + 15
             dw WS_LDX2 + 1, WS_Y3, WS_FX1 - 1, WS_Y3 + 15
-            dw 0, WS_Y3 + 16, WS_RM - 1, WS_BTNY - 1
+            dw 0, WS_Y3 + 16, WS_RM - 1, WS_Y4 - 1
+            dw 0, WS_Y4, WS_LDX1 - 1, WS_Y4 + 3
+            dw 0, WS_Y4 + 12, WS_LDX1 - 1, WS_Y4 + 15
+            dw WS_LDX2 + 1, WS_Y4, WS_RM - 1, WS_Y4 + 15
+            dw 0, WS_Y4 + 16, WS_RM - 1, WS_BTNY - 1
             dw 0, WS_BTNY, 7, WS_BTNY + WS_BTNH - 1
             dw 8 + WS_BTNW, WS_BTNY, WS_B2X - 1, WS_BTNY + WS_BTNH - 1
             dw WS_B2X + WS_BTNW, WS_BTNY, WS_RM - 1, WS_BTNY + WS_BTNH - 1
@@ -335,9 +359,14 @@ wa_sground:
     pop cx
     add si, 8
     loop .r
-    cmp byte [wa_splay], 3      ; THE FIELD's inside that its own draw does
-    jne .out                    ; not cover: the bands over and under its
-    mov si, wa_sfld             ; text, and the inset left of it
+    mov si, wa_snfld            ; the nick's field's inside, always
+    call wa_sfgnd
+    cmp byte [wa_splay], 3      ; ...and the address's, while there
+    jne wa_sfgnd.out
+    mov si, wa_sfld
+; wa_sfgnd - SI = a field: its inside that its own draw does not cover -
+; the bands over and under its text, and the inset left of it
+wa_sfgnd:
     mov ax, [si+LN_X1]
     inc ax
     mov bx, [si+LN_Y1]
@@ -442,7 +471,7 @@ wa_sdraw:
     call wa_slabel
     jc .no
     inc ax
-    cmp al, WS_NDR
+    cmp al, WS_NDR + 1
     jb .la
 .lset:
     mov al, [wa_sfoc]
@@ -483,6 +512,27 @@ wa_sdraw:
     mov si, wa_sfld
     call os88line_draw
 .ok:
+    mov al, 1                   ; THE NICK's FIELD: always there, its caret
+    cmp byte [wa_sfoc], WS_NICK ; while it has the focus
+    jne .nf
+    inc ax
+.nf:
+    mov byte [wa_snfld+LN_FOCUS], 0
+    cmp al, 2
+    jne .nfo
+    mov byte [wa_snfld+LN_FOCUS], 1
+.nfo:
+    cmp byte [wa_lkfull], 0
+    jne .nfd
+    cmp al, [wa_sdnk]
+    je .nok
+.nfd:
+    call wa_lkclipon
+    jc .no
+    mov [wa_sdnk], al
+    mov si, wa_snfld
+    call os88line_draw
+.nok:
     clc
     ret
 .no:
@@ -492,7 +542,7 @@ wa_sdraw:
 ; wa_slabel - AL = a drop-down: its label, the focus's marker in its first
 ; cell. CF = 1 no clip. Keeps all but the flags
 wa_slabel:
-    cmp al, WS_NDR
+    cmp al, WS_NDR + 1          ; (the drop-downs' and the nick's)
     jae .out
     call wa_lkclipon
     jc .no
@@ -659,6 +709,25 @@ wa_skey:
     call wa_sclose
     ret
 .nesc:
+    cmp byte [wa_sfoc], WS_NICK ; THE NICK's keys: anything printable but
+    jne .naddr                  ; Space, letters in upper case, and the
+    call wa_snavkey             ; editing keys
+    je .nav
+    cmp al, ' '
+    jb .nedit
+    cmp al, 127
+    jae .nedit
+    cmp al, 'a'
+    jb .nedit
+    cmp al, 'z'
+    ja .nedit
+    sub al, 'a' - 'A'
+.nedit:
+    mov si, wa_snfld
+    call wa_sedit
+    call wa_snkset
+    jmp .done
+.naddr:
     cmp byte [wa_sfoc], WS_FLD  ; THE FIELD's keys (joining by address):
     jne .nav                    ; digits and dots typed, the editing keys;
     cmp byte [wa_splay], 3      ; Up, Down, Tab and Enter are the page's
@@ -684,22 +753,7 @@ wa_skey:
     ja .done
 .edit:
     mov si, wa_sfld
-    mov byte [si+LN_FOCUS], 1   ; (it has the focus NOW: the tick that
-    push word [si+LN_VIEW]      ; draws its caret may not have run yet)      ; (as they were: os88line_edit's
-    push word [si+LN_LEN]       ; arguments)
-    push word [si+LN_CAR]
-    call os88line_key
-    pop dx
-    pop bx
-    pop ax
-    jc .done                    ; (not an edit)
-    push bx
-    mov bx, [wa_win]
-    call OSAPI_WM_CLIP_SET      ; (CF = 1: nothing of us to see)
-    pop bx
-    jc .parse
-    call os88line_edit
-.parse:
+    call wa_sedit
     call wa_saparse
     jmp .done
 .nav:
@@ -727,7 +781,7 @@ wa_skey:
     dec byte [wa_sfoc]
     jmp .done
 .down:
-    mov al, WS_NDR - 1          ; (the field a stop only while there)
+    mov al, WS_NICK             ; (the address a stop only while there)
     cmp byte [wa_splay], 3
     jne .dl
     inc ax
@@ -757,6 +811,61 @@ wa_skey:
     call wa_about
 .done:
     stc
+    ret
+
+; wa_sedit - SI = a field with the focus, AX = a key: the edit it makes,
+; drawn (os88line). Clobbers AX, BX, CX, DX, DI
+wa_sedit:
+    mov byte [si+LN_FOCUS], 1   ; (it has the focus NOW: the tick that
+    push word [si+LN_VIEW]      ; draws its caret may not have run yet)      ; (as they were: os88line_edit's
+    push word [si+LN_LEN]       ; arguments)
+    push word [si+LN_CAR]
+    call os88line_key
+    pop dx
+    pop bx
+    pop ax
+    jc .out                     ; (not an edit)
+    push bx
+    mov bx, [wa_win]
+    call OSAPI_WM_CLIP_SET      ; (CF = 1: nothing of us to see)
+    pop bx
+    jc .out
+    call os88line_edit
+.out:
+    ret
+
+; wa_snavkey - AX = a key: ZF = 1 when it is the page's on a field (Up,
+; Down, Tab, Enter, Space - Ready, as anywhere on the page)
+wa_snavkey:
+    cmp ah, 0x48
+    je .out
+    cmp ah, 0x50
+    je .out
+    cmp al, 9
+    je .out
+    cmp al, 13
+    je .out
+    cmp al, ' '
+.out:
+    ret
+
+; wa_snkset - the nick typed: wa_nick, space-padded, what the HELLOs send
+wa_snkset:
+    push ds
+    pop es
+    mov si, wa_snick
+    mov di, wa_nick
+    mov cx, WA_NNAME
+.c:
+    lodsb
+    or al, al
+    jz .pad
+    stosb
+    loop .c
+    ret
+.pad:
+    mov al, ' '
+    rep stosb
     ret
 
 ; wa_sfocfix - the focus off the field once there is no field
@@ -826,7 +935,14 @@ wa_sclick:
     inc di
     cmp di, WS_NDR * 2
     jb .d
-    cmp byte [wa_splay], 3      ; the field
+    mov si, wa_snfld            ; the nick's field
+    call os88line_click
+    jc .naddr
+    mov byte [wa_sfoc], WS_NICK
+    mov byte [wa_sdnk], 0FFh    ; (its caret where the press put it)
+    jmp .out
+.naddr:
+    cmp byte [wa_splay], 3      ; the address's field
     jne .out
     mov si, wa_sfld
     call os88line_click

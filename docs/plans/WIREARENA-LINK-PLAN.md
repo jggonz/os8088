@@ -102,22 +102,23 @@ checked. Words are little-endian.
 
 ### 4.1 In the lobby
 
-**HELLO** (type 1, 20 bytes), every 9 ticks while the window is open and
-the port is leased:
+**HELLO** (type 1, 28 bytes since version 2 - 20 in version 1), every 9
+ticks while the window is open and the port is leased:
 
 | byte | meaning |
 |---|---|
 | 0 | 1 |
 | 1, 2 | `WA` |
-| 3 | protocol version, 1 |
+| 3 | protocol version, 2 (the nick added; a version 1 HELLO is dropped) |
 | 4..7 | my identity (random, nonzero; lower is the host) |
 | 8..11 | the peer I have bound, or 0 |
 | 12 | my state: 0 in the lobby, 1 ready, 2 in the match |
 | 13 | the arena (the host's choice; a guest echoes the host's) |
 | 14 | the difficulty (host's), 15 the bots (L2: 0..2, host's) |
 | 16 | the match tag (host's, nonzero once START is sent) |
-| 17 | 0 (reserved) |
-| 18, 19 | CRC |
+| 17 | peers I have bound (WIREARENA-NET-PLAN 9.5) |
+| 18..25 | my nick: eight characters, space-padded, blank for none (NET-PLAN 9.6; a byte under 32 or over 126 reads as a space) |
+| 26, 27 | CRC |
 
 - A HELLO from another identity on our port ends the search (114.9's rule).
 - The first such identity is **bound**. While bound, a HELLO from a third

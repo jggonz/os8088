@@ -18,7 +18,7 @@ WL_BSCORE   equ 7               ; the host's bots' rows of deaths by cause
 WL_PEERS    equ 8               ; the window, on UDP: the other peers we know
 WL_PEERN    equ 2               ;   (two: the third is the one told)
 LK_NTYPES   equ 9
-lk_lens:    db 0, 20, 15, 8, 19, 24, 17, 12, 24 ; each type's body, its CRC too
+lk_lens:    db 0, 28, 15, 8, 19, 24, 17, 12, 24 ; each type's body, its CRC too
 WL_BEAT     equ 9               ; OS ticks between HELLOs (WireFleet's)
 WL_QUIET    equ 55              ; ticks of silence: gone (lobby), lost (match)
 WL_EVQ      equ 8               ; events waiting for their ack
@@ -60,7 +60,9 @@ WP_ACK      equ 30
 WP_SLOT     equ 31
 WP_NB       equ 32              ; (the lobby: how many peers it has bound,
                                 ; as its HELLO says - its byte 17)
-WP_SZ       equ 34
+WP_NICK     equ 34              ; its nick, as its HELLO says (bytes 18..25:
+                                ; space-padded, blank none)
+WP_SZ       equ 42
 WL_ROWS     equ 6               ; the window's rows of text: what the link is
                                 ; doing, then the players (wasetup.inc's
                                 ; controls between, WS_LOBY)
@@ -723,7 +725,7 @@ wa_lkhello1:
     stosb
     mov ax, 'WA'
     stosw
-    mov al, 1
+    mov al, 2                   ; (v2: the nick at its end)
     stosb
     mov si, wa_lkid
     movsw
@@ -743,8 +745,11 @@ wa_lkhello1:
     stosb
     call wa_lkbcount            ; how many peers we have bound: the start
     stosb                       ; waits until every one says what we do
+    mov si, wa_nick             ; our nick
+    mov cx, WA_NNAME / 2
+    rep movsw
     mov si, wa_lkfr
-    mov cl, 18
+    mov cl, 26
     jmp wa_lksend
 
 ; wa_lkbcount - AL = how many peers are bound. Keeps all but AX
@@ -1081,7 +1086,7 @@ wa_ltake1:
 wa_lkhtake:
     cmp word [si+1], 'WA'
     jne .out
-    cmp byte [si+3], 1
+    cmp byte [si+3], 2
     jne .out
     mov ax, [si+4]
     or ax, [si+6]
@@ -1136,6 +1141,26 @@ wa_lkhtake:
     mov [wa_lkptag], al         ; echo of it)
     mov al, [si+17]             ; (how many it has bound)
     mov [wa_pc+WP_NB], al
+    push si                     ; its nick: a byte off the wire is a glyph
+    push bx                     ; on the screen - a control one a blank
+    push cx
+    mov cx, WA_NNAME
+    xor bx, bx
+.nk:
+    mov al, [si+18+bx]
+    cmp al, ' '
+    jb .nkb
+    cmp al, 127
+    jb .nkc
+.nkb:
+    mov al, ' '
+.nkc:
+    mov [wa_pc+WP_NICK+bx], al
+    inc bx
+    loop .nk
+    pop cx
+    pop bx
+    pop si
     mov al, [si+12]
     mov [wa_lkps], al
     cmp byte [wa_lkon], 0       ; in the match: a HELLO saying it is not
@@ -1376,7 +1401,11 @@ wa_lkrow:
 .out:
     ret
 .you:
-    mov si, wa_lt_you
+    mov si, wa_lt_you           ; (our nick, if there is one)
+    cmp byte [wa_snick], 0
+    je .yc
+    mov si, wa_snick
+.yc:
     call wa_lkcpy
     mov di, wa_lkln+12
     mov al, [wa_lkst]
@@ -1441,6 +1470,8 @@ wa_lkpnm:
     stosb
     loop .c
 .hex:
+    cmp byte [wa_pc+WP_NICK], ' ' ; (its own nick: no number after it)
+    ja .out
     mov al, '-'
     stosb
     mov dx, [wa_lkpeer]
@@ -1459,6 +1490,7 @@ wa_lkpnm:
 .s:
     stosb
     loop .d
+.out:
     ret
 
 ; wa_lksbname - BX = a figure's code here (not ours): SI = its name on a
@@ -1478,6 +1510,9 @@ wa_lksbname:
     jae .bot
     call wa_slotpeer
     jc .none
+    lea si, [bx+WP_NICK]        ; (its nick, if it sent one)
+    cmp byte [si], ' '
+    ja .got
     mov al, [bx+WP_ID]
     jmp .nm
 .bot:
@@ -1488,6 +1523,7 @@ wa_lksbname:
     shl ax, cl
     add ax, wa_names
     mov si, ax
+.got:
     clc
     jmp .out
 .none:
@@ -1501,12 +1537,16 @@ wa_lksbname:
 ; wa_lkpname - the peer's robot name, 8 characters, into wa_lkpnam
 wa_lkpname:
     push di
+    mov si, wa_pc+WP_NICK       ; (its nick, if it sent one)
+    cmp byte [si], ' '
+    ja .cp
     mov al, [wa_lkpeer]
     and ax, WA_NNAME - 1
     mov cl, 3
     shl ax, cl
     add ax, wa_names
     mov si, ax
+.cp:
     mov di, wa_lkpnam
     push ds
     pop es
@@ -2158,9 +2198,10 @@ wa_lkmtake:
     shl bx, 1
     shl bx, 1
     mov ax, [si+2]
+    mov dx, [si+4]
+    call wa_lknews
     mov [wa_lkd+bx], ax
-    mov ax, [si+4]
-    mov [wa_lkd+bx+2], ax
+    mov [wa_lkd+bx+2], dx
     jmp wa_lkboard
 .bscore:
     cmp byte [wa_lkme], 0       ; (the host's bots' rows: to the guests -
@@ -2169,17 +2210,21 @@ wa_lkmtake:
     jne .out
     cmp byte [wa_lknp], 2
     ja .r3
+    mov bx, 8
     mov ax, [si+2]
+    mov dx, [si+4]
+    call wa_lknews
     mov [wa_lkd+8], ax
-    mov ax, [si+4]
-    mov [wa_lkd+10], ax
+    mov [wa_lkd+10], dx
 .r3:
     cmp byte [wa_lknp], 3
     ja .bd
+    mov bx, 12
     mov ax, [si+6]
+    mov dx, [si+8]
+    call wa_lknews
     mov [wa_lkd+12], ax
-    mov ax, [si+8]
-    mov [wa_lkd+14], ax
+    mov [wa_lkd+14], dx
 .bd:
     jmp wa_lkboard
 .out:
@@ -2770,7 +2815,9 @@ wa_lkbdeath:
     mov al, [wa_killer]
     call wa_lkcanon
 wa_lkcount:                     ; BL = the dead one, AL the cause (codes on
-    xor bh, bh                  ; the wire): D[BL][AL] + 1, the board again
+    mov ah, bl                  ; the wire): D[BL][AL] + 1, the HUD's
+    call wa_lkkill              ; message, the board again
+    xor bh, bh
     shl bx, 1
     shl bx, 1
     add bl, al
@@ -2778,6 +2825,63 @@ wa_lkcount:                     ; BL = the dead one, AL the cause (codes on
     pop bx
     pop ax
     ; (falls through)
+; wa_lknews - BX = a row of wa_lkd (the dead one's slot x 4), DX:AX = its
+; four counts as they arrive: each that ROSE is a kill the HUD says (a SCORE
+; once a second: a kill another machine judged). Keeps every register
+wa_lknews:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, ax                  ; (SI, DI = the new counts, two each)
+    mov di, dx
+    xor cx, cx                  ; CL = the cause's slot
+.c:
+    mov ax, si
+    cmp cl, 2
+    jb .lo
+    mov ax, di
+.lo:
+    test cl, 1
+    jz .b
+    mov al, ah
+.b:
+    push bx
+    add bl, cl
+    cmp al, [wa_lkd+bx]
+    pop bx
+    jbe .n
+    mov al, cl                  ; risen: the cause killed the dead one
+    mov ah, bl
+    shr ah, 1
+    shr ah, 1
+    call wa_lkkill
+.n:
+    inc cx
+    cmp cl, 4
+    jb .c
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; wa_lkkill - AL = the cause's slot, AH = the dead one's: the HUD's message,
+; in codes here. Keeps every register
+wa_lkkill:
+    push ax
+    push bx
+    mov bl, al
+    mov al, ah
+    call wa_lklocal
+    xchg al, bl                 ; BL = the dead one here
+    call wa_lklocal
+    mov ah, bl
+    call wa_hudkill
+    pop bx
+    pop ax
+    ret
+
 ; wa_lkboard - the scoreboard from the deaths by cause: a death to each,
 ; a kill to its cause, a kill less for a suicide (AI-PLAN 5's rule). Keeps
 ; every register
