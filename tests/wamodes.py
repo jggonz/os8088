@@ -210,7 +210,18 @@ def main():
         check(on(1) == 1 and rot & 8, "THE ROTATION: the last one checked "
               "(the hedge) stays checked", (on(1), rot))
         m.key("Escape")
+        # THE WINDOW GONE, not six ticks: on kern_mega's Bochs a key is typed
+        # through the X server in HOST time, and at the 4x guest rate
+        # (os88bochs.ROW_RATE) six guest ticks ran out before Escape landed -
+        # red every run there, green at rate 1. A window Esc never closes
+        # still fails when the 60 ticks run out. (Stepped as the row steps
+        # everything - `until` on this paused guest sees no progress and
+        # gives up before Escape is read.)
         m.advance(cycles=TICK * 6)
+        for _ in range(54):
+            if p.word(sym["wa_rwin"]) == 0:
+                break
+            m.advance(cycles=TICK)
         check(p.word(sym["wa_rwin"]) == 0, "THE ROTATION: Esc puts it away")
 
         play(3, 2, 1)                           # TEAM DEATHMATCH, Win at 10
