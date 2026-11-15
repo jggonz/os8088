@@ -568,60 +568,53 @@ ne_init:
     push cx
     push si
 
-    mov al, NE_TXPAGE                   ; the ring is the card's SIZE, and an
-    mov ah, NE_PSTART                   ; NE1000 has half of it
-    mov ch, NE_PSTOP
+    mov ax, NE_PSTART << 8 | NE_TXPAGE  ; the ring is the card's SIZE, and an
+    mov ch, NE_PSTOP                    ; NE1000 has half of it
     cmp byte [eth_word], 0
     jne .pages
-    mov al, NE1_TXPAGE
-    mov ah, NE1_PSTART
+    mov ax, NE1_PSTART << 8 | NE1_TXPAGE
     mov ch, NE1_PSTOP
 .pages:
-    mov [eth_txpg], al
-    mov [eth_pstart], ah
-    mov [eth_pstop], ch
+    mov [eth_txpg], al                  ; (three byte stores and not a word:
+    mov [eth_pstart], ah                ; tests/picomem/nehx.asm declares these
+    mov [eth_pstop], ch                 ; in an order of its own)
 
     mov si, ne_t_setup                  ; ne_probe's six: stopped, monitoring
     call ne_outs                        ; and in loopback while the ring is set
-    mov al, NE_TPSR
-    mov ah, [eth_txpg]
-    call ne_out
+    mov bx, ax                          ; (ne_outs and ne_out keep AX, BX and
+    mov ah, bl                          ; CX: BL = the transmit page, BH =
+    mov al, NE_TPSR                     ; PSTART and CH = PSTOP from here on,
+    call ne_out                         ; held in registers rather than read
+    mov ah, bh                          ; back out of the words just stored)
     mov al, NE_PSTARTR
-    mov ah, [eth_pstart]
     call ne_out
+    mov ah, ch
     mov al, NE_PSTOPR
-    mov ah, [eth_pstop]
     call ne_out
+    mov ah, bh
     mov al, NE_BNRY                     ; BNRY trails our read pointer by one
-    mov ah, [eth_pstart]                ; page, and our read pointer starts one
-    call ne_out                         ; page in - see the header
-    mov ah, [eth_pstart]
-    inc ah
-    mov [eth_next], ah
+    call ne_out                         ; page, and our read pointer starts one
+    inc bh                              ; page in - see the header
+    mov [eth_next], bh
     mov si, ne_t_quiet                  ; every cause cleared, NO INTERRUPTS
     call ne_outs                        ; (SPEC.md 72.2.1), and page 1
-    mov si, eth_mac                     ; our address, six registers
-    mov cl, NE_PAR0
-    mov ch, 6
+    mov si, eth_mac                     ; our address, six registers - AL
+    mov al, NE_PAR0                     ; walks them (ne_out keeps AX)
 .par:
-    mov al, cl
     mov ah, [si]
     call ne_out
     inc si
-    inc cl
-    dec ch
-    jnz .par
-    mov cl, NE_MAR0                     ; no multicast at all: the stack has
-    mov ch, 8                           ; no use for it and an open filter is
-.mar:                                   ; frames we would have to drop anyway
-    mov al, cl
-    mov ah, 0
-    call ne_out
-    inc cl
-    dec ch
-    jnz .mar
+    inc ax
+    cmp al, NE_PAR0 + 6
+    jb  .par
+    mov ax, NE_MAR0                     ; no multicast at all: the stack has
+.mar:                                   ; no use for it and an open filter is
+    call ne_out                         ; frames we would have to drop anyway -
+    inc ax                              ; eight registers of AH = 0
+    cmp al, NE_MAR0 + 8
+    jb  .mar
+    mov ah, bh
     mov al, NE_CURR
-    mov ah, [eth_next]
     call ne_out
 
     mov si, ne_t_go                     ; page 0 again, GO, out of loopback,
@@ -700,16 +693,18 @@ ne_t_ovw2:  db 3                                ; ...and once the ring has
 ; out: AL = the page. The card is on page 0 again.
 ; -----------------------------------------------------------------------------
 ne_curr:
-    push bx
-    mov ax, (NE_PAGE1 | NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov al, NE_CURR
-    call ne_in
-    mov bl, al
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov al, bl
-    pop bx
+    push dx                     ; THE PORTS DIRECT, ne_dma_read's walk: one
+    mov dx, [eth_base]          ; load and a step between neighbours where
+    mov al, NE_PAGE1 | NE_STA | NE_RD_ABORT ; three ne_out/ne_in calls each
+    out dx, al                  ; rebuilt base + register behind a push/pop
+    add dx, NE_CURR - NE_CR     ; pair (driver size pass 1: per frame, on
+    in  al, dx                  ; ne_rx's path)
+    sub dx, NE_CURR - NE_CR
+    push ax
+    mov al, NE_STA | NE_RD_ABORT
+    out dx, al
+    pop ax
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -862,16 +857,16 @@ ne_overflow:
     push si
     mov si, ne_t_ovw1
     call ne_outs
+    mov ah, [eth_pstart]
     mov al, NE_BNRY
-    mov ah, [eth_pstart]
-    call ne_out
-    mov ah, [eth_pstart]
+    call ne_out                 ; (AX kept)
     inc ah
     mov [eth_next], ah
+    mov cl, ah                  ; ...and held: CX is spent since the stop
     mov ax, (NE_PAGE1 | NE_STA | NE_RD_ABORT) << 8 | NE_CR
     call ne_out
+    mov ah, cl
     mov al, NE_CURR
-    mov ah, [eth_next]
     call ne_out
     mov si, ne_t_ovw2
     call ne_outs
@@ -928,17 +923,21 @@ ne_tx_i:
     mov ax, cx
     call ne_dma_write
     pop cx
-    mov al, NE_TPSR
-    mov ah, [eth_txpg]
-    call ne_out
-    mov al, NE_TBCR0
-    mov ah, cl
-    call ne_out
-    mov al, NE_TBCR1
-    mov ah, ch
-    call ne_out
-    mov ax, (NE_STA | NE_TXP | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
+    push dx                     ; THE PORTS DIRECT, ne_dma_write's walk: four
+    mov dx, [eth_base]          ; ne_out calls were four rebuilds of base +
+    add dx, NE_TPSR             ; register on every frame sent (driver size
+    mov al, bh                  ; pass 1). BH = [eth_txpg] still: ne_dma_write
+    out dx, al                  ; keeps BX
+    inc dx                      ; NE_TBCR0
+    mov al, cl
+    out dx, al
+    inc dx                      ; NE_TBCR1
+    mov al, ch
+    out dx, al
+    sub dx, NE_TBCR1 - NE_CR
+    mov al, NE_STA | NE_TXP | NE_RD_ABORT
+    out dx, al
+    pop dx
     inc word [eth_ntx]
     clc
 .out:

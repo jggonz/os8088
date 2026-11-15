@@ -134602,11 +134602,13 @@ when the card has gone away.
 ### 72.3 Big-endian is the wire's and little-endian is ours
 
 `drivers/ether/inet.inc` — Ethernet framing, ARP, IP, ICMP echo, UDP and the
-checksums. There is not one `mov ax, [bx+IPO_LEN]` in it: a header word is
-fetched a byte at a time into AH then AL (`be_get`) or stored the same way
-(`be_put`), because a plain word access assembles, runs, and is wrong by a
-factor of 256 — which for a length means a packet either enormous or empty and
-for a port a socket nobody can find.
+checksums. No header word in it is used as it is loaded: it is turned round
+with `xchg ah, al` before it means anything and again before it is stored, or
+compared in place against a constant `BE16()` turned round at assembly time
+(the `be_get`/`be_put` pair, a byte at a time behind a call, until driver size
+pass 1), because a plain word access used as it stands assembles, runs, and is
+wrong by a factor of 256 — which for a length means a packet either enormous or
+empty and for a port a socket nobody can find.
 
 **The checksum is the one deliberate exception.** The one's complement sum of a
 byte-swapped stream is the byte swap of the sum, so ordinary word loads plus a

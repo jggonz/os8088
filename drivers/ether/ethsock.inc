@@ -26,16 +26,15 @@
 ; --- NETV_OPEN ---------------------------------------------------------------
 ; in ES:SI = a NUL host, CX = the port; out AX = a handle
 eth_v_open:
-    mov [eth_usi], si           ; **BANKED, NOT RE-POPPED.** The obvious form -
-    push bx                     ; pop the pushed SI back when the name is
-    push cx                     ; wanted - reads the wrong slot the moment
-    push dx                     ; anything is pushed after it, and there is
-    push si                     ; something: DI
-    push di
-    call eth_pump
-    mov si, eth_ip
-    call ip_zero
-    jz  .nolink
+    push bx                     ; **SI IS HELD, NOT RE-POPPED.** The obvious
+    push cx                     ; form - pop the pushed SI back when the name
+    push dx                     ; is wanted - reads the wrong slot the moment
+    push si                     ; anything is pushed after it, and there is
+    push di                     ; something: DI. It was banked in a word
+    call eth_pump               ; (eth_usi) until driver size pass 1; it is
+    mov ax, [eth_ip]            ; simply never written: eth_pump, sk_alloc
+    or  ax, [eth_ip+2]          ; and tcp_lport all keep it, and ip_zero's
+    jz  .nolink                 ; question is asked in AX instead of SI
     mov dx, cx                  ; the port, across sk_alloc
     call sk_alloc
     jc  .full
@@ -48,8 +47,7 @@ eth_v_open:
     lea di, [bx+SKO_HOST]       ; the name, out of their segment and into the
                                 ; record - bounded by the record and never by
     mov cx, NET_HOSTMAX - 1     ; the NUL, which came off a package
-    mov si, [eth_usi]
-    call usr_read
+    call usr_read               ; SI = their offset, as they passed it
     mov byte [bx+SKO_HOST+NET_HOSTMAX-1], 0
 
     lea si, [bx+SKO_HOST]
@@ -67,8 +65,7 @@ eth_v_open:
     call tcp_syn
 .ok:
     mov al, [eth_hnd]
-    xor ah, ah
-    clc
+    xor ah, ah                  ; (and CF=0: `xor` clears it)
     jmp short .pop
 .nolink:
     mov ax, NETE_NOLINK
@@ -101,10 +98,9 @@ eth_v_status:
     pop bx
     clc
     ret
-.no:
+.no:                            ; (CF = 1: sk_h2p's)
     pop dx
     pop bx
-    stc
     ret
 
 ; --- NETV_SEND ---------------------------------------------------------------
@@ -206,20 +202,13 @@ eth_v_recv:
     ; segment it then sends is acknowledged with the space that opened after
     ; it - so nothing is lost by not repeating ourselves.
     ; -----------------------------------------------------------------------
-    push ax
     mov ax, [bx+SKO_RXC]        ; ...and half of ITS ring, not the driver's
-    shr ax, 1
-    cmp dx, ax                          ; was it at or above half...
-    jb  .noadv
+    shr ax, 1                   ; (AX is the handle the pops below restore,
+    cmp dx, ax                  ; so it is free here) was it at or above half...
+    jb  .out
     cmp [bx+SKO_RXN], ax                ; ...and is it below half now?
-    jae .noadv
-    pop ax
-    push cx
-    call tcp_ack
-    pop cx
-    jmp short .out
-.noadv:
-    pop ax
+    jae .out
+    call tcp_ack                        ; (which keeps CX, the answer)
 .out:
     pop si
     pop dx
@@ -262,9 +251,8 @@ eth_v_bulk:
     xor ax, ax
     clc
     ret
-.no:
+.no:                                    ; (CF = 1: sk_h2p's)
     pop bx
-    stc
     ret
 
 ; --- NETV_SKTAB --------------------------------------------------------------
@@ -276,7 +264,6 @@ eth_v_bulk:
 ; built against a smaller table still reads whole records.
 eth_v_sktab:
     push bx
-    push dx
     push di
     push bp
     push es
@@ -285,14 +272,12 @@ eth_v_sktab:
     mov es, [eth_useg]
     cld
     xor cx, cx                          ; ...and CX becomes the answer
-    xor dl, dl
+    mov bx, sk_tab                      ; BX = the record, walked
 .l:
     mov ax, cx
     add ax, SKI_SZ
     cmp ax, bp
     ja  .done                           ; a partial record is worse than none
-    mov al, dl
-    call sk_ptr                         ; BX = the record (CX survives it)
     mov si, sk_ski                      ; ...and the record's fields in SKI
 .f:                                     ; order, each a WORD to ES:DI: a byte
     lodsb                               ; field's spare half is overwritten by
@@ -309,15 +294,14 @@ eth_v_sktab:
     cmp si, sk_ski_end
     jb  .f
     add cx, SKI_SZ
-    inc dl
-    cmp dl, NET_SOCKS
+    sub bx, -SK_SZ                      ; tcp.inc's SK_NEXT, which is not
+    cmp bx, SK_END                      ; defined yet where this is included
     jb  .l
 .done:
     mov al, NET_SOCKS
     pop es
     pop bp
     pop di
-    pop dx
     pop bx
     clc
     ret
@@ -404,10 +388,7 @@ eth_v_abort:
     mov al, NSK_FREE                    ; its .free arm
     call tcp_abort
 .no:
-    pop bx
-    pop ax
-    clc
-    ret
+    jmp short eth_v_close.no            ; ...and eth_v_close's own tail
 
 ; --- NETV_ADDR ---------------------------------------------------------------
 ; out ES:DI (the CALLER's) = four bytes of IPv4; CF=1 / NETE_NOLINK if none yet
@@ -549,18 +530,19 @@ eth_v_raw:
     cmp byte [eth_raw], 0
     jne .held
     mov byte [eth_raw], 1
-    mov word [eth_nraw], 0      ; the counters are per CLAIM, so a probe can
-    mov word [eth_nrawtx], 0    ; read them without knowing what ran before it
+    push cx
+    push si
+    xor cx, cx                  ; the counters are per CLAIM, so a probe can
+    mov [eth_nraw], cx          ; read them without knowing what ran before it
+    mov [eth_nrawtx], cx
     or  di, di                  ; ...AND THE STATION ADDRESS, because a
     jz  .nomac                  ; consumer that is the stack now cannot build
-    push cx                     ; one frame without it (netpkg.inc)
-    push si
-    mov si, eth_mac
+    mov si, eth_mac             ; one frame without it (netpkg.inc)
     mov cx, 6
     call usr_write              ; SI ours, DI theirs
+.nomac:
     pop si
     pop cx
-.nomac:
     clc
     ret
 .release:
@@ -600,12 +582,13 @@ eth_v_rawtx:
                                 ; already taken (ne_tx, rt_tx): a second `inc`
                                 ; here counted every raw frame twice (kernel
                                 ; size pass 18 - the owner's call, -4)
-    pop word [eth_useg]
-    pop di
+    clc
+.pop:                           ; ONE TAIL: the frame's path runs the same
+    pop word [eth_useg]         ; instructions it did, and the refusals jump
+    pop di                      ; in with their CF set (driver size pass 1)
     pop si
     pop cx
     pop bx
-    clc
     ret
 .gone:
     mov ax, NETE_NOLINK         ; the card never finished the previous transmit
@@ -620,13 +603,8 @@ eth_v_rawtx:
                                 ; frame it wanted to send would have gone out
                                 ; under a MAC our own stack is still using
 .err:
-    pop word [eth_useg]
-    pop di
-    pop si
-    pop cx
-    pop bx
     stc
-    ret
+    jmp short .pop
 
 ; --- NETV_RAWRX --------------------------------------------------------------
 ; in DI = a buffer, CX = its capacity, DX = the segment it is in (0 = the
