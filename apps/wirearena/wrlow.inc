@@ -27,9 +27,11 @@
 ; its tag as a wall's does. Each corner keeps its own height (WL_CN, WL_CS):
 ; a ramp's low-end corners stand on the floor. A corner in
 ; the view is projected once a box (WL_KC..WL_KF); an edge with a corner out
-; of it is clipped (wa_clip) and that end projected on the spot - the clip
-; never moves an end in the view, whose record stands - unless it lies
-; under the screen whole (wl_face). A pass is culled before its edges are
+; of it has that end made where the edge meets the screen's edge, as a
+; wall's is (wl_send, wa_vend) - or, a ramp's side or an end the screen's
+; edge cannot stand for, is clipped (wa_clip) and that end projected on the
+; spot; the clip never moves an end in the view, whose record stands -
+; unless it lies under the screen whole (wl_face). A pass is culled before its edges are
 ; set up where its top lies at or under every open column's clip, and its
 ; floor edge alike (wl_draw).
 ; An edge is walked across its columns in RUNS of one half-row (wl_run,
@@ -573,6 +575,58 @@ wl_face:
     cmp cx, 4*WA_HR-1
     jge .under
 .cut:
+    ; A LEVEL EDGE's end out of the view is made where the edge meets the
+    ; screen's edge (wl_send: wa_vend's way, the walls' since pass 6): no
+    ; clip, the end's inverse depth by two multiplies, and nothing off the
+    ; screen to step over. A ramp's side (two heights), and an end the
+    ; screen's edge cannot stand for, take the clip
+    mov ax, [si+WL_CN-WL_KC]
+    cmp ax, [di+WL_CN-WL_KC]
+    jne .clip2
+    mov bx, [si+WL_CV-WL_KC]
+    mov bp, [di+WL_CV-WL_KC]
+    mov ax, [wa_vpc+bx]         ; (both ends beside the view on one side,
+    cmp ax, [ds:wa_vpc+bp]      ; or both behind it: nothing of the edge
+    jne .side                   ; is on the screen - wa_vcam's sentinels
+    test byte [wa_vok+bx], 1    ; agree only there, an end in the view
+    jz .under                   ; having its own column)
+.side:
+    mov ax, bp                  ; (the edge's two vertices, for wa_vend's
+    mov ah, al                  ; plane)
+    mov al, bl
+    mov [wa_fv], ax
+    push si                     ; (the first end's record)
+    test byte [wa_vok+bx], 1
+    jnz .s1
+    push di
+    mov di, wl_e1c
+    call wl_send                ; (SI = its record, BP = the other's vertex)
+    pop di
+    jc .back
+    mov si, wl_e1c
+.s1:                            ; SI = what the first end is drawn from
+    mov bx, [di+WL_CV-WL_KC]
+    test byte [wa_vok+bx], 1
+    jnz .s2
+    push si
+    mov si, di
+    mov al, [wa_fv]
+    xor ah, ah
+    mov bp, ax
+    mov di, wl_e2c
+    call wl_send
+    pop si
+    jc .back
+    mov di, wl_e2c
+.s2:
+    pop ax                      ; (the first end's record: done with)
+    jmp wl_draw
+.back:                          ; (the records again: the second is the
+    pop si                      ; corner after the first's)
+    lea di, [si-(wl_c+WL_KC)+WL_REC]
+    and di, 3*WL_REC
+    add di, wl_c+WL_KC
+.clip2:
     mov bx, [si+WL_CV-WL_KC]
     mov bp, [di+WL_CV-WL_KC]
     mov ax, [wa_vx+bx]
@@ -622,6 +676,73 @@ wl_face:
 .e2:
     jmp wl_draw
 .under:
+    ret
+
+; wl_send - SI = a LEVEL edge's end out of the view (its corner's record, at
+; WL_KC), BP = the other end's vertex x 2, DI = the quad to make (wl_e1c or
+; wl_e2c), [wa_fv] the edge's two vertices: the end where the edge meets
+; the screen's edge, as wa_vend makes a wall's - its column the edge's (x 16),
+; its inverse depth on the face's plane there, its rows from that at its
+; corner's height (and, with [wl_two], the floor's). The edge leaves the
+; view on the side its out end's sentinel says (wa_vcam: beside the view),
+; or, an end behind the eye, on the side its line crosses the eye's plane
+; - the sign of x at z = 0, x_out z_o - x_o z_out (z_o > 0). Wherever the
+; end's own place is off the screen there the edge is too (x / z is
+; monotonic along it ahead of the eye), so an edge wholly beside the screen
+; draws nothing either way. CF = 1: the clip's way - behind the near plane
+; but ahead of the eye, both ends behind, or wa_vend's own refusals.
+; Clobbers AX, BX, CX, DX, SI, DI
+wl_send:
+    mov bx, [si+WL_CV-WL_KC]
+    mov ax, [wa_vpc+bx]
+    cmp ax, 0x8000
+    je .behind
+    or ax, ax                   ; (beside the view: -WA_VOFF its left)
+    js .left
+    jmp short .right
+.behind:
+    cmp word [wa_vz+bx], 0
+    jg .no
+    cmp word [ds:wa_vpc+bp], 0x8000
+    je .no
+    mov ax, [wa_vx+bx]
+    imul word [ds:wa_vz+bp]
+    push dx
+    push ax
+    mov ax, [ds:wa_vx+bp]
+    imul word [wa_vz+bx]
+    pop cx
+    sub cx, ax
+    pop ax
+    sbb ax, dx
+    jl .left
+    jg .right
+    jcxz .no                    ; (through the eye: no side)
+.right:
+    mov ax, [wa_vpc+WA_VS2]     ; (the screen's right edge, x 16)
+    mov cx, 2
+    jmp short .go
+.left:
+    xor ax, ax
+    xor cx, cx
+.go:
+    push ax
+    push si
+    push di
+    mov si, bx
+    call wa_vend                ; BX = the inverse depth there
+    pop di
+    pop si
+    pop ax
+    jc .out
+    stosw                       ; its column, and its rows as wl_proj's
+    mov ch, [si+WL_CS-WL_KC]
+    mov si, [si+WL_CN-WL_KC]
+    jmp wl_prows
+.out:
+    ret
+.no:
+    stc
     ret
 
 ; wl_post - SI = a corner's record (an offset into wl_c), a face's start
@@ -727,7 +848,8 @@ wl_proj:
     stosw
     shl bx, 1                   ; (its inverse depth: wa_rcp's, the point
     mov bx, [wa_rcp+bx-WA_NEAR*2] ; on a box's edge, inside the room)
-    mov ax, si
+wl_prows:                       ; (wl_send's: BX the inverse depth, SI and
+    mov ax, si                  ; CH the pair, DI past the column; CF = 0)
     mov cl, ch
     imul bx
     sar dx, cl
@@ -746,6 +868,7 @@ wl_proj:
     sub ax, dx
 .nof:
     stosw
+    clc
     ret
 
 ; wl_draw - a pass over the columns between two ends, SI and DI: each the
