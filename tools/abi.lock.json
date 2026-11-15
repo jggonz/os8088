@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "0fd0ab8da4ae02ad816d1bebacbfba699ecf13e6c1368ebbac1e72bb466b3126",
+  "fingerprint": "0bf9b72fd1e31efdb429fb3f630b0cdc8d87e8f1085666b8c5ce1bf4e6dc8b4f",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "eb3ade0bf9b0259bfe62a93adc923aa6690fc7e09d9769ba09987617bddf7a9c",
+  "fingerprint": "94c3797bf0e943796c7b336c7bbfb1dd4c984efc9a73110e2984abb9684b18d0",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2336,6 +2336,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "merge of elendilon into driver size pass 1: DRVM_CEIL_NET 35 -> 34 (ETHER.DRV with UDP is 35 sectors, not 36, after the pass) - a caption's ceiling, no cell moved, no DRV_VER bump (driver size pass 1)",
+   "to": 14
+  },
+  {
+   "fingerprint": "94c3797bf0e943796c7b336c7bbfb1dd4c984efc9a73110e2984abb9684b18d0",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_KEY_MAP's contract now says kern_small refuses it (CF = 1, AX = 1, the caller's bytes untouched): the owner gated it off that kernel, which is locked under its 70.5KB heap rung (guard 1b). The cell is where it was on every kernel and its refusal is OSAPI_MOUSE_REL's, so nothing built before changes and PKG_FMT stays 13.",
+   "to": 13
+  },
+  {
+   "fingerprint": "0bf9b72fd1e31efdb429fb3f630b0cdc8d87e8f1085666b8c5ce1bf4e6dc8b4f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_KEY_MAP's contract now says kern_small refuses it (CF = 1, AX = 1, the caller's bytes untouched): the owner gated it off that kernel, which is locked under its 70.5KB heap rung (guard 1b). The cell is where it was on every kernel and its refusal is OSAPI_MOUSE_REL's, so nothing built before changes and PKG_FMT stays 13.",
    "to": 14
   }
  ]

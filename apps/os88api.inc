@@ -6473,7 +6473,8 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; kern_small REFUSES: CF = 1, AX = 1
 %define OSAPI_KEY_MAP       KERNEL_SEG:0x0239   ; THE WHOLE KEY-STATE MAP
                                  ; (SPEC.md 9.7.3): DS:DI = KEYMAP_BYTES of
-                                 ; yours, filled with OSAPI_KEY_DOWN's map -
+                                 ; yours (kern_small REFUSES: CF = 1, AX = 1,
+                                 ; the bytes untouched), filled with OSAPI_KEY_DOWN's map -
                                  ; bit (s & 7) of byte (s >> 3) set while make
                                  ; scancode s is held. CF = 0, every register
                                  ; kept (not the other flags). ONE far call for

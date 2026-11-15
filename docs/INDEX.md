@@ -127,7 +127,7 @@ Read first: [§9 mouse.inc — the pointer: serial and PS/2 mice, and the cursor
 | `0x01FF` | `OSAPI_MOUSE_FEED` | AX = dx, BX = dy (signed; POSITIVE dy IS DOWN), CL = buttons in mouse_btn's bits (1 left, 2 right) and, in its top SIX bits, the WHEEL: signed... |
 | `0x0156` | `OSAPI_EVQ_PENDING` | out AX = events still queued behind the one being dispatched (SPEC.md 13.4)... |
 | `0x0236` | `OSAPI_MOUSE_REL` | RELATIVE MOTION (SPEC.md 9.14): out CX = dx, DX = dy, the raw mickeys since the LAST call (signed, unclamped, + right/down), both then zeroed... |
-| `0x0239` | `OSAPI_KEY_MAP` | THE WHOLE KEY-STATE MAP (SPEC.md 9.7.3): DS:DI = KEYMAP_BYTES of yours, filled with OSAPI_KEY_DOWN's map... |
+| `0x0239` | `OSAPI_KEY_MAP` | THE WHOLE KEY-STATE MAP (SPEC.md 9.7.3): DS:DI = KEYMAP_BYTES of yours (kern_small REFUSES: CF = 1, AX = 1, the bytes untouched), filled with... |
 
 ### Files and volumes
 

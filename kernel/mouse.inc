@@ -1669,13 +1669,14 @@ osapi_mouse_rel:
     pop ds
     retf
 %else
-; kern_small: OSAPI_MOUSE_REL REFUSES (SPEC.md 9.14) - the owner gated the
-; accumulator out of the 64KB machine's budget. The cell stays where every
-; kernel has it and lands here: AX = 1, CF = 1 (`cmp al, 2` borrows as `stc`
-; sets it, and makes the body six bytes, EVEN, for t_hotpar)
+; kern_small: OSAPI_MOUSE_REL AND OSAPI_KEY_MAP REFUSE (SPEC.md 9.14, 9.7.3) -
+; the owner gated both off the 128KB machine, which is locked under its
+; 70.5KB heap rung. Both cells stay where every kernel has them and land
+; HERE: AX = 1, CF = 1, api_refuse's answer (xm_copy's three instructions,
+; called near), every other register kept. Four bytes, EVEN, for t_hotpar
 osapi_mouse_rel:
-    mov ax, 1
-    cmp al, 2
+osapi_key_map:
+    call xm_copy
     retf
 %endif
 
@@ -3120,7 +3121,13 @@ kbd_down:
 ; CF is 0 on both paths: `cmp [..], 0` never borrows, and the arm's first
 ; answer is always "up". No `cld`: DF = 0 on entry (SPEC.md 1). 32 bytes, 35
 ; on kern_mega (KDS), EVEN on every real-mode kernel for t_hotpar
+;
+; NOT ON kern_small (the owner, 2026-11-15): that kernel is locked under its
+; 70.5KB heap rung (SPEC.md 24.5.7's 128KB machine), and this body was 32 of
+; the 36 bytes that put it over. Its cell refuses there, beside
+; OSAPI_MOUSE_REL's (osapi_mouse_rel below)
 ; -----------------------------------------------------------------------------
+%ifndef KERN_SMALL
 osapi_key_map:
     push si
     push di
@@ -3143,6 +3150,7 @@ osapi_key_map:
     pop di
     pop si
     retf
+%endif
 
 ; =============================================================================
 ; The overrun guard (SPEC.md 9.8) - A FULL BIOS BUFFER IS A HANG, NOT A BEEP

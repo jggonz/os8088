@@ -410,7 +410,9 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   are proved inside one page by guard 6 instead (SPEC.md 2.1.1).
 - **Memory is THREE rules and three quantities** (docs/KERNEL-MEMORY.md):
   **kern_big fully RESIDES in 100KB at the desktop**, **kern_small fully
-  RESIDES in 64KB** — every non-purgeable byte, no drivers, no XMS, on VGA
+  RESIDES in 64KB** — and its 128KB machine's heap is LOCKED at 70.5KB
+  (guard 1b, `HEAP_SEG` <= 0x0E60, no grace: the owner, 2026-11-15) —
+  every non-purgeable byte, no drivers, no XMS, on VGA
   (guard 1's `KERN_BUDGET`, DERIVED from those, plus `tests/kernresident.py`
   and `tests/small128.py` for the half an assembler cannot see) — and **BOTH
   BOOT on 128KB** (guard 5, `MIN_RAM_KB`, asserted by booting each kernel on a
