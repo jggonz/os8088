@@ -8682,7 +8682,13 @@ SOAK = [
         "bots' dice: 79 to 132 s measured). Red with the touch's team test "
         "inverted (6 checks), the capture's home test dropped (4), "
         "wa_hurt's teammate guard out (1) and wc_bgoal returning at once "
-        "(one capture in four minutes).",
+        "(one capture in four minutes). And THE WEAPON'S SPRITE under "
+        "CTF's lines: the overlay holds the flag line before the weapon's "
+        "cells, and wa_ovbuild makes a sprite's cells from none - the "
+        "shotgun's 12 (its stock's 8 brown ones on the glass), then the "
+        "pistol's 7. Red with the index cleared for the reload's arm alone "
+        "(16 counted both times, 1 brown cell): the owner's stray blocks "
+        "after a respawn.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wamodes", "soak", py("tests/wamodes.py"), 25.0,
@@ -8742,7 +8748,7 @@ SOAK = [
         "16 units out (4 checks each).",
         needs=("marty", "nasm"), cpus=4,
         wants=("build/os8088-360.img", "build/warena360.img")),
-    Row("wastill", "soak", py("tests/wastill.py"), 33.0,
+    Row("wastill", "soak", py("tests/wastill.py"), 40.0,
         "WIREARENA'S STANDING VIEW DRAWS THE MOVING VIEW'S PICTURE "
         "(docs/plans/WIREARENA-ARENAS-PLAN.md 5). The renderer keeps work "
         "while the view stands - a floor line's walk, a low box's corners "
@@ -8758,10 +8764,16 @@ SOAK = [
         "single-stepped, must enter neither wa_thing (a pickup made again) "
         "nor wa_vert (a corner made again) while wl_vert is asked and "
         "pickup cells are plotted - the kept paths are the ones that ran. "
+        "And a BLINK, three poses of the twin before the path's health "
+        "pack: no pickup there on the frame the view moves, all back on "
+        "the next - the kept places' key counts the view's changes on a "
+        "frame that draws none too. "
         "Red with the pickups' key not reading the eye and the pitch (11 "
         "cells, the twin's rise), wl_vert taking a corner never stamped "
-        "(49 cells, the heights' rise) and the frame's corner maker always "
-        "wa_vert (both arenas' kept check).",
+        "(49 cells, the heights' rise), the frame's corner maker always "
+        "wa_vert (both arenas' kept check) and the key counted only where "
+        "a pickup is drawn (the blink: the pack where the pose before saw "
+        "it).",
         needs=("marty", "nasm"), cpus=4,
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
