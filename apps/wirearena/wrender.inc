@@ -2885,6 +2885,46 @@ wa_fclpc:
 ; bottom is under the screen for most of a steep span - and with both gone
 ; the rest of the span is opened and no more (wa_stail).
 %macro SPANLOOP 2
+; (THE LAYOUT IS THE POINT: a column's tests are SHORT jumps not taken. The
+; top's out-of-line blocks stand before the loop, the bottom's after it, so
+; each is in a short jump's reach - a target out of reach is NASM's inverted
+; jump round a near one on an 8086, TAKEN in the common case: 12 clk a test,
+; five a column)
+%if %1
+%%tf:                           ; the top STEPPED: its cell and the fill
+    dec bx                      ; (BX = the last column's top)
+    add bx, cx
+    push cx
+    xchg bx, cx
+    call wa_efill
+    pop cx
+    jmp %%t
+%%to:                           ; the top OFF the screen (or clipped): no
+    mov bx, [wa_pht]            ; cell - and no fill either unless the
+    mov [wa_pht], cx            ; last column's was on it, or off it the
+    cmp bx, [wa_cclip+si]       ; other way
+    jb %%tx
+    xor bx, cx
+    jns %%td
+    xor bx, cx
+%%tx:
+    push cx
+    xchg bx, cx
+    call wa_eoff
+    pop cx
+%%td:
+    or cx, cx                   ; above the screen, and moving up: for good
+    jns %%t
+    cmp byte [wa_tup], 0
+    je %%t
+  %if %2
+    jmp wa_ls01_b               ; (the bottom alone from here)
+  %else
+    jmp wa_stail
+  %endif
+%endif
+%%shut:                         ; (a nearer wall: wa_gap jumps the run, and
+    call wa_gap                 ; the loop goes on - falling into it)
 wa_ls%1%2:
     cmp word [wa_cov+si], 0
     jne %%shut
@@ -2948,42 +2988,6 @@ wa_ls%1%2_s:
     cmp si, [wa_end]
     jb wa_ls%1%2
     ret
-%%shut:                         ; (a nearer wall: wa_gap jumps the run)
-    call wa_gap
-    jmp wa_ls%1%2
-%if %1
-%%tf:                           ; the top STEPPED: its cell and the fill
-    dec bx                      ; (BX = the last column's top)
-    add bx, cx
-    push cx
-    xchg bx, cx
-    call wa_efill
-    pop cx
-    jmp %%t
-%%to:                           ; the top OFF the screen (or clipped): no
-    mov bx, [wa_pht]            ; cell - and no fill either unless the
-    mov [wa_pht], cx            ; last column's was on it, or off it the
-    cmp bx, [wa_cclip+si]       ; other way
-    jb %%tx
-    xor bx, cx
-    jns %%td
-    xor bx, cx
-%%tx:
-    push cx
-    xchg bx, cx
-    call wa_eoff
-    pop cx
-%%td:
-    or cx, cx                   ; above the screen, and moving up: for good
-    jns %%t
-    cmp byte [wa_tup], 0
-    je %%t
-  %if %2
-    jmp wa_ls01_b               ; (the bottom alone from here)
-  %else
-    jmp wa_stail
-  %endif
-%endif
 %if %2
 %%bf:
     dec bx
