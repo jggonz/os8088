@@ -108,7 +108,6 @@ WA_VAR wl_dcm, 2                ; off the fraction (the pass's: wl_draw),
 WA_VAR wl_dir, 2                ; and the half-row's step
 WA_VAR wl_col0, 2               ; a pass's first column x 2
 WA_VAR wl_sc, 2                 ; the loops' DX: the stamp, the pass's columns
-WA_VAR wl_prev, 2               ; the column before's half-row (a steep step)
 WA_VAR wl_tag, 1
 WA_VAR wl_k, 2                  ; a flight: the treads left, the
 WA_VAR wl_rise, 2               ; rise, the low face, and a tread's step
@@ -1149,21 +1148,22 @@ wl_rfloor:
 ; where the whole half-rows of two neighbouring columns are two or more
 ; apart, unless both ends are at or under the clip, where wa_slope fills
 ; nothing; a shut column leaves the next column's own value as the one
-; before it, so no step is filled across it.
+; before it, so no step is filled across it. The column before's value is
+; AX's between columns (the colour is put back for a cell: wl_fillc's and
+; wa_slope's put it back themselves).
 wl_l01s:
-    mov [wl_prev], cx
+    mov ax, cx
     jmp short .col
 .shut:
     add bp, [wl_stf]            ; (the next column's own values are the ones
     adc cx, [wl_stw]            ; before it: no step filled across this one)
-    mov [wl_prev], cx
+    mov ax, cx
     jmp .adv
 .col:
     cmp byte [wa_cov+si], 0
     jne .shut                   ; (shut)
     mov bx, cx                  ; a step of two half-rows or more from
-    sub bx, [wl_prev]           ; the column before's is filled
-    mov [wl_prev], cx
+    sub bx, ax                  ; the column before's is filled
     inc bx                      ; (-1..+1 -> 0..2: none)
     cmp bx, 3
     jb .nf
@@ -1175,6 +1175,7 @@ wl_l01s:
     js .over                    ; (over the screen's top: shut, nothing drawn)
     mov bx, cx
     mov al, [wa_hgl+bx]
+    mov ah, [wa_wcol]
     shl bx, 1
     mov bx, [wa_hroff+bx]
     add bx, si
@@ -1189,6 +1190,7 @@ wl_l01s:
 .inc:
     inc byte [wa_cstn+si]
 .next:
+    mov ax, cx                  ; (the one before, for the next column)
     add bp, [wl_stf]
     adc cx, [wl_stw]
 .adv:
@@ -1222,21 +1224,21 @@ wl_l01s:
 ; them, CX.BP its value, [wl_stw].[wl_stf] its step; each cell plotted where
 ; it is under the column's clip (ONE unsigned test: a row off either side
 ; reads as past it) and the column not shut, a steep step filled down to
-; the clip; nothing raised
+; the clip; nothing raised (the column before's value in AX between
+; columns, as wl_l01s keeps it)
 wl_f1:
-    mov [wl_prev], cx
+    mov ax, cx
     jmp short .col
 .shut:
     add bp, [wl_stf]            ; (the next column's own value is the one
     adc cx, [wl_stw]            ; before it: no step filled across this one)
-    mov [wl_prev], cx
+    mov ax, cx
     jmp short .adv
 .col:
     cmp byte [wa_cov+si], 0
     jne .shut                   ; (shut)
     mov bx, cx                  ; a step of two half-rows or more from
-    sub bx, [wl_prev]           ; the column before's is filled
-    mov [wl_prev], cx
+    sub bx, ax                  ; the column before's is filled
     inc bx                      ; (-1..+1 -> 0..2: none)
     cmp bx, 3
     jb .nf
@@ -1246,11 +1248,13 @@ wl_f1:
     jae .next
     mov bx, cx
     mov al, [wa_hgl+bx]
+    mov ah, [wa_wcol]
     shl bx, 1
     mov bx, [wa_hroff+bx]
     add bx, si
     WPLOT
 .next:
+    mov ax, cx
     add bp, [wl_stf]
     adc cx, [wl_stw]
 .adv:
@@ -1262,26 +1266,23 @@ wl_f1:
     ret
 wl_k160:    dw 0, 2*WA_MAXW, 4*WA_MAXW, 6*WA_MAXW
 
-; wl_fillc - CX = a column's edge (half-rows), BX = its step from the column
-; before's + 1 (not 0..2), SI = the column x 2: the step filled (wa_slope),
-; unless both ends are at or under the clip. Keeps CX; AH the colour again.
-; Clobbers AL, BX
+; wl_fillc - CX = a column's edge, AX = the column before's (half-rows,
+; two or more apart), SI = the column x 2: the step filled (wa_slope),
+; unless both ends are at or under the clip. Keeps CX; clobbers AX, BX
+; (AH the colour after a fill - the loops put it back for a cell)
 wl_fillc:
-    push cx
-    mov ax, cx
-    sub cx, bx
-    inc cx                      ; CX = the column before's
-    mov bx, cx
-    cmp bx, ax
+    mov bx, ax                  ; BX = the higher end
+    cmp ax, cx
     jl .min
-    mov bx, ax
+    mov bx, cx
 .min:
     cmp bx, [wa_cclip+si]
     jge .no
+    push cx
+    xchg ax, cx                 ; (AX = this column's, CX = the one before's)
     call wa_slope
-.no:
     pop cx
-    mov ah, [wa_wcol]
+.no:
     ret
 
 ; wl_shutc - SI = a column x 2: the column covered from the screen's top -
