@@ -496,9 +496,16 @@ impl DebugServer {
         // a fraction of a millisecond; a machine nobody is asking runs whole
         // batches as before. The guest is cycle-exact either way: a batch
         // boundary is where requests are served, not a guest event.
-        // MARTYPC_DEBUG_FINE=1 is the old behaviour, for an A/B.
+        //
+        // OFF BY DEFAULT (MARTYPC_DEBUG_FINE=10 turns it on), because it is
+        // NOT invisible to the guest: with it, fdlgchoose (an Enter in Save
+        // As never closed the chooser) and wimgtrip (a menu bar never
+        // carried Disk) failed 3 runs in 3 and passed with it off. The likely
+        // mechanism is input timing - a `key` with down and up, or a mouse
+        // packet, lands between batches, so a finer batch shortens what the
+        // guest sees of it - and that wants understanding before the cut.
         let fine = std::env::var("MARTYPC_DEBUG_FINE").ok()
-            .and_then(|v| v.parse::<u32>().ok()).unwrap_or(10).max(1);
+            .and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).max(1);
         let small = (batch / fine).max(1000);
         const CHATTY: Duration = Duration::from_millis(100);
         log::info!("Debug server: {} cycles per batch ({} while a client talks)",

@@ -124,10 +124,17 @@ techniques are cited as "SOAK-SPEED n".
     second (3.7 host ms idle, ~14 loaded), so a running machine's round trip
     averaged 5.6 host ms - cProfile of fmarrows: 11 of 19 host s in
     `recv_into`. While a command arrived within the last 100 ms the batch is
-    a tenth of that (`MARTYPC_DEBUG_FINE`, 1 = off); a machine nobody is
-    asking runs whole batches. A batch boundary is where requests are
-    served, not a guest event, so the guest is cycle-exact either way.
-    Needs the rebuild, as 11.
+    a tenth of that with `MARTYPC_DEBUG_FINE=10`; a machine nobody is
+    asking runs whole batches. **OFF BY DEFAULT, because it is NOT invisible
+    to the guest**: with it on, fdlgchoose (an Enter in Save As never closed
+    the chooser) and wimgtrip (the bar never carried Disk) failed 3 runs in
+    3, and passed with it off (`MARTYPC_DEBUG_FINE=1`) on the same binary.
+    The likely mechanism is input timing - a `key` with down and up, or a
+    mouse packet, is applied between batches, so a finer batch shortens
+    what the guest sees of it - not proven. Measured with it on (fmarrows,
+    loaded box): `recv_into` 9.9 -> 4.1 host s, the row 17.7 -> 15.4 host s.
+    Worth finishing: hold a key's up for a whole coarse batch's worth of
+    cycles server-side, then default it on.
 
 ## Measurements
 
