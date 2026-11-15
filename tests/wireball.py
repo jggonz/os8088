@@ -44,17 +44,42 @@ def artifact(name):
 
 
 class Mouse:
+    """CLOSED LOOP on the kernel's pointer words (os88qemu.mouse_to/
+    mouse_click/mouse_dblclick, SOAK-SPEED 15), tools/mouse.py's dead
+    reckoning only where they cannot be read (docs/plans/soak-speed-2/
+    qemubox.md)."""
+
     def __init__(self, machine):
         self.m = machine
+        self._ok = None
+
+    def closed(self):
+        if self._ok is None:
+            try:
+                os88qemu.mouse_where(self.m, S)
+                self._ok = True
+            except BaseException:       # noqa: BLE001 - no map: dead-reckon
+                self._ok = False
+        return self._ok
 
     def run(self, *args):
         subprocess.run([sys.executable, str(ROOT / 'tools/mouse.py'), self.m.path,
                         *map(str, args)], check=True, capture_output=True, cwd=ROOT)
 
     def to(self, x, y):
+        if self.closed():
+            try:
+                os88qemu.mouse_to(self.m, S, self.m.hmp, x, y)
+                return
+            except os88qemu.MouseError:     # (the serial-mouse contest eats
+                pass                        # the first packets: walk it)
         self.run('to', x, y)
 
     def dblclick(self, x, y):
+        if self.closed():
+            os88qemu.mouse_dblclick(self.m, S, self.m.hmp, x, y)
+            os88qemu.ui_done(self.m, S, cap=0.4)    # (was gsleep 0.4)
+            return
         self.to(x, y)
         subprocess.run([sys.executable, str(ROOT / 'tools/qmp.py'), self.m.path,
                         'mouse_button 1', 'sleep 0.08', 'mouse_button 0', 'sleep 0.12',
@@ -62,6 +87,9 @@ class Mouse:
                        check=True, capture_output=True, cwd=ROOT)
 
     def click(self, x, y):
+        if self.closed():
+            os88qemu.mouse_click(self.m, S, self.m.hmp, x, y)
+            return
         self.run('click', x, y)
 
 
