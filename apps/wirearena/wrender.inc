@@ -275,6 +275,8 @@ WA_VAR wa_tha, 1
 WA_VAR wa_thhb, 1               ;   a column's quadrant bits
 WA_VAR wa_thz, 2                ;   its z
 WA_VAR wa_thdx, 2               ;   its offset from the eye, x (wa_view)
+WA_VAR wa_vsp, 2                ;   sin + cos, cos - sin: wa_view's
+WA_VAR wa_vcm, 2                ;   factors, the frame's (wa_render)
 WA_VAR wa_ovoldn, 2             ; the overlay's cells as it last came in:
 WA_VAR wa_ovold, WA_MOV*2       ;   how many, and each's stamp's place
 WA_VAR wa_mmoo, 2               ; the minimap's block as it last came in:
@@ -973,6 +975,12 @@ wa_render:
     sub ax, [wa_newp]
     mov [wa_newn], ax
 .c_pk:                          ; (the labels: tools/watrace.py's stops)
+    mov ax, [wa_cos]            ; (wa_view's factors, for the things)
+    mov bx, ax
+    sub bx, [wa_sinv]
+    mov [wa_vcm], bx
+    add ax, [wa_sinv]
+    mov [wa_vsp], ax
     cmp byte [wa_ctfon], 0      ; (CTF-PLAN 4: the flags, as pickups are -
     je .c_pk1                   ; a team match's)
     call wa_flagsd
@@ -7694,41 +7702,46 @@ wa_thing:
 
 ; wa_view - AX, BX = a world point, CX = the least z worth having: its place
 ; in view space, z FIRST - one behind the eye (half of them, turning round)
-; costs two multiplies, not four. CF = 1: its z is under CX; else AX =
-; camera x (right), DX = z (ahead), the walls' own arithmetic. Clobbers BX,
-; CX, SI, DI.
+; costs two multiplies, not three. CF = 1: its z is under CX; else AX =
+; camera x (right), DX = z (ahead), the walls' own arithmetic: z = (dx cos +
+; dy sin) >> 14, x = (dx sin - dy cos) >> 14, the 32-bit sums exact. Three
+; multiplies make the two (Gauss's, for a complex product): k1 = (dx + dy)
+; cos, then z's sum is k1 - dy (cos - sin) and x's dx (sin + cos) - k1 - the
+; same integers, so the same bits, a multiply fewer for every thing ahead.
+; (|dx + dy| is at most twice the room, and |cos -+ sin| at most 2^14 x
+; sqrt 2: no factor leaves 16 bits.) Clobbers BX, CX, SI, DI.
 wa_view:
     sub ax, [wa_px]
     sub bx, [wa_py]
     mov [wa_thdx], ax
     mov di, cx
-    imul word [wa_cos]          ; z = (dx cos + dy sin) >> 14
+    add ax, bx
+    imul word [wa_cos]          ; SI:CX = k1 = (dx + dy) cos
     mov cx, ax
     mov si, dx
     mov ax, bx
-    imul word [wa_sinv]
-    add ax, cx
-    adc dx, si
+    imul word [wa_vcm]          ; dy (cos - sin)
+    xchg ax, bx
+    mov ax, cx
+    sub ax, bx
+    mov bx, si
+    sbb bx, dx                  ; BX:AX = dx cos + dy sin
     shl ax, 1
-    rcl dx, 1
+    rcl bx, 1
     shl ax, 1
-    rcl dx, 1
-    cmp dx, di
+    rcl bx, 1
+    cmp bx, di
     jl .out
-    mov di, dx
-    mov ax, [wa_thdx]           ; x = (dx sin - dy cos) >> 14
-    imul word [wa_sinv]
-    mov cx, ax
-    mov si, dx
-    mov ax, bx
-    imul word [wa_cos]
-    sub cx, ax
-    sbb si, dx
-    shl cx, 1
-    rcl si, 1
-    shl cx, 1
-    rcl si, 1
-    mov ax, si
+    mov di, bx
+    mov ax, [wa_thdx]
+    imul word [wa_vsp]          ; dx (sin + cos)
+    sub ax, cx
+    sbb dx, si                  ; DX:AX = dx sin - dy cos
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov ax, dx
     mov dx, di
     clc
     ret
