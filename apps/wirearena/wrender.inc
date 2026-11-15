@@ -173,7 +173,6 @@ WA_VAR wa_steep, 1              ; the span's edges can step >= 2 half-rows
 WA_VAR wa_crow, 2               ; this box's corner row (wa_corn)
 WA_VAR wa_ce0, 2
 WA_VAR wa_at, 12                ; this frame's attributes (A_*)
-WA_VAR wa_kmono, 1              ; ...for this wa_mono (FFh: none yet)
 WA_VAR wa_kfrow, WA_NJ*4*WA_NFIG ; each figure's two keyframe rows, out of
                                 ; the pose part (wa_kfrows)
 wa_cos  equ wa_fcs              ; the camera's cos and sin: the frame
@@ -405,24 +404,8 @@ wa_render:
     mov word [wa_newn], 0
     mov ax, [wa_newp]
     mov [wa_lp], ax
-    mov al, [wa_mono]           ; the attributes, when the adapter's kind
-    cmp al, [wa_kmono]          ; changes (wr_v_init forgets it: FFh)
-    je .attrd
-    mov [wa_kmono], al
-    mov si, wa_attrc
-    or al, al
-    je .attr
-    mov si, wa_attrm
-.attr:
-    mov di, wa_at
-    movsw
-    movsw
-    movsw
-    movsw
-    movsw
-    movsw
-.attrd:
-    mov ax, [wa_ang]
+    mov ax, [wa_ang]            ; (this frame's attributes, wa_at: the
+                                ; adapter's, made by INIT - wa_atset)
     mov cl, 6
     shr ax, cl
     mov [wa_cang], ax
@@ -656,10 +639,45 @@ wa_render:
     mov bl, al
     mov dl, [wa_bh+bx]
     dec dl
-    js .lfull                   ; no hint
-    jz .lhr
+    jns .lhint
+    jmp .lfull                  ; no hint
+; (THE HINTS' LAYOUT: the common two, 1 and 2, fall through and end in a
+; SHORT jump back to .lgo - an out-of-reach jcc is NASM's inverted one
+; round a near jump on an 8086, taken in the common case)
+.lhint:
+    jnz .lh2up
+    add bx, [wa_kr]             ; 1: still past the right edge's line?
+    mov bl, [bx]                ; the corner's vertex...
+    xor bh, bh
+    mov ax, [wa_vtx+bx]         ; ...its x and y indices (x 4: to 252,
+    xor bx, bx                  ; unsigned - 63 x values, HEDGES-PLAN 2):
+    xchg bl, ah                 ; AX = x's, BX = y's
+    mov di, ax
+    mov ax, [wa_xs+di+2]        ; x - z
+    sub ax, [wa_xc+di+2]
+    sub ax, [wa_yc+bx+2]
+    sub ax, [wa_ys+bx+2]
+    cmp ax, 3
+    jge .lgo                    ; still right of the view, or behind
+    jmp short .lmiss
+.lh2up:
     dec dl
-    jz .lhl
+    jnz .lh3up
+    add bx, [wa_kl]             ; 2: still left of the view?
+    mov bl, [bx]
+    xor bh, bh
+    mov ax, [wa_vtx+bx]
+    xor bx, bx
+    xchg bl, ah
+    mov di, ax
+    mov ax, [wa_xs+di+2]        ; x + z
+    add ax, [wa_xc+di+2]
+    add ax, [wa_ys+bx+2]
+    sub ax, [wa_yc+bx+2]
+    cmp ax, -3
+    jle .lgo                    ; still left of the view
+    jmp short .lmiss
+.lh3up:
     dec dl
     jz .lh3
     dec dl
@@ -685,41 +703,8 @@ wa_render:
     mul word [wa_vu]
     add bx, dx
     cmp bx, 3
-    jge .lgo
-    jmp short .lmiss
-.lhl:
-    add bx, [wa_kl]
-    mov bl, [bx]                ; the corner's vertex...
-    xor bh, bh
-    mov bx, [wa_vtx+bx]         ; ...its x and y indices (x 4: to 252,
-    mov al, bl                  ; unsigned - 63 x values, HEDGES-PLAN 2)
-    mov ah, 0
-    mov di, ax
-    mov bl, bh
-    xor bh, bh
-    mov ax, [wa_xs+di+2]        ; x + z
-    add ax, [wa_xc+di+2]
-    add ax, [wa_ys+bx+2]
-    sub ax, [wa_yc+bx+2]
-    cmp ax, -3
-    jle .lgo                    ; still left of the view
-    jmp short .lmiss
-.lhr:
-    add bx, [wa_kr]
-    mov bl, [bx]
-    xor bh, bh
-    mov bx, [wa_vtx+bx]
-    mov al, bl
-    mov ah, 0
-    mov di, ax
-    mov bl, bh
-    xor bh, bh
-    mov ax, [wa_xs+di+2]        ; x - z
-    sub ax, [wa_xc+di+2]
-    sub ax, [wa_yc+bx+2]
-    sub ax, [wa_ys+bx+2]
-    cmp ax, 3
-    jge .lgo                    ; still right of the view, or behind
+    jl .lmiss
+    jmp .lgo
 .lmiss:
     xor bx, bx
     mov bl, [si-4]
@@ -1001,6 +986,22 @@ wa_render:
     call wa_overlay
 .c_cr:
     call wa_cross
+    ret
+
+; wa_atset - the attributes (wa_at) for the display's kind, wa_mono: by
+; INIT, after every mode set - the only time wa_mono changes - rather than
+; copied every frame (12 bytes, ~480 clk a frame). Clobbers CX, SI, DI.
+wa_atset:
+    push ds
+    pop es
+    mov si, wa_attrc
+    cmp byte [wa_mono], 0
+    je .c
+    mov si, wa_attrm
+.c:
+    mov di, wa_at
+    mov cx, 6
+    rep movsw
     ret
 
 ; wa_geominit - once an arena is loaded (wa_main): the reciprocal table
@@ -1514,6 +1515,7 @@ wa_face:
     mov [wa_fv], ax
     xor bx, bx
     mov bl, ah
+    mov bp, bx                  ; (BP = v2 x 2, for .open)
     mov dx, [wa_vpc+bx]         ; THE PRE-CHECK: the columns it could reach,
     mov bl, al                  ; x 16 (a vertex in view is its own, one
     mov si, bx                  ; beside the view is beyond that edge -
@@ -1529,18 +1531,17 @@ wa_face:
     dec dx                      ; not after its tops, bottoms and inverse
     cmp ax, dx                  ; depths (two a frame on the play bench)
     jg .shut
-    or dx, dx                   ; wholly left of the screen, or right: off
-    js .shut                    ; it, whatever is open
-    cmp ax, [wa_w]
-    jge .shut
     shl ax, 1                   ; x 2 from here: BX, DX = the face's own
     shl dx, 1                   ; ends, before the screen clamps them (its
-    mov bx, ax                  ; corners'; wa_cs0 and wa_ce0 when both
-    or ax, ax                   ; ends are in the view)
+    js .shut                    ; corners'; wa_cs0 and wa_ce0 when both
+    mov cx, [wa_w2]             ; ends are in the view) - and wholly left
+    cmp ax, cx                  ; of the screen, or right: off it, whatever
+    jge .shut                   ; is open (the screen's 2W read once)
+    mov bx, ax
+    or ax, ax
     jns .lo
     xor ax, ax
 .lo:
-    mov cx, [wa_w2]
     dec cx
     dec cx
     cmp dx, cx
@@ -1571,9 +1572,7 @@ wa_face:
     mov [wa_ce0], dx
     lea ax, [di-2-wa_cov]       ; the first open column (wa_fspan's)
     mov [wa_cs], ax
-    mov bl, [wa_fv+1]
-    xor bh, bh
-    mov di, bx                  ; DI = v2 x 2
+    mov di, bp                  ; DI = v2 x 2
     mov al, [wa_vok+si]
     mov [wa_e1], al
     mov ah, [wa_vok+di]
@@ -2512,6 +2511,8 @@ wa_span:
 ; test the column's clip only where a low box has raised one in the range:
 ; with none raised, no low box has a cell there, and the plain passes draw
 ; the same cells.
+wa_fsfull:                      ; (wa_fspan's table full: in a short jump's
+    jmp wa_span.full            ; reach, so the test's common way is untaken)
 wa_fspanh:                      ; (heights' tall faces)
     push di
     call wa_fclpc
@@ -2521,7 +2522,7 @@ wa_fspan:
     inc bx                      ; a steep edge's way out takes it back): the
     inc bx                      ; table full stops drawing, as .reg does
     cmp bx, WA_MAXSP*2
-    jae wa_span.full
+    jae wa_fsfull
     mov [wa_tag], bx
     mov ax, [wa_vpc+si]         ; c1
     mov [wa_spcs+bx], ax
@@ -2896,6 +2897,46 @@ wa_fclpc:
 ; bottom is under the screen for most of a steep span - and with both gone
 ; the rest of the span is opened and no more (wa_stail).
 %macro SPANLOOP 2
+; (THE LAYOUT IS THE POINT: a column's tests are SHORT jumps not taken. The
+; top's out-of-line blocks stand before the loop, the bottom's after it, so
+; each is in a short jump's reach - a target out of reach is NASM's inverted
+; jump round a near one on an 8086, TAKEN in the common case: 12 clk a test,
+; five a column)
+%if %1
+%%tf:                           ; the top STEPPED: its cell and the fill
+    dec bx                      ; (BX = the last column's top)
+    add bx, cx
+    push cx
+    xchg bx, cx
+    call wa_efill
+    pop cx
+    jmp %%t
+%%to:                           ; the top OFF the screen (or clipped): no
+    mov bx, [wa_pht]            ; cell - and no fill either unless the
+    mov [wa_pht], cx            ; last column's was on it, or off it the
+    cmp bx, [wa_cclip+si]       ; other way
+    jb %%tx
+    xor bx, cx
+    jns %%td
+    xor bx, cx
+%%tx:
+    push cx
+    xchg bx, cx
+    call wa_eoff
+    pop cx
+%%td:
+    or cx, cx                   ; above the screen, and moving up: for good
+    jns %%t
+    cmp byte [wa_tup], 0
+    je %%t
+  %if %2
+    jmp wa_ls01_b               ; (the bottom alone from here)
+  %else
+    jmp wa_stail
+  %endif
+%endif
+%%shut:                         ; (a nearer wall: wa_gap jumps the run, and
+    call wa_gap                 ; the loop goes on - falling into it)
 wa_ls%1%2:
     cmp word [wa_cov+si], 0
     jne %%shut
@@ -2959,42 +3000,6 @@ wa_ls%1%2_s:
     cmp si, [wa_end]
     jb wa_ls%1%2
     ret
-%%shut:                         ; (a nearer wall: wa_gap jumps the run)
-    call wa_gap
-    jmp wa_ls%1%2
-%if %1
-%%tf:                           ; the top STEPPED: its cell and the fill
-    dec bx                      ; (BX = the last column's top)
-    add bx, cx
-    push cx
-    xchg bx, cx
-    call wa_efill
-    pop cx
-    jmp %%t
-%%to:                           ; the top OFF the screen (or clipped): no
-    mov bx, [wa_pht]            ; cell - and no fill either unless the
-    mov [wa_pht], cx            ; last column's was on it, or off it the
-    cmp bx, [wa_cclip+si]       ; other way
-    jb %%tx
-    xor bx, cx
-    jns %%td
-    xor bx, cx
-%%tx:
-    push cx
-    xchg bx, cx
-    call wa_eoff
-    pop cx
-%%td:
-    or cx, cx                   ; above the screen, and moving up: for good
-    jns %%t
-    cmp byte [wa_tup], 0
-    je %%t
-  %if %2
-    jmp wa_ls01_b               ; (the bottom alone from here)
-  %else
-    jmp wa_stail
-  %endif
-%endif
 %if %2
 %%bf:
     dec bx
@@ -3174,15 +3179,15 @@ wa_eoff:
     add bp, cx
 %endif
     jnc %%col
-    mov bx, [%2]                ; the next half-row (wa_fcell, inline)
-    add bx, [wa_fh]
-    mov [wa_fh], bx
+    mov bx, [%2]                ; the next half-row (wa_fcell, inline - but
+    add bx, [wa_fh]             ; its glyph: one half-row on, the next of
+    mov [wa_fh], bx             ; wa_hgl's two, ─ and _ by turns)
     cmp bx, WA_HR
     jae %%gone
 %if %3
     mov cx, bx
 %endif
-    mov al, [wa_hgl+bx]
+    xor al, WA_HGLX
     shl bx, 1
     mov bx, [wa_hroff+bx]
     add bx, si
@@ -3190,10 +3195,20 @@ wa_eoff:
 %%shut:
     cmp si, [wa_end]
     jae %%done
-%if %1
+%if %3 == 0
+  %if %1                        ; (a run of them, at once: wa_frun)
+    call wa_frun1
+  %else
+    call wa_frun2
+  %endif
+    jc %%gone
+    jmp %%col
+%else
+  %if %1
     inc word [wa_ncl]
-%endif
+  %endif
     jmp %%adv
+%endif
 %%off0:                         ; off the screen at the first column: and
     jcxz %%gone                 ; level, or moving further off (above it
     xor bx, [%2]                ; and going up, or under it and down)?
@@ -3246,6 +3261,96 @@ wa_fp:      FLATPASS 0, wa_db
 wa_foc:     FLATPASS 1, wa_dt, 1    ; (heights: against the column's clip)
 wa_fpc:     FLATPASS 0, wa_db, 1
 wa_ptab:    dw wa_fo, wa_fp, wa_foc, wa_fpc ; (by wa_fclp)
+
+; wa_frun1, wa_frun2 - a plain FLATPASS's RUN OF SHUT COLUMNS, pass 1's and
+; pass 2's, jumped at once as wa_gap jumps SPANLOOP's: one scan to the next
+; column the pass draws in (an open one in pass 1, one of the span's in pass
+; 2) or the end, and the fraction moved on by the run's k steps in one
+; multiply, its carries the half-rows the edge moved. A nearer box hides
+; ~7 columns at a time, each a turn of the pass's shut way (~180 clk in
+; pass 1, ~110 in pass 2). In: SI = the run's first column (not the end), BP,
+; CX, AX, DX, DI as the pass holds them. Out: CF = 0 - SI the column after
+; the run, BX and AL its cell and glyph, BP and [wa_fh] moved on, the run
+; counted into wa_ncl (pass 1); CF = 1 - the edge left the screen within the
+; run, [wa_fh] its first half-row off it (as a column at a time leaves it)
+; and SI still the run's first (pass 1's wa_openrest counts the run).
+; Keeps CX, DX, DI and AH.
+wa_frun1:
+    push ax
+    push cx
+    push dx
+    push di
+    xor ax, ax                  ; (on to an open column)
+    mov bx, wa_dt               ; BX = the edge's direction
+    jmp short wa_frun
+wa_frun2:
+    push ax
+    push cx
+    push dx
+    push di
+    mov al, dh                  ; (on to one of the span's)
+    xor ah, ah
+    mov bx, wa_db
+wa_frun:
+    mov [wa_fst], cx            ; (the step: a plain pass's own use of it)
+    lea di, [si+wa_cov+2]
+    mov cx, [wa_end]
+    sub cx, si
+    shr cx, 1
+    dec cx                      ; the columns between this one and the end
+    jz .rend
+    repne scasw
+    jne .rend
+    lea cx, [di-2-wa_cov]
+    jmp short .rhave
+.rend:
+    mov cx, [wa_end]            ; (none: the run reaches the end)
+.rhave:
+    sub cx, si
+    mov di, cx                  ; DI = the run x 2
+    shr cx, 1                   ; CX = k
+    mov ax, cx
+    mul word [wa_fst]
+    add bp, ax
+    adc dx, 0                   ; DX = the carries
+    jz .rsame
+    cmp word [bx], 0
+    jg .rdn
+    neg dx
+.rdn:
+    add dx, [wa_fh]
+    cmp dx, WA_HR
+    jae .roff
+    mov [wa_fh], dx
+.rsame:
+    cmp bx, wa_dt
+    jne .r2
+    add [wa_ncl], cx
+.r2:
+    add si, di                  ; SI = the column after the run
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    mov bx, [wa_fh]             ; (wa_fcell, inline)
+    mov al, [wa_hgl+bx]
+    shl bx, 1
+    mov bx, [wa_hroff+bx]
+    add bx, si                  ; (CF = 0)
+    ret
+.roff:
+    mov dx, WA_HR
+    cmp word [bx], 0
+    jg .ro1
+    mov dx, -1
+.ro1:
+    mov [wa_fh], dx
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
 
 ; wa_fcell - [wa_fh] in the column SI: AL = its glyph, BX = its cell, CF = 0;
 ; CF = 1 off the screen

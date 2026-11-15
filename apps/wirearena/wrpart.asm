@@ -80,8 +80,7 @@ wr_v_arena:                     ; DX = the arena part's segment
 ; cleared (the frame number restarts, so an old stamp could match), the lists
 ; emptied
 wr_v_init:
-    push ds
-    pop es
+    call wa_atset               ; (and ES = DS)
     xor bx, bx
     mov si, wa_rowo2
     mov di, wa_hroff
@@ -122,7 +121,6 @@ wr_v_init:
     mov [wa_newn], ax
     mov [wa_oldn], ax
     mov [wa_ovoldn], ax         ; (the overlay comes again: no old cells)
-    mov byte [wa_kmono], 0xFF   ; (and the attributes are made again)
     mov word [wa_newp], wa_lista
     mov word [wa_oldp], wa_listb
     retf
