@@ -190,4 +190,22 @@ soak rows and `megapkg`. Its results are in section 7.
 
 ## 7. The final pass
 
-(written when it finishes)
+The run was `tools/os88soak.py` over the union of the 156 soak rows the
+notes name, at `e01ce14c`: **150 ok, 1 FAIL, 6 SKIP** in 25 minutes.
+
+* **The skips.** Five rows want QEMU 9 (`hmahiber`, `b4ether`,
+  `b4ethswap`, `b4lease`, `hmadosret`), and `win16mscdex` wants the WIN16
+  reference fixtures. Neither is on this box. Bochs, 86Box, the PicoMEM host
+  firmware and `wiredisk` were installed for the run, so none of their rows
+  skipped.
+* **`megapkg`** (full tier) is ok.
+* **The failure** was `doscable`. Section 2.1 tells it: the cable transport
+  was reverted at `10af988a`.
+* **The rows the revert could reach were re-run once** on the fixed tree,
+  16 rows, **16 ok**: `doscable`, `socktest`, `fsclass`, `drvup`, `hmadrv`,
+  `wirezone`, `thewire`, `wire`, `netinst`, `netinstbad`, `netcoexist`,
+  `netpromise`, `romsock`, `sfx`, `dosnetarena`, `telnet`.
+
+`test-full` was not run. `end-of-week` is a feature branch, and the full
+tier is owed when this work first merges into `elendilon` (CLAUDE.md,
+Testing).
