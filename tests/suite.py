@@ -8689,12 +8689,14 @@ SOAK = [
         "line at the screen's edges in camera space and walks it by an "
         "error term, no divide; this row holds its picture to a referee "
         "that shares none of that arithmetic - the game's integer camera "
-        "space, then the line's image in exact rationals. Nine poses of "
+        "space, then the line's image in exact rationals. Ten poses of "
         "the twin through wa_render at a poked camera (tools/waposes.py), "
         "text VRAM read back: no floor-line cell more than a cell off the "
         "referee's lines, none missing where no box is in the view, none "
         "drawn through the tower from behind the west lift (wa_flhid and "
-        "the run it steps over), 85 in 100 the referee's own cell and "
+        "the run it steps over), none missing BEFORE the east tower where "
+        "both a line's ends lie in the tower's columns (the whole-line "
+        "skip), 85 in 100 the referee's own cell and "
         "dash (90 measured), and no divide fault. The same poses as a "
         "STILL view (drawn from the walk its first still frame kept) and "
         "as a NOD (the pitch alone moved: the rows' pass) must draw the "
@@ -8706,8 +8708,33 @@ SOAK = [
         "poses), a side cut's end left where it was (3 poses), a steep "
         "line that never steps (4 poses), a tall face's columns not asked "
         "about (55 cells through the tower), the kept walk's error not "
-        "loaded (62 cells), the rows' pass keeping the old rows (297) and "
-        "wa_dash not read (142 cells in odd columns and rows).",
+        "loaded (62 cells), the rows' pass keeping the old rows (297), "
+        "wa_dash not read (142 cells in odd columns and rows), the "
+        "whole-line skip not asking the line's row (3 cells before the "
+        "tower), and the direct cut's side sign turned or its bottom cut "
+        "16 units out (4 checks each).",
+        needs=("marty", "nasm"), cpus=4,
+        wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wastill", "soak", py("tests/wastill.py"), 33.0,
+        "WIREARENA'S STANDING VIEW DRAWS THE MOVING VIEW'S PICTURE "
+        "(docs/plans/WIREARENA-ARENAS-PLAN.md 5). The renderer keeps work "
+        "while the view stands - a floor line's walk, a low box's corners "
+        "(wl_vert: the vertices stamped last frame), a pickup's place on "
+        "the screen (wa_pickups' records) - and each is a chance to draw "
+        "last frame's picture. Twelve seeded poses each of the heights "
+        "arena and the twin through wa_render at a poked camera "
+        "(tools/waposes.py), four ways, an emulator each: MOVED (the view's "
+        "key forgotten: everything made), STILL, a NOD (the pitch alone "
+        "moved) and a RISE (the eye's height alone, which also changes the "
+        "corners a low box wants). Rows 0..22 of text VRAM must be the "
+        "moved view's in the other three, every cell; and the still frame, "
+        "single-stepped, must enter neither wa_thing (a pickup made again) "
+        "nor wa_vert (a corner made again) while wl_vert is asked and "
+        "pickup cells are plotted - the kept paths are the ones that ran. "
+        "Red with the pickups' key not reading the eye and the pitch (11 "
+        "cells, the twin's rise), wl_vert taking a corner never stamped "
+        "(49 cells, the heights' rise) and the frame's corner maker always "
+        "wa_vert (both arenas' kept check).",
         needs=("marty", "nasm"), cpus=4,
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,

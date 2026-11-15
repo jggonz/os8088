@@ -724,6 +724,7 @@ ARENA_ROOMH = {"a3": MH, "a4": 0}      # (the hedge's edge all of a height,
                                         # the owner's: its fills' and its
                                         # room's walls - HEDGES-PLAN 9)
 WA_MFL = 24                             # (wafb.inc's)
+WA_MFV = 24                             # (wafb.inc's: their distinct ends)
 
 
 def flines(tag):
@@ -1815,13 +1816,23 @@ def arena_tables(w, tag, boxes, start):
     graph_edges(tag, boxes)             # (the routes' checks: AI-PLAN 3.1)
     nodes = []
     box_tree(stacks(tag, boxes), nodes, boxes)
+    # an arena with no room walls (ARENA_ROOMH 0) draws nothing at the
+    # room's corners, so they are no vertices and their coordinates none of
+    # wa_products': its row of the corner table names vertex 0, unread
+    roomless = ARENA_ROOMH.get(tag, WALL_H) == 0
     pts = []
-    for (a, b, c, d) in [ROOM] + boxes:
+    for (a, b, c, d) in ([] if roomless else [ROOM]) + boxes:
         pts += [(a, b), (c, b), (c, d), (a, d)]
     segs = flines(tag)                  # (a floor line's ends: vertices too,
     if len(segs) > WA_MFL:              # made by the frame's cache)
         raise SystemExit("arenagen: arena %s: %d floor lines - at most %d"
                          % (tag, len(segs), WA_MFL))
+    ends = {(x0, y0) for (x0, y0, x1, y1) in segs} | \
+           {(x1, y1) for (x0, y0, x1, y1) in segs}
+    if len(ends) > WA_MFV:              # (wa_flinit's records: wa_fqvx)
+        raise SystemExit("arenagen: arena %s: its floor lines have %d "
+                         "distinct ends - at most %d" % (tag, len(ends),
+                                                         WA_MFV))
     for (x0, y0, x1, y1) in segs:
         if not (ROOM[0] <= min(x0, x1) and max(x0, x1) <= ROOM[2] and
                 ROOM[1] <= min(y0, y1) and max(y0, y1) <= ROOM[3]):
@@ -1862,7 +1873,9 @@ def arena_tables(w, tag, boxes, start):
         w("    db %d, %d" % (xs.index(x) * 4, ys.index(y) * 4))
     w(P + "corn:                        ; per box (the room first): its corners")
     w("                                ; c0..c3 as vertex x 2")
-    for (a, b, c, d) in [ROOM] + boxes:
+    if roomless:
+        w("    db 0, 0, 0, 0")
+    for (a, b, c, d) in ([] if roomless else [ROOM]) + boxes:
         w("    db " + ", ".join(str(vix[p] * 2) for p in
                                 [(a, b), (c, b), (c, d), (a, d)]))
     w(P + "bsp:                         ; kind (0 x, 1 y, 2 leaf), box x 4 (a")

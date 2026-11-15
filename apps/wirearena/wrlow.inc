@@ -59,6 +59,8 @@ WL_REC      equ 16
                                 ; wl_c's end, then wl_nvk
 
 %macro WL_BSS 0
+WA_VAR wl_pvc, 2                ; the view's count last frame
+WA_VAR wl_vp, 2                 ; this frame's corner maker: wa_vert, wl_vert
 WA_VAR wl_h, 2                  ; its height (a flight's, its top tread's)
 WA_VAR wl_kind, 1               ; its kind byte (wa_bxh), a flight's alone
 WA_VAR wl_lom, 1                ; a ramp's low face's bit (else 0): drawn
@@ -153,7 +155,7 @@ wl_bit:     db 1, 2, 4, 8, 1
     mov al, [wa_frame]
     cmp [wa_vst+bx], al
     je %%c
-    call wa_vert                ; (which takes the level's transform, wa_vtp:
+    call [wl_vp]                ; (wa_vert, which takes the level's transform -
 %%c:                            ; at ROUND the products' low words are not made)
     test byte [wa_vok+bx], 1
     jz %%n
@@ -220,6 +222,20 @@ wl_bit:     db 1, 2, 4, 8, 1
     call wl_face
 %%n:
 %endmacro
+
+; wl_vert - wa_vert on a frame whose view is where it was last frame
+; ([wl_vp], wa_render's): a vertex stamped THAT frame stands - its camera
+; place and its column are functions of the view alone - and is stamped
+; again with nothing made. Two corners of a low box in three were a
+; transform and a divide each, every still frame (ARENAS-PLAN 5). Keeps
+; what wa_vert keeps
+wl_vert:
+    mov ah, al
+    dec ah
+    cmp ah, [wa_vst+bx]
+    jne wa_vert
+    mov [wa_vst+bx], al
+    ret
 
 ; wa_lowbox - from wa_leaf: SI = a low box, DI = its record x 4 in wa_bxh,
 ; [wa_crow] its corners, [wa_wcol] its colour (ES = DS, as all through the
