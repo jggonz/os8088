@@ -33,10 +33,14 @@
 ; the floor lines' records (wa_flines). A VERTEX's: its column x 16 and
 ; quarter half-row once projected (first: a line's end is drawn from the
 ; pair), camera space, its x and y indices x 4 (words: wa_vtx's two bytes),
-; the view's planes it is outside of, and whether it is projected. A
-; LINE's: its two vertices' records, what it is in this view (0 nothing, 1
-; drawn between its vertices' projections, 2 cut: between its own two
-; ends), and those ends, each a column x 16 and a quarter half-row
+; the view's planes it is outside of, and its state - FS_ROW its row made,
+; FS_SIDE its x, its side (FO_L, FO_R: the same bits) and its column made,
+; which stand while the view does. A LINE's: its two vertices' records, what
+; it is in this view (0 nothing, 1 drawn between its vertices' own column
+; and row, 2 cut: between its own two ends), its WALK as last set up (FW_*:
+; kept from one still frame to the next), those ends, each a column x 16
+; and a quarter half-row, and the walk - what wa_flsh or wa_flst is entered
+; with
 FV_C    equ 0
 FV_Q    equ 2
 FV_X    equ 4
@@ -50,12 +54,25 @@ FO_N    equ 1                   ; nearer than the screen's bottom
 FO_F    equ 2                   ; beyond its top
 FO_L    equ 4                   ; left of it
 FO_R    equ 8                   ; right
+FS_ROW  equ 1
+FS_SIDE equ 0x80
 FL_A    equ 0
 FL_B    equ 2
 FL_K    equ 4
+FL_W    equ 5                   ; (after FL_K: one word's store clears it)
 FL_E1   equ 6
 FL_E2   equ 10
-FL_SIZE equ 14
+FL_WS   equ 14                  ; its walk: 12 bytes
+FW_NONE equ 0                   ; not set up for this view
+FW_SH   equ 1                   ; shallow: FL_WS + 0 its first half-row, 1
+                                ; its columns, 2 its first column x 2, 4 the
+                                ; error, 6 a column's step, 8 M, 10 wa_fqd
+FW_ST   equ 2                   ; steep: + 0 its first column x 2, 1 its
+                                ; first row x 2, 2 its rows, 3 the step's
+                                ; glyph, 4 the error, 6 a row's step, 8 M,
+                                ; 10 its least column x 2, 11 its greatest
+FW_OFF  equ 3                   ; nothing of it to draw
+FL_SIZE equ 26
 WA_MAXSP equ 127                ; spans a frame the table holds (a tag x 2
                                 ; is a byte: 127 at most) - heights' low
                                 ; boxes register an edge each top
@@ -182,6 +199,11 @@ WA_VAR wa_fqk2, 1               ; their vertices, and the line
 WA_VAR wa_fqva, 2
 WA_VAR wa_fqvb, 2
 WA_VAR wa_fqr, 2
+WA_VAR wa_fqdp, 1               ; ...WA_DASH's steep lines: the row's parity
+WA_VAR wa_fqcap, 2              ; ...the line whose walk is being kept
+                                ; (wa_flines' still pass), and where a
+WA_VAR wa_fqvsh, 2              ; set-up walk goes: wa_flsh and wa_flst, or
+WA_VAR wa_fqvst, 2              ; their .keep on a still frame's first
 WA_VAR wa_fqe1, 6               ; ...its ends in camera space: x, z, and
 WA_VAR wa_fqe2, 6               ; the cut's coordinate x 4 (wa_flmake.cz)
 WA_VAR wa_fqn4, 4               ; ...eye kyq x 4 (a side cut's row)
@@ -3624,7 +3646,12 @@ wa_plotf:
 ;    screen to step over. So every end is on the screen, and no walk tests
 ;    for it.
 ; It is DRAWN from them every frame (wa_fldraw) - while the view stands,
-; that is all a line costs. Its walk is set up WITHOUT A DIVIDE, as an error
+; that is all a line costs, and from its second still frame on not its
+; walk's setup either: the first keeps what each walk is entered with
+; (wa_flsh.keep, wa_flst.keep). Where the ROWS ALONE moved - the pitch, the
+; eye - the vertices' camera space, sides and columns stand, and only the
+; two depths are asked again (wa_flmake.vs).
+; Its walk is set up WITHOUT A DIVIDE, as an error
 ; term (Bresenham's), exact where a stepped fraction drifted: a SHALLOW line
 ; (under a half-row a column) by column, in dashes - a half-row on is the
 ; other dash, and every second one the next row: no table, no row kept - a
@@ -3655,8 +3682,8 @@ wa_plotf:
     adc cx, [wa_ys+di+2]
   %endif
     mov [bx+FV_Z], cx
-    mov dx, FO_N                ; DL = the planes, DH = 0: no row made
-    cmp cx, [wa_fqzn]
+    mov dx, FO_N                ; DL = the planes, DH = its state: nothing
+    cmp cx, [wa_fqzn]           ; made
     jl %%od
   %if %1
     mov ax, [wa_xs+si+2]
@@ -3668,8 +3695,8 @@ wa_plotf:
     sbb ax, [wa_yc+di+2]
   %endif
     mov [bx+FV_X], ax
-    xor dl, dl
-    cmp cx, [wa_fqzf]
+    mov dx, FS_SIDE << 8        ; (its side made: FV_F's FS_SIDE, and below
+    cmp cx, [wa_fqzf]           ; the side's own bit beside it)
     jle %%os
     mov dl, FO_F
 %%os:
@@ -3694,10 +3721,10 @@ wa_plotf:
     or ax, ax
     js %%left
 %%right:
-    or dl, FO_R
+    or dx, (FO_R << 8) | FO_R
     jmp short %%od
 %%left:
-    or dl, FO_L
+    or dx, (FO_L << 8) | FO_L
 %%od:
     mov [bx+FV_O], dx           ; (and FV_F)
     add bx, FV_SIZE
@@ -3710,6 +3737,8 @@ wa_plotf:
 ; view made. Clobbers AX, BX, CX, SI, DI.
 wa_flinit:
     mov word [wa_fqkey], 0      ; (no view: wa_vcnt is never 0)
+    mov word [wa_fqvsh], wa_flsh
+    mov word [wa_fqvst], wa_flst
     mov di, wa_cstn             ; (a flat arena never clears its columns'
     xor ax, ax                  ; stacks: none there, for wa_flhid)
     mov cx, WA_MAXW
@@ -3810,9 +3839,10 @@ wa_flines:
     mov [wa_fqb0], si
     mov [wa_fqb1], di
 .hd:
+    xor cx, cx                  ; CL = 1: the rows moved
     mov ax, [wa_eye]            ; THE FLOOR'S PAIR (wa_hnum of 0), made again
-    mov bx, [wa_kyq]            ; when the eye or the field of view moved
-    cmp ax, [wa_fqkey+4]
+    mov bx, [wa_kyq]            ; when the eye or the field of view moved -
+    cmp ax, [wa_fqkey+4]        ; and every row with it
     jne .pair
     cmp bx, [wa_fqkey+6]
     je .paired
@@ -3820,34 +3850,113 @@ wa_flines:
     mov [wa_fqkey+4], ax
     mov [wa_fqkey+6], bx
     xor ax, ax
-    mov [wa_fqkey], ax          ; (and every line with it)
     call wa_hnum
     mov [wa_fqfn], ax
     mov [wa_fqfs], bl
+    mov cl, 1
 .paired:
-    mov ax, [wa_vcnt]           ; THE VIEW WHERE IT WAS, and the pitch: every
-    cmp ax, [wa_fqkey]          ; line's ends stand, and it is drawn from
-    jne .make                   ; them
-    mov ax, [wa_hq]
+    mov ax, [wa_hq]             ; ...or the pitch
     cmp ax, [wa_fqkey+2]
-    je .still
-.make:
+    je .pitched
+    mov [wa_fqkey+2], ax
+    mov cl, 1
+.pitched:
+    mov ax, [wa_vcnt]           ; THE VIEW WHERE IT WAS: the vertices' camera
+    cmp ax, [wa_fqkey]          ; space and columns stand - and with the
+    je .stood                   ; rows where they were, every line's ends
+    mov [wa_fqkey], ax
+    mov cl, 2
+.stood:
+    or cl, cl
+    jz .still
     jmp wa_flmake
-.still:
-    mov si, wa_fqln
-.sl:
-    mov al, [si+FL_K]
-    or al, al
-    jz .sn
+.still:                         ; A STILL VIEW: every line from its ends -
+    mov si, wa_fqln             ; and from the second still frame on, from
+.sl:                            ; its WALK as the first set it up
+    cmp byte [si+FL_K], 0
+    je .sn
+    mov al, [si+FL_W]
+    dec al
+    jz .ssh
+    dec al
+    jz .sst
+    dec al
+    jz .sn                      ; (nothing of it to draw)
+    mov byte [si+FL_W], FW_OFF  ; not set up yet: now, kept by the walk it
+    mov [wa_fqcap], si          ; reaches (none: nothing to draw)
+    mov word [wa_fqvsh], wa_flsh.keep
+    mov word [wa_fqvst], wa_flst.keep
     mov bx, [si+FL_A]
     mov di, [si+FL_B]
-    dec al
-    jz .sd
+    cmp byte [si+FL_K], 1
+    je .sd
     lea bx, [si+FL_E1]
     lea di, [si+FL_E2]
 .sd:
     push si
     call wa_fldraw
+    pop si
+    mov word [wa_fqvsh], wa_flsh
+    mov word [wa_fqvst], wa_flst
+    jmp .sn
+.ssh:
+    push si
+    mov ax, [si+FL_WS+8]
+    mov [wa_fqm], ax
+    mov ax, [si+FL_WS+10]
+    mov [wa_fqd], ax
+    mov dx, [wa_w2]             ; (a row on, in cells: its step's way)
+    or al, al
+    jns .ssh1
+    neg dx
+.ssh1:
+    mov [wa_fqrs], dx
+    mov ax, [si+FL_WS]          ; AL = its first half-row, AH = its columns
+    mov [wa_fqn], ah
+    xor ah, ah
+    mov bx, ax
+    mov bp, [si+FL_WS+4]
+    mov cx, [si+FL_WS+6]
+    mov si, [si+FL_WS+2]
+    call wa_flsh.go
+    pop si
+    jmp .sn
+.sst:
+    push si
+    mov ax, [si+FL_WS+6]
+    mov [wa_fqst], ax
+    mov ax, [si+FL_WS+8]
+    mov [wa_fqm], ax
+    mov ax, [si+FL_WS+2]        ; AL = its rows, AH = the step's glyph
+    mov [wa_fqg], ah
+    xor ah, ah
+    mov cx, ax
+    mov ax, 2
+    cmp byte [wa_fqg], '\'
+    je .sst1
+    neg ax
+.sst1:
+    mov [wa_fqd], ax
+    mov ax, [si+FL_WS+10]       ; (its columns against this frame's hull)
+    xor bx, bx
+    mov bl, al
+    mov al, ah
+    xor ah, ah
+    mov byte [wa_fqt], 0
+    cmp bx, [wa_fqb1]
+    jg .sst2
+    cmp ax, [wa_fqb0]
+    jl .sst2
+    inc byte [wa_fqt]
+.sst2:
+    mov bp, [si+FL_WS+4]
+    mov ax, [si+FL_WS]          ; AL = its first column x 2, AH = its first
+    xor bx, bx                  ; row x 2
+    mov bl, al
+    mov al, ah
+    xor ah, ah
+    mov si, ax
+    call wa_flst.go
     pop si
 .sn:
     add si, FL_SIZE
@@ -3856,14 +3965,12 @@ wa_flines:
     pop bp
     ret
 
-; wa_flmake - wa_flines' way on where the view moved (BP on the stack):
-; every floor line's ends for this view - the planes, the vertices, then a
-; line at a time, each drawn as its ends are made
+; wa_flmake - wa_flines' way on where the view or its rows moved (BP on the
+; stack; CL = 2 the view, 1 its rows alone - the pitch, the eye): every
+; floor line's ends - the planes, the vertices, then a line at a time, each
+; drawn as its ends are made
 wa_flmake:
-    mov ax, [wa_vcnt]
-    mov [wa_fqkey], ax
-    mov ax, [wa_hq]
-    mov [wa_fqkey+2], ax
+    push cx
     mov ax, [wa_c16]            ; (the screen's last sixteenth of a column)
     shl ax, 1
     dec ax
@@ -3945,13 +4052,46 @@ wa_flmake:
 ; the eye they mean nothing: a cut makes its x and asks again). One inside
 ; the 90 degrees every view lies within is asked its side by its COLUMN,
 ; the projection's own divide - which a line drawn to it wants anyway.
+; THE ROWS ALONE MOVED (a nod, a jump, a lift's ride, the view standing):
+; a vertex's depth, and its x, side and column where they were made, stand
+; - it is asked the two depths again and no more (.vs).
     mov bx, wa_fqvx
+    pop cx
+    dec cl
+    jz .vs
     test byte [wa_look], LK_ROUND
     jnz .vr
     FLVTX 0
     jmp .vd
 .vr:
     FLVTX 1
+    jmp short .vd
+.vs:
+    mov cx, [bx+FV_Z]
+    mov dh, [bx+FV_F]
+    and dh, FS_SIDE|FO_L|FO_R   ; (no row made)
+    mov dl, FO_N
+    cmp cx, [wa_fqzn]
+    jl .vs3
+    test dh, FS_SIDE
+    jnz .vs1
+    call .vx                    ; (nearer than the bottom when the view
+    mov [bx+FV_X], ax           ; moved: its x and its side now)
+    call .vside
+    mov dh, dl
+    or dh, FS_SIDE
+    mov cx, [bx+FV_Z]
+.vs1:
+    mov dl, dh
+    and dl, FO_L|FO_R
+    cmp cx, [wa_fqzf]
+    jle .vs3
+    or dl, FO_F
+.vs3:
+    mov [bx+FV_O], dx
+    add bx, FV_SIZE
+    cmp bx, [wa_fqve]
+    jb .vs
 .vd:
 ; THE LINES
     mov si, wa_fqln
@@ -3963,7 +4103,8 @@ wa_flmake:
     test al, ah
     jz .lsee
 .lno:
-    mov byte [si+FL_K], 0       ; both outside one plane: nothing
+    mov word [si+FL_K], 0       ; both outside one plane: nothing (and no
+                                ; walk kept: FL_W)
 .lnx:
     add si, FL_SIZE
     cmp si, [wa_fqle]
@@ -3974,16 +4115,16 @@ wa_flmake:
     mov dx, ax
     or dl, dh
     jnz .lclip
-    cmp byte [bx+FV_F], 0       ; both in the view: its ends are its
-    jne .lp1                    ; vertices' own, each with its row
+    test byte [bx+FV_F], FS_ROW ; both in the view: its ends are its
+    jnz .lp1                    ; vertices' own, each with its row
     call .pj
 .lp1:
     xchg bx, di
-    cmp byte [bx+FV_F], 0
-    jne .lp2
+    test byte [bx+FV_F], FS_ROW
+    jnz .lp2
     call .pj
 .lp2:
-    mov byte [si+FL_K], 1
+    mov word [si+FL_K], 1       ; (FL_W: no walk kept)
 .ldraw:
     push si
     call wa_fldraw
@@ -3991,7 +4132,7 @@ wa_flmake:
     jmp .lnx
 ; .pj - BX = a vertex in the view: its row made. Keeps BX, SI, DI.
 .pj:
-    mov byte [bx+FV_F], 1
+    or byte [bx+FV_F], FS_ROW
     mov bp, [bx+FV_Z]           ; (wa_flrow's, in line)
     shl bp, 1
     mov ax, [ds:bp+wa_rcp-WA_NEAR*2]
@@ -4001,6 +4142,36 @@ wa_flmake:
     mov ax, [wa_hq]
     sub ax, dx
     mov [bx+FV_Q], ax
+    ret
+; .vside - BX = a vertex ahead of the screen's bottom, AX = its camera x,
+; CX = its z: DL = its side (0, FO_L or FO_R), and inside the 90 degrees
+; its column made - FLVTX's test, out of line (.vs). Keeps BX; clobbers AX,
+; CX, DH, SI, DI.
+.vside:
+    mov si, ax
+    or si, si
+    jns .vsd1
+    neg si
+.vsd1:
+    cmp si, cx
+    jg .vsd3
+    imul word [wa_k16]
+    idiv cx
+    xor dl, dl
+    add ax, [wa_c16]
+    js .vsd5
+    cmp ax, [wa_fqw16]
+    ja .vsd4
+    mov [bx+FV_C], ax
+    ret
+.vsd3:
+    or ax, ax
+    js .vsd5
+.vsd4:
+    mov dl, FO_R
+    ret
+.vsd5:
+    mov dl, FO_L
     ret
 ; .vx - BX = a vertex: AX = its camera x (one nearer than the screen's
 ; bottom has none made). Keeps BX, DI; clobbers SI, BP.
@@ -4078,7 +4249,7 @@ wa_flmake:
     call .pe
     mov [si+FL_E2], ax
     mov [si+FL_E2+2], dx
-    mov byte [si+FL_K], 2
+    mov word [si+FL_K], 2       ; (FL_W: no walk kept)
     lea bx, [si+FL_E1]
     lea di, [si+FL_E2]
     jmp .ldraw
@@ -4206,8 +4377,8 @@ wa_flmake:
     or al, al
     jnz .pec
     mov bx, di
-    cmp byte [bx+FV_F], 0
-    jne .pev
+    test byte [bx+FV_F], FS_ROW
+    jnz .pev
     call .pj
 .pev:
     mov ax, [bx+FV_C]
@@ -4393,7 +4564,7 @@ wa_fldraw:
     shl cx, 1
     shl cx, 1
     shl cx, 1                   ; CX = 16 |dq|
-    jmp wa_flsh
+    jmp [wa_fqvsh]              ; (wa_flsh - or, a still frame's first, wa_flsh.keep)
 .steep:                         ; AX = dc, CX = dq, DX = |dc|
     or cx, cx
     jz .none                    ; (a point)
@@ -4491,7 +4662,7 @@ wa_fldraw:
     sub ax, bp
     mov bp, ax                  ; BP = the error, less M
     mov cx, [wa_fqrn]
-    jmp wa_flst
+    jmp [wa_fqvst]              ; (wa_flst, or wa_flst.keep)
 
 ; wa_flsh - a SHALLOW line's walk: BX = its first half-row, SI = its first
 ; column x 2, BP = the error less M and CX = a column's step; wa_fqm = M,
@@ -4507,6 +4678,7 @@ wa_fldraw:
 ; on is the other dash, and the next row when the dash is the upper one
 ; (falling) or the lower (rising).
 wa_flsh:
+.go:
     mov dh, [wa_fqn]
     mov al, dh
     xor ah, ah
@@ -4529,6 +4701,10 @@ wa_flsh:
     mov dl, [wa_frame]
     mov di, [wa_lp]
 .tcol:
+%ifdef WA_DASH
+    test bl, 2                  ; (DASHED, the build's trial: an odd column
+    jnz .tadv                   ; is left out - a row's offset is a
+%endif                          ; multiple of 4, so the cell's bit 1 says)
     cmp word [wa_cov+si], 0     ; (a column something stands in: is it
     jne .task                   ; nearer?)
     cmp cl, [wa_cclip+si]
@@ -4668,6 +4844,10 @@ wa_flsh:
     mov dl, [wa_frame]
     mov di, [wa_lp]
 .pcol:
+%ifdef WA_DASH
+    test bl, 2
+    jnz .padv
+%endif
     cmp [wa_stamp+bx], dl
     je .padv
     mov [wa_stamp+bx], dl
@@ -4693,6 +4873,21 @@ wa_flsh:
     add bx, [wa_fqrs]
     jmp .pnx
 
+.keep:                          ; A STILL FRAME'S FIRST (wa_flines' still
+    mov di, [wa_fqcap]          ; pass): the walk kept, as it is entered
+    mov byte [di+FL_W], FW_SH
+    mov al, bl
+    mov ah, [wa_fqn]
+    mov [di+FL_WS], ax
+    mov [di+FL_WS+2], si
+    mov [di+FL_WS+4], bp
+    mov [di+FL_WS+6], cx
+    mov ax, [wa_fqm]
+    mov [di+FL_WS+8], ax
+    mov ax, [wa_fqd]
+    mov [di+FL_WS+10], ax
+    jmp .go
+
 ; wa_flst - a STEEP line's walk: BX = its first column x 2, SI = its first
 ; row x 2, CX = its rows, BP = the error less M; wa_fqst a row's step,
 ; wa_fqm = M, wa_fqd a column's step in cells (+-2), wa_fqg the glyph where
@@ -4701,6 +4896,15 @@ wa_flsh:
 ; step's where its column moved - DL = the stamp, DH = the post, SI = a
 ; row's stride, DI = the list), else tested (.trow: SI = the column x 2)
 wa_flst:
+.go:
+%ifdef WA_DASH
+  %if WA_DASH >= 2
+    mov ax, si                  ; (DASHED at 2: a steep line's odd rows left
+    shr al, 1                   ; out too - wa_fqdp the row's parity)
+    and al, 1
+    mov [wa_fqdp], al
+  %endif
+%endif
     mov dl, [wa_frame]
     mov dh, 0xB3
     mov ah, [wa_fqatr]
@@ -4711,6 +4915,12 @@ wa_flst:
     add bx, [wa_rowo2+si]       ; BX = the cell
     mov si, [wa_w2]
 .prow:
+%ifdef WA_DASH
+  %if WA_DASH >= 2
+    xor byte [wa_fqdp], 1
+    jz .pdup
+  %endif
+%endif
     cmp [wa_stamp+bx], dl
     je .pdup
     mov [wa_stamp+bx], dl
@@ -4745,6 +4955,12 @@ wa_flst:
     xchg bx, si                 ; SI = the column x 2
     add bx, si                  ; BX = the cell
 .trow:
+%ifdef WA_DASH
+  %if WA_DASH >= 2
+    xor byte [wa_fqdp], 1
+    jz .tdup
+  %endif
+%endif
     cmp word [wa_cov+si], 0
     jne .task
     cmp byte [wa_cstn+si], 0
@@ -4784,6 +5000,50 @@ wa_flst:
     call wa_flhid
     jnc .tput
     jmp .tdup
+
+.keep:
+    mov di, [wa_fqcap]          ; (a still frame's first: the walk kept)
+    mov byte [di+FL_W], FW_ST
+    mov ax, si
+    mov ah, al
+    mov al, bl                  ; AL = its first column x 2, AH = row x 2
+    mov [di+FL_WS], ax
+    mov al, cl
+    mov ah, [wa_fqg]            ; AL = its rows, AH = the step's glyph
+    mov [di+FL_WS+2], ax
+    mov [di+FL_WS+4], bp
+    mov ax, [wa_fqst]
+    mov [di+FL_WS+6], ax
+    mov ax, [wa_fqm]
+    mov [di+FL_WS+8], ax
+    push bx                     ; ...and its ends' columns x 2, the least
+    cmp byte [di+FL_K], 1       ; and the greatest: a later frame's hull is
+    jne .cap1                   ; asked about them
+    mov bx, [di+FL_A]
+    mov ax, [bx]
+    mov bx, [di+FL_B]
+    mov bx, [bx]
+    jmp short .cap2
+.cap1:
+    mov ax, [di+FL_E1]
+    mov bx, [di+FL_E2]
+.cap2:
+    cmp ax, bx
+    jle .cap3
+    xchg ax, bx
+.cap3:
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    and al, 0xFE
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    and bl, 0xFE
+    mov ah, bl
+    mov [di+FL_WS+10], ax
+    pop bx
+    jmp .go
 
 ; wa_flhid - SI = a column x 2 something stands in, [wa_fqh] = a floor
 ; point's half-row there (on the screen): CF = 1 when something nearer

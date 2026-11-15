@@ -28,7 +28,7 @@ The pose list is a function of (arena, n, seed) alone, never of the build, so
 two builds' recordings compare pose for pose:
 
   python3 tools/waposes.py record --arena 0|1|2 --width 40|80 [--level 1..5]
-          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still] [--poses LIST.json]
+          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still | --nod] [--poses LIST.json]
           [--tree DIR] [--profile p.json [--detail PREFIX]] --out f.json
   python3 tools/waposes.py compare base.json new.json [--list] [--show N]
   python3 tools/waposes.py show f.json N
@@ -166,7 +166,8 @@ def record(a):
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import os88ui
     from os88pkg import PKG_FMT
-    F = 4772727; T = os.path.abspath(a.tree); B = os.path.join(T, "build"); W = a.width
+    F = 4772727; T = os.path.abspath(a.tree); W = a.width
+    B = os.path.abspath(a.build) if a.build else os.path.join(T, "build")
     d = tempfile.mkdtemp(); mp, bn = os.path.join(d, "m"), os.path.join(d, "b")
     subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/wirearena/", "-I", "drivers/net/",
                            "-I", B + "/", "--before", "[map all %s]" % mp, "-o", bn, "apps/wirearena/wirearena.asm"], cwd=T)
@@ -210,11 +211,13 @@ def record(a):
         # moved view's (--still keeps it: what a standing player's frame costs).
         pang = None
         rmap = {}
+        if a.nod: a.still = True
         if not a.still or a.profile:
             mp2, bn2 = os.path.join(d, "m2"), os.path.join(d, "b2")
-            subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/wirearena/",
-                                   "-I", B + "/", "--before", "[map all %s]" % mp2, "-o", bn2,
-                                   "apps/wirearena/wrpart.asm"], cwd=T)
+            subprocess.check_call(["nasm", "-f", "bin", "-w+error"] + ["-D" + x for x in a.define]
+                                  + ["-I", "apps/", "-I", "apps/wirearena/",
+                                     "-I", B + "/", "--before", "[map all %s]" % mp2, "-o", bn2,
+                                     "apps/wirearena/wrpart.asm"], cwd=T)
             if open(bn2, "rb").read() != open(B + "/wrpart.bin", "rb").read():
                 raise SystemExit("waposes: %s/wrpart.bin is not its source - make wirearenadisk first" % B)
             for line in open(mp2):
@@ -253,6 +256,12 @@ def record(a):
             last = None; dirty = []
             for rep in range(9):        # until a render (not the pose's first: it re-orders the boxes) no
                                         # timer tick landed in: those repeat to ~40 clk
+                if a.nod:               # (--nod: a render a half-row of pitch away first, so the
+                    run_to(e_r)         # measured one is a PITCH-ONLY move's - the view standing)
+                    w16("wa_px", p["px"]); w16("wa_py", p["py"]); w16("wa_ang", p["ang"] << 6)
+                    w16("wa_pitch", p["pitch"] + 4); w16("wa_feet", p["feet"]); w16("wa_jz", 0); w16("wa_jv", 0)
+                    w16("wa_eye", 102 + p["feet"] + p["jump"]); w16("wa_pbtk", 0)
+                    run_to(e_p); run_to(e_m)
                 c0 = run_to(e_r)
                 w16("wa_px", p["px"]); w16("wa_py", p["py"]); w16("wa_ang", p["ang"] << 6)
                 w16("wa_pitch", p["pitch"]); w16("wa_feet", p["feet"]); w16("wa_jz", 0); w16("wa_jv", 0)
@@ -272,7 +281,8 @@ def record(a):
                 c1 = run_to(e_p)
                 clean = m.read(0x46C, 2) == t0
                 c2 = run_to(e_m)
-                if rep >= 1 and not lap:
+                if rep >= (2 if a.still else 1) and not lap:   # (a still view's: past its first still frame,
+                                                               # which sets up what the later ones keep)
                     if clean:
                         last = c1 - c0
                         break
@@ -336,11 +346,16 @@ r.add_argument("--arena", type=int, default=0); r.add_argument("--width", type=i
 r.add_argument("--level", type=int, default=0); r.add_argument("--n", type=int, default=60)
 r.add_argument("--seed", type=int, default=1)
 r.add_argument("--keys", default=""); r.add_argument("--tree", default=ROOT)
+r.add_argument("--build", default="", help="the build directory measured (default: TREE/build) - a knob build's "
+               "private one, `make BUILD=dir wirearenadisk WADASH=1`")
+r.add_argument("--define", action="append", default=[], help="a define the renderer part of --build was "
+               "assembled with (WA_DASH=1), for its map")
 r.add_argument("--profile", default="", help="also each pose rendered once more SINGLE-STEPPED: the "
                "renderer's cycles by routine over the set, into this JSON (and printed) - ~2 host s a pose")
 r.add_argument("--detail", default="", help="with --profile: by every label under routines named so")
 r.add_argument("--out", required=True)
 r.add_argument("--still", action="store_true", help="a standing view: the renderer's still-view work kept")
+r.add_argument("--nod", action="store_true", help="a standing view whose PITCH alone moved since the frame before")
 r.add_argument("--poses", default="", help="a JSON list of poses to use instead of the seeded set (poses()'s own shape)")
 c = sub.add_parser("compare")
 c.add_argument("base"); c.add_argument("new"); c.add_argument("--list", action="store_true")

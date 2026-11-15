@@ -8674,12 +8674,16 @@ SOAK = [
         "referee's lines, none missing where no box is in the view, none "
         "drawn through the tower from behind the west lift (wa_flhid and "
         "the run it steps over), 85 in 100 the referee's own cell and "
-        "dash (90 measured), and no divide fault. Red with the shallow "
-        "walk's error a modulus out (67 in 100, 3 poses), a side cut's "
-        "end left where it was (3 poses), a steep line that never steps "
-        "(4 poses), and a tall face's columns not asked about (55 cells "
-        "through the tower).",
-        needs=("marty", "nasm"),
+        "dash (90 measured), and no divide fault. The same poses as a "
+        "STILL view (drawn from the walk its first still frame kept) and "
+        "as a NOD (the pitch alone moved: the rows' pass) must draw the "
+        "moved view's cells, every one - three emulators side by side. "
+        "Red with the shallow walk's error a modulus out (67 in 100, 3 "
+        "poses), a side cut's end left where it was (3 poses), a steep "
+        "line that never steps (4 poses), a tall face's columns not asked "
+        "about (55 cells through the tower), the kept walk's error not "
+        "loaded (62 cells) and the rows' pass keeping the old rows (297).",
+        needs=("marty", "nasm"), cpus=3,
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
         "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"

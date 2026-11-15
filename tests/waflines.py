@@ -21,6 +21,10 @@ read back):
   exact     of all the floor-line cells drawn, 85 in 100 are the referee's
             own cell and dash - a walk that starts a fraction out lies within
             a cell of the line everywhere, and beside it
+  still     the same poses as a STILL view (drawn from the walk the first
+            still frame kept) and as a NOD (the pitch alone moved: the rows'
+            pass, the vertices' camera space kept) draw the moved view's
+            floor-line cells, every one
   faults    no divide fault in any render (waposes reads the BIOS's flag)
 
 A floor-line cell is one of the five line glyphs in the room's colour; the
@@ -172,18 +176,52 @@ def main():
     d = tempfile.mkdtemp()
     pin, pout = os.path.join(d, "poses.json"), keep or os.path.join(d, "out.json")
     json.dump(poses, open(pin, "w"))
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools/waposes.py"), "record",
-                        "--arena", str(ARENA), "--width", str(W), "--poses", pin,
-                        "--out", pout], cwd=ROOT, capture_output=True, text=True)
-    if r.returncode or not os.path.exists(pout):
-        print(r.stdout[-2000:], r.stderr[-2000:])
-        print("waflines: FAIL - waposes could not record the poses")
-        return 1
+    # three recordings of the same poses, an emulator each, side by side: a
+    # MOVED view (every render makes the lines' ends anew), a STILL one (the
+    # third render on: drawn from the walk the first still frame kept) and a
+    # NOD (the pitch alone moved since the render before: the rows' pass)
+    outs = [pout, os.path.join(d, "still.json"), os.path.join(d, "nod.json")]
+    runs = [subprocess.Popen([sys.executable, os.path.join(ROOT, "tools/waposes.py"), "record",
+                              "--arena", str(ARENA), "--width", str(W), "--poses", pin,
+                              "--out", o] + flag, cwd=ROOT, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True)
+            for o, flag in zip(outs, ([], ["--still"], ["--nod"]))]
+    logs = [q.communicate()[0] for q in runs]
+    for q, o, log in zip(runs, outs, logs):
+        if q.returncode or not os.path.exists(o):
+            print(log[-2000:])
+            print("waflines: FAIL - waposes could not record the poses")
+            return 1
+    r = runs[0]
+    r.stdout = logs[0]
     rec = json.load(open(pout))
     fails = 0
-    if " 0 DIVIDE FAULTS" not in r.stdout:
-        print("  FAIL  a divide fault in a render: %s" % r.stdout.strip().splitlines()[-1])
-        fails += 1
+    for log in logs:
+        if " 0 DIVIDE FAULTS" not in log:
+            print("  FAIL  a divide fault in a render: %s" % log.strip().splitlines()[-1])
+            fails += 1
+    # THE STILL VIEW AND THE NOD draw the moved view's picture: the same
+    # camera, so the same floor-line cells - whichever way their ends and
+    # their walks were come by
+    for what, o in (("still view (the kept walk)", outs[1]), ("nod (the rows alone)", outs[2])):
+        other = json.load(open(o))
+        diff = n = 0
+        for (name, *_), fa, fb in zip(POSES, rec["frames"], other["frames"]):
+            va, vb = bytes.fromhex(fa["vram"]), bytes.fromhex(fb["vram"])
+            for k in range(0, 23 * W * 2, 2):
+                la = va[k + 1] == A_ROOM and va[k] in GLYPHS
+                lb = vb[k + 1] == A_ROOM and vb[k] in GLYPHS
+                n += la
+                if (la or lb) and va[k:k + 2] != vb[k:k + 2]:
+                    if not diff:
+                        print("  FAIL  the %s draws another picture: %s, row %d column %d"
+                              % (what, name, k // 2 // W, k // 2 % W))
+                    diff += 1
+        if diff:
+            print("          %d floor-line cell(s) differ from the moved view's" % diff)
+            fails += 1
+        else:
+            print("  ok    the %s: the moved view's %d cells" % (what, n))
     boxes = [A.bx(b) for b in A.arenas()[ARENA][2]]
     total = exact = 0
     for (name, x, y, a, p, f, ask), fr in zip(POSES, rec["frames"]):
@@ -242,7 +280,8 @@ def main():
         return 1
     print("waflines: ok - nine poses of the twin, %d floor-line cells: %d in 100 the "
           "referee's own, none off its lines, none missing where nothing stands, none "
-          "through the tower, no divide fault" % (total, exact * 100 // total))
+          "through the tower; a still view and a nod draw the same; no divide fault"
+          % (total, exact * 100 // total))
     return 0
 
 
