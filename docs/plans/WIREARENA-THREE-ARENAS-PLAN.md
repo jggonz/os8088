@@ -210,6 +210,18 @@ spawns on the layer, no hop) takes six boxes out of every outline pass; a
 single-piece layer band each side (the dividers standing on it) takes four
 more.
 
+*Measured after (2026-11-15), and declined*: the owner kept the three
+levels (one layer would make it *"just a hole in the center"*) and asked
+for the single-piece bands if they were a free win. They are not. A
+stack's upper box must stand strictly inside the one under it and both be
+low, and the dividers are the arena's tallest boxes and run the band's
+whole depth - the thing that stops a walk round them - so the format
+cannot take it as drawn. Its upper bound, the north and south bands one
+box each with the inner dividers DELETED rather than stood on them: **1.4%**
+(241,126 -> 237,707 clk a frame, 120 poses). The low-box cost is the
+outlines of what is under the eye, not the count of pieces. The Pit stays
+as built, the one heavier map.
+
 **The Crossing's minimap** (the owner, 2026-11-15: *"the minimap is showing
 the vertical pathway as filled"*): at 40 columns a minimap cell is two
 samples (128 units), the larger kind of the pair - a wall wins - and the
