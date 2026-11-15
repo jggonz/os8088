@@ -152,16 +152,18 @@ lp_latch:
     push cx
     push dx
     mov dx, ax
-    add dx, 2                   ; the CONTROL register first: a bidirectional
+    inc dx                      ; the CONTROL register first: a bidirectional
+    inc dx
     in  al, dx                  ; port left in INPUT mode reads its PINS rather
     and al, 0xDF                ; than its latch, so the two-value test below
     mov cl, al                  ; would probe a port that cannot answer. The
     out dx, al                  ; DOS machine's DIO-500 came up at ctrl = EC,
-    sub dx, 2                   ; bit 5 SET - exactly that case, and it passed
+    dec dx                      ; bit 5 SET - exactly that case, and it passed
+    dec dx
                                 ; only because that card reads its latch back
                                 ; anyway. Read-modify-write, low nibble held:
                                 ; bit 2 is INIT and active low (NET-PLAN 1.4.3).
-                                ; CL is taken AFTER the mask, so .ctl puts
+                                ; CL is taken AFTER the mask, so the tail puts
                                 ; back direction = OUT, never bit 5 as read
                                 ; (SPEC.md 34.14: an SPP reads it as 1, and
                                 ; restoring that leaves a bidirectional latch
@@ -181,22 +183,19 @@ lp_latch:
     jmp short $+2
     in  al, dx
     cmp al, 0x55
-    jne .no
-    mov al, bh
-    out dx, al
-    clc
-    jmp short .ctl
+    je  .yes                    ; CF = 0 from the equal compare
 .no:
-    mov al, bh
-    out dx, al
     stc
-.ctl:
-    pushf                       ; the verdict is in CF and `out` does not touch
-    add dx, 2                   ; it - but the restore must not either, and a
+.yes:
+    mov al, bh                  ; the data register back, either way
+    out dx, al
+    inc dx                      ; the verdict is in CF and `out` does not touch
+    inc dx                      ; it - but the restore must not either, and a
     mov al, cl                  ; caller reading a probe result through a
     out dx, al                  ; clobbered flag is the shape of bug this file
-    popf                        ; has already had once
-.out:
+                                ; has already had once. `inc` leaves CF alone,
+                                ; which is why it is two of them and not an
+                                ; `add` inside a pushf/popf
     pop dx
     pop cx
     pop bx
@@ -255,7 +254,7 @@ lp_init:
     out dx, al                  ; (SPEC.md 34.14)
     mov dx, [lp_base]
     xor al, al
-    mov byte [lp_lastop], 0     ; a fresh port owes no turnaround
+    mov [lp_lastop], al         ; a fresh port owes no turnaround
     mov byte [lp_turnw], TURN_RX    ; ...and is being LOOKED for, not talked to
     out dx, al                  ; idle: five lines low, strobe down. Both
                                 ; roles idle identically, which is what makes
@@ -306,17 +305,17 @@ lp_restore:
 lp_turn:
     push ax
     push bx
+    push cx
+    mov cx, 2                   ; two edges
     call lpl_ticks
+.edge:
     mov bx, ax
-.e1:
+.e:
     call lpl_ticks
     cmp ax, bx
-    je  .e1
-    mov bx, ax
-.e2:
-    call lpl_ticks
-    cmp ax, bx
-    je  .e2
+    je  .e
+    loop .edge
+    pop cx
     pop bx
     pop ax
     ret
@@ -326,8 +325,8 @@ lp_turn:
 ;   %1 = jnz (wait for it HIGH) or jz (wait for it LOW)
 ;   %2 = the tick allowance      %3 = where to go when it expires
 ; in:  DX = the status port.  uses AL, CX.  PRESERVES BX (rnib's nibble).
-; out: AL = the XORed status byte that satisfied it, so a nibble is sampled by
-;      the very read that detected the strobe.
+; out: AL = the status byte that satisfied it, so a nibble is sampled by the
+;      very read that detected the strobe; CF = 0.
 ;
 ; A MACRO AND NOT A ROUTINE, and the field run is why. This was `lp_wfar`, a
 ; near proc, called FOUR TIMES A NIBBLE - and the first measurement on real
@@ -350,27 +349,44 @@ lp_turn:
 ; poll body is 9 bytes rather than 16 (the level is a BRANCH now, not a
 ; compare against a variable), and the whole thing is inlined so there is no
 ; frame and no call.
+;
+; ...AND 7 NOW (driver size pass 1): the `xor al, 0x80` that un-inverted BUSY
+; in front of the test is the BRANCH inverted instead, so %1 still names the
+; far D4's level and the poll reads the line one instruction sooner. Nothing
+; after a wait reads AL's bit 7 - lp_rnib's decode shifts it out of the
+; nibble and masks it - so the byte it hands on differs only where nobody
+; looks. And the arming byte is CL, LP_SPIN's low half, rather than an
+; immediate: a register store is a byte shorter, and lp_dlchk reads
+; [lp_dlset] NONZERO as "not armed yet".
 ; -----------------------------------------------------------------------------
+%if (LP_SPIN & 0xFF) == 0
+  %error "lplink: LP_WAIT arms [lp_dlset] with LP_SPIN's low byte, which must not be 0"
+%endif
 %macro LP_WAIT 3
     mov cx, LP_SPIN
-    mov byte [lp_dlset], 0
+    mov [lp_dlset], cl          ; nonzero: the deadline is not armed yet
 %%poll:
     in  al, dx
-    xor al, 0x80                ; BUSY is inverted, and it is the top bit
-    test al, 0x80
-    %1 %%got
+    test al, 0x80               ; BUSY - the far D4, INVERTED in hardware
+  %ifidni %1, jnz
+    jz  %%got                   ; ...so D4 HIGH is the bit CLEAR
+  %elifidni %1, jz
+    jnz %%got                   ; ...and D4 LOW is the bit SET
+  %else
+    %error "LP_WAIT: the level is jnz (high) or jz (low)"
+  %endif
     loop %%poll
     mov al, %2                  ; LP_SPIN polls unanswered: NOW ask the clock
-    call lp_dlchk
+    call lp_dlchk               ; ...which hands CX back as LP_SPIN
     jc  %3
-    mov cx, LP_SPIN
     jmp %%poll
 %%got:
 %endmacro
 
 ; -----------------------------------------------------------------------------
 ; lp_dlchk - the cold half of LP_WAIT. AL = the tick allowance.
-; out: CF=1 the deadline has passed. Preserves every register.
+; out: CF=1 the deadline has passed; CX = LP_SPIN, the next run of polls.
+;      Preserves every other register.
 ;
 ; The FIRST expiry establishes the deadline and never fails, which is what
 ; keeps `ticks` off the fast path entirely: a link that is working never gets
@@ -380,10 +396,10 @@ lp_dlchk:
     push ax
     push bx
     cmp byte [lp_dlset], 0
-    jne .chk
-    mov byte [lp_dlset], 1
+    je  .chk                    ; 0 = armed (LP_WAIT stores nonzero)
     mov bl, al
     xor bh, bh
+    mov [lp_dlset], bh          ; armed now
     call lpl_ticks
     add ax, bx
     mov [dl_wf], ax
@@ -391,13 +407,11 @@ lp_dlchk:
     jmp short .out
 .chk:
     call lpl_ticks
-    sub ax, [dl_wf]             ; modular compare (SPEC.md 45.15's js)
-    js  .live
-    stc
-    jmp short .out
-.live:
-    clc
+    sub ax, [dl_wf]             ; modular compare (SPEC.md 45.15's js):
+    shl ax, 1                   ; CF = the sign, 1 = still short of it...
+    cmc                         ; ...so CF = 1 = the deadline has passed
 .out:
+    mov cx, LP_SPIN
     pop bx
     pop ax
     ret
@@ -459,8 +473,8 @@ lp_snib:
     out dx, al                  ; strobe down, nibble held
     inc dx
     LP_WAIT jz, LP_TMO, .bad    ; ...and to FALL. Only then is the nibble
-    clc                         ; complete at BOTH ends
-    jmp short .out
+    jmp short .out              ; complete at BOTH ends - and CF = 0, the
+                                ; wait's `test`
 .bad:
     mov dx, [lp_base]
     mov al, bl
@@ -513,8 +527,7 @@ lp_rnib:
     dec dx
     xor al, al
     out dx, al                  ; ack down - both ends idle again
-    mov al, bl
-    clc
+    mov al, bl                  ; (CF = 0: the `xor`)
     jmp short .fin
 .bad:
     mov dx, [lp_base]
@@ -531,24 +544,20 @@ lp_rnib:
 ; -----------------------------------------------------------------------------
 ; lp_sbyte / lp_rbyte - a byte is two nibbles, LOW ONE FIRST
 ; -----------------------------------------------------------------------------
+; ...AND THE ANSWER IS THE LAST CALL'S CF. Every helper here keeps AX (or
+; BX), so the byte is still in AL after its first nibble and a failure leaves
+; through the same pop as a success: `pop` writes no flag.
 lp_sbyte:                       ; AL = the byte. CF=1 timed out
     push ax
-    call lp_snib                ; lp_snib masks to the low nibble itself
-    jc .bad
-    pop ax
-    push ax
+    call lp_snib                ; lp_snib masks to the low nibble itself, and
+    jc .out                     ; keeps AX
     shr al, 1
     shr al, 1
     shr al, 1
     shr al, 1
     call lp_snib
-    jc .bad
+.out:
     pop ax
-    clc
-    ret
-.bad:
-    pop ax
-    stc
     ret
 
 lp_rbyte:                       ; out AL. CF=1 timed out
@@ -562,13 +571,9 @@ lp_rbyte:                       ; out AL. CF=1 timed out
     shl al, 1
     shl al, 1
     shl al, 1
-    or  al, bl
-    clc
-    pop bx
-    ret
+    or  al, bl                  ; CF = 0
 .bad:
     pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -576,19 +581,12 @@ lp_rbyte:                       ; out AL. CF=1 timed out
 ; -----------------------------------------------------------------------------
 lp_sword:                       ; AX. CF=1 timed out
     push ax
-    call lp_sbyte
-    jc .bad
-    pop ax
-    push ax
+    call lp_sbyte               ; (keeps AX)
+    jc .out
     mov al, ah
     call lp_sbyte
-    jc .bad
+.out:
     pop ax
-    clc
-    ret
-.bad:
-    pop ax
-    stc
     ret
 
 lp_rword:                       ; out AX. CF=1 timed out
@@ -599,13 +597,9 @@ lp_rword:                       ; out AX. CF=1 timed out
     call lp_rbyte
     jc .bad
     mov ah, al
-    mov al, bl
-    clc
-    pop bx
-    ret
+    mov al, bl                  ; (CF = 0 from the call: `mov` writes none)
 .bad:
     pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -619,7 +613,6 @@ lp_rword:                       ; out AX. CF=1 timed out
 ; -----------------------------------------------------------------------------
 mst_hello:
     push ax
-    push bx
     push cx
     push si
     mov si, magic_q
@@ -628,29 +621,23 @@ mst_hello:
     mov al, [si]
     inc si
     call lp_sbyte
-    jc  .bad
+    jc  .out
     loop .snd
-    mov si, magic_r
-    mov cx, 4
+    mov cl, 4                   ; SI = magic_r, which follows magic_q (CH = 0)
 .rcv:
     call lp_rbyte
-    jc  .bad
-    mov bl, [si]
-    cmp al, bl
-    jne .bad
+    jc  .out
+    cmp al, [si]
+    stc                         ; (ZF is the compare's)
+    jne .out
     inc si
     loop .rcv
-    call lp_rbyte               ; the partner's protocol version
-    jc  .bad
+    call lp_rbyte               ; the partner's protocol version: CF is the
+    jc  .out                    ; answer from here
     mov [lp_ver], al
-    clc
-    jmp short .out
-.bad:
-    stc
 .out:
     pop si
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -668,9 +655,8 @@ cand_add:
     push si
     xor si, si
     mov cl, [ncand]
-    or  cl, cl
-    jz .append
     xor ch, ch
+    jcxz .append
 .look:
     cmp ax, [cand_base+si]
     je  .have
@@ -741,10 +727,8 @@ lpl_scan:
     add di, 2
     cmp di, 6
     jb .bios
-    push cs
-    pop es
-    xor si, si
-.std:
+    xor si, si                  ; (ES is the BIOS's still, and nothing below
+.std:                           ; reads through it)
     mov ax, [std_base+si]
     xor bl, bl
     call cand_add
@@ -752,24 +736,18 @@ lpl_scan:
     cmp si, 6
     jb .std
     mov cl, [ncand]
-    or  cl, cl
-    jz .out
     xor ch, ch
+    jcxz .out
     xor di, di
 .probe:
-    push cx
     mov bx, di
     shl bx, 1
     mov ax, [cand_base+bx]
-    call lp_latch
-    mov al, 1
-    jnc .pyes
-    xor al, al
-.pyes:
-    mov bx, di
-    mov [cand_ok+bx], al
+    call lp_latch               ; (keeps every register)
+    sbb al, al                  ; CF=0 answered -> 1, CF=1 -> 0
+    inc ax
+    mov [cand_ok+di], al
     inc di
-    pop cx
     loop .probe
 .out:
     pop es
@@ -785,26 +763,57 @@ lpl_scan:
 ; --- state, and the candidate list --------------------------------------------
 ; `db 0` in the image and not a bss: -f bin zeroes nothing, a driver has no bss
 ; at all (os88drv.inc), and lptlink is a flat binary either way.
+;
+; THE ZEROED CELLS ARE A MACRO, so an includer may put them where zeros are
+; free (driver size pass 1): NET.DRV places them in its trailing state, which
+; os88drv.py takes off the file, and OS88NET.COM in its reserved block, which
+; net_bss_clear zeroes before anything runs. `%define LPL_ZLATER` and invoke
+; LPL_ZSTATE yourself - `LPL_ZSTATE db` among initialised data, `LPL_ZSTATE
+; res` inside an `absolute` block. Without the define they are emitted here,
+; as they always were (tests/lptlink).
+%macro LPL_ZSTATE 1
+  %ifidn %1, db
 ncand:      db 0
 cand_base:  times MAXCAND dw 0
 cand_bios:  times MAXCAND db 0
 cand_ok:    times MAXCAND db 0
-
 lp_base:    dw 0
 lp_stat:    dw 0
 lp_ctrl:    dw 0
 lp_lastop:  db 0                ; 1 = the last link op was a RECEIVE
+lp_svdat:   db 0
+lp_svctl:   db 0
+lp_ver:     db 0
+lp_dlset:   db 0
+dl_wf:      dw 0
+  %elifidn %1, res
+ncand:      resb 1
+cand_base:  resw MAXCAND
+cand_bios:  resb MAXCAND
+cand_ok:    resb MAXCAND
+lp_base:    resw 1
+lp_stat:    resw 1
+lp_ctrl:    resw 1
+lp_lastop:  resb 1
+lp_svdat:   resb 1
+lp_svctl:   resb 1
+lp_ver:     resb 1
+lp_dlset:   resb 1
+dl_wf:      resw 1
+  %else
+    %error "LPL_ZSTATE: db or res"
+  %endif
+%endmacro
+%ifndef LPL_ZLATER
+    LPL_ZSTATE db
+%endif
+
 lp_turnw:   db TURN_RX          ; ticks a REVERSAL will wait - see REPLY_TMO.
                                 ; lp_init puts it back to the SWEEP's figure,
                                 ; so patience is something a linked master has
                                 ; to ask for and can never be left switched on
                                 ; across a port scan
-lp_svdat:   db 0
-lp_svctl:   db 0
-lp_ver:     db 0
 lp_myver:   db PROTO_VER        ; ...what WE answer with (see PROTO_VER)
-lp_dlset:   db 0
-dl_wf:      dw 0
 
 ; The three the POST itself scans, in its order. 3BC is the MDA/Hercules
 ; family's - the GB101 in the calibration machine - and 378 is the DOS machine's
@@ -813,5 +822,10 @@ dl_wf:      dw 0
 ; mono machine LPT1 IS 3BC (NET-PLAN 1.4.1).
 std_base:   dw 0x3BC, 0x378, 0x278
 
-magic_q:    db 'O','8','8','?'  ; master -> slave
+magic_q:    db 'O','8','8','?'  ; master -> slave. magic_r FOLLOWS it:
+                                ; mst_hello's second loop starts where its
+                                ; first ends
 magic_r:    db 'O','8','8','!'  ; slave -> master, then a version byte
+%if magic_r - magic_q != 4
+  %error "lplink: mst_hello reads magic_r where its walk of magic_q ends"
+%endif

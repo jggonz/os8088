@@ -121556,12 +121556,14 @@ finds it); greedy costs about 3% here.
 
 #### 62.12.3 It needs no memory the program did not already need
 
-The staged body runs `0x3ACA..0x6426` (it was `0x4A01..0x76CD` before
-§62.12.6's size pass). `os88net.asm`'s own reserved buffers already run to
-`net_bss1` = **`0x995C`** (§62.11.7; `0x9F89` before the same pass took 1,581
-bytes of code and block mode's bss out from under them), so every machine with
-the room to run the unpacked program has the room to unpack this one, with
-**13,622 bytes to spare**. `tools/os88sfx.py` asserts the ceiling and refuses in a
+The staged body runs `0x37FE..0x6085` (it was `0x4A01..0x76CD` before
+§62.12.6's size pass, and `0x3B6F..0x6524` before driver size pass 1).
+`os88net.asm`'s own reserved buffers already run to `net_bss1` =
+**`0x9726`** (§62.11.7; `0x9F89` before §62.12.6's pass took 1,581 bytes of
+code and block mode's bss out from under them, and `0x9A01` before driver
+size pass 1 took 881 more and reserved 150 bytes of zeroed state the image
+had carried), so every machine with the room to run the unpacked program has
+the room to unpack this one, with **13,985 bytes to spare**. `tools/os88sfx.py` asserts the ceiling and refuses in a
 sentence if it is ever crossed, and `net_bss_clear` zeroes the staged body along
 with everything else above the image — by which time it has been read.
 
@@ -238040,8 +238042,8 @@ Measured at one build number against the tree before it:
 | | `kern_big` | `kern_small` |
 |---|---|---|
 | resident | **81 bytes**: `.text` +43 - `drv_tab`'s row (16), its two strings (22), `drv_fptr10`'s pair (4), `drv_svcix`'s byte (1) - and `.bss` +38, `drv_owner`'s word and the class's 36-byte service-table copy. `DRVC_CD`'s shape (§119.5), five bytes of longer name over it. No rung crossed (the image rung 409 -> 316 left). `.boot2` +1, `drv_cfgbit`'s byte, is not resident | 0 - byte-identical |
-| `HTTPFS.DRV` | **5,557 bytes of image, a 6 KB claim while attached; 3,658 on the floppy** (8 clusters at 360 KB), LZ4 - 7,927 / 5,653 with the page in it. The 1 KB reader is most of its bss | none |
-| `HTTPPAGE.DRV` | **2,357 bytes of image, a 3 KB claim while the panel shows the page; 2,030 on the floppy** - four 512-byte clusters, and under 2 KB as split. Half of it is the shared field (`os88line.inc`, 775) and button (`os88ui.inc`, 299) | none |
+| `HTTPFS.DRV` | **5,513 bytes of image, a 6 KB claim while attached; 3,584 on the floppy** (7 clusters at 360 KB), LZ4 - 7,927 / 5,653 with the page in it. The 1 KB reader is most of its bss. (5,557 / 3,658 when this was measured; driver size pass 1 took it to these) | none |
+| `HTTPPAGE.DRV` | **2,339 bytes of image, a 3 KB claim while the panel shows the page; 1,995 on the floppy** - four 512-byte clusters, and under 2 KB as split. Half of it is the shared field (`os88line.inc`, 775) and button (`os88ui.inc`, 299). (2,357 / 2,030 when this was measured) | none |
 | while mounted | the index's claim: `ceil((16 + 18 x records) / 1024)` KB - **2 KB for a system disk's 70 records**, 16 KB at `HF_MAXREC` | none |
 
 **On every `kern_big` system disk, the 360 KB one included**: §24.3.1.6

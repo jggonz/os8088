@@ -300,7 +300,7 @@ net_detach:
                                 ; not hold is refused and costs nothing
     cmp byte [net_state], NS_LINKED
     jne .port
-    mov byte [lp_turnw], TURN_RX    ; ...AND SHORT AGAIN FOR THE GOODBYE.
+    call net_bye                ; ...AND SHORT AGAIN FOR THE GOODBYE.
                                 ; 62.10.4.8 made lp_snib patient, which is
                                 ; right for a far side that has gone to its
                                 ; disk and wrong for one that is not there at
@@ -309,9 +309,8 @@ net_detach:
                                 ; frozen UI, under the gfx lock - on a byte
                                 ; whose own comment says it is best effort.
                                 ; Nothing after this needs the long one; the
-                                ; next connect's lp_init sets it anyway
-    mov al, NC_BYE
-    call lp_sbyte               ; best effort: if it fails, it fails
+                                ; next connect's lp_init sets it anyway.
+                                ; Best effort: if it fails, it fails
 .port:
     cmp byte [net_state], NS_NOPORT
     je  .done
@@ -342,9 +341,8 @@ net_pick:
     push cx
     push di
     mov cl, [ncand]
-    or  cl, cl
-    jz  .none
     xor ch, ch
+    jcxz .none
     xor di, di
 .next:
     mov bx, di
@@ -384,9 +382,8 @@ net_connect:
     push si
     push di
     mov cl, [ncand]
-    or  cl, cl
-    jz  .nolink
     xor ch, ch
+    jcxz .nolink
     xor di, di
 .try:
     push cx
@@ -419,10 +416,7 @@ net_connect:
     inc di
     pop cx
     loop .try
-.nolink:
-    mov byte [net_state], NS_PORT
-    stc
-    jmp short .out
+    jmp short .nolink
 
 .linked:
     mov byte [net_state], NS_LINKED
@@ -444,11 +438,10 @@ net_connect:
     call net_info               ; how big is it, and may we write to it?
     jc  .lost
     call net_mount              ; osapi_vol_add + osapi_vol_mount
-    jc  .lost
-    clc
-    jmp short .out
+    jnc .out                    ; CF = 0: linked and mounted
 .lost:
     call lp_restore
+.nolink:                        ; ...and the sweep's end: nobody answered
     mov byte [net_state], NS_PORT
     stc
 .out:
@@ -470,22 +463,19 @@ net_info:
     push ax
     mov al, NC_INFO
     call lp_sbyte
-    jc  .bad
+    jc  .out
     call lp_rbyte               ; status
-    jc  .bad
+    jc  .out
     or  al, al
-    jnz .bad
+    stc                         ; (ZF is the status's)
+    jnz .out
     call lp_rword               ; sectors, consumed and not kept
-    jc  .bad
-    call lp_rbyte               ; flags: bit 0 = read-only
-    jc  .bad
+    jc  .out
+    call lp_rbyte               ; flags: bit 0 = read-only - and its CF is
+    jc  .out                    ; the answer
     mov [net_flags], al
-    pop ax
-    clc
-    ret
-.bad:
-    pop ax
-    stc
+.out:
+    pop ax                      ; (`pop` writes no flag)
     ret
 
 ; =============================================================================
@@ -1205,12 +1195,9 @@ net_mount:
     jc  .bad
     mov [net_vol], al
     call OSAPI_VOL_MOUNT        ; AL survives: it is the volume index
-    jc  .bad
-    clc
-    jmp short .out
-.bad:
+    jnc .out                    ; CF = 0: mounted
+.bad:                           ; (CF = 1 both ways in)
     mov byte [net_vol], 0xFF
-    stc
 .out:
     pop di
     pop si
@@ -1232,17 +1219,20 @@ net_drop:
 .novol:
     cmp byte [net_state], NS_LINKED
     jne .noling
-    mov byte [lp_turnw], TURN_RX    ; net_detach's reason exactly: a goodbye
-                                ; is best effort, and a patient one costs the
-                                ; user ten frozen seconds when the far end is
-                                ; simply not there (SPEC.md 62.10.4.8)
-    mov al, NC_BYE
-    call lp_sbyte
+    call net_bye
     call lp_restore
     mov byte [net_state], NS_PORT
 .noling:
     pop ax
     ret
+
+; net_bye - the goodbye, on the SHORT wait: net_detach's reason exactly - a
+; goodbye is best effort, and a patient one costs the user ten frozen seconds
+; when the far end is simply not there (SPEC.md 62.10.4.8). clobbers: AL, CF
+net_bye:
+    mov byte [lp_turnw], TURN_RX
+    mov al, NC_BYE
+    jmp lp_sbyte
 
 ; -----------------------------------------------------------------------------
 ; net_lost - the link went away mid-transfer
@@ -1273,6 +1263,7 @@ net_lost:
 
 %include "netui.inc"            ; the Control Panel page (SPEC.md 31.9)
 %include "netsock.inc"          ; ...the SOCKET half (SPEC.md 62.11)
+%define LPL_ZLATER              ; (its zeroed cells are in the state below)
 %include "lplink.inc"           ; ...and the transport, shared with tests/lptlink
 %define OS88UI_ARM              ; os88ui_arm/fire/armed: the press/release
 %define OS88UI_NOGEST           ; the page drives its one button through the
@@ -1307,6 +1298,21 @@ net_cmdip:  db 0                ; the NF_* letter in flight
 net_lastcmd: db 0               ; ...and the one the last failure died on
 net_px:     dw 0
 net_py:     dw 0
+
+; --- the page's (netui.inc), zero at load and so off the file -----------------
+net_cbuf:   db 0,0            ; the dead command's letter, as a string
+net_buf:    db 0,0,0,0,0      ; net_hex's four digits and a NUL
+net_rc:     dw 0,0,0,0       ; the button's rect, built by net_brect
+net_down:   db 0             ; 1 = it is drawn PRESSED (SPEC.md 13.8.4).
+                             ; net_setdown is its one writer and net_draw_btn
+                             ; is its one reader, so a repaint mid-press shows
+                             ; the same thing an edge does
+net_pgbody: dw 0             ; net_pgent's: the verb body it is running
+nu_btlbl:   dw 0             ; the button record's label...
+nu_btflg:   dw 0             ; ...and flags (net_draw_btn writes both)
+
+; --- the transport's (lplink.inc), likewise ----------------------------------
+    LPL_ZSTATE db
 
 ; --- file mode's (SPEC.md 62.10) ---------------------------------------------
 net_cwd:    dw 0                ; the far side's handle for where we STAND.

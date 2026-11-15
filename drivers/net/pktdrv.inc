@@ -106,9 +106,7 @@ ne_probe:
     pop ds
     jc  .none
     cmp ch, 1                   ; class 1 = Ethernet (DIX and 802.3)
-    jne .none
-    clc
-    jmp short .out
+    je  .out                    ; CF = 0 from the equal compare
 .none:
     mov byte [pk_int], 0
     stc
@@ -134,40 +132,32 @@ ne_init:
     push si
     push di
     push es
-    mov byte [pk_wr], 0         ; ...a fresh ring, because a second bring-up
-    mov byte [pk_rd], 0         ; must not inherit the first one's frames
-    mov cx, PKT_NBUF
-    xor bx, bx
-.zr:
-    mov word [pk_len + bx], 0
-    add bx, 2
-    loop .zr
+    push ds
+    pop es                      ; ES = DS: the ring now, the receiver below
+    mov di, pk_wr               ; ...a fresh ring, because a second bring-up
+    mov cx, PKT_ZRING / 2       ; must not inherit the first one's frames:
+    xor ax, ax                  ; pk_wr, pk_rd, pk_plen and every pk_len, one
+    cld                         ; run (PKT_ZSTATE)
+    rep stosw
 
-    mov ah, 2                   ; access_type
-    mov al, 1                   ; class 1: Ethernet
+    mov ax, 0x0201              ; access_type (AH = 2), class 1: Ethernet
     mov bx, 0xFFFF              ; type: whatever this interface is
     mov dl, 0                   ; interface 0
-    xor cx, cx                  ; typelen 0 = EVERY packet, which is what a
-    xor si, si                  ; stack wants and what mTCP asks for too
-    push ds
-    pop es
+                                ; CX = 0, the stosw's: typelen 0 = EVERY
+    xor si, si                  ; packet, which is what a stack wants and
+                                ; what mTCP asks for too
     mov di, pk_recv             ; ES:DI = the receiver
     call pk_call
-    jc  .fail
+    jc  .out
     mov [pk_handle], ax
 
+    mov bx, ax                  ; the handle
     mov ah, 6                   ; get_address
-    mov bx, [pk_handle]
     push ds
     pop es
     mov di, eth_mac
     mov cx, 6
-    call pk_call
-    jc  .fail
-    clc
-    jmp short .out
-.fail:
-    stc
+    call pk_call                ; ...and its CF is the answer
 .out:
     pop es
     pop di
@@ -352,12 +342,21 @@ pk_intop:
     ret                         ; ...a near ret preserves the driver's CF
 
 pk_sig:     db 'PKT DRVR'
-pk_int:     db 0                ; the vector it answered on, 0 = none found
-pk_handle:  dw 0                ; access_type's, 0 = not registered
-pk_wr:      db 0                ; the ring: pk_recv writes here...
-pk_rd:      db 0                ; ...and ne_rx reads here
-pk_plen:    dw 0                ; the length banked between the two upcalls
-pk_len:     times PKT_NBUF dw 0 ; 0 = the slot is free
+; ...and the state, all zero at start: reserved rather than emitted (driver
+; size pass 1) - os88net.asm invokes PKT_ZSTATE inside its `absolute` block,
+; which net_bss_clear zeroes before the packet driver is even looked for
+%macro PKT_ZSTATE 0
+pk_int:     resb 1              ; the vector it answered on, 0 = none found
+pk_handle:  resw 1              ; access_type's, 0 = not registered
+pk_wr:      resb 1              ; the ring: pk_recv writes here...
+pk_rd:      resb 1              ; ...and ne_rx reads here
+pk_plen:    resw 1              ; the length banked between the two upcalls
+pk_len:     resw PKT_NBUF       ; 0 = the slot is free
+PKT_ZRING   equ $ - pk_wr       ; ne_init's one zeroing run
+%if PKT_ZRING & 1
+  %error "pktdrv: ne_init clears pk_wr..pk_len in WORDS"
+%endif
+%endmacro
 %ifndef ETH_NOEMIT
 pk_ring:    times PKT_NBUF * PKT_FRAME db 0
 %endif
