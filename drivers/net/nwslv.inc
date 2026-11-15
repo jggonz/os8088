@@ -47,8 +47,7 @@ nw_up:
     loop .spin
     mov si, s_nwnodhcp
     jmp short .fail
-.bound:
-    clc
+.bound:                         ; (CF = 0: the equal compare)
     jmp short .out
 .nopkt:
     mov si, s_nwnopkt
@@ -89,78 +88,64 @@ nw_idle:
 ; --- NW_OPEN: port word, NET_HOSTMAX host bytes -> status, handle -----------
 nw_s_open:
     call lp_rword
-    jc  .io
+    jc  nw_hio
     mov [nw_port], ax
     mov di, nw_host
     mov cx, NET_HOSTMAX
 .rd:
     call lp_rbyte
-    jc  .io
+    jc  nw_hio
     mov [di], al
     inc di
     loop .rd
     mov byte [nw_host + NET_HOSTMAX - 1], 0     ; whatever arrived, ENDED: the
                                                 ; name is about to be walked
     call nw_ready
-    jc  .down
+    jc  nw_hdown
     mov si, nw_host
     mov cx, [nw_port]
     call eth_v_open
-    jc  .no
-    mov [nw_hnd], al
-    mov byte [nw_st], 0
-    jmp short .reply
-.down:
-    mov al, NETE_NOLINK
-.no:
-    mov [nw_st], al
-    mov byte [nw_hnd], 0
-.reply:
-    call nw_rep_h
-.io:
-    ret
+    jmp short nw_hans
 
 ; --- NW_LISTEN: port word -> status, handle ---------------------------------
 nw_s_listen:
     call lp_rword
-    jc  .io
+    jc  nw_hio
     mov cx, ax
     call nw_ready
-    jc  .down
+    jc  nw_hdown
     call eth_v_listen
-    jc  .no
-    mov [nw_hnd], al
-    mov byte [nw_st], 0
-    jmp short .reply
-.down:
-    mov al, NETE_NOLINK
-.no:
-    mov [nw_st], al
-    mov byte [nw_hnd], 0
-.reply:
-    call nw_rep_h
-.io:
-    ret
+    jmp short nw_hans
 
 ; --- NW_ACCEPT: handle byte -> status, handle -------------------------------
 nw_s_accept:
     call lp_rbyte
-    jc  .io
+    jc  nw_hio
     call nw_ready
-    jc  .down
+    jc  nw_hdown
     call eth_v_accept
-    jc  .no
-    mov [nw_hnd], al
-    mov byte [nw_st], 0
-    jmp short .reply
-.down:
+                                ; (falls into nw_hans)
+
+; --- nw_hans - OPEN, LISTEN and ACCEPT's one answer: status, then handle ------
+; in: CF/AL as eth_v_* left them - CF=0 and AL = the handle, CF=1 and AL = a
+; NETE_*; or nw_hdown, for no stack at all. A refusal's handle is 0. The two
+; bytes go straight to the wire from AL and AH; they used to be banked in
+; nw_st/nw_hnd first, which nothing read but nw_rep_h (driver size pass 1)
+nw_hans:
+    jc  nw_hno
+    mov ah, al                  ; the handle...
+    xor al, al                  ; ...under a status of 0
+    jmp short nw_hrep
+nw_hdown:
     mov al, NETE_NOLINK
-.no:
-    mov [nw_st], al
-    mov byte [nw_hnd], 0
-.reply:
-    call nw_rep_h
-.io:
+nw_hno:
+    mov ah, 0                   ; a refusal names no handle
+nw_hrep:
+    call lp_sbyte               ; status (lp_sbyte keeps AX)
+    jc  nw_hio
+    mov al, ah
+    call lp_sbyte               ; handle
+nw_hio:
     ret
 
 ; --- NW_ADDR: - -> status, four IP bytes ------------------------------------
@@ -183,15 +168,12 @@ nw_s_addr:
     mov di, nw_ip               ; caller is us
     call eth_v_addr
     pop es
-    jc  .no
-    mov byte [nw_st], 0
+    jc  .reply                  ; AL = the NETE_*
+    xor al, al
     jmp short .reply
 .down:
     mov al, NETE_NOLINK
-.no:
-    mov [nw_st], al
 .reply:
-    mov al, [nw_st]
     call lp_sbyte
     jc  .io
     xor di, di
@@ -219,15 +201,13 @@ nw_s_stat:
     jc  .no
     mov [nw_state], ah
     mov [nw_rdy], cx
-    mov byte [nw_st], 0
+    xor al, al
     jmp short .reply
 .down:
     mov al, NETE_NOLINK
 .no:
-    mov [nw_st], al
 .reply:
-    mov al, [nw_st]
-    call lp_sbyte
+    call lp_sbyte               ; AL = the status
     jc  .io
     mov al, [nw_state]
     call lp_sbyte
@@ -274,15 +254,13 @@ nw_s_send:
     call eth_v_send
     jc  .no
     mov [nw_took], cx
-    mov byte [nw_st], 0
+    xor al, al
     jmp short .reply
 .down:
     mov al, NETE_NOLINK
 .no:
-    mov [nw_st], al
 .reply:
-    mov al, [nw_st]
-    call lp_sbyte
+    call lp_sbyte               ; AL = the status
     jc  .io
     mov ax, [nw_took]
     call lp_sword
@@ -310,16 +288,14 @@ nw_s_recv:
     call eth_v_recv
     jc  .no
     mov [nw_len], cx
-    mov byte [nw_st], 0
+    xor al, al
     jmp short .reply
 .down:
     mov al, NETE_NOLINK
 .no:
-    mov [nw_st], al
     mov word [nw_len], 0        ; ...and the LENGTH WORD still goes, saying 0
 .reply:
-    mov al, [nw_st]
-    call lp_sbyte
+    call lp_sbyte               ; AL = the status
     jc  .io
     mov ax, [nw_len]
     call lp_sword
@@ -356,24 +332,7 @@ nw_s_close:
 
 ; --- nw_ready - is there a stack at all? CF=1 = no --------------------------
 nw_ready:
-    cmp byte [eth_up], 0
-    je  .no
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; --- nw_rep_h - the two-byte reply three commands share ---------------------
-nw_rep_h:
-    push ax
-    mov al, [nw_st]
-    call lp_sbyte
-    jc  .out
-    mov al, [nw_hnd]
-    call lp_sbyte
-.out:
-    pop ax
+    cmp byte [eth_up], 1        ; CF = 1 exactly when it is 0
     ret
 
 NW_DHCPW    equ 6000            ; nw_ms passes at DHCP, so this is seconds
@@ -381,19 +340,23 @@ NW_DHCPW    equ 6000            ; nw_ms passes at DHCP, so this is seconds
                                 ; run is interactive and a lease that takes
                                 ; five seconds is still a lease
 
-nw_port:    dw 0
-nw_hnd:     db 0
-nw_st:      db 0
-nw_state:   db 0
-nw_rdy:     dw 0
-nw_ip:      times 4 db 0        ; NW_ADDR's answer, staged so the reply frame
+; THE STATE IS ALL ZERO AT START, so it is reserved and not emitted (driver
+; size pass 1): os88net.asm invokes NWSLV_ZSTATE inside its `absolute` block,
+; which net_bss_clear zeroes before anything here runs
+%macro NWSLV_ZSTATE 0
+nw_port:    resw 1
+nw_hnd:     resb 1
+nw_state:   resb 1
+nw_rdy:     resw 1
+nw_ip:      resb 4              ; NW_ADDR's answer, staged so the reply frame
                                 ; is four bytes on the refusal path too
-nw_len:     dw 0
-nw_ann:     dw 0                ; what NW_SEND's master ANNOUNCED, which may be
+nw_len:     resw 1
+nw_ann:     resw 1              ; what NW_SEND's master ANNOUNCED, which may be
                                 ; more than nw_len: the drain is by this
-nw_cap:     dw 0
-nw_took:    dw 0
-nw_host:    times NET_HOSTMAX db 0
+nw_cap:     resw 1
+nw_took:    resw 1
+nw_host:    resb NET_HOSTMAX
+%endmacro
 %ifndef ETH_NOEMIT
 nw_buf:     times NET_SKMAX db 0
 %endif
