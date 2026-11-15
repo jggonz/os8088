@@ -827,9 +827,36 @@ wl_draw:
     je .top                     ; (r5): it is drawn against the clip as it
     mov ax, [si+6]              ; stood, which the top raises only after it
     mov bx, [di+6]              ; in each column - and each column is its
-    mov cx, wl_lfloor           ; own, so all the floor's cells and then all
-    call wl_run                 ; the top's are the same cells, plotted in
-.top:                           ; the same order within a column
+    mov dx, ax                  ; own, so all the floor's cells and then all
+    cmp dx, bx                  ; the top's are the same cells, plotted in
+    jle .f1                     ; the same order within a column.
+    mov dx, bx                  ; ITS CULL, the top's: at or under every
+.f1:                            ; open column's clip it draws nothing (and
+    add dx, 2                   ; raises nothing, ever) - the floor of a
+    sar dx, 1                   ; box behind a nearer one's top
+    sar dx, 1
+    push si
+    mov si, [wl_col0]
+    mov cl, [wl_sc+1]
+    xor ch, ch
+    add si, wa_cclip
+.fscan:
+    lodsw
+    cmp ax, dx
+    jg .fhit
+.fnext:
+    loop .fscan
+    pop si
+    jmp short .top
+.fhit:
+    cmp word [si+wa_cov-wa_cclip-2], 0
+    jne .fnext
+    pop si
+    mov ax, [si+6]
+    mov bx, [di+6]
+    mov cx, wl_lfloor
+    call wl_run
+.top:
     pop bx                      ; THE TOP, raising the clip
     pop ax
     mov cx, wl_ltop
