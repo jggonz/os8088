@@ -1312,7 +1312,7 @@ nu_btlbl:   dw 0             ; the button record's label...
 nu_btflg:   dw 0             ; ...and flags (net_draw_btn writes both)
 
 ; --- the transport's (lplink.inc), likewise ----------------------------------
-    LPL_ZSTATE db
+    ; (lplink.inc emits its own state: the transport is back at its base)
 
 ; --- file mode's (SPEC.md 62.10) ---------------------------------------------
 net_cwd:    dw 0                ; the far side's handle for where we STAND.

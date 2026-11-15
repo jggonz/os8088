@@ -3645,8 +3645,8 @@ eth_rxb:    resb NE_FRAME + 4
 eth_txb:    resb NE_FRAME + 4
 pk_ring:    resb PKT_NBUF * PKT_FRAME
 nw_buf:     resb NET_SKMAX
-    LPL_ZSTATE res              ; lplink.inc's zeroed cells...
-    LSLV_ZSTATE res             ; ...lplslv.inc's...
+    ; (lplink.inc emits its own state)
+    ; (lplslv.inc emits its own)
     NWSLV_ZSTATE                ; ...nwslv.inc's...
     PKT_ZSTATE                  ; ...and pktdrv.inc's: zero at start, like
                                 ; everything here, and so never emitted
