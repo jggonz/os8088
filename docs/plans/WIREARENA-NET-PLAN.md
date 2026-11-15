@@ -527,8 +527,8 @@ the meter is off, as a weapon hint and a message bar.
 - **The nick** is a third os88line field (SPEC.md 83) on a row of its own
   under Play (`WS_Y4`; the buttons and the players' rows 18 pixels lower,
   the window 174 tall): up to eight characters, letters in upper case, no
-  Space (Space is Ready anywhere on the page). It is focus stop 5; the
-  address, while there, is 6. `wa_nick` is the typed text space-padded.
+  Space (Space is Ready anywhere on the page). It is focus stop 6, after
+  the address's 5 (which Up and Down step over while it is not there). `wa_nick` is the typed text space-padded.
 - **On the wire** it is HELLO's bytes 18..25 (LINK-PLAN 4.1, protocol
   version 2): every HELLO carries it, so a peer has it long before START,
   in its record (`WP_NICK`, the record 42 bytes). A peer with a nick shows

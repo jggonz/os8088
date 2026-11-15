@@ -29,6 +29,7 @@ OS instances talking. It checks behaviour and bytes, not speed.
 Registered as walink in soak; make wirearenadisk first.
 """
 import binascii
+import re
 from pathlib import Path
 import struct
 import sys
@@ -49,7 +50,10 @@ _map = dispapps._map
 dispapps._map = lambda app, defines=(): (amap() if app == 'wirearena'
                                          else _map(app, defines))
 
-LENS = {1: 20, 2: 15, 3: 8, 4: 19, 5: 24, 6: 17, 7: 12, 8: 24}
+# a peer record's size, walink.inc's own (the nick made it 42, NET-PLAN 9.6)
+WP_SZ = int(re.search(r"^WP_SZ\s+equ\s+(\d+)", (ROOT / 'apps/wirearena/'
+                      'walink.inc').read_text(), re.M).group(1))
+LENS = {1: 28, 2: 15, 3: 8, 4: 19, 5: 24, 6: 17, 7: 12, 8: 24}
 ANIM = {}
 FS = 56
 fails = []
@@ -276,7 +280,7 @@ class Arena(W.Machine):
         """the per-peer names (wa_pc's, a working copy: NET-PLAN 4) read
         from peer record k of the table instead"""
         for name, off in self.PEER:
-            self.sy[name] = self.sy['wa_pt'] + 34 * k + off
+            self.sy[name] = self.sy['wa_pt'] + WP_SZ * k + off
 
     def v(self, name, n=1, signed=False):
         return int.from_bytes(self.readseg(self.seg, self.sy[name], n),

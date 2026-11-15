@@ -49,8 +49,8 @@ WS_BTNH     equ 16
 WS_B2X      equ 129
 WS_LOBY     equ 106             ; the players' rows (walink.inc), 10 apart
 WS_NDR      equ 5               ; the drop-downs; the focus's sixth stop is
-WS_NICK     equ 5               ; the nick's field, the seventh the address's
-WS_FLD      equ 6               ; (while Play is internet)
+WS_FLD      equ 5               ; the address's field (while Play is
+WS_NICK     equ 6               ; internet), the seventh the nick's
 WS_NKMAX    equ 9               ; the nick's buffer: eight and the NUL
 
 ; wa_sinit - the window is open: the controls' records
@@ -471,8 +471,11 @@ wa_sdraw:
     call wa_slabel
     jc .no
     inc ax
-    cmp al, WS_NDR + 1
+    cmp al, WS_NDR
     jb .la
+    mov al, WS_NICK
+    call wa_slabel
+    jc .no
 .lset:
     mov al, [wa_sfoc]
     mov [wa_sdfoc], al
@@ -542,8 +545,11 @@ wa_sdraw:
 ; wa_slabel - AL = a drop-down: its label, the focus's marker in its first
 ; cell. CF = 1 no clip. Keeps all but the flags
 wa_slabel:
-    cmp al, WS_NDR + 1          ; (the drop-downs' and the nick's)
+    cmp al, WS_NICK             ; (the drop-downs' and the nick's; the
+    je .lab                     ; address has none)
+    cmp al, WS_NDR
     jae .out
+.lab:
     call wa_lkclipon
     jc .no
     push ax
@@ -553,10 +559,15 @@ wa_slabel:
     push si
     mov bl, al
     xor bh, bh
+    cmp bl, WS_NICK             ; (the nick's: the table's sixth)
+    jne .ix
+    dec bx
+.ix:
     mov si, bx                  ; (x 6: the label's three words)
     shl si, 1
     add si, bx
     shl si, 1
+    mov bl, al                  ; (BL the focus stop again: the marker's)
     mov cx, [wa_slabs+si]
     add cx, [wa_sorg]
     mov dx, [wa_slabs+si+2]
@@ -779,16 +790,22 @@ wa_skey:
     cmp byte [wa_sfoc], 0
     je .done
     dec byte [wa_sfoc]
-    jmp .done
+    jmp .skip
 .down:
-    mov al, WS_NICK             ; (the address a stop only while there)
-    cmp byte [wa_splay], 3
-    jne .dl
-    inc ax
-.dl:
-    cmp [wa_sfoc], al
+    cmp byte [wa_sfoc], WS_NICK
     jae .done
     inc byte [wa_sfoc]
+.skip:
+    cmp byte [wa_sfoc], WS_FLD  ; (the address a stop only while there:
+    jne .done                   ; Up and Down step over it)
+    cmp byte [wa_splay], 3
+    je .done
+    mov al, WS_NICK
+    cmp ah, 0x48
+    jne .sk
+    mov al, WS_NDR - 1
+.sk:
+    mov [wa_sfoc], al
     jmp .done
 .left:
     mov ah, -1
@@ -873,7 +890,7 @@ wa_sfocfix:
     cmp byte [wa_splay], 3
     je .out
     cmp byte [wa_sfoc], WS_FLD
-    jb .out
+    jne .out
     mov byte [wa_sfoc], WS_NDR - 1
 .out:
     ret
