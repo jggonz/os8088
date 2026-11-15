@@ -1377,6 +1377,19 @@ def pvs_build(tag, boxes):
         return None                     # (an eye over the tallest: no occluder)
     tall = [i for i, b in enumerate(boxes) if b.h >= top]
     occ = [boxes[i] for i in tall]
+    m = pvs_reach()                     # (every place the game puts an eye
+    for (x, y) in ([tuple(arenas()[[t for t, _, _, _ in arenas()].index(tag)]
+                          [3][:2]), (1024, 700)] +      # without walking -
+                   [tuple(r[:2]) for r in ARENA_RESPAWNS.get(  # the start,
+                       tag, FLAT_RESPAWNS)] +           # the B bench, the
+                   [tuple(v[1:3]) for v in ARENA_BENCH.get(tag, [])]):  # re-
+        if not (ROOM[0] + m <= x <= ROOM[2] - m and     # spawns, the P
+                ROOM[1] + m <= y <= ROOM[3] - m) or any(  # bench's views -
+                a - m < x < c + m and b - m < y < d + m     # is in the cells'
+                for (a, b, c, d) in occ):                   # reach, pvs_points)
+            raise SystemExit("arenagen: arena %s: an eye placed at (%d, %d), "
+                             "within %d of a tall box or the wall - outside "
+                             "what the PVS is made for" % (tag, x, y, m))
     g = 1 << PVS_SHIFT
     if (ROOM[2] - ROOM[0]) % g or (ROOM[3] - ROOM[1]) % g or ROOM[0] or ROOM[1]:
         raise SystemExit("arenagen: the PVS grid wants the room at 0, 0 in "
@@ -1598,10 +1611,33 @@ def pvs_low(boxes, masks, occ):
     return cut
 
 
+def pvs_reach():
+    """How near a tall box or the room's wall an eye can be, units: the
+    player's square of WA_RAD collides with every box widened by it and
+    keeps it off the wall (wa_collide, wa_lists), less 2 for the exact
+    bounds of those compares"""
+    src = open(__file__.replace("tools/arenagen.py", "apps/wirearena/waconst.inc")
+               if __file__.endswith("tools/arenagen.py") else
+               "apps/wirearena/waconst.inc").read()
+    return int(re.search(r"WA_RAD\s+equ\s+(\d+)", src).group(1)) - 2
+
+
 def pvs_points(x0, y0, x1, y1, occ):
     """The points a cell's visibility is tested from, sorted (pvs_build's
     comment): its outline and the occluders' inside it every PVS_STEP, and
-    a PVS_GRIDP grid - none inside an occluder (no one stands in a wall)"""
+    a PVS_GRIDP grid - none inside an occluder (no one stands in a wall).
+    THE REACHABLE PART of the cell: an eye is never within pvs_reach() of a
+    tall box or of the room's wall (the player's square collides first),
+    so the cell is cut to the room less that, and each occluder widened by
+    it - and what a point there sees is what the cell can (a ray from an
+    eye, run backwards, leaves that region through its outline as it
+    would leave the cell)"""
+    m = pvs_reach()
+    x0, y0 = max(x0, ROOM[0] + m), max(y0, ROOM[1] + m)
+    x1, y1 = min(x1, ROOM[2] - m), min(y1, ROOM[3] - m)
+    if x0 > x1 or y0 > y1:
+        return []
+    occ = [(a - m + 1, b - m + 1, c + m - 1, d + m - 1) for (a, b, c, d) in occ]
     pts = set()
 
     def edge(ax, ay, bx_, by):
