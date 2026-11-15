@@ -213,7 +213,7 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
     if quick:
         settle = False
         kw.setdefault("boot", False)
-    # OS88_BOOTCACHE=1: the end of this boot restored from a fork snapshot
+    # the boot cache (on unless OS88_BOOTCACHE=0): the end of this boot restored from a fork snapshot
     # another row already paid for (tools/os88bootcache.py, docs/plans/
     # soak-speed-2/core.md). The machine comes back RUNNING at kernel_up's
     # gate, saver handled; `up` and the settle the row asked for follow as

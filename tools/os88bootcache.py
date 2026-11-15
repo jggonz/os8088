@@ -10,10 +10,11 @@ its boot as a fork snapshot (debug_server.rs `snapshot`: a copy-on-write
 process, nothing serialized, nothing that can be left out), and every later
 row with the same key `restore`s a copy of it in ~0.1 s.
 
-    OS88_BOOTCACHE=1 python3 tests/<row>.py      # opt in; os88ui.boot uses it
+    python3 tests/<row>.py                       # ON: os88ui.boot uses it
+    OS88_BOOTCACHE=0 python3 tests/<row>.py      # off: every boot fresh
 
-OPT-IN, because a restored machine is not a fresh boot in two ways a row
-could see:
+ON BY DEFAULT (the owner, 2026-11-15), after a soak of every row it reaches.
+A restored machine is not a fresh boot in two ways a row could see:
 
   * its guest clock does not start at 0 - it is the snapshot's (cycles and
     [ticks] continue from the end of the boot). Exactly as if the boot had
@@ -68,7 +69,10 @@ MAX_ENTRIES = int(os.environ.get("OS88_BOOTCACHE_MAX", "6"))
 
 
 def enabled():
-    return os.environ.get("OS88_BOOTCACHE", "0") not in ("", "0")
+    """ON unless $OS88_BOOTCACHE is "0" (or empty): the default since the
+    owner's 2026-11-15 decision, which followed a soak of every row it
+    reaches."""
+    return os.environ.get("OS88_BOOTCACHE", "1") not in ("", "0")
 
 
 def root():

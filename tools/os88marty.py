@@ -5310,7 +5310,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     True to run until the screen settles (`settle`, the right answer on any
     machine), a NUMBER of seconds to run blind for that long, 0/False to
     return the machine PAUSED, or "up": run, and `kernel_up` - the desktop's
-    STATE up, no picture settle - which OS88_BOOTCACHE=1 can serve from a
+    STATE up, no picture settle - which the boot cache (on unless
+    OS88_BOOTCACHE=0) can serve from a
     warm boot (tools/os88bootcache.py). The returned Marty owns the process: close() -
     or the `with` block - kills it, so a session cannot leak a survivor onto
     the next one.
@@ -5360,7 +5361,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         # BOOT ON STATE, and the one spelling the boot cache can serve:
         # `launch(boot=False)` + `m.run()` + `kernel_up(m)` as one call
         # (soak-speed-2/core.md). A RUNNING machine at the end of its boot,
-        # saver off unless `saver=True`. Under OS88_BOOTCACHE=1 a restore of
+        # saver off unless `saver=True`. Under the boot cache a restore of
         # a boot another row paid for (tools/os88bootcache.py), when nothing
         # here is a keyword the cache cannot key on.
         import os88bootcache

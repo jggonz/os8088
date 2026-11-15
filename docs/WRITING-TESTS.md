@@ -482,7 +482,8 @@ cache below can serve. **`launch(boot=N)` is a blind N-second pause** - one
 row spent 64 of its 69 seconds in it. Keep the picture settle only when the
 first thing you do is compare the boot screen.
 
-**`OS88_BOOTCACHE=1` serves `os88ui.boot` from a warm boot** (opt-in,
+**The boot cache serves `os88ui.boot` from a warm boot** (on by default since
+2026-11-15; `OS88_BOOTCACHE=0` turns it off;
 tools/os88bootcache.py, docs/plans/soak-speed-2/core.md): the first row with a
 given machine and pair of images boots it and holds the end of the boot as a
 fork snapshot; every later one restores a copy in a fraction of a second,

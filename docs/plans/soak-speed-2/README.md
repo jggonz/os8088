@@ -18,7 +18,7 @@ what it left for next time:
 | stream | goal | ledger | headline |
 |---|---|---|---|
 | frozen | 4 | [frozen.md](frozen.md) | `os88soak.py start` runs inside a detached worktree snapshot of the whole checkout (SOAK-PARALLEL.md 14.4); proved under live sabotage |
-| core | 1, 3 | [core.md](core.md) | MartyPC harness: opt-in boot cache (`OS88_BOOTCACHE=1`), `launch(boot="up")`, batched UI-idle reads, an fbuf digest, `press`/`keys`/`type` |
+| core | 1, 3 | [core.md](core.md) | MartyPC harness: a boot cache, on by default (`OS88_BOOTCACHE=0` turns it off), `launch(boot="up")`, batched UI-idle reads, an fbuf digest, `press`/`keys`/`type` |
 | bochs | 1, 2, 3 | [bochs.md](bochs.md) | kern_mega rows run at 4x real time on the same guest clock (`OS88_BOCHS_RATE`), about half the host time |
 | qemubox | 1, 2, 3 | [qemubox.md](qemubox.md) | QEMU rows on the guest's clock with closed-loop mice; `OS88_EMU=qemu` runs an os88ui row on QEMU |
 | vid | 1 | [vid.md](vid.md) | 74 `vid*` rows run as 25 rows that share a boot (`tests/vidshare.py`) |
