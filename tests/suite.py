@@ -671,7 +671,7 @@ FAST = [
         "figures were measured on, entry for entry. Soak because it "
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
-    Row("waverack", "soak", py("tests/waverack.py"), 150.0,
+    Row("waverack", "soak", py("tests/waverack.py"), 90.0,
         "WaveRack's document (SPEC.md 123.3-123.5) on QEMU, because what "
         "is asserted is behaviour: every tools/wrsim.py fixture on `make "
         "waverackfix`'s floppy opened through File > Open and the Standard "
@@ -686,7 +686,7 @@ FAST = [
         "the window after the zoom equal to a forced full repaint",
         needs=("qemu", "nasm", "pil"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin")),
-    Row("waverackplay", "soak", py("tests/waverackplay.py"), 480.0,
+    Row("waverackplay", "soak", py("tests/waverackplay.py"), 50.0,
         "WaveRack's transport (SPEC.md 123.6, 123.8, 123.9) on QEMU's SB16, "
         "its output captured by the wav audiodev at the rate the card plays "
         "and each play a slice held to tools/wrsim.py's convert(): "
@@ -707,7 +707,7 @@ FAST = [
         needs=("qemu", "nasm", "numpy"), serial=True, timeout=900,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin",
                "build/mixercfg/SYSTEM.CFG")),
-    Row("waverackedit", "soak", py("tests/waverackedit.py"), 420.0,
+    Row("waverackedit", "soak", py("tests/waverackedit.py"), 60.0,
         "WaveRack's edits and saves (SPEC.md 123.3, 123.9, 123.10) on QEMU, "
         "on a floppy the row builds (the fixtures in MEDIA/, a filler leaving "
         "300 KB free): TONE8.WAV cut, pasted, pasted back where it came from "
@@ -2825,7 +2825,7 @@ FULL = [
         "and boots it to a desktop, so what this adds is the THREE-adapter "
         "sweep - the deep gate a kern_small change runs, at 118s",
         needs=("marty",), serial=True),
-    Row("thewire", "soak", py("tests/thewire.py"), 160.0,
+    Row("thewire", "soak", py("tests/thewire.py"), 60.0,
         "THE WIRE, end to end over a real card (SPEC.md 92.12): a host HTTP "
         "server on 8092 serves a fixture catalog packed by tools/os88wire.py "
         "out of build/hello.o88, build/mines.o88, a tier-3 WF_DISK entry and "
@@ -11092,7 +11092,7 @@ SOAK = [
         "Does FTPD's Setup page keep a caret it cannot type into? "
         "(SPEC.md 77.45.4)",
         needs=("marty",), serial=True),
-    Row("ftpd", "soak", py("tests/ftpd.py"), 360.0,
+    Row("ftpd", "soak", py("tests/ftpd.py"), 270.0,
         "SPEC.md 77: the FTP server driven by Python's own ftplib through "
         "QEMU's forwarded ports. 8f (77.25.1): LIST and NLST of a folder that "
         "is not there answer 550 inside the timeout with the control "
@@ -22335,7 +22335,7 @@ SOAK = [
         "repaint identity",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
-    Row("telansi", "soak", py("tests/telansi.py"), 210.0,
+    Row("telansi", "soak", py("tests/telansi.py"), 95.0,
         "SPEC.md 70.9/70.10/70.12: the ANSI-BBS PARSER on the machine, against "
         "tools/ansisim.py - the same state machine in Python, and the "
         "contract's second reader the way htmsim.py is the browser's. Thirteen "
@@ -22644,7 +22644,7 @@ SOAK = [
                "build/pciether.drv", "build/kernel.sys",
                "build/browser.o88", "build/browser.map"),
         locks=("port:8090",)),
-    Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,
+    Row("brdownload", "soak", py("tests/brdownload.py"), 25.0,
         "SPEC.md 71.20: Save Link As streams a 32 KiB unknown-length binary "
         "response through the NE2000 into cluster-aligned disk writes; the "
         "test confirms no total is invented and compares the saved FAT file "
@@ -22653,20 +22653,20 @@ SOAK = [
         wants=("build/browser.o88", "build/ether360.img"),
         locks=("port:8090",)),
     Row("brdownload-length", "soak",
-        py("tests/brdownload.py", "--content-length"), 180.0,
+        py("tests/brdownload.py", "--content-length"), 25.0,
         "SPEC.md 71.20: the same 32 KiB Save Link As transfer with a declared "
         "Content-Length, checking the displayed total and exact saved bytes.",
         needs=("qemu",), serial=True,
         wants=("build/browser.o88", "build/ether360.img"),
         locks=("port:8090",)),
     Row("brdownload-auto", "soak",
-        py("tests/brdownload.py", "--automatic"), 180.0,
+        py("tests/brdownload.py", "--automatic"), 25.0,
         "SPEC.md 71.20: an ordinary click on a non-rendered file URL opens the "
         "existing Save dialog automatically before the byte-exact download.",
         needs=("qemu",), serial=True,
         wants=("build/browser.o88", "build/ether360.img"),
         locks=("port:8090",)),
-    Row("brnav", "soak", py("tests/brnav.py"), 215.0,
+    Row("brnav", "soak", py("tests/brnav.py"), 155.0,
         "SPEC.md 71.8 (BROWSER-PLAN 5): Back, Forward, Reload and Save As "
         "over the NE2000 against pages the row serves on :8091 - a navigation "
         "pushes, Back and Forward move the cursor AND fetch without pushing, "
@@ -22754,7 +22754,7 @@ SOAK = [
         "true only since READY stopped re-probing (SPEC.md 34.13.2)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/midisys720.img",)),
-    Row("ethcfg", "soak", py("tests/ethcfg.py"), 90.0,
+    Row("ethcfg", "soak", py("tests/ethcfg.py"), 30.0,
         "SPEC.md 72.7: the Ethernet Setup window - Manual, an address typed "
         "into its field, Ok applying it to the driver's LIVE addresses, the "
         "mode greying Renew, and the setting SURVIVING A REBOOT once the "
@@ -22805,7 +22805,7 @@ SOAK = [
         "take-back removed fails 4 rows, `\\` not a separator 2, a "
         "seven-character stem 8, a folder's dot kept as the leaf's 1",
         needs=("nasm", "unicorn")),
-    Row("telzm", "soak", py("tests/telzm.py"), 300.0,
+    Row("telzm", "soak", py("tests/telzm.py"), 70.0,
         "SPEC.md 70.11/70.12: ZMODEM RECEIVE end to end, with the bytes read "
         "back OFF THE DISK. tools/os88bbs.py's pure-Python sender sends two "
         "batches over one boot: first the rows of its own MANGLE83_CASES as "

@@ -86,7 +86,42 @@ Ranked by declared `secs` x rows over the QEMU and 86Box rows
 
 ## Measurements
 
-(filled in by the verification pass after 09:05 UTC - see below)
+HOST WALL seconds, A against B run AT ONCE in two lanes (the base tree,
+1868607, beside this branch, the row order reversed in one lane so the two
+copies of a row never shared the time): load average 8-14 on four cores, so
+each number is noisy and the ratio is the reading. QEMU has no cycle counter
+to quote instead; the guest-tick budgets are what moved, not the guest.
+
+| row | base | this branch | |
+|---|---|---|---|
+| waverackedit | 502.6 | 52.1 | 9.6x |
+| telansi | 345.0 | 92-95 (four runs) | 3.7x |
+| waverack | 168.7 | 87.7 | 1.9x |
+| thewire | 106.8 | 58.1 | 1.8x |
+| ethcfg | 40.0 | 24.8 | 1.6x |
+| brnav | 207.6 FAILED at base* | 152.8 | (time to failure, not a before) |
+
+\* base brnav: "the frameset needs the full safe line table; got 8 KB for
+1014 lines" - a row red at the base, green here once; not this branch's
+subject, so said and left.
+
+The scoped soak (`os88soak.py start`, 34 rows, 1434 s, the six above not
+repeated): 33 ok, 1 FAIL - qemuapi, my own new row, whose menu_pick check
+read the window list before the package's close had landed; fixed (waits on
+the state) and green 3/3 after. Measured there: waverackplay 43.5 (declared
+480), telzm 67.5 (300), brdownload x3 ~20 (180), ftpd 262 (360), wireball
+49.1, walink 50.2, walink4 60.5, mega-telansi (86Box) 117.2, box-ethernet
+19.4, mega-ethcfg (Bochs) 66.8, mega-rdxms 115.6, vbt286 38.4, pravetzboot
+14.7, qemu-uilayer 34.9, rdxms 20.3; controls vesa 42.8, hmacold 183.7
+(declared 70: load). `secs=` updated for the twelve rows materially changed.
+
+### A flake this pass made, found and fixed (goal 2)
+
+telansi's `quiet()` returned the moment `[te_soff]` read the fixture's
+length - and te_pbyte advances that offset BEFORE the byte acts, so the last
+byte (wrap's scroll) had not always written con_scr. The 0.25 s poll hid it;
+at 0.05 'wrap' read the screen one scroll early, 1 run in 3. It now needs
+the condition to hold across a guest tick.
 
 ## Left for the next pass
 
