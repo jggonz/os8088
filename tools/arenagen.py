@@ -2362,23 +2362,26 @@ def arena_tables(w, tag, boxes, start):
     for (a, b, c, d) in ([] if roomless else [ROOM]) + boxes:
         w("    db " + ", ".join(str(vix[p] * 2) for p in
                                 [(a, b), (c, b), (c, d), (a, d)]))
+    # THE TREE, rows of two sizes: a LEAF is its kind and its box x 4 (2
+    # bytes), a split its kind, 0, its value and its low and high links (8)
+    # - wa_order reads no more of either, and follows the links rather than
+    # counting rows, so a leaf needs no room for links it has not got
+    # (the splits' bounds, which wa_node's view-cone test read, went with
+    # it: 2,544 bytes of rows over the eight arenas were 1,036)
+    off, at = [], 0
+    for nd in nodes:
+        off.append(at)
+        at += 2 if nd[0] == 2 else 8
     w(P + "bsp:                         ; kind (0 x, 1 y, 2 leaf), box x 4 (a")
-    w("                                ; leaf's, into wa_boxes), value, low,")
-    w("                                ; high (0 = none) - ADDRESSES in the image")
-    w("                                ; this is assembled into: walked in place")
-    w("                                ; there, or rebased by the renderer's")
-    w("                                ; ARENA verb out of an arena part - and")
-    w("                                ; the bounds of the boxes under it, x0")
-    w("                                ; y0 x1 y1 as coordinate indices x 4,")
-    w("                                ; for wa_node's view-cone test")
+    w("                                ; leaf's, into wa_boxes; a split's 0)")
+    w("                                ; - and a split's value, low, high:")
+    w("                                ; ADDRESSES in the part, rebased by the")
+    w("                                ; renderer's ARENA verb")
     for (kind, box, v, lo, hi, ids) in nodes:
-        bb = (min(boxes[i][0] for i in ids), min(boxes[i][1] for i in ids),
-              max(boxes[i][2] for i in ids), max(boxes[i][3] for i in ids))
         w("    db %d, %d" % (kind, box * 4))
-        w("    dw %d, %s, %s" % (v, P + "bsp+%d" % (lo * 12) if lo >= 0 else "0",
-                              P + "bsp+%d" % (hi * 12) if hi >= 0 else "0"))
-        w("    db %d, %d, %d, %d" % (xs.index(bb[0]) * 4, ys.index(bb[1]) * 4,
-                                    xs.index(bb[2]) * 4, ys.index(bb[3]) * 4))
+        if kind != 2:
+            w("    dw %d, %s, %s" % (v, P + "bsp+%d" % off[lo],
+                                  P + "bsp+%d" % off[hi]))
     w(P + "bcol:                        ; per box (the room first): its colour")
     w("                                ; - 0 a boundary wall, 1 an item. The")
     w("                                ; owner's call: colour says WHAT a wall")
@@ -2418,7 +2421,7 @@ def arena_tables(w, tag, boxes, start):
                      "vertices, %d x and %d y values\n"
                      % (tag, len(boxes), len(nodes), len(verts), len(xs),
                         len(ys)))
-    return len(xs), len(ys), len(verts), len(boxes), len(nodes)
+    return len(xs), len(ys), len(verts), len(boxes), at
 
 
 def bsp_tables(w):
@@ -2442,7 +2445,7 @@ def bsp_tables(w):
     w("WA_MYV equ %d" % max(c[1] for c in counts))
     w("WA_MVTX equ %d" % max(c[2] for c in counts))
     w("WA_MBOX equ %d" % max(c[3] for c in counts))
-    w("WA_MNODE equ %d" % max(c[4] for c in counts))
+    w("WA_MBSP equ %d" % max(c[4] for c in counts))    # (a tree's bytes)
     w("WA_MAXKS equ %d" % MAXKS)
     w("WA_MPK equ %d" % WA_MPK)
     w("WA_PVSB equ %d" % pvs_bytes())   # (a cell's mask, and the most cells)
@@ -2633,7 +2636,7 @@ def arena_part(n, out):
     """Arena N as an OP_ASSET part of WIRERENA.O88, assembled at org 0
     (docs/plans/completed/WIREARENA-PARTS-PLAN.md 7.5): wa_arenas' descriptor row at
     offset 0 - every table offset relative to the part, the tree's links too
-    - plus the tree's node count, then the tables it names."""
+    - plus the tree's length in bytes, then the tables it names."""
     tag, name, boxes, start = arenas()[n]
     T = []
     nx, ny, nv, nb, nn = arena_tables(T.append, tag, boxes, start)
