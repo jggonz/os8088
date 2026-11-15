@@ -141,7 +141,7 @@ class ED(WRT.WR):
         self.bimg = os.path.join(tmp, "b.img")
         shutil.copy(os88build.at("build/os8088.img"), sysimg)
         shutil.copy(bsrc, self.bimg)
-        self.q = Q(tmp, sysimg, self.bimg, 4)
+        self.q = WRT.clock(Q(tmp, sysimg, self.bimg, 4))
         self.sock = self.q.sock
         os88qemu.acted(self.q, lambda: os.path.exists(self.sock), secs=30,
                        what="the QMP socket")
@@ -257,7 +257,7 @@ class ED(WRT.WR):
 
     def keyed(self, k):
         self.key(k)
-        time.sleep(1.2)
+        self.done(1.2)
         until(lambda: self.b("we_busy") != 1, "settled", 20)
 
 
@@ -430,7 +430,7 @@ def leg_cancel(ed, fx):
     ed.key("esc")
     heap = ed.heap()
     until(lambda: ed.b("ws_busy") == 0, "cancelled", 10)
-    time.sleep(0.5)
+    ed.done(0.5)
     fs = ed.files()
     check("'Save cancelled'", ed.status() == "Save cancelled", ed.status())
     check("no OUT2.WAV, no WRSAVE.$$$", "MEDIA/OUT2.WAV" not in fs and
@@ -477,15 +477,15 @@ def leg_full(ed, fx):
     say(" full: a document bigger than the disk's free space")
     before = ed.files()
     ed.key("a")
-    time.sleep(0.3)
+    ed.done(0.3)
     ed.keyed("c")
     while ed.d("wo_frames") * 4 + 44 < (FREE_KB + 64) * 1024:
         ed.key("end")
-        time.sleep(0.3)
+        ed.done(0.3)
         ed.keyed("v")
     ed.menu("File", "Save As...")
     ed.name_in("BIG.WAV")
-    time.sleep(1)
+    ed.done(1.0)
     check("refused before writing: 'Not enough disk space' (%d bytes)" %
           (ed.d("wo_frames") * 4), ed.status() == "Not enough disk space",
           ed.status())
@@ -579,7 +579,7 @@ def leg_asked(ed):
           not ed.menu("File", "Save"))
     before = (ed.pieces(), ed.b("wo_upos"))
     ed.key("u")                         # Undo: live a moment ago
-    time.sleep(0.8)
+    ed.done(0.8)
     check("Undo says 'Answer the question' and changes nothing (%r)"
           % ed.status(), ed.status() == "Answer the question" and
           (ed.pieces(), ed.b("wo_upos")) == before and
@@ -608,7 +608,7 @@ def leg_close(ed):
         ed.alert_btn(1)                 # Discard
     check("Discard closes the window", until(lambda: ed.wrseg()[0] is None,
                                              "the close", 15))
-    time.sleep(1)
+    ed.done(1.0)
     left = ed.heap()
     check("no claim of the closed region left (%s)" % left, left == [])
 
@@ -632,7 +632,7 @@ def main():
         ed = ED(tmp, syms, img, bimg)
         if not check("WaveRack launches off B:", ed.launch()):
             return 1
-        time.sleep(1)
+        ed.done(1.0)
         if not check("TONE8.WAV opens", ed.open("MEDIA/TONE8.WAV")):
             return 1
         ed.settled()
