@@ -109,7 +109,8 @@ def main():
                        capture_output=True)
         sysimg = os.path.join(tmp, "sys.img")
         shutil.copy(os88build.at("build/os8088.img"), sysimg)
-        b = os88box.launch("286-hma", name="vbt286", hold=True, fresh=True,
+        b = os88box.launch("286-hma", name="vbt286-%d" % os.getpid(),
+                           hold=True, fresh=True,
                            a=sysimg, b=disk, temp=not a.keep, turbo=True)
         mr_setup(b)
         b.kernel_up(guest_ms=120000)

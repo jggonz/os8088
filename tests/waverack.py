@@ -83,7 +83,8 @@ def u32(b, o=0):
 
 
 class Mo(object):
-    """os88ui's mouse, over QMP (tools/mouse.py, xmcheck's double-click)"""
+    """os88ui's mouse, over QMP - CLOSED-LOOP (xmcheck.click/dblclick go
+    through os88qemu.mouse_click/mouse_dblclick, SOAK-SPEED 15)"""
 
     def __init__(self, sock):
         self.sock = sock
@@ -95,19 +96,129 @@ class Mo(object):
         xmcheck.dblclick(self.sock, x, y)
 
 
+# THE MACHINE THE WAITS BELOW COUNT ON (docs/plans/soak-speed-2/qemubox.md).
+# Every WaveRack row drives one private QEMU at a time; its constructor puts
+# it here, so `until`, `idle` and `gpause` are budgeted on THAT guest's clock
+# (tests/os88qemu.py) rather than the host's - a loaded host stretched the
+# host-second budgets into timeouts the guest had not spent (goal 2), and a
+# host `time.sleep` after every gesture was a fixed price where the guest is
+# usually done in a tick (goal 1). None: the host clock, as before.
+_GUEST = [None]
+
+
+def guest(q):
+    """Make `q` (an object with `read(linear, n)`) the clock of every wait."""
+    _GUEST[0] = q
+    if q is not None:
+        q._wr_clock = os88qemu.Clock(q)
+
+
+def gnow():
+    """A monotonic guest-seconds reading (host seconds with no machine)."""
+    q = _GUEST[0]
+    if q is None:
+        return time.time()
+    return q._wr_clock.secs()
+
+
+def idle(cap):
+    """The UI finished with what it was given - `cap` guest seconds at most,
+    which is the host sleep this replaces (SOAK-SPEED 14's ui_done)."""
+    q = _GUEST[0]
+    if q is None:
+        time.sleep(cap)
+        return
+    os88qemu.ui_done(q, xmcheck.sym, cap=cap)
+
+
+def drained(cap):
+    """The BIOS key ring empty again - the UI has TAKEN the keys typed so
+    far - within `cap` guest seconds: a typing gap that ends when it can,
+    and never lets a run of keys overfill the ROM's 15-entry ring."""
+    q = _GUEST[0]
+    if q is None:
+        time.sleep(cap)
+        return
+
+    def empty():
+        kb = q.read(0x41A, 4)
+        return kb[0:2] == kb[2:4]
+    os88qemu.acted(q, empty, secs=cap, what="the key ring", poll=0.005)
+
+
+def gpause(secs):
+    """A pause that IS the test (a loop left to play): guest seconds."""
+    q = _GUEST[0]
+    if q is None:
+        time.sleep(secs)
+        return
+    os88qemu.pace(q, secs)
+
+
+_CLOSED = {}
+
+
+def _closed(sock):
+    """Can this process drive `sock`'s pointer closed-loop (the kernel's
+    mouse_x/mouse_y/mouse_btn resolve)? Asked once per socket."""
+    if sock not in _CLOSED:
+        try:
+            os88qemu.mouse_where(xmcheck.qm(sock), xmcheck.sym)
+            _CLOSED[sock] = True
+        except BaseException:           # noqa: BLE001 - no map: dead-reckon
+            _CLOSED[sock] = False
+    return _CLOSED[sock]
+
+
 def mouse(sock, *a):
-    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"),
-                    sock] + [str(x) for x in a], capture_output=True, cwd=ROOT)
+    """tools/mouse.py's verbs (to X Y / down [X Y] / up / click X Y),
+    CLOSED-LOOP on the kernel's pointer words (os88qemu.mouse_to/
+    mouse_button, SOAK-SPEED 15): each packet waits for mouse_x to move and
+    each edge for mouse_btn to agree, where mouse.py pinned on the clamp and
+    walked back on host sleeps (~1.7 s a click) and could not see a lost
+    edge. A pointer that stops short RAISES (os88qemu.MouseError) where it
+    used to be found twenty steps later as a missing selection."""
+    if not _closed(sock):
+        xmcheck.release(sock)
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"),
+                        sock] + [str(x) for x in a], capture_output=True,
+                       cwd=ROOT)
+        return
+    m = xmcheck.qm(sock)
+
+    def hmp(*c):
+        return xmcheck.qmp(sock, *c)
+    verb, xy = a[0], tuple(int(v) for v in a[1:])
+    if verb == "click":
+        os88qemu.mouse_click(m, xmcheck.sym, hmp, *xy)
+        return
+    if xy:
+        os88qemu.mouse_to(m, xmcheck.sym, hmp, *xy)
+    if verb in ("down", "up"):
+        os88qemu.mouse_button(m, xmcheck.sym, hmp, 1 if verb == "down" else 0)
+    elif verb != "to":
+        raise ValueError("waverack.mouse: %r" % verb)
 
 
 def until(cond, what, secs=30.0, poll=0.1):
+    """`cond()` within `secs` - of the GUEST's time when a machine is set
+    (`guest`), polled at 0.05 at most (SOAK-SPEED 8); a cond that raises
+    counts as not yet."""
+    def ok():
+        try:
+            return bool(cond())
+        except Exception:                                   # noqa: BLE001
+            return False
+    q = _GUEST[0]
+    if q is not None:
+        if os88qemu.acted(q, ok, secs=secs, what=what, poll=min(poll, 0.05)):
+            return True
+        say("     (timed out waiting for %s)" % what)
+        return False
     t = time.time()
     while time.time() - t < secs:
-        try:
-            if cond():
-                return True
-        except Exception:                                   # noqa: BLE001
-            pass
+        if ok():
+            return True
         time.sleep(poll)
     say("     (timed out waiting for %s)" % what)
     return False
@@ -122,11 +233,12 @@ class WR(object):
         bimg = os.path.join(tmp, "b.img")
         shutil.copy(os88build.at("build/os8088.img"), sysimg)
         shutil.copy(os88build.at("build/wrfix.img"), bimg)
-        self.q = Q(tmp, sysimg, bimg, 4)
+        self.q = Q(tmp, sysimg, bimg, 4, keep=True)
         self.sock = self.q.sock
         os88qemu.acted(self.q, lambda: os.path.exists(self.sock), secs=30,
                        what="the QMP socket")
         xmcheck.wait_desktop(self.sock, "waverack")
+        guest(self.q)
         self.ui = os88ui.UI(self.q, mouse=Mo(self.sock), sym=xmcheck.sym,
                             verbose=False)
         self.seg = None
@@ -214,7 +326,7 @@ class WR(object):
             return False
         if not until(disk, "Disk B"):
             return False
-        time.sleep(1)
+        idle(1)                         # (the listing painted)
         w = box["w"]
         i, _ = self.ui.entry("WAVERACK.O88", w)
         for _ in range(3):
@@ -329,7 +441,7 @@ class WR(object):
         xmcheck.click(self.sock, w.x + (w.w - row) // 2 + 84 * k + 36,
                       w.y + 18 + 46 + 6)
         until(lambda: not self.w("os88ui_awin"), "the alert answered", 10)
-        time.sleep(0.5)
+        idle(0.5)
 
     def open(self, path):
         g = self.w("wo_gen")
@@ -346,7 +458,7 @@ class WR(object):
             self.alert_btn(1)               # Discard
         if not until(lambda: self.chooser() is not None, "the dialog", 15):
             return False
-        time.sleep(0.3)
+        idle(0.3)
         if not self.chooser_open(path):
             return False
         # THE OPEN'S END, not a moment inside it (waverackdisk's open_doc
@@ -369,9 +481,9 @@ class WR(object):
                 seen["t"] = None
                 return False
             if gen != seen["g"] or seen["t"] is None:
-                seen["g"], seen["t"] = gen, time.time()
+                seen["g"], seen["t"] = gen, gnow()
                 return False
-            return time.time() - seen["t"] >= 0.5
+            return gnow() - seen["t"] >= 0.5
         return until(done, "the open and its scan", 120, 0.05)
 
     def settled(self, secs=60):
@@ -386,14 +498,15 @@ class WR(object):
                 quiet["t"] = None
                 return False
             if quiet["t"] is None:
-                quiet["t"] = time.time()
-            return time.time() - quiet["t"] >= 0.6
+                quiet["t"] = gnow()
+            return gnow() - quiet["t"] >= 0.6
         return until(still, "the refinement", secs, 0.05)
 
     def shot(self, path, w=None):
         w = w or self.window()
         mouse(self.sock, "to", 634, 474)    # the pointer is drawn into the
-        time.sleep(0.5)                     # framebuffer: off the window
+        idle(0.5)                           # framebuffer: off the window
+        xmcheck.release(self.sock)          # (QMP serves ONE client)
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "shot.py"),
                         self.sock, path, "--crop",
                         "%d,%d,%d,%d" % (w.x, w.y, w.w, w.h)],
@@ -457,7 +570,7 @@ def main():
         wr = WR(tmp, syms, img)
         if not check("WaveRack launches off B:", wr.launch()):
             return 1
-        time.sleep(1)
+        idle(1)
         order = sorted(n for n in fx if fx[n][1] == "GOOD") + \
             sorted(n for n in fx if fx[n][1] == "BAD") + ["LONG.WAV"]
         say("waverack: %d fixtures, each through File > Open" % len(order))
@@ -530,7 +643,7 @@ def leg_zoom(wr, data, r, tmp):
     until(lambda: wr.d("wo_cur") == (fr >> z) << z, "the cursor", 20)
     for _ in range(z):
         wr.key("kp_add")
-        time.sleep(0.3)
+        idle(0.3)
     until(lambda: wr.b("wv_z") == 0, "fpp = 1", 20)
     wr.settled()
     check("IMPULSE: zoomed to fpp 1 about the cursor", wr.b("wv_z") == 0,
@@ -542,15 +655,15 @@ def leg_zoom(wr, data, r, tmp):
         check("IMPULSE zoomed: the spike's column and the next reach it",
               ref[c][0][0] == -128 and ref[c + 1][0][0] == -128,
               "%r %r" % (ref[c], ref[c + 1]))
-    time.sleep(0.5)
+    idle(0.5)
     a = os.path.join(tmp, "inc.png")
     b = os.path.join(tmp, "full.png")
     wr.shot(a)
     wr.menu_pick("WaveRack", "About")
-    time.sleep(1)
+    idle(1)
     w = wr.window()
     xmcheck.click(wr.sock, w.x + w.w // 2, w.y + w.h // 2)
-    time.sleep(1.5)
+    idle(1.5)
     wr.shot(b)
     try:
         from PIL import Image, ImageChops

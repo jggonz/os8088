@@ -5134,9 +5134,11 @@ def emulator():
     (kern_mega's first shim), else "marty". A row that must know which
     machine it is on asks this rather than reading the variables itself."""
     e = (os.environ.get("OS88_EMU") or "").lower()
-    if e not in ("", "marty", "martypc", "86box"):
+    if e not in ("", "marty", "martypc", "86box", "qemu"):
         raise MartyError("$OS88_EMU=%s: the emulators a row can be handed to "
-                         "are martypc (the default) and 86box" % e)
+                         "are martypc (the default), 86box and qemu" % e)
+    if e == "qemu" and not os.environ.get("OS88_MEGA"):
+        return "qemu"               # (tools/os88qemuapi.py)
     if e == "86box" or (os.environ.get("OS88_MEGA") and (os.environ.get(
             "OS88_MEGA_EMU") or "").lower() == "86box"):
         return "86box"
@@ -5239,6 +5241,14 @@ def _launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         return os88box86api.launch(image, apps=apps, machine=machine,
                                    boot=boot, label=label, extra=extra,
                                    run_dir=run_dir)
+    # $OS88_EMU=qemu: the SAME row on a private QEMU (tools/os88qemuapi.py,
+    # docs/plans/soak-speed-2/qemubox.md) - the closed list's machines
+    # (docs/TESTING.md) driven through os88ui rather than QMP by hand
+    if emu == "qemu":
+        import os88qemuapi
+        return os88qemuapi.launch(image, apps=apps, machine=machine,
+                                  boot=boot, label=label, extra=extra,
+                                  run_dir=run_dir)
     if os.environ.get("OS88_MEGA"):
         import os88megabochs
         return os88megabochs.launch(image, apps=apps, machine=machine,
