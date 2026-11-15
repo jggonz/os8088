@@ -1213,6 +1213,11 @@ wa_lkdraw:
 ; body (wa_lkpaint) and the tick's (wa_lkdraw). A paint skips a blank row:
 ; the kernel filled the content white before it (SPEC.md 11)
 wa_lkrows:
+    call wa_slayout             ; (the layout as the link stands: a change
+    jnc .lay                    ; repaints all of it, this routine and all)
+    ret
+.lay:
+    call wa_splace              ; (the layout's places, the rows' too)
     push bp
     xor bp, bp                  ; BP = the row
 .row:
@@ -1260,8 +1265,11 @@ wa_lkrows:
     call wa_lkput
 .next:
     inc bp
+    cmp byte [wa_slay], 0       ; (alone, row 0 the only one: the players'
+    je .rowsd                   ; rows' place is the group's)
     cmp bp, WL_ROWS
     jb .row
+.rowsd:
     call wa_sdraw               ; (the setup's controls and buttons, where
     jc .gone                    ; they changed)
     call wa_sbtns
@@ -1320,7 +1328,15 @@ wa_lkput:
     dec ax
     mov bl, 10
     mul bl
-    add ax, WS_LOBY - 4
+    add ax, [wa_sgy]            ; (the players' rows under the group: the
+    add ax, WS_LOBYR - 4        ; layout's, wa_splace's)
+    push ax
+    add ax, 4 + 8               ; (a row that does not fit over the bottom
+    cmp ax, [wa_sby]            ; row - a short content, a CGA's - not
+    pop ax                      ; drawn)
+    jbe .fits
+    ret
+.fits:
 .r0:
     add ax, 4
     add dx, ax

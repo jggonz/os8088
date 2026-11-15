@@ -89,6 +89,16 @@ def main():
               'identical')
 
         ox, oy = wa.x + 1, wa.y + 18
+        dr = sym['wa_sdr_a']            # (the layout's places, the guest's
+        gy = p.word(dr + 2) - oy        # own: the Arena box's top and the
+        by = p.word(sym['wa_sby'])      # bottom row's - a CGA's content is
+                                        # fitted shorter, its group higher)
+        check(p.byte(sym['wa_slay']) == 0 and
+              abs((gy - 12) - (by - gy - 70)) <= 1 and by + 20 == wa.h - 19,
+              'THE LAYOUT, ALONE: the drop-downs centred between row 0 and '
+              'the bottom row (%d above, %d under), Nick, Play and Keys 4 '
+              'from the bottom (the owner, before release)'
+              % (gy - 12, by - gy - 70))
         dr = sym['wa_sdr_a']
 
         def under(x0, y0, x1, y1):
@@ -96,14 +106,14 @@ def main():
             return [d[(y * W + x0) * 3:(y * W + x1) * 3]
                     for y in range(y0, y1)]
         # (the list's place: under the Arena box, the box's width)
-        lrect = (ox + 57, oy + 14 + 18, ox + 182, oy + 14 + 60)
+        lrect = (ox + 57, oy + gy + 18, ox + 182, oy + gy + 60)
         closed = under(*lrect)
-        ui.mo.click(ox + 120, oy + 14 + 8)
+        ui.mo.click(ox + 120, oy + gy + 8)
         os88marty.until(m, lambda _: p.byte(dr + 16) == 1,
                         'the Arena list open', guest=5)
         check(p.byte(dr + 16) == 1, 'A DROP-DOWN: a click drops its list')
         ui.settle()
-        nrect = (ox + 57, oy + 14 + 18, ox + 182, oy + 86 + 16)
+        nrect = (ox + 57, oy + gy + 18, ox + 182, oy + gy + 70)
         listpic = under(*nrect)         # (down to the nick's row, for the
         rows = sum(a != b for a, b in zip(under(*lrect), closed))
         check(p.byte(dr + 16) == 1 and rows >= 30,
@@ -124,12 +134,12 @@ def main():
         # THE NICK UNDER A LIST (the owner, before release): with the focus
         # in the nick, a click on the Arena box drew the field back over its
         # list, and the list's bank put the field's caret back when it went
-        ui.mo.click(ox + 120, oy + 86 + 8)
+        ui.mo.click(ox + 120, oy + by + 8)
         os88marty.until(m, lambda _: p.byte(sym['wa_sfoc']) == 8,
                         'the nick focused', guest=5)
         ui.mo.to(4, 190)
         ui.settle()
-        ui.mo.click(ox + 120, oy + 14 + 8)
+        ui.mo.click(ox + 120, oy + gy + 8)
         os88marty.until(m, lambda _: p.byte(dr + 16) == 1,
                         'the Arena list open again', guest=5)
         ui.settle()

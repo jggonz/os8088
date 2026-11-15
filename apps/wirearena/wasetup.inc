@@ -14,7 +14,12 @@
 ;     same card the system menu's About shows.
 ;
 ; The window's text rows (walink.inc's wa_lkrows) are row 0, what the link
-; is doing, and rows 1 to 5, the players once linked. Each control is drawn
+; is doing, and rows 1 to 5, the players once linked. THE LAYOUT (the owner,
+; before release): Nick, Play and Keys on the bottom row, 4 from the
+; content's bottom; alone, the four rows of drop-downs centred between row
+; 0's text and it; linked, the drop-downs under row 0 and the players' rows
+; between them and the bottom row, as many as fit (three on a CGA, whose
+; window is fitted shorter). wa_slayout switches, repainting once. Each control is drawn
 ; when it CHANGED (its value, its greying, the focus), never all of them for
 ; a click or a key: the owner saw the whole window flash on every one,
 ; which was every row and both buttons redrawn per input (9.4).
@@ -38,22 +43,37 @@ WS_LDX2     equ 199
 WS_RX       equ 200             ; the right column: marker and label (nine
 WS_RDX1     equ 272             ; cells), then its drop-down
 WS_RDX2     equ 391
-WS_Y1       equ 14              ; the three rows of controls, 16 high
-WS_Y2       equ 32
-WS_Y3       equ 50
-WS_Y4       equ 68              ; (the fourth: Mode, CTF-PLAN 7; and Win
-                                ; at, MODES-PLAN 2)
-WS_Y5       equ 86              ; (the fifth: the nick, the buttons)
+WS_Y1       equ 0               ; THE GROUP's four rows of drop-downs, 16
+WS_Y2       equ 18              ; high, from its top - which is where the
+WS_Y3       equ 36              ; layout puts it (wa_sgy): alone, CENTRED
+WS_Y4       equ 54              ; between row 0's text and the bottom row
+WS_GH       equ 70              ; (the owner, before release); linked,
+WS_GLINK    equ 14              ; under row 0, the players' rows under it
+WS_LOBYR    equ WS_GH + 2       ; (from the group's top, 10 apart)
+WS_BOTM     equ 20              ; THE BOTTOM ROW, the nick and the buttons:
+                                ; both layouts, 4 from the content's bottom
+                                ; as row 0's text is from its top - the
+                                ; content's height the window's own (a CGA's
+                                ; is fitted shorter: 136, not 155)
+; THE GROUND's y values (wa_sgnd): an offset from one of six bases, the
+; base in bits 12-14, wa_splace's wa_sybase
+%define YT(o) (o)
+%define YG(o) ((o) + 1 * 4096)
+%define YGM1 (2 * 4096)
+%define YB(o) ((o) + 3 * 4096)
+%define YBM1 (4 * 4096)
+%define YEND (5 * 4096)
 WS_DH       equ 16
 WS_FX1      equ 208             ; the address field, right of Play
 WS_FX2      equ 391
-WS_BTNY     equ WS_Y5           ; the buttons, right of the nick
+                                ; (the buttons: the bottom row, right of the
+                                ; nick - wa_sby)
 WS_BTNW     equ 96              ; (Play: "Not ready" fits)
 WS_B1X      equ 208
 WS_BTNW2    equ 80              ; (Keys)
 WS_BTNH     equ 16
 WS_B2X      equ 312
-WS_LOBY     equ 106             ; the players' rows (walink.inc), 10 apart
+WS_LOBY     equ WS_GLINK + WS_LOBYR             ; the players' rows (walink.inc), 10 apart
 WS_NDR      equ 7               ; the drop-downs. THE FOCUS'S STOPS, in the
 WS_FLD      equ 5               ; window's reading order: the first five
 WS_FMODE    equ 6               ; drop-downs, the field beside Play (while
@@ -376,6 +396,33 @@ wa_splace:
     call OSAPI_WM_CONTENT       ; AX = left, DX = top
     mov [wa_sorg], ax
     mov [wa_sorg+2], dx
+    push dx                     ; THE LAYOUT (the owner, before release):
+    push cx                     ; the bottom row 4 from the content's
+    call OSAPI_WM_GEOM          ; bottom; the group under row 0 linked,
+    mov cx, dx                  ; alone centred between row 0's text
+    pop dx                      ; (ends at 12) and the bottom row
+    sub cx, WS_BOTM
+    mov [wa_sby], cx            ; (the bottom row's top)
+    mov [wa_sybase+3*2], cx
+    dec cx
+    mov [wa_sybase+4*2], cx
+    add cx, WS_BOTM             ; (the content's last line: h - 1)
+    mov [wa_sybase+5*2], cx
+    mov cx, WS_GLINK
+    cmp byte [wa_slay], 0
+    jne .gy
+    mov cx, [wa_sby]            ; (by - 12 - 70 split in two, 12 on)
+    sub cx, 12 + WS_GH
+    sar cx, 1
+    add cx, 12
+.gy:
+    mov [wa_sgy], cx
+    mov [wa_sybase+1*2], cx
+    dec cx
+    mov [wa_sybase+2*2], cx
+    pop dx
+    push dx                     ; (the bottom row's: the content's top)
+    add dx, [wa_sgy]            ; DX = the group's top, the layout's
     xor bx, bx                  ; the drop-downs, off wa_srects
 .d:
     mov si, [wa_sdrs+bx]
@@ -414,13 +461,14 @@ wa_splace:
     mov [wa_snfld+LN_X1], cx
     add cx, WS_LDX2 - WS_NKX
     mov [wa_snfld+LN_X2], cx
+    pop dx                      ; (the content's top again)
     mov cx, dx
-    add cx, WS_Y5
+    add cx, [wa_sby]
     mov [wa_snfld+LN_Y1], cx
     add cx, WS_DH - 1
     mov [wa_snfld+LN_Y2], cx
     add ax, WS_B1X              ; the buttons, right of the nick
-    add dx, WS_BTNY
+    add dx, [wa_sby]
     mov [wa_sbrects], ax
     mov [wa_sbrects+2], dx
     add ax, WS_BTNW - 1
@@ -459,7 +507,8 @@ wa_slabs:   dw WS_LX, WS_Y1 + 4, wa_sl_a
             dw WS_LX, WS_Y3 + 4, wa_sl_p
             dw WS_LX, WS_Y4 + 4, wa_sl_m
             dw WS_RX, WS_Y4 + 4, wa_sl_g     ; (Win at's: WS_FGOAL)
-            dw WS_LX, WS_Y5 + 4, wa_sl_n     ; (the nick's: WS_NICK)
+            dw WS_LX, 4, wa_sl_n             ; (the nick's: WS_NICK - from
+                                             ; the bottom row's top)
 wa_sl_a:    db ' Arena ', 0
 wa_sl_c:    db ' Columns ', 0
 wa_sl_b:    db ' Bots  ', 0
@@ -472,57 +521,142 @@ wa_sl_g:    db ' Win at  ', 0
 ; THE GROUND: every rect of the content no control and no row covers
 ; (content coordinates, inclusive). The last is the field's place, which
 ; is ground only while there is no field
-wa_sgnd:    dw 0, 0, WS_RM - 1, 3
-            dw 0, 4, 7, 11
-            dw 0, 12, WS_RM - 1, WS_Y1 - 1
-            dw 0, WS_Y1, WS_LDX1 - 1, WS_Y1 + 3
-            dw 0, WS_Y1 + 12, WS_LDX1 - 1, WS_Y1 + 15
-            dw WS_RX, WS_Y1, WS_RDX1 - 1, WS_Y1 + 3
-            dw WS_RX, WS_Y1 + 12, WS_RDX1 - 1, WS_Y1 + 15
-            dw 0, WS_Y1 + 16, WS_RM - 1, WS_Y2 - 1
-            dw 0, WS_Y2, WS_LDX1 - 1, WS_Y2 + 3
-            dw 0, WS_Y2 + 12, WS_LDX1 - 1, WS_Y2 + 15
-            dw WS_RX, WS_Y2, WS_RDX1 - 1, WS_Y2 + 3
-            dw WS_RX, WS_Y2 + 12, WS_RDX1 - 1, WS_Y2 + 15
-            dw 0, WS_Y2 + 16, WS_RM - 1, WS_Y3 - 1
-            dw 0, WS_Y3, WS_LDX1 - 1, WS_Y3 + 3
-            dw 0, WS_Y3 + 12, WS_LDX1 - 1, WS_Y3 + 15
-            dw WS_LDX2 + 1, WS_Y3, WS_FX1 - 1, WS_Y3 + 15
-            dw 0, WS_Y3 + 16, WS_RM - 1, WS_Y4 - 1
-            dw 0, WS_Y4, WS_LDX1 - 1, WS_Y4 + 3
-            dw 0, WS_Y4 + 12, WS_LDX1 - 1, WS_Y4 + 15
-            dw WS_RX, WS_Y4, WS_RDX1 - 1, WS_Y4 + 3
-            dw WS_RX, WS_Y4 + 12, WS_RDX1 - 1, WS_Y4 + 15
-            dw 0, WS_Y4 + 16, WS_RM - 1, WS_Y5 - 1
-            dw 0, WS_Y5, WS_LDX1 - 1, WS_Y5 + 3
-            dw 0, WS_Y5 + 12, WS_LDX1 - 1, WS_Y5 + 15
-            dw WS_LDX2 + 1, WS_Y5, WS_B1X - 1, WS_Y5 + 15
-            dw WS_B1X + WS_BTNW, WS_Y5, WS_B2X - 1, WS_Y5 + 15
-            dw 0, WS_Y5 + 16, WS_RM - 1, WS_LOBY - 1
-            dw 0, WS_LOBY, 7, WS_H - 1
-            dw 8, WS_LOBY + 8, WS_RM - 1, WS_LOBY + 9
-            dw 8, WS_LOBY + 18, WS_RM - 1, WS_LOBY + 19
-            dw 8, WS_LOBY + 28, WS_RM - 1, WS_LOBY + 29
-            dw 8, WS_LOBY + 38, WS_RM - 1, WS_LOBY + 39
-            dw 8, WS_LOBY + 48, WS_RM - 1, WS_H - 1
-            dw WS_RM, 0, WS_W - 1, WS_H - 1
-WS_NGND     equ ($ - wa_sgnd) / 8
-            dw WS_FX1, WS_Y3, WS_FX2, WS_Y3 + WS_DH - 1
+%macro WS_GROUND 2              ; label, 1: the players' rows (linked)
+%1:         dw 0, YT(0), WS_RM - 1, YT(3)
+            dw 0, YT(4), 7, YT(11)
+            dw 0, YT(12), WS_RM - 1, YGM1
+%assign wsg_r 0
+%rep 4                          ; (the group's four rows, and the gaps
+ %if wsg_r == 0                 ; under them)
+  %assign wsg_y WS_Y1
+  %assign wsg_n WS_Y2
+ %elif wsg_r == 1
+  %assign wsg_y WS_Y2
+  %assign wsg_n WS_Y3
+ %elif wsg_r == 2
+  %assign wsg_y WS_Y3
+  %assign wsg_n WS_Y4
+ %else
+  %assign wsg_y WS_Y4
+ %endif
+            dw 0, YG(wsg_y), WS_LDX1 - 1, YG(wsg_y + 3)
+            dw 0, YG(wsg_y + 12), WS_LDX1 - 1, YG(wsg_y + 15)
+ %if wsg_r == 2                 ; (Play: the field's place right of it)
+            dw WS_LDX2 + 1, YG(wsg_y), WS_FX1 - 1, YG(wsg_y + 15)
+ %else
+            dw WS_RX, YG(wsg_y), WS_RDX1 - 1, YG(wsg_y + 3)
+            dw WS_RX, YG(wsg_y + 12), WS_RDX1 - 1, YG(wsg_y + 15)
+ %endif
+ %if wsg_r < 3
+            dw 0, YG(wsg_y + 16), WS_RM - 1, YG(wsg_n - 1)
+ %endif
+ %assign wsg_r wsg_r + 1
+%endrep
+%if %2
+            dw 0, YG(WS_Y4 + 16), WS_RM - 1, YG(WS_LOBYR - 1)
+            dw 0, YG(WS_LOBYR), 7, YBM1     ; (the players' rows: their text
+            dw 8, YG(WS_LOBYR + 8), WS_RM - 1, YG(WS_LOBYR + 9)  ; 8 high, 10
+            dw 8, YG(WS_LOBYR + 18), WS_RM - 1, YG(WS_LOBYR + 19) ; apart, as
+            dw 8, YG(WS_LOBYR + 28), WS_RM - 1, YG(WS_LOBYR + 29) ; many as
+            dw 8, YG(WS_LOBYR + 38), WS_RM - 1, YG(WS_LOBYR + 39) ; fit over
+            dw 8, YG(WS_LOBYR + 48), WS_RM - 1, YBM1  ; the bottom row)
+%else
+            dw 0, YG(WS_Y4 + 16), WS_RM - 1, YBM1
+%endif
+            dw 0, YB(0), WS_LDX1 - 1, YB(3)
+            dw 0, YB(12), WS_LDX1 - 1, YB(15)
+            dw WS_LDX2 + 1, YB(0), WS_B1X - 1, YB(15)
+            dw WS_B1X + WS_BTNW, YB(0), WS_B2X - 1, YB(15)
+            dw 0, YB(16), WS_RM - 1, YEND
+            dw WS_RM, YT(0), WS_W - 1, YEND
+%%end:
+%1_n        equ (%%end - %1) / 8
+            dw WS_FX1, YG(WS_Y3), WS_FX2, YG(WS_Y3 + WS_DH - 1)
+%endmacro
+WS_GROUND wa_sgnd, 0            ; ALONE: the group centred
+WS_GROUND wa_sgndl, 1           ; LINKED: the players' rows too
+
+; wa_sgsel - SI = the ground table of the layout ([wa_slay]), CX = its
+; rects (the field's place after them). Keeps all but SI, CX
+wa_sgsel:
+    mov si, wa_sgnd
+    mov cx, wa_sgnd_n
+    cmp byte [wa_slay], 0
+    je .out
+    mov si, wa_sgndl
+    mov cx, wa_sgndl_n
+.out:
+    ret
+
+; wa_slayout - the layout as the link stands (the owner, before release):
+; ALONE the group centred, LINKED under row 0 with the players' rows under
+; it; Nick, Play and Keys at the bottom in both. A change while no list is
+; down repaints the window whole in the new one (CF = 1: wa_srepaint has
+; drawn everything, rows and all). Keeps all but AX, the flags
+wa_slayout:
+    call wa_lklinked            ; (ZF = 0: linked)
+    mov al, 0
+    jz .l
+    inc ax
+.l:
+    cmp al, [wa_slay]
+    je .same
+    push bx
+    call wa_sopen               ; (a list down: later)
+    pop bx
+    jnc .same
+    mov [wa_slay], al           ; (wa_splace places the group by it)
+    cmp byte [wa_lkfull], 0     ; (a paint: everything is drawn anyway)
+    jne .same
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call wa_srepaint
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+.same:
+    clc
+    ret
 
 ; wa_sground - the gaps white (a repaint of our own; the kernel's PAINT
 ; filled them already). The clip is armed
 wa_sground:
     mov al, CWHITE
     call OSAPI_SET_COLOR
-    mov si, wa_sgnd
-    mov cx, WS_NGND
+    call wa_sgsel               ; SI = the layout's table, CX its count
     cmp byte [wa_splay], 3      ; (no field: its place too)
     je .r
     inc cx
 .r:
     push cx
     call wa_srect
+    mov di, [si+2]              ; (a rect off the group's top: none of it
+    and di, 0x7000              ; on the bottom row - the players' rows
+    cmp di, 0x1000              ; that do not fit on a short content, a
+    jne .f                      ; CGA's)
+    mov cx, [wa_sby]
+    add cx, [wa_sorg+2]
+    dec cx
+    cmp dx, cx
+    jle .f0
+    mov dx, cx
+.f0:
+    mov cx, [si+4]
+    add cx, [wa_sorg]
+    cmp bx, dx
+    jg .fn
+.f:
     call OSAPI_GFX_FILL
+.fn:
     pop cx
     add si, 8
     loop .r
@@ -565,14 +699,32 @@ wa_sfgnd:
 
 ; wa_srect - SI = a content rect: AX, BX, CX, DX that rect on the screen
 wa_srect:
+    mov bx, [si+2]              ; (the ground's y values: an offset and its
+    call .y                     ; base, wa_sgnd's - the drop-downs' and
+    push bx                     ; fields' rects, absolute, are not read
+    mov bx, [si+6]              ; here)
+    call .y
+    mov dx, bx
+    pop bx
     mov ax, [si]
     add ax, [wa_sorg]
-    mov bx, [si+2]
-    add bx, [wa_sorg+2]
     mov cx, [si+4]
     add cx, [wa_sorg]
-    mov dx, [si+6]
-    add dx, [wa_sorg+2]
+    ret
+.y:                             ; BX = an encoded y: BX = the screen's
+    push ax
+    push cx
+    mov ax, bx
+    and bx, 0x0FFF
+    mov cl, 11
+    shr ax, cl
+    and ax, 0x0E                ; (the base x 2)
+    xchg ax, bx
+    add ax, [wa_sybase+bx]
+    add ax, [wa_sorg+2]
+    xchg ax, bx
+    pop cx
+    pop ax
     ret
 
 ; --- drawing --------------------------------------------------------------------
@@ -680,7 +832,13 @@ wa_sdraw:
     jne .ok                     ; already is)
     mov al, CWHITE
     call OSAPI_SET_COLOR
-    mov si, wa_sgnd + WS_NGND * 8
+    push cx
+    call wa_sgsel               ; (the field's place: after the table)
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add si, cx
+    pop cx
     call wa_srect
     call OSAPI_GFX_FILL
     jmp .ok
@@ -750,6 +908,13 @@ wa_slabel:                      ; (AL a focus STOP: wa_sfoc's)
     add cx, [wa_sorg]
     mov dx, [wa_slabs+si+2]
     add dx, [wa_sorg+2]
+    cmp bl, WS_NICK - 1         ; (the group's labels from its top; the
+    jae .lb                     ; nick's from the bottom row's)
+    add dx, [wa_sgy]
+    jmp short .lc
+.lb:
+    add dx, [wa_sby]
+.lc:
     mov si, [wa_slabs+si+4]
     pop ax
     mov [si], ah                ; (its own first cell: the strings are ours)
@@ -1664,6 +1829,12 @@ wa_sgval:       db 0, 5, 10, 15, 20, 25, 30     ; free-for-all: kills
                 db 0, 3, 5, 10, 15, 20, 30      ; king of the hill: points
 wa_srot:        db 0FFh, 0FFh, 0FFh, 0FFh   ; THE ROTATION by mode: a bit an
                                 ; arena, every one to begin with
+wa_slay:        db 0            ; THE LAYOUT: 0 alone, 1 linked (wa_slayout)
+wa_sgy:         dw 0            ; ...the group's top in it, the bottom row's
+wa_sby:         dw 0            ; (wa_splace's, off the content's height)
+wa_sybase:      dw 0, 0, 0, 0, 0, 0     ; the ground's y bases: 0, the group,
+                                ; the group - 1, the bottom row, it - 1, the
+                                ; content's last line
 wa_rwin:        dw 0            ; its window, 0 none; how many boxes, the
 wa_rn:          db 0            ; focus's, its marker's text
 wa_rfoc:        db 0
