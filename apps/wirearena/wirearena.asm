@@ -6591,9 +6591,16 @@ wa_rbind:
     xor al, al
     call op_cseg
     mov [wa_rcs], ax
+    mov ax, es                  ; THE KEYFRAMES come DELTA-coded (tools/
+    mov si, [es:WR_H_POSE]      ; wadelta.py: ~5KB fewer on the disk):
+    mov cx, WA_KHOT*WA_FRAMESZ  ; the hot ones in the renderer's data...
+    call wa_undelta
     mov al, WA_PPOSE            ; the keyframes' part: its segment, for the
     call op_seg                 ; renderer's CONFIG (wa_rsync)
     mov [wa_posg], ax
+    xor si, si                  ; ...and the pose part, whole
+    mov cx, (WA_NFRAMES-WA_KHOT)*WA_FRAMESZ
+    call wa_undelta
     push ds
     pop es
     clc
@@ -6605,6 +6612,51 @@ wa_rbind:
     xor cx, cx
     call OSAPI_TOAST
     stc
+    ret
+
+; wa_undelta - AX = a segment, SI = an offset in it, CX = the bytes of
+; keyframes there: tools/wadelta.py's coding undone in place. A keyframe
+; is NFACE rows of NJ (x, y) byte pairs, and a joint moves little from one
+; facing to the next and from one keyframe to the next, so the file holds
+; each byte less the one a row (WA_NJ*2) before it, and that again less the
+; one a keyframe (WA_FRAMESZ) before - which LZ packs to under half. The
+; two differences commute, so the two sums come back in either order. Once,
+; at entry (~40 clk a byte a pass: ~0.24 s on a 4.77 MHz 8088 for both
+; parts, against ~5.5KB the floppy does not have to give). CX is whole
+; keyframes. Keeps all but AX and the flags
+wa_undelta:
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    mov ds, ax
+    cld
+    mov dx, WA_NJ*2             ; a row, then a keyframe
+.pass:
+    push cx
+    push si
+    mov di, si
+    add di, dx                  ; DI = the byte, SI = the one it is less
+    sub cx, dx
+    shr cx, 1                   ; (a pair a loop: both strides are even,
+.b:                             ; so the two bytes read are decoded
+    lodsw                       ; already - ~40 clk a byte, not ~55)
+    add [di], al
+    inc di
+    add [di], ah
+    inc di
+    loop .b
+    pop si
+    pop cx
+    cmp dx, WA_FRAMESZ
+    mov dx, WA_FRAMESZ
+    jne .pass
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
     ret
 
 ; wa_partsmv - the parts standard's hook (OP_ONMOVE, SPEC.md 20.12.12): the
