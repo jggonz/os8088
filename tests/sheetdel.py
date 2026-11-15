@@ -90,7 +90,7 @@ def main():
         M.settle(m, limit=180)
 
         def delete(answer, tag):
-            mo.menu(FILE_MENU[0], FILE_MENU[1], *ITEM(FILE_MENU[0], DELETE))
+            SF.menu(m, mo, FILE_MENU[0], FILE_MENU[1], *ITEM(FILE_MENU[0], DELETE))
             M.settle(m, limit=60)
             ui.chooser_open(JUNK)       # THE PICKER IS A DISK WINDOW since
                                         # the 2026-10-14 merge (38.3), so its

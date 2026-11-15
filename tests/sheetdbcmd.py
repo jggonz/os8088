@@ -140,7 +140,7 @@ def main():
                 M.settle(m)
 
         def menu(i):
-            mo.menu(DATA[0], DATA[1], *ITEM(DATA[0], i))
+            SF.menu(m, mo, DATA[0], DATA[1], *ITEM(DATA[0], i))
             M.settle(m)
 
         def look(tag):
@@ -193,7 +193,7 @@ def main():
             mo.to(DATA[0], DATA[1])
             mo._edge(True)
             mo.to(*ITEM(DATA[0], 6), l=True)  # hover SORT, not the item being
-            M.settle(m)                      # read: the one under the pointer
+            SF.held(m)                       # read: the one under the pointer
             _, _, rw = m.vram("cga")         # is INVERTED, and glass reads
             M.write_png(os.path.join(WORK, tag + ".png"), 640, 200, rw)
             seen[tag] = glass.cell_text(
@@ -225,7 +225,7 @@ def main():
         M.settle(m, limit=180)
 
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

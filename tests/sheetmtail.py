@@ -140,7 +140,7 @@ def main_card(card):
             before = m.fbuf()
             mo.to(*data)
             mo._edge(True)
-            M.settle(m)
+            SF.held(m)
             opened = word("sh_mopen") & 0xFF
             banked = word("sh_mbanked") & 0xFF
             rect = (word("sh_mrx1"), word("sh_mry1"), word("sh_mrx2"),
@@ -248,7 +248,7 @@ def main():
             before = screen()
             mo.to(x, y)
             mo._edge(True)
-            M.settle(m)
+            SF.held(m)
             rect = (word("sh_mrx1"), word("sh_mry1"), word("sh_mrx2"),
                     word("sh_mry2"))
             banked = (word("sh_mbanked") & 0xFF, word("sh_mbky2"))

@@ -130,13 +130,13 @@ def main():
                 M.settle(m)
 
         def justify():
-            mo.menu(FORMAT[0], FORMAT[1], *ITEM(FORMAT[0], JUSTIFY))
+            SF.menu(m, mo, FORMAT[0], FORMAT[1], *ITEM(FORMAT[0], JUSTIFY))
             M.settle(m, limit=120)
 
         def save(tag):
             before = saved.get("last") or open(os.path.join(WORK, NAME),
                                                "rb").read()
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1],
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1],
                     SF.SAVE_AS[0], SF.SAVE_AS[1])
             M.ui_done(m)                    # SOAK-SPEED 4: every step of
             mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))

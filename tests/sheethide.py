@@ -122,7 +122,7 @@ def main():
             }
 
         def fmt(item, text):
-            mo.menu(FMT[0], FMT[1], *ITEM(FMT[0], item))
+            SF.menu(m, mo, FMT[0], FMT[1], *ITEM(FMT[0], item))
             M.settle(m)
             m.type_text("\b" * 10 + text + "\n")
             M.settle(m, limit=180)

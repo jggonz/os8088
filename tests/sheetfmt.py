@@ -355,6 +355,76 @@ def open_shin(m, mo, name="SHIN.SLK"):
 SH_MPAD, SH_MBAR_H, SH_MI_H = 8, 14, 12     # sheet.asm's own three
 
 
+def held(m, quiet=0.25):
+    """`settle` while a BUTTON HOLDS A PULL-DOWN OPEN, the one wait in these
+    rows that `ui_done` cannot end: SHEET's menu tracking (sh_mtrack, and the
+    kernel's for its own bar) yields rather than sleeps, so ui_task never
+    idles while the button is down - and a plain `settle(m)` then pays its
+    whole long window, three 4.5-guest-second captures, ~13.5 guest s a hold
+    (sheetmtail measured 27 of its 64 waited guest s in two). A pull-down is
+    drawn in one go, well inside a ~1.1 guest s window, so two still windows
+    of that prove it is on the glass (SOAK-SPEED 4's exception; soak-speed-2
+    office ledger)."""
+    return M.settle(m, quiet=quiet, stable=2)
+
+
+_SHEET_SYMS = []
+
+
+def _sheet_syms():
+    if not _SHEET_SYMS:                 # one map per process (and the map
+        from paintmove import pkg_syms  # itself is cached per source)
+        _SHEET_SYMS.append(pkg_syms(os.path.join(HERE, "..", "apps",
+                                                 "sheet", "sheet.asm")))
+    return _SHEET_SYMS[0]
+
+
+def _front_sheet_seg(m, x, y):
+    """SHEET's segment when the FRONT window is a Sheet window containing
+    (x, y) - the bar a press there lands on is SHEET's own - else None."""
+    import os88geom as geom
+    addr = geom.top(m)
+    if not addr:
+        return None
+    raw = bytes(m.read(addr, geom.WIN_SIZE))
+    wx, wy, ww, wh = struct.unpack_from("<HHHH", raw, geom.W_X)
+    seg, tp = (struct.unpack_from("<H", raw, geom.W_SEG)[0],
+               struct.unpack_from("<H", raw, geom.W_TITLE)[0])
+    if not seg or not (wx <= x < wx + ww and wy <= y < wy + wh):
+        return None
+    if not bytes(m.readseg(seg, tp, 5)).startswith(b"Sheet"):
+        return None
+    return seg
+
+
+def menu(m, mo, x0, y0, x1, y1, settle=None):
+    """`mo.menu(x0, y0, x1, y1)` on SHEET'S OWN BAR, the press confirmed on
+    [sh_mopen] instead of waited out.
+
+    os88mouse's drag waits for "the press to be taken" with `ui_done` capped
+    at PRESS_GUEST (3 guest s) - and SHEET's menu tracking YIELDS while the
+    button is down, so ui_task never sleeps there and every press paid the
+    whole cap, unlogged (a capped ui_done records nothing): sheetrowh's eight
+    menus were ~24 of its ~120 s. The pull-down being open is what the cap
+    stood for, so this waits for exactly that - [sh_mopen] off SH_M_NONE,
+    still bounded at the old cap - and then drags (os88mouse's `aim`). A press
+    anywhere else (the kernel's bar, a window that is not SHEET's in front)
+    is the plain `mo.menu`, unchanged."""
+    seg = _front_sheet_seg(m, x0, y0)
+    if seg is None:
+        return mo.menu(x0, y0, x1, y1, settle=settle)
+    off = _sheet_syms()["sh_mopen"]
+
+    def aim(_mo):
+        try:
+            M.until(m, lambda _: m.readseg(seg, off, 1)[0] != 0xFF,
+                    "SHEET's pull-down to open", guest=3.0)
+        except M.MartyError:
+            pass                        # the old cap, spent: drag as before
+        return x1, y1
+    return mo.menu(x0, y0, 0, 0, settle=settle, aim=aim)
+
+
 def _w(m, seg, off):
     v = m.readseg(seg, off, 2)
     return v[0] | (v[1] << 8)
@@ -603,7 +673,7 @@ def display_toggle(m, mo, box, title=OPTIONS_MENU, row=0):
     Returns True when a dialog opened and was answered."""
     S = lambda n: m.sym(n)
     before = dispcp.win_list(m, S, check=False)
-    mo.menu(title[0], title[1], title[0] + 17,
+    menu(m, mo, title[0], title[1], title[0] + 17,
             mega_y((0, 57 + 12 * row + 2), SHEET_DY)[1])
     M.settle(m)
     wins = dispcp.win_list(m, S, check=False)
@@ -637,7 +707,7 @@ def main():
         # mark it UNLOCKED, which travels in the same byte as a border and
         # through the same (format, border) pair table, so it exercises the
         # whole of 81.47's extra-XF mechanism without the Border dialog.
-        mo.menu(FORMAT_MENU[0], FORMAT_MENU[1], CELL_PROT[0], CELL_PROT[1])
+        menu(m, mo, FORMAT_MENU[0], FORMAT_MENU[1], CELL_PROT[0], CELL_PROT[1])
         M.settle(m)
         mo.click(*fdlg_xy(m, 1))                  # row 1 = Unlocked. THIS IS
                                                   # Cell Protection, not File
@@ -650,7 +720,7 @@ def main():
         M.settle(m, limit=120)
 
         for kind in KINDS:
-            mo.menu(FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
+            menu(m, mo, FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
             M.settle(m)
             mo.click(*fdlg_xy(m, FMT_ROW[kind]))
             M.settle(m)
@@ -670,11 +740,11 @@ def main():
         # needs none: switching sheets leaves a cell selected, and typing goes
         # to it.  SHIN.BIF is overwritten, and the checks above are unharmed
         # because read_biff answers with the FIRST sheet either way.
-        mo.menu(SHEETS_MENU[0], SHEETS_MENU[1], SHEET2[0], SHEET2[1])
+        menu(m, mo, SHEETS_MENU[0], SHEETS_MENU[1], SHEET2[0], SHEET2[1])
         M.settle(m)
         m.type_text("77"); m.key("Enter"); M.settle(m)
         m.type_text("88"); m.key("Enter"); M.settle(m)
-        mo.menu(FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
+        menu(m, mo, FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
         M.settle(m)
         mo.click(*fdlg_xy(m, FMT_ROW['bif']))
         M.settle(m)

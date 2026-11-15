@@ -121,7 +121,7 @@ def main():
             M.write_png(os.path.join(WORK, tag + ".png"), 640, 200, rr)
 
         def run(name):
-            mo.menu(MACRO[0], MACRO[1], *RUN)
+            SF.menu(m, mo, MACRO[0], MACRO[1], *RUN)
             M.settle(m)
             for ch in "\b" * 8 + name:
                 M.text_taken(m, ch, ui=False, cap=0.15)
@@ -130,14 +130,14 @@ def main():
             M.settle(m, limit=300)
 
         def pick(title, i):
-            mo.menu(title[0], title[1], *ITEM(title[0], i))
+            SF.menu(m, mo, title[0], title[1], *ITEM(title[0], i))
             M.settle(m, limit=300)
 
         run("MAIN")
         shot("1-bar")
         mo.to(*TOOLS)                           # the dropdown, held open
         mo._edge(True)
-        M.settle(m)
+        SF.held(m)
         shot("2-tools")
         mo._edge(False)
         M.settle(m)
@@ -152,7 +152,7 @@ def main():
         M.settle(m, limit=300)
         shot("4-back")
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

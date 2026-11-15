@@ -103,7 +103,7 @@ def main():
         table = glass.glyphs(m)
 
         def freeze():
-            mo.menu(OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], FREEZE))
+            SF.menu(m, mo, OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], FREEZE))
             M.settle(m)
 
         def look(tag):

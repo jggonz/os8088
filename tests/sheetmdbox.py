@@ -164,7 +164,7 @@ def main():
                 M.text_taken(m, ch, ui=False, cap=0.15)
                 # (SOAK-SPEED 9: taken when read, the old pace the cap)
 
-        mo.menu(MACRO[0], MACRO[1], *RUN)
+        SF.menu(m, mo, MACRO[0], MACRO[1], *RUN)
         M.settle(m)
         keys("\b" * 8 + "MAIN")
         m.type_text("\n")
@@ -211,7 +211,7 @@ def main():
         seen.append(dialog() is None)           # record stayed behind
         shot("5-done")
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

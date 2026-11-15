@@ -161,7 +161,7 @@ def main():
         def rowheight(r, typed):
             mo.click((xs[1] + xs[2]) // 2, (ys[r] + ys[r + 1]) // 2)
             M.settle(m)
-            mo.menu(SF.FORMAT_MENU[0], SF.FORMAT_MENU[1], *ROWH_ITEM)
+            SF.menu(m, mo, SF.FORMAT_MENU[0], SF.FORMAT_MENU[1], *ROWH_ITEM)
             M.settle(m)
             m.type_text(typed + "\n")
             M.settle(m)
@@ -176,7 +176,7 @@ def main():
         def save(tag):
             before = saved.get("last") or open(os.path.join(WORK, NAME),
                                                "rb").read()
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1],
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1],
                     SF.SAVE_AS[0], SF.SAVE_AS[1])
             M.ui_done(m)                    # SOAK-SPEED 4: every step of
             mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
@@ -198,14 +198,14 @@ def main():
         # --- 5: Insert Row at 1, save; Undo, save
         mo.click((xs[0] + xs[1]) // 2, (ys[0] + ys[1]) // 2)
         M.settle(m)
-        mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], INSERT))
+        SF.menu(m, mo, EDIT[0], EDIT[1], *ITEM(EDIT[0], INSERT))
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, 0))                 # Row
         M.settle(m)
         mo.click(*SF.fdlg_okxy(m))
         M.settle(m)
         save("5-inserted")
-        mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], UNDO))
+        SF.menu(m, mo, EDIT[0], EDIT[1], *ITEM(EDIT[0], UNDO))
         M.settle(m)
         save("5-undone")
 

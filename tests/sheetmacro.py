@@ -155,7 +155,7 @@ def main():
             M.write_png(os.path.join(WORK, tag + ".png"), 640, 200, rows)
 
         def run(start):
-            mo.menu(MACRO[0], MACRO[1], *RUN)
+            SF.menu(m, mo, MACRO[0], MACRO[1], *RUN)
             M.settle(m)
             shot("run-" + start)
             m.type_text("\b" * 8 + start + "\n")
@@ -180,7 +180,7 @@ def main():
         M.settle(m, limit=240)
         shot("4-done")
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

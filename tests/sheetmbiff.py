@@ -159,7 +159,7 @@ def main():
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
         M.settle(m, limit=240)
         # Save As -> Normal. The format radio's first row IS Normal (81.40).
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
         M.ui_done(m)                    # the save is aimed off the

@@ -260,7 +260,7 @@ def main():
         M.settle(m, limit=240)              # RATE and IRR iterate on a 5150
         shot(m, "1-loaded")
 
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.settle(m)

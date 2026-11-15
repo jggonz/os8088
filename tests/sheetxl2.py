@@ -281,7 +281,7 @@ def main():
         vol = lambda: os88flush.Flush(marty=m).volume(1)
 
         def save(kind, out, before=None):
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0],
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0],
                     SF.SAVE_AS[1])
             M.settle(m)
             mo.click(*SF.fdlg_xy(m, SF.FMT_ROW[kind]))
@@ -310,7 +310,7 @@ def main():
             row = shown.index(name)
             check(row < LIST_ROWS, "%s is on the Open list's first page"
                   % name, "row %d of %s" % (row, shown))
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], *OPEN_ITEM)
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], *OPEN_ITEM)
             M.settle(m)
             ui.chooser_open(name)       # BY NAME: the chooser is a Disk
                                         # window since the 2026-10-14 merge

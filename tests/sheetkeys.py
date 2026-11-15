@@ -121,9 +121,9 @@ def main():
             wider, and the end of the label is read with it"""
             mo.to(*title)
             mo._edge(True)
-            M.settle(m)
+            SF.held(m)
             mo.to(*park, l=True)
-            M.settle(m)
+            SF.held(m)
             x2, y1 = word("sh_mrx2"), word("sh_mry1")
             _, _, r = m.vram("cga")
             M.write_png(os.path.join(WORK, "menu-%d.png" % title[0]),

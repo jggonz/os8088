@@ -174,7 +174,7 @@ def main():
         mo.click(*at(3, 2))
         m.key("ShiftLeft", down=False, up=True)
         M.settle(m)
-        menu = lambda i: (mo.menu(DATA[0], DATA[1], *ITEM(DATA[0], i)),
+        menu = lambda i: (SF.menu(m, mo, DATA[0], DATA[1], *ITEM(DATA[0], i)),
                           M.settle(m))
         menu(SET_DB)
         mo.click(*at(0, 0))                 # a known selection to come back to
@@ -203,7 +203,7 @@ def main():
         seen["ref"] = glass.cell_text(rw, (56, 57, 122, 71), table)
 
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

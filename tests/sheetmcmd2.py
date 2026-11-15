@@ -139,14 +139,14 @@ def main():
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
         M.settle(m, limit=240)
-        mo.menu(MACRO[0], MACRO[1], *RUN)
+        SF.menu(m, mo, MACRO[0], MACRO[1], *RUN)
         M.settle(m)
         m.type_text("\b" * 8 + "MAIN\n")
         M.settle(m, limit=300)
         _, _, rows = m.vram("cga")
         M.write_png(os.path.join(WORK, "ran.png"), 640, 200, rows)
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

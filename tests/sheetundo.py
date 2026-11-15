@@ -85,7 +85,7 @@ def main():
         at = lambda r, c: ((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
 
         def edit(i):
-            mo.menu(EDIT[0], EDIT[1], *ITEM(i))
+            SF.menu(m, mo, EDIT[0], EDIT[1], *ITEM(i))
             M.settle(m)
 
         def look(tag, cells):
@@ -162,14 +162,14 @@ def main():
         # whose box was measured at the start - stays where it was
         mo.click(*at(0, 4))
         M.settle(m)
-        mo.menu(SF.FORMAT_MENU[0], SF.FORMAT_MENU[1],
+        SF.menu(m, mo, SF.FORMAT_MENU[0], SF.FORMAT_MENU[1],
                 SF.FORMAT_MENU[0] + 15, 57 + 12 * 6 + 2)   # Column Width...
         M.settle(m)
         m.type_text("\b\b\b9\n")
         M.settle(m)
         edit(UNDO)                          # "Can't Undo": nothing happens
         look("5-after", [(0, 3)])
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

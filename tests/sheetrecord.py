@@ -123,7 +123,7 @@ def main():
         grey = {"fresh": start_greyed()}
 
         def mac(i):
-            mo.menu(MACRO[0], MACRO[1], *ITEM(MACRO[0], i))
+            SF.menu(m, mo, MACRO[0], MACRO[1], *ITEM(MACRO[0], i))
             M.settle(m)
 
         def shot(tag):
@@ -172,7 +172,7 @@ def main():
         mo.click(*at(2, 0))                    # A1:A3
         m.key("ShiftLeft", down=False, up=True)
         M.settle(m)
-        mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], CLEAR))
+        SF.menu(m, mo, EDIT[0], EDIT[1], *ITEM(EDIT[0], CLEAR))
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, 0))            # All
         M.settle(m)
@@ -186,7 +186,7 @@ def main():
         shot("5-ran")
 
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the

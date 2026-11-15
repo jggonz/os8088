@@ -96,7 +96,7 @@ def biff_widths(data):
 
 
 def save(m, mo, kind, name, before=None):
-    mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+    SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
     M.ui_done(m)                    # SOAK-SPEED 4: every step of
     mo.click(*SF.fdlg_xy(m, SF.FMT_ROW[kind]))
     M.ui_done(m)                    # the save is aimed off the
@@ -163,7 +163,7 @@ def main():
         # --- 3: Format > Column Width on B3 --------------------------------
         mo.click(*centre(g, 2, 1))
         M.settle(m)
-        mo.menu(SF.FORMAT_MENU[0], SF.FORMAT_MENU[1], *COLW_ITEM)
+        SF.menu(m, mo, SF.FORMAT_MENU[0], SF.FORMAT_MENU[1], *COLW_ITEM)
         M.settle(m)
         m.type_text("\b\b\b10\n")
         M.settle(m)
@@ -180,7 +180,7 @@ def main():
         if g:
             mo.click(*centre(g, 2, 0))
             M.settle(m)
-        mo.menu(EDIT_MENU[0], EDIT_MENU[1], *INSERT_ITEM)
+        SF.menu(m, mo, EDIT_MENU[0], EDIT_MENU[1], *INSERT_ITEM)
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, COLUMN_ROW))
         M.settle(m)

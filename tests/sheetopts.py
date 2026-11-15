@@ -87,9 +87,9 @@ def main():
         # 1: hold the pulldown open and read its rows
         mo.to(*opt)
         mo._edge(True)
-        M.settle(m)
+        SF.held(m)
         mo.to(*park, l=True)
-        M.settle(m)
+        SF.held(m)
         x1, y1, x2 = word("sh_mrx1"), word("sh_mry1"), word("sh_mrx2")
         _, _, r = m.vram("cga")
         M.write_png(os.path.join(WORK, "1-menu.png"), 640, 200, r)
@@ -101,7 +101,7 @@ def main():
 
         # 2/3: Display... - read its opening state, then flip both boxes
         got["disp0"] = (byte("sh_gridlines"), byte("sh_showformulas"))
-        mo.menu(opt[0], opt[1], opt[0] + 17, 57 + 2)
+        SF.menu(m, mo, opt[0], opt[1], opt[0] + 17, 57 + 2)
         M.settle(m)
         got["dkind"] = (word("sh_bdlg_win") != 0, byte("sh_bdlg_kind"),
                         byte("sh_bdlg_sel"))
@@ -120,7 +120,7 @@ def main():
                         word("sh_bdlg_win"))
 
         # 4: Workspace... - R1C1
-        mo.menu(opt[0], opt[1], opt[0] + 17, 57 + 12 * 5 + 2)
+        SF.menu(m, mo, opt[0], opt[1], opt[0] + 17, 57 + 12 * 5 + 2)
         M.settle(m)
         got["wkind"] = (word("sh_bdlg_win") != 0, byte("sh_bdlg_kind"),
                         byte("sh_bdlg_sel"))

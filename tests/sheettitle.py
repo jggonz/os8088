@@ -85,7 +85,7 @@ def main():
         M.write_png_rgb(os.path.join(WORK, "1-launch.png"), *m.fbuf())
         # 2: File > New, Worksheet (the default radio), OK
         bar = y0 + 18 + 7
-        mo.menu(x0 + 1 + (8 * 4 + 16) // 2, bar,
+        SF.menu(m, mo, x0 + 1 + (8 * 4 + 16) // 2, bar,
                 x0 + 1 + 24 + 6, y0 + 18 + 14 + 2 + 6)
         M.settle(m, limit=120)
         dlg = dispcp.win_list(m, S, check=False)[-1]

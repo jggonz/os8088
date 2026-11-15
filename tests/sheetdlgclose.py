@@ -102,7 +102,7 @@ def main():
             M.settle(m, limit=60)
 
         def open_item(t, i):
-            mo.menu(X[t], bar, *item(t, i))
+            SF.menu(m, mo, X[t], bar, *item(t, i))
             M.settle(m, limit=120)
             mo.to(*park)
 

@@ -84,9 +84,9 @@ def main():
             mo.to(x + wcell // 2, y0 + 18 + 7)
             x += wcell
             mo._edge(True)
-            M.settle(m)
+            SF.held(m)
             mo.to(*park, l=True)
-            M.settle(m)
+            SF.held(m)
             px1, py1 = word("sh_mrx1"), word("sh_mry1")
             px2, py2 = word("sh_mrx2"), word("sh_mry2")
             n = word("sh_mcnt")

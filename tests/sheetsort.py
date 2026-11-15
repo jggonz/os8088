@@ -124,7 +124,7 @@ def main():
         at = lambda r, c: ((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
 
         def menu(title, i):
-            mo.menu(title[0], title[1], *ITEM(title[0], i))
+            SF.menu(m, mo, title[0], title[1], *ITEM(title[0], i))
             M.settle(m)
 
         def select(r1, c1, r2, c2):
@@ -149,7 +149,7 @@ def main():
         def save(tag):
             before = saved.get("last") or open(os.path.join(WORK, NAME),
                                                "rb").read()
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1],
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1],
                     SF.SAVE_AS[0], SF.SAVE_AS[1])
             M.ui_done(m)                    # SOAK-SPEED 4: every step of
             mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))

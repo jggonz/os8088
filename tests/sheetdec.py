@@ -277,7 +277,7 @@ def main():
             M.settle(m, limit=240)
 
         def save_as(kind, name, before=None):
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0],
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0],
                     SF.SAVE_AS[1])
             M.settle(m)
             mo.click(*SF.fdlg_xy(m, SF.FMT_ROW[kind]))

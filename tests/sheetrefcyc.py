@@ -105,7 +105,7 @@ def main():
         got["idle"] = (m.readseg(seg, sym["sh_editing"], 1)[0], buf()[:1])
         mo.to(*FORMULA)                     # open Formula: sh_refmark runs
         mo._edge(True)
-        M.settle(m)
+        SF.held(m)
         got["idle_grey"] = greyed()
         mo.to(634, 190, l=True)
         mo._edge(False)
@@ -128,7 +128,7 @@ def main():
         # 4: the menu, mid-entry
         mo.to(*FORMULA)
         mo._edge(True)
-        M.settle(m)
+        SF.held(m)
         got["live"] = not greyed()
         mo.to(FORMULA[0] + 17, 57 + 12 * REF_ROW + 2, l=True)
         mo._edge(False)

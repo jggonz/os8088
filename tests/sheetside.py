@@ -130,7 +130,7 @@ def main():
         def rowop(item):
             mo.click(*at(0, 0))
             M.settle(m)
-            mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], item))
+            SF.menu(m, mo, EDIT[0], EDIT[1], *ITEM(EDIT[0], item))
             M.settle(m)
             mo.click(*SF.fdlg_xy(m, 0))             # Row
             M.settle(m)
@@ -142,7 +142,7 @@ def main():
         look("2-inserted")
         rowop(DELETE)
         look("3-deleted")
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
         M.ui_done(m)                    # the save is aimed off the

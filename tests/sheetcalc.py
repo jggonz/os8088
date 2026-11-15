@@ -123,7 +123,7 @@ def main():
         fresh = look("1-fresh")
 
         # --- Calculation: Manual ----------------------------------------------
-        mo.menu(OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCULATION))
+        SF.menu(m, mo, OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCULATION))
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, MANUAL))
         M.settle(m)
@@ -140,7 +140,7 @@ def main():
         stale = look("2-stale")
 
         # --- Options > Calculate Now -------------------------------------------
-        mo.menu(OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCNOW))
+        SF.menu(m, mo, OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCNOW))
         M.settle(m, limit=120)
         after = look("3-calcnow")
 

@@ -208,7 +208,7 @@ def main():
                     y + TITLE_H + ABTNY + ABH // 2)
 
         def run(name):
-            mo.menu(MACRO[0], MACRO[1], *RUN)
+            SF.menu(m, mo, MACRO[0], MACRO[1], *RUN)
             M.settle(m)
             for ch in "\b" * 8 + name:        # one key at a time: type_text
                 M.text_taken(m, ch, ui=False, cap=0.15)  # drops keys to a polling field (MartyPC)
@@ -300,7 +300,7 @@ def main():
         shot("5-end")
 
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.ui_done(m)                    # the save is aimed off the
