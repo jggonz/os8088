@@ -105,9 +105,7 @@ wr_v_init:
     xor ax, ax
     mov cx, WA_CELLS
     rep stosw
-    mov di, wa_vst
-    mov cx, WA_MVTX
-    rep stosw
+    call wa_vstclr
     mov [wl_pvc], ax            ; (no corner of last frame's stands)
     mov di, wa_fqps             ; (and the floor lines' spans' feet's)
     mov cx, WA_MAXSP
