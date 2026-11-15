@@ -550,15 +550,6 @@ wc_evin:
 .ret:
     ret
 
-; wc_round - a win shown (the host's, or alone): the captures and the flags
-; anew, everyone back on their side (the kills and deaths on Tab go on) -
-; the guests told, and putting their own players back themselves
-wc_round:
-    call wc_reset
-    call wc_side
-    call wc_send
-    jmp wc_frame
-
 ; wc_score - FREE-FOR-ALL and TEAM DEATHMATCH, alone, a tick: team
 ; deathmatch's teams' kills (each its players', a suicide a kill less as on
 ; the board); the first to Win at's score wins. Keeps nothing

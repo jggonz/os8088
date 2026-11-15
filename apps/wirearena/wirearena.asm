@@ -16,6 +16,9 @@
     OS88_HEADER 'Wire Arena', wa_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 %define OP_WANT_CSEG            ; the renderer part is far-called through its
 %define OP_ONMOVE wa_partsmv    ; CODE selector, and its claim MOVES (SPEC.md
+%define OP_NO_LAZYOK            ; (20.12.9.2: the arenas are fetched, never
+                                ; asked about first - op_fetch's toast is
+                                ; the answer)
 %include "os88parts.inc"        ; 20.12.12): wa_partsmv re-reads both words
     OS88_ICON16                 ; ITS ICON: the corridor the game draws - a
     dw 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
@@ -41,6 +44,7 @@ wa_entry:
     jc .out                     ; the kernel's, so before anything else; a
     call wa_rbind               ; refusal has said why in a toast
     jc .out
+    call wa_sinmk               ; (the sine table: shipped coded)
     mov al, OP_CARVE            ; ...and its claim may move: wa_partsmv
     call op_movable             ; re-reads the two words wa_rbind banked
     mov byte [wa_fov], 1        ; 75 degrees: the owner's pick of the three
@@ -6715,9 +6719,16 @@ wa_rbind:
     xor al, al
     call op_cseg
     mov [wa_rcs], ax
+    mov ax, es                  ; THE KEYFRAMES come CODED (tools/
+    mov si, [es:WR_H_POSE]      ; wadelta.py: ~7KB fewer on the disk):
+    mov cx, WA_KHOT*WA_FRAMESZ  ; the hot ones in the renderer's data...
+    call wa_undelta
     mov al, WA_PPOSE            ; the keyframes' part: its segment, for the
     call op_seg                 ; renderer's CONFIG (wa_rsync)
     mov [wa_posg], ax
+    xor si, si                  ; ...and the pose part, whole
+    mov cx, (WA_NFRAMES-WA_KHOT)*WA_FRAMESZ
+    call wa_undelta
     push ds
     pop es
     clc
@@ -6729,6 +6740,89 @@ wa_rbind:
     xor cx, cx
     call OSAPI_TOAST
     stc
+    ret
+
+; wa_undelta - AX = a segment, SI = an offset in it, CX = the bytes of
+; keyframes there (whole ones, two or more): tools/wadelta.py's coding
+; undone in place. A keyframe is NFACE facing rows of NJ (x, y) byte pairs;
+; the file holds each keyframe less the one before, and in each, the first
+; half's rows each less the row before and the second half as zeros - it is
+; the first MIRRORED (the view turned half round: x negated, y the same,
+; which wadelta checks). LZ packs that to under a third. So: the keyframes'
+; running sum, then a keyframe at a time the rows' and the mirror. Once, at
+; entry (~70 clk a byte: ~0.2 s on a 4.77 MHz 8088 for both parts, against
+; ~7KB the floppy does not have to give). Keeps all but AX and the flags
+wa_undelta:
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    mov ds, ax
+    mov es, ax
+    cld
+    mov dx, si
+    add dx, cx                  ; DX = the end
+    push si
+    mov di, si                  ; every keyframe plus the one before
+    add di, WA_FRAMESZ
+    sub cx, WA_FRAMESZ
+    shr cx, 1
+    call .sum
+    pop si
+.f:
+    mov di, si                  ; its first half: each row plus the one
+    add di, WA_NJ*2             ; before
+    push si
+    mov cx, (WA_FRAMESZ/2 - WA_NJ*2) / 2
+    call .sum
+    pop si                      ; (DI = its second half)
+    mov cx, WA_FRAMESZ / 4
+.m:
+    lodsw                       ; ...the first's mirror
+    neg al
+    stosw
+    loop .m
+    mov si, di
+    cmp si, dx
+    jb .f
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+.sum:                           ; CX pairs: [DI] += [SI], both on. A pair
+    lodsw                       ; a loop: the strides are even, so the
+    add [di], al                ; two bytes read are summed already (~40
+    inc di                      ; clk a byte, not ~55)
+    add [di], ah
+    inc di
+    loop .sum
+    ret
+%if WA_KHOT < 2 || WA_NFRAMES - WA_KHOT < 2 || WA_FRAMESZ != WA_NFACE*WA_NJ*2
+ %error "wa_undelta: two keyframes or more a part, NFACE rows of NJ pairs"
+%endif
+
+; wa_sinmk - at entry, before anything turns: wa_sin is shipped as its
+; second difference (tools/wadelta.py --sin; ~470 bytes fewer packed - a
+; quarter sine's is 0 or -1 nearly everywhere), and two running sums give
+; back the table arenagen made: the first difference from the second (from
+; entry 2 on), then the table (from 1). ~32 clk a word, once. Image words,
+; so an instance's own. Keeps all but AX, CX, SI and the flags
+wa_sinmk:
+    cld
+    mov si, wa_sin + 2
+    mov cx, 255
+    call .sum
+    mov si, wa_sin
+    mov cx, 256
+.sum:
+    lodsw                       ; [SI] += the word before it
+    add [si], ax
+    loop .sum
     ret
 
 ; wa_partsmv - the parts standard's hook (OP_ONMOVE, SPEC.md 20.12.12): the
@@ -7104,9 +7198,12 @@ wa_loadarena:
 %include "wasetup.inc"          ; the opening window: the match setup
 %define OS88UI_DROP             ; the setup's drop-downs (SPEC.md 13.14)
 %define OS88UI_CHK              ; the rotation's check boxes (SPEC.md 13.15)
+%define OS88UI_NOGRADIO         ; (check boxes only: no radio ring and dot,
+                                ; 13.15.3 - ~150 bytes)
 %define OS88UI_ABOUT            ; the About card: the keys (SPEC.md 12.2)
 %define OS88UI_ABFIT            ; (thirteen lines on a CGA's content box)
 %define OS88UI_ABLEFT           ; (the key table at the card's left margin)
+%define OS88UI_ABPACK           ; (its lines end to end: no pointer table)
 %include "os88ui.inc"           ; (its buttons)
 %define OS88LINE_NOSET          ; (the field is typed into, never set,
 %define OS88LINE_NORESYNC       ;  never written behind its back)

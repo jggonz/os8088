@@ -251306,7 +251306,8 @@ disagree, this section and the source win.
     pushed far return enters it (`wa_rcall`), so no vector is read
     through CS;
   - part 1, `OP_ASSET`, `OP_COMP`: the POSE part, the figures'
-    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`);
+    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`),
+    delta-coded in the file (128.3);
   - parts 2.., `OP_ASSET`, `OP_LAZY | OP_COMP`: one ARENA each (128.4),
     fetched when a match needs it.
 - **Moves.** The region is `OS88_REGION_MOVABLE`, and the carve is
@@ -251376,9 +251377,23 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The renderer part's ABI** is `apps/wirearena/wafb.inc`, which both
   halves include, so the FRAME BLOCK is one layout:
   - **The part's header**: `'WRPART'`, then at +6 the ABI byte
-    (`WR_ABI`, 14) and at +7 the verb count (`WR_NVERB`, 6). From +8
-    there is a word per verb, its offset. The primary refuses a mismatch at
-    launch with *Renderer part mismatch*.
+    (`WR_ABI`, 15) and at +7 the verb count (`WR_NVERB`, 6). From +8
+    there is a word per verb, its offset, and at +20 (`WR_H_POSE`) the
+    offset of the hot keyframes (`wa_pose0`). The primary refuses a
+    mismatch at launch with *Renderer part mismatch*.
+  - **The keyframes are shipped CODED** (`tools/wadelta.py`): the renderer
+    part's hot ones (at `WR_H_POSE`) and the whole of the pose part. Facing
+    k + NFACE/2 is facing k mirrored (x negated, y the same), so a
+    keyframe's second half is shipped as zeros; its first half's rows are
+    each less the row before (`WA_NJ` x 2 bytes), and the whole keyframe is
+    less the one before (`WA_FRAMESZ`). That packs them to under a third,
+    and a keyframe that is not its own mirror fails the build. `wa_rbind`
+    undoes both in place at launch (`wa_undelta`), so the parts hold the
+    assembler's bytes from then on, and `build/wrpart.bin` and
+    `build/wapose.bin` are those bytes; only the `.dlt` copies are packed.
+    The primary's quarter-wave sine table (`wa_sin`) is shipped the same
+    way, as its second difference (`wadelta.py --sin`), and `wa_sinmk`
+    rebuilds it at entry before anything reads it.
   - **The verbs**: `WRV_INIT` (after a mode set), `WRV_GEOM`, `WRV_ARENA`
     (AL = an arena), `WRV_RENDER` (out AL = the frame number), `WRV_PRESENT`
     (out AX = cells written) and `WRV_TRACE` (a shot's cone; out the nearest

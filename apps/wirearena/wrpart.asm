@@ -42,6 +42,13 @@ WA_FBLOCK
 wr_hdr:
     db 'WRPART', WR_ABI, WR_NVERB
     dw wr_v_init, wr_v_geom, wr_v_arena, wr_v_render, wr_v_present, wr_v_trace
+wr_hpose:
+    dw wa_pose0                     ; (WR_H_POSE: the hot keyframes, which
+                                    ; the file holds coded and the
+                                    ; primary's wa_rbind decodes once)
+%if wr_hpose - wr_hdr != WR_H_POSE || WR_H_POSE != WR_H_VERB + WR_NVERB*2
+    %error "wrpart: WR_H_POSE is the word after the verbs"
+%endif
 %if ($ - $$) > WR_FB
     %error "wrpart: the header runs into the frame block"
 %endif

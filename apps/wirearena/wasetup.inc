@@ -1944,18 +1944,19 @@ wa_sb_keys:     db 'Keys', 0
 wa_sbflags:     dw OS88UI_FILL, OS88UI_FILL
     OS88UI_BTNREC wa_sbrec, wa_sbrects, wa_sblab, wa_sbflags, 2, wa_splace
 
-wa_ablines: dw wa_ab0, wa_ab1, wa_ab2, wa_ab3, wa_ab4, wa_ab5, wa_ab6
-            dw wa_ab14, wa_ab7, wa_ab8, wa_ab10, wa_ab12, wa_ab1, wa_ab13, 0
-wa_ab0:     db 'Wire Arena', 0
-wa_ab1:     db 0
-wa_ab2:     db OS88UI_ABLT, 'Mouse looks; W A S D move; arrows', 0
-wa_ab3:     db OS88UI_ABLT, 'turn and pitch; Space jumps.', 0
-wa_ab4:     db OS88UI_ABLT, 'Click or Ctrl fires; R reloads.', 0
-wa_ab5:     db OS88UI_ABLT, '1-6: pistol, shotgun, chaingun,', 0
-wa_ab6:     db OS88UI_ABLT, 'grenades, rockets, railgun.', 0
-wa_ab14:    db OS88UI_ABLT, 'Q/E: weapon. [/]: mouse. P: pause.', 0
-wa_ab7:     db OS88UI_ABLT, 'Tab: scores. -/+: 40/80 columns.', 0
-wa_ab8:     db OS88UI_ABLT, 'F1-F5: detail. V: vsync.', 0
-wa_ab10:    db OS88UI_ABLT, 'F10: fps; all the stats; off.', 0
-wa_ab12:    db OS88UI_ABLT, 'Esc leaves the arena.', 0
-wa_ab13:    db 'Contributed by Elendilon', 0
+wa_ablines:                     ; (OS88UI_ABPACK: the lines end to end, a
+            db 'Wire Arena', 0  ; lone NUL the blank one, ABEND the end)
+            db 0
+            db OS88UI_ABLT, 'Mouse looks; W A S D move; arrows', 0
+            db OS88UI_ABLT, 'turn and pitch; Space jumps.', 0
+            db OS88UI_ABLT, 'Click or Ctrl fires; R reloads.', 0
+            db OS88UI_ABLT, '1-6: pistol, shotgun, chaingun,', 0
+            db OS88UI_ABLT, 'grenades, rockets, railgun.', 0
+            db OS88UI_ABLT, 'Q/E: weapon. [/]: mouse. P: pause.', 0
+            db OS88UI_ABLT, 'Tab: scores. -/+: 40/80 columns.', 0
+            db OS88UI_ABLT, 'F1-F5: detail. V: vsync.', 0
+            db OS88UI_ABLT, 'F10: fps; all the stats; off.', 0
+            db OS88UI_ABLT, 'Esc leaves the arena.', 0
+            db 0
+            db 'Contributed by Elendilon', 0
+            db OS88UI_ABEND
