@@ -226,9 +226,13 @@ wa_setmode:
     mov ax, [wa_w]
     shl ax, 1
     mov [wa_w2], ax             ; 2W: the figures' sub-columns
-    mov byte [wa_mono], 0
-    cmp word [wa_vseg], 0xB000
-    jne .colour
+    mov byte [wa_mono], 0       ; MONO IS THE DISPLAY'S KIND, not FSI_SEG's
+    push dx                     ; value: on kern_mega that is a SELECTOR
+    mov bx, [wa_win]            ; (SPEC.md 53.4, KERN-MEGA-MEMORY-PLAN MC7.4)
+    call OSAPI_FSX_CAPS         ; and never B000h, so a Hercules there was
+    cmp dl, VID_HERC            ; drawn with colour attributes. DL = the kind
+    pop dx                      ; of the display our window is on - the one
+    jne .colour                 ; fsx_mode's B000h fixup keys on
     mov byte [wa_mono], 1
 .colour:
     mov ah, 1                   ; hide the cursor (SPEC.md 53.4's bare text

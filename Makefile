@@ -17959,8 +17959,12 @@ $(WIN16IMG360): $(WIN16SHIP) tools/os88disk.py
 # kern_mega arm of every package that has one ($(MEGAPKGS), MEGASUB) - in the
 # two geometries kern_mega ships in (14.1 answer 19), on demand through `make
 # mega` and never in `all`. Every other file is the shipped disk's own.
+# WIREARENA rides both in GAMES/ as the 1.44MB and 1.2MB apps disks carry it
+# (the shipped build, which has no arm: it runs on kern_mega as it is -
+# docs/plans/MULTIPLAYER-FPS-PLAN.md's kern_mega pass). 133 clusters: the
+# 1.2MB disk keeps 49 of its 182 free after it.
 MEGAAPPSARGS = $(addprefix APPS:,$(call MEGASUB,$(APPS_TOOLS))) \
-               $(addprefix GAMES:,$(call MEGASUB,$(APPS_GAMES) $(RDG_SHIP))) \
+               $(addprefix GAMES:,$(call MEGASUB,$(APPS_GAMES) $(RDG_SHIP) $(WA_SHIP))) \
                $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) $(LOGOVIDARG) \
                $(MIDISONGARGS) \
                $(addprefix SYSTEM:,$(call MEGASUB,$(APPSYS))) \
