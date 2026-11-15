@@ -1663,7 +1663,7 @@ DRVM_IMG_SND equ 21             ; ceil(build/sound.drv / 512) - t_drvmem
 DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv / 512)   checks
 DRVM_IMG_ETH equ 34             ; ceil(build/ether.drv / 512)   every one
 DRVM_IMG_RAM equ 11              ; ceil(build/ramdisk.drv / 512)   of these
-DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
+DRVM_IMG_NET equ 8              ; ceil(build/net.drv / 512) - 4K
                                 ; since SPEC.md 62.11.3's size pass, the
                                 ; Wire's desktop icon (drivers/wirezone.inc,
                                 ; SPEC.md 26.7) included
