@@ -16,6 +16,9 @@
     OS88_HEADER 'Wire Arena', wa_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 %define OP_WANT_CSEG            ; the renderer part is far-called through its
 %define OP_ONMOVE wa_partsmv    ; CODE selector, and its claim MOVES (SPEC.md
+%define OP_NO_LAZYOK            ; (20.12.9.2: the arenas are fetched, never
+                                ; asked about first - op_fetch's toast is
+                                ; the answer)
 %include "os88parts.inc"        ; 20.12.12): wa_partsmv re-reads both words
     OS88_ICON16                 ; ITS ICON: the corridor the game draws - a
     dw 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
