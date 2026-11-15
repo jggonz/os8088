@@ -3169,15 +3169,15 @@ wa_eoff:
     add bp, cx
 %endif
     jnc %%col
-    mov bx, [%2]                ; the next half-row (wa_fcell, inline)
-    add bx, [wa_fh]
-    mov [wa_fh], bx
+    mov bx, [%2]                ; the next half-row (wa_fcell, inline - but
+    add bx, [wa_fh]             ; its glyph: one half-row on, the next of
+    mov [wa_fh], bx             ; wa_hgl's two, ─ and _ by turns)
     cmp bx, WA_HR
     jae %%gone
 %if %3
     mov cx, bx
 %endif
-    mov al, [wa_hgl+bx]
+    xor al, WA_HGLX
     shl bx, 1
     mov bx, [wa_hroff+bx]
     add bx, si
