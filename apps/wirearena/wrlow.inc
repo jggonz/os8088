@@ -369,6 +369,8 @@ wa_lowbox:
     WLSEEN 1
     WLSEEN 2
     WLSEEN 3
+    cmp byte [wl_kind], 0       ; (a plain box - most: no treads, no box on
+    je .p3go                    ; its top)
     ; (a flight seen from its low end: its inner treads are nearer than the
     ; far side of its top, and the depth stack keeps its entries in order)
     cmp byte [wl_nt], 2
