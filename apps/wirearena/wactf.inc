@@ -777,8 +777,8 @@ wc_next:
     mov cl, bl
     mov dl, 1
     shl dl, cl                  ; DL = the mode's bit
-    mov al, [wa_arena]          ; BL = this one's item (wa_sarmap is its
-    call wa_sarmap              ; own inverse)
+    mov al, [wa_arena]          ; BL = this one's item
+    call wa_sitem
     mov bl, al
     mov ch, WA_NARENA           ; (round once at most: this one again)
 .n:
