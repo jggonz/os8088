@@ -1,0 +1,945 @@
+{
+ "apps360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "APPS/": [
+    0,
+    1
+   ],
+   "APPS/ARTFUL.O88": [
+    12769,
+    13
+   ],
+   "APPS/AUDIO.O88": [
+    9061,
+    9
+   ],
+   "APPS/BROWSER.O88": [
+    34243,
+    34
+   ],
+   "APPS/CALC.O88": [
+    3754,
+    4
+   ],
+   "APPS/FRACTAL.O88": [
+    2722,
+    3
+   ],
+   "APPS/FTPD.O88": [
+    11442,
+    12
+   ],
+   "APPS/NOTEPAD.O88": [
+    14421,
+    15
+   ],
+   "APPS/PAINT.O88": [
+    22108,
+    22
+   ],
+   "APPS/TELNET.O88": [
+    10599,
+    11
+   ],
+   "APPS/TEXPAD.O88": [
+    14508,
+    15
+   ],
+   "APPS/TRACKER.O88": [
+    25785,
+    26
+   ],
+   "APPS/VIDEO.O88": [
+    47646,
+    47
+   ],
+   "ASSOC.DAT": [
+    1884,
+    2
+   ],
+   "GAMES/": [
+    0,
+    1
+   ],
+   "GAMES/ARKANOID.O88": [
+    4925,
+    5
+   ],
+   "GAMES/CYCLONE.O88": [
+    9377,
+    10
+   ],
+   "GAMES/MINES.O88": [
+    1388,
+    2
+   ],
+   "GAMES/SKIES.O88": [
+    44454,
+    44
+   ],
+   "GAMES/SOLITAIR.O88": [
+    4058,
+    4
+   ],
+   "GAMES/TAMEGRAM.O88": [
+    3054,
+    3
+   ],
+   "GAMES/TANK.O88": [
+    11726,
+    12
+   ],
+   "GAMES/WIREBALL.O88": [
+    11389,
+    12
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MEDIA/BROWSER.HTM": [
+    2213,
+    3
+   ],
+   "MEDIA/GUIDE.TEX": [
+    858,
+    1
+   ],
+   "MEDIA/PAPER.TEX": [
+    1583,
+    2
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "SYSTEM/TASKMGR.O88": [
+    10613,
+    11
+   ]
+  },
+  "free": 27
+ },
+ "emu360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "ASSOC.DAT": [
+    200,
+    1
+   ],
+   "COPYING.W16": [
+    18735,
+    19
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MEDIA/GBDEMO.GB": [
+    1095,
+    2
+   ],
+   "REALDMG.O88": [
+    52499,
+    52
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/WIN16/": [
+    0,
+    1
+   ],
+   "WIN16.O88": [
+    144282,
+    141
+   ],
+   "WIN16.TXT": [
+    2843,
+    3
+   ]
+  },
+  "free": 132
+ },
+ "games360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "ARKANOID.O88": [
+    4925,
+    5
+   ],
+   "ASSOC.DAT": [
+    1336,
+    2
+   ],
+   "CYCLONE.O88": [
+    9377,
+    10
+   ],
+   "DOTDEL.O88": [
+    13737,
+    14
+   ],
+   "DRMARCO.O88": [
+    47302,
+    47
+   ],
+   "GORILLAS.O88": [
+    11760,
+    12
+   ],
+   "ISOTRON.O88": [
+    16815,
+    17
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MINES.O88": [
+    1388,
+    2
+   ],
+   "MISSILE.O88": [
+    8642,
+    9
+   ],
+   "PXSTEIN.O88": [
+    45284,
+    45
+   ],
+   "SKIES.O88": [
+    44454,
+    44
+   ],
+   "SOLITAIR.O88": [
+    4058,
+    4
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "TAMEGRAM.O88": [
+    3054,
+    3
+   ],
+   "TANK.O88": [
+    11726,
+    12
+   ],
+   "WIREBALL.O88": [
+    11389,
+    12
+   ],
+   "WIREFLET.O88": [
+    46585,
+    46
+   ]
+  },
+  "free": 67
+ },
+ "media360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "ASSOC.DAT": [
+    204,
+    1
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MEDIA/AFTERHRS.MP3": [
+    30523,
+    30
+   ],
+   "MEDIA/BEVERLY.MOD": [
+    41568,
+    41
+   ],
+   "MEDIA/MIDI/": [
+    0,
+    1
+   ],
+   "MEDIA/MIDI/BATTLE1.MID": [
+    4331,
+    5
+   ],
+   "MEDIA/MIDI/CANCAN.MID": [
+    2332,
+    3
+   ],
+   "MEDIA/MIDI/DEMO.MID": [
+    1819,
+    2
+   ],
+   "MEDIA/MIDI/ENTERTNR.MID": [
+    1470,
+    2
+   ],
+   "MEDIA/MIDI/FURELISE.MID": [
+    1249,
+    2
+   ],
+   "MEDIA/MIDI/INTRO.MID": [
+    1638,
+    2
+   ],
+   "MEDIA/MIDI/KOROBEIN.MID": [
+    2084,
+    3
+   ],
+   "MEDIA/MIDI/MOUNTKNG.MID": [
+    2663,
+    3
+   ],
+   "MEDIA/MIDI/SPACEJAM.MID": [
+    3486,
+    4
+   ],
+   "MEDIA/MIDI/TURKISH.MID": [
+    1494,
+    2
+   ],
+   "MEDIA/OS8088.V88": [
+    109056,
+    107
+   ],
+   "MIDIRACK.O88": [
+    30019,
+    30
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "XTMP3.O88": [
+    95839,
+    94
+   ]
+  },
+  "free": 19
+ },
+ "network360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "ASSOC.DAT": [
+    460,
+    1
+   ],
+   "BROWSER.O88": [
+    34243,
+    34
+   ],
+   "FTPD.O88": [
+    11442,
+    12
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MEDIA/BROWSER.HTM": [
+    2213,
+    3
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "SYSTEM/DOS/": [
+    0,
+    1
+   ],
+   "SYSTEM/DOS/OS88NET.COM": [
+    10784,
+    11
+   ],
+   "TELNET.O88": [
+    10599,
+    11
+   ],
+   "THEWIRE.O88": [
+    8500,
+    9
+   ],
+   "WIRECHAT.O88": [
+    16339,
+    16
+   ]
+  },
+  "free": 253
+ },
+ "office360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "ARTFUL.O88": [
+    12769,
+    13
+   ],
+   "ASSOC.DAT": [
+    856,
+    1
+   ],
+   "CALC.O88": [
+    3754,
+    4
+   ],
+   "CHART.O88": [
+    7940,
+    8
+   ],
+   "FONTVIEW.O88": [
+    3475,
+    4
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MEDIA/GUIDE.TEX": [
+    858,
+    1
+   ],
+   "MEDIA/PAPER.TEX": [
+    1583,
+    2
+   ],
+   "MEDIA/SALES.SLK": [
+    646,
+    1
+   ],
+   "MEDIA/SAMPLE.BMP": [
+    1387,
+    2
+   ],
+   "MEDIA/WELCOME.DOC": [
+    1668,
+    2
+   ],
+   "MEDIA/WRITING.MD": [
+    1581,
+    2
+   ],
+   "PAINT.O88": [
+    22108,
+    22
+   ],
+   "PIXEL.O88": [
+    109034,
+    107
+   ],
+   "SHEET.O88": [
+    87905,
+    86
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "SYSTEM/FONTS/": [
+    0,
+    1
+   ],
+   "SYSTEM/FONTS/ARCHIVO.F88": [
+    947,
+    1
+   ],
+   "SYSTEM/FONTS/CHARTER.F88": [
+    855,
+    1
+   ],
+   "SYSTEM/FONTS/COURIER.F88": [
+    873,
+    1
+   ],
+   "SYSTEM/FONTS/HELV.F88": [
+    953,
+    1
+   ],
+   "SYSTEM/FONTS/INCONSOL.F88": [
+    834,
+    1
+   ],
+   "SYSTEM/FONTS/JETBRAIN.F88": [
+    887,
+    1
+   ],
+   "SYSTEM/FONTS/LICENSE.TXT": [
+    3755,
+    4
+   ],
+   "SYSTEM/FONTS/NOTO.F88": [
+    956,
+    1
+   ],
+   "SYSTEM/FONTS/ROBOMONO.F88": [
+    882,
+    1
+   ],
+   "SYSTEM/FONTS/TALLX.F88": [
+    654,
+    1
+   ],
+   "SYSTEM/FONTS/TIMES.F88": [
+    962,
+    1
+   ],
+   "TEXPAD.O88": [
+    14508,
+    15
+   ],
+   "WORD.O88": [
+    43549,
+    43
+   ]
+  },
+  "free": 23
+ },
+ "os8088-360.img": {
+  "clusters": 706,
+  "csize": 512,
+  "files": {
+   "APPS/": [
+    0,
+    1
+   ],
+   "APPS/DOS.O88": [
+    49654,
+    97
+   ],
+   "APPS/NOTEPAD.O88": [
+    14421,
+    29
+   ],
+   "ASSOC.DAT": [
+    820,
+    2
+   ],
+   "AUTOSTRT/": [
+    0,
+    1
+   ],
+   "BOOTHD.SYS": [
+    512,
+    1
+   ],
+   "CTRL.DRV": [
+    15459,
+    31
+   ],
+   "DESK.DRV": [
+    4141,
+    9
+   ],
+   "DISKOPS.DRV": [
+    8984,
+    18
+   ],
+   "DOCK.DRV": [
+    2030,
+    4
+   ],
+   "EMS.DRV": [
+    717,
+    2
+   ],
+   "ETHER.DRV": [
+    11106,
+    22
+   ],
+   "EXTD.DRV": [
+    1830,
+    4
+   ],
+   "FORMAT.DRV": [
+    2944,
+    6
+   ],
+   "HDD.DRV": [
+    3571,
+    7
+   ],
+   "HDDTOOL.DRV": [
+    12216,
+    24
+   ],
+   "HIBER.DRV": [
+    6168,
+    13
+   ],
+   "HTTPFS.DRV": [
+    3606,
+    8
+   ],
+   "HTTPPAGE.DRV": [
+    2005,
+    4
+   ],
+   "INSTALL.O88": [
+    7315,
+    15
+   ],
+   "KERNEL.SYS": [
+    84304,
+    165
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MEDIA/OS8088.GIF": [
+    2138,
+    5
+   ],
+   "NET.DRV": [
+    3473,
+    7
+   ],
+   "RAMDISK.DRV": [
+    4597,
+    9
+   ],
+   "RAMPAGE.DRV": [
+    2171,
+    5
+   ],
+   "README.TXT": [
+    8088,
+    16
+   ],
+   "SAVER.DRV": [
+    7108,
+    14
+   ],
+   "SERIAL.DRV": [
+    848,
+    2
+   ],
+   "SOUND.DRV": [
+    8988,
+    18
+   ],
+   "STIKAPPS/": [
+    0,
+    1
+   ],
+   "STIKAPPS/DESKCAL.O88": [
+    9426,
+    19
+   ],
+   "STIKAPPS/DESKCLOK.O88": [
+    13812,
+    27
+   ],
+   "STIKAPPS/STIKNOTE.O88": [
+    4795,
+    10
+   ],
+   "STIKMENU.DRV": [
+    3579,
+    7
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/NOTES/": [
+    0,
+    2
+   ],
+   "SYSTEM/APPDATA/NOTES/WELCOME.TXT": [
+    141,
+    1
+   ],
+   "SYSTEM/RLAPPLY.O88": [
+    1482,
+    3
+   ],
+   "SYSTEM/TASKMGR.O88": [
+    10613,
+    21
+   ],
+   "SYSTEM/THEWIRE.O88": [
+    8500,
+    17
+   ],
+   "THMPAL.DRV": [
+    2259,
+    5
+   ],
+   "USBMOUSE.DRV": [
+    1423,
+    3
+   ],
+   "VESA.DRV": [
+    3848,
+    8
+   ],
+   "WIN95.DRV": [
+    1316,
+    3
+   ]
+  },
+  "free": 37
+ },
+ "small360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "APPS/": [
+    0,
+    1
+   ],
+   "APPS/ARTFUL.O88": [
+    12769,
+    13
+   ],
+   "APPS/BOUNCE.O88": [
+    923,
+    1
+   ],
+   "APPS/CALC.O88": [
+    2798,
+    3
+   ],
+   "APPS/FRACTAL.O88": [
+    2722,
+    3
+   ],
+   "APPS/NOTEPAD.O88": [
+    9628,
+    10
+   ],
+   "APPS/PAINT.O88": [
+    14540,
+    15
+   ],
+   "APPS/PIANO.O88": [
+    2985,
+    3
+   ],
+   "APPS/TEXPAD.O88": [
+    14508,
+    15
+   ],
+   "APPS/TIMER.O88": [
+    1470,
+    2
+   ],
+   "ASSOC.DAT": [
+    2132,
+    3
+   ],
+   "CTRL.DRV": [
+    5345,
+    6
+   ],
+   "DISKOPS.DRV": [
+    6458,
+    7
+   ],
+   "FDLG.DRV": [
+    1529,
+    2
+   ],
+   "FILECP.DRV": [
+    1702,
+    2
+   ],
+   "FORMAT.DRV": [
+    1226,
+    2
+   ],
+   "GAMES/": [
+    0,
+    1
+   ],
+   "GAMES/ARKANOID.O88": [
+    4925,
+    5
+   ],
+   "GAMES/CYCLONE.O88": [
+    9377,
+    10
+   ],
+   "GAMES/DOTDEL.O88": [
+    13737,
+    14
+   ],
+   "GAMES/GORILLAS.O88": [
+    11760,
+    12
+   ],
+   "GAMES/ISOTRON.O88": [
+    16815,
+    17
+   ],
+   "GAMES/MINES.O88": [
+    1388,
+    2
+   ],
+   "GAMES/MISSILE.O88": [
+    8642,
+    9
+   ],
+   "GAMES/SOLITAIR.O88": [
+    3875,
+    4
+   ],
+   "GAMES/TAMEGRAM.O88": [
+    3054,
+    3
+   ],
+   "GAMES/TANK.O88": [
+    12226,
+    12
+   ],
+   "GAMES/WIREBALL.O88": [
+    11389,
+    12
+   ],
+   "GAMES/WIREFLET.O88": [
+    46585,
+    46
+   ],
+   "KERNEL.SYS": [
+    53056,
+    52
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "MEDIA/GUIDE.TEX": [
+    858,
+    1
+   ],
+   "MEDIA/PAPER.TEX": [
+    1583,
+    2
+   ],
+   "README.TXT": [
+    8088,
+    8
+   ],
+   "SERIAL.DRV": [
+    848,
+    1
+   ],
+   "STIKAPPS/": [
+    0,
+    1
+   ],
+   "STIKAPPS/DESKCAL.O88": [
+    12565,
+    13
+   ],
+   "STIKAPPS/DESKCLOK.O88": [
+    16963,
+    17
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "SYSTEM/TASKMGR.O88": [
+    3877,
+    4
+   ]
+  },
+  "free": 17
+ },
+ "util360.img": {
+  "clusters": 354,
+  "csize": 1024,
+  "files": {
+   "ASSOC.DAT": [
+    280,
+    1
+   ],
+   "FSCHECK.DRV": [
+    5280,
+    6
+   ],
+   "MEDIA/": [
+    0,
+    1
+   ],
+   "REDLINE.O88": [
+    38803,
+    38
+   ],
+   "SYSCHECK.O88": [
+    14606,
+    15
+   ],
+   "SYSTEM/": [
+    0,
+    1
+   ],
+   "SYSTEM/APPDATA/": [
+    0,
+    1
+   ],
+   "SYSTEM/DOS/": [
+    0,
+    1
+   ],
+   "SYSTEM/DOS/OS88CZ.COM": [
+    5170,
+    6
+   ],
+   "SYSTEM/DOS/OS88NET.COM": [
+    10784,
+    11
+   ],
+   "TASKMGR.O88": [
+    10613,
+    11
+   ]
+  },
+  "free": 262
+ }
+}
