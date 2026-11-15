@@ -1579,14 +1579,20 @@ wa_lt_st:       dw wa_lt_s0, wa_lt_s1, wa_lt_s2
 wa_lt_s0:       db 'not ready', 0
 wa_lt_s1:       db 'READY', 0
 wa_lt_s2:       db 'in the arena', 0
-wa_lt_anames:   dw wa_lt_a1, wa_lt_a0, wa_lt_a2, wa_lt_a3, wa_lt_a4
-                                ; (the setup's order, Open first: an item
-                                ; is an arena through wa_sarmap)
+wa_lt_anames:                   ; (the setup's order: an item is an arena
+%assign wa_i 0                  ; through wa_sarmap)
+%rep WA_NARENA
+ %assign wa_o WA_ORD%[wa_i]
+                dw wa_lt_a%[wa_o]
+ %assign wa_i wa_i+1
+%endrep
 wa_lt_a0:       db 'pillars', 0
 wa_lt_a1:       db 'open', 0
 wa_lt_a2:       db 'heights', 0
 wa_lt_a3:       db 'hedge', 0
 wa_lt_a4:       db 'twin', 0
+wa_lt_a5:       db 'crossing', 0
+wa_lt_a6:       db 'ziggurat', 0
 wa_lt_dnames:   dw wa_lt_d0, wa_lt_d1, wa_lt_d2
 wa_lt_d0:       db 'easy', 0
 wa_lt_d1:       db 'normal', 0

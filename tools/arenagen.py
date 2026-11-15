@@ -635,7 +635,8 @@ def arena_modes(tag):
 # has no route - a bot cannot climb it - so it is the high ground that
 # overlooks the hill); the Twin's path at its bottom, between its lanes
 ARENA_HILL = {"a2": (1248, 1024, 1, 1), "a3": (1024, 832, 1, 1),
-              "a4": (1024, 832, 17, 18)}
+              "a4": (1024, 832, 17, 18), "a5": (1024, 1024, 12, 12),
+              "a6": (1024, 1024, 12, 12)}
 WA_FLR = 40                     # a flag is touched within this of it, in x
                                 # and in y (the game's WA_FLR; a pickup's 40)
 
@@ -862,26 +863,155 @@ HEDGE_BOXES, HEDGE_GRAPH, HEDGE_RESPAWNS, HEDGE_PICKUPS, HEDGE_START, \
     HEDGE_BENCH = _hedge()
 
 
+# --- CROSSING (docs/plans/WIREARENA-THREE-ARENAS-PLAN.md 1, the owner's
+# drawing of 2026-11-15): FLAT - every box 3 m, the renderer's and the
+# collision's cheapest paths. A plus-shaped corridor 2 m wide through the
+# middle, each arm 512 long, its sides 1 m walls - the sight grid's cell,
+# which a tall box keeps to (four L-shaped corners,
+# two boxes each), open at the arms' ends; a pillar in each quarter.
+def _crossing():
+    W, lo, hi, a0, a1 = 64, 512, 1536, 960, 1088   # (a wall, the arms' span,
+    bx_ = [                                        # the corridor's sides)
+        Box(a1, a1, a1 + W, hi, name="NE corner, N arm's side"),
+        Box(a1 + W, a1, hi, a1 + W, name="NE corner, E arm's side"),
+        Box(a0 - W, a1, a0, hi, name="NW corner, N arm's side"),
+        Box(lo, a1, a0 - W, a1 + W, name="NW corner, W arm's side"),
+        Box(a1, lo, a1 + W, a0, name="SE corner, S arm's side"),
+        Box(a1 + W, a0 - W, hi, a0, name="SE corner, E arm's side"),
+        Box(a0 - W, lo, a0, a0, name="SW corner, S arm's side"),
+        Box(lo, a0 - W, a0 - W, a0, name="SW corner, W arm's side"),
+        Box(320, 384, 448, 512, name="pillar SW"),
+        Box(1600, 384, 1728, 512, name="pillar SE"),
+        Box(320, 1536, 448, 1664, name="pillar NW"),
+        Box(1600, 1536, 1728, 1664, name="pillar NE")]
+    ring = [(192, 192), (1024, 192), (1856, 192), (1856, 1024),
+            (1856, 1856), (1024, 1856), (192, 1856), (192, 1024)]   # 0-7
+    arms = [(1024, 320), (1728, 1024), (1024, 1728), (320, 1024),
+            (1024, 1024), (1344, 1344), (640, 640)]  # 8-11 the arms' ends,
+    nodes = ring + arms                              # 12 the centre, 13-14
+    legs = [(i, (i + 1) % 8) for i in range(8)] + \
+           [(1, 8), (3, 9), (5, 10), (7, 11),       # (the ring to the arms,
+            (8, 12), (9, 12), (10, 12), (11, 12),   # the arms in, and two
+            (10, 13), (13, 9), (8, 14), (14, 11), (11, 8)]   # quarters')
+    homes = [list(range(8)), [12, 10, 13, 9], [8, 14, 11]]
+    graph = dict(nodes=nodes, legs=legs, homes=homes)
+    resp = [(192, 1536, 0, 1), (192, 512, 0, 1),             # red: the west
+            (1856, 1536, 512, 2), (1856, 512, 512, 2),       # blue: the east
+            (1024, 1856, 768), (1024, 192, 256)]
+    choice = (PK_CHAINGUN, PK_SHOTGUN, PK_RAIL)
+    pks = [((PK_GRENADE, PK_ROCKET), 1024, 1408),   # in the crossing's arms
+           ((PK_GRENADE, PK_ROCKET), 1024, 640),
+           ((PK_HEALTH, PK_SHIELD), 1024, 960),     # its centre
+           (choice, 192, 192), (choice, 1856, 192),  # the room's corners
+           (choice, 1856, 1856), (choice, 192, 1856)]
+    start = (1024, 192, 256)
+    bench = [("A", 1024, 256, 256, 0, 0),           # up the south arm
+             ("B", 192, 192, 128, 0, 0),            # a corner, across
+             ("C", 1024, 1024, 0, 0, 0),            # the centre, east
+             ("D", 1856, 1024, 512, 0, 0)]          # the blue flag, west
+    return bx_, graph, resp, pks, start, bench
+
+
+CROSS_BOXES, CROSS_GRAPH, CROSS_RESPAWNS, CROSS_PICKUPS, CROSS_START, \
+    CROSS_BENCH = _crossing()
+
+
+# --- THE ZIGGURAT (THREE-ARENAS-PLAN 3, the owner's drawing of 2026-11-15):
+# very high walls (8 m), the room's corners cut by tall boxes stepped three
+# to a corner (four cost 11% a frame more, two were coarse) - the drawing's octagon in the boxes the format has; a tower
+# 4 m square and 4.5 m tall (15 treads of a step's 24 the most a flight
+# climbs; 12 here) with a ramp up each side; a pillar between it and each
+# corner, the corner's spawn and launcher behind it, out of the tower's
+# sight. No flags.
+ZH = 512                        # the walls, the corners' boxes, the pillars
+ZT = 288                        # the tower
+
+
+def _ziggurat():
+    bx_ = []
+    for (fx, fy) in ((0, 0), (1, 0), (0, 1), (1, 1)):   # the corners' steps
+        for k in range(3):
+            x0, x1 = 0, 384 - 128 * k
+            y0, y1 = 128 * k, 128 * (k + 1)
+            if fx:
+                x0, x1 = 2048 - x1, 2048 - x0
+            if fy:
+                y0, y1 = 2048 - y1, 2048 - y0
+            bx_.append(Box(x0, y0, x1, y1, ZH, col=COL_ROOM,
+                           name="corner %d%d step %d" % (fx, fy, k)))
+    bx_ += [
+        Box(896, 896, 1152, 1152, ZT, col=COL_PLAT, name="the tower"),
+        Box(960, 1152, 1088, 1536, ZT, FLIGHT, col=COL_PLAT, toward="S",
+            treads=12, name="north ramp"),
+        Box(960, 512, 1088, 896, ZT, FLIGHT, col=COL_PLAT, toward="N",
+            treads=12, name="south ramp"),
+        Box(1152, 960, 1536, 1088, ZT, FLIGHT, col=COL_PLAT, toward="W",
+            treads=12, name="east ramp"),
+        Box(512, 960, 896, 1088, ZT, FLIGHT, col=COL_PLAT, toward="E",
+            treads=12, name="west ramp"),
+        Box(448, 448, 576, 576, ZH, name="pillar SW"),
+        Box(1472, 448, 1600, 576, ZH, name="pillar SE"),
+        Box(448, 1472, 576, 1600, ZH, name="pillar NW"),
+        Box(1472, 1472, 1600, 1600, ZH, name="pillar NE")]
+    ring = [(320, 320), (1024, 256), (1728, 320), (1792, 1024),
+            (1728, 1728), (1024, 1792), (320, 1728), (256, 1024)]  # 0-7
+    feet = [(1024, 448), (1600, 1024), (1024, 1600), (448, 1024)]  # 8-11
+    nodes = ring + feet + [(1024, 1024), (640, 1600)]   # 12 the top, 13
+    legs = [(i, (i + 1) % 8) for i in range(8)] + \
+           [(1, 8), (3, 9), (5, 10), (7, 11),       # (the ring to the feet,
+            (8, 12), (9, 12), (10, 12), (11, 12),   # the ramps, and two
+            (9, 8), (11, 13), (13, 10), (10, 11)]   # loops of the feet)
+    homes = [list(range(8)), [12, 9, 8], [11, 13, 10]]
+    graph = dict(nodes=nodes, legs=legs, homes=homes)
+    resp = [(320, 320, 128, 1), (320, 1728, 896, 1),          # red: the west
+            (1728, 320, 384, 2), (1728, 1728, 640, 2)]       # blue: the east
+    corner = (PK_CHAINGUN, PK_ROCKET)
+    pks = [((PK_HEALTH, PK_SHIELD), 1024, 944),     # the tower's top: the
+           (PK_RAIL, 1024, 1104),                   # owner's three, two
+           (corner, 384, 384), (corner, 1664, 384),  # spawns; the corners
+           (corner, 384, 1664), (corner, 1664, 1664)]
+    start = (1024, 256, 256)
+    bench = [("A", 1024, 256, 256, 0, 0),           # the tower, from south
+             ("B", 320, 320, 128, 0, 0),            # a corner, its pillar
+             ("C", 1024, 1024, 0, -40, ZT),         # on top, east
+             ("D", 1792, 1024, 512, 0, 0)]          # the east ramp's foot
+    return bx_, graph, resp, pks, start, bench
+
+
+ZIGG_BOXES, ZIGG_GRAPH, ZIGG_RESPAWNS, ZIGG_PICKUPS, ZIGG_START, \
+    ZIGG_BENCH = _ziggurat()
+
+
 def arenas():
     return [("a0", "Arena", BOXES, PLAYER_START),
             ("a1", "Open", OPEN_BOXES, PLAYER_START),
             ("a2", "Heights", HEIGHTS_BOXES, PLAYER_START),
             ("a3", "Hedge", HEDGE_BOXES, HEDGE_START),
-            ("a4", "Twin", TWIN_BOXES, TWIN_START)]
+            ("a4", "Twin", TWIN_BOXES, TWIN_START),
+            ("a5", "Crossing", CROSS_BOXES, CROSS_START),
+            ("a6", "Ziggurat", ZIGG_BOXES, ZIGG_START)]
+
+
+# THE SETUP'S LIST (THREE-ARENAS-PLAN 4): the arenas in the order the Arena
+# drop-down shows them - an arena keeps its number (the benches, the poses,
+# the rows and the wire all name them); WA_ORD<item> is the item's arena
+ARENA_ORDER = ["a1", "a0", "a5", "a2", "a3", "a4", "a6"]
 
 
 # an arena's own patrols (the rest walk PATHS): every arena's are WA_NFIG
 # loops - an arena with no route graph of its own walks them as one
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
-ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": HEDGE_GRAPH, "a4": TWIN_GRAPH}
+ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": HEDGE_GRAPH, "a4": TWIN_GRAPH,
+                "a5": CROSS_GRAPH, "a6": ZIGG_GRAPH}
 ARENA_ROOMCOL = {}                      # (a room's walls not the room's blue)
 # CTF's BASES (CTF-PLAN 3), red's then blue's, on a route node: the twin's
 # two flag places, behind its lifts; the hedge's west and east rooms
-ARENA_FLAGS = {"a3": [(224, 1152), (1824, 1152)], "a4": TWIN_FLAGS}
+ARENA_FLAGS = {"a3": [(224, 1152), (1824, 1152)], "a4": TWIN_FLAGS,
+               "a5": [(192, 1024), (1856, 1024)]}
 # FLOOR LINES (ARENAS-PLAN 4.5): an arena's closed lines on the floor, the
 # feet's edge - and its room's height, 0 for no room walls at all
 ARENA_FLINES = {"a4": TWIN_WALK}
-ARENA_ROOMH = {"a3": MH, "a4": 0}      # (the hedge's edge all of a height,
+ARENA_ROOMH = {"a3": MH, "a4": 0, "a6": ZH}      # (the hedge's edge all of a height,
                                         # the owner's: its fills' and its
                                         # room's walls - HEDGES-PLAN 9)
 WA_MFL = 24                             # (wafb.inc's)
@@ -931,7 +1061,8 @@ def in_walk(tag, x, y, r=0):
 # up"), each with its own ceiling and its frame rate measured where it is
 # worst. (boxes, outline edges)
 OVER_BUDGET = {}
-ARENA_RESPAWNS.update({"a3": HEDGE_RESPAWNS, "a4": TWIN_RESPAWNS})
+ARENA_RESPAWNS.update({"a3": HEDGE_RESPAWNS, "a4": TWIN_RESPAWNS,
+                       "a5": CROSS_RESPAWNS, "a6": ZIGG_RESPAWNS})
 # THE PLAY BENCH'S VIEWS (P, MULTIPLAYER-FPS-PLAN 16.7; ARENAS-PLAN 4.2), an
 # arena's own, each P press the next: mark, x, y, angle (1024ths), base
 # pitch, the floor under the eye. The heights arena's five are HEIGHTS-PLAN
@@ -943,6 +1074,7 @@ ARENA_BENCH = {
            ("C", 1248, 1024, 512, 0, 80), ("D", 1952, 1024, 512, -40, 160),
            ("E", 600, 1568, 512, 0, 0)],
     "a3": HEDGE_BENCH,                  # (the hedge's: its _hedge)
+    "a5": CROSS_BENCH, "a6": ZIGG_BENCH,
     "a4": [("A", 640, 1024, 0, 0, 0),           # at the path, east along it
            ("B", 512, 1024, 0, -40, 240),       # on the west tower
            ("C", 1024, 832, 0, 0, 0),           # the path's bottom
@@ -1402,7 +1534,8 @@ HEIGHTS_PICKUPS = [
 # is health or a shield (the owner, 2026-11-15)
 OPEN_PICKUPS = [((PK_HEALTH, PK_SHIELD), 1024, 1024)]
 ARENA_PICKUPS = {"a1": OPEN_PICKUPS, "a2": HEIGHTS_PICKUPS,
-                 "a3": HEDGE_PICKUPS, "a4": TWIN_PICKUPS}
+                 "a3": HEDGE_PICKUPS, "a4": TWIN_PICKUPS,
+                 "a5": CROSS_PICKUPS, "a6": ZIGG_PICKUPS}
 
 
 def pickups(tag, boxes):
@@ -2107,6 +2240,13 @@ def bsp_tables(w):
         counts.append(arena_tables(w, tag, boxes, start))
     w("%endif")
     w("WA_NARENA equ %d" % len(counts))
+    tags = [t[0] for t in arenas()]
+    if sorted(ARENA_ORDER) != sorted(tags):
+        raise SystemExit("arenagen: ARENA_ORDER names %r, the arenas are %r"
+                         % (ARENA_ORDER, tags))
+    for i, t in enumerate(ARENA_ORDER):    # (the setup's list: wasetup.inc)
+        w("WA_ORD%d equ %d" % (i, tags.index(t)))
+        w("WA_ITM%d equ %d" % (tags.index(t), i))
     w("WA_MXV equ %d" % max(c[0] for c in counts))
     w("WA_MYV equ %d" % max(c[1] for c in counts))
     w("WA_MVTX equ %d" % max(c[2] for c in counts))

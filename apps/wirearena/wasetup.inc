@@ -313,16 +313,22 @@ wa_spick:
 wa_spicks:  dw wa_spick.arena, wa_spick.cols, wa_spick.bots, wa_spick.skill
             dw wa_spick.play, wa_spick.mode, wa_spick.goal
 
-; wa_sarmap - AL = an arena, or the Arena list's item: the other. The list
-; puts Open (arena 1) first and Pillars (arena 0, once "full") second - the
-; owner's order - and the arenas keep their numbers (the benches, the poses,
-; the rows and the wire all name them). Keeps all but AL
+; wa_sarmap - AL = the Arena list's item: AL = its arena; wa_sitem - AL =
+; an arena: AL = its item. The list is the owner's order (arenagen's
+; ARENA_ORDER: open, pillars, crossing, the heights ...) and the arenas keep
+; their numbers (the benches, the poses, the rows and the wire all name
+; them). Keep all but AL
 wa_sarmap:
-    cmp al, 2
-    jae .out
-    xor al, 1
-.out:
+    push bx
+    mov bx, wa_saord
+.x:
+    xlatb
+    pop bx
     ret
+wa_sitem:
+    push bx
+    mov bx, wa_sitm
+    jmp short wa_sarmap.x
 
 ; wa_sset - BX = a drop-down x 2, AH = -1 or +1: its pick one along, round
 ; (Left and Right on the focused control). A greyed one says whose it is
@@ -1623,6 +1629,18 @@ wa_amodes:                      ; each arena's modes, a bit each (arenagen)
                 db WA_AM%[wa_i]
 %assign wa_i wa_i+1
 %endrep
+wa_saord:                        ; the list's order: each item's arena, and
+%assign wa_i 0                  ; each arena's item (arenagen's WA_ORD,
+%rep WA_NARENA                  ; WA_ITM)
+                db WA_ORD%[wa_i]
+%assign wa_i wa_i+1
+%endrep
+wa_sitm:
+%assign wa_i 0
+%rep WA_NARENA
+                db WA_ITM%[wa_i]
+%assign wa_i wa_i+1
+%endrep
 wa_salp:        times WA_NARENA+1 dw 0  ; the Arena list, the mode's
 wa_salx:        times WA_NARENA+1 db 0  ; ...and each item's arena (0FFh:
                                         ; Rotation..., the last)
@@ -1644,7 +1662,8 @@ wa_rmk:         db ' ', 0
 WR_CKSZ         equ 12          ; (os88ui's OS88UI_CK_SIZE, included after:
                                 ; wirearena.asm checks the two agree)
 wa_rck:         times WA_NARENA * WR_CKSZ db 0  ; the boxes
-wa_rtpl:        dw 232, 40, WR_W + 2, 0 ; its template (the height: wa_ropen)
+wa_rtpl:        dw 232, 22, WR_W + 2, 0 ; its template (the height: wa_ropen;
+                                        ; eight rows fit a CGA from y 22)
                 dw wa_rttl, wa_rcls
     OS88_CLASS wa_rcls, 0, PAINT, wa_rpaint, ONKEY, wa_rkey, \
                ONCLICK, wa_rclick, ONCLOSE, wa_rclose

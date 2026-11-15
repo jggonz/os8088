@@ -197,13 +197,40 @@ def main():
                 print("  %-26s feet %d" % ("hedge: " + what, f), flush=True)
         g.ride(0, 1024, 2016, 112, 0, fails, "hedge: the lift, the wall")
         g.bench((768, 832, ord("A")), fails, "hedge: bench view A")
+    with boot() as ui:                  # CROSSING (THREE-ARENAS-PLAN 1)
+        g = match(ui, 5)
+        if g.p.byte(g.sym["wa_aflat"]) != 1:
+            fails.append("crossing: not a flat arena (wa_aflat %d)"
+                         % g.p.byte(g.sym["wa_aflat"]))
+        else:
+            print("  %-26s flat" % "crossing:", flush=True)
+        g.bench((1024, 256, ord("A")), fails, "crossing: bench view A")
+    with boot() as ui:                  # THE ZIGGURAT (THREE-ARENAS-PLAN 3)
+        g = match(ui, 6)
+        g.p.write(g.sym["wa_bdet"], b"\x01")
+        g.place(1024, 448, 0, ang=256)  # (the south ramp's foot, north)
+        g.m.advance(cycles=TICK * 4)
+        g.m.key("KeyW", up=False)       # (up the ramp: 6 m at a walk's
+        for t in range(150):            # speed)
+            g.m.advance(cycles=TICK * 2)
+            if g.word("wa_feet") == 288:
+                break
+        g.m.key("KeyW", down=False)
+        if g.word("wa_feet") != 288:
+            fails.append("ziggurat: up the south ramp, the feet at %d, not "
+                         "the tower's top (288)" % g.word("wa_feet"))
+        else:
+            print("  %-26s up in %d ticks" % ("ziggurat: the south ramp",
+                                              2 * (t + 1)), flush=True)
+        g.bench((1024, 256, ord("A")), fails, "ziggurat: bench view A")
     if fails:
         print("waarenas: FAIL - %d:" % len(fails))
         for f in fails:
             print("  " + f)
         sys.exit(1)
     print("waarenas: ok - both lifts, the towers, the floor lines, the bots' rides, "
-          "the stack's tiers, the hedge's lift, each arena's bench")
+          "the stack's tiers, the hedge's lift, the crossing flat, the "
+          "ziggurat's ramp, each arena's bench")
 
 
 if __name__ == "__main__":

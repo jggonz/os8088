@@ -1397,12 +1397,14 @@ wa_lists:
 ; the divide cannot fault (HEIGHTS-PLAN 9.5)
 wa_hat:
     mov ax, [di]
-    test byte [di+2], 0x80      ; A LINE (WIREARENA-ARENAS-PLAN 2): a wall to
-    jnz .line                   ; feet, its height to shots
-    test byte [di+2], 3
-    jz .out                     ; (solid, or a lift: its height as it is)
+    test byte [di+2], 3         ; (a flight's bits 4-7 are its treads: bit
+    jnz .notsol                 ; 7 is a LINE's on a SOLID alone - the
+    test byte [di+2], 0x80      ; ziggurat's 12 treads read as a wall)
+    jnz .line                   ; A LINE (WIREARENA-ARENAS-PLAN 2): a wall to
+    ret                         ; feet, its height to shots
+.notsol:
     test byte [di+2], 2
-    jnz .out
+    jnz .out                    ; (a lift: its height as it is)
     push bx
     push cx
     push dx

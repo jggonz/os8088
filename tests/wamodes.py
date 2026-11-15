@@ -11,7 +11,7 @@ arena, on one machine, off the game's own variables.
   - A FREE-FOR-ALL WIN: Win at 5 kills, a bot's fifth shows its name
     WINS; after the 10 s the match goes on in the next arena (pillars, after
     open), the scores anew and the bots' names kept; our fifth there shows
-    YOU WIN, and the next is the heights;
+    YOU WIN, and the next is the crossing;
   - TEAM DEATHMATCH: the teams' tops are their players' kills (us and bot
     2 red, bot 1 blue) - nine is no win at Win at 10, the tenth shows RED
     WINS; after the 10 s the Twin (next after the hedge), us on red's side.
@@ -79,23 +79,23 @@ def main():
             m.key(key)
             m.advance(cycles=TICK * 6)
 
-        check(arenas() == [1, 0, 2, 3, 4] and
+        check(arenas() == [1, 0, 5, 2, 3, 4] and
               p.byte(sym["wa_lkarena"]) == 2,
-              "ARENAS BY MODE: free-for-all, all five, open first; the "
+              "ARENAS BY MODE: free-for-all, all six, open first; the "
               "heights picked", (arenas(), p.byte(sym["wa_lkarena"])))
         mode_key("ArrowRight")                  # free-for-all -> TDM
-        check(p.byte(sym["wa_lkgmode"]) == 2 and arenas() == [3, 4] and
-              p.byte(sym["wa_lkarena"]) == 3,
-              "ARENAS BY MODE: team deathmatch, the hedge and the Twin - the "
-              "heights left for the hedge",
+        check(p.byte(sym["wa_lkgmode"]) == 2 and arenas() == [5, 3, 4] and
+              p.byte(sym["wa_lkarena"]) == 5,
+              "ARENAS BY MODE: team deathmatch, the crossing, the hedge and the "
+              "Twin - the heights left for the crossing",
               (p.byte(sym["wa_lkgmode"]), arenas(),
                p.byte(sym["wa_lkarena"])))
         check(p.word(sym["wa_sdr_g"] + DR_ITEMS) == sym["wa_sg_tdm"],
               "WIN AT: team deathmatch's items")
         mode_key("ArrowLeft")                   # ...and back
-        check(p.byte(sym["wa_lkgmode"]) == 0 and arenas() == [1, 0, 2, 3, 4]
+        check(p.byte(sym["wa_lkgmode"]) == 0 and arenas() == [1, 0, 5, 2, 3, 4]
               and p.word(sym["wa_sdr_g"] + DR_ITEMS) == sym["wa_sg_ffa"],
-              "ARENAS BY MODE: free-for-all again, all five, its Win at")
+              "ARENAS BY MODE: free-for-all again, all six, its Win at")
 
         def play(arena, mode, goal, bots=2):
             p.write(sym["wa_lkarena"], bytes([arena]))
@@ -153,8 +153,8 @@ def main():
         kills([5, 0, 0, 0])
         check(g.word("wa_cwin") > 0 and g.word("wa_cmsg") == sym["wc_m_youw"],
               "A FREE-FOR-ALL WIN: our fifth shows YOU WIN")
-        next_arena(2)
-        check(True, "THE NEXT ARENA: the heights after pillars")
+        next_arena(5)
+        check(True, "THE NEXT ARENA: the crossing after pillars")
         m.key("Escape")                         # (back to the setup)
         m.go()
         os88marty.until(m, lambda _: p.byte(sym["wa_quit"]) == 1,
@@ -171,22 +171,26 @@ def main():
 
         def on(i):
             return p.byte(ck + i * 12 + 10)
-        check(p.word(sym["wa_rwin"]) != 0 and p.byte(sym["wa_rn"]) == 2 and
-              on(0) == 1 and on(1) == 1,
-              "THE ROTATION: R opens its window - the hedge and the Twin, "
-              "both checked", (p.word(sym["wa_rwin"]), p.byte(sym["wa_rn"])))
+        check(p.word(sym["wa_rwin"]) != 0 and p.byte(sym["wa_rn"]) == 3 and
+              on(0) == 1 and on(1) == 1 and on(2) == 1,
+              "THE ROTATION: R opens its window - the crossing, the hedge and "
+              "the Twin, all checked",
+              (p.word(sym["wa_rwin"]), p.byte(sym["wa_rn"])))
+        m.key("Space")                          # (the crossing, the focus's)
         m.key("ArrowDown")
-        m.key("Space")
+        m.key("ArrowDown")
+        m.key("Space")                          # (the Twin)
         m.advance(cycles=TICK * 6)
         rot = p.byte(sym["wa_srot"] + 2)
-        check(on(1) == 0 and not rot & 16 and rot & 8,
-              "THE ROTATION: the Twin unchecked, out of it", (on(1), rot))
+        check(on(0) == 0 and on(2) == 0 and not rot & (16 | 32) and rot & 8,
+              "THE ROTATION: the crossing and the Twin unchecked, out of it",
+              (on(0), on(2), rot))
         m.key("ArrowUp")
         m.key("Space")
         m.advance(cycles=TICK * 6)
         rot = p.byte(sym["wa_srot"] + 2)
-        check(on(0) == 1 and rot & 8, "THE ROTATION: the last one checked "
-              "stays checked", (on(0), rot))
+        check(on(1) == 1 and rot & 8, "THE ROTATION: the last one checked "
+              "(the hedge) stays checked", (on(1), rot))
         m.key("Escape")
         m.advance(cycles=TICK * 6)
         check(p.word(sym["wa_rwin"]) == 0, "THE ROTATION: Esc puts it away")
@@ -217,8 +221,9 @@ def main():
 
         p.write(sym["wa_lkgmode"], b"\x01")    # KING OF THE HILL (M2): the
         mode_key("ArrowRight")                  # list's fourth, after CTF
-        check(p.byte(sym["wa_lkgmode"]) == 3 and arenas() == [2, 3, 4],
-              "ARENAS BY MODE: king of the hill, the heights, the hedge and "
+        check(p.byte(sym["wa_lkgmode"]) == 3 and arenas() == [5, 2, 3, 4],
+              "ARENAS BY MODE: king of the hill, the crossing, the heights, "
+              "the hedge and "
               "the Twin", (p.byte(sym["wa_lkgmode"]), arenas()))
         play(3, 3, 1, bots=1)                   # the hedge, Win at 3
         hill = (p.word(sym["wa_cfl"] + WC_X), p.word(sym["wa_cfl"] + WC_Y),
@@ -269,15 +274,24 @@ def main():
               (1024, 832) and p.byte(sym["wa_cfl"] + WC_ST) == 0,
               "THE NEXT ARENA: the Twin after the hedge - sides, us on red's, "
               "its hill nobody's", g.word("wa_px"))
-        p.write(sym["wa_cfl"] + WC_ST, b"\x01")  # (red's, and its third
-        p.write(sym["wa_caps"], bytes([2, 0]))   # point: the next, round)
-        p.write(sym["wa_cfl"] + WC_TMR, struct.pack('<H', 295))
-        m.advance(cycles=TICK * 8)
+        def hill_win():                         # (red's, and its third
+            p.write(sym["wa_cfl"] + WC_ST, b"\x01")  # point: the next)
+            p.write(sym["wa_caps"], bytes([2, 0]))
+            p.write(sym["wa_cfl"] + WC_TMR, struct.pack('<H', 295))
+            m.advance(cycles=TICK * 8)
+        hill_win()
+        next_arena(5)                           # (round: the crossing)
+        hill = (p.word(sym["wa_cfl"] + WC_X), p.word(sym["wa_cfl"] + WC_Y),
+                p.word(sym["wa_cfl"] + WC_Z))
+        check(p.byte(sym["wa_gside"]) == 1 and hill == (1024, 1024, 0),
+              "THE NEXT ARENA: the crossing after the Twin, round - sides, "
+              "its hill at the centre", (p.byte(sym["wa_gside"]), hill))
+        hill_win()
         next_arena(2)
         hill = (p.word(sym["wa_cfl"] + WC_X), p.word(sym["wa_cfl"] + WC_Y),
                 p.word(sym["wa_cfl"] + WC_Z))
         check(p.byte(sym["wa_gside"]) == 0 and hill == (1248, 1024, 80),
-              "THE NEXT ARENA: the heights after the Twin, round - no sides, "
+              "THE NEXT ARENA: the heights after the crossing - no sides, "
               "the hill on its platform", (p.byte(sym["wa_gside"]), hill))
         m.key("Escape")
         m.go()
