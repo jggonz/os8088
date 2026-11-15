@@ -57,8 +57,6 @@ tests/blitplane.py                 poll        2  # pre-gate census 2026-11-15 (
 
 tests/blobsum.py                   poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/bootsmoke.py                 sleep       1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
 tests/bootstatus.py                advance     1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/bptrace.py                   passwait    1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
@@ -392,8 +390,6 @@ tests/lzmod.py                     poll        5  # pre-gate census 2026-11-15 (
 
 tests/lzship.py                    passwait    1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/martyfork.py                 sleep       1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
 tests/mcseg.py                     advance     1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/megaaltrdg.py                poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
@@ -470,8 +466,6 @@ tests/megaxmove.py                 deadline    2  # pre-gate census 2026-11-15 (
 tests/midirack.py                  poll       13  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/minexflag.py                 advance     1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/mouerrq.py                   sleep       1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/mouseup.py                   poll        4  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
@@ -897,8 +891,6 @@ tests/vidrmbsnd.py                 deadline    2  # pre-gate census 2026-11-15 (
 tests/vidxdisp.py                  poll        2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/vidxip.py                    deadline    1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vmmouse.py                   sleep       1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/waverack.py                  deadline    3  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 tests/waverack.py                  sleep       9  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise

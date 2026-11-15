@@ -603,58 +603,6 @@ def _tree_runq(root):
         return None
 
 
-def _port_hold(row):
-    """flock every `port:N` in ROW's locks ACROSS RUNNERS, for its life.
-
-    `lane_locks` keeps two rows of one runner off one host port; it cannot
-    see another worktree's soak, and a fixed port (8090: ethernet and the
-    brdownload family; 8099: the dos*cable family) bound by a row in each
-    fails one of them as `Address already in use` - or, worse, has one row's
-    guest talk to the other's server. The same /tmp flock shape as
-    `_bochs_take`; a port held elsewhere is WAITED for (the row cannot run
-    without it), up to 30 minutes, then the row runs anyway and says so."""
-    fds = []
-    try:
-        import fcntl
-    except ImportError:
-        return fds
-    for lk in getattr(row, "locks", ()):
-        if not str(lk).startswith("port:"):
-            continue
-        try:
-            fd = os.open("/tmp/.os88port-%s.lock" % lk[5:],
-                         os.O_RDWR | os.O_CREAT, 0o666)
-        except OSError:
-            continue
-        end, said = time.time() + 1800, False
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fds.append(fd)
-                break
-            except OSError:
-                if time.time() > end:
-                    sys.stderr.write("os88test: %s: %s still held by another "
-                                     "runner after 30 min; running anyway\n"
-                                     % (row.name, lk))
-                    os.close(fd)
-                    break
-                if not said:
-                    sys.stderr.write("os88test: %s: waiting for %s, held by "
-                                     "another runner\n" % (row.name, lk))
-                    said = True
-                time.sleep(1.0)
-    return fds
-
-
-def _port_free(fds):
-    for fd in fds:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-
-
 def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     """Popen.communicate, but REAPED WITH wait4 so the row's CPU is kept.
 
@@ -893,7 +841,6 @@ def run_row(row, caps, strict, verbose, unbuilt=(), shared=False):
     if q9:                              # the rows launch QEMU BY NAME
         env = dict(env or os.environ)
         env["PATH"] = os.path.dirname(q9) + os.pathsep + env.get("PATH", "")
-    ports = _port_hold(row)
     try:
         try:
             p = subprocess.Popen(row.cmd, cwd=ROOT, stdout=subprocess.PIPE,
@@ -908,7 +855,6 @@ def run_row(row, caps, strict, verbose, unbuilt=(), shared=False):
     finally:
         if disp is not None:
             _bochs_free(disp)
-        _port_free(ports)
     out = so + se
     ok = p.returncode == 0 and not timed_out
     reason = "" if ok else "exit %d" % p.returncode

@@ -135,14 +135,18 @@ the merge run `python3 tests/unit/t_hostwait.py --update` once.
   load is printed but not the witness. Tested on a sleeping child
   (`0 s queued ... blocked/hung`) and a `nice 19` busy child at load 43
   (`2 s queued ... HOST-STARVED`). Nothing changes WHEN a row is stopped.
-- **`port:N` locks are taken across runners** (`_port_hold`): an flock on
-  `/tmp/.os88port-N.lock` for the row's life, the `_bochs_take` shape.
-  `lane_locks` already kept two rows of one runner apart; with eight
-  agents' soaks on one box, ethernet / brdownload* (8090), telansi (8094)
-  and the dos*cable family (8099) in two worktrees bound one port at once.
-  A held port is waited for (up to 30 min, then the row runs and says so).
-- Not locked by anything: tests/socktest.py binds 127.0.0.1:8088 (SK_PORT
-  in its .asm) with no `locks=`; its script lock covers one runner only.
+- **Cross-runner port collisions are already handled** - by
+  tests/os88qemu.py's `lease_port` (an flock on `/tmp/.os88port-N.lock`,
+  held by the row's own process). A runner-level flock on the same file was
+  written here first and REMOVED before verification: the runner holding the
+  lease would have made the row's own `lease_port` wait its 30 minutes -
+  a deadlock dressed as a slow row. Read the row-side harness before adding
+  a runner-side lock.
+- **socktest leases its port now**: tests/socktest.py (MartyPC, so not
+  through os88qemu's launchers) bound 127.0.0.1:8088 (SK_PORT in its .asm)
+  with no `locks=` and no lease; its script lock covers one runner only, so
+  two worktrees' soaks could collide. It calls `os88qemu.lease_port(PORT)`
+  before the bind.
 
 ## 5. Left for the next pass (ranked by expected host time / flake risk)
 
