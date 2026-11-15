@@ -853,7 +853,7 @@ def _bpc(a):
             pass
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import importlib
-    return importlib.import_module("os88test").BOCHS_PER_CORE
+    return importlib.import_module("os88test")._default_bpc()   # (RATE)
 
 
 def _declared(a):
