@@ -97,6 +97,11 @@ techniques are cited as "SOAK-SPEED n".
    ~25 guest ms at 1200 baud, ~6 host ms on an idle box, so every proven
    button edge paid up to a 20 ms floor - two to four edges a click.
 
+10. **`key_taken`'s ui_task look (`_ui_asleep`) is one batch**, and
+    **`pace`'s nap never outlasts what is left at the idle rate** (1-10 ms,
+    was a flat 10): a mouse packet's 0.054-guest-second pace overshot by up
+    to its whole nap.
+
 ## Measurements
 
 (after 09:05 UTC; see below)

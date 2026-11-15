@@ -262,7 +262,10 @@ def pace(m, secs):
                 "a %.2fs pause (%.1f guest seconds) had spent %.2f of them "
                 "after %.0f host seconds - the guest is running at under a "
                 "tenth of real time" % (secs, want, spent, time.time() - t0))
-        time.sleep(0.01)
+        # the nap never outlasts what is LEFT at the idle rate (GUEST_PACE
+        # guest s a host s), so a short pause - a mouse packet's 0.054 -
+        # stops overshooting by up to the whole 10 ms (soak-speed-2/core.md)
+        time.sleep(min(0.01, max(0.001, (want - spent) / GUEST_PACE)))
         st = m.status()
 
 # Where a run records what its waits actually cost, in guest seconds, when
@@ -3918,6 +3921,9 @@ def _ui_asleep(m):
         a = m._ui_idle_syms = (m.sym("sch_tasks") + UI_T_STATE,
                                m.sym("evq_count"), m.sym("sch_uiwake"),
                                m.sym("gfx_lock_flag"))
+    got = _reads1(m, ((a[0], 1), (a[1], 1), (a[2], 1)))
+    if got is not None:                 # one round trip (soak-speed-2/core)
+        return got[0][0] == UI_ASLEEP and not got[1][0] and not got[2][0]
     return (m.read(a[0], 1)[0] == UI_ASLEEP and not m.read(a[1], 1)[0]
             and not m.read(a[2], 1)[0])
 
