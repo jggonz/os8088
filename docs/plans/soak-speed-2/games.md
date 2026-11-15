@@ -62,6 +62,18 @@ throughout.
    idle wall from the kill), excitebikeref 600 -> 1500 (1.25x),
    waverackplay 900 -> 1800 (1.88x).
 
+8. **waverackplay counts laps, and its play watch is guest-timed** (goal 2):
+   the loop leg's host sleep of 2.6 laps' time, which a loaded box turned
+   into fewer than the two laps it checks, is a wait for verb 9's
+   `wt_played` to pass 2.6 laps; `play_to_end`'s 60 s watch is a
+   `os88qemu.Clock`.
+9. **os88soak's preflight on a shallow clone** (goal 3): `_buildnum_current`
+   compared `build/buildnum.inc` with `git rev-list --count`, but
+   tools/buildnum.py writes 0 ON PURPOSE on a shallow clone - so every
+   fresh container's `check` said MISS "make has not run since the last
+   commit" right after a make. It now also accepts what `buildnum.py` itself
+   would write.
+
 ## Measured
 
 (filled in by the verification pass after 09:05 UTC)

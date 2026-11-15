@@ -152,8 +152,8 @@ class PR(WRT.WR):
         if not until(lambda: self.state() == WT_PLAY, what + " playing", 15,
                      0.05):
             return f0, seen
-        t = time.time()
-        while time.time() - t < secs and self.state() == WT_PLAY:
+        c = os88qemu.Clock(self.q)      # (GUEST seconds: games.md)
+        while c.secs() < secs and self.state() == WT_PLAY:
             seen["lit"].add(self.b("wr_lit"))
             seen["peak"] |= self.b("wr_peak")
             seen["mwho"].add(self.b("wr_mwho"))
@@ -383,7 +383,11 @@ def leg_loop(pr, m, idle):
     pr.key("spc")
     until(lambda: pr.state() == WT_PLAY, "the loop playing", 15, 0.05)
     t = (e - s) / 22050.0
-    time.sleep(max(2.0, 2.6 * t + 0.6))
+    # 2.6 LAPS PLAYED, by verb 9's own count - it was a host sleep of 2.6
+    # laps' time, which a loaded box turned into fewer than the two laps
+    # checked below (docs/plans/soak-speed-2/games.md)
+    until(lambda: pr.d("wt_played") * pr.b("wt_d") >= 2.6 * (e - s) + 0.6 *
+          22050, "2.6 laps played", max(20.0, 4 * t + 10), 0.05)
     pr.key("spc")
     until(lambda: pr.state() == WT_PPAUSE, "paused", 10, 0.05)
     time.sleep(1.0)

@@ -499,6 +499,17 @@ def _buildnum_current():
         return True, ""
     if int(have.group(1)) == n:
         return True, ""
+    try:
+        # ...unless buildnum.py itself would write what is there: on a
+        # SHALLOW clone it writes 0 on purpose (the count is not the count),
+        # and comparing against rev-list's truncated count reported a stale
+        # build after every `make` (games stream, docs/plans/soak-speed-2/
+        # games.md)
+        import buildnum
+        if int(have.group(1)) == buildnum.build_number()[0]:
+            return True, ""
+    except Exception:                                   # noqa: BLE001
+        pass
     return False, ("build/buildnum.inc says BUILD_NUM %s and this checkout is "
                    "at %d commits - so `make` has not run since the last "
                    "commit. The re-assembly check below CANNOT see this (both "
