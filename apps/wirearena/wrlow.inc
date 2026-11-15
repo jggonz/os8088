@@ -27,8 +27,11 @@
 ; its tag as a wall's does. Each corner keeps its own height (WL_CN, WL_CS):
 ; a ramp's low-end corners stand on the floor. A corner in
 ; the view is projected once a box (WL_KC..WL_KF); an edge with a corner out
-; of it is clipped (wa_clip) and its ends projected on the spot - unless it
-; lies under the screen whole (wl_face).
+; of it is clipped (wa_clip) and that end projected on the spot - the clip
+; never moves an end in the view, whose record stands - unless it lies
+; under the screen whole (wl_face). A pass is culled before its edges are
+; set up where its top lies at or under every open column's clip, and its
+; floor edge alike (wl_draw).
 ; An edge is walked across its columns in RUNS of one half-row (wl_run,
 ; wl_rtop, wl_rfloor): set up without a divide where its left end is on the
 ; screen; a steep one, a half-row a column or more, keeps a column loop
