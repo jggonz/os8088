@@ -252,8 +252,17 @@ class ED(WRT.WR):
 
     def saved(self, secs=120):
         WRT.idle(0.5)
-        return until(lambda: self.b("ws_busy") == 0 and self.b("we_busy") == 0,
-                     "the save", secs)
+        ok = until(lambda: self.b("ws_busy") == 0 and self.b("we_busy") == 0,
+                   "the save", secs)
+        # ...AND ITS TEMP FILE GONE FROM THE IMAGE, which is what every
+        # caller reads next: with the host sleep this `idle` replaced gone,
+        # the final soak read the floppy with OUT1.WAV still 0 bytes and the
+        # temp file there. Bounded in guest time; a save that really leaves
+        # its temp file still fails the caller's "no temp file left".
+        until(lambda: not any("WRSAV" in k and TEMP0 not in k
+                              for k in self.files()),
+              "the save's temp file gone from the floppy", 10)
+        return ok
 
     def keyed(self, k):
         self.key(k)
