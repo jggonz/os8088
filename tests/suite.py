@@ -8774,6 +8774,20 @@ SOAK = [
         "and the fetch) or a bot's rocket passing through the player.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wactflink", "soak", py("tests/wactflink.py"), 25.0,
+        "WIREARENA'S CAPTURE THE FLAG LINKED (docs/plans/"
+        "WIREARENA-CTF-PLAN.md 7, wave C3): two QEMUs on a socket cable, "
+        "the shipped package, walink's harness. The host's Mode reaches the "
+        "guest in its HELLO and both play CTF on the twin; the host is red "
+        "and the guest blue, each spawned on its own side; the guest's "
+        "player at red's base is given red's flag by the HOST's rules (its "
+        "SNAP) and told by a FLAG event (YOU HAVE THE FLAG), and at its own "
+        "base blue has 1 on both with red's flag home on both; the host's "
+        "take of blue's flag shows on the guest as figure 0 carrying it. "
+        "Red with the guest ignoring FLAG events (wc_evin returning at "
+        "once) and with the host not sending them (wc_send): 4 checks each.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/os8088.img"), timeout=200),
     Row("walink", "soak", py("tests/walink.py"), 32.0,
         "WIREARENA OVER A NULL MODEM (docs/plans/WIREARENA-LINK-PLAN.md, "
         "L1): two QEMUs on a socket cable, the shipped package. Each window "

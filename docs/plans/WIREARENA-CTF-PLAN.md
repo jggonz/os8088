@@ -1,8 +1,8 @@
 # WireArena: capture the flag, teams and side spawns
 
-**STATUS: C1 AND C2 BUILT** (2026-11-15): the rules on one machine and the
-bots that play for the flag (section 11). C3 (linked) and C4 (team
-deathmatch) are next. Written to
+**STATUS: CTF BUILT** (2026-11-15): waves C1 to C3 - the rules, the bots
+that play for the flag, and linked matches (section 11). C4, team
+deathmatch, is the one wave left. Written to
 the owner's brief below, before any code. Section 9 lists the defaults this plan chose where the brief left
 a choice; each is one constant or one line of data to change.
 
@@ -138,9 +138,9 @@ as for a player: a bot at the node walks within reach.
   (`Team deathmatch` with wave C4), beside the arena. CTF with an arena
   that has no bases is refused at Play with a line in the window: *"This
   arena has no flags: pick the Twin or the hedge"*.
-- **Linked**: the mode is the host's, as the arena is - HELLO's byte 17
-  (reserved today) carries it, and a guest echoes it. Old builds send 0:
-  free-for-all.
+- **Linked**: the mode is the host's, as the arena is - HELLO's byte 14,
+  the difficulty's, carries it in its high nibble (byte 17, reserved when
+  this was written, had since become the peers bound: NET-PLAN 4).
 - **THE HOST RUNS THE RULES.** It already has every position: its own
   player's, each remote player's from their SNAPs, and its bots'. Each
   tick it applies section 2 to all of them and sends a **FLAG** event (a
@@ -200,7 +200,7 @@ soak rows and `test-full` run once after the last (CLAUDE.md).
   their own.
   *Checked by:* `wactf`: in N minutes of bots only, a capture by each
   team.
-- [ ] **C3 Linked.** The mode in HELLO; the host's FLAG events; a guest
+- [x] **C3 Linked.** The mode in HELLO; the host's FLAG events; a guest
   draws them.
   *Checked by:* `walink`'s pattern - two machines, a guest's take and
   capture seen on both.
@@ -223,8 +223,7 @@ a side). The Twin's graph gained a spur node at each base.
 The renderer: `wa_flagsd` and the team colours in `wa_figure`.
 
 **As section 2 to 7 had it, with these differences:**
-- **Linked, CTF is refused at Ready** with a toast (*"CTF is not linked
-  yet"*) until C3; a linked match plays free-for-all.
+- **Linked, CTF was refused at Ready** with a toast until C3 (11.3).
 - **The teams' block is not in FRAME.** In FRAME, its 24 bytes were copied
   every frame of every match: +0.4 to +0.7% on free-for-all. It is a block
   of its own after the rockets, copied every frame of a team match and
@@ -280,3 +279,34 @@ captures came at 79 to 132 s over four runs, and once none by blue in
 other's flag, and two captures are made in all, within four guest
 minutes. With `wc_bgoal` returning at once the bots roam the graph at
 random, and one capture came in four minutes: red. `wactf` is now 28 s.
+
+### 11.3 C3: linked (2026-11-15)
+
+- **The mode** rides HELLO's byte 14 (the difficulty's high nibble), the
+  host's; a guest's setup shows it greyed, as the arena.
+- **The host runs the rules** (`wa_ctick`'s, unchanged) over every live
+  player and bot it has: its own player, each remote player's figure (its
+  SNAP's place; `F_DEAD` set from its alive flag) and its bots. After them
+  each tick, `wc_send` queues a **FLAG** event (EVENT kind 4) for each flag
+  whose state or carrier changed since it last sent one - both, when the
+  captures or the win changed. Its payload: the flag's team, its state,
+  its carrier by SLOT (`wa_lkcanon`), both teams' captures, the win, and
+  x, y, z: 12 of the event's 13 bytes. The queue's acks and resends are
+  the link's own (LINK-PLAN 4.2).
+- **A guest runs no rule.** `wc_evin` applies a FLAG event - the carrier
+  back to a local index (`wa_lklocal`) - and says what changed as the host
+  would: a capture (the captures went up), a take, a drop, a flag home;
+  the captures both 0 again after a win is the round anew, and the guest
+  puts its own player back on its side. Each tick a carried flag follows
+  its carrier there.
+- **A round's restart** (`wc_side`) puts back our player and only the bots
+  this machine runs; each guest puts back its own.
+- **Not run**: four players on UDP (NET-PLAN). The events are the link's,
+  per peer, as every event is; no row plays CTF with four.
+
+**The row: `wactflink`** (soak, 23 s; QEMU, walink's harness): the mode by
+HELLO, the teams by slot, side spawns, the guest's take decided by the
+host and told by its event, the guest's capture on both machines, the
+host's take seen on the guest with the flag over its figure. Red with the
+guest's events ignored (`wc_evin` returning at once) and with the host's
+sending off (`wc_send`): 4 checks each.

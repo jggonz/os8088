@@ -941,13 +941,6 @@ wa_sbtndrag:
 
 ; wa_sstart - Play (alone: the arena now) or Ready (linked)
 wa_sstart:
-    cmp byte [wa_lkgmode], 0    ; CTF (CTF-PLAN 7): not linked yet (wave
-    je .go                      ; C3), and only on an arena with bases
-    cmp byte [wa_splay], 0
-    je .go
-    mov si, wa_t_ctfl
-    jmp .toast
-.go:
     cmp byte [wa_splay], 0
     jne wa_lkready
     mov al, [wa_lkarena]
