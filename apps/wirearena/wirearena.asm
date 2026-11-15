@@ -1109,18 +1109,12 @@ wa_flcross:                     ; (wa_collide, its one caller, asks it
     push di
     push bp
     mov di, [wa_py]             ; THE CELL, as wa_floor's: its row x 64 is
-    cmp di, WA_ROOM_Y1          ; y's bits 7..10 a place down...
-    jae .yout
-    shr di, 1
-    and di, 0x03C0
-.yc:
-    mov ax, [wa_px]             ; ...and its column x 4 x's 7..10 five
-    cmp ax, WA_ROOM_X1          ; places down; beyond the room the edge's
-    jae .xout                   ; cells (wa_flgmk's clamp)
-    mov cl, 5
-    shr ax, cl
-    and al, 0x3C
-.xc:
+    shr di, 1                   ; y's bits 7..10 a place down, and its
+    and di, 0x03C0              ; column x 4 x's five down. (No clamp to
+    mov ax, [wa_px]             ; the room: a step starts inside it by
+    mov cl, 5                   ; WA_RAD, more than a step - and should the
+    shr ax, cl                  ; new point leave it, wa_collide refuses
+    and al, 0x3C                ; the step whatever this says)
     add di, ax
     add di, wa_flg              ; DI = the cell
     cmp byte [di], 0xFF         ; (none near it: the usual step)
@@ -1207,18 +1201,6 @@ wa_flcross:                     ; (wa_collide, its one caller, asks it
     pop di
     pop cx
     ret
-.yout:
-    or di, di
-    mov di, 0x03C0
-    jns .yc
-    xor di, di
-    jmp .yc
-.xout:
-    or ax, ax
-    mov ax, 0x003C
-    jns .xc
-    xor ax, ax
-    jmp .xc
 .side:                          ; AX, BX = a point: DX:AX = (x1 - x0)(y -
     sub ax, [si]                ; y0) - (y1 - y0)(x - x0)
     sub bx, [si+2]
