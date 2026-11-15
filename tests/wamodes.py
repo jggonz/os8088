@@ -84,10 +84,14 @@ def main():
             a = [p.byte(sym["wa_salx"] + i) for i in range(n)]
             return a[:-1] if a and a[-1] == 0xFF else a + ["no rotation"]
 
-        def mode_key(key):
-            p.write(sym["wa_sfoc"], bytes([FOC_MODE]))
-            m.key(key)
-            m.advance(cycles=TICK * 6)
+        def mode_key(key):              # (the mode's change itself waited
+            g0 = p.byte(sym["wa_lkgmode"])  # for, not six ticks: on Bochs
+            p.write(sym["wa_sfoc"], bytes([FOC_MODE]))  # the key landed
+            m.key(key)                  # later than that, on the build
+            m.go()                      # before Detail too, and the row
+            os88marty.until(m, lambda _: p.byte(sym["wa_lkgmode"]) != g0,
+                            "the mode's change (%s)" % key, guest=5)
+            m.advance(cycles=TICK * 2)  # read Team Deathmatch still)
 
         check(arenas() == [1, 0, 5, 2, 3, 4, 7, 6] and
               p.byte(sym["wa_lkarena"]) == 2,
