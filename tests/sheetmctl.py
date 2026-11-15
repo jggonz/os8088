@@ -46,6 +46,8 @@ from os88mouse import Mouse                                  # noqa: E402
 import dispcp                                                # noqa: E402
 import os88sym                                              # noqa: E402
 from harness import check, done                              # noqa: E402
+from os88geom import WIN_SIZE, W_SEG                         # noqa: E402
+from paintmove import pkg_syms                               # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
 
@@ -124,16 +126,23 @@ def main():
     S = os88sym.linear
     data = None
     seen = {}
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    SH = pkg_syms("apps/sheet/sheet.asm")
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
         M.settle(m, limit=240)
+        sl = dispcp.win_list(m, S, check=False)[-1]     # SHEET's, in front
+        seg = m.read(S("wm_wins") + sl * WIN_SIZE + W_SEG, 2)
+        seg = seg[0] | (seg[1] << 8)
+        running = SH["sh_macro_running"]
         mo.to(634, 180)
         M.settle(m)
 
@@ -199,11 +208,11 @@ def main():
                     y + TITLE_H + ABTNY + ABH // 2)
 
         def run(name):
-            mo.menu(MACRO[0], MACRO[1], *RUN)
+            SF.menu(m, mo, MACRO[0], MACRO[1], *RUN)
             M.settle(m)
             for ch in "\b" * 8 + name:        # one key at a time: type_text
-                m.type_text(ch)                 # drops keys to a polling
-                M.guest_sleep(m, 0.15)          # field (MartyPC)
+                M.text_taken(m, ch, ui=False, cap=0.15)  # drops keys to a polling field (MartyPC)
+                # (SOAK-SPEED 9: taken when read, the old pace the cap)
             shot("run-" + name)
             m.type_text("\n")
 
@@ -278,17 +287,25 @@ def main():
         M.guest_sleep(m, 2)
         seen['n1'] = up() is None
         print('  seen %s' % seen, flush=True)
-        M.guest_sleep(m, 40)                    # the 150-pass loop
+        # ...and the loop runs to its END: [sh_macro_running] back to 0, read
+        # off the package, where a fixed 40 guest seconds stood (SOAK-SPEED 5).
+        # Bounded at 60 and not raised: a run that never ends - CANCEL.KEY
+        # broken, so the Esc parked it on a dialog - is the checks' to name
+        try:
+            M.until(m, lambda _: m.readseg(seg, running, 1)[0] == 0,
+                    "NOESC's 150-pass loop to run to its end", guest=60.0)
+        except M.MartyError:
+            pass
         M.settle(m, limit=60)
         shot("5-end")
 
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
-        M.settle(m)
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
-        M.settle(m)
+        M.ui_done(m)                    # the save is aimed off the
         mo.click(*SF.fdlg_okxy(m))
-        M.settle(m, limit=120)
+        M.ui_done(m)                    # kernel's window record
         mo.click(*SF.SAVE_BUTTON)
         for _ in range(90):
             v = os88flush.Flush(marty=m).volume(1)

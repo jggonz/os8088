@@ -59,13 +59,15 @@ def main():
     build_disk()
     sym = pkg_syms("apps/sheet/sheet.asm")
     got = {}
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         S = lambda n: m.sym(n)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
         SF.open_shin(m, mo)
@@ -87,14 +89,13 @@ def main():
 
         def key(name, n=1):
             for _ in range(n):
-                m.key(name)
-                M.guest_sleep(m, 0.3)
+                M.key_taken(m, name, ui=False, cap=0.3)  # SOAK-SPEED 9
             M.settle(m)
 
         def typed(text):
             for ch in text:
-                m.type_text(ch)
-                M.guest_sleep(m, 0.3)
+                M.text_taken(m, ch, ui=False, cap=0.3)
+                # (SOAK-SPEED 9: taken when read, the old pace the cap)
             M.settle(m)
 
         # 1: nothing being entered
@@ -104,7 +105,7 @@ def main():
         got["idle"] = (m.readseg(seg, sym["sh_editing"], 1)[0], buf()[:1])
         mo.to(*FORMULA)                     # open Formula: sh_refmark runs
         mo._edge(True)
-        M.settle(m)
+        SF.held(m)
         got["idle_grey"] = greyed()
         mo.to(634, 190, l=True)
         mo._edge(False)
@@ -127,7 +128,7 @@ def main():
         # 4: the menu, mid-entry
         mo.to(*FORMULA)
         mo._edge(True)
-        M.settle(m)
+        SF.held(m)
         got["live"] = not greyed()
         mo.to(FORMULA[0] + 17, 57 + 12 * REF_ROW + 2, l=True)
         mo._edge(False)

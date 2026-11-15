@@ -246,18 +246,21 @@ def agrees(expect, got, tol):
 def main():
     os.chdir(os.path.join(HERE, ".."))
     build_disk()
-    with M.launch(SYS, apps=DISK, machine=MACHINE) as m:
-        M.settle(m)
+    with M.launch(SYS, apps=DISK, machine=MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
+        M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
         SF.open_shin(m, mo)           # the ASSOCIATION opens it
         M.settle(m, limit=240)              # RATE and IRR iterate on a 5150
         shot(m, "1-loaded")
 
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.settle(m)

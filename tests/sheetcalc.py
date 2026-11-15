@@ -88,13 +88,15 @@ def main():
     os.chdir(os.path.join(HERE, ".."))
     build_disk()
     shots = {}
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         table = glass.glyphs(m)
         dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
         SF.open_shin(m, mo)
@@ -121,7 +123,7 @@ def main():
         fresh = look("1-fresh")
 
         # --- Calculation: Manual ----------------------------------------------
-        mo.menu(OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCULATION))
+        SF.menu(m, mo, OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCULATION))
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, MANUAL))
         M.settle(m)
@@ -138,7 +140,7 @@ def main():
         stale = look("2-stale")
 
         # --- Options > Calculate Now -------------------------------------------
-        mo.menu(OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCNOW))
+        SF.menu(m, mo, OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCNOW))
         M.settle(m, limit=120)
         after = look("3-calcnow")
 
