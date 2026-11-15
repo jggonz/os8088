@@ -420,7 +420,11 @@ built one needed only the shipped kernel and a different fixture.
   SAME script (a row and its `mega-`/`box-` port, two legs of one file)
   never share the emulator lane at once - the script is an implicit lock
   (`tools/os88test.py`'s `lane_locks`, docs/plans/SOAK-PARALLEL.md 18). It
-  does nothing for a path two DIFFERENT scripts both write.
+  does nothing for a path two DIFFERENT scripts both write. A script split
+  into one row a leg so the legs can run AT ONCE says
+  `locks=("script:private",)` on each row, which lifts the implicit lock -
+  only after checking that it writes no fixed path
+  (docs/plans/soak-speed-2/games.md, `waverackrec*`).
 
 ---
 
