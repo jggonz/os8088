@@ -51,12 +51,12 @@ wa_entry:
     mov byte [wa_mtr], WA_METER ; the meter: off, unless the build says so
     mov byte [wa_diff], 1       ; the bots: normal (AI-PLAN 4.3)
     call OSAPI_CPU_INFO         ; THE DETAIL LEVEL (HEIGHTS-PLAN 9.11): Medium
-    cmp al, CPU_8086            ; on the target machine, High (Medium and the
-    mov al, 2                   ; floor grid, ~13 ms a frame on a 4.77 MHz
-    mov byte [wa_want], 1       ; 8088) on a 286 or better; keys 1..5. And
-    je .lev                     ; THE WIDTH (the owner, 2026-11-14): 40
-    mov al, 3                   ; columns on an 8086/8088, 80 on a 286+
-    mov byte [wa_want], 0
+    cmp al, CPU_8086            ; on the target machine, Very High (and its
+    mov al, 2                   ; vsync: a 286 runs it past the refresh -
+    mov byte [wa_want], 1       ; the owner, 2026-11-15) on a 286 or better;
+    je .lev                     ; F1-F5, or Detail in the setup. And THE
+    mov al, WA_NLEV - 1         ; WIDTH (the owner, 2026-11-14): 40 columns
+    mov byte [wa_want], 0       ; on an 8086/8088, 80 on a 286+
 .lev:
     call wa_setlevel
     mov si, wa_tpl
@@ -6890,29 +6890,33 @@ wa_rretv:   dw wa_rret
 ; other column, 2 a steep one's every other row too - the owner's, on the
 ; trial build: "actually look surprisingly fine"). Moving
 ; an option between levels is a change to this table and nothing else.
-; Last, the size under which a figure is drawn SMALL (wa_flodv, J's
+; Then the size under which a figure is drawn SMALL (wa_flodv, J's
 ; threshold: ARENAS-PLAN 5) - CONFIG's, so a level's change syncs it.
+; Last, VSYNC (wa_vsync, V's): Very High's alone, because the machine that
+; can afford Very High runs past the refresh with it - a 286 pegged over
+; the monitor's rate, tearing (the owner, 2026-11-15). V still sets it
+; within a level; picking a level sets it again.
 WA_NLEV equ 5
 %if WA_NLEV != 5
   %error "wa_hs_lev (the HUD's names for the levels) names five"
 %endif
 wa_levtab:
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0, 2, WA_FLODV2
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0, 2, WA_FLODV2, 0
                                                                     ; 1 Very Low
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_RAMP2, 0, 0, 1, WA_FLODV2 ; 2 Low
-    db LK_FEW|LK_ROUND|LK_COARSE, 0, 0, 0, WA_FLODV2                ; 3 Medium
-    db LK_FEW|LK_ROUND|LK_COARSE, 1, 0, 0, WA_FLODV                 ; 4 High
-    db 0, 1, 1, 0, WA_FLODV                                         ; 5 Very High
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_RAMP2, 0, 0, 1, WA_FLODV2, 0 ; 2 Low
+    db LK_FEW|LK_ROUND|LK_COARSE, 0, 0, 0, WA_FLODV2, 0             ; 3 Medium
+    db LK_FEW|LK_ROUND|LK_COARSE, 1, 0, 0, WA_FLODV, 0              ; 4 High
+    db 0, 1, 1, 0, WA_FLODV, 1                                      ; 5 Very High
 
 ; wa_setlevel - AL = a level, 0..WA_NLEV-1: its options into the frame
 ; block. Clobbers AX, BX
 wa_setlevel:
     mov [wa_level], al
     xor ah, ah
+    shl ax, 1
     mov bx, ax
     shl ax, 1
-    shl ax, 1
-    add bx, ax                  ; (five bytes a level)
+    add bx, ax                  ; (six bytes a level)
     mov al, [wa_levtab+bx]
     mov [wa_look], al
     mov al, [wa_levtab+bx+1]
@@ -6923,6 +6927,8 @@ wa_setlevel:
     mov [wa_dash], al
     mov al, [wa_levtab+bx+4]
     mov [wa_flodv], al
+    mov al, [wa_levtab+bx+5]
+    mov [wa_vsync], al
     ret
 
 wa_rsync:

@@ -39,13 +39,16 @@ the one marked with `>`.
 | Bots | None to three computer players |
 | Skill | how well the bots aim and react: Easy, Normal or Hard |
 | Play | Offline, Serial Cable, Local Network or Internet |
+| Detail | how much of the arena is drawn, Very Low to Very High |
 | Mode | Free-for-All, Team Deathmatch, Capture the Flag or King of the Hill |
 | Win at | the score that ends the match, or No Limit |
 | Nick | your name, up to eight characters, for other players to see |
 
 **Play** (or `Enter`) starts the match. **Keys** (or `K`) shows the list of
-keys. Columns starts at 40 on an IBM PC or XT and at 80 on a 286 or newer.
-A Hercules card always plays at 80.
+keys. Columns starts at 40 on an IBM PC or XT and at 80 on a 286 or newer,
+and Detail at Medium and Very High. A Hercules card always plays at 80.
+When Play is *Internet*, the address box takes Detail's place; `F1` to `F5`
+still set the detail during the match.
 
 ![The Arena list, dropped.](shot:wirerena-arenas){left}
 
@@ -137,12 +140,14 @@ example *Detail High*.
 |---|---|
 | `F1` to `F5` | the detail: Very Low, Low, Medium, High, Very High |
 | `-` and `+` | 40 or 80 columns |
-| `V` | waits for the screen's refresh before drawing (Vsync on or off) |
+| `V` | waits for the screen's refresh before drawing (Vsync on or off); Very High turns it on and the other levels off |
 | `[` and `]` | how far the view turns for a move of the mouse |
 | `F10` | a frame rate counter, then every figure, then off |
 
 Lower detail draws fewer lines and runs faster. The game picks Medium on an
-IBM PC or XT and High on a 286 or newer. 40 columns runs faster than 80.
+IBM PC or XT and Very High on a 286 or newer, which is fast enough there to
+outrun the screen's refresh, so Very High also turns Vsync on. 40 columns
+runs faster than 80.
 
 ![The same match at 80 columns.](shot:wirerena-wide){full}
 

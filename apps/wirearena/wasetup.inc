@@ -76,13 +76,16 @@ WS_BTNW2    equ 80              ; (Keys)
 WS_BTNH     equ 16
 WS_B2X      equ 320
 WS_LOBY     equ WS_GLINK + WS_LOBYR             ; the players' rows (walink.inc), 10 apart
-WS_NDR      equ 7               ; the drop-downs. THE FOCUS'S STOPS, in the
+WS_NDR      equ 8               ; the drop-downs. THE FOCUS'S STOPS, in the
 WS_FLD      equ 5               ; window's reading order: the first five
-WS_FMODE    equ 6               ; drop-downs, the field beside Play (while
-                                ; it is there), then Mode (drop-down 5,
-                                ; the row under Play: CTF-PLAN 7), then
-WS_FGOAL    equ 7               ; Win at (drop-down 6, right of Mode), then
-WS_NICK     equ 8               ; the nick's field, under Mode
+WS_FMODE    equ 6               ; drop-downs, then THE SLOT right of Play -
+                                ; the address field while Play is Internet,
+                                ; Detail (drop-down 7) the rest of the time
+                                ; (the owner, 2026-11-15) - then Mode
+                                ; (drop-down 5, the row under Play: CTF-
+WS_FGOAL    equ 7               ; PLAN 7), then Win at (drop-down 6, right
+WS_NICK     equ 8               ; of Mode), then the nick's field, under Mode
+WS_DDET     equ 7               ; (Detail's drop-down)
 WS_NKX      equ WS_LDX1         ; ...its left (its label seven cells)
 WS_NKMAX    equ 9               ; ...its buffer: eight and the NUL
 
@@ -191,9 +194,11 @@ wa_sforget:
 wa_sval:
     push bx
     xor dl, dl
-    cmp bx, 4 * 2               ; (arena 0, bots 2, skill 3 are the host's)
+    cmp bx, 4 * 2               ; (arena 0, bots 2, skill 3 are the host's;
+    je .mine                    ; Play, Columns and Detail each player's
+    cmp bx, 1 * 2               ; own)
     je .mine
-    cmp bx, 1 * 2
+    cmp bx, WS_DDET * 2
     je .mine
     call wa_lklinked
     jz .mine
@@ -248,6 +253,10 @@ wa_sval:
     mov al, [wa_sgoal+bx]
     mov ah, WA_NGOAL
     jmp .out
+.detail:
+    mov al, [wa_level]          ; (the CPU's tier picked it at the start:
+    mov ah, WA_NLEV             ; Medium on an 8088, High on a 286 or
+    jmp .out                    ; better - F1-F5 in the match set it too)
 .find:                          ; AL = a value, BX = a table: AL = its place
     push cx
     xor cx, cx
@@ -267,7 +276,7 @@ wa_sval:
     pop bx
     ret
 wa_svals:   dw wa_sval.arena, wa_sval.cols, wa_sval.bots, wa_sval.skill
-            dw wa_sval.play, wa_sval.mode, wa_sval.goal
+            dw wa_sval.play, wa_sval.mode, wa_sval.goal, wa_sval.detail
 
 ; wa_spick - BX = a drop-down x 2, AL = its new pick: the setting it names
 ; set, and whatever that implies
@@ -326,6 +335,13 @@ wa_spick:
     xor bh, bh
     mov [wa_sgoal+bx], al
     ret
+.detail:
+    call wa_setlevel            ; (the match's renderer, if one is bound,
+    cmp word [wa_rds], 0        ; as F1-F5's)
+    je .dn
+    call wa_rsync
+.dn:
+    ret
 .ser:
     call wa_lkcable
     call lk_disconnect
@@ -333,7 +349,7 @@ wa_spick:
     mov word [lk_blk+LK_MSG], lk_m_search
     ret
 wa_spicks:  dw wa_spick.arena, wa_spick.cols, wa_spick.bots, wa_spick.skill
-            dw wa_spick.play, wa_spick.mode, wa_spick.goal
+            dw wa_spick.play, wa_spick.mode, wa_spick.goal, wa_spick.detail
 
 ; wa_sarmap - AL = the Arena list's item: AL = its arena; wa_sitem - AL =
 ; an arena: AL = its item. The list is the owner's order (arenagen's
@@ -501,12 +517,16 @@ wa_srects:  dw WS_LDX1, WS_Y1, WS_LDX2, WS_Y1 + WS_DH - 1
             dw WS_LDX1, WS_Y3, WS_LDX2, WS_Y3 + WS_DH - 1
             dw WS_LDX1, WS_Y4, WS_LDX2, WS_Y4 + WS_DH - 1
             dw WS_RDX1, WS_Y4, WS_RDX2, WS_Y4 + WS_DH - 1
-; ...each one's label: its cell's x and y, its text (a marker cell first)
+            dw WS_RDX1, WS_Y3, WS_RDX2, WS_Y3 + WS_DH - 1   ; (Detail's)
+; ...each focus stop's label: its cell's x and y, its text (a marker cell
+; first)
 wa_slabs:   dw WS_LX, WS_Y1 + 4, wa_sl_a
             dw WS_RX, WS_Y1 + 4, wa_sl_c
             dw WS_LX, WS_Y2 + 4, wa_sl_b
             dw WS_RX, WS_Y2 + 4, wa_sl_s
             dw WS_LX, WS_Y3 + 4, wa_sl_p
+            dw WS_RX, WS_Y3 + 4, wa_sl_d     ; (Detail's: WS_FLD, the slot's
+                                             ; while there is no field)
             dw WS_LX, WS_Y4 + 4, wa_sl_m
             dw WS_RX, WS_Y4 + 4, wa_sl_g     ; (Win at's: WS_FGOAL)
             dw WS_LX, 4, wa_sl_n             ; (the nick's: WS_NICK - from
@@ -519,11 +539,17 @@ wa_sl_p:    db ' Play  ', 0
 wa_sl_m:    db ' Mode  ', 0
 wa_sl_n:    db ' Nick  ', 0
 wa_sl_g:    db ' Win at  ', 0
+wa_sl_d:    db ' Detail  ', 0
 
 ; THE GROUND: every rect of the content no control and no row covers
-; (content coordinates, inclusive). The last is the field's place, which
-; is ground only while there is no field
+; (content coordinates, inclusive). THE SLOT right of Play is the address
+; field's (Internet) or Detail's label and drop-down (the rest): the two
+; rects BEFORE the table are ground only with Detail there (over and under
+; its label, the field's place), the one AFTER it only with the field (the
+; band of Detail's label's first cell left of the field)
 %macro WS_GROUND 2              ; label, 1: the players' rows (linked)
+            dw WS_FX1, YG(WS_Y3), WS_RDX1 - 1, YG(WS_Y3 + 3)
+            dw WS_FX1, YG(WS_Y3 + 12), WS_RDX1 - 1, YG(WS_Y3 + 15)
 %1:         dw 0, YT(0), WS_RM - 1, YT(3)
             dw 0, YT(4), 7, YT(11)
             dw 0, YT(12), WS_RM - 1, YGM1
@@ -543,8 +569,9 @@ wa_sl_g:    db ' Win at  ', 0
  %endif
             dw 0, YG(wsg_y), WS_LDX1 - 1, YG(wsg_y + 3)
             dw 0, YG(wsg_y + 12), WS_LDX1 - 1, YG(wsg_y + 15)
- %if wsg_r == 2                 ; (Play: the field's place right of it)
-            dw WS_LDX2 + 1, YG(wsg_y), WS_FX1 - 1, YG(wsg_y + 15)
+ %if wsg_r == 2                 ; (Play: the slot right of it)
+            dw WS_LDX2 + 1, YG(wsg_y), WS_FX1 - 1, YG(wsg_y + 3)
+            dw WS_LDX2 + 1, YG(wsg_y + 12), WS_FX1 - 1, YG(wsg_y + 15)
  %else
             dw WS_RX, YG(wsg_y), WS_RDX1 - 1, YG(wsg_y + 3)
             dw WS_RX, YG(wsg_y + 12), WS_RDX1 - 1, YG(wsg_y + 15)
@@ -573,13 +600,13 @@ wa_sl_g:    db ' Win at  ', 0
             dw WS_RM, YT(0), WS_W - 1, YEND
 %%end:
 %1_n        equ (%%end - %1) / 8
-            dw WS_FX1, YG(WS_Y3), WS_FX2, YG(WS_Y3 + WS_DH - 1)
+            dw WS_LDX2 + 1, YG(WS_Y3 + 4), WS_FX1 - 1, YG(WS_Y3 + 11)
 %endmacro
 WS_GROUND wa_sgnd, 0            ; ALONE: the group centred
 WS_GROUND wa_sgndl, 1           ; LINKED: the players' rows too
 
 ; wa_sgsel - SI = the ground table of the layout ([wa_slay]), CX = its
-; rects (the field's place after them). Keeps all but SI, CX
+; rects (the slot's either side of them: WS_GROUND). Keeps all but SI, CX
 wa_sgsel:
     mov si, wa_sgnd
     mov cx, wa_sgnd_n
@@ -635,8 +662,10 @@ wa_sground:
     mov al, CWHITE
     call OSAPI_SET_COLOR
     call wa_sgsel               ; SI = the layout's table, CX its count
-    cmp byte [wa_splay], 3      ; (no field: its place too)
+    inc cx                      ; (the slot's: the field's strip after the
+    cmp byte [wa_splay], 3      ; table, or Detail's two before it)
     je .r
+    sub si, 2 * 8
     inc cx
 .r:
     push cx
@@ -753,6 +782,13 @@ wa_sdraw:
     jne .dn                     ; (open: the list is the control's)
     mov di, bx
     shr di, 1
+    cmp di, WS_DDET             ; (Detail: not while the field has its slot -
+    jne .dv                     ; and drawn whole when it is back)
+    cmp byte [wa_splay], 3
+    jne .dv
+    mov byte [wa_sdsel+di], 0FFh
+    jmp short .dn
+.dv:
     cmp byte [wa_lkfull], 0
     jne .dd
     cmp al, [wa_sdsel+di]
@@ -827,24 +863,47 @@ wa_sdraw:
 .fd:
     call wa_lkclipon
     jc .no
+    mov ah, [wa_sdfld]          ; (AH = as it was drawn)
     mov [wa_sdfld], al
-    or al, al
-    jnz .on
-    cmp byte [wa_lkfull], 0     ; (gone: its place white - a paint's
-    jne .ok                     ; already is)
+    cmp byte [wa_lkfull], 0     ; (a paint: its ground is down already)
+    jne .fg
+    cmp al, ah                  ; THE SLOT CHANGING HANDS (the drop-down
+    je .fg                      ; loop above drew Detail's box, if back):
+    or al, al                   ; the ground the newcomer's own draw does
+    jz .fx                      ; not cover, then its label
+    or ah, ah
+    jnz .fg
+.fx:
+    push ax
     mov al, CWHITE
     call OSAPI_SET_COLOR
-    push cx
-    call wa_sgsel               ; (the field's place: after the table)
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    add si, cx
-    pop cx
+    call wa_sgsel               ; SI = the table, CX its count
+    pop ax
+    or al, al
+    jnz .fs
+    sub si, 2 * 8               ; (Detail's: the two before the table)
     call wa_srect
     call OSAPI_GFX_FILL
+    add si, 8
+    call wa_srect
+    call OSAPI_GFX_FILL
+    mov al, WS_FLD
+    call wa_slabel
     jmp .ok
-.on:
+.fs:
+    shl cx, 1                   ; (the field's: the strip after it, and
+    shl cx, 1                   ; inside it)
+    shl cx, 1
+    add si, cx
+    call wa_srect
+    call OSAPI_GFX_FILL
+    mov si, wa_sfld
+    call wa_sfgnd
+    jmp short .fdr
+.fg:
+    or al, al
+    jz .ok
+.fdr:
     mov si, wa_sfld
     call os88line_draw
 .ok:
@@ -878,8 +937,11 @@ wa_sdraw:
 ; wa_slabel - AL = a drop-down: its label, the focus's marker in its first
 ; cell. CF = 1 no clip. Keeps all but the flags
 wa_slabel:                      ; (AL a focus STOP: wa_sfoc's)
-    cmp al, WS_FLD
+    cmp al, WS_FLD              ; (the slot's: Detail's, not the field's)
+    jne .lv
+    cmp byte [wa_splay], 3
     je .out
+.lv:
     cmp al, WS_NICK
     ja .out
     call wa_lkclipon
@@ -897,11 +959,6 @@ wa_slabel:                      ; (AL a focus STOP: wa_sfoc's)
     mov ah, '>'                 ; (the font has no triangles)
 .mk:
     push ax
-    cmp bl, WS_FLD              ; (its label: Mode's the sixth, the
-                                ; nick's the seventh)
-    jb .li
-    dec bx
-.li:
     mov si, bx                  ; (x 6: the label's three words)
     shl si, 1
     add si, bx
@@ -910,7 +967,7 @@ wa_slabel:                      ; (AL a focus STOP: wa_sfoc's)
     add cx, [wa_sorg]
     mov dx, [wa_slabs+si+2]
     add dx, [wa_sorg+2]
-    cmp bl, WS_NICK - 1         ; (the group's labels from its top; the
+    cmp bl, WS_NICK             ; (the group's labels from its top; the
     jae .lb                     ; nick's from the bottom row's)
     add dx, [wa_sgy]
     jmp short .lc
@@ -1133,25 +1190,15 @@ wa_skey:
     clc
     ret
 .up:
-    mov al, [wa_sfoc]
-    or al, al
+    mov al, [wa_sfoc]           ; (every stop always there: the slot's the
+    or al, al                   ; field's or Detail's)
     jz .done
-    dec ax
-    cmp al, WS_FLD              ; (the field a stop only while there)
-    jne .fset
-    cmp byte [wa_splay], 3
-    je .fset
     dec ax
     jmp short .fset
 .down:
     mov al, [wa_sfoc]
     cmp al, WS_NICK
     jae .done
-    inc ax
-    cmp al, WS_FLD
-    jne .fset
-    cmp byte [wa_splay], 3
-    je .fset
     inc ax
 .fset:
     mov [wa_sfoc], al
@@ -1166,14 +1213,17 @@ wa_skey:
     cmp bl, WS_NICK             ; (the fields: no pick)
     je .done
     cmp bl, WS_FLD
-    je .done
     jb .dd
+    ja .dm
+    cmp byte [wa_splay], 3
+    je .done
+    mov bl, WS_DDET + 1         ; (the slot's: Detail, drop-down 7)
+.dm:
     dec bx                      ; (Mode's stop: drop-down 5)
 .dd:
     xor bh, bh
     shl bx, 1
     call wa_sset
-    call wa_sfocfix
     jmp .done
 .enter:
     call wa_sstart
@@ -1239,16 +1289,6 @@ wa_snkset:
     rep stosb
     ret
 
-; wa_sfocfix - the focus off the field once there is no field
-wa_sfocfix:
-    cmp byte [wa_splay], 3
-    je .out
-    cmp byte [wa_sfoc], WS_FLD
-    jne .out
-    mov byte [wa_sfoc], 4       ; (Play's)
-.out:
-    ret
-
 ; wa_saparse - the address typed: the six bytes it names (wa_saddr6: the IP
 ; address and our port), four numbers with dots between
 wa_saparse:
@@ -1298,10 +1338,16 @@ wa_sclick:
 .boxes:
     xor di, di
 .d:
+    cmp di, WS_DDET * 2         ; (Detail: not while the field has its slot)
+    jne .dp
+    cmp byte [wa_splay], 3
+    je .dx
+.dp:
     mov bx, [wa_sdrs+di]
     call os88ui_drpress
     or ah, ah
     jnz .took
+.dx:
     inc di
     inc di
     cmp di, WS_NDR * 2
@@ -1327,7 +1373,10 @@ wa_sclick:
     shr bx, 1                   ; every drop-down before the field, and the
     cmp bl, WS_FLD              ; list came down only to be painted over)
     jb .tk                      ; (the focus where the press was: Mode's
-    inc bx                      ; stop past the field's)
+    inc bx                      ; and Win at's stops past the slot's,
+    cmp bl, WS_DDET + 1         ; Detail's the slot's)
+    jne .tk
+    mov bl, WS_FLD
 .tk:
     mov [wa_sfoc], bl
     popf
@@ -1358,7 +1407,6 @@ wa_stake:
     shr si, 1
     mov [wa_sdsel+si], al       ; (the control drew its own box)
     call wa_spick
-    call wa_sfocfix
     cmp byte [wa_splay], 3      ; (internet picked: the address next)
     jne .nf
     cmp si, 4
@@ -1821,7 +1869,7 @@ wa_sstart:
 ; --- data ---------------------------------------------------------------------
 
 wa_sdrs:    dw wa_sdr_a, wa_sdr_c, wa_sdr_b, wa_sdr_s, wa_sdr_p, wa_sdr_m
-            dw wa_sdr_g
+            dw wa_sdr_g, wa_sdr_d
 %macro WA_SDROP 3                ; a drop-down's record: its items, how many
 %1:         dw 0, 0, 0, 0, %2, %3, 0, 0
             db 0, 0FFh
@@ -1834,6 +1882,7 @@ WA_SDROP wa_sdr_s, wa_lt_dnames, 3
 WA_SDROP wa_sdr_p, wa_sp_names, 4
 WA_SDROP wa_sdr_m, wa_si_mode, WA_NMODES
 WA_SDROP wa_sdr_g, wa_sg_ffa, WA_NGOAL   ; (the mode's: wa_sarlist)
+WA_SDROP wa_sdr_d, wa_hs_lev, WA_NLEV   ; (the HUD's names for them)
 
 wa_si_cols:     dw wa_sw_40, wa_sw_80
 wa_sw_40:       db '40', 0

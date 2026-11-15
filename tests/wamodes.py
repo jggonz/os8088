@@ -68,6 +68,16 @@ def main():
             "WireArena's Link menu on the bar", guest=10)
         p = os88marty.Pkg(m, w)
         g = G(ui, w, sym)
+        os88marty.until(m, lambda _: p.byte(sym["wa_sdsel"] + 7) != 0xFF,
+                        "the setup drawn", guest=10)
+        lev, vs, want = (p.byte(sym[n]) for n in ("wa_level", "wa_vsync",
+                                                  "wa_want"))
+        check((lev, vs) == ((2, 0) if want else (4, 1)) and
+              p.byte(sym["wa_sdsel"] + 7) == lev,
+              "THE DETAIL BY THE CPU'S TIER: Medium on an 8088 (40 columns), "
+              "Very High and its vsync on a 286 or better (80), and the "
+              "setup's Detail drop-down showing it",
+              (lev, vs, want, p.byte(sym["wa_sdsel"] + 7)))
 
         def arenas():                           # (the list's last item is
             n = p.word(sym["wa_sdr_a"] + DR_N)  # Rotation..., 0FFh)

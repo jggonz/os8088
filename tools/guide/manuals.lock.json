@@ -1443,9 +1443,9 @@
    "apps/wirearena",
    "tools/arenagen.py"
   ],
-  "stamped": "0e70d1bf",
-  "strings": "2dfdd905e0a44b28",
-  "why": "the drop-downs title-cased (Capture the Flag, King of the Hill, The Pit, Serial Cable, No Limit...) and the setup window a cell wider: the manual quotes the new values; shots retaken"
+  "stamped": "c5c88829c",
+  "strings": "6136f95b083a4c1c",
+  "why": "Detail drop-down in the setup (the slot right of Play, the address field's under Internet); Very High the 286 default with vsync"
  },
  "WORD": {
   "sources": [],

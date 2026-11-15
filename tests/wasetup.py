@@ -18,6 +18,10 @@ outside the window so it is not counted:
   - A DROP-DOWN: a click on Arena's box drops its list (the
     record says open), a click outside it takes it down without a pick,
     and the window is pixel-identical again;
+  - DETAIL: the slot right of Play is Detail's drop-down, showing the
+    CPU tier's level (Medium on the 8088) - a pick sets the level and its
+    vsync (Very High's) - and the address field's while Play is Internet,
+    the slot changing hands with nothing of the other left behind;
   - ONE BOT MEANS ONE: Bots 1 picked from the keyboard and Play - for ten
     guest seconds the other two figures never leave their parking.
 
@@ -154,6 +158,81 @@ def main():
         check(p.byte(sym['wa_sfoc']) == 0 and region() == base,
               'THE NICK UNDER A LIST: the list down, the focus on Arena and '
               'the window pixel-identical - no caret left in the nick')
+
+        # DETAIL (the owner, 2026-11-15): the slot right of Play is Detail's
+        # drop-down while Play is not Internet - showing the level the CPU's
+        # tier picked (Medium, an 8088), each pick the level and its vsync
+        # (Very High's alone) - and the address field's while it is, the
+        # slot changing hands with nothing of the other left on the glass
+        dd = sym['wa_sdr_d']
+        x1, y1, x2, y2 = (p.word(dd + i) for i in (0, 2, 4, 6))
+        check(p.byte(sym['wa_level']) == 2 and p.byte(sym['wa_vsync']) == 0
+              and p.byte(sym['wa_sdsel'] + 7) == 2 and p.byte(dd + 12) == 2,
+              'DETAIL: the drop-down shows Medium, the 8088 tier\'s level '
+              '(level %d drawn as %d, vsync %d)' % (p.byte(sym['wa_level']),
+              p.byte(sym['wa_sdsel'] + 7), p.byte(sym['wa_vsync'])))
+        slot = (x1 - 72, y1, x2 + 1, y2 + 1)
+        slot0 = under(*slot)
+        for k in ["ArrowDown"] * 5 + ["ArrowRight"] * 2:
+            m.key(k)
+        ui.settle()
+        check(p.byte(sym['wa_sfoc']) == 5 and p.byte(sym['wa_level']) == 4
+              and p.byte(sym['wa_vsync']) == 1 and
+              p.byte(sym['wa_sdsel'] + 7) == 4,
+              'DETAIL: Down five to it, Right twice - Very High, and its '
+              'vsync on (focus %d, level %d, vsync %d)' % (
+                  p.byte(sym['wa_sfoc']), p.byte(sym['wa_level']),
+                  p.byte(sym['wa_vsync'])))
+        for k in ["ArrowLeft"] * 2 + ["ArrowUp"] * 5:
+            m.key(k)
+        ui.settle()
+        check(p.byte(sym['wa_level']) == 2 and p.byte(sym['wa_vsync']) == 0
+              and p.byte(sym['wa_sfoc']) == 0 and region() == base,
+              'DETAIL: Medium again, vsync off, the window pixel-identical')
+        ui.mo.click(x1 + 40, y1 + 8)
+        os88marty.until(m, lambda _: p.byte(dd + 16) == 1,
+                        'the Detail list open', guest=5)
+        ui.mo.click(ox + 20, oy + gy + 2)
+        os88marty.until(m, lambda _: p.byte(dd + 16) == 0,
+                        'the Detail list down', guest=5)
+        for k in ["ArrowUp"] * 8:        # (the press focused it: Arena's)
+            m.key(k)
+        ui.mo.to(4, 190)
+        ui.settle()
+        check(p.byte(sym['wa_level']) == 2 and under(*slot) == slot0,
+              'DETAIL: a click drops its list, a click outside takes it '
+              'down, no pick')
+        for k in ["ArrowDown"] * 4 + ["ArrowRight"] * 3:
+            m.key(k)
+        ui.settle()
+        os88marty.until(m, lambda _: p.byte(sym['wa_splay']) == 3,
+                        'Play: Internet', guest=5)
+        ui.settle()
+        W, H, d = m.fbuf()
+
+        def white(xa, ya, xb, yb):
+            g = d[(y1 * W + x1 - 72) * 3:(y1 * W + x1 - 71) * 3]
+            return all(d[(y * W + x) * 3:(y * W + x + 1) * 3] == g
+                       for y in range(ya, yb + 1) for x in range(xa, xb + 1))
+        fx = x1 - 64
+        check(p.byte(dd + 16) == 0 and p.byte(sym['wa_sdfld']) != 0 and
+              white(x1 - 72, y1 + 4, fx - 1, y1 + 11) and
+              white(fx + 1, y1 + 4, fx + 1, y1 + 11) and   # (the inset)
+              white(fx + 1, y1 + 1, x2 - 1, y1 + 2) and
+              white(fx + 1, y2 - 2, x2 - 1, y2 - 1),
+              'DETAIL: Internet - the field has the slot, nothing of '
+              'Detail\'s label or box left in it or beside it')
+        for k in ["ArrowLeft"] * 3:
+            m.key(k)
+        os88marty.until(m, lambda _: p.byte(sym['wa_splay']) == 0,
+                        'Play: Offline', guest=5)
+        p.write(sym['wa_lkbots'], bytes([3]))   # (linked: two at most)
+        for k in ["ArrowUp"] * 4:
+            m.key(k)
+        ui.settle()
+        check(under(*slot) == slot0 and p.byte(sym['wa_sfoc']) == 0,
+              'DETAIL: Offline again - Detail back in the slot, pixel-'
+              'identical, no field left under it')
 
         # ONE BOT MEANS ONE: Bots to 1 from the keyboard (Arena, Columns,
         # Bots; 3, 2, 1), Enter - and for ten guest seconds only figure 0

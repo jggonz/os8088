@@ -1894,6 +1894,23 @@ by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
   are `wirerena*.img`. The source keeps `apps/wirearena/` and `wa_`. Text
   written before the rename (16, the completed plans) keeps the old file
   name as history.
+- **Detail in the setup** (the owner, 2026-11-15: *"we don't have a
+  dropdown for Detail. We have one open dropdown slot ... make sure it
+  reflects the detail level the cpu tier gets"*). Detail is the slot right
+  of Play, and the address field takes that slot while Play is Internet
+  (the owner's pick of three layouts); one focus stop between Play and
+  Mode, whichever holds it. It shows `wa_level`, and a pick goes through
+  `wa_setlevel` as F1..F5 do (SPEC.md 128.6). And with it, the owner's
+  *"a 286 can do Very High, its pegged over the monitor's refresh rate. So
+  we can add VSync to that detail level as well"*: `wa_levtab` gains a
+  vsync column, on at Very High alone, and a 286 or better starts at Very
+  High (SPEC.md 128.2). `wasetup` (the drop-down at Medium on the 8088, a
+  pick, the slot changing hands both ways with nothing left behind - red
+  on each of three breaks), `wahudset` (F5's vsync), `wamodes` and
+  `mega-wamodes` (the level by the tier: Medium on MartyPC's 8088, Very
+  High with vsync on Bochs). `wabench` and `waprof` turn vsync off after
+  F5 so their Very High numbers compare. +201 bytes of the primary
+  (37,601 to 37,802).
 
 **After the first release** (the owner, 2026-11-15: *after*, for the turn
 acceleration and for all the test and measurement debt):

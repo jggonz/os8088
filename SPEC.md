@@ -251343,8 +251343,9 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
   (`wa_attrc`). On an MDA-class page 01h is an underline and 08h is nothing,
   so the colour table there is wrong. (Before 17.6 the test was `FSI_SEG ==
   B000h`, which is never true on kern_mega: `tests/wamono.py`.)
-- **Presentation** writes only the cells that changed. V waits for the
-  vertical retrace before presenting (`OSAPI_FSX_WAIT`).
+- **Presentation** writes only the cells that changed. With vsync on it
+  waits for the vertical retrace before presenting (`OSAPI_FSX_WAIT`):
+  V turns it on and off, and a detail level sets it (Very High's alone).
 - **A setting a key changes SAYS SO** in the HUD's message cell for four
   seconds (`WA_HMSGT`, 120 ticks): the name grey, what it is now bright -
   `Detail Medium`, `Vsync on`, `Columns 80` (`wa_hudset`), and `Mouse
@@ -251353,8 +251354,11 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The detail levels** are F1..F5: Very Low, Low, Medium, High, Very
   High. Each is one row of `wa_levtab`: the renderer's `LK_*` options, the
   floor grid, stepped treads, dashed floor lines and the small-figure
-  threshold. Moving an option between levels is a change to that table and
-  nothing else. The default is Medium on an 8086/8088 and High on a 286 or better.
+  threshold, and last vsync - Very High's alone, because a 286 runs Very
+  High past the monitor's refresh (the owner, 2026-11-15). Moving an
+  option between levels is a change to that table and nothing else. The
+  default is Medium on an 8086/8088 and Very High (vsync on) on a 286 or
+  better; the setup's Detail drop-down shows it and picks one too (128.6).
 
 ### 128.3 The simulation, the input and the renderer part
 
@@ -251508,14 +251512,23 @@ The window is made of the system's controls (§13.8 buttons, §13.15 check
 boxes, the drop-downs and §83's line editor). It draws only what changed
 and uses `font_run` for text:
 
-- **Drop-downs**: Arena, Columns, Bots, Skill, Play, Mode and Win at.
-  Play is `Offline`, `Serial Cable`, `Local Network` or `Internet`. Every
+- **Drop-downs**: Arena, Columns, Bots, Skill, Play, Detail, Mode and Win
+  at. Play is `Offline`, `Serial Cable`, `Local Network` or `Internet`. Every
   value a drop-down shows is title-cased (`The Pit`, `Easy`, `None`,
   `Rotation...`: the owner, 2026-11-15); the left column's drop-downs are
   sixteen cells wide, which `Capture the Flag` and `King of the Hill` need
   (`WS_LDX2`; the content 408 wide).
   On a guest, what only the host chooses (the arena, the bots, the skill)
   is refused with *The host picks the arena*.
+- **THE SLOT right of Play** is Detail's while Play is not `Internet` and
+  the address field's while it is (the owner, 2026-11-15): one focus stop
+  (`WS_FLD`), between Play and Mode, whichever holds it. Detail is the
+  level `wa_level` names - the CPU tier's from the start (128.2) - and a
+  pick is `wa_setlevel`'s, as F1..F5 are; it is each player's own, so a
+  guest is never refused it. When the slot changes hands only the ground
+  the newcomer's own draw does not cover is filled (`WS_GROUND`'s rects
+  either side of its table), so nothing of the other is left
+  (`tests/wasetup.py`).
 - **An address field** (for Internet) and a **Nick** (eight characters).
   They are in-session only: persistence was declined (MULTIPLAYER-FPS-PLAN
   17.1).
