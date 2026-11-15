@@ -90,8 +90,17 @@ def main():
               "got %s) and the UI took it" % got.hex())
 
         ui.menu_pick("Calc", "Close")
-        check(not [x for x in ui.windows() if x.title == "Calculator"],
-              "menu_pick('Calc', 'Close'): the window is gone")
+
+        def gone():
+            return not [x for x in ui.windows() if x.title == "Calculator"]
+        # (the pick is confirmed when the item FIRES; the close it asks for
+        # is the package's, a pass later - so the state is waited for)
+        try:
+            os88marty.until(m, lambda _: gone(), "the Calculator closed",
+                            poll=0.02, guest=5.0)
+        except os88marty.MartyError:
+            pass
+        check(gone(), "menu_pick('Calc', 'Close'): the window is gone")
 
         # the clock, a write, the glass
         os88marty.ui_done(m)
