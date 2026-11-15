@@ -1775,8 +1775,8 @@ SERIAL.DRV's verbs run there ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md)
 L3.3, 11.2); kern_mega soak rows of WireArena's own
 ([AI-PLAN](completed/WIREARENA-AI-PLAN.md) 1, 1.1;
 [PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 4.2's kern_mega row); the
-umbrella's Wave 6 "kern_mega rows" (15). Its pass (17.6) has the rows and
-the one defect; the linked match is what stays open.
+umbrella's Wave 6 "kern_mega rows" (15). Done: 17.6 has the rows, the
+linked match and the one defect.
 
 **The owner's, after the arena work** (17.1): the field run on 5150 #1, the
 CGA questions and the PERFORMANCE.md set that follows from it (15, Wave 7).
@@ -1866,6 +1866,18 @@ none is built: the shipped WARENA.O88 is correct on kern_mega as it is
 `megapkg`, `megahigh`, `cswrite`, `megagrid` and `movable` pass on the tree
 with it.
 
+**A second defect, every kernel's, that only kern_mega SHOWED.** The
+Rotation window's `W_PAINT`, `wa_rpaint`, left SI on a mode name's string,
+and `W_PAINT` owes SI back (SPEC.md 11, `W_CLASS`): `wm_draw_win` takes it
+for the window again for the grow box and the save-under bank, and
+`wm_ptr2idx` divided a string's address by the record size. On kern_mega
+that is `FAULT 00 at 0060:5F52` and the machine stops (`mega-wamodes`, at
+its Space and Down keys in the Rotation window); on kern_big the 8088's
+int 0 returns and the garbage index zeroes and frees a stranger's
+`wm_su_segs` word - silent. `wa_rpaint` banks SI and clears DF now, and
+`wa_rset` keeps SI, so `wa_rclick` (an `W_ONCLICK`, which owes SI too) is
+right as well. +13 bytes.
+
 **Run on kern_mega.** Bochs (a 386, VGA, 16MB; the region above 1MB) and
 86Box's mr286 (a 286 with its AT BIOS) with a Hercules:
 
@@ -1894,15 +1906,25 @@ with it.
 - `waarenas`: its benches are a private `WABENCH=1` tree, which has no
   kern_mega disk of its own;
 - `wasetup`: `flicker`, which the Bochs shim refuses;
-- the link rows (`walink*`, `wactflink`, `wamodeslink`): their QEMUs are
-  their own (tests/wireball.py's `Machine`), booted on kern_big's disk and
-  read through kern_big's map, so `$OS88_MEGA` does not reach them.
+- `wactflink`, `wamodeslink`, `walink4`: their QEMUs are their own
+  (tests/wireball.py's `Machine`), and `$OS88_MEGA` does not reach them;
+  walink's `--mega` (below) is the way, for whoever wants those three on
+  kern_mega as well.
 
 **kern_mega's apps disks** carry it now, in `GAMES/` as the 1.44MB and
 1.2MB apps disks do: 133 clusters, `megaapps120.img` keeping 49 free.
 
-**Open**: L3.3, the linked match on kern_mega and SERIAL.DRV's verbs run
-there. The way is tests/wireball.py's `Machine` given a kern_mega leg -
-`build/mega.img`, kern_mega's map (`OS88_BUILD=build/megak`,
-`os88sym.default_defines("KERN_BIG", "KERN_MEGA")`) and reads through the
-LDT, as tests/pciether.py's `MQemu` does.
+**The linked match on kern_mega (LINK-PLAN L3.3)**: `tests/walink.py
+--mega` runs both machines on kern_mega - plain QEMU on `build/mega.img`
+(QEMU is a 386 and boots it, as tests/pciether.py does), kern_mega's map
+(`OS88_BUILD=build/megak`, `os88sym.default_defines("KERN_BIG",
+"KERN_MEGA")`), the region read and written through the LDT (pciether's
+`MQemu`; wireball's `put` writes through `lin` now, the same address on
+kern_big). Every one of walink's checks passes on all four carriers:
+`walinkmega` (the null modem: SERIAL.DRV's verbs under protected mode, and
+the older driver's byte-a-call fallback), `walinkmeganet` (raw Ethernet),
+`walinkmegaudp` and `walinkmegaip`. QEMU is a lenient instrument for
+kern_mega (it checks no segment limit and lets a store through CS land),
+so the faults it would hide are the Bochs ports' to catch, and those pass.
+
+Nothing of the kern_mega session's list stays open.

@@ -34,6 +34,7 @@ from telansi import Qemu
 
 S = os88sym.linear
 DISK_OVERRIDE = None
+SYS_OVERRIDE = None     # (drive A's image: tests/walink.py --mega's mega.img)
 # The rate test's figure is a MEAN over this many rallies (see mono()).
 WB_RALLIES = 8
 
@@ -84,7 +85,7 @@ class Machine(Qemu):
         self.pidfile = str(directory / f'qemu{index}.pid')
         path = str(directory / f'qmp{index}.sock')
         args = ['qemu-system-i386', '-machine', 'pc,vmport=off,pcspk-audiodev=speaker', '-audiodev', f'wav,id=speaker,path={directory / ("speaker" + str(index) + ".wav")}', '-m', '16M', '-serial', 'none', '-parallel', 'none',
-                '-drive', f'file={artifact("os8088.img")},if=floppy,index=0,format=raw,snapshot=on',
+                '-drive', f'file={SYS_OVERRIDE or artifact("os8088.img")},if=floppy,index=0,format=raw,snapshot=on',
                 '-drive', f'file={(disk or DISK_OVERRIDE or artifact("wireball.img"))},if=floppy,index=1,format=raw,snapshot=on',
                 '-boot', 'a', '-display', 'none', '-nic', 'none',
                 # ps2: the pointer is the i8042's and the other UART is a
@@ -161,7 +162,7 @@ class Machine(Qemu):
                 s.settimeout(10)
                 s.connect(self.gdbpath)
                 for name, value, n in values:
-                    address = (self.seg << 4) + self.sy[self.varprefix + name]
+                    address = self.lin(self.seg, self.sy[self.varprefix + name])
                     data = value.to_bytes(n, 'little')
                     payload = f'M{address:x},{n:x}:{data.hex()}'.encode()
                     s.sendall(b'$' + payload + b'#' + f'{sum(payload) & 255:02x}'.encode())

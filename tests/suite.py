@@ -8975,6 +8975,41 @@ SOAK = [
         "the whole match follows.",
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=240),
+    Row("walinkmega", "soak", py("tests/walink.py", "--mega"), 60.0,
+        "WIREARENA LINKED ON kern_mega (WIREARENA-LINK-PLAN L3.3): walink's "
+        "whole match with BOTH machines kern_mega - plain QEMU on "
+        "build/mega.img, as tests/pciether.py runs it, the shipped "
+        "WARENA.O88 in B:, the region and its carve LDT selectors read "
+        "through pciether's MQemu. The null modem through SERIAL.DRV's "
+        "verbs under protected mode and the older driver's byte-a-call "
+        "fallback, the kill, the rocket, the pickups, the faults, the "
+        "host's bots, the lift, every frame on the wire valid. Its checks "
+        "are walink's, red with walink's breaks; this leg adds the kernel.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
+    Row("walinkmeganet", "soak", py("tests/walink.py", "--mega", "--net"),
+        60.0,
+        "walinkmega on raw Ethernet: ETHER.DRV's raw verbs on two kern_mega "
+        "NE2000s (walinknet's relay), the frames staged in the region's "
+        "own selector (SPEC.md 77.10).",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
+    Row("walinkmegaudp", "soak", py("tests/walink.py", "--mega", "--udp"),
+        60.0,
+        "walinkmega on UDP, found by broadcast: DHCP and ETHER.DRV's UDP "
+        "port on two kern_mega machines (walinkudp's hub).",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
+    Row("walinkmegaip", "soak", py("tests/walink.py", "--mega", "--udp-ip"),
+        60.0,
+        "walinkmega joined by address: walinkip's router drops the "
+        "broadcasts, and the kern_mega guest types the host's address.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/mega.img",
+               "build/megak/kernel.map"), timeout=300),
     Row("walink4", "soak", py("tests/walink4.py"), 46.0,
         "WIREARENA, FOUR MACHINES (WIREARENA-NET-PLAN 4): four QEMU NE2000s "
         "on walinkudp's hub. Each binds the other three by broadcast; one "

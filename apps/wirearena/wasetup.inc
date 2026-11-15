@@ -1363,7 +1363,13 @@ wa_rplace:
 ; wa_rpaint - PAINT (the kernel set the clip, the content white): the mode,
 ; the boxes, the marker
 wa_rpaint:
-    call wa_rplace
+    push si                     ; W_PAINT OWES BACK SI (SPEC.md 11's W_CLASS):
+    call .body                  ; wm_draw_win takes it for the window again,
+    pop si                      ; for the grow box and the save-under bank.
+    cld                         ; The mode's name left it a string's address:
+    ret                         ; wm_ptr2idx's divide overflowed on kern_mega
+.body:                          ; (FAULT 00), and on kern_big the same index
+    call wa_rplace              ; zeroed and freed a stranger's wm_su_segs word
     mov bx, [wa_rwin]
     call OSAPI_WM_CONTENT
     mov cx, ax
@@ -1510,6 +1516,11 @@ wa_rkey:
 ; wa_rset - BX = box AL, just toggled (and drawn): the rotation as it says -
 ; unless it was the last one checked, which goes back on (a toast says why)
 wa_rset:
+    push si                     ; SI KEPT: wa_rclick is an ONCLICK, which owes
+    call .body                  ; it back (SPEC.md 11's W_CLASS) as W_PAINT
+    pop si                      ; does, and both arms below spend it
+    ret
+.body:
     push bx
     mov bx, wa_rck              ; (any still checked?)
     xor cx, cx

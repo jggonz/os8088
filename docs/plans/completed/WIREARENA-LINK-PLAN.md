@@ -338,7 +338,8 @@ owns kern_mega.*
 - [ ] **L3.2 86Box XT pair** (`tools/wireball-pair.py`'s pattern): 2400
   baud between two emulated 4.77 MHz machines, for the byte loss QEMU's
   fast CPU cannot show.
-- [ ] **L3.3 kern_mega**: a linked match on kern_mega, beside kern_big.
+- [x] **L3.3 kern_mega**: a linked match on kern_mega, beside kern_big.
+  `tests/walink.py --mega`, all four carriers (MULTIPLAYER-FPS-PLAN 17.6).
 
 ## 10. How it is verified
 
@@ -535,7 +536,7 @@ by bot 2). Red with the damage word ignored or TAKE unsent, as in L1.
 - The bots do not hear the guest's shots: hearing is the host's player's
   alone.
 - kern_mega has built SERIAL.DRV's new verbs (`make mega`) but has not
-  run them (L3.3).
+  run them (L3.3). *(Run since: `walinkmega`, MULTIPLAYER-FPS-PLAN 17.6.)*
 
 ### 11.3 The guest's shots heard, the host's lift (2026-11-14)
 

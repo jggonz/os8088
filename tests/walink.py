@@ -26,7 +26,8 @@ OS instances talking. It checks behaviour and bytes, not speed.
     (binascii's CRC, never the game's), is a valid frame of a known type
     and length.
 
-Registered as walink in soak; make wirearenadisk first.
+Registered as walink in soak; make wirearenadisk first. --mega runs both
+machines on kern_mega (walinkmega*; make mega too).
 """
 import binascii
 import re
@@ -37,12 +38,26 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'tools'), str(ROOT / 'tests')]
+# --mega: BOTH machines kern_mega (docs/plans/WIREARENA-LINK-PLAN.md L3.3) -
+# plain QEMU on build/mega.img, as tests/pciether.py runs it, with the
+# shipped WARENA.O88 in B:. Which kernel the symbol map describes is said
+# before os88sym is first imported (pciether's lines); the package's region
+# is an LDT SELECTOR there, read through pciether's MQemu decoder
+MEGA = '--mega' in sys.argv
+if MEGA:
+    import os
+    os.environ["OS88_BUILD"] = str(ROOT / "build" / "megak")
 import wireball as W                                            # noqa: E402
 import os88qemu as Q                                            # noqa: E402
 import dispapps                                                 # noqa: E402
 from walift import amap                                         # noqa: E402
 from waweapons import anims                                     # noqa: E402
 import arenagen                                                 # noqa: E402
+if MEGA:
+    import os88sym                                              # noqa: E402
+    from pciether import MQemu                                  # noqa: E402
+    os88sym.default_defines("KERN_BIG", "KERN_MEGA")
+    W.SYS_OVERRIDE = W.artifact("mega.img")
 
 # The package's symbols: walift's map, assembled and held to the build
 # (dispapps cannot unwrap a parted image whose part 0 is OP_ZFILL)
@@ -262,7 +277,12 @@ def net_frames(frs):
 
 
 class Arena(W.Machine):
+    if MEGA:                            # (a selector's base off the LDT)
+        _tables, sel_base = MQemu._tables, MQemu.sel_base
+        lin, readseg = MQemu.lin, MQemu.readseg
+
     def __init__(self, d, i, net=None):
+        self._gdt = self._ldt = None
         extra = ()
         if net:
             extra = ('-netdev', 'socket,id=n0,connect=127.0.0.1:%d' % net.port,
