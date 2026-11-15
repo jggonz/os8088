@@ -102,6 +102,17 @@ techniques are cited as "SOAK-SPEED n".
     was a flat 10): a mouse packet's 0.054-guest-second pace overshot by up
     to its whole nap.
 
+11. **The debug server's hex encoder is a table, not a `format!` a byte**
+    (`tools/martypc/debug_server.rs` `hex_encode`): every `read`, `fbuf`,
+    `planes` and `vram` answer is hex, and a VGA frame is 921,600 bytes.
+    Same output byte for byte. **And `fbuf` takes `"digest": true`** (FNV-1a
+    64 of the frame, `fbuf_digest` in `ping`): `settle`'s captures with no
+    gate (`_Screen(..., digest=True)`) compare 16 hex digits rather than two
+    1.8 MB hex frames; the bands, if a diagnostic asks, are read from a
+    fresh frame. `OS88_FBUF_DIGEST=0` is the A/B; an older server answers as
+    before. **Needs the emulator rebuilt** (`tools/martypc/build.sh` /
+    `make marty`; incremental, ~15 s) - until then the client falls back.
+
 ## Measurements
 
 (after 09:05 UTC; see below)

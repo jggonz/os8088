@@ -356,6 +356,9 @@ class Marty:
         self.pid = r.get("pid")
         # the greeting answers `batch`'s question too: one ping, not two
         self._pipeline = bool(r.get("pipeline"))
+        # ...and whether `fbuf` can answer a digest (settle's stillness test)
+        self.fbuf_digest = bool(r.get("fbuf_digest")) and \
+            os.environ.get("OS88_FBUF_DIGEST", "1") != "0"
         # does `advance` drain MARTYPC_WAV's sinks (debug_server.rs)? settle
         # spends its windows in `advance`, so under a capture it needs this
         self.advance_drains = bool(r.get("advance_drains"))
@@ -2513,15 +2516,26 @@ class _Screen(object):
     `bytes == bytes`, which is one memcmp.
     """
 
-    __slots__ = ("bytes", "w", "h", "_rows", "_d", "_lit")
+    __slots__ = ("bytes", "w", "h", "_rows", "_d", "_lit", "_m", "_card")
 
-    def __init__(self, m, card=None):
+    def __init__(self, m, card=None, digest=False):
         vt = m.video(card=card)["type"]
         self._rows = self._d = self._lit = None
+        self._m, self._card = m, card
         if vt in ("cga", "mda", "hercules"):
             w, h, rows = m.vram("cga" if vt == "cga" else "herc")
             self._rows = rows
             self.bytes = b"".join(bytes(r) for r in rows)
+        elif digest and getattr(m, "fbuf_digest", False):
+            # STILLNESS ONLY (no gate asks for bands): the frame's FNV-1a
+            # from the server, 16 hex digits where the frame was 1.8 MB of
+            # hex on VGA (debug_server.rs `fbuf` `digest`;
+            # soak-speed-2/core.md). Equal digests are equal frames for
+            # settle's purpose; the bands, if a diagnostic asks, are read
+            # from a fresh frame.
+            r = m.cmd(cmd="fbuf", aperture=0, card=card, digest=True)
+            w, h = r["w"], r["h"]
+            self.bytes = ("%s:%s" % (r.get("len"), r["digest"])).encode()
         else:
             w, h, d = m.fbuf(card=card)
             self.bytes = self._d = d
@@ -2529,6 +2543,8 @@ class _Screen(object):
 
     def _band(self):
         if self._lit is None:
+            if self._rows is None and self._d is None:
+                w, h, self._d = self._m.fbuf(card=self._card)
             if self._rows is not None:
                 self._lit = [sum(r) for r in self._rows]
             else:
@@ -4128,7 +4144,7 @@ def _settle_det(m, quiet, stable, gate, card, prog, budget, t0):
             except MartyError:
                 _settle_spent(m, prog, budget, gate, seen, t0)
             try:
-                cur = _Screen(m, card)
+                cur = _Screen(m, card, digest=gate is None)
             except MartyError:
                 cur = None
             if cur is not None and gate is not None and not gate(cur):
@@ -4287,7 +4303,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
         except MartyError:
             _settle_spent(m, prog, budget, gate, seen, t0)
         try:
-            cur = _Screen(m, card)
+            cur = _Screen(m, card, digest=gate is None)
         except MartyError:
             cur = None
         if cur is not None and gate is not None and not gate(cur):

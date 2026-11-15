@@ -739,6 +739,8 @@ impl DebugServer {
                 // as the free-running loop does - so a capture keeps the
                 // samples of a guest-time window (os88marty.settle's) too.
                 "advance_drains": true,
+                // `fbuf` takes `"digest": true` (FNV-1a of the frame)
+                "fbuf_digest": true,
                 "pid": std::process::id(),
                 "port": self.listener.as_ref()
                             .and_then(|l| l.local_addr().ok())
@@ -859,12 +861,32 @@ fn address_of(req: &Value) -> Result<usize, String> {
     }
 }
 
+/// Two lowercase hex digits a byte, through a table. It was a `format!` per
+/// byte - an allocation and the formatting machinery for every byte of every
+/// `read`, `fbuf` and `planes` answer, which on a VGA frame (921,600 bytes)
+/// is tens of milliseconds a capture and was paid by every `settle` interval
+/// (docs/plans/soak-speed-2/core.md). Same output, byte for byte.
 fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize]);
+        out.push(HEX[(b & 15) as usize]);
     }
-    s
+    // SAFETY-free: every byte pushed is ASCII
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// FNV-1a, 64 bits: `fbuf`'s `digest`. Not cryptographic and not meant to
+/// be - it answers "is this frame the one I saw last time" for `settle`,
+/// which compared two whole frames shipped as hex.
+fn fnv64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
@@ -1621,7 +1643,19 @@ fn fbuf(machine: &mut Machine, req: &Value) -> Value {
         Ok(i) => i,
         Err(e) => return err(&e),
     };
+    // `"digest": true` answers the frame's FNV-1a instead of its bytes: what
+    // a stillness check compares, at 16 hex digits rather than 1.8 MB
+    let digest = req.get("digest").and_then(Value::as_bool).unwrap_or(false);
     match grab(machine, idx, sel) {
+        Ok((w, h, data)) if digest => json!({
+            "ok": true,
+            "w": w,
+            "h": h,
+            "card": idx,
+            "format": "rgb24",
+            "len": data.len(),
+            "digest": format!("{:016x}", fnv64(&data)),
+        }),
         Ok((w, h, data)) => json!({
             "ok": true,
             "w": w,
