@@ -1100,19 +1100,16 @@ wl_rtop:
 ; wl_rfloor - a pass's FLOOR edge alone, shallow (wl_draw's, r5): wl_rtop's
 ; walk, each cell plotted where it is above the column's clip and the
 ; column not shut; nothing raised. A run off the screen is stepped through
-; (wl_rfoff, [wl_hr] the half-row there).
+; (wl_rfoff, BX the half-row there).
 wl_rfoff:
-    mov [wl_hr], bx
-.col:
     inc si
     inc si
     dec dh
     jz wl_rfloor.done
     add bp, [wl_ks]
-    jnc .col
+    jnc wl_rfoff
     sub bp, [wl_dcm]
-    mov bx, [wl_dir]
-    add bx, [wl_hr]
+    add bx, [wl_dir]
     jmp short wl_rfloor.run
 wl_rfloor:
     mov bx, [wl_hr]
