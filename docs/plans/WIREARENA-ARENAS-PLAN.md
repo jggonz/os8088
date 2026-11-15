@@ -240,6 +240,13 @@ line on the floor between two of the arena's vertices, at any angle.
     are made when the view, the pitch or the eye has moved (`wa_flmake`) and
     kept in its record. Every frame draws from the records (`wa_fldraw`). So
     a still view pays for its lines' cells and nothing else.
+    - **The walk is kept too.** A view's first still frame sets each walk up
+      from its ends and keeps what the walk is entered with (12 bytes a
+      line). From the second on a line is drawn from that: no setup.
+    - **The rows alone moved** - a nod, a jump, a lift's ride, the view
+      standing: a vertex's camera space, its side and its column stand. It
+      is asked the screen's two depths again, and its row is made again
+      where a line wants it. Only a move of the view transforms a vertex.
   - **The vertices.** The floor lines have their own vertex records, one a
     distinct point (`wa_flinit`, at GEOM). When the view moves, each goes
     into camera space off the frame's products - two adds - and is tested
@@ -479,19 +486,47 @@ the table above: the first drawer's last tuning came between.)
   is about 1,100 cycles of setup and its two ends about 1,300 each. A drawn
   line is now about 7,000 cycles, a wall's face in the open arena about
   6,000.
-- **Not done, and what each would buy.**
-  - The walk's state kept across still frames, not only its ends: about
-    10,000 cycles of a still frame.
-  - A pitch-only move keeping the vertices' camera space and columns: about
-    15,000 cycles of such a frame.
-  - Fewer cells: a far or a low-detail line drawn dashed. The owner's call -
-    it changes the look.
+- **The still frame and the nod** (the owner's go-ahead, the same day:
+  4.5). Against the second drawer as it first stood, each pose's picture
+  the same cell for cell:
 
-**Size.** The renderer part is 61,403 of its 65,024 bytes. It was 59,041
-after the two arenas: 2,182 more for the first round, then 2,505 for floor
-lines (code, the per-column and per-vertex caches) and no room. The second
-drawer is 1,101 bytes more: its code is about twice the first's, its tables
-smaller.
+| cycles a frame | A | B | C | D | 40 seeded poses |
+|---|---|---|---|---|---|
+| a still view: the walk kept | -7,000 | -8,100 | -3,600 | -10,400 | 21.96 -> 21.46 ms |
+| the pitch alone moved | -6,000 | -6,000 | -3,500 | -8,100 | 26.21 -> 25.55 ms |
+| a moved view | +600 | +600 | +560 | +840 | 28.21 -> 28.29 ms |
+
+  - A still view is measured past its first still frame, which sets the
+    walks up (`tools/waposes.py --still`); `--nod` renders a frame a
+    half-row of pitch away first.
+  - The moved view pays about 0.3% for both: a set-up walk goes on through
+    a vector (so a still frame's first can keep it), and the view's key is
+    read in two parts.
+- **Dashed lines at Low and Very Low** (`wa_dash`, the detail level's:
+  HEIGHTS-PLAN 9.11). The same character in half the cells: at Low a
+  shallow line's odd columns are left out, at Very Low a steep line's odd
+  rows too. It was a trial build first (`WADASH`, a knob since removed);
+  the owner: *"Dashes: actually look surprisingly fine. Lets add dash2 to
+  very low, and dash to low."*
+  - The dashed walks are walkers of their own (`wa_flshd`, `wa_flstd`),
+    chosen when `wa_dash` changes: Medium and up run the whole walks as
+    they were, and pay nothing.
+  - It buys less than its half. In the bench's views, moved, at Low: 5,600,
+    3,900, 3,200 and 1,400 cycles a frame (Very Low: 5,900, 4,800, 4,800,
+    1,300); over the 40 poses 28.19 -> 27.82 ms at Low, 1.3%, and 28.38 ->
+    27.97 at Very Low, 1.4%.
+  - A cell left out still costs its step: the walk's error and, in a column
+    something stands in, its test. What is saved is the plot - the stamp,
+    the glyph, the list - about 110 cycles of a cell's 180 to 300, on half
+    the cells of the shallow lines.
+
+**Size.** The renderer part was 61,403 of its 65,024 bytes with the second
+drawer. It was 59,041 after the two arenas: 2,182 more for the first round,
+then 2,505 for floor lines (code, the per-column and per-vertex caches) and
+no room. The second drawer is 1,101 bytes more: its code is about twice the
+first's, its tables smaller. The kept walk and the rows' pass are 791 more
+(288 of them the lines' records), on a part the hedge had taken to 62,233,
+and the dashed walkers 706: 63,730 now.
 - Almost all of it is tables sized to the LARGEST arena: the maze's 92
   vertices against the heights arena's 51 (82 bytes per vertex table), its
   PVS at four mask bytes a cell (+512), and its box tree (+384).
@@ -549,3 +584,10 @@ smaller.
   - It was red with the shallow walk's error a modulus out, a side cut left
     where it was, a steep line that never steps, and a tall face's columns
     not asked about.
+- [x] The walk kept across still frames, and the rows' pass (4.5); row
+  `waflines` holds a still view and a nod to the moved view's cells.
+  - It was red with the kept walk's error not loaded and with the rows'
+    pass keeping the old rows.
+- [x] The floor lines dashed at Low, and steep ones too at Very Low
+  (`wa_dash`; 5); row `waflines` holds Very Low's picture to it.
+  - It was red with `wa_dash` not read.

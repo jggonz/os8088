@@ -2410,13 +2410,19 @@ was. They follow the owner's verdicts on the round-5 videos.
 **The levels** (`wa_levtab` in `wirearena.asm`: a row per level, the
 options as bits, so moving an option between levels is one line):
 
-| level | key | options | grid (G) | treads (T) |
-|---|---|---|---|---|
-| Very Low | 1 | Low + ROOMF + FARTOP | off | off |
-| Low | 2 | Medium + NOPOST | off | off |
-| **Medium** (the default on an 8088) | 3 | J + ROUND + COARSE | off | off |
-| **High** (the default on a 286 or better) | 4 | Medium | **on** | off |
-| Very High | 5 | none: exact products and edges, full figures | on | **on** |
+| level | key | options | grid (G) | treads (T) | floor lines |
+|---|---|---|---|---|---|
+| Very Low | 1 | Low + ROOMF + FARTOP | off | off | dashed, steep ones too |
+| Low | 2 | Medium + NOPOST | off | off | dashed |
+| **Medium** (the default on an 8088) | 3 | J + ROUND + COARSE | off | off | whole |
+| **High** (the default on a 286 or better) | 4 | Medium | **on** | off | whole |
+| Very High | 5 | none: exact products and edges, full figures | on | **on** | whole |
+
+The floor lines' column is `wa_dash`, a byte of its own beside the grid's
+and the treads' (2026-11-15, [WIREARENA-ARENAS-PLAN](WIREARENA-ARENAS-PLAN.md)
+4.5 and 5): a shallow line drawn in every other column at Low, and a steep
+one in every other row too at Very Low. The owner, on a trial build: *"Dashes:
+actually look surprisingly fine."*
 
 The options, a bit each in `wa_look` (LK_ in `waconst.inc`):
 
