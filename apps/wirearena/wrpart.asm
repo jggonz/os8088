@@ -100,11 +100,12 @@ wr_v_init:
     inc si
     inc si
     loop .rows
-    mov si, wa_hroff            ; ...and in wa_fbuf (wa_flgo's start)
-    mov di, wa_hrfb
+    mov si, wa_hroff            ; ...and in wa_fbuf (wa_flgo's start), a
+    mov di, wa_hrfb             ; byte a cell
     mov cx, WA_HR
 .fb:
     lodsw
+    shr ax, 1
     add ax, wa_fbuf
     stosw
     loop .fb
@@ -121,6 +122,7 @@ wr_v_init:
     mov [wa_newn], ax
     mov [wa_oldn], ax
     mov [wa_ovoldn], ax         ; (the overlay comes again: no old cells)
+    mov byte [wa_kmono], 0xFF   ; (and the attributes are made again)
     mov word [wa_newp], wa_lista
     mov word [wa_oldp], wa_listb
     retf
