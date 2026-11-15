@@ -49,7 +49,7 @@ CD_TMO       equ 0x80           ; cd_packet's AL for a timeout - no sense key
 
 ; -----------------------------------------------------------------------------
 ; cd_tmo_set - start a bound of AX ticks (internal)
-; clobbers: nothing
+; clobbers: AX - every caller's next step overwrites it (a select, a wait)
 ;
 ; TWO bounds, either of which ends the wait. The TICK bound is the real one:
 ; it counts CHANGES of the system tick (OSAPI_GET_TICKS, the kernel's [ticks]),
@@ -65,19 +65,18 @@ CD_TMO       equ 0x80           ; cd_packet's AL for a timeout - no sense key
 ; with no segment register touched (KERN-MEGA-PLAN 10.1 item 11).
 ; -----------------------------------------------------------------------------
 cd_tmo_set:
-    push ax
     mov [cd_tleft], ax
     call OSAPI_GET_TICKS
     mov [cd_tlast], ax
-    mov word [cd_ilo], 0xFFFF   ; 256 x 65,536 polls: the high byte is
-    mov byte [cd_ihi], 0xFF     ; spent when the low word borrows, and the
-                                ; bound is the borrow out of it
-    pop ax
+    mov ax, 0xFFFF              ; 256 x 65,536 polls: the high byte is
+    mov [cd_ilo], ax            ; spent when the low word borrows, and the
+    mov [cd_ihi], al            ; bound is the borrow out of it
     ret
 
-; cd_tmo_up - has the bound run out? out: CF = 1 yes. clobbers: nothing
+; cd_tmo_up - has the bound run out? out: CF = 1 yes. clobbers: AX - which
+; no caller holds across it: cd_wait reads the status again, and the other two
+; are counting the bound down and nothing else
 cd_tmo_up:
-    push ax
     call OSAPI_GET_TICKS
     cmp ax, [cd_tlast]
     je .same
@@ -85,18 +84,13 @@ cd_tmo_up:
     dec word [cd_tleft]         ; a tick went by: one fewer
     jz .exp
 .same:
-    sub word [cd_ilo], 1        ; ...and one poll fewer, every call
-    jnc .ok
-    sub byte [cd_ihi], 1
-    jc .out                     ; the net: 256 x 65,536 polls (CF = 1)
-.ok:
-    clc
-.out:
-    pop ax
-    ret
+    sub word [cd_ilo], 1        ; ...and one poll fewer, every call. The
+    sbb byte [cd_ihi], 0        ; borrow out of the low word is taken from
+    ret                         ; the high byte, and the borrow out of THAT
+                                ; is the net: 256 x 65,536 polls (CF = 1)
 .exp:
     stc
-    jmp short .out
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cd_wait - poll the status until BSY clears, inside the bound cd_tmo_set set
@@ -104,63 +98,58 @@ cd_tmo_up:
 ; out: CF = 0 and AL = the status; CF = 1 = it never cleared. A floating bus
 ;      (0FFh) is answered at once as CF = 0, AL = 0FFh, for the caller to
 ;      refuse - it is never a drive's status (§52.1.3's rule)
-; clobbers: AX (AL the output)
+;      DX = base + ATA_STAT, which the probe's command write reuses
+; clobbers: AX (AL the output), DX - every caller loads DX for its next port
+; itself, so the bank this used to make of it protected nothing
 ; -----------------------------------------------------------------------------
 cd_wait:
-    push dx
     lea dx, [bx+ATA_STAT]
 .poll:
     in al, dx
     cmp al, 0xFF
-    je .ok
+    je .ok                      ; CF = 0 off the equal compare...
     test al, ATA_ST_BSY
-    jz .ok
+    jz .ok                      ; ...or off the `test`
     call cd_tmo_up
     jnc .poll
-    pop dx
-    ret                         ; CF = 1
 .ok:
-    clc
-    pop dx
-    ret
+    ret                         ; CF = 1 only out of cd_tmo_up: the bound
 
+; -----------------------------------------------------------------------------
+; cd_select - point the task file at our unit (internal)
+; in:  BX = base, CL = unit 0/1
+; clobbers: AX, CL, DX, flags - and falls into cd_delay
+;
 ; cd_delay - ~400 ns after a select or a command: four reads of the
 ; alternate status, which acknowledge nothing (internal). BX = base
+; clobbers: AL, DX
+;
+; NEITHER BANKS A REGISTER, because every call of either is followed by
+; cd_wait, which loads DX and AL itself - and CL is the unit, which no caller
+; reads again (cd_ident banks CX whole, and cd_packet reloads it).
+; -----------------------------------------------------------------------------
+cd_select:
+    lea dx, [bx+ATA_DRVH]
+    mov al, 0xA0
+    shr cl, 1                   ; the unit's bit, into CF
+    jnc .d0
+    mov al, 0xB0
+.d0:
+    out dx, al
 cd_delay:
-    push ax
-    push dx
     lea dx, [bx+ATA_ALT]
     in al, dx
     in al, dx
     in al, dx
     in al, dx
-    pop dx
-    pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; cd_select - point the task file at our unit (internal)
-; in:  BX = base, CL = unit 0/1
-; clobbers: AX, flags
-; -----------------------------------------------------------------------------
-cd_select:
-    push dx
-    lea dx, [bx+ATA_DRVH]
-    mov al, 0xA0
-    test cl, 1
-    jz .d0
-    mov al, 0xB0
-.d0:
-    out dx, al
-    pop dx
-    jmp short cd_delay
 
 ; =============================================================================
 ; THE PROBE (SPEC.md 119.2)
 ; =============================================================================
 
-cd_bases:   dw 0x1F0, 0x170, 0x1E8, 0x168
-CD_NBASE    equ 4
+cd_bases:   dw 0x168, 0x1E8, 0x170, 0x1F0   ; BACKWARDS: cd_probe walks it down
+CD_NBASE    equ 4                           ; from the end, 1F0h first
 
 ; -----------------------------------------------------------------------------
 ; cd_probe - find the first CD-ROM. out: CF = 0 and [cd_base], [cd_unit],
@@ -176,7 +165,7 @@ cd_probe:
     push cx
     push dx
     push si
-    xor si, si
+    mov si, (CD_NBASE - 1) * 2  ; the table's LAST row is 1F0h
 .base:
     mov bx, [cd_bases+si]
     lea dx, [bx+ATA_STAT]
@@ -187,19 +176,15 @@ cd_probe:
 .unit:
     call cd_ident
     jnc .found
-    inc cl
-    cmp cl, 2
-    jb .unit
+    xor cl, 1                   ; unit 0, then 1, then back to 0 and out
+    jnz .unit
 .nextbase:
-    add si, 2
-    cmp si, CD_NBASE * 2
-    jb .base
-    stc
+    sub si, 2                   ; the borrow past the first row is CF = 1:
+    jnc .base                   ; "none", with nothing more to say
     jmp short .out
 .found:
-    mov [cd_base], bx
+    mov [cd_base], bx           ; CF = 0 off the `jnc`
     mov [cd_unit], cl
-    clc
 .out:
     pop si
     pop dx
@@ -212,7 +197,7 @@ cd_probe:
 ; cd_ident - IDENTIFY PACKET DEVICE on one unit (internal)
 ; in:  BX = base, CL = unit
 ; out: CF = 0 a CD-ROM: [cd_pkw] and [cd_model] set; CF = 1 not one
-; clobbers: AX, DX, flags
+; clobbers: AX, DX, ES, flags
 ;
 ; An ATA disk aborts A1h; an absent device never raises DRQ inside
 ; CD_PROBE_T; an ATAPI device that is not a CD-ROM (a tape, a ZIP) answers
@@ -222,15 +207,13 @@ cd_probe:
 cd_ident:
     push cx
     push di
-    push es
     mov ax, CD_PROBE_T
     call cd_tmo_set
     call cd_select
-    call cd_wait
+    call cd_wait                ; DX = the status port, on every answer
     jc .no
     cmp al, 0xFF
     je .no
-    lea dx, [bx+ATA_STAT]
     mov al, ATA_C_PIDENT
     out dx, al
     call cd_delay
@@ -241,14 +224,15 @@ cd_ident:
     test al, ATA_ST_DRQ
     jz .no                      ; nobody answered: no device there
     mov dx, bx                  ; ATA_DATA
-    in ax, dx                   ; word 0
-    mov [cd_w0], ax
+    in ax, dx                   ; word 0, ON THE STACK across the drain
+    push ax
     mov cx, 26                  ; words 1-26, dropped
 .skip:
     in ax, dx
     loop .skip
-    push ds
-    pop es
+    push ds                     ; ES = ours for the model, and NOT put back:
+    pop es                      ; the one caller is DRVV_ATTACH, and the
+                                ; drv_stamped that sent it restores ES itself
     mov di, cd_model
     mov cx, 20                  ; words 27-46: the model, two characters a
 .model:                         ; word and the FIRST in the HIGH byte
@@ -260,33 +244,30 @@ cd_ident:
 .rest:
     in ax, dx
     loop .rest
-    mov byte [cd_model+40], 0
-    mov ax, [cd_w0]
+                                ; (cd_model+40, the NUL, is 0 from the load
+                                ; and nothing writes it: the 20 words above
+                                ; are bytes 0-39, and the trim writes zeros)
+    pop ax                      ; word 0
     and ah, 0xDF                ; bits 15-14 = 10b (ATAPI) and 12-8 = 5 (a
     cmp ah, 0x85                ; CD-ROM): bit 13 is reserved
     jne .no
-    and al, 3                   ; the packet's size: 0 = 12 bytes, 1 = 16
-    mov word [cd_pkw], 6
-    jz .trim
-    cmp al, 1
-    jne .no                     ; a size no ATAPI version defines
-    mov word [cd_pkw], 8
-.trim:                          ; the model is padded with spaces: trim them
-    mov di, cd_model + 39
-.tr:
-    cmp byte [di], ' '
+    and al, 3                   ; the packet's size: 0 = 12 bytes, 1 = 16,
+    cmp al, 1                   ; and 2 or 3 a size no ATAPI version defines
+    ja .no
+    shl al, 1
+    add al, 6
+    cbw                         ; 6 or 8 WORDS - and AH = 0, the high byte the
+    mov [cd_pkw], ax            ; trim below stops on
+    mov di, cd_model + 39       ; the model is padded with spaces: trim them,
+.tr:                            ; down to cd_pkw's high byte if it is ALL
+    cmp byte [di], ' '          ; spaces - which is never one
     jne .ok
     mov byte [di], 0
     dec di
-    cmp di, cd_model
-    jae .tr
+    jmp short .tr
 .ok:
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop es
+    CLC_OR_STC .no              ; CF = 0 here, CF = 1 at .no: cd_probe asks
+                                ; for nothing but CF
     pop di
     pop cx
     ret
@@ -302,7 +283,7 @@ cd_ident:
 ;      (0 = no data), [cd_xout] = 1 when the data goes TO the drive
 ; out: CF = 0 done, [cd_xgot] = bytes moved; CF = 1 and AL = the sense key the
 ;      drive reported (1..0Fh), 0 for an error with none, or CD_TMO
-; clobbers: AX, flags
+; clobbers: AX, BX, CX, SI, DI, ES, flags - DX is kept
 ;
 ; A DRQ block longer than the buffer has room for is drained into nothing:
 ; the drive decides how much it sends, and stopping early would hang it.
@@ -317,13 +298,12 @@ cd_ident:
 ; CD_RUN x 2,048 = 32 KB, and the rest read into our own image.
 ; -----------------------------------------------------------------------------
 cd_packet:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov word [cd_xgot], 0
+    push dx                     ; DX alone: cd_cmd banks BX, CX, SI, DI and ES
+                                ; round this already, and cd_sense - the one
+                                ; other caller - is reached only from inside
+                                ; cd_cmd. DX is the one its callers keep
+    xor ax, ax
+    mov [cd_xgot], ax
     mov bx, [cd_base]
     mov ax, CD_CMD_T
     call cd_tmo_set
@@ -337,12 +317,12 @@ cd_packet:
     xor al, al
     out dx, al                  ; PIO, no overlap
     lea dx, [bx+ATA_BCL]
-    mov al, CD_BCLIM & 0xFF
-    out dx, al
+    out dx, al                  ; CD_BCLIM's low byte - the 0 still in AL
     inc dx
     mov al, CD_BCLIM >> 8
     out dx, al
-    lea dx, [bx+ATA_STAT]
+    inc dx                      ; BCH + 2 = ATA_STAT
+    inc dx
     mov al, ATA_C_PACKET
     out dx, al
     call cd_delay
@@ -370,7 +350,7 @@ cd_packet:
     test al, ATA_ST_ERR
     jnz .err
     test al, ATA_ST_DRQ
-    jz .done
+    jz .out                     ; done - and CF = 0 off the `test`
     lea dx, [bx+ATA_BCL]        ; this block's length
     in al, dx
     mov cl, al
@@ -422,49 +402,54 @@ cd_packet:
     sub ax, [cd_xoff]
     mov [cd_xgot], ax
     jmp short .phase
-.empty:                         ; DRQ with a count of 0 (or FFFFh): nothing to
-    call cd_tmo_up              ; move, and BSY is clear, so cd_wait would not
-    jc .tmo                     ; count it - the bound is counted here instead
-    jmp .phase
-.done:
-    clc
-    jmp short .out
 .err:
     lea dx, [bx+ATA_ERR]
     in al, dx
     mov cl, 4
     shr al, cl                  ; the sense key, 0 = none given
     stc
-    jmp short .out
+    pop dx
+    ret
+.empty:                         ; DRQ with a count of 0 (or FFFFh): nothing to
+    call cd_tmo_up              ; move, and BSY is clear, so cd_wait would not
+    jnc .phase                  ; count it - the bound is counted here instead
 .tmo:
     mov al, CD_TMO
     stc
 .out:
-    pop es
-    pop di
-    pop si
     pop dx
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; cd_pclear - [cd_pkt] all zero, and no data phase (internal)
-; out: DI = cd_pkt; clobbers: AX, CX
+; out: DI = cd_pkt; clobbers: CX - AX is KEPT, so a caller with an LBA or a
+;      verb in it need not bank it across (cd_read10, cd_v_play, cd_pausebit)
+;
+; ONE FILL: [cd_xmax] and [cd_xout] sit straight behind the packet
+; (cdrom.asm), so ten words clear all three. [cd_xseg]:[cd_xoff] are NOT in
+; it and must not be: a drive that asks for data on a command that has none
+; is answered out of whatever they last named, which is always a real segment.
 ; -----------------------------------------------------------------------------
 cd_pclear:
+    mov di, cd_pkt
+    push di
+    mov cx, (cd_xout + 2 - cd_pkt) / 2
+    call cd_wzero
+    pop di
+    ret
+
+; cd_wzero - CX words of zero at DS:DI (internal). out: DI past them, CX = 0;
+;            AX and ES kept
+cd_wzero:
+    push ax
     push es
     push ds
     pop es
-    mov di, cd_pkt
     xor ax, ax
-    mov cx, 8
     cld
     rep stosw
     pop es
-    mov di, cd_pkt
-    mov word [cd_xmax], 0
-    mov byte [cd_xout], 0
+    pop ax
     ret
 
 ; cd_xin - the data phase reads CX bytes into our own DS:SI (internal)
@@ -492,14 +477,14 @@ cd_cmd:
     push si
     push di
     push es
-    mov byte [cd_tries], CD_READY_N
-    mov byte [cd_uatry], CD_UA_N
+    mov word [cd_tries], CD_READY_N | (CD_UA_N << 8)  ; and [cd_uatry]
 .again:
     call cd_packet
     jnc .out
-    mov [cd_lkey], al           ; the last refusal, for a diagnosis: the key
-    mov ah, [cd_pkt]            ; and the command it answered (CDV_DRIVE's
-    mov [cd_lop], ah            ; registers can be read off a live machine)
+    mov ah, [cd_pkt]            ; the last refusal, for a diagnosis: the key
+    mov [cd_lkey], ax           ; and the command it answered (CDV_DRIVE's
+                                ; registers can be read off a live machine) -
+                                ; [cd_lop] being the byte after [cd_lkey]
     cmp al, 6
     jne .notua
     call cd_changed             ; the disc is not the one we knew
@@ -525,18 +510,23 @@ cd_cmd:
 .other:
     cmp al, 5                   ; ILLEGAL REQUEST: the drive does not do
     jne .io                     ; that - an audio command on a drive with
-    mov ax, CDE_NOAUDIO         ; none, the one place it is expected
+    mov al, CDE_NOAUDIO         ; none, the one place it is expected
     jmp short .fail
+    ; THE REFUSALS ARE A CHAIN: each `db 0x3D` is `cmp ax, imm16`, whose
+    ; immediate is the next two-byte `mov al, CDE_*` - so falling in runs the
+    ; compare (flags only, and stc follows) and a jump to the label runs the
+    ; `mov`. Every CDE_* is under 80h, so cbw makes it the whole of AX.
 .nodisc:
     call cd_forget              ; no disc is a disc we do not know either
-    mov ax, CDE_NODISC
-    jmp short .fail
+    mov al, CDE_NODISC
+    db 0x3D
 .notready:
-    mov ax, CDE_NOTREADY
-    jmp short .fail
+    mov al, CDE_NOTREADY
+    db 0x3D
 .io:
-    mov ax, CDE_IO
+    mov al, CDE_IO
 .fail:
+    cbw
     stc
 .out:
     pop es
@@ -550,15 +540,13 @@ cd_cmd:
 ; cd_sense - REQUEST SENSE, for the additional sense code (internal)
 ; out: AL = the ASC (0 when the drive gave none); [cd_pkt] and the transfer
 ;      words are put back as they were, so the caller can re-send
-; clobbers: AX, flags
+; clobbers: AX, BX, CX, SI, DI, ES, flags - its one caller is cd_cmd, which
+;      banks all of them but AX round everything it does
 ; -----------------------------------------------------------------------------
 cd_sense:
-    push cx
-    push si
-    push di
     mov si, cd_pkt              ; bank the packet and the transfer
     mov di, cd_pkt2
-    mov cx, 8 + 4               ; 16 bytes of packet, then xseg/xoff/xmax/xout
+    mov cx, 8 + 4               ; 16 bytes of packet, then xmax/xout/xoff/xseg
     call cd_wcopy
     call cd_pclear
     mov byte [di], 0x03         ; REQUEST SENSE
@@ -569,17 +557,11 @@ cd_sense:
     mov byte [cd_snsbuf+12], 0
     call cd_packet
     mov al, [cd_snsbuf+12]      ; the ASC (0 if it failed: nothing to add)
-    push ax
     mov si, cd_pkt2
     mov di, cd_pkt
     mov cx, 8 + 4
-    call cd_wcopy
-    pop ax
-    pop di
-    pop si
-    pop cx
-    ret
-
+                                ; ...and the bank back, which is the tail
+                                ; call: cd_wcopy keeps AX
 ; cd_wcopy - CX words DS:SI -> DS:DI (internal); clobbers CX, SI, DI
 cd_wcopy:
     push es
@@ -603,22 +585,13 @@ cd_wcopy:
 cd_changed:
     inc byte [cd_gen]
 cd_forget:
-    mov byte [cd_valid], 0
-    mov byte [cd_stale], 1
+    mov word [cd_valid], 0x0100 ; [cd_valid] = 0 and [cd_stale] = 1
     mov word [cd_stag+2], 0xFFFF    ; the sector buffer names no sector
-    push ax
     push cx
     push di
-    push es
-    push ds
-    pop es
     mov di, cd_hcache           ; and the handle cache names no handle
-    xor ax, ax
     mov cx, CD_HC_N * CD_HC_SZ / 2
-    cld
-    rep stosw
-    pop es
+    call cd_wzero
     pop di
     pop cx
-    pop ax
     ret

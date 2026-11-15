@@ -76,10 +76,8 @@ cd_v_disc:
     call cd_tstart
     call cd_secs
     mov cx, ax
-    mov al, [cd_first]
-    mov ah, [cd_last]
-    mov dl, [cd_kind]
-    mov dh, [cd_gen]
+    mov ax, [cd_first]          ; AL = the first track, AH = the last
+    mov dx, [cd_kind]           ; DL = the kinds, DH = the generation
     clc
 .out:
     ret
@@ -87,19 +85,16 @@ cd_v_disc:
 ; --- CDV_TRACK: AL = a track -------------------------------------------------
 cd_v_track:
     push bx
-    push ax
-    call cd_media
-    pop bx                      ; BL = the track (AX is the CDE_* on a refusal)
+    xchg ax, bx                 ; BL = the track: cd_media keeps BX, and AX is
+    call cd_media               ; the CDE_* on a refusal
     jc .out
     mov al, bl
     cmp al, [cd_first]
     jb .arg
     cmp al, [cd_last]
     ja .arg
-    push si
-    call cd_tdesc
+    call cd_tdesc               ; (SI is an output: nothing to keep)
     mov bl, [si+1]
-    pop si
     and bl, 0x0F
     xor bh, bh
     mov si, bx                  ; SI = the control nibble
@@ -113,8 +108,8 @@ cd_v_track:
     push dx
     sub cx, ax
     sbb bx, dx
-    mov ax, cx
-    mov dx, bx
+    xchg ax, cx                 ; DX:AX = the length (CX and BX are spent:
+    xchg dx, bx                 ; CX is the answer, BX the frame's)
     call cd_secs
     mov cx, ax
     pop dx
@@ -141,11 +136,8 @@ cd_v_play:
     push cx
     push si
     push di
-    push ax
-    push cx
-    call cd_media
-    pop cx
-    pop bx                      ; BL = first, BH = last
+    xchg ax, bx                 ; BL = first, BH = last: cd_media keeps BX
+    call cd_media               ; and CX
     jc .out
     mov al, bl
     call cd_isaudio
@@ -167,10 +159,10 @@ cd_v_play:
     jnc .scan
 .endat:
     dec al                      ; the last track played...
-    call cd_tend                ; ...and where it ends
-    mov [cd_tmp2], ax           ; the end LBA
-    mov [cd_tmp2+2], dx
-    mov al, bl
+    call cd_tend                ; ...and where it ends: BP:SI, the end LBA.
+    xchg si, ax                 ; BP and not memory, because the door saves
+    mov bp, dx                  ; BP round every verb (drv_pkg_call_x) and
+    mov al, bl                  ; cd_pkg spends it on the dispatch anyway
     call cd_tstart              ; the start, plus CX seconds
     push ax
     push dx
@@ -180,22 +172,18 @@ cd_v_play:
     pop bx
     add ax, bx
     adc dx, cx
-    cmp dx, [cd_tmp2+2]         ; never at or past the end
+    cmp dx, bp                  ; never at or past the end
     jb .startok
     ja .arg
-    cmp ax, [cd_tmp2]
+    cmp ax, si
     jae .arg
 .startok:
-    push ax
-    push dx
-    call cd_pclear
+    call cd_pclear              ; (it keeps AX, and DX)
     mov byte [di], 0x47         ; PLAY AUDIO MSF
-    pop dx
-    pop ax
     add di, 3
     call cd_msf                 ; bytes 3-5: the start
-    mov ax, [cd_tmp2]
-    mov dx, [cd_tmp2+2]
+    xchg ax, si
+    mov dx, bp
     sub ax, 1                   ; the end MSF is INCLUSIVE: the last frame
     sbb dx, 0
     add di, 3
@@ -213,29 +201,13 @@ cd_v_play:
     ret
 
 ; cd_msf - DX:AX = an LBA -> [DI] = M, S, F (MSF counts the 150-frame
-;          lead-in). clobbers: AX, DX
+;          lead-in, which cd_mcore adds between its two clamps).
+;          clobbers: AX, CX, DX
 cd_msf:
-    push cx
-    or dx, dx                   ; a negative address is the disc's start, and
-    jns .pos                    ; one past 74 hours does not exist: either
-    xor ax, ax                  ; would overflow the divide below (INT 0)
-    xor dx, dx
-.pos:
-    cmp dx, 4500
-    jb .ok
-    mov dx, 4499
-.ok:
-    add ax, 150
-    adc dx, 0
-    mov cx, 4500
-    div cx                      ; AX = minutes, DX = the frames left
-    mov [di], al
-    mov ax, dx
-    mov cl, 75
-    div cl                      ; AL = seconds, AH = frames
-    mov [di+1], al
-    mov [di+2], ah
-    pop cx
+    mov cx, 150
+    call cd_mcore
+    mov [di], cl                ; M...
+    mov [di+1], ax              ; ...then S and F, AL and AH
     ret
 
 ; --- CDV_PAUSE / CDV_RESUME: PAUSE/RESUME (4Bh), byte 8 bit 0 = resume --------
@@ -247,9 +219,7 @@ cd_v_resume:
 cd_pausebit:
     push di
     push cx
-    push ax
-    call cd_pclear
-    pop ax
+    call cd_pclear              ; (it keeps AL)
     mov byte [di], 0x4B
     mov [di+8], al
     call cd_cmd
@@ -268,12 +238,13 @@ cd_v_stop:
     pop di
     jnc .out
     cmp ax, CDE_NOAUDIO
-    jne .fail                   ; an empty drive is not a reason to pause
-    jmp short cd_v_pause        ; MMC-1 drives: a pause is a stop
-.fail:
-    stc
-.out:
-    ret
+    je cd_v_pause               ; MMC-1 drives: a pause is a stop
+.out:                           ; ...and an empty drive is not a reason to
+    ret                         ; pause: CF = 1 still, every other CDE_* being
+                                ; below CDE_NOAUDIO
+%if CDE_NOAUDIO < CDE_NODISC || CDE_NOAUDIO < CDE_NOTREADY || CDE_NOAUDIO < CDE_IO || CDE_NOAUDIO < CDE_ARG
+  %error "cdrom: cd_v_stop's refusal keeps the compare's borrow, so CDE_NOAUDIO is the largest CDE_*"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; CDV_STATUS - READ SUB-CHANNEL (42h), current position (SPEC.md 119.4)
@@ -285,8 +256,7 @@ cd_v_status:
     push di
     call cd_pclear
     mov byte [di], 0x42
-    mov byte [di+2], 0x40       ; SubQ
-    mov byte [di+3], 1          ; format 1: the current position
+    mov word [di+2], 0x0140     ; SubQ (40h), and format 1: the position
     mov byte [di+8], 16         ; allocation length
     mov si, cd_abuf
     mov cx, 16
@@ -301,27 +271,21 @@ cd_v_status:
     jmp short .out
 .full:
     mov si, cd_abuf + 12        ; the track-relative address: negative in a
-    call cd_be32                ; pregap, which shows as 0
-    or dx, dx
-    jns .rel
-    xor ax, ax
-    xor dx, dx
-.rel:
-    call cd_secs
+    call cd_be32                ; pregap, which shows as 0 - cd_secs's own
+    call cd_secs                ; clamp, which the 0 it used to be set to
+                                ; came out of anyway
     mov cx, ax
     mov si, cd_abuf + 8         ; the absolute address
     call cd_be32
     call cd_secs
     mov dx, ax
-    mov bl, [cd_abuf+1]         ; the audio status, 11h..15h
-    xor al, al                  ; CDS_IDLE for 15h and anything unknown
-    cmp bl, 0x11
-    jb .st
-    cmp bl, 0x14
-    ja .st
-    mov al, bl
-    sub al, 0x10                ; 11h playing .. 14h error = 1 .. 4
+    mov al, [cd_abuf+1]         ; the audio status, 11h..15h:
+    sub al, 0x11                ; 11h playing .. 14h error = 0 .. 3 here,
+    cmp al, 4                   ; then 1 .. 4 - and CDS_IDLE for 15h and
+    jb .st                      ; anything unknown, through 0FFh
+    mov al, 0xFF
 .st:
+    inc ax                      ; (AH is written next)
     mov ah, [cd_abuf+6]
     mov bl, [cd_gen]
     xor bh, bh
@@ -374,16 +338,14 @@ cd_v_volume:
     pop bx                      ; BL = get / set
     jc .out
     or bl, bl
-    jz .get
-    mov si, [cd_vpage]
+    jz .get                     ; SI = the page, out of cd_vsense
     mov [si+9], cl              ; port 0's volume...
     mov [si+11], ch             ; ...and port 1's
     and byte [si], 0x3F         ; PS is not ours to send back
     mov word [cd_abuf], 0       ; the mode data length is reserved in SELECT
     call cd_pclear
-    mov byte [di], 0x55         ; MODE SELECT (10), PF
-    mov byte [di+1], 0x10
-    mov cx, [cd_vpage]          ; what goes back: the header, the descriptor
+    mov word [di], 0x1055       ; MODE SELECT (10), and PF
+    mov cx, si                  ; what goes back: the header, the descriptor
     sub cx, cd_abuf - 16        ; if any, and the page - as it came
     mov [di+8], cl
     mov si, cd_abuf
@@ -393,8 +355,7 @@ cd_v_volume:
     jc .out
     call cd_vsense              ; ...and what it holds now
     jc .out
-.get:
-    mov si, [cd_vpage]
+.get:                           ; SI = the page, out of either cd_vsense
     mov cl, [si+9]
     mov ch, [si+11]
     clc
@@ -404,8 +365,9 @@ cd_v_volume:
     pop bx
     ret
 
-; cd_vsense - MODE SENSE (10), page 0Eh, into cd_abuf; [cd_vpage] = the page
-;             (past the header and any block descriptor). clobbers: AX, CX, SI, DI
+; cd_vsense - MODE SENSE (10), page 0Eh, into cd_abuf; out CF = 0 and SI =
+;             the page (past the header and any block descriptor).
+;             clobbers: AX, CX, SI, DI
 cd_vsense:
     call cd_pclear
     mov byte [di], 0x5A         ; MODE SENSE (10)
@@ -421,12 +383,10 @@ cd_vsense:
     cmp ax, 8
     ja .short                   ; more than one descriptor: not one we follow
     add ax, cd_abuf + 8
-    mov [cd_vpage], ax
-    add ax, 12                  ; the page must have arrived
-    sub ax, cd_abuf
+    mov si, ax
+    sub ax, cd_abuf - 12        ; the page must have arrived: 12 bytes of it
     cmp ax, [cd_xgot]
     ja .short
-    mov si, [cd_vpage]
     mov al, [si]
     and al, 0x3F
     cmp al, 0x0E
