@@ -1075,10 +1075,22 @@ wa_collide:
 ; wa_flcross - CF = 1 when the player's step from (wa_ox, wa_oy) to (wa_px,
 ; wa_py) crosses one of the arena's FLOOR LINES (docs/plans/completed/WIREARENA-
 ; ARENAS-PLAN.md 4.5): a line the feet stop at, as the twin's walk's edge.
-; A line is near only when the new point is within 16 units of its box (a
-; step is under 11); then the step's ends lie either side of the line, and
-; the line's ends either side of the step (or on it) - two cross products
-; each, 32 bits. Keeps CX, DI, BP; clobbers AX, BX, DX, SI.
+; A line is near only when its box and the step's meet (touching counts):
+; then the step's ends lie either side of the line, and the line's ends
+; either side of the step (or on it) - two cross products each, 32 bits,
+; exact. Those two say the closed segments meet, so a crossing is inside
+; both boxes: the boxes' test drops no line the products would stop at. (It
+; was the new point within 16 of the line's box, which a step - under 15 an
+; axis - also never left; the boxes are tighter, along a line the feet run
+; beside.) Keeps CX, DI, BP; clobbers AX, BX, DX, SI.
+;
+; THE GRID (wa_flg, wa_flgmk): the twin's 16 lines were walked twice a
+; walking tick, a quarter of its tick; the new point's 128-unit cell names
+; the lines whose box widened by 16 reaches into it (four at most:
+; arenagen's), and a cell with none - most of the room - costs the cell's
+; look alone.
+WA_FLGC     equ 4               ; a cell: its lines' offsets in wa_fl, 0FFh
+                                ; after the last (none past the fourth)
 wa_flcross:
     cmp word [wa_nfl], 0
     jne .on
@@ -1088,35 +1100,67 @@ wa_flcross:
     push cx
     push di
     push bp
-    mov si, wa_fl
-    mov cx, [wa_nfl]
+    mov di, [wa_py]             ; THE CELL, as wa_floor's: its row x 64 is
+    cmp di, WA_ROOM_Y1          ; y's bits 7..10 a place down...
+    jae .yout
+    shr di, 1
+    and di, 0x03C0
+.yc:
+    mov ax, [wa_px]             ; ...and its column x 4 x's 7..10 five
+    cmp ax, WA_ROOM_X1          ; places down; beyond the room the edge's
+    jae .xout                   ; cells (wa_flgmk's clamp)
+    mov cl, 5
+    shr ax, cl
+    and al, 0x3C
+.xc:
+    add di, ax
+    add di, wa_flg              ; DI = the cell
+    cmp byte [di], 0xFF         ; (none near it: the usual step)
+    je .none
+    mov ax, [wa_ox]             ; THE STEP'S BOX, for each line's test
+    mov dx, [wa_px]
+    cmp ax, dx
+    jle .sx
+    xchg ax, dx
+.sx:
+    mov [wa_fsb], ax
+    mov [wa_fsb+2], dx
+    mov ax, [wa_oy]
+    mov dx, [wa_py]
+    cmp ax, dx
+    jle .sy
+    xchg ax, dx
+.sy:
+    mov [wa_fsb+4], ax
+    mov [wa_fsb+6], dx
+    mov cx, WA_FLGC
+.cell:
+    mov bl, [di]
+    cmp bl, 0xFF
+    je .none
+    xor bh, bh
+    lea si, [wa_fl+bx]          ; SI = a line near the cell
 .seg:
-    mov ax, [si]                ; NEAR: the new point and the line's box
+    mov ax, [si]                ; NEAR: the line's box and the step's
     mov dx, [si+4]
     cmp ax, dx
     jle .x
     xchg ax, dx
 .x:
-    mov bx, [wa_px]
-    sub ax, 16
-    cmp bx, ax
-    jl .next
-    add dx, 16
-    cmp bx, dx
+    cmp ax, [wa_fsb+2]
     jg .next
+    cmp dx, [wa_fsb]
+    jl .next
     mov ax, [si+2]
     mov dx, [si+6]
     cmp ax, dx
     jle .y
     xchg ax, dx
 .y:
-    mov bx, [wa_py]
-    sub ax, 16
-    cmp bx, ax
-    jl .next
-    add dx, 16
-    cmp bx, dx
+    cmp ax, [wa_fsb+6]
     jg .next
+    cmp dx, [wa_fsb+4]
+    jl .next
     mov ax, [wa_ox]             ; THE STEP'S ENDS either side of the line
     mov bx, [wa_oy]             ; (a point on it counts with the side its
     call .side                  ; sign bit is clear on)
@@ -1141,8 +1185,11 @@ wa_flcross:
     xor dx, bp
     js .hit
 .next:
-    add si, 8
-    loop .seg
+    inc di
+    dec cx                      ; (no LOOP: the cell is out of its reach)
+    jz .none
+    jmp .cell
+.none:
     clc
     jmp short .out
 .hit:
@@ -1152,6 +1199,18 @@ wa_flcross:
     pop di
     pop cx
     ret
+.yout:
+    or di, di
+    mov di, 0x03C0
+    jns .yc
+    xor di, di
+    jmp .yc
+.xout:
+    or ax, ax
+    mov ax, 0x003C
+    jns .xc
+    xor ax, ax
+    jmp .xc
 .side:                          ; AX, BX = a point: DX:AX = (x1 - x0)(y -
     sub ax, [si]                ; y0) - (y1 - y0)(x - x0)
     sub bx, [si+2]
@@ -1488,6 +1547,87 @@ wa_lists:
     mov cl, 7
     shr ax, cl
     pop cx
+    ret
+
+; wa_flgmk - once an arena is loaded: wa_flg, wa_flcross's grid - for each
+; 128-unit cell the floor lines (their offsets in wa_fl, in order) whose box
+; widened by 16 reaches into it, so a point inside the widened box is in
+; one of its cells (wa_lists' clamp: the edge's cells take beyond the room)
+wa_flgmk:
+    push es
+    push ds
+    pop es
+    mov di, wa_flg
+    mov ax, 0xFFFF
+    mov cx, 256*WA_FLGC/2
+    cld
+    rep stosw
+    pop es
+    mov cx, [wa_nfl]
+    jcxz .out
+    mov si, wa_fl
+.l:
+    push cx
+    mov ax, [si]                ; its columns...
+    mov dx, [si+4]
+    call .rng
+    mov cx, ax
+    mov ax, [si+2]              ; ...and rows
+    mov dx, [si+6]
+    call .rng
+    xchg ax, bx                 ; BL = the first row, BH the last
+.row:                           ; (CL = the first column, CH the last)
+    mov al, 64
+    mul bl
+    add ax, wa_flg
+    xchg ax, di                 ; DI = the row's first cell
+    mov dl, cl                  ; DL = the column
+.c:
+    mov al, dl
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    push di
+    add di, ax                  ; DI = the cell
+    mov ah, WA_FLGC
+.slot:
+    cmp byte [di], 0xFF
+    je .put
+    inc di
+    dec ah
+    jnz .slot
+    jmp short .full             ; (arenagen refuses a fifth)
+.put:
+    mov ax, si
+    sub ax, wa_fl
+    mov [di], al
+.full:
+    pop di
+    inc dl
+    cmp dl, ch
+    jbe .c
+    inc bl
+    cmp bl, bh
+    jbe .row
+    pop cx
+    add si, 8
+    loop .l
+.out:
+    ret
+.rng:                           ; AX, DX = a line's two ends on an axis:
+    cmp ax, dx                  ; AL = the first cell of its widened
+    jle .r                      ; extent, AH = the last
+    xchg ax, dx
+.r:
+    sub ax, 16
+    call wa_lists.cc
+    push ax
+    xchg ax, dx
+    add ax, 16
+    call wa_lists.cc
+    pop dx
+    mov ah, al
+    mov al, dl
     ret
 
 ; wa_hat - SI = a box (wa_boxes), DI = its record, the square overlapping it
@@ -6868,6 +7008,7 @@ wa_loadarena:
     mov [wa_nbox8], ax
     call wa_lists               ; the boxes the floor and the walls read
     call wa_pkgridmk            ; ...and the cells its pickups reach
+    call wa_flgmk               ; ...and its floor lines near
     pop ax                      ; ITS ROUTE GRAPH (AI-PLAN 3.1), straight
     push ax                     ; out of the part: descriptor words 38
     call op_seg                 ; and 40, its offset and bytes
@@ -7284,6 +7425,8 @@ WA_VAR wa_spc,WA_SPMAX*2         ;   many, their offsets and their glyphs
 WA_VAR wa_spg,WA_SPMAX*2
 WA_VAR wa_pkt,WA_MPK*2           ; a taken pickup's ticks to its return
 WA_VAR wa_pkgrid,256             ; the pickups in reach of each 128-unit cell
+WA_VAR wa_flg,256*WA_FLGC        ; the floor lines near each (wa_flgmk)
+WA_VAR wa_fsb,8                  ; wa_flcross: the step's box
 WA_VAR wa_rkg,WA_NRK*WA_RKGSZ    ; the rockets' fractions, velocity, life
 WA_VAR wa_rkcp,1                 ; a rocket was live at the last copy
 WA_VAR wa_rkn,1                  ; rockets live (flying or exploding)
