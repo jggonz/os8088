@@ -86,21 +86,22 @@
 ; claims mem_bytes_gp_x of the unpacked file, so image + bss of 1,568 bytes
 ; held 2,048 of every 286+ machine's heap for the session, and 1,014 held
 ; 1,024 - until the HMA's loader, LOADALL and the two walks took the image to
-; 2,239 and the claim to 3,072. It is 2,041 now, back inside 2,048 (SPEC.md
+; 2,239 and the claim to 3,072. It is 2,015 now, back inside 2,048 (SPEC.md
 ; 41.12.6): the HMA's walk is the tail's, the LOADALL save shares the AH=87h
-; block, and la_borrow is one walk of SI. Seven bytes are left; a byte spent
-; here is a byte of a 512-byte granule on every 286 and 386. Two things in the
-; image are shaped by that, beyond plain tightening:
+; block, and la_borrow is one walk of SI (2,041), and driver size pass 1 took
+; 22 more. 33 bytes are left; a byte spent here is a byte of a 512-byte
+; granule on every 286 and 386. Two things in the image are shaped by that,
+; beyond plain tightening:
 ;
 ;   - THE SCRATCH LIVES ON TOP OF THE ATTACH-ONLY CODE (xm_once, at the foot
 ;     of the file). The block table, the AH=87h descriptor block (which the
 ;     LOADALL save shares), the copy's two ends, the pool's size and base and
 ;     the LOADALL state are 208 bytes nothing reads before attach has
 ;     finished, and the gate's enable call with its AH=88h question, the HMA
-;     loader and the unreal arm are 225 bytes nothing runs after it (the gate
+;     loader and the unreal arm are 207 bytes nothing runs after it (the gate
 ;     and its probe are resident: xm_bios re-opens A20 after every AH=87h) -
 ;     so the image is the resident code plus the larger of the two, and today
-;     that is the code.
+;     that is the scratch, by one byte (driver size pass 1: the code was 221).
 ;     xm_attach zeroes the one over the other as its LAST step - from code
 ;     outside the region - and refuses to run twice on one image
 ;     ([xm_feat]'s CPU_F_A20, which only a verified gate sets and nothing
@@ -1251,6 +1252,7 @@ xm_ltrip:
 ; one leg: BX = our end's offset, SI = 0 up / 1 down. AH=87h when (up) is
 ; (the pattern is XM_LPAT), LOADALL otherwise. Clobbers AX, CX, DI
 .leg:
+    push si                         ; (the transport's choice flips it)
     push dx
     mov ax, ds
     call la_lin
@@ -1280,12 +1282,7 @@ xm_ltrip:
 .la:
     call xm_lcopy                   ; (cannot fail)
 .done:
-    pushf
-    cmp dx, XM_LPAT
-    je .keep
-    xor si, 1
-.keep:
-    popf
+    pop si                          ; (pop keeps the transport's CF)
     ret
 
 %define LA_NOPROBE                  ; xm_lainit's INT 6 hook is the probe
@@ -1601,7 +1598,9 @@ xm_a20_enable:
 ; xm_hma - put the kernel's `.cold` in the HMA (docs/plans/HMA-PLAN.md)
 ;
 ; in:       [xm_feat] as attach has it so far; DS = this image
-; out:      nothing; every register but the flags preserved
+; out:      nothing; BX, DX and the segment registers preserved, which are
+;           what xm_attach holds across it (AX, CX and SI it spends: none is
+;           live there, the scratch's zeroing being next)
 ;
 ; The HMA is this image's to give (SPEC.md 41.3), and the first claimant the
 ; header always expected is the kernel's own `.cold`. The work is not here: it
@@ -1619,15 +1618,12 @@ XM_HMAF_KB      equ 4           ; COLDHMA.SYS's scratch claim: the file is ~2.9K
 xm_hma:
     test byte [xm_feat], CPU_F_HMA
     jz .out                     ; no HMA claimed: nothing to put there
-    push ax
     push bx
-    push cx
     push dx
-    push si
     push es
     mov ax, XM_HMAF_KB * 64     ; (paragraphs)
                                 ; no head
-    mov bl, MEMP_CLAIM          ; (BX, CX banked above)
+    mov bl, MEMP_CLAIM          ; (BX banked above; CX is no input)
     call OSAPI_MEM_P            ; owned by our segment, and freed below
     jc .done
     push dx
@@ -1647,11 +1643,13 @@ xm_hma:
     shr ax, cl
     mov dx, es
     sub dx, ax                  ; CS = the claim less that, in paragraphs
-    mov [xm_hma_fp+2], dx
-    mov ax, [es:24]             ; ...and its entry
-    mov [xm_hma_fp], ax
-    call far [xm_hma_fp]        ; CF is its answer, and every register is
-    jc .free                    ; kept: ES is still the file. INSTALLED: bank
+    push dx
+    push word [es:24]           ; ...and its entry: the far pointer, on the
+    mov si, sp                  ; stack, where a dword in the image was
+    call far [ss:si]            ; CF is its answer, and every register is
+    pop cx                      ; kept: ES is still the file (pops keep CF)
+    pop cx
+    jc .free                    ; INSTALLED: bank
     mov ax, [es:28]             ; the door the copy runs at, so the walk can
     mov [xm_hdoor], ax          ; name the HMA's contents (SPEC.md 28.4.13)
 .free:
@@ -1659,21 +1657,17 @@ xm_hma:
     call OSAPI_MEM_FREE
 .done:
     pop es
-    pop si
     pop dx
-    pop cx
     pop bx
-    pop ax
 .out:
     ret
-xm_hma_fp:      dd 0
 xm_hma_name:    db 'COLDHMA.SYS', 0
 ; -----------------------------------------------------------------------------
 ; xm_arm - enter unreal mode: give FS and GS a 4GB limit (SPEC.md 41.4)
 ;
 ; out:      FS and GS cached with a base-0, limit-4GB data descriptor;
 ;           CPU_F_UNREAL set
-; clobbers: the high half of EAX (flags)
+; clobbers: EAX (flags) - xm_attach holds nothing in AX across it
 ;
 ; TIER 2 ONLY, and it is the CALLER that tests: xm_attach reaches it from
 ; behind a compare of [xm_tier] with CPU_386, which is SPEC.md 41.9 rule 2's
@@ -1710,7 +1704,6 @@ xm_hma_name:    db 'COLDHMA.SYS', 0
 ; sequence is the hidden descriptor caches of FS and GS.
 ; -----------------------------------------------------------------------------
 xm_arm:
-    push ax
     pushf
     cli                         ; --- the transition window ----------------
     mov al, 0x80
@@ -1744,7 +1737,6 @@ cpu 8086                        ; ---- island closed -----------------------
     in  al, 0x71
     popf                        ; --- window closed ------------------------
     or byte [xm_feat], CPU_F_UNREAL
-    pop ax
     ret
 
 xm_gdt:                         ; entry 0, the null descriptor, which the CPU

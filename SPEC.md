@@ -87248,6 +87248,15 @@ round: unicorn starts with MSW, IDTR and GDTR all ZERO, so a field the
 borrow never wrote read back equal to the reference. It seeds them now, and
 an IDT left unwritten fails it.
 
+**Driver size pass 1 (2026-11-15): 2,037 -> 2,015 bytes of image** (1,878 ->
+1,864 on the disk), no behaviour change: `xm_hma` banks only BX, DX and ES,
+the ones `xm_attach` holds across it, and far-calls COLDHMA.SYS through a
+pointer pushed on the stack rather than a dword in the image; `xm_arm` keeps
+no AX nobody reads; `xm_ltrip`'s leg banks SI rather than flipping it back.
+The region's code went 221 -> 207 bytes against the 208-byte scratch, so the
+SCRATCH is the bound now, by one byte, and the next byte of attach-only code
+taken out of the region buys nothing.
+
 ### 41.13 Tier 1 copies by LOADALL (2026-10-15)
 
 **On a 286, `XMV_COPY` moves its bytes with the 286's LOADALL instead of
