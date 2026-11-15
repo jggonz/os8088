@@ -90,10 +90,26 @@ def main():
 
         ox, oy = wa.x + 1, wa.y + 18
         dr = sym['wa_sdr_a']
+
+        def under(x0, y0, x1, y1):
+            W, H, d = m.fbuf()
+            return [d[(y * W + x0) * 3:(y * W + x1) * 3]
+                    for y in range(y0, y1)]
+        # (the list's place: under the Arena box, the box's width)
+        lrect = (ox + 57, oy + 14 + 18, ox + 182, oy + 14 + 60)
+        closed = under(*lrect)
         ui.mo.click(ox + 120, oy + 14 + 8)
         os88marty.until(m, lambda _: p.byte(dr + 16) == 1,
                         'the Arena list open', guest=5)
         check(p.byte(dr + 16) == 1, 'A DROP-DOWN: a click drops its list')
+        ui.settle()
+        rows = sum(a != b for a, b in zip(under(*lrect), closed))
+        check(p.byte(dr + 16) == 1 and rows >= 30,
+              'A DROP-DOWN: the list still OPEN and ON THE GLASS once the '
+              'window settles (%d of %d rows changed under the box; the CTF '
+              'focus mapping\'s compare once set drpress\'s CF and the list '
+              'was painted over at once, its record left open)'
+              % (rows, len(closed)))
         ui.mo.click(ox + 300, oy + 120)
         os88marty.until(m, lambda _: p.byte(dr + 16) == 0,
                         'the Arena list down', guest=5)
