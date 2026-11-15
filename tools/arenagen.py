@@ -496,7 +496,69 @@ def graph_block(tag, boxes):
     out += struct.pack('<H', len(fl))   # count, 0 or 2 - red's, blue's -
     for (x, y, n) in fl:                # then each one's place and route node
         out += struct.pack('<hhBB', x, y, n, 0)
+    out += minimap(tag, boxes)          # THE MINIMAP last (the Tab screen)
     return bytes(out)
+
+
+# THE MINIMAP (the Tab screen, WIREARENA-NET-PLAN 9.7): the arena's floor
+# plan as MM_W x MM_H samples over the room, north (+y) at the top, each one
+# of four kinds - 0 off the walk (beyond a floor line), 1 floor, 2 a low box
+# or a floor up high (a top a player stands on: a platform, a lift, a
+# climbed tower), 3 a wall (a box at the arena's tallest, or a LINE). Packed
+# for the 80-column screen's cells: a cell is two samples, one over the
+# other (its top half-block and its bottom), in a nibble - top in bits 0-1,
+# bottom in 2-3 - and a byte is two cells side by side, the left in the low
+# nibble. So a byte is also exactly one 40-column cell's two columns, which
+# the game takes the larger kind of (a wall wins).
+MM_W, MM_H = 32, 26                     # samples: 64 x ~79 units each
+MM_KINDS = (0, 1, 2, 3)
+
+
+def minimap(tag, boxes):
+    """-> MM_H/2 rows of MM_W/2 bytes: the arena's floor plan, as above"""
+    bxs = list(map(bx, boxes))
+    top = hmax(bxs)
+
+    def kind(b):
+        if b.kind == LINE or (b.h >= top and not climbed(b, bxs)):
+            return 3
+        return 2
+    sw = (ROOM[2] - ROOM[0]) / MM_W
+    sh = (ROOM[3] - ROOM[1]) / MM_H
+    grid = [[0] * MM_W for _ in range(MM_H)]
+    for r in range(MM_H):                       # r 0 is the north edge
+        y0 = ROOM[3] - (r + 1) * sh
+        for c in range(MM_W):
+            x0 = ROOM[0] + c * sw
+            k = 1 if in_walk(tag, x0 + sw / 2, y0 + sh / 2) else 0
+            for b in bxs:                       # a box marks a sample it
+                ox = min(b[2], x0 + sw) - max(b[0], x0)     # covers half of
+                oy = min(b[3], y0 + sh) - max(b[1], y0)     # - or half of
+                if ox >= min(b[2] - b[0], sw) / 2 and \
+                        oy >= min(b[3] - b[1], sh) / 2:      # the box, a thin
+                    k = max(k, kind(b))                     # one
+            grid[r][c] = k
+    out = bytearray()
+    for r in range(0, MM_H, 2):
+        for c in range(0, MM_W, 2):
+            lo = grid[r][c] | grid[r + 1][c] << 2
+            hi = grid[r][c + 1] | grid[r + 1][c + 1] << 2
+            out.append(lo | hi << 4)
+    return bytes(out)
+
+
+def minimap_text(tag, boxes):
+    """the minimap as text, for a look on the host: . floor, : low, # wall"""
+    m = minimap(tag, boxes)
+    rows = []
+    for r in range(MM_H):
+        line = ""
+        for c in range(MM_W):
+            b = m[(r // 2) * (MM_W // 2) + c // 2]
+            n = (b >> 4) if c & 1 else b & 15
+            line += " .:#"[(n >> 2) & 3 if r & 1 else n & 3]
+        rows.append(line)
+    return "\n".join(rows)
 
 
 # THE MODES an arena plays (WIREARENA-MODES-PLAN 1, 6), a bit each by the
@@ -2021,6 +2083,8 @@ def main(out):
     # (graph_block): the most bytes any takes, which the game keeps room for
     w("WA_GPHSZ equ %d" % ((max(len(graph_block(t, bs)) for t, _, bs, _
                                 in arenas()) + 1) & ~1))
+    w("WA_MMW equ %d" % MM_W)            # (the minimap's samples, and
+    w("WA_MMH equ %d" % MM_H)            # the rows it takes: MM_H / 2)
     w("WA_MGN equ %d" % WA_MGN)
     w("%%assign WA_MSTK %d" % WA_MSTK)    # (a stack's boxes: wl_child's saves)
     w("WA_FLR equ %d" % WA_FLR)           # (a flag's reach: CTF-PLAN 2)
