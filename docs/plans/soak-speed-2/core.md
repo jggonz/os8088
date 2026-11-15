@@ -19,14 +19,16 @@ techniques are cited as "SOAK-SPEED n".
      port and lets go: ~0.1 s for what was a 15-30 guest-second boot plus the
      emulator start (and a reflink copy of each floppy).
    - The KEY: machine, sha1 of both floppies (after `$OS88_BUILD`), the
-     emulator binary and its `configs/` and `media/roms/` (path, size,
+     emulator binary (`$OS88_MARTY_BIN` when set) and its `configs/` and
+     `media/roms/` (path, size,
      mtime), the gate card, the saver choice. Not cached (`eligible` says why
      and the row boots fresh): any `launch` keyword but `label`/`timeout`
      (`extra`, `rom`, `run_dir`, `addr`, `detach`, a `boot=` number),
      `$OS88_ROM`, `$MARTYPC_WAV`, `$OS88_MEGA`, a non-Marty
      emulator, and a machine whose name says it has a disk or device that is
-     written THROUGH rather than held in RAM, or a device writing a host file (`hdd`, `ide`, PicoMEM, NIC, `lpt`) - a
-     fork does not roll a VHD back.
+     written THROUGH rather than held in RAM, or a device writing a host
+     file (`hdd`, `ide`, PicoMEM, NIC, `lpt`) - a fork does not roll a VHD
+     back.
    - THE DISKS. A floppy is RAM in MartyPC (nothing writes one back but
      `flush`), so each restore starts from the snapshot's sectors and writes
      privately. The server's default flush path is the REGISTRY's run tree,
