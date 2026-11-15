@@ -3185,10 +3185,20 @@ wa_eoff:
 %%shut:
     cmp si, [wa_end]
     jae %%done
-%if %1
+%if %3 == 0
+  %if %1                        ; (a run of them, at once: wa_frun)
+    call wa_frun1
+  %else
+    call wa_frun2
+  %endif
+    jc %%gone
+    jmp %%col
+%else
+  %if %1
     inc word [wa_ncl]
-%endif
+  %endif
     jmp %%adv
+%endif
 %%off0:                         ; off the screen at the first column: and
     jcxz %%gone                 ; level, or moving further off (above it
     xor bx, [%2]                ; and going up, or under it and down)?
@@ -3241,6 +3251,96 @@ wa_fp:      FLATPASS 0, wa_db
 wa_foc:     FLATPASS 1, wa_dt, 1    ; (heights: against the column's clip)
 wa_fpc:     FLATPASS 0, wa_db, 1
 wa_ptab:    dw wa_fo, wa_fp, wa_foc, wa_fpc ; (by wa_fclp)
+
+; wa_frun1, wa_frun2 - a plain FLATPASS's RUN OF SHUT COLUMNS, pass 1's and
+; pass 2's, jumped at once as wa_gap jumps SPANLOOP's: one scan to the next
+; column the pass draws in (an open one in pass 1, one of the span's in pass
+; 2) or the end, and the fraction moved on by the run's k steps in one
+; multiply, its carries the half-rows the edge moved. A nearer box hides
+; ~7 columns at a time, each a turn of the pass's shut way (~180 clk in
+; pass 1, ~110 in pass 2). In: SI = the run's first column (not the end), BP,
+; CX, AX, DX, DI as the pass holds them. Out: CF = 0 - SI the column after
+; the run, BX and AL its cell and glyph, BP and [wa_fh] moved on, the run
+; counted into wa_ncl (pass 1); CF = 1 - the edge left the screen within the
+; run, [wa_fh] its first half-row off it (as a column at a time leaves it)
+; and SI still the run's first (pass 1's wa_openrest counts the run).
+; Keeps CX, DX, DI and AH.
+wa_frun1:
+    push ax
+    push cx
+    push dx
+    push di
+    xor ax, ax                  ; (on to an open column)
+    mov bx, wa_dt               ; BX = the edge's direction
+    jmp short wa_frun
+wa_frun2:
+    push ax
+    push cx
+    push dx
+    push di
+    mov al, dh                  ; (on to one of the span's)
+    xor ah, ah
+    mov bx, wa_db
+wa_frun:
+    mov [wa_fst], cx            ; (the step: a plain pass's own use of it)
+    lea di, [si+wa_cov+2]
+    mov cx, [wa_end]
+    sub cx, si
+    shr cx, 1
+    dec cx                      ; the columns between this one and the end
+    jz .rend
+    repne scasw
+    jne .rend
+    lea cx, [di-2-wa_cov]
+    jmp short .rhave
+.rend:
+    mov cx, [wa_end]            ; (none: the run reaches the end)
+.rhave:
+    sub cx, si
+    mov di, cx                  ; DI = the run x 2
+    shr cx, 1                   ; CX = k
+    mov ax, cx
+    mul word [wa_fst]
+    add bp, ax
+    adc dx, 0                   ; DX = the carries
+    jz .rsame
+    cmp word [bx], 0
+    jg .rdn
+    neg dx
+.rdn:
+    add dx, [wa_fh]
+    cmp dx, WA_HR
+    jae .roff
+    mov [wa_fh], dx
+.rsame:
+    cmp bx, wa_dt
+    jne .r2
+    add [wa_ncl], cx
+.r2:
+    add si, di                  ; SI = the column after the run
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    mov bx, [wa_fh]             ; (wa_fcell, inline)
+    mov al, [wa_hgl+bx]
+    shl bx, 1
+    mov bx, [wa_hroff+bx]
+    add bx, si                  ; (CF = 0)
+    ret
+.roff:
+    mov dx, WA_HR
+    cmp word [bx], 0
+    jg .ro1
+    mov dx, -1
+.ro1:
+    mov [wa_fh], dx
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
 
 ; wa_fcell - [wa_fh] in the column SI: AL = its glyph, BX = its cell, CF = 0;
 ; CF = 1 off the screen
