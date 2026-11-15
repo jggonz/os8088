@@ -8833,7 +8833,9 @@ SOAK = [
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
         "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
-        "PLAN 9.4). With the focus in the nick, the Arena list drops over "
+        "PLAN 9.4). Alone, the drop-downs centred between row 0 and the "
+        "bottom row (Nick, Play, Keys, 4 from the bottom). "
+        "With the focus in the nick, the Arena list drops over "
         "it as over nothing, and once it goes the window is pixel-identical "
         "to the start - no caret left (red with the pass drawing while a "
         "list is down: the field drawn back over the list, its caret "
