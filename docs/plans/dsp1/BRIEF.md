@@ -167,6 +167,33 @@ the owner.
 **Ownership is by directory.** Anything you see in another agent's
 directory, or in a shared file, goes in CROSS-FILE with its bytes.
 
+**An eighth agent, `kmod`**, was added after `hdd` finished. It covers the
+kernel's ON-DEMAND MODULES, which also ship as `.DRV` files on the system
+disk but are cut out of the kernel build by `tools/os88mod.py` (SPEC.md 2.8).
+
+* **Modules and sizes.** On kern_big: CTRL 15,459 (shipped plain), DISKOPS
+  10,216, STIKMENU 7,926, HIBER 7,715, FSCHECK 6,298, DESK 4,432, FORMAT
+  3,179, DOCK 2,232, EXTD 1,927, WIN95 1,570 and SERIAL 919. On kern_small:
+  CTRL, FORMAT, DISKOPS, FILECP, FDLG and SERIAL.
+* **What it owns.** The module-only code in `kernel/`. Its rule is section
+  2.1 below, not section 1's directory fence.
+
+### 2.1 `kmod`'s rules
+
+* You own the code that assembles INTO a module image and nowhere else. Find
+  it from `tools/os88mod.py`'s split and the module sections in
+  `kernel/kernel.asm` and `kernel/mod.inc`.
+* **The resident kernel may not move by a byte** on kern_big, kern_small,
+  kern_emu or kern_mega. Prove it with `tools/kernsize.py --json` absolutes,
+  and with `cmp` of each kernel's resident sections where you can. This
+  excludes the build number, so compare at ONE commit, as CLAUDE.md
+  explains. A module saving that needs a resident change is CROSS-FILE.
+* **The module ABI (its entry table, `mod_tab` rows, the layout stamp) is
+  frozen.**
+* **No feature may come to need the system disk** where it did not before.
+* **CTRL.DRV ships plain on kern_big on purpose** (SPEC.md 2.8,
+  `os88mod.py --plain 0`), so there its image bytes are its disk bytes.
+
 | agent | owns | drivers | start with |
 |---|---|---|---|
 | **ether** | `drivers/ether/`, `drivers/pciether/`, `drivers/wirezone.inc` (NET.DRV includes it too: build NET.DRV and `cmp` when you touch it) | ETHER.DRV, PCIETHER.DRV | the two largest images in `drivers/`. `ethdrv.inc` is shared by both, so a byte there counts twice. The TCP/IP stack's per-packet path is hot. The ARP, DHCP and DNS setup, the probe and the settings are cold. QEMU is its emulator (CLAUDE.md's closed list, item 5) |
