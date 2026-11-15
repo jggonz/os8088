@@ -1505,6 +1505,7 @@ wa_face:
     mov [wa_fv], ax
     xor bx, bx
     mov bl, ah
+    mov bp, bx                  ; (BP = v2 x 2, for .open)
     mov dx, [wa_vpc+bx]         ; THE PRE-CHECK: the columns it could reach,
     mov bl, al                  ; x 16 (a vertex in view is its own, one
     mov si, bx                  ; beside the view is beyond that edge -
@@ -1520,18 +1521,17 @@ wa_face:
     dec dx                      ; not after its tops, bottoms and inverse
     cmp ax, dx                  ; depths (two a frame on the play bench)
     jg .shut
-    or dx, dx                   ; wholly left of the screen, or right: off
-    js .shut                    ; it, whatever is open
-    cmp ax, [wa_w]
-    jge .shut
     shl ax, 1                   ; x 2 from here: BX, DX = the face's own
     shl dx, 1                   ; ends, before the screen clamps them (its
-    mov bx, ax                  ; corners'; wa_cs0 and wa_ce0 when both
-    or ax, ax                   ; ends are in the view)
+    js .shut                    ; corners'; wa_cs0 and wa_ce0 when both
+    mov cx, [wa_w2]             ; ends are in the view) - and wholly left
+    cmp ax, cx                  ; of the screen, or right: off it, whatever
+    jge .shut                   ; is open (the screen's 2W read once)
+    mov bx, ax
+    or ax, ax
     jns .lo
     xor ax, ax
 .lo:
-    mov cx, [wa_w2]
     dec cx
     dec cx
     cmp dx, cx
@@ -1562,9 +1562,7 @@ wa_face:
     mov [wa_ce0], dx
     lea ax, [di-2-wa_cov]       ; the first open column (wa_fspan's)
     mov [wa_cs], ax
-    mov bl, [wa_fv+1]
-    xor bh, bh
-    mov di, bx                  ; DI = v2 x 2
+    mov di, bp                  ; DI = v2 x 2
     mov al, [wa_vok+si]
     mov [wa_e1], al
     mov ah, [wa_vok+di]
@@ -2503,6 +2501,8 @@ wa_span:
 ; test the column's clip only where a low box has raised one in the range:
 ; with none raised, no low box has a cell there, and the plain passes draw
 ; the same cells.
+wa_fsfull:                      ; (wa_fspan's table full: in a short jump's
+    jmp wa_span.full            ; reach, so the test's common way is untaken)
 wa_fspanh:                      ; (heights' tall faces)
     push di
     call wa_fclpc
@@ -2512,7 +2512,7 @@ wa_fspan:
     inc bx                      ; a steep edge's way out takes it back): the
     inc bx                      ; table full stops drawing, as .reg does
     cmp bx, WA_MAXSP*2
-    jae wa_span.full
+    jae wa_fsfull
     mov [wa_tag], bx
     mov ax, [wa_vpc+si]         ; c1
     mov [wa_spcs+bx], ax
