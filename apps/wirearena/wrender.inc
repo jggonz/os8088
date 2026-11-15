@@ -635,10 +635,45 @@ wa_render:
     mov bl, al
     mov dl, [wa_bh+bx]
     dec dl
-    js .lfull                   ; no hint
-    jz .lhr
+    jns .lhint
+    jmp .lfull                  ; no hint
+; (THE HINTS' LAYOUT: the common two, 1 and 2, fall through and end in a
+; SHORT jump back to .lgo - an out-of-reach jcc is NASM's inverted one
+; round a near jump on an 8086, taken in the common case)
+.lhint:
+    jnz .lh2up
+    add bx, [wa_kr]             ; 1: still past the right edge's line?
+    mov bl, [bx]                ; the corner's vertex...
+    xor bh, bh
+    mov ax, [wa_vtx+bx]         ; ...its x and y indices (x 4: to 252,
+    xor bx, bx                  ; unsigned - 63 x values, HEDGES-PLAN 2):
+    xchg bl, ah                 ; AX = x's, BX = y's
+    mov di, ax
+    mov ax, [wa_xs+di+2]        ; x - z
+    sub ax, [wa_xc+di+2]
+    sub ax, [wa_yc+bx+2]
+    sub ax, [wa_ys+bx+2]
+    cmp ax, 3
+    jge .lgo                    ; still right of the view, or behind
+    jmp short .lmiss
+.lh2up:
     dec dl
-    jz .lhl
+    jnz .lh3up
+    add bx, [wa_kl]             ; 2: still left of the view?
+    mov bl, [bx]
+    xor bh, bh
+    mov ax, [wa_vtx+bx]
+    xor bx, bx
+    xchg bl, ah
+    mov di, ax
+    mov ax, [wa_xs+di+2]        ; x + z
+    add ax, [wa_xc+di+2]
+    add ax, [wa_ys+bx+2]
+    sub ax, [wa_yc+bx+2]
+    cmp ax, -3
+    jle .lgo                    ; still left of the view
+    jmp short .lmiss
+.lh3up:
     dec dl
     jz .lh3
     dec dl
@@ -664,41 +699,8 @@ wa_render:
     mul word [wa_vu]
     add bx, dx
     cmp bx, 3
-    jge .lgo
-    jmp short .lmiss
-.lhl:
-    add bx, [wa_kl]
-    mov bl, [bx]                ; the corner's vertex...
-    xor bh, bh
-    mov bx, [wa_vtx+bx]         ; ...its x and y indices (x 4: to 252,
-    mov al, bl                  ; unsigned - 63 x values, HEDGES-PLAN 2)
-    mov ah, 0
-    mov di, ax
-    mov bl, bh
-    xor bh, bh
-    mov ax, [wa_xs+di+2]        ; x + z
-    add ax, [wa_xc+di+2]
-    add ax, [wa_ys+bx+2]
-    sub ax, [wa_yc+bx+2]
-    cmp ax, -3
-    jle .lgo                    ; still left of the view
-    jmp short .lmiss
-.lhr:
-    add bx, [wa_kr]
-    mov bl, [bx]
-    xor bh, bh
-    mov bx, [wa_vtx+bx]
-    mov al, bl
-    mov ah, 0
-    mov di, ax
-    mov bl, bh
-    xor bh, bh
-    mov ax, [wa_xs+di+2]        ; x - z
-    sub ax, [wa_xc+di+2]
-    sub ax, [wa_yc+bx+2]
-    sub ax, [wa_ys+bx+2]
-    cmp ax, 3
-    jge .lgo                    ; still right of the view, or behind
+    jl .lmiss
+    jmp .lgo
 .lmiss:
     xor bx, bx
     mov bl, [si-4]
