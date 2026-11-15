@@ -607,7 +607,7 @@ cd_mcore:
 ;      AX = a FERR_*
 ; clobbers: AX - on a refusal, and to the TRACK on a TRACKnn.CDA's handle. A
 ;      record's handle comes back in AX as it went in, which cd_chdir and
-;      cd_enum both read straight after (DEFECTS, docs/plans/dsp1/cdram.md:
+;      cd_enum both read straight after (DEFECTS, docs/plans/completed/dsp1/cdram.md:
 ;      the copy out of the record used to go through AX)
 ; -----------------------------------------------------------------------------
 cd_resolve:
@@ -814,7 +814,7 @@ cd_chdir:
     jz .noent                   ; nothing chdirs into a file
     mov [cd_cwd], ax            ; the HANDLE: cd_resolve keeps AX (and it
     mov si, cd_r_lba            ; did not, which is DEFECTS 1 in
-    call cd_setcwd              ; docs/plans/dsp1/cdram.md)
+    call cd_setcwd              ; docs/plans/completed/dsp1/cdram.md)
     call cd_parent              ; DX = the parent's handle
     clc
     jmp short .out

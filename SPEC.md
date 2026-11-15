@@ -110997,7 +110997,7 @@ routine or a string across the buffers, never padding. Since driver size pass
 1 the controls (`os88ui.inc`) and `ipkg.inc`'s code are what sit after them,
 and three routines and the install log's strings were moved in front to take
 a pad of 319 to 0: the image 16,508 -> 16,153, a 16,896-byte claim -> 16,384
-(docs/plans/dsp1/hdd.md).
+(docs/plans/completed/dsp1/hdd.md).
 
 ### 52.12 Every label on both surfaces is one opaque run
 
@@ -145428,7 +145428,7 @@ erase path §79.5.6.1 deleted, removed with it.
 
 **Driver size pass 1 took it to image 8,933 bytes, file 6,009** (from 10,247
 and 7,108), every picture unchanged frame for frame
-(docs/plans/dsp1/saver.md). Two things there change what this section
+(docs/plans/completed/dsp1/saver.md). Two things there change what this section
 describes. **Only the sine table's first quarter ships**: `sv_do_start`
 mirrors entries 0..64 into the other 191 at every session start, and the
 build reads `apps/wire/wiresin.inc` itself and refuses one whose symmetry the
