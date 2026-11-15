@@ -1257,8 +1257,14 @@ PVS_EPS = 0.003
 PVS_EPSD = 5.0
 PVS_STEP = 4
 PVS_GRIDP = 16
-PVS_MIN = 0.10                  # an arena carries one when it culls at
-                                # least this share of its box-cells
+PVS_MIN = 0.02                  # an arena carries one when it culls at
+                                # least this share of its box-cells: the
+                                # masks cost its part ~1 KB (~110 bytes
+                                # packed) and a frame nothing but a bit a
+                                # leaf when the order is made, and the
+                                # full arena's 2.6% measured -0.4% render
+                                # at 40 columns (pass 7, the data's) - the
+                                # open arena's 0% carries none
 PVS_SHIFT = 7                   # the grid: 128 units (2 m) a cell
 
 
