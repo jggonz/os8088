@@ -136,7 +136,10 @@ WIRE_CELL_LEVELS = ()
 # 19.7.1.1) was appended at 0x0233: no kernel at PKG_FMT 13 has been released,
 # so the flag day's table is not in the field yet and the new cell joins the
 # same unreleased generation - the end moves, and no row or level is cut.
-WIRE_TABLE_END = 0x0236
+# 0x0239 since OSAPI_MOUSE_REL (SPEC.md 9.14) joined it at 0x0236, the same
+# way: still no release at PKG_FMT 13. 0x023C since OSAPI_KEY_MAP (SPEC.md
+# 9.7.3) joined at 0x0239, the same way again.
+WIRE_TABLE_END = 0x023C
 # ...and the DOOR's (SPEC.md 20.3.4): a rare cell is `int 81h` and an index
 # byte, and a kernel that has no word for an index REFUSES it - CF = 1, AX =
 # 1, the caller's registers kept - rather than jumping anywhere. So a package

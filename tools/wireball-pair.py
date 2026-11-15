@@ -103,7 +103,7 @@ def prepare():
 def main():
     global PAIR, TITLE, APP_IMAGE, APP_DISK
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--game', choices=('wireball', 'wirefleet'), default='wireball', help='game to put on the paired XTs')
+    parser.add_argument('--game', choices=('wireball', 'wirefleet', 'wirearena'), default='wireball', help='game to put on the paired XTs')
     parser.add_argument('--86box', dest='box', metavar='PATH', help='86Box executable or macOS .app (also accepts BOX environment variable)')
     parser.add_argument('--roms', type=Path, metavar='DIR', help='override the installed 86Box ROM directory')
     parser.add_argument('--prepare-only', action='store_true', help='build disks and write configs without opening 86Box')
@@ -112,6 +112,9 @@ def main():
     if args.game == 'wirefleet':
         TITLE, APP_IMAGE, APP_DISK = 'WireFleet', 'wireflet360.img', 'wireflet.img'
         PAIR = BUILD / '86box-wirefleet-pair'
+    if args.game == 'wirearena':     # (docs/plans/completed/WIREARENA-LINK-PLAN.md L3.2:
+        TITLE, APP_IMAGE, APP_DISK = 'Wire Arena', 'wirerena360.img', 'wirerena.img'
+        PAIR = BUILD / '86box-wirearena-pair'  # 2400 baud on two 4.77 MHz XTs)
     if sys.platform not in ('darwin', 'linux'):
         raise RuntimeError('This FIFO launcher supports macOS and Linux.')
     if args.roms and not args.roms.expanduser().is_dir():

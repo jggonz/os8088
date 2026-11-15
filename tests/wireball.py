@@ -34,6 +34,7 @@ from telansi import Qemu
 
 S = os88sym.linear
 DISK_OVERRIDE = None
+SYS_OVERRIDE = None     # (drive A's image: tests/walink.py --mega's mega.img)
 # The rate test's figure is a MEAN over this many rallies (see mono()).
 WB_RALLIES = 8
 
@@ -73,17 +74,18 @@ def settle(m, **kw):
 
 
 class Machine(Qemu):
-    def __init__(self, directory, index, *, app='wireball', filename='WIREBALL.O88', disk=None, prefix='wb_', ps2=False):
+    def __init__(self, directory, index, *, app='wireball', filename='WIREBALL.O88', disk=None, prefix='wb_', ps2=False, extra=()):
         self.directory = directory
         self.app = app
         self.varprefix = prefix
-        self.linkport = 1-index
+        self.index = index
+        self.linkport = (1-index) & 1   # (a third and fourth machine: walink4)
         self.linkpath = str(directory / f'link{index}.sock')
         self.gdbpath = str(directory / f'gdb{index}.sock')
         self.pidfile = str(directory / f'qemu{index}.pid')
         path = str(directory / f'qmp{index}.sock')
         args = ['qemu-system-i386', '-machine', 'pc,vmport=off,pcspk-audiodev=speaker', '-audiodev', f'wav,id=speaker,path={directory / ("speaker" + str(index) + ".wav")}', '-m', '16M', '-serial', 'none', '-parallel', 'none',
-                '-drive', f'file={artifact("os8088.img")},if=floppy,index=0,format=raw,snapshot=on',
+                '-drive', f'file={SYS_OVERRIDE or artifact("os8088.img")},if=floppy,index=0,format=raw,snapshot=on',
                 '-drive', f'file={(disk or DISK_OVERRIDE or artifact("wireball.img"))},if=floppy,index=1,format=raw,snapshot=on',
                 '-boot', 'a', '-display', 'none', '-nic', 'none',
                 # ps2: the pointer is the i8042's and the other UART is a
@@ -95,6 +97,7 @@ class Machine(Qemu):
                 '-device', f'isa-serial,chardev=link,index={self.linkport}',
                 '-qmp', f'unix:{path},server=on,wait=off',
                 '-gdb', f'unix:{self.gdbpath},server=on,wait=off']
+        args += list(extra)     # (tests/walink.py --net: an NE2000 on a relay)
         self.log = open(directory / f'qemu{index}.log', 'w')
         self.proc = subprocess.Popen(args, cwd=ROOT, stdout=self.log, stderr=self.log)
         Path(self.pidfile).write_text(str(self.proc.pid))
@@ -129,10 +132,9 @@ class Machine(Qemu):
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait()
-        # The filename uses launch index, which is the complementary link-port index.
-        capture = self.directory / ('speaker' + str(1-self.linkport) + '.wav')
+        capture = self.directory / ('speaker' + str(self.index) + '.wav')
         if capture.exists() and capture.stat().st_size > 44:
-            shutil.copyfile(capture, artifact(self.app + '-speaker-' + str(1-self.linkport) + '.wav'))
+            shutil.copyfile(capture, artifact(self.app + '-speaker-' + str(self.index) + '.wav'))
         if hasattr(self, 'tmp'):
             shutil.rmtree(self.tmp, ignore_errors=True)
         if hasattr(self, 'log') and not self.log.closed:
@@ -160,7 +162,7 @@ class Machine(Qemu):
                 s.settimeout(10)
                 s.connect(self.gdbpath)
                 for name, value, n in values:
-                    address = (self.seg << 4) + self.sy[self.varprefix + name]
+                    address = self.lin(self.seg, self.sy[self.varprefix + name])
                     data = value.to_bytes(n, 'little')
                     payload = f'M{address:x},{n:x}:{data.hex()}'.encode()
                     s.sendall(b'$' + payload + b'#' + f'{sum(payload) & 255:02x}'.encode())

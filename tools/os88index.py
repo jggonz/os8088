@@ -329,6 +329,33 @@ INCLUDES = [
      "the folder if need be, so the program it names is opened at every boot "
      "(Shift held skips it). Over os88data.inc's walk, so it needs "
      "`OD_BOOTVOL`; REDLINE's Apply on boot is the worked example."),
+    ("os88cable.inc", "115",
+     "TWO MACHINES OVER A NULL MODEM, on the desktop serial lease: `lk_auto` "
+     "and `lk_connect` find the port (SPEC.md 114.9's search: COM2 first, the "
+     "lease MOVED between the ports after a random dwell), `lk_tick` runs it "
+     "from the window, and `lk_poll`/`lk_send` - legal inside a SPEC.md 53 "
+     "bracket - carry typed frames of up to 32 bytes: 7Eh/7Dh framing, "
+     "CRC-16/CCITT-FALSE, a length per type from your `lk_lens`. Wire Arena "
+     "is the user (docs/plans/completed/WIREARENA-LINK-PLAN.md); WireFleet's own copy "
+     "moves onto it later."),
+    ("os88raw.inc", "72.22",
+     "A GAME'S FRAMES OVER THE ETHERNET CARD, on ETHER.DRV's raw verbs: "
+     "`rw_open` attaches the driver if need be and claims the card (our "
+     "station address back), `rw_send` puts a body in a frame of your "
+     "EtherType to a station address or everyone, `rw_poll` drains up to N "
+     "frames and hands yours to your `rw_take` with their source. A length "
+     "byte before the body, as a padded frame does not say where it ends. "
+     "The claim stops the driver's own pump: hold it only while linking. "
+     "Wire Arena carries os88cable.inc's bodies on it "
+     "(docs/plans/completed/WIREARENA-LINK-PLAN.md 12)."),
+    ("os88udp.inc", "72.24",
+     "A GAME'S DATAGRAMS ON ETHER.DRV's UDP VERBS: `ud_open` attaches the "
+     "driver if need be, asks our IP address (NETE_NOLINK until DHCP has "
+     "bound: ask again) and binds your `UD_PORT`; `ud_send` to six bytes - an "
+     "IP address and a port - or everyone (255.255.255.255); `ud_poll` "
+     "drains datagrams to your `ud_take` with their source. os88raw.inc's "
+     "twin, for a network with an address: a host on UDP is found by a "
+     "broadcast and by its address at once (docs/plans/completed/WIREARENA-NET-PLAN.md)."),
     ("os88inflate.inc", "106.18",
      "INFLATE for a raw DEFLATE stream held WHOLE: `inflate` takes DS:SI, "
      "writes exactly CX bytes at ES:DI and sets carry on a bad stream. zlib's "

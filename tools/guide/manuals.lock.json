@@ -1438,6 +1438,15 @@
   "strings": "7567de0a93fbbb38",
   "why": "f9ed8cc4/9217a5c5 change wflink.inc's refusal handling and three status messages (a port the BIOS does not list, a UART the OS did not find, retry on an older SERIAL.DRV); the page quotes no message and describes the Link menu and the automatic search at a level these do not change - rare-case messages, no words needed"
  },
+ "WIRERENA_O88": {
+  "sources": [
+   "apps/wirearena",
+   "tools/arenagen.py"
+  ],
+  "stamped": "c5c88829c",
+  "strings": "6136f95b083a4c1c",
+  "why": "Detail drop-down in the setup (the slot right of Play, the address field's under Internet); Very High the 286 default with vsync"
+ },
  "WORD": {
   "sources": [],
   "stamped": "e4576a70",

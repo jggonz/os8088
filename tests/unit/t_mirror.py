@@ -310,6 +310,10 @@ ALIAS = [
     # to packages under the SDK's prefix: OSAPI_PKG_START answers it in AL,
     # and The Wire words it rather than printing the number.
     ("kernel/loader.inc", "LD_EVER", "apps/os88api.inc", "OSAPI_LD_EVER"),
+    # SPEC.md 9.7.3. OSAPI_KEY_MAP copies the kernel's whole key-state map
+    # into a buffer the PACKAGE sized: a kernel map that grew past the SDK's
+    # size would write past every caller's buffer, silently.
+    ("kernel/mouse.inc", "KBD_MAPSZ", "apps/os88api.inc", "KEYMAP_BYTES"),
     # SPEC.md 110.2. The Sticky App mark: which byte of a desktop row says "this is
     # a remembered widget", and the value it must EQUAL. The kernel's desk_live
     # and stik_boot read it, CTRL.DRV's settings core writes it, a package sets

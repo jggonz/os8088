@@ -219,6 +219,11 @@ nsk_tab:
                                 ; honest rather than an empty success: a packet
                                 ; driver built on a silent no would look
                                 ; mounted and never receive
+    dw nsk_everb                ; NETV_UDP   - **THE WIRE HAS NO DATAGRAM**
+    dw nsk_everb                ; NETV_UDPTX   (SPEC.md 72.24): nwire.inc has
+    dw nsk_everb                ; NETV_UDPRX   no UDP command, and a game
+                                ; that asks hears a refusal and offers what
+                                ; it can (WireArena: the serial cable)
 %if ($ - nsk_tab) / 2 != NETV_MAX + 1
   %error "net: nsk_tab does not cover NETV_0..NETV_MAX"
 %endif
