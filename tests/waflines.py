@@ -6,7 +6,7 @@ The floor-line drawer (apps/wirearena/wrender.inc, wa_flines) cuts each line
 at the screen's edges in camera space and walks it by an error term. This
 row holds its PICTURE to a referee that shares none of its arithmetic: the
 game's own integer camera space, then the line's image in exact rationals -
-which cells an exact drawer plots. Nine fixed poses of the twin, rendered
+which cells an exact drawer plots. Ten fixed poses of the twin, rendered
 through tools/waposes.py (the game's wa_render at a poked camera, text VRAM
 read back):
 
@@ -18,6 +18,9 @@ read back):
             short, or stopped at a row
   hidden    behind the west lift, the lines beyond the tower are NOT drawn
             inside the tower's face (wa_flhid, and the run it skips)
+  front     a line BEFORE a tower, both its ends in the tower's columns, is
+            drawn there - the whole-line skip (wa_flmake's .ldraw) takes a
+            line for hidden only above the face's foot
   exact     of all the floor-line cells drawn, 85 in 100 are the referee's
             own cell and dash - a walk that starts a fraction out lies within
             a cell of the line everywhere, and beside it
@@ -60,6 +63,7 @@ POSES = [
     ("down the path's slope",    850,  900, 900,  -60,   0, ""),
     ("on the west tower",        512, 1024,   0,  -40, 240, ""),
     ("the path, looking down",  1100,  830, 256, -290,   0, "cover"),
+    ("before the east tower",    654,  751, 1014, -16,   0, "front"),
 ]
 
 
@@ -153,7 +157,9 @@ def referee(v):
 def tower_face(v, box):
     """the screen cells a tall box hides every farther floor point in: its
     columns, a cell in from each side, and the rows above its highest foot,
-    a row clear of it - or None when a corner of it is behind the eye"""
+    a row clear of it; and, last, the row from which a floor point in those
+    columns is BEFORE it, a row under its lowest foot - or None when a corner
+    of it is behind the eye"""
     x0, y0, x1, y1 = box
     cols, feet = [], []
     for X, Y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
@@ -164,7 +170,7 @@ def tower_face(v, box):
         cols.append(c / 16)
         feet.append((q + 2) / 4)
     return (math.ceil(min(cols)) + 1, math.floor(max(cols)) - 1,
-            math.floor(min(feet) / 2) - 1)
+            math.floor(min(feet) / 2) - 1, math.ceil(max(feet) / 2) + 1)
 
 
 def near(cell, cells):
@@ -299,6 +305,17 @@ def main():
             if seen:
                 bad.append("%d cell(s) drawn THROUGH the tower, the first at row %d column %d"
                            % (len(seen), seen[0][0], seen[0][1]))
+        if ask == "front":
+            faces = [f for f in (tower_face(v, boxes[0]), tower_face(v, boxes[2])) if f]
+            before = [c for c in R if c[0] < 23 and c not in other and
+                      any(f[0] <= c[1] <= f[1] and c[0] >= f[3] for f in faces)]
+            if len(before) < 4:
+                bad.append("the referee has %d cell(s) before a tower - the pose asks "
+                           "nothing" % len(before))
+            gone = sorted(c for c in before if not near(c, drawn))
+            if gone:
+                bad.append("%d cell(s) of a line BEFORE a tower not drawn, the first at row "
+                           "%d column %d" % (len(gone), gone[0][0], gone[0][1]))
         print("  %-4s  %-26s %3d cells, the referee's %3d%s"
               % ("FAIL" if bad else "ok", name, len(drawn), len(R),
                  "".join("\n          " + b for b in bad)))
@@ -307,7 +324,7 @@ def main():
         print("  FAIL  Very Low draws %d cells where Medium draws %d: not about half" % (nd, total))
         fails += 1
     if total < 200:
-        print("  FAIL  %d floor-line cells over the nine poses - under 200: the "
+        print("  FAIL  %d floor-line cells over the ten poses - under 200: the "
               "colour or the glyphs this row reads are not the drawer's" % total)
         fails += 1
     print("  %d of %d floor-line cells are the referee's own cell and dash" % (exact, total))
@@ -318,9 +335,9 @@ def main():
     if fails:
         print("waflines: FAIL - %d check(s)" % fails)
         return 1
-    print("waflines: ok - nine poses of the twin, %d floor-line cells: %d in 100 the "
-          "referee's own, none off its lines, none missing where nothing stands, none "
-          "through the tower; a still view and a nod draw the same; Very Low's are "
+    print("waflines: ok - ten poses of the twin, %d floor-line cells: %d in 100 the "
+          "referee's own, none off its lines, none missing where nothing stands or before a tower, "
+          "none through the tower; a still view and a nod draw the same; Very Low's are "
           "dashed; no divide fault"
           % (total, exact * 100 // total))
     return 0

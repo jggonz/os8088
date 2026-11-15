@@ -295,6 +295,17 @@ line on the floor between two of the arena's vertices, at any angle.
     a multiply and a divide - while the line stays above the face's whole
     foot. A tower before the eye hides a dozen columns of every line behind
     it.
+  - A line WHOLLY behind one tall face is not set up at all (`.ldraw`):
+    both its ends in columns of the same span and above that span's whole
+    foot by a half-row. The line is straight and so is the foot, so every
+    cell between them is hidden by the walk's own rule. An end outside the
+    hull is in no span's column, which is two compares for most lines.
+- **The common cut goes by itself** (`.lclip`). One end in the view and the
+  other outside ONE plane - the screen's bottom or a side - is nearly every
+  cut there is. Only that end is cut, by the general way's own arithmetic to
+  the bit; the other end is its vertex's. A bottom cut that lands beside the
+  view goes on to the side's cut from there. Both ends outside, or the top,
+  take the general way (`.lcg`).
 - **Tried and not kept: ends snapped to cells.** The figures' limbs are
   drawn between whole sub-pixels (`wa_flgo`), with a setup of some thirty
   instructions and no multiply. Floor lines drawn that way, between their
@@ -335,6 +346,11 @@ renderer skips the room's four faces when the height is 0. The game still
 keeps the player inside the room (an invisible bound the floor lines sit well
 within), and `wamodel` skips the room as the renderer does. The twin uses it:
 its floor lines are its edge.
+
+The room's four corners are then no vertices, and their coordinates none of
+`wa_products'`: `arenagen` leaves them out of a roomless arena's tables (the
+room's row of the corner table names vertex 0, unread). The twin's distinct
+coordinates went from 23 to 19, each about 300 cycles of every moved frame.
 
 ### 4.7 Limits still standing (not met by these arenas)
 
@@ -496,9 +512,11 @@ the table above: the first drawer's last tuning came between.)
 | the pitch alone moved | -6,000 | -6,000 | -3,500 | -8,100 | 26.21 -> 25.55 ms |
 | a moved view | +600 | +600 | +560 | +840 | 28.21 -> 28.29 ms |
 
-  - A still view is measured past its first still frame, which sets the
-    walks up (`tools/waposes.py --still`); `--nod` renders a frame a
-    half-row of pitch away first.
+  - A still view is measured past its first still frames, which set up
+    what the later ones keep (`tools/waposes.py --still`: the walks, and
+    since the pickups' places were kept, a second frame for those); `--nod`
+    renders a frame a half-row of pitch away first, `--rise` one with the
+    eye 40 units lower.
   - The moved view pays about 0.3% for both: a set-up walk goes on through
     a vector (so a still frame's first can keep it), and the view's key is
     read in two parts.
@@ -520,13 +538,71 @@ the table above: the first drawer's last tuning came between.)
     the glyph, the list - about 110 cycles of a cell's 180 to 300, on half
     the cells of the shallow lines.
 
+- **What a standing view keeps, and the cuts** (the owner's go-ahead,
+  2026-11-15, on a list of seven ideas). The twin at 40 columns, cycles a
+  frame, every picture the same cell for cell as before (five arenas, both
+  widths, moved, still, nod and rise, Very Low, 150 stress poses):
+
+| what | a moved view (40 poses) | a still view | the bench's views |
+|---|---|---|---|
+| the room's corners out of the products (4.6) | -0.9% | - | -1,200 each, moved |
+| a low box's corners kept (`wl_vert`) | +0.1% | -0.4% | B -5,700 still |
+| a pickup's place kept (`wa_pkc`) | +0.25% | -6% | -6,000 to -15,000 still |
+| a line wholly behind a tower not set up | -0.4% | -0.8% | D -24,000 moved, -21,000 still; A-C +1,200 moved |
+| the common cut by itself | -1.6% | - | -2,300 to -2,900 moved |
+| all five | 28.35 -> 27.61 ms, -2.6% | 21.54 -> 19.98 ms, -7.2% | moved -1,900, -1,600, -2,000, -26,800; still -10,000, -15,700, -6,300, -37,200 |
+
+  - The P bench, frames a second, views A to D: 23.5, 20.8, 25.7, 17.8 ->
+    23.7, 21.0, 26.3, 19.8 at 40 columns; 18.3, 16.2, 19.3, 14.2 -> 18.4,
+    16.2, 19.6, 15.6 at 80. The bench's view moves every frame. View D
+    stands close to a tower, most of the walk behind it.
+  - A nod and a rise (the eye alone) are -2.2% and -2.1%. At 80 columns the
+    moved view is -2.4% and the still one -5.9%.
+  - **A low box's corners.** Two corners of a low box in three were a
+    transform and a divide each, every frame. A vertex's camera place and
+    column are functions of the view alone, so one stamped LAST frame
+    stands when the view's count is where it was (`wl_vp`, chosen once a
+    frame after the projection's check).
+  - **A pickup's place.** A pickup was one transform and ten multiplies a
+    frame. Its columns, rows and inverse depth are kept while the view, the
+    pitch and the eye stand, a record a pickup. What hides it is asked
+    every frame. A frame where the pitch or the eye alone moved keeps
+    nothing: making a record costs about 700 cycles, for one that may never
+    be read.
+  - **What the others pay.** A moved view pays about 0.35% for the two
+    kept paths: the frame's choice of corner maker and two instructions a
+    pickup. The other arenas' moved views are +0.1% to +0.25%; the heights
+    arena's still view is -2.9% and the hedge's -2.0%.
+  - **Tried and not kept.**
+    - The whole-line skip across a box's two faces: +0.05% moved, -0.3%
+      still, 50 bytes.
+    - Walking a tested line's open stretches with no test (the owner asked
+      whether it changes the look: it draws the same cells). Finding a
+      stretch is two scans, about 450 cycles and 32 a column, against 75
+      saved a column: +0.45% moved at 40 columns, +0.3% at 80.
+    - Dashes at Medium: the owner declined it for 1% to 4%.
+  - **A PVS for floor lines, asked and not built.** From a cell at floor
+    height, 10.7% of the twin's line-cells are hidden from everywhere in
+    the cell (8 or 9 of the 16 lines right behind a tower). But the twin
+    carries no PVS at all: a player stands on the towers, an eye over the
+    tallest box, so nothing is hidden from every eye a cell can hold. A
+    lines' PVS would need the eye's height tested each frame, a mask a
+    cell (512 bytes) and a bit test a line (about 1,300 cycles a frame). The
+    whole-line skip already takes the lines behind one face for two
+    compares, and the two-face extension measured what is left: nothing.
+  - Row `wastill` (soak) holds a still view, a nod and a rise to the moved
+    view's whole picture, in the heights arena and the twin.
+
 **Size.** The renderer part was 61,403 of its 65,024 bytes with the second
 drawer. It was 59,041 after the two arenas: 2,182 more for the first round,
 then 2,505 for floor lines (code, the per-column and per-vertex caches) and
 no room. The second drawer is 1,101 bytes more: its code is about twice the
 first's, its tables smaller. The kept walk and the rows' pass are 791 more
 (288 of them the lines' records), on a part the hedge had taken to 62,233,
-and the dashed walkers 706: 63,730 now.
+and the dashed walkers 706: 63,730. Capture the flag took it to 63,882.
+The standing view's keeps and the cuts are 757 more (134 of them the
+pickups' records), and the lines' vertex records gave back 336 - a record a
+distinct end, `WA_MFV`, where there were two a line: 64,303 now, 721 free.
 - Almost all of it is tables sized to the LARGEST arena: the maze's 92
   vertices against the heights arena's 51 (82 bytes per vertex table), its
   PVS at four mask bytes a cell (+512), and its box tree (+384).
@@ -591,3 +667,13 @@ and the dashed walkers 706: 63,730 now.
 - [x] The floor lines dashed at Low, and steep ones too at Very Low
   (`wa_dash`; 5); row `waflines` holds Very Low's picture to it.
   - It was red with `wa_dash` not read.
+- [x] What a standing view keeps - a low box's corners, a pickup's place -
+  the room's corners out of a roomless arena's products, a line wholly
+  behind a tower not set up, and the common cut by itself (5); row `wastill`
+  (soak), and a tenth pose in `waflines` (a line before the east tower).
+  - `wastill` was red with the pickups' key not reading the eye and the
+    pitch, with `wl_vert` taking a corner never stamped, and with the
+    frame's corner maker always `wa_vert`.
+  - `waflines` was red with the whole-line skip not asking the line's row,
+    with the direct cut's side sign turned, and with its bottom cut 16
+    units out.

@@ -224,7 +224,10 @@ WA_VAR wa_fqrn, 2               ; rows and its row past the last x 2
 WA_VAR wa_fqye, 2
 WA_VAR wa_fqve, 2               ; ...the vertices' records' end, the
 WA_VAR wa_fqle, 2               ; lines', and the records (FV_*, FL_*)
-WA_VAR wa_fqvx, WA_MFL*2*FV_SIZE
+%if wa_fqe2 != wa_fqe1 + 6 || FV_Z != 6 || FV_X != 4
+    %error "the floor lines' direct cut takes the scratch ends for a vertex's x and z"
+%endif
+WA_VAR wa_fqvx, WA_MFV*FV_SIZE   ; (a record a distinct end: arenagen's cap)
 WA_VAR wa_fqln, WA_MFL*FL_SIZE
 WA_VAR wa_fqps, WA_MAXSP*2      ; ...a span's feet (wa_flfeet), a byte each
 WA_VAR wa_fqpf, WA_MAXSP*2      ; at its tag: its frame stamp, the least
@@ -276,6 +279,13 @@ WA_VAR wa_thr0, 2
 WA_VAR wa_tht, 2                ;   its half-rows, first and last
 WA_VAR wa_thb, 2
 WA_VAR wa_thl, 2                ;   this column's last
+%if wa_thb != wa_thiz + 10
+    %error "wa_pickups keeps wa_thiz .. wa_thb, twelve bytes, as one block"
+%endif
+WA_VAR wa_pkg, 2                ; the pickups' kept places: the count of the
+WA_VAR wa_pkk, 4                ;   view's changes, the eye and the pitch
+WA_VAR wa_pkc, WA_MPK*16        ;   they stand for; a record a pickup - its
+                                ;   key, kind, attribute, wa_thiz .. wa_thb
 WA_VAR wa_fiz, 2                ; the figure being drawn: inverse depth
 WA_VAR wa_fatt, 1               ;   its attribute
 WA_VAR wa_fsub, 1               ;   keyframe blend, quarters
@@ -375,6 +385,8 @@ wa_render:
     mov di, wa_vst              ; ...and the vertex cache's with them
     mov cx, WA_MVTX
     rep stosw
+    mov [wl_pvc], ax            ; (and no corner stands: the view's count
+                                ; is never 0)
     mov di, wa_fqps             ; ...and the floor lines' spans' feet
     mov cx, WA_MAXSP
     rep stosw
@@ -576,6 +588,14 @@ wa_render:
     mov [wa_vu], ax
     call wa_moved               ; (every vertex's column is to make again)
 .uok:
+    mov ax, [wa_vcnt]           ; THE VIEW WHERE IT WAS LAST FRAME (after
+    mov dx, wa_vert             ; wa_moved, which is a move): a low box's
+    cmp ax, [wl_pvc]            ; corner stamped then stands - wl_vert, its
+    jne .pvm                    ; corners' maker for this frame
+    mov dx, wl_vert
+.pvm:
+    mov [wl_pvc], ax
+    mov [wl_vp], dx
 ; THE WALK over wa_order's list, a box a turn. A record is the box (x 4) and
 ; the vertices of its SILHOUETTE from where the player stands - a, the left
 ; end of the faces seen, b between them where two are seen, c, the right end
@@ -993,6 +1013,7 @@ wa_geominit:
     rep stosw
     mov [wa_rview], ax
     call wa_flinit              ; (its floor lines' records)
+    call wa_pkclr               ; (and no pickup's kept place)
     mov word [wa_nk], 0
     mov si, wa_xv
     mov di, wa_xk
@@ -4152,6 +4173,50 @@ wa_flmake:
 .lp2:
     mov word [si+FL_K], 1       ; (FL_W: no walk kept)
 .ldraw:
+; WHOLLY BEHIND ONE TALL FACE (ARENAS-PLAN 5): both its ends in columns of
+; the same span and above that span's whole foot, by a half-row - so is all
+; of it between them, a straight line over a straight foot, in columns the
+; span or something nearer than it fills. Nothing of it is set up or
+; walked. (An end outside the frame's hull is in no span's column.)
+    mov ax, [bx]
+    cmp ax, [wa_fqb0x]
+    jl .ld
+    cmp ax, [wa_fqb1x]
+    jg .ld
+    mov cl, 3
+    shr ax, cl
+    and al, 0xFE
+    xchg ax, bp
+    mov bp, [ds:bp+wa_cov]      ; BP = its first end's column's span
+    or bp, bp
+    jz .ld
+    mov ax, [di]
+    shr ax, cl
+    and al, 0xFE
+    xchg ax, di
+    cmp bp, [wa_cov+di]
+    xchg ax, di
+    jne .ld
+    mov al, [wa_frame]
+    cmp [ds:bp+wa_fqps], al
+    je .lf
+    xchg bp, di
+    call wa_flfeet
+    xchg bp, di
+.lf:
+    mov al, [ds:bp+wa_fqpf]     ; its least foot's half-row h: above it by
+    cbw                         ; one is (q + 2) / 4 < h, q < 4 h - 2
+    shl ax, 1
+    shl ax, 1
+    dec ax
+    dec ax
+    cmp [bx+2], ax
+    jge .ld
+    cmp [di+2], ax
+    jge .ld
+    mov byte [si+FL_W], FW_OFF  ; (and a still frame's pass has no walk of
+    jmp .lnx                    ; it to set up)
+.ld:
     push si
     call wa_fldraw
     pop si
@@ -4224,6 +4289,158 @@ wa_flmake:
 ; on a side): a line by the player's feet is cut a few units from the eye,
 ; where a whole unit is half a column or half a row.
 .lclip:
+; THE COMMON CUT, by itself (ARENAS-PLAN 5): one end in the view and the
+; other outside ONE plane - the screen's bottom, or a side. Only that end
+; is cut, by .cz's or .cs's own arithmetic to the bit, and the other is its
+; vertex's own: none of the general way's two ends through four calls. A
+; bottom's cut that lands beside the view, and anything else, goes the
+; general way.
+    or al, al
+    jz .lcb
+    or ah, ah
+    jnz .lcg                    ; (both outside)
+    mov dx, FL_E1 | (FL_E2 << 8) ; DL = the cut end's place in the line, DH
+    jmp short .lq1              ; the other's
+.lcb:
+    xchg bx, di
+    mov dx, FL_E2 | (FL_E1 << 8)
+.lq1:                           ; BX = the vertex outside, DI = the one in
+    test byte [bx+FV_O], FO_F
+    jnz .lcg1
+    push si
+    push dx
+    test byte [di+FV_F], FS_ROW ; (the one in the view: its row)
+    jnz .lq2
+    xchg bx, di
+    call .pj
+    xchg bx, di
+.lq2:
+    mov al, [bx+FV_O]
+    test al, FO_N
+    jnz .lcn
+.lqs:                           ; (AL = the side)
+    push ax                     ; A SIDE (.cs): d = t z -+ x, each end's
+    mov ax, [bx+FV_Z]
+    call wa_fltz
+    mov bp, ax
+    mov ax, [di+FV_Z]
+    call wa_fltz
+    pop dx                      ; DL = the side
+    test dl, FO_L
+    jz .lcsr
+    add bp, [bx+FV_X]
+    add ax, [di+FV_X]
+    jmp short .lcsc
+.lcsr:
+    sub bp, [bx+FV_X]
+    sub ax, [di+FV_X]
+.lcsc:
+    mov cx, ax
+    sub cx, bp
+    mov si, [bx+FV_Z]
+    shl si, 1
+    shl si, 1                   ; SI = its z x 4, where no cut is made
+    neg bp
+    jle .lcso
+    or cx, cx
+    jle .lcso
+    mov ax, [di+FV_Z]
+    sub ax, [bx+FV_Z]
+    push dx
+    imul bp
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    idiv cx
+    pop dx
+    add si, ax
+.lcso:
+    mov cx, si
+    mov al, dl
+    call .pes1                  ; AX = the screen's edge, DX = its row
+    jmp short .lcst
+.lcn:                           ; THE BOTTOM (.cz): its x x 4 on the plane
+    call .vx
+    mov bp, [wa_fqzn]
+    mov cx, [di+FV_Z]
+    sub cx, [bx+FV_Z]
+    mov si, ax
+    neg ax
+    add ax, [di+FV_X]
+    push bp
+    sub bp, [bx+FV_Z]
+    imul bp
+    pop bp
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    idiv cx
+    shl si, 1
+    shl si, 1
+    add si, ax                  ; SI = its x x 4
+    mov ax, bp
+    call wa_fltz
+    mov dx, si
+    sar dx, 1
+    sar dx, 1
+    mov cl, FO_R                ; beside the view there: a side's cut too,
+    cmp dx, ax                  ; from that point on the plane - a vertex's
+    jg .lcns                    ; x and z, in the general way's scratch
+    neg ax
+    mov cl, FO_L
+    cmp dx, ax
+    jge .lcnp
+.lcns:
+    mov bx, wa_fqe1
+    mov [bx+FV_X], dx
+    mov [bx+FV_Z], bp
+    mov al, cl
+    jmp .lqs
+.lcnp:
+    mov ax, si                  ; (.pec: its column, the plane's row)
+    mov cx, bp
+    shl cx, 1
+    shl cx, 1
+    imul word [wa_k16]
+    idiv cx
+    add ax, [wa_c16]
+    jns .lcn1
+    xor ax, ax
+.lcn1:
+    cmp ax, [wa_fqw16]
+    jbe .lcn2
+    mov ax, [wa_fqw16]
+.lcn2:
+    push ax
+    mov cx, bp
+    call wa_flrow
+    pop ax
+.lcst:                          ; AX, DX = the cut end, DI = the vertex in
+    pop cx                      ; the view: into the line, and drawn
+    pop si
+    xor bh, bh
+    mov bl, cl
+    mov [bx+si], ax
+    mov [bx+si+2], dx
+    mov bl, ch
+    mov ax, [di+FV_C]
+    mov [bx+si], ax
+    mov ax, [di+FV_Q]
+    mov [bx+si+2], ax
+    mov word [si+FL_K], 2       ; (FL_W: no walk kept)
+    lea bx, [si+FL_E1]
+    lea di, [si+FL_E2]
+    jmp .ldraw
+.lcg1:                          ; the general way, its vertices as they came
+    cmp dl, FL_E2
+    jne .lcg2
+    xchg bx, di
+.lcg2:
+    mov al, [bx+FV_O]
+    mov ah, [di+FV_O]
+.lcg:
     mov [wa_fqr], si
     mov [wa_fqo1], ax           ; (wa_fqo1 and wa_fqo2)
     mov word [wa_fqk1], 0       ; (wa_fqk1 and wa_fqk2: neither cut yet)
@@ -4433,8 +4650,9 @@ wa_flmake:
     pop ax
     ret
 .pes:
-    push ax
     mov cx, [bx+4]
+.pes1:                          ; (AL = its side, CX = its z x 4: .lclip's)
+    push ax
     mov ax, [wa_fqn4]           ; (rounded UP, as wa_flrow's row is: the
     mov dx, [wa_fqn4+2]         ; floor's product is negative, and its
     dec cx                      ; shift rounds down)
@@ -7086,12 +7304,87 @@ wa_pickups:
     mov al, [si]                ; the ones this cell may see...
     and al, [wa_pkon]           ; ...that are there
     jz .out
+    ; A PICKUP STANDS WHILE THE VIEW DOES (ARENAS-PLAN 5): its place on the
+    ; screen is a function of the view, the pitch and the eye's height, so
+    ; with all three where they were last frame its columns, rows and
+    ; inverse depth are kept (wa_pkc, a record a pickup, made the first
+    ; such frame) and it goes straight to its cells - no transform, none of
+    ; its ten multiplies. What hides it is asked again every frame. AH = 1
+    ; on such a frame; [wa_pkg] counts the changes, a record's its key.
+    xor ah, ah
+    cmp word [wl_vp], wl_vert   ; (the view where it was: wa_render's)
+    jne .gen
+    mov bx, [wa_eye]
+    mov cx, [wa_hh]
+    inc ah
+    cmp bx, [wa_pkk]
+    jne .rows
+    cmp cx, [wa_pkk+2]
+    je .same
+.rows:                          ; (the pitch or the eye alone - a nod, a
+    mov [wa_pkk], bx            ; jump, a lift's ride: nothing kept this
+    mov [wa_pkk+2], cx          ; frame, which would pay a record's making
+    dec ah                      ; for one that may never be read)
+.gen:
+    inc word [wa_pkg]
+    jnz .same
+    call wa_pkclr               ; (lapped: no record's key is 0)
+.same:
     mov si, wa_pks
 .p:                             ; AL = the pickups still to draw, a bit each
     shr al, 1
     jnc .next
     push ax
     push si
+    or ah, ah
+    jnz .still
+    call .make
+.drawn:
+    pop si
+    pop ax
+.next:
+    add si, WA_PKSZ
+    or al, al
+    jnz .p
+.out:
+    ret
+.still:
+    mov bx, si                  ; (16 bytes a record, 8 a pickup)
+    lea di, [bx+si+wa_pkc-2*wa_pks]
+    mov ax, [wa_pkg]
+    mov bl, [si+6]              ; its kind
+    scasw
+    jne .keep
+    cmp bl, [di]                ; (a spawn's kind is rolled again: its shape)
+    jne .keep
+    mov al, [di+1]
+    mov [wa_tha], al
+    lea si, [di+2]
+    mov di, wa_thiz
+    mov cx, 6
+    rep movsw
+    call wa_thing.cols
+    jmp .drawn
+.keep:                          ; made, and kept: DI = its record + 2
+    mov [di-2], ax
+    mov [di], bl
+    push di
+    mov word [wa_thr0], -1      ; (no column: what wa_thing leaves of one
+    call .make                  ; it turns away before its columns...
+    pop di
+    mov ax, [wa_tht]
+    cmp ax, [wa_thb]
+    jle .krow
+    mov word [wa_thr0], -1      ; ...and of one with no row is made so)
+.krow:
+    mov al, [wa_tha]
+    inc di
+    stosb
+    mov si, wa_thiz
+    mov cx, 6
+    rep movsw
+    jmp .drawn
+.make:                          ; SI = the pickup: drawn
     mov bl, [si+6]              ; its kind's shape
     xor bh, bh
     shl bx, 1
@@ -7102,15 +7395,22 @@ wa_pickups:
     mov ax, [si]
     mov cx, [si+4]
     mov bx, [si+2]
-    call wa_thing
-    pop si
-    pop ax
-.next:
-    add si, WA_PKSZ
-    or al, al
-    jnz .p
-.out:
+    jmp wa_thing
+
+; wa_pkclr - no pickup's record stands (an arena loaded, or [wa_pkg] lapped:
+; it is never 0, a record's key with nothing kept). Keeps all but DI
+wa_pkclr:
+    mov di, wa_pkc
+.c:
+    mov word [di], 0
+    add di, 16
+    cmp di, wa_pkc + WA_MPK*16
+    jb .c
+    mov word [wa_pkg], 1
     ret
+%if WA_PKSZ != 8
+    %error "wa_pickups: a pickup's cache record is twice its size"
+%endif
 
 ; wa_flagsd - the two flags (CTF-PLAN 4): each the game shows, a THING - a
 ; tall narrow block, its span and its attribute FRAME's (wa_flags)
@@ -7313,7 +7613,8 @@ wa_thing:
     mov ax, [wa_tht]
     cmp ax, [wa_thb]
     jg .out
-.cols:
+.cols:                          ; (and a pickup kept from last frame:
+                                ; wa_pickups - wa_thiz .. wa_thb, wa_tha)
     mov bp, [wa_thl0]
     and bp, 0xFFFE              ; BP = the column x 2
 .col:

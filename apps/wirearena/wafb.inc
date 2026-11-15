@@ -46,6 +46,9 @@ WR_ABI      equ 11                  ; (2: the camera's sin/cos in FRAME;
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-
                                     ; PLAN 4.5; arenagen's)
+WA_MFV      equ 24                  ; ...and their distinct ends: lines are
+                                    ; closed walks, an end shared by two
+                                    ; (arenagen refuses more)
 WR_H_ABI    equ 6
 WR_H_NV     equ 7
 WR_H_VERB   equ 8                   ; +8: a word per verb, its offset

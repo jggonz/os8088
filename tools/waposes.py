@@ -28,7 +28,7 @@ The pose list is a function of (arena, n, seed) alone, never of the build, so
 two builds' recordings compare pose for pose:
 
   python3 tools/waposes.py record --arena 0|1|2 --width 40|80 [--level 1..5]
-          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still | --nod] [--poses LIST.json]
+          [--n 60] [--seed 1] [--keys KeyG,KeyT] [--still | --nod | --rise] [--poses LIST.json]
           [--tree DIR] [--profile p.json [--detail PREFIX]] --out f.json
   python3 tools/waposes.py compare base.json new.json [--list] [--show N]
   python3 tools/waposes.py show f.json N
@@ -211,7 +211,7 @@ def record(a):
         # moved view's (--still keeps it: what a standing player's frame costs).
         pang = None
         rmap = {}
-        if a.nod: a.still = True
+        if a.nod or a.rise: a.still = True
         if not a.still or a.profile:
             mp2, bn2 = os.path.join(d, "m2"), os.path.join(d, "b2")
             subprocess.check_call(["nasm", "-f", "bin", "-w+error"] + ["-D" + x for x in a.define]
@@ -256,11 +256,13 @@ def record(a):
             last = None; dirty = []
             for rep in range(9):        # until a render (not the pose's first: it re-orders the boxes) no
                                         # timer tick landed in: those repeat to ~40 clk
-                if a.nod:               # (--nod: a render a half-row of pitch away first, so the
-                    run_to(e_r)         # measured one is a PITCH-ONLY move's - the view standing)
+                if a.nod or a.rise:     # (--nod: a render a half-row of pitch away first, so the
+                    run_to(e_r)         # measured one is a PITCH-ONLY move's - the view standing;
+                                        # --rise: one with the eye 40 units lower, an EYE-ONLY move's)
                     w16("wa_px", p["px"]); w16("wa_py", p["py"]); w16("wa_ang", p["ang"] << 6)
-                    w16("wa_pitch", p["pitch"] + 4); w16("wa_feet", p["feet"]); w16("wa_jz", 0); w16("wa_jv", 0)
-                    w16("wa_eye", 102 + p["feet"] + p["jump"]); w16("wa_pbtk", 0)
+                    w16("wa_pitch", p["pitch"] + (4 if a.nod else 0)); w16("wa_feet", p["feet"])
+                    w16("wa_jz", 0); w16("wa_jv", 0)
+                    w16("wa_eye", 102 + p["feet"] + p["jump"] - (40 if a.rise else 0)); w16("wa_pbtk", 0)
                     run_to(e_p); run_to(e_m)
                 c0 = run_to(e_r)
                 w16("wa_px", p["px"]); w16("wa_py", p["py"]); w16("wa_ang", p["ang"] << 6)
@@ -281,8 +283,9 @@ def record(a):
                 c1 = run_to(e_p)
                 clean = m.read(0x46C, 2) == t0
                 c2 = run_to(e_m)
-                if rep >= (2 if a.still else 1) and not lap:   # (a still view's: past its first still frame,
-                                                               # which sets up what the later ones keep)
+                if rep >= (3 if a.still else 1) and not lap:   # (a still view's: past its first two still
+                                                               # frames, which set up what the later ones keep
+                                                               # - the lines' walks, then the pickups' places)
                     if clean:
                         last = c1 - c0
                         break
@@ -356,6 +359,7 @@ r.add_argument("--detail", default="", help="with --profile: by every label unde
 r.add_argument("--out", required=True)
 r.add_argument("--still", action="store_true", help="a standing view: the renderer's still-view work kept")
 r.add_argument("--nod", action="store_true", help="a standing view whose PITCH alone moved since the frame before")
+r.add_argument("--rise", action="store_true", help="a standing view whose EYE HEIGHT alone moved since the frame before")
 r.add_argument("--poses", default="", help="a JSON list of poses to use instead of the seeded set (poses()'s own shape)")
 c = sub.add_parser("compare")
 c.add_argument("base"); c.add_argument("new"); c.add_argument("--list", action="store_true")
