@@ -852,33 +852,11 @@ tests/vidbank.py                   poll        1  # pre-gate census 2026-11-15 (
 
 tests/vidbench.py                  poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/vidbigclus.py                poll        3  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidcard.py                   poll        4  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidclmove.py                 poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
 tests/viddisk.py                   poll        9  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidgrey.py                   poll        2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidhdmake.py                 poll        2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidkeyclus.py                poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/vidlyorder.py                deadline    1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/vidmove.py                   poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidplay.py                   poll        2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
 tests/vidpreview.py                poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidrepeat.py                 poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidresbig.py                 poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
-
-tests/vidresident.py               poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/vidrmb.py                    deadline    2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
