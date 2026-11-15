@@ -105,7 +105,8 @@ WA_VAR wa_dmc, 2
 WA_VAR wa_dwh, 2                ;   W / 2
 WA_VAR wa_dnx, 1                ;   lines left in x, dots in a line,
 WA_VAR wa_dny, 1                ;   dots left in this one
-WA_VAR wa_dcnt, 1
+WA_VAR wa_dws, 1                ;   0 at 40 columns, 1 at 80: the view
+                                ;   test's shift
 WA_VAR wa_dsh, 1                ;   the row's shift
 WA_VAR wa_dlim, 1               ;   the first hidden half-row in the column
 WA_VAR wa_vt0, 2
@@ -5551,6 +5552,9 @@ wa_dots:
     mov ax, [wa_w]
     shr ax, 1
     mov [wa_dwh], ax
+    mov cl, 5                   ; (W / 2 >> 5: 0 at 40 columns, 1 at 80)
+    shr al, cl
+    mov [wa_dws], al
     push bp
     mov di, [wa_lp]
 .ix:
@@ -5565,23 +5569,20 @@ wa_dots:
     shl ax, 1
     mov bp, [wa_drx+2]
     rcl bp, 1
-    mov al, [wa_dny]
-    mov [wa_dcnt], al
+    mov cl, [wa_dws]            ; CL = the view test's shift, CH = the dots
+    mov ch, [wa_dny]            ; left (both pushed round a dot in view)
 .dot:
     cmp si, 48*32
     jl .next                    ; behind, or at our feet
-    mov bx, si
-    mov cl, 5
-    shr bx, cl                  ; BX = z
-    mov ax, bx                  ; in the view: |x| k16 / z <= 8W, which is
-    shl ax, 1                   ; |XK| <= z W / 8 - 5 z at 40 columns, 10 z
-    shl ax, 1                   ; at 80 (and BP is XK x 2)
+    mov bx, si                  ; in the view: |x| k16 / z <= 8W, which is
+    and bl, 0xE0                ; |XK| <= z W / 8 - 5 z at 40 columns, 10 z
+    shr bx, 1                   ; at 80 (and BP is XK x 2). 10 z is 8 z + 2 z,
+    shr bx, 1                   ; each 32 z shifted - single shifts, where
+    mov ax, bx                  ; z itself was SI >> 5 by CL: 28 clk a dot
+    shr bx, 1                   ; less - and 2 z is z's place in wa_rcp
+    shr bx, 1                   ; BX = 2 z
     add ax, bx
-    shl ax, 1
-    cmp byte [wa_w], 40
-    je .w40
-    shl ax, 1
-.w40:
+    shl ax, cl                  ; AX = 10 z, or 20 z at 80 columns
     mov dx, bp
     or dx, dx
     jns .xa
@@ -5589,7 +5590,7 @@ wa_dots:
 .xa:
     cmp dx, ax
     ja .next
-    shl bx, 1
+    push cx
     mov cx, [wa_rcp+bx-WA_NEAR*2] ; CX = 1/z (z < 700: inside the table)
     mov ax, bp
     imul cx
@@ -5597,13 +5598,13 @@ wa_dots:
     sar dx, 1
     add dx, [wa_dwh]
     cmp dx, [wa_w]
-    jae .next                   ; (negative is huge, unsigned)
+    jae .nextp                  ; (negative is huge, unsigned)
     mov bx, dx
     shl bx, 1                   ; BX = the column x 2
     mov ax, cx                  ; AL = the first half-row hidden there (the
     call wa_occl                ; span's ends before the wall's own depth)
     or al, al
-    jz .next                    ; a wall is nearer
+    jz .nextp                   ; a wall is nearer
     mov [wa_dlim], al
     mov ax, [wa_numb]
     imul cx
@@ -5611,9 +5612,9 @@ wa_dots:
     sar dx, cl
     add dx, [wa_hh]
     cmp dx, WA_HR
-    jae .next
+    jae .nextp
     cmp dl, [wa_dlim]
-    jae .next                   ; under a nearer platform's band
+    jae .nextp                  ; under a nearer platform's band
     mov al, 0xFA                ; upper half: the middle dot...
     test dl, 1
     jz .gl
@@ -5626,10 +5627,12 @@ wa_dots:
     mov ah, [wa_at+A_DOT]
     mov dl, [wa_frame]
     WPLOT
+.nextp:
+    pop cx
 .next:
     add si, [wa_dyz]            ; the next dot of the line
     add bp, [wa_dyx]
-    dec byte [wa_dcnt]
+    dec ch
     jnz .dot
     mov ax, [wa_dxz]            ; the next line
     add [wa_drz], ax
