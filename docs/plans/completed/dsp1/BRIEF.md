@@ -9,7 +9,7 @@ lever after the packages and ... a separate pass"*). This is that pass.
 
 Each agent works in its own git worktree, created by the coordinator at
 `/home/user/wt/<name>` on a branch `dsp1-<name>` cut from the commit that
-adds this file. Each agent writes its record to `docs/plans/dsp1/<name>.md`.
+adds this file. Each agent writes its record to `docs/plans/completed/dsp1/<name>.md`.
 The coordinator merges the branches into `end-of-week`. **Agents do not
 push.**
 
@@ -66,7 +66,7 @@ the trailing zeros the file does not carry. "file" is what the disk pays.
 | OS88NET.COM | `drivers/net/` (DOS end, SPEC.md 62.12) | - | - | 10,784 | os88sfx |
 | VMMOUSE.DRV | `drivers/vmmouse/` (kern_emu) | | | | |
 
-`docs/plans/dsp1/baseline.json` is `python3 tools/os88diskuse.py --save` of
+`docs/plans/completed/dsp1/baseline.json` is `python3 tools/os88diskuse.py --save` of
 the base build: every file on every 360KB image, with its clusters. **Measure
 your own base in your own worktree anyway** (section 3). The coordinator's
 JSON is the reference for the final total, not your yardstick.
@@ -266,7 +266,7 @@ disk but are cut out of the kernel build by `tools/os88mod.py` (SPEC.md 2.8).
 
 ## 4. The note
 
-Write `docs/plans/dsp1/<name>.md`, with these sections:
+Write `docs/plans/completed/dsp1/<name>.md`, with these sections:
 
 1. **BASE AND TIP**: a table, per driver, of image, bss, file and clusters
    on each disk that carries it, base against tip, with deltas.

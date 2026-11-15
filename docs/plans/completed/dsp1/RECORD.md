@@ -42,7 +42,7 @@ lz4-packed file, with trailing bss off the disk.
 SAVER −2, VESA −1 and HTTPFS −1. On the disks that carry OS88NET.COM
 (`network360`, `util360`, and the 720KB, 1.2MB and 1.44MB apps disks) it is
 465 bytes smaller and stays at 11 clusters at 360KB. `python3
-tools/os88diskuse.py --diff docs/plans/dsp1/baseline.json` reproduces these
+tools/os88diskuse.py --diff docs/plans/completed/dsp1/baseline.json` reproduces these
 figures.
 
 The snapshot was taken on a shallow clone with no build number. So

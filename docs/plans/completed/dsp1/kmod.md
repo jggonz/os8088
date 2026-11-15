@@ -137,7 +137,7 @@ None.
   is asked for and dropped at the feature's end (SPEC.md 2.8.3), so the
   section 0.2 price is **0** for all of them.
 - **FSCHECK.DRV** is `kernel/fsck.inc` (`.modfs`); the hdd agent's note
-  (docs/plans/dsp1/hdd.md 6) left it to this agent. Its four call/ret tails
+  (docs/plans/completed/dsp1/hdd.md 6) left it to this agent. Its four call/ret tails
   are in 9 below.
 
 ## 7. ROWS TO RUN
