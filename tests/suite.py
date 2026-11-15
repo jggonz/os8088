@@ -8656,7 +8656,15 @@ SOAK = [
         "BOTH lifts within 150 s (a lift leg names its lift); on the hedge "
         "the stack's top is a floor at 160 and its middle tier, a box "
         "STANDING on a box, one at 104, and its lift lands a rider on the "
-        "outer wall; on each, P starts at the arena's OWN first view. Red with bit "
+        "outer wall; the CROSSING (THREE-ARENAS-PLAN 1) is a flat arena; "
+        "up the ZIGGURAT's south ramp (12 treads) the feet reach the tower's "
+        "top at 288 (red with wa_hat reading a flight's treads as a LINE); "
+        "in THE PIT the start stands on the layer at 192, CTF's flags stand "
+        "at the ring's 240 (red with the base's height dropped), the west "
+        "lift carries a rider out of the pit, a hop off the layer lands on "
+        "the ring at 240, and the bots ride a lift and hop onto the ring "
+        "within two minutes (28 to 65 s measured); "
+        "on each, P starts at the arena's OWN first view. Red with bit "
         "6 dropped, one lift ticked and the views' pointer a word off (5 "
         "failures), and with wa_flcross answering 'clear' (both floor-line "
         "checks).",
@@ -8752,6 +8760,23 @@ SOAK = [
         "whole-line skip not asking the line's row (3 cells before the "
         "tower), and the direct cut's side sign turned or its bottom cut "
         "16 units out (4 checks each).",
+        needs=("marty", "nasm"), cpus=4,
+        wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wafiglod", "soak", py("tests/wafiglod.py"), 52.0,
+        "WIREARENA'S SMALL FIGURE BEGINS WHERE THE DETAIL LEVEL SAYS "
+        "(docs/plans/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
+        "figure small on the screen is drawn as seven joints and five "
+        "straight limbs (LK_FEW); how small is the level's (wa_flodv, "
+        "CONFIG's: wa_levtab's last column) - from 464 units ahead at "
+        "Medium and below, from 696 at High, never at Very High; the "
+        "owner chose it on trial builds. One figure before the eye in the "
+        "open arena 400, 560 and 760 units ahead, through "
+        "tools/waposes.py at Low, Medium, High and Very High, an emulator "
+        "each, the still frame single-stepped: the limbs walked (wa_flgo: "
+        "9 a whole figure, 5 a small one) must be 19, 19, 23 and 27. The "
+        "level is set by its key in a running match. Red with the "
+        "threshold a constant (23 at Low and Medium) and with the level's "
+        "key not syncing CONFIG (19 at High).",
         needs=("marty", "nasm"), cpus=4,
         wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wastill", "soak", py("tests/wastill.py"), 40.0,
@@ -8868,7 +8893,7 @@ SOAK = [
         "Twin's hill is given it by the HOST's rules and told by a GAME "
         "event (WE HAVE THE HILL); the hill's 10 s on the host make blue 1 "
         "on both; blue's third point shows BLUE WINS on both; after the "
-        "10 s a NEXT event takes both machines to the heights, the scores "
+        "10 s a NEXT event takes both machines to the pit, the scores "
         "anew and the hill nobody's on both, the link still up and the "
         "guest's pickups the host's rolls. Red with the guest ignoring GAME "
         "and NEXT (wc_gin, wc_nin returning at once): 8 checks.",

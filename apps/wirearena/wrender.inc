@@ -6201,11 +6201,13 @@ wa_figure:
 .none:
     mov word [di+F_PZ], 0       ; not drawn: the trigger has nothing to hit
     ret
-.lod:                           ; a SMALL figure (fv8 under WA_FLODV): J,
-    cmp word [wa_fv8], WA_FLODV ; its keyframe as it stands and only its
-    jae .lodd                   ; first seven joints, the ends, joined by
-    mov cl, 4                   ; five straight limbs (q 4: wa_fjl,
-    jmp .lodd                   ; wa_fjdone)
+.lod:                           ; a SMALL figure (fv8 under the level's
+    mov dl, [wa_flodv]          ; wa_flodv): J, its keyframe as it stands
+    xor dh, dh                  ; and only its first seven joints, the
+    cmp [wa_fv8], dx            ; ends, joined by five straight limbs (q 4:
+    jae .lodd                   ; wa_fjl, wa_fjdone)
+    mov cl, 4
+    jmp .lodd
 ; wa_kfrows - DI = a near figure, [wa_pa] and [wa_pb] its two keyframes'
 ; facing rows: a HOT keyframe's (IDLE, RUN) is here already and nothing is
 ; done; a cold one's (bit 15: a flinch, a death) is in the POSE part

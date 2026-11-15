@@ -1592,6 +1592,8 @@ wa_lt_a2:       db 'heights', 0
 wa_lt_a3:       db 'hedge', 0
 wa_lt_a4:       db 'twin', 0
 wa_lt_a5:       db 'crossing', 0
+wa_lt_a6:       db 'ziggurat', 0
+wa_lt_a7:       db 'the pit', 0
 wa_lt_dnames:   dw wa_lt_d0, wa_lt_d1, wa_lt_d2
 wa_lt_d0:       db 'easy', 0
 wa_lt_d1:       db 'normal', 0

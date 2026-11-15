@@ -35,9 +35,13 @@ LK_FEW      equ 64              ; J: a small figure's 7 joints, 5 limbs
 LK_COARSE2  equ 128             ; with COARSE: an edge moving under TWO
                                 ; half-rows is level (Low and Very Low: the
                                 ; owner, pass 6 - MULTIPLAYER-FPS-PLAN 16.10)
-%ifndef WA_FLODV                ; (a trial build's own: -DWA_FLODV=n)
-WA_FLODV    equ 16              ; LK_FEW: fv8 below this: under ~7 half-rows tall
-%endif
+WA_FLODV    equ 16              ; LK_FEW, High: fv8 below this - under ~7
+                                ; half-rows tall, 696 units ahead at 75
+                                ; degrees
+WA_FLODV2   equ 24              ; ...Medium and below: under ~10, from 464
+                                ; (the owner on the trial builds, 2026-11-15:
+                                ; "you can hardly tell at that distance" -
+                                ; wa_flodv, the detail level's: wa_levtab)
 
 ; per-figure record
 F_X     equ 0

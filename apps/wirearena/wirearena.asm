@@ -617,6 +617,9 @@ wa_frame_input:
     cmp al, WA_NLEV
     jae .bw
     call wa_setlevel
+    cmp word [wa_rds], 0        ; (wa_flodv is CONFIG's: into the part now,
+    je .drain                   ; if it is there - a mode set syncs it too)
+    call wa_rsync
     jmp .drain
 .bw:
     mov al, ah                  ; 1..3: a weapon (WEAPONS-PLAN 2.1; 4 and 5
@@ -1495,12 +1498,14 @@ wa_lists:
 ; the divide cannot fault (HEIGHTS-PLAN 9.5)
 wa_hat:
     mov ax, [di]
-    test byte [di+2], 0x80      ; A LINE (WIREARENA-ARENAS-PLAN 2): a wall to
-    jnz .line                   ; feet, its height to shots
-    test byte [di+2], 3
-    jz .out                     ; (solid, or a lift: its height as it is)
+    test byte [di+2], 3         ; (a flight's bits 4-7 are its treads: bit
+    jnz .notsol                 ; 7 is a LINE's on a SOLID alone - the
+    test byte [di+2], 0x80      ; ziggurat's 12 treads read as a wall)
+    jnz .line                   ; A LINE (WIREARENA-ARENAS-PLAN 2): a wall to
+    ret                         ; feet, its height to shots
+.notsol:
     test byte [di+2], 2
-    jnz .out
+    jnz .out                    ; (a lift: its height as it is)
     push bx
     push cx
     push dx
@@ -6597,23 +6602,26 @@ wa_rretv:   dw wa_rret
 ; other column, 2 a steep one's every other row too - the owner's, on the
 ; trial build: "actually look surprisingly fine"). Moving
 ; an option between levels is a change to this table and nothing else.
+; Last, the size under which a figure is drawn SMALL (wa_flodv, J's
+; threshold: ARENAS-PLAN 5) - CONFIG's, so a level's change syncs it.
 WA_NLEV equ 5
 wa_levtab:
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0, 2
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0, 2, WA_FLODV2
                                                                     ; 1 Very Low
-    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_RAMP2, 0, 0, 1 ; 2 Low
-    db LK_FEW|LK_ROUND|LK_COARSE, 0, 0, 0                           ; 3 Medium
-    db LK_FEW|LK_ROUND|LK_COARSE, 1, 0, 0                           ; 4 High
-    db 0, 1, 1, 0                                                   ; 5 Very High
+    db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_RAMP2, 0, 0, 1, WA_FLODV2 ; 2 Low
+    db LK_FEW|LK_ROUND|LK_COARSE, 0, 0, 0, WA_FLODV2                ; 3 Medium
+    db LK_FEW|LK_ROUND|LK_COARSE, 1, 0, 0, WA_FLODV                 ; 4 High
+    db 0, 1, 1, 0, WA_FLODV                                         ; 5 Very High
 
 ; wa_setlevel - AL = a level, 0..WA_NLEV-1: its options into the frame
 ; block. Clobbers AX, BX
 wa_setlevel:
     mov [wa_level], al
     xor ah, ah
+    mov bx, ax
     shl ax, 1
-    shl ax, 1                   ; (four bytes a level)
-    xchg ax, bx
+    shl ax, 1
+    add bx, ax                  ; (five bytes a level)
     mov al, [wa_levtab+bx]
     mov [wa_look], al
     mov al, [wa_levtab+bx+1]
@@ -6622,6 +6630,8 @@ wa_setlevel:
     mov [wa_treads], al
     mov al, [wa_levtab+bx+3]
     mov [wa_dash], al
+    mov al, [wa_levtab+bx+4]
+    mov [wa_flodv], al
     ret
 
 wa_rsync:

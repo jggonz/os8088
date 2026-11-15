@@ -119,9 +119,11 @@ def boot():
     return os88ui.boot(SYS, apps=APPS, machine="os8088_5150_cga", quick=True)
 
 
-def match(ui, arena, bots=None):
+def match(ui, arena, bots=None, mode=None):
     sym = amap(bench=True)
     w = ui.path("B:/WARENA.O88")
+    if mode is not None:                # (the setup's Mode, poked: CTF on
+        os88marty.Pkg(ui.m, w).write(sym["wa_lkgmode"], bytes([mode]))
     p = start(ui, w, sym, arena=arena, bots=bots)
     f0 = p.byte(sym["wa_frame"])
     os88marty.until(ui.m, lambda _: p.byte(sym["wa_frame"]) != f0,
@@ -197,13 +199,102 @@ def main():
                 print("  %-26s feet %d" % ("hedge: " + what, f), flush=True)
         g.ride(0, 1024, 2016, 112, 0, fails, "hedge: the lift, the wall")
         g.bench((768, 832, ord("A")), fails, "hedge: bench view A")
+    with boot() as ui:                  # CROSSING (THREE-ARENAS-PLAN 1)
+        g = match(ui, 5)
+        if g.p.byte(g.sym["wa_aflat"]) != 1:
+            fails.append("crossing: not a flat arena (wa_aflat %d)"
+                         % g.p.byte(g.sym["wa_aflat"]))
+        else:
+            print("  %-26s flat" % "crossing:", flush=True)
+        g.bench((1024, 256, ord("A")), fails, "crossing: bench view A")
+    with boot() as ui:                  # THE ZIGGURAT (THREE-ARENAS-PLAN 3)
+        g = match(ui, 6)
+        g.p.write(g.sym["wa_bdet"], b"\x01")
+        g.place(1024, 448, 0, ang=256)  # (the south ramp's foot, north)
+        g.m.advance(cycles=TICK * 4)
+        g.m.key("KeyW", up=False)       # (up the ramp: 6 m at a walk's
+        for t in range(150):            # speed)
+            g.m.advance(cycles=TICK * 2)
+            if g.word("wa_feet") == 288:
+                break
+        g.m.key("KeyW", down=False)
+        if g.word("wa_feet") != 288:
+            fails.append("ziggurat: up the south ramp, the feet at %d, not "
+                         "the tower's top (288)" % g.word("wa_feet"))
+        else:
+            print("  %-26s up in %d ticks" % ("ziggurat: the south ramp",
+                                              2 * (t + 1)), flush=True)
+        g.bench((1024, 256, ord("A")), fails, "ziggurat: bench view A")
+    with boot() as ui:                  # THE PIT (THREE-ARENAS-PLAN 2, 5)
+        g = match(ui, 7, mode=1)        # (CTF: its flags on the ring)
+        z = [g.word("wa_cfl", 10 * k + 6) for k in (0, 1)]
+        if z != [240, 240] or g.p.byte(g.sym["wa_gmode"]) != 1:
+            fails.append("pit: CTF's flags at their bases %r high (the "
+                         "ring's 240), mode %d" % (z, g.p.byte(
+                             g.sym["wa_gmode"])))
+        else:
+            print("  %-26s 240 up" % "pit: CTF's flags, the ring",
+                  flush=True)
+        g.p.write(g.sym["wa_bdet"], b"\x01")
+        g.m.advance(cycles=TICK * 4)
+        f = g.word("wa_feet")           # (the start: on the west layer)
+        if f != 192:
+            fails.append("pit: the start's feet at %d, not the layer's 192"
+                         % f)
+        else:
+            print("  %-26s feet %d" % ("pit: the start, the layer", f),
+                  flush=True)
+        g.place(512, 1024, 0)           # (down in the pit)
+        g.m.advance(cycles=TICK * 4)
+        g.ride(0, 416, 1024, -112, 0, fails, "pit: the west lift out")
+        g.place(192, 1024, 192, ang=512)    # A HOP onto the ring, west
+        g.m.advance(cycles=TICK * 4)
+        g.m.key("KeyW", up=False)
+        g.m.advance(cycles=TICK * 2)
+        g.m.key("Space", up=False)      # (held: a frame's poll sees it)
+        g.m.advance(cycles=TICK * 5)
+        g.m.key("Space", down=False)
+        for t in range(40):
+            g.m.advance(cycles=TICK)
+            if g.word("wa_feet") == 240 and g.word("wa_jz") == 0:
+                break
+        g.m.key("KeyW", down=False)
+        if g.word("wa_feet") != 240:
+            fails.append("pit: a hop west off the layer, the feet at %d, not "
+                         "the ring's 240" % g.word("wa_feet"))
+        else:
+            print("  %-26s feet 240" % "pit: a hop onto the ring",
+                  flush=True)
+        g.bench((256, 1024, ord("A")), fails, "pit: bench view A")
+    with boot() as ui:                  # ...ITS BOTS: the lifts out of the
+        g = match(ui, 7)                # pit, the hop to the ring
+        g.place(256, 1024, 192)
+        g.p.write(g.sym["wa_bdet"], b"\x00")
+        rode, ring = False, False
+        for s_ in range(240):
+            g.put("wa_hp", 100)
+            g.m.advance(cycles=F // 2)
+            rode = rode or any(g.lift(i) > g.word("wa_lrest", 2 * i)
+                               for i in (0, 1))
+            ring = ring or any(g.word("wa_figs", 56 * i + 18) == 240
+                               for i in range(3))
+            if rode and ring:
+                break
+        if not (rode and ring):
+            fails.append("pit: in 120 s the bots %s"
+                         % ("rode no lift" if not rode else
+                            "hopped onto no ring"))
+        else:
+            print("  %-26s within %d s" % ("pit: the bots ride, hop",
+                                            (s_ + 1) // 2), flush=True)
     if fails:
         print("waarenas: FAIL - %d:" % len(fails))
         for f in fails:
             print("  " + f)
         sys.exit(1)
     print("waarenas: ok - both lifts, the towers, the floor lines, the bots' rides, "
-          "the stack's tiers, the hedge's lift, each arena's bench")
+          "the stack's tiers, the hedge's lift, the crossing flat, the "
+          "ziggurat's ramp, the pit's lift, hop and bots, each arena's bench")
 
 
 if __name__ == "__main__":
