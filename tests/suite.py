@@ -671,7 +671,7 @@ FAST = [
         "figures were measured on, entry for entry. Soak because it "
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
-    Row("waverack", "soak", py("tests/waverack.py"), 150.0,
+    Row("waverack", "soak", py("tests/waverack.py"), 190.0,
         "WaveRack's document (SPEC.md 123.3-123.5) on QEMU, because what "
         "is asserted is behaviour: every tools/wrsim.py fixture on `make "
         "waverackfix`'s floppy opened through File > Open and the Standard "
@@ -686,7 +686,7 @@ FAST = [
         "the window after the zoom equal to a forced full repaint",
         needs=("qemu", "nasm", "pil"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin")),
-    Row("waverackplay", "soak", py("tests/waverackplay.py"), 480.0,
+    Row("waverackplay", "soak", py("tests/waverackplay.py"), 130.0,
         "WaveRack's transport (SPEC.md 123.6, 123.8, 123.9) on QEMU's SB16, "
         "its output captured by the wav audiodev at the rate the card plays "
         "and each play a slice held to tools/wrsim.py's convert(): "
@@ -704,10 +704,10 @@ FAST = [
         "keys, every sample; and on an SB16 TONE44.WAV at d = 1 - 44,100 Hz, "
         "the card's 4 KB block against eleven 2 KB halves - ending IDLE with "
         "no underrun and every sample captured",
-        needs=("qemu", "nasm", "numpy"), serial=True, timeout=1800,
+        needs=("qemu", "nasm", "numpy"), serial=True, timeout=900,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin",
                "build/mixercfg/SYSTEM.CFG")),
-    Row("waverackedit", "soak", py("tests/waverackedit.py"), 420.0,
+    Row("waverackedit", "soak", py("tests/waverackedit.py"), 440.0,
         "WaveRack's edits and saves (SPEC.md 123.3, 123.9, 123.10) on QEMU, "
         "on a floppy the row builds (the fixtures in MEDIA/, a filler leaving "
         "300 KB free): TONE8.WAV cut, pasted, pasted back where it came from "
@@ -724,10 +724,10 @@ FAST = [
         "it gone; a Save As refused for want of space before a byte is "
         "written; the 64-piece refusal; and the close box asking about an "
         "edited document, Discard closing it with no claim left",
-        needs=("qemu", "nasm"), serial=True, timeout=900,
+        needs=("qemu", "nasm"), serial=True, timeout=1500,
         wants=("build/os8088.img", "build/waverack.o88",
                "build/waverack.bin")),
-    Row("waverackdisk", "soak", py("tests/waverackdisk.py"), 1500.0,
+    Row("waverackdisk", "soak", py("tests/waverackdisk.py"), 400.0,
         "WaveRack PLAYING THROUGH DISK READS (SPEC.md 123.6) on MartyPC, "
         "because the defect is time: disk.inc holds sch_lock across every "
         "int 13h, so nothing converts while anything reads. Each leg runs "
@@ -745,7 +745,7 @@ FAST = [
         "CLUSTERS (os88hdd.py --spc 64): Wave 4 refused it; this one opens, "
         "plays and saves on it, the saved file read back off the VHD byte "
         "for byte",
-        needs=("marty", "nasm"), serial=True, timeout=3600,
+        needs=("marty", "nasm"), serial=True, timeout=1800,
         wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
                "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
                "build/sound.drv", "build/mixercfg/SYSTEM.CFG")),
@@ -757,7 +757,7 @@ FAST = [
     # being mkdtemp's or launch's (os88test.lane_locks) - the lane runs the
     # legs at once. `-k 'waverackrec*'` is the old row.
     Row("waverackrec", "soak", py("tests/waverackrec.py", "--leg", "hdd"),
-        1200.0,
+        300.0,
         "WaveRack RECORDS (SPEC.md 123.7) onto a HARD DISK on MartyPC, whose "
         "SB 2.01 ADC records a flat 80h, because a take is time: the card "
         "writes the ring by DMA while disk.inc holds sch_lock across every "
@@ -772,59 +772,59 @@ FAST = [
         "killed with the machine: unfinished on the VHD, then File > "
         "Recover Take on the next boot opens it dirty and marks WAVERACK.TAK "
         "done. Its sibling legs are waverackrec-clu, -fd, -calls and -q",
-        needs=("marty", "nasm"), serial=True, timeout=5400,
-        locks=("script:private",),
-        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
-               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
-               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
-               "build/wrfix.img")),
-    Row("waverackrec-clu", "soak", py("tests/waverackrec.py", "--leg",
-                                      "bigclu"), 450.0,
-        "WaveRack RECORDS onto 32 KB CLUSTERS (waverackrec's bigclu leg, "
-        "SPEC.md 123.7): a VGA XT on a 321 MB VHD of os88hdd.py --spc 64, "
-        "60 s at 11,025 Hz and at 15,000 Hz, the header one cluster and "
-        "every write 32 KB, each take read back off the VHD against "
-        "wrsim.take_header with frames = the card's count and no overrun, "
-        "the colour face photographed mid-take",
-        needs=("marty", "nasm"), serial=True, timeout=2400,
-        locks=("script:private",),
-        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
-               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
-               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
-               "build/wrfix.img")),
-    Row("waverackrec-fd", "soak", py("tests/waverackrec.py", "--leg",
-                                     "floppy"), 450.0,
-        "WaveRack RECORDS onto a FLOPPY (waverackrec's floppy leg, SPEC.md "
-        "123.7): a 1.44 MB B: filled so a 30 s take at 8,000 Hz fits and a "
-        "second runs out of room - 11,025 Hz refused there first ('Floppy: "
-        "use 8,000 Hz'), the first take read back whole, the second DISK "
-        "FULL ('Disk full: take kept') with whole writes",
-        needs=("marty", "nasm"), serial=True, timeout=2400,
-        locks=("script:private",),
-        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
-               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
-               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
-               "build/wrfix.img")),
-    Row("waverackrec-calls", "soak", py("tests/waverackrec.py", "--leg",
-                                        "calls"), 300.0,
-        "WaveRack's redraw cost on the target (waverackrec's calls leg, "
-        "US-11): a -DWR_CALLS build counts the drawing primitives a tick "
-        "idle, recording, playing the take and for one cut on the 5150 + "
-        "Hercules + XT-IDE, and prices wr_redraw's tick while recording and "
-        "a full repaint each way in guest cycles",
         needs=("marty", "nasm"), serial=True, timeout=1800,
         locks=("script:private",),
         wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
                "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
                "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
                "build/wrfix.img")),
+    Row("waverackrec-clu", "soak", py("tests/waverackrec.py", "--leg",
+                                      "bigclu"), 200.0,
+        "WaveRack RECORDS onto 32 KB CLUSTERS (waverackrec's bigclu leg, "
+        "SPEC.md 123.7): a VGA XT on a 321 MB VHD of os88hdd.py --spc 64, "
+        "60 s at 11,025 Hz and at 15,000 Hz, the header one cluster and "
+        "every write 32 KB, each take read back off the VHD against "
+        "wrsim.take_header with frames = the card's count and no overrun, "
+        "the colour face photographed mid-take",
+        needs=("marty", "nasm"), serial=True, timeout=1200,
+        locks=("script:private",),
+        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
+               "build/wrfix.img")),
+    Row("waverackrec-fd", "soak", py("tests/waverackrec.py", "--leg",
+                                     "floppy"), 90.0,
+        "WaveRack RECORDS onto a FLOPPY (waverackrec's floppy leg, SPEC.md "
+        "123.7): a 1.44 MB B: filled so a 30 s take at 8,000 Hz fits and a "
+        "second runs out of room - 11,025 Hz refused there first ('Floppy: "
+        "use 8,000 Hz'), the first take read back whole, the second DISK "
+        "FULL ('Disk full: take kept') with whole writes",
+        needs=("marty", "nasm"), serial=True, timeout=900,
+        locks=("script:private",),
+        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
+               "build/wrfix.img")),
+    Row("waverackrec-calls", "soak", py("tests/waverackrec.py", "--leg",
+                                        "calls"), 90.0,
+        "WaveRack's redraw cost on the target (waverackrec's calls leg, "
+        "US-11): a -DWR_CALLS build counts the drawing primitives a tick "
+        "idle, recording, playing the take and for one cut on the 5150 + "
+        "Hercules + XT-IDE, and prices wr_redraw's tick while recording and "
+        "a full repaint each way in guest cycles",
+        needs=("marty", "nasm"), serial=True, timeout=900,
+        locks=("script:private",),
+        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
+               "build/wrfix.img")),
     Row("waverackrec-q", "soak", py("tests/waverackrec.py", "--leg",
-                                    "noinput"), 60.0,
+                                    "noinput"), 30.0,
         "WaveRack's Record with NO INPUT (waverackrec's noinput leg, SPEC.md "
         "123.7) on QEMU's SB16, which captures nothing: 11,025 Hz onto the B: "
         "floppy refused ('Floppy: use 8,000 Hz'); at 8,000 Hz Record answers "
         "'No input from the card', the heap as it was and no VOICE file left",
-        needs=("qemu", "nasm"), serial=True, timeout=600,
+        needs=("qemu", "nasm"), serial=True, timeout=300,
         locks=("script:private",),
         wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
                "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
@@ -868,7 +868,7 @@ FAST = [
                                "--skip", "playwav", "--skip", "pause",
                                "--skip", "wavdirs", "--skip", "xtpeak",
                                "--skip", "mainstall"),
-        750.0,
+        320.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "
         "X3STUB.CFG), on QEMU because what is asserted is behaviour: the "

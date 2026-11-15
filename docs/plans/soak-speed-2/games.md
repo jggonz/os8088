@@ -59,8 +59,9 @@ throughout.
 6. **waverackdisk's `guest_wait` polls at 0.05** (goal 1): 0.5 host s a
    look overran every wait by up to ~1.7 guest s (waverackrec imports it).
 7. **Timeouts** (goal 2): gbaot 900 -> 2400 (a CPU-bound host row 1.26x its
-   idle wall from the kill), excitebikeref 600 -> 1500 (1.25x),
-   waverackplay 900 -> 1800 (1.88x).
+   declared wall from the kill), excitebikeref 600 -> 1500 (1.25x),
+   waverackedit 900 -> 1500 (it measured 430 s at the load below). Set from
+   the measured walls, not raised: waverackrec* and waverackdisk (below).
 
 8. **waverackplay counts laps, and its play watch is guest-timed** (goal 2):
    the loop leg's host sleep of 2.6 laps' time, which a loaded box turned
@@ -73,7 +74,38 @@ throughout.
 
 ## Measured
 
-(filled in by the verification pass after 09:05 UTC)
+One scoped soak, `os88soak.py start --marty-jobs 1` over the ten rows the
+changes reach, 09:05 UTC, **10/10 ok** in 30:41 - on a box carrying 9 to 13
+other emulators of the other streams the whole time (`status`'s in-flight
+list), so every wall below is a LOADED wall. Beside it, `.scratch-agent/ab.sh`
+ran the base commit's scripts (a symlinked root with the old files) for the
+A/B. Walls are host seconds; QEMU rows have no WAITLOG.
+
+| row | declared | before | after | note |
+|---|---|---|---|---|
+| waverackrec (5 rows) | 2,400 one row | - (never measured) | 226 + 149 + 59 + 65 + 14.5 = **514 s**, longest leg **226 s** | guest time unchanged by the split: 743 guest s of waits (OS88_WAITLOG); the critical path at lane width >= 2 is the hdd leg |
+| waverackdisk | 1,500 | 266.8 (WAVERACK-PLAN.md's final run, idle) | **320.8 s** | 742 guest s of waits; secs 400 |
+| xtmp3eng covox leg | - | **60 s** (A/B) | **13 s** (A/B) | the old 45 s sleep let the WHOLE 111 KB file play (111,517 writes); the wait stops at 30,317, the same check passing (30,312 identical from the head) |
+| xtmp3eng | 750 | - | **273.5 s** | secs 320; per-leg host seconds now printed |
+| waverackedit | 420 | **490 s** (A/B) | **432 s** (A/B), 430.1 (soak) | -12% from the key pauses alone |
+| waverack | 150 | **191 s** (A/B) | **186.9 s** | stability only: the guest-budgeted `until` |
+| waverackplay | 480 | **105 s** (A/B) | **101.6 s** | stability only: the lap count, the guest-timed watch |
+
+`secs=` re-declared to these walls: waverackrec 300 / -clu 200 / -fd 90 /
+-calls 90 / -q 30, waverackdisk 400, waverack 190, waverackplay 130,
+waverackedit 440, xtmp3eng 320 - **5,700 declared seconds become 2,190** for
+the same rows (the scheduler packs lanes by `secs`).
+
+Not run, and why: `xtmp3rate` needs `qemuvt` (build/qemu9, not built here)
+and would SKIP - its script change is the per-leg print and the lock;
+`xtmp3live` imports xtmp3eng but reaches neither the covox helper nor
+`main`; gbaot and excitebikeref changed only their timeouts.
+
+Break-it: no row's ASSERTION changed. The covox wait ends on the same
+quantity the check then tests, so a Covox given nothing still waits out its
+240 s and goes red on "at least two seconds"; `ui_done` is capped at each old
+pause, so a key that is never taken spends exactly the old pause and the
+check after it is what it was.
 
 ## Ideas for the next pass, by expected host time saved
 

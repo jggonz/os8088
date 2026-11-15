@@ -1889,13 +1889,13 @@ def leg_covox():
               "md %d state %d %s" % (r.st()["md"], r.st()["state"],
                                      r.errtext()))
         g0 = r.w("x3_grans")                # QEMU runs the bracket's 11 kHz
-        # IRQ0 slowly (~700 samples a wall second), so this was a 45 s
-        # sleep sized for ~31,000 of them on an idle box - and a loaded one
-        # gave fewer than the two seconds checked below. It waits for THE
-        # SAMPLES instead: data-port writes since this moment (an
-        # undercount: the play began before it) past two seconds' worth
-        # plus slack, the 45 s now a floor only for a box too slow to say
-        # (docs/plans/soak-speed-2/games.md)
+        # IRQ0 at whatever rate the host allows (~700 samples a wall second
+        # when this was written, the whole 111 KB file in 45 s today), so a
+        # fixed 45 s sleep was either most of the leg or, on a loaded box,
+        # short of the two seconds checked below. It waits for THE SAMPLES
+        # instead: data-port writes since this moment (an undercount: the
+        # play began before it) past two seconds' worth plus slack, 240 host
+        # s at most (docs/plans/soak-speed-2/games.md: 60 -> 13 s a leg)
         n0 = _covox_writes(tr)
         t0 = time.time()
         while (_covox_writes(tr) - n0 < 2 * 11025 + 2048 and
