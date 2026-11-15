@@ -1771,8 +1771,17 @@ def start(a):
     # for a poll that may never come. A waiter must be able to see the end
     # without anybody's help.
     inner = " ".join("'%s'" % c.replace("'", "'\\''") for c in cmd)
-    wrapper = ("%s; echo $? > '%s'; touch '%s'"
-               % (inner, os.path.join(d, "exit"), os.path.join(d, "finished")))
+    # ...AND IT DROPS ITS BOOT CACHE (tools/os88bootcache.py) before the
+    # marker: entries are swept only by the NEXT row that uses the cache, so
+    # a finished run left its paused registries (~40 MB each) alive for as
+    # long as nothing used that tree again - the first soak with the cache on
+    # ended holding them. The row's exit code is kept across the drop.
+    drop = "'%s' '%s' drop >/dev/null 2>&1" % (
+        sys.executable.replace("'", "'\\''"),
+        os.path.join(ROOT, "tools", "os88bootcache.py").replace("'", "'\\''"))
+    wrapper = ("%s; rc=$?; %s; echo $rc > '%s'; touch '%s'"
+               % (inner, drop, os.path.join(d, "exit"),
+                  os.path.join(d, "finished")))
     # APPENDED, not truncated: a --resume reuses this directory, and the log
     # of the attempt that died is the only account of how it died.
     try:

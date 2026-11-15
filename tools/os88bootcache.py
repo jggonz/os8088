@@ -43,7 +43,7 @@ THE REGISTRY is an instance, owned by the row that boots it until the
 snapshot is held and DETACHED after (`os88marty.py instances` shows it,
 label `bootcache`), paused, holding the snapshot. Entries idle for
 OS88_BOOTCACHE_IDLE_MIN minutes (default 20) or beyond OS88_BOOTCACHE_MAX
-(default 6) are killed by the next row that uses the cache;
+(default 24) are killed by the next row that uses the cache;
 `python3 tools/os88bootcache.py drop` kills them all, `list` shows them, and
 `check IMG [APPS] [--machine M]` is the self-check: a cached and a fresh boot
 of the same key compared on the guest's desktop state.
@@ -65,7 +65,12 @@ from os88marty import Marty, MartyError  # noqa: E402
 
 VERSION = 1
 IDLE_MIN = float(os.environ.get("OS88_BOOTCACHE_IDLE_MIN", "20"))
-MAX_ENTRIES = int(os.environ.get("OS88_BOOTCACHE_MAX", "6"))
+# 24, not 6: a soak's four lanes run rows with MANY keys (a row's own
+# disks are a key of their own), and at 6 the LRU evicted the shared ones
+# before a second row could restore them - the first soak with the cache on
+# showed every entry at `uses 1`. An entry is a paused process of ~40 MB
+# resident (measured), so 24 is about 1 GB at most.
+MAX_ENTRIES = int(os.environ.get("OS88_BOOTCACHE_MAX", "24"))
 
 
 def enabled():
