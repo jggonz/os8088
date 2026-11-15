@@ -23276,7 +23276,8 @@ def _shared(rows, groups):
     that boots once and gives every leg a restore of that desktop with its
     own disk in B:. The legs keep the rows' names, arguments and reasons
     (registered above, as they were, and taken out here), and the row's
-    output names the leg that failed. `secs` is the group's own."""
+    output names the leg that failed. `secs` is the group's own: 1.25x
+    its wall in one scoped soak at --marty-jobs 1, the box at load ~8-10."""
     import shlex
     by = {r.name: r for r in rows}
     gone, made = set(), {}
@@ -23302,43 +23303,43 @@ def _shared(rows, groups):
 # (the rows the ports above name - vidpage, vidfskeysvga4 - stay rows of
 # their own: a kern_mega port boots Bochs, which has no fork snapshot)
 SOAK = _shared(SOAK, (
-    ("vidpage2sh", 220, ("vidkpart", "vidpagemx", "vidpagely",
+    ("vidpage2sh", 165, ("vidkpart", "vidpagemx", "vidpagely",
                          "vidpagelymx", "vidpagebn", "vidpagebnmx")),
-    ("vidpage3sh", 270, ("vidpage3mx", "vidkpart3mx", "vidpage4mx",
+    ("vidpage3sh", 180, ("vidpage3mx", "vidkpart3mx", "vidpage4mx",
                          "vidpagefmx3", "vidpagefmx3o")),
-    ("vidpage4sh", 330, ("vidpage4v", "vidpagefmx4", "vidpagefmx4o",
+    ("vidpage4sh", 150, ("vidpage4v", "vidpagefmx4", "vidpagefmx4o",
                          "vidpagefv4")),
-    ("vidpagepoolsh", 250, ("vidpagepool4v", "vidpagepoolf")),
-    ("vidpagensh", 370, ("vidpage8n", "vidpage6n", "vidpagefv8n",
+    ("vidpagepoolsh", 90, ("vidpagepool4v", "vidpagepoolf")),
+    ("vidpagensh", 185, ("vidpage8n", "vidpage6n", "vidpagefv8n",
                          "vidpagefv6n")),
-    ("vidpagehercsh", 95, ("vidpageherc", "vidkparth")),
-    ("vidfskeys8sh", 170, ("vidfskeysvga8", "vidfskeysmodex",
+    ("vidpagehercsh", 55, ("vidpageherc", "vidkparth")),
+    ("vidfskeys8sh", 145, ("vidfskeysvga8", "vidfskeysmodex",
                            "vidfskeysflip")),
-    ("vidfskeys4sh", 290, ("vidfskeysvga4m3", "vidfskeysink",
+    ("vidfskeys4sh", 285, ("vidfskeysvga4m3", "vidfskeysink",
                            "vidfskeysvga4pl", "vidkpartfs")),
-    ("vidfskeyscgash", 200, ("vidfskeyscga4", "vidfskeysc160",
+    ("vidfskeyscgash", 120, ("vidfskeyscga4", "vidfskeysc160",
                              "vidfskeysc512", "vidfskeystext")),
-    ("vidplaycgash", 150, ("vidplay", "vidplayring", "vidplay3",
+    ("vidplaycgash", 145, ("vidplay", "vidplayring", "vidplay3",
                            "vidplaybig", "vidplaycomp")),
-    ("vidv2vgash", 140, ("vidv2", "vidv2mx", "vidv24")),
-    ("vidv2enc1sh", 380, ("vidv2pgmx", "vidv2flmx", "vidv2pg4")),
-    ("vidv2enc2sh", 280, ("vidv2lp", "vidv2ly4")),
-    ("vidv2hercsh", 85, ("vidv2herc", "vidv2shd")),
-    ("vidmodexsh", 230, ("vidmodex2", "vidmodexfl", "vidmodexflh",
+    ("vidv2vgash", 75, ("vidv2", "vidv2mx", "vidv24")),
+    ("vidv2enc1sh", 155, ("vidv2pgmx", "vidv2flmx", "vidv2pg4")),
+    ("vidv2enc2sh", 105, ("vidv2lp", "vidv2ly4")),
+    ("vidv2hercsh", 35, ("vidv2herc", "vidv2shd")),
+    ("vidmodexsh", 100, ("vidmodex2", "vidmodexfl", "vidmodexflh",
                          "vidmodexflo")),
-    ("vidmodexsh2", 160, ("vidmodexflc", "vidmodexrk", "vidmodexrs")),
-    ("vidcgash", 120, ("vidcga4", "vidcga4p", "vidc160", "vidc512",
+    ("vidmodexsh2", 80, ("vidmodexflc", "vidmodexrk", "vidmodexrs")),
+    ("vidcgash", 55, ("vidcga4", "vidcga4p", "vidc160", "vidc512",
                        "vidtext")),
-    ("vidcgavgash", 90, ("vidcga4vga", "vidc160vga", "vidtextvga")),
-    ("vidcgahercsh", 40, ("vidtextherc", "vidtexthercno")),
-    ("vidscreensh", 280, ("vidscreen", "vidscreeno")),
-    ("vidscreennsh", 170, ("vidscreenb", "vidscreenn", "vidscreennc",
+    ("vidcgavgash", 50, ("vidcga4vga", "vidc160vga", "vidtextvga")),
+    ("vidcgahercsh", 25, ("vidtextherc", "vidtexthercno")),
+    ("vidscreensh", 140, ("vidscreen", "vidscreeno")),
+    ("vidscreennsh", 95, ("vidscreenb", "vidscreenn", "vidscreennc",
                            "vidscreenno")),
-    ("videmssh", 200, ("videms", "videmshyb", "videmsslow", "videmswrap")),
-    ("vidpalsh", 170, ("vidpal", "vidpallayer", "vidpalloop",
+    ("videmssh", 140, ("videms", "videmshyb", "videmsslow", "videmswrap")),
+    ("vidpalsh", 140, ("vidpal", "vidpallayer", "vidpalloop",
                        "vidpalrep0")),
-    ("vidrepeatsh", 140, ("vidrepeat", "vidrepeatshd", "vidkpartrep")),
-    ("vidprevhercsh", 170, ("vidprevherc", "vidprevshd", "vidkpartpv")),
+    ("vidrepeatsh", 80, ("vidrepeat", "vidrepeatshd", "vidkpartrep")),
+    ("vidprevhercsh", 165, ("vidprevherc", "vidprevshd", "vidkpartpv")),
 ))
 
 

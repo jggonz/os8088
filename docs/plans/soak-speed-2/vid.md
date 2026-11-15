@@ -51,33 +51,33 @@ out and puts one row in the first one's place whose command is
 theirs joined, and whose `needs`/`wants` are their union. `secs` is the
 group's own.
 
-| shared row | legs (the rows they were) | declared before (sum) | after |
-|---|---|---|---|
-| vidpage2sh | vidkpart vidpagemx vidpagely vidpagelymx vidpagebn vidpagebnmx | 262 | 220 (predicted) |
-| vidpage3sh | vidpage3mx vidkpart3mx vidpage4mx vidpagefmx3 vidpagefmx3o | 326 | 270 (predicted) |
-| vidpage4sh | vidpage4v vidpagefmx4 vidpagefmx4o vidpagefv4 | 385 | 330 (predicted) |
-| vidpagepoolsh | vidpagepool4v vidpagepoolf | 275 | 250 (predicted) |
-| vidpagensh | vidpage8n vidpage6n vidpagefv8n vidpagefv6n | 420 | 370 (predicted) |
-| vidpagehercsh | vidpageherc vidkparth | 110 | 95 (predicted) |
-| vidfskeys8sh | vidfskeysvga8 vidfskeysmodex vidfskeysflip | 200 | 170 (predicted) |
-| vidfskeys4sh | vidfskeysvga4m3 vidfskeysink vidfskeysvga4pl vidkpartfs | 340 | 290 (predicted) |
-| vidfskeyscgash | vidfskeyscga4 vidfskeysc160 vidfskeysc512 vidfskeystext | 240 | 200 (predicted) |
-| vidplaycgash | vidplay vidplayring vidplay3 vidplaybig vidplaycomp | 195 | 150 (predicted) |
-| vidv2vgash | vidv2 vidv2mx vidv24 | 180 | 140 (predicted) |
-| vidv2enc1sh | vidv2pgmx vidv2flmx vidv2pg4 | 510 | 380 (predicted) |
-| vidv2enc2sh | vidv2lp vidv2ly4 | 340 | 280 (predicted) |
-| vidv2hercsh | vidv2herc vidv2shd | 100 | 85 (predicted) |
-| vidmodexsh | vidmodex2 vidmodexfl vidmodexflh vidmodexflo | 270 | 230 (predicted) |
-| vidmodexsh2 | vidmodexflc vidmodexrk vidmodexrs | 190 | 160 (predicted) |
-| vidcgash | vidcga4 vidcga4p vidc160 vidc512 vidtext | 180 | 120 (predicted) |
-| vidcgavgash | vidcga4vga vidc160vga vidtextvga | 120 | 90 (predicted) |
-| vidcgahercsh | vidtextherc vidtexthercno | 50 | 40 (predicted) |
-| vidscreensh | vidscreen vidscreeno | 300 | 280 (predicted) |
-| vidscreennsh | vidscreenb vidscreenn vidscreennc vidscreenno | 195 | 170 (predicted) |
-| videmssh | videms videmshyb videmsslow videmswrap | 260 | 200 (predicted) |
-| vidpalsh | vidpal vidpallayer vidpalloop vidpalrep0 | 220 | 170 (predicted) |
-| vidrepeatsh | vidrepeat vidrepeatshd vidkpartrep | 180 | 140 (predicted) |
-| vidprevhercsh | vidprevherc vidprevshd vidkpartpv | 214 | 170 (predicted) |
+| shared row | legs (the rows they were) | declared before (sum) | measured wall, soak | declared now |
+|---|---|---|---|---|
+| vidpage2sh | vidkpart vidpagemx vidpagely vidpagelymx vidpagebn vidpagebnmx | 262 | 130.6 s | 165 |
+| vidpage3sh | vidpage3mx vidkpart3mx vidpage4mx vidpagefmx3 vidpagefmx3o | 326 | 144.8 s | 180 |
+| vidpage4sh | vidpage4v vidpagefmx4 vidpagefmx4o vidpagefv4 | 385 | 119.2 s | 150 |
+| vidpagepoolsh | vidpagepool4v vidpagepoolf | 275 | 71.7 s | 90 |
+| vidpagensh | vidpage8n vidpage6n vidpagefv8n vidpagefv6n | 420 | 146.8 s | 185 |
+| vidpagehercsh | vidpageherc vidkparth | 110 | 43.9 s | 55 |
+| vidfskeys8sh | vidfskeysvga8 vidfskeysmodex vidfskeysflip | 200 | 114.9 s | 145 |
+| vidfskeys4sh | vidfskeysvga4m3 vidfskeysink vidfskeysvga4pl vidkpartfs | 340 | 229.9 s | 285 |
+| vidfskeyscgash | vidfskeyscga4 vidfskeysc160 vidfskeysc512 vidfskeystext | 240 | 96.5 s | 120 |
+| vidplaycgash | vidplay vidplayring vidplay3 vidplaybig vidplaycomp | 195 | 115.5 s | 145 |
+| vidv2vgash | vidv2 vidv2mx vidv24 | 180 | 61.4 s | 75 |
+| vidv2enc1sh | vidv2pgmx vidv2flmx vidv2pg4 | 510 | 123.3 s | 155 |
+| vidv2enc2sh | vidv2lp vidv2ly4 | 340 | 82.6 s | 105 |
+| vidv2hercsh | vidv2herc vidv2shd | 100 | 25.4 s | 35 |
+| vidmodexsh | vidmodex2 vidmodexfl vidmodexflh vidmodexflo | 270 | 81.0 s | 100 |
+| vidmodexsh2 | vidmodexflc vidmodexrk vidmodexrs | 190 | 64.6 s | 80 |
+| vidcgash | vidcga4 vidcga4p vidc160 vidc512 vidtext | 180 | 42.0 s | 55 |
+| vidcgavgash | vidcga4vga vidc160vga vidtextvga | 120 | 39.4 s | 50 |
+| vidcgahercsh | vidtextherc vidtexthercno | 50 | 19.0 s | 25 |
+| vidscreensh | vidscreen vidscreeno | 300 | 112.0 s | 140 |
+| vidscreennsh | vidscreenb vidscreenn vidscreennc vidscreenno | 195 | 76.0 s | 95 |
+| videmssh | videms videmshyb videmsslow videmswrap | 260 | 112.3 s | 140 |
+| vidpalsh | vidpal vidpallayer vidpalloop vidpalrep0 | 220 | 113.3 s | 140 |
+| vidrepeatsh | vidrepeat vidrepeatshd vidkpartrep | 180 | 63.1 s | 80 |
+| vidprevhercsh | vidprevherc vidprevshd vidkpartpv | 214 | 131.0 s | 165 |
 
 Groups are sized so no row is past ~6 minutes declared: a merged row costs
 the lanes some packing granularity, which is the price of a boot.
@@ -97,7 +97,39 @@ vidkeyclus, vidmove, vidplay, vidrepeat, vidresbig, vidresident -> 0.05.
 
 ## Measurements
 
-(Filled in after the verification pass - see below.)
+All on this box with eight agents sharing four cores (load 8-18); MartyPC
+guest seconds are load-independent, walls are not.
+
+**One scoped soak** (`os88soak.py start -k ... --marty-jobs 1`, the 64 rows
+the changes reach, kern_mega ports included): **61 ok, 0 FAIL, 3 SKIP**
+(vidpage3xip, mega-vidcard, mega-vidpreview: no 86Box on this box), 59 min
+wall. The 25 shared rows took **2,360 s** of wall; the 74 rows they replace
+were declared **6,062 s** (declared, not measured - the honest before is
+below) and are now declared 2,880 s (1.25x measured).
+
+**Before / after, the same legs run alone and shared** (`OS88_WAITLOG` sums:
+guest s waited; wall host s; back to back, same load):
+
+| legs | alone (sum of N rows) | shared (one row) |
+|---|---|---|
+| vidcgash: vidcga4 vidcga4p vidc160 vidc512 vidtext | 99.9 s wall, 133.6 guest s | 58.4 s wall, 76.0 guest s (42.0 s in the soak) |
+| vidfskeys8sh: vidfskeysvga8 vidfskeysmodex vidfskeysflip | 185.5 s, 218.9 guest | 135.1 s, 184.1 guest (114.9 in the soak) |
+| vidpagehercsh: vidpageherc vidkparth | 85.9 s, 115.0 guest | 89.1 s, 100.5 guest (43.9 in the soak) |
+
+A shared boot is ~6-11 host s once; a leg after the first starts in under a
+second (vidcgahercsh: leg 1 17.1 s with the boot, leg 2 3.7 s). The saving
+is the boot and launch per leg, so it is biggest where a leg is short
+(vidcga*, -42% wall) and small where the leg is a long play (vidpage herc,
+guest -13%, wall within noise).
+
+**Broken on purpose**: the shared boot with `Marty.mount` stubbed out (the
+swap never made, `.scratch-agent`-style monkeypatch, not committed) - leg 1
+vidcga4 ok, leg 2 vidcga4p **FAILS** (the poster differs in 1,514 bytes,
+every hold 16,000 pixels wrong), and the summary names it. So a leg played
+against another leg's disk cannot pass.
+
+**vidv2's cache**: hpa and pgmx cached == fresh encode, byte for byte
+(md5 07e0a289... for hpa).
 
 ## Not done - for the next pass, by expected saving
 
