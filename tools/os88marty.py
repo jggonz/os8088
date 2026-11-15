@@ -274,6 +274,10 @@ def pace(m, secs):
 WAITLOG = os.environ.get("OS88_WAITLOG")
 
 
+# vram's unpacking table: byte -> its eight pixels as 0/1 bytes, MSB first
+_BITS8 = [bytes((b >> (7 - i)) & 1 for i in range(8)) for b in range(256)]
+
+
 class MartyError(Exception):
     pass
 
@@ -778,13 +782,17 @@ class Marty:
             raise MartyError("kind must be 'cga' or 'herc'")
         fb = self.read(base, banks * 0x2000)
         rows = []
+        bits = _BITS8
         for y in range(h):
             # SPEC.md 39.3's banked layout, byte for byte the arithmetic in
             # tools/hercshot.py - so a picture from either route is the same
             # picture, and a shear means the KERNEL's bank arithmetic moved.
             off = (y % banks) * 0x2000 + (y // banks) * stride
-            rows.append(bytearray((fb[off + (x >> 3)] >> (7 - (x & 7))) & 1
-                                  for x in range(w)))
+            # a byte's eight pixels by TABLE, MSB first: it was a generator
+            # step a pixel - 128,000 a CGA frame, ~35 host ms, paid by every
+            # `settle` capture on a 1bpp card (soak-speed-2/core.md)
+            rows.append(bytearray(b"".join(
+                [bits[c] for c in fb[off:off + (w >> 3)]])))
         return w, h, rows
 
     # --- memory --------------------------------------------------------------
@@ -2549,7 +2557,9 @@ class _Screen(object):
                 self._lit = [sum(r) for r in self._rows]
             else:
                 w, h, d = self.w, self.h, self._d
-                self._lit = [sum(1 for x in range(w) if d[(y * w + x) * 3])
+                # each row's RED bytes by slice, counted by `count` (was a
+                # generator step a pixel: 307,200 a VGA capture)
+                self._lit = [w - d[y * w * 3:(y + 1) * w * 3:3].count(0)
                              for y in range(h)]
         return self._lit
 

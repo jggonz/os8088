@@ -136,6 +136,14 @@ techniques are cited as "SOAK-SPEED n".
     Worth finishing: hold a key's up for a whole coarse batch's worth of
     cycles server-side, then default it on.
 
+13. **`Marty.vram` unpacks by table, `_Screen._band` counts by slice**:
+    `vram` was a Python generator step a PIXEL (128,000 a CGA frame, 250,560
+    a Hercules one) and every `settle` capture on a 1bpp card is one -
+    cProfile of fmarrows at the base: 3.6 M genexpr calls, 1.9 host s in 28
+    `vram`s. Now 0.5 / 0.8 ms against 9.8 / 19.9 (CGA / Herc, outputs
+    checked equal on random frames). The VGA boot gate's band count
+    likewise (equal on random frames).
+
 ## Measurements
 
 (after 09:05 UTC; see below)
