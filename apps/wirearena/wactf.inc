@@ -555,12 +555,18 @@ wc_score:
     jz .out                     ; kills
     cmp word [wc_grace], 0      ; (linked, a new arena: the old board's
     jne .out                    ; rows may still come in)
-.f:
-    cmp [wa_kills+bx], ah
-    jae wc_fwin
+%if WA_NFIG != 3
+ %error "wc_score's free-for-all test is written for four players"
+%endif
+%assign wc_i 0                  ; (four tests in a row, no loop: every
+%rep WA_NFIG + 1                ; tick of a match with a goal asks them)
+    cmp [wa_kills+wc_i], ah
+    jae wc_fwin                 ; (BX = the index, as wc_fwin takes it)
+ %if wc_i < WA_NFIG
     inc bx
-    cmp bx, WA_NFIG + 1
-    jb .f
+ %endif
+%assign wc_i wc_i+1
+%endrep
 .out:
     ret
 .tdm:                           ; TEAM DEATHMATCH: DL red's, DH blue's
