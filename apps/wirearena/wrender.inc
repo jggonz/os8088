@@ -505,6 +505,8 @@ wa_render:
     mov [wl_gfs], bl
     mov word [wl_hh], -1
     mov byte [wl_lvl], 0
+    mov al, [wa_frame]          ; (the outline loops' stamp: wl_run's DL)
+    mov [wl_sc], al
     mov ax, 1
 .gen:
     mov [wa_gen], al

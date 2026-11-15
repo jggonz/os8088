@@ -107,7 +107,8 @@ WA_VAR wl_ks, 2                 ; its fraction's step, what a carry takes
 WA_VAR wl_dcm, 2                ; off the fraction (the pass's: wl_draw),
 WA_VAR wl_dir, 2                ; and the half-row's step
 WA_VAR wl_col0, 2               ; a pass's first column x 2
-WA_VAR wl_sc, 2                 ; the loops' DX: the stamp, the pass's columns
+WA_VAR wl_sc, 2                 ; the loops' DX: the stamp (wa_render's, once
+                                ; a frame), the pass's columns
 WA_VAR wl_tag, 1
 WA_VAR wl_k, 2                  ; a flight: the treads left, the
 WA_VAR wl_rise, 2               ; rise, the low face, and a tread's step
@@ -304,8 +305,6 @@ wa_lowbox:
 .need:
     mov [wl_need], ax
     mov byte [wl_nvk], 15
-    mov al, [wa_frame]
-    mov [wl_sc], al             ; (the loops' stamp)
     mov ax, [wl_h]              ; the box's own height's pair, every corner's
     cmp ax, [wl_hh]             ; - kept for the next box of that height in
     je .hhave                   ; the frame (the floor's: wa_render's, once a
