@@ -73,9 +73,9 @@ gA2, gN2 = table(g, False); rA2, rN2 = table(r, False)
 gRev = {v: k for v, k in zip(gA, gN)}; rRev = {v: k for v, k in zip(rA, rN)}
 gSet = set(gA); rSet = set(rA)
 W = 40 if a.what.endswith("40") else 80
-with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena360.img", verbose=False) as ui:
+with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/wirerena360.img", verbose=False) as ui:
     m = ui.m
-    ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
+    ui.path("B:/WIRERENA.O88"); m.advance(cycles=F // 2); m.go()
     sys.path.insert(0, os.path.join(ROOT, "tests"))
     import walift             # (the setup by its keys: the Game
     walift.start_keys(m, *ITEM[a.what])  # menu's Play items went)
@@ -84,7 +84,7 @@ with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena36
         m.key("F%d" % a.level); m.advance(cycles=F // 4)
     buf = m.read(0x10000, 0x90000)
     b = [0x10000 + o for o in range(0, len(buf) - 32, 16)
-         if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 22] == b'WARENA'][-1]
+         if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 26] == b'Wire Arena'][-1]
     if a.live:
         m.advance(cycles=int(F * a.live))
     else:

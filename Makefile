@@ -17659,7 +17659,7 @@ os88cz: $(BUILD)/os88cz.com
 # before it) and so does more720.img, the 720KB apps disk's other half
 # (126KB free); apps720.img (25KB free) leaves it off. kern_mega's apps disks
 # are the kern_mega session's to decide (MEGAAPPSARGS does not name it).
-WA_SHIP := $(BUILD)/warena.o88
+WA_SHIP := $(BUILD)/wirerena.o88
 APPS := $(APPS_TOOLS) $(APPS_GAMES) $(WA_SHIP) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
         $(APPS_DOSCZ) $(MIDISONGS) $(RDG_SHIP) $(RDG_DEMO)
 # ...and the 360KB disk's list, which is that one less what the media disk
@@ -21324,7 +21324,7 @@ $(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/
 # (docs/plans/completed/WIREARENA-PARTS-PLAN.md 7): wirearena.bin is the primary - the
 # game - and wrpart.bin the renderer, its part 0 (OP_SEG, OP_COMP|OP_ZFILL),
 # far-called with its own data; each assembles the watab.inc blocks it reads.
-#> [Applications] wirearena :: WARENA.O88, the text-mode arena shooter's renderer prototype (docs/plans/MULTIPLAYER-FPS-PLAN.md)
+#> [Applications] wirearena :: WIRERENA.O88, the text-mode arena shooter's renderer prototype (docs/plans/MULTIPLAYER-FPS-PLAN.md)
 #> [Knobs] WAMETER=1|2 :: WireArena starts with its meter row on - 1 the frame rate, 2 every number (F10 cycles it; off as shipped)
 # WAMETER: a BENCHMARK build's. The meter's row (fps, frame, render and present
 # ms, video writes) is off as shipped - nothing shown, nothing summed, one
@@ -21342,7 +21342,7 @@ $(WASTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.wapkg*
 	@touch $@
 .PHONY: wirearena wirearenadisk
-wirearena: $(BUILD)/warena.o88
+wirearena: $(BUILD)/wirerena.o88
 $(BUILD)/watab.inc: tools/arenagen.py apps/wirearena/waconst.inc | $(BUILD)
 	python3 tools/arenagen.py $@
 $(BUILD)/wirearena.bin: apps/wirearena/wirearena.asm apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc apps/os88api.inc apps/os88pit.inc apps/os88parts.inc apps/os88partsbody.inc apps/wirearena/walink.inc apps/wirearena/wasetup.inc apps/wirearena/wactf.inc apps/os88cable.inc apps/os88raw.inc apps/os88udp.inc apps/os88ui.inc drivers/net/netpkg.inc $(WASTAMP) | $(BUILD)
@@ -21363,17 +21363,17 @@ $(BUILD)/waa%.bin: $(BUILD)/waa%.asm | $(BUILD)
 	$(NASM) -f bin -w+error -o $@ $<
 $(BUILD)/wapose.bin: apps/wirearena/wapose.asm apps/wirearena/waconst.inc $(BUILD)/watab.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -o $@ $<
-$(BUILD)/warena.o88: $(BUILD)/wirearena.bin $(BUILD)/wrpart.bin $(WAARENAS) $(BUILD)/wapose.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+$(BUILD)/wirerena.o88: $(BUILD)/wirearena.bin $(BUILD)/wrpart.bin $(WAARENAS) $(BUILD)/wapose.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $< -o $@ --part $(BUILD)/wrpart.bin --part $(BUILD)/wapose.bin $(addprefix --part ,$(WAARENAS)) --part-compress $(PKGZBFMT)
-#> [Applications] wirearenadisk :: its own floppies, warena{,720,120,360}.img
-wirearenadisk: $(BUILD)/warena.img $(BUILD)/warena720.img $(BUILD)/warena120.img $(BUILD)/warena360.img
-$(BUILD)/warena.img: $(BUILD)/warena.o88 tools/os88disk.py
+#> [Applications] wirearenadisk :: its own floppies, wirerena{,720,120,360}.img
+wirearenadisk: $(BUILD)/wirerena.img $(BUILD)/wirerena720.img $(BUILD)/wirerena120.img $(BUILD)/wirerena360.img
+$(BUILD)/wirerena.img: $(BUILD)/wirerena.o88 tools/os88disk.py
 	python3 tools/os88disk.py --size 1440 -o $@ $<
-$(BUILD)/warena720.img: $(BUILD)/warena.o88 tools/os88disk.py
+$(BUILD)/wirerena720.img: $(BUILD)/wirerena.o88 tools/os88disk.py
 	python3 tools/os88disk.py --size 720 -o $@ $<
-$(BUILD)/warena120.img: $(BUILD)/warena.o88 tools/os88disk.py
+$(BUILD)/wirerena120.img: $(BUILD)/wirerena.o88 tools/os88disk.py
 	python3 tools/os88disk.py --size 1200 -o $@ $<
-$(BUILD)/warena360.img: $(BUILD)/warena.o88 tools/os88disk.py
+$(BUILD)/wirerena360.img: $(BUILD)/wirerena.o88 tools/os88disk.py
 	python3 tools/os88disk.py --size 360 -o $@ $<
 
 .PHONY: wireball wireballdisk wireballtest wireball-pair

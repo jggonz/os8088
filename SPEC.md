@@ -60324,7 +60324,7 @@ everything on it and gain nothing from three.
 | `office360` | ArtfulType, Calculator, Chart, Font Viewer, Paint, PiXEL, Sheet, TeXPad, Word | `PAPER.TEX`, `GUIDE.TEX`, `SALES.SLK`, `WRITING.MD`, `WELCOME.DOC`, `SAMPLE.BMP` (no `LAKE.JPG` since 2026-10-22, §24.6.1) |
 | `network360` | Browser, FTPD, Telnet, The Wire (+ `SYSTEM/DOS/OS88NET.COM`) | `BROWSER.HTM` |
 | `games360` | every package in the apps disk's `GAMES/` | — |
-| `games2-360` | WireArena (`WARENA.O88`: 67,537 bytes, 66 clusters - `games360` had 67 free, and a game disk at its last cluster cannot save a high score); the next game too big for `games360` (2026-11-15, the owner's) | — |
+| `games2-360` | Wire Arena (`WIRERENA.O88`: 67,537 bytes, 66 clusters - `games360` had 67 free, and a game disk at its last cluster cannot save a high score); the next game too big for `games360` (2026-11-15, the owner's) | — |
 | `emu360` | RealDMG | `GBDEMO.GB` |
 | `util360` | System Check, Redline, Task Manager (+ `SYSTEM/DOS/OS88NET.COM`, `OS88CZ.COM`) (§24.3.1.7) | — |
 
@@ -60608,7 +60608,7 @@ contents are DERIVED from those omissions rather than listed again:
 | Folder | Carries |
 |---|---|
 | `APPS/` | `PIXEL.O88`; `MIDIRACK.O88`, a second copy |
-| `GAMES/` | `REALDMG.O88`, `DRMARCO.O88`, `WARENA.O88` (2026-11-15: `apps720.img` had 25 KB free) |
+| `GAMES/` | `REALDMG.O88`, `DRMARCO.O88`, `WIRERENA.O88` (2026-11-15: `apps720.img` had 25 KB free) |
 | `MEDIA/` | `GBDEMO.GB` (packed), `OS8088.V88`, and in `MIDI/` the eight songs `apps720.img` does not carry |
 | `PICTURES/` | PiXEL's 360 KB gallery selection, five pictures (§106.7) |
 | `SYSTEM/APPDATA/` | empty, §19.9 |
@@ -251271,9 +251271,9 @@ turns the `D8h` reading off and on, `Esc` closes.
 On kern_small, which refuses `OSAPI_WM_TIMER`, there is no play test and
 page 2 says so.
 
-## 128. WireArena — a text-mode arena shooter (`apps/wirearena/`, `WARENA.O88`)
+## 128. Wire Arena — a text-mode arena shooter (`apps/wirearena/`, `WIRERENA.O88`)
 
-`WARENA.O88` is WireArena: a first-person arena shooter drawn in text mode.
+`WIRERENA.O88` is Wire Arena: a first-person arena shooter drawn in text mode.
 Thin wall edges on black, solid figures and changed cells only. You can play
 it alone against bots, or with up to four participants over a null modem,
 raw Ethernet or UDP. This section is its contract. The plans that built
@@ -251284,6 +251284,11 @@ disagree, this section and the source win.
 
 ### 128.1 Where it runs, and what it is made of
 
+- **Its name**: the window, the menu bar, the setup's heading, the keys card
+  and the package header's program name are all *Wire Arena*, two words.
+  The file is `WIRERENA.O88`, beside `WIREBALL.O88`, `WIREFLET.O88` and
+  `WIRECHAT.O88` (the owner, 2026-11-15). The source keeps its directory
+  and prefixes, `apps/wirearena/` and `wa_`.
 - **kern_big and kern_mega.** kern_small refuses it at entry, before a
   sector of its parts is read: `OSAPI_MOUSE_REL` (§9.14) is the test, and
   the toast is *Needs kern_big or mega*.

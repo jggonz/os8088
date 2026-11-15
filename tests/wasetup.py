@@ -48,9 +48,9 @@ def main():
     with os88ui.boot(SYS, apps=APPS, machine="os8088_5150_cga",
                      quick=True) as ui:
         m = ui.m
-        w = ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WIRERENA.O88")
         p = os88marty.Pkg(m, w)
-        wa = [x for x in ui.windows() if x.title == 'WireArena'][0]
+        wa = [x for x in ui.windows() if x.title == 'Wire Arena'][0]
         ui.mo.to(4, 190)                    # (the pointer off the window)
         ui.settle()
 

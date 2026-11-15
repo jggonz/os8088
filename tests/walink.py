@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'tools'), str(ROOT / 'tests')]
 # --mega: BOTH machines kern_mega (docs/plans/WIREARENA-LINK-PLAN.md L3.3) -
 # plain QEMU on build/mega.img, as tests/pciether.py runs it, with the
-# shipped WARENA.O88 in B:. Which kernel the symbol map describes is said
+# shipped WIRERENA.O88 in B:. Which kernel the symbol map describes is said
 # before os88sym is first imported (pciether's lines); the package's region
 # is an LDT SELECTOR there, read through pciether's MQemu decoder
 MEGA = '--mega' in sys.argv
@@ -288,8 +288,8 @@ class Arena(W.Machine):
             extra = ('-netdev', 'socket,id=n0,connect=127.0.0.1:%d' % net.port,
                      '-device', 'ne2k_isa,netdev=n0,iobase=0x300,irq=5,'
                      'mac=52:54:00:12:34:%02x' % (0x50 + i))
-        super().__init__(d, i, app='wirearena', filename='WARENA.O88',
-                         disk=W.artifact('warena.img'), prefix='wa_',
+        super().__init__(d, i, app='wirearena', filename='WIRERENA.O88',
+                         disk=W.artifact('wirerena.img'), prefix='wa_',
                          extra=extra)
         self.peer_names(0)
 

@@ -335,7 +335,7 @@ INCLUDES = [
      "lease MOVED between the ports after a random dwell), `lk_tick` runs it "
      "from the window, and `lk_poll`/`lk_send` - legal inside a SPEC.md 53 "
      "bracket - carry typed frames of up to 32 bytes: 7Eh/7Dh framing, "
-     "CRC-16/CCITT-FALSE, a length per type from your `lk_lens`. WireArena "
+     "CRC-16/CCITT-FALSE, a length per type from your `lk_lens`. Wire Arena "
      "is the user (docs/plans/completed/WIREARENA-LINK-PLAN.md); WireFleet's own copy "
      "moves onto it later."),
     ("os88raw.inc", "72.22",
@@ -346,7 +346,7 @@ INCLUDES = [
      "frames and hands yours to your `rw_take` with their source. A length "
      "byte before the body, as a padded frame does not say where it ends. "
      "The claim stops the driver's own pump: hold it only while linking. "
-     "WireArena carries os88cable.inc's bodies on it "
+     "Wire Arena carries os88cable.inc's bodies on it "
      "(docs/plans/completed/WIREARENA-LINK-PLAN.md 12)."),
     ("os88udp.inc", "72.24",
      "A GAME'S DATAGRAMS ON ETHER.DRV's UDP VERBS: `ud_open` attaches the "

@@ -62,7 +62,7 @@ def main():
     sym = amap()
     with boot() as ui:
         m = ui.m
-        w = ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WIRERENA.O88")
         os88marty.until(m, lambda _: any(c[0] == MENU and any(
             i[0] == ITEM for i in c[3]) for c in ui.menus()),
             "WireArena's Link menu on the bar", guest=10)

@@ -1899,7 +1899,7 @@ wa_sbflags:     dw OS88UI_FILL, OS88UI_FILL
 
 wa_ablines: dw wa_ab0, wa_ab1, wa_ab2, wa_ab3, wa_ab4, wa_ab5, wa_ab6
             dw wa_ab14, wa_ab7, wa_ab8, wa_ab10, wa_ab12, wa_ab1, wa_ab13, 0
-wa_ab0:     db 'WireArena', 0
+wa_ab0:     db 'Wire Arena', 0
 wa_ab1:     db 0
 wa_ab2:     db OS88UI_ABLT, 'Mouse looks; W A S D move; arrows', 0
 wa_ab3:     db OS88UI_ABLT, 'turn and pitch; Space jumps.', 0

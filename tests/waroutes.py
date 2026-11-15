@@ -53,7 +53,7 @@ def main():
     with os88ui.boot(SYS, apps=APPS, machine="os8088_5150_cga",
                      quick=True) as ui:
         m = ui.m
-        w = ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WIRERENA.O88")
         p = start(ui, w, sym)
         f0 = p.byte(sym["wa_frame"])
         os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,

@@ -139,7 +139,7 @@ PKG_FILE = {
     "drmario": "DRMARCO.O88",      # SPEC.md 100: $(BUILD)/drmarco.o88 out of
                                    # apps/drmario/ - the package was renamed
                                    # and the source folder kept its name
-    "wirearena": "WARENA.O88",     # $(BUILD)/warena.o88 out of apps/wirearena/
+    "wirearena": "WIRERENA.O88",   # $(BUILD)/wirerena.o88 out of apps/wirearena/
                                    # (the Makefile's WA_SHIP; docs/plans/
                                    # MULTIPLAYER-FPS-PLAN.md 17.2)
 }

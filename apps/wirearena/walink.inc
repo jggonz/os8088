@@ -1582,7 +1582,7 @@ wa_lkpname:
     ret
 
 wa_lt_on1:      db 'Linked on COM', 0
-wa_ms_setup:    db 'WireArena - match setup', 0
+wa_ms_setup:    db 'Wire Arena - match setup', 0
 wa_lt_onet:     db 'Linked on Ethernet', 0
 wa_lt_oudp:     db 'Linked with ', 0
 wa_lm_addr:     db 'Asking the network for an address...', 0

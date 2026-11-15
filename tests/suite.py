@@ -8644,7 +8644,7 @@ SOAK = [
         "own variables: up to its raised height with no drop of the feet, "
         "off onto the tower, the lift home. Red on e9ca8cff: 14 failures.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wahudset", "soak", py("tests/wahudset.py"), 12.0,
         "WIREARENA SAYS A SETTING WHEN A KEY CHANGES IT (SPEC.md 128.2; the "
         "owner, 2026-11-15: 'right now I just have to see what changes'). "
@@ -8656,7 +8656,7 @@ SOAK = [
         "screen. Red with the detail keys' wa_hudset call taken out (three "
         "failures).",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wamono", "soak", py("tests/wamono.py"), 9.0,
         "WIREARENA ON A HERCULES DRAWS MONOCHROME ATTRIBUTES. wa_setmode "
         "chose the mono table by FSI_SEG == B000h, and on kern_mega that "
@@ -8670,7 +8670,7 @@ SOAK = [
         "kern_mega port, mega-wamono on 86Box's mr286 with a Hercules, red "
         "on the shipped source before the fix.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("waarenas", "soak", py("tests/waarenas.py"), 60.0,
         "WIREARENA'S HEDGE AND TWIN, AND THE LIMITS THEY RETIRED "
         "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md "
@@ -8705,7 +8705,7 @@ SOAK = [
         "failures), and with wa_flcross answering 'clear' (both floor-line "
         "checks).",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wactf", "soak", py("tests/wactf.py"), 40.0,
         "WIREARENA'S CAPTURE THE FLAG, ONE MACHINE "
         "(docs/plans/completed/WIREARENA-CTF-PLAN.md 2, 6, waves C1 and C2), on the "
@@ -8735,7 +8735,7 @@ SOAK = [
         "(16 counted both times, 1 brown cell): the owner's stray blocks "
         "after a respawn.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wamodes", "soak", py("tests/wamodes.py"), 25.0,
         "WIREARENA'S MODES, ONE MACHINE (docs/plans/completed/WIREARENA-MODES-PLAN.md "
         "2, 3, 5, wave M1), off the game's own variables: Mode at team "
@@ -8765,7 +8765,7 @@ SOAK = [
         "wc_hgoal returning at once (blue never takes the hill in two "
         "minutes).",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("waflines", "soak", py("tests/waflines.py"), 11.0,
         "WIREARENA'S FLOOR LINES AGAINST AN EXACT REFEREE "
         "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "
@@ -8797,7 +8797,7 @@ SOAK = [
         "tower), and the direct cut's side sign turned or its bottom cut "
         "16 units out (4 checks each).",
         needs=("marty", "nasm"), cpus=4,
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wafiglod", "soak", py("tests/wafiglod.py"), 52.0,
         "WIREARENA'S SMALL FIGURE BEGINS WHERE THE DETAIL LEVEL SAYS "
         "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
@@ -8814,7 +8814,7 @@ SOAK = [
         "threshold a constant (23 at Low and Medium) and with the level's "
         "key not syncing CONFIG (19 at High).",
         needs=("marty", "nasm"), cpus=4,
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wastill", "soak", py("tests/wastill.py"), 40.0,
         "WIREARENA'S STANDING VIEW DRAWS THE MOVING VIEW'S PICTURE "
         "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 5). The renderer keeps work "
@@ -8842,7 +8842,7 @@ SOAK = [
         "a pickup is drawn (the blink: the pack where the pose before saw "
         "it).",
         needs=("marty", "nasm"), cpus=4,
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
         "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
         "PLAN 9.4). Alone, the drop-downs centred between row 0 and the "
@@ -8862,7 +8862,7 @@ SOAK = [
         "the same, with no pick. Red with the old full redraw on a focus "
         "move: 11 frames, 192 transient pixels.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("waroutes", "soak", py("tests/waroutes.py"), 50.0,
         "WIREARENA'S BOTS WALK THE ROUTE GRAPH (docs/plans/completed/WIREARENA-AI-"
         "PLAN.md 3). arenagen's graph replaced the dummies' three patrol "
@@ -8875,7 +8875,7 @@ SOAK = [
         "tower, drops off, and the lift goes home. Red with the branch "
         "never taken (4 checks) or the bot not counted as a rider.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wabots", "soak", py("tests/wabots.py"), 40.0,
         "WIREARENA'S BOTS SEE, FACE AND SHOOT BACK (docs/plans/completed/WIREARENA-"
         "AI-PLAN.md 4). The Game menu sets the difficulty; a bot's look "
@@ -8887,7 +8887,7 @@ SOAK = [
         "saw them, gets there and roams again. Red with the turn's sign "
         "reversed (no turn, no shot) or a wrong accuracy table.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wascore", "soak", py("tests/wascore.py"), 16.0,
         "WIREARENA'S DEATHS, RESPAWNS AND SCORE (docs/plans/completed/WIREARENA-AI-"
         "PLAN.md 5). Three robots' names, all different; a pistol kill is "
@@ -8901,7 +8901,7 @@ SOAK = [
         "set 40 and 80 columns. Red with the chooser taking the first point "
         "or a bot's kill not credited.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wabotarms", "soak", py("tests/wabotarms.py"), 30.0,
         "WIREARENA'S BOTS ARM THEMSELVES (docs/plans/completed/WIREARENA-AI-PLAN.md "
         "3.3, B4). A bot reaching the ramp platform's spawn takes what is "
@@ -8913,7 +8913,7 @@ SOAK = [
         "close shotgun hit 60. Red with nothing taken at nodes (the spawn "
         "and the fetch) or a bot's rocket passing through the player.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("wactflink", "soak", py("tests/wactflink.py"), 25.0,
         "WIREARENA'S CAPTURE THE FLAG LINKED (docs/plans/"
         "completed/WIREARENA-CTF-PLAN.md 7, wave C3): two QEMUs on a socket cable, "
@@ -8927,7 +8927,7 @@ SOAK = [
         "Red with the guest ignoring FLAG events (wc_evin returning at "
         "once) and with the host not sending them (wc_send): 4 checks each.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=200),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=200),
     Row("wamodeslink", "soak", py("tests/wamodeslink.py"), 32.0,
         "WIREARENA'S MODES LINKED (docs/plans/completed/WIREARENA-MODES-PLAN.md 8, "
         "wave M4): two QEMUs on a socket cable, the shipped package, "
@@ -8941,7 +8941,7 @@ SOAK = [
         "guest's pickups the host's rolls. Red with the guest ignoring GAME "
         "and NEXT (wc_gin, wc_nin returning at once): 8 checks.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=200),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=200),
     Row("walink", "soak", py("tests/walink.py"), 32.0,
         "WIREARENA OVER A NULL MODEM (docs/plans/completed/WIREARENA-LINK-PLAN.md, "
         "L1): two QEMUs on a socket cable, the shipped package. Each window "
@@ -8963,7 +8963,7 @@ SOAK = [
         "Red with the damage word ignored, TAKE unsent, the guest's bot "
         "hits ignored or the damage word's attribution dropped.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=200),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=200),
     Row("walinknet", "soak", py("tests/walink.py", "--net"), 35.0,
         "WIREARENA OVER ETHERNET (docs/plans/completed/WIREARENA-LINK-PLAN.md 12, "
         "E1): walink's whole match - lobby, SNAP, kills on both boards, a "
@@ -8975,7 +8975,7 @@ SOAK = [
         "frame of the EtherType on the wire parses with binascii's CRC. "
         "Red with the peer's station address never recorded.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=220),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=220),
     Row("walinkudp", "soak", py("tests/walink.py", "--udp"), 40.0,
         "WIREARENA ON UDP, FOUND BY BROADCAST (docs/plans/completed/WIREARENA-NET-"
         "PLAN.md 3): walink's match on two QEMU NE2000s behind a relay that "
@@ -8985,7 +8985,7 @@ SOAK = [
         "Every datagram on port 30088 parses with binascii's CRC; garbage "
         "datagrams are dropped and counted.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=240),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=240),
     Row("walinkip", "soak", py("tests/walink.py", "--udp-ip"), 40.0,
         "WIREARENA JOINED BY ADDRESS (WIREARENA-NET-PLAN 6): as walinkudp, "
         "but the relay drops every broadcast to WireArena's port, as a "
@@ -8993,19 +8993,19 @@ SOAK = [
         "the setup's Address row. B's HELLO reaches A only by address, and "
         "the whole match follows.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=240),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=240),
     Row("walinkmega", "soak", py("tests/walink.py", "--mega"), 60.0,
         "WIREARENA LINKED ON kern_mega (WIREARENA-LINK-PLAN L3.3): walink's "
         "whole match with BOTH machines kern_mega - plain QEMU on "
         "build/mega.img, as tests/pciether.py runs it, the shipped "
-        "WARENA.O88 in B:, the region and its carve LDT selectors read "
+        "WIRERENA.O88 in B:, the region and its carve LDT selectors read "
         "through pciether's MQemu. The null modem through SERIAL.DRV's "
         "verbs under protected mode and the older driver's byte-a-call "
         "fallback, the kill, the rocket, the pickups, the faults, the "
         "host's bots, the lift, every frame on the wire valid. Its checks "
         "are walink's, red with walink's breaks; this leg adds the kernel.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/mega.img",
+        wants=("build/wirerena.img", "build/mega.img",
                "build/megak/kernel.map"), timeout=300),
     Row("walinkmeganet", "soak", py("tests/walink.py", "--mega", "--net"),
         60.0,
@@ -9013,21 +9013,21 @@ SOAK = [
         "NE2000s (walinknet's relay), the frames staged in the region's "
         "own selector (SPEC.md 77.10).",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/mega.img",
+        wants=("build/wirerena.img", "build/mega.img",
                "build/megak/kernel.map"), timeout=300),
     Row("walinkmegaudp", "soak", py("tests/walink.py", "--mega", "--udp"),
         60.0,
         "walinkmega on UDP, found by broadcast: DHCP and ETHER.DRV's UDP "
         "port on two kern_mega machines (walinkudp's hub).",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/mega.img",
+        wants=("build/wirerena.img", "build/mega.img",
                "build/megak/kernel.map"), timeout=300),
     Row("walinkmegaip", "soak", py("tests/walink.py", "--mega", "--udp-ip"),
         60.0,
         "walinkmega joined by address: walinkip's router drops the "
         "broadcasts, and the kern_mega guest types the host's address.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/mega.img",
+        wants=("build/wirerena.img", "build/mega.img",
                "build/megak/kernel.map"), timeout=300),
     Row("walink4", "soak", py("tests/walink4.py"), 46.0,
         "WIREARENA, FOUR MACHINES (WIREARENA-NET-PLAN 4): four QEMU NE2000s "
@@ -9040,7 +9040,7 @@ SOAK = [
         "alone as gone. Red with the damage in the shared working record, "
         "and with the lobby's quiet-peer drop off.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=420),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=420),
     Row("walink4ip", "soak", py("tests/walink4.py", "--ip"), 31.0,
         "WIREARENA, THREE JOINED BY ADDRESS (WIREARENA-NET-PLAN 6.1): "
         "walink4's relay dropping every broadcast to WireArena's port; B "
@@ -9049,7 +9049,7 @@ SOAK = [
         "match of three follows with every player seen by both others. Red "
         "with PEERS never sent.",
         needs=("qemu", "nasm"),
-        wants=("build/warena.img", "build/os8088.img"), timeout=240),
+        wants=("build/wirerena.img", "build/os8088.img"), timeout=240),
     Row("waweapons", "soak", py("tests/waweapons.py"), 26.0,
         "WIREARENA'S WEAPONS AND PICKUPS (docs/plans/completed/WIREARENA-WEAPONS-"
         "PLAN.md). One boot into the Heights arena, every piece checked off "
@@ -9067,7 +9067,7 @@ SOAK = [
         "Low alone. Red with the dice "
         "fixed, R dead, the reach broken or a death mapped wrong.",
         needs=("marty", "nasm"),
-        wants=("build/os8088-360.img", "build/warena360.img")),
+        wants=("build/os8088-360.img", "build/wirerena360.img")),
     Row("kdmix", "soak", py("tests/kdmix.py"), 40.0,
         "A 1.44MB FLOPPY IN B: UNDER kern_dos (SPEC.md 96.40.5). Every other "
         "kd* row boots two 360KB drives - not by choice, but because every "

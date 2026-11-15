@@ -13,7 +13,7 @@
 ; mouse, P pause (offline), Esc leaves (linked: asked). B and P as benches
 ; are a test build's (WABENCH=1).
 %include "os88api.inc"
-    OS88_HEADER 'WARENA', wa_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
+    OS88_HEADER 'Wire Arena', wa_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 %define OP_WANT_CSEG            ; the renderer part is far-called through its
 %define OP_ONMOVE wa_partsmv    ; CODE selector, and its claim MOVES (SPEC.md
 %include "os88parts.inc"        ; 20.12.12): wa_partsmv re-reads both words
@@ -7005,7 +7005,7 @@ wa_tpl:
                                             ; setup's, NET-PLAN 9.9)
 
 wa_name:
-wa_ttl:     db 'WireArena', 0
+wa_ttl:     db 'Wire Arena', 0
 wa_m_link:  db 'Link', 0
 wa_i_link:  dw wa_il_auto, wa_il_c1, wa_il_c2, wa_il_off
 wa_il_auto: db 'Automatic', 0

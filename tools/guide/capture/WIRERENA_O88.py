@@ -1,6 +1,6 @@
-"""WireArena's screenshots, for tools/guide/manuals/WARENA_O88.md.
+"""Wire Arena's screenshots, for tools/guide/manuals/WIRERENA_O88.md.
 
-    python3 tools/guide/capture/run.py WARENA_O88 --apps build/games2-360.img
+    python3 tools/guide/capture/run.py WIRERENA_O88 --apps build/games2-360.img
 
 One boot on the guide's VGA XT. The setup window and its lists are reached
 through the game's own keys and clicks; a match is started as the setup's
@@ -87,13 +87,13 @@ class Game(object):
 
 def capture(ui, shot):
     m = ui.m
-    w = ui.path("B:/WARENA.O88")
+    w = ui.path("B:/WIRERENA.O88")
     g = Game(ui, w)
     ui.mo.to(4, 190)
-    shot("warena-setup", window="WireArena", pad=4)
+    shot("wirerena-setup", window="Wire Arena", pad=4)
 
     # the Arena list, dropped by a click on its box (wasetup.py's place)
-    wn = [x for x in ui.windows() if x.title == "WireArena"][0]
+    wn = [x for x in ui.windows() if x.title == "Wire Arena"][0]
     ox, oy = wn.x + 1, wn.y + 18
     dr = g.sym["wa_sdr_a"]
     gy = g.p.word(dr + 2) - oy
@@ -101,7 +101,7 @@ def capture(ui, shot):
     os88marty.until(m, lambda _: g.p.byte(dr + 16) == 1,
                     "the Arena list open", guest=5)
     ui.mo.to(4, 190)
-    shot("warena-arenas", rect=(wn.x - 4, wn.y - 4, wn.w + 10, wn.h + 70))
+    shot("wirerena-arenas", rect=(wn.x - 4, wn.y - 4, wn.w + 10, wn.h + 70))
     m.key("Escape")
     ui.settle()
 
@@ -113,7 +113,7 @@ def capture(ui, shot):
     m.key("ArrowRight")                 # (team deathmatch)
     m.key("KeyR")
     ui.mo.to(4, 190)
-    shot("warena-rotation", rect=(wn.x - 4, wn.y - 4, 300, wn.h + 8))
+    shot("wirerena-rotation", rect=(wn.x - 4, wn.y - 4, 300, wn.h + 8))
     m.key("Escape")
     m.key("ArrowLeft")                  # (Mode back to free-for-all, the
     for _ in range(5):                  # focus back to Arena)
@@ -125,18 +125,18 @@ def capture(ui, shot):
     g.pose(1024, 300, 256)
     g.bot(0, 1060, 760, 768)
     g.ticks(8)
-    shot("warena-match", rect=TEXT, settle=False)
+    shot("wirerena-match", rect=TEXT, settle=False)
     m.key("Tab", up=False)              # the scoreboard and the minimap
     g.ticks(6)
-    shot("warena-scores", rect=TEXT, settle=False)
+    shot("wirerena-scores", rect=TEXT, settle=False)
     m.key("Tab", down=False)
     g.ticks(2)
     m.key("F4")                         # a setting says what it is now
     g.ticks(4)
-    shot("warena-detail", rect=TEXT, settle=False)
+    shot("wirerena-detail", rect=TEXT, settle=False)
     m.key("Equal")                      # 80 columns
     g.frames(3)
-    shot("warena-wide", rect=TEXT, settle=False)
+    shot("wirerena-wide", rect=TEXT, settle=False)
     g.leave()
 
     # capture the flag on the Twin: toward blue's flag at its base
@@ -144,5 +144,5 @@ def capture(ui, shot):
     g.ticks(30)                         # (the side spawn, first)
     g.pose(1856, 1480, 768)              # (north of blue's base, facing it)
     g.ticks(10)
-    shot("warena-ctf", rect=TEXT, settle=False)
+    shot("wirerena-ctf", rect=TEXT, settle=False)
     g.leave()

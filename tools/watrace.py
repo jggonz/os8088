@@ -95,9 +95,9 @@ g = amap("apps/wirearena/wirearena.asm", B + "/wirearena.bin")
 r = amap("apps/wirearena/wrpart.asm", B + "/wrpart.bin")
 NAMES = ["G.render", "wa_render", "wa_render.walked", "wa_render.roomless", "wa_leaf", "wa_face",
          "wa_span", "wa_figures", "wa_cross", "wa_present"]
-with os88ui.boot("build/os8088-360.img", apps="build/warena360.img") as ui:
+with os88ui.boot("build/os8088-360.img", apps="build/wirerena360.img") as ui:
     m = ui.m
-    w = ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
+    w = ui.path("B:/WIRERENA.O88"); m.advance(cycles=F // 2); m.go()
     ar, wd = (int(x) for x in item.split(","))
     walift.start(ui, w, walift.amap(bench=True), arena=ar, w40=(wd == 40))
     m.advance(cycles=F)
@@ -105,7 +105,7 @@ with os88ui.boot("build/os8088-360.img", apps="build/warena360.img") as ui:
         m.key(k); m.advance(cycles=F // 4)
     buf = m.read(0x10000, 0x90000)
     b = [0x10000 + o for o in range(0, len(buf) - 32, 16)
-         if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 22] == b'WARENA'][-1]
+         if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 26] == b'Wire Arena'][-1]
     m.key("KeyP"); m.advance(cycles=F // 2)
     m.pause()
     rs = struct.unpack('<H', m.read(b + g["wa_rds"], 2))[0] * 16

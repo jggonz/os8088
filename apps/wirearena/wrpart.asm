@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/wirearena/wrpart.asm - WireArena's RENDERER PART
 ;
-; Part 0 of WARENA.O88 (docs/plans/completed/WIREARENA-PARTS-PLAN.md section 7; the
+; Part 0 of WIRERENA.O88 (docs/plans/completed/WIREARENA-PARTS-PLAN.md section 7; the
 ; parts standard is SPEC.md 20.12). An OP_SEG part assembled at org 0 that
 ; carries its own data and is entered with DS = its data segment - XTMP3's
 ; FRONT shape (apps/xtmp3/x3front.asm): a header naming its verbs, the FRAME

@@ -329,8 +329,8 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88wseq.inc` | §18.4.9.4 | An APPEND OF ANY SIZE: `os88_wseq_open` (a name, a stream record of `WSEQ_SIZE` and a buffer of yours) creates the file empty, `os88_wseq_put` takes ES:SI and any count as often as you like, and `os88_wseq_close` writes the tail. It buffers into whole clusters for `OSAPI_FILE_WRITE_SEQ` - which, like `OSAPI_FILE_APPEND`, refuses a chunk that is not one - and falls back to `OSAPI_FILE_APPEND` on the small kernel. The read side is os88rseq.inc. |
 | `apps/os88data.inc` | §19.9.1 | SYSTEM\APPDATA on your own volume: `od_read` and `od_write`, which walk there with `OSAPI_FILE_GOTO_QM` (never the display remount), bank the folder's cluster, rewrite a file of unchanged length in ONE sector with `OSAPI_FILE_WRITE_AT`, and put the instance back on every path out. For a high-score table or a settings file; five packages carry it. |
 | `apps/os88link.inc` | §26.10.6 | LINKS and AUTOSTART: `OS88_LINK` lays down a 50-byte `.LNK` record and `ol_autostart` writes it into `\AUTOSTRT` on the BOOT volume, making the folder if need be, so the program it names is opened at every boot (Shift held skips it). Over os88data.inc's walk, so it needs `OD_BOOTVOL`; REDLINE's Apply on boot is the worked example. |
-| `apps/os88cable.inc` | §115 | TWO MACHINES OVER A NULL MODEM, on the desktop serial lease: `lk_auto` and `lk_connect` find the port (SPEC.md 114.9's search: COM2 first, the lease MOVED between the ports after a random dwell), `lk_tick` runs it from the window, and `lk_poll`/`lk_send` - legal inside a SPEC.md 53 bracket - carry typed frames of up to 32 bytes: 7Eh/7Dh framing, CRC-16/CCITT-FALSE, a length per type from your `lk_lens`. WireArena is the user (docs/plans/completed/WIREARENA-LINK-PLAN.md); WireFleet's own copy moves onto it later. |
-| `apps/os88raw.inc` | §72.22 | A GAME'S FRAMES OVER THE ETHERNET CARD, on ETHER.DRV's raw verbs: `rw_open` attaches the driver if need be and claims the card (our station address back), `rw_send` puts a body in a frame of your EtherType to a station address or everyone, `rw_poll` drains up to N frames and hands yours to your `rw_take` with their source. A length byte before the body, as a padded frame does not say where it ends. The claim stops the driver's own pump: hold it only while linking. WireArena carries os88cable.inc's bodies on it (docs/plans/completed/WIREARENA-LINK-PLAN.md 12). |
+| `apps/os88cable.inc` | §115 | TWO MACHINES OVER A NULL MODEM, on the desktop serial lease: `lk_auto` and `lk_connect` find the port (SPEC.md 114.9's search: COM2 first, the lease MOVED between the ports after a random dwell), `lk_tick` runs it from the window, and `lk_poll`/`lk_send` - legal inside a SPEC.md 53 bracket - carry typed frames of up to 32 bytes: 7Eh/7Dh framing, CRC-16/CCITT-FALSE, a length per type from your `lk_lens`. Wire Arena is the user (docs/plans/completed/WIREARENA-LINK-PLAN.md); WireFleet's own copy moves onto it later. |
+| `apps/os88raw.inc` | §72.22 | A GAME'S FRAMES OVER THE ETHERNET CARD, on ETHER.DRV's raw verbs: `rw_open` attaches the driver if need be and claims the card (our station address back), `rw_send` puts a body in a frame of your EtherType to a station address or everyone, `rw_poll` drains up to N frames and hands yours to your `rw_take` with their source. A length byte before the body, as a padded frame does not say where it ends. The claim stops the driver's own pump: hold it only while linking. Wire Arena carries os88cable.inc's bodies on it (docs/plans/completed/WIREARENA-LINK-PLAN.md 12). |
 | `apps/os88udp.inc` | §72.24 | A GAME'S DATAGRAMS ON ETHER.DRV's UDP VERBS: `ud_open` attaches the driver if need be, asks our IP address (NETE_NOLINK until DHCP has bound: ask again) and binds your `UD_PORT`; `ud_send` to six bytes - an IP address and a port - or everyone (255.255.255.255); `ud_poll` drains datagrams to your `ud_take` with their source. os88raw.inc's twin, for a network with an address: a host on UDP is found by a broadcast and by its address at once (docs/plans/completed/WIREARENA-NET-PLAN.md). |
 | `apps/os88inflate.inc` | §106.18 | INFLATE for a raw DEFLATE stream held WHOLE: `inflate` takes DS:SI, writes exactly CX bytes at ES:DI and sets carry on a bad stream. zlib's `puff` in 8086, ~1KB of work space (`INF_WS`) and no window of its own. ARCADE's zip import is the user (ARCADE-SPEC, its section on import); a stream too big to hold wants PIXEL's table-driven ring decoder, 106.18's. |
 | `apps/os88pit.inc` | §72.15.1 | `pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, good for an hour before it wraps. Sub-tick timing for a profiler. |
@@ -416,13 +416,13 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | Timer | `apps/timer/timer.asm` | §111 | yes |
 | Video Battle | `apps/vbattle/vbattle.asm` | §126 | no |
 | Video Player | `apps/video/video.asm` | §98 | yes |
-| WARENA | `apps/wirearena/wirearena.asm` | §128 | no |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` | yes |
 | WIRE | `apps/wire/wire.asm` | §78 | no |
 | WIREBALL | `apps/wireball/wireball.asm` | §109 | yes |
 | WORD | `apps/word/wdload.asm` | §68 | no |
 | WORD | `apps/word/word.asm` | §68 | yes |
 | WaveRack | `apps/waverack/waverack.asm` | §123 | yes |
+| Wire Arena | `apps/wirearena/wirearena.asm` | §128 | no |
 | WireChat | `apps/wirechat/wirechat.asm` | §113 | yes |
 | WireFleet | `apps/wirefleet/wirefleet.asm` | §114 | yes |
 | XTMP3 | `apps/xtmp3/xtmp3.asm` | §121 | yes |
@@ -559,7 +559,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 125 | PCIETHER.DRV — PCI network cards for the big builds (`drivers/pciether/`) |
 | 126 | VIDEO BATTLE — a battle played as joined video clips (`apps/vbattle/`, `VBATTLE.O88`, `.VBT`) |
 | 127 | Debug disks — a boot floppy per subsystem that shows what the driver found (`apps/snddiag/`, `drivers/sound/snddiag.inc`) |
-| 128 | WireArena — a text-mode arena shooter (`apps/wirearena/`, `WARENA.O88`) |
+| 128 | Wire Arena — a text-mode arena shooter (`apps/wirearena/`, `WIRERENA.O88`) |
 
 ## docs/
 

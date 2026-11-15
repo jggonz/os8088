@@ -1336,15 +1336,6 @@
   "strings": "4095e5c86a5e295a",
   "why": "the driver passes wheel notches to the kernel (SPEC.md 9.12.8), so the wheel scrolls the front window"
  },
- "WARENA_O88": {
-  "sources": [
-   "apps/wirearena",
-   "tools/arenagen.py"
-  ],
-  "stamped": "66bc2f6a",
-  "strings": "f1c8c994a882bd7a",
-  "why": "first page: every setup row, key, weapon, mode, arena, message and link step read off apps/wirearena (its strings and key handlers) and SPEC.md 128; eight shots by capture/WARENA_O88.py on the VGA XT, each looked at"
- },
  "WAVERACK_O88": {
   "sources": [
    "apps/waverack"
@@ -1446,6 +1437,15 @@
   "stamped": "18b1ddbe",
   "strings": "7567de0a93fbbb38",
   "why": "f9ed8cc4/9217a5c5 change wflink.inc's refusal handling and three status messages (a port the BIOS does not list, a UART the OS did not find, retry on an older SERIAL.DRV); the page quotes no message and describes the Link menu and the automatic search at a level these do not change - rare-case messages, no words needed"
+ },
+ "WIRERENA_O88": {
+  "sources": [
+   "apps/wirearena",
+   "tools/arenagen.py"
+  ],
+  "stamped": "f4a4e8a2",
+  "strings": "cd83557002e8d201",
+  "why": "the page for WIRERENA.O88 (the file renamed from WARENA.O88 and the title made 'Wire Arena' by the owner): every setup row, key, weapon, mode, arena, message and link step read off apps/wirearena and SPEC.md 128; shots retaken under the new ids"
  },
  "WORD": {
   "sources": [],

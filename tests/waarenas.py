@@ -121,7 +121,7 @@ def boot():
 
 def match(ui, arena, bots=None, mode=None):
     sym = amap(bench=True)
-    w = ui.path("B:/WARENA.O88")
+    w = ui.path("B:/WIRERENA.O88")
     if mode is not None:                # (the setup's Mode, poked: CTF on
         os88marty.Pkg(ui.m, w).write(sym["wa_lkgmode"], bytes([mode]))
     p = start(ui, w, sym, arena=arena, bots=bots)

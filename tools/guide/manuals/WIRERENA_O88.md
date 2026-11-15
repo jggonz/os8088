@@ -1,6 +1,6 @@
-# WireArena
+# Wire Arena
 
-WireArena is a first-person arena shooter drawn in text. Thin wall edges
+Wire Arena is a first-person arena shooter drawn in text. Thin wall edges
 stand on black, the fighters are solid figures, and the whole screen is
 characters, which is what lets it run on an IBM PC with a CGA card. Play
 alone against up to three bots, or with up to four players on other
@@ -10,13 +10,13 @@ There are eight arenas, six weapons, health and shield pickups, and four
 ways to play: free-for-all, team deathmatch, capture the flag and king of
 the hill.
 
-![A match on the Heights, with a bot in front of you. Your health is at the bottom left, the weapons and the score at the bottom right.](shot:warena-match){full}
+![A match on the Heights, with a bot in front of you. Your health is at the bottom left, the weapons and the score at the bottom right.](shot:wirerena-match){full}
 
-## Starting WireArena
+## Starting Wire Arena
 
-WireArena is in the `GAMES` folder of the 1.44 MB and 1.2 MB software disks
+Wire Arena is in the `GAMES` folder of the 1.44 MB and 1.2 MB software disks
 and of the second 720 KB software disk, and at the top of the second 360 KB
-games disk. Double-click `WARENA.O88`. The match setup window opens on the
+games disk. Double-click `WIRERENA.O88`. The match setup window opens on the
 desktop.
 
 It needs the standard system disk. The small system disk for 128 KB
@@ -26,7 +26,7 @@ Hercules and MDA.
 
 ## Setting up a match
 
-![The match setup window.](shot:warena-setup){right}
+![The match setup window.](shot:wirerena-setup){right}
 
 The setup window holds every choice. Click a box to drop its list, or use
 the keys: Up and Down move between the settings, and Left and Right change
@@ -47,14 +47,14 @@ the one marked with `>`.
 keys. Columns starts at 40 on an IBM PC or XT and at 80 on a 286 or newer.
 A Hercules card always plays at 80.
 
-![The Arena list, dropped.](shot:warena-arenas){left}
+![The Arena list, dropped.](shot:wirerena-arenas){left}
 
 The last item of the Arena list, **rotation...** (or `R`), opens the
 Rotation window. It lists the arenas the chosen mode can use, each with a
 check box. When a match is won, the next one starts in the next checked
 arena. At least one arena stays checked (*One arena stays in*).
 
-![The Rotation window for team deathmatch.](shot:warena-rotation){right}
+![The Rotation window for team deathmatch.](shot:wirerena-rotation){right}
 
 ## Playing
 
@@ -74,7 +74,7 @@ Hold `Tab` to see the scoreboard and a map of the arena, with you as a red
 dot. `P` pauses a match you are playing alone. `Esc` leaves the match; in a
 match with other players it asks first: *Leave the match? Y/N*.
 
-![Tab held: the map of the arena and the scoreboard.](shot:warena-scores){full}
+![Tab held: the map of the arena and the scoreboard.](shot:wirerena-scores){full}
 
 ## Weapons
 
@@ -106,7 +106,7 @@ The score against the goal shows at the bottom right, for example `0/20`.
 When someone reaches it the winner's name shows for ten seconds, and play
 goes on in the next arena of the rotation.
 
-![Capture the flag on the Twin: the blue team at its base, the team scores across the top.](shot:warena-ctf){full}
+![Capture the flag on the Twin: the blue team at its base, the team scores across the top.](shot:wirerena-ctf){full}
 
 ## The arenas
 
@@ -131,7 +131,7 @@ These keys change how the game looks and feels during a match. Each one
 says what it changed at the bottom of the screen for a few seconds, for
 example *Detail High*.
 
-![F4 pressed: Detail High at the bottom left.](shot:warena-detail){full}
+![F4 pressed: Detail High at the bottom left.](shot:wirerena-detail){full}
 
 | Key | What it changes |
 |---|---|
@@ -144,7 +144,7 @@ example *Detail High*.
 Lower detail draws fewer lines and runs faster. The game picks Medium on an
 IBM PC or XT and High on a 286 or newer. 40 columns runs faster than 80.
 
-![The same match at 80 columns.](shot:warena-wide){full}
+![The same match at 80 columns.](shot:wirerena-wide){full}
 
 ## Playing with others
 
@@ -188,7 +188,7 @@ window.
 ## Good to know
 
 - Nothing is saved between sessions. The setup starts fresh each time you
-  open WireArena.
+  open Wire Arena.
 - The serial cable runs at 2400 baud. Keep the mouse on the other port.
 - Two players cannot share one machine.
 - A match runs full screen. The desktop comes back when you leave it.

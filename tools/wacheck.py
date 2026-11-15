@@ -2,7 +2,7 @@
 """wacheck - WireArena's wall edges against a host reference, pose by pose.
 
 A DEVELOPMENT INSTRUMENT, not a suite row (docs/plans/MULTIPLAYER-FPS-PLAN.md
-16.5). It boots the system disk and WARENA under MartyPC, opens 40 columns,
+16.5). It boots the system disk and WIRERENA under MartyPC, opens 40 columns,
 then for each random pose (clear of every box) writes the player's position
 and angle straight into the package's BSS, lets half a guest second draw, and
 reads text VRAM at B800 - `screen()` drops the box-drawing glyphs, so it would
@@ -226,10 +226,10 @@ def main_heights(a, off):
              if A.bx(b).h < hmax and A.bx(b).kind != A.LIFT and A.bx(b).h > 40]
     stats = dict(poses=0, bad=0, badnf=0, cols=0, off=0, offnf=0, faults=0)
     with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"),
-                     apps=os.path.join(ROOT, "build/warena360.img"),
+                     apps=os.path.join(ROOT, "build/wirerena360.img"),
                      machine=a.machine) as ui:
         m = ui.m
-        w = ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WIRERENA.O88")
         m.advance(cycles=F // 2)
         m.go()
         walift.start(ui, w, walift.amap(), w40=(W == 40))
@@ -241,7 +241,7 @@ def main_heights(a, off):
         base = None
         for o in range(0, len(buf) - 32, 16):
             if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and \
-                    buf[o + 16:o + 22] == b'WARENA':
+                    buf[o + 16:o + 26] == b'Wire Arena':
                 base = 0x10000 + o
         for n in range(a.poses):
             kind = n % 4                 # floor, a platform's top, a corner,
@@ -340,10 +340,10 @@ def main():
     F = 4772727
     bad = 0
     with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"),
-                     apps=os.path.join(ROOT, "build/warena360.img"),
+                     apps=os.path.join(ROOT, "build/wirerena360.img"),
                      machine=a.machine) as ui:
         m = ui.m
-        w = ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WIRERENA.O88")
         m.advance(cycles=F // 2)
         m.go()
         walift.start(ui, w, walift.amap(), arena=0)
@@ -355,10 +355,10 @@ def main():
         base = None
         for o in range(0, len(buf) - 32, 16):
             if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and \
-                    buf[o + 16:o + 22] == b'WARENA':
+                    buf[o + 16:o + 26] == b'Wire Arena':
                 base = 0x10000 + o
         if base is None:
-            raise SystemExit("wacheck: WARENA is not in memory")
+            raise SystemExit("wacheck: WIRERENA is not in memory")
         for n in range(a.poses):
             while True:
                 px, py = random.randint(60, 1988), random.randint(60, 1988)

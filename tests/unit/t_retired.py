@@ -62,7 +62,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 REGISTRY = os.path.join(ROOT, "apps", "RETIRED.txt")
 PKG_STEM = {"pixelstein": "pxstein", "drmario": "drmarco", "excitebike": "excbike",
             "wirefleet": "wireflet",
-            "wirearena": "warena"}  # apps/<dir> -> build/<stem>.o88
+            "wirearena": "wirerena"}  # apps/<dir> -> build/<stem>.o88
 BUILD = os.path.join(ROOT, "build")
 MAKEFILE = os.path.join(ROOT, "Makefile")
 LIVEPAYLOAD = os.path.join(BUILD, "livepayload.txt")

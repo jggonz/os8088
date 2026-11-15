@@ -52,7 +52,7 @@ PIT_RED = (64, 1024)            # (on the ring, 240 up)
 
 def match(ui, arena, bots):
     sym = amap()
-    w = ui.path("B:/WARENA.O88")
+    w = ui.path("B:/WIRERENA.O88")
     m = ui.m
     os88marty.until(m, lambda _: any(c[0] == MENU and any(
         i[0] == ITEM for i in c[3]) for c in ui.menus()),

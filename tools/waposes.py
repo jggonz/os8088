@@ -4,7 +4,7 @@ exact render cycles of a fixed, seeded set of poses - the instrument of
 performance pass 6 (docs/plans/MULTIPLAYER-FPS-PLAN.md 16.9).
 
 A DEVELOPMENT INSTRUMENT, not a suite row. It boots the system disk and
-WARENA, opens an arena, starts the play bench (which makes the world a
+WIRERENA, opens an arena, starts the play bench (which makes the world a
 bench's: every pickup present, the bots dummies that neither think nor
 shoot) and holds the bench's clock at 0 so it never ends. (The HUD's health can read 80 or
 100 from one run to the next - a bot's shot before the bench starts - which
@@ -35,7 +35,7 @@ two builds' recordings compare pose for pose:
   python3 tools/waposes.py sets OUTDIR [--tree DIR]     the eight reference sets
   python3 tools/waposes.py cmpsets BASEDIR NEWDIR
 
---tree is the checkout whose apps/wirearena sources and build/warena360.img
+--tree is the checkout whose apps/wirearena sources and build/wirerena360.img
 are measured (default: this one, through a WABENCH=1 private tree - the play
 bench is a test build's, NET-PLAN 9.9; another checkout's build/ must be
 made with WABENCH=1) - a worktree needs only `make wirearenadisk
@@ -192,9 +192,9 @@ def record(a):
     FO = {k: int(v) for k, v in re.findall(r"^(F_[A-Z]+)\s+equ\s+(\d+)", src, re.M)}
     ps = json.load(open(a.poses)) if a.poses else poses(a.arena, a.n, a.seed)
     frames = []; faults = 0
-    with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena360.img", verbose=False) as ui:
+    with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/wirerena360.img", verbose=False) as ui:
         m = ui.m
-        w = ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
+        w = ui.path("B:/WIRERENA.O88"); m.advance(cycles=F // 2); m.go()
         import os88marty                # the setup's arena and width, then
         p = os88marty.Pkg(m, w)         # Enter: its Play button (the Game
         p.write(g["wa_lkarena"], bytes([a.arena]))  # menu's Play items went,
@@ -206,7 +206,7 @@ def record(a):
             m.key(k); m.advance(cycles=F // 4)
         buf = m.read(0x10000, 0x90000)
         b = [0x10000 + o for o in range(0, len(buf) - 32, 16)
-             if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 22] == b'WARENA'][-1]
+             if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 26] == b'Wire Arena'][-1]
         # the PLAY bench's start makes the world a bench's (every pickup there at
         # its first choice and none taken, the bots dummies that neither think
         # nor shoot, no keys); its clock is poked back to 0 every frame, so it

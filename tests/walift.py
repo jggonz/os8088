@@ -49,7 +49,7 @@ from os88fixture import need                                   # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SYS = "build/os8088-360.img"
-APPS = "build/warena360.img"
+APPS = "build/wirerena360.img"
 F = 4772727                     # the 5150's clock: guest cycles a second
 TICK = F // 30                  # the sim's tick (wa_tick runs at 30 Hz)
 MENU, ITEM = "Link", "Automatic"   # (the menu bar's one menu: its first
@@ -108,7 +108,7 @@ def bench_build():
     `build/...` it then names, os88build.at's. -> the tree's directory; read
     the game's symbols with amap(bench=True)."""
     t = os88build.tree("WABENCH=1",
-                       targets=("os8088-360.img", "warena360.img")).apply()
+                       targets=("os8088-360.img", "wirerena360.img")).apply()
     return t.dir
 
 
@@ -286,7 +286,7 @@ def main():
     with os88ui.boot(SYS, apps=APPS, machine="os8088_5150_cga",
                      quick=True) as ui:
         m = ui.m
-        w = ui.path("B:/WARENA.O88")
+        w = ui.path("B:/WIRERENA.O88")
         # the window is up before its entry proc has set its menus
         p = start(ui, w, sym)
         f0 = p.byte(sym["wa_frame"])

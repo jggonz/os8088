@@ -3,7 +3,7 @@
 **STATUS (2026-11-15): READY FOR ITS FIRST RELEASE.** Nothing of the
 build's is open before it; what is left before it is the owner's own (17.3),
 and the rest of this plan is after it (17.3, 17.4).
-WireArena (`apps/wirearena/`, `WARENA.O88`) is a text-mode arena shooter for
+Wire Arena (`apps/wirearena/`, `WIRERENA.O88`) is a text-mode arena shooter for
 kern_big and kern_mega (kern_small refuses it): mouse look, six weapons and
 pickups, bots that route, shoot and play for the flag, free-for-all, team
 deathmatch, capture the flag and king of the hill with a score to win and a
@@ -1764,10 +1764,18 @@ by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
   `Columns 80` in the HUD's message for four seconds, as `[`/`]` already
   did for the mouse (SPEC.md 128.2, `wahudset`). +174 bytes.
 - **A player's guide**, asked for at the same time - and `test-full`'s
-  `guidelock-full` said the same (WARENA.O88 shipped with no page in the
-  project guide): `tools/guide/manuals/WARENA_O88.md`, its line in
+  `guidelock-full` said the same (the package shipped with no page in the
+  project guide): `tools/guide/manuals/WIRERENA_O88.md`, its line in
   `tools/guide/entries.toml` and its eight shots by
-  `tools/guide/capture/WARENA_O88.py`, stamped in the guide lock.
+  `tools/guide/capture/WIRERENA_O88.py`, stamped in the guide lock.
+- **The name** (the owner, 2026-11-15): the file is `WIRERENA.O88`, *"so it
+  sits with the other wires better"*, and the window title is **Wire
+  Arena**, two words - *"WireBall fits well as one word, but Wire Arena I
+  think feels better as two."* The menu bar, the setup's heading, the keys
+  card and the header's program name follow the title; the on-demand disks
+  are `wirerena*.img`. The source keeps `apps/wirearena/` and `wa_`. Text
+  written before the rename (16, the completed plans) keeps the old file
+  name as history.
 
 **After the first release** (the owner, 2026-11-15: *after*, for the turn
 acceleration and for all the test and measurement debt):
@@ -1878,7 +1886,7 @@ None is promised; each is where it was proposed.
 ### 17.6 The kern_mega pass (2026-11-15)
 
 **The rules, read against the source.** No `PKG_MEGA` arm is needed and
-none is built: the shipped WARENA.O88 is correct on kern_mega as it is
+none is built: the shipped WIRERENA.O88 is correct on kern_mega as it is
 (SPEC.md 20.18 rule 2), which the rows below are the evidence for.
 
 | rule | WireArena |
