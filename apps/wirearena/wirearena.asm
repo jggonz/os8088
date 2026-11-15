@@ -7068,6 +7068,8 @@ wa_loadarena:
 %include "wasetup.inc"          ; the opening window: the match setup
 %define OS88UI_DROP             ; the setup's drop-downs (SPEC.md 13.14)
 %define OS88UI_CHK              ; the rotation's check boxes (SPEC.md 13.15)
+%define OS88UI_NOGRADIO         ; (check boxes only: no radio ring and dot,
+                                ; 13.15.3 - ~150 bytes)
 %define OS88UI_ABOUT            ; the About card: the keys (SPEC.md 12.2)
 %define OS88UI_ABFIT            ; (thirteen lines on a CGA's content box)
 %define OS88UI_ABLEFT           ; (the key table at the card's left margin)
