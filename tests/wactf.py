@@ -66,6 +66,9 @@ def match(ui, arena, bots):
     f0 = p.byte(sym["wa_frame"])
     os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,
                     "the match's first frames", guest=20)
+    f0 = p.byte(sym["wa_frame"])                # (a frame of the loop's:
+    os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,  # the mode
+                    "a frame of the loop's", guest=5)            # is set)
     return G(ui, w, sym)
 
 

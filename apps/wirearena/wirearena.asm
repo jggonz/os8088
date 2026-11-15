@@ -6490,6 +6490,7 @@ wa_loadarena:
 %include "wactf.inc"            ; capture the flag, and its teams (CTF-PLAN)
 %include "wasetup.inc"          ; the opening window: the match setup
 %define OS88UI_DROP             ; the setup's drop-downs (SPEC.md 13.14)
+%define OS88UI_CHK              ; the rotation's check boxes (SPEC.md 13.15)
 %define OS88UI_ABOUT            ; the About card: the keys (SPEC.md 12.2)
 %define OS88UI_ABFIT            ; (thirteen lines on a CGA's content box)
 %define OS88UI_ABLEFT           ; (the key table at the card's left margin)
@@ -6497,6 +6498,9 @@ wa_loadarena:
 %define OS88LINE_NOSET          ; (the field is typed into, never set,
 %define OS88LINE_NORESYNC       ;  never written behind its back)
 %include "os88line.inc"         ; the setup's address field (SPEC.md 83)
+%if WR_CKSZ != OS88UI_CK_SIZE
+ %error "wasetup.inc's WR_CKSZ is not os88ui's check box record"
+%endif
 %if wa_sdr_c - wa_sdr_a != OS88UI_DR_SIZE
  %error "WA_SDROP is not OS88UI_DR_SIZE bytes: os88ui writes every one"
 %endif
@@ -6544,6 +6548,7 @@ TOASTSTR wa_t_small, 'Needs kern_big or mega'
 TOASTSTR wa_t_part, 'Renderer part mismatch'
 TOASTSTR wa_t_host, 'The host picks the arena'
 TOASTSTR wa_t_ctfa, 'This arena has no flags'
+TOASTSTR wa_t_rone, 'One arena stays in'
 TOASTSTR wa_t_be, 'Bots: easy'
 TOASTSTR wa_t_bn, 'Bots: normal'
 TOASTSTR wa_t_bh, 'Bots: hard'

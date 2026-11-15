@@ -1,6 +1,6 @@
 # WireArena: the score to win, team deathmatch, king of the hill, and arenas in rotation
 
-**STATUS: IN PROGRESS** (2026-11-15): M1 and M2 built. Written to the owner's
+**STATUS: IN PROGRESS** (2026-11-15): M1, M2 and M3 built. Written to the owner's
 brief below, before any code; section 8 is the waves and section 9 what was
 built.
 
@@ -129,7 +129,7 @@ code is needed, so nothing moves this round. The game segment has ~18 KB.
   mode's list of arenas, a win at the score in free-for-all, team
   deathmatch and CTF, the 10 s, the next arena loaded and played.
 - [x] **M2 King of the hill** - alone, the bots too. Checked by `wamodes`.
-- [ ] **M3 The rotation's window.** Checked by `wamodes`.
+- [x] **M3 The rotation's window.** Checked by `wamodes`.
 - [ ] **M4 Linked**: the win and the next arena from the host; team
   deathmatch's and king of the hill's scores on the wire. Checked by
   `wactflink`'s pattern.
@@ -192,3 +192,22 @@ code is needed, so nothing moves this round. The game segment has ~18 KB.
 - **The HUD**: each team's points, `#` by the holders.
 - **Linked** is M4's: a guest plays king of the hill's teams and spawns, but
   the hill's rules are not on the wire yet.
+
+**M3** (2026-11-15):
+
+- **The Arena list's last item is `rotation...`** (`wa_sarlist`, its arena
+  0FFh); picking it opens the Rotation window and leaves the arena as it
+  was. **R** opens it from the keyboard too; Left and Right on the Arena go
+  round the arenas alone, so stepping through the list never pops a
+  window.
+- **The window** (`wasetup.inc`'s `wa_ropen` .. `wa_rset`) is a window of
+  its own with its own class, os88ui's check boxes (`OS88UI_CHK`, SPEC.md
+  13.15): the mode's name, then a box per arena of the mode. A click or
+  Space toggles; Up and Down move the `>` marker; Esc, Enter or the close
+  box put it away and give the setup its keys back. The last box checked
+  cannot be unchecked (a toast: `One arena stays in`). Changing the mode
+  closes it; so does closing WireArena.
+- **The rotation** is `wa_srot`, a bit per arena by mode, all set at first.
+  `wc_next` takes the next arena of the mode that is in it, round; with one
+  checked it is that one again.
+- **Checked by** `wamodes`.

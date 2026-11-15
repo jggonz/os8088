@@ -127,6 +127,11 @@ wa_sarlist:
     inc bx
     cmp bx, WA_NARENA
     jb .i
+    mov byte [wa_salx+di], 0FFh ; ...and the last: Rotation... (MODES-PLAN
+    mov si, di                  ; 5), its window
+    shl si, 1
+    mov word [wa_salp+si], wa_s_rot
+    inc di
     mov [wa_sdr_a+OS88UI_DR_N], di
     cmp ch, 0FFh
     jne .have
@@ -250,8 +255,13 @@ wa_spick:
     xor bh, bh                  ; (the mode's list: wa_sarlist's)
     mov bl, al
     mov al, [wa_salx+bx]
+    cmp al, 0FFh
+    je .rot
     mov [wa_lkarena], al
     ret
+.rot:
+    mov byte [wa_sdsel], 0FFh   ; (Rotation...: its window, the arena as it
+    jmp wa_ropen                ; was drawn again)
 .cols:
     xor al, 1
     mov [wa_want], al
@@ -284,6 +294,7 @@ wa_spick:
     mov bl, al
     mov al, [wa_smodes+bx]
     mov [wa_lkgmode], al
+    call wa_rdone               ; (another mode's rotation: its window down)
     call wa_sarlist             ; (its arenas, its Win at)
     mov byte [wa_sdsel], 0FFh   ; (the Arena and Win at drawn again)
     mov byte [wa_sdsel+6], 0FFh
@@ -318,6 +329,10 @@ wa_sarmap:
 wa_sset:
     push ax
     call wa_sval
+    or bx, bx                   ; (the Arena: round its arenas, Rotation...
+    jnz .nr                     ; left out - R, or a pick, opens it)
+    dec ah
+.nr:
     or dl, dl
     pop dx                      ; (DH = the step)
     jnz .host
@@ -928,6 +943,11 @@ wa_skey:
     or ah, 0x20
     cmp ah, 'k'
     je .keys
+    cmp ah, 'r'                 ; R: the rotation's window
+    jne .nr
+    call wa_ropen
+    jmp .done
+.nr:
     clc
     ret
 .up:
@@ -1215,6 +1235,317 @@ wa_sbtndrag:
     mov bx, wa_sbrec
     jmp os88ui_btndrag
 
+; --- THE ROTATION (MODES-PLAN 5) ----------------------------------------------
+; A window of its own: the mode's arenas, a check box each (os88ui's, SPEC.md
+; 13.15) - the ones a win moves on to, round, in the list's order (wc_next).
+; Each mode keeps its own (wa_srot, a bit per arena, all by default); at
+; least one stays checked. Up and Down move the marker, Space checks, Esc or
+; Enter (or the close box) puts it away
+
+WR_W        equ 168             ; its content: the mode's name, then a row
+WR_Y0       equ 18              ; a box
+WR_DY       equ 16
+WR_BX       equ 20              ; (a box's rect from here; the marker at 4)
+
+; wa_ropen - the window up (Rotation..., R): the mode's arenas
+wa_ropen:
+    mov bx, [wa_rwin]
+    or bx, bx
+    jz .new
+    call OSAPI_WM_SHOW          ; (up already: in front)
+    ret
+.new:
+    mov al, [wa_sdr_a+OS88UI_DR_N]
+    dec ax                      ; (the list but Rotation...)
+    mov [wa_rn], al
+    mov byte [wa_rfoc], 0
+    mov ah, WR_DY
+    mul ah
+    add ax, WR_Y0 + 4 + 19      ; (the template's: the title bar's 19 with
+    mov [wa_rtpl+WT_H], ax      ; the content, as wa_tpl's 174 is)
+    mov si, wa_rtpl
+    call OSAPI_WM_CREATE
+    jc .out
+    mov [wa_rwin], bx
+    call OSAPI_WM_SHOW
+.out:
+    ret
+
+; wa_rdone - the window down, if it is up. Keeps all but BX
+wa_rdone:
+    xor bx, bx
+    xchg bx, [wa_rwin]          ; (the word first: wm_destroy's repaint
+    or bx, bx                   ; must not find a dying one)
+    jz .out
+    call OSAPI_WM_DESTROY
+.out:
+    ret
+
+; wa_rclose - ONCLOSE: down, and the close done (CF = 1: nothing left to
+; close - os88ui_aclose's answer)
+wa_rclose:
+    call wa_rback
+    stc
+    ret
+
+; wa_rback - down, and the setup in front again (its keys back)
+wa_rback:
+    call wa_rdone
+    mov bx, [wa_win]
+    call OSAPI_WM_FRONT
+    ret
+
+; wa_rplace - the boxes' records from where the window is, their marks from
+; the mode's rotation. Keeps every register
+wa_rplace:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [wa_rwin]
+    call OSAPI_WM_CONTENT       ; AX = left, DX = top
+    mov cx, ax
+    add dx, WR_Y0
+    mov bl, [wa_lkgmode]
+    xor bh, bh
+    mov bl, [wa_srot+bx]        ; BL = the rotation
+    xor si, si
+    mov di, wa_rck
+.r:
+    mov ax, si
+    cmp al, [wa_rn]
+    jae .out
+    mov ax, cx
+    add ax, WR_BX
+    mov [di+OS88UI_CK_RECT], ax
+    mov [di+OS88UI_CK_RECT+2], dx
+    add ax, WR_W - WR_BX - 9
+    mov [di+OS88UI_CK_RECT+4], ax
+    mov ax, dx
+    add ax, 13
+    mov [di+OS88UI_CK_RECT+6], ax
+    push si
+    shl si, 1
+    mov ax, [wa_salp+si]        ; (SI, not BP: BP would read SS)
+    pop si
+    mov [di+OS88UI_CK_LABEL], ax
+    push cx
+    mov cl, [wa_salx+si]
+    mov al, 1
+    shl al, cl
+    pop cx
+    and al, bl
+    jz .m
+    mov al, 1
+.m:
+    mov [di+OS88UI_CK_ON], al
+    add di, OS88UI_CK_SIZE
+    add dx, WR_DY
+    inc si
+    jmp .r
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wa_rpaint - PAINT (the kernel set the clip, the content white): the mode,
+; the boxes, the marker
+wa_rpaint:
+    call wa_rplace
+    mov bx, [wa_rwin]
+    call OSAPI_WM_CONTENT
+    mov cx, ax
+    add cx, 8
+    add dx, 4
+    mov al, [wa_lkgmode]        ; (its name: Mode's item)
+    mov bx, wa_smodes
+    call wa_sval.find
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov si, [wa_si_mode+bx]
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    mov bx, wa_rck
+    xor cx, cx
+.b:
+    cmp cl, [wa_rn]
+    jae wa_rmarks
+    xor di, di
+    call os88ui_chk
+    add bx, OS88UI_CK_SIZE
+    inc cx
+    jmp .b
+
+; wa_rmarks - each row's marker cell, '>' at the focus (the clip armed)
+wa_rmarks:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, wa_rck
+    xor cx, cx
+.l:
+    cmp cl, [wa_rn]
+    jae .o
+    mov al, ' '
+    cmp cl, [wa_rfoc]
+    jne .s
+    mov al, '>'
+.s:
+    mov [wa_rmk], al
+    push cx
+    mov cx, [bx+OS88UI_CK_RECT]
+    sub cx, WR_BX - 4
+    mov dx, [bx+OS88UI_CK_RECT+2]
+    add dx, 3
+    mov si, wa_rmk
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    pop cx
+    add bx, OS88UI_CK_SIZE
+    inc cx
+    jmp .l
+.o:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wa_rclip - CF = 0 the window's clip armed, CF = 1 nothing of it to see;
+; the records placed. Keeps all but the flags
+wa_rclip:
+    push bx
+    call wa_rplace
+    mov bx, [wa_rwin]
+    call OSAPI_WM_CLIP_SET
+    pop bx
+    ret
+
+; wa_rclick - ONCLICK: CX, DX = the press (screen): a box toggled
+wa_rclick:
+    call wa_rclip
+    jc .out
+    mov bx, wa_rck
+    xor bp, bp
+.h:
+    mov ax, bp
+    cmp al, [wa_rn]
+    jae .out
+    call os88ui_chkhit
+    jnc .hit
+    add bx, OS88UI_CK_SIZE
+    inc bp
+    jmp .h
+.hit:
+    mov [wa_rfoc], al
+    call wa_rset
+    call wa_rmarks
+.out:
+    ret
+
+; wa_rkey - ONKEY: Up, Down, Space; Esc and Enter close. CF = 1 taken
+wa_rkey:
+    cmp al, 27
+    je .close
+    cmp al, 13
+    je .close
+    call wa_rclip
+    jc .yes
+    mov bl, [wa_rfoc]
+    cmp ah, 0x48
+    je .up
+    cmp ah, 0x50
+    je .down
+    cmp al, ' '
+    jne .no
+    mov al, OS88UI_CK_SIZE      ; SPACE: the focused one toggled
+    mul bl
+    add ax, wa_rck
+    mov bx, ax
+    xor byte [bx+OS88UI_CK_ON], 1
+    xor di, di
+    call os88ui_chkmark
+    mov al, [wa_rfoc]
+    call wa_rset
+    jmp short .yes
+.up:
+    or bl, bl
+    jz .yes
+    dec bx
+    jmp short .f
+.down:
+    inc bx
+    cmp bl, [wa_rn]
+    jae .yes
+.f:
+    mov [wa_rfoc], bl
+    call wa_rmarks
+.yes:
+    stc
+    ret
+.no:
+    clc
+    ret
+.close:
+    call wa_rback
+    stc
+    ret
+
+; wa_rset - BX = box AL, just toggled (and drawn): the rotation as it says -
+; unless it was the last one checked, which goes back on (a toast says why)
+wa_rset:
+    push bx
+    mov bx, wa_rck              ; (any still checked?)
+    xor cx, cx
+    xor ah, ah
+.c:
+    cmp cl, [wa_rn]
+    jae .cd
+    or ah, [bx+OS88UI_CK_ON]
+    add bx, OS88UI_CK_SIZE
+    inc cx
+    jmp .c
+.cd:
+    pop bx
+    or ah, ah
+    jnz .set
+    mov byte [bx+OS88UI_CK_ON], 1
+    xor di, di
+    call os88ui_chkmark
+    push ds
+    pop es
+    mov si, wa_t_rone
+    xor cx, cx
+    call OSAPI_TOAST
+    ret
+.set:
+    xor ah, ah
+    mov si, ax
+    mov cl, [wa_salx+si]
+    mov dl, 1
+    shl dl, cl                  ; DL = its arena's bit
+    mov al, [wa_lkgmode]
+    xor ah, ah
+    mov si, ax
+    cmp byte [bx+OS88UI_CK_ON], 0
+    je .clr
+    or [wa_srot+si], dl
+    ret
+.clr:
+    not dl
+    and [wa_srot+si], dl
+    ret
+
 ; wa_sstart - Play (alone: the arena now) or Ready (linked)
 wa_sstart:
     cmp byte [wa_splay], 0
@@ -1292,8 +1623,10 @@ wa_amodes:                      ; each arena's modes, a bit each (arenagen)
                 db WA_AM%[wa_i]
 %assign wa_i wa_i+1
 %endrep
-wa_salp:        times WA_NARENA dw 0    ; the Arena list, the mode's
-wa_salx:        times WA_NARENA db 0    ; ...and each item's arena
+wa_salp:        times WA_NARENA+1 dw 0  ; the Arena list, the mode's
+wa_salx:        times WA_NARENA+1 db 0  ; ...and each item's arena (0FFh:
+                                        ; Rotation..., the last)
+wa_s_rot:       db 'rotation...', 0
 ; WIN AT (MODES-PLAN 2): by mode (wa_gmode's numbers), its items, the
 ; values they name (0: no limit) and the pick, which each mode keeps
 WA_NGOAL        equ 7
@@ -1302,6 +1635,20 @@ wa_sgval:       db 0, 5, 10, 15, 20, 25, 30     ; free-for-all: kills
                 db 0, 1, 2, 3, 5, 7, 10         ; CTF: captures
                 db 0, 10, 15, 20, 25, 30, 50    ; team deathmatch: kills
                 db 0, 3, 5, 10, 15, 20, 30      ; king of the hill: points
+wa_srot:        db 0FFh, 0FFh, 0FFh, 0FFh   ; THE ROTATION by mode: a bit an
+                                ; arena, every one to begin with
+wa_rwin:        dw 0            ; its window, 0 none; how many boxes, the
+wa_rn:          db 0            ; focus's, its marker's text
+wa_rfoc:        db 0
+wa_rmk:         db ' ', 0
+WR_CKSZ         equ 12          ; (os88ui's OS88UI_CK_SIZE, included after:
+                                ; wirearena.asm checks the two agree)
+wa_rck:         times WA_NARENA * WR_CKSZ db 0  ; the boxes
+wa_rtpl:        dw 232, 40, WR_W + 2, 0 ; its template (the height: wa_ropen)
+                dw wa_rttl, wa_rcls
+    OS88_CLASS wa_rcls, 0, PAINT, wa_rpaint, ONKEY, wa_rkey, \
+               ONCLICK, wa_rclick, ONCLOSE, wa_rclose
+wa_rttl:        db 'Rotation', 0
 wa_sgoal:       db 4, 3, 5, 3   ; the picks: 20 kills, 3 captures, 30
                                 ; kills, 10 points
 wa_sg_ffa:      dw wa_sgn, wa_sgk5, wa_sgk10, wa_sgk15, wa_sgk20, wa_sgk25

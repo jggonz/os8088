@@ -16,9 +16,18 @@ arena, on one machine, off the game's own variables.
     2 red, bot 1 blue) - nine is no win at Win at 10, the tenth shows RED
     WINS; after the 10 s the Twin (next after the hedge), us on red's side.
 
+  - THE ROTATION (wave M3): the Arena list's last item is Rotation...; R
+    opens its window with team deathmatch's arenas both checked; the Twin
+    unchecked leaves it, the hedge (then the last) cannot be; Esc puts it
+    away - and the team deathmatch win on the hedge goes on on the hedge;
+  - KING OF THE HILL (wave M2): its arenas; on the hedge the hill taken by
+    us, held when contested, taken by the foe alone, a point each 10 s held
+    and the win; the next arenas round; the bots go for it.
+
 Red with: wa_sarlist's mode test inverted (TDM offers the arenas it cannot
 play), wc_score's team sum read off the wrong team, wc_next taking the
-same arena again.
+same arena again, wc_next ignoring the rotation, wc_hgoal returning at
+once.
 """
 import os
 import struct
@@ -60,9 +69,10 @@ def main():
         p = os88marty.Pkg(m, w)
         g = G(ui, w, sym)
 
-        def arenas():
-            n = p.word(sym["wa_sdr_a"] + DR_N)
-            return [p.byte(sym["wa_salx"] + i) for i in range(n)]
+        def arenas():                           # (the list's last item is
+            n = p.word(sym["wa_sdr_a"] + DR_N)  # Rotation..., 0FFh)
+            a = [p.byte(sym["wa_salx"] + i) for i in range(n)]
+            return a[:-1] if a and a[-1] == 0xFF else a + ["no rotation"]
 
         def mode_key(key):
             p.write(sym["wa_sfoc"], bytes([FOC_MODE]))
@@ -98,6 +108,9 @@ def main():
             f0 = p.byte(sym["wa_frame"])
             os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,
                             "the match's first frames", guest=20)
+            f0 = p.byte(sym["wa_frame"])        # (wa_reset moves the count:
+            os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,
+                            "a frame of the loop's", guest=5)   # the loop's)
             p.write(sym["wa_bdet"], b"\x01")    # (dummies: nobody's kills
             m.advance(cycles=TICK * 2)          # but ours)
 
@@ -148,6 +161,36 @@ def main():
                         "the match over", guest=5)
         m.advance(cycles=F * 2)
 
+        mode_key("ArrowRight")                  # THE ROTATION (M3): team
+        m.key("KeyR")                           # deathmatch's, its window
+        m.go()
+        os88marty.until(m, lambda _: p.word(sym["wa_rwin"]) != 0 and
+                        p.byte(sym["wa_rck"] + 10) == 1, "the rotation "
+                        "window painted", guest=5)
+        ck = sym["wa_rck"]
+
+        def on(i):
+            return p.byte(ck + i * 12 + 10)
+        check(p.word(sym["wa_rwin"]) != 0 and p.byte(sym["wa_rn"]) == 2 and
+              on(0) == 1 and on(1) == 1,
+              "THE ROTATION: R opens its window - the hedge and the Twin, "
+              "both checked", (p.word(sym["wa_rwin"]), p.byte(sym["wa_rn"])))
+        m.key("ArrowDown")
+        m.key("Space")
+        m.advance(cycles=TICK * 6)
+        rot = p.byte(sym["wa_srot"] + 2)
+        check(on(1) == 0 and not rot & 16 and rot & 8,
+              "THE ROTATION: the Twin unchecked, out of it", (on(1), rot))
+        m.key("ArrowUp")
+        m.key("Space")
+        m.advance(cycles=TICK * 6)
+        rot = p.byte(sym["wa_srot"] + 2)
+        check(on(0) == 1 and rot & 8, "THE ROTATION: the last one checked "
+              "stays checked", (on(0), rot))
+        m.key("Escape")
+        m.advance(cycles=TICK * 6)
+        check(p.word(sym["wa_rwin"]) == 0, "THE ROTATION: Esc puts it away")
+
         play(3, 2, 1)                           # TEAM DEATHMATCH, Win at 10
         check(p.byte(sym["wa_gmode"]) == 2 and p.byte(sym["wa_ggoal"]) == 10,
               "TEAM DEATHMATCH: the mode, Win at 10",
@@ -159,10 +202,13 @@ def main():
         kills([4, 3, 6, 0])
         check(g.word("wa_cwin") > 0 and g.word("wa_cmsg") == sym["wc_m_rwin"],
               "TEAM DEATHMATCH: red's tenth shows RED WINS")
-        next_arena(4)
-        check(g.word("wa_px") < 1024 and p.byte(sym["wa_gmode"]) == 2,
-              "THE NEXT ARENA: the Twin after the hedge, us on red's side",
-              g.word("wa_px"))
+        next_arena(3)
+        check(g.word("wa_px") < 1024 and p.byte(sym["wa_gmode"]) == 2 and
+              p.byte(sym["wa_caps"]) == 0 and
+              bytes(p.byte(sym["wa_kills"] + i) for i in range(4)) ==
+              bytes(4),
+              "THE NEXT ARENA: the hedge again, the Twin out of the rotation "
+              "- the scores anew, us on red's side", g.word("wa_px"))
         m.key("Escape")
         m.go()
         os88marty.until(m, lambda _: p.byte(sym["wa_quit"]) == 1,
