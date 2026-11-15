@@ -472,8 +472,9 @@ paint stroke).
 `quick=True` ends the boot when the kernel says the desktop is up (`desk_rows`
 and `menu_nbar` live, `[spl_live]` = 0, the tick moving) instead of waiting for
 the picture to settle. Use it whenever the first act is an `os88ui` verb or a
-guest read. A bare launch is `launch(boot=False)`, `m.run()`,
-`os88marty.kernel_up(m)`. **`launch(boot=N)` is a blind N-second pause** - one
+guest read. A bare launch is `launch(boot="up")` - `launch(boot=False)`,
+`m.run()`, `os88marty.kernel_up(m)` in one call, and the spelling the boot
+cache below can serve. **`launch(boot=N)` is a blind N-second pause** - one
 row spent 64 of its 69 seconds in it. Keep the picture settle only when the
 first thing you do is compare the boot screen.
 
