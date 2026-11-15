@@ -111,9 +111,8 @@ def shots(image, apps, machine, tree=None):
     def still():
         os88marty.ui_done(m, "the repaint")
         os88marty.guest_sleep(m, 0.1)
-    with os88marty.launch(image, apps=apps, machine=machine, boot=False) as m:
-        m.run()
-        os88marty.kernel_up(m)
+    with os88marty.launch(image, apps=apps, machine=machine,
+                          boot="up") as m:  # run + kernel_up
         # SPEC.md 79's SAVER IS LEFT ON, DELIBERATELY. It came up in the
         # middle of this gate once and broke it twice over - it ANIMATES, so
         # the settles waited out their whole limit, and it BLITS, so the
