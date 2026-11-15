@@ -1120,13 +1120,15 @@ wa_sclick:
     mov byte [wa_sdfld], 0FFh   ; (its caret where the press put it)
     jmp .out
 .took:
-    mov bx, di                  ; (the focus where the press was: Mode's
-    shr bx, 1                   ; stop past the field's)
-    cmp bl, WS_FLD
-    jb .tk
-    inc bx
+    pushf                       ; (drpress's CF - repaint - is wa_stake's to
+    mov bx, di                  ; read: the stop's compare below set it for
+    shr bx, 1                   ; every drop-down before the field, and the
+    cmp bl, WS_FLD              ; list came down only to be painted over)
+    jb .tk                      ; (the focus where the press was: Mode's
+    inc bx                      ; stop past the field's)
 .tk:
     mov [wa_sfoc], bl
+    popf
     mov bx, [wa_sdrs+di]
     call wa_stake
 .out:
