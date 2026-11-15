@@ -785,6 +785,14 @@ class Marty:
             length -= n
         return bytes(out)
 
+    def lin(self, seg, off=0):
+        """The linear address of SEG:OFF - `seg << 4` plus OFF here. The
+        kern_mega shims answer the same call for a SELECTOR too
+        (os88megacommon.MegaMixin.lin), so a row spells it `m.lin(seg,
+        off)` on every emulator rather than `m.lin(...) if bochs else seg
+        * 16 + off` (soak-speed-2/bochs.md, parity)."""
+        return (seg << 4) + off
+
     def readseg(self, seg, off, length):
         """`length` bytes at seg:off. A LiveSeg (what dispapps.pkg_seg,
         dosmap.instance and pkg_live answer) is read through the kernel word

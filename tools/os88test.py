@@ -896,7 +896,15 @@ def _default_bpc():
             return max(1, int(env))
         except ValueError:
             pass
-    return BOCHS_PER_CORE
+    # ...divided by the cap's RATE (os88bochs.ROW_RATE, $OS88_BOCHS_RATE): a
+    # guest allowed RATE x real time may keep RATE x the share of a core
+    # busy (docs/plans/soak-speed-2/bochs.md)
+    try:
+        import os88bochs
+        rate = max(1.0, float(os88bochs.ROW_RATE))
+    except Exception:           # (no tools/ on the path: the old weight)
+        rate = 1.0
+    return max(1, int(round(BOCHS_PER_CORE / rate)))
 
 
 def lane_weight(row, bpc):
