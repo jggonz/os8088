@@ -3151,7 +3151,7 @@ wa_bhear_far:
     jmp wa_bheara
 
 ; wa_lkonlift - DI = figure 0 on the host: one of the lift's riders when it
-; stands on top of it (wa_lbn, which wa_ltick counts) - so the lift rises
+; stands on top of it (wa_lbot, which wa_ltick counts) - so the lift rises
 ; for the guest as it does for anyone here. Keeps every register
 wa_lkonlift:
     push ax
@@ -3178,7 +3178,7 @@ wa_lkonlift:
     jl .next
     cmp ax, [wa_boxes+bx+6]
     jg .next
-    inc byte [wa_lbn+si]
+    inc byte [wa_lbot+si]
 .next:
     inc si
     inc si

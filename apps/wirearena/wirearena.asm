@@ -658,6 +658,9 @@ wa_frame_input:
     cmp byte [wa_paused], 0     ; (paused: the hand's motion drained, and
     jne .held                   ; nothing looks or fires)
     mov bl, al                  ; the buttons
+    mov ax, cx                  ; (the hand still, the usual frame: no
+    or ax, dx                   ; factor, no product - a multiply and a
+    jz .clamp                   ; shift of 0 by 0)
     push cx
     mov al, [wa_msens]          ; the sensitivity's level (-4..4, 0 the
     cbw                         ; first one's): its factors
@@ -979,10 +982,10 @@ wa_tick:
 .figs0:
     xor ax, ax                  ; (the bots on each lift this tick: its
 %assign wa_i 0                  ; riders the next, wa_ltick - a byte a
-%rep WA_MLIFT                   ; lift, a word apart)
-    mov [wa_lbn+wa_i], ax
-%assign wa_i wa_i+2
-%endrep
+%rep WA_MLIFT                   ; lift, a word apart - counted straight
+    mov [wa_lbot+wa_i], ax      ; into wa_lbot: its one reader, wa_lift1,
+%assign wa_i wa_i+2             ; ran already this tick, so no second
+%endrep                         ; table and no copy at the loop's end)
     mov bx, [wa_tkn]            ; WHOSE TURN TO LOOK (AI-PLAN 4.1): each bot
     and bx, 7                   ; every eighth tick, 0.27 s, on the tick
     shl bx, 1                   ; where tick + (WA_NFIG - its index) x 3 is a
@@ -1002,12 +1005,6 @@ wa_tick:
     jb .fig
 .figd:
     inc word [wa_tkn]
-%assign wa_i 0
-%rep WA_MLIFT
-    mov ax, [wa_lbn+wa_i]
-    mov [wa_lbot+wa_i], ax
-%assign wa_i wa_i+2
-%endrep
 .c_w:                           ; (the labels: tools/watrace.py's stops)
     call wa_wtick               ; the weapon's reload and its next shot,
 .c_rk:                          ; the rockets, the pickups (WEAPONS-PLAN)
@@ -1044,8 +1041,11 @@ wa_blkt:                        ; the figure that looks, by the tick's low
 ; the air: above the feet at all). Keeps CX, DI, BP (its two callers' own:
 ; the tick's steps in x and in y); clobbers AX, BX, DX, SI.
 wa_collide:
+    cmp word [wa_nfl], 0        ; (an arena with no floor lines - all but
+    je .nofl                    ; the twin: no call)
     call wa_flcross             ; (a floor line crossed: ARENAS-PLAN 4.5)
     jc .hit
+.nofl:
     mov ax, [wa_px]
     mov bx, [wa_py]
     cmp ax, WA_ROOM_X0 + WA_RAD
@@ -1060,10 +1060,17 @@ wa_collide:
     call wa_floor
     cmp byte [wa_aflat], 0
     jne .flat
-    call wa_fabs                ; DX = the feet, units: on the ground a
-    mov si, [wa_jz]             ; step more, in the air nothing more - a
-    or si, [wa_jv]              ; jump reaches what its feet clear (the
-    jnz .air                    ; back room's 48, not the platform's 80)
+    xchg ax, bx                 ; DX = the feet, units (wa_fabs's sum,
+    mov ax, [wa_jz]             ; here - each step of a walking tick asks
+    mov si, ax                  ; it): on the ground a step more, in the
+    or si, [wa_jv]              ; air nothing more - a jump reaches what
+    mov al, ah                  ; its feet clear (the back room's 48, not
+    cbw                         ; the platform's 80)
+    add ax, [wa_feet]
+    xchg ax, dx
+    xchg ax, bx                 ; (AX the floor again)
+    or si, si
+    jnz .air
     add dx, WA_STEPUP
 .air:
     cmp ax, dx
@@ -1081,48 +1088,81 @@ wa_collide:
 ; wa_flcross - CF = 1 when the player's step from (wa_ox, wa_oy) to (wa_px,
 ; wa_py) crosses one of the arena's FLOOR LINES (docs/plans/completed/WIREARENA-
 ; ARENAS-PLAN.md 4.5): a line the feet stop at, as the twin's walk's edge.
-; A line is near only when the new point is within 16 units of its box (a
-; step is under 11); then the step's ends lie either side of the line, and
-; the line's ends either side of the step (or on it) - two cross products
-; each, 32 bits. Keeps CX, DI, BP; clobbers AX, BX, DX, SI.
-wa_flcross:
-    cmp word [wa_nfl], 0
-    jne .on
-    clc
-    ret
-.on:
-    push cx
+; A line is near only when its box and the step's meet (touching counts):
+; then the step's ends lie either side of the line, and the line's ends
+; either side of the step (or on it) - two cross products each, 32 bits,
+; exact. Those two say the closed segments meet, so a crossing is inside
+; both boxes: the boxes' test drops no line the products would stop at. (It
+; was the new point within 16 of the line's box, which a step - under 15 an
+; axis - also never left; the boxes are tighter, along a line the feet run
+; beside.) Keeps CX, DI, BP; clobbers AX, BX, DX, SI.
+;
+; THE GRID (wa_flg, wa_flgmk): the twin's 16 lines were walked twice a
+; walking tick, a quarter of its tick; the new point's 128-unit cell names
+; the lines whose box widened by 16 reaches into it (four at most:
+; arenagen's), and a cell with none - most of the room - costs the cell's
+; look alone.
+WA_FLGC     equ 4               ; a cell: its lines' offsets in wa_fl, 0FFh
+                                ; after the last (none past the fourth)
+wa_flcross:                     ; (wa_collide, its one caller, asks it
+    push cx                     ; only of an arena with floor lines)
     push di
     push bp
-    mov si, wa_fl
-    mov cx, [wa_nfl]
+    mov di, [wa_py]             ; THE CELL, as wa_floor's: its row x 64 is
+    shr di, 1                   ; y's bits 7..10 a place down, and its
+    and di, 0x03C0              ; column x 4 x's five down. (No clamp to
+    mov ax, [wa_px]             ; the room: a step starts inside it by
+    mov cl, 5                   ; WA_RAD, more than a step - and should the
+    shr ax, cl                  ; new point leave it, wa_collide refuses
+    and al, 0x3C                ; the step whatever this says)
+    add di, ax
+    add di, wa_flg              ; DI = the cell
+    cmp byte [di], 0xFF         ; (none near it: the usual step)
+    je .none
+    mov ax, [wa_ox]             ; THE STEP'S BOX, for each line's test
+    mov dx, [wa_px]
+    cmp ax, dx
+    jle .sx
+    xchg ax, dx
+.sx:
+    mov [wa_fsb], ax
+    mov [wa_fsb+2], dx
+    mov ax, [wa_oy]
+    mov dx, [wa_py]
+    cmp ax, dx
+    jle .sy
+    xchg ax, dx
+.sy:
+    mov [wa_fsb+4], ax
+    mov [wa_fsb+6], dx
+    mov cx, WA_FLGC
+.cell:
+    mov bl, [di]
+    cmp bl, 0xFF
+    je .none
+    xor bh, bh
+    lea si, [wa_fl+bx]          ; SI = a line near the cell
 .seg:
-    mov ax, [si]                ; NEAR: the new point and the line's box
+    mov ax, [si]                ; NEAR: the line's box and the step's
     mov dx, [si+4]
     cmp ax, dx
     jle .x
     xchg ax, dx
 .x:
-    mov bx, [wa_px]
-    sub ax, 16
-    cmp bx, ax
-    jl .next
-    add dx, 16
-    cmp bx, dx
+    cmp ax, [wa_fsb+2]
     jg .next
+    cmp dx, [wa_fsb]
+    jl .next
     mov ax, [si+2]
     mov dx, [si+6]
     cmp ax, dx
     jle .y
     xchg ax, dx
 .y:
-    mov bx, [wa_py]
-    sub ax, 16
-    cmp bx, ax
-    jl .next
-    add dx, 16
-    cmp bx, dx
+    cmp ax, [wa_fsb+6]
     jg .next
+    cmp dx, [wa_fsb+4]
+    jl .next
     mov ax, [wa_ox]             ; THE STEP'S ENDS either side of the line
     mov bx, [wa_oy]             ; (a point on it counts with the side its
     call .side                  ; sign bit is clear on)
@@ -1147,8 +1187,11 @@ wa_flcross:
     xor dx, bp
     js .hit
 .next:
-    add si, 8
-    loop .seg
+    inc di
+    dec cx                      ; (no LOOP: the cell is out of its reach)
+    jz .none
+    jmp .cell
+.none:
     clc
     jmp short .out
 .hit:
@@ -1494,6 +1537,87 @@ wa_lists:
     mov cl, 7
     shr ax, cl
     pop cx
+    ret
+
+; wa_flgmk - once an arena is loaded: wa_flg, wa_flcross's grid - for each
+; 128-unit cell the floor lines (their offsets in wa_fl, in order) whose box
+; widened by 16 reaches into it, so a point inside the widened box is in
+; one of its cells (wa_lists' clamp: the edge's cells take beyond the room)
+wa_flgmk:
+    push es
+    push ds
+    pop es
+    mov di, wa_flg
+    mov ax, 0xFFFF
+    mov cx, 256*WA_FLGC/2
+    cld
+    rep stosw
+    pop es
+    mov cx, [wa_nfl]
+    jcxz .out
+    mov si, wa_fl
+.l:
+    push cx
+    mov ax, [si]                ; its columns...
+    mov dx, [si+4]
+    call .rng
+    mov cx, ax
+    mov ax, [si+2]              ; ...and rows
+    mov dx, [si+6]
+    call .rng
+    xchg ax, bx                 ; BL = the first row, BH the last
+.row:                           ; (CL = the first column, CH the last)
+    mov al, 64
+    mul bl
+    add ax, wa_flg
+    xchg ax, di                 ; DI = the row's first cell
+    mov dl, cl                  ; DL = the column
+.c:
+    mov al, dl
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    push di
+    add di, ax                  ; DI = the cell
+    mov ah, WA_FLGC
+.slot:
+    cmp byte [di], 0xFF
+    je .put
+    inc di
+    dec ah
+    jnz .slot
+    jmp short .full             ; (arenagen refuses a fifth)
+.put:
+    mov ax, si
+    sub ax, wa_fl
+    mov [di], al
+.full:
+    pop di
+    inc dl
+    cmp dl, ch
+    jbe .c
+    inc bl
+    cmp bl, bh
+    jbe .row
+    pop cx
+    add si, 8
+    loop .l
+.out:
+    ret
+.rng:                           ; AX, DX = a line's two ends on an axis:
+    cmp ax, dx                  ; AL = the first cell of its widened
+    jle .r                      ; extent, AH = the last
+    xchg ax, dx
+.r:
+    sub ax, 16
+    call wa_lists.cc
+    push ax
+    xchg ax, dx
+    add ax, 16
+    call wa_lists.cc
+    pop dx
+    mov ah, al
+    mov al, dl
     ret
 
 ; wa_hat - SI = a box (wa_boxes), DI = its record, the square overlapping it
@@ -2945,7 +3069,7 @@ wa_bnext:
 
 ; wa_bwait - DI = a figure waiting at its edge's start: CF = 1 while it
 ; still must (kind 1: the lift not yet at rest; 2: it rides the lift, not
-; yet at the top - a rider, wa_lbn). Keeps all but AX, BX
+; yet at the top - a rider, wa_lbot). Keeps all but AX, BX
 wa_bwait:
     push si
     mov bl, [di+F_BWAIT]        ; (its lift: the edge's kind byte's bits
@@ -2967,7 +3091,7 @@ wa_bwait:
     clc
     ret
 .up:
-    inc byte [wa_lbn+si]
+    inc byte [wa_lbot+si]
     cmp ax, [wa_ltop+si]
     je .go
 .wait:
@@ -6715,15 +6839,16 @@ wa_rsync:
 ; 0..19: where it is, which way it faces, its animation, its flash, whether
 ; it is dead, the floor it stands on) into the renderer part: three runs, the first taking FRAME and
 ; figure 0 together - FRAME's camera sin and cos made here first; then the
-; lift's height, and the rockets while any is live. Clobbers CX, SI, DI,
-; ES (= the part)
+; lift's height, and the rockets while any is live. Clobbers AX, BX, CX,
+; DX, SI, DI, ES (= the part) - its three callers keep nothing across it
 WA_FHW equ WA_FIGHEAD/2
 wa_rframe:
-    push ax
-    push dx
-    call wa_camsc               ; the camera's sin and cos, into FRAME (the
-    pop dx                      ; part has no table)
-    pop ax
+    mov ax, [wa_ang]            ; the camera's sin and cos, into FRAME (the
+    or al, 0x3F                 ; part has no table) - wa_camsc's own test
+    cmp ax, [wa_fsa]            ; here: a view that has not turned costs
+    je .sc                      ; no call and no load of what FRAME holds
+    call wa_camsc.make
+.sc:
     mov [wa_mmseg], ds          ; (our segment, for the minimap's bytes:
     mov es, [wa_rds]            ; the region may have moved since)
     cld
@@ -6812,9 +6937,10 @@ wa_render:
     mov [wa_frame], al
     push ds
     pop es
-%assign wa_i 0
+    mov ax, 1                   ; (one register's stores: 3 bytes each,
+%assign wa_i 0                  ; where an immediate's are 6)
 %rep WA_NFIG
-    mov word [wa_figs + wa_i*F_SIZE + F_PZ], 1
+    mov [wa_figs + wa_i*F_SIZE + F_PZ], ax
 %assign wa_i wa_i+1
 %endrep
     ret
@@ -6874,6 +7000,7 @@ wa_loadarena:
     mov [wa_nbox8], ax
     call wa_lists               ; the boxes the floor and the walls read
     call wa_pkgridmk            ; ...and the cells its pickups reach
+    call wa_flgmk               ; ...and its floor lines near
     pop ax                      ; ITS ROUTE GRAPH (AI-PLAN 3.1), straight
     push ax                     ; out of the part: descriptor words 38
     call op_seg                 ; and 40, its offset and bytes
@@ -7202,8 +7329,9 @@ WA_VAR wa_tz,2
 WA_VAR wa_sgrid,1024              ; the sight grid, a byte a 64-unit cell
 WA_VAR wa_bshots,2               ; the bots' shots fired, and hits
 WA_VAR wa_bhits,2
-WA_VAR wa_lbn,WA_MLIFT*2         ; per lift (a byte, a word apart): bots
-WA_VAR wa_lbot,WA_MLIFT*2        ;   on it this tick, and the last (riders)
+WA_VAR wa_lbot,WA_MLIFT*2        ; per lift (a byte, a word apart): bots
+                                 ;   on it (riders), counted by the tick's
+                                 ;   figures, read by the next's wa_lift1
 WA_VAR wa_pbsel,1                ; the play bench: the heights arena's pose,
 WA_VAR wa_pba,2                  ;   the angle and pitch it circles round,
 WA_VAR wa_pbp,2                  ;   and its HUD mark
@@ -7289,6 +7417,8 @@ WA_VAR wa_spc,WA_SPMAX*2         ;   many, their offsets and their glyphs
 WA_VAR wa_spg,WA_SPMAX*2
 WA_VAR wa_pkt,WA_MPK*2           ; a taken pickup's ticks to its return
 WA_VAR wa_pkgrid,256             ; the pickups in reach of each 128-unit cell
+WA_VAR wa_flg,256*WA_FLGC        ; the floor lines near each (wa_flgmk)
+WA_VAR wa_fsb,8                  ; wa_flcross: the step's box
 WA_VAR wa_rkg,WA_NRK*WA_RKGSZ    ; the rockets' fractions, velocity, life
 WA_VAR wa_rkcp,1                 ; a rocket was live at the last copy
 WA_VAR wa_rkn,1                  ; rockets live (flying or exploding)

@@ -1128,6 +1128,7 @@ ARENA_ROOMH = {"a3": MH, "a4": 0, "a6": ZH, "a7": 0}      # (the hedge's edge al
                                         # room's walls - HEDGES-PLAN 9)
 WA_MFL = 24                             # (wafb.inc's)
 WA_MFV = 24                             # (wafb.inc's: their distinct ends)
+WA_FLGC = 4                             # (wirearena.asm's: lines near a cell)
 
 
 def flines(tag):
@@ -2236,6 +2237,16 @@ def arena_tables(w, tag, boxes, start):
     if len(segs) > WA_MFL:              # made by the frame's cache)
         raise SystemExit("arenagen: arena %s: %d floor lines - at most %d"
                          % (tag, len(segs), WA_MFL))
+    flg = {}                            # (the game's grid of them, wa_flgmk:
+    for (x0, y0, x1, y1) in segs:       # a 128-unit cell holds the lines whose
+        def cc(v):                      # box widened by 16 reaches into it -
+            return min(max(v, 0), 2047) >> 7  # WA_FLGC at most)
+        for r in range(cc(min(y0, y1) - 16), cc(max(y0, y1) + 16) + 1):
+            for c in range(cc(min(x0, x1) - 16), cc(max(x0, x1) + 16) + 1):
+                flg[(r, c)] = flg.get((r, c), 0) + 1
+    if flg and max(flg.values()) > WA_FLGC:
+        raise SystemExit("arenagen: arena %s: %d floor lines near one cell "
+                         "- at most %d" % (tag, max(flg.values()), WA_FLGC))
     ends = {(x0, y0) for (x0, y0, x1, y1) in segs} | \
            {(x1, y1) for (x0, y0, x1, y1) in segs}
     if len(ends) > WA_MFV:              # (wa_flinit's records: wa_fqvx)
