@@ -8645,6 +8645,18 @@ SOAK = [
         "off onto the tower, the lift home. Red on e9ca8cff: 14 failures.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wahudset", "soak", py("tests/wahudset.py"), 12.0,
+        "WIREARENA SAYS A SETTING WHEN A KEY CHANGES IT (SPEC.md 128.2; the "
+        "owner, 2026-11-15: 'right now I just have to see what changes'). "
+        "A match alone on MartyPC's 5150 CGA: F2, F5, F3, V twice, + and - "
+        "each put 'Detail Low', 'Detail Very High', 'Detail Medium', "
+        "'Vsync on', 'Vsync off', 'Columns 80', 'Columns 40' in the HUD's "
+        "message - read out of wa_hmsg AND off row 24 of text memory, the "
+        "setting itself agreeing; the width's message drawn on the new "
+        "screen. Red with the detail keys' wa_hudset call taken out (three "
+        "failures).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wamono", "soak", py("tests/wamono.py"), 9.0,
         "WIREARENA ON A HERCULES DRAWS MONOCHROME ATTRIBUTES. wa_setmode "
         "chose the mono table by FSI_SEG == B000h, and on kern_mega that "

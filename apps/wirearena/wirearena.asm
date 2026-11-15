@@ -539,14 +539,28 @@ wa_frame_input:
     push ax
     call wa_setmode
     pop ax
-    jnc .drain
+    jnc .wsay
     mov al, ah                  ; refused (no 40 on Hercules): put it back
     call wa_setmode
+.wsay:                          ; "Columns 40" or "80", whichever it is now
+    mov bx, wa_hs_80
+    cmp byte [wa_mode], 0
+    je .ws
+    mov bx, wa_hs_40
+.ws:
+    mov si, wa_hs_cols
+    call wa_hudset
     jmp .drain
 .v:
     cmp ah, 0x2F                ; V: present after vertical retrace
     jne .b
     xor byte [wa_vsync], 1
+    mov bx, wa_hs_off           ; ("Vsync on", "Vsync off" on the HUD's
+    jz .vs                      ; message: a setting says what it is now)
+    mov bx, wa_hs_on
+.vs:
+    mov si, wa_hs_vsync
+    call wa_hudset
     jmp .drain
 .b:                             ; (F, G, T and L - the field of view, the
                                 ; floor grid, treads, the walls' tops - are
@@ -614,6 +628,12 @@ wa_frame_input:
     cmp al, WA_NLEV
     jae .bw
     call wa_setlevel
+    xor bh, bh                  ; "Detail Medium", the level's name
+    mov bl, [wa_level]
+    shl bx, 1
+    mov bx, [wa_hs_lev+bx]
+    mov si, wa_hs_detail
+    call wa_hudset
     cmp word [wa_rds], 0        ; (wa_flodv is CONFIG's: into the part now,
     je .drain                   ; if it is there - a mode set syncs it too)
     call wa_rsync
@@ -6449,6 +6469,44 @@ wa_hudsay:
     ret
 wa_hk_mouse: db 'Mouse sensitivity ', 0
 
+; wa_hudset - SI = a setting's name (NUL), BX = what it is now (NUL): the
+; HUD's message, the name grey and the value bright, for WA_HMSGT ticks -
+; every setting a key changes in the match says so there (the owner,
+; 2026-11-15: "right now I just have to see what changes"). Keeps every
+; register but AX, BX and SI
+wa_hudset:
+    push di
+    xor di, di
+    call wa_hudtext
+    mov si, bx
+.v:
+    lodsb
+    or al, al
+    jz .end
+    mov [wa_hmsg+di], al
+    mov byte [wa_hmsa+di], 0x0F
+    inc di
+    jmp .v
+.end:
+    mov [wa_hmsl], di
+    mov byte [wa_hmsgt], WA_HMSGT
+    mov byte [wa_hmsgd], 1
+    pop di
+    ret
+wa_hs_detail:   db 'Detail ', 0
+wa_hs_vsync:    db 'Vsync ', 0
+wa_hs_cols:     db 'Columns ', 0
+wa_hs_on:       db 'on', 0
+wa_hs_off:      db 'off', 0
+wa_hs_40:       db '40', 0
+wa_hs_80:       db '80', 0
+wa_hs_lev:      dw wa_hs_l0, wa_hs_l1, wa_hs_l2, wa_hs_l3, wa_hs_l4
+wa_hs_l0:       db 'Very Low', 0
+wa_hs_l1:       db 'Low', 0
+wa_hs_l2:       db 'Medium', 0
+wa_hs_l3:       db 'High', 0
+wa_hs_l4:       db 'Very High', 0
+
 wa_hudtext:                     ; SI = text (NUL), grey, at DI
     lodsb
     or al, al
@@ -6604,6 +6662,9 @@ wa_rretv:   dw wa_rret
 ; Last, the size under which a figure is drawn SMALL (wa_flodv, J's
 ; threshold: ARENAS-PLAN 5) - CONFIG's, so a level's change syncs it.
 WA_NLEV equ 5
+%if WA_NLEV != 5
+  %error "wa_hs_lev (the HUD's names for the levels) names five"
+%endif
 wa_levtab:
     db LK_FEW|LK_ROUND|LK_COARSE|LK_COARSE2|LK_NOPOST|LK_ROOMF|LK_FARTOP|LK_RAMP2, 0, 0, 2, WA_FLODV2
                                                                     ; 1 Very Low

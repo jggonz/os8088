@@ -251339,6 +251339,11 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
   B000h`, which is never true on kern_mega: `tests/wamono.py`.)
 - **Presentation** writes only the cells that changed. V waits for the
   vertical retrace before presenting (`OSAPI_FSX_WAIT`).
+- **A setting a key changes SAYS SO** in the HUD's message cell for four
+  seconds (`WA_HMSGT`, 120 ticks): the name grey, what it is now bright -
+  `Detail Medium`, `Vsync on`, `Columns 80` (`wa_hudset`), and `Mouse
+  sensitivity 5` for `[`/`]` (`wa_msset`). F10's meter is its own picture
+  and takes the cell while it shows (`tests/wahudset.py`).
 - **The detail levels** are F1..F5: Very Low, Low, Medium, High, Very
   High. Each is one row of `wa_levtab`: the renderer's `LK_*` options, the
   floor grid, stepped treads, dashed floor lines and the small-figure
@@ -251543,7 +251548,8 @@ another tag is dropped.
 
 - MartyPC (the 5150 with a CGA): `walift`, `waarenas`, `wactf`, `wamodes`,
   `waflines`, `wafiglod`, `wastill`, `wasetup`, `waroutes`, `wabots`,
-  `wascore`, `wabotarms`, `waweapons`; on its Hercules, `wamono`.
+  `wascore`, `wabotarms`, `waweapons`, `wahudset`; on its Hercules,
+  `wamono`.
 - The link, on QEMU (no NIC on MartyPC, and two machines): `walink`,
   `walinknet`, `walinkudp`, `walinkip`, `walink4`, `walink4ip`,
   `wactflink`, `wamodeslink`; with kern_mega at both ends, `walinkmega`,

@@ -1746,23 +1746,25 @@ by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
 - [WIREARENA-THREE-ARENAS-PLAN](completed/WIREARENA-THREE-ARENAS-PLAN.md) is
   completed.
 
-**The owner's own - reviews and a field run, none of them build work** (each
-changes data at most, and none blocks the build being released):
+**The owner's own - answered (2026-11-15)**:
 
-- **The field run on 5150 #1**, the CGA questions and the PERFORMANCE.md
-  set that follows from it (15, Wave 7).
-- **The Ziggurat's ramp fixes on the glass**, from the owner's two
-  screenshots ([THREE-ARENAS-PLAN](completed/WIREARENA-THREE-ARENAS-PLAN.md)
-  8): built and checked by `waarenas`, waiting on a look.
-- **The detail levels**, to re-review from the videos; moving an option is
-  one line of `wa_levtab`.
-  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.3 item 6)
-- **The heights plan's interpretations** of the owner's placements (the
-  lift platform as the tower's top, the back tunnel), never confirmed.
-  ([WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) 3.4)
-- **The room corners' views**, to be named beside the tower's - probably
-  moot since performance pass 6, to close or drop.
-  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.1, 9.3 item 3)
+- **The field run on 5150 #1**: *"Ran about 10% slower than it did in
+  86Box; 86Box slightly underpriced something. Still fine."* 86Box is not
+  cycle-accurate (docs/86BOX.md, *What it is NOT*); MartyPC's numbers are
+  the ones the plans quote, and nothing moves on this.
+- **The Ziggurat's ramp fixes**: *"Look much better, good enough to ship
+  the level."* Closed.
+- **The heights plan's interpretations**: *"Its good."* Closed.
+- **The room corners' views**: *"They are what they are; you put more on
+  screen from the places with the most views, which is why so many rooms
+  have 4 corner pillars to block view."* Closed, as designed.
+- **The detail levels**: kept as they are, and the owner asked that a
+  setting SAY what it changed to - *"Right now I just have to see what
+  changes."* Built: F1..F5, V and `-`/`+` put `Detail Medium`, `Vsync on`,
+  `Columns 80` in the HUD's message for four seconds, as `[`/`]` already
+  did for the mouse (SPEC.md 128.2, `wahudset`). +174 bytes.
+- **A player's guide**, asked for at the same time: `docs/wirearena-guide/`
+  (17.7).
 
 **After the first release** (the owner, 2026-11-15: *after*, for the turn
 acceleration and for all the test and measurement debt):
