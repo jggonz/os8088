@@ -63,6 +63,7 @@ full  bootsmoke              # as reviewed 2026-11-12
 full  cswrite                # as reviewed 2026-11-12
 full  ctoolchain             # as reviewed 2026-11-12
 full  guidelock-full         # as reviewed 2026-11-12
+full  hostwait               # owner 2026-11-15: everyone does it wrong (a host sleep in a row); quick enough for full
 full  kernresident           # as reviewed 2026-11-12
 full  megagrid               # as reviewed 2026-11-12
 full  megahigh               # as reviewed 2026-11-12

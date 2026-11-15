@@ -7,6 +7,9 @@
     python3 tests/unit/t_hostwait.py --update     rewrite tests/hostwait.txt DOWN
     python3 tests/unit/t_hostwait.py --update --raise "why"
                                                   ...and let counts rise/appear
+    python3 tests/unit/t_hostwait.py --no-cache   the gate, every file parsed
+    python3 tests/unit/t_hostwait.py --selfcheck  the pruned walk against the
+                                                  full one, every file
 
 WHY (docs/plans/soak-speed-2/flake.md). A soak runs eight emulators on four
 cores, and a guest short of CPU runs FEWER guest seconds per host second. A
@@ -155,16 +158,19 @@ def _fname(call):
         f.id if isinstance(f, ast.Name) else ""
 
 
-def scan(path):
-    """[(line, kind, text)] for one file."""
-    src = open(os.path.join(ROOT, path), errors="replace").read()
+def _scan_full(path, src):
+    """[(line, kind, text)] for one file - the REFERENCE walk, every node.
+    `scan` is the same answer from fewer nodes; `--selfcheck` holds the two
+    equal over every file."""
     lines = src.splitlines()
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             tree = ast.parse(src, path)
-    except SyntaxError:
-        return []
+    except SyntaxError as e:
+        # NOT zero sites: a file that does not parse would read as "lower
+        # the count" - the gate says what it is instead
+        return [(e.lineno or 0, "syntax", str(e.msg))]
     bare = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom) and n.module == "time":
@@ -269,13 +275,253 @@ def scan(path):
     return out
 
 
-def census():
-    """{(path, kind): [(line, text)]}"""
-    out = {}
-    for p in files():
-        for ln, kind, text in scan(p):
-            out.setdefault((p, kind), []).append((ln, text))
+# A HIT IS ALWAYS ON A LINE HOLDING ONE OF THESE (cold-run speed: most of a
+# cold run was the walk, ~2.5 million nodes over 1,164 files). Every kind's
+# node spans the line with its token - `sleep`, a clock call, the keyword,
+# the literal - so `scan` skips every subtree whose line span holds none,
+# and every ancestor of a hit is on the path it does walk, so the loop and
+# comparison context `_poll`/`in_cmp` read is still there. A name imported
+# `from time` (an alias included) joins the tokens per file.
+_TOK = (r"sleep|time\s*\(|monotonic|perf_counter|"
+        r"\b(?:boot|settle|poll|frames|required|need|port|addr)\s*=|"
+        r"127\.0\.0\.1:|localhost:|/tmp/|qmp\.sock")
+_TOKRE = re.compile(_TOK)
+_FROMTIME = re.compile(r"^\s*from\s+time\s+import\s+\(?([^)#\n]*)", re.M)
+
+
+def _bare(src):
+    """The names a file binds `from time import` (asname or name)."""
+    out = set()
+    for m in _FROMTIME.finditer(src):
+        for part in m.group(1).split(","):
+            w = part.split()
+            if w:
+                out.add(w[-1] if len(w) == 3 and w[1] == "as" else w[0])
     return out
+
+
+def scan(path, src=None):
+    """[(line, kind, text)] for one file - `_scan_full`'s answer, walking
+    only the subtrees whose lines hold a token."""
+    if src is None:
+        src = open(os.path.join(ROOT, path), errors="replace").read()
+    bare = _bare(src)
+    tok = _TOKRE if not bare else re.compile(
+        _TOK + "|" + "|".join(r"\b%s\b" % re.escape(b) for b in sorted(bare)))
+    # ONE pass over the file, not one a line: each match's offset becomes
+    # its line by counting newlines up to it
+    cand, at, ln = [], 0, 1
+    for m in tok.finditer(src):
+        ln += src.count("\n", at, m.start())
+        at = m.start()
+        if not cand or cand[-1] != ln:
+            cand.append(ln)
+    if not cand:
+        return []
+    lines = src.splitlines()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(src, path)
+    except SyntaxError as e:
+        # NOT zero sites: a file that does not parse would read as "lower
+        # the count" - the gate says what it is instead
+        return [(e.lineno or 0, "syntax", str(e.msg))]
+    return _walk(tree, lines, bare, cand)
+
+
+def _walk(tree, lines, bare, cand):
+    import bisect
+    docs = set()
+    hits = []
+
+    def add(node, kind):
+        ln = node.lineno
+        near = lines[ln - 1] + (lines[ln - 2] if ln > 1 else "")
+        if MARK not in near:
+            hits.append((ln, kind, lines[ln - 1].strip()))
+
+    parent = {}
+
+    def up(node):
+        n = parent.get(id(node))
+        while n is not None:
+            yield n
+            n = parent.get(id(n))
+
+    def in_cmp(node):
+        for n in up(node):
+            if isinstance(n, ast.Compare):
+                return True
+            if isinstance(n, (ast.stmt, ast.Lambda)):
+                return False
+        return False
+
+    def live(n):
+        a = getattr(n, "lineno", None)
+        if a is None:
+            return True                 # no span (operators, comprehension)
+        b = getattr(n, "end_lineno", None) or a
+        i = bisect.bisect_left(cand, a)
+        return i < len(cand) and cand[i] <= b
+
+    todo = [tree]
+    DOC = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    Call, BinOp, Compare, Const = ast.Call, ast.BinOp, ast.Compare, ast.Constant
+    while todo:
+        node = todo.pop()
+        for c in ast.iter_child_nodes(node):
+            if live(c):
+                parent[id(c)] = node
+                todo.append(c)
+        if isinstance(node, DOC) and node.body:
+            d = node.body[0]
+            if isinstance(d, ast.Expr) and isinstance(d.value, Const):
+                docs.add(id(d.value))
+        if isinstance(node, Call):
+            nm = _fname(node)
+            if nm == "sleep" and (
+                    (isinstance(node.func, ast.Attribute) and
+                     isinstance(node.func.value, ast.Name) and
+                     node.func.value.id == "time") or
+                    (isinstance(node.func, ast.Name) and "sleep" in bare)):
+                a = node.args[0] if node.args else None
+                if not ((_num(a) and a.value < 0.1) or
+                        _poll(list(up(node))[::-1])):
+                    add(node, "sleep")
+            if not node.keywords:
+                continue
+            kw = dict((k.arg, k.value) for k in node.keywords if k.arg)
+            if nm == "launch" and "boot" in kw and _num(kw["boot"]) \
+                    and kw["boot"].value > 0:
+                add(node, "bootpace")
+            if nm in ("click", "dblclick") and "settle" in kw and \
+                    _num(kw["settle"]) and kw["settle"].value > 0:
+                add(node, "clickpace")
+            if "poll" in kw and _num(kw["poll"]) and kw["poll"].value > 0.05:
+                add(node, "poll")
+            if nm == "advance" and "frames" in kw:
+                add(node, "advance")
+            for k in ("required", "need"):
+                v = kw.get(k)
+                if isinstance(v, Const) and v.value is False:
+                    add(node, "passwait")
+            for k in ("port", "addr"):
+                v = kw.get(k)
+                if v is not None and isinstance(v, Const) and (
+                        (_num(v) and v.value >= 1024) or
+                        (isinstance(v.value, str) and PORTLIT.match(v.value))):
+                    add(node, "port")
+        elif isinstance(node, BinOp):
+            if (_clock_call(node.left, bare) or
+                    _clock_call(node.right, bare)) and (
+                    isinstance(node.op, ast.Add) or
+                    (isinstance(node.op, ast.Sub) and in_cmp(node))):
+                add(node, "deadline")
+        elif isinstance(node, Compare):
+            if any(_clock_call(s, bare)
+                   for s in [node.left] + list(node.comparators)):
+                add(node, "deadline")
+        elif isinstance(node, Const) and isinstance(node.value, str) \
+                and id(node) not in docs:
+            v = node.value
+            if PORTLIT.match(v) and not isinstance(parent.get(id(node)),
+                                                   ast.keyword):
+                add(node, "port")
+            elif v.startswith("/tmp/") or v == "build/qmp.sock":
+                add(node, "tmppath")
+    seen, out = set(), []
+    for h in sorted(hits):
+        if (h[0], h[1]) not in seen:
+            seen.add((h[0], h[1]))
+            out.append(h)
+    return out
+
+
+# THE CHANGE CACHE: one entry a file, keyed on (size, mtime_ns) and behind
+# that the file's sha1, so a touched-but-unchanged file is a hash and not a
+# parse; the whole cache is void when THIS file changes (its rules are the
+# answer's other input). It lives in build/, which is gitignored and per
+# tree - a frozen soak's slot has its own. `--no-cache` is the cold run.
+CACHE = os.path.join(ROOT, "build", "hostwait.cache.json")
+
+
+def _self_key():
+    import hashlib
+    return hashlib.sha1(open(os.path.abspath(__file__), "rb").read()
+                        ).hexdigest()
+
+
+def census(use_cache=True):
+    """{(path, kind): [(line, text)]}"""
+    import hashlib
+    import json
+    key = _self_key()
+    old = {}
+    if use_cache:
+        try:
+            c = json.load(open(CACHE))
+            if c.get("v") == key:
+                old = c.get("files", {})
+        except (OSError, ValueError):
+            pass
+    new, out, dirty = {}, {}, not use_cache or not old
+    miss = []
+    for p in files():
+        full = os.path.join(ROOT, p)
+        st = os.stat(full)
+        e = old.get(p)
+        if not (e and e[0] == st.st_size and e[1] == st.st_mtime_ns):
+            raw = open(full, "rb").read()
+            sha = hashlib.sha1(raw).hexdigest()
+            if e and e[2] == sha:
+                e = [st.st_size, st.st_mtime_ns, sha, e[3]]
+            else:
+                e = [st.st_size, st.st_mtime_ns, sha, None]
+                miss.append(p)
+            dirty = True
+        new[p] = e
+    # THE MISSES IN PARALLEL when there are enough to pay for the workers
+    # (a cold run: ~960 parses, which are most of its time); a few edited
+    # files are parsed here
+    if len(miss) >= 64 and (os.cpu_count() or 1) > 1:
+        import multiprocessing
+        with multiprocessing.get_context("fork").Pool(
+                min(os.cpu_count(), 8)) as pool:
+            res = pool.map(scan, miss, chunksize=16)
+    else:
+        res = [scan(p) for p in miss]
+    for p, hits in zip(miss, res):
+        new[p][3] = [list(h) for h in hits]
+    for p in sorted(new):
+        for ln, kind, text in new[p][3]:
+            out.setdefault((p, kind), []).append((ln, text))
+    if use_cache and (dirty or len(new) != len(old)):
+        try:
+            os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+            tmp = CACHE + ".%d" % os.getpid()
+            with open(tmp, "w") as fh:
+                json.dump({"v": key, "files": new}, fh)
+            os.replace(tmp, CACHE)
+        except OSError:
+            pass                        # a read-only tree answers uncached
+    return out
+
+
+def selfcheck():
+    """`scan` (the pruned walk) against `_scan_full` (every node), every
+    file: the speed-up may not change one answer."""
+    bad = 0
+    for p in files():
+        src = open(os.path.join(ROOT, p), errors="replace").read()
+        a = sorted(set(scan(p, src)))
+        b = sorted(set(_scan_full(p, src)))
+        if a != b:
+            bad += 1
+            print("t_hostwait: selfcheck DIFFERS on %s:\n  pruned %s\n  full   %s"
+                  % (p, sorted(set(a) - set(b))[:4], sorted(set(b) - set(a))[:4]))
+    print("t_hostwait: selfcheck %d files, %d differ" % (len(files()), bad))
+    return 1 if bad else 0
 
 
 def load():
@@ -337,7 +583,9 @@ def row_secs():
 
 
 def main(argv):
-    cen = census()
+    if "--selfcheck" in argv:
+        return selfcheck()
+    cen = census(use_cache="--no-cache" not in argv)
     if "--list" in argv:
         for (p, k) in sorted(cen):
             for ln, text in cen[(p, k)]:
@@ -372,7 +620,14 @@ def main(argv):
             why = argv[i + 1] if i + 1 < len(argv) else ""
             check(len(why) >= 20, "--raise needs a reason of 20+ characters")
         new, refused = {}, []
+        broken = sorted(p for (p, k) in cen if k == "syntax")
+        if broken:
+            print("t_hostwait: --update refused - %s does not parse, so its "
+                  "counts cannot be read" % ", ".join(broken))
+            return 1
         for key in sorted(set(reg) | set(cen)):
+            if key[1] == "syntax":
+                continue
             have = len(cen.get(key, ()))
             old, reason = reg.get(key, (0, ""))
             if have > old and why is None:
@@ -388,7 +643,14 @@ def main(argv):
             os.path.relpath(REGISTRY, ROOT), len(new),
             sum(v[0] for v in new.values())))
         return 1 if refused else 0
+    for (p, k), v in sorted(cen.items()):
+        if k == "syntax":
+            check(False, "%s:%d does not parse (%s) - its counts cannot be "
+                  "read" % (p, v[0][0], v[0][1]))
+    unread = {p for (p, k) in cen if k == "syntax"}
     for key in sorted(set(reg) | set(cen)):
+        if key[1] == "syntax" or key[0] in unread:
+            continue
         have = cen.get(key, [])
         allow, reason = reg.get(key, (0, ""))
         sites = ", ".join(str(ln) for ln, _ in have[:12])

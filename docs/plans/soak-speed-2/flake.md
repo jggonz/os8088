@@ -79,11 +79,28 @@ host wait), a count below fails too (a stale line), and
 `python3 tests/unit/t_hostwait.py --update` is the one command after any
 fix - it lowers and drops lines and never raises one; `--raise "<why>"`
 does. A genuine host wait is marked `# host: <why>` on its line or the line
-above. AST-walked, so comments and docstrings never count. Registered in
-SOAK (`hostwait`): fast/full need the owner's line in tests/tierlock.txt,
-and it is ~3 s idle (~7 s at a load of 30) - 16 MB of Python to parse.
+above. AST-walked, so comments and docstrings never count. A file that
+does not parse is its own failure, not "zero sites, lower the count".
 Verified red: a `time.sleep(2)` after a click in dispcp.py, a removed
 `# host:` mark in hibernate.py, a line left one high.
+
+**Tier and cost (owner, 2026-11-15): `full`**, as the commonly-done-wrong
+class. It first shipped in `soak` at 7.8 s cold, nearly all of it the walk
+over ~2.5 million AST nodes. Measured idle on four cores, the same answers:
+
+| run | before | after |
+|---|---:|---:|
+| cold (`--no-cache`) | 7.8 s | 0.88 s |
+| warm, nothing changed | 7.8 s | 0.05 s |
+| one file edited | 7.8 s | 0.08 s |
+| every file touched, none changed | 7.8 s | 0.08 s |
+
+Three changes: the walk skips every subtree whose line span holds none of
+the tokens a hit needs (found in one regex pass over the file, not one per
+line), a cold run's misses are parsed across the cores, and a change cache
+in `build/hostwait.cache.json` keys each file on (size, mtime) with its
+sha1 behind that, void whenever t_hostwait.py itself changes.
+`--selfcheck` holds the pruned walk equal to the full one over every file.
 
 **Merging:** other streams lower counts in their files concurrently; after
 the merge run `python3 tests/unit/t_hostwait.py --update` once.

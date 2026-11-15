@@ -319,10 +319,13 @@ FAST = [
         "int 19h they existed to read it at, and passed. m.sym() follows the "
         "slide; a deliberate unslid use is a line in tests/coldsym.txt. "
         "VERIFIED TO FAIL on the three rows' old forms"),
-    Row("hostwait", "soak", py("tests/unit/t_hostwait.py"), 7.0,
-        "SOAK (owner, 2026-11-11): about the suite's own harness, not the OS "
-        "- and fast/full need the owner's line in tests/tierlock.txt, which "
-        "this has not got (it is ~3 s idle, ~7 s at a load of 30). "
+    Row("hostwait", "full", py("tests/unit/t_hostwait.py"), 1.0,
+        "FULL (owner, 2026-11-15): the commonly-done-wrong class - every row "
+        "author reaches for a host sleep - so it is paid at integration, not "
+        "per `make`. 0.9 s cold on four cores (the misses parsed in "
+        "parallel, each walk pruned to the subtrees holding a token; "
+        "`--selfcheck` holds that equal to the full walk over every file), "
+        "~0.05 s off its change cache in build/. "
         "A ROW DOES NOT PACE THE GUEST IN HOST SECONDS, AS A RATCHET: every "
         "tests/*.py is walked (AST, so comments never count) for time.sleep "
         "outside a poll, time.time()/monotonic() deadlines, fixed ports and "
