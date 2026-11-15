@@ -617,7 +617,9 @@ first's, its tables smaller. The kept walk and the rows' pass are 791 more
 and the dashed walkers 706: 63,730. Capture the flag took it to 63,882.
 The standing view's keeps and the cuts are 757 more (134 of them the
 pickups' records), and the lines' vertex records gave back 336 - a record a
-distinct end, `WA_MFV`, where there were two a line: 64,303 now, 721 free.
+distinct end, `WA_MFV`, where there were two a line: 64,303 - and 64,243
+with the walls' steep edge, which landed beside it and is 60 smaller: 781
+free.
 - Almost all of it is tables sized to the LARGEST arena: the maze's 92
   vertices against the heights arena's 51 (82 bytes per vertex table), its
   PVS at four mask bytes a cell (+512), and its box tree (+384).
