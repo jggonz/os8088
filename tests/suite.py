@@ -1514,6 +1514,19 @@ FAST = [
         "at all, and whether five named packages' small arm still assembles "
         "is not 'did you obviously break the OS'. It follows t_buildmatrix "
         "down"),
+    Row("soaksnap", "soak", py("tests/unit/t_soaksnap.py"), 1.1,
+        "SOAK: about the suite's own runner, not the OS "
+        "(docs/WRITING-TESTS.md 2.1). tools/os88soak.py runs a frozen soak "
+        "INSIDE a snapshot of the checkout - a commit object made with a "
+        "throw-away index, checked out into a reused git worktree under "
+        "build/soak/src/ (docs/plans/SOAK-PARALLEL.md 14.4) - so the session "
+        "that started it may edit, commit, `make` and `make marty` while it "
+        "runs. Checks on a scratch repository, with no emulator and no make, "
+        "that the snapshot carries the working tree and touches none of the "
+        "operator's index, refs or files; that a reused slot rewrites only "
+        "what differs and keeps its warm build/; that a live or resumable "
+        "run's slot is never re-pointed or pruned; and that MartyPC's binary "
+        "is a copy while its instance registry is the shared one."),
     Row("smallreq", "soak", py("tests/unit/t_smallreq.py"), 0.1,
         "SPEC.md 24.5 on the BUILT floppy: nothing on a small disk may need "
         "something kern_small has not got. Every one of those omissions is a "
