@@ -84,8 +84,10 @@ def main():
         t0 = m.read(0x41C, 2)
         os88marty.key_taken(m, "Digit7")
         kb = m.read(0x41A, 4)
-        check(m.read(0x41C, 2) != t0 and kb[0:2] == kb[2:4],
-              "key_taken: the ROM stored the key and the UI took it")
+        got = m.read(0x400 + (t0[0] | t0[1] << 8), 2)  # the entry it stored
+        check(m.read(0x41C, 2) != t0 and kb[0:2] == kb[2:4]
+              and got == b"7\x08", "key_taken: the ROM stored '7' (scan 08h, "
+              "got %s) and the UI took it" % got.hex())
 
         ui.menu_pick("Calc", "Close")
         check(not [x for x in ui.windows() if x.title == "Calculator"],

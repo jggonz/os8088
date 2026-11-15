@@ -260,6 +260,23 @@ class ApiQemu(om.Marty):
                                                 r["error"]))
         return r.get("return")
 
+    def _input(self, evs):
+        """input-send-event - which QEMU REFUSES on a stopped VM ("VM not
+        running"), and os88mouse steps a gesture on a paused guest. So a
+        held machine is let go for the send alone: cont, send, stop - a
+        millisecond or so of guest time, where MartyPC queues the packet
+        with no time passing at all."""
+        with self._lock:
+            held = self._state != "running"
+            if held:
+                self.qmp("cont")
+            try:
+                self._send({"execute": "input-send-event",
+                            "arguments": {"events": evs}})
+            finally:
+                if held:
+                    self.qmp("stop")
+
     # ---- memory ---------------------------------------------------------------
     def _read(self, addr, n):
         p = os.path.join(self.run_dir, "m.bin")
@@ -376,9 +393,8 @@ class ApiQemu(om.Marty):
         q = qcode(key)
 
         def ev(dn):
-            self._send({"execute": "input-send-event", "arguments": {
-                "events": [{"type": "key", "data": {
-                    "down": dn, "key": {"type": "qcode", "data": q}}}]}})
+            self._input([{"type": "key", "data": {
+                "down": dn, "key": {"type": "qcode", "data": q}}}])
         if down:
             t0 = self._read(0x41C, 2)
             ev(True)
@@ -413,8 +429,7 @@ class ApiQemu(om.Marty):
                                                     "button": name}})
         self._btn = want
         if evs:
-            self._send({"execute": "input-send-event",
-                        "arguments": {"events": evs}})
+            self._input(evs)
         self._log.append({"cycles": self._cycles(), "kind": "mouse",
                           "args": {"dx": dx, "dy": dy, "l": l, "r": r}})
         return {"cycles": self._cycles()}

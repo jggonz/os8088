@@ -12481,6 +12481,22 @@ SOAK = [
         "surfacing twenty steps later. Ends with the same navigation run "
         "both ways on one machine: settle-and-hope against read-the-answer.",
         needs=("marty",), serial=True),
+    Row("qemu-uilayer", "soak",
+        ["env", "OS88_EMU=qemu"] + py("tests/uilayer.py"), 35.0,
+        "uilayer UNCHANGED on QEMU ($OS88_EMU=qemu, tools/os88qemuapi.py): "
+        "the os88marty API answered by a private QEMU, so every os88ui verb "
+        "and failure path a MartyPC row uses runs there as written - the "
+        "worked example of one row, the emulator chosen (docs/plans/"
+        "soak-speed-2/qemubox.md). Measured 31s on a loaded box",
+        needs=("qemu",)),
+    Row("qemuapi", "soak", py("tests/qemuapi.py"), 10.0,
+        "tools/os88qemuapi.py's own row: os88ui boot/open_drive/open/"
+        "menu_pick, key_taken's stored entry read back, a write through the "
+        "GDB stub, the tick clock moving and standing, fbuf, and the "
+        "refusals NAMED. RED with the backend's mouse sending nothing (stuck "
+        "at 320,240) or Digit keys mapped wrong (the ring holds 0086). "
+        "Measured 6s",
+        needs=("qemu",)),
     Row("bptrace", "soak", py("tests/bptrace.py"), 30.0,
         "Can the harness drive the UI with BREAKPOINTS ARMED? It could not "
         "until os88marty.bp_trace: every os88ui and os88mouse verb confirms "
