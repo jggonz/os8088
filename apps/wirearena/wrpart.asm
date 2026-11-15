@@ -115,6 +115,7 @@ wr_v_init:
     mov [wa_newn], ax
     mov [wa_oldn], ax
     mov [wa_ovoldn], ax         ; (the overlay comes again: no old cells)
+    mov byte [wa_kmono], 0xFF   ; (and the attributes are made again)
     mov word [wa_newp], wa_lista
     mov word [wa_oldp], wa_listb
     retf

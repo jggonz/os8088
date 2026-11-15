@@ -173,6 +173,7 @@ WA_VAR wa_steep, 1              ; the span's edges can step >= 2 half-rows
 WA_VAR wa_crow, 2               ; this box's corner row (wa_corn)
 WA_VAR wa_ce0, 2
 WA_VAR wa_at, 12                ; this frame's attributes (A_*)
+WA_VAR wa_kmono, 1              ; ...for this wa_mono (FFh: none yet)
 WA_VAR wa_kfrow, WA_NJ*4*WA_NFIG ; each figure's two keyframe rows, out of
                                 ; the pose part (wa_kfrows)
 wa_cos  equ wa_fcs              ; the camera's cos and sin: the frame
@@ -404,8 +405,12 @@ wa_render:
     mov word [wa_newn], 0
     mov ax, [wa_newp]
     mov [wa_lp], ax
+    mov al, [wa_mono]           ; the attributes, when the adapter's kind
+    cmp al, [wa_kmono]          ; changes (wr_v_init forgets it: FFh)
+    je .attrd
+    mov [wa_kmono], al
     mov si, wa_attrc
-    cmp byte [wa_mono], 0
+    or al, al
     je .attr
     mov si, wa_attrm
 .attr:
@@ -416,6 +421,7 @@ wa_render:
     movsw
     movsw
     movsw
+.attrd:
     mov ax, [wa_ang]
     mov cl, 6
     shr ax, cl
