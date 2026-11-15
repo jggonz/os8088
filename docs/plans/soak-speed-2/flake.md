@@ -157,6 +157,15 @@ the merge run `python3 tests/unit/t_hostwait.py --update` once.
 
 ## 5. Left for the next pass (ranked by expected host time / flake risk)
 
+0. **Proposed, not built: a wall backstop that does not count the run
+   queue.** The CPU limit is already load-proof; what a starved row can
+   still hit is the 5x wall backstop. `_tree_runq` (above) measures the
+   time the row's tree sat RUNNABLE; `reap` could compare
+   `wall - queued` with the backstop at the cadence it already reads
+   `_tree_cpu`. Left out of this pass because it changes WHEN rows stop in
+   a file every agent's soak is running from; the diagnosis line in a few
+   soaks will say whether HOST-STARVED timeouts happen at all first.
+
 1. waverack* (media stream): 47 host sleeps - the biggest flake mass.
 2. The mega*.py `deadline` shape (~40 files, 2 sites each): one helper
    (`os88deadline.Guest` works on the Bochs shim's status) converts them.
