@@ -45,8 +45,11 @@ WS_BTNW     equ 104
 WS_BTNH     equ 16
 WS_B2X      equ 129
 WS_LOBY     equ 106             ; the players' rows (walink.inc), 10 apart
-WS_NDR      equ 6               ; the drop-downs; the focus's seventh stop
-WS_FLD      equ 6               ; is the field
+WS_NDR      equ 6               ; the drop-downs. THE FOCUS'S STOPS, in the
+WS_FLD      equ 5               ; window's reading order: the first five
+WS_FMODE    equ 6               ; drop-downs, the field beside Play (while
+                                ; it is there), then Mode (drop-down 5,
+                                ; the row under Play: CTF-PLAN 7)
 
 ; wa_sinit - the window is open: the controls' records
 wa_sinit:
@@ -457,8 +460,8 @@ wa_sdraw:
     call wa_slabel
     jc .no
     inc ax
-    cmp al, WS_NDR
-    jb .la
+    cmp al, WS_FMODE
+    jbe .la
 .lset:
     mov al, [wa_sfoc]
     mov [wa_sdfoc], al
@@ -506,9 +509,11 @@ wa_sdraw:
 
 ; wa_slabel - AL = a drop-down: its label, the focus's marker in its first
 ; cell. CF = 1 no clip. Keeps all but the flags
-wa_slabel:
-    cmp al, WS_NDR
-    jae .out
+wa_slabel:                      ; (AL a focus STOP: wa_sfoc's)
+    cmp al, WS_FLD
+    je .out
+    cmp al, WS_FMODE
+    ja .out
     call wa_lkclipon
     jc .no
     push ax
@@ -518,6 +523,16 @@ wa_slabel:
     push si
     mov bl, al
     xor bh, bh
+    mov ah, ' '                 ; its marker, by its stop
+    cmp al, [wa_sfoc]
+    jne .mk
+    mov ah, '>'                 ; (the font has no triangles)
+.mk:
+    push ax
+    cmp bl, WS_FLD              ; (its label: Mode's the sixth)
+    jb .li
+    dec bx
+.li:
     mov si, bx                  ; (x 6: the label's three words)
     shl si, 1
     add si, bx
@@ -527,11 +542,7 @@ wa_slabel:
     mov dx, [wa_slabs+si+2]
     add dx, [wa_sorg+2]
     mov si, [wa_slabs+si+4]
-    mov ah, ' '
-    cmp bl, [wa_sfoc]
-    jne .m
-    mov ah, '>'                 ; (the font has no triangles)
-.m:
+    pop ax
     mov [si], ah                ; (its own first cell: the strings are ours)
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
@@ -737,19 +748,28 @@ wa_skey:
     clc
     ret
 .up:
-    cmp byte [wa_sfoc], 0
-    je .done
-    dec byte [wa_sfoc]
-    jmp .done
-.down:
-    mov al, WS_NDR - 1          ; (the field a stop only while there)
+    mov al, [wa_sfoc]
+    or al, al
+    jz .done
+    dec ax
+    cmp al, WS_FLD              ; (the field a stop only while there)
+    jne .fset
     cmp byte [wa_splay], 3
-    jne .dl
-    inc ax
-.dl:
-    cmp [wa_sfoc], al
+    je .fset
+    dec ax
+    jmp short .fset
+.down:
+    mov al, [wa_sfoc]
+    cmp al, WS_FMODE
     jae .done
-    inc byte [wa_sfoc]
+    inc ax
+    cmp al, WS_FLD
+    jne .fset
+    cmp byte [wa_splay], 3
+    je .fset
+    inc ax
+.fset:
+    mov [wa_sfoc], al
     jmp .done
 .left:
     mov ah, -1
@@ -758,8 +778,11 @@ wa_skey:
     mov ah, 1
 .chg:
     mov bl, [wa_sfoc]
-    cmp bl, WS_NDR
-    jae .done
+    cmp bl, WS_FLD
+    je .done
+    jb .dd
+    dec bx                      ; (Mode's stop: drop-down 5)
+.dd:
     xor bh, bh
     shl bx, 1
     call wa_sset
@@ -779,8 +802,8 @@ wa_sfocfix:
     cmp byte [wa_splay], 3
     je .out
     cmp byte [wa_sfoc], WS_FLD
-    jb .out
-    mov byte [wa_sfoc], WS_NDR - 1
+    jne .out
+    mov byte [wa_sfoc], 4       ; (Play's)
 .out:
     ret
 
@@ -850,8 +873,12 @@ wa_sclick:
     mov byte [wa_sdfld], 0FFh   ; (its caret where the press put it)
     jmp .out
 .took:
-    mov bx, di                  ; (the focus where the press was)
-    shr bx, 1
+    mov bx, di                  ; (the focus where the press was: Mode's
+    shr bx, 1                   ; stop past the field's)
+    cmp bl, WS_FLD
+    jb .tk
+    inc bx
+.tk:
     mov [wa_sfoc], bl
     mov bx, [wa_sdrs+di]
     call wa_stake

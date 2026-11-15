@@ -230,7 +230,12 @@ The renderer: `wa_flagsd` and the team colours in `wa_figure`.
   once as a match starts (`wa_ctfcp`), and the renderer tests one byte
   (`wa_ctfon`) before the flags and before a figure's team colour.
 - **The setup grew a fourth row** for Mode (`free-for-all`, `capture
-  flag`), under Play; the window is 18 px taller (338 x 174).
+  flag`), under Play; the window is 18 px taller (338 x 174). The keys'
+  focus goes in the window's reading order: the first five drop-downs,
+  the address field beside Play (while Play is internet), then Mode. Its
+  first version put Mode before the field, and the final pass's
+  `walinkip` and `walink4ip` caught it: Down from Play no longer reached
+  the field, so an address typed there went nowhere.
 - **Teams by slot parity**, as 9 has it: alone, us red, bot 1 blue, bot 2
   red, bot 3 blue.
 
@@ -310,3 +315,14 @@ host and told by its event, the guest's capture on both machines, the
 host's take seen on the guest with the flag over its figure. Red with the
 guest's events ignored (`wc_evin` returning at once) and with the host's
 sending off (`wc_send`): 4 checks each.
+
+### 11.4 The final pass (2026-11-15)
+
+`make` (the gates and the fast tier), then the seventeen WireArena soak
+rows once - `walift waarenas wasetup waroutes wabots wascore wabotarms
+walink walinknet walinkudp walinkip walink4 walink4ip waweapons waflines
+wactf wactflink`. Thirteen passed. `walinkip` and `walink4ip` failed on
+the setup's focus order (11.1), fixed; `waflines` and `wasetup` failed
+because the setup's source was being edited while they ran (each
+assembles it, and it did not assemble at that moment). The four re-run
+after the fix: all pass.
