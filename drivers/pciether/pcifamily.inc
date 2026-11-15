@@ -35,14 +35,9 @@ pce_find:
     mov ax, [si+4]
     mov [pce_name], ax
     mov si, [si+6]              ; the backend's vectors...
-    xor bx, bx
-.cp:
-    mov ax, [si+bx]
-    mov [pce_vt+bx], ax
-    inc bx
-    inc bx
-    cmp bl, PCEV_HALT + 2
-    jb  .cp
+    mov di, pce_vt
+    mov cx, PCEV_HALT + 2
+    call mem_copy
     call [pce_vt + PCEV_CLAIM]  ; ...and its memory
 .out:
     pop si

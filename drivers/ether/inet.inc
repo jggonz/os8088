@@ -8,12 +8,15 @@
 ;
 ; --- BIG-ENDIAN IS THE WIRE'S AND LITTLE-ENDIAN IS OURS ----------------------
 ; Every multi-byte field in every header here is network order, which is the
-; opposite of the machine's. There are no `mov ax, [bx+IPO_LEN]` reads in this
-; file for that reason: a word is fetched a byte at a time into AH then AL, or
-; stored the same way, and the two helpers that do it are be_get/be_put. A
-; plain word access to a header field assembles, runs, and is wrong by a
-; factor of 256 - which for a length field means a packet that is either
-; enormous or empty and for a port means a socket nobody can find.
+; opposite of the machine's. So no header field is USED as it is loaded: a
+; word is loaded and turned round with `xchg ah, al` before it means anything,
+; turned round again before it is stored, or compared in place against a
+; constant BE16() has turned round at assembly time. (They were be_get and
+; be_put, a byte at a time behind a call, until driver size pass 1: every
+; caller was a `mov` away from the word itself.) A plain word access to a
+; header field, used as it stands, assembles, runs, and is wrong by a factor
+; of 256 - which for a length field means a packet that is either enormous or
+; empty and for a port means a socket nobody can find.
 ;
 ; **The one deliberate exception is the CHECKSUM**, which is computed with
 ; ordinary word loads. The one's complement sum of a byte-swapped stream is
@@ -37,6 +40,11 @@ EH_TYPE     equ 12
 EH_SIZE     equ 14
 ETY_IP      equ 0x0800
 ETY_ARP     equ 0x0806
+; ...and the same two as a LITTLE-ENDIAN word load of the wire bytes sees them,
+; so a field can be compared in place rather than fetched through be_get
+%define BE16(x) ((((x) >> 8) & 0xFF) | (((x) & 0xFF) << 8))
+ETY_IP_LE   equ BE16(ETY_IP)
+ETY_ARP_LE  equ BE16(ETY_ARP)
 
 ; --- ARP ---------------------------------------------------------------------
 AR_HTYPE    equ 0
@@ -83,21 +91,6 @@ UDO_DP      equ 2
 UDO_LEN     equ 4
 UDO_CK      equ 6
 UD_HLEN     equ 8
-
-; -----------------------------------------------------------------------------
-; be_get / be_put - one network-order word
-; be_get: in SI = where; out AX. be_put: in AX = the value, DI = where.
-; clobbers: nothing else, not even flags for be_put
-; -----------------------------------------------------------------------------
-be_get:
-    mov ah, [si]
-    mov al, [si+1]
-    ret
-
-be_put:
-    mov [di], ah
-    mov [di+1], al
-    ret
 
 ; -----------------------------------------------------------------------------
 ; mem_copy - CX bytes from DS:SI to DS:DI
@@ -315,49 +308,41 @@ ARP_N       equ 4               ; four entries: the gateway, the DNS server and
                                 ; talks to a local server needs two - past that
                                 ; the round-robin victim below is as good as
                                 ; anything and costs no code
+%if ARP_N & (ARP_N - 1)
+  %error "arp_put's round-robin wraps with an AND: ARP_N must be a power of two"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; arp_find - the hardware address for the IP at DS:SI
 ; out: CF=0 and DI = a 6-byte MAC in the cache; CF=1 = not known
 ; -----------------------------------------------------------------------------
 arp_find:
-    push ax
     push bx
     push cx
-    mov bx, 0
-    mov cx, ARP_N
-.e:
-    mov al, [arp_used+bx]
-    or  al, al
-    jz  .next
-    push si
-    push di
-    mov di, arp_ip
-    push bx
-    shl bx, 1
-    shl bx, 1
-    add di, bx
-    pop bx
+    push di                     ; the caller's, given back on a miss
+    xor bx, bx                  ; BX = the entry, DI = its address: ip_eq
+    mov cx, ARP_N               ; keeps SI and DI, so DI walks the table
+    mov di, arp_ip              ; rather than being rebuilt from BX each turn
+.e:                             ; (driver size pass 1 - ip_start's path)
+    cmp byte [arp_used+bx], 0
+    je  .next
     call ip_eq
-    pop di
-    pop si
     je  .hit
 .next:
+    add di, 4
     inc bx
     loop .e
+    pop di
     stc
     jmp short .out
 .hit:
-    mov di, bx                  ; DI = entry * 6 + arp_ha
-    shl di, 1
-    add di, bx
-    shl di, 1
-    add di, arp_ha
+    add sp, 2                   ; ...and on a hit the answer replaces it:
+    shl bx, 1                   ; DI = arp_ip + 4 * entry, so + 2 * entry and
+    lea di, [bx+di+(arp_ha-arp_ip)] ; the gap is arp_ha + 6 * entry
     clc
 .out:
     pop cx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -370,9 +355,7 @@ arp_put:
     push dx
     push si
     push di
-    push bx
-    call arp_find               ; already known? then just refresh it
-    pop bx
+    call arp_find               ; already known? then just refresh it (BX kept)
     jnc .store
     xor di, di                  ; a free slot...
     mov cx, ARP_N
@@ -385,10 +368,7 @@ arp_put:
     xor dh, dh
     mov di, dx
     inc dl
-    cmp dl, ARP_N
-    jb  .rr
-    xor dl, dl
-.rr:
+    and dl, ARP_N - 1           ; (ARP_N is a power of two)
     mov [arp_rr], dl
 .got:
     mov byte [arp_used+di], 1
@@ -396,14 +376,10 @@ arp_put:
     shl di, 1
     shl di, 1
     add di, arp_ip
-    push cx
-    call mem_cp4                    ; the address into the slot
-    pop cx
-    mov di, dx                  ; ...and now DI = the MAC slot, entry * 6
-    shl di, 1
-    add di, dx
-    shl di, 1
-    add di, arp_ha
+    call mem_cp4                ; the address into the slot (DI kept)...
+    shl dx, 1                   ; ...and DI = the MAC slot: arp_ip + 4 * entry,
+    add di, dx                  ; + 2 * entry, + the gap is arp_ha + 6 * entry
+    add di, arp_ha - arp_ip
 .store:
     mov si, bx                  ; DI is the MAC slot either way
     call mem_cp6
@@ -483,28 +459,22 @@ arp_in:
     push cx
     push si
     push di
-    mov si, eth_rxb + EH_SIZE + AR_PTYPE
-    call be_get
-    cmp ax, ETY_IP
+    cmp word [eth_rxb+EH_SIZE+AR_PTYPE], ETY_IP_LE  ; the wire's 08 00
     jne .out
-    cmp byte [eth_rxb+EH_SIZE+AR_HLEN], 6
-    jne .out
-    cmp byte [eth_rxb+EH_SIZE+AR_PLEN], 4
+    cmp word [eth_rxb+EH_SIZE+AR_HLEN], 4 << 8 | 6  ; HLEN 6 and PLEN 4
     jne .out
 
     mov si, eth_rxb + EH_SIZE + AR_SPA      ; cache the sender either way
     mov bx, eth_rxb + EH_SIZE + AR_SHA
     call arp_put
 
-    mov si, eth_rxb + EH_SIZE + AR_OPER
-    call be_get
-    cmp ax, ARP_REQ
+    cmp word [eth_rxb+EH_SIZE+AR_OPER], ARP_REQ << 8 ; 00 01: a REQUEST
     jne .out
     mov si, eth_rxb + EH_SIZE + AR_TPA      ; ...is it us being asked about?
     mov di, eth_ip
     call ip_eq
     jne .out
-    mov si, eth_ip
+    mov si, di                              ; (ip_eq keeps DI = eth_ip)
     call ip_zero
     jz  .out                                ; we have no address to claim yet
 
@@ -533,24 +503,18 @@ arp_in:
 ;      subnet, the gateway if it is not
 ; -----------------------------------------------------------------------------
 ip_route:
-    push ax
-    push bx
-    push cx
-    mov cx, 4
-    xor bx, bx
-.l:
-    mov al, [si+bx]
-    xor al, [eth_ip+bx]
-    and al, [eth_mask+bx]
-    jnz .gw
-    inc bx
-    loop .l
-    jmp short .out
+    push ax                     ; a WORD at a time: an address is never
+    mov ax, [si]                ; arithmetic here (see the header), and any
+    xor ax, [eth_ip]            ; bit that differs under the mask is the same
+    and ax, [eth_mask]          ; answer whichever byte it is in (driver size
+    jnz .gw                     ; pass 1: the byte loop was 32 bytes and a
+    mov ax, [si+2]              ; turn of `loop` per byte, on every send)
+    xor ax, [eth_ip+2]
+    and ax, [eth_mask+2]
+    jz  .out
 .gw:
     mov si, eth_gw
 .out:
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -569,13 +533,14 @@ ip_start:                       ; STKDEPTH-NOSAVE: bx
     push ax                     ; BX is not saved - see eth_pump_i
     push cx
     push si
-    mov [eth_pr], al
-    mov di, eth_dip                     ; bank the real destination: the route
-    call mem_cp4                    ; below may hand us the gateway's
-    mov si, eth_dip
-    mov ax, [si]                        ; A BROADCAST HAS NO ARP, and DHCP is
-    and ax, [si+2]                      ; sent before we have an address at all
-    inc ax                              ; - so a stack that tried to resolve it
+    mov [eth_pr], al                    ; AL is the protocol to the end: no
+    mov di, eth_dip                     ; callee below writes it. Bank the real
+    call mem_cp4                        ; destination - the route below may hand
+                                        ; us the gateway's - and SI is still the
+                                        ; caller's copy of it (mem_cp4 keeps SI)
+    mov cx, [si]                        ; A BROADCAST HAS NO ARP, and DHCP is
+    and cx, [si+2]                      ; sent before we have an address at all
+    inc cx                              ; - so a stack that tried to resolve it
     jnz .unicast                        ; could never acquire one. All four
                                         ; bytes 0xFF is the two words ANDed
                                         ; being 0xFFFF, which `inc` makes zero
@@ -586,49 +551,51 @@ ip_start:                       ; STKDEPTH-NOSAVE: bx
     call arp_find
     jnc .have
     call arp_req
-    pop si
-    pop cx
-    pop ax
     stc
-    ret
+    jmp short .pop
 .have:
     mov si, di                          ; DI = the MAC in the cache
     mov di, eth_txb + EH_DST
     mov cx, 6
+    call mem_copy                       ; (CX and DI kept: the source address
+    mov si, eth_mac                     ; is the next six bytes)
+    add di, cx
     call mem_copy
-    mov si, eth_mac
-    mov di, eth_txb + EH_SRC
-    mov cx, 6
-    call mem_copy
-    mov di, eth_txb + EH_TYPE
-    mov ax, ETY_IP
-    call be_put
+    mov word [eth_txb+EH_TYPE], ETY_IP_LE
 
+    ; --- the IP header, a WORD a field-pair (driver size pass 1) -------------
+    ; LEN is ip_finish's, and so is CK: it zeroes the field before it sums the
+    ; header, and nothing between here and there reads it - the transport
+    ; checksums cover the pseudo-header, never this one - so it is not zeroed
+    ; here as well
     mov di, eth_txb + IP_OFF
-    mov byte [di+IPO_VIHL], 0x45
-    mov byte [di+IPO_TOS], 0
-    mov byte [di+IPO_TTL], 64
-    mov al, [eth_pr]
-    mov [di+IPO_PROTO], al
+    mov word [di+IPO_VIHL], 0x45        ; VIHL 45h, and TOS 0 in the high byte
     mov word [di+IPO_FRAG], 0
-    mov word [di+IPO_CK], 0
+    mov ah, al                          ; TTL 64, and the protocol after it
+    mov al, 64
+    mov [di+IPO_TTL], ax
     mov ax, [eth_ipid]
     inc word [eth_ipid]
-    push di
-    add di, IPO_ID
-    call be_put
-    pop di
+    xchg ah, al                         ; network order
+    mov [di+IPO_ID], ax
+%if IPO_TOS != IPO_VIHL + 1 || IPO_PROTO != IPO_TTL + 1
+  %error "ip_start writes VIHL/TOS and TTL/PROTO as one word each"
+%endif
     mov si, eth_ip
     mov di, eth_txb + IP_OFF + IPO_SRC
+    call mem_cp4                        ; CX = 4 and DI kept: the destination
+    mov si, eth_dip                     ; follows the source...
+    add di, cx
     call mem_cp4
-    mov si, eth_dip
-    mov di, eth_txb + IP_OFF + IPO_DST
-    call mem_cp4
-    mov di, eth_txb + IP_PAY
+    add di, cx                          ; ...and the payload follows that
+%if IPO_DST != IPO_SRC + 4 || IP_PAY != IP_OFF + IPO_DST + 4
+  %error "ip_start steps DI from IPO_SRC to IPO_DST to IP_PAY by four"
+%endif
+    clc
+.pop:
     pop si
     pop cx
     pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -639,11 +606,10 @@ ip_finish:
     push ax
     push cx
     push si
-    push di
     mov ax, cx
     add ax, IP_HLEN
-    mov di, eth_txb + IP_OFF + IPO_LEN
-    call be_put
+    xchg ah, al                         ; network order
+    mov [eth_txb+IP_OFF+IPO_LEN], ax
     mov word [eth_txb+IP_OFF+IPO_CK], 0
     mov si, eth_txb + IP_OFF
     push cx
@@ -652,8 +618,7 @@ ip_finish:
     pop cx
     mov [eth_txb+IP_OFF+IPO_CK], ax
     add cx, EH_SIZE + IP_HLEN
-    call nic_tx
-    pop di
+    call nic_tx                         ; (which keeps DI, as this does)
     pop si
     pop cx
     pop ax
@@ -668,25 +633,27 @@ ip_finish:
 ; transmitted, only counted, which is what makes a checksum notice a packet
 ; delivered to the wrong machine.
 ; -----------------------------------------------------------------------------
+; **SUMMED IN REGISTERS** (driver size pass 1). It was two ip_ck_part calls,
+; the second over four bytes staged in eth_ph - the zero, the protocol and the
+; length. They are six words, so they are six `adc`s: the same words in the
+; same order of a one's complement sum, and the end-around carry makes the
+; result a function of their total alone (0 only if every word is 0, else
+; the one value in 1..FFFFh congruent to it mod FFFFh), so one chain with one
+; fold gives exactly what two chains with two folds did.
 ip_pseudo:
     push ax
     push cx
-    push si
-    xor bx, bx
-    mov si, eth_txb + IP_OFF + IPO_SRC
-    push cx
-    mov cx, 8                           ; source and destination together
-    call ip_ck_part
-    pop cx
-    mov al, [eth_pr]                    ; then the zero byte, the protocol and
-    mov byte [eth_ph], 0                ; the length - staged in OUR OWN bss
-    mov [eth_ph+1], al                  ; and not on the stack, because SS is
-    mov [eth_ph+2], ch                  ; the kernel's task slice and every
-    mov [eth_ph+3], cl                  ; address in this file is a DS one
-    mov si, eth_ph
-    mov cx, 4
-    call ip_ck_part
-    pop si
+    mov bx, [eth_txb+IP_OFF+IPO_SRC]    ; source and destination...
+    add bx, [eth_txb+IP_OFF+IPO_SRC+2]
+    adc bx, [eth_txb+IP_OFF+IPO_DST]
+    adc bx, [eth_txb+IP_OFF+IPO_DST+2]
+    mov ah, [eth_pr]                    ; ...the zero byte and the protocol, as
+    mov al, 0                           ; the wire has them (`mov`, not `xor`:
+    adc bx, ax                          ; CF is the sum's)...
+    xchg cl, ch                         ; ...and the length, network order
+    adc bx, cx
+    adc bx, 0
+    adc bx, 0
     pop cx
     pop ax
     ret
@@ -712,20 +679,15 @@ icmp_in:
     ja  .out
     mov si, eth_rxb + IP_OFF + IPO_SRC
     mov al, IPP_ICMP
-    push cx
-    call ip_start
-    pop cx
+    call ip_start                       ; (CX kept)
     jc  .out                            ; ARP is on its way; they will ping again
     mov si, eth_rxb + IP_PAY
-    call mem_copy                       ; the whole message back, data and all
-    mov di, eth_txb + IP_PAY
-    mov byte [di+ICO_TYPE], ICMP_REPLY
+    call mem_copy                       ; the whole message back, data and all -
+    mov byte [di+ICO_TYPE], ICMP_REPLY  ; and DI is still eth_txb + IP_PAY
     mov word [di+ICO_CK], 0
     mov si, di
-    push cx
-    call ip_cksum
-    pop cx
-    mov [eth_txb+IP_PAY+ICO_CK], ax
+    call ip_cksum                       ; (CX kept)
+    mov [di+ICO_CK], ax
     call ip_finish
     inc word [eth_nping]
 .out:
@@ -744,8 +706,8 @@ udp_in:
     push si
     cmp cx, UD_HLEN
     jb  .out
-    mov si, eth_rxb + IP_PAY + UDO_LEN  ; **THE UDP LENGTH, NOT THE IP ONE.**
-    call be_get                         ; The two agree on a well-formed
+    mov ax, [eth_rxb+IP_PAY+UDO_LEN]    ; **THE UDP LENGTH, NOT THE IP ONE.**
+    xchg ah, al                         ; The two agree on a well-formed
     cmp ax, UD_HLEN                     ; datagram and one of them came off a
     jb  .out                            ; network, so the shorter is the one to
     cmp ax, cx                          ; walk options with (dhcp_opt)
@@ -753,19 +715,17 @@ udp_in:
     sub ax, UD_HLEN
     mov [eth_udplen], ax
     mov dx, ax
-    mov si, eth_rxb + IP_PAY + UDO_DP
-    call be_get
+    mov ax, [eth_rxb+IP_PAY+UDO_DP]
+    xchg ah, al
     mov cx, dx
     cmp ax, DHCP_CLIPORT
     je  .dhcp
     cmp ax, [dns_lport]
-    je  .dns
+    jne .out
+    call dns_in
     jmp short .out
 .dhcp:
     call dhcp_in
-    jmp short .out
-.dns:
-    call dns_in
 .out:
     pop si
     pop dx
@@ -789,36 +749,30 @@ udp_send:
     push si
     push di
     mov al, IPP_UDP
-    push cx
-    call ip_start
-    pop cx
+    call ip_start                       ; (CX kept)
     jc  .out
-    mov di, eth_txb + IP_PAY
-    mov ax, bp
-    call be_put                         ; source port
-    add di, 2
+    mov ax, bp                          ; DI = eth_txb + IP_PAY: the header,
+    xchg ah, al                         ; each word in network order
+    mov [di+UDO_SP], ax                 ; source port
     mov ax, dx
-    call be_put                         ; destination
-    add di, 2
+    xchg ah, al
+    mov [di+UDO_DP], ax                 ; destination
+    add cx, UD_HLEN                     ; CX = the datagram from here on
     mov ax, cx
-    add ax, UD_HLEN
-    call be_put                         ; length
-    mov word [eth_txb+IP_PAY+UDO_CK], 0
+    xchg ah, al
+    mov [di+UDO_LEN], ax                ; length
+    mov word [di+UDO_CK], 0
 
-    push cx                             ; the checksum, over the pseudo-header
-    add cx, UD_HLEN                     ; and the datagram
-    call ip_pseudo
-    mov si, eth_txb + IP_PAY
+    call ip_pseudo                      ; the checksum, over the pseudo-header
+    mov si, di                          ; and the datagram
     call ip_ck_part
     mov ax, bx
     not ax
-    pop cx
     or  ax, ax                          ; a UDP checksum of zero means "not
     jnz .ck                             ; computed", so the all-ones form is
-    mov ax, 0xFFFF                      ; the one to send
+    dec ax                              ; the one to send
 .ck:
-    mov [eth_txb+IP_PAY+UDO_CK], ax
-    add cx, UD_HLEN
+    mov [di+UDO_CK], ax
     call ip_finish
     clc
 .out:
@@ -840,11 +794,10 @@ eth_frame_i:                    ; STKDEPTH-NOSAVE: bx
     push di
     cmp cx, EH_SIZE
     jbe .drop
-    mov si, eth_rxb + EH_TYPE
-    call be_get
-    cmp ax, ETY_ARP
+    mov ax, [eth_rxb+EH_TYPE]           ; compared as the wire has it
+    cmp ax, ETY_ARP_LE
     je  .arp
-    cmp ax, ETY_IP
+    cmp ax, ETY_IP_LE
     jne .drop
 
     ; --- IP ------------------------------------------------------------------
@@ -864,9 +817,9 @@ eth_frame_i:                    ; STKDEPTH-NOSAVE: bx
     pop cx
     or  ax, ax                          ; a correct header sums to 0xFFFF, so
     jnz .drop                           ; its complement is zero
-    mov si, eth_rxb + IP_OFF + IPO_FRAG ; a FRAGMENT is refused rather than
-    call be_get                         ; reassembled: nothing this stack sends
-    and ax, 0x3FFF                      ; can provoke one, and a browser that
+    mov ax, [eth_rxb+IP_OFF+IPO_FRAG]   ; a FRAGMENT is refused rather than
+                                        ; reassembled: nothing this stack sends
+    and ax, BE16(0x3FFF)                ; can provoke one, and a browser that
     jnz .drop                           ; met one would need a buffer it has not
     mov si, eth_rxb + IP_OFF + IPO_DST  ; got. Is it for us?
     mov di, eth_ip
@@ -877,8 +830,8 @@ eth_frame_i:                    ; STKDEPTH-NOSAVE: bx
     inc ax                              ; an address at all (SI is still the
     jnz .drop                           ; destination: ip_eq preserves it)
 .mine:
-    mov si, eth_rxb + IP_OFF + IPO_LEN  ; the wire length, which is what the
-    call be_get                         ; payload length must come from: the
+    mov ax, [eth_rxb+IP_OFF+IPO_LEN]    ; the wire length, which is what the
+    xchg ah, al                         ; payload length must come from: the
     sub cx, EH_SIZE                     ; card's frame is padded to 60 bytes
     cmp ax, cx                          ; and every short packet is padded. The
     ja  .drop                           ; datagram's room is the frame WITHOUT
@@ -892,16 +845,14 @@ eth_frame_i:                    ; STKDEPTH-NOSAVE: bx
     cmp al, IPP_UDP
     je  .udp
     cmp al, IPP_TCP
-    je  .tcp
-    jmp short .drop
+    jne .drop
+    call tcp_in                         ; (TCP falls through: one taken branch
+    jmp short .out                      ; fewer on the busiest path)
 .icmp:
     call icmp_in
     jmp short .out
 .udp:
     call udp_in
-    jmp short .out
-.tcp:
-    call tcp_in
     jmp short .out
 .arp:
     call arp_in
@@ -970,13 +921,11 @@ eth_pump_i:                     ; STKDEPTH-NOSAVE: ax bx dx si di
 ; -----------------------------------------------------------------------------
 eth_pump1:
     call nic_rx
-    jc  .none
+    jc  .none                   ; (CF = 1 already: nic_rx's empty)
     inc word [eth_nrx]
     call eth_frame
     clc
-    ret
 .none:
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -986,5 +935,4 @@ eth_pump1:
 eth_ptimers:
     call tcp_timers
     call dns_timer
-    call dhcp_timer
-    ret
+    jmp dhcp_timer              ; (its `ret` is ours)
