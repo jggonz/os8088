@@ -251484,9 +251484,10 @@ the arenas the chosen mode can play.
 
 - **Free-for-all, team deathmatch, capture the flag, king of the hill**
   (`wa_gmode`: 0 free-for-all, 1 capture the flag, 2 team deathmatch, 3
-  king of the hill; the setup's Mode list reads `free-for-all`, `team
-  deathmatch`, `capture flag`, `KingOfTheHill`).
-- **Win at**: each mode has its own list of scores, and `no limit`. A win shows
+  king of the hill; the setup's Mode list reads `Free-for-All`, `Team
+  Deathmatch`, `Capture the Flag`, `King of the Hill`).
+- **Win at**: each mode has its own list of scores (`20 Kills`, `3
+  Captures`, `10 Points`...), and `No Limit`. A win shows
   for 10 s (`WC_WINT`, 300 ticks) and the match goes on in the next arena
   of the mode's ROTATION. That is `wa_srot`, a bit for each arena for each
   mode, all of them by default. The setup's Rotation window (R) changes it,
@@ -251508,10 +251509,14 @@ boxes, the drop-downs and §83's line editor). It draws only what changed
 and uses `font_run` for text:
 
 - **Drop-downs**: Arena, Columns, Bots, Skill, Play, Mode and Win at.
-  Play is `offline`, `serial cable`, `local network` or `internet`.
+  Play is `Offline`, `Serial Cable`, `Local Network` or `Internet`. Every
+  value a drop-down shows is title-cased (`The Pit`, `Easy`, `None`,
+  `Rotation...`: the owner, 2026-11-15); the left column's drop-downs are
+  sixteen cells wide, which `Capture the Flag` and `King of the Hill` need
+  (`WS_LDX2`; the content 408 wide).
   On a guest, what only the host chooses (the arena, the bots, the skill)
   is refused with *The host picks the arena*.
-- **An address field** (for internet) and a **Nick** (eight characters).
+- **An address field** (for Internet) and a **Nick** (eight characters).
   They are in-session only: persistence was declined (MULTIPLAYER-FPS-PLAN
   17.1).
 - **Buttons**: Play (or Ready, when linked) and Keys, which puts up the
@@ -251541,7 +251546,7 @@ typed bodies:
   broadcast, and everything else goes to the peer's station address.
 - **UDP**: `apps/os88udp.inc` on ETHER.DRV's UDP verbs (§72.24), port
   **30088**. HELLO is broadcast to 255.255.255.255 and also sent to a typed
-  address. Play's `local network` takes UDP and falls back to raw frames
+  address. Play's `Local Network` takes UDP and falls back to raw frames
   when there is no address.
 
 **A body**: byte 0 is the TYPE. The last two bytes are CRC-16/CCITT-FALSE

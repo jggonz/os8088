@@ -7237,7 +7237,7 @@ wa_loadarena:
 %endif
 
 wa_tpl:
-    dw 119, 20, 402, 174        ; (wasetup.inc's WS_W x WS_H content)
+    dw 115, 20, 410, 174        ; (wasetup.inc's WS_W x WS_H content)
     dw wa_ttl, wa_cls
     OS88_CLASS wa_cls, 0, PAINT, wa_paint, ONKEY, wa_lkkey, \
                ONCLOSE, wa_lkclose, ONTIMER, wa_lktimer, \

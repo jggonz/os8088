@@ -30,19 +30,21 @@
 ; that could not bank) writes each pixel once, with no white first. A
 ; kernel PAINT skips the ground: the kernel filled the content white.
 
-WS_W        equ 400             ; the content box (the template: 402 x 174 -
-                                ; wide for team deathmatch and Win at's
-                                ; "10 captures", MODES-PLAN 2)
-WS_RM       equ 392             ; ...and its right margin, past every
+WS_W        equ 408             ; the content box (the template: 410 x 174 -
+                                ; wide for Win at's "10 Captures",
+                                ; MODES-PLAN 2, and a cell more for Mode's
+                                ; "Capture the Flag" and "King of the Hill",
+                                ; sixteen cells: the owner, 2026-11-15)
+WS_RM       equ 400             ; ...and its right margin, past every
                                 ; control and row (the owner: the drop-downs
                                 ; off the edge, as the left's 8 px are)
 WS_H        equ 155
 WS_LX       equ 0               ; the left column: a marker cell and a
 WS_LDX1     equ 56              ; label (seven cells), then its drop-down
-WS_LDX2     equ 199
-WS_RX       equ 200             ; the right column: marker and label (nine
-WS_RDX1     equ 272             ; cells), then its drop-down
-WS_RDX2     equ 391
+WS_LDX2     equ 207
+WS_RX       equ 208             ; the right column: marker and label (nine
+WS_RDX1     equ 280             ; cells), then its drop-down
+WS_RDX2     equ 399
 WS_Y1       equ 0               ; THE GROUP's four rows of drop-downs, 16
 WS_Y2       equ 18              ; high, from its top - which is where the
 WS_Y3       equ 36              ; layout puts it (wa_sgy): alone, CENTRED
@@ -64,15 +66,15 @@ WS_BOTM     equ 20              ; THE BOTTOM ROW, the nick and the buttons:
 %define YBM1 (4 * 4096)
 %define YEND (5 * 4096)
 WS_DH       equ 16
-WS_FX1      equ 208             ; the address field, right of Play
-WS_FX2      equ 391
+WS_FX1      equ 216             ; the address field, right of Play
+WS_FX2      equ 399
                                 ; (the buttons: the bottom row, right of the
                                 ; nick - wa_sby)
 WS_BTNW     equ 96              ; (Play: "Not ready" fits)
-WS_B1X      equ 208
+WS_B1X      equ 216
 WS_BTNW2    equ 80              ; (Keys)
 WS_BTNH     equ 16
-WS_B2X      equ 312
+WS_B2X      equ 320
 WS_LOBY     equ WS_GLINK + WS_LOBYR             ; the players' rows (walink.inc), 10 apart
 WS_NDR      equ 7               ; the drop-downs. THE FOCUS'S STOPS, in the
 WS_FLD      equ 5               ; window's reading order: the first five
@@ -1837,21 +1839,21 @@ wa_si_cols:     dw wa_sw_40, wa_sw_80
 wa_sw_40:       db '40', 0
 wa_sw_80:       db '80', 0
 wa_si_bots:     dw wa_sbn_0, wa_sbn_1, wa_sbn_2, wa_sbn_3
-wa_sbn_0:       db 'none', 0
+wa_sbn_0:       db 'None', 0
 wa_sbn_1:       db '1', 0
 wa_sbn_2:       db '2', 0
 wa_sbn_3:       db '3', 0
 wa_sp_names:    dw wa_sp_0, wa_sp_1, wa_sp_2, wa_sp_3
-wa_sp_0:        db 'offline', 0
-wa_sp_1:        db 'serial cable', 0
-wa_sp_2:        db 'local network', 0
-wa_sp_3:        db 'internet', 0
+wa_sp_0:        db 'Offline', 0
+wa_sp_1:        db 'Serial Cable', 0
+wa_sp_2:        db 'Local Network', 0
+wa_sp_3:        db 'Internet', 0
 wa_si_mode:     dw wa_smd_0, wa_smd_2, wa_smd_1, wa_smd_3
                                 ; (CTF-PLAN 7, MODES-PLAN 1)
-wa_smd_0:       db 'free-for-all', 0
-wa_smd_1:       db 'capture flag', 0
-wa_smd_2:       db 'team deathmatch', 0
-wa_smd_3:       db 'KingOfTheHill', 0   ; (the box's width: the owner's spelling)
+wa_smd_0:       db 'Free-for-All', 0
+wa_smd_1:       db 'Capture the Flag', 0
+wa_smd_2:       db 'Team Deathmatch', 0
+wa_smd_3:       db 'King of the Hill', 0 ; (sixteen cells: WS_LDX2's)
 WA_NMODES       equ 4
 wa_smodes:      db 0, 2, 1, 3   ; (the list's order to wa_gmode's numbers)
 wa_amodes:                      ; each arena's modes, a bit each (arenagen)
@@ -1875,7 +1877,7 @@ wa_sitm:
 wa_salp:        times WA_NARENA+1 dw 0  ; the Arena list, the mode's
 wa_salx:        times WA_NARENA+1 db 0  ; ...and each item's arena (0FFh:
                                         ; Rotation..., the last)
-wa_s_rot:       db 'rotation...', 0
+wa_s_rot:       db 'Rotation...', 0
 ; WIN AT (MODES-PLAN 2): by mode (wa_gmode's numbers), its items, the
 ; values they name (0: no limit) and the pick, which each mode keeps
 WA_NGOAL        equ 7
@@ -1916,26 +1918,26 @@ wa_sg_tdm:      dw wa_sgn, wa_sgk10, wa_sgk15, wa_sgk20, wa_sgk25, wa_sgk30
                 dw wa_sgk50
 wa_sg_kh:       dw wa_sgn, wa_sgp3, wa_sgp5, wa_sgp10, wa_sgp15, wa_sgp20
                 dw wa_sgp30
-wa_sgn:         db 'no limit', 0
-wa_sgk5:        db '5 kills', 0
-wa_sgk10:       db '10 kills', 0
-wa_sgk15:       db '15 kills', 0
-wa_sgk20:       db '20 kills', 0
-wa_sgk25:       db '25 kills', 0
-wa_sgk30:       db '30 kills', 0
-wa_sgk50:       db '50 kills', 0
-wa_sgc1:        db '1 capture', 0
-wa_sgc2:        db '2 captures', 0
-wa_sgc3:        db '3 captures', 0
-wa_sgc5:        db '5 captures', 0
-wa_sgc7:        db '7 captures', 0
-wa_sgc10:       db '10 captures', 0
-wa_sgp3:        db '3 points', 0
-wa_sgp5:        db '5 points', 0
-wa_sgp10:       db '10 points', 0
-wa_sgp15:       db '15 points', 0
-wa_sgp20:       db '20 points', 0
-wa_sgp30:       db '30 points', 0
+wa_sgn:         db 'No Limit', 0
+wa_sgk5:        db '5 Kills', 0
+wa_sgk10:       db '10 Kills', 0
+wa_sgk15:       db '15 Kills', 0
+wa_sgk20:       db '20 Kills', 0
+wa_sgk25:       db '25 Kills', 0
+wa_sgk30:       db '30 Kills', 0
+wa_sgk50:       db '50 Kills', 0
+wa_sgc1:        db '1 Capture', 0
+wa_sgc2:        db '2 Captures', 0
+wa_sgc3:        db '3 Captures', 0
+wa_sgc5:        db '5 Captures', 0
+wa_sgc7:        db '7 Captures', 0
+wa_sgc10:       db '10 Captures', 0
+wa_sgp3:        db '3 Points', 0
+wa_sgp5:        db '5 Points', 0
+wa_sgp10:       db '10 Points', 0
+wa_sgp15:       db '15 Points', 0
+wa_sgp20:       db '20 Points', 0
+wa_sgp30:       db '30 Points', 0
 
 wa_sb_play:     db 'Play', 0
 wa_sb_rdy:      db 'Ready', 0

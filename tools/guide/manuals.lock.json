@@ -1443,9 +1443,9 @@
    "apps/wirearena",
    "tools/arenagen.py"
   ],
-  "stamped": "f4a4e8a2",
-  "strings": "cd83557002e8d201",
-  "why": "the page for WIRERENA.O88 (the file renamed from WARENA.O88 and the title made 'Wire Arena' by the owner): every setup row, key, weapon, mode, arena, message and link step read off apps/wirearena and SPEC.md 128; shots retaken under the new ids"
+  "stamped": "0e70d1bf",
+  "strings": "2dfdd905e0a44b28",
+  "why": "the drop-downs title-cased (Capture the Flag, King of the Hill, The Pit, Serial Cable, No Limit...) and the setup window a cell wider: the manual quotes the new values; shots retaken"
  },
  "WORD": {
   "sources": [],
