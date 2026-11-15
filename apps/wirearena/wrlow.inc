@@ -828,8 +828,10 @@ wl_draw:
     mov dx, bx                  ; ITS CULL, the top's: at or under every
 .f1:                            ; open column's clip it draws nothing (and
     add dx, 2                   ; raises nothing, ever) - the floor of a
-    sar dx, 1                   ; box behind a nearer one's top
-    sar dx, 1
+    sar dx, 1                   ; box behind a nearer one's top, or one
+    sar dx, 1                   ; under the screen
+    cmp dx, WA_HR
+    jge .top
     push si
     mov si, [wl_col0]
     mov cl, [wl_sc+1]
