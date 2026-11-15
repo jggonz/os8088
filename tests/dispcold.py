@@ -250,6 +250,7 @@ def pump(m, mo, px, py, secs=30.0):
             break
         if c != last:
             last, moved = c, time.time()
+        # host: a STALL detector - the cycle count standing still
         elif time.time() - moved > 30.0:
             raise os88marty.MartyError("the guest stopped (%r) while a click "
                                        "was being watched" % st["state"])

@@ -17,6 +17,7 @@ complementary advertised-intercept path. For the negative control, pass
 The optional paths never rebuild or replace the kernel under test.
 """
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -36,7 +37,7 @@ def main():
     ap.add_argument("--evidence", default=os88build.at("build/pravetzboot.png"))
     a = ap.parse_args()
     with os88box.launch(
-            "xt640", name="pravetzboot", a=a.system, b=a.apps, kmap=a.map,
+            "xt640", name="pravetzboot-%d" % os.getpid(), a=a.system, b=a.apps, kmap=a.map,
             hold=True, fresh=True, temp=True,
             sets=("Machine.machine=pravetz16s", "Machine.cpu_family=necv20",
                   "Machine.cpu_speed=12000000", "Machine.fpu_type=8087",

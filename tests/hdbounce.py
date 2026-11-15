@@ -77,6 +77,7 @@ else:
     os.environ.setdefault("OS88_MEGA", "1")
     os.environ.setdefault("OS88_MEGA_EMU", "86box")
 import os88marty, os88ui, os88build, os88geom as geom  # noqa: E402
+import os88deadline                                    # noqa: E402
 
 KB = "build/" if BIG else "build/megak/"
 SECTORS = 120                   # BIG.DAT: 60KB, fits a 64KB claim
@@ -183,8 +184,8 @@ def leg(name, a, tmp, msyms, mbin, hsyms):
         # its header ('O8', the name at +16) on a paragraph of conventional
         # memory (it is not OS88_HIGH)
         base = None
-        end = time.time() + 120
-        while time.time() < end and base is None:
+        gd = os88deadline.Guest(m, 120)     # the guest's clock, not the host's
+        while gd and base is None:
             low = m.read(0, 0xA0000)
             i = low.find(b"MEGARD\0")
             cands = []
@@ -268,8 +269,8 @@ def leg(name, a, tmp, msyms, mbin, hsyms):
             s0 = rb("mr_seq")
             m.write(base + msyms["mr_cmd"], bytes([c]))
             m.run()
-            end = time.time() + 600
-            while time.time() < end:
+            gd = os88deadline.Guest(m, 600)     # the guest's clock
+            while gd:
                 if m.wait_stop(limit=2.0):
                     ip = m.status().get("flat_ip")
                     r = m.regs()

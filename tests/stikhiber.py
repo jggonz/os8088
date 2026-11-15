@@ -144,8 +144,9 @@ def main():
         print("B: and launched %s" % ("nothing" if MEGA else "its widget"))
         ui = os88ui.UI(m)
         t0 = tick(m)                    # 20 GUEST seconds, off the BIOS tick
+        # host: a backstop; the wait is twenty GUEST seconds off the tick
         end = time.time() + 600         # (memory: the liveness signal)
-        while (tick(m) - t0) & 0xFFFF < 364 and time.time() < end:
+        while (tick(m) - t0) & 0xFFFF < 364 and time.time() < end:  # host:
             time.sleep(0.5)
         check((tick(m) - t0) & 0xFFFF >= 364, "twenty guest seconds passed")
         if not MEGA:

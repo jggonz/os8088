@@ -98,33 +98,31 @@ with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
     ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
     m = ui.m
     w = ui.path("B:/APPS")
-    ui.settle()
+    ui.still()          # every check below is guest state, bands() the glass
     blk = ui._fsblk(w)
     n = word(ui, blk, geom.FS_N)
     print("== SPEC.md 22.26: the arrows move a selection (B:\\APPS, %d "
           "entries) ==" % n)
 
     # --- 1: nothing selected - Down scrolls ----------------------------------
-    m.key("ArrowDown")
-    ui.settle()
+    ui.press("ArrowDown", need=True)    # taken + handled: os88ui's verb
     check("with nothing selected Down scrolls",
           word(ui, blk, geom.FS_SEL) == 0xFFFF
           and word(ui, blk, geom.FS_SCRL) == 1,
           "(sel %04X, scrl %d)" % (word(ui, blk, geom.FS_SEL),
                                    word(ui, blk, geom.FS_SCRL)))
-    m.key("ArrowUp")
-    ui.settle()
+    ui.press("ArrowUp", need=True)
 
     # --- 2: a click selects; Down walks it off the bottom, the view follows --
     x, y = ui.row_xy(w, 0)
     ui.mo.click(x, y, settle=0)
-    ui.settle()
+    ui.still(0)
     check("a click selects row 0", word(ui, blk, geom.FS_SEL) == 0)
     fit = ui._word("fm_fit")
     steps = min(n - 1, fit + 2)
     for _ in range(steps):
-        m.key("ArrowDown")
-    ui.settle()
+        ui.press("ArrowDown", need=True)
+    ui.still()                          # bands() below reads the glass
     sel = word(ui, blk, geom.FS_SEL)
     scrl = word(ui, blk, geom.FS_SCRL)
     check("Down x %d moves the selection to row %d" % (steps, steps),
@@ -136,13 +134,12 @@ with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
           "(inverted rows %r, want [%d])" % (b, sel - scrl))
 
     # --- 3: PgUp a page, Up to the top ---------------------------------------
-    m.key("PageUp")
-    ui.settle()
+    ui.press("PageUp", need=True)
     check("PgUp moves it a page", word(ui, blk, geom.FS_SEL) == steps - fit,
           "(%d)" % word(ui, blk, geom.FS_SEL))
     for _ in range(steps):
-        m.key("ArrowUp")
-    ui.settle()
+        ui.press("ArrowUp", need=True)
+    ui.still()
     check("Up stops at the first row", word(ui, blk, geom.FS_SEL) == 0
           and word(ui, blk, geom.FS_SCRL) == 0,
           "(sel %d, scrl %d)" % (word(ui, blk, geom.FS_SEL),

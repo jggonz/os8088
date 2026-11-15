@@ -66,7 +66,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "tests"), os.path.join(ROOT, "tools")]
@@ -141,11 +140,12 @@ class ED(WRT.WR):
         self.bimg = os.path.join(tmp, "b.img")
         shutil.copy(os88build.at("build/os8088.img"), sysimg)
         shutil.copy(bsrc, self.bimg)
-        self.q = Q(tmp, sysimg, self.bimg, 4)
+        self.q = Q(tmp, sysimg, self.bimg, 4, keep=True)
         self.sock = self.q.sock
         os88qemu.acted(self.q, lambda: os.path.exists(self.sock), secs=30,
                        what="the QMP socket")
         xmcheck.wait_desktop(self.sock, "waverackedit")
+        WRT.guest(self.q)               # every wait on THIS guest's clock
         self.ui = os88ui.UI(self.q, mouse=WRT.Mo(self.sock), sym=xmcheck.sym,
                             verbose=False)
         self.seg = None
@@ -185,26 +185,26 @@ class ED(WRT.WR):
         xa, y = self.wpoint(c0)
         xb, _ = self.wpoint(c1)
         WRT.mouse(self.sock, "to", xa, y)
-        time.sleep(0.3)
+        WRT.idle(0.3)
         WRT.mouse(self.sock, "down", xa, y)
-        time.sleep(0.3)
+        WRT.idle(0.3)
         for x in range(xa, xb + 1, max(1, (xb - xa) // 6)):
             WRT.mouse(self.sock, "to", x, y)
-            time.sleep(0.1)
+            WRT.idle(0.1)
         WRT.mouse(self.sock, "to", xb, y)
-        time.sleep(0.3)
+        WRT.idle(0.3)
         WRT.mouse(self.sock, "up")
         until(lambda: self.d("wo_s") != self.d("wo_e"), "the selection", 5)
-        time.sleep(0.3)
+        WRT.idle(0.3)
 
     def click(self, col):
         x, y = self.wpoint(col)
         WRT.mouse(self.sock, "to", x, y)
-        time.sleep(0.3)
+        WRT.idle(0.3)
         WRT.mouse(self.sock, "down", x, y)
-        time.sleep(0.2)
+        WRT.idle(0.2)
         WRT.mouse(self.sock, "up")
-        time.sleep(0.5)
+        WRT.idle(0.5)
 
     def menu(self, mn, item):
         """WR.menu_pick, but the item's name EXACT (File's Save, Save As...
@@ -233,31 +233,40 @@ class ED(WRT.WR):
                   + geom.MENU_ITEM_H // 2)
         ok = until(lambda: ui._word("menu_sel") == k, item, 10)
         WRT.mouse(self.sock, "up")
-        time.sleep(0.5)
+        WRT.idle(0.5)
         return ok
 
     def name_in(self, name):
         """the Save dialog: its name box emptied, NAME typed, Enter"""
         if not until(lambda: self.chooser() is not None, "the dialog", 15):
             return False
-        time.sleep(0.5)
+        WRT.idle(0.5)
         for _ in range(14):
             self.key("backspace")
-            time.sleep(0.05)
+            WRT.drained(0.05)
         for ch in name.lower():
             self.key({".": "dot", "$": "shift-4"}.get(ch, ch))
-            time.sleep(0.08)
+            WRT.drained(0.08)
         self.key("ret")
         return until(lambda: self.chooser() is None, "the dialog gone", 15)
 
     def saved(self, secs=120):
-        time.sleep(0.5)
-        return until(lambda: self.b("ws_busy") == 0 and self.b("we_busy") == 0,
-                     "the save", secs)
+        WRT.idle(0.5)
+        ok = until(lambda: self.b("ws_busy") == 0 and self.b("we_busy") == 0,
+                   "the save", secs)
+        # ...AND ITS TEMP FILE GONE FROM THE IMAGE, which is what every
+        # caller reads next: with the host sleep this `idle` replaced gone,
+        # the final soak read the floppy with OUT1.WAV still 0 bytes and the
+        # temp file there. Bounded in guest time; a save that really leaves
+        # its temp file still fails the caller's "no temp file left".
+        until(lambda: not any("WRSAV" in k and TEMP0 not in k
+                              for k in self.files()),
+              "the save's temp file gone from the floppy", 10)
+        return ok
 
     def keyed(self, k):
         self.key(k)
-        time.sleep(1.2)
+        WRT.idle(1.2)
         until(lambda: self.b("we_busy") != 1, "settled", 20)
 
 
@@ -430,7 +439,7 @@ def leg_cancel(ed, fx):
     ed.key("esc")
     heap = ed.heap()
     until(lambda: ed.b("ws_busy") == 0, "cancelled", 10)
-    time.sleep(0.5)
+    WRT.idle(0.5)
     fs = ed.files()
     check("'Save cancelled'", ed.status() == "Save cancelled", ed.status())
     check("no OUT2.WAV, no WRSAVE.$$$", "MEDIA/OUT2.WAV" not in fs and
@@ -477,15 +486,15 @@ def leg_full(ed, fx):
     say(" full: a document bigger than the disk's free space")
     before = ed.files()
     ed.key("a")
-    time.sleep(0.3)
+    WRT.idle(0.3)
     ed.keyed("c")
     while ed.d("wo_frames") * 4 + 44 < (FREE_KB + 64) * 1024:
         ed.key("end")
-        time.sleep(0.3)
+        WRT.idle(0.3)
         ed.keyed("v")
     ed.menu("File", "Save As...")
     ed.name_in("BIG.WAV")
-    time.sleep(1)
+    WRT.idle(1)
     check("refused before writing: 'Not enough disk space' (%d bytes)" %
           (ed.d("wo_frames") * 4), ed.status() == "Not enough disk space",
           ed.status())
@@ -501,7 +510,7 @@ def leg_pieces(ed):
     if ed.alert():                      # the edited document: discarded
         ed.alert_btn(1)
     until(lambda: ed.chooser() is not None, "the dialog", 15)
-    time.sleep(0.3)
+    WRT.idle(0.3)
     g = ed.w("wo_gen")
     ed.chooser_open("MEDIA/TONE8.WAV")
     until(lambda: ed.w("wo_gen") != g and ed.b("we_busy") == 0, "TONE8", 60)
@@ -535,7 +544,7 @@ def leg_temp(ed, fx):
     if ed.alert():                      # the edited document: discarded
         ed.alert_btn(1)
     until(lambda: ed.chooser() is not None, "the dialog", 15)
-    time.sleep(0.3)
+    WRT.idle(0.3)
     g = ed.w("wo_gen")
     ed.chooser_open("MEDIA/" + TEMP0)
     until(lambda: ed.w("wo_gen") != g and ed.b("we_busy") == 0, TEMP0, 60)
@@ -574,12 +583,12 @@ def leg_asked(ed):
         return
     w = ed.window()                     # back to WaveRack, the alert up
     xmcheck.click(ed.sock, w.x + w.w // 2, w.y + 6)
-    time.sleep(0.8)
+    WRT.idle(0.8)
     check("File > Save is greyed under the question",
           not ed.menu("File", "Save"))
     before = (ed.pieces(), ed.b("wo_upos"))
     ed.key("u")                         # Undo: live a moment ago
-    time.sleep(0.8)
+    WRT.idle(0.8)
     check("Undo says 'Answer the question' and changes nothing (%r)"
           % ed.status(), ed.status() == "Answer the question" and
           (ed.pieces(), ed.b("wo_upos")) == before and
@@ -608,7 +617,7 @@ def leg_close(ed):
         ed.alert_btn(1)                 # Discard
     check("Discard closes the window", until(lambda: ed.wrseg()[0] is None,
                                              "the close", 15))
-    time.sleep(1)
+    WRT.idle(1)
     left = ed.heap()
     check("no claim of the closed region left (%s)" % left, left == [])
 
@@ -632,7 +641,7 @@ def main():
         ed = ED(tmp, syms, img, bimg)
         if not check("WaveRack launches off B:", ed.launch()):
             return 1
-        time.sleep(1)
+        WRT.idle(1)
         if not check("TONE8.WAV opens", ed.open("MEDIA/TONE8.WAV")):
             return 1
         ed.settled()

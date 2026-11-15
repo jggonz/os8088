@@ -107,7 +107,7 @@ def main():
             sw = lambda n: s16(m.read(base + syms[n], 2))
             rb = lambda n: m.read(base + syms[n], 1)[0]
             os88marty.until(m, lambda mm: rw("vp_ploads") >= 1, "the poster",
-                            poll=0.3, limit=600.0, guest=60.0)
+                            poll=0.05, limit=600.0, guest=60.0)
             os88marty.pace(m, 1.0)
             flags = u16(m.read(wrec, geom.WIN_SIZE), geom.W_FLAGS)
             print("   1: grey %d, W_FLAGS %04x (WF_OWNBG %s)"
@@ -201,7 +201,7 @@ def main():
             ground("2: the card shut")
             m.type_text("i")
             os88marty.until(m, lambda mm: rb("vp_lcard") == 1, "the card",
-                            poll=0.3, limit=600.0, guest=30.0)
+                            poll=0.05, limit=600.0, guest=30.0)
             os88marty.pace(m, 3.0)
             ground("2, 3: the card out")
     for b in bad:

@@ -80,7 +80,7 @@ def play(ui, m, syms, name, q, bad):
     base = struct.unpack_from("<H", rec, geom.W_SEG)[0] << 4
     rw = lambda n: struct.unpack_from("<H", m.read(base + syms[n], 2))[0]
     M.until(m, lambda mm: rw("vp_ploads") >= 1, "the poster",
-            poll=0.3, limit=600.0, guest=60.0)
+            poll=0.05, limit=600.0, guest=60.0)
     print("   %s: C:/%s opened %r and its poster was read off the disk"
           % (q, name, w.title))
 
@@ -179,7 +179,7 @@ def main():
                 bytes(mm.read(0xB8000, 4000)[0::2])
             try:                        # (the ROM tries the empty A: first)
                 M.until(m, lambda mm: b"Not a bootable disk" in text(mm),
-                        "the stub's words", poll=0.5, limit=300.0,
+                        "the stub's words", poll=0.05, limit=300.0,
                         guest=90.0)
             except M.MartyError:
                 pass

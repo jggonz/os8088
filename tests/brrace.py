@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
 import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
+import os88deadline                                    # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import partner as P                                    # noqa: E402
@@ -383,8 +384,10 @@ def main():
         m.breakpoints([{"type": "execseg", "seg": ps(),
                         "off": codeoff("br_abort")}])
         m.run()
-        t0, at = time.time(), None
-        while time.time() - t0 < 60:
+        # the window is the GUEST's (os88deadline): 60 host s was ~270 guest
+        # s alone and a fifth of that in a loaded soak
+        at, gd = None, os88deadline.Guest(m, 60)
+        while gd:
             if m.stopped():
                 at = (bss_b(BR_NSTATE), bss_b(BR_FIN), bss_w(BR_NLINES))
                 break

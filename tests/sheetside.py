@@ -84,12 +84,14 @@ def main():
     S = os88sym.linear
     edges = {}
     data = None
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name="SIDE.BIF")
@@ -128,7 +130,7 @@ def main():
         def rowop(item):
             mo.click(*at(0, 0))
             M.settle(m)
-            mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], item))
+            SF.menu(m, mo, EDIT[0], EDIT[1], *ITEM(EDIT[0], item))
             M.settle(m)
             mo.click(*SF.fdlg_xy(m, 0))             # Row
             M.settle(m)
@@ -140,12 +142,12 @@ def main():
         look("2-inserted")
         rowop(DELETE)
         look("3-deleted")
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
-        M.settle(m)
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
-        M.settle(m)
+        M.ui_done(m)                    # the save is aimed off the
         mo.click(*SF.fdlg_okxy(m))
-        M.settle(m, limit=120)
+        M.ui_done(m)                    # kernel's window record
         mo.click(*SF.SAVE_BUTTON)
         before = open(os.path.join(WORK, "SIDE.BIF"), "rb").read()
         for _ in range(60):

@@ -140,7 +140,7 @@ def main():
             rw = lambda n: struct.unpack_from("<H", m.read(base + syms[n],
                                                            2))[0]
             ww = lambda n, v: m.write(base + syms[n], struct.pack("<H", v))
-            wait = lambda c, what, g=60.0: M.until(m, c, what, poll=0.3,
+            wait = lambda c, what, g=60.0: M.until(m, c, what, poll=0.05,
                                                    limit=600.0, guest=g)
             try:
                 wait(lambda mm: rb("vp_loaded") == 1, "the header")

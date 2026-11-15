@@ -36,6 +36,13 @@
 #include <time.h>
 
 static int64_t bx_base_real, bx_base_mono, bx_last, bx_off, bx_gap = -1;
+/* THE CAP'S RATE (OS88_BXCLOCK_RATE, default 1): the clock runs RATE times
+ * the host's running time, so the slowdown timer caps the guest at RATE x
+ * real time instead of at real time. Guest time is still the instruction
+ * count - only how much of it a host second may hold moves - and a stop is
+ * still taken out whole (docs/plans/soak-speed-2/bochs.md). In thousandths,
+ * so the arithmetic stays integral: hours of running at 1000x fit */
+static int64_t bx_rate = -1;
 
 static int64_t bx_ns(clockid_t c)
 {
@@ -57,7 +64,13 @@ time_t time(time_t *tp)
         bx_off += now - bx_last - 1000000;
     }
     bx_last = now;
-    v = bx_base_real + (now - bx_base_mono) - bx_off;
+    if (bx_rate < 0) {
+        const char *k = getenv("OS88_BXCLOCK_RATE");
+        bx_rate = k && *k ? (int64_t)(atof(k) * 1000.0 + 0.5) : 1000;
+        if (bx_rate < 1000)
+            bx_rate = 1000;     /* never SLOWER than real time */
+    }
+    v = bx_base_real + (now - bx_base_mono - bx_off) / 1000 * bx_rate;
     r = (time_t)(v / 1000000000);
     if (tp)
         *tp = r;

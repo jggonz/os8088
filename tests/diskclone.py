@@ -234,9 +234,8 @@ def key(m, name, limit=60.0):
     M.ui_done(m, "the %s key to be handled" % name, limit=limit)
 
 
-with M.launch(SRC, apps=APPS, machine=MACHINE, boot=False) as m:
-    m.run()                             # the boot gate on STATE
-    M.kernel_up(m)
+with M.launch(SRC, apps=APPS, machine=MACHINE,
+              boot="up") as m:  # run + kernel_up
     M.no_saver(m)
     mo = Mouse(marty=m)
     p = Probe(m)

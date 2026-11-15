@@ -185,8 +185,7 @@ def goto(sock, x, y):
     docs/plans/SOAK-PARALLEL.md 17.5)."""
     try:
         import os88qemu
-        os88qemu.mouse_to(os88qemu._Sock(sock), sym,
-                          lambda *c: qmp(sock, *c), x, y)
+        os88qemu.mouse_to(qm(sock), sym, lambda *c: qmp(sock, *c), x, y)
         return
     except BaseException:               # noqa: BLE001 - no map, a kernel
         pass                            # without the words: dead-reckon
@@ -195,7 +194,48 @@ def goto(sock, x, y):
                     "to", str(x), str(y)], capture_output=True, cwd=ROOT)
 
 
+_QM = {}
+
+
+def qm(sock):
+    """THE reader object for `sock` (os88qemu._Sock), one per socket for the
+    process: it carries the last press's tick, which os88qemu._sep needs to
+    keep two clicks from reading as a double-click."""
+    m = _QM.get(sock)
+    if m is None:
+        import os88qemu
+        m = _QM[sock] = os88qemu._Sock(sock)
+    return m
+
+
+def _reach(sock, x, y):
+    """`goto`'s closed loop alone: True once the pointer is at (x, y) off the
+    kernel's own words, False when this process cannot drive it that way (no
+    map, a kernel without the words, a pointer that stopped short) - the
+    caller then takes the dead-reckoned path whole, before any button."""
+    try:
+        import os88qemu
+        os88qemu.mouse_to(qm(sock), sym, lambda *c: qmp(sock, *c), x, y)
+        return True
+    except BaseException:               # noqa: BLE001
+        return False
+
+
 def click(sock, x, y):
+    """CLOSED LOOP when the pointer words resolve (os88qemu.mouse_click's
+    edges, each confirmed off mouse_btn): there, then press, then release -
+    SOAK-SPEED 15. tools/mouse.py's `click` was ~1.7 s of host sleeps a call
+    and could not see a lost edge (docs/plans/soak-speed-2/qemubox.md).
+    The dead-reckoned walk stays the fallback."""
+    if _reach(sock, x, y):
+        import os88qemu
+        m = qm(sock)
+        hmp = lambda *c: qmp(sock, *c)          # noqa: E731
+        if os88qemu.mouse_where(m, sym)[2] & 3:
+            os88qemu.mouse_button(m, sym, hmp, 0)
+        os88qemu.mouse_button(m, sym, hmp, 1)
+        os88qemu.mouse_button(m, sym, hmp, 0)
+        return
     release(sock)
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"), sock,
                     "click", str(x), str(y)], capture_output=True, cwd=ROOT)
@@ -203,7 +243,14 @@ def click(sock, x, y):
 
 def dblclick(sock, x, y):
     """Two presses over ONE connection: the 9-tick window (SPEC.md 22) is far
-    shorter than two mouse.py invocations."""
+    shorter than two mouse.py invocations. Closed loop where it can be
+    (os88qemu.mouse_dblclick: the four edges in one burst, separated from
+    the last press on the guest's clock); else the host-paced pair."""
+    if _reach(sock, x, y):
+        import os88qemu
+        os88qemu.mouse_dblclick(qm(sock), sym, lambda *c: qmp(sock, *c),
+                                x, y)
+        return
     goto(sock, x, y)
     qmp(sock, "mouse_button 1", "sleep 0.08", "mouse_button 0",
         "sleep 0.12", "mouse_button 1", "sleep 0.08", "mouse_button 0")

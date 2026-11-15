@@ -104,12 +104,14 @@ def main():
     S = os88sym.linear
     saved = None
 
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         SF.open_shin(m, mo, NAME)
         M.settle(m, limit=240)
         mo.to(634, 180)
@@ -135,7 +137,7 @@ def main():
         def table(rowref, colref):
             """Data > Table, and its two fields in sequence. EITHER MAY BE
             EMPTY: that is how a one-input table says which kind it is."""
-            mo.menu(DATA_MENU[0], DATA_MENU[1], *TABLE_ITEM)
+            SF.menu(m, mo, DATA_MENU[0], DATA_MENU[1], *TABLE_ITEM)
             M.settle(m, limit=120)
             m.type_text(rowref + "\n")       # Row Input Cell
             M.settle(m, limit=120)
@@ -143,13 +145,13 @@ def main():
             M.settle(m, limit=240)
 
         def save():
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1],
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1],
                     SF.SAVE_AS[0], SF.SAVE_AS[1])
-            M.settle(m)
+            M.ui_done(m)                    # SOAK-SPEED 4: every step of
             mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
-            M.settle(m)
+            M.ui_done(m)                    # the save is aimed off the
             mo.click(*SF.fdlg_okxy(m))
-            M.settle(m, limit=120)
+            M.ui_done(m)                    # kernel's window record
             mo.click(*SF.SAVE_BUTTON)
             for _ in range(60):
                 v = os88flush.Flush(marty=m).volume(1)

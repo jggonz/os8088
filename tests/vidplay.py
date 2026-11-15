@@ -67,6 +67,15 @@ VSIZE = {"cga": 16384, "herc": 65536, "lin80": 38400}
 # plane 0 IS the picture, and MartyPC's debug read returns it
 ROWS = {"cga": 200, "herc": 348, "lin80": 480}
 STOPS = (1, 17, 40, 63, 88, 111, 137, NF)
+_STOPS0 = STOPS                 # (--shared: each leg from these)
+_SYMS = {}
+
+
+def _pkg_syms(*k):
+    """pkg_syms once a process: every --shared leg asks for the same"""
+    if k not in _SYMS:
+        _SYMS[k] = pkg_syms(*k)
+    return _SYMS[k]
 
 
 def u16(b, i=0):
@@ -146,7 +155,10 @@ def mirror_frames(r, clb, k=2, slot=0):
     return out
 
 
-def main():
+def main(argv=None, boot=None):
+    """one row, or with `boot` (tests/vidshare.py) one leg of a shared boot"""
+    global STOPS
+    STOPS = _STOPS0
     ap = argparse.ArgumentParser()
     ap.add_argument("--layout", choices=sorted(MACHINE), default="cga")
     ap.add_argument("--comp", action="store_true",
@@ -170,10 +182,9 @@ def main():
                     help="the first play's ring, in slots (default 2, the "
                     "tightest; 3 wraps a ring that is NOT a power of two, "
                     "SPEC.md 98.3's chunk mod K)")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     if a.k1 is None:
         a.k1 = 3 if a.big else 2
-    global STOPS
     if a.stops:
         STOPS = tuple(int(x) for x in a.stops.split(","))
     screen = a.screen or a.layout
@@ -188,7 +199,10 @@ def main():
     # protected mode, so the row plays the ARM - build/megak/apps/, assembled
     # -DPKG_MEGA - and reads the arm's symbols (tests/vidvga4.py's port)
     mega = bool(os.environ.get("OS88_MEGA"))
-    syms, image = pkg_syms("apps/video/video.asm", ("apps/",),
+    if boot is not None and mega:
+        sys.exit("vidplay: --shared is MartyPC's: a kern_mega leg boots a "
+                 "machine of its own")
+    syms, image = _pkg_syms("apps/video/video.asm", ("apps/",),
                            ("PKG_MEGA",) if mega else ())
     pkg = os88build.at("build/megak/apps/video.o88" if mega
                        else "build/video.o88")
@@ -222,7 +236,8 @@ def main():
         tx0 = (tg.stride - g.wb) // 2
         rows_at = [tg.base[y + ty0] + tx0 for y in range(g.h)]
         bad = []
-        with os88ui.boot(os88build.at("build/os8088.img" if big144 else
+        with (boot or os88ui.boot)(os88build.at(
+                "build/os8088.img" if big144 else
                                       "build/os8088-360.img"), apps=disk,
                          machine=machine, quick=True) as ui:
             m = ui.m
@@ -359,12 +374,12 @@ def main():
                     on_hit=lambda mm, rec: mm.read(ready, 1)[0])) as tr:
                 m.type_text("p")
                 os88marty.until(m, lambda mm: rb("vp_ready") == 1,
-                                "the second play to start", poll=0.1,
+                                "the second play to start", poll=0.05,
                                 limit=300.0, guest=60.0)
                 p0 = int(m.status().get("cycles", 0))
                 toast2 = rb("vo_toast")
                 os88marty.until(m, lambda mm: rb("vp_ready") == 0,
-                                "the second play to end", poll=0.1,
+                                "the second play to end", poll=0.05,
                                 limit=300.0, guest=60.0)
                 p1 = int(m.status().get("cycles", 0))
                 if tr is not None:
@@ -464,4 +479,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--shared"]:   # ONE BOOT, SEVERAL ROWS' LEGS
+        import vidshare
+        sys.exit(vidshare.run(main, sys.argv[2:]))
     sys.exit(main())

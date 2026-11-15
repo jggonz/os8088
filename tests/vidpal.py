@@ -163,13 +163,14 @@ def clip(tmp, layer=False, loop=None):
     return out
 
 
-def main():
+def main(argv=None, boot=None):
+    """one row, or with `boot` (tests/vidshare.py) one leg of a shared boot"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--layer", action="store_true")
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--repeat0", action="store_true")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
@@ -233,8 +234,9 @@ def main():
                         "--size", "360", pkg, v88,
                         os.path.join(tmp, "PALBAD.V88")], check=True,
                        capture_output=True)
-        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine, quick=True) as ui:
+        with (boot or os88ui.boot)(os88build.at("build/os8088-360.img"),
+                                   apps=disk, machine=a.machine,
+                                   quick=True) as ui:
             m = ui.m
             # --- 0: the hostile table refused at open
             wb_ = ui.path("B:/PALBAD.V88")
@@ -465,4 +467,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--shared"]:   # ONE BOOT, SEVERAL ROWS' LEGS
+        import vidshare
+        sys.exit(vidshare.run(main, sys.argv[2:]))
     sys.exit(main())

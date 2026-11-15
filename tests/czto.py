@@ -461,14 +461,30 @@ def main():
             good = hits = hops = 0
             del seenhops[:]
             del after[:]
+            # NOT STARTED IS NOT FINISHED: no claim and mode 0 is also the
+            # moment before the join has begun - the Enter that starts it
+            # still on its way - and a leg that looked then returned None
+            # after 0 reads, leaving the join to run into the NEXT leg's
+            # breakpoint (mega-czto, 1 in 5 on a loaded box). So the end is
+            # believed only once the join has been seen: its claim, or a
+            # stop of its own. One that never starts is NEVER STARTED, ~27
+            # guest seconds on
+            live, idle = False, 0
             try:
                 for _ in range(20000):
                     if m.wait_stop(limit=0.3) != "breakpoint":
-                        if claim() is None and mode() == 0:
+                        if claim() is not None:
+                            live = True
+                        elif live and mode() == 0:
                             t, on = ui.toast()      # staged since the key
                             return (t or None), hits, hops  # (outcome's
                                                             # reason)
+                        elif not live:
+                            idle += 1           # ~0.9 guest s a wait_stop
+                            if idle >= 30:
+                                return "NEVER STARTED", hits, hops
                         continue
+                    live = True
                     rg = m.regs()
                     here = lin(rg["cs"], rg["ip"])
                     if here == gto:

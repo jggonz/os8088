@@ -64,6 +64,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid  # noqa: E402
+import os88deadline                                  # noqa: E402
 import os88spkfx as fx                               # noqa: E402
 import os88geom as geom                              # noqa: E402
 from cycweb import pkg_syms                          # noqa: E402
@@ -224,12 +225,14 @@ def prof(m, ui, i, name):
     rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)
     base = (rec[geom.W_SEG] | rec[geom.W_SEG + 1] << 8) << 4
     seg = m.sym("spk_seg")
-    t0 = time.time()
-    while m.read(seg, 2) == b"\0\0" and time.time() - t0 < 60:
+    # both windows on the GUEST's clock (os88deadline), not the host's
+    start = os88deadline.Guest(m, 60)
+    while m.read(seg, 2) == b"\0\0" and start:
         time.sleep(0.05)
     hits, n = collections.Counter(), 0
     c0 = m.status()["cycles"]
-    while m.read(seg, 2) != b"\0\0" and time.time() - t0 < 600:
+    play = os88deadline.Guest(m, 600)
+    while m.read(seg, 2) != b"\0\0" and play:
         st = m.status()
         ip = st["flat_ip"]
         n += 1

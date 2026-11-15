@@ -75,7 +75,8 @@ def clip(tmp):
     return out
 
 
-def main():
+def main(argv=None, boot=None):
+    """one row, or with `boot` (tests/vidshare.py) one leg of a shared boot"""
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--hybrid", action="store_true",
@@ -93,7 +94,7 @@ def main():
                          "measures) - so the session takes the hybrid and "
                          "never decodes in place, the decode reading every "
                          "record through the slow board")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     a.hybrid = a.hybrid or a.slow
     os.chdir(ROOT)
     for p in (IMG, "build/video.o88"):
@@ -118,8 +119,8 @@ def main():
         ty0 = (348 - H) // 2 // tg.banks * tg.banks
         tx0 = (tg.stride - WB) // 2
         rows_at = [tg.base[y + ty0] + tx0 for y in range(H)]
-        with os88ui.boot(os88build.at(IMG), apps=disk, machine=BOARD,
-                         quick=True) as ui:
+        with (boot or os88ui.boot)(os88build.at(IMG), apps=disk,
+                                   machine=BOARD, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -305,4 +306,7 @@ def report(bad):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--shared"]:   # ONE BOOT, SEVERAL ROWS' LEGS
+        import vidshare
+        sys.exit(vidshare.run(main, sys.argv[2:]))
     sys.exit(main())

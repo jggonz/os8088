@@ -237,7 +237,8 @@ def main():
         else:
             print("  open: bar ok, underline %r, %r" % (s1, line))
 
-        mo.click(tx + 40, ty + HTW_R0Y + 2 * HTW_ROWH + 4, settle=2.0)
+        mo.click(tx + 40, ty + HTW_R0Y + 2 * HTW_ROWH + 4, settle=0)
+        M.ui_done(m, cap=2.0 * 4.5)      # SOAK-SPEED 13
         rows = look(m, mo, tx, ty, "slot3")
         if read_under(rows, tx, ty) != back:
             bad.append("slot 3's underline is %r, not the hole behind slot 2 "
@@ -250,7 +251,8 @@ def main():
         else:
             print("  slot 3: underline %r, size %s" % (back, mb))
 
-        mo.click(tx + BAR_X + s2[1] - 2, ty + HTW_MAPY + 4, settle=2.0)
+        mo.click(tx + BAR_X + s2[1] - 2, ty + HTW_MAPY + 4, settle=0)
+        M.ui_done(m, cap=2.0 * 4.5)      # SOAK-SPEED 13
         rows = look(m, mo, tx, ty, "bar2")
         if read_under(rows, tx, ty) != s2:
             bad.append("a click on slot 2's segment left the underline at "
@@ -258,7 +260,8 @@ def main():
         else:
             print("  bar click on slot 2: underline %r" % (s2,))
 
-        mo.click(tx + BAR_X + 2, ty + HTW_MAPY + 4, settle=2.0)
+        mo.click(tx + BAR_X + 2, ty + HTW_MAPY + 4, settle=0)
+        M.ui_done(m, cap=2.0 * 4.5)      # SOAK-SPEED 13
         rows = look(m, mo, tx, ty, "bar0")
         if read_under(rows, tx, ty) != back:
             bad.append("a click on the white in front of slot 1 left the "

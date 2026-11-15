@@ -596,10 +596,13 @@ class Mouse:
                 break
             # ...and the raise below blames the UART, which is the wrong
             # answer for a guest that is not executing at all.
-            if i % 4 == 3:
+            if i % 16 == 15:
                 _alive(self.m, seen, "the button edge to be decoded")
             i += 1
-            time.sleep(0.02)
+            # 5 ms (was 20): a packet is ~25 guest ms at 1200 baud, ~6 host
+            # ms on an idle box, so the 20 ms floor was paid on every edge of
+            # every click (soak-speed-2/core.md)
+            time.sleep(0.005)
         raise MartyError(
             "the %s %s was never decoded across %.1f GUEST seconds with the "
             "packet re-sent every %.2f (mouse_btn = %02x) - the guest is "

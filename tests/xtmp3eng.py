@@ -172,6 +172,17 @@ RATE_LEGS = ("ladder", "slowdown", "rungfail", "playwav", "pause",
 _ICOUNT = [False]
 
 
+def _covox_writes(tr):
+    """how many writes QEMU's -trace has logged to the Covox's DATA port
+    (378h) so far - the covox leg's samples (it re-parses what it reads)"""
+    try:
+        with open(tr, errors="replace") as f:
+            return sum(1 for ln in f if "parallel_ioport_write" in ln and
+                       re.search(r"addr 0x0+ val", ln))
+    except OSError:
+        return 0
+
+
 def gpace(secs):
     r = _RIG[0]
     try:
@@ -1878,9 +1889,20 @@ def leg_covox():
               "md %d state %d %s" % (r.st()["md"], r.st()["state"],
                                      r.errtext()))
         g0 = r.w("x3_grans")                # QEMU runs the bracket's 11 kHz
-        time.sleep(45)                      # IRQ0 slowly (~700 samples a
-        check(leg, "no granule decoded while it plays",   # wall second):
-              r.w("x3_grans") == g0)        # what it played in 45 s is held
+        # IRQ0 at whatever rate the host allows (~700 samples a wall second
+        # when this was written, the whole 111 KB file in 45 s today), so a
+        # fixed 45 s sleep was either most of the leg or, on a loaded box,
+        # short of the two seconds checked below. It waits for THE SAMPLES
+        # instead: data-port writes since this moment (an undercount: the
+        # play began before it) past two seconds' worth plus slack, 240 host
+        # s at most (docs/plans/soak-speed-2/games.md: 60 -> 13 s a leg)
+        n0 = _covox_writes(tr)
+        t0 = time.time()
+        while (_covox_writes(tr) - n0 < 2 * 11025 + 2048 and
+               time.time() - t0 < 240):   # host: a ceiling on QEMU's trace FILE; the pass is the count
+            time.sleep(1.0)
+        check(leg, "no granule decoded while it plays",   # what it played
+              r.w("x3_grans") == g0)        # meanwhile is held
         r.key("esc")
         r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 60)
     finally:
@@ -2303,7 +2325,12 @@ def main():
         _ICOUNT[0] = name in RATE_LEGS
         print("xtmp3eng: %s%s" % (name, " (-icount)" if _ICOUNT[0] and
                                   os88qemu.icount() else ""))
+        t0 = time.time()
         LEGS[name]()
+        # (each leg's host seconds: what a split of the row is decided on,
+        # docs/plans/soak-speed-2/games.md)
+        print("xtmp3eng: %s took %.0f s host" % (name, time.time() - t0),
+              flush=True)
     if bad:
         print("xtmp3eng: %d FAILED" % len(bad))
         for b in bad:

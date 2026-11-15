@@ -20390,11 +20390,17 @@ pentium-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
 # test ROMs tools/getgbtest.py fetches at pinned SHA-256s and the assembler
 # tools/gbclock.py builds from a pinned clone. Thrown away, the rgbds rows
 # would SKIP and the ROM rows fetch again. `clean-gb` is the escape hatch.
+#
+# ...and build/soak, which is not an artefact at all: a soak's RECORDS
+# (journal, log, the `finished` marker) and the SNAPSHOT it runs inside
+# (docs/plans/SOAK-PARALLEL.md 14.4). A `clean` while one runs would delete
+# the source tree the run executes from. `os88soak.py` prunes old snapshots
+# itself; `rm -rf build/soak` is the escape hatch when none is running.
 #> [Build] clean :: remove build/ (spares build/cc and fetched data)
 clean:
 	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc ! -name cc \
 		! -name apple2-rom ! -name nasm3 ! -name gbtest ! -name rgbds \
-		! -name watcom \
+		! -name watcom ! -name soak \
 		-exec rm -rf {} + 2>/dev/null || true
 	@rm -f $(BUILD)/apple2-rom/APPLE2.ROM
 

@@ -159,13 +159,15 @@ def main():
     os.chdir(os.path.join(HERE, ".."))
     build_disk()
     S = os88sym.linear
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         table = glass.glyphs(m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name="NF.BIF")
@@ -195,7 +197,7 @@ def main():
                  for k in CASES}
 
         # --- 2: Format Number on the empty, selected H3, then a value --------
-        mo.menu(SF.FORMAT_MENU[0], SF.FORMAT_MENU[1],
+        SF.menu(m, mo, SF.FORMAT_MENU[0], SF.FORMAT_MENU[1],
                 SF.FORMAT_MENU[0] + 15, 59)             # Format's first item
         M.settle(m)
         dlg = [x for x in os88geom.windows(m, S)
@@ -224,7 +226,7 @@ def main():
         r, c = LEFTBLANK
         mo.click((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
         M.settle(m)
-        mo.menu(SF.FORMAT_MENU[0], SF.FORMAT_MENU[1],
+        SF.menu(m, mo, SF.FORMAT_MENU[0], SF.FORMAT_MENU[1],
                 SF.FORMAT_MENU[0] + 15, 59)
         M.settle(m)
         d2 = [x for x in os88geom.windows(m, S)
@@ -254,12 +256,12 @@ def main():
         readblank = glass.cell_text(rows, box(*READBLANK), table, xs, ys)
 
         # --- 3: Save As Normal -------------------------------------------------
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
-        M.settle(m)
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
-        M.settle(m)
+        M.ui_done(m)                    # the save is aimed off the
         mo.click(*SF.fdlg_okxy(m))
-        M.settle(m, limit=120)
+        M.ui_done(m)                    # kernel's window record
         mo.click(*SF.SAVE_BUTTON)
         before = open(os.path.join(WORK, "NF.BIF"), "rb").read()
         data = None
