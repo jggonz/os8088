@@ -1,5 +1,5 @@
 ; walink.inc - WireArena over a null modem: the lobby in the window and the
-; match in the bracket (docs/plans/WIREARENA-LINK-PLAN.md; protocol v1 is
+; match in the bracket (docs/plans/completed/WIREARENA-LINK-PLAN.md; protocol v1 is
 ; its section 4). The port, the frames and their CRC are apps/os88cable.inc's.
 ;
 ; In the window (UI task, its one-tick timer): the search, HELLO every

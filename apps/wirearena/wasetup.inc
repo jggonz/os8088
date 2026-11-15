@@ -1,5 +1,5 @@
 ; wasetup.inc - the opening window: the MATCH SETUP (docs/plans/
-; WIREARENA-NET-PLAN.md 2 and 9.4). Every control on it is the system's own:
+; completed/WIREARENA-NET-PLAN.md 2 and 9.4). Every control on it is the system's own:
 ;
 ;   - five DROP-DOWNS (apps/os88ui.inc, SPEC.md 13.14): Arena, Columns,
 ;     Bots, Skill, Play - a joined player's Arena, Bots and Skill greyed,

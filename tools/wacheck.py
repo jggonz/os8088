@@ -24,7 +24,7 @@ more off before the fix, 5 in 30 after (single columns at a near corner).
 
     python3 tools/wacheck.py --arena 2 [--poses N] [--width 40|80]
 
-HEIGHTS (docs/plans/WIREARENA-HEIGHTS-PLAN.md wave 2): the heights arena, its
+HEIGHTS (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md wave 2): the heights arena, its
 boxes at their heights, the reference cast per column as a ray through the
 boxes' footprints, nearest first - a box the eye is below the top of hides
 its column above as far as its top and no further; one the eye is above

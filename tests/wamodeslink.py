@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena's MODES LINKED, wave M4 (docs/plans/WIREARENA-MODES-PLAN.md 5,
+"""WireArena's MODES LINKED, wave M4 (docs/plans/completed/WIREARENA-MODES-PLAN.md 5,
 8): two QEMUs on a socket cable, the shipped package, walink's harness
 (tests/walink.py: MartyPC cannot link two instances).
 

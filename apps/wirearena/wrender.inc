@@ -367,7 +367,7 @@ WA_VAR wa_hflat, 1              ; 1: no box below the tallest (HEIGHTS-PLAN
 WA_VAR wa_hmax, 2               ; 7.2.5) - and the tallest, the room's too
 WA_VAR wa_keye, 2               ; the eye and kyq wa_numt and wa_numb were
 WA_VAR wa_kkyq, 2               ; made for (wa_render)
-; THE COLUMN STATE OF HEIGHTS (docs/plans/WIREARENA-HEIGHTS-PLAN.md 1.2,
+; THE COLUMN STATE OF HEIGHTS (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 1.2,
 ; 7.2.5), per column x 2: the topmost half-row covered so far, and a stack
 ; of the faces that raised it, front to back - entry k at wa_cst + k x
 ; 2 x WA_MAXW, a word: its span tag (low byte), the row it covers from
@@ -1209,7 +1209,7 @@ wa_moved:
 ; which side of each split line it is on - so a frame whose position is
 ; still in the cell (turning, or moving inside it, which is most frames of
 ; play) reuses the list, and a frame walks no inner node.
-; THE PVS (docs/plans/WIREARENA-HEIGHTS-PLAN.md 9.8): an arena may carry, per
+; THE PVS (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 9.8): an arena may carry, per
 ; cell of a square grid, the boxes that can draw anything from somewhere in
 ; it (tools/arenagen.py, pvs_masks); the rest are left off the list, so a
 ; frame never visits them. The order's cell is then inside the grid's cell.
@@ -3655,7 +3655,7 @@ wa_plotf:
     mov [wa_cur+bx], ax
     ret
 
-; --- floor lines (docs/plans/WIREARENA-ARENAS-PLAN.md 4.5) ------------------
+; --- floor lines (docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4.5) ------------------
 ; An arena's FLOOR LINES: straight lines on the floor, each between two of
 ; its vertices - the twin's walk, its edge where it has no room walls. Drawn
 ; after every box and before the floor's dots, in the room's colour.

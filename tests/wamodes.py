@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WireArena's MODES, wave M1 (docs/plans/WIREARENA-MODES-PLAN.md 2, 3, 5):
+"""WireArena's MODES, wave M1 (docs/plans/completed/WIREARENA-MODES-PLAN.md 2, 3, 5):
 the setup's lists by mode, Win at, team deathmatch and the rotation's next
 arena, on one machine, off the game's own variables.
 

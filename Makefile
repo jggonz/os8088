@@ -21293,7 +21293,7 @@ $(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/
 # four geometries - on no shipped disk until it is a game. Its tables (sine,
 # arena, patrols, the pre-projected stick-figure keyframes) are built by
 # tools/arenagen.py into $(BUILD)/watab.inc. Two segments in one file
-# (docs/plans/WIREARENA-PARTS-PLAN.md 7): wirearena.bin is the primary - the
+# (docs/plans/completed/WIREARENA-PARTS-PLAN.md 7): wirearena.bin is the primary - the
 # game - and wrpart.bin the renderer, its part 0 (OP_SEG, OP_COMP|OP_ZFILL),
 # far-called with its own data; each assembles the watab.inc blocks it reads.
 #> [Applications] wirearena :: WARENA.O88, the text-mode arena shooter's renderer prototype (docs/plans/MULTIPLAYER-FPS-PLAN.md)
@@ -21324,7 +21324,7 @@ $(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/w
 # ...and each arena a part of its own (WIREARENA-PARTS-PLAN 7.5), in
 # arenagen's order: one row per arena in wirearena.asm's table (WA_NARENA).
 # Arena 2 is the heights demo, on the Game menu since wave 2
-# (docs/plans/WIREARENA-HEIGHTS-PLAN.md 7.3); arenagen refuses an arena over
+# (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 7.3); arenagen refuses an arena over
 # the visible budget, which tools/wamodel.py prices
 WAARENAS := $(BUILD)/waa0.bin $(BUILD)/waa1.bin $(BUILD)/waa2.bin \
             $(BUILD)/waa3.bin $(BUILD)/waa4.bin $(BUILD)/waa5.bin

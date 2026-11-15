@@ -1,8 +1,12 @@
 # WireArena: capture the flag, teams and side spawns
 
-**STATUS: CTF BUILT** (2026-11-15): waves C1 to C3 - the rules, the bots
+**STATUS: BUILT** (2026-11-15): waves C1 to C3 - the rules, the bots
 that play for the flag, and linked matches (section 11). C4, team
-deathmatch, is the one wave left. Written to
+deathmatch, was built by
+[WIREARENA-MODES-PLAN](WIREARENA-MODES-PLAN.md) M1, with the score to
+win, king of the hill and the rotation. Filed under `completed/`; the one
+open item (a four-player CTF row, 11.3) is carried in
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.3. Written to
 the owner's brief below, before any code. Section 9 lists the defaults this plan chose where the brief left
 a choice; each is one constant or one line of data to change.
 
@@ -17,7 +21,7 @@ The owner, 2026-11-15:
 > cheap in performance."*
 
 WireArena is `apps/wirearena/`. Its plans: the parent
-[MULTIPLAYER-FPS-PLAN](MULTIPLAYER-FPS-PLAN.md); the bots
+[MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md); the bots
 [WIREARENA-AI-PLAN](WIREARENA-AI-PLAN.md) (1.1 lists the modes); the link
 [WIREARENA-LINK-PLAN](WIREARENA-LINK-PLAN.md) and Ethernet
 [WIREARENA-NET-PLAN](WIREARENA-NET-PLAN.md); the arenas
@@ -31,9 +35,9 @@ WireArena is `apps/wirearena/`. Its plans: the parent
 |---|---|---|
 | free-for-all | every player and bot for themselves | **the game today** |
 | duel | free-for-all with one other: one bot, or one linked player | **the game today**, with the setup's bots at one |
-| team deathmatch | two teams; a kill scores for the killer's team | after CTF: it is CTF's teams and side spawns with kills for points (wave C4) |
+| team deathmatch | two teams; a kill scores for the killer's team | after CTF: it is CTF's teams and side spawns with kills for points (wave C4; built in MODES-PLAN M1) |
 | capture the flag | two teams, a flag each; take theirs to yours | **this plan** |
-| last stand | (AI-PLAN 1) | later |
+| last stand | (AI-PLAN 1) | later (an idea for after 1.0: MULTIPLAYER-FPS-PLAN 17.4) |
 
 ## 2. The rules of capture the flag
 
@@ -140,10 +144,15 @@ as for a player: a bot at the node walks within reach.
 - **The setup's Mode**: a drop-down, `Free-for-all` / `Capture the flag`
   (`Team deathmatch` with wave C4), beside the arena. CTF with an arena
   that has no bases is refused at Play with a line in the window: *"This
-  arena has no flags: pick the Twin or the hedge"*.
+  arena has no flags: pick the Twin or the hedge"*. *(Since MODES-PLAN 5
+  the Arena list shows only the arenas the mode can play, so the refusal
+  is no longer reached from the list; and Mode has four items, king of the
+  hill the fourth.)*
 - **Linked**: the mode is the host's, as the arena is - HELLO's byte 14,
   the difficulty's, carries it in its high nibble (byte 17, reserved when
   this was written, had since become the peers bound: NET-PLAN 4).
+  *(Since MODES-PLAN M4 byte 14 is the difficulty in bits 0-1, Win at's
+  pick in bits 2-4 and the mode in bits 5-6: LINK-PLAN 4.1.)*
 - **THE HOST RUNS THE RULES.** It already has every position: its own
   player's, each remote player's from their SNAPs, and its bots'. Each
   tick it applies section 2 to all of them and sends a **FLAG** event (a
@@ -172,6 +181,10 @@ frame in `wa_present`. `wa_stamp` and `wa_cur` are read and written in
 cell. Not done here, because CTF fits; measured when something needs it.
 
 ## 9. Defaults chosen, for the owner
+
+*(Since MODES-PLAN: the captures to win are the setup's Win at, 3 by
+default, and a win shows for 10 s and goes on in the next arena of the
+rotation.)*
 
 | choice | default | change by |
 |---|---|---|
@@ -207,8 +220,10 @@ soak rows and `test-full` run once after the last (CLAUDE.md).
   draws them.
   *Checked by:* `walink`'s pattern - two machines, a guest's take and
   capture seen on both.
-- [ ] **C4 Team deathmatch.** The mode; a kill scores for the killer's
-  team; the win at a kill count.
+- [x] **C4 Team deathmatch.** The mode; a kill scores for the killer's
+  team; the win at a kill count. *Built in
+  [WIREARENA-MODES-PLAN](WIREARENA-MODES-PLAN.md) M1 (2026-11-15), and
+  checked by `wamodes`.*
 
 ## 11. As built
 
@@ -290,7 +305,8 @@ random, and one capture came in four minutes: red. `wactf` is now 28 s.
 
 ### 11.3 C3: linked (2026-11-15)
 
-- **The mode** rides HELLO's byte 14 (the difficulty's high nibble), the
+- **The mode** rides HELLO's byte 14 (the difficulty's high nibble; bits
+  5-6 since MODES-PLAN M4), the
   host's; a guest's setup shows it greyed, as the arena.
 - **The host runs the rules** (`wa_ctick`'s, unchanged) over every live
   player and bot it has: its own player, each remote player's figure (its

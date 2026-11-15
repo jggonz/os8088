@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WireArena over a null modem: two QEMUs on a socket cable, the shipped
-package, real UART bytes (docs/plans/WIREARENA-LINK-PLAN.md, wave L1).
+package, real UART bytes (docs/plans/completed/WIREARENA-LINK-PLAN.md, wave L1).
 
 Uses WireBall's owned-QEMU bridge (tests/wireball.py), as wirefleetlink
 does: MartyPC cannot link two instances, so this is the instrument for two

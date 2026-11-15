@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WireArena's bots arm themselves and use each weapon (docs/plans/
-WIREARENA-AI-PLAN.md 3.3, wave B4).
+completed/WIREARENA-AI-PLAN.md 3.3, wave B4).
 
 One boot into the Heights arena at 40 columns, then, off the game's own
 variables (its symbols from wirearena.asm assembled with a map, refused

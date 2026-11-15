@@ -1,5 +1,5 @@
 ; WireArena's FRAME BLOCK and the renderer part's ABI (docs/plans/
-; WIREARENA-PARTS-PLAN.md section 7). Included by BOTH halves, which is what
+; completed/WIREARENA-PARTS-PLAN.md section 7). Included by BOTH halves, which is what
 ; makes the block one layout: the primary (wirearena.asm) expands WA_FBLOCK
 ; in its BSS, the renderer part (wrpart.asm) at WR_FB in its image, each
 ; through its own WA_FBV, so the variables come in this order in both. A

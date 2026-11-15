@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """watrace - exact guest cycles of WireArena's renderer pieces on MartyPC
-(docs/plans/WIREARENA-HEIGHTS-PLAN.md 2.1: the measured unit costs that
+(docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 2.1: the measured unit costs that
 tools/wamodel.py prices a frame with).
 
 SUPERSEDED by tools/waprof.py (every routine, exclusive cycles) and

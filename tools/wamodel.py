@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """wamodel - a host model of WireArena's wall renderer, priced in guest cycles
-(docs/plans/WIREARENA-HEIGHTS-PLAN.md sections 2 and 7.2.6).
+(docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md sections 2 and 7.2.6).
 
 It renders a pose on the host as the renderer would - the arena's boxes in
 tools/arenagen.py's tree order, the view cone, each box's faces, the exact

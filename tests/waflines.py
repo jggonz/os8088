@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """waflines - WireArena's FLOOR LINES against an exact referee
-(docs/plans/WIREARENA-ARENAS-PLAN.md 4.5).
+(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4.5).
 
 The floor-line drawer (apps/wirearena/wrender.inc, wa_flines) cuts each line
 at the screen's edges in camera space and walks it by an error term. This
