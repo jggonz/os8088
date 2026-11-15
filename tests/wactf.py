@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty                                               # noqa: E402
 from os88fixture import need                                   # noqa: E402
-from walift import amap, APPS, ITEM                            # noqa: E402
+from walift import amap, APPS, ITEM, MENU                            # noqa: E402
 from waarenas import G, boot                                   # noqa: E402
 
 F = 4772727
@@ -54,9 +54,9 @@ def match(ui, arena, bots):
     sym = amap()
     w = ui.path("B:/WARENA.O88")
     m = ui.m
-    os88marty.until(m, lambda _: any(c[0] == "Game" and any(
+    os88marty.until(m, lambda _: any(c[0] == MENU and any(
         i[0] == ITEM for i in c[3]) for c in ui.menus()),
-        "WireArena's Game menu on the bar", guest=10)
+        "WireArena's Link menu on the bar", guest=10)
     p = os88marty.Pkg(m, w)
     p.write(sym["wa_lkarena"], bytes([arena]))
     p.write(sym["wa_want"], bytes([1]))
@@ -238,8 +238,12 @@ def main():
               "THE WIN: red's third capture shows RED WINS",
               (g.caps(), g.word("wa_cwin")))
         g.m.go()
+        # (wc_go writes wa_arena BEFORE it reads the hedge's part off the
+        # disk and starts the match: wait on the match started - its scores
+        # anew - not on the number, or a slower read loses the race)
         os88marty.until(g.m, lambda _: g.p.byte(sym["wa_arena"]) == 3 and
-                        g.word("wa_cwin") == 0, "the hedge next", guest=20)
+                        g.word("wa_cwin") == 0 and g.caps() == (0, 0),
+                        "the hedge next", guest=20)
         g.ticks(4)
         check(g.caps() == (0, 0) and g.flag(0, WC_ST) == HOME and
               g.flag(1, WC_ST) == HOME and (g.flag(0, WC_X, 2),

@@ -79,10 +79,11 @@ from os88pkg import PKG_FMT
 F = 4772727
 item, nfr, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 pre = sys.argv[4:]
+B = walift.bench_build()                        # (P: a test build's, NET-PLAN 9.9)
 def amap(path, binp):
     d = tempfile.mkdtemp(); mp, bn = os.path.join(d, "m"), os.path.join(d, "b")
-    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/wirearena/", "-I", "drivers/net/",
-                           "-I", "build/", "--before", "[map all %s]" % mp, "-o", bn, path])
+    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-DWA_BENCH", "-I", "apps/", "-I", "apps/wirearena/",
+                           "-I", "drivers/net/", "-I", B + "/", "--before", "[map all %s]" % mp, "-o", bn, path])
     assert open(bn, "rb").read() == open(binp, "rb").read(), "stale " + binp
     o = {}
     for line in open(mp):
@@ -90,15 +91,15 @@ def amap(path, binp):
         if len(f) == 3 and re.match(r'^[0-9A-F]+$', f[0]) and re.match(r'^[0-9A-F]+$', f[1]):
             o[f[2]] = int(f[0], 16)
     return o
-g = amap("apps/wirearena/wirearena.asm", "build/wirearena.bin")
-r = amap("apps/wirearena/wrpart.asm", "build/wrpart.bin")
+g = amap("apps/wirearena/wirearena.asm", B + "/wirearena.bin")
+r = amap("apps/wirearena/wrpart.asm", B + "/wrpart.bin")
 NAMES = ["G.render", "wa_render", "wa_render.walked", "wa_render.roomless", "wa_leaf", "wa_face",
          "wa_span", "wa_figures", "wa_cross", "wa_present"]
 with os88ui.boot("build/os8088-360.img", apps="build/warena360.img") as ui:
     m = ui.m
     w = ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
     ar, wd = (int(x) for x in item.split(","))
-    walift.start(ui, w, walift.amap(), arena=ar, w40=(wd == 40))
+    walift.start(ui, w, walift.amap(bench=True), arena=ar, w40=(wd == 40))
     m.advance(cycles=F)
     for k in pre:
         m.key(k); m.advance(cycles=F // 4)

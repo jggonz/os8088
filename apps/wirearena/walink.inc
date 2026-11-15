@@ -978,30 +978,7 @@ wa_lkplay:
 
 ; wa_lkcmd - the Link menu: AL = Automatic, COM1, COM2, Disconnect, Ready,
 ; then No bots, One bot, Two bots (the host's)
-wa_lkcmd:
-    cmp al, 8
-    jne .nnet
-    mov byte [wa_splay], 2
-    mov al, 2
-    jmp wa_lknetgo
-.nnet:
-    cmp al, 5
-    jb .link
-    sub al, 5
-    call wa_lkhost
-    jz .hosts
-    mov [wa_lkbots], al
-    ret
-.hosts:
-    push ds
-    pop es
-    mov si, wa_t_host
-    xor cx, cx
-    call OSAPI_TOAST
-    ret
-.link:
-    cmp al, 4
-    je .rdy
+wa_lkcmd:                       ; (Automatic, COM1, COM2, Disconnect)
     push ax
     call wa_lkcable             ; (Automatic, COM1, COM2, Disconnect: the
     pop ax                      ; card's claim given back)
@@ -1017,10 +994,8 @@ wa_lkcmd:
     jmp lk_connect              ; (AL = 1 or 2: COM1, COM2)
 .off:
     jmp lk_disconnect
-.rdy:
-    jmp wa_lkready
 
-; wa_lkready - Ready, toggled (the Link menu, Space or Enter)
+; wa_lkready - Ready, toggled (the setup's button, Space or Enter)
 wa_lkready:
     xor byte [wa_lkst], 1
     and byte [wa_lkst], 1

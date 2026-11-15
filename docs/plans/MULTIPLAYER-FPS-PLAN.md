@@ -1136,6 +1136,11 @@ would need a change of design, not tuning.
 
 ### 16.7 A play bench — the `P` key
 
+> **Since 2026-11-15 a TEST build's** (WIREARENA-NET-PLAN 9.9): `B` and `P`
+> are assembled only with `make WABENCH=1`; the shipped game has neither.
+> The rows and tools that press them build a private tree with it
+> (`tests/walift.py`'s `bench_build`).
+
 Bench `B` (16.1) flies a fixed path through the arena and is good for
 comparing renderer changes. The owner asked for a second bench that looks like
 PLAY. Its numbers should be judged against a frame rate felt at the controls.

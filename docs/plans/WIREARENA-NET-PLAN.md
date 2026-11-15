@@ -635,3 +635,29 @@ Three of the owner's:
 - **A package icon** (the owner: WARENA had none): `OS88_ICON16`, the
   corridor the game draws - a square frame, its corners running in to the
   far wall, the crosshair's dot - white with black lines (SPEC.md 20.2).
+
+### 9.9 The debug keys out; the menus the setup made redundant (2026-11-15)
+
+The owner: *"remove some of the debug/test keys and options, and save some
+space if they take it up"*.
+
+- **F, G, T and L are gone** - the field of view (75 degrees, as it
+  started), the floor grid, ramps as treads and the walls' tops: the last
+  three are the detail levels' (F1-F5, `wa_levtab`), and the view's width
+  is not a player's setting.
+- **B and P - the benches - are a TEST build's**: `make WABENCH=1`
+  (`-DWA_BENCH`) assembles them, the shipped game has neither. The rows and
+  tools that press P - `waarenas`; `waposes` and the rows over it
+  (`waflines`, `wastill`); `wabench`, `waprof`, `watrace` - build a private
+  tree with the knob (`tests/walift.py`'s `bench_build`, `amap(bench=True)`;
+  `tools/os88build.py`), so nothing of theirs moves into `build/`.
+- **The menus**: the Game menu (the bots' skill) is gone - the setup's
+  Skill is the one place; the Link menu keeps Automatic, Connect COM1,
+  Connect COM2 and Disconnect, and loses Ready, the bots' count and
+  Ethernet, all the setup's (its Ready button, Bots, Play).
+- **The About card** (Keys) loses those keys' lines and ends with
+  "Contributed by Elendilon": 12 lines, so the window stays the size the
+  setup itself needs.
+
+**Bytes**: `wirearena.bin` 36,614 -> 35,425 (-1,189); a WABENCH=1 build is
+829 more.

@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 from os88fixture import need                                   # noqa: E402
-from walift import Game, start, amap, SYS, APPS, ITEM  # noqa: E402
+from walift import Game, start, amap, SYS, APPS, ITEM, MENU  # noqa: E402
 
 FS = 56                         # F_SIZE (apps/wirearena/waconst.inc)
 

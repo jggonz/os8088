@@ -21304,7 +21304,12 @@ $(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/
 # (MULTIPLAYER-FPS-PLAN 16.10). The B and P benches turn it on themselves.
 # Stamped, like every knob: `make wirearenadisk WAMETER=2` after a plain build
 # must rebuild the game, and a plain build after it must take it out again.
-WASTAMP := $(BUILD)/.wapkg$(if $(WAMETER),-m$(WAMETER))
+#> [Knobs] WABENCH=1 :: WireArena with its B (spin) and P (play) benches - a TEST build's; the shipped game has neither key
+# WABENCH: the B and P benches (MULTIPLAYER-FPS-PLAN 16.7) are a test build's
+# since NET-PLAN 9.9 - the shipped game has neither key. The rows and tools
+# that press them (waarenas; waposes and the rows on it, wabench, waprof,
+# watrace) build a private tree with it (tools/os88build.py).
+WASTAMP := $(BUILD)/.wapkg$(if $(WAMETER),-m$(WAMETER))$(if $(WABENCH),-b)
 $(WASTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.wapkg*
 	@touch $@
@@ -21313,7 +21318,7 @@ wirearena: $(BUILD)/warena.o88
 $(BUILD)/watab.inc: tools/arenagen.py apps/wirearena/waconst.inc | $(BUILD)
 	python3 tools/arenagen.py $@
 $(BUILD)/wirearena.bin: apps/wirearena/wirearena.asm apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc apps/os88api.inc apps/os88pit.inc apps/os88parts.inc apps/os88partsbody.inc apps/wirearena/walink.inc apps/wirearena/wasetup.inc apps/wirearena/wactf.inc apps/os88cable.inc apps/os88raw.inc apps/os88udp.inc apps/os88ui.inc drivers/net/netpkg.inc $(WASTAMP) | $(BUILD)
-	$(NASM) -f bin -w+error $(if $(WAMETER),-DWA_METER=$(WAMETER)) -I apps/ -I apps/wirearena/ -I drivers/net/ -I $(BUILD)/ -l $(BUILD)/wirearena.lst -o $@ $<
+	$(NASM) -f bin -w+error $(if $(WAMETER),-DWA_METER=$(WAMETER)) $(if $(WABENCH),-DWA_BENCH) -I apps/ -I apps/wirearena/ -I drivers/net/ -I $(BUILD)/ -l $(BUILD)/wirearena.lst -o $@ $<
 $(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/wirearena/wrlow.inc apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wrtab.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -l $(BUILD)/wrpart.lst -o $@ $<
 # ...and each arena a part of its own (WIREARENA-PARTS-PLAN 7.5), in

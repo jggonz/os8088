@@ -47,10 +47,14 @@ _g = _re.match(r"A(\d+)-(\d+)$", a.what)
 if _g:
     ITEM[a.what] = (int(_g.group(1)), int(_g.group(2)))
 T = os.path.abspath(a.tree); B = os.path.join(T, "build")
+if T == ROOT:                       # (P, the play bench: a test build's since
+    sys.path.insert(0, os.path.join(ROOT, "tests"))  # NET-PLAN 9.9 - this
+    import walift                   # checkout's WABENCH=1 tree; another
+    B = walift.bench_build()        # checkout's build/ made with it)
 def amap(path, binp):
     d = tempfile.mkdtemp(); mp, bn = os.path.join(d, "m"), os.path.join(d, "b")
-    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/wirearena/", "-I", "drivers/net/",
-                           "-I", B + "/", "--before", "[map all %s]" % mp, "-o", bn, path], cwd=T)
+    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-DWA_BENCH", "-I", "apps/", "-I", "apps/wirearena/",
+                           "-I", "drivers/net/", "-I", B + "/", "--before", "[map all %s]" % mp, "-o", bn, path], cwd=T)
     if open(bn, "rb").read() != open(binp, "rb").read():
         raise SystemExit("waprof: %s is not its source - make wirearenadisk first" % binp)
     o = {}

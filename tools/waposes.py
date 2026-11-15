@@ -36,8 +36,10 @@ two builds' recordings compare pose for pose:
   python3 tools/waposes.py cmpsets BASEDIR NEWDIR
 
 --tree is the checkout whose apps/wirearena sources and build/warena360.img
-are measured (default: this one) - a worktree needs only `make
-wirearenadisk`; MartyPC and the system disk are this checkout's.
+are measured (default: this one, through a WABENCH=1 private tree - the play
+bench is a test build's, NET-PLAN 9.9; another checkout's build/ must be
+made with WABENCH=1) - a worktree needs only `make wirearenadisk
+WABENCH=1`; MartyPC and the system disk are this checkout's.
 """
 import sys, os, re, json, struct, random, argparse, subprocess, tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -167,12 +169,20 @@ def record(a):
     import os88ui
     from os88pkg import PKG_FMT
     F = 4772727; T = os.path.abspath(a.tree); W = a.width
-    B = os.path.abspath(a.build) if a.build else os.path.join(T, "build")
+    if a.build:                     # (P, the play bench, is a test build's
+        B = os.path.abspath(a.build)    # since NET-PLAN 9.9: WABENCH=1 -
+    elif T == ROOT:                     # this checkout's private tree, made
+        sys.path.insert(0, os.path.join(ROOT, "tests"))    # here, or another
+        import walift                   # checkout's build/, built with it)
+        B = walift.bench_build()
+    else:
+        B = os.path.join(T, "build")
     d = tempfile.mkdtemp(); mp, bn = os.path.join(d, "m"), os.path.join(d, "b")
-    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/wirearena/", "-I", "drivers/net/",
+    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-DWA_BENCH", "-I", "apps/", "-I", "apps/wirearena/", "-I", "drivers/net/",
                            "-I", B + "/", "--before", "[map all %s]" % mp, "-o", bn, "apps/wirearena/wirearena.asm"], cwd=T)
     if open(bn, "rb").read() != open(B + "/wirearena.bin", "rb").read():
-        raise SystemExit("waposes: %s/wirearena.bin is not its source - make wirearenadisk first" % B)
+        raise SystemExit("waposes: %s/wirearena.bin is not its source with the benches - "
+                         "make wirearenadisk WABENCH=1 first" % B)
     g = {}
     for line in open(mp):
         f = line.split()
@@ -351,8 +361,8 @@ r.add_argument("--arena", type=int, default=0); r.add_argument("--width", type=i
 r.add_argument("--level", type=int, default=0); r.add_argument("--n", type=int, default=60)
 r.add_argument("--seed", type=int, default=1)
 r.add_argument("--keys", default=""); r.add_argument("--tree", default=ROOT)
-r.add_argument("--build", default="", help="the build directory measured (default: TREE/build) - a knob build's "
-               "private one, `make BUILD=dir wirearenadisk WAMETER=1`")
+r.add_argument("--build", default="", help="the build directory measured (default: this checkout's WABENCH=1 "
+               "private tree, or TREE/build) - built WITH THE BENCHES, `make BUILD=dir wirearenadisk WABENCH=1`")
 r.add_argument("--define", action="append", default=[], help="a define the renderer part of --build was "
                "assembled with (NAME=VALUE), for its map")
 r.add_argument("--profile", default="", help="also each pose rendered once more SINGLE-STEPPED: the "

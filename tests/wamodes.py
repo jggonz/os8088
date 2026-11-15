@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty                                               # noqa: E402
 from os88fixture import need                                   # noqa: E402
-from walift import amap, APPS, ITEM                            # noqa: E402
+from walift import amap, APPS, ITEM, MENU                            # noqa: E402
 from waarenas import G, boot                                   # noqa: E402
 
 F = 4772727
@@ -63,9 +63,9 @@ def main():
     with boot() as ui:
         m = ui.m
         w = ui.path("B:/WARENA.O88")
-        os88marty.until(m, lambda _: any(c[0] == "Game" and any(
+        os88marty.until(m, lambda _: any(c[0] == MENU and any(
             i[0] == ITEM for i in c[3]) for c in ui.menus()),
-            "WireArena's Game menu on the bar", guest=10)
+            "WireArena's Link menu on the bar", guest=10)
         p = os88marty.Pkg(m, w)
         g = G(ui, w, sym)
 
