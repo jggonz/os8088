@@ -1278,12 +1278,14 @@ wa_sp_0:        db 'alone', 0
 wa_sp_1:        db 'serial cable', 0
 wa_sp_2:        db 'local network', 0
 wa_sp_3:        db 'internet', 0
-wa_si_mode:     dw wa_smd_0, wa_smd_2, wa_smd_1  ; (CTF-PLAN 7, MODES-PLAN 1)
+wa_si_mode:     dw wa_smd_0, wa_smd_2, wa_smd_1, wa_smd_3
+                                ; (CTF-PLAN 7, MODES-PLAN 1)
 wa_smd_0:       db 'free-for-all', 0
 wa_smd_1:       db 'capture flag', 0
 wa_smd_2:       db 'team deathmatch', 0
-WA_NMODES       equ 3
-wa_smodes:      db 0, 2, 1      ; (the list's order to wa_gmode's numbers)
+wa_smd_3:       db 'king of the hill', 0
+WA_NMODES       equ 4
+wa_smodes:      db 0, 2, 1, 3   ; (the list's order to wa_gmode's numbers)
 wa_amodes:                      ; each arena's modes, a bit each (arenagen)
 %assign wa_i 0
 %rep WA_NARENA

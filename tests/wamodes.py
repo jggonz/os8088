@@ -34,6 +34,8 @@ from waarenas import G, boot                                   # noqa: E402
 F = 4772727
 TICK = F // 30
 DR_ITEMS, DR_N = 8, 10
+WC_ST, WC_X, WC_Y, WC_Z, WC_TMR = 0, 2, 4, 6, 8
+F_X, F_DEAD = 0, 17
 FOC_MODE = 6
 
 
@@ -85,10 +87,10 @@ def main():
               and p.word(sym["wa_sdr_g"] + DR_ITEMS) == sym["wa_sg_ffa"],
               "ARENAS BY MODE: free-for-all again, all five, its Win at")
 
-        def play(arena, mode, goal):
+        def play(arena, mode, goal, bots=2):
             p.write(sym["wa_lkarena"], bytes([arena]))
             p.write(sym["wa_want"], bytes([1]))
-            p.write(sym["wa_lkbots"], bytes([2]))
+            p.write(sym["wa_lkbots"], bytes([bots]))
             p.write(sym["wa_lkgmode"], bytes([mode]))
             p.write(sym["wa_sgoal"] + mode, bytes([goal]))
             m.key("Enter")
@@ -161,6 +163,100 @@ def main():
         check(g.word("wa_px") < 1024 and p.byte(sym["wa_gmode"]) == 2,
               "THE NEXT ARENA: the Twin after the hedge, us on red's side",
               g.word("wa_px"))
+        m.key("Escape")
+        m.go()
+        os88marty.until(m, lambda _: p.byte(sym["wa_quit"]) == 1,
+                        "the match over", guest=5)
+        m.advance(cycles=F * 2)
+
+        p.write(sym["wa_lkgmode"], b"\x01")    # KING OF THE HILL (M2): the
+        mode_key("ArrowRight")                  # list's fourth, after CTF
+        check(p.byte(sym["wa_lkgmode"]) == 3 and arenas() == [2, 3, 4],
+              "ARENAS BY MODE: king of the hill, the heights, the hedge and "
+              "the Twin", (p.byte(sym["wa_lkgmode"]), arenas()))
+        play(3, 3, 1, bots=1)                   # the hedge, Win at 3
+        hill = (p.word(sym["wa_cfl"] + WC_X), p.word(sym["wa_cfl"] + WC_Y),
+                p.word(sym["wa_cfl"] + WC_Z))
+        check(p.byte(sym["wa_gmode"]) == 3 and p.byte(sym["wa_gside"]) == 1
+              and hill == (1024, 832, 0) and
+              p.byte(sym["wa_cfl"] + WC_ST) == 0,
+              "KING OF THE HILL: the mode, the hedge's sides, its hill at the "
+              "stack's foot, nobody's", (p.byte(sym["wa_gmode"]),
+                                         p.byte(sym["wa_gside"]), hill))
+        b1 = sym["wa_figs"]
+
+        def foe_on(x, y, n):                    # (bot 1, blue, held there)
+            for _ in range(n):
+                p.write(b1 + F_X, struct.pack('<hh', x, y))
+                p.write(b1 + F_DEAD, b"\x00")
+                m.advance(cycles=TICK)
+
+        foe_on(1824, 1152, 2)
+        g.place(hill[0], hill[1], 0)
+        m.advance(cycles=TICK * 3)
+        check(p.byte(sym["wa_cfl"] + WC_ST) == 1 and
+              p.word(sym["wa_cmsg"]) == sym["wc_m_hwe"],
+              "THE HILL: ours to run over - red's, WE HAVE THE HILL",
+              p.byte(sym["wa_cfl"] + WC_ST))
+        foe_on(hill[0], hill[1], 3)             # both on it: as it was
+        check(p.byte(sym["wa_cfl"] + WC_ST) == 1,
+              "THE HILL: both teams on it, it stays red's")
+        g.place(224, 1152, 0)
+        foe_on(hill[0], hill[1], 3)
+        check(p.byte(sym["wa_cfl"] + WC_ST) == 2 and
+              p.word(sym["wa_cmsg"]) == sym["wc_m_hthey"],
+              "THE HILL: the foe alone on it, blue's - THEY HAVE THE HILL")
+        foe_on(1824, 1152, 1)
+        p.write(sym["wa_cfl"] + WC_TMR, struct.pack('<H', 295))
+        m.advance(cycles=TICK * 8)
+        check((p.byte(sym["wa_caps"]), p.byte(sym["wa_caps"] + 1)) == (0, 1),
+              "THE HILL: held 10 s, blue's point",
+              (p.byte(sym["wa_caps"]), p.byte(sym["wa_caps"] + 1)))
+        p.write(sym["wa_caps"], bytes([0, 2]))
+        p.write(sym["wa_cfl"] + WC_TMR, struct.pack('<H', 295))
+        m.advance(cycles=TICK * 8)
+        check(g.word("wa_cwin") > 0 and g.word("wa_cmsg") == sym["wc_m_bwin"],
+              "THE HILL: blue's third point, BLUE WINS")
+        next_arena(4)
+        check(p.byte(sym["wa_gside"]) == 1 and g.word("wa_px") < 1024 and
+              (p.word(sym["wa_cfl"] + WC_X), p.word(sym["wa_cfl"] + WC_Y)) ==
+              (1024, 832) and p.byte(sym["wa_cfl"] + WC_ST) == 0,
+              "THE NEXT ARENA: the Twin after the hedge - sides, us on red's, "
+              "its hill nobody's", g.word("wa_px"))
+        p.write(sym["wa_cfl"] + WC_ST, b"\x01")  # (red's, and its third
+        p.write(sym["wa_caps"], bytes([2, 0]))   # point: the next, round)
+        p.write(sym["wa_cfl"] + WC_TMR, struct.pack('<H', 295))
+        m.advance(cycles=TICK * 8)
+        next_arena(2)
+        hill = (p.word(sym["wa_cfl"] + WC_X), p.word(sym["wa_cfl"] + WC_Y),
+                p.word(sym["wa_cfl"] + WC_Z))
+        check(p.byte(sym["wa_gside"]) == 0 and hill == (1248, 1024, 80),
+              "THE NEXT ARENA: the heights after the Twin, round - no sides, "
+              "the hill on its platform", (p.byte(sym["wa_gside"]), hill))
+        m.key("Escape")
+        m.go()
+        os88marty.until(m, lambda _: p.byte(sym["wa_quit"]) == 1,
+                        "the match over", guest=5)
+        m.advance(cycles=F * 2)
+
+        p.write(sym["wa_lkarena"], b"\x03")    # THE BOTS PLAY FOR IT: the
+        p.write(sym["wa_lkbots"], b"\x02")      # hedge, us idle, bot 2 red's
+        p.write(sym["wa_sgoal"] + 3, b"\x00")   # and bot 1 blue's, no limit
+        m.key("Enter")
+        m.go()
+        f0 = p.byte(sym["wa_frame"])
+        os88marty.until(m, lambda _: p.byte(sym["wa_frame"]) != f0,
+                        "the match's first frames", guest=20)
+        took, t = set(), 0                      # (the hedge's hill is off
+        while t < 480 and took != {1, 2}:       # the bots' patrols: with no
+            g.put("wa_hp", 100)                 # goal it stood a minute
+            m.advance(cycles=F // 4)            # untaken)
+            t += 1
+            st = p.byte(sym["wa_cfl"] + WC_ST)
+            if st:
+                took.add(st)
+        check(took == {1, 2}, "THE BOTS PLAY: each team's bot takes the "
+              "hill within 2 minutes (%d s)" % (t // 4), took)
     if fails:
         print("wamodes: FAIL - %d of the checks:" % len(fails))
         for f in fails:

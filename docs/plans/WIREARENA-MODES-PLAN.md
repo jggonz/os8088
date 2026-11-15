@@ -1,6 +1,6 @@
 # WireArena: the score to win, team deathmatch, king of the hill, and arenas in rotation
 
-**STATUS: IN PROGRESS** (2026-11-15): M1 built. Written to the owner's
+**STATUS: IN PROGRESS** (2026-11-15): M1 and M2 built. Written to the owner's
 brief below, before any code; section 8 is the waves and section 9 what was
 built.
 
@@ -83,8 +83,10 @@ their foes.
 - **The HUD**: each team's points, and the hill's owner.
 - **The bots**: a bot whose team does not hold the hill heads for it (CTF's
   FETCH, CTF-PLAN 6); a bot whose team holds it roams and fights near it.
-- **The arenas**: the hedge (the stack's top, its highest place), the
-  heights arena (its central platform), the Twin (the path's bottom).
+- **The arenas**: the hedge, the heights arena (its central platform), the
+  Twin (the path's bottom). On the hedge the hill is the court's floor at
+  the stack's south foot, not the stack's top as first planned: no route
+  climbs the stack, so a bot could never take a hill there (section 9).
 
 ## 5. Arenas by mode, and the rotation
 
@@ -126,7 +128,7 @@ code is needed, so nothing moves this round. The game segment has ~18 KB.
   default, the next arena** - alone. Checked by `wamodes` (soak): each
   mode's list of arenas, a win at the score in free-for-all, team
   deathmatch and CTF, the 10 s, the next arena loaded and played.
-- [ ] **M2 King of the hill** - alone, the bots too. Checked by `wamodes`.
+- [x] **M2 King of the hill** - alone, the bots too. Checked by `wamodes`.
 - [ ] **M3 The rotation's window.** Checked by `wamodes`.
 - [ ] **M4 Linked**: the win and the next arena from the host; team
   deathmatch's and king of the hill's scores on the wire. Checked by
@@ -163,3 +165,30 @@ code is needed, so nothing moves this round. The game segment has ~18 KB.
   same arena; free-for-all and team deathmatch have no win linked yet.
 - **Checked by** `wamodes` (soak, 12 s), and `wactf`'s win now waits for
   the hedge after the Twin. Red: see the row.
+
+**M2** (2026-11-15):
+
+- **The hill** (`tools/arenagen.py`'s `ARENA_HILL`, `hill()`): a place, its
+  floor and two route nodes whose leg passes within reach of it (one node
+  where the hill stands on it), after the flag bases in the graph block;
+  the game's `wa_ghlp`. The heights: its central platform (1248, 1024, 80),
+  at node 1. The hedge: (1024, 832), the court's floor at the stack's
+  south foot, node 1 - the stack has no route, so it is the high ground
+  over the hill rather than the hill. The Twin: (1024, 832), the path's
+  bottom, between nodes 17 and 18 (both lanes within reach).
+- **The rules** (`wc_hill`, a tick, alone): one team alone on the hill and
+  not its holder takes it (`WE HAVE THE HILL` / `THEY HAVE THE HILL`); both
+  teams on it leave it as it is; its holders score a point each 10 s held
+  (`WC_HOLD`), and Win at's wins as in the other modes. The hill is flag
+  0's record (`WC_ST` the holder, `WC_TMR` its time), drawn white while
+  nobody's and in its holders' colour after - no renderer code.
+- **Spawns**: a team mode spawns on the sides only where the arena has
+  them (`wa_gside`) - the heights has none, so king of the hill there
+  spawns as free-for-all does.
+- **The bots** (`wc_hgoal`): a bot whose team does not hold the hill, and
+  is not fighting, FETCHes its node, or from one node to the other across
+  it. Measured on the hedge, two bots and us idle: without it the hill
+  stood a minute untaken; with it both teams took it within 29 to 50 s.
+- **The HUD**: each team's points, `#` by the holders.
+- **Linked** is M4's: a guest plays king of the hill's teams and spawns, but
+  the hill's rules are not on the wire yet.
