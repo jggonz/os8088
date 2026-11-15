@@ -159,12 +159,15 @@ volume_popup:
     xor al, al
     call mix_get
     mov [volume_pair], cx       ; baseline is never overwritten by a drag
-    call volume_level
+    mov al, cl                  ; AL = max(L, R): the level the slider shows
+    cmp al, ch
+    jae .lvl
+    mov al, ch
+.lvl:
     mov [volume_levelv], al
     call volume_draw
     mov byte [volume_live], 1
-    xor al, al                  ; bridge 0: spend lazy hide and show arrow
-    call far [volume_bridge]
+    call volume_br0             ; bridge 0: spend lazy hide and show arrow
     mov byte [volume_prev], 1  ; opening press may already have been released
 .poll:
     mov ah, 1
@@ -188,31 +191,29 @@ volume_popup:
     je .home
     cmp ah, 4Fh
     jne .mouse
-    mov al, 100
-    jmp short .keyset
-.home:
-    xor al, al
-    jmp short .keyset
+    jmp short .max              ; End: 100
 .quieter:
     mov al, [volume_levelv]
     sub al, 1
-    jnc .keyset
-    xor al, al
+    adc al, 0                   ; ...and 0 stays 0 (FFh + the borrow)
     jmp short .keyset
 .louder:
     mov al, [volume_levelv]
     add al, 1
     cmp al, 100
     jbe .keyset
+.max:
     mov al, 100
+    jmp short .keyset
+.home:
+    xor al, al
 .keyset:
     call volume_set
 .mouse:
     mov al, 2
-    call far [volume_bridge]    ; AL=buttons, CX/DX=live, indivisible coords
-    and al, 1
+    call volume_br              ; AL=buttons, CX/DX=live, indivisible coords
+    and al, 1                   ; (ZF: the button)
     mov [volume_btn], al
-    or al, al
     jz .release
     cmp byte [volume_prev], 0
     je .press
@@ -221,8 +222,8 @@ volume_popup:
     cmp dx, MVP_Y              ; initial held press can drag into the track
     jb .wait
     cmp dx, MVP_Y+64
-    jae .wait
-    mov byte [volume_drag], 1
+    jb .grab
+    jmp short .wait
 .press:
     cmp byte [volume_drag], 0
     jne .slide
@@ -237,8 +238,7 @@ volume_popup:
     cmp dx, [volume_bottom]
     ja .dismiss
     cmp dx, MVP_Y+64
-    jb .grab
-    jmp short .wait
+    jae .wait
 .grab:
     mov byte [volume_drag], 1
 .slide:
@@ -253,15 +253,13 @@ volume_popup:
     cmp byte [volume_drag], 0
     jne .dismiss              ; press-drag-release changes and closes
     ; Opening click released on the icon: leave the panel up for a click.
-    jmp short .wait
 .wait:
     mov al, [volume_btn]
     mov [volume_prev], al
     call OSAPI_TASK_YIELD
     jmp .poll
 .dismiss:
-    mov al, 1                  ; arrow down before restoring its background
-    call far [volume_bridge]
+    call volume_br1            ; arrow down before restoring its background
     call volume_rect
     mov es, [volume_save]
     mov si, VOLUME_BANDSZ
@@ -269,14 +267,14 @@ volume_popup:
     ; Consume the entire dismissing gesture, including a held outside press.
 .drain:
     mov al, 2
-    call far [volume_bridge]
+    call volume_br
     test al, 1
     jz .drained
     call OSAPI_TASK_YIELD
     jmp short .drain
 .drained:
     mov al, 3
-    call far [volume_bridge]    ; drain modal mouse edges from event ring
+    call volume_br              ; drain modal mouse edges from event ring
 .nosave:
     call OSAPI_GFX_UNLOCK
     mov dx, [volume_save]
@@ -309,12 +307,16 @@ volume_rect:
     add cx, MVP_W-1
     mov dx, [volume_bottom]
     ret
-volume_level:                  ; pair CX -> AL=max(L,R)
-    mov al, cl
-    cmp al, ch
-    jae .out
-    mov al, ch
-.out:
+; volume_br1 / volume_br0 / volume_br - the kernel's bridge (ui.inc's
+; ui_volume_service) with AL = 1, 0 or the caller's AL: its far call, once
+volume_br1:
+    mov al, 1
+    db 0x3D                     ; `cmp ax, imm16`, whose immediate is the XOR
+                                ; below: steps over it, writing only flags
+volume_br0:
+    xor al, al
+volume_br:
+    call far [volume_bridge]
     ret
 volume_draw:
     mov ax, [volume_x]
@@ -322,8 +324,7 @@ volume_draw:
     mov bx, MVP_Y+12
     mov cl, [volume_levelv]
     mov si, volume_label
-    call mixui_draw
-    ret
+    jmp mixui_draw              ; (its RET is ours)
 
 volume_set:
     cmp al, [volume_levelv]
@@ -336,11 +337,9 @@ volume_set:
     pop ax
     jc .out
     mov [volume_levelv], al
-    mov al, 1
-    call far [volume_bridge]
+    call volume_br1
     call volume_draw
-    xor al, al
-    call far [volume_bridge]
+    call volume_br0
 .out:
     ret
 
