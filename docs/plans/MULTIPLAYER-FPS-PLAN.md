@@ -1775,7 +1775,8 @@ SERIAL.DRV's verbs run there ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md)
 L3.3, 11.2); kern_mega soak rows of WireArena's own
 ([AI-PLAN](completed/WIREARENA-AI-PLAN.md) 1, 1.1;
 [PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 4.2's kern_mega row); the
-umbrella's Wave 6 "kern_mega rows" (15).
+umbrella's Wave 6 "kern_mega rows" (15). Its pass (17.6) has the rows and
+the one defect; the linked match is what stays open.
 
 **The owner's, after the arena work** (17.1): the field run on 5150 #1, the
 CGA questions and the PERFORMANCE.md set that follows from it (15, Wave 7).
@@ -1845,3 +1846,63 @@ None is promised; each is where it was proposed.
 | [WIREARENA-CTF-PLAN](completed/WIREARENA-CTF-PLAN.md) | teams, side spawns, capture the flag | completed |
 | [WIREARENA-MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) | Win at, team deathmatch, king of the hill, the rotation | completed |
 | [WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md) | Crossing built; the Ziggurat and the Pit | **in progress** |
+
+### 17.6 The kern_mega pass (2026-11-15)
+
+**The rules, read against the source.** No `PKG_MEGA` arm is needed and
+none is built: the shipped WARENA.O88 is correct on kern_mega as it is
+(SPEC.md 20.18 rule 2), which the rows below are the evidence for.
+
+| rule | WireArena |
+|---|---|
+| a claim or region is a SELECTOR: no paragraph arithmetic on one | none. Every segment is asked for - `op_seg`/`op_cseg` for the parts, `FSI_SEG` for text memory, DS for the minimap's bytes - and re-asked in `wa_partsmv` when the carve moves |
+| nothing stored through CS | none (`cswrite` holds); the renderer is entered by a pushed far return (`wa_rcall`), so no vector is read through CS |
+| a code selector is the kernel's (`OSAPI_MEM_CODESEL`, MC7), never the retired static alias | `op_cseg` under `OP_WANT_CSEG`: the parts standard's own |
+| `OS88_HIGH` / `OS88_HIGHMEM` declared (`megahigh`) | both; the region and the carve run above 1MB under Bochs |
+| a BIOS call or the BDA from a protected-mode bracket | `int 10h` AH=01h once a mode set (reflected), `int 16h` (`mega_i16`, native); `pit_now`'s 0040h is an identity selector |
+| a socket buffer in the package's own segment (§72, §77.10) | `lk_blk`, in the region |
+| **`FSI_SEG` is a selector on kern_mega** (§53.4, MC7.4) | **the defect**: `wa_setmode` chose the mono attribute table by `FSI_SEG == B000h`, so a 286 with a Hercules or an MDA played in the COLOUR table - walls in 01h, which an MDA draws UNDERLINED (134 cells on the Heights arena), dots in 08h, which it draws as nothing. Mono is now the display's kind, `OSAPI_FSX_CAPS`'s DL = `VID_HERC`, the fact `fsx_mode`'s own B000h fixup keys on. kern_big drew right and still does |
+
+`megapkg`, `megahigh`, `cswrite`, `megagrid` and `movable` pass on the tree
+with it.
+
+**Run on kern_mega.** Bochs (a 386, VGA, 16MB; the region above 1MB) and
+86Box's mr286 (a 286 with its AT BIOS) with a Hercules:
+
+- `mega-walift`, `mega-wamodes`, `mega-waroutes`, `mega-wabots`,
+  `mega-wabotarms` - the base rows, unchanged, green on Bochs; at the level
+  a 386 picks itself (High; the 8088's is Medium), the sim at exactly 30
+  ticks a guest second;
+- `wamono` (new, MartyPC's 5150 Hercules) and `mega-wamono` (86Box) - red
+  on the shipped source on kern_mega (`[wa_mono]` 0, 134 wall cells in
+  01h), green with the fix on both kernels; on kern_big red with the test
+  aimed at `VID_CGA`.
+
+**Not ported, and why** - none of them a WireArena defect:
+
+- `wascore`, `waweapons`: green on kern_big at either detail level; on
+  Bochs the shim's re-capture after every debugger stop is Ctrl + a middle
+  click (os88bochs.GRAB), and its Ctrl reaches the guest - WireArena's
+  TRIGGER. A key pressed just after a stop fired a pistol shot by itself
+  (`waweapons`' "the start: 6 loaded" read 5), and Tab's make was lost
+  behind the chord (`wascore`'s board one step late). Their own keys,
+  alone, reach the game on kern_mega (Tab's bit, `[wa_sbon]` 1, the board
+  drawn);
+- `waflines`, `wafiglod`, `wastill`: `tools/waposes.py` finds the package
+  by scanning conventional memory for its header, and on kern_mega the
+  region is above 1MB;
+- `waarenas`: its benches are a private `WABENCH=1` tree, which has no
+  kern_mega disk of its own;
+- `wasetup`: `flicker`, which the Bochs shim refuses;
+- the link rows (`walink*`, `wactflink`, `wamodeslink`): their QEMUs are
+  their own (tests/wireball.py's `Machine`), booted on kern_big's disk and
+  read through kern_big's map, so `$OS88_MEGA` does not reach them.
+
+**kern_mega's apps disks** carry it now, in `GAMES/` as the 1.44MB and
+1.2MB apps disks do: 133 clusters, `megaapps120.img` keeping 49 free.
+
+**Open**: L3.3, the linked match on kern_mega and SERIAL.DRV's verbs run
+there. The way is tests/wireball.py's `Machine` given a kern_mega leg -
+`build/mega.img`, kern_mega's map (`OS88_BUILD=build/megak`,
+`os88sym.default_defines("KERN_BIG", "KERN_MEGA")`) and reads through the
+LDT, as tests/pciether.py's `MQemu` does.

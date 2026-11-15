@@ -8645,6 +8645,20 @@ SOAK = [
         "off onto the tower, the lift home. Red on e9ca8cff: 14 failures.",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wamono", "soak", py("tests/wamono.py"), 9.0,
+        "WIREARENA ON A HERCULES DRAWS MONOCHROME ATTRIBUTES. wa_setmode "
+        "chose the mono table by FSI_SEG == B000h, and on kern_mega that "
+        "word is a SELECTOR (fsx.inc's VSEG, KERN-MEGA-MEMORY-PLAN MC7.4), "
+        "so a 286 with a Hercules played in the COLOUR table: an MDA page "
+        "reads 01h as underline, and 134 wall cells were underlined. Now "
+        "the display's kind, OSAPI_FSX_CAPS's DL. A match at 80 columns on "
+        "MartyPC's 5150 Hercules: [wa_mono] 1, no glyph in a colour-only "
+        "attribute and no underline at B000h, a frame there to judge. "
+        "Red with the test aimed at VID_CGA ([wa_mono] 0, 01h x134); its "
+        "kern_mega port, mega-wamono on 86Box's mr286 with a Hercules, red "
+        "on the shipped source before the fix.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("waarenas", "soak", py("tests/waarenas.py"), 60.0,
         "WIREARENA'S HEDGE AND TWIN, AND THE LIMITS THEY RETIRED "
         "(docs/plans/completed/WIREARENA-ARENAS-PLAN.md 4, WIREARENA-HEDGES-PLAN.md "
