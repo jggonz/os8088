@@ -1,6 +1,6 @@
 # WireArena: Crossing, the Pit and the Ziggurat
 
-**STATUS: BUILT** (2026-11-15): A1 to A3; the Pit's cost is the owner's to weigh (section 8, A3). Written to the owner's three drawings below,
+**STATUS: BUILT** (2026-11-15): A1 to A3; the owner accepted the Pit's cost - *"it would play fine on a V20 or above, and I think its ok to have one heavier map for first release"* (2026-11-15); the Ziggurat's ramp fixes (section 8) wait on the owner's look. Written to the owner's three drawings below,
 before any code; section 7 is the waves and section 8 what was built.
 
 The owner, 2026-11-15, with three MS Paint drawings (*"not perfectly to
