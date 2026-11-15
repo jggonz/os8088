@@ -22,6 +22,30 @@
 ; answer; every other register preserved.
 ; =============================================================================
 
+; **INCLUDED TWICE** (hddtool.asm): with HD_IPKG_TEXT defined it emits the
+; log's strings and nothing else, IN FRONT of the sector buffers, where they
+; fill the pad hdsec.inc's `align 512` would otherwise spend on zeros; without
+; it, everything else, past the buffers. Which strings go in front is a
+; PACKING question (hddtool.asm's tuning note says how to re-tune it) - every
+; string is DS-relative and means the same bytes wherever it sits.
+%ifdef HD_IPKG_TEXT
+hd_s_lkb:    db ' KB', 0
+hd_s_lbuf:   db 'Copy buffer: ', 0
+hd_s_lsrc:   db 'System disk: drive ', 0
+hd_s_lkeep:  db 'Keeping the files on ', 0
+hd_s_lfmt:   db 'Formatting the partition', 0
+hd_s_lmnt:   db 'Mounted as ', 0
+hd_s_lvbr:   db 'Writing the boot sector', 0
+hd_s_lboot:  db 'The disk starts os8088 now', 0
+hd_s_lafnd:  db 'Apps disk: drive ', 0
+hd_s_laask:  db 'No apps disk in a drive', 0
+hd_s_lasc:   db 'Writing '          ; ...and hd_s_assoc is its tail: ONE run,
+hd_s_assoc:  db 'ASSOC.DAT', 0      ; so nothing may be inserted between
+hd_s_lkept:  db 'kept', 0
+hd_s_lleft:  db 'left alone', 0
+hd_s_lsum0:  db 'Copied ', 0
+hd_s_lsum1:  db ' files, ', 0
+%else
 %if HDG_FAIL != HII_IDLE || HDG_APPS != HII_SYSDONE || HDG_DONE != HII_DONE
   %error "HDG_* (apps/os88api.inc) is HII_*'s numbering, and has drifted"
 %endif
@@ -134,14 +158,7 @@ hd_pv_slots:
     mov si, hd_line
     add di, HDIS_TEXT
     mov cx, HDIS_TEXTSZ - 1
-.cp:
-    lodsb
-    or al, al
-    jz .end
-    stosb
-    loop .cp
-.end:
-    mov byte [es:di], 0
+    call hd_pcopy
     pop di
     pop cx
     add di, HDIS_SIZE
@@ -187,7 +204,7 @@ hd_pv_dev:
 ; out AL = an HDG_* - the stage hd_inst_step left - and the caption at ES:DI
 ; -----------------------------------------------------------------------------
 hd_pv_go:
-    push bx                     ; hd_pv_out's frame: the engine runs below
+    push bx                     ; hd_pv_stage's frame: the engine runs below
     push cx                     ; and promises no register back, and these
     push dx                     ; verbs keep every one but AX (117.4)
     push si
@@ -205,9 +222,9 @@ hd_pv_go:
     mov [hd_isrcx], ch          ; apps disk (SPEC.md 117.10.5); 0FFh = as ever
     mov word [hd_imsg], hd_s_ibad
     cmp dh, 4
-    jae .fail
+    jae hd_pv_apps.fail         ; (HDI_APPS's refusal is this one too)
     call hd_pv_dev
-    jc .fail
+    jc hd_pv_apps.fail
     call hd_ia_rel              ; an earlier run abandoned at its apps prompt
     mov [hd_idev], dl           ; the device, and the slot
     mov [hd_isel], dh           ; the CALLER's: a fresh table, as 52.10.4.3
@@ -221,21 +238,17 @@ hd_pv_go:
 .wipe:                          ; GREYED there (52.10.15), so erase it is
     mov [hd_iwipe], cl
     call hd_iact_ok             ; may that slot be taken, as asked
-    jc .fail
+    jc hd_pv_apps.fail
     mov byte [hd_iautod], 0xFF  ; a fresh run asks the machine again
     mov byte [hd_iw_st], HII_ARMED  ; the wizard's Confirm page WAS the confirm
-    call hd_inst_step
-    jmp short hd_pv_stage
-.fail:
-    mov byte [hd_iw_st], HII_IDLE
-    jmp short hd_pv_stage
+    jmp short hd_pv_apps.step   ; ...and the run is HDI_APPS's from here on
 
 ; -----------------------------------------------------------------------------
 ; hd_pv_apps - HDI_APPS: the apps phase of the run HDI_GO left waiting.
 ;              ES:DI = an HDIB_* block. out as HDI_GO
 ; -----------------------------------------------------------------------------
 hd_pv_apps:
-    push bx                     ; hd_pv_out's frame: the engine runs below
+    push bx                     ; hd_pv_stage's frame: the engine runs below
     push cx                     ; and promises no register back, and these
     push dx                     ; verbs keep every one but AX (117.4)
     push si
@@ -246,6 +259,7 @@ hd_pv_apps:
     mov word [hd_imsg], hd_s_pvnone
     cmp byte [hd_iw_st], HII_SYSDONE
     jne .fail                   ; nothing waiting: the tool was reloaded
+.step:                          ; (HDI_GO's too, armed)
     call hd_inst_step
     jmp short hd_pv_stage
 .fail:
@@ -257,22 +271,15 @@ hd_pv_apps:
 hd_pv_stage:
     mov al, [hd_iw_st]
     mov si, [hd_imsg]
-    jmp short hd_pv_out
-
-hd_pv_out:
+.out:                           ; (this was hd_pv_out, reached only from here:
+                                ; a local now, so the stack walker follows the
+                                ; fall-through rather than starting it at 0)
     mov bp, sp                  ; THE CALLER'S ES:DI, off the verb's frame:
     mov es, [ss:bp]             ; the engine reads files and claims buffers
     mov di, [ss:bp+4]           ; and promises neither register back
     push ax
     mov cx, HDI_CAPSZ - 1
-.cp:
-    lodsb
-    or al, al
-    jz .end
-    stosb
-    loop .cp
-.end:
-    mov byte [es:di], 0
+    call hd_pcopy
     mov word [hd_ilogp], 0      ; no log outlives its verb (SPEC.md 117.4.1)
     pop ax
     pop es
@@ -285,6 +292,19 @@ hd_pv_out:
     clc
     ret
 
+; hd_pcopy - DS:SI to ES:DI, at most CX bytes and then a NUL: the three
+; copies into the CALLER's block (a slot's text, the caption, a log line),
+; which were one loop written out three times. DF = 0 (hd_pkgv's cld).
+; Clobbers AL, CX, SI, DI (DI left on the NUL), flags
+hd_pcopy:
+    lodsb
+    or al, al
+    jz .end
+    stosb
+    loop hd_pcopy
+.end:
+    mov byte [es:di], 0
+    ret
 
 ; -----------------------------------------------------------------------------
 ; hd_pv_quit - HDI_QUIT: abandon OUR run at its apps prompt. The system part
@@ -308,7 +328,7 @@ hd_s_pvnone: db 'Nothing to continue', 0   ; HDI_APPS with no run waiting
 ; drawn after the answer would be a line drawn after everything.
 ;
 ; Every entry keeps every register, and every entry is one compare and a
-; branch when nobody asked (hd_pv_out disarms it at the end of each verb).
+; branch when nobody asked (hd_pv_stage disarms it at the end of each verb).
 ; =============================================================================
 hd_ilogp:    dw 0               ; the package's log proc, 0 = none
 hd_ilogf:    dw PKG_DISP, 0     ; ...reached at its dispatcher (SPEC.md 20.2)
@@ -400,6 +420,7 @@ hd_ilog_dir:
 ; words - or, BX = 0, AX as KB
 hd_ilog_f:
     call os88_ent
+.body:                          ; (hd_ilog_file joins here, with its frame)
     call hd_il_open
     jc hd_il_out
     call hd_il_ind
@@ -433,14 +454,7 @@ hd_il_send:
     push di
     mov si, hd_lline
     mov cx, HDI_LINESZ - 1
-.cp:
-    lodsb
-    or al, al
-    jz .end
-    stosb
-    loop .cp
-.end:
-    mov byte [es:di], 0
+    call hd_pcopy
     pop si                      ; SI = the line, in the CALLER's segment
     mov bp, [hd_ilogp]
     push word [hd_ilogf+2]
@@ -459,11 +473,7 @@ hd_il_out:
 hd_ilog_file:
     cmp word [hd_ilogp], 0
     je .out
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call os88_ent               ; hd_ilog_f's own frame, which its body below
     mov ax, [hd_isize]          ; KB, rounded up: a 32-bit shift
     mov dx, [hd_isize+2]
     add ax, 1023
@@ -477,12 +487,7 @@ hd_ilog_file:
     add [hd_ilkb], ax
     mov si, hd_iname
     xor bx, bx
-    call hd_ilog_f
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp hd_ilog_f.body          ; ...gives back by hd_il_send's ladder
 .out:
     ret
 
@@ -503,20 +508,9 @@ hd_ilog_sum:
     call hd_scat
     jmp hd_il_send
 
-hd_s_lkb:    db ' KB', 0
-hd_s_lbuf:   db 'Copy buffer: ', 0
-hd_s_lsrc:   db 'System disk: drive ', 0
-hd_s_lkeep:  db 'Keeping the files on ', 0
-hd_s_lfmt:   db 'Formatting the partition', 0
-hd_s_lmnt:   db 'Mounted as ', 0
-hd_s_lvbr:   db 'Writing the boot sector', 0
 hd_s_lmbr:   db 'Writing the partition table', 0
-hd_s_lboot:  db 'The disk starts os8088 now', 0
-hd_s_lafnd:  db 'Apps disk: drive ', 0
-hd_s_laask:  db 'No apps disk in a drive', 0
-hd_s_lasc:   db 'Writing '          ; ...and hd_s_assoc is its tail: ONE run,
-hd_s_assoc:  db 'ASSOC.DAT', 0      ; so nothing may be inserted between
-hd_s_lkept:  db 'kept', 0
-hd_s_lleft:  db 'left alone', 0
-hd_s_lsum0:  db 'Copied ', 0
-hd_s_lsum1:  db ' files, ', 0
+                                ; (hd_s_lmbr is the one log string kept back
+                                ; here, past the buffers: the rest fit the pad
+                                ; in front exactly - driver size pass 1)
+
+%endif
