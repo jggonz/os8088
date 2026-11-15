@@ -226,6 +226,48 @@ ARENA_RESPAWNS = {"a2": HEIGHTS_RESPAWNS}    # (the hedge's and twin's: below)
 WA_MRSP = 8
 
 
+# A SPAWN'S FACING (the owner, 2026-11-15: "check the view isn't shoved
+# into a wall"): a respawn point or the start may stand beside a wall, but
+# its view must run FACE_CLEAR units before anything eye-high (FACE_WALL or
+# taller, or the room's wall where it has one). One that does not - the
+# hedge's, between its rings, were the worst - is turned, at build time, to
+# whichever of 16 directions runs clear the longest (the authored angle
+# breaking ties), so nothing on the guest asks.
+FACE_CLEAR = 448                # 7 m
+FACE_WALL = 96                  # a box this tall fills the eye's view
+FACE_DIRS = 16
+
+
+def clear_run(tag, boxes, x, y, a, cap=1024):
+    """units from (x, y) along angle a (1024ths, 256 north) before a wall"""
+    walls = [b for b in boxes if b.h >= FACE_WALL or b.kind == LINE]
+    room = ARENA_ROOMH.get(tag, WALL_H) > 0
+    t = a * 2 * math.pi / 1024
+    cx, cy = math.cos(t), math.sin(t)
+    d = 0
+    while d < cap:
+        d += 8
+        px, py = x + d * cx, y + d * cy
+        if room and not (ROOM[0] < px < ROOM[2] and ROOM[1] < py < ROOM[3]):
+            return d
+        if any(b[0] < px < b[2] and b[1] < py < b[3] for b in walls):
+            return d
+    return cap
+
+
+def facing(tag, boxes, x, y, a):
+    """a spawn's facing: a, or turned to the clearest view (above)"""
+    boxes = [bx(b) for b in boxes]
+    if clear_run(tag, boxes, x, y, a) >= FACE_CLEAR:
+        return a
+    step = 1024 // FACE_DIRS
+
+    def off(c):
+        return min((c - a) & 1023, (a - c) & 1023)
+    return max(range(0, 1024, step),
+               key=lambda c: (clear_run(tag, boxes, x, y, c), -off(c)))
+
+
 def respawns(tag, boxes, nodes, grid):
     """An arena's respawn points: [(x, y, facing, node)] - refused in a wall
     or off the floor; the node is the nearest the point sees"""
@@ -243,6 +285,7 @@ def respawns(tag, boxes, nodes, grid):
         d = sorted(range(len(nodes)), key=lambda k: math.hypot(
             nodes[k][0] - x, nodes[k][1] - y))
         seen = [k for k in d if sight_clear(grid, (x, y), nodes[k])]
+        a = facing(tag, boxes, x, y, a)     # (not into a wall)
         out.append((x, y, a, (seen or d)[0], side))
     if not 1 <= len(out) <= WA_MRSP:
         raise SystemExit("arenagen: arena %s: %d respawn points - 1 to %d"
@@ -2086,7 +2129,8 @@ def bsp_tables(w):
         P = "wa_%s_" % tag
         w("    dw %sxv, %d, %syv, %d, %svtx, %d, %scorn" % (P, nx, P, ny, P, nv, P))
         w("    dw %sboxes, %d, %sbsp, %d, %d, %d, %sbcol" % (
-            P, nb, P, start[0], start[1], start[2], P))
+            P, nb, P, start[0], start[1],
+            facing(tag, boxes, *start[:3]), P))
     w("%endif")
     w("WA_ARENASZ equ 28")
 
@@ -2282,7 +2326,8 @@ def arena_part(n, out):
          "    dw %sxv, %d, %syv, %d, %svtx, %d, %scorn" % (P, nx, P, ny, P, nv,
                                                          P),
          "    dw %sboxes, %d, %sbsp, %d, %d, %d, %sbcol, %d" % (
-             P, nb, P, start[0], start[1], start[2], P, nn),
+             P, nb, P, start[0], start[1], facing(tag, boxes, *start[:3]),
+             P, nn),
          "    dw %sbxh, %d, %d, %slifts" % (P, ARENA_ROOMH.get(tag, WALL_H),
                                          hmax(boxes), P)]
     gb = graph_block(tag, boxes)

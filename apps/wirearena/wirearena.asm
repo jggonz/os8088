@@ -6006,7 +6006,8 @@ wa_putca:
 ; wa_hudkill - AL = the killer's code here, AH = the dead one's (0 the
 ; player, 1..3 the figures; the same code twice, a suicide): "KILLER killed
 ; DEAD" - or "DEAD died" - the HUD's message for the next WA_HMSGT ticks,
-; the player's own name green. Keeps every register
+; the player's own name green - or in a team mode each name its team's
+; colour. Keeps every register
 wa_hudkill:
     push ax
     push bx
@@ -6059,6 +6060,14 @@ wa_hudname:                     ; BL = a code: its name at DI, its trailing
     jnz .a
     mov ah, 0x0A
 .a:
+    cmp byte [wa_gmode], 0      ; (a team mode: each name its team's
+    je .a0                      ; colour, the player's too - red or blue)
+    xor bh, bh
+    mov ah, 0x0C
+    cmp byte [wa_tm+bx], 0
+    je .a0
+    mov ah, 0x09
+.a0:
     cmp byte [wa_mono], 0
     je .a1
     mov ah, 0x0F

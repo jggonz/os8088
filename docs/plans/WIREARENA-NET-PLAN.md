@@ -612,3 +612,23 @@ cell's glyph and attribute out of arenagen's samples, the dot where the
 player stands - and red with the wall's colour changed (55 cells wrong).
 Floor and off-the-walk are both blank on mono, so the twin's walk does not
 show there.
+
+### 9.8 Offline; spawns that face the room; kills in team colours (2026-11-15)
+
+Three of the owner's:
+
+- **Play's first item is "offline"**, not "alone" (the setup's list; the
+  setting's value and every name for it in the code are unchanged).
+- **A spawn's facing** is checked when the map is built (arenagen's
+  `facing`): a respawn point or an arena's start may stand beside a wall,
+  but its view must run 448 units (7 m) before anything eye-high (96 units
+  or taller, a LINE, or the room's wall where it has one). One that does
+  not is turned to whichever of 16 directions runs clear the longest, the
+  authored angle breaking ties. The hedge's four on its axes and its start
+  had 72 units - a hedge in the face - and now have 712 to 840; one of the
+  heights' turns 22 degrees (328 -> 360); every other spawn keeps its
+  angle. Nothing on the guest asks.
+- **"X killed Y" in a team mode** (every mode but free-for-all) writes
+  each name in its team's colour, the player's own too (red or blue,
+  `wa_tm`); free-for-all keeps the player green. Checked on the glass:
+  capture the flag on the twin, `COG killed YOU`, COG blue and YOU red.
