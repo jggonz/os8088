@@ -1041,8 +1041,11 @@ wa_blkt:                        ; the figure that looks, by the tick's low
 ; the air: above the feet at all). Keeps CX, DI, BP (its two callers' own:
 ; the tick's steps in x and in y); clobbers AX, BX, DX, SI.
 wa_collide:
+    cmp word [wa_nfl], 0        ; (an arena with no floor lines - all but
+    je .nofl                    ; the twin: no call)
     call wa_flcross             ; (a floor line crossed: ARENAS-PLAN 4.5)
     jc .hit
+.nofl:
     mov ax, [wa_px]
     mov bx, [wa_py]
     cmp ax, WA_ROOM_X0 + WA_RAD
@@ -1057,10 +1060,17 @@ wa_collide:
     call wa_floor
     cmp byte [wa_aflat], 0
     jne .flat
-    call wa_fabs                ; DX = the feet, units: on the ground a
-    mov si, [wa_jz]             ; step more, in the air nothing more - a
-    or si, [wa_jv]              ; jump reaches what its feet clear (the
-    jnz .air                    ; back room's 48, not the platform's 80)
+    xchg ax, bx                 ; DX = the feet, units (wa_fabs's sum,
+    mov ax, [wa_jz]             ; here - each step of a walking tick asks
+    mov si, ax                  ; it): on the ground a step more, in the
+    or si, [wa_jv]              ; air nothing more - a jump reaches what
+    mov al, ah                  ; its feet clear (the back room's 48, not
+    cbw                         ; the platform's 80)
+    add ax, [wa_feet]
+    xchg ax, dx
+    xchg ax, bx                 ; (AX the floor again)
+    or si, si
+    jnz .air
     add dx, WA_STEPUP
 .air:
     cmp ax, dx
@@ -1094,13 +1104,8 @@ wa_collide:
 ; look alone.
 WA_FLGC     equ 4               ; a cell: its lines' offsets in wa_fl, 0FFh
                                 ; after the last (none past the fourth)
-wa_flcross:
-    cmp word [wa_nfl], 0
-    jne .on
-    clc
-    ret
-.on:
-    push cx
+wa_flcross:                     ; (wa_collide, its one caller, asks it
+    push cx                     ; only of an arena with floor lines)
     push di
     push bp
     mov di, [wa_py]             ; THE CELL, as wa_floor's: its row x 64 is
