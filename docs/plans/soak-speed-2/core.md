@@ -144,17 +144,55 @@ techniques are cited as "SOAK-SPEED n".
     checked equal on random frames). The VGA boot gate's band count
     likewise (equal on random frames).
 
-## Measurements
+## Measurements (2026-11-15, a box at load 5-9 with seven other agents)
 
-(after 09:05 UTC; see below)
+Wall time on this box is noise-dominated; the interleaved A/B below (base
+and new alternated row by row, two rounds) is the fair one. "new" = this
+branch + OS88_BOOTCACHE=1 + the rebuilt server (fine batches off).
+
+| row | base host s | new host s | note |
+|---|---|---|---|
+| fdlggrey | 10.4, 10.2 | 5.4, 4.7 | os88ui.boot: cached |
+| fmarrows | 9.7, 9.4 | 5.6, 6.2 | cached + `press` |
+| dispclose | 13.2, 12.8 | 13.0, 11.8 | raw launch: not cached |
+| drvup | 15.3, 14.9 | 14.9, 15.0 | `os8088_xt_hdd`: not cacheable |
+| dockmark | 21.0, 21.2 | 19.5, 20.1 | raw launch: not cached |
+
+- `bootcache check` (5150 CGA, 360KB pair): cached and fresh boots agree
+  on desk_rows, menu_nbar, spl_live, ss_idle, the mouse cells, dsk_vtab,
+  mem_top and the rendered frame's sha1. A miss boots in ~5-7 host s; a
+  hit is 0.03-0.04 host s.
+- fmarrows under cProfile: base 28.5 s (13.7 of it a cold os88sym map),
+  8.3 s in `recv_into`; final 6.0 s, 3.5 in `recv_into`. Waitlog: the boot
+  gate (14 guest s) gone; 8.3 guest s waited.
+- Scoped soaks, `--marty-jobs 1`: 25 rows (martyconc uilayer fmarrows
+  multiseg rehome rehomeabort mediadisk drvup evqfull drvscroll minexflag
+  heapscrl diskclone dockmark dockmodule dispclose dispdrag lzmod fdlggrey
+  fdlgup fdlgchoose sbar vbtmenu wimgtrip editmove) all green on the
+  deployed server without the cache, and all green with cache + rebuilt
+  server. Later, with the vram table: those minus a few plus dispherc1 and
+  alertanim (Hercules settles) green both ways.
+- FAILED and fixed: with the server's fine batches ON, fdlgchoose and
+  wimgtrip failed 3 in 3 and uilayer once (item 12): off by default now.
+- The `between` lines on 25 rows: 757 gaps, 538 guest s, 154 host s - the
+  machine running while the rows and harness do their own work. That is
+  the next work list (`os88marty.py waitlog build/...wl`).
 
 ## Next time, ranked by expected host time saved
 
-1. Make the boot cache the DEFAULT once a soak has run with it on and the
-   rows' results match: ~430 scripts boot through `os88ui.boot`.
-2. Convert the rest of the `launch(boot=False)` + `m.run()` +
-   `kernel_up(m)` openers (222 files call `kernel_up`) to `boot="up"`.
-3. `ui_done`'s hold loop (two `disk` calls and a tick read a pass) and
-   `key_taken`'s look as batches, like `_ui_settled1`.
-4. A server-side `wait` verb (86Box has `wait_mem`): the poll loops then cost
-   one round trip a wait rather than one per look.
+1. **Rebuild the emulator** (`tools/martypc/build.sh`) so items 11 and 13's
+   server half are live; until then the client falls back silently.
+2. **Make the boot cache the DEFAULT** once a wider soak has run with it on:
+   ~430 scripts boot through `os88ui.boot`, ~4-5 host s each on a hit.
+3. **Move raw-launch rows to `boot="up"`** where their first act is a verb
+   or a read (dispclose, dockmark and most of the 222 `kernel_up` callers
+   open `launch(...)` with a picture settle or `boot=False` + a different
+   shape): each one is then cacheable.
+4. **Finish the fine batch** (item 12): apply a `key`'s release a coarse
+   batch's worth of cycles after its press, server-side, and check the
+   failing pair green; `recv_into` halves.
+5. The `between` gaps (538 guest s on 25 rows): per call site, which rows
+   let the machine run while they compute.
+6. `key_taken`'s ring read and `ui_done`'s two `disk` calls a pass into the
+   batches; a server-side `wait` verb (86Box has `wait_mem`) would make a
+   poll loop one round trip a wait.
