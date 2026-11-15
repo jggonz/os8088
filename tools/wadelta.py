@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wadelta - WireArena's keyframes CODED for the disk.
+"""wadelta - WireArena's keyframes (and its sine table) CODED for the disk.
 
 A keyframe is NFACE facing rows of NJ (x, y) byte pairs (tools/arenagen.py's
 wa_pose, pre-projected for each facing). LZ sees none of their shape, and
@@ -25,6 +25,12 @@ keyframes' running sum, then per keyframe the rows' and the mirror).
   python3 tools/wadelta.py --tab build/watab.inc --part  IN OUT
         the RENDERER part (wrpart.bin): the hot keyframes, at the offset
         its header's WR_H_POSE word names (apps/wirearena/wafb.inc)
+  python3 tools/wadelta.py --tab build/watab.inc --sin   IN OUT
+        the PRIMARY (wirearena.bin): its quarter-wave sine table, wa_sin -
+        a smooth curve, so each word less the one before, twice (its second
+        difference is 0 or -1 nearly everywhere): ~470 bytes off the packed
+        image. Found by its contents, which watab.inc gives, and refused
+        unless they occur exactly once; wirearena.asm's wa_sinmk undoes it
 
 IN stays the image the assembler made - what the game holds once decoded,
 and what every tool that maps a build reads; OUT is only what the package
@@ -32,7 +38,7 @@ carries. Deterministic, and refuses rather than guesses: a header that is not
 the renderer's, a length that is not whole keyframes, or a facing that is
 not its opposite's mirror is an error.
 """
-import re, sys
+import re, struct, sys
 
 WR_H_POSE = 20                      # (apps/wirearena/wafb.inc)
 
@@ -81,12 +87,44 @@ def undo(b, F, R):                  # wa_undelta's loops, byte for byte
     return b
 
 
+def sintab(tab):
+    m = re.search(r"^wa_sin:\s*\n((?:\s+dw [^\n]*\n)+)", open(tab).read(), re.M)
+    if not m:
+        raise SystemExit("wadelta: %s has no wa_sin table" % tab)
+    return [int(v) for v in re.findall(r"-?\d+", "".join(
+        l.split(";")[0].replace("dw", "") for l in m.group(1).splitlines()))]
+
+
+def sincode(img, tab, src):
+    t = sintab(tab)
+    raw = struct.pack("<%dH" % len(t), *[v & 0xFFFF for v in t])
+    at = img.find(raw)
+    if at < 0 or img.find(raw, at + 1) >= 0:
+        raise SystemExit("wadelta: %s holds wa_sin %s" % (src, "nowhere" if at < 0
+                                                         else "more than once"))
+    w = list(t)
+    for p in (1, 2):                    # the first difference, then the second
+        for k in range(len(w) - 1, p - 1, -1):
+            w[k] = (w[k] - w[k - 1]) & 0xFFFF
+    u = list(w)                         # wa_sinmk's two sums, word for word
+    for p in (2, 1):
+        for k in range(p, len(u)):
+            u[k] = (u[k] + u[k - 1]) & 0xFFFF
+    if u != [v & 0xFFFF for v in t]:
+        raise SystemExit("wadelta: the sine coding did not round-trip - a bug here")
+    img[at:at + len(raw)] = struct.pack("<%dH" % len(w), *w)
+    return img
+
+
 def main(argv):
-    if len(argv) != 5 or argv[0] != "--tab" or argv[2] not in ("--pose", "--part"):
+    if len(argv) != 5 or argv[0] != "--tab" or argv[2] not in ("--pose", "--part", "--sin"):
         raise SystemExit(__doc__)
     c = consts(argv[1])
     src, dst = argv[3], argv[4]
     img = bytearray(open(src, "rb").read())
+    if argv[2] == "--sin":
+        open(dst, "wb").write(sincode(img, argv[1], src))
+        return 0
     F, R = c["WA_FRAMESZ"], c["WA_NJ"] * 2
     if argv[2] == "--pose":
         at, n = 0, (c["WA_NFRAMES"] - c["WA_KHOT"]) * F

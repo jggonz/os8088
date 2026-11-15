@@ -21365,14 +21365,17 @@ $(BUILD)/wapose.bin: apps/wirearena/wapose.asm apps/wirearena/waconst.inc $(BUIL
 	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -o $@ $<
 # The keyframes ride the file CODED (tools/wadelta.py: the mirrored half of
 # the facings as zeros, the rows and keyframes as differences - a quarter of
-# their LZ size), and wa_rbind undoes it at entry: the .bin is the image the
+# their LZ size), and the primary's sine table as its second difference; the
+# game undoes both at entry (wa_rbind, wa_sinmk): each .bin is the image the
 # game then holds - what the tools that map a build read - and the .dlt only
 # what is packed
 $(BUILD)/wrpart.dlt: $(BUILD)/wrpart.bin tools/wadelta.py $(BUILD)/watab.inc
 	python3 tools/wadelta.py --tab $(BUILD)/watab.inc --part $< $@
 $(BUILD)/wapose.dlt: $(BUILD)/wapose.bin tools/wadelta.py $(BUILD)/watab.inc
 	python3 tools/wadelta.py --tab $(BUILD)/watab.inc --pose $< $@
-$(BUILD)/wirerena.o88: $(BUILD)/wirearena.bin $(BUILD)/wrpart.dlt $(WAARENAS) $(BUILD)/wapose.dlt tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+$(BUILD)/wirearena.dlt: $(BUILD)/wirearena.bin tools/wadelta.py $(BUILD)/watab.inc
+	python3 tools/wadelta.py --tab $(BUILD)/watab.inc --sin $< $@
+$(BUILD)/wirerena.o88: $(BUILD)/wirearena.dlt $(BUILD)/wrpart.dlt $(WAARENAS) $(BUILD)/wapose.dlt tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $< -o $@ --part $(BUILD)/wrpart.dlt --part $(BUILD)/wapose.dlt $(addprefix --part ,$(WAARENAS)) --part-compress $(PKGZBFMT)
 #> [Applications] wirearenadisk :: its own floppies, wirerena{,720,120,360}.img
 wirearenadisk: $(BUILD)/wirerena.img $(BUILD)/wirerena720.img $(BUILD)/wirerena120.img $(BUILD)/wirerena360.img

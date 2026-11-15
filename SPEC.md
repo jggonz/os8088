@@ -251391,6 +251391,9 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
     undoes both in place at launch (`wa_undelta`), so the parts hold the
     assembler's bytes from then on, and `build/wrpart.bin` and
     `build/wapose.bin` are those bytes; only the `.dlt` copies are packed.
+    The primary's quarter-wave sine table (`wa_sin`) is shipped the same
+    way, as its second difference (`wadelta.py --sin`), and `wa_sinmk`
+    rebuilds it at entry before anything reads it.
   - **The verbs**: `WRV_INIT` (after a mode set), `WRV_GEOM`, `WRV_ARENA`
     (AL = an arena), `WRV_RENDER` (out AL = the frame number), `WRV_PRESENT`
     (out AX = cells written) and `WRV_TRACE` (a shot's cone; out the nearest

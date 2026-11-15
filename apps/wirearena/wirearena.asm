@@ -41,6 +41,7 @@ wa_entry:
     jc .out                     ; the kernel's, so before anything else; a
     call wa_rbind               ; refusal has said why in a toast
     jc .out
+    call wa_sinmk               ; (the sine table: shipped coded)
     mov al, OP_CARVE            ; ...and its claim may move: wa_partsmv
     call op_movable             ; re-reads the two words wa_rbind banked
     mov byte [wa_fov], 1        ; 75 degrees: the owner's pick of the three
@@ -6677,6 +6678,25 @@ wa_undelta:
 %if WA_KHOT < 2 || WA_NFRAMES - WA_KHOT < 2 || WA_FRAMESZ != WA_NFACE*WA_NJ*2
  %error "wa_undelta: two keyframes or more a part, NFACE rows of NJ pairs"
 %endif
+
+; wa_sinmk - at entry, before anything turns: wa_sin is shipped as its
+; second difference (tools/wadelta.py --sin; ~470 bytes fewer packed - a
+; quarter sine's is 0 or -1 nearly everywhere), and two running sums give
+; back the table arenagen made: the first difference from the second (from
+; entry 2 on), then the table (from 1). ~32 clk a word, once. Image words,
+; so an instance's own. Keeps all but AX, CX, SI and the flags
+wa_sinmk:
+    cld
+    mov si, wa_sin + 2
+    mov cx, 255
+    call .sum
+    mov si, wa_sin
+    mov cx, 256
+.sum:
+    lodsw                       ; [SI] += the word before it
+    add [si], ax
+    loop .sum
+    ret
 
 ; wa_partsmv - the parts standard's hook (OP_ONMOVE, SPEC.md 20.12.12): the
 ; carve moved, op_seg is right again, and the two words wa_rbind banked are
