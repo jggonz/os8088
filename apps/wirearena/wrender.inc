@@ -8068,11 +8068,11 @@ wa_cross:
 ;   frame, so it is not, and if it were, the write is a no-op.
 ; wa_nwr, the meter's N, counts the writes made: every listed cell and every
 ; blank (it used to count the cells that had changed).
-%macro PNEW 0                   ; this frame's cell: written
-    lodsw
-    xchg bx, ax
-    mov ax, [bx+di]             ; (DI = wa_cur)
-    mov [es:bx], ax
+%macro PNEW 0                   ; this frame's cell: written - by STOSW,
+    lodsw                       ; off DI (55 clk: wa_cur by a displacement,
+    xchg di, ax                 ; where indexed by BX off DI the read was 2
+    mov ax, [di+wa_cur]         ; clk cheaper and the ES store 5 dearer)
+    stosw
 %endmacro
 %macro POLD 1                   ; last frame's: blanked unless drawn again
     lodsw                       ; (DL = this frame, DH = a figure cell's
@@ -8093,7 +8093,6 @@ wa_present:
     push es
     mov es, [wa_vseg]
     mov si, [wa_newp]
-    mov di, wa_cur
     mov cx, [wa_newn]           ; bytes: 2 a cell
     mov bp, cx
     shr bp, 1                   ; BP = writes, for the meter
