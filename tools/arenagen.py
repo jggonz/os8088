@@ -610,6 +610,20 @@ def minimap(tag, boxes):
             lo = grid[r][c] | grid[r + 1][c] << 2
             hi = grid[r][c + 1] | grid[r + 1][c + 1] << 2
             out.append(lo | hi << 4)
+    # THE PHASE at 40 columns, a byte after: a cell is two samples there, the
+    # larger kind of the pair - so a 2 m corridor between two 1 m walls that
+    # straddles a pair's boundary shows as wall (the crossing's north-south
+    # arm, the owner's report). Pairs (2c, 2c+1), or (2c-1, 2c) - one sample
+    # alone at either end, a cell more - whichever splits fewer walls from
+    # floor; the first on a tie
+    def split(ph):
+        n = 0
+        for row in grid:
+            for c in range(-ph, MM_W, 2):
+                pair = {row[k] for k in (c, c + 1) if 0 <= k < MM_W}
+                n += 1 in pair and 3 in pair
+        return n
+    out.append(1 if split(1) < split(0) else 0)
     return bytes(out)
 
 

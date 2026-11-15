@@ -206,6 +206,23 @@ def main():
                          % g.p.byte(g.sym["wa_aflat"]))
         else:
             print("  %-26s flat" % "crossing:", flush=True)
+        g.m.key("Tab", up=False)        # THE MINIMAP at 40 columns: its
+        g.m.advance(cycles=TICK * 20)   # pairs a sample on (phase 1), so
+        g.m.key("Tab", down=False)      # the north-south arm, a 2 m way
+        blk = [g.p.byte(g.sym["wa_mma"] + i) for i in range(17 * 13)]
+        if g.p.byte(g.sym["wa_mmph"]) != 1 or \
+                g.p.byte(g.sym["wa_mmw"]) != 17 or \
+                any(blk[r * 17 + 8] in (blk[r * 17 + 7], blk[r * 17 + 9])
+                    for r in (3, 4, 5)):        # (the arm's column, its
+                                                # walls' either side)
+            fails.append("crossing: the minimap's north-south arm not open "
+                         "at 40 columns (phase %d, %d across, its column %r)"
+                         % (g.p.byte(g.sym["wa_mmph"]),
+                            g.p.byte(g.sym["wa_mmw"]),
+                            [blk[r * 17 + 7:r * 17 + 10] for r in range(2, 6)]))
+        else:
+            print("  %-26s open at 40 columns" % "crossing: the minimap's arm",
+                  flush=True)
         g.bench((1024, 256, ord("A")), fails, "crossing: bench view A")
     with boot() as ui:                  # THE ZIGGURAT (THREE-ARENAS-PLAN 3)
         g = match(ui, 6)
