@@ -67,12 +67,9 @@ throughout.
    into fewer than the two laps it checks, is a wait for verb 9's
    `wt_played` to pass 2.6 laps; `play_to_end`'s 60 s watch is a
    `os88qemu.Clock`.
-9. **os88soak's preflight on a shallow clone** (goal 3): `_buildnum_current`
-   compared `build/buildnum.inc` with `git rev-list --count`, but
-   tools/buildnum.py writes 0 ON PURPOSE on a shallow clone - so every
-   fresh container's `check` said MISS "make has not run since the last
-   commit" right after a make. It now also accepts what `buildnum.py` itself
-   would write.
+9. **os88soak's preflight on a shallow clone** (goal 3): found here too,
+   and fixed by the office stream's 10b460b (cherry-picked; this stream's
+   own version reverted so the two do not conflict).
 
 ## Measured
 
