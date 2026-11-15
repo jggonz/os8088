@@ -641,23 +641,22 @@ TWIN_PICKUPS = [
 TWIN_START = (640, 800, 0)
 
 
-# --- THE HEDGES (docs/plans/WIREARENA-HEDGES-PLAN.md): the owner's two
-# redrawings of the maze for speed, 2026-11-14. The same rings - a court
-# with the red stack, an inner ring, an outer ring - but the court larger,
-# every corridor 2 m (128) wide, every gap in a hedge 2 m and never facing
-# the next one out, and past the outer ring a 1 m WALL (the outer wall's
-# top, MP high) walked round the whole map, its gaps narrow enough to jump.
-# The three rooms stand OUTSIDE that wall, west, east and south, each a 4 x
-# 8 m pocket off a gap, a platform in it; the lift is in the north gap and
-# rises to the wall's top. Tall fill boxes are the edge round the rooms: a
-# tall box is the cheap one to draw and the one that hides (a box at the
-# wall's height would be an outline, and hide nothing).
+# --- THE HEDGE (docs/plans/WIREARENA-HEDGES-PLAN.md): the owner's redrawing
+# of the maze, 2026-11-14 - chosen over a second drawing with four gaps a
+# ring for its play: the gaps' offsets tell you where you are. The same rings
+# - a court with the red stack, an inner ring, an outer ring - but the court
+# larger, every corridor 2 m (128) wide, every gap in a hedge 2 m and never
+# facing the next one out, and past the outer ring a 1 m WALL (the outer
+# wall's top, MP high) walked round the whole map, its gaps narrow enough to
+# jump. The three rooms stand OUTSIDE that wall, west, east and south, each a
+# 4 x 8 m pocket off a gap, a platform in it; the lift is in the north gap
+# and rises to the wall's top. Tall fills round the rooms are the EDGE, in
+# the room's blue as the room's own walls are (the owner's drawing): a tall
+# box is the cheap one to draw and the one that hides.
 # Absolute coordinates; the main square x 256..1792, y 256..2048, the
-# court's middle (1024, 1152). HEDGE A has the fewer gaps: the court's N and
-# S, the middle ring's W (by its north end) and E (by its south end). HEDGE
-# B has four of each: the court's at its sides' middles, the middle ring's
-# a pinwheel, one by an end of each side.
-def _hedge(four):
+# court's middle (1024, 1152). The court's hedge is open N and S at the
+# middle; the middle hedge W by its north end and E by its south end.
+def _hedge():
     H, G = MH, COL_HEDGE
     bx_ = [
         # the stack, as the maze's: 384, 256 and 128 square
@@ -670,98 +669,61 @@ def _hedge(four):
         Box(832, 960, 1216, 1024, 48, col=COL_PLAT, name="stack bottom S"),
         Box(1152, 1024, 1216, 1280, 48, col=COL_PLAT, name="stack bottom E"),
         Box(832, 1024, 896, 1280, 48, col=COL_PLAT, name="stack bottom W"),
-    ]
-    # the court's hedge, x 640..1408, y 640..1664, 1 m thick: gaps 960..1088
-    # (N and S) and 1088..1216 (W and E)
-    if four:
-        bx_ += [Box(640, 1600, 960, 1664, H, col=G, name="inner hedge N-W"),
-                Box(1088, 1600, 1408, 1664, H, col=G, name="inner hedge N-E"),
-                Box(640, 640, 960, 704, H, col=G, name="inner hedge S-W"),
-                Box(1088, 640, 1408, 704, H, col=G, name="inner hedge S-E"),
-                Box(640, 1216, 704, 1600, H, col=G, name="inner hedge W-N"),
-                Box(640, 704, 704, 1088, H, col=G, name="inner hedge W-S"),
-                Box(1344, 1216, 1408, 1600, H, col=G, name="inner hedge E-N"),
-                Box(1344, 704, 1408, 1088, H, col=G, name="inner hedge E-S")]
-    else:
-        bx_ += [Box(640, 640, 704, 1664, H, col=G, name="inner hedge W"),
-                Box(1344, 640, 1408, 1664, H, col=G, name="inner hedge E"),
-                Box(704, 1600, 960, 1664, H, col=G, name="inner hedge N-W"),
-                Box(1088, 1600, 1344, 1664, H, col=G, name="inner hedge N-E"),
-                Box(704, 640, 960, 704, H, col=G, name="inner hedge S-W"),
-                Box(1088, 640, 1344, 704, H, col=G, name="inner hedge S-E")]
-    # the middle hedge, x 448..1600, y 448..1856: a side a box, each past a
-    # corner, so a gap is where one side stops short of the next. B's
-    # pinwheel: N by its east end, E by its south, S by its west, W by its
-    # north - its NE corner a box of its own, since no axis line splits a
-    # pinwheel (the box tree's rule). A: W and E only
-    if four:
-        bx_ += [Box(448, 1792, 1408, 1856, H, col=G, name="middle hedge N"),
-                Box(1536, 1792, 1600, 1856, H, col=G, name="middle hedge NE"),
-                Box(1536, 640, 1600, 1792, H, col=G, name="middle hedge E"),
-                Box(640, 448, 1600, 512, H, col=G, name="middle hedge S"),
-                Box(448, 448, 512, 1664, H, col=G, name="middle hedge W")]
-    else:
-        bx_ += [Box(448, 1792, 1600, 1856, H, col=G, name="middle hedge N"),
-                Box(1536, 640, 1600, 1792, H, col=G, name="middle hedge E"),
-                Box(512, 448, 1600, 512, H, col=G, name="middle hedge S"),
-                Box(448, 448, 512, 1664, H, col=G, name="middle hedge W")]
-    # the outer wall, 1 m thick and MP high, walked round: its gaps 2 m,
-    # into the rooms and (north) the lift's
-    bx_ += [Box(256, 256, 320, 1088, MP, col=G, name="wall W-S"),
-            Box(256, 1216, 320, 2048, MP, col=G, name="wall W-N"),
-            Box(1728, 256, 1792, 1088, MP, col=G, name="wall E-S"),
-            Box(1728, 1216, 1792, 2048, MP, col=G, name="wall E-N"),
-            Box(320, 256, 960, 320, MP, col=G, name="wall S-W"),
-            Box(1088, 256, 1728, 320, MP, col=G, name="wall S-E"),
-            Box(320, 1984, 960, 2048, MP, col=G, name="wall N-W"),
-            Box(1088, 1984, 1728, 2048, MP, col=G, name="wall N-E"),
-            Box(960, 1984, 1088, 2048, 16, col=COL_PLAT, kind=LIFT, top=MP,
-                name="the lift")]
-    # the edge: tall fills round the three rooms (W and E 4 x 8 m, y 896..
-    # 1408; S 8 x 4 m, x 768..1280), and each room's platform
-    bx_ += [Box(0, 0, 256, 896, H, col=G, name="fill W-S"),
-            Box(0, 1408, 256, 2048, H, col=G, name="fill W-N"),
-            Box(1792, 0, 2048, 896, H, col=G, name="fill E-S"),
-            Box(1792, 1408, 2048, 2048, H, col=G, name="fill E-N"),
-            Box(256, 0, 768, 256, H, col=G, name="fill S-W"),
-            Box(1280, 0, 1792, 256, H, col=G, name="fill S-E"),
-            Box(64, 1088, 192, 1216, 48, col=COL_PLAT, name="west room's platform"),
-            Box(1856, 1088, 1984, 1216, 48, col=COL_PLAT, name="east room's platform"),
-            Box(960, 64, 1088, 192, 48, col=COL_PLAT, name="south room's platform")]
+        # the court's hedge, x 640..1408, y 640..1664, 1 m thick: its gaps
+        # x 960..1088, N and S
+        Box(640, 640, 704, 1664, H, col=G, name="inner hedge W"),
+        Box(1344, 640, 1408, 1664, H, col=G, name="inner hedge E"),
+        Box(704, 1600, 960, 1664, H, col=G, name="inner hedge N-W"),
+        Box(1088, 1600, 1344, 1664, H, col=G, name="inner hedge N-E"),
+        Box(704, 640, 960, 704, H, col=G, name="inner hedge S-W"),
+        Box(1088, 640, 1344, 704, H, col=G, name="inner hedge S-E"),
+        # the middle hedge, x 448..1600, y 448..1856: a side a box, each past
+        # a corner, so a gap is where one side stops short of the next - W
+        # y 1664..1792, E y 512..640
+        Box(448, 1792, 1600, 1856, H, col=G, name="middle hedge N"),
+        Box(1536, 640, 1600, 1792, H, col=G, name="middle hedge E"),
+        Box(512, 448, 1600, 512, H, col=G, name="middle hedge S"),
+        Box(448, 448, 512, 1664, H, col=G, name="middle hedge W"),
+        # the outer wall, 1 m thick and MP high, walked round: its gaps 2 m,
+        # into the rooms and (north) the lift's
+        Box(256, 256, 320, 1088, MP, col=G, name="wall W-S"),
+        Box(256, 1216, 320, 2048, MP, col=G, name="wall W-N"),
+        Box(1728, 256, 1792, 1088, MP, col=G, name="wall E-S"),
+        Box(1728, 1216, 1792, 2048, MP, col=G, name="wall E-N"),
+        Box(320, 256, 960, 320, MP, col=G, name="wall S-W"),
+        Box(1088, 256, 1728, 320, MP, col=G, name="wall S-E"),
+        Box(320, 1984, 960, 2048, MP, col=G, name="wall N-W"),
+        Box(1088, 1984, 1728, 2048, MP, col=G, name="wall N-E"),
+        Box(960, 1984, 1088, 2048, 16, col=COL_PLAT, kind=LIFT, top=MP,
+            name="the lift"),
+        # the edge: tall fills round the three rooms (W and E 4 x 8 m, y
+        # 896..1408; S 8 x 4 m, x 768..1280), and each room's platform
+        Box(0, 0, 256, 896, H, col=COL_ROOM, name="fill W-S"),
+        Box(0, 1408, 256, 2048, H, col=COL_ROOM, name="fill W-N"),
+        Box(1792, 0, 2048, 896, H, col=COL_ROOM, name="fill E-S"),
+        Box(1792, 1408, 2048, 2048, H, col=COL_ROOM, name="fill E-N"),
+        Box(256, 0, 768, 256, H, col=COL_ROOM, name="fill S-W"),
+        Box(1280, 0, 1792, 256, H, col=COL_ROOM, name="fill S-E"),
+        Box(64, 1088, 192, 1216, 48, col=COL_PLAT, name="west room's platform"),
+        Box(1856, 1088, 1984, 1216, 48, col=COL_PLAT, name="east room's platform"),
+        Box(960, 64, 1088, 192, 48, col=COL_PLAT, name="south room's platform")]
     # the route graph: the court round the stack, the inner ring, the outer
     # ring, the three rooms (their nodes before the platforms, as the maze's)
-    if four:
-        court = [(768, 832), (1024, 832), (1280, 832), (1280, 1152),
-                 (1280, 1472), (1024, 1472), (768, 1472), (768, 1152)]  # 0-7
-        inner = [(576, 576), (1024, 576), (1472, 576), (1472, 1152),
-                 (1472, 1728), (1024, 1728), (576, 1728), (576, 1152)]  # 8-15
-        outer = [(384, 384), (576, 384), (1024, 384), (1664, 384),
-                 (1664, 576), (1664, 1152), (1664, 1920), (1472, 1920),
-                 (1024, 1920), (384, 1920), (384, 1728), (384, 1152)]   # 16-27
-        nodes = court + inner + outer + [(1824, 1152), (224, 1152), (1024, 224)]
-        legs = [(i, (i + 1) % 8) for i in range(8)] + \
-               [(8 + i, 8 + (i + 1) % 8) for i in range(8)] + \
-               [(16 + i, 16 + (i + 1) % 12) for i in range(12)] + \
-               [(1, 9), (3, 11), (5, 13), (7, 15),      # the court's gaps
-                (12, 23), (10, 20), (8, 17), (14, 26),  # the middle's
-                (21, 28), (27, 29), (18, 30)]           # the rooms
-        homes = [list(range(8, 16)), list(range(16, 28)), list(range(0, 8))]
-    else:
-        court = [(768, 832), (1024, 832), (1280, 832), (1280, 1472),
-                 (1024, 1472), (768, 1472)]                             # 0-5
-        inner = [(576, 576), (1024, 576), (1472, 576), (1472, 1728),
-                 (1024, 1728), (576, 1728)]                             # 6-11
-        outer = [(384, 384), (1024, 384), (1664, 384), (1664, 576),
-                 (1664, 1152), (1664, 1920), (1024, 1920), (384, 1920),
-                 (384, 1728), (384, 1152)]                              # 12-21
-        nodes = court + inner + outer + [(1824, 1152), (224, 1152), (1024, 224)]
-        legs = [(i, (i + 1) % 6) for i in range(6)] + \
-               [(6 + i, 6 + (i + 1) % 6) for i in range(6)] + \
-               [(12 + i, 12 + (i + 1) % 10) for i in range(10)] + \
-               [(1, 7), (4, 10),                        # the court's gaps
-                (11, 20), (8, 15),                      # the middle's
-                (16, 22), (21, 23), (13, 24)]           # the rooms
-        homes = [list(range(6, 12)), list(range(12, 22)), list(range(0, 6))]
+    court = [(768, 832), (1024, 832), (1280, 832), (1280, 1472),
+             (1024, 1472), (768, 1472)]                             # 0-5
+    inner = [(576, 576), (1024, 576), (1472, 576), (1472, 1728),
+             (1024, 1728), (576, 1728)]                             # 6-11
+    outer = [(384, 384), (1024, 384), (1664, 384), (1664, 576),
+             (1664, 1152), (1664, 1920), (1024, 1920), (384, 1920),
+             (384, 1728), (384, 1152)]                              # 12-21
+    nodes = court + inner + outer + [(1824, 1152), (224, 1152), (1024, 224)]
+    legs = [(i, (i + 1) % 6) for i in range(6)] + \
+           [(6 + i, 6 + (i + 1) % 6) for i in range(6)] + \
+           [(12 + i, 12 + (i + 1) % 10) for i in range(10)] + \
+           [(1, 7), (4, 10),                        # the court's gaps
+            (11, 20), (8, 15),                      # the middle's
+            (16, 22), (21, 23), (13, 24)]           # the rooms
+    homes = [list(range(6, 12)), list(range(12, 22)), list(range(0, 6))]
     graph = dict(nodes=nodes, legs=legs, homes=homes)
     resp = [(1024, 384, 256), (384, 1152, 0), (1664, 1152, 512),
             (1024, 1920, 768), (576, 1152, 768), (1472, 1152, 256),
@@ -778,10 +740,8 @@ def _hedge(four):
     return bx_, graph, resp, pks, start, bench
 
 
-HEDGEA_BOXES, HEDGEA_GRAPH, HEDGEA_RESPAWNS, HEDGEA_PICKUPS, HEDGEA_START, \
-    HEDGEA_BENCH = _hedge(False)
-HEDGEB_BOXES, HEDGEB_GRAPH, HEDGEB_RESPAWNS, HEDGEB_PICKUPS, HEDGEB_START, \
-    HEDGEB_BENCH = _hedge(True)
+HEDGE_BOXES, HEDGE_GRAPH, HEDGE_RESPAWNS, HEDGE_PICKUPS, HEDGE_START, \
+    HEDGE_BENCH = _hedge()
 
 
 def arenas():
@@ -790,16 +750,15 @@ def arenas():
             ("a2", "Heights", HEIGHTS_BOXES, PLAYER_START),
             ("a3", "Maze", MAZE_BOXES, MAZE_START),
             ("a4", "Twin", TWIN_BOXES, TWIN_START),
-            ("a5", "Hedge A", HEDGEA_BOXES, HEDGEA_START),
-            ("a6", "Hedge B", HEDGEB_BOXES, HEDGEB_START)]
+            ("a5", "Hedge", HEDGE_BOXES, HEDGE_START)]
 
 
 # an arena's own patrols (the rest walk PATHS): every arena's are WA_NFIG
 # loops - an arena with no route graph of its own walks them as one
 ARENA_PATHS = {"a2": HEIGHTS_PATHS}
 ARENA_GRAPHS = {"a2": HEIGHTS_GRAPH, "a3": MAZE_GRAPH, "a4": TWIN_GRAPH,
-                "a5": HEDGEA_GRAPH, "a6": HEDGEB_GRAPH}
-ARENA_ROOMCOL = {"a3": COL_HEDGE, "a5": COL_HEDGE, "a6": COL_HEDGE}
+                "a5": HEDGE_GRAPH}
+ARENA_ROOMCOL = {"a3": COL_HEDGE}
 # FLOOR LINES (ARENAS-PLAN 4.5): an arena's closed lines on the floor, the
 # feet's edge - and its room's height, 0 for no room walls at all
 ARENA_FLINES = {"a4": TWIN_WALK}
@@ -849,9 +808,9 @@ def in_walk(tag, x, y, r=0):
 # the owner's stress tests (ARENAS-PLAN 4.4: "to see how well the system holds
 # up"), each with its own ceiling and its frame rate measured where it is
 # worst. (boxes, outline edges)
-OVER_BUDGET = {"a3": (20, 44), "a5": (20, 44), "a6": (20, 44)}
+OVER_BUDGET = {"a3": (20, 44), "a5": (20, 44)}
 ARENA_RESPAWNS.update({"a3": MAZE_RESPAWNS, "a4": TWIN_RESPAWNS,
-                       "a5": HEDGEA_RESPAWNS, "a6": HEDGEB_RESPAWNS})
+                       "a5": HEDGE_RESPAWNS})
 # THE PLAY BENCH'S VIEWS (P, MULTIPLAYER-FPS-PLAN 16.7; ARENAS-PLAN 4.2), an
 # arena's own, each P press the next: mark, x, y, angle (1024ths), base
 # pitch, the floor under the eye. The heights arena's five are HEIGHTS-PLAN
@@ -870,7 +829,7 @@ ARENA_BENCH = {
            ("B", 512, 1024, 0, -40, 240),       # on the west tower
            ("C", 1024, 832, 0, 0, 0),           # the path's bottom
            ("D", 192, 1024, 0, 0, 0)],          # behind the lift: the flag
-    "a5": HEDGEA_BENCH, "a6": HEDGEB_BENCH,
+    "a5": HEDGE_BENCH,
 }
 
 
@@ -1313,8 +1272,7 @@ HEIGHTS_PICKUPS = [
     ((PK_ROCKET, PK_RAIL), 1952, 1024),
 ]
 ARENA_PICKUPS = {"a2": HEIGHTS_PICKUPS, "a3": MAZE_PICKUPS,
-                 "a4": TWIN_PICKUPS, "a5": HEDGEA_PICKUPS,
-                 "a6": HEDGEB_PICKUPS}
+                 "a4": TWIN_PICKUPS, "a5": HEDGE_PICKUPS}
 
 
 def pickups(tag, boxes):

@@ -1,10 +1,11 @@
 # WireArena: the Hedges, the maze redrawn for speed
 
-**STATUS: TRIAL BUILT** (2026-11-15), on branch `multiplayer-fps`. The
-owner's two redrawings of the Maze are playable as arenas 5 and 6, `hedge A`
-and `hedge B`, beside the Maze (arena 3), which is unchanged. Section 3 is
-what they measure; section 4 is what would make them faster. The owner picks
-what stays.
+**STATUS: BUILT, A CHOSEN** (2026-11-15), on branch `multiplayer-fps`. The
+owner's two redrawings of the Maze were built as arenas 5 and 6 beside the
+Maze (arena 3), which is unchanged. The owner chose A, `hedge`, for its PLAY
+- *"the offsets hint where you are"* - and B is gone (section 6). Section 3
+is what they measured; section 4 what would make them faster, of which the
+owner asked for 4.1 and 4.2.
 
 The owner's brief, 2026-11-14, with two drawings (not to scale):
 
@@ -178,7 +179,7 @@ In order of what it buys:
 3. **Hedge A over B.** Fewer gaps, less seen: B costs 10% more.
 4. **No room platforms**: -3%, the rooms' views -20%.
 
-## 5. Checklist
+## 5. Checklist (the trial)
 
 - [x] Hedge A and Hedge B as arenas 5 and 6, playable, on the setup's
   arena list (`hedge A`, `hedge B`)
@@ -190,3 +191,29 @@ In order of what it buys:
   are wanted
 - [ ] Suite rows to run once the layout is chosen: `waarenas` and `walift`
   (the setup's arena count comes off `arenagen.arenas()`)
+
+## 6. The owner's rulings, 2026-11-15
+
+> *"The longer hallways serve their purpose well, and basically make A/B
+> close to the same - you can't see from one entrance into and through a
+> second entrance like you could in the smaller old hedge. So I will pick A
+> - but the reason is gameplay rather than performance, in this case."*
+
+- **A stays as arena 5, `hedge`; B is removed.** Its pinwheel note
+  (section 2) stands as a fact about the box tree.
+- **A's outer ring was not slower than B's.** The question was why fewer
+  gaps should cost more. They do not: each arena's seeded poses are its
+  own, about 50 in the outer ring, and one frame there runs 40,000 to
+  330,000 clk. On A's own 200 poses B measures 136.6 kclk to A's 138.7 in
+  the outer ring, and more everywhere else (court +8 to +22%, inner +14%,
+  all +7.1%).
+- **What the tall-wall test was.** It raised the walkway ITSELF to the
+  hedges' height - no wall added. Its saving is mostly not what the tall
+  wall hid: about three quarters is the outline path a low box takes,
+  which section 4.1 attacks.
+- **The edge is blue.** The fills are boxes of their own, so they take the
+  room's blue (`COL_ROOM`), and the room's own walls (the north edge) go
+  back to the room's colour from the hedges' green, as drawn.
+- **Section 4.1 (low boxes as faces) and 4.2 (a box standing on a box)
+  are asked for**, 4.1 with *"push a bit on it ... a lot of setup that can
+  be optimized, reduced or even removed"*.
