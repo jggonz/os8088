@@ -5,7 +5,8 @@ on every adapter the game runs on. Section 5 gives the measured frame times,
 section 6 the parts of the brief that changed on the way, and section 7 the
 checklist. The Twin was rebuilt the same day from the owner's drawing
 (section 3): two squares and a path drawn as FLOOR LINES, with no room walls
-(4.5, 4.6).
+(4.5, 4.6). The floor lines' drawer was rebuilt on 2026-11-15 (4.5; section
+5, *The second drawer*).
 
 The owner's brief, 2026-11-14:
 
@@ -226,61 +227,77 @@ line on the floor between two of the arena's vertices, at any angle.
     `wa_fl`, for the game) and the vertex pairs into its own `wa_fqv`.
     `WR_ABI` is 9.
 - **Drawing** (`wa_flines`, after every box and before the floor's dots, in
-  the room's colour).
-  - A line's ends come through the vertex cache.
-  - Both ends in front and inside the guard band: no clip, and their
-    columns are the cache's. Else `wa_clip` and a projection.
-  - A line wholly off one side of the screen costs a few compares.
-  - The floor is a plane, so a floor line's half-row is linear across its
-    columns and its column is linear down its rows. Each step is ONE
-    divide, 8.8 fixed point (under a tenth of a half-row adrift across the
-    widest screen), then a 16.16 add in registers.
-  - A SHALLOW line, under a half-row a column, is walked by COLUMN, a cell
-    each, in dashes.
-  - A STEEP one is walked by CELL ROW, a cell each. It draws a post's `│`
-    where its column holds, and `\` or `/` where it steps.
-  - The first version filled each column's step with slashes, and a column
-    of slashes read as two parallel lines: the owner's *"weirdly doubled"*,
-    2026-11-14.
-  - The steep threshold was two half-rows a column. Past one, a line of
-    dashes read as steps: the owner's *"horizontally stacked"*. It is one
-    now.
-  - The renderer's frame stamp laps every 127 frames. The floor lines'
-    caches (a vertex's row, a column's record) are cleared with the cell
-    stamps and the vertex cache when it does.
-- **What hides it.** A column with nothing drawn in it (no tall face, no
-  depth-stack entry) needs no test: two compares. Any other column has a
-  RECORD (`wa_fqmk`), made once a frame by whichever line asks first:
-  - the foot of its tall face, from the wall's 1/z (`wa_colz`) and one
-    multiply. A tall face stands on the floor, so a floor point is behind
-    it exactly when it lies at or above that row;
-  - up to two depth-stack entries (a lift, a tower seen from above), each
-    as the half-rows it hides a floor point in: from the row it hides from
-    to the floor's row at its own depth. That row is made lazily, the first
-    time a point lies past the row.
-  - A floor point's depth is a function of its row alone. So every test is
-    a compare, and no line needs a 1/z of its own.
-  - More than two entries ask `wa_occl`, with the point's 1/z from its row.
-  - A tall face's foot is linear across its columns (the floor's row is
-    linear in 1/z, and 1/z in the column). So `wa_fqspf` makes each wall
-    span's FOOT LINE once a frame, its first row and an 8.8 step, and a
-    column's foot is one multiply. Before, it was `wa_wallz`'s divide and a
-    multiply. The stack entries' feet read the same lines.
+  the room's colour). The drawer was rebuilt on 2026-11-15: the first one
+  cost more than the arena's boxes, figures and pickups together (section 5,
+  *The second drawer*). The picture is the same to a rounding.
+  - **Ends once a view, cells every frame.** A line's two ends ON THE SCREEN
+    are made when the view, the pitch or the eye has moved (`wa_flmake`) and
+    kept in its record. Every frame draws from the records (`wa_fldraw`). So
+    a still view pays for its lines' cells and nothing else.
+  - **The vertices.** The floor lines have their own vertex records, one a
+    distinct point (`wa_flinit`, at GEOM). When the view moves, each goes
+    into camera space off the frame's products - two adds - and is tested
+    against the four planes the screen's floor lies between:
+    - its BOTTOM and its TOP. The floor's row is a function of depth alone,
+      so each screen edge is a depth, `wa_fqzn` and `wa_fqzf`, a divide a
+      frame. There is a top only when the horizon is above the screen,
+      looking down;
+    - its two SIDES. A vertex inside the 90 degrees every view lies within
+      is tested by its COLUMN - the projection's own divide, which a line
+      drawn to it needs anyway. One outside them needs no divide.
+    A vertex nearer than the screen's bottom is asked nothing more.
+  - **The lines.** Both ends outside one plane: nothing, for two byte loads
+    and a test. Both inside: the ends are the vertices' own column and row,
+    the row made once a vertex. Any other is CUT in camera space at the
+    planes it crosses, a divide a cut, to a quarter of a unit - a line by
+    the player's feet is cut a few units from the eye, where a whole unit is
+    half a column. A cut end lies on the screen's edge: no guard band, and
+    nothing off the screen to step over.
+  - **The walk is an error term** (Bresenham's), set up without a divide and
+    exact from the ends' sixteenths of a column and quarters of a half-row.
+    The first drawer stepped an 8.8 fraction, a divide a line.
+    - A SHALLOW line, under a half-row a column, is walked by COLUMN in
+      dashes. A half-row on is the other dash, and every second one the next
+      row: no table, no row kept.
+    - A STEEP one is walked by CELL ROW. It draws a post's `│` where its
+      column holds, and `\` or `/` where it steps.
+    - The first version filled each column's step with slashes, and a column
+      of slashes read as two parallel lines: the owner's *"weirdly
+      doubled"*, 2026-11-14.
+    - The steep threshold was two half-rows a column. Past one, a line of
+      dashes read as steps: the owner's *"horizontally stacked"*. It is one
+      now.
+- **What hides it.** A floor point's depth is a function of its row alone,
+  so it is behind a face exactly when it lies above the face's foot.
+  - The frame's spans give the HULL of the columns anything was drawn in,
+    once a frame. A line whose columns lie outside it is walked with no test
+    at all.
+  - Inside it, a column with a tall face, or a cell at or under a low box's
+    top (`wa_cclip`), is asked about.
+  - A span's foot lies between its two ends' feet (`wa_flfeet`, two
+    multiplies once a frame a span). Those two settle nearly every ask with
+    two compares, in the walk's own loop. A point between them takes the
+    foot in its column, a divide (`wa_flfoot`).
+  - Behind a tall face, the face's other columns are stepped over AT ONCE -
+    a multiply and a divide - while the line stays above the face's whole
+    foot. A tower before the eye hides a dozen columns of every line behind
+    it.
+- **Tried and not kept: ends snapped to cells.** The figures' limbs are
+  drawn between whole sub-pixels (`wa_flgo`), with a setup of some thirty
+  instructions and no multiply. Floor lines drawn that way, between their
+  ends' cells, were 6,000 cycles a frame cheaper and visibly wrong: a far
+  line is two or three half-rows tall on the screen, and a half-row's error
+  at each end split one far edge into two rows of dashes. Over the 40
+  seeded poses its picture differed from the first drawer's in 321 line
+  cells, where the exact walk differs in 45, and an exact referee sided
+  with the first drawer in 275 of them.
 - **Considered and not built: drawing floor lines inside the box walk.**
   - The idea: each line cut where the box tree's split lines and each box's
     faces cross it, every piece drawn at its place in the front-to-back
-    walk. The column clip alone would then hide it, as it hides a wall, and
-    no record would be needed.
-  - The owner asked for it on 2026-11-14. Measured against the tower-top
-    frame, it does not pay:
-    - the records and tests it removes are about 25,000 cycles;
-    - the twin's 16 lines become about 50 pieces;
-    - each piece needs its cut points projected (a transform and a divide)
-      and a walk set up of its own, about 2,100 cycles a piece - more than
-      all the floor lines cost now.
-  - Per-line setup is the larger part (about 56,000), and it is a wall
-    edge's arithmetic: a divide and a multiply for each end, a divide for
-    the step.
+    walk. The column clip alone would then hide it, as it hides a wall.
+  - The owner asked for it on 2026-11-14. Hiding is now about 5,000 to
+    9,000 cycles a frame; the twin's 16 lines would become about 50 pieces,
+    each with a setup of its own of about 1,100 cycles.
 - **The feet.** `wa_collide` asks `wa_flcross` first. A step that crosses a
   floor line is refused, as a wall's is, and the player slides along it.
   - A line is near only when the new point is within 16 units of its box.
@@ -294,6 +311,9 @@ line on the floor between two of the arena's vertices, at any angle.
     polygon, with a margin).
 
   `wamodel` counts a floor line in view as one edge.
+
+Row `waflines` (soak) holds the drawer's picture to an exact referee: the
+game's integer camera space, then the line's image in exact rationals.
 
 ### 4.6 An arena with no room walls
 
@@ -329,7 +349,8 @@ cycles a pose:
 | maze | 36.5 | 15 boxes, 42 edges |
 | first twin, LINE boxes as low boxes (two edges each) | 69.8 | 16 boxes, 56 edges |
 | first twin, LINE boxes as one edge (section 2) | 64.0 | 16 boxes, 37 edges |
-| **twin as drawn: floor lines, no room walls** | **35.6** | 4 boxes, 15 edges |
+| twin as drawn: floor lines, no room walls | 35.6 | 4 boxes, 15 edges |
+| **twin as drawn, the second floor-line drawer** | **28.6** | |
 
 **`tools/wabench.py`**, the P bench: every pickup present, three dummies
 walking, 8 s per view, the HUD's averages. Frames a second, and the render
@@ -341,7 +362,8 @@ time in ms:
 | maze | 10.5 (83.5) | 26.5 (29.8) | 15.8 (53.8) | 45.8 (18.5) | |
 | first twin | 9.3 (91.7) | 8.5 (100.7) | 9.8 (88.1) | 9.2 (96.0) | |
 | twin as drawn, first floor-line drawer | 17.2 (50.6) | 14.5 (61.4) | 18.2 (47.1) | 13.8 (63.9) | |
-| **twin as drawn, now** | **18.5 (46.7)** | **17.0 (51.7)** | **19.4 (43.7)** | **13.3 (66.3)** | |
+| twin as drawn, the first drawer tuned | 18.5 (46.7) | 17.0 (51.7) | 19.4 (43.7) | 13.3 (66.3) | |
+| **twin as drawn, the second drawer** | **22.4 (37.9)** | **20.9 (41.5)** | **24.0 (34.6)** | **17.2 (50.3)** | |
 
 The twin's views differ between the two builds (4.2). The first twin's were
 before the south tower, on it, the walks' bar and behind it. The rebuilt
@@ -358,9 +380,9 @@ maze's court to 11.8 and the heights views by up to 3.
 
 Its 37 edges each crossed most of the screen, about 100 cycles a column.
 
-**What the rebuilt twin's cost is.** `tools/waprof.py --what A4-40 --pose
-1`, the tower-top view (B), was 326,000 cycles a frame and is now 277,000
-(58 ms):
+**What the rebuilt twin's cost was, with the first floor-line drawer.**
+`tools/waprof.py --what A4-40 --pose 1`, the tower-top view (B), was 326,000
+cycles a frame and came to 277,000 (58 ms):
 
 | part | cycles a frame | share |
 |---|---|---|
@@ -397,9 +419,73 @@ Its 37 edges each crossed most of the screen, about 100 cycles a column.
     frame counter laps every 127 frames, and a second that spanned a lap
     counted it as frames.
 
-**Size.** The renderer part is 59,041 of its 65,024 bytes: 2,182 more for
-the first round, then 2,505 for floor lines (code, the per-column and
-per-vertex caches) and no room.
+**The second drawer** (2026-11-15, section 4.5). The owner: *"These lines
+are costing drastically more than walls."* They were: in the tower-top view
+the 16 lines were 112,000 cycles of a 276,000-cycle frame (123,000 in the
+table above, which gives them all of the shared vertex cache's work),
+against 35,000 for the arena's boxes. Only about 27,000 of that drew cells
+- some 70 of them. The rest was each line's and each vertex's arithmetic and the
+per-column hiding records. A line is short on a 40-column screen, about
+eight cells, so what a line costs before its first cell is what the lines
+cost.
+
+Measured against the tree before it, the same day, both builds on the same
+poses (`tools/waposes.py`, `tools/wabench.py`, `tools/waprof.py`):
+
+| | first drawer | second | |
+|---|---|---|---|
+| 40 seeded poses, a moved view, 40 columns | 34.3 ms | 28.6 ms | -16.6% |
+| ...80 columns | 42.5 ms | 33.9 ms | -20.1% |
+| ...a still view, 40 columns | 32.3 ms | 22.4 ms | -30.6% |
+| 150 stress poses (tower tops, by a line, steep pitch), 40 columns | 28.9 ms | 22.7 ms | -21.7% |
+| ...80 columns, 60 degrees | 33.4 ms | 24.7 ms | -26.2% |
+| P bench A to D, 40 columns, fps | 19.1, 17.3, 20.3, 13.9 | 22.4, 20.9, 24.0, 17.2 | +17% to +24% |
+| P bench A to D, 80 columns, fps | 14.3, 13.3, 14.7, 10.4 | 17.5, 16.2, 18.2, 13.8 | +22% to +33% |
+| the floor lines alone, view A, cycles a frame | 107,800 | 68,300 | -37% |
+| ...view B, the tower top | 112,500 | 66,000 | -41% |
+| ...view D, behind the lift | 135,000 | 75,000 | -44% |
+
+(The first drawer's share counts its 16 vertices' part of the shared vertex
+cache and its clip. The poses' first-drawer figure is 34.3 here and 35.6 in
+the table above: the first drawer's last tuning came between.)
+
+- The heights arena, the maze and the first arena draw the same picture in
+  the same cycles, to 10 in 160,000.
+- The picture of the twin differs from the first drawer's in 45 line cells
+  over the 40 poses, each by one cell: the first drawer's 8.8 step against
+  an exact one, and a cut at the guard band against a cut at the screen's
+  edge. An exact referee sides with each about as often.
+- Where the second drawer's cycles go, view B (66,000):
+
+| part | cycles a frame |
+|---|---|
+| the vertices: camera space, planes, columns (16) | 9,500 |
+| their rows (10) | 3,700 |
+| the lines' pass, and two cuts | 9,000 |
+| the walks' setups (9 lines) | 10,500 |
+| the walks (about 66 cells) | 24,500 |
+| hiding | 7,700 |
+| the hull, the planes | 1,100 |
+
+- **What is left is the picture's own.** A cell is about 180 cycles plain
+  and 300 where it is tested: the stamp, the glyph and the list are three
+  stores at 30 cycles each on an 8088, as a wall's cell is. A line in view
+  is about 1,100 cycles of setup and its two ends about 1,300 each. A drawn
+  line is now about 7,000 cycles, a wall's face in the open arena about
+  6,000.
+- **Not done, and what each would buy.**
+  - The walk's state kept across still frames, not only its ends: about
+    10,000 cycles of a still frame.
+  - A pitch-only move keeping the vertices' camera space and columns: about
+    15,000 cycles of such a frame.
+  - Fewer cells: a far or a low-detail line drawn dashed. The owner's call -
+    it changes the look.
+
+**Size.** The renderer part is 61,403 of its 65,024 bytes. It was 59,041
+after the two arenas: 2,182 more for the first round, then 2,505 for floor
+lines (code, the per-column and per-vertex caches) and no room. The second
+drawer is 1,101 bytes more: its code is about twice the first's, its tables
+smaller.
 - Almost all of it is tables sized to the LARGEST arena: the maze's 92
   vertices against the heights arena's 51 (82 bytes per vertex table), its
   PVS at four mask bytes a cell (+512), and its box tree (+384).
@@ -449,3 +535,11 @@ per-vertex caches) and no room.
   - It was red with bit 6 dropped, one lift ticked and the views' pointer a
     word off: 5 failures (the first twin).
   - It was red with `wa_flcross` answering "clear": both floor-line checks.
+- [x] The second floor-line drawer (4.5): ends once a view, an exact walk
+  with no divide, hiding off the spans' feet; measured (5).
+- [x] Row `waflines` (soak): nine poses of the twin against an exact
+  referee - no cell off its lines, none missing in an open view, none
+  through the tower, 85 in 100 its own cell and dash, no divide fault.
+  - It was red with the shallow walk's error a modulus out, a side cut left
+    where it was, a steep line that never steps, and a tall face's columns
+    not asked about.

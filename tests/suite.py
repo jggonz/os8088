@@ -8660,6 +8660,25 @@ SOAK = [
         "checks).",
         needs=("marty", "nasm"),
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("waflines", "soak", py("tests/waflines.py"), 10.0,
+        "WIREARENA'S FLOOR LINES AGAINST AN EXACT REFEREE "
+        "(docs/plans/WIREARENA-ARENAS-PLAN.md 4.5). The drawer cuts each "
+        "line at the screen's edges in camera space and walks it by an "
+        "error term, no divide; this row holds its picture to a referee "
+        "that shares none of that arithmetic - the game's integer camera "
+        "space, then the line's image in exact rationals. Nine poses of "
+        "the twin through wa_render at a poked camera (tools/waposes.py), "
+        "text VRAM read back: no floor-line cell more than a cell off the "
+        "referee's lines, none missing where no box is in the view, none "
+        "drawn through the tower from behind the west lift (wa_flhid and "
+        "the run it steps over), 85 in 100 the referee's own cell and "
+        "dash (90 measured), and no divide fault. Red with the shallow "
+        "walk's error a modulus out (67 in 100, 3 poses), a side cut's "
+        "end left where it was (3 poses), a steep line that never steps "
+        "(4 poses), and a tall face's columns not asked about (55 cells "
+        "through the tower).",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wasetup", "soak", py("tests/wasetup.py"), 7.0,
         "WIREARENA'S MATCH SETUP DRAWS WHAT CHANGED, ONCE (WIREARENA-NET-"
         "PLAN 9.4). The owner saw the whole window flash on every click and "

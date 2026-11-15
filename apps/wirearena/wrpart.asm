@@ -108,6 +108,9 @@ wr_v_init:
     mov di, wa_vst
     mov cx, WA_MVTX
     rep stosw
+    mov di, wa_fqps             ; (and the floor lines' spans' feet's)
+    mov cx, WA_MAXSP
+    rep stosw
     mov [wa_frame], al
     mov [wa_newn], ax
     mov [wa_oldn], ax
