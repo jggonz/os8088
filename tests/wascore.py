@@ -16,6 +16,10 @@ unless byte-identical to the build) and its text screen:
     from the player (on its route node);
   - THE SCOREBOARD: Tab held puts YOU and the three robots' names over the
     view; let go, it is gone;
+  - THE MINIMAP (NET-PLAN 9.7): Tab held puts the arena's floor plan over
+    the board, every cell the one arenagen's samples make (a referee here:
+    the samples folded to 40 columns and coloured in Python), the player a
+    red dot in the cell over where it stands; let go, it is gone;
   - THE WIDTH: - is 40 columns, + is 80.
 """
 import math
@@ -199,19 +203,51 @@ def main():
         # THE SCOREBOARD: Tab held, then let go
         m.key("Tab", up=False)
         g.tick(6)
-        held = text(range(6, 13))
+        held = text(range(13, 20))
+        mm_held = m.read(0xB8000, 40 * 25 * 2)
+        px, py = g.word("wa_px"), g.word("wa_py")
         if shots:
             wd, ht, dd = m.fbuf(0)
             os88marty.write_png_rgb(shots, wd, ht, dd)
         m.key("Tab", down=False)
         g.tick(6)
-        gone = text(range(6, 13))
+        gone = text(range(13, 20))
+        mm_gone = m.read(0xB8000, 40 * 25 * 2)
         board = " ".join(held)
         check("NAME" in board and "YOU" in board
               and all(n in board for n in names),
               "THE SCOREBOARD: Tab held shows YOU and %r (%r)" % (names, held))
         check(not any("YOU" in r for r in gone), "THE SCOREBOARD: let go, "
               "it is gone")
+
+        # THE MINIMAP: the referee's cells, 16 x 13 at columns 12.. rows 1..
+        tag, _, boxes, _ = arenagen.arenas()[2]
+        mmb = arenagen.minimap(tag, boxes)
+        col = (0, 1, 3, 7)
+        want = {}
+        for r in range(arenagen.MM_H // 2):
+            for c in range(arenagen.MM_W // 4):
+                b = mmb[r * (arenagen.MM_W // 2) + c]
+                top = max(b & 3, b >> 4 & 3)
+                bot = max(b >> 2 & 3, b >> 6 & 3)
+                want[(1 + r, 12 + c)] = (0xDF, col[top] | col[bot] << 4)
+        dot = (1 + (2047 - min(py, 2047)) * 13 // 2048, 12 + px // 128)
+        bad = []
+        for (r, c), (gl, at) in want.items():
+            o = (r * 40 + c) * 2
+            have = (mm_held[o], mm_held[o + 1])
+            if (r, c) == dot:
+                if have != (0x07, (at & 0x70) | 0x0C):
+                    bad.append(("dot", r, c, have))
+            elif have != (gl, at):
+                bad.append((r, c, have, (gl, at)))
+        check(not bad, "THE MINIMAP: Tab held, its 208 cells the referee's, "
+              "the player a red dot at %r (%d wrong: %r)"
+              % (dot, len(bad), bad[:4]))
+        left = sum((mm_gone[(r * 40 + c) * 2], mm_gone[(r * 40 + c) * 2 + 1])
+                   == v for (r, c), v in want.items())
+        check(left < 20, "THE MINIMAP: let go, it is gone (%d cells of it "
+              "left)" % left)
 
         # THE WIDTH: - and +
         g.press("Equal")

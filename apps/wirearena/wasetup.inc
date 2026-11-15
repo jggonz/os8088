@@ -1605,7 +1605,7 @@ wa_sbn_1:       db '1', 0
 wa_sbn_2:       db '2', 0
 wa_sbn_3:       db '3', 0
 wa_sp_names:    dw wa_sp_0, wa_sp_1, wa_sp_2, wa_sp_3
-wa_sp_0:        db 'alone', 0
+wa_sp_0:        db 'offline', 0
 wa_sp_1:        db 'serial cable', 0
 wa_sp_2:        db 'local network', 0
 wa_sp_3:        db 'internet', 0

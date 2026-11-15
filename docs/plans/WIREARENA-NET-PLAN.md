@@ -563,3 +563,72 @@ its field, typed "zed-9" -> `ZED-9`; the match's row 24 `123456` with the
 pistol inverse and the rest grey; F10 once keeps the weapons beside the
 frame rate, twice gives the row to the meter; the player at 1 health,
 killed by a bot: `COG killed ZED-9`, the nick green.
+
+### 9.7 A minimap on the Tab screen (2026-11-15)
+
+The owner: *"a minimap on the tab screen ... precalculated on the host when
+the map is built, so its minimal work at runtime. If it is cheap, show the
+player as a red dot. Show flag spawn points. Don't show other players
+positions, or current flag positions"* - a plan of the arena, not a radar.
+
+- **Made on the host.** `arenagen`'s `minimap()` samples the room 32 x 26
+  (64 x ~79 units a sample, north at the top) into four kinds: off the walk
+  (past a floor line), floor, a low box or a top stood on (a platform, a
+  lift, a climbed tower), a wall (the arena's tallest, or a LINE). A box
+  marks a sample it covers half of, or half of the box, so a thin wall is
+  never lost. Packed two samples to a cell (top and bottom half) and two
+  cells to a byte, 208 bytes, it ends the route-graph block the game
+  already copies out of the arena's part (`wa_gmmp`, after the flags'
+  bases and the hill); `minimap_text()` prints it on the host.
+- **On the guest** it is turned into cells only when the overlay is rebuilt
+  with Tab held: rows 1 to 13, centred, 32 cells at 80 columns and 16 at 40
+  (two samples a cell, the larger kind - a wall wins), each the upper
+  half-block in its top sample's colour over its bottom's (off the walk
+  black, floor blue, low cyan, wall grey; on mono a box's halves, white on
+  black). The board moves under it, rows 14 to 18; the crosshair is not
+  drawn while it is up.
+- **Marks**: the player a red dot, the overlay rebuilt when the dot changes
+  cell (`wa_hudrow`), not every frame; in capture the flag the two bases,
+  red's ► and blue's ◄. Nothing else that moves.
+- **Where the bytes live.** As overlay-list cells (six bytes each across the
+  two halves) 416 cells did not fit the renderer part's 65,024 bytes, and
+  even a byte a cell in the part left it 100 bytes. So the part's OVERLAY
+  carries a BLOCK - its first cell, size, the half every cell shares and
+  three marks, 20 bytes - and the cells' bytes stay in the game's segment,
+  read through `wa_mmseg` (FRAME, set every frame: the region is movable).
+  The renderer treats the block's cells as it does the list's (stamped
+  every frame, their glyph given again where the view drew, listed when the
+  block comes or goes), before the list, which wins. `WR_ABI` 12.
+
+**Bytes**: the renderer part 64,243 -> 64,536 (+293; 488 left of the
+part's 65,024); `wirearena.bin` 34,097 -> 34,667 (+570: the builder, the
+names' and the board's moves), and in its BSS the block's 416 and the
+route-graph copy's 208 more; each arena's part +208.
+
+**Checked**: on a MartyPC 5150 CGA the heights at 40 and 80 columns and the
+twin in capture the flag with its bases; on its Hercules the same, mono.
+`wascore` now holds the 40-column minimap to a referee in Python - every
+cell's glyph and attribute out of arenagen's samples, the dot where the
+player stands - and red with the wall's colour changed (55 cells wrong).
+Floor and off-the-walk are both blank on mono, so the twin's walk does not
+show there.
+
+### 9.8 Offline; spawns that face the room; kills in team colours (2026-11-15)
+
+Three of the owner's:
+
+- **Play's first item is "offline"**, not "alone" (the setup's list; the
+  setting's value and every name for it in the code are unchanged).
+- **A spawn's facing** is checked when the map is built (arenagen's
+  `facing`): a respawn point or an arena's start may stand beside a wall,
+  but its view must run 448 units (7 m) before anything eye-high (96 units
+  or taller, a LINE, or the room's wall where it has one). One that does
+  not is turned to whichever of 16 directions runs clear the longest, the
+  authored angle breaking ties. The hedge's four on its axes and its start
+  had 72 units - a hedge in the face - and now have 712 to 840; one of the
+  heights' turns 22 degrees (328 -> 360); every other spawn keeps its
+  angle. Nothing on the guest asks.
+- **"X killed Y" in a team mode** (every mode but free-for-all) writes
+  each name in its team's colour, the player's own too (red or blue,
+  `wa_tm`); free-for-all keeps the player green. Checked on the glass:
+  capture the flag on the twin, `COG killed YOU`, COG blue and YOU red.

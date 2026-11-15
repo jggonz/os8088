@@ -226,6 +226,48 @@ ARENA_RESPAWNS = {"a2": HEIGHTS_RESPAWNS}    # (the hedge's and twin's: below)
 WA_MRSP = 8
 
 
+# A SPAWN'S FACING (the owner, 2026-11-15: "check the view isn't shoved
+# into a wall"): a respawn point or the start may stand beside a wall, but
+# its view must run FACE_CLEAR units before anything eye-high (FACE_WALL or
+# taller, or the room's wall where it has one). One that does not - the
+# hedge's, between its rings, were the worst - is turned, at build time, to
+# whichever of 16 directions runs clear the longest (the authored angle
+# breaking ties), so nothing on the guest asks.
+FACE_CLEAR = 448                # 7 m
+FACE_WALL = 96                  # a box this tall fills the eye's view
+FACE_DIRS = 16
+
+
+def clear_run(tag, boxes, x, y, a, cap=1024):
+    """units from (x, y) along angle a (1024ths, 256 north) before a wall"""
+    walls = [b for b in boxes if b.h >= FACE_WALL or b.kind == LINE]
+    room = ARENA_ROOMH.get(tag, WALL_H) > 0
+    t = a * 2 * math.pi / 1024
+    cx, cy = math.cos(t), math.sin(t)
+    d = 0
+    while d < cap:
+        d += 8
+        px, py = x + d * cx, y + d * cy
+        if room and not (ROOM[0] < px < ROOM[2] and ROOM[1] < py < ROOM[3]):
+            return d
+        if any(b[0] < px < b[2] and b[1] < py < b[3] for b in walls):
+            return d
+    return cap
+
+
+def facing(tag, boxes, x, y, a):
+    """a spawn's facing: a, or turned to the clearest view (above)"""
+    boxes = [bx(b) for b in boxes]
+    if clear_run(tag, boxes, x, y, a) >= FACE_CLEAR:
+        return a
+    step = 1024 // FACE_DIRS
+
+    def off(c):
+        return min((c - a) & 1023, (a - c) & 1023)
+    return max(range(0, 1024, step),
+               key=lambda c: (clear_run(tag, boxes, x, y, c), -off(c)))
+
+
 def respawns(tag, boxes, nodes, grid):
     """An arena's respawn points: [(x, y, facing, node)] - refused in a wall
     or off the floor; the node is the nearest the point sees"""
@@ -243,6 +285,7 @@ def respawns(tag, boxes, nodes, grid):
         d = sorted(range(len(nodes)), key=lambda k: math.hypot(
             nodes[k][0] - x, nodes[k][1] - y))
         seen = [k for k in d if sight_clear(grid, (x, y), nodes[k])]
+        a = facing(tag, boxes, x, y, a)     # (not into a wall)
         out.append((x, y, a, (seen or d)[0], side))
     if not 1 <= len(out) <= WA_MRSP:
         raise SystemExit("arenagen: arena %s: %d respawn points - 1 to %d"
@@ -500,7 +543,69 @@ def graph_block(tag, boxes):
     out += struct.pack('<H', len(hl))   # or 1, then its place, its floor and
     for (x, y, z, a, b) in hl:          # the route's two nodes a bot crosses
         out += struct.pack('<hhhBB', x, y, z, a, b)     # it between
+    out += minimap(tag, boxes)          # THE MINIMAP last (the Tab screen)
     return bytes(out)
+
+
+# THE MINIMAP (the Tab screen, WIREARENA-NET-PLAN 9.7): the arena's floor
+# plan as MM_W x MM_H samples over the room, north (+y) at the top, each one
+# of four kinds - 0 off the walk (beyond a floor line), 1 floor, 2 a low box
+# or a floor up high (a top a player stands on: a platform, a lift, a
+# climbed tower), 3 a wall (a box at the arena's tallest, or a LINE). Packed
+# for the 80-column screen's cells: a cell is two samples, one over the
+# other (its top half-block and its bottom), in a nibble - top in bits 0-1,
+# bottom in 2-3 - and a byte is two cells side by side, the left in the low
+# nibble. So a byte is also exactly one 40-column cell's two columns, which
+# the game takes the larger kind of (a wall wins).
+MM_W, MM_H = 32, 26                     # samples: 64 x ~79 units each
+MM_KINDS = (0, 1, 2, 3)
+
+
+def minimap(tag, boxes):
+    """-> MM_H/2 rows of MM_W/2 bytes: the arena's floor plan, as above"""
+    bxs = list(map(bx, boxes))
+    top = hmax(bxs)
+
+    def kind(b):
+        if b.kind == LINE or (b.h >= top and not climbed(b, bxs)):
+            return 3
+        return 2
+    sw = (ROOM[2] - ROOM[0]) / MM_W
+    sh = (ROOM[3] - ROOM[1]) / MM_H
+    grid = [[0] * MM_W for _ in range(MM_H)]
+    for r in range(MM_H):                       # r 0 is the north edge
+        y0 = ROOM[3] - (r + 1) * sh
+        for c in range(MM_W):
+            x0 = ROOM[0] + c * sw
+            k = 1 if in_walk(tag, x0 + sw / 2, y0 + sh / 2) else 0
+            for b in bxs:                       # a box marks a sample it
+                ox = min(b[2], x0 + sw) - max(b[0], x0)     # covers half of
+                oy = min(b[3], y0 + sh) - max(b[1], y0)     # - or half of
+                if ox >= min(b[2] - b[0], sw) / 2 and \
+                        oy >= min(b[3] - b[1], sh) / 2:      # the box, a thin
+                    k = max(k, kind(b))                     # one
+            grid[r][c] = k
+    out = bytearray()
+    for r in range(0, MM_H, 2):
+        for c in range(0, MM_W, 2):
+            lo = grid[r][c] | grid[r + 1][c] << 2
+            hi = grid[r][c + 1] | grid[r + 1][c + 1] << 2
+            out.append(lo | hi << 4)
+    return bytes(out)
+
+
+def minimap_text(tag, boxes):
+    """the minimap as text, for a look on the host: . floor, : low, # wall"""
+    m = minimap(tag, boxes)
+    rows = []
+    for r in range(MM_H):
+        line = ""
+        for c in range(MM_W):
+            b = m[(r // 2) * (MM_W // 2) + c // 2]
+            n = (b >> 4) if c & 1 else b & 15
+            line += " .:#"[(n >> 2) & 3 if r & 1 else n & 3]
+        rows.append(line)
+    return "\n".join(rows)
 
 
 # THE MODES an arena plays (WIREARENA-MODES-PLAN 1, 6), a bit each by the
@@ -2024,7 +2129,8 @@ def bsp_tables(w):
         P = "wa_%s_" % tag
         w("    dw %sxv, %d, %syv, %d, %svtx, %d, %scorn" % (P, nx, P, ny, P, nv, P))
         w("    dw %sboxes, %d, %sbsp, %d, %d, %d, %sbcol" % (
-            P, nb, P, start[0], start[1], start[2], P))
+            P, nb, P, start[0], start[1],
+            facing(tag, boxes, *start[:3]), P))
     w("%endif")
     w("WA_ARENASZ equ 28")
 
@@ -2056,6 +2162,8 @@ def main(out):
     # (graph_block): the most bytes any takes, which the game keeps room for
     w("WA_GPHSZ equ %d" % ((max(len(graph_block(t, bs)) for t, _, bs, _
                                 in arenas()) + 1) & ~1))
+    w("WA_MMW equ %d" % MM_W)            # (the minimap's samples, and
+    w("WA_MMH equ %d" % MM_H)            # the rows it takes: MM_H / 2)
     w("WA_MGN equ %d" % WA_MGN)
     w("%%assign WA_MSTK %d" % WA_MSTK)    # (a stack's boxes: wl_child's saves)
     w("WA_FLR equ %d" % WA_FLR)           # (a flag's reach: CTF-PLAN 2)
@@ -2218,7 +2326,8 @@ def arena_part(n, out):
          "    dw %sxv, %d, %syv, %d, %svtx, %d, %scorn" % (P, nx, P, ny, P, nv,
                                                          P),
          "    dw %sboxes, %d, %sbsp, %d, %d, %d, %sbcol, %d" % (
-             P, nb, P, start[0], start[1], start[2], P, nn),
+             P, nb, P, start[0], start[1], facing(tag, boxes, *start[:3]),
+             P, nn),
          "    dw %sbxh, %d, %d, %slifts" % (P, ARENA_ROOMH.get(tag, WALL_H),
                                          hmax(boxes), P)]
     gb = graph_block(tag, boxes)

@@ -4618,8 +4618,10 @@ wa_ovbuild:
     cld
     mov word [es:WA_RAT(wa_ovfresh)], 1 ; (the renderer shows it, then clears
                                 ; this)
-    cmp byte [wa_sbon], 0       ; Tab held: the scoreboard (AI-PLAN 5)
-    je .nosb
+    mov byte [es:WA_RAT(wa_mmbh)], 0 ; (no minimap but under Tab)
+    cmp byte [wa_sbon], 0       ; Tab held: the minimap and the scoreboard
+    je .nosb                    ; (AI-PLAN 5; NET-PLAN 9.7)
+    call wa_ovmm
     call wa_ovboard
 .nosb:
     cmp byte [wa_pdead], 0      ; dead: the respawn's count
@@ -4797,6 +4799,8 @@ wa_ovbuild:
 ; kills, most first: the name, kills, deaths. White on blue (inverse on
 ; mono), the header yellow, YOU's row bright green
 WA_SBW      equ 20
+WA_MMROW    equ 1               ; THE MINIMAP's first row (row 0: CTF's line)
+WA_SBROW    equ WA_MMROW + WA_MMH / 2 + 1 ; ...and the board's, under it
 WA_NNAME    equ 8
 wa_names:   db 'COG     ', 'RIVET   ', 'SERVO   ', 'SPROCKET'
             db 'DIODE   ', 'PISTON  ', 'BOLT    ', 'GEAR    '
@@ -4863,7 +4867,7 @@ wa_ovboard:
     cmp bx, 3
     jb .cmp
     loop .pass
-    mov dx, 7                   ; the header, then a row each
+    mov dx, WA_SBROW            ; the header, then a row each
     mov si, wa_sbhead
     mov ax, 0x1E70
     call wa_ovrow
@@ -4927,6 +4931,249 @@ wa_ovboard:
     inc bp
     cmp bp, 4
     jb .row
+    ret
+
+; THE MINIMAP (NET-PLAN 9.7), while Tab is held: the arena's floor plan
+; over the board, made on the host (arenagen's minimap: WA_MMW x WA_MMH
+; samples, four kinds, a byte two 80-column cells) and only turned into
+; cells here, when the overlay is rebuilt. A cell is the upper half-block,
+; its top sample's colour over its bottom's; at 40 columns a cell is two
+; samples wide, the larger kind of each pair (a wall wins). On it: the
+; player, a red dot - the overlay is rebuilt when the dot changes cell
+; (wa_hudrow), not every frame - and in capture the flag the two bases.
+; Nobody else, and no flag where it is now: a plan of the arena, not a radar.
+wa_mmcol:   db 0, 1, 3, 7       ; off the walk, floor, low, wall: black,
+                                ; blue, cyan, grey (a background: 0..7)
+wa_mmmono:  db ' ', 0xDF, 0xDC, 0xDB ; mono: a box in the top, the bottom
+
+; wa_mmcell - AX = x, DX = y (units): AX = the minimap's cell over it, its
+; row high and its column low (wa_mmkey's form). Keeps all but AX, DX
+wa_mmcell:
+    push cx
+    or ax, ax                   ; (the room, 0..2047, both ways)
+    jns .x0
+    xor ax, ax
+.x0:
+    cmp ax, 2047
+    jbe .x1
+    mov ax, 2047
+.x1:
+    or dx, dx
+    jns .y0
+    xor dx, dx
+.y0:
+    cmp dx, 2047
+    jbe .y1
+    mov dx, 2047
+.y1:
+    mov cl, 6                   ; a column: 64 units (80), 128 (40)
+    cmp word [wa_w], 40
+    jne .c
+    inc cx
+.c:
+    shr ax, cl
+    push ax
+    mov ax, 2047                ; a row: north at the top
+    sub ax, dx
+    mov cx, WA_MMH / 2
+    mul cx                      ; (26,611 at most: DX = 0)
+    mov cl, 11
+    shr ax, cl
+    mov ah, al
+    pop cx
+    mov al, cl
+    pop cx
+    ret
+
+; wa_ovmm - the minimap into the part's block (wafb.inc's wa_mma: a byte
+; a cell, the renderer's to put on the glass), at WA_MMROW, centred, and
+; its marks. ES = the part. Keeps DI; clobbers AX, BX, CX, DX, SI
+wa_ovmm:
+    push di
+    mov al, WA_MMW              ; its cells across: a sample each at 80
+    cmp word [wa_w], 40         ; columns, two at 40
+    jne .w
+    shr al, 1
+.w:
+    mov [wa_mmw], al
+    mov [es:WA_RAT(wa_mmbw)], al
+    mov byte [es:WA_RAT(wa_mmbh)], WA_MMH / 2
+    mov bx, [wa_w]              ; its first cell, x 2
+    sub bl, al
+    shr bx, 1
+    add bx, [wa_rowoff+WA_MMROW*2]
+    shl bx, 1
+    mov [wa_mmo0], bx
+    mov [es:WA_RAT(wa_mmo)], bx
+    mov ax, 0x07DF              ; the half every cell shares: the upper
+    mov dx, 1                   ; half-block, its byte the attribute - or
+    cmp byte [wa_mono], 0       ; on mono the attribute, its byte the glyph
+    je .fx
+    dec dx
+.fx:
+    mov [es:WA_RAT(wa_mmfix)], ax
+    mov [es:WA_RAT(wa_mmhi)], dx
+    mov ax, 0xFFFF              ; THE MARKS: none yet
+    mov [es:WA_RAT(wa_mmk)], ax
+    mov [es:WA_RAT(wa_mmk)+4], ax
+    mov [es:WA_RAT(wa_mmk)+8], ax
+    mov ax, [wa_px]             ; ...the player's cell...
+    mov dx, [wa_py]
+    call wa_mmcell
+    mov [wa_mmkey], ax
+    mov ax, 0xFFFF              ; ...and in capture the flag the bases'
+    mov [wa_mmf], ax
+    mov [wa_mmf+2], ax
+    cmp byte [wa_gmode], 1
+    jne .nf
+    mov si, [wa_gflp]
+    cmp word [si], 2
+    jne .nf
+    mov ax, [si+2]
+    mov dx, [si+4]
+    call wa_mmcell
+    mov [wa_mmf], ax
+    mov ax, [si+8]
+    mov dx, [si+10]
+    call wa_mmcell
+    mov [wa_mmf+2], ax
+.nf:
+    mov word [es:WA_RAT(wa_mmp)], wa_mma
+    push es
+    push ds
+    pop es
+    mov si, [wa_gmmp]
+    mov di, wa_mma              ; ES:DI = the block's bytes, ours (the part
+                                ; reads them through wa_mmseg)
+    xor cx, cx                  ; CH = the row, CL = the column
+.r:
+    xor cl, cl
+.c:
+    push cx
+    mov al, cl
+    xor ah, ah
+    cmp byte [wa_mmw], WA_MMW
+    jne .k40
+    shr ax, 1                   ; 80: half a byte a cell
+    mov bx, ax
+    mov al, [si+bx]
+    test cl, 1
+    jz .k80
+    mov cl, 4
+    shr al, cl
+.k80:
+    mov ah, al
+    and al, 3                   ; AL = the top's kind
+    shr ah, 1
+    shr ah, 1
+    and ah, 3                   ; AH = the bottom's
+    jmp short .kk
+.k40:
+    mov bx, ax                  ; 40: a byte a cell, each half the larger
+    mov al, [si+bx]             ; of its two
+    mov cl, al
+    mov ch, al
+    and al, 3
+    shr ch, 1
+    shr ch, 1
+    shr ch, 1
+    shr ch, 1
+    and ch, 3
+    cmp al, ch
+    jae .t
+    mov al, ch
+.t:
+    mov ah, cl
+    shr ah, 1
+    shr ah, 1
+    and ah, 3
+    mov ch, cl
+    mov cl, 6
+    shr ch, cl
+    cmp ah, ch
+    jae .kk
+    mov ah, ch
+.kk:
+    pop cx
+    call wa_mmglyph             ; AL = the glyph, AH = its attribute
+    push ax
+    cmp byte [wa_mono], 0       ; the block's byte: the attribute, or on
+    jne .bm                     ; mono the glyph
+    mov al, ah
+.bm:
+    stosb
+    pop ax
+    xor bx, bx                  ; THE MARKS: the player a red dot, the
+    cmp cx, [wa_mmkey]          ; bases red's and blue's pennants
+    je .mk
+    mov bl, 4
+    cmp cx, [wa_mmf]
+    je .mk
+    mov bl, 8
+    cmp cx, [wa_mmf+2]
+    jne .nx
+.mk:
+    and ah, 0x70                ; (on the cell's own ground)
+    or ah, [wa_mmka+bx]
+    mov al, [wa_mmkg+bx]
+    cmp byte [wa_mono], 0
+    je .mc
+    mov ah, 0x0F
+.mc:
+    push es
+    mov es, [wa_rds]
+    mov [es:WA_RAT(wa_mmk)+bx+2], ax
+    mov al, ch                  ; its cell: the block's first, CH rows and
+    mov ah, [wa_w]              ; CL columns on (x 2)
+    mul ah
+    add al, cl
+    adc ah, 0
+    shl ax, 1
+    add ax, [wa_mmo0]
+    mov [es:WA_RAT(wa_mmk)+bx], ax
+    pop es
+.nx:
+    inc cl
+    cmp cl, [wa_mmw]
+    jb .c
+    add si, WA_MMW / 2
+    inc ch
+    cmp ch, WA_MMH / 2
+    jb .r
+    pop es
+    pop di
+    ret
+wa_mmkg:    db 0x07, 0, 0, 0, 0x10, 0, 0, 0, 0x11 ; the marks' glyphs and
+wa_mmka:    db 0x0C, 0, 0, 0, 0x0C, 0, 0, 0, 0x09 ; colours, by BX
+
+; wa_mmglyph - AL = a cell's top kind, AH = its bottom's: AL = its glyph,
+; AH = its attribute (colour: the upper half-block, top over bottom; mono:
+; a box's halves on black). Keeps all but AX
+wa_mmglyph:
+    push bx
+    mov bx, wa_mmmono
+    cmp byte [wa_mono], 0
+    jne .mono
+    mov bx, wa_mmcol
+    xlatb                       ; AL = the top's colour
+    xchg al, ah
+    xlatb                       ; AL = the bottom's
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    or ah, al
+    mov al, 0xDF
+    pop bx
+    ret
+.mono:
+    shr al, 1                   ; (a box: kinds 2 and 3)
+    shr ah, 1
+    shl ah, 1
+    or al, ah
+    xlatb
+    mov ah, 0x07
+    pop bx
     ret
 
 ; wa_sbnum - AL = a count: three cells at DI, right-aligned
@@ -5663,6 +5910,15 @@ wa_hk_died: db ' died', 0
 ; wa_hudrow - once a frame, before the render: the row's fields that
 ; changed. Clobbers AX, BX, CX, SI, DI
 wa_hudrow:
+    cmp byte [wa_sbon], 0       ; (Tab held: the minimap's dot moved to
+    je .nomm                    ; another cell - the overlay again)
+    mov ax, [wa_px]
+    mov dx, [wa_py]
+    call wa_mmcell
+    cmp ax, [wa_mmkey]
+    je .nomm
+    mov byte [wa_ovd], 1
+.nomm:
     cmp byte [wa_mtr], 2
     jae .out
     mov al, [wa_own]
@@ -5750,7 +6006,8 @@ wa_putca:
 ; wa_hudkill - AL = the killer's code here, AH = the dead one's (0 the
 ; player, 1..3 the figures; the same code twice, a suicide): "KILLER killed
 ; DEAD" - or "DEAD died" - the HUD's message for the next WA_HMSGT ticks,
-; the player's own name green. Keeps every register
+; the player's own name green - or in a team mode each name its team's
+; colour. Keeps every register
 wa_hudkill:
     push ax
     push bx
@@ -5803,6 +6060,14 @@ wa_hudname:                     ; BL = a code: its name at DI, its trailing
     jnz .a
     mov ah, 0x0A
 .a:
+    cmp byte [wa_gmode], 0      ; (a team mode: each name its team's
+    je .a0                      ; colour, the player's too - red or blue)
+    xor bh, bh
+    mov ah, 0x0C
+    cmp byte [wa_tm+bx], 0
+    je .a0
+    mov ah, 0x09
+.a0:
     cmp byte [wa_mono], 0
     je .a1
     mov ah, 0x0F
@@ -5985,7 +6250,8 @@ wa_rframe:
     call wa_camsc               ; the camera's sin and cos, into FRAME (the
     pop dx                      ; part has no table)
     pop ax
-    mov es, [wa_rds]
+    mov [wa_mmseg], ds          ; (our segment, for the minimap's bytes:
+    mov es, [wa_rds]            ; the region may have moved since)
     cld
     mov si, wa_fb_frm
     mov di, WA_RAT(wa_fb_frm)
@@ -6207,6 +6473,14 @@ wa_loadarena:
     inc ax
     inc ax
     mov [wa_ghlp], ax
+    mov bx, ax                  ; ...and the minimap after the hill: a
+    mov ax, [bx]                ; count, 8 bytes each (NET-PLAN 9.7)
+    mov cl, 3
+    shl ax, cl
+    add ax, bx
+    inc ax
+    inc ax
+    mov [wa_gmmp], ax
     call wa_sgrow
     pop ax
     call op_drop
@@ -6501,6 +6775,13 @@ WA_VAR wa_mtr,1                  ; the meter (F10): 0 off, 1 the frame rate, 2
                                  ; every number
 WA_VAR wa_rowoff,(WA_ROWS+1)*2
 WA_VAR wa_hudp,4                 ; the HUD's row in text memory, offset:segment
+WA_VAR wa_gmmp,2                 ; -> the arena's minimap (in wa_gph)
+WA_VAR wa_mmkey,2                ; ...the player's cell on it, as drawn
+WA_VAR wa_mmf,4                  ; ...the bases' (FFFFh: none shown)
+WA_VAR wa_mmw,1                  ; ...its cells across
+WA_VAR wa_mmo0,2                 ; ...its first cell (x 2)
+WA_VAR wa_mma,WA_MMCAP           ; ...and its block's bytes (the renderer
+                                 ; reads them here: wafb.inc's wa_mmseg)
 WA_VAR wa_hwsig,2                ; ...its weapons as written (had, held)
 WA_VAR wa_hmsl,2                 ; ...its message: cells, ticks left, to be
 WA_VAR wa_hmsgt,1                ;   written again, characters, attributes
