@@ -69,7 +69,7 @@ WP_SZ       equ 42
 WL_ROWS     equ 6               ; the window's rows of text: what the link is
                                 ; doing, then the players (wasetup.inc's
                                 ; controls between, WS_LOBY)
-WL_COLS     equ 40
+WL_COLS     equ (WS_RM - 8) / 8
 
 %include "os88cable.inc"
 RW_ETYPE    equ 0x88B5          ; IEEE 802's local experimental EtherType
@@ -1187,8 +1187,9 @@ wa_lkhtake:
     mov [wa_lkdiff], al
     mov cl, 4
     shr ah, cl
-    and ah, 1
-    mov [wa_lkgmode], ah
+    and ah, 3                   ; (free-for-all, CTF, team deathmatch,
+    mov [wa_lkgmode], ah        ; king of the hill: MODES-PLAN 1)
+    call wa_sarlist             ; (the mode's arenas and Win at)
     mov al, [si+15]
     cmp al, 2
     jbe .nb

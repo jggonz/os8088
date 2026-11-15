@@ -440,8 +440,8 @@ wa_brespawn:
     cmp byte [wa_bdet], 0
     jne wa_spawn
     push si
-    cmp byte [wa_gmode], 0      ; A TEAM MODE: its side's points alone,
-    je .ffa                     ; the farthest from its nearest foe
+    cmp byte [wa_gside], 0      ; A TEAM MODE ON SIDES: its side's points
+    je .ffa                     ; alone, the farthest from its nearest foe
     call wa_bidx                ; (CTF-PLAN 2)
     inc ax
     mov bl, al
@@ -3905,8 +3905,8 @@ wa_ptick:
 ; the axis distances) from the nearest live bot
 wa_prespawn:
     push di
-    cmp byte [wa_gmode], 0      ; A TEAM MODE: our side's points alone,
-    je .ffa                     ; the farthest from our nearest foe
+    cmp byte [wa_gside], 0      ; A TEAM MODE ON SIDES: our side's points
+    je .ffa                     ; alone, the farthest from our nearest foe
     mov al, [wa_tm]             ; (CTF-PLAN 2)
     xor ah, ah
     call wc_rspick
@@ -6199,6 +6199,14 @@ wa_loadarena:
     inc ax
     inc ax
     mov [wa_gflp], ax
+    mov bx, ax                  ; ...and the hill after the bases: a count,
+    mov ax, [bx]                ; 6 bytes a base (MODES-PLAN 6)
+    mov cl, 6
+    mul cl
+    add ax, bx
+    inc ax
+    inc ax
+    mov [wa_ghlp], ax
     call wa_sgrow
     pop ax
     call op_drop
@@ -6229,7 +6237,7 @@ wa_loadarena:
 %endif
 
 wa_tpl:
-    dw 120, 20, 338, 174        ; (wasetup.inc's WS_W x WS_H content)
+    dw 119, 20, 402, 174        ; (wasetup.inc's WS_W x WS_H content)
     dw wa_ttl, wa_cls
     OS88_CLASS wa_cls, 0, PAINT, wa_paint, ONKEY, wa_lkkey, \
                ONCLOSE, wa_lkclose, ONTIMER, wa_lktimer, \

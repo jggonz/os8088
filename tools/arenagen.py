@@ -496,11 +496,67 @@ def graph_block(tag, boxes):
     out += struct.pack('<H', len(fl))   # count, 0 or 2 - red's, blue's -
     for (x, y, n) in fl:                # then each one's place and route node
         out += struct.pack('<hhBB', x, y, n, 0)
+    hl = hill(tag, boxes, nodes)        # THE HILL (MODES-PLAN 4): a count, 0
+    out += struct.pack('<H', len(hl))   # or 1, then its place, its floor and
+    for (x, y, z, a, b) in hl:          # the route's two nodes a bot crosses
+        out += struct.pack('<hhhBB', x, y, z, a, b)     # it between
     return bytes(out)
 
 
+# THE MODES an arena plays (WIREARENA-MODES-PLAN 1, 6), a bit each by the
+# game's numbers (wa_gmode): free-for-all always; capture the flag where it
+# has bases; team deathmatch where each side has two respawn points; king
+# of the hill where it has a hill
+MODE_FFA, MODE_CTF, MODE_TDM, MODE_KOTH = 0, 1, 2, 3
+
+
+def arena_modes(tag):
+    sides = [r[3] if len(r) > 3 else 0
+             for r in ARENA_RESPAWNS.get(tag, FLAT_RESPAWNS)]
+    m = 1 << MODE_FFA
+    if ARENA_FLAGS.get(tag):
+        m |= 1 << MODE_CTF
+    if sides.count(1) >= 2 and sides.count(2) >= 2:
+        m |= 1 << MODE_TDM
+    if ARENA_HILL.get(tag):
+        m |= 1 << MODE_KOTH
+    return m
+
+
+# THE HILL (MODES-PLAN 4): (x, y, node a, node b) - on the free floor or a
+# platform, on the route between two nodes (or at one: a == b) so that a
+# bot going from one to the other runs over it. The heights' central
+# platform; the hedge's court at the stack's south foot (the stack itself
+# has no route - a bot cannot climb it - so it is the high ground that
+# overlooks the hill); the Twin's path at its bottom, between its lanes
+ARENA_HILL = {"a2": (1248, 1024, 1, 1), "a3": (1024, 832, 1, 1),
+              "a4": (1024, 832, 17, 18)}
 WA_FLR = 40                     # a flag is touched within this of it, in x
                                 # and in y (the game's WA_FLR; a pickup's 40)
+
+
+def hill(tag, boxes, nodes):
+    """An arena's hill: [(x, y, z, a, b)] or [] - refused off a floor, or
+    out of reach of the route between its nodes"""
+    if tag not in ARENA_HILL:
+        return []
+    x, y, a, b = ARENA_HILL[tag]
+    boxes = [bx(bb) for bb in boxes]
+    z = floor_at(x, y, boxes, 24)
+    if inside(x, y, [bb for bb in boxes if bb.h > z], 24) or \
+            not in_walk(tag, x, y, 24):
+        raise SystemExit("arenagen: arena %s: the hill at (%d, %d) is not "
+                         "on a floor" % (tag, x, y))
+    (ax, ay), (bx_, by) = nodes[a], nodes[b]
+    for t in range(17):                 # (its nearest on the leg a to b)
+        px, py = ax + (bx_ - ax) * t / 16, ay + (by - ay) * t / 16
+        if abs(px - x) < WA_FLR and abs(py - y) < WA_FLR:
+            break
+    else:
+        raise SystemExit("arenagen: arena %s: the route from node %d to %d "
+                         "passes nowhere within %d of the hill" % (tag, a, b,
+                                                                  WA_FLR))
+    return [(x, y, z, a, b)]
 
 
 def flag_bases(tag, boxes, nodes):
@@ -2003,6 +2059,9 @@ def main(out):
     w("WA_MGN equ %d" % WA_MGN)
     w("%%assign WA_MSTK %d" % WA_MSTK)    # (a stack's boxes: wl_child's saves)
     w("WA_FLR equ %d" % WA_FLR)           # (a flag's reach: CTF-PLAN 2)
+    for i, (tag, name, boxes, start) in enumerate(arenas()):
+        w("WA_AM%d equ %d" % (i, arena_modes(tag)))  # (MODES-PLAN 6: the
+                                        # modes it plays, a bit each)
     # poses
     first = 0
     for name, n, _, _ in ANIMS:
