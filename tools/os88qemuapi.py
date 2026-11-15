@@ -348,20 +348,29 @@ class ApiQemu(om.Marty):
         return self._status()
 
     def _c_advance(self, frames=None, cycles=None, card=None, **_):
-        """WHOLE ticks of guest time (at least one), then held."""
+        """Run a bounded amount of guest time, then hold. A tick or more is
+        WHOLE ticks, counted on the guest's clock; less than a tick (a
+        stepped gesture's 4 ms - os88mouse's DBL_STEP) is that much HOST
+        time running, which without -icount is the guest's time too, near
+        enough - the clock this backend can read has no finer grain."""
         secs = (cycles / float(GUEST_HZ) if cycles is not None
                 else (frames or 1) / 60.0)
-        need = max(1, int(secs * TICK_HZ + 0.999))
-        c0 = self._cycles()
         if self._state != "running":
             self.qmp("cont")
             self._state = "running"
-        t0 = time.monotonic()
-        while self._cycles() - c0 < need * TICKCYC - 1:
-            if time.monotonic() - t0 > om.GUEST_STALL + need / TICK_HZ * 4:
-                break                           # (a clock that stands: the
-            time.sleep(0.002)                   # caller's stall watch says)
-        return self._c_pause()
+        if secs < 1.0 / TICK_HZ:
+            time.sleep(max(secs, 0.002))
+        else:
+            need = int(secs * TICK_HZ + 0.5)
+            c0 = self._cycles()
+            t0 = time.monotonic()
+            while self._cycles() - c0 < need * TICKCYC - 1:
+                if time.monotonic() - t0 > om.GUEST_STALL + secs * 4:
+                    break                       # (a clock that stands: the
+                time.sleep(0.002)               # caller's stall watch says)
+        st = self._c_pause()
+        st["advanced_cycles"] = int(secs * GUEST_HZ)
+        return st
 
     def _c_key(self, key, down=True, up=True, **_):
         q = qcode(key)
