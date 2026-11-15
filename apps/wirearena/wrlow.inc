@@ -998,16 +998,19 @@ wl_lfloor:  dw wl_f1, wl_rfloor
 ; tested in place, no index made - or, full, merged into the deepest (the
 ; nearer tag kept, so a figure between the two can only be hidden a frame
 ; too soon). A half-row off the screen, or its top one, goes a column at a
-; time (wl_rodd, [wl_hr] the half-row there): under the screen nothing; at
-; or over its top the column shut (wl_shutc), the top half-row's cell drawn
-; first.
+; time (wl_rodd, BX the half-row there, on to the next run's .run2 with it):
+; under the screen nothing - the columns stepped through; at or over its
+; top the column shut (wl_shutc), the top half-row's cell drawn first. (An
+; open column's clip is 1 or more - only a shut one's is 0 - so there the
+; top is over it wherever the column is open.)
 wl_rodd:
     inc bx                      ; BX = the half-row
-    mov [wl_hr], bx
-    cmp bx, [wa_cclip+si]
-    jge .next                   ; (under the clip, as all under the screen)
+    cmp bx, 0
+    jg .under
+.over:
     cmp byte [wa_cov+si], 0
-    jne .next
+    jne .onext
+    push bx
     or bx, bx
     jnz .shut                   ; (over the screen's top: nothing drawn)
     mov al, [wa_hgl]
@@ -1016,16 +1019,25 @@ wl_rodd:
     WPLOT
 .shut:
     call wl_shutc
-.next:
+    pop bx
+.onext:
     inc si
     inc si
     dec dh
     jz wl_rtop.done
     add bp, [wl_ks]
-    jnc wl_rtop
+    jnc .over
+    jmp short .step
+.under:                         ; (under the screen: nothing, to the end
+    inc si                      ; of the run)
+    inc si
+    dec dh
+    jz wl_rtop.done
+    add bp, [wl_ks]
+    jnc .under
+.step:
     sub bp, [wl_dcm]
-    mov bx, [wl_dir]
-    add bx, [wl_hr]
+    add bx, [wl_dir]
     jmp short wl_rtop.run2
 wl_rtop:
     mov bx, [wl_hr]
