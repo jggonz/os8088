@@ -488,15 +488,17 @@ def _buildnum_current():
                                                  # re-assembly check owns it
     if not have:
         return True, ""
+    # THE NUMBER `make` WOULD WRITE, asked of tools/buildnum.py itself - not
+    # a second `git rev-list --count`. On a SHALLOW clone buildnum.py writes 0
+    # on purpose (its docstring: a truncated count is a wrong number), so the
+    # raw count here disagreed with every fresh `make` and refused every run
+    # in a shallow checkout as "make has not run since the last commit".
     try:
-        want = subprocess.run(["git", "rev-list", "--count", "HEAD"],
-                              cwd=ROOT, capture_output=True, text=True,
-                              timeout=30)
-        if want.returncode:
-            return True, ""                      # not a git checkout: not our
-        n = int(want.stdout.strip())             # question to answer
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return True, ""
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import buildnum
+        n, _why = buildnum.build_number()
+    except Exception:                            # noqa: BLE001 - as before:
+        return True, ""                          # not our question to answer
     if int(have.group(1)) == n:
         return True, ""
     return False, ("build/buildnum.inc says BUILD_NUM %s and this checkout is "
