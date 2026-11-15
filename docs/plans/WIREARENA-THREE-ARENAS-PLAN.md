@@ -1,6 +1,6 @@
 # WireArena: Crossing, the Pit and the Ziggurat
 
-**STATUS: IN PROGRESS** (2026-11-15): A1 built. Written to the owner's three drawings below,
+**STATUS: IN PROGRESS** (2026-11-15): A1 and A2 built. Written to the owner's three drawings below,
 before any code; section 7 is the waves and section 8 what was built.
 
 The owner, 2026-11-15, with three MS Paint drawings (*"not perfectly to
@@ -87,7 +87,7 @@ edge the room's (the collision's room test keeps the feet in).
 ## 3. The Ziggurat (arena 6)
 
 - **The walls**: the room's, very high (8 m), the four corners cut by tall
-  boxes stepped three to a corner - the octagon of the drawing, in the
+  boxes stepped three to a corner (section 8, A2) - the octagon of the drawing, in the
   boxes the arena format has (no diagonal walls).
 - **The tower**: 4 m square (x and y 896..1152) and 4.5 m tall (288) - the
   tallest a flight reaches (15 treads of a step's 24 at most).
@@ -132,7 +132,7 @@ cut (a lower ring, fewer boxes) before going further.
 - [x] **A1 Crossing**, the setup's eight-arena table, the rotation window
   fitting eight. Checked by `waarenas` (its rows' new checks) and
   `wamodes`' lists; measured.
-- [ ] **A2 The Ziggurat**. Checked by `waarenas`; measured.
+- [x] **A2 The Ziggurat**. Checked by `waarenas`; measured.
 - [ ] **A3 The Pit** with sections 5.1 to 5.3. Checked by `waarenas` (a
   lift out of the pit, a hop to the ring, the bots' ride and hop) and
   `wactf` on its flags; measured.
@@ -152,3 +152,27 @@ opens at y 22 so eight rows fit a CGA.
 CGA): Crossing **135,257** clk a frame on average (max 246,450), Pillars
 **123,749** (max 201,005) - 9% dearer than the cheapest walled arena, as
 the owner intended.
+
+**A2** (2026-11-15): the Ziggurat is arena 6, `_ziggurat()`: 25 boxes - the
+corners cut by three tall steps of 2 m each, the tower 4 m square and 288
+high, four 12-tread flights, four pillars - 14 route nodes, four corner
+spawns (west red, east blue), six pickups. Modes: free-for-all, team
+deathmatch, king of the hill (the hill on the top). **The top's pickups are
+two, not one**: the owner's *"health, shield or railgun"* mixes a weapon
+with health, which a single spawn's choices may not (arenagen's rule, the
+owner's: health and shield apart from weapons) - so health or shield at the
+top's south edge and a railgun at its north.
+
+**A bug the ramps found**: a flight's tread count is the high nibble of its
+kind byte, and the game's `wa_hat` read bit 7 as a LINE (a wall to feet)
+before asking the kind - so a flight of 8 treads or more was a wall. The
+heights' flights have 4. `wa_hat` asks the kind first now; `waarenas`'s
+climb of the south ramp was red before (the feet stopped at its foot).
+
+**Measured** (120 poses, 40 columns, the 5150 with CGA): the Ziggurat
+**226,405** clk a frame; the hedge **167,164**; with two corner steps
+instead of three, **207,356**. No routine dominates the profile - it is the
+box and vertex count, the ramps' outlines and the tower over the eye. Two
+steps would save 8% at the octagon's look; three were kept, the owner's to
+call.
+
