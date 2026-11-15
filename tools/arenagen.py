@@ -899,7 +899,7 @@ HEDGE_BOXES, HEDGE_GRAPH, HEDGE_RESPAWNS, HEDGE_PICKUPS, HEDGE_START, \
     HEDGE_BENCH = _hedge()
 
 
-# --- CROSSING (docs/plans/WIREARENA-THREE-ARENAS-PLAN.md 1, the owner's
+# --- CROSSING (docs/plans/completed/WIREARENA-THREE-ARENAS-PLAN.md 1, the owner's
 # drawing of 2026-11-15): FLAT - every box 3 m, the renderer's and the
 # collision's cheapest paths. A plus-shaped corridor 2 m wide through the
 # middle, each arm 512 long, its sides 1 m walls - the sight grid's cell,

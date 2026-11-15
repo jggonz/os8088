@@ -8,7 +8,7 @@ went, and the hedge took its place as arena 3 (section 9). Section 3 is
 what the drawings measured; section 4 what would make them faster, of which
 the owner asked for 4.1 (section 7) and 4.2 (section 8). **"Arenas 5 and 6"
 below are the trial's numbers: arena 5 is Crossing now**
-([WIREARENA-THREE-ARENAS-PLAN](../WIREARENA-THREE-ARENAS-PLAN.md)), and the
+([WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md)), and the
 hedge is arena 3. Filed under `completed/` (2026-11-15); 4.1's faces, which
 section 7 did not build, are carried as a renderer lever in
 [MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.3.

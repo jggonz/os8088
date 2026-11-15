@@ -1,23 +1,24 @@
 # A multiplayer first-person shooter for the 5150, in text mode: investigation
 
-**STATUS (2026-11-15): A GAME, ON ITS OWN DISK; RELEASE WORK IN PROGRESS.**
-WireArena (`apps/wirearena/`, `WARENA.O88`, `make wirearenadisk`) is a
-text-mode arena shooter for kern_big and kern_mega (kern_small refuses it):
-mouse look, six weapons and pickups, bots that route, shoot and play for the
-flag, free-for-all, team deathmatch, capture the flag and king of the hill
-with a score to win and a rotation, six arenas (open, pillars, crossing,
-heights, hedge, twin), and up to four participants over a serial cable,
-raw Ethernet or UDP, all chosen in the match setup window. It is still on an
-on-demand disk of its own and listed as an `instrument` in
-`apps/RETIRED.txt`; section 17.2's release work puts it on shipped disks.
+**STATUS (2026-11-15): READY FOR ITS FIRST RELEASE.** Nothing of the
+build's is open before it; what is left before it is the owner's own (17.3),
+and the rest of this plan is after it (17.3, 17.4).
+WireArena (`apps/wirearena/`, `WARENA.O88`) is a text-mode arena shooter for
+kern_big and kern_mega (kern_small refuses it): mouse look, six weapons and
+pickups, bots that route, shoot and play for the flag, free-for-all, team
+deathmatch, capture the flag and king of the hill with a score to win and a
+rotation, eight arenas (open, pillars, crossing, heights, hedge, twin, the
+pit, ziggurat), and up to four participants over a serial cable, raw
+Ethernet or UDP, all chosen in the match setup window. It ships on
+`games2-360.img`, the 1.44MB and 1.2MB apps disks, `more720.img` and
+kern_mega's apps disks (17.2, 17.6). **Its contract is SPEC.md 128.**
 
 This document began as the investigation (sections 1-15, proposals as
 written on 2026-11-12) and is now WireArena's umbrella: section 16 is the
 record of Wave 0 and the renderer passes, and **section 17 holds the owner's
 rulings, what is in progress, what is open and the ideas for after 1.0**.
 The plans that built each part are in `docs/plans/completed/` (17.5 lists
-them); WireArena has no SPEC.md section yet, so those plans and this one are
-its contract.
+them); SPEC.md 128 is the contract, and the plans are how it got there.
 
 The owner's answers to section 14 (2026-11-12): prototype to decide 40 vs 80
 columns; spend the relative-mouse bytes (done, SPEC.md 9.14 - 38 resident
@@ -1656,8 +1657,7 @@ a pointer to where it came from, after the owner's rulings below.
     so);
   - **a hit marker**: not needed - the struck figure already flashes red.
 - **kern_mega** is another session's now: its linked match, SERIAL.DRV's
-  verbs run there and its soak rows are that session's (17.3 lists them
-  for the hand-over).
+  verbs run there and its soak rows are that session's. *(Done: 17.6.)*
 - **The field run on the 5150** is the owner's, at home, after the arena
   work (17.3).
 
@@ -1728,88 +1728,97 @@ each cue seen.
     release zip (`360K/GAMES2.IMG`) know the new disk;
   - kern_mega's apps disks are the kern_mega session's to place. Another session builds
 the Ziggurat and the Pit
-([WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md)).
+([WIREARENA-THREE-ARENAS-PLAN](completed/WIREARENA-THREE-ARENAS-PLAN.md)).
 
-### 17.3 Open, after the rulings
+### 17.3 Open, after the rulings - sorted for the first release (2026-11-15)
 
-**The game and its contract**
+Sorted with the owner on 2026-11-15: **nothing the build owes is open
+before the first release.** The one item the plan itself had called owed
+by the release - WireArena's SPEC.md section - is SPEC.md 128 now.
 
-- **WireArena has no SPEC.md section.** Its contract is these plans,
-  most now in `completed/`; a section of its own (the frame block, the
-  arena part, the link's frames, the setup) is owed before or at the
-  release. (CLAUDE.md, *Building an app or game in waves*, step 3.)
-- **Keyboard turn acceleration**: the arrows turn at one fixed rate. The
-  owner asked for it (AI-PLAN 1, "Adjust it"); mouse sensitivity (17.2) is
-  the other half. ([AI-PLAN](completed/WIREARENA-AI-PLAN.md) 1, 1.1)
-- **The heights plan's interpretations** of the owner's placements (the
-  lift platform as the tower's top, the back tunnel) were never confirmed.
-  ([WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) 3.4)
-- **The detail levels**, for the owner to re-review from the videos;
-  moving an option is one line of `wa_levtab`.
+**Done for the release** (this round):
+
+- **SPEC.md 128**, the contract: the parts and where it runs, the bracket
+  and the screen, the sim and the renderer part's ABI, the arenas and their
+  part format, the modes and bots, the setup window, the link's carriers
+  and frames, and the rows.
+- **kern_mega** (17.6): the hand-over's every item, two defects fixed.
+- [WIREARENA-THREE-ARENAS-PLAN](completed/WIREARENA-THREE-ARENAS-PLAN.md) is
+  completed.
+
+**The owner's own - reviews and a field run, none of them build work** (each
+changes data at most, and none blocks the build being released):
+
+- **The field run on 5150 #1**, the CGA questions and the PERFORMANCE.md
+  set that follows from it (15, Wave 7).
+- **The Ziggurat's ramp fixes on the glass**, from the owner's two
+  screenshots ([THREE-ARENAS-PLAN](completed/WIREARENA-THREE-ARENAS-PLAN.md)
+  8): built and checked by `waarenas`, waiting on a look.
+- **The detail levels**, to re-review from the videos; moving an option is
+  one line of `wa_levtab`.
   ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.3 item 6)
-- **The room corners' views** were to be named to the owner beside the
-  tower's; probably moot since performance pass 6, to close or drop.
+- **The heights plan's interpretations** of the owner's placements (the
+  lift platform as the tower's top, the back tunnel), never confirmed.
+  ([WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) 3.4)
+- **The room corners' views**, to be named beside the tower's - probably
+  moot since performance pass 6, to close or drop.
   ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.1, 9.3 item 3)
-- **The divide-fault panel** in the shipped kernels: the owner's call, and
-  the kernel's rather than WireArena's.
-  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.3 item 5, 7.1.2)
 
-**The link**
+**After the first release** (the owner, 2026-11-15: *after*, for the turn
+acceleration and for all the test and measurement debt):
 
-- **The cable read skipped on the frame after an empty one**: "keep it on
-  the list, but not yet". (16.10)
-- **WireFleet onto `apps/os88cable.inc`**, so the copy does not stay two.
-  ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) L3.1)
-- **The 86Box XT pair** at 2400 baud, for the byte loss QEMU cannot show:
-  `tools/wireball-pair.py --game wirearena` exists, no result is recorded.
-  ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) L3.2)
-- **What the card costs on an 8088** (raw and UDP), unmeasured: MartyPC has
-  no NIC, so `vm/xt-wire` or the iron.
-  ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) 12.5,
-  [NET-PLAN](completed/WIREARENA-NET-PLAN.md) 8)
+- **Keyboard turn acceleration**: the arrows turn at one fixed rate; mouse
+  sensitivity (17.2) shipped as the other half.
+  ([AI-PLAN](completed/WIREARENA-AI-PLAN.md) 1, 1.1)
+- **The link**:
+  - the cable read skipped on the frame after an empty one ("keep it on
+    the list, but not yet", 16.10);
+  - WireFleet onto `apps/os88cable.inc`, so the copy does not stay two
+    ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) L3.1);
+  - the 86Box XT pair at 2400 baud, for the byte loss QEMU cannot show:
+    `tools/wireball-pair.py --game wirearena` exists, no result is recorded
+    ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) L3.2);
+  - what the card costs on an 8088 (raw and UDP), unmeasured: MartyPC has
+    no NIC, so `vm/xt-wire` or the iron
+    ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md) 12.5,
+    [NET-PLAN](completed/WIREARENA-NET-PLAN.md) 8).
+- **Rows not yet written**:
+  - capture the flag with four players on UDP
+    ([CTF-PLAN](completed/WIREARENA-CTF-PLAN.md) 11.3);
+  - free-for-all's and team deathmatch's linked wins
+    ([MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) 9, M4);
+  - the setup's buttons in `tests/btnall.py`
+    ([NET-PLAN](completed/WIREARENA-NET-PLAN.md) 9.1);
+  - the ramp walks of HEIGHTS-PLAN 9.7.3, still scratch scripts
+    ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.12);
+  - a launch row, a refusal row (too little memory) and a move row
+    (`tests/pkgmove.py`'s pattern) for the parts
+    ([PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 4.2);
+  - `tools/wacheck.py`'s host reference still leaves lifts out
+    ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.12);
+  - `wascore` and `waweapons` on kern_mega, which need the Bochs shim's
+    mouse re-capture to stop leaking a Ctrl (17.6).
+- **Renderer levers**, measured or estimated and not taken (internal; each
+  under a few percent):
+  - 16.9's interface hints between areas: a byte-wide `wa_fbuf`, `wa_face`
+    handing its columns over in registers, a "clip raised" flag (16.10);
+  - the frame block's version 2, ~0.25%; the hot keyframes into the pose
+    part for 4 KB at ~1% of render; a smaller `wa_rcp`
+    ([PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 8.2, 8.4, 8.6);
+  - a low box whose top is above the eye drawn as FACES - asked for, and 7
+    built the shut test instead ([HEDGES-PLAN](completed/WIREARENA-HEDGES-PLAN.md)
+    4.1, 7);
+  - a pickup's single occlusion verdict, the overlay's cost, the PVS margin
+    by the annex ([WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) 4);
+  - posts, a culled pass, shut runs in `FLATPASS`; merged edges; a 64-unit
+    PVS ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.7.8, 9.8).
 
-**Rows not yet written**
-
-- capture the flag with four players on UDP
-  ([CTF-PLAN](completed/WIREARENA-CTF-PLAN.md) 11.3);
-- free-for-all's and team deathmatch's linked wins
-  ([MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) 9, M4);
-- the setup's buttons in `tests/btnall.py`
-  ([NET-PLAN](completed/WIREARENA-NET-PLAN.md) 9.1);
-- the ramp walks of HEIGHTS-PLAN 9.7.3, still scratch scripts
-  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.12);
-- a launch row, a refusal row (too little memory) and a move row
-  (`tests/pkgmove.py`'s pattern) for the parts
-  ([PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 4.2);
-- `tools/wacheck.py`'s host reference still leaves lifts out
-  ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.12).
-
-**For the kern_mega session** (17.1): a linked match on kern_mega and
-SERIAL.DRV's verbs run there ([LINK-PLAN](completed/WIREARENA-LINK-PLAN.md)
-L3.3, 11.2); kern_mega soak rows of WireArena's own
-([AI-PLAN](completed/WIREARENA-AI-PLAN.md) 1, 1.1;
-[PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 4.2's kern_mega row); the
-umbrella's Wave 6 "kern_mega rows" (15). Done: 17.6 has the rows, the
-linked match and the one defect.
-
-**The owner's, after the arena work** (17.1): the field run on 5150 #1, the
-CGA questions and the PERFORMANCE.md set that follows from it (15, Wave 7).
-
-**Renderer levers, measured or estimated and not taken** (internal; each
-under a few percent):
-
-- 16.9's interface hints between areas: a byte-wide `wa_fbuf`, `wa_face`
-  handing its columns over in registers, a "clip raised" flag (16.10);
-- the frame block's version 2, ~0.25%; the hot keyframes into the pose
-  part for 4 KB at ~1% of render; a smaller `wa_rcp`
-  ([PARTS-PLAN](completed/WIREARENA-PARTS-PLAN.md) 8.2, 8.4, 8.6);
-- a low box whose top is above the eye drawn as FACES - asked for, and 7
-  built the shut test instead ([HEDGES-PLAN](completed/WIREARENA-HEDGES-PLAN.md)
-  4.1, 7);
-- a pickup's single occlusion verdict, the overlay's cost, the PVS margin
-  by the annex ([WEAPONS-PLAN](completed/WIREARENA-WEAPONS-PLAN.md) 4);
-- posts, a culled pass, shut runs in `FLATPASS`; merged edges; a 64-unit
-  PVS ([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.7.8, 9.8).
+**Not WireArena's**: the divide-fault panel in the shipped kernels is the
+kernel's, and the owner's call
+([HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md) 9.3 item 5, 7.1.2) -
+17.6's second defect is a field reason to weigh it: on kern_big the 8088's
+int 0 returned into a corrupted index where kern_mega stopped and said
+where.
 
 ### 17.4 After 1.0: ideas
 
@@ -1859,7 +1868,7 @@ None is promised; each is where it was proposed.
 | [WIREARENA-HEDGES-PLAN](completed/WIREARENA-HEDGES-PLAN.md) | the hedge, 63 boxes, a box standing on a box | completed |
 | [WIREARENA-CTF-PLAN](completed/WIREARENA-CTF-PLAN.md) | teams, side spawns, capture the flag | completed |
 | [WIREARENA-MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) | Win at, team deathmatch, king of the hill, the rotation | completed |
-| [WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md) | Crossing built; the Ziggurat and the Pit | **in progress** |
+| [WIREARENA-THREE-ARENAS-PLAN](completed/WIREARENA-THREE-ARENAS-PLAN.md) | Crossing, the Ziggurat and the Pit | completed |
 
 ### 17.6 The kern_mega pass (2026-11-15)
 

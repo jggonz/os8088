@@ -416,7 +416,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | Timer | `apps/timer/timer.asm` | §111 | yes |
 | Video Battle | `apps/vbattle/vbattle.asm` | §126 | no |
 | Video Player | `apps/video/video.asm` | §98 | yes |
-| WARENA | `apps/wirearena/wirearena.asm` |  | no |
+| WARENA | `apps/wirearena/wirearena.asm` | §128 | no |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` | yes |
 | WIRE | `apps/wire/wire.asm` | §78 | no |
 | WIREBALL | `apps/wireball/wireball.asm` | §109 | yes |
@@ -559,6 +559,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 125 | PCIETHER.DRV — PCI network cards for the big builds (`drivers/pciether/`) |
 | 126 | VIDEO BATTLE — a battle played as joined video clips (`apps/vbattle/`, `VBATTLE.O88`, `.VBT`) |
 | 127 | Debug disks — a boot floppy per subsystem that shows what the driver found (`apps/snddiag/`, `drivers/sound/snddiag.inc`) |
+| 128 | WireArena — a text-mode arena shooter (`apps/wirearena/`, `WARENA.O88`) |
 
 ## docs/
 
@@ -566,5 +567,5 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 *How it works today - `docs/` (51):* [86BOX.md](86BOX.md), [AGENT-SKILLS.md](AGENT-SKILLS.md), [APPLE2-SPEC.md](APPLE2-SPEC.md), [ARCADE-SPEC.md](ARCADE-SPEC.md), [BIFF-NOTES.md](BIFF-NOTES.md), [BOCHS.md](BOCHS.md), [C-TOOLCHAIN.md](C-TOOLCHAIN.md), [C64-SPEC.md](C64-SPEC.md), [DOS-DEBUGGING.md](DOS-DEBUGGING.md), [FIELD-MACHINES.md](FIELD-MACHINES.md), [FIELD-NOTES.md](FIELD-NOTES.md), [HEAP-CLAIMS.md](HEAP-CLAIMS.md), [HERCULES-TESTING.md](HERCULES-TESTING.md), [HOW-ARCADE-WAS-BUILT.md](HOW-ARCADE-WAS-BUILT.md), [HOW-CDROM-WAS-BUILT.md](HOW-CDROM-WAS-BUILT.md), [HOW-DEBUG-DISKS-WERE-BUILT.md](HOW-DEBUG-DISKS-WERE-BUILT.md), [HOW-INSTALL-WAS-BUILT.md](HOW-INSTALL-WAS-BUILT.md), [HOW-MIXER-WAS-BUILT.md](HOW-MIXER-WAS-BUILT.md), [HOW-SYSCHECK-WAS-BUILT.md](HOW-SYSCHECK-WAS-BUILT.md), [HOW-VBATTLE-WAS-BUILT.md](HOW-VBATTLE-WAS-BUILT.md), [HOW-VESA-WAS-BUILT.md](HOW-VESA-WAS-BUILT.md), [HOW-WAVERACK-WAS-BUILT.md](HOW-WAVERACK-WAS-BUILT.md), [HOW-WIN16-WAS-BUILT.md](HOW-WIN16-WAS-BUILT.md), [HOW-WIREFLEET-WAS-BUILT.md](HOW-WIREFLEET-WAS-BUILT.md), [HOW-XTMP3-WAS-BUILT.md](HOW-XTMP3-WAS-BUILT.md), [IMAGER.md](IMAGER.md), [KERNEL-MEMORY.md](KERNEL-MEMORY.md), [KODAK-EXAMPLE.md](KODAK-EXAMPLE.md), [LIVE-MEDIA.md](LIVE-MEDIA.md), [MARTYPC-DEBUG.md](MARTYPC-DEBUG.md), [README.md](README.md), [REALDMG-SPEC.md](REALDMG-SPEC.md), [REDLINE.md](REDLINE.md), [TEST-INCIDENTS.md](TEST-INCIDENTS.md), [TESTING.md](TESTING.md), [UPSTREAM.md](UPSTREAM.md), [WEAVE-SPEC.md](WEAVE-SPEC.md), [WRITING-TESTS.md](WRITING-TESTS.md), [browser/screenshots/README.md](browser/screenshots/README.md), [lemband-format.md](lemband-format.md), [syscheck/design/CODEX-PROMPTS.md](syscheck/design/CODEX-PROMPTS.md), [syscheck/design/PROMPT.md](syscheck/design/PROMPT.md), [xtmp3/ENGINE.md](xtmp3/ENGINE.md), [xtmp3/FACE.md](xtmp3/FACE.md), [xtmp3/FIELD.md](xtmp3/FIELD.md), [xtmp3/NUMERICS.md](xtmp3/NUMERICS.md), [xtmp3/STD.md](xtmp3/STD.md), [xtmp3/XT-STUDY-TABLES.md](xtmp3/XT-STUDY-TABLES.md), [xtmp3/XT-STUDY.md](xtmp3/XT-STUDY.md), [xtmp3/XT.md](xtmp3/XT.md), [xtmp3/listen/README.md](xtmp3/listen/README.md)
 
-*Not reference:* 120 open plans in `docs/plans/`, 268 design records in `docs/plans/completed/`, 1 retired plans in `docs/plans/retired/`, 11 superseded files in `docs/history/`, 174 measurements in `docs/reports/`.
+*Not reference:* 119 open plans in `docs/plans/`, 269 design records in `docs/plans/completed/`, 1 retired plans in `docs/plans/retired/`, 11 superseded files in `docs/history/`, 174 measurements in `docs/reports/`.
 

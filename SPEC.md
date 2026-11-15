@@ -251270,3 +251270,287 @@ turns the `D8h` reading off and on, `Esc` closes.
 
 On kern_small, which refuses `OSAPI_WM_TIMER`, there is no play test and
 page 2 says so.
+
+## 128. WireArena — a text-mode arena shooter (`apps/wirearena/`, `WARENA.O88`)
+
+`WARENA.O88` is WireArena: a first-person arena shooter drawn in text mode.
+Thin wall edges on black, solid figures and changed cells only. You can play
+it alone against bots, or with up to four participants over a null modem,
+raw Ethernet or UDP. This section is its contract. The plans that built
+it are its history: docs/plans/MULTIPLAYER-FPS-PLAN.md (the umbrella, with
+the owner's rulings and what comes after 1.0) and the ten
+`docs/plans/completed/WIREARENA-*-PLAN.md`. Where a plan and this section
+disagree, this section and the source win.
+
+### 128.1 Where it runs, and what it is made of
+
+- **kern_big and kern_mega.** kern_small refuses it at entry, before a
+  sector of its parts is read: `OSAPI_MOUSE_REL` (§9.14) is the test, and
+  the toast is *Needs kern_big or mega*.
+- **kern_mega runs the shipped build as it is.** There is no `PKG_MEGA` arm
+  (§20.18 rule 2). The class byte is `OS88_HIGH | OS88_HIGHMEM`: the region and the
+  parts' carve may live above 1MB. Every segment the package holds is
+  ASKED for, never computed: `op_seg`/`op_cseg` for the parts, `FSI_SEG`
+  for text memory, DS for the minimap's bytes. They are asked for again in the
+  carve's move hook. Nothing is stored through CS.
+  MULTIPLAYER-FPS-PLAN 17.6 is the audit.
+- **Parts (§20.12)**, `OS88_PARTS_BEGIN 2 + WA_NARENA`:
+  - part 0, `OP_SEG`, `OP_COMP | OP_ZFILL`: the RENDERER
+    (`apps/wirearena/wrpart.asm`). It has its own segment and its own data,
+    and is far-called through its code selector (`OP_WANT_CSEG`). A
+    pushed far return enters it (`wa_rcall`), so no vector is read
+    through CS;
+  - part 1, `OP_ASSET`, `OP_COMP`: the POSE part, the figures'
+    keyframes off the renderer's hot path (`apps/wirearena/wapose.asm`);
+  - parts 2.., `OP_ASSET`, `OP_LAZY | OP_COMP`: one ARENA each (128.4),
+    fetched when a match needs it.
+- **Moves.** The region is `OS88_REGION_MOVABLE`, and the carve is
+  `op_movable` with `wa_partsmv`, which re-reads the two banked words. That is
+  safe because the renderer calls no kernel slot, so no claim moves while
+  the task stands in it. While a serial port is leased the region is
+  pinned, as §115 requires, and it is declared movable again when the port
+  is let go.
+- **The disks** (§24): `games2-360.img` at 360KB (at the root), `GAMES/`
+  on the 1.44MB and 1.2MB apps disks, on `more720.img`, and on kern_mega's
+  `megaapps.img` and `megaapps120.img`. `apps720.img` leaves it off for
+  room. The on-demand `make wirearenadisk` gives a disk of its own in four
+  geometries.
+
+### 128.2 The bracket and the screen
+
+The window is the match setup (128.6). The match runs inside a plain
+`OSAPI_FSX_RUN` bracket (§53.1, CX = 0) in a text mode set with
+`OSAPI_FSX_MODE`: `FSXM_TEXT80` (80x25) or `FSXM_TEXT40` (40x25). The
+bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
+
+- **The width.** The default is 40 columns on an 8086/8088 and 80 on a
+  286 or better (`OSAPI_CPU_INFO`), changed with `-` and `+` in a match or
+  with Columns in the setup. A Hercules refuses 40, and the game then takes 80.
+- **The screen.** Rows 0..23 are the view; row 24 is the HUD (health, the
+  weapon and its rounds, the score against the goal, the message cell).
+  Text memory is `FSI_SEG` from `OSAPI_FSX_MODE`, and on kern_mega it is a
+  selector. The cursor is hidden with `int 10h` AH=01h CX=2000h, which is
+  §53.4's bare text contract.
+- **Mono is the display's KIND, never the segment's value**:
+  `OSAPI_FSX_CAPS`' DL = `VID_HERC` for the window's display selects the
+  monochrome attribute table (`wa_attrm`) and the colour one otherwise
+  (`wa_attrc`). On an MDA-class page 01h is an underline and 08h is nothing,
+  so the colour table there is wrong. (Before 17.6 the test was `FSI_SEG ==
+  B000h`, which is never true on kern_mega: `tests/wamono.py`.)
+- **Presentation** writes only the cells that changed. V waits for the
+  vertical retrace before presenting (`OSAPI_FSX_WAIT`).
+- **The detail levels** are F1..F5: Very Low, Low, Medium, High, Very
+  High. Each is one row of `wa_levtab`: the renderer's `LK_*` options, the
+  floor grid, stepped treads, dashed floor lines and the small-figure
+  threshold. Moving an option between levels is a change to that table and
+  nothing else. The default is Medium on an 8086/8088 and High on a 286 or better.
+
+### 128.3 The simulation, the input and the renderer part
+
+- **A fixed step of 30 Hz** (`WA_TICK`, 39,773 counts of the PIT's 838 ns).
+  The clock is `pit_now` (`apps/os88pit.inc`). A frame owes the ticks the
+  time since the last one buys, AT MOST FOUR, and drops the rest of the
+  debt. Presentation is once a frame, whatever the ticks.
+- **Input** is polled, as §53.1 has it. `OSAPI_KEY_MAP` gives the held keys,
+  one call a frame, and `int 16h` gives typed keys (the weapon digits, R, Q/E,
+  the F keys). `OSAPI_MOUSE_REL` gives the mouse, with its motion discarded
+  on entry. The keys are the About card's: mouse looks; W A S D move;
+  the arrows turn and pitch; Space jumps; a click or Ctrl fires; R reloads;
+  1..6 choose pistol, shotgun, chaingun, grenades, rockets, railgun;
+  Q/E step back and forward through the weapons; `[`/`]` set the mouse
+  sensitivity (nine levels, for the session); P pauses (offline only); Tab
+  shows the scoreboard and the minimap while held; `-`/`+` choose 40/80
+  columns; F1..F5 set the detail; V turns vsync on and off; F10 cycles the
+  meter (none, frames a second, every number); Esc leaves (in a linked match
+  it asks "Leave the match? Y/N").
+- **The renderer part's ABI** is `apps/wirearena/wafb.inc`, which both
+  halves include, so the FRAME BLOCK is one layout:
+  - **The part's header**: `'WRPART'`, then at +6 the ABI byte
+    (`WR_ABI`, 14) and at +7 the verb count (`WR_NVERB`, 6). From +8
+    there is a word per verb, its offset. The primary refuses a mismatch at
+    launch with *Renderer part mismatch*.
+  - **The verbs**: `WRV_INIT` (after a mode set), `WRV_GEOM`, `WRV_ARENA`
+    (AL = an arena), `WRV_RENDER` (out AL = the frame number), `WRV_PRESENT`
+    (out AX = cells written) and `WRV_TRACE` (a shot's cone; out the nearest
+    figure hit and a bit for each figure hit). Each is entered with DS =
+    the part's data and leaves with `retf`, and every register but DS, SS
+    and SP may be clobbered.
+  - **The frame block** sits at offset `WR_FB` (32) in the part.
+    `WA_RAT(x)` is a variable's address there. Its sections and who writes
+    them:
+    - CONFIG: the game writes it at a mode set or a field-of-view change
+      (`wa_rsync`);
+    - FRAME and the figures' first 20 bytes: the game writes them every
+      frame;
+    - ARENA: the part writes it, and the game copies it back;
+    - OVERLAY: the game writes it when it is rebuilt;
+    - ROCKETS: the game writes them while any is live;
+    - TEAMS: the game writes them every frame of a team match.
+
+    The renderer reads only its own copy, so a variable it reads belongs in
+    CONFIG or FRAME. A change to the block's layout is an ABI bump.
+- **The figure record** is `F_SIZE` (56) bytes, `waconst.inc`: position,
+  facing, route leg, shield, animation, health, the death's kind, the floor
+  it stands on, the last projection (the part's), and the bot's own bytes.
+  There are three figure records besides the player (`WA_NFIG`): the
+  other players and the bots.
+
+### 128.4 Arenas
+
+Eight arenas are host-built DATA: `tools/arenagen.py` writes each one as an
+`OP_ASSET` part, `build/waa<n>.asm`. The list's order is
+`arenagen.ARENA_ORDER`, emitted as `WA_ORD<item>` and `WA_ITM<arena>`:
+
+| item | arena | name | modes |
+|---|---|---|---|
+| 0 | 1 | Open | free-for-all |
+| 1 | 0 | Pillars ("Arena") | free-for-all |
+| 2 | 5 | Crossing | all four |
+| 3 | 2 | Heights (the default) | free-for-all, king of the hill |
+| 4 | 3 | Hedge | all four |
+| 5 | 4 | Twin | all four |
+| 6 | 7 | The Pit | all four |
+| 7 | 6 | Ziggurat | free-for-all, team deathmatch, king of the hill |
+
+Which modes an arena plays is derived from its data by arenagen's
+`arena_modes` (`WA_AM<n>`): free-for-all always, capture the flag where it
+has flag bases, team deathmatch where each side has two respawn points,
+and king of the hill where it has a hill. The setup's Arena list offers only
+the arenas the chosen mode can play.
+
+- **The world.** A unit is 1/64 m. Each arena is a room 2048 units square with
+  y pointing north, and angles are 1024 to the turn. An arena is a list of
+  axis-aligned BOXES, each with a height and a kind: a SOLID; a FLIGHT
+  (a ramp of treads, rising toward one face); a LIFT (a rest height and a
+  raised height, and the sim moves it); or a LINE (a low outline the feet
+  treat as a wall, and shots and sight do not). A box may STAND on the one
+  before it.
+- **A part's layout**: the descriptor row is at offset 0, with every table
+  offset relative to the part. It names, in order: the coordinate tables,
+  the vertices and corners, the boxes and their BSP, the start (x, y, its
+  facing), the colours, the box heights and kinds, the room height, the
+  tallest box, the lifts, the route graph (AI-PLAN 3.1), the PVS, the
+  pickups and their PVS, and the floor lines. `wa_loadarena` copies one into the
+  working tables and REBASES the tree's links. `arena_part()` in
+  arenagen.py is this layout's single writer, and the renderer's
+  `wa_loadarena` its single reader.
+- **Budgets checked at build time**: at most `WA_MBOX` boxes, `WA_MLIFT`
+  (4) lifts and `WA_MFL` (24) floor lines. arenagen also REFUSES an arena
+  over the visible budget of boxes in view and outline edges (`wamodel`,
+  HEIGHTS-PLAN 4.2); `OVER_BUDGET` is where an exception would be written,
+  and it holds none.
+- **Pickups**: up to `WA_MPK`. Each has a place, a kind (a weapon, health
+  or a shield) and its choices: a weapon spawn picks among its weapons when
+  it spawns, and health and shields never share a spawn with weapons.
+  **Respawns, the start and flag bases may stand on a box's top** (the Pit).
+
+### 128.5 Modes and bots
+
+- **Free-for-all, team deathmatch, capture the flag, king of the hill**
+  (`wa_gmode`: 0 free-for-all, 1 capture the flag, 2 team deathmatch, 3
+  king of the hill; the setup's Mode list reads `free-for-all`, `team
+  deathmatch`, `capture flag`, `KingOfTheHill`).
+- **Win at**: each mode has its own list of scores, and `no limit`. A win shows
+  for 10 s (`WC_WINT`, 300 ticks) and the match goes on in the next arena
+  of the mode's ROTATION. That is `wa_srot`, a bit for each arena for each
+  mode, all of them by default. The setup's Rotation window (R) changes it,
+  and the last arena left checked stays checked.
+- **Teams** are red and blue, with side spawns. In a team mode a teammate takes no
+  damage, from hitscan, splash or a projectile's direct hit.
+- **Spawn protection**: for 2 s (`WA_PROTT`, 60 ticks) after a player's
+  spawn, or until its first shot, nothing hurts it; its heart is cyan while
+  that lasts. Bots get none.
+- **Bots**: up to three (`Bots` 0..3), with players and bots four in all.
+  They walk the arena's route graph (lifts and hops included), see and
+  shoot, arm themselves, fetch health, and play for the flag. Skill is easy,
+  normal or hard. In a linked match the HOST runs the bots.
+
+### 128.6 The match setup window
+
+The window is made of the system's controls (§13.8 buttons, §13.15 check
+boxes, the drop-downs and §83's line editor). It draws only what changed
+and uses `font_run` for text:
+
+- **Drop-downs**: Arena, Columns, Bots, Skill, Play, Mode and Win at.
+  Play is `offline`, `serial cable`, `local network` or `internet`.
+  On a guest, what only the host chooses (the arena, the bots, the skill)
+  is refused with *The host picks the arena*.
+- **An address field** (for internet) and a **Nick** (eight characters).
+  They are in-session only: persistence was declined (MULTIPLAYER-FPS-PLAN
+  17.1).
+- **Buttons**: Play (or Ready, when linked) and Keys, which puts up the
+  About card (§12.2): the same card the system menu's About shows.
+- **The Link menu**: Automatic, Connect COM1, Connect COM2 and Disconnect.
+- **The Rotation window**: one check box for each arena the mode plays.
+  Its paint keeps SI and DF, as `W_PAINT` owes (§11), and its click keeps
+  SI, as `W_ONCLICK` owes. Before 17.6 it did not, and kern_mega's fault
+  reporter found it.
+
+### 128.7 The link
+
+**One body format on three carriers.** Every carrier carries the same
+typed bodies:
+
+- **Serial**: `apps/os88cable.inc` on the desktop serial lease (§115) at
+  2400 baud. A frame is 7Eh, the escaped body, 7Eh, with 7Eh/7Dh escaped as
+  7Dh plus the byte XOR 20h. Automatic searches COM2 first and then moves
+  between the ports (§114.9's search). Open and Close happen in the window;
+  only Read and Write happen in the bracket (§53.7).
+- **Raw Ethernet**: `apps/os88raw.inc` on ETHER.DRV's raw verbs (§72.22).
+  The EtherType is 88B5h, then a length byte, then the body. HELLO is
+  broadcast, and everything else goes to the peer's station address.
+- **UDP**: `apps/os88udp.inc` on ETHER.DRV's UDP verbs (§72.24), port
+  **30088**. HELLO is broadcast to 255.255.255.255 and also sent to a typed
+  address. Play's `local network` takes UDP and falls back to raw frames
+  when there is no address.
+
+**A body**: byte 0 is the TYPE. The last two bytes are CRC-16/CCITT-FALSE
+(initial FFFFh, polynomial 1021h) over the bytes before them. Each type has
+exactly one length, its CRC included, so a frame of another length, of an
+unknown type, or with a bad CRC is dropped whole. Words are little-endian.
+Every in-match body carries the match TAG at byte 1, and a frame with
+another tag is dropped.
+
+| type | name | length | when | what |
+|---|---|---|---|---|
+| 1 | HELLO | 28 | the window, every 9 ticks | `WA`, protocol version 2, my identity (4 bytes, random and nonzero; the LOWEST is the host, slot 0), the peer I bound, my state (lobby, ready, in the match), the arena, the host's byte (skill bits 0-1, Win at bits 2-4, the mode bits 5-6), the bots, the match tag, the count of peers I have bound, my nick (8 bytes) |
+| 2 | SNAP | 15 | the match, every 3rd tick (10 Hz) | x, y, feet / 2, yaw (high byte); byte 8 (from the host: one lift in turn, its index x 64 + height / 4; from a guest: the pitch / 4); flags (alive, firing, shielded, the weapon in bits 3-5, the death's kind in bits 6-7); the damage dealt TO the receiver (a word, cumulative); the last EVENT applied from the receiver |
+| 3 | SCORE | 8 | once a second | the sender's row of deaths by cause (4 slots) |
+| 4 | EVENT | 19 | until acked | the sequence (1..255), then 14 bytes: the kind (1 FIRE, 2 TAKE, 3 ROLL, 4 FLAG, 5 GAME, 6 NEXT) and its payload |
+| 5 | HSNAP | 24 | the host, with bots, in place of SNAP | SNAP's fields, who dealt the damage (a slot), and each of two bots' x / 8, y / 8, facing / 4 and flags |
+| 6 | GSNAP | 17 | a guest, with bots, in place of SNAP | SNAP's fields and its hits on the host's bots (a word) |
+| 7 | BSCORE | 12 | the host, with bots, once a second | the bots' two rows of deaths by cause |
+| 8 | PEERS | 24 | the window, on UDP, with each HELLO | up to two other peers, each with its identity and address, so that players who each typed the host's address find each other |
+
+- **Slots**: identities ascending, the lowest is the host, slot 0. Bots
+  take the slots after the players. A match has four slots.
+- **The mesh**: every body goes to each peer (at most three copies). Every
+  per-peer quantity (the damage dealt, the last event applied, the ack of
+  our queue, when it was last heard) lives in that peer's record (`wa_pt`,
+  `WP_SZ` bytes).
+- **Events** queue up to eight. Each is sent until every peer still in the
+  match has acked it, and resent when an ack is `WL_RESEND` (20) ticks
+  late. A receiver applies only the sequence one past the last it applied.
+- **Silence**: 55 ticks without a frame shows LINK LOST, and frames
+  resuming clear it. A HELLO from the peer in the window shows OPPONENT LEFT.
+  In the lobby a quiet peer is dropped after 55 ticks, and the host
+  starts only when every peer it has bound is READY.
+- **Not in this release** (MULTIPLAYER-FPS-PLAN 17.1, 17.4): joining a
+  match in progress, a server browser, migrating the host, and more than
+  four participants.
+
+### 128.8 Verification
+
+- MartyPC (the 5150 with a CGA): `walift`, `waarenas`, `wactf`, `wamodes`,
+  `waflines`, `wafiglod`, `wastill`, `wasetup`, `waroutes`, `wabots`,
+  `wascore`, `wabotarms`, `waweapons`; on its Hercules, `wamono`.
+- The link, on QEMU (no NIC on MartyPC, and two machines): `walink`,
+  `walinknet`, `walinkudp`, `walinkip`, `walink4`, `walink4ip`,
+  `wactflink`, `wamodeslink`; with kern_mega at both ends, `walinkmega`,
+  `walinkmeganet`, `walinkmegaudp` and `walinkmegaip`.
+- kern_mega's ports (`tests/megaport.txt`): `mega-walift`, `mega-wamodes`,
+  `mega-waroutes`, `mega-wabots` and `mega-wabotarms` on Bochs, and
+  `mega-wamono` on 86Box's 286 with a Hercules.
+- The gates that hold the package as it ships: `megapkg`, `megahigh`,
+  `cswrite`, `megagrid` and `movable`, and the shipped-image lists
+  (`t_image`, `t_diskverify`, `t_catdisk`).

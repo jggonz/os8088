@@ -1,6 +1,6 @@
 # WireArena: Crossing, the Pit and the Ziggurat
 
-**STATUS: BUILT** (2026-11-15): A1 to A3; the owner accepted the Pit's cost - *"it would play fine on a V20 or above, and I think its ok to have one heavier map for first release"* (2026-11-15); the Ziggurat's ramp fixes (section 8) wait on the owner's look. Written to the owner's three drawings below,
+**STATUS: BUILT, COMPLETED** (2026-11-15): A1 to A3; the owner accepted the Pit's cost - *"it would play fine on a V20 or above, and I think its ok to have one heavier map for first release"* (2026-11-15). The Ziggurat's ramp fixes (section 8) are built and checked by `waarenas`; the owner's look at them is listed with the owner's other reviews in [MULTIPLAYER-FPS-PLAN](../MULTIPLAYER-FPS-PLAN.md) 17.3. The arenas' contract is SPEC.md 128.4. Written to the owner's three drawings below,
 before any code; section 7 is the waves and section 8 what was built.
 
 The owner, 2026-11-15, with three MS Paint drawings (*"not perfectly to
@@ -28,9 +28,9 @@ scale ... take them as general layout"*):
 > railgun at the top. Chaingun, rocket launcher at the four corner spawns
 > hidden behind the pillars out of view from the zigg."*
 
-The arena format is [WIREARENA-HEIGHTS-PLAN](completed/WIREARENA-HEIGHTS-PLAN.md)
+The arena format is [WIREARENA-HEIGHTS-PLAN](WIREARENA-HEIGHTS-PLAN.md)
 section 7 and `tools/arenagen.py`; the modes each arena plays come from its
-data ([WIREARENA-MODES-PLAN](completed/WIREARENA-MODES-PLAN.md) section 6). All three
+data ([WIREARENA-MODES-PLAN](WIREARENA-MODES-PLAN.md) section 6). All three
 are DATA in `tools/arenagen.py`, plus the engine work section 5 names.
 
 Coordinates are world units (64 a metre), the room 2048 square, y north.

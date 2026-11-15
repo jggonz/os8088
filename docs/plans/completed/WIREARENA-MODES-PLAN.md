@@ -90,7 +90,7 @@ their foes.
   the stack's south foot, not the stack's top as first planned: no route
   climbs the stack, so a bot could never take a hill there (section 9).
   *(Since: Crossing, arena 5, plays all four modes, its hill at the centre -
-  [WIREARENA-THREE-ARENAS-PLAN](../WIREARENA-THREE-ARENAS-PLAN.md) 1.)*
+  [WIREARENA-THREE-ARENAS-PLAN](WIREARENA-THREE-ARENAS-PLAN.md) 1.)*
 
 ## 5. Arenas by mode, and the rotation
 
