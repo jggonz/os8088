@@ -30,10 +30,10 @@ Clear Skies rows, 1,021 s of declared row time:
     one invocation PER ROW        ~1,549 s   = 1,021 + 24 x 22
 
 What this file adds over `os88test.py soak` is therefore NOT parallelism.  It
-is the four things below - and, since the width change, one lane per core
+is the five things below - and, since the width change, one lane per core
 rather than cores-1.
 
-It also owns the four things a soak in a container gets wrong, none of which
+It also owns the five things a soak in a container gets wrong, none of which
 belong in `os88test.py` - that runs rows, and these are about the RUN:
 
   1. THE PREFLIGHT.  A capability the box has not got makes a row SKIP, and a
@@ -64,6 +64,15 @@ belong in `os88test.py` - that runs rows, and these are about the RUN:
      rule the run depends on is the other half of point 2: check in with THIS,
      not by running rows beside it.
 
+  5. BEING LEFT ALONE.  `start` runs the whole soak inside a SNAPSHOT of
+     the checkout - a commit object of the working tree, checked out into a
+     reused git worktree under build/soak/src/ - so the runner, the rows,
+     the tools, the Makefile, the build and MartyPC are all the snapshot's.
+     The session that started it may edit, commit, merge, `make` and
+     `make marty` while it runs (docs/plans/SOAK-PARALLEL.md 14.4; the block
+     headed THE SNAPSHOT below).  `--shared-build` is the old live-checkout
+     run.
+
 WHAT IT DOES NOT DO.  It does not decide whether a failure is real.  That is
 the classification protocol - re-run alone on HEAD, then at the
 base, and bisect only where those two disagree - and the first step is
@@ -86,7 +95,17 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88build                                            # noqa: E402
 
-RUNS = os.path.join(ROOT, "build", "soak")
+# THE CHECKOUT THE RUN BELONGS TO, which is not always the one this file is
+# in. A frozen `start` (docs/plans/SOAK-PARALLEL.md 14.4) re-runs THIS SCRIPT
+# out of the run's own SNAPSHOT of the source, so there ROOT is the snapshot
+# and every tool, row, Makefile and build/ it reads comes from it - while the
+# run's records (build/soak/<run>/, `latest`, the journal, the `finished`
+# marker CLAUDE.md fork rule 4 waits on) stay in the operator's checkout,
+# where `status`, `stop` and `--resume` look for them. $OS88_SOAK_HOME is set
+# only by `start` for that inner copy; unset, HOME is ROOT.
+HOME = os.path.abspath(os.environ.get("OS88_SOAK_HOME") or ROOT)
+IN_SNAPSHOT = os.path.realpath(HOME) != os.path.realpath(ROOT)
+RUNS = os.path.join(HOME, "build", "soak")
 
 GREEN, RED, YELLOW, DIM, OFF = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
@@ -488,15 +507,21 @@ def _buildnum_current():
                                                  # re-assembly check owns it
     if not have:
         return True, ""
+    # THE NUMBER `make` WOULD WRITE, asked of tools/buildnum.py itself - not
+    # a second `git rev-list --count`. On a SHALLOW clone buildnum.py writes 0
+    # on purpose (its docstring: a truncated count is a wrong number), so the
+    # raw count here disagreed with every fresh `make` and refused every run
+    # in a shallow checkout as "make has not run since the last commit".
+    # (Folded from soak-speed-office 10b460b.) It also honours
+    # $OS88_BUILDNUM, which is what a frozen run's snapshot needs: a dirty
+    # snapshot is a commit one AHEAD of the operator's HEAD, and its tree was
+    # built at the operator's pinned number (docs/plans/SOAK-PARALLEL.md 14.4).
     try:
-        want = subprocess.run(["git", "rev-list", "--count", "HEAD"],
-                              cwd=ROOT, capture_output=True, text=True,
-                              timeout=30)
-        if want.returncode:
-            return True, ""                      # not a git checkout: not our
-        n = int(want.stdout.strip())             # question to answer
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return True, ""
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import buildnum
+        n, _why = buildnum.build_number()
+    except Exception:                            # noqa: BLE001 - as before:
+        return True, ""                          # not our question to answer
     if int(have.group(1)) == n:
         return True, ""
     return False, ("build/buildnum.inc says BUILD_NUM %s and this checkout is "
@@ -913,21 +938,459 @@ def _done_rows(d):
     return out
 
 
-def _snapshot_src(tree):
-    """Copy what os88sym assembles the kernel from into `tree`/src: kernel/,
-    boot/, drivers/ and apps/*.inc, as they are now - the moment the tree
-    was built from them. Replaced whole, so a resumed run takes its own."""
-    import shutil
-    dst = os.path.join(tree, "src")
-    shutil.rmtree(dst, ignore_errors=True)
-    for d in ("kernel", "boot", "drivers"):
-        shutil.copytree(os.path.join(ROOT, d), os.path.join(dst, d))
-    os.makedirs(os.path.join(dst, "apps"))
-    for n in os.listdir(os.path.join(ROOT, "apps")):
-        if n.endswith(".inc"):
-            shutil.copy2(os.path.join(ROOT, "apps", n),
-                         os.path.join(dst, "apps", n))
-    return dst
+# --------------------------------------------------------------------------
+# THE SNAPSHOT - docs/plans/SOAK-PARALLEL.md 14.4.
+#
+# A frozen run used to freeze the BUILD (a tree under build/trees/) and the
+# KERNEL SOURCE os88sym re-assembles (a copy of kernel/ boot/ drivers/ and
+# apps/*.inc) - and nothing else. Every row still ran tools/os88test.py,
+# tests/suite.py, its own tests/<row>.py, every tools/*.py module, the Makefile
+# and the package sources out of the LIVE checkout, and read MartyPC through
+# build/martypc, which is a symlink every worktree on the box shares. So the
+# session that started the soak could not fix anything while it ran: an edit
+# to a test, a commit, a checkout, a merge or a `make marty` broke the rows
+# that had not started yet, and the soak was red for a reason nobody tested.
+#
+# Now the run gets a SNAPSHOT of the whole source tree as the session would
+# build it - tracked files, uncommitted changes and untracked files that are
+# not ignored - and the runner, every row, every tool and every `make` a row
+# runs execute INSIDE it (cwd = the snapshot, so ROOT = the snapshot for
+# every module that computes one). Its build/ is the run's tree. Nothing of
+# the operator's checkout is read after `start` returns except three
+# instruments that `make` never rewrites (the C compiler, Watcom, QEMU 9 -
+# see PIN_LINK), and the run's records, which stay in the operator's
+# build/soak/ for `status`, `stop` and `--resume`.
+#
+# HOW, AND WHY IT IS CHEAP ON THE SECOND RUN. The snapshot is a COMMIT OBJECT
+# made with a throw-away index (`git add -A` into a copy of the session's
+# index, `write-tree`, `commit-tree`) - no ref, no index, no stash and no file
+# of the operator's is touched - checked out into a SLOT: a detached git
+# worktree under build/soak/src/. A slot is reused: re-pointing it at the
+# next snapshot is `git checkout --detach -f`, which rewrites ONLY the files
+# that differ and gives each a fresh mtime, so the slot's build/ stays warm
+# and its `make` rebuilds exactly what an in-place edit would have rebuilt.
+# A slot a live or resumable run holds is never re-pointed; the next run
+# takes another (KEEP_SLOTS).
+# --------------------------------------------------------------------------
+
+SLOTS = os.path.join(RUNS, "src")
+KEEP_SLOTS = 2
+try:
+    KEEP_SLOTS = max(1, int(os.environ.get("OS88_SOAK_SLOTS", "2")))
+except ValueError:
+    pass
+
+# INSTRUMENTS. The run must not see one swapped under it, and `make marty` is
+# the one a working session actually rebuilds - build/martypc is one directory
+# shared by symlink across every worktree here, so another session's rebuild
+# reaches this run too. So MartyPC's staged run/ (12 MB: the binary, configs,
+# ROMs) is COPIED into the slot, and its instance REGISTRY (inst/) is linked
+# back to the shared one: `os88marty.py instances`, `reap` and `status`'s
+# "in flight" line must see the run's emulators, and the run's reaper must see
+# everybody else's - an orphan is an orphan whoever made it. 86Box's binary
+# is copied the same way (a `tools/86box/build.sh` rewrites it); its ROMs are
+# linked and its run/ is the slot's own.
+#
+# PIN_LINK is everything else `make clean` spares - pinned upstream tools
+# that only their own setup script rebuilds, never `make` - linked as
+# os88build.SHARED links them into a knob tree. Copying build/cc or a QEMU
+# install would be hundreds of MB per slot to guard against a rebuild nobody
+# does mid-soak; if that changes, move the name into the copied set.
+PIN_LINK = ("cc", "watcom", "apple2-rom", "nasm3", "gbtest", "rgbds",
+            "picomem", "qemu9")
+
+# CONTENT-ADDRESSED CACHES, linked so a slot starts warm: an entry is keyed
+# on the bytes of everything that made it (os88fixture.cached), so a source
+# that differs between the slot and the checkout is a different key, never
+# a stale hit - sharing one cannot unfreeze anything.
+CACHE_LINK = ("fixcache",)
+
+# IGNORED INPUTS outside build/ that rows read: the IBM ROM a box may have
+# dropped in (os88marty.IBM_ROM_PATH) and the WIN16 reference machines
+# (win16ref.py). `git add -A` leaves both out, correctly, so they are linked.
+CARRY_IGNORED = ("tools/martypc/roms", "win16ref")
+
+
+def _git(args, cwd, env=None, check=True):
+    r = subprocess.run(["git"] + list(args), cwd=cwd, env=env,
+                       capture_output=True, text=True)
+    if check and r.returncode:
+        raise RuntimeError("git %s failed in %s: %s"
+                           % (" ".join(args), cwd,
+                              (r.stderr or r.stdout).strip()[-600:]))
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def snapshot_commit(home=None):
+    """A commit object holding the checkout AS IT WOULD BUILD NOW.
+
+    Returns {"commit", "head", "dirty"}: `dirty` is the number of paths that
+    differ from HEAD (modified, added, deleted, untracked-not-ignored), and
+    with none the snapshot IS HEAD and no object is written. The session's
+    index, refs and files are not touched: `git add -A` runs against a COPY of
+    its index (copied so the stat cache makes it a rescan, not a rehash of
+    638 MB), and the commit is reachable only from the slot that checks it out.
+    """
+    import tempfile
+    home = home or HOME
+    head = _git(["rev-parse", "HEAD"], home)
+    idx = _git(["rev-parse", "--git-path", "index"], home)
+    if not os.path.isabs(idx):
+        idx = os.path.join(home, idx)
+    fd, tmp = tempfile.mkstemp(prefix="os88soak-index-")
+    os.close(fd)
+    try:
+        if os.path.exists(idx):
+            shutil.copyfile(idx, tmp)
+        else:
+            os.remove(tmp)
+        env = dict(os.environ, GIT_INDEX_FILE=tmp)
+        _git(["add", "-A"], home, env=env)
+        tree = _git(["write-tree"], home, env=env)
+        changed = _git(["diff", "--cached", "--name-only", "--no-renames",
+                        "HEAD"], home, env=env)
+    finally:
+        for p in (tmp, tmp + ".lock"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    dirty = len([n for n in (changed or "").splitlines() if n])
+    if tree == _git(["rev-parse", "HEAD^{tree}"], home):
+        return {"commit": head, "head": head, "dirty": 0}
+    who = dict(os.environ, GIT_AUTHOR_NAME="os88soak",
+               GIT_AUTHOR_EMAIL="os88soak@localhost",
+               GIT_COMMITTER_NAME="os88soak",
+               GIT_COMMITTER_EMAIL="os88soak@localhost")
+    commit = _git(["commit-tree", tree, "-p", head, "-m",
+                   "os88soak snapshot: HEAD plus %d uncommitted path(s)"
+                   % dirty], home, env=who)
+    return {"commit": commit, "head": head, "dirty": dirty}
+
+
+def _slots():
+    try:
+        names = os.listdir(SLOTS)
+    except OSError:
+        return []
+    return sorted(os.path.join(SLOTS, n) for n in names
+                  if re.match(r"s\d+$", n)
+                  and os.path.isdir(os.path.join(SLOTS, n)))
+
+
+def _pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError as e:
+        return e.errno == errno.EPERM
+    except (TypeError, ValueError):
+        return False
+
+
+def _reserved():
+    """Slots that may not be re-pointed: a LIVE run's, the LATEST run's when
+    it can still be resumed (it never wrote `exit` - stopped, killed or
+    reclaimed), and one a `start` has CLAIMED and not yet handed a pid."""
+    out = set()
+    try:
+        latest = os.path.realpath(os.path.join(RUNS, "latest"))
+        names = os.listdir(RUNS)
+    except OSError:
+        return out
+    for n in names:
+        d = os.path.join(RUNS, n)
+        try:
+            meta = json.load(open(os.path.join(d, "meta.json")))
+        except (OSError, ValueError):
+            continue
+        snap = meta.get("snapshot")
+        if not snap:
+            continue
+        resumable = (os.path.realpath(d) == latest
+                     and not os.path.exists(os.path.join(d, "exit")))
+        if _pid_alive(meta.get("pid")) or resumable:
+            out.add(os.path.realpath(snap))
+    for s in _slots():
+        try:
+            pid = int(open(s + ".claim").read().split()[0])
+        except (OSError, ValueError, IndexError):
+            continue
+        if pid != os.getpid() and _pid_alive(pid):
+            out.add(os.path.realpath(s))
+    return out
+
+
+class _SlotLock(object):
+    """A short flock over choosing and claiming a slot, so two `start`s in one
+    checkout cannot pick the same one. Held for milliseconds, not the build:
+    the claim file is what reserves the slot after it is released."""
+    def __enter__(self):
+        os.makedirs(SLOTS, exist_ok=True)
+        self.f = open(os.path.join(SLOTS, ".lock"), "a")
+        try:
+            import fcntl
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+
+def _claim(slot):
+    with open(slot + ".claim", "w") as f:
+        f.write("%d %f\n" % (os.getpid(), time.time()))
+
+
+def pick_slot():
+    """The slot this run will use, claimed: the most recently used FREE one
+    (its build/ is the warmest and its checkout the fewest files behind), else
+    a new one."""
+    with _SlotLock():
+        res = _reserved()
+        free = [s for s in _slots() if os.path.realpath(s) not in res]
+
+        def used(s):
+            try:
+                return os.path.getmtime(s + ".claim")
+            except OSError:
+                return 0.0
+        if free:
+            slot = max(free, key=used)
+        else:
+            have = {int(os.path.basename(s)[1:]) for s in _slots()}
+            n = 0
+            while n in have:
+                n += 1
+            slot = os.path.join(SLOTS, "s%d" % n)
+        _claim(slot)
+    return slot
+
+
+def _is_slot(slot, home=None):
+    """Is `slot` a working git worktree of this checkout's repository?"""
+    home = home or HOME
+    if not os.path.isfile(os.path.join(slot, ".git")):
+        return False
+    mine = _git(["rev-parse", "--git-common-dir"], slot, check=False)
+    ours = _git(["rev-parse", "--git-common-dir"], home, check=False)
+    if not mine or not ours:
+        return False
+    ab = lambda p, c: os.path.realpath(p if os.path.isabs(p)
+                                       else os.path.join(c, p))
+    return ab(mine, slot) == ab(ours, home)
+
+
+def remove_slot(slot, home=None):
+    """Delete a slot and forget its worktree. shutil.rmtree FIRST, because it
+    never follows a symlink - build/martypc/inst in a slot IS the shared
+    registry - and then `git worktree prune` drops the record of a worktree
+    whose directory is gone."""
+    home = home or HOME
+    if os.path.islink(slot):
+        os.remove(slot)
+    elif os.path.lexists(slot):
+        shutil.rmtree(slot, ignore_errors=True)
+    _git(["worktree", "prune"], home, check=False)
+    for ext in (".claim",):
+        try:
+            os.remove(slot + ext)
+        except OSError:
+            pass
+
+
+def sync_slot(slot, commit, home=None):
+    """Point `slot` at `commit`: a new detached worktree, or an existing one
+    re-checked-out, which rewrites only the files that differ (fresh mtimes,
+    so make sees them) and deletes untracked non-ignored debris a row left.
+    Its build/ is ignored by the snapshot's own .gitignore and survives."""
+    home = home or HOME
+    if os.path.isdir(slot) and _is_slot(slot, home):
+        _git(["checkout", "-q", "--detach", "-f", commit], slot)
+        _git(["clean", "-fdq"], slot)
+        return "reused"
+    if os.path.lexists(slot):
+        remove_slot(slot, home)
+    os.makedirs(os.path.dirname(slot), exist_ok=True)
+    _git(["worktree", "prune"], home, check=False)
+    _git(["worktree", "add", "-q", "--detach", "-f", slot, commit], home)
+    return "created"
+
+
+def _relink(src, dst):
+    if os.path.islink(dst):
+        if os.readlink(dst) == src:
+            return
+        os.remove(dst)
+    elif os.path.exists(dst):
+        return                          # something real is there: the slot's
+    os.symlink(src, dst)                # own, leave it
+
+
+def pin_instruments(slot, home=None):
+    """Copy or link the instruments into the slot's build/ - see PIN_LINK."""
+    home = home or HOME
+    B, D = os.path.join(home, "build"), os.path.join(slot, "build")
+    os.makedirs(D, exist_ok=True)
+    pinned = []
+    for name, keep in (("martypc", ("run",)), ("86box", ("86Box",))):
+        src = os.path.realpath(os.path.join(B, name))
+        if not os.path.isdir(src):
+            continue
+        dst = os.path.join(D, name)
+        if os.path.islink(dst):
+            os.remove(dst)
+        os.makedirs(dst, exist_ok=True)
+        for k in keep:
+            s, t = os.path.join(src, k), os.path.join(dst, k)
+            if not os.path.exists(s):
+                continue
+            if os.path.isdir(t) and not os.path.islink(t):
+                shutil.rmtree(t)
+            elif os.path.lexists(t):
+                os.remove(t)
+            (shutil.copytree(s, t, symlinks=True) if os.path.isdir(s)
+             else shutil.copy2(s, t))
+            pinned.append("%s/%s" % (name, k))
+        if name == "martypc":
+            reg = os.path.join(src, "inst")
+            os.makedirs(reg, exist_ok=True)
+            _relink(reg, os.path.join(dst, "inst"))
+        else:
+            for n in os.listdir(src):
+                if n not in keep and n != "run":
+                    _relink(os.path.join(src, n), os.path.join(dst, n))
+            os.makedirs(os.path.join(dst, "run"), exist_ok=True)
+    for name in PIN_LINK:
+        src = os.path.join(B, name)
+        if os.path.exists(src):
+            _relink(os.path.realpath(src), os.path.join(D, name))
+    for name in CACHE_LINK:
+        src = os.path.join(B, name)
+        os.makedirs(src, exist_ok=True)
+        _relink(os.path.realpath(src), os.path.join(D, name))
+    for rel in CARRY_IGNORED:
+        src = os.path.join(home, rel)
+        if os.path.exists(src):
+            dst = os.path.join(slot, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            _relink(os.path.realpath(src), dst)
+    return pinned
+
+
+def build_slot(slot, targets, num):
+    """Build the run's artefacts into the slot's own build/, from the slot's
+    own source and Makefile, at the pinned build number. The same goals and
+    carries os88build.tree() gives a tree, with BUILD left at its default."""
+    D = os.path.join(slot, "build")
+    os88build._sweep_truncated(D)
+    os88build._carry_fetched(D)         # module ROOT is HOME: copies FROM it
+    env = dict(os.environ, OS88_BUILDNUM=str(num))
+    for k in ("OS88_TREE", "OS88_BUILD", "OS88_DEFINES", "OS88_SRC",
+              "OS88_PREBUILT", "MAKEFLAGS", "MAKELEVEL", "MFLAGS"):
+        env.pop(k, None)
+    cmd = (["make"] + os88build.NO_GATES
+           + os88build._goals("build", targets))
+    r = subprocess.run(cmd, cwd=slot, env=env, capture_output=True,
+                       text=True)
+    if r.returncode:
+        raise RuntimeError("`%s` failed in %s:\n%s"
+                           % (" ".join(cmd), slot,
+                              os88build._why(r.stdout, r.stderr)))
+    os88build._carry_inputs(D)
+
+
+def prune_slots(keep_also=(), home=None):
+    """Remove the least recently used FREE slots past KEEP_SLOTS. A reserved
+    slot is never removed, so the count can exceed KEEP_SLOTS while runs
+    hold them."""
+    res = _reserved() | {os.path.realpath(s) for s in keep_also}
+    slots = _slots()
+    free = [s for s in slots if os.path.realpath(s) not in res]
+    excess = len(slots) - KEEP_SLOTS
+    if excess <= 0:
+        return []
+
+    def used(s):
+        try:
+            return os.path.getmtime(s + ".claim")
+        except OSError:
+            return 0.0
+    gone = sorted(free, key=used)[:excess]
+    for s in gone:
+        remove_slot(s, home)
+    return gone
+
+
+def _du(path):
+    tot = 0
+    for dp, dn, fn in os.walk(path):
+        for n in fn:
+            try:
+                st = os.lstat(os.path.join(dp, n))
+                tot += st.st_blocks * 512
+            except OSError:
+                pass
+    return tot
+
+
+def freeze(a, verbose=True):
+    """Snapshot the checkout into a slot, pin its instruments and build it.
+
+    Returns (slot, info) - info is what meta.json records. The single entry
+    point `start` uses and `os88test.py --frozen` can use."""
+    import buildnum
+    t0 = time.time()
+    # THE NUMBER AND THE SNAPSHOT MUST DESCRIBE ONE HEAD: a commit landing
+    # between the two would pin N against a snapshot of N+1. Asked on both
+    # sides, and taken again in the rare case they disagree.
+    for _ in range(3):
+        num, why = buildnum.build_number()
+        snap = snapshot_commit()
+        if buildnum.build_number()[0] == num:
+            break
+    if not num and verbose:             # 0 on a shallow clone, pinned as 0:
+        print("%sos88soak: build number 0 - %s%s"   # the images then say
+              % (YELLOW, why, OFF))                 # "no number", as make's
+    slot = pick_slot()
+    how = sync_slot(slot, snap["commit"])
+    t1 = time.time()
+    pinned = pin_instruments(slot)
+    targets = _frozen_targets(a)
+    build_slot(slot, targets, num)
+    t2 = time.time()
+    gone = prune_slots(keep_also=(slot,))
+    info = {"snapshot": slot, "commit": snap["commit"], "head": snap["head"],
+            "dirty": snap["dirty"], "buildnum": num, "slot_was": how,
+            "pinned": pinned, "snap_secs": round(t1 - t0, 2),
+            "build_secs": round(t2 - t1, 2)}
+    if verbose:
+        print("os88soak: snapshot %s (HEAD %s%s) -> %s, %s in %.1fs; "
+              "built in %.1fs"
+              % (snap["commit"][:10], snap["head"][:10],
+                 (" + %d uncommitted path(s)" % snap["dirty"])
+                 if snap["dirty"] else "", os.path.relpath(slot, HOME), how,
+                 t1 - t0, t2 - t1))
+        if gone:
+            print("os88soak: pruned %d old snapshot(s): %s"
+                  % (len(gone), " ".join(os.path.basename(g) for g in gone)))
+    return slot, info
+
+
+def frozen_env(slot, info, base=None):
+    """The environment a process running inside the snapshot gets."""
+    env = dict(base if base is not None else os.environ)
+    D = os.path.join(slot, "build")
+    for k in ("OS88_SRC", "OS88_DEFINES", "OS88_PREBUILT"):
+        env.pop(k, None)
+    env.update(OS88_SOAK_HOME=HOME, OS88_BUILDNUM=str(info["buildnum"]),
+               OS88_TREE=D, OS88_BUILD=D,
+               OS88_SOAK_INFO=json.dumps(info))
+    return env
 
 
 def _frozen_targets(a):
@@ -1047,10 +1510,99 @@ def _whole_tier_refusal(a):
         % (RED, a.tier, size, OFF))
 
 
+def _argv(a):
+    """`a` back as a `start` command line, for the copy inside the snapshot."""
+    out = ["start", "--tier", a.tier]
+    for g in a.k:
+        out += ["-k", g]
+    for g in a.exclude:
+        out += ["-x", g]
+    for flag, val in (("--marty-jobs", a.marty_jobs),
+                      ("--bochs-per-core", getattr(a, "bpc", None)),
+                      ("-j", a.j)):
+        if val:
+            out += [flag, str(val)]
+    for flag, on in (("--resume", a.resume), ("--anyway", a.anyway),
+                     ("--no-prewarm", a.no_prewarm),
+                     ("--user-asked", a.user_asked), ("--strict", a.strict)):
+        if on:
+            out.append(flag)
+    return out
+
+
+def _start_frozen(a):
+    """Freeze, then run `start` again INSIDE the snapshot (14.4).
+
+    The copy in the snapshot is this file as it stood at the snapshot, and it
+    does everything `start` always did - preflight, run directory, journal,
+    the detached runner - with ROOT the snapshot and the records in HOME. So
+    from here on nothing the run executes is read out of the operator's
+    checkout.
+
+    **--resume REUSES THE RUN'S OWN SNAPSHOT**, unrebuilt: the rows that
+    already reported were answered by that source and that build, and the
+    rest must be too, or one run's verdicts describe two trees. A slot a
+    resumable run holds is never re-pointed (`_reserved`), so it is there
+    unless somebody deleted it; then the refusal says so, and
+    `--resume --resnapshot` resumes the journal onto a fresh snapshot of the
+    checkout as it is now - an explicit choice to mix two trees in one run.
+    """
+    info = None
+    if a.resume:
+        d = _run_dir()
+        meta = {}
+        if d:
+            try:
+                meta = json.load(open(os.path.join(d, "meta.json")))
+            except (OSError, ValueError):
+                meta = {}
+        snap = meta.get("snapshot")
+        if snap and not a.resnapshot:
+            have = (_git(["rev-parse", "HEAD"], snap, check=False)
+                    if os.path.isdir(snap) and _is_slot(snap) else None)
+            if not have or (meta.get("commit") and have != meta["commit"]):
+                print("%sos88soak: --resume: the snapshot %s run %s was frozen "
+                      "at is %s.%s\n  Its rows were answered by THAT tree. "
+                      "Re-run with --resume --resnapshot to resume the\n"
+                      "  journal onto a fresh snapshot of the checkout as it "
+                      "is now, or drop --resume\n  to start over."
+                      % (RED, os.path.relpath(snap, HOME),
+                         os.path.basename(d),
+                         "gone" if not have else "no longer at %s"
+                         % meta["commit"][:10], OFF), file=sys.stderr)
+                return 1
+            info = {k: meta[k] for k in ("snapshot", "commit", "head",
+                                         "dirty", "buildnum", "pinned")
+                    if k in meta}
+            info.update(slot_was="resumed", snap_secs=0.0, build_secs=0.0)
+            slot = snap
+            with _SlotLock():
+                _claim(slot)
+            print("os88soak: --resume reuses the run's own snapshot %s (%s), "
+                  "unrebuilt" % (os.path.relpath(slot, HOME),
+                                 info.get("commit", "?")[:10]))
+        elif not snap:
+            print("os88soak: --resume: run %s was not frozen at a snapshot; "
+                  "taking one now" % (os.path.basename(d) if d else "-"))
+    if info is None:
+        try:
+            slot, info = freeze(a)
+        except RuntimeError as e:
+            print("%sos88soak: could not freeze the run's snapshot:%s\n%s\n"
+                  "  --shared-build runs against the live checkout instead."
+                  % (RED, OFF, str(e)[-1200:]), file=sys.stderr)
+            return 1
+    cmd = ([sys.executable, os.path.join(slot, "tools", "os88soak.py")]
+           + _argv(a))
+    return subprocess.call(cmd, cwd=slot, env=frozen_env(slot, info))
+
+
 def start(a):
     if a.tier == "soak" and not a.k and not a.user_asked:
         print(_whole_tier_refusal(a), file=sys.stderr)
         return 2
+    if not a.shared_build and not IN_SNAPSHOT:
+        return _start_frozen(a)
     cores = _cores()
     mj, hj = widths(cores, a.marty_jobs, a.j)
 
@@ -1070,8 +1622,8 @@ def start(a):
     # needs only nasm; without it the preflight below says so as it always
     # did.
     rows = _selected_rows(a)
-    if not a.no_prewarm and shutil.which("nasm"):
-        prewarm(a=a)
+    if not a.no_prewarm and not IN_SNAPSHOT and shutil.which("nasm"):
+        prewarm(a=a)                    # a snapshot was built by freeze()
     blocking, advisory = preflight(rows=rows)
     if advisory:
         skips = would_skip(rows)
@@ -1108,7 +1660,7 @@ def start(a):
     skip = _done_rows(d) if a.resume else {}
     if a.resume and skip:
         print("os88soak: resuming in %s - %d row(s) already reported"
-              % (os.path.relpath(d, ROOT), len(skip)))
+              % (os.path.relpath(d, HOME), len(skip)))
         # NOTHING LEFT is a finished run, not a failure. Without this the
         # resume hands os88test an empty selection, which it correctly refuses
         # with "no rows matched" and exit 1 - so the one case a resume is most
@@ -1118,73 +1670,39 @@ def start(a):
             print("os88soak: nothing left to run - every selected row is "
                   "already in %s/done.txt. `status` has the result; drop "
                   "--resume to start over."
-                  % os.path.relpath(d, ROOT))
+                  % os.path.relpath(d, HOME))
             return 0
 
-    # **THE RUN GETS A TREE OF ITS OWN** (docs/plans/SOAK-PARALLEL.md 14.2), unless
-    # --shared-build says otherwise. A soak is two hours and the box is not
-    # idle for them: somebody types `make`, and every row that launches after
-    # it copies a half-written floppy while every row that resolves a symbol
-    # reads a kernel the map no longer describes. Rows leaving build/ alone -
-    # which 14.1 finished - is not the same as build/ being safe to work in.
-    #
-    # `os88build.tree()` is the same machinery the knob rows use, with no
-    # knobs: a full `make BUILD=<dir>` into build/trees/, sharing the pinned
-    # instruments by symlink. $OS88_BUILD then points os88sym, os88marty's
-    # launch and scratch_disk at it (tools/os88build.at), and the shared
-    # build/ can be rebuilt under the run without touching it.
-    #
-    # It is NOT free and the number is worth knowing: a cold tree is a whole
-    # build. A warm one is make finding nothing to do, which is what the
-    # second run of the day pays.
+    # **THE RUN READS ITS OWN SNAPSHOT** (docs/plans/SOAK-PARALLEL.md 14.4),
+    # unless --shared-build says otherwise. 14.2 froze only the build tree and
+    # the kernel source; the runner, the rows, the tools and the Makefile
+    # still came out of the live checkout, so a session could not fix
+    # anything while its own soak ran. `_start_frozen` has frozen all of it
+    # by the time this runs: ROOT is the snapshot, and $OS88_TREE /
+    # $OS88_BUILD already name its build/ (os88build.at, tree_root), which
+    # keeps every row on the frozen-run paths 14.2 proved out - os88test's
+    # prebuild CONFIRMS the tree rather than running `make` in it, `plain()`
+    # answers the tree, and `use_build` can tell the runner's default from a
+    # row's choice. $OS88_BUILDNUM is the operator's commit count: a dirty
+    # snapshot is one commit AHEAD of HEAD, and the images say HEAD's number.
     env = dict(os.environ, PYTHONUNBUFFERED="1")
-    if not a.shared_build:
-        sys.path.insert(0, os.path.join(ROOT, "tools"))
-        import os88build
-        import buildnum
-        # THE BUILD NUMBER IS PINNED BEFORE THE TREE IS BUILT, and the
-        # tree's own `make` is handed it (tools/buildnum.py reads the pin).
-        # Read afterwards, a commit landing during a cold tree's build - which
-        # is minutes - pinned the run at N+1 against a tree built at N, the
-        # very skew the pin below exists to prevent.
-        num, _ = buildnum.build_number()
-        was = os.environ.get("OS88_BUILDNUM")
-        os.environ["OS88_BUILDNUM"] = str(num)
+    info = {}
+    # NOT handed to the rows: a row that imports this module (a unit gate of
+    # it, say) must get ITS checkout's HOME, not the operator's.
+    env.pop("OS88_SOAK_HOME", None)
+    env.pop("OS88_SOAK_INFO", None)
+    if IN_SNAPSHOT:
         try:
-            frozen = os88build.tree(targets=_frozen_targets(a))
-        except RuntimeError as e:
-            print("%sos88soak: could not build the run's own tree:%s\n%s"
-                  % (RED, OFF, str(e)[-1200:]), file=sys.stderr)
-            return 1
-        finally:
-            if was is None:
-                os.environ.pop("OS88_BUILDNUM", None)
-            else:
-                os.environ["OS88_BUILDNUM"] = was
-        # BOTH VARIABLES, and they are not the same claim (os88build's
-        # `tree_root`): OS88_BUILD says which kernel a symbol map describes -
-        # which three registry rows override with `build/smallk` - and
-        # OS88_TREE says where this run's artefacts live. Keying the path
-        # resolver on the first sent every disk a kern_small row opened into
-        # `build/smallk`, and five rows died on a missing image the tree had.
-        env["OS88_BUILD"] = frozen.dir
-        env["OS88_TREE"] = frozen.dir
-        # ...and the kernel SOURCE that tree was built from (os88sym's
-        # `_src`): the symbol reader re-assembles kernel.asm to prove its map,
-        # and reading the live checkout made one mid-run commit to kernel/
-        # fail every emulator row after it.
-        env["OS88_SRC"] = _snapshot_src(frozen.dir)
-        # ...and the BUILD NUMBER it froze at (tools/buildnum.py): a row that
-        # rebuilds a declared artefact in the tree later would otherwise take
-        # the live checkout's commit count, and one commit mid-run put the
-        # tree's kernel.bin a build ahead of its own images. `num` is the
-        # one the tree was just built with, above.
-        env["OS88_BUILDNUM"] = str(num)
-        print("os88soak: the run reads %s, so build/ is yours while it runs"
-              % os.path.relpath(frozen.dir, ROOT))
+            info = json.loads(os.environ.get("OS88_SOAK_INFO") or "{}")
+        except ValueError:
+            info = {}
+        print("os88soak: the run reads its snapshot %s - edit, commit, `make` "
+              "or `make marty` in %s as you like while it runs"
+              % (os.path.relpath(ROOT, HOME), HOME))
     else:
-        print("%sos88soak: --shared-build: the run reads build/, so a `make` "
-              "while it runs will break rows%s" % (YELLOW, OFF))
+        print("%sos88soak: --shared-build: the run reads build/ and the live "
+              "checkout, so a `make`, an edit or a commit while it runs will "
+              "break rows%s" % (YELLOW, OFF))
 
     cmd = ["python3", os.path.join("tools", "os88test.py"), a.tier,
            "--marty-jobs", str(mj), "-j", str(hj),
@@ -1204,10 +1722,11 @@ def start(a):
     meta = {"started": time.time(), "cmd": cmd, "cores": cores,
             "marty_jobs": mj, "host_jobs": hj, "tier": a.tier,
             "bochs_per_core": bpc,
-            "resumed": len(skip), "root": ROOT,
+            "resumed": len(skip), "root": ROOT, "home": HOME,
             # The denominator, fixed at the first start and carried through
             # every resume - see _selected().
             "total": len(_selected(a))}
+    meta.update(info)                   # snapshot, commit, buildnum, costs
     with open(os.path.join(d, "meta.json"), "w") as f:
         json.dump(meta, f, indent=1)
 
@@ -1242,23 +1761,28 @@ def start(a):
         json.dump(meta, f, indent=1)
 
     print()
-    print("os88soak: started pid %d in %s" % (p.pid, os.path.relpath(d, ROOT)))
+    print("os88soak: started pid %d in %s" % (p.pid, os.path.relpath(d, HOME)))
     print()
     _protocol(d)
     return 0
 
 
 def _protocol(d):
-    rel = os.path.relpath(d, ROOT)
+    rel = os.path.relpath(d, HOME)
     print("HOW TO CHECK ON IT - and the rule that keeps the run honest:")
     print()
     print("    python3 tools/os88soak.py status")
     print()
     print("  That reads a file.  It starts no emulator, takes no lock and")
     print("  spends no measurable CPU, so polling it CANNOT perturb the run.")
-    print("  The emulator lane is sized to leave one core free for exactly")
-    print("  this.  What DOES perturb the run is running rows beside it, or")
-    print("  a `make` - both rewrite build/ under the rows reading it.")
+    if IN_SNAPSHOT:
+        print("  The run executes inside its own snapshot, so editing,")
+        print("  committing or running `make` / `make marty` in this checkout")
+        print("  cannot reach it. What still competes is running emulator rows")
+        print("  beside it: they share the cores the lane was sized to.")
+    else:
+        print("  What DOES perturb this --shared-build run is a `make`, an edit")
+        print("  or a commit in this checkout: the rows read it live.")
     print()
     print("  IN A CONTAINER, HOLD A WAITING TASK FOR THE WHOLE RUN. This is")
     print("  the part that is not optional and not obvious. Observed on the")
@@ -1376,6 +1900,13 @@ def status(a):
              meta.get("tier", "soak"), meta.get("marty_jobs", 1),
              meta.get("bochs_per_core", 1)))
     print("  elapsed  %s" % _hms(el))
+    if meta.get("snapshot"):
+        print("  snapshot %s at %s%s" % (
+            os.path.relpath(meta["snapshot"], HOME),
+            (meta.get("commit") or "?")[:10],
+            (" (HEAD %s + %d uncommitted path(s))"
+             % ((meta.get("head") or "?")[:10], meta["dirty"]))
+            if meta.get("dirty") else ""))
     print("  reported %d%s   ok %d   FAIL %d   SKIP %d"
           % (len(seen), "/%d" % total if total else "", len(ok), len(bad), len(skp)))
     if total and len(seen) and alive:
@@ -1547,9 +2078,13 @@ def main():
                          "it rather than after")
     ap.add_argument("--shared-build", action="store_true",
                     dest="shared_build",
-                    help="read build/ instead of a tree of the run's own - "
-                         "faster to start, and a `make` while it runs breaks "
-                         "rows (docs/plans/SOAK-PARALLEL.md 14.2)")
+                    help="run in the live checkout against build/ instead of "
+                         "a snapshot of the run's own - faster to start, and "
+                         "an edit, commit or `make` while it runs breaks rows "
+                         "(docs/plans/SOAK-PARALLEL.md 14.4)")
+    ap.add_argument("--resnapshot", action="store_true",
+                    help="with --resume: resume the journal onto a FRESH "
+                         "snapshot when the run's own is gone (14.4)")
     ap.add_argument("--user-asked", action="store_true", dest="user_asked",
                     help="the OWNER asked, in as many words, for the WHOLE "
                          "soak tier. Required by `start` with no -k - see "

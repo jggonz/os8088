@@ -1403,6 +1403,28 @@ def cache_save(store):
     os.replace(t, CACHE_FILE)
 
 
+def _run_frozen(a):
+    """`--frozen`: freeze the checkout with os88soak's helper and re-run this
+    command, minus the flag, from inside the snapshot - in the FOREGROUND,
+    so it is `os88test.py` as ever, reading a tree nobody else can write."""
+    import argparse
+    import os88soak
+    try:
+        slot, info = os88soak.freeze(argparse.Namespace(
+            tier=a.tier, k=a.k, exclude=a.exclude))
+    except RuntimeError as e:
+        sys.stderr.write("os88test: --frozen: %s\n" % e)
+        return 1
+    env = os88soak.frozen_env(slot, info)
+    env.pop("OS88_SOAK_HOME", None)     # the rows' own HOME is theirs
+    env.pop("OS88_SOAK_INFO", None)
+    argv = [x for x in sys.argv[1:] if x != "--frozen"]
+    sys.stdout.flush()
+    return subprocess.call([sys.executable,
+                            os.path.join(slot, "tools", "os88test.py")] + argv,
+                           cwd=slot, env=env)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Run the os8088 regression suite.",
@@ -1465,7 +1487,15 @@ def main():
                          "(contents, not mtimes; kept in build/testcache/). "
                          "`full` and `soak` never use the cache. "
                          "OS88_TESTCACHE=0 does the same as this flag.")
+    ap.add_argument("--frozen", action="store_true",
+                    help="run in a SNAPSHOT of this checkout, as "
+                         "`os88soak.py start` does (docs/plans/"
+                         "SOAK-PARALLEL.md 14.4): edits, commits and `make` "
+                         "here cannot reach the rows while they run")
     a = ap.parse_args()
+    if a.frozen and not (a.tier == "soak" and not a.k and not a.list
+                         and not a.user_asked):
+        return _run_frozen(a)
     scratch_tmpdir()
 
     import suite
