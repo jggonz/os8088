@@ -213,8 +213,25 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
     if quick:
         settle = False
         kw.setdefault("boot", False)
+    # OS88_BOOTCACHE=1: the end of this boot restored from a fork snapshot
+    # another row already paid for (tools/os88bootcache.py, docs/plans/
+    # soak-speed-2/core.md). The machine comes back RUNNING at kernel_up's
+    # gate, saver handled; `up` and the settle the row asked for follow as
+    # they would after a fresh boot. Anything the cache cannot key on boots
+    # fresh, and says why when verbose.
+    import os88bootcache
+    mach = os88marty.machine(machine, why_ibm)
+    why = os88bootcache.eligible(mach, kw)
+    if why is None:
+        cm = os88bootcache.launch(image, apps=apps, machine=mach, card=card,
+                                  saver=saver, label=kw.get("label"),
+                                  verbose=verbose)
+        return _Booted(cm, card=card, saver=saver, verbose=verbose,
+                       limit=limit, settle=settle, quick=False)
+    if verbose and os88bootcache.enabled():
+        print("      bootcache: not used (%s)" % why)
     cm = os88marty.launch(image, apps=apps,
-                          machine=os88marty.machine(machine, why_ibm),
+                          machine=mach,
                           card=card, saver=saver, **kw)
     return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit,
                    settle=settle, quick=quick and not kw.get("boot"))
@@ -322,6 +339,53 @@ class UI:
         os88marty.ui_done(self.m, "the desktop to finish drawing")
         if frames:
             os88marty.guest_sleep(self.m, frames)
+        return self
+
+    # --- the keyboard (soak-speed-2/core.md) -------------------------------
+    def press(self, name, need=False, done=True, limit=T_NAV, cap=0.675):
+        """Press `name` and return once the guest has TAKEN it and the UI
+        has FINISHED with it - the verb for the `m.key(k); settle(m)` and
+        `m.key(k); pace(m, .15); ui_done(m)` shapes rows spell by hand.
+        `os88marty.key_taken` (ring tail moved, head caught up, ui_task
+        asleep), then with `done` `os88marty.ui_done` (the pass the key
+        started, its repaint included, is over under the lock). Answers self,
+        so `ui.press("Enter").still()` is the cheap settle before an `fbuf`.
+
+        `need=True` RAISES when the key never reached the BIOS ring - for a
+        key the row expects a ui_task consumer to read; leave it False for a
+        modifier or a key the kernel's own ISR takes (kbm, a hotkey), which
+        never reach the ring and would raise for no fault. `done=False` is
+        for a package whose worker holds the gfx lock all the time (a game):
+        key_taken alone does not ask the lock.
+        """
+        tail = os88marty.BIOS_KBUF + 2
+        t0 = bytes(self.m.read(tail, 2)) if need else None
+        os88marty.key_taken(self.m, name, cap=cap,
+                            what="the guest to take %s" % name)
+        if need and bytes(self.m.read(tail, 2)) == t0:
+            raise UIError("%s never reached the BIOS key ring in %.2f guest "
+                          "seconds - nothing stored it, so nothing read it"
+                          % (name, cap))
+        if done:
+            os88marty.ui_done(self.m, "the UI to finish with %s" % name,
+                              limit=limit)
+        return self
+
+    def keys(self, *names, **kw):
+        """`press` each of `names` in turn (same keywords)."""
+        for n in names:
+            self.press(n, **kw)
+        return self
+
+    def type(self, text, done=True, limit=T_NAV):
+        """Type `text` (os88marty.text_taken: each character taken off the
+        ring by ui_task) and, with `done`, wait for the UI to finish with
+        it. The replacement for `m.type_text(s); settle(m)`."""
+        os88marty.text_taken(self.m, text,
+                             what="the guest to take %r" % text[:20])
+        if done:
+            os88marty.ui_done(self.m, "the UI to finish with %r" % text[:20],
+                              limit=limit)
         return self
 
     # --- the desktop --------------------------------------------------------
@@ -1853,7 +1917,7 @@ class UI:
                 prog.check()
             except os88marty.MartyError:
                 return
-            time.sleep(0.2)
+            time.sleep(0.05)     # (was 0.2: SOAK-SPEED 8, soak-speed-2/core)
 
     def menu_pick(self, menu, item, limit=T_MENU):
         """Press a menu title, highlight an item BY NAME, release.
