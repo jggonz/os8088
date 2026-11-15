@@ -28,7 +28,7 @@
 WR_MAGIC0   equ 'WR'                ; +0: 'WRPART', then the ABI byte and the
 WR_MAGIC1   equ 'PA'                ;     verb count - checked by the primary
 WR_MAGIC2   equ 'RT'                ;     at launch, refused on a mismatch
-WR_ABI      equ 13                  ; (2: the camera's sin/cos in FRAME;
+WR_ABI      equ 14                  ; (2: the camera's sin/cos in FRAME;
                                     ; 3: F_Z, the treads, ARENA's heights;
                                     ; 4: wa_look, the detail level's bits,
                                     ; where wa_hyst was; wa_flod gone;
@@ -44,7 +44,8 @@ WR_ABI      equ 13                  ; (2: the camera's sin/cos in FRAME;
                                     ; teams' colours and the flags,
                                     ; CTF-PLAN 4; 12: the minimap's
                                     ; block in OVERLAY, NET-PLAN 9.7; 13:
-                                    ; wa_sparse gone, 9.10)
+                                    ; wa_sparse gone, 9.10; 14: wa_flodv,
+                                    ; where CONFIG's pad was)
 WA_MLIFT    equ 4                   ; lifts an arena may have (arenagen's)
 WA_MFL      equ 24                  ; floor lines an arena may have (ARENAS-
                                     ; PLAN 4.5; arenagen's)
@@ -120,7 +121,10 @@ WA_FBV wa_kyq, 2
 WA_FBV wa_kyh, 2
 WA_FBV wa_wf, 2
 WA_FBV wa_mono, 1
-WA_FBV wa_fbpad0, 1
+WA_FBV wa_flodv, 1                  ; J's threshold: a figure whose fv8 is
+                                    ; under it is drawn small (LK_FEW; the
+                                    ; detail level's, wa_levtab -
+                                    ; ARENAS-PLAN 5)
 WA_FBV wa_posg, 2                   ; the POSE part's segment (the keyframes,
                                     ; PARTS-PLAN 8.6): the primary's op_seg
 WA_FBV wa_fb_frm, 0                 ; FRAME

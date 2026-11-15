@@ -644,9 +644,16 @@ the table above: the first drawer's last tuning came between.)
     joints and five straight limbs, with no head and no blend (`LK_FEW`,
     under `WA_FLODV` half-rows a unit x 256: 16 today, a figure under
     about seven half-rows tall, some 650 units away). A figure J takes in
-    costs 3,600 to 5,800 cycles less. Trial builds at 24 (from about 430
-    units) and 32 (from about 325) went to the owner to look at
-    (`-DWA_FLODV=n`); nothing is changed until they say.
+    costs 3,600 to 5,800 cycles less. Trial builds at 24 (from 464 units
+    ahead at 75 degrees) and 32 (from 348) went to the owner, with a plan
+    of the heights arena showing the three lines. Their answer: 24 at
+    Medium and below. It is the level's now (`wa_flodv`, CONFIG's pad as
+    was; `wa_levtab`'s last column; a level's key syncs CONFIG): 24 at Very
+    Low, Low and Medium, 16 at High. Over the 20 figure poses, -1.6% of a
+    frame; a figure between the two lines is a fifth cheaper.
+    Row `wafiglod` (soak): the limbs walked for a figure 400, 560 and 760
+    units ahead at four levels; red with the threshold a constant and with
+    the level's key not syncing it.
   - **The smaller items, measured and left**: a pickup's shape copied
     after its view test would save about 200 cycles a pickup turned away
     and cost 60 a pickup drawn, 0.2% of a frame; the whole-line skip's two
