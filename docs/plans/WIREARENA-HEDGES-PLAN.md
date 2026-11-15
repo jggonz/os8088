@@ -1,0 +1,192 @@
+# WireArena: the Hedges, the maze redrawn for speed
+
+**STATUS: TRIAL BUILT** (2026-11-15), on branch `multiplayer-fps`. The
+owner's two redrawings of the Maze are playable as arenas 5 and 6, `hedge A`
+and `hedge B`, beside the Maze (arena 3), which is unchanged. Section 3 is
+what they measure; section 4 is what would make them faster. The owner picks
+what stays.
+
+The owner's brief, 2026-11-14, with two drawings (not to scale):
+
+> *"A new arena in Wire Arena, hedge, has come in. It works decently well, so
+> we may keep it as is; but I'd like to try a few other options to make it
+> generally faster. This may require an engine change; I think the total
+> object count/arena size might have been a blocker."*
+>
+> *"The entries here are moved around, and one option has less entries. The
+> goal is to obscure any view from 'going too far', thus allowing maximized
+> generation time culling, and maximized runtime culling while still
+> providing an interesting playfield. The size of the center room is larger,
+> and the edge rooms as well. The hallways are a bit longer to prevent angle
+> views reaching as far as they do today. The entries into the rooms is more
+> narrow, allowing the gap to be jumped and the player to go around the
+> entire map on the outer wall. The outer wall does not need its current
+> additional height, unless that is very cheap to keep."*
+
+The Maze is [WIREARENA-ARENAS-PLAN](WIREARENA-ARENAS-PLAN.md) section 1, and
+the arena format [WIREARENA-HEIGHTS-PLAN](WIREARENA-HEIGHTS-PLAN.md) section 7.
+Both arenas are DATA, `tools/arenagen.py`'s `_hedge()`.
+
+## 1. The layout
+
+Absolute coordinates. The main square is x 256..1792, y 256..2048; the
+court's middle is (1024, 1152).
+
+- **The court**, x 704..1344, y 704..1600: 640 x 896 against the Maze's 512
+  square. The red stack is the Maze's, three tiers at 48, 104 and 160 with
+  the rocket or grenade launcher on top.
+- **Two rings** of 6 m hedges round it, every corridor 2 m (128) wide, every
+  gap 2 m. No gap faces the next one out.
+  - Hedge A, the fewer entries: the court's hedge open N and S at the
+    middle; the middle hedge open W by its north end and E by its south end.
+  - Hedge B: the court's hedge open at the middle of every side; the middle
+    hedge a pinwheel, open by one end of every side.
+- **The outer wall**, 1 m thick and 2 m (128) high, walked all the way
+  round. Its gaps are 2 m: a running jump clears one (below).
+- **Three rooms OUTSIDE the wall**, W, E (4 x 8 m) and S (8 x 4 m), each
+  off a gap in the wall, a platform at 48 in the middle with the Maze's
+  pickups: E shotgun or chaingun, W railgun or shotgun, S health or shield.
+- **The lift** fills the north gap and rises from 16 to the wall's top.
+- **The edge**: tall fills round the rooms, the hedges' green. They are
+  tall because a tall box is the CHEAP one (section 3).
+- The drawings' marks this reading took as eraser leftovers: in the first,
+  a tick on the court hedge's east side and one on the middle hedge's south
+  side. Neither is a gap here.
+
+The graph walks the court, both rings and the three rooms (31 nodes in B, 25
+in A); the bots do not use the wall's top. Seven respawns, the four pickups,
+the start at the south room's gap facing north. The P bench's views: the
+court beside the stack, into the east room, the inner ring's SW corner, on
+the wall's top.
+
+## 2. What the engine stopped assuming
+
+**More than 31 boxes.** Hedge A is 37 boxes and B 40: the stack's 9, the
+rings', the wall's 8 and the lift, 6 fills and 3 platforms. A tree leaf
+held its box x 8 in a byte, which stops at 31. It holds box x 4 now, so an
+arena may have **63**:
+
+- `arenagen` writes the leaf's byte as box x 4 and checks boxes x 4 <= 255;
+- `wa_order` reads it: its PVS byte is the byte >> 5, its bit (byte >> 2)
+  & 7, and the order's record (box x 4) is the byte as it stands - one
+  shift fewer than before on each path;
+- the PVS was already a bit a box, sized by the largest arena
+  (`pvs_bytes`): 5 bytes a cell now;
+- the other per-box tables are sized by `WA_MBOX` already.
+
+The Maze renders exactly as before: 174,297 clk a pose before, 174,284
+after (`waposes`, 40 poses, 40 columns).
+
+The byte limits still standing: 127 vertices (B has 124), 63 distinct x and
+63 y values, 8 distinct coordinate steps.
+
+**A box tree cannot split a pinwheel.** No axis line separates four boxes
+each past a corner of the next, so `box_tree` refused B's middle hedge as
+drawn. Its NE corner is a box of its own (`middle hedge NE`): 5 boxes, not 4.
+
+**A gap a jump clears.** `height_checks` refused the wall's south half: a
+128-high box no flight or lift reaches. It now also reaches a box across a
+gap from a reached box of the same height, the gap at most `jump_gap()`:
+half the ground a running jump covers, off `WA_JUMPV`, `WA_GRAV` and
+`WA_MSPD` (27 ticks at 10 units: 270, so 135 allowed; the gaps are 128).
+Computed, not yet tried in the game.
+
+**Size.** The renderer part grew 1,655 bytes (61,957 of its 65,024): the
+tables sized to the largest arena - B's 124 vertices against the Maze's
+92, its 79-node tree, its 40 boxes. The arena parts are 5,492 (A) and 6,263
+(B) bytes, loaded only when chosen.
+
+## 3. Measured
+
+All on MartyPC's 5150 with CGA, `tools/waposes.py`, exact render cycles a
+pose. The seeded pose set puts three figures near the view and a quarter of
+the poses on a raised box, and the figures dominate single frames; so the
+comparison below is the same 200 poses per arena (seed 1) with the figures
+moved behind the camera: geometry alone. A pose is binned by where it
+stands.
+
+**As drawn**, ms a pose (40 columns) and kclk by region:
+
+| arena | all | court | inner ring | outer ring | rooms and the wall's top |
+|---|---|---|---|---|---|
+| Maze | 28.0 | 189 | 124 | 123 | 121 |
+| Hedge A | **27.9** | **141** | **101** | 137 | 148 |
+| Hedge B | 30.7 | 186 | 120 | 128 | 139 |
+
+With the figures in (the seeded set, 200 poses): Maze 37.8, A 38.0, B 40.7.
+
+So neither is faster as a whole. A's centre is 20-25% cheaper - the larger
+court keeps the eye farther from the stack, and two gaps a ring let less in
+- and its outer ring and rooms give it back. B's extra gaps cost it the
+centre's saving.
+
+**What the outer ring costs.** The walk-round wall is LOWER than the
+hedges, so the renderer draws it as an OUTLINE (HEIGHTS-PLAN 1) and it hides
+nothing: the fills and room walls behind it are drawn as well. A tall box is
+one span a face on the most-tuned path, and shuts its columns. Hedge A with
+the wall made tall (not walkable; no lift), same poses:
+
+| region | as drawn | wall tall | |
+|---|---|---|---|
+| outer ring | 137 | 80 | -42% |
+| rooms | 140 | 111 | -21% |
+| inner ring | 101 | 93 | -7% |
+| court | 139 | 139 | 0 |
+| **all** | **27.9 ms** | **22.8 ms** | -18% |
+
+`tools/waprof.py`, the bench's view B (the outer ring, into the east room):
+219,815 clk a frame with the low wall, 178,986 with the tall one. Of the
+41,000 between them about 31,000 is the outline path itself - `wa_lowbox`
++9,600, `wl_rtop` +7,300, `wl_post` +6,500, `wl_f1` +4,400, `wl_draw`
++3,400 - and the rest the scenery behind.
+
+**The other knobs**, Hedge A, all 200 poses:
+
+| variant | ms | where it moved |
+|---|---|---|
+| as drawn | 27.9 | |
+| the room's walls at the wall's height (128) | 27.9 | nowhere |
+| no platforms in the rooms | 27.0 | rooms -20% |
+| the stack ONE tier (one box, 384 square at 48) | 24.2 | court -27 to -34%, inner -10% |
+| the wall tall and no platforms | 22.1 | |
+
+The fills lowered to the room's walls (192) were refused by `height_checks`
+(unreachable low boxes), and would draw as outlines anyway: tall is their
+cheap height.
+
+So, against the brief's *"unless that is very cheap to keep"*: the extra
+height is not a cost but a saving. **What costs is the walk-round wall
+being low, and the stack's nine boxes.**
+
+## 4. What would make it faster
+
+In order of what it buys:
+
+1. **Draw a low box whose top is above the eye as FACES** (an engine
+   change). From below its top a low box looks exactly like a tall face of
+   its height, with the scene visible above it: the outline path is the
+   wrong tool there. Through the face path with a column clip at its top
+   row, about 31,000 of view B's 41,000 come back; the outer ring would be
+   near the tall wall's 80 kclk while the wall stays walkable. It helps
+   every arena with a low box seen from beside it (the Maze's plateau, the
+   heights arena's platforms). It is a change to the heights renderer's
+   column clip (`wrlow.inc`), and is not started.
+2. **The stack.** Nine boxes is what three tiers cost when no box may
+   stand on another. A tier standing on a tier would be 3 boxes; it touches
+   collision, the depth stack, the PVS's low pass and the bots. A design
+   answer is fewer tiers: one tier is -13% on the whole arena.
+3. **Hedge A over B.** Fewer gaps, less seen: B costs 10% more.
+4. **No room platforms**: -3%, the rooms' views -20%.
+
+## 5. Checklist
+
+- [x] Hedge A and Hedge B as arenas 5 and 6, playable, on the setup's
+  arena list (`hedge A`, `hedge B`)
+- [x] Up to 63 boxes an arena: leaf byte box x 4, `wa_order`
+- [x] `height_checks`: a gap a running jump clears (`jump_gap`)
+- [x] Measured: as drawn, and five variants of A (section 3)
+- [ ] The jump across a wall gap tried in the game
+- [ ] The owner's choice: which layout stays, and whether section 4's items
+  are wanted
+- [ ] Suite rows to run once the layout is chosen: `waarenas` and `walift`
+  (the setup's arena count comes off `arenagen.arenas()`)

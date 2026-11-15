@@ -1144,15 +1144,14 @@ wa_order:
     cmp al, 2
     jne .split
     cmp byte [wa_pvsh], 0       ; a leaf: onto the list - with a PVS, if
-    je .take                    ; its box is in the cell's (box x 8: its
-    mov al, [bx+1]              ; byte x 64, its bit x 8)
-    mov cl, 6
+    je .take                    ; its box is in the cell's (box x 4, so up
+    mov al, [bx+1]              ; to 63 boxes: its byte x 32, its bit x 4)
+    mov cl, 5
     shr al, cl
     cbw
     mov si, ax
     add si, [wa_pvp]
     mov cl, [bx+1]
-    shr cl, 1
     shr cl, 1
     shr cl, 1
     and cl, 7
@@ -1161,9 +1160,8 @@ wa_order:
     test [si], al
     jz .out
 .take:
-    mov al, [bx+1]              ; the box x 8
-    shr al, 1
-    stosb                       ; (its record's: x 4)
+    mov al, [bx+1]              ; the box x 4: its record's
+    stosb
     add di, 3                   ; (its silhouette: wa_stale, wa_sil)
 .out:
     ret
