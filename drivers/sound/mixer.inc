@@ -23,7 +23,7 @@ mix_1745:
     db 3Bh,0,6,3, 46h,47h,4,15, 44h,45h,4,15
 mix_1745e:
 %if (mix_1335e - mix_1335) != 4 * MIX_DSZ || (mix_1345e - mix_1345) != 6 * MIX_DSZ || (mix_1745e - mix_1745) != MIX_NCHAN * MIX_DSZ
-  %error "a mixer table's count byte no longer matches its mask (0Fh, 3Fh, 1FFh), or the CT1745's MIX_NCHAN"
+  %error "a mixer table's channels are no longer 4, 6 and MIX_NCHAN: mix_probe makes INFO's mask (0Fh, 3Fh, 1FFh) from the count"
 %endif
 
 ; --- MIX_ONCE: ATTACH-ONLY (SPEC.md 34.15.1) ------------------------------
@@ -45,19 +45,15 @@ mix_probe:
     mov [mix_base], ax
     mov si, mix_1335
     mov bl, 1
-    mov cx, 000Fh
     cmp byte [sbl_verhi], 3
     jb .test
     mov si, mix_1345
     inc bl
-    mov cx, 003Fh
     cmp byte [sbl_verhi], 4
     jb .test
     mov si, mix_1745
     inc bl
-    mov cx, 01FFh
 .test:
-    push cx
     pushf
     cli
     mov ah, [si]
@@ -87,14 +83,16 @@ mix_probe:
     mov al, bh
     call mix_wr
     popf
-    pop cx
     mov [mix_kind], bl
-    mov [mix_mask], cx
+    mov cl, [si-1]              ; CL = the table's channels, and INFO's mask
+    mov ax, 1                   ; one bit each: 0Fh, 3Fh, 1FFh
+    shl ax, cl
+    dec ax
+    mov [mix_mask], ax
     mov [mix_table], si
     ; Preserve the original native registers before the first user write.
     mov di, mix_orig
-    mov cl, [si-1]              ; CX = the table's channels
-    mov ch, 0
+    mov ch, 0                   ; CX = the channels
 .save:
     pushf
     cli
@@ -119,7 +117,6 @@ mix_probe:
     mov al, bh
     call mix_wr
     popf
-    pop cx
     mov word [mix_base], 0
 .out:
     pop di

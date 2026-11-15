@@ -366,14 +366,27 @@ sbl_hw_start:
 .dmad:
     mov bx, [sbl_half]          ; BX = DSP block length - 1
     dec bx
+    cmp byte [sbl_wide], 0      ; (wide and high-speed never both: verb 0
+    jne .wide                   ; sets one of the two, or neither)
     mov ah, 0x1C                ; the 48h regime: block size (one half - 1)
     cmp byte [sbl_hisp], 0      ; then ONE start byte, and that byte is the
-    je .blkchk                  ; whole difference between legacy auto-init
+    je .block                   ; whole difference between legacy auto-init
     mov ah, 0x90                ; (1Ch) and SB Pro high-speed (90h). After
-    jmp short .block            ; 90h the DSP takes NO command until a reset
-.blkchk:                        ; - so sbl_halt masks the 8237 and
-    cmp byte [sbl_wide], 0      ; sbl_stop_stream resets, never D0h/DAh
-    je .block
+                                ; 90h the DSP takes NO command until a reset
+                                ; - so sbl_halt masks the 8237 and
+                                ; sbl_stop_stream resets, never D0h/DAh
+.block:
+    mov al, 0x48                ; DSP block size = one half
+    call sbl_dsp_wr3
+    cmp byte [sbl_adpcm], 0     ; ...or 7Dh, auto-init 4-bit ADPCM with its
+    je .start                   ; reference byte (SPEC.md 34.5.3), which
+    mov ah, 0x7D                ; only the legacy regime on a DSP < 4.00
+                                ; reaches (the open refuses it otherwise)
+.start:
+    mov al, ah                  ; 1Ch legacy / 90h high-speed / 7Dh ADPCM4
+    call sbl_dsp_wr
+    jmp short .out
+.wide:
     mov ah, [sbl_fmt]           ; wide start: C6h, mode 00h (8-bit mono
     mov al, 0xC6                ; unsigned), block length - 1 lo/hi. A
     test ah, SND_FMT_16         ; format (SPEC.md 34.5.5) is B6h for 16 bits,
@@ -390,17 +403,6 @@ sbl_hw_start:
     add al, 0x18
 .wm:
     call sbl_dsp_wr3
-    jmp short .out
-.block:
-    mov al, 0x48                ; DSP block size = one half
-    call sbl_dsp_wr3
-    cmp byte [sbl_adpcm], 0     ; ...or 7Dh, auto-init 4-bit ADPCM with its
-    je .start                   ; reference byte (SPEC.md 34.5.3), which
-    mov ah, 0x7D                ; only the legacy regime on a DSP < 4.00
-                                ; reaches (the open refuses it otherwise)
-.start:
-    mov al, ah                  ; 1Ch legacy / 90h high-speed / 7Dh ADPCM4
-    call sbl_dsp_wr
     jmp short .out
 .single:
     mov al, 0
@@ -1611,16 +1613,16 @@ sbl_v_open:
     mov byte [sbl_str_act], 0   ; unwind: nothing started
     call sbl_dma_put            ; ...and the buffer it would have played
     mov al, 6                   ; the documented clean pool-full error
-    jmp short .err
-.e1:
-    mov al, 1
-    jmp short .err
-.e2:
-    mov al, 2
-    jmp short .err
+    db 0x3D                     ; THE SKIP: `cmp ax, imm16`, whose immediate
+.e1:                            ; is the next `mov al, n` (B0 nn) - so each
+    mov al, 1                   ; code falls past the ones below it to .err,
+    db 0x3D                     ; writing only flags, which .err's STC
+.e2:                            ; overwrites (driver size pass 1: three
+    mov al, 2                   ; `jmp short .err`, a byte each)
+    db 0x3D
 .e8:
     mov al, 8                   ; no page-safe 8KB for the double buffer
-    jmp short .err              ; (SPEC.md 34.5.2) - verb 7's "no space"
+    db 0x3D                     ; (SPEC.md 34.5.2) - verb 7's "no space"
 .e7:
     mov al, 7
 .err:
@@ -3428,11 +3430,9 @@ sbl_dsc_mask: db 0              ; discovery: saved 8259 mask
 ;              byte this driver reads, so it is attach-only too)
 ; in:       [sbl_base] set
 ; out:      CF = 0, AL = byte; CF = 1 nothing arrived (timeout, AL trash)
-; clobbers: nothing else (flags)
+; clobbers: CX, DX - sbl_f_probe, the one caller, banks both (AH is kept)
 ; -----------------------------------------------------------------------------
 sbl_dsp_rd:
-    push cx
-    push dx
     mov dx, [sbl_base]
     add dx, 0x0E                ; 2xEh: read-buffer status
     mov cx, SBL_POLLS
@@ -3447,8 +3447,6 @@ sbl_dsp_rd:
     sub dx, 4                   ; 2xAh: read data (CF = 0: 2xEh less 4 does
     in al, dx                   ; not borrow)
 .out:
-    pop dx
-    pop cx
     ret
 
 

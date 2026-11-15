@@ -821,8 +821,8 @@ opl_fm_op:
     jmp short .ok               ; the chip too if it had it
 .on:                            ; --- verb 0: note-on --------------------------
     call opl_owned              ; CF = 1: not yet this requester's, so the
-    mov al, 0                   ; claim below would be FRESH - AL remembers
-    adc al, 0                   ; (AL is dead: the verb is decoded)
+    sbb al, al                  ; claim below would be FRESH - AL remembers
+                                ; (AL is dead: the verb is decoded)
     call opl_claim
     jc .bad
     call opl_keyon              ; CF = frequency out of 19..6208
@@ -1426,7 +1426,7 @@ snd_attach:
 %endif
     call opl_probe              ; the timer-flag dance; a present chip is
     jc .nofm                    ; FULLY initialised before this returns
-    mov byte [drv_up], 1
+    inc byte [drv_up]           ; 0 -> 1: the first thing to attach
     mov word [si+DSV_FM], opl_fm_op
     mov word [si+DSV_TONE], opl_tone
     mov word [si+DSV_RELINST], snd_release_both
@@ -1619,7 +1619,8 @@ opl_probe:
 ; -----------------------------------------------------------------------------
 ; opl_kind_probe - OPL2 or OPL3? (SPEC.md 34.12)
 ; in:  a chip that has just passed the timer dance, its flags reset
-; out: [opl_kind] = SND_OPL2 / SND_OPL3; every register preserved
+; out: [opl_kind] = SND_OPL2 / SND_OPL3; clobbers AX, BX, CX, DX - which
+;      opl_probe, the one caller, banks (driver size pass 1)
 ;
 ; TWO TESTS, and an OPL3 must pass both. The first is the one every period
 ; driver used: an OPL2 reads 1s in status bits 1-2 and an OPL3 0s. It is not
@@ -1632,10 +1633,6 @@ opl_probe:
 ; and it does.
 ; -----------------------------------------------------------------------------
 opl_kind_probe:
-    push ax
-    push bx
-    push cx
-    push dx
     mov byte [opl_kind], SND_OPL2
     mov dx, 0x388
     in al, dx
@@ -1661,10 +1658,6 @@ opl_kind_probe:
     mov byte [opl_kind], SND_OPL3
     mov byte [opl_fast], 1      ; (its short write delays, SPEC.md 34.12.1)
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1672,13 +1665,11 @@ opl_kind_probe:
 ; in:       nothing
 ; out:      registers 01h..F5h zeroed, 01h <- 20h (waveform select enabled),
 ;           BDh <- 0, the default patch on all 9 channels
-; clobbers: nothing (flags)
+; clobbers: AX, CX - opl_probe, the one caller, banks both
 ;
 ; ~245 writes ~= 25-70ms on the floor machine. Cold, once, at attach.
 ; -----------------------------------------------------------------------------
 opl_init:
-    push ax
-    push cx
     mov ax, 0x0100              ; AL = 0 once: opl_wr keeps AX
 .zero:
     call opl_wr
@@ -1704,10 +1695,7 @@ opl_init:
     call opl_wr1
 .one:
     mov ch, 9                   ; the default voice on all nine channels
-    call opl_defpat
-    pop cx
-    pop ax
-    ret
+    jmp opl_defpat              ; (its RET is ours)
 
     SBL_ONCE                    ; sb.inc: the reset scan and the IRQ
                                 ; discovery, through sbl_find (SPEC.md 34.5)
