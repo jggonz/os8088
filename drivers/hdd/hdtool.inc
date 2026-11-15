@@ -288,27 +288,20 @@ hd_tool_call:
 ;
 ; THE LOAD IS THE ONLY NEW FAILURE and the arguments are the only new problem.
 ; hd_tool_need reads a file and claims memory, so it spends every register the
-; page was handed - which is why they are banked ACROSS the load and restored
-; before the call, rather than trusted through it.
+; page was handed - and gives every one of them back: its whole load runs
+; between one set of pushes and the pops at .out, its only way out. So the
+; arguments survive the load by ITS contract ("clobbers: flags"); this thunk
+; banked five of them across it as well, until driver size pass 1.
 ;
 ; Nothing here is a repaint trigger: a page that is already up stays up, and
 ; hd_tool_need returns at its first compare once the image is in.
 ; -----------------------------------------------------------------------------
 hd_cp_thunk:
-    push bx
-    push cx
-    push dx
-    push di
-    push ax                     ; the verb, across a load entitled to spend it
-    call hd_tool_need
-    pop ax
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    jc .nofile
-    call hd_tool_call
-    ret
+    call hd_tool_need           ; EVERY register kept, the verb in AL among
+    jc .nofile                  ; them: its load banks AX..BP and ES and
+    jmp short hd_tool_call      ; gives them back on every path, so the five
+                                ; this thunk used to bank around it were the
+                                ; second copy (driver size pass 1)
 .nofile:
     mov byte [hd_msgc], HDM_NOSYS
     stc
@@ -392,15 +385,7 @@ hd_cp_key:
     push es
     mov al, HDT_KEY
     call hd_tool_call
-    pop es                      ; `pop` leaves the page's CF alone
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp hd_tool_need.out        ; `pop` leaves the page's CF alone
 .no:
     stc
     ret
