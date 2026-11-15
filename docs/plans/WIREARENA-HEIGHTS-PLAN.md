@@ -2410,13 +2410,13 @@ was. They follow the owner's verdicts on the round-5 videos.
 **The levels** (`wa_levtab` in `wirearena.asm`: a row per level, the
 options as bits, so moving an option between levels is one line):
 
-| level | key | options | grid (G) | treads (T) | floor lines |
-|---|---|---|---|---|---|
-| Very Low | 1 | Low + ROOMF + FARTOP | off | off | dashed, steep ones too |
-| Low | 2 | Medium + NOPOST | off | off | dashed |
-| **Medium** (the default on an 8088) | 3 | J + ROUND + COARSE | off | off | whole |
-| **High** (the default on a 286 or better) | 4 | Medium | **on** | off | whole |
-| Very High | 5 | none: exact products and edges, full figures | on | **on** | whole |
+| level | key | options | grid (G) | treads (T) | floor lines | a small figure from |
+|---|---|---|---|---|---|---|
+| Very Low | 1 | Low + ROOMF + FARTOP | off | off | dashed, steep ones too | 464 units |
+| Low | 2 | Medium + NOPOST | off | off | dashed | 464 |
+| **Medium** (the default on an 8088) | 3 | J + ROUND + COARSE | off | off | whole | 464 |
+| **High** (the default on a 286 or better) | 4 | Medium | **on** | off | whole | 696 |
+| Very High | 5 | none: exact products and edges, full figures | on | **on** | whole | never |
 
 The floor lines' column is `wa_dash`, a byte of its own beside the grid's
 and the treads' (2026-11-15, [WIREARENA-ARENAS-PLAN](WIREARENA-ARENAS-PLAN.md)
@@ -2428,6 +2428,14 @@ The options, a bit each in `wa_look` (LK_ in `waconst.inc`):
 
 - **J** (LK_FEW, `r5-figs`): a small figure (fv8 under 16) as its seven
   joints and five straight limbs. The owner: it "can become the default".
+  - How small is the level's now (`wa_flodv`, CONFIG's, `wa_levtab`'s last
+    column; 2026-11-15, ARENAS-PLAN 5): under 24 at Medium and below, 16
+    at High. At the default 75 degrees that is from 464 units ahead and
+    from 696 (depth, not range; a wider view brings both nearer). The
+    owner, on trial builds at 24 and 32: *"figures24 at medium and below
+    works; you can hardly tell at that distance simply because there are
+    too few characters to display more data until they are right next to
+    you."* Row `wafiglod` (soak) holds each level's line.
 - **ROUND** (`r5-walls`): the products' rounded high words, a sum each for a
   vertex. "Can hardly see much difference."
 - **COARSE**: an edge moving less than a half-row along a whole wall is

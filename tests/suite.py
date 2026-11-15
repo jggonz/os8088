@@ -8754,6 +8754,23 @@ SOAK = [
         "16 units out (4 checks each).",
         needs=("marty", "nasm"), cpus=4,
         wants=("build/os8088-360.img", "build/warena360.img")),
+    Row("wafiglod", "soak", py("tests/wafiglod.py"), 52.0,
+        "WIREARENA'S SMALL FIGURE BEGINS WHERE THE DETAIL LEVEL SAYS "
+        "(docs/plans/WIREARENA-ARENAS-PLAN.md 5, HEIGHTS-PLAN 9.11). A "
+        "figure small on the screen is drawn as seven joints and five "
+        "straight limbs (LK_FEW); how small is the level's (wa_flodv, "
+        "CONFIG's: wa_levtab's last column) - from 464 units ahead at "
+        "Medium and below, from 696 at High, never at Very High; the "
+        "owner chose it on trial builds. One figure before the eye in the "
+        "open arena 400, 560 and 760 units ahead, through "
+        "tools/waposes.py at Low, Medium, High and Very High, an emulator "
+        "each, the still frame single-stepped: the limbs walked (wa_flgo: "
+        "9 a whole figure, 5 a small one) must be 19, 19, 23 and 27. The "
+        "level is set by its key in a running match. Red with the "
+        "threshold a constant (23 at Low and Medium) and with the level's "
+        "key not syncing CONFIG (19 at High).",
+        needs=("marty", "nasm"), cpus=4,
+        wants=("build/os8088-360.img", "build/warena360.img")),
     Row("wastill", "soak", py("tests/wastill.py"), 40.0,
         "WIREARENA'S STANDING VIEW DRAWS THE MOVING VIEW'S PICTURE "
         "(docs/plans/WIREARENA-ARENAS-PLAN.md 5). The renderer keeps work "
