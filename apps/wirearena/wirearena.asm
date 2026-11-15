@@ -6849,15 +6849,16 @@ wa_rsync:
 ; 0..19: where it is, which way it faces, its animation, its flash, whether
 ; it is dead, the floor it stands on) into the renderer part: three runs, the first taking FRAME and
 ; figure 0 together - FRAME's camera sin and cos made here first; then the
-; lift's height, and the rockets while any is live. Clobbers CX, SI, DI,
-; ES (= the part)
+; lift's height, and the rockets while any is live. Clobbers AX, BX, CX,
+; DX, SI, DI, ES (= the part) - its three callers keep nothing across it
 WA_FHW equ WA_FIGHEAD/2
 wa_rframe:
-    push ax
-    push dx
-    call wa_camsc               ; the camera's sin and cos, into FRAME (the
-    pop dx                      ; part has no table)
-    pop ax
+    mov ax, [wa_ang]            ; the camera's sin and cos, into FRAME (the
+    or al, 0x3F                 ; part has no table) - wa_camsc's own test
+    cmp ax, [wa_fsa]            ; here: a view that has not turned costs
+    je .sc                      ; no call and no load of what FRAME holds
+    call wa_camsc.make
+.sc:
     mov [wa_mmseg], ds          ; (our segment, for the minimap's bytes:
     mov es, [wa_rds]            ; the region may have moved since)
     cld
@@ -6946,9 +6947,10 @@ wa_render:
     mov [wa_frame], al
     push ds
     pop es
-%assign wa_i 0
+    mov ax, 1                   ; (one register's stores: 3 bytes each,
+%assign wa_i 0                  ; where an immediate's are 6)
 %rep WA_NFIG
-    mov word [wa_figs + wa_i*F_SIZE + F_PZ], 1
+    mov [wa_figs + wa_i*F_SIZE + F_PZ], ax
 %assign wa_i wa_i+1
 %endrep
     ret
