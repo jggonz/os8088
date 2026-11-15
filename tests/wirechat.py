@@ -492,10 +492,9 @@ class Hub:
                 if not any(not l.startswith("C ") for l in lines):
                     self.held += 1
                     seq0 = self.seq
-                    # host: the HOST server's long-poll hold, not guest work
                     end = time.time() + 20
                     while self.seq == seq0 and self.sessions.get(q["t"]) is s \
-                            and time.time() < end:  # host: (the hold)
+                            and time.time() < end:
                         self.lock.wait(0.5)
                     self.held -= 1
                     if self.sessions.get(q["t"]) is not s:

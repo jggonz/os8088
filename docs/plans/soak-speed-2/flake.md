@@ -43,12 +43,12 @@ stream owns each (`--rank` BEFORE the fixes below):
 |---:|---|---|---|
 | 8820 | waverackedit.py | sleep 21 | media stream |
 | 8160 | waverackplay.py | sleep 16, deadline 1 | media stream |
-| 3510 | telansi.py | deadline 4, sleep 5 | **flake: fixed/marked** |
+| 3510 | telansi.py | deadline 4, sleep 5 | qemubox stream (note below) |
 | 3435 | xtmp3eng.py | sleep 3 | media stream |
 | 2400 | waverackrec.py | sleep 1 | media stream |
 | 2400 | win16pbrush.py | sleep 9, deadline 1 | flake: NOT fixed (SKIPs here - no PBRUSH.EXE) |
 | 2000 | hibernate.py | deadline 4 | **flake: marked (host file flush)** |
-| 1920 | telzm.py | sleep 4 | **flake: fixed** |
+| 1920 | telzm.py | sleep 4 | qemubox stream (note below) |
 | 1800 | waverack.py | deadline 3, sleep 9 | media stream |
 | 1300 | vidxip.py | deadline 1 | vid stream |
 | 912 | trkspk.py | deadline 2 | **flake: fixed** |
@@ -57,12 +57,12 @@ stream owns each (`--rank` BEFORE the fixes below):
 | 520 | smallboot.py | sleep 1 (+bootpace) | **flake: fixed** |
 | 500 | rdgaotmega.py | deadline 2 | mega stream |
 | 450 | vesabench.py | deadline 2, sleep 1 | flake: left (QEMU; mtools poll of the guest's file) |
-| 420 | wirechat.py | deadline 2 | **flake: marked (host server's long-poll)** |
+| 420 | wirechat.py | deadline 2 | qemubox stream (genuine host: the server's long-poll hold) |
 | 396 | apspk.py | deadline 2 | **flake: fixed** |
 | 340 | chuge.py | deadline 4 | flake (big leg) / mega (mega leg): left |
 | 300 | lemmings.py | deadline 2, sleep 1 | flake: left (QEMU dump poll) |
 | 240 | hdbounce.py | deadline 4 | **flake: fixed** |
-| 215 | brnav.py | sleep 1 | **flake: marked (the server's hold IS the subject)** |
+| 215 | brnav.py | sleep 1 | qemubox stream (genuine host: the server's hold is SPEC.md 71.8's subject) |
 | 90  | brrace.py | deadline 1 | **flake: fixed** |
 | ~40 files | mega*.py | deadline 2-4 each | mega stream (one shared shape) |
 
@@ -109,13 +109,16 @@ the merge run `python3 tests/unit/t_hostwait.py --update` once.
 - **smallboot**: "the guest is still executing" was cycles across a 0.4-s
   host sleep; at a load of 40 that sleep can see the emulator descheduled
   for all of it. Now a poll up to 5 host s that ends at the first moved cycle.
-- **telansi / telzm**: seven `time.sleep(0.3)` after `srv.start()` dropped -
-  os88bbs.BBSServer and telansi's MirrorServer bind and LISTEN in
-  `__init__`, so the guest's connect queues on the backlog; the pause bought
-  nothing. The bind retries and the port-release pauses are marked `# host:`.
+- **Notes for the qemubox stream (QEMU network rows are theirs; edits
+  reverted here)**: in telansi/telzm the seven `time.sleep(0.3)` after
+  `srv.start()` buy nothing - os88bbs.BBSServer and telansi's MirrorServer
+  bind and LISTEN in `__init__`, so the guest's connect queues on the
+  backlog. Their bind retries and port-release pauses (0.6 s) are genuine
+  host waits; telansi's MirrorServer 12-s read of the guest's reply is a
+  host deadline on guest output. wirechat's 20-s hold and brnav's
+  SLOW_SECS are genuine host waits (servers' holds) to mark `# host:`.
 - Marked as genuine host waits: hibernate (the host FILE's flush),
-  wirechat (the host server's long-poll hold), brnav (the server's hold is
-  SPEC.md 71.8's subject), dispreboot/dispcold/dotdelpen (stall detectors),
+  dispreboot/dispcold/dotdelpen (stall detectors),
   heapmap/stikhiber (10x backstops on guest windows), vbthold (glass sample
   spacing), vbtdiag (a debug-only print loop).
 

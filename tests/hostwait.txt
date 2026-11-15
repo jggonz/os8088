@@ -67,6 +67,7 @@ tests/bptrace.py                   poll        1  # pre-gate census 2026-11-15 (
 tests/brdownload.py                poll       15  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/brnav.py                     poll        8  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/brnav.py                     sleep       1  # reverted to the qemubox stream's ownership (QEMU network rows), 2026-11-15
 
 tests/brreload.py                  poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
@@ -773,11 +774,14 @@ tests/tanksmall.py                 poll        1  # pre-gate census 2026-11-15 (
 
 tests/tankspawn.py                 advance     6  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
+tests/telansi.py                   deadline    4  # reverted to the qemubox stream's ownership (QEMU network rows), 2026-11-15
 tests/telansi.py                   poll        8  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/telansi.py                   sleep       5  # reverted to the qemubox stream's ownership (QEMU network rows), 2026-11-15
 
 tests/telnet.py                    poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/telzm.py                     poll        9  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/telzm.py                     sleep       4  # reverted to the qemubox stream's ownership (QEMU network rows), 2026-11-15
 
 tests/tgplay.py                    poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
@@ -968,6 +972,7 @@ tests/win16pbrush.py               sleep       9  # pre-gate census 2026-11-15 (
 
 tests/win16write.py                sleep       2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
+tests/wirechat.py                  deadline    2  # reverted to the qemubox stream's ownership (QEMU network rows), 2026-11-15
 tests/wirechat.py                  poll        2  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
 tests/wireflick.py                 advance     3  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
