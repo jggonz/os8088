@@ -88,7 +88,7 @@ WA_VAR wl_hs, 1
 WA_VAR wl_hh, 2                 ; ...that height (-1: none this frame)
 WA_VAR wl_nvk, 1                ; the corners NOT projected in the view: bits
 WA_VAR wl_two, 1                ; ...and draws a floor edge with its top
-WA_VAR wl_n1, 2                 ; a clipped edge's ends' pairs
+WA_VAR wl_n1, 2                 ; a tread's ends' pairs (wl_xedge)
 WA_VAR wl_s1, 1
 WA_VAR wl_n2, 2
 WA_VAR wl_s2, 1
@@ -569,25 +569,54 @@ wl_face:
     cmp cx, 4*WA_HR-1
     jge .under
 .cut:
-    mov ax, [si+WL_CN-WL_KC]
-    mov [wl_n1], ax
-    mov ax, [di+WL_CN-WL_KC]
-    mov [wl_n2], ax
-    mov al, [si+WL_CS-WL_KC]
-    mov [wl_s1], al
-    mov al, [di+WL_CS-WL_KC]
-    mov [wl_s2], al
     mov bx, [si+WL_CV-WL_KC]
-    mov si, [di+WL_CV-WL_KC]
+    mov bp, [di+WL_CV-WL_KC]
     mov ax, [wa_vx+bx]
     mov [wa_x1], ax
     mov ax, [wa_vz+bx]
     mov [wa_z1], ax
-    mov ax, [wa_vx+si]
+    mov ax, [ds:wa_vx+bp]
     mov [wa_x2], ax
-    mov ax, [wa_vz+si]
+    mov ax, [ds:wa_vz+bp]
     mov [wa_z2], ax
-    jmp wl_xedge
+    push si
+    push di
+    call wa_clip
+    pop di
+    pop si
+    jc .under
+    ; AN END IN THE VIEW is inside all three of wa_clip's planes (wa_vcam's
+    ; test), so the clip never moved it: its projection is its corner's
+    ; record already (both of a face's corners are wanted, so one in the
+    ; view is made), and only an end out of it is projected (wl_proj, the
+    ; same arithmetic as the corner's)
+    mov bx, [si+WL_CV-WL_KC]
+    test byte [wa_vok+bx], 1
+    jnz .e1
+    push di
+    mov di, wl_e1c
+    mov ax, [wa_x1]
+    mov bx, [wa_z1]
+    mov cx, [si+WL_CN-WL_KC]    ; (at its corner's height)
+    mov dl, [si+WL_CS-WL_KC]
+    call wl_proj
+    pop di
+    mov si, wl_e1c
+.e1:
+    mov bx, [di+WL_CV-WL_KC]
+    test byte [wa_vok+bx], 1
+    jnz .e2
+    push si
+    mov ax, [wa_x2]
+    mov bx, [wa_z2]
+    mov cx, [di+WL_CN-WL_KC]
+    mov dl, [di+WL_CS-WL_KC]
+    mov di, wl_e2c
+    call wl_proj
+    pop si
+    mov di, wl_e2c
+.e2:
+    jmp wl_draw
 .under:
     ret
 
