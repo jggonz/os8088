@@ -271,6 +271,16 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
             b.pump(600, 4)
             if b.n.get("wm_su_try.occl/us"):
                 break
+            # ...BUT A MISSED CLICK IS RE-CLICKED, NOT WAITED OUT: a round
+            # is 40 guest seconds, and a window still at the zoomed rect
+            # after one was never un-zoomed - nothing is coming. Waiting out
+            # all eight rounds of three tries was 14,400 advances, each a
+            # halt and a resume with five breakpoints armed on Bochs: a
+            # whole-tier soak's mega-zoomsave ran 59 minutes into the wall
+            # limit doing exactly that, and passes 3 of 3 alone
+            cur = [x for x in os88geom.windows(m) if x.i == disk][0]
+            if (cur.x, cur.y, cur.w, cur.h) == (big.x, big.y, big.w, big.h):
+                break
         n = b.take()
         if n.get("wm_su_try.occl/us"):
             break

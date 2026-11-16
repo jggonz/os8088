@@ -1033,8 +1033,15 @@ class Box(object):
                                   env=benv, preexec_fn=_fsize_cap)
         self.inp.attach(self.p.pid,     # (the wrapper execs bochs-bin)
                         os.path.join(out, "bochs.log"))
+        # THE HOLDER TAKES NONE OF ITS PARENT'S STDIO. It inherited the
+        # row's stderr, and a row that died before stop() (a timeout's
+        # SIGTERM, an exception) left it orphaned for its day with that pipe
+        # open - so os88test, reading the row's output to EOF, waited on it:
+        # a whole-tier soak sat 2 h 7 min on a mega-zoomsave already reaped
         self.hold = subprocess.Popen("exec sleep 86400 > '%s'" % fifo,
-                                     shell=True, env=self.env)
+                                     shell=True, env=self.env,
+                                     stdin=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
         with open(fifo, "w") as fh:
             fh.write("c\n")
 

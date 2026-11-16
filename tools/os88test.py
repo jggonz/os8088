@@ -175,6 +175,7 @@ capability is known to be there.
 import argparse
 import concurrent.futures
 import fnmatch
+import codecs
 import os
 import shutil
 import subprocess
@@ -603,6 +604,9 @@ def _tree_runq(root):
         return None
 
 
+DRAIN_SECS = 30                 # a reaped row's pipes, read to EOF at most
+
+
 def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     """Popen.communicate, but REAPED WITH wait4 so the row's CPU is kept.
 
@@ -640,8 +644,19 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     bufs = {"o": [], "e": []}
 
     def drain(f, key):
-        for chunk in iter(lambda: f.read(8192), ""):
-            bufs[key].append(chunk)
+        # os.read, which answers whatever has ARRIVED: a text file's
+        # read(8192) waits for 8192 characters or EOF, so a pipe held open
+        # past the row (see DRAIN_SECS) kept the row's last words inside the
+        # call and they were never reported
+        dec = codecs.getincrementaldecoder(f.encoding or "utf-8")(
+            errors="replace")
+        fd = f.fileno()
+        while True:
+            b = os.read(fd, 8192)
+            if not b:
+                break
+            bufs[key].append(dec.decode(b).replace("\r\n", "\n"))
+        bufs[key].append(dec.decode(b"", final=True))
 
     ts = [threading.Thread(target=drain, args=(p.stdout, "o"), daemon=True),
           threading.Thread(target=drain, args=(p.stderr, "e"), daemon=True)]
@@ -702,10 +717,24 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     status, ru = got
     p.returncode = os.waitstatus_to_exitcode(status)
     qcpu = _qemu_cpu(qdir, qseen) if qdir is not None else 0.0
+    # THE ROW IS REAPED, so its output ends when its LAST WRITER closes - and
+    # a process the row left running holds the pipe for as long as it lives.
+    # Waited on without a bound, one orphan stalled a whole-tier soak for
+    # 2 h 7 min after the row itself had ended (os88bochs's fifo holder,
+    # `sleep 86400`, which had inherited the row's stderr). So the drains
+    # get DRAIN_SECS, and a pipe still open after them is SAID and left.
+    end = time.time() + DRAIN_SECS
     for t in ts:
-        t.join()
-    p.stdout.close()
-    p.stderr.close()
+        t.join(max(0.0, end - time.time()))
+    held = [k for t, k in zip(ts, ("stdout", "stderr")) if t.is_alive()]
+    if held:
+        bufs["e"].append("\nos88test: the row was reaped but its %s was "
+                         "still held open %ds later - a process it started "
+                         "outlived it; read what had arrived\n"
+                         % (" and ".join(held), DRAIN_SECS))
+    else:
+        p.stdout.close()
+        p.stderr.close()
     return ("".join(bufs["o"]), "".join(bufs["e"]),
             ru.ru_utime + ru.ru_stime + qcpu, timed_out)
 
