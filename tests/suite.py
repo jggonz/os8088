@@ -7856,9 +7856,13 @@ SOAK = [
         "360KB LZB system disk, and traces the widget to READY: exactly two "
         "fpg_opbegins, every DOS.O88 read, the loader's probe of the "
         "document and every module read but dos_load's one-sector probe "
-        "inside one, each filling its trough, at most two phases of 100 ms "
-        "or more outside them (the kernel's header read and HIBER.DRV, as at "
-        "e7bd353b) and at most 4 widget ups. VERIFIED TO FAIL on f4c112c6: "
+        "inside one, each filling its trough, at most three phases of 100 ms "
+        "or more outside them and EACH NAMED by what it read - A:'s "
+        "ASSOC.DAT (its cache holds B:'s), the kernel's read of DOS.O88's "
+        "header, HIBER.DRV - since whether the header read reaches 100 ms "
+        "is where DOS.O88 lands on the disk (22 ms inside a track already "
+        "read, 404 across a track boundary: 10af988a moved it five "
+        "clusters) - and at most 4 widget ups. VERIFIED TO FAIL on f4c112c6: "
         "1 operation, the probe outside, five module reads outside and eight "
         "long phases. Measured 9s.",
         needs=("marty",), serial=True,
