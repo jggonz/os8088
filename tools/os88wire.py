@@ -292,9 +292,17 @@ def _pieces(blob):
                 ulen, pk = os88pkg.row_lens(b0, ulen, zkb, pfl)  # 20.12.15
                 zkb = zkb if pk is None else pk
                 start = off * gran
-                if pfl & os88pkg.OPF_COMP:
-                    pieces.append(os88lz.decompress(blob[start:start + zkb],
-                                                    fid, ulen))
+                z = blob[start:start + zkb]
+                if pfl & os88pkg.OPF_COMP and pfl & os88pkg.OPF_ZFILL:
+                    # SPEC.md 20.12.7.5: a head S1, P1, B, S2, then two
+                    # streams landing at 0 and at B, the rest of the row zero
+                    s1, p1, b, s2 = struct.unpack_from("<HHHH", z, 0)
+                    out = bytearray(ulen)
+                    out[:s1] = os88lz.decompress(z[8:8 + p1], fid, s1)
+                    out[b:b + s2] = os88lz.decompress(z[8 + p1:], fid, s2)
+                    pieces.append(bytes(out))
+                elif pfl & os88pkg.OPF_COMP:
+                    pieces.append(os88lz.decompress(z, fid, ulen))
                 else:
                     pieces.append(blob[start:start + ulen])
     return pieces
