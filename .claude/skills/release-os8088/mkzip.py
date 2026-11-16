@@ -303,10 +303,11 @@ ITEMS = [
     ("xt", "Games disk", True,
      "Every game on one floppy.",
      [("games360.img", "360KB", "")]),
-    ("xt", "Games disk 2: WireArena", True,
-     "WireArena, the text-mode arena shooter: up to three bots, or two to "
-     "four players over a serial cable, a local network or the internet. "
-     "It needs kern_big or kern_mega, not the 128KB machine's kern_small.",
+    ("xt", "Games disk 2: Wire Arena", True,
+     "Wire Arena, a first-person arena shooter drawn in text: up to three "
+     "bots, or two to four players over a serial cable, a local network or "
+     "the internet. It needs the standard system disk; the 128KB machine's "
+     "small system disk refuses it.",
      [("games2-360.img", "360KB", "")]),
     ("xt", "Emulators disk", True,
      "RealDMG, the Game Boy emulator, with the project's own demo cartridge "
@@ -356,8 +357,9 @@ ITEMS = [
     ("x720", "Second software disk, 720KB", True,
      "PiXEL with five of its sample pictures in PICTURES, MIDIRack with "
      "the eight songs the first disk has no room for, RealDMG with its demo "
-     "cartridge, DrMarco and the demo video, and the REDLINE benchmark, "
-     "Telnet and CDRack, which the 720KB system disk has no room for. "
+     "cartridge, DrMarco and the demo video, Wire Arena, and the REDLINE "
+     "benchmark, Telnet and CDRack, which the 720KB system disk has no room "
+     "for. "
      "MIDIRack is on both software disks, so its songs open from either.",
      [("more720.img", "720KB", "")]),
 
