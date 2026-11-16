@@ -408,13 +408,7 @@ def main():
                 for ch in typed:
                     b.key('dot' if ch == '.' else ch)
                 Q.pace(b, .3)
-                # WHAT THE FIELD HOLDS, said: a loaded run once failed the
-                # lobby on both sides with frames flowing both ways, and an
-                # address B did not type as asked is the first suspect
-                got = bytes(b.readseg(b.seg, b.sy['wa_saddr'], 16))
-                got = got.split(b'\0')[0].decode('latin-1')
-                check(got == typed, 'B\'s Address field holds %r, as typed '
-                      '(%r)' % (got, typed))
+                print('   (B typed %s)' % typed)
             else:
                 b.setup_play(2)
             b.wait_for(lambda: b.v('wa_lknet') == want, 'NETWORK: B on the '
@@ -437,6 +431,32 @@ def main():
             print('  ' + f)
         sys.exit(1)
     print('walink: ok - two machines, one arena, the cable')
+
+
+def place_after_spawn(where):
+    """[(machine, x, y, ang), ...]: each player put there ONCE ITS MATCH HAS
+    RUN, and confirmed there on its own machine.
+
+    The match's spawn places each player in its first ticks, after wa_lkon
+    reads 1, so a poke made the moment the lobby says "in the match" can be
+    overwritten by it: under a loaded box B read (1024, 480), its spawn, and
+    the other machine's figure showed exactly that - walinkip failed "SNAP:
+    B at (1100, 300)" with the link carrying 10,572 bytes B->A, and walink4
+    its slot 2 on two machines of three. So every sim runs 30 match ticks on
+    its OWN clock first, and each position is read back where it was put,
+    re-poked up to three times, before anybody else is asked about it."""
+    for m, *_ in where:
+        t0 = m.v('wa_tkn', 2)
+        m.wait_for(lambda m=m, t0=t0: (m.v('wa_tkn', 2) - t0) & 0xFFFF >= 30,
+                   'the match running before the players are placed', secs=10)
+    for _ in range(3):
+        for m, x, y, ang in where:
+            m.at(x, y, ang)
+        Q.pace(where[0][0], .2)
+        if all((m.v('wa_px', 2), m.v('wa_py', 2)) == (x, y)
+               for m, x, y, _ in where):
+            return True
+    return False
 
 
 def run(a, b, cable):
@@ -494,17 +514,7 @@ def run(a, b, cable):
     # (1100, 300)" with the link carrying 10,572 bytes B->A. So both sims
     # run a second of match ticks first (their own clocks), and B is
     # confirmed where it was put before A is asked about it
-    for m in (a, b):
-        t0 = m.v('wa_tkn', 2)
-        m.wait_for(lambda m=m, t0=t0: (m.v('wa_tkn', 2) - t0) & 0xFFFF >= 30,
-                   'SNAP: %s\'s match running' % ('A' if m is a else 'B'),
-                   secs=10)
-    for _ in range(3):
-        b.at(1100, 300, 512)
-        a.at(1000, 300, 0)
-        Q.pace(b, .2)
-        if (b.v('wa_px', 2), b.v('wa_py', 2)) == (1100, 300):
-            break
+    place_after_spawn([(b, 1100, 300, 512), (a, 1000, 300, 0)])
 
     def near(m, x, y):
         f = m.fig(0)

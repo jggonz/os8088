@@ -163,8 +163,8 @@ def run_ip(ms, cable):
                    secs=20)
     by = {m.v('wa_lkme'): m for m in ms}
     check(sorted(by) == [0, 1, 2], 'BY ADDRESS: slots 0..2 (%r)' % sorted(by))
-    for s, m in by.items():
-        m.at(1000 + 100 * s, 300 + 40 * s, 0)
+    L.place_after_spawn([(m, 1000 + 100 * s, 300 + 40 * s, 0)
+                         for s, m in by.items()])
     for s, m in by.items():
         for o in range(N):
             if o != s:
@@ -217,9 +217,10 @@ def run(ms, cable):
           'THE SLOTS: each peer record has its peer\'s slot')
     by = {slotof[id(m)]: m for m in ms}
 
-    # SNAP: slot s at (1000 + 100 s, 300 + 40 s)
-    for s, m in by.items():
-        m.at(1000 + 100 * s, 300 + 40 * s, 0)
+    # SNAP: slot s at (1000 + 100 s, 300 + 40 s) - once the match has run
+    # (walink.place_after_spawn: the spawn overwrote slot 2's poke)
+    L.place_after_spawn([(m, 1000 + 100 * s, 300 + 40 * s, 0)
+                         for s, m in by.items()])
 
     def near(m, s, x, y):
         f = figof(m, s)
