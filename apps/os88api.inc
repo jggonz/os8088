@@ -370,7 +370,13 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
                                  ; species (SPEC.md 38.1): a driver's windows,
                                  ; and a package's second one. An app's own
                                  ; window needs neither - closing it tears the
-                                 ; instance down and the kernel frees the record
+                                 ; instance down and the kernel frees the record.
+                                 ; NEVER destroy the window your instance is
+                                 ; BOUND to while it has a worker: the worker's
+                                 ; end posts the instance's teardown against that
+                                 ; slot (SPEC.md 20.6), and a freed slot is a
+                                 ; close nobody takes - your record, image and
+                                 ; claims stay for the session
 %define OSAPI_WM_FRONT      OS88_DOOR           ; BX=win ptr
 %define OSAPI_WM_CONTENT    KERNEL_SEG:0x0076   ; BX=win ptr; out AX=content left, DX=top
 %define OSAPI_WM_OBSCURED   KERNEL_SEG:0x007E   ; BX=win ptr; out CF=1 if covered -

@@ -20398,7 +20398,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_win_rect`  | in SI = win ptr; out AX,BX,CX,DX = its occupied rect, inclusive, drop shadow included (WF_FULL: no shadow). Clobbers only those four. |
 | `wm_top`       | out BX = frontmost visible window ptr, 0 if none. Takes no lock, touches no VRAM and reads only `wm_zord`, so a **worker task** may call it — which is what a door cell (§20.3) is for: a package is told when it *gains* the front (`W_ONCLICK`, `W_PAINT`) and never when it loses it, and `W_FLAGS` bit 1 answers *visible*, which a covered window still is. apps/arkanoid pauses on it (§44.8) — together with `menu_owner` (§12.6), which answers the other half: a click on the bare desktop changes the active application without touching `wm_zord`, so this routine correctly reports that nothing moved. |
 | `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box, 4 grow box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. AL=4 only when BX is the frontmost visible window **and** has WF_SIZABLE (and not WF_FULL): the 13×13 grow-box rect of the frame drawing above; anywhere else that region is plain content (AL=0). A WF_FULL window reports AL=0 for every point — it has no chrome. |
-| `wm_paint_all` | full repaint: `wm_paint_dmg` over the whole virtual desktop, `(0, 0)` to the far corner (§11.91.7) — the dither where no window stands, every zone, the dock and the menu bar, and every visible window back→front, each drawn only where nothing above it will be. Forces neither the bar nor the strip. Caller holds gfx lock; all registers preserved. |
+| `wm_paint_all` | full repaint: `wm_paint_dmg` over the whole virtual desktop, `(0, 0)` to the far corner (§11.91.7) — the dither where no window stands, every zone, the dock and the menu bar, and every visible window back→front, each drawn only where nothing above it will be. Forces neither the bar nor the strip (the strip on `kern_big`; `kern_small` forces it, §11.91.7). Caller holds gfx lock; all registers preserved. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
 | `wm_flag`      | `OSAPI_WM_FLAG`: in BX = win ptr, AH = a W_FLAGS bit number (`WFB_*`), AL = 0 clear / non-zero set. The run-time half of the style word, and the seven flag setters it replaced (§11.104.3). Every register and the flags kept. |
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call; **every register preserved**. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through a door cell (§20.3). |
@@ -22339,7 +22339,14 @@ and its `W_PAINT` under the cull (§11.3.3); the dither lays only the ground no
 window holds (§11.91.1) and keeps to each display's band (§39.16.2.1), which
 floors display 0 at `MBAR_H` and stops it above the strip. It forces neither
 the bar nor the strip: a caller whose app drew over them says so first
-(`blk_relit`, hibernation's resume). The settled screen is the one the walk
+(`blk_relit`, hibernation's resume). The pass is told so: this rect always
+reaches the strip, which on any other rect means something moved off it and
+owes the damaged span a restore (`dock_force_r`), so on `kern_big`
+`wm_paint_all` enters with BP nonzero and `.fill` skips the force;
+`wm_paint_dmg`'s own entry zeroes BP. Without it every whole-desktop pass
+rebuilt every tile of an unchanged strip. **`kern_small` still pays that
+rebuild** (`dock_force_x` over the whole width): its heap rung is locked
+(guard 1b) and the six bytes did not fit. The settled screen is the one the walk
 left — the incremental-equals-full property every damage path rests on
 (`tests/dispcorner.py`).
 
@@ -25729,16 +25736,24 @@ About box's build number to the commit count, so an ordinary commit moves
 three bytes and can flip it by itself. A defect that travels between commits
 on its own reads as intermittent hardware, or as a fix that did not hold.
 
-Two things are wrong and both are fixed:
+Two things were wrong, and this is what stands of their fixes:
 
 - **`wm_ptr2idx` now zeroes `AH`.** The remainder is not part of the answer,
   and a routine whose documented output is "AL = index" should not hand back a
   second byte that a caller might fold in.
-- **`wm_su_slot` and the two API cells VALIDATE the pointer** through
-  `wm_win_ok`: in range, record-aligned, and `W_FLAGS` bit 0 set. A package
-  that names something that is not one of its windows is refused, which is
-  §20's rule about bytes that come from a package applied to the one argument
-  every window call takes.
+- **No door validates the pointer now; `wm_ptr2idx`'s clamp is the guard.**
+  `wm_su_slot` and the two API cells once checked it through `wm_win_ok` (in
+  range, record-aligned, `W_FLAGS` bit 0 set), and `wm_isrec` after it. The
+  cells are one door now, `OSAPI_WM_FLAG` (§11.104.3), and it and
+  `OSAPI_WM_BAND` TRUST `BX`: packages are trusted (the owner's ruling,
+  §34.11.1), so the check went in the size passes. What keeps a bad pointer
+  off `.text` is that `wm_ptr2idx` also BOUNDS the index to `MAX_WIN - 1`: a
+  pointer that is not a window names the LAST window's slot, so `wm_su_drop`
+  drops that window's cache instead of zeroing a word of the kernel. That
+  holds for an offset under `256 * WIN_SIZE` past `wm_wins`; below the table,
+  or past that, the `div` raises INT 0 first. Step 1 above is not guarded:
+  `wm_flag` sets or flips a bit at `KERNEL_SEG:BX` whatever `BX` holds, so a
+  package must hand `OSAPI_WM_FLAG` its own window and nothing else.
 
 Nothing validates the jump table at run time — `api-abi` decodes it out of
 `build/kernel.bin`, so every gate passed while the live table was wrong. That
@@ -27602,7 +27617,8 @@ cell weaker and the case against a *fourth* hand-written exception stronger —
 `apps/paint`'s `pt_wfix` is the tree's only remaining hand-write of a window
 record and it carries a paragraph explaining why it cannot be given up. One
 cell and five bytes of body is what the rule staying one rule costs. (The
-body has since gained `wm_isrec`'s guard - BX comes from a package - and on a
+body gained `wm_isrec`'s guard - BX comes from a package - and lost it again
+when it was folded into `wm_flag`, which trusts `BX` (§11.96.11.4); and on a
 kernel with no zoom, `kern_small` or an `ANIMOFF` build, it is a bare `ret`:
 the bit's one reader is the zoom, so there the call is taken and ignored, as
 `OSAPI_WM_QUIET`'s is on `kern_small` - kernel size pass 12.)
@@ -49163,9 +49179,11 @@ Two teardown corollaries, both about not trading a crash for a leak:
   this routine used to carry for a corrupt table is gone with the teardown
   it guarded (BR-4). A package that destroys its OWN bound window with
   `OSAPI_WM_DESTROY` breaks the record's binding and is outside the
-  contract: its close is posted to a dead slot and spent unread, and the
-  record leaks (before BR-4 the worker destroyed whatever then held the
-  slot). A `T_INST` outside the table exits with no release byte and posts
+  contract (`os88api.inc` says so at the cell): its close is posted to a
+  dead slot and spent unread - or, if another window has taken the slot
+  since, closes THAT window - and the record, its image and its claims leak
+  for the session (before BR-4 the worker destroyed whatever then held the
+  slot). The kernel spends no guard on it; nothing in the tree does it. A `T_INST` outside the table exits with no release byte and posts
   nothing, the `sbl_refill_task` precedent (§34.5).
 - **The UI task is never exited.** Task 0's `T_INST` is a hard 0xFF, so a
   package that calls ALIVE from a *window callback* with a stale BX would
@@ -106299,6 +106317,11 @@ DRVV_SLEEP (5)  in: nothing. Stop the hardware (a bus master stops its DMA
                 NOW: the picture is about to be taken), close what a peer
                 holds open, unhook every vector you hooked - a DOS program
                 gets the machine next - and keep your image and claims.
+                END EVERY WORKER (OSAPI_DRV_TASK) here, as USBMOUSE's
+                um_dsleep does: WAKE and a refusal's DETACH run with the
+                scheduler locked, so a worker still alive never reaches
+                its exit, drv_unload_x's wait times out and the refused
+                row stays loaded, detached and not reloadable.
                 out CF=0 kept; CF=1 = "unload me as before", NOTHING done.
 DRVV_WAKE  (6)  in: nothing. The same image, after a POST (a resume) or a
                 DOS program (the return), neither of which you saw. Find
@@ -230141,12 +230164,20 @@ resident was added), and a write that touched no `STIKAPPS\` - a
 Sticky App's own `SYSTEM.CFG` registration, a saved document - costs one
 ordinary scan on the next press, which is every press's cost before this.
 An 8-bit generation that wraps by exactly 256 writes between two presses is
-read as unchanged; the list is then merely stale, below.
+read as unchanged; the list is then merely stale, below. **A walk that ends
+on a failed read is not kept**: `dsk_find_x` answering anything but
+`FERR_NOENT` - a directory sector that did not read - leaves a SHORT list,
+so `stm_scanvol` clears `stm_kok` (set when the scan starts) and the next
+press scans again, as every press did before the kept scan (+11 bytes of
+the module image, nothing resident).
 
 **What does NOT re-scan, and is the ACTION's to find**: a floppy SWAPPED in
 `A:` (a 5150 has no change line, and asking the drive is the disk access
 this removes), a write the OS never made (a raw `int 13h` from a DOS
-program, a host editing a mounted image). The list then shows what the last
+program, a host editing a mounted image), a fixed disk mounted or lost since
+the scan with no write between (`HDD.DRV` loaded from the Control Panel
+lists its `C:\STIKAPPS` once the panel's own `SYSTEM.CFG` write has moved a
+generation). The list then shows what the last
 scan saw, and a pick re-walks the disk as it always did: `Add` stands in the
 entry's volume's `STIKAPPS\` by name (`stm_gohome`'s `dsk_goto`, whose mount
 reads the boot sector and so sees the other disk) and its refusals are

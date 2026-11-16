@@ -218,8 +218,12 @@ DRVV_SLEEP   equ 5              ; THE MACHINE IS GOING AWAY AND COMING BACK
                                 ; Stop the hardware and unhook every vector -
                                 ; a DOS program gets the machine next - and
                                 ; STAY LOADED: your image and your claims are
-                                ; in the picture. out CF=0; CF=1 = "unload me
-                                ; as before", and nothing was done
+                                ; in the picture. END EVERY WORKER here too:
+                                ; WAKE and a refusal's DETACH run with the
+                                ; scheduler locked, so a live worker never
+                                ; exits and the refused row is never reloaded.
+                                ; out CF=0; CF=1 = "unload me as before", and
+                                ; nothing was done
 DRVV_WAKE    equ 6              ; ...and it came back: the same image, after a
                                 ; POST or a DOS program. Find the hardware
                                 ; again where SLEEP left it and re-arm it.

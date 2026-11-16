@@ -4984,8 +4984,10 @@ wm_dmg_union:
 ; wm_paint_dmg, and a fullscreen window is that routine's wm_dmg_fs case: the
 ; windows under it are skipped by wm_covered (SPEC.md 11.91.7 prices it).
 ;
-; It forces neither the bar nor the dock: a caller whose app overdrew them
-; says so first (blk_relit, hiber's resume).
+; It forces neither the bar nor (on kern_big) the dock: a caller whose app
+; overdrew them says so first (blk_relit, hiber's resume). On kern_big BP != 0 is what
+; tells .fill so: this rect always reaches the strip, and nothing in it moved
+; off the strip. kern_small has no rung byte for it, and keeps the force.
 ; -----------------------------------------------------------------------------
 wm_paint_all:
     KFZ 23                      ; a WHOLE desktop repaint
@@ -4994,7 +4996,10 @@ wm_paint_all:
     xor bx, bx                  ; rect, a near call into wm_paint_dmg - whose
     mov cx, 7FFFh               ; kent_bp banked all seven again - and
     mov dx, cx                  ; `jmp kret_dx` (kernel size pass 20, -5, and
-    jmp short wm_paint_dmg.go   ; a call, four pushes and four pops faster)
+%ifdef DOCK_OPT                 ; a call, four pushes and four pops faster).
+    mov bp, cx                  ; BP != 0: no dock force (SPEC.md 11.91.7)
+%endif
+    jmp short wm_paint_dmg.go
 
 ; -----------------------------------------------------------------------------
 ; wm_paint_dmg - repaint only what a rectangle's worth of change touched
@@ -5032,7 +5037,10 @@ wm_paint_all:
 ; -----------------------------------------------------------------------------
 wm_paint_dmg:
     call kent_bp                ; = push ax/bx/cx/dx/si/di/bp - FIRST, so that
-.go:                            ; wm_paint_all (above) can enter after it
+%ifdef DOCK_OPT                 ; wm_paint_all (above) can enter after it, with
+    xor bp, bp                  ; BP != 0 where this is 0 (.fill reads it)
+%endif
+.go:
     mov byte [cur_shchk], 1     ; ...and the other way (SPEC.md 7.2): a window
     inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13). `inc`
                                 ; and not `mov byte ..., 1`, a byte less: the
@@ -5112,6 +5120,8 @@ wm_paint_dmg:
     call wm_dmg_gray            ; (preserves every register)
     call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole (AX..DX
 %ifdef DOCK_OPT                 ; preserved: so the rect is STILL in AX..DX)
+    or bp, bp                   ; wm_paint_all's whole desktop moved nothing
+    jnz .dock                   ; off the strip: no force (SPEC.md 11.91.7)
                                 ; reached the strip? then whatever WAS covering
                                 ; it has moved - the one case that owes the
                                 ; strip a restore rather than a tile. Only the
@@ -9448,13 +9458,12 @@ wm_su_drop:
     push bx
     push dx
     push si
-                                ; NO wm_win_ok HERE, and that is a size
-                                ; decision rather than a judgement that it is
-                                ; safe: the BOOT_MARK kernel has tens of bytes
-                                ; of its 64KB segment left (docs/KERNEL-MEMORY.md),
-                                ; so the check lives at the two API doors a
-                                ; package can reach and every caller below them
-                                ; passes wm_idx2ptr's own answer
+                                ; NO POINTER CHECK HERE, nor at any door: the
+                                ; WM doors trust BX (packages are trusted,
+                                ; SPEC.md 34.11.1). What keeps a bad pointer
+                                ; off .text is wm_ptr2idx's clamp - it names
+                                ; the LAST window's slot, whose cache this then
+                                ; drops (SPEC.md 11.96.11.4)
     call wm_su_slot             ; SI = its word, BX = its tag
     mov dx, [si]
     or dx, dx

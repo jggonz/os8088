@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "0bf9b72fd1e31efdb429fb3f630b0cdc8d87e8f1085666b8c5ce1bf4e6dc8b4f",
+  "fingerprint": "4da796f360597501a44eb39e01b078976a6e5ebdd713fc4356d4a1f406153e90",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "0253a766305fdf9932d018f898fd232d46874a3be99bd87b657033d96965f2f6",
+  "fingerprint": "650b83b92ecd717de04b26d05a4b49e23a0e0af138d1a70d4476cdb09c276304",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2365,6 +2365,20 @@
    "guard": "PKG_FMT",
    "reason": "merge of elendilon (Wire Arena round: OSAPI_MOUSE_REL and OSAPI_KEY_MAP appended at 0x0236 and 0x0239, the SERIAL.DRV block verbs and ETHER.DRV's UDP verbs) onto elendilon-pr's merge of origin/main 7b802356 (C SDK thunks over existing cells): both sides only append, nothing built before changes meaning, no bump",
    "to": 13
+  },
+  {
+   "fingerprint": "650b83b92ecd717de04b26d05a4b49e23a0e0af138d1a70d4476cdb09c276304",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_WM_DESTROY's note: never destroy the window a worker-owning instance is bound to (SPEC.md 20.6); contract clarified, nothing built before stops running",
+   "to": 13
+  },
+  {
+   "fingerprint": "4da796f360597501a44eb39e01b078976a6e5ebdd713fc4356d4a1f406153e90",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "DRVV_SLEEP's note: a WAKES driver ends every worker in SLEEP (SPEC.md 51.2.5), and OSAPI_WM_DESTROY's: never destroy a worker-owning instance's bound window (SPEC.md 20.6); contracts clarified, nothing built before stops running",
+   "to": 14
   }
  ]
 }

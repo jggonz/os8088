@@ -367,7 +367,7 @@ had added.
     "minramkb": 128,
     "ovl": 2050,
     "stk0": 512,
-    "text": 39267,
+    "text": 39275,
     "toppara": 2904,
     "vga": 2218,
     "vgabuf": 336,
@@ -926,21 +926,21 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,759 | 38.7% |
-| the window system and its furniture | 22,409 | 29.1% |
+| the window system and its furniture | 22,417 | 29.1% |
 | drawing: adapters, primitives, glyphs, icons | 10,545 | 13.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 7,409 | 9.6% |
 | the kernel proper: API table, heap, scheduler, events | 6,270 | 8.1% |
 | the Control Panel | 301 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 288 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **76,981** | |
+| **total** | **76,989** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,190 | 7,680 | **8,870** | 527 | — | — |
-| `wm.inc` — the window manager (§11) | 8,416 | 154 | **8,570** | 856 | — | — |
+| `wm.inc` — the window manager (§11) | 8,424 | 154 | **8,578** | 856 | — | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 406 | 7,021 | **7,427** | 422 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,096 | **5,120** | 180 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,480 | 1,408 | **4,888** | 38 | 526 | — |
@@ -1001,7 +1001,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | — | — | **0** | — | — | 3 |
-| **total** | **39,267** | **37,714** | **76,981** | **4,882** | **5,358** | **3,206** |
+| **total** | **39,275** | **37,714** | **76,989** | **4,882** | **5,358** | **3,206** |
 <!-- END generated table -->
 
 ### Reading it
