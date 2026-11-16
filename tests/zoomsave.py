@@ -267,7 +267,15 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # So the pump runs until the answer arrives rather than for a fixed count.
     for _ in range(3):
         b.dblclick(big.x + 60, big.y + 9)       # ...down
-        for _ in range(8):
+        # TWO ROUNDS, NOT EIGHT: a round is 600 x 4 frames, 40 GUEST
+        # seconds, and no un-zoom repaints for longer than one - the budget
+        # is the guest's, so a busy HOST does not need more of it. What does
+        # happen is a hit LOST in the pump (dispcells.Pump.serve), and then
+        # waiting is all cost: eight rounds a try were 20-25 wall minutes on
+        # Bochs, and three tries ran mega-zoomsave into the wall limit in
+        # both a whole-tier soak and the scoped one after it. A lost hit is
+        # what the retry below is for
+        for _ in range(2):
             b.pump(600, 4)
             if b.n.get("wm_su_try.occl/us"):
                 break
