@@ -431,9 +431,18 @@ def leg_tracker(leg, out, pkg, mapsyms, mod, check_wide=False, disk=None,
             if not t.b("mp_playing"):
                 return "the replayer stopped"
             if check_wide:
+                # BRACKETED, because these are separate reads of a RUNNING
+                # guest: pattern, then volume, then row read a pattern's
+                # turn between them on a loaded soak box and filed pattern
+                # 1's volume under 128 ("wrong [128]"). The volume counts
+                # only when the rows either side of it are one pattern's,
+                # inside it and not wrapped, and the pattern read after is
+                # the one read before - so it is THAT pattern's row 0
+                r1 = t.rd("mp_row", 1, base)[0]
                 v = box.read(base + t.s["mp_chans"] + MP_VOL, 1)[0]
-                r = t.rd("mp_row", 1, base)[0]
-                if 2 <= r < 60:             # inside the pattern, not its turn
+                r2 = t.rd("mp_row", 1, base)[0]
+                if (2 <= r1 <= r2 < 60 and
+                        t.rd("mp_pattern", 1, base)[0] == pat):
                     seen.setdefault(pat, []).append(v)
             return True
         bad = listen(box, ok, "%s: the play" % leg, PLAY)
