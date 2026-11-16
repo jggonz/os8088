@@ -19201,7 +19201,7 @@ baseline of its own in docs/KERNEL-MEMORY.md, blessable by
 | drivers | `$(EMUDRIVERS)` = `$(DRIVERS)` **plus** `VMMOUSE.DRV` — an addition, where `$(SMALLDRIVERS)` is a restatement from nothing |
 | `SYSTEM.CFG` | **shipped on this disk and on §80.7's browser image, and on no other**, bit 5 set. Every row is not-wanted by default (§51.3), and a `kern_emu` machine that must be told to enable the one feature it was built for has been given nothing |
 | apps disk | the **shipped** `build/apps.img`, unchanged — `kern_emu` defines `KERN_BIG`, so it holds the same API table at the same offsets |
-| `DRV_MAX` | 7 here, 6 on `kern_big` (both counting §9.12's USB mouse), 4 on `kern_small` |
+| `DRV_MAX` | 13 on `kern_emu`, one fewer on `kern_big`/`kern_mega`, 4 on `kern_small` |
 | geometry | 1.44MB only. 360KB exists for real period hardware, and no machine that needs a 360KB floppy can execute a 386 instruction |
 
 **Rows 0-4 do not move, so `SYSTEM.CFG` stays readable both ways.** The row
@@ -192099,11 +192099,13 @@ the number of drivers that went — the bitmap of classes the first body also
 answered in `AX` is withdrawn, its one reader having stored it in a word
 nothing read back. `DQ_MAXREC` is published in `os88api.inc` so a
 caller can size that buffer without mirroring the kernel's own `DRV_MAX`.
-It is 12: kern_emu has twelve rows (CD-ROM, HTTP, VESA and §125's
-`PCIETHER.DRV`), kern_big and kern_mega eleven, and kern_small four. VESA is
-kept by the suspend sweep (§120.4) and `DRVC_NET` is never suspended
-(§96.23.6), so neither of the two rows that widened it adds a record to an
-older caller's buffer.
+It is 13, the maximum `kern_emu` table size with the optional VESA and §125
+`PCIETHER.DRV` rows and the appended PC1 mouse row; `kern_big` and `kern_mega`
+can have 12 rows, and `kern_small` has four. The PC1 row does not implement
+`DRVV_HWINFO` today, but the public buffer bound follows the table maximum so
+a later driver implementation cannot overrun a caller's buffer. VESA is kept
+by the suspend sweep (§120.4) and `DRVC_NET` is never suspended (§96.23.6), so
+those rows do not add records to an older caller's buffer.
 The kernel asserts `DRV_MAX <= DQ_MAXREC` at assembly time, because a row
 added here without widening the SDK
 would write past the end of somebody's buffer.
@@ -250596,8 +250598,8 @@ cross no resident rung on any of the three; `make budget-check` holds
 `KERN_BUDGET` for kern_big and kern_emu and `KERN_MEGA_RESIDENT_KB` for
 kern_mega. The row is LAST on each, so it is row 10 on kern_big and kern_mega
 (after `VESA.DRV`'s row 9) and row 11 on kern_emu, whose absolute mouse is
-its row 5; `DRV_MAX` is 11, 12 and 11, and `DQ_MAXREC` went to 12 for
-kern_emu (§51.11.2).
+its row 5; the PC1 row now follows the optional driver rows, making
+`DQ_MAXREC` 13 on kern_emu (§51.11.2).
 
 ### 125.6 Disks and machines (pinned)
 
