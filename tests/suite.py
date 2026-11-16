@@ -2301,9 +2301,7 @@ FAST = [
         "nothing refuses it, so the feature works and the heap is merely "
         "smaller. DESK.DRV shipped that way, with 'no mod_drop anywhere' in "
         "its own banner and a 5 KB claim priced as 1 (SPEC.md 11.103.10). "
-        "FAST and not soak, though it is about the kernel: new features keep "
-        "arriving as modules, a new mod_tab row is the one path every one of "
-        "them takes, and the place to refuse it is the next `make`. It reads "
+        "It reads "
         "that a drop is WRITTEN; that it is reached is stiknodesk's G"),
     Row("toast", "full", py("tests/unit/t_toast.py"), 2.0,
         "FULL (owner, 2026-11-11): each costs over a second, so it runs "

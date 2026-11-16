@@ -2204,8 +2204,8 @@ round is §2.8.3.2.
 its claim from first use to power-off, pinned - the bytes a module exists to
 give back - and nothing refuses it: the feature works and the heap is merely
 smaller. `DESK.DRV` shipped that way until §11.103.10's drop rule.
-`tests/unit/t_moddrop.py` (fast tier) reads every `mod_tab` row and fails the
-build unless the row's `MOD_*` reaches a `mod_drop` in kernel code, or
+`tests/unit/t_moddrop.py` (soak tier) reads every `mod_tab` row and fails the
+row unless the row's `MOD_*` reaches a `mod_drop` in kernel code, or
 `tests/moddrop.txt` says why that module is held until restart. The list
 turns one way and is empty today. `MOD_KBM`'s drop is the one a feature does
 not decide: it belongs to the first pointer that speaks (§2.8.8). **A drop

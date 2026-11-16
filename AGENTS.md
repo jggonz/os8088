@@ -330,7 +330,7 @@ review shows the head being merged, not an earlier one.
   one of them writes every pixel twice, and the gap between the two passes is
   *visible* on the target machine. `font_run` draws the ground and the glyph in
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
-  `tests/textsites.txt` is the ratchet: a new call site fails the build until it
+  `tests/textsites.txt` is the ratchet: a new call site fails `test-full` until it
   is registered with a reason, and the count can only go down. **The sweep is
   finished** (§6.6.5): the registry stands at 69 sites in 21 files, every one
   with a reason, so a new transparent call is now an argument to win rather
@@ -386,8 +386,8 @@ review shows the head being merged, not an earlier one.
   cone is 155 symbols in 7 files, so a module inside it must be gated rather
   than moved. There is no entry cap (§2.8.1): a module's slot block is its
   own entry count.
-  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (fast)
-  fails `make` for a `mod_tab` row nothing drops, unless
+  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (soak)
+  fails the soak for a `mod_tab` row nothing drops, unless
   `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
   5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
   drop rule. A new module needs its drop on the day it lands.
