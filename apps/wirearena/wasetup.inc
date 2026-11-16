@@ -1862,6 +1862,7 @@ wa_sstart:
     mov bx, [wa_win]
     xor cx, cx
     call OSAPI_FSX_RUN
+    call wa_saidin              ; (a rotation's refused arena, said now)
     mov byte [wa_lkfull], 1
 .out:
     ret

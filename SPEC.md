@@ -50861,6 +50861,23 @@ then needs Wire level 7** (§92.2). `%define OP_NO_FSOP` before
 `apps/os88parts.inc` assembles the reads as they were: WireFleet does, its
 image and bss being at `APP_MAX_SIZE` with three bytes to spare.
 
+##### 20.12.9.7 `OP_HUSH`, for an `op_fetch` inside an fsx bracket
+
+`op_fetch`'s refusals are toasts, and a toast composes the menu bar - a
+drawing slot §53.7 forbids once `OSAPI_FSX_MODE` has set a foreign mode. A
+package that fetches a part from inside its bracket, as Wire Arena's
+rotation does (§128.4), names a word of its own with `%define OP_HUSH
+<word>` before `apps/os88parts.inc`. While that word is nonzero, `op_say`
+stores the refusal's string offset in it and refuses with CF = 1 instead
+of toasting; the package sets it to 1 before the fetch, clears it on
+success, and toasts the banked string itself (`OSAPI_TOAST`, ES:SI = its
+own segment) after `OSAPI_FSX_RUN` returns. While it is 0 the toast is as
+it always was, so the same package's setup-window fetches still say why. It is
+a DEFINE, so every other includer assembles byte-identical. The fetch is
+still the standard's own `op_fetch`, so its claim, read, expansion and
+shadow (§20.12.7.4.1) are not copied into the package, as Excitebike's
+`xb_partget` (§20.12.9.5) copies them for rows that are all `OP_SELF`.
+
 #### 20.12.10 A LOADER hands its identity to one of its own parts
 
 A parted package's image is the thing the kernel launches, and everything else
@@ -253011,6 +253028,15 @@ disagree, this section and the source win.
 - **kern_big and kern_mega.** kern_small refuses it at entry, before a
   sector of its parts is read: `OSAPI_MOUSE_REL` (§9.14) is the test, and
   the toast is *Needs kern_big or mega*.
+- **kern_emu runs it with the keys alone while `VMMOUSE.DRV` is live**
+  (§9.11.7), which is how os8088.com's demo boots (§80.7). The game steers
+  only by `OSAPI_MOUSE_REL`'s mickeys, and §9.14 says those words do not
+  move under the absolute pointer, so mouse look does nothing there. The
+  buttons still fire, and the arrows turn and pitch. This is a
+  known limitation and not a refusal: kern_emu answers `OSAPI_MOUSE_REL`, so
+  the entry test admits it. Steering by differencing `OSAPI_MOUSE` would stop
+  at the screen's edge, because an absolute host pointer cannot be put back
+  in the middle.
 - **kern_mega runs the shipped build as it is.** There is no `PKG_MEGA` arm
   (§20.18 rule 2). The class byte is `OS88_HIGH | OS88_HIGHMEM`: the region and the
   parts' carve may live above 1MB. Every segment the package holds is
@@ -253051,6 +253077,9 @@ bracket uses no `FSXF_RATE` and no `FSXF_REAL`.
 - **The width.** The default is 40 columns on an 8086/8088 and 80 on a
   286 or better (`OSAPI_CPU_INFO`), changed with `-` and `+` in a match or
   with Columns in the setup. A Hercules refuses 40, and the game then takes 80.
+  In a match, `-` on a Hercules changes nothing: `OSAPI_FSX_MODE` refuses
+  before it touches the card, so only `wa_mode` goes back. There is no
+  second mode set and no repaint, and the HUD says `Columns 80`.
 - **The screen.** Rows 0..23 are the view; row 24 is the HUD (health, the
   weapon and its rounds, the score against the goal, the message cell).
   Text memory is `FSI_SEG` from `OSAPI_FSX_MODE`, and on kern_mega it is a
@@ -253218,7 +253247,11 @@ the arenas the chosen mode can play.
 - **Win at**: each mode has its own list of scores (`20 Kills`, `3
   Captures`, `10 Points`...), and `No Limit`. A win shows
   for 10 s (`WC_WINT`, 300 ticks) and the match goes on in the next arena
-  of the mode's ROTATION. That is `wa_srot`, a bit for each arena for each
+  of the mode's ROTATION. That arena's part is fetched INSIDE the bracket
+  (`wc_go`, `wa_loadin`), so its refusal is banked through `OP_HUSH`
+  (§20.12.9.7) rather than toasted into the text mode: the match ends, and
+  the setup window toasts why once `OSAPI_FSX_RUN` has returned
+  (`wa_saidin`). That is `wa_srot`, a bit for each arena for each
   mode, all of them by default. The setup's Rotation window (R) changes it,
   and the last arena left checked stays checked.
 - **Teams** are red and blue, with side spawns. In a team mode a teammate takes no
@@ -253307,6 +253340,26 @@ another tag is dropped.
 
 - **Slots**: identities ascending, the lowest is the host, slot 0. Bots
   take the slots after the players. A match has four slots.
+- **What a frame may say** (every byte off the wire is hostile, and these
+  are the fences on the bytes that index a table):
+  - **The host's alone**: ROLL, FLAG, GAME and NEXT events, and an HSNAP's
+    own fields (who dealt the damage, and the bots), are applied only on a
+    guest and only from slot 0 (`wa_lkhostsays`). From anyone else, an
+    event's sequence still counts, so the stream does not stall, but the
+    event does nothing. An HSNAP from anyone else is read as a SNAP.
+  - **A slot a frame names** (an HSNAP's damage dealer, a FIRE's owner
+    nibble, a FLAG's carrier) must be below the players plus the bots
+    (`wa_lkslotin`). A FIRE with any other owner is not spawned, and a FLAG
+    with any other carrier is not applied. An HSNAP's damage with any
+    other dealer is charged to the sender.
+  - **A FLAG's state** is home, carried or dropped (`WC_DROP` at most), and
+    a **ROLL's kind** is below `WA_NPKIND` (7), the count both pickup tables
+    are checked against at build time. Anything else drops the event.
+  - **A SNAP's x and y** are clamped to the room (0..2047), in the frame
+    itself, before the figure's record or the host's bots hear them.
+  - **A HELLO's state** and **the host's skill** are clamped to 2, as its
+    bots byte already was, so the lobby's three state names and the Skill
+    list's three items are never read past their end.
 - **The mesh**: every body goes to each peer (at most three copies). Every
   per-peer quantity (the damage dealt, the last event applied, the ack of
   our queue, when it was last heard) lives in that peer's record (`wa_pt`,

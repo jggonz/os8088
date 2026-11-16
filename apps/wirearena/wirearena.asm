@@ -19,6 +19,8 @@
 %define OP_NO_LAZYOK            ; (20.12.9.2: the arenas are fetched, never
                                 ; asked about first - op_fetch's toast is
                                 ; the answer)
+%define OP_HUSH wa_ophush       ; (20.12.9.7: a rotation's fetch is in the
+                                ; bracket - its refusal banked, wa_loadin)
 %include "os88parts.inc"        ; 20.12.12): wa_partsmv re-reads both words
     OS88_ICON16                 ; ITS ICON: the corridor the game draws - a
     dw 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
@@ -544,8 +546,9 @@ wa_frame_input:
     call wa_setmode
     pop ax
     jnc .wsay
-    mov al, ah                  ; refused (no 40 on Hercules): put it back
-    call wa_setmode
+    mov [wa_mode], ah           ; refused (no 40 on Hercules): fsx_mode says
+                                ; so before it touches the card, so only the
+                                ; width's byte goes back - no mode set
 .wsay:                          ; "Columns 40" or "80", whichever it is now
     mov bx, wa_hs_80
     cmp byte [wa_mode], 0
@@ -657,7 +660,8 @@ wa_frame_input:
     jmp wa_pbview
 %endif
 .live:
-    call OSAPI_MOUSE_REL
+    clc                         ; (the flags are KEPT - SPEC.md 9.14 - and a
+    call OSAPI_MOUSE_REL        ; frame owing no tick arrives with CF = 1)
     jc .nomouse                 ; kern_small refuses: keys only
     cmp byte [wa_paused], 0     ; (paused: the hand's motion drained, and
     jne .held                   ; nothing looks or fires)
@@ -3388,6 +3392,9 @@ wa_wdie:  db 0,     1,      0,       2,       2,      3  ; its kill: the fall,
 wa_pkresp:  dw 300, 300, 300, 300, 300, 600, 900 ; a pickup's respawn, by
                                 ; kind (s 10 the weapons, 20 health, 30
                                 ; the shield)
+%if $ - wa_pkresp != WA_NPKIND * 2
+  %error "wa_pkresp is a word for each of WA_NPKIND pickup kinds"
+%endif
 
 ; wa_arm0 - the player as they start: the pistol, loaded, nothing else; full
 ; health, no shield. Keeps all but AX
@@ -7213,6 +7220,32 @@ wa_loadarena:
 .out:
     ret
 
+; wa_loadin - wa_loadarena INSIDE the bracket (a rotation's, wc_go): the
+; parts standard's refusal banked in wa_ophush rather than toasted - a toast
+; is a drawing slot there (SPEC.md 53.7) - and said by wa_saidin once the
+; bracket has returned. CF as wa_loadarena's
+wa_loadin:
+    mov word [wa_ophush], 1     ; (nonzero: op_say banks the sentence)
+    call wa_loadarena
+    jc .out                     ; (refused: wa_ophush is the sentence)
+    mov word [wa_ophush], 0
+.out:
+    ret
+
+; wa_saidin - after OSAPI_FSX_RUN: a refusal wa_loadin banked, toasted now
+; that the desktop is back, and the word cleared. Clobbers AX, CX, SI, ES
+wa_saidin:
+    xor si, si
+    xchg si, [wa_ophush]
+    cmp si, 1
+    jbe .out
+    push ds
+    pop es
+    xor cx, cx
+    call OSAPI_TOAST
+.out:
+    ret
+
 %include "os88pit.inc"
 
 ; --- tables -----------------------------------------------------------------
@@ -7423,6 +7456,8 @@ WA_VAR wa_lkarena,1                ; the match: the host's arena, difficulty,
 WA_VAR wa_lkdiff,1                 ;   tag; the host's tag as the guest heard
 WA_VAR wa_lktag,1                  ;   it; 1: go in (wa_lkstart)
 WA_VAR wa_lkfull,1                 ; the window's rows all to draw
+WA_VAR wa_ophush,2                 ; 0, or the bracket's fetch: 1, then a
+                                   ;   refusal's sentence (wa_loadin)
 WA_VAR wa_bdet,1                 ; 1: the bots walk their home loops - and
 WA_VAR wa_lkon,1                   ; 1: in a linked match, ITS HIGH BYTE:
                                    ; wa_bthink asks both in one compare
