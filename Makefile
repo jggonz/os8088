@@ -14836,6 +14836,12 @@ VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(
 # Hercules's since its 2026-11-09 videos left it room - and five of its
 # pictures ($(PX_GALLERY_CGAVID)) the CGA's, whose videos of that day left
 # room for no more with 100 KB free (SPEC.md 106.7).
+# THE CGA DISK LEAVES THE BROWSER OFF (2026-11-16, the owner's, SPEC.md
+# 98.5): Wire Arena and Browser 1.7 (34 -> 101 KB) together put the derived
+# install 10 clusters past the ST11R volume, and the 5150 the disk is for
+# has no network card. Its page in MEDIA goes with it - nothing else on the
+# disk opens a .HTM.
+VIDDEMO_CGA_OMIT = APPS:$(BUILD)/browser.o88 MEDIA:$(ZDATA)/BROWSER.HTM
 VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
 	$(sort $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
 	       $(FACESARG) $(SYSVIDARGS) \
@@ -14879,7 +14885,7 @@ $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--geometry 613/4/26 --mbr $(BUILD)/mbr.bin \
 		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
 		$(filter %/system.cfg,$^) \
-		$(VIDDEMO_INSTALL) $(if $(filter CGA,$*),$(PX_GALLERY_CGAVID),$(PX_GALLERY)) \
+		$(if $(filter CGA,$*),$(filter-out $(VIDDEMO_CGA_OMIT),$(VIDDEMO_INSTALL)) $(PX_GALLERY_CGAVID),$(VIDDEMO_INSTALL) $(PX_GALLERY)) \
 		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
 	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \

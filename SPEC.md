@@ -215970,7 +215970,11 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   `OS8088.V88` in `MEDIA/` because the apps disk carries them. **No
   SETTING in its SYSTEM.CFG**: the disk boots on the defaults, the sound
   card mounted where there is one, and a machine's settings stay its
-  owner's. The file is there for the desktop alone (below).
+  owner's. The file is there for the desktop alone (below). **One
+  exception, the owner's (2026-11-16): the CGA disk leaves the Browser
+  off**, and its `BROWSER.HTM` with it. Wire Arena and Browser 1.7 put the
+  derived install 10 clusters past the ST11R volume, and the 5150 that
+  disk is for has no network card.
 - **A shortcut on the desktop for the guide and every demo video**
   (2026-11-09, the owner's layout): `tools/os88deskcfg.py` writes a
   SYSTEM.CFG that is 26.8.6's trailer behind a settings head carrying ONE
