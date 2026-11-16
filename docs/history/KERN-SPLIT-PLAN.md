@@ -342,7 +342,7 @@ current.
 
    - **The seam is drawn by what code is FOR, not by which file it is in.**
      §41 is two modules and the split runs *through* one of them: the CPU
-     tier stays in both builds (slot 0x0155 is a published ABI four packages
+     tier stays in both builds (slot 0x0101 is a published ABI four packages
      read), and the A20 and HMA routines go, because they exist only to reach
      the store. The test that made that decision cheap was a grep —
      `[cpu_feat]` and the `CPU_F_*` bits have no readers outside the two

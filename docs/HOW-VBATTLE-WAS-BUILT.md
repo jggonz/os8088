@@ -824,6 +824,15 @@ the row judges the median of the first three samples, which sits on its
 2-frame line: it failed 2 runs in 7 on the merge's engine and 0 in 3 on the
 engine before it, with the same samples.
 
+Closed later (2026-11-11): those red runs were not noise. The row pressed
+the title's Enter at a HOST-timed instant, and one instant in twenty started
+the opening's sound in the card ring's last 512 bytes, where `vb_asound`
+clobbered the starting chunk's length and four bytes landed on the ring's
+control words - the clock, and the picture, a dozen frames on (SPEC.md
+126.3). `vbtownsnd` now runs in lockstep (`tests/vbtstep.py`, the battle
+opened by `\AUTOSTRT`) and sweeps the keypress from one snapshot; a sweep of
+60 instants found 3 bad before the two-byte fix and none after.
+
 ## kern_mega, and VGA's flashes (2026-11-06)
 
 kern_mega is VBATTLE-MEGA-PLAN's five waves. The engine's first Play on

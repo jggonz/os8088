@@ -133,10 +133,6 @@ cb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [cb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
-    mov si, cb_onabout
-    call OSAPI_ABOUT_SET
     clc
 .out:
     pop si
@@ -422,8 +418,9 @@ cb_setup:
     push di
     cmp word [cb_rseg], 0
     jne .src
-    mov ax, (CB_RL + 272 + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    mov ax, ((CB_RL + 272 + 1023) / 1024) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [cb_rseg], dx
 .src:
@@ -1197,7 +1194,10 @@ cb_share:
 ; =============================================================================
 cb_tpl:
     dw 7, 22, 632, 448
-    dw cb_ttl, cb_paint, cb_onkey, cb_onclick
+    dw cb_ttl, cb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS cb_cls, 0, PAINT, cb_paint, ONKEY, cb_onkey, \
+               ONCLICK, cb_onclick, ABOUT, cb_onabout
 cb_ttl:     db 'Covox Bench', 0
 
 cb_rates:   dw 5512, 8000, 11025, 0

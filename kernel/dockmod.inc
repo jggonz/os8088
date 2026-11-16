@@ -12,6 +12,8 @@ modk_hdr:
     dw 0x384F
     db MOD_VER, MOD_DOCK
     dw BUILD_NUM, MOD_STAMP, modk_end, DK_NENT
+    dw modk_end - dock_sx1      ; MOD_H_SCR: its geometry and state, the
+                                ; image's last bytes (2.8.3) - KEPT
     dw dkx_hook, dkx_unhook
 
 ; -----------------------------------------------------------------------------
@@ -81,6 +83,11 @@ dkx_vset:
 ; the segment that needs naming. The kernel keeps only what IT reads: the
 ; live rect, its two crosses, [dock_side], [dock_up], [dock_c0] and
 ; [dock_thk].
+; THE BLOCK IS A MACRO, emitted LAST in the image by kernel.asm (DOCK_SCRATCH):
+; every byte here is written by the image and zero in the file, so it is the
+; image's scratch tail and a KEPT image's drop zeroes it back to what a load
+; brings in (SPEC.md 2.8.3)
+%macro DOCK_SCRATCH 0
 dock_sx1:   dw 0                ; the strip's whole rect - SEVEN CONSECUTIVE
 dock_sy1:   dw 0                ; WORDS, which dkx_live_set copies over the
 dock_sx2:   dw 0                ; kernel's live block in one rep movsw
@@ -106,6 +113,7 @@ dock_timer_tick: dw 0           ; modular start tick; survives cancellation
 %if dock_ffar - dock_sx1 != 14 || dock_la1 - dock_sx1 != 16 || dock_la2 - dock_sx1 != 18 || dock_a0 - dock_sx1 != 20 || dock_astep - dock_sx1 != 22 || dock_alen - dock_sx1 != 24 || dock_cap - dock_sx1 != 26
   %error "dkx_geom writes dock_sx1 through dock_cap as one run of stosw, in this order"
 %endif
+%endmacro
 
 dkb_tab:                        ; the KERNEL's bodies, in dock.inc's DKI_* order
     dw dkb_geom, dkb_band, db_force, db_paint, db_px_hit
@@ -565,7 +573,7 @@ dkx_paint:
     xor di, di                  ; tile gets the active mark (0 = nobody), and
     or bx, bx                   ; every tile's key depends on it, so it is
     jz .noact                   ; resolved before the first one is tested.
-    call KERNEL_SEG:cw_inst_win_owner         ; DI = its instance record, or 0 - and the
+    KDOOR inst_win_owner                      ; DI = its instance record, or 0 - and the
 .noact:                         ; `or bx,bx` guard must stay, because
     mov [dock_act], di          ; inst_of_win compares I_WIN against BX and
                                 ; BX = 0 would match a live instance with no
@@ -690,7 +698,7 @@ dkx_paint:
     mov al, [cs:si]
     cmp al, 0FFh
     je .key
-    call KERNEL_SEG:cw_inst_ptr
+    KDOOR inst_ptr
 .key:
     call dkx_key               ; AX = what this tile should look like, or 0
     mov dx, [bx]                ; for no tile at all (SPEC.md 29.2 rule 3)
@@ -1143,7 +1151,7 @@ dkx_hit:
     mov al, [cs:dock_pos+bx]
     cmp al, 0FFh
     je .in                      ; none
-    call KERNEL_SEG:cw_inst_ptr               ; DI = record (in: AL = index; AX survives)
+    KDOOR inst_ptr                            ; DI = record (in: AL = index; AX survives)
     push ax                     ; AL, the slot, is an output
     call dkx_key                ; AX = 0: no tile - empty, dying or a DESK
     or ax, ax                   ; instance (SPEC.md 30), dkx_key's one
@@ -1194,7 +1202,7 @@ dkx_click:
     jz .consumed                ; bare strip, gap or dead slot: consumed no-op
 
     call KERNEL_SEG:cw_gfx_lock
-    call KERNEL_SEG:cw_inst_ptr ; DI = the record of slot AL, again
+    KDOOR inst_ptr              ; DI = the record of slot AL, again
     cmp byte [di+I_STATE], 1
     jne .unlock                 ; gone since the press: nothing to do
     test byte [di+I_FLAGS], 1
@@ -1210,10 +1218,10 @@ dkx_click:
     cmp bx, cx
     mov bx, cx                  ; mov does not touch flags: BX = our window for
     je .fmin                    ; whichever of the two calls is taken
-    call KERNEL_SEG:apic_wm_front     ; the routine's own cell is the door
+    KDOOR wm_front                    ; the routine's own cell is the door
     jmp short .unlock
 .fmin:
-    call KERNEL_SEG:apic_inst_minimize ; sets I_FLAGS bit0 and wm_hides, so
+    KDOOR inst_minimize                ; sets I_FLAGS bit0 and wm_hides, so
                                 ; the tile inverts (SPEC.md 30.3)
 .unlock:
     call KERNEL_SEG:cw_gfx_unlock
@@ -1244,7 +1252,8 @@ dkx_click:
 ;
 ; **The record pointer does not survive the tracker; the slot does.**
 ; menu_popup holds the button and yields (SPEC.md 12.4), so a package worker
-; can reach inst_task_die and free the very record this menu is about. So the
+; can reach inst_task_die and leave the record this menu is about (freed by
+; the UI task's close pass since BR-4, after this menu). So the
 ; SLOT is carried across it, and 'Close' re-resolves it and re-tests
 ; I_STATE = 1 before anything is done.
 ;
@@ -1281,16 +1290,16 @@ dkx_rclick:
 .drop:
     mov bx, dock_ctx_items
     mov ax, DOCK_CTX_N
-    call KERNEL_SEG:cw_menu_popup             ; CF = 1 nothing chosen
+    KDOOR menu_popup                          ; CF = 1 nothing chosen
     pop ax                      ; POP spends no flag
     jc .rdone
-    call KERNEL_SEG:cw_inst_ptr ; 'Close': the tracker yielded, so find the
+    KDOOR inst_ptr              ; 'Close': the tracker yielded, so find the
     cmp byte [di+I_STATE], 1    ; record again and take it only if it is
     jne .rdone                  ; still live
     mov bx, [di+I_WIN]
     or bx, bx
     jz .rdone
-    call KERNEL_SEG:cw_app_close_win  ; in: BX; lock held, UI task (SPEC.md 29.4)
+    KDOOR app_close_win               ; in: BX; lock held, UI task (SPEC.md 29.4)
 .rdone:
     call KERNEL_SEG:cw_gfx_unlock
     jmp short dkx_click.consumed ; ...and out through dkx_click's tail, whose
@@ -1513,7 +1522,7 @@ dkx_pass:
 .shut:                          ; --- CLOSE: the old rect is kept before the
     call dkx_live_rect          ; hidden line goes live, and repainted after
     call dkx_drop
-    call KERNEL_SEG:cw_wm_paint_dmg
+    KDOOR wm_paint_dmg
 .unlock:
     call KERNEL_SEG:cw_gfx_unlock
 .off:
@@ -1599,7 +1608,7 @@ dkx_hole_win:
     push dx
     push si
     mov si, di
-    call KERNEL_SEG:cw_wm_win_rect
+    KDOOR wm_win_rect
     call dkx_live_hit
     jmp dkx_ret_si                ; pops preserve the overlap answer in CF
 .no:

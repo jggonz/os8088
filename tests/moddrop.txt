@@ -1,7 +1,9 @@
 # tests/moddrop.txt - modules held until restart ON PURPOSE (SPEC.md 2.8.3)
 #
 # An on-demand module is read into a heap claim when its feature is asked for,
-# and what it buys is that the claim is given back when the feature is done.
+# and what it buys is that the claim is given back when the feature is done -
+# freed, or on kern_big KEPT as a purgeable cache the heap may take (SPEC.md
+# 2.8.3), which ends the pin all the same.
 # tests/unit/t_moddrop.py fails the build for a mod_tab row nothing drops -
 # unless it has a line here, which is the argument written down.
 #

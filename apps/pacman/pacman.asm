@@ -45,15 +45,11 @@ pm_entry:
                                     ; kernel's Alt+Enter latch rides on it
     mov si, pm_menus
     call OSAPI_MENU_SET
-    mov si, pm_about
-    call OSAPI_ABOUT_SET
     mov si, pm_pref
     call OSAPI_WM_PREFER
     mov cx, 338
     mov dx, 140
     call OSAPI_WM_MINSIZE
-    mov al, 1
-    call OSAPI_WM_OWNBG
     clc
 .out:
     ret
@@ -1325,7 +1321,10 @@ pm_decimal:
     pop bp
     ret
 
-pm_tpl: dw 144, 32, 338, 222, pm_title, pm_paint, pm_key, pm_dismiss
+pm_tpl: dw 144, 32, 338, 222, pm_title, pm_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pm_cls, WF_OWNBG, PAINT, pm_paint, ONKEY, pm_key, \
+               ONCLICK, pm_dismiss, ABOUT, pm_about
     OS88_PREFER pm_pref, 338,222, 338,222, 338,140
     OS88_MENUSET pm_menus, pm_menu_name, pm_command
         OS88_MENU pm_game_name, pm_items, 3

@@ -35,7 +35,7 @@ def u16(data, at=0):
 
 def package_segment(m, slot):
     rec = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    return u16(rec, 22)
+    return u16(rec, dispcp.W_SEG)
 
 
 STATE = ("selected", "loaded", "face", "pending", "error", "textlen")

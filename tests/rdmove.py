@@ -347,10 +347,8 @@ def main():
         # 32KB left a hole), the second packs it to A's top. On the A/B arm
         # (HEAPCOMPACT=0) nothing moves, and the first pass ends the loop.
         def post_top():
-            wp = os88geom.winptr(m, hfa.i, S)
-            m.pause()
-            m.write(S("mem_cpq_lvl"), bytes([0xFF]))    # MEM_LVL_TOP: rank
-            m.write(S("mem_cpq"), bytes([wp & 0xFF, wp >> 8]))  # LAST
+            m.pause()                                   # MEM_LVL_TOP: rank
+            os88geom.post_compact(m, hfa.i, 0xFF, S)    # (the window LAST)
             m.run()
             os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                             "the posted pass", poll=0.05, limit=10.0)

@@ -12,7 +12,7 @@ census's code at a segment of its own, as part 5, SPEC.md 124.18.7),
 and its own `w16_census` is called on each program the way the loader
 calls it - the file read, every segment copied to a paragraph of its own,
 the relocations applied and the OS fixups patched for a machine with no
-coprocessor - with OSAPI_MEM_CLAIM and OSAPI_MEM_FREE answered here.
+coprocessor - with OSAPI_MEM_P's claim and OSAPI_MEM_FREE answered here.
 
 Two things are compared, for every code segment of every program:
 
@@ -67,7 +67,7 @@ IMG = 0x1000            # WIN16's segment: DS
 PSEG = 0x7000           # part 5, the loader and the census: CS (SPEC.md 124.18.7)
 FSEG = 0x2000           # the file, as w16_load reads it
 SEG0 = 0x3000           # the program's segments, one after another
-CLAIM = 0x8000          # what OSAPI_MEM_CLAIM answers
+CLAIM = 0x8000          # what the claim (OSAPI_MEM_P) answers
 SSEG = 0x9000
 THK = 0x6000            # a module block's thunks (SPEC.md 124.26.14): w16_cthk
 KSEG = 0x0060           # KERNEL_SEG: every API cell is an `int 0F0h` here
@@ -77,7 +77,7 @@ STOP = 0xFFF0           # w16_census returns here
 def assemble():
     """WIN16's image and its symbols, as `make win16` assembles it. Cached in
     build/win16/ under a hash of every file the assembly can include, so the
-    fast tier pays nasm's three seconds only after an edit"""
+    row pays nasm's three seconds only after an edit"""
     import hashlib
     h = hashlib.sha256()
     for f in sorted(glob.glob(os.path.join(ROOT, "apps", "win16", "*.*"))
@@ -108,16 +108,21 @@ def assemble():
 
 
 def api(name):
+    """A DOOR cell's index (SPEC.md 20.3.4): both cells the census calls are
+    behind the door since kernel size pass 19's T5, `int 81h` and the index
+    byte, read off the SDK's generated block."""
     src = open(os.path.join(ROOT, "apps", "os88api.inc")).read()
-    return int(re.search(r"%%define %s\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)" % name,
+    return int(re.search(r"%%xdefine %s\s+__OSAPI_RARE\s+(0x[0-9A-Fa-f]+)" % name,
                          src).group(1), 16)
 
 
 IMAGE, PART, S = assemble()
-CLAIM_CELL, FREE_CELL = api("OSAPI_MEM_CLAIM"), api("OSAPI_MEM_FREE")
+FREE_CELL = api("OSAPI_MEM_FREE")
 # the package sweep moved the census's claim onto OSAPI_MEM_P, BL = MEMP_CLAIM
-# (= 0); its cell is an X stub, so the int lands a byte further in
+# (= 0). It is the only claim door since the flag day withdrew the KB ones
+# (SPEC.md 50.3)
 MEMP_CELL = api("OSAPI_MEM_P")
+CLAIM_CELL = MEMP_CELL
 REFUSAL = {}
 for k, tier in (("w16_r_c186", "186"), ("w16_r_c286", "286"),
                 ("w16_r_c386", "386"), ("w16_r_cbig", "too large"),
@@ -313,28 +318,29 @@ class Machine:
             mu.emu_start(lin, (PSEG << 4) + STOP, count=400000000)
             if self.pend is None:
                 break
-            if self.pend != 0xF0:
+            if self.pend not in (0xF0, 0x81):
                 raise RuntimeError("int %02Xh" % self.pend)
             ip = mu.reg_read(UC_X86_REG_IP)
-            cell = ip - 2
             fl = mu.reg_read(UC_X86_REG_FLAGS)
-            if cell in (MEMP_CELL, MEMP_CELL + 1) and \
-                    mu.reg_read(UC_X86_REG_BL) == 0:
-                cell = CLAIM_CELL
-            if cell == CLAIM_CELL:
-                mu.reg_write(UC_X86_REG_DX, CLAIM)
-                fl &= ~1
-            elif cell == FREE_CELL:
-                fl &= ~1
-            else:
-                raise RuntimeError("the census called the API cell %04Xh" % cell)
-            mu.reg_write(UC_X86_REG_FLAGS, fl)
-            # retf: the far call's return
-            sp = mu.reg_read(UC_X86_REG_SP)
-            rip, rcs = struct.unpack("<HH", rd(mu, SSEG, sp, 4))
-            mu.reg_write(UC_X86_REG_SP, sp + 4)
-            mu.reg_write(UC_X86_REG_CS, rcs)
-            lin = (rcs << 4) + rip
+            if self.pend == 0x81:
+                # THE DOOR (SPEC.md 20.3.4): the index byte follows the int,
+                # and the door's `retf 2` steps past it - so return there
+                rcs = mu.reg_read(UC_X86_REG_CS)
+                cell = rd(mu, rcs, ip, 1)[0]
+                if cell == MEMP_CELL and mu.reg_read(UC_X86_REG_BL) != 0:
+                    raise RuntimeError("the census asked OSAPI_MEM_P verb %d"
+                                       % mu.reg_read(UC_X86_REG_BL))
+                if cell == CLAIM_CELL:
+                    mu.reg_write(UC_X86_REG_DX, CLAIM)
+                    fl &= ~1
+                elif cell == FREE_CELL:
+                    fl &= ~1
+                else:
+                    raise RuntimeError("the census called door index %02Xh" % cell)
+                mu.reg_write(UC_X86_REG_FLAGS, fl)
+                lin = (rcs << 4) + ip + 1
+                continue
+            raise RuntimeError("the census called the API cell %04Xh" % (ip - 2))
         cf = mu.reg_read(UC_X86_REG_FLAGS) & 1
         l1 = rd(mu, IMG, S["w16_l1"], 48).split(b"\0")[0].decode("latin-1")
         reached = {}

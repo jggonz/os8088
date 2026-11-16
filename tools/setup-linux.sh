@@ -118,6 +118,14 @@ missing_list() {
     # with it; `needs=("mtools")` SKIPS those rows without it, and a skip is a
     # soak failure. Small and packaged, so installed like inform6.
     command -v mcopy >/dev/null 2>&1 || echo mtools
+    # qpdf. PageDesk's host rows (tests/pagedeskhost.py: pdeng, pdefuzz,
+    # pdflate, pdwrt-real, pdwrt-enc) check what the engine and the writer
+    # make against it, the independent reader PAGEDESK-SPEC 18 names, and
+    # died on a FileNotFoundError without it. Small and packaged. mutool
+    # (mupdf-tools) is their second reader: pdwrt-real's foreign-file Insert
+    # compares pages it draws, and failed its checks without it.
+    command -v qpdf >/dev/null 2>&1 || echo qpdf
+    command -v mutool >/dev/null 2>&1 || echo mupdf-tools
     # unicorn. The fast tier's w16fp and w16cens run WIN16's FP emulator and
     # census under it and SKIP without it. pip's, not the archive's: no apt
     # package carries the Python binding for the python3 on PATH.

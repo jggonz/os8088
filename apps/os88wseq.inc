@@ -218,8 +218,9 @@ os88_wseq_out:
     pop cx
     jnc .ok
     cmp ax, FERR_NAME               ; the small kernel's answer, or a
-    jne .bad                        ; misaligned chunk APPEND refuses too
-    call OSAPI_FILE_APPEND
+    jne .bad                        ; misaligned chunk the append refuses too
+    mov dx, -1                      ; ...which is WRITE_AT at the file's END
+    call OSAPI_FILE_WRITE_AT        ; (SPEC.md 18.4.7.3; DX is banked above)
     jc .bad
     xor di, di                      ; no token on that path
 .ok:

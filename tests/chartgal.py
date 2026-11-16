@@ -43,10 +43,8 @@ RUN LENGTHS below are the real transposition. And the pie is an ELLIPSE,
 94x70 on this data and not a circle, so a near-square test on its bounding
 box fails on a correct picture where "centre inked, corners not" does not.
 """
-import hashlib
 import os
 import subprocess
-import time
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -157,19 +155,20 @@ def main():
     u16 = lambda b: b[0] | (b[1] << 8)
 
     with os88ui.boot(os.path.join(ROOT, "build", "os8088-360.img"),
-                     apps=DISK, machine="os8088_xt_vga") as ui:
+                     apps=DISK, machine="os8088_xt_vga",
+                     quick=True) as ui:    # SOAK-SPEED 12
         m = ui.m
         mo = os88mouse.Mouse(marty=m)
         w = ui.path("B:/CHART.O88")
         seg = os88marty.pkg_live(m, w, ui.sym)
-        ui.settle()                     # ...and not before: without it the
+        ui.still(0)                     # ...and not before: without it the
                                         # first menu_pick raced the Disk
                                         # window still being in front, and
                                         # picked ITS File menu ('Open', 'New
                                         # Folder...', 'Compress'...)
         ui.menu_pick("File", "Open...")
         ui.chooser_open(DOC)
-        ui.settle()
+        ui.still(0)
 
         canvas = u16(m.readseg(seg, S["ct_chartseg"], 2))
         if not canvas:
@@ -182,12 +181,6 @@ def main():
         # responding. ui.settle() does not cover it either: it watches for
         # the picture to stop changing, and a canvas being computed is not
         # changing yet.
-        def screen():
-            """A hash of the rendered frame - the cheapest "has the window
-            been painted yet" there is."""
-            wpx, hpx, data = m.fbuf()
-            return hashlib.md5(bytes(data)).digest()
-
         def grab():
             """One read of the whole canvas, with the guest STOPPED.
 
@@ -201,68 +194,37 @@ def main():
                 m.run()
 
         def stable(baseline):
-            """The canvas after a redraw: wait for it to CHANGE, then settle.
+            """The canvas after a Gallery pick, once the pick is FINISHED.
 
-            ui.settle() is not enough on its own and the difference is this
-            row's whole reliability: settle watches the SCREEN stop changing,
-            and a canvas still being computed has not reached the screen -
-            the frame is already still, so settle returns before the drawing
-            even starts. Reading on that gave a half-swept pie, under a
-            mutation that cannot touch Pie at all.
+            Chart has no worker and arms no timer: the pick's handler renders
+            the whole canvas offscreen and blits it inside the ui_task pass
+            that took the release. So `ui_done` - ui_task asleep, nothing
+            queued, the gfx lock free, for a tick - is the END of that render,
+            read off the machine rather than inferred from pixels
+            (SOAK-SPEED 4).
 
-            Waiting for a CHANGE first is what removes that: it proves the
-            redraw has begun before we start asking whether it has finished.
-            That wait is bounded and falling out of it is not an error - two
-            types CAN draw the same picture, and when they do it is check 2's
-            business to say so, not this helper's to hang on.
+            It replaced two HOST-paced polls - grab every 0.25 host seconds
+            until the canvas changed, then hash the screen every 0.25 until
+            the blit landed - and a settle, which is host timing deciding
+            when a guest read is taken (goal 2 of soak-speed-2). The lessons
+            those polls were written for still hold, and this keeps them:
 
-            AN EARLIER VERSION TOOK THE FIRST PICTURE SEEN TWICE instead of
-            settling, and tolerated never seeing one. That made BOTH of the
-            checks that compare pictures unreliable, and in opposite
-            directions: check 5 failed on a pie read mid-sweep (centre
-            blank), and check 2 - loosened to a pixel threshold so the
-            half-swept pie would not forge a match - then MISSED the
-            ct_gal_map mutation on one run, because the two identical charts
-            had been read at different moments and drifted past the
-            threshold. A gate that intermittently fails wastes an afternoon;
-            one that intermittently MISSES is worse than not existing.
+            * settle alone was WRONG: the canvas is rasterised offscreen, so
+              the screen is still while the render runs and a settle returned
+              mid-render - a half-swept pie, its box 94 -> 113 -> 133 px wide
+              across runs. ui_done cannot end mid-render: the render IS the
+              pass it waits out.
+            * "the first picture seen twice" and "two consecutive matches"
+              were both unreliable (check 2 missed a ct_gal_map mutation; the
+              row was intermittent beside two other emulators). One read of
+              a STOPPED guest after the pass has ended is neither.
+            * a pick that draws NOTHING ends here at once and the checks say
+              so - check 1 (a blank canvas) or check 2 (the same picture as
+              the last type) - rather than this helper hanging on it.
             """
-            for _ in range(60):             # ...it has started
-                cur = grab()
-                if baseline is None or cur != baseline:
-                    break
-                time.sleep(0.25)
-            # ...AND THEN THE BLIT HAS HAPPENED. This is the part two
-            # earlier versions got wrong, and the reason is 82.1's whole
-            # point: THE CANVAS IS RASTERISED OFFSCREEN, so while the render
-            # runs the SCREEN DOES NOT CHANGE. settle() therefore returns
-            # immediately - mid-render - and so does settle() placed after a
-            # canvas-change test, which is what read a pie whose bounding box
-            # grew 94 -> 113 -> 133 px wide across runs with its centre still
-            # blank. The screen carries no signal DURING an offscreen render.
-            #
-            # What it does carry is the END of one: the finished canvas is
-            # blitted to the window, and that changes the screen. So wait for
-            # the NEXT screen change after the canvas started moving - the
-            # menu's own save-under restore is long since done by then - and
-            # only then let it settle.
-            before = screen()
-            for _ in range(240):
-                if screen() != before:
-                    break
-                time.sleep(0.25)
-            ui.settle(quiet=1.0, stable=3)
+            os88marty.ui_done(m, "the Gallery pick to render and blit",
+                              limit=120.0)
             return grab(), True
-            # ...and it has finished: THE FIRST PICTURE SEEN TWICE, which is
-            # not the same as two reads running agreeing. Chart re-renders
-            # the canvas on a repaint and a paused read lands wherever the
-            # redraw had got to, so an in-progress frame is never seen twice
-            # while the finished one is seen every time the guest is idle.
-            # Demanding two CONSECUTIVE matches made this row intermittent -
-            # it passed alone, failed in the suite beside two other emulators
-            # and then passed again, with 60 of 19,200 bytes moving each
-            # time. Counting repeats instead needs the idle state to come up
-            # twice in sixty tries and does not care what lands between.
 
         mo.to(620, 470)                 # the pointer OFF the window before
                                         # any of this: it is parked once and

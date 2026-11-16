@@ -142,10 +142,7 @@ def main(argv):
             base = _w(m, seg, "pt_base")
             bad = 0
             for y in range(min(ch, H)):
-                off = int.from_bytes(
-                    m.read(_boff(seg, "pt_rowoff") + y * 2, 2), "little")
-                sg = int.from_bytes(
-                    m.read(_boff(seg, "pt_rowseg") + y * 2, 2), "little")
+                off, sg = dispapps.pt_row(m, lambda n: _boff(seg, n), y)
                 if m.read((sg << 4) + off, stride) != rows[y]:
                     bad += 1
             print("   canvas against the file: %d of %d rows differ"

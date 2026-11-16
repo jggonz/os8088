@@ -49,9 +49,12 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # the doors that can reach mem_compact. OSAPI_MEM_FREE cannot: it never moves
-# anything. OSAPI_MEM_REGROW can - mem_regrow path 3 relocates (SPEC.md 66.9).
-CLAIMS = ("OSAPI_MEM_CLAIM", "OSAPI_MEM_CLAIM_HI", "OSAPI_MEM_CLAIM_DMA",
-          "OSAPI_MEM_CLAIM_DMA_HI", "OSAPI_MEM_REGROW")
+# anything. A regrow can - mem_regrow path 3 relocates (SPEC.md 66.9). Since
+# the flag day (kernel size pass 19) every one of them is OSAPI_MEM_P's - the
+# KB doors were withdrawn for it (SPEC.md 50.3) - so the cell is the door, and
+# its ask (MEMP_AVAIL) is counted with the rest: a service task has no
+# business sizing a claim it may not make
+CLAIMS = ("OSAPI_MEM_P",)
 
 LABEL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
 LOCAL = re.compile(r"^(\.[A-Za-z0-9_]+):")

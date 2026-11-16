@@ -40,6 +40,16 @@
 
 #include "os88.h"
 
+/* THE WINDOW'S CLASS (SPEC.md 11.104): hang over the dock, do not be
+ * shortened (KEEPH); the content origin on 8, the default - BLITP and BLIT1
+ * both refuse an unaligned x (11.94); every pixel is ours, so skip the white
+ * fill the arcade field would cover (OWNBG). */
+static struct os88_class pmc_cls = {
+    OS88_CLASS_LEN, OS88_WF_KEEPH | OS88_WF_OWNBG,
+    os88_t_paint, os88_t_onkey, 0, os88_t_about,
+    0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
 /* --- the field, in tiles and in pixels -----------------------------------
  * 28 x 36 tiles of 8 pixels: the Namco board's own geometry, rotated so that
  * the field is TALLER than it is wide (pacman.c 172-176).
@@ -309,20 +319,15 @@ void *os88_main(void)
     os88_video(&v);
     h = (v.h - OS88_MBAR_H >= PMC_WIN_H) ? PMC_WIN_H : PMC_WIN_H_LO;
 
-    win = os88_wm_create(PMC_WIN_X, PMC_WIN_Y, PMC_WIN_W, h, PMC_TITLE);
+    win = os88_wm_create(PMC_WIN_X, PMC_WIN_Y, PMC_WIN_W, h, PMC_TITLE,
+                         &pmc_cls);
     if (win == 0)
         return 0;
 
-    os88_wm_keeph(win, 1);        /* hang over the dock, do not be shortened */
-    os88_wm_snap(win, 1);         /* content origin on 8: BLITP and BLIT1
-                                   * both refuse an unaligned x (11.94)     */
-    os88_wm_ownbg(win, 1);        /* every pixel is ours; skip the white
-                                   * fill the arcade field would cover      */
     os88_wm_minsize(win, PMC_WIN_W, h);
 
     pmc_pause_item();
     os88_menu_set(win, &pmc_mset);
-    os88_about_set(win);
 
     os88_key_down(0);             /* arm the map; the answer means nothing  */
 

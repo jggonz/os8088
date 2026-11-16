@@ -13,9 +13,17 @@ the bump happened because a reviewer saw it.
 
 So each number is LOCKED to a fingerprint of the surface it guards:
 
-  PKG_FMT  apps/os88api.inc
-  DRV_VER  apps/os88api.inc and drivers/os88drv.inc (a driver far-calls the
-           same table, through the same SDK)
+  PKG_FMT     apps/os88api.inc, and the C SDK's apps/cc/os88.h and
+              apps/cc/os88thunk.asm (a C package's way to the same cells)
+  DRV_VER     apps/os88api.inc and drivers/os88drv.inc (a driver far-calls
+              the same table, through the same SDK)
+  VX_ABI_VER  kernel/vxabi.inc        (VESA.DRV, SPEC.md 120.3)
+  XM_ABI_VER  kernel/xmabi.inc        (XMEM.DRV, SPEC.md 41.12.2)
+  HD_ABI_VER  drivers/hdd/hddabi.inc  (HDD.DRV and HDDTOOL.DRV, SPEC.md 52.11)
+
+The last three are PRIVATE ABIs between the kernel and one image (or two
+images): the image compares the number at attach, and nothing else would make
+anybody bump it.
 
 and `tools/abi.lock.json` holds, per number, the value and the fingerprint it
 was recorded at. The check fails when the fingerprint moved and the lock was
@@ -57,16 +65,41 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK = os.path.join(ROOT, "tools", "abi.lock.json")
 
 GUARDS = {
+    # The C SDK is the same surface spelled for C (SPEC.md 73): a C package
+    # reaches every cell through os88thunk.asm's thunks and os88.h's
+    # prototypes, so a cell re-contracted without them is the break the lock
+    # exists for (engsys-11, kernel size pass 19).
     "PKG_FMT": {"defined": "apps/os88api.inc",
-                "files": ["apps/os88api.inc"]},
+                "files": ["apps/os88api.inc", "apps/cc/os88.h",
+                          "apps/cc/os88thunk.asm"]},
     "DRV_VER": {"defined": "drivers/os88drv.inc",
                 "files": ["apps/os88api.inc", "drivers/os88drv.inc"]},
+    # ...and the PRIVATE kernel<->image ABIs whose numbers the image compares
+    # at attach (drivers-16). Each is ONE include both sides assemble, so the
+    # include is the whole surface. A stale VESA.DRV, XMEM.DRV or HDDTOOL.DRV
+    # beside a new kernel is refused at load only if the number moved.
+    "VX_ABI_VER": {"defined": "kernel/vxabi.inc",
+                   "files": ["kernel/vxabi.inc"]},
+    "XM_ABI_VER": {"defined": "kernel/xmabi.inc",
+                   "files": ["kernel/xmabi.inc"]},
+    "HD_ABI_VER": {"defined": "drivers/hdd/hddabi.inc",
+                   "files": ["drivers/hdd/hddabi.inc"]},
 }
 OSAPI_DEF = re.compile(r"^%define\s+OSAPI_")
 
 
-def surface(text, guard):
+def surface_c(text):
+    """A C header's code lines: comments gone, whitespace collapsed. Every
+    prototype, #define and struct field is ABI; prose in /* */ is not."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", "", text)
+    return [" ".join(l.split()) for l in text.splitlines() if l.strip()]
+
+
+def surface(text, guard, rel=""):
     """The lines of `text` that are ABI, normalised (see the module doc)."""
+    if rel.endswith(".h"):
+        return surface_c(text)
     out, in_contract = [], False
     own = re.compile(r"^%s\s+equ\b" % re.escape(guard))
     for raw in text.splitlines():
@@ -104,7 +137,7 @@ def fingerprint(guard, texts=None):
         if text is None:
             text = open(os.path.join(ROOT, rel)).read()
         h.update(("== %s\n" % rel).encode())
-        h.update("\n".join(surface(text, guard)).encode())
+        h.update("\n".join(surface(text, guard, rel)).encode())
         h.update(b"\n")
     return h.hexdigest()
 

@@ -106,7 +106,10 @@ EC_COK      equ 1               ; ...and their control ids (SPEC.md 13.8.4):
 EC_CCANCEL  equ 2               ; what a press ARMS and a release fires
 EC_NF       equ 4               ; Address, Subnet, Router, Name
 
-ec_tpl:     dw 60, 30, EC_FW, EC_FH, ec_s_title, ec_paint, ec_key, ec_click
+ec_tpl:     dw 60, 30, EC_FW, EC_FH, ec_s_title, ec_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ec_cls, 0, PAINT, ec_paint, ONKEY, ec_key, ONCLICK, ec_click, \
+               ONMOUSEUP, ec_up, ONDRAG, ec_drag
 ec_s_title: db 'Ethernet Setup', 0
 
 ; -----------------------------------------------------------------------------
@@ -141,16 +144,14 @@ eth_cfg_open:
     pop si
     mov [si+LN_BUF], di
     mov word [si+LN_MAX], EC_TLEN
-    mov byte [si+LN_FOCUS], 0
-    mov word [si+LN_VIEW], 0
-    push cx
+    xor ax, ax                  ; (AX is the mode's no more: it is banked)
+    mov [si+LN_FOCUS], al
+    mov [si+LN_VIEW], ax
     call os88line_set           ; DI = the string; the caret lands at the end
-    pop cx
-    inc cx
+    inc cx                      ; (every register kept)
     cmp cx, EC_NF
     jb .fld
-    mov si, ec_f0
-    mov byte [si+LN_FOCUS], 1   ; the first field has it, so a user who opens
+    mov byte [ec_f0+LN_FOCUS], 1 ; the first field has it, so a user who opens
                                 ; this and types is typing into the address
 
     mov bx, [ec_win]
@@ -160,10 +161,6 @@ eth_cfg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [ec_win], bx
-    mov ax, ec_up               ; SPEC.md 13.7/13.8.1: NOT template words, so a
-    call OSAPI_WM_ONMOUSEUP     ; window installs them itself after create
-    mov ax, ec_drag
-    call OSAPI_WM_ONDRAG
     mov byte [ec_down], 0       ; a window reopened mid-gesture must not come
     xor ax, ax                  ; up with one armed for the next release to
     call os88ui_arm             ; fire
@@ -243,18 +240,17 @@ ec_paint:
     ; --- the four fields, each with its label ----------------------------
     xor cx, cx
 .f:
-    push cx
     call ec_blk                 ; SI = the block, BX = the index * 2
+    push cx
+    push si
     mov dx, [si+LN_Y1]          ; the label sits on the field's own top edge,
     add dx, 3                   ; so the two cannot drift apart
     mov si, [ec_labels+bx]
     lea cx, [di+EC_LX]
     call ec_txt
+    pop si
     pop cx
-    push cx
-    call ec_blk
-    call os88line_draw
-    pop cx
+    call os88line_draw          ; (which keeps every register)
     inc cx
     cmp cx, EC_NF
     jb .f
@@ -358,9 +354,9 @@ ec_click:
     call os88line_click
     pop cx
     jc .nextf
-    call ec_focus               ; CX = the one that was hit
-    call ec_repaint
-    jmp .out
+    jmp ec_key.setf             ; ec_focus with CX = the one that was hit,
+                                ; then the repaint - ec_key's own tail, whose
+                                ; stack is this one (os88_ent, out by ep_bp)
 .nextf:
     inc cx
     cmp cx, EC_NF
@@ -384,8 +380,7 @@ ec_click:
     mov bl, ECM_MAN
 .mode:
     mov [ec_mode], bl
-    call ec_repaint
-    jmp short .out
+    jmp ec_key.rep              ; (the repaint, and out by ec_key's ep_bp)
 
     ; --- a button? -------------------------------------------------------
 .btn:
@@ -398,7 +393,7 @@ ec_click:
     xor ah, ah                  ; 13.8.4). Both of these want the release: Ok
     call os88ui_arm             ; commits an address and Cancel throws typing
     call ec_setdown             ; away, and neither is a 13.6 control with a
-    jmp short .out              ; safe prefix action - so a mis-aimed press is
+                                ; safe prefix action - so a mis-aimed press is
                                 ; cancelled by sliding off, which it could not
                                 ; be while it acted on the way down
 .out:
@@ -565,8 +560,9 @@ ec_key:
     cmp cx, EC_NF
     jb  .setf
     xor cx, cx
-.setf:
+.setf:                          ; (ec_click's way in too)
     call ec_focus
+.rep:                           ; ...and ec_click's radio
     call ec_repaint
     jmp short .out
 .ret:
@@ -588,16 +584,15 @@ ec_repaint:
     jz  .out
     call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
     mov si, ax
-    mov di, dx
+    mov bx, dx
     mov al, CWHITE
-    call OSAPI_SET_COLOR
+    call OSAPI_SET_COLOR        ; (which keeps BX)
     mov ax, si
-    mov bx, di
     lea cx, [si+EC_FW - 3]      ; the content is (w-2) x (h-TITLE_H-1), so its
-    lea dx, [di+EC_FH - TITLE_H - 2] ; last column and row are these
+    lea dx, [bx+EC_FH - TITLE_H - 2] ; last column and row are these
     call OSAPI_GFX_FILL
-    mov si, [ec_win]
-    call ec_paint
+    call ec_paint               ; (which reads [ec_win], not the SI a W_PAINT
+                                ; is handed)
 .out:
     jmp ep_bp
 
@@ -652,7 +647,8 @@ eth_cfg_reap:
 ; -----------------------------------------------------------------------------
 ec_apply:
     call os88_ent               ; push ax..di, and bp: out by ep_bp
-    cmp byte [ec_mode], ECM_MAN
+    mov al, [ec_mode]           ; AL = the mode to the end: ip_parse, mem_copy,
+    cmp al, ECM_MAN             ; mem_zero and arp_flush all keep it
     jne .auto
 
     xor bx, bx                  ; the field, times two
@@ -680,21 +676,23 @@ ec_apply:
     mov di, eth_ip
     mov cx, 16
     call mem_copy
-    mov byte [eth_mode], ECM_MAN
     mov byte [dhcp_st], DH_BOUND
     mov word [dhcp_tmo], 0
-    call arp_flush              ; the router may be a different box now, and a
-                                ; cached MAC for it is a black hole
-    jmp short .live
+    jmp short .mode
 .auto:
-    mov byte [eth_mode], ECM_DHCP
     mov di, eth_ip              ; the old address goes with the mode: a machine
     mov cx, 16                  ; that is asking has no address yet, and a page
     call mem_zero               ; still showing the last one is a page that
                                 ; says it succeeded
-    call arp_flush              ; ...and BEFORE the exchange, not after: the
+.mode:
+    mov [eth_mode], al          ; ECM_MAN or ECM_DHCP, what the radios said
+    call arp_flush              ; the router may be a different box now, and a
+                                ; cached MAC for it is a black hole - and for
+                                ; DHCP BEFORE the exchange, not after: the
                                 ; server is reached through the gateway entry
                                 ; this is throwing away
+    cmp al, ECM_MAN
+    je  .live
     call eth_dhcp_wait          ; and WAIT for an address: no package is
                                 ; polling here, so nothing else would ever
                                 ; drain the reply (SPEC.md 72.2.1)
@@ -805,9 +803,7 @@ eth_cfg_load:
                                 ; a version 1 file is SHORTER and the read
                                 ; answers with what it found, which is what
     call OSAPI_FILE_READ        ; tells the two apart below
-    push ax
-    call ec_vol_back
-    pop ax
+    call ec_vol_back            ; (AX and CF kept)
     jc  .no
     cmp word [ec_fbuf+EC_F_MAGIC], EC_MAGIC
     jne .no
@@ -834,8 +830,7 @@ eth_cfg_load:
     call mem_copy
     mov si, eth_ip              ; ...and a stored 0.0.0.0 is not an address
     call ip_zero
-    jz  .drop
-    clc
+    jz  .drop                   ; (CF = 0 otherwise: ip_zero's `or`)
     jmp short .out
 .drop:
     mov byte [eth_mode], ECM_DHCP
@@ -876,6 +871,10 @@ eth_cfg_load:
 ; ever fires on the second and later dirty closes of a session - the first
 ; is a full write - and that is a real case: every Ok marks [ec_dirty].
 ; -----------------------------------------------------------------------------
+; --- eth_cp_close - DSV_CPCLOSE: the panel has gone. The window goes, then
+;     the setting reaches the disk: it FALLS INTO eth_cfg_save, its one caller
+eth_cp_close:
+    call eth_cfg_reap
 eth_cfg_save:
     call os88_ent               ; push ax..di, and bp: out by ep_bp
     push es
@@ -883,9 +882,12 @@ eth_cfg_save:
     je  .out
     mov byte [ec_dirty], 0
     mov word [ec_fbuf+EC_F_MAGIC], EC_MAGIC
-    mov byte [ec_fbuf+EC_F_VER], EC_VER
-    mov al, [eth_mode]
-    mov [ec_fbuf+EC_F_MODE], al
+    mov ah, [eth_mode]          ; the version and the mode, one word
+    mov al, EC_VER
+    mov [ec_fbuf+EC_F_VER], ax
+%if EC_F_MODE != EC_F_VER + 1
+  %error "eth_cfg_save writes the version and the mode as one word"
+%endif
     mov si, eth_ip
     mov di, ec_fbuf + EC_F_IP
     mov cx, 16
@@ -948,18 +950,12 @@ ec_buf_put:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; eth_cp_close - DSV_CPCLOSE: the panel has gone
-; -----------------------------------------------------------------------------
-eth_cp_close:
-    call eth_cfg_reap
-    call eth_cfg_save
-    ret
 
 ; --- strings and state --------------------------------------------------------
 ec_s_file:   db 'ETHER.CFG', 0
 ec_s_auto:   db 'Automatic', 0
-ec_s_man:    db 'Manual', 0
+ec_s_man     equ eu_s_manual  ; ONE COPY of each string the pane also
+                             ; draws (etherui.inc, included above)
 ec_s_ok:     db 'Ok', 0
 ec_s_cancel: db 'Cancel', 0
 ec_s_ready:  db 'Needs Address and Subnet', 0
@@ -975,8 +971,8 @@ ec_s_badgw:  db 'Router?', 0
 ec_s_baddns: db 'Name server?', 0
 ec_s_l0:     db 'Address', 0
 ec_s_l1:     db 'Subnet', 0
-ec_s_l2:     db 'Router', 0
-ec_s_l3:     db 'Name', 0
+ec_s_l2      equ eu_s_rtr
+ec_s_l3      equ eu_s_name
 
 ec_labels:   dw ec_s_l0, ec_s_l1, ec_s_l2, ec_s_l3
 ec_errs:     dw ec_s_badip, ec_s_badmask, ec_s_badgw, ec_s_baddns

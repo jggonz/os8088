@@ -194,7 +194,9 @@ pt_paint:
 ; =============================================================================
 pt_tpl:
     dw 60, 70, 340, 80
-    dw pt_ttl, pt_paint, pt_key, 0
+    dw pt_ttl, pt_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pt_cls, 0, PAINT, pt_paint, ONKEY, pt_key
 
 pt_ttl:     db 'Path Test', 0
 pt_l_hint:  db 'p = OSAPI_FILE_PATH    g = the moves alone', 0

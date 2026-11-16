@@ -297,11 +297,13 @@ dsk_secbuf: resb 512            ; sector scratch: BPB read, root-dir scan,
                                 ; FIRST, and that is an int 13h requirement
                                 ; rather than a preference: this is the one
                                 ; buffer here that is a TRANSFER BASE (ES:BX
-                                ; at dsk_rd1_x), and only a 512-aligned base
-                                ; cannot straddle a 64KB DMA page (SPEC.md
-                                ; 2.1.1). LOW_SEG is 512-aligned by guard 6,
+                                ; at dsk_rd1_x), and it must not straddle a
+                                ; 64KB DMA page (SPEC.md 2.1.1). Guard 6
+                                ; proves [LOW_SEG, +DSK_WIN_BYTES) lies in
+                                ; one page - LOW_SEG is a constant, packed to
+                                ; the paragraph since kernel size pass 19 -
                                 ; so being the rung's first bytes is what
-                                ; aligns it - at +2,816 it was 256 into a
+                                ; puts it under that proof - at +2,816 it was 256 into a
                                 ; sector and the build's own size decided
                                 ; whether the first mount failed with 09h
                                 ; **AND NO `disk_dir` AND NO `dsk_icoix`**

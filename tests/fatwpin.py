@@ -183,23 +183,23 @@ def invariants(st, when, maxheap):
 
 
 def boot(m, defs=()):
-    lin_live = os88sym.linear("spl_live", defs)
-    lin_entry = os88sym.linear("cold_entry", defs)
+    # A GATE ON STATE, NOT ON A TRANSIENT. This waited to SEE [spl_live] = 1
+    # with the kernel's first byte in place and then [spl_live] = 0 - two host
+    # polls that both had to land inside the splash. When neither did, the
+    # wait never armed and ran out its whole 900 guest seconds with the
+    # machine idling at its desktop ([spl_live] 0, CS:IP in the idle loop):
+    # the 2026-11-13 soak's "never reached a desktop" on the FATWNONE=1 arm,
+    # reproduced here on a freshly built tree and passing on a warm one -
+    # host timing deciding a row. os88marty.kernel_up asks what a desktop IS
+    # (desk_rows and menu_nbar written, [spl_live] 0, [ticks] moving), which
+    # no sampling rate can miss. Its symbols are os88sym's module default,
+    # which Tree.apply() has pointed at this arm's kernel and defines.
     m.run()
-    seen = {"started": False}
-
-    def desk(_):
-        live = m.read(lin_live, 1)[0]
-        if not seen["started"]:
-            if live == 1 and m.read(lin_entry, 1)[0] == 0xE9:
-                seen["started"] = True
-            return False
-        return live == 0
     try:                                # a GUEST-time budget
-        os88marty.until(m, desk, "the splash to end", poll=0.05, limit=300)
-    except os88marty.MartyError:
+        os88marty.kernel_up(m)
+    except os88marty.MartyError as e:
         raise SystemExit("fatwpin: never reached a desktop - nothing below "
-                         "would mean what it says")
+                         "would mean what it says (%s)" % e)
     os88marty.ui_done(m)                # the desktop's first paint: every
                                         # read after this is guest state
 

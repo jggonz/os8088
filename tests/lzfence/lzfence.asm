@@ -36,8 +36,9 @@ LF_WANT     equ 12              ; what `good` must produce
 
 ; -----------------------------------------------------------------------------
 lf_entry:
-    mov ax, 1                   ; a kilobyte to expand into
-    call OSAPI_MEM_CLAIM
+    mov ax, 1 * 64                   ; a kilobyte to expand into
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [lf_seg], dx
 
@@ -180,7 +181,9 @@ lf_paint:
 
 lf_tpl:
     dw 120, 90, 280, 78
-    dw lf_ttl, lf_paint, 0, 0
+    dw lf_ttl, lf_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS lf_cls, 0, PAINT, lf_paint
 
 lf_ttl:     db 'LZ fence', 0
 

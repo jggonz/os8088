@@ -208,7 +208,8 @@ od_dive:
     push ds                         ; ES EVERY TIME: nothing promises it
     pop es                          ; survives a far call into the kernel
     mov di, od_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .out
     cmp word [od_find + 14], OSAPI_FT_DIR
     jne .each                       ; only a FOLDER, and type 1 is a PACKAGE

@@ -271,7 +271,9 @@ pt_build:
 
 pt_tpl:
     dw 200, 20, 176, 208       ; tall enough for three cases at PT_STEP
-    dw pt_ttl, pt_paint, 0, 0
+    dw pt_ttl, pt_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pt_cls, 0, PAINT, pt_paint
 
 pt_ttl:   db 'PtsTest', 0
 

@@ -106,11 +106,12 @@ def main():
     u16 = lambda b: b[0] | (b[1] << 8)
 
     with os88ui.boot(os.path.join(ROOT, "build", "os8088-360.img"),
-                     apps=DISK, machine="os8088_xt_vga") as ui:
+                     apps=DISK, machine="os8088_xt_vga",
+                     quick=True) as ui:    # SOAK-SPEED 12
         m = ui.m
         w = ui.path("B:/CHART.O88")
         seg = os88marty.pkg_live(m, w, ui.sym)
-        ui.settle()
+        ui.still(0)
 
         rd = lambda s: u16(m.readseg(seg, S[s], 2))
         rdb = lambda s: m.readseg(seg, S[s], 1)[0]
@@ -124,7 +125,7 @@ def main():
 
         ui.menu_pick("File", "Open...")
         ui.chooser_open(DOC)
-        ui.settle()
+        ui.still(0)
 
         charted = rd("ct_valcnt")
         auto_col = rd("ct_mincol")
@@ -142,7 +143,7 @@ def main():
               want="1 name, %r" % NAME)
 
         ui.menu_pick("Data", NAME)
-        ui.settle()
+        ui.still(0)
         want = rd("ct_wantrng")
         named_col = rd("ct_mincol")
         check(want == 1, "4 REQUESTED",
@@ -166,7 +167,7 @@ def main():
               want="different columns")
 
         ui.menu_pick("Data", "Automatic")
-        ui.settle()
+        ui.still(0)
         back = rd("ct_mincol")
         check(back == 0 and rd("ct_wantrng") == 0, "6 BACK",
               "Automatic clears both the column and the range choice",

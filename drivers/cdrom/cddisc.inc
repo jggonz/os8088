@@ -34,20 +34,17 @@ cd_pbe32:
 cd_read10:
     push cx
     push di
-    push dx
-    push ax
+    push ax                     ; the LBA's low word, for cd_rdsec's tag: the
+                                ; high one, DX, is one cd_cmd keeps itself
     push cx
-    call cd_pclear              ; (it zeroes [cd_xmax]: set it after)
-    pop cx
+    call cd_pclear              ; (it zeroes [cd_xmax]: set it after) - and
+    pop cx                      ; it keeps AX, so the LBA is still in DX:AX
     mov byte [di], 0x28
-    pop ax
-    pop dx
-    push dx
-    push ax
-    add di, 2
+    inc di
+    inc di
     call cd_pbe32               ; bytes 2-5: the LBA
-    mov [cd_pkt+7], ch          ; bytes 7-8: the count
-    mov [cd_pkt+8], cl
+    mov [di+5], ch              ; bytes 7-8: the count
+    mov [di+6], cl
     mov ax, cx
     mov cl, 11
     shl ax, cl                  ; bytes: at most CD_RUN x 2,048 = 32 KB
@@ -57,15 +54,12 @@ cd_read10:
     mov ax, [cd_xgot]
     cmp ax, [cd_xmax]
     mov ax, CDE_IO              ; a SHORT read is a failed one: the buffer
-    jne .short                  ; holds old bytes past it, and cd_rdsec would
+    jne .err                    ; holds old bytes past it, and cd_rdsec would
                                 ; tag them as the sector asked for
     pop ax                      ; the LBA back, for cd_rdsec's tag
-    pop dx
     jmp short .out              ; (CF = 0: `pop` writes no flag)
-.short:
 .err:
     pop di                      ; the banked AX, dropped: AX is the CDE_*
-    pop dx
     stc
 .out:
     pop di
@@ -80,27 +74,29 @@ cd_rdsec:
     cmp ax, [cd_stag]
     jne .read
     cmp dx, [cd_stag+2]
-    je .hit
+    jne .read
+    ret                         ; there already: CF = 0 off the equal compare
 .read:
     push cx
+    push si
     mov word [cd_stag+2], 0xFFFF    ; nothing, until the read is whole
-    mov [cd_xseg], ds
-    mov word [cd_xoff], cd_sbuf
-    mov cx, 1
+    mov si, cd_sbuf             ; the buffer (cd_read10's pclear sets the
+    call cd_xin                 ; capacity after this; SI is banked because
+    mov cx, 1                   ; cd_bytes holds an offset in it)
     call cd_read10
     jc .out
     mov [cd_stag], ax
     mov [cd_stag+2], dx
 .out:
+    pop si
     pop cx
-    ret
-.hit:
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
 ; cd_media - make sure the tables describe the disc in the drive
-; out: CF = 0 they do; CF = 1 and AX = CDE_* (CDE_NODISC: the drive is empty)
+; out: CF = 0 they do, and ZF = 1 unless [cd_stale] says every handle
+;      refuses until the root is mounted again; CF = 1 and AX = CDE_*
+;      (CDE_NODISC: the drive is empty)
 ; clobbers: AX
 ;
 ; TEST UNIT READY every time: it touches no medium, and it is what turns a
@@ -114,11 +110,13 @@ cd_media:
     call cd_cmd
     jc .out
     cmp byte [cd_valid], 0
-    jne .out                    ; CF = 0 off the compare
+    jne .ok
     call cd_readdisc
     jc .out
-    mov byte [cd_valid], 1
-.out:
+    inc byte [cd_valid]         ; 0 -> 1 (it was 0 a moment ago)
+.ok:
+    cmp byte [cd_stale], 0      ; CF = 0, and ZF = 0 = THE HANDLES ARE STALE:
+.out:                           ; every caller that refuses on it asks here
     pop di
     pop si
     pop cx
@@ -134,19 +132,18 @@ cd_media:
 cd_readdisc:
     push bx
     push dx
-    mov byte [cd_iso], 0
-    mov byte [cd_kind], 0
+    xor ax, ax
+    mov [cd_iso], ax            ; [cd_iso] and [cd_kind] (cdrom.asm)
     call cd_pclear
     mov byte [di], 0x43         ; READ TOC, LBA addresses, format 0
-    mov byte [di+7], CD_TOCSZ >> 8
-    mov byte [di+8], CD_TOCSZ & 0xFF
+    mov word [di+7], (CD_TOCSZ >> 8) | ((CD_TOCSZ & 0xFF) << 8)
+                                ; bytes 7-8: the allocation, big-endian
     mov si, cd_toc
     mov cx, CD_TOCSZ
     call cd_xin
     call cd_cmd
     jc .fail
-    mov al, [cd_toc+2]
-    mov ah, [cd_toc+3]
+    mov ax, [cd_toc+2]          ; AL = the first track, AH = the last
     or al, al
     jz .bad
     cmp ah, 99
@@ -155,18 +152,13 @@ cd_readdisc:
     ja .bad
 %ifdef CDSIM_AUDIO
     call cd_simtoc              ; the gate's fake audio tracks (below)
-    mov al, [cd_toc+2]
-    mov ah, [cd_toc+3]
+    mov ax, [cd_toc+2]
 %endif
-    mov [cd_first], al
-    mov [cd_last], ah
-    sub ah, al                  ; descriptors: the tracks and the lead-out
-    mov al, ah
-    xor ah, ah
-    add ax, 2                   ; tracks + the lead-out
-    mov cl, 3
-    shl ax, cl
-    add ax, 4                   ; 4 + 8 x (tracks + 1)
+    mov [cd_first], ax          ; ...and [cd_last]
+    sub ah, al                  ; descriptors: the tracks and the lead-out,
+    mov al, 8                   ; 4 + 8 x (tracks + 1) = 8 x (last - first)
+    mul ah                      ; + 20 bytes
+    add ax, 2 * 8 + 4
     cmp [cd_xgot], ax
     jb .bad
     ; --- the generation: a TOC that differs is a disc that differs ----------
@@ -179,14 +171,15 @@ cd_readdisc:
     add bx, ax
     rol bx, 1
     loop .sum
-    cmp byte [cd_tsok], 0
-    je .first
+    mov al, 1
+    xchg al, [cd_tsok]          ; ...and there is a sum from now on
+    or al, al
+    jz .first
     cmp bx, [cd_tsum]
     je .first
     inc byte [cd_gen]           ; no UNIT ATTENTION said so, the TOC did
 .first:
     mov [cd_tsum], bx
-    mov byte [cd_tsok], 1
     ; --- the kinds, and the last data track ---------------------------------
     mov al, [cd_first]
 .trk:
@@ -195,8 +188,7 @@ cd_readdisc:
     jz .audio
     or byte [cd_kind], CDK_DATA
     push ax
-    add si, 4
-    call cd_be32
+    call cd_tstart              ; (the descriptor's LBA, which is SI + 4)
     mov [cd_vdlba], ax
     mov [cd_vdlba+2], dx
     pop ax
@@ -208,9 +200,8 @@ cd_readdisc:
     cmp al, [cd_last]
     jbe .trk
     test byte [cd_kind], CDK_DATA
-    jz .ok
+    jz .out                     ; CF = 0 off the `test`
     call cd_readvol             ; a volume that fails leaves cd_iso 0
-.ok:
     clc
     jmp short .out
 .bad:
@@ -228,14 +219,11 @@ cd_readdisc:
 ; -----------------------------------------------------------------------------
 cd_tdesc:
     push ax
-    push cx
     sub al, [cd_first]
-    xor ah, ah
-    mov cl, 3
-    shl ax, cl
+    mov ah, 8                   ; x 8 bytes a descriptor: the byte multiply
+    mul ah                      ; writes AX and nothing else
     add ax, cd_toc + 4
     xchg si, ax
-    pop cx
     pop ax
     ret
 
@@ -261,62 +249,46 @@ cd_readvol:
     adc dx, 0
     mov cx, CD_VDMAX
 .vd:
-    push ax
-    push dx
-    call cd_rdsec
-    jc .vdbad
+    call cd_rdsec               ; DX:AX kept when it reads, and a refusal is
+    jc .ret                     ; the end of the walk either way
     cmp word [cd_sbuf+1], 'CD'
-    jne .vdbad
+    jne .ret
     cmp word [cd_sbuf+3], '00'
-    jne .vdbad
+    jne .ret
     cmp byte [cd_sbuf+5], '1'
-    jne .vdbad
-    mov al, [cd_sbuf]
-    cmp al, 1
+    jne .ret
+    mov bl, [cd_sbuf]           ; (BX is the caller's: cd_readdisc banked it)
+    cmp bl, 1
     je .pvd
-    cmp al, 255
-    je .vdbad                   ; the terminator, and no primary before it
-    pop dx
-    pop ax
+    cmp bl, 255
+    je .ret                     ; the terminator, and no primary before it
     add ax, 1
     adc dx, 0
     loop .vd
+.ret:
     ret                         ; [cd_iso] stays 0
-.vdbad:
-    pop dx
-    pop ax
-    ret
 .pvd:
-    pop dx
-    pop ax
     cmp word [cd_sbuf+128], 2048
-    jne .out                    ; a logical block this driver cannot address
-    mov ax, [cd_sbuf+156+2]     ; the root's directory record
-    mov dx, [cd_sbuf+156+4]
-    mov [cd_rlba], ax
-    mov [cd_rlba+2], dx
-    mov [cd_dbase], ax          ; ...and the base, until the path table
-    mov [cd_dbase+2], dx        ; finds a lower directory
-    mov ax, [cd_sbuf+156+10]
-    mov [cd_rlen], ax
-    mov ax, [cd_sbuf+156+12]
-    mov [cd_rlen+2], ax
-    mov ax, [cd_sbuf+132]       ; the path table's size...
-    mov [cd_ptlen], ax
-    mov ax, [cd_sbuf+134]
-    mov [cd_ptlen+2], ax
-    mov ax, [cd_sbuf+140]       ; ...and its type-L copy's LBA
-    mov [cd_ptlba], ax
-    mov ax, [cd_sbuf+142]
-    mov [cd_ptlba+2], ax
-    mov byte [cd_iso], 1
-    call cd_ptwalk
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
+    jne .ret                    ; a logical block this driver cannot address
+    push es                     ; FIVE DWORDS, into five adjacent ones
+    push ds                     ; (cdrom.asm): the root's extent and length,
+    pop es                      ; the base - the root's extent again, until
+    mov di, cd_rlba             ; the path table finds a lower directory -
+    mov bx, cd_pvdmap           ; and the type-L path table's LBA and size
+    mov cx, 5
+    cld
+.f:
+    mov si, [bx]
+    movsw
+    movsw
+    inc bx
+    inc bx
+    loop .f
+    pop es
+    inc byte [cd_iso]           ; 0 -> 1: cd_readdisc cleared it
+                                ; ...and falls into the path table's walk
 ; cd_ptwalk - the lowest directory extent on the disc, into [cd_dbase]
-; clobbers: AX, CX, DX, SI, DI
+; clobbers: AX, BX, CX, DX, SI, DI (BX is cd_readdisc's, which banks it)
 ;
 ; The path table is a byte stream across sectors and a record may straddle
 ; two, so it is read a BYTE at a time through cd_ptbyte, whose sector is the
@@ -336,23 +308,18 @@ cd_ptwalk:
     jc .out
     or al, al
     jz .out
-    mov bl, al                  ; (BX is the caller's: cd_readdisc banked it)
-    lea cx, [di+2]              ; the extent, four bytes little-endian
+    mov bl, al
+    lea cx, [di+2]              ; the extent, four bytes little-endian, a
+    mov si, cd_tmp              ; byte at a time into cd_tmp
+    mov bh, 4
+.ext:
     call cd_ptbyte
     jc .out
-    mov [cd_tmp], al
+    mov [si], al
+    inc si
     inc cx
-    call cd_ptbyte
-    jc .out
-    mov [cd_tmp+1], al
-    inc cx
-    call cd_ptbyte
-    jc .out
-    mov [cd_tmp+2], al
-    inc cx
-    call cd_ptbyte
-    jc .out
-    mov [cd_tmp+3], al
+    dec bh
+    jnz .ext                    ; ...which leaves BH = 0, so BX = the length
     mov ax, [cd_tmp]
     mov dx, [cd_tmp+2]
     cmp dx, [cd_dbase+2]        ; lower than the base so far?
@@ -364,20 +331,20 @@ cd_ptwalk:
     mov [cd_dbase], ax
     mov [cd_dbase+2], dx
 .next:
-    mov al, bl
-    xor ah, ah
-    inc ax                      ; the name, padded to even
-    and al, 0xFE
-    add ax, 8
-    add di, ax
+    lea ax, [bx+9]              ; 8 bytes of record and the name padded to
+    and al, 0xFE                ; even: (length + 1 rounded down even) + 8,
+    add di, ax                  ; which is (length + 9) rounded down even
     jnc .rec
 .out:
     ret
 
+; cd_readvol's five runs, in the order of the five dwords they fill
+cd_pvdmap:  dw cd_sbuf+156+2, cd_sbuf+156+10, cd_sbuf+156+2, cd_sbuf+140, cd_sbuf+132
+
 ; cd_ptbyte - CX = an offset into the path table -> AL = its byte; CF = 1 on a
-;             read that failed. clobbers: AX
+;             read that failed. clobbers: AX, DX - its one caller holds
+;             nothing in DX across it
 cd_ptbyte:
-    push dx
     push si
     mov si, cx
     and si, 2047
@@ -394,13 +361,14 @@ cd_ptbyte:
     mov al, [cd_sbuf+si]
 .out:
     pop si
-    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
 ; cd_secs - DX:AX = a count of frames (sectors) -> AX = whole seconds (75 a
 ;           second; a disc is at most ~80 minutes, so the quotient is a word)
-; clobbers: DX
+; clobbers: DX - to whatever: the divide leaves its remainder there, and every
+;           caller writes DX before it reads it (CDV_DISC, _TRACK, _STATUS),
+;           so the two clamps no longer zero it either
 ; -----------------------------------------------------------------------------
 cd_secs:
     or dx, dx
@@ -415,11 +383,9 @@ cd_secs:
     ret
 .zero:
     xor ax, ax
-    xor dx, dx
     ret
 .max:
     mov ax, 0xFFFF
-    xor dx, dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -438,30 +404,22 @@ cd_tend:
     push cx
     push si
     mov bl, al                  ; this track
-    call cd_tstart
-    mov cx, ax                  ; CX:SI... its start, kept to clamp against
-    mov si, dx
-    push si
-    push cx
+    call cd_tstart              ; its start, BANKED to clamp against
+    push dx
+    push ax
     mov al, bl
-    inc al
+    inc ax                      ; (AL is at most 99: nothing carries)
     call cd_tstart              ; DX:AX = the next start, or the lead-out
     cmp bl, [cd_last]
     jae .clamp                  ; the last track: the lead-out is its end
     push ax
-    push si
     mov al, bl
-    call cd_tdesc
-    mov bh, [si+1]              ; this track's control...
-    mov al, bl
-    inc al
-    call cd_tdesc
-    mov cl, [si+1]              ; ...and the next's
-    pop si
+    call cd_tdesc               ; SI = this track's descriptor, and the next
+    mov bh, [si+1]              ; one's is 8 bytes on: BH's CDT_DATA is set
+    not bh                      ; exactly when this one is AUDIO and the next
+    and bh, [si+8+1]            ; is DATA
     pop ax
     test bh, CDT_DATA
-    jnz .clamp
-    test cl, CDT_DATA
     jz .clamp
     sub ax, CD_SGAP             ; audio, then data: the session gap is not ours
     sbb dx, 0

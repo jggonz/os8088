@@ -199,6 +199,13 @@ zi_putkey:
 ; zi_getkey - worker: take a keystroke, if there is one
 ; out: AL = ASCII, AH = scan code, CF = 0; CF = 1 and AX undefined if empty.
 ;      Preserves every other register.
+;
+; A KEY TAKEN IS INPUT, so it restarts the [MORE] count (zwin.inc's
+; zw_morechk): [zw_more] is rows since the last input, which is the Standard's
+; 8.4.1 and the real Frotz's, and nothing else ever zeroed it but the prompt
+; itself. Without this a player who typed every command still met [MORE]
+; every screenful of rows - in the middle of a one-line reply, or on @read's
+; own echo of RETURN (zw_morechk's zx_rsm test is what keeps THAT one safe).
 ; -----------------------------------------------------------------------------
 zi_getkey:
     push bx
@@ -211,6 +218,7 @@ zi_getkey:
     inc bl
     and bl, ZI_RING_N - 1
     mov [zi_rtail], bl
+    mov word [zw_more], 0           ; input: the [MORE] count starts again
     pop bx
     clc
     ret
@@ -859,15 +867,16 @@ zi_load:
     ; bigger claim's selector already covers its first 64KB, and the pages
     ; past that are zm_pages'. Bit 2 is TI: a real-mode claim is 512-byte
     ; aligned and never has it, so this costs the XT nothing. The 64KB one
-    ; stays on the KB door ON PURPOSE: as an OS88_HIGHMEM claim of 64KB it
-    ; goes above 1MB, where OSAPI_MEM_P's would be conventional memory.
+    ; is a plain claim with no MEMP_CONV ON PURPOSE: as an OS88_HIGHMEM claim
+    ; of 64KB it goes above 1MB.
     test dl, 4
     jz .claimed
     cmp ax, 64 * 64
     jae .claimed
     call OSAPI_MEM_FREE
-    mov ax, 64
-    call OSAPI_MEM_CLAIM
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov word [zi_para], 64 * 64
     jmp short .claimed
@@ -931,8 +940,9 @@ zi_load:
                                 ; above hands the old claim back and a FRESH
                                 ; claim starts undeclared
 
-    mov ax, ZI_STKKB
-    call OSAPI_MEM_CLAIM
+    mov ax, ZI_STKKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [zf_stkseg], dx
     mov ax, zf_reloc
@@ -1021,8 +1031,10 @@ zi_load:
                                     ; bytes went somewhere else (KERN-MEGA-PLAN
                                     ; 14.13)
     mov bx, [zf_win]
-    mov ax, zi_name
-    call OSAPI_WM_TITLE
+    mov ax, zi_story                ; zi_STORY, not zi_name: the record keeps
+    call OSAPI_WM_TITLE             ; the POINTER (OSAPI_WM_TITLE), and every
+                                    ; dialog answer since overwrote zi_name -
+                                    ; a save retitled the window ZRS2.SAV
 
     mov byte [zf_state], ZFS_RUN
     mov word [zf_why], 0            ; the last refusal is history now
@@ -2503,7 +2515,7 @@ zi_m_issave:  db 'A saved game: open its story, then RESTORE.', 0
 ;
 ; IT IS BUFFERED WHOLE AND WRITTEN WHOLE, and that is forced rather than
 ; chosen. A worker may not touch a file slot (SPEC.md 20.6), so the write is
-; the UI task's; and OSAPI_FILE_APPEND (slot 0x0286) refuses a file whose size
+; the UI task's; and OSAPI_FILE_APPEND (withdrawn, kernel size pass 19) refuses a file whose size
 ; is not a whole number of clusters, so a transcript cannot be dribbled out a
 ; line at a time without padding the file with rubbish. OSAPI_FILE_WRITE
 ; REPLACES, so the only correct thing to replace it with is everything so far.
@@ -2562,8 +2574,9 @@ zi_script_open:
     push dx
     cmp word [zi_scrseg], 0
     jne .ok                         ; idempotent: a second story reuses it
-    mov ax, ZI_SCRKB
-    call OSAPI_MEM_CLAIM
+    mov ax, ZI_SCRKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .no
     mov [zi_scrseg], dx
     mov ax, zf_reloc                ; ...AND IT MOVES (NO-PINNING A3): the
@@ -2794,7 +2807,8 @@ zi_openpend:
     xor cx, cx                      ; ordinal 0 = start of this directory
 .scan:
     mov di, zi_find
-    call OSAPI_FILE_FIND            ; out CF=1 at the end, else CX = next
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; out CF=1 at the end, else CX = next
     jc .nofile
     push cx
     mov si, zi_find

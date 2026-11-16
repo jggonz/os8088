@@ -351,7 +351,18 @@ NETV_RAWRX   equ 17
 ; image for ever, on every machine, including the ones with no card - so these
 ; two take the segment explicitly and a heap claim can hold the pair.
 
-NETV_MAX     equ 17             ; ...and anything above it is refused. A verb
+NETV_UDP     equ 18             ; UDP FOR A PACKAGE (SPEC.md 72.24): AL = 1
+                                ; bind CX = a port, 0 release. CF=1 AX =
+                                ; NETE_BUSY (one package port at a time)
+NETV_UDPTX   equ 19             ; SI = the payload, CX = its length (<= 512),
+                                ; DI = 6 bytes: the IP address, then the port
+                                ; (a little-endian word). CF=1 AX =
+                                ; NETE_NOLINK: no ARP answer yet - try again
+NETV_UDPRX   equ 20             ; DI = a buffer, CX = its capacity: the
+                                ; source's 6 bytes (as UDPTX's DI) first,
+                                ; the payload after them. CF=0 CX = the
+                                ; payload's TRUE length; CF=1 empty
+NETV_MAX     equ 20             ; ...and anything above it is refused. A verb
                                 ; table indexed by an unchecked verb is a wild
                                 ; near call inside the driver
 NETV_GONE    equ 0x42           ; **THE KERNEL'S, NEVER A PACKAGE'S**: AL = an

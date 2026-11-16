@@ -39,7 +39,7 @@ actually been run. The build diary is `docs/HOW-INSTALL-WAS-BUILT.md`.
 
 ## Wave 1 — the doors (engine reachable from a package)
 
-- [x] `OSAPI_DRV_USE` at `0x04A5`: a rare cell, `.cold` body
+- [x] `OSAPI_DRV_USE` at `0x0417`: a rare cell, `.cold` body
       `osapi_drv_use_x` (`cpf_need`, `CPE_DRVUP`, drop when no panel is open;
       `DRVU_DONE` sends the class's `DSV_CPCLOSE` unless a panel is open);
       kern_small refuses. `CTRL.DRV` gains `CPE_DRVUP` (kern_big).

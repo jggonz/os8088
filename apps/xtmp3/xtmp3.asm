@@ -276,19 +276,8 @@ x3_entry:
     OS88_REGION_MOVABLE_NOKEEP x3_ret ; every byte that outlives a pass is a
                                     ; static and moves with us
     mov [x3_win], bx
-    call x3_e_attach                ; ENGINE TRACK: its wake and close handlers
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content origin on the 8-pixel grid
-    mov al, 1
-    call OSAPI_WM_OWNBG             ; every pixel is the paint's
-    mov si, x3_about
-    call OSAPI_ABOUT_SET
     mov si, x3_menus
     call OSAPI_MENU_SET
-    mov ax, x3_wheel
-    call OSAPI_WM_ONWHEEL
-    mov ax, x3_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 1
     call OSAPI_WM_TIMER             ; the first pass, next tick
     call x3_prefset
@@ -296,8 +285,6 @@ x3_entry:
     call OSAPI_WM_PREFER            ; the size, per adapter - and applied
     xchg ax, bx                     ; AX = the window
     mov bx, x3_btrec
-    mov si, x3_onup
-    mov di, x3_ondrag
     mov dx, x3_onclick
     call os88ui_btninit             ; keeps every register
     xchg ax, bx
@@ -1560,7 +1547,12 @@ x3_hash:
 ; DATA
 ; =============================================================================
 x3_tpl:     dw 12, 28, X3_CW + 2, X3_C1H + TITLE_H + 1
-            dw x3_ttl, x3f_paint, x3_key, 0
+            dw x3_ttl, x3_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS x3_cls, WF_OWNBG, PAINT, x3f_paint, ONKEY, x3_key, \
+               ONCLICK, os88ui_btnclick, ABOUT, x3_about, ONWAKE, x3_onwake, \
+               ONCLOSE, x3_onclose, ONMOUSEUP, x3_onup, ONTIMER, x3_tick, \
+               ONDRAG, x3_ondrag, ONWHEEL, x3_wheel
 x3_ttl      equ 16                  ; the header's name field: 'XTMP3'
 
 x3_pref:    times 6 dw 0            ; OSAPI_WM_PREFER's table (x3_prefset)

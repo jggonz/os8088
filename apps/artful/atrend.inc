@@ -1970,7 +1970,9 @@ at_sbar:
     mov bx, [at_sbx]
     add bx, 7
     add bx, si
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     inc dx
     inc si
     cmp si, 6
@@ -1986,7 +1988,9 @@ at_sbar:
     mov bx, [at_sbx]
     add bx, 7
     add bx, si
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     inc dx
     dec si
     jnz .da

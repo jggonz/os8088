@@ -143,8 +143,11 @@ MACRO = re.compile(r"^[ \t]*%i?macro[ \t]+(\w+)[^\n]*\n(.*?)^[ \t]*%endm\w*",
 # the word boundary is checked on the few matches instead (word_before).
 _TGT = (r"[ \t]+(?:(?:short|near|far)[ \t]+)?(?:[A-Za-z_]\w*[ \t]*:[ \t]*)?("
         + TOPNAME + r")[ \t]*$")
+# (`KDOOR x` - kernel/kernel.asm's spelling of a call through the rare door,
+# SPEC.md 20.3.4 - is a call to x: toast_show is behind the door since kernel
+# size pass 19's T5, and the kernel's toasts reach it that way)
 REFS = (re.compile(r"call" + _TGT, re.M), re.compile(r"j[a-z]{1,4}" + _TGT, re.M),
-        re.compile(r"loop[a-z]{0,2}" + _TGT, re.M))
+        re.compile(r"loop[a-z]{0,2}" + _TGT, re.M), re.compile(r"KDOOR" + _TGT, re.M))
 STORE = re.compile(r"mov[ \t]+(?:word[ \t]+)?(?:[cdes]s[ \t]*:[ \t]*)?\[[ \t]*"
                    r"(?:[cdes]s[ \t]*:[ \t]*)?("
                    + NAME + r")[ \t]*\][ \t]*,[ \t]*([^\n]+?)[ \t]*$", re.M)
@@ -289,6 +292,8 @@ class Src(object):
             p2 = rest.split(None, 1)
             op = op + " " + p2[0].lower()
             rest = p2[1] if len(p2) > 1 else ""
+        if op == "kdoor":
+            op = "call"             # the rare door's spelling (REFS above)
         L.op = op
         L.args = split_args(rest) if rest else []
         return L

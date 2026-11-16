@@ -12,7 +12,7 @@
 ;   3. the vector - a magic, the asset's segment and the carve's base - is
 ;      written into the HEAD OF THE PROGRAM'S BSS, which is inside part 0 and
 ;      which the kernel will not zero (SPEC.md 20.12.10.2);
-;   4. OSAPI_PKG_REHOME names part 0 and the bytes available at it;
+;   4. OSAPI_PKG_REHOME names part 0 and the paragraphs it keeps;
 ;   5. it returns CF=0 with BX=0 - NO WINDOW, which SPEC.md 20.12.10.6 makes a
 ;      refusal, its region being about to be freed.
 ;

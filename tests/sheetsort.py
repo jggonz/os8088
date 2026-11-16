@@ -100,12 +100,14 @@ def main():
     build_disk()
     S = os88sym.linear
     saved = {}
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
@@ -122,7 +124,7 @@ def main():
         at = lambda r, c: ((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
 
         def menu(title, i):
-            mo.menu(title[0], title[1], *ITEM(title[0], i))
+            SF.menu(m, mo, title[0], title[1], *ITEM(title[0], i))
             M.settle(m)
 
         def select(r1, c1, r2, c2):
@@ -147,13 +149,13 @@ def main():
         def save(tag):
             before = saved.get("last") or open(os.path.join(WORK, NAME),
                                                "rb").read()
-            mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1],
+            SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1],
                     SF.SAVE_AS[0], SF.SAVE_AS[1])
-            M.settle(m)
+            M.ui_done(m)                    # SOAK-SPEED 4: every step of
             mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
-            M.settle(m)
+            M.ui_done(m)                    # the save is aimed off the
             mo.click(*SF.fdlg_okxy(m))
-            M.settle(m, limit=120)
+            M.ui_done(m)                    # kernel's window record
             mo.click(*SF.SAVE_BUTTON)
             for _ in range(60):
                 v = os88flush.Flush(marty=m).volume(1)

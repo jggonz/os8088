@@ -97,11 +97,34 @@ def pkg_syms(src):
             elif len(f) == 2 and len(f[0]) == 8 and set(f[0]) <= hexd:
                 equ[f[1]] = int(f[0], 16)
         sites = {}
+        # SDK `call` is a MACRO since the flag day (apps/os88api.inc routes a
+        # rare cell through its door), so the source line `call tg_update`
+        # lists with no address and its bytes appear on the expansion's own
+        # `<1> call %1` line after it. A target named on an address-less
+        # source line is held until the next line that has one.
+        pending = None
         for line in open(lp):
             f = line.split(None, 3)
-            if len(f) < 4 or not set(f[1]) <= hexd:
+            if len(f) < 3:
                 continue
-            code = f[3].split(";")[0].split()
+            if set(f[1]) <= hexd and len(f[1]) == 8:
+                if pending and len(f) >= 4 and f[3].split()[:1] == ["<1>"] \
+                        and "call" in f[3].split(";")[0].split():
+                    if pending in sites:
+                        raise SystemExit("tgplay: two `call %s` sites in %s"
+                                         % (pending, src))
+                    sites[pending] = int(f[1], 16)
+                    pending = None
+                    continue
+                if len(f) < 4:
+                    continue
+                code = f[3].split(";")[0].split()
+            else:
+                code = " ".join(f[1:]).split(";")[0].split()
+                if code[:1] == ["call"] and len(code) > 1 and code[1] in (
+                        "tg_update", "tg_frame", "OSAPI_GFX_UNLOCK"):
+                    pending = code[1]
+                continue
             if code[:1] != ["call"]:
                 continue
             tgt = code[1] if len(code) > 1 else ""

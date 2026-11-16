@@ -4,9 +4,10 @@ wf_fullscreen:
     call OSAPI_WM_DISPLAY
     cmp dh, 1
     ja .native
-    call OSAPI_FSX_CAPS
-    test ax, 1 << FSXM_CGA320
-    jz .native
+    cmp dl, VID_CGA             ; a 1bpp display offers FSXM_CGA320 exactly
+    jne .native                 ; when it is a CGA (fsx_capstab). It asked
+                                ; OSAPI_FSX_CAPS with BX = WM_DISPLAY's
+                                ; HEIGHT, not the window (kernel size pass 19)
     call wf_fontcopy
     mov ax, wf_fs_main
     mov bx, [wf_win]

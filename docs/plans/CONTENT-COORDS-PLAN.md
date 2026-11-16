@@ -580,7 +580,7 @@ Three ways through, for the owner:
    layout and no containment tests. The cost is cycles on the slowest machine:
    the rig's always-arm text shape measured +1,846 a glyph, and a rect would
    take `gfx_clip_run`'s armed path on every call.
-3. **Fund it** from the open rows of docs/plans/KERN-SMALL-CUT-PLAN.md.
+3. **Fund it** from the open rows of docs/plans/retired/KERN-SMALL-CUT-PLAN.md.
 
 ---
 

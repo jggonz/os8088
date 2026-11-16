@@ -46,6 +46,99 @@
 %include "hddabi.inc"
 %include "hdcom.inc"
 %include "hdsvc.inc"
+
+; THE NEXT THREE ROUTINES AND ipkg.inc's STRINGS sit in front of the sector
+; buffers for the tuning described past hdsec.inc below, and HERE among the
+; includes because the compressed file is smallest with them here.
+; -----------------------------------------------------------------------------
+; hd_tshut - HDT_SHUT: nothing of ours left on screen, nothing of ours held
+; in:  nothing
+; out: CF = 0
+;
+; DESTROY AND NOT HIDE, which is what OSAPI_WM_DESTROY (a door cell) was added
+; for. Hiding takes the pixels down and leaves the RECORD, holding a W_SEG that
+; names this image - inert while nothing re-shows it, and a loaded gun once the
+; image is freed and something else claims the memory. It also costs a window
+; slot per load, and MAX_WIN is 12: with the image now reclaimed every time the
+; tool is finished with, an open/close cycle that leaked one would run the
+; table out inside a session.
+;
+; hd_ia_rel runs FIRST for the ASSOC.DAT hold an abandoned install keeps;
+; destroying a window already hidden is fine - wm_destroy tests the visible
+; bit and passes an empty damage rect when it is clear. The launch window
+; (cppage.inc's hd_inst_post) is never shown at all.
+; -----------------------------------------------------------------------------
+hd_tshut:
+    push ax
+    push bx
+    call hd_ia_rel              ; an install abandoned at its apps prompt
+    mov bx, [hd_twin]
+    or bx, bx
+    jz .launch
+    call OSAPI_WM_DESTROY
+    mov word [hd_twin], 0
+.launch:
+    call hd_lkill               ; a posted wizard launch that never ran
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tbusy - HDT_BUSY: is a window of ours still on screen?
+; in:  nothing
+; out: CF = 1 = yes, do not unload me
+;
+; VISIBLE, not merely allocated. Closing one of our windows is a hide, so
+; [hd_twin] stays non-zero for the rest of the load and testing it would pin
+; this image until detach - which is the whole thing this verb exists to stop.
+;
+; The resident asks; we never volunteer. A "you may free me now" call would be
+; answered by freeing the image the call has to return into.
+; -----------------------------------------------------------------------------
+hd_tbusy:
+    push bx
+    cmp byte [hd_iw_st], HII_SYSDONE    ; A RUN waiting on its apps disk
+    je .busy                    ; (SPEC.md 117.4): it holds ASSOC.DAT's
+                                ; writer and its stage is in this image
+    cmp word [hd_lwin], 0       ; a wizard launch posted and not yet run
+    jne .busy                   ; (cppage.inc's hd_inst_post)
+    mov bx, [hd_twin]
+    call hd_win_live
+    jc .busy
+    pop bx
+    clc
+    ret
+.busy:
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_win_live - CF = 1 when BX names a window of ours that is on screen
+; in:  BX = a window pointer, or 0
+; out: CF = 1 visible; CF = 0 = never created, or closed
+; clobbers: flags
+; -----------------------------------------------------------------------------
+hd_win_live:
+    or bx, bx
+    jz .no
+    push cx
+    push dx
+    call OSAPI_WM_GEOM          ; CF = 1 = not visible
+    pop dx
+    pop cx
+    jc .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+%define HD_IPKG_TEXT            ; ipkg.inc's log strings, in front of the
+%include "ipkg.inc"             ; buffers with these three routines: the
+%undef HD_IPKG_TEXT             ; tuning below
+
 %include "partw.inc"
 %include "fmt.inc"
 %include "tool.inc"
@@ -137,110 +230,27 @@ hd_tinit:
 %include "hdsec.inc"
 
 ; =============================================================================
-; PAST THE SECTOR BUFFERS ON PURPOSE. hdsec.inc pads to a 512 boundary in front
-; of hd_mbr, and every byte of that pad is a byte of every load of this image.
-; Code after the buffers costs no alignment, so what sits here is chosen to
-; make what is IN FRONT of them end exactly on the boundary - three routines
-; this file owns, 91 bytes, which put hd_mbrok at 511 mod 512 and the pad at
-; zero. It is a tuning, not a rule: any change above moves it, and the cure is
-; to move a routine across the buffers in one direction or the other, never to
-; pad. The claim was whole KB (HDTOOL_KB), so the tuning was worth a KB exactly
-; when it carried the image under a KB boundary. It did until INSTALL's log
-; (SPEC.md 117.4.1, its call sites in inst.inc) took the image to 17,810
-; bytes and an 18KB claim. The Install window's removal (SPEC.md 52.10.4)
-; took it to 17,038 and a 17KB claim with a pad of 199, which is LEFT:
-; closing it is 199 bytes off a load and no KB (16,839 is still over
-; 16,384), and on the disk a run of zeros costs the compressed file nearly
-; nothing. The claim is PARAGRAPHS now (HDTOOL_PARA, SPEC.md 50.3.7), so the
-; heap rounds it to its 512-byte granule and the tuning is worth 512 bytes,
-; not a KB, whenever it carries the image under a 512 boundary.
+; PAST THE SECTOR BUFFERS, AND THE TUNING. hdsec.inc pads to a 512 boundary
+; in front of hd_mbr, and every byte of that pad is a byte of every load of
+; this image. Code after the buffers costs no alignment, so what is IN FRONT
+; is chosen to end exactly on the boundary, and the rest sits here. It is a
+; tuning, not a rule: any change above moves it, and the cure is to move a
+; routine or a string across the buffers in one direction or the other, never
+; to pad. The claim is PARAGRAPHS (HDTOOL_PARA, SPEC.md 50.3.7), rounded by the
+; heap to its 512-byte granule, so every byte of pad is a byte of heap while
+; the tool is in.
+;
+; Its history, because the trade moved under it: three routines here (91
+; bytes) put the pad at zero while the claim was whole KB; INSTALL's log
+; (SPEC.md 117.4.1) and then the Install window's removal (52.10.4) left a pad
+; of 199, LEFT because it bought no KB. Driver size pass 1 freed ~200 bytes of
+; code in front and took the pad to 319, then re-tuned: hd_tshut, hd_tbusy and
+; hd_win_live (78 bytes) and ipkg.inc's log strings but one (241, the
+; HD_IPKG_TEXT include) moved in front of partw.inc - placed there because
+; that is where the compressed file came out smallest of the places tried -
+; and the pad is 0 again. What is left here: os88ui.inc's controls and
+; ipkg.inc's code (and hd_s_lmbr, the one string that did not fit).
 ; =============================================================================
-; -----------------------------------------------------------------------------
-; hd_tshut - HDT_SHUT: nothing of ours left on screen, nothing of ours held
-; in:  nothing
-; out: CF = 0
-;
-; DESTROY AND NOT HIDE, which is what OSAPI_WM_DESTROY (slot 0x02BC) was added
-; for. Hiding takes the pixels down and leaves the RECORD, holding a W_SEG that
-; names this image - inert while nothing re-shows it, and a loaded gun once the
-; image is freed and something else claims the memory. It also costs a window
-; slot per load, and MAX_WIN is 12: with the image now reclaimed every time the
-; tool is finished with, an open/close cycle that leaked one would run the
-; table out inside a session.
-;
-; hd_ia_rel runs FIRST for the ASSOC.DAT hold an abandoned install keeps;
-; destroying a window already hidden is fine - wm_destroy tests the visible
-; bit and passes an empty damage rect when it is clear. The launch window
-; (cppage.inc's hd_inst_post) is never shown at all.
-; -----------------------------------------------------------------------------
-hd_tshut:
-    push ax
-    push bx
-    call hd_ia_rel              ; an install abandoned at its apps prompt
-    mov bx, [hd_twin]
-    or bx, bx
-    jz .launch
-    call OSAPI_WM_DESTROY
-    mov word [hd_twin], 0
-.launch:
-    call hd_lkill               ; a posted wizard launch that never ran
-    pop bx
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_tbusy - HDT_BUSY: is a window of ours still on screen?
-; in:  nothing
-; out: CF = 1 = yes, do not unload me
-;
-; VISIBLE, not merely allocated. Closing one of our windows is a hide, so
-; [hd_twin] stays non-zero for the rest of the load and testing it would pin
-; this image until detach - which is the whole thing this verb exists to stop.
-;
-; The resident asks; we never volunteer. A "you may free me now" call would be
-; answered by freeing the image the call has to return into.
-; -----------------------------------------------------------------------------
-hd_tbusy:
-    push bx
-    cmp byte [hd_iw_st], HII_SYSDONE    ; A RUN waiting on its apps disk
-    je .busy                    ; (SPEC.md 117.4): it holds ASSOC.DAT's
-                                ; writer and its stage is in this image
-    cmp word [hd_lwin], 0       ; a wizard launch posted and not yet run
-    jne .busy                   ; (cppage.inc's hd_inst_post)
-    mov bx, [hd_twin]
-    call hd_win_live
-    jc .busy
-    pop bx
-    clc
-    ret
-.busy:
-    pop bx
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_win_live - CF = 1 when BX names a window of ours that is on screen
-; in:  BX = a window pointer, or 0
-; out: CF = 1 visible; CF = 0 = never created, or closed
-; clobbers: flags
-; -----------------------------------------------------------------------------
-hd_win_live:
-    or bx, bx
-    jz .no
-    push cx
-    push dx
-    call OSAPI_WM_GEOM          ; CF = 1 = not visible
-    pop dx
-    pop cx
-    jc .no
-    stc
-    ret
-.no:
-    clc
-    ret
-
-
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 ; %define OS88UI_CHK              ; the installer's Erase box (SPEC.md 52.10.15)
 %define OS88UI_ARM              ; os88ui_arm/fire/armed: the press/release

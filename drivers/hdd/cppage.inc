@@ -39,7 +39,7 @@
 ; GREYING FOLLOWS SPEC.md 47: one predicate per control, shared by the
 ; greying, the click refusal and the explanation; a fact and never a guess;
 ; and the whole control, not just its caption. The pen comes from
-; OSAPI_GFX_PEN (slot 0x0260), so a disabled button carries [gfx_dis] as well
+; OSAPI_GFX_PEN (slot 0x014E), so a disabled button carries [gfx_dis] as well
 ; as CDGRAY and its LABEL dithers on the two 1bpp adapters instead of coming
 ; out solid black next to a dotted frame.
 ; =============================================================================
@@ -985,8 +985,6 @@ hd_inst_post:
     call OSAPI_WM_CREATE        ; CF = 1: the window table is full
     jc .out
     mov [hd_lwin], bx
-    mov ax, hd_lwake
-    call OSAPI_WM_ONWAKE
 .wake:
     call OSAPI_WM_WAKE          ; CF = 1, the event ring full, is left: the
 .out:                           ; window stays and the next click kicks it
@@ -1049,7 +1047,9 @@ hd_lkret:                       ; ...a `ret`, which is the paint the launch
     ret                         ; window is never asked for
 
 hd_lwin:     dw 0               ; the launch window, 0 = no launch pending
-hd_ltpl:     dw 0, 0, 8, 8, hd_s_inspkg, hd_lkret, 0, 0
+hd_ltpl:     dw 0, 0, 8, 8, hd_s_inspkg, hd_lcls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS hd_lcls, 0, PAINT, hd_lkret, ONWAKE, hd_lwake
 TOASTRUN hd_s_insfail
               db 'Cannot start '   ; THREE STRINGS IN ONE RUN: the toast,
 hd_s_inspkg: db 'INSTALL'           ; the name it starts, and inst.inc's

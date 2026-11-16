@@ -626,7 +626,10 @@ fb_head:
 
 fb_tpl:
     dw 180, 150, 306, 108           ; x, y, w, h -> content 304 x 89
-    dw fb_ttl, fb_paint, fb_onkey, fb_onclick
+    dw fb_ttl, fb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fb_cls, 0, PAINT, fb_paint, ONKEY, fb_onkey, \
+               ONCLICK, fb_onclick
 
 fb_ttl:     db 'Font Bench', 0
 

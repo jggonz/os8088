@@ -30,8 +30,11 @@
 
 HB_M_ASK    equ 0               ; the window offers Hibernate... / Cancel
 HB_M_BUSY   equ 1               ; the image is being written (or read)
-HB_M_RESUME equ 2               ; the boot-time question: Resume / Discard
+HB_M_RESUME equ 2               ; a resume is posted: keep the image (no face)
 HB_M_GONE   equ 3               ; the window closed: the thunk drops the image
+HBP_DONE    equ 2               ; [hb_down] between hb_probe_x's two calls on
+HBP_P2      equ 3               ; kern_big/kern_emu (P1 = 1, "early"): settled,
+                                ; or P2 still to ask (SPEC.md 87.5)
 
 ; --- the module's entry slots (SPEC.md 2.8.1) - its ABI with the thunks -----
 HBE_PAINT   equ 0
@@ -112,6 +115,14 @@ HBX_HMAX    equ (512 - 12) / 8  ; the runs the section's head can list: 12
     %define HBM_HMACHK 1
   %endif
 %endif
+; HBM_KEEPS - a driver that says OS88_DRV_WAKES is put to SLEEP by a
+; hibernate's sweep and kept, then WAKEd (SPEC.md 51.2.5). EVERY kernel with
+; a hibernate, kern_mega's included: there a kept driver's pool blocks ride
+; the image's extended section, which hbm_xplan lists by contiguous SPAN
+; rather than by block, so they do not spend HBX_HMAX; the DOS park leaves
+; the pool where it stands and puts the HMA back, so a kept image is simply
+; there when the trip comes home (docs/plans/B4-WAKE-PLAN.md, "kern_mega")
+%define HBM_KEEPS 1
 
 ; --- the DOS handoff's own fields (SPEC.md 96.40.1) -------------------------
 ; They sit ABOVE HS_SLAVE and BELOW HS_IVT, which the DOS stub never uses: it
@@ -293,7 +304,10 @@ MRF_SIG     equ 0x3146524D      ; 'MRF1' in the same cell: kernel/megares.inc's
 
 section .text
 ; --- resident data: the template and the title (read through DS by wm) -----
-hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hbf_paint, hbf_onkey, hbf_onclick
+hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hb_cls
+hb_cls:     dw 18, 0, hbf_paint, hbf_onkey, hbf_onclick, 0, 0, 0, hbf_onup
+                                ; ...its CLASS (SPEC.md 11.104): the release
+                                ; is a COLD offset (SPEC.md 2.6.3)
 hb_ttl:     db 'Hibernate', 0
 hb_s_ptr:   db 'HIBERNAT.PTR', 0    ; THE ONE name (SPEC.md 87.3). The two
 HB_S_EXT    equ hb_s_ptr + 9        ; files differ in three bytes, so the
@@ -371,12 +385,15 @@ section .cold
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; hb_probe - is there a hibernation to offer? (SPEC.md 87.5; kmain, after
+; hb_probe - is there a hibernation to resume? (SPEC.md 87.5; kmain_o, after
 ;            drv_boot and before the first paint)
 ; in:  nothing
 ; out: nothing; AX, DX and SI kept, BP clobbered (kmain_o holds nothing in
-;      it). A hit records the volume in [hb_vol]
-;      and posts UI_RBQ_ASK, which ui_task's first pass spends.
+;      it). A hit records the volume in [hb_vol]; with either Shift held it
+;      deletes both files and toasts, and otherwise the image is checked and
+;      RESUMED from here (kern_big, kern_emu - it does not come back) or, on
+;      kern_mega, UI_RBQ_ASK is posted for ui_task's first pass after
+;      mega_enter. A refused image has been toasted and deleted on return.
 ;
 ; The ONE root a pointer can be in - hb_pick's volume, the one a hibernate
 ; writes to - in a drv_vol_bank/back bracket (SPEC.md 51.5.2) so the machine
@@ -391,6 +408,20 @@ B3SECT                          ; IN `.boot3` (SPEC.md 2.9.15): kmain_o is its
                                 ; BLOBCALL spl_finish - it was the blob's until
                                 ; BOOT3-PLAN wave 1
 hb_probe_x:
+%ifndef KERN_MEGA
+    ; --- P1 AND P2 (HB_EARLY: kern_big, kern_emu; SPEC.md 87.5) -------------
+    ; kmain_o calls this twice: P1 before the mouse and the drivers, P2 after
+    ; drv_boot's pass 1. [hb_down] - the window's armed button, which nothing
+    ; reads until the Hibernate window opens and zeroes it (hbm_open,
+    ; hbm_kinit) - carries the state between them, so the two probes cost no
+    ; resident byte: 0 before P1, 1 DURING P1 (hbm_ask reads it: "early",
+    ; and a head it cannot judge yet is deferred rather than deleted), 3
+    ; after a P1 that did not settle it, 0 during P2 and 2 = settled.
+    cmp byte [hb_down], HBP_DONE
+    jne .go
+    retf                        ; P1 settled it: P2 has nothing to ask
+.go:
+%endif
     push ax
     push dx
     push si
@@ -412,6 +443,14 @@ hb_probe_x:
 %if KDH_NOCODE != 0xFFFF
   %error "hb_probe spells KDH_NOCODE as a decremented zero"
 %endif
+%ifndef KERN_MEGA
+    cmp byte [hb_down], 1       ; 0 (P1) -> 1 = early; 3 (P2) -> 0
+    sbb al, al
+    neg al
+    mov [hb_down], al
+    mov word [HB_S_EXT], 'PT'   ; ...and the name is the POINTER's again: a
+    mov byte [HB_S_EXT + 2], 'R' ; P1 the module refused left it stamped
+%endif                          ; 'IMG' (hbm_forget's last delete)
     call COLD_SEG:hb_pick_x     ; AL = the volume
     jc .out
     mov [hb_vol], al
@@ -423,19 +462,108 @@ hb_probe_x:
     mov si, hb_s_ptr
     mov bp, drv_find            ; (wm_cbd: kmain_o holds nothing in BP)
     call COLD_SEG:wm_cbd        ; the directory sectors themselves
+%ifndef KERN_MEGA
+    jnc .hit
+    mov al, [hb_vol]            ; NO POINTER on the BOOT volume settles it:
+    cmp al, [dsk_bootvol]       ; hb_pick takes that volume first whenever it
+    jne .back                   ; is fixed, so P2 would ask the same root
+    jmp short .done
+.hit:
+%else
     jc .back
+%endif
+    ; --- SHIFT HELD AT STARTUP SKIPS IT (SPEC.md 87.5, 26.10.5) -------------
+    ; The ROM's own read of 0040:0017, as_boot's idiom and the same gesture:
+    ; a user holding either Shift through the boot gets neither the old
+    ; session nor the autostart. A SKIP IS A RESUME FAILURE like any other -
+    ; the owner's rule: hibernation is a state convenience, not a way to save
+    ; work, and the file is room a small hard disk may not have - so both
+    ; files go, pointer first, here and without HIBER.DRV: the kernel carries
+    ; the one name and the three bytes that tell the pair apart are stamped
+    ; (hbm_nimg's shape). Nothing reads the stamp after this: the module
+    ; stamps its own name before every use.
+    mov ah, 2
+    int 0x16
+    test al, 3                  ; ...either Shift
+    jz .post
+    mov si, hb_s_ptr            ; drv_find spends SI
+    call COLD_SEG:dwf_dskw_delete
+    mov word [HB_S_EXT], 'IM'
+    mov byte [HB_S_EXT + 2], 'G'
+    call COLD_SEG:dwf_dskw_delete
+    push es                     ; (this routine's contract keeps them)
+    push cx
+    push cs
+    pop es
+    mov si, hb_s_skip
+    xor cx, cx
+    KDOOR toast_show            ; COPIED, so a `.boot3` string outlives it
+    pop cx
+    pop es
+%ifndef KERN_MEGA
+.done:
+    mov byte [hb_down], HBP_DONE    ; settled: no P2 (both files are gone, or
+%endif                              ; there were none)
+    jmp short .back
+.post:
     mov byte [ui_rebootq], UI_RBQ_ASK
 .back:
     call COLD_SEG:drvf_drv_vol_back
 .out:
+%ifndef KERN_MEGA
+    ; --- ...AND RESUME IT FROM HERE (SPEC.md 87.5, HIBER-RESUME-PLAN B1) ---
+    ; There is no question to put on a desktop any more, so nothing is gained
+    ; by building one first: the check and the resume run now, from inside
+    ; kmain_o on task 0's stack with nothing held - ui_task's step 0 context
+    ; in every respect hbm_perform asks about (it banks its own SP) - and the
+    ; first paint, autostart and a ui_task pass are never spent on a session
+    ; that is about to be overwritten. kern_mega keeps the late check: its
+    ; protected-mode images can only be judged after mega_enter (87.9).
+    ;
+    ; The post above is the hit's marker and is spent here, read and cleared
+    ; as ui_task spends one. hbm_ask answers by posting UI_RBQ_RESUME, or
+    ; refuses (a toast, both files deleted, the module dropped) and the boot
+    ; carries on exactly as a boot with no hibernation does - autostart
+    ; included, since nothing is posted any more.
+    cmp byte [ui_rebootq], UI_RBQ_ASK
+    jne .ret
+    mov al, UI_RBQ_ASK
+    call hb_spend
+    cmp byte [ui_rebootq], UI_RBQ_RESUME
+    jne .ret
+    ; THE LOADING SCREEN STOPS FIRST (SPEC.md 15.3.8): its spinner animates
+    ; from IRQ0 until spl_finish, and vid_setmode - which hbm_down's
+    ; vid_reboot is - is refused while [spl_live] stands. A frame landing in
+    ; the text page would land in the stub staged there. A refusal past this
+    ; point leaves the bar at 100% for the rest of the boot, and kmain_o's
+    ; own spl_finish is then a compare
+    B2CALL spl_finish
+    mov al, UI_RBQ_RESUME       ; ...and the resume, which returns only on a
+    call hb_spend               ; refusal (hbm_res's, 87.5)
+.ret:
+    mov al, HBP_P2              ; a P1 (still 1: early) that did not settle it
+    cmp byte [hb_down], 1       ; leaves P2 to ask - a deferral, a refusal
+    je .st                      ; (P2 then finds nothing), no fixed volume yet
+    mov al, HBP_DONE            ; ...and after P2, or once settled, nothing is
+.st:                            ; left to ask
+    mov [hb_down], al
+%endif
     pop si
     pop dx
     pop ax
     retf
+%ifndef KERN_MEGA
+hb_spend:                       ; AL = the post: cleared, then spent. A NEAR
+    mov byte [ui_rebootq], 0    ; routine of its own, not a local of the far
+                                ; hb_probe_x (drv_boot_want's reason)
+    call COLD_SEG:hbf_perform
+    ret
+%endif
+TOASTSTR hb_s_skip, 'Hibernation skipped'
 section .cold
 
 ; -----------------------------------------------------------------------------
-; drv_suspend_x - slot 0x0419's three verbs (SPEC.md 51.11): THE MACHINE, OUT
+; drv_suspend_x - a door cell's three verbs (SPEC.md 51.11): THE MACHINE, OUT
 ;                 OF MY WAY. Entered from kernel.asm's thunk under api_x, so
 ;                 ES = the caller's DS and DS = KERNEL_SEG
 ; in:  AL = 1 suspend the hardware drivers, ES:DI = a DQ_SIZE-record buffer
@@ -713,7 +841,7 @@ hbf_perform:
     ; one clears the latch on every arm it has. Unconditional because
     ; `[hb_dosseg]` is zero unless a DOS handoff is what was posted, and
     ; `ui_rebootq` holds one post at a time.
-    mov word [hb_dosseg], 0
+    and word [hb_dosseg], 0     ; (`and`, flags dead: -1)
     cmp al, UI_RBQ_ASK          ; a question that cannot be asked is not
     je .quiet                   ; worth a toast: the pointer stays for a
 .toast:                         ; boot that has the system disk in (and
@@ -764,6 +892,7 @@ modh_hdr:
     dw MOD_STAMP                ; MOD_H_STAMP
     dw modh_end                 ; MOD_H_IMG
     dw HB_NENT                  ; MOD_H_NENT
+    dw MODH_BSS                 ; MOD_H_SCR: its bss, .modhb (2.8.3) - KEPT
     dw modh_e_paint             ; HBE_PAINT
     dw modh_e_onclick           ; HBE_ONCLICK
     dw modh_e_onup              ; HBE_ONUP
@@ -1008,7 +1137,7 @@ hbm_toast:
     push cs
     pop es                      ; toast_show takes ES:SI
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     pop cx
     ret
@@ -1127,10 +1256,6 @@ hbm_btnrect:
     mov [bx], ax
     add ax, dx
     mov [bx+4], ax
-    cmp byte [hb_mode], HB_M_RESUME
-    jne .out
-    add si, hbm_s_bres - hbm_s_bhib ; the RESUME face's pair, the same
-.out:                               ; distance on from each (asserted there)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1245,15 +1370,10 @@ hbm_paint:
     mov bx, hbm_lines_busy
 .notbusy:
     push ax
-    mov al, [hb_vol]            ; the letter, patched into both faces' lines
+    mov al, [hb_vol]            ; the letter, patched into the ASK face's line
     add al, 'A'
-    mov [cs:hbm_s_r1 + HBM_R1_LTR], al
     mov [cs:hbm_s_a2 + HBM_A2_LTR], al
     pop ax
-    cmp al, HB_M_RESUME
-    jne .lines
-    mov bx, hbm_lines_res
-.lines:
     push si
 .line:
     mov si, [cs:bx]
@@ -1309,7 +1429,7 @@ hbm_win:
     push ax
     push di
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_inst_find_kind   ; DI = the record
+    KDOOR inst_find_kind                ; DI = the record
     jc .no
     mov si, [di+I_WIN]
     or si, si
@@ -1398,25 +1518,10 @@ hbm_act:
     push dx
     push si
     push di
-    cmp byte [hb_mode], HB_M_RESUME
-    je .resume
     cmp al, 2
     je .close
     call hbm_arm                ; Hibernate: check the disk, then post
     jmp short .out
-.resume:
-    cmp al, 2
-    je .discard
-    ; --- Resume: say so, and post the restore for the top of the pass -------
-    mov byte [hb_mode], HB_M_BUSY
-    call hbm_repaint
-    mov al, UI_RBQ_RESUME
-    call hbm_post               ; ...unless a restart already stands
-    jmp short .out
-.discard:
-    call hbm_vbn                   
-    call hbm_forget             ; the pointer and the image go
-    call hbm_vbk                   
 .close:
     mov byte [hb_mode], HB_M_GONE       ; BEFORE the close: app_close_win's
     mov bx, si                          ; KIND_HIBER hook drops the image on
@@ -1605,14 +1710,9 @@ hbm_forget:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 hbm_kinit:
-    push ax
-    mov byte [hb_down], 0
-    mov ax, hbf_onup            ; a COLD offset (SPEC.md 2.6.3)
-    call KERNEL_SEG:cw_wm_onmouseup
-    mov al, 1
-    call KERNEL_SEG:cw_wm_snap  ; text on cell boundaries (SPEC.md 11.94)
-    pop ax
-    ret
+    mov byte [hb_down], 0       ; (the release is hb_cls's slot, SPEC.md
+    ret                         ; 11.104, and the snap the default every
+                                ; window is born with, 11.94)
 
 ; -----------------------------------------------------------------------------
 ; hbm_open - the System menu's Hibernate... (SPEC.md 87.1): open the window
@@ -1631,9 +1731,9 @@ hbm_open:
     mov byte [hb_down], 0
 .launch:
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     jnc .out
-    call KERNEL_SEG:cw_snd_beep
+    KDOOR snd_beep
 .out:
     pop si
     pop ax
@@ -1683,9 +1783,13 @@ hbm_geom:
     mov ah, [bx+DV_UNIT]        ; the driver's handle
     mov al, [bx+DV_CLASS]
     mov [drv_blkcls], al
-    call COLD_SEG:drvf_drv_cls_svc  ; DI = the class's service table
+    push es
+    call COLD_SEG:drvf_drv_cls_svc  ; ES:DI = the class's service table, in
+    jc .nogeo                   ; place (kernel size pass 19)
+    mov bp, [es:di+DSV_GEOM]    ; == DSV_BLK, and AL = 2 is the sub-function
+.nogeo:
+    pop es                      ; (pop writes no flag)
     jc .no
-    mov bp, [di+DSV_GEOM]       ; == DSV_BLK, and AL = 2 is the sub-function
     mov al, 2
     HBGC drv_blk_call_x         ; DL = unit, CX:BX = base, SI = spt,
     jc .no                      ; DI = heads; CF = 1 not int 13h
@@ -1889,6 +1993,16 @@ hbm_wrimg:
                                 ;    memory, so the image holds what this
                                 ;    read (SPEC.md 87.4.1). Into this image,
                                 ;    so it is written with it
+%ifndef KERN_MEGA
+    in al, 0x21                 ;    ...AND THE 8259 MASKS THE IMAGE WAKES
+    mov [cs:hbm_imr], al        ;    WITH (SPEC.md 87.6 step 1, the review's
+    in al, 0xA1                 ;    hiber-14): the hardware drivers' lines
+    mov [cs:hbm_imr + 1], al    ;    are already masked by the sweep, and
+                                ;    kern_mega has banked these in hbm_xplan
+                                ;    all along. (An XT's A1h is the NMI
+                                ;    register's alias: read harmlessly here,
+                                ;    never written back there)
+%endif
     call hbm_nimg               ;    ...and the image: all of memory, one write
     xor bx, bx
     mov es, bx
@@ -2212,6 +2326,9 @@ hbm_hfree:
 hbm_sweep:
     mov word [si], 0
     CSDO mov byte [CSEG hbm_swn], 0
+%ifdef HBM_KEEPS
+    CSDO mov word [CSEG hbm_kept], 0 ; ...and nothing kept yet (51.2.5)
+%endif
     xor cx, cx
 .row:
     mov al, cl
@@ -2255,6 +2372,42 @@ hbm_sweep:
     pop cx                      ; ...which does not touch the ZF `test` set
     jz .next
 .take:
+%ifdef HBM_KEEPS
+    ; --- A DRIVER THAT SAYS IT CAN SLEEP STAYS (SPEC.md 51.2.5) -------------
+    ; Only on a hibernate's own sweep (DL = 0, both callers): OSAPI_DRV_SUSPEND
+    ; passes DRVC_NET and is today's. OS88_DRV_WAKES is bit 7 of the byte
+    ; before the dispatcher, wherever the row says the image runs (a heap
+    ; claim, or the HMA's copy at DRV_HMA_ORG); SLEEP is the driver's own
+    ; quiesce, and a refusal falls through to today's unload. Kept rows go in
+    ; the module's [hbm_kept], which the picture carries, and not in [SI]
+    or dl, dl
+    jnz .gone
+    push es
+    push si
+    les si, [bx+DRVR_DISP]      ; ES:SI = the image's dispatcher
+    test byte [es:si-PKG_DISP+DRV_H_WAKES], 0x80
+    pop si
+    pop es
+    jz .gone
+    push cx                     ; the row, the skip, the mask's word and DI:
+    push dx                     ; the driver is not ours to trust with any of
+    push si                     ; them
+    push di
+    mov al, DRVV_SLEEP
+    mov bp, [bx+DRVR_ENT]
+    call hbg_cgo
+    dw drv_call
+    pop di
+    pop si
+    pop dx
+    pop cx
+    jc .gone                    ; "unload me as before"
+    mov ax, 1
+    shl ax, cl
+    CSDO or [CSEG hbm_kept], ax
+    jmp short .next
+.gone:
+%endif
     mov ax, 1
     shl ax, cl
     or [si], ax
@@ -2295,9 +2448,67 @@ hbm_sweep:
 hbm_reload:
     push dx
     mov dx, [hb_drvmask]
+%ifdef HBM_KEEPS
+    call hbm_wakem              ; the KEPT rows first: woken, or added to DX
+%endif
     call hbm_reload_m
     pop dx
     ret
+
+%ifdef HBM_KEEPS
+; hbm_wakem - DRVV_WAKE every row hbm_sweep kept, in row order (SPEC.md 51.2.5)
+; in:  DX = rows to reload; [cs:hbm_kept] = the kept ones, SPENT here
+; out: DX |= every kept row whose WAKE refused - unloaded already, so
+;      hbm_reload_m's ordinary load is its fallback: a card gone, swapped or
+;      disabled while the machine was away comes back exactly as it did
+;      before B4, off the disk
+; clobbers: nothing else (flags)
+hbm_wakem:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    xor ax, ax
+    CSDO xchg ax, [CSEG hbm_kept]
+    xor cx, cx
+.row:
+    shr ax, 1
+    jnc .next
+    push ax
+    push cx
+    push dx
+    mov al, cl
+    call hbg_cgo                ; BX = the row
+    dw drv_row_x
+    mov al, DRVV_WAKE
+    mov bp, [bx+DRVR_ENT]
+    call hbg_cgo
+    dw drv_call
+    pop dx
+    pop cx
+    jnc .woke
+    mov al, cl                  ; NOT THE SAME CARD, OR NONE: DETACH, free,
+    call hbg_cgo                ; and the row joins the reload
+    dw drv_unload_x
+    mov ax, 1
+    shl ax, cl
+    or dx, ax
+.woke:
+    pop ax
+.next:
+    inc cx
+    or ax, ax
+    jnz .row
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; hbm_reload_m - load the rows in DX again, in row order
 ; in:  DX = the rows; out: nothing; clobbers DX
@@ -2359,9 +2570,11 @@ hbm_drvsusp:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_ask - the boot-time question (SPEC.md 87.5): validate the pointer,
-;           find the image, and open the window in HB_M_RESUME
+; hbm_ask - the boot-time check (SPEC.md 87.5): validate the pointer, find
+;           the image, and post UI_RBQ_RESUME in HB_M_RESUME - no question
 ; in:  [hb_vol] = the volume the probe found the pointer on; no lock
+; out: [ui_rebootq] = UI_RBQ_RESUME and the image kept, or a refusal: a
+;      toast, both files deleted and HB_M_GONE
 ; -----------------------------------------------------------------------------
 hbm_ask:
     call hbm_enter
@@ -2373,7 +2586,13 @@ hbm_ask:
     xor dx, dx
     mov cx, HBP_SIZE
     call COLD_SEG:dwf_dskw_read ; DX:AX = bytes
-    jc .gone
+    jnc .rd
+    cmp ax, FERR_BIG            ; A POINTER THIS KERNEL CAN NEVER READ (hiber-9):
+    je .stale                   ; kern_mega's 28 bytes met by kern_big's 18
+    jmp .gone                   ; buffer is the same refusal every boot, so it
+                                ; is forgotten; any other error (a transient
+                                ; read) leaves the pair for the next boot
+.rd:
     cmp ax, HBP_SIZE
     jne .stale
     call hbm_ptrfix_set         ; ONE description of the fixed head, written
@@ -2387,16 +2606,16 @@ hbm_ask:
     mov cx, HBP_WAKE / 2
     repe cmpsw
     pop ds                      ; ...and a pop does not touch cmpsw's ZF
-    jne .stale
+    jne .nyet
 %ifdef HMA_DRV
     mov cl, [cs:hbm_ptrbuf + HBP_PAD]   ; THE HMA POOL THE IMAGE CARRIES
     or cl, cl                   ; (SPEC.md 87.3): its table goes back over
     jz .htab                    ; this boot's tail at the wake, where nothing
     mov al, ROMF_HTAB           ; can refuse - so the tail is asked HERE,
     call far [rom_mfp]          ; before the teardown. The fixed head has
-    jc .stale                   ; already said `.cold` is in the HMA (FF)
+    jc .nyet                    ; already said `.cold` is in the HMA (FF)
     cmp cl, [cs:hbm_ptrbuf + HBP_PAD]
-    jne .stale
+    jne .nyet
 .htab:
 %endif
 %ifdef KERN_MEGA
@@ -2426,21 +2645,6 @@ hbm_ask:
     mov al, [hb_vol]
     call hbm_geom
     jc .nobios
-    call hbm_vbk                   
-    mov byte [hb_mode], HB_M_RESUME
-    ; --- ...AND WHETHER TO ASK AT ALL (docs/plans/KERN-DOS-PLAN.md 8) -------
-    ; An image written for a DOS handoff is not the user leaving the machine,
-    ; so there is no question to put: the session is coming back and the only
-    ; thing the user did was run a program. Everything above still runs - the
-    ; fixed head, the image's size, the geometry - because a stale or
-    ; unreadable pointer is exactly as fatal either way.
-    cmp byte [cs:hbm_ptrbuf + HBP_DOS], 0
-    je .askit
-    call hbm_dosbda             ; the exit code, out of the BDA
-    mov al, UI_RBQ_RESUME
-    call hbm_post               ; ...unless a restart already stands
-    jmp short .out
-.askit:
 %ifdef KERN_MEGA
     ; A REFUSAL THE LAST BOOT COULD NOT ACT ON (KERN-MEGA-PLAN 14.158): the
     ; streaming stub (megares.inc) checks the extended section's sum after
@@ -2461,14 +2665,34 @@ hbm_ask:
     jmp short .drop
 .ask2:
 %endif
-    mov byte [hb_down], 0
-    call hbm_kbdrain            ; a key held at the hibernate's own prompt
-                                ; repeats through int 19h into this boot, and
-                                ; ui_task's next step hands it to the front
-                                ; window - where Esc is Discard
-    mov al, KIND_HIBER
-    call KERNEL_SEG:cw_app_launch
+    call hbm_vbk
+    ; --- NO QUESTION (SPEC.md 87.5): A VALID IMAGE IS RESUMED ---------------
+    ; The Resume/Discard window went (docs/plans/HIBER-RESUME-PLAN.md (A)):
+    ; somebody restarting a machine with a hibernation on it means to resume
+    ; it, and the one reason to say no - an image that cannot be got out of -
+    ; is Shift held at startup, which hb_probe_x reads before this module is
+    ; even loaded. HB_M_RESUME is the MODE that keeps this image loaded until
+    ; hbm_res spends the post: hbm_ptrbuf carries the wake address across.
+    ; An image written for a DOS handoff reads the program's exit code too.
+    mov byte [hb_mode], HB_M_RESUME
+    cmp byte [cs:hbm_ptrbuf + HBP_DOS], 0
+    je .post
+    call hbm_dosbda             ; the exit code, out of the BDA
+.post:
+    mov al, UI_RBQ_RESUME
+    call hbm_post               ; ...unless a restart already stands
     jmp short .out
+.nyet:
+%ifndef KERN_MEGA
+    ; --- "NOT YET" (SPEC.md 87.5): the EARLY probe, before the drivers ------
+    ; A head that does not match at P1 may match at P2: XMEM.DRV has not put
+    ; `.cold` in the HMA yet, and SYSTEM.CFG's adapter switch has not run -
+    ; both are drv_boot's pass 1. So it is DEFERRED - no toast, nothing
+    ; deleted, the image dropped - and P2 asks again and decides. A P1 that
+    ; deleted an HMA image here would be silent data loss
+    cmp byte [hb_down], 1       ; 1 = hb_probe_x's P1
+    je .gone
+%endif
 .stale:
     mov si, hbm_s_stale
     jmp short .drop
@@ -2669,13 +2893,12 @@ hbm_res:
     call hbm_cb         
     mov word [hb_xseg], 0
 .fail:
-    call hbm_vbk                   
-    mov byte [hb_mode], HB_M_RESUME
-    mov si, hbm_s_lost
-    call hbm_toast
-    call hbm_winback
-    mov sp, [hb_sp]
-    ret
+    mov si, hbm_s_lost          ; A RESUME THAT CANNOT BE PUT BACK IS SPENT
+    jmp hbm_ask.drop            ; (SPEC.md 87.5): toast, both files deleted,
+                                ; HB_M_GONE so the thunk drops this image -
+                                ; there is no window to go back to (hiber-8:
+                                ; RESUME and a winback pinned the module for
+                                ; the session)
 
 ; =============================================================================
 ; THE DOS HANDOFF (SPEC.md 96.40, docs/plans/KERN-DOS-PLAN.md §7)
@@ -3967,19 +4190,57 @@ hbm_xplan:
     mov [mega_hbxl], ax
     mov word [mega_hbxl + 2], 0
     add di, MPK_CPYSZ           ; so KERNEL.SYS's bytes, as a boot makes them
+    ; --- THE POOL'S BLOCKS, ONE RUN PER CONTIGUOUS SPAN (SPEC.md 51.2.5) ----
+    ; Every block the pool has given out, the kernel's own among them (track
+    ; 1's modules and caches: hbm_wake flushes the caches), the HMA's too
+    ; since it is pool (MC4) - but a run is a SPAN, not a block: a block that
+    ; another block ends exactly at is the tail of that block's run, so only a
+    ; span's HEAD starts one, and the run grows block by block until nothing
+    ; starts where it ends. The table is in slot order, not address order,
+    ; so both questions walk it whole: ~96 x 96 reads, milliseconds on a 286,
+    ; once a hibernate. It is what lets a driver kept across the trip (B4, a
+    ; kept ETHER.DRV's image and socket pool) ride the section without
+    ; spending HBX_HMAX: a compacted pool is a handful of spans whatever its
+    ; block count. The stub and hbm_xruns take any whole-KB run in the pool
     mov si, mx_tab
 .mx:
-    push ds                     ; the entry, through DS for two reads: ES is
-    mov ax, MEGA_SEL_MXT        ; the list's, and the pool's table is the
-    mov ds, ax                  ; tables' tail (kern_mega size pass 2)
-    mov ax, [si+MX_KB]
-    mov bx, [si+MX_OFF]
+    push ds                     ; the entry, through DS: ES is the list's,
+    mov ax, MEGA_SEL_MXT        ; and the pool's table is the tables' tail
+    mov ds, ax                  ; (kern_mega size pass 2)
+    mov ax, [si+MX_KB]          ; AX = the run's KB so far
+    or ax, ax
+    jz .skip                    ; a free entry
+    mov bx, [si+MX_OFF]         ; BX = where it starts, KB from the pool
+    push si
+    mov si, mx_tab              ; --- a HEAD? nothing ends where it starts --
+.hd:
+    mov cx, [si+MX_KB]
+    jcxz .hn
+    add cx, [si+MX_OFF]
+    cmp cx, bx
+    je .tail                    ; ...another block's run carries this one
+.hn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .hd
+.grow:                          ; --- ...then every block that starts where
+    mov dx, bx                  ; the run so far ends, until none does
+    add dx, ax
+    mov si, mx_tab
+.gl:
+    cmp word [si+MX_KB], 0
+    je .gn
+    cmp [si+MX_OFF], dx
+    jne .gn
+    add ax, [si+MX_KB]
+    jmp short .grow
+.gn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .gl
+    pop si
     pop ds
-                                ; every block the pool has given out, the
-    or ax, ax                   ; kernel's own among them (track 1's modules
-    jz .next                    ; and caches: hbm_wake flushes the caches),
-                                ; the HMA's too since it is pool (MC4)
-    mov dx, ax
+    mov dx, ax                  ; the run: AX KB from BX KB
     mov cl, 10
     shl ax, cl
     mov cl, 6
@@ -3998,6 +4259,11 @@ hbm_xplan:
     mov [es:di+4], ax
     mov [es:di+6], dx
     add di, MPK_CPYSZ
+    jmp short .next
+.tail:
+    pop si
+.skip:
+    pop ds
 .next:
     add si, MX_BLKSZ
     cmp si, mx_tab_end
@@ -4492,17 +4758,10 @@ hbm_xres:
 .bad:
     mov si, hbm_s_lost
 .refuse:
-    push si
     mov dx, [hb_xseg]
     call hbm_xfree
     mov word [hb_xseg], 0
-    call hbm_vbk
-    mov byte [hb_mode], HB_M_RESUME
-    pop si
-    call hbm_toast
-    call hbm_winback
-    mov sp, [hb_sp]
-    ret
+    jmp hbm_ask.drop            ; hbm_res's .fail: spent, GONE (hiber-8)
 .rd:                            ; HBX_CHUNK at file offset DX:AX into ES:0.
     push ax                     ; CF = 1 unless all of it came
     push dx
@@ -4608,6 +4867,23 @@ hbm_wake:
     in al, 0x61
     and al, 0xFC
     out 0x61, al
+%ifndef KERN_MEGA
+    ; ...AND THE IMAGE'S 8259 MASKS (hiber-14), which hbm_wrimg banked after
+    ; its sweep. The stub put back the masks of whoever STAGED it - the fresh
+    ; boot's on the reboot route, kern_dos's on the live one - and since the
+    ; early probe (SPEC.md 87.5) a fresh boot that resumes has opened neither
+    ; the mouse's line nor a driver's: so a line one of the image's KEPT
+    ; drivers owns would stay shut. One wake model on every route, as
+    ; kern_mega's mega_hbwake has: the image's masks, then step 3d and the
+    ; reload open what they own
+    mov al, [cs:hbm_imr]
+    out 0x21, al
+    cmp byte [cpu_tier], CPU_8086   ; an XT has no second 8259 (hbm_handover)
+    je .imr1
+    mov al, [cs:hbm_imr + 1]
+    out 0xA1, al
+.imr1:
+%endif
     sti                         ; the IVT is the image's; nobody switches
     call hbm_stageseg           ; 2. the clock the boot just read
     mov si, HS_CLK
@@ -5117,9 +5393,13 @@ hbm_wake:
     call hbm_kd                
     mov bp, dock_force
     call hbm_kd                
-    call KERNEL_SEG:cw_wm_paint_all
-    ; 5. the two files are spent, and the drivers come back -----------------
-    call hbm_forget
+    ; 4b. THE DRIVERS, BEFORE THE PAINT (SPEC.md 87.6 step 4b, 51.2.5). The
+    ; kept ones are WOKEN here - milliseconds each, and the desktop the
+    ; paint below shows is then one whose card, mouse and Web drive are
+    ; already back, the Wire's icon included (its paint verb is ETHER.DRV's
+    ; own, and a reloaded ETHER re-registered it after the paint: a second
+    ; paint). A wake that refuses joins the rows to LOAD, which is disk work
+    ; and waits for the paint, behind the busy pointer.
     ; **AND A SUSPEND'S ROWS COME BACK THROUGH THIS DOOR TOO** (SPEC.md
     ; 51.11.5). `[hb_drvmask]` is what `hbm_wrimg`'s sweep found still MOUNTED when it
     ; swept, so a row `OSAPI_DRV_SUSPEND` had ALREADY unmounted is not in it -
@@ -5154,6 +5434,22 @@ hbm_wake:
     mov dx, [hb_drvmask]
     or dx, [hb_susp]
     mov word [hb_susp], 0
+%ifdef HBM_KEEPS
+    call hbm_wakem              ; the KEPT rows woken, a refusal joining DX
+%endif
+    push dx
+    KDOOR wm_paint_all
+    ; 5. the busy pointer, then the two files spent and the drivers loaded.
+    ; **THE CLOCK FROM THE FIRST FRAME** (SPEC.md 87.6 step 5): from here to
+    ; step 6's gfx_unlock the machine takes no input - the deletes and every
+    ; reload are disk work with the lock held - and a desktop that looks
+    ; ready and then ignores the user for seconds was the DOS return's whole
+    ; complaint. gfx_unlock takes it off (SPEC.md 7.5), so nothing here has to
+    ; - and the reload's own file reads find it worn (cur_busy_on.wornh)
+    mov bp, cur_busy_on
+    call hbm_kd
+    call hbm_forget
+    pop dx
     call hbm_reload_m
     ; 5b. ...and the DOS program's exit code, to the DOS.O88 that asked ---
     ; **THIS IS THE ONLY THING THE RETURN ADDS TO THE WAKE**
@@ -5678,27 +5974,17 @@ hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
 
 hbm_lines_ask:  dw hbm_s_a1, hbm_s_a2, hbm_s_a3, 0
 hbm_lines_busy: dw hbm_s_b1, 0
-hbm_lines_res:  dw hbm_s_r1, hbm_s_r2, hbm_s_r3, 0
 
 hbm_s_a1:   db 'Save everything in memory to', 0
 hbm_s_a2:   db 'C:\HIBERNAT.IMG and stop the machine?'
 HBM_A2_LTR  equ 0
             db 0
-hbm_s_a3:   db 'Restarting offers to resume it.', 0
+hbm_s_a3:   db 'Restarting resumes it.', 0
 hbm_s_b1:   db 'Hibernating...', 0
-hbm_s_r1:   db 'A hibernation file is on drive '
-HBM_R1_LTR  equ $ - hbm_s_r1
-            db 'C:.', 0        ; 34 cells: the content is 39 wide
-hbm_s_r2:   db 'Resume where you left off, or', 0
-hbm_s_r3:   db 'discard it and start normally?', 0
-
-hbm_s_bhib: db 'Hibernate', 0      ; the ASK face's two labels, then the
-hbm_s_bcan: db 'Cancel', 0, 0, 0, 0 ; RESUME face's two at one distance on
-hbm_s_bres: db 'Resume', 0, 0, 0, 0 ; from each - hbm_btnrect adds it rather
-hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
-%if hbm_s_bdis - hbm_s_bcan != hbm_s_bres - hbm_s_bhib
-  %error "hbm_btnrect: each RESUME label is one fixed distance past its ASK label"
-%endif
+                                ; (the RESUME face - 'Resume'/'Discard' - went
+                                ; with the boot-time question, SPEC.md 87.1)
+hbm_s_bhib: db 'Hibernate', 0      ; the ASK face's two labels
+hbm_s_bcan: db 'Cancel', 0
 
 TOASTSTR hbm_s_nobios, 'Needs a BIOS hard disk'
 TOASTSTR hbm_s_noroom, 'Not enough room on disk'
@@ -5761,6 +6047,18 @@ hbm_swn:        resb 1          ; hbm_sweep's record count, across the ask
 hbm_spm:        resb 1          ; OSAPI_DRV_SUSPEND's class mask (SPEC.md
                                 ; 51.11.4), banked by hbm_drvsusp off the
                                 ; slot's own BL - the kernel keeps nothing
+%ifdef HBM_KEEPS
+hbm_kept:       resw 1          ; the rows hbm_sweep put to SLEEP and kept
+                                ; (SPEC.md 51.2.5): written before the
+                                ; picture, read by the restored hbm_wake or
+                                ; by a failed write's unwind - hbm_imr's
+                                ; reasoning. hbm_sweep zeroes it first
+%endif
+%ifndef KERN_MEGA
+hbm_imr:        resb 2          ; the 8259 masks the image wakes with (hiber-14):
+                                ; banked by hbm_wrimg after the sweep, read by
+                                ; the restored hbm_wake - hbm_hseg's reasoning
+%endif
 %ifdef HMA_DRV
 hbm_hseg:       resw 1          ; the HMA pool's copy (hbm_hsave), 0 = none:
                                 ; written before the picture, so the restored

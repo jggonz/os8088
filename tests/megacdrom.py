@@ -75,7 +75,7 @@ import os88ui                                                 # noqa: E402
 
 CD_ROW = 7                      # drv_tab's CDROM.DRV row (kern_big's, and
 DRVR_SIZE, DRVR_SEG = 16, 2     #   so kern_mega's)
-WIN_SIZE, W_SEG, W_FLAGS = 74, 22, 0
+WIN_SIZE, W_SEG, W_FLAGS = 50, 18, 0
 
 
 def _mega_equates():

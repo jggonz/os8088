@@ -45,8 +45,11 @@ dos_k_write:
     call OSAPI_FILE_WRITE
     ret
 
-dos_k_append:
-    call OSAPI_FILE_APPEND
+dos_k_append:                       ; OSAPI_FILE_WRITE_AT at the file's END
+    push dx                         ; (SPEC.md 18.4.7.3): the cell
+    mov dx, -1                      ; OSAPI_FILE_APPEND was, withdrawn for
+    call OSAPI_FILE_WRITE_AT        ; it at the flag day. DX kept, as that
+    pop dx                          ; cell kept it
     ret
 
 dos_k_delete:
@@ -129,8 +132,7 @@ dos_k_wseq:                         ; SPEC.md 18.4.9 ...
     cmp ax, FERR_NAME               ; ...and on the small kernel, which has
     jne .no                         ; none, APPEND - whose refusals are the
     jcxz .none                      ; same - and a close that is nothing
-    call OSAPI_FILE_APPEND
-    ret
+    jmp dos_k_append
 .none:
     xor ax, ax                      ; CF=0
 .ok:

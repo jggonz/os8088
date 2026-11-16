@@ -26,12 +26,12 @@ AFTERHRS.MP3 on a B: floppy, and opens the MP3 from B:'s listing:
         1MB; the track plays on the card (MD_LIVE, the stream open,
         granules decoding and frames counting up) with its gulps COPIED out
         of the hold; Stop.
-  conv  OSAPI_MEM_HUGE made to refuse (its cell's dispatch word pointed at
+  conv  OSAPI_MEM_HUGE made to refuse (its rd_tab word pointed at
         mod_gone, the kernel's `stc / retf`) and OSAPI_XMEM_CAPS to answer
-        0 (its word at xm_caps.none) for the open, both put back once the
-        hold is taken - the words, never the code: CAPS_WORD, HUGE_WORD -
-        so the hold is the fallback CONVENTIONAL claim - 30 KB,
-        OS88_HIGHMEM, so a pool block above 1MB, read and served through
+        0 (xm_svc's CAPS word at a `.mega` `xor ax, ax / ret`) for the
+        open, both put back once the hold is taken - the words, never the
+        code: CAPS_WORD, HUGE_WORD - so the hold is the fallback
+        CONVENTIONAL claim - 30 KB, OS88_HIGHMEM, so a pool block above 1MB, read and served through
         x3h_at's window, which must be based inside it. Then Stop, XT STANDARD by Q, Decode First (D) onto
         C:: while it converts, the stage [x3c_sseg] is an LDT selector based
         exactly x3_lasz + 2,560 bytes into the look-ahead claim, above 1MB;
@@ -88,31 +88,59 @@ MD_IDLE, MD_CHECK, MD_LIVE, MD_FILE, MD_SPK, MD_CHOOSE, MD_CONV, MD_STEP, \
 Q_XTSTD = 4
 X3HK_XMS, X3HK_CONV, X3HK_HUGE = 1, 2, 3
 X3_PCMRES = 2560
-# OSAPI_XMEM_CAPS's cell, KERNEL_SEG:015Ah - at its physical place, the
-# kernel's code being at 0060:0 in protected mode as in real mode. It is a
-# rare cell, `push bp / call api_rs / dw xm_caps`, and the leg points its
-# DISPATCH WORD (+4) at xm_caps.none - the kernel's own "no pool" answer
-# (AX = 0, DX:CX = 0, BL = every block entry free) - and puts it back.
-#
-# THE WORD AND NEVER THE CODE: Bochs's decoded-instruction cache does not
+# THE WORDS AND NEVER THE CODE: Bochs's decoded-instruction cache does not
 # see a debugger `setpmem`, so code patched in and then restored keeps
-# EXECUTING the patch. This leg once wrote `xor ax, ax / retf` over the
-# cell's first three bytes, and the restored cell went on running a stale
-# two-byte `xor ax, ax` where the memory said `push bp`, then decoded the
-# rest of the cell from its third byte - so the second call (the Decode
-# First's x3h_begin) ran without its `push bp`, and api_rs's `retf` took
-# the caller's banked BX as its CS: `kern_mega FAULT 0D err 001C at
-# 0060:055A`. Which bytes followed decided whether it faulted, so it came
-# and went with api_rs's address. The dispatch word is DATA - api_rs reads
-# it through CS with `mov bp, [cs:bp]` on every call - so a debugger write
-# to it is seen at once
-CAPS_CELL = 0x600 + 0x15A
-CAPS_WORD = CAPS_CELL + 4
-# OSAPI_MEM_HUGE's cell, KERNEL_SEG:04C5h, the same shape (`push bp / call
-# api_rxc / dw mmf_osapi_mem_huge`, a .cold body far-called): its word
-# pointed at mod_gone, .cold's own `stc / retf`, refuses every claim
-HUGE_CELL = 0x600 + 0x4C5
-HUGE_WORD = HUGE_CELL + 4
+# EXECUTING the patch. This leg once wrote `xor ax, ax / retf` over
+# OSAPI_XMEM_CAPS's cell's first three bytes, and the restored cell went on
+# running a stale two-byte `xor ax, ax` where the memory said `push bp`, then
+# decoded the rest of the cell from its third byte - `kern_mega FAULT 0D err
+# 001C at 0060:055A`, coming and going with api_rs's address. So each poke is
+# a DISPATCH WORD the kernel reads as data on every call:
+#
+# OSAPI_XMEM_CAPS is a hot XCELL since T5 (kernel size pass 19, SPEC.md
+# 20.3.4) - `push bp / mov bp, xm_caps / jmp api_x`, its routine an
+# IMMEDIATE, which is code. Its data word is one call further in: xm_caps
+# reaches kern_mega's pool through [xm_svc + XMV_CAPS] (mx_caps, a `.mega`
+# near routine mega_bpcall calls), and the leg points THAT at a `.mega`
+# `xor ax, ax / ret` - AX = 0, "the pool can hand out nothing", which is the
+# one answer x3hold reads - and puts it back.
+#
+# OSAPI_MEM_HUGE is a DOOR cell since T5: the door reads its routine out of
+# rd_tab at RD_P + its published index (`mov bp, [cs:bx+rd_tab]`, an RCX
+# entry far-called through api_far), and the leg points that word at
+# mod_gone, .cold's own `stc / retf`, which refuses every claim.
+XMV_CAPS = 0                                   # kernel/xmabi.inc
+
+
+def mega_words(box):
+    """{caps, mx_caps, zero, huge, huge_body}: the linear addresses of the
+    two dispatch words (`caps`, `huge`), the near offsets each holds when the
+    kernel is untouched (`mx_caps` in `.mega`, `huge_body` the .cold offset
+    of mmf_osapi_mem_huge), and the `.mega` `xor ax, ax / ret` the CAPS word
+    is pointed at - off the map of the tree that built the disk."""
+    path = os.path.join(box.build or os.path.join(ROOT, "build"), "megak",
+                        "kernel.map")
+    off, sect, equ = os88sym._parse_map(path)
+    full = open(os.path.join(os.path.dirname(path), "kernel-full.bin"),
+                "rb").read()
+    real = {}                                  # .mega labels: virtual -> real
+    lines = open(path).read().split("\n")
+    at = [i for i, l in enumerate(lines)
+          if l.startswith("---- Section .mega")][-1]
+    for l in lines[at + 3:]:
+        if l.startswith("----"):
+            break
+        p = l.split()
+        if len(p) == 3:
+            real[int(p[1], 16)] = int(p[0], 16)
+    zero = min(v for v, r in real.items()
+               if full[r:r + 3] in (b"\x31\xc0\xc3", b"\x33\xc0\xc3"))
+    return {"caps": box.sym("xm_svc") + XMV_CAPS, "mx_caps": off["mx_caps"],
+            "zero": zero,
+            "huge": box.sym("rd_tab") + 2 * (equ["RD_P"] + equ["rdp_MEM_HUGE"]),
+            "huge_body": off["mmf_osapi_mem_huge"]}
+
+
 ROW0_Y, ROW_X, ROW_H = 123, 170, 16            # a Disk window's rows
 # THE PLAY LEG'S CPU. Auto's ladder (x3eng.inc x3l_run) MEASURES each rung's
 # decode in audio seconds a guest second and plays live only on one that
@@ -296,23 +324,21 @@ def leg_conv(out):
     box, d = boot(leg, out, MP3)
     cell = hcell = None
     try:
-        body = box.sym("xm_caps") - 0x600
-        none = box.sym("xm_caps.none") - 0x600
-        got = box.read(CAPS_CELL, 6)
-        if not want(got[:2] == b"\x55\xe8" and
-                    struct.unpack_from("<H", got, 4)[0] == body,
-                    "%s: OSAPI_XMEM_CAPS's cell where the API table puts "
-                    "it, dispatching to xm_caps at %04X (%s)"
-                    % (leg, body, got.hex())):
-            raise RuntimeError("no OSAPI_XMEM_CAPS cell to point")
-        cell = got[4:6]
-        hg = box.read(HUGE_CELL, 6)
-        if not want(hg[:2] == b"\x55\xe8", "%s: OSAPI_MEM_HUGE's cell a "
-                    "rare cell (%s)" % (leg, hg.hex())):
-            raise RuntimeError("no OSAPI_MEM_HUGE cell to point")
-        hcell = struct.unpack_from("<H", hg, 4)[0]
+        mw = mega_words(box)
+        CAPS_WORD, HUGE_WORD, body = mw["caps"], mw["huge"], mw["mx_caps"]
+        got = box.read(CAPS_WORD, 2)
+        if not want(struct.unpack("<H", got)[0] == body,
+                    "%s: xm_svc's CAPS word dispatching to mx_caps at %04X "
+                    "(%s)" % (leg, body, got.hex())):
+            raise RuntimeError("no OSAPI_XMEM_CAPS word to point")
+        cell = got
+        hcell = struct.unpack("<H", box.read(HUGE_WORD, 2))[0]
+        if not want(hcell == mw["huge_body"], "%s: OSAPI_MEM_HUGE's rd_tab "
+                    "word dispatching to mmf_osapi_mem_huge at %04X (%04X)"
+                    % (leg, mw["huge_body"], hcell)):
+            raise RuntimeError("no OSAPI_MEM_HUGE word to point")
         gone = hcell + box.sym("mod_gone") - box.sym("mmf_osapi_mem_huge")
-        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, none),
+        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, mw["zero"]),
                  "setpmem 0x%x 2 0x%x" % (HUGE_WORD, gone)])
         open_mp3(box)
         x = X3(box)

@@ -84,6 +84,33 @@ class Client(object):
                 continue
             return msg
 
+    def burst(self, lines):
+        """Several HMP command lines PIPELINED: every request in one write,
+        then their answers, in order. QEMU's monitor queues the requests and
+        runs them back to back in its own main loop, so the gap between two
+        of them is QEMU's and not this process's - a row on a loaded box can
+        be descheduled for half a second between two round trips, and four
+        mouse edges a round trip apiece then left a double-click's two
+        presses more than DBL_TICKS apart (tests/os88qemu.py
+        mouse_dblclick). Answers the list of replies; an error raises."""
+        f = self.f
+        f.write("".join(json.dumps({"execute": "human-monitor-command",
+                                    "arguments": {"command-line": c}}) + "\n"
+                        for c in lines))
+        f.flush()
+        outs = []
+        while len(outs) < len(lines):
+            line = f.readline()
+            if not line:
+                raise RuntimeError("QMP connection closed")
+            msg = json.loads(line)
+            if "event" in msg:
+                continue
+            if "error" in msg:
+                raise RuntimeError(msg["error"])
+            outs.append(msg.get("return", ""))
+        return outs
+
     def close(self):
         try:
             self.f.close()

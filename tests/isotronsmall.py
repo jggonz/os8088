@@ -16,8 +16,8 @@ different way for the floor machine to fail:
      and the package would have to go in $(SMALLOMIT_GAMES).
   B  IT REFUSES ITSELF BEFORE ANY CLAIM.  `it_nomem` = 1 and neither the
      canvas (`it_cseg`, 63 KB) nor the work claim (`it_seg`, 30 KB) is held -
-     and, traced at the two API cells across the launch, the package called
-     `OSAPI_MEM_AVAIL` and NEVER `OSAPI_MEM_CLAIM`: it asked before claiming,
+     and, traced at the door across the launch, the package called
+     `OSAPI_MEM_P` with MEMP_AVAIL and NEVER a claim verb: it asked before claiming,
      so the disk caches were not shed for nothing. (Holding no claim alone
      would be just as true of a package that claimed, was refused and shed
      them.)
@@ -81,18 +81,24 @@ MACHINE = "os8088_5150_cga_128k"
 CANVKB, CLAIMKB = 63, 30           # SPEC.md 108.8's two claims, in KB
 
 
-def _api_cell(name):
-    """An OSAPI cell's linear address, off the SDK's own `%define` (a far
-    call to KERNEL_SEG:off lands there whoever makes it)."""
-    import re
-    txt = open(os.path.join(ROOT, "apps", "os88api.inc"), encoding="utf-8").read()
-    seg = int(re.search(r"^KERNEL_SEG\s+equ\s+(0x[0-9A-Fa-f]+)", txt, re.M).group(1), 16)
-    off = int(re.search(r"^%%define\s+%s\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)" % name, txt,
-                        re.M).group(1), 16)
-    return (seg << 4) + off
+# ONE cell since the flag day (kernel size pass 19): the KB doors this row
+# traced were withdrawn for OSAPI_MEM_P (SPEC.md 50.3), which isoTron reaches
+# in paragraphs since kernel size pass 19 (kbpara) - so a hit is a CLAIM or an
+# ASK by its verb, BL (MEMP_CONV, 80h, masked off: a verb BIT that keeps a
+# claim conventional, not a verb). And OSAPI_MEM_P is a DOOR cell since T5
+# (SPEC.md 20.3.4): a call is `int 81h / db <index>`, no cell address to
+# break on - so the trace is at the door's entry, where the stack holds the
+# int frame (IP, CS, FLAGS), and a hit is MEM_P's when the byte at the
+# caller's CS:IP is the SDK's index, the kernel's rdp_MEM_P. BL is the verb
+# there: the door banks BX before it reads its index.
+def memp_door():
+    """(the door's linear entry, OSAPI_MEM_P's published index)."""
+    return (os88sym.linear("os88_door", DEFS),
+            os88sym.equates(DEFS)["rdp_MEM_P"])
 
 
-CLAIM_AT, AVAIL_AT = _api_cell("OSAPI_MEM_CLAIM"), _api_cell("OSAPI_MEM_AVAIL")
+MEMP_ASK = 5                       # MEMP_AVAIL; 0..3 are the claim verbs
+MEMP_CONV = 0x80                   # a verb bit (SPEC.md 50.3.7), not the verb
 MEM_MAX_SMALL = 16                 # kernel/memory.inc's MEM_MAX under KERN_SMALL
 MEM_PG_MIN, MEM_PG_MAX = 0xFB, 0xFE   # a cache's owner high byte (memory.inc)
 
@@ -142,15 +148,18 @@ def main():
         ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         # --- A: the loader places it ---------------------------------------
-        # the two API cells traced across the launch, each hit with the CS
-        # of its far call's return address: the package's own calls are the
-        # ones from its segment, whoever else asks
+        # the door traced across the launch, each hit with the CS of its
+        # int frame and the index byte after the `int`: the package's own
+        # MEM_P calls are the ones from its segment, whoever else asks
+        door_at, memp_ix = memp_door()
+
         def caller(mm, rec):
             r = rec.get("regs") or {}
             f = mm.read(((r.get("ss", 0) << 4) + r.get("sp", 0)) & 0xFFFFF, 4)
-            return _u16(f, 2)
+            ip, cs = _u16(f, 0), _u16(f, 2)
+            return cs, mm.read(((cs << 4) + ip) & 0xFFFFF, 1)[0]
         try:
-            with M.bp_trace(m, CLAIM_AT, AVAIL_AT, regs=True, on_hit=caller,
+            with M.bp_trace(m, door_at, regs=True, on_hit=caller,
                             cap=400) as tr:
                 ui.path(PKG)
                 g = L.Game(ui)
@@ -162,14 +171,16 @@ def main():
             return
         check(True, "A: the loader places the package", "(segment 0x%04X)" % g.seg)
         # --- B: refused before any claim -----------------------------------
-        mine = [h for h in tr.hits if h.get("hit") == g.seg]
-        asks = sum(1 for h in mine if h["addr"] == AVAIL_AT)
-        claims = sum(1 for h in mine if h["addr"] == CLAIM_AT)
+        mine = [h for h in tr.hits if h.get("hit") == (g.seg, memp_ix)]
+        verb = [((h.get("regs") or {}).get("bx", 0) & 0xFF & ~MEMP_CONV)
+                for h in mine]
+        asks = sum(1 for v in verb if v == MEMP_ASK)
+        claims = sum(1 for v in verb if v < 4)     # CLAIM, _HI, | MEMP_CPU
         check(g.b("it_nomem") == 1 and g.w("it_cseg") == 0 and g.w("it_seg") == 0
               and asks >= 1 and claims == 0 and not tr.overflowed,
               "B: it ASKS, refuses itself and never claims",
               "(it_nomem %d, it_cseg %04X, it_seg %04X; from its segment %d "
-              "OSAPI_MEM_AVAIL, %d OSAPI_MEM_CLAIM)"
+              "MEMP_AVAIL, %d MEMP_CLAIM)"
               % (g.b("it_nomem"), g.w("it_cseg"), g.w("it_seg"), asks, claims))
         # --- C: the sentence ------------------------------------------------
         raw = m.read(g.a("it_msgbuf"), 96).split(b"\0")[0].decode("latin-1")

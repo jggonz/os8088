@@ -260,6 +260,9 @@ class Q(object):
     def hmp(self, *cmds):
         return xmcheck.qmp(self.sock, *cmds)
 
+    def hmp_burst(self, lines):
+        return xmcheck.qmp_burst(self.sock, lines)
+
     def read(self, linear, n):
         return bytes(xmcheck.read_bytes(self.sock, linear, n))
 
@@ -277,7 +280,7 @@ def force_bios(tmp, sysimg):
     b = os.path.join(tmp, "xmem.bin")
     d = os.path.join(tmp, "XMEM.DRV")
     subprocess.run(["nasm", "-f", "bin", "-w+error", "-DXM_FORCE_BIOS",
-                    "-I", "drivers/", "-I", "apps/", "-o", b,
+                    "-I", "drivers/", "-I", "apps/", "-I", "kernel/", "-o", b,
                     "drivers/xmem/xmem.asm"], check=True)
     subprocess.run([sys.executable, "tools/os88drv.py", b, "-o", d],
                    check=True, capture_output=True)

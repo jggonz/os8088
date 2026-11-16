@@ -49,8 +49,9 @@ mh_entry:
     call OSAPI_XMEM_CAPS
     call mh_hex4
     call mh_nl
-    mov ax, 1                       ; --- a claim from the entry proc ------
-    call OSAPI_MEM_CLAIM
+    mov ax, 1 * 64                       ; --- a claim from the entry proc ------
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov cl, 1
     jc .no
     mov es, dx
@@ -67,8 +68,9 @@ mh_entry:
     call mh_say
     call mh_nl
     mov bp, dx                      ; --- REGROW: in the pool, DX kept ------
-    mov ax, 8
-    call OSAPI_MEM_REGROW
+    mov ax, 8 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     mov cl, 0x10
     jc .no
     mov cl, 0x11
@@ -81,8 +83,9 @@ mh_entry:
     cmp word [es:1022], 0xA5A5
     jne .no
     mov word [es:8190], 0x7E7E      ; the new last word
-    mov ax, 80                      ; --- ...past 64KB: MOVED DOWN ----------
-    call OSAPI_MEM_REGROW
+    mov ax, 80 * 64                      ; --- ...past 64KB: MOVED DOWN ----------
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     mov cl, 0x13
     jc .no
     mov es, dx
@@ -105,6 +108,10 @@ mh_entry:
     call OSAPI_MEM_FREE
     mov cl, 3
     jc .no
+    xor bx, bx                      ; THE ASK READS BX (64KB windows): the
+                                    ; REGROW above left BL = MEMP_REGROW, and
+                                    ; BX = 4 is MEMH_REGROW (kernel size pass
+                                    ; 19, clobber.md)
     mov ax, 200                     ; --- OSAPI_MEM_HUGE: 200KB, four pieces
     call OSAPI_MEM_HUGE             ; walked by the step it answers (KERN-
     mov [mh_hstep], cx              ; MEGA-PLAN 14.1 answers 6, 7)
@@ -158,6 +165,7 @@ mh_entry:
     call OSAPI_MEM_FREE
     mov cl, 0x32
     jc .no
+    xor bx, bx                      ; (BX read again: a bridge answers in it)
     mov ax, 200                     ; ...and the FREE gave the whole run back:
     call OSAPI_MEM_HUGE             ; the same claim again lands on the same
     mov cl, 0x33                    ; first selector, which it cannot if the
@@ -167,8 +175,9 @@ mh_entry:
     call OSAPI_MEM_FREE
     mov cl, 0x34
     jc .no
-    mov ax, 8                       ; ...and one LEFT HELD: the teardown's
-    call OSAPI_MEM_CLAIM
+    mov ax, 8 * 64                       ; ...and one LEFT HELD: the teardown's
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov cl, 9
     jc .no
     push dx                         ; --- a file into that claim -----------
@@ -208,8 +217,6 @@ mh_entry:
     jc .no
     OS88_REGION_MOVABLE
     mov [mh_win], bx
-    mov ax, mh_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 9
     call OSAPI_WM_TIMER
     clc
@@ -327,7 +334,9 @@ mh_hex2:
 
 mh_tpl:
     dw 8, 300, 200, 40
-    dw mh_ttl, mh_paint, 0, 0
+    dw mh_ttl, mh_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mh_cls, 0, PAINT, mh_paint, ONTIMER, mh_tick
 mh_ttl:     db 'MegaHi', 0
 mh_s_ds:    db 'MEGAHI: ds ', 0
 mh_s_caps:  db ' caps ', 0

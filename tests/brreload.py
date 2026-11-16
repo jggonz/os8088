@@ -39,6 +39,7 @@ _OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
@@ -78,7 +79,7 @@ def main():
         if len(wins) <= len(before):
             sys.exit("brreload: DEMO.HTM opened no window")
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))   # noqa: E731
         # THE PAGE ARRIVES ON THE WAKE, after the window is up (SPEC.md 54.10):
         # read straight after the open and this is an empty browser

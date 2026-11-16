@@ -403,7 +403,9 @@ mw_hex2:
 
 mw_tpl:
     dw 300, 26, 128, 40
-    dw mw_ttl, mw_paint, 0, 0
+    dw mw_ttl, mw_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mw_cls, 0, PAINT, mw_paint
 mw_ttl:     db 'MegaW32', 0
 mw_s_calls: db 'MEGAW32: calls ', 0
 mw_s_pers:  db ' periods ', 0

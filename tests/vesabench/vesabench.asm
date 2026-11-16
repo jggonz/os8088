@@ -67,8 +67,6 @@ vb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [vb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; the content origin onto a multiple of 8
     clc
 .out:
     pop si
@@ -567,7 +565,10 @@ vb_fillbufs:
 
 vb_tpl:
     dw 7, 22, 632, 448
-    dw vb_ttl, vb_paint, vb_onkey, vb_onclick
+    dw vb_ttl, vb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vb_cls, 0, PAINT, vb_paint, ONKEY, vb_onkey, \
+               ONCLICK, vb_onclick
 
 vb_ttl:     db 'VESA Bench', 0
 vb_fname:   db 'VESABNCH.TXT', 0

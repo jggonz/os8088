@@ -200,8 +200,8 @@ PF_TRIM     equ 64              ; the walk is that second walk
 ; =============================================================================
 %ifdef OS88_FSCK
 ; -----------------------------------------------------------------------------
-; osapi_vol_check - OSAPI_VOL_CHECK (0x04F5, SPEC.md 118.14.2). The cell is
-; OSAPI_RCSLOT's: DS = KERNEL_SEG here, every other register the caller's.
+; osapi_vol_check - OSAPI_VOL_CHECK (a door cell, SPEC.md 118.14.2). The cell is
+; the door's RCS kind's: DS = KERNEL_SEG here, every other register the caller's.
 ; in:  AL = verb (AH, CX: its arguments), ES = the image, DX = the workspace
 ; out: the image's answer (CF, AX); CF=1 AX=FSKE_IMAGE for an image that is
 ;      not this kernel's. Every register but AX preserved
@@ -213,10 +213,10 @@ PF_TRIM     equ 64              ; the walk is that second walk
 ; -----------------------------------------------------------------------------
 section .cold                   ; ALL OF IT `.cold`, so kern_mega's kernel
                                 ; segment carries none of it (megaseg.txt)
-osapi_vol_check:                ; OSAPI_RCSLOT's body: far-called, DS = KERNEL
+osapi_vol_check:                ; the door's RCS body: far-called, DS = KERNEL
     mov bp, inst_vol_enter      ; V: the caller's folder (SPEC.md 19.2.1),
     call KERNEL_SEG:spw_near    ; a `.text` routine, through its one door.
-                                ; BP is api_rsc's to restore and an input to
+                                ; BP is the door's to restore and an input to
                                 ; no rare cell (kernel size pass 17)
     push si
     push di
@@ -249,7 +249,7 @@ osapi_vol_check:                ; OSAPI_RCSLOT's body: far-called, DS = KERNEL
  %define FSK_CSEG es            ; ...where real mode's is ES itself
 %endif
     push FSK_CSEG               ; A FAR JUMP into the image, not a call: its
-    push word [es:MOD_H_ENT]    ; own retf returns to api_rsc, which this
+    push word [es:MOD_H_ENT]    ; own retf returns to the door's RCS kind, which this
     retf                        ; body's would have reached next (kernel size
                                 ; pass 17: no [fsk_fp]). ONE push line for
                                 ; both arms, api_far's way: stkbalance reads
@@ -296,6 +296,7 @@ modfs_header:
     db MOD_VER, MOD_FSCK
     dw BUILD_NUM, MOD_STAMP
     dw modfs_end, FSK_NENT
+    dw 0                        ; MOD_H_SCR (2.8.3): no mod_tab row
     dw fsk_entry
 FSK_NENT    equ 1
 

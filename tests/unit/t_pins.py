@@ -142,7 +142,7 @@ HOT = re.compile(r"\b(?:call|jmp)\b|mem_claim|mem_movable")
 # a claim exactly where one is made. Without this the registry was BLIND to
 # every claim the granule's sweep moved onto the paragraph door.
 MEMP_CALL = re.compile(r"\bcall\s+(?:far\s+)?OSAPI_MEM_P\b")
-MEMP_VERB = re.compile(r"\bmov\s+bl\s*,\s*(MEMP_\w+(?:\s*\|\s*MEMP_\w+)?)")
+MEMP_VERB = re.compile(r"\bmov\s+bl\s*,\s*(MEMP_\w+(?:\s*[|+]\s*MEMP_\w+)*)")
 
 
 def memp_verb(lines, i):
@@ -156,12 +156,38 @@ def memp_verb(lines, i):
             # MEMP_CPU): every other verb asks or resizes, and a verb added
             # later is a question until it is named here - MEMP_KPARTS was
             # read as a claim when this tested for AVAIL and REGROW instead
-            return "claim" if "MEMP_CLAIM" in v else "ask"
+            # (MEMP_CONV alone is MEMP_CLAIM + the conventional bit)
+            return "claim" if "MEMP_CLAIM" in v or "MEMP_CONV" in v else "ask"
         if re.search(r"\b(?:xor|sub)\s+(?:bx\s*,\s*bx|bl\s*,\s*bl)\b", c):
             return "claim"
         if LABEL.match(lines[j]) and not lines[j].lstrip().startswith("."):
             break
     return "claim"
+
+
+# OSAPI_MEM_HUGE's BX = MEMH_REGROW (SPEC.md 50.3.5, kernel size pass 19)
+# RESIZES a claim the package already holds - it is the paragraph door's
+# REGROW for 1,024KB and more - so it is no claim site, exactly as
+# MEMP_REGROW is not. The verb is BX, set within a few lines above the call
+# (the Browser's br_regrow sets it and jumps to the call).
+HUGE_CALL = re.compile(r"\bcall\s+(?:far\s+)?OSAPI_MEM_HUGE\b")
+HUGE_REGROW = re.compile(r"\bmov\s+(?:bx\s*,\s*MEMH_REGROW|bx\s*,\s*MEMP_REGROW|bl\s*,\s*MEMP_REGROW)\b")
+
+
+def huge_regrow(lines, i):
+    for j in range(i - 1, max(-1, i - 24), -1):
+        c = asm_code(lines[j])
+        if HUGE_REGROW.search(c):
+            return True
+        if re.search(r"\bmov\s+(?:bx|bl)\s*,", c):
+            return False        # another verb set nearer the call: a
+                                # `mov bl, MEMP_CLAIM` between a REGROW and
+                                # this call (The Wire's wr_refresh: regrow,
+                                # else `.new:` claims) made the claim read as
+                                # a resize and hid the site (ksp19 patterns)
+        if LABEL.match(lines[j]) and not lines[j].lstrip().startswith("."):
+            break
+    return False
 
 
 def hot(lines):
@@ -175,6 +201,11 @@ def hot(lines):
             c = asm_code(ln)
             if not HOT.search(c):
                 continue
+            if re.search(r"\bcall\s+(?:far\s+)?(?:OSAPI_MEM_HUGE|OSAPI_MEM_P|br_kbp)\b", c) and huge_regrow(lines, i):
+                # a call made with the REGROW verb already in BX - the cell
+                # itself or a package's own wrapper that passes BL through
+                # (the Browser's br_kbp) - resizes, it does not claim
+                c = re.sub(r"\bcall\s+(?:far\s+)?[\w.:]+", "call OSAPI_MEMP_ASK", c)
             if MEMP_CALL.search(c):
                 c = MEMP_CALL.sub("call OSAPI_MEM_CLAIM" if memp_verb(lines, i)
                                   == "claim" else "call OSAPI_MEMP_ASK", c)

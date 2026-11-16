@@ -93,7 +93,7 @@ def main():
     fail = []
     say = lambda s: print("  " + s)
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
-                          boot=False) as m:
+                          boot=False, saver=True) as m:   # its subject
         cards = m.cards()
         if len(cards) != 2:
             sys.exit("dispsaver: %s has %d video card(s), not 2"

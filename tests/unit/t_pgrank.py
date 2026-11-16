@@ -109,6 +109,49 @@ def main():
           got=m.group(1) if m else "no mem_avail_lvl before DSK_FATW_MINK",
           want="%s, MEM_P_FATW's own rank" % own)
 
+    # kern_small's own order (SPEC.md 50.6.13.2): there the ICON STORE
+    # OUTRANKS THE READ-AHEAD - no ASSOC.DAT, so losing the store is a sector
+    # per package - and the store sits above the save-unders. The two tags
+    # are kern_small's spellings, chosen inside the kernel: the SDK is not
+    # changed, and every other kernel keeps the order above.
+    sm = {n: rank_of(mem, n) for n in ("MEM_P_DIRW_SM", "MEM_P_ICO_SM")}
+    wsave = rank_of(mem, "MEM_P_WSAVE")
+    for n, r in sm.items():
+        check(r in levels, "%s is defined at a PURGEABLE rank" % n,
+              "kern_small's spelling of a cache tag (SPEC.md 50.6.13.2)",
+              got=r, want="one of %s" % ", ".join(levels))
+    if all(r in levels for r in sm.values()) and wsave in levels:
+        check(levels.index(sm["MEM_P_DIRW_SM"])
+              < levels.index(sm["MEM_P_ICO_SM"]),
+              "kern_small: the read-ahead ranks strictly below the icon store",
+              "a refusal on kern_small must shed the read-ahead (one slower "
+              "read before the next mount) before the icons (seconds: a "
+              "sector per package with no ASSOC.DAT) - SPEC.md 50.6.13.2",
+              got=sm, want="MEM_P_DIRW_SM below MEM_P_ICO_SM")
+        check(levels.index(wsave) < levels.index(sm["MEM_P_ICO_SM"]),
+              "kern_small: the icon store ranks above the save-unders",
+              "a save-under costs one window's redraw, the store a sector "
+              "per package (SPEC.md 50.6.13.2)",
+              got="WSAVE=%s ICO_SM=%s" % (wsave, sm["MEM_P_ICO_SM"]),
+              want="MEM_P_WSAVE below MEM_P_ICO_SM")
+    for tag in ("MEM_P_ICO", "MEM_P_DIRW"):
+        hit = re.search(r"^%%ifn?def KERN_SMALL\b(?:(?!^%%endif).)*?^%s\s+equ"
+                        r"\s+%s_SM\b" % (tag, tag), mem, re.M | re.S)
+        check(hit is not None, "kern_small spells %s as %s_SM" % (tag, tag),
+              "the kernel's KERN_SMALL arm is what makes the order above the "
+              "one that machine runs (SPEC.md 50.6.13.2)",
+              got="no such arm",
+              want="%s equ %s_SM under KERN_SMALL" % (tag, tag))
+    m = re.search(r"mov al, ([^;\n]+?)\s*;[^\n]*\n[^\n]*call mem_avail_lvl_x",
+                  disk[disk.find("dsk_rah_want:"):])
+    check(m is not None and m.group(1).strip() == "MEM_P_DIRW >> 8",
+          "dsk_rah_want asks mem_avail_lvl at its OWN rank, per kernel",
+          "a literal MEM_PG_HIGH there would let kern_small's read-ahead, "
+          "TRIV on that kernel, count the icon store and the listings as "
+          "room at a mount - the order SPEC.md 50.6.13.2 reverses",
+          got=m.group(1) if m else "no mem_avail_lvl_x in dsk_rah_want",
+          want="MEM_P_DIRW >> 8")
+
     return done("pgrank")
 
 

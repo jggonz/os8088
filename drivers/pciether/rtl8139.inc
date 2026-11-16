@@ -150,9 +150,14 @@ rt_rstwait:
 ; -----------------------------------------------------------------------------
 rt_claim:
     push dx
+    cmp word [rt_seg], 0        ; ALREADY HELD: a WAKE's find (SPEC.md
+    jne .out                    ; 51.2.5) - SLEEP kept the ring, pinned and
+                                ; where RBSTART will be pointed again, so it
+                                ; is not claimed twice (CF = 0: the `cmp`
+                                ; borrowed nothing, and `pop` keeps it)
     mov ax, OS88_BYTES_PARA(RT_CLAIM)
-    mov cx, MEMP_CONV           ; no head, and below 1MB
-    mov bl, MEMP_CLAIM | MEMP_CPU
+    xor cx, cx                  ; no head, and below 1MB
+    mov bl, MEMP_CLAIM | MEMP_CPU | MEMP_CONV
     call OSAPI_MEM_P            ; DX = the base
     jc  .out
     mov [rt_seg], dx
@@ -164,11 +169,9 @@ rt_claim:
     shr ax, cl                  ; 0..0Fh and lands in the top nibble
     mov cl, 12
     shl dx, cl
-    or  ax, dx
-    mov [rt_par], ax
-    mov word [rt_win], 0
-    clc
-.out:
+    or  ax, dx                  ; (CF = 0: the `or`)
+    mov [rt_par], ax            ; [rt_win] is 0 already: a window exists only
+.out:                           ; while [rt_seg] does, and rt_stop zeroes both
     pop dx
     ret
 
@@ -226,9 +229,8 @@ rt_init:
     call rt_port
     xor al, al
     out dx, al                  ; CONFIG1 = 0: powered on
-    mov al, RT_CR
-    call rt_port
-    mov al, RTC_RST
+    sub dx, RT_CONFIG1 - RT_CR  ; (a port is a step from the last one: the
+    mov al, RTC_RST             ; walk ne_dma_read takes, driver size pass 1)
     out dx, al
     call rt_rstwait
     mov dx, [eth_base]          ; IDR0..5: the station address
@@ -240,8 +242,8 @@ rt_init:
     inc si
     inc dx
     loop .mac
-    mov al, RT_MAR0
-    call rt_port
+    inc dx                      ; RT_MAR0: two past IDR5
+    inc dx
     mov cx, 8
     xor al, al
 .mar:                           ; no multicast: the stack has no use for it
@@ -267,31 +269,26 @@ rt_start:
     call rt_port
     mov ax, [rt_lin]
     mov bx, [rt_lin+2]
-    call rt_outd                ; RBSTART = the ring
-    mov al, RT_IMR
-    call rt_port
+    call rt_outd                ; RBSTART = the ring (rt_outd keeps DX, and
+    add dx, RT_IMR - RT_RBSTART ; each port below is a step from the last)
     xor ax, ax
     out dx, ax                  ; IMR = 0: we poll
-    mov al, RT_ISR
-    call rt_port
+    inc dx                      ; RT_ISR
+    inc dx
     mov ax, 0xFFFF
     out dx, ax                  ; every cause cleared (write-one-to-clear)
-    mov al, RT_CR
-    call rt_port
+    sub dx, RT_ISR - RT_CR
     mov al, RTC_RE | RTC_TE
     out dx, al
-    mov al, RT_RCR
-    call rt_port
+    add dx, RT_RCR - RT_CR
     xor bx, bx
     mov ax, RT_RCR_VAL
     call rt_outd
-    mov al, RT_TCR
-    call rt_port
+    sub dx, RT_RCR - RT_TCR
     mov bx, RT_TCR_HI
     mov ax, RT_TCR_LO
     call rt_outd
-    mov al, RT_CAPR
-    call rt_port
+    sub dx, RT_TCR - RT_CAPR
     mov ax, RT_CAPR0
     out dx, ax                  ; CAPR = 0 - 16: the ring is empty
     mov word [rt_off], 0
@@ -323,20 +320,21 @@ rt_rxreset:
 ;
 ; The DMA stops BEFORE the memory is freed: a card left running writes into
 ; whatever the heap gives that memory to next. Spends AX, BX, CX and DX:
-; eth_detach, nic_stop's one caller, has banked everything (os88_ent)
+; eth_detach and eth_wake's refusal, nic_stop's callers, have banked
+; everything (os88_ent)
+;
+; rt_halt is its first half ALONE - DRVV_SLEEP's (nic_sleep, SPEC.md
+; 51.2.5): the bus master off and the chip reset BEFORE the picture is
+; taken, and the ring, its window and its claim KEPT. WAKE's rt_claim finds
+; [rt_seg] standing and claims nothing, and rt_init points RBSTART at the
+; same ring. It was a free here and a fresh claim at the wake, which on
+; kern_mega leaked a ring per trip: a boot claim is named by its PARAGRAPH
+; and the free below cannot find it under protected mode. The ring is
+; pinned and conventional (rt_claim), so it is in every picture and no
+; compaction moves it while the card is asleep
 ; -----------------------------------------------------------------------------
 rt_stop:
-    mov al, RT_IMR
-    call rt_port
-    xor ax, ax
-    out dx, ax
-    mov al, RT_CR
-    call rt_port
-    xor al, al
-    out dx, al                  ; receiver and transmitter off
-    mov al, RTC_RST
-    out dx, al                  ; ...and the chip reset
-    call rt_rstwait
+    call rt_halt
     mov dx, [rt_win]            ; rt_es's window, if protected mode made one
     or  dx, dx
     jz  .nowin
@@ -356,6 +354,17 @@ rt_stop:
                                 ; card was silenced above, so nothing writes it
 .out:
     ret
+
+rt_halt:
+    mov al, RT_IMR
+    call rt_port
+    xor ax, ax
+    out dx, ax
+    sub dx, RT_IMR - RT_CR      ; (AL is 0 already)
+    out dx, al                  ; receiver and transmitter off
+    mov al, RTC_RST
+    out dx, al                  ; ...and the chip reset
+    jmp rt_rstwait              ; ...and waited out (its tail is our ret)
 
 ; -----------------------------------------------------------------------------
 ; rt_rx - take ONE frame off the ring (nic_rx)
@@ -379,8 +388,7 @@ rt_rx:
     out dx, ax                  ; the ring is not to be trusted after an
     jmp short .reset            ; overrun, and every frame in it is lost
 .nov:
-    mov al, RT_CR
-    call rt_port
+    sub dx, RT_ISR - RT_CR      ; DX is the ISR's port: CR is a step away
     in  al, dx
     test al, RTC_BUFE
     jnz .empty
@@ -508,10 +516,9 @@ rt_tx:
     call rt_port
     add dx, si
     pop ax
-    call rt_outd
-    mov al, RT_TSD0             ; TSD[n] = ERTXTH and the size, ONE write:
-    call rt_port                ; OWN clear in it is what starts the send
-    add dx, si
+    call rt_outd                ; (which keeps DX)
+    sub dx, RT_TSAD0 - RT_TSD0  ; TSD[n] = ERTXTH and the size, ONE write:
+                                ; OWN clear in it is what starts the send
     mov bx, RT_ERTXTH
     mov ax, cx
     call rt_outd
@@ -540,4 +547,4 @@ rt_tx:
     ret
 
 rt_name:    db 'RTL8139', 0
-rt_vtab:    dw rt_claim, rt_init, rt_rx, rt_tx, rt_stop
+rt_vtab:    dw rt_claim, rt_init, rt_rx, rt_tx, rt_stop, rt_halt

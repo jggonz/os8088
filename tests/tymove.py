@@ -87,10 +87,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     os88marty.until(m, lambda _: len(dispcp.win_list(m, S)) > len(before),
                     "the viewer's window", poll=0.2, limit=15)
     fvslot = dispcp.win_list(m, S)[-1]
-    seg = u16(m.read(S("wm_wins") + fvslot * dispcp.WIN_SIZE, 22), 22) \
+    seg = u16(m.read(S("wm_wins") + fvslot * dispcp.WIN_SIZE, 22), os88geom.W_SEG) \
         if False else None
     rec = m.read(S("wm_wins") + fvslot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    seg = u16(rec, 22)
+    seg = u16(rec, os88geom.W_SEG)
     os88marty.quiesce(m, lambda: m.read(seg * 16 + MAP["fv_pending"], 1),
                       guest=1.0, what="the face load")
     os88marty.ui_done(m)
@@ -109,15 +109,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     shot0 = m.fbuf()
 
     # post a compaction at the TRIVIAL rank, the door OSAPI_MEM_COMPACT uses
-    wptr = os88geom.winptr(m, fvslot, S)
-    m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-    m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+    os88geom.post_compact(m, fvslot, 0xFC, S)
     os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                     "the posted compaction to run", poll=0.2, limit=30)
     os88marty.ui_done(m)
 
     rec = m.read(S("wm_wins") + fvslot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    seg = u16(rec, 22)                  # the region may have moved too
+    seg = u16(rec, os88geom.W_SEG)                  # the region may have moved too
     faces1, cur1, ps1 = words(m, seg)
     held = claims(m)
     print("faces %s  curseg %04x  psseg %04x"

@@ -46,10 +46,6 @@ dm_entry:
     OS88_ALTENTER_ARM
     mov si, dm_pref
     call OSAPI_WM_PREFER
-    mov al, 1
-    call OSAPI_WM_SNAP
-    mov si, dm_about
-    call OSAPI_ABOUT_SET
     call OSAPI_GET_TICKS
     or ax, 1
     mov [dm_seed], ax
@@ -57,8 +53,6 @@ dm_entry:
     call dm_audio_song
     call dm_audio_open
     mov bx, [dm_win]
-    mov ax, dm_audio_timer
-    call OSAPI_WM_ONTIMER
     mov ax, 1
     call OSAPI_WM_TIMER
     mov bx, [dm_win]
@@ -468,7 +462,10 @@ dm_input:
 
 dm_scans: db KSC_LEFT,KSC_RIGHT,KSC_DOWN,2ch,2dh,KSC_UP,19h,31h,KSC_ENTER,32h
 
-dm_tpl: dw 52, 32, 452, 284, dm_title, dm_paint, dm_onkey, dm_click
+dm_tpl: dw 52, 32, 452, 284, dm_title, dm_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS dm_cls, 0, PAINT, dm_paint, ONKEY, dm_onkey, \
+               ONCLICK, dm_click, ABOUT, dm_about, ONTIMER, dm_audio_timer
 OS88_PREFER dm_pref, 452,284,452,284,452,154
 dm_title: db 'DrMarco',0
 dm_setting: db 'Level 00  Speed LOW  Music FEVER',0

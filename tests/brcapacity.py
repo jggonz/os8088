@@ -17,6 +17,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_ROOT, "tests"))
 import dispcp
+import os88geom  # noqa: E402
 import os88build
 import os88qemu
 import os88sym
@@ -93,7 +94,7 @@ def main():
             raise RuntimeError("the 196 KiB local fixture did not open")
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         image = os.path.getsize(os88build.at("build/browser.bin"))
 
         def symbol(name):

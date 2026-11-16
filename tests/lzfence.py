@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
+import os88geom  # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import dispcp                                          # noqa: E402
@@ -69,7 +70,7 @@ def main():
                      "proc refused, which is itself a failure")
         rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         say("lzfence: package at %04X" % pseg)
 
         raw = m.readseg(pseg, 0, img)

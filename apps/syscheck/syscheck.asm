@@ -87,7 +87,7 @@ SCF_SYSTEM  equ 1
 SCF_STIK    equ 2
 SCF_OPT     equ 0x80            ; OR'd in: not on every system disk (118.2.3)
 
-DRV_VER     equ 12                  ; drivers/os88drv.inc - the ABI lock binds
+DRV_VER     equ 14                  ; drivers/os88drv.inc - the ABI lock binds
 MOD_VER     equ 5                   ; kernel/mod.inc       it to PKG_FMT's era
 
 ; --- the findings table (SPEC.md 118.3) ---------------------------------------
@@ -136,19 +136,8 @@ sc_entry:
                                     ; with us, so the proc is a bare `ret`
     mov si, sc_pref                 ; a size per adapter (SPEC.md 11.100.1)
     call OSAPI_WM_PREFER
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content origin on a multiple of 8, so
-                                    ; every run is font_run's one-store path
-    mov si, sc_about
-    call OSAPI_ABOUT_SET
-    mov ax, sc_onwake
-    call OSAPI_WM_ONWAKE
-    mov ax, sc_onclose              ; a disk task ends properly however the
-    call OSAPI_WM_ONCLOSE           ; window goes (SPEC.md 118.14.6)
     xchg ax, bx                     ; AX = the window
     mov bx, sc_btrec
-    mov si, sc_onup                 ; W_ONMOUSEUP: a button fires
-    mov di, sc_ondrag
     mov dx, sc_onclick              ; a press that was not a button's
     call os88ui_btninit             ; keeps every register
     xchg ax, bx                     ; BX = the window again
@@ -699,7 +688,11 @@ sc_abdown:
 
 ; --- data ----------------------------------------------------------------------
 sc_tpl:     dw 7, 22, 626, 436
-            dw sc_ttl, sc_paint, sc_onkey, 0
+            dw sc_ttl, sc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sc_cls, 0, PAINT, sc_paint, ONKEY, sc_onkey, \
+               ONCLICK, os88ui_btnclick, ABOUT, sc_about, ONWAKE, sc_onwake, \
+               ONCLOSE, sc_onclose, ONMOUSEUP, sc_onup, ONDRAG, sc_ondrag
     OS88_PREFER sc_pref, 626, 436, 712, 330, 632, 300
 
 sc_ttl      equ 16                  ; the header's name field: 'System Check'

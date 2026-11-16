@@ -2337,7 +2337,7 @@ mega_pkgok:
     pop es
     mov si, mega_s_kbdos
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop si
     pop cx
     pop es

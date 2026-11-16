@@ -150,6 +150,9 @@ CLK_DEF_D   equ 4
 CLK_YMIN    equ 1980            ; the year range the Date/Time page allows;
 CLK_YMAX    equ 2099            ; also the range the leap rule below is exact
                                 ; over (see clk_mlen)
+CLK_TMUL    equ 1167            ; clk_tick's tick-to-second ratio: CLK_TDIV /
+CLK_TDIV    equ 21247           ; CLK_TMUL = 18.206512 against the PIT's
+                                ; 18.206482 Hz (SPEC.md 37, Advancing)
 
 ; --- month names (data, .text) ----------------------------------------------
 ; One 3-char cell per month, indexed by (month-1)*3. The same table serves
@@ -1708,11 +1711,15 @@ section .text
 ;      nothing that writes a flag may be put between it and the `ret`
 ; clobbers: AX only
 ;
-; The SPEC.md 14 accumulator idiom verbatim, which is what makes 18.2 Hz add
-; up to real seconds: delta ticks (wrap-safe subtraction) times ten, kept as
-; a 32-bit value because one long gfx_lock starvation - a held-open menu -
-; can owe more than 65535 tenths, then DIV 182 for whole seconds owed and
-; the new remainder. Quotient <= 3602, so the DIV cannot fault.
+; The SPEC.md 14 accumulator idiom, which is what makes the PIT's tick add
+; up to real seconds: delta ticks (wrap-safe subtraction) times CLK_TMUL,
+; kept as a 32-bit value because one long gfx_lock starvation - a held-open
+; menu - can owe more than 65535 units, then DIV CLK_TDIV for whole seconds
+; owed and the new remainder. The tick is 1,193,182 / 65,536 = 18.206482 Hz
+; and 21,247 / 1,167 = 18.206512 is the closest ratio with a 16-bit divisor
+; (0.0001 s a day); the old 182 / 10 gained 31 s a day. Worst case delta =
+; 65535 (the subtraction's own range) and remainder 21,246: 76,500,591 /
+; 21,247 = 3,600, so the DIV cannot fault.
 ;
 ; The two bits are separate because that IS the seconds setting: with the
 ; seconds hidden the bar's text is unchanged 59 seconds out of 60, and
@@ -1732,11 +1739,11 @@ clk_tick:
                                 ; wrapping 16-bit arithmetic, and it cannot
                                 ; tear: IRQ0 writes [ticks] and never this,
                                 ; and both writers of [clk_last] are UI-task
-    mov dx, 10
-    mul dx                      ; DX:AX = delta * 10 (tenths of a tick)
+    mov dx, CLK_TMUL
+    mul dx                      ; DX:AX = delta * CLK_TMUL
     add ax, [clk_acc]
     adc dx, 0
-    mov cx, 182
+    mov cx, CLK_TDIV
     div cx                      ; AX = whole seconds owed, DX = leftover
     mov [clk_acc], dx
     xchg cx, ax                 ; CX = the seconds (one byte: AX is zeroed
@@ -2228,7 +2235,7 @@ clk_barq:   resb 1              ; sticky: the bar's text is stale (an edit or a
                                 ; (A clk_bpad byte used to follow, "keeping the
                                 ; words below even-aligned" - see clk_year)
 clk_last:   resw 1              ; last [ticks] sample
-clk_acc:    resw 1              ; tenth-of-tick remainder
+clk_acc:    resw 1              ; tick remainder, in 1/CLK_TMUL ticks
 %if clk_mon - clk_day != 1 || (clk_acc + 2 - clk_sec) & 1 || clk_rtc < clk_sec || clk_rtc > clk_acc || clk_dirty < clk_sec || clk_dirty > clk_acc || clk_year < clk_sec || clk_year > clk_acc || clk_h12 < clk_sec || clk_h12 > clk_acc || clk_secs < clk_sec || clk_secs > clk_acc || clk_barq < clk_sec || clk_barq > clk_acc || clk_last < clk_sec
   %error "clock: clk_init zeroes clk_sec..clk_acc as one even run of words and stores day+month as one word"
 %endif
@@ -2333,7 +2340,7 @@ CLK_PROBE_SPAN equ 22
 section .cold
 ; -----------------------------------------------------------------------------
 ; osapi_clk_get - OSAPI_CLK_GET, the date and time a package may read
-;                 (SPEC.md 37.96); far, DS = KERNEL_SEG (api_rsc)
+;                 (SPEC.md 37.96); far, DS = KERNEL_SEG (the door's RCS kind)
 ; out: CX = year, DH = month, DL = day, BH = hour, BL = minute, AH = second,
 ;      AL = bit 0 a hardware RTC was found, bit 1 12-hour display; CF = 0
 ;

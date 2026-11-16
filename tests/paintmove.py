@@ -5,7 +5,8 @@
 
 heapfrag proves the mechanism against a package written for it. This proves it
 against a real one, and Paint is the case worth proving: its canvas base is not
-held in one word at all - `[pt_base]`, then ONE SEGMENT PER ROW in `pt_rowseg`
+held in one word at all - `[pt_base]`, then ONE SEGMENT PER ROW in the row table
+(a claim of its own since SPEC.md 42.6.7, at `[pt_tabseg]`)
 because a canvas can be bigger than a segment, then `[pt_undelta]` linking it
 to the undo image. `pt_reloc` has to put all three right, and only two of them
 can be checked by reading memory. The third is checked by looking.
@@ -23,7 +24,7 @@ Three assertions, and the third is the one a memory dump cannot make:
      this script says so rather than passing.
   2. Its CONTENTS survived the move, hashed either side at the two addresses.
   3. Paint REPAINTS THE SAME PICTURE afterwards - which is the only thing that
-     tests `pt_rowseg`, because the row table is what a repaint draws through
+     tests the row table, because the row table is what a repaint draws through
      and a stale one produces a plausible-looking wrong picture rather than a
      crash.
 """
@@ -43,6 +44,42 @@ MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_HEAPFRAG, PKG_PAINT = "HEAPFRAG.O88", "PAINT.O88"
 
 
+_INC_RE = None
+
+
+def _inc_closure(src, incs):
+    """Every file `src` can %include or %incbin, resolved as nasm resolves them
+    here (the working directory, then each -I) and followed into each include
+    - or None when a name cannot be resolved, in which case nothing is cached.
+    A superset is fine: names inside a false %if still join the key."""
+    import re
+    global _INC_RE
+    if _INC_RE is None:
+        _INC_RE = re.compile(r'^\s*%(?:include|incbin)\s+["<]([^">]+)[">]',
+                             re.M | re.I)
+    seen, todo = [], [src]
+    while todo:
+        f = todo.pop()
+        if f in seen:
+            continue
+        seen.append(f)
+        if not f.endswith((".asm", ".inc", ".mac")):
+            continue                    # an incbin's bytes: hashed, not read
+        try:
+            text = open(f, errors="replace").read()
+        except OSError:
+            return None
+        for name in _INC_RE.findall(text):
+            for d in ("",) + tuple(incs):
+                cand = os.path.join(d, name)
+                if os.path.isfile(cand):
+                    todo.append(os.path.normpath(cand))
+                    break
+            else:
+                return None
+    return sorted(seen)
+
+
 def pkg_syms(src, incs=("apps/",)):
     """A package's symbols, by re-assembling it - os88sym.py's trick.
 
@@ -51,14 +88,33 @@ def pkg_syms(src, incs=("apps/",)):
     only answer that cannot go stale: a wrong offset here reads a plausible
     word out of the middle of another variable and the test then reports the
     kernel as broken.
+
+    THE MAP IS CACHED PER SOURCE CLOSURE (os88fixture.cached, SOAK-SPEED 16):
+    keyed on the bytes of `src` and of every file it includes, nasm's version
+    and the -I list - so an edit anywhere in what nasm reads is a miss, and
+    a miss is only slow. SHEET's assemble was ~5 CPU s (12 wall under a soak)
+    and twenty-odd rows paid it, two of them twice. OS88_FIXCACHE=0 is the A/B.
     """
+    def produce(mp):
+        with tempfile.TemporaryDirectory() as d:
+            cp = os.path.join(d, "p.asm")
+            open(cp, "w").write(open(src).read()
+                                + "\n[map symbols %s]\n" % mp)
+            subprocess.run(["nasm", "-f", "bin", "-w+error"]
+                           + sum([["-I", i] for i in incs], [])
+                           + ["-o", os.path.join(d, "p.bin"), cp], check=True)
+
     with tempfile.TemporaryDirectory() as d:
-        cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
-        open(cp, "w").write(open(src).read()
-                            + "\n[map symbols %s]\n" % mp)
-        subprocess.run(["nasm", "-f", "bin", "-w+error"]
-                       + sum([["-I", i] for i in incs], [])
-                       + ["-o", os.path.join(d, "p.bin"), cp], check=True)
+        mp = os.path.join(d, "p.map")
+        deps = _inc_closure(src, incs)
+        if deps is None:
+            produce(mp)
+        else:
+            os88fixture.cached(mp, ("pkg_syms", src, tuple(incs)), produce,
+                               sources=[os.path.relpath(os.path.abspath(f),
+                                                        os88fixture.ROOT)
+                                        for f in deps],
+                               tools=("nasm",))
         out = {}
         for line in open(mp):
             f = line.split()
@@ -304,9 +360,15 @@ def main():
             return u16(m.read(lin(m, pt_seg, P[name]), 2))
 
         def rowdeltas(base):
-            rows = m.read(lin(m, pt_seg, P["pt_rowseg"]), nrows * 2)
-            return [(seg_key(m, u16(rows, i * 2)) - base) & 0xFFFF
+            tab = pword("pt_tabseg")            # SPEC.md 42.6.7: the row
+            rows = m.read(lin(m, tab), nrows * 4)   # table is a claim, entry
+            return [(seg_key(m, u16(rows, i * 4 + 2)) - base) & 0xFFFF  # y*4
                     for i in range(nrows)]
+        # (THROUGH lin(), not `tab << 4`: on kern_mega the table's word is an
+        # LDT SELECTOR like every claim's, so `tab << 4` read whatever sat at
+        # that number's paragraph - other bytes after the move than before
+        # it - and check 3 read STALE over a table that had followed, while
+        # check 5's repaint, which draws through it, came out identical)
 
         cbase = seg_key(m, pword("pt_base"))
         csize = [c[1] for c in before if c[0] == cbase]
@@ -407,7 +469,7 @@ def main():
         print("  4 undo delta correct  %s" % ("OK" if ok4 else "WRONG"))
         bad += not ok4
 
-        # --- raise Paint: the repaint is what reads pt_rowseg ---------------
+        # --- raise Paint: the repaint is what reads the row table -----------
         # ON AN UNCOVERED PIXEL OF ITS TITLE: the second heapfrag opens over
         # the left of Paint's title bar on a 640x480 screen, and a click at
         # (x+60, y+9) raised heapfrag and captured it over the canvas

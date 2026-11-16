@@ -161,6 +161,11 @@ def main():
               "SUB:" + put("y/SUB", "NOTE.TXT", b"one sector\r\n"))
     dz = disk("z.img", put("z", "SET.003", setp[2]),
               put("z", "BAD.001", badp[0]))
+    # the marginal disk's geometry and where its root directory starts, out
+    # of its own BPB: ioerr fails reads from there on (by LBA, not by count)
+    bpb = open(dy, "rb").read(32)
+    SPT, HEADS = bpb[24] | bpb[25] << 8, bpb[26] | bpb[27] << 8
+    ROOT = (bpb[14] | bpb[15] << 8) + bpb[16] * (bpb[22] | bpb[23] << 8)
     # the SAME disk before and after: os88disk derives the volume serial from
     # the content (SPEC.md 18.8.2), so the second image is built and then
     # given the first one's boot sector - which is what a DOS machine leaves
@@ -438,7 +443,7 @@ def main():
 
         after = []
 
-        def marginal(skip, failhop, written=False, stays=False):
+        def marginal(skip, failhop, written=False, stays=False, past=None):
             """run with every read of B: after the first `skip` failing (CRC,
             AH = 10h) for as long as the join holds its claim - and, with
             `failhop`, every hop back to A: after the first failure pointed
@@ -449,19 +454,37 @@ def main():
             has said its verdict - the field's case, where the Disk window
             re-reads it before it repaints - and every failure then nudges
             the mouse and records (cur_level, drawn x) in `after`,
-            or ('LOOPING', ...) once the hop has failed 50 times"""
+            or ('LOOPING', ...) once the hop has failed 50 times. With
+            `past`, `skip` is ignored: reads pass until the first whose run
+            reaches LBA `past`, and that one and every read after it fail"""
             m.bp_exec(i13, gto)
             good = hits = hops = 0
             del seenhops[:]
             del after[:]
+            # NOT STARTED IS NOT FINISHED: no claim and mode 0 is also the
+            # moment before the join has begun - the Enter that starts it
+            # still on its way - and a leg that looked then returned None
+            # after 0 reads, leaving the join to run into the NEXT leg's
+            # breakpoint (mega-czto, 1 in 5 on a loaded box). So the end is
+            # believed only once the join has been seen: its claim, or a
+            # stop of its own. One that never starts is NEVER STARTED, ~27
+            # guest seconds on
+            live, idle = False, 0
             try:
                 for _ in range(20000):
                     if m.wait_stop(limit=0.3) != "breakpoint":
-                        if claim() is None and mode() == 0:
+                        if claim() is not None:
+                            live = True
+                        elif live and mode() == 0:
                             t, on = ui.toast()      # staged since the key
                             return (t or None), hits, hops  # (outcome's
                                                             # reason)
+                        elif not live:
+                            idle += 1           # ~0.9 guest s a wait_stop
+                            if idle >= 30:
+                                return "NEVER STARTED", hits, hops
                         continue
+                    live = True
                     rg = m.regs()
                     here = lin(rg["cs"], rg["ip"])
                     if here == gto:
@@ -475,6 +498,12 @@ def main():
                           and m.read(S("dsk_unit"), 1)[0] == 0x01
                           and (stays or w16("clo_seg"))):
                         good += 1
+                        if past is not None and good <= skip + 1:
+                            cx, dx = rg["cx"], rg["dx"]
+                            lba = ((((cx >> 8) | (cx & 0xC0) << 2) * HEADS
+                                    + (dx >> 8)) * SPT + (cx & 0x3F) - 1)
+                            if lba + (rg["ax"] & 0xFF) <= past:
+                                skip = good     # still the mount's own
                         if good > skip and (not written
                                             or seenhops.count(0) >= 2):
                             m.setreg("ax", 0x1000 | (rg["ax"] & 0xFF))
@@ -526,14 +555,16 @@ def main():
         motor_off()
         m.mount(1, dy)
         key("Enter")
-        # TWO good reads are the mount's boot sector and its FAT, so the
-        # ROOT DIRECTORY's is the first to fail. kern_mega's mount reads the
-        # FAT in TWO transfers (sector 2 alone, then sectors 3-11 - the
-        # trace of its int 13h calls, where kern_big's is one 9-sector
-        # call), so the same read is its fourth: failing the third fails
-        # the FAT, the mount refuses and the verdict is `No disk`
-        r = marginal(3 if getattr(m, "bochs", False) else 2, False,
-                     stays=True)
+        # The mount's own reads - the boot sector and the FAT - pass, and the
+        # first read that reaches the ROOT DIRECTORY fails, with everything
+        # after it. Counted by LBA, not by call: how many int 13h the FAT
+        # takes is the transport's business - kern_mega's mount reads it in
+        # two, and on kern_big a FAT window whose claim straddles a 64KB page
+        # is two calls too (dsk_runcap), so a count of "two good reads"
+        # failed the FAT's second half whenever the heap moved and the
+        # verdict became `No disk`, the mount refusing, rather than the
+        # `Disk error` this leg is about
+        r = marginal(0, False, stays=True, past=ROOT)
         af = a_files()
         leg("ioerr", r[0] == "Disk error" and mode() == 0
             and claim() is None and "BAD.DAT" not in af

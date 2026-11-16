@@ -58,6 +58,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
@@ -111,6 +112,11 @@ class Server(threading.Thread):
         self.gap = False            # ...did the condition ever arise?
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # LEASED across runners (tests/os88qemu.py's lease_port): PORT is
+        # baked into socktest.asm, and another worktree's soak running this
+        # row would bind it too - `Address already in use`, read as the ABI
+        import os88qemu
+        os88qemu.lease_port(PORT)
         self.s.bind(("127.0.0.1", PORT))
         self.s.listen(2)
         self.request = None
@@ -199,7 +205,7 @@ def main():
             sys.exit("socktest: SOCKTEST.O88 did not open a window")
         skwin = wins2[-1]
         rec = m.read(S("wm_wins") + skwin * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         say("package at %04X" % pseg)
 
         def report():

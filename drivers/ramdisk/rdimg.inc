@@ -96,7 +96,10 @@ rd_kb_max:
     push ax
     push cx
     push dx
-    call OSAPI_MEM_AVAIL        ; AX = the largest free RUN in KB, DX = total
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest free RUN, paragraphs...
+    mov cl, 6                   ; ...in KB, the unit the store is sized in
+    shr ax, cl
     mov bx, ax
     cmp byte [rd_loc], RDL_XMS
     jne .conv
@@ -341,8 +344,13 @@ rd_wbuf_get:
     mov [rd_wseg], ax           ; ...[rd_wown] is already 0: a loan
     jmp short .out
 .claim:
-    mov ax, RDI_META / 1024
-    call OSAPI_MEM_CLAIM
+    push bx
+    push cx
+    mov ax, RDI_META / 16       ; (paragraphs)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
     jc .out
     mov [rd_wseg], dx
     mov byte [rd_wown], 1       ; (a `mov`: CF = 0 stays the answer)

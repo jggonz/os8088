@@ -282,7 +282,14 @@ cs_r_setup:
                                     ; (88.10.9), so the title page never holds
                                     ; 16KB that only a flight can use
     mov ax, [cs_shkb]               ; the backend's own size: 8KB on C160
-    call OSAPI_MEM_CLAIM
+    push bx                         ; (.haveshadow's path keeps BX and CX,
+    push cx                         ; so this one does too)
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
     jc .noshadow
     mov [cs_shseg], dx
 .haveshadow:

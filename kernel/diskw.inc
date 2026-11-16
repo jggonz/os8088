@@ -9,7 +9,7 @@
 ; dskw_read, dskw_delete, dskw_rename, dskw_dfree - were the first surface,
 ; and read and write are ONE routine each: both take a far pointer and a
 ; 32-bit count, so there is no separate big-file entry point any more
-; (SPEC.md 18.4.1; its slot 0x0190 has since gone to OSAPI_VOL_KIND),
+; (SPEC.md 18.4.1; its a door cell has since gone to OSAPI_VOL_KIND),
 ; for the OS and for packages alike (they ARE the API cells 0x0103..0x0118,
 ; SPEC.md 20.3): whole files, by name, in the volume's CURRENT directory
 ; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles and no
@@ -223,8 +223,8 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; dskw_pmask - which attribute bits refuse THIS replace (SPEC.md 19.6.2)
 ; in:  dskw_raw holds the existing entry's 32 raw bytes; [dskw_syswr] says
 ;      whose write this is
-; out: AL = the mask to test DSK_R_ATTR against; every other register and the
-;      flags preserved
+; out: AL = the mask, and ZF the entry's DSK_R_ATTR tested against it (ZF = 0
+;      refuses); every other register preserved
 ;
 ; Three tiers, and the third is the one the field paid for:
 ;
@@ -313,12 +313,13 @@ dskw_pmask:
     mov al, DSKW_KPROT
 %endif
 .out:
-    pop bx
-    ret
+    test byte [dskw_raw+DSK_R_ATTR], al ; ...and the test both callers made
+    pop bx                      ; after the call: ZF = 0 = refused (kernel
+    ret                         ; size pass 19, -4)
 %endif                          ; DSKW_SYSW
 
 ; -----------------------------------------------------------------------------
-; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0103)
+; dskw_write - create or replace a whole file (SPEC.md 18.4, a door cell)
 ; in:  SI -> NUL-terminated 8.3 name, ES:BX -> the bytes, DX:CX = byte count
 ;      (32-bit, DX high; 0 = an empty file)
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
@@ -374,7 +375,7 @@ dskw_wrp:
 ; dskw_write_sys - dskw_write, for a file that belongs to the KERNEL
 ; in/out: dskw_write's, exactly
 ;
-; KERNEL AND DRIVERS ONLY - OSAPI_FILE_WRITE_SYS (0x0280) publishes it behind
+; KERNEL AND DRIVERS ONLY - OSAPI_FILE_WRITE_SYS (0x015C) publishes it behind
 ; a caller test that refuses a package FERR_PROT (SPEC.md 19.6.1), because the
 ; whole point of SPEC.md 19.6 is that a package cannot make a file the user
 ; can neither see nor delete. Two differences from the ordinary write,
@@ -396,7 +397,7 @@ dskw_wrp:
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
-; dskw_read - read a whole file by name (SPEC.md 18.4, slot 0x0109)
+; dskw_read - read a whole file by name (SPEC.md 18.4, a door cell)
 ; in:  SI -> name, ES:BX -> destination, DX:CX = its capacity in bytes
 ;      (32-bit, DX high)
 ; out: CF=0, DX:AX = bytes read (the file's 32-bit size); CF=1, AX = FERR_* -
@@ -441,7 +442,7 @@ dskw_read_x:
     jmp dskw_ent_store.pdi      ; DI, SI, CX, BX (size pass 13)
 
 ; -----------------------------------------------------------------------------
-; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x010F)
+; dskw_delete - delete a file by name (SPEC.md 18.4, a door cell)
 ; in:  SI -> name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -451,7 +452,7 @@ dskw_delete_x:
     jmp short dskw_wrap7
 
 ; -----------------------------------------------------------------------------
-; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x0115)
+; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x00D3)
 ; in:  SI -> old name, DI -> new name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -477,7 +478,7 @@ dskw_wrap7:
     jmp short dskw_wrp.pop      ; the same seven pops, the same order
 
 ; -----------------------------------------------------------------------------
-; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, slot 0x0118)
+; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, a door cell)
 ; in:  nothing
 ; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (1..64 by mount
 ;      rule 4, so spc*512 fits a word; the cell answers sectors and callers
@@ -698,43 +699,12 @@ dskw_mkbody:
     jne dskw_mounted.ret        ; FERR_IO: the scan itself failed (CF = 1, as
                                 ; 2 < 4). The `ret` just above this routine,
                                 ; where .fail's is past short reach (-3)
-    cmp word [DSKW_FNONE], 0xFFFF
-    je .dirfull                 ; scanned to the end with no reusable slot
+    call dskw_dirgrow           ; a slot - the folder GROWN for one if it
+    jc .fail                    ; had none (BR-60) - or the refusal
 
-    call dskw_alloc             ; AX = cluster, already marked end-of-chain
-    jnc .haveclus
-    inc ax                      ; 0xFFFF -> 0: the mark could not be written,
-    jz .wfail                   ; which is an I/O failure and not a full disk
-    jmp .nospace                ; - and it takes the ROLLBACK path, because a
-                                ; half-marked cluster must not survive in RAM
-                                ; to be flushed by a later unrelated write
-.haveclus:
-    mov [dskw_first], ax
-    call dsk_clus2lba_x ; AX = its first LBA
-    jc .badclus
-    DSKW_CLBA_SET               ; ...in the data walk's own cursor, which
-                                ; nothing else is using between here and the
-                                ; commit - all 32 bits of it (SPEC.md 18.7.5)
-
-    call dskw_dotents           ; '.' and '..' built in dsk_secbuf, and ES =
-                                ; LOW_SEG (SPEC.md 2.1), which is what SS names
-    DSK_WR1D dskw_clba
-    jc .wfail
-
-    call dskw_zerobuf           ; the cluster's remaining sectors
-    mov al, [dsk_spc]           ; (<= 64: cbw is a zero extension, and AX
-    cbw                         ; is dead until the flush's answer)
-    xchg ax, cx
-    dec cx
-    jcxz .zeroed
-.zsec:
-    DSKW_CLBA_INC
-    push cx
-    DSK_WR1D dskw_clba
-    pop cx
-    jc .wfail
-    loop .zsec
-.zeroed:
+    mov bp, dskw_dotents        ; '.' and '..' in the cluster's first sector
+    call dskw_mkclus            ; ...the rest zero: [dskw_first] = it
+    jc .fail                    ; (rolled back already)
 
     call dskw_flush_x           ; the FAT, THEN the entry (SPEC.md 18.4)
     jc .rollax
@@ -774,6 +744,110 @@ dskw_mkbody:
     pop ax
     stc
 .fail:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_mkclus - allocate a DIRECTORY cluster and write it whole: sector 0 as
+;               the routine at BP builds it in dsk_secbuf, every other zero
+; in:  BP = dskw_dotents (a new folder) or dskw_zerobuf (a folder's growth)
+; out: CF=0 with [dskw_first] = the cluster, marked end-of-chain in the FAT
+;      window and NOT flushed - and DX = it too when BP is dskw_zerobuf
+;      (dskw_dotents spends DX); CF=1 with AX = FERR_* and the FAT window
+;      already rolled back (dskw_mkbody's tails, which `ret` for the caller)
+; clobbers: AX, BX, CX, DX, SI, DI, ES, flags
+;
+; The REST of a directory cluster is written zero: a slot search reaching
+; uninitialised sectors would read whatever the disk last held there and could
+; match a name that is not in this directory at all. Both directory clusters
+; the kernel makes go through here - mkdir's and dskw_dirgrow's - so that is
+; one loop (BR-60).
+; -----------------------------------------------------------------------------
+dskw_mkclus:
+    call dskw_alloc             ; AX = cluster, already marked end-of-chain
+    jnc .haveclus
+    inc ax                      ; 0xFFFF -> 0: the mark could not be written,
+    jz dskw_mkbody.wfail        ; which is an I/O failure and not a full disk
+    jmp short dskw_mkbody.nospace   ; - and it takes the ROLLBACK path, because
+                                ; a half-marked cluster must not survive in RAM
+                                ; to be flushed by a later unrelated write
+.haveclus:
+    mov [dskw_first], ax
+    mov dx, ax                  ; ...and in DX, which survives to the `ret`
+    call dsk_clus2lba_x         ; when BP is dskw_zerobuf. AX = its first LBA
+    jc dskw_mkbody.badclus
+    DSKW_CLBA_SET               ; ...in the data walk's own cursor, which
+                                ; nothing else is using between here and the
+                                ; commit - all 32 bits of it (SPEC.md 18.7.5)
+    call bp                     ; sector 0 built in dsk_secbuf, and ES =
+                                ; LOW_SEG (SPEC.md 2.1), which is what SS names
+    mov al, [dsk_spc]           ; (<= 64: cbw is a zero extension)
+    cbw
+    xchg ax, si                 ; SI = the cluster's sectors, all written by
+.zsec:                          ; ONE loop: sector 0 as BP built it, then the
+    DSK_WR1D dskw_clba          ; buffer zeroed for the rest. SI survives the
+    jc dskw_mkbody.wfail        ; write and the zeroing; the last pass zeroes
+    DSKW_CLBA_INC               ; and steps the cursor once more than it uses,
+    call dskw_zerobuf           ; and nothing reads either before setting its
+    dec si                      ; own (dskw_xclus sets the cursor; the buffer
+    jnz .zsec                   ; is scratch). CF = 0: the write's `jc` was
+    ret                         ; not taken, and nothing since writes it
+                                ; (kernel size pass 20, -11)
+
+; -----------------------------------------------------------------------------
+; dskw_dirgrow - a free slot in the current directory, GROWING a subdirectory
+;                that has none (SPEC.md 18.5.2, BR-60)
+; in:  dskw_find's NOENT answer: [dskw_fsec]/[dskw_foff]/[dskw_fend], and the
+;      directory walker as that scan left it ([dsk_wlast], [dsk_wguard])
+; out: CF=0 with [dskw_fsec]/[dskw_foff]/[dskw_fend] a free slot, as
+;      dskw_find leaves one; CF=1 with AX = FERR_*
+;      (FERR_DIRFULL: the ROOT, which FAT12/16 fixes in size, or a folder the
+;      walk could not reach the end of)
+; clobbers: AX, BX, CX, DX, SI, DI, BP, ES, [dskw_first], flags - the two
+;      callers, dskw_mkbody and dskw_wbody, are module-internal bodies whose
+;      registers dskw_wrp banked, and set [dskw_first] afresh after this
+;
+; DOS has grown subdirectories since 2.0; this kernel refused at the end of
+; the first cluster - 14 entries in a kernel-made folder on a 512-byte-cluster
+; disk (1.44MB, 1.2MB, the 360KB system disk), and RunCPM's save failed on the
+; glass for it. The order is SPEC.md 18.4's: the new cluster is written zero
+; and its end mark flushed BEFORE the folder's last cluster is linked to it
+; and that flushed, so a crash between the two leaves a lost cluster, never
+; a folder whose chain runs into garbage. Then dskw_find runs again and finds
+; the new cluster's first entry - a 00h, so the slot it publishes is exactly
+; the one a folder with room would have handed over. Every pass either finds
+; a slot or spends a cluster, so the loop ends at one or at Disk full.
+; -----------------------------------------------------------------------------
+dskw_dirgrow:
+    cmp word [DSKW_FNONE], 0xFFFF   ; CF = 1 exactly when a slot was found
+    cmc                         ; (below FFFFh), so CF = 0 out of the `cmc`
+    jnc .ret                    ; is "there is one": answered as it stands
+%ifdef KD_BUILD                 ; kern_dos refuses as before: its image is at
+    jmp short dskw_mkbody.dirfull   ; KD_IMG_KB's edge (kdlayout.inc)
+%else
+    mov ax, [dsk_wguard]        ; THE ROOT, AND A WALK THAT DID NOT REACH THE
+    mul word [dsk_wlast]        ; END, NEVER GROW: [dsk_wlast] is 0 for the
+    or ax, dx                   ; root (no step is taken there) and the guard
+    jz dskw_mkbody.dirfull      ; 0 when the walk was capped short of the end
+                                ; - either factor 0 makes the product 0, and
+                                ; growing either would link a cluster the
+                                ; volume's chain does not end at
+    mov bp, dskw_zerobuf
+    call dskw_mkclus            ; [dskw_first] = the new cluster, zeroed
+    jc .ret
+    call dskw_flush_x           ; ...its end mark durable FIRST
+    jc dskw_mkbody.rollax
+    mov ax, [dsk_wlast]         ; the folder's last cluster -> the new one,
+    call dskw_setfat            ; DX (dskw_mkclus's); preserves every register
+    jc dskw_mkbody.wfail        ; a FAT window that would not load
+    call dskw_flush_x           ; ...then the link
+    jc dskw_mkbody.rollax
+    call dskw_find              ; THE SEARCH AGAIN: it now walks into the new
+    cmp ax, FERR_NOENT          ; cluster and stops at its first entry, the
+    je dskw_dirgrow             ; slot, which the test above then answers.
+                                ; Its directory sectors are the read-ahead
+                                ; cache's still; FERR_IO is CF = 1 (2 < 4)
+%endif
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1550,15 +1624,12 @@ dskw_wbody:
     ; --- the directory entry: replace an existing one, or take a slot -----
     call dskw_find              ; CF=0 found; CF=1 AX = NOENT / IO
     jnc .replace
-    cmp ax, FERR_NOENT
-    je .create
-    stc                         ; a read error mid-scan: report it as is
-    ret
-.create:
-    cmp word [DSKW_FNONE], 0xFFFF
-    jne .newslot
-    jmp dskw_mkbody.dirfull
-.newslot:
+    cmp ax, FERR_NOENT          ; a read error mid-scan is reported as is:
+    jne .out                    ; FERR_IO is CF = 1 out of this compare (2 <
+                                ; 4), and `jne` keeps it (kernel size pass
+                                ; 20, -2, as dskw_mkbody's does)
+    call dskw_dirgrow           ; the slot dskw_find spotted, or the folder
+    jc .out                     ; grown for one (BR-60) - or the refusal
     mov byte [dskw_new], 1      ; the slot dskw_find already spotted
     and word [dskw_oldclus], 0
     jmp short .data
@@ -1568,9 +1639,8 @@ dskw_wbody:
                                 ; 18.4.3), so this path re-read the sector it
                                 ; had just been handed - a whole revolution
 %ifdef DSKW_SYSW
-    call dskw_pmask             ; AL = what may not be replaced here
-    test byte [dskw_raw+DSK_R_ATTR], al
-%else
+    call dskw_pmask             ; AL = what may not be replaced here, and
+%else                           ; ZF = 0 if the entry carries any of it
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT  ; (no system writer: AL is
 %endif                          ; dead on both arms below)
     jnz .prot                   ; FERR_PROT, written beside .big above
@@ -1606,9 +1676,8 @@ dskw_wbody:
     jmp dskw_relold
 .out:
     ret
-.rollback:
-    call dskw_refat             ; drop the half-built chain: invalidate the
-    stc                         ; FAT window. It keeps AX, the error
+.rollback:                      ; the half-built chain FREED and flushed,
+    jmp dskw_wabody.rbfree      ; as an append's is (SPEC.md 18.4, Rollback)
 .rbret:                         ; (dskw_wdata's nothing-to-write exit, pass 16)
     ret
 
@@ -3261,7 +3330,11 @@ dskw_sync_x:
                                 ; the single remount at its end has left
     cmp byte [dskw_batch], 0    ; a tree copy remounts ONCE, when it ends -
     jne .defer                  ; not after every one of its files (22.3)
-    mov word [disk_nfiles], 0   ; ...otherwise publish the EMPTY listing and
+%ifdef KERN_SMALL
+    and word [disk_nfiles], 0   ; ...otherwise publish the EMPTY listing and
+%else                           ; (`and`: the flags it leaves are the `cmp`'s
+    mov word [disk_nfiles], 0   ; above, ZF = 1 and CF = 0 - SPEC.md
+%endif                          ; 50.6.13.2's byte)
     mov byte [dsk_lstale], 1    ; the debt, exactly the state a quiet mount
                                 ; leaves (18.9): a wrong listing is worse than
                                 ; no listing, and the next listing mount pays
@@ -3543,9 +3616,13 @@ dskw_read_at_x:
     ; offset / cluster_bytes, and one div: a REAL file's quotient fits 16 bits
     ; (a volume holds under 65,525 clusters), but the offset is bounded only
     ; by the entry's size, and a hostile size can overflow it - unguarded.
+%ifdef DSK_STREAM
+    call dwr_cidx               ; AX = clusters to skip: the cursor's own
+%else                           ; division, below (kernel size pass 19, -8)
     mov ax, [dwr_off]
     mov dx, [dwr_off+2]
     div word [dwr_clb]          ; AX = clusters to skip
+%endif
 %ifndef KERN_SMALL
     mov cl, 9                   ; ...and DX the bytes into the one it lands
     shr dx, cl                  ; in: its SECTORS, which dsk_read_chain skips
@@ -3870,7 +3947,7 @@ dwf_dskw_read_seq:
 ; -----------------------------------------------------------------------------
 %ifdef DSKW_WSEQ
 WSQF_HELD   equ 0x01            ; the caller's AL...
-WSQF_SYS    equ 0x02            ; ...and APPEND_SYS's permission (18.4.4):
+WSQF_SYS    equ 0x02            ; ...and a SYSTEM file's permission (18.4.4):
                                 ; a hidden + system file may be grown
 WSQF_KEEP   equ 0x04            ; ...the hold outlives a WAKE (18.4.9.3), on a
                                 ; fixed disk: [dws_keep] is the verdict
@@ -3883,10 +3960,10 @@ DWS_RECW    equ 8               ; and size, dskw_dsec, dskw_doff, dskw_prev,
                                 ; where declared
 
 %ifndef KD_BUILD
-; dwsf_dskw_write_seq - THE CELL's way in (slot 0x0461), and the kernel's
-; writers call the door below it. WSEQF_SYS is APPEND_SYS's permission, so it
-; takes APPEND_SYS's FENCE (api_file_sysc, SPEC.md 19.6.1): drv_owns_seg on
-; the caller's DS, which api_rn banked under the far return api_far built -
+; dwsf_dskw_write_seq - THE CELL's way in (a door cell), and the kernel's
+; writers call the door below it. WSEQF_SYS is a SYSTEM file's permission, so
+; it takes OSAPI_FILE_WRITE_SYS's FENCE (SPEC.md 19.6.1): drv_owns_seg on
+; the caller's DS, which api_nb banked under the far return api_far built -
 ; BP, BX, IP, CS, the caller's SI, the caller's DS. A close reads no flag
 dwsf_dskw_write_seq:
     jcxz dwf_dskw_write_seq
@@ -3895,7 +3972,7 @@ dwsf_dskw_write_seq:
     push bx
     push bp
     mov bp, sp
-    mov bx, [bp+10]             ; the caller's DS (SS: the stack's own)
+    mov bx, [bp+API_RN_DSOFF]   ; the caller's DS (SS: the stack's own)
     call drv_owns_seg_x         ; CF = 0: a loaded driver's segment
     pop bp
     pop bx
@@ -4158,7 +4235,7 @@ dws_hlose:
 ; out: CF=0 with AX=0; CF=1 with AX = FERR_*
 ; clobbers: AX (the output), CF
 ;
-; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4, slot 0x0286)
+; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4; OSAPI_FILE_WRITE_AT's append form)
 ; in:  SI -> a NUL 8.3 name, ES:BX -> the bytes, CX = count (>= 1)
 ; out/clobbers: dskw_write_at's
 ;
@@ -4199,9 +4276,9 @@ dws_hlose:
 ; bytes from past the CALLER's buffer over bytes the file owns. At or past
 ; the size the rounded tail lands on slack, so any count goes (18.4.7.2).
 ; -----------------------------------------------------------------------------
-; (The SYSTEM-file flavour, dskw_append_sys, is its far entry alone:
-; dwf_dskw_append_sys stores [dskw_syswr] = 1 and falls into dwf_dskw_append's
-; call, and dskw_wrp clears it on the way out - size pass 10, -4.)
+; (The SYSTEM-file flavour, dskw_append_sys, was its far entry alone until
+; kernel size pass 19 withdrew OSAPI_FILE_APPEND_SYS, which had no caller: a
+; driver appends to a system file through WRITE_SEQ's WSEQF_SYS.)
 dskw_append_x:
     push bx
     push cx
@@ -4262,9 +4339,8 @@ dskw_wabody:
     call dskw_find
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
 %ifdef DSKW_SYSW
-    call dskw_pmask             ; AL = what may not be written here
-    test byte [dskw_raw+DSK_R_ATTR], al
-%else
+    call dskw_pmask             ; AL = what may not be written here (ZF:
+%else                           ; the entry's attribute tested against it)
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT  ; (.args spends AX next)
 %endif
     jnz .prot
@@ -4557,26 +4633,32 @@ dskw_wabody:
     ret
 .rollback:
     pop cx                      ; the banked last cluster, into a dead register
-%ifdef DSKW_WSEQ
-    test byte [dws_flg], WSQF_HELD  ; A FAILED HELD CALL LOSES ITSELF AND
-    jz .rbdrop                  ; NOTHING ELSE (SPEC.md 18.4.9), as a failed
-    push ax                     ; APPEND does. Dropping the window would take
-    mov ax, [dskw_first]        ; **ITS OWN SUB-CHAIN FREED FIRST** (SPEC.md
-    call dskw_free_chain        ; 18.4.9.1): never linked, so it is this
-                                ; call's alone, and a flush of it would leak
-                                ; every cluster it took - on a DISK FULL,
-                                ; every free cluster the volume had left
-    call dskw_flush_x           ; the held chain's unflushed allocations with
-    pop ax                      ; it, and the commit would then link the file
-    jnc .rbkept                 ; into clusters the disk calls free. So FLUSH
-    call dws_hlose              ; it: the held chain is unreachable until the
-                                ; commit; this call's own half-built
-                                ; sub-chain is freed above rather than left
-                                ; as lost clusters. Only a
-                                ; flush that ALSO fails loses the stream: it
-                                ; is POISONED, as a lost bank is, so its next
-                                ; call answers FERR_IO rather than appending
-                                ; past what never reached the disk
+.rbfree:                        ; (dskw_wbody's rollback too: one arm, BR-17)
+    push ax                     ; **THE HALF-BUILT CHAIN FREED, THEN FLUSHED**
+    mov ax, [dskw_first]        ; (SPEC.md 18.4's Rollback, 18.4.9.1). Never
+    call dskw_free_chain        ; linked, it is this call's alone - and an
+                                ; invalidate alone cannot take it back: on a
+                                ; FAT longer than the window the scan and the
+                                ; links moved the window, dsk_fat_window
+                                ; flushed before it evicted, and what it
+                                ; flushed is allocated on the disk and
+                                ; reachable from nothing. On a DISK FULL that
+                                ; was every free cluster the volume had left,
+                                ; and it stayed "full" until a repair. Freed
+                                ; in RAM, those windows fault back in with
+                                ; their links, so the walk frees exactly what
+                                ; was built; [dskw_first] = 0 (nothing taken)
+                                ; is no walk at all.
+    call dskw_flush_x           ; FLUSH it, rather than dropping the window:
+    pop ax                      ; for a HELD stream the drop would take the
+    jnc .rbkept                 ; held chain's unflushed allocations with it
+%ifdef DSKW_WSEQ                ; and the commit would then link the file
+    test byte [dws_flg], WSQF_HELD  ; into clusters the disk calls free. Only
+    jz .rbdrop                  ; a flush that ALSO fails drops the window,
+    call dws_hlose              ; and a HELD stream with it: POISONED, as a
+                                ; lost bank is, so its next call answers
+                                ; FERR_IO rather than appending past what
+                                ; never reached the disk (SPEC.md 18.4.9)
 %endif
 .rbdrop:
     call dskw_refat             ; drop the half-built sub-chain; it keeps AX
@@ -4763,7 +4845,7 @@ dskw_czknow:
     call dskw_czsniff           ; ...or it said nothing: ask the file, and
 .judge:                         ; judge again on whatever that wrote
     mov al, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
-    sub al, DSK_CZ_MARK             ; 20.14.1), so 0x5A and 0x5B pass
+    sub al, DSK_CZ_MARK             ; 20.14.1), so 0xA4 and 0xA5 pass
     cmp al, LZ_LZB
 .out:
     ret
@@ -5499,9 +5581,10 @@ dskw_flush_x:
 ;
 ; What the window DOES change is the reach of the rollback: an eviction may
 ; already have flushed part of a half-built chain to the disk, and no
-; invalidate can take that back. It costs LOST CLUSTERS and never a
-; cross-link - the same guarantee the commit order gives a crash (18.4) - and
-; that is the whole of the difference.
+; invalidate can take that back. So the write bodies' rollback FREES the
+; chain and flushes first (dskw_wabody.rbfree), and comes here only when that
+; flush fails - then it costs LOST CLUSTERS and never a cross-link, the same
+; guarantee the commit order gives a crash (18.4).
 ; -----------------------------------------------------------------------------
 dskw_refat:
     mov word [dsk_fatw0], 0xFFFF
@@ -5868,6 +5951,12 @@ modf_hdr:
     dw MOD_STAMP                ; ...and another BUILD of this one
     dw modf_end                 ; MOD_H_IMG
     dw FM_NENT                  ; MOD_H_NENT
+%ifdef OS88_ASSOC
+    dw modf_end - asw_v         ; MOD_H_SCR: ascw's cells, the image's last
+%else                           ; bytes and zeros in the file (2.8.3) - KEPT
+    dw modf_end - modf_scr      ; ...and kern_small's: ONE zero byte, the
+%endif                          ; image writing nothing else of its own
+                                ; (DESK.DRV's shape, SPEC.md 2.8.3.4.1) - KEPT
     dw dskw_fmt_probe_x         ; the FAR entries ARE the bodies: each is
     dw dskw_fmt_do_x            ; reached by `call far` - the two inside
     dw dskw_fmt_line_x          ; dskw_fmt_do_x by `push cs / call` - so each
@@ -6832,7 +6921,7 @@ dskw_fmt_low:
 .ok:
     pop dx
     mov ax, 512                 ; one unit: this track
-    call KERNEL_SEG:apic_fpg_stepb
+    KDOOR fpg_stepb
     inc bp
     mov ax, bp
     shr ax, 1                   ; AL = the next track's cylinder
@@ -7089,8 +7178,8 @@ asc_flush:
     popf
     ret
 
-; OSAPI_ASSOC_FLUSH's far entry (0x0493, SPEC.md 54.5): the rare cold slot
-; far-calls its body (api_rsc), and asc_flush ends in a near ret
+; OSAPI_ASSOC_FLUSH's far entry (a door cell, SPEC.md 54.5): the rare cold slot
+; far-calls its body (the door's RCS kind), and asc_flush ends in a near ret
 osapi_assoc_flush_x:
     call asc_flush
     retf
@@ -7309,11 +7398,16 @@ dwf_dskw_mkdir:         call dskw_mkdir_x
                     retf
 dwf_dskw_read_at:       call dskw_read_at_x
                     retf
-%ifdef DSKW_SYSW
-dwf_dskw_append_sys:    mov byte [dskw_syswr], 1    ; ...and the plain
-%endif
-dwf_dskw_append:        call dskw_append_x          ; append (dskw_wrp
-                    retf                            ; clears it)
+%ifdef KERN_SMALL
+dwf_dskw_write_at:      cmp dx, -1  ; DX = 0xFFFF IS the append (SPEC.md
+                        jne dwf_dskw_wat_no ; 18.4.7.3), which is what
+%endif                  ; OSAPI_FILE_APPEND was withdrawn for (kernel size
+dwf_dskw_append:        call dskw_append_x  ; pass 19) - so kern_small
+                    retf                    ; answers that offset and
+                                ; refuses every other: DOS.O88 does not ship
+                                ; on the small disks, os88data.inc's od_write
+                                ; takes its full arm (SPEC.md 19.9.1), and
+                                ; the INSIDE arm is kern_big's
 %ifndef KERN_SMALL
 dwf_dskw_write_at:      call dskw_write_at_x
                     retf
@@ -7331,15 +7425,9 @@ dwf_dskw_write_seq:             ; SPEC.md 18.4.9: kern_big's alone too
 dwf_dskw_read_seq:  mov ax, FERR_NAME   ; SPEC.md 18.4.8: kern_big's alone, and
                                         ; the cell is in both kernels (20.8
                                         ; rule 4) - falling into the refusal
-dwf_dskw_write_at:  stc         ; every caller tests CF (SPEC.md 18.4.7.4):
-                    retf        ; DOS.O88 does not ship on the small disks,
-                                ; and os88data.inc's od_write takes its full
-                                ; arm (SPEC.md 19.9.1). The INSIDE arm,
-                                ; dsk_write_chain and this door are
-                                ; kern_big's, and an append
-                                ; still has the whole body. Cold, because the
-                                ; N cell reaches the far entry by name
-                                ; (SPEC.md 20.3.2)
+dwf_dskw_wat_no:    stc         ; every caller tests CF (SPEC.md 18.4.7.4).
+                    retf        ; Cold, because the N cell reaches the far
+                                ; entry by name (SPEC.md 20.3.2)
 %endif
 ; THE AL DISPATCH IS HERE, in the COLD far entry, and not in a second resident
 ; thunk: both bodies are already cold, so branching here costs one far entry

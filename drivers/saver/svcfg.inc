@@ -93,29 +93,18 @@ SC_TLEN     equ 4               ; a field's buffer: three digits and the NUL
 sv_do_cfg:
     mov [sv_pub], si
 
-    mov bx, si
-    mov al, [es:bx + SS_P_MODES]
+    mov al, [es:si + SS_P_MODES]
     mov [sc_modes], al
-    mov al, [es:bx + SS_P_SECS]
-    xor ah, ah
-    mov di, sc_t0
-    call sc_num2str
-    mov bx, si                  ; RE-ESTABLISHED: sc_num2str divides by ten and
-                                ; BX is where the ten is. A pointer held across
-                                ; a call that clobbers it is xm_boot's recorded
-                                ; bug (SPEC.md 41.12), and it reads here as the
-                                ; minutes field showing a number from nowhere
-    mov al, [es:bx + SS_P_MINS]
-    xor ah, ah
-    mov di, sc_t1
-    call sc_num2str
-
+    mov ax, [es:si + SS_P_SECS] ; AL = the seconds, AH = the minutes - the two
+    push ax                     ; fields, adjacent in the block
     mov si, sc_f0               ; the two line blocks: buffer, capacity, and
     mov di, sc_t0               ; the caret at the end of what is in them
-    call sc_seed
+    call sc_fld
+    pop ax
+    mov al, ah
     mov si, sc_f1
     mov di, sc_t1
-    call sc_seed
+    call sc_fld
     mov byte [sc_f0 + LN_FOCUS], 1  ; the first field has it, so a user who
                                     ; opens this and types is typing seconds
 
@@ -126,12 +115,6 @@ sv_do_cfg:
     call OSAPI_WM_CREATE
     jc .no
     mov [sv_win], bx
-    mov ax, sc_up               ; SPEC.md 13.7/13.8.1: NOT template words, so a
-    call OSAPI_WM_ONMOUSEUP     ; window installs them itself after create
-    mov ax, sc_drag
-    call OSAPI_WM_ONDRAG
-    mov ax, sc_close            ; ...and the close negotiator, which is what
-    call OSAPI_WM_ONCLOSE       ; makes this image safe to free (see the header)
     mov byte [sc_down], 0
     xor ax, ax
     call os88ui_arm             ; a window reopened mid-gesture must not come
@@ -140,16 +123,43 @@ sv_do_cfg:
     CLC_OR_STC .no
     ret
 
-; sc_seed - SI = a line block, DI = its buffer; fill in the rest
-sc_seed:
+; -----------------------------------------------------------------------------
+; sc_fld - AL (0..255) into the buffer at DI as decimal, NUL terminated, and
+; the line block at SI filled in around it: the caret lands at the end
+; clobbers: AX, BX, CX, DX (all of them sc_num2str's and sc_seed's, which
+; were two routines with this one caller - driver size pass 1)
+;
+; Written out rather than borrowed because there is no shared one: the kernel
+; has clk_fld_str and the SDK has none, and three digits of unsigned decimal
+; is a divide loop either way. A zero needs no case of its own: the loop runs
+; once and pushes its one '0'.
+; -----------------------------------------------------------------------------
+sc_fld:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
+    push di
+    xor cx, cx                  ; CX = digits pushed
+    mov bl, 10
+.div:
+    xor ah, ah
+    div bl                      ; AL = the rest, AH = this digit
     push ax
+    inc cx
+    or al, al
+    jnz .div
+.pop:
+    pop ax
+    add ah, '0'
+    mov [di], ah
+    inc di
+    loop .pop
+    mov byte [di], 0
+    pop di
+
     mov [si + LN_BUF], di
     mov word [si + LN_MAX], SC_TLEN
     mov word [si + LN_VIEW], 0
     mov byte [si + LN_FOCUS], 0
-    call os88line_set           ; DI = the string; the caret lands at the end
-    pop ax
-    ret
+    jmp os88line_set            ; DI = the string; the caret lands at the end
 
 ; -----------------------------------------------------------------------------
 ; sc_layout - the two field rects, in SCREEN coordinates
@@ -171,12 +181,10 @@ sc_layout:
     mov di, ax
     mov bp, dx
     mov si, sc_f0
-    mov dx, bp
     add dx, SC_N0Y
     call sc_frect
     mov si, sc_f1
-    mov dx, bp
-    add dx, SC_N0Y + SC_NPIT
+    add dx, SC_NPIT             ; sc_frect keeps DX
     call sc_frect
     jmp os88_r_si
 
@@ -213,35 +221,32 @@ sc_paint:
     cmp cx, SS_NMODE
     jb .row
 
-    mov si, sc_s_every          ; --- the two numbers, each label, field and
-    mov cx, di                  ; unit on one row
-    add cx, SC_GX
-    mov dx, bp
-    add dx, SC_N0Y + 3
-    call sc_txt
-    mov si, sc_s_secs
-    mov cx, di
-    add cx, SC_UX
-    call sc_txt
-    mov si, sc_f0
-    call os88line_draw
-
+    mov dx, bp                  ; --- the two numbers, each label, unit and
+    add dx, SC_N0Y + 3          ; field on one row
+    mov si, sc_s_every
+    mov bx, sc_s_secs
+    mov ax, sc_f0
+    call .num
+    add dx, SC_NPIT
     mov si, sc_s_after
-    mov cx, di
-    add cx, SC_GX
-    mov dx, bp
-    add dx, SC_N0Y + SC_NPIT + 3
-    call sc_txt
-    mov si, sc_s_mins
-    mov cx, di
-    add cx, SC_UX
-    call sc_txt
-    mov si, sc_f1
-    call os88line_draw
+    mov bx, sc_s_mins
+    mov ax, sc_f1
+    call .num
 
     call sc_btns                ; --- and the two buttons
 
     jmp os88_r_bp
+
+.num:                           ; SI = the label, BX = the unit, AX = the field,
+    mov cx, di                  ; DX = the row's text top
+    add cx, SC_GX
+    call sc_txt
+    mov si, bx
+    mov cx, di
+    add cx, SC_UX
+    call sc_txt
+    xchg ax, si
+    jmp os88line_draw
 
 ; --- sc_txt - SI = the string at (CX, DX), black ----------------------------
 sc_txt:
@@ -254,25 +259,26 @@ sc_txt:
 ; -----------------------------------------------------------------------------
 ; sc_check - one check box and its label
 ; in:  CX = the row, DI = content left, BP = content top; lock held
-; out: nothing; clobbers AX, BX, DX, SI
+; out: nothing; clobbers AX, BX, CX, DX, SI
 ;
 ; ONE ROW, so a toggle repaints a row and never the window: os88ui_glyph is
 ; ~45ms on the field machine (its own header says so) and four of them plus
 ; two fields plus two buttons is most of a second of held gfx lock.
 ; -----------------------------------------------------------------------------
 sc_check:
-    push cx
+    mov bx, cx
+    add bx, bx
+    mov si, [bx + sc_labels]    ; (os88ui_glyph keeps every register)
     mov ax, cx
     mov bl, SC_ROWH
     mul bl
     add ax, SC_R0Y
     mov dx, bp
     add dx, ax                  ; DX = the glyph's top
-    push dx
 
     mov al, OS88UI_GCHECK
     mov bl, [sc_modes]
-    shr bl, cl                  ; bit CL = mode CL, sv_enabled's own mapping
+    shr bl, cl                  ; bit CL = mode CL, sv_pick's own mapping
     test bl, 1
     jz .off
     or al, OS88UI_GON
@@ -282,65 +288,27 @@ sc_check:
     add cx, SC_GX
     call os88ui_glyph
 
-    pop dx
-    pop cx
-    push cx
     add dx, SC_TXDY
-    mov ax, cx
-    add ax, ax
-    mov bx, ax
-    mov si, [bx + sc_labels]
     mov cx, di
     add cx, SC_LX
-    call sc_txt
-    pop cx
-    ret
+    jmp sc_txt
 
 ; -----------------------------------------------------------------------------
-; sc_btns / sc_btn1 - the two buttons, drawn to follow [sc_down]
+; sc_btns - the buttons, drawn to follow [sc_down]
 ; in:  DI = content left, BP = content top; lock held
+; out: nothing; clobbers AX, BX, CX, DX, SI - its two callers bank them
+;
+; One button at a time through the one record: its rect is sc_r, which the
+; record names statically, its label and flags the two words the record
+; points at (SPEC.md 20.5.1.3). It was sc_btns calling sc_btn1, its one
+; caller (driver size pass 1).
 ; -----------------------------------------------------------------------------
 sc_btns:
-    push ax
-    push bx
-    push cx
-    push si
-    xor cx, cx
+    xor bx, bx                  ; BX = the button's index, twice
 .b:
-    push cx
-    mov bx, cx
-    add bx, bx
     mov ax, [bx + sc_btnx]      ; ONE TABLE drives the painter and the hit
     add ax, di                  ; test, so a third button is a row rather than
     mov si, [bx + sc_btnl]      ; two places to add it and one to forget
-    inc cl
-    call sc_btn1
-    pop cx
-    inc cx
-    cmp cx, SC_NBTN
-    jb .b
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; in: AX = its left edge (screen), SI = the label, CL = its control id
-
-; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
-; A Control Panel page draws its buttons one at a time, so the record is
-; pointed at whichever rect the caller staged. The GESTURE here is the
-; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
-; release-fired; what changed is that the DRAW goes through the control.
-sv_btlbl: dw 0
-sv_btflg: dw 0
-sv_btrec: dw 0, sv_btlbl, sv_btflg, 1, 0, 0, 0, 0, 0
-
-sc_btn1:
-    push ax
-    push bx
-    push dx
-    push di
     mov [sc_r + 0], ax
     add ax, SC_BW - 1
     mov [sc_r + 4], ax
@@ -349,70 +317,71 @@ sc_btn1:
     mov [sc_r + 2], ax
     add ax, SC_BH - 1
     mov [sc_r + 6], ax
-    mov bx, sc_r
-    mov di, OS88UI_FILL         ; FILL because a RELEASE redraws this button
+    mov cx, bx                  ; the control's id is its index plus one
+    shr cx, 1
+    inc cx
+    mov dx, OS88UI_FILL         ; FILL because a RELEASE redraws this button
     cmp cl, [sc_down]           ; over a PRESSED one; on a full repaint the
     jne .up                     ; content has already been whited
-    or di, OS88UI_DOWN          ; SPEC.md 13.8: the pressed look is DRAWN, not
-.up:                            ; XOR-ed - a repaint between the two edges must
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [sv_btlbl], si          ; label and DI its flags, so the record takes
-    mov [sv_btflg], di          ; all three and the picture is identical
-    mov [sv_btrec+OS88UI_BT_RECTS], bx
+    or dx, OS88UI_DOWN          ; SPEC.md 13.8: the pressed look is DRAWN, not
+.up:                            ; XOR-ed. THE ONE CONTROL (SPEC.md 20.5.1.3):
+    mov [sv_btlbl], si          ; the record takes the label and the flags,
+    mov [sv_btflg], dx          ; and the picture is identical
+    push bx
     mov bx, sv_btrec
     mov al, 1
     call os88ui_btn
     pop bx
-    pop ax
-    pop di
-    pop dx
-    pop bx
-    pop ax
+    inc bx
+    inc bx
+    cmp bx, SC_NBTN * 2
+    jb .b
     ret
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control. The
+; rect is always sc_r, so the record names it once, here.
+sv_btlbl: dw 0
+sv_btflg: dw 0
+sv_btrec: dw sc_r, sv_btlbl, sv_btflg, 1, 0, 0, 0, 0, 0
+%if OS88UI_BT_RECTS != 0
+ %error "saver: sv_btrec names sc_r in its first word, OS88UI_BT_RECTS"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sc_bhit - which button is the SCREEN point (CX, DX) in? AL = 0 for neither
 ; in:  CX = x, DX = y; DI = content left and BP = content top, from sc_layout
+; out: AL; clobbers AH, CX, DX, SI. BX IS KEPT: sc_up and sc_drag hold the
+;      armed control in BL across it
 ; -----------------------------------------------------------------------------
 sc_bhit:
-    push bx
-    push cx
-    push dx
-    push si
     mov ax, dx
     sub ax, bp
     cmp ax, SC_BY
-    jl  .none
+    jl .none
     cmp ax, SC_BY + SC_BH
     jge .none
-    mov si, cx                  ; SI = the x, off the table's own row
-    sub si, di
-    xor cx, cx
+    sub cx, di                  ; CX = the x, off the table's own row
+    mov si, sc_btnx
+    mov dl, 1                   ; the ids are the table's index plus one
 .b:
-    mov bx, cx
-    add bx, bx
-    mov ax, [bx + sc_btnx]
-    cmp si, ax
+    lodsw
+    cmp cx, ax
     jl .next
     add ax, SC_BW
-    cmp si, ax
+    cmp cx, ax
     jl .hit
 .next:
-    inc cx
-    cmp cx, SC_NBTN
-    jb .b
+    inc dx
+    cmp dl, SC_NBTN
+    jbe .b
 .none:
-    xor al, al
-    jmp short .out
+    xor dl, dl
 .hit:
-    mov ax, cx
-    inc al                      ; the ids are the table's index plus one
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    xchg ax, dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -423,39 +392,34 @@ sc_bhit:
 ; 13.6 applied rather than an inconsistency: a toggle has a safe prefix action
 ; - clicking it again undoes it, in view, with nothing else changed - and Ok
 ; does not, so a mis-aimed press on Ok has to be cancellable by sliding off.
+;
+; CX AND DX STAY THE CLICK throughout: sc_layout and os88line_click keep both.
 ; -----------------------------------------------------------------------------
 sc_click:
     call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
-    mov [sc_cx], cx
-    mov [sc_cy], dx
     call sc_layout
 
-    xor cx, cx                  ; --- a field?
-.f:
-    push cx
-    call sc_blk
-    mov cx, [sc_cx]
-    mov dx, [sc_cy]
+    mov si, sc_f0               ; --- a field?
     call os88line_click
-    pop cx
+    mov al, 0
     jnc .focus
-    inc cx
-    cmp cx, 2
-    jb .f
-    jmp short .chk
+    mov si, sc_f1
+    call os88line_click
+    mov al, 1
+    jc .chk
 .focus:
-    call sc_focus
-    call sc_fields              ; ...and the two fields are the whole change
-    jmp .out
+    mov cl, al
+    call sc_focus               ; ...which redraws the two fields, the whole
+    jmp short .out              ; of the change
 
 .chk:                           ; --- a check box?
-    mov ax, [sc_cx]
+    mov ax, cx
     sub ax, di
     sub ax, SC_GX
     jl .btn
     cmp ax, SC_HITW
     jge .btn
-    mov ax, [sc_cy]
+    mov ax, dx
     sub ax, bp
     sub ax, SC_R0Y
     jl .btn
@@ -469,14 +433,11 @@ sc_click:
     mov bl, 1
     shl bl, cl
     xor [sc_modes], bl          ; the toggle, and then its own row and nothing
-    xor cx, cx                  ; else
-    mov cl, al
+    mov ch, 0                   ; else
     call sc_check
     jmp short .out
 
 .btn:                           ; --- a button? THE PRESS ONLY ARMS
-    mov cx, [sc_cx]
-    mov dx, [sc_cy]
     call sc_bhit
     or al, al
     jz .out
@@ -486,33 +447,31 @@ sc_click:
 .out:
     jmp os88_r_bp
 
-; sc_blk - CX = 0 or 1 -> SI = that field's line block
-sc_blk:
-    mov si, sc_f0
-    or cx, cx
-    jz .out
-    mov si, sc_f1
-.out:
-    ret
-
-; sc_focus - CX = the field that gets it, the other loses it
+; -----------------------------------------------------------------------------
+; sc_focus - CL = the field that gets it (0 or 1), the other loses it; then
+; the two fields, and NOTHING else
+; clobbers: CL, SI
+;
+; A caret arriving in one field and leaving the other is the whole of what a
+; click into a field or a Tab changes, and os88line_draw draws "the box, its
+; text, and the caret if it has focus" - so two calls express it. Repainting
+; the content instead cost the white fill, four os88ui_glyph (~45ms each, its
+; own header) and 121 cells of label and button text: a third of a second of
+; held gfx lock for one 1px bar, which is sc_check's argument above at the
+; other end of the same window.
+;
+; The caller has already run sc_layout, so LN_X1..LN_Y2 are at the window's
+; live position - the only state os88line_draw reads. (sc_fields, which was
+; this routine's tail and had no other caller)
+; -----------------------------------------------------------------------------
 sc_focus:
-    push cx
-    mov byte [sc_f0 + LN_FOCUS], 0
-    mov byte [sc_f1 + LN_FOCUS], 0
-    call sc_blk
-    mov byte [si + LN_FOCUS], 1
-    pop cx
-    ret
-
-; sc_focused - out CX = which field has it (0 if neither does)
-sc_focused:
-    xor cx, cx
-    cmp byte [sc_f1 + LN_FOCUS], 0
-    je .out
-    inc cx
-.out:
-    ret
+    mov [sc_f1 + LN_FOCUS], cl
+    xor cl, 1
+    mov [sc_f0 + LN_FOCUS], cl
+    mov si, sc_f0
+    call os88line_draw
+    mov si, sc_f1
+    jmp os88line_draw
 
 ; -----------------------------------------------------------------------------
 ; sc_setdown - AL = the button drawn PRESSED (0 = neither)
@@ -544,10 +503,11 @@ sc_up:
     cmp al, bl
     jne .cancel
     cmp al, SC_CTEST            ; --- Test: the window STAYS, so this one owes
-    jne .close                  ; the upright redraw the other two do not
-    xor al, al
+    jne .close                  ; the upright redraw the other two do not -
+    call sc_test                ; which is the slid-off path's own, so it
+.cancel:                        ; falls into it
+    xor al, al                  ; slid off: thought better of, nothing fires
     call sc_setdown
-    call sc_test
     jmp short .out
 .close:
     mov byte [sc_down], 0       ; NOT sc_setdown: both paths below destroy the
@@ -556,10 +516,6 @@ sc_up:
     call sc_apply
 .shut:
     call sc_kill
-    jmp short .out
-.cancel:
-    xor al, al                  ; slid off: thought better of, nothing fires
-    call sc_setdown
 .out:
     jmp os88_r_bp
 
@@ -588,7 +544,8 @@ sc_drag:
 ;
 ; The field takes what it knows; Tab, Return and Escape come back here, which
 ; is os88line.inc's whole contract - only the caller knows whether Return
-; means Ok.
+; means Ok. A field's LN_FOCUS byte is 0 or 1, so the second one's IS the
+; index of the field that has it.
 ; -----------------------------------------------------------------------------
 sc_key:
     call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
@@ -599,56 +556,30 @@ sc_key:
     je .esc
     cmp al, 9
     je .tab
-    call sc_focused
-    call sc_blk
+    mov si, sc_f0               ; the field that has the focus
+    cmp byte [sc_f1 + LN_FOCUS], 0
+    je .key
+    mov si, sc_f1
+.key:
     call os88line_key
     jc .out                     ; not the field's: nothing here wants it
     call os88line_draw          ; ...and only the field it changed is redrawn
     jmp short .out
 .tab:
-    call sc_focused
-    inc cx
-    cmp cx, 2
-    jb .setf
-    xor cx, cx
-.setf:
+    mov cl, [sc_f1 + LN_FOCUS]  ; ...to the other one
+    xor cl, 1
     call sc_focus
-    call sc_fields              ; ...and the two fields are the whole change
     jmp short .out
 .ret:
-    call sc_apply
-    call sc_kill
-    jmp short .out
+    call sc_apply               ; Return is Ok, and then Escape's close
 .esc:
     call sc_kill
 .out:
     jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
-; sc_fields - the two fields after a focus change, and NOTHING else
-;
-; A caret arriving in one field and leaving the other is the whole of what a
-; click into a field or a Tab changes, and os88line_draw draws "the box, its
-; text, and the caret if it has focus" - so two calls express it. Repainting
-; the content instead cost the white fill, four os88ui_glyph (~45ms each, its
-; own header) and 121 cells of label and button text: a third of a second of
-; held gfx lock for one 1px bar, which is sc_check's argument above at the
-; other end of the same window.
-;
-; The caller has already run sc_layout, so LN_X1..LN_Y2 are at the window's
-; live position - the only state os88line_draw reads.
-; -----------------------------------------------------------------------------
-sc_fields:
-    push si
-    mov si, sc_f0
-    call os88line_draw
-    mov si, sc_f1
-    call os88line_draw
-    pop si
-    ret
-
-; -----------------------------------------------------------------------------
 ; sc_apply - the controls into the kernel's settings block (SPEC.md 79.7)
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI - its callers are banked
 ;
 ; NOTHING IS WRITTEN TO A DISK HERE. The three bytes go into KERNEL_SEG and
 ; SS_P_POST is raised; the UI task re-derives the idle period from them and
@@ -659,53 +590,44 @@ sc_fields:
 ; -----------------------------------------------------------------------------
 sc_apply:
     call sc_store
-    push bx
-    mov bx, [sv_pub]
-    mov byte [es:bx + SS_P_POST], 1
-    pop bx
+    mov byte [es:di + SS_P_POST], 1
     ret
 
 ; -----------------------------------------------------------------------------
 ; sc_store - the controls into the kernel's block, WITHOUT the post
 ; in:  nothing; ES = KERNEL_SEG
-; out: nothing (all registers preserved)
+; out: DI = the block; clobbers AX, BX, CX, DX, SI
 ;
 ; Split out of sc_apply for Test, which needs the settings live and must NOT
 ; raise SS_P_POST: blk_pass spends a post BEFORE it looks at the clock, so a
 ; post would re-derive [ss_idle] from [ss_mins] on the very next pass and undo
-; the 1 that Test has just written there (SPEC.md 79.7).
+; the 1 that Test has just written there (SPEC.md 79.7). sc_str2num spends
+; BX, so the block is held in DI.
 ; -----------------------------------------------------------------------------
 sc_store:
-    push ax
-    push bx
-    push cx
-    push dx                     ; the header's "all registers preserved" was a
-    push si                     ; lie by one: both clamps and sc_str2num's mul
-    mov bx, [sv_pub]
+    mov di, [sv_pub]
     mov al, [sc_modes]
-    mov [es:bx + SS_P_MODES], al
+    mov [es:di + SS_P_MODES], al
 
     mov si, sc_t0
     call sc_str2num             ; AX = what was typed, 0 if it was nonsense
     mov cx, SV_MINSEC
     mov dx, SV_MAXSEC
     call sc_clamp
-    mov bx, [sv_pub]            ; RE-ESTABLISHED after every parse: sc_str2num
-    mov [es:bx + SS_P_SECS], al ; accumulates through BX
+    mov [es:di + SS_P_SECS], al
 
     mov si, sc_t1
     call sc_str2num
     xor cx, cx                  ; ZERO IS LEGAL HERE and is the whole of the
     mov dx, SS_MAXMIN           ; off switch (SPEC.md 79.4), which is why the
     call sc_clamp               ; two clamps take their floor as an argument
-    mov bx, [sv_pub]
-    mov [es:bx + SS_P_MINS], al
-    jmp os88_r_si
+    mov [es:di + SS_P_MINS], al
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sc_test - show it NOW (SPEC.md 79.7)
 ; in:  the gfx lock is HELD (a release); ES = KERNEL_SEG
-; out: nothing (all registers preserved)
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI - its caller is banked
 ;
 ; **IT APPLIES FIRST**, because a Test that showed something other than what
 ; the controls say would be worth less than nothing - so Test commits exactly
@@ -728,14 +650,9 @@ sc_store:
 ; in between, because SSV_BUSY answers for that window.
 ; -----------------------------------------------------------------------------
 sc_test:
-    push ax
-    push bx
     call sc_store
-    mov bx, [sv_pub]
-    mov word [es:bx + SS_P_IDLE], 1
+    mov word [es:di + SS_P_IDLE], 1
     mov byte [sc_testing], 1    ; ...and sv_do_stop is what spends it
-    pop bx
-    pop ax
     ret
 
 SS_MAXMIN   equ 59              ; MIRRORED IN kernel/blank.inc, where the
@@ -761,6 +678,7 @@ sc_clamp:
 
 ; -----------------------------------------------------------------------------
 ; sc_kill - take the window down for good (module internal)
+; out: nothing (all registers preserved)
 ;
 ; DESTROY AND NOT HIDE. An unowned window's close is a hide (SPEC.md 38.1),
 ; which leaves the record holding a W_SEG and a W_PAINT that name THIS IMAGE -
@@ -768,12 +686,11 @@ sc_clamp:
 ; using it (SPEC.md 79.8). SS_P_POST is what brings that reap on.
 ; -----------------------------------------------------------------------------
 sc_kill:
-    push ax
     push bx
-    mov bx, [sv_win]
+    xor bx, bx                  ; the window, and 0 in its place
+    xchg bx, [sv_win]
     or bx, bx
     jz .out
-    mov word [sv_win], 0
     call OSAPI_WM_DESTROY
     mov bx, [sv_pub]
     or bx, bx
@@ -781,7 +698,6 @@ sc_kill:
     mov byte [es:bx + SS_P_POST], 1
 .out:
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -803,61 +719,27 @@ sc_close:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_num2str - AX (0..999) into the buffer at DI, NUL terminated
 ; sc_str2num - the digits at SI into AX; anything else ends it
-; clobbers: AX, BX, CX, DX (both)
+; clobbers: AX, BX, CX, DX
 ;
-; Written out rather than borrowed because there is no shared one: the kernel
-; has clk_fld_str and the SDK has none, and three digits of unsigned decimal
-; is a divide loop either way.
+; A digit is one whose distance from '0' is 0..9 UNSIGNED, which is both ends
+; of the range in one compare.
 ; -----------------------------------------------------------------------------
-sc_num2str:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push di
-    mov bx, 10
-    mov cx, 0                   ; CX = digits pushed
-    or ax, ax
-    jnz .div
-    mov byte [di], '0'
-    mov byte [di+1], 0
-    pop di
-    ret
-.div:
-    xor dx, dx
-    div bx
-    add dl, '0'
-    push dx
-    inc cx
-    or ax, ax
-    jnz .div
-.pop:
-    pop dx
-    mov [di], dl
-    inc di
-    dec cx
-    jnz .pop
-    mov byte [di], 0
-    pop di
-    ret
-
 sc_str2num:
     xor ax, ax
     xor bx, bx
     mov cx, 10
 .d:
     mov bl, [si]
-    cmp bl, '0'
-    jb .out
-    cmp bl, '9'
-    ja .out
     sub bl, '0'
+    cmp bl, 9
+    ja .out
     mul cx                      ; DX:AX; three digits cannot reach DX
     add ax, bx
     inc si
     cmp ax, 999
     jbe .d
     mov ax, 999
-    ret
 .out:
     ret
 
@@ -869,7 +751,10 @@ sc_str2num:
     OS88_RET_LADDER bp
 
 ; --- the window ---------------------------------------------------------------
-sc_tpl:    dw SC_X, SC_Y, SC_FW, SC_FH, sc_s_title, sc_paint, sc_key, sc_click
+sc_tpl:    dw SC_X, SC_Y, SC_FW, SC_FH, sc_s_title, sc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sc_cls, 0, PAINT, sc_paint, ONKEY, sc_key, ONCLICK, sc_click, \
+               ONCLOSE, sc_close, ONMOUSEUP, sc_up, ONDRAG, sc_drag
 sc_s_title: db 'Screen Saver', 0
 
 sc_labels:  dw sc_s_m0, sc_s_m1, sc_s_m2, sc_s_m3
@@ -895,8 +780,6 @@ sc_modes:   db SS_M_ALL         ; the check boxes, seeded at every open
 sc_testing: db 0                ; a Test is running: the session's end owes a
                                 ; post, which is what restores [ss_idle]
 sc_down:    db 0                ; which button is drawn pressed
-sc_cx:      dw 0                ; the click being dispatched
-sc_cy:      dw 0
 sc_r:       dw 0, 0, 0, 0       ; ONE button's rect at a time - os88ui_krect's
                                 ; argument, one window over
 sc_t0:      times SC_TLEN db 0  ; the two fields' text...

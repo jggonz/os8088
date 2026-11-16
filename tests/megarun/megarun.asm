@@ -34,10 +34,6 @@ mr_entry:
     jc .out
     OS88_REGION_MOVABLE
     mov [mr_win], bx
-    mov ax, mr_tick
-    call OSAPI_WM_ONTIMER
-    mov ax, mr_wake
-    call OSAPI_WM_ONWAKE
     mov ax, MR_GAP
     call OSAPI_WM_TIMER
     clc
@@ -162,7 +158,9 @@ mr_hex:                         ; AL as two hex digits
 
 mr_tpl:
     dw 8, 380, 200, 40
-    dw mr_ttl, mr_paint, 0, 0
+    dw mr_ttl, mr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mr_cls, 0, PAINT, mr_paint, ONWAKE, mr_wake, ONTIMER, mr_tick
 mr_ttl:     db 'MegaRun', 0
 mr_s_pfx:   db 'MEGARUN: ', 0
 mr_s_ok:    db 'MEGARUN: ok', 0

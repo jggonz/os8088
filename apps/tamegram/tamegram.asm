@@ -331,8 +331,6 @@ tg_entry:
     OS88_REGION_MOVABLE_NOKEEP tg_ret
     mov si, tg_menus
     call OSAPI_MENU_SET
-    mov si, tg_about
-    call OSAPI_ABOUT_SET            ; 'About TameGram' under our name in the
     clc                             ; bar
 .done:
     ret
@@ -581,7 +579,7 @@ tg_newgame:
 ; content is what apps/arkanoid and apps/missile do for the same reason.
 ; -----------------------------------------------------------------------------
 
-; tg_about - the OSAPI_ABOUT_SET handler: a window callback in every respect
+; tg_about - the WC_ABOUT handler: a window callback in every respect
 ; in:  SI = our window ptr; caller holds the gfx lock
 tg_about:
     call tg_track
@@ -1714,7 +1712,10 @@ tg_fmt:
 ; =============================================================================
 tg_tpl:
     dw 0, 0, 0, 0
-    dw tg_ttl, tg_paint, tg_onkey, tg_onclick
+    dw tg_ttl, tg_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS tg_cls, 0, PAINT, tg_paint, ONKEY, tg_onkey, \
+               ONCLICK, tg_onclick, ABOUT, tg_about
 
     OS88_MENUSET tg_menus, tg_ttl, tg_oncmd
         OS88_MENU tg_m_game, tg_mi_game, 4

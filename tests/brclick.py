@@ -51,6 +51,7 @@ _OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88flush                                       # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
@@ -118,7 +119,7 @@ def main():
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "DEMO.HTM")
         w = dispcp.win_list(m, S)[-1]
         rec = m.read(S("wm_wins") + w * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
         about = [
@@ -877,8 +878,11 @@ def main():
                  rw("br_tby") + BR_TBH + BR_TBG + BR_LBAR // 2)
         os88marty.settle(m)
         bookmark_url = "http://bookmark.invalid/"
-        m.type_text("\b" * 120 + bookmark_url)
-        os88marty.settle(m)
+        # Paused-queue typing, paced in guest time: 144 keys at host speed
+        # overran the BIOS ring (SPEC.md 9.8 drops the newest) and the bar,
+        # BROWSE.DAT and the Bookmarks menu all got whatever survived - 'ai/'
+        # on the run that found it. brfetch.py's note has the whole account.
+        os88marty.text_taken(m, "\b" * 120 + bookmark_url)
         m.key("Enter")
         os88marty.settle(m)
         os88marty.until(m, lambda _m: rb("br_nstate") in (6, 7),
@@ -979,10 +983,16 @@ def main():
             xl = u16(m.read(base + 6, 2))
             xr = u16(m.read(base + 8, 2))
             tptr = u16(m.read(base, 2))
-            if tptr and xr > xl:
+            cseg = u16(m.read(base + 10, 2))
+            if tptr and xr > xl and cseg == 0:
+                # seg 0 is a KERNEL cell (the system menu): its title lives in
+                # KERNEL_SEG, so reading it through the browser's segment only
+                # printed garbage. It is never the Bookmarks menu.
+                say("menu cell %d: kernel's x=%d..%d" % (c, xl, xr))
+            elif tptr and xr > xl:
                 name = bytes(m.readseg(pseg, tptr, 16)).split(b"\0")[0]
                 say("menu cell %d: %r x=%d..%d seg=%04X" %
-                    (c, name, xl, xr, u16(m.read(base + 10, 2))))
+                    (c, name, xl, xr, cseg))
                 if name == b"Bookmarks":
                     bookmark_cell = (xl + xr) // 2
         if bookmark_cell is None:

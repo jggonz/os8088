@@ -85,8 +85,6 @@ cb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [cb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
     clc
 .out:
     pop si
@@ -394,8 +392,9 @@ cb_run:
     call bl_run
     cmp word [cb_dseg], 0
     jne .have
-    mov ax, 16                      ; the interleave rows' 16 KB
-    call OSAPI_MEM_CLAIM
+    mov ax, 16 * 64                      ; the interleave rows' 16 KB
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nogap
     mov [cb_dseg], dx
 .have:
@@ -425,7 +424,10 @@ cb_run:
 
 cb_tpl:
     dw 7, 22, 632, 300
-    dw cb_ttl, cb_paint, cb_onkey, cb_onclick
+    dw cb_ttl, cb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS cb_cls, 0, PAINT, cb_paint, ONKEY, cb_onkey, \
+               ONCLICK, cb_onclick
 
 cb_ttl:       db 'CPU Bench', 0
 cb_f_txt:     db 'CPUBENCH.TXT', 0

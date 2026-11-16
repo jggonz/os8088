@@ -546,7 +546,7 @@ static int ovl_find_open(void *win)
 
     ord = 0;
     while (ord >= 0) {
-        ord = os88_file_find(ord, &w_find);
+        ord = os88_file_find_seq(ord, &w_find);
         if (ord < 0)
             break;
         if (!w_samename(w_find.name, w_name))

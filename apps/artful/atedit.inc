@@ -1604,8 +1604,9 @@ at_undo_init:
     push dx
     cmp word [at_aseg], 0
     jne .out
-    mov ax, AT_UKB0
-    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment (SPEC.md 50.3)
+    mov ax, AT_UKB0 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; AX paragraphs -> DX segment (SPEC.md 50.3)
     jc .out                         ; no claim: the menus grey Undo/Redo
     mov [at_aseg], dx
     mov [at_akb], ax
@@ -1627,16 +1628,16 @@ at_agrow:
     push cx
     push dx
     mov ax, cx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; AX = KB this entry needs
+    add ax, 15
+    mov cl, 4
+    shr ax, cl                      ; AX = paragraphs this entry needs
     cmp ax, [at_akb]
     ja .grow
     clc                             ; already held: the common case - and the
     jmp short .ok                   ; compare's own CF says BELOW, not refused
 .grow:
-    add ax, AT_UGROWKB - 1          ; a quantum at a time, so a typing run's
-    and ax, -AT_UGROWKB             ; snapshot does not regrow every 1 KB
+    add ax, AT_UGROWKB * 64 - 1     ; a quantum at a time, so a typing run's
+    and ax, -AT_UGROWKB * 64        ; snapshot does not regrow every 1 KB
     call at_aregrow
     jnc .ok
     pop dx                          ; refused: the exact need, once more,
@@ -1644,8 +1645,8 @@ at_agrow:
     push cx
     push dx
     mov ax, cx
-    add ax, 1023
-    mov cl, 10
+    add ax, 15
+    mov cl, 4
     shr ax, cl
     call at_aregrow
 .ok:
@@ -1654,10 +1655,13 @@ at_agrow:
     pop ax
     ret
 
-; at_aregrow - the arena to AX KB; CF as OSAPI_MEM_REGROW; clobbers DX
+; at_aregrow - the arena to AX paragraphs; CF as OSAPI_MEM_REGROW; clobbers DX
 at_aregrow:
     mov dx, [at_aseg]
-    call OSAPI_MEM_REGROW           ; DX = the base NOW, the bytes with it
+    push bx
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P            ; DX = the base NOW, the bytes with it
+    pop bx
     jc .no
     mov [at_aseg], dx
     mov [at_akb], ax
@@ -1680,13 +1684,13 @@ at_afit:
     mov ax, [at_usz]                ; ...or, while redo holds anything, the
     add ax, [at_rtop]               ; redo stack's, which sits above it
 .hi:
-    add ax, 1023
-    mov cl, 10
+    add ax, 15
+    mov cl, 4
     shr ax, cl
-    add ax, AT_UGROWKB - 1          ; at_agrow's own rounding, so the size a
-    and ax, -AT_UGROWKB             ; push grew to is never given back by the
+    add ax, AT_UGROWKB * 64 - 1     ; at_agrow's own rounding, so the size a
+    and ax, -AT_UGROWKB * 64        ; push grew to is never given back by the
     jnz .kb                         ; at_afit that follows it - a shrink and a
-    mov ax, AT_UKB0                 ; regrow every typing run otherwise
+    mov ax, AT_UKB0 * 64            ; regrow every typing run otherwise
 .kb:
     cmp ax, [at_akb]
     jae .done                       ; nothing to give back

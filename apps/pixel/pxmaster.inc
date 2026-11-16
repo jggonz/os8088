@@ -729,7 +729,12 @@ px_claims:
     pop cx
     pop bx
 %else
-    call OSAPI_MEM_CLAIM            ; the master first: the largest
+    push cx                         ; (CL is the scale px_wkp takes below)
+    mov cl, 6                       ; the master first: the largest, its KB
+    shl ax, cl                      ; in paragraphs
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
 %endif
     jc .nomem
     mov [px_cur + PXR_MSEG], dx
@@ -840,9 +845,9 @@ px_prevmv:
 ; px_avail - AX = the largest claim a master is granted, BX = the KB free in
 ; all: OSAPI_MEM_AVAIL's, and on the ARM the master's own shape asked
 ; (SPEC.md 106.8.1; pxrec.inc says why). Preserves all else
-%ifdef PKG_MEGA
-px_avail:
+px_avail:                       ; (KB: OSAPI_MEM_P's paragraphs, shifted)
     push cx
+%ifdef PKG_MEGA
     push dx
     xor ax, ax
     mov bx, MEMH_AVAIL
@@ -855,12 +860,18 @@ px_avail:
     pop bx
     jnc .o
 .conv:
-    call OSAPI_MEM_AVAIL
+%endif
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+%ifdef PKG_MEGA
 .o:
     pop dx
+%endif
     pop cx
     ret
-%endif
 
 ; px_capavl - AX/BX = OSAPI_MEM_AVAIL's answers into [px_avl] [px_avt], the
 ; largest run cut to [px_mcap] when a test has set one (tests/pxdecode.py's

@@ -86,11 +86,6 @@ hf_entry:
                                 ; OSAPI_MEM_MOVABLE answers in CF and the macro
                                 ; leaves it, so without this the launch aborts
                                 ; with LD_EABORT and the package refuses itself
-    push ax
-    mov ax, hf_wake             ; ...and check 18 is answered there, because
-    call OSAPI_WM_ONWAKE        ; that is the whole shape under test: a package
-    pop ax                      ; cannot compact its own region from inside its
-                                ; own callback, so it posts and is woken
     pop si
     ret
 
@@ -119,7 +114,7 @@ hf_wake:
                                 ; twice would push hf_n past HF_ROWS and slide
                                 ; every label in the harness by two
     mov byte [hf_woke], 1
-    call OSAPI_MEM_AVAIL        ; AX = largest run KB, and now it is the truth
+    call hf_kav                  ; AX = largest run KB, and now it is the truth
     mov [hf_avwake], ax
     call hf_pass                ; 17: the post round-tripped
     mov bx, [hf_avmax]
@@ -143,7 +138,7 @@ hf_wake:
 .nomove:
     call hf_rfail
 .wav:
-    call OSAPI_MEM_AVAIL
+    call hf_kav      
     mov [hf_ravwake], ax
     cmp ax, [hf_rmax]
     jb .noav
@@ -178,7 +173,7 @@ hf_key:
     jne .out
     call hf_mypara
     mov [hf_rseg0], ax          ; where we are BEFORE
-    call OSAPI_MEM_AVAIL
+    call hf_kav      
     mov [hf_rav], ax
     mov ax, MEM_LVL_TOP         ; THE SAME LEVEL AS THE PLAIN SLOT ABOVE, or
     call OSAPI_MEM_COMPACT      ; the two are answers to different questions
@@ -286,7 +281,7 @@ hf_availp:
     xor ax, ax
     call hf_setrloc             ; AX = 0 pins every block held
     pop ax
-    call OSAPI_MEM_AVAIL
+    call hf_kav      
     push ax
     mov ax, hf_reloc
     call hf_setrloc             ; ...and movable again, bar HF_PIN
@@ -335,12 +330,12 @@ hf_ceilask:
 .round:
     xor ax, ax
     call hf_setrloc             ; nothing of ours movable...
-    call OSAPI_MEM_AVAIL
+    call hf_kav      
     mov cx, ax                  ; CX = the largest run without our moves
     mov dx, [hf_base + HF_N*2]
     mov ax, hf_reloc
     call OSAPI_MEM_MOVABLE      ; ...and then the ceiling block alone
-    call OSAPI_MEM_AVAIL        ; AX = the largest run with it moving
+    call hf_kav                  ; AX = the largest run with it moving
     cmp ax, cx
     ja .got                     ; only its move funds this one
     mov bx, [hf_nplug]
@@ -350,7 +345,10 @@ hf_ceilask:
     xor ax, ax                  ; (ours pinned while it is placed, so it
     call hf_setrloc             ; cannot be made by moving the ceiling block)
     mov ax, cx
-    call OSAPI_MEM_CLAIM        ; a claim is born PINNED (SPEC.md 66.2)
+    push bx
+    mov bl, MEMP_CLAIM
+    call hf_kb                   ; a claim is born PINNED (SPEC.md 66.2)
+    pop bx
     jc .none
     shl bx, 1
     mov [bx + hf_plug], dx
@@ -452,7 +450,7 @@ hf_run:
 .room:
 
     ; --- 2. is there room to build a comb that proves anything? --------------
-    call OSAPI_MEM_AVAIL        ; AX = largest free run KB, BX = total free KB
+    call hf_kav                  ; AX = largest free run KB, BX = total free KB
     mov [hf_l0], ax
     cmp ax, HF_MINKB
     jb .toosmall
@@ -471,7 +469,8 @@ hf_run:
     xor di, di
 .claim:
     mov ax, [hf_s]
-    call OSAPI_MEM_CLAIM        ; DX = base segment
+    mov bl, MEMP_CLAIM
+    call hf_kb                   ; DX = base segment
     jc .claimdone               ; a refusal is where the comb ENDS, not where
                                 ; the suite does - see HF_MINBLK
     mov bx, di
@@ -610,7 +609,8 @@ hf_run:
     ; against a kernel with no park-at-the-lock at all, which is the one thing
     ; it is here to prove.
     mov ax, [hf_want]
-    call OSAPI_MEM_CLAIM
+    mov bl, MEMP_CLAIM
+    call hf_kb       
     jc .bigfail
     mov [hf_bigseg], dx
     call hf_pass
@@ -718,17 +718,19 @@ hf_run:
     ; the descending pass is reached from. Without it the ask below cannot be
     ; funded from any single run and the check goes red, which is the assertion.
 .ceil:
-    call OSAPI_MEM_AVAIL        ; AX = largest run KB
+    call hf_kav                  ; AX = largest run KB
     mov cl, 3
     shr ax, cl                  ; an eighth: small enough that both fit above
     or ax, ax                   ; the arena and leave a run under them
     jz .ceilno
     mov [hf_hik], ax
-    call OSAPI_MEM_CLAIM_HI     ; the UPPER one, whose only job is to be freed
+    mov bl, MEMP_CLAIM_HI
+    call hf_kb                   ; the UPPER one, whose only job is to be freed
     jc .ceilno
     mov [hf_hia], dx
     mov ax, [hf_hik]
-    call OSAPI_MEM_CLAIM_HI     ; ...and the one that has to MOVE
+    mov bl, MEMP_CLAIM_HI
+    call hf_kb                   ; ...and the one that has to MOVE
     jc .ceilnoa
     mov di, HF_N                ; it rides in the slot past the comb, so
     mov bx, di                  ; hf_fill, hf_check and hf_reloc all reach it
@@ -757,7 +759,8 @@ hf_run:
     ; this block moves, and it is a top-down claim, so it moves UP
     call hf_ceilask             ; AX = that run, only this block declared
     jc .ceilnop
-    call OSAPI_MEM_CLAIM        ; ...which only the descending pass can fund
+    mov bl, MEMP_CLAIM
+    call hf_kb                   ; ...which only the descending pass can fund
     pushf
     push ax
     mov ax, hf_reloc
@@ -870,7 +873,7 @@ hf_run:
     jne .dmaok0                 ; and without one there is nothing to open
     jmp .dmano
 .dmaok0:
-    call OSAPI_MEM_AVAIL        ; AX = largest run KB
+    call hf_kav                  ; AX = largest run KB
     mov dx, ax                  ; (DX = the run, the block's other ceiling)
     mov cl, 2
     shr ax, cl                  ; a quarter of it...
@@ -919,7 +922,8 @@ hf_run:
     mov cl, 6
     shr ax, cl                  ; KB from B to D
     mov dx, [hf_bigseg]
-    call OSAPI_MEM_REGROW
+    mov bl, MEMP_REGROW
+    call hf_kb       
     jc .dmafix
     mov [hf_bigseg], dx         ; take DX (SPEC.md 50.3: a grow that moved)
     call hf_lin
@@ -927,13 +931,15 @@ hf_run:
     jne .dmafix                 ; it moved: B is not where the plan began
     mov byte [hf_dmawhy], 3     ; 3: the roof was refused
     mov ax, [hf_hik]
-    call OSAPI_MEM_CLAIM_HI     ; born pinned, a barrier to both passes
+    mov bl, MEMP_CLAIM_HI
+    call hf_kb                   ; born pinned, a barrier to both passes
     jc .dmafix
     mov [hf_roof], dx
     mov byte [hf_dmawhy], 4     ; 4: the block was refused
     mov ax, [hf_hik]
     mov cx, ax                  ; CX = KB of head = ALL of it
-    call OSAPI_MEM_CLAIM_DMA
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call hf_kb       
     jc .dmafix
     mov di, HF_N                ; the slot check 13 handed back
     mov bx, di
@@ -964,23 +970,25 @@ hf_run:
     mov word [hf_bigseg], 0
     jmp short .dmaask
 .dmashr:
-    call OSAPI_MEM_REGROW       ; a shrink, in place, always (SPEC.md 50.3)
+    mov bl, MEMP_REGROW
+    call hf_kb                   ; a shrink, in place, always (SPEC.md 50.3)
     jc .dmarst
     mov [hf_bigseg], dx
 .dmaask:
     mov byte [hf_dmawhy], 7     ; 7: the block could not be declared
     xor ax, ax
     call hf_setrloc             ; nothing of ours movable...
-    call OSAPI_MEM_AVAIL
+    call hf_kav      
     mov [hf_dmaap], ax
     mov dx, [hf_base + HF_N*2]
     mov ax, hf_reloc
     call OSAPI_MEM_MOVABLE      ; ...and then the block alone
     jc .dmarst
-    call OSAPI_MEM_AVAIL        ; what mem_avail says its move buys...
+    call hf_kav                  ; what mem_avail says its move buys...
     mov [hf_dmaaw], ax
     mov byte [hf_dmaag], 2      ; ...and a claim of EXACTLY that: 2 refused,
-    call OSAPI_MEM_CLAIM        ; the promise the plan could not keep
+    mov bl, MEMP_CLAIM
+    call hf_kb                   ; the promise the plan could not keep
     jc .dmaag
     call OSAPI_MEM_FREE         ; DX: straight back
     mov byte [hf_dmaag], 1      ; 1 granted
@@ -989,7 +997,8 @@ hf_run:
     inc ax                      ; of ours moving, so only this block's move
                                 ; funds it
     mov byte [hf_dmawhy], 8     ; 8: the ask was refused
-    call OSAPI_MEM_CLAIM
+    mov bl, MEMP_CLAIM
+    call hf_kb       
     jc .dmarst
     call OSAPI_MEM_FREE         ; DX still: give it straight back
     mov byte [hf_dmawhy], 9     ; 9: the contents did not come with it
@@ -1057,17 +1066,21 @@ hf_run:
     ; answer [mem_top] and every row below still green - which is exactly the
     ; hole docs/WRITING-TESTS.md 1 is about.
     mov ax, [hf_s]
-    call OSAPI_MEM_CLAIM_HI
+    mov bl, MEMP_CLAIM_HI
+    call hf_kb       
     jc .av_nohi
     mov [hf_hia], dx
     mov ax, hf_reloc
     call OSAPI_MEM_MOVABLE      ; DX is still its base
 .av_nohi:
-    call OSAPI_MEM_AVAIL
+    call hf_kav      
     mov [hf_av], ax
     or ax, ax
     jz .av_bad
-    call OSAPI_MEM_CLAIM
+    push bx
+    mov bl, MEMP_CLAIM
+    call hf_kb       
+    pop bx
     jc .av_bad                  ; it promised more than it had
     call OSAPI_MEM_FREE         ; DX is still the base
     call hf_pass
@@ -1455,7 +1468,9 @@ hf_numgo:
 
 hf_tpl:
     dw 140, 26, 250, 250
-    dw hf_ttl, hf_paint, hf_key, 0
+    dw hf_ttl, hf_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS hf_cls, 0, PAINT, hf_paint, ONKEY, hf_key, ONWAKE, hf_wake
 
 hf_ttl:    db 'Heap Compaction', 0
 hf_s_pass: db 'PASS', 0
@@ -1489,6 +1504,34 @@ hf_lbl_t:
 %if ($ - hf_lbl_t) / 2 != HF_ROWS
   %error "hf_lbl_t needs one label per row: rows past it read a word of the image as a string"
 %endif
+
+; hf_kb - OSAPI_MEM_P's verb BL with AX in KB (and, with MEMP_CONV, CX the
+; head in KB): this test plans in KB. AX, CX and SI kept
+hf_kb:
+    push ax
+    push cx
+    push si
+    mov si, cx
+    mov cl, 6
+    shl ax, cl
+    shl si, cl
+    mov cx, si
+    call OSAPI_MEM_P
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; hf_kav - MEMP_AVAIL's AX/BX in KB. CX kept
+hf_kav:
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
+    ret
 
     OS88_BSS HF_BSS_TOTAL
     OS88_IMAGE_END

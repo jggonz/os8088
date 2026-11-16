@@ -99,11 +99,6 @@ spb_entry:
     jc .fail
     mov [spb_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP          ; 8-align the content so FONT_RUN's
-                                ; single-store path letters the lines - every
-                                ; adapter now (SPEC.md 11.94)
-                                ; (preserves FLAGS, so the CF we owe the
-                                ; loader is untouched)
     pop si
     pop ax
     clc
@@ -468,7 +463,9 @@ spb_utoa:
     ret
 
 ; --- window template: x, y, w, h, title, paint, onkey, onclick ---------------
-spb_tpl:    dw 150, 120, 272, 112, spb_s_wt, spb_paint, 0, 0
+spb_tpl:    dw 150, 120, 272, 112, spb_s_wt, spb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS spb_cls, 0, PAINT, spb_paint
 spb_s_wt:   db 'Stack Probe', 0
 
 spb_s_title: db 'Worker slice: 384 bytes', 0

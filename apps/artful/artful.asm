@@ -176,26 +176,16 @@ at_entry:
     pop si
     jc .out
     mov [at_win], bx
-    push ax                         ; **THE GESTURE'S TWO SLOTS** (SPEC.md
-    push bx                         ; 20.5.1.3): neither is a template word,
-    push si                         ; which is why this modal's three buttons
-    push di                         ; fired on the press for as long as they
-    push dx                         ; existed
+    push ax                         ; THE BUTTON RECORD (SPEC.md 20.5.1.3):
+    push bx                         ; the gesture's three slots are at_cls's
+    push dx                         ; (SPEC.md 11.104)
     mov ax, bx
     mov bx, at_btrec
-    mov si, at_modal_up             ; the release and the drag go straight
-    mov di, at_modal_drag           ; to the one record both button sets
-                                    ; share: a callback may clobber CX, DX
-                                    ; and DI (SPEC.md 13.7, 13.8.2), and the
-                                    ; two pass-through frames that pushed and
-                                    ; popped all six went in apps size pass 2
     mov dx, at_onclick                ; OUR own click work; the library
                                     ; takes the press FIRST and chains
                                     ; here (SPEC.md 20.5.1.3.3)
     call os88ui_btninit
     pop dx
-    pop di
-    pop si
     pop bx
     pop ax
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
@@ -210,10 +200,9 @@ at_entry:
     push si
     mov si, at_kmenus
     call OSAPI_MENU_SET             ; the WINDOWED bar (flags preserved)
-    mov si, at_about                ; ...and 'About ArtfulType' above the Close
-    call OSAPI_ABOUT_SET            ; the kernel already puts in that bar's
-    pop si                          ; pull-down (SPEC.md 12.2). The FULLSCREEN
-                                    ; bar keeps its own 'About The Artful
+    pop si                          ; at_cls's WC_ABOUT is 'About ArtfulType'
+                                    ; in that bar's pull-down (SPEC.md 12.2).
+                                    ; The FULLSCREEN bar keeps its own 'About The Artful
                                     ; Type...' item: in there the kernel's bar
                                     ; is unreachable by design (SPEC.md 11.2),
                                     ; so the two are not duplicates - they are
@@ -225,18 +214,8 @@ at_entry:
     mov byte [at_writer], 1         ; Writer is the default view (main.c)
     call at_cmd_newdoc              ; a fresh untitled document
     call at_arg                     ; ...unless we were launched to open one
-    mov bx, [at_win]                ; SPEC.md 54.10: the kernel calls this once
-    mov ax, at_onwake               ; our window is on the glass, and the launch
-    call OSAPI_WM_ONWAKE            ; document loads in front of it
-    mov ax, at_onclose              ; SPEC.md 46.7.1: the close box asks about
-    call OSAPI_WM_ONCLOSE           ; unsaved changes like the other three doors
-                                    ; - it did not, and lost the document
-                                    ; silently. A side table, so this goes here
-                                    ; and not in the template, and it preserves
-                                    ; the FLAGS, which is what lets it sit in
-                                    ; front of the CF the loader is owed
-    mov ax, at_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls
-    call OSAPI_WM_ONWHEEL           ; the page (flags preserved, as above)
+                                    ; (the wake, the close negotiator and
+                                    ; the wheel are at_cls's, SPEC.md 11.104)
     clc                             ; the CF the loader is owed
 .out:
     ret
@@ -865,7 +844,7 @@ at_worker:
 ; standard card here.
 
 ; -----------------------------------------------------------------------------
-; at_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; at_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -911,7 +890,12 @@ at_ab3:     db 0
 
 at_tpl:
     dw 140, 60, 360, 300
-    dw at_ttl, at_paint, at_onkey, at_onclick
+    dw at_ttl, at_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS at_cls, 0, PAINT, at_paint, ONKEY, at_onkey, \
+               ONCLICK, os88ui_btnclick, ABOUT, at_about, ONWAKE, at_onwake, \
+               ONCLOSE, at_onclose, ONMOUSEUP, at_modal_up, \
+               ONDRAG, at_modal_drag, ONWHEEL, at_onwheel
 
 at_ttl: db 'ArtfulType', 0
 
@@ -1417,7 +1401,7 @@ at_sncnt    equ at_snpad + 1                 ; word
 at_sntop    equ at_sncnt + 2                 ; word
 at_snbase   equ at_sntop + 2                 ; word
 at_snoffs   equ at_snbase + 2                ; word
-at_akb      equ at_snoffs + 2                ; word: the arena's size NOW, KB
+at_akb      equ at_snoffs + 2                ; word: the arena's size NOW, paragraphs
 at_fontbuf  equ at_akb + 2                ; the kernel's glyph table,
                                              ; copied in at launch
 at_abon     equ at_fontbuf + AT_FONTBYTES     ; byte: the About card is up

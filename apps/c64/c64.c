@@ -53,6 +53,15 @@
 
 #include "os88.h"
 
+/* THE WINDOW'S CLASS (SPEC.md 11.104): the content x is on a cell boundary
+ * (the default - blit1 and gfx_scroll both want it, 9.4), we paint every
+ * pixel (OWNBG), and the wake is the slice driver's entry (74.1). */
+static struct os88_class c64_cls = {
+    OS88_CLASS_LEN, OS88_WF_OWNBG,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    0, 0, 0, 0, 0, 0, 0, 0
+};
+
 /* --- the callbacks the shim declares (C64.asm's CC_HAS_*) ---------------- */
 void *os88_main(void);
 void  os88_paint(void *win);
@@ -1999,7 +2008,7 @@ static void ovl_jit_init(void)
      * image and its tables are 39.5KB of either */
     seg = 0;
     for (kb = 64; kb >= 48 && seg == 0; kb -= 16)
-        seg = os88_mem_claim(kb);
+        seg = os88_mem_claim_p((unsigned)kb << 6);
     kb += 16;
     if (seg != 0 && c64f_codesel(seg) == seg) {
         c64j_setup(seg, os88_part_seg(C64_JIT_PART), C64_JIT_LEN, c64_fseg, 0, kb);
@@ -2139,7 +2148,7 @@ static void *ovl_main(void)
     void *win;
     int wh;
 
-    c64_m.ramseg = os88_mem_claim(64);      /* the C64's RAM is its own
+    c64_m.ramseg = os88_mem_claim_p(4096);      /* the C64's RAM is its own
                                              * segment (3.1) */
     if (c64_m.ramseg == 0) {
         ovl_refuse_kb("C64: 64KB? ");
@@ -2233,21 +2242,15 @@ static void *ovl_main(void)
             wh = vid.dock_top - C64_W_Y;
     if (wh < OS88_TITLE_H + C64_STATH + 16)
         wh = OS88_TITLE_H + C64_STATH + 16;
-    win = os88_wm_create(C64_W_X, C64_W_Y, C64_W_W, wh, c64_title);
+    win = os88_wm_create(C64_W_X, C64_W_Y, C64_W_W, wh, c64_title, &c64_cls);
     if (win == 0) {
         os88_mem_free(c64_m.ramseg);
         return 0;
     }
     c64_win = win;
-    os88_wm_snap(win, 1);                   /* the content x on a cell
-                                             * boundary: blit1 and gfx_scroll
-                                             * both want it (9.4) */
-    os88_wm_ownbg(win, 1);                  /* we paint every pixel */
     os88_menu_set(win, (struct os88_menuset *)&c64_menus);
-    os88_about_set(win);
-    os88_wm_onwake(win);                    /* the slice driver's entry (74.1) */
-    /* ...AND THE FIRST WAKE HAS TO BE ASKED FOR. os88_wm_onwake INSTALLS the
-     * handler; os88_wm_wake POSTS the kick (os88.h:585, :592), and os88_paint
+    /* ...AND THE FIRST WAKE HAS TO BE ASKED FOR. The class's onwake is the
+     * handler; os88_wm_wake POSTS the kick, and os88_paint
      * only re-posts `if (c64_kick)`. Without this line the machine sat at its
      * reset vector with 0 % on the status row until the user pressed a key or
      * clicked - and then booted perfectly, which is what made it look like a

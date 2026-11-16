@@ -713,7 +713,6 @@ dk_cbuild:
     call OSAPI_MEM_FREE
     mov word [dk_cseg], 0
 .claim:
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P            ; DX = the segment, CF = 1 refused
     jc .x

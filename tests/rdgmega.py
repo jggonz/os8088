@@ -93,7 +93,7 @@ import os88bochs  # noqa: E402
 import os88build  # noqa: E402
 import megatraps  # noqa: E402
 
-LIMIT = 150                     # seconds for cpu_instrs to finish (~45 s)
+LIMIT = 150                     # GUEST seconds for cpu_instrs (~45 s)
 REGION_ALLOW = 200              # the region's own: rdg_init's two words, the
                                 # lossy picture's patch (rdg_lpatch, ~90)
 RDG_STATE = 0x4000
@@ -176,11 +176,20 @@ def leg(t, out, name, pkg, lst, rom, where, squeeze=False):
             print("rdgmega: %s: %s" % (name, "refused" if not fails
                                        else "; ".join(fails)))
             return ["%s: %s" % (name, f) for f in fails]
-        end = time.time() + LIMIT
+        # LIMIT IS GUEST SECONDS: Bochs runs the guest at real time at
+        # most, so a host deadline handed a loaded box fewer of them
+        g0 = box.ptime()
         view = None
         coded = set()
-        while time.time() < end:
-            time.sleep(3)
+        over = False
+        while not over:                 # (the last look is still taken)
+            try:
+                box.guest_sleep(3, poll=0.5)
+                over = box.ptime() - g0 >= LIMIT * box.ips
+            except RuntimeError as e:   # (as the reads below: a machine
+                fails.append("the debugger could not stop the machine: "
+                             "%s" % e)  #   buried in fixups answers late)
+                break
             if any(l.startswith("kern_mega FAULT") for l in box.lines()):
                 break
             if view is None:

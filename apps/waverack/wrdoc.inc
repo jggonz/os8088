@@ -328,8 +328,9 @@ wo_open:
     jc .refuse
     mov [di+WS_ENV], dx
 .noenv:
-    mov ax, WE_VKB
-    call OSAPI_MEM_CLAIM
+    mov ax, WE_VKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov bl, E_MEM
     jc .refuse
     mov [we_vseg], dx
@@ -721,19 +722,17 @@ wo_iofit:
 ; fixed disk's transfer into a pool block is bounced in dsk_xfer, nine
 ; sectors a call through the read-ahead's landing, which then reads ahead of
 ; nothing (KERN-MEGA-PLAN 10.3 item 85, 14.156). Every other kernel reads
-; MEMP_CONV as CX = 0, the claim it always made. keeps all but DX
+; MEMP_CONV as CX = 0, the claim it always made. keeps all but AX and DX
 wo_ioclaim:
-    push ax
     push bx
     push cx
-    mov cl, 6
-    shl ax, cl                      ; KB -> paragraphs
-    mov cx, MEMP_CONV
-    mov bl, MEMP_CLAIM
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    xor cx, cx                      ; no head, and MEMP_CONV: conventional
+    mov bl, MEMP_CONV
     call OSAPI_MEM_P
     pop cx                          ; (pops keep CF)
     pop bx
-    pop ax
     ret
 
 ; wo_maxclu - AX = the largest cluster any live source record reads, or AX

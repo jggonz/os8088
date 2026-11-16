@@ -409,7 +409,8 @@ blk_pass:
 ;
 ; in:       AL = 1 to save, 0 to restore
 ; out:      [blk_on] follows
-; clobbers: flags
+; clobbers: flags; and AX on kern_small, whose one-card arm is vid_bk's tail
+;           (kernel size pass 20) - both callers bank AX around the call
 ;
 ; THE ANIMATION IS TRIED FIRST AND THE BLANKER IS WHAT HAPPENS WHEN IT CANNOT
 ; RUN (SPEC.md 79.1). Every refusal ss_start_x can answer - no mode ticked, no
@@ -450,8 +451,8 @@ blk_pass:
 ; -----------------------------------------------------------------------------
 blk_set:
     mov [blk_on], al
-    push ax
 %ifdef KERN_BIG                 ; CX is the loop's and the loop is KERN_BIG's:
+    push ax
     push cx                     ; the %else arm below names no CX, and
                                 ; vid_bk, which banks ax/es/dx, never writes it
     push si                     ; SI = the routine the walk calls, chosen once
@@ -511,18 +512,24 @@ blk_set:
 .pop:
     pop si
     pop cx
-%else
-    or al, al                   ; the direction (`mov` writes no flag)...
-    mov al, [vid_kind]          ; kern_small is single-display by construction
-    jz .lit                     ; - vidsel.inc's whole multi-display half is
-    call vid_blank_kind
-    jmp short .one
-.lit:
-    call vid_unblank_kind
-.one:
-%endif                          ; inside one %ifdef KERN_BIG
     pop ax
     ret
+%else
+    ; kern_small is single-display by construction - vidsel.inc's whole
+    ; multi-display half is inside one %ifdef KERN_BIG - so this is ONE card,
+    ; and vid_bk's own body, ENTERED WITH vid_blank_kind's FRAME: DX banked
+    ; and DH = the direction byte, which its epilogue pops before its `ret`
+    ; returns to our caller. 0 dark and 8 lit is exactly the byte the two
+    ; doors load (kernel size pass 20, -4: it was a test, two calls and a
+    ; jump). AX IS SPENT HERE, and on this build alone - AL comes back as
+    ; [vid_kind]; both callers bank AX around the call (blk_wake, blk_pass)
+    push dx
+    cmp al, 1                   ; CF = AL is 0, "light"...
+    sbb dh, dh
+    and dh, 8                   ; ...so DH = 8 lit, 0 dark
+    mov al, [vid_kind]
+    jmp vid_bk
+%endif                          ; inside one %ifdef KERN_BIG
 
 ; (blk_one, which turned [blk_on] into one of these two jumps per display, is
 ; gone: blk_set chooses once - kernel size pass 17, -2 on kern_big, -4 on
@@ -545,41 +552,8 @@ blk_set:
 ; -----------------------------------------------------------------------------
 blk_relit:
     call menu_force
-    call dock_force
-%ifdef KHP_RELIT
-%ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1     ; TWO DISPLAYS: the other card's desktop is
-    ja .all                     ; wm_paint_all's EXT_DESK, whole
-%endif
-    call wm_fs_vis              ; ...and a fullscreen window still up: its
-    jc .all                     ; walk starts at it (wm_paint_all's .fswins)
-    ; THE WHOLE BAND IS THE DAMAGE (SPEC.md 11.91.7). wm_paint_all draws the
-    ; desktop and then every window back to front WHOLE, so a pixel under the
-    ; top window was written once per layer - seven to eight times over in
-    ; deskbench's scene - and every covered window put its whole content back
-    ; only for the windows above to paint over it. The damage pass draws each
-    ; window where nothing above will (11.3.3's cull, 11.96.15's pieces,
-    ; 11.97's chrome) and dithers only the ground no window holds (11.91.1),
-    ; and its marking needs no vacated rect: [wm_dmg_stwin] is 0 here, so
-    ; every window the rect touches is marked. The bar and the strip are
-    ; forced above and drawn by the pass; a window over the strip owes it
-    ; through wm_dmg_dk as on any pass. AX..DX are the callers': banked.
-    push ax
-    push bx
-    push cx
-    push dx
-    xor ax, ax                  ; x 0 .. the right edge, MBAR_H .. the bottom:
-    mov bx, MBAR_H              ; wm_paint_dmg clamps the far corner onto the
-    mov cx, 7FFFh               ; live screen, and its dither keeps to the
-%ifdef KERN_BIG                 ; bands (wm_dmg_bands), off the dock
-    mov dx, cx
-%else
-    mov dx, 7FFFh               ; a byte longer than `mov dx, cx` ON PURPOSE:
-%endif                          ; kern_small's wm_paint_all and ui_task parity
-    call wm_paint_dmg
-    jmp kret_dx                 ; once a relight: the shared ladder, 3 bytes
-.all:                           ; for 5 (kernel hot-paths pass 1, size)
-%endif
+    call dock_force             ; ...and the world: the damage pass over the
+                                ; whole desktop (SPEC.md 11.91.7)
     jmp wm_paint_all            ; a tail jump: both callers are near (fsx.inc
                                 ; is .text, and kernel.asm's cw_blk_relit is
                                 ; `call blk_relit / retf`), so wm_paint_all's
@@ -743,20 +717,11 @@ ss_open:
 ;
 ; THE DESKTOP IS OWED A FULL REPAINT AND THERE IS NO CHEAPER ANSWER. A session
 ; has drawn over the menu bar, the drive column, the dock and every window, so
-%ifdef KHP_RELIT
-; there is no damage rect to be clever with - the whole band IS the damage
-%else
-; there is no damage rect to be clever with - wm_paint_all IS the damage
-%endif
+; there is no damage rect to be clever with - the whole desktop IS the damage
 ; (PERFORMANCE.md rule 1's one legitimate exemption, because the whole screen
-%ifdef KHP_RELIT
 ; really did change). It is paid once per wake, on the far side of a period
-; measured in minutes - and since SPEC.md 11.91.7 through the damage pass,
-; which writes each pixel about once rather than once per window layer.
-%else
-; really did change). It is ~0.4s on the 5150 and it is paid once per wake, on
-; the far side of a period measured in minutes.
-%endif
+; measured in minutes - and through the damage pass (SPEC.md 11.91.7), which
+; writes each pixel about once rather than once per window layer.
 ;
 ; **AND wm_paint_all ALONE IS NOT ENOUGH**, which is what cw_blk_relit is for
 ; and is worth stating because it looks like it should be. That routine forces
@@ -776,7 +741,7 @@ ss_stop_x:
     mov al, SSV_STOP
     call ss_call
     call ct_cw_gfx_lock
-    call KERNEL_SEG:cw_blk_relit
+    KDOOR blk_relit
     call ct_cw_gfx_unlock       ; ...and FALLS INTO ss_reap_x: the image goes
                                 ; back, if nothing else has a use for it
                                 ; (SPEC.md 79.8)
@@ -921,7 +886,7 @@ ssf_set:
 .stop:
     mov [blk_sv], al            ; AL is still the 0 that brought us here
     call ss_stop_x
-    call KERNEL_SEG:cw_cursor_show
+    KDOOR cursor_show
     jmp short .ok
 .start:                         ; --- ss_start_x, above -----------------------
     cmp byte [ss_modes], 0      ; no mode ticked: blank the signal instead
@@ -954,7 +919,7 @@ ssf_set:
     call ct_cw_gfx_unlock       ; contract is "clobbers: flags"
     popf
     jc .no                      ; nothing loaded, so nothing to hide
-    call KERNEL_SEG:cw_cursor_hide
+    KDOOR cursor_hide
     mov al, 1                   ; ...and a byte store through AL is three
     mov [blk_sv], al            ; bytes where an immediate one is six
 .ok:

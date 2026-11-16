@@ -1166,12 +1166,10 @@ dos_entry:
                                     ; library lays the page out from where
                                     ; the window IS before every hit test,
                                     ; SPEC.md 20.5.1.3.5)
-    mov si, dos_onup                ; slots - the press, the release and the
-    mov di, dos_ondrag              ; tracking edge - and none of them is a
-    mov dx, dos_click               ; template word except the press, which
-    call os88ui_btninit             ; 20.5.1.3.3's cell now lets it write
-    pop dx                          ; late. dos_click is OUR own click work
-    mov bx, [dos_win]               ; and the library chains to it
+    mov dx, dos_click               ; record - its three slots are dos_cls's
+    call os88ui_btninit             ; (SPEC.md 11.104). dos_click is OUR own
+    pop dx                          ; click work and the library chains to it
+    mov bx, [dos_win]
     WIN_END
 
 
@@ -1247,27 +1245,6 @@ dos_entry:
                                     ; the first paint can read a screen whose
                                     ; attribute is still a zeroed bss's
 %endif
-    WIN_END
-
-    mov bx, [dos_win]               ; **NAMED, not whatever the last call left
-    mov ax, dos_wake                ; in BX.** The slot takes BX = the window
-    call OSAPI_WM_ONWAKE            ; and AX = the handler, and this used to
-                                    ; ride on a leftover: the first proc above
-                                    ; it that clobbered BX registered the
-                                    ; handler against another window's slot and
-                                    ; every wake this package posts went
-                                    ; nowhere - Run, Enter-re-run and the
-                                    ; console's own launch all stuck at
-                                    ; DST_READY with nothing to see
-    WIN_ONLY                        ; ...and the window's two: a close that
-                                    ; stops a windowed run, and the About card
-%ifdef DVW
-    mov ax, HENT(dvw_onclose)       ; a running program is stopped by a close,
-    call OSAPI_WM_ONCLOSE           ; not orphaned behind a hidden window
-%endif                              ; (SPEC.md 96.54). BX is still the window:
-                                    ; every slot preserves it
-    mov si, dos_about
-    call OSAPI_ABOUT_SET
     WIN_END
 
     mov byte [dos_pvol], 0xFF       ; **THE SENTINEL, BECAUSE BSS IS ZERO AND
@@ -1864,18 +1841,16 @@ dos_run:
     cmp word [DOS_ACAP], 0
     je .unmount                     ; NO CAP: we want the maximum, so the
                                     ; question is only whether a pass adds any
-    push bx                         ; ...A CAP, and the cheaper road: a program
-    call OSAPI_MEM_AVAIL            ; that asked for 200K on a machine with
-    pop bx                          ; 300K free needs no compaction and no
+    call dos_avkb                   ; ...A CAP, and the cheaper road: a program
+                                    ; that asked for 200K on a machine with
+                                    ; 300K free needs no compaction and no
                                     ; silence. Net of the floor, like every
                                     ; AVAIL on this task from .sized on
     cmp ax, [DOS_ACAP]
     jae .ask                        ; it fits: claim it and ask nothing more
 .unmount:
-    push bx
-    call OSAPI_MEM_AVAIL
+    call dos_avkb
     mov [dos_akb], ax               ; what the heap gives WITHOUT a pass...
-    pop bx
     push bx
     mov al, bl                      ; ...and what it would give with one, AT
     xor ah, ah                      ; THE SAME LEVEL, or the two are answers to
@@ -1908,9 +1883,8 @@ dos_run:
                                     ; to move, and the drivers stay OUT across
                                     ; it on purpose
 .ask:
-    push bx
-    call OSAPI_MEM_AVAIL            ; AX = the largest run a claim can HAVE at
-    pop bx                          ; the floor - already net of every
+    call dos_avkb                   ; AX = the largest run a claim can HAVE at
+                                    ; the floor - already net of every
                                     ; purgeable cache BELOW it and of what a
                                     ; compaction would recover (SPEC.md 50.6.3,
                                     ; 66.10.3). Nothing to compute, nothing to
@@ -1928,7 +1902,12 @@ dos_run:
                                     ; slot promises nothing about AX, so the KB
                                     ; figure has to survive the call somewhere
                                     ; other than in a register
-    call OSAPI_MEM_CLAIM_HI         ; AX = KB -> DX = base segment, at the
+    mov cl, 6                       ; ...and it is claimed in paragraphs
+    shl ax, cl
+    push bx
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; AX = KB -> DX = base segment, at the
+    pop bx
                                     ; floor .sized set - the same one the
                                     ; number above was answered at, or the plan
                                     ; is not the one the claim carries out.
@@ -2776,7 +2755,8 @@ dos_hend:
 
 dos_htpl:
     dw 0, MBAR_H, 8 * DOS_HTXT, 8 + TITLE_H + 1
-    dw dos_ttl, dos_hpaint, 0, 0
+    dw dos_ttl, dos_hcls            ; its CLASS (SPEC.md 11.104): the paint
+    OS88_CLASS dos_hcls, 0, PAINT, dos_hpaint, ONWAKE, dos_wake ; and the wake
 dos_ttl:      db 'DOS', 0           ; ...the window's caption too: resident for
                                     ; both templates, and the menu bar's head
 dos_hs_start: db 'Starting '
@@ -2944,6 +2924,31 @@ dos_prog_done:                      ; the INT 21h terminate path jumps here,
 ; program's to scribble on, and a save area the program can corrupt is worse
 ; than none, because it fails at restore time when nothing can be done.
 ; -----------------------------------------------------------------------------
+; dos_vslot - WHERE AH=25h WRITES and AH=35h READS vector AL: out ES:BX, its
+; IVT slot - or `dos_rarev`, ours, for OS88_RARE, the kernel's rare door
+; (SPEC.md 96.12, 20.3.4). That vector is how DOS.O88 - its INT 21h included
+; - and every other package reach the kernel, so the live one stays the
+; door and the program's goes here. kern_dos runs this same core (one binary,
+; both hosts) and virtualises it too. A slot and not "set it and ignore it",
+; because a program that sets a vector and reads it back must get what it
+; set; never reset, because a vector a program left set outlives it in DOS.
+; The two calls each wrote out the six-instruction walk to the slot, so
+; sharing it pays for the door's arm: the core is 2 bytes SHORTER (16,570),
+; kernel size pass 19. AL and DX kept
+dos_vslot:
+    xor bx, bx
+    mov es, bx
+    mov bl, al
+    shl bx, 1
+    shl bx, 1
+    cmp al, OS88_RARE
+    jne .r
+    push ds
+    pop es
+    mov bx, dos_rarev
+.r:
+    ret
+
 dos_save_machine:
     push ax
     push cx
@@ -3759,6 +3764,12 @@ dos_hvec:
 ; (PSP:000A) and, above it, the program's own NEAR return - so the way back is
 ; that near address under the PSP's CS: the far return's IP is overwritten
 ; with it, and `retf 2` drops it.
+dos_rarev:  dw 0, 0                 ; the program's OS88_RARE (dos_vslot):
+                                    ; four bytes of the padding dos_cpm's
+                                    ; `align 16` leaves, and not of the
+                                    ; core's bss - every host reserves
+                                    ; CORE_BSS_SIZE, and kern_dos's image
+                                    ; has no kilobyte to spare for them
     align 16
 dos_cpm:
     cmp cl, 0x24
@@ -4485,13 +4496,8 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; anything it likes and the machine still comes back.
     push bx
     push es
-    xor bx, bx
-    mov es, bx
-    mov bl, al
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    mov [es:bx], dx
+    call dos_vslot                  ; ES:BX = the slot - the rare door's is
+    mov [es:bx], dx                 ; OURS (SPEC.md 96.12)
     ; ...and the PROGRAM's DS, off the frame - THROUGH THE STACK AND NOT
     ; THROUGH AX (SPEC.md 96.7.1.3). AH=25h answers nothing, so AX is the
     ; program's: `mov ax, [bp]` handed it back its own DS, and the idiom that
@@ -4509,12 +4515,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
 .getvec:
     ; AH=35h: AL = the interrupt; out ES:BX = its handler.
     push ax
-    xor bx, bx
-    mov es, bx
-    mov bl, al
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
+    call dos_vslot                  ; ES:BX = the slot (SPEC.md 96.12)
     mov ax, [es:bx+2]
     mov bx, [es:bx]
     mov [bp-6], ax                  ; ...the banked ES, as .getdta above
@@ -6723,7 +6724,8 @@ DHK_SNAP    equ 0                   ; the last screen, before the restore (96.34
 DHK_POLL    equ 2                   ; the packet driver's third poll (96.23.4)
 DHK_TTY     equ 4                   ; AH=02h/09h: CF=0 = the host took it (96.33)
 DHK_MOUSE   equ 6                   ; INT 33h's state; absent = a still pointer
-DHK_CLAIM   equ 8                   ; AX = KB -> DX = segment, CF=1 refused; the
+DHK_CLAIM   equ 8                   ; AX = paragraphs -> DX = segment, CF=1
+                                    ; refused, BX clobbered; the
                                     ; host's HEAP, which only the windowed one
                                     ; has (96.44.6). ABSENT is not a refusal to
                                     ; be retried - it is "there is no heap in
@@ -7016,14 +7018,28 @@ dos_hk_bind:
     ret
 
 ; --- dos_hk_claim / dos_hk_free - DHK_CLAIM/DHK_FREE: the host's heap --------
-; in:  AX = KB; out: DX = the base segment, CF=1 refused / in: DX = it back
+; in:  AX = PARAGRAPHS; out: DX = the base segment, CF=1 refused / in: DX
+; = it back
 ;
 ; The kernel's heap, which is the windowed host's and no other's: under
 ; `kern_dos` the program owns everything above the floor and there is nothing
 ; to claim from, which is why these two are a HOOK and not a door (SPEC.md
 ; 96.44.6). They were the last four `OSAPI_*` far calls in the core.
 dos_hk_claim:
-    call OSAPI_MEM_CLAIM            ; AX = KB -> DX = the base segment
+    mov bl, MEMP_CLAIM              ; AX = paragraphs -> DX = the base segment
+    call OSAPI_MEM_P                ; (BX is DHK_CLAIM's to clobber)
+    ret
+; dos_avkb - MEMP_AVAIL's largest claim, in KB (the unit DOS plans its arena
+; in: [DOS_ACAP], [dos_akb], MEMC_WHATIF's answer). Keeps BX and CX
+dos_avkb:
+    push bx
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    pop cx
+    pop bx
     ret
 dos_hk_free:
     call OSAPI_MEM_FREE             ; DX = the segment
@@ -8072,12 +8088,12 @@ dos_keeph:
     pop bx                          ; window is ON, not the primary (SPEC.md
                                     ; 39.16.4), because a drag across a seam is
                                     ; exactly when the answer changes
-    xor al, al
+    mov ax, WFB_KEEPH * 256
     cmp dl, VID_CGA
     jne .set
-    inc al
+    inc ax
 .set:
-    call OSAPI_WM_KEEPH
+    call OSAPI_WM_FLAG
     pop si
     pop dx
     pop cx
@@ -10727,10 +10743,20 @@ dos_tpl:
                                     ; (SPEC.md 96.32.5). The WIDTH is
                                     ; per-adapter and dos_pref says so; this
                                     ; row is the VGA/CGA one
-    dw dos_ttl, dos_paint, dos_key, 0   ; W_ONCLICK is installed by
-                                    ; os88ui_btninit (SPEC.md
-                                    ; 20.5.1.3.3), so the buttons see
-                                    ; the press before dos_click does
+    dw dos_ttl, dos_cls
+; its CLASS (SPEC.md 11.104). The press is the button library's (SPEC.md
+; 20.5.1.3.3), so the buttons see it before dos_click does; the wake is what
+; Run, Enter-re-run and the console's own launch post; a running program is
+; stopped by a close (DVW), not orphaned behind a hidden window (SPEC.md
+; 96.54); and the About card
+%ifdef DVW
+  %define DOS_C_CLOSE HENT(dvw_onclose)
+%else
+  %define DOS_C_CLOSE 0
+%endif
+    OS88_CLASS dos_cls, 0, PAINT, dos_paint, ONKEY, dos_key, \
+               ONCLICK, os88ui_btnclick, ABOUT, dos_about, ONWAKE, dos_wake, \
+               ONCLOSE, DOS_C_CLOSE, ONMOUSEUP, dos_onup, ONDRAG, dos_ondrag
 
     OS88_PREFER dos_pref, DOS_CONW, DOS_FRAMEH,  DOS_HERCW, DOS_FRAMEH,  DOS_CONW, 300
                                     ; **A REAL WIDTH AND A GENEROUS HEIGHT**,
@@ -15389,7 +15415,12 @@ dos_pkt_bufs:
 %else
     mov ax, cx
     push cx
-    call OSAPI_MEM_CLAIM
+    mov cl, 6                       ; the KB in paragraphs
+    shl ax, cl
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     pop cx                          ; (the size, for the zeroing below)
     jc .out                         ; **A REFUSAL IS SURVIVABLE**: the program
     mov [dos_pkt_bseg], dx          ; still runs, the interface is simply not

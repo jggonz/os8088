@@ -71,8 +71,9 @@ rp_entry:
     ; heap by [ld_base], which is what reaches everything WE claimed. Same
     ; source as the passing arm on purpose: the checks above all run first, so
     ; a failure here cannot be a package that never got going.
-    mov ax, RP_CLAIM_KB             ; ...and leave one of our OWN claims
-    call OSAPI_MEM_CLAIM            ; outstanding, so the [ld_base] sweep has
+    mov ax, RP_CLAIM_KB * 64             ; ...and leave one of our OWN claims
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; outstanding, so the [ld_base] sweep has
     xor bx, bx                      ; something to find too
     stc
     jmp short .out
@@ -116,8 +117,9 @@ rp_check:
     ; The check that is RED without mem_own's arms, and the reason this fixture
     ; exists. The claim's last byte is written and read back too: a fence that
     ; answered CF=0 with a segment of nothing would otherwise pass.
-    mov ax, RP_CLAIM_KB
-    call OSAPI_MEM_CLAIM            ; out DX = base segment
+    mov ax, RP_CLAIM_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out DX = base segment
     jc .n3
     mov [rp_cseg], dx
     mov es, dx
@@ -294,7 +296,9 @@ rp_hex4:
 ; -----------------------------------------------------------------------------
 rp_tpl:
     dw 140, 90, 250, 60             ; x, y, w, h
-    dw rp_title, rp_paint, 0, 0
+    dw rp_title, rp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rp_cls, 0, PAINT, rp_paint
 
 rp_title:  db 'REHOMED '
 rp_t_n:    db '0'

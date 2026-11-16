@@ -343,7 +343,7 @@ x3f_forget:
 ;              window can be seen. Nothing while the About card is up (it is
 ;              opaque over the face, and its dismissal repaints everything)
 ; in:  BX = the window; the gfx lock HELD - every window callback holds it. A
-;      handler that does not (OSAPI_WM_ONWAKE's) calls x3f_poke instead.
+;      handler that does not (WC_ONWAKE's) calls x3f_poke instead.
 ; out: every register preserved
 ; -----------------------------------------------------------------------------
 x3f_update:
@@ -418,7 +418,7 @@ x3f_walk:
 ; -----------------------------------------------------------------------------
 ; x3f_paint - W_PAINT: the layout's static parts, every element and every
 ;             button; the About card last
-; in:  SI = the window (gfx lock held; NOT white-filled - OSAPI_WM_OWNBG).
+; in:  SI = the window (gfx lock held; NOT white-filled - WF_OWNBG).
 ;      Keeps SI
 ; -----------------------------------------------------------------------------
 x3f_paint:

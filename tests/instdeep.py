@@ -419,7 +419,7 @@ def main():
                    "rb").read())       # (mega.img on kern_mega)
     for p in WANT_RAW:
         want, wmark = src.read(p), src.mark(p)
-        if want is None or wmark not in (0x5A, 0x5B):
+        if want is None or wmark not in (0xA4, 0xA5):
             bad.append("%s is not COMPRESSED on build/os8088-360.img (hint "
                        "%s) - this row would pass on any installer, so the "
                        "fixture is wrong rather than the machine"

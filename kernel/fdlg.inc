@@ -156,6 +156,9 @@ FDE_TOP     equ 4
     call fdt_go                 ; this build: fdx_go's hop into KERNEL_SEG,
     dw %1                       ; so it needs no resident cw_ shim (kernel
   %endmacro                     ; size pass 13)
+  %macro FDKTD 1                ; ...the same hop here, and on kern_big the
+    FDKT %1                     ; routine's rare-door index (rd_tab, kernel
+  %endmacro                     ; size pass 19)
   %macro FDRET 0
     retf
   %endmacro
@@ -176,6 +179,9 @@ FDE_TOP     equ 4
   %endmacro
   %macro FDKT 1                 ; ...which on kern_big is the shim, kept for
     call KERNEL_SEG:cw_ %+ %1   ; its other callers (DOCK.DRV, DESK.DRV)
+  %endmacro
+  %macro FDKTD 1                ; ...or, for a routine behind the rare door,
+    KDOOR %1                    ; its index (rd_tab, kernel size pass 19)
   %endmacro
   %macro FDRET 0
     ret
@@ -225,6 +231,11 @@ modd_hdr:                       ; is at offset 0 because vstart is 0 and
     dw MOD_STAMP                ; ...and this build's LAYOUT
     dw modd_end                 ; MOD_H_IMG - vstart 0, so the end label IS it
     dw FD_NENT
+%ifdef MOD_CACHE
+    dw MODD_BSS                 ; MOD_H_SCR: its whole bss, .moddb - KEPT
+%else                           ; at its drop (2.8.3.4)
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
+%endif
     dw fdlg_open_x_m            ; EVERY ENTRY IS ITS OWN BODY: each ends in a
     dw fdlg_hook_x_m            ; `retf` here (fdk_di, FDRET), so the table
     dw fdlg_reap_x_m            ; needs no `call body / retf` wrapper between
@@ -300,7 +311,7 @@ fdlg_ref:   stc                 ; kern_big's: the same refusal, in front of
 %endif
 
 ; -----------------------------------------------------------------------------
-; fdlg_open - slot 0x0124's body (SPEC.md 38.6, 38.7)
+; fdlg_open - slot 0x00D6's body (SPEC.md 38.6, 38.7)
 ; in:  AL = 0 Open / 1 Save, BX = requester window, DI = completion proc,
 ;      SI = a default name (NUL, <= 12) or 0; gfx lock HELD by the caller
 ; out: CF=0 the chooser is ON SCREEN; CF=1 refused. All registers preserved.
@@ -413,18 +424,20 @@ FDBODY fdlg_open_x
                                 ; 0FFFFh, out of the 0 the fence above saw
     inc byte [inst_lkhd]        ; ...and app_launch shows it under OUR hold
     mov al, KIND_FILES          ; (0 -> 1 -> 0: no other path sets it)
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     dec byte [inst_lkhd]        ; (CF is the launch's: `dec` keeps it)
     jc .fail
     mov bx, [fdlg_win]          ; still the mark: launched, but not by
     inc bx                      ; fm_kinit - impossible, and refused rather
     jz .fail                    ; than trusted. `inc` keeps the launch's CF=0
 %ifdef KERN_SMALL
-    mov word [bx+W_ONMOUSEUP-1], fdlg_onup ; the column's release (SPEC.md
-                                ; 38.3): this build's Disk window has none of
-                                ; its own, so the chooser's is ours - and
-                                ; wm_onmouseup IS this store, which kern_small
-                                ; publishes no shim for. BX is the window + 1
+    mov word [bx+W_CLASS-1], fdlg_cls + WM_KCLS_BIAS ; the column's
+                                ; release (SPEC.md 38.3): this build's Disk
+                                ; window has none of its own, so the
+                                ; chooser's window takes a CLASS of its own
+                                ; (fdlg_cls, files.inc, SPEC.md 11.104) -
+                                ; biased like every kernel window's, since
+                                ; W_SEG is 0 (11.104.1). BX is the window + 1
 %endif
     jmp fdk_di                  ; CF=0, still app_launch's
 .fail:
@@ -441,7 +454,7 @@ FDBODY fdlg_open_x
 fdlg_hidx:
     push di
     mov di, FDV(fdlg_rqrec)
-    FDKT inst_fhome_idx
+    FDKTD inst_fhome_idx
     pop di
     push ax
     mov al, INST_FNSZ
@@ -456,7 +469,7 @@ fdlg_hidx:
 ; out: ZF=1 yes, DI = the record; ZF=0 no (DI garbage). BX kept
 ; -----------------------------------------------------------------------------
 fdlg_live:
-    FDK cw_inst_win_owner       ; DI = the owning record, or 0
+    KDOOR inst_win_owner        ; DI = the owning record, or 0
     or di, di
     jz .no
     cmp byte [di+I_STATE], 1
@@ -580,11 +593,11 @@ FDBODY fdlg_reap_x
     jne .gone                   ; ...or torn down already: the close box did it
     cmp [di+I_SPTR], si         ; ...and it is still the CHOOSER's: a window
     jne .gone                   ; slot is reused, a pool block names one role
-    FDKT app_close_win          ; frees the cache claim with the record
+    FDKTD app_close_win          ; frees the cache claim with the record
 .gone:
     mov bx, FDV(fdlg_rqwin)
-    FDKT menu_activate          ; the bar goes back to the requester
-    FDKT menu_draw_bar
+    FDKTD menu_activate          ; the bar goes back to the requester
+    FDKTD menu_draw_bar
     pop dx
 %if FDA_COMMIT != 1
   %error "fdlg_reap tests the posted answer for FDA_COMMIT with dec"
@@ -678,7 +691,7 @@ FDBODY fdlg_reap_x
     or ax, ax
     jz .unlk
     push word [snd_inst]        ; the callback is the PACKAGE's code, so its
-    call KERNEL_SEG:cw_snd_disp_set ; sound stamp is the requester's (34.3)
+    KDOOR snd_disp_set              ; sound stamp is the requester's (34.3)
     push es                     ; the callback owes us nothing (SPEC.md
     push bp                     ; 38.6), and ES is the one register the
     mov bp, ax                  ; kernel cannot shrug off (SPEC.md 1)
@@ -717,11 +730,11 @@ FDBODY fdlg_grab_x
     call fdlg_gate              ; answered or gone: CF=1 and ZF=0
     jc .notup
     push bx
-    call KERNEL_SEG:cw_wm_hit   ; BX = the window this press would reach
+    KDOOR wm_hit                ; BX = the window this press would reach
     pop ax                      ; AX = the chooser, never 0
     cmp ax, bx
     je .out                     ; CF=0 from the compare
-    FDK cw_snd_beep             ; (which keeps AX)
+    KDOOR snd_beep              ; (which keeps AX)
     neg ax                      ; CF=1 and ZF=0: swallowed (AX is popped)
 .notup:
     jnz .out                    ; ZF=0: swallowed, CF=1
@@ -978,7 +991,7 @@ fdlg_save:
     cmp byte [fdlg_name], 0
     jne fdlg_post_commit
 fdlg_beep:
-    FDK cw_snd_beep             ; an empty box answers nothing
+    KDOOR snd_beep              ; an empty box answers nothing
     stc
     ret
 
@@ -1351,12 +1364,10 @@ fdlg_reap_x:
     cmp word [fdlg_win], 0
     jne .no                     ; still up - or a callback opened another -
 .drop:                          ; so the image stays
-    push ax
-    mov al, MOD_FDLG
-    call mod_drop
-    pop ax
-.no:
-    retf
+    mov al, MOD_FDLG            ; AX is not banked (kernel size pass 20, -2):
+    call mod_drop               ; ui_task's ladder, the one caller, reads no
+.no:                            ; register after it - its next rung writes
+    retf                        ; AX before any read
 
 fdlg_grab_x:
     cmp word [fdlg_win], 0      ; CF=0 either way, which with no chooser is

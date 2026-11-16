@@ -48,6 +48,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path[:0] = [str(HERE), str(ROOT / "tools")]
 import os88build                                            # noqa: E402
+import modstate                                             # noqa: E402
 import os88geom as geom                                     # noqa: E402
 import os88marty                                            # noqa: E402
 import os88ui                                               # noqa: E402
@@ -93,7 +94,11 @@ def kind(m):
 
 
 def modseg(m, eq):
-    return u16(m.read(m.sym("mod_tab") + eq["MOD_WIN"] * 4, 2))
+    """WIN95.DRV's segment while it is LIVE, 0 otherwise. A drop on kern_big
+    KEEPS the image (SPEC.md 2.8.3): the row still names it, its slots rest
+    on mod_gone, and that is the "dropped" this row asks for (modstate.py),
+    kern_mega's pool pair included (SPEC.md 2.8.3.3)"""
+    return modstate.live(m, "MOD_WIN")
 
 
 def doors(m):

@@ -1366,7 +1366,7 @@ it — `RAMDISK.DRV` (`[rd_pfar+2]`) and `HDD.DRV` (`[hd_tfar+2]`) do.
 
 **kern_small is the build to check, not kern_big.** It has `MEM_MAX` 20 rather
 than 32, `MOD_MAX` 5 rather than 4, and 28,672 bytes of `KERN_BUDGET` spare — but
-docs/plans/KERN-SMALL-CUT-PLAN.md's rule is that **bytes returned to kern_small
+docs/plans/retired/KERN-SMALL-CUT-PLAN.md's rule is that **bytes returned to kern_small
 stay returned** (SPEC.md 39.27.4), so ~650 spent there is spent against a budget
 nothing may draw on. That is a decision for whoever owns that machine, not a
 build fix.

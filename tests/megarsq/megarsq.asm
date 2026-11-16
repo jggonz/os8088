@@ -30,10 +30,13 @@ RQ_CHUNK    equ 32768
 RQ_PASSES   equ 3
 
 rq_entry:
-    mov ax, 32
-    mov cx, 32                      ; page-safe, all of it: the player's
-    call OSAPI_MEM_CLAIM_DMA        ; bounce is taken the same way
-    mov cl, 1
+    mov ax, 32 * 64
+    mov cx, 32 * 64                      ; page-safe, all of it: the player's
+    push bx
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call OSAPI_MEM_P            ; bounce is taken the same way
+    pop bx
+    mov cx, 1
     jnc .have
     jmp .no
 .have:

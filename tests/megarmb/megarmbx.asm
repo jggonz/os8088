@@ -71,8 +71,6 @@ mx_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [mx_win], bx
-    mov ax, mx_tick
-    call OSAPI_WM_ONTIMER
     mov ax, MX_WAIT
     call OSAPI_WM_TIMER
     clc
@@ -101,9 +99,10 @@ mx_tick:
     call OSAPI_FILE_HERE            ; where we were launched: DX, BL
     mov [mx_home], dx
     mov [mx_hdrv], bl
-    mov ax, MX_CHUNK / 1024         ; the buffer: CONVENTIONAL (the DMA door,
+    mov ax, (MX_CHUNK / 1024) * 64         ; the buffer: CONVENTIONAL (the DMA door,
     xor cx, cx                      ; CX = 0, for an OS88_HIGHMEM package)
-    call OSAPI_MEM_CLAIM_DMA
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P
     jc .nomem
     mov [mx_buf], dx
     mov ax, MX_XKB * 1024 & 0xFFFF  ; the XMS block
@@ -725,7 +724,9 @@ mx_n_miss:  db 'missing.dat', 0     ; (lower case: the twin compares upper)
 mx_legix:   db 5, 1, 0, 4, 0, 2, 3, 0, 0, 0, 0, 0, 0, 6
 mx_tpl:
     dw 8, 300, 200, 40
-    dw mx_ttl, mx_paint, 0, 0
+    dw mx_ttl, mx_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mx_cls, 0, PAINT, mx_paint, ONTIMER, mx_tick
 mx_ttl:     db 'MegaRMB reads', 0
 mx_name0:   db 'MEGARMBX: ', 0
 mx_s_start: db 'start', 0

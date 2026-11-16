@@ -807,7 +807,9 @@ vp_strcpy:
 
 vp_tpl:
     dw 100, 80, VP_CONT_W + 2, VP_CONT_H + TITLE_H + 2
-    dw vp_ttl, vp_paint, vp_onkey, 0
+    dw vp_ttl, vp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vp_cls, 0, PAINT, vp_paint, ONKEY, vp_onkey
 vp_ttl:     db 'VGA Probe', 0
 vp_legend:  dw vp_l1, vp_l2, vp_l3, vp_l4, vp_l5, vp_l6, vp_s_res, 0
 vp_l1:      db 'Enter: run it (VGA, full screen). Inside:', 0

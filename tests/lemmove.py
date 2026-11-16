@@ -293,9 +293,7 @@ def run(a, machine, sym):
             cyc = None
             if not a.nomove:
                 m.bp_exec("mem_compact")
-                m.write(S("mem_cpq_lvl"), bytes([0xFC]))    # drop TRIV caches
-                m.write(S("mem_cpq"),
-                        struct.pack("<H", os88geom.winptr(m, lw[0].i, S)))
+                os88geom.post_compact(m, lw[0].i, 0xFC, S)  # drop TRIV caches
             if not a.nomove and m.wait_stop(120) == "breakpoint":
                 rg = m.regs()
                 c_in = int(m.status().get("cycles", 0))

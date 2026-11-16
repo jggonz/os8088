@@ -476,7 +476,7 @@ static int ovl_dive(const char *name)
 
     ord = 0;
     while (ord >= 0) {
-        ord = os88_file_find(ord, &lem_findbuf);
+        ord = os88_file_find_seq(ord, &lem_findbuf);
         if (ord < 0)
             break;
         if (lem_findbuf.type != OS88_FT_DIR)

@@ -157,8 +157,7 @@ hd_xa_a20:
     je .open
     stc
     ret
-.open:
-    clc
+.open:                          ; (CF = 0 off the equal compare: no clc)
     ret
 
 ; -----------------------------------------------------------------------------

@@ -213,7 +213,10 @@ rt_tpl:
                                 ; was drawn BELOW the window and every press on
                                 ; it missed, which reads as the control being
                                 ; broken rather than as the test's own layout
-    dw rt_ttl, rt_paint, rt_onkey, rt_onclick
+    dw rt_ttl, rt_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rt_cls, 0, PAINT, rt_paint, ONKEY, rt_onkey, \
+               ONCLICK, rt_onclick
 
 rt_ttl:  db 'Radio', 0
 

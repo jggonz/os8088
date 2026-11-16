@@ -103,15 +103,16 @@ it_ret:
 ; so it_paint reads one word a row and there is no result array in the bss.
 ; -----------------------------------------------------------------------------
 it_entry:
-    mov ax, IT_DSTKB
-    call OSAPI_MEM_CLAIM
+    mov ax, IT_DSTKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc it_ret                           ; CF=1: the loader says so
     mov si, it_blk
     mov [si+IMG_DSTSEG], dx
     mov word [si+IMG_ROWBUF], it_row
     mov di, imgc_tab                    ; DI = this case's record, throughout
 .case:
-    mov ax, 1024
+    mov ax, 16
     mul word [si+IT_SRCKB]
     xchg cx, ax                         ; DX:CX = what the source claim holds
     mov es, [si+IMG_SRCSEG]
@@ -199,10 +200,13 @@ it_entry:
 .grow:
     cmp ax, FERR_BIG                    ; the read refused: AX = FERR_*, and on
     jne .fail                           ; FERR_BIG DX = the KB the file needs
-    cmp dx, [si+IT_SRCKB]               ; only MORE than we hold is worth a
+    xchg ax, dx                         ; AX = the KB, in paragraphs
+    mov cl, 6
+    shl ax, cl
+    cmp ax, [si+IT_SRCKB]               ; only MORE than we hold is worth a
     jbe .fail                           ; second read
-    xchg ax, dx
-    call OSAPI_MEM_CLAIM                ; AX = KB -> DX = the new claim
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; AX = paragraphs -> DX = the new claim
     jc .fail
     mov [si+IT_SRCKB], ax               ; ...recorded only once it is held
     xchg dx, [si+IMG_SRCSEG]
@@ -215,7 +219,9 @@ it_entry:
 
 it_tpl:
     dw 30, 30, IT_W, IT_H
-    dw it_title, it_paint, 0, 0
+    dw it_title, it_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS it_cls, 0, PAINT, it_paint
 it_title:   db 'os88img self-test', 0
 it_s_ok:    db 'ok', 0
 it_s_bad:   db 'FAIL', 0
@@ -242,7 +248,7 @@ IT_H        equ IMGC_N * IT_ROWH + 40   ; one row a case plus the verdict under
 it_blk     equ os88_image_end + 2      ; OS88IMG_SZ - its IMG_SRCSEG and
                                        ; IMG_DSTSEG are where the two claims
                                        ; are kept, and the word BEFORE it is
-IT_SRCKB   equ -2                      ; [SI+IT_SRCKB], the KB the source claim
+IT_SRCKB   equ -2                      ; [SI+IT_SRCKB], the paragraphs the source claim
                                        ; holds (0 = none), reached off the
                                        ; block pointer the loop already holds
 it_row     equ it_blk + OS88IMG_SZ     ; OS88IMG_ROW

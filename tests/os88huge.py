@@ -5,7 +5,7 @@
 
 The include (SPEC.md 50.3.8, docs/plans/MEGA-HUGE-PLAN.md F5) is assembled
 with every arm into a stub and run in Unicorn's 8086 core. OSAPI_MEM_HUGE is
-an `int F0h` at its cell (KERNEL_SEG:04C5h) that this script answers; the
+a door cell (`int 81h` and its index) that this script answers; the
 two file routines' callees, os88_rseq and os88_wseq_put, are stubs of the
 same kind over a Python file and a Python stream, so what is under test is
 the WALK - where each piece starts and ends - and not the file doors, which
@@ -94,10 +94,24 @@ except ImportError:                     # pragma: no cover
 CSEG = 0xE000                           # the stub: code, its DS, the record
 SSEG = 0xD000                           # a stack of its own (SS != DS)
 FSEG = 0xC000                           # a FAR buffer
-KSEG = 0x0060                           # KERNEL_SEG: OSAPI_MEM_HUGE's cell
-HUGE_CELL = 0x04C5
-MEMP_CELL = 0x04E9                      # OSAPI_MEM_P (hw_claimfit's MEMP_AVAIL)
-FREE_CELL = 0x01AA                      # OSAPI_MEM_FREE
+# hw_claimfit's three cells are DOOR cells since T5 (kernel size pass 19,
+# SPEC.md 20.3.4): `call OSAPI_x` assembles to `int OS88_RARE / db <index>`,
+# so the model answers the door - the index byte after the `int`, read off
+# the SDK's generated block exactly as the stub was assembled with it - and
+# maps each index to the private number the rest of this script answers.
+RARE_VEC = 0x81                         # OS88_RARE (apps/os88api.inc)
+
+
+def _door_ix(name):
+    import re
+    txt = open(os.path.join(ROOT, "apps", "os88api.inc")).read()
+    return int(re.search(r"^%%xdefine\s+%s\s+__OSAPI_RARE\s+(0x[0-9A-Fa-f]+|\d+)"
+                         % name, txt, re.M).group(1), 0)
+
+
+DOOR = {_door_ix("OSAPI_MEM_HUGE"): 0xF0,   # its number below
+        _door_ix("OSAPI_MEM_P"): 0xF3,      # (hw_claimfit's MEMP_AVAIL)
+        _door_ix("OSAPI_MEM_FREE"): 0xF4}
 REC = 0x8000                            # CSEG:REC the record
 NAME = 0x8020                           # ...the name the file routines pass
 CUR = 0x8040                            # ...the cursor / the stream
@@ -201,10 +215,7 @@ class Stub:
         mu = Uc(UC_ARCH_X86, UC_MODE_16)
         mu.mem_map(0, 1 << 20)
         mu.mem_write(CSEG * 16, code)
-        # the cells: int F0h / F3h / F4h, retf
-        mu.mem_write(KSEG * 16 + HUGE_CELL, b"\xCD\xF0\xCB")
-        mu.mem_write(KSEG * 16 + MEMP_CELL, b"\xCD\xF3\xCB")
-        mu.mem_write(KSEG * 16 + FREE_CELL, b"\xCD\xF4\xCB")
+        # the door: an `int 81h` with its index byte after it (DOOR, above)
         mu.hook_add(UC_HOOK_INTR, self._int)
         self.mu = mu
         self.huge = None                # (cf, dx, cx, bx) for the next call
@@ -224,6 +235,15 @@ class Stub:
 
     def _int(self, mu, intno, _):
         r = mu.reg_read
+        if intno == RARE_VEC:           # the door: step past the index byte
+            ip = r(UC_X86_REG_IP)
+            ix = mu.mem_read(r(UC_X86_REG_CS) * 16 + ip, 1)[0]
+            mu.reg_write(UC_X86_REG_IP, ip + 1)
+            if ix not in DOOR:
+                self.bad.append("door index %02Xh" % ix)
+                mu.emu_stop()
+                return
+            intno = DOOR[ix]
         if self.kern is not None and intno in (0xF0, 0xF3, 0xF4):
             self.kern.cell(self, intno)
             return
@@ -507,8 +527,7 @@ class Kernel:
             self.log.append(("avail",))
             w(UC_X86_REG_AX, self.run)
             w(UC_X86_REG_BX, self.run + self.holes)
-            w(UC_X86_REG_CX, 0x20)              # MEM_GRAN
-            st._setcf(0)
+            st._setcf(0)                        # CX kept (SPEC.md 50.3.7)
         else:                                   # OSAPI_MEM_FREE
             dx = r(UC_X86_REG_DX)
             self.log.append(("free", dx))

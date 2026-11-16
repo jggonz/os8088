@@ -12,6 +12,9 @@
 ;                          nic_init may spend AX, BX, CX, SI and DI and keeps
 ;                          DX (eth_attach banks the five); nic_stop may spend
 ;                          any register (eth_detach has banked them all)
+;   nic_sleep              optional: DRVV_SLEEP's stop - the card silenced
+;                          and its memory KEPT for the wake (PCIETHER's ring,
+;                          rtl8139.inc's rt_halt); nic_stop when undefined
 ;   nic_rx, nic_tx         the stack's two verbs (nic_rx: CF=1 = empty, CX =
 ;                          the length in eth_rxb; nic_tx: CX bytes of eth_txb)
 ;   NIC_FRAME              the largest frame, bytes
@@ -21,6 +24,10 @@
 ;   NIC_UI_CARD/_STRINGS   macros: the card's row on the Control Panel page
 ;   NIC_RING_CONSTS        macro: NIC_RINGSZ, NIC1_RINGSZ, SK_RINGSLK + proof
 ; =============================================================================
+
+ %ifndef nic_sleep
+  %define nic_sleep nic_stop    ; the 8390 holds no memory of its own
+ %endif
 
 DHCP_WAIT   equ 110             ; ticks - six seconds for the whole exchange,
                                 ; which is four DISCOVERs at DHCP_TMO
@@ -92,8 +99,88 @@ eth_entry:
     je  eth_detach
     cmp al, DRVV_READY
     je  eth_ready
+    cmp al, DRVV_SLEEP
+    je  eth_sleep
+    cmp al, DRVV_WAKE
+    je  eth_wake
+    stc                         ; any other verb is REFUSED: CF = 0 is "I did
+    ret                         ; it", and HWINFO's would hand OSAPI_DRV_SUSPEND
+                                ; three words of garbage (SPEC.md 51.2.2)
+
+; -----------------------------------------------------------------------------
+; DRVV_SLEEP - a hibernate or a DOS trip, and we stay loaded (SPEC.md 51.2.5)
+;
+; Every connection is reset (its peer is told, as at detach), the card is
+; stopped - which on the RTL8139 is its bus master off BEFORE the picture is
+; taken, its ring KEPT for the wake (nic_sleep) - and the mutex is TAKEN AND HELD
+; until WAKE, so no verb pumps a stopped card. The rings, the address and the
+; page stay: they are the picture's, and the lease is what WAKE spends.
+; -----------------------------------------------------------------------------
+eth_sleep:
+    call os88_ent
+    mov byte [eth_busy], 1
+    call eth_dropall
+    call dns_drop               ; ...and the resolver lets go of its slot,
+    call nic_sleep              ; which the next sk_alloc may hand anyone
     clc
-    ret
+    jmp ep_bp
+
+; -----------------------------------------------------------------------------
+; DRVV_WAKE - the same card, where SLEEP left it, or CF = 1 (SPEC.md 51.2.5)
+;
+; Found again at the place attach found it (NIC_WAKE_FIND: [eth_base] for the
+; 8390, the PCI bus for the RTL8139 - whose BAR a POST may move, and whose
+; ring SLEEP kept, so rt_claim finds it held), brought up, and its MAC held against the one the
+; picture knew: another card is a refusal, and the kernel then detaches us and
+; reads a fresh driver for it. A refusal leaves [eth_up] 0, so that DETACH
+; touches no port that may no longer be a card's - after stopping whatever
+; nic_init started on the card that was not ours.
+;
+; THE LEASE IS KEPT (SPEC.md 72.5.3): an address a server gave is asked for
+; once more, by name, in RFC 2131's INIT-REBOOT form, and nothing waits.
+; -----------------------------------------------------------------------------
+eth_wake:
+    call os88_ent
+    mov si, eth_mac             ; the picture's MAC, banked over dhcp_off and
+    mov di, dhcp_off            ; half of dhcp_srv: both are written before
+    call mem_cp6                ; they are read again, the first below
+    NIC_WAKE_FIND .gone
+    call nic_init               ; ...which reads the card's MAC into eth_mac
+    mov si, eth_mac             ; (and keeps neither register: rt_init
+    mov di, dhcp_off            ; walks SI over the MAC)
+    call ip_eq                  ; four bytes...
+    jne .other
+    mov ax, [si+4]              ; ...and two
+    cmp ax, [di+4]
+    jne .other
+    call arp_flush              ; the gateway may be another box now
+    mov byte [eth_busy], 0
+    mov al, [dhcp_st]
+    cmp al, DH_BOUND
+    je  .rq
+    cmp al, DH_REQUEST          ; a REQUEST SLEEP left outstanding had its
+    jne .ok                     ; offer under the bank: a wake's is asked
+    cmp byte [dhcp_wk], 0       ; again by name, an offer's from DISCOVER
+    jne .rq
+    call dhcp_begin
+    jmp short .ok
+.rq:
+    cmp byte [eth_mode], ECM_MAN
+    je  .ok                     ; no server owns a manual address
+    mov si, eth_ip              ; THE LEASE BYPASS: the address we hold,
+    call mem_cp4                ; asked for by name (DI = dhcp_off still),
+    mov byte [dhcp_try], 0      ; and no wait
+    mov byte [dhcp_wk], 1
+    call dhcp_request
+.ok:
+    clc
+    jmp ep_bp
+.other:
+    call nic_stop               ; not ours: stop what nic_init started
+.gone:
+    mov byte [eth_up], 0        ; ...and DETACH leaves the ports alone
+    stc
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; DRVV_ATTACH - find a card, and hook NOTHING
@@ -231,10 +318,9 @@ eth_dhcp_wait:
 .rel:
     mov byte [eth_busy], 0
 .look:
-    cmp byte [dhcp_st], DH_BOUND
-    je  .done
-    cmp byte [dhcp_st], DH_FAIL
-    je  .done
+    cmp byte [dhcp_st], DH_BOUND    ; BOUND or FAIL: the last two states, so
+    jae .done                       ; one unsigned compare asks for both (the
+                                    ; %if beside DH_* in dns.inc holds it)
     call OSAPI_GET_TICKS
     sub ax, [eth_dl]
     js  .spin
@@ -286,28 +372,16 @@ eth_dropall:
     push ax
     push bx
     push cx
-    push dx
-    xor dl, dl
+    xor al, al
     mov cx, NET_SOCKS
 .l:
-    mov al, dl
     call sk_ptr
-    cmp byte [bx+SKO_TS], TS_ESTAB
-    jb  .kill
-    mov al, TF_RST | TF_ACK
-    push cx
-    push dx                     ; DL is the slot: the RST carries SND.NXT,
-    mov dx, [bx+SKO_TXS]        ; SND.UNA past what is in flight, as tcp_ack
-    xor cx, cx                  ; does - a peer takes a reset at no other
-    call tcp_out                ; sequence number (RFC 5961)
-    pop dx
-    pop cx
-.kill:
+    call sk_rst                 ; a peer is told (tcp.inc), every register kept
     mov byte [bx+SKO_TS], TS_CLOSED
     mov byte [bx+SKO_ST], NSK_FREE
-    inc dl
+    inc ax                      ; AL is the slot (never past NET_SOCKS)
     loop .l
-    jmp ep_dx
+    jmp ep_cx
 
 ; =============================================================================
 ; THE PACKAGE DOOR - the socket verbs (netpkg.inc)
@@ -421,8 +495,7 @@ eth_pkg:
     jmp short .pop              ; path, which drops a card lock not taken
 .notk:
     mov ax, NETE_VERB
-    stc
-    jmp short .pop
+    jmp short .stc
 .ident:
     call eth_v_ident
     jmp short .pop
@@ -432,7 +505,8 @@ eth_pkg:
     jmp short .pop
 .busy:
     mov ax, NETE_BUSY           ; NOT A FAILURE (netpkg.inc): the other task is
-    stc                         ; in the driver, come back next tick
+.stc:                           ; in the driver, come back next tick
+    stc
     jmp short .pop
 
 ; -----------------------------------------------------------------------------
@@ -477,6 +551,9 @@ eth_vtab:
     dw eth_v_raw                ; 15 NETV_RAW   - the wire is mine (72.22)
     dw eth_v_rawtx              ; 16 NETV_RAWTX - one frame out
     dw eth_v_rawrx              ; 17 NETV_RAWRX - one frame in
+    dw eth_v_udp                ; 18 NETV_UDP   - a package's port (72.24)
+    dw eth_v_udptx              ; 19 NETV_UDPTX - one datagram out
+    dw eth_v_udprx              ; 20 NETV_UDPRX - one datagram in
 eth_vtab_end:
 %if (eth_vtab_end - eth_vtab) / 2 != NETV_MAX + 1
   %error "ether: the verb table and NETV_MAX disagree"
@@ -503,27 +580,24 @@ eth_v_state:
     push bx
     push cx
     push dx
-    push si
     call eth_pump
     mov dl, NSTF_PORT           ; a card was found, or we would not be here
-    mov si, eth_ip
-    call ip_zero
+    mov ax, [eth_ip]            ; ip_zero's question, asked in place: AX is
+    or  ax, [eth_ip+2]          ; the answer's and free until it is built
     jz  .noip
     or  dl, NSTF_LINK | NSTF_SOCK
 .noip:
     xor dh, dh
-    xor al, al
-    mov cx, NET_SOCKS
+    mov bx, sk_tab              ; BX walks the records (tcp.inc's SK_NEXT,
+    mov cx, NET_SOCKS           ; which is not defined yet here)
 .l:
-    call sk_ptr
     cmp byte [bx+SKO_ST], NSK_FREE
     jne .next
     inc dh
 .next:
-    inc al
+    sub bx, -SK_SZ
     loop .l
     mov ax, dx                  ; AL = DL, the flags; AH = DH, the count
-    pop si
     pop dx
     pop cx
     pop bx
@@ -550,6 +624,7 @@ eth_v_state:
 %define OS88UI_NOGCHECK       ; radios only: no check picture (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard control (SPEC.md 20.5.1)...
 %define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
+%define OS88LINE_NORESYNC       ; ...nor os88line_resync: every field is set
 %include "os88line.inc"         ; ...and the one-line field the Setup window is
 %include "etherui.inc"
 %include "ethcfg.inc"           ; ...and the Setup window behind it (72.7)

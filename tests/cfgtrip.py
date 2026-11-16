@@ -124,7 +124,10 @@ def main(argv=None):
                         % cfg[:8])
         f.save(0, written)
 
-    with os88marty.launch(written, apps=a.apps, machine=a.machine, boot=False) as m:
+    # saver=True: this boot READS BACK [ss_mins], which launch's saver-off
+    # would otherwise zero before snap() looked
+    with os88marty.launch(written, apps=a.apps, machine=a.machine, boot=False,
+                          saver=True) as m:
         m.run()
         # A saved hidden dock has no white bottom strip: desktop_up's default
         # dock sample deliberately cannot recognize this configuration.

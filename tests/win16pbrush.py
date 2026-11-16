@@ -146,31 +146,41 @@ def main():
         print("Paintbrush: %r at %d, %d" % (w.title, fx, fy))
         ivt0 = d.read(0, 0x40)          # the first sixteen vectors, now
 
-        def m(*args):
-            subprocess.run([sys.executable, "tools/mouse.py", d.sock]
-                           + [str(v) for v in args], check=True,
-                           capture_output=True)
+        # THE POINTER CLOSED LOOP (os88qemu.mouse_to/mouse_button: every
+        # move and edge confirmed off the kernel's own words, SOAK-SPEED 15)
+        # and every pause `d.idle` - ui_done CAPPED at the host sleep it was,
+        # as win16sol/win16calc already wait. It was tools/mouse.py, one
+        # process a gesture, and 2-3 s of host sleep after each: ~4.3 s a
+        # click (docs/plans/soak-speed-2/qemubox.md)
+        Q = d.q
 
-        def at(pt):                     # the pointer there, a tick to see it
-            m("to", fx + pt[0], fy + pt[1])
-            time.sleep(2.0)
+        def to(x, y):
+            Q.mouse_to(d, d.x.sym, d.hmp, x, y)
+
+        def btn(mask):
+            Q.mouse_button(d, d.x.sym, d.hmp, mask)
+
+        def at(pt):                     # the pointer there, the UI's look
+            to(fx + pt[0], fy + pt[1])
+            d.idle(2.0)
 
         def click(pt):
             at(pt)
-            m("down")
-            time.sleep(0.3)
-            m("up")
-            time.sleep(2.0)
+            btn(1)
+            d.idle(0.3)
+            btn(0)
+            d.idle(2.0)
 
         def drag(p0, p1):
             at(p0)
-            m("down")
-            time.sleep(0.4)
+            btn(1)
+            d.idle(0.4)
             for k in (1, 2):
-                m("move", (p1[0] - p0[0]) // 2, (p1[1] - p0[1]) // 2)
-                time.sleep(0.4)
-            m("up")
-            time.sleep(3.0)
+                to(fx + p0[0] + k * ((p1[0] - p0[0]) // 2),
+                   fy + p0[1] + k * ((p1[1] - p0[1]) // 2))
+                d.idle(0.4)
+            btn(0)
+            d.idle(3.0)
 
         drag(BRUSH0, BRUSH1)            # 1: the brush, then the box tool
         click(BOXTOOL)
@@ -182,8 +192,8 @@ def main():
         click(GREEN)                    # 3: green, the roller outside
         click(OUTSIDE)
         d.idle(15.0)
-        m("to", fx + 400, fy + 360)     # off the canvas, out of the reading
-        time.sleep(2.0)
+        to(fx + 400, fy + 360)          # off the canvas, out of the reading
+        d.idle(2.0)
 
         vw, vh, rows = glass(d, "vga", work)
 
@@ -211,14 +221,13 @@ def main():
 
         click(FILE)                     # 4: File > Save As, NEW.BMP
         click(SAVEAS)
-        time.sleep(1.0)
+        d.idle(1.0)
         for k in ("n", "e", "w", "dot", "b", "m", "p", "ret"):
-            subprocess.run([sys.executable, "tools/qmp.py", d.sock,
-                            "sendkey " + k], check=True, capture_output=True)
-            time.sleep(0.25)
+            d.hmp("sendkey " + k)       # (CONFIRMED in process: xmcheck.qmp)
+            d.idle(0.25)
         saved, t0 = None, time.time()
         while time.time() - t0 < 240:   # the header is written last
-            time.sleep(5.0)
+            time.sleep(1.0)             # (a host file read: cheap)
             data = disk_file(d.p.b, "NEW.BMP")   # QEMU's copy, not src.img
             if data and bmp_pixel(data, 0, 0) is not None:
                 saved = data

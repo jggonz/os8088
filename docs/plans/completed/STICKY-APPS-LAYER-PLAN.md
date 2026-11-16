@@ -239,7 +239,7 @@ the owner (CLAUDE.md: a rung is not a build fix).
   it with one BLIT1. A release over it runs `stik_quit`:
   1. `stik_close` (os88stik.inc:613): `STIK_ONCLOSE`, remove the row by name,
      save.
-  2. On CF=0, `OSAPI_WM_CLOSE` (0x0368), then return without drawing.
+  2. On CF=0, `OSAPI_WM_CLOSE` (a door cell), then return without drawing.
 
   Sliding off cancels (the §13.5 gesture), and stikswap's declined-once case
   is unchanged. **0 kernel bytes.** While the widget owns the bar, the

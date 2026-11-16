@@ -175,6 +175,7 @@ capability is known to be there.
 import argparse
 import concurrent.futures
 import fnmatch
+import codecs
 import os
 import shutil
 import subprocess
@@ -516,6 +517,104 @@ def _qemu_cpu(qdir, seen):
     return sum(seen.values())
 
 
+def _timeout_note(p, which, wall, cpu, limit, charged):
+    """Say WHICH limit ended a timed-out row, on `p.os88_timeout` as (short,
+    long) - so a TIMEOUT line tells "the host was slow" from "it hung".
+
+    THE TWO ARE DIFFERENT FIXES (docs/plans/soak-speed-2/flake.md). The CPU
+    limit trips only on work actually done: the row's tree spent more CPU
+    than its timeout, which a loaded box cannot cause - a guest that spins
+    in a hang, or a row that really costs more than declared. The WALL
+    limit (WALL_BACKSTOP x wider) trips on a row that was not given the CPU
+    or was blocked on something that never answered: with the box's load
+    beside it, a timeout at a load past the core count with little CPU
+    spent is the host's, not the row's. Advisory only - nothing here
+    changes when a row is stopped."""
+    if getattr(p, "os88_timeout", None):
+        return                          # (the terminate's own reap: keep
+    try:                                # the limit that ended the row)
+        la = os.getloadavg()[0]
+    except OSError:
+        la = -1.0
+    n = os.cpu_count() or 1
+    cpu_s = "?" if cpu is None else "%.0f" % cpu
+    # THE RUN QUEUE IS THE WITNESS (/proc/<pid>/schedstat: ns on a CPU, ns
+    # RUNNABLE and waiting for one), over the row's live process tree: a row
+    # the host starved waited on the queue; a row that hung waited on
+    # nothing the scheduler knows about. Load alone cannot tell them apart -
+    # a sleeping row on a box at load 30 is still a hung row.
+    qwait = _tree_runq(p.pid)
+    if which == "cpu":
+        short = "CPU-bound (%s CPU s > %s)" % (cpu_s, limit)
+        long = ("the row's process tree spent %s CPU seconds, past its %s "
+                "budget, in %.0f wall s: it did that much WORK - a guest "
+                "spinning in a hang, or a row slower than its declared secs. "
+                "Host load does not cause this one." % (cpu_s, limit, wall))
+    else:
+        if qwait is not None:
+            starved = qwait > 0.25 * wall
+        else:
+            starved = la > n and (cpu is None or limit is None or
+                                  cpu < 0.5 * limit)
+        short = ("wall %.0fs, %s CPU s, %s s queued for a CPU, load "
+                 "%.1f/%d: %s"
+                 % (wall, cpu_s, "?" if qwait is None else "%.0f" % qwait,
+                    la, n, "HOST-STARVED" if starved else "blocked/hung"))
+        long = ("the WALL limit ended the row after %.0f s having spent %s "
+                "CPU s%s and %s s RUNNABLE waiting for a CPU (its live "
+                "processes' schedstat); the box's 1-min load was %.1f on %d "
+                "cpus. %s"
+                % (wall, cpu_s, "" if charged else " (CPU not charged here)",
+                   "?" if qwait is None else "%.0f" % qwait, la, n,
+                   "A load past the core count with little CPU spent is the "
+                   "HOST being slow, not the row hanging - re-run it alone "
+                   "before believing it." if starved else
+                   "Little CPU and a box with cores to spare: the row was "
+                   "WAITING on something that never answered (a socket, a "
+                   "lock, a machine that stopped)."))
+    try:
+        p.os88_timeout = (short, long)
+    except AttributeError:
+        pass
+
+
+def _tree_runq(root):
+    """Seconds the live process tree under ROOT has spent RUNNABLE but not
+    running (/proc/<pid>/schedstat's second field, summed over every thread
+    of every descendant), or None where /proc cannot say."""
+    try:
+        kids = {}
+        for d in os.listdir("/proc"):
+            if d.isdigit():
+                try:
+                    raw = open("/proc/%s/stat" % d).read()
+                except OSError:
+                    continue
+                kids.setdefault(int(raw[raw.rindex(")") + 2:].split()[1]),
+                                []).append(int(d))
+        total, todo, seen = 0, [root], False
+        while todo:
+            q = todo.pop()
+            todo.extend(kids.get(q, ()))
+            try:
+                tids = os.listdir("/proc/%d/task" % q)
+            except OSError:
+                continue
+            for t in tids:
+                try:
+                    f = open("/proc/%d/task/%s/schedstat" % (q, t)).read()
+                    total += int(f.split()[1])
+                    seen = True
+                except (OSError, ValueError, IndexError):
+                    pass
+        return total / 1e9 if seen else None
+    except OSError:
+        return None
+
+
+DRAIN_SECS = 30                 # a reaped row's pipes, read to EOF at most
+
+
 def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     """Popen.communicate, but REAPED WITH wait4 so the row's CPU is kept.
 
@@ -553,8 +652,19 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     bufs = {"o": [], "e": []}
 
     def drain(f, key):
-        for chunk in iter(lambda: f.read(8192), ""):
-            bufs[key].append(chunk)
+        # os.read, which answers whatever has ARRIVED: a text file's
+        # read(8192) waits for 8192 characters or EOF, so a pipe held open
+        # past the row (see DRAIN_SECS) kept the row's last words inside the
+        # call and they were never reported
+        dec = codecs.getincrementaldecoder(f.encoding or "utf-8")(
+            errors="replace")
+        fd = f.fileno()
+        while True:
+            b = os.read(fd, 8192)
+            if not b:
+                break
+            bufs[key].append(dec.decode(b).replace("\r\n", "\n"))
+        bufs[key].append(dec.decode(b"", final=True))
 
     ts = [threading.Thread(target=drain, args=(p.stdout, "o"), daemon=True),
           threading.Thread(target=drain, args=(p.stderr, "e"), daemon=True)]
@@ -581,6 +691,8 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
             # gets there), so the declared timeout is the wall limit.
             lim = wall if (not cpu or qdir is None or qseen) else blind
             if lim is not None and time.time() - t0 > lim:
+                _timeout_note(p, "wall", time.time() - t0, spent_cpu(),
+                              limit, cpu)
                 return None
             n += 1
             if cpu and limit is not None and n % 50 == 0:
@@ -588,6 +700,8 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
                 if spent is None:
                     cpu, wall = False, blind    # unmeasurable: wall it is
                 elif spent > limit:
+                    _timeout_note(p, "cpu", time.time() - t0, spent, limit,
+                                  cpu)
                     return None
             time.sleep(0.02)
 
@@ -611,10 +725,24 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     status, ru = got
     p.returncode = os.waitstatus_to_exitcode(status)
     qcpu = _qemu_cpu(qdir, qseen) if qdir is not None else 0.0
+    # THE ROW IS REAPED, so its output ends when its LAST WRITER closes - and
+    # a process the row left running holds the pipe for as long as it lives.
+    # Waited on without a bound, one orphan stalled a whole-tier soak for
+    # 2 h 7 min after the row itself had ended (os88bochs's fifo holder,
+    # `sleep 86400`, which had inherited the row's stderr). So the drains
+    # get DRAIN_SECS, and a pipe still open after them is SAID and left.
+    end = time.time() + DRAIN_SECS
     for t in ts:
-        t.join()
-    p.stdout.close()
-    p.stderr.close()
+        t.join(max(0.0, end - time.time()))
+    held = [k for t, k in zip(ts, ("stdout", "stderr")) if t.is_alive()]
+    if held:
+        bufs["e"].append("\nos88test: the row was reaped but its %s was "
+                         "still held open %ds later - a process it started "
+                         "outlived it; read what had arrived\n"
+                         % (" and ".join(held), DRAIN_SECS))
+    else:
+        p.stdout.close()
+        p.stderr.close()
     return ("".join(bufs["o"]), "".join(bufs["e"]),
             ru.ru_utime + ru.ru_stime + qcpu, timed_out)
 
@@ -769,6 +897,10 @@ def run_row(row, caps, strict, verbose, unbuilt=(), shared=False):
     reason = "" if ok else "exit %d" % p.returncode
     if timed_out:
         ok, reason = False, "TIMEOUT after %ds" % row.timeout
+        why = getattr(p, "os88_timeout", None)
+        if why:
+            reason += " - " + why[0]
+            out += "\nos88test: " + why[1] + "\n"
         if "qemu" in row.needs:
             out += _sweep_qemu(qdir, legacy=not shared)
     if qdir:
@@ -804,8 +936,16 @@ def lane_locks(row):
     tail."""
     script = next((c for c in row.cmd
                    if c.startswith("tests/") and c.endswith(".py")), None)
-    return tuple(getattr(row, "locks", ())) + (
-        ("script:" + script,) if script else ())
+    own = tuple(getattr(row, "locks", ()))
+    # `locks=("script:private",)` OPTS OUT: a script whose every scratch is
+    # private (tempfile.mkdtemp, os88marty.launch's run dir) and which is
+    # split into one row a leg so the lane can run the legs AT ONCE - the
+    # lock would otherwise put them end to end again (waverackrec*,
+    # docs/plans/soak-speed-2/games.md). Say so only after checking the
+    # script writes no fixed path
+    if "script:private" in own:
+        return tuple(k for k in own if k != "script:private")
+    return own + (("script:" + script,) if script else ())
 
 
 # **A BOCHS ROW IS A FRACTION OF A CORE** (docs/plans/SOAK-PARALLEL.md 19).
@@ -904,7 +1044,17 @@ def _default_bpc():
             return max(1, int(env))
         except ValueError:
             pass
-    return BOCHS_PER_CORE
+    # ...divided by the square root of the cap's RATE (os88bochs.ROW_RATE,
+    # $OS88_BOCHS_RATE): a guest allowed RATE x real time keeps more of a
+    # core busy, but not RATE x - the row's harness work is a fixed amount,
+    # not a rate. Measured at 4: 0.12-0.19 of a core a wall second against
+    # 0.08-0.12 at 1, so 2 a core (docs/plans/soak-speed-2/bochs.md)
+    try:
+        import os88bochs
+        rate = max(1.0, float(os88bochs.ROW_RATE))
+    except Exception:           # (no tools/ on the path: the old weight)
+        rate = 1.0
+    return max(1, int(round(BOCHS_PER_CORE / rate ** 0.5)))
 
 
 def lane_weight(row, bpc):
@@ -1264,6 +1414,175 @@ def _whole_tier_refusal(rows):
         % (total, hours))
 
 
+# THE INPUT-HASH CACHE (`fast` only). A row that declares `inputs=` in
+# tests/suite.py is skipped as "cached ok" when it last PASSED against a key
+# that still matches: the row's own command, needs and declarations, the
+# CONTENTS (never mtimes) of its script, of every repo-local module the script
+# imports (transitively), of every `*.txt` registry its sources name, of every
+# file its `inputs=` globs match, and the version of each tool it uses (Python
+# always, nasm when it needs or names it). `full` and `soak` ignore the cache
+# and run everything; a row with no `inputs=` always runs; `--no-cache` (or
+# OS88_TESTCACHE=0) reruns every row. The record lives in build/testcache/,
+# so `make clean` drops it, and a failure deletes the row's entry.
+#
+# THE RISK IS A STALE PASS: a row that reads a file its declaration does not
+# name is not rerun when that file changes. So a declaration is WIDE (all of
+# apps/**/*.inc, not the three files the row happens to care about today),
+# and a row that reads build/ artefacts or `git ls-files` is not declared.
+CACHE_DIR = os.path.join(ROOT, "build", "testcache")
+CACHE_FILE = os.path.join(CACHE_DIR, "fast.json")
+_HASHES = {}
+_HASH_LOCK = threading.Lock()
+_TOOLVER = {}
+
+
+def _file_digest(path):
+    import hashlib
+    with _HASH_LOCK:
+        got = _HASHES.get(path)
+    if got is None:
+        try:
+            with open(path, "rb") as f:
+                got = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            got = "-"
+        with _HASH_LOCK:
+            _HASHES[path] = got
+    return got
+
+
+def _tool_version(name):
+    if name not in _TOOLVER:
+        try:
+            r = subprocess.run([name, "-v"], capture_output=True, text=True,
+                               timeout=30)
+            _TOOLVER[name] = (r.stdout + r.stderr).strip()
+        except (OSError, subprocess.SubprocessError):
+            _TOOLVER[name] = None
+    return _TOOLVER[name]
+
+
+_IMPORT = None
+_TXT = None
+
+
+def _local_closure(scripts):
+    """The scripts plus every repo-local .py they import, transitively, plus
+    every `*.txt` file their text names that exists under tests/ or at that
+    repo-relative path. Repo-local means tools/, tests/ or tests/unit/."""
+    import re
+    global _IMPORT, _TXT
+    if _IMPORT is None:
+        _IMPORT = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w., ]+))",
+                             re.M)
+        _TXT = re.compile(r"\.txt\b")
+    dirs = [os.path.join(ROOT, d) for d in ("tools", "tests",
+                                             os.path.join("tests", "unit"))]
+    seen, todo, txts = set(), list(scripts), set()
+    while todo:
+        f = todo.pop()
+        if f in seen or not os.path.isfile(f):
+            continue
+        seen.add(f)
+        try:
+            src = open(f, errors="replace").read()
+        except OSError:
+            continue
+        for m in _TXT.finditer(src):
+            k = m.start()
+            while k > 0 and (src[k - 1].isalnum() or src[k - 1] in "_./-"):
+                k -= 1
+            name = src[k:m.end()]
+            for c in (os.path.join(ROOT, name),
+                      os.path.join(ROOT, "tests", os.path.basename(name))):
+                if os.path.isfile(c):
+                    txts.add(c)
+        if not f.endswith(".py"):
+            continue
+        for m in _IMPORT.finditer(src):
+            for mod in (m.group(1) or m.group(2)).split(","):
+                mod = mod.strip().split(" as ")[0].strip().split(".")[0]
+                for d in dirs:
+                    c = os.path.join(d, mod + ".py")
+                    if os.path.isfile(c):
+                        todo.append(c)
+    return sorted(seen | txts)
+
+
+def cache_key(row):
+    """The row's cache key, or None when it declares no inputs."""
+    import glob
+    import hashlib
+    inputs = getattr(row, "inputs", ())
+    if not inputs:
+        return None
+    h = hashlib.sha256(repr((row.cmd, row.needs, inputs,
+                             sys.version_info[:3])).encode())
+    cmd = [row.cmd] if isinstance(row.cmd, str) else list(row.cmd)
+    scripts = [os.path.join(ROOT, a) for a in cmd
+               if a.endswith(".py") and os.path.isfile(os.path.join(ROOT, a))]
+    files = set(_local_closure(scripts))
+    for g in inputs:
+        for f in glob.glob(os.path.join(ROOT, g), recursive=True):
+            if os.path.isfile(f):
+                files.add(f)
+    py = [f for f in files if f.endswith(".py")]
+    files |= set(_local_closure(py))
+    names_nasm = "nasm" in row.needs
+    for f in sorted(files):
+        d = _file_digest(f)
+        h.update(os.path.relpath(f, ROOT).encode() + b"\0" + d.encode())
+        if f.endswith(".py") and not names_nasm and f in scripts:
+            try:
+                names_nasm = "nasm" in open(f, errors="replace").read()
+            except OSError:
+                pass
+    if names_nasm:
+        h.update(repr(_tool_version("nasm")).encode())
+    return h.hexdigest()
+
+
+def cache_load():
+    import json
+    try:
+        with open(CACHE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def cache_save(store):
+    import json
+    import tempfile
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    fd, t = tempfile.mkstemp(dir=CACHE_DIR)
+    with os.fdopen(fd, "w") as f:
+        json.dump(store, f, indent=1, sort_keys=True)
+    os.replace(t, CACHE_FILE)
+
+
+def _run_frozen(a):
+    """`--frozen`: freeze the checkout with os88soak's helper and re-run this
+    command, minus the flag, from inside the snapshot - in the FOREGROUND,
+    so it is `os88test.py` as ever, reading a tree nobody else can write."""
+    import argparse
+    import os88soak
+    try:
+        slot, info = os88soak.freeze(argparse.Namespace(
+            tier=a.tier, k=a.k, exclude=a.exclude))
+    except RuntimeError as e:
+        sys.stderr.write("os88test: --frozen: %s\n" % e)
+        return 1
+    env = os88soak.frozen_env(slot, info)
+    env.pop("OS88_SOAK_HOME", None)     # the rows' own HOME is theirs
+    env.pop("OS88_SOAK_INFO", None)
+    argv = [x for x in sys.argv[1:] if x != "--frozen"]
+    sys.stdout.flush()
+    return subprocess.call([sys.executable,
+                            os.path.join(slot, "tools", "os88test.py")] + argv,
+                           cwd=slot, env=env)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Run the os8088 regression suite.",
@@ -1318,7 +1637,23 @@ def main():
                     help="report the tier budget but do not fail on it")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="print every row's output, not just the failures")
+    ap.add_argument("--no-cache", action="store_true", dest="no_cache",
+                    help="rerun every row. Without it, `fast` skips a row "
+                         "that declares `inputs=` as 'cached ok' when it last "
+                         "PASSED and its script, imports, registries, "
+                         "declared inputs and tool versions hash identical "
+                         "(contents, not mtimes; kept in build/testcache/). "
+                         "`full` and `soak` never use the cache. "
+                         "OS88_TESTCACHE=0 does the same as this flag.")
+    ap.add_argument("--frozen", action="store_true",
+                    help="run in a SNAPSHOT of this checkout, as "
+                         "`os88soak.py start` does (docs/plans/"
+                         "SOAK-PARALLEL.md 14.4): edits, commits and `make` "
+                         "here cannot reach the rows while they run")
     a = ap.parse_args()
+    if a.frozen and not (a.tier == "soak" and not a.k and not a.list
+                         and not a.user_asked):
+        return _run_frozen(a)
     scratch_tmpdir()
 
     import suite
@@ -1382,6 +1717,26 @@ def main():
 
     t0 = time.time()
     results = []
+    # THE CACHE (see cache_key): fast only, and only for declared rows. Keys
+    # are taken BEFORE anything runs, so an edit made while the tier runs is
+    # a miss next time rather than a pass recorded against the new bytes.
+    use_cache = (a.tier == "fast" and not a.no_cache
+                 and os.environ.get("OS88_TESTCACHE", "1") != "0")
+    store = cache_load() if use_cache else {}
+    keys, hits = {}, []
+    if use_cache:
+        for r in want:
+            k = cache_key(r)
+            if k is None:
+                continue
+            keys[r.name] = k
+            if store.get(r.name) == k and not (set(r.needs) - caps):
+                hits.append(r)
+        if hits:
+            names = set(r.name for r in hits)
+            want = [r for r in want if r.name not in names]
+            for r in hits:
+                results.append(Result(r, True, False, 0.0, "", "cached", 0.0))
     par = [r for r in want if not r.serial and not r.builds]
     ser = [r for r in want if r.serial or r.builds]
     # ...`builds` keeps a row OUT of the shared lane whatever the row says
@@ -1419,6 +1774,10 @@ def main():
                  if nb and bpc > 1 else ""))
 
     def report(res):
+        if res.reason == "cached" and res.ok:
+            print("%s ok %s %-28s %scached%s" % (GREEN, OFF, res.row.name,
+                                                 DIM, OFF))
+            return
         if res.skipped:
             print("%sSKIP%s %-28s %s(%s)%s" % (YELLOW, OFF, res.row.name, DIM, res.reason, OFF))
         elif res.ok:
@@ -1458,6 +1817,8 @@ def main():
             for line in res.output.rstrip().splitlines():
                 print("       | " + line)
 
+    for res in list(results):           # the cache hits, reported first
+        report(res)
     # The host-side rows fan out; the emulator rows share one lane behind
     # them, for the port reason in the header.
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.j)) as ex:
@@ -1482,13 +1843,30 @@ def main():
             report(res)
 
     wall = time.time() - t0
+    if use_cache:
+        store = cache_load()            # (another runner may have written)
+        for res in results:
+            n = res.row.name
+            if n not in keys or res.skipped:
+                continue
+            if res.ok:
+                store[n] = keys[n]
+            else:
+                store.pop(n, None)
+        try:
+            cache_save(store)
+        except OSError:
+            pass
+    ncached = sum(1 for r in results if r.ok and r.reason == "cached")
     failed = [r for r in results if not r.ok]
     skipped = [r for r in results if r.skipped]
     cost = charge(results, par, ser, conc, max(1, a.j), mj)
     print()
-    print("os88test: %d passed, %d failed, %d skipped in %.1fs, %.1fs charged "
+    print("os88test: %d passed%s, %d failed, %d skipped in %.1fs, %.1fs charged "
           "(budget %s)"
-          % (len(results) - len(failed) - len(skipped), len(failed), len(skipped),
+          % (len(results) - len(failed) - len(skipped),
+             (" (%d cached)" % ncached) if ncached else "",
+             len(failed), len(skipped),
              wall, cost, ("%ds" % cap) if cap else "none"))
 
     over = cap is not None and cost > cap

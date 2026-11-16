@@ -135,8 +135,6 @@ ab_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [ab_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
     clc
     jmp short .out
 .refuse:
@@ -1425,7 +1423,10 @@ ab_tpl:
     ; measurement of the blit, and full screen, which is the only thing that
     ; issues this call, is never clipped.
     dw 0, 22, 640, 448
-    dw ab_ttl, ab_paint, ab_onkey, ab_onclick
+    dw ab_ttl, ab_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ab_cls, 0, PAINT, ab_paint, ONKEY, ab_onkey, \
+               ONCLICK, ab_onclick
 
 ab_ttl:     db 'Apple II Band Bench', 0
 

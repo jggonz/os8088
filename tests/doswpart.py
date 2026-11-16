@@ -150,8 +150,13 @@ def run(disk):
         if "dvw_pseg" not in dm:
             fail("this DOS keeps its windowed layer INLINE - no [dvw_pseg] "
                  "(SPEC.md 96.54.9 is the parted host, -DDOSKPART)")
-        part_kb = (len(open(os.path.join(ROOT, "build", "doswp.bin"),
-                            "rb").read()) + 1023) // 1024
+        # the part's claim is in PARAGRAPHS since the flag day (SPEC.md
+        # 50.3.7, kernel size pass 19), rounded to the heap's granule - it
+        # was a KB count before
+        gran = os88geom.MEM_GRAN * 16
+        part_b = (len(open(os.path.join(ROOT, "build", "doswp.bin"),
+                           "rb").read()) + gran - 1) // gran * gran
+        part_kb = part_b / 1024
 
         # --- 1: the full screen only: no part --------------------------------
         bracket_once(ui, m, True)
@@ -161,9 +166,9 @@ def run(disk):
             fail("a window that only ran on the full screen holds a part at "
                  "%04X" % a.w("dvw_pseg"))
         mine = [s for s, c in claims(m).items()
-                if c[1] == a.seg() and c[0] == part_kb * 1024]
+                if c[1] == a.seg() and c[0] == part_b]
         if mine:
-            fail("window A owns a %d KB claim at %04X with no windowed run"
+            fail("window A owns a %g KB claim at %04X with no windowed run"
                  % (part_kb, mine[0]))
         print("doswpart: 1 a window that ran on the full screen holds no part")
 
@@ -171,8 +176,8 @@ def run(disk):
         windowed(ui, m, a, wa, "A's first windowed run")
         pa = a.w("dvw_pseg")
         c = claims(m).get(pa)
-        if not pa or not c or c[0] != part_kb * 1024 or c[1] != a.seg():
-            fail("A's part should be one %d KB claim of its own: [dvw_pseg] "
+        if not pa or not c or c[0] != part_b or c[1] != a.seg():
+            fail("A's part should be one %g KB claim of its own: [dvw_pseg] "
                  "%04X, claim %r" % (part_kb, pa, c))
         if c[2]:
             fail("A's part is MOVABLE (proc %04X) while its program runs - the "
@@ -182,7 +187,7 @@ def run(disk):
         if not c or c[2] != dm["dvw_preloc"]:
             fail("between runs A's part should be movable through dvw_preloc "
                  "(%04X); it is %r" % (dm["dvw_preloc"], c))
-        print("doswpart: 2 the first Run in Window claims %d KB at %04X, "
+        print("doswpart: 2 the first Run in Window claims %g KB at %04X, "
               "pinned for the run and movable after it" % (part_kb, pa))
 
         # --- 3: B above A, and A's full-screen run drops A's -----------------

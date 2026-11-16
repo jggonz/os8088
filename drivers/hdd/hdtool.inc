@@ -48,7 +48,7 @@
 ; panel can be closed with the disk tool still on screen.
 ;
 ; This needed the one kernel byte-count the split had otherwise avoided:
-; OSAPI_WM_DESTROY, slot 0x02BC, 8 bytes of jump table. Closing an unowned
+; OSAPI_WM_DESTROY, a door cell, 8 bytes of jump table. Closing an unowned
 ; window is a hide (SPEC.md 38.1), so without a destroy every load leaks a
 ; window record holding a W_SEG that names a freed claim - and MAX_WIN is 12.
 ; Holding 11KB was the better of those two, which is why this was a documented
@@ -133,9 +133,9 @@ hd_tool_need:
                                 ; read below never runs in the user's folder
 
     mov ax, HDTOOL_PARA         ; PARAGRAPHS (SPEC.md 50.3.7): the image is
-    xor cx, cx                  ; a byte count, 16,510 today, and a KB door
+    xor cx, cx                  ; a byte count, 16,153 today, and a KB door
     mov bl, MEMP_CLAIM_HI       ; held 17KB of heap for it while the page was
-    call OSAPI_MEM_P            ; open where the granule holds 16.5. CX = 0,
+    call OSAPI_MEM_P            ; open where the granule holds 16. CX = 0,
                                 ; no DMA head; the DISK class, because the
                                 ; tool's own sector buffers take int 13h
     jc .fail                    ; owner = our segment, so drv_release sweeps
@@ -288,27 +288,20 @@ hd_tool_call:
 ;
 ; THE LOAD IS THE ONLY NEW FAILURE and the arguments are the only new problem.
 ; hd_tool_need reads a file and claims memory, so it spends every register the
-; page was handed - which is why they are banked ACROSS the load and restored
-; before the call, rather than trusted through it.
+; page was handed - and gives every one of them back: its whole load runs
+; between one set of pushes and the pops at .out, its only way out. So the
+; arguments survive the load by ITS contract ("clobbers: flags"); this thunk
+; banked five of them across it as well, until driver size pass 1.
 ;
 ; Nothing here is a repaint trigger: a page that is already up stays up, and
 ; hd_tool_need returns at its first compare once the image is in.
 ; -----------------------------------------------------------------------------
 hd_cp_thunk:
-    push bx
-    push cx
-    push dx
-    push di
-    push ax                     ; the verb, across a load entitled to spend it
-    call hd_tool_need
-    pop ax
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    jc .nofile
-    call hd_tool_call
-    ret
+    call hd_tool_need           ; EVERY register kept, the verb in AL among
+    jc .nofile                  ; them: its load banks AX..BP and ES and
+    jmp short hd_tool_call      ; gives them back on every path, so the five
+                                ; this thunk used to bank around it were the
+                                ; second copy (driver size pass 1)
 .nofile:
     mov byte [hd_msgc], HDM_NOSYS
     stc
@@ -392,15 +385,7 @@ hd_cp_key:
     push es
     mov al, HDT_KEY
     call hd_tool_call
-    pop es                      ; `pop` leaves the page's CF alone
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp hd_tool_need.out        ; `pop` leaves the page's CF alone
 .no:
     stc
     ret

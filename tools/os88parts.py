@@ -75,6 +75,8 @@ PKG_MIRROR = {
     "OPF_OPT": "OP_OPT",
     "OPF_LAZY": "OP_LAZY",
     "OPF_ZFILL": "OP_ZFILL",
+    "OPF_BIG": "OP_BIG",
+    "OP_BIGMAX": "OP_BIGMAX",
     "PK_SEG": "OP_SEG",
     "PK_ASSET": "OP_ASSET",
 }
@@ -149,11 +151,19 @@ def rows(image):
     out = []
     for i in range(image[at + hdr - 2]):
         b = at + hdr + row * i
-        out.append({"kind": image[b + EQU["OP_R_KIND"]],
-                    "flags": image[b + EQU["OP_R_FLAG"]],
+        b0, fl = image[b + EQU["OP_R_KIND"]], image[b + EQU["OP_R_FLAG"]]
+        ln, zk = _u16(image, b + EQU["OP_R_LEN"]), _u16(image, b + EQU["OP_R_ZKB"])
+        if fl & EQU["OP_BIG"]:
+            # 20-bit lengths, their high bits in the kind byte (SPEC.md
+            # 20.12.15): `len` from bits 4-7, a packed `zkb` from bits 1-3
+            ln |= (b0 >> 4) << 16
+            if fl & EQU["OP_COMP"]:
+                zk |= ((b0 >> 1) & 7) << 16
+        out.append({"kind": b0 & EQU["OP_KIND"],
+                    "flags": fl,
                     "off": _u16(image, b + EQU["OP_R_OFF"]),
-                    "len": _u16(image, b + EQU["OP_R_LEN"]),
-                    "zkb": _u16(image, b + EQU["OP_R_ZKB"]),
+                    "len": ln,
+                    "zkb": zk,
                     "gran": g})
     return out
 

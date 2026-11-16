@@ -152,11 +152,8 @@ def main():
 
         # --- the torn instant -----------------------------------------------
         m.bp_exec("mem_reloc_call")
-        wptr = (S("wm_wins") + tgt.i * os88geom.WIN_SIZE
-                - os88geom.KERNEL_SEG * 16) & 0xFFFF
         m.pause()
-        m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-        m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+        os88geom.post_compact(m, tgt.i, 0xFC, S)
         torn = None
         mark = m.go()
         for _ in range(HUNT):

@@ -134,7 +134,9 @@ sp_fmark:                           ; the harness reads [sch_fast] HERE
 
 sp_tpl:
     dw 40, 40, 160, 40
-    dw sp_ttl, sp_paint, sp_onkey, 0
+    dw sp_ttl, sp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sp_cls, 0, PAINT, sp_paint, ONKEY, sp_onkey
 sp_ttl: db 'SndPlay', 0
 
 sp_samp:                            ; the clip: (i * 37) & 0xFF, a pattern

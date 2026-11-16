@@ -180,9 +180,7 @@ def main():
         front(np_slot)
         ui.close(win(np_slot))
         front(dos_slot)
-        wptr = os88geom.winptr(m, dos_slot, S)
-        m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-        m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+        os88geom.post_compact(m, dos_slot, 0xFC, S)
         os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                         "the posted compaction", poll=0.2, limit=30)
         os88marty.ui_done(m)

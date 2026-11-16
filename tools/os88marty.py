@@ -173,6 +173,8 @@ GUEST_PACE = float(os.environ.get("OS88_GUEST_PACE", "4.5"))
 # overshot a stop by up to the last nap - a harness-driven guest routine of a
 # few ms (a breakpoint-bracketed handler, a readback stub) paid ~2x its run.
 WAIT_STOP_NAP = float(os.environ.get("OS88_WAIT_STOP_NAP", "0.004"))
+# `until`'s adaptive poll ceiling (it doubles from 20 ms to this). Was 0.25.
+UNTIL_NAP_MAX = float(os.environ.get("OS88_UNTIL_NAP", "0.05"))
 
 # SETTLE'S SHORT WINDOW. `settle` proves stillness over `stable` intervals of
 # `quiet`, and at GUEST_PACE that is nine guest seconds of a still screen
@@ -187,6 +189,29 @@ WAIT_STOP_NAP = float(os.environ.get("OS88_WAIT_STOP_NAP", "0.004"))
 # one knob for the whole A/B.
 SETTLE_UI = os.environ.get("OS88_SETTLE_UI", "1") != "0"
 SETTLE_UI_QUIET = 0.2
+# ...AND A UI THAT WAKES ON A CLOCK GETS THE SHORT WINDOW A BOUNDED NUMBER OF
+# TIMES. A long window is cut the moment the UI goes idle, and a cut window
+# proves nothing (run = 0) - so a UI task that sleeps and wakes every tick
+# while the screen sits still (a DOS program in its window polling INT 33h
+# and INT 16h: ~half the samples read T_STATE 1) re-cut every window for
+# ever. Under SETTLE_DET the samples land at the same guest phase every time,
+# so it was not slow but NEVER: doswmouse spent its 360 guest seconds on a
+# still screen. After this many cuts the UI is taken for one that does not
+# idle, and the settle spends whole windows on the screen alone, as it
+# always has for an animating worker.
+SETTLE_UI_CUTS = 3
+
+# SETTLE'S WINDOW IS RUN, NOT WAITED. `pace` spends AT LEAST its guest seconds
+# and polls to see that it has, so each interval overshot by however long the
+# host took to look (a 10 ms nap is ~45 guest ms at 4.5x, more on a loaded
+# box) - and the capture after it was taken from a guest still RUNNING while
+# the screen was read. Two captures of a screen that animates on a guest
+# clock (a stopwatch, a seconds field) therefore landed at host-chosen guest
+# moments, and whether they matched depended on the box's load. With this on,
+# settle PAUSES the machine, reads, `advance`s exactly the window, reads
+# again - every capture at a guest position fixed by the guest alone - and
+# resumes it at the end. OS88_SETTLE_DET=0 is the polled path, for an A/B.
+SETTLE_DET = os.environ.get("OS88_SETTLE_DET", "1") != "0"
 
 
 def pace(m, secs):
@@ -223,6 +248,7 @@ def pace(m, secs):
             return got
     st = m.status()
     c0 = int(st.get("cycles", 0))
+    _saver_guard(m, c0)                 # launch's saver-off, when due
     t0 = time.time()
     while True:
         spent = (int(st.get("cycles", 0)) - c0) / GUEST_HZ
@@ -236,13 +262,20 @@ def pace(m, secs):
                 "a %.2fs pause (%.1f guest seconds) had spent %.2f of them "
                 "after %.0f host seconds - the guest is running at under a "
                 "tenth of real time" % (secs, want, spent, time.time() - t0))
-        time.sleep(0.01)
+        # the nap never outlasts what is LEFT at the idle rate (GUEST_PACE
+        # guest s a host s), so a short pause - a mouse packet's 0.054 -
+        # stops overshooting by up to the whole 10 ms (soak-speed-2/core.md)
+        time.sleep(min(0.01, max(0.001, (want - spent) / GUEST_PACE)))
         st = m.status()
 
 # Where a run records what its waits actually cost, in guest seconds, when
 # OS88_WAITLOG names a file. Nothing reads it at run time: it is how the
 # numbers above get re-derived from a real soak instead of argued about.
 WAITLOG = os.environ.get("OS88_WAITLOG")
+
+
+# vram's unpacking table: byte -> its eight pixels as 0/1 bytes, MSB first
+_BITS8 = [bytes((b >> (7 - i)) & 1 for i in range(8)) for b in range(256)]
 
 
 class MartyError(Exception):
@@ -258,6 +291,10 @@ class Marty:
             host, port = "127.0.0.1", addr
         try:
             self.s = socket.create_connection((host, int(port)), timeout=timeout)
+            # SOAK-SPEED 17 on the CLIENT too: the server sets it, and a
+            # request is one write - but a caller writing two (a key then a
+            # read from another thread) must not wait out a delayed ACK
+            self.s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except OSError as e:
             raise MartyError(
                 f"{addr}: {e}. Is martypc_headless running with "
@@ -321,6 +358,14 @@ class Marty:
             except OSError:
                 pass
         self.pid = r.get("pid")
+        # the greeting answers `batch`'s question too: one ping, not two
+        self._pipeline = bool(r.get("pipeline"))
+        # ...and whether `fbuf` can answer a digest (settle's stillness test)
+        self.fbuf_digest = bool(r.get("fbuf_digest")) and \
+            os.environ.get("OS88_FBUF_DIGEST", "1") != "0"
+        # does `advance` drain MARTYPC_WAV's sinks (debug_server.rs)? settle
+        # spends its windows in `advance`, so under a capture it needs this
+        self.advance_drains = bool(r.get("advance_drains"))
 
     def __enter__(self):
         return self
@@ -737,13 +782,17 @@ class Marty:
             raise MartyError("kind must be 'cga' or 'herc'")
         fb = self.read(base, banks * 0x2000)
         rows = []
+        bits = _BITS8
         for y in range(h):
             # SPEC.md 39.3's banked layout, byte for byte the arithmetic in
             # tools/hercshot.py - so a picture from either route is the same
             # picture, and a shear means the KERNEL's bank arithmetic moved.
             off = (y % banks) * 0x2000 + (y // banks) * stride
-            rows.append(bytearray((fb[off + (x >> 3)] >> (7 - (x & 7))) & 1
-                                  for x in range(w)))
+            # a byte's eight pixels by TABLE, MSB first: it was a generator
+            # step a pixel - 128,000 a CGA frame, ~35 host ms, paid by every
+            # `settle` capture on a 1bpp card (soak-speed-2/core.md)
+            rows.append(bytearray(b"".join(
+                [bits[c] for c in fb[off:off + (w >> 3)]])))
         return w, h, rows
 
     # --- memory --------------------------------------------------------------
@@ -757,6 +806,14 @@ class Marty:
             out += bytes.fromhex(r["data"])
             length -= n
         return bytes(out)
+
+    def lin(self, seg, off=0):
+        """The linear address of SEG:OFF - `seg << 4` plus OFF here. The
+        kern_mega shims answer the same call for a SELECTOR too
+        (os88megacommon.MegaMixin.lin), so a row spells it `m.lin(seg,
+        off)` on every emulator rather than `m.lin(...) if bochs else seg
+        * 16 + off` (soak-speed-2/bochs.md, parity)."""
+        return (seg << 4) + off
 
     def readseg(self, seg, off, length):
         """`length` bytes at seg:off. A LiveSeg (what dispapps.pkg_seg,
@@ -1159,12 +1216,12 @@ class Marty:
         itself first, so one snapshot can be restored any number of times.
         """
         r = self.cmd(cmd="restore", id=snap_id, port=port)
-        for _ in range(100):
-            try:
+        for _ in range(1000):           # 10 ms, not 100: the holder binds
+            try:                        # in about a millisecond
                 return Marty("127.0.0.1:%d" % r["port"])
             except MartyError:
                 import time as _t
-                _t.sleep(0.1)
+                _t.sleep(0.01)
         raise MartyError("snapshot %d never came up on port %d" % (snap_id, port))
 
     def key(self, name, down=True, up=True):
@@ -2048,7 +2105,9 @@ def _warn_oversubscribed(about_to_start):
     whatever is counting it.
     """
     cap = int(os.environ.get("OS88_MARTY_MAX", "0")) or _cpu_count()
-    live = len([d for d in instances() if d["alive"]])
+    live = len([d for d in instances() if d["alive"]
+                and d.get("label") != "bootcache"])  # paused cache holders
+                                                    # (os88bootcache) run nothing
     if live + about_to_start > cap:
         sys.stderr.write(
             "os88marty: starting emulator %d on a %d-core box. Aggregate "
@@ -2473,15 +2532,26 @@ class _Screen(object):
     `bytes == bytes`, which is one memcmp.
     """
 
-    __slots__ = ("bytes", "w", "h", "_rows", "_d", "_lit")
+    __slots__ = ("bytes", "w", "h", "_rows", "_d", "_lit", "_m", "_card")
 
-    def __init__(self, m, card=None):
+    def __init__(self, m, card=None, digest=False):
         vt = m.video(card=card)["type"]
         self._rows = self._d = self._lit = None
+        self._m, self._card = m, card
         if vt in ("cga", "mda", "hercules"):
             w, h, rows = m.vram("cga" if vt == "cga" else "herc")
             self._rows = rows
             self.bytes = b"".join(bytes(r) for r in rows)
+        elif digest and getattr(m, "fbuf_digest", False):
+            # STILLNESS ONLY (no gate asks for bands): the frame's FNV-1a
+            # from the server, 16 hex digits where the frame was 1.8 MB of
+            # hex on VGA (debug_server.rs `fbuf` `digest`;
+            # soak-speed-2/core.md). Equal digests are equal frames for
+            # settle's purpose; the bands, if a diagnostic asks, are read
+            # from a fresh frame.
+            r = m.cmd(cmd="fbuf", aperture=0, card=card, digest=True)
+            w, h = r["w"], r["h"]
+            self.bytes = ("%s:%s" % (r.get("len"), r["digest"])).encode()
         else:
             w, h, d = m.fbuf(card=card)
             self.bytes = self._d = d
@@ -2489,11 +2559,15 @@ class _Screen(object):
 
     def _band(self):
         if self._lit is None:
+            if self._rows is None and self._d is None:
+                w, h, self._d = self._m.fbuf(card=self._card)
             if self._rows is not None:
                 self._lit = [sum(r) for r in self._rows]
             else:
                 w, h, d = self.w, self.h, self._d
-                self._lit = [sum(1 for x in range(w) if d[(y * w + x) * 3])
+                # each row's RED bytes by slice, counted by `count` (was a
+                # generator step a pixel: 307,200 a VGA capture)
+                self._lit = [w - d[y * w * 3:(y + 1) * w * 3:3].count(0)
                              for y in range(h)]
         return self._lit
 
@@ -2548,9 +2622,11 @@ def no_saver(m):
     armed caught a SAVER shape instead of Paint's canvas. Neither symptom
     named the saver.
 
-    Not done in `launch`: tests/saver.py is a gate ABOUT the saver, and a
-    harness that silently disabled the feature under test would be worse than
-    the failure this prevents.
+    `launch` now does this by default, through `_saver_guard` (the block
+    above `kernel_up`), unless the row passes `saver=True` - which
+    tests/saver.py and every other row ABOUT the saver does, since a harness
+    that silently disabled the feature under test would be worse than the
+    failure this prevents. Calling it by hand as well is harmless.
     """
     S = _syms().linear
     # NOT BEFORE THE BOOT HAS APPLIED ITS SETTINGS. `drv_boot_x` loads
@@ -2580,6 +2656,111 @@ def no_saver(m):
         mins = None
     if mins is not None:
         m.write(mins, b"\0")
+
+
+# --- THE SAVER IS OFF BY DEFAULT, at launch --------------------------------
+#
+# SPEC.md 79's saver comes up after five GUEST minutes with no input, and a
+# row that gets there compares a starfield. os88ui.boot always turned it off;
+# a raw `launch` did not, and about a hundred rows start with one (81 in
+# tests/megaport.txt alone). Whether they reached five idle guest minutes was
+# a matter of how long their own waits ran - so `launch` now arms this guard
+# unless the row passes `saver=True`, which the rows ABOUT the saver do.
+#
+# A GUARD, not a write at launch, because there is nothing to write until the
+# kernel has applied SYSTEM.CFG (no_saver's own note: `ss_mins2idle` runs late
+# in kmain_o and rewrites [ss_idle]) and a `boot=False` row runs its own boot.
+# So every guest-time wait (`_Progress.check`: until, settle, ui_done,
+# quiesce, wait_stop...) and every `pace` looks - at every poll until it has
+# written, then every SAVER_LOOK guest seconds: once the boot is over - desk_rows written, [spl_live] = 0,
+# the same test no_saver makes - it writes no_saver's two bytes, ONCE PER
+# BOOT. It does not keep them at zero: a row that turns the saver on later
+# (dotdelpen's last leg) is left alone. A boot that is seen not finished
+# re-arms it, so a reboot inside a row gets the saver off again too.
+#
+# AND ONLY ON THE KERNEL THE MAP DESCRIBES. A raw launch can boot kern_small,
+# a knob kernel, DOS - a machine whose [ss_idle] is not where os88sym says. So
+# before writing, the 32 code bytes at `blk_pass` (which address [ss_idle] in
+# their own encoding) are read off the guest and compared with kernel.bin's;
+# a machine that does not match is not written to. Anything that cannot be
+# resolved disarms the guard quietly: it is a convenience, and a convenience
+# that raises would be a new way for a row to fail.
+SAVER_LOOK = 2.0
+
+
+class _SaverGuard(object):
+    __slots__ = ("next", "done", "a", "ident")
+
+    def __init__(self):
+        self.next, self.done, self.a, self.ident = 0, False, None, None
+
+
+def _saver_arm(m, on=True):
+    """Arm (or disarm) launch's saver guard on `m`."""
+    m._saver_g = _SaverGuard() if on else None
+
+
+def _saver_guard(m, c=None, force=False):
+    """The saver guard's look: see the block above. `c` is the guest clock
+    the caller already read (cycles), so a look costs no extra round trip
+    until it is due; `force` looks now."""
+    g = getattr(m, "_saver_g", None)
+    if g is None:
+        return
+    if not force:
+        if c is None or c < g.next:
+            return
+    # UNTIL IT HAS WRITTEN, IT LOOKS AT EVERY WAIT'S EVERY POLL (two reads):
+    # the boot's end is a moment, and a row that pokes [ss_idle] itself just
+    # after its own boot wait must find the guard already done, not arriving
+    # a look later to undo it. Once done (or on a kernel that is not the
+    # map's) it looks every SAVER_LOOK guest seconds, for a reboot.
+    later = (c + int(SAVER_LOOK * GUEST_HZ)) if c is not None else 0
+    g.next = 0
+    try:
+        if g.a is None:
+            S = _syms().linear
+            try:
+                mins = S("ss_mins")
+            except KeyError:
+                mins = None
+            g.a = (S("desk_rows"), S("spl_live"), S("ss_idle"), mins)
+        desk, spl, idle, mins = g.a
+        if m.read(desk, 2) == b"\0\0" or m.read(spl, 1)[0] != 0:
+            g.done = False                  # not up yet, or rebooting
+            return
+        if g.done:
+            g.next = later
+            return
+        if not _saver_ident(m, g):
+            g.next = later
+            return                          # not the kernel the map is of
+        m.write(idle, b"\0\0")
+        if mins is not None:
+            m.write(mins, b"\0")
+        g.done = True
+        g.next = later
+    except Exception:
+        m._saver_g = None
+
+
+def _saver_ident(m, g):
+    """Is the RUNNING kernel the one os88sym's map describes? `blk_pass`'s
+    first 32 bytes, guest against image. kern_mega's map is its own build's
+    (os88sym._mega_map) and its machine always runs that build, so it is
+    taken as read there."""
+    if os.environ.get("OS88_MEGA"):
+        return True
+    if g.ident is None:
+        import os88sym
+        with open(os88sym.kernel_image(), "rb") as f:
+            f.seek(os88sym.file_offset("blk_pass"))
+            want = f.read(32)
+        if len(want) != 32:
+            raise MartyError("kernel.bin is shorter than blk_pass")
+        g.ident = (m.sym("blk_pass"), want)
+    at, want = g.ident
+    return bytes(m.read(at, 32)) == want
 
 
 def kernel_up(m, guest=120.0, what="the kernel to reach the desktop"):
@@ -2732,9 +2913,12 @@ class _Progress:
         el = time.time() - self.t0
         return (self.spent() / el) if el > 0.01 else 0.0
 
-    def check(self):
+    def check(self, c=None):
+        """`c`: the cycle count from a `status` the caller has just read,
+        which saves this its own round trip."""
         now = time.time()
-        c = self._cycles()
+        c = self._cycles() if c is None else int(c)
+        _saver_guard(self.m, c)             # launch's saver-off, when due
         if c != self.last_c:
             self.last_c, self.last_move = c, now
         elif now - self.last_move > GUEST_STALL:
@@ -2792,11 +2976,30 @@ class _Progress:
         if not WAITLOG:
             return
         try:
+            now = time.time()
+            site = _caller()
             with open(WAITLOG, "a") as f:
+                # THE GAP BEFORE THIS WAIT (soak-speed-2/core.md): host and
+                # guest seconds from the end of the last logged wait on this
+                # Marty to the start of this one - the row's and harness's
+                # OWN work between waits (reads, clicks, host-side Python).
+                # Host >> guest there is host overhead; guest >> 0 is the
+                # machine running unwatched. `tools/os88marty.py waitlog
+                # FILE` sums both per call site.
+                prev = getattr(self.m, "_wl_end", None)
+                if prev is not None:
+                    f.write("between\t%s\t%.2f\t%.2f\t%.3f\tbefore %s\n"
+                            % (site, (self.c0 - prev[1]) / GUEST_HZ,
+                               self.t0 - prev[0], 0.0,
+                               self.what.replace("\t", " ")[:52]))
                 f.write("%s\t%s\t%.2f\t%.2f\t%.3f\t%s\n"
-                        % (kind, _caller(), self.spent(),
-                           time.time() - self.t0, self.rate(),
+                        % (kind, site, self.spent(),
+                           now - self.t0, self.rate(),
                            self.what.replace("\t", " ")[:60]))
+            try:
+                self.m._wl_end = (now, self.last_c)
+            except AttributeError:
+                pass
         except OSError:
             pass
 
@@ -2856,7 +3059,13 @@ def guest_sleep(m, secs, poll=0.02):
     p = _Progress(m, "guest_sleep(%g)" % secs, secs + 30.0)
     while p.spent() < secs:
         p.check()
-        time.sleep(poll)
+        if p.spent() >= secs:
+            break
+        # never nap past what is left at the idle rate: still()'s three
+        # frames are ~11 host ms idle and paid a whole 20 ms poll
+        # (soak-speed-2/core.md)
+        time.sleep(min(poll, max(0.001, (secs - p.spent())
+                                 / (GUEST_PACE or 4.5))))
     p.done("guest_sleep")
     return p.spent()
 
@@ -2918,6 +3127,29 @@ def quiesce(m, read, guest=0.5, stable=2, budget=30.0,
     """
     prog = _Progress(m, what, budget)
     last, run = object(), 0
+    if _settle_det_ok(m):
+        # AS SETTLE (SETTLE_DET): read a PAUSED guest, then run exactly
+        # `guest` of its time, so two readings are a fixed guest interval
+        # apart and a value that moves on a guest clock is sampled at the
+        # same guest moments on any box. Resumed at the end.
+        m.pause()
+        resume = True
+        try:
+            while True:
+                prog.check()
+                cur = read()
+                run = run + 1 if cur == last else 0
+                if run >= stable:
+                    prog.done("quiesce")
+                    return cur
+                last = cur
+                _gadvance(m, guest)
+        except _SettleStopped:
+            resume = False
+            raise
+        finally:
+            if resume:
+                m.run()
     while True:
         cur = read()
         run = run + 1 if cur == last else 0
@@ -3500,6 +3732,12 @@ def ui_idle(m, lock=True):
         a = m._ui_idle_syms = (m.sym("sch_tasks") + UI_T_STATE,
                                m.sym("evq_count"), m.sym("sch_uiwake"),
                                m.sym("gfx_lock_flag"))
+    got = _reads1(m, ((a[0], 1), (a[1], 1), (a[2], 1), (a[3], 1),
+                      (BIOS_KBUF, 4)))
+    if got is not None:                 # one pipelined round trip, not five
+        st, q, wk, lk, kb = got
+        return (st[0] == UI_ASLEEP and not q[0] and not wk[0]
+                and not (lock and lk[0]) and kb[0:2] == kb[2:4])
     if m.read(a[0], 1)[0] != UI_ASLEEP:
         return False
     if (m.read(a[1], 1)[0] or m.read(a[2], 1)[0]
@@ -3507,6 +3745,23 @@ def ui_idle(m, lock=True):
         return False
     kb = m.read(BIOS_KBUF, 4)
     return kb[0:2] == kb[2:4]
+
+
+def _reads1(m, spans):
+    """Several short guest reads in ONE pipelined round trip (`Marty.batch`),
+    or None where that is not on offer - another backend's object, or a
+    server too old to pipeline - and the caller reads them one at a time.
+    Each span stays under 64KB. soak-speed-2/core.md: ui_done's poll was
+    five to ten serial round trips a look."""
+    if not isinstance(m, Marty):
+        return None
+    if m._pipeline is False:
+        return None
+    try:
+        out = m.batch([{"cmd": "read", "addr": a, "len": n} for a, n in spans])
+    except MartyError:
+        return None
+    return [bytes.fromhex(r["data"]) for r in out]
 
 
 def ui_done(m, what="the UI to finish with that input", hold=0.06,
@@ -3548,6 +3803,8 @@ def ui_done(m, what="the UI to finish with that input", hold=0.06,
     is then NOT promised finished - settle before a capture.
     """
     idle = (lambda mm: ui_idle(mm, False)) if not lock else ui_idle
+    if not lock:
+        idle._ui_lock = False           # (for _ui_settled1's batched look)
     prog = _Progress(m, what, limit * GUEST_BUDGET_RATIO)
     c0 = r0 = k0 = None
     while True:
@@ -3599,8 +3856,8 @@ def ui_done(m, what="the UI to finish with that input", hold=0.06,
         # At least `hold` guest seconds AND one kernel tick: the tick is
         # ui_task's own periodic wake having come and gone, and the proof
         # that it is THIS kernel's bytes being read (see `_ui_mark`).
-        if (prog._cycles() - c0) / GUEST_HZ < hold:
-            prog.check()
+        prog.check()                    # (its status IS the clock read:
+        if (prog.last_c - c0) / GUEST_HZ < hold:    # one round trip, not 2)
             time.sleep(0.005)
             continue
         got = _ui_settled(m, idle, k0, r0)
@@ -3627,6 +3884,47 @@ _UI_STEPS = 24                          # PIT counts, 4 CPU clocks each) - and
                                         # 24 of them are three ticks
 
 
+_SLOW = object()
+
+
+def _ui_settled1(m, idle, k0, r0):
+    """`_ui_settled`'s look as ONE pipelined round trip - the drive's read
+    count, [ticks], [ui_lastt] and ui_idle's five spans in one `batch` (eight
+    serial round trips before; soak-speed-2/core.md). The guest is PAUSED
+    around every look but the pump's, so the values are the same ones the
+    serial reads saw. `_SLOW` where it is not on offer: not a Marty, a
+    server that does not pipeline, an `idle` that is not one of ui_done's
+    two, or a symbol not resolved yet - the caller then reads serially."""
+    if not isinstance(m, Marty) or not m._pipeline:
+        return _SLOW
+    lock = getattr(idle, "_ui_lock", None)
+    if idle is ui_idle:
+        lock = True
+    a = getattr(m, "_ui_idle_syms", None)
+    kt = getattr(m, "_ktick_sym", None)
+    lt = getattr(m, "_ui_lastt_sym", None)
+    if lock is None or a is None or kt is None:
+        return _SLOW
+    if lt is None:
+        lt = m._ui_lastt_sym = m.sym("ui_lastt")
+    rd = [(kt, 2), (lt, 2), (a[0], 1), (a[1], 1), (a[2], 1), (a[3], 1),
+          (BIOS_KBUF, 4)]
+    try:
+        out = m.batch([{"cmd": "disk"}] +
+                      [{"cmd": "read", "addr": x, "len": n} for x, n in rd])
+    except MartyError:
+        return _SLOW
+    if out[0].get("reads") != r0:
+        return None
+    b = [bytes.fromhex(r["data"]) for r in out[1:]]
+    k = b[0][0] | (b[0][1] << 8)
+    if k == k0 or (b[1][0] | (b[1][1] << 8)) != k:
+        return False
+    st, q, wk, lk, kb = b[2:]
+    return (st[0] == UI_ASLEEP and not q[0] and not wk[0]
+            and not (lock and lk[0]) and kb[0:2] == kb[2:4])
+
+
 def _ui_settled(m, idle, k0, r0):
     """True when ui_task's pass for the current tick is FINISHED, a tick later
     than `k0`, with no read since `r0`; False when three ticks of guest time
@@ -3634,6 +3932,9 @@ def _ui_settled(m, idle, k0, r0):
     Under a breakpoint pump the guest is not ours to stop, so it is one
     snapshot taken running."""
     def ok():
+        got = _ui_settled1(m, idle, k0, r0)
+        if got is not _SLOW:
+            return got
         if m.disk().get("reads") != r0:
             return None
         k = _ktick(m)
@@ -3660,6 +3961,9 @@ def _ui_asleep(m):
         a = m._ui_idle_syms = (m.sym("sch_tasks") + UI_T_STATE,
                                m.sym("evq_count"), m.sym("sch_uiwake"),
                                m.sym("gfx_lock_flag"))
+    got = _reads1(m, ((a[0], 1), (a[1], 1), (a[2], 1)))
+    if got is not None:                 # one round trip (soak-speed-2/core)
+        return got[0][0] == UI_ASLEEP and not got[1][0] and not got[2][0]
     return (m.read(a[0], 1)[0] == UI_ASLEEP and not m.read(a[1], 1)[0]
             and not m.read(a[2], 1)[0])
 
@@ -3772,6 +4076,139 @@ def text_taken(m, text, ui=True, cap=0.675, what="the guest to take that text"):
         m.pause()
     return prog.spent()
 
+def _settle_spent(m, prog, budget, gate, seen, t0):
+    """settle's answer to a `_Progress.check` that raised: re-raise a STOPPED
+    guest as it is, and say which of three things a SPENT budget was."""
+    if prog.spent() <= budget:
+        raise                                # the guest stopped: its own
+    spent, host = prog.spent(), time.time() - t0
+    if gate is not None and seen is not None and not gate(seen):
+        raise MartyError(
+            "the os8088 desktop never appeared in %.0f GUEST seconds "
+            "(%.0fs of host time) - the last screen was %s, against a "
+            "desktop's 93+/0/96. This machine never finished booting, "
+            "so nothing below would mean what it says. The budget is "
+            "the guest's own clock, so this is not the box being busy. "
+            "See the MartyPC log." % (spent, host, seen)) from None
+    if saver_running(m):
+        raise MartyError(
+            "the screen was still changing after %.0f GUEST seconds "
+            "because SPEC.md 79's SCREEN SAVER IS RUNNING - [blk_on] "
+            "is set. It draws, so this can never settle, and anything "
+            "else this gate armed is now watching the saver rather "
+            "than the machine. launch() turns it off unless the row "
+            "passed saver=True; os88marty.no_saver(m) turns it off "
+            "by hand." % spent) from None
+    raise MartyError(
+        "the screen was still changing after %.0f GUEST seconds "
+        "(%.0fs of host time at %.2fx real): the machine never "
+        "finished booting, or something on it is animating - in which "
+        "case pass boot=<seconds> instead. The budget is the guest's "
+        "own clock, so a loaded box does not shorten it."
+        % (spent, host, prog.rate())) from None
+
+
+def _settle_det_ok(m):
+    """May this settle run its windows as `advance`s (SETTLE_DET)?
+
+    Not under a `bp_trace` pump, which owns the resumes; not on a guest that
+    is not RUNNING at entry - the polled path's stall report is the answer
+    there, as it always was; and not on a MartyPC recording MARTYPC_WAV whose
+    server predates `advance_drains` (an `advance` there drops the capture's
+    samples - docs/MARTYPC-DEBUG.md, Audio capture), where the polled path is
+    the one that keeps the file whole."""
+    if not SETTLE_DET or getattr(m, "_pumping", 0):
+        return False
+    if getattr(m, "_wav", False) and not getattr(m, "advance_drains", False):
+        return False
+    try:
+        return m.status().get("state", "running") == "running"
+    except (MartyError, OSError):
+        return False
+
+
+def _gadvance(m, secs):
+    """Run a PAUSED guest exactly `secs` of its own time and leave it paused.
+    A breakpoint (or a halt) that ends it early is raised: nothing a settle
+    watches can change on a stopped machine, which is what the polled path's
+    stall arm said two host seconds later."""
+    st = m.advance(cycles=max(1, int(round(secs * GUEST_HZ))))
+    state = st.get("state", "paused")
+    if state != "paused":
+        raise _SettleStopped(
+            "the guest STOPPED while a settle/quiesce window was running - it is "
+            "%r at %04X:%04X. A breakpoint still armed, or a halted CPU: a "
+            "stopped machine can never show a settled screen."
+            % (state, st.get("cs", 0), st.get("ip", 0)))
+    return st
+
+
+class _SettleStopped(MartyError):
+    pass
+
+
+def _settle_det(m, quiet, stable, gate, card, prog, budget, t0):
+    """`settle`'s loop with every window RUN rather than waited: see
+    SETTLE_DET. The guest is paused for the reads, so a capture, the
+    `_ui_mark` beside it and the gate all describe ONE guest instant, and the
+    window between two captures is exactly the guest time asked for - on an
+    idle box, a loaded one, MartyPC, Bochs or 86Box alike. The decision
+    (settled or not) is therefore a function of the guest alone. The guest is
+    RESUMED at the end, as the polled path leaves it, unless something
+    stopped it."""
+    per = GUEST_PACE if GUEST_PACE > 0 else 4.5
+    m.pause()
+    resume = True
+    try:
+        last, run, seen = None, 0, None
+        fast, lastmark, cuts = False, None, 0
+        while True:
+            try:
+                prog.check()
+            except MartyError:
+                _settle_spent(m, prog, budget, gate, seen, t0)
+            try:
+                cur = _Screen(m, card, digest=gate is None)
+            except MartyError:
+                cur = None
+            if cur is not None and gate is not None and not gate(cur):
+                seen, last, run = cur, None, 0   # not up yet: stillness before
+                fast = False                     # the gate means nothing
+                _gadvance(m, quiet * per)
+                continue
+            mark = _ui_mark(m)
+            same = (cur is not None and last is not None
+                    and cur.bytes == last.bytes
+                    and (not fast or _ui_same(lastmark, mark)))
+            run = run + 1 if same else 0
+            if run >= stable:
+                prog.done("settle")
+                return time.time() - t0
+            last, lastmark = cur, mark
+            # the same three windows as the polled path, below
+            fast = mark is not None and cuts < SETTLE_UI_CUTS
+            if fast:
+                _gadvance(m, SETTLE_UI_QUIET)
+            elif not SETTLE_UI:
+                _gadvance(m, quiet * per)
+            else:
+                want, spent = quiet * per, 0.0
+                while spent < want:
+                    step = min(SETTLE_UI_QUIET, want - spent)
+                    _gadvance(m, step)
+                    spent += step
+                    if cuts < SETTLE_UI_CUTS and _ui_mark(m) is not None:
+                        cuts += 1
+                        last, run = None, 0
+                        break
+    except _SettleStopped:
+        resume = False
+        raise
+    finally:
+        if resume:
+            m.run()
+
+
 def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
            guest=None):
     """Run until the SCREEN STOPS CHANGING, and answer how long that took.
@@ -3875,8 +4312,10 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
     # the end of the deadline.
     budget = guest if guest is not None else limit * GUEST_BUDGET_RATIO
     prog = _Progress(m, "the screen to stop changing", budget)
+    if _settle_det_ok(m):
+        return _settle_det(m, quiet, stable, gate, card, prog, budget, t0)
     last, run, seen = None, 0, None
-    fast, lastmark = False, None
+    fast, lastmark, cuts = False, None, 0
     chg = t0
     while True:
         # A STOPPED guest is reported by `check` at once; a SPENT budget is
@@ -3886,34 +4325,9 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
         try:
             prog.check()
         except MartyError:
-            if prog.spent() <= budget:
-                raise                            # the guest stopped: its own
-            spent, host = prog.spent(), time.time() - t0
-            if gate is not None and seen is not None and not gate(seen):
-                raise MartyError(
-                    "the os8088 desktop never appeared in %.0f GUEST seconds "
-                    "(%.0fs of host time) - the last screen was %s, against a "
-                    "desktop's 93+/0/96. This machine never finished booting, "
-                    "so nothing below would mean what it says. The budget is "
-                    "the guest's own clock, so this is not the box being busy. "
-                    "See the MartyPC log." % (spent, host, seen)) from None
-            if saver_running(m):
-                raise MartyError(
-                    "the screen was still changing after %.0f GUEST seconds "
-                    "because SPEC.md 79's SCREEN SAVER IS RUNNING - [blk_on] "
-                    "is set. It draws, so this can never settle, and anything "
-                    "else this gate armed is now watching the saver rather "
-                    "than the machine. Call os88marty.no_saver(m) once after "
-                    "the desktop is up." % spent) from None
-            raise MartyError(
-                "the screen was still changing after %.0f GUEST seconds "
-                "(%.0fs of host time at %.2fx real): the machine never "
-                "finished booting, or something on it is animating - in which "
-                "case pass boot=<seconds> instead. The budget is the guest's "
-                "own clock, so a loaded box does not shorten it."
-                % (spent, host, prog.rate())) from None
+            _settle_spent(m, prog, budget, gate, seen, t0)
         try:
-            cur = _Screen(m, card)
+            cur = _Screen(m, card, digest=gate is None)
         except MartyError:
             cur = None
         if cur is not None and gate is not None and not gate(cur):
@@ -3949,7 +4363,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
         # draw (SETTLE_UI above). The next capture only counts as "the same"
         # if the UI was still idle and the drive still unmoved at its end, so
         # a short interval can never be the one that hides a load.
-        fast = mark is not None
+        fast = mark is not None and cuts < SETTLE_UI_CUTS
         if fast:
             pace(m, SETTLE_UI_QUIET / (GUEST_PACE or 4.5))
         elif not SETTLE_UI or GUEST_PACE <= 0:
@@ -3971,7 +4385,8 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
             while (prog._cycles() - c0) / GUEST_HZ < want:
                 if pace(m, SETTLE_UI_QUIET / GUEST_PACE) < SETTLE_UI_QUIET / 2:
                     break                   # the guest stopped: pace's rule
-                if _ui_mark(m) is not None:
+                if cuts < SETTLE_UI_CUTS and _ui_mark(m) is not None:
+                    cuts += 1               # (SETTLE_UI_CUTS: a UI on a clock)
                     last, run = None, 0
                     break
 
@@ -4602,10 +5017,13 @@ def until(m, cond, what="that condition", poll=None, limit=600.0, guest=None):
                 "make a condition true. A breakpoint still armed, or `run` "
                 "never called?"
                 % (prog.spent(), what, st["state"], st["cs"], st["ip"]))
-        prog.check()
+        prog.check(st.get("cycles"))    # (the status above: one round trip)
         time.sleep(nap)
+        # ...doubling to 50 ms, not 250 (SOAK-SPEED 8: "0.05 is a ~1 ms
+        # read; never coarser"): at 250 a long wait ended on average 125 ms
+        # after its condition was already true (soak-speed-2/core.md)
         if poll is None:
-            nap = min(nap * 2, 0.25)
+            nap = min(nap * 2, UNTIL_NAP_MAX)
 
 
 def faces(folder="SYSTEM/FONTS"):
@@ -4865,9 +5283,11 @@ def emulator():
     (kern_mega's first shim), else "marty". A row that must know which
     machine it is on asks this rather than reading the variables itself."""
     e = (os.environ.get("OS88_EMU") or "").lower()
-    if e not in ("", "marty", "martypc", "86box"):
+    if e not in ("", "marty", "martypc", "86box", "qemu"):
         raise MartyError("$OS88_EMU=%s: the emulators a row can be handed to "
-                         "are martypc (the default) and 86box" % e)
+                         "are martypc (the default), 86box and qemu" % e)
+    if e == "qemu" and not os.environ.get("OS88_MEGA"):
+        return "qemu"               # (tools/os88qemuapi.py)
     if e == "86box" or (os.environ.get("OS88_MEGA") and (os.environ.get(
             "OS88_MEGA_EMU") or "").lower() == "86box"):
         return "86box"
@@ -4876,13 +5296,23 @@ def emulator():
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
-           card=None, label=None, detach=False, rom=None):
+           card=None, label=None, detach=False, rom=None, saver=False):
     """Start a FRESH martypc_headless on `image` and return a booted Marty.
+
+    **THE SCREEN SAVER IS TURNED OFF** unless `saver=True` - the rows whose
+    subject is the saver pass that, and nothing else should. It is off the
+    way os88ui.boot turns it off (no_saver's two bytes), applied by a guard
+    the row's own waits run once the boot is over, once per boot and only on
+    the kernel os88sym describes: see `_saver_guard`. That holds on every
+    backend - MartyPC, Bochs and 86Box alike.
 
     `image` and `apps` are paths to floppy images (fd:0 and fd:1). `boot` is
     True to run until the screen settles (`settle`, the right answer on any
-    machine), a NUMBER of seconds to run blind for that long, or 0/False to
-    return the machine PAUSED. The returned Marty owns the process: close() -
+    machine), a NUMBER of seconds to run blind for that long, 0/False to
+    return the machine PAUSED, or "up": run, and `kernel_up` - the desktop's
+    STATE up, no picture settle - which the boot cache (on unless
+    OS88_BOOTCACHE=0) can serve from a
+    warm boot (tools/os88bootcache.py). The returned Marty owns the process: close() -
     or the `with` block - kills it, so a session cannot leak a survivor onto
     the next one.
 
@@ -4927,6 +5357,51 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     one just started, and a machine already part-way through its boot are all
     errors with a sentence each.
     """
+    if boot == "up":
+        # BOOT ON STATE, and the one spelling the boot cache can serve:
+        # `launch(boot=False)` + `m.run()` + `kernel_up(m)` as one call
+        # (soak-speed-2/core.md). A RUNNING machine at the end of its boot,
+        # saver off unless `saver=True`. Under the boot cache a restore of
+        # a boot another row paid for (tools/os88bootcache.py), when nothing
+        # here is a keyword the cache cannot key on.
+        import os88bootcache
+        why = os88bootcache.eligible(machine, dict(
+            label=label, timeout=timeout, **{k: v for k, v in (
+                ("addr", addr), ("run_dir", run_dir), ("rom", rom),
+                ("detach", detach or None), ("extra", list(extra) or None))
+                if v is not None}))
+        if why is None:
+            m = os88bootcache.launch(image, apps=apps, machine=machine,
+                                     card=card, saver=saver, label=label)
+        else:
+            m = launch(image, apps=apps, machine=machine, addr=addr,
+                       run_dir=run_dir, boot=False, timeout=timeout,
+                       extra=extra, card=card, label=label, detach=detach,
+                       rom=rom, saver=saver)
+            try:
+                m.run()
+            except BaseException:
+                m.close()
+                raise
+        try:
+            kernel_up(m)
+        except BaseException:
+            m.close()
+            raise
+        return m
+    m = _launch(image, apps=apps, machine=machine, addr=addr,
+                run_dir=run_dir, boot=boot, timeout=timeout, extra=extra,
+                card=card, label=label, detach=detach, rom=rom)
+    _saver_arm(m, not saver)
+    if boot is True:                    # up and settled: no wait need come
+        _saver_guard(m, force=True)     # first
+    return m
+
+
+def _launch(image, apps=None, machine="os8088_5150_cga", addr=None,
+            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
+            card=None, label=None, detach=False, rom=None):
+    """`launch` less the saver: the backend chosen, the machine started."""
     import subprocess
     import time
 
@@ -4950,6 +5425,14 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         return os88box86api.launch(image, apps=apps, machine=machine,
                                    boot=boot, label=label, extra=extra,
                                    run_dir=run_dir)
+    # $OS88_EMU=qemu: the SAME row on a private QEMU (tools/os88qemuapi.py,
+    # docs/plans/soak-speed-2/qemubox.md) - the closed list's machines
+    # (docs/TESTING.md) driven through os88ui rather than QMP by hand
+    if emu == "qemu":
+        import os88qemuapi
+        return os88qemuapi.launch(image, apps=apps, machine=machine,
+                                  boot=boot, label=label, extra=extra,
+                                  run_dir=run_dir)
     if os.environ.get("OS88_MEGA"):
         import os88megabochs
         return os88megabochs.launch(image, apps=apps, machine=machine,
@@ -5133,7 +5616,11 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     # guessed could be answered by somebody else's emulator, and that is the
     # stale-machine failure in a new hat.
     port = None
-    for _ in range(240):
+    # A 20 ms poll on a 60 s deadline (was 240 x 0.25 s): the emulator
+    # publishes its port ~0.3-1 s in, and the quarter-second floor was paid on
+    # every launch of every row (docs/plans/soak-speed-2/core.md).
+    end = time.time() + 60.0
+    while time.time() < end:
         if proc.poll() is not None:
             try:                        # what the emulator found, BEFORE _die
                 had = sorted(os.listdir(os.path.join(run_dir, "media")))
@@ -5152,7 +5639,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
                 break
         except (OSError, ValueError):
             pass
-        time.sleep(0.25)
+        time.sleep(0.02)
     if port is None:
         _die("martypc_headless never published a debug port (%s). It is "
              "either still starting - a cold ROM load on a loaded box - or it "
@@ -5162,7 +5649,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     addr = "%s:%d" % (host, port)
 
     m = None
-    for _ in range(80):                          # wait for it to ANSWER
+    end = time.time() + 40.0                     # wait for it to ANSWER
+    while time.time() < end:                     # (was 80 x 0.5 s)
         if proc.poll() is not None:
             _die("martypc_headless exited while starting (rc=%s)"
                  % proc.returncode)
@@ -5170,7 +5658,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
             m = Marty(addr, timeout=timeout)
             break
         except MartyError:
-            time.sleep(0.5)
+            time.sleep(0.05)
     if m is None:
         _die("martypc_headless never answered on %s" % addr)
 
@@ -5202,6 +5690,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     m.port = port
     m.run_dir = run_dir
     m.pid = proc.pid
+    # a MARTYPC_WAV capture: settle's windows need `advance_drains` then
+    m._wav = bool(env.get("MARTYPC_WAV"))
     if boot:
         try:
             m.run()
@@ -5435,7 +5925,51 @@ def cmd_verify(m, args):
 # The verbs that are about the INSTANCES rather than about one machine, and so
 # take no address. They are pre-dispatched below, before argparse sees a
 # positional it would read as a host:port.
-NOADDR_OPS = ("instances", "ps", "reap", "kill", "kill-all", "launch")
+NOADDR_OPS = ("instances", "ps", "reap", "kill", "kill-all", "launch",
+              "waitlog")
+
+
+def waitlog_summary(path, top=25):
+    """`os88marty.py waitlog FILE`: an OS88_WAITLOG summed per (kind, call
+    site) - count, guest s, host s - heaviest host first, with the totals of
+    the waits against the `between` gaps (the row's and the harness's own
+    time between waits: soak-speed-2/core.md). Answers lines to print."""
+    agg = {}
+    tot = {}
+    with open(path) as f:
+        for line in f:
+            p = line.rstrip("\n").split("\t")
+            if len(p) < 4:
+                continue
+            try:
+                g, h = float(p[2]), float(p[3])
+            except ValueError:
+                continue
+            k = (p[0], p[1])
+            a = agg.setdefault(k, [0, 0.0, 0.0])
+            a[0] += 1
+            a[1] += g
+            a[2] += h
+            t = tot.setdefault("between" if p[0] == "between" else
+                               "gap" if p[0] == "gap" else "wait",
+                               [0, 0.0, 0.0])
+            t[0] += 1
+            t[1] += g
+            t[2] += h
+    out = ["%-8s %6s %9s %9s" % ("", "n", "guest s", "host s")]
+    for k in ("wait", "between"):
+        if k in tot:
+            out.append("%-8s %6d %9.1f %9.1f" % (k, tot[k][0], tot[k][1],
+                                                 tot[k][2]))
+    out.append("")
+    out.append("%6s %9s %9s  %-10s %s" % ("n", "guest s", "host s", "kind",
+                                          "call site"))
+    for (kind, site), (n, g, h) in sorted(agg.items(),
+                                          key=lambda kv: -kv[1][2])[:top]:
+        if kind == "gap":
+            continue
+        out.append("%6d %9.1f %9.1f  %-10s %s" % (n, g, h, kind, site))
+    return out
 
 
 def _fmt_age(secs):
@@ -5456,6 +5990,14 @@ def main_instances(argv):
     """
     op = argv[0]
     args = argv[1:]
+    if op == "waitlog":
+        if not args:
+            print("usage: os88marty.py waitlog OS88_WAITLOG-FILE [TOP]")
+            return 2
+        for line in waitlog_summary(args[0],
+                                    int(args[1]) if len(args) > 1 else 25):
+            print(line)
+        return 0
     if op in ("instances", "ps"):
         rows = instances(include_ended="--all" in args)
         if not rows:

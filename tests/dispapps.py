@@ -652,3 +652,42 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
+
+# --- Paint's TABLE CLAIM (SPEC.md 42.6.7) -----------------------------------
+# The row table, the inked table and the undo mask are a heap claim now, not
+# bss: [pt_tabseg] names it, entry y of the row table is the four bytes at
+# y*4 (offset, then segment), and the inked table is [pt_tbnb] (x1, x2) pairs
+# at [pt_tbib]. `bss` is the caller's own "linear address of a Paint bss word"
+# function, so this serves every row's way of finding Paint's segment. Real
+# mode only: a segment is shifted, not looked up as a selector.
+
+def _pt_word(m, bss, name):
+    return int.from_bytes(m.read(bss(name), 2), "little")
+
+
+def pt_row(m, bss, y):
+    """(offset, segment) of canvas row y, out of the row table."""
+    tab = _pt_word(m, bss, "pt_tabseg")
+    e = m.read((tab << 4) + y * 4, 4)
+    return (int.from_bytes(e[0:2], "little"), int.from_bytes(e[2:4], "little"))
+
+
+def pt_rowsegs(m, bss, n):
+    """The segment half of the first n row-table entries."""
+    tab = _pt_word(m, bss, "pt_tabseg")
+    raw = m.read(tab << 4, n * 4)
+    return [int.from_bytes(raw[i * 4 + 2:i * 4 + 4], "little") for i in range(n)]
+
+
+def pt_bands(m, bss, n=None):
+    """[(x1, x2)] for the inked table's first n bands (all it holds if None)."""
+    tab = _pt_word(m, bss, "pt_tabseg")
+    ib = _pt_word(m, bss, "pt_tbib")
+    nb = _pt_word(m, bss, "pt_tbnb")
+    if n is None or n > nb:
+        n = nb
+    raw = m.read((tab << 4) + ib, n * 4)
+    return [(int.from_bytes(raw[i * 4:i * 4 + 2], "little"),
+             int.from_bytes(raw[i * 4 + 2:i * 4 + 4], "little"))
+            for i in range(n)]

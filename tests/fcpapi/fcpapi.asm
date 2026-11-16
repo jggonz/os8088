@@ -285,7 +285,9 @@ fa_none:    db 'NOSUCH.DAT', 0
 fa_mv:      db 'MOVE.DAT', 0
 fa_rname:   db 'RESULT.TXT', 0
 fa_tpl:     dw 90, 90, 220, 60
-            dw fa_ttl, 0, 0, 0
+            dw fa_ttl, fa_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fa_cls, 0
 fa_ttl:     db 'Copy API', 0
 fa_want:    db 'os8088 copy'
 

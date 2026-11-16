@@ -184,6 +184,18 @@
 
 #include "os88.h"
 
+/* THE WINDOW'S CLASS (SPEC.md 11.104): resizable; the content origin on a
+ * multiple of 8 is the default, so every os88_font_run() takes the
+ * single-store path on the two 1bpp adapters (SPEC.md 6.1, 11.94). The About
+ * opens the same box Help > About does; the release is a drag's other half;
+ * the wake opens the launch document once the window is on the glass
+ * (54.10). */
+static struct os88_class cw_cls = {
+    OS88_CLASS_LEN, OS88_WF_SIZABLE,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    0, os88_t_onmouseup, 0, 0, 0, 0, 0, 0
+};
+
 #include "cwrtftbl.h"
 #include "cwrtftbl.c"                   /* the Opus RTF tables - include once */
 #include "cwrtfio.c"                    /* the document and RTF - include once */
@@ -2216,7 +2228,7 @@ void os88_onmove(unsigned was, unsigned now)
 static void cw_u_save(void)
 {
     if (cw_u_seg == 0) {
-        cw_u_seg = os88_mem_claim(CW_U_KB);
+        cw_u_seg = os88_mem_claim_p(CW_U_KB * 64);
         if (cw_u_seg == 0) {
             cw_u_ok = 0;
             return;
@@ -2723,14 +2735,9 @@ void *os88_main(void)
     os88_strcpy(cw_title, "Microsoft Word - Document", sizeof(cw_title));
     os88_strcpy(cw_wname, "1 Document", sizeof(cw_wname));
 
-    win = os88_wm_create(24, 40, 592, 384, cw_title);
+    win = os88_wm_create(24, 40, 592, 384, cw_title, &cw_cls);
     if (win == 0)
         return 0;
-
-    /* Content origin on a multiple of 8, so every os88_font_run() takes the
-     * single-store path on the two 1bpp adapters (SPEC.md 6.1, 11.94). */
-    os88_wm_snap(win, 1);
-    os88_wm_sizable(win, 1);
 
     /* The kernel's bar carries the app NAME and nothing else: this program's
      * nine menus are drawn inside its own window because MENU_APPMAX is five
@@ -2738,17 +2745,14 @@ void *os88_main(void)
      * and the empty set above it is what makes the bar read the product's name
      * rather than the file's (SPEC.md 73.12). */
     os88_menu_set(win, (struct os88_menuset *)&cw_kmenus);
-    os88_about_set(win);
     os88_assoc_set("RTF", "CWORD");     /* double-clicking a document on the
                                          * desktop launches this (SPEC.md 54.5) */
-    os88_wm_onmouseup(win);             /* the release half of a drag */
 
     /* ...and the document that double-click named. BANKED, not read: the
      * kernel calls os88_onwake() once this window is on the glass and that is
      * where the floppy is touched (SPEC.md 54.10). */
     if (os88_arg_file(cw_argname, &cw_argplace) == 0)
         cw_argp = 1;
-    os88_wm_onwake(win);
     return win;
 }
 

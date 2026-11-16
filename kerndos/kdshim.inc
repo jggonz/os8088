@@ -402,8 +402,11 @@ kd_spent:         resb 1        ; **AND WHETHER THE ARENA IS STILL OURS TO
                                 ; theirs
 
 section .text
-; in: AX = KB, BX = owner (ignored); out CF=0 and DX = the segment
-; (mem_claimp_x: AX in PARAGRAPHS, disk.inc's caches - SPEC.md 50.2.1)
+; in: AX = PARAGRAPHS, BX = owner (ignored); out CF=0 and DX = the segment
+; (disk.inc's caches and kdgate's buffer - SPEC.md 50.2.1). There is no KB
+; entry: its shift trusted CF, which holds only the last bit out, so 1025KB
+; claimed 1KB (BR-105's kern_dos twin) - kernel size pass 19 moved its one
+; caller to paragraphs and deleted it.
 ;
 ; **A CLAIM AFTER THE HANDOVER IS A CLAIM ON THE PROGRAM** (SPEC.md
 ; 96.44.11.3). This allocator hands out `[kd_top] - size` and lowers the
@@ -414,13 +417,6 @@ section .text
 ; program is already using.
 mem_claimp_x:
     push ax
-    jmp short mem_claim_x.p
-mem_claim_x:
-    push ax
-    mov cl, 6
-    shl ax, cl                  ; KB -> paragraphs
-    jc .no
-.p:
     add ax, 31                  ; ...a whole number of 512-byte granules, as
     and ax, -32                 ; the kernel's own allocator rounds (SPEC.md
     jz .no                      ; 50.2.1): a base off [kd_top] stays 512-

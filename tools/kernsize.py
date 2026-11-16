@@ -179,9 +179,15 @@ RUNGS = (
 # rounds to 512 ONCE, at KERN_END, so it is one rung and not three. The kernel
 # says which with `toppara` (0 on a kernel with rungs, and absent from a
 # baseline taken before it, which then reads as the three rungs' sum).
+#
+# ...and since kernel size pass 19 the IMAGE is not a rung either: KIMG_PARA
+# rounds `.text` + `.bss` to the paragraph, because the two fixed disk buffers
+# above it need only not straddle a 64KB DMA page (SPEC.md 2.1.1, guard 6)
+# rather than a 512-byte base. So a LADDER_PACK kernel is ONE rung, KERNEL_SEG
+# to KERN_END, and the FAT window (a fixed size) is a member of it.
 RUNGS_PACK = (
-    ("image", ("text", "bss"), "imgpara"),
-    ("top", ("lowbss", "stk0", "vga", "cold", "vgabuf"), "toppara"),
+    ("kernel", ("text", "bss", "fat", "lowbss", "stk0", "vga", "cold",
+                "vgabuf"), "kernpara"),
 )
 
 # ...and therefore the sections a rung CHARGES for, which is not SECTIONS:
@@ -534,6 +540,8 @@ def rung_bytes(v, para_key):
     # (SPEC.md 39.22's `.vgabuf` is the case that arrived): a rung nobody had
     # measured was 0 bytes, which is the honest reading and makes the first
     # report after it lands price the whole thing rather than crashing.
+    if para_key == "kernpara":
+        return (v.get("kend", 0) - v.get("kseg", 0)) * 16
     if para_key == "toppara" and not v.get("toppara"):
         return sum(v.get(k, 0) for k in ("lowpara", "coldpara",
                                           "vgabufpara")) * 16
@@ -541,7 +549,8 @@ def rung_bytes(v, para_key):
 
 
 def rung_used(v, parts):
-    return sum(v.get(p, 0) for p in parts)
+    return sum(v.get("fatpara", 0) * 16 if p == "fat" else v.get(p, 0)
+               for p in parts)
 
 
 def rung_accrued(size, used):

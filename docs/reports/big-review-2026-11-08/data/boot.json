@@ -654,8 +654,8 @@
   },
   {
    "file": "SPEC.md",
-   "old_text": "through `cpu_info`'s AH (slot 0x0155), so the byte belongs beside the routine\nthat publishes it. On `kern_small` nothing ever writes it and it reads 0 — no\ngate verified, no HMA, no unreal mode — which is true, and is also exactly\nwhat tier 0 answers.",
-   "new_text": "through `cpu_info`'s AH (slot 0x0155), so the byte belongs beside the routine\nthat publishes it. On `kern_small` nothing writes the three memory bits and\nthey read 0 — no gate verified, no HMA, no unreal mode — which is true, and is\nalso exactly what tier 0 answers; `CPU_F_X87` is probed on both kernels.",
+   "old_text": "through `cpu_info`'s AH (slot 0x0101), so the byte belongs beside the routine\nthat publishes it. On `kern_small` nothing ever writes it and it reads 0 — no\ngate verified, no HMA, no unreal mode — which is true, and is also exactly\nwhat tier 0 answers.",
+   "new_text": "through `cpu_info`'s AH (slot 0x0101), so the byte belongs beside the routine\nthat publishes it. On `kern_small` nothing writes the three memory bits and\nthey read 0 — no gate verified, no HMA, no unreal mode — which is true, and is\nalso exactly what tier 0 answers; `CPU_F_X87` is probed on both kernels.",
    "why": "cpudet.inc: 'the x87 probe has no %ifdef, so CPU_F_X87 is live on kern_small too'"
   },
   {

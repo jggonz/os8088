@@ -510,13 +510,18 @@ static void lb_fill_lut(void)
         }
 }
 
+static struct os88_class lb_cls = {
+    OS88_CLASS_LEN, 0,
+    os88_t_paint, os88_t_onkey, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
 void *os88_main(void)
 {
     static struct os88_video vid;
     static int kind;                /* an out-parameter, so a static (73.5) */
     int caps;
 
-    lb_win = os88_wm_create(40, 40, 448, 160, "LEMBENCH");
+    lb_win = os88_wm_create(40, 40, 448, 160, "LEMBENCH", &lb_cls);
     if (lb_win == 0)
         return 0;
     os88_video(&vid);

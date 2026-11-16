@@ -66,6 +66,10 @@ RANGE_TAGS = {
     "MEM_P_VIEW": "a Disk window's listing cache on kern_small: MEM_P_VIEW_N "
                   "of them, the window's fm_pool slot added (SPEC.md 50.6.5), "
                   "so tm_htype tests the range before it walks the table",
+    "MEM_P_MOD": "a dropped module's KEPT image on kern_big: two owners a "
+                 "mod_tab row, MEM_P_MOD + 2 x the id (SPEC.md 2.8.3), so "
+                 "tm_htype tests the range and names it by its file, as it "
+                 "names a MEM_K_MOD image",
     "MEM_P_FATW": "one volume's FAT window: MEM_P_FATW_N of them, the VOLUME "
                   "added (SPEC.md 18.8.4). It was MEM_K_FATW and an ordinary "
                   "tm_ktab row until the window became a purgeable cache, "

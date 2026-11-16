@@ -782,7 +782,7 @@ opl_free:
     ret
 
 ; =============================================================================
-; opl_fm_op - the body behind OSAPI_SND_FM (slot 0x00E3, SPEC.md 34.2)
+; opl_fm_op - the body behind OSAPI_SND_FM (slot 0x00C5, SPEC.md 34.2)
 ;
 ; in:       AL = verb - 0 note-on (CL = channel, BX = Hz), 1 note-off (CL),
 ;           2 patch-load (CL, ES:SI -> 11 bytes ALREADY STAGED BY THE KERNEL
@@ -821,8 +821,8 @@ opl_fm_op:
     jmp short .ok               ; the chip too if it had it
 .on:                            ; --- verb 0: note-on --------------------------
     call opl_owned              ; CF = 1: not yet this requester's, so the
-    mov al, 0                   ; claim below would be FRESH - AL remembers
-    adc al, 0                   ; (AL is dead: the verb is decoded)
+    sbb al, al                  ; claim below would be FRESH - AL remembers
+                                ; (AL is dead: the verb is decoded)
     call opl_claim
     jc .bad
     call opl_keyon              ; CF = frequency out of 19..6208
@@ -1029,7 +1029,10 @@ snd_pkg:
     mov bp, bx                  ; may have dropped it (SPEC.md 34.15.1)                  ; a table through BP, which the kernel's
     and bp, 0x00FF              ; OSAPI_DRV_CALL banks: BX comes back as it
     shl bp, 1                   ; came, as it always did
-    jmp [ds:snd_ptab+bp]
+    jmp [ds:snd_ptab+bp]        ; ...and EVERY VERB IS ENTERED AT CF = 0, the
+                                ; SHL having shifted a byte: snd_ident
+                                ; answers CF = 0 with no CLC of its own
+                                ; (driver size pass 1)
 .nomix:
     mov ax, SNDE_NOMIX          ; ...and SNDV_MIXPOP's CF = 1 is "not on the
     stc                         ; speaker", which is true: none is drawn
@@ -1067,16 +1070,14 @@ snd_rmode:
     xor al, 1
     mov [sbl_dpm], al           ; 1 back in protected mode, 0 in the bracket
 .list:
-    mov si, snd_rmlist
-    mov cx, (snd_rmlist_end - snd_rmlist) / 2
-    clc
+    mov si, snd_rmlist          ; (CF = 0 from both ways here: the JAE taken,
+    mov cx, (snd_rmlist_end - snd_rmlist) / 2   ; or the XOR)
     ret
 snd_rmlist:
     dw sbl_rseg, sbl_extctl + 2, sbl_poolseg, sbl_seg
 snd_rmlist_end:
 snd_ident:
-    mov ax, SND_SIG
-    clc
+    mov ax, SND_SIG             ; (CF = 0: snd_pkg's dispatch)
     ret
 SDG_VERB                        ; snddiag.inc: resident, above snd_keep
 snd_pkg_oplw:                   ; SNDV_OPLW
@@ -1425,7 +1426,7 @@ snd_attach:
 %endif
     call opl_probe              ; the timer-flag dance; a present chip is
     jc .nofm                    ; FULLY initialised before this returns
-    mov byte [drv_up], 1
+    inc byte [drv_up]           ; 0 -> 1: the first thing to attach
     mov word [si+DSV_FM], opl_fm_op
     mov word [si+DSV_TONE], opl_tone
     mov word [si+DSV_RELINST], snd_release_both
@@ -1602,12 +1603,12 @@ opl_probe:
     jne .absent
     call opl_kind_probe         ; OPL2 or OPL3 (SPEC.md 34.12)
     call opl_init               ; present: configure FULLY, then say so
-    clc
-    jmp short .out
-.absent:
-    mov byte [opl_kind], 0
-    stc
-.out:
+    CLC_OR_STC .absent          ; (snd_attach reads CF alone). .absent
+                                ; stores no [opl_kind] = 0: it IS 0, the
+                                ; image's zero state - ATTACH is the first
+                                ; verb a freshly loaded image gets (the
+                                ; [drv_up] note in snd_attach) and only
+                                ; opl_kind_probe, past both tests, writes it
     pop dx
     pop cx
     pop bx
@@ -1618,7 +1619,8 @@ opl_probe:
 ; -----------------------------------------------------------------------------
 ; opl_kind_probe - OPL2 or OPL3? (SPEC.md 34.12)
 ; in:  a chip that has just passed the timer dance, its flags reset
-; out: [opl_kind] = SND_OPL2 / SND_OPL3; every register preserved
+; out: [opl_kind] = SND_OPL2 / SND_OPL3; clobbers AX, BX, CX, DX - which
+;      opl_probe, the one caller, banks (driver size pass 1)
 ;
 ; TWO TESTS, and an OPL3 must pass both. The first is the one every period
 ; driver used: an OPL2 reads 1s in status bits 1-2 and an OPL3 0s. It is not
@@ -1631,10 +1633,6 @@ opl_probe:
 ; and it does.
 ; -----------------------------------------------------------------------------
 opl_kind_probe:
-    push ax
-    push bx
-    push cx
-    push dx
     mov byte [opl_kind], SND_OPL2
     mov dx, 0x388
     in al, dx
@@ -1660,10 +1658,6 @@ opl_kind_probe:
     mov byte [opl_kind], SND_OPL3
     mov byte [opl_fast], 1      ; (its short write delays, SPEC.md 34.12.1)
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1671,16 +1665,13 @@ opl_kind_probe:
 ; in:       nothing
 ; out:      registers 01h..F5h zeroed, 01h <- 20h (waveform select enabled),
 ;           BDh <- 0, the default patch on all 9 channels
-; clobbers: nothing (flags)
+; clobbers: AX, CX - opl_probe, the one caller, banks both
 ;
 ; ~245 writes ~= 25-70ms on the floor machine. Cold, once, at attach.
 ; -----------------------------------------------------------------------------
 opl_init:
-    push ax
-    push cx
-    mov ah, 0x01
+    mov ax, 0x0100              ; AL = 0 once: opl_wr keeps AX
 .zero:
-    xor al, al
     call opl_wr
     inc ah
     cmp ah, 0xF6                ; 01h..F5h inclusive
@@ -1691,9 +1682,9 @@ opl_init:
     call opl_wr
     cmp byte [opl_kind], SND_OPL3
     jne .one
-    mov ah, 0x20                ; an OPL3's SECOND bank too: a warm restart
+    mov ax, 0x2000              ; an OPL3's SECOND bank too: a warm restart
 .zero1:                         ; inherits whatever the last program left
-    xor al, al                  ; there, and a player's claim reads it as
+                                ; there, and a player's claim reads it as
     call opl_wr1                ; silence until it writes it (SPEC.md 34.12)
     inc ah
     cmp ah, 0xF6
@@ -1704,10 +1695,7 @@ opl_init:
     call opl_wr1
 .one:
     mov ch, 9                   ; the default voice on all nine channels
-    call opl_defpat
-    pop cx
-    pop ax
-    ret
+    jmp opl_defpat              ; (its RET is ours)
 
     SBL_ONCE                    ; sb.inc: the reset scan and the IRQ
                                 ; discovery, through sbl_find (SPEC.md 34.5)

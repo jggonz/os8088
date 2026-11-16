@@ -33,8 +33,9 @@ tp_export_do:
     push es
     call tp_typeset
     push si                     ; the name, past both writers
-    mov ax, TP_EXP_STEP
-    call OSAPI_MEM_CLAIM
+    mov ax, TP_EXP_STEP * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov si, tp_s_nomem
     jc .say
     mov [tp_expseg], dx
@@ -120,13 +121,16 @@ tp_xgrow:
     mov ax, [tp_expcap]
     cmp ax, TP_EXP_MAX
     jae .no
-    mov al, ah                  ; bytes -> KB (the cap is whole KB)
-    shr al, 1
-    shr al, 1
-    xor ah, ah
-    add al, TP_EXP_STEP
+    push cx
+    mov cl, 4                   ; bytes -> paragraphs
+    shr ax, cl
+    pop cx
+    add ax, TP_EXP_STEP * 64
     mov dx, [tp_expseg]
-    call OSAPI_MEM_REGROW       ; out DX = the claim's base NOW
+    push bx
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P            ; out DX = the claim's base NOW
+    pop bx
     jc .no
     mov [tp_expseg], dx
     add word [tp_expcap], TP_EXP_STEP * 1024

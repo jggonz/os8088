@@ -10,7 +10,7 @@ every `call OSAPI_*` through a slot that swaps back up to the UI stack. The
 assembly already refuses a slot it does not know (KERNEL_SEG is re-defined to
 an undefined symbol after the table); this reads the BUILT modules and holds
 the shape that cannot be seen in the source: every far call to KERNEL_SEG
-(9A off 60 00) sits in a slot - a near call before it to ONE routine (pdk_up)
+(9A off 60 00), and every RARE DOOR call (CD 81 index, SPEC.md 20.3.4), sits in a slot - a near call before it to ONE routine (pdk_up)
 and a jump after it to ONE routine (pdk_dn) - in PDENG, PDREND, PDWRT, the slot's
 occupants (PDXK PDXG PDXF PDXI PDXJ) and the stand-ins, whichever are built. ~0.1 s. SKIPs when no module is built.
 """
@@ -25,17 +25,26 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 KSEG = 0x0060
 
 
+RARE = 0x81                                 # os88api.inc's OS88_RARE
+
+
 def slots(data):
-    """(far-call offset, near-call target, jump target) for every 9A ...60 00"""
+    """(call offset, near-call target, jump target) for every kernel call: a
+    far call 9A ...60 00 to a table cell, or the RARE DOOR's `int 81h` + its
+    index byte (SPEC.md 20.3.4) - a door call never names KERNEL_SEG, so the
+    far-call scan alone would not see one made bare on the deep stack"""
     out = []
     for i in range(3, len(data) - 6):
-        if data[i] != 0x9A or struct.unpack_from("<H", data, i + 3)[0] != KSEG:
+        if data[i] == 0x9A and struct.unpack_from("<H", data, i + 3)[0] == KSEG:
+            j = i + 5
+        elif data[i] == 0xCD and data[i + 1] == RARE:
+            j = i + 3
+        else:
             continue
         up = None
         if data[i - 3] == 0xE8:
             up = (i + struct.unpack_from("<h", data, i - 2)[0]) & 0xFFFF
         dn = None
-        j = i + 5
         if data[j] == 0xEB:
             dn = (j + 2 + struct.unpack_from("<b", data, j + 1)[0]) & 0xFFFF
         elif data[j] == 0xE9:
@@ -72,7 +81,7 @@ def main():
         ups = {u for _, u, _ in s}
         dns = {d for _, _, d in s}
         bad = [hex(i) for i, u, d in s if u is None or d is None]
-        check(not bad, "%s: every far call to KERNEL_SEG is in a gate slot%s"
+        check(not bad, "%s: every kernel call (far or door) is in a gate slot%s"
               % (name, "" if not bad else " - bare at " + ", ".join(bad)))
         check(len(ups) <= 1 and len(dns) <= 1,
               "%s: %d slot(s), one pdk_up and one pdk_dn (%s / %s)"

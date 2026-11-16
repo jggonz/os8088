@@ -109,7 +109,6 @@ pb_entry:
     jc .out
     mov [pb_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP          ; the content origin on a multiple of 8, so
     clc                         ; the blits below are not refused for their x
     jmp short .out
 .refuse:
@@ -983,7 +982,10 @@ pb_run:
 
 pb_tpl:
     dw 7, 22, 632, 448
-    dw pb_ttl, pb_paint, pb_onkey, pb_onclick
+    dw pb_ttl, pb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pb_cls, 0, PAINT, pb_paint, ONKEY, pb_onkey, \
+               ONCLICK, pb_onclick
 
 pb_ttl:     db 'PaccMan Band Bench', 0
 

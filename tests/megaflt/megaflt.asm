@@ -71,7 +71,13 @@ fl_entry:
     push di
     mov si, fl_s_av                 ; --- what is free, before we take any
     call fl_say
-    call OSAPI_MEM_AVAIL
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; (paragraphs: the row reads KB)
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
     call fl_hex4
     mov al, ' '
     out 0xE9, al
@@ -86,20 +92,15 @@ fl_entry:
     mov ax, [0xFFFF]                ; past the segment: #GP in the entry proc
 %endif
 %if FLT_MODE == 4
-    mov ax, 32                      ; a claim, held
-    call OSAPI_MEM_CLAIM
+    mov ax, 32 * 64                      ; a claim, held
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
 %endif
     mov si, fl_tpl
     call OSAPI_WM_CREATE
     jc .out
     mov [fl_win], bx
-    mov ax, fl_tick
-    call OSAPI_WM_ONTIMER
-%if FLT_MODE == 6
-    mov ax, fl_wake
-    call OSAPI_WM_ONWAKE
-%endif
     mov ax, 27                      ; a second and a half
     call OSAPI_WM_TIMER
 %if FLT_MODE == 4
@@ -270,10 +271,13 @@ fl_hex2:
 
 fl_tpl:
     dw 40, 120, 200, 60
-%if FLT_MODE == 0
-    dw fl_ttl, fl_paint, fl_key, fl_click
+    dw fl_ttl, fl_cls
+%if FLT_MODE == 0                   ; (every build's timer is fl_tick: the
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONKEY, fl_key, ONCLICK, fl_click, ONTIMER, fl_tick
+%elif FLT_MODE == 6                 ; fault is IN it, or starts there)
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONWAKE, fl_wake, ONTIMER, fl_tick
 %else
-    dw fl_ttl, fl_paint, 0, 0
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONTIMER, fl_tick
 %endif
 fl_ttl:     db FLT_NAME, 0
 fl_s_pfx:   db 'FLT', FLT_CH, ': ', 0

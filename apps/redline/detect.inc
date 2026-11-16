@@ -354,7 +354,11 @@ rl_inventory:
     call rl_e820
     call rl_tsc_mhz
 .os:
-    call OSAPI_MEM_AVAIL
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; in paragraphs...
+    mov cl, 6                       ; ...and RedLine shows KB
+    shr ax, cl
+    shr bx, cl
     mov [rl_free], bx
     mov [rl_largest], ax
     call OSAPI_XMEM_CAPS

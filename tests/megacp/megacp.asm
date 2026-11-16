@@ -43,8 +43,9 @@ mc_entry:
 .fill:
     cmp bp, MC_MAX
     jae .filled
-    mov ax, MC_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, MC_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .filled
     test dl, 4
     jnz .sel
@@ -70,7 +71,12 @@ mc_entry:
     mov ax, 32                      ; ...and the TAIL, in ever smaller claims,
 .tail:                              ; so the holes made below are the only
     push ax                         ; free runs the pool has left
-    call OSAPI_MEM_CLAIM
+    push cx
+    mov cl, 6                       ; (the KB, in paragraphs)
+    shl ax, cl
+    pop cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .tnext
     test dl, 4
     jnz .tkeep
@@ -117,8 +123,9 @@ mc_entry:
     call OSAPI_XMEM_CAPS
     call mc_hex4
     call mc_nl
-    mov ax, 64                      ; --- 3. the claim no hole holds -------
-    call OSAPI_MEM_CLAIM
+    mov ax, 64 * 64                      ; --- 3. the claim no hole holds -------
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov cl, 2
     jc .no
     mov [mc_big], dx

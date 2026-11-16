@@ -209,7 +209,7 @@ def xms():
         if os.environ.get("VBTD_DBG"):
             import time
             for _ in range(20):
-                time.sleep(2)
+                time.sleep(2)       # host: VBTD_DBG's debug print only
                 print("   ready %d tplay %d err %04x status %04x prx %d prkb %d "
                       "prseg %04x" % (rb("vb_ready"), rb("vb_tplay"),
                                       rw("vb_err"), rw("vb_status"),

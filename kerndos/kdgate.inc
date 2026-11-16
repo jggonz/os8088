@@ -92,9 +92,9 @@ kd_gate_entry:
     ; destination overwrote the records behind it, and chunk 1 came back off
     ; the wrong LBAs - the right NUMBER of bytes and the wrong ones, which is
     ; the one failure this row's checksum exists to catch.
-    mov ax, KD_GATE_KB
-    xor bx, bx
-    call mem_claim_x
+    mov ax, KD_GATE_KB * 64     ; (paragraphs: kdshim's KB entry and its
+    xor bx, bx                  ; unguarded shift, BR-105's kern_dos twin,
+    call mem_claimp_x           ; went in kernel size pass 19)
     jc .nomem
     mov [kd_buf], dx
 

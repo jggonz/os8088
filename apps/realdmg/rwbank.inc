@@ -37,7 +37,7 @@ RW_XROMMAX_KB   equ 8192            ; MBC5's largest cartridge
 ; mega's arm) its banks IN PLACE above 1MB; CF = 1: SI = the refusal
 rw_plan:
     mov byte [rw_bcache], 0
-    call OSAPI_MEM_AVAIL            ; AX = the heap's largest run, KB (and
+    call rw_avkb                    ; AX = the heap's largest run, KB (and
     mov [rw_pavail], ax             ;   BX its total: the log's head says the
 %ifdef PKG_MEGA                     ;   one)
     call rw_xplan
@@ -116,7 +116,7 @@ rw_plan:
     jmp short .no
 .nc1:
     mov si, rw_s_room
-    call OSAPI_MEM_AVAIL
+    call rw_avkb
     cmp ax, cx
     jb .no
 .whole:
@@ -172,14 +172,18 @@ rw_xplan:
 ; banks 1 to K-1 into slots 0 to K-2 and every later one through slot K-1,
 ; each copied up as it comes. CF = 1: SI = the refusal, nothing kept.
 rw_bload:
-    mov ax, [rw_nslot]
-    mov cl, 4
+    mov ax, [rw_nslot]              ; 16KB a slot, in paragraphs
+    mov cl, 10
     shl ax, cl
 %ifdef PKG_MEGA
     xor cx, cx                      ; CONVENTIONAL, whatever OS88_HIGHMEM
-    call OSAPI_MEM_CLAIM_DMA        ;   says: the file is read INTO it, and
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ;   says: the file is read INTO it, and
 %else                               ;   a read above 1MB bounces sector by
-    call OSAPI_MEM_CLAIM            ;   sector (a 1MB cartridge's load ran
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ;   sector (a 1MB cartridge's load ran
+    pop bx
 %endif                              ;   minutes on a 286, 16.2.6)
                                     ; DX = the slots (the bank table names
 %ifdef RDG_AOT                      ;   them: rw_mreloc, rwmove.inc)
@@ -486,7 +490,8 @@ rw_czprobe:
     xor cx, cx                      ; ordinal 0
 .f:
     mov di, rw_fnd
-    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; CX = the next token
     jc .r                           ; (not found: a plain read finds out)
     cmp word [rw_fnd + 14], OSAPI_FT_DIR
     jae .f
@@ -740,6 +745,19 @@ rw_bmiss:
 ; last buffer is let go every lent slot is the cache's again, empty.
 RW_LENDMIN      equ 4
 
+; rw_avkb - MEMP_AVAIL's answers in KB, the unit the plan is made in (the
+; cartridge's size is the probe's KB): AX = the largest run, BX = the total.
+; Keeps CX
+rw_avkb:
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
+    ret
+
 ; rw_mclaim - AX = KB: DX = a side feature's buffer, CF = 1 none (rw_mrel
 ; lets it go). AX kept. UI task
 rw_mclaim:
@@ -748,11 +766,16 @@ rw_mclaim:
     push cx
     mov cx, ax
 %ifndef RW_LENDTEST                 ; (tests/rdglend.py: the heap as if full)
-    call OSAPI_MEM_AVAIL            ; (asked first: a refused claim compacts
+    call rw_avkb                    ; (asked first: a refused claim compacts
     cmp ax, cx                      ;   the heap and sheds its caches)
     jb .lend
     mov ax, cx
-    call OSAPI_MEM_CLAIM
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
     jnc .r
 %endif
 .lend:

@@ -76,19 +76,21 @@ def build_disk():
 def main():
     os.chdir(os.path.join(HERE, ".."))
     build_disk()
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         ui = os88ui.UI(m, mouse=mo)
         dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ui.open("APPS")                 # BY NAME: SF.open_shin's own lesson
         SF.open_shin(m, mo)
         M.settle(m, limit=180)
 
         def delete(answer, tag):
-            mo.menu(FILE_MENU[0], FILE_MENU[1], *ITEM(FILE_MENU[0], DELETE))
+            SF.menu(m, mo, FILE_MENU[0], FILE_MENU[1], *ITEM(FILE_MENU[0], DELETE))
             M.settle(m, limit=60)
             ui.chooser_open(JUNK)       # THE PICKER IS A DISK WINDOW since
                                         # the 2026-10-14 merge (38.3), so its

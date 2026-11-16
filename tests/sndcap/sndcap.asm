@@ -74,8 +74,6 @@ sc_entry:
     mov si, sc_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
-    mov ax, sc_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 9                       ; half a second for the desktop to settle
     call OSAPI_WM_TIMER
     clc
@@ -193,9 +191,10 @@ sc_start:
     call OSAPI_SND_STREAM
     mov [sc_r1], ax
     call sc_close_if_open           ; (only if it wrongly opened)
-    mov ax, (SC_RL + 1023) / 1024 + 1   ; the ring and its control words,
+    mov ax, ((SC_RL + 1023) / 1024 + 1) * 64 ; the ring and its control words,
     mov cx, ax                      ; page-safe whole
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = its segment
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = its segment
     jnc .claimed
     mov word [sc_xopen], 0xEE00     ; no claim: skip to the legacy leg
     mov byte [sc_state], ST_LEG
@@ -440,7 +439,10 @@ sc_scan:
 ; --- the window ------------------------------------------------------------------
 sc_tpl:
     dw 340, 88, 190, 60
-    dw sc_ttl, sc_paint, sc_nop, sc_nop
+    dw sc_ttl, sc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sc_cls, 0, PAINT, sc_paint, ONKEY, sc_nop, ONCLICK, sc_nop, \
+               ONTIMER, sc_tick
 sc_ttl:     db 'Snd Capture', 0
 sc_line:    db 'step: -', 0
 

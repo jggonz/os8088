@@ -228,6 +228,11 @@ zf_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF=1 = window table full
     jc .out
     mov [zf_win], bx
+%ifdef OS88UI_SBDRAG
+    cmp al, WC_ONDRAG + 1           ; AL = the class slots this kernel
+    sbb al, al                      ; dispatches (SPEC.md 11.104): no drag
+    mov [zw_nodrag], al             ; edge on kern_small (13.10.7.1)
+%endif
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
     ; exists, and not beside any worker's declaration: a package with
     ; NO worker is the case that moves most easily, and putting it at
@@ -237,12 +242,6 @@ zf_entry:
 
     mov si, zf_menus
     call OSAPI_MENU_SET             ; preserves every register AND the flags
-    mov si, zf_abouth               ; the HANDLER (SPEC.md 12.2). This passed the
-    call OSAPI_ABOUT_SET            ; string 'Frotz' for as long as the app had
-                                    ; existed, so About Frotz far-called five
-                                    ; letters as code
-    mov al, 1
-    call OSAPI_WM_SIZABLE           ; re-wrap on drag
     push cx                         ; ...and the floor is DECLARED now (SPEC.md
     push dx                         ; 11.100.2) rather than answered by a
     mov cx, ZF_MIN_W                ; negotiator. zf_onsize was ten
@@ -252,30 +251,6 @@ zf_entry:
     pop cx                          ; negotiator is consulted by the grow box
                                     ; and by OSAPI_WM_RESIZE, and by neither of
                                     ; the two clamps that had no floor at all
-%ifdef OS88UI_SBDRAG
-    pushf                           ; the entry still owes the loader
-    push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
-    mov ax, zf_ontimer              ; 13.10.5.4.2's PAUSE commit - FIRST of the
-    call OSAPI_WM_ONTIMER           ; three, because the `sbb al, al` below
-                                    ; captures OSAPI_WM_ONDRAG's OWN CF
-    mov ax, zf_onup                 ; SPEC.md 13.10.6.4: the THUMB's alone.
-    call OSAPI_WM_ONMOUSEUP         ; zwin6.inc's v6 input poll owns a gesture
-    mov ax, zf_ondrag               ; that cannot be live at the same time as a
-    call OSAPI_WM_ONDRAG            ; bar drag, so 13.7's no-mixing rule is
-    sbb al, al                      ; satisfied by "not at the same time"
-    mov [zw_nodrag], al
-    pop ax
-    popf
-%endif
-    mov ax, zf_onresize             ; ...and TELL US when the adapter moves
-    call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98)
-    mov ax, zf_onwake               ; SPEC.md 54.10: the kernel calls this once
-    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the story
-                                    ; a double-click named loads in front of it
-    mov ax, zf_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls
-    call OSAPI_WM_ONWHEEL           ; the scrollback. Flags preserved, so
-                                    ; wm_create's CF rides on; a no-op on
-                                    ; kern_small
 
     ; A story named by a double-click (SPEC.md 54.7). SI comes back pointing
     ; into KERNEL_SEG, so it is read through ES and copied before anything
@@ -941,7 +916,21 @@ zf_splash:
 ; =============================================================================
 zf_tpl:
     dw ZF_WIN_X, ZF_WIN_Y, ZF_WIN_W, ZF_WIN_H
-    dw zf_ttl, zf_paint, zf_onkey, zf_onclick
+    dw zf_ttl, zf_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+%ifdef OS88UI_SBDRAG                ; the scroll bar's three: 13.10.5.4.2's
+  %define ZF_C_TIMER zf_ontimer     ; PAUSE commit, and the THUMB's own
+  %define ZF_C_UP zf_onup           ; release and drag (13.10.6.4) - zwin6.inc's
+  %define ZF_C_DRAG zf_ondrag       ; v6 input poll owns a gesture that cannot
+%else                               ; be live at the same time as a bar drag,
+  %define ZF_C_TIMER 0              ; so 13.7's no-mixing rule is satisfied by
+  %define ZF_C_UP 0                 ; "not at the same time"
+  %define ZF_C_DRAG 0
+%endif
+    OS88_CLASS zf_cls, WF_SIZABLE, PAINT, zf_paint, ONKEY, zf_onkey, \
+               ONCLICK, zf_onclick, ABOUT, zf_abouth, ONWAKE, zf_onwake, \
+               ONMOUSEUP, ZF_C_UP, ONRESIZE, zf_onresize, \
+               ONTIMER, ZF_C_TIMER, ONDRAG, ZF_C_DRAG, ONWHEEL, zf_onwheel
 
     OS88_MENUSET zf_menus, zf_name, zf_oncmd
         OS88_MENU zf_m_file, zf_i_file, 3

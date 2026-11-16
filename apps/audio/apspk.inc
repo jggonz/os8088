@@ -255,8 +255,11 @@ aps_setup:
     push es
     cmp word [aps_rseg], 0
     jne .have
-    mov ax, (APS_RL + SPKFX_RINGEND + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    mov ax, ((APS_RL + SPKFX_RINGEND + 1023) / 1024) * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .nomem
     mov [aps_rseg], dx
 .have:

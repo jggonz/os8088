@@ -45,7 +45,7 @@ HDR = 32
 # has read the header, so raising it costs every driver load on every machine.
 BSS_MAX_PARA = 255
 MAGIC = 0x384F                  # 'O','8'
-DRV_VER = 12  # 4 until the API table moved, 7 until 34.11, 9 until 62.9.19, 11 until 50.2.1 (SPEC.md 20.2.0)
+DRV_VER = 14  # 4 until the API table moved, 7 until 34.11, 9 until 62.9.19, 11 until 50.2.1 (SPEC.md 20.2.0)
 DRV_RUNG = 512                  # the strip rung: kernel/memory.inc's
                                 # mem_bytes_gp_x claims an image to 512 bytes
                                 # on every granule (SPEC.md 50.2.1)
@@ -133,6 +133,19 @@ def main() -> int:
         fail(f"{args.input}: entry {entry:#06x} is outside the image")
     if data[12:15] != b"\xFF\xD5\xCB":
         fail(f"{args.input}: no `call bp / retf` dispatcher at +12")
+
+    # THE SURVIVING-FAR-CALL GATE (SPEC.md 20.3.3): a driver far-calls the
+    # same table through the same SDK, so the packer refuses what
+    # tools/os88pkg.py refuses - a far call that is no published cell, and
+    # once T5's door is switched on, one to a rare cell.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import os88cells
+        bad = os88cells.farcall_problems({args.input: data})
+    except (ImportError, OSError):
+        bad = []
+    if bad:
+        fail("; ".join(bad))
 
     if data[31] != 0:
         fail(f"{args.input}: byte +31 is {data[31]:#04x} and must be zero - it "

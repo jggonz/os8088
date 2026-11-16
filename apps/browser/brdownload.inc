@@ -784,7 +784,13 @@ br_dl_s_te: db 'transfer-encoding:', 0
 
 br_dl_tpl:
     dw 40, 20, 560, 154
-    dw br_dl_title, br_dl_paint, 0, 0
+    dw br_dl_title, br_dl_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; The handlers are this segment's thunks into part 0 (above)
+    OS88_CLASS br_dl_cls, 0, PAINT, br_dl_paint, ONCLICK, os88ui_btnclick, \
+               ONWAKE, br_dl_onwake, ONCLOSE, br_dl_managerclose, \
+               ONMOUSEUP, br_dl_onup, ONTIMER, br_dl_timer, \
+               ONDRAG, br_dl_ondrag
 br_dl_title: db 'Download Manager', 0
 
 br_dl_btnlabels: dw 0

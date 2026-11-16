@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import os88drv                                         # noqa: E402
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
+import os88geom  # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 from os88sym import KERNEL_SEG                         # noqa: E402
@@ -119,7 +120,8 @@ def strike(src):
     for i in range(nent):
         e = off + i * 32
         if d[e:e + 11] == b"RAMDISK DRV":
-            if not 0x5A <= d[e + 12] <= 0x5B:
+            if d[e + 12] not in (0xA4, 0xA5):   # os88disk.CZ_HINT + the
+                # format (5Ah/5Bh until kernel size pass 19's F3)
                 sys.exit("lzdrv: RAMDISK.DRV carries no hint to strike - "
                          "the fixture stopped compressing it")
             d[e + 12] = d[e + 13] = d[e + 20] = d[e + 21] = 0
@@ -312,7 +314,7 @@ def run(a, sysimg, plain):
             else:
                 rec = m.read(S("wm_wins") + w2[-1] * dispcp.WIN_SIZE,
                              dispcp.WIN_SIZE)
-                pseg = rec[22] | (rec[23] << 8)
+                pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
                 n = os.path.getsize(os88build.at("build/drvcall.bin"))
 
                 # RE-PROBE, AND CONFIRM IT RAN. dc_probe runs from dc_paint,

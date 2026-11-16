@@ -755,13 +755,6 @@ cs_entry:
     loop .win                       ; refuses and drpress answers SPENT with
                                     ; the list never drawn - a drop-down that
                                     ; cannot be dropped down (SPEC.md 88.13.6)
-    mov al, 1                       ; an 8-aligned content origin: the two
-    call OSAPI_WM_SNAP              ; bands land on the byte grid (SPEC.md
-                                    ; 5.4.2) and font_run reaches 6.1's
-                                    ; single-store cell
-    mov al, 1                       ; every pixel of the page is ours, so the
-    call OSAPI_WM_OWNBG             ; kernel's white fill before W_PAINT would
-                                    ; only be written over (SPEC.md 11.96)
     call cs_adapter                 ; which raster we would take, whether the
                                     ; machine will give it to us, and the menus
     mov al, CSZ_FULL                ; ...and now Size can take its default,
@@ -782,16 +775,11 @@ cs_entry:
                                     ; card. The entry proc is UI-task context
                                     ; - it is what opens the window - so the
                                     ; file slots are legal here
-    mov ax, cs_adapter              ; the card can change under us
-    call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98)
-    mov ax, cs_onup                 ; the release half of a click (13.7)...
-    call OSAPI_WM_ONMOUSEUP
-    mov ax, cs_ondrag               ; ...and the tracking edge (13.8.2), for
-    call OSAPI_WM_ONDRAG            ; the drop-downs' highlight
-    mov si, cs_about                ; 'About Clear Skies' above the Close the
-    call OSAPI_ABOUT_SET            ; kernel puts in our pull-down (SPEC.md
-                                    ; 12.2). WINDOWED only: in the bracket
-                                    ; there is no bar to pull down
+    clc                             ; ...and its CF is the READ's, not ours:
+                                    ; no settings file yet answers CF = 1, and
+                                    ; the loader would hear a refused launch
+                                    ; (the six setters that stood here cleared
+                                    ; it until R14 moved them into cs_cls)
 .full:
     pop di
     pop si
@@ -2668,7 +2656,7 @@ cs_i13:      db 'F1 to F7  step a setting, in flight', 0   ; in the blank
                                                           ; at thirteen lines
 
 ; -----------------------------------------------------------------------------
-; cs_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; cs_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD.  preserves all
 ; -----------------------------------------------------------------------------
 cs_about:
@@ -2702,7 +2690,18 @@ cs_ab3:      db 'Contributed by Elendilon', 0
 
 cs_tpl:
     dw 0, 0, CS_WINW, CS_WINH
-    dw cs_ttl, cs_paint, cs_onkey, cs_onclick
+    dw cs_ttl, cs_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; An 8-aligned content origin (the default, 11.94): the two bands land on the
+; byte grid (5.4.2) and font_run reaches 6.1's single-store cell. OWNBG:
+; every pixel of the page is ours, so the kernel's white fill before W_PAINT
+; would only be written over (11.96). The card can change under us (11.98);
+; the release half of a click (13.7) and the tracking edge (13.8.2) are for
+; the drop-downs' highlight; 'About Clear Skies' is WINDOWED only in effect -
+; in the bracket there is no bar to pull down (12.2)
+    OS88_CLASS cs_cls, WF_OWNBG, PAINT, cs_paint, ONKEY, cs_onkey, \
+               ONCLICK, cs_onclick, ABOUT, cs_about, ONMOUSEUP, cs_onup, \
+               ONRESIZE, cs_adapter, ONDRAG, cs_ondrag
 
 %ifdef CSDIAG                   ; SPEC.md 88.14: where the frame had reached,
 %macro CSSTAGE 1                ; for a machine that stopped inside it - and

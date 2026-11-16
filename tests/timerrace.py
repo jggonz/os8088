@@ -15,7 +15,7 @@ goes into memory the heap may already have handed to somebody else.
 The real interleaving needs a worker to win a lock at one instant, so this
 gate MAKES that instant instead of waiting for it, with two breakpoints:
   1. A Disk window's record is given a due timer (W_TIMER behind [ticks], a
-     non-zero W_ONTIMER, [wm_tarm] set) and the guest is stopped at
+     class with a non-zero WC_ONTIMER, [wm_tarm] set) and the guest is stopped at
      `ui_task.tp_locked` - the first instruction after gfx_lock
      returned, the record in SI asserted to be that window's.
   2. W_FLAGS bit 0 is cleared there: the window was destroyed while the pass
@@ -37,7 +37,10 @@ import os88geom as geom                                       # noqa: E402
 import os88marty                                              # noqa: E402
 import os88ui                                                 # noqa: E402
 
-W_ONTIMER, W_TIMER = 30, 32     # kernel/wm.inc (the record's timer words)
+W_TIMER = 20                    # kernel/wm.inc: the deadline. The handler
+                                # is the Disk window's CLASS's WC_ONTIMER
+                                # (fm_cls, SPEC.md 11.104) - kern_big's is
+                                # the scroll bar's pause commit, non-zero
 
 
 def main():
@@ -53,8 +56,8 @@ def main():
         m.pause()
         raw = bytearray(m.read(rec, geom.WIN_SIZE))
         ticks = struct.unpack("<H", m.read(m.sym("ticks"), 2))[0]
-        struct.pack_into("<HH", raw, W_ONTIMER, 1, (ticks - 4) & 0xFFFF)
-        m.write(rec + W_ONTIMER, bytes(raw[W_ONTIMER:W_TIMER + 2]))
+        struct.pack_into("<H", raw, W_TIMER, (ticks - 4) & 0xFFFF)
+        m.write(rec + W_TIMER, bytes(raw[W_TIMER:W_TIMER + 2]))
         m.write(m.sym("wm_tarm"), b"\x01")
         m.bp_exec("ui_task.tp_locked")
         m.run()
@@ -83,7 +86,7 @@ def main():
                 bad.append("a window destroyed while the pass waited for the "
                            "lock was still dispatched (stopped at %s)" % where)
             m.write(rec, bytes([fl]))                 # ...put back, unarmed
-            m.write(rec + W_ONTIMER, b"\0\0\0\0")
+            m.write(rec + W_TIMER, b"\0\0")
         m.bp_exec()
         m.run()
     for b in bad:

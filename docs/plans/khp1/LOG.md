@@ -319,6 +319,47 @@ against tip), the instruments (`optime`, the per-instruction tracer,
 agent's finders. Paths into deleted worktrees and scratch were replaced; none
 has been re-run since. The rest of the scratch was one-offs and is dropped.
 
+### L.6 The four VGA knobs on kern_big (+214 `.vga`), then size-passed
+
+The owner's words: *"Yes, though size pass it as well."* kern_big and kern_emu
+define `KHP_VGASAVE`, `KHP_VGAFILL`, `KHP_VGAEDGE` and `KHP_VGABLITP`
+(LAST-DROP-PERF.md 7.1 rows 3, 6, 8 and 9), as kern_mega already did;
+kern_small assembles no planar body, so it cannot carry them. Every byte is in
+the `.vga` rung, which only a VGA or EGA machine keeps resident: a CGA,
+Hercules or MDA machine slides `.cold` over it at boot.
+
+Bytes as turned on, kern_big `.vga` 2,030 -> 2,244: VGASAVE +122, VGAFILL
++39, VGAEDGE +21, VGABLITP +32 (each assembled alone against the base,
+`2cf57256`). `.text`, `.bss` and `.cold` do not move.
+
+**The size pass, -22, every cycle figure kept or bettered.** One commit an
+item, each re-proved against the BASE's bytes (knobs off) under unicorn with
+`patches/tools/equivalence/vga_planeq.py`, written for this (fill, gray,
+save, restore, blitp and the pointer's walks over a GC/Sequencer model with
+latches; red on a deliberate break) and the parked `pointer_vgaeq.py`:
+
+| item | bytes | cycles (PREDICTED, 8088 tables) |
+|---|---:|---|
+| gray interior: AL = AH once, `not ax` a row (VGAFILL) | -2 | -8 a row |
+| solid interior's step from CX, which VGAEDGE holds at ROW_BYTES | -1 | -2 a fill |
+| `cur_vspan` makes the rows test both pointer walks made; their GC/Seq tails reload one byte | -9 | -2 a tail; a cell wholly off the bottom pays ~60 |
+| blitp: the width in CX once a plane; the word loop entered past its reload; a prologue branch relaxes to short | -4 | ~-8 a plane, ~-20 a wide plane |
+| gray's clipped exit through `vga_solid_rect`'s identical `.done` (short `jc`, was `jnc +3 / jmp near`), plain code; the parity nop stays | -2 | -12 a gray fill (the taken jnc) |
+| `cur_vspan`'s flag as a word (`xor bx,bx`, `sub bp,bx`) | -3 | ~-4 a save or restore |
+
+Net: **kern_big and kern_emu `.vga` 2,030 -> 2,222 (+192)**, nothing else
+moves; **kern_mega `.text` 45,079 -> 45,063 (-16)** (no blitp relaxation and
+no gray long jump on its layout); **kern_small byte-identical**. `t_hotpar`'s
+table is the base's, unedited: the pinned VGA bodies sit on their parities.
+`tests/megaseg.txt` 3,650 -> 3,442 read, its allowance -208 to 3,555.
+
+Rows (named, not run here; the coordinator's final pass): `wdmenusu`,
+`atmenusu`, `vgadrop`, `vgadirty`, `savervga` (save/restore), `vidgrey`
+(gray), `dispdrag`, `colorpresets`, `xorrect` (solid fills, XOR), `blitp`,
+`dispblitp`, `paintplan`, `paintdraw`, `gorillasmenu` (blitp, the 75 ms
+budget), `isotronega`, `excitebikeega` (EGA), `tmhover`, the gfxbench VGA
+rows, and the pointer's VGA rows.
+
 ## 0. The owner's picks at a glance, ranked
 
 Every byte-costing item, in one place, ranked by user-visible time per

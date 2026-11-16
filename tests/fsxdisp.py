@@ -100,6 +100,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+import modstate  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispcp                                                # noqa: E402
 import os88build
@@ -249,7 +250,7 @@ def main(argv):
                             "dock_lx2", "dock_ly2", "dock_thk")}
         dispcp.close_panel(m, mo0, S, os88marty.settle, card=gate_card)
 
-        if a.dock and m.read(S("mod_tab"), 2) != b"\x00\x00":
+        if a.dock and modstate.live(m, "MOD_CTRL"):     # (kept is a drop)
             raise RuntimeError("fsxdisp: CTRL.DRV is still loaded before fullscreen")
 
         kind = m.read(S("vid_kind"), 1)[0]
@@ -446,8 +447,8 @@ def main(argv):
                         "SPEC.md 53.9 says the restore repaint erases what "
                         "the bracket drew" % d)
         if a.dock:
-            if m.read(S("mod_tab"), 2) != b"\x00\x00":
-                fail.append("fullscreen return loaded CTRL.DRV")
+            if modstate.live(m, "MOD_CTRL"):   # (a KEPT image is a drop,
+                fail.append("fullscreen return loaded CTRL.DRV")  # 2.8.3)
             for name, expected in dock_bounds.items():
                 if m.read(S(name), 2) != expected:
                     fail.append("fullscreen return changed " + name)

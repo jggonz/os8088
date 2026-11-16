@@ -1170,17 +1170,18 @@ wc_cmpi:
 ;             a floppy. out: CF = 1, SI = why. clobbers AX, CX, DX
 ; -----------------------------------------------------------------------------
 wc_claims:
-    mov ax, WC_RINGKB + 1
+    mov ax, (WC_RINGKB + 1) * 64
     mov cl, 3                       ; RL's code: 32 KB
 .try:
     push cx
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI     ; (keeps all but DX)
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; (keeps all but DX)
     pop cx
     jnc .ring
-    cmp ax, WC_RINGKB2 + 1
-    je .nomem
-    mov ax, WC_RINGKB2 + 1
+    cmp ax, (WC_RINGKB2 + 1) * 64   ; (refused: AX = the request, whole
+    je .nomem                       ;   granules)
+    mov ax, (WC_RINGKB2 + 1) * 64
     mov cl, 2
     jmp short .try
 .ring:
@@ -1193,18 +1194,18 @@ wc_claims:
     mov [wc_rmask], ax
     cmp byte [wc_fixed], 0          ; the units: the medium's (wc_go asked)
     jne .fixed
-    mov ax, WC_FLOPKB
+    mov ax, WC_FLOPKB * 64          ; (paragraphs, every size below)
     jmp short .osz
 .fixed:
     mov ax, [wc_clu]                ; a fixed disk: 16 KB, or one cluster
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    cmp ax, WC_OUTKB
+    cmp ax, WC_OUTKB * 64
     jae .osz
-    mov ax, WC_OUTKB
+    mov ax, WC_OUTKB * 64
 .osz:
     mov cl, WC_NU                   ; THE UNITS: four of 16 KB, two larger
-    cmp ax, WC_OUTKB                ; (64 KB of staging either way: 5.9 s at
+    cmp ax, WC_OUTKB * 64           ; (64 KB of staging either way: 5.9 s at
     jbe .n                          ; 11,025 Hz beyond the ring's 2.95)...
     mov cl, WC_NU / 2
 .n:
@@ -1212,7 +1213,10 @@ wc_claims:
     xor bx, bx
 .u:
     push ax
-    call OSAPI_MEM_CLAIM
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     pop ax
     jc .short
     mov [wc_useg + bx], dx
@@ -1222,7 +1226,7 @@ wc_claims:
     shr bx, 1                       ; ...or as many as the heap gives, one
     jz .nomem                       ; at the least
     mov [wc_nu], bl
-    mov cl, 10
+    mov cl, 4
     shl ax, cl                      ; (32 KB at most: a word)
     mov [wc_osz], ax
     clc

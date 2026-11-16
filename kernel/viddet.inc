@@ -525,10 +525,15 @@ section .text                   ; AND spend KERN_CODE_MAX, which is the guard
 ; the planar path: a VGA on step 1, an EGA on step 2, and only a machine that
 ; answers neither is a real mono card.
 ;
-; Documented scope cut: no Hercules-versus-plain-MDA discrimination (the
-; 0x3BA vertical-sync toggle test). A plain MDA is text-only, so there is no
-; better action available; driving it as a Hercules is strictly less wrong
-; than driving it as a CGA at B800.
+; A MONO ANSWER IS A HERCULES OR A PLAIN MDA, AND THEY ARE TOLD APART HERE
+; (SPEC.md 39.1, big review BR-6). Hercules graphics CRTC timings on an MDA
+; drive a 5151 at about 33 kHz against its 18.4: a dead screen, and possibly
+; a damaged monitor. So 3BFh = 1 first - an unconfigured Hercules aliases
+; like an MDA (SPEC.md 39.11.1.1) and an MDA has no 3BFh - then the alias
+; probe at B000. A Hercules keeps 0 and 1000h apart; an MDA's 4KB aliases.
+; An MDA with a CGA beside it runs on the CGA (vid_setmode's vid_cga_equip
+; turns the equipment word to colour so int 10h reaches it); an MDA alone
+; says so on its own text screen and halts.
 ;
 ; Documented scope cut: a VGA whose BIOS does not implement the DCC call is
 ; classed VID_EGA (640x350) rather than VID_VGA. Such a card is vanishingly
@@ -559,8 +564,14 @@ vid_detect:                     ; in it - the splash's first tick, and vid_init
     mov ah, 0x12                ; "get EGA info" overwrites BL with the card's
     mov bl, 0x10                ; memory size. An XT BIOS leaves 10h alone.
     int 0x10                    ; Step 1 already claimed every VGA, so a card
-    cmp bl, 0x10                ; that answers HERE is an EGA - and an EGA has
-    je .equip                   ; no mode 12h, only mode 10h (SPEC.md 39.24).
+    test bl, 3                  ; that answers HERE is an EGA - and an EGA has
+    jz .equip                   ; no mode 12h, only mode 10h (SPEC.md 39.24).
+                                ; BL 0..3 is 64/128/192/256KB, and `test bl,3`
+                                ; is "10h OR 0" in the bytes `cmp bl,10h` was:
+                                ; a 64KB EGA's mode 10h is TWO planes, which
+                                ; the four-plane writer collapses toward black,
+                                ; so it goes to the equipment word and runs in
+                                ; mode 6 like a CGA (SPEC.md 39.1, BR-56)
     mov al, VID_EGA             ; ...BUT THE SAME CALL SAYS WHICH DISPLAY IT
     or bh, bh                   ; DRIVES, and it is free: BH = 0 colour (3Dx),
     jz .set                     ; 1 monochrome (3Bx). AL is set BEFORE the
@@ -592,10 +603,43 @@ vid_detect:                     ; in it - the splash's first tick, and vid_init
     cmp al, 0x30                ; 11b = a monochrome card at B000
     mov al, VID_CGA
     jne .set
+%if VID_CGA != 2
+  %error "vid_detect's `dec ax` makes the 3BFh value 1 out of VID_CGA = 2"
+%endif
+    dec ax                      ; AL = 1: 3BFh bit 0, graphics allowed and
+    mov dx, 0x3BF               ; page 1 (B8000, a CGA's) left off - and an
+    out dx, al                  ; MDA has no 3BFh, so this writes to nothing
+    xor di, di                  ; .mchk's offset base
+    mov ax, VID_HERC_SEG
+    call .mchk
     mov al, VID_HERC
+    je .set                     ; 0 and 1000h kept apart: a Hercules
+    mov ax, 0xB800              ; ...aliased: a PLAIN MDA. Is there a CGA?
+    call .mchk
+    mov al, VID_CGA
+    je .set                     ; yes: run there (vid_setmode's cga_equip)
+    push cs                     ; no: say so on the MDA's own text screen -
+    pop ds                      ; the BIOS is still in mode 7, nothing has
+    mov si, vid_mdamsg          ; touched a CRTC - and stop, through the
+    jmp read_run.halt           ; loader's own teletype-and-halt (boot2.asm)
+
+; .mchk - AX = a segment; ZF = 1 when RAM there keeps offsets 0 and 1000h
+; apart: vid_memchk's two-offset idiom (vidsel.inc), which an empty bus (it
+; answers 0xAA or 0xFF) and an aliasing MDA both fail. Nothing is put back:
+; every answer is followed by a mode set or by the halt. Clobbers ES.
+.mchk:
+    mov es, ax
+    mov byte [es:di], 0x55
+    mov byte [es:di+0x1000], 0xAA
+    cmp byte [es:di], 0x55
+    ret
 %ifdef GFX_VGA
-    jmp short .set
 .vga:
+    sub bl, 0x0A                ; BL = the ACTIVE display's code: 0Ah..0Ch is
+    cmp bl, 3                   ; an MCGA (PS/2 Models 25 and 30) - no mode
+    jb .equip                   ; 12h, no GC or Sequencer - which runs as a
+                                ; CGA in mode 6 (SPEC.md 39.1, BR-55). Below
+                                ; 0Ah wraps high: every other code is a VGA
     mov al, VID_VGA
 %endif
 .set:
@@ -609,8 +653,10 @@ vid_detect:                     ; in it - the splash's first tick, and vid_init
     pop bx
     pop ax
     retf                        ; BLOBCALL's far frame. It used to `jmp
-section .text                   ; vid_pop8`, the shared epilogue, which is
+                                ; vid_pop8`, the shared epilogue, which is
                                 ; `.text`'s and so out of reach from the blob
+vid_mdamsg: db 13, 10, 'MDA cannot run os8088', 0 ; SPEC.md 39.1
+section .text
 
 ; -----------------------------------------------------------------------------
 ; vid_apply - publish [vid_kind]'s geometry into the live and derived blocks

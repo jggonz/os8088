@@ -486,7 +486,30 @@ impl DebugServer {
         exec.set_state(ExecutionState::Paused);
 
         let batch = ((machine.get_cpu_mhz() * 1_000_000.0) / BATCH_DIVISOR) as u32;
-        log::info!("Debug server: {} cycles per batch", batch);
+        // A REQUEST WAITS FOR THE BATCH IN FLIGHT. A batch is a 60th of a
+        // guest second - 3.7 host ms on an idle box, ~14 under a four-wide
+        // soak - so every request to a RUNNING machine paid half of one on
+        // average: measured, 5.6 host ms a round trip, and 11 of a row's 19
+        // host seconds in recv (docs/plans/soak-speed-2/core.md). While a
+        // client is talking - a command within CHATTY of the last - batches
+        // are FINE times smaller, so a poll loop's reads are answered within
+        // a fraction of a millisecond; a machine nobody is asking runs whole
+        // batches as before. The guest is cycle-exact either way: a batch
+        // boundary is where requests are served, not a guest event.
+        //
+        // OFF BY DEFAULT (MARTYPC_DEBUG_FINE=10 turns it on), because it is
+        // NOT invisible to the guest: with it, fdlgchoose (an Enter in Save
+        // As never closed the chooser) and wimgtrip (a menu bar never
+        // carried Disk) failed 3 runs in 3 and passed with it off. The likely
+        // mechanism is input timing - a `key` with down and up, or a mouse
+        // packet, lands between batches, so a finer batch shortens what the
+        // guest sees of it - and that wants understanding before the cut.
+        let fine = std::env::var("MARTYPC_DEBUG_FINE").ok()
+            .and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).max(1);
+        let small = (batch / fine).max(1000);
+        const CHATTY: Duration = Duration::from_millis(100);
+        log::info!("Debug server: {} cycles per batch ({} while a client talks)",
+                   batch, small);
 
         // When paused, a client stepping through commands (a stopped
         // breakpoint's reads, a register set, a resume) sends the next one
@@ -504,7 +527,8 @@ impl DebugServer {
 
             log_pass(machine, &mut exec);   // a resume that stepped onto one
             if matches!(exec.get_state(), ExecutionState::Running) {
-                machine.run(batch, &mut exec);
+                let n = if last_cmd.elapsed() < CHATTY { small } else { batch };
+                machine.run(n, &mut exec);
                 log_pass(machine, &mut exec);
                 note_state(&exec);       // the stop sequence number, above
                 // Drain after every batch, not on a timer: the channels are
@@ -735,6 +759,12 @@ impl DebugServer {
                 // all answered (in order) with no Nagle stall between the
                 // replies, and a request split across reads is kept whole.
                 "pipeline": true,
+                // `advance` drains the MARTYPC_WAV sinks after every batch,
+                // as the free-running loop does - so a capture keeps the
+                // samples of a guest-time window (os88marty.settle's) too.
+                "advance_drains": true,
+                // `fbuf` takes `"digest": true` (FNV-1a of the frame)
+                "fbuf_digest": true,
                 "pid": std::process::id(),
                 "port": self.listener.as_ref()
                             .and_then(|l| l.local_addr().ok())
@@ -811,7 +841,7 @@ impl DebugServer {
             "planes" => planes(machine, &req),
             "flicker" => flicker(machine, exec, &req),
             "pace" => pace(machine, exec, &req),
-            "advance" => advance(machine, exec, &req),
+            "advance" => advance(machine, exec, &req, &mut self.wavs),
             "snapshot" => { self.snap_cycles = machine.cpu_cycles(); snapshot(self) }
             "restore" => restore(self, &req),
             "key" => key(machine, &req),
@@ -855,12 +885,32 @@ fn address_of(req: &Value) -> Result<usize, String> {
     }
 }
 
+/// Two lowercase hex digits a byte, through a table. It was a `format!` per
+/// byte - an allocation and the formatting machinery for every byte of every
+/// `read`, `fbuf` and `planes` answer, which on a VGA frame (921,600 bytes)
+/// is tens of milliseconds a capture and was paid by every `settle` interval
+/// (docs/plans/soak-speed-2/core.md). Same output, byte for byte.
 fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize]);
+        out.push(HEX[(b & 15) as usize]);
     }
-    s
+    // SAFETY-free: every byte pushed is ASCII
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// FNV-1a, 64 bits: `fbuf`'s `digest`. Not cryptographic and not meant to
+/// be - it answers "is this frame the one I saw last time" for `settle`,
+/// which compared two whole frames shipped as hex.
+fn fnv64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
@@ -1617,7 +1667,19 @@ fn fbuf(machine: &mut Machine, req: &Value) -> Value {
         Ok(i) => i,
         Err(e) => return err(&e),
     };
+    // `"digest": true` answers the frame's FNV-1a instead of its bytes: what
+    // a stillness check compares, at 16 hex digits rather than 1.8 MB
+    let digest = req.get("digest").and_then(Value::as_bool).unwrap_or(false);
     match grab(machine, idx, sel) {
+        Ok((w, h, data)) if digest => json!({
+            "ok": true,
+            "w": w,
+            "h": h,
+            "card": idx,
+            "format": "rgb24",
+            "len": data.len(),
+            "digest": format!("{:016x}", fnv64(&data)),
+        }),
         Ok((w, h, data)) => json!({
             "ok": true,
             "w": w,
@@ -2124,7 +2186,8 @@ fn restore(_server: &mut DebugServer, _req: &Value) -> Value {
 /// it is deterministic but not cycle-exact; `frames` counts completed video
 /// frames, which is the natural unit when the thing being waited for is drawn.
 /// A breakpoint ends the run early and `state` says so.
-fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Value {
+fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value,
+           wavs: &mut Vec<WavSink>) -> Value {
     let want_cycles = req.get("cycles").and_then(Value::as_u64);
     let want_frames = req.get("frames").and_then(Value::as_u64);
     if want_cycles.is_none() == want_frames.is_none() {
@@ -2162,6 +2225,15 @@ fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
     loop {
         machine.run(batch, exec);
         log_pass(machine, exec);
+        // DRAIN THE CAPTURES HERE TOO, as run_loop does after a free-running
+        // batch. Without it a capture lost every sample of an `advance`: the
+        // Sound Blaster's bounded channel dropped them and an OPL's came back
+        // all zero - and os88marty.settle spends its stillness window in
+        // `advance` (guest time, not host time), so every settle under a
+        // MARTYPC_WAV capture would have been a hole in the file.
+        for w in wavs.iter_mut() {
+            w.drain();
+        }
         if matches!(exec.get_state(), ExecutionState::BreakpointHit) {
             break;
         }

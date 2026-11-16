@@ -100,12 +100,14 @@ section .modx
     call exk_go
     dw %1
 %endmacro
-EXT_NENT    equ 16
+EXT_NENT    equ 15
 modx_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
     db MOD_VER, MOD_EXT         ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modx_end, EXT_NENT       ; MOD_H_IMG, MOD_H_NENT
+    dw modx_end - wm_lf_win     ; MOD_H_SCR: its two cells, the image's last
+                                ; bytes (2.8.3) - KEPT
     dw ext_extend_b             ; EXT_EXTEND - far procs, the six whose only
     dw ui_drag_size             ; EXT_LAND     caller is their slot (or a
     dw ext_e_strads             ; EXT_STRADS   `push cs` + call in here) and
@@ -116,7 +118,11 @@ modx_hdr:
     dw ext_e_display            ; EXT_DISPLAY
     dw wm_disp_span             ; EXT_SPAN
     dw ext_e_fsrect             ; EXT_FSRECT
-    dw vid_disp_desk            ; EXT_DESK
+    dw ext_e_phase              ; EXT_PHASE (kernel size pass 14) - in slot
+                                ; 10, EXT_DESK's, since that entry retired
+                                ; with its one caller (SPEC.md 11.91.7): the
+                                ; last entry moved in rather than leave a hole
+                                ; four bytes of .bss wide (kernel size pass 20)
     dw ext_e_ylow               ; EXT_YLOW
 %ifdef SEAMCUT                  ; ...and the two seam CUTS, whose bodies are
     dw ext_fcut                 ; EXT_FCUT   this image's since kernel size
@@ -129,9 +135,8 @@ modx_hdr:
     dw ext_refuse
 %endif
     dw ext_e_dead               ; EXT_DEAD  (kernel size pass 14)
-    dw ext_e_phase              ; EXT_PHASE (kernel size pass 14)
-%if EXT_YLOW != 11 || EXT_DEAD != 14 || EXT_PHASE != 15 || EXT_NENT != 16
-  %error "extmod: EXT_FCUT and EXT_BCUT are entries 12 and 13, after EXT_YLOW, then EXT_DEAD and EXT_PHASE (kernel.asm)"
+%if EXT_PHASE != 10 || EXT_YLOW != 11 || EXT_DEAD != 14 || EXT_NENT != 15
+  %error "extmod: EXT_PHASE is entry 10, EXT_YLOW 11, EXT_FCUT and EXT_BCUT 12 and 13, then EXT_DEAD, the last (kernel.asm)"
 %endif
 %ifdef SEAMCUT
  %if EXT_FCUT != 12
@@ -287,7 +292,7 @@ ext_e_ylow:                     ; EXT_YLOW: ui_ylow's arm, behind its caller's
     mov ax, [ui_curx]           ; the drag's PROPOSED x, not W_X
     mov bx, MBAR_H              ; any row the primary's band contains, so a
                                 ; point on display 0 resolves to it
-    call KERNEL_SEG:cw_vid_disp_of
+    KDOOR vid_disp_of
     or al, al
     jz .done                    ; display 0 keeps the chrome's floor, which
                                 ; the caller loaded into SI. Anything else is
@@ -367,14 +372,14 @@ ext_e_fsx:
     push bx
     or bx, bx
     jnz .win
-    call KERNEL_SEG:apic_wm_top ; OSAPI_WM_TOP's own cell is the door: the
+    KDOOR wm_top                ; OSAPI_WM_TOP's own cell is the door: the
     or bx, bx                   ; same five bytes as an EXK and no exk_go
     jz .notop
 .win:
     mov al, bl                  ; BX = 1..15 IS A DISPLAY, BX-1 (SPEC.md
     dec ax                      ; 53.1.2): fsx_caps has already refused one
-    cmp bx, 16                  ; past [vid_ndisp]
-    jb .kind
+    or bh, bh                   ; past [vid_ndisp], and no window pointer is
+    jz .kind                    ; below 256 (fsx_caps' own test)
                                 ; (NOT ext_wctx: that needs DI banked
     EXK wm_disp_of              ; round it, and this is the one entry a
 .kind:
@@ -516,7 +521,7 @@ ext_org_disp:
     push bx
     mov ax, [bx+W_X]
     mov bx, [bx+W_Y]
-    call KERNEL_SEG:cw_vid_disp_of
+    KDOOR vid_disp_of
     pop bx
     or al, al
     ret
@@ -547,56 +552,10 @@ wm_disp_span:                   ; (far: EXT_SPAN is its only caller)
 .out:
     retf
 
-; -----------------------------------------------------------------------------
-; vid_disp_desk - the desktop ground of every display but the primary
-;                 (SPEC.md 39.14.4)
-; in:       nothing
-; out:      CF = 0 it painted one; CF = 1 there is one display and nothing to
-;           paint - mod_gone's answer too, which wm_paint_all's fullscreen
-;           arm reads in place of the [vid_ndisp] test it used to make
-; clobbers: flags
-;
-; A secondary display gets its ground WHOLE, because SPEC.md 39.14's chrome -
-; the menu bar, the dock, the drive column - lives on the primary alone.
-;
-; **IT IS thm_desk AND NOT gfx_fill_gray, AND THE NAME IS WHY IT WAS NOT**
-; (SPEC.md 76.2.1). This routine was called vid_disp_dither, SPEC.md 76.1's own
-; list of the four themed desktop sites NAMES it, and 76.2 says thm_desk
-; replaced gfx_fill_gray at all of them - and this one kept the dither, so
-; switching to Dark left the second monitor in Bright's ground for ever. A
-; routine whose name says DITHER does not read as a themed site to whoever is
-; converting them.
-;
-; wm_paint_all draws display 0's band itself - menu bar to dock, the call that
-; has always been there - and this is the rest: ONE ground fill in VIRTUAL
-; coordinates, and GFXDISP is what puts it on the right card. This is the only
-; caller in the kernel that draws in virtual coordinates. Everything else is
-; inside the chrome or inside a window, and both are on display 0, where
-; virtual and local are the same numbers (39.14.4).
-; -----------------------------------------------------------------------------
-vid_disp_desk:
-    call ext_one
-    jb .r                       ; CF = 1: one display
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov al, 1                   ; NOT A LOOP: VID_NDISP_MAX is 2 (the %if at
-                                ; its equ), the guard above has already
-                                ; returned for [vid_ndisp] <= 1, and display 0
-                                ; is wm_paint_all's own - so the general loop
-                                ; ran exactly once by construction
-    EXK vid_ctx_rect            ; AX/BX/CX/DX = its inclusive virtual rect
-    call KERNEL_SEG:cw_thm_desk ; the THEME's ground (SPEC.md 76.2), not a
-                                ; hard-coded dither
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-.r: retf                        ; (far: EXT_DESK is its only caller)
+; (vid_disp_desk - EXT_DESK, every display but the primary's ground, whole -
+; stood here. Its one caller was the layered wm_paint_all, and the damage pass
+; that replaced it dithers each display's own band through wm_dmg_bands
+; (SPEC.md 39.16.2.1, 11.91.7), so slot 10 is retired: see the table above.)
 
 ; ==== the drop, the landing and the straddle (SPEC.md 11.100.3/.4, 39.16.3) ==
 ; -----------------------------------------------------------------------------
@@ -665,7 +624,7 @@ vid_disp_desk:
 ; -----------------------------------------------------------------------------
 ui_drag_size:
     call ext_one                ; one display - mod_gone's case, or this image
-    jb vid_disp_desk.r          ; over a collapsed desktop: a drag can never
+    jb ext_e_apply.r            ; over a collapsed desktop: a drag can never
                                 ; change a kind, and CF = 1 is "not moved"
     push ax
     push cx
@@ -1121,8 +1080,13 @@ wm_fit_box:
 ; right - wm_disp_now is asked from the first press after an Extend, long
 ; before any landing, and 0 is "nothing armed" only because wm_wins is well
 ; above it. CS: on every access, DS being the kernel's here.
+; A MACRO, emitted LAST in the image by kernel.asm: the two are its scratch
+; tail, so a KEPT image's drop zeroes them back to that fresh load's "nothing
+; armed" (SPEC.md 2.8.3)
+%macro EXT_SCRATCH 0
 wm_lf_win:  dw 0
 wm_lf_disp: db 0
+%endmacro
 
 ; -----------------------------------------------------------------------------
 ; wm_disp_now - WHICH DISPLAY IS THIS WINDOW'S? (SPEC.md 39.16.4.1)

@@ -86,23 +86,12 @@ mods_ser_header:
     db MOD_VER, MOD_SER
     dw BUILD_NUM, MOD_STAMP
     dw mods_ser_end, SER_NENT
+    dw mods_ser_end - srl_base  ; MOD_H_SCR: its lease, the image's last
+                                ; bytes (2.8.3) - KEPT
     dw srl_api,srl_irq,srl_release
 
 ; DS=kernel; data owned by the image is always CS-relative. No ring lives
 ; in this module: the pinned caller's buffer holds all producer/consumer data.
-srl_base: dw 0
-srl_seg: dw 0
-srl_buf: dw 0
-srl_owner: db 0xff
-srl_lcr: db 0
-srl_ier: db 0
-srl_dll: db 0
-srl_dlm: db 0
-srl_mcr: db 0
-srl_div: db 12
-srl_pic: db 0
-srl_mask: db 0
-srl_seen: db 0                 ; [mou_seen] when the lease was taken
 SRL_O_SEG   equ srl_seg         ; three OFFSETS in the image, for code that
 SRL_O_BUF   equ srl_buf         ; holds the image's own DATA selector -
 SRL_O_MASK  equ srl_mask        ; fsx.inc's real-mode bracket (SPEC.md 53.2.3,
@@ -143,9 +132,14 @@ srl_body:
     cmp al, 1
     je srl_close
     cmp al, 2
+    je .pump
+    cmp al, 5
     jne .ring
+.pump:
     push ax
+    push di
     call srl_pump              ; a missed IRQ edge cannot strand pending bytes
+    pop di
     pop ax
 .ring:
     mov bx, [cs:srl_buf]
@@ -153,6 +147,10 @@ srl_body:
     mov es, dx
     cmp al, 2
     je .read
+    cmp al, 4
+    je .wblk
+    cmp al, 5
+    je .rblk
     cmp al, 3
     jne .bad
     mov dl, [es:bx+3]
@@ -190,6 +188,92 @@ srl_body:
 .empty:
     mov ax, 6
     stc
+    ret
+; The block verbs (115.1.2): a run in one call, moved with rep movsb up to
+; the ring's wrap and again from 0, its index published once at the end -
+; interrupts are off for the whole verb, so no reader sees a part of it.
+; SI / DI are the caller's offsets in the leased region, the ring's segment.
+; BP = the bytes moved
+.wblk:
+    mov al, [es:bx+4]           ; the room: tail - head - 1
+    sub al, [es:bx+3]
+    dec al
+    xor ah, ah
+    cmp cx, ax
+    jbe .wn
+    mov cx, ax
+.wn:
+    mov bp, cx
+    jcxz .wout
+    push ds
+    mov ax, es
+    mov ds, ax                  ; (DS = ES: the region, for the movsb)
+    mov dl, [bx+3]
+.wrun:
+    xor dh, dh
+    mov di, bx
+    add di, dx
+    add di, SER_TX
+    call .run
+    jnz .wrun
+    mov [bx+3], dl              ; publish
+    pop ds
+    mov dx, [cs:srl_base]
+    inc dx
+    mov al, 3                   ; RX+THRE, and the first byte kicked now
+    out dx, al
+    push bp
+    call srl_pump
+    pop bp
+.wout:
+    mov ax, bp
+    clc
+    ret
+.rblk:
+    mov al, [es:bx]             ; what waits: head - tail
+    sub al, [es:bx+1]
+    xor ah, ah
+    cmp cx, ax
+    jbe .rn
+    mov cx, ax
+.rn:
+    mov bp, cx
+    jcxz .rend
+    push ds
+    mov ax, es
+    mov ds, ax
+    mov dl, [bx+1]
+.rrun:
+    xor dh, dh
+    mov si, bx
+    add si, dx
+    add si, SER_RX
+    call .run
+    jnz .rrun
+    mov [bx+1], dl              ; consumed
+    pop ds
+.rend:
+    mov ax, bp
+    mov ah, [es:bx+2]
+    mov byte [es:bx+2], 0
+    clc
+    ret
+; .run - DL = the ring index, CX = bytes left: the part before the wrap
+; moved (DS:SI -> ES:DI), DL and CX moved on; ZF = 1 when none are left
+.run:
+    mov ax, 256
+    sub ax, dx
+    cmp ax, cx
+    jbe .r
+    mov ax, cx
+.r:
+    push cx
+    mov cx, ax
+    add dl, al                  ; (wraps at 256, as the ring does)
+    cld
+    rep movsb
+    pop cx
+    sub cx, ax
     ret
 .full:
     mov ax, 7
@@ -489,6 +573,8 @@ srl_release:
     push dx
     pushf
     cli
+    cmp word [cs:srl_base], 0   ; NO LEASE: nothing to close, and srl_owner
+    je .no                      ; is not one (it is read only under a lease)
     cmp al, 0xff
     je .close
     cmp al, [cs:srl_owner]
@@ -506,6 +592,24 @@ srl_release:
     pop ax
     stc
     retf
+; THE LEASE: the image's SCRATCH TAIL, its last bytes and zeros in the file,
+; so a KEPT image's drop zeroes it back to what a load brings in (SPEC.md
+; 2.8.3). srl_base = 0 is "no lease", and nothing else here is read without
+; it: srl_open writes every cell before it sets srl_base, srl_body and
+; srl_open test it first, and srl_release does now as well
+srl_base: dw 0
+srl_seg: dw 0
+srl_buf: dw 0
+srl_owner: db 0                ; read only while srl_base is non-zero
+srl_lcr: db 0
+srl_ier: db 0
+srl_dll: db 0
+srl_dlm: db 0
+srl_mcr: db 0
+srl_div: db 0                  ; srl_open's, before it is read (0 asked is 12)
+srl_pic: db 0
+srl_mask: db 0
+srl_seen: db 0                 ; [mou_seen] when the lease was taken
 mods_ser_end:
 SER_IMAGE_SIZE equ mods_ser_end - $$
 section .text

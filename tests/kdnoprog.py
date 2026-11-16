@@ -201,7 +201,19 @@ def refusal(m, mo, gone, poke=True):
         # machine has even hibernated. The console cannot be confused that way:
         # a second line naming the program is the outcome, by construction.
         def band():
-            scr = m.read(pb() + dm["con_scr"], 80 * 25 * 2)
+            # **WHILE THE MACHINE IS AWAY THERE IS NO WINDOW TO READ.** From
+            # the post until the restore has put the desktop back, the
+            # kernel's window table is kern_dos's memory or a half-restored
+            # image: dosmap.instance() raises on it, or names a segment whose
+            # read runs off the address space. That is the in-flight state,
+            # not a verdict, so it reads as "nothing said yet" and the wait
+            # goes on - the predicate wants TWO lines naming the program and
+            # the band held one before the trip. A machine that never comes
+            # back is still the wait's own timeout.
+            try:
+                scr = m.read(pb() + dm["con_scr"], 80 * 25 * 2)
+            except (RuntimeError, M.MartyError):
+                return []
             rows = ["".join(chr(scr[r * 160 + i])
                             if 32 <= scr[r * 160 + i] < 127 else " "
                             for i in range(0, 160, 2)).rstrip()

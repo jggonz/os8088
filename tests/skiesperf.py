@@ -98,8 +98,15 @@ def sites(lst):
     rx = re.compile(r"\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F\[\]]+)\s+(?:<\d+>\s*)?(.*)$")
     lab = re.compile(r"\s*\d+\s+(?:[0-9A-F]{8}\s+(?:[0-9A-F()\-\[\]]+\s+)?)?(?:<\d+>\s*)?([A-Za-z_][A-Za-z0-9_]*):")
 
+    # A `call` in a package is a MACRO since kernel size pass 19 (the
+    # flag day's OSAPI_RARE door, apps/os88api.inc): the source line carries
+    # no bytes and the instruction is emitted a few listing lines later, as
+    # `call %1` inside the expansion. So a matching line with no bytes arms
+    # a pending site, and the next line that HAS bytes is it.
+    bare = re.compile(r"\s*\d+\s+(?:<\d+>\s*)?(.*)$")
+
     def find(pat, nth=0, within=None, optional=False):
-        hits, scope = [], within is None
+        hits, scope, pending = [], within is None, False
         for L in lines:
             if within:
                 m = lab.match(L)
@@ -108,9 +115,18 @@ def sites(lst):
                 if not scope:
                     continue
             m = rx.match(L)
+            if m and pending:
+                pending = False
+                b = bytes.fromhex(m.group(2).replace("[", "").replace("]", ""))
+                hits.append((int(m.group(1), 16), b))
+                continue
             if m and re.search(pat, m.group(3).split(";")[0].rstrip()):
                 b = bytes.fromhex(m.group(2).replace("[", "").replace("]", ""))
                 hits.append((int(m.group(1), 16), b))
+            elif not m:
+                mb = bare.match(L)
+                if mb and re.search(pat, mb.group(1).split(";")[0].rstrip()):
+                    pending = True
         if len(hits) <= nth:
             if optional:
                 return None

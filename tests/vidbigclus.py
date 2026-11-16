@@ -130,7 +130,7 @@ def main():
             rw = lambda n: struct.unpack_from("<H", m.read(base + syms[n],
                                                            2))[0]
             M.until(m, lambda mm: rb("vp_ok") == 1 or rw("vp_msg") ==
-                    syms["vp_s_bad"], "the header", poll=0.3, limit=300.0,
+                    syms["vp_s_bad"], "the header", poll=0.05, limit=300.0,
                     guest=60.0)
             if rb("vp_ok") != 1:
                 bad.append("2: the file did not open playable")
@@ -141,7 +141,7 @@ def main():
                 try:
                     M.until(m, lambda mm: rb("vp_sess") == 1 or
                             rw("vp_msg") == syms["vp_s_bad"], "a session",
-                            poll=0.3, limit=300.0, guest=60.0)
+                            poll=0.05, limit=300.0, guest=60.0)
                 except M.MartyError:
                     pass
                 if rw("vp_msg") == syms["vp_s_bad"]:
@@ -164,7 +164,7 @@ def main():
                                    "bytes" % d)
                     try:
                         M.until(m, lambda mm: rw("vp_vseq") >= 20,
-                                "twenty frames", poll=0.3, limit=300.0,
+                                "twenty frames", poll=0.05, limit=300.0,
                                 guest=60.0)
                         print("   5: %d frames drawn" % rw("vp_vseq"))
                     except M.MartyError:

@@ -114,11 +114,12 @@ def main():
     s16 = lambda v: v - 0x10000 if v & 0x8000 else v
 
     with os88ui.boot(os.path.join(ROOT, "build", "os8088-360.img"),
-                     apps=DISK, machine="os8088_xt_vga") as ui:
+                     apps=DISK, machine="os8088_xt_vga",
+                     quick=True) as ui:    # SOAK-SPEED 12
         m = ui.m
         w = ui.path("B:/CHART.O88")
         seg = os88marty.pkg_live(m, w, ui.sym)
-        ui.settle()
+        ui.still(0)
 
         rd = lambda s: s16(u16(m.readseg(seg, S[s], 2)))
 
@@ -129,7 +130,7 @@ def main():
         def load(doc):
             ui.menu_pick("File", "Open...")
             ui.chooser_open(doc)
-            ui.settle()
+            ui.still(0)
 
         names = ["1 FRACTIONS", "2 LARGE", "3 CAPPED", "4 ROUNDED"]
         for (doc, col, want_e, why), label in zip(CASES, names):

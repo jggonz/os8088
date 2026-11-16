@@ -421,7 +421,7 @@ static int lm_dive(const char *name)
 
     ord = 0;
     while (ord >= 0) {
-        ord = os88_file_find(ord, &lm_find);
+        ord = os88_file_find_seq(ord, &lm_find);
         if (ord < 0)
             break;
         if (lm_find.type != OS88_FT_DIR)
@@ -564,7 +564,7 @@ static int ovl_exists(const char *name)
 
     ord = 0;
     while (ord >= 0) {
-        ord = os88_file_find(ord, &lm_find);
+        ord = os88_file_find_seq(ord, &lm_find);
         if (ord < 0)
             break;
         if (lm_find.type >= OS88_FT_DIR)
@@ -603,7 +603,7 @@ static int ovl_openproj(void *win, const char *name)
     /* 10.1's shape, applied to the claim this program cannot start without.
      * The source claim is small, but the refusal has to name BOTH figures:
      * a heap with room overall and no run big enough cannot host it either. */
-    lm_srcseg = os88_mem_claim(LM_CLAIMKB);
+    lm_srcseg = os88_mem_claim_p(LM_CLAIMKB * 64);
     if (lm_srcseg == 0) {
         lm_l0();
         lm_ls("LOOM needs ");
@@ -786,13 +786,13 @@ static int lm_pack_claim(void)
         lm_short(ask);
         return 0;
     }
-    lm_outseg = os88_mem_claim(LM_OUTKB);       /* the bigger one first: it is
+    lm_outseg = os88_mem_claim_p(LM_OUTKB * 64);       /* the bigger one first: it is
                                                  * the one that can fail */
     if (lm_outseg == 0) {
         lm_short(ask);
         return 0;
     }
-    lm_workseg = os88_mem_claim(LM_WORKKB);
+    lm_workseg = os88_mem_claim_p(LM_WORKKB * 64);
     if (lm_workseg == 0) {
         lm_pack_free();
         lm_short(ask);

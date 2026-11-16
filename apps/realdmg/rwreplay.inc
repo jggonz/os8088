@@ -529,9 +529,13 @@ rw_rpclaim:
     mov ax, RP_KB
     call rw_mclaim
     jnc .got
-    mov ax, 2
-    call OSAPI_MEM_CLAIM
-    jnc .got
+    mov ax, 2 * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
+    mov al, 2                       ; (granted 128 paragraphs: AX = the KB
+    jnc .got                        ;   again, for .got)
     mov si, rw_s_rproom
     call rw_rpsay
     stc

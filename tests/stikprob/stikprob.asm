@@ -134,10 +134,6 @@ dp_entry:
     mov si, dp_tpl
     call OSAPI_WM_CREATE
     jc .out
-%ifdef DP_DESK
-    mov ax, dp_ondrag           ; counted: an armed card press may deliver
-    call OSAPI_WM_ONDRAG        ; some, a posted DRAG none (CF=1 on small)
-%endif
     call stik_made
 %ifdef DP_DESK
     test byte [stik_wf], STIK_W_DESK
@@ -303,7 +299,14 @@ dp_key:                         ; AL = ascii, AH = scan, SI = the window
 
 dp_tpl:
     dw 40, 60, 0, 0             ; the TEMPLATE place: a valid state file
-    dw dp_ttl, dp_paint, dp_key, 0  ; moves it; stik_load sizes it
+    dw dp_ttl, dp_cls               ; moves it; stik_load sizes it
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; The press, the release, the wake, the tick and the close are os88stik.inc's;
+; the drag is counted: an armed card press may deliver some, a posted DRAG
+; none (and kern_small none at all)
+    OS88_CLASS dp_cls, 0, PAINT, dp_paint, ONKEY, dp_key, ONCLICK, stik_click, \
+               ONWAKE, STIK_WAKE, ONCLOSE, stik_close, ONMOUSEUP, stik_mup, \
+               ONTIMER, stik_tick, ONDRAG, dp_ondrag
 
 dp_ttl:     db 'DeskProbe', 0
 dp_lab:     db 'DeskProbe', 0
@@ -341,7 +344,11 @@ dp_paint:                       ; SI = the window, lock held: one opaque run
 
 dp_tpl:
     dw 40, 60, 160, 50          ; the TEMPLATE place: a valid state file
-    dw dp_ttl, dp_paint, 0, 0   ; moves it
+    dw dp_ttl, dp_cls           ; moves it
+    OS88_CLASS dp_cls, 0, PAINT, dp_paint, ONWAKE, stik_wake, \
+               ONCLOSE, stik_close, ONTIMER, stik_tick ; (not a widget: the
+                                ; wake is the worker arm's kick, SPEC.md
+                                ; 110.5.2, and it reads STIK_S_WORKER)
 
 dp_ttl:     db 'StikProbe', 0
 dp_msg:     db 'Sticky App probe', 0

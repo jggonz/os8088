@@ -799,7 +799,10 @@ mppl_onkey:
 ; =============================================================================
 mppl_tpl:
     dw 0, 0, MPPL_FW, MPPL_H + TITLE_H + 1      ; x/y/h set by mppl_geom
-    dw mppl_ttl, mppl_paint, mppl_onkey, mppl_onclick
+    dw mppl_ttl, mppl_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mppl_cls, 0, PAINT, mppl_paint, ONKEY, mppl_onkey, \
+               ONCLICK, mppl_onclick
 mppl_ttl:        db 'PlayList Editor', 0
 mppl_s_empty:    db 'Empty - Add... queues a module', 0
 mppl_s_playmark: db '>', 0

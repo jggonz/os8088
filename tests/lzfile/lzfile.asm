@@ -44,8 +44,9 @@ LZ_CAP      equ 4096           ; each buffer's capacity - and a multiple of
 
 ; -----------------------------------------------------------------------------
 lz_entry:
-    mov ax, LZ_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, LZ_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [lz_seg], dx
 
@@ -422,7 +423,9 @@ lz_paint:
 
 lz_tpl:
     dw 110, 84, 300, 90
-    dw lz_ttl, lz_paint, 0, 0
+    dw lz_ttl, lz_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS lz_cls, 0, PAINT, lz_paint
 
 lz_ttl:     db 'LZ file', 0
 

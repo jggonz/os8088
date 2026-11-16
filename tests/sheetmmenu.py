@@ -103,12 +103,14 @@ def main():
     build_disk()
     S = os88sym.linear
     data = None
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
@@ -119,23 +121,23 @@ def main():
             M.write_png(os.path.join(WORK, tag + ".png"), 640, 200, rr)
 
         def run(name):
-            mo.menu(MACRO[0], MACRO[1], *RUN)
+            SF.menu(m, mo, MACRO[0], MACRO[1], *RUN)
             M.settle(m)
             for ch in "\b" * 8 + name:
-                m.type_text(ch)
-                M.guest_sleep(m, 0.15)
+                M.text_taken(m, ch, ui=False, cap=0.15)
+                # (SOAK-SPEED 9: taken when read, the old pace the cap)
             m.type_text("\n")
             M.settle(m, limit=300)
 
         def pick(title, i):
-            mo.menu(title[0], title[1], *ITEM(title[0], i))
+            SF.menu(m, mo, title[0], title[1], *ITEM(title[0], i))
             M.settle(m, limit=300)
 
         run("MAIN")
         shot("1-bar")
         mo.to(*TOOLS)                           # the dropdown, held open
         mo._edge(True)
-        M.settle(m)
+        SF.held(m)
         shot("2-tools")
         mo._edge(False)
         M.settle(m)
@@ -150,12 +152,12 @@ def main():
         M.settle(m, limit=300)
         shot("4-back")
         before = open(os.path.join(WORK, NAME), "rb").read()
-        mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
-        M.settle(m)
+        SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+        M.ui_done(m)                    # SOAK-SPEED 4: every step of
         mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
-        M.settle(m)
+        M.ui_done(m)                    # the save is aimed off the
         mo.click(*SF.fdlg_okxy(m))
-        M.settle(m, limit=120)
+        M.ui_done(m)                    # kernel's window record
         mo.click(*SF.SAVE_BUTTON)
         for _ in range(90):
             v = os88flush.Flush(marty=m).volume(1)

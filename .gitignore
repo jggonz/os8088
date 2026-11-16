@@ -53,3 +53,11 @@ docs/excelfileformat.pdf
 # `win16ref.py all` recreates the lot.
 /win16ref/
 /win16ref-*/
+
+# a guest disk extracted at the repo root (mcopy -s): built packages, never source.
+# APPS/ names only its .O88s: git matches case-INSENSITIVELY on macOS
+# (core.ignorecase), so a bare /APPS/ ignored every new file under apps/
+/APPS/**/*.O88
+/GAMES/
+/MEDIA/
+/SYSTEM/

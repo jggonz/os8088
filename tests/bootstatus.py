@@ -11,7 +11,9 @@ under the bar. This is that line, checked two ways because neither is enough
 on its own.
 
 **Five lines now, and the first two are 15.6.4's.** `Looking for Mouse` and
-`Looking for Drives` name the two phases of `kmain` that are not disk at all
+`Looking for Drives` (in THAT order on kern_small, and the other on kern_big,
+whose mouse is set up after the hibernation probe - SPEC.md 87.5) name the two
+phases of `kmain` that are not disk at all
 and are the longest waits on a hard-disk boot's bar - 9.4.1's identify window
 and 18.97's TRACK 0 question. They are composed from `kmain` rather than from
 `drv_boot`, so this row is what proves the ORDER: a line composed before the
@@ -278,6 +280,11 @@ def run(img, machine, kind, want):
 
     fail = []
     head = ["Looking for Mouse", "Looking for Drives", "Loading SYSTEM.CFG"]
+    if "KERN_SMALL" not in os.environ.get("OS88_DEFINES", ""):
+        # kern_big and kern_emu set the mouse up AFTER the hibernation probe
+        # (SPEC.md 87.5, 15.6.4), and the probe comes after the drive probe
+        head = ["Looking for Drives", "Looking for Mouse",
+                "Loading SYSTEM.CFG"]
     if lines[:3] != head:
         fail.append("15.6.4's two lines do not precede the settings read: %r"
                     % lines[:3])
@@ -299,7 +306,10 @@ def run(img, machine, kind, want):
 
 def main():
     big = "KERN_SMALL" not in os.environ.get("OS88_DEFINES", "")
-    want = ["Ethernet", "Ram Disk"] if big else ["Ethernet"]
+    # kern_big loads in TWO PASSES (SPEC.md 51.3.4): the classes a hibernate
+    # keeps first - the RAM disk is one - then the rest, so its ordinals are
+    # in PASS order, not row order
+    want = ["Ram Disk", "Ethernet"] if big else ["Ethernet"]
     bits = BIT_ETHER | (BIT_RAM if big else 0)
     img = image(bits)
 

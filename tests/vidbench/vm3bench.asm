@@ -56,8 +56,6 @@ vm_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [vm_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
     clc
 .out:
     pop si
@@ -430,8 +428,9 @@ vm_run:
     call bl_sline
     cmp word [vm_dseg], 0
     jne .have
-    mov ax, 8                       ; the masks (VM_B of 8 KB)
-    call OSAPI_MEM_CLAIM
+    mov ax, 8 * 64                       ; the masks (VM_B of 8 KB)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [vm_dseg], dx
 .have:
@@ -515,7 +514,10 @@ vm_run:
 ; =============================================================================
 vm_tpl:
     dw 7, 22, 632, 300
-    dw vm_ttl, vm_paint, vm_onkey, vm_onclick
+    dw vm_ttl, vm_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vm_cls, 0, PAINT, vm_paint, ONKEY, vm_onkey, \
+               ONCLICK, vm_onclick
 
 vm_ttl:       db 'Write Mode 3 Bench', 0
 vm_f_txt:     db 'VM3BENCH.TXT', 0

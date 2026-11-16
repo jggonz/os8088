@@ -20,6 +20,10 @@ about what the module DECIDED, not about pixels:
      called 'Desk Calendar' comes up, and the module is dropped after;
   C  a press released OFF the panel picks nothing: nothing posted, and the
      module dropped by the track thunk itself;
+     A DROP IS SPEC.md 2.8.3's: the image is KEPT - its first slot no
+     longer names its segment and its claim is re-tagged MEM_P_MOD + 2 x
+     the id, purgeable (on kern_mega its POOL block, 2.8.3.3) - and once
+     the heap has shed it, the row holds nothing (Menu.dropped);
   D  Hide All hides the widget (visible bit clear, still used), the next
      panel offers Show All, and Show All shows it again;
   E  Arrange puts its frame at W_X = 7 mod 8, at the column's top (MBAR_H +
@@ -43,7 +47,9 @@ about what the module DECIDED, not about pixels:
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): clear DESKCAL's
 OS88_F_STIK and A fails (no card, nothing listed); make stm_track_x drop the
 image whatever the track answered and B fails (the posted act finds
-mod_gone); call wm_close_req instead of app_close_win in stm_a_close and F's
+mod_gone); leave mod_drop's re-tag out (`mov [ss:si+MC_OWN], ax`) and
+B's drop never comes - the claim stays MEM_K_MOD, which nothing sheds
+(measured 2026-11-11); call wm_close_req instead of app_close_win in stm_a_close and F's
 row check fails (the negotiator is cleared before the close); take the call
 to stm_thaw out of smn_track and C reads [fpg_on] 1 and the clock as the shape (both
 measured on the kernel before it); put menu_s_stik back in fm_menus and H
@@ -62,6 +68,7 @@ import os88ui      # noqa: E402
 import os88stik    # noqa: E402
 import os88sym     # noqa: E402
 import os88geom as geom  # noqa: E402
+import heapmap     # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -78,6 +85,7 @@ SL_SIZE, SL_KIND, SL_PARAM, SL_FLAGS, SL_H, SL_Y = (EQ[n] for n in (
 SK_APP, SK_ITEM, SK_PAGE = EQ["SK_APP"], EQ["SK_ITEM"], EQ["SK_PAGE"]
 IT_ARR, IT_HIDE, IT_MORE = EQ["IT_ARR"], EQ["IT_HIDE"], EQ["IT_MORE"]
 SF_SEL, SF_DIS = EQ["SF_SEL"], EQ["SF_DIS"]
+MEM_P_MOD = EQ["MEM_P_MOD"]
 T = 120                         # guest seconds: a floppy scan on a 5150
 
 fails = []
@@ -125,6 +133,26 @@ class Menu:
             return 0
         return lin
 
+    def armed(self):
+        """base(), once the image's slots NAME its segment - mod_check's
+        arming, after the read and the stamps. Before that the claim holds
+        whatever its last holder left, and a nonzero byte at stm_live's
+        offset read as a panel that was not up: drop() returned while the
+        file was still being read, the release landed in the scan, and the
+        panel stayed up for a click nobody made (modcache A, two runs in
+        five, once the kept scan moved stm_live; SPEC.md 110.12.2). Under
+        Bochs base() already refuses a claim mod_hi has not copied."""
+        lin = self.base()
+        if not lin or getattr(self.m, "bochs", False):
+            return lin
+        seg = struct.unpack("<H", bytes(self.m.read(
+            self.ui._S("mod_tab") + self.mod * MODR_SIZE, 2)))[0]
+        blk = struct.unpack("<H", bytes(self.m.read(
+            self.ui._S("mod_fpt") + 2 * self.mod, 2)))[0]
+        sseg = struct.unpack("<H", bytes(self.m.read(
+            (geom.KERNEL_SEG << 4) + blk + 2, 2)))[0]
+        return lin if sseg == seg else 0
+
     def rd(self, name, n):
         return bytes(self.m.read(self.base() + self.off[name], n))
 
@@ -149,7 +177,7 @@ class Menu:
         # before the close, so the last drop's image - a reload lands in the
         # same claim, whose memory still holds its bytes until this one's
         # read overwrites them - always left it 0
-        self.ui._wait(lambda: self.base() and self.b("stm_live"),
+        self.ui._wait(lambda: self.armed() and self.b("stm_live"),
                       "the Sticky Apps panel to drop", T)
         n = self.b("stm_nsl")
         raw = self.rd("stm_sl", n * SL_SIZE)
@@ -167,7 +195,7 @@ class Menu:
         self.ui.mo.to(self.cell(), geom.MBAR_H // 2)
         self.ui.mo._edge(True)
         self.ui.mo.to(self.cell() + 40, 120, l=True)
-        self.ui._wait(lambda: self.base() and self.b("stm_live"),
+        self.ui._wait(lambda: self.armed() and self.b("stm_live"),
                       "the Sticky Apps panel to drop", T)
 
     def release_on(self, slabs, k):
@@ -183,8 +211,58 @@ class Menu:
         self.ui.mo.to(20, self.ui._word("vid_ph") - 40, l=True)
         self.ui.mo._edge(False)
 
+    def dropped(self):
+        """THE DROP AS SPEC.md 2.8.3 HAS IT, or None: 'freed' when the row
+        holds no segment (an image that does not opt in, or a kept image
+        the heap has since shed), 'kept' when the row still names its claim
+        but the module's first slot no longer names that segment - the very
+        test mod_need makes - AND the claim is re-tagged MEM_P_MOD + 2 x
+        the id, purgeable. A drop that left the slots armed, or the claim
+        pinned as MEM_K_MOD, is no drop: the heap could never take it."""
+        row = self.ui._S("mod_tab") + self.mod * MODR_SIZE
+        seg = struct.unpack("<H", bytes(self.m.read(row, 2)))[0]
+        if not seg:
+            return "freed"
+        if getattr(self.m, "bochs", False):
+            # kern_mega (SPEC.md 2.8.3.3): KEPT is the pair above 1MB with
+            # its slots on mod_gone and its POOL block marked purgeable
+            import modstate
+            return ("kept" if modstate.state(self.m, self.mod) == "kept" and
+                    modstate.kept_owner(self.m, self.mod) ==
+                    MEM_P_MOD + 2 * self.mod else None)
+        fpt = self.ui._S("mod_fpt")
+        blk = struct.unpack("<H", bytes(self.m.read(fpt + 2 * self.mod,
+                                                    2)))[0]
+        slot = (geom.KERNEL_SEG << 4) + blk
+        sseg = struct.unpack("<H", bytes(self.m.read(slot + 2, 2)))[0]
+        if sseg == seg:
+            return None                 # live: armed, held by its bracket
+        own = [c.own for c in heapmap.Map(self.m, _Syms(self.ui)).claims
+               if c.seg == seg]
+        return "kept" if own == [MEM_P_MOD + 2 * self.mod] else None
+
     def gone(self):
-        self.ui._wait(lambda: not self.base(), "STIKMENU.DRV dropped", T)
+        self.ui._wait(lambda: self.dropped(), "STIKMENU.DRV dropped "
+                      "(freed, or kept as MEM_P_MOD + 2 x its id with its "
+                      "slots disarmed)", T,
+                      snapshot=lambda: self.why())
+
+    def why(self):
+        row = self.ui._S("mod_tab") + self.mod * MODR_SIZE
+        seg = struct.unpack("<H", bytes(self.m.read(row, 2)))[0]
+        own = [hex(c.own) for c in heapmap.Map(self.m, _Syms(self.ui)).claims
+               if seg and c.seg == seg]
+        return "MODR_SEG %#x, its claim's owner %r" % (seg, own)
+
+
+class _Syms(object):
+    """tools/heapmap.Map reads symbols by subscript; this is os88ui's."""
+
+    def __init__(self, ui):
+        self.ui = ui
+
+    def __getitem__(self, name):
+        return self.ui._S(name)
 
 
 def is_open(ui, title):

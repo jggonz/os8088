@@ -50,9 +50,13 @@ vga - an XT with a VGA: the TALL layout, the papers and a full folder
   I  the pad's sheet is YELLOW (the default paper) and its edge black.
   J  Color > Pink: the sheet is pink and STIKNOTE.DAT's table says
      WELCOME pink; the pad closed and launched again is STILL pink.
-  K  the folder holds 30 notes (29 empty ones put in its directory on the
-     host): the pad counts 30, and `+` answers `Notes folder is full` and
-     makes nothing.
+  K  NOTE0001..NOTE0032 all exist (32 empty ones put in NOTES on the host,
+     its directory grown past the 32 slots it ships with by a cluster of its
+     own, as the kernel grows one since BR-60, SPEC.md 18.5.2): the pad counts
+     33, and `+` - whose numbers are 1..32 - answers `Notes folder is full`
+     and makes nothing. (Filling only the 32 shipped slots tested the
+     directory's size, which a kernel that grows a folder no longer hits:
+     `+` made NOTE0030.TXT and opened it.)
 
 small - kern_small, a copy of STIKNOTE.O88 carried there by hand (B:)
   L  it refuses to launch, in words: `No desk layer (DESK.DRV)` - the
@@ -64,7 +68,8 @@ small - kern_small, a copy of STIKNOTE.O88 carried there by hand (B:)
 witness and E2 goes red (the tick writes onto the apps disk); take sn_go out of sn_launch and E's Note Pad opens
 an empty note in STIKAPPS\\ and the pad never shows `Hi`; drop sn_setpen's
 call from snp_pcard and I reads white; draw the notches as paper (snp_put's
-titled arm) and B fails.
+titled arm) and B fails; let sn_new's `cmp al, 32` read 33 and K
+makes NOTE0033.TXT instead of saying the folder is full.
 """
 import os
 import shutil
@@ -96,6 +101,7 @@ TITLE = "Sticky Note"
 S = os88stik
 STIK_S_DIRTY = 16
 NOTES = S.STIKNOTE_DIR
+NEWMAX = 32                     # New's numbers: NOTE0001..0032, sn_used's bits
 TICK9 = (0xFF80, 0x8080, 0x8280, 0x8680, 0xCC80, 0xB880, 0x9080, 0x8080,
          0xFF80)                # snpad.inc's sn_box9x, MID's ticked box
 YELLOW, PINK, BLACK = (255, 255, 85), (255, 85, 255), (0, 0, 0)
@@ -507,7 +513,9 @@ def px(fb, x, y):
 def fill_notes(path, count):
     """`count` EMPTY notes, NOTE0001.TXT up, written straight into the free
     slots of SYSTEM/APPDATA/NOTES on a FAT12 image - an empty file has no
-    cluster, so only its directory entry is written."""
+    cluster, so only its directory entry is written. When the folder has too
+    few, it GROWS as the kernel grows one (SPEC.md 18.5.2): a zeroed free
+    cluster linked onto its chain, in every FAT."""
     img = bytearray(open(path, "rb").read())
     bps, spc, rsvd, nfat, nroot, _tot, _med, fatsz = \
         struct.unpack_from("<HBHBHHBH", img, 11)
@@ -518,6 +526,24 @@ def fill_notes(path, count):
         o = rsvd * bps + c * 3 // 2
         v = struct.unpack_from("<H", img, o)[0]
         return (v >> 4) if c & 1 else (v & 0xFFF)
+
+    def setc(c, val):
+        for f in range(nfat):
+            o = (rsvd + f * fatsz) * bps + c * 3 // 2
+            v = struct.unpack_from("<H", img, o)[0]
+            v = (v & 0x000F) | (val << 4) if c & 1 else (v & 0xF000) | val
+            struct.pack_into("<H", img, o, v)
+
+    def grow(c):
+        last = c
+        while nxt(last) < 0xFF8:
+            last = nxt(last)
+        ncl = (len(img) - data0) // (spc * bps) + 2
+        new = next(k for k in range(2, ncl) if nxt(k) == 0)
+        base = data0 + (new - 2) * spc * bps
+        img[base:base + spc * bps] = bytes(spc * bps)
+        setc(new, 0xFFF)
+        setc(last, new)
 
     def slots(c):
         out = []
@@ -537,9 +563,9 @@ def fill_notes(path, count):
     c = find(slots(c), "APPDATA")
     c = find(slots(c), "NOTES")
     free = [o for o in slots(c) if img[o] in (0, 0xE5)]
-    if len(free) < count:
-        raise SystemExit("NOTES has %d free slots, not %d" % (len(free),
-                                                              count))
+    while len(free) < count:
+        grow(c)
+        free = [o for o in slots(c) if img[o] in (0, 0xE5)]
     for k in range(count):
         e = bytearray(32)
         e[0:11] = ("NOTE%04d" % (k + 1) + "TXT").encode()
@@ -552,7 +578,7 @@ def fill_notes(path, count):
 def vga(tmp):
     img = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
-    fill_notes(img, S.STIKNOTE_SLOTS - 3)       # '.', '..', WELCOME.TXT
+    fill_notes(img, NEWMAX)                     # every number New may use
     with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         n = Note(ui, tmp)
         m = n.m
@@ -592,14 +618,14 @@ def vga(tmp):
 
         print("K: a full folder")
         s = n.st()
-        check(s["n"] == S.STIKNOTE_SLOTS - 2, "thirty notes counted (%d)"
+        check(s["n"] == NEWMAX + 1, "thirty-three notes counted (%d)"
               % s["n"])
         before = set(o.i for o in ui.windows())
         n.press(n.at(S.STIKNOTE_PLUSX + 2, g["HY"] + 3))
         said = ui.wait_toast(says="full", limit=60)
         check("Notes folder is full" in said, "`+` says %r" % said)
         os88marty.guest_sleep(m, 2.0)
-        check(n.editor(before) is None and n.st()["n"] == S.STIKNOTE_SLOTS - 2,
+        check(n.editor(before) is None and n.st()["n"] == NEWMAX + 1,
               "and nothing was made or opened")
 
 

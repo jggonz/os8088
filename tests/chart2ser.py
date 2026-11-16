@@ -99,11 +99,12 @@ def main():
     s16 = lambda v: v - 0x10000 if v & 0x8000 else v
 
     with os88ui.boot(os.path.join(ROOT, "build", "os8088-360.img"),
-                     apps=DISK, machine="os8088_xt_vga") as ui:
+                     apps=DISK, machine="os8088_xt_vga",
+                     quick=True) as ui:    # SOAK-SPEED 12
         m = ui.m
         w = ui.path("B:/CHART.O88")
         seg = os88marty.pkg_live(m, w, ui.sym)
-        ui.settle()
+        ui.still(0)
 
         rd = lambda s: u16(m.readseg(seg, S[s], 2))
 
@@ -115,7 +116,7 @@ def main():
         def load(doc):
             ui.menu_pick("File", "Open...")
             ui.chooser_open(doc)
-            ui.settle()
+            ui.still(0)
             return (rd("ct_tcnt"), rd("ct_mincol"),
                     rd("ct_t2cnt"), rd("ct_mincol2"))
 
@@ -191,7 +192,7 @@ def main():
         # as - it is simply still zero, which is what this check first read
         # and wrongly reported as a shared maximum.
         ui.menu_pick("Gallery", "Scatter", limit=60.0)
-        ui.settle()
+        ui.still(0)
         mx1, mx2 = rd("ch_max"), rd("ch_max2")
         check(mx1 != mx2 and mx2 != 0, "5 SCALES",
               "ch_max and ch_max2 are INDEPENDENT. 82.8: a scatter's axes "

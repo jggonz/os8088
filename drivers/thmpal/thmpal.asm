@@ -112,29 +112,21 @@ TV_NBTN     equ 2
 ; tv_entry - the one door (sv_entry's shape, SPEC.md 79.3)
 ; in:  AL = THMV_*, DS = CS, ES = KERNEL_SEG, SS = LOW_SEG
 ; out: CF as the verb documents; every register but AX preserved
+;
+; THE SHARED PROLOGUE AND LADDER, which SAVER.DRV's own door cannot take
+; because its frame verb arrives on every UI pass: this one's three verbs come
+; twice a panel session (driver size pass 1). os88_ent banks AX as well, which
+; the contract allows, and neither it nor the pops moves a flag.
 ; =============================================================================
 tv_entry:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent
     push es
     call tv_disp
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp os88_r_es
 
 tv_disp:
-    cmp al, THMV_OPEN
-    je tv_do_open
-    cmp al, THMV_BUSY
+    cmp al, THMV_BUSY           ; the three verbs in numeric order: one compare
+    jb tv_do_open               ; splits OPEN (0) from BUSY (1)
     je tv_do_busy
     cmp al, THMV_CLOSE
     je tv_kill
@@ -143,15 +135,11 @@ tv_disp:
 
 ; -----------------------------------------------------------------------------
 ; tv_do_busy - may our image be freed? (sv_do_busy's shape, SPEC.md 79.8)
-; out: CF = 1 = no
+; out: CF = 1 = no. `neg` sets CF exactly when the window word is not zero
 ; -----------------------------------------------------------------------------
 tv_do_busy:
-    cmp word [tv_win], 0
-    je .free
-    stc
-    ret
-.free:
-    clc
+    mov ax, [tv_win]
+    neg ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -186,15 +174,13 @@ tv_do_open:
     mov ah, al
     and al, 1
     mov [tv_stripes], al
-    mov al, ah
-    shr al, 1
-    and al, 1
-    mov [tv_classic], al
-    mov [tv_classic_box+OS88UI_CK_ON], al
-    mov al, [tv_stripes]        ; the style radio: Windows when it is live,
-    cmp ch, THM_WIN             ; else Solid or Stripes off bit 0
-    jne .style_ready
-    mov al, TV_STY_WIN
+    shr ah, 1
+    and ah, 1
+    mov [tv_classic], ah
+    mov [tv_classic_box+OS88UI_CK_ON], ah
+    cmp ch, THM_WIN             ; the style radio: Windows when it is live,
+    jne .style_ready            ; else Solid or Stripes off bit 0, which AL
+    mov al, TV_STY_WIN          ; still is
 .style_ready:
     mov [tv_live_style], al
     xor ah, ah
@@ -210,38 +196,27 @@ tv_do_open:
     call OSAPI_WM_CREATE
     jc .no
     mov [tv_win], bx
-    mov ax, tv_up                ; SPEC.md 13.7/13.8.1: NOT template words, so
-    call OSAPI_WM_ONMOUSEUP      ; a window installs them itself after create
-    mov ax, tv_drag
-    call OSAPI_WM_ONDRAG
-    mov ax, tv_close
-    call OSAPI_WM_ONCLOSE        ; what makes this image safe to free (header)
-    mov byte [tv_down], 0
     xor ax, ax
+    mov [tv_down], al
     call os88ui_arm              ; a window reopened mid-gesture must not come
 .show:                           ; up with one armed for the next release
     call OSAPI_WM_SHOW
-    clc
-    ret
-.no:
-    stc                          ; nothing was changed yet: nothing to undo
-    ret
+    CLC_OR_STC .no               ; ...and a refusal: nothing was changed yet,
+    ret                          ; so there is nothing to undo
 
 ; -----------------------------------------------------------------------------
 ; tv_kill - destroy the window if it exists (sc_kill's shape)
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 tv_kill:
-    push ax
     push bx
-    mov bx, [tv_win]
+    xor bx, bx                   ; the window, and 0 in its place
+    xchg bx, [tv_win]
     or bx, bx
     jz .out
-    mov word [tv_win], 0
     call OSAPI_WM_DESTROY
 .out:
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -251,11 +226,7 @@ tv_kill:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 tv_install:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
+    call os88_ent
     push es
     mov bx, KERNEL_SEG
     mov es, bx
@@ -271,13 +242,7 @@ tv_install:
     mov cx, THM_PRESET_ROWB
     cld
     rep movsb                   ; DS = ours, ES = the kernel's: no override
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; tv_apply - show what the window says: [tv_sel], the style radio, the 95 box.
@@ -287,11 +252,19 @@ tv_install:
 ; refusal this answers by putting the radio back and saying why at the click
 ; that asked for it (SPEC.md 76.14.10).
 ; out: nothing (all registers preserved)
+;
+; The style byte the kernel expects is the 95 box in bit 1, the stripes in
+; bit 0 and Windows in bit 2 (tv_stylebits_get, with this one caller).
 ; -----------------------------------------------------------------------------
 tv_apply:
     push ax
-    call tv_stylebits_get
-    mov ah, al
+    mov ah, [tv_classic]
+    shl ah, 1
+    or ah, [tv_stripes]
+    cmp byte [tv_styles+OS88UI_RD_SEL], TV_STY_WIN
+    jne .bits
+    or ah, 4
+.bits:
     mov al, [tv_sel]
     call tv_install
     mov byte [tv_chg], 1
@@ -303,7 +276,7 @@ tv_apply:
     mov [tv_styles+OS88UI_RD_SEL], ax
     call tv_nowin
 .live:
-    mov ax, [tv_styles+OS88UI_RD_SEL]
+    mov al, [tv_styles+OS88UI_RD_SEL]
     mov [tv_live_style], al
     pop ax
     ret
@@ -319,12 +292,12 @@ tv_apply:
 ; -----------------------------------------------------------------------------
 tv_cancel:
     push ax
-    cmp byte [tv_chg], 0
-    je .out
-    mov byte [tv_chg], 0
-    mov al, [tv_opreset]
-    mov ah, [tv_ostripes]
-    call tv_install
+    mov al, 0                   ; the flag read and cleared in one
+    xchg al, [tv_chg]
+    or al, al
+    jz .out
+    mov ax, [tv_opreset]        ; AL = the preset, AH = the style bits: the
+    call tv_install             ; two bytes are a pair (asserted there)
     mov al, [tv_okind]
     call OSAPI_THM_SET
     jnc .out
@@ -381,13 +354,14 @@ tv_layout:
 
 ; -----------------------------------------------------------------------------
 ; tv_paint - W_PAINT (content already white-filled, lock held)
+;
+; The three painters below are this routine's alone (and tv_btns tv_setdown's
+; too, which banks the same way), so none of them banks a register this one
+; has already banked: each keeps DI and BP, which the next one reads.
 ; -----------------------------------------------------------------------------
 tv_paint:
     call os88_ent
-    mov bx, [tv_win]
-    call OSAPI_WM_CONTENT        ; nothing after this needs the ORIGINAL
-    mov di, ax                   ; CX/DX, so the plain call is enough here
-    mov bp, dx
+    call tv_layout
     call tv_list_paint
     call tv_style_paint
     call tv_btns
@@ -419,111 +393,70 @@ tv_style_layout:
     pop ax
     ret
 
+; tv_style_paint - the heading, the radio group and the 95 box; keeps DI, BP
+; (os88ui_rad and os88ui_chk keep every register, and FONT_RUN does)
 tv_style_paint:
-    push ax
-    push bx
-    push cx
-    push dx
     push di
-    push si
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, (CWHITE << 8) | CBLACK
     mov si, tv_s_style
     mov cx, di
     add cx, TV_TXX
     mov dx, bp
     add dx, TV_SHY
-    push di
-    push bp
     call OSAPI_FONT_RUN
-    pop bp
-    pop di
     call tv_style_layout
     mov bx, tv_styles
     xor di, di
     call os88ui_rad
-    mov bx, tv_classic_box
-    mov al, [tv_styles+OS88UI_RD_SEL]
-    cmp al, TV_STY_WIN
-    je .classic_enabled
+    mov bx, tv_classic_box      ; DI is still 0 - live - unless the style is
+    cmp byte [tv_styles+OS88UI_RD_SEL], TV_STY_WIN  ; not Windows
+    je .classic_draw
     mov di, OS88UI_DIS
-    jmp short .classic_draw
-.classic_enabled:
-    xor di, di
 .classic_draw:
     call os88ui_chk
-    pop si
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; tv_list_paint - all eight rows, the selected one filled
 ; in:  DI = content left, BP = content top (screen); gfx lock held
-; out: nothing (all registers preserved)
+; out: nothing; keeps DI and BP
+;
+; BX walks the rows' tops a pitch at a time, so no row multiplies.
 ; -----------------------------------------------------------------------------
 tv_list_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     xor cx, cx                   ; CX = row 0..7
+    mov bx, bp
+    add bx, TV_L0Y               ; BX = this row's top, screen y
 .row:
-    mov al, cl
-    mov ah, TV_LROWH
-    mul ah                       ; AX = row * TV_LROWH, <= 99
-    add ax, TV_L0Y
-    add ax, bp                   ; AX = this row's top, screen y
-    mov [tv_rowy], ax
-
+    mov si, cx
+    add si, si                   ; word index into tv_names
+    mov si, [si+tv_names]
+    mov ax, (CWHITE << 8) | CBLACK  ; ink, paper for a plain row
     cmp cl, [tv_sel]
-    jne .plain
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    jne .text
+    call OSAPI_SET_COLOR         ; AL = CBLACK, the bar's colour
     push cx                      ; the fill wants AX/BX/CX/DX: bank the loop
     mov ax, di                   ; counter across it
     add ax, TV_LX
-    mov bx, [tv_rowy]
     mov cx, ax
     add cx, TV_LW - 1
     mov dx, bx
     add dx, TV_LROWH - 1
     call OSAPI_GFX_FILL
     pop cx
-    mov al, CWHITE                ; ink, paper for the text pass below
-    mov ah, CBLACK
-    jmp short .text
-.plain:
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, (CBLACK << 8) | CWHITE  ; ink, paper for the text pass below
 .text:
-    push ax                      ; bank ink/paper across the name lookup
-    mov bl, cl
-    mov bh, 0
-    add bx, bx                   ; word index into tv_names
-    mov si, [bx+tv_names]
-    pop ax
     push cx
     mov cx, di
     add cx, TV_TXX
-    mov dx, [tv_rowy]
-    add dx, TV_TXDY
+    lea dx, [bx + TV_TXDY]
     call OSAPI_FONT_RUN
     pop cx
-
+    add bx, TV_LROWH
     inc cx
     cmp cx, TV_NPRESET
     jb .row
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -549,7 +482,7 @@ tv_click:
     call os88ui_radhit
     jc .list
     jnz .out                      ; same/disabled style: no appearance change
-    mov ax, [tv_styles+OS88UI_RD_SEL]
+    mov al, [tv_styles+OS88UI_RD_SEL]
     cmp al, TV_STY_WIN
     je .apply                     ; Windows keeps the stripes choice it had
     mov [tv_stripes], al
@@ -558,6 +491,16 @@ tv_click:
     mov al, [tv_classic_box+OS88UI_CK_ON]
     mov [tv_classic], al
     jmp short .apply
+
+.btn:                             ; --- a button? THE PRESS ONLY ARMS
+    call tv_bhit
+    or al, al
+    jz .out
+    xor ah, ah
+    call os88ui_arm
+    call tv_setdown
+    jmp short .out
+
 .list:
     mov ax, dx
     sub ax, bp
@@ -576,71 +519,40 @@ tv_click:
     call tv_apply
     ; OSAPI_THM_SET posts one complete repaint in the same UI pass. Painting
     ; all rows here duplicates that work and leaves old highlight tails.
-    jmp short .out
-
-.btn:                             ; --- a button? THE PRESS ONLY ARMS
-    call tv_bhit
-    or al, al
-    jz .out
-    xor ah, ah
-    call os88ui_arm
-    call tv_setdown
 .out:
     jmp os88_r_bp
-
-; Return the persisted style byte expected by the kernel API.
-tv_stylebits_get:
-    mov al, [tv_classic]
-    shl al, 1
-    or al, [tv_stripes]
-    cmp byte [tv_styles+OS88UI_RD_SEL], TV_STY_WIN
-    jne .out
-    or al, 4
-.out:
-    ret
 
 ; -----------------------------------------------------------------------------
 ; tv_bhit - which button is the SCREEN point (CX, DX) in? AL = 0 for neither
 ; in:  CX = x, DX = y; DI = content left, BP = content top (tv_layout's)
+; out: AL; clobbers AH, CX, DX, SI. BX IS KEPT: tv_up and tv_drag hold the
+;      armed control in BL across it (sc_bhit's shape)
 ; -----------------------------------------------------------------------------
 tv_bhit:
-    push bx
-    push cx
-    push dx
-    push si
     mov ax, dx
     sub ax, bp
     cmp ax, TV_BY
     jl .none
     cmp ax, TV_BY + TV_BH
     jge .none
-    mov si, cx
-    sub si, di
-    xor cx, cx
+    sub cx, di
+    mov si, tv_btnx
+    mov dl, 1                    ; the ids are the table's index plus one
 .b:
-    mov bx, cx
-    add bx, bx
-    mov ax, [bx+tv_btnx]
-    cmp si, ax
+    lodsw
+    cmp cx, ax
     jl .next
     add ax, TV_BW
-    cmp si, ax
+    cmp cx, ax
     jl .hit
 .next:
-    inc cx
-    cmp cx, TV_NBTN
-    jb .b
+    inc dx
+    cmp dl, TV_NBTN
+    jbe .b
 .none:
-    xor al, al
-    jmp short .out
+    xor dl, dl
 .hit:
-    mov ax, cx
-    inc al                       ; the ids are the table's index plus one
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    xchg ax, dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -659,16 +571,18 @@ tv_setdown:
 ; -----------------------------------------------------------------------------
 ; tv_up - W_ONMOUSEUP (SPEC.md 13.7): Apply and Cancel fire HERE
 ; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = the window
+;
+; os88ui_fire's answer is held in BL across tv_layout and tv_bhit, which both
+; keep BX - sc_up's shape, where a byte of memory used to bank it.
 ; -----------------------------------------------------------------------------
 tv_up:
     call os88_ent
     call os88ui_fire              ; AX = what the press armed, cleared
     or ax, ax
     jz .out
-    mov [tv_armed], al
+    mov bl, al
     call tv_layout                ; DI/BP set; CX/DX still the release's own
     call tv_bhit                  ; ...against a FRESH hit at the release
-    mov bl, [tv_armed]
     cmp al, bl
     jne .slid
     mov byte [tv_down], 0
@@ -706,63 +620,36 @@ tv_drag:
 
 ; -----------------------------------------------------------------------------
 ; tv_key - W_ONKEY: AL = ascii, AH = scan, SI = the window
-; Escape cancels, Return applies - the same two doors the buttons are.
+; Escape cancels, Return applies - the same two doors the buttons are, and
+; Escape's is Return's with the cancel in front of it.
 ; -----------------------------------------------------------------------------
 tv_key:
     call os88_ent
-    cmp al, 27
-    je .esc
     cmp al, 13
     je .ret
-    jmp short .out
-.ret:
-    call tv_kill
-    jmp short .out
-.esc:
+    cmp al, 27
+    jne .out
     call tv_cancel
+.ret:
     call tv_kill
 .out:
     jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
-; tv_btns / tv_btn1 - the two buttons, drawn to follow [tv_down]
+; tv_btns - the two buttons, drawn to follow [tv_down]
 ; in:  DI = content left, BP = content top; lock held
+; out: nothing; clobbers AX, BX, CX, DX, SI - its two callers bank them
+;
+; sc_btns' shape: one record, its rect tv_r named statically, its label and
+; flags staged per button. It was tv_btns calling tv_btn1, its one caller
+; (driver size pass 1).
 ; -----------------------------------------------------------------------------
 tv_btns:
-    push ax
-    push bx
-    push cx
-    push si
-    xor cx, cx
+    xor bx, bx                   ; BX = the button's index, twice
 .b:
-    push cx
-    mov bx, cx
-    add bx, bx
     mov ax, [bx+tv_btnx]
     add ax, di
     mov si, [bx+tv_btnl]
-    inc cl
-    call tv_btn1
-    pop cx
-    inc cx
-    cmp cx, TV_NBTN
-    jb .b
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; in: AX = its left edge (screen), SI = the label, CL = its control id
-tv_btlbl: dw 0
-tv_btflg: dw 0
-tv_btrec: dw 0, tv_btlbl, tv_btflg, 1, 0, 0, 0, 0, 0
-
-tv_btn1:
-    push ax
-    push bx
-    push dx
-    push di
     mov [tv_r + 0], ax
     add ax, TV_BW - 1
     mov [tv_r + 4], ax
@@ -771,36 +658,45 @@ tv_btn1:
     mov [tv_r + 2], ax
     add ax, TV_BH - 1
     mov [tv_r + 6], ax
-    mov bx, tv_r
-    mov di, OS88UI_FILL          ; FILL because a RELEASE redraws this button
+    mov cx, bx                   ; the control's id is its index plus one
+    shr cx, 1
+    inc cx
+    mov dx, OS88UI_FILL          ; FILL because a RELEASE redraws this button
     cmp cl, [tv_down]            ; over a PRESSED one; on a full repaint the
     jne .up                      ; content has already been whited
-    or di, OS88UI_DOWN
+    or dx, OS88UI_DOWN
 .up:
-    push ax
-    push bx
     mov [tv_btlbl], si
-    mov [tv_btflg], di
-    mov [tv_btrec + OS88UI_BT_RECTS], bx
+    mov [tv_btflg], dx
+    push bx
     mov bx, tv_btrec
     mov al, 1
     call os88ui_btn
     pop bx
-    pop ax
-    pop di
-    pop dx
-    pop bx
-    pop ax
+    inc bx
+    inc bx
+    cmp bx, TV_NBTN * 2
+    jb .b
     ret
+
+tv_btlbl: dw 0
+tv_btflg: dw 0
+tv_btrec: dw tv_r, tv_btlbl, tv_btflg, 1, 0, 0, 0, 0, 0
+%if OS88UI_BT_RECTS != 0
+ %error "thmpal: tv_btrec names tv_r in its first word, OS88UI_BT_RECTS"
+%endif
 
 tv_r:       dw 0, 0, 0, 0
 
 ; --- the shared prologue and return ladder (drivers/os88drv.inc) -----------
     OS88_ENT
-    OS88_RET_LADDER bp
+    OS88_RET_LADDER es
 
 ; --- the window --------------------------------------------------------------
-tv_tpl:     dw TV_X, TV_Y, TV_FW, TV_FH, tv_s_title, tv_paint, tv_key, tv_click
+tv_tpl:     dw TV_X, TV_Y, TV_FW, TV_FH, tv_s_title, tv_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS tv_cls, 0, PAINT, tv_paint, ONKEY, tv_key, ONCLICK, tv_click, \
+               ONCLOSE, tv_close, ONMOUSEUP, tv_up, ONDRAG, tv_drag
 tv_s_title: db 'Color Theme', 0
 tv_s_apply: db 'Apply', 0
 tv_s_cancel: db 'Cancel', 0
@@ -814,7 +710,6 @@ tv_s_classic: db '95', 0
 TV_CLASSIC_X equ 91
 TV_CLASSIC_W equ 83
 tv_classic_box: dw 0, 0, 0, 0, tv_s_classic, 0
-tv_ostripes: db 0             ; [thm_cstrp] when the window opened (bits 0-2)
 TOASTSTR tv_s_nowin, 'Could not load WIN95.DRV'
 tv_stripes: db 0
 tv_classic: db 0
@@ -853,15 +748,16 @@ tv_down:    db 0                ; which button is drawn pressed, 0 = none -
                                  ; own convention
 tv_sel:     db 0                ; the row highlighted right now
 tv_okind:   db 0                ; [thm_kind] when the window opened
-tv_opreset: db 0                ; 'TP' byte 0 when the window opened
+tv_opreset: db 0                ; 'TP' byte 0 when the window opened...
+tv_ostripes: db 0               ; ...and [thm_cstrp] (bits 0-2): a PAIR, which
+                                 ; tv_cancel loads as one word
+%if tv_ostripes - tv_opreset != 1
+ %error "thmpal: tv_cancel loads tv_opreset and tv_ostripes as one word"
+%endif
 tv_chg:     db 0                ; 1 = something was installed since the open
 tv_row:     dw 0                ; the kernel's Color row (OPEN's SI)
 tv_cfg:     dw 0                ; drv_cfg's 'TP' record (OPEN's DI)
 tv_cbits:   dw 0                ; [thm_cstrp]'s address (OPEN's DX)
-tv_armed:   db 0                ; banked across tv_layout in tv_up (SPEC.md
-                                 ; 76.14): os88ui_fire's answer, which BL would
-                                 ; otherwise have to survive OSAPI_WM_CONTENT
-tv_rowy:    dw 0                ; tv_list_paint's own scratch: this row's top
 
 section .text
     OS88_DRV_END

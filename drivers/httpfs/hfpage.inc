@@ -138,8 +138,7 @@ hp_need:
     cmp byte [es:10], HFP_ABI   ; ...built against this table of verbs
     jne .drop
     mov ax, [es:6]
-    mov [hf_pent], ax
-    clc
+    mov [hf_pent], ax           ; (CF = 0: the equal compare)
     jmp short .back
 .drop:
     call hp_drop

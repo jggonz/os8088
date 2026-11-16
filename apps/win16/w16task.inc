@@ -877,8 +877,8 @@ w16t_hand:
     mov word [w16_titleptr], w16_wtitle
     push bx
     mov bx, [w16_win]
-    mov al, 1                       ; W_PAINT paints every pixel
-    call OSAPI_WM_OWNBG
+    mov ax, WFB_OWNBG * 256 + 1     ; W_PAINT paints every pixel
+    call OSAPI_WM_FLAG
     mov ax, w16_wtitle
     call OSAPI_WM_TITLE
     pop bx

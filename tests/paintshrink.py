@@ -109,10 +109,7 @@ def _inked(m, seg):
     one = _bss(m, seg, "pt_1bpp", 1)                # ...or ONE BIT (42.23)
     rx, ry = -1, -1
     for row in range(h):
-        off = int.from_bytes(m.read(_boff(seg, "pt_rowoff") + row * 2, 2),
-                             "little")
-        seg2 = int.from_bytes(m.read(_boff(seg, "pt_rowseg") + row * 2, 2),
-                              "little")
+        off, seg2 = dispapps.pt_row(m, lambda n: _boff(seg, n), row)
         if one:
             # 42.23.1: eight pixels a byte, bit 7 leftmost, and 1 IS white -
             # so a blank row is 0xFF here exactly as it is at 4bpp

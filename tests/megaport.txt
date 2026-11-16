@@ -18,26 +18,29 @@
 #
 # `secs` is MEASURED on the port (Bochs runs the guest at real time, so a row
 # that is guest-heavy costs more than its MartyPC figure); without one it is
-# twice the base row's. A row is listed here only once it PASSES on kern_mega
+# twice the base row's. A row's machine is capped at os88bochs.ROW_RATE x
+# real time now (4; docs/plans/soak-speed-2/bochs.md), which roughly halved
+# the rows measured there - those carry the new figure, the rest still
+# their old one, which is now generous. A row is listed here only once it PASSES on kern_mega
 # - and was seen to go red when the thing it checks was broken - or once its
 # failure is a kern_mega defect that is fixed in the same change.
 
-sheetbtn secs=60   # Sheet's dialog buttons (Goto/Format) open, close and reuse their slot
-uilayer secs=120   # every os88ui verb confirmed off guest state, and confirm-vs-settle
+sheetbtn secs=40   # Sheet's dialog buttons (Goto/Format) open, close and reuse their slot
+uilayer secs=70   # every os88ui verb confirmed off guest state, and confirm-vs-settle
 
 # DOS, CP/M AND THE NETWORK
 # On kern_mega EVERY DOS program runs on a kern_dos TRIP (the kernel parked
 # above 1MB, kern_dos in the HMA), so these are the trip's gates. The rows'
 # own fixture floppies ride B: as they are; tests/dosmap.py adds DOS_MEGA to
 # the map and resolves a region through m.lin.
-doscom secs=40   # a .COM runs on the trip: its output, PSP:0002, the desktop back
+doscom secs=20   # a .COM runs on the trip: its output, PSP:0002, the desktop back
 dosexe secs=40   # an MZ .EXE with relocations and a short last page, on the trip
 dosexec secs=40   # AH=4Bh loads a child under kern_dos and control returns
 dosfile secs=40   # the handle layer under kern_dos: 20KB written, read, seeked, grown, deleted
 dosdir secs=45 @OS88_BOCHS_TIME0=1783180800   # find, vectors, and AH=2Ah = the KERNEL's RTC date (14.77: `mul bx` ate the month); the clock PINNED at 16:00 so DOSDIR's AH=2Dh 13:45:30 always sets it BACK, and the date must still come home unmoved (14.114)
 dosdrv secs=45   # a drive letter reaches the drive it names; A: is mega.img + AONLY.TXT
 dosregs secs=40   # INT 21h hands back every register it does not answer in
-dostype secs=150   # TYPE/COPY/VER at the windowed prompt, the console buffer by selector
+dostype secs=70   # TYPE/COPY/VER at the windowed prompt, the console buffer by selector
 dosargs secs=120   # arguments typed on the Setup page reach the program (14.77: the press reached no field)
 dossnd secs=40   # a DOS program drives the Sound Blaster itself (Bochs's SB16)
 dosxms secs=40   # AX=4300h answers 80h: kern_dos's XMS arena is REAL on kern_mega (the row's own inversion)
@@ -70,6 +73,8 @@ lzmod secs=40   # BEVERLY.MOD packed with lz4, double-clicked: Tracker's module 
 lzmod-lz4big secs=40   # ...and an LZ4 stream past 64KB (176,085 bytes) through the transparent read
 multiseg secs=50   # MSEG loads its own parts (7/7 checked three ways each) - and on kern_mega's store the OP_XMS part goes into the pool, op_seg 0, 'X', instance-owned: msegxms's facts too
 msegw secs=50   # ...the same with the carve past 64KB at both ends
+msegb secs=50   # ...and three ROWS past 64KB each, OP_BIG (SPEC.md 20.12.15): every byte compared, the lazy one fetched on a key - the copies through op_at's windows, which are selectors here
+msegbz secs=50   # ...the same compressed: OSAPI_LZ_BIG's output crossing 64KB in a conventional selector, and the plain big row moved down through op_unpack's windows
 mseglazy secs=60   # an OP_LAZY part is outside the carve, fetched on a key (its 7 LBAs off Bochs's FDC log, or served out of a read-ahead chunk a launch fill left them in - RAH_END moving past them), dropped and fetched again; the claims - mem_tab AND the pool - back as they were
 pkgmax secs=40   # a package of exactly APP_MAX_SIZE loads into one claim of exactly image + bss, 4,064 paragraphs (its mem_tab record found by the selector's base, the selector's limit 0xFDFF), I_SIZE 0xFE00, its last bss byte written, and closes clean
 pkgrun secs=50   # OSAPI_PKG_START: the image form runs one and refuses two, the by-name form runs two more (MSEG 7/7 OK), HELLO's region byte-equal to its file
@@ -101,17 +106,22 @@ recorder secs=45   # RECORDER on Bochs's SB16: PCM_BG plays and retires, the spe
 weavesmoke secs=120   # WEAVE opens FORM.WAB at the standard rect with weavesim's VGA cell grid (80x52), title, edges, ink in bands - on the glass, thresholded (VGA leg only)
 weavepack secs=200   # LOOM packs every demo and template ON kern_mega byte-identical to weavesim --pack, read back off the guest's floppy
 weavesession secs=70   # a scripted WEAVE session (type, click, script, formula) against weavesim's oracle, VGA leg
-chartread secs=150   # CHART's SYLK, DIF and BIFF readers draw one chart (CHART and SHEET above 1MB)
+chartread secs=110   # CHART's SYLK, DIF and BIFF readers draw one chart (CHART and SHEET above 1MB)
 ovlhigh secs=60   # CWORD's overlay part claimed TOP-DOWN, packed under the ceiling, MOVABLE - unchanged on kern_mega's conventional arena
-sheetfmt secs=300   # SHEET's three file formats round-trip what they mean; the CGA-pinned menu/chooser/folder points moved by their windows' measured dy on Bochs's VGA (sheetfmt.mega_y)
-sheetfunc secs=70   # all 48 text/information/transcendental functions, saved and read back on the host
-sheeteval secs=80   # what SHEET's evaluator answers, 102 checks by the host
-sheetxl2 secs=90   # SHEET opens Excel 2.1's own BIFF2 files (arm A; arm B skips without the archive, as on MartyPC)
+sheetfmt secs=80   # SHEET's three file formats round-trip what they mean; the CGA-pinned menu/chooser/folder points moved by their windows' measured dy on Bochs's VGA (sheetfmt.mega_y)
+sheetfunc secs=45   # all 48 text/information/transcendental functions, saved and read back on the host
+sheeteval secs=50   # what SHEET's evaluator answers, 102 checks by the host
+sheetxl2 secs=60   # SHEET opens Excel 2.1's own BIFF2 files (arm A; arm B skips without the archive, as on MartyPC)
 scsize secs=130   # SCRIBE's parts and claims (heapmap's kern_mega pool: the region and its three claims above 1MB), round trips, picture, TOOBIG, sort, undo
 gbsave secs=160   # RealDMG's ARM: battery RAM and MBC3 clock saved on close (GBSAVE.SAV) and read back on a second boot; red with rw_onclose answering without writing
 gbship secs=90   # RealDMG's ARM opens the SHIPPED packed MEDIA/GBDEMO.GB off megaapps.img and the game runs (rw_czprobe: a packed cart never takes the in-place bank cache's raw READ_SEQ); red with the base's megaapps.img (--apps): 'not a GB ROM', no frame
 wirefleetdeploy secs=60   # WireFleet deployment, refusals, rotation, removal, auto, Ready, button cancel, About - the VGA leg (Bochs has no CGA/Hercules)
-chartgal secs=600   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
+walift secs=90   # WireArena's lift and tower ride on kern_mega: the shipped WIRERENA.O88 off its own disk (B:), the region and its parts selectors (op_seg, op_cseg); red: the base row's
+wamodes secs=185   # WireArena's modes on one machine: the setup's arena lists by mode, Win at, team deathmatch and the rotation's next arena loaded as a part - the renderer far-called by its code selector throughout; red on its own before wa_rpaint gave SI back (FAULT 00 in wm_ptr2idx at the Rotation window's keys)
+waroutes secs=160   # WireArena's bots walk the Heights arena's route graph - a branch at every node, the lift ridden - at the detail level a 386 picks (High, by CPU_INFO); red: the base row's
+wabots secs=185   # WireArena's bots see, face, shoot and hunt under protected mode; red: the base row's
+wabotarms secs=145   # WireArena's bots arm themselves and use their arms; red: the base row's
+chartgal secs=100   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
 
 # WINDOW MANAGER AND INPUT
 dispclose secs=45   # closing ASKS: W_ONCLOSE, the deferred OSAPI_WM_CLOSE, os88ui_ask's alert through every branch, NOTES.TXT read off the floppy (VGA leg); red: Note Pad re-assembled with np_onclose's `jnc .go` a `jmp .go` (a dirty note closes unasked)
@@ -165,7 +175,7 @@ fdlgchoose secs=120   # the Standard File chooser end to end through Note Pad
 fdlggrey secs=60   # the chooser's default button greyed with nothing selected; from the root of B: under Bochs, MEDIA overflowing the 1.44MB disk's list
 sbardlg secs=60   # the chooser's scroll bar at the list's right edge
 facescan144 secs=40   # ty_scan walks to SYSTEM/FONTS - the 1.44MB leg, which is kern_mega's only system disk (facescan's 360KB one has no faces and tests the other rung)
-assocopen secs=40   # opening a document draws no pixel of the Disk window; the whole double-click is os88mouse.dblclick's, queued under Bochs
+assocopen secs=15   # opening a document draws no pixel of the Disk window; the whole double-click is os88mouse.dblclick's, queued under Bochs
 assocwake secs=60   # a document launch draws the program's window before reading the document; the glass is fbuf under Bochs
 assocfind secs=90   # an unclaimed extension is looked for, the search's disk reads counted
 assocflush secs=480   # what the machine learns is written back to ASSOC.DAT, across five boots; the .cold flush breakpoints above 1MB here
@@ -247,7 +257,7 @@ vesashut secs=40   # Shut Down on the VESA desktop: every driver detached (vx_de
 # block" are asked of the paragraph under each word (sheetmove.seg_key).
 regmove secs=100 @OS88_BOCHS_MEGS=1   # Note Pad's REGION moves in the descending pass: its selector rebased, W_SEG/I_SPTR/owners naming the new paragraph, image and picture intact (found tests/filler's BX: 14.90)
 rdmove secs=90 @OS88_BOCHS_MEGS=1   # the RAM disk's STORE ([rd_arena], a selector: its paragraph read through the LDT) slides DOWN into the hole heapfrag A leaves, bytes hashed the same, and D: still mounts; red on a HEAPCOMPACT=0 kern_mega (OS88_MEGA_BUILD=its tree): 'arena moved NO'
-sheetmove secs=95 @OS88_BOCHS_MEGS=1   # a LIVE Sheet's six declared claims (~99KB, the tree's largest holder) slide down under it: every word follows (the paragraph under each selector), hashes, sh_noteseg's carve, the staging, the repaint and the grow box; red on a HEAPCOMPACT=0 kern_mega: 'a declared claim moved NO'
+sheetmove secs=100 @OS88_BOCHS_MEGS=1   # a LIVE Sheet's six declared claims (~99KB, the tree's largest holder) slide down under it: every word follows (the paragraph under each selector), hashes, sh_noteseg's carve, the staging, the repaint and the grow box; red on a HEAPCOMPACT=0 kern_mega: 'a declared claim moved NO'
 paintmove secs=90 @OS88_BOCHS_MEGS=1   # a LIVE Paint canvas slides down under it: the paragraph under [pt_base] follows, the bytes hash the same, the row table's deltas and the undo delta hold, and the raise repaints the same picture off the glass (Paint shoved clear of heapfrag on 640x480); red on a HEAPCOMPACT=0 kern_mega: 'canvas moved NO'. Check 5 reads the glass here: with heapfrag's old paint, a figure line drawn below its frame, it goes red at x 154..191, y 284..290 - as kern_big on os8088_xt_vga does
 drvmove secs=45 @OS88_BOCHS_MEGS=1   # the RAM disk's IMAGE moves; no kernel word names the old paragraph, and int 33h planted as a REAL vector follows it (mem_ivt_relocf, 14.90)
 sndmove secs=70 @OS88_BOCHS_MEGS=1   # SOUND.DRV's image moves on Bochs's SB16: the IVT's IRQ5 rows (0Dh and 25h) follow it - they did not before 14.90 - and the IDT gate lands the image's distance on
@@ -301,14 +311,14 @@ deskwhole secs=190 +--machine +os8088_xt_vga   # wm_dmg_gray's .whole reached on
 clipgrow secs=90   # a caption beside a covering window's corner keeps every row (the Calculator covers on a 640 glass)
 dockpos secs=90 ---cga   # the Dock on every edge and hidden: band, rule, glass against a repaint, the hover strip and its linger (DOCK.DRV's claim found in the pool by linear base; the CGA leg is a 200-row question)
 btnall secs=200   # every converted button driven: aimed after a paint, sane rects, a press arms, a slide-off un-arms (DOS_MEGA / PKG_MEGA maps)
-sheetmtailvga secs=100   # SHEET's pulldown save-under on the four-plane path, and the repaint fallback beside it
-czto secs=260   # Uncompress To...: the join asks for each floppy, swapped under the running machine (the shim's `mount`), refusals, a CRC error by `setreg flags`
+sheetmtailvga secs=60   # SHEET's pulldown save-under on the four-plane path, and the repaint fallback beside it
+czto secs=100   # Uncompress To...: the join asks for each floppy, swapped under the running machine (the shim's `mount`), refusals, a CRC error by `setreg flags`
 imgswap secs=60   # an image on a floppy is swapped WITH that floppy: the stand re-reads it off the other disk and the write goes nowhere
 lzcomp secs=270   # File > Compress byte for byte against the host's LZB; an uncompressed package compressed and launched in protected mode too (KERN-MEGA-PLAN 14.116), an already-packed one 'Already compressed' (14.100)
 rdup secs=130   # the RAM disk's page acts on the RELEASE: +, Load, Mount, Preserve As
 rdpreserve secs=240   # the RAM disk's Preserve and Load round-tripped and read from the host (RAMDISK.DRV and its store through selectors)
 lzmod-dialog secs=40   # BEVERLY.MOD through Tracker's file dialog: the module claim holds all 116,085 bytes
-sheetdel secs=100   # SHEET's File > Delete: No keeps the file, Yes deletes it, the open document untouched (the CGA points moved to Bochs's VGA)
+sheetdel secs=70   # SHEET's File > Delete: No keeps the file, Yes deletes it, the open document untouched (the CGA points moved to Bochs's VGA)
 msegz secs=30   # the seven parts with two COMPRESSED: op_unpack through kern_mega's selectors, the same three proofs a part
 mseglzslack secs=30   # a compressed lazy part keeps its own length at its claim's base (claims keyed by selector), and the drop gives it back
 pkgbig secs=110   # a package past 64KB is typed by PKG_FILE_HI and the loader reads 32 bits of its size
@@ -370,16 +380,16 @@ tankspawn secs=80   # no TANK round starts inside a piece, and a player poked in
 timerbounce secs=50   # TIMER and BOUNCE as packages: seconds advance, digits on the glass, Stop/Start, Bounce's worker and square
 cycplay secs=40   # a kill scores what cy_kindsc says, the zapper recharges and says so, a death keeps the wave; red with shl bx,1 out (tanker 25,600) - the spawn tick patched at the TITLE on Bochs
 tgui secs=60 +--card +vga   # TameGram's every key, both menus and both panels, read out of its bss through m.lin
-chartname secs=100   # CHART charts the range Sheet NAMED (Data > a name), not the lowest column (CHART above 1MB)
+chartname secs=60   # CHART charts the range Sheet NAMED (Data > a name), not the lowest column (CHART above 1MB)
 isotronrules secs=60   # six-tier seeded games round for round against tools/isotronsim.py, the script and the keyboard; the model's other rule must disagree (its own negative control)
-sheetsize secs=90   # SHEET resizes and its grid re-lays itself to the new box, the floor, and back
-sheetask secs=70   # SHEET asks before closing modified work, and Discard closes
-sheetsort secs=300   # Sort orders every kind of constant and an error constant stays one; Edit and Data at sheetfmt.mega_y
-sheetundo secs=300   # Edit > Undo and Redo, one level as Excel 2.1, read off the VGA glass and a SYLK save; Edit at sheetfmt.mega_y
+sheetsize secs=75   # SHEET resizes and its grid re-lays itself to the new box, the floor, and back
+sheetask secs=60   # SHEET asks before closing modified work, and Discard closes
+sheetsort secs=155   # Sort orders every kind of constant and an error constant stays one; Edit and Data at sheetfmt.mega_y
+sheetundo secs=165   # Edit > Undo and Redo, one level as Excel 2.1, read off the VGA glass and a SYLK save; Edit at sheetfmt.mega_y
 gbkeys secs=80 +--only +vga   # RealDMG's ARM: the key map rebinds, refuses a reserved key, swaps, saves to REALDMG.CFG and the game reads it
 gbstate secs=160 +--package   # RealDMG's ARM: F5/F8 save states in the window and full screen, CLOCK0.SS3/.SS7 read back off the floppy
 fmpatch secs=40   # OSAPI_SND_FM verb 2 hands the driver the channel it names (a .cold breakpoint above 1MB)
-minesrc secs=60   # Minesweeper's right button: flag, toggle, the strip, a flag blocking reveal, an open cell, a background window raised - the QEMU row on the Marty API; red with mn_onrclick a bare ret
+minesrc secs=30   # Minesweeper's right button: flag, toggle, the strip, a flag blocking reveal, an open cell, a background window raised - the QEMU row on the Marty API; red with mn_onrclick a bare ret
 weavegrid secs=70   # WEAVE's SHEET grid against weavesim's vga model, the edit's damage exactly the changed rows
 weavegfx secs=110   # FORM's and SHEET's cards against weavesim's vga render (a boot a bundle: no snapshot on Bochs)
 vidplayvga secs=150   # the Video Player ARM plays lin80 full screen, every hold the decode, the ring K at 2 then 8, on its BIOS ticks (the copying arm; the last hold one frame early)
@@ -389,7 +399,7 @@ vidthumb secs=50   # the thumb on the bar walks with the play, read off plane 0
 vidresidentvga secs=50   # a RESIDENT file: the block in its claim byte for byte, no ring, every hold on two laps
 vidlivevga secs=100   # Live plays in the window on VGA and the screen is the file's
 vidpage secs=90   # a PAGE-AHEAD file: every hold across both flips is the clip, and from key 1 (the CRTC reads are MartyPC's)
-vidfskeysvga4 secs=60   # mode 12h full screen with the keys: four planes saved and the window back
+vidfskeysvga4 secs=35   # mode 12h full screen with the keys: four planes saved and the window back
 mrdrawvga secs=90   # MIDIRack's ARM: each gesture's UI-task drawing calls under its ceiling, and the incremental picture IS a repaint's
 midirackend secs=130   # MIDIRack's ARM on Bochs's FM chip: INTRO loops, then Loop off ends the playlist
 pxfolder secs=130   # PiXEL's ARM: the folder, Prev, Next and the slideshow, no claim left behind - its claims counted in mem_tab AND the pool by selector (the callback ceiling is MartyPC's: Bochs's cycles are its running time)
@@ -414,7 +424,8 @@ doscon secs=100   # DOSHELLO's own lines land in the console between `Starting` 
 # IRQ - unless its comment says the break is not cheap.
 dockmark secs=30 OS88_MEGA_EMU=86box   # the extended desktop's dock strip (CGA + Hercules) marks only windows drawn under, both cards match a forced repaint; red: REDRAWFULL=1's kern_mega (OS88_MEGA_BUILD=its tree) marks A
 dispseam secs=120 OS88_MEGA_EMU=86box   # the cell a display seam crosses is whole, CGA primary (seam 640) and Hercules primary (720, MR BIOS's Primary Video = Monochrome); red: its own NOSEAMCUT=1 kern_mega arm loses 18 px
-disptitle secs=60 OS88_MEGA_EMU=86box   # a BAND=1 title bar straddling a VGA and a Hercules has one ground per display; red not cheap (the per-column polarity fix has no knob, and stubbing the composer moves both references alike)
+disptitle secs=130 OS88_MEGA_EMU=86box   # (251 host s alone on 86Box, measured 2026-11-15; 60 timed out at 271 CPU s in the soak) a BAND=1 title bar straddling a VGA and a Hercules has one ground per display; red not cheap (the per-column polarity fix has no knob, and stubbing the composer moves both references alike)
+wamono secs=20 OS88_MEGA_EMU=86box   # WireArena on a Hercules draws MONOCHROME attributes: [wa_mono] off OSAPI_FSX_CAPS's kind, since FSI_SEG is a SELECTOR on kern_mega and never B000h; red on the shipped source before the fix ([wa_mono] 0, 134 wall cells underlined)
 runclip secs=40 OS88_MEGA_EMU=86box   # a text run a window edge cuts is not drawn over the window, on the Hercules (font_run_cell's column mask); red: POKE font_run_cell.store-2=9090 (the merge skipped)
 vidcard secs=30 OS88_MEGA_EMU=86box   # the Video Player's info card: OSAPI_WM_RESIZE hides the pointer, the caption names the video; red: POKE cur_unlazy=c3 (its documented break, the slot straight at wm_resize, no longer reproduces on kern_big or kern_mega)
 vidwin secs=40 OS88_MEGA_EMU=86box   # VIDEO.O88 plays in its window on the Hercules, every frame, the thumb, a click pauses; the 8088's mute verdict handed over (a 286 plays the clip's PCM8 and the card would be the clock); red: POKE gfx_blit1=f8c3

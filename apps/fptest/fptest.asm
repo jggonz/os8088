@@ -55,7 +55,9 @@ fpt_ret:
 
 fpt_tpl:
     dw 40, 40, FPT_W, FPT_H
-    dw fpt_title, fpt_paint, 0, 0
+    dw fpt_title, fpt_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fpt_cls, 0, PAINT, fpt_paint
 
 fpt_title:  db 'FP self-test', 0
 fpt_s_pass: db 'ok  ', 0

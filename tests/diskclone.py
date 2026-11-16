@@ -54,6 +54,7 @@ import os88geom                                           # noqa: E402
 import os88ui                                             # noqa: E402
 from os88mouse import Mouse                               # noqa: E402
 import dispcp                                             # noqa: E402
+import modstate                                           # noqa: E402
 from harness import check, done                           # noqa: E402
 
 MACHINE = "os8088_5150_cga_gla"
@@ -157,8 +158,11 @@ class Probe:
         return b[0] | (b[1] << 8)
 
     def image(self):
-        """DISKOPS.DRV's MODR_SEG - 0 when the image is not resident."""
-        return word(self.m, self.mod_tab + MOD_DISKOPS * MODR_SIZE)
+        """DISKOPS.DRV's MODR_SEG while it is LIVE - 0 when the image is not
+        resident or rests KEPT after its drop (SPEC.md 2.8.3: the row names
+        it, its slots on mod_gone; modstate.py), which is a drop all the
+        same - kern_mega's pool pair included (2.8.3.3)"""
+        return modstate.live(self.m, MOD_DISKOPS)
 
 
 def open_clone(m, mo):
@@ -230,9 +234,8 @@ def key(m, name, limit=60.0):
     M.ui_done(m, "the %s key to be handled" % name, limit=limit)
 
 
-with M.launch(SRC, apps=APPS, machine=MACHINE, boot=False) as m:
-    m.run()                             # the boot gate on STATE
-    M.kernel_up(m)
+with M.launch(SRC, apps=APPS, machine=MACHINE,
+              boot="up") as m:  # run + kernel_up
     M.no_saver(m)
     mo = Mouse(marty=m)
     p = Probe(m)

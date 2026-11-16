@@ -120,7 +120,9 @@ rp_worker:
 
 rp_tpl:
     dw 120, 40, 200, 60
-    dw rp_title, rp_paint, 0, 0
+    dw rp_title, rp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rp_cls, 0, PAINT, rp_paint
 
 rp_title:   db 'Reg Pair', 0
 rp_s_line:  db 'region + worker', 0

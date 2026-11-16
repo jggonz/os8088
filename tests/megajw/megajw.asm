@@ -35,7 +35,11 @@ mj_entry:
     push di
     call OSAPI_XMEM_CAPS            ; AX = the pool's free KB
     mov [mj_res+26], ax
-    call OSAPI_MEM_AVAIL            ; AX = largest, BX = total
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = largest, BX = total, paragraphs...
+    mov cl, 6                       ; ...and the row reads KB
+    shr ax, cl
+    shr bx, cl
     mov [mj_res+28], ax
     mov [mj_res+30], bx
     xor ax, ax                      ; --- the query -------------------------
@@ -243,7 +247,9 @@ mj_hex2:
 
 mj_tpl:
     dw 8, 400, 200, 40
-    dw mj_ttl, mj_paint, 0, 0
+    dw mj_ttl, mj_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mj_cls, 0, PAINT, mj_paint
 mj_ttl:     db 'MegaJW', 0
 mj_s_e9:    db 'MEGAJW: max ', 0
 mj_s_pool:  db ' pool ', 0

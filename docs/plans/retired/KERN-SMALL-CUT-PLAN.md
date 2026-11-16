@@ -1,6 +1,116 @@
 # `kern_small` — what a 128KB machine can stop carrying
 
-> **THIS IS THE OPEN HALF. What has been BUILT is
+> **CLOSED OUT, 2026-11-10 — RETIRED, NOT COMPLETED.** The goal this plan was
+> written for was reached, but not by the route it proposed. That is why it is
+> in `docs/plans/retired/` and not `completed/`: it is not a record of how the
+> thing was built. It is kept for the lesson below.
+
+## The lesson: cutting features was not the only answer, and it was not the one that worked
+
+**The ask** was 70KB of free heap on a 128KB machine, so `kern_small` had to
+boot in 58KB. **This plan's answer**, worked out with care over several
+revisions, was that features had to go. Taking every row it listed reached
+66.5 KB. That last tier deleted the FAT write path and left five packages
+believing their saves had worked. The plan called 70KB unreachable and retired
+the target (§0, §8.1, §8.2).
+
+**What happened instead**, measured on 2026-11-10 at `kernel-size-19`
+(`e45c315`), `tests/small128.py` on MartyPC's `os8088_5150_cga_128k`, all five
+checks passing:
+
+```
+KERN_SIZE 57,856   HEAP_SEG 58.0 KB   71,680 bytes free = 70.0 KB   (69.5 usable)
+```
+
+**That is exactly the original 70KB.** The half-KB between free and usable is
+the keyboard mouse's 512-byte granule, which is held only while no pointer has
+spoken (SPEC.md 2.8.8). The plan's last measured position was 52.5 KB, its
+"every clean row" tier 58.5 KB, and its "delete everything" tier 66.5 KB. The
+tree went past all three **while keeping almost everything on the menu.**
+
+**Nearly every row is still in the kernel**, most of them smaller. Figures
+from `tools/kernsize.py --modules` and the map's symbol spans, plan figure
+first:
+
+| row | what it is | plan | today |
+|---|---|---:|---:|
+| C1 | the FAT write path (`diskw.inc`) — **files still save** | 5,077 | 3,678 code |
+| B1 | raise cache / save-under (`wm_su*`) | 2,451 | 1,800 |
+| B2 | drag cache (`wm_dc*`, `wm_cov*`) | 484 | 253 |
+| B3 | icon renderer (`icons.inc`) | 1,060 | 781 code |
+| B5 | toast (`toast.inc`) | 458 | 375 code |
+| B6 | progress widget (`fprog.inc`) | 725 | 748 |
+| B7 | screen blanker (`blank.inc`) | 148 | 119 |
+| C6 | fullscreen exclusive (`fsx.inc`) | 788 | 1,373 code |
+| C7 | the dock (`dock.inc`) | 717 | 639 code |
+| C8 | clipboard (`clip.inc`) | 159 | 138 code |
+| §3.1 | damage rects and clip region (`wm_dmg*`, `wm_clip*`) | 1,700 | 1,527 |
+| §4.1 | Disk window rename, drag, clone, more-files | 1,333 | 1,077 |
+
+**Three rows were taken, and the biggest was MOVED rather than deleted.**
+B4, the `gfx_line` family (1,503), went app-side: SPEC.md 5.12.7 moved the
+walk into `apps/os88gfx.inc`, which is §12's "better row" and not a cut.
+Paint and Cyclone still draw lines; 228 bytes of commit primitive stay in the
+kernel. A1's unreachable PCM half went, so kern_small plays no PCM, but PC
+speaker tones stay (`snd.inc` 336 against 1,110). C5 and the D batch were
+already built when this plan last stood.
+
+**The ~18 KB came from size passes 6–19**
+(`docs/plans/completed/HANDOFF-KERNEL-SIZE-P7.md` through `-P20.md`). Their
+briefs were "bytes only": the same features in fewer bytes, on hot paths
+without losing speed. The later passes also cashed in the ABI breaks collected
+in `docs/plans/ABI-BREAK-LIST.md` (pass 19: `PKG_FMT` 10 → 13). `KERN_SIZE`
+went down by passes: 71,168 → 70,656 (P7) → 67,584 (P9) → 65,536 (P10) →
+63,488 (P11) → 60,928 (P14) → 59,392 (P18) → 57,856 (P20). Against the
+section sizes in §1:
+
+| section | this plan | today |
+|---|---:|---:|
+| `.text` | 38,756 | 29,197 |
+| `.cold` | 26,483 | 20,905 |
+| `.bss` | 4,819 | 2,840 |
+| `.lowbss` | 6,060 | 2,868 |
+
+### Why the plan got this wrong, and how to avoid it
+
+1. **It priced features at their CURRENT size and treated that as fixed.**
+   Every table here measures what a feature costs as written. None asks what
+   it would cost written tighter. A row that is 2,451 bytes today is not a
+   2,451-byte decision: B1 is 1,800 now with nothing taken out of it. **A
+   cut-list built off today's encoding assumes the code is already as small
+   as it can be. Here that was wrong by about a quarter of the kernel.**
+2. **It concluded "there is no big single win" and stopped there** (§0
+   finding 5). That was true and pointed the wrong way. A long tail of 40–200
+   byte procedures does not argue for removing whole features. It argues for a
+   pass over the tail, and that is where the bytes were.
+3. **It retired the target instead of the method.** When the arithmetic said
+   70KB cost the write path, it concluded the goal was wrong (§0.1's SHEET
+   argument). The SHEET argument was true and beside the point: 70KB was still
+   worth having, and it came out of the same tree without the cuts.
+4. **Its own best finding was the one it under-weighted.** §8.2 ended: *"Before
+   taking anything here, ask whether the package could stop needing it
+   instead."* PAINT (SPEC.md 42.23), the Task Manager's `APP_SMALL` arm
+   (SPEC.md 28.12) and then B4 itself all went that way, and none cost a
+   feature.
+
+**The rule to carry forward:** when a memory target looks reachable only by
+deleting features, first price **a size pass over everything you would keep**.
+Then ask whether the **package can carry it** (moved app-side, made on-demand,
+sized by the caller). A cut is the last answer, not the first. Each of the
+other two is a pass of work rather than a decision, which is why a
+cut-list looks cheaper on paper than it is.
+
+**What is still useful here**: §9.1's validation that a symbol span is
+exactly what a gate returns; §10's rule that a refusing stub is free only
+when every caller tests CF (SPEC.md cites it in four places); §5.1's proof
+that `DSK_NENT` must be a multiple of 32; and §7's account of `.ovlw` and the
+FAT window. Code and SPEC.md cite those sections by number, so the body
+below is left as it was.
+
+---
+
+> **What follows is the plan as it last stood, unedited below this header.**
+> It called itself the open half. What was BUILT off it is still
 > `docs/plans/completed/KERN-SMALL-CUT-BUILT.md`**, and it is worth reading
 > first: it carries A3, A4, A2, C3, B5 and the D rows, and the three findings
 > that bind every row still on this page - sections are not heap, a byte's

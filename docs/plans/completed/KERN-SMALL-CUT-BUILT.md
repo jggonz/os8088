@@ -1,9 +1,12 @@
 # What the `kern_small` cut actually took
 
 **BUILT, and this is the record.** It is the completed half of
-`docs/plans/KERN-SMALL-CUT-PLAN.md`, which is still open: that document is the
-menu of what a 128KB machine could *further* stop carrying, and this one is
-what has already been taken off it. The two were one document until the rows
+`docs/plans/retired/KERN-SMALL-CUT-PLAN.md`, which was the menu of what a
+128KB machine could *further* stop carrying, and this one is what was taken
+off it. **That menu is now RETIRED, not completed** (2026-11-10): the 70KB it
+said could not be had without deleting the write path was reached anyway, at
+**70.0 KB measured**, by size passes that kept the features - its header
+carries the figures and the lesson. The two were one document until the rows
 below closed; they are split because a built row and a proposed row read
 identically in a table, and every row here had stopped being a proposal.
 
@@ -42,9 +45,13 @@ a reading taken with a stale baseline reports three waves as one and reads
 exactly like an increment. Bless after a wave lands; measure tree-to-tree when
 the number is going into a document.
 
+> **Superseded by events (2026-11-10): the 70KB target was MET, at 70.0 KB
+> measured, without the cuts - see the retired plan's header.** What follows
+> is what this document said when it was written.
+>
 > **The 70KB target this work was commissioned against is RETIRED**, and the
-> reason is in docs/plans/KERN-SMALL-CUT-PLAN.md §8.2 and
-> docs/plans/KERN-SMALL-CUT-PLAN.md §0.1: it was derived from SHEET's
+> reason is in docs/plans/retired/KERN-SMALL-CUT-PLAN.md §8.2 and
+> docs/plans/retired/KERN-SMALL-CUT-PLAN.md §0.1: it was derived from SHEET's
 > region, SHEET claims ~100KB of heap on open - more than the machine has - so
 > no row in the study ever ran it. The brief is open-ended now.
 
@@ -79,7 +86,7 @@ boot-time minimum and move `HEAP_SEG` by *nothing*. Only 81 bytes went to the
 512-byte rung rounding.
 
 **That makes this document's whole method optimistic**, and it is worth saying
-plainly before anything else here is decided off it. docs/plans/KERN-SMALL-CUT-PLAN.md §2-§5 price features by
+plainly before anything else here is decided off it. docs/plans/retired/KERN-SMALL-CUT-PLAN.md §2-§5 price features by
 adding up `.text`, `.cold` and `.bss` off a symbol map. That is the right
 answer for **footprint**, and it is the wrong answer for **free heap** whenever
 any of the bytes are in an overlay: the ladder is `.text+.bss`, then `.cold`,
@@ -166,7 +173,7 @@ machine**, so the ladder is not unlikely there, it is dead code. SPEC.md
 §37.0.1 is the contract.
 
 **And what it is worth is not its own bytes.** `.ovlw` went **4,328 → 2,789**,
-and `.ovlw` is what docs/plans/KERN-SMALL-CUT-PLAN.md §7 caps three of the most attractive data cuts against:
+and `.ovlw` is what docs/plans/retired/KERN-SMALL-CUT-PLAN.md §7 caps three of the most attractive data cuts against:
 
 ```
                               .ovlw   rounded   region at 2 FAT sectors
@@ -212,7 +219,7 @@ of section deltas, because a claim is not a section: it never appears in
 **50.5 KB, measured on a machine with 128KB in it** (`tests/small128.py`), and
 `kern_big` moved by 512 bytes — D4's, the only item here it shares.
 
-**B5 is the row that was not on the list**, and it is the shape docs/plans/KERN-SMALL-CUT-PLAN.md §3 was looking
+**B5 is the row that was not on the list**, and it is the shape docs/plans/retired/KERN-SMALL-CUT-PLAN.md §3 was looking
 for and did not find: `disk_icons` is 2,048 bytes of `.lowbss` holding one
 64-byte body per directory entry, and a listing does not have 32 distinct
 icons — every folder is the same picture and most entries have none at all.

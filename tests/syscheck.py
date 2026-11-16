@@ -201,16 +201,29 @@ BTN_SAVE = (210, 441)       # Save Report
 BTN_CLEAN = (321, 441)      # Clean Up...
 ALERT_PROCEED = (358, 265)  # the alert's Proceed (Cancel is the default)
 
+def _ver(rel, name):
+    """PKG_FMT / DRV_VER off the SDK: a flag day moves both (kernel size
+    pass 19: 10 -> 13 and 12 -> 14), and the fixtures are made from them"""
+    import re
+    return int(re.search(r"^%s\s+equ\s+(\d+)" % name,
+                         open(os.path.join(ROOT, rel)).read(), re.M).group(1))
+
+
+DRV_VER = _ver("drivers/os88drv.inc", "DRV_VER")
+PKG_FMT = _ver("apps/os88api.inc", "PKG_FMT")
+
 EXPECT = [                  # (severity, path, a word of the reason)
     ("BROKEN", r"C:\RAMDISK.DRV", "driver version 9"),
-    ("BROKEN", r"C:\XMEM.DRV", "driver version 11, needs 12 - will not load"),
+    ("BROKEN", r"C:\XMEM.DRV", "driver version %d, needs %d - will not load"
+     % (DRV_VER - 1, DRV_VER)),
     ("BROKEN", r"C:\WIN95.DRV", "will not load"),
     ("WARNING", r"C:\COLDHMA.SYS", "HMA image"),
     ("BROKEN", r"C:\EMS.DRV", "missing"),
     ("WARNING", r"C:\KPAD.TMP", "install"),
     ("WARNING", r"C:\DEBUG.DRV", "dropped from os8088"),
     ("WARNING", r"C:\APPS\MINES.O88", r"C:\APPS\GAMES"),
-    ("BROKEN", r"C:\APPS\OLDTIMER.O88", "package format 8, needs 10 - will not load"),
+    ("BROKEN", r"C:\APPS\OLDTIMER.O88", "package format 8, needs %d - will not "
+     "load" % PKG_FMT),
     ("BROKEN", r"C:\APPS\JUNK.O88", "not a program"),
     ("WARNING", r"C:\APPS\MODPLUG.O88", "dropped from os8088"),
     ("BROKEN", r"C:\SYSTEM.CFG", "EMS.DRV"),

@@ -87,13 +87,13 @@ static int h_norm_x, h_norm_y, h_norm_w, h_norm_h;  /* the FRAME the window
                                                      * was authored with, and
                                                      * what leaving fullscreen
                                                      * comes back to */
-static int lock_depth, clip_armed, h_in_main, h_snap, h_ownbg;
+static int lock_depth, clip_armed, h_in_main;
 static int h_key_armed, h_key_first_in_main;
 static int blit_refuse, scroll_refuse;
 static unsigned the_ticks = 100;
 static char last_toast[80];
 static void *the_win = (void *)0x4321;
-static int h_wake_posted, h_closed, h_menu_set, h_about_set, h_onwake_set;
+static int h_wake_posted, h_closed, h_menu_set;
 
 /* the cost counters the glass model keeps (the package's own live in
  * a2scr.c under -DA2_HOST) */
@@ -299,8 +299,24 @@ void os88_font_str(int x, int y, const char *s)
 /* ==========================================================================
  * THE WINDOW
  * ========================================================================*/
-void *os88_wm_create(int x, int y, int w, int h, const char *title)
+/* the trampolines a class names (SPEC.md 11.104) - addresses, never called
+ * here */
+void os88_t_paint(void) {}
+void os88_t_onkey(void) {}
+void os88_t_onclick(void) {}
+void os88_t_about(void) {}
+void os88_t_onwake(void) {}
+void os88_t_onclose(void) {}
+void os88_t_onmouseup(void) {}
+void os88_t_onresize(void) {}
+void os88_t_ontimer(void) {}
+void os88_t_onwheel(void) {}
+static struct os88_class *h_cls;        /* what os88_wm_create was handed */
+void os88_wm_flag(void *win, int bit, int on) { (void)win; (void)bit; (void)on; }
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls)
 {
+    h_cls = cls;
     h_win_x = x;
     h_win_y = y;
     h_win_w = w;
@@ -308,7 +324,7 @@ void *os88_wm_create(int x, int y, int w, int h, const char *title)
     /* the kernel's own arithmetic: wm_create authors a FRAME and wm_geom
      * answers the CONTENT box, which is `w - 2` wide (the two 1-pixel side
      * borders) and `h - TITLE_H - 1` tall */
-    h_cont_x = (x + 1 + 7) & ~7;        /* os88_wm_snap: on a cell boundary */
+    h_cont_x = (x + 1 + 7) & ~7;        /* snapped, the default: a cell boundary */
     h_cont_y = y + OS88_TITLE_H;
     h_cont_w = w - 2;
     h_cont_h = h - OS88_TITLE_H - 1;
@@ -390,18 +406,14 @@ int os88_wm_clip_set(void *win)
     return 0;
 }
 
-void os88_wm_snap(void *win, int on) { (void)win; h_snap = on; }
-void os88_wm_ownbg(void *win, int on) { (void)win; h_ownbg = on; }
-void os88_wm_onwake(void *win) { (void)win; h_onwake_set = 1; }
 
 /* OSAPI_WM_TIMER (SPEC.md 13.9), ONE-SHOT: h_tmr_at is the tick it is due,
  * and do_wake() fires it when the clock reaches it. h_tmr_refuse is the
  * kern_small arm - the slot without the body - which is the SECOND PATH
  * a2_wants_wake keeps the wake's poll for. */
-static int h_ontimer_set, h_tmr_armed, h_tmr_refuse, h_tmr_fires;
+static int h_tmr_armed, h_tmr_refuse, h_tmr_fires;
 static unsigned h_tmr_at;
 
-void os88_wm_ontimer(void *win) { (void)win; h_ontimer_set = 1; }
 
 int os88_wm_timer(void *win, int ticks)
 {
@@ -467,7 +479,6 @@ int os88_fullscreen(void *win, int enter)
 }
 void os88_menu_set(void *win, struct os88_menuset *set)
 { (void)win; (void)set; h_menu_set = 1; }
-void os88_about_set(void *win) { (void)win; h_about_set = 1; }
 
 void os88_task_sleep(int ticks) { the_ticks += (unsigned)ticks; }
 
@@ -841,6 +852,10 @@ unsigned os88_mem_claim_p(unsigned paras)
 {
     int i;
 
+    if ((paras & 63) == 0 && paras)     /* a KB size, which the package now
+                                         * asks for in paragraphs (kernel size
+                                         * pass 19): the KB stub's model */
+        return os88_mem_claim((int)(paras >> 6));
     if (h_claim_refuse) {
         h_claim_refuse = 0;
         return 0;
@@ -2563,15 +2578,23 @@ int main(void)
     if (!h_key_first_in_main)
         fail("the key-state map was armed from somewhere other than "
              "os88_main");
-    if (!h_snap)
-        fail("os88_wm_snap was not asked for - the content origin must be on "
-             "a cell boundary or OSAPI_GFX_SCROLL refuses the rect");
-    if (!h_ownbg)
-        fail("os88_wm_ownbg was not asked for - the kernel would paint its "
-             "own background under a window that draws every pixel");
-    if (!h_onwake_set || !h_menu_set || !h_about_set)
-        fail("os88_main did not install the wake handler, the menus and the "
-             "About item");
+    if (h_cls == 0 || h_cls->len != OS88_CLASS_LEN)
+        fail("os88_main did not hand os88_wm_create a whole class (SPEC.md "
+             "11.104)");
+    else {
+        if (h_cls->style & OS88_WF_NOSNAP)
+            fail("the class opts out of the snap - the content origin must be "
+                 "on a cell boundary or OSAPI_GFX_SCROLL refuses the rect");
+        if (!(h_cls->style & OS88_WF_OWNBG))
+            fail("the class is not OWNBG - the kernel would paint its own "
+                 "background under a window that draws every pixel");
+        if (h_cls->onwake == 0 || h_cls->about == 0 || !h_menu_set)
+            fail("os88_main did not name the wake handler and the About item "
+                 "in its class, or set the menus");
+        if (h_cls->ontimer == 0)
+            fail("the class names no ontimer - the flash phase has no "
+                 "heartbeat");
+    }
 
     /* THE CHARGEN DECODE AND THE REVERSE TABLE ARE RESIDENT AND ARE BUILT
      * HERE - the negative control for keeping them off the overlay
@@ -2605,9 +2628,6 @@ int main(void)
      * a timer. If the install or the arm goes missing the wake goes back to
      * ~1,400 round trips a second of the shared UI task and nothing else
      * changes, so it is asserted rather than assumed. */
-    if (!h_ontimer_set)
-        fail("os88_wm_ontimer was not called from os88_main - the flash "
-             "phase has no heartbeat");
     if (!a2_tmr_ok || !h_tmr_armed)
         fail("the flash timer was not armed from os88_main");
 

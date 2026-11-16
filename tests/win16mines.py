@@ -271,6 +271,9 @@ class QDrive(object):
     def hmp(self, *cmds):
         return self.x.qmp(self.sock, *cmds)
 
+    def hmp_burst(self, lines):
+        return self.x.qmp_burst(self.sock, lines)
+
     def read(self, linear, n):
         return bytes(self.x.read_bytes(self.sock, linear, n))
 

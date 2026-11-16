@@ -44,9 +44,22 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "modkeep.py": "run by the `modcache` row (tests/modcache.py imports and "
+                  "runs it): every on-demand module kept in RAM after its "
+                  "drop, its tail zero in the file, its re-adoption free",
+    "modstate.py": "not a test: the shared live / kept / none reader of a "
+                   "mod_tab row, a module the module-cache rows import",
+    "vbtstep.py": "not a test: Video Battle on MartyPC in LOCKSTEP (the "
+                  "battle opened by the boot's \\AUTOSTRT, every wait and "
+                  "key at a guest cycle), a module tests/vbtownsnd.py and "
+                  "tests/vbtsndend.py both import",
     "vbtrulesdemo.py": "not a test: the Video Battle RULES test battle, a "
                        "module tests/vbtrules.py and tests/vbtengine.py both "
                        "import (the battle, its plan, the reference's moves)",
+    "vidshare.py": "not a test: ONE BOOT for several rows' legs (a fork "
+                   "snapshot, each leg's disk swapped into B:), the "
+                   "`--shared` runner tests/vidpage.py and tests/vidfskeys.py "
+                   "import for the vid*sh rows",
     # --- the rows of a RETIRED package (SPEC.md 20.16, apps/RETIRED.txt) ---
     # These two drive PACMAN.O88, which `all` no longer builds (SPEC.md
     # 89.12), so a registered row would need `wants=("build/pacman.o88",)`

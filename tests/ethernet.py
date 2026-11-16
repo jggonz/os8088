@@ -333,7 +333,12 @@ class Mouse:
         return SOCK
 
     def _m(self):
-        return os88qemu._Sock(self._sock())
+        # ONE reader per socket for the process (xmcheck.qm): it carries the
+        # last press's tick, so os88qemu._sep can keep a click that follows
+        # a short wait from landing inside the previous one's 9-tick
+        # double-click window
+        import xmcheck
+        return xmcheck.qm(self._sock())
 
     def _hmp(self, *cmds):
         import xmcheck
@@ -354,6 +359,13 @@ class Mouse:
     def _pace(self, secs):
         os88qemu.pace(self._m(), secs)
 
+    def _idle(self, secs):
+        """The pause after a gesture, CAPPED at what it was: `ui_done` ends
+        it the moment the UI has finished with the gesture (SOAK-SPEED 14;
+        docs/plans/soak-speed-2/qemubox.md). A kernel this process cannot
+        resolve takes the old pause."""
+        os88qemu.ui_done(self._m(), S, cap=secs)
+
     def _tool(self, *args):
         r = subprocess.run(["python3", "tools/mouse.py", self._sock()]
                            + list(args), capture_output=True, text=True)
@@ -370,20 +382,32 @@ class Mouse:
             if not xy or self._closed(os88qemu.mouse_to, *xy):
                 if self._closed(os88qemu.mouse_button,
                                 1 if verb == "down" else 0):
-                    self._pace(0.15)
+                    self._idle(0.15)
                     return
         elif verb == "click" and len(xy) == 2:
             if (self._closed(os88qemu.mouse_to, *xy)
                     and self._closed(os88qemu.mouse_button, 1)):
-                self._pace(0.2)
+                self._idle(0.2)         # (the press TAKEN before the release)
                 if self._closed(os88qemu.mouse_button, 0):
-                    self._pace(0.2)
+                    self._idle(0.2)
                     return
         self._tool(*args)
 
     def click(self, x, y):
         self.run("click", str(x), str(y))
-        self._pace(0.4)
+        self._idle(0.4)
+
+    def rclick(self, x, y):
+        """tools/mouse.py's `rclick`, closed loop: there, the RIGHT button
+        down (taken), up - the dead-reckoned tool where the words cannot be
+        read. No pause after: the caller waits on what the click opens."""
+        if not (self._closed(os88qemu.mouse_to, x, y)
+                and self._closed(os88qemu.mouse_button, 2)):
+            self._tool("rclick", str(x), str(y))
+            return
+        self._idle(0.2)
+        if not self._closed(os88qemu.mouse_button, 0):
+            self._tool("up")
 
     def dblclick(self, x, y):
         # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
@@ -397,7 +421,7 @@ class Mouse:
                             "sleep 0.12",
                             "mouse_button 1", "sleep 0.08", "mouse_button 0"],
                            check=True, capture_output=True)
-        self._pace(0.4)
+        self._idle(0.4)
 
 
 def settle(m, card=None):
@@ -1093,7 +1117,7 @@ def main():
             sys.exit("ethernet: BROWSER.O88 did not open a window")
         bw = wins2[-1]
         rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = u16(rec, 22)
+        pseg = u16(rec, dispcp.W_SEG)
         say("browser at %04X" % pseg)
         browser_image_size = os.path.getsize(os88build.at("build/browser.bin"))
 

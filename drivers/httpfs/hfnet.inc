@@ -211,7 +211,7 @@ hf_open:
     call hf_ncs
     jc .wbusy
     cmp ah, NSK_UP
-    je .up
+    je .up                      ; (CF = 0 from the equal compare)
     cmp ah, NSK_CLOSING         ; up and already closed by the peer: there
     je .up                      ; may be bytes waiting all the same
     cmp ah, NSK_CONNECT
@@ -221,7 +221,6 @@ hf_open:
     jnc .w
     jmp short .fail
 .up:
-    clc
     ret
 .nonet:
     mov ax, HFE_NONET
@@ -314,9 +313,8 @@ hf_fill:
     call hf_ncs
     jc .why
     jcxz .st
-    mov [hf_rlen], cx
+    mov [hf_rlen], cx           ; (CF = 0: the verb's)
     mov word [hf_rpos], 0
-    clc
     jmp short .out
 .why:
     cmp ax, NETE_BUSY
@@ -354,8 +352,8 @@ hf_fill:
 hf_getc:
     push si
     mov si, [hf_rpos]
-    cmp si, [hf_rlen]
-    jb .have
+    cmp [hf_rlen], si
+    ja .have                    ; CF = 0 when it is taken
     call OSAPI_GET_TICKS
     sub ax, [hf_hbase]
     cmp ax, HF_HDRT             ; CF=1 while under the deadline...
@@ -368,8 +366,7 @@ hf_getc:
 .have:
     mov al, [hf_rbuf+si]
     inc si
-    mov [hf_rpos], si
-    clc
+    mov [hf_rpos], si           ; (CF = 0: the `ja`, or the `xor`)
 .out:
     pop si
     ret
@@ -396,8 +393,7 @@ hf_line:
     inc cx
     jmp short .c
 .eol:
-    mov byte [di], 0
-    clc
+    mov byte [di], 0            ; (CF = 0: the equal compare)
 .out:
     pop di
     ret
@@ -563,27 +559,25 @@ hf_get:
     mov ax, [hf_port]
     xor dx, dx
     call hf_ultoa
-.nop:
-    mov ax, 0x0A0D              ; the Host line's end - and no User-Agent:
-    stosw                       ; HTTP/1.0 asks none (SPEC.md 122.2)
-    cmp byte [hf_rng], 0
-    je .norng
+.nop:                           ; (the Host line's CRLF is the head of what
+    cmp byte [hf_rng], 0        ; follows it - and no User-Agent: HTTP/1.0
+    je .norng                   ; asks none, SPEC.md 122.2)
     mov si, hf_s_rng            ; Range: bytes=<lo>-<lo+n-1>
     call hf_scpy
     mov ax, [hf_rlo]
     mov dx, [hf_rlo+2]
+    push dx
+    push ax
     call hf_ultoa
     mov al, '-'
     stosb
-    mov ax, [hf_rlo]
-    mov dx, [hf_rlo+2]
+    pop ax
+    pop dx
     add ax, [hf_rn]
     adc dx, [hf_rn+2]
     sub ax, 1
     sbb dx, 0
     call hf_ultoa
-    mov ax, 0x0A0D
-    stosw
 .norng:
     mov si, hf_s_end
     call hf_scpy
@@ -689,9 +683,7 @@ hf_get:
     jmp .fresh
 .fail:
     stc
-    jmp short .out
-.ok:
-    clc
+.ok:                            ; (CF = 0: the equal compare)
 .out:
     ret
 
@@ -755,18 +747,16 @@ hf_urlch:
     stosb
     pop ax
     push ax
-    push cx
-    mov cl, 4
+    mov cl, 4                   ; (CX is hf_get's to spend)
     shr al, cl
     call .hex
-    pop cx
     pop ax
     and al, 15
-.hex:
-    add al, '0'
-    cmp al, '9'
-    jbe .put
-    add al, 'A' - '9' - 1
+.hex:                           ; AL = 0..15 -> '0'..'9', 'A'..'F': the
+    add al, 0x90                ; 8086's hex-digit idiom (netui.inc's net_hex)
+    daa
+    adc al, 0x40
+    daa
 .put:
     stosb
     ret
@@ -786,7 +776,7 @@ hf_body:
 .loop:
     mov ax, [hf_left]
     or ax, [hf_left+2]
-    jz .done
+    jz .done                    ; (CF = 0: the `or`)
     mov si, [hf_rpos]
     mov cx, [hf_rlen]
     sub cx, si
@@ -817,7 +807,6 @@ hf_body:
     call OSAPI_FS_PROG          ; AX = since the last report; keeps everything
     jmp short .loop
 .done:
-    clc
 .out:
     pop es
     pop di
@@ -870,7 +859,8 @@ hf_bnorm:
 
 hf_s_get:   db 'GET ', 0
 hf_s_host:  db ' HTTP/1.0', 13, 10, 'Host: ', 0
-hf_s_rng:   db 'Range: bytes=', 0
-hf_s_end:   db 'Connection: keep-alive', 13, 10, 13, 10, 0
+hf_s_rng:   db 13, 10, 'Range: bytes=', 0  ; ...each led by the CRLF that
+hf_s_end:   db 13, 10, 'Connection: keep-alive', 13, 10, 13, 10, 0  ; ends the
+                                ; line before it: Host's, or Range's
 hf_s_conn:  db 'CONNECTION:', 0
 hf_s_clen:  db 'CONTENT-LENGTH:', 0

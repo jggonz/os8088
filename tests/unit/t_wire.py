@@ -77,7 +77,7 @@ S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
 S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 7   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
-S_PKGFMT = 10                           # SPEC.md 20.2's format byte
+S_PKGFMT = 13                           # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
 # --- SPEC.md 92.13, the same way ---------------------------------------------
@@ -1686,64 +1686,25 @@ def archive_refusals(tmp, mod):
 # 4. THE CELL FENCE (SPEC.md 92.2)
 # =============================================================================
 def fence(tmp, mod):
-    """A package calling a cell an older kernel lacks needs a level-3 Wire.
-
-    build/wirechat.o88 far-calls OSAPI_WM_ONWHEEL (0x0499) and nothing newer,
-    and build/hello.o88 calls nothing past 0x046D, so they are the two sides of
-    the line. (It was Note Pad until Note Pad's document moved onto
-    OSAPI_MEM_P, 0x04E9, which made it a level-7 package - SPEC.md 50.3.7.)
+    """THE CELL FENCE at a new PKG_FMT (SPEC.md 92.2): no kernel has been
+    released at PKG_FMT 13 yet, so WIRE_CELL_LEVELS has no rows and every
+    package built here is level 0 - and a call past WIRE_TABLE_END, the
+    table every Wire's kernel at this format has, is still refused. A DOOR
+    cell (SPEC.md 20.3.4) needs no level: a kernel that lacks an index
+    refuses it (CF = 1, AX = 1), so door_top fences nothing.
     """
-    note = os.path.join(BUILD, "wirechat.o88")
-    if not os.path.exists(note):
-        check(False, "no build/wirechat.o88", "the fence needs a package that "
-              "calls a cell past 0x046D; run `make`")
-        return
-    lvl, top = mod.cell_level([open(note, "rb").read()])
-    eq(lvl, 3, "WireChat's wheel call needs a level-3 Wire",
-       "it far-calls 0x0499, which v1.0.20261014's kernel does not have")
-    lvl, _ = mod.cell_level([open(os.path.join(BUILD, "hello.o88"), "rb").read()])
-    eq(lvl, 0, "Hello calls nothing past 0x046D")
-    pix = os.path.join(BUILD, "pixel.o88")
-    if os.path.exists(pix):
-        lvl, top = mod.cell_level([open(pix, "rb").read()])
-        # AT LEAST 4, not exactly: the depth blit is past v1.0.20261020's
-        # table end (0x04A5), and PiXEL has since gained later cells
-        # (OSAPI_SEG, 0x04E3), which can only raise the level - an exact 4
-        # failed the day an unrelated call moved the top cell on
-        check(lvl is not None and lvl >= 4,
-              "PiXEL's depth blit needs at least a level-4 Wire",
-              "it far-calls 0x%04X; v1.0.20261020's kernel (table end "
-              "0x04A5) does not have its depth blit" % (top or 0),
-              got=lvl, want=">= 4")
-    tm = os.path.join(BUILD, "taskmgr.o88")
-    if os.path.exists(tm):
-        lvl, top = mod.cell_level([open(tm, "rb").read()])
-        # AT LEAST 5, PiXEL's reason above: it has since gained OSAPI_SEG
-        # (0x04E3), which puts it at 6 - and level 6 is checked by name below
-        check(lvl is not None and lvl >= 5,
-              "the Task Manager's OSAPI_IMG_NAME needs at least a level-5 Wire",
-              "it far-calls 0x%04X; v1.0.20261025's kernel (table end "
-              "0x04D7) does not have OSAPI_IMG_NAME" % (top or 0),
-              got=lvl, want=">= 5")
-    # LEVEL 6: OSAPI_SEG (0x04E3) is past v1.0.20261026's table, the one
-    # level-5 Wire. A package that calls it and reads below 6 is offered to a
-    # machine whose kernel would jump into whatever followed its table end -
-    # PiXEL calls it, so its level is the check
-    if os.path.exists(pix):
-        lvl, top = mod.cell_level([open(pix, "rb").read()])
-        if top is not None and top >= 0x04E3:
-            check(lvl is not None and lvl >= 6,
-                  "PiXEL's OSAPI_SEG (0x04E3) needs at least a level-6 Wire",
-                  "WIRE_CELL_LEVELS has no row for v1.0.20261026's table end",
-                  got=lvl, want=">= 6")
-    # LEVEL 7: OSAPI_MEM_P (0x04E9, SPEC.md 50.3.7) is past the level-6
-    # Wire's table, and the parts library claims through it (SPEC.md
-    # 20.12.14) - so a parted package is level 7, and PiXEL is one
-    if os.path.exists(pix):
-        lvl, top = mod.cell_level([open(pix, "rb").read()])
-        if top is not None and top >= 0x04E9:
-            eq(lvl, 7, "PiXEL's OSAPI_MEM_P (0x04E9) needs a level-7 Wire",
-               "WIRE_CELL_LEVELS has no row for the level-6 Wire's table end")
+    eq(mod.WIRE_CELL_LEVELS, (), "PKG_FMT 13 starts a new generation: no rows",
+       "a row describes a RELEASED kernel at this PKG_FMT, and there is none")
+    pkgs = [os.path.join(BUILD, f) for f in ("wirechat.o88", "hello.o88",
+                                             "pixel.o88", "taskmgr.o88")]
+    pkgs = [p for p in pkgs if os.path.exists(p)]
+    lvl, top = mod.cell_level([open(p, "rb").read() for p in pkgs])
+    eq(lvl, 0, "every package is level 0 with no rows")
+    check(top is not None and top < mod.WIRE_TABLE_END,
+          "no package far-calls past WIRE_TABLE_END 0x%04X" % mod.WIRE_TABLE_END,
+          got=top)
+    dt = mod.door_top([open(os.path.join(BUILD, "hello.o88"), "rb").read()])
+    check(dt is None or dt < 0x80, "door_top reads Hello's door indices", got=dt)
 
     pub = os.path.join(tmp, "fpkg")
     os.makedirs(pub, exist_ok=True)
@@ -1767,39 +1728,23 @@ def fence(tmp, mod):
 
     cat = os.path.join(tmp, "fence.bin")
     r = run("--pack", man(None), "--pkgdir", pub, "--out", cat)
-    check(r.returncode != 0 and "needs_wire" in r.stdout + r.stderr,
-          "--pack refuses a wheel caller that does not declare needs_wire",
-          "the website's writer cannot unpack a package, so the declaration "
-          "is all it has", got=(r.stdout + r.stderr).strip())
-    r = run("--pack", man(3), "--pkgdir", pub, "--out", cat)
-    check(r.returncode == 0, "--pack takes needs_wire 3",
+    check(r.returncode == 0, "--pack takes packages that declare nothing",
           got=(r.stdout + r.stderr).strip(), want="exit 0")
     if r.returncode:
         return
-    blob = bytearray(open(cat, "rb").read())
-    _, recs, _ = read_catalog(bytes(blob))
-    eq([x["needw"] for x in recs], [3, 1], "WC_NEEDW is 3 for the wheel "
-       "caller and 1 beside it", "an older Wire greys exactly the record "
-       "whose package would call past its kernel's table")
     r = run("--verify", cat, "--pkgdir", pub)
-    check(r.returncode == 0, "--verify --pkgdir passes the fenced catalog",
+    check(r.returncode == 0, "--verify --pkgdir passes the catalog",
           got=(r.stdout + r.stderr).strip(), want="exit 0")
-    blob[S_HDR + S_NEEDW_OFF] = 2
-    open(cat, "wb").write(blob)
-    r = run("--verify", cat, "--pkgdir", pub)
-    check(r.returncode != 0 and "WC_NEEDW" in r.stdout + r.stderr,
-          "--verify --pkgdir fails a wheel caller whose WC_NEEDW is 2",
-          "every level-2 Wire would offer it", got=(r.stdout + r.stderr).strip())
-    r = run("--pack", man(3, 3), "--pkgdir", pub, "--out", cat)
+    r = run("--pack", man(3), "--pkgdir", pub, "--out", cat)
     r = run("--verify", cat, "--pkgdir", pub)
     check(r.returncode != 0 and "WC_NEEDW" in r.stdout + r.stderr,
           "--verify --pkgdir fails an over-declared needs_wire",
           "a stale declaration greys a program every older machine can run",
           got=(r.stdout + r.stderr).strip())
     end = mod.WIRE_TABLE_END
-    mod.WIRE_TABLE_END = 0x0499
+    mod.WIRE_TABLE_END = 0x0100
     try:
-        mod.pack(json.load(open(man(3))), pub, None)
+        mod.pack(json.load(open(man(None))), pub, None)
         check(False, "--pack refuses a call past WIRE_TABLE_END",
               "a cell newer than any level cannot be fenced at all")
     except mod.Refused as e:

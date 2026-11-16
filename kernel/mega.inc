@@ -442,7 +442,7 @@ mega_enterf:
     mov es, si                      ; below 1MB: toast_show COPIES it, and
     mov si, dx                      ; mega_rung below is what makes it heap
     mov cx, 146
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     mov ax, MEGA_RAM                ; ...and `.mega`'s rung to the heap: real
     call mega_rung                  ; mode can never run what is on it
@@ -1585,8 +1585,8 @@ mega_pmpre:
     mov es, ax                      ; calls the ROM): the IVT at 0:0, and the
     mov bl, [mega_rv]               ; ROM's RAM by its own segment. It was
     xor bh, bh                      ; read in protected mode through the ROM
-    shl bx, 1                       ; segment AS A SELECTOR - an identity
-    shl bx, 1                       ; selector only until MC7 cut the GDT to
+    shl bx, 2                       ; segment AS A SELECTOR - an identity
+                                    ; selector only until MC7 cut the GDT to
     mov ax, [es:bx+2]               ; the kernel's own, and a #GP(C800h) on
     mov word [mega_pmseg], 0        ; a PicoMEM ever since (2026-10-29)
     cmp ax, 0xC000
@@ -2366,7 +2366,7 @@ mega_nmitell:
     push ds
     pop es
     mov cx, 182                     ; ten seconds: long enough to photograph
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     call KERNEL_SEG:mega_putsf      ; ...and the debug port (the line is the
                                     ; kernel's DATA, which `.mega`'s CS cannot
                                     ; read: the low writer does), with how many
@@ -2714,13 +2714,17 @@ mega_fkill:
     je .wnl
     cmp al, [gfx_lock_own]
     jne .wnl
-    mov bp, gfx_unlock              ; inst_task_die takes the lock itself
+    mov bp, gfx_unlock              ; a lock the dead worker held would
+                                    ; wedge every draw (and the close
+                                    ; pass inst_task_die posts takes it)
     call KERNEL_SEG:mega_tcall
 .wnl:
     mov ax, MEGA_SEL_KDATA
     mov es, ax
     cld
-    jmp KERNEL_SEG:inst_task_die    ; DI = the record; never returns
+    jmp KERNEL_SEG:inst_task_die    ; DI = the record; never returns. It
+                                    ; posts the close and exits: nothing
+                                    ; deep runs on the stack that faulted
 .ret:
     mov ax, MEGA_SEL_KDATA
     mov ds, ax
@@ -2968,7 +2972,7 @@ mega_fkdo:
     mov byte [es:mega_fktm], 0
     mov si, mega_fkmsg              ; ES:SI
     mov cx, 182                     ; ten seconds, mega_nmitell's
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
 .nt:
     mov al, [es:mega_fkslot]
     or al, al
@@ -2982,7 +2986,8 @@ mega_fkdo:
     je .shut
     mov ax, [es:mega_fks]
     cmp [di+I_SPTR], ax
-    je .keep                        ; its worker has not left yet
+    je .keep                        ; not closed yet (its worker, or the
+                                    ; close it posted, still to come)
 .shut:
     mov byte [es:mega_fkslot], 0
 .clr:
@@ -2993,8 +2998,9 @@ mega_fkdo:
     ret
 
 ; mega_fkclose - DI = a live package record: what app_close_win does to it,
-; without asking it (its code is what faulted) - inst_task_die's order. With
-; a worker, the die flag and the hide, and the worker leaves by itself.
+; without asking it (its code is what faulted). With a worker, the die flag
+; and the hide: the worker leaves by itself and posts the close that
+; app_close_now's .dying arm finishes (SPEC.md 20.6).
 %macro MEGA_TC 1
     mov bp, %1
     call KERNEL_SEG:mega_tcall
@@ -3788,7 +3794,7 @@ mega_svc_back:
     cwd
     add bx, ax
     adc si, dx                      ; SI:BX = the length, PIT counts
-    or si, si                       ; NEGATIVE: channel 0 reloaded and the
+                                    ; NEGATIVE (adc's SF): channel 0 reloaded and the
     jns .rqok                       ; ROM never counted it - an IRQ's
     inc si                          ; reflection keeps the mask, so its
     cmp byte [sch_fast], SCH_RATE   ; IRQ0s wait for mega_replay - so one
@@ -5743,20 +5749,9 @@ mega_icw_%1:
     MEGA_ICW_STUB gfx_b1ink, ax
 %endif
     MEGA_ICW_STUB ico_c1, ax
-%macro MEGA_ICWB_STUB 1
-mega_icwb_%1:
-    push ds
-    mov ds, [cs:k_dsel]
-    mov [bx+%1], ax
-    pop ds
-    retf
-%endmacro
-    MEGA_ICWB_STUB W_ONSIZE
-    MEGA_ICWB_STUB W_ONSZ
-    MEGA_ICWB_STUB W_ONWK
-    MEGA_ICWB_STUB W_ONRC
-    MEGA_ICWB_STUB W_ONCLICK
-    MEGA_ICWB_STUB W_ONWH           ; (the wheel's, SPEC.md 13.18)
+; (MEGA_ICWB_STUB's six - the handler setters' stores through the data alias
+; - went with the setters: a window's handlers are its class's, SPEC.md
+; 11.104, kernel size pass 19)
 
 ; mega_bhex4 / mega_bhex2 - AX (AL) as 4 (2) hex digits at ES:DI
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
@@ -6145,7 +6140,6 @@ mega_hugef:
     mov word [ss:bp+8], 0           ; the caller's BX: 0, the ask was met
 .ok:
     or [es:di+MX_FL], al
-    clc
     jmp short .out
 .full:
     popf                            ; no run: the block goes back
@@ -6289,8 +6283,8 @@ mega_hugebf:
     cmp ax, bp
     jb .no                          ; ...less the reserve: short
     mov ax, bp                      ; --- the CONVENTIONAL piece, first: it
-    xor cx, cx                      ; is the one a compaction may take time
-    call COLD_SEG:mmf_osapi_mem_claim_dma_hi ; over, and nothing is held yet.
+                                    ; is the one a compaction may take time
+    call COLD_SEG:mmf_mem_claim_ownhi ; over, and nothing is held yet.
     jc .no                          ; From the TOP (14.169): the heap's end,
                                     ; never the fill point, where what the
                                     ; bottom stack sheds under it would cut
@@ -6380,7 +6374,7 @@ mega_hgcnt:
     ret
 
 ; mega_hugec - OSAPI_MEM_HUGE's CONVENTIONAL arm in protected mode (KERN-MEGA-
-; MEMORY-PLAN MC7.4): DX = the claim osapi_mem_claim_dma_x has just made (its
+; MEMORY-PLAN MC7.4): DX = the claim mmf_mem_claim_own has just made (its
 ; pair's data selector), AX = its KB, BX = the ask (8000h a window every 32KB,
 ; 4000h every 16KB, else every 64KB) -> CF = 0, DX = the first of a RUN of
 ; data selectors over it, a 64KB window each (the last its end), CX = 8, BX =
@@ -6920,7 +6914,6 @@ mega_hugek:
     call COLD_SEG:osapi_mem_movable_x
 .nd:
     add sp, 2
-    clc
     jmp short .o
 .no:
     add sp, 2
@@ -7456,7 +7449,7 @@ mega_fdjudge:
     pop es
     mov si, mega_tfdfb
     mov cx, 182                     ; ten seconds
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     pop si
     pop di
@@ -7479,7 +7472,7 @@ mega_fdjudge:
     pop es                          ; field machine shows: toast_show only
     mov si, mega_tfdoff             ; stages it, the UI task draws it
     mov cx, 146
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
  %endif
     pop es
     pop cx
@@ -7542,8 +7535,7 @@ mega_fdgo:
     and al, 0xC0                    ; the rate the BIOS established...
     and byte [es:0x8B], 0x3F
     or [es:0x8B], al                ; ...as the one last programmed (so a
-    rol al, 1                       ; reflected call does not skip it)
-    rol al, 1
+    rol al, 2                       ; reflected call does not skip it)
     out dx, al
     mov byte [mega_fdstep], 2
     mov al, 0x03                    ; SPECIFY, from the parameter table
@@ -9279,7 +9271,7 @@ MX_FWIN     equ 0x10                ; MX_FL: an OSAPI_SEG BOUND window lives in
                                     ; it (SEG_BWIN), which a rate hook may read
                                     ; through: it moves with the hook held off
                                     ; (mx_cpflags, KERN-MEGA-MEMORY-PLAN 9.1)
-MX_FDMA     equ 0x80                ; MX_FL: a DMA door's claim (mega_claimdf,
+MX_FDMA     equ 0x80                ; MX_FL: a DMA head claim (mega_claimdf,
                                     ; KERN-MEGA-PLAN 14.160): MX_AUX is the KB
                                     ; of its head, which no compaction lands
                                     ; across a 64KB page (mx_dmafit) - and
@@ -9325,6 +9317,12 @@ MEGA_USTN   equ 8                   ; mega_useg's selectors over real segments
 mega_ustab  equ 0                   ; at or above A000h: {segment, selector}
 mega_ustab_end equ mega_ustab + MEGA_USTN * 4 ; a row, 0 a free one
 MEGA_WTN    equ 32                  ; OSAPI_SEG's windows (mega_segf): a row
+                                    ; (32 until kernel size pass 19, R2-3: the
+                                    ; rows are in this tail, above 1MB since
+                                    ; msp2, so 32 more cost 128 bytes of the
+                                    ; tables' block and no conventional byte,
+                                    ; and C64's and RealDMG's window refusals
+                                    ; come later)
 mega_wtab   equ mega_ustab_end      ; each, the selector, its owner byte and
 mega_wtab_end equ mega_wtab + MEGA_WTN * 4 ; BOUND; 0 a free row (MC7)
 MEGA_MSELN  equ 32                  ; mem_tab's MEM_MAX (memory.inc checks)
@@ -9949,10 +9947,8 @@ mx_unsel:
     loop .l
 .none:
     pop cx
-    pop ax
-    call mx_dfree                   ; ...and its OSAPI_SEG SUB selectors
-    ret
-
+    pop ax                          ; ...and into mx_dfree: its OSAPI_SEG
+                                    ; SUB selectors
 ; mx_dfree - SI = an mx_tab entry: when it is a PROGRAM's or a DRIVER's claim
 ; (a slot, 0A0h-0DFh or FFh: not a region, an image or the kernel's own, whose
 ; selectors are freed by their own owners), every allocator DATA descriptor
@@ -10558,7 +10554,6 @@ mega_ldt2ds:
     jne .lone
     pop ax
     add ax, 8
-    clc
     jmp short .out
 .lone:
     pop ax
@@ -10826,6 +10821,54 @@ mega_modhif:
     pop dx
     pop cx
     pop bx
+    retf
+
+; mega_modkeepf - FAR (mod_drop, mod_need's .held; `.cold`): AX = a module
+; image's pool pair (either half: mod_drop hands the DATA one, .held the CODE
+; one, and the two share one base), BX = its kept tag MEM_P_MOD
+; + 2 x the id -> its mx_tab block becomes a purgeable kernel cache
+; (MX_FPURGE, the tag in MX_AUX), which mx_shed takes back through
+; mem_pg_forget's .mod arm; BX = 0 takes the mark off again (a re-adoption).
+; CF = 0 done, CF = 1 no block of the kernel's at that base. Under IF = 0
+; for the mark, so a shed (mx_shedf, which scans with IF = 0) sees the block
+; and its tag together or not at all (SPEC.md 2.8.3.3). Clobbers nothing else
+mega_modkeepf:
+    push ax
+    push cx
+    push dx
+    push si
+    push es
+    pushf
+    cli
+    call mega_selbase               ; DX:AX = the pair's base
+    MXT_ES                          ; (the tables' tail)
+    push bx
+    mov bl, MX_KOWN
+    call mx_find                    ; SI = its entry
+    pop bx
+    jc .out
+    mov [es:si+MX_AUX], bx
+    and byte [es:si+MX_FL], ~MX_FPURGE & 0xFF
+    or bx, bx                       ; (CF = 0)
+    jz .out
+    or byte [es:si+MX_FL], MX_FPURGE
+.out:
+    pop ax                          ; the caller's flags: IF back, CF ours
+    jc .no
+    push ax
+    popf
+    clc
+    jmp short .ret
+.no:
+    push ax
+    popf
+    stc
+.ret:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop ax
     retf
 
 ; mega_modsayf - FAR (mod_hi): DS:SI = a module's NUL file name, AX = the code
@@ -11150,7 +11193,6 @@ mega_ownerof:
     test byte [es:LD_H_CLASS], 0x40 ; OS88_HIGHMEM: read only once ES is
     jz .no                          ; known to be a package's
     or bl, 0xA0
-    clc
     ret
 .drv:
     push ax
@@ -12272,8 +12314,10 @@ section .cold                   ; (KERN-MEGA-SEGMENTS-PLAN: back from .mega)
 ;      lives in the block's MX_SEL (OSAPI_XMEM_SEL's word), so mx_free and the
 ;      instance's teardown (mx_relinst) give it back with the block. AX and
 ;      every other register kept
-; mega_claimdf - FAR (osapi_mem_claim_dma / _dma_hi, `.cold`): the same for a
-; DMA door's claim with a HEAD, CX = its KB (1..64; KERN-MEGA-PLAN 14.160):
+; mega_claimdf - FAR (osapi_mem_p, MEMP_CONV + MEMP_DMAPOOL - the withdrawn KB
+; DMA doors' answer, restored by kernel size pass 19's megacmp after C1 and
+; wave C had taken it, `.cold`): the same for a claim with a HEAD, CX = its
+; KB (1..64; KERN-MEGA-PLAN 14.160):
 ; for an OS88_HIGHMEM PACKAGE only - never a driver, whose own 8237 or bus
 ; master code may not take a selector's base - a pool block whose first CX KB
 ; lie inside one 64KB physical page (the pool is all below 16MB, mega_layoutf,
@@ -12952,7 +12996,6 @@ mega_imghuge:
     dec byte [sch_lock]
     pop ax
     add ax, 8                       ; the DATA half names the region
-    clc
 .out:
     pop bp
     pop di
@@ -13032,7 +13075,6 @@ mega_imghif:
     dec byte [sch_lock]
     pop ax
     add ax, 8                       ; the DATA half names the region
-    clc
 .out:
     pop bp
     pop di
@@ -14430,7 +14472,6 @@ mega_blkof:
     shl si, 4
     shr di, 12                      ; DI:SI = its base
     xor bx, bx
-    clc
 .o:
     pop cx
     ret
@@ -16039,7 +16080,7 @@ mega_pmtail:
 %endif
     mov cx, 146                     ; draws it), for eight seconds: long enough
                                     ; to photograph
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     retf
 

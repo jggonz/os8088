@@ -583,16 +583,20 @@ def sys_attr(name11: bytes, boot: bool, hdd: bool = False) -> int:
 # tool that rewrites the entry may drop these bytes; a missing hint reads as
 # "not compressed", and if that were TRUSTED the kernel would hand an
 # application compressed bytes. So the read path checks the header too.
-CZ_HINT = 0x5A                     # +12: a value a conformant FAT writer never
+CZ_HINT = 0xA4                     # +12: a value a conformant FAT writer never
                                    # puts there, so it cannot be forged by
                                    # luck - AND THE FORMAT RIDES IN IT, so
-                                   # 0x5A is LZ4 and 0x5B is LZB (SPEC.md
+                                   # 0xA4 is LZ4 and 0xA5 is LZB (SPEC.md
                                    # 20.14.2.4). The kernel's capacity
                                    # decision happens before any data I/O and
                                    # the two formats get different answers
                                    # there, so a hint that could not tell them
                                    # apart would have to read the file - the
-                                   # one thing this hint exists to avoid
+                                   # one thing this hint exists to avoid.
+                                   # BITS 3 AND 4 CLEAR (kernel size pass
+                                   # 19, F3): NT, Linux vfat and macOS read
+                                   # them as lower-case flags, and 5Ah/5Bh
+                                   # listed every packed file in lower case
 CZ_H_MARK, CZ_H_HI, CZ_H_LO = 12, 13, 20
 
 

@@ -87,7 +87,6 @@ rf_entry:
     jc .out
     mov [rf_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP
     clc
     jmp short .out
 .refuse:
@@ -663,7 +662,10 @@ rf_ratio:
 
 rf_tpl:
     dw 7, 22, 632, 448              ; x = 7 so WF_SNAP wants W_X + 1 on a
-    dw rf_ttl, rf_paint, rf_onkey, rf_onclick   ; multiple of 8
+    dw rf_ttl, rf_cls                           ; multiple of 8
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rf_cls, 0, PAINT, rf_paint, ONKEY, rf_onkey, \
+               ONCLICK, rf_onclick
 
 rf_ttl:     db 'ROM Font Bench', 0
 

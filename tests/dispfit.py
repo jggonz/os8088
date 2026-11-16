@@ -212,7 +212,27 @@ def main(argv):
                    + b"\xc3")                                        # ret
         m.write(code_lin, handler)
         m.write(os88sym.wfield(10, "W_ZOOMR"), b"\0\0\0\0")
-        m.write(os88sym.wfield(keep, "W_ONSZ"), code_at.to_bytes(2, "little"))
+        # THE SIZE-CHANGED HANDLER IS THE CLASS'S (SPEC.md 11.104, kernel size pass
+        # 19's R14): the record names a class - for a kernel window a LINEAR
+        # address under 64KB, W_SEG 0 being its DS - and WC_ONRESIZE is a slot
+        # in it. The Disk window's class is fm_cls in `.text`, shared by every
+        # Disk window, so a COPY of it, the handler added, goes in the
+        # last window record (spare, as slot 10's is: its first word, the
+        # class length, is even, so the record still reads as unused) and
+        # `keep` alone is pointed at it.
+        cls = int.from_bytes(m.read(os88sym.wfield(keep, "W_CLASS"), 2),
+                             "little")
+        n = int.from_bytes(m.read(cls, 2), "little")
+        body = bytearray(m.read(cls, n)) + bytes(max(0, eq["WC_ONRESIZE"] + 2 - n))
+        n = max(n, eq["WC_ONRESIZE"] + 2)
+        body[0:2] = n.to_bytes(2, "little")
+        body[eq["WC_ONRESIZE"]:eq["WC_ONRESIZE"] + 2] = code_at.to_bytes(2, "little")
+        spare = os88sym.wfield(eq["MAX_WIN"] - 1, "W_FLAGS")
+        if eq["MAX_WIN"] - 1 in (10, keep, moved) or n > eq["WIN_SIZE"] \
+                or spare >= 0x10000 or m.read(spare, 1)[0] & 1:
+            sys.exit("dispfit: no spare record below 64KB for the class copy")
+        m.write(spare, bytes(body))
+        m.write(os88sym.wfield(keep, "W_CLASS"), spare.to_bytes(2, "little"))
         say("handler for window %d poked at COLD:%04x, recording to %04x"
             % (keep, code_at, rec_at))
 

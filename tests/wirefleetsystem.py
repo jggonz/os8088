@@ -203,15 +203,17 @@ def systems():
         m.write((seg<<4)+sy['wf_savebuf'],record)
         m.run()
         # Bypass the app negotiator to exercise the kernel's forced teardown.
+        # The negotiator is a CLASS slot now (SPEC.md 11.104, kernel size
+        # pass 19's R14) - the class lives in the package, so zero its
+        # WC_ONCLOSE there; the record no longer has a W_ONCL word.
         ui.menu_pick('Link','Connect COM2')
         wait(lambda:val('linkopen')==1,'reopen lease after load')
         assert val('linkopen')==1, (data('board',100).hex(),
             m.readseg(dispapps.pkg_seg(m,0)[1],val('message',2),80),
             m.read(m.sym('ser_row'),2).hex(),m.read(m.sym('mou_hpst'),1).hex())
         m.pause()
-        import os88geom as G
         import os88sym
-        m.write(m.sym('wm_wins')+w.i*G.WIN_SIZE+os88sym.equates()['W_ONCL'],b'\0\0')
+        m.write((dispapps.pkg_seg(m,0)[1]<<4)+sy['wf_cls']+os88sym.equates()['WC_ONCLOSE'],b'\0\0')
         m.run()
         ui.close(w)
         m.pause()

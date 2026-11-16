@@ -179,9 +179,20 @@ def _parse_map(path):
     for line in open(path):
         s = line.strip()
         if s.startswith("-- Symbols"):
-            insyms = True
+            insyms, cur = True, None
             continue
         if not insyms:
+            # THE SECTION TABLE: each section's FILE offset (`start:`), kept
+            # as the pseudo-equate "start:<section>" - the image offset of a
+            # label is its section's start plus its virtual offset (`.text`
+            # starts at E00, after the boot blob: file_offset())
+            if s.startswith("---- Section "):
+                cur = s.split()[2]
+            elif s.startswith("start:") and cur:
+                try:
+                    equ["start:" + cur] = int(s.split()[1], 16)
+                except (IndexError, ValueError):
+                    pass
             continue
         if s.startswith("---- Section "):
             cur = s.split()[2]
@@ -358,6 +369,25 @@ def _in_tree(bdir):
         return ""
     import os88build
     return os88build.at(bdir) if not os.path.isabs(bdir) else bdir
+
+
+def file_offset(name, defines=()):
+    """Where label `name`'s bytes are in kernel.bin: its section's file
+    start (the map's section table) plus its offset in that section."""
+    return (equates(defines)["start:" + sections(defines)[name]]
+            + syms(defines)[name])
+
+
+def kernel_image():
+    """The `kernel.bin` this map is checked against - `_load`'s own choice of
+    build directory - for a caller that wants to ask whether a RUNNING
+    machine is that kernel (linear 0x600 onward is this file's bytes, apart
+    from writable state: os88marty's `verify`)."""
+    bdir = _in_tree(os.environ.get("OS88_BUILD", "")) \
+        or os.path.join(ROOT, "build")
+    if not os.path.isabs(bdir):
+        bdir = os.path.join(ROOT, bdir)
+    return os.path.join(bdir, "kernel.bin")
 
 
 def kz_defines(bdir, defines=()):

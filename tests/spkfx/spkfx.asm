@@ -26,20 +26,27 @@ fx_entry:
     push si
     mov si, fx_tpl
     call OSAPI_WM_CREATE
-    mov ax, 5                       ; the ring: 4 KB and the table after it
-    call OSAPI_MEM_CLAIM
+    push bx                         ; THE WINDOW is what the entry hands the
+                                    ; loader in BX (SPEC.md 20.2), and the
+                                    ; claims' verb is BL
+    mov ax, 5 * 64                       ; the ring: 4 KB and the table after it
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [fx_rseg], dx
-    mov ax, FX_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, FX_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [fx_iseg], dx
-    mov ax, FX_KB + (SPKFX_FAMSZ + 1023) / 1024 ; the output, and the
-    call OSAPI_MEM_CLAIM            ; shaper's family past it: it is read
+    mov ax, (FX_KB + (SPKFX_FAMSZ + 1023) / 1024) * 64 ; the output, and the
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; shaper's family past it: it is read
     jc .out                         ; through ES, the segment emit writes
     mov [fx_oseg], dx
     mov byte [fx_up], 1
 .out:
+    pop bx
     pop si
     pop dx
     pop ax
@@ -123,7 +130,9 @@ fx_onkey:
 
 fx_tpl:
     dw 40, 40, 160, 40
-    dw fx_ttl, fx_paint, fx_onkey, 0
+    dw fx_ttl, fx_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fx_cls, 0, PAINT, fx_paint, ONKEY, fx_onkey
 fx_ttl: db 'SpkFx', 0
 
 fx_rate:  dw 8000

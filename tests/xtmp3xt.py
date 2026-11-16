@@ -850,13 +850,12 @@ def compact(r, leg):
               "%s=%04x" % kv for kv in sorted(w0.items()))))
     S = geom._sym(m, None)
     wins = m.read(S("wm_wins"), geom.MAX_WIN * geom.WIN_SIZE)
-    wptr = None
+    slot = None
     for i in range(geom.MAX_WIN):
         o = i * geom.WIN_SIZE
         if struct.unpack_from("<H", wins, o + geom.W_SEG)[0] == r.seg:
-            wptr = S("wm_wins") + o
-    m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-    m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+            slot = i
+    geom.post_compact(m, slot, 0xFC, S)
     m.run()
     os88marty.until(m, lambda _: bytes(m.read(S("mem_cpq"), 2)) == b"\0\0",
                     "the posted compaction", poll=0.1, guest=30)

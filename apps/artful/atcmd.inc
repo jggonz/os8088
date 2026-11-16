@@ -473,7 +473,7 @@ at_cmd_none:
     add ax, 15
     mov cl, 4
     shr ax, cl                      ; AX = PARAGRAPHS for that many words
-    xor cx, cx                      ; (SPEC.md 50.3.7)
+                                    ; (SPEC.md 50.3.7)
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; -> DX segment, CF = refused
     pop cx

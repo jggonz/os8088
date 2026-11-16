@@ -37,9 +37,11 @@ ROMS = {
     "gbsave": ["-m", "0x10", "-r", "3"],    # MBC3+TIMER+RAM+BATTERY, 32KB
     "gbdemo": [],
     "gbbank": ["-m", "0x19"],               # MBC5, 1MB: every bank there
-    "gbbank8": ["-m", "0x1B", "-r", "3"],   # gbbank.asm at 8 banks, 128KB:
-                                            #   MBC5+RAM+BATTERY, 32KB of RAM
-                                            #   (tests/rdgmove.py's claims)
+    "gbbank8": ["-m", "0x1B", "-r", "2"],   # gbbank.asm at 8 banks, 128KB:
+                                            #   MBC5+RAM+BATTERY, 8KB of RAM
+                                            #   (tests/rdgmove.py's claims -
+                                            #   32KB left its Static leg's
+                                            #   menus no room, see there)
     "gbrmw": [],
     "gbflags": [],                          # (generated: tools/gbprof/gbflags.py)
     "gblazy": [],                           # (generated: tools/gbprof/gblazy.py)

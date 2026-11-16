@@ -60,7 +60,9 @@ mb_paint:
 
 mb_tpl:
     dw 140, 100, 200, 60
-    dw mb_title, mb_paint, 0, 0
+    dw mb_title, mb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mb_cls, 0, PAINT, mb_paint
 mb_title:  db 'MSEGBIG GRANTED', 0
 
 ; The image is padded to the same seven sectors MSEG's is, so the two launches

@@ -55,14 +55,13 @@ class Run:
         from unicorn import UC_HOOK_CODE
         mu.hook_add(UC_HOOK_CODE, self._svc,
                     begin=E.PKG * 16 + SVC, end=E.PKG * 16 + SVC + 28)
-        mu.hook_add(UC_HOOK_CODE, self._readat, begin=E.KSEG * 16,
-                    end=E.KSEG * 16 + 0xFFFF)
+        # OSAPI_FILE_READ_AT is a DOOR since T5 (kernel size pass 19,
+        # SPEC.md 20.3.4): tests/pxpartemu.py answers the int
+        self.p.doors[self.p.door_ix["OSAPI_FILE_READ_AT"]] = self._readat
 
-    def _readat(self, mu, addr, size, _):
+    def _readat(self, mu):
         # OSAPI_FILE_READ_AT, for the part's own next head (pxhmore.inc):
         # whole clusters at a cluster's offset, as the kernel reads them
-        if addr - E.KSEG * 16 != self.p.cells["OSAPI_FILE_READ_AT"]:
-            return
         from unicorn.x86_const import UC_X86_REG_CX, UC_X86_REG_ES
         off = mu.reg_read(UC_X86_REG_AX) | (mu.reg_read(UC_X86_REG_DX) << 16)
         n = mu.reg_read(UC_X86_REG_CX)

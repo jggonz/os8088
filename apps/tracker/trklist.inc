@@ -446,19 +446,13 @@ tpl_toggle:
     mov si, tpl_tpl
     call OSAPI_WM_CREATE
     jc .out
-    mov [tpl_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; its rows are runs on the byte grid too
-    mov ax, bx
-    push bx
-    mov bx, tpl_btns
-    mov si, tpl_onup
-    mov di, tpl_ondrag
+    mov [tpl_win], bx               ; (its rows are runs on the byte grid
+    mov ax, bx                      ; too: snapped, the default - and the
+    push bx                         ; press reaches us FIRST, for tw_clickw's
+    mov bx, tpl_btns                ; reason: tpl_cls, SPEC.md 11.104)
     mov dx, tpl_onclick
     call os88ui_btninit
     pop bx
-    mov ax, tpl_clickw              ; ...and the press reaches us FIRST, for
-    call OSAPI_WM_ONCLICK           ; tw_clickw's reason
     jmp short .show
 .have:
     call tpl_visible
@@ -1116,7 +1110,9 @@ tpl_onkey:
 ; =============================================================================
 tpl_tpl:
     dw 0, 0, TPL_W + 2, TPL_H + 20
-    dw tpl_ttl, tpl_paint, tpl_onkey, 0
+    dw tpl_ttl, tpl_cls
+    OS88_CLASS tpl_cls, 0, PAINT, tpl_paint, ONKEY, tpl_onkey, \
+               ONCLICK, tpl_clickw, ONMOUSEUP, tpl_onup, ONDRAG, tpl_ondrag
     OS88UI_BTNREC tpl_btns, tpl_rects_b, tpl_labels, tpl_flags_b, TPL_NB
 tpl_labels: dw tpl_s_add, tpl_s_rem, tpl_s_clr, tpl_s_shuf, tpl_s_sort
             dw tpl_s_play

@@ -65,18 +65,50 @@ void os88_gfx_pen(int disabled);
 int  os88_gfx_blit1(const void *bits, int stride, int x, int y,
                     int w, int rows);
 
-void *os88_wm_create(int x, int y, int w, int h, const char *title);
+/* the window CLASS (SPEC.md 11.104) - apps/cc/os88.h's, mirrored */
+struct os88_class {
+    unsigned len, style;
+    void (*paint)(void), (*onkey)(void), (*onclick)(void), (*about)(void),
+         (*onwake)(void), (*onclose)(void), (*onmouseup)(void),
+         (*onresize)(void), (*onrclick)(void), (*onsize)(void),
+         (*ontimer)(void), (*ondrag)(void), (*onwheel)(void);
+};
+#define OS88_CLASS_LEN 30
+#define OS88_WF_SIZABLE 0x0004
+#define OS88_WF_NOSNAP  0x0010
+#define OS88_WF_SAVEU   0x0020
+#define OS88_WF_OWNBG   0x0040
+#define OS88_WF_KEEPH   0x0080
+#define OS88_WF_QUIET   0x1000
+#define OS88_WF_1BPP    0x2000
+#define OS88_WF_NOANIM  0x4000
+#define OS88_WFB_SIZABLE 2
+#define OS88_WFB_NOSNAP  4
+#define OS88_WFB_SAVEU   5
+#define OS88_WFB_OWNBG   6
+#define OS88_WFB_KEEPH   7
+#define OS88_WFB_QUIET   12
+#define OS88_WFB_1BPP    13
+void os88_t_paint(void);
+void os88_t_onkey(void);
+void os88_t_onclick(void);
+void os88_t_about(void);
+void os88_t_onwake(void);
+void os88_t_onclose(void);
+void os88_t_onmouseup(void);
+void os88_t_onresize(void);
+void os88_t_ontimer(void);
+void os88_t_onwheel(void);
+void os88_wm_flag(void *win, int bit, int on);
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls);
 void os88_wm_content(void *win, struct os88_pt *o);
 int  os88_wm_geom(void *win, struct os88_size *s);
 int  os88_wm_obscured(void *win);
 void os88_wm_title(void *win, const char *s);
-void os88_wm_snap(void *win, int on);
-void os88_wm_sizable(void *win, int on);
 void os88_wm_destroy(void *win);
 void os88_wm_hide(void *win);
-void os88_wm_onmouseup(void *win);
 void os88_menu_set(void *win, struct os88_menuset *set);
-void os88_about_set(void *win);
 
 void os88_video(struct os88_video *v);
 void os88_mouse(struct os88_mouse *m);
@@ -88,6 +120,7 @@ int  os88_task_restartable(int on);   /* SPEC.md 66.6.2 - a stub here:
 void os88_task_alive(void *win);
 int  os88_peek(unsigned seg, unsigned off);
 unsigned os88_mem_claim(int kb);        /* Undo's snapshot: a static block */
+unsigned os88_mem_claim_p(unsigned paras);
 int  os88_mem_movable(unsigned seg, int on);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 int os88_file_write(const char *name, const void *buf, unsigned count);
@@ -96,7 +129,6 @@ int os88_file_dlg(int mode, void *win, const char *defname);
 int os88_arg_file(char *name13, struct os88_place *p);
 int os88_file_goto(struct os88_place *p);
 int os88_file_goto_q_mark(unsigned clus, int vol);
-void os88_wm_onwake(void *win);
 int os88_assoc_set(const char *ext, const char *stem);
 int os88_clip_put(const void *text, unsigned len);
 int os88_clip_get(void *buf, unsigned cap);

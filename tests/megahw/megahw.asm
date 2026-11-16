@@ -59,6 +59,9 @@ mh_entry:
     mov si, mh_tpl                  ; the window FIRST, so a row on 86Box or
     call OSAPI_WM_CREATE            ; MartyPC sees the program up
     jc .out0
+    mov [mh_win], bx                ; the entry RETURNS it (SPEC.md 20.2):
+                                    ; the loader's step 9 binds BX as the
+                                    ; window, and BX is everybody's below
     OS88_REGION_MOVABLE
     xor ax, ax                      ; the ask: the most a 64KB step's claim
     xor bx, bx                      ; is given, a bridge allowed
@@ -257,6 +260,9 @@ mh_entry:
 .done:
     mov word [mh_res+38], 1
     call mh_dump
+    mov bx, [mh_win]                ; BX = the window again: the 8KB walk
+                                    ; above leaves 0 here, and step 9 bound
+                                    ; that (wm_ptr2idx's divide, FAULT 00)
 .out0:
     pop bp
     pop di
@@ -592,7 +598,9 @@ mh_spans_end:
 
 mh_tpl:
     dw 8, 400, 200, 40
-    dw mh_ttl, mh_paint, 0, 0
+    dw mh_ttl, mh_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mh_cls, 0, PAINT, mh_paint
 mh_ttl:     db 'MegaHW', 0
 mh_s_e9:    db 'MEGAHW: ', 0
 mh_s_k:     db 'HWK.DAT', 0
@@ -601,6 +609,7 @@ mh_s_w:     db 'HWW.DAT', 0
 mh_res:     db 'HWRES001'
             times 32 db 0
 mh_dx       dw 0
+mh_win      dw 0
 mh_b        dw 0
 mh_t        db 0
             align 2

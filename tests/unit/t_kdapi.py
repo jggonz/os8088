@@ -81,7 +81,11 @@ def scan(path, api):
 
 def main():
     api = cells()
-    if len(api) < 100:
+    # The flag day (kernel size pass 19, SPEC.md 20.3.4) put the rare cells
+    # behind `int OS88_RARE`, so only the TABLE cells are still `%define`d as
+    # KERNEL_SEG:offset - 78 of them where there had been over 100. A rare
+    # cell is no far call at all, so this scan cannot see one either way.
+    if len(api) < 60:
         fail("only %d OSAPI_* cells found in apps/os88api.inc - the regex no "
              "longer matches how they are spelled, so this test is checking "
              "nothing" % len(api))

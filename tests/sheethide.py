@@ -70,12 +70,14 @@ def main():
     build_disk()
     S = os88sym.linear
     seen = {}
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
@@ -120,7 +122,7 @@ def main():
             }
 
         def fmt(item, text):
-            mo.menu(FMT[0], FMT[1], *ITEM(FMT[0], item))
+            SF.menu(m, mo, FMT[0], FMT[1], *ITEM(FMT[0], item))
             M.settle(m)
             m.type_text("\b" * 10 + text + "\n")
             M.settle(m, limit=180)

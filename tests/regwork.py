@@ -146,7 +146,29 @@ def main():
         raise_disk()
         p2_seg, p2 = open_named("PAINT.O88", 6, (8, 98))
         raise_disk()
-        pm_seg, pm = open_named("PINME.O88", 5, (8, 136))
+        # THE SUBJECT MUST OPEN BELOW PAINT #2, and it is the row's to make
+        # sure of rather than the arena's to happen to allow: a region goes
+        # into the HIGHEST hole it fits, and PINME's is one 512-byte block, so
+        # a sliver left free above the Paints takes it - kern_mega's arena has
+        # one at its ceiling, over the descriptor tables - and the subject is
+        # then flush against the ceiling, where no pass could move it and the
+        # stacking check below refuses the run. So an instance that lands
+        # above Paint #2 is left open as a PLUG for that sliver and another is
+        # opened; the last one is the subject. (A plug is never 'R'-pressed
+        # and, flush where it is, is no part of the experiment)
+        for _ in range(4):
+            pm_seg, pm = open_named("PINME.O88", 5, (8, 136))
+            if key(pm_seg) < key(p2_seg):
+                break
+            print("pinme %04x opened above Paint #2: left as a plug"
+                  % pm_seg)
+            raise_disk()
+
+        def pm_now_seg():
+            """THE SUBJECT's W_SEG now, by its own window - never by title,
+            which would answer a plug's"""
+            return u16(m.read(os88geom.winptr(m, pm.i, S) + os88geom.W_SEG,
+                              2))
         # THE PARAGRAPHS, NOW: on kern_mega the words are selectors whose
         # base a move rebases, so key() read later answers where they ARE
         pm_p = key(pm_seg)
@@ -215,17 +237,17 @@ def main():
             m.key("KeyA")
             try:                            # the claim, and the move it forces
                 os88marty.until(
-                    m, lambda _: key(pkg_seg(m, S, "PinMe")[0])
+                    m, lambda _: key(pm_now_seg())
                     not in (pm_p, None),
                     "PinMe's region to move",
                     guest=6 * os88marty.GUEST_PACE)
             except os88marty.MartyError:
                 pass                        # ...press again
             done(m)
-            if key(pkg_seg(m, S, "PinMe")[0]) not in (pm_p, None):
+            if key(pm_now_seg()) not in (pm_p, None):
                 break
 
-        pm_now = pkg_seg(m, S, "PinMe")[0]
+        pm_now = pm_now_seg()
         if pm_now is None:
             print("  3 the region moved         the PinMe window is GONE or "
                   "its title is unreadable - which is what a W_SEG the move "

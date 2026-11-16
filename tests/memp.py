@@ -32,7 +32,7 @@ import os88ui                                                # noqa: E402
 from os88fixture import need                                 # noqa: E402
 
 LABELS = {
-    1: "MEMP_AVAIL reports the granule (CX = 32) and a run",
+    1: "MEMP_AVAIL keeps CX and reports a run",
     2: "one paragraph is granted a whole granule, on a granule",
     3: "33 paragraphs are granted two granules",
     4: "MEMP_CLAIM_HI: 300 -> 320, aligned",

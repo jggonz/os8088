@@ -34,15 +34,17 @@ HF_DEPTH     equ 16             ; the deepest folder a path is composed for
 hf_rec:
     push ax
     mov bx, ax
-    shl bx, 1                   ; 2n
     shl ax, 1
     shl ax, 1
-    shl ax, 1
-    shl ax, 1                   ; 16n
-    add bx, ax
+    shl ax, 1                   ; 8n
+    add bx, ax                  ; 9n
+    shl bx, 1                   ; 18n
     add bx, HF_HDR
     pop ax
     ret
+%if HF_REC != 18
+  %error "httpfs: hf_rec multiplies by 18 as (8n + n) x 2"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; hf_reloc - the index moved (SPEC.md 66.2, NO-PINNING R2). BX = where it was,
@@ -120,7 +122,6 @@ hf_fetch:
     add ax, 15                  ; 50.3.7): the index is a byte count held
     mov cl, 4                   ; for the whole mount, and a whole KB of it
     shr ax, cl                  ; is half a granule more on average
-    xor cx, cx
     mov bl, MEMP_CLAIM_HI
     call OSAPI_MEM_P            ; owner = our segment: drv_release sweeps it
     jnc .claimed
@@ -268,13 +269,9 @@ hf_valid:
     inc ax
     cmp ax, cx
     jb .r
-    clc
-    ret
-.badnm:
-    pop cx
-    stc
-    ret
-.badkid:
+    ret                         ; CF = 0: the compare that ended the walk
+.badnm:                         ; (a CX or a BX on the stack: either is a
+.badkid:                        ; register this clobbers, so one pop drops it)
     pop bx
 .bad:
     stc
@@ -527,10 +524,9 @@ hf_wprot:
 
 ; FSV_DFREE: nothing free, in 512-byte granules
 hf_dfree:
-    xor ax, ax
+    xor ax, ax                  ; (CF = 0)
     xor dx, dx
     mov bx, 512
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -548,9 +544,8 @@ hf_chdir:
     mov ax, bx
     call hf_isdir
     jc .out
-    mov [hf_cwd], ax
+    mov [hf_cwd], ax            ; (CF = 0: hf_isdir's)
     mov dx, [es:bx+HR_PAR]      ; the root's is 0, which is never read
-    clc
 .out:
     pop es
     pop bx
@@ -676,11 +671,9 @@ hf_stat:
     mov cx, [es:bx+HR_A]
     mov dx, [es:bx+HR_B]
     xor bl, bl
-    jmp short .ok
+    jmp short .out              ; (CF = 0: the test, and every one after it)
 .dir:
     mov bl, 0x10
-.ok:
-    clc
 .out:
     pop es
     pop di
@@ -715,8 +708,7 @@ hf_open_file:
     pop cx
     mov ax, FERR_IO
     jc .fail
-    clc
-    ret
+    ret                         ; (CF = 0: hf_mkpath's)
 .fail:
     xor dx, dx
     stc
@@ -912,8 +904,7 @@ hf_lenis:
     mov ax, [hf_clen+2]
     cmp ax, [hf_fsize+2]
     jne .no
-.ok:
-    clc
+.ok:                            ; (CF = 0 every way in: an equal compare)
     ret
 .no:
     mov ax, HFE_SHORT

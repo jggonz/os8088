@@ -4095,7 +4095,7 @@ until 20.17; the host sets the count):
 | 5.. | each code image's two 32KB halves, `OP_SELF` | a 64KB claim each |
 | then | the relocations, 16,256 a part, eager (`OP_ASSET`, LZ4) | the carve |
 | then | the list, up to `RDG_LXMAX` = 4 parts of 8,128 entries, eager | the carve |
-| then | with `--embed`, the ROM in plain 32KB pieces (20.13) | the ROM's claim or the bank cache |
+| then | with `--embed`, the ROM: one `OP_BIG` row of banks compressed one by one, two past 960KB (20.13) | the ROM's claim or the bank cache |
 
 The table is laid out for 64 rows, the most a part table holds, and the
 host sets the count.
@@ -4291,16 +4291,37 @@ frames identical to the interpreter.
 ### 20.13 The ROM inside the package
 
 `gbaot.py make ... --embed` (and `package --embed`, the window's tick)
-appends the ROM after the code images as PLAIN 32KB parts - plain so that,
-being whole sectors, they lie back to back in the file, and one offset finds
-any bank. The meta says where (58: the first piece's row, 60: the ROM's KB);
-the table's count includes them. **A package file is under 32MB**
+appends the ROM after the code images, **COMPRESSED A BANK AT A TIME**
+(RDAOT3). Each 16KB bank is its own LZ4 stream, or the bank itself when LZ4
+does not make it smaller, and the banks lie back to back in ONE part, an
+`OP_BIG` row (SPEC.md 20.12.15) that is `OP_SELF` like the code images:
+the package reads it, and the standard never does. A ROM whose stored banks
+pass `OP_BIGMAX` (960KB) takes a second such row, and the rows are whole
+paragraphs, so they too lie back to back and one offset is still the base of
+every bank. The meta says where (58: the first row, 62: how many rows, 60:
+the ROM's KB) and how big each bank is: from 64, a word a bank, its stream's
+packed length, 0 for a bank stored as it is. Bank n is at the first row's
+offset plus the stored lengths of the banks before it - a sum over at most
+512 words in memory, against a disk read it saves nothing on.
+
+**A bank is expanded IN PLACE, in its own 16KB**: `rw_aebank1` reads the
+stream to the top of the bank's slot and `OSAPI_DECOMP` writes the bank
+down from offset 0, `rw_apart`'s trick for the code images (20.10). It
+needs no buffer and no margin, because every stream ends in a raw tail
+(SPEC.md 20.13.7); the host checks `in_place_margin` is 0 for each bank and
+stores the bank plain if it is not. No near-call filter: the bytes are SM83
+code and data, not 8086.
+
+**It was PLAIN 32KB parts, a row each**, so that they lay back to back with
+one offset finding any bank - and the ROM was most of a package's bytes: a
+256KB cartridge embedded was 256KB of the file, where its banks pack to
+roughly half that. The rows came out of the code images' budget too: a 1MB
+ROM was 32 of the table's 64.
+
+**A package file is under 32MB**
 (`PKG_FILE_HI`, SPEC.md 19.1: the mount types nothing bigger as a package;
-it was 1MB until 20.17),
-so a 1 MB cartridge - Looney Tunes' .gbc, 1,344,512 bytes embedded - cannot
-be inside its package, and the host refuses it there and says to leave the
-ROM beside it. Within that, a ROM is a row a 32KB, and the table's 64 rows
-are the other bound.
+it was 1MB until 20.17), and the table's 64 rows are the other bound - which
+the ROM now spends one or two of.
 
 **The window's tick is ON by default** (the CLI's `--embed` is off), so a
 package made with the window's defaults CONTAINS the cartridge ROM - it is

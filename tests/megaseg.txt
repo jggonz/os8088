@@ -199,4 +199,15 @@
 #             bit rather than run the bracket it would otherwise run). The
 #             strip of the bit itself is the same `and cl` kern_big has, and
 #             the whole preparation is `.mega`'s (+432 there, inside its rung)
-3760
+# 2026-11-10: +3, kernel size pass 19 (SPEC.md 20.3.4): the rare door's RS
+#             body loads DS with KDS, which is `mov ds, [cs:k_dsel]` here and
+#             `push cs / pop ds` on kern_big - five bytes against two. The
+#             door is `.text` on every kernel because its bodies near-call
+#             `.text` routines and a real-mode bracket's IVT entry names it
+# 2026-11-10: -208 (the reading 3,650 -> 3,442), kern_big and kern_emu
+#             take the four VGA KHP knobs (docs/plans/khp1/LOG.md L.6):
+#             kern_mega already carried them, so kern_big's `.vga` grows
+#             +192 under the same window and kern_mega's own .text shrinks
+#             -16 with their size pass. The allowance comes down by what
+#             this change moved, keeping the slack it had
+3555

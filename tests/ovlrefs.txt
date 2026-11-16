@@ -107,7 +107,7 @@ bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since
 # B2CALL spl_finish - which is the release's precondition, so the blob is
 # aboard for every one of them by construction.
 vid_init            kmain_o only (B2CALL, MARK 7) - the probe and publish re-run, the mode set skipped while the splash is up (viddet.inc); before spl_finish
-font_init           kmain_o only (B2CALL on kern_big, kern_emu and kern_mega - kern_small's is `.boot3`'s, B3CALL - between MARKW 13 and 14: the ROM font pick, after mem_init_x and before splf_step) - before spl_finish. Back in the blob since BOOT3-PLAN 16.16, which took its bytes out of the packed KERNEL.SYS; the BAKED_FONT arm is ovl_font_init, `.ovl`, and names no blob label
+font_init           kmain_o only (B3CALL, `.boot3` on every kernel, between MARKW 13 and 14: the ROM font pick, after mem_init_x and before splf_step) - before spl_finish. In the blob on the three big kernels from BOOT3-PLAN 16.16 until 2026-11-10, when the plain-MDA probe (SPEC.md 39.1) took the room; the BAKED_FONT arm is ovl_font_init, `.ovl`, and names no blob label
 ovl_spl_msg_mouse   kmain_o only (B2CALL, MARK 18) - 'Looking for a mouse', before spl_finish
 ovl_spl_msg_fdd     kmain_o only (B2CALL, MARK 20) - 'Checking drives', before spl_finish
 bvs_apply           the boot's own vid_switch and vid_disp_init only (VSW_SWITCH's and VSW_DISP's bvs arms, B2CALL - the macro BODIES are what sits in `.text`, textually): the probe's FAR body itself since BOOT3-PLAN 16.17 retired its door bvs_apply_f, from `.boot3`, which drv_boot_x, vx_boot_x and kmain_o reach before spl_finish (vx_boot_x after it, and before mem_unblob_x - the blob is still aboard: kmain releases it only on kmain_o's return)

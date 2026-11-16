@@ -96,12 +96,12 @@ def biff_widths(data):
 
 
 def save(m, mo, kind, name, before=None):
-    mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
-    M.settle(m)
+    SF.menu(m, mo, SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
+    M.ui_done(m)                    # SOAK-SPEED 4: every step of
     mo.click(*SF.fdlg_xy(m, SF.FMT_ROW[kind]))
-    M.settle(m)
+    M.ui_done(m)                    # the save is aimed off the
     mo.click(*SF.fdlg_okxy(m))
-    M.settle(m, limit=120)
+    M.ui_done(m)                    # kernel's window record
     mo.click(*SF.SAVE_BUTTON)
     for _ in range(60):
         v = os88flush.Flush(marty=m).volume(1)
@@ -115,13 +115,15 @@ def main():
     os.chdir(os.path.join(HERE, ".."))
     build_disk()
     shown, gaps1, gaps3, sylk, biff, sylk2 = {}, [], [], None, None, None
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         table = glass.glyphs(m)
         dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
         SF.open_shin(m, mo)
@@ -161,7 +163,7 @@ def main():
         # --- 3: Format > Column Width on B3 --------------------------------
         mo.click(*centre(g, 2, 1))
         M.settle(m)
-        mo.menu(SF.FORMAT_MENU[0], SF.FORMAT_MENU[1], *COLW_ITEM)
+        SF.menu(m, mo, SF.FORMAT_MENU[0], SF.FORMAT_MENU[1], *COLW_ITEM)
         M.settle(m)
         m.type_text("\b\b\b10\n")
         M.settle(m)
@@ -178,7 +180,7 @@ def main():
         if g:
             mo.click(*centre(g, 2, 0))
             M.settle(m)
-        mo.menu(EDIT_MENU[0], EDIT_MENU[1], *INSERT_ITEM)
+        SF.menu(m, mo, EDIT_MENU[0], EDIT_MENU[1], *INSERT_ITEM)
         M.settle(m)
         mo.click(*SF.fdlg_xy(m, COLUMN_ROW))
         M.settle(m)

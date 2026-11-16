@@ -72,9 +72,18 @@ def dirty_addr():
 def after_frame():
     """ar_loop's instruction after `call [bx+BD_FRAME]`, from the listing."""
     import re
+    # The SDK's `call` is a macro since the flag day, so the source line
+    # lists with no address; its bytes are on the expansion's `<1> call %1`.
+    pending = False
     for ln in open(os88build.at('build/arcade.lst')):
         m = re.match(r'\s*\d+\s+([0-9A-F]{8})\s+(\S+)\s+call \[bx\+BD_FRAME\]', ln)
         if m:
+            return int(m.group(1), 16) + len(m.group(2)) // 2
+        if re.match(r'\s*\d+\s+call \[bx\+BD_FRAME\]', ln):
+            pending = True
+            continue
+        m = re.match(r'\s*\d+\s+([0-9A-F]{8})\s+(\S+)\s+<1>\s+call %1', ln)
+        if pending and m:
             return int(m.group(1), 16) + len(m.group(2)) // 2
     raise SystemExit('qbglass: FAIL - no BD_FRAME call in the listing')
 

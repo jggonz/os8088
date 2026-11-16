@@ -26,16 +26,15 @@
 ; --- NETV_OPEN ---------------------------------------------------------------
 ; in ES:SI = a NUL host, CX = the port; out AX = a handle
 eth_v_open:
-    mov [eth_usi], si           ; **BANKED, NOT RE-POPPED.** The obvious form -
-    push bx                     ; pop the pushed SI back when the name is
-    push cx                     ; wanted - reads the wrong slot the moment
-    push dx                     ; anything is pushed after it, and there is
-    push si                     ; something: DI
-    push di
-    call eth_pump
-    mov si, eth_ip
-    call ip_zero
-    jz  .nolink
+    push bx                     ; **SI IS HELD, NOT RE-POPPED.** The obvious
+    push cx                     ; form - pop the pushed SI back when the name
+    push dx                     ; is wanted - reads the wrong slot the moment
+    push si                     ; anything is pushed after it, and there is
+    push di                     ; something: DI. It was banked in a word
+    call eth_pump               ; (eth_usi) until driver size pass 1; it is
+    mov ax, [eth_ip]            ; simply never written: eth_pump, sk_alloc
+    or  ax, [eth_ip+2]          ; and tcp_lport all keep it, and ip_zero's
+    jz  .nolink                 ; question is asked in AX instead of SI
     mov dx, cx                  ; the port, across sk_alloc
     call sk_alloc
     jc  .full
@@ -48,8 +47,7 @@ eth_v_open:
     lea di, [bx+SKO_HOST]       ; the name, out of their segment and into the
                                 ; record - bounded by the record and never by
     mov cx, NET_HOSTMAX - 1     ; the NUL, which came off a package
-    mov si, [eth_usi]
-    call usr_read
+    call usr_read               ; SI = their offset, as they passed it
     mov byte [bx+SKO_HOST+NET_HOSTMAX-1], 0
 
     lea si, [bx+SKO_HOST]
@@ -67,8 +65,7 @@ eth_v_open:
     call tcp_syn
 .ok:
     mov al, [eth_hnd]
-    xor ah, ah
-    clc
+    xor ah, ah                  ; (and CF=0: `xor` clears it)
     jmp short .pop
 .nolink:
     mov ax, NETE_NOLINK
@@ -101,10 +98,9 @@ eth_v_status:
     pop bx
     clc
     ret
-.no:
+.no:                            ; (CF = 1: sk_h2p's)
     pop dx
     pop bx
-    stc
     ret
 
 ; --- NETV_SEND ---------------------------------------------------------------
@@ -206,20 +202,13 @@ eth_v_recv:
     ; segment it then sends is acknowledged with the space that opened after
     ; it - so nothing is lost by not repeating ourselves.
     ; -----------------------------------------------------------------------
-    push ax
     mov ax, [bx+SKO_RXC]        ; ...and half of ITS ring, not the driver's
-    shr ax, 1
-    cmp dx, ax                          ; was it at or above half...
-    jb  .noadv
+    shr ax, 1                   ; (AX is the handle the pops below restore,
+    cmp dx, ax                  ; so it is free here) was it at or above half...
+    jb  .out
     cmp [bx+SKO_RXN], ax                ; ...and is it below half now?
-    jae .noadv
-    pop ax
-    push cx
-    call tcp_ack
-    pop cx
-    jmp short .out
-.noadv:
-    pop ax
+    jae .out
+    call tcp_ack                        ; (which keeps CX, the answer)
 .out:
     pop si
     pop dx
@@ -262,9 +251,8 @@ eth_v_bulk:
     xor ax, ax
     clc
     ret
-.no:
+.no:                                    ; (CF = 1: sk_h2p's)
     pop bx
-    stc
     ret
 
 ; --- NETV_SKTAB --------------------------------------------------------------
@@ -276,7 +264,6 @@ eth_v_bulk:
 ; built against a smaller table still reads whole records.
 eth_v_sktab:
     push bx
-    push dx
     push di
     push bp
     push es
@@ -285,14 +272,12 @@ eth_v_sktab:
     mov es, [eth_useg]
     cld
     xor cx, cx                          ; ...and CX becomes the answer
-    xor dl, dl
+    mov bx, sk_tab                      ; BX = the record, walked
 .l:
     mov ax, cx
     add ax, SKI_SZ
     cmp ax, bp
     ja  .done                           ; a partial record is worse than none
-    mov al, dl
-    call sk_ptr                         ; BX = the record (CX survives it)
     mov si, sk_ski                      ; ...and the record's fields in SKI
 .f:                                     ; order, each a WORD to ES:DI: a byte
     lodsb                               ; field's spare half is overwritten by
@@ -309,15 +294,14 @@ eth_v_sktab:
     cmp si, sk_ski_end
     jb  .f
     add cx, SKI_SZ
-    inc dl
-    cmp dl, NET_SOCKS
+    sub bx, -SK_SZ                      ; tcp.inc's SK_NEXT, which is not
+    cmp bx, SK_END                      ; defined yet where this is included
     jb  .l
 .done:
     mov al, NET_SOCKS
     pop es
     pop bp
     pop di
-    pop dx
     pop bx
     clc
     ret
@@ -404,10 +388,7 @@ eth_v_abort:
     mov al, NSK_FREE                    ; its .free arm
     call tcp_abort
 .no:
-    pop bx
-    pop ax
-    clc
-    ret
+    jmp short eth_v_close.no            ; ...and eth_v_close's own tail
 
 ; --- NETV_ADDR ---------------------------------------------------------------
 ; out ES:DI (the CALLER's) = four bytes of IPv4; CF=1 / NETE_NOLINK if none yet
@@ -549,18 +530,19 @@ eth_v_raw:
     cmp byte [eth_raw], 0
     jne .held
     mov byte [eth_raw], 1
-    mov word [eth_nraw], 0      ; the counters are per CLAIM, so a probe can
-    mov word [eth_nrawtx], 0    ; read them without knowing what ran before it
+    push cx
+    push si
+    xor cx, cx                  ; the counters are per CLAIM, so a probe can
+    mov [eth_nraw], cx          ; read them without knowing what ran before it
+    mov [eth_nrawtx], cx
     or  di, di                  ; ...AND THE STATION ADDRESS, because a
     jz  .nomac                  ; consumer that is the stack now cannot build
-    push cx                     ; one frame without it (netpkg.inc)
-    push si
-    mov si, eth_mac
+    mov si, eth_mac             ; one frame without it (netpkg.inc)
     mov cx, 6
     call usr_write              ; SI ours, DI theirs
+.nomac:
     pop si
     pop cx
-.nomac:
     clc
     ret
 .release:
@@ -600,12 +582,13 @@ eth_v_rawtx:
                                 ; already taken (ne_tx, rt_tx): a second `inc`
                                 ; here counted every raw frame twice (kernel
                                 ; size pass 18 - the owner's call, -4)
-    pop word [eth_useg]
-    pop di
+    clc
+.pop:                           ; ONE TAIL: the frame's path runs the same
+    pop word [eth_useg]         ; instructions it did, and the refusals jump
+    pop di                      ; in with their CF set (driver size pass 1)
     pop si
     pop cx
     pop bx
-    clc
     ret
 .gone:
     mov ax, NETE_NOLINK         ; the card never finished the previous transmit
@@ -620,13 +603,8 @@ eth_v_rawtx:
                                 ; frame it wanted to send would have gone out
                                 ; under a MAC our own stack is still using
 .err:
-    pop word [eth_useg]
-    pop di
-    pop si
-    pop cx
-    pop bx
     stc
-    ret
+    jmp short .pop
 
 ; --- NETV_RAWRX --------------------------------------------------------------
 ; in DI = a buffer, CX = its capacity, DX = the segment it is in (0 = the
@@ -682,5 +660,217 @@ eth_rawseg:
     mov [eth_useg], dx
 .keep:
     ret
+
+; =============================================================================
+; UDP FOR A PACKAGE (SPEC.md 72.24): one port, a queue of UQ_N datagrams of
+; up to UQ_DATA bytes each, filled by udp_in as frames are pumped and
+; drained by NETV_UDPRX. The stack already speaks UDP (DHCP, DNS): what is
+; new is a package's port. A full queue drops the newest and counts it.
+; =============================================================================
+UQ_N        equ 8
+UQ_DATA     equ 64
+UQ_LEN      equ 0               ; a slot: the datagram's TRUE length, the
+UQ_SRC      equ 2               ; source (IP, then port, little-endian), the
+UQ_PAY      equ 8               ; payload (at most UQ_DATA of it)
+UQ_SZ       equ UQ_PAY + UQ_DATA
+
+; --- NETV_UDP: AL = 1 bind CX = a port, 0 release ----------------------------
+eth_v_udp:
+    or  al, al
+    je  .release
+    jcxz .bad
+    cmp word [eth_uport], 0
+    je  .take
+    cmp cx, [eth_uport]         ; (the same port again: still ours)
+    jne .busy
+.take:
+    mov [eth_uport], cx
+    mov al, [eth_cslot]         ; (whose: NETV_GONE releases it)
+    mov [eth_uslot], al
+    mov word [eth_uqh], 0       ; the queue empty
+    clc
+    ret
+.release:
+    mov word [eth_uport], 0
+    clc
+    ret
+.busy:
+    mov ax, NETE_BUSY
+    stc
+    ret
+.bad:
+    mov ax, NETE_ARG
+    stc
+    ret
+
+; --- NETV_UDPTX: SI = the payload, CX = its length, DI = 6 bytes: IP, port --
+eth_v_udptx:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    cmp word [eth_uport], 0
+    je  .nolink
+    cmp cx, 512
+    ja  .bad
+    push si
+    push cx
+    mov si, di                  ; the destination: 6 bytes, theirs
+    mov di, eth_udst
+    mov cx, 6
+    call usr_read
+    pop cx
+    pop si
+    mov di, eth_txb + IP_PAY + UD_HLEN
+    call usr_read               ; the payload, in place (udp_send's rule)
+    mov si, eth_udst
+    mov dx, [eth_udst+4]
+    mov bp, [eth_uport]
+    call udp_send               ; CF=1: no ARP answer yet - again later
+    jc  .nolink
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.bad:
+    mov ax, NETE_ARG
+    jmp short .err
+.nolink:
+    mov ax, NETE_NOLINK
+.err:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; --- NETV_UDPRX: DI = a buffer, CX = its capacity ----------------------------
+; The ring pumped first (this verb is all the service a polling game gives
+; the card), then the oldest queued datagram out: its SOURCE's six bytes at
+; DI (BX is the door's class and verb, so it cannot carry a pointer), its
+; payload after them. CX = the payload's TRUE length
+eth_v_udprx:
+    push ax
+    push si
+    push di
+    push bx                     ; **eth_pump SAVES ONLY CX AND BP**
+    push dx                     ; (eth_pump_i's STKDEPTH-NOSAVE): without
+    call eth_pump               ; these the caller's DI - where the datagram
+    pop dx                      ; goes - was the pump's, and the copy landed
+    pop bx                      ; at an offset in the package nobody chose
+    pop di                      ; (WIREARENA-NET-PLAN 9.2)
+    push di
+    cmp word [eth_uqh], 0
+    je  .none
+    cmp cx, 6                   ; no room for the source is refused, and the
+    jb  .bad                    ; datagram stays queued (SPEC.md 72.24)
+    sub cx, 6                   ; (the room past the source)
+    mov ax, [eth_uq+UQ_LEN]
+    push ax                     ; (the TRUE length, the answer)
+    cmp ax, cx
+    jae .cap
+    mov cx, ax
+.cap:
+    cmp cx, UQ_DATA
+    jbe .fit
+    mov cx, UQ_DATA
+.fit:
+    push cx
+    mov si, eth_uq + UQ_SRC
+    mov cx, 6
+    call usr_write              ; SI ours, DI theirs
+    pop cx
+    add di, 6
+    mov si, eth_uq + UQ_PAY
+    call usr_write
+    push es                     ; the rest down a slot
+    push ds
+    pop es
+    mov si, eth_uq + UQ_SZ
+    mov di, eth_uq
+    mov cx, (UQ_N - 1) * UQ_SZ
+    cld
+    rep movsb
+    pop es
+    dec word [eth_uqh]
+    pop cx
+    pop di
+    pop si
+    pop ax
+    clc
+    ret
+.none:
+    pop di
+    pop si
+    pop ax
+    stc
+    ret
+.bad:
+    pop di
+    pop si
+    pop ax
+    mov ax, NETE_ARG
+    stc
+    ret
+
+; udp_queue - a datagram for the package's port (udp_in, CX = its payload's
+; length, the frame in eth_rxb): into the queue's next slot, or dropped
+udp_queue:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov ax, [eth_uqh]
+    cmp ax, UQ_N
+    jae .full
+    mov di, UQ_SZ
+    mul di
+    add ax, eth_uq
+    mov di, ax
+    push ds
+    pop es
+    mov [di+UQ_LEN], cx
+    add di, UQ_SRC              ; (past the length: the source, then the
+    mov si, eth_rxb + IP_OFF + IPO_SRC ; payload)
+    movsw
+    movsw
+    mov ax, [eth_rxb + IP_PAY + UDO_SP] ; the source port, network order
+    xchg ah, al                 ; (be_get's load, written in place - it went in
+    stosw                       ; driver size pass 1)
+    mov si, eth_rxb + IP_PAY + UD_HLEN
+    cmp cx, UQ_DATA
+    jbe .c
+    mov cx, UQ_DATA
+.c:
+    cld
+    rep movsb
+    inc word [eth_uqh]
+    jmp short .out
+.full:
+    inc word [eth_uqdrop]
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+eth_uport:  dw 0                ; the package's port, 0 = none
+eth_uslot:  db 0xFF             ; ...its instance
+eth_uqh:    dw 0                ; datagrams queued
+eth_uqdrop: dw 0                ; ...dropped, the queue full
+eth_udst:   times 6 db 0        ; NETV_UDPTX's destination, ours
+eth_uq:     times UQ_N * UQ_SZ db 0
 
 %endif                          ; ETH_NORAW

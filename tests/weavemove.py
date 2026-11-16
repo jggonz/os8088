@@ -360,9 +360,7 @@ def weave(r):
                       what="the claims after SHEET closed")
     a = state(win)
     print("  (the worker's RUN at the post: %d)" % (sw(WSS_RUN) & 0xFF))
-    wptr = os88geom.winptr(m, win.i, S)
-    m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-    m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+    os88geom.post_compact(m, win.i, 0xFC, S)
     os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                     "the posted compaction", poll=0.2, guest=30)
     os88marty.ui_done(m)

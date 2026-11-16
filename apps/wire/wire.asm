@@ -131,13 +131,6 @@ wr_entry:
     call wr_pick                    ; not the state we want
     mov si, wr_menus
     call OSAPI_MENU_SET
-    mov si, wr_about
-    call OSAPI_ABOUT_SET            ; ...and 'About Wire' above the Close the
-                                    ; kernel already puts there (SPEC.md 12.2/
-                                    ; 12.7). BX is still the window: both slots
-                                    ; preserve every register and the flags,
-                                    ; which is why they may sit between
-                                    ; wm_create and the CF we owe the loader
 .out:
     pop si
     ret
@@ -858,7 +851,7 @@ wr_oncmd:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_about - the OSAPI_ABOUT_SET handler (SPEC.md 78.7, slot 0x018A)
+; wr_about - the WC_ABOUT handler (SPEC.md 78.7, 11.104)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment -
 ;      a window callback in every respect that matters
 ; out: nothing; preserves all registers
@@ -1033,10 +1026,13 @@ wr_pick:
     pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) --------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) --------------------------
 wr_tpl:
     dw 96, 32, WR_W, WR_H
-    dw wr_ttl, wr_paint, 0, wr_onclick   ; no onkey; the click is the credit
+    dw wr_ttl, wr_cls                    ; no onkey; the click is the credit
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS wr_cls, 0, PAINT, wr_paint, ONCLICK, wr_onclick, \
+               ABOUT, wr_about
                                     ; card's dismiss and nothing else (78.7)
 
 ; --- the app menu set (SPEC.md 12.2) ------------------------------------------

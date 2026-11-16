@@ -28,7 +28,7 @@
 ; pinned after the last Sticky App closed. No entry calls anything that can
 ; destroy a window, so the image is never freed under its own code.
 ;
-; DS = KERNEL_SEG on every entry (api_rsc, cur_shape_pass, wm_show_b,
+; DS = KERNEL_SEG on every entry (the door's RCS kind, cur_shape_pass, wm_show_b,
 ; fdlg_top_x), so the kernel's data is plain references. Kernel code is
 ; reached by far calls through resident cells and shims (apic_*, cw_*), which
 ; is what lets the image carry no EXK device at all. os88ovlchk refuses a
@@ -45,7 +45,7 @@ DKD_KEY     equ 12              ;   fdlg_top_x's "does a widget own the bar"
 section .cold
 ; -----------------------------------------------------------------------------
 ; osapi_wm_desk_x - OSAPI_WM_DESK, the desk layer's one door (SPEC.md 11.103.9)
-; far, DS = KERNEL_SEG (api_rsc). in: AL = the verb, BX = the window for 1-3.
+; far, DS = KERNEL_SEG (the door's RCS kind). in: AL = the verb, BX = the window for 1-3.
 ; out: CF = 0 done / CF = 1 refused; every register preserved.
 ;
 ; QUERY IS THE LOAD (SPEC.md 11.103.10): AL = 0 is desk_need's answer - CF =
@@ -111,11 +111,12 @@ desk_need:
 ;
 ; THE RULE IS "ANY RECORD", NOT "ANY LIVE RECORD": ld_alloc marks an
 ; OS88_F_DESK launch's record IF_DESK while it is still unpublished, so a
-; worker-arm widget dying mid-launch (inst_task_die, on that worker) cannot
-; drop the image between step 5's desk_need and the entry proc's MAKE - the
-; entry proc runs with the gfx lock FREE (SPEC.md 20.2). Every other caller
-; is on the UI task, outside the image, so the drop never frees code that is
-; running (mod_drop's banner).
+; widget closing while another launches cannot drop the image between step
+; 5's desk_need and the entry proc's MAKE - the entry proc runs with the gfx
+; lock FREE (SPEC.md 20.2). Every caller is on the UI task, outside the
+; image, so the drop never frees code that is running (mod_drop's banner) -
+; a worker's teardown included, since BR-4 posted it to the UI task
+; (SPEC.md 20.6, 11.103.10).
 ; -----------------------------------------------------------------------------
 desk_drop_x:
     push si
@@ -144,6 +145,8 @@ modj_hdr:
     db MOD_VER, MOD_DESK        ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modj_end, DKD_NENT       ; MOD_H_IMG, MOD_H_NENT
+    dw modj_end - modj_scr      ; MOD_H_SCR: one zero byte (2.8.3) - KEPT:
+                                ; it writes no byte of itself
     dw dkd_verb, dkd_hover, dkd_show, dkd_key
 
 ; -----------------------------------------------------------------------------
@@ -185,9 +188,9 @@ dkd_verb:
     cmp bx, [menu_win]          ; --- RELEASE
     jne .ok                     ; not the bar's owner: nothing to give back
     push bx
-    call KERNEL_SEG:apic_wm_top ; BX = the front APPLICATION window, 0 =
-    call KERNEL_SEG:cw_menu_activate ; Locator (SPEC.md 11.103.2)
-    call KERNEL_SEG:cw_menu_draw_bar
+    KDOOR wm_top                ; BX = the front APPLICATION window, 0 =
+    KDOOR menu_activate              ; Locator (SPEC.md 11.103.2)
+    KDOOR menu_draw_bar
     pop bx
 .ok:
     clc
@@ -328,12 +331,12 @@ dkd_show:
     push si
     or byte [bx+W_FLAGS], 2
     mov si, bx
-    call KERNEL_SEG:cw_wm_win_rect  ; AX..DX = its frame (no shadow: chromeless)
+    KDOOR wm_win_rect               ; AX..DX = its frame (no shadow: chromeless)
     mov byte [wm_dmg_npro], 1   ; ...and PROMOTES NOBODY: a desk window is
                                 ; never wm_top, so the front window is the one
                                 ; it was and its title is right (SPEC.md
                                 ; 11.103.3) - or .promote re-titles it
-    call KERNEL_SEG:cw_wm_paint_dmg ; under wm_show's lock
+    KDOOR wm_paint_dmg              ; under wm_show's lock
     pop si
     pop dx
     pop cx
@@ -387,6 +390,11 @@ dkd_key:
 dkd_lib:
     incbin "stiklib.bin"
 dkd_lib_end:
+modj_scr:   db 0                ; ...and the image's SCRATCH TAIL, one zero
+                                ; byte it never writes: DESK.DRV writes no byte
+                                ; of itself, and this is how its header opts
+                                ; it in to being KEPT at its drop (SPEC.md
+                                ; 2.8.3) - MOD_H_SCR = 0 means freed
 
 section .text
 %endif

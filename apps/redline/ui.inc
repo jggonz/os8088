@@ -592,7 +592,9 @@ ru_headline:
     add bx, 108
     mov dx, bx
     add dx, 4
+    push ax
     call OSAPI_GFX_VLINE
+    pop ax
     sub ax, [ru_x]
     mov cx, ax
     push cx

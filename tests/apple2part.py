@@ -193,9 +193,8 @@ def run():
             fails.append("part 4 does not unpack to %s byte for byte - the "
                          "package carries a module from another build" % OVL)
 
-    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
-        m.run()                         # the boot gate on STATE: the first
-        os88marty.kernel_up(m)          # act is a verb
+    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                          boot="up") as m:  # run + kernel_up
         mo = os88mouse.Mouse(marty=m)
         os88marty.no_saver(m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
@@ -236,7 +235,7 @@ def run():
         seg = 0
         for i in dispcp.win_list(m, S):
             rec = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-            sg = u16(rec, 22)           # W_SEG
+            sg = u16(rec, dispcp.W_SEG)
             if sg and m.read(sg << 4, 2) == b"O8":
                 seg = sg
         say("ld_status = %d, package segment %04X" % (st, seg))

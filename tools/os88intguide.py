@@ -1021,6 +1021,24 @@ for _n in range(0x80, 0xF1):
 VEC[0xF1]["text"] = """
 F1h-FFh were left unassigned for programs. Nothing standard uses them.
 """
+V(0x81, "os8088's rare door", "Door", kind="drv", text="""
+IBM reserved 80h-85h for BASIC and nothing ever used them, which is why
+os8088 took 81h: no firmware, no DOS and no BASIC writes it.
+""", os="""
+The kernel's RARE DOOR. A program reaches one of the kernel's less frequent
+services as `INT 81h` followed by one byte naming which - three bytes where
+a far call is five. The handler reads that byte through the caller's own
+return address, steps the return past it, puts the caller's interrupt flag
+back and calls the service. The kernel installs it at boot, beside its
+timer handler, and keeps it for as long as it runs.
+""", dos="""
+A DOS program that asks for 81h, or sets it, is answered from a copy of its
+own: the real entry stays the kernel's, because os8088's DOS reaches the
+kernel through it too. The whole-machine DOS keeps the same copy.
+""", own={"desk": "os", "dos": "os"},
+  anchors=[A("kernel/kernel.asm", r"^os88_door\s*:"),
+           A("kernel/sched.inc", r"OS88_RARE\*4"),
+           A("apps/dos/dos.asm", r"^dos_vslot\s*:")])
 
 for _n in FW_QUIET:
     for _view in ("boot", "desk", "dos"):

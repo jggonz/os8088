@@ -33,7 +33,7 @@ JOB_TABLES  equ 2                   ; tables and histogram (a restored picture,
 ; CLAIMS FOR THE DISK (SPEC.md 2.1.1): DMA-safe, and 512-aligned
 ; =============================================================================
 
-; px_dmaclaim - AX = KB of disk buffer, page-safe, its base ASSERTED on 32
+; px_dmaclaim - AX = PARAGRAPHS of disk buffer, page-safe, its base ASSERTED on 32
 ; paragraphs rather than rounded: kernel.asm's guard 6b pins every base
 ; mem_claim hands out to HEAP_SEG + n*MEM_PARA_KB paragraphs, MEM_PARA_KB a
 ; multiple of 32, so the round-up this used to do could never move a base
@@ -46,7 +46,8 @@ px_dmaclaim:
     push ax
     push cx
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call OSAPI_MEM_P
     jc .out
     mov bx, dx
     push dx
@@ -125,9 +126,9 @@ px_ringclaim:
     je .one
     shl ax, 1
 .one:
-    add ax, 1023
-    rcr ax, 1                       ; bytes -> KB, up (a carry is bit 16)
-    mov cl, 9
+    add ax, 15
+    rcr ax, 1                       ; bytes -> paragraphs, up (a carry is
+    mov cl, 3                       ; bit 16)
     shr ax, cl
     call px_dmaclaim
     jnc .have

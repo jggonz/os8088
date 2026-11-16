@@ -244,12 +244,16 @@ lz_decomp_big:
     jb .esok                    ; at 0FFF0h, which is what lz_dbump would make
     cmp bx, 1                   ; of the selector (KERN-MEGA-PLAN 13.6)
     jb .esok
-    ja .esbad
+    ja .esbig
     or dx, dx
     jz .esok
-.esbad:
-    pop ax
-    jmp .early                  ; (near: the huge read's test below)
+.esbig:                         ; ...BUT ONLY ABOVE 1MB: an LDT selector over
+    call COLD_SEG:mega_s2segc   ; CONVENTIONAL memory has a segment, and
+    inc ax                      ; lz_dbump bumps it as one - a parts carve or
+    jnz .esok                   ; a fetch past 64KB, which is always
+    pop ax                      ; conventional (SPEC.md 20.12.15). 0xFFFF,
+    jmp .early                  ; no segment, is the refusal; (near: the
+                                ; huge read's test below)
 .esok:
     pop ax
 %endif

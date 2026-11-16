@@ -2,7 +2,7 @@
 ; os8088 - tests/sbtest/sbtest.asm
 ;
 ; SBTEST: the sound Phase 4+5 gate package (docs/history/SOUND-PLAN.md). Exercises
-; the stream + staging surface (slot 0x00EA, SPEC.md 20.3/34.5/34.6) end to
+; the stream + staging surface (slot 0x00CC, SPEC.md 20.3/34.5/34.6) end to
 ; end from a real package: grant -> synthesise -> stage -> open -> poll ->
 ; close, exactly the model SPEC.md 34.5 prescribes (the package never holds
 ; an ES pointer into SND_SEG; the kernel refill/drain tasks pace the card).
@@ -429,10 +429,11 @@ sb_rec:
     mov ax, si                      ; show the grant offset on line 1
     mov bx, sb_s1+2
     call sb_putu5
-    mov ax, SB_RKB
+    mov ax, SB_RKB * 64
     mov cx, ax                      ; all of it is the card's: page-safe
     mov word [sb_rtmp], 0           ; (nothing to free if this refuses)
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = the ring's segment
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = the ring's segment
     mov al, 9
     jc .freefail
     mov [sb_rtmp], dx               ; a candidate, like the grant: an open
@@ -646,7 +647,7 @@ sb_putu5:
     pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) -------------------------
 sb_tpl:                             ; 88 AND NOT 290: this window has to fit a
     dw 340, 88, 190, 100            ; 640x200 CGA as well as the 640x480 that
                                     ; `make test-snd` gives it, because
@@ -655,7 +656,10 @@ sb_tpl:                             ; 88 AND NOT 290: this window has to fit a
                                     ; and at 290 the whole window was below the
                                     ; bottom of that screen.
                                     ; x, y, w, h -> content 188 x 81
-    dw sb_ttl, sb_paint, sb_onkey, sb_onclick
+    dw sb_ttl, sb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sb_cls, 0, PAINT, sb_paint, ONKEY, sb_onkey, \
+               ONCLICK, sb_onclick
 
 sb_ttl:     db 'SB Test', 0
 sb_s1:      db 'g:----- o:-', 0     ; [+2..6] grant offset, [+10] result

@@ -21,20 +21,8 @@ mx_entry:
     jc mx_ret
     mov [mx_win], bx
     OS88_REGION_MOVABLE_NOKEEP mx_ret
-    mov si, mx_about
-    call OSAPI_ABOUT_SET
     mov si, mx_pref
     call OSAPI_WM_PREFER
-    mov al, 1
-    call OSAPI_WM_KEEPH
-    mov ax, mx_click
-    call OSAPI_WM_ONCLICK
-    mov ax, mx_drag
-    call OSAPI_WM_ONDRAG
-    mov ax, mx_up
-    call OSAPI_WM_ONMOUSEUP
-    mov ax, mx_timer
-    call OSAPI_WM_ONTIMER
     mov ax, 18
     call OSAPI_WM_TIMER
     clc
@@ -640,8 +628,12 @@ mx_abdismiss:
     ret
 
 mx_tpl:
-    dw 136,40,360,162
-    dw mx_title,mx_paint,mx_key,mx_click
+    dw 136, 40, 360, 162
+    dw mx_title, mx_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mx_cls, WF_KEEPH, PAINT, mx_paint, ONKEY, mx_key, \
+               ONCLICK, mx_click, ABOUT, mx_about, ONMOUSEUP, mx_up, \
+               ONTIMER, mx_timer, ONDRAG, mx_drag
 mx_pref: dw 360,162, 360,162, 360,162
 mx_title: db 'Mixer',0
 mx_heading: db '  SOUND MIXER',0

@@ -21,9 +21,9 @@ So every reference is REGISTERED here by the routine it sits in, as one of:
               NOT name WF_DESK.
   DEF         the definition, or an assembly-time assertion about it.
 
-and the reason goes with it. A site in neither list fails `make`, so the next
-person to copy a WF_FULL test has to decide which one they meant; a listed
-site that has gone fails too, so the list cannot rot into a stale comfort.
+and the reason goes with it. A site in neither list fails this (soak) row, so
+the next person to copy a WF_FULL test has to decide which one they meant;
+a listed site that has gone fails too, so the list cannot rot into a stale comfort.
 
 **BREAK IT ON PURPOSE**: turn wm_hit's `WM_CHROMELESS bx` back into `test byte
 [bx+W_FLAGS], WF_FULL` and this fails (a CHROMELESS site that is not the

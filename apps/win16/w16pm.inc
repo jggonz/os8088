@@ -278,7 +278,7 @@ w16_vclaimm:
 %else
     push bx
     push cx
-    xor cx, cx                      ; no page-safe head
+                                    ; no page-safe head
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     pop cx
@@ -612,7 +612,7 @@ w16_vclaim:
     push bx
     cmp ax, 0x1000
     ja .huge
-    xor cx, cx                      ; 64 KB or less: one selector over it
+                                    ; 64 KB or less: one selector over it
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; AX = granted
     jmp short .got

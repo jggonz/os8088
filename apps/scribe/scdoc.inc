@@ -2681,7 +2681,6 @@ sc_dpic1:
     jnz .kb
     inc ax                          ; (never 0: a claim of nothing refuses)
 .kb:
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; out DX = the base segment
     pop cx

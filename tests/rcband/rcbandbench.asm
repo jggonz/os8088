@@ -81,7 +81,6 @@ rb_entry:
     jc .out
     mov [rb_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP
     clc
     jmp short .out
 .refuse:
@@ -634,7 +633,10 @@ rdg_run:
 
 rb_tpl:
     dw 7, 22, 632, 448
-    dw rb_ttl, rb_paint, rb_onkey, rb_onclick
+    dw rb_ttl, rb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rb_cls, 0, PAINT, rb_paint, ONKEY, rb_onkey, \
+               ONCLICK, rb_onclick
 
 rb_ttl:     db 'RC Band Bench', 0
 

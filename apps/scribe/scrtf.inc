@@ -1289,7 +1289,6 @@ sc_rpclaim:
     jnz .kbok
     inc ax                          ; (never 0: a claim of nothing refuses)
 .kbok:
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; out DX = the base segment
     jc .no

@@ -31,6 +31,12 @@ eth_fixed:  dw ETH_BASE
 ; --- NIC_ATTACH_FIND found, none: pin, fixed base or sweep. Jumps to `none` when
 ; no card answers and FALLS THROUGH to `found`, which must follow it (the labels
 ; are arguments so that the includer's own text mentions them) ---
+; --- NIC_WAKE_FIND gone: DRVV_WAKE's find (SPEC.md 51.2.5) - the card at the
+; base attach found it at, and nowhere else: a card that moved is another card
+%macro NIC_WAKE_FIND 1
+    call ne_probe
+    jc  %1
+%endmacro
 %macro NIC_ATTACH_FIND 2
     call os88_pin               ; THE PORTS PAGE FIRST (SPEC.md 51.9.2): a
     or  al, al                  ; pinned card is probed at its one address and
@@ -79,9 +85,16 @@ eth_next:   db NE_PSTART + 1    ; the page WE will read next
     mov si, eu_s_ne2
 %%kind:
     call eu_val
-    mov ax, [eth_base]
+    mov ax, [eth_base]          ; ...and its base as four hex digits - eu_hex
+    mov di, eu_buf              ; until driver size pass 1, written at its one
+    xchg al, ah                 ; call (eth_cp_paint has banked every
+    call eu_hexb                ; register), so PCIETHER.DRV no longer
+    xchg al, ah                 ; carries it unused
+    call eu_hexb
+    mov byte [di], 0
+    mov si, eu_buf
     mov cx, EU_VX + 64
-    call eu_hex
+    call eu_txt
 %endmacro
 %macro NIC_UI_STRINGS 0
 eu_s_ne1:   db 'Ne1000', 0

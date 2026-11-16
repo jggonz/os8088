@@ -2,7 +2,7 @@
 ; os8088 - tests/fmtest/fmtest.asm
 ;
 ; FMTEST: the committed sound Phase 3 gate package (docs/history/SOUND-PLAN.md).
-; Exercises the public FM surface (slot 0x00E3, SPEC.md 20.3/34.2) end to
+; Exercises the public FM surface (slot 0x00C5, SPEC.md 20.3/34.2) end to
 ; end, so the AdLib gate can be re-run mechanically. It is NEVER shipped on
 ; the apps disks (their directory order is pinned) - the Makefile builds it
 ; into its own scratch image, build/fmtest.img, mounted with
@@ -208,10 +208,13 @@ ft_patch:
     db 0x22, 0x00, 0xF0, 0x07, 0x00 ; carrier: EGT|MULT2, full level, sine
     db 0x00                         ; C0h: FM connection, no feedback
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) -------------------------
 ft_tpl:
     dw 360, 300, 170, 78            ; x, y, w, h -> content 168 x 59
-    dw ft_ttl, ft_paint, ft_onkey, ft_onclick
+    dw ft_ttl, ft_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ft_cls, 0, PAINT, ft_paint, ONKEY, ft_onkey, \
+               ONCLICK, ft_onclick
 
 ft_ttl:     db 'FM Test', 0
 ft_stage:   db 0                    ; 0 idle / 1 one note / 2 chord

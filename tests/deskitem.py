@@ -17,10 +17,10 @@ GUEST'S OWN STATE:
      there. SYSTEM.CFG on A: carries the trailer.
   B  a double-click on the link launches the package it points at - a second
      DeskItem window.
-  C  a Remove whose zone no longer holds THIS link is refused: the row's path
-     is changed under the package - a zone is reused, so that is what the
-     user's own shortcut in it looks like - and Remove must answer CF = 1
-     (`di_res` 'r') and leave the row where it is.
+  C  a Remove no row matches is refused: the row's path is changed under the
+     package - the record NAMES the row (ABI-BREAK-LIST C10, kernel size pass
+     19), so a row that is no longer its link is somebody else's - and Remove
+     must answer CF = 1 (`di_res` 'r') and leave the row where it is.
   D  Remove takes it off: the cell is nothing, the claim is gone, and
      SYSTEM.CFG has no trailer again.
 
@@ -165,7 +165,7 @@ def main():
             if w.title == "DeskItem" and w.i not in first:  # holds the zone
                 ui.close(w)
 
-        print("C: File > Remove, the zone holding somebody else's link")
+        print("C: File > Remove, no row holding its link")
         w = [w for w in ui.windows() if w.i in first][0]
         wseg = _u16le(m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE
                              + geom.W_SEG, 2))
@@ -179,7 +179,7 @@ def main():
         ui._wait(lambda: m.read(res, 1)[0] in b"rR", "Remove's answer", 90,
                  snapshot=lambda: chr(m.read(res, 1)[0]))
         check(m.read(res, 1)[0] == ord("r"),
-              "Remove REFUSED a zone that no longer holds the link (%r)"
+              "Remove REFUSED: no row holds the link (%r)"
               % chr(m.read(res, 1)[0]))
         check(zbyte(DESK_SC0) == DSL_PIN | 5 and path0() == ord("X"),
               "...and the row in it is still there (%#x)" % zbyte(DESK_SC0))

@@ -232,7 +232,7 @@ def main():
     o = offsets()
     bad = 0
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
-                          boot=False) as m:
+                          boot=False, saver=True) as m:   # its subject
         m.run()                     # the boot gate on STATE: every figure
         os88marty.kernel_up(m)      # below is a guest counter
         print("one frame a tick is %.2f fps; a mode below %.1f that is also "

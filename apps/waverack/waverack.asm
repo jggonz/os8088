@@ -165,7 +165,7 @@ wr_entry:
     sub cx, MBAR_H                  ; its desktop band, for the size table
     mov [wr_pband], cx
     mov ax, OS88_BYTES_PARA(WRL_BANDSZ) ; the waveform band (SPEC.md 123.5),
-    xor cx, cx                      ; in PARAGRAPHS (50.3.7): 9,600 bytes is
+                                    ; in PARAGRAPHS (50.3.7): 9,600 bytes is
     mov bl, MEMP_CLAIM              ; 9.5 KB at the granule. A refusal is not
     call OSAPI_MEM_P                ; fatal - the waveform is then drawn
     jnc .band                       ; without its grid
@@ -188,12 +188,6 @@ wr_entry:
     OS88_REGION_MOVABLE_NOKEEP wr_ret ; every byte that outlives a pass is a
                                     ; static or in a pinned claim
     mov [wr_win], bx
-    mov ax, wr_ontimer              ; the scan, the refinement, a launch's
-    call OSAPI_WM_ONTIMER           ; document, the playhead: all from the
-    mov ax, wr_onwake               ; one-shot timer; the refills and the
-    call OSAPI_WM_ONWAKE            ; play's end from the worker's wake
-    mov ax, wr_onclose              ; (SPEC.md 123.6); and a close stops the
-    call OSAPI_WM_ONCLOSE           ; play first
     cmp byte [wr_argpend], 0
     je .noopen
     call wr_arm
@@ -210,23 +204,13 @@ wr_entry:
     add di, OS88UI_DR_SIZE
     loop .dw
     mov word [wr_drops + OS88UI_DR_SIZE + OS88UI_DR_SEL], 1
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content origin on the 8-pixel grid
-    mov al, 1
-    call OSAPI_WM_OWNBG             ; every pixel is the paint's
-    mov si, wr_about
-    call OSAPI_ABOUT_SET
     mov si, wr_menus
     call OSAPI_MENU_SET
-    mov ax, wr_wheel
-    call OSAPI_WM_ONWHEEL
     call wr_prefset
     mov si, wr_pref
     call OSAPI_WM_PREFER            ; the size, per adapter - and applied
     xchg ax, bx                     ; AX = the window
     mov bx, wr_btrec
-    mov si, wr_onup
-    mov di, wr_ondrag
     mov dx, wr_onclick
     call os88ui_btninit             ; keeps every register
     xchg ax, bx
@@ -1079,7 +1063,7 @@ wr_ontimer:
     pop si
     ret
 
-; wr_onwake - OSAPI_WM_ONWAKE (UI task, the gfx lock NOT held): the
+; wr_onwake - WC_ONWAKE (UI task, the gfx lock NOT held): the
 ; worker's refill and the play's end (wrxport.inc). SI = the window
 wr_onwake:
     push ax
@@ -1702,7 +1686,7 @@ wr_repaint:
 ; -----------------------------------------------------------------------------
 ; wr_paint - W_PAINT: the static parts, every element and every key; the
 ;            About card last
-; in:  SI = the window (gfx lock held; NOT white-filled - OSAPI_WM_OWNBG).
+; in:  SI = the window (gfx lock held; NOT white-filled - WF_OWNBG).
 ;      Keeps SI
 ; -----------------------------------------------------------------------------
 wr_paint:
@@ -2411,7 +2395,17 @@ wr_ratetxt:
 ; DATA
 ; =============================================================================
 wr_tpl:     dw 6, 24, WRL_CMP_W + 2, WRL_CMP_H + TITLE_H + 1
-            dw wr_ttl, wr_paint, wr_key, 0
+            dw wr_ttl, wr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+; (the content origin on the 8-pixel grid is the default; every pixel is the
+; paint's - OWNBG; the press is the button library's and the release and drag
+; ours; the timer is the scan, the refinement, a launch's document and the
+; playhead; the wake is the worker's refills and the play's end; a close
+; stops the play first, SPEC.md 123.6)
+    OS88_CLASS wr_cls, WF_OWNBG, PAINT, wr_paint, ONKEY, wr_key, \
+               ONCLICK, os88ui_btnclick, ABOUT, wr_about, ONWAKE, wr_onwake, \
+               ONCLOSE, wr_onclose, ONMOUSEUP, wr_onup, ONTIMER, wr_ontimer, \
+               ONDRAG, wr_ondrag, ONWHEEL, wr_wheel
 wr_ttl      equ 16                  ; the header's name field: 'WaveRack'
 
 wr_pref:    times 6 dw 0            ; OSAPI_WM_PREFER's table (wr_prefset)

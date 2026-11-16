@@ -51,7 +51,6 @@ eth_static: db ETH_IP
 eth_pr:     db 0                ; the protocol of the frame being built
 eth_dip:    times 4 db 0        ; ...and where it is really going
 eth_ipid:   dw 1
-eth_ph:     times 4 db 0        ; the pseudo-header's tail (ip_pseudo)
 eth_ph2:    times 4 db 0        ; a 32-bit scratch for sequence arithmetic
 eth_oflg:   db 0                ; the flags tcp_out is sending...
 eth_flg:    db 0                ; ...and the ones tcp_seg received. TWO WORDS
@@ -72,7 +71,6 @@ eth_now:    dw 0
 eth_dl:     dw 0
 eth_hnd:    db 0
 eth_useg:   dw 0                ; the calling package's segment (eth_pkg)
-eth_usi:    dw 0                ; ...and the offset it handed NETV_OPEN
 eth_busy:   db 0                ; THE CARD'S MUTEX (SPEC.md 72.2.2). One byte,
                                 ; and the first thing in this driver that two
                                 ; tasks touch: eth_useg above is one word for
@@ -114,6 +112,7 @@ dhcp_tmo:   dw 0
 dhcp_xid:   times 4 db 0
 dhcp_off:   times 4 db 0
 dhcp_srv:   times 4 db 0
+dhcp_wk:    db 0                ; 1 = the REQUEST out is a wake's (72.5.3)
 dns_sk:     db 0xFF
 dns_try:    db 0
 dns_id:     dw 0

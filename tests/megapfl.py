@@ -27,7 +27,7 @@ same at e6e7930c, before F4.
 THE FAILING CASES (docs/WRITING-TESTS.md 1), both measured when the row was
 written: --break bx rebuilds MEGAPFL with -DPFL_BADBX, the reported probe's
 BX, and the row fails `kern_mega FAULT 00 err 0000 at 0060:64A5`; --break free
-pokes OSAPI_XMEM_FREE's cell to a `retf` before MEGARUN starts, and the row
+points OSAPI_XMEM_FREE's rd_tab word at a `ret` before MEGARUN starts, and the row
 fails `the pool's best run back` (128KB back of 2978KB).
 """
 import argparse
@@ -47,7 +47,32 @@ sys.path.insert(0, HERE)
 fails = []
 FIELDS = ["before", "ccf", "hi", "fillkb", "blocks", "acf", "after", "rcf",
           "rlen", "name", "done"]
-XMEM_FREE_CELL = 0x0166             # OSAPI_XMEM_FREE, KERNEL_SEG's offset
+
+
+def free_noop():
+    """(linear address, word) that makes OSAPI_XMEM_FREE a no-op.
+
+    A DOOR cell since T5 (kernel size pass 19, SPEC.md 20.3.4): there is no
+    cell to poke a `retf` into. The door near-calls the routine rd_tab names
+    at RD_P + the published index (an RS entry), so the break points that
+    word at a `ret` byte of `.text` instead - every OSAPI_XMEM_FREE, the
+    package's and the kernel's own KDOOR ones, then returns at once, as every
+    far call to the old cell did."""
+    import os88cells
+    import os88layout
+    import os88sym
+    bdir = os.path.join(ROOT, "build", "megak")
+    off, sect, equ = os88sym._parse_map(os.path.join(bdir, "kernel.map"))
+    blob = open(os.path.join(bdir, "kernel.bin"), "rb").read()
+    blob = blob[os88layout.boot2_pad(ROOT):]
+    ix, kind, _, _ = os88cells.kernel_doors(blob, off, equ)["OSAPI_XMEM_FREE"]
+    if kind != "RS":
+        raise RuntimeError("OSAPI_XMEM_FREE is an %s door entry, not RS: the "
+                           "break wants a return of that kind" % kind)
+    ret = min(v for k, v in off.items()
+              if sect[k] == ".text" and v < len(blob) and blob[v] == 0xC3)
+    return (equ["KERNEL_SEG"] * 16 + off["rd_tab"] + 2 * (equ["RD_P"] + ix),
+            ret)
 
 
 def check(what, ok, more=""):
@@ -109,11 +134,7 @@ def main():
         if box.wait_pm(240):
             box.up()
             if a.brk == "free":
-                import os88sym
-                equ = os88sym._parse_map(os.path.join(
-                    ROOT, "build", "megak", "kernel.map"))[2]
-                box.dbg(["setpmem 0x%x 1 0xcb" % (equ["KERNEL_SEG"] * 16
-                                                  + XMEM_FREE_CELL)])
+                box.dbg(["setpmem 0x%x 2 0x%x" % free_noop()])
             box.megarun()
             end = time.time() + 300
             while time.time() < end:

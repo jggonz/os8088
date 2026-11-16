@@ -916,7 +916,13 @@ px_vrule:
     mov al, [px_c_rule]
     call OSAPI_SET_COLOR
     pop ax
+    push ax
+    push bx
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; px_hrule - row DX, columns AX..BX, in the rule colour. Preserves all
@@ -925,7 +931,9 @@ px_hrule:
     mov al, [px_c_rule]
     call OSAPI_SET_COLOR
     pop ax
+    push ax
     call OSAPI_GFX_HLINE
+    pop ax
     ret
 
 ; px_btn - draw button SI (an index) if it is laid out, and RECORD what was
@@ -3511,8 +3519,9 @@ px_artload:
     mov al, PXPART_GFX
     call op_lazyok                  ; the largest run holds the fetch...
     jc .out
-    call OSAPI_MEM_AVAIL            ; ...and BX = the KB free in all, which
-    cmp bx, PXA_MINFREE + PXA_KB    ; must leave PXA_MINFREE beside them
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; ...and BX = the paragraphs free in all,
+    cmp bx, (PXA_MINFREE + PXA_KB) * 64 ; which must leave PXA_MINFREE beside
     jb .out
     call OSAPI_FILE_HERE            ; the part is read BY NAME, so at home
     cmp dx, [px_homedir]            ; (px_pfetch's bracket): px_artback asks

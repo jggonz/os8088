@@ -253,8 +253,14 @@ def sites(defines=()):
     lab = re.compile(r"\s*\d+\s+(?:[0-9A-F]{8}\s+(?:[0-9A-F()\-\[\]]+\s+)?)?"
                      r"(?:<\d+>\s*)?([A-Za-z_][A-Za-z0-9_]*):")
 
+    # THE SDK'S `call` IS A MACRO since T5 (kernel size pass 19, SPEC.md
+    # 20.3.3): a call's bytes are listed on the expansion's `call %1`, and
+    # the text the source wrote is on the invocation line above, which has
+    # no address. So the instruction text is the last invocation's.
+    inv = re.compile(r"\s*\d+\s+(?:<\d+>\s*)?(call\s+[^%;]\S*)")
+
     def find(scope, pat):
-        hits, inside = [], False
+        hits, inside, said = [], False, ""
         for L in lines:
             m = lab.match(L)
             if m:
@@ -262,7 +268,15 @@ def sites(defines=()):
             if not inside:
                 continue
             m = rx.match(L)
-            if m and re.search(pat, m.group(3).split(";")[0].rstrip()):
+            if not m:
+                mi = inv.match(L)
+                if mi:
+                    said = mi.group(1)
+                continue
+            text = m.group(3).split(";")[0].rstrip()
+            if "%1" in text and said:
+                text, said = said, ""
+            if re.search(pat, text):
                 b = bytes.fromhex(m.group(2).replace("[", "").replace("]", ""))
                 a = int(m.group(1), 16)
                 hits.append((a, a + len(b)))

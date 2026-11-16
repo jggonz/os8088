@@ -180,15 +180,23 @@ def main():
     # --- 2. the resume, stopped at .nowz ------------------------------------
     box = ob.Box(OUT, [], cmode="keep", bootc=True, noa=True, build=TREE)
     try:
+        # NO QUESTION (SPEC.md 87.5): the resume follows mega_enter by
+        # itself, so the breakpoint is armed BEFORE protected mode - as soon
+        # as Bochs has taken its first `c`. Armed after wait_pm, it raced the
+        # stub's read of the image and lost on a loaded box (the wake ran
+        # past .nowz first: "never reached"). Nothing else runs that linear
+        # address: it is the hibernated session's HIBER.DRV, put back by the
+        # stub
+        end = time.time() + 60
+        while not re.search(r"<bochs:1> c", ob._tail(box.e9, 0)):
+            if time.time() > end:
+                break
+            time.sleep(0.05)
+        box.dbg(["lb 0x%x" % bp])
         if not box.wait_pm(300):
             fails.append("the second boot never reached protected mode")
             return report(fails, keep, t0)
-        box.up()                        # the desktop and its Resume card
-        box.capture()
-        box.dbg(["lb 0x%x" % bp])
-        box.goto(225, 225)              # Resume
-        box.xd("click", 1)
-        if not box.wait_for("Breakpoint 1", 180):
+        if not box.wait_for("Breakpoint 1", 300):
             fails.append("hbm_wake's .nowz (linear %X) never reached" % bp)
         else:
             # stopped there: read the masks, delete it, go on - on the
@@ -204,6 +212,11 @@ def main():
         if not box.wait_resumed(120):
             fails.append("no `kern_mega: resumed`")
         box.ui_done("the resumed desktop")     # (was 20 s slept)
+        # ...AND THE MOUSE CAPTURED: the box.capture() that stood before the
+        # Resume click went with the question, and a Box never captured is
+        # never re-grabbed after a stop - X's pointer then reached no Bochs
+        # and the guest's sat at (225, 225), the Hibernate button
+        box.capture()
         try:                            # CLOSED-LOOP: one that cannot move
             box.goto(100, 100)          # the pointer raises - and a == b
         except RuntimeError:            # below says so

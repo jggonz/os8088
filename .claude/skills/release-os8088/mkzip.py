@@ -12,7 +12,7 @@ THE MAIN ZIP IS LAID OUT BY DISK SIZE (approved for v1.0.20261026):
     1200K/            OS88-120 APPS-120 ALLn-120
     720K/             OS88-720 APPS-720 MORE-720
     720K/128K-RAM/    OS88-720 (small720.img)
-    360K/             OS88-360 APPS-360 MEDIA360 OFFIC360 NETWK360 GAMES360
+    360K/             OS88-360 APPS-360 MEDIA360 OFFIC360 NETWK360 GAMES360 GAMES2
                       EMU360 UTIL360
     360K/128K-RAM/    OS88-360 (small360.img)
     1440K/286-PLUS/   OS88-144 APPS-144 (mega.img, megaapps.img), and in
@@ -303,6 +303,11 @@ ITEMS = [
     ("xt", "Games disk", True,
      "Every game on one floppy.",
      [("games360.img", "360KB", "")]),
+    ("xt", "Games disk 2: WireArena", True,
+     "WireArena, the text-mode arena shooter: up to three bots, or two to "
+     "four players over a serial cable, a local network or the internet. "
+     "It needs kern_big or kern_mega, not the 128KB machine's kern_small.",
+     [("games2-360.img", "360KB", "")]),
     ("xt", "Emulators disk", True,
      "RealDMG, the Game Boy emulator, with the project's own demo cartridge "
      "in MEDIA, and WIN16, which runs Windows 3.x programs you put on a "
@@ -552,6 +557,7 @@ DEST = {
     "office360.img": "360K/OFFIC360.IMG",
     "network360.img": "360K/NETWK360.IMG",
     "games360.img": "360K/GAMES360.IMG",
+    "games2-360.img": "360K/GAMES2.IMG",
     "emu360.img": "360K/EMU360.IMG",
     "util360.img": "360K/UTIL360.IMG",
     "small360.img": "360K/128K-RAM/OS88-360.IMG",

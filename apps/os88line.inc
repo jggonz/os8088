@@ -62,6 +62,12 @@
 ; (DOS.O88, the Desk Calendar), carried 51 bytes it never reached. It
 ; removes the SYMBOL, so a package that sets it and calls os88line_set does
 ; not assemble; every package that does not set it is byte-identical.
+;
+; --- OS88LINE_NORESYNC - the field WITHOUT os88line_resync -------------------
+; The same opt-out for the other end: a client that only ever fills its
+; buffer through os88line_set never re-derives one written behind its back.
+; ETHER.DRV and PCIETHER.DRV's Setup window (drivers/ether/ethcfg.inc) carried
+; its 43 bytes unreached (SPEC.md 51.2.5's trim). Removes the SYMBOL, as above.
 ; =============================================================================
 
 LN_X1     equ 0
@@ -902,6 +908,7 @@ os88line_click:
 ; buffer somebody filled without a terminator ends the field at the cap
 ; instead of running off it.
 ; -----------------------------------------------------------------------------
+%ifndef OS88LINE_NORESYNC
 os88line_resync:
     push ax
     push bx
@@ -927,6 +934,7 @@ os88line_resync:
     pop bx
     pop ax
     ret
+%endif
 
 %ifndef OS88LINE_NOSET
 ; -----------------------------------------------------------------------------

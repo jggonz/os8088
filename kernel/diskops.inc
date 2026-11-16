@@ -211,8 +211,8 @@ CLO_NENT     equ 2              ; ...and a SECOND for the compressor, which
 %define CLO_XMS
 %endif
 CLO_XCAPS    equ apic_xm_caps          ; SPEC.md 41: out AX = free KB
-CLO_XALLOC   equ apic_xm_alloc         ; in DX:AX = bytes; out CF, DX:AX = the base
-CLO_XFREE    equ apic_xm_free          ; in DX:AX = a base this caller owns
+%define CLO_XALLOC   xm_alloc         ; in DX:AX = bytes; out CF, DX:AX = the base
+%define CLO_XFREE    xm_free          ; in DX:AX = a base this caller owns
 CLO_XCOPY    equ apic_xm_copy          ; in ES:SI / DX:AX / CX / DI = direction
 
 ; CLO_RSEQ seg, off - dwf_dskw_read_at, served by READ_SEQ from the 16-byte
@@ -243,6 +243,9 @@ modl_hdr:
     dw MOD_STAMP                ; MOD_H_STAMP
     dw modl_end                 ; MOD_H_IMG
     dw CLO_NENT                 ; MOD_H_NENT
+    dw modl_end - cmz_ovl       ; MOD_H_SCR: the pack's and the join's cells
+                                ; and the cursors after them, zeros in the
+                                ; file (2.8.3) - KEPT
     dw modl_e_disp
     dw modl_e_cmz               ; ...the compressor's (compress.inc)
 
@@ -468,10 +471,11 @@ clo_plan:
     push cx
     push dx
     push di
-    call KERNEL_SEG:apic_osapi_mem_avail ; AX = the largest free run, in KB.
-                                ; The CELL (0x0210), whose chain ends at the
-                                ; same mem_avail_x our own shim called:
-                                ; osapi_mem_avail_x is a bare `jmp` to it
+    call COLD_SEG:mmf_osapi_mem_avail ; AX = the largest free run, in KB:
+                                ; the withdrawn OSAPI_MEM_AVAIL's own body,
+                                ; far-called as mmf_mem_claim is below (it
+                                ; went through that cell until kernel size
+                                ; pass 19 took the cell away)
     sub ax, CLO_SLACK
     jc .nomem
     cmp ax, CLO_MINKB
@@ -976,7 +980,7 @@ clo_xmsup:
     jb .out
     mov ax, 1024
     mul di                      ; DX:AX = the bytes wanted
-    call KERNEL_SEG:CLO_XALLOC  ; DX:AX = the block's 32-bit linear base
+    KDOOR CLO_XALLOC  ; DX:AX = the block's 32-bit linear base
     jc .out
     mov [es:CL_XLO], ax
     mov [es:CL_XHI], dx
@@ -2256,7 +2260,7 @@ clo_opgo:
     mov cx, 1024
     mul cx
     xchg cx, ax                 ; DX:CX = the bytes (2,880 x 1KB fits)
-    call KERNEL_SEG:apic_fs_op
+    KDOOR osapi_fs_op
     pop dx
     pop cx
     pop ax
@@ -2945,14 +2949,14 @@ clo_free:
 %ifdef FPG_PARK
     xor cx, cx                  ; DX:CX = 0: the clone's ONE operation is over
     xor dx, dx                  ; (clo_opgo). Every way a clone stops comes
-    call KERNEL_SEG:apic_fs_op  ; here, so this is its only end; refused (CF)
+    KDOOR osapi_fs_op           ; here, so this is its only end; refused (CF)
 %endif                          ; when it never began, or is a package's
 %ifdef CLO_XMS
     cmp word [es:CL_XKB], 0
     je .noxms
     mov ax, [es:CL_XLO]
     mov dx, [es:CL_XHI]
-    call KERNEL_SEG:CLO_XFREE
+    KDOOR CLO_XFREE
     mov word [es:CL_XKB], 0
 .noxms:
 %endif
@@ -3449,7 +3453,7 @@ clo_mtoast:
     pop es
 .es:
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     ret
 
 clo_s_mis:   db ' is drive ', 0

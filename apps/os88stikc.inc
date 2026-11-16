@@ -94,11 +94,6 @@ STIKD_UNPACK equ STIK_UNPACK
 %else
 STIKD_UNPACK equ 0
 %endif
-STIKD_CLICK     equ stik_click  ; the kernel's callbacks are our thunks: a
-STIKD_MUP       equ stik_mup    ; callback is a near proc in the caller's
-STIKD_TICK      equ stik_tick   ; segment (SPEC.md 20.2)
-STIKD_CLOSE     equ stik_close
-STIKD_WAKE      equ STIK_WAKE
 
 ; --- the thunks: os88stik.inc's routines, in DESK.DRV -------------------------
 %macro STIK_THUNK 2

@@ -215,8 +215,45 @@ class Qemu:
 
 
 class Mouse:
-    """tools/mouse.py, one process per action - QEMU's msmouse is 1200 baud
-    and the pacing inside that tool is what makes a click land."""
+    """CLOSED-LOOP on the kernel's pointer words (os88qemu.mouse_to/
+    mouse_click/mouse_dblclick, SOAK-SPEED 15): each packet waits for
+    mouse_x to move and each edge for mouse_btn to agree, and the pause
+    after a gesture is `ui_done` capped at the old `gsleep 0.4`. It was
+    tools/mouse.py, one process per action, pinning on the clamp and walking
+    back on host sleeps - ~1.7 s a click and blind to a lost edge
+    (docs/plans/soak-speed-2/qemubox.md). That walk stays the FALLBACK for a
+    kernel whose words this process cannot resolve. Reads go over QMP's `xp`
+    one connection a command, as this file's Qemu does: QMP serves one
+    client, and nothing here holds it."""
+
+    AFTER = 0.4                         # guest s: the old gsleep, a ceiling
+
+    def __init__(self):
+        self._ok = None
+        self._mm = None
+
+    def _m(self):
+        # ONE object for the run: it carries the last press's tick
+        # (os88qemu._sep), which keeps two clicks from reading as a double
+        if self._mm is None:
+            self._mm = os88qemu._Sock(SOCK)
+        return self._mm
+
+    def _hmp(self, *cmds):
+        import xmcheck
+        return xmcheck.qmp(SOCK, *cmds)
+
+    def closed(self):
+        if self._ok is None:
+            try:
+                os88qemu.mouse_where(self._m(), S)
+                self._ok = True
+            except BaseException:       # noqa: BLE001 - no map: dead-reckon
+                self._ok = False
+        return self._ok
+
+    def _after(self):
+        os88qemu.ui_done(self._m(), S, cap=self.AFTER)
 
     def run(self, *args):
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"),
@@ -224,13 +261,24 @@ class Mouse:
                        cwd=ROOT)
 
     def to(self, x, y):
+        if self.closed():
+            os88qemu.mouse_to(self._m(), S, self._hmp, x, y)
+            return
         self.run("to", str(x), str(y))
 
     def click(self, x, y):
+        if self.closed():
+            os88qemu.mouse_click(self._m(), S, self._hmp, x, y)
+            self._after()
+            return
         self.run("click", str(x), str(y))
         qmp("gsleep 0.4")               # the GUEST's time (tools/qmp.py)
 
     def dblclick(self, x, y):
+        if self.closed():
+            os88qemu.mouse_dblclick(self._m(), S, self._hmp, x, y)
+            self._after()
+            return
         # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
         # compare birth ticks in a 9-tick window and two processes are far too
         # slow. Position, then both presses down one QMP connection.
@@ -400,7 +448,7 @@ def main():
             sys.exit("telansi: TELNET.O88 did not open a window")
         tw = wins2[-1]
         rec = m.read(S("wm_wins") + tw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = u16(rec, 22)
+        pseg = u16(rec, dispcp.W_SEG)
         say("telnet at %04X" % pseg)
 
         def rb(n):
@@ -468,19 +516,31 @@ def main():
             reports."""
             clk = os88qemu.Clock(m)
             last, since = -1, 0.0
+            at = None
             while True:
                 t = clk.secs()
                 if t >= timeout or clk.stalled():
                     break
                 off = rw("te_soff")
                 drained = rw("te_rxi") >= rw("te_rxn") and rb("te_pndn") == 0
+                # ...AND STILL SO A TICK LATER: te_pbyte advances [te_soff]
+                # BEFORE the byte acts (apps/telnet/teansi.inc), so the
+                # instant it reads `want` the last byte - a wrap's scroll -
+                # may not have touched con_scr yet. A 0.25 s poll hid that;
+                # at 0.05 'wrap' read the screen one scroll early, 1 run in 3
                 if drained and want is not None and off == want:
-                    return off
+                    n = clk.step()
+                    if at is None:
+                        at = n
+                    elif n > at:
+                        return off
+                else:
+                    at = None
                 if off != last:
                     last, since = off, t
                 elif drained and t - since >= still:
                     return off
-                time.sleep(0.25)
+                time.sleep(0.05)        # (a poll is a host floor: SOAK-SPEED 8)
             return rw("te_soff")
 
         def press_connect():

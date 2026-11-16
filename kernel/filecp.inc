@@ -216,6 +216,11 @@ modp_hdr:                       ; is at offset 0 because vstart is 0 and
     dw MOD_STAMP                ; ...and this build's LAYOUT
     dw modp_end                 ; MOD_H_IMG - vstart 0, so the end label IS it
     dw FCP_NENT
+%ifdef MOD_CACHE
+    dw MODP_BSS                 ; MOD_H_SCR: its whole bss, .modpb - KEPT
+%else                           ; at its drop (2.8.3.4)
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
+%endif
     dw modp_e_arm               ; the FAR entries, never the bodies: an entry
     dw modp_e_paste             ; is reached by `call far`, so it has to end in
     dw modp_e_answer            ; a retf, and every body below keeps the near
@@ -461,6 +466,14 @@ FCPBODY fcp_paste
     mov dh, [sch_cur]           ; OSAPI_MEM_FLOOR's one store, for this task
     mov dl, MEM_PG_MED          ; (DX is banked above)
     mov [mem_pg_fl], dx
+    mov [mem_pg_finst], dl      ; ...stamped as the KERNEL's (BR-11): MED is
+                                ; no instance's slot (asserted below), so no
+                                ; window's teardown lifts it - only fcp_lend,
+                                ; which every end of the list reaches, a closed
+                                ; window's stop included (fm's .pastegone)
+%if MEM_PG_MED < INST_MAX
+  %error "fcp_paste stamps the floor's instance with MEM_PG_MED, a slot number"
+%endif
 .single:
 %endif
                                 ; fcp_stop, at the end; here, at the start, is
@@ -474,13 +487,17 @@ FCPBODY fcp_paste
 %ifdef FM_MSEL
     call fcp_lnext              ; ...and the list's other entries after it
 %endif
-    jmp short .out
+    SKIPF2                      ; over .empty's load, AL kept (the flags are
+                                ; a clobber: kernel size pass 20, -1)
 %if FCP_NONE != 0 || FCP_CBSZ > 255
   %error "fcp_paste writes FCP_NONE and a zero [fcp_all] out of CH = FCP_CBSZ >> 8"
 %endif
 .empty:
     mov al, FCPS_DONE           ; nothing on the clipboard is not an error,
-.out:                           ; it is a menu item that does nothing
+                                ; it is a menu item that does nothing
+%if FCPS_DONE > 255
+  %error "fcp_paste's SKIPF2 steps over a two-byte `mov al, FCPS_DONE`"
+%endif
     jmp fcp_x5
 
 %ifdef FM_MSEL
@@ -787,7 +804,9 @@ fcp_claim:
     cmp ax, FCP_MAXKB
     jbe .size
     mov ax, FCP_MAXKB
-.size:                          ; 3. the claim
+.size:                          ; 3. the claim, in PARAGRAPHS (the heap's
+    mov cl, 6                   ; unit: the KB DMA door went at the flag day,
+    shl ax, cl                  ; kernel size pass 19)
     mov bx, MEM_K_COPY
     mov cx, ax                  ; ...THE WHOLE BUFFER INSIDE ONE 64KB DMA PAGE
                                 ; (SPEC.md 22.5.1). dsk_runcap splits a run at
@@ -798,14 +817,14 @@ fcp_claim:
                                 ; the heap happened to be holding. Aligned, a
                                 ; chunk smaller than the buffer never reaches
                                 ; the boundary at all
-    FCPX mem_claim_dma_x
+    FCPX mem_claimp_dma_x
     jnc .claimed
-    FCPX mem_claim_x            ; ...and a heap with no page-aligned run
+    FCPX mem_claimp_x           ; ...and a heap with no page-aligned run
     jc .full                    ; still copies, exactly as it did before
 .claimed:                       ; the segment comes back in DX, and AX still
-    mov FCV(fcp_seg), dx        ; holds the KB asked for
-    mov cl, 10                  ; 4. the chunk: KB -> bytes. 64KB exactly
-    shl ax, cl                  ; wraps to 0 - the one count that does,
+    mov FCV(fcp_seg), dx        ; holds the paragraphs asked for
+    mov cl, 4                   ; 4. the chunk: paragraphs -> bytes. 64KB
+    shl ax, cl                  ; exactly wraps to 0 - the one count that does,
     jnz .round                  ; FCP_MAXKB being the cap - and takes the
     mov ax, FCP_MAXCH           ; largest whole-sector run below it instead
 .round:
@@ -2297,6 +2316,18 @@ fcp_arm:                        ; files.inc reaches this one with `jmp`, and a
     call fcp_load               ; stub is as jumpable as the body it replaces
     jc fcp_pfin.keep            ; the refusal is a bare `ret` (CF = 1, the
                                 ; `jc`'s), and fcp_pfin has one
+    cmp word [fm_vseg], 1       ; ...AND THE LOAD MAY HAVE EVICTED THE VERY
+    jc fcp_fin                  ; LISTING the body reads the name out of
+                                ; (SPEC.md 50.6.13.1): it lands top-down and
+                                ; takes a cache where no free hole fit it,
+                                ; and with [fm_vseg] = 0 fmv_copy_in stages
+                                ; an all-zero entry - an EMPTY name on the
+                                ; clipboard. Refused instead, as "nothing
+                                ; selected"; the window owes a re-list
+                                ; (fmv_demote) and the user can Copy again.
+                                ; (CF = 1 exactly when the word is 0: the
+                                ; compare with 1 is the stc, SPEC.md
+                                ; 50.6.13.2; fcp_fin keeps CF)
     call far [FCPFP + FCPE_ARM*4]
     jmp short fcp_fin           ; CF is fcp_arm's answer and fcp_fin keeps it
 

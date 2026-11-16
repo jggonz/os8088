@@ -209,10 +209,12 @@ xt_claim:
     pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) -------------------------
 xt_tpl:
     dw 180, 120, 240, 90            ; x, y, w, h -> content 238 x 71
-    dw xt_ttl, xt_paint, 0, 0       ; no onkey, no onclick
+    dw xt_ttl, xt_cls               ; no onkey, no onclick
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS xt_cls, 0, PAINT, xt_paint
 
 xt_ttl:      db 'XmTest', 0
 xt_s_held:   db 'XMS blocks held: ', 0

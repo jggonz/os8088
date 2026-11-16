@@ -54,7 +54,7 @@ def pkg_base(ui, w):
     import os88geom as geom
     slot = w.i if hasattr(w, 'i') else w
     rec = ui._S('wm_wins') + slot * geom.WIN_SIZE
-    return struct.unpack('<H', bytes(ui.m.read(rec + 22, 2)))[0] * 16
+    return struct.unpack('<H', bytes(ui.m.read(rec + geom.W_SEG, 2)))[0] * 16
 
 
 def main():

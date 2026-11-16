@@ -1196,7 +1196,8 @@ x3p_probe:
     push ds
     pop es
     mov di, x3p_pfind
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .nofile
     mov si, x3p_pfind
     mov di, [x3p_pname]
@@ -1225,15 +1226,16 @@ x3p_probe:
     mov ax, X3_FIRST_READ * 2
 .b:
     mov [x3p_pbsz], ax
-    mov cl, 10
+    mov cl, 4                       ; its paragraphs
     shr ax, cl
     jmp short .claim
 .b32:                               ; 32 KB CLUSTERS: two are past a segment,
     mov word [x3p_pbsz], 32768      ; so ONE is read 4 KB in, and a request
     mov word [x3p_pboff], X3P_PTAIL ; that runs past it is answered with its
-    mov ax, 32768 / 1024 + X3P_PTAIL / 1024     ; tail moved down in front
+    mov ax, (32768 + X3P_PTAIL) / 16    ; tail moved down in front
 .claim:                             ; of the next one (.rd): 36 KB
-    call OSAPI_MEM_CLAIM            ; AX = KB
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; AX = paragraphs
     jc .nomem
     mov [x3p_pseg], dx
     mov di, [x3p_pinfo]

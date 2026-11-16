@@ -28,6 +28,7 @@
 1 kernel/stikmenu.inc  # stm_a_launch: ES = 0, no document, for ldf_ld_pkg_start
 1 drivers/hdd/cppage.inc  # hd_lwake: ES = 0, no document, for OSAPI_PKG_START (INSTALL.O88)
 1 drivers/net/pktdrv.inc  # pk_recv's refusal: ES:DI = 0:0 is the packet-driver ABI's "no buffer"
+1 drivers/net/os88net.asm  # OS88NET.COM's dos_ticks reads the BIOS tick at 0000:046C (driver size pass 1, -1 byte against 0040h) - it is a DOS program for the machine at the OTHER END of the cable (SPEC.md 62.12) and never runs under os8088, let alone kern_mega
 
 # --- knob-only ---------------------------------------------------------------------
 1 kernel/bootprof.inc  # BOOTPROF=1's table

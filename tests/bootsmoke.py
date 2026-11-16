@@ -116,9 +116,12 @@ def _smoke(machine, card, want_w, want_h, t0):
               got="%.3f" % frac, want="0.15 .. 0.85")
 
         # 5 - and it is still executing.
-        c0 = m.status().get("cycles", 0)
-        time.sleep(0.4)
-        c1 = m.status().get("cycles", 0)
+        c0 = c1 = m.status().get("cycles", 0)
+        for _ in range(250):        # up to 5 host s: the emulator's own
+            time.sleep(0.02)        # progress, not a guess at its rate (a
+            c1 = m.status().get("cycles", 0)    # 0.4-s sleep at a load of
+            if c1 > c0:             # 40 can see it descheduled throughout)
+                break
         check(c1 > c0, "%s: the guest is still executing" % machine,
               "a machine frozen holding the gfx lock draws a perfect desktop and "
               "never draws another - stillness alone cannot see it",

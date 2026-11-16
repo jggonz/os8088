@@ -1003,15 +1003,15 @@ dsh_bufget:
 .try:                               ; put below cannot free the other one
     mov [dsh_cpkb], ax
     push bx
+    mov cl, 6
+    shl ax, cl                      ; KB -> paragraphs, for either arm
     cmp byte [dsh_cpheap], 0
     je .arena
-    call word [dos_hkv + DHK_CLAIM] ; AX = KB -> DX = the base segment
+    call word [dos_hkv + DHK_CLAIM] ; AX = paragraphs -> DX = the base
     mov ax, dx                      ; ...and this arm answers where the other
     jmp short .did                  ; one does, in AX
 .arena:
     mov bx, ax
-    mov cl, 6
-    shl bx, cl                      ; KB -> paragraphs
     call dos_mcb_alloc
 .did:
     pop bx
@@ -1979,7 +1979,7 @@ dsh_sbuild:
                                     ; door: under `kern_dos` a DIR lists in
                                     ; directory order, which is real DOS's and
                                     ; is the behaviour already written below
-    mov ax, DSH_SKB
+    mov ax, DSH_SKB * 64
     call word [dos_hkv + DHK_CLAIM] ; out DX = base segment
     jc .no                          ; **REFUSED IS NOT FATAL**: fall through to
     mov [dsh_sseg], dx              ; directory order, which is real DOS's

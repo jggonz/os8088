@@ -80,8 +80,6 @@ nb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [nb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
     clc
 .out:
     pop si
@@ -547,7 +545,10 @@ NB_C_USKB   equ 43
 ; the honest trade on a 200-row adapter.
 nb_tpl:
     dw 151, 230, 480, 240
-    dw nb_ttl, nb_paint, nb_onkey, nb_onclick
+    dw nb_ttl, nb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS nb_cls, 0, PAINT, nb_paint, ONKEY, nb_onkey, \
+               ONCLICK, nb_onclick
 
 nb_ttl:     db 'Net Bench', 0
 nb_s_file:  db 'NETBENCH.TXT', 0

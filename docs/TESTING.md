@@ -239,13 +239,20 @@ make a row slow, it makes it less thorough at the same wall time.
 | tier | budget | what it does | when |
 |---|---|---|---|
 | `fast` | **30s** (uses ~9) | Host-side only. Reads what `make` just built and checks what breaks SILENTLY — and only what somebody who did NOT touch the subject can break. | A commit you are going to keep |
-| `full` | **3 min** (uses ~1¼) | One question: *did you obviously break the OS?* Boots to a desktop on both 1bpp adapters and on VGA, builds and boots `kern_small` on its 128KB floor machine, checks the mouse and keyboard, and builds a C package - and carries the ratchets the owner put there (`megahigh`, `sysfree`, `guidelock-full`, `noovl`, and the pin ratchet's `pins` and `pinsrt`, docs/plans/NO-PINNING-PLAN.md 4.1). | A major round of work reaching the integration branch |
+| `full` | **3 min** (uses ~1¼) | One question: *did you obviously break the OS?* Boots to a desktop on both 1bpp adapters and on VGA, builds and boots `kern_small` on its 128KB floor machine, checks the mouse and keyboard, and builds a C package - and carries the ratchets the owner put there (`megahigh`, `sysfree`, `guidelock-full`, `noovl`, and the pin ratchet's `pins` and `pinsrt`, docs/plans/NO-PINNING-PLAN.md 4.1), and the source ratchets that cost over a second each (`textrules`, `toast`, `movable`, `megapkg`, `registry`, `cswrite`, `seg0`, `megagrid`). | A major round of work reaching the integration branch |
 | `soak` | none | The other gates in `tests/`, one subject each — every per-package and kernel-internal row, the 99-knob build matrix, and everything about the tree or the suite rather than the product. | The rows your change can REACH, scoped with `-k`. The WHOLE tier only when the owner asks for it, in as many words — both runners refuse it otherwise |
 
 The runner's own banner — `os88test: fast tier - N rows, Ns declared, budget 30s` — is the live count; the numbers in this table describe the tiers and are not a second source of truth for them.
 
-**Both gates are deliberately narrow, and docs/WRITING-TESTS.md §2.1 and §2.2
-are the rules.** `fast` is the one tier nobody opts into, so a row about ONE
+**Both gates are deliberately narrow, and the owner's rule (2026-11-11) is the
+whole of it: `fast` and `full` are for "did you break the BUILD or the OS, or
+critical documentation maintenance". A row about ONE package, about KERNEL
+INTERNALS, or about the SUITE'S OWN harness and fixtures is `soak`, however
+cheap - the release soak runs every row. A rule over every line that costs
+over a second (`textrules`, `toast`, `movable`, `megapkg`, `registry`,
+`cswrite`, `seg0`, `megagrid`) is `full`; `btnrules` and `guidelock` stay
+`fast` as the owner's named exceptions. docs/WRITING-TESTS.md §2.1 and §2.2
+are that rule written out.** `fast` is the one tier nobody opts into, so a row about ONE
 package or about a kernel internal no package can reach is charged to every
 contributor who is not working on it. `full` asks only whether the OS is
 obviously broken, so a row about one package, about the build matrix, or about
@@ -273,6 +280,15 @@ when it overruns them, so the row that got slower is named.
 
 **This section is the authority on when a tier is run. CLAUDE.md carries the
 short form and points here; nothing else in the tree may say otherwise.**
+
+**What the gates are for is the owner's rule (2026-11-11): `fast` and `full`
+answer "did you break the build or the OS, or critical documentation
+maintenance" and nothing else; one package, kernel internals and the suite's
+own harness and fixtures are `soak`. So `make` no longer checks a kernel
+internal for you - except `hotpar` (fast, 0.07 s), which any upstream kernel
+edit can trip, so it stays in `make` - so edit the WF_FULL sites and
+name `chromesites`, a `drv_cls_*` call and name `clscf`, a `KHP_*` arm and
+name `khpknobs`.**
 
 A tier is not a ritual performed at every step — each one answers a different
 question, and the question is only asked at one point in the cycle. `full` is
@@ -507,6 +523,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | Sound Blaster (DMA streams) | ✅ | ✅ | `make test-snd SB16=1 TESTAPPS=build/sbtest.img`, or `os8088_5150_sb_gla` | 2.00 s at 1000.0 Hz on both. MartyPC's is a DSP **2.01** (`0x48`+`0x1C` auto-init); QEMU's an SB16; `dsp_version` picks |
 | **A PicoMEM**, 1.x and 2.x, as **its own firmware** | ✅ | ❌ | `tools/picomem/build.sh`, then `tests/pmmarty.py` (MartyPC, `os8088_5150_herc_pm1_gla` / `_pm2_gla`) or `tests/pmbox.py [--board 2]` (86Box, `vm/xt-picomem1` / `2`) | see *The PicoMEM* below. Sound, its virtual and real DMA, B: and a boot disk off its microSD, its NE2000, its USB mouse, its EMS and kern_mega's reflections of its IRQs, against the firmware os8088's field cards run |
 | Boot sound probe (SPEC.md §51.3.1) | ✅ | ⚠️ | `os8088_5150_sb_gla` / `_sbonly` / `_cga_gla`, fresh image | MartyPC's OPL2 answers the timer-flag dance; QEMU's `-device sb16` has an OPL *stub* that does not, so an SB16-only box reads as cardless there. `_sb` → row 0 `WANT` 1 and the Sound page on **Sound Blaster**; `_cga` → `WANT` 0; `_sbonly` → 0 by default, 1 under `SNDSNIFF=sb` |
+| **One row, the emulator chosen** | ✅ | ✅ | `OS88_EMU=qemu` (tools/os88qemuapi.py) or `OS88_EMU=86box` (tools/os88box86api.py) in front of an os88ui/os88marty row | the os88marty API answered by a private QEMU: os88ui verbs, os88mouse, `until`/`ui_done`/`key_taken` unchanged, on QEMU's VGA. Not there: breakpoints/steps/snapshots, FDC counters, CGA/EGA/Hercules, a <640KB machine - each a named MartyError (docs/plans/soak-speed-2/qemubox.md) |
 | Scripted mouse / keys | ✅ | ✅ | `tools/os88mouse.py click X Y` (absolute), `tools/os88mouserel.py` (relative), `os88marty.py key`; `tools/mouse.py` on QEMU | MartyPC drives the REAL devices: a Microsoft packet through the UART, a keystroke through int 09h |
 | **Screenshots** | ✅ | ✅ | `os88marty.py shot [--rendered]`, or `tools/shot.py` / `hercshot.py` | `shot` decodes VRAM on the 1bpp cards; `--rendered` asks the card what it rasterised and is automatic on VGA. On a CGA desktop the two routes differ by 0 pixels of 128,000 |
 | Mouse on COM2 (SPEC.md §9.5) | ➖ | ✅ | `make test MOUSEPORT=com2` | both UARTs probe present, COM2 wins, COM1 retired |

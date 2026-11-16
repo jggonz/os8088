@@ -898,7 +898,8 @@ zw_break:
 ; -----------------------------------------------------------------------------
 ; zw_morechk / zw_morewait - the [MORE] prompt (Standard 8.4.1)
 ;
-; [zw_more] counts rows emitted since the last input; at one short of the
+; [zw_more] counts rows emitted since the last input (zio.inc's zi_getkey
+; zeroes it on every key taken); at one short of the
 ; window height the reader is about to lose a line they have not read, so the
 ; prompt goes up and the VM stops until a key arrives.
 ;
@@ -924,6 +925,14 @@ zw_morechk:
 %endif
     cmp byte [zw_nomore], 0
     jne .out
+    cmp byte [zx_rsm], 0            ; NOT INSIDE A PARKED WAIT: zx_park has
+    jne .out                        ; dropped the lock there, and zw_morewait's
+                                    ; unlock/lock pair would end it HOLDING
+                                    ; the lock, so the handler's zx_relock
+                                    ; waited on ITSELF and the desktop froze
+                                    ; (@read's echo of RETURN reaching the
+                                    ; count). The reader is looking at what
+                                    ; they typed; the next row pages instead
     push ax
     call zw_lowrows
     dec ax
@@ -2843,11 +2852,13 @@ zw_setup:
     mov [zw_ucol], ax
     call zw_bounds
 
-    mov ax, ZW_SBKB
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    mov ax, ZW_SBKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=0 and DX = the base segment
     jnc .got
-    mov ax, ZW_SBKB2
-    call OSAPI_MEM_CLAIM
+    mov ax, ZW_SBKB2 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .none
     mov ax, ZW_SBKB2
     jmp short .have

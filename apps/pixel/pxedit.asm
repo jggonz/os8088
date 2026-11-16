@@ -2992,12 +2992,12 @@ pv_fmt:
     pop ax
     ret
 
-%ifdef PKG_MEGA
 ; pe_avail - the package's px_avail, in this part: OSAPI_MEM_AVAIL's two
 ; answers as a master's huge claim is granted them (pxrec.inc, SPEC.md
 ; 106.8.1). Preserves all else
-pe_avail:
+pe_avail:                       ; (KB: OSAPI_MEM_P's paragraphs, shifted)
     push cx
+%ifdef PKG_MEGA
     push dx
     xor ax, ax
     mov bx, MEMH_AVAIL
@@ -3010,12 +3010,18 @@ pe_avail:
     pop bx
     jnc .o
 .conv:
-    call OSAPI_MEM_AVAIL
+%endif
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+%ifdef PKG_MEGA
 .o:
     pop dx
+%endif
     pop cx
     ret
-%endif
 
 ; pv_res - Resize's second line: "320 x 240", or - no run for it - "Needs
 ; 300K; 120K free" and OK greyed for the fact. Preserves all
@@ -3557,7 +3563,14 @@ pf_go:                              ; flip's only once it is sure to run
     pop cx
     pop bx
 %else
-    call OSAPI_MEM_CLAIM
+    push bx
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
 %endif
     jc .nodest
     mov [px_edseg], dx
@@ -3859,3 +3872,4 @@ pf_xchg:
     pop cx
     pop ax
     ret
+

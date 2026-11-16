@@ -31,6 +31,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88sym, os88ui, dispcp
+import os88geom  # noqa: E402
 # ...and the bar cell's stride and fields, from the one copy that is checked
 # against kernel/menu.inc at import (tools/os88geom.py, and t_mirror in the
 # fast tier). They were four literals here.
@@ -80,7 +81,7 @@ def u16(b, i=0):
 def pkg_seg(m, slot):
     """The segment the package owning window `slot` runs in (W_SEG)."""
     r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    return u16(r, 22)
+    return u16(r, os88geom.W_SEG)
 
 
 def bss(m, seg, off, n):
