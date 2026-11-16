@@ -381,7 +381,8 @@ FAST = [
         "alone reported every package as not shipping, and a substring test "
         "for WIRE.O88 matched THEWIRE.O88. FAST for t_movable's argument - it "
         "is a rule about what apps/ means, so it belongs in front of the next "
-        "make rather than the next soak run"),
+        "make rather than the next soak run",
+        wants=("build/livepayload.txt",)),
     Row("excitebikeclean", "soak", py("tests/unit/t_excitebike_clean.py"), 0.2,
         "EXCITEBIKE carries nothing from a NES ROM or its disassembly "
         "(SPEC.md 102.2, docs/plans/EXCITEBIKE-PLAN.md section 0). The art and "
@@ -1810,7 +1811,8 @@ FAST = [
         "and a plain `make` rebuilds an existing one first), because a list "
         "can name a file that never lands. It reads that artefact rather than running `make "
         "print-`, which registry refuses and rightly: a knob in the "
-        "environment makes $(VIDSTAMP) delete build/kernel.bin"),
+        "environment makes $(VIDSTAMP) delete build/kernel.bin",
+        wants=("build/livepayload.txt",)),
     Row("catdisk", "fast", py("tests/unit/t_catdisk.py"), 0.1,
         "SPEC.md 24.6's three category disks, checked for the one thing they "
         "ARE: packages at the ROOT with no folder to click into, MEDIA/ and "
@@ -1832,7 +1834,8 @@ FAST = [
         "through compression, os88mini baking the shipped bytes and not the "
         "reduction, DOS.O88 setting the bit, and every shipped ASSOC.DAT being "
         "version 2 with the glyph in DOS's row. Host-only, one package format "
-        "and three tools, which is why it is here beside `pkg` and not in soak"),
+        "and three tools, which is why it is here beside `pkg` and not in soak",
+        wants=("build/livepayload.txt",)),
     Row("stikcard", "soak", py("tests/unit/t_stikcard.py"), 0.6,
         "SOAK (owner, 2026-11-12: Sticky Apps' card format). a Sticky App carries a CARD (SPEC.md 110.12) - name, description and "
         "32x32 picture in the clear prefix behind flags bit 7: the validator's "

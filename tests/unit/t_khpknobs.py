@@ -48,8 +48,13 @@ def assemble(label, inc, defs, ks):
         return
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, "k.bin")
+        # -DKERN_KNOB, as the Makefile passes for EVERY knob kernel: a
+        # build with knobs on is not the shipped kernel, so guard 1 and 1b
+        # (the heap rung kern_small is locked at) do not bind it - guard 2
+        # does (CLAUDE.md, "None of the rules binds a KNOB build"). Without
+        # it this row reported the 70.5KB heap lock as a broken knob arm.
         cmd = (["nasm", "-f", "bin", "-w+error", "-I", "kernel/", "-I",
-                "apps/", "-I", inc] + defs +
+                "apps/", "-I", inc] + defs + ["-DKERN_KNOB"] +
                ["-DKZIP", "-DKZ_SECS=0", "-DKZ_RPARA=0", "-DKZ_NBLK=1",
                 "-DKZ_HEADSEC=0"] + ["-D" + k for k in ks] +
                ["-o", out, "kernel/kernel.asm"])
