@@ -6489,7 +6489,7 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; 8088; this is ~650 for all of them). It
                                  ; ARMS the map as OSAPI_KEY_DOWN does, and the
                                  ; first answer is all up: ask once at entry.
-                                 ; Every kernel, kern_small and a FSXF_REAL
+                                 ; Every kernel but kern_small, a FSXF_REAL
                                  ; bracket included
 KEYMAP_BYTES equ 16              ; ...its size: 128 bits, one per make code
 

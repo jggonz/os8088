@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "4da796f360597501a44eb39e01b078976a6e5ebdd713fc4356d4a1f406153e90",
+  "fingerprint": "85f3970e1d28aac6328d6359e2bca1325625dc5553a9d8b40e8dcdd25d9a74d3",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "650b83b92ecd717de04b26d05a4b49e23a0e0af138d1a70d4476cdb09c276304",
+  "fingerprint": "74fc88983d1a85d86b91d38845196a525999643d70426744fed9d42baab87f61",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2378,6 +2378,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "DRVV_SLEEP's note: a WAKES driver ends every worker in SLEEP (SPEC.md 51.2.5), and OSAPI_WM_DESTROY's: never destroy a worker-owning instance's bound window (SPEC.md 20.6); contracts clarified, nothing built before stops running",
+   "to": 14
+  },
+  {
+   "fingerprint": "74fc88983d1a85d86b91d38845196a525999643d70426744fed9d42baab87f61",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "os88_key_map answers 0 / -1 (sbb ax, ax) so a C caller can see kern_small's refusal, and os88_key_map's SDK note no longer claims kern_small; os88_mem_claim refuses 1,024KB and more before its KB-to-paragraph shift, as the KB door did. A contract clarified and a C return value added: a package built before runs unchanged, so no bump.",
+   "to": 13
+  },
+  {
+   "fingerprint": "85f3970e1d28aac6328d6359e2bca1325625dc5553a9d8b40e8dcdd25d9a74d3",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "os88_key_map answers 0 / -1 (sbb ax, ax) so a C caller can see kern_small's refusal, and os88_key_map's SDK note no longer claims kern_small; os88_mem_claim refuses 1,024KB and more before its KB-to-paragraph shift, as the KB door did. A contract clarified and a C return value added: a package built before runs unchanged, so no bump.",
    "to": 14
   }
  ]

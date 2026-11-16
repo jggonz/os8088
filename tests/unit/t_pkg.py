@@ -219,7 +219,77 @@ def header(blob, nm):
     return ver
 
 
+def op_big_refusals():
+    """SPEC.md 20.12.15 - the bounds os88pkg's lay_out_parts REFUSES on an
+    OP_BIG row, each one run in-process against a one-row table. The only
+    package that builds an OP_BIG row is a soak row's fixture, and it takes
+    the accepting path alone, so without these a refusal deleted from the
+    packer leaves every fast and full row green. The part's bytes and its
+    compressor are stubbed: what is under test is the packer's arithmetic on
+    the lengths, not lz4 - and a stream of 0x10000 bytes is the sentinel case
+    no honest input could be searched for."""
+    import contextlib
+    import io
+    P = os88pkg
+
+    def lay(flags, body=b"\x01" * 64, packs=None, nofilt=(), zkb=0):
+        out = bytearray(P.PARTS_HDR + P.PART_ROW)
+        struct.pack_into("<BBHHH", out, P.PARTS_HDR, P.PK_SEG, flags, 0, 0, zkb)
+        it = iter(packs or ())
+        saved = P.read_file, P.compress_part
+        P.read_file = lambda path: body
+        P.compress_part = lambda i, b, fmt, filt=True, zfill=False: (
+            lambda n: (b"\0" * n, n))(next(it))
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                P.lay_out_parts(out, 0, 1, [] if flags & P.OPF_ZERO
+                                else ["part0"], "lz4", nofilt)
+            code = 0
+        except SystemExit as e:
+            code = e.code
+        finally:
+            P.read_file, P.compress_part = saved
+        return code, err.getvalue(), out
+
+    BIG, COMP, LAZY = P.OPF_BIG, P.OPF_COMP, P.OPF_LAZY
+    cases = (
+        ("OP_BIG with OP_ZERO", dict(flags=BIG | P.OPF_ZERO, zkb=1),
+         "OP_BIG with OP_ZERO, OP_XMS or OP_ZFILL"),
+        ("a body past OP_BIGMAX", dict(flags=BIG, body=bytes(P.OP_BIGMAX + 1)),
+         "past OP_BIGMAX"),
+        ("a packed length at OP_BIGPK", dict(flags=BIG | COMP,
+                                             packs=(P.OP_BIGPK,)),
+         "packed length is 19 bits"),
+        ("a lazy row packing to a low word of 0, both ways",
+         dict(flags=BIG | COMP | LAZY, packs=(0x10000, 0x10000)),
+         "either way"),
+        ("a lazy row packing to a low word of OP_SPENT, no filter to drop",
+         dict(flags=BIG | COMP | LAZY, packs=(0x1FFFF,), nofilt=(0,)),
+         "--part-nofilter leaves no other encoding"),
+    )
+    for what, kw, says in cases:
+        code, err, _ = lay(**kw)
+        check(code not in (0, None) and says in err,
+              "os88pkg refuses %s (SPEC.md 20.12.15)" % what,
+              "the refusal is the only thing between that row and a part "
+              "the package's op_fetch misreads at launch",
+              got=(code, err.strip()), want="exit 1, %r" % says)
+
+    # ...and the NEGATIVE CONTROLS, so a refusal that fires on everything is
+    # not a pass: the sentinel retry takes the other filter's length, and a
+    # sentinel low word on an EAGER row is no sentinel at all
+    code, err, out = lay(flags=BIG | COMP | LAZY, packs=(0x10000, 0x10001))
+    eq((code, out[P.PARTS_HDR + 6], out[P.PARTS_HDR] >> 1 & 7), (0, 1, 1),
+       "a lazy OP_BIG row off the sentinel takes the unfiltered stream "
+       "(SPEC.md 20.12.15)", err.strip())
+    code, err, _ = lay(flags=BIG | COMP, packs=(0x10000,))
+    eq(code, 0, "an EAGER OP_BIG row may pack to a low word of 0", err.strip())
+
+
 def main():
+    op_big_refusals()
     build = os.path.join(ROOT, "build")
     arts, apps, drvs, mods, drvs_cz = {}, 0, 0, 0, 0
     for f in sorted(os.listdir(build)):

@@ -120,7 +120,8 @@ eth_sleep:
     call os88_ent
     mov byte [eth_busy], 1
     call eth_dropall
-    call nic_sleep
+    call dns_drop               ; ...and the resolver lets go of its slot,
+    call nic_sleep              ; which the next sk_alloc may hand anyone
     clc
     jmp ep_bp
 
@@ -154,8 +155,16 @@ eth_wake:
     jne .other
     call arp_flush              ; the gateway may be another box now
     mov byte [eth_busy], 0
-    cmp byte [dhcp_st], DH_BOUND
-    jne .ok
+    mov al, [dhcp_st]
+    cmp al, DH_BOUND
+    je  .rq
+    cmp al, DH_REQUEST          ; a REQUEST SLEEP left outstanding had its
+    jne .ok                     ; offer under the bank: a wake's is asked
+    cmp byte [dhcp_wk], 0       ; again by name, an offer's from DISCOVER
+    jne .rq
+    call dhcp_begin
+    jmp short .ok
+.rq:
     cmp byte [eth_mode], ECM_MAN
     je  .ok                     ; no server owns a manual address
     mov si, eth_ip              ; THE LEASE BYPASS: the address we hold,

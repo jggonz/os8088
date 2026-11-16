@@ -1370,19 +1370,22 @@ _os88_key_down:
     ret
 %endif
 
-; void os88_key_map(unsigned char *map) - DS:DI = the caller's
+; int os88_key_map(unsigned char *map) - DS:DI = the caller's
 ; OS88_KEYMAP_BYTES (16); the kernel's whole key-state map copied in, bit
 ; (s & 7) of byte (s >> 3) set while make scancode s is held (SPEC.md 9.7.3).
 ; ONE crossing for every key a frame asks about, where os88_key_down is one
 ; EACH. The map must be a `static` - DS-relative, SPEC.md 73's first rule -
 ; and the call ARMS the map exactly as os88_key_down does: the first answer is
-; all up. The cell keeps every register, and the thunk owes none (73.3)
+; all up. Answers 0 = copied, -1 = REFUSED (kern_small, CF = 1): poll
+; os88_key_down there. The cell keeps every register, and the thunk owes none
+; (73.3)
 CC_GATE _os88_key_map
 %ifdef CC_U__os88_key_map
 _os88_key_map:
     mov bx, sp                      ; no frame: one argument
     mov di, [ss:bx+2]
     call OSAPI_KEY_MAP
+    sbb ax, ax                      ; CF -> -1 = refused, else 0
     ret
 %endif
 
@@ -2189,6 +2192,8 @@ CC_GATE _os88_mem_claim
 _os88_mem_claim:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
+    cmp ax, 1024                    ; 1MB and more (or a negative int):
+    jae .no                         ; refused BEFORE the shift, which wraps
     mov cl, 6                       ; the KB in paragraphs, OSAPI_MEM_P's one
     shl ax, cl                      ; unit (SPEC.md 50.3.7): no head, the DISK
     mov bl, MEMP_CLAIM              ; class
@@ -2197,6 +2202,9 @@ _os88_mem_claim:
     not ax
     and ax, dx                      ; ...-> 0 = refused, and nothing was
                                     ; claimed; or the segment
+    ret
+.no:
+    xor ax, ax                      ; 0 = refused, nothing claimed
     ret
 %endif
 

@@ -422,7 +422,8 @@ lk_seal:
 ; appended, behind what waits, and the lease fed. CF = 1: no room (send it
 ; again later). Changes every register but DS, ES, BP and the stack
 lk_send:
-    cmp byte [lk_blk+LK_OPEN], 0
+    push es                     ; (borrowed for the moves: a callback's is
+    cmp byte [lk_blk+LK_OPEN], 0 ; the kernel's, SPEC.md 20)
     je .full
     mov di, [lk_blk+LK_TXPOS]   ; (what went already: the rest moved down
     or di, di                   ; first)
@@ -477,9 +478,11 @@ lk_send:
     sub di, lk_blk+LK_TXB
     mov [lk_blk+LK_TXLEN], di
     call lk_flush
+    pop es
     clc
     ret
 .full:
+    pop es
     stc
     ret
 .put:

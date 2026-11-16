@@ -1045,12 +1045,12 @@ int  os88_key_down(int scan);
  * os88_key_down is one EACH: a loop asking three keys or more is ahead. map
  * must be static (SPEC.md 73: never the address of an automatic). It ARMS the
  * map as os88_key_down does, so the first answer is all up, and it is the
- * same advice, not an oracle. kern_small REFUSES it and leaves map as it
- * was - a static starts all up - so a program that runs there polls
- * os88_key_down instead. */
+ * same advice, not an oracle. Answers 0 = copied, -1 = REFUSED (kern_small,
+ * which leaves map as it was - a static starts all up) - TEST IT: a program
+ * that runs there polls os88_key_down instead. */
 #define OS88_KEYMAP_BYTES 16
 #define OS88_KEYMAP_HELD(map, s) ((map)[(s) >> 3] & (1 << ((s) & 7)))
-void os88_key_map(unsigned char *map);
+int  os88_key_map(unsigned char *map);
 
 /* ALT+ENTER, THE FULL-SCREEN KEY (SPEC.md 11.2.1.1). os88_onkey is handed
  * ascii 0 with OS88_SCAN_ENTER for it - the code an enhanced ROM gives, and

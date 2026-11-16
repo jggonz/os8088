@@ -2376,6 +2376,8 @@ op_fetch:
 %if OP_HAS_BIG
     call op_lenx                ; `len` in PARAGRAPHS, 20 bits (20.12.15)
     call op_gr
+    pop dx                      ; ...which both write DX: the claim back,
+    push dx                     ; still banked for the row
 %else
     mov ax, [si+OP_R_LEN]
     add ax, 15                  ; `len` in PARAGRAPHS, rounded up - the RCR

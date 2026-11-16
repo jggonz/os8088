@@ -73204,7 +73204,7 @@ function*:
 
 | row | KB | = image + what it holds to work |
 |---|---|---|
-| Sound | ~27 | 11 image + 16 (`SBL_PLAYKB`; `DRVM_IMG_SND` = 22 half-KB units, §34.5.8): a player's 16KB ring, which the card reads in place (§34.5.2). It was 35 — image + the 8KB double buffer + the pool's 20KB ceiling, a worst case no shipped program reaches. Recording holds 31 (a 16KB grant + the 8KB capture buffer); an idle card holds its image alone |
+| Sound | ~26.5 | 10.5 image + 16 (`SBL_PLAYKB`; `DRVM_IMG_SND` = 21 half-KB units, §34.5.8): a player's 16KB ring, which the card reads in place (§34.5.2). It was 35 — image + the 8KB double buffer + the pool's 20KB ceiling, a worst case no shipped program reaches. Recording holds 31 (a 16KB grant + the 8KB capture buffer); an idle card holds its image alone |
 | Hard Drive | ~4 | 4 image, and no heap claim at all — §22.6 retired the 4 × 6KB listing claims, and §52.13 took the Control Panel page out of the image |
 | Ethernet | ~33.5 | 17 image + 16.5, the socket RING POOL at its top rung (§72.21: the bulk pair and three lean ones, 16,896 bytes since §72.4.3's send window, where a pair per slot was 36,864), claimed in paragraphs (§50.3.7) where a KB door took 17 |
 | Ram Disk | ~20+ | 5.5 image + 6.5 directory and chain table, one claim taken at Mount (`RD_TABMAXB`, 6,400 bytes, §62.9.13.1; claimed in paragraphs, §50.3.7, where a KB door took 7) + 8 bounce (`RD_EXTMAXKB`). Loaded with nothing mounted it holds the image alone |
@@ -75769,8 +75769,8 @@ high-speed pause/resume, stereo primer, close and consumed-count reads.
 SB16's independent 16-bit DMA path is unchanged. Discovery and ESS setup
 are attach-only, beyond `snd_keepmix`; only the channel and two port bytes
 remain resident and survive a tier toggle. A DSP software reset preserves
-the ESS resource configuration. The full load-time image claim is 11KB
-(`DRVM_IMG_SND = 22` half-KB units); the Drivers page estimate includes
+the ESS resource configuration. The full load-time image claim is 10.5KB
+(`DRVM_IMG_SND = 21` half-KB units); the Drivers page estimate includes
 this before the attach-only tail is released. `essdma` runs the assembled
 driver against scripted ESS/configuration and 8237 ports; physical ESS playback remains a
 field check.
@@ -77579,8 +77579,8 @@ bitmap in screen polarity, inverting it for Dark IN PLACE and back again
 around the blit (it borrowed the popup's slider band until kernel size pass
 15 moved that band into the popup's claim). Verb 10 stays in the driver for an older kernel; this kernel calls
 12 alone, so a sound driver built before the themed verb shows no speaker
-rather than costing every kernel the fallback. SOUND.DRV rounds to 11KB of
-image plus state on the heap; `DRVM_IMG_SND` is 22 half-KB units.
+rather than costing every kernel the fallback. SOUND.DRV rounds to 10.5KB of
+image plus state on the heap; `DRVM_IMG_SND` is 21 half-KB units.
 **That is the IMAGE**: loaded,
 the driver holds 9KB with a mixer and 6KB without, the attach-only code -
 and with no mixer the mixer verbs and this popup too - having been handed
@@ -136839,6 +136839,16 @@ exchange, and it changes three answers and nothing else:
 Nothing pumps a driver no package is using (§72.2.1), so the answer is read
 by the first socket verb after the wake, or by the page; until then the
 address is the one the picture held, which is the point.
+
+**A REQUEST still outstanding at SLEEP is asked again**, because the wake
+banks the picture's MAC over `dhcp_off` and half of `dhcp_srv` to compare
+the card against: a wake's own (`dhcp_wk` = 1, a second hibernate before
+anything pumped the first answer) goes out again in the INIT-REBOOT form
+from `eth_ip`, and an offer's (`dhcp_wk` = 0) starts again from DISCOVER.
+Without that the next retry asked for the MAC's first four bytes by name,
+and the server's NAK cost the kept address. SLEEP also lets go of the
+resolver (`dns_drop`): `[dns_sk]` lives outside the socket records, and a
+lookup that outlived the reset would land on whoever the slot went to next.
 `tests/b4lease.py` drives all three against a host-side DHCP server, since
 QEMU's slirp never refuses.
 
@@ -137213,7 +137223,7 @@ DNS). What these verbs add is a **package's port** and a queue for it.
 |---|---|---|
 | `NETV_UDP` 18 | `AL` = 1 bind `CX` = a port, 0 release | CF=0. CF=1 `AX=NETE_BUSY` (another port is bound: one at a time) or `NETE_ARG` (port 0) |
 | `NETV_UDPTX` 19 | `SI` = the payload, `CX` = its length (<= 512), `DI` = six bytes: the IP address, then the port (a little-endian word) | CF=0 sent. CF=1 `AX=NETE_NOLINK`: no port bound, or no ARP answer yet (a request has gone out: send again on the next tick) |
-| `NETV_UDPRX` 20 | `DI` = a buffer, `CX` = its capacity | CF=0: the source's six bytes (as `UDPTX`'s `DI`) at `DI`, the payload after them, and `CX` = the payload's **true** length (72.22.2's rule); CF=1 = none queued |
+| `NETV_UDPRX` 20 | `DI` = a buffer, `CX` = its capacity | CF=0: the source's six bytes (as `UDPTX`'s `DI`) at `DI`, the payload after them, and `CX` = the payload's **true** length (72.22.2's rule); CF=1 = none queued; CF=1 `AX`=`NETE_ARG`: capacity < 6, the datagram left queued |
 
 - **The source comes first in the buffer** because `OSAPI_DRV_CALL` takes
   the class and the verb in `BX`, so no verb can take a pointer there.
