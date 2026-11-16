@@ -120,6 +120,17 @@ def main():
             os88marty.until(m, lambda mm: u16(m.read(base + syms["vp_ploads"],
                                                      2)) >= 1,
                             "the poster", poll=0.05, limit=300, guest=60)
+            # ...AND THE LAYOUT IT OWES. The poster is the worker's and the
+            # resize to the clip is the wake's (vp_relay, "the wake owes a
+            # layout and a resize"), so on a loaded box the poster can land
+            # first: a full soak read the window at the player's OPENING
+            # 658x275, aimed the pointer 150 px right of that and off a
+            # 720-wide screen. The flag clears just before the resize runs,
+            # so the rect is then held to two still readings as well
+            os88marty.until(m, lambda mm: rb("vp_relay") == 0,
+                            "the layout the open owes", poll=0.05,
+                            limit=120, guest=20)
+            os88marty.quiesce(m, rect, what="the window at the clip's size")
             x0, y0, w0, h0 = rect()
             # 418 wide: 45 characters, so 'Video Player - ' + 35 does not fit
             says("Video - " + TITLE, "at %d wide" % w0)
