@@ -1116,12 +1116,32 @@ def mouse_dblclick(m, sym, hmp, x, y):
         held = "running" in str(hmp("info status") or "")
         if held:
             hmp("stop")
+    # ...AND ON QEMU THEY GO IN ONE WRITE where the caller can pipeline
+    # (`m.hmp_burst`, tools/qmp.py Client.burst). A round trip apiece put
+    # this PROCESS's scheduling between the two presses, and on a soak box
+    # with twice as many emulators as cores it was descheduled past the
+    # 9-tick window: win16mdi's B: never opened, its double-click two
+    # clicks. QEMU drops input while the guest is stopped (ui/input.c) and
+    # one input-send-event syncs once - one packet for four edges - so
+    # neither 86Box's stop nor a batch can do it there; QEMU's own monitor
+    # queue running the four back to back can.
+    burst = None if BOX86 else getattr(m, "hmp_burst", None)
+    t0 = ticks(m)
     try:
-        for edge in (1, 0, 1, 0):
-            hmp("mouse_button %d" % edge)
+        if burst is not None:
+            burst(["mouse_button %d" % e for e in (1, 0, 1, 0)])
+        else:
+            for edge in (1, 0, 1, 0):
+                hmp("mouse_button %d" % edge)
     finally:
         if held:
             hmp("cont")
+    span = (ticks(m) - t0) & 0xFFFF
+    if span > DBL_TICKS - 1 and not held:
+        sys.stderr.write("os88qemu: mouse_dblclick's four edges took %d "
+                         "guest ticks (window %d) - it may have been two "
+                         "clicks%s\n" % (span, DBL_TICKS, "" if burst else
+                                          ": this caller has no hmp_burst"))
     c = Clock(m)
     lim = to_ticks(PKT_SECS)
     while (mouse_where(m, sym)[2] & 3 or c.step() < 2) and c.step() < lim:

@@ -80,8 +80,30 @@ FAILS = []
 # (rmk_3 and rmk_6 went with T5, kernel size pass 19: OSAPI_SND_CAPS,
 # _FONT_GLYPHS and _FSX_MODE are RARE cells now, answered inside the bracket
 # by THE DOOR's first RD_RK published indices - fsx_rdownf's bound, below)
-RUNS = ["rmk_1", "rmk_2", "rmk_4", "rmk_5", "rmk_7", "rmk_8", "rmk_9",
-        "rmk_10"]
+# The kept runs are READ OUT OF fsx_rkeep (kernel/fsx.inc), because a typed
+# copy went stale: OSAPI_KEY_MAP's rmk_11 joined the list (SPEC.md 9.7.3)
+# and this row went on comparing its four bytes as `stc`s, red in the next
+# soak ("4 bytes differ, first at 0238"). The runs typed here are a FLOOR -
+# every one must still be in the list - so a list that loses one is still
+# caught, and a list that gains one is followed.
+RUNS_FLOOR = ["rmk_1", "rmk_2", "rmk_4", "rmk_5", "rmk_7", "rmk_8", "rmk_9",
+              "rmk_10", "rmk_11"]
+
+
+def _rkeep_runs():
+    with open(os.path.join(ROOT, "kernel", "fsx.inc")) as f:
+        src = f.read()
+    body = src[src.index("\nfsx_rkeep:"):src.index("\nfsx_rkeep_end:")]
+    runs = re.findall(r"^\s*dw\s+(rmk_\w+),\s*\1e\s*-\s*\1\s*,", body, re.M)
+    lost = [r for r in RUNS_FLOOR if r not in runs]
+    if lost:
+        raise SystemExit("megarmbref: fsx_rkeep no longer keeps %s - "
+                         "kernel/fsx.inc moved under this row"
+                         % " ".join(lost))
+    return runs
+
+
+RUNS = _rkeep_runs()
 
 
 def cell(name):

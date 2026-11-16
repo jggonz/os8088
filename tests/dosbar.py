@@ -20,11 +20,20 @@ traces the kernel's file widget until the program's READY prompt:
      96.8.2.1;
   4. each operation fills its trough: `[fpg_done]` reaches 90% of `[fpg_opt]`;
   5. at most PHASES_MAX phases OUTSIDE an operation last 100 ms or more - the
-     ones a user can see as a bar of their own. They are the two e7bd353b
-     had, where the one-bar operation landed: the kernel's read of the
-     loader's header off the floppy before any entry proc runs (~390 ms),
-     and HIBER.DRV read as the run's bracket opens (~1.1 s, the flash as the
-     window comes up);
+     ones a user can see as a bar of their own - and EACH IS ONE OF THE THREE
+     THE LAUNCH OWES, NAMED off the system disk by the cluster it read: the
+     re-read of A:'s ASSOC.DAT (its cache holds ONE volume's, SPEC.md 54.7,
+     and the row has just mounted B:), the kernel's read of the loader's
+     header off the floppy before any entry proc runs (DOS.O88's first
+     sectors, ~400 ms when they miss the track buffer), and HIBER.DRV read
+     as the run's bracket opens (~1.1 s, the flash as the window comes up;
+     a module, read by no file chain). The limit was 2, the count e7bd353b
+     and later trees happened to give: whether the header read reaches
+     100 ms is WHERE DOS.O88 LANDS - at cluster 520 its six sectors sat in a
+     track already read and took 22 ms, and when NET.DRV's transport grew by
+     77 bytes (10af988a) it landed at 525, straddled tracks 59 and 60 and
+     took 404. So the row names each long phase instead of counting on the
+     layout, and a long phase that read anything else fails it;
   6. the widget comes UP at most BARS_MAX times, the count measured on this
      disk with this program.
 
@@ -53,7 +62,8 @@ PAGES = 272                     # 139,264 bytes of header + module: 4 x 32 KB
 FPG_SHOWN = 4                   # chunks and a tail after the 512-byte probe
 FPG_OP = 8
 BARS_MAX = 4
-PHASES_MAX = 2
+PHASES_MAX = 3                  # the three named in 5
+HEADER_SECS = 8                 # the loader's header read is the first few
 LONG = 0.100 * 4772727          # 100 ms of a 4.77 MHz 8088, in cycles
 
 
@@ -111,6 +121,11 @@ def trace(disk):
             raw = m.read(r["ds"] * 16 + r["si"], 16)
             name = raw.split(b"\0")[0].decode("latin1").upper()
             off, cap = (r["dx"] << 16) | r["ax"], r["cx"]
+        if rec["name"] == "dsk_read_chain_x":       # (first cluster, sectors,
+            r = m.regs()                            # drive: 0 is A:)
+            name = "#chain"
+            off, cap = r["ax"] | (m.read(m.sym("dsk_unit"), 1)[0] << 16), \
+                r["dx"]
         done = opt = 0
         if rec["name"] == "fpg_show" and f & FPG_OP:
             done = int.from_bytes(m.read(m.sym("fpg_done"), 2), "little")
@@ -123,7 +138,7 @@ def trace(disk):
         M.settle(m)
         with M.bp_trace(m, "fpg_show", "fpg_hide", "fpg_opbegin",
                         "fpg_begin", "fpg_end", "dskw_read_at_x",
-                        on_hit=on, cap=12000) as tr:
+                        "dsk_read_chain_x", on_hit=on, cap=12000) as tr:
             ui.path("B:/" + NAME)
             M.until(m, lambda mm: any("READY" in r
                                       for r in (mm.screen() or [])),
@@ -132,11 +147,43 @@ def trace(disk):
     return tr.hits
 
 
+def system_files():
+    """The system disk's files by first cluster, walked by t_image's Vol."""
+    sys.path.insert(0, os.path.join(ROOT, "tests", "unit"))
+    from t_image import Vol, read
+    v = Vol(read(SYS), SYS)
+    return {clus: (path + n[:8].decode("latin1").strip() + "." +
+                   n[8:].decode("latin1").strip()).rstrip(".")
+            for path, n, attr, clus, size in v.walk() if clus >= 2}
+
+
+def phase_kind(reads, files):
+    """What a phase outside an operation read: 'ASSOC.DAT', 'header' (the
+    loader's first sectors of DOS.O88), 'module' (no file chain: a driver
+    read by the module loader) - or None, a read the launch does not owe."""
+    if not reads:
+        return "module"
+    kinds = set()
+    for clus, drive, secs in reads:
+        f = files.get(clus) if drive == 0 else None
+        if f == "ASSOC.DAT":
+            kinds.add("ASSOC.DAT")
+        elif f == "APPS/DOS.O88" and secs <= HEADER_SECS:
+            kinds.add("header")
+        else:
+            return None
+    return kinds.pop() if len(kinds) == 1 else None
+
+
 def judge(hits):
     ups, shown, ops, best = 0, False, 0, []
     dos_in, dos_out, prog_out, probe_in = 0, 0, [], None
-    phases, begun = [], None
+    phases, begun, reads, kinds, pending = [], None, [], [], None
+    files = system_files()
+    last = None
     for h in hits:
+        if h is not hits[0]:
+            last = n
         n, (f, cyc, name, off, cap, done, opt) = h["name"], h["hit"]
         if n == "fpg_show" and (f & FPG_OP) and opt and best:
             best[-1] = max(best[-1], done * 100 // opt)
@@ -150,9 +197,18 @@ def judge(hits):
             best.append(0)
         elif n == "fpg_begin":
             begun = None if f & FPG_OP else cyc
+            reads = [pending] if pending and last == "dsk_read_chain_x" \
+                else []         # (dsk_read_chain opens the phase it reads in)
+            pending = None
         elif n == "fpg_end" and begun is not None:
             phases.append(cyc - begun)
+            kinds.append((phase_kind(reads, files), reads))
             begun = None
+        elif n == "dsk_read_chain_x":
+            if begun is not None:
+                reads.append((off & 0xFFFF, off >> 16, cap))
+            else:
+                pending = (off & 0xFFFF, off >> 16, cap)
         elif n == "dskw_read_at_x" and name == "DOS.O88":
             if f & FPG_OP:
                 dos_in += 1
@@ -166,6 +222,15 @@ def judge(hits):
             elif not f & FPG_OP:
                 prog_out.append((off, cap))
     long_ = [c for c in phases if c >= LONG]
+    named = [k for c, k in zip(phases, kinds) if c >= LONG]
+    for c, (k, rd) in zip(phases, kinds):
+        if c >= LONG:
+            print("dosbar:   a phase outside an operation, %.0f ms: %s%s"
+                  % (c / 4772.727, k or "UNOWED", "" if k else " - read %s"
+                     % " ".join("%s:%s+%d" % ("AB"[d] if d < 2 else d,
+                                              files.get(cl, cl) if d == 0
+                                              else cl, n) for cl, d, n in rd)),
+                  flush=True)
     print("dosbar: %d operation(s) filled to %s%%; DOS.O88 read %d time(s) "
           "inside one and %d outside; the loader's probe %s; %d module "
           "read(s) outside one; %d phase(s) outside an operation, %d of them "
@@ -194,6 +259,15 @@ def judge(hits):
     low = [b for b in best if b < 90]
     if low:
         fail("an operation ended with the bar at %d%% of its scale" % low[0])
+    bad = [k for k, _ in named if k is None]
+    if bad:
+        fail("%d phase(s) outside an operation lasted 100 ms or more reading "
+             "something the launch does not owe - only A:'s ASSOC.DAT, the "
+             "loader's header of DOS.O88 and a module are" % len(bad))
+    dup = sorted({k for k, _ in named if [x for x, _ in named].count(k) > 1})
+    if dup:
+        fail("the long phase(s) %s came more than once - each is owed once"
+             % " ".join(dup))
     if len(long_) > PHASES_MAX:
         fail("%d phases outside an operation lasted 100 ms or more, each a "
              "bar of its own, against the %d measured" % (len(long_),

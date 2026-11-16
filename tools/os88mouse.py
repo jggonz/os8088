@@ -738,6 +738,8 @@ class Mouse:
     SERIAL_GAP = 0.2                # ...and s between serial edges (a poll)
     SERIAL_PACE = 0.15              # GUEST s between paced serial edges: past
                                     # one 100 ms poll, presses 5.5 ticks apart
+    SERIAL_TRIES = 3                # paced attempts before a span past the
+                                    # window is an error (dblclick)
 
     def _bochs_clear(self, traces):
         """Inside a held bp_trace on Bochs: record and resume every
@@ -824,19 +826,46 @@ class Mouse:
                     # 1 in 7 at load 5 on an open_drive loop).
                     edges = (("mousedown", 1), ("mouseup", 1),
                              ("mousedown", 1), ("mouseup", 1))
-                    ran = self.m.paced_input(edges, self.SERIAL_PACE)
-                    if ran:
+                    # ...AND A STOP THAT LANDS LATE IS RETRIED. The time
+                    # breakpoint does not stop the guest exactly: its stop
+                    # arrives in steps of ~14.8 guest ms (0.15 asked, 0.165,
+                    # 0.180, 0.196 and 0.200 read back, idle and loaded
+                    # alike), and once in a full soak a far later one put
+                    # the presses 13 ticks apart (mega-kdnomouse). The span
+                    # IS the guest's - read off the breakpoints - so past
+                    # the window it is a fact that the guest saw two single
+                    # clicks, which is what a person who clicked too slowly
+                    # makes, and what they do next is wait and double-click
+                    # again: the window is waited out first (_sep) so the
+                    # next press cannot pair with this one's
+                    for attempt in range(self.SERIAL_TRIES):
+                        if attempt:
+                            self._last_edge = self.ticks()
+                            self._sep()
+                        ran = self.m.paced_input(edges, self.SERIAL_PACE)
+                        if not ran:
+                            break
                         # PRESS TO PRESS, off the time breakpoints: ticks
                         # read around the call would count the host's gaps
                         # either side of it too (36 at load 12, for a
                         # gesture of 11)
                         span = int((ran[0] + ran[1]) * 18.2065)
                         self._edge(False)
+                        if span < DBL_TICKS:
+                            break
+                        sys.stderr.write(
+                            "os88mouse: a paced Bochs serial double-click "
+                            "put its presses %d ticks apart (window %d, runs "
+                            "%s) - two clicks; again\n"
+                            % (span, DBL_TICKS, " ".join(
+                                "%.3f" % g for g in ran)))
+                    if ran:
                         if span >= DBL_TICKS:
                             raise MartyError(
                                 "a paced Bochs serial double-click put its "
-                                "presses %d ticks apart (window %d)"
-                                % (span, DBL_TICKS))
+                                "presses %d ticks apart (window %d) %d times"
+                                " running" % (span, DBL_TICKS,
+                                              self.SERIAL_TRIES))
                     else:
                         # a breakpoint of the row's own armed, or a pump:
                         # no exact run to be had, so the host-timed spacing

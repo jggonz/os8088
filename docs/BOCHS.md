@@ -499,6 +499,10 @@ it maps:
   re-adopts it in place (SPEC.md 2.8.3.3), so a module routine that ran
   once stays decoded across a close and a reopen, and tests/shutdown.py's
   failing settings writer is a renamed KERNEL.SYS there, not a patch.
+  A STUB A ROW PARKS ON is code too: tests/evqfull.py rewrote its
+  `mov cx, n` per run, and the second run executed the first one's count -
+  so its stub is now the same bytes every run and the count is a word of
+  DATA it reads.
 - **a row's OWN fixed disk** - what MartyPC is handed, the shim takes:
   `extra=["--mount", "hd:0:PATH"]` (os88marty.launch's own argument), or a
   `run_dir=` from `os88marty.stage_run_dir()` on an `_hdd` machine, whose

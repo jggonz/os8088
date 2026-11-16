@@ -20,7 +20,8 @@
     us on our side (WIREARENA-MODES-PLAN 5);
   - NO FRIENDLY FIRE: our pistol at our teammate (bot 2) takes nothing off
     it; at the foe (bot 1) it does;
-  - THE BOTS PLAY (wave C2, CTF-PLAN 6): two bots and us idle - bot 2
+  - THE BOTS PLAY (wave C2, CTF-PLAN 6): two bots and us out of it (held
+    dead, so no bot's target) - bot 2
     red's, bot 1 blue's - and within six guest minutes each has carried
     the other's flag, and two captures have been made. (Who captures first
     is the bots' dice: one bot's capture alone is not asked for.)
@@ -273,8 +274,16 @@ def main():
         g.__class__ = C                         # bot 2 red's, bot 1 blue's:
         sym = g.sym                             # one against one
         took, caps, last, t = [0, 0], 0, g.caps(), 0
+        # US OUT OF IT, held DEAD (wa_pdead, under a second's ticks from
+        # its end): a dead player is no bot's target (wa_btpbl), so "us
+        # idle" means the two bots play each other. This refilled our health
+        # instead, and an enemy that cannot die is one a bot that has seen
+        # it ENGAGES for the whole match: in a soak run, and 1 in 3 alone,
+        # blue's bot sat on us (state ENGAGED, its target 0) for six
+        # minutes while red's took five captures, and the row failed "blue
+        # 0 s"
         while t < 360 and not (all(took) and caps >= 2):
-            g.p.write(sym["wa_hp"], struct.pack('<H', 100))
+            g.p.write(sym["wa_pdead"], bytes([200]))
             g.ticks(30)
             t += 1
             for k in (0, 1):                    # (flag k carried: the other

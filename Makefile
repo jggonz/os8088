@@ -2666,8 +2666,10 @@ STKLST = -l $(@:.bin=.lst) --before "[map all $(@:.bin=.map)]"
 # per make invocation, so making it a prerequisite here and excluding the two
 # rows keeps `make test-fast` complete on its own and runs each once under
 # `make`. `python3 tools/os88test.py fast` direct still runs them as rows.
+# $(BUILD)/livepayload.txt is the `wants=` of three fast rows (retired,
+# livefull, docglyph) - prebuild only CHECKS it inside a make, so it is here.
 #> [Test] test-fast :: host-side regression tier (budget 30s CPU); `all` already runs it
-test-fast: checkdocs $(SHIPIMGS) $(WEAVEWABS)
+test-fast: checkdocs $(SHIPIMGS) $(WEAVEWABS) $(BUILD)/livepayload.txt
 ifeq ($(KNOBS),)
 	@OS88_PKGDEFS="$(PKGSBDEF)" python3 tools/os88test.py fast -x checkdocs -x docindex
 else
@@ -2677,9 +2679,16 @@ endif
 
 # $(BUILD)/small360.img is small128's `wants=`: inside this make the runner only
 # checks a declared artefact exists (os88test.prebuild, MAKELEVEL), so the
-# target that brings it current has to be here.
+# target that brings it current has to be here - and so are kern_emu's and
+# kern_mega's trees, api-abi-all's: `all` builds neither, and without them
+# `make test-full` on a box that had never typed `make emu` SKIPPED the one
+# row that reads every kernel's API table. Their SYSTEM DISKS and not their
+# kernel.bin: that rule (kernsub-force) builds the kernel alone, a tree
+# bootfence then fails for its missing boot sectors and whose map os88sym
+# refuses; the disk brings the whole tree, as `make emu` and `make mega` do.
 #> [Test] test-full :: did you obviously break the OS: boots on three adapters and kern_small (~1-4 min)
-test-full: $(SHIPIMGS) $(WEAVEWABS) $(BUILD)/small360.img
+test-full: $(SHIPIMGS) $(WEAVEWABS) $(BUILD)/small360.img \
+           $(BUILD)/emu.img $(BUILD)/mega.img
 	@python3 tools/os88test.py full
 
 # THIS TARGET RUNS THE TIER SERIALLY (`--marty-jobs 1`), which is right for a

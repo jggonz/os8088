@@ -26,6 +26,10 @@ it. Per kernel:
   (f) kern_mega only: `fsx_rkeep` (kernel/fsx.inc) carries the cell's row,
       so a FSXF_REAL bracket keeps it rather than answering CF = 1.
 
+  (r) kern_small only: the cell REFUSES - the body is compiled out to keep
+      the 128KB machine under its locked 70.5KB heap rung, and the label is
+      OSAPI_MOUSE_REL's refusal - so AX = 1, CF = 1, nothing else moved.
+
 kern_big (build/) is required. build/smallk, build/megak and build/emuk are
 checked when they hold a kernel that HAS the cell, and named as not checked
 otherwise; TREE arguments add or replace the list (a private `make BUILD=`).
@@ -273,6 +277,36 @@ def exercise(k, patch=None, quiet=False):
     return mine
 
 
+def refused(k):
+    """kern_small: the cell REFUSES (SPEC.md 9.7.3, the owner 2026-11-15).
+
+    Its body is compiled out there - the 128KB machine is locked under its
+    70.5KB heap rung - and the label shares OSAPI_MOUSE_REL's refusal, so
+    the contract is api_refuse's: AX = 1, CF = 1, every other register kept,
+    the caller's 16 bytes and the kernel's map both untouched, and the map
+    NOT armed (kbd_track keeps no map nobody can read)."""
+    m = Machine(k)
+    armed, dn = k.v("kbd_armed"), k.v("kbd_dnmap")
+    m.kwrite(armed, b"\x00")
+    m.kwrite(dn, b"\xA5" * MAPSZ)
+    m.ufill(0xEE)
+    r = m.far(CELL_MAP, flags=0)
+    check(returned(r), "(r) the refusal returns through its far frame "
+          "(%04X:%04X)" % (r["CS"], r["IP"]))
+    check(r["AX"] == 1, "(r) AX = 1 out (FERR_NODISK, api_refuse's answer): "
+          "%04X" % r["AX"])
+    check(bool(r["FL"] & CF), "(r) CF = 1 out (entered with CF = 0)")
+    bad = ["%s %04X->%04X" % (n, val, r[n]) for n, _, val in REGS
+           if n != "AX" and r[n] != val]
+    check(not bad, "(r) every register but AX kept%s"
+          % ("" if not bad else " - " + ", ".join(bad)))
+    got = m.ubuf()
+    check(got == b"\x5A" + b"\xEE" * MAPSZ + b"\xA5",
+          "(r) the caller's bytes untouched: %s" % got.hex())
+    check(m.kread(armed, 1) == b"\x00" and m.kread(dn, MAPSZ) == b"\xA5" * MAPSZ,
+          "(r) the map neither armed nor cleared")
+
+
 def one(tree, required):
     k = Kernel(tree)
     name = os.path.relpath(tree, ROOT)
@@ -302,6 +336,9 @@ def one(tree, required):
           % (TABLE_END, k.v("osapi_table_end")))
     check(k.v("kbd_dnmap") - k.v("kbd_armed") == 1,
           "(a) kbd_armed is the byte below kbd_dnmap, as the body reads it")
+    if k.v("osapi_key_map") == k.sym.get("osapi_mouse_rel", (0, -1))[1]:
+        refused(k)
+        return
     exercise(k)
     # the negative control: a copy one word short must be SEEN
     text = bytearray(k.image[start:start + k.sec[".text"][1]])

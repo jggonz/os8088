@@ -381,7 +381,8 @@ FAST = [
         "alone reported every package as not shipping, and a substring test "
         "for WIRE.O88 matched THEWIRE.O88. FAST for t_movable's argument - it "
         "is a rule about what apps/ means, so it belongs in front of the next "
-        "make rather than the next soak run"),
+        "make rather than the next soak run",
+        wants=("build/livepayload.txt",)),
     Row("excitebikeclean", "soak", py("tests/unit/t_excitebike_clean.py"), 0.2,
         "EXCITEBIKE carries nothing from a NES ROM or its disassembly "
         "(SPEC.md 102.2, docs/plans/EXCITEBIKE-PLAN.md section 0). The art and "
@@ -1810,7 +1811,8 @@ FAST = [
         "and a plain `make` rebuilds an existing one first), because a list "
         "can name a file that never lands. It reads that artefact rather than running `make "
         "print-`, which registry refuses and rightly: a knob in the "
-        "environment makes $(VIDSTAMP) delete build/kernel.bin"),
+        "environment makes $(VIDSTAMP) delete build/kernel.bin",
+        wants=("build/livepayload.txt",)),
     Row("catdisk", "fast", py("tests/unit/t_catdisk.py"), 0.1,
         "SPEC.md 24.6's three category disks, checked for the one thing they "
         "ARE: packages at the ROOT with no folder to click into, MEDIA/ and "
@@ -1832,7 +1834,8 @@ FAST = [
         "through compression, os88mini baking the shipped bytes and not the "
         "reduction, DOS.O88 setting the bit, and every shipped ASSOC.DAT being "
         "version 2 with the glyph in DOS's row. Host-only, one package format "
-        "and three tools, which is why it is here beside `pkg` and not in soak"),
+        "and three tools, which is why it is here beside `pkg` and not in soak",
+        wants=("build/livepayload.txt",)),
     Row("stikcard", "soak", py("tests/unit/t_stikcard.py"), 0.6,
         "SOAK (owner, 2026-11-12: Sticky Apps' card format). a Sticky App carries a CARD (SPEC.md 110.12) - name, description and "
         "32x32 picture in the clear prefix behind flags bit 7: the validator's "
@@ -7853,9 +7856,13 @@ SOAK = [
         "360KB LZB system disk, and traces the widget to READY: exactly two "
         "fpg_opbegins, every DOS.O88 read, the loader's probe of the "
         "document and every module read but dos_load's one-sector probe "
-        "inside one, each filling its trough, at most two phases of 100 ms "
-        "or more outside them (the kernel's header read and HIBER.DRV, as at "
-        "e7bd353b) and at most 4 widget ups. VERIFIED TO FAIL on f4c112c6: "
+        "inside one, each filling its trough, at most three phases of 100 ms "
+        "or more outside them and EACH NAMED by what it read - A:'s "
+        "ASSOC.DAT (its cache holds B:'s), the kernel's read of DOS.O88's "
+        "header, HIBER.DRV - since whether the header read reaches 100 ms "
+        "is where DOS.O88 lands on the disk (22 ms inside a track already "
+        "read, 404 across a track boundary: 10af988a moved it five "
+        "clusters) - and at most 4 widget ups. VERIFIED TO FAIL on f4c112c6: "
         "1 operation, the probe outside, five module reads outside and eight "
         "long phases. Measured 9s.",
         needs=("marty",), serial=True,
@@ -8643,7 +8650,12 @@ SOAK = [
         "sentinels untouched, CF = 0, every register kept; kbd_down agrees "
         "with the copy on all 128 make codes; on kern_mega fsx_rkeep keeps the "
         "cell for a FSXF_REAL bracket. kern_big required; smallk, megak and "
-        "emuk when built. A negative control patches the copy one word short "
+        "emuk when built. kern_small REFUSES the cell (the owner, 2026-11-15: "
+        "the 128KB machine is locked under its 70.5KB heap rung, so the body "
+        "is compiled out and the label is OSAPI_MOUSE_REL's refusal) and is "
+        "held to that instead - AX = 1, CF = 1, nothing else moved, the map "
+        "never armed; until this said so the row was red there from d7553e79. "
+        "A negative control patches the copy one word short "
         "and must see it. RED with the arm's `call kbd_down` dropped (the "
         "poison comes back) and with fsx_rkeep's row taken out. 1s is 0.3 "
         "measured",

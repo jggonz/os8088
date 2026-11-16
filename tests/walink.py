@@ -372,12 +372,27 @@ def main():
         if NET:
             import threading
             cable = NetCable()
+            # A DAEMON, AND ITS ANSWER CHECKED: a machine whose NIC never
+            # connected left accept() blocked, the row ran on with one end
+            # of the cable (A's figure 0 read as zeros, the SNAP leg failed
+            # dressed as the game's), and at exit the interpreter waited on
+            # this thread for ever - a walinkip found still alive, its row
+            # long reported, under a loaded box
             t = threading.Thread(target=lambda: (cable.accept(0),
-                                                 cable.accept(1)))
+                                                 cable.accept(1)),
+                                 daemon=True)
             t.start()
             a = Arena(d, 0, net=cable)
             b = Arena(d, 1, net=cable)
             t.join(30)
+            gone = [k for k in (0, 1) if cable.socks[k] is None]
+            if gone:
+                a.cleanup()
+                b.cleanup()
+                print('walink: FAIL - %d of the two NICs never connected to '
+                      'the cable in 30 s (%s connected)'
+                      % (len(gone), 2 - len(gone)))
+                sys.exit(1)
             cable.start()
             cable.drop_bcast = UDPIP
             want = 2 if UDP else 1      # (no DHCP on --net: raw after ~5 s)
@@ -389,9 +404,11 @@ def main():
                 b.setup_play(3)
                 b.key('down')
                 ip = a.readseg(a.seg, a.sy['ud_blk'], 4)
-                for ch in '.'.join(str(x) for x in ip):
+                typed = '.'.join(str(x) for x in ip)
+                for ch in typed:
                     b.key('dot' if ch == '.' else ch)
                 Q.pace(b, .3)
+                print('   (B typed %s)' % typed)
             else:
                 b.setup_play(2)
             b.wait_for(lambda: b.v('wa_lknet') == want, 'NETWORK: B on the '
@@ -416,6 +433,32 @@ def main():
     print('walink: ok - two machines, one arena, the cable')
 
 
+def place_after_spawn(where):
+    """[(machine, x, y, ang), ...]: each player put there ONCE ITS MATCH HAS
+    RUN, and confirmed there on its own machine.
+
+    The match's spawn places each player in its first ticks, after wa_lkon
+    reads 1, so a poke made the moment the lobby says "in the match" can be
+    overwritten by it: under a loaded box B read (1024, 480), its spawn, and
+    the other machine's figure showed exactly that - walinkip failed "SNAP:
+    B at (1100, 300)" with the link carrying 10,572 bytes B->A, and walink4
+    its slot 2 on two machines of three. So every sim runs 30 match ticks on
+    its OWN clock first, and each position is read back where it was put,
+    re-poked up to three times, before anybody else is asked about it."""
+    for m, *_ in where:
+        t0 = m.v('wa_tkn', 2)
+        m.wait_for(lambda m=m, t0=t0: (m.v('wa_tkn', 2) - t0) & 0xFFFF >= 30,
+                   'the match running before the players are placed', secs=10)
+    for _ in range(3):
+        for m, x, y, ang in where:
+            m.at(x, y, ang)
+        Q.pace(where[0][0], .2)
+        if all((m.v('wa_px', 2), m.v('wa_py', 2)) == (x, y)
+               for m, x, y, _ in where):
+            return True
+    return False
+
+
 def run(a, b, cable):
     # THE LOBBY
     for m in (a, b):
@@ -423,6 +466,13 @@ def run(a, b, cable):
                    (NET or m.v('lk_blk') == 1),
                    'THE LOBBY: %s finds its peer'
                    % ('A' if m is a else 'B'), secs=20)
+    if not (a.v('wa_lkpeer', 4) and b.v('wa_lkpeer', 4)):
+        print('   (LOBBY: no peer - A lknet %d, B lknet %d; B aims at %s; A '
+              'is %s; frames carried A->B, B->A %r)' % (
+                  a.v('wa_lknet'), b.v('wa_lknet'),
+                  bytes(b.readseg(b.seg, b.sy['wa_saddr6'], 6)).hex(),
+                  bytes(a.readseg(a.seg, a.sy['ud_blk'], 4)).hex(),
+                  list(getattr(cable, 'counts', ()))))
     ida, idb = a.v('wa_lkid', 4), b.v('wa_lkid', 4)
     check(a.v('wa_lkpeer', 4) == idb and b.v('wa_lkpeer', 4) == ida,
           'THE LOBBY: each bound to the other (%08x, %08x)' % (ida, idb))
@@ -456,15 +506,36 @@ def run(a, b, cable):
                 for j, c in enumerate(cable.counts)]
 
 
-    # SNAP: B somewhere; A's figure 0 there
-    b.at(1100, 300, 512)
-    a.at(1000, 300, 0)
+    # SNAP: B somewhere; A's figure 0 there - ONCE THE MATCH HAS RUN. The
+    # match's spawn places each player in its first ticks, after wa_lkon
+    # reads 1, so a poke made the moment the lobby says "in the match" can
+    # be overwritten by it: under a loaded box B read (1024, 480), its spawn,
+    # and A's figure 0 showed exactly that - the row failed "SNAP: B at
+    # (1100, 300)" with the link carrying 10,572 bytes B->A. So both sims
+    # run a second of match ticks first (their own clocks), and B is
+    # confirmed where it was put before A is asked about it
+    place_after_spawn([(b, 1100, 300, 512), (a, 1000, 300, 0)])
 
     def near(m, x, y):
         f = m.fig(0)
         return not f['dead'] and abs(f['x'] - x) <= 6 and abs(f['y'] - y) <= 6
-    a.wait_for(lambda: near(a, 1100, 300), 'SNAP: B at (1100, 300) is A\'s '
-               'figure 0 there (%r)' % a.fig(0))
+    if not a.wait_for(lambda: near(a, 1100, 300), 'SNAP: B at (1100, 300) '
+                      'is A\'s figure 0 there (%r)' % a.fig(0)):
+        # (seen twice in ~12 loaded runs and not explained: the state the
+        # next one needs - is A in the match, bound, hearing B at all, and
+        # did the relay carry B's frames - read at the moment it failed)
+        def rd(m, n, k=1):
+            try:
+                return m.v(n, k)
+            except KeyError:
+                return -1
+        print('   (SNAP missed: A fig0 %r; A lkon %d lkpeer %x lklost %d '
+              'lkgone %d tkn %d; B lkon %d px %d py %d tkn %d; frames '
+              'carried A->B, B->A %r)' % (
+                  a.fig(0), rd(a, 'wa_lkon'), rd(a, 'wa_lkpeer', 4),
+                  rd(a, 'wa_lklost'), rd(a, 'wa_lkgone'), rd(a, 'wa_tkn', 2),
+                  rd(b, 'wa_lkon'), rd(b, 'wa_px', 2), rd(b, 'wa_py', 2),
+                  rd(b, 'wa_tkn', 2), list(getattr(cable, 'counts', ()))))
     b.wait_for(lambda: near(b, 1000, 300), 'SNAP: A at (1000, 300) is B\'s '
                'figure 0 there')
     check(a.fig(0)['ang'] == 512 & 1020, 'SNAP: facing as B does (%d)'
@@ -665,8 +736,17 @@ def run(a, b, cable):
     # HEARING: the guest's shot, heard by the host's bot 1 roaming 300 off
     # and facing away (it cannot see the guest) - four shots, each heard:
     # the latch, not the muzzle flash a SNAP may or may not land in
+    # THE HOST'S BOTS NOT THINKING (wa_bdet, as THE GUEST KILLS A BOT has
+    # them): hearing is wa_bheara off the SNAP, which a bench does not stop,
+    # so the hunt it sets STAYS - thinking, the bot turns on its hunt, sees
+    # the guest and is ENGAGED a look later, and a row reading "hunting"
+    # after any delay missed the shot it was there to see (a loaded lane:
+    # 3 of 4). Nor can a roaming bot turn round and see the guest by
+    # itself, which would have passed it without a shot heard at all.
+    host.put([('bdet', 1, 1)])
     heard = 0
     for _ in range(4):
+        host.setf(1, 55, 0)                 # (its target: not the guest)
         host.setf(1, 20, 0, 2)              # (heading east - it turns to
         host.freeze(1, 1300, 300)           # face its heading - and facing
         host.setf(1, 4, 0, 2)               # east: away from the guest)
@@ -676,13 +756,32 @@ def run(a, b, cable):
         guest.at(1000, 300, 256)            # (firing north, at nothing)
         guest.put([('cool', 0, 1), ('rld', 0, 1), ('wpn', 0, 1),
                    ('mag', 6, 1)])          # (the pistol, loaded)
+        # EACH STEP ON THE MACHINE IT HAPPENS ON. This held Ctrl for 0.05s
+        # of the guest's time and then gave the host 1.5s of ITS clock for
+        # the whole chain - the guest's game seeing the key, the shot, two
+        # SNAPs over the wire, the host's bot turning - which is a budget
+        # across two QEMUs, i.e. host time: a loaded soak lane missed one
+        # in four. Now the shot is confirmed on the guest (a round out of
+        # the magazine), its latch confirmed SENT on the guest (both SNAPs
+        # it rides, wa_lkfired back to 0), and only then is the host asked,
+        # on its own clock, with room for a starved machine; `acted` ends
+        # the moment the bot hunts, so the room costs nothing on a pass.
         guest.key_state('ctrl', True)
-        Q.pace(guest, .05)
+        shot = Q.acted(guest, lambda: guest.v('wa_mag') < 6, secs=3,
+                       what='the guest\'s shot')
         guest.key_state('ctrl', False)
-        if Q.acted(host, lambda: host.readseg(     # (hunting: it cannot
-                host.seg, host.sy['wa_figs'] + FS + 46, 1)[0] == 2,  # see)
-                secs=1.5, what='heard'):
+        sent = Q.acted(guest, lambda: guest.v('wa_lkfired') == 0, secs=3,
+                       what='the shot latch out on two SNAPs')
+        bst = lambda: tuple(host.readseg(host.seg, host.sy['wa_figs'] + FS
+                                         + 46, 10)[0:10:9])  # F_BST, F_BTGT
+        if Q.acted(host, lambda: bst() == (2, 1),  # (hunting figure 0, the
+                   secs=4, what='heard'):          # guest: it cannot see)
             heard += 1
+        else:
+            print('   (not heard: shot %s, latch sent %s, guest mag %d '
+                  'lkfired %d; host bot 1 state, target %r at %r)' % (
+                      shot, sent, guest.v('wa_mag'), guest.v('wa_lkfired'),
+                      bst(), host.fig(1)))
     check(heard == 4, 'HEARING: each of the guest\'s four shots sends the '
           'host\'s bot hunting the guest (%d of 4)' % heard)
 
