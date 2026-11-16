@@ -8646,7 +8646,12 @@ SOAK = [
         "sentinels untouched, CF = 0, every register kept; kbd_down agrees "
         "with the copy on all 128 make codes; on kern_mega fsx_rkeep keeps the "
         "cell for a FSXF_REAL bracket. kern_big required; smallk, megak and "
-        "emuk when built. A negative control patches the copy one word short "
+        "emuk when built. kern_small REFUSES the cell (the owner, 2026-11-15: "
+        "the 128KB machine is locked under its 70.5KB heap rung, so the body "
+        "is compiled out and the label is OSAPI_MOUSE_REL's refusal) and is "
+        "held to that instead - AX = 1, CF = 1, nothing else moved, the map "
+        "never armed; until this said so the row was red there from d7553e79. "
+        "A negative control patches the copy one word short "
         "and must see it. RED with the arm's `call kbd_down` dropped (the "
         "poison comes back) and with fsx_rkeep's row taken out. 1s is 0.3 "
         "measured",

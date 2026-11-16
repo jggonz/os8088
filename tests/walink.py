@@ -665,8 +665,17 @@ def run(a, b, cable):
     # HEARING: the guest's shot, heard by the host's bot 1 roaming 300 off
     # and facing away (it cannot see the guest) - four shots, each heard:
     # the latch, not the muzzle flash a SNAP may or may not land in
+    # THE HOST'S BOTS NOT THINKING (wa_bdet, as THE GUEST KILLS A BOT has
+    # them): hearing is wa_bheara off the SNAP, which a bench does not stop,
+    # so the hunt it sets STAYS - thinking, the bot turns on its hunt, sees
+    # the guest and is ENGAGED a look later, and a row reading "hunting"
+    # after any delay missed the shot it was there to see (a loaded lane:
+    # 3 of 4). Nor can a roaming bot turn round and see the guest by
+    # itself, which would have passed it without a shot heard at all.
+    host.put([('bdet', 1, 1)])
     heard = 0
     for _ in range(4):
+        host.setf(1, 55, 0)                 # (its target: not the guest)
         host.setf(1, 20, 0, 2)              # (heading east - it turns to
         host.freeze(1, 1300, 300)           # face its heading - and facing
         host.setf(1, 4, 0, 2)               # east: away from the guest)
@@ -676,13 +685,32 @@ def run(a, b, cable):
         guest.at(1000, 300, 256)            # (firing north, at nothing)
         guest.put([('cool', 0, 1), ('rld', 0, 1), ('wpn', 0, 1),
                    ('mag', 6, 1)])          # (the pistol, loaded)
+        # EACH STEP ON THE MACHINE IT HAPPENS ON. This held Ctrl for 0.05s
+        # of the guest's time and then gave the host 1.5s of ITS clock for
+        # the whole chain - the guest's game seeing the key, the shot, two
+        # SNAPs over the wire, the host's bot turning - which is a budget
+        # across two QEMUs, i.e. host time: a loaded soak lane missed one
+        # in four. Now the shot is confirmed on the guest (a round out of
+        # the magazine), its latch confirmed SENT on the guest (both SNAPs
+        # it rides, wa_lkfired back to 0), and only then is the host asked,
+        # on its own clock, with room for a starved machine; `acted` ends
+        # the moment the bot hunts, so the room costs nothing on a pass.
         guest.key_state('ctrl', True)
-        Q.pace(guest, .05)
+        shot = Q.acted(guest, lambda: guest.v('wa_mag') < 6, secs=3,
+                       what='the guest\'s shot')
         guest.key_state('ctrl', False)
-        if Q.acted(host, lambda: host.readseg(     # (hunting: it cannot
-                host.seg, host.sy['wa_figs'] + FS + 46, 1)[0] == 2,  # see)
-                secs=1.5, what='heard'):
+        sent = Q.acted(guest, lambda: guest.v('wa_lkfired') == 0, secs=3,
+                       what='the shot latch out on two SNAPs')
+        bst = lambda: tuple(host.readseg(host.seg, host.sy['wa_figs'] + FS
+                                         + 46, 10)[0:10:9])  # F_BST, F_BTGT
+        if Q.acted(host, lambda: bst() == (2, 1),  # (hunting figure 0, the
+                   secs=4, what='heard'):          # guest: it cannot see)
             heard += 1
+        else:
+            print('   (not heard: shot %s, latch sent %s, guest mag %d '
+                  'lkfired %d; host bot 1 state, target %r at %r)' % (
+                      shot, sent, guest.v('wa_mag'), guest.v('wa_lkfired'),
+                      bst(), host.fig(1)))
     check(heard == 4, 'HEARING: each of the guest\'s four shots sends the '
           'host\'s bot hunting the guest (%d of 4)' % heard)
 
