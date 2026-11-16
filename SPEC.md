@@ -38716,6 +38716,20 @@ kern_big and kern_emu, where they and `DSK_PMHD`'s odd 51 make an even pair
 and the parity pad they needed goes; +12 on kern_small and kern_mega, which
 carry that pad here instead. An XT has no change line and never answers `06h`.
 
+**A speculative read's `06h` fails the transfer that started it** (kern_big,
+kern_emu, kern_mega). A read-ahead fill or the loader's prefetch (§18.95.14)
+meeting `06h` while mounted shuts the gate and fails - but only the GUESS, and
+the fill's CF = 1 means "read it yourself": the direct read behind it then
+succeeds, the BIOS having already reset the line, on the NEW disk at the old
+volume's LBA, and the operation goes on with the old FAT. So `dsk_xfer` keeps
+`[dsk_mntok]` across `dsk_rah_serve` and, when a missed serve finds the gate
+lower than it left it, fails with the fill's `06h` instead of reading; the
+loader does the same across `dsk_rah_pre` and answers `LD_EDISK`. A gate that
+was already 0 (inside a mount) compares equal, so neither test can be tripped
+by a stale `[dsk_ioerr]`. 14 bytes at the cache gate and 11 in the loader,
+`.cold`; kern_small leaves both out for the reason above and guard 1b's, and
+kern_dos, which assembles `disk.inc` without `KERN_BIG`, leaves them out too.
+
 Three things about the implementation:
 
 - **`dsk_here_ok` preserves every register**, so the motor bit comes out of
@@ -42642,6 +42656,20 @@ so `dsk_runcap` and `dsk_next_clus_x` behind it keep their measured parity
 (`hotpar`) - and the two `mov`s, one byte each over `inc`/`dec`
 (`dsk_rah_rdst` 57 -> 59; kern_mega's `dsk_rah_fill` 238 -> 240). No `.text`,
 no `.bss`.
+
+**`06h` is not a failing disk, so it keeps the retry** (kern_big, kern_emu,
+kern_mega). Inside a mount `[dsk_mntok]` is already 0, so BR-16's arm (§18.9.1)
+lets `06h` fall to the ladder - and an AT BIOS answers `06h` to the first
+access after EVERY swap, which is exactly the listing mount's eight-sector LBA
+0 fill (18.95.11). Abandoned there, the fill cost the boot sector, the FAT
+window and the root's first sectors a call each again. So after the reset,
+`[dsk_ioerr]` = `06h` goes to the attempt count before the `DSK_RAH_SPEC` test:
+the fill retries once, as it did before this section. A MOUNTED `06h` never
+reaches it - BR-16 has already failed that transfer. 7 bytes of `.cold`, and
+the PARITY byte above now stands for them, BR-16's 14 at the cache gate and
+three relaxed jumps (23, odd). kern_small, an XT-class machine with no change
+line and no `.cold` byte to spare (guard 1b), leaves it out, and so does
+kern_dos (no `KERN_BIG`).
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
@@ -112124,7 +112152,12 @@ Each was one test at the door and each test is gone:
   at the exit as a driver's is (it runs where it is when the claim is
   conventional already), and at the drop every `EXFP` slot's SEGMENT becomes
   that copy's paragraph, the offsets kept; the return puts the code selector
-  back. What a bracket reaches of the module is `OSAPI_FSX_MODE`'s two verbs,
+  back. A KEPT one (`MOD_CACHE`, §2.8.3: held, every slot disarmed to
+  `mod_gone`) is NOT loaded here - `fsx_rextf` and `FSXF_PREP`'s count ask
+  `[EXFP]` = `mod_gone`, `mod_live`'s question, before `MODR_SEG` - so it gets
+  no row, no KB and `fsx_rgone`'s slots, as a freed one does: kept offsets in
+  a copy's segment would far-call `mod_gone`'s `.cold` offset inside EXTD's
+  image. What a bracket reaches of the module is `OSAPI_FSX_MODE`'s two verbs,
   `EXTF_KIND` and `EXTF_ENTER` (the collapse onto the bracket's display) -
   `OSAPI_FSX_CAPS` is not a kept cell, and `OSAPI_WM_CONTENT`'s
   second-display arm is resident - and that path is real-mode code as it
@@ -113078,6 +113111,24 @@ task, and a task cannot pre-empt itself. `mod_need`'s disk read takes
 had stopped loading the module fails the first half rather than passing the
 second. Against the kernel before this it reads three failures and one pass,
 which is the table above.
+
+##### 38.0.1.1 …and since `MOD_CACHE`, on the image LIVE
+
+§2.8.3.4 turned the cache on here, and `FDLG.DRV` names its whole bss, so
+its drop KEEPS the image: `mod_r_fdlg` stays non-zero, every `FDFP` slot is
+disarmed to `mod_gone`, and the claim is re-tagged. A guard on "held" then
+stays open on every later pass, and each one far-called `fdlg_reap_x` into a
+full `mod_drop` of an image already kept - the scratch re-zeroed, the slots
+re-disarmed under `cli`, a `mem_tab` walk and the same tag - until a claim
+evicted the cache. **The question is "held and ARMED"**, `mod_live`'s own
+non-`kern_mega` test: a live slot's segment is `MODR_SEG`, a disarmed one
+names `.cold`'s, and a row that holds nothing (0) matches neither. `ui.inc`
+compares `[mod_r_fdlg]` with `[FDFP+2]` and skips the rung unless they are
+equal. A dialog closed from inside its own callback still leaves the image
+armed until this drop, so the drop still runs exactly once; `mod_need.held`
+re-arms it for the next dialog. It costs **+2 bytes** of `.text` on
+`kern_small` (`mov`, `cmp`, `jne` for `cmp`, `je`), and the other kernels
+carry no `FDLG_MOD`.
 
 ## 54. assoc.inc — file type associations
 

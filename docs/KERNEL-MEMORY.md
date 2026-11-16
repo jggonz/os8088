@@ -341,39 +341,39 @@ had added.
   "big": {
     "b2res": 3584,
     "b3m": 448,
-    "b3ram": 6000,
-    "b3res": 720,
+    "b3ram": 6008,
+    "b3res": 592,
     "blift": 512,
     "blobseg": 6560,
     "boot2": 3206,
     "boot3": 7728,
     "bootmax": 115200,
-    "bss": 4878,
+    "bss": 4882,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37677,
-    "coldpara": 2355,
-    "colds": 3645,
+    "cold": 37714,
+    "coldpara": 2358,
+    "colds": 3650,
     "fatpara": 288,
-    "fats": 2851,
+    "fats": 2856,
     "grace": 2048,
-    "imgpara": 2755,
+    "imgpara": 2760,
     "kend": 6048,
     "kseg": 96,
     "ksize": 95232,
     "lowbss": 5358,
     "lowpara": 367,
-    "lows": 3139,
+    "lows": 3144,
     "minramkb": 128,
     "ovl": 2050,
     "stk0": 512,
-    "text": 39199,
-    "toppara": 2909,
+    "text": 39267,
+    "toppara": 2904,
     "vga": 2218,
     "vgabuf": 336,
     "vgabufpara": 21,
-    "vgars": 3506,
-    "vgas": 6000
+    "vgars": 3511,
+    "vgas": 6008
   },
   "emu": {
     "b2res": 3584,
@@ -483,7 +483,7 @@ had added.
     "minramkb": 128,
     "ovl": 1472,
     "stk0": 512,
-    "text": 28952,
+    "text": 28961,
     "toppara": 1533,
     "vga": 0,
     "vgabuf": 0,
@@ -925,15 +925,15 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,725 | 38.7% |
+| the file system, end to end | 29,759 | 38.7% |
 | the window system and its furniture | 22,409 | 29.1% |
 | drawing: adapters, primitives, glyphs, icons | 10,545 | 13.7% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,347 | 9.6% |
-| the kernel proper: API table, heap, scheduler, events | 6,262 | 8.1% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,409 | 9.6% |
+| the kernel proper: API table, heap, scheduler, events | 6,270 | 8.1% |
 | the Control Panel | 301 | 0.4% |
-| the About box, the one built-in kind left in apps.inc | 287 | 0.4% |
+| the About box, the one built-in kind left in apps.inc | 288 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **76,876** | |
+| **total** | **76,981** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -941,10 +941,10 @@ there and nowhere else.
 |---|---:|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,190 | 7,680 | **8,870** | 527 | — | — |
 | `wm.inc` — the window manager (§11) | 8,416 | 154 | **8,570** | 856 | — | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 407 | 6,997 | **7,404** | 422 | — | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 406 | 7,021 | **7,427** | 422 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,096 | **5,120** | 180 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,480 | 1,408 | **4,888** | 38 | 526 | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,332 | 6 | **3,338** | 111 | 824 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,394 | 6 | **3,400** | 115 | 824 | — |
 | `memory.inc` — the claim heap (§50) | 290 | 2,621 | **2,911** | 27 | 324 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,866 | 9 | **2,875** | 54 | — | — |
 | `assoc.inc` — file type associations (§54) | 504 | 2,017 | **2,521** | 31 | — | — |
@@ -957,15 +957,15 @@ there and nowhere else.
 | `fsx.inc` — fullscreen exclusive (§53) | 1,522 | 147 | **1,669** | 9 | — | 413 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,664 | **1,664** | 152 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,312 | — | **1,312** | 207 | 2,944 | — |
-| `loader.inc` — the package loader (§21) | 4 | 1,277 | **1,281** | 47 | — | — |
+| `loader.inc` — the package loader (§21) | 4 | 1,288 | **1,292** | 47 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,257 | — | **1,257** | 20 | — | — |
-| `boot3.inc` — **(undescribed)** | 1,099 | 118 | **1,217** | — | — | — |
+| `boot3.inc` — **(undescribed)** | 1,105 | 118 | **1,223** | — | — | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 966 | — | **966** | — | — | — |
 | `icons.inc` — the icon renderer (§10) | 913 | — | **913** | 288 | — | — |
 | `dock.inc` — the dock strip (§30) | 874 | — | **874** | 59 | — | — |
 | `snd.inc` — the sound layer (§34) | 784 | — | **784** | 35 | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 666 | **666** | — | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 167 | 487 | **654** | — | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 167 | 489 | **656** | — | — | — |
 | `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 85 | 561 | **646** | 3 | — | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 553 | — | **553** | — | — | 488 |
 | `clock.inc` — the clock ladder (§37) | 470 | 30 | **500** | 59 | — | — |
@@ -974,7 +974,7 @@ there and nowhere else.
 | `blank.inc` — the idle screen blanker (§64) | 197 | 229 | **426** | — | — | — |
 | `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 85 | 286 | **371** | 255 | — | — |
 | `ctrl.inc` — the Control Panel (§31) | 119 | 182 | **301** | 28 | — | — |
-| `apps.inc` — the three built-in kinds (§14) | 212 | 75 | **287** | — | — | — |
+| `apps.inc` — the three built-in kinds (§14) | 213 | 75 | **288** | — | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 273 | — | **273** | 24 | — | — |
 | `events.inc` — the event ring (§10) | 168 | — | **168** | 3 | 128 | — |
 | `clip.inc` — the system clipboard (§55) | 157 | — | **157** | 3 | — | — |
@@ -1001,7 +1001,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | — | — | **0** | — | — | 3 |
-| **total** | **39,199** | **37,677** | **76,876** | **4,878** | **5,358** | **3,206** |
+| **total** | **39,267** | **37,714** | **76,981** | **4,882** | **5,358** | **3,206** |
 <!-- END generated table -->
 
 ### Reading it

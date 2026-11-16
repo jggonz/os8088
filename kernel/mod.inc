@@ -506,14 +506,23 @@ mod_need:
 ; the boot, which slides it before the heap exists. DX = the segment, BX =
 ; the row
 .held:
+%ifdef KERN_BIG                 ; THE ID kept: .race reaches .load with it
+    push di                     ; (kern_small: guard 1b leaves it no `.cold`
+%endif                          ; byte for it)
     call mod_fpr                ; DI = its slot block. LIVE: the slots name
 %ifdef KERN_MEGA                ; its segment, and that is the whole test -
     COLDSEG_TO ax               ; no walk on a thunk's hot path. KEPT: they
     cmp [di+2], ax              ; read mod_gone's, `.cold`'s. kern_mega asks
-    je .kept                    ; the KEPT question (mod_live's note): a
-    clc                         ; live slot there names a code half, which is
-%else                           ; MODR_SEG or MODR_SEG - 8
-    cmp [di+2], dx
+%else                           ; the KEPT question (mod_live's note): a
+    cmp [di+2], dx              ; live slot there names a code half, which is
+%endif                          ; MODR_SEG or MODR_SEG - 8
+%ifdef KERN_BIG
+    pop di                      ; (a pop keeps the flags)
+%endif
+%ifdef KERN_MEGA
+    je .kept
+    clc
+%else
     jne .kept
 %endif
     jmp kretc_es                ; LIVE: CF = 0

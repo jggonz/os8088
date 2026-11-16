@@ -1629,6 +1629,8 @@ fsx_rprepp:
     pop bp
     call fsx_rkb
     call fsx_rdrvprep           ; THE DRIVERS, down or counted
+    cmp word [EXFP], mod_gone   ; KEPT, disarmed (MOD_CACHE): not loaded,
+    je .nx                      ; mod_live's test - the drop's fsx_rgone
     mov dx, [mod_tab + MOD_EXT * MODR_SIZE + MODR_SEG]
     lsl cx, dx                  ; EXTD.DRV's copy, when it is above 1MB (no
     jnz .nx                     ; descriptor: not loaded)
@@ -2211,13 +2213,15 @@ fsx_rdrvf:
 ; fsx_rextf - EXTD.DRV LOW (W7, SPEC.md 53.2.3): a loaded extended desktop's
 ; module gets the service area's RMD_EXT row - its whole claim (LSL: the
 ; image and its tail), copied down and back up as a driver's is - and the
-; drop aims EXFP's segments at RMD_SEG. Nothing when it is not loaded (the
-; row stays zero, and the drop's fsx_rgone stands). CF = 1 and AL =
+; drop aims EXFP's segments at RMD_SEG. Nothing when it is not loaded or is
+; KEPT, disarmed (the row stays zero, and the drop's fsx_rgone stands). CF = 1 and AL =
 ; FSXR_DROOM: no room for the copy. PM, DS = KDATA. Clobbers AX, CX, DX, BP
 fsx_rextf:
     mov dx, [mod_tab + MOD_EXT * MODR_SIZE + MODR_SEG]
     or dx, dx                   ; its DATA selector (mega_mods_fix), 0 = not
     jz .o                       ; loaded: CF = 0 from the `or`
+    cmp word [EXFP], mod_gone   ; KEPT, disarmed (MOD_CACHE): its slots name
+    je .o                       ; mod_gone, so not loaded either (CF = 0)
     push es
     mov es, [ss:fsx_rsvc]
     mov bp, rms_drv - rms_lo + RMD_EXT

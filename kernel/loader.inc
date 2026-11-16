@@ -914,11 +914,19 @@ ld_run_body_x:
     ; ld_check_hdr reads it through ES.
 .peek:
 %ifdef DSK_RAHINT
+%ifdef KERN_BIG
+    push word [dsk_mntok]       ; BR-16's gate as the prefetch finds it
+%endif
     call dsk_rah_pre            ; THE FILE IS ABOUT TO BE READ, so its first
                                 ; cylinder is read now, in one int 13h, and the
                                 ; peek and step 6 are served out of the cache
                                 ; (SPEC.md 18.95.13). An explicit call that
                                 ; leaves nothing armed; AX, the cluster, kept
+%ifdef KERN_BIG
+    pop cx                      ; ...and a prefetch whose 06h SHUT it (SPEC.md
+    cmp [dsk_mntok], cl         ; 18.9.1) fails the load: the peek would read
+    jb .edisk                   ; the NEW disk at the old cluster. CF = 1
+%endif
 %endif
     mov cx, 512                 ; ...whichever transport (SPEC.md 20.14.6.2).
     call dsk_peek_x             ; A redirected volume has no sectors at all -
@@ -939,6 +947,7 @@ ld_run_body_x:
                                 ; verdict on a directory entry naming a
                                 ; cluster this volume has not got, and the
                                 ; only behaviour this factoring moved
+.edisk:
     mov al, LD_EDISK            ; (the tails HERE, where the peek's refusal
 .ret1:                          ; falls into them and the steps below jump
     ret                         ; back: no `jmp short .read` over them -

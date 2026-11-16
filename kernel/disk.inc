@@ -1748,8 +1748,20 @@ dsk_xfer:
     cmp byte [dsk_vkind], DVK_DRV
     je .nocache
 %endif
+%ifdef KERN_BIG
+    push word [dsk_mntok]       ; BR-16's gate as the fill finds it (byte 0)
+%endif
     call dsk_rah_serve          ; CF=0 with AX = sectors copied out of it, the
+%ifdef KERN_BIG
+    pop dx                      ; (DX is dead: the serve spent it too)
+    jnc .rahhit
+    cmp [dsk_mntok], dl         ; A FILL'S 06h THAT SHUT THE GATE (BR-16,
+    jnb .nocache                ; SPEC.md 18.9.1) fails THIS transfer: the AT
+    jmp .fail                   ; BIOS has reset its change line, so the read
+.rahhit:                        ; behind it would land on the NEW disk
+%else
     jc .nocache                 ; slot filled first if a fill would have paid
+%endif
                                 ; (SPEC.md 18.95.1). THREE CALLS AND A TEST
                                 ; STOOD HERE - take, len, the surplus compare,
                                 ; fill, take AGAIN - and the second take
@@ -2131,6 +2143,10 @@ dsk_xfer:
 %ifdef DISK_COUNTERS
     inc word [dsk_dbg_rst]
 %endif
+%ifdef KERN_BIG
+    cmp byte [dsk_ioerr], 0x06  ; ...but not for MEDIA CHANGED inside a mount
+    je .again                   ; (a mounted one failed above): it is every
+%endif                          ; swap's first answer and not a failing disk
     cmp byte [dsk_rah_busy], DSK_RAH_SPEC
     je .wpfail                  ; A SPECULATIVE READ GETS ONE ATTEMPT (SPEC.md
                                 ; 18.95.14): a read-ahead fill or the loader's
@@ -2145,6 +2161,7 @@ dsk_xfer:
                                 ; the cache aside - the swap detector, the
                                 ; cloner, the format probe - raises the byte
                                 ; with `inc` to 1 and keeps its ladder
+.again:
     dec bp
     jnz .attempt
     ; Three strikes at this run length. If it WAS a run, drop to a single
@@ -2165,7 +2182,9 @@ dsk_xfer:
                                 ; grows a byte rather than failing to
                                 ; assemble (fprog.inc's idiom, for its reason)
     nop                         ; PARITY, never executed: the speculative
-                                ; read's 7-byte test above is odd, and .ok,
+                                ; read's 7-byte test above is odd (kern_big:
+                                ; its 06h test's 7, BR-16's 14 at the cache
+                                ; gate and three relaxed jumps, 23), and .ok,
                                 ; the run loop and the hot routines behind
                                 ; it (dsk_runcap, dsk_next_clus_x) keep the
                                 ; parity they were measured at (t_hotpar)
