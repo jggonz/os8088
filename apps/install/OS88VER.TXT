@@ -1,5 +1,5 @@
-20261113
-* ESS AudioDrive cards on DMA 1 or 3
-* Sound driver sets the ESS DMA route
-* Sound Debug shows the DMA in use
-* DOS gets the right BLASTER setting
+20261116
+* Wire Arena: 3D shooter for the XT
+* Module cache: reopen with no disk read
+* Hibernate resumes without asking
+* MCGA, 64KB EGA and MDA detected right
