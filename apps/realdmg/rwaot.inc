@@ -13,7 +13,7 @@
 ; through a bounce (rw_apart).
 ;
 ; THE META, part 4:
-;   0   'RDAOT2'
+;   0   'RDAOT3'
 ;   6   db the code images past the core, 7 db the table's mask (7 for
 ;       16KB, 15 for 32KB: kern_mega's packages)
 ;   8   dw the list's entries, 10 dw the relocations
@@ -31,12 +31,16 @@
 ;       its own eager part, sorted, the parts in key order, so the search
 ;       picks a part by its first entry and bisects only that one
 ;       (REALDMG-SPEC 20.17.1). The filter is after the table, in its part
-;   58  db the first row of the ROM's pieces, 0 for none (REALDMG-SPEC
-;       20.13): 32KB each, plain, so they lie back to back in the file
+;   58  db the first row of the ROM, 0 for none (REALDMG-SPEC 20.13): its
+;       banks compressed ONE BY ONE and laid back to back in OP_BIG rows
+;       (SPEC.md 20.12.15) that are themselves back to back in the file
 ;   59  db the HOT images - the first so many hold what the counters ran
 ;       (REALDMG-SPEC 20.11), and they are claimed before the ROM, the rest
 ;       after it; 0 = all of them
 ;   60  dw the ROM's KB
+;   62  db how many rows the ROM takes (one, two past 960KB)
+;   64  dw a bank, for every bank: its LZ4 stream's packed length, 0 for a
+;       bank stored as it is
 ;
 ; AN IMAGE THE HEAP CANNOT HOLD IS LEFT ON THE DISK, and what it held is
 ; interpreted: its table and list entries get offset 0 (rdgaot.inc's miss
@@ -75,8 +79,10 @@ rw_ameta:
     jne .bad1
     cmp word [es:2], 'AO'
     jne .bad1
-    cmp word [es:4], 'T2'           ; (RDAOT2: the relocations and the
-    jne .bad1                       ;   list in parts of their own, 20.17)
+    cmp word [es:4], 'T3'           ; (RDAOT3: the ROM's banks compressed
+    jne .bad1                       ;   one by one, 20.13; RDAOT2 the
+                                    ;   relocations and the list in parts
+                                    ;   of their own, 20.17)
     mov al, [es:6]
     cmp al, RWA_MAX
     ja .bad1
@@ -120,14 +126,14 @@ rw_ameta:
     xor dh, dh
     shl dx, 1
     add ax, dx
-    mov dx, [es:60]                 ; ...and a row a 32KB of the ROM in it
+    mov dx, [es:60]                 ; ...and the ROM's rows, if it is in it
     mov [rw_aromkb], dx
     cmp byte [es:58], 0
     je .nor
     cmp [es:58], al                 ; (where they begin: past the images)
     jne .bad1
-    mov cl, 5
-    shr dx, cl
+    mov dl, [es:62]
+    xor dh, dh
     add ax, dx
 .nor:
 %ifdef PKG_MEGA
@@ -354,14 +360,63 @@ rw_aebread:
 
 ; rw_aebank1 - AX = a bank: its 16KB out of the package to BP:0. CF = 1: it
 ; could not be. Clobbers AX-DI and ES
+;
+; THE BANKS ARE COMPRESSED ONE BY ONE (REALDMG-SPEC 20.13): bank n is at the
+; ROM's base plus the STORED lengths of the banks before it, which the meta
+; lists from 64 - a word a bank, 0 for a bank stored as it is. A stream is
+; read to the TOP of the bank's own 16KB and expanded down from 0, in place:
+; it ends in a raw tail, so the writer never overtakes it (SPEC.md 20.13.7),
+; and the host has checked that for every bank it compressed
 rw_aebank1:
-    mov cx, 16384
-    mul cx                          ; DX:AX = its offset in the ROM
+    mov es, [rw_amseg]
+    mov si, 64                      ; SI = the bank's word
+    mov cx, ax                      ; CX = the banks before it
+    xor ax, ax
+    xor dx, dx                      ; DX:AX = what they take in the file
+    jcxz .at
+.sum:
+    mov bx, [es:si]
+    or bx, bx
+    jnz .z
+    mov bx, 16384                   ; (stored as it is)
+.z:
+    add ax, bx
+    adc dx, 0
+    inc si
+    inc si
+    loop .sum
+.at:
     add ax, [rw_arombase]
     adc dx, [rw_arombase + 2]
-    mov word [rw_awant], 16384
-    mov word [rw_adst], 0
-    jmp rw_acopy
+    mov cx, [es:si]                 ; CX = its stream, 0 = it is plain
+    mov bx, 16384
+    jcxz .raw
+    sub bx, cx                      ; BX = where the stream lands: the top
+    mov [rw_awant], cx
+    jmp short .go
+.raw:
+    mov [rw_awant], bx
+    xor bx, bx
+.go:
+    mov [rw_adst], bx
+    push cx
+    call rw_acopy
+    pop cx
+    jc .r
+    jcxz .r                         ; plain: it is there already, CF = 0
+    mov si, 16384
+    sub si, cx                      ; DS:SI = the stream, ES:0 the bank
+    xor ax, ax                      ; LZ4, the format gbaot.py packs with
+    xor bx, bx
+    mov dx, 16384                   ; BX:DX = exactly one bank
+    xor di, di
+    mov es, bp
+    push ds
+    mov ds, bp
+    call OSAPI_DECOMP
+    pop ds
+.r:
+    ret
 
 ; rw_ahdr - ES = the cartridge's bank 0 (rw_hdrchk's): ZF = 1 when its
 ; header is the one the package was made from, else SI = why. Every other

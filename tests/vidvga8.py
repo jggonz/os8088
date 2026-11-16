@@ -80,6 +80,7 @@ import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E
 from cycweb import pkg_syms                                   # noqa: E402
 
 W, H, NF, FPS = 160, 96, 60, 15.0
+_H0 = H                         # (--shared: each leg from this)
 STOPS = (1, 9, 23, 38, 52, NF)
 # --held (98.1.3.9): HELD records - one, and a run of two - each the next
 # frame's TOP over the last one's BOTTOM, so the record after it finishes
@@ -144,7 +145,18 @@ def clip(tmp, layout, rs=1, flip=False, loop=None, black0=False, held=(),
     return out
 
 
-def main():
+_SYMS = {}
+
+
+def _pkg_syms(*k):
+    """pkg_syms once a process: every --shared leg asks for the same"""
+    if k not in _SYMS:
+        _SYMS[k] = pkg_syms(*k)
+    return _SYMS[k]
+
+
+def main(argv=None, boot=None):
+    """one row, or with `boot` (tests/vidshare.py) one leg of a shared boot"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--layout", choices=("lin320", "modex"),
@@ -165,14 +177,14 @@ def main():
                     "to date by the LATCH COPY of the last record's rows "
                     "off the glass (98.3.8.1), vp_flcw set 0, instead of "
                     "decoding the last record again")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     if (a.lcopy or a.held or a.own) and not a.flip:
         sys.exit("vidvga8: --lcopy, --held and --own are a flipped play's")
     if a.own and (a.lcopy or a.repeat == "seam"):
         sys.exit("vidvga8: --own brings no page up, and has no seam")
     rs = 2 if a.rows2 else 1
     global H
-    H //= rs
+    H = _H0 // rs
     lay = vid.LAYOUT_BY_NAME[a.layout]
     modex = lay == vid.LAY_MODEX
     mode_want = 8 if modex else FSXM_VGA13
@@ -182,7 +194,10 @@ def main():
     # protected mode, so the row plays the ARM - build/megak/apps/, assembled
     # -DPKG_MEGA - and reads the arm's symbols
     mega = bool(os.environ.get("OS88_MEGA"))
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",),
+    if boot is not None and mega:
+        sys.exit("vidvga8: --shared is MartyPC's: a kern_mega leg boots a "
+                 "machine of its own")
+    syms, _ = _pkg_syms("apps/video/video.asm", ("apps/",),
                        ("PKG_MEGA",) if mega else ())
     pkg = os88build.at("build/megak/apps/video.o88" if mega
                        else "build/video.o88")
@@ -213,7 +228,8 @@ def main():
                        capture_output=True)
         ty0, tx0 = (SH // rs - H) // 2, (SW - W) // 2
         rows_at = [(ty0 + y) * 320 + tx0 for y in range(H)]
-        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
+        with (boot or os88ui.boot)(os88build.at("build/os8088-360.img"),
+                                   apps=disk,
                          machine=a.machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/COLOR.V88")
@@ -406,4 +422,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--shared"]:   # ONE BOOT, SEVERAL ROWS' LEGS
+        import vidshare
+        sys.exit(vidshare.run(main, sys.argv[2:]))
     sys.exit(main())

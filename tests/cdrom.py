@@ -94,6 +94,9 @@ class QH(object):
     def hmp(self, *cmds):
         return xmcheck.qmp(self.sock, *cmds)
 
+    def hmp_burst(self, lines):
+        return xmcheck.qmp_burst(self.sock, lines)
+
     def read(self, linear, n):
         return bytes(xmcheck.read_bytes(self.sock, linear, n))
 

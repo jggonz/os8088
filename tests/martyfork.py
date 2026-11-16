@@ -52,7 +52,7 @@ def main():
             for _ in range(2):
                 with fk.restore() as r:
                     r.run()
-                    time.sleep(0.5)
+                    time.sleep(0.5)     # host: the fork's PROCESS is the subject
             m.snapshot()                    # held, never restored
             during = ours()
             print("martyfork: %d processes while held: %s" % (len(during), during))

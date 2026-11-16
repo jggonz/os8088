@@ -361,21 +361,21 @@ hp_setdown:
 hp_btns:
     push ax
     push bx
-    mov ax, OS88UI_FILL
+    mov ax, OS88UI_FILL         ; (every flag is in AL: AH stays 0)
     cmp byte [hp_down], HP_BMOUNT
     jne .m
-    or ax, OS88UI_DOWN
+    or al, OS88UI_DOWN
 .m:
     mov [hp_bflg], ax
-    mov ax, OS88UI_FILL
+    mov al, OS88UI_FILL
     cmp byte [hp_vol], 0xFF     ; DISABLED IS A FACT: no drive, nothing to
     jne .u                      ; unmount (SPEC.md 47 rule 3)
-    or ax, OS88UI_DIS
+    or al, OS88UI_DIS
     jmp short .uset
 .u:
     cmp byte [hp_down], HP_BUNMNT
     jne .uset
-    or ax, OS88UI_DOWN
+    or al, OS88UI_DOWN
 .uset:
     mov [hp_bflg+2], ax
     mov bx, hp_brec
@@ -403,22 +403,20 @@ hp_status:
     pop es
     mov di, hp_sbuf             ; --- line 1 -----------------------------------
     mov si, hp_s_none
-    mov al, [hp_vol]
-    cmp al, 0xFF
-    je .l1
+    mov bx, [hp_vol]            ; BL = the volume, BH = the HFS_* (hp_st)
+    inc bl                      ; 0FFh, no drive, is 0 now
+    jz .l1
     mov si, hp_s_drive          ; 'Drive '
-    call hp_scpy                ; (lodsb: AL is spent, so read it again)
-    mov al, [hp_vol]
-    add al, 'A'
+    call hp_scpy                ; (lodsb spends AL, and BX is ours till line 2)
+    lea ax, [bx + 'A' - 1]      ; AL = the letter
+    mov ah, ':'
+    stosw
+    mov al, ' '                 ; the two spaces both endings begin with
     stosb
-    mov al, ':'
     stosb
     mov si, hp_s_lazy
-    cmp byte [hp_st], HFS_READY
+    cmp bh, HFS_READY
     jne .l1
-    mov ax, ' '
-    stosb
-    stosb
     mov ax, [hp_nrec]
     dec ax                      ; the root is not an entry
     call hp_utoa
@@ -649,7 +647,7 @@ hp_s_mount: db 'Mount', 0
 hp_s_unmnt: db 'Unmount', 0
 hp_s_none:  db 'Not mounted', 0
 hp_s_drive: db 'Drive ', 0
-hp_s_lazy:  db '  not read yet', 0
+hp_s_lazy:  db 'not read yet', 0    ; (after hp_status's two spaces)
 hp_s_ents:  db ' entries', 0
 hp_msgs:                        ; one per HFE_*, 1..HFE_MAXMSG, IN ORDER -
     db 'Bad address', 0         ; HFE_URL       the walk in hp_status counts
@@ -677,7 +675,8 @@ hp_msgs:                        ; one per HFE_*, 1..HFE_MAXMSG, IN ORDER -
 hp_px:      dw 0
 hp_py:      dw 0
 hp_vol:     db 0                ; HFV_STATE: AL, the volume (0FFh none)...
-hp_st:      db 0                ; ...AH, the HFS_*...
+hp_st:      db 0                ; ...AH, the HFS_*... (hp_status reads the
+                                ; pair as one word: hp_vol, then this)
 hp_nrec:    dw 0                ; ...CX, the records...
 hp_hst:     dw 0                ; ...DX, the last HTTP status...
 hp_err:     dw 0                ; ...SI, the last HFE_* (or HFE_BUSY)
@@ -691,6 +690,13 @@ hp_sbuf:    times HP_COLS + 1 db 0
 hp_url:     times HF_URLMAX db 0
 %ifdef HFDIAG
 hp_dlog:    times 96 db 0
+%endif
+
+%if hp_st - hp_vol != 1
+  %error "httppage: hp_status reads hp_vol and hp_st as one word"
+%endif
+%if (OS88UI_FILL | OS88UI_DOWN | OS88UI_DIS) > 0xFF
+  %error "httppage: hp_btns builds the flags in AL alone"
 %endif
 
     OS88_DRV_END

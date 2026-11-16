@@ -112,27 +112,25 @@ sv_star_init:
     mov ax, [sv_h]
     shr ax, 1
     mov [sv_soy], ax
-    mov word [sv_sovx], 1
-    mov word [sv_sovy], 1
+    mov ax, 1
+    mov [sv_sovx], ax
+    mov [sv_sovy], ax
     mov byte [sv_sodn], SV_ODRIFT
 
     xor di, di
-    mov cx, SV_NSTAR
 .one:
-    push cx
     mov word [sv_spx + di], SV_NODRAW   ; a SECOND session must not erase at
                                         ; the first one's coordinates: the
                                         ; screen is black under them now
-    call sv_star_born
+    call sv_star_born           ; (which keeps DI)
     mov cx, SV_ZMAX - SV_ZMIN
     call sv_rndn
     add ax, SV_ZMIN
     mov [sv_sz + di], ax        ; ...over the WHOLE range, not at the back
-    add di, 2
-    pop cx
-    dec cx
-    jnz .one
-
+    inc di
+    inc di
+    cmp di, SV_NSTAR * 2
+    jb .one
     ret
 
 ; -----------------------------------------------------------------------------
@@ -145,23 +143,26 @@ sv_star_init:
 ; and vanishes - the field looks sparse at the edges and busy in the middle,
 ; which is the opposite of what the origin drift above is for. Forcing one
 ; coordinate out to at least a quarter of the cube costs a compare.
+;
+; |x| is `cwd / xor / sub`: DX is the sign, and the two undo it. sv_rndn keeps
+; CX, so the bound is loaded once for both coordinates.
 ; -----------------------------------------------------------------------------
 sv_star_born:
     mov cx, SV_SXY * 2
     call sv_rndn
     sub ax, SV_SXY
     mov [sv_sx + di], ax
-    mov cx, SV_SXY * 2
+    cwd
+    xor ax, dx
+    sub ax, dx
+    xchg ax, bx                 ; BX = |x|
     call sv_rndn
     sub ax, SV_SXY
     mov [sv_sy + di], ax
-
-    mov ax, [sv_sx + di]        ; ...and is either coordinate far enough out?
-    call sv_abs
-    mov bx, ax
-    mov ax, [sv_sy + di]
-    call sv_abs
-    cmp ax, bx
+    cwd
+    xor ax, dx
+    sub ax, dx                  ; AX = |y|
+    cmp ax, bx                  ; ...and is either coordinate far enough out?
     ja .big
     mov ax, bx
 .big:
@@ -174,32 +175,59 @@ sv_star_born:
     mov word [sv_sz + di], SV_ZMAX
     ret
 
-; sv_abs - AX = |AX|, signed. clobbers flags
-sv_abs:
-    or ax, ax
-    jns .out
-    neg ax
-.out:
-    ret
-
 ; -----------------------------------------------------------------------------
 ; sv_star_step - one frame
 ; in:  the gfx lock is HELD
+;
+; It is ONE ROUTINE with the drift, the projection and the erase written into
+; it, which were each a routine with this one caller (driver size pass 1); the
+; two bands' draws are one routine called twice. Every star's index is DI.
 ; -----------------------------------------------------------------------------
 sv_star_step:
-    call sv_star_drift
+    ; --- THE DRIFT: the vanishing point takes a step every SV_ODRIFT frames.
+    ; Bounded to the middle half of the screen. Further out and the field
+    ; becomes one-sided - every star leaving through the same two edges -
+    ; which is both uglier and worse at the job. The two axes are one walk:
+    ; sv_sox/sv_soy, sv_sovx/sv_sovy and sv_w/sv_h are each a pair
+    dec byte [sv_sodn]
+    jnz .still
+    mov byte [sv_sodn], SV_ODRIFT
+    xor si, si
+.axis:
+    mov ax, [sv_sox + si]
+    mov dx, [sv_sovx + si]
+    add ax, dx
+    mov bx, [sv_w + si]
+    mov cx, bx
+    shr cx, 1                   ; the low bound is w/4 - TWO shifts, because an
+    shr cx, 1                   ; 8086 shifts by 1 or by CL and nothing else
+    sub bx, cx                  ; ...and the high one 3w/4
+    call sv_bounce
+    mov [sv_sox + si], ax
+    mov [sv_sovx + si], dx
+    inc si
+    inc si
+    cmp si, 4
+    jb .axis
+.still:
+
+    ; --- BANK WHERE EVERY STAR IS - the erase pass below runs after every
+    ; draw and needs the whole field's old blots, where the per-star order
+    ; needed only one at a time. sv_spx/spy/sw and sv_opx/opy/ow are each
+    ; three arrays end to end, so it is one block move
+    push es
+    push ds
+    pop es
+    mov si, sv_spx
+    mov di, sv_opx
+    mov cx, SV_NSTAR * 3
+    cld
+    rep movsw
+    pop es
 
     ; --- PASS 1: fly every star and project it. NOTHING IS DRAWN HERE -------
     xor di, di
-    mov si, SV_NSTAR
 .one:
-    mov ax, [sv_spx + di]       ; bank where it IS - the erase pass below runs
-    mov [sv_opx + di], ax       ; after every draw and needs the whole field's
-    mov ax, [sv_spy + di]       ; old blots, where the per-star order needed
-    mov [sv_opy + di], ax       ; only one at a time
-    mov ax, [sv_sw + di]
-    mov [sv_ow + di], ax
-
     mov ax, [sv_sz + di]        ; fly it a step nearer
     sub ax, SV_ZSTEP
     cmp ax, SV_ZMIN
@@ -209,30 +237,99 @@ sv_star_step:
 .live:
     mov [sv_sz + di], ax
 .proj:
-    call sv_star_plot
-    add di, 2
-    dec si
-    jnz .one
+    ; --- ...and project it and RECORD where it lands. A star that projects
+    ; off the screen is BORN AGAIN rather than clipped: the primitives would
+    ; clip it for free, but it would then spend the rest of its life invisible
+    ; and the field would thin out to nothing over a minute. The divide cannot
+    ; fault - see the header for why. One UNSIGNED compare a coordinate is
+    ; both of its bounds, because a negative one is above any width
+    mov ax, [sv_sx + di]
+    mov cx, SV_SK
+    imul cx                     ; DX:AX = the signed product
+    idiv word [sv_sz + di]
+    add ax, [sv_sox]
+    xchg ax, bx                 ; BX = x
+    mov ax, [sv_sy + di]
+    imul cx
+    idiv word [sv_sz + di]
+    add ax, [sv_soy]
+    xchg ax, cx                 ; CX = y
+    cmp bx, [sv_w]
+    jae .gone
+    cmp cx, [sv_h]
+    jae .gone
+
+    cmp word [sv_sz + di], SV_ZNEAR + 1 ; ...and how BIG, by depth: 1 for a
+    sbb dx, dx                  ; 2x2 at z <= SV_ZNEAR, else 0. How BRIGHT is
+    neg dx                      ; not decided here: the pen is per band and
+    mov [sv_sw + di], dx        ; sv_star_emit reads the band off [sv_sz].
+    mov [sv_spx + di], bx       ; The erase has to know what the draw drew,
+    mov [sv_spy + di], cx       ; and it is a WORD array indexed the way every
+    jmp short .next             ; other one here is - a byte array on a stride
+                                ; of two writes over its neighbour, which in a
+                                ; file of parallel arrays is the mistake that
+                                ; is hardest to see
+.gone:
+    mov word [sv_spx + di], SV_NODRAW   ; NOTHING IS ON THE GLASS FOR IT NOW,
+                                        ; and saying so is what lets the erase
+                                        ; tell "the draw already owns this
+                                        ; pixel" from "the star left the
+                                        ; screen and its last pixel is still
+                                        ; lit". Without it a star that ran off
+                                        ; the edge left one behind, for the
+                                        ; rest of the session
+    call sv_star_born           ; ...and it will be projected again next frame
+.next:
+    inc di
+    inc di
+    cmp di, SV_NSTAR * 2
+    jb .one
 
     ; --- PASS 2: THE DRAWS, one arrival a band, AND STILL BEFORE THE ERASE --
     ; The order the header insists on is untouched: every star that is going
     ; to be on the glass this frame is on it before one old pixel comes off.
     mov al, SV_MAIN
-    xor ah, ah                  ; ...the NEAR band: SV_HOT and SV_MAIN are one
+    mov bp, -1                  ; ...the NEAR band: SV_HOT and SV_MAIN are one
     call sv_star_emit           ; ink since 79.5.11, so it is one arrival
     mov al, SV_DIM
-    mov ah, 1
+    xor bp, bp
     call sv_star_emit
 
-    ; --- PASS 3: ...and only now the erases ---------------------------------
-    call sv_star_erase
-
-    ret
+    ; --- PASS 3: ...and only now the erases, the whole field's PREVIOUS blots
+    ; in one arrival. **IT STILL REFUSES TO ERASE THE PIXEL THE DRAW HAS JUST
+    ; PUT DOWN**: a far star can project to the same pixel two frames running,
+    ; the draws went first, and without the test the field would lose exactly
+    ; the stars that move least - which is the ones a starfield has most of.
+    ; It compares the ORIGIN only, as it always did, which is safe because a
+    ; blot never shrinks at a fixed origin: z only falls, so a size goes 1 ->
+    ; 2x2 and back only at a rebirth, which moves the star
+    mov al, SV_GROUND
+    call sv_pen
+    call gfxe_pnew
+    xor di, di
+.erase:
+    mov ax, [sv_opx + di]
+    cmp ax, SV_NODRAW
+    je .enext                   ; it was not on the glass at all
+    mov dx, [sv_opy + di]
+    cmp ax, [sv_spx + di]
+    jne .ego
+    cmp dx, [sv_spy + di]
+    je .enext                   ; the same pixel: the draw already owns it
+.ego:
+    mov cx, [sv_ow + di]
+    call sv_star_pts
+.enext:
+    inc di
+    inc di
+    cmp di, SV_NSTAR * 2
+    jb .erase
+    jmp gfxe_pput
 
 ; -----------------------------------------------------------------------------
 ; sv_star_pts - one blot onto the point list (module internal)
-; in:  AX = x, DX = y, CX = 0 for a pixel or 1 for a 2x2; DI, SI live
-; out: nothing; clobbers AX, BX
+; in:  AX = x, DX = y, CX = 0 for a pixel or 1 for a 2x2
+; out: nothing; clobbers DX, BX
 ;
 ; **THE 2x2 IS FOUR POINTS AND NOT A gfx_fill**, which is the conversion's one
 ; judgement call and it goes the other way from sv_star_blot's. That routine
@@ -240,235 +337,55 @@ sv_star_step:
 ; depth was free - and the whole point here is that there is no arrival left to
 ; be equal to: the list is going up in a single OSAPI_GFX_POINTS either way, so
 ; the near star costs four stores against a second ~756us call of its own.
+;
+; gfxe_padd keeps AX, CX and DX and spends only BX, so the four corners are
+; stepped to in AX and DX themselves.
 ; -----------------------------------------------------------------------------
 sv_star_pts:
-    push si
-    push cx
-    mov si, ax                  ; SI = x, banked across the three offsets -
-    call gfxe_padd              ; gfxe_padd preserves it, AX, CX and DX and
-    or cx, cx                   ; spends only BX
-    jz .out
-    mov ax, si
+    call gfxe_padd              ; (x,   y)
+    jcxz .out
     inc ax
     call gfxe_padd              ; (x+1, y)
     inc dx
-    mov ax, si
+    dec ax
     call gfxe_padd              ; (x,   y+1)
-    mov ax, si
     inc ax
     call gfxe_padd              ; (x+1, y+1)
 .out:
-    pop cx
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------
 ; sv_star_emit - every star of one DEPTH BAND onto the glass, in ONE arrival
-; in:  AL = the pen (sv_pen's index), AH = 0 for the near band (z <= SV_ZFAR)
-;      or 1 for the far one
-; out: nothing; clobbers AX, BX, CX, DX
+; in:  AL = the pen (sv_pen's index), BP = 0FFFFh for the near band
+;      (z <= SV_ZFAR) or 0 for the far one
+; out: nothing; clobbers AX, BX, CX, DX, DI
 ;
 ; THE BAND IS READ OFF [sv_sz] rather than banked per star, because the pen
 ; and the size are both functions of depth and depth is already an array. That
-; is what lets pass 1 store nothing but the blot.
+; is what lets pass 1 store nothing but the blot. A star's band is the borrow
+; of one compare, spread over CX by `sbb`, and BP is the band asked for.
 ; -----------------------------------------------------------------------------
 sv_star_emit:
-    push si
-    push di
-    push ax
     call sv_pen                 ; AL - and the LIST is per pen, which is why
     call gfxe_pnew              ; there is one pass a band and not one a star
-    pop ax
     xor di, di
-    mov si, SV_NSTAR
 .one:
-    cmp word [sv_spx + di], SV_NODRAW
-    je .next                    ; this one is not on the glass at all
-    mov cx, [sv_sz + di]
-    cmp cx, SV_ZFAR
-    ja .far
-    or ah, ah                   ; near band
-    jnz .next
-    jmp short .put
-.far:
-    or ah, ah
-    jz .next
-.put:
-    push ax
     mov ax, [sv_spx + di]
+    cmp ax, SV_NODRAW
+    je .next                    ; this one is not on the glass at all
+    cmp word [sv_sz + di], SV_ZFAR + 1
+    sbb cx, cx                  ; 0FFFFh near, 0 far
+    cmp cx, bp
+    jne .next
     mov dx, [sv_spy + di]
     mov cx, [sv_sw + di]
     call sv_star_pts
-    pop ax
 .next:
-    add di, 2
-    dec si
-    jnz .one
-    call gfxe_pput              ; ...and the whole band goes up at once
-    pop di
-    pop si
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_star_erase - the whole field's PREVIOUS blots, in one arrival
-; out: nothing; clobbers AX, BX, CX, DX
-;
-; **IT STILL REFUSES TO ERASE THE PIXEL THE DRAW HAS JUST PUT DOWN**, and that
-; test is sv_star_off's unchanged: a far star can project to the same pixel two
-; frames running, the draws went first, and without it the field would lose
-; exactly the stars that move least - which is the ones a starfield has most
-; of. It compares the ORIGIN only, as it always did, which is safe because a
-; blot never shrinks at a fixed origin: z only falls, so a size goes 1 -> 2x2
-; and back only at a rebirth, which moves the star.
-; -----------------------------------------------------------------------------
-sv_star_erase:
-    push si
-    push di
-    mov al, SV_GROUND
-    call sv_pen
-    call gfxe_pnew
-    xor di, di
-    mov si, SV_NSTAR
-.one:
-    mov ax, [sv_opx + di]
-    cmp ax, SV_NODRAW
-    je .next                    ; it was not on the glass at all
-    cmp ax, [sv_spx + di]
-    jne .go
-    mov ax, [sv_opy + di]
-    cmp ax, [sv_spy + di]
-    je .next                    ; the same pixel: the draw already owns it
-.go:
-    mov ax, [sv_opx + di]
-    mov dx, [sv_opy + di]
-    mov cx, [sv_ow + di]
-    call sv_star_pts
-.next:
-    add di, 2
-    dec si
-    jnz .one
-    call gfxe_pput
-    pop di
-    pop si
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_star_drift - the vanishing point takes a step every SV_ODRIFT frames
-; (module internal); clobbers AX, BX, CX, DX, flags
-;
-; Bounded to the middle half of the screen. Further out and the field becomes
-; one-sided - every star leaving through the same two edges - which is both
-; uglier and worse at the job.
-; -----------------------------------------------------------------------------
-sv_star_drift:
-    dec byte [sv_sodn]
-    jnz .out
-    mov byte [sv_sodn], SV_ODRIFT
-
-    mov ax, [sv_sox]
-    mov dx, [sv_sovx]
-    add ax, dx
-    mov bx, [sv_w]
-    mov cx, bx
-    shr cx, 1                   ; the low bound is w/4 - TWO shifts, because an
-    shr cx, 1                   ; 8086 shifts by 1 or by CL and nothing else
-    sub bx, cx                  ; ...and the high one 3w/4
-    call sv_bounce
-    mov [sv_sox], ax
-    mov [sv_sovx], dx
-
-    mov ax, [sv_soy]
-    mov dx, [sv_sovy]
-    add ax, dx
-    mov bx, [sv_h]
-    mov cx, bx
-    shr cx, 1
-    shr cx, 1
-    sub bx, cx
-    call sv_bounce
-    mov [sv_soy], ax
-    mov [sv_sovy], dx
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_star_plot - project star DI and RECORD where it lands (module internal)
-; in:  DI = index*2
-; out: nothing; clobbers AX, BX, CX, DX
-;
-; It used to be sv_star_draw and it used to end in a pen change and a blot;
-; both moved out to sv_star_emit, which does them once a BAND instead of once a
-; star (SPEC.md 79.5.11). What is left is arithmetic, so a frame's projection
-; pass touches the screen not at all.
-;
-; A star that projects off the screen is BORN AGAIN rather than clipped: the
-; primitives would clip it for free, but it would then spend the rest of its
-; life invisible and the field would thin out to nothing over a minute.
-; -----------------------------------------------------------------------------
-sv_star_plot:
-    push si
-    mov ax, [sv_sx + di]
-    call sv_star_proj           ; AX = the offset in x
-    add ax, [sv_sox]
-    mov bx, ax
-    mov ax, [sv_sy + di]
-    call sv_star_proj
-    add ax, [sv_soy]
-    mov cx, ax                  ; BX = x, CX = y
-
-    or bx, bx
-    jl .gone
-    cmp bx, [sv_w]
-    jge .gone
-    or cx, cx
-    jl .gone
-    cmp cx, [sv_h]
-    jge .gone
-
-    xor dx, dx                  ; ...and how BIG, by depth. How BRIGHT is not
-    mov ax, [sv_sz + di]        ; decided here any more: the pen is per band
-    cmp ax, SV_ZNEAR            ; and sv_star_emit reads the band off [sv_sz],
-    ja .size                    ; which this array already is
-    inc dx
-.size:
-    mov [sv_sw + di], dx        ; the erase has to know what the draw drew, and
-                                ; it is a WORD array indexed the way every
-                                ; other one here is - a byte array on a stride
-                                ; of two writes over its neighbour, which in a
-                                ; file of parallel arrays is the mistake that
-                                ; is hardest to see
-    mov [sv_spx + di], bx
-    mov [sv_spy + di], cx
-    pop si
-    ret
-.gone:
-    mov word [sv_spx + di], SV_NODRAW   ; NOTHING IS ON THE GLASS FOR IT NOW,
-                                        ; and saying so is what lets
-                                        ; sv_star_off tell "the draw already
-                                        ; owns this pixel" from "the star left
-                                        ; the screen and its last pixel is
-                                        ; still lit". Without it a star that
-                                        ; ran off the edge left one behind, for
-                                        ; the rest of the session
-    call sv_star_born           ; ...and it will be projected again next frame
-    pop si
-    ret
-
-; -----------------------------------------------------------------------------
-; sv_star_proj - AX = a model coordinate -> AX = its screen offset
-; in:  AX signed, |AX| <= SV_SXY; DI = index*2 (for the depth)
-; out: AX; clobbers DX, flags. See the header for why this cannot fault.
-; -----------------------------------------------------------------------------
-sv_star_proj:
-    push bx
-    push cx
-    mov bx, SV_SK
-    imul bx                     ; DX:AX = the signed product
-    mov cx, [sv_sz + di]
-    idiv cx
-    pop cx
-    pop bx
-    ret
+    inc di
+    inc di
+    cmp di, SV_NSTAR * 2
+    jb .one
+    jmp gfxe_pput               ; ...and the whole band goes up at once
 
 ; -----------------------------------------------------------------------------
 ; sv_star_blot / sv_star_bl ARE GONE (SPEC.md 79.5.11). They put ONE star on

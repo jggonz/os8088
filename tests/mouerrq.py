@@ -55,12 +55,17 @@ def leg_qemu():
             '-qmp', f'unix:{qmp},server=on,wait=off']
     p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        time.sleep(1)
+        for _ in range(1500):           # the QMP socket appearing (a fixed
+            if Path(qmp).exists():      # 1-s sleep was a race at a load of
+                break                   # 40), up to 30 host s
+            time.sleep(0.02)
         m = Qemu(qmp)
         b = lambda n: m.read(S(n), 1)[0]
         w = lambda n, i=0: struct.unpack_from('<H', m.read(S(n) + i, 2))[0]
-        assert os88qemu.acted(m, lambda: os88qemu.ticks(m) > 3 and b('spl_live') == 0,
-                              secs=90, what='desktop'), 'no desktop'
+        # os88qemu.kernel_up, not `ticks > 3 and spl_live == 0`: with the
+        # socket polled rather than slept on, that pair read pre-boot RAM
+        # and passed at once, before the kernel had probed a port.
+        assert os88qemu.kernel_up(m, S, secs=90), 'no desktop'
         assert w('mou_bases') == 0x3F8 and w('mou_bases', 2) == 0, 'not a one-port machine'
         assert b('mou_need') == 1, 'one port should need ONE packet (SPEC.md 9.5)'
         kt = lambda: w('ticks')

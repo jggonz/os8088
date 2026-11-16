@@ -99,7 +99,31 @@ OPF_ZFILL = 64                  # an EAGER OP_COMP row stored as TWO streams
                                 # byte they do not write being ZERO (SPEC.md
                                 # 20.12.7.5): op_unpack fills it and this tool
                                 # cuts the streams round the zeros
-OPF_ALL = OPF_XMS | OPF_ZERO | OPF_OPT | OPF_LAZY | OPF_COMP | OPF_ZFILL
+OPF_BIG = 128                   # the row's lengths are 20 BITS, their high
+                                # bits in its `kind` byte: bits 4-7 `len`'s
+                                # 16-19, bits 1-3 the packed length's 16-18
+                                # (SPEC.md 20.12.15)
+OP_BIGMAX = 983040              # ...an OP_BIG row's `len` at most
+                                # (OP_SECMAX sectors; t_mirror holds it to
+                                # the include's)
+OP_BIGPK = 0x80000              # ...and its packed length under this
+OP_SPENT = 0xFFFF               # os88parts.inc's: what op_drop leaves in zkb
+OPF_ALL = (OPF_XMS | OPF_ZERO | OPF_OPT | OPF_LAZY | OPF_COMP | OPF_ZFILL |
+           OPF_BIG)
+
+
+def row_kind(b: int) -> int:
+    """A row's `kind`, out of its byte - bit 0 (SPEC.md 20.12.15)"""
+    return b & 1
+
+
+def row_lens(b0: int, plen: int, pzkb: int, pflags: int):
+    """(unpacked, packed-or-None) of a FILED row, 20 bits where OP_BIG says
+    so (SPEC.md 20.12.15). `packed` is None on a plain row"""
+    if pflags & OPF_BIG:
+        plen |= (b0 >> 4) << 16
+        pzkb |= ((b0 >> 1) & 7) << 16
+    return plen, (pzkb if pflags & OPF_COMP else None)
 PART_FMT_AT = PARTS_HDR - 1     # the table's reserved byte, which is the
                                 # FORMAT the OP_COMP rows use (SPEC.md
                                 # 20.12.7). It is the package's own scope, so
@@ -819,7 +843,12 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         off = table + PARTS_HDR + PART_ROW * i
         kind, pflags, poff, plen, pzkb = struct.unpack_from("<BBHHH", out, off)
         if kind not in (PK_SEG, PK_ASSET):
-            fail(f"part {i}: kind {kind}; 0 = SEGMENT, 1 = ASSET")
+            fail(f"part {i}: kind {kind}; 0 = SEGMENT, 1 = ASSET - and the "
+                 "byte's other bits are this tool's to fill (SPEC.md "
+                 "20.12.15)")
+        if pflags & OPF_BIG and pflags & (OPF_ZERO | OPF_XMS | OPF_ZFILL):
+            fail(f"part {i}: OP_BIG with OP_ZERO, OP_XMS or OP_ZFILL "
+                 "(SPEC.md 20.12.15)")
         if pflags & ~OPF_ALL:
             fail(f"part {i}: flags 0x{pflags:02X}; this toolchain writes "
                  "OP_XMS, OP_ZERO, OP_OPT and OP_LAZY (SPEC.md 20.12.4)")
@@ -927,13 +956,16 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         body = read_file(next(it))
         if not body:
             fail(f"part {i}: the payload is empty")
-        if len(body) > OP_PARTMAX:
-            fail(f"part {i}: {len(body)} bytes. A part is reached through a "
-                 "SEGMENT, so it is addressed by a 16-bit offset, and op_size "
-                 "rounds its length up to a whole sector in a word - so "
-                 f"{OP_PARTMAX:,} is the ceiling. An asset bigger than that is "
-                 "two adjacent rows: plain rows sit back to back in the carve "
-                 "(SPEC.md 20.12, 20.12.11)")
+        big = bool(pflags & OPF_BIG)
+        if len(body) > OP_PARTMAX and not big:
+            fail(f"part {i}: {len(body)} bytes. A row's lengths are words "
+                 "and op_size rounds them up to a sector, so "
+                 f"{OP_PARTMAX:,} is the ceiling for a row without OP_BIG. "
+                 "Put OP_BIG on the row (SPEC.md 20.12.15) - its lengths are "
+                 "then 20 bits - or split it into two adjacent rows")
+        if len(body) > OP_BIGMAX:
+            fail(f"part {i}: {len(body)} bytes, past OP_BIGMAX's "
+                 f"{OP_BIGMAX:,} (SPEC.md 20.12.15)")
         # A PART THAT IS ITSELF A PACKAGE IMAGE has one extra rule, and it is
         # checked here rather than left to fail at launch. SPEC.md 20.12.10's
         # re-home hands the kernel `image + bss` as the bytes available at the
@@ -974,10 +1006,32 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         # flag is a decision the package's author wrote down, so a part that
         # does not pay is an error and not a line of output (SPEC.md 20.12.7).
         unpacked, packed = len(body), len(body)
+        unpacked_body = body
         if pflags & OPF_COMP:
             body, packed = compress_part(i, body, part_fmt,
                                          filt=i not in nofilt,
                                          zfill=bool(pflags & OPF_ZFILL))
+            # A LAZY COMPRESSED ROW'S zkb IS ALSO A SENTINEL (SPEC.md
+            # 20.12.15): a low word of OP_SPENT reads as dropped before the
+            # first fetch, and one of 0 leaves op_drop no shadow, so it
+            # writes OP_SPENT. Only an OP_BIG row can land on either; the
+            # other filter setting gives a different stream length
+            if big and pflags & OPF_LAZY and packed & 0xFFFF in (0, OP_SPENT):
+                if i in nofilt:
+                    fail(f"part {i}: packs to {packed:,} bytes, whose low "
+                         "word reads as OP_SPENT or as no shadow, and "
+                         "--part-nofilter leaves no other encoding to try "
+                         "(SPEC.md 20.12.15)")
+                body, packed = compress_part(i, unpacked_body, part_fmt,
+                                             filt=False)
+                if packed & 0xFFFF in (0, OP_SPENT):
+                    fail(f"part {i}: packs to {packed:,} bytes either way, "
+                         "and that low word reads as OP_SPENT or as no "
+                         "shadow on a lazy row - change a byte of the part "
+                         "(SPEC.md 20.12.15)")
+            if big and packed >= OP_BIGPK:
+                fail(f"part {i}: packs to {packed:,} bytes; an OP_BIG row's "
+                     "packed length is 19 bits (SPEC.md 20.12.15)")
         # PADDING IS POISON, NOT ZERO. These are bytes no part declares and
         # nothing is meant to read, so a stub that strays into one - a length
         # rounded up to a granule, a run started a cluster early - has to
@@ -993,9 +1047,13 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         # from, so a machine that cannot fit the part is still told before a
         # sector is read - which is the third thing the whole parts design
         # exists for. `zkb` takes the packed one.
-        struct.pack_into("<HH", out, off + 2, len(out) // PART_ALIGN, unpacked)
+        struct.pack_into("<HH", out, off + 2, len(out) // PART_ALIGN,
+                         unpacked & 0xFFFF)
         if pflags & OPF_COMP:
-            struct.pack_into("<H", out, off + 6, packed)
+            struct.pack_into("<H", out, off + 6, packed & 0xFFFF)
+        if big:                 # the high bits, in the kind byte (20.12.15)
+            out[off] |= ((unpacked >> 16) << 4) | (
+                ((packed >> 16) << 1) if pflags & OPF_COMP else 0)
         laid.append((i, pflags, len(out) // PART_ALIGN,
                      (len(body) + PART_ALIGN - 1) // PART_ALIGN))
         out.extend(body)
@@ -1035,8 +1093,9 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         usecs = 0
         for i in range(rows):
             off = table + PARTS_HDR + PART_ROW * i
-            _, pf, po, pl, _ = struct.unpack_from("<BBHHH", out, off)
+            b0, pf, po, pl, pz = struct.unpack_from("<BBHHH", out, off)
             if po and not pf & OPF_LAZY:
+                pl = row_lens(b0, pl, pz, pf)[0]
                 usecs += (pl + PART_ALIGN - 1) // PART_ALIGN
         if usecs >= runmax:
             fail(f"the carve UNPACKS to {usecs} paragraphs. op_size refuses "
@@ -1050,11 +1109,16 @@ def report_parts(out: bytes, table: int, rows: int, parts) -> None:
     fi = 0
     for i in range(rows):
         off = table + PARTS_HDR + PART_ROW * i
-        kind, pflags, poff, plen, pzkb = struct.unpack_from("<BBHHH", out, off)
+        b0, pflags, poff, plen, pzkb = struct.unpack_from("<BBHHH", out, off)
+        kind = row_kind(b0)
+        if not pflags & OPF_ZERO:
+            plen, pk = row_lens(b0, plen, pzkb, pflags)
+            pzkb = pzkb if pk is None else pk
         what = "SEGMENT" if kind == PK_SEG else "ASSET  "
         tag = "".join(c for c, b in (("X", OPF_XMS), ("Z", OPF_ZERO),
                                      ("O", OPF_OPT), ("L", OPF_LAZY),
-                                     ("C", OPF_COMP), ("F", OPF_ZFILL))
+                                     ("C", OPF_COMP), ("F", OPF_ZFILL),
+                                     ("B", OPF_BIG))
                       if pflags & b) or "-"
         if pflags & OPF_ZERO:
             print(f"os88pkg:   part {i} {what} {tag:4} scratch {pzkb}K, "

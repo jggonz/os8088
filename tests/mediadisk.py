@@ -68,9 +68,9 @@ def on_disk(img, folder):
 def run(apps, want_root):
     want_media = on_disk(apps, "MEDIA")
     print("B: = %s   MEDIA holds %r on the image" % (apps, want_media))
-    with os88marty.launch(SYS_IMG, apps=apps, machine=MACHINE, boot=False) as m:
-        m.run()                         # the boot gate on STATE: the first
-        os88marty.kernel_up(m)          # act is a verb
+    with os88marty.launch(SYS_IMG, apps=apps, machine=MACHINE,
+                          boot="up") as m:  # the boot gate on STATE: the
+                                            # first act is a verb; cacheable
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]

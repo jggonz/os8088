@@ -122,6 +122,14 @@ OP_ZFILL      equ 64            ; ...and on an EAGER OP_COMP row, the part is
                                 ; longest run of zeros and the trailing ones,
                                 ; so a bss or a reserved hole costs neither
                                 ; the disk nor a decoder writing it out
+OP_BIG        equ 128           ; ...and the row's lengths are 20 BITS, their
+                                ; high bits in its `kind` byte (SPEC.md
+                                ; 20.12.15): bits 4-7 `len`'s 16-19, bits 1-3
+                                ; the packed length's 16-18. A table with no
+                                ; such row assembles to the byte it did
+OP_KIND       equ 1             ; ...so `kind` is BIT 0 of its byte
+OP_BIGMAX     equ 983040        ; an OP_BIG row's `len` at most (OP_SECMAX
+                                ; sectors); its packed length under 512KB
 OP_MARGIN     equ 0             ; what a compressed run needs ABOVE its
                                 ; unpacked bytes: NOTHING, since every stream
                                 ; ends in a raw tail (SPEC.md 20.13.7) - the
@@ -248,6 +256,10 @@ OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
 %assign OP_HAS_PLAZY 0              ; ...a PLAIN lazy row op_fetch reads, which
                                     ; is what earns its move-down (SPEC.md
                                     ; 20.12.7.4.4) - ZLAZY's other half
+%assign OP_HAS_BIG 0                ; ...an OP_BIG row, which is what earns the
+                                    ; 32-bit arms (SPEC.md 20.12.15) - and
+                                    ; OP_WANT_BIG forces them, for OS88_REHOME
+%assign OP_REHOME_NARROW 0          ; ...and OS88_REHOME expanded WITHOUT them
 %assign OP_HAS_ZFILL 0              ; ...an OP_ZFILL row, which is what earns
                                     ; op_unpack its zero fill (20.12.7.5)
 %assign OP_HAS_CARVE 0              ; ...and a row that is NOT lazy, which is
@@ -325,6 +337,12 @@ op_t_n:
     %if ((%2) & OP_ZFILL) && (!((%2) & OP_COMP) || ((%2) & OP_LAZY))
         %error "OP_ZFILL off an EAGER OP_COMP row: it is op_unpack's, and op_unpack expands the carve - a lazy row is op_fetch's, and a plain row has no stream to stop short"
     %endif
+    %if ((%2) & OP_BIG) && ((%2) & (OP_ZERO | OP_XMS | OP_ZFILL))
+        %error "OP_BIG with OP_ZERO, OP_XMS or OP_ZFILL: a scratch row's zkb is KB, the XMS climb counts a word of bytes and OP_ZFILL's head is four words (SPEC.md 20.12.15)"
+    %endif
+    %if ((%2) & OP_BIG)
+        %assign OP_HAS_BIG 1
+    %endif
     %if ((%2) & OP_ZFILL)
         %assign OP_HAS_ZFILL 1
     %endif
@@ -383,6 +401,12 @@ op_t_n:
     ; fetched again. It is the package's own data, in its own segment (a C
     ; package's `.data`, where this macro is expanded), so it needs no format
     ; change and no kernel byte.
+    %ifdef OP_WANT_BIG
+        %assign OP_HAS_BIG 1
+    %endif
+    %if OP_HAS_BIG && OP_REHOME_NARROW
+        %error "OS88_REHOME was expanded before an OP_BIG row without OP_WANT_BIG: its keep reads `len` as a word. %define OP_WANT_BIG before os88parts.inc (SPEC.md 20.12.15)"
+    %endif
     %if OP_HAS_ZLAZY
 op_zshadow:
         times OS88_PART_N dw 0
@@ -462,6 +486,22 @@ op_zshadow:
     or ax, ax
     jz %%next
     xchg ax, dx                 ; DX = that start
+%ifdef OP_WANT_BIG                 ; a 20-bit `len` (SPEC.md 20.12.15)
+    mov ax, [si+OP_R_ZKB]       ; a SCRATCH part is zkb KB long...
+    mov cl, 6
+    shl ax, cl
+    cmp word [si+OP_R_OFF], 0
+    je %%bsum
+    push dx
+    call op_lenx                ; ...and a filed one `len` bytes, 20 bits
+    call op_gr                  ; AX = its paragraphs
+    pop dx
+%%bsum:
+%else
+  %if OP_HAS_BIG
+    %error "OS88_REHOME after an OP_BIG row needs %define OP_WANT_BIG before os88parts.inc (SPEC.md 20.12.15)"
+  %endif
+  %assign OP_REHOME_NARROW 1
     mov ax, [si+OP_R_ZKB]       ; a SCRATCH part is zkb KB long...
     mov cl, 6
     cmp word [si+OP_R_OFF], 0
@@ -474,6 +514,7 @@ op_zshadow:
 %%kb:                           ; below: a byte rather than a jump round it,
     shl ax, cl                  ; and it writes no register - CLC_OR_STC's
                                 ; trick, one operand byte wider
+%endif
     add ax, dx                  ; AX = the paragraph this part ENDS at
     cmp ax, bx
     jbe %%next

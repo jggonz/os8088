@@ -1313,13 +1313,16 @@ def rom_name(path):
 
 def package(build, img, rom, out, romname, image=None, log=print, embed=False, mega=False):
     """GAME.O88: the RDG_AOT image with the parts set to this cartridge's -
-    and with `embed`, the ROM itself as plain 32KB parts after the code
-    images, which the package reads out of its own file (REALDMG-SPEC 20.13)"""
+    and with `embed`, the ROM itself after the code images, its banks
+    compressed one by one into one OP_BIG row (two past OP_BIGMAX), which the
+    package reads out of its own file (REALDMG-SPEC 20.13)"""
     meta, segs, table = img
     nseg = len(segs) - 1
     if nseg > AOT_MAX:
         raise SystemExit("gbaot: %d code images; the package holds %d" % (nseg, AOT_MAX))
-    romrows = len(rom.d) // 0x8000 if embed else 0
+    romblob, romlens = rom_banks(rom.d) if embed else (b"", [])
+    rompieces = [romblob[k:k + ROM_ROWMAX] for k in range(0, len(romblob), ROM_ROWMAX)]
+    romrows = len(rompieces)
     lst = meta["list"]
     rel = b"".join(struct.pack("<BBH", n, tn | (0x80 if form else 0), site)
                    for n, site, tn, form in meta["relocs"])
@@ -1365,13 +1368,15 @@ def package(build, img, rom, out, romname, image=None, log=print, embed=False, m
     for r in range(relrow, coderow):       # eager, into the carve: the load
         b[rows + 8 * r] = 1                #   reads them, OP_ASSET | OP_COMP
         b[rows + 8 * r + 1] = 16           #   (rwaot.inc's rw_ameta)
-    hdr = struct.pack("<6sBBHHBB", b"RDAOT2", nseg, meta["hmask"], len(lst) // 8,
+    hdr = struct.pack("<6sBBHHBB", b"RDAOT3", nseg, meta["hmask"], len(lst) // 8,
                       len(meta["relocs"]), relrow if relp else 0, len(relp))
     hdr += bytes.fromhex(meta["header"]) + romname.encode().ljust(13, b"\0")[:13]
     hdr = hdr.ljust(55, b"\0") + bytes([jrow]) + struct.pack(
         "<BBBBH", lstrow if lstp else 0, len(lstp), romrow if embed else 0,
-        meta.get("hot", nseg), len(rom.d) // 1024 if embed else 0)
-    metap = hdr.ljust(64, b"\0")
+        meta.get("hot", nseg), len(rom.d) // 1024 if embed else 0) + bytes([romrows])
+    # ...and from 64 the banks' stored lengths, a word each: the packed
+    # length of its LZ4 stream, 0 for a bank stored as it is (20.13)
+    metap = hdr.ljust(64, b"\0") + b"".join(struct.pack("<H", n) for n in romlens)
     # the filter and the list's cache (rdgaot.inc, 10KB) follow the TABLE in
     # its part: in the meta part, after a long list, they took that part past
     # 65,024 bytes - Link's Awakening's 65,264, Wario Land's 68,672
@@ -1379,9 +1384,10 @@ def package(build, img, rom, out, romname, image=None, log=print, embed=False, m
     for sg in segs[1:]:
         parts += [sg[:0x8000], sg[0x8000:]]
     plain = set()
-    for i in range(romrows):               # the ROM: plain, so its pieces lie
-        parts.append(rom.d[i * 0x8000:(i + 1) * 0x8000])   # back to back
-        plain.add(romrow + i)
+    for i, piece in enumerate(rompieces):  # the ROM: its banks compressed
+        parts.append(piece)                #   one by one already, so the
+        plain.add(romrow + i)              #   ROW is plain - and OP_BIG,
+        b[rows + 8 * (romrow + i) + 1] |= os88pkg.OPF_BIG  # being past 64KB
     if jrow:                               # kern_mega's: the recompiler, for
         parts.append(open(aot_jitpart(build), "rb").read())   # the misses (20.16)
     filed = [0, 1, 3, 4] + list(range(AOT_CODE, nrows))
@@ -1421,6 +1427,41 @@ def package(build, img, rom, out, romname, image=None, log=print, embed=False, m
     return size
 
 
+ROM_BANK = 0x4000                 # a cartridge bank, the unit the ROM is
+                                  #   compressed in (REALDMG-SPEC 20.13)
+ROM_ROWMAX = 983040               # an OP_BIG row's bytes at most: os88pkg's
+                                  #   OP_BIGMAX (SPEC.md 20.12.15), a whole
+                                  #   number of paragraphs, so the rows lie
+                                  #   back to back
+
+
+def rom_banks(d):
+    """(the stored banks, their lengths): each 16KB bank its own LZ4 stream,
+    or the bank itself when that is not smaller or would not expand in place
+    at the top of its own 16KB (rw_aebank1's way, REALDMG-SPEC 20.13); a
+    length is 0 for a bank stored as it is"""
+    sys.path.insert(0, HERE)
+    import os88lz
+    out, lens = bytearray(), []
+    for k in range(0, len(d), ROM_BANK):
+        bank = bytes(d[k:k + ROM_BANK])
+        z = os88lz.compress(bank, os88lz.LZ4, filt=False)
+        if (len(z) < len(bank) and os88lz.decompress(z, os88lz.LZ4, len(bank)) == bank
+                and not os88lz.in_place_margin(bank, os88lz.LZ4, packed=z)):
+            out += z
+            lens.append(len(z))
+        else:
+            out += bank
+            lens.append(0)
+    return bytes(out), lens
+
+
+def rom_rows(d):
+    """the rows the ROM takes inside the package"""
+    n = len(rom_banks(d)[0])
+    return (n + ROM_ROWMAX - 1) // ROM_ROWMAX
+
+
 PKG_FILE_MAX = 512 << 16          # SPEC.md 19.1: a package file is under 32MB
 META_MAX = 65024                  # SPEC.md 20.12.11: a part's bytes at most
 REL_PART = 65024                  # a relocation part: 16,256 of 4 bytes
@@ -1443,7 +1484,7 @@ def package_fit(build, img, rom, out, romname, log=print, embed=False, mega=Fals
     nseg = len(img[1]) - 1
 
     def trimmed(emb):                  # the coldest images out until it fits:
-        rows = AOT_ROWS - AOT_CODE - (len(rom.d) // 0x8000 if emb else 0) - (1 if mega else 0)
+        rows = AOT_ROWS - AOT_CODE - (rom_rows(rom.d) if emb else 0) - (1 if mega else 0)
         keep = min(nseg, (rows - 2) // 2)   # the rows (two at least for the
                                             #   relocation and list parts), the
                                             #   list's parts, the file

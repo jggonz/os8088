@@ -56,6 +56,10 @@ UNREGISTERED = {
     "vbtrulesdemo.py": "not a test: the Video Battle RULES test battle, a "
                        "module tests/vbtrules.py and tests/vbtengine.py both "
                        "import (the battle, its plan, the reference's moves)",
+    "vidshare.py": "not a test: ONE BOOT for several rows' legs (a fork "
+                   "snapshot, each leg's disk swapped into B:), the "
+                   "`--shared` runner tests/vidpage.py and tests/vidfskeys.py "
+                   "import for the vid*sh rows",
     # --- the rows of a RETIRED package (SPEC.md 20.16, apps/RETIRED.txt) ---
     # These two drive PACMAN.O88, which `all` no longer builds (SPEC.md
     # 89.12), so a registered row would need `wants=("build/pacman.o88",)`

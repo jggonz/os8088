@@ -57,6 +57,9 @@ DH_DISCOVER equ 1
 DH_REQUEST  equ 2
 DH_BOUND    equ 3
 DH_FAIL     equ 4
+%if DH_FAIL != DH_BOUND + 1
+  %error "eth_dhcp_wait (ethdrv.inc) takes BOUND and FAIL as the states at and above BOUND"
+%endif
 
 DHCP_TMO    equ 27              ; ticks between attempts - 1.5 s
 DHCP_TRIES  equ 4
@@ -113,10 +116,8 @@ ip_parse:
     jmp short .part
 .last:
     cmp byte [si], 0            ; it must end here, or it is a name that
-    jne .no                     ; happens to start like an address
-    clc
-    jmp short .out
-.no:
+    je  .out                    ; happens to start like an address (CF = 0:
+.no:                            ; a compare with zero borrows nothing)
     stc
 .out:
     jmp ep_di
@@ -172,6 +173,10 @@ dh_emit:
     inc si
 dh_emitn:                       ; ...or CX bytes at SI, uncounted
     call mem_copy
+    add di, cx
+    ret
+dh_emit4:                       ; ...or an ADDRESS: four bytes, uncounted
+    call mem_cp4                ; (CX = 4 out of it, as dh_emitn's was)
     add di, cx
     ret
 
@@ -246,15 +251,13 @@ dhcp_request:
     mov si, dh_o_req
     call dh_emit
     mov si, dhcp_off
-    mov cx, 4
-    call dh_emitn
+    call dh_emit4
     cmp byte [dhcp_wk], 0       ; A WAKE'S IS INIT-REBOOT (SPEC.md 72.5.3):
     jne .reboot                 ; no server is being chosen, so option 54
     mov si, dh_o_sid            ; goes - RFC 2131 4.3.2, the form a server
     call dh_emit                ; may NAK
     mov si, dhcp_srv
-    mov cx, 4
-    call dh_emitn
+    call dh_emit4
 .reboot:
     mov al, DH_REQUEST
     ; ...and fall through
@@ -323,16 +326,12 @@ dhcp_opt:
     add ax, cx
     cmp ax, bx
     ja  .no
-    pop dx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop bx
-    pop ax
+    db 0xA8                             ; `test al, 0xF9`: CF = 0, over the
+.no:                                    ; `stc` - one tail for both answers
     stc
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -379,9 +378,8 @@ dhcp_in:
     je  .offer
     cmp al, 5
     je  .ack
-    cmp al, 6
-    je  .nak
-    jmp .out
+    cmp al, 6                           ; ...and a NAK falls through
+    jne .out
 .nak:
     mov di, eth_ip                      ; REFUSED - and a wake's address goes
     mov cx, 16                          ; with it, the router and the name
@@ -445,16 +443,18 @@ dhcp_in:
 ; dhcp_timer
 ; -----------------------------------------------------------------------------
 dhcp_timer:
-    push ax                     ; **THE FULL SET, and it is not this routine's
-    push bx                     ; own need.** It clobbers only AX; the four
-    push dx                     ; below are saved so that ETH_PUMP_I - which
-    push si                     ; calls it - can stop saving them (SPEC.md
-    push di                     ; 72.16.4). The saving is the same work either
-                                ; way and this is where it is CHEAP: eth_pump_i
-                                ; holds its set across a 108-byte subtree,
-                                ; where these four sit twenty bytes into the
-                                ; chain. Pushing a save DOWN to a shallow
-                                ; callee is free depth
+    push ax                     ; **AX AND NOTHING ELSE, and that is checked.**
+                                ; ETH_PUMP_I - which calls it - saves none of
+                                ; AX BX DX SI DI (SPEC.md 72.16.4), so this
+                                ; must give all five back. It used to push
+                                ; the full set for that, and it writes only
+                                ; AX: dhcp_start and dhcp_request each bank
+                                ; what they spend, and udp_send under them
+                                ; gives AX and BX back, so the other four
+                                ; pushes were saving registers nothing below
+                                ; here writes (driver size pass 1).
+                                ; `tools/stkdepth.py --check` fails the build
+                                ; the day one of them does
     mov al, [dhcp_st]           ; DISCOVER or REQUEST, 1 or 2: one compare
     dec ax                      ; (IDLE wraps to FFh, BOUND and FAIL stay
     cmp al, DH_REQUEST - 1      ; above it; AH is spent below anyway)
@@ -482,10 +482,6 @@ dhcp_timer:
 .rereq:
     call dhcp_request
 .out:
-    pop di
-    pop si
-    pop dx
-    pop bx
     pop ax
     ret
 
@@ -531,23 +527,16 @@ dns_qname:
     jz  .no
     mov [bx], cl
     mov byte [di], 0
-    inc di
-    mov ax, di                  ; the caller's DI is what advances
-    pop di
-    mov di, ax
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
+    inc di                      ; the caller's DI is what advances, so its
+    pop si                      ; banked one is DROPPED (SI is popped again)
+    db 0xA9                     ; `test ax, imm16`: CF = 0, over the two
+.no:                            ; bytes below - one tail for both answers
     stc
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -603,11 +592,10 @@ dns_send:
     push bp
     mov al, [dns_sk]
     call sk_ptr
-    mov di, eth_txb + IP_PAY + UD_HLEN
     mov ax, [dns_id]
-    call be_put                         ; the transaction
-    inc di
-    inc di
+    xchg ah, al                         ; the transaction, network order
+    mov [eth_txb+IP_PAY+UD_HLEN], ax
+    mov di, eth_txb + IP_PAY + UD_HLEN + 2
     mov si, dn_o_hdr
     call dh_emit
     lea si, [bx+SKO_HOST]
@@ -621,11 +609,9 @@ dns_send:
     mov dx, DNS_PORT
     mov bp, [dns_lport]
     call udp_send
-    clc
-    jmp short .out
-.no:
+    db 0xA8                             ; `test al, 0xF9`: CF = 0, over the
+.no:                                    ; `stc`
     stc
-.out:
     jmp ep_bp
 
 ; the rest of the header, after the transaction: flags RECURSION DESIRED
@@ -653,16 +639,16 @@ dns_in:
     mov di, eth_dns                     ; the port servers answer on: udp_in
     call ip_eq                          ; dispatched this on the destination
     jne .out                            ; port alone, and the transaction ID
-    mov si, eth_rxb + IP_PAY + UDO_SP   ; below is 16 bits over a source port
-    call be_get                         ; that walks upward from a known base
-    cmp ax, DNS_PORT
-    jne .out
+                                        ; below is 16 bits over a source port
+    cmp word [eth_rxb+IP_PAY+UDO_SP], BE16(DNS_PORT) ; that walks upward
+    jne .out                            ; from a known base
     mov si, eth_rxb + IP_PAY + UD_HLEN
     mov bx, si
     add bx, cx                          ; BX = one past the message, and every
                                         ; step below is bounded by it
-    call be_get
-    cmp ax, [dns_id]
+    mov ax, [dns_id]
+    xchg ah, al
+    cmp ax, [si]                        ; the transaction, as the wire has it
     jne .out
     test byte [si+2], 0x80              ; it must be a response
     jz  .out
@@ -706,21 +692,19 @@ dns_in:
     mov al, [dns_sk]                    ; ...and there it is
     call sk_ptr
     lea di, [bx+SKO_RIP]
-    call mem_cp4
-    push si                             ; ...and REMEMBERED, the name and its
-    mov di, dns_cip                     ; address (SPEC.md 72.5.1)
-    call mem_cp4
+    call mem_cp4                        ; (SI kept)
+    mov di, dns_cip                     ; ...and REMEMBERED, the name and its
+    call mem_cp4                        ; address (SPEC.md 72.5.1)
     lea si, [bx+SKO_HOST]
     mov di, dns_cnm
     mov cx, NET_HOSTMAX
     call mem_copy
-    pop si
     call dns_unres              ; ...it is resolved, and the resolver is free
     call tcp_syn
     jmp short .out
 .next:
-    mov ah, [si+8]                      ; RDLENGTH, big-endian, into a step
-    mov al, [si+9]
+    mov ax, [si+8]                      ; RDLENGTH, big-endian, into a step
+    xchg ah, al
     mov cx, bx                          ; ...bounded by what is LEFT and not by
     sub cx, si                          ; where the step lands: the add is
     sub cx, 10                          ; modulo 65536, and wire data that
@@ -809,35 +793,34 @@ dns_dropr:
 ; dns_timer - start a lookup, or give up on one
 ; -----------------------------------------------------------------------------
 dns_timer:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di                     ; DI is not this routine's need either - it is
-                                ; saved so eth_pump_i can stop saving it, for
-                                ; dhcp_timer's reason above (SPEC.md 72.16.4)
+    push ax                     ; WHAT IT WRITES, and no more: eth_pump_i
+    push bx                     ; saves none of AX BX DX SI DI (SPEC.md
+    push cx                     ; 72.16.4), and DX and DI - pushed here for
+    push si                     ; that until driver size pass 1 - are written
+                                ; by nothing below: dns_send, tcp_lport and
+                                ; dns_fail each give them back, and the scan
+                                ; walks BX where it walked DL. Checked by
+                                ; `tools/stkdepth.py --check`, as dhcp_timer
     cmp byte [dns_sk], 0xFF
     jne .live
 
-    xor dl, dl                          ; nothing in flight: is anything owed?
+    mov bx, sk_tab                      ; nothing in flight: is anything owed?
     mov cx, NET_SOCKS
 .scan:
-    mov al, dl
-    call sk_ptr
     cmp byte [bx+SKO_ST], NSK_FREE      ; a slot that has been FREED owes
     je  .nextscan                       ; nothing, whatever SKF_RES still says
     test byte [bx+SKO_FL], SKF_RES
     jnz .go
 .nextscan:
-    inc dl
+    SK_NEXT
     loop .scan
     jmp short .out
 .go:
+    mov al, [bx+SKO_IDX]                ; THE RESOLVER TAKES IT FIRST, either
+    mov [dns_sk], al                    ; way: dns_fail below lets go of it
     mov si, eth_dns                     ; ...and can we even ask? A machine
     call ip_zero                        ; with no name server has to say no
     jz  .nodns                          ; rather than time out four times
-    mov [dns_sk], dl
     call OSAPI_RAND
     mov [dns_id], ax
     call tcp_lport                      ; a source port out of the same pool
@@ -853,7 +836,6 @@ dns_timer:
     call dns_fail                       ; the name will not even encode
     jmp short .out
 .nodns:
-    mov [dns_sk], dl
     call dns_fail
     jmp short .out
 .live:
@@ -872,10 +854,8 @@ dns_timer:
 .give:
     call dns_fail
 .out:                           ; ...its OWN pops and not the ladder's jump:
-    pop di                      ; this runs on every pump (eth_ptimers), and
-    pop si                      ; the ladder is for cold routines only
-    pop dx
-    pop cx
+    pop si                      ; this runs on every pump (eth_ptimers), and
+    pop cx                      ; the ladder is for cold routines only
     pop bx
     pop ax
     ret

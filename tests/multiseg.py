@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A package carries its own parts, and loads them itself (SPEC.md 20.12).
 
-    make mseg && python3 tests/multiseg.py [1440|360] [--comp] [--wide] [machine] [system-image]
+    make mseg && python3 tests/multiseg.py [1440|360] [--comp] [--wide|--big] [machine] [system-image]
 
 MSEG is a v3 package with flags bit 2: its file is longer than its image, and
 what is past the image is three separately assembled modules it reads for
@@ -75,7 +75,14 @@ COMP = "--comp" in sys.argv
 # because a padding that shrank would let this row pass on a carve the old
 # bound allowed.
 WIDE = "--wide" in sys.argv
-argv = [a for a in sys.argv if a not in ("--comp", "--wide")]
+# ...and `--big` swaps in build/msegb*.img: MSEG built -DMSEG_BIG, OP_BIG on
+# parts 1, 2 and the lazy 6, each padded past 65,024 bytes (SPEC.md
+# 20.12.15). Every assertion again, and three more: each of those rows really
+# is past 65,024; each of the three parts reads back out of the guest equal
+# to its padded module, EVERY byte - the module checks above see only its
+# first few hundred; and part 6 is fetched on a key and compared the same way
+BIG = "--big" in sys.argv
+argv = [a for a in sys.argv if a not in ("--comp", "--wide", "--big")]
 
 GEOM = argv[1] if len(argv) > 1 else "1440"
 if GEOM not in ("1440", "360"):
@@ -88,9 +95,9 @@ DEFAULT_MACHINE = {"1440": "os8088_5150_herc_gla_144"}.get(
     GEOM, "os8088_5150_cga_gla")
 MACHINE = argv[2] if len(argv) > 2 else DEFAULT_MACHINE
 SYS_IMG = argv[3] if len(argv) > 3 else "build/os8088-360.img"
-STEM = ("msegw" if WIDE else "mseg") + ("z" if COMP else "")
+STEM = ("msegw" if WIDE else "msegb" if BIG else "mseg") + ("z" if COMP else "")
 APPS_IMG = "build/%s.img" % STEM if GEOM == "1440" else "build/%s360.img" % STEM
-O88 = ("build/%sd/MSEG.O88" % STEM) if WIDE else ("build/%s.o88" % STEM)
+O88 = ("build/%sd/MSEG.O88" % STEM) if WIDE or BIG else ("build/%s.o88" % STEM)
 S = os88sym.linear
 # HOW MANY PARTS IS THE PACKAGE'S OWN ANSWER, read out of the .o88's part
 # table (tools/os88parts.py). It was written down here as `PARTS = 6` and wave
@@ -110,9 +117,63 @@ def UD(m, **_):            # every read below is guest memory
     return os88marty.ui_done(m)
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
-    m.run()
-    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+# --big: which module each OP_BIG row was padded from (the Makefile's
+# MSEGB_PARTS), so a part is compared with the very bytes the packer took
+BIG_SRC = {1: "build/msegbp1.bin", 2: "build/msegbp2.bin",
+           LAZY: "build/msegbp4.bin"}
+
+
+def big_same(m, lin, segv, i, what):
+    """Part i in the guest, every byte, against its padded module"""
+    want = open(os88build.at(BIG_SRC[i]), "rb").read()
+    got = bytes(m.read(lin(segv), len(want)))
+    bad = next((k for k in range(len(want)) if got[k] != want[k]), None)
+    say("part %d %s: %d bytes at %04X, %s" % (
+        i, what, len(want), segv,
+        "identical" if bad is None else "FIRST DIFFERENCE at +%d" % bad))
+    if bad is not None:
+        fails.append(
+            "part %d (%s) differs from %s at byte %d of %d - an OP_BIG row "
+            "read, expanded or moved down short or misplaced past 64KB "
+            "(SPEC.md 20.12.15)" % (i, what, BIG_SRC[i], bad, len(want)))
+
+
+def big_check(m, lin, seg, segs):
+    rows_ = os88parts.rows(_image_of(O88))
+    for i in BIG_SRC:
+        r = rows_[i]
+        say("part %d: len %d, %s" % (i, r["len"], (
+            "packed %d" % r["zkb"]) if r["flags"] & os88parts.EQU["OP_COMP"]
+            else "plain"))
+        if not r["flags"] & os88parts.EQU["OP_BIG"] or r["len"] <= 65024:
+            fails.append("part %d is %d bytes %s OP_BIG - the fixture is not "
+                         "testing a row past 65,024 (SPEC.md 20.12.15)"
+                         % (i, r["len"], "with" if r["flags"] & 0x80
+                            else "without"))
+    for i in (1, 2):
+        if segs[i]:
+            big_same(m, lin, segs[i], i, "eager")
+    # ...AND THE LAZY ONE, which is op_fetch's: a key fetches it (ms_onkey),
+    # and the row's own zkb word is where a fetched part banks its segment
+    os88marty.key_taken(m, "KeyL")
+    os88marty.ui_done(m)
+    row6 = msegsym.sym("op_table", COMP, BIG) + os88parts.EQU["OP_T_ROWS"] + \
+        os88parts.EQU["OP_ROW"] * LAZY
+    rb = m.read(lin(seg) + row6, 8)
+    lseg = struct.unpack_from("<H", rb, os88parts.EQU["OP_R_ZKB"])[0]
+    fetched = rb[os88parts.EQU["OP_R_FLAG"]] & os88parts.EQU["OP_FETCHED"]
+    say("after the key: part %d %s, segment %04X" % (
+        LAZY, "FETCHED" if fetched else "not fetched", lseg))
+    if not fetched:
+        fails.append("part %d (OP_BIG, lazy) did not arrive on the key: "
+                     "op_fetch refused it - and the toast says why (SPEC.md "
+                     "20.12.15)" % LAZY)
+    else:
+        big_same(m, lin, lseg, LAZY, "lazy, fetched")
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot="up") as m:  # the boot gate on STATE: cacheable
     os88marty.no_saver(m)
     # a guest segment's linear base: on kern_mega (OS88_MEGA) every region
     # and part is an LDT SELECTOR (docs/BOCHS.md)
@@ -177,7 +238,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     want = "MSEG %d/%d OK" % (PARTS, PARTS)
     if title != want:
         bad = struct.unpack_from(
-            "<H", m.read(lin(seg) + msegsym.sym("ms_bad", COMP), 2), 0)[0]
+            "<H", m.read(lin(seg) + msegsym.sym("ms_bad", COMP, BIG), 2), 0)[0]
         fails.append(
             "MSEG says %r, wanted %r - the parts that did NOT pass are %r. "
             "Each part is checked three independent "
@@ -198,7 +259,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     # out a second time, in Python, with the part count in it - and the
     # namespace one along has already gone stale exactly that way (see
     # tools/os88parts.py's header).
-    ms_seg = msegsym.sym("ms_seg", COMP)
+    ms_seg = msegsym.sym("ms_seg", COMP, BIG)
 
     # THE HEAD SLACK, and this is what makes the two geometries different
     # rows rather than one run twice. A part begins on a PARAGRAPH of the
@@ -211,7 +272,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     # the arithmetic it exists for, so a zero slack is refused outright on
     # the 360KB disk - the image is padded so it is not.
     slack = struct.unpack_from(
-        "<H", m.read(lin(seg) + msegsym.sym("op_slack", COMP), 2), 0)[0]
+        "<H", m.read(lin(seg) + msegsym.sym("op_slack", COMP, BIG), 2), 0)[0]
     clb = 1024 if GEOM == "360" else 512
     first = next(r for r in os88parts.rows(_image_of(O88))
                  if r["off"] and not r["flags"] & os88parts.EQU["OP_LAZY"])
@@ -234,7 +295,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     # this row would be passing without testing SPEC.md 20.12.11 at all.
     if WIDE:
         secs, usecs = (struct.unpack_from(
-            "<H", m.read(lin(seg) + msegsym.sym(n, COMP), 2), 0)[0]
+            "<H", m.read(lin(seg) + msegsym.sym(n, COMP, BIG), 2), 0)[0]
             for n in ("op_secs", "op_usecs"))
         # op_secs/op_usecs count GRANULES since SPEC.md 20.12.2: 64KB is
         # 128 sectors, which is 4,096 of them
@@ -263,7 +324,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
         # took the extended path ('X'), and an INSTANCE owns a pool block
         # (OSAPI_XMEM_ALLOC's owner is its slot, mx_tab's MX_OWN < 80h). The
         # title above is fact 2: the bytes came back down and summed
-        xw = m.read(lin(seg) + msegsym.sym("ms_xwhere", COMP), 1)
+        xw = m.read(lin(seg) + msegsym.sym("ms_xwhere", COMP, BIG), 1)
         say("part %d: op_seg %04X, ms_xwhere %r" % (XMS, segs[XMS], xw))
         if segs[XMS] or xw != b"X":
             fails.append("the OP_XMS part did not go above 1MB on kern_mega: "
@@ -277,6 +338,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
             fails.append("no pool block is owned by an INSTANCE, so the part "
                          "above 1MB is the kernel's and stranded (SPEC.md "
                          "41.5.1's trap, tests/msegxms.py)")
+    if BIG:
+        big_check(m, lin, seg, segs)
     if segs[LAZY]:
         fails.append(
             "part %d is OP_LAZY and it has a segment (%04X) after the LAUNCH. "
@@ -310,4 +373,5 @@ if fails:
     sys.exit(1)
 print("\nmultiseg: three parts in one file, sized with no disk read, claimed "
       "once and read by the PACKAGE - PASS on %s (%s)%s"
-      % (GEOM, MACHINE, ", a carve past 64KB" if WIDE else ""))
+      % (GEOM, MACHINE, ", a carve past 64KB" if WIDE else
+         ", three parts past 64KB each" if BIG else ""))

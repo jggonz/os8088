@@ -460,6 +460,11 @@ still carried the old one, and every result after it was about two kernels at
 once. It was stopped and re-run from zero. Merge after the run, or soak a
 separate checkout.
 
+**SUPERSEDED BY §14.4 (2026-11-15)**: `os88soak.py start` now runs the whole
+soak inside a snapshot of the checkout, so the source IS frozen and an edit,
+merge, pull or commit in the checkout no longer reaches a running soak. The
+paragraph above stands for `--shared-build`, which still reads the live tree.
+
 **The lock is `flock`, held only across the build.** That is the argument for
 deleting `martylock.py` rather than reusing it: a lease was needed there
 because a holder worked across many shells and no PID could answer "is the
@@ -1417,9 +1422,9 @@ running kernel's `.cold` with the file's, reported one byte of damage at
 `mod_check+34`: the immediate of `cmp word [es:MOD_H_BUILD], BUILD_NUM`, 0xA7
 in memory against 0xA9 on disk. `os88soak.py start` now exports
 `$OS88_BUILDNUM`, the count it froze at, and `buildnum.py` honours it. **A
-SOURCE edit is still not frozen**: a row that rebuilds an artefact inside the
-tree assembles the live `kernel/`, so commit tools and tests freely while a
-soak runs and hold kernel edits until it ends.
+SOURCE edit was still not frozen** - a row that rebuilt an artefact inside the
+tree assembled the live `kernel/`, and the runner, the rows and the tools
+were the live checkout's - until §14.4 froze the whole source tree.
 
 **What is still exposed, and it is the other direction.** The soak no longer
 minds the operator; the operator may still mind the soak. **Three** rows write
@@ -1511,6 +1516,98 @@ argument — the emulator needs no environment, the symbol reader does — and
 copied it and died with a `TypeError` in their first second. `t.env` is for a
 subprocess; inside one process the call is `.apply()`, which sets os88sym's
 module default as well as the environment. The header is corrected.
+
+### 14.4 The WHOLE run is frozen - it executes inside a snapshot of the checkout
+
+**BUILT, 2026-11-15** (`tools/os88soak.py`, the block headed *THE
+SNAPSHOT*; gate `tests/unit/t_soaksnap.py`, row `soaksnap`). §14.2 froze the
+build tree, then the kernel source os88sym re-assembles, then the build
+number - one hazard at a time, each found by a soak that died of it. What it
+never froze was everything else the run EXECUTES: `tools/os88test.py`,
+`tests/suite.py`, every `tests/<row>.py`, every `tools/*.py` module, the
+Makefile and the package sources a row's `make` reads, and MartyPC through
+`build/martypc`, which is one directory shared by symlink across every
+worktree on the box. So the session that started a soak still could not fix
+anything while it ran - an edited test, a commit, a checkout, a merge or a
+`make marty` reached every row that had not started yet - and "do not touch
+the checkout for two hours" is not an answer the owner accepts.
+
+**The design: freeze the source, not a list of hazards.**
+
+  * **A snapshot is a commit object, made without touching anything of the
+    operator's.** `git add -A` into a COPY of the session's index (copied so
+    the stat cache makes it a rescan: 0.34 s on this 5,300-file, 638 MB
+    tree), `write-tree`, `commit-tree -p HEAD`. It holds exactly what the
+    session would build - tracked files, uncommitted edits staged or not,
+    untracked files that are not ignored, deletions - and touches no ref, no
+    index, no stash and no file. A clean checkout's snapshot is HEAD itself.
+  * **It is checked out into a SLOT**: a detached git worktree under
+    `build/soak/src/s<N>/`. Being a real worktree of the same repository is
+    the point - the ~20 tools and rows that call `git` (checkdocs'
+    `ls-files`, abicompat's base, waverackdisk's `archive`) work unchanged.
+  * **`start` re-runs itself from inside the slot.** The outer `start`
+    freezes, pins and builds, then runs the slot's own `os88soak.py start`
+    with cwd = the slot, so ROOT is the slot for every module that computes
+    one (`os88test`, `os88build`, `os88sym`, `os88marty`, every row), and
+    nothing the run executes is read out of the operator's checkout again.
+    `$OS88_SOAK_HOME` names the operator's checkout to that inner copy only,
+    because the run's RECORDS stay there: `build/soak/<run>/`, `latest`, the
+    journal, `exit` and the `finished` marker fork rule 4's waiting loop
+    watches. `status`, `stop` and `check` are unchanged.
+  * **The build tree IS the slot's `build/`**, built by the slot's own
+    Makefile at the pinned build number, with the goals and carries
+    `os88build.tree()` gives a tree. `$OS88_TREE` and `$OS88_BUILD` still
+    name it, deliberately: every row then stays on the frozen-run paths §14.2
+    proved out (`prebuild` confirms rather than makes, `plain()` and
+    `use_build` answer the run's tree), and `$OS88_SRC` is gone because
+    os88sym's own ROOT now is the frozen source. Knob trees a row builds land
+    in the slot's `build/trees/`, from the slot's source.
+  * **Slots are reused, and that is what keeps the second run cheap.**
+    Re-pointing a slot is `git checkout --detach -f` plus `git clean -fd`:
+    only the files that differ are rewritten, each with a fresh mtime, so the
+    slot's `build/` stays warm and its `make` rebuilds exactly what an
+    in-place edit would have. A slot is never re-pointed while a LIVE run
+    holds it, nor while it is the LATEST run's and that run never wrote
+    `exit` (stopped, killed, reclaimed - resumable); the next `start` takes
+    another. `$OS88_SOAK_SLOTS` (default 2) is how many free slots are kept;
+    the least recently used is pruned past it, and a reserved one never is.
+  * **`--resume` reuses the run's own snapshot, unrebuilt.** The rows that
+    reported were answered by that tree and the rest must be, or one run's
+    verdicts describe two. If the slot has gone, `--resume` refuses and
+    `--resume --resnapshot` is the explicit choice to continue the journal
+    on a fresh one.
+  * **Instruments.** MartyPC's staged `run/` (12 MB: binary, configs, ROMs)
+    is COPIED into the slot - not hardlinked, because `build.sh` overwrites
+    in place - while its instance registry `inst/` is LINKED back to the
+    shared one, so `os88marty.py instances`/`reap`, `status`'s in-flight
+    line and `stop`'s reap see the run's emulators and the run's own reaper
+    sees everybody else's. 86Box's binary is copied the same way. The rest
+    of what `make clean` spares (`cc`, `watcom`, `qemu9`, `nasm3`, `rgbds`,
+    `gbtest`, `apple2-rom`, `picomem`) is linked: pinned tools only their own
+    setup script rebuilds, hundreds of MB to copy per slot against a rebuild
+    nobody does mid-soak. Bochs and QEMU 8 are the system's. Two IGNORED
+    inputs outside `build/` - `tools/martypc/roms/` and `win16ref/` - are
+    linked, because `git add -A` rightly leaves them out.
+  * **`make clean` spares `build/soak`** - it would otherwise delete the
+    source tree a live run executes from.
+  * **`os88test.py --frozen`** is the same helper in the foreground: freeze,
+    then run the same command from inside the snapshot.
+
+**What it costs**, measured on this box under a load of 40 on 4 cores (eight
+agents building): the snapshot commit 0.34 s; a NEW slot's checkout 11.7 s
+and 640 MB; a reused slot's re-point well under a second; MartyPC's copy
+12 MB. The build is the cost that matters: a cold `make` of the shipped set
+the first time a slot is used (404 s wall at that load), an incremental one
+after (40 s after a Makefile edit), and **1.1 s for the whole freeze when
+nothing has changed**. The ledger is `docs/plans/soak-speed-2/frozen.md`. §14.2's tree under `build/trees/plain-*` was warm
+across every run of the checkout; a slot is warm across the runs that use
+it, so with two slots the cold build is paid twice per checkout rather than
+once.
+
+**What is still not frozen**: the linked instruments above and the system's
+Bochs, QEMU and nasm - none of which `make` or a row rewrites. And
+`--shared-build`, which is the escape hatch it always was: the live
+checkout, live `build/`, nothing frozen.
 
 ---
 

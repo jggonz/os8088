@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "656c4d3e833541a611013b08fcb90cc38806ad506fedec67f45aebef1324010f",
+  "fingerprint": "0bf9b72fd1e31efdb429fb3f630b0cdc8d87e8f1085666b8c5ce1bf4e6dc8b4f",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "3aa521518ca9666207043f9bb9ab4301d88bf99a85d47317f1d6423962921241",
+  "fingerprint": "0253a766305fdf9932d018f898fd232d46874a3be99bd87b657033d96965f2f6",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2259,6 +2259,111 @@
    "from": 13,
    "guard": "PKG_FMT",
    "reason": "merge of origin/main 7b802356 (PageDesk, Browser 1.7): the C SDK gains os88_gfx_blit1_seg, os88_file_read_seq, os88_file_write_seq, os88_vol_kind and os88_ferr_text (thunks over existing cells) and crt0's optional CC_OVL_ROOM/CC_OVL_FAIL hooks - additions within this unreleased PKG_FMT 13 round, nothing built before changes meaning, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "2d96e4d95a66f5990791f2975b5067b555fc3a88201116b04819955ac1a98c1c",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MOUSE_REL (SPEC.md 9.14) is a cell APPENDED at the table's end, 0x0236: every package built before it calls only cells that are where they were, so nothing built before it changes and PKG_FMT stays 13. A package that calls it on an older kernel far-calls past that kernel's table, which is the appended-cell case 20.2.0.1 already covers.",
+   "to": 13
+  },
+  {
+   "fingerprint": "507f6afa32bbe012e56a41050f3255f524e507ff7aaeda164d683f5aabe7c9cb",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MOUSE_REL (SPEC.md 9.14) is a cell APPENDED at the table's end, 0x0236: every package built before it calls only cells that are where they were, so nothing built before it changes and PKG_FMT stays 13. A package that calls it on an older kernel far-calls past that kernel's table, which is the appended-cell case 20.2.0.1 already covers.",
+   "to": 14
+  },
+  {
+   "fingerprint": "ebd169085996987ee10e2ddd7c6072a0b711b546ca3e420e17fc3dbea8ffc201",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MOUSE_REL's contract now says kern_small refuses it (CF = 1, AX = 1): the owner gated the accumulator off that kernel's budget. The cell is where it was on every kernel, so nothing built before changes and PKG_FMT stays 13.",
+   "to": 13
+  },
+  {
+   "fingerprint": "bf6b72cae0b03bb4ad4d88c44711c8b7ab8ef677600c15a19197572054096893",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MOUSE_REL's contract now says kern_small refuses it (CF = 1, AX = 1): the owner gated the accumulator off that kernel's budget. The cell is where it was on every kernel, so nothing built before changes and PKG_FMT stays 13.",
+   "to": 14
+  },
+  {
+   "fingerprint": "a4a157e5a466e74bdee722c122551a280041236b9d4b39d6f3d1a17fc34c0187",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_KEY_MAP (SPEC.md 9.7.3): a jump cell APPENDED at 0x0239 that copies the whole key-state map to DS:DI, with KEYMAP_BYTES/KEYMAP_TEST in the SDK and os88_key_map/OS88_KEYMAP_* in the C SDK. Nothing built before it moves or changes meaning, and no kernel at PKG_FMT 13 has been released, so no bump.",
+   "to": 13
+  },
+  {
+   "fingerprint": "7a16cbe6c853f024bd048d4c4e8e55f62c3f6189ec20a9afb2cc2a8773419b4c",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_KEY_MAP (SPEC.md 9.7.3): a jump cell APPENDED at 0x0239 that copies the whole key-state map to DS:DI, with KEYMAP_BYTES/KEYMAP_TEST in the SDK and os88_key_map/OS88_KEYMAP_* in the C SDK. Nothing built before it moves or changes meaning, and no kernel at PKG_FMT 13 has been released, so no bump.",
+   "to": 14
+  },
+  {
+   "fingerprint": "44eea6c7d9c5309ddc44adfb56c204e46a723b6ea091968871edb17fb1e50ef7",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SERIAL gains verbs 4 Write block and 5 Read block (SPEC.md 115.1.2): additive, an older SERIAL.DRV answers them CF=1 AX=5 and callers fall back to the per-byte verbs",
+   "to": 13
+  },
+  {
+   "fingerprint": "e04da3ba707c6d6107a7d857c90bb58f23a83530730b16682fafad5fb1fb0620",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SERIAL gains verbs 4 Write block and 5 Read block (SPEC.md 115.1.2): additive, an older SERIAL.DRV answers them CF=1 AX=5 and callers fall back to the per-byte verbs",
+   "to": 14
+  },
+  {
+   "fingerprint": "d21931c13e5ad37ffa9aa8d87d89152f7499b09e087dbe4d8be66ea2c4564d11",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "ETHER.DRV gains UDP for packages (NETV_UDP 18, NETV_UDPTX 19, NETV_UDPRX 20, SPEC.md 72.23) and grows ~1KB: DRVM_CEIL_NET 34->35, DRVM_CEIL_NET_PCI 39->40. Additive; earlier packages run unchanged",
+   "to": 13
+  },
+  {
+   "fingerprint": "9d0e1ac4c0bf2be40587166b3b495cefe5f7ff61a9e8b68c19fed9f8fecd7d0e",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "ETHER.DRV gains UDP for packages (NETV_UDP 18, NETV_UDPTX 19, NETV_UDPRX 20, SPEC.md 72.23) and grows ~1KB: DRVM_CEIL_NET 34->35, DRVM_CEIL_NET_PCI 39->40. Additive; earlier packages run unchanged",
+   "to": 14
+  },
+  {
+   "fingerprint": "eb3ade0bf9b0259bfe62a93adc923aa6690fc7e09d9769ba09987617bddf7a9c",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge of elendilon into driver size pass 1: DRVM_CEIL_NET 35 -> 34 (ETHER.DRV with UDP is 35 sectors, not 36, after the pass) - a caption's ceiling, no cell moved, no DRV_VER bump (driver size pass 1)",
+   "to": 13
+  },
+  {
+   "fingerprint": "0fd0ab8da4ae02ad816d1bebacbfba699ecf13e6c1368ebbac1e72bb466b3126",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "merge of elendilon into driver size pass 1: DRVM_CEIL_NET 35 -> 34 (ETHER.DRV with UDP is 35 sectors, not 36, after the pass) - a caption's ceiling, no cell moved, no DRV_VER bump (driver size pass 1)",
+   "to": 14
+  },
+  {
+   "fingerprint": "94c3797bf0e943796c7b336c7bbfb1dd4c984efc9a73110e2984abb9684b18d0",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_KEY_MAP's contract now says kern_small refuses it (CF = 1, AX = 1, the caller's bytes untouched): the owner gated it off that kernel, which is locked under its 70.5KB heap rung (guard 1b). The cell is where it was on every kernel and its refusal is OSAPI_MOUSE_REL's, so nothing built before changes and PKG_FMT stays 13.",
+   "to": 13
+  },
+  {
+   "fingerprint": "0bf9b72fd1e31efdb429fb3f630b0cdc8d87e8f1085666b8c5ce1bf4e6dc8b4f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_KEY_MAP's contract now says kern_small refuses it (CF = 1, AX = 1, the caller's bytes untouched): the owner gated it off that kernel, which is locked under its 70.5KB heap rung (guard 1b). The cell is where it was on every kernel and its refusal is OSAPI_MOUSE_REL's, so nothing built before changes and PKG_FMT stays 13.",
+   "to": 14
+  },
+  {
+   "fingerprint": "0253a766305fdf9932d018f898fd232d46874a3be99bd87b657033d96965f2f6",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge of elendilon (Wire Arena round: OSAPI_MOUSE_REL and OSAPI_KEY_MAP appended at 0x0236 and 0x0239, the SERIAL.DRV block verbs and ETHER.DRV's UDP verbs) onto elendilon-pr's merge of origin/main 7b802356 (C SDK thunks over existing cells): both sides only append, nothing built before changes meaning, no bump",
    "to": 13
   }
  ]

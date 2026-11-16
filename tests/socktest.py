@@ -112,6 +112,11 @@ class Server(threading.Thread):
         self.gap = False            # ...did the condition ever arise?
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # LEASED across runners (tests/os88qemu.py's lease_port): PORT is
+        # baked into socktest.asm, and another worktree's soak running this
+        # row would bind it too - `Address already in use`, read as the ABI
+        import os88qemu
+        os88qemu.lease_port(PORT)
         self.s.bind(("127.0.0.1", PORT))
         self.s.listen(2)
         self.request = None

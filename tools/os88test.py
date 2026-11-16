@@ -175,6 +175,7 @@ capability is known to be there.
 import argparse
 import concurrent.futures
 import fnmatch
+import codecs
 import os
 import shutil
 import subprocess
@@ -516,6 +517,104 @@ def _qemu_cpu(qdir, seen):
     return sum(seen.values())
 
 
+def _timeout_note(p, which, wall, cpu, limit, charged):
+    """Say WHICH limit ended a timed-out row, on `p.os88_timeout` as (short,
+    long) - so a TIMEOUT line tells "the host was slow" from "it hung".
+
+    THE TWO ARE DIFFERENT FIXES (docs/plans/soak-speed-2/flake.md). The CPU
+    limit trips only on work actually done: the row's tree spent more CPU
+    than its timeout, which a loaded box cannot cause - a guest that spins
+    in a hang, or a row that really costs more than declared. The WALL
+    limit (WALL_BACKSTOP x wider) trips on a row that was not given the CPU
+    or was blocked on something that never answered: with the box's load
+    beside it, a timeout at a load past the core count with little CPU
+    spent is the host's, not the row's. Advisory only - nothing here
+    changes when a row is stopped."""
+    if getattr(p, "os88_timeout", None):
+        return                          # (the terminate's own reap: keep
+    try:                                # the limit that ended the row)
+        la = os.getloadavg()[0]
+    except OSError:
+        la = -1.0
+    n = os.cpu_count() or 1
+    cpu_s = "?" if cpu is None else "%.0f" % cpu
+    # THE RUN QUEUE IS THE WITNESS (/proc/<pid>/schedstat: ns on a CPU, ns
+    # RUNNABLE and waiting for one), over the row's live process tree: a row
+    # the host starved waited on the queue; a row that hung waited on
+    # nothing the scheduler knows about. Load alone cannot tell them apart -
+    # a sleeping row on a box at load 30 is still a hung row.
+    qwait = _tree_runq(p.pid)
+    if which == "cpu":
+        short = "CPU-bound (%s CPU s > %s)" % (cpu_s, limit)
+        long = ("the row's process tree spent %s CPU seconds, past its %s "
+                "budget, in %.0f wall s: it did that much WORK - a guest "
+                "spinning in a hang, or a row slower than its declared secs. "
+                "Host load does not cause this one." % (cpu_s, limit, wall))
+    else:
+        if qwait is not None:
+            starved = qwait > 0.25 * wall
+        else:
+            starved = la > n and (cpu is None or limit is None or
+                                  cpu < 0.5 * limit)
+        short = ("wall %.0fs, %s CPU s, %s s queued for a CPU, load "
+                 "%.1f/%d: %s"
+                 % (wall, cpu_s, "?" if qwait is None else "%.0f" % qwait,
+                    la, n, "HOST-STARVED" if starved else "blocked/hung"))
+        long = ("the WALL limit ended the row after %.0f s having spent %s "
+                "CPU s%s and %s s RUNNABLE waiting for a CPU (its live "
+                "processes' schedstat); the box's 1-min load was %.1f on %d "
+                "cpus. %s"
+                % (wall, cpu_s, "" if charged else " (CPU not charged here)",
+                   "?" if qwait is None else "%.0f" % qwait, la, n,
+                   "A load past the core count with little CPU spent is the "
+                   "HOST being slow, not the row hanging - re-run it alone "
+                   "before believing it." if starved else
+                   "Little CPU and a box with cores to spare: the row was "
+                   "WAITING on something that never answered (a socket, a "
+                   "lock, a machine that stopped)."))
+    try:
+        p.os88_timeout = (short, long)
+    except AttributeError:
+        pass
+
+
+def _tree_runq(root):
+    """Seconds the live process tree under ROOT has spent RUNNABLE but not
+    running (/proc/<pid>/schedstat's second field, summed over every thread
+    of every descendant), or None where /proc cannot say."""
+    try:
+        kids = {}
+        for d in os.listdir("/proc"):
+            if d.isdigit():
+                try:
+                    raw = open("/proc/%s/stat" % d).read()
+                except OSError:
+                    continue
+                kids.setdefault(int(raw[raw.rindex(")") + 2:].split()[1]),
+                                []).append(int(d))
+        total, todo, seen = 0, [root], False
+        while todo:
+            q = todo.pop()
+            todo.extend(kids.get(q, ()))
+            try:
+                tids = os.listdir("/proc/%d/task" % q)
+            except OSError:
+                continue
+            for t in tids:
+                try:
+                    f = open("/proc/%d/task/%s/schedstat" % (q, t)).read()
+                    total += int(f.split()[1])
+                    seen = True
+                except (OSError, ValueError, IndexError):
+                    pass
+        return total / 1e9 if seen else None
+    except OSError:
+        return None
+
+
+DRAIN_SECS = 30                 # a reaped row's pipes, read to EOF at most
+
+
 def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     """Popen.communicate, but REAPED WITH wait4 so the row's CPU is kept.
 
@@ -553,8 +652,19 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     bufs = {"o": [], "e": []}
 
     def drain(f, key):
-        for chunk in iter(lambda: f.read(8192), ""):
-            bufs[key].append(chunk)
+        # os.read, which answers whatever has ARRIVED: a text file's
+        # read(8192) waits for 8192 characters or EOF, so a pipe held open
+        # past the row (see DRAIN_SECS) kept the row's last words inside the
+        # call and they were never reported
+        dec = codecs.getincrementaldecoder(f.encoding or "utf-8")(
+            errors="replace")
+        fd = f.fileno()
+        while True:
+            b = os.read(fd, 8192)
+            if not b:
+                break
+            bufs[key].append(dec.decode(b).replace("\r\n", "\n"))
+        bufs[key].append(dec.decode(b"", final=True))
 
     ts = [threading.Thread(target=drain, args=(p.stdout, "o"), daemon=True),
           threading.Thread(target=drain, args=(p.stderr, "e"), daemon=True)]
@@ -581,6 +691,8 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
             # gets there), so the declared timeout is the wall limit.
             lim = wall if (not cpu or qdir is None or qseen) else blind
             if lim is not None and time.time() - t0 > lim:
+                _timeout_note(p, "wall", time.time() - t0, spent_cpu(),
+                              limit, cpu)
                 return None
             n += 1
             if cpu and limit is not None and n % 50 == 0:
@@ -588,6 +700,8 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
                 if spent is None:
                     cpu, wall = False, blind    # unmeasurable: wall it is
                 elif spent > limit:
+                    _timeout_note(p, "cpu", time.time() - t0, spent, limit,
+                                  cpu)
                     return None
             time.sleep(0.02)
 
@@ -611,10 +725,24 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
     status, ru = got
     p.returncode = os.waitstatus_to_exitcode(status)
     qcpu = _qemu_cpu(qdir, qseen) if qdir is not None else 0.0
+    # THE ROW IS REAPED, so its output ends when its LAST WRITER closes - and
+    # a process the row left running holds the pipe for as long as it lives.
+    # Waited on without a bound, one orphan stalled a whole-tier soak for
+    # 2 h 7 min after the row itself had ended (os88bochs's fifo holder,
+    # `sleep 86400`, which had inherited the row's stderr). So the drains
+    # get DRAIN_SECS, and a pipe still open after them is SAID and left.
+    end = time.time() + DRAIN_SECS
     for t in ts:
-        t.join()
-    p.stdout.close()
-    p.stderr.close()
+        t.join(max(0.0, end - time.time()))
+    held = [k for t, k in zip(ts, ("stdout", "stderr")) if t.is_alive()]
+    if held:
+        bufs["e"].append("\nos88test: the row was reaped but its %s was "
+                         "still held open %ds later - a process it started "
+                         "outlived it; read what had arrived\n"
+                         % (" and ".join(held), DRAIN_SECS))
+    else:
+        p.stdout.close()
+        p.stderr.close()
     return ("".join(bufs["o"]), "".join(bufs["e"]),
             ru.ru_utime + ru.ru_stime + qcpu, timed_out)
 
@@ -769,6 +897,10 @@ def run_row(row, caps, strict, verbose, unbuilt=(), shared=False):
     reason = "" if ok else "exit %d" % p.returncode
     if timed_out:
         ok, reason = False, "TIMEOUT after %ds" % row.timeout
+        why = getattr(p, "os88_timeout", None)
+        if why:
+            reason += " - " + why[0]
+            out += "\nos88test: " + why[1] + "\n"
         if "qemu" in row.needs:
             out += _sweep_qemu(qdir, legacy=not shared)
     if qdir:
@@ -804,8 +936,16 @@ def lane_locks(row):
     tail."""
     script = next((c for c in row.cmd
                    if c.startswith("tests/") and c.endswith(".py")), None)
-    return tuple(getattr(row, "locks", ())) + (
-        ("script:" + script,) if script else ())
+    own = tuple(getattr(row, "locks", ()))
+    # `locks=("script:private",)` OPTS OUT: a script whose every scratch is
+    # private (tempfile.mkdtemp, os88marty.launch's run dir) and which is
+    # split into one row a leg so the lane can run the legs AT ONCE - the
+    # lock would otherwise put them end to end again (waverackrec*,
+    # docs/plans/soak-speed-2/games.md). Say so only after checking the
+    # script writes no fixed path
+    if "script:private" in own:
+        return tuple(k for k in own if k != "script:private")
+    return own + (("script:" + script,) if script else ())
 
 
 # **A BOCHS ROW IS A FRACTION OF A CORE** (docs/plans/SOAK-PARALLEL.md 19).
@@ -904,7 +1044,17 @@ def _default_bpc():
             return max(1, int(env))
         except ValueError:
             pass
-    return BOCHS_PER_CORE
+    # ...divided by the square root of the cap's RATE (os88bochs.ROW_RATE,
+    # $OS88_BOCHS_RATE): a guest allowed RATE x real time keeps more of a
+    # core busy, but not RATE x - the row's harness work is a fixed amount,
+    # not a rate. Measured at 4: 0.12-0.19 of a core a wall second against
+    # 0.08-0.12 at 1, so 2 a core (docs/plans/soak-speed-2/bochs.md)
+    try:
+        import os88bochs
+        rate = max(1.0, float(os88bochs.ROW_RATE))
+    except Exception:           # (no tools/ on the path: the old weight)
+        rate = 1.0
+    return max(1, int(round(BOCHS_PER_CORE / rate ** 0.5)))
 
 
 def lane_weight(row, bpc):
@@ -1411,6 +1561,28 @@ def cache_save(store):
     os.replace(t, CACHE_FILE)
 
 
+def _run_frozen(a):
+    """`--frozen`: freeze the checkout with os88soak's helper and re-run this
+    command, minus the flag, from inside the snapshot - in the FOREGROUND,
+    so it is `os88test.py` as ever, reading a tree nobody else can write."""
+    import argparse
+    import os88soak
+    try:
+        slot, info = os88soak.freeze(argparse.Namespace(
+            tier=a.tier, k=a.k, exclude=a.exclude))
+    except RuntimeError as e:
+        sys.stderr.write("os88test: --frozen: %s\n" % e)
+        return 1
+    env = os88soak.frozen_env(slot, info)
+    env.pop("OS88_SOAK_HOME", None)     # the rows' own HOME is theirs
+    env.pop("OS88_SOAK_INFO", None)
+    argv = [x for x in sys.argv[1:] if x != "--frozen"]
+    sys.stdout.flush()
+    return subprocess.call([sys.executable,
+                            os.path.join(slot, "tools", "os88test.py")] + argv,
+                           cwd=slot, env=env)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Run the os8088 regression suite.",
@@ -1473,7 +1645,15 @@ def main():
                          "(contents, not mtimes; kept in build/testcache/). "
                          "`full` and `soak` never use the cache. "
                          "OS88_TESTCACHE=0 does the same as this flag.")
+    ap.add_argument("--frozen", action="store_true",
+                    help="run in a SNAPSHOT of this checkout, as "
+                         "`os88soak.py start` does (docs/plans/"
+                         "SOAK-PARALLEL.md 14.4): edits, commits and `make` "
+                         "here cannot reach the rows while they run")
     a = ap.parse_args()
+    if a.frozen and not (a.tier == "soak" and not a.k and not a.list
+                         and not a.user_asked):
+        return _run_frozen(a)
     scratch_tmpdir()
 
     import suite

@@ -1,6 +1,6 @@
 # Large LZ4 — decompression past 64KB, in one stream
 
-> **STATUS: THE CORE HAS LANDED, AND TWO OPTIONS ARE DEFERRED BY DECISION.**
+> **STATUS: THE CORE HAS LANDED; OF THE TWO OPTIONS DEFERRED BY DECISION, §4.1 HAS SINCE LANDED.**
 > The kernel decoder, the published cell, the parts carve and the host
 > encoders all cross 64KB now. SPEC.md is the contract for what shipped:
 > §20.13.3, §20.14.5.2, §20.14.5.3 and §20.12.11. This file keeps four
@@ -9,8 +9,8 @@
 > - **why** one stream and not split volumes (§2);
 > - the **consumers** that were bent by the old limits (§3) — two converted,
 >   the rest follow-ups;
-> - the **two options the owner decided not to take now** (§4.1 and §4.2),
->   costed and explained, so whoever revisits them starts from the arithmetic;
+> - the **two options the owner decided not to take at first** (§4.1 and
+>   §4.2), costed and explained - §4.1 has since landed (SPEC.md §20.12.15);
 > - two things considered and **not recommended** (§4.3 and §4.4).
 >
 > Figures marked *estimate* were not prototyped. Every other figure was
@@ -114,7 +114,17 @@ SPEC.md §20.12.7.4 lifted it.
 
 ## 4. Options
 
-### 4.1 DEFERRED — a single part past 65,024 bytes (estimate +60–90 package bytes)
+### 4.1 LANDED — a single part past 65,024 bytes (`OP_BIG`, SPEC.md §20.12.15)
+
+> **Landed 2026-11-14 as a row flag, `OP_BIG`, rather than as wider fields for
+> every row.** The high bits went where this section proposed — the `kind`
+> byte — but behind flags bit 7, so the 32-bit arms are derived from the
+> table like every other feature of the standard and **every package without
+> an `OP_BIG` row assembles to the byte it did** (all 280 images and binaries
+> `make` builds, compared by hash). SPEC.md §20.12.15 is the contract and
+> `tests/multiseg.py --big` (`make msegb`) the gate. The text below is the
+> costing as it was written.
+
 
 **What the limit is.** One row of a part table describes at most 65,024 bytes
 (`OP_PARTMAX`, 127 sectors). Its `len` and `zkb` are words, and `op_size`

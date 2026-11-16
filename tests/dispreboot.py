@@ -312,6 +312,7 @@ def main():
                     break
                 if st["cycles"] != last:
                     last, moved = st["cycles"], time.time()
+                # host: a STALL detector - the cycle count standing still
                 elif time.time() - moved > 10.0:
                     break
                 if st["state"] != "breakpoint":     # state_name(), NOT the

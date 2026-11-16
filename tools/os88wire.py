@@ -136,7 +136,10 @@ WIRE_CELL_LEVELS = ()
 # 19.7.1.1) was appended at 0x0233: no kernel at PKG_FMT 13 has been released,
 # so the flag day's table is not in the field yet and the new cell joins the
 # same unreleased generation - the end moves, and no row or level is cut.
-WIRE_TABLE_END = 0x0236
+# 0x0239 since OSAPI_MOUSE_REL (SPEC.md 9.14) joined it at 0x0236, the same
+# way: still no release at PKG_FMT 13. 0x023C since OSAPI_KEY_MAP (SPEC.md
+# 9.7.3) joined at 0x0239, the same way again.
+WIRE_TABLE_END = 0x023C
 # ...and the DOOR's (SPEC.md 20.3.4): a rare cell is `int 81h` and an index
 # byte, and a kernel that has no word for an index REFUSES it - CF = 1, AX =
 # 1, the caller's registers kept - rather than jumping anywhere. So a package
@@ -281,10 +284,13 @@ def _pieces(blob):
             n = img[at + os88pkg.PARTS_HDR - 2]
             fid = os88lz.LZ4 if img[at + os88pkg.PART_FMT_AT] == 0 else os88lz.LZB
             for i in range(n):
-                kind, pfl, off, ulen, zkb = struct.unpack_from(
+                b0, pfl, off, ulen, zkb = struct.unpack_from(
                     "<BBHHH", img, at + os88pkg.PARTS_HDR + os88pkg.PART_ROW * i)
-                if kind != os88pkg.PK_SEG or pfl & os88pkg.OPF_ZERO or not off:
+                if (os88pkg.row_kind(b0) != os88pkg.PK_SEG
+                        or pfl & os88pkg.OPF_ZERO or not off):
                     continue
+                ulen, pk = os88pkg.row_lens(b0, ulen, zkb, pfl)  # 20.12.15
+                zkb = zkb if pk is None else pk
                 start = off * gran
                 if pfl & os88pkg.OPF_COMP:
                     pieces.append(os88lz.decompress(blob[start:start + zkb],

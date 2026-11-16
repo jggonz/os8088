@@ -162,9 +162,8 @@ def run():
                          "- the package carries a module other than the one "
                          "its vectors were assembled against")
 
-    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
-        m.run()
-        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                          boot="up") as m:  # run + kernel_up
         os88marty.no_saver(m)
         mega = getattr(m, "bochs", False)
         # SEG:OFF linear: on kern_mega (OS88_MEGA) the region, the parts and

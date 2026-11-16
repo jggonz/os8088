@@ -309,10 +309,9 @@ eth_dhcp_wait:
 .rel:
     mov byte [eth_busy], 0
 .look:
-    cmp byte [dhcp_st], DH_BOUND
-    je  .done
-    cmp byte [dhcp_st], DH_FAIL
-    je  .done
+    cmp byte [dhcp_st], DH_BOUND    ; BOUND or FAIL: the last two states, so
+    jae .done                       ; one unsigned compare asks for both (the
+                                    ; %if beside DH_* in dns.inc holds it)
     call OSAPI_GET_TICKS
     sub ax, [eth_dl]
     js  .spin
@@ -487,8 +486,7 @@ eth_pkg:
     jmp short .pop              ; path, which drops a card lock not taken
 .notk:
     mov ax, NETE_VERB
-    stc
-    jmp short .pop
+    jmp short .stc
 .ident:
     call eth_v_ident
     jmp short .pop
@@ -498,7 +496,8 @@ eth_pkg:
     jmp short .pop
 .busy:
     mov ax, NETE_BUSY           ; NOT A FAILURE (netpkg.inc): the other task is
-    stc                         ; in the driver, come back next tick
+.stc:                           ; in the driver, come back next tick
+    stc
     jmp short .pop
 
 ; -----------------------------------------------------------------------------
@@ -543,6 +542,9 @@ eth_vtab:
     dw eth_v_raw                ; 15 NETV_RAW   - the wire is mine (72.22)
     dw eth_v_rawtx              ; 16 NETV_RAWTX - one frame out
     dw eth_v_rawrx              ; 17 NETV_RAWRX - one frame in
+    dw eth_v_udp                ; 18 NETV_UDP   - a package's port (72.24)
+    dw eth_v_udptx              ; 19 NETV_UDPTX - one datagram out
+    dw eth_v_udprx              ; 20 NETV_UDPRX - one datagram in
 eth_vtab_end:
 %if (eth_vtab_end - eth_vtab) / 2 != NETV_MAX + 1
   %error "ether: the verb table and NETV_MAX disagree"
@@ -569,27 +571,24 @@ eth_v_state:
     push bx
     push cx
     push dx
-    push si
     call eth_pump
     mov dl, NSTF_PORT           ; a card was found, or we would not be here
-    mov si, eth_ip
-    call ip_zero
+    mov ax, [eth_ip]            ; ip_zero's question, asked in place: AX is
+    or  ax, [eth_ip+2]          ; the answer's and free until it is built
     jz  .noip
     or  dl, NSTF_LINK | NSTF_SOCK
 .noip:
     xor dh, dh
-    xor al, al
-    mov cx, NET_SOCKS
+    mov bx, sk_tab              ; BX walks the records (tcp.inc's SK_NEXT,
+    mov cx, NET_SOCKS           ; which is not defined yet here)
 .l:
-    call sk_ptr
     cmp byte [bx+SKO_ST], NSK_FREE
     jne .next
     inc dh
 .next:
-    inc al
+    sub bx, -SK_SZ
     loop .l
     mov ax, dx                  ; AL = DL, the flags; AH = DH, the count
-    pop si
     pop dx
     pop cx
     pop bx

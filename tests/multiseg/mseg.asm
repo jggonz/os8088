@@ -77,10 +77,21 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
   %define MS_LF 0
 %endif
 
+; MSEG_BIG=1 puts OP_BIG on parts 1, 2 and 6 (SPEC.md 20.12.15), and the
+; Makefile pads each past 64KB (`make msegb`): one PLAIN row and one row that
+; is compressed in the -DMSEG_COMP build in the carve, so op_unpack moves a
+; plain row past 64KB down through a compressed carve, and a lazy row past
+; 64KB for op_fetch - compressed with MSEG_LZC, moved down without
+%ifdef MSEG_BIG
+  %define MS_BF OP_BIG
+%else
+  %define MS_BF 0
+%endif
+
     OS88_PARTS_BEGIN MS_PARTS
       OS88_PART OP_SEG, MS_ZF           ; 0 code
-      OS88_PART OP_SEG                  ; 1 code
-      OS88_PART OP_ASSET, MS_ZF         ; 2 data - and `kind` changes NOTHING
+      OS88_PART OP_SEG, MS_BF           ; 1 code
+      OS88_PART OP_ASSET, MS_ZF | MS_BF ; 2 data - and `kind` changes NOTHING
                                         ;   about how it is claimed or read
                                         ;   here, which is deliberate: it is
                                         ;   the package's own note about what
@@ -103,7 +114,8 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
                                         ;   because os88pkg.py requires it:
                                         ;   the span that goes up has to be
                                         ;   contiguous
-      OS88_PART OP_SEG, OP_LAZY | MS_LF ; 6 NOT CLAIMED AND NOT READ AT LOAD.
+      OS88_PART OP_SEG, OP_LAZY | MS_LF | MS_BF
+                                        ; 6 NOT CLAIMED AND NOT READ AT LOAD.
                                         ;   op_size steps over its row, so it
                                         ;   is in no total and outside the
                                         ;   carve, and op_fetch claims and

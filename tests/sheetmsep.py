@@ -60,12 +60,14 @@ def main():
     S = os88sym.linear
     sym = pkg_syms("apps/sheet/sheet.asm")
     got = {}
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
@@ -82,9 +84,9 @@ def main():
             mo.to(x + wcell // 2, y0 + 18 + 7)
             x += wcell
             mo._edge(True)
-            M.settle(m)
+            SF.held(m)
             mo.to(*park, l=True)
-            M.settle(m)
+            SF.held(m)
             px1, py1 = word("sh_mrx1"), word("sh_mry1")
             px2, py2 = word("sh_mrx2"), word("sh_mry2")
             n = word("sh_mcnt")

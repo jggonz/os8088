@@ -119,7 +119,18 @@ def main():
 
             os88marty.until(m, lambda mm: u16(m.read(base + syms["vp_ploads"],
                                                      2)) >= 1,
-                            "the poster", poll=0.3, limit=300, guest=60)
+                            "the poster", poll=0.05, limit=300, guest=60)
+            # ...AND THE LAYOUT IT OWES. The poster is the worker's and the
+            # resize to the clip is the wake's (vp_relay, "the wake owes a
+            # layout and a resize"), so on a loaded box the poster can land
+            # first: a full soak read the window at the player's OPENING
+            # 658x275, aimed the pointer 150 px right of that and off a
+            # 720-wide screen. The flag clears just before the resize runs,
+            # so the rect is then held to two still readings as well
+            os88marty.until(m, lambda mm: rb("vp_relay") == 0,
+                            "the layout the open owes", poll=0.05,
+                            limit=120, guest=20)
+            os88marty.quiesce(m, rect, what="the window at the clip's size")
             x0, y0, w0, h0 = rect()
             # 418 wide: 45 characters, so 'Video Player - ' + 35 does not fit
             says("Video - " + TITLE, "at %d wide" % w0)
@@ -135,7 +146,7 @@ def main():
             m.type_text("i")
             os88marty.until(m, lambda mm: rb("vp_card") == 1 and
                             rect()[2] > w0, "the card open and the window "
-                            "grown", poll=0.3, limit=120, guest=20)
+                            "grown", poll=0.05, limit=120, guest=20)
             os88marty.pace(m, 2.0)
             x1, y1, w1, h1 = rect()
             says("Video Player - " + TITLE, "at %d wide" % w1)
@@ -155,11 +166,11 @@ def main():
             # the pointer far away
             m.type_text("i")
             os88marty.until(m, lambda mm: rb("vp_card") == 0 and
-                            rect()[2] == w0, "the card closed", poll=0.3,
+                            rect()[2] == w0, "the card closed", poll=0.05,
                             limit=120, guest=20)
             m.type_text("i")
             os88marty.until(m, lambda mm: rb("vp_card") == 1 and
-                            rect()[2] == w1, "the card open again", poll=0.3,
+                            rect()[2] == w1, "the card open again", poll=0.05,
                             limit=120, guest=20)
             os88marty.pace(m, 2.0)
             _, _, ref = m.vram(None)

@@ -102,7 +102,7 @@ def kill_stale():
     if os.path.exists(PIDFILE):
         try:
             os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            time.sleep(1)       # host: a stale process's exit
         except Exception:
             pass
     for f in (SOCK, PIDFILE):

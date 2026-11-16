@@ -20,7 +20,7 @@ below were read off the tool at the last bless.
 | | rule | guard |
 |---|---|---|
 | 1 | **`kern_big` fully RESIDES in 100KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 100,864, plus `tests/kernresident.py` |
-| 2 | **`kern_small` fully RESIDES in 64KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 64,000, plus `tests/small128.py`'s no-pinned-claim check (the keyboard mouse's 512 excepted, and charged) |
+| 2 | **`kern_small` fully RESIDES in 64KB** once it is at the desktop, **and its 128KB machine's heap stays 70.5KB** (`HEAP_SEG` <= 0x0E60, LOCKED - the owner, 2026-11-15) | guard 1, `KERN_BUDGET` = 64,000, plus `tests/small128.py`'s no-pinned-claim check (the keyboard mouse's 512 excepted, and charged); guard 1b, `KERN_SMALL_HEAP_SEG`, with **no** branch grace |
 | 3 | **BOTH BOOT on 128KB** | guard 5, `MIN_RAM_KB` = 128, plus `tests/small128.py` and `tests/kernresident.py` on the 128KB machine |
 | 4 | **`kern_mega` RESIDES in 68KB of CONVENTIONAL memory** once it has switched, and **BOOTS on a 1MB machine's 640KB** | guard 1's mega arm, `KERN_BUDGET` = 68,096 against `MEGA_RESIDENT`; guard 5's mega arm, `MEGA_BOOT_KB` = 640 |
 
@@ -136,6 +136,7 @@ shutdown screen retains the module only after the OS stops.
 | name | what it bounds | can it be raised? |
 |---|---|---|
 | **`KERN_BUDGET`** (guard 1) | the **footprint** — the whole contiguous span from `KERNEL_SEG` to `KERN_END`, RAM taken from the machine; on kern_mega `MEGA_RESIDENT`, that span less the two rungs that go above 1MB | only by the owner, as a rework of rules 1, 2 and 4. `KERN_GRACE` lets branch work run 2KB over |
+| **`KERN_SMALL_HEAP_SEG`** (guard 1b) | kern_small's **heap rung**: `HEAP_SEG` at or under 0x0E60, so a 128KB machine has 70.5KB of heap. `KERN_BUDGET` cannot see it - it showed 6KB spare while 44 bytes of new cells had already cost the heap a 512-byte step and broken `tests/smallfrag.py` | **no** (the owner, 2026-11-15: take the bytes back, do not move the line). No grace; a knob build is exempt |
 | **`KERN_CODE_MAX`** (guard 2) | the **segment** — `.text` + `.bss` in one 64KB window | **no.** It is what a 16-bit offset reaches |
 | **`MIN_RAM_KB`** (guard 5) | the smallest machine the kernels **boot** on, 128KB for both; kern_mega's arm is `MEGA_BOOT_KB`, the 640KB conventional half of its 1MB floor | only by the owner |
 

@@ -378,6 +378,57 @@ op_size:
     jnz .have
     mov bx, ax                  ; the first filed row anchors the run
 .have:
+%if OP_HAS_BIG
+    ; --- THE SAME ROW IN 32 BITS (SPEC.md 20.12.15) --------------------------
+    ; What the arm below does with words, with the lengths op_lenx and op_pkx
+    ; answer. DX is the run's end and is banked: both helpers answer in it
+    push dx
+    push cx
+    push ax                     ; the row's first granule
+%if OP_HAS_COMP
+    call op_lenx                ; the UNPACKED total, which the claim is cut
+    call op_gr                  ; from (SPEC.md 20.12.7)
+    jc .ovfb
+    add [op_usecs], ax
+    jc .ovfb
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz .bclen
+    inc byte [op_zn]
+.bclen:
+%endif
+    call op_pkx                 ; ...and the DISK extent, exactly: op_bend
+    mov [op_bend], ax
+    mov [op_bendh], dx
+    call op_gr                  ; ...and in granules
+    jc .ovfb
+    xchg ax, cx                 ; CX = them
+    pop ax
+    push ax
+    sub ax, bx                  ; granules from the run's start, as bytes
+    mov dx, ax                  ; in 32 bits, onto op_bend
+    push cx
+    mov cl, OP_GSH
+    shl ax, cl
+    mov cl, 16 - OP_GSH
+    shr dx, cl
+    pop cx
+    add [op_bend], ax
+    adc [op_bendh], dx
+    pop ax
+    add ax, cx                  ; one past this row
+    pop cx
+    pop dx
+    jc .bad
+    cmp ax, dx
+    jbe .next
+    mov dx, ax
+    jmp .next
+.ovfb:
+    pop ax
+    pop cx
+    pop dx
+    jmp .bad
+%else
     push cx
     push ax
 %if OP_HAS_COMP
@@ -443,6 +494,7 @@ op_size:
                                 ; the padding after the last body - and
                                 ; subtracted again in op_claim, which counted
                                 ; it twice
+%endif                              ; OP_HAS_BIG
 %if OP_HAS_ZERO
 .scratch:
     push ax
@@ -952,6 +1004,94 @@ op_unpack:
     jnz .zfill                  ; two streams and the zeros round them
 %endif
 
+%if OP_HAS_BIG
+    ; --- THE SAME WALK IN 32 BITS (SPEC.md 20.12.15) -------------------------
+    call op_unpto               ; ES = the landing, BX = the stream
+    jc .refuse
+    push bx                     ; the stream's segment, for after the lengths
+    call op_lenx
+    push dx
+    push ax                     ; the UNPACKED length...
+    call op_pkx
+    mov cx, ax                  ; ...and the PACKED one, AH:CX - read here,
+    mov ah, dl                  ; where op_table is still DS's
+    mov al, [op_table + OP_T_FMT]
+    or al, OSAPI_LZ_BIG
+    pop dx
+    pop bx                      ; BX:DX = the exact output, 32 bits
+    pop di
+    push ds
+    mov ds, di
+    xor si, si
+    xor di, di
+    call OSAPI_DECOMP
+.zjoin:
+    pop ds
+    push ds
+    pop es
+    jc .refuse
+    jmp short .bstep
+.plain:                         ; --- or move it down, OP_CHUNK at a time -----
+    call op_lenx                ; DX:AX = the bytes still to move
+    push bp                     ; the two pointers, which the pieces advance
+    push word [op_zsrc]         ; and the step below advances again WHOLE
+.pc:
+    mov cx, ax
+    or dx, dx
+    jnz .pfull
+    cmp ax, OP_CHUNK
+    jbe .pgo
+.pfull:
+    mov cx, OP_CHUNK
+.pgo:
+    jcxz .pend
+    sub ax, cx
+    sbb dx, 0
+    push dx
+    push ax
+    push cx
+    call op_unpto               ; ES = the landing, BX = the stream, aimed at
+    pop cx                      ; this piece (AX, BX, DX gone)
+    jc .prf
+    push ds
+    push si
+    mov ds, bx
+    xor si, si
+    xor di, di
+    cld
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
+    pop si
+    pop ds
+    add bp, OP_CHUNK >> 4
+    add word [op_zsrc], OP_CHUNK >> 4
+    pop ax
+    pop dx
+    jmp short .pc
+.prf:
+    pop ax
+    pop dx
+    pop word [op_zsrc]
+    pop bp
+    jmp .refuse
+.pend:
+    pop word [op_zsrc]
+    pop bp
+    push ds
+    pop es
+.bstep:
+    pop si
+    push si
+    call op_pkx                 ; the READ pointer by the packed length...
+    call op_gr
+    add [op_zsrc], ax
+    call op_lenx                ; ...and the landing by the unpacked one, both
+    call op_gr                  ; in granules - op_size has already proved
+                                ; neither reaches a megabyte; the ADD after
+                                ; the arms is both arms'
+%else
     call op_unpto               ; ES = the landing, BX = the stream
     jc .refuse                  ; (no window: op_at)
     mov cx, [si+OP_R_ZKB]       ; --- expand it ------------------------------
@@ -1008,6 +1148,7 @@ op_unpack:
     and ax, -OP_GRAN
     mov cl, 4
     shr ax, cl
+%endif                              ; OP_HAS_BIG
     add bp, ax
     pop si
     pop cx
@@ -1476,11 +1617,18 @@ op_seg:
     jne .zwnext                 ; it went above 1MB
 .zwadd:
     push ax
+%if OP_HAS_BIG
+    push dx
+    call op_lenx                ; the UNPACKED length, 20 bits (20.12.15)
+    call op_gr
+    pop dx
+%else
     mov ax, [si+OP_R_LEN]       ; the UNPACKED length, rounded to a granule
     add ax, OP_GRAN - 1
     and ax, -OP_GRAN
     mov cl, 4
     shr ax, cl
+%endif
     add dx, ax
     pop ax
 .zwnext:
@@ -1822,6 +1970,19 @@ op_lazyp:
     dec bx
     and bx, ax                  ; BX = the head slack: a cluster size is a
                                 ; power of two
+%if OP_HAS_BIG
+    call op_pkx                 ; the read in 32 bits (SPEC.md 20.12.15)...
+    add ax, bx
+    adc dx, 0
+    mov bx, [op_clb]
+    dec bx
+    add ax, bx
+    adc dx, 0
+    not bx
+    and ax, bx                  ; ...rounded to whole clusters...
+    call op_gr                  ; ...in paragraphs, refused past a word
+    jc .no
+%else
     OP_RDLEN                    ; a COMPRESSED row reads its packed length...
     add ax, bx
     jc .no
@@ -1833,6 +1994,7 @@ op_lazyp:
     and ax, dx                  ; ...rounded to whole clusters, the slot's
     mov cl, 4                   ; other precondition: the READ, in paragraphs
     shr ax, cl
+%endif
 %if OP_HAS_ZLAZY
     OP_JPLAIN .para
     mov dx, ax                  ; ...and R paragraphs UP the claim, which is
@@ -1971,8 +2133,13 @@ op_fetch:
     mov bx, MEMP_CONV           ; MEMP_CONV: CONVENTIONAL on every kernel
     xor cx, cx                  ; whatever the header says, as the fetch
 %ifdef OP_WANT_ASSETHI          ; below adds paragraphs to the base - which
-    cmp byte [si+OP_R_KIND], OP_ASSET   ; is why it was the DMA door with no
-    jne .lodoor                 ; head and not OSAPI_MEM_CLAIM. A LAZY ASSET
+%if OP_HAS_BIG                  ; is why it was the DMA door with no
+    test byte [si+OP_R_KIND], OP_KIND   ; head and not OSAPI_MEM_CLAIM. A LAZY
+    jz .lodoor                  ; ASSET - `kind` is bit 0 there (20.12.15)
+%else
+    cmp byte [si+OP_R_KIND], OP_ASSET
+    jne .lodoor                 ; A LAZY ASSET
+%endif
     inc bx                      ; FROM THE CEILING, when the package asks
 .lodoor:                        ; (SPEC.md 20.12.4.1): MEMP_CLAIM_HI, the
 %endif                          ; verb's bit 0 being only the direction
@@ -1993,6 +2160,22 @@ op_fetch:
     sbb dx, 0
     mov [op_off], ax
     mov [op_off+2], dx
+%if OP_HAS_BIG
+    push bx                     ; the slack, which the 32-bit sum needs a
+    call op_pkx                 ; register for (SPEC.md 20.12.15)
+    add ax, bx
+    adc dx, 0
+    mov [op_want], ax           ; what op_read must see arrive, in 32 bits
+    mov [op_want+2], dx
+    mov bx, [op_clb]
+    dec bx
+    add ax, bx
+    adc dx, 0
+    not bx
+    and ax, bx
+    call op_gr                  ; in paragraphs: op_lazyp has proved it fits
+    pop bx
+%else
     OP_RDLEN                    ; A COMPRESSED ROW READS ITS PACKED LENGTH and
                                 ; expands to OP_R_LEN below (SPEC.md 20.12.7.4)
     add ax, bx                  ; op_lazyp has already proved that neither of
@@ -2007,6 +2190,7 @@ op_fetch:
     and ax, dx
     mov cl, 4
     shr ax, cl                  ; in paragraphs, as op_read counts
+%endif
     mov [op_cap], ax
 
     ; THE CARVE'S READ WORDS ARE BORROWED AND PUT BACK. op_read reads
@@ -2086,12 +2270,24 @@ op_fetch:
     call op_ata                 ; op_read has finished with op_wa)
     jc .zw                      ; (no window: op_at - the stack is .zw's)
     mov di, ax                  ; ...as a segment, through a window
+%if OP_HAS_BIG
+    call op_lenx                ; BX:DX = the expected output, 20 bits
+    mov bx, dx
+    push ax
+    call op_pkx                 ; AH:CX = the packed length (SPEC.md 20.12.15)
+    mov cx, ax
+    mov ah, dl
+    mov al, [op_table + OP_T_FMT]
+    or al, OSAPI_LZ_BIG
+    pop dx
+%else
     mov cx, [si+OP_R_ZKB]       ; CX = the PACKED length, while it is still
     mov ax, [si+OP_R_LEN]       ; there - one more store and it is a segment
     mov dx, ax                  ; BX:DX = the 32-bit expected output, and a
     xor bx, bx                  ; part is 16 bits by os88pkg.py
     mov al, [op_table + OP_T_FMT]   ; THE FORMAT, READ BEFORE DS MOVES: one
     xor ah, ah                      ; instruction later op_table is
+%endif
     pop si                          ; unreachable, which op_unpack's own
     pop es                          ; header records as the defect that
     push es                         ; refused every stream. ES = the claim
@@ -2134,6 +2330,17 @@ op_fetch:
     mov cl, 4
     shr ax, cl                  ; AX = the slack in paragraphs
     jz .keep                    ; ...none: the part is at the base already
+%if OP_HAS_BIG
+    push dx                     ; the claim, kept across the copy
+    push dx                     ; SOURCE: the claim, the slack up it
+    push ax
+    push dx                     ; DESTINATION: the claim, its base
+    xor ax, ax
+    push ax
+    call op_bmove               ; OP_CHUNK at a time (SPEC.md 20.12.15)
+    pop dx
+    jc .ioerr
+%else
     mov es, dx                  ; ES:DI the claim's base...
     push dx
     call op_ata                 ; AX = the slack's paragraphs up the claim
@@ -2152,6 +2359,7 @@ op_fetch:
     rep movsb                   ; REP MOVSW does not touch
     pop si
     pop ds
+%endif                              ; OP_HAS_BIG
 %endif
 .keep:
     ; --- AND KEEP THE PART AND NOTHING ELSE (SPEC.md 88.10.4.1, 20.12.7.4.4)
@@ -2165,11 +2373,16 @@ op_fetch:
     ; stands. CF is not read: a refused shrink leaves the claim as it was,
     ; which is only the cost it had before.
     push dx                     ; the claim, which IS the part's base now
+%if OP_HAS_BIG
+    call op_lenx                ; `len` in PARAGRAPHS, 20 bits (20.12.15)
+    call op_gr
+%else
     mov ax, [si+OP_R_LEN]
     add ax, 15                  ; `len` in PARAGRAPHS, rounded up - the RCR
     rcr ax, 1                   ; takes the carry back in, so a part near 64KB
     mov cl, 3                   ; keeps its 17th bit - and the kernel rounds
     shr ax, cl                  ; that to the GRANULE, where the KB door
+%endif
     mov bl, MEMP_REGROW         ; rounded it to a KB: up to half a KB of
     call OSAPI_MEM_P            ; every fetched part back (SPEC.md 50.3.7). DX
     pop ax                      ; = the claim, and a shrink keeps it there
@@ -2234,11 +2447,16 @@ op_hilift:
     pop ax
     jz .out                     ; real mode: no claim is above 1MB
     push ax
+%if OP_HAS_BIG
+    call op_lenx
+    call op_gr
+%else
     mov ax, [si+OP_R_LEN]
     add ax, 15
     rcr ax, 1
     mov cl, 3
-    shr ax, cl                  ; AX = the part's paragraphs: a plain claim,
+    shr ax, cl
+%endif                          ; AX = the part's paragraphs: a plain claim,
                                 ; no MEMP_CONV, so the pool's block above 1MB
                                 ; (SPEC.md 50.3.7)
     mov bl, MEMP_CLAIM
@@ -2253,6 +2471,20 @@ op_hilift:
     pop dx
     pop ax
     jb .back
+%if OP_HAS_BIG
+    push ax                     ; THE OLD CLAIM, and the copy is op_bmove's
+    push dx                     ; ...the new one
+    push ax                     ; SOURCE: the old claim's base
+    xor cx, cx
+    push cx
+    push dx                     ; DESTINATION: the new one's
+    push cx
+    call op_bmove               ; (ES ends on DS: the caller's ES is not ours
+    pop dx                      ;  to keep - op_fetch clobbers it)
+    pop ax
+    jc .back                    ; no window: the part stays in the old claim
+                                ; (AX) and the NEW one (DX) goes back
+%else
     push si
     push ds
     mov cx, [si+OP_R_LEN]       ; read BEFORE DS moves
@@ -2267,6 +2499,7 @@ op_hilift:
     rep movsb
     pop ds
     pop si
+%endif
     xchg ax, dx                 ; AX = the new claim, DX = the old one...
 .back:
     call OSAPI_MEM_FREE         ; ...which goes back (or the conventional
@@ -2374,6 +2607,129 @@ op_row:
     add si, op_table + OP_T_ROWS
     pop ax
     ret
+
+%if OP_HAS_BIG
+; GATED (SPEC.md 20.12.15): a row's lengths in 32 bits - only a table with an
+; OP_BIG row (or OP_WANT_BIG, for OS88_REHOME) carries these, and every row
+; reads through them there: a row without the flag has zeros in the bits
+
+; op_lenx - DX:AX = row SI's UNPACKED length. Every other register kept
+op_lenx:
+    mov ax, [si+OP_R_LEN]
+    mov dl, [si+OP_R_KIND]
+    and dx, 0F0h                ; bits 4-7 are `len`'s 16-19 (DH is cleared
+    push cx                     ; by the AND's high byte being 0)
+    mov cl, 4
+    shr dx, cl
+    pop cx
+    ret
+
+; op_pkx - DX:AX = the bytes row SI holds ON THE DISK: the packed length on an
+; OP_COMP row, `len` on a plain one. Every other register kept
+op_pkx:
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz op_lenx
+    mov ax, [si+OP_R_ZKB]
+    mov dl, [si+OP_R_KIND]
+    and dx, 0Eh                 ; bits 1-3 are the packed length's 16-18
+    shr dx, 1
+    ret
+
+; op_gr - AX = DX:AX bytes in PARAGRAPHS, rounded up; CF=1 = a megabyte or
+; more, which no word of paragraphs holds. DX clobbered, the rest kept
+op_gr:
+    add ax, 15
+    adc dx, 0
+    test dx, 0FFF0h
+    stc
+    jnz .r
+    push cx
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx                   ; ...and OR clears CF
+    pop cx
+.r:
+    ret
+%endif
+
+%if OP_HAS_BIG && OP_HAS_FETCH
+; -----------------------------------------------------------------------------
+; op_bmove - row SI's `len` bytes from one place to another, OP_CHUNK at a time
+; in:  SI -> the row; pushed in this order: the SOURCE claim, its paragraphs,
+;      the DESTINATION claim, its paragraphs. Returns `ret 8`.
+; out: CF=0; CF=1 = op_at had no window
+; clobbers: AX, BX, CX, DX, DI, ES, flags
+;
+; A FORWARD copy, so it is safe DOWN over an overlap (op_fetch's move-down:
+; the writer is always below the reader) and across two claims (op_hilift).
+; Both ends go through op_at's windows, re-aimed each piece, because a part
+; past 64KB is past any one segment's reach - and under kern_mega's protected
+; mode past any one selector's (SPEC.md 20.12.15)
+; -----------------------------------------------------------------------------
+op_bmove:
+    ; STKBALANCE-NET: -4 - `ret 8` takes its four argument words off the caller's stack
+    push bp
+    mov bp, sp                  ; [bp+4] dst paragraphs, [bp+6] dst claim,
+    call op_lenx                ; [bp+8] src paragraphs, [bp+10] src claim
+.c:
+    mov cx, ax
+    or dx, dx
+    jnz .f
+    cmp ax, OP_CHUNK
+    jbe .g
+.f:
+    mov cx, OP_CHUNK
+.g:
+    jcxz .ok
+    sub ax, cx
+    sbb dx, 0
+    push dx
+    push ax
+    push cx
+    mov ax, [bp+4]
+    mov dx, [bp+6]
+    mov bx, op_wb
+    call op_at
+    jc .e
+    mov es, ax
+    mov ax, [bp+8]
+    mov dx, [bp+10]
+    mov bx, op_wa
+    call op_at
+    jc .e
+    pop cx
+    push ds
+    push si
+    mov ds, ax
+    xor si, si
+    xor di, di
+    cld
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
+    pop si
+    pop ds
+    add word [bp+4], OP_CHUNK >> 4
+    add word [bp+8], OP_CHUNK >> 4
+    pop ax
+    pop dx
+    jmp short .c
+.ok:
+    clc
+    jmp short .out
+.e:
+    pop cx                      ; the three words .c banked, CF = op_at's 1
+    pop ax                      ; kept: POP touches no flag
+    pop dx
+.out:
+    push ds
+    pop es
+    pop bp
+    ret 8
+%endif
 
 %ifdef OP_ONMOVE
 ; -----------------------------------------------------------------------------
@@ -2515,6 +2871,29 @@ op_carvemv:
 ; separately did not.
 ; -----------------------------------------------------------------------------
 op_zrpara:
+%if OP_HAS_BIG
+    push bx                     ; the same in 32 bits (SPEC.md 20.12.15):
+    push cx                     ; roundup512(len - packed), in paragraphs
+    push dx
+    call op_pkx
+    xchg ax, cx
+    mov bx, dx
+    call op_lenx
+    sub ax, cx
+    sbb dx, bx
+    add ax, 511
+    adc dx, 0
+    and ax, 0FE00h
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
     push cx
     mov ax, [si+OP_R_LEN]
     sub ax, [si+OP_R_ZKB]       ; os88pkg.py refuses a part that does not get

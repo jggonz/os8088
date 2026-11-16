@@ -528,14 +528,13 @@ def main():
         fails.append("no History cell in the menu bar")
     else:
         before_h = len(srv.log)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "down",
-                        str(hx), "6"], check=True, capture_output=True)
-        os88qemu.pace(m, 0.5)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "to",
-                        str(hx), "26"], check=True, capture_output=True)
-        os88qemu.pace(m, 0.5)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "up"],
-                       check=True, capture_output=True)
+        # CLOSED LOOP (ethernet.Mouse.run: each edge and move confirmed off
+        # the kernel's words), each pause a ui_done capped at the old one
+        Mouse().run("down", hx, 6)
+        os88qemu.ui_done(m, S, cap=0.5)
+        Mouse().run("to", hx, 26)
+        os88qemu.ui_done(m, S, cap=0.5)
+        Mouse().run("up")
         wait_done("History > Page A")
         print("after History > item 0: histi=%d, +%d request(s), last %r"
               % (rw("br_histi"), len(srv.log) - before_h,
@@ -875,14 +874,11 @@ def main():
         # for this app it is 134, and 40 - the first version's guess - is the
         # CHIP menu.
         nwin = len(dispcp.win_list(m, S))
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "down", "134", "8"],
-                       check=True, capture_output=True)
-        os88qemu.pace(m, 0.4)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "to", "134", "62"],
-                       check=True, capture_output=True)
-        os88qemu.pace(m, 0.4)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "up"],
-                       check=True, capture_output=True)
+        Mouse().run("down", 134, 8)         # (closed loop, as History's)
+        os88qemu.ui_done(m, S, cap=0.4)
+        Mouse().run("to", 134, 62)
+        os88qemu.ui_done(m, S, cap=0.4)
+        Mouse().run("up")
         # the DIALOG is a window, so it is its own answer; and half a second
         # more of the machine before its field is typed into
         if os88qemu.acted(m, lambda: len(dispcp.win_list(m, S)) > nwin,

@@ -39,7 +39,18 @@ MSEGLZ = Syms("tests/multiseg/mseg.asm", "build/mseglz.bin",
               ["apps", "tests/multiseg"], defines=("MSEG_LZC",))
 
 
-def sym(name, comp=False):
+# ...and built -DMSEG_BIG, OP_BIG on parts 1, 2 and 6 (SPEC.md 20.12.15) -
+# plain, and with OP_COMP on parts 0, 2 and 6
+MSEGB = Syms("tests/multiseg/mseg.asm", "build/msegb.bin",
+             ["apps", "tests/multiseg"], defines=("MSEG_BIG",))
+MSEGBZ = Syms("tests/multiseg/mseg.asm", "build/msegbz.bin",
+              ["apps", "tests/multiseg"],
+              defines=("MSEG_BIG", "MSEG_COMP", "MSEG_LZC"))
+
+
+def sym(name, comp=False, big=False):
+    if big:
+        return (MSEGBZ if comp else MSEGB).sym(name)
     return (MSEGZ if comp else MSEG).sym(name)
 
 

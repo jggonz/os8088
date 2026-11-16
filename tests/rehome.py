@@ -124,9 +124,8 @@ def UD(m, **_):            # every read below is guest memory
     return os88marty.ui_done(m)
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
-    m.run()
-    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot="up") as m:  # the boot gate on STATE: cacheable
     os88marty.no_saver(m)
     S = m.sym
     mo = os88mouse.Mouse(marty=m)

@@ -308,6 +308,10 @@ X apps/os88pself.inc @op_self           # op_self hands its claim to the CALLER
                                          # the page is up
 C apps/wirefleet/wfsound.inc op:WF_P_SFX # the samples part, fetched and dropped
                                          # inside wf_pcm_open's one call
+C apps/wirearena/wirearena.asm @wa_loadarena # an arena part, fetched, read
+                                         # into both halves and dropped inside
+                                         # wa_loadarena's one call (the Game
+                                         # menu's command, before the bracket)
 C apps/c64/c64kbd.c ovl_clip_service:seg # Copy's staging, claimed and freed
                                          # inside one wake (Paste's queue in the
                                          # same function declares)

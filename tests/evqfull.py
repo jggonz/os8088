@@ -44,14 +44,23 @@ EVT_MDOWN = 1
 EVT_WAKE = 4
 
 
-def stub(sym, at, rec, n, cli=False):
-    """mov si,rec / mov cx,n / .l: call evq_push / inc [si+EV_A] / loop / hlt
+def stub(sym, at, rec, cli=False):
+    """mov si,rec / mov cx,[rec+8] / .l: call evq_push / inc [si+EV_A] / loop
+    / jmp $
+
+    THE COUNT IS DATA, NOT AN IMMEDIATE, so the stub is the SAME BYTES on
+    every run. It was `mov cx, n`, rewritten per run - and Bochs's decoded-
+    instruction cache does not see a write through its debugger: the WAKE
+    run (n = 1) executed the previous run's `mov cx, 20`, pushed twenty
+    WAKEs (EV_A 1234h up to 1247h, read back) and the twenty MDOWNs after
+    them were all correctly refused, so mega-evqfull failed every time on a
+    kernel doing exactly what SPEC.md 10.1 says. A data write is seen.
 
     `cli` puts a `cli` in front, for a `park` that cannot clear IF itself
     (kern_mega's Bochs, tools/os88megabochs.py's _c_park)."""
     body = bytearray([0xFA]) if cli else bytearray()
     body += bytes([0xBE]) + rec.to_bytes(2, "little")        # mov si, rec
-    body += bytes([0xB9]) + n.to_bytes(2, "little")          # mov cx, n
+    body += bytes([0x8B, 0x0E]) + (rec + 8).to_bytes(2, "little")  # mov cx,
     loop = at + len(body)
     rel = (sym["evq_push"] - (loop + 3)) & 0xFFFF
     body += bytes([0xE8]) + rel.to_bytes(2, "little")        # call evq_push
@@ -65,11 +74,12 @@ def stub(sym, at, rec, n, cli=False):
 def run_pushes(m, sym, at, rec, evtype, first_a, n):
     """Park on the stub and let it push n records of `evtype`, EV_A = first_a.."""
     bochs = getattr(m, "bochs", False)
-    blob, done = stub(sym, at, rec, n, cli=bochs)
+    blob, done = stub(sym, at, rec, cli=bochs)
+    assert done <= rec and rec + 10 <= at + 36, "the stub outgrew fcp_stack"
     m.write((KERNEL_SEG << 4) + at, blob)
     m.write((KERNEL_SEG << 4) + rec,
             evtype.to_bytes(2, "little") + first_a.to_bytes(2, "little")
-            + b"\x00\x00\x00\x00")
+            + b"\x00\x00\x00\x00" + n.to_bytes(2, "little"))
     r = m.regs()
     m.cmd(cmd="park", cs=KERNEL_SEG, ip=at)                  # ...and IF := 0
     ds = 0x10 if bochs else KERNEL_SEG  # kern_mega: MEGA_SEL_KDATA, the
@@ -136,12 +146,11 @@ def main(argv):
                                         # 5.4.1.1), and an offset in LOW_SEG
                                         # poked at KERNEL_SEG lands in the
                                         # middle of the kernel
-    rec = at + 20                       # the 16-byte stub, then the record
+    rec = at + 20                       # the 18-byte stub, then the record
     bad = 0
 
-    with os88marty.launch(a.image, machine=a.machine, boot=False) as m:
-        m.run()                         # the boot gate on STATE, the UI
-        os88marty.kernel_up(m)          # idle (kernel_up ends on ui_done)
+    with os88marty.launch(a.image, machine=a.machine,
+                          boot="up") as m:  # run + kernel_up
         m.pause()
 
         # --- 1. twenty input records, sixteen slots -------------------------

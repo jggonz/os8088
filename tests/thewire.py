@@ -546,7 +546,8 @@ def clip_check(m, mo, slot, shot, no, say):
         # (300, 440) is desktop: below the Wire's frame and left of the zone
         # column.
         mo.run("to", "300", "440")
-        os88qemu.pace(m, 0.6)           # the GUEST's time (os88qemu.py)
+        # every UI paint below: ui_done CAPPED at the old pace (SOAK-SPEED 14)
+        os88qemu.ui_done(m, S, cap=0.6)
         png = os.path.join(tempfile.mkdtemp(), tag + ".png")
         subprocess.run(["python3", "tools/shot.py", SOCK, png],
                        check=True, capture_output=True)
@@ -565,7 +566,7 @@ def clip_check(m, mo, slot, shot, no, say):
         subprocess.run(["python3", "tools/qmp.py", SOCK, "mouse_button 1",
                         "gsleep 0.15"], check=True, capture_output=True)
         mo.run("to", str(bar[0] + dx), str(bar[1]))
-        os88qemu.pace(m, 0.4)
+        os88qemu.ui_done(m, S, cap=0.4)
         wx0 = dispcp.win_rect(m, S, slot)[0]
         subprocess.run(["python3", "tools/qmp.py", SOCK, "mouse_button 0"],
                        check=True, capture_output=True)
@@ -573,9 +574,9 @@ def clip_check(m, mo, slot, shot, no, say):
         # then the repaint it owes, in guest time
         os88qemu.acted(m, lambda: dispcp.win_rect(m, S, slot)[0] != wx0,
                        secs=5, what="the window moving", poll=0.1)
-        os88qemu.pace(m, 1.5)
+        os88qemu.ui_done(m, S, cap=1.5)
         bar = (bar[0] + dx, bar[1])
-    os88qemu.pace(m, 1.5)
+    os88qemu.ui_done(m, S, cap=1.5)
     nx, ny, nw, nh = content(slot)
     px1 = grab("clip-b")
     shot("09-clip-b")
@@ -1301,7 +1302,7 @@ def main():
         mo.click(ox + 40, oy + 19 + 2 * 16 + 8)
         os88qemu.acted(m, lambda: w("wr_sel") == 2, secs=4, what="[wr_sel]",
                        poll=0.1)
-        os88qemu.pace(m, 1.0)               # ...and the predicate behind it
+        os88qemu.ui_done(m, S, cap=1.0)               # ...and the predicate behind it
         shot("03-selected")
         sel, grey = w("wr_sel"), b("wr_grey")[0]
         say("wr_sel = %d, wr_grey = %d" % (sel, grey))
@@ -1360,7 +1361,7 @@ def main():
             press("wr_rb")                       # Add to Disk...
             if os88qemu.acted(m, lambda: chooser_slot() is not None,
                               secs=10, what="the Save chooser", poll=0.25):
-                os88qemu.pace(m, 1.0)           # ...and its first paint
+                os88qemu.ui_done(m, S, cap=1.0)           # ...and its first paint
             shot(tag + "-savedlg")
             slot = chooser_slot()
             if slot is None:
@@ -1373,7 +1374,7 @@ def main():
                 mo.click(*chooser_btn(slot, CH_DRIVE))
                 if os88qemu.acted(m, lambda: chooser_drv() != was, secs=6,
                                   what="the chooser's FS_DRV", poll=0.2):
-                    os88qemu.pace(m, 0.5)       # ...and the listing behind it
+                    os88qemu.ui_done(m, S, cap=0.5)       # ...and the listing behind it
             vol = chooser_drv()
             say("the Save chooser is on volume %d (B: is %d)" % (vol, VOL_B))
             shot(tag + "-onB")
@@ -1428,7 +1429,7 @@ def main():
             wptr = S("wm_wins") + ww * dispcp.WIN_SIZE
             os88qemu.acted(m, lambda: os88geom.top(m, S) == wptr, secs=3,
                            what="the Wire raised", poll=0.1)
-            os88qemu.pace(m, 0.5)               # ...and repainted on top
+            os88qemu.ui_done(m, S, cap=0.5)               # ...and repainted on top
 
         def pick(row):
             raise_wire()
@@ -1438,7 +1439,7 @@ def main():
             # settled() is not satisfied by the state BEFORE it
             os88qemu.acted(m, lambda: w("wr_sel") == row, secs=4,
                            what="[wr_sel] = %d" % row, poll=0.1)
-            os88qemu.pace(m, 1.0)
+            os88qemu.ui_done(m, S, cap=1.0)
             settled()
 
         # --- 6: Add to Disk writes both files -------------------------------
@@ -1615,7 +1616,7 @@ def main():
         cbytes = m.read(c0 * 16, kb2 * 16)
         post(m, ww)
         os88qemu.poke(m.hmp, S("cp_dirty"), b"\x01")  # repaint it all, so the
-        os88qemu.pace(m, 1.5)          # list is counted again out of the claim
+        os88qemu.ui_done(m, S, cap=1.5)          # list is counted again out of the claim
         c1 = w("wr_catseg")
         held = claims(m)
         say("catalog claim: %04X -> %04X after a posted compaction, MC_RLOC "
@@ -1663,7 +1664,7 @@ def main():
         if arc_done and os88qemu.acted(
                 m, lambda: len(dispcp.win_list(m, S)) > len(before), secs=10,
                 what="the archive's window", poll=0.25):
-            os88qemu.pace(m, 1.0)       # ...and the status cell behind it
+            os88qemu.ui_done(m, S, cap=1.0)       # ...and the status cell behind it
         shot("08-fromram")
         after = dispcp.win_list(m, S)
         vols1 = live_vols(m)
@@ -1915,7 +1916,7 @@ def main():
         press("wr_ra")
         os88qemu.pace(m, 0.5)
         settled()
-        os88qemu.pace(m, 1.0)
+        os88qemu.ui_done(m, S, cap=1.0)
         say("OLDHELLO Load: the status cell says %r" % cell())
         if len(dispcp.win_list(m, S)) > len(before):
             no("a package of the previous format OPENED A WINDOW: the loader "

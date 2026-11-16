@@ -420,7 +420,11 @@ built one needed only the shipped kernel and a different fixture.
   SAME script (a row and its `mega-`/`box-` port, two legs of one file)
   never share the emulator lane at once - the script is an implicit lock
   (`tools/os88test.py`'s `lane_locks`, docs/plans/SOAK-PARALLEL.md 18). It
-  does nothing for a path two DIFFERENT scripts both write.
+  does nothing for a path two DIFFERENT scripts both write. A script split
+  into one row a leg so the legs can run AT ONCE says
+  `locks=("script:private",)` on each row, which lifts the implicit lock -
+  only after checking that it writes no fixed path
+  (docs/plans/soak-speed-2/games.md, `waverackrec*`).
 
 ---
 
@@ -440,8 +444,11 @@ with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
 
 Verbs include `open_drive`, `open`, `path`, `window`, `wait_window`, `front`,
 `raise_window`, `move_window`, `drag_window`, `close`, `listing`, `entry`,
-`scroll_to`, `menu_pick`, `wait_toast`, `chooser`, `still` and `settle`. `ui.m`
-is the Marty and `ui.mo` the mouse.
+`scroll_to`, `menu_pick`, `wait_toast`, `chooser`, `press`, `keys`, `type`,
+`still` and `settle`. `ui.m` is the Marty and `ui.mo` the mouse. **A key is
+`ui.press("Enter")`** - taken off the BIOS ring, then `ui_done` - not
+`m.key(k); settle(m)` (`need=True` raises when the key never reached the
+ring; `.still()` after it before an `fbuf` read; tests/fmarrows.py).
 
 - **Nothing is aimed at a remembered coordinate.** A layout change moves every
   table at once, and a listing row number is not a file.
@@ -469,10 +476,19 @@ paint stroke).
 `quick=True` ends the boot when the kernel says the desktop is up (`desk_rows`
 and `menu_nbar` live, `[spl_live]` = 0, the tick moving) instead of waiting for
 the picture to settle. Use it whenever the first act is an `os88ui` verb or a
-guest read. A bare launch is `launch(boot=False)`, `m.run()`,
-`os88marty.kernel_up(m)`. **`launch(boot=N)` is a blind N-second pause** - one
+guest read. A bare launch is `launch(boot="up")` - `launch(boot=False)`,
+`m.run()`, `os88marty.kernel_up(m)` in one call, and the spelling the boot
+cache below can serve. **`launch(boot=N)` is a blind N-second pause** - one
 row spent 64 of its 69 seconds in it. Keep the picture settle only when the
 first thing you do is compare the boot screen.
+
+**The boot cache serves `os88ui.boot` from a warm boot** (on by default since
+2026-11-15; `OS88_BOOTCACHE=0` turns it off;
+tools/os88bootcache.py, docs/plans/soak-speed-2/core.md): the first row with a
+given machine and pair of images boots it and holds the end of the boot as a
+fork snapshot; every later one restores a copy in a fraction of a second,
+with its own disks. The guest clock continues from the snapshot's, so a row
+whose subject is the boot itself uses `launch`, which the cache never touches.
 
 ### 6.2 When a hand-rolled click is right
 

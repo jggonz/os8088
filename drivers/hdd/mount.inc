@@ -335,15 +335,13 @@ hd_vol_new:
     inc al
     loop .scan
     xor bx, bx
-    pop cx
-    pop ax
     stc
-    ret
-.free:
+    jmp short .out
+.free:                          ; (CF = 0 off the equal compare)
     mov [bx+HDV_VOLH], al
+.out:
     pop cx
     pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------

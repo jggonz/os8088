@@ -79,12 +79,14 @@ def main():
                    stdout=subprocess.DEVNULL)
     S = os88sym.linear
     got = []
-    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE) as m:
-        M.settle(m)
+    with M.launch(SF.SYS, apps=DISK, machine=SF.MACHINE,
+                  boot=False) as m:
+        m.run()                         # SOAK-SPEED 12: the boot is
+        M.kernel_up(m)                  # gated on state, no settle
         M.no_saver(m)
         mo = Mouse(marty=m)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
-        M.settle(m)
+        M.ui_done(m)                    # SOAK-SPEED 4: no pixel read next
         ds = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
@@ -106,13 +108,13 @@ def main():
                              y0 + 18 + 14 + 26 + 14 * r + 7)
         mo.drag(*cell(0, 0), *cell(1, 1))
         M.settle(m)
-        mo.menu(X["Data"], bar, *item("Data", 4))           # Set Database
+        SF.menu(m, mo, X["Data"], bar, *item("Data", 4))           # Set Database
         M.settle(m)
         for t, i, what, want in DIALOGS:
             mo.to(*park)
             M.settle(m)
             before = m.fbuf()
-            mo.menu(X[t], bar, *item(t, i))
+            SF.menu(m, mo, X[t], bar, *item(t, i))
             M.settle(m, limit=120)
             mo.to(*park)
             M.settle(m, limit=60)

@@ -194,6 +194,24 @@ per row already (SOAK-PARALLEL 18.1), while past the box's last core every
 guest runs below real time and the few host-second waits named above stop
 meaning what they say.
 
+**PAST REAL TIME: THE CAP'S RATE.** The cap is the preload's, so it can be
+moved: `bxclock.c`'s `time()` runs `$OS88_BXCLOCK_RATE` times the host's
+running time, and `slowdown` then holds the guest to that many times real
+time. It is the same machine at any rate - 4M instructions and 18.2 ticks a
+GUEST second, and every shim wait is on that clock - so a row's verdict
+cannot move with it; only how many guest seconds a host second may hold
+does. A ROW's machine (`os88megabochs.launch`) runs at
+`os88bochs.ROW_RATE`; one with an NE2000 or an SB16 stays at 1, their peers
+(slirp and the host behind it, the waveout mixer thread) keeping host time;
+`os88bochs.py boot` and a standalone row's own `Box` stay at 1.
+`$OS88_BOCHS_RATE` sets every one of them (1 is the old cap, the A/B), and
+os88test's lane divides `--bochs-per-core`'s default by its square root (2 a core at 4). Past real time
+the VGA timer is the guest's (`vga: realtime=0`), and a look at a RUNNING
+guest (`m.fbuf()`) runs it exactly 0.12 guest seconds on a time breakpoint
+and dumps the window STOPPED, where it slept `GLASS` host seconds
+(`$OS88_BOCHS_GLASS=sleep` is that A/B). Measured, and why the number is
+what it is: docs/plans/soak-speed-2/bochs.md.
+
 ## Commands
 
 ```
@@ -308,7 +326,7 @@ between its two presses.
 | `box.wait_resumed(secs)` | a hibernated session woken: `[hb_resumes]` past 0 with the kernel home and switched - where a row waited for `kern_mega: resumed` |
 | `box.mod_base(name)` | an on-demand module's linear base off its `mod_tab` row (above 1MB once `mod_hi` moved it) - where a row read `kern_mega: above 1MB: NAME` |
 | `box.shot(path)` | a screenshot after `GLASS` (0.45 s): the X window lags the guest by up to one of Bochs's 5 Hz VGA updates |
-| `m.fbuf()` (os88megabochs) | the same window, after `GLASS` only while the guest RUNS: a stopped Bochs paints nothing, and before the clock preload (*The clock*) every host second spent stopped was run back as a guest sprint on the resume, so a sleep there only handed the guest time (`mega-vidfskeysvga4` looked at its toast 4 times instead of 11) |
+| `m.fbuf()` (os88megabochs) | the same window - a RUNNING guest run exactly 0.12 guest s first and dumped stopped (*PAST REAL TIME*, below), where it slept `GLASS` only while the guest RUNS: a stopped Bochs paints nothing, and before the clock preload (*The clock*) every host second spent stopped was run back as a guest sprint on the resume, so a sleep there only handed the guest time (`mega-vidfskeysvga4` looked at its toast 4 times instead of 11) |
 | `box.xd(...)`, `box.key(...)`, `box.type(...)` | xdotool on THIS machine's display - one call at a time (a thread wiggling the mouse beside a click is safe) |
 | `box.at_prompt(cmds)` | the machine is ALREADY stopped (an `lb` breakpoint hit): run CMDS and continue, on the prompts |
 | `box.watch_write(label, spans)` / `box.unwatch()` | state the guest OVERWRITES on its own clock (a single-slot record such as `mega_fkmsg`): a write watchpoint freezes the guest at each write and every later stop of the Box reads SPANS into `box.watched`, so no write falls in a host stall (tests/megaflt.py). Any stop - `dbg`, `session` - takes an unanswered prompt rather than signalling into it |
@@ -481,6 +499,10 @@ it maps:
   re-adopts it in place (SPEC.md 2.8.3.3), so a module routine that ran
   once stays decoded across a close and a reopen, and tests/shutdown.py's
   failing settings writer is a renamed KERNEL.SYS there, not a patch.
+  A STUB A ROW PARKS ON is code too: tests/evqfull.py rewrote its
+  `mov cx, n` per run, and the second run executed the first one's count -
+  so its stub is now the same bytes every run and the count is a word of
+  DATA it reads.
 - **a row's OWN fixed disk** - what MartyPC is handed, the shim takes:
   `extra=["--mount", "hd:0:PATH"]` (os88marty.launch's own argument), or a
   `run_dir=` from `os88marty.stage_run_dir()` on an `_hdd` machine, whose
