@@ -341,6 +341,9 @@ class Rig(object):
     def hmp(self, *c):
         return xmcheck.qmp(self.sock, *c)
 
+    def hmp_burst(self, lines):
+        return xmcheck.qmp_burst(self.sock, lines)
+
     def override_to(self, want, limit=16):
         """Q until the quality override READS `want` (x3_st's third byte),
         each press waited for: a count of presses, slept between, left the

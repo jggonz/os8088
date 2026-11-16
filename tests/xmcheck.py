@@ -117,6 +117,31 @@ def qmp(sock, *cmds):
     return out + "\n" if out else ""
 
 
+def qmp_burst(sock, lines):
+    """HMP command lines PIPELINED on one connection (tools/qmp.py
+    Client.burst) - for edges that must be born together in the guest, which
+    `qmp`'s round trip apiece cannot promise on a loaded box. On the kept
+    connection when there is one; a failure is `qmp`'s SystemExit."""
+    t = os.path.join(ROOT, "tools")
+    if t not in sys.path:
+        sys.path.insert(0, t)
+    import qmp as qmpc
+    c = _KEEP.get(sock)
+    if c is None and sock in _WANT:
+        c = _KEEP[sock] = qmpc.Client(sock)
+    try:
+        if c is not None:
+            return c.burst(list(lines))
+        c = qmpc.Client(sock)
+        try:
+            return c.burst(list(lines))
+        finally:
+            c.close()
+    except (OSError, RuntimeError, ValueError) as e:
+        release(sock)
+        raise SystemExit("xmcheck: qmp burst failed: %s" % e)
+
+
 def qmp_exec(sock, execute, arguments=None):
     """ONE raw QMP command - for the few that are not HMP's, such as
     `input-send-event`, which can send a key's press and its release apart
