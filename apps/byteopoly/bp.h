@@ -360,6 +360,19 @@ int    bp_ckpt_load(int role, BPCkpt *meta, BPState *out);  /* last committed */
  * over the immutable board and card tables and BP_RULES_VER */
 #define BP_RULES_VER    1
 void   bp_fingerprint(BPU32 *out);
+/* the save lane's additions (SPEC.md 131.7.1-131.7.4) */
+#define BP_ENC_VER      1
+#define BP_ENC_LEN      233     /* bp_encode's exact output length */
+#define BP_FILE_HDR     40
+int    bp_invalid_rule(void);                     /* rule of the last bp_validate refusal */
+unsigned bp_file_build(const BPCkpt *meta, const BPState *s, BPByte *buf, unsigned cap);
+int    bp_file_peek(const BPByte *buf, unsigned n, BPCkpt *meta);   /* header + CRC only */
+int    bp_file_parse(const BPByte *buf, unsigned n, BPCkpt *meta, BPState *out);
+/* which: 0 current committed, 1 previous committed, 2 candidate; out 0 = header only */
+int    bp_ckpt_open(int role, int which, BPCkpt *meta, BPState *out);
+#define BP_HAVE_CKPT_LOAD_ID 1
+int    bp_ckpt_load_id(int role, const BPU32 *ckpt_id, BPCkpt *meta, BPState *out); /* committed or candidate; meta->state says which */
+int    bp_ckpt_damaged(int role);                 /* slot files that exist but fail: 0..2 */
 
 /* ===== BP_LINK: bp_link.c bp_cable.inc =================================== */
 #define BP_MODE_LOCAL   0
