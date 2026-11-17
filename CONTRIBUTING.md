@@ -475,7 +475,7 @@ A good PR body says (`.github/pull_request_template.md` lays it out):
 
 **Screenshots are not optional.** A pull request that touches `apps/`,
 `kernel/`, `drivers/`, `faces/` or `boot/` needs screenshots in its
-description, or the `PR screenshots` check fails it.
+description, or a `No visible change: <why>` line saying why it has none.
 
 - Take one screenshot for each adapter the change reaches: VGA, CGA and
   Hercules, plus EGA where it has its own layout.

@@ -296,11 +296,12 @@ user gives a different workflow. The worked example is
 of the change in its description** - the owner's rule (2026-11-09), binding
 every contributor and agent. `.github/pull_request_template.md` is the shape
 and says what each picture needs (one per adapter the change reaches, taken
-on the glass and named, hosted at a pinned SHA, never under `build/`);
-`.github/workflows/pr-screenshots.yml` fails a pull request touching `apps/`,
-`kernel/`, `drivers/`, `faces/` or `boot/` whose description has neither an
-image nor a `No visible change: <why>` line. A description rewritten after
-review shows the head being merged, not an earlier one.
+on the glass and named, hosted at a pinned SHA, never under `build/`). A
+pull request touching `apps/`, `kernel/`, `drivers/`, `faces/` or `boot/`
+whose description has neither an image nor a `No visible change: <why>` line
+is not ready for review; no CI check enforces it, so the reviewer does. A
+description rewritten after review shows the head being merged, not an
+earlier one.
 
 ## Hard rules (§1 — these break silently if violated)
 
