@@ -326,6 +326,16 @@ void   bp_redeem_cost(int space, BPU32 *out);
 int    bp_group_owner(const BPState *s, int group);  /* seat owning all, or BP_NOBODY */
 void   bp_score_of(const BPState *s, int seat, BPU32 *out);
 int    bp_seat_assets(const BPState *s, int seat, BPU32 *mask);
+/* rules lane additions (SPEC.md 131.4.4, 131.4.5, 131.4.9) */
+#define BP_DR_NONE      0       /* BPState.debt_reason */
+#define BP_DR_RENT      1
+#define BP_DR_CHARGE    2       /* a charge space */
+#define BP_DR_CARD      3       /* a card payment or Bench Service */
+#define BP_DR_BAIL      4       /* the third failed release: pending_move set */
+#define BP_DEPTH_MAX    3       /* cards drawn since the last dice move */
+#define BP_BID_STEP     10
+void   bp_bid_min(const BPState *s, BPU32 *out);  /* the next legal bid */
+int    bp_state_check(const BPState *s);          /* BP_OK or BP_EINVALID */
 
 /* ===== BP_SAVE: bp_codec.c bp_save.c ===================================== */
 #define BP_STATE_MAX    320     /* encoded canonical state, bytes (cap) */
@@ -454,6 +464,8 @@ extern BPByte bp_sel;           /* the selected space (presentation) */
 #define BP_D_LOG        0x0020
 #define BP_D_HINT       0x0040
 #define BP_D_ALL        0x007F
+#define BP_D_FORCE      0x8000  /* with other bits: repaint them even if their
+                                   signature says nothing changed */
 int    bp_face_init(void *win, unsigned artseg, unsigned bandseg, unsigned bandcap, int bpp);
 void   bp_face_layout(int w, int h);              /* content size changed */
 void   bp_face_dirty(unsigned mask);
@@ -475,6 +487,7 @@ int    bp_w_textw(const char *s, int font);
 int    bp_w_fonth(int font);
 int    bp_w_sprite(int x, int y, int art_id);     /* -> width, 0 absent */
 unsigned bp_w_spritesz(int art_id);               /* w | h << 8 */
+int    bp_face_isdirty(void);                     /* any section dirty (the timer repaints on it) */
 void   bp_w_fill(int x1, int y1, int x2, int y2, int colour);
 /* the log ring the sidebar shows (bounded) */
 #define BP_LOG_LINES    8

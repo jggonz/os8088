@@ -254076,13 +254076,332 @@ cash or ownership.
 
 ### 131.4 The engine
 
-(Rules lane. Reserved: the transition rules phase by phase, continuation,
-the PRNG, the validation predicates `bp_can` answers for greying.)
+The engine is four files of the one translation unit: `bp_board.c` and
+`bp_cards.c` (the immutable tables of 131.2.1 and 131.2.9), `bp_math.c`
+(131.4.1) and `bp_rules.c` (everything below). It is OS-free: the same
+source runs in the host harness under `BP_HOST` and on the guest. It has
+no recursion, and every loop is bounded by a constant of the board (28
+spaces, 18 props, 4 seats, 8 cards), so a transaction's cost is bounded
+whatever the state holds. The arithmetic is 131.4.1; the transitions are
+131.4.2-131.4.9.
+
+**The door.**
+
+`bp_apply(s, c, r)` is the only function that changes a match. It runs
+`bp_check(s, c)` (pure), then copies `*s` into a static scratch record,
+executes the command there, adds one to the scratch `rev`, and copies the
+scratch back over `*s` only if every step answered `BP_OK`. Any later
+refusal (`BP_EOVERFLOW` on a balance, `BP_EDEPTH` on a full result or a
+card chain past its bound, `BP_EINVALID` on a state that cannot be
+resolved) therefore leaves `*s` byte-identical, and `r->n` is 0. The
+scratch record is the engine's (one `BPState` of bss); the engine is
+called only from the UI task, so it is never re-entered.
+
+`bp_check` refuses in this order, and the first refusal is the answer:
+
+| # | refusal | when |
+|---:|---|---|
+| 1 | `BP_EARG` | `c->type` is 0 or not below `BP_C_COUNT` |
+| 2 | `BP_EOUT` | `s->status` is not `BP_ST_PLAY` (an OVER match refuses everything) |
+| 3 | `BP_ESEAT` | `c->seat` is not below `s->nseats` |
+| 4 | `BP_EOUT` | the seat is eliminated |
+| 5 | `BP_ESTALE` | `c->rev` is not `s->rev` (both words) |
+| 6 | `BP_EPHASE` | the phase table below does not list `c->type` in `s->phase` |
+| 7 | `BP_ESEAT` | `c->seat` is not the command's actor (below) |
+| 8 | the command's own checks | ownership `BP_EOWNER`, cash `BP_EFUNDS`, a rule `BP_ERULE`, a malformed argument `BP_EARG` |
+
+The actor is `s->decider` for every command except `BP_C_CANCEL`, whose
+actor is the proposer `s->offer_from`. The decider is the active seat in
+every phase except AUCTION (the seat whose bid is required, `auc_turn`)
+and TRADE (the recipient, `offer_to`).
 
 #### 131.4.1 Two-word arithmetic
 
-(Rules lane. Reserved: `bp_u32_*` contracts, overflow policy, formatting
-and parsing, and the boundary fixtures.)
+A `BPU32` is a logical 32-bit unsigned value held as two named 16-bit
+words, value = `hi` x 65,536 + `lo`. Money, revisions, identities, digests
+and the PRNG state are BPU32s, and every arithmetic operation on one is a
+function in `bp_math.c`; no other file adds, subtracts or multiplies the
+words (reading them, `bp_u32_set` and `bp_u32_copy` are free).
+
+| function | contract |
+|---|---|
+| `bp_u32_set`, `bp_u32_copy` | never fail |
+| `bp_u32_add(r, a)`, `bp_u32_addw(r, v)` | r += a; a carry out of `hi` is `BP_EOVERFLOW` |
+| `bp_u32_sub(r, a)`, `bp_u32_subw(r, v)` | r -= a; a borrow out of `hi` is `BP_EFUNDS` (a balance never goes negative) |
+| `bp_u32_mulw(r, a, b)` | r = a x b, the exact 32-bit product of two words; never overflows (at most FFFE0001h) |
+| `bp_u32_mul(r, a, b)` | r = a x b for a BPU32 and a word; a product above FFFFFFFFh is `BP_EOVERFLOW` |
+| `bp_u32_cmp`, `bp_u32_cmpw` | -1, 0, 1 |
+| `bp_u32_iszero` | 1 when both words are 0 |
+| `bp_u32_fmt(buf14, a)` | decimal with a comma every three digits from the right, no sign, no leading zero ("0", "1,280", "4,294,967,295"); at most 13 characters and the NUL; answers `buf14` |
+| `bp_u32_parse(r, s)` | one or more decimal digits, commas allowed between them and ignored; anything else, or nothing, is `BP_EARG`; a value above FFFFFFFFh `BP_EOVERFLOW` |
+
+**Overflow policy.** Every mutator answers `BP_OK` or an error and leaves
+`*r` unchanged on error; nothing saturates, truncates or wraps. The engine
+turns the error into a refusal of the whole transaction (131.4's door), so
+a corrupt or hostile state can stop a command but can never mint money.
+Nothing in a real match approaches 2^32 credits; the policy exists so the
+question never has to be asked.
+
+**Why multiplication is by hand.** On the 8088, C's `unsigned * unsigned`
+keeps the low 16 bits and SmallerC has no 32-bit type to widen into, so
+`bp_u32_mulw` forms the product from four byte-by-byte partial products
+(each at most 65,025, which fits in a word on either compiler) and adds
+them with explicit carries. Division by ten for `bp_u32_fmt` is long
+division a byte at a time: the running remainder times 256 plus a byte is
+at most 2,559, so every intermediate is a 16-bit value.
+
+**The host discipline** (131.12): under `BP_HOST`, `BPWord` is `unsigned
+short` but C promotes it to a 32-bit `int`. Every intermediate is cast back
+to `BPWord` before it is stored or compared, and every carry and borrow is
+derived from the 16-bit results (`(BPWord)(x + y) < x`), never from a
+wider sum, so the host computes exactly the guest's numbers and an
+overflow the guest would suffer cannot hide in a host register.
+
+**Fixtures.** `hosttest/t_rules.c` checks the boundaries by values
+computed by hand: carry from `lo` FFFFh into `hi`, borrow from `hi`, add
+and sub at FFFFFFFFh and 0 (refused, target unchanged), `mulw` of FFFFh x
+FFFFh, 100h x 100h, 0 and 1, `mul` across the overflow line, `fmt` and
+`parse` round trips at 0, 999, 1,000, 65,535, 65,536, 999,999, 1,000,000
+and 4,294,967,295, and the parse refusals. `tests/bpmath/` runs the same
+table on the 8088 itself (`make bpmath`): a target-execution fixture, so
+the host's integer promotion cannot hide a defect the guest would have.
+
+#### 131.4.2 Phases and their commands
+
+| phase | decider | legal | leaves to |
+|---|---|---|---|
+| MANAGE | active | ROLL; UPGRADE SELL MORTGAGE REDEEM; PROPOSE | landing outcome; TRADE |
+| REPAIR | active | ROLL (attempt), PAY_BAIL, USE_DISK; UPGRADE SELL MORTGAGE REDEEM; PROPOSE | MANAGE (paid / disk), landing outcome (doubles), AFTER (failed), DEBT (third failure, short); TRADE |
+| BUY | active | BUY, DECLINE | AFTER; AUCTION |
+| AUCTION | `auc_turn` | BID, PASS | AUCTION; AFTER |
+| CARD | active | ACK_CARD | landing outcome |
+| DEBT | active | SELL, MORTGAGE, SETTLE, BANKRUPT | `ret_phase` or the pending move; the next turn or OVER |
+| TRADE | `offer_to` | ACCEPT, REJECT; CANCEL (by `offer_from`) | `ret_phase` |
+| AFTER | active | ROLL (bonus), END_TURN; UPGRADE SELL MORTGAGE REDEEM; PROPOSE | landing outcome; the next turn or OVER; TRADE |
+| OVER | - | nothing | - |
+
+A "landing outcome" is the phase the landing dispatcher (131.4.4)
+leaves: BUY, CARD, DEBT, or AFTER when nothing is left to decide.
+
+#### 131.4.3 Turns, rolls and the Repair Shop
+
+**A turn begins** (`bp_new_match`, END_TURN, a bankruptcy): `active` and
+`decider` become the seat, `turn` + 1, `doubles`, `rolled`, `d1`, `d2`
+and `depth` 0, event TURN, and the phase is REPAIR if the seat is
+detained, else MANAGE.
+
+**ROLL in MANAGE, or the bonus ROLL in AFTER.** The bonus is legal only
+while `doubles` > 0 and the seat is not detained; END_TURN is refused
+(`BP_ERULE`) while it is legal, so a doubles roll is never skipped. The
+roll draws `d1` then `d2` (131.4.7), sets `rolled`, and reports ROLL.
+Not doubles: `doubles` = 0. Doubles: `doubles` + 1; the third detains
+before moving (event DETAIN; `doubles` 0) and the phase is AFTER;
+otherwise event DOUBLES, and the move runs. `depth` is 0 for a dice move.
+
+**Movement.** Forward by n: every step that reaches space 0 pays salary
+200 (event SALARY; one crossing per lap), then event MOVE with the
+destination, then the landing dispatcher. Backward movement (Roll Back) and
+transport to detention pay nothing. **Detention**: `pos` 7, `detained` 1,
+`tries` 0, `doubles` 0, event DETAIN, no landing; the phase becomes AFTER
+with no bonus roll, and the turn passes on END_TURN.
+
+**REPAIR.** PAY_BAIL (cash at least 50, else `BP_EFUNDS`) pays the bank 50;
+USE_DISK `arg` = deck needs bit `arg` of the seat's `disks`, clears it and
+returns that deck's Recovery Disk to the bottom of its deck. Either one
+clears `detained` and `tries`, reports RELEASE (other 0 pay, 1 disk) and
+makes the phase MANAGE: a normal turn, doubles included. ROLL is an
+attempt: `doubles` stays 0 whatever it shows. Doubles release (RELEASE
+other 2) and move the total with no bonus roll. A failed first or second
+attempt adds one to `tries` and the phase is AFTER (the turn is spent).
+The third failure owes 50 to the bank with `pending_move` = `d1` + `d2`:
+paid at once when cash suffices (RELEASE other 3, then the move), else
+DEBT with reason `BP_DR_BAIL`; SETTLE pays it, releases and moves;
+BANKRUPT cancels the move. Detention is cleared only when the 50 is paid.
+
+**END_TURN** (AFTER, no bonus owed): the seat's bit leaves `round_left`
+(masked to the living); if that leaves it empty, `round` + 1 (event ROUND)
+and, in a Quick Match whose `round` has reached `rounds_limit`, the match
+ends by score (131.4.6); otherwise `round_left` becomes every living seat
+and the next living seat in roster order after the active one begins its
+turn.
+
+#### 131.4.4 The landing dispatcher
+
+One function resolves every arrival, by dice, release or card, and it
+never calls itself:
+
+| space | outcome |
+|---|---|
+| BOOT, REPAIR SHOP (visiting), SWAP MEET | nothing; AFTER |
+| computer or utility, unowned | BUY (decider active) |
+| owned by the lander, or mortgaged | nothing; AFTER |
+| owned by another seat | rent (below) paid to the owner; AFTER, or DEBT |
+| charge | its amount to the bank (event CHARGE); AFTER, or DEBT |
+| event space | the deck's top card is shown: `card` = its id, event CARD, phase CARD |
+| CRASH! | detention (131.4.3); AFTER |
+
+**Rent.** A computer at level 1..5 pays base x 5, 15, 30, 45, 60; at level
+0 it pays base x 2 when its owner holds the whole collection and no member
+is mortgaged, else base. A utility pays 4 x (`d1` + `d2`) when its owner
+holds one unmortgaged utility, 10 x with both; a utility landing with
+`rolled` 0 is `BP_EINVALID`. Every amount is a 16 x 16 product
+(`bp_u32_mulw`), so none overflows. `bp_rent_quote` is this function.
+
+**Payment.** A debt the active seat cannot cover in full opens DEBT: nothing
+is paid, `debt_to` (creditor seat or `BP_NOBODY` for the bank),
+`debt_amount`, `debt_reason` (`BP_DR_RENT`, `BP_DR_CHARGE`, `BP_DR_CARD`,
+`BP_DR_BAIL`) and `ret_phase` = AFTER are set and event DEBT reports it.
+Otherwise the whole amount moves at once (event RENT or CHARGE).
+
+**Cards.** The card is drawn when the token lands and resolved when the
+active seat sends ACK_CARD, so a redraw, a handoff or a save in between
+cannot apply it twice. The deck is a cycle of `deck_n[d]` ids in
+`deck[d][0..n-1]` read from `deck_top[d]`; the shown card is
+`deck[d][deck_top[d]]`. ACK_CARD first returns the card to the bottom
+(`deck_top` + 1 modulo n) or, for a Recovery Disk, takes it out of the
+cycle (delete at `deck_top`, n - 1, the seat's `disks` bit d set, event
+DISK). A disk coming back is inserted just before `deck_top` (the bottom),
+`deck_top` + 1. Then the effect: GAIN pays from the bank; PAY and Bench
+Service (25 per level 1..4 computer level, 100 per Workshop, over the
+seat's computers) pay the bank; TO advances to the space forward (a
+distance of 0 is a full lap, so Reboot to BOOT pays 200 also from BOOT),
+FORWARD moves forward, BACK moves backward without salary, DETAIN detains;
+movement ends in the landing dispatcher. `depth` counts the cards drawn since
+the last dice move: every draw adds one, and a draw that would take it
+beyond `BP_DEPTH_MAX` (3) refuses the whole transaction with `BP_EDEPTH`. No chain on this
+board draws twice (131.2.9), so the bound is never met by play.
+
+#### 131.4.5 Auctions, trades, management and debt
+
+**DECLINE** (allowed whatever the cash) opens the auction on `auc_space` =
+the landed space: `auc_open` = every living seat (a mask), `auc_passed` 0,
+`auc_high` `BP_NOBODY`, `auc_bid` 0, event AUCTION, and the turn goes to
+the landing seat. **Seeking the next bidder** walks roster order from the
+seat after the last one to act (from the landing seat itself at the
+opening), at most four steps: a seat not in `auc_open`, passed or holding
+the high bid is skipped; a seat whose cash is below the minimum is passed
+for it (event PASS, other 1). The first seat left is `auc_turn` and
+`decider`. When none is left the lot goes to the high bidder for exactly
+`auc_bid` (event WON) or, with no bid, stays with the bank (event UNSOLD);
+the phase is AFTER. Every bid is a multiple of 10; the minimum is 10 with
+no bid and `auc_bid` + 10 after one (`bp_bid_min`); a bid below the
+minimum or not a multiple of 10 is `BP_ERULE`, one above the bidder's cash
+`BP_EFUNDS`. PASS is
+permanent for this auction.
+
+**PROPOSE** (MANAGE, REPAIR, AFTER; the active seat) carries `to`, `give`
+(prop mask of the proposer's), `get` (of the recipient's), `disks` (bit d:
+the proposer gives deck d's disk; bit 4 + d: receives it), `amount` and
+`payer` (0 proposer, 1 recipient). Refused: `to` not a living other seat,
+a mask bit above 17 or a disks bit other than 0, 1, 4, 5, a payer other
+than 0/1 (`BP_EARG`); everything empty (`BP_EARG`); an asset its side does
+not hold (`BP_EOWNER`); a computer of a collection with any upgrade on it
+(`BP_ERULE`); cash above the payer's (`BP_EFUNDS`). It freezes the terms in
+`offer_*` with `offer_id` + 1 (0 skipped), `ret_phase` = the phase, event
+OFFER, phase TRADE. ACCEPT (`arg` = low byte of `offer_id`, else
+`BP_EARG`) re-runs every PROPOSE check on the current state and exchanges
+all of it at once (event TRADED); REJECT and CANCEL change nothing but the
+phase (events REJECTED, CANCELLED). All three clear `offer_*` back to idle
+and return to `ret_phase` with the active seat deciding. Mortgages travel
+with their property; no interest is charged.
+
+**UPGRADE** a computer: the seat owns the whole collection, none of it
+mortgaged, the level is below 5 and equal to the collection's lowest, and
+the seat has the step's price; not in DEBT. **SELL** one step: level above
+0 and equal to the collection's highest; refunds half the price, rounded
+down. **MORTGAGE**: owned, not mortgaged, and for a computer every member
+of the collection at level 0; pays half the price rounded down.
+**REDEEM**: mortgaged and owned, cost principal + ceil(principal / 10)
+(`bp_redeem_cost`); not in DEBT.
+
+**DEBT.** SETTLE needs cash at least `debt_amount` and pays it once to
+the creditor (event SETTLED, then RENT/CHARGE naming the reason); the
+record returns to idle; with `pending_move` the seat is released (RELEASE
+other 3) and moves, else the phase is `ret_phase`. **BANKRUPT** (any time in
+DEBT): every upgrade of the seat is sold to the bank at resale value (one
+event SELL a computer, other 0); all of the seat's cash goes to a player
+creditor or is absorbed by the bank (event ESTATE, other = creditor); a
+player creditor takes every property (mortgages kept) and the Recovery
+Disks; with the bank every property returns unowned at level 0 and
+unmortgaged and each disk goes to the bottom of its deck. The seat is
+eliminated: `alive` 0, cash, detention, tries, disks and `pending_move` 0,
+its bit out of `round_left`, event BANKRUPT. Then, with one seat left the
+match ends (131.4.6); otherwise the turn passes as END_TURN would.
+
+#### 131.4.6 The end
+
+Classic ends when one seat is alive; a Quick Match also ends when its
+round count is reached. Either way, every living seat's score is computed
+(`bp_score_of`: cash + each owned property's price, less half of it when
+mortgaged, + level x half the collection's step price; disks 0; an
+eliminated seat 0), `winners` is the mask of the highest scores in a Quick
+Match and the survivor in Classic, `status` and `phase` become OVER and
+event OVER carries the mask. Victory is evaluated only at the end of the
+transaction that eliminated a seat or completed the round.
+
+#### 131.4.7 The PRNG (`BP_RNG_ALG` 1)
+
+xorshift32 with shifts 13, 17, 5 over `BPState.rng`, done in two 16-bit
+words (`bp_rand_next`): a state of 0 is first replaced by 92D68CA2h (the
+generator's one fixed point is never stepped). After the step the
+answer is the high word of (new high word x bound), i.e. 0..bound-1; a
+bound of 0 answers the new high word itself. Dice are `1 + next(6)`, `d1`
+first. **`bp_new_match` consumes the stream in this order**, so a fixed
+seed reproduces a match: `rng` = seed; `match_id.lo`, `match_id.hi` (two
+bound-0 draws); deck 0 then deck 1 shuffled Fisher-Yates from the last
+index down (`j = next(i + 1)` for i = 7..1, swapping `deck[i]` and
+`deck[j]`, starting from `deck[d][i] = d * 8 + i`); then the roll-off, each
+round rolling `d1`, `d2` for every candidate seat in roster order (event
+ORDER, amount `d1 * 16 + d2`) and keeping the tied highest totals until
+one remains (at most 16 rounds; a result that cannot hold the events is
+`BP_EDEPTH`, and the caller seeds again). Only rolls, shuffles and the
+match id consume randomness: no text, redraw, retry or animation does.
+
+#### 131.4.8 The new match and the idle record
+
+`bp_setup_check`: 2..4 seats, rules 0/1, rounds 0 for Classic and 10, 20
+or 30 for Quick, every name 1..8 printable characters with its NUL inside
+the field, tokens below 4 and distinct, machines 0/1 (`BP_EARG`).
+`bp_new_match` builds the record in scratch and copies it out only on
+`BP_OK`: `status` PLAY, `rev` 1 (a zeroed record never matches a live
+match), every seat 1,500 cr on BOOT, unused seats zero with `alive` 0,
+every prop unowned (`BP_NOBODY`), level 0, unmortgaged, both decks full
+(n 8, top 0), `round_left` = every seat, events ORDER..., FIRST, TURN, and
+the first seat's MANAGE.
+
+Idle values, which `bp_state_check` requires outside their phase: `card`
+`BP_NOBODY` outside CARD; `auc_space`, `auc_turn` and `auc_high`
+`BP_NOBODY`, `auc_open`, `auc_passed` and `auc_bid` 0 outside AUCTION;
+`debt_to` `BP_NOBODY`, `debt_reason` and `debt_amount` 0 outside DEBT;
+`offer_from`, `offer_to` `BP_NOBODY`, the other `offer_*` terms 0 outside
+TRADE (`offer_id` keeps counting); `ret_phase` `BP_PH_NONE` outside DEBT and
+TRADE; `pending_move` 0 unless DEBT with reason `BP_DR_BAIL`.
+
+#### 131.4.9 Queries (pure; the UI greys with these)
+
+`bp_can(s, seat, type, arg)` builds the command a button would send (the
+current `rev`; `arg` as given; for BID the seat's minimum bid; for PROPOSE
+only the phase and actor, since the terms are not yet chosen) and answers
+exactly what `bp_check` would: the same predicates, so a greyed button and
+a refused command never disagree. What only execution can find
+(`BP_EOVERFLOW`, `BP_EDEPTH`, `BP_EINVALID` from a corrupt record) it does
+not predict; `hosttest/t_rules.c` compares the two on every button at
+every sixteenth step of its scripted games. `bp_rent_quote(s, space, out)`: BP_OK
+with the rent the active seat would pay now; for a utility with no
+recorded total, `BP_ERULE` with `*out` = the multiplier (4 or 10); for an
+unowned, own or non-property space, `BP_EOWNER` with 0.
+`bp_mortgage_value`, `bp_redeem_cost`, `bp_group_owner` (seat holding the
+whole collection, or `BP_NOBODY`), `bp_score_of`, `bp_seat_assets` (prop
+mask, answer = count), `bp_bid_min`. `bp_state_check(s)` answers
+`BP_OK` or `BP_EINVALID` for every rule-level invariant: enums in range,
+seat fields of unused and eliminated seats, one owner per prop and only
+living owners, levels only on fully held unmortgaged collections and even,
+no level on a utility, every card id 0..15 exactly once across the two
+cycles and the held disks, each in its own deck, the idle values above, the
+phase's own fields (the deciding seat alive, the shown card on top, the
+auction lot unowned, the debt owed by the active seat). The save lane's
+`bp_validate` calls it; it is the rules' own description of a legal
+match, kept beside the code that makes one.
 
 ### 131.5 The cable protocol
 
@@ -254756,9 +255075,6 @@ memory completes.
 
 ### 131.8 The face
 
-(Face lane. Reserved: layouts, the board cells, tokens and markers, the
-sidebar, the hint bar, the widget kit, sections and redraw cost.)
-
 Binding choices made before the lane: drawing is Breadboard XT's band core
 (`apps/breadxt/draw.inc`, §130.6.2), shared as SOURCE with `BX_CORE_ONLY`
 leaving out Breadboard's own tail: every repaint is strips, each composed in
@@ -254768,6 +255084,184 @@ content box, never from the adapter's name: FULL (VGA 640x480 class), MID
 (Hercules 720x348 class) and COMPACT (CGA 640x200 class). No meaning is
 carried by hue alone: collections have letters, owners have token marks,
 mortgage and upgrades have shapes.
+
+#### 131.8.1 Layouts
+
+`bp_face_paint` reads the window's content origin (`os88_wm_content`) and
+size (`os88_wm_geom`) on every call and lays out again only when origin, size
+or `bp_pn_covers()` changed (the cache key; a change repaints everything).
+The adapter is never named: the content box alone picks the layout, and the
+live bit depth sets `bp_mono` (bpp < 4).
+
+| layout | picked when (content w x h) | reference box | side | cell w x h | ring | font (body / small) |
+|---|---|---|---:|---|---|---|
+| `BP_LAY_FULL` | w >= 600 and h >= 380 | VGA 640 x 418 | 192 | 56 x 50 | 448 x 400 | TEXT10 / TEXT08 |
+| `BP_LAY_MID` | w >= 560 and h >= 240 | Hercules 720 x 288 | 208 | 64 x 34 | 512 x 272 | TEXT08 / TEXT08 |
+| `BP_LAY_COMPACT` | otherwise | CGA 640 x 142 | 192 | 56 x 16 | 448 x 128 | TEXT08 / TEXT08 |
+
+The reference boxes are what the window gives on a 640x480, 720x348 and
+640x200 screen (menu bar, title bar and dock taken). A bigger window grows
+the sidebar; a smaller one shrinks the cell down to 16 x 16 and, under 96 px
+of sidebar, drops the sidebar.
+
+The geometry, all from (ax, ay, aw, h) = the content box with x rounded UP and
+w rounded down to multiples of 8 (the band's contract; a sliver left over is
+never painted):
+
+* `cw` = ((aw - side) / 8) rounded down to a multiple of 8, `ch` = (h - hint
+  minimum) / 8, where the hint bar needs body-font height + 4 rows.
+* `bp_r_board` = (ax, ay, 8 cw, 8 ch). The ring is 8 x 8 cells; space ids run
+  CLOCKWISE from BOOT at the bottom-left (131.1): ids 0..7 climb the left
+  column (7, REPAIR SHOP, is top-left), 7..14 run the top row to SWAP MEET,
+  14..21 descend the right column to CRASH!, 21..27 return along the bottom.
+* `bp_r_center` = (ax + cw, ay + ch, 6 cw, 6 ch): the inner 6 x 6.
+* `bp_r_side` = (ax + 8 cw, ay, aw - 8 cw, 8 ch), tiled exactly by four boxes
+  top to bottom: players (title bar + four rows, none in COMPACT), details
+  (3/5, 14/25 and 1/2 of what is left on FULL, MID, COMPACT), the link box
+  (two rows on FULL, one otherwise) and the log, which takes the remainder.
+* `bp_r_hint` = (ax, ay + 8 ch, aw, h - 8 ch).
+
+Every section tiles its rect completely and paints every pixel of it, so a
+strip (a rect in the band, widened to 8) never carries stale band bytes.
+
+When `bp_pn_covers()` is `BP_PN_FULL` (the setup and lobby screens) the face
+sets `bp_r_center` to the whole aligned content, draws NOTHING of the board,
+and calls only `bp_pn_draw`; `bp_face_hit_space` then answers -1 and
+`bp_face_key` 0. Back to 0 or `BP_PN_CENTRE`, the layout is rebuilt and
+everything repainted.
+
+#### 131.8.2 A cell
+
+A cell is its own repaint unit (`ovl_fc_cell`): ground white, a 1 px black
+line along its top and left edges (the outer right and bottom edges belong to
+the cells on the ring's rim), then, by what it is:
+
+* A **property** (computer or utility): a bar of the collection's colour
+  (blue C, green H, cyan A, red I, magenta R, grey utility; on 1bpp always
+  solid black, so the LETTER carries the meaning: C H A I R P, `U` for a
+  utility) holding the letter at the left in white and the price at the right;
+  the short name centred beneath (an owner's cell shows nothing else of its
+  owner here); the picture, the biggest of SMALL / TINY that fits the room
+  left (on 1bpp the `BP_A_MTINY` twin, 131.10.5), centred in the rest; the
+  OWNER's token silhouette in the sprite row's left margin; the level in its
+  right margin: one to four `BP_A_RAM` chips (stacked in as many columns as the
+  margin holds) or one `BP_A_WORKSHOP`, drawn pips when the art part is
+  absent; a MORTGAGED property shows the `BP_A_MORTGAGE` mark under the owner
+  and a sparse grey dither over its picture.
+* A **corner or special space**: the name at the top, the picture below
+  (`fc_specart`: BOOT, REPAIR, SWAP, CRASH, the two decks, DUTY, E-WASTE), and
+  for BOOT and the two charges the amount ("+200", "-100", "-75").
+* **COMPACT** cells (16 rows: not enough for a picture) trade it for two
+  rows: row A is an 8 x 7 collection letter chip, then the short name; row B
+  an 8 x 8 chip with the owner's SEAT NUMBER in the seat's dark colour, then
+  the price. Levels are black bars (four) or one wide block (Workshop); a
+  mortgaged cell strikes its name through with a dotted line and shows an `M`.
+* **Selection** (`bp_sel`): the short name on a navy/black bar in white
+  (visible on every adapter), and on FULL/MID a 1 px yellow (black on 1bpp)
+  frame inside the edge. It is drawn over ground only, so it never erases an
+  owner mark, level, token or the mortgage mark.
+* **Tokens**: up to four on one cell, a 7 x 7 silhouette each, side by side
+  along the bottom (COMPACT: in row B in place of the price). The silhouette's
+  SHAPE is the token's identity (floppy a square, mouse a round, joystick a
+  triangle, cassette a diamond) and its fill the seat's colour (red, blue,
+  yellow, green; on 1bpp white, black, white, white), a black outline always;
+  the owner mark uses the same shapes.
+
+#### 131.8.3 The centre
+
+With no panel over it (`bp_pn_covers() == 0`) the centre is a teal ground with
+a sparse light-cyan stipple (on 1bpp black with white dots), then:
+`BYTEOPOLY` as nine keycaps (drawn frames with BIG letters on FULL and MID, the
+`BP_A_KEYCAP` sprite on COMPACT), above them on FULL and MID the mascot
+between the Floppy Find and System Error cards, and under them the two dice
+(`BP_A_DIE`, a drawn die when absent) of `bp_game.d1/d2`. Then, always,
+`bp_pn_draw()` runs. With `BP_PN_CENTRE` the art is skipped and the ground and
+border only are drawn.
+
+#### 131.8.4 The sidebar and the hint bar
+
+* **Players**: title "Round N" with the dice total as "d1+d2" at the right
+  (COMPACT carries both in the link row); a row per seat: token silhouette,
+  name, cash (`bp_u32_fmt`). The ACTIVE seat is the whole row inverted
+  (navy/black ground, white text) - readable without colour; an eliminated
+  seat shows "OUT" and a dotted strike through its name; a DETAINED seat an
+  inverse `R` chip. Before a match: "No match - Game > New Game".
+* **Details** for `bp_sel`: the full name in a title bar; for a property
+  Price, Mortgage (Redeem, with 131.2.4's cost, once mortgaged), Owner, Level,
+  and on FULL its `BP_A_LARGE` picture beside them; then the rent schedule of
+  131.2.3, computed here from the base rent: Base, Set (x2), 1..4 RAM (5, 15,
+  30, 45, 60 x base) and Workshop. A utility shows its 4x/10x dice rule; any
+  other space one plain sentence (and a charge its amount). COMPACT: three
+  lines (name, collection, price; rent, set, Workshop; owner, level, MORT).
+* **Link**: "Same PC" in local mode, else the state name (Off, Searching, Peer
+  found, Bad peer, Lobby, Linked, PAUSED, Resync) with " ..." while
+  `bp_sess_busy()`, PAUSED and BADPEER struck through, and on FULL the
+  `bp_link_msg()` line beneath. Status never depends on colour.
+* **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters, newest at
+  the bottom, truncated to the box width; as many as the box holds.
+* **Hint bar**: navy/black; each `bp_pn_hint(i)` is split at its first space:
+  the head (under 8 characters) becomes a white key cap, the rest its label;
+  entries that no longer fit are dropped.
+
+#### 131.8.5 Sections, dirty bits and what an update costs
+
+A paint is a list of rects, each painted in strips of the band
+(`bx_rows` rows at a time, `bx_new`, the scene, one `bx_out`). The scene is
+run per strip, so it skips whatever does not touch the strip: a cell by its
+rect, a sidebar line by its y.
+
+| bit | repainted when | rect |
+|---|---|---|
+| `BP_D_BOARD` | a cell's signature (owner, level, mortgage, the tokens standing on it, selected) changed, or `bp_face_dirty_space` named it; more than ten cells: the four sides of the ring | each cell |
+| `BP_D_CENTER` | always (the panel's state is not the face's to hash) | `bp_r_center` |
+| `BP_D_PLAYERS` | signature (round, dice, active seat, status, cash, alive, detained, token, name) changed | players box |
+| `BP_D_DETAILS` | signature (`bp_sel`, every owner/level/mortgage, names) changed | details box |
+| `BP_D_LINK` | signature (state, busy, mode, message text, round/dice off FULL) changed | link box |
+| `BP_D_LOG` | `bp_log_add` was called (a version counter) | log box |
+| `BP_D_HINT` | signature of the hint strings changed | hint bar |
+| `BP_D_FORCE` | with other bits: repaint them even when the signature says nothing changed | |
+
+So `bp_face_dirty(BP_D_ALL)` after a commit repaints only what the commit
+touched, and an idle board repaints nothing. `os88_paint` (`full` = 1) repaints
+the whole content, the kernel's clip region doing the rest.
+
+Measured on MartyPC, strips per update (a strip is one `bx_new`, the scene and
+one blit; "paints" are rects). FULL (band 16 KB, 51 rows of the 640-wide
+content, 97 of the 336-wide centre):
+
+| update | paints | strips FULL | strips MID | strips COMPACT |
+|---|---:|---:|---:|---:|
+| arrow key / click: selection moves | 3 (two cells, details) | 4 | 3 | 3 |
+| click on the selected cell | 0 | 0 | 0 | 0 |
+| a token moves | 3 (two cells, centre) | 6 | 3 | 3 |
+| one player's cash changes | 2 (players, centre) | 5 | 2 | 2 |
+| a property is bought and upgraded | 3 (cell, details, centre) | 7 | 3 | 3 |
+| a log line | 1 | 1 | 1 | 1 |
+| an expose (`full`) | whole content | 9 | 2 | 1 |
+
+The centre is the largest single cost and is forced because a panel's
+contents are not the face's to hash; a panel that is not changing keeps the
+commit's repaint to the centre alone.
+
+#### 131.8.6 The widget kit
+
+`bp_w_*` is valid only while `bp_pn_draw` runs (it draws into the current
+strip's band). `bp_w_panel` is a 1 px black frame, a ground (light grey; white
+on 1bpp) and a navy title bar with white text; `bp_w_button` draws one of:
+NORMAL (ground, light/dark bevel; on 1bpp a black shadow), FOCUS (navy ground,
+white text; black on 1bpp), DEFAULT (an extra black ring), DISABLED (dark grey
+text; on 1bpp a screen-door of white dots across the label, so it reads
+without colour). A label wider than the button is cut to fit. Everything else
+(`bp_w_text`, `_sprite`, `_fill`, `_box`) is the band core's call.
+
+#### 131.8.7 Keys and hits
+
+`bp_face_key`: the arrow keys move `bp_sel` along the ring spatially (a step
+that would leave the ring crosses to the far side of the same row or column);
+Home selects the active player's space. Both answer 1. `bp_face_hit_space`
+answers the space under a screen point (exact: the cell grid is 8 x 8 and the
+centre and sidebar answer -1), so every cell is one hit target in every
+layout.
 
 ### 131.9 Panels, flows and input
 

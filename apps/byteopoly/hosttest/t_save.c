@@ -5,6 +5,11 @@
  * reader) to agree with. */
 #include "bphost.h"
 #include "byteoply.c"
+/* The UI hooks the session calls (bp.h BP_LINK). Weak, so the link lane's
+ * own host no-ops (bp_link.c under BP_HOST) win without a clash. */
+__attribute__((weak)) void bp_ui_committed(const BPResult *r) { (void)r; }
+__attribute__((weak)) void bp_ui_link(void) {}
+__attribute__((weak)) void bp_ui_chat(int machine, const char *text) { (void)machine; (void)text; }
 
 /* ---- a fake os88 file layer: 8 files, whole-file, with faults -------------- */
 #define OS88_FERR_OK      0
