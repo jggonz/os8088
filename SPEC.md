@@ -254603,8 +254603,10 @@ sends READY (lobby revision, flag) every two beats, the host records it only
 for the current revision, and any change clears both flags
 (`bp_lobby_peer_ready` answers the other machine's flag). `bp_lobby_start`
 (host, both ready on the current revision) freezes the roster: the host runs
-`bp_new_match` with a fresh seed and sends START (the lobby revision, the
-seed, the revision and digest it produced) as an ordinary outstanding
+`bp_new_match` with a fresh seed (another, up to four draws, when the
+engine answers BP_EDEPTH - a roll-off tie storm, 131.4.7 - so a client never
+reseeds by itself) and sends START (the lobby revision, the seed, the
+revision and digest it produced) as an ordinary outstanding
 transaction (131.6.3): the client runs `bp_new_match` with the SAME setup
 and seed, checks the digest and acknowledges with ACK. Names and tokens are
 bounded (8 characters, NUL-padded on the wire; a received name is cut at

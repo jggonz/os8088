@@ -442,13 +442,27 @@ void bp_sess_local(void)
     bp_here = 0;
 }
 
+/* a new match on a fresh seed. A roll-off tie storm can overflow the
+ * event list (BP_EDEPTH, about 1e-6, *s untouched): the host - or the one
+ * local machine - draws another seed, so a client never reseeds by itself
+ * and START always carries a seed the engine accepted */
+static int ovl_new_seeded(const BPSetup *su)
+{
+    int e, k;
+    for (k = 0; k < 4; k++) {
+        bpl_rand32(&bpl.seed);
+        e = bp_new_match(&bp_game, su, &bpl.seed, &bpl_res);
+        if (e != BP_EDEPTH) break;
+    }
+    return e;
+}
+
 static int ovl_sess_new(const BPSetup *su)
 {
     int e;
     if (bp_mode == BP_MODE_HOST) return bp_lobby_start();
     if (bp_mode != BP_MODE_LOCAL) return BP_EPHASE;
-    bpl_rand32(&bpl.seed);
-    e = bp_new_match(&bp_game, su, &bpl.seed, &bpl_res);
+    e = ovl_new_seeded(su);
     if (e == BP_OK) bp_ui_committed(&bpl_res);
     return e;
 }
@@ -1001,8 +1015,7 @@ static int ovl_lobby_start(void)
     if (bpl.rmask != 3) return BP_EPENDING;
     e = bp_setup_check(&bpl.lob);
     if (e != BP_OK) return e;
-    bpl_rand32(&bpl.seed);
-    e = bp_new_match(&bp_game, &bpl.lob, &bpl.seed, &bpl_res);
+    e = ovl_new_seeded(&bpl.lob);
     if (e != BP_OK) return e;
     ovl_match_on();
     bpl.pend = 2;
