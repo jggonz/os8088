@@ -44,6 +44,11 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "byteopoly_link.py": "the Byteopoly cable match on two QEMU guests through a "
+                         "fault-injecting byte relay (SPEC.md 131.5-131.6); "
+                         "unregistered by the lane brief: the lead runs it in "
+                         "the final pass on the integrated tree, whose setup "
+                         "screen and panels it drives",
     "modkeep.py": "run by the `modcache` row (tests/modcache.py imports and "
                   "runs it): every on-demand module kept in RAM after its "
                   "drop, its tail zero in the file, its re-adoption free",
