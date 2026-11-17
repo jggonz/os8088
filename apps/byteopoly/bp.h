@@ -326,6 +326,16 @@ void   bp_redeem_cost(int space, BPU32 *out);
 int    bp_group_owner(const BPState *s, int group);  /* seat owning all, or BP_NOBODY */
 void   bp_score_of(const BPState *s, int seat, BPU32 *out);
 int    bp_seat_assets(const BPState *s, int seat, BPU32 *mask);
+/* rules lane additions (SPEC.md 131.4.4, 131.4.5, 131.4.9) */
+#define BP_DR_NONE      0       /* BPState.debt_reason */
+#define BP_DR_RENT      1
+#define BP_DR_CHARGE    2       /* a charge space */
+#define BP_DR_CARD      3       /* a card payment or Bench Service */
+#define BP_DR_BAIL      4       /* the third failed release: pending_move set */
+#define BP_DEPTH_MAX    3       /* cards drawn since the last dice move */
+#define BP_BID_STEP     10
+void   bp_bid_min(const BPState *s, BPU32 *out);  /* the next legal bid */
+int    bp_state_check(const BPState *s);          /* BP_OK or BP_EINVALID */
 
 /* ===== BP_SAVE: bp_codec.c bp_save.c ===================================== */
 #define BP_STATE_MAX    320     /* encoded canonical state, bytes (cap) */
