@@ -119,3 +119,61 @@ lobby's Ready column and the remote-seat checks.
   rides its own disk rather than `games360.img`.
 - **Rows.** `byteopolyhost` (the host harness, 9.5 s, which a salary of 210
   turns red) and `byteopolylink` (the QEMU pair) are registered.
+
+## The QA run and the fix round (2026-11-17)
+
+Two Opus testers ran the one QA pass on MartyPC. qa1 played complete local
+games on the VGA XT; qa2 checked every screen on CGA and lone Hercules and
+compared the art with the concept screenshots. Neither edited source. They
+found 33 defects between them. Every rule they checked by hand held: rent
+cases, even building, mortgage and redeem, all four Repair Shop exits,
+atomic trades, settle, bankruptcy to a player and to the bank, and the
+Classic, Quick and shared-win scores. Save and load also held, including
+damaged and truncated files.
+
+- **The blocker** was found by both testers within minutes. A key that
+  changed only a panel's own state (focus, the bid editor, a handoff)
+  repainted nothing, because the face's section signatures cannot see panel
+  state. The screen said "Bid 10" while Enter bid 40. It was hotfixed in the
+  middle of the pass (one change in `os88_onkey`/`os88_onclick`) so the rest
+  of QA could trust the glass, and both testers re-checked it.
+- **The XT cost** was the finding that mattered most, and only the 4.77 MHz
+  machine could show it. Every switch between the bottom bar and a centre
+  panel repainted the WHOLE window, at 7.5-10.4 s of guest time, so a
+  two-player turn spent about 25 s repainting. The face had treated a change
+  of `bp_pn_covers()` as a reason to repaint everything. The fix round split
+  it in two. The face repaints the centre alone, draws no background under a
+  panel, and gets `bp_face_dirty_rect` for a damaged band. The panels name
+  the band a key changed. Measured again on the XT:
+
+  | action | before | after |
+  |---|---|---|
+  | End Turn | 7.4 s | 2.1 s |
+  | handoff acknowledged | 8.8 s | 2.7 s |
+  | Collection open | 7.9 s | 1.5 s |
+  | Tab | 2.7 s | 0.6 s |
+  | a bid step | 2.3 s | 1.4 s |
+- **A held Enter acted for the next player.** The panels lane's clock-only
+  freshness rule counted from a key's arrival, and typematic repeats had
+  queued behind an 8-second repaint. The rule now counts 1.1 s of quiet
+  from the END of the previous key's handling, repaint included. The OS key
+  map would also have worked, but arming it makes arrows step twice under
+  QEMU for the whole session, and `kern_small` refuses it.
+- **Focus carried across panels.** The debt panel opened focused on Bankrupt
+  and its confirmation on Yes, so two Enters went bankrupt. Focus now
+  resets to the first enabled button, and a confirmation opens on No.
+- **The re-check** (a third tester, on the fixed head) passed every priority
+  row on the glass and found two small regressions of the fix round. The
+  composer's band missed a line that moved when a refusal appeared, and
+  focus could be left on a greyed button after a passed auction. Both were
+  fixed the same afternoon.
+
+What stayed unfixed: "!" and "Y" are hard to read in the 8-pixel strike
+(they look like "I" and "T"), because that font is WIN16's, shared as
+source. A Rules page still takes about 4 s to turn on the XT.
+
+The fan-out's own lesson was that the stall watchdog went blind. Lane
+looks had left about 30 MartyPC instances running inside the worktrees,
+and the watchdog counts a process in a worktree as an agent at work. One
+lane sat 45 minutes after a green build with its fixes uncommitted before
+the lead noticed by hand.
