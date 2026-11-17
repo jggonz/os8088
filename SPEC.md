@@ -253801,3 +253801,393 @@ A paint is priced by planes: every lit byte on VGA is four read-modify-
 writes where 1bpp is one, which is why VGA's first paint is the outlier.
 While running, a VGA update (the scope plot, the readouts) costs about
 0.5 s and the simulation keeps the rest.
+
+## 131. Byteopoly — a vintage-computer trading game, written in C (`apps/byteopoly/`, `BYTEOPLY.O88`)
+
+Byteopoly is a property-trading board game for 2-4 players: on one machine
+(the seats share a keyboard and optional mouse), or on two machines joined by
+a null-modem cable with one or more seats on each (1+1, 1+2, 2+1, 2+2, 1+3,
+3+1). It is a native C package (§73) over the existing window, band-drawing,
+file, serial-lease (§115) and sound facilities; it adds no kernel facility
+and no OSAPI slot. `docs/plans/BYTEOPOLY-PLAN.md` is the story list and the
+evidence, `docs/HOW-BYTEOPOLY-WAS-BUILT.md` the build diary,
+`docs/BYTEOPOLY-GUIDE.md` the player guide. Planned behaviour is not a claim
+of implemented or tested behaviour: the plan says which is which.
+
+### 131.1 Authority, scope and boundaries
+
+The owner's build brief and five concept screenshots are the product
+direction: navy headers, an ivory perimeter board, small collectible
+computer sprites, a teal centre, floppy-disk event cards, a right sidebar,
+bitmap text and compact bevelled controls. Where a screenshot repeats a
+property or contradicts the rules, this section wins. All code, text and
+art are original; no commercial board-game artwork, rules text or trademark
+lettering is copied.
+
+Out of scope: computer opponents, TCP/IP, modems, more than two machines,
+accounts, downloads and board editors. The engine's seat interface admits a
+computer seat later; none is built. No gameplay dependency on protected
+mode, an FPU, EMS/XMS, the network or a host process. Target: an 8088 at
+4.77 MHz with 640 KB; later machines run the same rules and protocol.
+
+**Board orientation.** The 28 spaces run CLOCKWISE on the glass: BOOT
+(0) at the bottom-left, up the left side to REPAIR SHOP (7) at the
+top-left, across the top to SWAP MEET (14) at the top-right, down the right
+to CRASH! (21) at the bottom-right, and back along the bottom. This is the
+brief's "clockwise ring" and the concept screenshots' corners; the brief's
+one sentence listing the sides in the other order is read as a slip.
+Selection and movement use space ids, never pixels.
+
+### 131.2 Rules
+
+Binding in full. Money is exact integer credits (`cr`), held as logical
+32-bit values (131.4.1); a balance never goes negative and never wraps.
+
+#### 131.2.1 The board
+
+| id | space | kind | collection | price | base rent |
+|---:|---|---|---|---:|---:|
+| 0 | BOOT | start, salary | | | |
+| 1 | Commodore PET | computer | C | 120 | 8 |
+| 2 | Floppy Find | event deck 0 | | | |
+| 3 | VIC-20 | computer | C | 140 | 10 |
+| 4 | Commodore 64 | computer | C | 220 | 18 |
+| 5 | POWER | utility | | 150 | special |
+| 6 | Import Duty | charge 100 | | | |
+| 7 | REPAIR SHOP | visiting / detention | | | |
+| 8 | TRS-80 | computer | H | 160 | 12 |
+| 9 | Atari 800 | computer | H | 180 | 14 |
+| 10 | System Error | event deck 1 | | | |
+| 11 | ZX Spectrum | computer | H | 200 | 16 |
+| 12 | Apple II | computer | A | 240 | 20 |
+| 13 | Apple IIe | computer | A | 260 | 22 |
+| 14 | SWAP MEET | rest | | | |
+| 15 | Macintosh 128K | computer | A | 280 | 24 |
+| 16 | BBS | utility | | 150 | special |
+| 17 | IBM PC 5150 | computer | I | 300 | 26 |
+| 18 | Floppy Find | event deck 0 | | | |
+| 19 | PC XT 5160 | computer | I | 320 | 28 |
+| 20 | PC AT 5170 | computer | I | 340 | 30 |
+| 21 | CRASH! | go to Repair Shop | | | |
+| 22 | Amiga 500 | computer | R | 360 | 32 |
+| 23 | Atari ST | computer | R | 380 | 34 |
+| 24 | System Error | event deck 1 | | | |
+| 25 | 386DX | computer | P | 400 | 36 |
+| 26 | 486DX2 | computer | P | 420 | 40 |
+| 27 | E-waste Fee | charge 75 | | | |
+
+16 computers, 2 utilities, 4 event spaces, 2 charges, 4 corners. The
+eighteen purchasable spaces have a PROP INDEX 0..17 in id order
+(`bp_board.c`); ownership, levels and mortgages are indexed by it.
+Collections and the price of one upgrade step: C Commodore 3 members 50,
+H Home Micros 3 75, A Apple 3 100, I IBM 3 125, R 16-bit Rivals 2 150,
+P Power PCs 2 200.
+
+#### 131.2.2 Money, order and salary
+
+Each of 2-4 seats starts on BOOT with 1,500 cr. The bank has no finite
+cash. The first player is chosen by the authority's dice: every seat rolls
+two dice; ties among the highest re-roll among themselves; play then runs in
+roster order from the winner. Forward movement that crosses or lands on BOOT
+pays 200 cr once per crossing; backward movement and transport to detention
+pay nothing; card text may say otherwise explicitly. Purchases and auctions
+pay the bank; rent pays the owner; charges and card payments pay the bank.
+Every payment names its reason, debtor, creditor and exact amount (the
+result's events, 131.3.4). Classic ends when one player remains; a resolved
+match accepts no economic command.
+
+#### 131.2.3 Sets and upgrades
+
+A computer has level 0..5: stock, 1-4 RAM chips, 5 a Workshop (which
+replaces the four chips). Owning every member of a collection doubles the
+base rent of an unupgraded member, provided no member is mortgaged. An
+upgrade needs the whole collection, no mortgage in it, the cash, and a
+management phase; building and selling are EVEN: after each step the
+collection's highest and lowest levels differ by at most one. Rent at levels
+1..5 is 5, 15, 30, 45, 60 times base rent, replacing (not multiplying) the
+set doubling. A step costs the collection's price; selling one returns half,
+rounded down (5 -> 4 is one step). Utilities are never upgraded. Selling is
+allowed in debt; buying is not.
+
+#### 131.2.4 Mortgages and utilities
+
+A property or utility mortgages for half its price, rounded down, and earns
+no rent while mortgaged. A computer mortgages only when every member of its
+collection is at level 0. Redemption costs principal plus 10% of principal
+rounded up, shown before confirmation. POWER/BBS rent is 4 x the movement
+dice total when the owner holds one unmortgaged utility, 10 x with both
+unmortgaged. A card-induced utility landing uses the turn's recorded dice
+total (BPState.d1 + d2, `rolled` set); a state lacking it is invalid. An
+unowned utility is bought or auctioned like a computer.
+
+#### 131.2.5 Turns and the Repair Shop
+
+Management -> roll -> move -> resolve the landing and every consequence ->
+management -> end turn, or roll again on doubles. Normal doubles grant
+another roll after the landing fully resolves; a third consecutive double
+sends the player straight to detention before moving. CRASH! transports to
+space 7 detained, without salary, ending the turn once obligations resolve.
+Landing on 7 is visiting. SWAP MEET does nothing. A detained player may pay
+50 cr, use a held Recovery Disk, or roll for doubles at the start of the
+turn; paying or the disk restores a normal turn including its doubles. A
+doubles release moves the rolled sum with no bonus roll; a failed attempt
+ends the first or second detained turn; the third failure creates a 50 cr
+obligation, after whose payment the recorded total is moved and resolved
+(no bonus roll); bankruptcy cancels that movement. Detained players receive
+rent, bid in auctions, trade and manage. The consecutive-doubles count
+resets at turn end or detention; tries, the pending payment and the pending
+movement are saved and replicated.
+
+#### 131.2.6 Auctions
+
+Declining, or being unable to afford, a direct purchase opens an auction
+among all solvent players including the decliner. Order starts with the
+landing player, then roster order. Opening minimum 10 cr; a later bid is a
+multiple of 10 and at least 10 above the high bid; no bid exceeds the
+bidder's cash. On each turn a seat bids or passes permanently. The high
+bidder is skipped until outbid. A seat that cannot make a legal higher bid
+is passed automatically, with a visible reason (event PASS, other = 1).
+When every other eligible seat has passed, the high bidder pays exactly the
+bid and receives the lot in the same transaction; if all pass without a
+bid, the bank keeps it. During an auction only BID and PASS are legal: no
+trade, upgrade, mortgage or roll, no wall-clock deadline, no proxy bid for a
+disconnected seat.
+
+#### 131.2.7 Trades
+
+The current player may propose a trade with one other solvent player in a
+management phase (MANAGE, REPAIR, AFTER), never past an unresolved debt,
+landing, auction or card. Terms: any subset of either side's properties and
+utilities, either side's Recovery Disks, and one cash amount with an
+explicit payer; a one-sided gift is legal, an empty proposal is not. No
+property of a collection with any upgrade may be traded. A mortgaged
+property may be traded and stays mortgaged. The offer is FROZEN under an
+offer id and the revision it was made at; the recipient alone accepts or
+rejects, the proposer may cancel. Acceptance re-validates every asset and
+balance and applies the whole exchange in one transaction or none of it.
+While an offer is pending nothing else economic happens; a disconnect pauses
+it and is never consent.
+
+#### 131.2.8 Debt, bankruptcy, rounds and scoring
+
+An obligation larger than cash opens DEBT for the active seat (the debtor is
+always the active seat: rent, charges, cards and the Repair Shop's third
+failure are its own). DEBT shows amount, creditor, cash and shortfall and
+permits only even upgrade sales, legal mortgages, SETTLE (when cash
+suffices; pays the whole obligation once) and BANKRUPT. On bankruptcy:
+every upgrade is sold at resale value; the debtor's cash goes to the
+creditor up to the debt, and any excess follows the estate; a PLAYER
+creditor receives every property, utility and Recovery Disk, mortgages
+kept, no interest; the BANK absorbs cash, returns properties at level 0
+unmortgaged (offered normally on later landings, no liquidation auctions)
+and Recovery Disks to the bottom of their decks. The seat is eliminated:
+removed from turn, round and bidding order, its pending commands invalid.
+Victory is evaluated only after the whole transaction. Quick Match ends
+after 10, 20 or 30 completed rounds (a round: every seat active at its start
+has completed a turn or been eliminated; bonus rolls belong to their turn);
+the final turn's consequences finish, then score = cash + each owned
+property's price minus outstanding mortgage principal + upgrade resale
+value (Recovery Disks score 0); ties share the win.
+
+#### 131.2.9 Cards
+
+Two original eight-card decks, shuffled once at setup by the authority's
+PRNG; drawn from the top, resolved cards returned to the bottom; a held
+Recovery Disk is out of the cycle until used (then to its own deck's bottom)
+or transferred. Card ids are `deck * 8 + n` (`bp_cards.c`).
+
+| deck | card | effect |
+|---|---|---|
+| Floppy Find | Boxed New Old Stock | receive 100 |
+| Floppy Find | Garage Sale Treasure | receive 50 |
+| Floppy Find | Duplicate Manual | receive 25 |
+| Floppy Find | Reboot to BOOT | advance to BOOT; receive 200 once, also when already there |
+| Floppy Find | Dial Into the BBS | advance to 16, salary only if crossing BOOT, resolve the BBS |
+| Floppy Find | Turbo Button | forward 3, collecting crossed salary, resolve |
+| Floppy Find | Recovery Disk | keep |
+| Floppy Find | Replacement Cable | pay 25 |
+| System Error | Leaking Battery | pay 100 |
+| System Error | Failed Capacitor | pay 50 |
+| System Error | Shipping Damage | pay 35 |
+| System Error | Bench Service | pay 25 per RAM chip + 100 per Workshop owned (a Workshop is no chips) |
+| System Error | General Protection Fault | detained, no salary, end turn |
+| System Error | Roll Back | back 3, no salary, resolve |
+| System Error | Warranty Replacement | receive 50 |
+| System Error | Recovery Disk | keep |
+
+Card destinations resolve through the ordinary landing code. The chains on
+this board terminate (Roll Back from 10 lands on 7, from 24 on 21; neither
+draws); the engine still bounds continuation depth (`BPState.depth`) and
+answers BP_EDEPTH rather than drop a payment or a move.
+
+### 131.3 The canonical match, phases and commands
+
+`apps/byteopoly/bp.h` is the source of truth for every record named here.
+
+#### 131.3.1 Canonical state
+
+`BPState` holds everything that decides the game and nothing that does not:
+match id and revision, turn and round, status/rules, phase, active and
+deciding seats, the roster (names, tokens, machine assignment, alive,
+position, cash, detention, tries, held disks), owner/level/mortgage per prop
+index, dice and doubles, pending movement, deck order and positions, the
+current card, the return phase, continuation depth, PRNG state, the auction,
+the debt, the frozen offer and the scores. Selection, focus, animation,
+sound, the log and window state are presentation and live outside it; they
+never enter a digest. Booleans and enums are explicit bytes, validated on
+every decode.
+
+#### 131.3.2 Phases
+
+`BP_PH_MANAGE` (before the roll), `REPAIR` (detained, before a release
+choice), `BUY`, `AUCTION`, `CARD` (the drawn card is shown; ACK_CARD
+resolves its effect), `DEBT`, `TRADE` (an offer awaits its recipient),
+`AFTER` (landing resolved: END_TURN, or ROLL for a doubles bonus), `OVER`.
+MOVING, RESOLVE_LANDING and TURN_COMPLETE are inside one transaction and
+never observable. START_ROLL is inside `bp_new_match`. HANDOFF is
+presentation only: it changes no canonical byte and needs no peer. LINK
+PAUSED is a session overlay that leaves the underlying phase intact.
+Dismissing a card is canonical (ACK_CARD); dismissing a handoff is not.
+
+#### 131.3.3 Commands
+
+`BPCmd` carries the type, the actor seat and the revision the actor saw,
+plus the arguments its type uses. `bp_apply` is the single mutation door: it
+checks phase, actor (`decider`), revision, ownership, cash and every rule,
+and either commits the whole transaction (BP_OK, `rev` + 1) or changes
+nothing and answers a `BP_E*` with a readable reason (`bp_err_text`).
+Wrong seat, wrong phase, stale revision, foreign asset, insufficient cash,
+malformed offer and an eliminated actor are each refused without change.
+
+#### 131.3.4 Results
+
+A committed transaction reports a `BPResult`: the dice and card it consumed
+and up to `BP_EV_MAX` events naming every payment (debtor, creditor,
+amount, reason), movement, ownership change and phase-relevant fact, in
+order. The log, the sounds and the client's cross-check read events; the
+renderer reads only `bp_game`.
+
+#### 131.3.5 Ownership of source
+
+One owner per file (the table in `bp.h`'s header). `bp_game` is mutated
+only by the session (`bp_link.c`) through `bp_apply` / `bp_new_match` /
+an adopted load or snapshot. The face and panels read it; they never write
+cash or ownership.
+
+### 131.4 The engine
+
+(Rules lane. Reserved: the transition rules phase by phase, continuation,
+the PRNG, the validation predicates `bp_can` answers for greying.)
+
+#### 131.4.1 Two-word arithmetic
+
+(Rules lane. Reserved: `bp_u32_*` contracts, overflow policy, formatting
+and parsing, and the boundary fixtures.)
+
+### 131.5 The cable protocol
+
+(Link lane. Reserved: the C bridge to `apps/os88cable.inc`, frame types and
+lengths, the handshake (Byteopoly magic, protocol version, rules and content
+fingerprints, endpoint identity, role), sequence and acknowledgement, the
+bandwidth and queue arithmetic at 2,400 baud 8N1, timeouts in ticks.)
+
+Binding choices made before the lane: the framer is `apps/os88cable.inc`
+(§115, written once for any two-machine package): 7Eh/7Dh framing,
+CRC-16/CCITT-FALSE, at most 32 body bytes a frame, one length per type.
+The port search, lease, mouse-port refusal and teardown are its own; this
+package does not touch a UART, an interrupt vector or the PIT. Byteopoly has
+its own frame identity and never answers a WireFleet or Wire Arena peer.
+
+### 131.6 Sessions, authority and recovery
+
+(Link lane. Reserved: local / host / client sessions, seat gating, the
+stop-and-wait transaction, deduplication identities, pause and resume,
+digest disagreement and snapshot adoption, chat and diagnostics.)
+
+Binding choices made before the lane: ONE banker host per match for its
+whole life; one outstanding economic transaction at a time. The client
+sends INTENTs only and never optimistically mutates. The host applies a
+legal intent once, retains the result, and publishes it with the new
+revision and the canonical digest (131.7). The client then applies the SAME
+command with the SAME production engine: the PRNG state is canonical, so
+the replay is deterministic, and it cross-checks the result's dice/card and
+the digest; any disagreement stops economic input and offers the banker's
+snapshot within the same match. Local play and both cable roles call the
+same `bp_apply`. The trust model is friendly: the banker is trusted;
+nothing here claims cheat resistance or secrecy from a modified peer, and
+the ordinary interface never shows a future card.
+
+### 131.7 Saves and paired checkpoints
+
+(Save lane: the canonical encoding, its validation, the digest, the local
+save file and the file half of a paired checkpoint. Link lane: the
+checkpoint protocol between the machines. Reserved.)
+
+Binding choices made before the lane: one canonical field-by-field
+little-endian encoding (`bp_encode`) serves the save files, the snapshot
+and the digest; nothing is written raw from a struct. A load decodes into a
+scratch `BPState` and validates completely before anything replaces the
+running match.
+
+### 131.8 The face
+
+(Face lane. Reserved: layouts, the board cells, tokens and markers, the
+sidebar, the hint bar, the widget kit, sections and redraw cost.)
+
+Binding choices made before the lane: drawing is Breadboard XT's band core
+(`apps/breadxt/draw.inc`, §130.6.2), shared as SOURCE with `BX_CORE_ONLY`
+leaving out Breadboard's own tail: every repaint is strips, each composed in
+one band (four planes on colour, one on 1bpp, 2x2 patterns standing in for
+colour) and put down with one call. Three layouts are picked from the
+content box, never from the adapter's name: FULL (VGA 640x480 class), MID
+(Hercules 720x348 class) and COMPACT (CGA 640x200 class). No meaning is
+carried by hue alone: collections have letters, owners have token marks,
+mortgage and upgrades have shapes.
+
+### 131.9 Panels, flows and input
+
+(Panels lane. Reserved: the application's callbacks and modes, setup, the
+cable lobby, the decision panels, handoff, menus and keys, sound cues, the
+close decision.)
+
+### 131.10 Art
+
+(Art lane. Reserved: the codex master and its prompt, `art/sprites.txt` as
+the source, `tools/os88bpart.py`, BPART.BIN's layout, sizes and the mono
+treatment.)
+
+### 131.11 Memory and parts
+
+Every byte is measured, not assumed (US-25). `APP_MAX_SIZE` (65,024 bytes)
+bounds the resident image plus bss; the eager embedded overlay (§73.14.2)
+has its own 64 KB segment and holds code only; the art is a lazy part; the
+band is a 16 KB movable heap claim with a 2 KB bss fallback. Budgets at the
+foundation (each lane measures its own and reports it):
+
+| part | budget | holds |
+|---|---|---|
+| runtime, thunks, draw core, os88ui | ~14 KB (measured 14,102 with the skeleton) | |
+| rules (resident) | 16 KB | the engine, the tables, the arithmetic |
+| codec (resident) | 3 KB | encode, digest |
+| link (resident) | 8 KB | serial service, parser, the session |
+| face (resident) | 10 KB | layout, board, sidebar, widgets |
+| app glue (resident) | 3 KB | callbacks, routing |
+| bss | 8 KB | three BPState-sized records, buffers, the link's rings |
+| overlay | 64 KB | panels and flows, saves/loads, lobby, checkpoint and snapshot, help |
+
+A resident function called on every paint, key, click or timer tick stays
+resident; anything reached from a menu, a dialog, a file or a lobby goes in
+the overlay (`ovl_*`), split by frequency (§73.14).
+
+### 131.12 Build, distribution and verification
+
+`make byteopoly` builds `build/byteoply.o88` (SmallerC at the pin
+`tools/setup-cc.sh` fetches, then `tools/cc8086.py` with its gates, then the
+ordinary package pipeline); `make byteopolydisk` the software disk in all
+four geometries; `make byteopolyhost` the host harness; `make
+byteopoly-pair` two 86Box XTs on a COM2 null modem. Every included `.c`,
+`.h` and `.inc`, the art text and the art tool are make prerequisites. The
+host harness compiles the SHIPPING rules, codec and link C with `BP_HOST`
+(16-bit stored words) under ASan/UBSan; it supplements, never replaces,
+the guest runs. (Reserved: the registered rows, the paired-emulator fault
+cases and the acceptance evidence.)

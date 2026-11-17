@@ -1401,6 +1401,9 @@ bx_rpar: resw 1
 bx_rk: resw 1
 section .text
 
+; Breadboard XT's own tail. A package sharing the band core as source
+; (Byteopoly, SPEC.md 131.8) defines BX_CORE_ONLY and takes the core alone.
+%ifndef BX_CORE_ONLY
 ; int bb_ask(const char *message,void *window,int buttons)
 _bb_ask:
     push bp
@@ -1532,3 +1535,4 @@ bb_dr_tlo: resw 1
 bb_dr_frac: resw 1
 bb_dr_num: resb 12
 section .text
+%endif

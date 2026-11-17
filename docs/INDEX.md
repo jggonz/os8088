@@ -355,6 +355,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | ArtfulType | `apps/artful/artful.asm` | §46 | yes |
 | BREADXT | `apps/breadxt/breadxt.asm` |  | yes |
 | BROWSER | `apps/browser/browser.asm` | §71 | yes |
+| BYTEOPOLY | `apps/byteopoly/byteoply.asm` | §131 | no |
 | Bounce | `apps/bounce/bounce.asm` | §112 | yes |
 | C64 | `apps/c64/c64.asm` | `docs/C64-SPEC.md` | yes |
 | CALCULATOR | `apps/calc/calc.asm` | §65 | yes |
@@ -564,6 +565,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 128 | Wire Arena — a text-mode arena shooter (`apps/wirearena/`, `WIRERENA.O88`) |
 | 129 | PageDesk — a native PDF viewer and editor (`apps/pagedesk/`, `PAGEDESK.O88`) |
 | 130 | Breadboard XT — educational circuit workbench, written in C |
+| 131 | Byteopoly — a vintage-computer trading game, written in C (`apps/byteopoly/`, `BYTEOPLY.O88`) |
 
 ## docs/
 
