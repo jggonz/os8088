@@ -342,24 +342,36 @@ static int fc_pick(int prop, int aw, int ah)
     if (z && (int)(z & 255) <= aw && (int)(z >> 8) <= ah) { fc_pw = z & 255; fc_ph = z >> 8; return id; }
     return -1;
 }
-/* a corner or special space's picture: SMALL, else TINY (131.10), else -1 */
-static int ovl_fc_spick(const BPSpace *sp, int s, int aw, int ah)
+/* a corner or special space below its name: the picture with the amount
+ * beside it (BOOT, the charges) where both fit, SMALL before TINY (131.10),
+ * else the SMALL picture alone, else the TINY pair or picture, else the
+ * amount alone */
+static void ovl_fc_special(const BPSpace *sp, int s, int x, int sy, int nw, int ah)
 {
-    int id, k, t;
+    const char *a;
+    int aw, k, t, id, pw, ph, w;
     unsigned z;
+    a = fc_cellsub(sp);
+    aw = *a ? bx_twidth(a, fc_fs) + 3 : 0;
     id = fc_specart(sp, s);
-    if (id < 0) return -1;
-    for (k = 0; k < 2; k++) {
+    for (k = 0; k < 4 && id >= 0; k++) {
         t = fc_mono(id);
 #ifdef BP_A_TSPECIAL
-        if (k) t = bp_mono ? BP_A_MTSPECIAL(id) : BP_A_TSPECIAL(id);
+        if (k & 2) t = bp_mono ? BP_A_MTSPECIAL(id) : BP_A_TSPECIAL(id);
 #else
-        if (k) break;
+        if (k & 2) break;
 #endif
         z = bx_size(t);
-        if (z && (int)(z & 255) <= aw && (int)(z >> 8) <= ah) { fc_pw = z & 255; fc_ph = z >> 8; return t; }
+        if (!z) continue;
+        pw = z & 255; ph = z >> 8;
+        w = pw + ((k & 1) ? 0 : aw);
+        if (w > nw || ph > ah) continue;
+        x += (fc_cw - w) / 2;
+        bx_spr(x, sy + (ah - ph) / 2, t);
+        if (!(k & 1) && aw) bx_text(x + pw + 3, sy + (ah - fc_sh) / 2, a, 0, fc_fs);
+        return;
     }
-    return -1;
+    fc_ctext(x + 2, x + fc_cw - 3, sy + 2, a, 0, fc_fs);
 }
 static int fc_seatat(int s, int k)      /* k-th live seat standing on space s, or -1 */
 {
@@ -438,10 +450,10 @@ static void fc_cell(int s)
         fc_ctext(x + 2, x2 - 2, sy, ovl_fc_cfits(sp->shortname, nw), ink, fc_fs);
         sy += fc_sh + (ch >= 44);
         ah = y2 - sy - (ch >= 44 ? 4 : 1);
-        id = prop != BP_NOBODY ? fc_pick(prop, nw, ah) : ovl_fc_spick(sp, s, nw, ah);
+        id = prop != BP_NOBODY ? fc_pick(prop, nw, ah) : -1;
         if (mort) bx_dither(x + 2, sy, x2 - 2, y2 - 2, 15, 7, 2);
         if (id >= 0) bx_spr(x + (cw - fc_pw) / 2, sy + (ah - fc_ph) / 2, id);
-        else if (prop == BP_NOBODY) fc_ctext(x + 2, x2 - 2, sy + 2, fc_cellsub(sp), 0, fc_fs);
+        else if (prop == BP_NOBODY) ovl_fc_special(sp, s, x, sy, nw, ah);
         if (lvl) fc_lvl(x2 - 3, sy + 1, lvl, id >= 0 ? (cw - fc_pw) / 2 - 3 : 20);
         if (mort) {                                     /* the left margin, top of the picture row */
             if (bx_size(BP_A_MORTGAGE)) bx_spr(x + 3, sy + 1, fc_mono(BP_A_MORTGAGE));

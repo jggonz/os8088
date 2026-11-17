@@ -255167,10 +255167,12 @@ the cells on the ring's rim), then, by what it is:
   property the `BP_A_MORTGAGE` mark at the top of the left margin (inside
   the cell on MID's 34 rows too) and a sparse grey dither over its picture.
 * A **corner or special space**: the name at the top, the picture below
-  (`fc_specart`: BOOT, REPAIR, SWAP, CRASH, the two decks, DUTY, E-WASTE; the
-  SMALL picture where it fits, else its TINY `BP_A_TSPECIAL` - on 1bpp
-  `BP_A_MTSPECIAL` - twin, which is what a MID cell shows), and
-  for BOOT and the two charges the amount ("+200", "-100", "-75").
+  (`fc_specart`: BOOT, REPAIR, SWAP, CRASH, the two decks, DUTY, E-WASTE), and
+  for BOOT and the two charges the amount ("+200", "-100", "-75") beside it.
+  The first that fits the room under the name wins: the SMALL picture with
+  the amount, the SMALL picture alone (FULL's charges: the details box gives
+  the amount), the TINY `BP_A_TSPECIAL` twin (on 1bpp `BP_A_MTSPECIAL`) with
+  the amount, then alone (MID), and the amount alone.
 * **COMPACT** cells (16 rows: not enough for a picture) trade it for two
   rows: row A is an 8 x 7 collection letter chip, a 2 px gap, then the short
   name (fitted as above); row B an 8 x 8 chip with the owner's SEAT NUMBER in
