@@ -106,13 +106,51 @@
 #define BP_A_KEYCAP 84
 #define BP_A_COINS 85
 #define BP_A_LOCK 86
+/* monochrome twins (SPEC.md 131.10.5): drawn in black and white only, for
+ * 1bpp where the core's 2x2 patterns turn the colour sprite to mush. The face
+ * uses BP_A_MTINY(p) for a TINY prop and BP_A_M_<NAME> for the singles listed
+ * below, in place of the colour ID, when bp_mono. Every other ID reads well
+ * through the core's patterns. */
+#define BP_A_M_T_PET 87
+#define BP_A_M_T_VIC20 88
+#define BP_A_M_T_C64 89
+#define BP_A_M_T_POWER 90
+#define BP_A_M_T_TRS80 91
+#define BP_A_M_T_A800 92
+#define BP_A_M_T_ZX 93
+#define BP_A_M_T_APPLE2 94
+#define BP_A_M_T_APPLE2E 95
+#define BP_A_M_T_MAC 96
+#define BP_A_M_T_BBS 97
+#define BP_A_M_T_PC 98
+#define BP_A_M_T_XT 99
+#define BP_A_M_T_AT 100
+#define BP_A_M_T_AMIGA 101
+#define BP_A_M_T_ST 102
+#define BP_A_M_T_386 103
+#define BP_A_M_T_486 104
+#define BP_A_M_TOK_FLOPPY 105
+#define BP_A_M_TOK_JOYSTICK 106
+#define BP_A_M_BOOT 107
+#define BP_A_M_SWAP 108
+#define BP_A_M_FLOPPY 109
+#define BP_A_M_CRASH 110
+#define BP_A_M_CARD_FF 111
+#define BP_A_M_CARD_SE 112
+#define BP_A_M_RAM 113
+#define BP_A_M_MORTGAGE 114
+#define BP_A_M_EWASTE 115
 /* text: the built-in rules and help lines, NUL-terminated, in order */
-#define BP_A_HELP 87
-#define BP_A_COUNT 88
+#define BP_A_HELP 116
+/* UI strings the panels/app may move out of the resident image: the same
+ * NUL-terminated text record as BP_A_HELP; empty until a lane fills art/uitext.txt */
+#define BP_A_UITEXT 117
+#define BP_A_COUNT 118
 /* prop index -> art ID */
 #define BP_A_SMALL(p) (BP_A_S_PET + (p))
 #define BP_A_LARGE(p) (BP_A_L_PET + (p))
 #define BP_A_TINY(p) (BP_A_T_PET + (p))
+#define BP_A_MTINY(p) (BP_A_M_T_PET + (p))
 #define BP_A_TOKEN(t) (BP_A_TOK_FLOPPY + (t))
 #define BP_A_DIE(n) (BP_A_DIE1 + (n) - 1)
 #endif
