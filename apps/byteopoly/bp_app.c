@@ -522,29 +522,26 @@ void os88_onkey(int ascii, int scan, void *win)
 {
     int used;
     used = 0;
-    /* a key the hot keys or the panels took changed panel-local state (the
-     * focus, a bid editor, a handoff, an opened panel) that the face cannot
-     * hash, so the centre and the hint bar are dirtied here (SPEC 131.8.5:
-     * CENTER always); a board key dirties precisely on its own */
-    if ((ascii == 0 && ovl_bp_ap_hotkey(scan)) || bp_pn_key(ascii, scan)) {
-        used = 1;
-        bp_face_dirty(BP_D_CENTER | BP_D_HINT);
-    } else if (bp_ap_mode == BP_M_GAME && bp_face_key(ascii, scan)) used = 1;
+    /* the panels and the hot keys name their own damage (SPEC 131.9.7): a
+     * key that changed nothing repaints nothing; a board key dirties
+     * precisely on its own */
+    if ((ascii == 0 && ovl_bp_ap_hotkey(scan)) || bp_pn_key(ascii, scan)) used = 1;
+    else if (bp_ap_mode == BP_M_GAME && bp_face_key(ascii, scan)) used = 1;
     bp_ap_poll();
     if (used || bp_ap_need) bp_ap_repaint(win);
+    bp_gp_keyend();                     /* after the repaint: the held-key clock (131.9.8) */
 }
 void os88_onclick(int x, int y, void *win)
 {
     int s;
     if (bp_pn_click(x, y)) {
-        bp_face_dirty(BP_D_CENTER | BP_D_HINT);
         bp_ap_poll();
         bp_ap_repaint(win);
-        return;
+    } else if (!bp_ap_mode) {
+        s = bp_face_hit_space(x, y);
+        if (s >= 0) { bp_face_select(s); bp_ap_repaint(win); }
     }
-    if (bp_ap_mode) return;
-    s = bp_face_hit_space(x, y);
-    if (s >= 0) { bp_face_select(s); bp_ap_repaint(win); }
+    bp_gp_keyend();
 }
 void os88_oncmd(int item, int menu, void *win)
 {
