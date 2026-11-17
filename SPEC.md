@@ -253407,3 +253407,144 @@ is the story list (PD-01 to PD-30), the platform record and the capability
 matrix. Nothing in the kernel changes for it: it is a package over the
 published API (`READ_SEQ`, `WRITE_SEQ`, the Standard File dialog, the
 clipboard, the parts standard of §20.12) and §73's C toolchain.
+
+
+## 130. Breadboard XT — educational circuit workbench, written in C
+
+Breadboard XT (`apps/breadxt/`, `BREADXT.O88`, `.BBX`) is a native editable
+breadboard with bounded DC, four-state HC logic and backward-Euler transient
+simulation, including an idealized pin-level NE555. This section is the
+application contract; `docs/plans/BREADXT-PLAN.md` records delivery status,
+`docs/breadxt/CONTRACT.md` the source interfaces, and
+`docs/HOW-BREADXT-WAS-BUILT.md` the measured build diary. Planned capabilities
+are not claims of implemented or tested behavior.
+
+### 130.1 Authority and boundaries
+
+The user's Breadboard XT brief and concept provide product/UI direction.
+BreadboardSim at commit `0ba38d35a9f7b9cd53a226865d20b7d94faff948` is
+workflow inspiration only: none of its GPL code, models, artwork or data is
+copied. `docs/breadxt/SOURCES.md` identifies inspected files and datasheets.
+Native controls, fonts, menus, close alerts and file dialogs use the SDK.
+The shell permits five menus: File, Edit, Parts, Simulate and View; Help is
+a View command and About uses the standard application entry. There is no
+private application menu bar and no new kernel facility.
+
+### 130.2 Document and physical topology
+
+One board has 30 columns, terminal rows a–j, and four power-rail rows.
+Hole = row*30 + zero-based column, 0..419: rows0/1 upper positive/negative,
+2..6 a..e, 7..11 f..j, 12/13 lower positive/negative. Each terminal column
+has independent a–e and f–j strips. Every rail is split between columns15
+and16, making eight separate rail segments; this break is drawn.
+
+At most64 parts and128 wires, two drawing-only orthogonal bends per wire,
+64 active electrical nets and24 unknown analog voltages. Only occupied
+strips count against the electrical-net limit. Connections are made through
+strips and wire endpoints, never a drawing intersection. One inserted lead
+per hole includes wire endpoints. Removing a part leaves independent wires
+in their holes; removal is one undoable command. Sixteen complete commands
+retain before/after records; an edit after Undo discards the redo branch.
+
+Parts and wires have stable nonzero16-bit IDs. DIP pin1 starts on row f
+with the notch at the left; lower pins increase to the right, upper pins
+return left along e. Rotation reverses this footprint while retaining pin
+identity. Resistors, LEDs, switches, capacitors, pots, ground, supply, logic
+inputs/indicators/clocks, SN74HC00/04/08/32/86N and NE555P use actual pins.
+Pin maps and validation are defined once in the model.
+
+### 130.3 Numbers, solver and publication
+
+C integers and pointers are16bits. Addressable objects are static and no
+C floating type, long integer, struct-by-value or FPU is used. The solver
+uses V/mS/mA opaque eight-byte records through the shared `apps/os88fp.inc` software
+arithmetic, never initializes its optional hardware path, and checks
+accepted ranges, pivots, finite results, residuals and iteration bounds.
+Parameters: resistance in10-ohm units (100..655350ohms), capacitance in nF
+(1..60000), supply4500..6000mV, pot wiper0..1000 permille. Time is a pair
+of unsigned words counting100us; default step10units (1ms), convergence
+fixture5units (0.5ms). Published voltages are mV, branch currents uA from
+pin1 to pin2, magnitude at most30000uA; larger values fail before conversion.
+Analog domain is0..6000mV; negative published sentinel values mean floating,
+unknown or failed, never valid zero. A supplying source has negative pin1-to-pin2
+current; current absorbed into its positive terminal is positive. Exactly one
+ground-referenced supply is supported; a second source is diagnosed rather than
+silently choosing a logic rail or inventing parallel-source currents.
+
+The absolute pivot threshold is1e-9mS, with1e-12 relative to the row maximum.
+KCL residual allowance is1e-6mA plus1e-7 times the incident absolute current;
+tiny incident sums use the absolute allowance alone. Voltage enclosure allows
+1uV rounding at0/6V. Results are rounded to integer mV/uA only after validation.
+
+Nodal analysis uses fixed ground/supply nodes, bounded pivoting and bounded
+LED active-set iteration. The LED is an ideal reverse block and a forward
+2V source plus explicitly documented10ohm on-resistance; it has no hidden
+current limiter. An active all-LED path between different ideal fixed rails
+is diagnosed even when the summed on-resistance yields less than30mA; a parallel
+resistor is not a series limiter. Zero-current
+LED boundaries are checked without their diode stamp: an otherwise unreferenced
+node publishes FLOAT/Z rather than an invented2V. Genuine resistor/capacitor
+references retain valid boundary solutions. Each step re-arms ON candidates
+within the bounded active-set iteration. Ambiguous cyclic zero-current LED-only
+references receive a conservative floating-network diagnostic; this educational
+model does not claim a general diode complementarity solver.
+Capacitors use backward-Euler companions, retaining the previous committed
+terminal voltage. A pot endpoint's zero-length segment is ideal connectivity.
+Diagnostics distinguish absent ground, floating/disconnected nets, fixed
+voltage conflict, source short, singularity, numeric range, nonconvergence,
+invalid power, contention, oscillation/event bound and unsupported bridges.
+
+HC input levels are LOW<=0.3VCC, HIGH>=0.7VCC; intermediate, undriven or
+conflicting inputs retain explicit X/Z state. Ideal HC output levels are
+0/VCC; unsupported analog feedback/output bridges are diagnosed.
+Ideal HC/555 output drivers supply loads directly; their load and quiescent
+consumption are omitted from power-pin current. The DC source reading covers
+the external stamped network at its node, not a complete IC power budget.
+NE555 pins1GND/2TRIG/3OUT/4RESET/5CONT/6THRES/7DISCH/8VCC follow TI's
+function table: RESET below0.7V dominates; otherwise TRIG belowVCC/3 sets;
+otherwise THRES above2VCC/3 resets; otherwise retain. Output and discharge
+stamps act on actual nets. Only default CONT with an optional bypass
+capacitor to ground is supported; externally driven control is diagnosed.
+
+Edits pause, invalidate results and require compile on Run/Step. Pause
+retains dynamic state and inspectable results; Reset returns capacitors,
+clocks and timer latches to initial conditions and clears scope capture.
+Simulation work occurs only in bounded lock-free wake batches, never paint.
+Publication occurs only after an entire numerical step completes; paint
+reads committed results. Simulation time is independent of wall/OS time.
+
+### 130.4 Scope and display
+
+Two channels each retain256 signed-mV samples with shared32-bit100us
+timestamps. Free/rising/falling capture and time/voltage scales derive from
+actual timestamps, with explicit undersampling and insufficient-cycle state.
+Traces hold the older sample until the next timestamp, then change vertically;
+they do not interpolate a false analog ramp between digital edges.
+The compact frequency/duty readout accepts periods through6.5535s; longer
+measured periods retain their32-bit timestamps and show `long period`.
+OUT and timing-capacitor probes use ordinary hole bindings.
+VGA640x480 shows palette, canvas, inspector and docked scope; Hercules
+720x348 uses monochrome patterns; CGA640x200 uses a readable panned canvas
+and alternate palette/inspector/scope views. Rendering follows window
+damage and caches changed instrument fields; no full-screen framebuffer.
+
+### 130.5 Persistence and distribution
+
+BBX version1 is bounded little-endian binary:48-byte header and16-byte
+part/wire records, maximum3120bytes. The final field table and host inspector
+live in `docs/breadxt/CONTRACT.md`; serialized source contains no authoritative
+netlist or solver cache. Header includes board-profile1 and hole/stable-part-
+ID/pin/branch probe bindings. Loads validate into a separate document before
+commit. Whole-file native writes use the OS's allocate-new-chain, commit
+directory, then free-old-chain replacement behavior (18.4), retaining dirty
+state on reported failure. No application delete-before-save path exists.
+
+The C package uses an embedded eager overlay when needed (73.14.2), native
+BBX association and original procedural icon/art. On-demand `breadxt`,
+`breadxtdisk` and `breadxtbundle` build the package, all four software-disk
+geometries and a conventionally verified WPK. The everything-disk/live payload
+includes its own BREADXT folder. Included examples are ordinary
+editable BBX files. There is no build-time upstream dependency. The final
+verification includes actual VGA/CGA/Hercules XT models, a256KB machine and
+kern_mega; measured sizes/memory and any unavailable emulator check belong to
+the evidence report, separately from build results.

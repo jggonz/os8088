@@ -1,0 +1,386 @@
+os88test: building 3 declared artefact(s): build/breadxt-check360.img build/breadxt360.img build/BREADXT.WPK
+os88test: soak tier - 10 rows, 1105s declared, budget none  (caps: cc,ffmpeg,lame,marty,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+
+os88test: 7 emulator row(s) in a lane of 2; 1 run alone
+ ok  breadxtuihost                  6.1s
+       | breadxt UI host queue: 20 checks, 0 failures
+       | breadxt UI queue: injected defect fails as intended
+       | UI appended value char: 4 glyph cells, 1 drawing calls
+       | UI unchanged inspector: 0 glyph cells, 0 drawing calls
+       | breadxt UI host modal: 18 checks, 0 failures
+       | breadxt UI modal: injected defect fails as intended
+       | breadxt UI host damage: 12 checks, 0 failures
+       | breadxt UI damage: injected defect fails as intended
+       | breadxt UI host wide: 16 checks, 0 failures
+       | breadxt UI wide: injected defect fails as intended
+       | breadxt UI host wide-dismiss: 16 checks, 0 failures
+       | breadxt UI wide-dismiss: injected defect fails as intended
+       | breadxt UI host locate-help: 13 checks, 0 failures
+       | breadxt UI host locate-scope: 15 checks, 0 failures
+       | breadxt UI host locate-offscreen: 15 checks, 0 failures
+       | breadxt UI host locate-none: 11 checks, 0 failures
+       | breadxt UI host stale: 28 checks, 0 failures
+       | breadxt UI stale: injected defect fails as intended
+       | breadxt UI host scope-hold: 12 checks, 0 failures
+       | breadxt UI scope-hold: injected defect fails as intended
+       | breadxt UI host elapsed: 6.06s
+ ok  breadxtcore                   13.4s
+       | breadxt core: 3956 checks, 0 failures; max numeric ops/slice 16
+       | breadxt core: six independent expected-answer negative controls fail as intended
+       | breadxt random: altered voltage/current/source direction controls rejected
+       | breadxt random: 160 resistor networks, 3920 voltage/current/KCL checks
+       | breadxt host elapsed: 13.34s
+ ok  breadxtcapacity               18.3s
+       |       bootcache fbdfbcf3cbaf7eec MISS, booted (3.34 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open MAX24.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick Simulate -> Pause
+       | {
+       |   "pending_solve_help_input_cycles": 3739210,
+       |   "MAX24_step_cycles": 156572399,
+       |   "scope_samples_at_measurement": 1,
+       |   "scope_paint_cycles": 1375900,
+       |   "elapsed_host_seconds": 14.8
+       | }
+       | breadxt capacity: actual24 unknowns, every voltage/current, pending Help input PASS
+ ok  breadxttarget                 56.9s
+       |       bootcache fbdfbcf3cbaf7eec hit (0.04 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BBNUM.O88 -> 'Breadboard XT numeric'
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open HCLOW.BBX
+       |       menu_pick Simulate -> Step
+       | HCLOW (1250, 0) (5000, 1)
+       |       menu_pick File -> Open...
+       |       chooser open HCMID.BBX
+       |       menu_pick Simulate -> Step
+       | HCMID (2500, 2) (-2, 2)
+       |       menu_pick File -> Open...
+       |       chooser open HCHIGH.BBX
+       |       menu_pick Simulate -> Step
+       | HCHIGH (3750, 1) (0, 0)
+       |       menu_pick File -> Open...
+       |       chooser open RESET.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Open...
+       |       chooser open FLOATLED.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Open...
+       |       chooser open BCLK.BBX
+       |       menu_pick Simulate -> Run
+       |       menu_pick Simulate -> Pause
+       |       menu_pick File -> Open...
+       |       chooser open RC.BBX
+       |       menu_pick Simulate -> Run
+       |       menu_pick Simulate -> Pause
+       | {
+       |   "HCLOW_step_cycles": 23708444,
+       |   "HCMID_step_cycles": 28164160,
+       |   "HCHIGH_step_cycles": 29914211,
+       |   "LED_step_cycles": 21003527,
+       |   "RC_time_100us": 1010,
+       |   "RC_mv": 3170,
+       |   "RC_expected_mv": 3169.7464736182233,
+       |   "RC_cycles": 379749931,
+       |   "ui_stack_high_water_bytes": 338
+       | }
+       | breadxt target: numeric ABI, red control, HC bridges, reset, LED, B clock, RC and stack PASS
+       | elapsed host seconds: 56.71
+ ok  breadxtflasher               802.8s
+       |       bootcache eb8d05efb4eb7361 MISS, booted (3.17 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open FLASHER.BBX
+       |       menu_pick Simulate -> Larger timestep
+       |       menu_pick Simulate -> Larger timestep
+       |       menu_pick Simulate -> Reset
+       |       menu_pick Simulate -> Run
+       |   progress three settled flasher cycles: sim0.0000s cycles=0 guestcycles=13524211
+       |   progress three settled flasher cycles: sim0.1000s cycles=0 guestcycles=177898957
+       |   progress three settled flasher cycles: sim0.2000s cycles=0 guestcycles=335590182
+       |   progress three settled flasher cycles: sim0.3000s cycles=0 guestcycles=496462294
+       |   progress three settled flasher cycles: sim0.4000s cycles=0 guestcycles=658528276
+       |   progress three settled flasher cycles: sim0.5000s cycles=0 guestcycles=821153171
+       |   progress three settled flasher cycles: sim0.6000s cycles=0 guestcycles=986005832
+       |   progress three settled flasher cycles: sim0.7000s cycles=0 guestcycles=1153084831
+       |   progress three settled flasher cycles: sim0.8000s cycles=0 guestcycles=1322550810
+       |   progress three settled flasher cycles: sim0.9000s cycles=0 guestcycles=1490504439
+       |   progress three settled flasher cycles: sim1.0000s cycles=0 guestcycles=1650501826
+       |   progress three settled flasher cycles: sim1.1000s cycles=0 guestcycles=1812170796
+       |   progress three settled flasher cycles: sim1.2000s cycles=0 guestcycles=1973124024
+       |   progress three settled flasher cycles: sim1.3000s cycles=0 guestcycles=2137497816
+       |   progress three settled flasher cycles: sim1.4000s cycles=0 guestcycles=2320726669
+       |   progress three settled flasher cycles: sim1.5000s cycles=0 guestcycles=2503719382
+       |   progress three settled flasher cycles: sim1.6000s cycles=0 guestcycles=2686873375
+       |   progress three settled flasher cycles: sim1.7000s cycles=0 guestcycles=2872728907
+       |   progress three settled flasher cycles: sim1.8000s cycles=0 guestcycles=3060971609
+       |   progress three settled flasher cycles: sim1.9000s cycles=0 guestcycles=3250330616
+       |   progress three settled flasher cycles: sim2.0000s cycles=0 guestcycles=3428230797
+       |   progress three settled flasher cycles: sim2.1000s cycles=0 guestcycles=3607882621
+       |   progress three settled flasher cycles: sim2.2000s cycles=0 guestcycles=3790000101
+       |   progress three settled flasher cycles: sim2.3000s cycles=0 guestcycles=3973392122
+       |   progress three settled flasher cycles: sim2.3400s cycles=1 guestcycles=4050407690
+       |   progress three settled flasher cycles: sim2.4400s cycles=1 guestcycles=4254086636
+       |   progress three settled flasher cycles: sim2.5400s cycles=1 guestcycles=4456493550
+       |   progress three settled flasher cycles: sim2.6400s cycles=1 guestcycles=4660650291
+       |   progress three settled flasher cycles: sim2.7400s cycles=1 guestcycles=4867034214
+       |   progress three settled flasher cycles: sim2.8400s cycles=1 guestcycles=5073976455
+       |   progress three settled flasher cycles: sim2.9400s cycles=1 guestcycles=5279643064
+       |   progress three settled flasher cycles: sim3.0400s cycles=1 guestcycles=5478867468
+       |   progress three settled flasher cycles: sim3.1400s cycles=1 guestcycles=5678969282
+       |   progress three settled flasher cycles: sim3.2400s cycles=1 guestcycles=5879944235
+       |   progress three settled flasher cycles: sim3.3400s cycles=1 guestcycles=6083145894
+       |   progress three settled flasher cycles: sim3.3520s cycles=2 guestcycles=6112583715
+       |   progress three settled flasher cycles: sim3.4520s cycles=2 guestcycles=6333767130
+       |   progress three settled flasher cycles: sim3.5520s cycles=2 guestcycles=6556541175
+       |   progress three settled flasher cycles: sim3.6520s cycles=2 guestcycles=6780034826
+       |   progress three settled flasher cycles: sim3.7520s cycles=2 guestcycles=7004798048
+       |   progress three settled flasher cycles: sim3.8520s cycles=2 guestcycles=7231950724
+       |   progress three settled flasher cycles: sim3.9520s cycles=2 guestcycles=7458944717
+       |   progress three settled flasher cycles: sim4.0520s cycles=2 guestcycles=7675596114
+       |   progress three settled flasher cycles: sim4.1520s cycles=2 guestcycles=7894791819
+       |   progress three settled flasher cycles: sim4.2520s cycles=2 guestcycles=8117252114
+       |   progress three settled flasher cycles: sim4.3520s cycles=2 guestcycles=8339869499
+       |   progress three settled flasher cycles: sim4.3600s cycles=3 guestcycles=8360953671
+       |       menu_pick Simulate -> Pause
+       |   calculation three settled flasher cycles: simulated4.360000s, 8374717691guest cycles/1754.703XTseconds, 0.002485simulated seconds per XTsecond
+       |   RB=68000 period=1.008000s oracle=1.011995s duty=0.5357 oracle=0.5342 dt=4ms
+       |   evidence build/breadxt-final/vga-flasher-68k-paused.png
+       |       menu_pick Simulate -> Smaller timestep
+       |       menu_pick Simulate -> Smaller timestep
+       |       menu_pick Simulate -> Reset
+       |       menu_pick Simulate -> Run
+       |   progress three fast-RB cycles: sim0.0000s cycles=0 guestcycles=13762662
+       |   progress three fast-RB cycles: sim0.1000s cycles=0 guestcycles=660039773
+       |   progress three fast-RB cycles: sim0.2000s cycles=0 guestcycles=1305278847
+       |   progress three fast-RB cycles: sim0.3000s cycles=0 guestcycles=1934846229
+       |   progress three fast-RB cycles: sim0.4000s cycles=0 guestcycles=2607062309
+       |   progress three fast-RB cycles: sim0.4970s cycles=1 guestcycles=3239337870
+       |   progress three fast-RB cycles: sim0.5970s cycles=1 guestcycles=3939795408
+       |   progress three fast-RB cycles: sim0.6970s cycles=1 guestcycles=4619730656
+       |   progress three fast-RB cycles: sim0.7040s cycles=2 guestcycles=4669297796
+       |   progress three fast-RB cycles: sim0.8040s cycles=2 guestcycles=5396886825
+       |   progress three fast-RB cycles: sim0.9040s cycles=2 guestcycles=6102919566
+       |   progress three fast-RB cycles: sim0.9110s cycles=3 guestcycles=6154078578
+       |       menu_pick Simulate -> Pause
+       |   calculation three fast-RB cycles: simulated0.911000s, 6167922196guest cycles/1292.327XTseconds, 0.000705simulated seconds per XTsecond
+       |   RB=10000 period=0.207000s oracle=0.207944s duty=0.6667 oracle=0.6667 dt=1ms
+       |       menu_pick Simulate -> Step
+       |   evidence build/breadxt-final/vga-flasher-10k-stepped.png
+       |       menu_pick File -> Save As...
+       |       chooser save FAST555.BBX
+       |       menu_pick Edit -> Delete
+       |       menu_pick Simulate -> Reset
+       |       menu_pick Simulate -> Run
+       |   progress broken timing connection observation: sim0.0000s cycles=0 guestcycles=13603508
+       |   progress broken timing connection observation: sim0.1000s cycles=0 guestcycles=634656363
+       |   progress broken timing connection observation: sim0.2000s cycles=0 guestcycles=1252605425
+       |   progress broken timing connection observation: sim0.3000s cycles=0 guestcycles=1876206293
+       |   progress broken timing connection observation: sim0.4000s cycles=0 guestcycles=2505615773
+       |   progress broken timing connection observation: sim0.5000s cycles=0 guestcycles=3142740663
+       |   progress broken timing connection observation: sim0.6000s cycles=0 guestcycles=3786151061
+       |       menu_pick Simulate -> Pause
+       |   calculation broken timing connection observation: simulated0.622000s, 3938907155guest cycles/825.295XTseconds, 0.000754simulated seconds per XTsecond
+       |   evidence build/breadxt-final/vga-flasher-timing-wire-removed.png
+       |       menu_pick Edit -> Undo
+       |       menu_pick Simulate -> Reset
+       |       menu_pick Simulate -> Run
+       |   progress restored timing oscillation: sim0.0000s cycles=0 guestcycles=13683419
+       |   progress restored timing oscillation: sim0.1000s cycles=0 guestcycles=648977706
+       |   progress restored timing oscillation: sim0.2000s cycles=0 guestcycles=1282280204
+       |   progress restored timing oscillation: sim0.3000s cycles=0 guestcycles=1901904683
+       |   progress restored timing oscillation: sim0.4000s cycles=0 guestcycles=2562745982
+       |   progress restored timing oscillation: sim0.4970s cycles=1 guestcycles=3184757119
+       |       menu_pick Simulate -> Pause
+       |   calculation restored timing oscillation: simulated0.497000s, 3199236876guest cycles/670.316XTseconds, 0.000741simulated seconds per XTsecond
+       |       menu_pick File -> Open...
+       |       chooser open BROKEN.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/vga-diagnostic-located.png
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       | breadxt native vga: PASS elapsed 799.38s
+       | breadxt native total elapsed 802.53s
+ ok  breadxteditor                 37.3s
+       |       bootcache eb8d05efb4eb7361 hit (0.05 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick Parts -> Resistor
+       |       menu_pick Edit -> Undo
+       |       menu_pick Edit -> Redo
+       |       menu_pick File -> Save As...
+       |       chooser save PLACED.BBX
+       |   evidence build/breadxt-final/vga-placed-saved.png
+       |       menu_pick File -> New
+       |       menu_pick File -> Open...
+       |       chooser open PLACED.BBX
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |       menu_pick Simulate -> Step
+       |       menu_pick Edit -> Undo
+       |       menu_pick Simulate -> Step
+       |       menu_pick Edit -> Redo
+       |       menu_pick Simulate -> Step
+       |       menu_pick Edit -> Undo
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Save As...
+       |       chooser save RUNLED.BBX
+       |   evidence build/breadxt-final/vga-led-edited-probed-saved.png
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open RUNLED.BBX -> 'UNTITLED.BBX - Breadboar'
+       |   cold-boot BBX association retained source/probes/view
+       |       menu_pick Simulate -> Step
+       |   evidence build/breadxt-final/vga-led-source-current.png
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       | breadxt native vga: PASS elapsed 33.94s
+       | breadxt native total elapsed 37.06s
+ ok  breadxtbundle                 19.3s
+       | os88disk: /var/folders/66/5snv6tls1pj03hggcyvj894w0000gp/T/breadxt-native-56fxn7xp/installed-wpk.img (360KB, 9 spt, FAT12) 11 file(s) in 1 folder(s), 64/354 clusters
+       |       bootcache 5d3a9dafcfdcd0b1 MISS, booted (3.14 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT -> 11 entries
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       open BREADXT -> 11 entries
+       |       chooser open BREADXT/LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |   evidence build/breadxt-final/bundle-fresh-install-led.png
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 640, 435, 71) press (0,0), origin (0,0), outline (0,0), pointer (198, 191, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/bundle-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/bundle-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/bundle-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (634,449), origin (640,435), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 626, 435)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       | breadxt native bundle: PASS elapsed 15.97s
+       | breadxt native total elapsed 19.08s
+ ok  breadxtherc                   17.3s
+       |       bootcache a111a47a748001e5 MISS, booted (2.31 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |   evidence build/breadxt-final/herc-led-board.png
+       |       menu_pick View -> Oscilloscope
+       |   evidence build/breadxt-final/herc-scope.png
+       |       menu_pick View -> Breadboard
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 720, 303, 71) press (0,0), origin (0,0), outline (0,0), pointer (198, 191, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/herc-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/herc-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/herc-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (714,317), origin (720,303), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 706, 303)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |       menu_pick File -> Open...
+       |       chooser open BROKEN.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/herc-diagnostic-located.png
+       |   heap free/largest before=(518144, 517632) loaded=(394240, 393728) after=(518144, 517632); close released115712bytes incl overlay and timer
+       | breadxt native herc: PASS elapsed 13.99s
+       | breadxt native total elapsed 17.13s
+ ok  breadxtcga                    19.4s
+       |       bootcache faf9b1863c9d1e32 MISS, booted (2.36 host s)
+       |       open_drive B: -> 'Disk' at (103,20)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/cga-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/cga-led-board.png
+       |       menu_pick View -> Oscilloscope
+       |   evidence build/breadxt-final/cga-scope.png
+       |       menu_pick View -> Breadboard
+       |       menu_pick File -> Save
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 640, 155, 71) press (0,0), origin (0,0), outline (0,0), pointer (102, 131, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/cga-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/cga-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/cga-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (634,169), origin (640,155), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 626, 155)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |       menu_pick File -> Open...
+       |       chooser open BROKEN.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/cga-diagnostic-located.png
+       |       menu_pick File -> Save
+       |   heap free/largest before=(518144, 517632) loaded=(396288, 395776) after=(518144, 517632); close released115712bytes incl overlay and timer
+       | breadxt native cga: PASS elapsed 15.88s
+       | breadxt native total elapsed 19.21s
+ ok  breadxt256                    19.7s
+       |       bootcache 5b97835f8d776f8c MISS, booted (2.34 host s)
+       |       open_drive B: -> 'Disk' at (103,20)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/256-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/256-led-board.png
+       |       menu_pick View -> Oscilloscope
+       |   evidence build/breadxt-final/256-scope.png
+       |       menu_pick View -> Breadboard
+       |       menu_pick File -> Save
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 640, 155, 71) press (0,0), origin (0,0), outline (0,0), pointer (102, 131, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/256-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/256-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/256-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (634,169), origin (640,155), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 626, 155)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |       menu_pick File -> Open...
+       |       chooser open BROKEN.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/256-diagnostic-located.png
+       |       menu_pick File -> Save
+       |   heap free/largest before=(124928, 124416) loaded=(3072, 2560) after=(124928, 124928); close released115712bytes incl overlay and timer
+       | breadxt native 256: PASS elapsed 16.33s
+       | breadxt native total elapsed 19.54s
+
+os88test: 10 passed, 0 failed, 0 skipped in 947.4s, 41.4s charged (budget none)

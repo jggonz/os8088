@@ -1,0 +1,12 @@
+{
+  "HCLOW_step_cycles": 24982274,
+  "HCMID_step_cycles": 22435765,
+  "HCHIGH_step_cycles": 23868096,
+  "LED_step_cycles": 20048630,
+  "RC_time_100us": 1010,
+  "RC_mv": 3170,
+  "RC_expected_mv": 3169.7464736182233,
+  "RC_cycles": 380700811,
+  "ui_stack_high_water_bytes": 338,
+  "elapsed_host_seconds": 56.64
+}
