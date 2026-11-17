@@ -13,10 +13,10 @@
  * prove the session's own checks. The relay never chooses dice, applies a
  * rule or repairs state.
  *
- * The engine: the real rules and codec (byteoply.c) once those lanes have
- * landed - BP_TL_REAL. Until then a TOY engine and codec below stand in
- * (BP_TL_TOY): small, deterministic, with an RNG in the state, which is all
- * the protocol needs; the complete-game test runs only on the real one.
+ * The engine: the real rules and codec (byteoply.c), so every test runs the
+ * shipping engine on both machines. -DBP_TL_TOY swaps in the small toy
+ * engine and codec this file kept from before the rules landed (all the
+ * protocol needs; the complete-game test runs only on the real one).
  * The checkpoint files are a fake per machine (one disk each), with
  * injectable write/commit failures. */
 #define BP_LINK_FAKE
@@ -28,9 +28,7 @@
 int bp_ckpt_load_id(int role, const BPU32 *ckpt_id, BPCkpt *meta, BPState *out);
 #endif
 
-#ifndef BP_TL_REAL
-#define BP_TL_TOY 1
-#endif
+/* the real engine unless -DBP_TL_TOY asks for the stand-in */
 
 #ifdef BP_TL_TOY
 #include "bp_board.c"
@@ -340,6 +338,8 @@ static long tl_cash(const BPState *s)
     return t;
 }
 static long tl_prev_cash[2];
+static BPWord tl_prev_rev[2];
+static BPU32 tl_prev_match[2];
 void bp_ui_committed(const BPResult *r)
 {
     TEnd *e = &E[tl_cur];
@@ -351,6 +351,9 @@ void bp_ui_committed(const BPResult *r)
         switch (r->ev[i].kind) {
         case BP_V_SALARY: case BP_V_GAIN: case BP_V_SELL: case BP_V_MORTGAGE: bank += a; if (r->ev[i].kind == BP_V_SALARY) e->salaries++; break;
         case BP_V_BUY: case BP_V_CHARGE: case BP_V_UPGRADE: case BP_V_REDEEM: case BP_V_WON: bank -= a; if (r->ev[i].kind == BP_V_BUY) e->buys++; break;
+#ifndef BP_TL_TOY
+        case BP_V_ESTATE: if (r->ev[i].other == BP_NOBODY) bank -= a; break;
+#endif
         case BP_V_RENT: e->rents++; break;
         case BP_V_TRADED: e->trades++; break;
         default: break;
@@ -358,9 +361,16 @@ void bp_ui_committed(const BPResult *r)
     }
     /* cash moves only by the bank events the result names (an adopted
      * snapshot or resume reports no events and resets the base) */
-    if (r->n && bp_game.status == BP_ST_PLAY)
+    if (r->n && bp_game.status == BP_ST_PLAY && bpl_eq(&bp_game.match_id, &tl_prev_match[tl_cur])
+        && bp_game.rev.lo == (BPWord)(tl_prev_rev[tl_cur] + 1u)) {
+        if (tl_cash(&bp_game) - tl_prev_cash[tl_cur] != bank)
+            printf("  cash: machine %d rev %u moved %ld, bank events %ld\n", tl_cur, bp_game.rev.lo,
+                   tl_cash(&bp_game) - tl_prev_cash[tl_cur], bank);
         BP_CHECK(tl_cash(&bp_game) - tl_prev_cash[tl_cur] == bank, "cash changed outside a documented bank event");
+    }
     tl_prev_cash[tl_cur] = tl_cash(&bp_game);
+    tl_prev_rev[tl_cur] = bp_game.rev.lo;
+    tl_prev_match[tl_cur] = bp_game.match_id;
     e->bank += bank;
     for (p = 0; p < BP_PROPS; p++) {
         owners = bp_game.owner[p];
@@ -494,6 +504,7 @@ static int tl_connect(int nh, int nc)
     return tl_same();
 }
 /* the decider's machine submits cmd type `t` (arg) for the decider */
+#ifdef BP_TL_TOY
 static int tl_submit_as_decider(int type, int arg)
 {
     static BPCmd c;
@@ -506,6 +517,83 @@ static int tl_submit_as_decider(int type, int arg)
     e = bp_sess_submit(&c);
     return e;
 }
+#endif
+#ifndef BP_TL_TOY
+/* the real engine's policy, t_rules.c's script in miniature: build when
+ * rich, buy what it can, bid once at the minimum, settle or sell or
+ * mortgage or go bankrupt, accept two offers of three, and now and then
+ * offer to buy a rival's last collection member at twice its price - so a
+ * PROPOSE crosses the cable as TERMS and its answer as a RESULT */
+static int tl_bids[BP_SEATS];
+static unsigned tl_offered = 0xFFFF;
+static long tl_v32(const BPU32 *v) { return (long)v->lo + 65536L * v->hi; }
+static int tl_policy_move(void)
+{
+    static BPCmd c;
+    BPState *S;
+    int seat, sp, k, did = 0;
+    tl_use(0);
+    S = &bp_game;
+    seat = S->decider;
+#define TL_CMD(t, a) (memset(&c, 0, sizeof c), c.type = (BPByte)(t), c.seat = (BPByte)seat, c.arg = (BPByte)(a), c.rev = S->rev)
+    switch (S->phase) {
+    case BP_PH_MANAGE: case BP_PH_AFTER:
+        if (tl_v32(&S->cash[seat]) > 400)
+            for (sp = 0; sp < BP_SPACES && !did; sp++)
+                if (bp_can(S, seat, BP_C_UPGRADE, sp) == BP_OK) { TL_CMD(BP_C_UPGRADE, sp); did = 1; }
+        if (!did && S->phase == BP_PH_MANAGE && tl_offered != S->turn)
+            for (k = 0; k < BP_PROPS && !did; k++) {
+                const BPSpace *ks = bp_space(bp_prop_space(k));
+                int m, have = 0, size = 0, o = S->owner[k];
+                if (ks->kind != BP_K_COMPUTER || o == BP_NOBODY || o == seat) continue;
+                for (m = 0; m < BP_PROPS; m++) {
+                    const BPSpace *ms = bp_space(bp_prop_space(m));
+                    if (ms->kind != BP_K_COMPUTER || ms->group != ks->group) continue;
+                    size++;
+                    if (S->owner[m] == seat) have++;
+                }
+                if (have != size - 1 || tl_v32(&S->cash[seat]) < 2L * ks->price + 100) continue;
+                TL_CMD(BP_C_PROPOSE, 0); c.to = (BPByte)o;
+                if (k < 16) c.get.lo = (BPWord)(1u << k); else c.get.hi = (BPWord)(1u << (k - 16));
+                c.amount.lo = (BPWord)(2u * ks->price);
+                if (bp_check(S, &c) == BP_OK) { did = 1; tl_offered = S->turn; }
+            }
+        if (!did) TL_CMD(bp_can(S, seat, BP_C_ROLL, 0) == BP_OK ? BP_C_ROLL : BP_C_END_TURN, 0);
+        break;
+    case BP_PH_REPAIR:
+        if (S->tries[seat] >= 1 && bp_can(S, seat, BP_C_PAY_BAIL, 0) == BP_OK) TL_CMD(BP_C_PAY_BAIL, 0);
+        else if (S->disks[seat]) TL_CMD(BP_C_USE_DISK, (S->disks[seat] & 1) ? 0 : 1);
+        else TL_CMD(BP_C_ROLL, 0);
+        break;
+    case BP_PH_BUY:
+        TL_CMD(bp_can(S, seat, BP_C_BUY, 0) == BP_OK ? BP_C_BUY : BP_C_DECLINE, 0);
+        memset(tl_bids, 0, sizeof tl_bids);
+        break;
+    case BP_PH_AUCTION:
+        if (!tl_bids[seat] && bp_can(S, seat, BP_C_BID, 0) == BP_OK) {
+            TL_CMD(BP_C_BID, 0); bp_bid_min(S, &c.amount); tl_bids[seat] = 1;
+        } else TL_CMD(BP_C_PASS, 0);
+        break;
+    case BP_PH_CARD: TL_CMD(BP_C_ACK_CARD, 0); break;
+    case BP_PH_TRADE:
+        TL_CMD((S->offer_id % 3) ? BP_C_ACCEPT : BP_C_REJECT, S->offer_id & 0xFF);
+        if (bp_check(S, &c) != BP_OK) TL_CMD(BP_C_REJECT, S->offer_id & 0xFF);
+        break;
+    case BP_PH_DEBT:
+        if (bp_can(S, seat, BP_C_SETTLE, 0) == BP_OK) { TL_CMD(BP_C_SETTLE, 0); break; }
+        for (sp = 0; sp < BP_SPACES && !did; sp++)
+            if (bp_can(S, seat, BP_C_SELL, sp) == BP_OK) { TL_CMD(BP_C_SELL, sp); did = 1; }
+        for (sp = 0; sp < BP_SPACES && !did; sp++)
+            if (bp_can(S, seat, BP_C_MORTGAGE, sp) == BP_OK) { TL_CMD(BP_C_MORTGAGE, sp); did = 1; }
+        if (!did) TL_CMD(BP_C_BANKRUPT, 0);
+        break;
+    default: return BP_EPHASE;
+    }
+#undef TL_CMD
+    tl_use(bp_game.machine[seat]);
+    return bp_sess_submit(&c);
+}
+#else
 /* a simple policy move for the toy engine: whatever the phase wants */
 static int tl_policy_move(void)
 {
@@ -518,6 +606,7 @@ static int tl_policy_move(void)
     if (ph == BP_PH_TRADE) return tl_submit_as_decider(BP_C_ACCEPT, 0);
     return BP_EPHASE;
 }
+#endif
 static void tl_one_move(const char *what)
 {
     unsigned r0 = tl_rev(0);
@@ -741,9 +830,11 @@ static void t_diverge(void)
     tl_use(1); BP_CHECK(bp_diag.resync >= 1, "resync counted");
     tl_one_move("play after adoption");
     /* a divergence found at a RESULT (the client's state damaged mid-turn) */
+    /* (damaged just before the roll: a PING would also see the rng, which
+     * the real digest covers - this is the RESULT's own cross-check) */
+    for (k = 0; k < 20 && (tl_use(0), bp_game.phase) != BP_PH_MANAGE; k++) tl_one_move("to a roll");
     tl_use(1);
     bp_game.rng.lo ^= 0x1234;
-    for (k = 0; k < 20 && (tl_use(0), bp_game.phase) != BP_PH_MANAGE; k++) tl_one_move("to a roll");
     tl_policy_move();
     TL_UNTIL(tl_state(1) == BP_L_DIVERGED, 200, "a result's dice disagree");
     tl_use(1); BP_CHECK(bp_sess_adopt() == BP_OK, "adopt again");
@@ -797,7 +888,93 @@ static void t_ckpt(void)
     E[1].wfail = 0;
     BP_CHECK(tl_idle() && tl_state(0) == BP_L_PLAY, "play continues after a failed save");
     tl_one_move("a move after the failed save");
+    /* a CLIENT intent crossing the host's save request: the host is not
+     * busy (it has not seen the intent), starts the save, refuses the
+     * intent; the client must answer CKBEGIN with its intent still out */
+    for (r = 0; r < 60 && (tl_use(0), bp_game.machine[bp_game.decider]) != 1; r++) tl_one_move("to a client decision");
+    BP_CHECK(bp_game.machine[bp_game.decider] == 1, "a client seat decides");
+    r = tl_rev(0);
+    tl_policy_move();                   /* the INTENT is queued to the host... */
+    tl_use(0);
+    BP_CHECK(!bp_sess_busy() && bp_sess_save_pair() == BP_OK, "...which saves before it arrives");
+    TL_UNTIL((tl_use(0), bp_sess_pair()) == BP_PAIR_DONE && (tl_use(1), bp_sess_pair()) == BP_PAIR_DONE
+             && tl_idle() && tl_rev(0) == r + 1 && tl_rev(1) == r + 1, 600, "the crossing save and intent both finish");
+    BP_CHECK(E[0].cur.m.rev.lo == r && E[1].cur.m.rev.lo == r, "the pair is the state before the intent");
+    BP_CHECK(tl_same(), "agree after the crossing");
 }
+
+#ifndef BP_TL_TOY
+/* A COMPLETE CABLE GAME on the real engine (US-17..US-20): two seats on
+ * each machine, every decision submitted on the decider's own machine, a
+ * fault on the wire every few moves, a pulled cable, a paired save and a
+ * chat line mid-game - to the end. bp_ui_committed checks on BOTH machines
+ * at every revision that cash moved only by the bank events of the result;
+ * here: one owner per asset, the same digest at every revision, and each
+ * machine applied every revision exactly once (equal salary, purchase and
+ * trade counts on the two sides, commits = revisions). */
+static void t_full_game(int nh, int nc)
+{
+    static const int ft[] = { BPF_RESULT, BPF_INTENT, BPF_ACK, BPF_TERMS, BPF_PING, BPF_REFUSE };
+    unsigned r0, moves = 0;
+    int k, p, dir, saved = 0, pulled = 0;
+    BP_CHECK(tl_connect(nh, nc), "a split for a complete game");
+    for (k = 0; k < 2; k++) {
+        tl_use(k);
+        E[k].commits = E[k].salaries = E[k].buys = E[k].trades = 0;
+    }
+    tl_use(0);
+    r0 = bp_game.rev.lo;
+    while ((tl_use(0), bp_game.status) == BP_ST_PLAY && moves < 4000 && !bp_host_fail) {
+        moves++;
+        dir = (int)(moves / 7u) & 1;
+        switch (moves % 7) {
+        case 1: F[dir].drop_type = ft[moves % 6]; F[dir].drop_n = 1; break;
+        case 3: F[dir].dup_type = ft[(moves / 3) % 6]; F[dir].dup_n = 1; break;
+        case 5: F[dir].corrupt_type = 0; F[dir].corrupt_n = 1; break;
+        case 6: F[dir].delay_type = BPF_RESULT; F[dir].delay_n = 1; F[dir].delay_ticks = 20; break;
+        default: break;
+        }
+        if (moves == 120 && !pulled) {      /* a pulled cable mid-turn */
+            pulled = 1;
+            F[0].cut = F[1].cut = 1;
+            tl_policy_move();
+            tl_run(BPL_QUIET + 10);
+            BP_CHECK(tl_state(0) == BP_L_PAUSED && tl_state(1) == BP_L_PAUSED, "both pause");
+            F[0].cut = F[1].cut = 0;
+            TL_UNTIL(tl_idle() && tl_state(0) == BP_L_PLAY && tl_state(1) == BP_L_PLAY, 800, "the cable returns");
+            BP_CHECK(tl_same(), "agree after the pull");
+            continue;
+        }
+        if (moves == 30) {
+            tl_use(1);
+            BP_CHECK(bp_chat_send("good luck") == BP_OK, "chat mid-game");
+        }
+        if (moves == 60 && !saved) {
+            saved = 1;
+            tl_use(0);
+            BP_CHECK(bp_sess_save_pair() == BP_OK, "paired save mid-game");
+            TL_UNTIL((tl_use(0), bp_sess_pair()) == BP_PAIR_DONE && (tl_use(1), bp_sess_pair()) == BP_PAIR_DONE, 800, "mid-game save");
+            BP_CHECK(bpl_eq(&E[0].cur.m.digest, &E[1].cur.m.digest), "the pair agrees");
+            continue;
+        }
+        tl_one_move("a move of the complete game");
+        for (p = 0; p < BP_PROPS; p++)
+            BP_CHECK(tl_g(0)->owner[p] == tl_g(1)->owner[p], "one owner, the same on both machines");
+    }
+    memset(F, 0, sizeof F);
+    TL_UNTIL(tl_idle(), 400, "the last transaction settles");
+    BP_CHECK(saved && pulled, "the save and the pull happened mid-game");
+    BP_CHECK(tl_g(0)->status == BP_ST_OVER && tl_g(1)->status == BP_ST_OVER, "the game reached its end on both machines");
+    BP_CHECK(tl_same() && tl_g(0)->winners == tl_g(1)->winners && tl_g(0)->winners, "the same winners");
+    BP_CHECK(E[0].commits == E[1].commits && (unsigned)E[0].commits == tl_g(0)->rev.lo - r0,
+             "each machine applied every revision once");
+    BP_CHECK(E[0].salaries == E[1].salaries && E[0].buys == E[1].buys && E[0].trades == E[1].trades,
+             "no double salary, purchase or trade on either side");
+    tl_use(1); BP_CHECK(E[0].chats + E[1].chats >= 1, "the chat line arrived");
+    printf("t_link: complete cable game %d+%d: %u moves, rev %u, %d salaries, %d buys, %d trades, winners %02x, crc drops %d/%d\n",
+           nh, nc, moves, tl_g(0)->rev.lo, E[0].salaries, E[0].buys, E[0].trades, tl_g(0)->winners, E[0].crc, E[1].crc);
+}
+#endif
 
 /* close both applications and resume: the plain case, the roll-forward
  * (host committed, client did not), refusals */
@@ -898,6 +1075,11 @@ int main(void)
     t_ckpt();
     t_resume();
     t_leave_and_misc();
+#ifndef BP_TL_TOY
+    t_full_game(2, 2);
+    t_full_game(1, 3);
+    t_full_game(3, 1);
+#endif
     printf("t_link: %s (%d failure%s)\n", bp_host_fail ? "FAILED" : "ok", bp_host_fail, bp_host_fail == 1 ? "" : "s");
     return bp_host_fail ? 1 : 0;
 }

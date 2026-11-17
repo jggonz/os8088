@@ -1363,7 +1363,12 @@ static void ovl_ck_client(void)
             ovl_ck_frame(BPF_CKREPLY);
             return;
         }
-        if (bpl.cpend || bpl.snap) goto bad;        /* not yet */
+        /* not during a snapshot. An INTENT of ours still out does NOT
+         * hold it: the host starts a save only with nothing pending, so it
+         * has not applied that intent (it refuses it BP_EPENDING until the
+         * save ends) and CKBEGIN's revision is ours - waiting here for an
+         * answer the host is waiting on us to give was a deadlock */
+        if (bpl.snap) goto bad;
         os88_memcpy(&bpl.ckm, &bpl_km, sizeof(BPCkpt));
         bpl.ckm.role = BP_MODE_CLIENT;
         bpl.ckm.state = 1;

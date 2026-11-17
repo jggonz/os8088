@@ -255011,7 +255011,13 @@ file, role 2 the client's; each machine writes only its own.
 **Saving.** `bp_sess_save_pair()` on either machine; the client's sends
 CKREQ until CKBEGIN arrives. The request WAITS behind an outstanding
 transaction - it never cancels or rerolls one - and from the moment the host
-starts it, economic input is frozen on both machines (`bp_sess_busy`).
+starts it, economic input is frozen on both machines (`bp_sess_busy`). The
+host starts only with no RESULT of its own outstanding, so a client INTENT
+that crossed the request has not been applied: the host refuses it
+(BP_EPENDING, the client keeps retrying) until the save ends, and the client
+answers CKBEGIN with that intent still out, since CKBEGIN's revision is its
+own. (Holding CKBEGIN until the intent is answered would deadlock: each side
+would be waiting on the other.)
 
 1. The host takes a checkpoint id one above every id this match has in its
    own slots (`bp_ckpt_open`, all three: the files rank slots by id, so ids
