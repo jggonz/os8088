@@ -255309,7 +255309,11 @@ names, money is `bp_u32_fmt`), dirties precisely (the players, log, hint and
 centre; a space only when its owner, level, mortgage or occupant changed,
 found by comparing each seat's position with the one last drawn), picks ONE
 sound cue by rank (win, bankruptcy, Crash!, card, rent, buy, dice), and calls
-`bp_pn_sync`. A cable commit never marks a local save as owed. Each event
+`bp_pn_sync`. A new, loaded or adopted match clears the log first; each
+roll-off roll reads "NAME rolls a+b" and one line says who goes first; a rent
+line names the space and its RAM level, a landing on a mortgaged computer logs
+"no rent", and a detention straight after a roll is marked "third double". A
+commit also dirties the link row. A cable commit never marks a local save as owed. Each event
 is also handed to the panels (`bp_gp_event`), each chat line
 (`bp_gp_chat`) and every timer tick in game mode (`bp_gp_tick`); after a
 key or click on a finished match the app polls `bp_gp_overchoice` (2 New
@@ -255337,7 +255341,9 @@ disagree; rows are 11 px on a content under 260 px high (CGA-class, whose
 150 px content must hold everything) and 16 px above it. Text is the
 kernel's 8x8 and every state has a mark besides colour (the selected tab or
 rule is the DEFAULT button, a disabled one is the DISABLED button, a focused
-one the FOCUS button). A disabled widget is skipped by focus and ignores a
+one the FOCUS button; on 1bpp the selected tab or rule also starts with `>`).
+The `-` and `+` buttons grey at 2 and 4 players. Editing a name starts with
+the old name selected: the first typed character replaces it. A disabled widget is skipped by focus and ignores a
 click.
 
 #### 131.9.3 The cable lobby
@@ -255367,7 +255373,9 @@ would reach `vid_clk_hx` (432 px on a 640 px adapter), so after the 128 px
 name cell the titles may total 27 characters: Game, Trade, Assets, Options,
 Help (26). About is the application menu's (`OSAPI_ABOUT_SET`), never a Help
 item. Items grey (`OS88_MENU_DIS`) where illegal and are re-evaluated by
-`bp_pn_sync`.
+`bp_pn_sync` and on every mode change; Propose Trade follows
+`bp_can(BP_C_PROPOSE)` for the active seat, Assets > My Collection needs a
+running match, and a menu command that opens a panel dirties the centre.
 
 | menu | items |
 |---|---|

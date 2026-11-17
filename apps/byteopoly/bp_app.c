@@ -107,15 +107,22 @@ static void ovl_bp_ap_menus(void)
     bp_ap_game[3] = ovl_bp_ap_it(bp_ap_s_psave, play && cab);
     bp_ap_game[4] = ovl_bp_ap_it(bp_ap_s_resume, bp_ap_mode == BP_M_LOBBY && bp_link_state() == BP_L_LOBBY);
     bp_ap_game[5] = bp_ap_s_close;
-    bp_ap_trade[0] = ovl_bp_ap_it(bp_ap_s_prop, play);
-    bp_ap_assets[0] = ovl_bp_ap_it(bp_ap_s_coll, g);
-    bp_ap_assets[1] = ovl_bp_ap_it(bp_ap_s_stand, g);
+    bp_ap_trade[0] = ovl_bp_ap_it(bp_ap_s_prop, play && bp_can(&bp_game, bp_game.active, BP_C_PROPOSE, 0) == BP_OK);
+    bp_ap_assets[0] = ovl_bp_ap_it(bp_ap_s_coll, play);
+    bp_ap_assets[1] = ovl_bp_ap_it(bp_ap_s_stand, g && bp_game.status != BP_ST_EMPTY);
     bp_ap_opts[0] = bp_opt_sound ? "Sound: On" : "Sound: Off";
     bp_ap_opts[1] = bp_opt_fast ? "Fast Animation: On" : "Fast Animation: Off";
     bp_ap_opts[2] = ovl_bp_ap_it(bp_ap_s_diag, g && cab);
     bp_ap_help[0] = ovl_bp_ap_it(bp_ap_s_rules, g);
-    bp_ap_help[1] = ovl_bp_ap_it(bp_ap_s_keys, g);
+    bp_ap_help[1] = ovl_bp_ap_it(bp_ap_s_keys, g && bp_game.status != BP_ST_EMPTY);
     bp_ap_help[2] = ovl_bp_ap_it(bp_ap_s_chat, g && cab);
+}
+
+/* a new or loaded match starts with an empty log (131.9.1) */
+static void ovl_bp_ap_clear(void)
+{
+    int i;
+    for (i = 0; i < BP_LOG_LINES; i++) bp_log_add("");
 }
 
 /* a match began, or was adopted, on this machine */
@@ -126,6 +133,7 @@ static void ovl_bp_ap_started(void)
     bp_ap_unsaved = 0; bp_ap_gone = 0;
     for (i = 0; i < BP_SEATS; i++) bp_ap_lastpos[i] = bp_game.pos[i];
     bp_face_dirty(BP_D_ALL);
+    ovl_bp_ap_menus();
     bp_ap_need = 1;
 }
 
@@ -139,6 +147,7 @@ static void ovl_bp_ap_newscreen(void)
     bp_ap_mode = BP_M_SETUP;
     ovl_su_open();
     bp_face_dirty(BP_D_ALL);
+    ovl_bp_ap_menus();
     bp_ap_need = 1;
 }
 
@@ -151,6 +160,7 @@ static void ovl_bp_ap_back(void)
         bp_ap_mode = BP_M_GAME;
     else return;
     bp_face_dirty(BP_D_ALL);
+    ovl_bp_ap_menus();
     bp_ap_need = 1;
 }
 
@@ -253,7 +263,9 @@ static void ovl_bp_ap_file(int mode, const char *name, unsigned lo, unsigned hi)
     if (e == BP_OK) e = bp_sess_load_local(&bp_ap_scratch);
     if (e != BP_OK) { ovl_bp_ap_fail(e); return; }
     os88_strcpy(bp_ap_name, name, sizeof(bp_ap_name));
+    ovl_bp_ap_clear();
     ovl_bp_ap_started();
+    bp_pn_sync();
     ovl_bp_ap_say("Match loaded");
 }
 
@@ -289,6 +301,7 @@ static int ovl_bp_ap_cmd(int item, int menu, void *win)
         else if (menu == 4) bp_gp_open(item == 0 ? BP_GP_RULES : item == 1 ? BP_GP_KEYS : BP_GP_CHAT);
         else if (menu == 3 && item == 2) bp_gp_open(BP_GP_DIAG);
     }
+    if (bp_ap_mode == BP_M_GAME) bp_face_dirty(BP_D_CENTER | BP_D_HINT);
     if (menu == 3) {
         if (item == 0) { bp_opt_sound ^= 1; if (bp_opt_sound) bp_sound(BP_SND_BUY); }
         else if (item == 1) bp_opt_fast ^= 1;
@@ -339,7 +352,11 @@ static int ovl_bp_ap_line(const BPEvent *e)
         d[0] = (char)('0' + e->other); d[1] = '+'; d[2] = 0; ovl_bp_ap_c(d);
         d[0] = (char)('0' + e->space); d[1] = 0; ovl_bp_ap_c(d);
     } else if (k == BP_V_MOVE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" to "); ovl_bp_ap_sp(e->space); }
-    else if (k == BP_V_ORDER || k == BP_V_FIRST) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" goes first"); }
+    else if (k == BP_V_ORDER) {
+        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" rolls ");
+        d[0] = (char)('0' + ((e->amount.lo >> 4) & 15)); d[1] = '+'; d[2] = 0; ovl_bp_ap_c(d);
+        d[0] = (char)('0' + (e->amount.lo & 15)); d[1] = 0; ovl_bp_ap_c(d);
+    } else if (k == BP_V_FIRST) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" goes first"); }
     else if (k == BP_V_SALARY) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" salary +"); ovl_bp_ap_amt(&e->amount); }
     else if (k == BP_V_BUY || k == BP_V_WON) {
         ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(k == BP_V_BUY ? " bought " : " won ");
@@ -347,6 +364,10 @@ static int ovl_bp_ap_line(const BPEvent *e)
     } else if (k == BP_V_RENT) {
         ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" paid "); ovl_bp_ap_nm(e->other);
         ovl_bp_ap_c(" "); ovl_bp_ap_amt(&e->amount);
+        ovl_bp_ap_c(" ("); ovl_bp_ap_sp(e->space);
+        k = bp_space(e->space % BP_SPACES)->prop;
+        if (k != BP_NOBODY && bp_game.level[k]) { d[0] = 'L'; d[1] = (char)('0' + bp_game.level[k]); d[2] = 0; ovl_bp_ap_c(" "); ovl_bp_ap_c(d); }
+        ovl_bp_ap_c(")");
     } else if (k == BP_V_CHARGE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" paid "); ovl_bp_ap_amt(&e->amount); }
     else if (k == BP_V_CARD) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" drew: "); ovl_bp_ap_c(bp_card(e->other & 15)->title); }
     else if (k == BP_V_GAIN) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" gets "); ovl_bp_ap_amt(&e->amount); }
@@ -393,17 +414,31 @@ static int ovl_bp_ap_cue(int k)
 
 static void ovl_bp_ap_committed(const BPResult *r)
 {
-    int i, k, best, c;
+    int i, k, best, c, pk, sp;
     unsigned dirty;
     const BPEvent *e;
-    best = -1;
-    dirty = BP_D_PLAYERS | BP_D_LOG | BP_D_HINT | BP_D_CENTER | BP_D_DETAILS;
+    best = -1; pk = 0;
+    dirty = BP_D_PLAYERS | BP_D_LOG | BP_D_HINT | BP_D_CENTER | BP_D_DETAILS | BP_D_LINK;
+    if (bp_ap_mode != BP_M_GAME && bp_game.status == BP_ST_PLAY) ovl_bp_ap_clear();
     for (i = 0; i < r->n && i < BP_EV_MAX; i++) {
         e = &r->ev[i];
         k = e->kind;
         c = ovl_bp_ap_cue(k);
         if (c > best) best = c;
-        if (ovl_bp_ap_line(e)) bp_log_add(bp_ap_ln);
+        if (ovl_bp_ap_line(e)) {
+            if (k == BP_V_DETAIN && pk == BP_V_ROLL) ovl_bp_ap_c(" (third double)");
+            bp_log_add(bp_ap_ln);
+        }
+        if (k == BP_V_MOVE) {                   /* landing on a mortgaged computer pays no rent */
+            sp = bp_space(e->space % BP_SPACES)->prop;
+            if (sp != BP_NOBODY && bp_game.mortgaged[sp] && bp_game.owner[sp] != e->seat
+                && bp_game.owner[sp] != BP_NOBODY) {
+                bp_ap_ll = 0; bp_ap_ln[0] = 0;
+                ovl_bp_ap_sp(e->space); ovl_bp_ap_c(" mortgaged: no rent");
+                bp_log_add(bp_ap_ln);
+            }
+        }
+        pk = k;
         bp_gp_event(e);
         if (k == BP_V_BUY || k == BP_V_WON || k == BP_V_UPGRADE || k == BP_V_SELL
             || k == BP_V_MORTGAGE || k == BP_V_REDEEM || k == BP_V_UNSOLD || k == BP_V_AUCTION)
@@ -436,7 +471,7 @@ static void ovl_bp_ap_link(void)
         if (p == BP_PAIR_DONE || p == BP_PAIR_FAIL) ovl_bp_ap_say(bp_link_msg());
     }
     if (bp_ap_mode != BP_M_GAME) {
-        if (bp_link_state() == BP_L_PLAY && bp_game.status == BP_ST_PLAY) ovl_bp_ap_started();
+        if (bp_link_state() == BP_L_PLAY && bp_game.status == BP_ST_PLAY) { ovl_bp_ap_clear(); ovl_bp_ap_started(); }
         else ovl_su_sync();
     }
     ovl_bp_ap_menus();
