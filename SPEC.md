@@ -254266,9 +254266,9 @@ Service (25 per level 1..4 computer level, 100 per Workshop, over the
 seat's computers) pay the bank; TO advances to the space forward (a
 distance of 0 is a full lap, so Reboot to BOOT pays 200 also from BOOT),
 FORWARD moves forward, BACK moves backward without salary, DETAIN detains;
-movement ends in the landing dispatcher. `depth` counts cards drawn since
-the last dice move; a card move landing on an event space adds one and a
-draw at `depth` beyond `BP_DEPTH_MAX` (3) is `BP_EDEPTH`. No chain on this
+movement ends in the landing dispatcher. `depth` counts the cards drawn since
+the last dice move: every draw adds one, and a draw that would take it
+beyond `BP_DEPTH_MAX` (3) refuses the whole transaction with `BP_EDEPTH`. No chain on this
 board draws twice (131.2.9), so the bound is never met by play.
 
 #### 131.4.5 Auctions, trades, management and debt
@@ -254383,7 +254383,10 @@ TRADE; `pending_move` 0 unless DEBT with reason `BP_DR_BAIL`.
 current `rev`; `arg` as given; for BID the seat's minimum bid; for PROPOSE
 only the phase and actor, since the terms are not yet chosen) and answers
 exactly what `bp_check` would: the same predicates, so a greyed button and
-a refused command never disagree. `bp_rent_quote(s, space, out)`: BP_OK
+a refused command never disagree. What only execution can find
+(`BP_EOVERFLOW`, `BP_EDEPTH`, `BP_EINVALID` from a corrupt record) it does
+not predict; `hosttest/t_rules.c` compares the two on every button at
+every sixteenth step of its scripted games. `bp_rent_quote(s, space, out)`: BP_OK
 with the rent the active seat would pay now; for a utility with no
 recorded total, `BP_ERULE` with `*out` = the multiplier (4 or 10); for an
 unowned, own or non-property space, `BP_EOWNER` with 0.
