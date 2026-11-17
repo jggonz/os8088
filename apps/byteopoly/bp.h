@@ -448,6 +448,7 @@ int    bp_w_textw(const char *s, int font);
 int    bp_w_fonth(int font);
 int    bp_w_sprite(int x, int y, int art_id);     /* -> width, 0 absent */
 unsigned bp_w_spritesz(int art_id);               /* w | h << 8 */
+int    bp_face_isdirty(void);                     /* any section dirty (the timer repaints on it) */
 void   bp_w_fill(int x1, int y1, int x2, int y2, int colour);
 /* the log ring the sidebar shows (bounded) */
 #define BP_LOG_LINES    8
