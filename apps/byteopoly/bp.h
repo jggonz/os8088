@@ -336,6 +336,7 @@ int    bp_seat_assets(const BPState *s, int seat, BPU32 *mask);
 #define BP_BID_STEP     10
 void   bp_bid_min(const BPState *s, BPU32 *out);  /* the next legal bid */
 int    bp_state_check(const BPState *s);          /* BP_OK or BP_EINVALID */
+#define BP_HAVE_STATE_CHECK 1
 
 /* ===== BP_SAVE: bp_codec.c bp_save.c ===================================== */
 #define BP_STATE_MAX    320     /* encoded canonical state, bytes (cap) */

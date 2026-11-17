@@ -80,7 +80,8 @@ static void base(BPState *s)
         for (j = 0; j < BP_DECK_CARDS; j++) s->deck[i][j] = (BPByte)(i * 8 + j);
         s->deck_n[i] = 8;
     }
-    s->card = BP_NOBODY; s->auc_space = BP_NOBODY; s->auc_high = BP_NOBODY; s->debt_to = BP_NOBODY;
+    s->card = BP_NOBODY; s->auc_space = BP_NOBODY; s->auc_turn = BP_NOBODY; s->auc_high = BP_NOBODY;
+    s->debt_to = BP_NOBODY; s->offer_from = BP_NOBODY; s->offer_to = BP_NOBODY;   /* 131.4.8's idle record */
     u32(&s->rng, 0x5A5A, 0x1357);
 }
 static void sc_manage(BPState *s)
@@ -91,7 +92,7 @@ static void sc_manage(BPState *s)
     s->owner[4] = 1; s->mortgaged[4] = 1;                  /* a mortgaged TRS-80 */
     s->owner[3] = 2;                                       /* POWER */
     s->disks[2] = 1; s->deck_n[0] = 7; s->deck_top[0] = 3; /* deck 0's disk is held */
-    { static const BPByte d[7] = {0, 1, 2, 3, 4, 5, 7}; memcpy(s->deck[0], d, 7); }
+    { static const BPByte d[8] = {0, 1, 2, 3, 4, 5, 7, 0}; memcpy(s->deck[0], d, 8); }
     s->doubles = 1; s->d1 = 3; s->d2 = 3; s->rolled = 1;
 }
 static void sc_repair(BPState *s)
@@ -101,25 +102,25 @@ static void sc_repair(BPState *s)
 static void sc_buy(BPState *s) { base(s); s->phase = BP_PH_BUY; s->pos[1] = 1; }
 static void sc_auction(BPState *s)
 {
-    base(s); s->phase = BP_PH_AUCTION; s->auc_space = 1; s->auc_open = 7; s->auc_passed = 2;
-    s->auc_turn = 2; s->auc_high = 0; u32(&s->auc_bid, 130, 0);
+    base(s); s->phase = BP_PH_AUCTION; s->pos[1] = 1; s->auc_space = 1; s->auc_open = 7; s->auc_passed = 2;
+    s->auc_turn = 2; s->decider = 2; s->auc_high = 0; u32(&s->auc_bid, 130, 0);
 }
 static void sc_card(BPState *s)
 {
-    base(s); s->phase = BP_PH_CARD; s->card = 3; s->deck_top[0] = 3; s->d1 = 2; s->d2 = 5; s->rolled = 1;
+    base(s); s->phase = BP_PH_CARD; s->pos[1] = 2; s->depth = 1; s->card = 3; s->deck_top[0] = 3; s->d1 = 2; s->d2 = 5; s->rolled = 1;
 }
 static void sc_debt(BPState *s)
 {
     base(s); s->phase = BP_PH_DEBT; s->pos[1] = 7; s->detained[1] = 1; s->tries[1] = 3;
-    s->d1 = 2; s->d2 = 3; s->rolled = 1; s->pending_move = 1; s->ret_phase = BP_PH_REPAIR;
+    s->d1 = 2; s->d2 = 3; s->rolled = 1; s->pending_move = 5; s->ret_phase = BP_PH_AFTER; s->debt_reason = BP_DR_BAIL;
     u32(&s->debt_amount, 50, 0); u32(&s->cash[1], 20, 0);
 }
 static void sc_trade(BPState *s)
 {
     base(s); s->phase = BP_PH_TRADE; s->ret_phase = BP_PH_AFTER; s->active = 0; s->decider = 1;
     s->owner[0] = 0; s->owner[5] = 1; s->disks[0] = 2; s->deck_n[1] = 7; s->deck_top[1] = 2;
-    { static const BPByte d[7] = {8, 9, 10, 11, 12, 13, 14}; memcpy(s->deck[1], d, 7); }
-    s->offer_id = 9; s->offer_from = 0; s->offer_to = 1; s->offer_disks = 0x02; s->offer_payer = 1;
+    { static const BPByte d[8] = {8, 9, 10, 11, 12, 13, 14, 0}; memcpy(s->deck[1], d, 8); }
+    s->round_left = 7; s->offer_id = 9; s->offer_from = 0; s->offer_to = 1; s->decider = 1; s->offer_disks = 0x02; s->offer_payer = 1;
     u32(&s->offer_give, 1, 0); u32(&s->offer_get, 2, 0); u32(&s->offer_cash, 45, 0);
     s->owner[1] = 1;                                       /* prop 1 offered by 1 */
 }
@@ -127,7 +128,7 @@ static void sc_after(BPState *s) { base(s); s->phase = BP_PH_AFTER; s->d1 = 4; s
 static void sc_over(BPState *s)
 {
     base(s); s->status = BP_ST_OVER; s->phase = BP_PH_OVER; s->rules = BP_RULES_QUICK;
-    s->rounds_limit = 10; s->round = 10; s->winners = 5; s->alive[1] = 0; s->decider = BP_NOBODY;
+    s->rounds_limit = 10; s->round = 10; s->winners = 5; s->alive[1] = 0; s->decider = BP_NOBODY; s->round_left = 0;
     u32(&s->score[0], 3210, 0); u32(&s->score[2], 3210, 0); u32(&s->cash[1], 0, 0);
 }
 typedef void (*scfn)(BPState *);
@@ -158,7 +159,7 @@ static int mut(int rule, int v, BPState *s)
         default: return 0; } break;
     case 4: sc_manage(s);
         switch (v) { case 0: s->name[0][0] = 0; break; case 1: s->name[0][1] = 7; break;
-        case 2: s->name[1][5] = 'x'; break; case 3: s->token[1] = 0; break;
+        case 2: s->name[1][0] = 0; break; case 3: s->token[1] = 0; break;
         case 4: s->token[2] = 4; break; case 5: s->machine[0] = 2; break;
         case 6: s->token[3] = 1; break; case 7: s->name[0][8] = 'z'; break; default: return 0; } break;
     case 5: sc_manage(s);
@@ -181,7 +182,7 @@ static int mut(int rule, int v, BPState *s)
     case 8: sc_manage(s);
         switch (v) { case 0: s->d1 = 7; break; case 1: s->d1 = 0; break;
         case 2: s->d1 = s->d2 = 0; break; case 3: s->doubles = 3; break;
-        case 4: s->pending_move = 2; break; case 5: s->pending_move = 1; break;
+        case 4: s->pending_move = 13; break; case 5: s->pending_move = 1; break;
         case 6: s->rolled = 2; break; default: return 0; } break;
     case 9: sc_manage(s);
         switch (v) { case 0: s->disks[0] = 1; break;                   /* two holders */
@@ -204,7 +205,7 @@ static int mut(int rule, int v, BPState *s)
         default: return 0; } break;
     case 12: sc_card(s);
         switch (v) { case 0: s->card = 6; s->disks[0] = 1; s->deck_n[0] = 7;      /* the shown card is held */
-            { static const BPByte d[7] = {0, 1, 2, 3, 4, 5, 7}; memcpy(s->deck[0], d, 7); } break;
+            { static const BPByte d[8] = {0, 1, 2, 3, 4, 5, 7, 0}; memcpy(s->deck[0], d, 8); } break;
         case 1: s->card = 5; s->pos[1] = 2; s->rolled = 0; s->d1 = s->d2 = 0; break;   /* forward 3 onto POWER */
         case 2: s->card = 4; s->rolled = 0; s->d1 = s->d2 = 0; break;                  /* to the BBS */
         case 3: s->card = 13; s->pos[1] = 19; s->rolled = 0; s->d1 = s->d2 = 0; break; /* back 3 onto BBS */
@@ -367,7 +368,7 @@ int main(void)
             BP_CHECK(bp_validate(&st) == BP_EINVALID, "mutation is refused");
             if (bp_invalid_rule() != r) printf("mutation %d.%d reported rule %d\n", r, v, bp_invalid_rule());
             BP_CHECK(bp_invalid_rule() == r, "the right rule");
-            if (r == 4 && (v == 2 || v == 7)) continue;     /* the encoder cannot carry these */
+            if (r == 4 && v == 7) continue;                /* the encoder cannot carry the ninth byte */
             bp_encode(&st, enc, sizeof enc);
             BP_CHECK(bp_decode(enc, BP_ENC_LEN, &scratch) == BP_EINVALID, "decode refuses");
             memset(&cm, 0, sizeof cm); cm.role = 0; cm.state = 2;
@@ -423,6 +424,49 @@ int main(void)
         if (d1.lo == d2.lo && d1.hi == d2.hi) { BP_CHECK(0, "a bit flip kept the digest"); break; }
     }
 
+    /* the real engine: validate, round-trip and file-parse every resting state of scripted games */
+    {
+        static const BPByte order[] = {BP_C_ACK_CARD, BP_C_ROLL, BP_C_BUY, BP_C_END_TURN, BP_C_SETTLE,
+                                       BP_C_PASS, BP_C_PAY_BAIL, BP_C_BANKRUPT, BP_C_DECLINE};
+        static BPSetup su;
+        static BPCmd cmd;
+        static BPResult res;
+        static BPU32 seed;
+        int g, step, t, steps = 0, phases = 0;
+        for (g = 0; g < 4; g++) {
+            bp_setup_default(&su);
+            su.nseats = (BPByte)(2 + g % 3);
+            if (g == 3) { su.rules = BP_RULES_QUICK; su.rounds = 10; }
+            for (i = 0; i < su.nseats; i++) { su.name[i][0] = (char)('A' + i); su.name[i][1] = 0; su.token[i] = (BPByte)i; }
+            u32(&seed, 1000 + g, g);
+            BP_CHECK(bp_new_match(&st, &su, &seed, &res) == BP_OK, "engine: new match");
+            for (step = 0; step < 600; step++) {
+                r = bp_validate(&st);
+                if (r) printf("engine game %d step %d phase %d rule %d\n", g, step, st.phase, bp_invalid_rule());
+                BP_CHECK(r == BP_OK, "engine state validates");
+                if (r) break;
+                bp_encode(&st, enc, sizeof enc);
+                BP_CHECK(bp_decode(enc, BP_ENC_LEN, &scratch) == BP_OK, "engine state decodes");
+                bp_encode(&scratch, enc2, sizeof enc2);
+                BP_CHECK(!memcmp(enc, enc2, BP_ENC_LEN), "engine round trip");
+                if (!(step & 15)) {
+                    n = build_local(&st, img);
+                    if (st.status == BP_ST_PLAY) BP_CHECK(parse_file(img, n) == BP_OK, "engine file parse");
+                }
+                steps++; phases |= 1 << st.phase;
+                if (st.status != BP_ST_PLAY) break;
+                memset(&cmd, 0, sizeof cmd);
+                for (t = 0; t < (int)sizeof order; t++)
+                    if (bp_can(&st, st.decider, order[t], 0) == BP_OK) break;
+                if (t == (int)sizeof order) break;
+                cmd.type = order[t]; cmd.seat = st.decider; cmd.rev = st.rev;
+                if (bp_apply(&st, &cmd, &res) != BP_OK) break;
+            }
+        }
+        printf("t_save: %d engine states checked, phases seen mask %x\n", steps, phases);
+        BP_CHECK(steps > 200, "engine games ran");
+    }
+
     /* ---- the guest file half over the fake file system ---------------------- */
     memset(fs, 0, sizeof fs); fs_failw = 0; fs_torn = 0; fs_ferr = 0;
     sc_debt(&st);
@@ -431,7 +475,7 @@ int main(void)
     BP_CHECK(bp_load_local("GAME.BPS", &scratch) == BP_OK, "load local");
     bp_encode(&st, enc, sizeof enc); bp_encode(&scratch, enc2, sizeof enc2);
     BP_CHECK(!memcmp(enc, enc2, BP_ENC_LEN), "local save exact: pending_move, debt and all");
-    BP_CHECK(scratch.pending_move == 1 && scratch.debt_amount.lo == 50, "debt preserved");
+    BP_CHECK(scratch.pending_move == 5 && scratch.debt_amount.lo == 50, "debt preserved");
     BP_CHECK(bp_load_local("NOPE.BPS", &scratch) == BP_EIO && os88_ferr() == OS88_FERR_NOENT, "missing file");
     /* disk full / write protected: the previous save survives */
     sc_manage(&st2);
@@ -452,7 +496,10 @@ int main(void)
     { BPState bad; sc_manage(&bad); bad.owner[3] = 7;
       BP_CHECK(bp_save_local("BAD.BPS", &bad) == BP_EINVALID && fs_find("BAD.BPS") < 0, "invalid state is not written"); }
     /* a damaged file on disk: the scratch result is an error, a sentinel state is untouched */
-    i = fs_find("GAME.BPS"); fs[i].data[60] ^= 4;
+    i = fs_find("GAME.BPS");
+    BP_CHECK(i >= 0, "GAME.BPS exists");
+    if (i < 0) return 1;
+    fs[i].data[60] ^= 4;
     BP_CHECK(bp_load_local("GAME.BPS", &scratch) == BP_ECRC, "load: bad crc");
     fs[i].data[60] ^= 4; fs[i].len -= 5;
     BP_CHECK(bp_load_local("GAME.BPS", &scratch) == BP_EFORMAT, "load: truncated");
