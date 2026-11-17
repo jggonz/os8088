@@ -37,7 +37,7 @@ in emulation follows integration; then the fix round; then the final pass.
 |---|---|---|---|
 | US-01 | Launch from the desktop: window, icon, About, focus, close, two independent instances, lease released on close | lead, panels | I (skeleton) |
 | US-02 | Set up 2-4 seats on one PC: names, distinct tokens, Classic/Quick, roll-off, handoff needing fresh input | panels, rules | - |
-| US-03 | Read the board: 28 cells and hit targets, details pane with full rent schedule, active seat/cash/decision/dice/round/link, stacked tokens | face | - |
+| US-03 | Read the board: 28 cells and hit targets, details pane with full rent schedule, active seat/cash/decision/dice/round/link, stacked tokens | face | B |
 | US-04 | Roll and move: recorded dice, salary, doubles, third double, board wrap, wrong-seat/phase refusals, fixed-seed fixtures | rules, panels | - |
 | US-05 | Buy a computer: purchase panel, single debit, decline -> auction | rules, panels | - |
 | US-06 | Rent and charges: set/upgrade/mortgage/utility rent, payer/recipient/calculation shown, debt on shortfall | rules, panels | - |
@@ -56,7 +56,7 @@ in emulation follows integration; then the fix round; then the final pass.
 | US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | - |
 | US-20 | Chat and link diagnostics | link, panels | - |
 | US-21 | Keyboard and mouse: shortcuts, focus order, fresh input after handoff | panels, face | - |
-| US-22 | CGA and Hercules: usable layouts, no hue-only meaning, mixed-adapter pairs | face, art | - |
+| US-22 | CGA and Hercules: usable layouts, no hue-only meaning, mixed-adapter pairs | face, art | B |
 | US-23 | Distinctive computer art: 16 computers, tokens, dice, markers, corners, mono variants | art | - |
 | US-24 | Restrained sound and animation through the system's routing; mute; no idle repaint | panels | - |
 | US-25 | XT memory and latency budgets, measured | all, lead | - |

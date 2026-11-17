@@ -195,18 +195,19 @@ int bp_face_init(void *win, unsigned artseg, unsigned bandseg, unsigned bandcap,
 #endif
     return BP_OK;
 }
-void bp_face_layout(int w, int h)
+static void ovl_fc_layout(int w, int h)
 {
     int ax, aw, sw, hb, hp, hl, rem, side_h, rh, th;
     ax = (fc_org.x + 7) & ~7;
     aw = (fc_org.x + w - ax) & ~7;
     bp_layout = (w >= 600 && h >= 380) ? BP_LAY_FULL : (w >= 560 && h >= 240) ? BP_LAY_MID : BP_LAY_COMPACT;
     if (bp_layout == BP_LAY_FULL) { fc_fs = BP_F_TEXT08; fc_fb = BP_F_TEXT10; fc_ft = BP_F_TEXT13; sw = 192; }
-    else if (bp_layout == BP_LAY_MID) { fc_fs = BP_F_TEXT08; fc_fb = BP_F_TEXT10; fc_ft = BP_F_TEXT10; sw = 208; }
+    else if (bp_layout == BP_LAY_MID) { fc_fs = BP_F_TEXT08; fc_fb = BP_F_TEXT08; fc_ft = BP_F_TEXT10; sw = 208; }
     else { fc_fs = BP_F_TEXT08; fc_fb = BP_F_TEXT08; fc_ft = BP_F_TEXT08; sw = 192; }
     fc_sh = bx_fonth(fc_fs);
     fc_fh = bx_fonth(fc_fb);
     hb = fc_fh + 4;
+    if (aw - sw < 320) sw = 0;                          /* too narrow for a sidebar: the ring takes it all */
     fc_cw = ((aw - sw) / 8) & ~7;
     if (fc_cw < 16) fc_cw = 16;
     fc_ch = (h - hb) / 8;
@@ -271,6 +272,26 @@ static int ovl_fc_specart(const BPSpace *sp, int s)
     }
     return -1;
 }
+/* the 1bpp twin of an art id (SPEC.md 131.10.5), else the id itself */
+static int ovl_fc_mono(int id)
+{
+    if (!bp_mono) return id;
+    if (id >= BP_A_T_PET && id <= BP_A_T_486) return BP_A_MTINY(id - BP_A_T_PET);
+    switch (id) {
+    case BP_A_TOK_FLOPPY: return BP_A_M_TOK_FLOPPY;
+    case BP_A_TOK_JOYSTICK: return BP_A_M_TOK_JOYSTICK;
+    case BP_A_BOOT: return BP_A_M_BOOT;
+    case BP_A_SWAP: return BP_A_M_SWAP;
+    case BP_A_FLOPPY: return BP_A_M_FLOPPY;
+    case BP_A_CRASH: return BP_A_M_CRASH;
+    case BP_A_CARD_FF: return BP_A_M_CARD_FF;
+    case BP_A_CARD_SE: return BP_A_M_CARD_SE;
+    case BP_A_RAM: return BP_A_M_RAM;
+    case BP_A_MORTGAGE: return BP_A_M_MORTGAGE;
+    case BP_A_EWASTE: return BP_A_M_EWASTE;
+    }
+    return id;
+}
 /* the biggest of SMALL / TINY that fits, else -1; sets fc_pw/fc_ph */
 static int ovl_fc_pick(int prop, int aw, int ah)
 {
@@ -279,7 +300,7 @@ static int ovl_fc_pick(int prop, int aw, int ah)
     id = BP_A_SMALL(prop);
     z = bx_size(id);
     if (z && (int)(z & 255) <= aw && (int)(z >> 8) <= ah) { fc_pw = z & 255; fc_ph = z >> 8; return id; }
-    id = BP_A_TINY(prop);
+    id = ovl_fc_mono(BP_A_TINY(prop));
     z = bx_size(id);
     if (z && (int)(z & 255) <= aw && (int)(z >> 8) <= ah) { fc_pw = z & 255; fc_ph = z >> 8; return id; }
     return -1;
@@ -294,33 +315,35 @@ static int ovl_fc_seatat(int s, int k)      /* k-th live seat standing on space 
 }
 static void ovl_fc_tokens(int x, int y, int cw, int s, int compact)
 {
-    int k, seat, gap, tx;
-    unsigned z;
+    int k, seat, gap;
     gap = compact ? 8 : (cw - 4) / 4;
     for (k = 0; k < BP_SEATS; k++) {
         seat = ovl_fc_seatat(s, k);
         if (seat < 0) break;
-        tx = x + 2 + k * gap;
-        z = !compact && fc_ch >= 44 ? bx_size(BP_A_TOKEN(bp_game.token[seat] & 3)) : 0;
-        if (z) bx_spr(tx, y - 9, BP_A_TOKEN(bp_game.token[seat] & 3));
-        else ovl_fc_tok(tx, y, seat, bp_game.token[seat]);
+        ovl_fc_tok(x + 2 + k * gap, y, seat, bp_game.token[seat]);
     }
 }
-/* upgrade pips: 1..4 RAM chips, 5 a Workshop block */
-static void ovl_fc_pips(int x2, int y, int level, int big)
+/* upgrade pips: 1..4 RAM bars, 5 a Workshop block (no art, and COMPACT) */
+static void ovl_fc_pips(int x2, int y, int level)
 {
-    int i, pw;
-    if (level >= BP_MAX_LEVEL) {
-        pw = big ? 10 : 9;
-        ovl_fc_rect(x2 - pw + 1, y, pw, big ? 8 : 6, 0);
-        ovl_fc_rect(x2 - pw + 2, y + 1, pw - 2, big ? 6 : 4, 14);
-        return;
-    }
-    pw = big ? 5 : 3;
-    for (i = 0; i < level; i++) {
-        ovl_fc_rect(x2 - (i + 1) * (pw + 1) + 2, y, pw, big ? 7 : 6, 0);
-        if (big) ovl_fc_rect(x2 - (i + 1) * (pw + 1) + 3, y + 1, pw - 2, 5, 10);
-    }
+    int i;
+    if (level >= BP_MAX_LEVEL) { ovl_fc_rect(x2 - 8, y, 9, 6, 0); return; }
+    for (i = 0; i < level; i++) ovl_fc_rect(x2 - (i + 1) * 4 + 2, y, 3, 6, 0);
+}
+/* the level in the margin right of the sprite: art chips, else drawn pips */
+static void ovl_fc_lvl(int xr, int y, int lvl, int mw)
+{
+    unsigned z;
+    int id, i, pw, ph, cols;
+    id = lvl >= BP_MAX_LEVEL ? BP_A_WORKSHOP : BP_A_RAM;
+    z = bx_size(id);
+    if (!z) { ovl_fc_pips(xr, y, lvl); return; }
+    pw = z & 255; ph = z >> 8;
+    if (lvl >= BP_MAX_LEVEL) { bx_spr(xr - pw + 1, y, id); return; }
+    cols = mw / (pw + 1);
+    if (cols < 1) cols = 1;
+    for (i = 0; i < lvl; i++)
+        bx_spr(xr - (i % cols + 1) * (pw + 1) + 2, y + (i / cols) * (ph + 1), ovl_fc_mono(id));
 }
 static void ovl_fc_cell(int s)
 {
@@ -352,12 +375,12 @@ static void ovl_fc_cell(int s)
             bx_text(x + 4, y + 2, fc_buf, 15, fc_fs);
             ovl_fc_rtext(x2 - 3, y + 2, ovl_fc_dec(sp->price), 15, fc_fs);
         }
-        sy = y + (prop != BP_NOBODY ? bar + 3 : 3);
+        sy = y + (prop != BP_NOBODY ? bar + 2 + (ch >= 44) : 2 + (ch >= 44));
         if (sel) bx_fill(x + 2, sy, x2 - 2, sy + fc_sh, 1);
         ovl_fc_ctext(x + 2, x2 - 2, sy, ovl_fc_fits(sp->shortname, fc_fs, nw), ink, fc_fs);
-        sy += fc_sh + 1;
-        ah = y2 - sy - (ch >= 44 ? 9 : 2);
-        id = prop != BP_NOBODY ? ovl_fc_pick(prop, nw, ah) : ovl_fc_specart(sp, s);
+        sy += fc_sh + (ch >= 44);
+        ah = y2 - sy - (ch >= 44 ? 4 : 1);
+        id = prop != BP_NOBODY ? ovl_fc_pick(prop, nw, ah) : ovl_fc_mono(ovl_fc_specart(sp, s));
         if (prop == BP_NOBODY && id >= 0) {
             fc_pw = bx_size(id) & 255; fc_ph = bx_size(id) >> 8;
             if (fc_pw > nw || fc_ph > ah) id = -1;
@@ -366,12 +389,15 @@ static void ovl_fc_cell(int s)
         if (id >= 0) bx_spr(x + (cw - fc_pw) / 2, sy + (ah - fc_ph) / 2, id);
         else if (prop == BP_NOBODY) ovl_fc_ctext(x + 2, x2 - 2, sy + 2, ovl_fc_cellsub(sp), 0, fc_fs);
         if (own != BP_NOBODY) ovl_fc_tok(x + 4, sy + 1, own, bp_game.token[own]);
-        if (lvl) ovl_fc_pips(x2 - 3, sy + 1, lvl, 1);
+        if (lvl) ovl_fc_lvl(x2 - 3, sy + 1, lvl, id >= 0 ? (cw - fc_pw) / 2 - 3 : 20);
         if (mort) {
-            ovl_fc_rect(x + 3, sy + ah - 8, 9, 9, 0);
-            bx_text(x + 4, sy + ah - 8, "M", 15, BP_F_TEXT08);
+            if (bx_size(BP_A_MORTGAGE)) bx_spr(x + 3, sy + 12, ovl_fc_mono(BP_A_MORTGAGE));
+            else {
+                ovl_fc_rect(x + 3, sy + 12, 9, 9, 0);
+                bx_text(x + 4, sy + 12, "M", 15, BP_F_TEXT08);
+            }
         }
-        ovl_fc_tokens(x, y2 - 9, cw, s, 0);
+        ovl_fc_tokens(x, y2 - 8, cw, s, 0);
         if (sel) {                                      /* a frame inside the edge, over the ground only */
             bx_fill(x + 1, y + 1, x2 - 1, y + 1, bp_mono ? 0 : 14);
             bx_fill(x + 1, y2 - 1, x2 - 1, y2 - 1, bp_mono ? 0 : 14);
@@ -394,7 +420,7 @@ static void ovl_fc_cell(int s)
         if (ovl_fc_seatat(s, 0) >= 0) ovl_fc_tokens(id - 2, y + 8, cw, s, 1);
         else if (prop != BP_NOBODY) bx_text(id, y + 8, ovl_fc_dec(sp->price), 0, fc_fs);
         else bx_text(id, y + 8, ovl_fc_cellsub(sp), 0, fc_fs);
-        if (lvl) ovl_fc_pips(x2 - 2, y + 9, lvl, 0);
+        if (lvl) ovl_fc_pips(x2 - 2, y + 9, lvl);
         if (mort) bx_text(x2 - 9, y + 8, "M", 0, BP_F_TEXT08);
     }
 }
@@ -416,47 +442,51 @@ static unsigned ovl_fc_sigcell(int s)
 /* ---- the centre --------------------------------------------------------- */
 static void ovl_fc_die(int x, int y, int sz, int n)
 {
-    int id, c, e, t, m;
+    int id;
     id = BP_A_DIE(n);
     if (bx_size(id)) { bx_spr(x, y, id); return; }
-    ovl_fc_frame(x, y, sz, sz, 15);
-    t = sz / 4; e = sz - 1 - t; m = sz / 2;
-    c = 0;
-    if (n & 1) { ovl_fc_rect(x + m - 1, y + m - 1, 3, 3, c); }
-    if (n >= 2) { ovl_fc_rect(x + t - 1, y + t - 1, 3, 3, c); ovl_fc_rect(x + e - 1, y + e - 1, 3, 3, c); }
-    if (n >= 4) { ovl_fc_rect(x + e - 1, y + t - 1, 3, 3, c); ovl_fc_rect(x + t - 1, y + e - 1, 3, 3, c); }
-    if (n == 6) { ovl_fc_rect(x + t - 1, y + m - 1, 3, 3, c); ovl_fc_rect(x + e - 1, y + m - 1, 3, 3, c); }
+    ovl_fc_frame(x, y, sz, sz, 15);                     /* no art: the number in a box */
+    fc_num[0] = (char)('0' + n); fc_num[1] = 0;
+    ovl_fc_ctext(x, x + sz - 1, y + (sz - 8) / 2, fc_num, 0, BP_F_TEXT08);
 }
 static void ovl_fc_centre(void)
 {
     static const char logo[] = "BYTEOPOLY";
-    int x, y, w, h, kw, kh, i, lx, ly, dsz, my;
+    int x, y, w, h, kw, kh, i, lx, ly, dsz, my, cid;
     unsigned z;
     x = bp_r_center.x; y = bp_r_center.y; w = bp_r_center.w; h = bp_r_center.h;
     bx_dither(x, y, x + w - 1, y + h - 1, 3, 11, 2);
     bx_fill(x, y, x + w - 1, y, 0); bx_fill(x, y + h - 1, x + w - 1, y + h - 1, 0);
     bx_fill(x, y, x, y + h - 1, 0); bx_fill(x + w - 1, y, x + w - 1, y + h - 1, 0);
     if (bp_pn_covers() == BP_PN_CENTRE) return;
-    kh = bp_layout == BP_LAY_FULL ? 28 : bp_layout == BP_LAY_MID ? 20 : 14;
+    kh = bp_layout == BP_LAY_FULL ? 28 : bp_layout == BP_LAY_MID ? 20 : 16;
     kw = kh;
-    z = bx_size(BP_A_KEYCAP);
-    if (z && (int)(z & 255) * 9 <= w - 8) { kw = (int)(z & 255) + 2; kh = (int)(z >> 8) + 2; }
-    else z = 0;
+    z = bp_layout == BP_LAY_COMPACT ? bx_size(BP_A_KEYCAP) : 0;
+    if (z) { kw = (int)(z & 255) + 1; kh = (int)(z >> 8) + 1; }
     lx = x + (w - 9 * kw) / 2;
-    ly = bp_layout == BP_LAY_COMPACT ? y + 6 : y + h / 2 - kh / 2;
+    ly = bp_layout == BP_LAY_COMPACT ? y + 8 : y + h / 2 - kh / 2;
     for (i = 0; i < 9; i++) {
         if (z) bx_spr(lx + i * kw, ly, BP_A_KEYCAP);
         else ovl_fc_frame(lx + i * kw, ly, kw - 2, kh - 2, 15);
         fc_buf[0] = logo[i]; fc_buf[1] = 0;
         ovl_fc_ctext(lx + i * kw, lx + i * kw + kw - 3, ly + (kh - 2 - bx_fonth(fc_ft)) / 2, fc_buf, 0, fc_ft);
     }
-    z = bx_size(BP_A_MASCOT);
-    if (z && bp_layout != BP_LAY_COMPACT) {
-        my = y + 6;
-        if ((int)(z >> 8) <= ly - my - 2) bx_spr(x + (w - (int)(z & 255)) / 2, my, BP_A_MASCOT);
+    my = y + 6;
+    if (bp_layout != BP_LAY_COMPACT) {                  /* the mascot between the two card decks */
+        z = bx_size(BP_A_MASCOT);
+        if (z && (int)(z >> 8) <= ly - my - 2) {
+            bx_spr(x + (w - (int)(z & 255)) / 2, my, BP_A_MASCOT);
+            cid = ovl_fc_mono(BP_A_CARD_FF);
+            z = bx_size(cid);
+            if (z && (int)(z >> 8) <= ly - my - 2 && w >= 300) {
+                bx_spr(x + w / 2 - 56 - (int)(z & 255), my, cid);
+                bx_spr(x + w / 2 + 56, my, ovl_fc_mono(BP_A_CARD_SE));
+            }
+        }
     }
     if (ovl_fc_live() && bp_game.d1 > 0 && bp_game.d1 < 7 && bp_game.d2 > 0 && bp_game.d2 < 7) {
-        dsz = bp_layout == BP_LAY_FULL ? 24 : bp_layout == BP_LAY_MID ? 20 : 14;
+        z = bx_size(BP_A_DIE1);
+        dsz = z ? (int)(z & 255) : bp_layout == BP_LAY_FULL ? 24 : bp_layout == BP_LAY_MID ? 20 : 14;
         if (bp_layout == BP_LAY_COMPACT) {
             ovl_fc_die(x + 12, ly, dsz, bp_game.d1);
             ovl_fc_die(x + w - 12 - dsz, ly, dsz, bp_game.d2);
@@ -468,7 +498,7 @@ static void ovl_fc_centre(void)
 }
 
 /* ---- the sidebar -------------------------------------------------------- */
-void bp_w_panel(const BPRect *r, const char *title)
+static void ovl_fc_wpanel(const BPRect *r, const char *title)
 {
     int th;
     th = fc_fh + 3;
@@ -476,7 +506,7 @@ void bp_w_panel(const BPRect *r, const char *title)
     bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + th, 1);
     bx_text(r->x + 4, r->y + 2, ovl_fc_fits(title, fc_fb, r->w - 8), 15, fc_fb);
 }
-void bp_w_box(const BPRect *r, int fill, int edge)
+static void ovl_fc_wbox(const BPRect *r, int fill, int edge)
 {
     ovl_fc_frame(r->x, r->y, r->w, r->h, fill);
     if (edge != 0) {
@@ -553,123 +583,114 @@ static const char *ovl_fc_plain(int s)
     }
     return "";
 }
+/* a..d joined into fc_buf; numbers come from ovl_fc_nn's two slots */
+static char fc_n[2][8];
+static const char *ovl_fc_nn(int k, unsigned v) { return os88_utoa(v, fc_n[k]); }
+static const char *ovl_fc_cat(const char *a, const char *b, const char *c, const char *d)
+{
+    int n;
+    fc_buf[0] = 0;
+    n = ovl_fc_ap(fc_buf, 0, a);
+    n = ovl_fc_ap(fc_buf, n, b);
+    n = ovl_fc_ap(fc_buf, n, c);
+    ovl_fc_ap(fc_buf, n, d);
+    return fc_buf;
+}
+static const char *ovl_fc_lvltxt(int lvl, int mort)
+{
+    static char b[8];
+    if (mort) return "Mortgaged";
+    if (lvl >= BP_MAX_LEVEL) return "Workshop";
+    b[0] = (char)('0' + lvl); os88_strcpy(b + 1, " RAM", 6);
+    return b;
+}
 static void ovl_fc_details(void)
 {
     static const BPByte mul[5] = {5, 15, 30, 45, 60};
+    static const char *const rl[5] = {"1 RAM", "2 RAM", "3 RAM", "4 RAM", "Workshop"};
     const BPRect *r;
     const BPSpace *sp;
-    int x1, x2, y, rh, th, i, id, prop, own, lvl, mort, cw;
+    const char *own;
+    int x1, x2, y, rh, i, id, prop, lvl, mort, cw, cp;
     unsigned base;
     r = &fc_rd;
     sp = bp_space(bp_sel);
     prop = sp->prop;
     rh = fc_fh + 3;
+    cp = bp_layout == BP_LAY_COMPACT;
     x1 = r->x + 5; x2 = r->x + r->w - 6;
-    own = BP_NOBODY; lvl = 0; mort = 0;
+    own = "Bank"; lvl = 0; mort = 0;
     if (prop != BP_NOBODY && ovl_fc_live() && bp_game.owner[prop] < bp_game.nseats) {
-        own = bp_game.owner[prop]; lvl = bp_game.level[prop]; mort = bp_game.mortgaged[prop];
+        own = bp_game.name[bp_game.owner[prop]]; lvl = bp_game.level[prop]; mort = bp_game.mortgaged[prop];
     }
-    th = bp_layout == BP_LAY_COMPACT ? 0 : fc_fh + 4;
-    if (bp_layout == BP_LAY_COMPACT) ovl_fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    else {
-        ovl_fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-        bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + th - 1, 1);
+    ovl_fc_frame(r->x, r->y, r->w, r->h, fc_gr);
+    y = r->y + 2;
+    if (!cp) {                                          /* the title bar: the full name */
+        bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + bx_fonth(fc_ft) + 3, 1);
         ovl_fc_t(x1, r->y + 2, ovl_fc_fits(sp->name, fc_ft, r->w - 10), 15, fc_ft);
-        th = bx_fonth(fc_ft) + 4;
+        y += bx_fonth(fc_ft) + 3;
     }
-    y = r->y + th + 2;
     if (prop == BP_NOBODY) {
-        if (bp_layout == BP_LAY_COMPACT) { ovl_fc_t(x1, y - 1, sp->name, 0, fc_fb); y += rh; }
         id = ovl_fc_specart(sp, bp_sel);
-        if (bp_layout == BP_LAY_FULL && id >= 0 && bx_size(id)) bx_spr(r->x + (r->w - (int)(bx_size(id) & 255)) / 2, y, id), y += (int)(bx_size(id) >> 8) + 4;
+        if (cp) { ovl_fc_t(x1, y, sp->name, 0, fc_fb); y += rh; }
+        else if (id >= 0 && bx_size(id)) { bx_spr(r->x + (r->w - (int)(bx_size(id) & 255)) / 2, y, id); y += (int)(bx_size(id) >> 8) + 4; }
         ovl_fc_t(x1, y, ovl_fc_fits(ovl_fc_plain(bp_sel), fc_fb, r->w - 10), 0, fc_fb);
-        if (sp->kind == BP_K_CHARGE) { y += rh; fc_buf[0] = 0; i = ovl_fc_ap(fc_buf, 0, "Charge: "); i = ovl_fc_ap(fc_buf, i, ovl_fc_dec(sp->price)); ovl_fc_ap(fc_buf, i, " cr"); ovl_fc_t(x1, y, fc_buf, 0, fc_fb); }
+        if (sp->kind == BP_K_CHARGE) ovl_fc_t(x1, y + rh, ovl_fc_cat("Charge: ", ovl_fc_nn(0, sp->price), " cr", ""), 0, fc_fb);
         return;
     }
     base = sp->rent;
-    /* top block: price, mortgage, owner, level; the LARGE sprite to its right on FULL */
-    id = bp_layout == BP_LAY_FULL ? BP_A_LARGE(prop) : -1;
+    if (cp) {                                           /* COMPACT: three lines */
+        ovl_fc_t(x1, y, ovl_fc_cat(sp->name, "  ", ovl_fc_nn(0, sp->price), " cr"), 0, fc_fb);
+        ovl_fc_t(x1, y + rh, sp->kind == BP_K_UTILITY ? "Rent 4x dice, 10x both" :
+                 ovl_fc_cat("Rent ", ovl_fc_nn(0, base), " set ", ovl_fc_nn(1, base * 2)), 0, fc_fb);
+        ovl_fc_t(x1, y + rh * 2, ovl_fc_fits(ovl_fc_cat("Owner ", own, " ", lvl || mort ? ovl_fc_lvltxt(lvl, mort) : ""), fc_fb, r->w - 10), 0, fc_fb);
+        return;
+    }
+    id = bp_layout == BP_LAY_FULL ? BP_A_LARGE(prop) : -1;      /* top block; LARGE art to its right on FULL */
+    cw = r->w - 10;
     if (id >= 0 && bx_size(id) && (int)(bx_size(id) & 255) <= r->w / 2) {
         bx_spr(x2 - (int)(bx_size(id) & 255) + 1, y, id);
-        cw = r->w - (int)(bx_size(id) & 255) - 14;
-    } else cw = r->w - 10;
-    if (bp_layout == BP_LAY_COMPACT) {
-        fc_buf[0] = 0; i = ovl_fc_ap(fc_buf, 0, sp->shortname); i = ovl_fc_ap(fc_buf, i, "  ");
-        fc_buf[i++] = bp_group_letter(sp->group); fc_buf[i] = 0;
-        if (sp->kind == BP_K_UTILITY) fc_buf[i - 1] = 'U';
-        i = ovl_fc_ap(fc_buf, i, " "); i = ovl_fc_ap(fc_buf, i, ovl_fc_dec(sp->price)); ovl_fc_ap(fc_buf, i, " cr");
-        ovl_fc_t(x1, y - 1, fc_buf, 0, fc_fb); y += rh - 1;
-        fc_buf[0] = 0; i = ovl_fc_ap(fc_buf, 0, "Rent "); i = ovl_fc_ap(fc_buf, i, ovl_fc_dec(base));
-        if (sp->kind == BP_K_UTILITY) { fc_buf[0] = 0; i = ovl_fc_ap(fc_buf, 0, "Rent 4x dice, 10x both"); }
-        else { i = ovl_fc_ap(fc_buf, i, " set "); i = ovl_fc_ap(fc_buf, i, ovl_fc_dec(base * 2)); i = ovl_fc_ap(fc_buf, i, " w "); ovl_fc_ap(fc_buf, i, ovl_fc_dec(base * 60)); }
-        ovl_fc_t(x1, y - 1, fc_buf, 0, fc_fb); y += rh - 1;
-        fc_buf[0] = 0; i = ovl_fc_ap(fc_buf, 0, "Owner ");
-        i = ovl_fc_ap(fc_buf, i, own != BP_NOBODY ? bp_game.name[own] : "Bank");
-        if (lvl) { i = ovl_fc_ap(fc_buf, i, lvl >= 5 ? " WS" : " RAM "); if (lvl < 5) { fc_buf[i++] = (char)('0' + lvl); fc_buf[i] = 0; } }
-        if (mort) ovl_fc_ap(fc_buf, i, " MORT");
-        ovl_fc_t(x1, y - 1, ovl_fc_fits(fc_buf, fc_fb, r->w - 10), 0, fc_fb);
-        return;
+        cw -= (int)(bx_size(id) & 255) + 4;
     }
-    fc_buf[0] = 0; i = ovl_fc_ap(fc_buf, 0, ovl_fc_dec(sp->price)); ovl_fc_ap(fc_buf, i, " cr");
-    ovl_fc_kv(x1, x1 + cw - 1, y, "Price", fc_buf); y += rh;
-    fc_buf[0] = 0;
-    if (mort) { bp_redeem_cost(bp_sel, &fc_u); i = ovl_fc_ap(fc_buf, 0, bp_u32_fmt(fc_fit, &fc_u)); }
-    else i = ovl_fc_ap(fc_buf, 0, ovl_fc_dec((unsigned)bp_mortgage_value(bp_sel)));
-    ovl_fc_ap(fc_buf, i, " cr");
-    ovl_fc_kv(x1, x1 + cw - 1, y, mort ? "Redeem" : "Mortgage", fc_buf); y += rh;
-    ovl_fc_kv(x1, x1 + cw - 1, y, "Owner", own != BP_NOBODY ? bp_game.name[own] : "Bank"); y += rh;
-    if (sp->kind == BP_K_UTILITY) fc_buf[0] = 0, ovl_fc_ap(fc_buf, 0, mort ? "Mortgaged" : "-");
-    else if (mort) { fc_buf[0] = 0; ovl_fc_ap(fc_buf, 0, "Mortgaged"); }
-    else if (lvl >= 5) { fc_buf[0] = 0; ovl_fc_ap(fc_buf, 0, "Workshop"); }
-    else { fc_buf[0] = 0; i = ovl_fc_ap(fc_buf, 0, ovl_fc_dec(lvl)); ovl_fc_ap(fc_buf, i, " RAM"); }
-    ovl_fc_kv(x1, x1 + cw - 1, y, sp->kind == BP_K_UTILITY ? "State" : "Level", fc_buf); y += rh + 3;
+    ovl_fc_kv(x1, x1 + cw - 1, y, "Price", ovl_fc_cat(ovl_fc_nn(0, sp->price), " cr", "", ""));
+    if (mort) bp_redeem_cost(bp_sel, &fc_u);
+    ovl_fc_kv(x1, x1 + cw - 1, y + rh, mort ? "Redeem" : "Mortgage",
+              ovl_fc_cat(mort ? bp_u32_fmt(fc_fit, &fc_u) : ovl_fc_nn(0, (unsigned)bp_mortgage_value(bp_sel)), " cr", "", ""));
+    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 2, "Owner", own);
+    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 3, "Level", sp->kind == BP_K_UTILITY ? (mort ? "Mortgaged" : "-") : ovl_fc_lvltxt(lvl, mort));
+    y += rh * 4 + 3;
     if (sp->kind == BP_K_UTILITY) {
-        ovl_fc_t(x1, y, "Rent: 4 x dice total,", 0, fc_fb); y += rh;
-        ovl_fc_t(x1, y, "10 x with both utilities.", 0, fc_fb);
+        ovl_fc_t(x1, y, "Rent: 4 x dice total,", 0, fc_fb);
+        ovl_fc_t(x1, y + rh, "10 x with both utilities.", 0, fc_fb);
         return;
     }
-    /* the rent schedule, two columns (SPEC.md 131.2.3) */
-    bx_fill(r->x + 1, y - 2, x2 + 4, y - 2, 0);
+    bx_fill(r->x + 1, y - 2, x2 + 4, y - 2, 0);         /* the rent schedule, two columns (131.2.3) */
     cw = (r->w - 10) / 2;
-    fc_buf[0] = 0; ovl_fc_ap(fc_buf, 0, ovl_fc_dec(base));
-    ovl_fc_kv(x1, x1 + cw - 6, y, "Base", fc_buf);
-    fc_buf[0] = 0; ovl_fc_ap(fc_buf, 0, ovl_fc_dec(base * 2));
-    ovl_fc_kv(x1 + cw + 4, x2, y, "Set", fc_buf);
-    y += rh;
+    ovl_fc_kv(x1, x1 + cw - 6, y, "Base", ovl_fc_cat(ovl_fc_nn(0, base), "", "", ""));
+    ovl_fc_kv(x1 + cw + 4, x2, y, "Set", ovl_fc_cat(ovl_fc_nn(0, base * 2), "", "", ""));
     for (i = 0; i < 5; i++) {
-        fc_buf[0] = 0; ovl_fc_ap(fc_buf, 0, ovl_fc_dec(base * mul[i]));
-        fc_num[0] = (char)('1' + i); fc_num[1] = 0;
-        if (i < 4) { id = ovl_fc_ap(fc_fit, 0, fc_num); ovl_fc_ap(fc_fit, id, " RAM"); } else os88_strcpy(fc_fit, "Workshop", 12);
-        if (i == 4) ovl_fc_kv(x1, x2, y, fc_fit, fc_buf);
-        else ovl_fc_kv(x1 + (i & 1) * (cw + 4), (i & 1) ? x2 : x1 + cw - 6, y, fc_fit, fc_buf);
-        if (i & 1) y += rh;
+        y += (i & 1) == 0 ? rh : 0;
+        ovl_fc_kv(i == 4 ? x1 : x1 + (i & 1) * (cw + 4), i == 4 || (i & 1) ? x2 : x1 + cw - 6, y, rl[i],
+                  ovl_fc_cat(ovl_fc_nn(0, base * mul[i]), "", "", ""));
     }
 }
 static void ovl_fc_link(void)
 {
+    static char pre[16], dd[5];
     const BPRect *r;
-    int st, i, y;
+    int st, loc;
     r = &fc_rl;
     ovl_fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    y = r->y + 2;
     st = bp_link_state();
-    fc_buf[0] = 0;
-    if (bp_layout != BP_LAY_FULL && ovl_fc_live()) {
-        i = ovl_fc_ap(fc_buf, 0, "R"); i = ovl_fc_ap(fc_buf, i, ovl_fc_dec(bp_game.round + 1));
-        if (bp_game.rolled && bp_game.d1) { fc_buf[i++] = ' '; fc_buf[i++] = (char)('0' + bp_game.d1); fc_buf[i++] = '+'; fc_buf[i++] = (char)('0' + bp_game.d2); fc_buf[i++] = ' '; fc_buf[i] = 0; }
-        else i = ovl_fc_ap(fc_buf, i, " ");
-    } else i = 0;
-    if (bp_mode == BP_MODE_LOCAL) {
-        if (bp_layout == BP_LAY_FULL) ovl_fc_t(r->x + 5, y, "Same PC", 0, fc_fb);
-        else { ovl_fc_ap(fc_buf, i, "Same PC"); ovl_fc_t(r->x + 5, y, fc_buf, 0, fc_fb); }
-        if (bp_layout == BP_LAY_FULL) ovl_fc_t(r->x + 5, y + fc_fh + 3, "Cable: off", 0, fc_fb);
-        return;
+    loc = bp_mode == BP_MODE_LOCAL;
+    pre[0] = 0;
+    if (bp_layout != BP_LAY_FULL && ovl_fc_live()) {    /* round and dice ride the link row off FULL */
+        dd[0] = ' '; dd[1] = (char)('0' + bp_game.d1); dd[2] = '+'; dd[3] = (char)('0' + bp_game.d2); dd[4] = 0;
+        os88_strcpy(pre, ovl_fc_cat("R", ovl_fc_nn(0, bp_game.round + 1), bp_game.rolled && bp_game.d1 ? dd : "", " "), sizeof(pre));
     }
-    i = ovl_fc_ap(fc_buf, i, st >= 0 && st < 8 ? fc_lnk[st] : "?");
-    if (bp_sess_busy()) ovl_fc_ap(fc_buf, i, " ...");
-    ovl_fc_t(r->x + 5, y, fc_buf, 0, fc_fb);
-    if (st == BP_L_PAUSED || st == BP_L_BADPEER) ovl_fc_strike(r->x + 5, y - 1, r->w - 10);
-    if (bp_layout == BP_LAY_FULL) ovl_fc_t(r->x + 5, y + fc_fh + 3, ovl_fc_fits(bp_link_msg(), fc_fb, r->w - 10), 0, fc_fb);
+    ovl_fc_t(r->x + 5, r->y + 2, ovl_fc_cat(pre, loc ? "Same PC" : st < 8 ? fc_lnk[st] : "?", bp_sess_busy() ? " ..." : "", ""), 0, fc_fb);
+    if (st == BP_L_PAUSED || st == BP_L_BADPEER) ovl_fc_strike(r->x + 5, r->y + 1, r->w - 10);
+    if (bp_layout == BP_LAY_FULL) ovl_fc_t(r->x + 5, r->y + 5 + fc_fh, ovl_fc_fits(loc ? "Cable: off" : bp_link_msg(), fc_fb, r->w - 10), 0, fc_fb);
 }
 static void ovl_fc_logbox(void)
 {
@@ -787,35 +808,44 @@ static void ovl_fc_paint(int x1, int y1, int w, int h, unsigned secs)
 static void ovl_fc_paintr(const BPRect *r, unsigned secs) { ovl_fc_paint(r->x, r->y, r->w, r->h, secs); }
 
 /* ---- signatures of the sections that need no explicit dirty ------------- */
+static unsigned ovl_fc_hb(unsigned h, const void *p, int n)
+{
+    const BPByte *q;
+    for (q = (const BPByte *)p; n > 0; n--) h = ovl_fc_mix(h, *q++);
+    return h;
+}
+static unsigned ovl_fc_sigscal(unsigned h)
+{
+    return ovl_fc_mix(ovl_fc_mix(ovl_fc_mix(h, bp_game.round), bp_game.d1 * 8 + bp_game.d2 + bp_game.rolled * 64), bp_game.active * 4 + bp_game.status);
+}
 static unsigned ovl_fc_sigplayers(void)
 {
     unsigned h;
-    int i;
     h = ovl_fc_live() ? 7 : 3;
     if (!ovl_fc_live()) return h;
-    h = ovl_fc_mix(ovl_fc_mix(ovl_fc_mix(h, bp_game.round), bp_game.d1 * 8 + bp_game.d2 + bp_game.rolled * 64), bp_game.active * 4 + bp_game.status);
-    for (i = 0; i < bp_game.nseats && i < BP_SEATS; i++) {
-        h = ovl_fc_mix(ovl_fc_mix(ovl_fc_mix(h, bp_game.cash[i].lo), bp_game.cash[i].hi), bp_game.alive[i] * 4 + bp_game.detained[i] + bp_game.token[i] * 16);
-        h = ovl_fc_mix(h, bp_game.name[i][0] * 256 + bp_game.name[i][1]);
-    }
-    return h;
+    h = ovl_fc_sigscal(h);
+    h = ovl_fc_hb(h, bp_game.name, sizeof(bp_game.name));
+    h = ovl_fc_hb(h, bp_game.cash, sizeof(bp_game.cash));
+    h = ovl_fc_hb(h, bp_game.alive, BP_SEATS);
+    h = ovl_fc_hb(h, bp_game.detained, BP_SEATS);
+    return ovl_fc_hb(h, bp_game.token, BP_SEATS);
 }
 static unsigned ovl_fc_sigdetails(void)
 {
     unsigned h;
-    int i;
     h = ovl_fc_mix(bp_sel, ovl_fc_live());
     if (!ovl_fc_live()) return h;
-    for (i = 0; i < BP_PROPS; i++) h = ovl_fc_mix(h, bp_game.owner[i] * 64 + bp_game.level[i] * 2 + bp_game.mortgaged[i]);
-    for (i = 0; i < bp_game.nseats && i < BP_SEATS; i++) h = ovl_fc_mix(h, bp_game.name[i][0] * 256 + bp_game.name[i][1]);
-    return h;
+    h = ovl_fc_hb(h, bp_game.owner, BP_PROPS);
+    h = ovl_fc_hb(h, bp_game.level, BP_PROPS);
+    h = ovl_fc_hb(h, bp_game.mortgaged, BP_PROPS);
+    return ovl_fc_hb(h, bp_game.name, sizeof(bp_game.name));
 }
 static unsigned ovl_fc_siglink(void)
 {
     unsigned h;
     const char *m;
     h = ovl_fc_mix(ovl_fc_mix(bp_link_state(), bp_sess_busy()), bp_mode);
-    if (bp_layout != BP_LAY_FULL) h = ovl_fc_mix(ovl_fc_mix(h, bp_game.round), bp_game.d1 * 8 + bp_game.d2 + bp_game.rolled * 64);
+    if (bp_layout != BP_LAY_FULL) h = ovl_fc_sigscal(h);
     for (m = bp_link_msg(); *m; m++) h = ovl_fc_mix(h, *m);
     return h;
 }
@@ -840,18 +870,19 @@ static void ovl_fc_fullcentre(void)
 {
     bp_r_center.x = fc_all.x; bp_r_center.y = fc_all.y; bp_r_center.w = fc_all.w; bp_r_center.h = fc_all.h;
 }
-void bp_face_paint(void *win, int full)
+static void ovl_fc_paintall(void *win, int full)
 {
     static BPRect r;
     unsigned d, sg;
     int s, nch, cov;
+    nch = 0;
     os88_wm_content(win, &fc_org);
     if (os88_wm_geom(win, &fc_size) != 0) return;
     cov = bp_pn_covers();
     if (!fc_ready || fc_org.x != fc_lx || fc_org.y != fc_ly || fc_size.w != fc_lw || fc_size.h != fc_lh ||
         cov != fc_lv) {
         fc_lx = fc_org.x; fc_ly = fc_org.y; fc_lw = fc_size.w; fc_lh = fc_size.h; fc_lv = cov;
-        bp_face_layout(fc_size.w, fc_size.h);
+        ovl_fc_layout(fc_size.w, fc_size.h);
         if (cov == BP_PN_FULL) ovl_fc_fullcentre();
         fc_ready = 1;
         full = 1;
@@ -873,19 +904,13 @@ void bp_face_paint(void *win, int full)
             sg = ovl_fc_sigcell(s);
             if (sg != fc_csig[s] || (d & BP_D_FORCE) || (fc_dsp[s >> 4] & (1u << (s & 15)))) { fc_csig[s] = sg; fc_dsp[s >> 4] |= 1u << (s & 15); nch++; }
         }
-        if (nch > 10) {                                 /* many: the four sides */
-            r.x = bp_r_board.x; r.w = bp_r_board.w; r.h = fc_ch; r.y = bp_r_board.y;
-            ovl_fc_paintr(&r, BP_D_BOARD);
-            r.y = bp_r_board.y + 7 * fc_ch; ovl_fc_paintr(&r, BP_D_BOARD);
-            r.y = bp_r_board.y + fc_ch; r.h = 6 * fc_ch; r.w = fc_cw;
-            ovl_fc_paintr(&r, BP_D_BOARD);
-            r.x = bp_r_board.x + 7 * fc_cw; ovl_fc_paintr(&r, BP_D_BOARD);
-        } else
+        if (nch > 10) ovl_fc_paintr(&bp_r_board, BP_D_BOARD | BP_D_CENTER);   /* many: the board and its centre at once */
+        else
             for (s = 0; s < BP_SPACES; s++)
                 if (fc_dsp[s >> 4] & (1u << (s & 15))) { ovl_fc_cellrect(s, &r); ovl_fc_paintr(&r, BP_D_BOARD); }
         fc_dsp[0] = fc_dsp[1] = 0;
     }
-    if (d & BP_D_CENTER) ovl_fc_paintr(&bp_r_center, BP_D_CENTER);
+    if ((d & BP_D_CENTER) && nch <= 10) ovl_fc_paintr(&bp_r_center, BP_D_CENTER);
     if (bp_r_side.w >= 96) {
         if (d & BP_D_PLAYERS) { sg = ovl_fc_sigplayers(); if (sg != fc_psig || (d & BP_D_FORCE)) { fc_psig = sg; ovl_fc_paintr(&fc_rp, BP_D_PLAYERS); } }
         if (d & BP_D_DETAILS) { sg = ovl_fc_sigdetails(); if (sg != fc_dsig || (d & BP_D_FORCE)) { fc_dsig = sg; ovl_fc_paintr(&fc_rd, BP_D_DETAILS); } }
@@ -896,7 +921,7 @@ void bp_face_paint(void *win, int full)
 }
 
 /* ---- input -------------------------------------------------------------- */
-int bp_face_hit_space(int x, int y)
+static int ovl_fc_hitspace(int x, int y)
 {
     int col, row;
     if (!fc_ready || bp_pn_covers() == BP_PN_FULL) return -1;
@@ -911,7 +936,7 @@ void bp_face_select(int space)
     bp_sel = (BPByte)space;
     fc_dirty |= BP_D_BOARD | BP_D_DETAILS;
 }
-int bp_face_key(int ascii, int scan)
+static int ovl_fc_key(int ascii, int scan)
 {
     int col, row, dx, dy, t;
     if (bp_pn_covers() == BP_PN_FULL) return 0;
@@ -945,7 +970,7 @@ int bp_face_key(int ascii, int scan)
 }
 
 /* ---- the widget kit (valid only while bp_pn_draw runs) ------------------ */
-void bp_w_button(const BPRect *r, const char *label, int state)
+static void ovl_fc_wbutton(const BPRect *r, const char *label, int state)
 {
     int x, y, x2, y2, tw, ty, dis, foc, i;
     x = r->x; y = r->y; x2 = x + r->w - 1; y2 = y + r->h - 1;
@@ -982,3 +1007,12 @@ void bp_log_add(const char *line)
     fc_dirty |= BP_D_LOG;
 }
 const char *bp_log_line(int i) { if (i < 0 || i >= BP_LOG_LINES) return ""; return fc_log[i]; }
+
+/* the public doors are one resident wrapper each: the bodies are overlay code */
+void bp_face_layout(int w, int h) { ovl_fc_layout(w, h); }
+void bp_face_paint(void *win, int full) { ovl_fc_paintall(win, full); }
+int bp_face_key(int ascii, int scan) { return ovl_fc_key(ascii, scan); }
+int bp_face_hit_space(int x, int y) { return ovl_fc_hitspace(x, y); }
+void bp_w_panel(const BPRect *r, const char *title) { ovl_fc_wpanel(r, title); }
+void bp_w_box(const BPRect *r, int fill, int edge) { ovl_fc_wbox(r, fill, edge); }
+void bp_w_button(const BPRect *r, const char *label, int state) { ovl_fc_wbutton(r, label, state); }
