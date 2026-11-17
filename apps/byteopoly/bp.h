@@ -13,8 +13,9 @@
  *   link     bp_link.c bp_cable.inc                 BP_LINK
  *            hosttest/t_link.c
  *   face     bp_face.c                              BP_FACE
- *   panels   bp_panels.c bp_app.c                   BP_PANELS
- *   art      art.h art/ tools/os88bpart.py          (art.h)
+ *   panels   bp_panels.c                            BP_PANELS
+ *   app      bp_app.c bp_setup.c                    BP_APP
+ *   art      art.h art/ icon.inc tools/os88bpart.py (art.h)
  *
  * The C rules of SPEC.md 73 bind everything here: every addressable object
  * is static, no struct is copied/passed/returned by value (pass pointers to
@@ -435,13 +436,54 @@ void   bp_w_fill(int x1, int y1, int x2, int y2, int colour);
 void   bp_log_add(const char *line);
 const char *bp_log_line(int i);                   /* 0 newest */
 
-/* ===== BP_PANELS: bp_panels.c bp_app.c ==================================== */
-/* the centre's modal panel and the flows that open them (SPEC.md 131.9) */
-void   bp_pn_draw(void);                          /* draw into bp_r_center, per strip */
-int    bp_pn_covers(void);                        /* 1 = panel hides the centre art */
-int    bp_pn_key(int ascii, int scan);            /* 1 = consumed */
-int    bp_pn_click(int x, int y);                 /* 1 = consumed */
-const char *bp_pn_hint(int i);                    /* key-hint bar entries, 0 ends */
-void   bp_pn_sync(void);                          /* game/link state changed */
+/* ===== BP_PANELS: bp_panels.c ============================================ */
+/* the in-game panels in the centre (SPEC.md 131.9.7-131.9.11): purchase,
+ * auction, card, Repair Shop, debt, trade composer and review, collection /
+ * manage, handoff, link pause, chat, diagnostics, rules/help, game over.
+ * Driven by bp_game and the session; every decision becomes a BPCmd through
+ * bp_sess_submit, never a write to bp_game. */
+#define BP_GP_NONE      0       /* bp_gp_open's which: menu-opened panels */
+#define BP_GP_MANAGE    1       /* collection: upgrade/sell/mortgage/redeem */
+#define BP_GP_TRADE     2       /* compose a trade */
+#define BP_GP_CHAT      3
+#define BP_GP_DIAG      4
+#define BP_GP_RULES     5
+#define BP_GP_KEYS      6
+#define BP_GP_STANDINGS 7
+void   bp_gp_draw(void);                          /* into bp_r_center, per strip */
+int    bp_gp_covers(void);                        /* 1 = panel hides the centre art */
+int    bp_gp_key(int ascii, int scan);            /* 1 = consumed */
+int    bp_gp_click(int x, int y);                 /* 1 = consumed */
+const char *bp_gp_hint(int i);                    /* hint bar entries, 0 ends */
+void   bp_gp_sync(void);                          /* game/link state changed */
+void   bp_gp_open(int which);                     /* a menu asked for a panel */
+
+/* ===== BP_APP: bp_app.c bp_setup.c ======================================= */
+/* the application (SPEC.md 131.9.1-131.9.6): every os88_* callback, the
+ * mode (title/setup, lobby, game), menus, keys, sound cues, files and the
+ * close decision; bp_setup.c is the New Game screen (Same PC / Host Cable /
+ * Join Cable, the roster, the rules) and the cable lobby, both drawn over
+ * the WHOLE content. The face calls only the bp_pn_* door below; bp_app.c
+ * routes it to the setup screens or to the game panels (bp_gp_*). */
+#define BP_PN_CENTRE    1       /* bp_pn_covers: panel hides the centre art */
+#define BP_PN_FULL      2       /* ...or the whole content (setup, lobby):
+                                   the face then draws only bp_pn_draw, with
+                                   bp_r_center set to the whole content */
+void   bp_pn_draw(void);
+int    bp_pn_covers(void);                        /* 0, BP_PN_CENTRE, BP_PN_FULL */
+int    bp_pn_key(int ascii, int scan);
+int    bp_pn_click(int x, int y);
+const char *bp_pn_hint(int i);
+void   bp_pn_sync(void);
+/* sound cues (bp_app.c), honouring Options > Sound */
+#define BP_SND_DICE     0
+#define BP_SND_BUY      1
+#define BP_SND_RENT     2
+#define BP_SND_CARD     3
+#define BP_SND_CRASH    4
+#define BP_SND_BANKRUPT 5
+#define BP_SND_WIN      6
+#define BP_SND_ERROR    7
+void   bp_sound(int cue);
 
 #endif

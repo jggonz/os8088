@@ -1,5 +1,5 @@
 /* Byteopoly - the application: callbacks, window, menus, timer, close
- * (SPEC.md 131.9). Lane: panels. Every os88_* callback enters here and is
+ * (SPEC.md 131.9.1-131.9.6). Lane: app. Every os88_* callback enters here and is
  * routed: panels first, then the board. Only the session (bp_link.c)
  * changes the game; this file turns its results into log lines and sounds.
  * FOUNDATION SKELETON: window, menus, About, timer and a selectable board. */
@@ -20,6 +20,15 @@ static struct os88_menuset bp_ap_menus = {"Byteopoly", 0, 5,
 static const char *bp_ap_about[] = {"Byteopoly 1.0", "Collect vintage computers",
     "2-4 players, one PC or two", "over a null-modem cable", "Original os8088 game, written in C", 0};
 
+static BPByte bp_ap_mode;     /* 0 game/board, 1 setup, 2 lobby */
+/* the face's door: setup screens in setup/lobby mode, else the game panels */
+void bp_pn_draw(void) { if (bp_ap_mode) bp_su_draw(); else bp_gp_draw(); }
+int bp_pn_covers(void) { return bp_ap_mode ? BP_PN_FULL : bp_gp_covers(); }
+int bp_pn_key(int ascii, int scan) { return bp_ap_mode ? bp_su_key(ascii, scan) : bp_gp_key(ascii, scan); }
+int bp_pn_click(int x, int y) { return bp_ap_mode ? bp_su_click(x, y) : bp_gp_click(x, y); }
+const char *bp_pn_hint(int i) { return bp_gp_hint(i); }
+void bp_pn_sync(void) { bp_gp_sync(); }
+void bp_sound(int cue) { (void)cue; }
 void bp_ui_committed(const BPResult *r) { (void)r; bp_face_dirty(BP_D_ALL); bp_pn_sync(); }
 void bp_ui_link(void) { bp_face_dirty(BP_D_LINK); }
 void bp_ui_chat(int machine, const char *text) { (void)machine; bp_log_add(text); }

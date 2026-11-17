@@ -254146,9 +254146,18 @@ mortgage and upgrades have shapes.
 
 ### 131.9 Panels, flows and input
 
-(Panels lane. Reserved: the application's callbacks and modes, setup, the
-cable lobby, the decision panels, handoff, menus and keys, sound cues, the
-close decision.)
+(App lane: 131.9.1 modes and routing, 131.9.2 the New Game screen,
+131.9.3 the cable lobby, 131.9.4 menus and keys, 131.9.5 sound,
+131.9.6 files and the close decision. Panels lane: 131.9.7 the decision
+panels, 131.9.8 handoff, 131.9.9 trades, 131.9.10 pause, chat and
+diagnostics, 131.9.11 the end. Reserved.)
+
+Binding choices made before the lanes: the face calls one door
+(`bp_pn_*`); `bp_app.c` routes it to the setup screens (drawn over the whole
+content) or to the game panels (`bp_gp_*`, drawn in the centre). Every
+decision a panel takes becomes a `BPCmd` through `bp_sess_submit`.
+About is the standard application entry (`OSAPI_ABOUT_SET`, §12.2), not a
+private menu item.
 
 ### 131.10 Art
 

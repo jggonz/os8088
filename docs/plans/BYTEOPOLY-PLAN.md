@@ -27,7 +27,8 @@ in emulation follows integration; then the fix round; then the final pass.
 | save | `bp_codec.c` `bp_save.c` `hosttest/t_save.c` | 131.7 (file half) |
 | link | `bp_link.c` `bp_cable.inc` `hosttest/t_link.c`, the pair launcher | 131.5, 131.6, 131.7 (protocol half) |
 | face | `bp_face.c` | 131.8 |
-| panels | `bp_panels.c` `bp_app.c` | 131.9 |
+| panels | `bp_panels.c` (the in-game panels) | 131.9.7-131.9.11 |
+| app | `bp_app.c` `bp_setup.c` (callbacks, setup, lobby, menus, files, sound) | 131.9.1-131.9.6 |
 | art | `art.h` `art/` `icon.inc` `tools/os88bpart.py` | 131.10 |
 
 ## Stories

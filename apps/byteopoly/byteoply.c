@@ -16,10 +16,12 @@
 #include "bp_codec.c"
 #ifndef BP_HOST
 /* files (save lane), the session and cable (link lane), the face, the
- * panels and the application (face, panels lanes) */
+ * game panels, the setup screens and the application (face, panels,
+ * app lanes) */
 #include "bp_save.c"
 #include "bp_link.c"
 #include "bp_face.c"
 #include "bp_panels.c"
+#include "bp_setup.c"
 #include "bp_app.c"
 #endif
