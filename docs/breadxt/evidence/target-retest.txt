@@ -1,0 +1,53 @@
+os88test: building 1 declared artefact(s): build/breadxt-check360.img
+os88test: soak tier - 1 rows, 55s declared, budget none  (caps: cc,ffmpeg,lame,marty,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+
+os88test: 1 emulator row(s) in a lane of 7; 0 run alone
+ ok  breadxttarget                 56.8s
+       |       bootcache be7e1e6d99153634 hit (0.10 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BBNUM.O88 -> 'Breadboard XT numeric'
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open HCLOW.BBX
+       |       menu_pick Simulate -> Step
+       | HCLOW (1250, 0) (5000, 1)
+       |       menu_pick File -> Open...
+       |       chooser open HCMID.BBX
+       |       menu_pick Simulate -> Step
+       | HCMID (2500, 2) (-2, 2)
+       |       menu_pick File -> Open...
+       |       chooser open HCHIGH.BBX
+       |       menu_pick Simulate -> Step
+       | HCHIGH (3750, 1) (0, 0)
+       |       menu_pick File -> Open...
+       |       chooser open RESET.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Open...
+       |       chooser open FLOATLED.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Open...
+       |       chooser open BCLK.BBX
+       |       menu_pick Simulate -> Run
+       |       menu_pick Simulate -> Pause
+       |       menu_pick File -> Open...
+       |       chooser open RC.BBX
+       |       menu_pick Simulate -> Run
+       |       menu_pick Simulate -> Pause
+       | {
+       |   "HCLOW_step_cycles": 24982274,
+       |   "HCMID_step_cycles": 22435765,
+       |   "HCHIGH_step_cycles": 23868096,
+       |   "LED_step_cycles": 20048630,
+       |   "RC_time_100us": 1010,
+       |   "RC_mv": 3170,
+       |   "RC_expected_mv": 3169.7464736182233,
+       |   "RC_cycles": 380700811,
+       |   "ui_stack_high_water_bytes": 338
+       | }
+       | breadxt target: numeric ABI, red control, HC bridges, reset, LED, B clock, RC and stack PASS
+       | elapsed host seconds: 56.64
+
+os88test: 1 passed, 0 failed, 0 skipped in 56.8s, 4.3s charged (budget none)

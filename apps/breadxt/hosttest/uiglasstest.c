@@ -16,6 +16,8 @@ static unsigned ug_ticks,ug_glyphs,ug_calls,ug_failures,ug_checks,ug_wakes,ug_di
 static int ug_negative;
 static char ug_textlog[16384],ug_toast[128];
 static unsigned ug_textn;
+static BBByte ug_filebits[BB_FILEMAX];
+static unsigned ug_filesize;
 static struct os88_rect ug_damage;
 static struct os88_place ug_place={0,1};
 static char ug_token;
@@ -68,7 +70,7 @@ void os88_file_here(struct os88_place *place){*place=ug_place;}
 int os88_file_goto_q_mark(unsigned clus,int vol){ug_place.clus=clus;ug_place.vol=vol;return 0;}
 int os88_arg_file(char *name,struct os88_place *place){(void)name;(void)place;return -1;}
 int os88_file_dlg(int mode,void *win,const char *name){(void)mode;(void)win;(void)name;return 0;}
-unsigned os88_file_read(const char *name,void *buf,unsigned cap){(void)name;(void)buf;(void)cap;UC(ug_lock==0);return 0;}
+unsigned os88_file_read(const char *name,void *buf,unsigned cap){unsigned n;UC(ug_lock==0);if(!strcmp(name,"CACHE.BBX")&&ug_filesize){n=ug_filesize<cap?ug_filesize:cap;memmove(buf,ug_filebits,n);return n;}return 0;}
 int os88_file_write(const char *name,const void *buf,unsigned n){(void)name;(void)buf;(void)n;UC(ug_lock==0);return -1;}
 int os88_ferr(void){return OS88_FERR_OK;}
 int os88_toast(const char *message,int ticks){(void)ticks;snprintf(ug_toast,sizeof(ug_toast),"%s",message);return 0;}
@@ -178,4 +180,37 @@ static void ug_scope_hold_checks(void)
     ug_textn=0;ug_textlog[0]=0;ug_cmd(1,3);
     UC(!bb_running&&strstr(ug_textlog,"PAUSE")!=0);
 }
-int main(int argc,char **argv){if(argc!=2&&argc!=3)return 2;ug_negative=argc==3&&!strcmp(argv[2],"negative");if(!strcmp(argv[1],"queue"))ug_queue_checks();else if(!strcmp(argv[1],"modal"))ug_modal_checks();else if(!strcmp(argv[1],"damage"))ug_damage_checks();else if(!strcmp(argv[1],"wide"))ug_wide_checks(0);else if(!strcmp(argv[1],"wide-dismiss"))ug_wide_checks(1);else if(!strcmp(argv[1],"locate-help"))ug_locate_checks(0);else if(!strcmp(argv[1],"locate-scope"))ug_locate_checks(1);else if(!strcmp(argv[1],"locate-offscreen"))ug_locate_checks(2);else if(!strcmp(argv[1],"locate-none"))ug_locate_checks(3);else if(!strcmp(argv[1],"stale"))ug_stale_checks();else if(!strcmp(argv[1],"scope-hold"))ug_scope_hold_checks();else return 2;printf("breadxt UI host %s: %u checks, %u failures\n",argv[1],ug_checks,ug_failures);return ug_failures?1:0;}
+static void ug_led_body(unsigned char *pixels)
+{
+    int x,y,cx,cy,n=0;BBPart *led=&bb_doc.part[3];
+    cx=(bu_hx(bb_pin(led,1))+bu_hx(bb_pin(led,2)))/2;
+    cy=(bu_hy(bb_pin(led,1))+bu_hy(bb_pin(led,2)))/2;
+    for(y=cy-2;y<=cy+2;y++)for(x=cx-2;x<=cx+2;x++)pixels[n++]=ug_glass[y*720+x];
+}
+static void ug_replacement_checks(void)
+{
+    unsigned i,guard,mode;unsigned char baseline[25],actual[25];
+    ug_init(480);ug_example(1);ug_led_body(baseline);
+    for(i=0;i<25;i++)UC(baseline[i]==OS88_LRED);
+    ug_filesize=bb_encode(&bb_doc,ug_filebits,sizeof(ug_filebits));UC(ug_filesize>0);bb_mark_saved();
+    for(mode=0;mode<2;mode++){
+        if(mode==0){
+            ug_cmd(0,0);for(guard=0;bu_op&&guard<20;guard++)ug_wake();UC(bb_doc.np==0);
+            ug_event_begin();os88_onfile(OS88_FDLG_OPEN,"CACHE.BBX",ug_filesize,0,ug_win);ug_event_end();
+            for(guard=0;bu_op&&guard<20;guard++)ug_wake();UC(bb_doc.np==4&&!bb_valid);
+        }else{bb_mark_saved();ug_load_example(1);UC(bb_doc.np==4&&!bb_valid);}
+        ug_paint(0);ug_led_body(actual);UC(actual[12]==OS88_WHITE);
+        /* Restore the stale ON key after replacement to reproduce the old
+         * cache bug while leaving the actual invalid full paint intact. */
+        if(ug_negative)bu_led_shadow[3]=3;
+        ug_step();UC(bb_valid&&bb_result.ua[3]==8824);
+        ug_led_body(actual);UC(!memcmp(baseline,actual,sizeof(actual)));
+        ug_paint(0);ug_led_body(actual);UC(!memcmp(baseline,actual,sizeof(actual)));
+    }
+    /* A genuine failed numerical slice invalidates a formerly powered result.
+     * Its incremental body must agree with a clean paint of that failed state. */
+    vx_num_calls=0;vx_inject=20;ug_step();vx_inject=0;
+    UC(!bb_valid&&bb_result.diag==BB_ENUMERIC);ug_led_body(actual);UC(actual[12]==OS88_WHITE);
+    ug_paint(0);ug_led_body(actual);UC(actual[12]==OS88_WHITE);
+}
+int main(int argc,char **argv){if(argc!=2&&argc!=3)return 2;ug_negative=argc==3&&!strcmp(argv[2],"negative");if(!strcmp(argv[1],"queue"))ug_queue_checks();else if(!strcmp(argv[1],"modal"))ug_modal_checks();else if(!strcmp(argv[1],"damage"))ug_damage_checks();else if(!strcmp(argv[1],"wide"))ug_wide_checks(0);else if(!strcmp(argv[1],"wide-dismiss"))ug_wide_checks(1);else if(!strcmp(argv[1],"locate-help"))ug_locate_checks(0);else if(!strcmp(argv[1],"locate-scope"))ug_locate_checks(1);else if(!strcmp(argv[1],"locate-offscreen"))ug_locate_checks(2);else if(!strcmp(argv[1],"locate-none"))ug_locate_checks(3);else if(!strcmp(argv[1],"stale"))ug_stale_checks();else if(!strcmp(argv[1],"scope-hold"))ug_scope_hold_checks();else if(!strcmp(argv[1],"replace-led"))ug_replacement_checks();else return 2;printf("breadxt UI host %s: %u checks, %u failures\n",argv[1],ug_checks,ug_failures);return ug_failures?1:0;}

@@ -30,7 +30,7 @@ def main():
                         str(ROOT/'apps/breadxt/hosttest/uiglasstest.c'),
                         '-lm','-o',str(binary)],check=True,cwd=ROOT)
         failed = []
-        for mode in ('queue','modal','damage','wide','wide-dismiss','locate-help','locate-scope','locate-offscreen','locate-none','stale','scope-hold'):
+        for mode in ('queue','modal','damage','wide','wide-dismiss','locate-help','locate-scope','locate-offscreen','locate-none','stale','scope-hold','replace-led'):
             positive = subprocess.run([str(binary),mode],cwd=ROOT)
             if positive.returncode:
                 failed.append(mode)

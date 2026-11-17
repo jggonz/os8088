@@ -940,7 +940,7 @@ static int ovl_bu_io(unsigned op)
         bb_copy(&bb_doc,&bb_stage,sizeof(bb_doc));bb_history_clear();bb_mark_saved();bb_invalidate();bb_dirty=0;
         bb_sim_reset();ovl_bu_speed_reset();bu_active=0;bu_step_once=0;bu_selected=0;bu_selected_kind=0;bu_hole=BB_NONE;bu_reset_tools();
         os88_strcpy(bu_name,bu_choice,sizeof(bu_name));bb_copy(&bu_doc_place,&bu_choice_place,sizeof(bu_doc_place));
-        bu_mode=BU_BOARD;bu_note("Opened editable BBX project");bu_flags|=BU_ALL;
+        bu_mode=BU_BOARD;bu_note("Opened editable BBX project");bu_result_changed();bu_flags|=BU_ALL;
     }else{
         if(!bu_io_as&&os88_file_goto_q_mark(bu_doc_place.clus,bu_doc_place.vol)!=0){bb_error=BB_EIO;bu_error();bu_after=0;return 1;}
         n=bb_encode(&bb_doc,bu_filebits,BB_FILEMAX);
@@ -965,14 +965,14 @@ static int ovl_bu_execute(unsigned op,unsigned arg)
         if(!n||!bb_decode(bu_filebits,n,&bb_stage)){bu_error();return 1;}
         bb_copy(&bb_doc,&bb_stage,sizeof(bb_doc));bb_history_clear();bb_invalidate();bb_sim_reset();ovl_bu_speed_reset();
         bu_active=0;bu_step_once=0;bu_selected=0;bu_selected_kind=0;bu_hole=BB_NONE;bu_reset_tools();
-        bu_name[0]=0;if(op==BU_OP_NEW)bb_mark_saved();else bb_dirty=1;bu_mode=BU_BOARD;bu_flags|=BU_ALL;
+        bu_name[0]=0;if(op==BU_OP_NEW)bb_mark_saved();else bb_dirty=1;bu_mode=BU_BOARD;bu_result_changed();bu_flags|=BU_ALL;
         bu_note(op==BU_OP_NEW?"Choose Parts; click pins; Enter":"Example is editable; Space to run");return 1;
     }
     if(op==BU_OP_RUN||op==BU_OP_STEP){
         if(bb_sim_start(0)){
             ovl_bu_speed_reset();bu_active=1;bu_step_once=op==BU_OP_STEP;bb_running=op==BU_OP_RUN;bu_msg[0]=0;
             bu_flags|=BU_BAR_DIRTY|BU_INFO_DIRTY|BU_SCOPE_DIRTY;
-        }else{bu_active=0;bb_running=0;bu_error();bu_flags|=BU_INFO_DIRTY|BU_BAR_DIRTY|BU_SCOPE_DIRTY;}
+        }else{bu_active=0;bb_running=0;bu_error();bu_result_changed();bu_flags|=BU_INFO_DIRTY|BU_BAR_DIRTY|BU_SCOPE_DIRTY;}
         return 1;
     }
     if(op==BU_OP_RESET){bb_running=0;bb_sim_reset();ovl_bu_speed_reset();bu_active=0;bu_step_once=0;bu_note("Reset to initial conditions");bu_result_changed();bu_flags|=BU_SCOPE_DIRTY|BU_INFO_DIRTY|BU_BAR_DIRTY;return 1;}
@@ -1381,11 +1381,11 @@ void os88_onwake(void *win)
     if(op)ovl_bu_execute(op,arg);
     if(bu_closing)return;
     if(bb_running||bu_step_once){
-        if(!bu_active){if(bb_sim_start(0)){ovl_bu_speed_reset();bu_active=1;}else{bb_running=0;bu_step_once=0;bu_error();}}
+        if(!bu_active){if(bb_sim_start(0)){ovl_bu_speed_reset();bu_active=1;}else{bb_running=0;bu_step_once=0;bu_error();bu_result_changed();bu_flags|=BU_BAR_DIRTY|BU_SCOPE_DIRTY;}}
         if(bu_active){
             result=bb_sim_slice(16);
             if(result==1){bu_result_changed();if(bu_step_once){bu_step_once=0;bb_running=0;bu_flags|=BU_BAR_DIRTY|BU_SCOPE_DIRTY;}}
-            else if(result<0){bu_diag_stale=0;bu_active=0;bu_step_once=0;bb_running=0;bu_flags|=BU_INFO_DIRTY|BU_BAR_DIRTY|BU_SCOPE_DIRTY;}
+            else if(result<0){bu_diag_stale=0;bu_active=0;bu_step_once=0;bb_running=0;bu_result_changed();bu_flags|=BU_INFO_DIRTY|BU_BAR_DIRTY|BU_SCOPE_DIRTY;}
         }
     }
     now=os88_ticks();

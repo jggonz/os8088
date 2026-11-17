@@ -1,0 +1,4 @@
+budget-check: kern_big KERN_SIZE 95,232 of KERN_BUDGET 100,864 - 5,632 spare
+budget-check: kern_small KERN_SIZE 57,344 of KERN_BUDGET 64,000 - 6,656 spare
+budget-check: kern_emu KERN_SIZE 95,232 of KERN_BUDGET 100,864 - 5,632 spare
+budget-check: kern_mega resident 61,440 of KERN_BUDGET 68,096 - 6,656 spare

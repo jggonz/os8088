@@ -1,0 +1,146 @@
+nasm -f bin  -DHEAP_PARA=6560 ... -o build/boot.bin boot/boot.asm
+python3 tools/os88disk.py -o build/os8088.img --size 1440 \
+		--boot build/boot.bin --kernel build/kernel.sys \
+		build/sound.drv build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/xmem.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/cdrom.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/pciether.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys build/coldhma.sys SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88 SYSTEM:build/cdrack.o88 STIKAPPS:build/deskcal.o88 STIKAPPS:build/stiknote.o88 STIKAPPS:build/deskclok.o88 SYSTEM:build/syscheck.o88 SYSTEM:build/fscheck.drv SYSTEM/APPDATA/NOTES:build/notes/WELCOME.TXT APPS:build/kdos/DOS.O88 build/install.o88 APPS:build/browser.o88 APPS:build/fontview.o88 APPS:build/notepad.o88 APPS:build/paint.o88 APPS:build/telnet.o88 APPS:build/redline.o88 GAMES:build/mines.o88 build/readme.txt MEDIA:build/OS8088.GIF SYSTEM/FONTS:build/faces/archivo.f88 SYSTEM/FONTS:build/faces/charter.f88 SYSTEM/FONTS:build/faces/courier.f88 SYSTEM/FONTS:build/faces/helv.f88 SYSTEM/FONTS:build/faces/inconsol.f88 SYSTEM/FONTS:build/faces/jetbrain.f88 SYSTEM/FONTS:build/faces/noto.f88 SYSTEM/FONTS:build/faces/robomono.f88 SYSTEM/FONTS:build/faces/tallx.f88 SYSTEM/FONTS:build/faces/times.f88 SYSTEM/FONTS:build/license.txt \
+		MEDIA:apps/video/os8088.v88 APPS:build/video.o88 --folder SYSTEM/APPDATA --folder AUTOSTRT --dir-slots SYSTEM/APPDATA/NOTES=32
+os88disk: build/os8088.img (1440KB, 18 spt, FAT12) 64 file(s) in 9 folder(s), 1473/2847 clusters, KERNEL.SYS 165 sectors at LBA 33
+nasm -f bin -DSPT=15 -DHEADS=2  -DHEAP_PARA=6560 ... -o build/boot120.bin boot/boot.asm
+python3 tools/os88disk.py -o build/os8088-120.img --size 1200 \
+		--boot build/boot120.bin --kernel build/kernel.sys \
+		build/sound.drv build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/xmem.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/cdrom.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/pciether.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys build/coldhma.sys SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88 SYSTEM:build/cdrack.o88 STIKAPPS:build/deskcal.o88 STIKAPPS:build/stiknote.o88 STIKAPPS:build/deskclok.o88 SYSTEM:build/syscheck.o88 SYSTEM:build/fscheck.drv SYSTEM/APPDATA/NOTES:build/notes/WELCOME.TXT APPS:build/kdos/DOS.O88 build/install.o88 APPS:build/browser.o88 APPS:build/fontview.o88 APPS:build/notepad.o88 APPS:build/paint.o88 APPS:build/telnet.o88 APPS:build/redline.o88 GAMES:build/mines.o88 build/readme.txt MEDIA:build/OS8088.GIF SYSTEM/FONTS:build/faces/archivo.f88 SYSTEM/FONTS:build/faces/charter.f88 SYSTEM/FONTS:build/faces/courier.f88 SYSTEM/FONTS:build/faces/helv.f88 SYSTEM/FONTS:build/faces/inconsol.f88 SYSTEM/FONTS:build/faces/jetbrain.f88 SYSTEM/FONTS:build/faces/noto.f88 SYSTEM/FONTS:build/faces/robomono.f88 SYSTEM/FONTS:build/faces/tallx.f88 SYSTEM/FONTS:build/faces/times.f88 SYSTEM/FONTS:build/license.txt \
+		MEDIA:apps/video/os8088.v88 APPS:build/video.o88 --folder SYSTEM/APPDATA --folder AUTOSTRT --dir-slots SYSTEM/APPDATA/NOTES=32
+os88disk: build/os8088-120.img (1200KB, 15 spt, FAT12) 64 file(s) in 9 folder(s), 1473/2371 clusters, KERNEL.SYS 165 sectors at LBA 29
+nasm -f bin -DSPT=9 -DHEADS=2  -DHEAP_PARA=6560 ... -o build/boot360.bin boot/boot.asm
+python3 tools/os88disk.py -o build/os8088-720.img --size 720 \
+		--boot build/boot360.bin --kernel build/kernel.sys \
+		build/sound.drv build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/xmem.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/cdrom.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/pciether.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys build/coldhma.sys SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88  STIKAPPS:build/deskcal.o88 STIKAPPS:build/stiknote.o88 STIKAPPS:build/deskclok.o88 SYSTEM:build/syscheck.o88 SYSTEM:build/fscheck.drv SYSTEM/APPDATA/NOTES:build/notes/WELCOME.TXT APPS:build/kdos/DOS.O88 build/install.o88 APPS:build/browser.o88 APPS:build/fontview.o88 APPS:build/notepad.o88 APPS:build/paint.o88 GAMES:build/mines.o88 build/readme.txt MEDIA:build/OS8088.GIF SYSTEM/FONTS:build/faces/archivo.f88 SYSTEM/FONTS:build/faces/charter.f88 SYSTEM/FONTS:build/faces/courier.f88 SYSTEM/FONTS:build/faces/helv.f88 SYSTEM/FONTS:build/faces/inconsol.f88 SYSTEM/FONTS:build/faces/jetbrain.f88 SYSTEM/FONTS:build/faces/noto.f88 SYSTEM/FONTS:build/faces/robomono.f88 SYSTEM/FONTS:build/faces/tallx.f88 SYSTEM/FONTS:build/faces/times.f88 SYSTEM/FONTS:build/license.txt \
+		MEDIA:apps/video/os8088.v88 APPS:build/video.o88 --folder SYSTEM/APPDATA --folder AUTOSTRT --dir-slots SYSTEM/APPDATA/NOTES=32
+os88disk: build/os8088-720.img (720KB, 9 spt, FAT12) 61 file(s) in 9 folder(s), 696/713 clusters, KERNEL.SYS 165 sectors at LBA 14
+python3 tools/os88disk.py -o build/os8088-360.img --size 360 --spc 1 \
+		--boot build/boot360.bin --kernel build/kernel.sys \
+		build/sound.drv build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88 STIKAPPS:build/deskcal.o88 STIKAPPS:build/stiknote.o88 STIKAPPS:build/deskclok.o88 SYSTEM/APPDATA/NOTES:build/notes/WELCOME.TXT APPS:build/kdos360/DOS.O88 build/install.o88 APPS:build/notepad.o88  build/readme.txt MEDIA:build/OS8088.GIF  \
+		--folder SYSTEM/APPDATA --folder AUTOSTRT --dir-slots SYSTEM/APPDATA/NOTES=32
+os88disk: build/os8088-360.img (360KB, 9 spt, FAT12) 38 file(s) in 7 folder(s), 667/706 clusters, KERNEL.SYS 165 sectors at LBA 14
+python3 tools/os88disk.py -o build/apps.img --size 1440 APPS:build/artful.o88 APPS:build/browser.o88 APPS:build/calc.o88 APPS:build/chart.o88 APPS:build/fractal.o88 APPS:build/mixer.o88 APPS:build/notepad.o88 APPS:build/paint.o88 APPS:build/piano.o88 APPS:build/ftpd.o88 APPS:build/sheet.o88 APPS:build/telnet.o88 APPS:build/wirechat.o88 APPS:build/texpad.o88 APPS:build/tracker.o88 APPS:build/audio.o88 APPS:build/video.o88 APPS:build/midirack.o88 APPS:build/pixel.o88 APPS:build/timer.o88 APPS:build/bounce.o88 APPS:build/xtmp3.o88 APPS:build/waverack.o88 GAMES:build/wireball.o88 GAMES:build/wireflet.o88 GAMES:build/arkanoid.o88 GAMES:build/tank.o88 GAMES:build/cyclone.o88 GAMES:build/mines.o88 GAMES:build/skies.o88 GAMES:build/dotdel.o88 GAMES:build/missile.o88 GAMES:build/solitair.o88 GAMES:build/tamegram.o88 GAMES:build/pxstein.o88 GAMES:build/gorillas.o88 GAMES:build/drmarco.o88 GAMES:build/isotron.o88 GAMES:build/realdmg.o88 GAMES:build/wirerena.o88 MEDIA:build/zdata-lz4/BEVERLY.MOD MEDIA:build/zdata-lz4/PAPER.TEX MEDIA:build/zdata-lz4/GUIDE.TEX MEDIA:build/zdata-lz4/BROWSER.HTM MEDIA:build/zdata-lz4/GBDEMO.GB MEDIA:apps/video/os8088.v88 MEDIA/MIDI:build/zdata-lz4/MIDI/BATTLE1.MID MEDIA/MIDI:build/zdata-lz4/MIDI/CANCAN.MID MEDIA/MIDI:build/zdata-lz4/MIDI/DEMO.MID MEDIA/MIDI:build/zdata-lz4/MIDI/ENTERTNR.MID MEDIA/MIDI:build/zdata-lz4/MIDI/FURELISE.MID MEDIA/MIDI:build/zdata-lz4/MIDI/INTRO.MID MEDIA/MIDI:build/zdata-lz4/MIDI/KOROBEIN.MID MEDIA/MIDI:build/zdata-lz4/MIDI/MOUNTKNG.MID MEDIA/MIDI:build/zdata-lz4/MIDI/SPACEJAM.MID MEDIA/MIDI:build/zdata-lz4/MIDI/TURKISH.MID SYSTEM:build/taskmgr.o88 SYSTEM/DOS:build/os88net.com SYSTEM/DOS:build/os88cz.com MEDIA:tests/xtmp3/NEONDRV.MP3 MEDIA:tests/xtmp3/NIGHTSIG.MP3 MEDIA:tests/xtmp3/AFTERHRS.MP3 --folder SYSTEM/APPDATA
+os88disk: build/apps.img (1440KB, 18 spt, FAT12) 63 file(s) in 7 folder(s), 2806/2847 clusters
+python3 tools/os88disk.py -o build/apps120.img --size 1200 APPS:build/artful.o88 APPS:build/browser.o88 APPS:build/calc.o88 APPS:build/chart.o88 APPS:build/fractal.o88 APPS:build/mixer.o88 APPS:build/notepad.o88 APPS:build/paint.o88 APPS:build/piano.o88 APPS:build/ftpd.o88 APPS:build/sheet.o88 APPS:build/telnet.o88 APPS:build/wirechat.o88 APPS:build/texpad.o88 APPS:build/tracker.o88 APPS:build/audio.o88 APPS:build/video.o88 APPS:build/midirack.o88 APPS:build/pixel.o88 APPS:build/timer.o88 APPS:build/bounce.o88 APPS:build/waverack.o88 GAMES:build/wireball.o88 GAMES:build/wireflet.o88 GAMES:build/arkanoid.o88 GAMES:build/tank.o88 GAMES:build/cyclone.o88 GAMES:build/mines.o88 GAMES:build/skies.o88 GAMES:build/dotdel.o88 GAMES:build/missile.o88 GAMES:build/solitair.o88 GAMES:build/tamegram.o88 GAMES:build/pxstein.o88 GAMES:build/gorillas.o88 GAMES:build/drmarco.o88 GAMES:build/isotron.o88 GAMES:build/realdmg.o88 GAMES:build/wirerena.o88 MEDIA:build/zdata-lz4/BEVERLY.MOD MEDIA:build/zdata-lz4/PAPER.TEX MEDIA:build/zdata-lz4/GUIDE.TEX MEDIA:build/zdata-lz4/BROWSER.HTM MEDIA:build/zdata-lz4/GBDEMO.GB MEDIA:apps/video/os8088.v88 MEDIA/MIDI:build/zdata-lz4/MIDI/BATTLE1.MID MEDIA/MIDI:build/zdata-lz4/MIDI/CANCAN.MID MEDIA/MIDI:build/zdata-lz4/MIDI/DEMO.MID MEDIA/MIDI:build/zdata-lz4/MIDI/ENTERTNR.MID MEDIA/MIDI:build/zdata-lz4/MIDI/FURELISE.MID MEDIA/MIDI:build/zdata-lz4/MIDI/INTRO.MID MEDIA/MIDI:build/zdata-lz4/MIDI/KOROBEIN.MID MEDIA/MIDI:build/zdata-lz4/MIDI/MOUNTKNG.MID MEDIA/MIDI:build/zdata-lz4/MIDI/SPACEJAM.MID MEDIA/MIDI:build/zdata-lz4/MIDI/TURKISH.MID SYSTEM:build/taskmgr.o88 SYSTEM/DOS:build/os88net.com SYSTEM/DOS:build/os88cz.com --folder SYSTEM/APPDATA
+os88disk: build/apps120.img (1200KB, 15 spt, FAT12) 59 file(s) in 7 folder(s), 2321/2371 clusters
+python3 tools/os88disk.py -o build/apps720.img --size 720 APPS:build/artful.o88 APPS:build/calc.o88 APPS:build/chart.o88 APPS:build/fractal.o88 APPS:build/mixer.o88 APPS:build/notepad.o88 APPS:build/paint.o88 APPS:build/piano.o88 APPS:build/ftpd.o88 APPS:build/sheet.o88 APPS:build/telnet.o88 APPS:build/wirechat.o88 APPS:build/texpad.o88 APPS:build/tracker.o88 APPS:build/audio.o88 APPS:build/video.o88 APPS:build/midirack.o88 APPS:build/timer.o88 APPS:build/bounce.o88 GAMES:build/wireball.o88 GAMES:build/wireflet.o88 GAMES:build/arkanoid.o88 GAMES:build/tank.o88 GAMES:build/cyclone.o88 GAMES:build/mines.o88 GAMES:build/skies.o88 GAMES:build/dotdel.o88 GAMES:build/missile.o88 GAMES:build/solitair.o88 GAMES:build/tamegram.o88 GAMES:build/pxstein.o88 GAMES:build/gorillas.o88 GAMES:build/isotron.o88 MEDIA:build/zdata-lz4/BEVERLY.MOD MEDIA:build/zdata-lz4/PAPER.TEX MEDIA:build/zdata-lz4/GUIDE.TEX MEDIA:build/zdata-lz4/BROWSER.HTM SYSTEM:build/taskmgr.o88 SYSTEM/DOS:build/os88net.com SYSTEM/DOS:build/os88cz.com MEDIA/MIDI:build/zdata-lz4/MIDI/BATTLE1.MID MEDIA/MIDI:build/zdata-lz4/MIDI/INTRO.MID --folder SYSTEM/APPDATA
+os88disk: build/apps720.img (720KB, 9 spt, FAT12) 43 file(s) in 7 folder(s), 653/713 clusters
+python3 tools/os88disk.py -o build/apps360.img --size 360 APPS:build/artful.o88 APPS:build/calc.o88 APPS:build/fractal.o88 APPS:build/notepad.o88 APPS:build/paint.o88 APPS:build/ftpd.o88 APPS:build/telnet.o88 APPS:build/texpad.o88 APPS:build/tracker.o88 APPS:build/audio.o88 APPS:build/video.o88 GAMES:build/wireball.o88 GAMES:build/arkanoid.o88 GAMES:build/tank.o88 GAMES:build/cyclone.o88 GAMES:build/mines.o88 GAMES:build/skies.o88 GAMES:build/solitair.o88 GAMES:build/tamegram.o88 MEDIA:build/zdata-lz4/PAPER.TEX MEDIA:build/zdata-lz4/GUIDE.TEX SYSTEM:build/taskmgr.o88 --folder MEDIA --folder SYSTEM/APPDATA
+os88disk: build/apps360.img (360KB, 9 spt, FAT12) 23 file(s) in 5 folder(s), 290/354 clusters
+python3 tools/os88disk.py -o build/util360.img --size 360 build/syscheck.o88 build/redline.o88 build/taskmgr.o88 build/fscheck.drv SYSTEM/DOS:build/os88net.com SYSTEM/DOS:build/os88cz.com --folder MEDIA --folder SYSTEM/APPDATA
+os88disk: build/util360.img (360KB, 9 spt, FAT12) 7 file(s) in 4 folder(s), 92/354 clusters
+python3 tools/os88disk.py -o build/more720.img --size 720 APPS:build/pixel.o88 APPS:build/midirack.o88 APPS:build/redline.o88 APPS:build/telnet.o88 APPS:build/cdrack.o88 GAMES:build/realdmg.o88 GAMES:build/drmarco.o88 GAMES:build/wirerena.o88 MEDIA:build/zdata-lz4/GBDEMO.GB MEDIA:apps/video/os8088.v88 MEDIA/MIDI:build/zdata-lz4/MIDI/CANCAN.MID MEDIA/MIDI:build/zdata-lz4/MIDI/DEMO.MID MEDIA/MIDI:build/zdata-lz4/MIDI/ENTERTNR.MID MEDIA/MIDI:build/zdata-lz4/MIDI/FURELISE.MID MEDIA/MIDI:build/zdata-lz4/MIDI/KOROBEIN.MID MEDIA/MIDI:build/zdata-lz4/MIDI/MOUNTKNG.MID MEDIA/MIDI:build/zdata-lz4/MIDI/SPACEJAM.MID MEDIA/MIDI:build/zdata-lz4/MIDI/TURKISH.MID PICTURES:apps/pixel/samples/VACATION.JPG PICTURES:apps/pixel/samples/LAKE.JPG PICTURES:apps/pixel/samples/CAT.GIF PICTURES:apps/pixel/samples/BALLOONS.PNG PICTURES:apps/pixel/samples/BOUNCE.GIF --folder SYSTEM/APPDATA
+os88disk: build/more720.img (720KB, 9 spt, FAT12) 24 file(s) in 7 folder(s), 709/713 clusters
+make[1]: `build/smallk/boot360.bin' is up to date.
+make[1]: `build/smallk/boot.bin' is up to date.
+python3 tools/os88disk.py -o build/debug-sound.img --size 1440 \
+		--boot build/boot.bin --kernel build/kernel.sys \
+		build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/xmem.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/cdrom.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/pciether.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys build/coldhma.sys build/snddiag/sound.drv SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88 APPS:build/notepad.o88 build/readme.txt MEDIA:build/OS8088.GIF \
+		build/snddiag.o88 apps/snddiag/SNDDEBUG.TXT build/sdcfg/system.cfg AUTOSTRT:build/sdcfg/SNDDIAG.LNK --folder SYSTEM/APPDATA
+os88disk: build/debug-sound.img (1440KB, 18 spt, FAT12) 40 file(s) in 5 folder(s), 557/2847 clusters, KERNEL.SYS 165 sectors at LBA 33
+python3 tools/os88disk.py -o build/debug-sound-120.img --size 1200 \
+		--boot build/boot120.bin --kernel build/kernel.sys \
+		build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/xmem.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/cdrom.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/pciether.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys build/coldhma.sys build/snddiag/sound.drv SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88 APPS:build/notepad.o88 build/readme.txt MEDIA:build/OS8088.GIF \
+		build/snddiag.o88 apps/snddiag/SNDDEBUG.TXT build/sdcfg/system.cfg AUTOSTRT:build/sdcfg/SNDDIAG.LNK --folder SYSTEM/APPDATA
+os88disk: build/debug-sound-120.img (1200KB, 15 spt, FAT12) 40 file(s) in 5 folder(s), 557/2371 clusters, KERNEL.SYS 165 sectors at LBA 29
+python3 tools/os88disk.py -o build/debug-sound-720.img --size 720 \
+		--boot build/boot360.bin --kernel build/kernel.sys \
+		build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/xmem.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/cdrom.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/pciether.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys build/coldhma.sys build/snddiag/sound.drv SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88 APPS:build/notepad.o88 build/readme.txt MEDIA:build/OS8088.GIF \
+		build/snddiag.o88 apps/snddiag/SNDDEBUG.TXT build/sdcfg/system.cfg AUTOSTRT:build/sdcfg/SNDDIAG.LNK --folder SYSTEM/APPDATA
+os88disk: build/debug-sound-720.img (720KB, 9 spt, FAT12) 40 file(s) in 5 folder(s), 293/713 clusters, KERNEL.SYS 165 sectors at LBA 14
+python3 tools/os88disk.py -o build/debug-sound-360.img --size 360 \
+		--boot build/boot360.bin --kernel build/kernel.sys \
+		build/hdd.drv build/net.drv build/ramdisk.drv build/ether.drv build/rampage.drv build/hddtool.drv build/saver.drv build/thmpal.drv build/usbmouse.drv build/ems.drv build/httpfs.drv build/httppage.drv build/vesa.drv build/ctrl.drv build/format.drv build/diskops.drv build/serial.drv build/hiber.drv build/dock.drv build/extd.drv build/win95.drv build/desk.drv build/stikmenu.drv build/boothd.sys build/snddiag/sound.drv SYSTEM:build/taskmgr.o88 SYSTEM:build/thewire.o88 SYSTEM:build/rlapply.o88 APPS:build/notepad.o88 build/readme.txt MEDIA:build/OS8088.GIF \
+		build/snddiag.o88 apps/snddiag/SNDDEBUG.TXT build/sdcfg/system.cfg AUTOSTRT:build/sdcfg/SNDDIAG.LNK --folder SYSTEM/APPDATA
+os88disk: build/debug-sound-360.img (360KB, 9 spt, FAT12) 36 file(s) in 5 folder(s), 271/354 clusters, KERNEL.SYS 165 sectors at LBA 12
+os88test: full tier - 81 rows, 172s declared, budget 180s  (caps: cc,ffmpeg,lame,marty,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+
+os88test: 5 emulator row(s) in a lane of 7; 1 run alone
+ ok  retired                        0.1s
+ ok  blobruns                       0.1s
+ ok  blobbodies                     0.1s
+ ok  romtool                        0.2s
+ ok  partoff                        1.1s
+ ok  hostwait                       1.1s  (declared 1s)
+ ok  cellgate                       0.4s
+ ok  nulldev                        1.6s
+ ok  abilock                        0.1s
+ ok  bits                           0.7s
+ ok  pkgdeps                        0.3s
+ ok  kernbudget                     0.1s
+ ok  swallow                        0.1s
+ ok  vidext                         0.3s
+ ok  heapgran                       0.1s
+ ok  tierlock                       0.1s
+ ok  drvverb                        0.1s
+ ok  drvmem                         0.1s
+ ok  installabi                     0.1s
+ ok  mirror                         2.1s
+ ok  image                          0.1s
+ ok  pkgzrules                      0.9s
+ ok  pdfix                          0.2s
+ ok  pdstk                          0.1s
+ ok  pdjr                           1.3s
+ ok  guidelock                      2.6s
+ ok  pdfixstress                    0.4s
+ ok  pdlay                          0.6s
+ ok  pderrlen                       0.0s
+ ok  pdssarg                        0.1s
+SKIP pd360                        (needs pagedesk)
+ ok  pdnotes                        0.4s
+ ok  pdprep                         1.4s
+ ok  pdkgate                        0.0s
+ ok  livefull                       0.1s
+ ok  catdisk                        0.1s
+ ok  pkg                            0.5s
+ ok  fonts                          0.1s
+ ok  pded                           1.2s
+ ok  hotpar                         0.1s
+ ok  bootfence                      0.1s
+ ok  canary                         0.1s
+ ok  ascplace                       0.1s
+ ok  volsig                         0.1s
+ ok  treesweep                      0.1s
+ ok  diskverify                     2.1s
+ ok  api-abi                       10.8s  (declared 3s)
+ ok  registry                       2.0s
+ ok  api-abi-all                   10.6s  (declared 4s)
+ ok  toast                          2.0s
+ ok  movable                        2.2s
+ ok  textrules                      2.2s
+ ok  seg0                           1.2s
+ ok  asmrules                       4.1s
+ ok  megagrid                       1.7s
+ ok  deps                           0.2s
+ ok  layout                         0.4s
+ ok  megapkg                        1.9s
+FAIL docindex                       0.1s  exit 1
+       | os88index: docs/breadxt/PLAN-REVIEWS.md is a plan filed as reference - git mv it to docs/plans/ (open) or docs/plans/completed/ (shipped)
+ ok  checkreadme                    0.0s
+ ok  readme8088                     0.2s
+ ok  btnrules                       2.9s
+ ok  cswrite                        4.7s
+ ok  stkbalance                     2.0s
+ ok  checkdocs                      3.7s
+ ok  ovlchk                         5.3s
+ ok  guidelock-full                 3.7s
+ ok  sysfree                        0.1s
+ ok  noovl                          0.1s
+ ok  stkapps                        6.7s
+ ok  brautosave                     0.1s
+ ok  megahigh                       2.9s
+ ok  brbookmarks                    0.1s
+ ok  stkclass                       6.0s
+ ok  pins                           4.6s
+ ok  ctoolchain                    12.5s
+ ok  kernresident                   6.2s
+ ok  small128                       7.7s
+ ok  bootsmoke                      8.9s
+ ok  ps2mouse                      10.5s
+ ok  pinsrt                        11.0s
+
+os88test: 79 passed, 1 failed, 1 skipped in 51.9s, 50.4s charged (budget 180s)
+failed: docindex
+make: *** [test-full] Error 1

@@ -137,6 +137,8 @@ class App:
         win = ui.open('BREADXT.O88')
         self.p = M.Pkg(ui.m, win)
         ui._wait(lambda: any(m[0] == 'Parts' for m in ui.menus()), 'BreadXT menus', 30)
+        ui._wait(lambda: self.word('bu_initialized') and not self.word('bu_op'),
+                 'completed application initialization', 30)
 
     def word(self, name, offset=0):
         return self.p.word(self.s['_'+name]+offset)
@@ -144,7 +146,10 @@ class App:
     def open(self, name, count):
         self.ui.menu_pick('File', 'Open...')
         self.ui.chooser_open(name)
-        self.ui._wait(lambda: self.word('bb_doc', 3072) == count and not self.word('bu_op'), name+' loaded', 40)
+        self.ui._wait(lambda: self.word('bb_doc', 3072) == count
+                      and self.p.read(self.s['_bu_name'], 13).split(b'\0')[0].decode('ascii') == name
+                      and not self.word('bu_op') and not self.word('bb_valid')
+                      and self.word('bb_recompile'), name+' loaded and stale', 40)
 
     def pin_hole(self, index, pin):
         data = struct.unpack('<8H', self.p.read(self.s['_bb_doc']+16*index, 16))
@@ -170,7 +175,8 @@ class App:
     def step(self):
         c0 = self.ui.m.status()['cycles']
         self.ui.menu_pick('Simulate', 'Step')
-        self.ui._wait(lambda: self.word('bb_valid') and not self.word('bu_step_once'), 'committed target step', 600)
+        self.ui._wait(lambda: self.word('bb_valid') and not self.word('bu_op')
+                      and not self.word('bu_step_once'), 'committed target step', 600)
         return self.ui.m.status()['cycles']-c0
 
     def stamp(self):

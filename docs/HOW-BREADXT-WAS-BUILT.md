@@ -154,3 +154,37 @@ results. kern_mega needs its strict runtime instrument; unavailable Bochs or
 automated 86Box is not replaced with a passing QEMU claim. The checked story
 list stays open until its required evidence exists. No branch, external PR,
 release or website was published by this work.
+
+
+## Final native evidence and the cache lesson
+
+Both milestones reached installed native checks. The reference 555 ran through
+its real pins and RC network: three settled periods measured1.008s/53.571% at
+68k/4ms, then.207s/66.667% after a native10k/1ms edit, within2% of independent
+continuous estimates. Deleting the real timing wire stopped edges; Undo/Reset
+recovered them. The solid output and dashed capacitor trace are calculated
+samples, and the drawing-only dash repair was tested by actual8088 bitmap cases.
+
+A full empty-board LED build supplied the last useful challenge: all four parts
+and both wires were placed with native controls, solved, probed, saved and
+reopened. Its numeric checks passed while its reopened LED was white. The
+logical ON cache survived a full stale/off repaint. The independent host
+replacement case went red before a five-call synchronization repair. The final
+native test now sees25/25 red interior pixels before and after reopening and an
+exact315-pixel match of the entire body/rays. Correct numbers alone had not
+proved the indicator was right.
+
+The first final union passed ten rows; the added manual row and affected short
+UI/adapter/ABI rows passed after the cache repair. Pure model, solver, numeric
+bridge and drawing source did not change, so the long timing run was retained.
+The full OS gate passed apart from a misfiled plan-review document, which was
+moved and its failed index row rerun successfully. All four kernel budgets pass.
+
+The actual256KB run keeps full capacities but has only3KB free while loaded.
+The final package owns113KiB plus native window/cache resources. The software
+arithmetic is deliberately honest about speed: the reference4ms run advanced
+about2.5 simulated milliseconds per real XT second. The UI remains usable during
+bounded calculation. No hardware or strict mega runtime is claimed; Bochs and
+automated86Box were unavailable. See [the evidence record](breadxt/EVIDENCE.md),
+[measured memory/cycles](breadxt/DEVELOPER.md) and retained captures for the exact
+checks and practical limits. Nothing was published externally.

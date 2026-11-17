@@ -2,8 +2,8 @@
 
 Status: both milestones are implemented. Host core/UI and native editor,
 DC/digital/RC, VGA/CGA/Hercules, minimum-window, 256 KB and WPK installation
-checks pass. The long native flasher timing/rewiring pass succeeded; final fresh-artifact
-soak and captures are in progress; the ledger below distinguishes these from completed evidence.
+checks pass. Both the long native flasher pass and registered scoped verification succeeded;
+final LED replacement-cache repair and pixel assertions also pass; the ledger below distinguishes these from completed evidence.
 Strict kern_mega runtime remains unavailable locally; all four kernel build
 budgets pass. There is no scope cut or remaining user decision.
 
@@ -521,7 +521,7 @@ checks performed rather than implying every case ran on every adapter.
 |---|---|---|---|---|
 |US01|Native workbench/files/close/help|[x]|[x]|[x] Native launch, menus, Help and staged-file workflows; host modal/close guards|
 |US02|Strips/trench/split rails/net selection|[x]|[x]|[x] 420-hole/rail/topology oracle; native mono board and diagnostic selection|
-|US03|Valid pin placement/polarity/rotation|[x]|[x]|[x] Native resistor preview/commit; all footprints and both DIP orientations in core|
+|US03|Valid pin placement/polarity/rotation|[x]|[x]|[x] Native Power/Ground/R/LED placement from empty, two wires, solve/save/reload; all footprints and both DIP orientations in core|
 |US04|Wire endpoints/bends/editing|[x]|[x]|[x] Native bent wire, Undo/Redo; topology/crossing/edit cases in core|
 |US05|Inspector/value grammar/Undo/Redo|[x]|[x]|[x] Native LED330→680→Undo/Redo/Undo; minimum value dialog; grammar/overflow core|
 |US06|Bounded real DC/LED/pot diagnostics|[x]|[x]|[x] Native8.824/4.348mA LED and24-node ladder; independent resistor/pot/LED oracle|
@@ -532,8 +532,8 @@ checks performed rather than implying every case ran on every adapter.
 |US11|Editable examples/tutorial|[x]|[x]|[x] Eight generated/graph-checked ordinary BBX files; installed examples and Help|
 |US12|VGA/CGA/Hercules/minimum layouts|[x]|[x]|[x] Actual640×480,640×200,720×348; native322×128 frame;256KB full-capacity run|
 |US13|RC transient/convergence/initial state|[x]|[x]|[x] Actual8088 RC101ms3170mV vs BE3169.746; host convergence/discharge/reset|
-|US14|Pin-level555/settled timing/rewiring|[x]|[x]|[ ] Native68k1.008s/53.571%,10k.207s/66.667%; wire Delete stops edges; Undo/Reset recovers; final fresh-artifact pass pending|
-|US15|Two-channel timestamp scope/trigger|[x]|[x]|[ ] Core wrap/trigger/edge oracle; target A/B traces; final spatial-dash capture pending|
+|US14|Pin-level555/settled timing/rewiring|[x]|[x]|[x] Native68k1.008s/53.571%,10k.207s/66.667%; wire Delete stops edges; Undo/Reset recovers; registered native pass succeeded|
+|US15|Two-channel timestamp scope/trigger|[x]|[x]|[x] Core wrap/trigger/edge oracle; target A/B traces; actual spatial-dash capture and15-case raster/numeric ABI fixture passed|
 |US16|Models/help/limits/attribution|[x]|[x]|[x] Installed Help/minimum views and host About; one-supply/current/LED limits documented|
 
 ## Verification and release evidence

@@ -134,6 +134,8 @@ instead of hanging. Outputs are ideal educational rail drivers. Their output
 load and quiescent consumption are omitted from power-pin current: the DC
 source reading is the stamped external network at its node, not a complete
 IC power budget. The same ideal-output limitation applies to the NE555.
+The numeric frequency/duty readout supports periods through 6.5535 s; slower
+measured periods keep their timestamps and show `long period`.
 
 The NE555 is a pin-level comparator/latch/discharge model. At default CONT,
 RESET below 0.7 V dominates even with unwired comparator inputs; otherwise an
@@ -150,9 +152,9 @@ The physical board also bounds DIP count; workspace holds 32 gates. Time is a
 pair of unsigned words in 100 us units, independent of host and OS elapsed time.
 
 The final link has 219 C functions, maximum individual frame 52 bytes,
-**32,670 bytes resident image + 32,180 BSS = 64,850 of 65,024 bytes**
-(174 bytes spare). The eager embedded overlay is 49,625 bytes, compressed to
-22,828 bytes; the complete .O88 is 45,676 bytes. No kernel budget was increased.
+**32,710 bytes resident image + 32,180 BSS = 64,890 of 65,024 bytes**
+(134 bytes spare). The eager embedded overlay is 49,637 bytes, compressed to
+22,846 bytes; the complete .O88 is 45,726 bytes. No kernel budget was increased.
 
 | Resident BSS component | Bytes |
 |---|---:|
@@ -183,13 +185,14 @@ not a static proof of every possible call chain.
 
 | Machine/session | Free / largest before | Loaded free / largest | After close |
 |---|---:|---:|---:|
-| 640 KB VGA | 515,584 / 515,072 | final scoped run records this | 515,584 / 515,072 |
-| 640 KB CGA/Hercules | 518,144 / 517,632 | final scoped run records this | 518,144 / 517,632 |
+| 640 KB VGA | 515,584 / 515,072 | 369,152 / 368,640 | 515,584 / 515,072 |
+| 640 KB CGA | 518,144 / 517,632 | 396,288 / 395,776 | 518,144 / 517,632 |
+| 640 KB Hercules | 518,144 / 517,632 | 394,240 / 393,728 | 518,144 / 517,632 |
 | 256 KB CGA | 124,928 / 124,416 | **3,072 / 2,560** | 124,928 / 124,928 |
 
 All entries are bytes. The loaded snapshot follows native file/diagnostic work;
 associated native caches/window resources account for another 6,144 bytes on
-the 256 KB session beyond owned claims. Thus its observed total incremental
+CGA/256 KB, 8,192 on Hercules and 30,720 on VGA beyond owned claims. Thus its observed total incremental
 working set is 121,856 bytes / 119 KiB. This is a tight, otherwise idle desktop:
 close other applications there. Full capacities and scope remain enabled; the
 actual 256 KB run exercised launch, solve, files, compact/minimum views and
@@ -200,9 +203,9 @@ cleanup. It is not a promise of room for another program or every future SDK.
 The independent host pass has 3,956 C assertions, six expectation-fault families,
 160 resistor networks and 3,920 independent Cholesky/current/KCL comparisons.
 Three actual-output corruptions must also fail. ASan/UBSan cover the host core.
-The host UI pass has 176 assertions and seven injected defects, including
+The host UI pass has 245 assertions and eight injected defects, including
 queued-edit ownership, partial/modal/wide editor damage, diagnostic location
-and stale results, sample holds and Pause labels. Appending a value character
+and stale results, sample holds, Pause labels and LED repaint after replacement/failure. Appending a value character
 changed four glyph cells in one call; an unchanged inspector drew zero cells.
 
 The actual 8088 ABI fixture checks 13 software-number cases and two raster
@@ -219,12 +222,12 @@ RC discharge/initial conditions are separate host checks.
 
 | XT measurement | Guest cycles | Interpretation |
 |---|---:|---|
-| 24-unknown first step, with Help input | 157,526,406 | about 33.0 XT seconds; all 25 currents and node voltages checked |
-| Help accepted during elimination | 3,977,940 | about 0.83 XT seconds including its native paint |
-| Scope paint with one sample | 1,387,965 | about 0.29 XT seconds; not a full-ring frame-rate claim |
-| RC Run/Pause to 101 ms | 381,335,966 | about 79.9 XT seconds, 1.26 simulated ms per XT second |
-| 68k flasher, 4 ms steps, 4.360 simulated s | 8,474,639,001 | 1,775.639 XT seconds, 2.455 simulated ms per XT second |
-| Edited 10k flasher, 1 ms steps, 0.911 simulated s | 6,197,978,767 | 1,298.624 XT seconds, 0.702 simulated ms per XT second |
+| 24-unknown first step, with Help input | 156,572,399 | about 32.8 XT seconds; all 25 currents and node voltages checked |
+| Help accepted during elimination | 3,739,210 | about 0.78 XT seconds to the mode latch, including input/poll overhead |
+| Scope paint with one sample | 1,375,900 | about 0.29 XT seconds; not a full-ring frame-rate claim |
+| RC Run/Pause to 101 ms | 380,700,811 | about 79.8 XT seconds, 1.26 simulated ms per XT second |
+| 68k flasher, 4 ms steps, 4.360 simulated s | 8,374,717,691 | 1,754.703 XT seconds, 2.485 simulated ms per XT second |
+| Edited 10k flasher, 1 ms steps, 0.911 simulated s | 6,167,922,196 | 1,292.327 XT seconds, 0.705 simulated ms per XT second |
 
 The run measurements include control/display overhead and scheduling. Host
 wall time is not substituted for 4.77 MHz guest cycles. This is an educational
@@ -254,7 +257,9 @@ ordinary BBX file or File/Examples. Build products stay under build/.
 The native checks include real placement/bent-wire editing, LED330→680 with
 Undo/Redo, stable A/B probes, native saves, independent flushed FAT/BBX readback,
 a cold boot and BBX association that runs the saved circuit, all three actual
-adapters and 322×128 minimum frames. WPK verification uses the canonical reader,
+adapters and 322×128 minimum frames. The separate manual row places all four
+LED circuit parts and both wires from an empty board, checks the calculated
+current, then compares the complete LED body pixels before/after save/reload. WPK verification uses the canonical reader,
 fresh FAT installation, file-by-file comparison and boot from its BREADXT folder;
 it does not claim a network download or guest library installation.
 

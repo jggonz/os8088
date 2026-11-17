@@ -146,11 +146,15 @@ class App:
     def run_to(self,predicate,what,guest=6000):
         initial=self.state();cycles_before=int(self.ui.m.status()['cycles'])
         self.ui.menu_pick('Simulate','Run')
-        progress=[-2500,-1]
+        progress=[-1000,-1]
         def done(q):
-            if q['t']>=progress[0]+2500 or q['cycles']!=progress[1]:
+            if q['t']>=progress[0]+1000 or q['cycles']!=progress[1]:
                 progress[:]=[q['t'],q['cycles']]
-                print(f'  progress {what}: sim{q["t"]/10000:.4f}s cycles={q["cycles"]} guestcycles={int(self.ui.m.status()["cycles"])-cycles_before}',flush=True)
+                line=f'  progress {what}: sim{q["t"]/10000:.4f}s cycles={q["cycles"]} guestcycles={int(self.ui.m.status()["cycles"])-cycles_before}'
+                print(line,flush=True)
+                if os.environ.get('BREADXT_PROGRESS'):
+                    with Path(os.environ['BREADXT_PROGRESS']).open('a') as log:
+                        log.write(line+'\n')
             if q['diag'] and not q['op'] and not q['bb_recompile']:
                 raise AssertionError(('unexpected simulation diagnosis',q))
             return predicate(q)

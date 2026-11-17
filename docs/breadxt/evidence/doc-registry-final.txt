@@ -1,0 +1,7 @@
+os88test: full tier - 3 rows, 3s declared, budget 180s  (caps: cc,ffmpeg,lame,marty,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+
+ ok  hostwait                       0.1s
+ ok  docindex                       0.3s
+ ok  registry                       1.4s
+
+os88test: 3 passed, 0 failed, 0 skipped in 1.4s, 1.3s charged (budget 180s)

@@ -1,0 +1,106 @@
+{
+  "implementation_base_commit": "d90b2abd2088c9116e4d23846dc5db2af72bc4e4",
+  "final_repair": "Five UI indicator-cache synchronization calls only; model/sim/numeric/draw byte-identical to implementation base. Flasher capture/calculation from initial union; other native shots refreshed by cache follow-up.",
+  "artifacts": {
+    "build/breadxt.o88": {
+      "bytes": 45726,
+      "sha256": "abd1343ca7004413d4f1b02f95a2e62d6e00951a483886d41ddb5cb43826dc3f"
+    },
+    "build/BREADXT.OVL": {
+      "bytes": 49637,
+      "sha256": "ff3cfc12829931df542ed5e8ea782980ef55ecd9b3235d0f99d8820221e8300d"
+    },
+    "build/breadxt.bin": {
+      "bytes": 82347,
+      "sha256": "7240d23c00d0024c32bde41711b30efc0f4360a965100f78ea30429c38b8c855"
+    },
+    "build/BREADXT.WPK": {
+      "bytes": 52842,
+      "sha256": "5831bb3af80f9aa00502e1724bcb24c986b1792d17129b412f741d267cb8b223"
+    },
+    "build/breadxt.img": {
+      "bytes": 1474560,
+      "sha256": "76a30e9ec045c75a4e06c91c4d82a1c86491e44d29a801290dabb1f20d206dce"
+    },
+    "build/breadxt720.img": {
+      "bytes": 737280,
+      "sha256": "ef04f435ad3f2b176e4da020fc5f86432281952f124ccd1b2e99a2c6c0339a72"
+    },
+    "build/breadxt120.img": {
+      "bytes": 1228800,
+      "sha256": "4b4f6a21b1a02179a25c2efaf7eaf1868439483b64c46a5f5a4fee4595b46b60"
+    },
+    "build/breadxt360.img": {
+      "bytes": 368640,
+      "sha256": "32547b73dd6840fc2a3dd6c1ec91f307fbaaffcdcf1199ef5e56c0b2a81ec10a"
+    },
+    "build/kernel.bin": {
+      "bytes": 105904,
+      "sha256": "a635f9c349a7d6ed40b8d36b2dcc0cefbbd1a0286a3fe0183f24de78d5c5eba7"
+    },
+    "apps/breadxt/HELP.TXT": {
+      "bytes": 9046,
+      "sha256": "4072d7a4e82b4d88bd2b6e6e71edcfdbf260e6f7538f8dca0ca308db35ae83fb"
+    }
+  },
+  "model_source": {
+    "bb.h": "ff6a9c90a739a4b98ae05562b2b67baa02ec432622080ac9f338847ba7ec521b",
+    "model.c": "a356159c48f4a8b8c4dc4d1167f0eed15b9e031fb8702bfe4d5f75e35e189d5f",
+    "sim.c": "020ed16920b74dab78017dda3cf3a787bbd3215c0fe11de7af7e5d9eeb57f8ff",
+    "numeric.inc": "f440e4befe03006bfb130d4e658896eed528335e480cdbbd26cd7ed0581d017e",
+    "draw.inc": "f93506274e2dc5268a5715778353ae08aaff6d43ff18f63f4f59c74186a290f4",
+    "file.c": "1f33fd6faec5bae5024ca2e0bcbac2a8732b7cfe77f8a33e385fabc97efe7d02",
+    "examples.c": "616cdb316f0c7ef16c0e866c1620405ec81bd902da8acfd2ced63ef3cc0929a4",
+    "ui.c": "9ceaae19b18ff6c30bd1220cb4266286995bedbf78fba92a3cbd43c1d10e5d95"
+  },
+  "screenshots": {
+    "herc-scope.png": "e94006ba928cb0ff3e0f8ea080f07887ad8ef356ef35dd307a0c4b024ca26927",
+    "vga-manual-built-led.png": "becd534713f46072e89c77a4753a73dbefa7b430acc740562ef708473a0db946",
+    "vga-flasher-10k-stepped.png": "4374753d239053b5acd3e7d6d17a4c793a15d85f9fbac3ad0f5072a4679c7720",
+    "vga-led-edited-probed-saved.png": "1b2a476801d7df5ef7b2c2bb344147e620204cbea6bf8086fca83dd89a516b88",
+    "256-diagnostic-located.png": "c1e462b564aea32b5238257bb412c2839fee5a97faea21af003497dc1a8f794e",
+    "vga-led-source-current.png": "6b1548c9eeef78b494dd2f151ba08ce6842d9ead6923eccbf67ebf88f682dfb9",
+    "256-led-board.png": "314f29002eae4523750fd586947ff11fb173b8fc3ecadd134dc7e58d7a849814",
+    "cga-minimum-inspector.png": "b4c01a581e1b487272ee5edbcd442e650f800f97ab14351e6d9a778bfc052639",
+    "256-minimum-help.png": "ec5a0b8d173a53d6f3af5a0767aef2a3acb88603cb8a7568830269495bf9cc37",
+    "breadxt-rc-vga.png": "1f063fcf68964ac9d3114d8944698902f5c73ed0cfd2ec4e9f4d855237124e9d",
+    "vga-placed-saved.png": "af76ccc30cb92e56869fadaa181155102c3c6290ec7163b619c6a3cbd18e1791",
+    "256-inspector.png": "66cccb75891722c82fdef345205f099dd379fc5e242b7c6f2fea1acd3fd1e94c",
+    "bundle-minimum-inspector.png": "a6a83e9245ee9a31d5e4fc033e3b418f3c744a331b1f52c1f2fb6c32d24479fd",
+    "cga-scope.png": "03027a89ac67af68e7a35b6aef2b25c47eea45d9c3cf21e278e711310daf3750",
+    "bundle-minimum-help.png": "f013f3517e2a1e97fd2839b7f72e0178ec4c7d3eb9fec6ddcd326868420e1294",
+    "bundle-fresh-install-led.png": "0a9f2de0b169728d9a3cad7fccc734e49d110fc2c0e3d438cf4053a41ea88218",
+    "herc-minimum-help.png": "0cf1c22a6bc2e3afa648be78a0b8663ff2362f618ba6921d3acf3daa16d96c0a",
+    "bundle-minimum-value.png": "9c3a693f9df6fbedc32bbd944b3e6aaee09b7af942b6a345618467daccb0854b",
+    "cga-diagnostic-located.png": "c1e462b564aea32b5238257bb412c2839fee5a97faea21af003497dc1a8f794e",
+    "herc-minimum-value.png": "3a0f85241f5ca91bca05649519746cf7af5a888b1749fee60af13bea0fb16839",
+    "cga-minimum-help.png": "ec5a0b8d173a53d6f3af5a0767aef2a3acb88603cb8a7568830269495bf9cc37",
+    "breadxt-clock-vga.png": "bbe093c28c92e5a7eeb8758c9029cdf93ea00b43cc1d595051d1276fe97d6358",
+    "herc-led-board.png": "dd898a9354079f3d982abe6eb142ad07d118b1250285c4f02504c25f75a522c9",
+    "breadxt-max24-vga.png": "8d2e82ce57489ff676ce9f6ba994d43490def98068dffda9c094f21e7239ad98",
+    "breadxt-numeric-vga.png": "07d8abc0894e85270b3a51fb01a4c00469353120d6fd3088d521d3fdefb99500",
+    "herc-minimum-inspector.png": "4aad9a56d94914e79d960fbaffa25f1d539fb489e0f27219238ffc6f87a6c23e",
+    "vga-diagnostic-located.png": "e362fe04037a02f78389d2f143c66d2af623ec92224b215abf10c5db42ea34dc",
+    "vga-flasher-68k-paused.png": "a6aa1d1cd086bbcc9d0c0bb3037c07323d57deb87bf1362ef2a7929b3b28e4a4",
+    "cga-inspector.png": "66cccb75891722c82fdef345205f099dd379fc5e242b7c6f2fea1acd3fd1e94c",
+    "256-scope.png": "03027a89ac67af68e7a35b6aef2b25c47eea45d9c3cf21e278e711310daf3750",
+    "herc-diagnostic-located.png": "c2dc9519d42680686719a11635d9dc3577aeae95db550f06a4c98db843209755",
+    "vga-flasher-timing-wire-removed.png": "f3e58485105b4922f065695ae9438635ba20f2c190ba5e5b08d0779853d0e8a1",
+    "256-minimum-inspector.png": "b4c01a581e1b487272ee5edbcd442e650f800f97ab14351e6d9a778bfc052639",
+    "cga-led-board.png": "314f29002eae4523750fd586947ff11fb173b8fc3ecadd134dc7e58d7a849814",
+    "256-minimum-value.png": "11f056849a89bb65340e3e1d0b8cadf8769cfb15a4faac0966a91c2b8d86587c",
+    "cga-minimum-value.png": "11f056849a89bb65340e3e1d0b8cadf8769cfb15a4faac0966a91c2b8d86587c",
+    "before-led-cache-repair.png": "bae50fce38ec4f1b84ee04756408b23559de97d197418087c24e2b1b531ec220"
+  },
+  "package": {
+    "resident_code_const_data_bytes": 32710,
+    "bss_bytes": 32180,
+    "overlay_bytes": 49637,
+    "resident_limit_bytes": 65024,
+    "remaining_bytes": 134,
+    "owned_runtime_bytes": 115712,
+    "max_c_frame_bytes": 52,
+    "measured_ui_stack_used_bytes": 338,
+    "ui_stack_bytes": 512
+  }
+}

@@ -1773,10 +1773,10 @@ FAST = [
         "Cholesky/KCL answers; six expectation and three measured-output "
         "corruptions must fail. Host arithmetic only; target ABI has its own row",
         needs=("cc",)),
-    Row("breadxtuihost", "soak", py("tests/breadxt_ui_host.py"), 6.7,
+    Row("breadxtuihost", "soak", py("tests/breadxt_ui_host.py"), 6.3,
         "SPEC.md 130: actual native UI callbacks under a clipped host glass "
         "check queued-edit ownership, modal text damage, deferred repaint and "
-        "diagnostic location/staleness and sample-hold scope; seven "
+        "diagnostic location/staleness and sample-hold scope; eight "
         "reintroduced defects must go red",
         needs=("cc",)),
     Row("breadxttarget", "soak", py("tests/breadxt_target.py"), 55.4,
@@ -1804,6 +1804,13 @@ FAST = [
         "reboots cold, BBX association reopens and solves the saved circuit",
         needs=("marty", "nasm"), timeout=300,
         wants=("build/breadxt360.img",)),
+    Row("breadxtmanual", "soak", py("tests/breadxt_manual.py"), 23.4,
+        "SPEC.md 130: empty board to working LED entirely through native "
+        "Power/Ground/R/LED placement and two wires, calculated signed "
+        "current and A/B probes, SaveAs/New/Open/Step plus independent "
+        "flushed FAT/BBX decoding and full owned-claim cleanup",
+        needs=("marty", "nasm"), timeout=300,
+        wants=("build/breadxt360.img",)),
     Row("breadxt256", "soak", py("tests/breadxt.py", "--only", "256"), 17.2,
         "SPEC.md 130: BIOS256KB verified, full-capacity package loads and "
         "solves LED, compact/minimum views and error navigation work, and "
@@ -1821,10 +1828,10 @@ FAST = [
         "folder, LED solved and minimum views/owned-claim cleanup exercised",
         needs=("marty", "nasm"), timeout=240,
         wants=("build/breadxt360.img", "build/BREADXT.WPK")),
-    # Measured908.46s with the stronger1s broken-wire observation. The final
-    # driver observes three absent periods instead; retain that measured ceiling.
+    # Measured802.8s in the final union with three absent periods after the
+    # timing-wire deletion; the guest clock gates the calculation.
     Row("breadxtflasher", "soak",
-        py("tests/breadxt.py", "--only", "vga", "--flasher-only"), 908.5,
+        py("tests/breadxt.py", "--only", "vga", "--flasher-only"), 802.8,
         "SPEC.md 130: installed pin-level555 at68k/4ms and edited10k/1ms, "
         "three settled periods within2% independent period/duty oracles, "
         "actual two-channel capture, Pause/Step, timing-wire Delete/Undo and "
