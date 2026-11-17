@@ -254713,9 +254713,6 @@ the two machines.)
 
 ### 131.8 The face
 
-(Face lane. Reserved: layouts, the board cells, tokens and markers, the
-sidebar, the hint bar, the widget kit, sections and redraw cost.)
-
 Binding choices made before the lane: drawing is Breadboard XT's band core
 (`apps/breadxt/draw.inc`, §130.6.2), shared as SOURCE with `BX_CORE_ONLY`
 leaving out Breadboard's own tail: every repaint is strips, each composed in
@@ -254725,6 +254722,184 @@ content box, never from the adapter's name: FULL (VGA 640x480 class), MID
 (Hercules 720x348 class) and COMPACT (CGA 640x200 class). No meaning is
 carried by hue alone: collections have letters, owners have token marks,
 mortgage and upgrades have shapes.
+
+#### 131.8.1 Layouts
+
+`bp_face_paint` reads the window's content origin (`os88_wm_content`) and
+size (`os88_wm_geom`) on every call and lays out again only when origin, size
+or `bp_pn_covers()` changed (the cache key; a change repaints everything).
+The adapter is never named: the content box alone picks the layout, and the
+live bit depth sets `bp_mono` (bpp < 4).
+
+| layout | picked when (content w x h) | reference box | side | cell w x h | ring | font (body / small) |
+|---|---|---|---:|---|---|---|
+| `BP_LAY_FULL` | w >= 600 and h >= 380 | VGA 640 x 418 | 192 | 56 x 50 | 448 x 400 | TEXT10 / TEXT08 |
+| `BP_LAY_MID` | w >= 560 and h >= 240 | Hercules 720 x 288 | 208 | 64 x 34 | 512 x 272 | TEXT08 / TEXT08 |
+| `BP_LAY_COMPACT` | otherwise | CGA 640 x 142 | 192 | 56 x 16 | 448 x 128 | TEXT08 / TEXT08 |
+
+The reference boxes are what the window gives on a 640x480, 720x348 and
+640x200 screen (menu bar, title bar and dock taken). A bigger window grows
+the sidebar; a smaller one shrinks the cell down to 16 x 16 and, under 96 px
+of sidebar, drops the sidebar.
+
+The geometry, all from (ax, ay, aw, h) = the content box with x rounded UP and
+w rounded down to multiples of 8 (the band's contract; a sliver left over is
+never painted):
+
+* `cw` = ((aw - side) / 8) rounded down to a multiple of 8, `ch` = (h - hint
+  minimum) / 8, where the hint bar needs body-font height + 4 rows.
+* `bp_r_board` = (ax, ay, 8 cw, 8 ch). The ring is 8 x 8 cells; space ids run
+  CLOCKWISE from BOOT at the bottom-left (131.1): ids 0..7 climb the left
+  column (7, REPAIR SHOP, is top-left), 7..14 run the top row to SWAP MEET,
+  14..21 descend the right column to CRASH!, 21..27 return along the bottom.
+* `bp_r_center` = (ax + cw, ay + ch, 6 cw, 6 ch): the inner 6 x 6.
+* `bp_r_side` = (ax + 8 cw, ay, aw - 8 cw, 8 ch), tiled exactly by four boxes
+  top to bottom: players (title bar + four rows, none in COMPACT), details
+  (3/5, 14/25 and 1/2 of what is left on FULL, MID, COMPACT), the link box
+  (two rows on FULL, one otherwise) and the log, which takes the remainder.
+* `bp_r_hint` = (ax, ay + 8 ch, aw, h - 8 ch).
+
+Every section tiles its rect completely and paints every pixel of it, so a
+strip (a rect in the band, widened to 8) never carries stale band bytes.
+
+When `bp_pn_covers()` is `BP_PN_FULL` (the setup and lobby screens) the face
+sets `bp_r_center` to the whole aligned content, draws NOTHING of the board,
+and calls only `bp_pn_draw`; `bp_face_hit_space` then answers -1 and
+`bp_face_key` 0. Back to 0 or `BP_PN_CENTRE`, the layout is rebuilt and
+everything repainted.
+
+#### 131.8.2 A cell
+
+A cell is its own repaint unit (`ovl_fc_cell`): ground white, a 1 px black
+line along its top and left edges (the outer right and bottom edges belong to
+the cells on the ring's rim), then, by what it is:
+
+* A **property** (computer or utility): a bar of the collection's colour
+  (blue C, green H, cyan A, red I, magenta R, grey utility; on 1bpp always
+  solid black, so the LETTER carries the meaning: C H A I R P, `U` for a
+  utility) holding the letter at the left in white and the price at the right;
+  the short name centred beneath (an owner's cell shows nothing else of its
+  owner here); the picture, the biggest of SMALL / TINY that fits the room
+  left (on 1bpp the `BP_A_MTINY` twin, 131.10.5), centred in the rest; the
+  OWNER's token silhouette in the sprite row's left margin; the level in its
+  right margin: one to four `BP_A_RAM` chips (stacked in as many columns as the
+  margin holds) or one `BP_A_WORKSHOP`, drawn pips when the art part is
+  absent; a MORTGAGED property shows the `BP_A_MORTGAGE` mark under the owner
+  and a sparse grey dither over its picture.
+* A **corner or special space**: the name at the top, the picture below
+  (`fc_specart`: BOOT, REPAIR, SWAP, CRASH, the two decks, DUTY, E-WASTE), and
+  for BOOT and the two charges the amount ("+200", "-100", "-75").
+* **COMPACT** cells (16 rows: not enough for a picture) trade it for two
+  rows: row A is an 8 x 7 collection letter chip, then the short name; row B
+  an 8 x 8 chip with the owner's SEAT NUMBER in the seat's dark colour, then
+  the price. Levels are black bars (four) or one wide block (Workshop); a
+  mortgaged cell strikes its name through with a dotted line and shows an `M`.
+* **Selection** (`bp_sel`): the short name on a navy/black bar in white
+  (visible on every adapter), and on FULL/MID a 1 px yellow (black on 1bpp)
+  frame inside the edge. It is drawn over ground only, so it never erases an
+  owner mark, level, token or the mortgage mark.
+* **Tokens**: up to four on one cell, a 7 x 7 silhouette each, side by side
+  along the bottom (COMPACT: in row B in place of the price). The silhouette's
+  SHAPE is the token's identity (floppy a square, mouse a round, joystick a
+  triangle, cassette a diamond) and its fill the seat's colour (red, blue,
+  yellow, green; on 1bpp white, black, white, white), a black outline always;
+  the owner mark uses the same shapes.
+
+#### 131.8.3 The centre
+
+With no panel over it (`bp_pn_covers() == 0`) the centre is a teal ground with
+a sparse light-cyan stipple (on 1bpp black with white dots), then:
+`BYTEOPOLY` as nine keycaps (drawn frames with BIG letters on FULL and MID, the
+`BP_A_KEYCAP` sprite on COMPACT), above them on FULL and MID the mascot
+between the Floppy Find and System Error cards, and under them the two dice
+(`BP_A_DIE`, a drawn die when absent) of `bp_game.d1/d2`. Then, always,
+`bp_pn_draw()` runs. With `BP_PN_CENTRE` the art is skipped and the ground and
+border only are drawn.
+
+#### 131.8.4 The sidebar and the hint bar
+
+* **Players**: title "Round N" with the dice total as "d1+d2" at the right
+  (COMPACT carries both in the link row); a row per seat: token silhouette,
+  name, cash (`bp_u32_fmt`). The ACTIVE seat is the whole row inverted
+  (navy/black ground, white text) - readable without colour; an eliminated
+  seat shows "OUT" and a dotted strike through its name; a DETAINED seat an
+  inverse `R` chip. Before a match: "No match - Game > New Game".
+* **Details** for `bp_sel`: the full name in a title bar; for a property
+  Price, Mortgage (Redeem, with 131.2.4's cost, once mortgaged), Owner, Level,
+  and on FULL its `BP_A_LARGE` picture beside them; then the rent schedule of
+  131.2.3, computed here from the base rent: Base, Set (x2), 1..4 RAM (5, 15,
+  30, 45, 60 x base) and Workshop. A utility shows its 4x/10x dice rule; any
+  other space one plain sentence (and a charge its amount). COMPACT: three
+  lines (name, collection, price; rent, set, Workshop; owner, level, MORT).
+* **Link**: "Same PC" in local mode, else the state name (Off, Searching, Peer
+  found, Bad peer, Lobby, Linked, PAUSED, Resync) with " ..." while
+  `bp_sess_busy()`, PAUSED and BADPEER struck through, and on FULL the
+  `bp_link_msg()` line beneath. Status never depends on colour.
+* **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters, newest at
+  the bottom, truncated to the box width; as many as the box holds.
+* **Hint bar**: navy/black; each `bp_pn_hint(i)` is split at its first space:
+  the head (under 8 characters) becomes a white key cap, the rest its label;
+  entries that no longer fit are dropped.
+
+#### 131.8.5 Sections, dirty bits and what an update costs
+
+A paint is a list of rects, each painted in strips of the band
+(`bx_rows` rows at a time, `bx_new`, the scene, one `bx_out`). The scene is
+run per strip, so it skips whatever does not touch the strip: a cell by its
+rect, a sidebar line by its y.
+
+| bit | repainted when | rect |
+|---|---|---|
+| `BP_D_BOARD` | a cell's signature (owner, level, mortgage, the tokens standing on it, selected) changed, or `bp_face_dirty_space` named it; more than ten cells: the four sides of the ring | each cell |
+| `BP_D_CENTER` | always (the panel's state is not the face's to hash) | `bp_r_center` |
+| `BP_D_PLAYERS` | signature (round, dice, active seat, status, cash, alive, detained, token, name) changed | players box |
+| `BP_D_DETAILS` | signature (`bp_sel`, every owner/level/mortgage, names) changed | details box |
+| `BP_D_LINK` | signature (state, busy, mode, message text, round/dice off FULL) changed | link box |
+| `BP_D_LOG` | `bp_log_add` was called (a version counter) | log box |
+| `BP_D_HINT` | signature of the hint strings changed | hint bar |
+| `BP_D_FORCE` | with other bits: repaint them even when the signature says nothing changed | |
+
+So `bp_face_dirty(BP_D_ALL)` after a commit repaints only what the commit
+touched, and an idle board repaints nothing. `os88_paint` (`full` = 1) repaints
+the whole content, the kernel's clip region doing the rest.
+
+Measured on MartyPC, strips per update (a strip is one `bx_new`, the scene and
+one blit; "paints" are rects). FULL (band 16 KB, 51 rows of the 640-wide
+content, 97 of the 336-wide centre):
+
+| update | paints | strips FULL | strips MID | strips COMPACT |
+|---|---:|---:|---:|---:|
+| arrow key / click: selection moves | 3 (two cells, details) | 4 | 3 | 3 |
+| click on the selected cell | 0 | 0 | 0 | 0 |
+| a token moves | 3 (two cells, centre) | 6 | 3 | 3 |
+| one player's cash changes | 2 (players, centre) | 5 | 2 | 2 |
+| a property is bought and upgraded | 3 (cell, details, centre) | 7 | 3 | 3 |
+| a log line | 1 | 1 | 1 | 1 |
+| an expose (`full`) | whole content | 9 | 2 | 1 |
+
+The centre is the largest single cost and is forced because a panel's
+contents are not the face's to hash; a panel that is not changing keeps the
+commit's repaint to the centre alone.
+
+#### 131.8.6 The widget kit
+
+`bp_w_*` is valid only while `bp_pn_draw` runs (it draws into the current
+strip's band). `bp_w_panel` is a 1 px black frame, a ground (light grey; white
+on 1bpp) and a navy title bar with white text; `bp_w_button` draws one of:
+NORMAL (ground, light/dark bevel; on 1bpp a black shadow), FOCUS (navy ground,
+white text; black on 1bpp), DEFAULT (an extra black ring), DISABLED (dark grey
+text; on 1bpp a screen-door of white dots across the label, so it reads
+without colour). A label wider than the button is cut to fit. Everything else
+(`bp_w_text`, `_sprite`, `_fill`, `_box`) is the band core's call.
+
+#### 131.8.7 Keys and hits
+
+`bp_face_key`: the arrow keys move `bp_sel` along the ring spatially (a step
+that would leave the ring crosses to the far side of the same row or column);
+Home selects the active player's space. Both answer 1. `bp_face_hit_space`
+answers the space under a screen point (exact: the cell grid is 8 x 8 and the
+centre and sidebar answer -1), so every cell is one hit target in every
+layout.
 
 ### 131.9 Panels, flows and input
 
