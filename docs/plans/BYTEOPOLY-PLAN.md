@@ -132,10 +132,10 @@ Fix groups are file-disjoint. F-face is `bp_face.c`, F-panels is
 | Qqa2-20 | minor | four pairs of computers near-identical: Apple II/IIe, XT/AT, Amiga/ST, 386/486 | all | F-art | fixed, re-checked PASS (qa3) |
 | Qqa2-16 | cosmetic | "!" reads like "I" in the 8-px font (CRASHI) | all | - | not fixed: the WIN16 strike is shared source |
 | Q-pre-1 | ? | stale "rev"/"Sent - waiting" text in the cable game | cable | final pass (byteopolylink) | not checked: needs a pair |
-| Qqa3-1 | minor | trade composer: after a refusal the incremental repaint erased the balance line (and half the cash line on Herc) | all | F-panels | open |
-| Qqa3-2 | minor | double, auction, everyone passes: the bar returns focused on the greyed End Turn | Herc | F-panels | open |
+| Qqa3-1 | minor | trade composer: after a refusal the incremental repaint erased the balance line (and half the cash line on Herc) | all | F-panels | fixed a591653ff, checked on Herc by the fixer |
+| Qqa3-2 | minor | double, auction, everyone passes: the bar returns focused on the greyed End Turn | Herc | F-panels | fixed a591653ff, checked on Herc by the fixer |
 | Qqa3-3 | cosmetic | upper-case Y reads as T in the 8-px font (DUTT, FLOPPT) | all | - | not fixed: the WIN16 strike is shared source |
-| Qqa3-4 | cosmetic | the MAC's TINY mono twin does not read as a computer | Herc | F-art | open |
+| Qqa3-4 | cosmetic | the MAC's TINY mono twin does not read as a computer | Herc | F-art | redrawn, seen in the zoomed preview only |
 
 After the fix round (qa3, VGA XT): End Turn 2.07 s (was 7.5), Collection open 1.48 s
 (was 9.4), Tab 0.60 s (was 1.85); a Rules page turn is still about 4 s. Not seen
