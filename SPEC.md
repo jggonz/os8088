@@ -254187,13 +254187,13 @@ Little-endian, read by the shared drawing core (`bx_art_at`, 130.6.3): `'BP'`, t
 word offset per ID (0 = absent), then the records: sprites as `db w, db h` and packed 4bpp rows (high
 nibble left, colour 13 transparent); fonts as height, ascent, first, count, widths and per-glyph
 two-byte rows; the help as NUL-terminated lines ending in an empty one (`bx_artstr`, 47
-characters at most). Packing is deterministic and shares `tools/os88bbart.py`'s packers as
+characters at most; in `BP_A_HELP` a `#KEYS` line starts the Keys page; `BP_A_UITEXT`, last, is the same record for UI strings, empty until a lane fills `art/uitext.txt`). Packing is deterministic and shares `tools/os88bbart.py`'s packers as
 imports. It is lazy part 1 of `BYTEOPLY.O88` (`os88_part_lazyok`); without it the face is drawn
 plain.
 
 #### 131.10.4 Sizes
 
-TINY 16x12 (COMPACT and MID cells; every one has a mono twin `BP_A_M_T_*`, 131.10.5), SMALL 32x24 (FULL cells, sidebar, specials), LARGE 64x40
+TINY 16x12 (COMPACT and MID cells; every one has a mono twin `BP_A_M_T_*`, 131.10.5), SMALL 32x24 (FULL cells, sidebar, specials), LARGE 48x32
 (panels), tokens 16x16, dice 24x24, RAM 8x6, Workshop 12x10, mortgage 12x10, mascot 64x64, card
 backs 48x64, cable 32x12, keycap 16x16 (see the table printed by `--selfcheck`; the face asks
 `bx_size`).
@@ -254210,10 +254210,9 @@ which exist. `os88bpart.py png DIR --mono` previews every sprite through the cor
 #### 131.10.6 Tool and size
 
 `os88bpart.py build -o`, `--selfcheck`, `draft`, `png DIR [--mono]`. The measured size is in
-`art/PROMPT.md` and the art lane's report: BPART.BIN is 61,239 bytes (50,357 of sprites, 9,087 of fonts,
-1,795 of help), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
-included; loaded it is a 61KB lazy claim and a machine without the room draws the plain face. LARGE is
-the cost (23KB): 48x30 would save 10KB if the panels allow.
+`art/PROMPT.md` and the art lane's report: BPART.BIN is 52,033 bytes (41,144 of sprites, 9,087 of fonts,
+1,802 of text; cap 56 KB unpacked), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
+included; loaded it is a 52KB lazy claim and a machine without the room draws the plain face.
 
 ### 131.11 Memory and parts
 

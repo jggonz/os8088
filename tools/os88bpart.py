@@ -25,7 +25,20 @@ ART_H = os.path.join(ROOT, "apps", "byteopoly", "art.h")
 ARTDIR = os.path.join(ROOT, "apps", "byteopoly", "art")
 SPRITES = os.path.join(ARTDIR, "sprites.txt")
 HELP = os.path.join(ARTDIR, "help.txt")
-TEXTS = {"BP_A_HELP": HELP}
+UITEXT = os.path.join(ARTDIR, "uitext.txt")
+def pack_text(path):
+    """help.txt: '# ' comment lines and blanks skipped; '#KEYS' is a real line."""
+    out = bytearray()
+    for line in open(path).read().split("\n"):
+        if not line or (line.startswith("#") and line != "#KEYS"):
+            continue
+        if len(line) > 47 or any(not 32 <= ord(c) < 127 for c in line):
+            fail(f"{path}: {line!r}: printable ASCII, 47 characters at most")
+        out += line.encode("ascii") + b"\0"
+    return bytes(out + b"\0")
+
+
+TEXTS = {"BP_A_HELP": HELP, "BP_A_UITEXT": UITEXT}
 FONTS = {"BP_F_TEXT13": "dlg13", "BP_F_TEXT10": "dlg10", "BP_F_TEXT08": "dlg08",
          "BP_F_BIG16": "sys16", "BP_F_BIG12": "sys12"}
 CHARS, EGA, KEY = bb.CHARS, bb.EGA, bb.KEY
@@ -36,7 +49,7 @@ BX_MONO = [0, 0, 0, 0, 0, 0, 9, 7, 6, 0, 15, 15, 15, 15, 15, 15]
 
 PROPS = ["PET", "VIC20", "C64", "POWER", "TRS80", "A800", "ZX", "APPLE2",
          "APPLE2E", "MAC", "BBS", "PC", "XT", "AT", "AMIGA", "ST", "386", "486"]
-SIZES = {"S": (32, 24), "L": (64, 40), "T": (16, 12)}
+SIZES = {"S": (32, 24), "L": (48, 32), "T": (16, 12)}
 
 
 def fail(msg):
@@ -115,7 +128,7 @@ def build(out_path):
         if name in FONTS:
             blobs[name] = bb.pack_font(FONTS[name])
         elif name in TEXTS:
-            blobs[name] = bb.pack_text(TEXTS[name])
+            blobs[name] = pack_text(TEXTS[name])
         elif name in sprites:
             blobs[name] = bb.pack_sprite(*sprites[name])
         else:
@@ -193,7 +206,7 @@ def selfcheck():
             bb.read_font(FONTS[name])
             continue
         if name in TEXTS:
-            if len(bb.pack_text(TEXTS[name]).split(b"\0")) < 20:
+            if name == "BP_A_HELP" and len(pack_text(TEXTS[name]).split(b"\0")) < 20:
                 fail(f"selfcheck: {name} has under 20 lines")
             continue
         if name not in sprites:
@@ -248,7 +261,7 @@ for _n in list(SIZE_RULES):
 # Each sheet: file -> list of pictures in reading order; a picture is a list
 # of (ID, w, h) cut from the same drawing (a computer is cut three times).
 def prop_cut(p):
-    return [(f"BP_A_L_{p}", 64, 40), (f"BP_A_S_{p}", 32, 24), (f"BP_A_T_{p}", 16, 12)]
+    return [(f"BP_A_L_{p}", 48, 32), (f"BP_A_S_{p}", 32, 24), (f"BP_A_T_{p}", 16, 12)]
 
 
 SHEETS = [

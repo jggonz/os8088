@@ -1,5 +1,6 @@
 # Byteopoly's built-in rules and key list (SPEC.md 131.2, 131.10): one line a
-# row, plain ASCII, 47 characters at most. tools/os88bpart.py packs it into
+# row, plain ASCII, 47 characters at most. A line `#KEYS` starts the Keys
+# page (rules lines come before it); every other # line is a comment. tools/os88bpart.py packs it into
 # BPART.BIN as BP_A_HELP; the Rules and Keys panels page it.
 RULES 1/4  The goal
 2-4 players start on BOOT with 1,500 cr.
@@ -35,6 +36,7 @@ A mortgage pays half price; redeeming
 costs the loan plus 10 percent.
 Short of cash? Sell upgrades, mortgage,
 settle the debt or declare bankruptcy.
+#KEYS
 KEYS 1/2  The board
 Space    Roll the dice
 B        Buy the computer you landed on

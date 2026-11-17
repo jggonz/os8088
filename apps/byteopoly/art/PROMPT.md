@@ -10,7 +10,7 @@ sanctioned binary of the lane (as Breadboard XT's `master.png`).
 They are a GUIDE, not the asset. The sheets did not honour the exact grid, so
 `tools/os88bpart.py draft` finds each picture as a connected run of non-key
 pixels, reads the pictures in reading order, quantises each to its logical
-sizes (a computer is cut at 64x40, 32x24 and 16x12 from the same picture) and
+sizes (a computer is cut at 48x32, 32x24 and 16x12 from the same picture) and
 writes `sprites.txt`. That file was then finished by hand and is THE SOURCE:
 the dice (all six faces), the Workshop, coins, keycap, null-modem cable and the
 two card frames were redrawn as text (the master's were mushy or misaligned), and
@@ -93,4 +93,6 @@ Each sheet's "Use case:" line read "vintage-computer sprites" / "icons" /
 "large illustrations for a 1987-style retro board game on a 16-colour EGA
 screen." followed by the preamble; the full text is kept at
 `~/Repos/byteopoly-logs/codex-art/p1.txt..p3.txt` and in this file above.
-Measured: BPART.BIN 61,239 bytes (lz4 17,417 on disk).
+Measured: BPART.BIN 52,033 bytes.
+
+Update (D14): the LARGE cut was re-made at 48x32 from master1 (the prompt above asked for 64x40 cells; the draft fits each picture to its bbox). BPART.BIN 52,033 bytes, lz4 16,180.

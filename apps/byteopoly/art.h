@@ -142,7 +142,10 @@
 #define BP_A_M_EWASTE 115
 /* text: the built-in rules and help lines, NUL-terminated, in order */
 #define BP_A_HELP 116
-#define BP_A_COUNT 117
+/* UI strings the panels/app may move out of the resident image: the same
+ * NUL-terminated text record as BP_A_HELP; empty until a lane fills art/uitext.txt */
+#define BP_A_UITEXT 117
+#define BP_A_COUNT 118
 /* prop index -> art ID */
 #define BP_A_SMALL(p) (BP_A_S_PET + (p))
 #define BP_A_LARGE(p) (BP_A_L_PET + (p))
