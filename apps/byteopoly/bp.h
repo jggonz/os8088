@@ -326,6 +326,16 @@ void   bp_redeem_cost(int space, BPU32 *out);
 int    bp_group_owner(const BPState *s, int group);  /* seat owning all, or BP_NOBODY */
 void   bp_score_of(const BPState *s, int seat, BPU32 *out);
 int    bp_seat_assets(const BPState *s, int seat, BPU32 *mask);
+/* rules lane additions (SPEC.md 131.4.4, 131.4.5, 131.4.9) */
+#define BP_DR_NONE      0       /* BPState.debt_reason */
+#define BP_DR_RENT      1
+#define BP_DR_CHARGE    2       /* a charge space */
+#define BP_DR_CARD      3       /* a card payment or Bench Service */
+#define BP_DR_BAIL      4       /* the third failed release: pending_move set */
+#define BP_DEPTH_MAX    3       /* cards drawn since the last dice move */
+#define BP_BID_STEP     10
+void   bp_bid_min(const BPState *s, BPU32 *out);  /* the next legal bid */
+int    bp_state_check(const BPState *s);          /* BP_OK or BP_EINVALID */
 
 /* ===== BP_SAVE: bp_codec.c bp_save.c ===================================== */
 #define BP_STATE_MAX    320     /* encoded canonical state, bytes (cap) */
@@ -350,6 +360,19 @@ int    bp_ckpt_load(int role, BPCkpt *meta, BPState *out);  /* last committed */
  * over the immutable board and card tables and BP_RULES_VER */
 #define BP_RULES_VER    1
 void   bp_fingerprint(BPU32 *out);
+/* the save lane's additions (SPEC.md 131.7.1-131.7.4) */
+#define BP_ENC_VER      1
+#define BP_ENC_LEN      233     /* bp_encode's exact output length */
+#define BP_FILE_HDR     40
+int    bp_invalid_rule(void);                     /* rule of the last bp_validate refusal */
+unsigned bp_file_build(const BPCkpt *meta, const BPState *s, BPByte *buf, unsigned cap);
+int    bp_file_peek(const BPByte *buf, unsigned n, BPCkpt *meta);   /* header + CRC only */
+int    bp_file_parse(const BPByte *buf, unsigned n, BPCkpt *meta, BPState *out);
+/* which: 0 current committed, 1 previous committed, 2 candidate; out 0 = header only */
+int    bp_ckpt_open(int role, int which, BPCkpt *meta, BPState *out);
+#define BP_HAVE_CKPT_LOAD_ID 1
+int    bp_ckpt_load_id(int role, const BPU32 *ckpt_id, BPCkpt *meta, BPState *out); /* committed or candidate; meta->state says which */
+int    bp_ckpt_damaged(int role);                 /* slot files that exist but fail: 0..2 */
 
 /* ===== BP_LINK: bp_link.c bp_cable.inc =================================== */
 #define BP_MODE_LOCAL   0

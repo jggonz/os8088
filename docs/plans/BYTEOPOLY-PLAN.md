@@ -38,22 +38,22 @@ in emulation follows integration; then the fix round; then the final pass.
 | US-01 | Launch from the desktop: window, icon, About, focus, close, two independent instances, lease released on close | lead, panels | I (skeleton) |
 | US-02 | Set up 2-4 seats on one PC: names, distinct tokens, Classic/Quick, roll-off, handoff needing fresh input | panels, rules | - |
 | US-03 | Read the board: 28 cells and hit targets, details pane with full rent schedule, active seat/cash/decision/dice/round/link, stacked tokens | face | - |
-| US-04 | Roll and move: recorded dice, salary, doubles, third double, board wrap, wrong-seat/phase refusals, fixed-seed fixtures | rules, panels | - |
-| US-05 | Buy a computer: purchase panel, single debit, decline -> auction | rules, panels | - |
-| US-06 | Rent and charges: set/upgrade/mortgage/utility rent, payer/recipient/calculation shown, debt on shortfall | rules, panels | - |
-| US-07 | Auctions: order, minimum, increments, pass, budget, out-of-turn handoff, no timeout | rules, panels | - |
-| US-08 | Upgrades: set, even build/sell, RAM chips/Workshop markers visible on mono | rules, face, panels | - |
-| US-09 | Mortgage and redeem: proceeds/interest shown, rent suppression, set effects | rules, panels | - |
-| US-10 | Floppy Find / System Error: all 16 cards, held disks, bounded chains | rules, panels | - |
-| US-11 | Repair Shop: visiting vs detained, pay/disk/doubles, third failure debt and pending move | rules, panels | - |
-| US-12 | Trades: compose, freeze, recipient-only accept, revalidate, atomic | rules, panels | - |
-| US-13 | Debt and bankruptcy: shortfall screen, liquidation, estate to bank or player, elimination | rules, panels | - |
-| US-14 | Finish: last survivor, Quick Match score breakdown and shared wins, Review/New/Exit | rules, panels | - |
-| US-15 | Save and resume a local game from every pending decision; bad files refused, prior save kept | save, panels | - |
+| US-04 | Roll and move: recorded dice, salary, doubles, third double, board wrap, wrong-seat/phase refusals, fixed-seed fixtures | rules, panels | - (rules B) |
+| US-05 | Buy a computer: purchase panel, single debit, decline -> auction | rules, panels | - (rules B) |
+| US-06 | Rent and charges: set/upgrade/mortgage/utility rent, payer/recipient/calculation shown, debt on shortfall | rules, panels | - (rules B) |
+| US-07 | Auctions: order, minimum, increments, pass, budget, out-of-turn handoff, no timeout | rules, panels | - (rules B) |
+| US-08 | Upgrades: set, even build/sell, RAM chips/Workshop markers visible on mono | rules, face, panels | - (rules B) |
+| US-09 | Mortgage and redeem: proceeds/interest shown, rent suppression, set effects | rules, panels | - (rules B) |
+| US-10 | Floppy Find / System Error: all 16 cards, held disks, bounded chains | rules, panels | - (rules B) |
+| US-11 | Repair Shop: visiting vs detained, pay/disk/doubles, third failure debt and pending move | rules, panels | - (rules B) |
+| US-12 | Trades: compose, freeze, recipient-only accept, revalidate, atomic | rules, panels | - (rules B) |
+| US-13 | Debt and bankruptcy: shortfall screen, liquidation, estate to bank or player, elimination | rules, panels | - (rules B) |
+| US-14 | Finish: last survivor, Quick Match score breakdown and shared wins, Review/New/Exit | rules, panels | - (rules B) |
+| US-15 | Save and resume a local game from every pending decision; bad files refused, prior save kept | save, panels | B (codec, file; menus are app/panels) |
 | US-16 | Connect two PCs: Host/Join, search/peer/compatible/ready/started, port conflicts, every seat split | link, panels | - |
 | US-17 | Synchronized play: banker authority, machine-gated input, matching digests | link | - |
 | US-18 | Survive a pulled cable: pause, resume the pending transaction exactly once | link | - |
-| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | - |
+| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | B (save half: slots, commit marker; exchange is link's) |
 | US-20 | Chat and link diagnostics | link, panels | - |
 | US-21 | Keyboard and mouse: shortcuts, focus order, fresh input after handoff | panels, face | - |
 | US-22 | CGA and Hercules: usable layouts, no hue-only meaning, mixed-adapter pairs | face, art | - |
