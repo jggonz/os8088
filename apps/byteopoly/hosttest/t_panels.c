@@ -209,6 +209,51 @@ static void t_extra(void)
     memcpy(&bp_game, &keep, sizeof(keep));      /* "Load" the earlier position */
     t_paint();
     BP_CHECK(!gp_hand || gp_hand == bp_game.decider + 1, "after the Load no handoff names another player");
+    /* -- an auction after doubles: the bar comes back focused on Roll (Qqa3-2) -- */
+    {
+        int seen = 0;
+        t_new(2);
+        bp_host_ticks += 40; t_paint(); t_key(13, 0x1C);
+        for (n = 0; n < 600 && !seen; n++) {
+            t_paint();
+            if (t_has("Pass the keyboard")) t_key(13, 0x1C);
+            else if (bp_game.phase == BP_PH_MANAGE) t_key(' ', 0x39);
+            else if (bp_game.phase == BP_PH_AFTER) {
+                if (bp_game.doubles && bp_game.d1 == bp_game.d2 && i == 1) {
+                    seen = 1;
+                    BP_CHECK(gp_bwhy[t_fockey() == ' ' ? 0 : gp_foc] == 0, "after the auction the focus is on an enabled button");
+                    BP_CHECK(gp_bwhy[gp_foc] == 0, "no focus on a greyed button");
+                } else t_key(bp_game.doubles ? ' ' : 'e', bp_game.doubles ? 0x39 : 0x12);
+            } else if (bp_game.phase == BP_PH_BUY) { i = bp_game.doubles && bp_game.d1 == bp_game.d2; t_key('a', 0x1E); }
+            else if (bp_game.phase == BP_PH_AUCTION) t_key('p', 0x19);
+            else if (bp_game.phase == BP_PH_CARD) t_key(13, 0x1C);
+            else if (bp_game.phase == BP_PH_REPAIR) t_key('p', 0x19);
+            else if (bp_game.phase == BP_PH_DEBT) t_key('s', 0x1F);
+            else break;
+            if (bp_game.phase != BP_PH_AFTER) i = bp_game.phase == BP_PH_AUCTION ? i : (bp_game.phase == BP_PH_BUY ? i : 0);
+        }
+        BP_CHECK(seen, "reached the bar after a doubles auction");
+    }
+    /* -- the bar never rests on a grey button, however it got there (Qqa3-2) -- */
+    t_new(2);
+    bp_host_ticks += 40; t_paint(); t_key(13, 0x1C);
+    BP_CHECK(bp_game.phase == BP_PH_MANAGE && gp_kind == GK_IDLE, "idle bar before the roll");
+    gp_foc = 1;                                 /* End Turn, grey before the roll */
+    t_paint();
+    BP_CHECK(gp_bwhy[gp_foc] == 0 && t_fockey() == ' ', "a focus on a grey button moves to the first enabled");
+    /* -- a composer refusal repaints from the lists down (Qqa3-1) -- */
+    bp_game.owner[0] = bp_game.decider; bp_game.level[0] = 1; bp_game.owner[1] = bp_game.decider;
+    t_key('t', 0x14);
+    BP_CHECK(gp_kind == GK_COMPOSE, "the composer is open");
+    t_key(' ', 0x39);                           /* the cursor's row is in an upgraded set */
+    BP_CHECK(t_has("Upgraded sets cannot be traded"), "the refusal shows");
+    BP_CHECK(!(bp_t_dirty & BP_D_CENTER) && bp_t_rects == 1 && bp_t_ry <= gp_vy + 1,
+             "the status line appearing repaints from the column heads down, not mid-line");
+    t_key(9, 0x0F);                             /* clears the refusal: the same band */
+    BP_CHECK(bp_t_rects == 1 && bp_t_ry <= gp_vy + 1, "the status line going repaints from the column heads too");
+    t_key(9, 0x0F);
+    BP_CHECK(bp_t_rects == 1 && bp_t_ry == gp_r.y + gp_r.h - gp_bh - 4,
+             "a focus move alone is the button row from its own top");
     bp_t_help = 0;
 }
 int main(void)

@@ -440,10 +440,10 @@ static void ovl_gp_spec(void)
      * commit that greys the focused button moves it on (131.9.7) */
     i = ovl_gp_ident();
     if (i != (int)gp_fid) { gp_fid = (unsigned)i; gp_frev = bp_game.rev.lo; gp_foc = (BPByte)ovl_gp_first(); }
-    else if (gp_frev != bp_game.rev.lo || gp_kind == GK_RULES || gp_kind == GK_KEYS) {
-        gp_frev = bp_game.rev.lo;   /* (a page turn greys Next/Prev: move on too) */
+    else if (gp_frev != bp_game.rev.lo || (gp_kind != GK_AUC && gp_kind != GK_MANAGE)) {
+        gp_frev = bp_game.rev.lo;   /* never rests on a grey button (Qqa3-2), but for */
         if (gp_foc >= gp_nb || gp_bwhy[gp_foc]) gp_foc = (BPByte)ovl_gp_first();
-    }
+    }                               /* a typed bid or a list cursor between commits */
     if (gp_foc >= gp_nb) gp_foc = 0;
 }
 
@@ -1388,7 +1388,7 @@ static void ovl_gp_snap(unsigned *s)
 {
     int i, e;
     s[0] = (unsigned)ovl_gp_ident();
-    s[1] = gp_foc;
+    s[1] = gp_foc | (ovl_gp_needstatus() << 8);    /* 8: a status line is reserved */
     for (e = 0; e < 2; e++) {
         gp_h = gp_nb + e;
         for (i = 0; i < gp_nb; i++)
@@ -1424,12 +1424,17 @@ static void ovl_gp_damage(void)
     bot = gp_r.y + gp_r.h;
     y = bot;
     if (gp_s1[6] != gp_s0[6]) y = gp_vy;
-    if (gp_s1[4] != gp_s0[4]) {
-        t = (gp_kind == GK_IDLE || gp_kind == GK_REVIEW) ? gp_r.y : gp_btop - 2 * gp_pitch;
+    /* a status line appearing or going moves every line sized from gp_btop
+     * (the composer's and Collection's lists, the lines under them): from
+     * gp_vy, a line boundary; a status text change alone: its own line
+     * (Qqa3-1: a band top inside a line erased the line's lower half) */
+    if (gp_s1[4] != gp_s0[4] || ((gp_s1[1] ^ gp_s0[1]) >> 8)) {
+        t = (gp_kind == GK_IDLE || gp_kind == GK_REVIEW) ? gp_r.y :
+            ((gp_s1[1] ^ gp_s0[1]) >> 8) ? gp_vy : gp_btop;
         if (t < y) y = t;
     }
     if (gp_s1[1] != gp_s0[1] || gp_s1[2] != gp_s0[2]) {
-        t = bot - gp_bh - 6;
+        t = bot - gp_bh - 4;                    /* the button row's own top */
         if (t < y) y = t;
     }
     if (y >= bot) return;
