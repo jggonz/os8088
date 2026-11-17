@@ -372,6 +372,9 @@ void bp_ui_committed(const BPResult *r)
     tl_prev_rev[tl_cur] = bp_game.rev.lo;
     tl_prev_match[tl_cur] = bp_game.match_id;
     e->bank += bank;
+#if !defined(BP_TL_TOY) && defined(BP_HAVE_STATE_CHECK)
+    BP_CHECK(bp_state_check(&bp_game) == BP_OK, "a state the session applied fails the rules' own check");
+#endif
     for (p = 0; p < BP_PROPS; p++) {
         owners = bp_game.owner[p];
         BP_CHECK(owners == BP_NOBODY || owners < bp_game.nseats, "an asset with no valid owner");
