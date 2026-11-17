@@ -480,7 +480,7 @@ def mono_draft():
     for n in ids:
         if n.startswith("BP_A_M_"):
             base = "BP_A_" + n[len("BP_A_M_"):]
-            if base in sprites:
+            if base in sprites and n not in sprites:       # hand-finished twins are kept
                 w, h, rows = sprites[base]
                 sprites[n] = (w, h, mono_twin(w, h, rows, base.startswith("BP_A_T_")))
     write_sprites(sprites, SPRITES, HEADER)
