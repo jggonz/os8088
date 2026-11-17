@@ -585,8 +585,10 @@ FAST = [
         "[api_coldseg] FFFF, both files gone. RED verified with hb_probe_x's "
         "eviction reverted: [hb_resumes] 0, 'other build', 0842. WHY QEMU: "
         "the closed list, entry 1. NEEDS QEMU 9, as hmahiber. secs measured "
-        "3.3",
-        needs=("qemu", "qemu9", "nasm"),
+        "3.3. timeout=300, p2hiber's reason: its two waits are GUEST-budgeted "
+        "(120 + 120 guest s) and the default 60s wall backstop would report "
+        "the red arm as a bare timeout instead of step 2's numbers",
+        needs=("qemu", "qemu9", "nasm"), timeout=300,
         wants=("build/kernel.sys", "build/mbr.bin", "build/boothd.bin",
                "build/xmem.drv", "build/coldhma.sys", "build/hiber.drv")),
     Row("p2hiber", "soak", py("tests/p2hiber.py"), 10.0,
