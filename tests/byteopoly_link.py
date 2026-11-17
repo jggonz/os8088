@@ -303,7 +303,11 @@ def move(host, join, what):
         k = keys[attempt % len(keys)]
         m.key(k)
         if k == 'k':
-            m.key('k')                  # Bankrupt asks; K again is Yes
+            # Bankrupt asks; a SECOND K, pressed at least 20 guest ticks after
+            # the first one's handling, is Yes (SPEC 131.9.7: a confirmation
+            # defaults to No and ignores a held or queued key)
+            Q.pace(m, 1.5)
+            m.key('k')
         if Q.acted(m, lambda: host.rev() != r0 or m.link('cpend'), secs=2, what='decision taken'):
             break
     host.wait_for(lambda: in_sync(host, join) and host.rev() == r0 + 1, what, secs=30)
