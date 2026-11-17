@@ -301,7 +301,9 @@ ITEMS = [
      "Ethernet card.",
      [("network360.img", "360KB", "")]),
     ("xt", "Games disk", True,
-     "Every game on one floppy.",
+     "Fifteen games on one floppy: WireBall, WireFleet, Gorillas, isoTron, "
+     "PIXELSTEIN 3D, DrMarco and the rest. Wire Arena is on the second games "
+     "disk.",
      [("games360.img", "360KB", "")]),
     ("xt", "Games disk 2: Wire Arena", True,
      "Wire Arena, a first-person arena shooter drawn in text: up to three "
@@ -491,6 +493,15 @@ ITEMS = [
      [("pagedesk.img", "1.44MB", ""), ("pagedesk120.img", "1.2MB", ""),
       ("pagedesk720.img", "720KB", ""), ("pagedesk360.img", "360KB", ""),
       ("pagedesk360b.img", "360KB", "the samples")]),
+    ("progs", "Breadboard XT", False,
+     "A circuit workbench: place resistors, LEDs, switches, capacitors, "
+     "logic chips and a 555 timer on a breadboard, wire them up and run the "
+     "circuit, with a two-channel oscilloscope to watch it. Each disk "
+     "carries the program, eight example circuits to open and change, and "
+     "HELP.TXT. It runs on 256KB of memory; it is on the everything sets "
+     "and the live media too.",
+     [("breadxt.img", "1.44MB", ""), ("breadxt120.img", "1.2MB", ""),
+      ("breadxt720.img", "720KB", ""), ("breadxt360.img", "360KB", "")]),
     ("progs", "Windows 3.x programs", True,
      "WIN16, which runs Windows 3.0 and 3.1 programs in an os8088 window. "
      "The disk carries WIN16 and is otherwise empty: copy your Windows "
@@ -608,6 +619,7 @@ PROGRAMS = {
     "PiXEL": ("PIXEL", "PIXEL"),
     "XTMP3": ("XTMP3", "XTMP3"),
     "PageDesk": ("PAGEDESK", "PDESK"),
+    "Breadboard XT": ("BREADXT", "BREAD"),
     "Weave": ("WEAVE", "WEAVE"),
     "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),
