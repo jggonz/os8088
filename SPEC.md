@@ -165553,7 +165553,9 @@ is what changes them: `[api_coldseg]`'s high byte (`XMEM.DRV` puts `.cold` in
 the HMA) and `[vid_kind]` (SYSTEM.CFG's adapter switch); the HMA pool's table
 (`ROMF_HTAB`) does not exist before `XMEM.DRV` either. So `hbm_ask` takes a
 mismatch there as **not yet** while `[hb_down]` = 1 (P1): no toast, nothing
-deleted, the image dropped, and P2 asks again and decides — a P1 that deleted
+deleted, the image dropped - and under `MOD_CACHE` evicted rather than kept
+(`hb_probe_x`, jggonz/os8088#370), so `COLDHMA.SYS` finds no module held
+(2.10.7) - and P2 asks again and decides — a P1 that deleted
 an HMA image would be silent data loss. `[hb_down]` is the window's armed
 button, which nothing reads until the Hibernate window opens and zeroes it,
 so it carries the state between the two calls for no resident byte: 0 before

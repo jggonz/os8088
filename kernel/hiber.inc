@@ -543,7 +543,40 @@ hb_probe_x:
 .ret:
     mov al, HBP_P2              ; a P1 (still 1: early) that did not settle it
     cmp byte [hb_down], 1       ; leaves P2 to ask - a deferral, a refusal
+%ifdef MOD_CACHE
+    jne .p2                     ; (P2 then finds nothing), no fixed volume yet
+    ; --- ...AND A P1 LEAVES NO KEPT IMAGE BEHIND (jggonz/os8088#370) --------
+    ; A P1 that read HIBER.DRV and did not resume dropped it, and under
+    ; MOD_CACHE a drop KEEPS the image (mod_drop): MODR_SEG still names it.
+    ; drv_boot's pass 1 is next, and XMEM.DRV's COLDHMA.SYS refuses to put
+    ; `.cold` in the HMA while ANY mod_tab row is non-zero (osrom.asm's
+    ; `.held`) - rightly, since a kept image re-adopted later skips
+    ; mod_cfix and would still name `.cold`'s RAM. So `.cold` stayed in RAM,
+    ; and P2 met an image whose head says FF (hbm_ptrfix_set) on a boot that
+    ; says 08: 'Hibernation: other build', both files deleted - every resume
+    ; on every machine with an HMA that boots from the image's own disk. The
+    ; image is EVICTED here instead, as mem_shed_one would: the naming word
+    ; zeroed (its mem_rr_tab row then matches nothing) and the record freed
+    ; under its kept tag. Its slots already read mod_gone (mod_drop's
+    ; mod_disarm). `.boot3`, so not a resident byte; tests/hdhiber.py
+    push bx
+    push dx
+    xor dx, dx
+    xchg dx, [mod_tab + MOD_HIBER * MODR_SIZE + MODR_SEG]
+    or dx, dx
+    jz .nokept                  ; never read, or freed outright by the drop
+    mov bx, MEM_P_MOD + MOD_HIBER * MODR_SIZE / 2  ; mod_drop's kept tag
+    mov bp, mem_free_x          ; (wm_cbd: kmain_o holds nothing in BP)
+    call COLD_SEG:wm_cbd
+.nokept:
+    pop dx
+    pop bx
+    mov al, HBP_P2
+    jmp short .st
+.p2:
+%else
     je .st                      ; (P2 then finds nothing), no fixed volume yet
+%endif
     mov al, HBP_DONE            ; ...and after P2, or once settled, nothing is
 .st:                            ; left to ask
     mov [hb_down], al

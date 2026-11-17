@@ -570,6 +570,27 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
                "build/hdd.hma.bin", "build/net.hma.bin",
                "build/sound.hma.map", "build/hdd.hma.map")),
+    Row("hdhiber", "soak", py("tests/hdhiber.py"), 5.0,
+        "SPEC.md 87.5, jggonz/os8088#370: a hibernation RESUMES on a machine "
+        "that boots from the image's own fixed disk AND has an HMA - the live "
+        "USB's shape, which the 2026-11-16 release refused on every such "
+        "machine (`Hibernation: other build`, both files deleted). P1 defers "
+        "an HMA image, and its drop KEPT HIBER.DRV (MOD_CACHE), so "
+        "COLDHMA.SYS refused to move `.cold` with a module row standing and "
+        "P2 saw 08 against the image's FF. hmahiber boots the FLOPPY, so its "
+        "P1 never meets a pointer; every MartyPC row is an 8088 with no HMA - "
+        "nothing had this machine. A FAT16 C: with the kernel, XMEM.DRV, "
+        "COLDHMA.SYS and HIBER.DRV, -m 128: premise `.cold` in the HMA, "
+        "hibernate, power off, boot C: -> [hb_resumes] 1, no refusal toast, "
+        "[api_coldseg] FFFF, both files gone. RED verified with hb_probe_x's "
+        "eviction reverted: [hb_resumes] 0, 'other build', 0842. WHY QEMU: "
+        "the closed list, entry 1. NEEDS QEMU 9, as hmahiber. secs measured "
+        "3.3. timeout=300, p2hiber's reason: its two waits are GUEST-budgeted "
+        "(120 + 120 guest s) and the default 60s wall backstop would report "
+        "the red arm as a bare timeout instead of step 2's numbers",
+        needs=("qemu", "qemu9", "nasm"), timeout=300,
+        wants=("build/kernel.sys", "build/mbr.bin", "build/boothd.bin",
+               "build/xmem.drv", "build/coldhma.sys", "build/hiber.drv")),
     Row("p2hiber", "soak", py("tests/p2hiber.py"), 10.0,
         "SPEC.md 96.45.2.4, docs/plans/KERN-MEGA-PLAN.md 14.57: kern_big's "
         "PS/2 mouse after a hibernate's REBOOT-route resume. WHY QEMU: the "
