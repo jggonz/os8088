@@ -1,5 +1,5 @@
-20261116
-* Wire Arena: 3D shooter for the XT
-* Module cache: reopen with no disk read
-* Hibernate resumes without asking
-* MCGA, 64KB EGA and MDA detected right
+20261117
+* Breadboard XT: build circuits and
+  watch them run on a workbench
+* Olivetti Prodest PC1 mouse support
+* Hibernate resumes with extended memory
