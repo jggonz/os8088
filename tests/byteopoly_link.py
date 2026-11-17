@@ -16,7 +16,7 @@ the cable. It never chooses dice, applies a rule or repairs state.
 
 THE PLAYERS are keys on the decider's own machine, through the shipped UI:
 the setup screen's focus (read back from the guest, never assumed), the
-game panels' keys (SPEC.md 131.9.7) and the Game menu, picked off the
+game panels' keys (bp_panels.c) and the Game menu, picked off the
 kernel's `menu_bar` and confirmed by `menu_cell`/`menu_sel` before release.
 Every assertion reads the session's own record (`_bpl`, `_bp_game`) through
 the shipped binary's map and compares the two guests: same revision, same
@@ -110,10 +110,10 @@ PH_MANAGE, PH_REPAIR, PH_BUY, PH_AUCTION, PH_CARD, PH_DEBT, PH_TRADE, PH_AFTER, 
 BPL_LOBBY, BPL_MATCH = 1, 2
 PAIR_DONE, PAIR_FAIL = 2, 3
 SU_TAB, SU_MACH, SU_READY, SU_LINK, SU_START = 0, 13, 17, 23, 24       # bp_setup.c's widget ids
-GAME_MENU, PAIRED_SAVE, RESUME_PAIR, CLOSE = 1, 3, 4, 5                # SPEC.md 131.9.4
+GAME_MENU, PAIRED_SAVE, RESUME_PAIR, CLOSE = 1, 3, 4, 5                # bp_app.c's Game menu
 F_INTENT, F_RESULT, F_ACK = 7, 9, 11
 KEY = {PH_MANAGE: 'spc', PH_REPAIR: 'p', PH_BUY: 'b', PH_AUCTION: 'p', PH_CARD: 'ret',
-       PH_DEBT: 's', PH_TRADE: 'r', PH_AFTER: 'e'}                     # SPEC.md 131.9.7
+       PH_DEBT: 's', PH_TRADE: 'r', PH_AFTER: 'e'}                     # bp_panels.c's keys
 
 
 def u16(raw, i=0):
