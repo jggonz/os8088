@@ -255295,17 +255295,20 @@ QA run's report, section 3):
 
 | update | before (QA head) | now |
 |---|---:|---:|
-| End Turn (the bar -> the handoff panel) | 7.42 | 2.14 |
-| handoff acknowledged (panel -> the bar) | 8.78 | 2.74 |
-| Collection opened / closed | 7.88 / 8.80 | 1.65 / 2.75 |
-| F1 Rules / Esc out of Rules | 10.34 / 8.80 | 3.74 / 2.77 |
-| a roll that lands on a property (bar -> Buy panel, cell, players, log) | 8.00 | 2.80 |
-| Tab on the bar (centre dirtied; the art above the line stands) | 2.66 | 0.92 |
+| End Turn (the bar -> the handoff panel) | 7.42 | 2.17 |
+| handoff acknowledged (panel -> the bar) | 8.78 | 2.72 |
+| Collection opened / closed | 7.88 / 8.80 | 1.53 / 2.74 |
+| F1 Rules / Esc out of Rules | 10.34 / 8.80 | 4.05 / 2.70 |
+| a roll that lands on a property (bar -> Buy panel, cell, players, log) | 8.00 | 2.84 |
+| Tab on the bar (the panel names the button row) | 2.66 | 0.63 |
+| Tab in the auction | 2.20 | 0.53 |
+| bid + / - (the panel names the editor and the rows below it) | 2.30 | 1.45 / 1.38 |
 
-A centre panel itself is ~1.7-2.0 s of the figures above (four strips of
-the 336-wide centre, the panel's ground, text and the blit); a panel key
-that names its row with `bp_face_dirty_rect` pays for that row's strip
-only.
+A centre panel itself is ~1.5-2.0 s of the figures above (four strips of
+the 336-wide centre, the panel's ground, text and the blit), and bringing
+the bar back costs the centre's art as well (its sprites - mascot, cards, dice -
+are ~40% of it); a panel key that names its rows with `bp_face_dirty_rect`
+pays for those rows' strip only.
 
 #### 131.8.6 The widget kit
 
