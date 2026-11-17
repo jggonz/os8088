@@ -4941,22 +4941,12 @@ $(BUILD)/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc apps/os
 $(BUILD)/pc1mouse.drv: $(BUILD)/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/pc1mouse.bin -o $@
 
-# A controlled axis-map comparison for the PC1 field session. This image uses
-# the DOS source's register labels (10h -> X, 11h -> Y), but the same button
-# setup and one-count-per-pixel scale as pc1mouse720.img.
-$(BUILD)/pc1ref/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
-	@mkdir -p $(BUILD)/pc1ref
-	$(NASM) -f bin -w+error -I drivers/ -I apps/ -DPC1_AXES_DOS -o $@ $<
-	@echo "pc1mouse (DOS axis map): $(call FILESIZE,$@) bytes"
-
-$(BUILD)/pc1ref/pc1mouse.drv: $(BUILD)/pc1ref/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
-	$(OS88DRV) $(BUILD)/pc1ref/pc1mouse.bin -o $@
-
-# A conservative sensitivity arm on the DOS-reference axis map. Fractional
-# mickeys are carried so slow motions still advance the pointer.
+# A conservative sensitivity arm on the DOS-reference axis map the shipped
+# driver uses. Fractional mickeys are carried so slow motions still advance
+# the pointer.
 $(BUILD)/pc1slow/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	@mkdir -p $(BUILD)/pc1slow
-	$(NASM) -f bin -w+error -I drivers/ -I apps/ -DPC1_AXES_DOS -DPC1_SCALE8 -o $@ $<
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -DPC1_SCALE8 -o $@ $<
 	@echo "pc1mouse (1/8 scale): $(call FILESIZE,$@) bytes"
 
 $(BUILD)/pc1slow/pc1mouse.drv: $(BUILD)/pc1slow/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
@@ -5655,17 +5645,17 @@ $(BUILD)/pc1cfg/system.cfg: kernel/driver.inc | $(BUILD)
 	  (1 << 12).to_bytes(2,'little') + b'\0\0')" > $@
 
 
-$(BUILD)/pc1mouse720-ref.img: $(BUILD)/boot360.bin $(KERNFILE) $(filter-out $(BUILD)/pc1mouse.drv,$(DRIVERS)) $(BUILD)/pc1ref/pc1mouse.drv $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS720) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $(BUILD)/pc1cfg/system.cfg tools/os88disk.py
+$(BUILD)/pc1mouse720-ref.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS720) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $(BUILD)/pc1cfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(filter-out $(BUILD)/pc1mouse.drv,$(DRIVERS)) $(BUILD)/pc1ref/pc1mouse.drv $(SYSAPPSARGS) $(filter-out $(addprefix SYSTEM:,$(SYS720OMIT)),$(SYSOPTIONALARGS)) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS720) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(filter-out $(addprefix SYSTEM:,$(SYS720OMIT)),$(SYSOPTIONALARGS)) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS720) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(BUILD)/pc1cfg/system.cfg $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 #> [Gate disks] pc1mousetest :: field disk for the Olivetti Prodest PC1's Yamaha mouse
 .PHONY: pc1mousetest
 pc1mousetest: $(BUILD)/pc1mouse720-ref.img
 	@echo "pc1mousetest: build/pc1mouse720-ref.img - the PC1 field disk (SYSTEM.CFG bit 12)."
-	@echo "              Uses the DOS reference axis mapping and the XT button-scan filter."
+	@echo "              Carries the shipped PC1MOUSE.DRV: the DOS reference axis mapping."
 
 # EMSTEST - SPEC.md 107.7's gate disk: the 360KB system disk with a SYSTEM.CFG
 # that wants EMS.DRV (bit 7) and EMSTEST.O88 in its root. MartyPC's

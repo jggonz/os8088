@@ -64,7 +64,7 @@ DRVC_OVL = 0x40
 # overlays, tool halves and whatever a gate target left there
 DRIVERS = ["sound.drv", "hdd.drv", "ether.drv", "pciether.drv", "net.drv",
            "ramdisk.drv", "usbmouse.drv", "ems.drv", "cdrom.drv",
-           "httpfs.drv"]
+           "httpfs.drv", "pc1mouse.drv"]
 
 # the drivers that declare OS88_DRV_WAKES (SPEC.md 51.2.5, B4). SOUND does
 # not, by decision (docs/plans/B4-WAKE-PLAN.md)

@@ -341,39 +341,39 @@ had added.
   "big": {
     "b2res": 3584,
     "b3m": 448,
-    "b3ram": 6008,
-    "b3res": 592,
-    "blift": 512,
-    "blobseg": 6560,
-    "boot2": 3206,
-    "boot3": 7728,
-    "bootmax": 115200,
+    "b3ram": 6012,
+    "b3res": 1008,
+    "blift": 544,
+    "blobseg": 6592,
+    "boot2": 3216,
+    "boot3": 7760,
+    "bootmax": 114688,
     "bss": 4882,
     "budget": 100864,
     "codemax": 65536,
     "cold": 37714,
     "coldpara": 2358,
-    "colds": 3650,
+    "colds": 3654,
     "fatpara": 288,
-    "fats": 2856,
+    "fats": 2860,
     "grace": 2048,
-    "imgpara": 2760,
+    "imgpara": 2764,
     "kend": 6048,
     "kseg": 96,
     "ksize": 95232,
     "lowbss": 5358,
     "lowpara": 367,
-    "lows": 3144,
+    "lows": 3148,
     "minramkb": 128,
     "ovl": 2050,
     "stk0": 512,
-    "text": 39275,
-    "toppara": 2904,
+    "text": 39342,
+    "toppara": 2900,
     "vga": 2218,
     "vgabuf": 336,
     "vgabufpara": 21,
-    "vgars": 3511,
-    "vgas": 6008
+    "vgars": 3515,
+    "vgas": 6012
   },
   "emu": {
     "b2res": 3584,
@@ -925,15 +925,15 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,759 | 38.7% |
+| the file system, end to end | 29,760 | 38.6% |
 | the window system and its furniture | 22,417 | 29.1% |
 | drawing: adapters, primitives, glyphs, icons | 10,545 | 13.7% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,409 | 9.6% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,476 | 9.7% |
 | the kernel proper: API table, heap, scheduler, events | 6,270 | 8.1% |
 | the Control Panel | 301 | 0.4% |
-| the About box, the one built-in kind left in apps.inc | 288 | 0.4% |
+| the About box, the one built-in kind left in apps.inc | 287 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **76,989** | |
+| **total** | **77,056** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -941,17 +941,17 @@ there and nowhere else.
 |---|---:|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,190 | 7,680 | **8,870** | 527 | — | — |
 | `wm.inc` — the window manager (§11) | 8,424 | 154 | **8,578** | 856 | — | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 406 | 7,021 | **7,427** | 422 | — | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 407 | 7,021 | **7,428** | 422 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,096 | **5,120** | 180 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,480 | 1,408 | **4,888** | 38 | 526 | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,394 | 6 | **3,400** | 115 | 824 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,432 | 6 | **3,438** | 115 | 824 | — |
 | `memory.inc` — the claim heap (§50) | 290 | 2,621 | **2,911** | 27 | 324 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,866 | 9 | **2,875** | 54 | — | — |
 | `assoc.inc` — file type associations (§54) | 504 | 2,017 | **2,521** | 31 | — | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,278 | 149 | **2,427** | 207 | 84 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,075 | **2,110** | 84 | — | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 507 | 1,508 | **2,015** | 189 | — | 108 |
 | `font.inc` — the 8×8 glyph renderer (§6) | 1,997 | — | **1,997** | 20 | 16 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 478 | 1,508 | **1,986** | 189 | — | 98 |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,850 | **1,873** | 91 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,613 | 123 | **1,736** | 705 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 1,522 | 147 | **1,669** | 9 | — | 413 |
@@ -974,7 +974,7 @@ there and nowhere else.
 | `blank.inc` — the idle screen blanker (§64) | 197 | 229 | **426** | — | — | — |
 | `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 85 | 286 | **371** | 255 | — | — |
 | `ctrl.inc` — the Control Panel (§31) | 119 | 182 | **301** | 28 | — | — |
-| `apps.inc` — the three built-in kinds (§14) | 213 | 75 | **288** | — | — | — |
+| `apps.inc` — the three built-in kinds (§14) | 212 | 75 | **287** | — | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 273 | — | **273** | 24 | — | — |
 | `events.inc` — the event ring (§10) | 168 | — | **168** | 3 | 128 | — |
 | `clip.inc` — the system clipboard (§55) | 157 | — | **157** | 3 | — | — |
@@ -1001,7 +1001,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | — | — | **0** | — | — | 3 |
-| **total** | **39,275** | **37,714** | **76,989** | **4,882** | **5,358** | **3,206** |
+| **total** | **39,342** | **37,714** | **77,056** | **4,882** | **5,358** | **3,216** |
 <!-- END generated table -->
 
 ### Reading it

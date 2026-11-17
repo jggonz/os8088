@@ -19930,8 +19930,11 @@ reports that the mapping is not already active. The sequence bytes, including
 the leading 12h, are all data-port writes.
 
 `PC1MOUSE.DRV` is a `DRVC_POINT` worker driver, wanted only when the user
-selects it in the Drivers page. Its attach check uses the PC1 BIOS signature
-before touching the controller. It does not install the DOS
+selects it in the Drivers page. Its attach check asks `OSAPI_CPU_INFO` for an
+8086-class CPU (kern_mega's protected mode has no F000h segment to read) and
+then uses the PC1 BIOS signature before touching the controller; a refusal is
+`DRVE_HW`, and every verb other than attach, detach and ready is refused
+(§51.2.2). It does not install the DOS
 driver's INT 08h/09h/33h handlers and does not program the V6335 hardware
 cursor: movement and buttons enter the existing OS cursor/event path through
 `OSAPI_MOUSE_FEED`, so os8088 retains its normal cursor, clipping and click
@@ -19943,18 +19946,29 @@ map and prevents those bytes from being enqueued as typed keys. Since the PC1
 is an XT, the kernel consumes them in INT 09h, pulses bit 7 of port 61h to
 acknowledge the 8255 byte, then sends IRQ1's EOI. Ordinary scancodes keep their
 normal path. The middle code 78h is consumed but does not map to an OS button.
-Detach feeds a release for any held button and stops the worker.
+Detach stops the worker, which feeds a release for any held button on its way
+out.
+
+**The controller setup is session-long.** Nothing sends the PC1 a sequence
+that turns the button codes off again - the DOS reference has none - so once
+the row is unloaded (unticked, or suspended for a DOS session or a hibernate
+sweep, where `mouse_unhook` also returns int 09h to the ROM) the kernel no
+longer consumes 77h/78h/79h and a click reaches the BIOS as a key until the
+machine is restarted. Recording what the PC1 BIOS makes of those codes is
+part of the field checklist in `docs/plans/PC1-MOUSE-PLAN.md`.
 
 The one `DRVC_POINT` publication slot means `PC1MOUSE.DRV` and
 `USBMOUSE.DRV` are alternatives: attach of the second one is refused with the
 class-in-use error. They remain separate optional rows; neither is wanted by
-default. The PC1 row is available on `kern_big` and `kern_emu`, the kernels
-with the driver framework; `kern_small` has no driver layer.
+default. The PC1 row is available on `kern_big`, `kern_emu` and `kern_mega`,
+the kernels with the driver framework (kern_mega's probe refuses at the CPU
+check); `kern_small` has no driver layer.
 
 The source DOS driver's comments call register 10h horizontal (negated) and
-11h vertical. The first PC1 field report found the OS pointer moving
-horizontally in response to vertical mouse movement, so `PC1MOUSE.DRV` maps
-register 11h to screen X and the negated register 10h to screen Y. It starts at
+11h vertical, and `PC1MOUSE.DRV` maps them so: the negated register 10h is
+screen X and register 11h screen Y. The first PC1 field report's sideways
+pointer was the right-button query overwriting the X delta (now banked), and
+the field PC1 confirmed the DOS mapping once that was fixed. It starts at
 one count per pixel. The normal arm doubles a signed delta whose magnitude is
 greater than two mickeys in a sample, matching the DOS driver's default
 `Max_speed_D2 = 2` acceleration. This mapping and sensitivity remain subject
@@ -250598,9 +250612,10 @@ stays free and `PCIETHER.DRV` attaches. Unticking the owner releases the slot
 (`drv_release` zeroes `[drv_owner]` only for the row that holds it). It must
 cross no resident rung on any of the three; `make budget-check` holds
 `KERN_BUDGET` for kern_big and kern_emu and `KERN_MEGA_RESIDENT_KB` for
-kern_mega. The row is LAST on each, so it is row 10 on kern_big and kern_mega
-(after `VESA.DRV`'s row 9) and row 11 on kern_emu, whose absolute mouse is
-its row 5; the PC1 row now follows the optional driver rows, making
+kern_mega. The row was LAST on each until §9.15's PC1 mouse row followed it,
+so it is row 10 on kern_big and kern_mega (after `VESA.DRV`'s row 9) and row
+11 on kern_emu, whose absolute mouse is its row 5; the PC1 row follows the
+optional driver rows, making
 `DQ_MAXREC` 13 on kern_emu (§51.11.2).
 
 ### 125.6 Disks and machines (pinned)

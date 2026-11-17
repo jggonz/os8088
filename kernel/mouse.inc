@@ -2931,11 +2931,6 @@ kbm_isr:
     iret
 
 %ifdef KBD_I15
-    ; Keep the following shared hot routines on their original parity. The
-    ; PC1 scan filter above adds an odd-sized branch sequence to kbm_isr;
-    ; this byte is unreachable padding at the boundary before the INT 15h
-    ; entry and costs no cycles on either interrupt path.
-    db 0x90
 ; -----------------------------------------------------------------------------
 ; kbm_i15 - int 15h, for AH=4Fh alone: the AT BIOS's keyboard intercept
 ;           (SPEC.md 9.7.2)
@@ -2986,10 +2981,9 @@ kbm_i15:
                                 ; BIOS buffer is kept off full BEFORE the ROM
                                 ; below stores into it (9.8) - 4Fh is called
                                 ; between the ROM's read and its store
-    jmp kbm_isr.scan
-%ifndef KBD_DIAG
-    nop                         ; PARITY PAD, never executed: kbm_i15 is 17
-%endif                          ; bytes, and what follows it is hot (t_hotpar)
+    jmp kbm_isr.scan            ; a NEAR jump since the PC1 filter (SPEC.md
+                                ; 9.15), so kbm_i15 is 18 bytes and needs no
+                                ; parity pad: what follows it is hot (t_hotpar)
 %ifdef KBD_DIAG
 .old:
     jmp far [cs:kbm_old9]       ; CS: DS is the caller's

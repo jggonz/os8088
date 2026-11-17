@@ -44,19 +44,21 @@ p1_entry:
     cmp al, DRVV_READY
     je p1_ready
     cmp al, DRVV_ATTACH
-    jne .ok
+    jne .no                    ; any other verb is REFUSED: CF = 0 is "I did
+                               ; it" (SPEC.md 51.2.2)
     call p1_probe
-    jc .refuse
-    call p1_keyinit
     jc .refuse
     mov al, P1_LEFT            ; arm the kernel's make/break map before PC1
     call OSAPI_KEY_DOWN        ; button scans can arrive (SPEC.md 9.7)
+    call p1_keyinit
+    jc .refuse
     mov byte [p1_stop], 0
     mov byte [p1_alive], 0
-.ok:
     clc
     ret
 .refuse:
+    mov al, DRVE_HW            ; the Drivers page's reason (SPEC.md 51.2)
+.no:
     stc
     ret
 
@@ -74,22 +76,18 @@ p1_ready:
     ret
 
 p1_detach:
-    inc byte [p1_stop]
-    cmp byte [p1_alive], 0
-    jne .done
-    ; No worker was created (READY refusal); still end with released buttons.
-    xor ax, ax
-    xor bx, bx
-    xor cx, cx
-    call OSAPI_MOUSE_FEED
-.done:
-    clc
-    ret
+    inc byte [p1_stop]          ; the worker feeds any held button's release
+    clc                         ; on its way out; with no worker (a READY
+    ret                         ; refusal) nothing was ever fed. BX is the
+                                ; caller's row and must survive (drv_unload_x)
 
 ; A positive BIOS identity is required before any PC1-specific keyboard or
 ; counter access. The DOS reference recognizes the final ROM word FE44h
 ; (floppy), FE49h (unknown disk configuration) and FE4Ah (hard disk).
 p1_probe:
+    call OSAPI_CPU_INFO         ; the PC1 is an 8086-class machine. Ask first:
+    cmp al, CPU_8086            ; on kern_mega in protected mode F000h is no
+    jne .no                     ; selector and the load below would #GP
     push ds
     push bx
     mov ax, 0xF000
@@ -109,6 +107,9 @@ p1_probe:
 .out:
     pop bx
     pop ds
+    ret
+.no:
+    stc
     ret
 
 ; Configure the PC1 keyboard interface to publish left and right button state
@@ -232,10 +233,9 @@ p1_worker:
     call OSAPI_DRV_TASK         ; worker exit; never returns
 
 ; Read/clear the two signed 8-bit hardware counters, and combine them with the
-; PC1's button make/break states. On the PC1 field run the DOS reference's
-; apparent X/Y assignment was transposed: register 11h drives horizontal motion,
-; while register 10h drives vertical motion and is reversed. Keep both at one
-; count per pixel until the hardware speed is measured on the PC1.
+; PC1's button make/break states. The DOS reference's mapping, which the field
+; PC1 confirmed once the right-button drift was fixed: register 10h, negated,
+; is X and register 11h is Y (SPEC.md 9.15).
 p1_sample:
     mov dx, 0xD4
     mov al, P1_REG10
@@ -244,8 +244,7 @@ p1_sample:
     in al, dx
     cbw
     neg ax
-                                ; this counter is vertical on the field unit
-    push ax
+    push ax                     ; X, negated
 
     mov dx, 0xD4
     mov al, P1_REG11
@@ -253,12 +252,8 @@ p1_sample:
     inc dx
     in al, dx
     cbw
-    mov bx, ax                  ; this counter is horizontal on the field unit
-    pop ax                      ; negated vertical delta
-%ifndef PC1_AXES_DOS
-    xchg ax, bx                  ; OSAPI_MOUSE_FEED wants X in AX, Y in BX
-%endif                          ; -DPC1_AXES_DOS is the controlled reference-map
-                                ; A/B: register 10h -> X, register 11h -> Y
+    mov bx, ax                  ; Y
+    pop ax                      ; OSAPI_MOUSE_FEED wants X in AX, Y in BX
 %ifndef PC1_SCALE8
     P1_ACCEL ax
     P1_ACCEL bx

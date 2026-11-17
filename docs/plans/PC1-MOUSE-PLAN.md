@@ -27,6 +27,9 @@ IRQ0/IRQ1 as its resident program does.
 - [ ] **Field validation:** build a dedicated PC1 test disk and document a
   real-machine check for attach, cursor movement, both buttons, keyboard
   operation, detach/restart and the standard OS cursor on the PC1 display.
+  Include what a click does after the row is unticked and inside a DOS
+  session: the controller keeps sending 77h/79h until restart and the kernel
+  no longer consumes them there (SPEC.md 9.15).
 
 ## Verification
 

@@ -56,7 +56,7 @@ DRV_VX      equ 0               ; the absolute mouse's, with a SYSTEM.CFG bit
                                 ; can evaluate DRV_MAX
 %ifdef DRV_PCIETH
 DRV_PX      equ 1               ; ...plus PCIETHER.DRV's row (SPEC.md 125.5),
-%else                           ; LAST on every big build (kern_mega's alone
+%else                           ; next-to-last on every big build (kern_mega's alone
 DRV_PX      equ 0               ; until 125.1 widened it); kern_small
 %endif                          ; assembles without it
 %ifdef KERN_EMU
@@ -1591,7 +1591,7 @@ vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
     db 0
 %endif
 %ifdef DRV_PCIETH
-    dw PKG_DISP, 0              ; LAST: PCIETHER.DRV (SPEC.md 125.5), every
+    dw PKG_DISP, 0              ; PCIETHER.DRV (SPEC.md 125.5), on every
     dw drv_f_pcieth, DRVT_PCIETH ; big build. DRVC_NET - ETHER.DRV's class - so
     dw 0, 0                     ; packages, net_find and the DOS packet layer
     db DRVC_NET                 ; need no change; the two are ALTERNATIVES,
@@ -1794,7 +1794,7 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 120)
 %endif
 %ifdef DRV_PCIETH
-    dw DRVM_PCIETH              ; ...and PCIETHER.DRV (SPEC.md 125), last
+    dw DRVM_PCIETH              ; ...and PCIETHER.DRV (SPEC.md 125)
 %endif
     dw DRVM_PC1                 ; PC1MOUSE.DRV follows the optional rows
 %endif

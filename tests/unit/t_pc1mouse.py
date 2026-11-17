@@ -44,6 +44,13 @@ def main():
           want="push AX before the first scancode load; pop AX before report compare",
           why="AL is the key query input and shares AX with the mouse's horizontal delta; "
               "without the bank, the right-button scan 79h becomes a +121 cursor step")
+    x10 = body.find("mov al, P1_REG10")
+    x11 = body.find("mov al, P1_REG11")
+    check(x10 >= 0 and x11 > x10 and "neg ax" in body[x10:x11]
+          and "mov bx, ax" in body[x11:] and "xchg ax, bx" not in body
+          and "PC1_AXES_DOS" not in src,
+          "the shipped driver maps the DOS reference axes: -10h is X, 11h is Y",
+          why="the field PC1 confirmed the DOS mapping; the default build is what every system disk ships")
     accel = re.search(r"(?ms)^%macro P1_ACCEL 1\s*(.*?)^%endmacro", src)
     check(accel is not None and "cmp dx, 2" in accel.group(1)
           and "shl %1, 1" in accel.group(1),

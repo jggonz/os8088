@@ -863,9 +863,9 @@
   "sources": [
    "drivers/pc1mouse/pc1mouse.asm"
   ],
-  "stamped": "7b802356",
+  "stamped": "29e9848e7",
   "strings": "075d3ddf5a3a826e",
-  "why": "Added the PC1 mouse driver guide page from its initial documented behavior"
+  "why": "row title PC1 Mouse, every system disk carries it, the session-long button codes"
  },
  "PCIETHER_DRV": {
   "sources": [
