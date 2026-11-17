@@ -112,8 +112,10 @@ PAIR_DONE, PAIR_FAIL = 2, 3
 SU_TAB, SU_MACH, SU_READY, SU_LINK, SU_START = 0, 13, 17, 23, 24       # bp_setup.c's widget ids
 GAME_MENU, PAIRED_SAVE, RESUME_PAIR, CLOSE = 1, 3, 4, 5                # bp_app.c's Game menu
 F_INTENT, F_RESULT, F_ACK = 7, 9, 11
-KEY = {PH_MANAGE: 'spc', PH_REPAIR: 'p', PH_BUY: 'b', PH_AUCTION: 'p', PH_CARD: 'ret',
-       PH_DEBT: 's', PH_TRADE: 'r', PH_AFTER: 'e'}                     # bp_panels.c's keys
+# bp_panels.c's keys, in the order tried: a greyed one only shows its reason,
+# so the next candidate follows (AFTER: End Turn, or the bonus Roll doubles owe)
+KEY = {PH_MANAGE: ['spc'], PH_REPAIR: ['r', 'p'], PH_BUY: ['b', 'a'], PH_AUCTION: ['p', 'b'],
+       PH_CARD: ['ret'], PH_DEBT: ['s', 'k'], PH_TRADE: ['r', 'a'], PH_AFTER: ['e', 'spc']}
 
 
 def u16(raw, i=0):
@@ -296,20 +298,22 @@ def move(host, join, what):
     r0 = host.rev()
     phase, decider = host.game_at('phase'), host.game_at('decider')
     m = (host, join)[host.mem('_bp_game', GAME['machine'] + decider)]
-    for attempt in range(6):
-        m.key(KEY.get(phase, 'ret'))
+    keys = KEY.get(phase, []) + ['ret']
+    for attempt in range(3 * len(keys)):
+        k = keys[attempt % len(keys)]
+        m.key(k)
+        if k == 'k':
+            m.key('k')                  # Bankrupt asks; K again is Yes
         if Q.acted(m, lambda: host.rev() != r0 or m.link('cpend'), secs=2, what='decision taken'):
             break
-        if phase == PH_DEBT and attempt >= 1:
-            m.key('k')                  # cannot settle: Bankrupt, then confirm
-            m.key('k')
-        else:
-            m.key('ret')                # (a handoff panel first)
     host.wait_for(lambda: in_sync(host, join) and host.rev() == r0 + 1, what, secs=30)
 
 
 def reopen(m):
     m.menu_pick(GAME_MENU, CLOSE)
+    # bp_app.c asks "Leave the cable game?" (Yes is the default button)
+    if not Q.acted(m, lambda: dispapps.pkg_seg(m, 0) is None, secs=2, what='closed without asking'):
+        m.key('ret')
     assert Q.acted(m, lambda: dispapps.pkg_seg(m, 0) is None, secs=8, what='closed'), 'the package did not close'
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
     dispcp.open_named(m, m.mo, S, W.settle, wx, wy, 'BYTEOPLY.O88')
@@ -361,8 +365,9 @@ def main():
             for m in machines:
                 m.wait_for(lambda m=m: m.link('ph') == BPL_MATCH, 'resumed from the pair', secs=60)
             assert (host.rev(), host.dig()) == saved == (join.rev(), join.dig()), 'not the saved checkpoint'
-            # play on, every revision compared on both machines
-            for _ in range(300):
+            # play on, every revision compared on both machines (bounded: the
+            # complete games are t_link's, on the host)
+            for _ in range(60):
                 if host.game_at('status') != 1:
                     break
                 move(host, join, 'play on')
