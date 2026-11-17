@@ -88,6 +88,20 @@ disk has 67 of 354 clusters free (measured 2026-11-17).
 
 (Filled by the QA run in emulation once every lane is integrated.)
 
+Leads to check on the glass, carried from the lanes' reports:
+- Q-pre-1 (link): after a commit the screen showed "rev 35" at revision 37,
+  and "Sent - waiting" with nothing outstanding, while both machines'
+  records agreed - a stale redraw in the face or panels?
+- Q-pre-2 (art): help page heading "Corners, cards, jail" - the game says
+  Repair Shop and detained, never jail.
+- Q-pre-3 (help vs panels): the Keys page says C shows the collection and M
+  manages; the panels use M (and C) for the one Collection panel; F1 Rules is
+  not on the Keys page.
+- Q-pre-4 (face): CGA COMPACT truncates POWER and E-WASTE in the cell.
+- Q-pre-5 (panels): a key held past ~1 s across a handoff could still reach
+  the next player (clock-only freshness rule).
+- Q-pre-6 (panels): paint cost per strip on the XT with several bp_can calls.
+
 ## Evidence
 
 (Filled as stories reach S.)
