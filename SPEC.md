@@ -254210,7 +254210,8 @@ match is not savable. Rules, in the order checked:
    for Classic and 10, 20 or 30 for Quick; Quick `round` <= `rounds_limit`.
 2. `phase` 1..9; `phase == OVER` exactly when `status == OVER`.
 3. `alive[]` 0/1, seats at and above `nseats` 0, at least two alive in PLAY
-   (one in OVER); `active` and `decider` below `nseats` and, in PLAY, alive;
+   (one in OVER); `active` below `nseats` and `decider` too (in OVER `decider` may be
+   `BP_NOBODY`), both alive in PLAY;
    `round_left` inside the seat mask and, in PLAY, inside the alive mask.
 4. Roster: each used seat's name is 1..8 printable characters (20h-7Eh) then
    zero padding; tokens below 4 and distinct; `machine[]` 0 or 1; every
@@ -254240,11 +254241,13 @@ match is not savable. Rules, in the order checked:
    or 0..15 outside `CARD`.
 10. `REPAIR`: the active seat is detained. `BUY`: the active seat stands on
     an unowned computer or utility.
-11. `AUCTION`: `auc_space` is an unowned property; `auc_open` and
-    `auc_passed` are disjoint, non-empty-open, and together exactly the alive
-    mask; `auc_turn` is in `auc_open`; `auc_high` is `BP_NOBODY` with
-    `auc_bid` 0, or a seat in `auc_open` with `auc_bid` a non-zero multiple
-    of 10 not above that seat's cash. `ret_phase` is not used.
+11. `AUCTION`: `auc_space` is a SPACE id (0..27) of an unowned property;
+    `auc_open` is the eligible mask fixed at the opening, exactly the alive
+    mask, and `auc_passed` a subset of it (passers stay in `auc_open`);
+    `auc_turn` is in `auc_open`, not in `auc_passed` and not the high bidder;
+    `auc_high` is `BP_NOBODY` with `auc_bid` 0, or a seat in `auc_open` and not
+    passed with `auc_bid` a non-zero multiple of 10 not above that seat's
+    cash. `ret_phase` is not used.
 12. `CARD`: `card` is in 0..15 and in its deck's cycle; when its effect moves
     the active seat (TO, FORWARD, BACK) onto a utility, `rolled` is set (a
     card-induced utility landing needs the turn's dice total, 131.2.4).
