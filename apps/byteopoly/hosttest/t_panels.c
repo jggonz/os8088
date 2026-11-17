@@ -75,6 +75,60 @@ int main(void)
     rev = (int)bp_game.rev.lo;
     t_key(' ', 0x39);
     BP_CHECK((int)bp_game.rev.lo == rev + 1, "Space rolls once");
+    /* play on: roll, end turn, until a computer is landed on */
+    {
+        int n, d, bought = 0, auc = 0;
+        for (n = 0; n < 400 && !(bought && auc); n++) {
+            t_paint();
+            d = bp_game.decider;
+            if (bp_game.phase == BP_PH_MANAGE) t_key(' ', 0x39);
+            else if (bp_game.phase == BP_PH_AFTER) t_key('e', 0x12);
+            else if (bp_game.phase == BP_PH_BUY) {
+                BP_CHECK(bp_gp_covers() && t_has("Price:"), "buy panel shows the price");
+                if (!bought) {
+                    t_key('b', 0x30);
+                    BP_CHECK(bp_game.phase != BP_PH_BUY, "B buys");
+                    bought = 1;
+                } else {
+                    t_key('a', 0x1E);
+                    BP_CHECK(bp_game.phase == BP_PH_AUCTION, "A opens the auction");
+                    t_paint();
+                    BP_CHECK(t_has("Auction:") && t_has("[B] Bid 10"), "auction shows the opening bid");
+                    t_key('3', 0x04); t_key('0', 0x0B);
+                    t_paint();
+                    BP_CHECK(t_has("[B] Bid 30"), "typed digits set the bid");
+                    t_key('b', 0x30);
+                    BP_CHECK(bp_game.auc_high != BP_NOBODY, "B bids");
+                    auc = 1;
+                }
+            } else if (bp_game.phase == BP_PH_CARD) t_key(13, 0x1C);
+            else if (bp_game.phase == BP_PH_AUCTION) t_key('p', 0x19);
+            else if (bp_game.phase == BP_PH_REPAIR) t_key('r', 0x13);
+            else if (bp_game.phase == BP_PH_DEBT) t_key('k', 0x25), t_key('k', 0x25);
+            else break;
+            /* a handoff between the two local seats: wait it out */
+            t_paint();
+            if (t_has("Pass the keyboard")) { t_tick(30); t_key(13, 0x1C); }
+            (void)d;
+        }
+        BP_CHECK(bought && auc, "a purchase and an auction were played through the panels");
+    }
+#ifdef BP_L_DIVERGED    /* the real session (link lane) decides bp_sess_mine */
+    /* a seat on the other PC: facts shown, no buttons, no commands */
+    t_new(2);
+    bp_mode = BP_MODE_HOST; bp_here = 0;
+    bp_game.machine[0] = 1; bp_game.machine[1] = 1;
+    bp_game.decider = 0; bp_game.active = 0;
+    t_paint();
+    BP_CHECK(t_has("Waiting for P1 on the other PC"), "remote decider: waiting line");
+    BP_CHECK(bp_t_buttons <= 1, "remote decider: no economic buttons");
+    {
+        int rv = (int)bp_game.rev.lo;
+        t_key(' ', 0x39);
+        BP_CHECK((int)bp_game.rev.lo == rv, "remote decider: Space does nothing");
+    }
+    bp_mode = BP_MODE_LOCAL;
+#endif
     printf("t_panels: %s\n", bp_host_fail ? "FAILED" : "ok");
     return bp_host_fail ? 1 : 0;
 }
