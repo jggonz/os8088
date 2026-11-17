@@ -933,69 +933,53 @@ static unsigned fc_sighint(void)
 
 void bp_face_dirty(unsigned mask) { fc_dirty |= mask; }
 int bp_face_isdirty(void) { return fc_dirty != 0 || fc_dsp[0] != 0 || fc_dsp[1] != 0; }
-/* damage smaller than a section (131.8.5): up to FC_NR rects, a further one
- * merged into the last as their bounding box */
+/* damage smaller than a section (131.8.5): the rects named before a paint,
+ * as their bounding box (x2, y2 exclusive); FC_D_RECT says it is set */
 #define FC_D_RECT 0x4000
-#define FC_NR 4
-static BPRect fc_dr[FC_NR];
-static BPByte fc_ndr;
+static int fc_dx1, fc_dy1, fc_dx2, fc_dy2;
 static void ovl_fc_drect(const BPRect *r)
 {
-    BPRect *d;
-    int x2, y2;
     if (!r || r->w <= 0 || r->h <= 0) return;
-    fc_dirty |= FC_D_RECT;
-    if (fc_ndr < FC_NR) {
-        d = &fc_dr[fc_ndr++];
-        d->x = r->x; d->y = r->y; d->w = r->w; d->h = r->h;
-        return;
+    if (!(fc_dirty & FC_D_RECT)) {
+        fc_dirty |= FC_D_RECT;
+        fc_dx1 = fc_dx2 = r->x; fc_dy1 = fc_dy2 = r->y;
     }
-    d = &fc_dr[FC_NR - 1];
-    x2 = d->x + d->w; y2 = d->y + d->h;
-    if (r->x + r->w > x2) x2 = r->x + r->w;
-    if (r->y + r->h > y2) y2 = r->y + r->h;
-    if (r->x < d->x) d->x = r->x;
-    if (r->y < d->y) d->y = r->y;
-    d->w = x2 - d->x; d->h = y2 - d->y;
+    if (r->x < fc_dx1) fc_dx1 = r->x;
+    if (r->y < fc_dy1) fc_dy1 = r->y;
+    if (r->x + r->w > fc_dx2) fc_dx2 = r->x + r->w;
+    if (r->y + r->h > fc_dy2) fc_dy2 = r->y + r->h;
 }
 void bp_face_dirty_rect(const BPRect *r) { ovl_fc_drect(r); }
-static int ovl_fc_in(const BPRect *a, const BPRect *b)  /* a inside b */
-{
-    return a->x >= b->x && a->y >= b->y && a->x + a->w <= b->x + b->w && a->y + a->h <= b->y + b->h;
-}
-/* paint the queued rects; centre: the whole centre was painted this pass */
+/* paint the named damage; centre: the whole centre was painted this pass */
 static void ovl_fc_rects(int cov, int centre)
 {
     static BPRect r;
     unsigned secs;
-    int i, x2, y2;
-    for (i = 0; i < fc_ndr; i++) {
-        r.x = fc_dr[i].x; r.y = fc_dr[i].y; r.w = fc_dr[i].w; r.h = fc_dr[i].h;
-        if (centre && ovl_fc_in(&r, &bp_r_center)) continue;
-        x2 = r.x + r.w; y2 = r.y + r.h;                 /* clipped to the content, x to 8 */
-        if (r.x < fc_all.x) r.x = fc_all.x;
-        if (r.y < fc_all.y) r.y = fc_all.y;
-        if (x2 > fc_all.x + fc_all.w) x2 = fc_all.x + fc_all.w;
-        if (y2 > fc_all.y + fc_all.h) y2 = fc_all.y + fc_all.h;
-        r.x = fc_all.x + ((r.x - fc_all.x) & ~7);
-        x2 = fc_all.x + ((x2 - fc_all.x + 7) & ~7);
-        if (x2 > fc_all.x + fc_all.w) x2 = fc_all.x + fc_all.w;
-        r.w = x2 - r.x; r.h = y2 - r.y;
-        if (r.w <= 0 || r.h <= 0) continue;
-        fc_sx1 = r.x; fc_sx2 = x2 - 1; fc_sy1 = r.y; fc_sy2 = y2 - 1;
-        secs = BP_D_CENTER;                             /* the sections it touches */
-        if (cov != BP_PN_FULL) {
-            if (!fc_hit(&bp_r_center)) secs = 0;
-            if (fc_hit(&bp_r_board) && !ovl_fc_in(&r, &bp_r_center)) secs |= BP_D_BOARD;
-            if (fc_hit(&fc_rp)) secs |= BP_D_PLAYERS;
-            if (fc_hit(&fc_rd)) secs |= BP_D_DETAILS;
-            if (fc_hit(&fc_rl)) secs |= BP_D_LINK;
-            if (fc_hit(&fc_rg)) secs |= BP_D_LOG;
-            if (fc_hit(&bp_r_hint)) secs |= BP_D_HINT;
-        }
-        fc_paintr(&r, secs);
+    int x2, y2, in;
+    in = fc_dx1 >= bp_r_center.x && fc_dy1 >= bp_r_center.y &&
+         fc_dx2 <= bp_r_center.x + bp_r_center.w && fc_dy2 <= bp_r_center.y + bp_r_center.h;
+    if (centre && in) return;
+    r.x = fc_dx1; r.y = fc_dy1; x2 = fc_dx2; y2 = fc_dy2;   /* clipped to the content, x to 8 */
+    if (r.x < fc_all.x) r.x = fc_all.x;
+    if (r.y < fc_all.y) r.y = fc_all.y;
+    if (y2 > fc_all.y + fc_all.h) y2 = fc_all.y + fc_all.h;
+    r.x = fc_all.x + ((r.x - fc_all.x) & ~7);
+    x2 = fc_all.x + ((x2 - fc_all.x + 7) & ~7);
+    if (x2 > fc_all.x + fc_all.w) x2 = fc_all.x + fc_all.w;
+    r.w = x2 - r.x; r.h = y2 - r.y;
+    if (r.w <= 0 || r.h <= 0) return;
+    fc_sx1 = r.x; fc_sx2 = x2 - 1; fc_sy1 = r.y; fc_sy2 = y2 - 1;
+    secs = BP_D_CENTER;                                 /* the sections it touches */
+    if (cov != BP_PN_FULL) {
+        if (!fc_hit(&bp_r_center)) secs = 0;
+        if (!in && fc_hit(&bp_r_board)) secs |= BP_D_BOARD;
+        if (fc_hit(&fc_rp)) secs |= BP_D_PLAYERS;
+        if (fc_hit(&fc_rd)) secs |= BP_D_DETAILS;
+        if (fc_hit(&fc_rl)) secs |= BP_D_LINK;
+        if (fc_hit(&fc_rg)) secs |= BP_D_LOG;
+        if (fc_hit(&bp_r_hint)) secs |= BP_D_HINT;
     }
-    fc_ndr = 0;
+    fc_paintr(&r, secs);
 }
 void bp_face_dirty_space(int space)
 {
@@ -1030,7 +1014,7 @@ static void fc_paintall(void *win, int full)
     if (full) {
         for (s = 0; s < BP_SPACES; s++) fc_csig[s] = fc_sigcell(s);
         fc_psig = fc_sigplayers(); fc_dsig = fc_sigdetails(); fc_lsig = fc_siglink(); fc_hsig = fc_sighint(); fc_gsig = fc_logver;
-        fc_dsp[0] = fc_dsp[1] = 0; fc_dirty = 0; fc_ndr = 0; fc_art = cov == 0;
+        fc_dsp[0] = fc_dsp[1] = 0; fc_dirty = 0; fc_art = cov == 0;
         fc_paintr(&fc_all, cov == BP_PN_FULL ? BP_D_CENTER : BP_D_ALL);
         return;
     }
@@ -1038,7 +1022,7 @@ static void fc_paintall(void *win, int full)
     if (!d) return;
     fc_dirty = 0;
     if (cov == BP_PN_FULL) {
-        if (d & BP_D_CENTER) { fc_ndr = 0; fc_paintr(&fc_all, BP_D_CENTER); }
+        if (d & BP_D_CENTER) fc_paintr(&fc_all, BP_D_CENTER);
         else if (d & FC_D_RECT) ovl_fc_rects(cov, 0);
         return;
     }

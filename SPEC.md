@@ -255259,13 +255259,13 @@ the whole content, the kernel's clip region doing the rest.
 
 **Damage smaller than a section.** `bp_face_dirty_rect(r)` names a screen
 rect that changed - a panel's button row, an editor line, a list row - when
-nothing else did. The face keeps up to four (a fifth is merged into the last
-as their bounding box); at the next paint each is widened to multiples of 8,
-clipped to the content and painted in strips of ITS width, with only the
-sections it touches (inside the centre: `BP_D_CENTER` alone - the centre's
-art and `bp_pn_draw` clipped to the strip). A rect that lies inside the
-centre is dropped when the same pass repaints the whole centre, and every
-rect is dropped by a `full` paint. The centre itself is painted whole only
+nothing else did. The rects named before a paint are kept as their bounding
+box (the panels name one per key); at the paint it is widened to multiples
+of 8, clipped to the content and painted in strips of ITS width, with only
+the sections it touches (inside the centre: `BP_D_CENTER` alone - the
+centre's art and `bp_pn_draw` clipped to the strip). It is dropped when it
+lies inside the centre and the same pass repaints the whole centre, and by a
+`full` paint. The centre itself is painted whole only
 for `BP_D_CENTER`: a panel that changes its KIND dirties the centre, a key
 that changes a line inside one names the line.
 
@@ -255297,14 +255297,14 @@ QA run's report, section 3):
 
 | update | before (QA head) | now |
 |---|---:|---:|
-| End Turn (the bar -> the handoff panel) | 7.42 | 2.17 |
+| End Turn (the bar -> the handoff panel) | 7.42 | 2.14 |
 | handoff acknowledged (panel -> the bar) | 8.78 | 2.72 |
-| Collection opened / closed | 7.88 / 8.80 | 1.53 / 2.74 |
-| F1 Rules / Esc out of Rules | 10.34 / 8.80 | 4.05 / 2.70 |
-| a roll that lands on a property (bar -> Buy panel, cell, players, log) | 8.00 | 2.84 |
+| Collection opened / closed | 7.88 / 8.80 | 1.53 / 2.75 |
+| F1 Rules / Esc out of Rules | 10.34 / 8.80 | 4.00 / 2.74 |
+| a roll that lands on a property (bar -> Buy panel, cell, players, log) | 8.00 | 2.79 |
 | Tab on the bar (the panel names the button row) | 2.66 | 0.63 |
-| Tab in the auction | 2.20 | 0.53 |
-| bid + / - (the panel names the editor and the rows below it) | 2.30 | 1.45 / 1.38 |
+| Tab in the auction | 2.20 | 0.63 |
+| bid + / - (the panel names the editor and the rows below it) | 2.30 | 1.38 / 1.35 |
 
 A centre panel itself is ~1.5-2.0 s of the figures above (four strips of
 the 336-wide centre, the panel's ground, text and the blit), and bringing
