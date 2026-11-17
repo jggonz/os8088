@@ -255375,7 +255375,7 @@ Help (26). About is the application menu's (`OSAPI_ABOUT_SET`), never a Help
 item. Items grey (`OS88_MENU_DIS`) where illegal and are re-evaluated by
 `bp_pn_sync` and on every mode change; Propose Trade follows
 `bp_can(BP_C_PROPOSE)` for the active seat, Assets > My Collection needs a
-running match, and a menu command that opens a panel dirties the centre.
+running match, and `bp_gp_open` dirties what a menu-opened panel changes.
 
 | menu | items |
 |---|---|
