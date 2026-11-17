@@ -18,6 +18,47 @@
  * handshake, lobby, chat, snapshot, checkpoint and resume are ovl_* code
  * (UI task only - every caller is - and never address-taken). */
 
+/* ---- host harness defaults (131.12) ---------------------------------------
+ * A hosttest program that is not t_link.c (t_smoke, t_rules, t_save) builds
+ * this file too. It gets an unplugged cable, a silent UI and no checkpoint
+ * files: the calls below are renamed to file-local no-ops until the end of
+ * this file, so it neither needs nor clashes with the real definitions that
+ * test (or bp_save.c, included later) may provide. t_link.c defines
+ * BP_LINK_FAKE and supplies its own. */
+#if defined(BP_HOST) && !defined(BP_LINK_FAKE)
+static int bpl_h_open(int port) { (void)port; return BP_EIO; }
+static void bpl_h_void(void) {}
+static int bpl_h_zero(void) { return 0; }
+static int bpl_h_send(const BPByte *b, unsigned n) { (void)b; (void)n; return BP_EIO; }
+static int bpl_h_recv(BPByte *b) { (void)b; return 0; }
+static const char *bpl_h_msg(void) { return "Off"; }
+static BPWord bpl_h_rand(void) { return 0x1234; }
+static void bpl_h_committed(const BPResult *r) { (void)r; }
+static void bpl_h_chat(int m, const char *t) { (void)m; (void)t; }
+static int bpl_h_write(const BPCkpt *m, const BPState *s) { (void)m; (void)s; return BP_EIO; }
+static int bpl_h_commit(const BPCkpt *m) { (void)m; return BP_EIO; }
+static int bpl_h_load(int r, BPCkpt *m, BPState *o) { (void)r; (void)m; (void)o; return BP_EIO; }
+static int bpl_h_loadid(int r, const BPU32 *i, BPCkpt *m, BPState *o) { (void)r; (void)i; (void)m; (void)o; return BP_EIO; }
+static int bpl_h_open2(int r, int w, BPCkpt *m, BPState *o) { (void)r; (void)w; (void)m; (void)o; return BP_EIO; }
+#define bp_ck_open bpl_h_open
+#define bp_ck_close bpl_h_void
+#define bp_ck_tick bpl_h_void
+#define bp_ck_heard bpl_h_zero
+#define bp_ck_send bpl_h_send
+#define bp_ck_recv bpl_h_recv
+#define bp_ck_port bpl_h_zero
+#define bp_ck_msg bpl_h_msg
+#define bp_ck_rand bpl_h_rand
+#define bp_ui_committed bpl_h_committed
+#define bp_ui_link bpl_h_void
+#define bp_ui_chat bpl_h_chat
+#define bp_ckpt_write bpl_h_write
+#define bp_ckpt_commit bpl_h_commit
+#define bp_ckpt_load bpl_h_load
+#define bp_ckpt_load_id bpl_h_loadid
+#define bp_ckpt_open bpl_h_open2
+#endif
+
 /* ---- protocol constants (SPEC.md 131.5.2, 131.5.3) ----------------------- */
 #define BPL_VER         1
 #define BPL_BEAT        9
@@ -1224,6 +1265,19 @@ static void ovl_ck_end(int code, const char *why)
     bpl_say(why);
 }
 
+/* host: a checkpoint id above every one this match has on this disk -
+ * the files rank slots by id (131.7.4), so ids only grow */
+static void ovl_ck_newid(BPU32 *id)
+{
+    int w;
+    bp_u32_set(id, 0, 0);
+    for (w = 0; w < 3; w++)
+        if (bp_ckpt_open(BP_MODE_HOST, w, &bpl_km, 0) == BP_OK && bpl_eq(&bpl_km.match_id, &bp_game.match_id)
+            && (bpl_km.ckpt_id.hi > id->hi || (bpl_km.ckpt_id.hi == id->hi && bpl_km.ckpt_id.lo > id->lo)))
+            bp_u32_copy(id, &bpl_km.ckpt_id);
+    if (!++id->lo) id->hi++;
+}
+
 /* host: the exchange begins (nothing outstanding) */
 static void ovl_ck_begin(void)
 {
@@ -1232,7 +1286,7 @@ static void ovl_ck_begin(void)
     bpl.pair = BP_PAIR_BUSY;
     os88_memset(&bpl.ckm, 0, sizeof(BPCkpt));
     bp_u32_copy(&bpl.ckm.match_id, &bp_game.match_id);
-    bpl_rand32(&bpl.ckm.ckpt_id);
+    ovl_ck_newid(&bpl.ckm.ckpt_id);
     bp_u32_copy(&bpl.ckm.rev, &bp_game.rev);
     bp_u32_copy(&bpl.ckm.digest, &bpl.dig);
     bp_u32_copy(&bpl.ckm.host_id, &bpl.me);
@@ -1383,6 +1437,7 @@ static int ovl_load_id(const BPU32 *id)
 static int ovl_rs_switch(void)
 {
     if (ovl_load_id(&bpl_t1) != BP_OK || !bpl_eq(&bpl_km.ckpt_id, &bpl_t1) || bpl_km.role != bp_mode
+        || !bpl_eq(&bpl_km.match_id, &bpl.rsm.match_id)
         || (bpl_km.state != 2 && (bp_mode == BP_MODE_HOST || bpl_km.state != 1))) {
         /* not here: the offer we had stands, its state reloaded */
         ovl_load_id(&bpl.rsm.ckpt_id);
@@ -1639,24 +1694,23 @@ static void ovl_leave(void)
 }
 void bp_link_leave(void) { ovl_leave(); }
 
-/* ---- host harness defaults (131.12): a hosttest program that is not
- * t_link.c gets an unplugged cable, a silent UI and no checkpoint files ------- */
+/* ---- the host harness's defaults end here (see the top of this file) ---- */
 #if defined(BP_HOST) && !defined(BP_LINK_FAKE)
-int bp_ck_open(int port) { (void)port; return BP_EIO; }
-void bp_ck_close(void) {}
-void bp_ck_tick(void) {}
-int bp_ck_heard(void) { return 0; }
-int bp_ck_send(const BPByte *body, unsigned n) { (void)body; (void)n; return BP_EIO; }
-int bp_ck_recv(BPByte *body) { (void)body; return 0; }
-int bp_ck_port(void) { return 0; }
-const char *bp_ck_msg(void) { return "Off"; }
-BPWord bp_ck_rand(void) { return 0x1234; }
-void bp_ui_committed(const BPResult *r) { (void)r; }
-void bp_ui_link(void) {}
-void bp_ui_chat(int machine, const char *text) { (void)machine; (void)text; }
-#ifndef BP_CKPT_HOST    /* (a harness with the save lane's files defines it) */
-int bp_ckpt_write(const BPCkpt *meta, const BPState *s) { (void)meta; (void)s; return BP_EIO; }
-int bp_ckpt_commit(const BPCkpt *meta) { (void)meta; return BP_EIO; }
-int bp_ckpt_load(int role, BPCkpt *meta, BPState *out) { (void)role; (void)meta; (void)out; return BP_EIO; }
-#endif
+#undef bp_ck_open
+#undef bp_ck_close
+#undef bp_ck_tick
+#undef bp_ck_heard
+#undef bp_ck_send
+#undef bp_ck_recv
+#undef bp_ck_port
+#undef bp_ck_msg
+#undef bp_ck_rand
+#undef bp_ui_committed
+#undef bp_ui_link
+#undef bp_ui_chat
+#undef bp_ckpt_write
+#undef bp_ckpt_commit
+#undef bp_ckpt_load
+#undef bp_ckpt_load_id
+#undef bp_ckpt_open
 #endif

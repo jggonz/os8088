@@ -49,11 +49,11 @@ in emulation follows integration; then the fix round; then the final pass.
 | US-12 | Trades: compose, freeze, recipient-only accept, revalidate, atomic | rules, panels | - |
 | US-13 | Debt and bankruptcy: shortfall screen, liquidation, estate to bank or player, elimination | rules, panels | - |
 | US-14 | Finish: last survivor, Quick Match score breakdown and shared wins, Review/New/Exit | rules, panels | - |
-| US-15 | Save and resume a local game from every pending decision; bad files refused, prior save kept | save, panels | - |
+| US-15 | Save and resume a local game from every pending decision; bad files refused, prior save kept | save, panels | B (codec, file; menus are app/panels) |
 | US-16 | Connect two PCs: Host/Join, search/peer/compatible/ready/started, port conflicts, every seat split | link, panels | - |
 | US-17 | Synchronized play: banker authority, machine-gated input, matching digests | link | - |
 | US-18 | Survive a pulled cable: pause, resume the pending transaction exactly once | link | - |
-| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | - |
+| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | B (save half: slots, commit marker; exchange is link's) |
 | US-20 | Chat and link diagnostics | link, panels | - |
 | US-21 | Keyboard and mouse: shortcuts, focus order, fresh input after handoff | panels, face | - |
 | US-22 | CGA and Hercules: usable layouts, no hue-only meaning, mixed-adapter pairs | face, art | - |

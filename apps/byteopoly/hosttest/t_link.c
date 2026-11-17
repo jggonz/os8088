@@ -380,6 +380,9 @@ int bp_ckpt_write(const BPCkpt *m, const BPState *s)
 {
     TEnd *e = &E[tl_cur];
     if (e->wfail) return e->wfail;
+    /* as the save lane's files do (131.7.4): slots of another match go */
+    if (e->cur.has && !bpl_eq(&e->cur.m.match_id, &m->match_id)) e->cur.has = 0;
+    if (e->prev.has && !bpl_eq(&e->prev.m.match_id, &m->match_id)) e->prev.has = 0;
     e->cand.has = 1; e->cand.m = *m; e->cand.m.state = 1; e->cand.s = *s;
     return BP_OK;
 }
@@ -399,6 +402,12 @@ static int tl_give(const TSlot *t, int role, BPCkpt *m, BPState *out)
     return BP_OK;
 }
 int bp_ckpt_load(int role, BPCkpt *m, BPState *out) { return tl_give(&E[tl_cur].cur, role, m, out); }
+int bp_ckpt_open(int role, int which, BPCkpt *m, BPState *out)
+{
+    static BPState junk;
+    TEnd *e = &E[tl_cur];
+    return tl_give(which == 0 ? &e->cur : which == 1 ? &e->prev : &e->cand, role, m, out ? out : &junk);
+}
 int bp_ckpt_load_id(int role, const BPU32 *id, BPCkpt *m, BPState *out)
 {
     TEnd *e = &E[tl_cur];
