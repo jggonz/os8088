@@ -418,6 +418,7 @@ int    bp_sess_adopt(void);                       /* client, DIVERGED: take the 
 #define BP_PAIR_DONE    2       /* "Paired save complete" / resumed */
 #define BP_PAIR_FAIL    3       /* failed: the previous paired save stands */
 int    bp_sess_pair(void);
+int    bp_lobby_peer_ready(void);                 /* 1: the other machine pressed Ready (D3) */
 /* host-harness convention: a hosttest/ program that includes byteoply.c
  * gets no-op bp_ck_* / bp_ui_* from bp_link.c unless it defines
  * BP_LINK_FAKE and supplies its own (t_link.c does) */

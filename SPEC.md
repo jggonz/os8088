@@ -254114,7 +254114,7 @@ function (§73.3) that keeps BP, DS and DF.
 | `bp_ck_tick()` | `lk_tick` (the search), then the TX staging flushed; copies the framer's counters into `bp_diag.crc` (frames dropped: CRC, length, type, an escape at a delimiter) and `bp_diag.overrun` (line errors and overflows, plus frames the RX ring had no slot for) |
 | `bp_ck_heard()` | `LK_HEARD` = 1: a Byteopoly HELLO arrived, the search stops moving |
 | `bp_ck_send(body, n)` | `lk_send`; BP_EPENDING when the staging has no room for the worst case (2n + 6) |
-| `bp_ck_recv(body)` | the next valid body, without its CRC, out of a 6-slot RX ring; with the ring empty it first runs `lk_poll` for at most 32 bytes, which is at most four frames, so the ring cannot overflow from one poll |
+| `bp_ck_recv(body)` | the next valid body, without its CRC, out of a 4-slot RX ring; with the ring empty it first runs `lk_poll` for at most 32 bytes, which completes at most four frames (the shortest is 8 bytes on the wire, the first may need only its closing delimiter), so the ring cannot overflow from one poll |
 | `bp_ck_port()`, `bp_ck_msg()` | `LK_PORT` while the lease is open, `LK_MSG` |
 | `bp_ck_rand()` | `OSAPI_RAND`: endpoint and checkpoint identities only, never the game's dice |
 
@@ -254207,7 +254207,7 @@ shown as progress. A lobby rebroadcasts ~75 bytes every 2 beats (~1 s).
 |---|---|
 | the lease's rings (§115.1) | 255 bytes each way |
 | `os88cable.inc` TX staging | 136 bytes: two worst-case frames |
-| the RX ring (`bp_cable.inc`) | 6 bodies of 30 bytes; a full ring drops and counts |
+| the RX ring (`bp_cable.inc`) | 4 slots of 30 bytes (a length and a body); a full ring drops and counts |
 | outstanding economic transactions | 1, globally |
 | chat | 1 line in flight, 24 characters |
 | snapshot window | 3 chunks beyond the last acknowledged offset |
@@ -254280,7 +254280,8 @@ or a token in use. The host rebroadcasts LOBBY1 + LOBBY2 every two beats;
 the client takes a setup only when both halves of the same revision have
 arrived. **Ready belongs to a revision**: `bp_lobby_ready` on the client
 sends READY (lobby revision, flag) every two beats, the host records it only
-for the current revision, and any change clears both flags. `bp_lobby_start`
+for the current revision, and any change clears both flags
+(`bp_lobby_peer_ready` answers the other machine's flag). `bp_lobby_start`
 (host, both ready on the current revision) freezes the roster: the host runs
 `bp_new_match` with a fresh seed and sends START (the lobby revision, the
 seed, the revision and digest it produced) as an ordinary outstanding
@@ -254364,8 +254365,10 @@ because of 131.6.3's identities: a lost intent is applied when its retry
 arrives, a result lost after the host's commit is re-sent from the retained
 copy, an ACK lost after the client's apply is answered by the client's
 revision check (resend the ACK). Nothing is rerolled, repaid, rebid or
-re-accepted. `bp_link_leave` is the only way out of a cable match: it sends
-BYE twice, closes the port and leaves the state OFF; the peer shows "The
+re-accepted. `bp_link_leave` is the only way out of a cable match, and it
+ENDS the match on this machine: BYE twice, the port let go, `bp_mode` back
+to LOCAL and `bp_game.status` EMPTY - the match is never turned into a local
+game, and a paired checkpoint stays on disk to resume. The peer shows "The
 other PC left the match" and stays paused. A peer that comes back as a new
 instance has a new endpoint id and is a stranger; the match continues only
 from a paired checkpoint (131.7.5).

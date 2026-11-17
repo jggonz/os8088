@@ -366,7 +366,7 @@ static const char *const bpl_states[9] = {
     "Boards differ: use the banker's board?"
 };
 
-static const char *ovl_msg(void)
+static const char *bpl_msg(void)
 {
     int s;
     if (bp_mode == BP_MODE_LOCAL) return "Same PC";
@@ -383,7 +383,7 @@ static const char *ovl_msg(void)
     if (bp_sess_busy()) os88_strcpy(bpl_line + os88_strlen(bpl_line), " waiting", 9);
     return bpl_line;
 }
-const char *bp_link_msg(void) { return ovl_msg(); }
+const char *bp_link_msg(void) { return bpl_msg(); }
 
 /* ---- local mode, and the start of every mode -------------------------------- */
 static void bpl_reset(void)
@@ -904,7 +904,7 @@ static int ovl_lobby_set(const BPSetup *su)
 }
 int bp_lobby_set(const BPSetup *su) { return ovl_lobby_set(su); }
 
-static int ovl_lobby_ready(int ready)
+static int bpl_lobby_ready(int ready)
 {
     if (bp_mode == BP_MODE_LOCAL || bpl.ph != BPL_LOBBY || bpl.intent) return BP_EPHASE;
     if (bp_mode == BP_MODE_HOST) bpl.rmask = (BPByte)((bpl.rmask & 2) | (ready != 0));
@@ -913,7 +913,13 @@ static int ovl_lobby_ready(int ready)
     bp_ui_link();
     return BP_OK;
 }
-int bp_lobby_ready(int ready) { return ovl_lobby_ready(ready); }
+int bp_lobby_ready(int ready) { return bpl_lobby_ready(ready); }
+
+int bp_lobby_peer_ready(void)
+{
+    if (bp_mode == BP_MODE_LOCAL || bpl.ph != BPL_LOBBY) return 0;
+    return (bpl.rmask >> (1 - bp_here)) & 1;
+}
 
 const BPSetup *bp_lobby_setup(void)
 {
@@ -1062,7 +1068,7 @@ static int ovl_adopt(void)
 int bp_sess_adopt(void) { return ovl_adopt(); }
 
 /* host: the next chunk, or (offset 0) SNAPHEAD first */
-static void ovl_snapdata(void)
+static void bpl_snapdata(void)
 {
     BPWord n;
     if (!bpl.ssent) {
@@ -1101,7 +1107,7 @@ static void ovl_snapreq_in(void)
         bpl.ssent = 0;
         bpl.stries = 0;
         bp_diag.resync++;
-        ovl_snapdata();
+        bpl_snapdata();
     } else if (off > bpl.sack) {
         bpl.sack = off;
         bpl.stries = 0;
@@ -1183,7 +1189,7 @@ static void bpl_wckpt(const BPCkpt *m)
     bpl_w32(&m->client_id);
 }
 
-static void ovl_ck_frame(int type)
+static void bpl_ck_frame(int type)
 {
     bpl_begin(type);
     if (type == BPF_CKBEGIN) bpl_wckpt(&bpl.ckm);
@@ -1227,7 +1233,7 @@ static void ovl_ck_begin(void)
     if (e != BP_OK) { bpl_ck_end(e, "Save failed on this PC"); return; }
     bpl.ck = BPL_CK_WRITTEN;
     bpl.cktries = 0;
-    ovl_ck_frame(BPF_CKBEGIN);
+    bpl_ck_frame(BPF_CKBEGIN);
     bp_ui_link();
 }
 
@@ -1241,7 +1247,7 @@ static int ovl_save_pair(void)
     bpl.cktries = 0;
     if (bp_mode == BP_MODE_CLIENT) {
         bpl.ck = BPL_CK_ASKED;
-        ovl_ck_frame(BPF_CKREQ);
+        bpl_ck_frame(BPF_CKREQ);
     } else if (bp_sess_busy()) bpl.ckwant = 1;      /* behind the transaction */
     else ovl_ck_begin();
     bp_ui_link();
@@ -1256,7 +1262,7 @@ static void ovl_ck_host(void)
     bpl_r32(&bpl_t1);
     if (bpl_rx[0] == BPF_CKREQ) {
         if (!bpl_eq(&bpl_t1, &bp_game.match_id)) goto bad;
-        if (bpl.ck) ovl_ck_frame(bpl.ck == BPL_CK_WRITTEN ? BPF_CKBEGIN : BPF_CKCOMMIT);
+        if (bpl.ck) bpl_ck_frame(bpl.ck == BPL_CK_WRITTEN ? BPF_CKBEGIN : BPF_CKCOMMIT);
         else if (!bpl.ckwant) ovl_save_pair();
         return;
     }
@@ -1269,7 +1275,7 @@ static void ovl_ck_host(void)
         if (e) { bpl_ck_end(e, "Save failed on this PC"); return; }
         bpl.ck = BPL_CK_COMMIT;
         bpl.cktries = 0;
-        ovl_ck_frame(BPF_CKCOMMIT);
+        bpl_ck_frame(BPF_CKCOMMIT);
     } else if (bpl.ck == BPL_CK_COMMIT && stage == 2)
         bpl_ck_end(e, e ? "Save incomplete: resume will finish it" : "Paired save complete");
     return;
@@ -1290,7 +1296,7 @@ static void ovl_ck_client(void)
         bpl_r32(&bpl_km.host_id);
         bpl_r32(&bpl_km.client_id);
         if (bpl.ck >= BPL_CK_CAND && bpl_eq(&bpl_km.ckpt_id, &bpl.ckm.ckpt_id)) {
-            ovl_ck_frame(BPF_CKREPLY);
+            bpl_ck_frame(BPF_CKREPLY);
             return;
         }
         if (bpl.cpend || bpl.snap) goto bad;        /* not yet */
@@ -1304,7 +1310,7 @@ static void ovl_ck_client(void)
         bpl.ckcode = (BPByte)e;
         bpl.ck = BPL_CK_CAND;
         bpl.pair = BP_PAIR_BUSY;
-        ovl_ck_frame(BPF_CKREPLY);
+        bpl_ck_frame(BPF_CKREPLY);
         if (e) bpl_ck_end(e, "Save failed on this PC");
         else bp_ui_link();
         return;
@@ -1315,12 +1321,12 @@ static void ovl_ck_client(void)
         e = bp_ckpt_commit(&bpl.ckm);
         bpl.ck = BPL_CK_DONE;
         bpl.ckcode = (BPByte)e;
-        ovl_ck_frame(BPF_CKREPLY);
+        bpl_ck_frame(BPF_CKREPLY);
         bpl_ck_end(e, e ? "Save incomplete: resume will finish it" : "Paired save complete");
         bpl.ck = BPL_CK_DONE;
         return;
     }
-    ovl_ck_frame(BPF_CKREPLY);
+    bpl_ck_frame(BPF_CKREPLY);
     return;
 bad:
     bp_diag.frame++;
@@ -1355,16 +1361,21 @@ static void bpl_rs_fail(const char *why)
 
 /* offer checkpoint id t1 instead, if this side has it: the client as a
  * committed checkpoint or its candidate, the host only as a committed one */
+static int bpl_load_id(const BPU32 *id)
+{
+#ifdef BP_HAVE_CKPT_LOAD_ID
+    return bp_ckpt_load_id(bp_mode, id, &bpl_km, &bpl_scr);
+#else
+    (void)id;                               /* (until the save lane lands) */
+    return BP_EIO;
+#endif
+}
 static int bpl_rs_switch(void)
 {
-    os88_memset(&bpl_km, 0, sizeof(BPCkpt));
-    bp_u32_copy(&bpl_km.ckpt_id, &bpl_t1);
-    if (bp_ckpt_load(bp_mode, &bpl_km, &bpl_scr) != BP_OK || !bpl_eq(&bpl_km.ckpt_id, &bpl_t1)
-        || bpl_km.role != bp_mode || (bpl_km.state != 2 && (bp_mode == BP_MODE_HOST || bpl_km.state != 1))) {
-        /* the offer we had is still in bpl.rsm; reload its state */
-        os88_memcpy(&bpl_km, &bpl.rsm, sizeof(BPCkpt));
-        bpl_km.state = 0;
-        bp_ckpt_load(bp_mode, &bpl_km, &bpl_scr);
+    if (bpl_load_id(&bpl_t1) != BP_OK || !bpl_eq(&bpl_km.ckpt_id, &bpl_t1) || bpl_km.role != bp_mode
+        || (bpl_km.state != 2 && (bp_mode == BP_MODE_HOST || bpl_km.state != 1))) {
+        /* not here: the offer we had stands, its state reloaded */
+        bpl_load_id(&bpl.rsm.ckpt_id);
         return 0;
     }
     os88_memcpy(&bpl.rsm, &bpl_km, sizeof(BPCkpt));
@@ -1482,12 +1493,12 @@ bad:
 }
 
 /* ---- the per-tick service ---------------------------------------------------------- */
-static void ovl_slow_timers(void)
+static void bpl_slow_timers(void)
 {
     if (bpl.ck == BPL_CK_WRITTEN || bpl.ck == BPL_CK_COMMIT || bpl.ck == BPL_CK_ASKED) {
         if (bpl_due(bpl.ckdue)) {
             bpl_bump(&bpl.cktries);
-            ovl_ck_frame(bpl.ck == BPL_CK_WRITTEN ? BPF_CKBEGIN
+            bpl_ck_frame(bpl.ck == BPL_CK_WRITTEN ? BPF_CKBEGIN
                          : bpl.ck == BPL_CK_COMMIT ? BPF_CKCOMMIT : BPF_CKREQ);
         }
     }
@@ -1497,7 +1508,7 @@ static void ovl_slow_timers(void)
             bpl_bump(&bpl.stries);
             bpl.ssent = bpl.sack;
         }
-        if (bpl.ssent < bpl.sn && bpl.ssent < bpl.sack + BPL_WINDOW) ovl_snapdata();
+        if (bpl.ssent < bpl.sn && bpl.ssent < bpl.sack + BPL_WINDOW) bpl_snapdata();
     } else if (bpl.snap == 2 && bpl_due(bpl.sdue)) {
         bpl_bump(&bpl.stries);
         if (!bpl.shead) bpl.ssent = 0;
@@ -1537,7 +1548,7 @@ static void bpl_timers(void)
         if (bpl.pend) bpl_send_result();
         else bpl_send_intent();
     }
-    if (bpl.ck || bpl.ckwant || bpl.snap || bpl.cbusy) ovl_slow_timers();
+    if (bpl.ck || bpl.ckwant || bpl.snap || bpl.cbusy) bpl_slow_timers();
     if ((BPWord)(bpl.clk - bpl.sent) >= BPL_PING) bpl_send_state(BPF_PING);
 }
 
@@ -1567,7 +1578,7 @@ void bp_sess_tick(void)
 }
 
 /* ---- opening, joining, leaving ------------------------------------------------------- */
-static int ovl_open(int mode, int port)
+static int bpl_open(int mode, int port)
 {
     int e;
     bpl_reset();
@@ -1590,10 +1601,10 @@ static int ovl_open(int mode, int port)
     bp_ui_link();
     return BP_OK;
 }
-int bp_link_host(int port) { return ovl_open(BP_MODE_HOST, port); }
-int bp_link_join(int port) { return ovl_open(BP_MODE_CLIENT, port); }
+int bp_link_host(int port) { return bpl_open(BP_MODE_HOST, port); }
+int bp_link_join(int port) { return bpl_open(BP_MODE_CLIENT, port); }
 
-static void ovl_leave(void)
+static void bpl_leave(void)
 {
     if (bp_mode == BP_MODE_LOCAL || !bpl.on) return;
     if (bpl.peer.lo) {
@@ -1601,17 +1612,13 @@ static void ovl_leave(void)
         bpl_send();
         bpl_send();
     }
-    bp_ck_close();
-    bpl.on = 0;
-    bpl_unbind();
-    bpl.pend = 0;
-    bpl.cpend = 0;
-    bpl.ck = 0;
-    bpl.ckwant = 0;
-    bpl.snap = 0;
+    bpl_reset();                            /* (the port let go) */
+    bp_mode = BP_MODE_LOCAL;                /* D3: the match ENDS - never a */
+    bp_here = 0;                            /* local game made of it */
+    bp_game.status = BP_ST_EMPTY;
     bpl_say("Left the cable match");
 }
-void bp_link_leave(void) { ovl_leave(); }
+void bp_link_leave(void) { bpl_leave(); }
 
 /* ---- host harness defaults (131.12): a hosttest program that is not
  * t_link.c gets an unplugged cable, a silent UI and no checkpoint files ------- */
