@@ -233,7 +233,7 @@ static void ovl_su_link(void)
     }
     e = su_tab == 1 ? bp_link_host(su_port) : bp_link_join(su_port);
     if (e == BP_OK) { bp_ap_mode = BP_M_LOBBY; su_sent = 0; su_ready = 0; su_msg[0] = 0; return; }
-    m = bp_link_msg();
+    m = bp_ck_msg();
     ovl_su_say(m && m[0] ? m : bp_err_text(e));
     bp_sound(BP_SND_ERROR);
 }
@@ -420,7 +420,7 @@ static void ovl_su_draw(void)
             ovl_su_rect(id, &su_rc);
             bp_w_button(&su_rc, ovl_su_mine(s) ? "This PC" : "Other PC", ovl_su_state(id));
             bp_w_text(su_gx + 262, su_rc.y + (su_rh - 8) / 2,
-                      ovl_su_mine(s) ? (su_ready ? "Ready" : "...") : "--", 0, -1);
+                      (ovl_su_mine(s) ? su_ready : bp_lobby_peer_ready()) ? "Ready" : "...", 0, -1);
         }
     }
     /* player count */

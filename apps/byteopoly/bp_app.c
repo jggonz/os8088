@@ -15,7 +15,7 @@ static struct os88_video bp_ap_video;
 static unsigned bp_ap_artseg, bp_ap_bandseg;
 static BPByte bp_ap_timer_ok, bp_ap_unsaved, bp_ap_need, bp_ap_after, bp_ap_askset;
 static BPByte bp_ap_asking, bp_ap_closing, bp_ap_sndok, bp_ap_gone, bp_ap_wait;
-static BPByte bp_ap_lastpos[BP_SEATS];
+static BPByte bp_ap_lastpos[BP_SEATS], bp_ap_pair;
 static const unsigned *bp_ap_cue;
 static BPState bp_ap_scratch;
 static char bp_ap_name[13];
@@ -267,6 +267,7 @@ static void ovl_bp_ap_over(int c)
 static void ovl_bp_ap_report(int e, const char *ok)
 {
     if (e == BP_OK) ovl_bp_ap_say(ok); else ovl_bp_ap_fail(e);
+    bp_ap_pair = (BPByte)bp_sess_pair();
 }
 
 static int ovl_bp_ap_cmd(int item, int menu, void *win)
@@ -279,8 +280,8 @@ static int ovl_bp_ap_cmd(int item, int menu, void *win)
             else ovl_bp_ap_newscreen();
         } else if (item == 1) ovl_bp_ap_guard(BP_ACT_LOAD);
         else if (item == 2) ovl_bp_ap_save();
-        else if (item == 3) ovl_bp_ap_report(bp_sess_save_pair(), "Pair saved");
-        else if (item == 4) ovl_bp_ap_report(bp_sess_resume_pair(), "Resuming pair");
+        else if (item == 3) ovl_bp_ap_report(bp_sess_save_pair(), "Pair save started");
+        else if (item == 4) ovl_bp_ap_report(bp_sess_resume_pair(), "Resume started");
         else if (item == 5) { if (ovl_bp_ap_close()) os88_wm_close(win); }
     } else if (bp_ap_mode == BP_M_GAME) {
         if (menu == 1) bp_gp_open(BP_GP_TRADE);
@@ -427,7 +428,13 @@ static void ovl_bp_ap_committed(const BPResult *r)
 
 static void ovl_bp_ap_link(void)
 {
+    int p;
     bp_face_dirty(BP_D_LINK);
+    p = bp_sess_pair();
+    if (p != bp_ap_pair) {                      /* paired save/resume progress */
+        bp_ap_pair = (BPByte)p;
+        if (p == BP_PAIR_DONE || p == BP_PAIR_FAIL) ovl_bp_ap_say(bp_link_msg());
+    }
     if (bp_ap_mode != BP_M_GAME) {
         if (bp_link_state() == BP_L_PLAY && bp_game.status == BP_ST_PLAY) ovl_bp_ap_started();
         else ovl_su_sync();
