@@ -106,34 +106,42 @@ Fix groups are file-disjoint. F-face is `bp_face.c`, F-panels is
 | id | sev | what was seen | adapter | group | status |
 |---|---|---|---|---|---|
 | Qqa1-1 = Qqa2-1 | blocker | a panel-only key or click repainted nothing: the bid committed 40 while the screen said 10, and a dismissed handoff stayed up | all | lead | hotfixed cdae5a1f5, re-checked PASS on VGA and CGA |
-| Qqa1-4 | major | every bar/panel switch repaints the whole window, 7.5-10.4 s on the XT, and each panel key repaints the whole centre (Tab 1.85 s, bid +/- 2.2 s) | XT | F-face + F-panels (`bp_face_dirty_rect`) | open |
-| Qqa1-3 (Q-pre-5) | major | a held Enter on End Turn confirmed the next player's handoff, rolled, acked a card and rolled again | all | F-panels | open |
-| Qqa1-2 = Qqa2-4 | major | focus carries between panels: DEBT opens on Bankrupt and its confirm on Yes, so two Enters bankrupt; Esc out of Rules then Enter opens Trade | all | F-panels | open |
-| Qqa2-2 | major | MANAGE/AFTER and Review bar status text, black on a grey dither, illegible | CGA, Herc | F-panels | open |
-| Qqa2-3 | major | trade composer cursor and active column shown by yellow alone | CGA, Herc | F-panels | open |
-| Qqa2-5 | major | Rules paging on MID steps 13 lines and shows 9; it runs into the Keys text and ends on a blank page | Herc | F-panels | open |
-| Qqa2-9 = Qqa1-5 | major | every roll-off roll is logged as "X goes first", with no dice | all | F-app | open |
-| Qqa2-6 | minor | seat 2's black token vanishes on the inverted active row | CGA, Herc | F-face | open |
-| Qqa2-7 | minor | the COMPACT link row (round, dice) is stale after a roll: BP_D_LINK is not in the commit mask | CGA | F-app | open |
-| Qqa2-8 | minor | the MID mortgage mark spills into the next cell and the hint bar | Herc | F-face | open |
-| Qqa2-12, -13, -15 | cosmetic | COMPACT letter chip abuts the name, the "M" is clipped; on MID the owner mark and a token look the same | CGA, Herc | F-face | open |
-| Q-pre-4, Qqa1-10 | cosmetic | "POWE"/"E-WAST" truncated in cells; "Round 11" shown after a 10-round match | all | F-face | open |
-| Qqa2-21 | minor | no picture for the corners and specials on MID cells, and no deck art in the MID card panel | Herc | F-art (TINY specials) + F-face (cells) + F-panels (card) | open |
-| Qqa2-14, Qqa1-10 | minor | "[K] Yes, bankru": the label is cut, also in the hint | CGA, VGA | F-panels | open |
-| Qqa2-22 | cosmetic | COMPACT lists show 3 rows with no "more" mark | CGA | F-panels | open |
-| Qqa2-23 | minor | the hint lists "Space Roll" while Roll is greyed | all | F-panels | open |
-| Qqa1-1 rest | minor | menu commands that open a panel (Help > Keys, Assets > Standings, Load) do not dirty the centre | all | F-app | open |
-| Qqa1-6 | minor | after a Load the handoff keeps the old name and the first Enter is ignored | VGA | F-panels | open |
-| Qqa2-10, -11, -18 | minor | the DEFAULT tab is barely marked on 1bpp; "Classic" reads "lassic"; "+" is not disabled at 4 players | CGA, Herc | F-app | open |
-| Qqa2-17 | minor | menu greying: Propose is enabled in BUY, after the end and in setup; Keys is greyed before a match | all | F-app | open |
-| Qqa1-8 | minor | a default name blocks typing until it is backspaced | all | F-app | open |
-| Qqa1-9 | minor | the log omits rent arithmetic, mortgaged no-rent and the third-double reason; New Game and Load keep old lines; the refusal text is generic | all | F-app | open |
-| Q-pre-2, Q-pre-3 = Qqa1-7, Qqa2-19 | minor | help text: "jail"; the Keys page is wrong or incomplete (C vs M, no F1/P/R/S/K/U/Home/PgUp, "Esc opens the menu", "arrows move between buttons") | all | F-art | open |
-| Qqa2-20 | minor | four pairs of computers near-identical: Apple II/IIe, XT/AT, Amiga/ST, 386/486 | all | F-art | open |
+| Qqa1-4 | major | every bar/panel switch repaints the whole window, 7.5-10.4 s on the XT, and each panel key repaints the whole centre (Tab 1.85 s, bid +/- 2.2 s) | XT | F-face + F-panels (`bp_face_dirty_rect`) | fixed, re-checked PASS (qa3) |
+| Qqa1-3 (Q-pre-5) | major | a held Enter on End Turn confirmed the next player's handoff, rolled, acked a card and rolled again | all | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa1-2 = Qqa2-4 | major | focus carries between panels: DEBT opens on Bankrupt and its confirm on Yes, so two Enters bankrupt; Esc out of Rules then Enter opens Trade | all | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa2-2 | major | MANAGE/AFTER and Review bar status text, black on a grey dither, illegible | CGA, Herc | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa2-3 | major | trade composer cursor and active column shown by yellow alone | CGA, Herc | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa2-5 | major | Rules paging on MID steps 13 lines and shows 9; it runs into the Keys text and ends on a blank page | Herc | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa2-9 = Qqa1-5 | major | every roll-off roll is logged as "X goes first", with no dice | all | F-app | fixed, re-checked PASS (qa3) |
+| Qqa2-6 | minor | seat 2's black token vanishes on the inverted active row | CGA, Herc | F-face | fixed, re-checked PASS (qa3) |
+| Qqa2-7 | minor | the COMPACT link row (round, dice) is stale after a roll: BP_D_LINK is not in the commit mask | CGA | F-app | fixed, re-checked PASS (qa3) |
+| Qqa2-8 | minor | the MID mortgage mark spills into the next cell and the hint bar | Herc | F-face | fixed, re-checked PASS (qa3) |
+| Qqa2-12, -13, -15 | cosmetic | COMPACT letter chip abuts the name, the "M" is clipped; on MID the owner mark and a token look the same | CGA, Herc | F-face | fixed, re-checked PASS (qa3) |
+| Q-pre-4, Qqa1-10 | cosmetic | "POWE"/"E-WAST" truncated in cells; "Round 11" shown after a 10-round match | all | F-face | fixed; truncation re-checked PASS (qa3), "Round 11" not re-checked |
+| Qqa2-21 | minor | no picture for the corners and specials on MID cells, and no deck art in the MID card panel | Herc | F-art (TINY specials) + F-face (cells) + F-panels (card) | fixed, re-checked PASS (qa3) |
+| Qqa2-14, Qqa1-10 | minor | "[K] Yes, bankru": the label is cut, also in the hint | CGA, VGA | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa2-22 | cosmetic | COMPACT lists show 3 rows with no "more" mark | CGA | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa2-23 | minor | the hint lists "Space Roll" while Roll is greyed | all | F-panels | fixed, re-checked PASS (qa3) |
+| Qqa1-1 rest | minor | menu commands that open a panel (Help > Keys, Assets > Standings, Load) do not dirty the centre | all | F-app | fixed, re-checked PASS (qa3) |
+| Qqa1-6 | minor | after a Load the handoff keeps the old name and the first Enter is ignored | VGA | F-panels | fixed (host/inspection), not re-checked on the glass |
+| Qqa2-10, -11, -18 | minor | the DEFAULT tab is barely marked on 1bpp; "Classic" reads "lassic"; "+" is not disabled at 4 players | CGA, Herc | F-app | fixed, re-checked PASS (qa3) |
+| Qqa2-17 | minor | menu greying: Propose is enabled in BUY, after the end and in setup; Keys is greyed before a match | all | F-app | fixed, re-checked PASS (qa3) |
+| Qqa1-8 | minor | a default name blocks typing until it is backspaced | all | F-app | fixed, re-checked PASS (qa3) |
+| Qqa1-9 | minor | the log omits rent arithmetic, mortgaged no-rent and the third-double reason; New Game and Load keep old lines; the refusal text is generic | all | F-app | fixed (host/inspection), not re-checked on the glass |
+| Q-pre-2, Q-pre-3 = Qqa1-7, Qqa2-19 | minor | help text: "jail"; the Keys page is wrong or incomplete (C vs M, no F1/P/R/S/K/U/Home/PgUp, "Esc opens the menu", "arrows move between buttons") | all | F-art | fixed, re-checked PASS (qa3) |
+| Qqa2-20 | minor | four pairs of computers near-identical: Apple II/IIe, XT/AT, Amiga/ST, 386/486 | all | F-art | fixed, re-checked PASS (qa3) |
 | Qqa2-16 | cosmetic | "!" reads like "I" in the 8-px font (CRASHI) | all | - | not fixed: the WIN16 strike is shared source |
 | Q-pre-1 | ? | stale "rev"/"Sent - waiting" text in the cable game | cable | final pass (byteopolylink) | not checked: needs a pair |
+| Qqa3-1 | minor | trade composer: after a refusal the incremental repaint erased the balance line (and half the cash line on Herc) | all | F-panels | open |
+| Qqa3-2 | minor | double, auction, everyone passes: the bar returns focused on the greyed End Turn | Herc | F-panels | open |
+| Qqa3-3 | cosmetic | upper-case Y reads as T in the 8-px font (DUTT, FLOPPT) | all | - | not fixed: the WIN16 strike is shared source |
+| Qqa3-4 | cosmetic | the MAC's TINY mono twin does not read as a computer | Herc | F-art | open |
 
-Measured on the XT (MartyPC guest cycles): launch 15.9 s to a settled picture,
+After the fix round (qa3, VGA XT): End Turn 2.07 s (was 7.5), Collection open 1.48 s
+(was 9.4), Tab 0.60 s (was 1.85); a Rules page turn is still about 4 s. Not seen
+on the glass: nine of the sixteen cards, the refusal to trade an upgraded set from
+the accept side, a failed save keeping the previous one, and Fast Animation
+(the host harness covers the rules). Measured on the XT (MartyPC guest cycles): launch 15.9 s to a settled picture,
 188 KB held by a running instance, idle repaint none, idle tone none.
 
 Leads to check on the glass, carried from the lanes' reports:
