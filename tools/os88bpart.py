@@ -206,8 +206,10 @@ def selfcheck():
             bb.read_font(FONTS[name])
             continue
         if name in TEXTS:
-            if name == "BP_A_HELP" and len(pack_text(TEXTS[name]).split(b"\0")) < 20:
-                fail(f"selfcheck: {name} has under 20 lines")
+            if name == "BP_A_HELP":
+                lines = pack_text(TEXTS[name]).split(b"\0")
+                if b"#KEYS" not in lines or lines.index(b"#KEYS") < 16 or len(lines) < 40:
+                    fail("selfcheck: BP_A_HELP needs rules lines, a #KEYS line, then key lines")
             continue
         if name not in sprites:
             fail(f"selfcheck: {name} missing from sprites.txt")
@@ -248,6 +250,8 @@ def size_rules():
               "BP_A_LOCK": (16, 16)})
     for n in ("BOOT", "REPAIR", "SWAP", "CRASH", "FLOPPY", "SYSERR", "DUTY", "EWASTE"):
         r[f"BP_A_{n}"] = (32, 24)
+        r[f"BP_A_T_{n}"] = (16, 12)
+    r["BP_A_CARD_FF_S"] = r["BP_A_CARD_SE_S"] = (24, 32)
     return r
 
 
@@ -277,6 +281,8 @@ SHEETS = [
         [("BP_A_BOOT", 32, 24)], [("BP_A_REPAIR", 32, 24)], [("BP_A_SWAP", 32, 24)],
         [("BP_A_CRASH", 32, 24)], [("BP_A_FLOPPY", 32, 24)], [("BP_A_SYSERR", 32, 24)],
         [("BP_A_DUTY", 32, 24)], [("BP_A_EWASTE", 32, 24)], [("BP_A_CABLE", 32, 12)]]),
+    # master4 replaces four near-twins of master1 (Qqa2-20): Apple IIe, PC AT, Atari ST, 486
+    ("master4.png", [prop_cut("APPLE2E"), prop_cut("AT"), prop_cut("ST"), prop_cut("486")]),
     ("master3.png", [[("BP_A_MASCOT", 64, 64)], [("BP_A_CARD_FF", 48, 64)],
                      [("BP_A_CARD_SE", 48, 64)]]),
 ]
