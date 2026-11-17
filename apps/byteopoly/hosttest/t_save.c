@@ -96,7 +96,7 @@ static void sc_repair(BPState *s)
 static void sc_buy(BPState *s) { base(s); s->phase = BP_PH_BUY; s->pos[1] = 1; }
 static void sc_auction(BPState *s)
 {
-    base(s); s->phase = BP_PH_AUCTION; s->auc_space = 0; s->auc_open = 5; s->auc_passed = 2;
+    base(s); s->phase = BP_PH_AUCTION; s->auc_space = 1; s->auc_open = 7; s->auc_passed = 2;
     s->auc_turn = 2; s->auc_high = 0; u32(&s->auc_bid, 130, 0);
 }
 static void sc_card(BPState *s)
@@ -122,7 +122,7 @@ static void sc_after(BPState *s) { base(s); s->phase = BP_PH_AFTER; s->d1 = 4; s
 static void sc_over(BPState *s)
 {
     base(s); s->status = BP_ST_OVER; s->phase = BP_PH_OVER; s->rules = BP_RULES_QUICK;
-    s->rounds_limit = 10; s->round = 10; s->winners = 5; s->alive[1] = 0;
+    s->rounds_limit = 10; s->round = 10; s->winners = 5; s->alive[1] = 0; s->decider = BP_NOBODY;
     u32(&s->score[0], 3210, 0); u32(&s->score[2], 3210, 0); u32(&s->cash[1], 0, 0);
 }
 typedef void (*scfn)(BPState *);
@@ -190,11 +190,12 @@ static int mut(int rule, int v, BPState *s)
         case 3: sc_buy(s); s->pos[1] = 0; break; default: return 0; } break;
     case 11: sc_auction(s);
         switch (v) { case 0: s->auc_space = 18; break; case 1: s->owner[0] = 1; break;
-        case 2: s->auc_open = 7; break; case 3: s->auc_open = 4; break;
+        case 2: s->auc_open = 3; break; case 3: s->auc_open = 4; break;
         case 4: s->auc_open = 0; s->auc_passed = 7; break; case 5: s->auc_turn = 1; break;
         case 6: s->auc_high = BP_NOBODY; break; case 7: s->auc_bid.lo = 135; break;
         case 8: s->auc_bid.lo = 0; break; case 9: s->auc_bid.lo = 1600; break;
         case 10: s->auc_high = 1; break; case 11: s->auc_bid.hi = 1; break;
+        case 12: s->auc_passed = 8; break; case 13: s->auc_turn = 0; break;
         default: return 0; } break;
     case 12: sc_card(s);
         switch (v) { case 0: s->card = 6; s->disks[0] = 1; s->deck_n[0] = 7;      /* the shown card is held */
