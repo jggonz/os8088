@@ -342,6 +342,25 @@ static int fc_pick(int prop, int aw, int ah)
     if (z && (int)(z & 255) <= aw && (int)(z >> 8) <= ah) { fc_pw = z & 255; fc_ph = z >> 8; return id; }
     return -1;
 }
+/* a corner or special space's picture: SMALL, else TINY (131.10), else -1 */
+static int ovl_fc_spick(const BPSpace *sp, int s, int aw, int ah)
+{
+    int id, k, t;
+    unsigned z;
+    id = fc_specart(sp, s);
+    if (id < 0) return -1;
+    for (k = 0; k < 2; k++) {
+        t = fc_mono(id);
+#ifdef BP_A_TSPECIAL
+        if (k) t = bp_mono ? BP_A_MTSPECIAL(id) : BP_A_TSPECIAL(id);
+#else
+        if (k) break;
+#endif
+        z = bx_size(t);
+        if (z && (int)(z & 255) <= aw && (int)(z >> 8) <= ah) { fc_pw = z & 255; fc_ph = z >> 8; return t; }
+    }
+    return -1;
+}
 static int fc_seatat(int s, int k)      /* k-th live seat standing on space s, or -1 */
 {
     int i;
@@ -419,11 +438,7 @@ static void fc_cell(int s)
         fc_ctext(x + 2, x2 - 2, sy, ovl_fc_cfits(sp->shortname, nw), ink, fc_fs);
         sy += fc_sh + (ch >= 44);
         ah = y2 - sy - (ch >= 44 ? 4 : 1);
-        id = prop != BP_NOBODY ? fc_pick(prop, nw, ah) : fc_mono(fc_specart(sp, s));
-        if (prop == BP_NOBODY && id >= 0) {
-            fc_pw = bx_size(id) & 255; fc_ph = bx_size(id) >> 8;
-            if (fc_pw > nw || fc_ph > ah) id = -1;
-        }
+        id = prop != BP_NOBODY ? fc_pick(prop, nw, ah) : ovl_fc_spick(sp, s, nw, ah);
         if (mort) bx_dither(x + 2, sy, x2 - 2, y2 - 2, 15, 7, 2);
         if (id >= 0) bx_spr(x + (cw - fc_pw) / 2, sy + (ah - fc_ph) / 2, id);
         else if (prop == BP_NOBODY) fc_ctext(x + 2, x2 - 2, sy + 2, fc_cellsub(sp), 0, fc_fs);
