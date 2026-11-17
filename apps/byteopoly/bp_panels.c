@@ -9,7 +9,7 @@
  * only the data is resident. */
 
 int bx_artstr(int id, int n, char *buf);
-#define BP_PANELS_DEMO 2   /* looking only: hand-made states, F5 steps; never shipped */
+/* #define BP_PANELS_DEMO 1 */   /* looking only: hand-made states, F5 steps; never shipped */
 
 #define GP_MAXB 6
 /* panel kinds */
