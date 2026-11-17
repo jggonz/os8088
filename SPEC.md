@@ -254825,7 +254825,8 @@ match is not savable. Rules, in the order checked:
    `BP_NOBODY`), both alive in PLAY;
    `round_left` inside the seat mask and, in PLAY, inside the alive mask.
 4. Roster: each used seat's name is 1..8 printable characters (20h-7Eh) then
-   zero padding; tokens below 4 and distinct; `machine[]` 0 or 1; every
+   a NUL (bytes after it are not state: the encoder writes zeros, and a
+   decoded payload with a non-zero byte there is refused as rule 4); tokens below 4 and distinct; `machine[]` 0 or 1; every
    field of an unused seat (name, token, machine, position, cash, detention,
    tries, disks, score) is 0.
 5. Seat state: `pos` < 28; `detained` 0/1 and a detained seat is on space 7;
