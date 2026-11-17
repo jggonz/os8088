@@ -5,9 +5,6 @@
 #include "bphost.h"
 #include "byteoply.c"
 #include "art.h"
-#define OS88_KEYMAP_HELD(map, s) ((map)[(s) >> 3] & (1 << ((s) & 7)))
-static unsigned char bp_t_keys[16];
-static int os88_key_map(unsigned char *m) { memcpy(m, bp_t_keys, 16); return 0; }
 int bx_artstr(int id, int n, char *buf) { (void)id; (void)n; buf[0] = 0; return 0; }
 /* the fake face: geometry plus a transcript of every text drawn */
 BPRect bp_r_board, bp_r_center, bp_r_side, bp_r_hint;
@@ -61,19 +58,16 @@ int main(void)
     memset(&bp_game, 0, sizeof(bp_game));
     BP_CHECK(!bp_gp_covers(), "no match, no panel");
     BP_CHECK(bp_gp_key('b', 0) == 0, "no match: keys fall through");
-    /* Enter is held while a two-seat hot-seat match starts: it starts under a handoff */
-    bp_t_keys[0x1C >> 3] |= 1 << (0x1C & 7);
     t_new(2);
     t_paint();
     BP_CHECK(bp_gp_covers() && t_has("Pass the keyboard"), "handoff covers the centre");
     BP_CHECK(bp_gp_key(' ', 0x39) == 1 && bp_game.phase == BP_PH_MANAGE, "a key under the handoff changes nothing");
     t_tick(10);
-    t_key(13, 0x1C);
+    t_key(13, 0x1C);                            /* too soon: a held key's first repeat */
     t_paint();
-    BP_CHECK(t_has("Pass the keyboard"), "a held Enter does not confirm");
-    memset(bp_t_keys, 0, 16);
-    t_tick(1);                                  /* the timer poll sees the release */
-    t_key(13, 0x1C);
+    BP_CHECK(t_has("Pass the keyboard"), "an early Enter does not confirm");
+    t_tick(12);
+    t_key(13, 0x1C);                            /* quiet for 12 ticks, 22 in: fresh */
     t_paint();
     BP_CHECK(!t_has("Pass the keyboard"), "a fresh Enter confirms");
     BP_CHECK(!bp_gp_covers() && t_has("Roll"), "the idle bar offers Roll");

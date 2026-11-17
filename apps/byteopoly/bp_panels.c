@@ -64,7 +64,7 @@ static BPU32 gp_bid, gp_u1, gp_u2;
 static BPByte gp_typed;
 static BPByte gp_mc;            /* manage cursor */
 /* handoff */
-static BPByte gp_hand, gp_hmap[16], gp_hcur[16], gp_hmapok;
+static BPByte gp_hand;
 static unsigned gp_hlast, gp_hsince;
 /* trade composer */
 static BPByte gp_tto, gp_tpay, gp_tcol, gp_tcur[2], gp_ttop[2], gp_in[2], gp_it[2][BP_PROPS + 2];
@@ -413,14 +413,6 @@ static void ovl_gp_spec(void)
 }
 
 /* ---- the handoff and the per-state bookkeeping ---------------------------- */
-static void ovl_gp_hpoll(void)
-{
-    static BPByte cur[16];
-    int i;
-    if (!gp_hmapok) return;
-    if (os88_key_map(cur) != 0) { gp_hmapok = 0; return; }
-    for (i = 0; i < 16; i++) gp_hmap[i] &= cur[i];
-}
 static void ovl_gp_track(void)
 {
     int d;
@@ -452,25 +444,19 @@ static void ovl_gp_track(void)
         if (ovl_gp_nlocal() >= 2) {
             gp_hand = (BPByte)(d + 1);
             gp_hlast = gp_hsince = os88_ticks();
-            gp_hmapok = 1;
-            os88_memset(gp_hmap, 0, sizeof(gp_hmap));
-            if (os88_key_map(gp_hmap) != 0) gp_hmapok = 0;
         }
     }
 }
-/* a fresh key press, not a held one: the key map says it was released since
- * the panel appeared; without the map (kern_small) a long quiet gap says so */
+/* a fresh key press, not a held one - by the clock alone, so the key map is
+ * never armed (D8): nothing counts in the first 20 ticks (longer than any
+ * typematic delay), and a press within 8 ticks of the previous key event is
+ * a repeat. Every event, accepted or not, restarts the quiet gap. */
 static int ovl_gp_hkey(int a, int sc)
 {
     unsigned now;
     int fresh;
     now = os88_ticks();
-    fresh = 1;
-    if (now - gp_hsince < 6) fresh = 0;
-    else if (gp_hmapok) {
-        ovl_gp_hpoll();
-        if (gp_hmapok && OS88_KEYMAP_HELD(gp_hmap, sc) && now - gp_hlast < 30) fresh = 0;
-    } else if (now - gp_hlast < 8) fresh = 0;
+    fresh = now - gp_hsince >= 20 && now - gp_hlast >= 8;
     gp_hlast = now;
     if (fresh && (a == 13 || a == ' ' || sc == GS_ENT)) gp_hand = 0;
     return 1;
@@ -1437,7 +1423,7 @@ static void ovl_gp_demoset(int n)
     else if (n == 7) ovl_gp_openmanage();
     else if (n == 8) ovl_gp_topen();
     else if (n == 9) { bp_game.status = BP_ST_OVER; bp_game.phase = BP_PH_OVER; bp_game.winners = 2; bp_game.rules = BP_RULES_QUICK; bp_game.rounds_limit = 20; bp_game.round = 20; }
-    else if (n == 10) { gp_hand = 2; gp_hlast = gp_hsince = os88_ticks(); gp_hmapok = 0; bp_game.decider = 1; bp_game.phase = BP_PH_AUCTION; bp_game.auc_space = 4; }
+    else if (n == 10) { gp_hand = 2; gp_hlast = gp_hsince = os88_ticks(); bp_game.decider = 1; bp_game.phase = BP_PH_AUCTION; bp_game.auc_space = 4; }
     else if (n == 11) { gp_over = BP_GP_CHAT; os88_strcpy(gp_cl[1], "Them: hi from the other PC", 30); os88_strcpy(gp_cbuf, "good luck", 25); gp_cn = 9; }
     else if (n == 12) gp_over = BP_GP_DIAG;
     else if (n == 13) gp_over = BP_GP_RULES;
@@ -1460,5 +1446,5 @@ void bp_gp_event(const BPEvent *e)
     if (e->kind == BP_V_PASS && e->other == 1) gp_auto |= (BPByte)(1 << e->seat);
     else if (e->kind == BP_V_AUCTION) gp_auto = 0;
 }
-void bp_gp_tick(void) { if (gp_hand && gp_hmapok) ovl_gp_hpoll(); }
+void bp_gp_tick(void) {}   /* kept for the app's call; the handoff is clock-only */
 int bp_gp_overchoice(void) { int c; c = gp_oc; gp_oc = 0; return c; }

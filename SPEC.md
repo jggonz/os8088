@@ -254229,16 +254229,13 @@ seats, the centre is covered by "Pass to NAME - next: <phase>" until a FRESH
 Enter or Space. This covers the active player changing and also an
 out-of-turn local bidder or trade recipient. A machine playing one seat
 never shows it; a cable machine playing two does, between those two only.
-**A held key never confirms the next person's decision**: when the panel
-appears the key map (`os88_key_map`, armed by the app once from `os88_main`)
-is copied, and a press is refused while the map shows that key still down
-since then (`bp_gp_tick`, per timer tick, clears the copy's bits as keys
-come up; a key seen held for 30 ticks is let through, longer than any
-typematic delay, so a missed release cannot deadlock the panel); nothing is
-accepted in the first 6 ticks. Where the map is refused (kern_small) a
-press within 8 ticks of the previous key event is refused instead, which
-stops a repeating key but not the first repeat after a long delay. Mouse
-clicks on "Ready" count as fresh.
+**A held key never confirms the next person's decision**, by the clock alone
+(the key-state map is never armed: arming it makes extended keys step twice
+on some machines): nothing counts in the first 20 ticks, longer than any
+typematic delay, and a press within 8 ticks of the previous key event is a
+repeat. Every key event, accepted or not, restarts that quiet gap. Mouse
+clicks on "Ready" count as fresh. `bp_gp_tick` is kept for the app's call and
+does nothing.
 
 #### 131.9.9 Trades
 
