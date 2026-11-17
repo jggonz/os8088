@@ -151,10 +151,12 @@ Limits: one 30-column board, 64 parts, 128 wires with two bends, 64 active nets,
 The physical board also bounds DIP count; workspace holds 32 gates. Time is a
 pair of unsigned words in 100 us units, independent of host and OS elapsed time.
 
-The final link has 219 C functions, maximum individual frame 52 bytes,
-**32,710 bytes resident image + 32,180 BSS = 64,890 of 65,024 bytes**
-(134 bytes spare). The eager embedded overlay is 49,637 bytes, compressed to
-22,846 bytes; the complete .O88 is 45,726 bytes. No kernel budget was increased.
+The final link has 261 C functions, maximum individual frame 48 bytes,
+**33,024 bytes resident image + 31,803 BSS = 64,827 of 65,024 bytes**
+(197 bytes spare). The eager embedded overlay is 64,061 bytes of its 65,024
+ceiling, compressed to 30,510; the workbench face's art (`BBART.BIN`, SPEC.md
+130.6.3) is 14,923 bytes, compressed to 7,280, and loaded only when it fits.
+The complete .O88 is 61,616 bytes. No kernel budget was increased.
 
 | Resident BSS component | Bytes |
 |---|---:|
@@ -167,11 +169,11 @@ The final link has 219 C functions, maximum individual frame 52 bytes,
 | Scope samples, timestamps and metadata | 2,068 |
 | Published and working result, 330 each | 660 |
 | Hole-to-net map | 420 |
-| Shared file/board/plot workspace | 3,120 |
-| UI text shadows | 768 |
+| File buffer, and the face's band when its claim is refused | 3,120 |
+| Face section keys and rects, help line, drawing-core state | 473 |
 | Numeric-library scratch | 76 |
-| Other topology/vectors/queues/UI/SDK state and alignment | 6,504 |
-| **Total BSS** | **32,180** |
+| Other topology/vectors/queues/UI/SDK state and alignment | 6,422 |
+| **Total BSS** | **31,803** |
 
 The remainder is measured against linked BSS, not another allocation. Runtime
 heap observations on the installed 360 KB disk give a 65,024-byte region and a

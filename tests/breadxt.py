@@ -96,7 +96,7 @@ class App:
     def state(self):
         spans = [(self.s['_bb_doc']+DOC_META,34), (self.s['_bb_result']+320,10),
                  (self.s['_bb_scope']+2048,20)]
-        names = ('bb_dirty','bb_valid','bb_running','bb_recompile','bu_op','bu_step_once','bu_flags','bu_mode','bu_initialized')
+        names = ('bb_dirty','bb_valid','bb_running','bb_recompile','bu_op','bu_step_once','bu_flags','bu_mode','bu_view','bu_initialized')
         raw = self.p.reads(spans+[(self.s['_'+n],2) for n in names])
         meta = struct.unpack('<17H',raw[0]);result=struct.unpack('<5H',raw[1]);scope=struct.unpack('<10H',raw[2])
         q = dict(zip(names,(int.from_bytes(v,'little') for v in raw[3:])))
@@ -180,9 +180,12 @@ class App:
         return struct.unpack('<8H',self.p.read(self.s['_bb_doc']+16*index,16))
 
     def hole_xy(self,hole):
-        q=self.state();gx,gy,pitch=(self.word(n) for n in ('bu_gx','bu_gy','bu_pitch'))
+        # face.c's bu_hx/bu_hy (SPEC.md 130.6.4): the trench and the rail
+        # gaps are bu_rg (half a row) and one row, below rows 2, 7 and 12
+        q=self.state();gx,gy,pitch,py,rg=(self.word(n) for n in ('bu_gx','bu_gy','bu_pitch','bu_py','bu_rg'))
+        gap=lambda r:(rg if r>=2 else 0)+(py if r>=7 else 0)+(rg if r>=12 else 0)
         row,col=divmod(hole,30)
-        return gx+8+(col-q['panx'])*pitch,gy+(row-q['pany'])*pitch+((row>=7)-(q['pany']>=7))*pitch+5
+        return gx+(col-q['panx'])*pitch,gy+(row-q['pany'])*py+gap(row)-gap(q['pany'])
 
     def click(self,x,y):
         self.ui.mo.click(x,y,settle=0);M.ui_done(self.ui.m,'BreadXT click')
@@ -367,6 +370,13 @@ def minimum_window(app,kind):
 def adapter(ui,offsets,kind,negative=False):
     app=App(ui,offsets);led(app,negative)
     if kind=='256':assert int.from_bytes(ui.m.read(0x413,2),'little')==256,'wrong RAM machine'
+    # SPEC.md 130.6.3: the art is a lazy part and the band a claim of its
+    # own; the 256KB machine has room for neither and gets the plain face
+    # on the file buffer's band, never a refused launch.
+    plain,band=app.word('bu_plain'),app.word('bu_bandseg')
+    print(f"  face: {'plain' if plain else 'art'}, band {'in a claim' if band else 'in the file buffer'}",flush=True)
+    if kind=='256':assert plain==1 and band==0,(plain,band)
+    elif kind=='vga':assert plain==0 and band!=0,(plain,band)
     expected_compact=kind in ('cga','256')
     assert bool(app.word('bu_compact'))==expected_compact,(kind,app.word('bu_compact'))
     if expected_compact:
@@ -376,7 +386,8 @@ def adapter(ui,offsets,kind,negative=False):
         ui.menu_pick('View','Breadboard')
     shot(ui,kind,'led-board')
     ui.menu_pick('View','Oscilloscope');shot(ui,kind,'scope')
-    if expected_compact:app.wait(lambda q:q['bu_mode']==3,'compact scope callback',60)
+    # the compact face's scope is a VIEW of the board mode (SPEC.md 130.6.4)
+    if expected_compact:app.wait(lambda q:q['bu_mode']==0 and q['bu_view']==2,'compact scope view',60)
     ui.menu_pick('View','Breadboard')
     if app.state()['dirty']:app.save()
     minimum_window(app,kind);diagnostics(app,kind);app.close()

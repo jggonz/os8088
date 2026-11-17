@@ -88,7 +88,9 @@ def led_body(app):
     def pixel(x, y):
         offset = (y * width + x) * 3
         return tuple(rgb[offset:offset + 3])
-    interior = tuple(pixel(x, y) for y in range(cy - 2, cy + 3)
+    # The LED's body picture (SPEC.md 130.6.4) is centred three rows above
+    # the leads' midpoint; rows 4..8 of it are lit red under the highlight.
+    interior = tuple(pixel(x, y) for y in range(cy - 5, cy)
                      for x in range(cx - 2, cx + 3))
     body = tuple(pixel(x, y) for y in range(cy - 9, cy + 6)
                  for x in range(cx - 10, cx + 11))

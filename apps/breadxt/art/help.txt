@@ -1,0 +1,43 @@
+# Breadboard XT's built-in help (SPEC.md 130.6.3): one line a row, eight rows
+# a page on the narrowest face. tools/os88bbart.py packs it into BBART.BIN as
+# BA_HELP; the plain face (no art part) points at HELP.TXT instead.
+1/5  Build a circuit
+Columns1-30; rowsa-j. a-e share
+a strip; f-j share another. Trench
+isolates them. Rails split15|16.
+Parts: choose, click each pin, Enter.
+Wire: click ends, Enter. B adds bend.
+Esc cancels. Crossing is not a joint.
+Enter next page; Esc breadboard.
+2/5  Edit and measure
+Select part/pin or wire. E value;
+T parameter; R rotate; M move part.
+Del removes; Ctrl-Z/Y undo/redo.
+Moving/removing parts leaves wires.
+P probe; Tab chooses A/B channel.
+Click pin: voltage; body: I1->2 uA.
+Enter next page; Esc breadboard.
+3/5  Simulation
+Space Run/Pause; . one timestep.
+Reset restores C initial voltage.
+Edits pause and stale old results.
+Pause holds state; Run resumes it.
+Simulation time is calculation time.
+An XT may calculate below real time.
+Enter next page; Esc breadboard.
+4/5  Models and units
+Educational models, not SPICE.
+R100..655350ohm; 1..60000nF C.
+5V default; allowed4.5..6V supply.
+LED2V+10ohm; no hidden limiter.
+Max30mA/branch. No heat/avalanche.
+HC inputs0.3/0.7VCC; X/Z explicit.
+Enter next page; Esc breadboard.
+5/5  Timer, scope and limits
+555:1GND2TRIG3OUT4RESET5CONT
+6THRES7DISCH8VCC. Reset wins.
+CONT only open/ground bypass cap.
+64parts128wires64nets24unknowns.
+1ms default; C backward Euler.
+ScopeA/B0..6V; +/- time; G trigger.
+Scope holds values between samples.

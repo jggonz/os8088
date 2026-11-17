@@ -25,7 +25,8 @@ static void *ug_win=&ug_token;
 static void ug_check(int yes,const char *what,int line){ug_checks++;if(!yes){ug_failures++;fprintf(stderr,"FAIL ui:%d %s\n",line,what);}}
 #define UC(e) ug_check(!!(e),#e,__LINE__)
 static void ug_pixel(int x,int y,int colour){if(x>=0&&x<ug_width&&y>=0&&y<ug_height&&x>=ug_x1&&x<=ug_x2&&y>=ug_y1&&y<=ug_y2)ug_glass[y*720+x]=(unsigned char)(ug_disabled&&((x+y)&1)?15:colour);}
-static void ug_diff(const char *label){unsigned x,y,n=0,minx=720,miny=480,maxx=0,maxy=0;for(y=0;y<480;y++)for(x=0;x<720;x++)if(ug_before[y*720+x]!=ug_glass[y*720+x]){n++;if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y;}fprintf(stderr,"%s: %u differing pixels, bounds %u,%u..%u,%u\n",label,n,minx,miny,maxx,maxy);}
+static void ug_dump(unsigned char *g,unsigned x1,unsigned y1,unsigned x2,unsigned y2){unsigned x,y;if(!getenv("UG_DUMP"))return;for(y=y1;y<=y2;y++){for(x=x1;x<=x2&&x<x1+100;x++)fputc("0123456789abcdef"[g[y*720+x]&15],stderr);fputc('\n',stderr);}fputc('\n',stderr);}
+static void ug_diff(const char *label){unsigned x,y,n=0,minx=720,miny=480,maxx=0,maxy=0;for(y=0;y<480;y++)for(x=0;x<720;x++)if(ug_before[y*720+x]!=ug_glass[y*720+x]){n++;if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y;}fprintf(stderr,"%s: %u differing pixels, bounds %u,%u..%u,%u\n",label,n,minx,miny,maxx,maxy);if(n){ug_dump(ug_before,minx>4?minx-4:0,miny>2?miny-2:0,maxx+4,maxy+2);ug_dump(ug_glass,minx>4?minx-4:0,miny>2?miny-2:0,maxx+4,maxy+2);}}
 static void ug_clip_full(void){ug_x1=0;ug_y1=OS88_MBAR_H+OS88_TITLE_H;ug_x2=ug_w-1;ug_y2=OS88_MBAR_H+ug_h-1;}
 static void ug_event_begin(void){ug_lock=1;ug_clip_full();}
 static void ug_event_end(void){ug_lock=0;}
@@ -70,7 +71,12 @@ void os88_file_here(struct os88_place *place){*place=ug_place;}
 int os88_file_goto_q_mark(unsigned clus,int vol){ug_place.clus=clus;ug_place.vol=vol;return 0;}
 int os88_arg_file(char *name,struct os88_place *place){(void)name;(void)place;return -1;}
 int os88_file_dlg(int mode,void *win,const char *name){(void)mode;(void)win;(void)name;return 0;}
-unsigned os88_file_read(const char *name,void *buf,unsigned cap){unsigned n;UC(ug_lock==0);if(!strcmp(name,"CACHE.BBX")&&ug_filesize){n=ug_filesize<cap?ug_filesize:cap;memmove(buf,ug_filebits,n);return n;}return 0;}
+static unsigned ug_example_file(const char *name,void *buf,unsigned cap)
+{   /* the package folder's .BBX examples, from the host builders */
+    unsigned k;for(k=1;k<=8;k++)if(!strcmp(name,bb_example_name(k))&&bb_example(k))return bb_encode(&bb_stage,buf,cap);
+    return 0;
+}
+unsigned os88_file_read(const char *name,void *buf,unsigned cap){unsigned n;UC(ug_lock==0);if(!strcmp(name,"CACHE.BBX")&&ug_filesize){n=ug_filesize<cap?ug_filesize:cap;memmove(buf,ug_filebits,n);return n;}return ug_example_file(name,buf,cap);}
 int os88_file_write(const char *name,const void *buf,unsigned n){(void)name;(void)buf;(void)n;UC(ug_lock==0);return -1;}
 int os88_ferr(void){return OS88_FERR_OK;}
 int os88_toast(const char *message,int ticks){(void)ticks;snprintf(ug_toast,sizeof(ug_toast),"%s",message);return 0;}
@@ -82,12 +88,53 @@ UG_TRAMP(paint) UG_TRAMP(onkey) UG_TRAMP(onclick) UG_TRAMP(about)
 UG_TRAMP(onwake) UG_TRAMP(onclose) UG_TRAMP(onmouseup) UG_TRAMP(onresize)
 UG_TRAMP(ontimer) UG_TRAMP(onwheel)
 void bb_timefmt(char *out,unsigned lo,unsigned hi){uint32_t t=((uint32_t)hi<<16)|(lo&65535u);snprintf(out,20,"%u.%04u",t/10000,t%10000);}
-void bb_bytes(void *p,unsigned n,unsigned byte){memset(p,byte,n);}
 unsigned bb_muldiv(unsigned a,unsigned b,unsigned denominator){uint32_t n;if(!denominator)return 65535;n=(uint32_t)a*b/denominator;return n>65535?65535:n;}
 int bb_ask(const char *message,void *win,int buttons){(void)message;(void)win;(void)buttons;return 0;}
-static void ug_bit(void *raw,int stride,int x,int y,int black){unsigned char *p=raw;unsigned char mask=(unsigned char)(128>>(x&7));if(black)p[y*stride+x/8]&=(unsigned char)~mask;else p[y*stride+x/8]|=mask;}
-void bb_board_row(void *raw,int stride,int cols,int pitch,const BBWord *marks){int c,x,y,mode;memset(raw,255,stride*pitch);for(c=0;c<cols;c++){x=8+c*pitch;for(y=4;y<=6;y++){ug_bit(raw,stride,x-1,y,1);ug_bit(raw,stride,x,y,1);ug_bit(raw,stride,x+1,y,1);}mode=(marks[c/16]>>(c&15))&1?2:(marks[2+c/16]>>(c&15))&1;for(y=0;mode&&y<pitch;y++)if(mode==2||!(y&1)){ug_bit(raw,stride,x-4,y,1);ug_bit(raw,stride,x+4,y,1);}}}
-void bb_scope_line(void *raw,int stride,int x1,int y1,int x2,int y2,int dash){ug_scope_lines++;if(x1!=x2&&y1!=y2)ug_diagonals++;int dx=abs(x2-x1),sx=x1<x2?1:-1,dy=-abs(y2-y1),sy=y1<y2?1:-1,e=dx+dy,e2;for(;;){if(!dash||!((x1+y1)&2))ug_bit(raw,stride,x1,y1,0);if(x1==x2&&y1==y2)break;e2=2*e;if(e2>=dy){e+=dy;x1+=sx;}if(e2<=dx){e+=dx;y1+=sy;}}}
+
+
+/* ---- the face's drawing core, on the host (SPEC.md 130.6.2) -------------
+ * The same contract as draw.inc, one colour index a pixel: a band composed
+ * in memory and put on the glass by bx_out through the clipped ug_pixel.
+ * The art is the shipped build/BBART.BIN, read the way draw.inc reads it. */
+unsigned char bx_map[16]={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+static unsigned char hb_band[720*64],hb_art[32768];
+static int hb_x0,hb_y0,hb_w,hb_h,hb_bpp,hb_haveart;
+static unsigned ug_bxouts,ug_area;
+int os88_part_lazyok(int i){(void)i;return 1;}
+int os88_part_fetch(int i){FILE *f;size_t n;(void)i;f=fopen("build/BBART.BIN","rb");if(!f)return -1;n=fread(hb_art,1,sizeof(hb_art),f);fclose(f);hb_haveart=n>4;return hb_haveart?0:-1;}
+unsigned os88_part_seg(int i){(void)i;return hb_haveart?1:0;}
+static const unsigned char *hb_rec(int id){unsigned off;if(!hb_haveart||id<0)return 0;off=hb_art[4+2*id]|hb_art[5+2*id]<<8;return off?hb_art+off:0;}
+static int ug_plot_x1=1,ug_plot_y1=1,ug_plot_x2=0,ug_plot_y2=0;
+static void ug_seg(int x1,int y1,int x2,int y2){if(x1>=ug_plot_x1&&x2<=ug_plot_x2&&y1>=ug_plot_y1&&y2<=ug_plot_y2){ug_scope_lines++;if(x1!=x2&&y1!=y2&&x2-x1>2&&y2-y1>2)ug_diagonals++;}}
+unsigned bx_bseg;
+unsigned os88_mem_claim_p(unsigned paras){(void)paras;return 0;}   /* the fallback band */
+int os88_mem_movable(unsigned seg,int on){(void)seg;(void)on;return 0;}
+void bx_setup(unsigned seg,void *band,unsigned cap,unsigned artseg,int bpp){(void)seg;(void)band;(void)cap;hb_bpp=bpp;if(!artseg)hb_haveart=0;}
+int bx_artstr(int id,int n,char *buf){const unsigned char *r=hb_rec(id);buf[0]=0;if(!r)return 0;while(n-->0){if(!*r)return 0;r+=strlen((const char *)r)+1;}if(!*r)return 0;snprintf(buf,48,"%s",(const char *)r);return 1;}
+int bx_rows(int x,int y,int w,int h){(void)x;(void)y;(void)h;return w>0?(int)(sizeof(hb_band)/(unsigned)w):0;}
+static unsigned ug_outside;static int ug_out_sec=-1,ug_out_x,ug_out_y;
+static void hb_set(int x,int y,int c){if(bu_host_sec>=0&&x>=hb_x0&&x<hb_x0+hb_w&&y>=hb_y0&&y<hb_y0+hb_h&&(x<bu_r1[bu_host_sec]||x>bu_r3[bu_host_sec]||y<bu_r2[bu_host_sec]||y>bu_r4[bu_host_sec])){if(!ug_outside++){ug_out_sec=bu_host_sec;ug_out_x=x;ug_out_y=y;}if(getenv("UG_OUT"))fprintf(stderr,"out s%d %d,%d c%d\n",bu_host_sec,x,y,c);}x-=hb_x0;y-=hb_y0;if(x>=0&&x<hb_w&&y>=0&&y<hb_h)hb_band[y*hb_w+x]=(unsigned char)(c&15);}
+void bx_new(int x,int y,int w,int h,int c){hb_x0=x;hb_y0=y;hb_w=w;hb_h=h;UC(x%8==0&&w%8==0&&w*h<=(int)sizeof(hb_band));memset(hb_band,c&15,(size_t)(w*h));}
+void bx_fill(int x1,int y1,int x2,int y2,int c){int x,y;if(c==OS88_LGREEN||c==OS88_YELLOW)ug_seg(x1,y1,x2,y2);for(y=y1;y<=y2;y++)for(x=x1;x<=x2;x++)hb_set(x,y,c);}
+void bx_dither(int x1,int y1,int x2,int y2,int c1,int c2,int pat){int x,y,c;for(y=y1;y<=y2;y++)for(x=x1;x<=x2;x++){c=pat==0?((x+y)&1?c2:c1):pat==1?(y&1?c2:c1):((x&1)&&(y&1)?c2:c1);hb_set(x,y,c);}}
+void bx_dots(int x1,int y1,int x2,int y2,int step,int c){if(x1!=x2&&y1!=y2){ug_seg(x1,y1,x2,y2);}if(step<1)step=1;if(y1==y2){for(;x1<=x2;x1+=step)hb_set(x1,y1,c);}else for(;y1<=y2;y1+=step)hb_set(x1,y1,c);}
+unsigned bx_size(int id){const unsigned char *r=hb_rec(id);return r?(unsigned)(r[0]|r[1]<<8):0;}
+int bx_spr(int x,int y,int id){const unsigned char *r=hb_rec(id);int w,h,i,j,c;if(!r)return 0;w=r[0];h=r[1];for(j=0;j<h;j++)for(i=0;i<w;i++){c=r[2+j*((w+1)/2)+i/2];c=i&1?c&15:c>>4;if(c!=13)hb_set(x+i,y+j,bx_map[c]);}return w;}
+static int hb_glyph(int font,int ch,const unsigned char **bits){const unsigned char *r=hb_rec(font);unsigned off;int k;
+    if(!r){*bits=0;return ch>=32&&ch<127?8:0;}
+    k=ch-r[2];if(k<0||k>=r[3])return 0;off=r[4+r[3]+2*k]|r[5+r[3]+2*k]<<8;*bits=off?r+off:0;return r[4+k];}
+int bx_fonth(int font){const unsigned char *r=hb_rec(font);return r?r[0]:8;}
+int bx_twidth(const char *s,int font){const unsigned char *b;int w=0;while(*s)w+=hb_glyph(font,(unsigned char)*s++,&b);return w;}
+int bx_text(int x,int y,const char *s,int c,int font){const unsigned char *b;int x0=x,w,i,j,bit,h=bx_fonth(font);
+    if(ug_textn+strlen(s)+2<sizeof(ug_textlog)){strcpy(ug_textlog+ug_textn,s);ug_textn+=strlen(s);ug_textlog[ug_textn++]='|';ug_textlog[ug_textn]=0;}
+    for(;*s;s++){w=hb_glyph(font,(unsigned char)*s,&b);ug_glyphs++;
+        if(!b&&w&&*s!=' '){for(j=1;j<h-1;j++)for(i=1;i<w-2;i++)if((i+j+*s)%3==0)hb_set(x+i,y+j,c);}
+        else if(b){for(j=0;j<b[1];j++)for(i=0;i<w&&i<16;i++)if(((b[2+2*j]<<8)|b[3+2*j])&(0x8000>>i))hb_set(x+i,y+b[0]+j,c);}
+        x+=w;}
+    return x-x0;}
+int bx_out(void){int x,y,c;ug_calls++;ug_bxouts++;ug_area+=(unsigned)(hb_w*hb_h);UC(ug_lock==1);
+    for(y=0;y<hb_h;y++)for(x=0;x<hb_w;x++){c=hb_band[y*hb_w+x];if(hb_bpp<4)c=c==15||c==14||c>=10?15:c==7?15:c==8?(x+y)&1?15:0:0;ug_pixel(hb_x0+x,hb_y0+y,c);}
+    return 0;}
 
 static void ug_paint(int partial){ug_event_begin();ug_damage_on=partial;if(partial){ug_x1=ug_damage.x1;ug_y1=ug_damage.y1;ug_x2=ug_damage.x2;ug_y2=ug_damage.y2;}os88_paint(ug_win);ug_damage_on=0;ug_event_end();}
 static void ug_init(int height){ug_height=height;ug_width=640;memset(ug_glass,15,sizeof(ug_glass));ug_ticks=0;ug_lock=0;ug_calls=ug_glyphs=0;UC(os88_main()==ug_win);ug_paint(0);}
@@ -105,9 +152,14 @@ static void ug_queue_checks(void){unsigned count,value;BBWord flags;char name[13
   if(ug_negative){ug_event_begin();ovl_bu_key('r',0,ug_win);ug_event_end();}else ug_key('r',0);
   ug_wake();UC(bb_doc.part[2].flags==(flags^BB_ROT)&&bb_doc.part[3].flags==other);}
  ug_select_resistor();ug_key('r',0);memcpy(name,bu_choice,13);ug_event_begin();os88_onfile(OS88_FDLG_OPEN,"OTHER.BBX",112,0,ug_win);ug_event_end();UC(!memcmp(name,bu_choice,13));ug_key(27,1);ug_wake();}
-static void ug_modal_checks(void){unsigned cells;ug_init(200);ug_example(2);ug_value_open();if(ug_negative)bu_cache_ok=0;ug_calls=ug_glyphs=0;ug_key('1',0);cells=ug_glyphs;UC(cells<=10);printf("UI appended value char: %u glyph cells, %u drawing calls\n",cells,ug_calls);ug_key(27,1);ug_cmd(2,4);UC(bu_mode==BU_INSPECT);ug_calls=ug_glyphs=0;bu_flags|=BU_INFO_DIRTY;ug_wake();UC(ug_glyphs==0);printf("UI unchanged inspector: %u glyph cells, %u drawing calls\n",ug_glyphs,ug_calls);
+static void ug_modal_checks(void){unsigned cells,area,box;ug_init(200);ug_example(2);ug_value_open();
+ /* A keystroke in the value box repaints the inspector it lives in, no
+  * more: the negative arm makes it repaint the whole face. */
+ box=(unsigned)((bu_r3[S_INSP]-bu_r1[S_INSP]+16)*(bu_r4[S_INSP]-bu_r2[S_INSP]+1));
+ ug_calls=ug_glyphs=ug_area=0;if(ug_negative)bu_flags|=BU_ALL;ug_key('1',0);cells=ug_glyphs;area=ug_area;UC(area<=box);
+ printf("UI appended value char: %u glyph cells, %u band pixels (inspector %u), %u drawing calls\n",cells,area,box,ug_calls);ug_key(27,1);ug_cmd(2,4);UC(bu_mode==BU_INSPECT);ug_calls=ug_glyphs=0;bu_flags|=BU_INFO_DIRTY;ug_wake();UC(ug_glyphs==0);printf("UI unchanged inspector: %u glyph cells, %u drawing calls\n",ug_glyphs,ug_calls);
  ug_event_begin();os88_about(ug_win);ug_event_end();memcpy(ug_before,ug_glass,sizeof(ug_before));ug_event_begin();os88_ontimer(ug_win);ug_event_end();ug_wake();UC(!memcmp(ug_before,ug_glass,sizeof(ug_before)));ug_damage.x1=64;ug_damage.y1=72;ug_damage.x2=95;ug_damage.y2=79;ug_event_begin();os88_set_color(0);os88_gfx_fill(64,72,95,79);ug_event_end();ug_paint(1);ug_wake();UC(!memcmp(ug_before,ug_glass,sizeof(ug_before)));ug_key(27,1);UC(bu_mode!=BU_ABOUT);}
-static void ug_damage_checks(void){unsigned net,last;int compare;ug_init(480);ug_example(2);net=bb_hnet[bb_pin(&bb_doc.part[3],1)];bb_result.mv[net]=2345;last=(bb_scope.head+255)&255;bb_scope.mv[0][last]=2345;bu_flags|=BU_INFO_DIRTY|BU_SCOPE_DIRTY;ug_damage.x1=bu_right+2;ug_damage.y1=bu_y+26;ug_damage.x2=bu_right+31;ug_damage.y2=bu_y+31;ug_paint(1);ug_wake();memcpy(ug_before,ug_glass,sizeof(ug_before));ug_paint(0);compare=memcmp(ug_before,ug_glass,sizeof(ug_before));UC(compare==0);if(compare)fprintf(stderr,"partial damage/delta differs from full repaint\n");}
+static void ug_damage_checks(void){unsigned net,last;int compare;ug_init(480);ug_example(2);net=bb_hnet[bb_pin(&bb_doc.part[3],1)];bb_result.mv[net]=2345;last=(bb_scope.head+255)&255;bb_scope.mv[0][last]=2345;bu_flags|=BU_INFO_DIRTY|BU_SCOPE_DIRTY;ug_damage.x1=bu_r1[S_PREAD]+2;ug_damage.y1=bu_r2[S_PREAD]+2;ug_damage.x2=bu_r1[S_PREAD]+31;ug_damage.y2=bu_r2[S_PREAD]+7;ug_paint(1);ug_wake();memcpy(ug_before,ug_glass,sizeof(ug_before));ug_paint(0);compare=memcmp(ug_before,ug_glass,sizeof(ug_before));UC(compare==0);if(compare)fprintf(stderr,"partial damage/delta differs from full repaint\n");}
 static void ug_wide_checks(int dismiss)
 {
     char edit[24];unsigned output,last;int compare;
@@ -132,7 +184,7 @@ static void ug_locate_checks(int kind)
 {
     unsigned beforex,beforey,target;int compare;
     ug_init(kind==1?200:480);ug_example(2);target=bb_doc.part[2].id;
-    if(kind==1){bb_doc.pany=6;bb_view_changed();bu_flags|=BU_ALL;ug_wake();ug_cmd(3,4);UC(bu_mode==BU_SCOPE);}
+    if(kind==1){bb_doc.pany=6;bb_view_changed();bu_flags|=BU_ALL;ug_wake();ug_cmd(3,4);UC(bu_mode==BU_BOARD&&bu_view==BU_VSCOPE);}
     else {if(kind==2){bb_doc.panx=29;bb_doc.pany=13;bb_view_changed();bu_flags|=BU_ALL;ug_wake();}ug_cmd(6,4);UC(bu_mode==BU_HELP);}
     bb_result.diag=BB_ENUMERIC;bb_result.part=kind==3?0:target;bb_result.net=BB_NNET;bb_valid=0;
     beforex=bb_doc.panx;beforey=bb_doc.pany;ug_textn=0;ug_textlog[0]=0;ug_toast[0]=0;
@@ -150,11 +202,11 @@ static void ug_stale_checks(void)
     ug_init(480);ug_load_example(6);ug_step();UC(bb_result.diag==BB_ELEDLIMIT);
     target=bb_doc.part[2].id;bu_selected_kind=BB_PART;bu_selected=target;bu_selected_pin=1;
     ug_key('r',0);ug_wake();UC(bb_recompile&&!bb_valid&&bb_result.diag==BB_ELEDLIMIT);
-    ug_textn=0;ug_textlog[0]=0;bu_flags|=BU_INFO_DIRTY;ug_wake();UC(strstr(ug_textlog,"Click error:")==0);
+    ug_textn=0;ug_textlog[0]=0;bu_flags|=BU_INFO_DIRTY;ug_wake();UC(strstr(ug_textlog,"Error: ")==0);
     /* A public standalone recompile must not revive a diagnosis from the old
      * source revision even though numeric net IDs have become reusable. */
     UC(bb_compile());if(ug_negative)bu_diag_stale=0;ug_textn=0;ug_textlog[0]=0;bu_cache_ok=0;bu_flags|=BU_INFO_DIRTY;ug_wake();
-    UC(strstr(ug_textlog,"Click error:")==0);
+    UC(strstr(ug_textlog,"Error: ")==0);
     ug_cmd(6,4);bu_selected=0;bu_selected_kind=0;px=bb_doc.panx;py=bb_doc.pany;
     ug_event_begin();os88_onclick(bu_x+8,bu_y+bu_h-5,ug_win);ug_event_end();
     UC(bu_mode==BU_HELP&&bu_selected==0&&bb_doc.panx==px&&bb_doc.pany==py);
@@ -167,31 +219,37 @@ static void ug_stale_checks(void)
 }
 static void ug_scope_hold_checks(void)
 {
+    /* The scope draws a held square wave as steps: every trace segment is a
+     * horizontal or a vertical run, never an interpolated edge. The host
+     * core counts the trace's rects inside the plot (SPEC.md 130.4). */
     unsigned i;ug_init(480);ug_example(8);bb_scope.head=3;bb_scope.count=3;
     for(i=0;i<3;i++){bb_scope.lo[i]=i*1000;bb_scope.hi[i]=0;}
     bb_scope.mv[0][0]=0;bb_scope.mv[0][1]=5000;bb_scope.mv[0][2]=0;
     bb_scope.mv[1][0]=1000;bb_scope.mv[1][1]=3000;bb_scope.mv[1][2]=2000;
     bb_running=1;ug_diagonals=ug_scope_lines=0;ug_textn=0;ug_textlog[0]=0;
-    ug_event_begin();bu_flags|=BU_SCOPE_DIRTY;bu_render(ug_win,0);ug_event_end();
-    /* A negative arm restores an interpolated edge through the same shipped
-     * drawing primitive; the axis/corner rule must reject it. */
-    if(ug_negative)bb_scope_line(bu_scopebits,48,10,10,20,20,0);
-    UC(ug_scope_lines>=24&&ug_diagonals==0);UC(strstr(ug_textlog,"RUN")!=0);
+    ug_plot_x1=bu_r1[S_SCOPE];ug_plot_y1=bu_r2[S_SCOPE];ug_plot_x2=bu_r3[S_SCOPE];ug_plot_y2=bu_r4[S_SCOPE];
+    ug_event_begin();bu_flags|=BU_SCOPE_DIRTY|BU_UIKEY;bu_render(ug_win,0);
+    /* A negative arm draws an interpolated edge through the shipped
+     * primitive; the axis rule must reject it. */
+    if(ug_negative){bx_new(bu_r1[S_SCOPE]&~7,bu_r2[S_SCOPE],64,32,-1);bx_dots(bu_r1[S_SCOPE]+40,bu_r2[S_SCOPE]+10,bu_r1[S_SCOPE]+50,bu_r2[S_SCOPE]+20,1,OS88_YELLOW);}
+    ug_event_end();ug_plot_x2=0;
+    UC(ug_scope_lines>=8&&ug_diagonals==0);UC(strstr(ug_textlog,"RUN")!=0);
     ug_textn=0;ug_textlog[0]=0;ug_cmd(1,3);
-    UC(!bb_running&&strstr(ug_textlog,"PAUSE")!=0);
+    UC(!bb_running&&strstr(ug_textlog,"HOLD")!=0);
 }
-static void ug_led_body(unsigned char *pixels)
-{
-    int x,y,cx,cy,n=0;BBPart *led=&bb_doc.part[3];
+static unsigned ug_led_lit(void)
+{   /* the LED's body sprite (10x12, centred on the leads' midpoint, 3 up):
+     * light red pixels there are the lit picture, none the dark one */
+    int x,y,cx,cy;unsigned n=0;BBPart *led=&bb_doc.part[3];
     cx=(bu_hx(bb_pin(led,1))+bu_hx(bb_pin(led,2)))/2;
-    cy=(bu_hy(bb_pin(led,1))+bu_hy(bb_pin(led,2)))/2;
-    for(y=cy-2;y<=cy+2;y++)for(x=cx-2;x<=cx+2;x++)pixels[n++]=ug_glass[y*720+x];
+    cy=(bu_hy(bb_pin(led,1))+bu_hy(bb_pin(led,2)))/2-3;
+    for(y=cy-6;y<=cy+5;y++)for(x=cx-5;x<=cx+4;x++)n+=ug_glass[y*720+x]==OS88_LRED;
+    return n;
 }
 static void ug_replacement_checks(void)
 {
-    unsigned i,guard,mode;unsigned char baseline[25],actual[25];
-    ug_init(480);ug_example(1);ug_led_body(baseline);
-    for(i=0;i<25;i++)UC(baseline[i]==OS88_LRED);
+    unsigned guard,mode,baseline;
+    ug_init(480);ug_example(1);baseline=ug_led_lit();UC(baseline>=30);
     ug_filesize=bb_encode(&bb_doc,ug_filebits,sizeof(ug_filebits));UC(ug_filesize>0);bb_mark_saved();
     for(mode=0;mode<2;mode++){
         if(mode==0){
@@ -199,18 +257,37 @@ static void ug_replacement_checks(void)
             ug_event_begin();os88_onfile(OS88_FDLG_OPEN,"CACHE.BBX",ug_filesize,0,ug_win);ug_event_end();
             for(guard=0;bu_op&&guard<20;guard++)ug_wake();UC(bb_doc.np==4&&!bb_valid);
         }else{bb_mark_saved();ug_load_example(1);UC(bb_doc.np==4&&!bb_valid);}
-        ug_paint(0);ug_led_body(actual);UC(actual[12]==OS88_WHITE);
-        /* Restore the stale ON key after replacement to reproduce the old
-         * cache bug while leaving the actual invalid full paint intact. */
-        if(ug_negative)bu_led_shadow[3]=3;
-        ug_step();UC(bb_valid&&bb_result.ua[3]==8824);
-        ug_led_body(actual);UC(!memcmp(baseline,actual,sizeof(actual)));
-        ug_paint(0);ug_led_body(actual);UC(!memcmp(baseline,actual,sizeof(actual)));
+        ug_paint(0);UC(ug_led_lit()==0);
+        /* The negative arm drops the step's damage, the class of defect
+         * that left a replaced document's LED dark. */
+        if(ug_negative){BBWord m=bu_mode;ug_cmd(2,3);bu_mode=BU_ABOUT;for(guard=0;(bu_op||bu_step_once)&&guard<10000;guard++)ug_wake();bu_mode=m;bu_flags=0;}
+        else ug_step();
+        UC(bb_valid&&bb_result.ua[3]==8824);
+        UC(ug_led_lit()==baseline);
+        ug_paint(0);UC(ug_led_lit()==baseline);
     }
     /* A genuine failed numerical slice invalidates a formerly powered result.
      * Its incremental body must agree with a clean paint of that failed state. */
     vx_num_calls=0;vx_inject=20;ug_step();vx_inject=0;
-    UC(!bb_valid&&bb_result.diag==BB_ENUMERIC);ug_led_body(actual);UC(actual[12]==OS88_WHITE);
-    ug_paint(0);ug_led_body(actual);UC(actual[12]==OS88_WHITE);
+    UC(!bb_valid&&bb_result.diag==BB_ENUMERIC);UC(ug_led_lit()==0);
+    ug_paint(0);UC(ug_led_lit()==0);
 }
-int main(int argc,char **argv){if(argc!=2&&argc!=3)return 2;ug_negative=argc==3&&!strcmp(argv[2],"negative");if(!strcmp(argv[1],"queue"))ug_queue_checks();else if(!strcmp(argv[1],"modal"))ug_modal_checks();else if(!strcmp(argv[1],"damage"))ug_damage_checks();else if(!strcmp(argv[1],"wide"))ug_wide_checks(0);else if(!strcmp(argv[1],"wide-dismiss"))ug_wide_checks(1);else if(!strcmp(argv[1],"locate-help"))ug_locate_checks(0);else if(!strcmp(argv[1],"locate-scope"))ug_locate_checks(1);else if(!strcmp(argv[1],"locate-offscreen"))ug_locate_checks(2);else if(!strcmp(argv[1],"locate-none"))ug_locate_checks(3);else if(!strcmp(argv[1],"stale"))ug_stale_checks();else if(!strcmp(argv[1],"scope-hold"))ug_scope_hold_checks();else if(!strcmp(argv[1],"replace-led"))ug_replacement_checks();else return 2;printf("breadxt UI host %s: %u checks, %u failures\n",argv[1],ug_checks,ug_failures);return ug_failures?1:0;}
+static void ug_section_checks(void)
+{
+    /* Every section draws inside its own rect (SPEC.md 130.6.4): a pixel
+     * outside one is drawn by a full paint and missed by the incremental
+     * repaint of that section - the class of the supply box and tab edge. */
+    static const int heights[]={480,350,200};unsigned k,v;
+    for(k=0;k<3;k++){
+        ug_init(heights[k]);ug_example(8);
+        for(v=0;v<6;v++){
+            if(v==1)ug_cmd(8,4);else if(v==2){ug_cmd(8,4);ug_cmd(3,4);}else if(v==3){ug_cmd(0,4);ug_select_resistor();bu_flags|=BU_ALL;ug_wake();}
+            else if(v==4)ug_cmd(6,4);else if(v==5){ug_key(27,1);ug_cmd(7,4);}
+            ug_outside=0;ug_paint(0);
+            if(ug_negative&&v==0){bu_host_sec=S_STATUS;bx_new(0,bu_y,640,8,-1);bx_fill(0,bu_y+2,8,bu_y+3,0);bu_host_sec=-1;}
+            if(ug_outside)fprintf(stderr,"height %d view %u: %u pixels outside section %d (%d,%d..%d,%d), first at %d,%d; by %d gy %d th %d\n",heights[k],v,ug_outside,ug_out_sec,bu_r1[ug_out_sec],bu_r2[ug_out_sec],bu_r3[ug_out_sec],bu_r4[ug_out_sec],ug_out_x,ug_out_y,bu_by,bu_gy,bu_th);
+            UC(ug_outside==0);
+        }
+    }
+}
+int main(int argc,char **argv){if(argc!=2&&argc!=3)return 2;ug_negative=argc==3&&!strcmp(argv[2],"negative");if(!strcmp(argv[1],"queue"))ug_queue_checks();else if(!strcmp(argv[1],"modal"))ug_modal_checks();else if(!strcmp(argv[1],"damage"))ug_damage_checks();else if(!strcmp(argv[1],"wide"))ug_wide_checks(0);else if(!strcmp(argv[1],"wide-dismiss"))ug_wide_checks(1);else if(!strcmp(argv[1],"locate-help"))ug_locate_checks(0);else if(!strcmp(argv[1],"locate-scope"))ug_locate_checks(1);else if(!strcmp(argv[1],"locate-offscreen"))ug_locate_checks(2);else if(!strcmp(argv[1],"locate-none"))ug_locate_checks(3);else if(!strcmp(argv[1],"stale"))ug_stale_checks();else if(!strcmp(argv[1],"scope-hold"))ug_scope_hold_checks();else if(!strcmp(argv[1],"replace-led"))ug_replacement_checks();else if(!strcmp(argv[1],"sections"))ug_section_checks();else return 2;printf("breadxt UI host %s: %u checks, %u failures\n",argv[1],ug_checks,ug_failures);return ug_failures?1:0;}
