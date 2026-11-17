@@ -360,6 +360,7 @@ int    bp_file_peek(const BPByte *buf, unsigned n, BPCkpt *meta);   /* header + 
 int    bp_file_parse(const BPByte *buf, unsigned n, BPCkpt *meta, BPState *out);
 /* which: 0 current committed, 1 previous committed, 2 candidate; out 0 = header only */
 int    bp_ckpt_open(int role, int which, BPCkpt *meta, BPState *out);
+int    bp_ckpt_load_id(int role, const BPU32 *ckpt_id, BPCkpt *meta, BPState *out); /* committed or candidate; meta->state says which */
 int    bp_ckpt_damaged(int role);                 /* slot files that exist but fail: 0..2 */
 
 /* ===== BP_LINK: bp_link.c bp_cable.inc =================================== */

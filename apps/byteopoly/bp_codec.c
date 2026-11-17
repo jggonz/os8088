@@ -390,7 +390,11 @@ static int ovl_bp_validate(const BPState *s)
     if (!r) r = ovl_bp_v_decks(s);
     if (!r) r = ovl_bp_v_phase(s);
     bpc_why = -r;
-    return r ? BP_EINVALID : BP_OK;
+    if (r) return BP_EINVALID;
+#ifdef BP_HAVE_STATE_CHECK      /* rules lane's invariants (SPEC 131.4.9, D4): define once it lands */
+    if (bp_state_check(s) != BP_OK) { bpc_why = 16; return BP_EINVALID; }
+#endif
+    return BP_OK;
 }
 int bp_validate(const BPState *s) { return ovl_bp_validate(s); }
 

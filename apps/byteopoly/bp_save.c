@@ -131,6 +131,10 @@ static int ovl_bp_ckpt_write(const BPCkpt *meta, const BPState *s)
     if (r) return r;
     if (!ovl_bp_ideq(&meta->match_id, &s->match_id) || !ovl_bp_ideq(&meta->rev, &s->rev))
         return BP_EMATCH;
+    if (meta->digest.lo | meta->digest.hi) {        /* the caller's digest must be the state's */
+        bp_digest(s, &bpc_t2);
+        if (!ovl_bp_ideq(&meta->digest, &bpc_t2)) return BP_EMATCH;
+    }
     os88_memcpy(&bps_cm, meta, sizeof(BPCkpt));
     bps_cm.state = 1;
     ovl_bp_scan(meta->role);
@@ -215,3 +219,27 @@ static int ovl_bp_ckpt_damaged(int role)
     return (bps_se[0] != 0) + (bps_se[1] != 0);
 }
 int bp_ckpt_damaged(int role) { return ovl_bp_ckpt_damaged(role); }
+
+/* the checkpoint with this ckpt_id, committed (preferred) or candidate; meta->state says which */
+static int ovl_bp_ckpt_load_id(int role, const BPU32 *id, BPCkpt *meta, BPState *out)
+{
+    int i, slot, n;
+    if (role < 1 || role > 2) return BP_EMATCH;
+    ovl_bp_scan(role);
+    slot = -1;
+    for (i = 0; i < 2; i++)
+        if (bps_sk[i] && ovl_bp_ideq(&bps_sl[i].ckpt_id, id) && (slot < 0 || bps_sk[i] == 2)) slot = i;
+    if (slot < 0) {
+        if (bps_se[0]) return bps_se[0];
+        if (bps_se[1]) return bps_se[1];
+        return BP_EIO;
+    }
+    ovl_bp_slotname(role, slot);
+    n = ovl_bp_rd(bps_nm);
+    if (n < 0) return -n;
+    return ovl_bp_file_parse(bpc_io, (unsigned)n, meta, out);
+}
+int bp_ckpt_load_id(int role, const BPU32 *id, BPCkpt *meta, BPState *out)
+{
+    return ovl_bp_ckpt_load_id(role, id, meta, out);
+}

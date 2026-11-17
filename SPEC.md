@@ -254331,10 +254331,11 @@ commit marker:
 
 | call | effect |
 |---|---|
-| `bp_ckpt_write(meta, s)` | validates `s` (`meta->match_id`/`rev` must be `s`'s: `BP_EMATCH`), then writes a CANDIDATE (state 1) into the VICTIM slot, then deletes any slot of a different match |
+| `bp_ckpt_write(meta, s)` | validates `s` (`meta->match_id`/`rev` must be `s`'s, and a non-zero `meta->digest` must be `bp_digest(s)`: `BP_EMATCH`), then writes a CANDIDATE (state 1) into the VICTIM slot, then deletes any slot of a different match |
 | `bp_ckpt_commit(meta)` | finds the candidate with `meta->ckpt_id` and `match_id`, checks its CRC, rewrites it with state 2 (one whole-file write, same atomicity) and reads it back; already committed answers `BP_OK`; no such candidate `BP_EMATCH` |
 | `bp_ckpt_open(role, which, meta, out)` | `which` 0 = current, 1 = previous, 2 = candidate; `out` 0 answers the header only (CRC, version, fingerprint) |
 | `bp_ckpt_load(role, meta, out)` | `bp_ckpt_open(role, 0, ...)`: the current committed checkpoint, fully decoded and validated |
+| `bp_ckpt_load_id(role, &ckpt_id, meta, out)` | the checkpoint with that id, committed (preferred) or candidate (`meta->state` 2 or 1), fully decoded and validated; absent: `BP_EIO` (or a damaged slot's error). It is how the exchange rolls a candidate forward (load by id, then `bp_ckpt_commit`) or falls back to a committed one |
 
 The VICTIM is the slot ranked lowest by (missing or invalid < candidate <
 committed, then lower `ckpt_id`, then slot B), so a committed checkpoint is

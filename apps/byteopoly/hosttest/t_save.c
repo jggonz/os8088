@@ -493,6 +493,12 @@ int main(void)
                 else BP_CHECK(bp_ckpt_open(role, 1, &got, 0) == BP_EIO, "no previous yet");
                 BP_CHECK(bp_ckpt_open(role, 2, &got, 0) == BP_EIO, "no candidate after commit");
             }
+            { BPU32 want; u32(&want, 4, 0);
+              BP_CHECK(bp_ckpt_load_id(role, &want, &got, &g) == BP_OK && got.state == 2 && got.ckpt_id.lo == 4, "load by id: committed");
+              u32(&want, 3, 0);
+              BP_CHECK(bp_ckpt_load_id(role, &want, &got, &g) == BP_OK && got.ckpt_id.lo == 3, "load by id: previous");
+              u32(&want, 8, 0);
+              BP_CHECK(bp_ckpt_load_id(role, &want, &got, &g) == BP_EIO, "load by id: unknown"); }
             /* a failed paired save keeps the previous completed pair */
             sc_manage(&st); st.machine[1] = 1; st.rev.lo = 105;
             m.rev = st.rev; u32(&m.ckpt_id, 5, 0);
@@ -508,6 +514,11 @@ int main(void)
             fs_failw = 0;
             BP_CHECK(bp_ckpt_load(role, &got, &g) == BP_OK && got.ckpt_id.lo == 4, "still current 4");
             BP_CHECK(bp_ckpt_open(role, 2, &got, 0) == BP_OK && got.ckpt_id.lo == 5, "candidate 5 survives");
+            { BPU32 want; u32(&want, 5, 0);
+              BP_CHECK(bp_ckpt_load_id(role, &want, &got, &g) == BP_OK && got.state == 1, "load by id: candidate"); }
+            m.digest.lo = 1;
+            BP_CHECK(bp_ckpt_write(&m, &st) == BP_EMATCH, "meta digest must be the state's");
+            m.digest.lo = 0;
             /* a commit for an id nobody wrote, another match, or a torn candidate */
             u32(&m.ckpt_id, 9, 0);
             BP_CHECK(bp_ckpt_commit(&m) == BP_EMATCH, "commit for an unknown candidate");
