@@ -76,6 +76,14 @@ in emulation follows integration; then the fix round; then the final pass.
   band core; `make byteopoly`, `byteopolydisk`, `byteopolyhost`,
   `byteopoly-pair` rules. Booted on MartyPC's VGA XT: the ring draws.
 
+## Distribution
+
+Byteopoly ships on its own disk in all four geometries (`make
+byteopolydisk`: `byteopoly.img`, `byteopoly720.img`, `byteopoly120.img`,
+`byteopoly360.img`) and on the live media. It does not join
+`games360.img`: BYTEOPLY.O88 is 78,452 bytes packed (77 clusters), and that
+disk has 67 of 354 clusters free (measured 2026-11-17).
+
 ## QA list
 
 (Filled by the QA run in emulation once every lane is integrated.)
