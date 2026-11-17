@@ -195,8 +195,8 @@ static int ovl_bp_v_seats(const BPState *s)
         z = 0;
         for (j = 0; j < BP_NAMELEN; j++) {
             c = (BPByte)s->name[i][j];
-            if (z) { if (c) return -4; }
-            else if (!c) { z = 1; if (!j) return -4; }
+            if (z) continue;            /* past the NUL: not state (the encoder writes zeros) */
+            if (!c) { z = 1; if (!j) return -4; }
             else if (c < 0x20 || c > 0x7E) return -4;
         }
         if (s->name[i][BP_NAMELEN]) return -4;
@@ -353,7 +353,7 @@ static int ovl_bp_v_phase(const BPState *s)
     const BPSpace *sp;
     if (s->d1 > 6 || s->d2 > 6 || (s->d1 == 0) != (s->d2 == 0)) return -8;
     if (s->rolled > 1 || (s->rolled && !s->d1) || s->doubles > 2) return -8;
-    if (s->pending_move > 1 || (s->pending_move && (s->phase != BP_PH_DEBT || !s->rolled)))
+    if (s->pending_move > 12 || (s->pending_move && (s->phase != BP_PH_DEBT || !s->rolled)))
         return -8;
     switch (s->phase) {
     case BP_PH_REPAIR:
@@ -404,7 +404,7 @@ int bp_validate(const BPState *s) { return ovl_bp_validate(s); }
 
 static int ovl_bp_decode(const BPByte *buf, unsigned n, BPState *out)
 {
-    int i;
+    int i, j, z;
     if (!n) return BP_EFORMAT;
     if (buf[0] != BP_ENC_VER) return BP_EVERSION;
     if (n != BP_ENC_LEN) return BP_EFORMAT;
@@ -440,6 +440,13 @@ static int ovl_bp_decode(const BPByte *buf, unsigned n, BPState *out)
     bpc_g32(&out->offer_give); bpc_g32(&out->offer_get); bpc_g32(&out->offer_cash);
     for (i = 0; i < BP_SEATS; i++) bpc_g32(&out->score[i]);
     out->winners = (BPByte)bpc_g8();
+    for (i = 0; i < BP_SEATS; i++) {            /* a canonical payload has zero past each name's NUL */
+        z = 0;
+        for (j = 0; j < BP_NAMELEN; j++) {
+            if (!out->name[i][j]) z = 1;
+            else if (z) { bpc_why = 4; return BP_EINVALID; }
+        }
+    }
     return ovl_bp_validate(out);
 }
 int bp_decode(const BPByte *buf, unsigned n, BPState *out) { return ovl_bp_decode(buf, n, out); }

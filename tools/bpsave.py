@@ -260,7 +260,7 @@ def validate(s):
         bad(8, 'dice')
     if s['rolled'] > 1 or (s['rolled'] and not d1) or s['doubles'] > 2:
         bad(8, 'rolled/doubles')
-    if s['pending_move'] > 1 or (s['pending_move'] and (phase != 6 or not s['rolled'])):
+    if s['pending_move'] > 12 or (s['pending_move'] and (phase != 6 or not s['rolled'])):
         bad(8, 'pending_move')
     # 9
     held = [[i for i in range(4) if s['disks'][i] >> d & 1] for d in range(2)]
