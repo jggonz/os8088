@@ -1,0 +1,2 @@
+# Byteopoly UI strings (BP_A_UITEXT): one NUL-terminated line each, 47
+# characters at most, plain ASCII; empty until a lane moves strings here.
