@@ -301,7 +301,6 @@ static int ovl_bp_ap_cmd(int item, int menu, void *win)
         else if (menu == 4) bp_gp_open(item == 0 ? BP_GP_RULES : item == 1 ? BP_GP_KEYS : BP_GP_CHAT);
         else if (menu == 3 && item == 2) bp_gp_open(BP_GP_DIAG);
     }
-    if (bp_ap_mode == BP_M_GAME) bp_face_dirty(BP_D_CENTER | BP_D_HINT);
     if (menu == 3) {
         if (item == 0) { bp_opt_sound ^= 1; if (bp_opt_sound) bp_sound(BP_SND_BUY); }
         else if (item == 1) bp_opt_fast ^= 1;
