@@ -152,9 +152,9 @@ The physical board also bounds DIP count; workspace holds 32 gates. Time is a
 pair of unsigned words in 100 us units, independent of host and OS elapsed time.
 
 The final link has 261 C functions, maximum individual frame 48 bytes,
-**33,024 bytes resident image + 31,803 BSS = 64,827 of 65,024 bytes**
-(197 bytes spare). The eager embedded overlay is 64,061 bytes of its 65,024
-ceiling, compressed to 30,510; the workbench face's art (`BBART.BIN`, SPEC.md
+**33,024 bytes resident image + 31,805 BSS = 64,829 of 65,024 bytes**
+(195 bytes spare). The eager embedded overlay is 64,132 bytes of its 65,024
+ceiling, compressed to 30,553; the workbench face's art (`BBART.BIN`, SPEC.md
 130.6.3) is 14,923 bytes, compressed to 7,280, and loaded only when it fits.
 The complete .O88 is 61,616 bytes. No kernel budget was increased.
 
@@ -207,7 +207,7 @@ elsewhere. The 640 KB machines return exactly to their launch figures. The
 All entries are bytes. Loaded minus before is the whole working set, owned
 claims and the desktop's caches together: 193,024 on VGA, 168,448 on CGA,
 170,496 on Hercules and 120,320 on 256 KB (#372: 146,432, 121,856, 123,904
-and 121,856). The face's growth is the overlay (now 64,061 bytes), the art
+and 121,856). The face's growth is the overlay (64,061 bytes then; 64,132 since the scope header fix), the art
 part (14,923) and the 16 KB band; on 256 KB the kernel sheds its caches to
 make that room. This is a tight, otherwise idle desktop:
 close other applications there. Full capacities and scope remain enabled; the
