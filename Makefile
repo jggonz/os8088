@@ -11278,9 +11278,15 @@ breadxtnum: $(BUILD)/bbnum360.img
 .PHONY: breadxtnum
 
 # --- Breadboard XT native circuit workbench (SPEC.md 130) ------------------
-$(eval $(call CC_PACKAGE,breadxt,breadxt,BREADXT.OVL,,part))
+$(eval $(call CC_PACKAGE,breadxt,breadxt,BREADXT.OVL,,part,$(BUILD)/BBART.BIN))
 BREADXTSRC := apps/breadxt/bb.h apps/breadxt/model.c apps/breadxt/sim.c \
-              apps/breadxt/file.c apps/breadxt/examples.c apps/breadxt/ui.c
+              apps/breadxt/file.c apps/breadxt/examples.c apps/breadxt/ui.c \
+              apps/breadxt/face.c apps/breadxt/art.h
+# The face's art (SPEC.md 130.6.3): the text art and WIN16's font art are the
+# source; the PNG master is not read.
+$(BUILD)/BBART.BIN: tools/os88bbart.py apps/breadxt/art.h apps/breadxt/art/sprites.txt apps/breadxt/art/help.txt \
+                    $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88bbart.py --selfcheck build -o $@
 $(BUILD)/breadxt.raw.asm: $(BREADXTSRC)
 $(BUILD)/breadxt.bin: $(wildcard apps/breadxt/*.inc) apps/os88fp.inc apps/os88ui.inc
 

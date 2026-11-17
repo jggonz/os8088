@@ -30,13 +30,13 @@ def main():
                         str(ROOT/'apps/breadxt/hosttest/uiglasstest.c'),
                         '-lm','-o',str(binary)],check=True,cwd=ROOT)
         failed = []
-        for mode in ('queue','modal','damage','wide','wide-dismiss','locate-help','locate-scope','locate-offscreen','locate-none','stale','scope-hold','replace-led'):
+        for mode in ('queue','modal','damage','wide','wide-dismiss','locate-help','locate-scope','locate-offscreen','locate-none','stale','scope-hold','replace-led','sections'):
             positive = subprocess.run([str(binary),mode],cwd=ROOT)
             if positive.returncode:
                 failed.append(mode)
             # Each hook deliberately reintroduces the class of defect under
-            # test: bypass callback guard, invalidate modal cache, or suppress
-            # the partial-damage indication while retaining its native clip.
+            # test: bypass a callback guard, repaint the whole face for one
+            # keystroke, drop damage, or draw outside a section's rect.
             if mode.startswith('locate-'):
                 continue
             negative = subprocess.run([str(binary),mode,'negative'],text=True,

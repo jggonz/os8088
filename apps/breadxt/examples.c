@@ -1,6 +1,10 @@
 /* Original editable teaching documents. SPEC.md130; physical holes, no demo
  * behavior or filename dispatch in the simulator. All figures derive from
  * manufacturer pin maps and independent logical graphs in FORMAT.md. */
+#ifdef BB_HOST
+/* The example builders run on the HOST only: the build writes the eight
+ * .BBX files from them (hosttest/export.c), and the package opens those
+ * files from its own folder like any other document (SPEC.md 130.6). */
 static unsigned bb_exhole(unsigned row,unsigned col)
 {
     return (row<<5)-(row<<1)+col;
@@ -118,6 +122,7 @@ int bb_example(unsigned which)
 {
     return ovl_bb_example(which);
 }
+#endif
 const char *bb_example_name(unsigned which)
 {
     switch(which) {

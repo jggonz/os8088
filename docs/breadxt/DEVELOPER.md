@@ -151,10 +151,12 @@ Limits: one 30-column board, 64 parts, 128 wires with two bends, 64 active nets,
 The physical board also bounds DIP count; workspace holds 32 gates. Time is a
 pair of unsigned words in 100 us units, independent of host and OS elapsed time.
 
-The final link has 219 C functions, maximum individual frame 52 bytes,
-**32,710 bytes resident image + 32,180 BSS = 64,890 of 65,024 bytes**
-(134 bytes spare). The eager embedded overlay is 49,637 bytes, compressed to
-22,846 bytes; the complete .O88 is 45,726 bytes. No kernel budget was increased.
+The final link has 261 C functions, maximum individual frame 48 bytes,
+**33,024 bytes resident image + 31,803 BSS = 64,827 of 65,024 bytes**
+(197 bytes spare). The eager embedded overlay is 64,061 bytes of its 65,024
+ceiling, compressed to 30,510; the workbench face's art (`BBART.BIN`, SPEC.md
+130.6.3) is 14,923 bytes, compressed to 7,280, and loaded only when it fits.
+The complete .O88 is 61,616 bytes. No kernel budget was increased.
 
 | Resident BSS component | Bytes |
 |---|---:|
@@ -167,33 +169,47 @@ The final link has 219 C functions, maximum individual frame 52 bytes,
 | Scope samples, timestamps and metadata | 2,068 |
 | Published and working result, 330 each | 660 |
 | Hole-to-net map | 420 |
-| Shared file/board/plot workspace | 3,120 |
-| UI text shadows | 768 |
+| File buffer, and the face's band when its claim is refused | 3,120 |
+| Face section keys and rects, help line, drawing-core state | 473 |
 | Numeric-library scratch | 76 |
-| Other topology/vectors/queues/UI/SDK state and alignment | 6,504 |
-| **Total BSS** | **32,180** |
+| Other topology/vectors/queues/UI/SDK state and alignment | 6,422 |
+| **Total BSS** | **31,803** |
 
-The remainder is measured against linked BSS, not another allocation. Runtime
-heap observations on the installed 360 KB disk give a 65,024-byte region and a
-50,688-byte parts carve, **115,712 bytes / 113 KiB owned**. The carve includes
-native cluster-read/alignment slack; rounding only the raw overlay would
-undercount it. Both claims are movable and are released on close. No worker or
-full-screen RAM framebuffer is allocated. The existing UI stack is 512 bytes;
-a safe fill probe measured **338 bytes used, 174 spare**, including interrupts
+The remainder is measured against linked BSS, not another allocation. #372's
+runtime heap observations on the installed 360 KB disk gave a 65,024-byte
+region and a 50,688-byte parts carve, 115,712 bytes / 113 KiB owned; the
+carve includes native cluster-read/alignment slack. The workbench face grows
+the carve by the larger overlay and the art part and adds the 16 KB band
+claim (the loaded figures below are the measurement). Every claim is movable
+and is released on close, which the soak rows check. No worker or full-screen
+RAM framebuffer is allocated. The existing UI stack is 512 bytes;
+a safe fill probe measured **410 bytes used, 102 spare** with the workbench face (338 before it), including interrupts
 and native launch/menu/file/solver drawing paths. This is measured coverage,
 not a static proof of every possible call chain.
 
 | Machine/session | Free / largest before | Loaded free / largest | After close |
 |---|---:|---:|---:|
-| 640 KB VGA | 515,584 / 515,072 | 369,152 / 368,640 | 515,584 / 515,072 |
-| 640 KB CGA | 518,144 / 517,632 | 396,288 / 395,776 | 518,144 / 517,632 |
-| 640 KB Hercules | 518,144 / 517,632 | 394,240 / 393,728 | 518,144 / 517,632 |
-| 256 KB CGA | 124,928 / 124,416 | **3,072 / 2,560** | 124,928 / 124,928 |
+| 640 KB VGA | 515,584 / 515,072 | 322,560 / 322,048 | 515,584 / 515,072 |
+| 640 KB CGA | 518,144 / 517,632 | 349,696 / 349,184 | 518,144 / 517,632 |
+| 640 KB Hercules | 518,144 / 517,632 | 347,648 / 347,136 | 518,144 / 517,632 |
+| 256 KB CGA | 124,928 / 124,416 | **4,608 / 4,608** | 134,144 / 102,912 |
 
-All entries are bytes. The loaded snapshot follows native file/diagnostic work;
-associated native caches/window resources account for another 6,144 bytes on
-CGA/256 KB, 8,192 on Hercules and 30,720 on VGA beyond owned claims. Thus its observed total incremental
-working set is 121,856 bytes / 119 KiB. This is a tight, otherwise idle desktop:
+Workbench face, 2026-11-16: the 555 flasher opened, run 25 guest seconds,
+paused, a resistor selected, closed (`docs/breadxt/face/` holds the
+pictures). Every machine took the art and the 16 KB band claim, the 256 KB
+one included, so it draws the full compact face. Its after-close line is
+the kernel's, not the package's: the soak row checks every package claim is
+released, and the free total is 9 KB HIGHER than at launch with a smaller
+largest run - the desktop's caches were shed under the pressure and refilled
+elsewhere. The 640 KB machines return exactly to their launch figures. The
+#372 face measured 369,152 / 396,288 / 394,240 / 3,072 loaded.
+
+All entries are bytes. Loaded minus before is the whole working set, owned
+claims and the desktop's caches together: 193,024 on VGA, 168,448 on CGA,
+170,496 on Hercules and 120,320 on 256 KB (#372: 146,432, 121,856, 123,904
+and 121,856). The face's growth is the overlay (now 64,061 bytes), the art
+part (14,923) and the 16 KB band; on 256 KB the kernel sheds its caches to
+make that room. This is a tight, otherwise idle desktop:
 close other applications there. Full capacities and scope remain enabled; the
 actual 256 KB run exercised launch, solve, files, compact/minimum views and
 cleanup. It is not a promise of room for another program or every future SDK.

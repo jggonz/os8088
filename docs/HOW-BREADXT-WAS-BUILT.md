@@ -200,3 +200,87 @@ remain under build/, outside the tracked source and captured verification set.
 On 2026-11-16 the user authorized pushing the feature branch and opening a PR.
 This supersedes the original local-only delivery restriction for that review
 handoff; it does not authorize merging or publishing a release or website.
+
+## The workbench face, 2026-11-16
+
+The owner handed over a concept picture of "how the design should have been"
+(`docs/breadxt/design/workbench-mockup.png`): a System 1 workbench with a
+picture tool bar, a parts palette in categories, an examples list, a cream
+breadboard with real-looking parts, a docked oscilloscope and an inspector
+with a big resistor and a spinner. #372's face drew the same information in
+the kernel's 8x8 font with lines and frames. The contract is SPEC.md 130.6
+and the story list `docs/plans/BREADXT-FACE-PLAN.md`.
+
+**The budget decided the shape before any pixel did.** The resident segment
+had 646 bytes free and the 256 KB machine about 3 KB of heap with the
+package loaded. So: the drawing core *replaces* the old row/scope bit
+painters; the art and fonts are one LAZY part that the 256 KB machine does
+without, getting a plain face in the kernel font rather than a refused
+launch; and every layout and drawing function is `ovl_*`. The plan was a
+band in the file buffer, which is never busy while painting. Measurement
+changed that (below).
+
+**One band, in the card's own format.** Every repaint composes into one band
+and puts it down in one call. The first version composed packed 4bpp and
+converted it on the way out; the converter cost about 64 cycles a pixel of
+every strip, so the band became four bit planes, exactly what
+`OSAPI_GFX_BLITP` copies, and one plane on a 1bpp display for
+`OSAPI_GFX_BLIT1`. A strip is drawn whole, so nothing is ever written twice
+and nothing flashes.
+
+**The art came from codex and was finished as text.** codex drew one
+1024x1024 master on an 8x8 grid in the EGA palette (`apps/breadxt/art/
+PROMPT.md` has the prompt); `tools/os88bbart.py draft` cut it into text art,
+which is the source from then on, hand-finished cell by cell. The resistor's
+four bands are placeholder colours in the art, remapped from the value at
+draw time, so one sprite paints every resistor correctly. The fonts are
+WIN16's (Wine's System and MS Sans Serif strikes), shared as source.
+
+**Cache by drawing, not by bookkeeping.** Each section's key is its own
+drawing code run in a keying mode that hashes what it would draw. An
+incremental pass repaints exactly the sections whose picture moved, and the
+full paint and the incremental one cannot disagree about what a section
+looks like, because there is only one description of it.
+
+**Sixteen seconds, measured, then six.** The first complete face took
+16.4 guest seconds on MartyPC's 4.77 MHz XT to paint the 555 flasher after
+opening it; main's face took 1.42. A sampling profile said "drawing", which
+was true and useless. Breakpoints on each section's entry, counting guest
+cycles, said more: the board view and the palette were half of it, and
+both are TALL. The band was the file buffer's 3,120 bytes, nine rows at
+640 wide, so a paint was 45 strips and every strip re-walked all 27
+sections and their parts. The band moved into a 16 KB heap claim of its
+own (movable, with an `os88_onmove`; the file buffer stands in when the
+claim is refused): 11 strips, 7.2 s. Then the primitives, each measured
+before and after: rows of a rect with no memory operand inside the loop and
+`rep stosw`; a glyph row read whole from a new font record (first lit row,
+row count, two bytes a row) instead of walked a bit at a time, with no
+multiply per row; sprites eight pixels a step through the colour remap
+instead of a call per pixel; one-byte-wide solid columns as a single OR or
+AND per row. 6.2 s. The same paint is 1.43 s on the 5150's CGA (main:
+1.05) and 2.95 s on Hercules (main: 1.45). VGA is the outlier for a reason
+no loop fixes: a software band pays four read-modify-writes for every lit
+byte that a 1bpp band pays one for, and VGA's own set/reset hardware, which
+does all four planes in one write, is on the far side of the blit.
+
+**A check for the class, not the instance.** Two bugs had one shape: the
+supply's voltage box sat half a line above the board view's rect, and the
+open tab erased a row of the centre box's frame outside the tabs' rect. A
+full paint drew both; a repaint of just that section did not. The host
+harness now tags every pixel with the section that drew it and fails on
+any outside that section's rect, over all three layouts and six views. It
+found a third at once: the "30" column label ran four pixels past the board
+onto the frame.
+
+**The overlay hit its 64 KB ceiling** (67,135 bytes at the first link). The
+eight example builders were 2.4 KB of code that only ever produced the eight
+`.BBX` files the build already writes onto every disk; they now run on the
+host only, and the package opens the file from its own folder - which is
+what an example is, a document. That brought the overlay to 64,844.
+
+**The 256 KB machine was a guess, and the row said so.** The plan assumed
+it would get the plain face; the 256 KB row was made to say which face it
+got, and it got the art and the band - 4,608 bytes free with the flasher
+open, after the kernel shed its desktop caches. The plain face stays for
+whatever machine is tighter still. Pictures of every adapter, before and
+after, are in `docs/breadxt/face/`.

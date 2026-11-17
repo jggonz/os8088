@@ -72,8 +72,10 @@ def screenshot(ui, path):
 
 
 def scope_cycles(ui, app):
-    """Measure a real scope call entry-to-caller-return, including interrupts."""
-    entry = app.p.seg*16 + app.s['_bu_scope_draw']
+    """Measure the render Pause asks for, entry-to-caller-return, including
+    interrupts: the workbench face repaints the scope's section with the run
+    state's (SPEC.md 130.6.4), so this is the scope's paint and its peers'."""
+    entry = app.p.seg*16 + app.s['_bu_render']
     clocks = []
 
     def hit(mm, record):
@@ -88,7 +90,7 @@ def scope_cycles(ui, app):
 
     with M.bp_trace(ui.m, entry, regs=True, on_hit=hit) as trace:
         ui.menu_pick('Simulate', 'Pause')
-        trace.until(lambda: len(clocks) == 2, 'scope function returned', limit=120)
+        trace.until(lambda: len(clocks) == 2, 'render returned', limit=120)
     assert len(clocks) == 2 and clocks[1] > clocks[0], clocks
     return clocks[1]-clocks[0]
 
@@ -123,7 +125,7 @@ def capacity(offsets):
             assert app.pin(i+2, 2)[0] == 4800-200*i, (i, app.pin(i+2, 2))
         assert struct.unpack('<h', app.p.read(offsets['_bb_result']+128, 2))[0] == -20
         evidence['scope_samples_at_measurement'] = app.word('bb_scope', 2050)
-        evidence['scope_paint_cycles'] = scope_cycles(ui, app)
+        evidence['pause_render_cycles'] = scope_cycles(ui, app)
         screenshot(ui, ROOT/'build/breadxt-max24-vga.png')
     evidence['elapsed_host_seconds'] = round(time.monotonic()-started, 2)
     (ROOT/'build/breadxt-capacity-evidence.json').write_text(json.dumps(evidence, indent=2)+'\n')
