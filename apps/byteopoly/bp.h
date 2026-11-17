@@ -326,6 +326,17 @@ void   bp_redeem_cost(int space, BPU32 *out);
 int    bp_group_owner(const BPState *s, int group);  /* seat owning all, or BP_NOBODY */
 void   bp_score_of(const BPState *s, int seat, BPU32 *out);
 int    bp_seat_assets(const BPState *s, int seat, BPU32 *mask);
+/* rules lane additions (SPEC.md 131.4.4, 131.4.5, 131.4.9) */
+#define BP_DR_NONE      0       /* BPState.debt_reason */
+#define BP_DR_RENT      1
+#define BP_DR_CHARGE    2       /* a charge space */
+#define BP_DR_CARD      3       /* a card payment or Bench Service */
+#define BP_DR_BAIL      4       /* the third failed release: pending_move set */
+#define BP_DEPTH_MAX    3       /* cards drawn since the last dice move */
+#define BP_BID_STEP     10
+void   bp_bid_min(const BPState *s, BPU32 *out);  /* the next legal bid */
+int    bp_state_check(const BPState *s);          /* BP_OK or BP_EINVALID */
+#define BP_HAVE_STATE_CHECK 1
 
 /* ===== BP_SAVE: bp_codec.c bp_save.c ===================================== */
 #define BP_STATE_MAX    320     /* encoded canonical state, bytes (cap) */
@@ -350,6 +361,19 @@ int    bp_ckpt_load(int role, BPCkpt *meta, BPState *out);  /* last committed */
  * over the immutable board and card tables and BP_RULES_VER */
 #define BP_RULES_VER    1
 void   bp_fingerprint(BPU32 *out);
+/* the save lane's additions (SPEC.md 131.7.1-131.7.4) */
+#define BP_ENC_VER      1
+#define BP_ENC_LEN      233     /* bp_encode's exact output length */
+#define BP_FILE_HDR     40
+int    bp_invalid_rule(void);                     /* rule of the last bp_validate refusal */
+unsigned bp_file_build(const BPCkpt *meta, const BPState *s, BPByte *buf, unsigned cap);
+int    bp_file_peek(const BPByte *buf, unsigned n, BPCkpt *meta);   /* header + CRC only */
+int    bp_file_parse(const BPByte *buf, unsigned n, BPCkpt *meta, BPState *out);
+/* which: 0 current committed, 1 previous committed, 2 candidate; out 0 = header only */
+int    bp_ckpt_open(int role, int which, BPCkpt *meta, BPState *out);
+#define BP_HAVE_CKPT_LOAD_ID 1
+int    bp_ckpt_load_id(int role, const BPU32 *ckpt_id, BPCkpt *meta, BPState *out); /* committed or candidate; meta->state says which */
+int    bp_ckpt_damaged(int role);                 /* slot files that exist but fail: 0..2 */
 
 /* ===== BP_LINK: bp_link.c bp_cable.inc =================================== */
 #define BP_MODE_LOCAL   0
@@ -406,6 +430,22 @@ extern BPDiag bp_diag;
 void   bp_ui_committed(const BPResult *r);        /* a revision was applied here */
 void   bp_ui_link(void);                          /* link state/msg changed */
 void   bp_ui_chat(int machine, const char *text);
+/* --- appended by the link lane (SPEC.md 131.5.1, 131.6.5, 131.7.5) --- */
+#define BP_L_DIVERGED   8       /* boards differ: economic input stopped on
+                                   both; the client may bp_sess_adopt */
+#define BP_CHAT_LEN     24      /* chat characters a line carries */
+BPWord bp_ck_rand(void);                          /* bridge: OSAPI_RAND, identities only */
+int    bp_sess_adopt(void);                       /* client, DIVERGED: take the banker's board */
+/* the paired save / resume exchange, for the UI (bp_link_msg says more) */
+#define BP_PAIR_IDLE    0
+#define BP_PAIR_BUSY    1       /* a save or a resume is being exchanged */
+#define BP_PAIR_DONE    2       /* "Paired save complete" / resumed */
+#define BP_PAIR_FAIL    3       /* failed: the previous paired save stands */
+int    bp_sess_pair(void);
+int    bp_lobby_peer_ready(void);                 /* 1: the other machine pressed Ready (D3) */
+/* host-harness convention: a hosttest/ program that includes byteoply.c
+ * gets no-op bp_ck_* / bp_ui_* from bp_link.c unless it defines
+ * BP_LINK_FAKE and supplies its own (t_link.c does) */
 
 /* ===== BP_FACE: bp_face.c ================================================= */
 /* layouts picked from the content box (SPEC.md 131.8.1) */
@@ -425,6 +465,8 @@ extern BPByte bp_sel;           /* the selected space (presentation) */
 #define BP_D_LOG        0x0020
 #define BP_D_HINT       0x0040
 #define BP_D_ALL        0x007F
+#define BP_D_FORCE      0x8000  /* with other bits: repaint them even if their
+                                   signature says nothing changed */
 int    bp_face_init(void *win, unsigned artseg, unsigned bandseg, unsigned bandcap, int bpp);
 void   bp_face_layout(int w, int h);              /* content size changed */
 void   bp_face_dirty(unsigned mask);
@@ -446,6 +488,12 @@ int    bp_w_textw(const char *s, int font);
 int    bp_w_fonth(int font);
 int    bp_w_sprite(int x, int y, int art_id);     /* -> width, 0 absent */
 unsigned bp_w_spritesz(int art_id);               /* w | h << 8 */
+int    bp_face_isdirty(void);                     /* any section dirty (the timer repaints on it) */
+/* Damage a screen rectangle inside the centre only (SPEC 131.8.5): the
+ * panels name what a key changed (a button row, the bid editor, a list row)
+ * and the face repaints only the strips it touches, drawing the panel there
+ * (QA Qqa1-4). Until the face lane refines it, it dirties the whole centre. */
+void   bp_face_dirty_rect(const BPRect *r);
 void   bp_w_fill(int x1, int y1, int x2, int y2, int colour);
 /* the log ring the sidebar shows (bounded) */
 #define BP_LOG_LINES    8
@@ -474,6 +522,11 @@ int    bp_gp_click(int x, int y);                 /* 1 = consumed */
 const char *bp_gp_hint(int i);                    /* hint bar entries, 0 ends */
 void   bp_gp_sync(void);                          /* game/link state changed */
 void   bp_gp_open(int which);                     /* a menu asked for a panel */
+/* added by the panels lane (SPEC.md 131.9.7-131.9.11) */
+void   bp_gp_event(const BPEvent *e);             /* each event of a committed result (auto-pass note) */
+void   bp_gp_chat(int machine, const char *text); /* a chat line sent or received, for the panel */
+void   bp_gp_tick(void);                          /* every timer tick: a handoff watches the keys */
+int    bp_gp_overchoice(void);                    /* the end panel's pick, once: 1 review 2 new 3 exit */
 
 /* ===== BP_APP: bp_app.c bp_setup.c ======================================= */
 /* the application (SPEC.md 131.9.1-131.9.6): every os88_* callback, the
@@ -503,4 +556,16 @@ void   bp_pn_sync(void);
 #define BP_SND_ERROR    7
 void   bp_sound(int cue);
 
+/* app-lane additions (SPEC.md 131.9.1-131.9.6) */
+#define BP_M_GAME       0       /* bp_ap_mode: board and game panels */
+#define BP_M_SETUP      1       /* New Game screen (the launch default) */
+#define BP_M_LOBBY      2       /* the same screen, a cable link open */
+extern BPByte bp_ap_mode;
+extern BPByte bp_opt_sound, bp_opt_fast;          /* Options menu flags */
+/* guarded actions (bp_setup.c asks the app): */
+#define BP_ACT_START    1       /* start the match the setup screen holds */
+#define BP_ACT_LOAD     2
+#define BP_ACT_CLOSE    3
+#define BP_ACT_NEW      4       /* leave a cable match for the setup screen */
+#define BP_ACT_SAVECLOSE 5      /* close once the save lands */
 #endif
