@@ -254161,9 +254161,59 @@ private menu item.
 
 ### 131.10 Art
 
-(Art lane. Reserved: the codex master and its prompt, `art/sprites.txt` as
-the source, `tools/os88bpart.py`, BPART.BIN's layout, sizes and the mono
-treatment.)
+#### 131.10.1 Sources
+
+THE TEXT ART IS THE SOURCE (the Breadboard XT model, 130.6.3): `apps/byteopoly/art/sprites.txt`
+holds every picture as `sprite BP_A_NAME W H` and H rows of W characters, one per EGA colour
+(`kbgcrmnldBGCR.yw`, `.` = 13 light magenta = transparent); `art/help.txt` is the in-game rules
+and key list (`BP_A_HELP`); the type is WIN16's committed strikes (`apps/win16/fonts/`:
+`dlg13`/`dlg10`/`dlg08` for `BP_F_TEXT13/10/08`, `sys16`/`sys12` for `BP_F_BIG16/12`), shared as
+source. `apps/byteopoly/art.h` is the ID list; IDs are dense and in order and `BP_A_COUNT` and
+`BP_A_HELP` are last. `make` reads only those text files, never a PNG and never a service.
+
+#### 131.10.2 The master and the prompt
+
+The pictures were drafted ONCE from three codex-generated master sheets
+(`art/master1.png` computers, `master2.png` icons, `master3.png` mascot and card backs; the one
+sanctioned binary, as Breadboard XT's). `art/PROMPT.md` keeps the exact prompts, the date and the
+tool version (codex-cli 0.169.0, 2026-11-17). The sheets are original pixel art on a light-magenta
+key in the 16 EGA colours with no lettering or trademark marks and nothing taken from a
+commercial board game. `os88bpart.py draft` quantises each picture's extent to its logical size
+and `sprites.txt` is then finished by hand; from then on the text is the source.
+
+#### 131.10.3 BPART.BIN
+
+Little-endian, read by the shared drawing core (`bx_art_at`, 130.6.3): `'BP'`, the ID count, one
+word offset per ID (0 = absent), then the records: sprites as `db w, db h` and packed 4bpp rows (high
+nibble left, colour 13 transparent); fonts as height, ascent, first, count, widths and per-glyph
+two-byte rows; the help as NUL-terminated lines ending in an empty one (`bx_artstr`, 47
+characters at most). Packing is deterministic and shares `tools/os88bbart.py`'s packers as
+imports. It is lazy part 1 of `BYTEOPLY.O88` (`os88_part_lazyok`); without it the face is drawn
+plain.
+
+#### 131.10.4 Sizes
+
+TINY 16x12 (COMPACT and MID cells; every one has a mono twin `BP_A_M_T_*`, 131.10.5), SMALL 32x24 (FULL cells, sidebar, specials), LARGE 64x40
+(panels), tokens 16x16, dice 24x24, RAM 8x6, Workshop 12x10, mortgage 12x10, mascot 64x64, card
+backs 48x64, cable 32x12, keycap 16x16 (see the table printed by `--selfcheck`; the face asks
+`bx_size`).
+
+#### 131.10.5 Monochrome
+
+On 1bpp the core draws each colour as a 2x2 pattern (`bx_mono`): black for black and every dark
+chromatic colour, grey 3/4 (light grey), 1/2 (dark grey, brown), white for the light colours.
+A dark chromatic fill therefore merges with its black outline. Where that turns a picture to
+mush it has a `_M` twin drawn in black and white only (dark chromatic fills as a 50% checker),
+as an ID added after the colour ones; the face prefers `BP_A_M_x` when `bp_mono`. `art.h` lists
+which exist. `os88bpart.py png DIR --mono` previews every sprite through the core's mapping.
+
+#### 131.10.6 Tool and size
+
+`os88bpart.py build -o`, `--selfcheck`, `draft`, `png DIR [--mono]`. The measured size is in
+`art/PROMPT.md` and the art lane's report: BPART.BIN is 61,239 bytes (50,357 of sprites, 9,087 of fonts,
+1,795 of help), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
+included; loaded it is a 61KB lazy claim and a machine without the room draws the plain face. LARGE is
+the cost (23KB): 48x30 would save 10KB if the panels allow.
 
 ### 131.11 Memory and parts
 
