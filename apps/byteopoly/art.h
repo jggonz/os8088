@@ -140,16 +140,41 @@
 #define BP_A_M_RAM 113
 #define BP_A_M_MORTGAGE 114
 #define BP_A_M_EWASTE 115
+/* TINY (16x12) specials and the small card backs (24x32) for MID cells and
+ * the MID card panel (Qqa2-21); BP_A_TSPECIAL maps a BP_A_BOOT..EWASTE ID. */
+#define BP_A_T_BOOT 116
+#define BP_A_T_REPAIR 117
+#define BP_A_T_SWAP 118
+#define BP_A_T_CRASH 119
+#define BP_A_T_FLOPPY 120
+#define BP_A_T_SYSERR 121
+#define BP_A_T_DUTY 122
+#define BP_A_T_EWASTE 123
+#define BP_A_CARD_FF_S 124
+#define BP_A_CARD_SE_S 125
+/* their monochrome twins */
+#define BP_A_M_T_BOOT 126
+#define BP_A_M_T_REPAIR 127
+#define BP_A_M_T_SWAP 128
+#define BP_A_M_T_CRASH 129
+#define BP_A_M_T_FLOPPY 130
+#define BP_A_M_T_SYSERR 131
+#define BP_A_M_T_DUTY 132
+#define BP_A_M_T_EWASTE 133
+#define BP_A_M_CARD_FF_S 134
+#define BP_A_M_CARD_SE_S 135
 /* text: the built-in rules and help lines, NUL-terminated, in order */
-#define BP_A_HELP 116
+#define BP_A_HELP 136
 /* UI strings the panels/app may move out of the resident image: the same
  * NUL-terminated text record as BP_A_HELP; empty until a lane fills art/uitext.txt */
-#define BP_A_UITEXT 117
-#define BP_A_COUNT 118
+#define BP_A_UITEXT 137
+#define BP_A_COUNT 138
 /* prop index -> art ID */
 #define BP_A_SMALL(p) (BP_A_S_PET + (p))
 #define BP_A_LARGE(p) (BP_A_L_PET + (p))
 #define BP_A_TINY(p) (BP_A_T_PET + (p))
+#define BP_A_TSPECIAL(id) (BP_A_T_BOOT + (id) - BP_A_BOOT)   /* id: BP_A_BOOT..BP_A_EWASTE */
+#define BP_A_MTSPECIAL(id) (BP_A_M_T_BOOT + (id) - BP_A_BOOT)
 #define BP_A_MTINY(p) (BP_A_M_T_PET + (p))
 #define BP_A_TOKEN(t) (BP_A_TOK_FLOPPY + (t))
 #define BP_A_DIE(n) (BP_A_DIE1 + (n) - 1)

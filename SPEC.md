@@ -255710,7 +255710,7 @@ plain.
 
 #### 131.10.4 Sizes
 
-TINY 16x12 (COMPACT and MID cells; every one has a mono twin `BP_A_M_T_*`, 131.10.5), SMALL 32x24 (FULL cells, sidebar, specials), LARGE 48x32
+TINY 16x12 props, and TINY specials `BP_A_T_BOOT..EWASTE` for MID cells (`BP_A_TSPECIAL(id)` maps `BP_A_BOOT..BP_A_EWASTE`), small card backs `BP_A_CARD_FF_S`/`_SE_S` 24x32 for the MID card panel (COMPACT and MID cells; every one has a mono twin `BP_A_M_T_*`, 131.10.5), SMALL 32x24 (FULL cells, sidebar, specials), LARGE 48x32
 (panels), tokens 16x16, dice 24x24, RAM 8x6, Workshop 12x10, mortgage 12x10, mascot 64x64, card
 backs 48x64, cable 32x12, keycap 16x16 (see the table printed by `--selfcheck`; the face asks
 `bx_size`).
@@ -255724,12 +255724,19 @@ mush it has a `_M` twin drawn in black and white only (dark chromatic fills as a
 as an ID added after the colour ones; the face prefers `BP_A_M_x` when `bp_mono`. `art.h` lists
 which exist. `os88bpart.py png DIR --mono` previews every sprite through the core's mapping.
 
+The Apple IIe, PC AT, Atari ST and 486 were redrawn from a fourth master (`art/master4.png`) so no two
+machines are near-twins: a light-grey keyboard with a separate amber monitor, a tall grey case with
+three bays and a yellow screen, a dark-grey wedge with a blue-screen monitor, and a lone black tower.
+The Keys page of `BP_A_HELP` states exactly the keys of 131.9.7 and 131.9.4 (F1, P, R, S, K, U, Home,
+PgUp/PgDn; C and M are one Collection panel; Esc does not open the menu); `--selfcheck` requires
+rules lines, the `#KEYS` line, then key lines.
+
 #### 131.10.6 Tool and size
 
 `os88bpart.py build -o`, `--selfcheck`, `draft`, `png DIR [--mono]`. The measured size is in
-`art/PROMPT.md` and the art lane's report: BPART.BIN is 52,033 bytes (41,144 of sprites, 9,087 of fonts,
-1,802 of text; cap 56 KB unpacked), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
-included; loaded it is a 52KB lazy claim and a machine without the room draws the plain face.
+`art/PROMPT.md` and the art lane's report: BPART.BIN is 55,473 bytes (44,296 of sprites, 9,087 of fonts,
+2,090 of text; cap 56 KB = 57,344 unpacked), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
+included; loaded it is a 55KB lazy claim and a machine without the room draws the plain face.
 
 ### 131.11 Memory and parts
 
