@@ -93,3 +93,4 @@ apps/weave/wload.c w_short w_line  # WEAVE-SPEC 10.1's sentence with both KB fig
 apps/weave/wovl.c ovl_about w_line  # WEAVE-SPEC 4.12's banner with the measured ops/s: LONGER THAN THE BAR (35 at five digits). A short toast form is owed
 apps/weave/wovl.c ovl_info w_line  # the SHORT form 'ask NKB, N sections', 20 at the largest bundle the format allows
 apps/pagedesk/pdujob.c pdu_open_step m  # PDU_LADTEST's look only (PAGEDESK-SPEC 20.22.2.9; nothing shipped compiles it): 'dN cN xK rE fF', five numbers, 24 at the longest
+apps/byteopoly/bp_app.c ovl_bp_ap_say tb  # bp_err_text, the link's own message or a save/load result (SPEC 131.9.6), copied into 25 bytes so the toast never passes TOAST_MAX; the whole text goes to the log
