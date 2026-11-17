@@ -11446,6 +11446,19 @@ byteopoly-pair: byteopolydisk
 	python3 tools/wireball-pair.py --game byteopoly
 .PHONY: byteopoly byteopolydisk byteopolyhost byteopoly-pair
 
+# Byteopoly's two-word arithmetic executed on the 8088 (SPEC.md 131.4.1): the
+# shipping bp_math.c under the real C ABI, against hand-worked literals, with
+# a negative control on N. The host harness cannot see an 8088 promotion
+# fact; this can. Rules lane.
+$(eval $(call CC_PACKAGE,bpmath,../tests/bpmath))
+$(BUILD)/bpmath.raw.asm: apps/byteopoly/bp.h apps/byteopoly/bp_math.c
+$(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/bpmath.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] bpmath :: actual 8088 Byteopoly two-word arithmetic fixture and negative control
+bpmath: $(BUILD)/bpmath360.img
+.PHONY: bpmath
+
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and
