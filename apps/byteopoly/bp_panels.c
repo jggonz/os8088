@@ -9,7 +9,7 @@
  * only the data is resident. */
 
 int bx_artstr(int id, int n, char *buf);
-/* #define BP_PANELS_DEMO 1 */   /* looking only: hand-made states, F5 steps; never shipped */
+#define BP_PANELS_DEMO 2   /* looking only: hand-made states, F5 steps; never shipped */
 
 #define GP_MAXB 6
 /* panel kinds */
@@ -78,7 +78,10 @@ static BPByte gp_cn;
 #ifdef BP_PANELS_DEMO
 static BPByte gp_demo;
 static void ovl_gp_demoset(int n);
+static void ovl_gp_demonew(void);
+#if BP_PANELS_DEMO != 2
 #define bp_can(s, se, t, a) 0
+#endif
 #endif
 
 /* ---- text builders ------------------------------------------------------ */
@@ -417,7 +420,13 @@ static void ovl_gp_track(void)
 {
     int d;
 #ifdef BP_PANELS_DEMO
-    if (!gp_demo) { gp_demo = 1; ovl_gp_demoset(0); }
+    if (!gp_demo) { gp_demo = 1;
+#if BP_PANELS_DEMO == 2
+        ovl_gp_demonew();
+#else
+        ovl_gp_demoset(0);
+#endif
+    }
 #endif
     if (bp_game.match_id.lo != gp_mid) {
         gp_mid = bp_game.match_id.lo;
@@ -1384,6 +1393,15 @@ static void ovl_gp_chat(int machine, const char *text)
 }
 
 #ifdef BP_PANELS_DEMO
+static void ovl_gp_demonew(void)
+{
+    static BPSetup su;
+    bp_setup_default(&su);
+    su.nseats = 3;
+    os88_strcpy(su.name[0], "George", 9); os88_strcpy(su.name[1], "Ada", 9); os88_strcpy(su.name[2], "Alan", 9);
+    su.token[1] = 1; su.token[2] = 2;
+    bp_sess_new(&su);
+}
 /* hand-made states to look at the panels before the engine lands: F5 steps */
 static void ovl_gp_demoset(int n)
 {
