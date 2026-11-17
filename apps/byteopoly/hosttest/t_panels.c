@@ -113,7 +113,6 @@ int main(void)
         }
         BP_CHECK(bought && auc, "a purchase and an auction were played through the panels");
     }
-#ifdef BP_L_DIVERGED    /* the real session (link lane) decides bp_sess_mine */
     /* a seat on the other PC: facts shown, no buttons, no commands */
     t_new(2);
     bp_mode = BP_MODE_HOST; bp_here = 0;
@@ -132,7 +131,6 @@ int main(void)
         BP_CHECK((int)bp_game.rev.lo == rv, "remote decider: Space does nothing");
     }
     bp_mode = BP_MODE_LOCAL;
-#endif
     printf("t_panels: %s\n", bp_host_fail ? "FAILED" : "ok");
     return bp_host_fail ? 1 : 0;
 }

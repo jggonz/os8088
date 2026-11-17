@@ -587,6 +587,7 @@ static void ovl_gp_brow(void)
 /* ---- the panels ---------------------------------------------------------------- */
 static const char *gp_lstate[] = {"off", "searching", "peer found", "bad peer", "lobby",
                                   "in sync", "PAUSED", "resyncing", "boards differ"};
+static const char *gp_pairs[] = {"idle", "saving or resuming", "complete", "failed - old pair stands"};
 static const char *gp_phn[] = {"", "move", "release", "buy", "bid", "card", "debt", "trade", "end turn", "over"};
 
 static int ovl_gp_sprite(int art)
@@ -867,11 +868,14 @@ static void ovl_gp_dpause(void)
 {
     ovl_gp_frame(bp_link_state() == BP_L_RESYNC ? "RESYNCING" : bp_link_state() == 8 ? "BOARDS DIFFER" : "CABLE LINK LOST");
     ovl_gp_tc(bp_link_state() == 8 ? "Economic input is stopped" : "Game paused", 0);
-    ovl_gp_lb(); ovl_gp_la("Waiting for the other PC: "); ovl_gp_la(bp_link_msg());
+    ovl_gp_lb(); ovl_gp_la(bp_link_state() == 8 ? "Boards differ: " : "Waiting for the other PC: "); ovl_gp_la(bp_link_msg());
     ovl_gp_para(gp_line, 0);
     ovl_gp_t("LAST ACTION RETAINED:", 0);
     ovl_gp_para(bp_log_line(0), 0);
-    ovl_gp_t("Reconnect to continue this turn.", 0);
+    if (bp_sess_pair() == BP_PAIR_BUSY || bp_sess_pair() == BP_PAIR_FAIL) {
+        ovl_gp_lb(); ovl_gp_la("Paired save: "); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
+    }
+    ovl_gp_para(bp_link_state() == 8 ? "The client takes the host's board to continue." : "Reconnect to continue this turn.", 0);
     if (gp_conf) ovl_gp_t("Leaving abandons this match. Sure?", 0);
 }
 static void ovl_gp_ditem(int p, char *dst)
@@ -1010,6 +1014,7 @@ static void ovl_gp_ddiag(void)
     ovl_gp_lb(); ovl_gp_la("overrun "); ovl_gp_lu(bp_diag.overrun); ovl_gp_la("  resync "); ovl_gp_lu(bp_diag.resync);
     ovl_gp_la("  chat lost "); ovl_gp_lu(bp_diag.chatdrop); ovl_gp_tl();
     ovl_gp_lb(); ovl_gp_la("rx "); ovl_gp_lu(bp_diag.rx); ovl_gp_la("  tx "); ovl_gp_lu(bp_diag.tx); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la("Paired save: "); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
     ovl_gp_para(bp_link_msg(), 0);
 }
 /* help text: the art record's lines; a "#KEYS" line starts the keys section */
