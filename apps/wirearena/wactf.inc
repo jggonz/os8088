@@ -454,6 +454,11 @@ wc_evin:
     mov bl, [si+4]
     cmp bl, 1
     ja .ret
+    cmp byte [si+5], WC_DROP    ; (fenced: a state, and a carrier the match
+    ja .ret                     ; has - wc_pos indexes wc_figp with it)
+    mov al, [si+6]
+    call wa_lkslotin
+    jc .ret
     push bp
     push si
     mov bp, bx                  ; BP = its team
@@ -839,7 +844,7 @@ wc_go:
     cmp al, [wa_arena]
     je .same
     mov [wa_arena], al
-    call wa_loadarena
+    call wa_loadin              ; (in the bracket: its refusal said after it)
     jc .fail
     call wa_geominit
 .same:

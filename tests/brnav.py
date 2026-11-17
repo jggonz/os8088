@@ -565,7 +565,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.6c":
+    if line != "User-Agent: os8088 Browser 1.7":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
@@ -663,7 +663,11 @@ def main():
                 fails.append("frogfind submit: " + err)
             else:
                 wait_done("submit")
-                got = srv.log[-1] if len(srv.log) > before else None
+                # (the page's own picture is fetched after it, so the
+                # submit is looked for among everything since, SPEC.md 71.26)
+                new = srv.log[before:]
+                got = next((r for r in new if "q=os8088" in r),
+                           new[-1] if new else None)
                 print("  the server saw: %r" % got)
                 if not got or "q=os8088" not in got:
                     fails.append("submitting a form whose action is `/` did "
@@ -811,6 +815,10 @@ def main():
     fetch(URL_FS)
     st = wait_done("the frameset")
     doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
+    # the line count BEFORE the table's size: layout runs on after BN_DONE
+    # and grows the table before it writes a line, so this order is the one
+    # in which the two readings can be compared at all
+    nlines = rw("br_nlines")
     linekb = rw("br_linekb")
     ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
     print("after fs: state %d, msg %04X, doclen %d, lines %d/%d KB, title %r, "
@@ -826,9 +834,9 @@ def main():
     if len(doc) <= 16 * 1024:
         fails.append("the frameset output is only %d bytes; this fixture must "
                      "exercise aggregate output growth beyond 16 KB" % len(doc))
-    if linekb * 1024 < rw("br_nlines") * 10 or linekb > 62:
+    if linekb * 1024 < nlines * 10 or linekb > 62:
         fails.append("the frameset needs the full safe line table; got %d KB "
-                     "for %d lines" % (linekb, rw("br_nlines")))
+                     "for %d lines" % (linekb, nlines))
     for mark in (b"Hesperus", b"Phosphorus"):
         if mark not in doc:
             fails.append("the frameset's document lacks %r - the child that "

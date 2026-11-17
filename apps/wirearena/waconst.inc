@@ -42,6 +42,8 @@ WA_FLODV2   equ 24              ; ...Medium and below: under ~10, from 464
                                 ; (the owner on the trial builds, 2026-11-15:
                                 ; "you can hardly tell at that distance" -
                                 ; wa_flodv, the detail level's: wa_levtab)
+WA_NPKIND   equ 7               ; pickup kinds: wa_pkresp's words, wa_pkshape's
+                                ; rows (both check it), and a ROLL's fence
 
 ; per-figure record
 F_X     equ 0

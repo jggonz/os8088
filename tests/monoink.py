@@ -71,7 +71,7 @@ def buttons(fb, w, x0, x1, y):
     return out
 
 
-with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+with os88marty.launch("build/os8088-360.img", apps="build/network360.img",
                       machine=MACHINE, boot=False) as m:
     m.run()
     os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
@@ -80,9 +80,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     w = dispcp.win_list(m, S)
     wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
-    w = dispcp.win_list(m, S)
-    wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
+    # network360.img carries the Browser at its ROOT (SPEC.md 71.30)
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BROWSER.O88")
     os88marty.settle(m)
 

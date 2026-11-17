@@ -463,13 +463,34 @@ normal — several commits in this repo have one.
 Fork, branch, open the PR against `main`. `.github/CODEOWNERS` auto-requests
 review from @jggonz.
 
-A good PR body says:
+A good PR body says (`.github/pull_request_template.md` lays it out):
 
 - what changed and why;
 - which SPEC.md sections moved;
-- **how you verified it** — the exact commands, and a screendump if it's
-  visible. Screenshots are the review currency in a project like this;
-- whether you checked the 360KB build or only QEMU.
+- **how you verified it**: the exact commands and the suite rows that cover
+  the change;
+- whether you checked the 360KB build or only QEMU;
+- **screenshots of the change, which are REQUIRED** whenever it changes what
+  the machine draws.
+
+**Screenshots are not optional.** A pull request that touches `apps/`,
+`kernel/`, `drivers/`, `faces/` or `boot/` needs screenshots in its
+description, or the `PR screenshots` check fails it.
+
+- Take one screenshot for each adapter the change reaches: VGA, CGA and
+  Hercules, plus EGA where it has its own layout.
+- Crop and zoom a small change (`tools/shot.py out.png --crop X,Y,W,H --zoom N`).
+- Show before and after when something changed rather than appeared.
+- Take them on the glass, in QEMU, MartyPC, 86Box or on real hardware, and say
+  which one under each picture. A host-side render is labelled as one.
+- Commit them under `docs/<subject>/` on your branch and link them as
+  `https://raw.githubusercontent.com/<you>/os8088/<commit SHA>/docs/...`, or
+  drag them into the description on github.com.
+
+When there is truly nothing to see (a host tool, a gate, docs, a refactor whose
+pixels are identical), write one line in the Screenshots section:
+`No visible change: <why, and what showed it>`. The check accepts that line
+instead of a screenshot.
 
 Things that won't merge: 186+ instructions, anything that breaks the 256KB /
 0xA000 budget, changes to interfaces without the matching SPEC.md update, and

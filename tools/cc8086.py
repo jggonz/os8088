@@ -1245,8 +1245,14 @@ def _owner(lines, i):
     return None
 
 
-def overlay(lines, errors, path):
+def overlay(lines, errors, path, resident=False):
     """Split `ovl_*` out into .modc and wire both directions.  See above.
+
+    resident=True (--ovl-resident) is for a code part that is loaded WITH its
+    image and bound before any of it can run - PageDesk's PDREND
+    (PAGEDESK-SPEC 20.22.7.9): a resident call site is then the far call
+    alone, without the cc_ovneed / jc preamble, which would be five bytes and
+    a call of nothing at every site.
 
     Returns (lines, stats).  `lines` is unchanged, and no table is emitted, if
     the program has no overlay function at all - a package that does not use
@@ -1295,6 +1301,9 @@ def overlay(lines, errors, path):
                     mm = True       # and goes through cc_ovmthunk so that no
                     out.append("%smov\tbx, cc_ovm%s" % (pad, sym))  # stack
                     out.append("%scall far [cc_ovvmm]" % pad)  # holds our CS
+                elif resident:      # loaded with the image: nothing to need
+                    sites += 1
+                    out.append("%scall far [cc_ovm%s]" % (pad, sym))
                 else:               # so only a resident site pays for the load
                     sites += 1
                     lab = "..@ovl_site_%d" % sites
@@ -1508,7 +1517,7 @@ def run(path, text, args):
     # AFTER lowering, because a lowering can emit a `[bp+N]` of its own that
     # was not in the source (a fused `imul ax, [bp+6], 2` becomes a `mov` from
     # it), and an argument fixup that ran first would miss exactly those.
-    lines, ovl = overlay(lines, errors, path)
+    lines, ovl = overlay(lines, errors, path, getattr(args, 'ovl_resident', False))
 
     # Last, so that overlay() sees exactly the text it always saw.
     lines, used = externs(lines)
@@ -1569,6 +1578,11 @@ def main():
                          "ships")
     ap.add_argument("--quiet", action="store_true",
                     help="print only frames that break the budget")
+    ap.add_argument("--ovl-resident", action="store_true",
+                    help="the ovl_* code part is loaded with the image and "
+                         "bound before it can run (a module's second code "
+                         "segment, PAGEDESK-SPEC 20.22.7.9): emit no "
+                         "cc_ovneed preamble at a resident call site")
     ap.add_argument("--no-peep", action="store_true",
                     help="skip tools/ccpeep.py, the peephole pass over the "
                          "lowered output (SPEC.md 73.15) - the A/B, and what "

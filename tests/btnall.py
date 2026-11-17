@@ -66,13 +66,14 @@ def pkg_syms(src, inc, defines=()):
 # the very drift this control exists to end (docs/WRITING-TESTS.md).
 # Telnet is False only because tests/btngesture.py already drives it in
 # depth; every other row is driven here.
+BROWSER = "B:/BROWSER.O88"        # network360.img's root (SPEC.md 71.30)
 ROWS = [
     ("A:/APPS/DOS.O88", "dos_btrec", "/apps/dos/dos.asm",
      ["/apps/", "/apps/dos/", "/drivers/net/", "/kerndos/"],
      ("-DDOSKPART", "-DDOS_EXTCORE", "-DDOS_WIN16"), (556, 26)),
     ("B:/APPS/TELNET.O88", "te_btrec", "/apps/telnet/telnet.asm",
      ["/apps/", "/apps/telnet/", "/drivers/net/"], (), False),
-    ("B:/APPS/BROWSER.O88", "br_btrec", "/apps/browser/browser.asm",
+    ("B:/BROWSER.O88", "br_btrec", "/apps/browser/browser.asm",
      ["/apps/", "/apps/browser/", "/drivers/net/"], (), True),
     ("B:/APPS/AUDIO.O88", "apu_btrec", "/apps/audio/audio.asm",
      ["/apps/", "/apps/audio/"], (), True),
@@ -113,10 +114,10 @@ def close_menu(ui, w):
 
 def run():
     fails = []
-    with os88ui.boot(ROOT + "/build/os8088-360.img",
-                     apps=ROOT + "/build/apps360.img") as ui:
+
+    def drive(ui, rows):
         m, mo = ui.m, ui.mo
-        for path, rec, src, inc, defs, at in ROWS:
+        for path, rec, src, inc, defs, at in rows:
             name = path.rsplit("/", 1)[-1]
             syms = pkg_syms(ROOT + src, inc, defs)
             w = ui.path(path)
@@ -179,7 +180,22 @@ def run():
 
             if at is not False:
                 cx, cy = (r0[0] + r0[2]) // 2, (r0[1] + r0[3]) // 2
+                # ABOVE the button, not below it: a clamp to the window's
+                # bottom edge can land back INSIDE a control near the foot of
+                # the content, which reads exactly like a gesture that cannot
+                # be cancelled. Artful's splash row failed this way and the
+                # product was correct.
+                off_y = max(wr[1] + 2, r0[1] - 10)
                 up0 = dark()
+                # ...and the upright button counted with the pointer WHERE
+                # THE SLIDE WILL LEAVE IT: the arrow hangs below its hot spot
+                # and over the button's top rows, so the glass after the
+                # cancel is compared with the glass of the same pointer and
+                # an unpressed button, not with a pointer elsewhere (Audio,
+                # opened one cascade step higher once the Browser left this
+                # boot, differed from `up0` by 29 pixels of arrow alone)
+                mo.to(cx, off_y); os88marty.settle(m)
+                upoff = dark()
                 mo.to(cx, cy); os88marty.settle(m)
                 mo._edge(True); m.advance(frames=10); m.run()
                 held = rd(10)                              # BT_DOWN
@@ -197,23 +213,19 @@ def run():
                                  "%s armed NOTHING (BT_DOWN=0) - the press is "
                                  "being hit-tested against rects it does not "
                                  "match" % (name, (cx, cy)))
-                # 4. sliding off UN-arms it (SPEC.md 13.8.1's cancel)
-                # ABOVE the button, not below it: a clamp to the window's
-                # bottom edge can land back INSIDE a control near the foot of
-                # the content, which reads exactly like a gesture that cannot
-                # be cancelled. Artful's splash row failed this way and the
-                # product was correct.
-                off_y = max(wr[1] + 2, r0[1] - 10)
+                # 4. sliding off UN-arms it (SPEC.md 13.8.1's cancel), to
+                # off_y above
                 mo.to(cx, off_y, l=True)
                 m.advance(frames=30); m.run()
                 off = rd(10)
                 offdark = dark()
-                if held and abs(offdark - up0) > max(8, up0 // 4):
+                if held and abs(offdark - upoff) > max(8, upoff // 4):
                     fails.append("%s: the pointer slid OFF and the button is "
                                  "still inverted on the GLASS (%d dark pixels, "
-                                 "upright was %d) - SPEC.md 13.8.1's cancel is "
-                                 "what tells the user the gesture is off"
-                                 % (name, offdark, up0))
+                                 "upright under the same pointer was %d) - "
+                                 "SPEC.md 13.8.1's cancel is what tells the "
+                                 "user the gesture is off"
+                                 % (name, offdark, upoff))
                 if held and off != 0:
                     fails.append("%s: the pointer slid OFF the button and it "
                                  "is still down (BT_DOWN=%d) - the gesture "
@@ -222,7 +234,8 @@ def run():
             print("  %-14s N=%d rect0=%s%s"
                   % (name, n, r0,
                      "" if at is False
-                     else " up=%d held=%d off=%d ok" % (up0, dn, offdark)))
+                     else " up=%d/%d held=%d off=%d ok"
+                     % (up0, upoff, dn, offdark)))
             # Esc first: a package whose button DID fire may have taken the
             # whole screen (Artful's New does), and a menu pick cannot reach a
             # window that is not there any more.
@@ -233,6 +246,17 @@ def run():
                 os88marty.settle(m)
                 ui.menu_pick(close_menu(ui, w), "Close")
             ui.settle()
+
+    # TWO BOOTS, because no 360KB apps disk carries all four any more: the
+    # Browser left apps360.img for network360.img, at its ROOT (SPEC.md
+    # 71.30), and Audio and Artful are not on that disk
+    for apps, rows in (("apps360.img",
+                        [r for r in ROWS if r[0] != BROWSER]),
+                       ("network360.img",
+                        [r for r in ROWS if r[0] == BROWSER])):
+        with os88ui.boot(ROOT + "/build/os8088-360.img",
+                         apps=ROOT + "/build/" + apps) as ui:
+            drive(ui, rows)
 
     for f in fails:
         print("FAIL " + f)

@@ -303,6 +303,78 @@ kind = "program"
 summary = "A four-function desk calculator with a fold-out history. Click a past answer to start the next sum from it."
 short = "Desk calculator with history"
 
+["PAGEDESK.O88"]
+title = "PageDesk"
+kind = "program"
+summary = "Reads and marks up PDF files. Highlights, notes, text boxes and drawings are saved into a new copy; pages can be rotated, moved, extracted and inserted from another file."
+short = "PDF viewer and editor"
+
+["PAGEDESK/"]
+title = "PageDesk"
+kind = "folder"
+summary = "PageDesk's decoders for compressed images, fonts and encrypted files. They are read from here when a page needs them, so leave the folder where it is."
+short = "PageDesk's helper modules"
+
+["PDFONTS.TXT"]
+title = "PageDesk font licence"
+kind = "document"
+summary = "The licence of the Liberation fonts PageDesk draws text in. Opens in Note Pad."
+short = "Font licence for PageDesk"
+
+["PDFONTX.RES"]
+title = "PageDesk extra font sizes"
+kind = "data"
+summary = "The other text sizes PageDesk uses for pages set in 6 to 24 pixel type. Optional: without it PageDesk scales the nearest size it has."
+short = "Extra text sizes for PageDesk"
+
+["HELLO.PDF"]
+title = "Hello (PDF)"
+kind = "document"
+summary = "A one-page sample with text and simple drawings, the quickest file to try PageDesk on. Opens in PageDesk."
+short = "One-page sample"
+
+["XTGUIDE.PDF"]
+title = "XT guide (PDF)"
+kind = "document"
+summary = "A twelve-page illustrated guide with a table of contents and links between pages. Opens in PageDesk."
+short = "Twelve-page sample with links"
+
+["MARKUP.PDF"]
+title = "Markup worksheet (PDF)"
+kind = "document"
+summary = "A two-page worksheet to practise highlights, notes and text boxes on. Opens in PageDesk."
+short = "Sample to mark up"
+
+["PAGES.PDF"]
+title = "Pages (PDF)"
+kind = "document"
+summary = "Eight pages in different sizes and rotations, for trying page rotation, moving, extracting and inserting. Opens in PageDesk."
+short = "Sample for page operations"
+
+["LATIN.PDF"]
+title = "Latin text (PDF)"
+kind = "document"
+summary = "A sample of text in several encodings, with accented letters and punctuation in the standard fonts. Opens in PageDesk."
+short = "Accented-text sample"
+
+["MONOIMG.PDF"]
+title = "Black and white pictures (PDF)"
+kind = "document"
+summary = "A sample with one-bit, grey and stencil images. Opens in PageDesk."
+short = "Image sample"
+
+["FLATE.PDF"]
+title = "Compressed streams (PDF)"
+kind = "document"
+summary = "A sample whose page is stored compressed, as most PDFs are. Opens in PageDesk."
+short = "Compressed sample"
+
+["ACROFORM.PDF"]
+title = "Form (PDF)"
+kind = "document"
+summary = "A sample with form fields. PageDesk shows the form as printed and does not fill it. Opens in PageDesk."
+short = "Form sample"
+
 ["NOTEPAD.O88"]
 title = "Note Pad"
 kind = "program"

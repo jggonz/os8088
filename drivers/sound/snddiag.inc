@@ -29,7 +29,7 @@ SNDV_DIAG    equ 14             ; the verb (sndpkg.inc's numbering, past
                                 ; which is how the package tells the builds
                                 ; apart
 SDG_SIG      equ 'SG'
-SDG_VER      equ 1
+SDG_VER      equ 2
 
 SDGF_COPY    equ 0              ; AL: ES:DI <- the record, CX = SDG_LEN
 SDGF_MIXRD   equ 1              ; AL: mixer register AH, read CL times (1..4)
@@ -56,7 +56,9 @@ SDG_O_VERHI  equ 6              ; db E1h's major
 SDG_O_VERLO  equ 7              ; db ...and minor
 SDG_O_IRQ    equ 8              ; db the line, 0FFh = none usable
 SDG_O_HDMA   equ 9              ; db the SB16's 16-bit channel, 0 = none
-SDG_O_AUTO   equ 10             ; db 1 = auto-init DMA (DSP >= 2.00)
+SDG_O_AUTO   equ 10             ; db bit 0 auto-init; bits 2:1 (v2):
+                                ; 00 DMA 1, 01 DMA 3, 11 refused (34.5.8)
+SDG_DMA_MASK equ 6
 SDG_O_OPL    equ 11             ; db 0 / SND_OPL2 / SND_OPL3
 SDG_O_MIX    equ 12             ; db 0 / 1 CT1335 / 2 CT1345 / 3 CT1745
 SDG_O_SBUP   equ 13             ; db 1 = the DSP tier attached
@@ -256,9 +258,12 @@ sdg_copy:
     mov al, [sbl_irq]
     mov ah, [sbl_hdma]
     stosw                                   ; 8
-    mov al, [sbl_auto]
+    mov al, [sbl_dma]
+    dec al                                  ; 1 -> 0, 3 -> 2, FFh -> FEh
+    and al, SDG_DMA_MASK
+    or al, [sbl_auto]
     mov ah, [opl_kind]
-    stosw                                   ; 10
+    stosw                                   ; 10: flags/channel, OPL kind
     mov al, [mix_kind]
     mov ah, [sbl_up]
     stosw                                   ; 12

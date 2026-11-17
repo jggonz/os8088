@@ -31,38 +31,31 @@ overlapping windows, serial mouse, a bottom dock, and loadable software
 packages that run as closable, multi-instance apps. One binary drives VGA,
 Hercules or CGA, picked at boot.
 
-os8088's DOS (`apps/dos/`, `kerndos/`) is a clean reimplementation of DOS, not
-an emulator: call it "DOS", never "the DOS box" or "the box" - DOSBox is an
-unrelated emulator.
+os8088's DOS (`apps/dos/`, `kerndos/`) is a reimplementation, not an
+emulator: call it "DOS", never "the DOS box" - DOSBox is unrelated.
 
 This file is a map. Each document below is the authority on its subject and
 nothing here duplicates it — a second copy is a copy that goes stale.
-
-**"Working in this fork" at the end is BRANCH-SPECIFIC — read it before your
-first commit and before any `git` question about ancestry.** Ten rules that
-are this fork's rather than the project's, kept in one section at the bottom
-so that a PR going upstream deletes them rather than hunting for them. Two
-of them fire in the first minute of a session: rule 9 (`tools/session-sync.sh`)
-is the first command, and rule 0 (`make deps`) the second.
 
 | document | read it before |
 |---|---|
 | **[SPEC.md](SPEC.md)** — the binding contract | touching any interface. Every symbol name, register contract, constant and layout is pinned there. **Update it *before* the change, not after.** A bare `§` anywhere in this repo means SPEC.md; §4 is the module-ownership table |
 | **[PERFORMANCE.md](PERFORMANCE.md)** | anything that draws, lays out or loops — but the load-bearing ~200 lines are condensed below, and over half the file is a field-measurement log. Open it for the reasons listed at the end of that section, not by default |
-| **[docs/WRITING-TESTS.md](docs/WRITING-TESTS.md)** | **ADDING A ROW TO THE SUITE — read it before writing the first line, not after the review.** Its one-screen **Start here** is the rules: register the row in the right tier with a `secs` you measured, use `wants=` or a private tree rather than `builds=True`, drive the UI through `tools/os88ui.py` rather than remembered coordinates, wait on the GUEST's clock rather than `time.sleep`, and **break the thing on purpose and watch the row go red** — a green row that tests nothing is worse than none. [docs/TEST-INCIDENTS.md](docs/TEST-INCIDENTS.md) is the incidents the rules are made of |
-| **[docs/DOS-DEBUGGING.md](docs/DOS-DEBUGGING.md)** | a DOS program (SPEC.md 96) misbehaving under os8088's DOS. Our own trace looks right on both sides of a defect, so the method is to run the same program under a real IBM DOS and DIFF: `tools/os88dosdbg.py` (`trace`, `ref`, `diff`, `build`, `syms`) aligns the two traces on CALL SITE, `tools/os88fat.py` is the disk half and `tests/dostrap/` holds probes that run under both. Read its *Traps* first: **every MartyPC 5150 profile has 40-CYLINDER drives**, so a 720KB image's top half reads as END OF FILE (`os88fat.py reach` checks; `os8088_5150_herc_sb_720_gla` is the machine) |
-| **[docs/BOCHS.md](docs/BOCHS.md)** | running **kern_mega** at all. Bochs is its instrument and nothing else's: QEMU lets code write through CS and checks no segment limit, so it runs what a real 286 faults on, and Bochs reproduced the Victory 286's faults to the CS:IP. Install, `tools/os88bochs.py` and `tools/os88bochsui.py`, reading E9 and the debugger, recipes - and the four blind spots, of which the one that bites is that **its CPU is a 386, so the 286 reset path never runs there** - docs/86BOX.md is where it does |
-| **[docs/86BOX.md](docs/86BOX.md)** | anything only an 86Box machine can answer - **a 286 or 386 running kern_mega's RESET path, an AT BIOS, the owner's mr286 or pc5150 profile, or a TIMING on a machine MartyPC does not model** - or the moment you are about to write *"86Box cannot be automated"*. **It can, and in a container**: `python3 tools/os88box.py build` makes upstream 86Box with its automation socket and GDB stub (three minutes), and `tools/os88box.py` boots any `vm/` profile HEADLESS - step by exact emulated time, screenshot, read the text screen and guest memory, keys, a closed-loop pointer (`to X Y` off the kernel's own `mouse_x`), double-clicks, typing, `quit` saving the CMOS. **`faults` is the instrument for a machine that REBOOTS**: this tree's patch prints every CPU exception and shutdown with its CS:IP, resolved against the kernel map - the one tool that sees a 286 reset loop, which Bochs (a 386) cannot. Read its *AT machines start in BIOS setup once* before the first launch and its *What it is NOT* before quoting a time: 86Box is not cycle-accurate |
-| **[docs/TESTING.md](docs/TESTING.md)** | concluding something is untestable, **or reaching for a test tier** — it is the matrix of what each emulator can and cannot do, with a recipe per capability, and its *When to run which tier* is the AUTHORITY on when `fast`, `full` and the soak are run. None of the three is a per-commit gate, and the Testing section below is only its short form |
-| **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory — the three rules and their guards, what `kernsize`'s lines mean, the ladder, task stacks and the standing gotchas (no transfer across a 64KB page, sections are not heap, rungs are not a design input). |
-| **[docs/HEAP-CLAIMS.md](docs/HEAP-CLAIMS.md)** | declaring a heap claim movable, or asking why a compaction achieved less than expected — one row per claim in the tree with its `MC_RLOC` verdict and the reason, including the packages that claim and have never declared (Word, Sheet, every C package — the C SDK cannot). `tools/heapmap.py` reads the fact off a running machine |
-| **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — MartyPC boots a real Hercules and `shot` reads it back (use the `_herc_gla` twin: the IBM ROM is not in the tree); QEMU needs `VIDEO=herc HERCSEG=0x7000` plus `tools/hercshot.py`, and all four ways of getting that wrong give a black or plausible image rather than an error |
+| **[docs/TESTING.md](docs/TESTING.md)** | concluding something is untestable — it is the matrix of what each emulator can and cannot do, with a recipe per capability |
+| **[docs/WRITING-TESTS.md](docs/WRITING-TESTS.md)** | adding a row to the suite — its *Start here* is the rules: the right tier and a `secs` you measured, `tools/os88ui.py` rather than remembered coordinates, the guest's clock rather than `time.sleep` (`tests/unit/t_hostwait.py` fails a host-clock wait; `tests/hostwait.txt` is its ratchet), and break the thing on purpose to watch the row go red |
+| **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory |
+| **[docs/HEAP-CLAIMS.md](docs/HEAP-CLAIMS.md)** | declaring a heap claim movable, or asking why a compaction moved less than expected — one row per claim with its `MC_RLOC` verdict and the reason |
+| **[docs/BOCHS.md](docs/BOCHS.md)** | running kern_mega (docs/plans/KERN-MEGA-PLAN.md) at all — Bochs is its instrument, because QEMU runs what a real 286 faults on; install, `tools/os88bochs.py`, and its blind spots |
+| **[docs/86BOX.md](docs/86BOX.md)** | anything only a period machine can answer — a 286 or 386 running kern_mega's reset path, an AT BIOS — and how `tools/os88box.py` drives a `vm/` profile headless |
+| **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — it *is* automatable, and all three ways of getting it wrong give you a black image rather than an error |
 | **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** | writing or building a package in C (§73) — how to install the compiler, the four C rules and what each refusal means, and what the language does not have here |
-| **[docs/MARTYPC-DEBUG.md](docs/MARTYPC-DEBUG.md)** | driving the emulator — `launch`/`settle`/`sym`, the debug server, reading the guest's floppy back on the host, and installing the deps in a fresh Ubuntu container. The IBM ROM is NOT in the tree, so `launch()`'s default machine exits at once in a container: name a `_gla` twin, or go through `os88ui.boot()` which substitutes it |
+| **[docs/DOS-DEBUGGING.md](docs/DOS-DEBUGGING.md)** | a DOS program (§96) misbehaving under os8088's DOS — run it under a real IBM DOS and diff the two traces with `tools/os88dosdbg.py` |
+| **[docs/MARTYPC-DEBUG.md](docs/MARTYPC-DEBUG.md)** | driving the emulator — `launch`/`settle`/`sym`, the debug server, reading the guest's floppy back on the host, and installing the deps in a fresh Ubuntu container |
 | **[docs/UPSTREAM.md](docs/UPSTREAM.md)** | any claim about what is ahead, behind, merged or unrelated. **Its Rule 0: a fresh clone is SHALLOW, and git answers ancestry questions confidently and wrongly on one** |
 | **[docs/FIELD-MACHINES.md](docs/FIELD-MACHINES.md)** | asking for a field run — who has the hardware, what is in it, what a run costs them, and the two rules that bind whoever reads a result |
-| **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | bugs reported off real hardware, one numbered entry each — the open ones with what has been ruled out and what to try next, the closed ones a paragraph naming the fix and its § (code and SPEC.md cite the numbers) |
+| **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
+| **[docs/PAGEDESK-SPEC.md](docs/PAGEDESK-SPEC.md)** | touching PageDesk (§129, `apps/pagedesk/`, the PDF viewer/editor: the primary, its overlay and the `PDENG`/`PDREND`/`PDWRT` C modules) — its binding contract, cited as `PAGEDESK-SPEC §N`; `docs/plans/PAGEDESK-PLAN.md` is the story list and `docs/PAGEDESK-GUIDE.md` the user guide. **Every segment is at its cap** (PAGEDESK-SPEC 20.20.1); `pdstk` bounds every call chain statically (the UI task's stack is 512 bytes, a module verb runs on 20.15's private stack) and `pdkgate` checks every kernel call a module makes is a gate slot |
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
 
 ## Fast fullscreen VRAM games (SPEC.md §53, §109.5)
@@ -155,9 +148,10 @@ chunks in a fallback without a rate hook.
 serial bytes, not 4.77 MHz speed. In the final pass described below, use
 MartyPC's guest cycles with held-key motion, wall/paddle hits and no pause or
 serve countdown; report display frames and physics steps separately.
-WireBall's own rows (`grep -n wireball tests/suite.py`) are the worked
-example of what to check: every adapter, page counts, sprite occupancy after
-movement and the restored desktop. Include real serial traffic when changing
+WireBall's `wireballvideo` row checks VGA, CGA, lone Hercules and dual-card
+Hercules, page counts, exact sprite occupancy after movement, fractional
+controls and restored desktop/input state. `wireballphysics` checks swept
+contacts and their cycle budget. Include real serial traffic when changing
 the renderer's service budget. Set 160 measured 46–59 display frames/s and
 about 73 motion steps/s, not a guarantee for every game or physical XT.
 Read [Hercules testing](docs/HERCULES-TESTING.md) and
@@ -252,26 +246,12 @@ when `Workflow` is unavailable. Keep the skill's lessons, independent review
 stages, authorization gates and final test pass on either host. `vga-face`
 remains manual-only, with matching policy in its `agents/openai.yaml`.
 
-| skill | for |
-|---|---|
-| `release-os8088` | cutting a release: images to the website repo and a GitHub release |
-| `port-to-os8088` | porting an existing program to a C package, the way `apps/cword` was made |
-| `native-game-port` | a native assembly remake of a console or arcade game |
-| `review-fork-pr` | an incoming PR from a contributor's fork: merge `main`, review, fix, push back |
-| `refresh-stale-pr` | one of the maintainer's own stale PRs: is it still valid and needed |
-| `functional-check` | verifying a change on the glass in QEMU before it merges |
-| `vga-face` | a colour face for a package on VGA/EGA (**manual invocation only**) |
-| `retro-face` | an app whose UI is a styled piece of hardware from mockups |
-| `win16-reference` | rebuilding the real Windows 3.0/3.1 machines SPEC.md §124 is held to |
-| `story-fanout` | building a plan's stories or open items with parallel sub-agents, each in its own worktree, verified before it is integrated |
-
-Each has a `LESSONS.md` beside it: what the runs it came from learned.
-
 ## Building an app or game in waves
 
 Use WireFleet's delivery workflow for new applications and games, unless the
-user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
-(§114) are the worked example of the result.
+user gives a different workflow. The worked example is
+[docs/plans/WIREFLEET-PLAN.md](docs/plans/WIREFLEET-PLAN.md), with its companion
+[build diary](docs/HOW-WIREFLEET-WAS-BUILT.md).
 
 1. **Isolate the work.** Read `docs/UPSTREAM.md`, fetch the current base and
    create a named feature branch in a separate git worktree. Leave the user's
@@ -310,32 +290,19 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
    adapters, sound/link configurations and resource cleanup checked, and report
    hardware-only limitations honestly. Do not mark unfinished stories done.
 
+## Pull requests show the change
+
+**A pull request that changes what the machine draws carries screenshots
+of the change in its description** - the owner's rule (2026-11-09), binding
+every contributor and agent. `.github/pull_request_template.md` is the shape
+and says what each picture needs (one per adapter the change reaches, taken
+on the glass and named, hosted at a pinned SHA, never under `build/`);
+`.github/workflows/pr-screenshots.yml` fails a pull request touching `apps/`,
+`kernel/`, `drivers/`, `faces/` or `boot/` whose description has neither an
+image nor a `No visible change: <why>` line. A description rewritten after
+review shows the head being merged, not an earlier one.
+
 ## Hard rules (§1 — these break silently if violated)
-
-> ### RUNGS ARE TEMPORARY. BYTES ARE FOREVER.
->
-> The footprint moves in 512-byte steps, so a change that adds 400 bytes often
-> reports as costing nothing and a change that saves 300 often reports as
-> buying nothing. **Both readings are wrong and neither is a rounding error —
-> they are the wrong question.** The right one is always *how many BYTES, and
-> what do they buy?*, and it is asked against the byte and not against the
-> step. This project will keep optimising and will keep spending; every rung
-> gets crossed eventually, and the byte that crossed it is charged to whoever
-> was standing there rather than to whoever spent it.
->
-> **A rounded figure will actively hide the thing you are deciding about.**
-> Worked example, this tree: `gfx_points` was built with one inner loop and
-> with three, and `kern_small`'s `kernel.bin` is **75,493 bytes either way** —
-> section padding swallowed the difference whole. The symbol span says what the
-> file could not: **472 bytes against 215**. Measure the SPAN, or `kernsize`'s
-> sum and its accrued line; never a step count, and never a padded artefact.
->
-> **The question that replaces it has a shape**: *do we spend N resident bytes
-> for M cycles?* — and it may answer differently per build. The same
-> `gfx_points` split is **yes on `kern_big` and no on `kern_small`**: 257 bytes
-> for 92 cycles a point is worth it on the machine with memory and is not on
-> the machine with 128KB (SPEC.md 5.6.9.3, PERFORMANCE.md Set 143.3.2).
-
 
 - **8086 only.** `cpu 8086` plus `-w+error`: no `pusha`, no `push imm`, no
   `shl reg, imm` other than 1, no `movzx`, no 32-bit registers.
@@ -354,20 +321,18 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
 - **Label hygiene.** One flat namespace: every module-internal label carries
   its module prefix (`vga_`, `wm_`, `menu_`, `fm_`, `dsk_`, …) or is a NASM
   local label.
-- **A toast message is a `TOASTSTR`, never a bare `db` (§59.10.1).**
-  `TOASTSTR label, 'text'` (or `TOASTRUN label` ... `TOASTEND` round a run
-  with fields poked at run time) emits the same bytes and FAILS THE BUILD at
-  that line past `TOAST_MAX` (24) - the bar drops the rest silently. In C,
-  hand `os88_toast` a literal. Text only the running program knows (a name,
-  a number) goes in `tests/toastdyn.txt` with its reason.
+- **A toast message is a `TOASTSTR`, never a bare `db` (§59.10.1).** It
+  fails the build past `TOAST_MAX` (24), where the bar would drop the rest
+  silently. Text only the running program knows goes in `tests/toastdyn.txt`
+  with its reason.
 - **Text is `font_run`, not `font_str` (§6.1, §6.6).** `font_char`/`font_str`
   are TRANSPARENT — they leave what is underneath — so a `gfx_fill` followed by
   one of them writes every pixel twice, and the gap between the two passes is
   *visible* on the target machine. `font_run` draws the ground and the glyph in
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
-  `tests/textsites.txt` is the ratchet: a new call site is registered there
-  with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 70 sites in 21 files, every one
+  `tests/textsites.txt` is the ratchet: a new call site fails `test-full` until it
+  is registered with a reason, and the count can only go down. **The sweep is
+  finished** (§6.6.5): the registry stands at 69 sites in 21 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
@@ -377,140 +342,55 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   **Look at a drawing or greying change on a 1bpp adapter before calling it
   done** (§39.4, §47): grey rounds to black there, so a disabled glyph is a
   checkerboard and a ring is dotted.
-- **Code only a VGA or an EGA runs goes in `.vga`, behind a RUN-TIME door**
-  (SPEC.md 2.10.9). On kern_big the rung sits inside KERNEL_SEG's window, so
-  calls into it stay near, and a CGA, Hercules or MDA machine slides `.cold`
-  down over it at boot - after which a call into it runs `.cold`'s bytes.
-  Every way in from outside is registered in `tests/vgarefs.txt` with the
-  test that keeps those machines out (`[vid_planes]` = 4, `[vid_avail]`);
-  `%ifdef GFX_VGA` is not one, kern_big defining it on every machine. The
-  rung may not name `.cold`'s segment (a `.text` shim makes that call), and
-  a row reading a `.cold` label on a mono machine goes through `m.sym()`,
-  which follows the slide.
-- **Packages are trusted; a resident guard is for OUR catastrophic,
-  visible mistakes** (the owner's rule; SPEC.md 34.11.1,
-  docs/plans/LAST-DROP-BYTES.md). A real-mode kernel cannot defend itself
-  from a hostile package - and on kern_mega an FSX real-mode bracket hands
-  the package real mode anyway - so no resident byte is spent validating a
-  package's arguments against the package. The kernel's own mistakes are
-  caught at BUILD time wherever that is possible (a gate, a knob kernel). A
-  resident guard earns its bytes only where the failure is catastrophic and
-  user-visible and what it prints gives the owner something to act on, as
-  the stack-overflow panel does - and even then it is weighed against the
-  bytes: a panel for a failure no machine has met yet (a divide fault, so
-  far) goes behind a build knob, off in the shipped kernels, until a field
-  report says it is being hit. Bytes read off a disk or out of
-  `SYSTEM.CFG` are still hostile and still fenced (§19). On kern_mega, where
-  the kernel can afford not to crash, closing the faulting package beats
-  stopping the machine.
-- **No disk transfer may straddle a 64KB page.** int 13h answers one with
-  error 09h; the symptom is "Disk error" on a large save. A base known only
-  at run time (the heap, every claim, `KERNEL_SEG`) is 512-byte aligned, the
-  one way to rule that out; the two FIXED windows (`FAT_SEG`, `dsk_secbuf`)
-  are proved inside one page by guard 6 instead (SPEC.md 2.1.1).
-- **Memory is THREE rules and three quantities** (docs/KERNEL-MEMORY.md):
-  **kern_big fully RESIDES in 100KB at the desktop**, **kern_small fully
-  RESIDES in 64KB** — and its 128KB machine's heap is LOCKED at 70.5KB
-  (guard 1b, `HEAP_SEG` <= 0x0E60, no grace: the owner, 2026-11-15) —
-  every non-purgeable byte, no drivers, no XMS, on VGA
-  (guard 1's `KERN_BUDGET`, DERIVED from those, plus `tests/kernresident.py`
-  and `tests/small128.py` for the half an assembler cannot see) — and **BOTH
-  BOOT on 128KB** (guard 5, `MIN_RAM_KB`, asserted by booting each kernel on a
-  128KB machine). **kern_mega is rule 4 and is budgeted too** (kern_mega size
-  `MEGA_RESIDENT`): it RESIDES in **68KB of
-  CONVENTIONAL memory** once it has switched - `MEGA_RESIDENT`, `KERN_SIZE`
-  less the `.cold` and `.mega` rungs that go above 1MB, and NOT `KERN_SIZE`,
-  which is a boot-time transient there - and BOOTS on its 1MB floor machine's
-  640KB (guard 5's mega arm, `MEGA_BOOT_KB`). **A budget is met EXACTLY at an upstream merge or a release;
-  branch and integration work may run up to 2KB over it** (`KERN_GRACE` —
-  features land whole and are size-passed after), and `make budget-check` is
-  where that grace ends, on all four budgeted kernels. Over a budget at that point is a conversation with
-  the owner and a rework of the budgets, never a quiet raise.
-  `KERN_CODE_MAX` is separate and absolute: `.text` + `.bss` inside one 64KB
-  window because offsets are 16 bits - and on kern_big the near-called VGA
-  rung shares that window above the FAT window and LOW, so its guard binds
-  first (`kernsize`'s `window` line, docs/KERNEL-MEMORY.md). **Booting on a machine and residing in
-  one are different questions** — the 128KB boot is where overlays and boot
-  order broke machines whose resident size was well under it. `kernsize`
-  prints both lines; quote the one you mean. **None of the rules binds a KNOB
-  build** — guard 2 is the whole of what
-  bounds it, because nobody boots one and every machine here has 640KB or
-  could; a RAM-constrained test states its own constraint instead.
-  `KERN_SMALL`, `KERN_EMU` and `KERN_MEGA` are not knobs for this purpose;
-  a knob ON kern_mega (`MEGATRAP=1`, `MEGADIAG=1`, ...) is. **`soak -k 'buildmatrix'` is
-  the only thing that builds the knob kernels.**
+- **VGA/EGA-only code goes in `.vga`** (§2.10.9), entered only behind a
+  run-time adapter test listed in `tests/vgarefs.txt` - a mono machine
+  slides `.cold` over it.
+- **Every disk-visible base is 512-byte aligned.** int 13h answers a transfer
+  straddling a 64KB physical boundary with error 09h, and only starting
+  512-aligned prevents it. The symptom is "Disk error" on a large save.
+- **Memory is two guards: `kern_big` resides in 100KB, `kern_small` in 64KB,
+  `kern_mega` in 68KB of conventional memory** (`KERN_BUDGET`,
+  docs/KERNEL-MEMORY.md; kern_mega's is `KERN_MEGA_RESIDENT_KB`, held against
+  `MEGA_RESIDENT` - its size less the `.cold` and `.mega` rungs it moves above
+  1MB). `kern_big` and `kern_small` boot on 128KB and `kern_mega` on a 1MB
+  machine's 640KB (`MEGA_BOOT_KB`), and `.text` + `.bss` stay inside one 64KB
+  window (`KERN_CODE_MAX`) - on kern_big the near-called VGA rung shares that
+  window above the FAT window and LOW, so its guard binds first (`kernsize`'s
+  `window` line, docs/KERNEL-MEMORY.md). Development may run 2KB over a budget
+  (`KERN_GRACE`); `make budget-check` holds all three exactly before a PR or
+  release. **Raising any of them is a decision to take with whoever asked for
+  the feature, not a build fix.**
+  **kern_small must also leave 70.5KB of heap after boot on its 128KB
+  machine**: its `kernsize[small]: ladder` line stays at 57.5 KB or less.
+- **kern_mega is a shipped kernel.** A feature's design includes its kern_mega
+  work; "not on mega" is a gap to close unless the owner agreed to it. Package
+  code only kern_mega needs goes under `%ifdef PKG_MEGA` (§20.18,
+  `apps/os88mega.inc`) and `make mega` builds it; the shipped build must still
+  run there, or refuse with `OS88_MEGA_REFUSE`.
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
-  MODULE** (§2.8, `kernel/mod.inc`): kernel code that ships as a file
-  (`CTRL.DRV`, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV`, `DOCK.DRV`, on
-  kern_big `EXTD.DRV` (the extended desktop, SPEC.md 39.19.6),
-  `WIN95.DRV` (the Windows theme, SPEC.md 76.14),
-  `DESK.DRV` (the desk layer, SPEC.md 110) and `STIKMENU.DRV` (the Sticky
-  Apps menu, SPEC.md 110.12), and on
-  kern_small `FILECP.DRV` and `FDLG.DRV`) and is read into a heap claim when the feature
-  is asked for, freed when it is done. A feature qualifies when the system
-  disk is already required to use it, or can be required without interrupting
-  what the user was doing. When it qualifies, the resident part is the menu
-  item, the greying predicate and the thunks; everything else goes in the
-  module. Moving code to `.cold` or the boot overlay relieves `KERN_CODE_MAX`
-  but not `KERN_BUDGET` — a module relieves both.
-  **"Freed when it is done" is a rule, not a hope**: every `mod_tab` row is
-  dropped somewhere, or `tests/moddrop.txt` says why it is held until
-  restart - `DESK.DRV` held 5KB pinned after the last Sticky App closed,
-  until SPEC.md 11.103.10's drop rule. A new module needs its drop on the
-  day it lands.
-  **`.cold` IS RESIDENT, and the name is the trap**: it means a cold PATH, not
-  a cold LIFETIME. Those bytes are in RAM from boot to power-off exactly like
-  `.text`'s on the machine the budget describes (a 5150's ROM or a 286's HMA
-  can take them out of RAM, SPEC.md 2.10 and 2.10.7, and no budget counts
-  that) and are billed by `KERN_BUDGET` exactly like `.text`'s — all
-  `COLD_SEG` buys is a CS of its own, which relieves the 64KB near-addressing
-  window and nothing else (docs/KERNEL-MEMORY.md, *Where it goes*). **`.boot2`
-  (the boot blob) and `.ovl` are the sections that really do go away**, and the two get
-  conflated constantly: *"+N bytes of `.cold`, nothing resident"* is a
-  sentence several sessions have now written and it is wrong every time. The
-  honest form is *"+N bytes of `.cold`, resident, no rung crossed"* — and per
-  the banner above, the rung is not the point anyway.
-  **Code `mod_need` itself reaches cannot be a module** - the loader cannot
-  load its own dependencies - so code inside that cone is gated by build
-  rather than moved.
-  **There is no entry cap any more** (SPEC.md 2.8.1): a module's slot block is
-  exactly its own entry count, so an entry costs 4 bytes of `.bss` plus a byte
-  per call site and nothing else.
-- **Design for BYTES, never for rungs** — the banner at the top of this
-  section is the rule; this is its mechanics. The amortised price of a byte is
-  a byte, so a change that crosses no rung has not cost nothing: it spent slack
-  belonging to whoever comes next, and the guard bills *them* the whole 512.
-  **A rung is not a design input.** Do not size a feature, shave a table, or
-  justify an addition against where the next crossing falls; take a rung-shaped
-  answer only when it is the clean one anyway. Two arguments are refused
-  outright: *"it adds 400 bytes and crosses no rung, so it is free"* and *"it
-  saves 500 and uncrosses no rung, so it buys nothing."* The one moment a rung
-  is the point is when a crossing means the kernel no longer FITS — and that is
-  a discussion to have with whoever asked for the feature, never a build fix
-  and never a reason to quietly cut the design down. Slack here
-  has never gone unspent, so its expected cost is 100%.
-- **kern_mega is a SHIPPED kernel, not a beta or a side kernel** (the
-  owner, 2026-11-12). A new feature's design INCLUDES its kern_mega work:
-  where kern_mega's memory model differs (selectors, the HMA, images above
-  1MB), the design says how the feature works there and the work lands with
-  the feature. "kern_mega frees it instead" or "not on mega" is a gap to
-  close, never "by design" - unless the owner has agreed to that one gap.
-  Name kern_mega's rows beside kern_big's when you verify.
-- **kern_mega-only package code is the ARM's, never the shipped build's**
-  (SPEC.md 20.18). The owner's rule:
-  *"mega specific work that more than trivially increases the disk size is
-  gated to mega builds only."* Code a package carries only because segments
-  may be SELECTORS - a second ISR family for protected mode, a decoder part
-  assembled to write nothing through CS, reads through a run of selectors,
-  a path for a claim that is an LDT selector - goes under `%ifdef PKG_MEGA`
-  (apps/os88mega.inc), and `make mega` builds that arm onto kern_mega's own
-  disks. On kern_mega a claim is an LDT SELECTOR, so a package asks
-  `OSAPI_SEG` (§50.6.11) for a derived segment rather than adding to one. The shipped build must still be CORRECT on kern_mega: run low and
-  plain, refuse the one tier, or refuse to start with `OS88_MEGA_REFUSE`,
-  and say which at the place. A shipped build's kern_mega markers
-  (`CPU_F_PM`, the selector cells) are held to `tests/megapkg.txt`'s
-  per-file allowance, which turns one way. A new arm is a `$(MEGAAPPDIR)`
-  rule and a `$(MEGAPKGS)` entry in the same diff.
+  MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
+  test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
+  `DISKOPS.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV`, `EXTD.DRV`,
+  `WIN95.DRV`, `DESK.DRV` and `STIKMENU.DRV`, and on
+  kern_small `FILECP.DRV` and `FDLG.DRV`) and
+  is read into a heap claim when the feature is asked for, freed when it is
+  done. A feature qualifies when the system disk is already required to use
+  it, or can be required without interrupting what the user was doing. When
+  it qualifies, the resident part is the menu item, the greying predicate and
+  the thunks; everything else goes in the module. Only a feature that fails
+  the test may grow `.text`/`.cold`, and moving code to `.cold` or the boot
+  overlay relieves `KERN_CODE_MAX` but not `KERN_BUDGET` — a module relieves
+  both. Check `tools/kernsize.py` before and after: a byte costs a byte.
+  **docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md is what the mechanism
+  REFUSES**, and it refused two of four candidates: `mod_need`'s own transitive
+  cone is 155 symbols in 7 files, so a module inside it must be gated rather
+  than moved. There is no entry cap (§2.8.1): a module's slot block is its
+  own entry count.
+  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (soak)
+  fails the soak for a `mod_tab` row nothing drops, unless
+  `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
+  5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
+  drop rule. A new module needs its drop on the day it lands.
 - **An ABI change is a written decision** (§20.2.0.1). `PKG_FMT` and
   `DRV_VER` are locked in `tools/abi.lock.json` to a fingerprint of
   `apps/os88api.inc` and `drivers/os88drv.inc`, and `make` fails when the SDK
@@ -518,24 +398,19 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   run (a cell moved or re-contracted, a header grew), then
   `python3 tools/abilock.py --update "why"`; if it still runs (a cell added at
   the end, a contract clarified), the same command without the bump.
+- **A heap claim is paragraphs, rounded to 512 bytes** (§50.2.1), not whole
+  KB. `OSAPI_MEM_P` (§50.3.7) takes a byte-sized request; the KB doors still
+  work. Ask for what you need, not the next KB.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder
   can have more than one such word, and segments derived from a base are
   reached by no poke at all. Opting in and forgetting the proc is silent until
   the next compaction, which by construction happens on a busy heap.
-- **A PACKAGE'S OWN REGION is that rule's biggest instance, and it is a
-  RATCHET now** (§66.6.1.1). Every package under `apps/` declares
-  `OS88_REGION_MOVABLE` where its window exists — and, if it hires a worker,
-  `OS88_WORKER_RESTARTABLE` at the spawn, because §66.6.2's frame pins the
-  region however it is declared and a region declaration alone is **inert**.
-  The way out is a line in `tests/movable.txt` with a reason, and the list
-  only turns one way. **Before declaring, ask what segment words the package holds that point
-  INSIDE itself** — almost always none, which is why the proc is a `ret`; the
-  two shapes where it is not are a segment the package **stamped** somewhere
-  (scribe did, into its pre-parts `.ovl`, until SPEC.md 95.8.8 made it a part) and a **re-homed** program whose assets
-  live in its own carve (skies), and for those the bare form is silent
-  corruption rather than a missed optimisation.
+- **Every package declares its own region movable** (§66.6.1.1):
+  `OS88_REGION_MOVABLE`, plus `OS88_WORKER_RESTARTABLE` at any worker spawn.
+  An exception is a line in `tests/movable.txt` with its reason, and the list
+  only shrinks.
 - **The package boundary is solved once, not per call site** (§20): calling out
   is a far call through an API cell that switches DS; calling in goes through
   the three-byte dispatcher in the package header, so every callback is a near
@@ -553,6 +428,9 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   heap claim is read out of the package's own image instead — which reads as
   memory corruption rather than as a wrong segment register, because the bytes
   really are ours (§77.10).
+- **A file operation of several transfers is ONE progress bar** (§12.8.8-
+  §12.8.10): open it with `OSAPI_FS_OP` and the total bytes, close it with 0.
+  Without it every transfer rescales the bar from zero.
 - **A worker may not touch a file** (§20.6 rule 7), so a package that is
   socket-to-file by definition is shaped around `OSAPI_WM_ONWAKE`: the worker
   stages, the UI task commits, and a single byte written last by the producer
@@ -605,12 +483,7 @@ The rules that fall out:
    refactor.** Check yourself against that table.
 2. **Nothing writes a pixel twice.** The erase-then-letter pair is the
    canonical violation and `font_run` (§6.1) is the answer: one decision per
-   cell, so the line is never momentarily blank. **It is not only about text:**
-   to clear anything, draw its replacement over it in the right colour rather
-   than filling a ground first — a fill followed by the real content a few
-   drawing calls later is milliseconds of visible blank. Writing a shared
-   control is where this keeps getting missed, so §13.14.6 states it again at
-   the point of use and names the routine that gets copied and breaks it.
+   cell, so the line is never momentarily blank.
 3. **Size every range from the slowest machine it will run on.** A constant
    sized while looking at QEMU encodes the wrong range and fails structurally,
    not proportionally: 16-bit counters lap into small plausible numbers. Fold
@@ -619,11 +492,7 @@ The rules that fall out:
    primitive (`font_char`, `gfx_fill`, `wm_paint_all`) — it costs one rebuild —
    then multiply by the table above and say that you did. A clock is
    `apps/os88pit.inc`'s `pit_now` (838 ns, an hour before it wraps), never a
-   hand-rolled PIT latch: one misses the tick at the reload. When you PROFILE
-   the kernel, resolve a sample by LINEAR address (`os88sym.linear()`), never
-   by offset against the `.text` table — the kernel is several segments and a
-   `.cold` sample resolved against `.text` returns a plausible WRONG name —
-   and aggregate by routine, since a `.local` label belongs to the proc above.
+   hand-rolled PIT latch: one misses the tick at the reload.
 5. **Keeping the shape of an optimisation is not keeping the optimisation.**
    `gfx_blit4`'s first version emitted exactly the designed number of calls and
    decoded every pixel by hand inside them: nine times slower, and QEMU priced
@@ -635,33 +504,9 @@ The rules that fall out:
 7. **Degrade by tier.** `OSAPI_CPU_INFO` answers `CPU_8086` for the target
    machine, which is a fact the code can test rather than a guess about speed.
 
-Three defects cost this project bug after bug — a **visible redraw** (seconds
-on real hardware), a **double-draw flash** (anything drawn twice), and **input
-overrun** — and for years this said they were *invisible in an emulator*.
-**That is no longer true and the line misled people while it stood.** It was
-true of QEMU; MartyPC rasterises into a front/back pair, so `display_buf()` is
-the last frame the card actually FINISHED and stepping until `frame_count()`
-increments samples the glass exactly as often as an eye does. PERFORMANCE.md
-Part 3.1 is the account and it retired the claim first; Part 3.2 is frame
-pacing.
-
-**So none of the three is found by looking, and all three are MEASURABLE.**
-What is still true is the half that matters: a **screendump shows none of
-them**, because anything that happens entirely between two completed frames
-was never on the glass. Reach for the instrument instead:
-
-```
-m.pause(); m.key("KeyA")          # inject first, so the action lands INSIDE
-r = m.flicker(frames=40)          # the window rather than racing it
-```
-
-`flicker` returns per-frame `changed` and `transient` counts, the bounding box
-of the transient pixels, and `settled` — **which must be true, or every count
-was measured against a moving target**. `m.pace()` is the same idea for frame
-pacing and takes an `ignore` rect for anything on a clock of its own. Part 5's
-budget table is largely written in those units, so a redraw claim belongs in
-them too: *"2 frames = 16.7 ms, worst 320 transient px"* is a measurement, and
-*"it looked fine"* is not.
+Three defects cost this project bug after bug: a **visible redraw**, a
+**double-draw flash** and **input overrun**. A screendump shows none of them;
+MartyPC's `flicker()`/`pace()` measure them (PERFORMANCE.md Part 3.1/3.2).
 
 That is the whole of it that applies to every change. Open PERFORMANCE.md
 itself for one of four reasons — it is over 15,000 lines and most of it is a log of
@@ -683,8 +528,9 @@ field measurements:
 
 **There is a regression suite now** — `make test-fast` / `test-full` /
 `test-soak`, driven by `tools/os88test.py` off the registry in
-`tests/suite.py`. There are still no unit tests in the usual sense: the rows
-are host-side invariant checks over what `make` just built, the build
+`tests/suite.py`. The fast tier runs as part of every `make`; **`test-full` is
+the pre-merge gate**. There are still no unit tests in the usual sense: the
+rows are host-side invariant checks over what `make` just built, the build
 configurations `all` never builds, and whole scripted sessions driven through
 an emulator.
 
@@ -727,201 +573,17 @@ nineteen hours** on emulator rows while obeying the letter of a narrower rule:
   scripts under `.claude/skills/` are written to this rule; a new one must
   be too.
 
-**WHEN TO RUN WHICH TIER — docs/TESTING.md's *When to run which tier* is the
-authority and this is its short form.** `full` is four minutes and the whole
-soak is nearly two hours, so neither is a per-commit gate; run each where an
-answer changes and nowhere else. **A change is covered by the ROW that is
-about the thing it touched, not by the tier that contains it** — after a
-redraw change `python3 tools/os88test.py soak -k 'disp*'` is minutes and is
-the right answer far more often than any tier is.
+**The whole soak tier runs only when the owner asks for it.**
+`os88test.py soak` and `os88soak.py start` refuse with no `-k`, and
+`--user-asked` carries that permission. Run the rows your change can reach
+instead (docs/TESTING.md, *When to run which tier*).
 
-**THE WHOLE SOAK TIER IS THE OWNER'S CALL AND RUNS ONLY WHEN THEY ASK FOR IT,
-IN AS MANY WORDS.** It is a permission rather than a judgement, and it is not
-reachable by reasoning about the change: two wordings that left the decision
-here were argued past within a day of each other, in opposite directions — *"at
-the end of extensive kernel surgery"* became *"I edited `kernel/`"*, and the
-reach test that replaced it became *"my change moves `kern_big`, so I cannot
-bound it"*. Whoever just did the work always wants to be sure, and the one to
-three hours land on somebody else's box. So `os88test.py soak` and
-`os88soak.py start` both REFUSE with no `-k`, and `--user-asked` is what
-carries the permission once it has been given. If you think the tier is
-warranted, say so in one line, run the rows you CAN name, and carry on.
+**Drive the UI through `tools/os88ui.py`** (`boot`, `open_drive`, `path`,
+`menu_pick`), not remembered coordinates: every position comes from the
+guest's own tables and every verb is confirmed against guest state
+(docs/MARTYPC-DEBUG.md).
 
-**WHAT to run is decided by what the BUILD says moved, never by how big the
-work felt.** Every row runs a built artefact, so an artefact your change left
-byte-identical cannot answer a question about it — those rows boot the same
-kernel off the same floppies and report yesterday's answer. Read it off the
-`KERN_BUDGET big <n>, small <n>` line `make` already printed, off the diff
-(code inside an `%ifdef KERN_SMALL` cannot move `kern_big`), or exactly, by
-building the other arm into a tree of its own (`make BUILD=<dir>`,
-`tools/os88build.py`) and `cmp`-ing — at ONE commit, since the build number is
-the commit count (SPEC.md §14.2). Then name the rows the change CANNOT reach:
-that list is usually short and easy to write, and its complement is the run.
-**A scope is not a different tool** — `tools/os88soak.py` takes `-k`/`-x`, so
-the preflight, frozen tree, parallel lanes, journal, `--resume` and pollable
-`status` are all there for ten rows as they are for 377.
-
-| tier | RUN IT | do NOT run it |
-|---|---|---|
-| `fast` | a commit you intend to keep, when it could change a byte under `build/` — and usually there is nothing extra to type, because `all` already ran it | a build you are not going to commit (an experiment, an A/B, a knob build — `make` skips it there itself); a **documentation-only** commit; a commit that only moves the **build number** |
-| `full` | major work reaching the INTEGRATION BRANCH — the first time a piece of it merges there, and again when you come back to that branch and land another large round | every commit on your own feature branch; a **minor bugfix** onto the integration branch; a documentation-only commit or merge; a build-number-only commit |
-| `soak` | the rows your change can REACH, scoped with `-k` — minutes, and the answer to the question you actually have | **the WHOLE tier, ever, unless the owner has asked for it in as many words.** Not for kernel surgery, not at a merge, not because the reach cannot be bounded. Both runners REFUSE it unscoped; `--user-asked` carries the permission once given |
-
-`checkdocs.py` is the gate a documentation-only commit actually owes; a
-build-number-only commit is three bytes of `.text` moving because the commit
-count moved (SPEC.md §14.2) and no row in any tier can see it.
-
-**ADDING A ROW IS `docs/WRITING-TESTS.md`, and it is worth reading BEFORE the
-first line rather than at the review.** Everything below is how to drive the
-machine; that is how to write something worth driving it for — the tier and
-the registry fields, a `secs` you measured, `wants=` and private trees instead
-of `builds=True`, `os88ui` instead of a remembered coordinate, the guest's
-clock instead of `time.sleep`, and a §1 that is the only question that decides
-whether the row is worth having: **break the thing on purpose and watch it go
-red.** Start at its *Start here* box; it points at the section you need. Its 2.1 and 2.2 are the second question, and they decide the TIER:
-`fast` is paid for by everybody on every build, so a row about one package or
-about a kernel internal nothing outside the kernel can reach belongs in
-`soak`; `full` asks only *did you obviously break the OS*, so a row about one
-package, about the build matrix, or about the suite's own instruments belongs
-there too.
-
-**MartyPC is the default instrument; QEMU is a fallback with a closed list.**
-docs/TESTING.md's opening owns the rule and the reasoning. The list is
-repeated here on purpose — one you have to go and open is one you will argue
-past:
-
-1. 286 and 386
-2. rung 1 of the hard-disk driver (§52.1) — gated on `CPU_286`
-3. §9.5's awkward mouse cases — COM2, the cross-wired IRQ4 card, a modem
-4. the PS/2 mouse (§9.9) — MartyPC is an 8088, and an XT has an 8255 PPI
-   rather than an 8042 with an aux port
-5. the Ethernet card (§72) — MartyPC has no NIC of any kind
-6. the RTC ladder's WRITE half (§37.90, §37.94) — **a 5150 has no real-time
-   clock**, the MC146818 arrived with the AT, and MartyPC models no XT clock
-   card, so all four rungs are out of its reach and `[clk_tier]` is 0 there.
-   QEMU has an MC146818 and nothing else, so rung 1 wins. The assertion is a
-   REBOOT: set the clock, close the panel (which is what writes the chip),
-   `system_reset`, read the bar. Rungs 2 and 3 are in no emulator here and
-   stay the 5150's
-7. the VMware absolute pointer (§9.11) — the backdoor is 32-bit and QEMU's
-   `pc` machine is the only emulator here that answers it (`make
-   vmmousetest`, on kern_emu)
-
-Entries 4 to 7 share the only shape that gets on this list easily —
-**MartyPC has not got the hardware at all**, so there is no "prefer MartyPC"
-to weigh. 1–3 are the harder kind.
-
-**Entries 1, 2, 4, 5 and 6 also run on 86Box, on the row's own kernel and
-disks** (`OS88_EMU=86box`, registered as `box-<row>` in
-`tests/box86port.txt`; docs/86BOX.md, *kern_big rows on 86Box*): a period
-BIOS rather than SeaBIOS, and still no timing.
-
-**VGA IS NOT ON THIS LIST.** MartyPC models a register-level VGA and
-`os8088_xt_vga` (with `_vga_mda`, `_vga_herc`, `_vga_sb`, `_vga_hdd`) boots
-it: mode 12h desktops, and the unchained 320x240 "Mode X" too, rendered
-correctly (`tests/skies.py --machine os8088_xt_vga`). Three sessions in a
-row concluded from the `5150_*` names that MartyPC had no VGA and reached
-for QEMU; the machine list is `tools/martypc/configs/os8088_machines.toml`,
-and "the three adapters" above means the three 1983 ones, not everything
-the emulator has.
-
-**"It is quicker to type" is not on it, and neither is "I already know the QMP
-commands."** Everything else that runs on an 8088 — all three of §39's
-adapters, input, screenshots, sound — is `make marty`, which agrees with the
-field machine to 0–4% on 45 of 47 `gfxbench` rows.
-
-**Without MartyPC the list still binds**: QEMU does not become the answer in
-its absence. QEMU counts work exactly and cannot time it, and 86Box
-(`tools/os88box.py`, docs/86BOX.md) scripts and reads a whole period machine
-but is not cycle-accurate. That leaves the table above and arithmetic — which is precisely
-rule 5's blind spot. Say when a number is predicted rather than measured, and
-get it checked on the 5150 (docs/FIELD-MACHINES.md).
-
-**Start at `tools/os88ui.py`, not at the mouse** (docs/MARTYPC-DEBUG.md,
-*Start at tools/os88ui.py*). It is the vocabulary a test actually means —
-`boot`, `open_drive("B")`, `path("B:/APPS/CALC.O88")`, `raise_window`,
-`drag_window`, `menu_pick("Calc", "Close")` — every position resolved out of
-the guest's own tables and every verb CONFIRMED by reading guest state. It is
-also **faster**: the check replaces the wait instead of following it, and the
-same three-step navigation is **0.35x** the host time and 0.35x the guest
-cycles of the settle-and-hope spelling (`tests/uilayer.py`). `boot` turns the
-screen saver off by default and resolves an IBM machine name to its GLaBIOS
-twin, which are the two things most scripts forget. A verb that cannot do what
-it was asked RAISES naming what it saw, so a miss is reported where it
-happened rather than twenty steps later dressed as the feature under test.
-**`settle` (identical captures a quiet interval apart) is about half of a
-typical row's time**; when the assertion is a read of guest memory rather
-than of pixels, `os88marty.quiesce(m, read)` waits on those bytes instead and
-is far cheaper.
-
-```python
-with os88ui.boot("build/os8088-360.img", apps="build/apps360.img") as ui:
-    w = ui.path("B:/APPS/CALC.O88")     # drive, folder, package - all checked;
-                                        # a drive-less path starts from the
-                                        # ACTING Disk window, and a fresh boot
-                                        # has none
-    ui.menu_pick("Calc", "Close")
-```
-
-Driving MartyPC — **`os88mouse.py`, never `os88marty.py mouse`**: it reads the
-cursor back instead of dead-reckoning, and `dblclick` is a verb of its own.
-**There are two mouse drivers and the other one is `tools/os88mouserel.py`** —
-RELATIVE, for the short list where relative is right (the mouse itself under
-test, a bit-exact replay, or motion with no destination such as a paint stroke
-or a window drag). Everything else wants the absolute one; a dead-reckoned
-click that misses raises nothing and is reported as a broken feature twenty
-steps later. `Marty.mouse()` is the transport under both.
-
-```
-python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
-python3 tools/os88mouse.py 127.0.0.1:9001 dblclick 150 90   # NOT two clicks
-python3 tools/os88marty.py 127.0.0.1:9001 shot out.png --rendered
-```
-
-**SEVERAL INSTANCES RUN AT ONCE, and nothing has to be arranged between
-them.** `os88marty.launch()` gives each one its own port, its own run
-directory and its own disks, so two terminals, two agents or two rows of the
-suite in one checkout never meet — and it reaps only ORPHANS, never another
-session's live machine. It used to sweep every `martypc_headless` on the box
-before starting its own, which is why a session's emulator would vanish
-mid-run and every symptom pointed at the guest. **Take the address off the
-object** (`m.addr`, `m.port`) rather than typing 9001; pass `addr=` only to
-pin a port on purpose.
-
-```
-python3 tools/os88marty.py launch build/os8088-360.img --apps build/apps360.img
-                                        # a BENCH: boots, prints its addr, and
-                                        # OUTLIVES the command that started it
-python3 tools/os88marty.py instances    # what is running, whose, how old
-python3 tools/os88marty.py kill <port>  # end one
-python3 tools/os88marty.py reap         # orphans only - live work is left alone
-```
-
-Three failures are now gated rather than discovered: a **second client** on
-one instance is refused in a sentence naming the holder (it used to *hang*
-until the read timed out), a **bind that fails** exits loudly instead of
-running on unreachable and holding the port against the next run, and a
-**port somebody else holds** is an error that names them. `tests/martyconc.py`
-is the gate and docs/MARTYPC-DEBUG.md's *Several at once* is the account.
-
-**How many is ONE PER CORE, and there is no hard cap** — only a line on stderr
-when you pass it, because a refusal would be a new way to lose work. Measured
-on a four-core box, aggregate guest speed against a real 4.77MHz 8088: **3.4x
-at one instance, 13.1x at four, 13.9x at six, 13.4x at eight** — FLAT past the
-core count, so the ninth instance does not add throughput, it slows the other
-eight. Nothing else binds first (~50-100MB RSS and ~1MB of disk each; the 32MB
-VHD is reflinked). Going past it is slower, not broken: at eight on four cores
-each guest is still 1.66x real time, and guest CYCLE counts, `disk()` counts
-and pixel comparisons are exact at any oversubscription because they are
-counted rather than timed. What loses slack is host wall-clock — `settle`,
-`until`, a row's timeout — and an IDLE guest costs less than a busy one
-(96.9% halted, SPEC.md §8.1.2), so eight agents is the worst case only when
-all eight are driving. **A registry record names a PROCESS, not a PID**: with
-`pid_max` at 32,768 a busy session wraps the counter in minutes, and a stale
-record whose number got reused once had `reap` kill a live instance silently. `os88test.py --marty-jobs N` takes the suite's
-emulator lane past 1 deliberately (four rows: 175.6s at 1, 85.9s at 3).
-
-Driving QEMU, for the five cases above and for a host with no MartyPC:
+Everything else is still boot `make test`, then drive it over QMP.
 
 ```
 python3 tools/mouse.py build/qmp.sock click 180 150        # absolute click
@@ -932,20 +594,24 @@ python3 tools/shot.py build/qmp.sock out.png [--crop X,Y,W,H] [--zoom N]
 python3 tools/qmp.py build/qmp.sock 'quit'
 ```
 
-Four traps, the first of which you can spring by hand in one command:
+`OS88_EMU=86box` runs a row that needs a period machine on 86Box instead of
+QEMU, on the row's own kernel and disks - the rows are registered as
+`box-<row>` in `tests/box86port.txt` (docs/86BOX.md, *kern_big rows on
+86Box*): a period BIOS rather than SeaBIOS, and still no timing.
 
-- **NEVER hand `/dev/null` to nasm as `-o` or `-l`** - not in a script, not
-  in a one-off "does it assemble?" check. nasm treats its output files as its
-  own: a FAILED assembly unlinks its `-o` target and `-l` replaces its target
-  with a regular file even on success, and as root that target is the device
-  itself. Everything
-  after it then misbehaves without naming the cause - output grows on disk,
-  `diff`/`cmp` against it answer wrongly, `./configure` fails. Write to a temp
-  file and delete it. `tests/unit/t_nulldev.py` refuses the pattern in the
-  tree, but it cannot see a command typed at a prompt, and a session typed
-  exactly that on 2026-09-24. The check and the repair, as root:
-  `stat -c %F /dev/null` must say `character special file`; otherwise
-  `mknod /dev/null.new c 1 3 && chmod 666 /dev/null.new && mv -f /dev/null.new /dev/null`.
+docs/TESTING.md is the authority on which emulator to reach for, and its
+opening currently argues MartyPC first — so expect it to disagree with the
+paragraph above.
+
+Four traps not written down elsewhere:
+
+- **Never hand `/dev/null` to nasm as `-o` or `-l`.** A failed assembly
+  unlinks its `-o` target and `-l` replaces its target with a regular file, so
+  as root the device itself is replaced and everything after misbehaves
+  without naming the cause. Write to a temp file. `tests/unit/t_nulldev.py`
+  refuses the pattern in the tree; `stat -c %F /dev/null` must say
+  `character special file`.
+
 - **A knob kernel in `build/` is a different kernel to the symbol reader.**
   Every emulator row resolves kernel symbols through `tools/os88sym.py`, which
   re-assembles `kernel.asm` and refuses an address unless the result is
@@ -985,8 +651,9 @@ in docs/TESTING.md, per capability.
   are injected by the Makefile, and stage 1 relocates itself.
 - `kernel/kernel.asm` — constants, the memory ladder and its guards, boot
   sequence, the API jump table, `%include`s of every module, size assertions.
-  Which `.inc` owns what is the table in §4 (not yet every file in `kernel/`);
-  the pre-GUI text shell's five relics are deleted, not parked.
+  Which `.inc` owns what is the table in §4. The pre-GUI shell's unincluded
+  leftovers — `video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` — are gone
+  (§4); `softgfx.inc` is what replaced the last of them.
 - `apps/` — loadable packages; **everything here ships**. `os88api.inc` is the
   SDK, and each package's design notes are its SPEC.md section. `apps/cc/` is
   the **C** SDK (§73): `os88.h`, the runtime `crt0.asm`/`os88thunk.asm`, the
@@ -994,16 +661,13 @@ in docs/TESTING.md, per capability.
 - `drivers/` — loadable drivers (§51): same format, but `.DRV`, header version
   4, no instance record, bss shipped inside the image. `drivers/ether/` is the NIC
   and the TCP/IP stack (§72) — the largest of them, and QEMU-only to test.
-- `dostools/` — MS-DOS programs that ship for the machine at the OTHER end
-  of a disk walk: `os88cz.asm` is `OS88CZ.COM`, the split set's DOS end
-  (§20.17.4), and `%include`s `kernel/lz.inc` as it is.
 - `tests/` — every package that is **not** shipped software: capability gates
   (pass/fail) and benchmarks (how fast). Built only by their own targets.
 - `apps/browser/`, `apps/telnet/` — the network clients (§71, §70), over
   `os88sock.inc`. `tools/os88proxy.py` is the host-side other end and
   `os88proxygui.py` its desk-side front. `apps/ftpd/` is the FTP **server**
-  (§77) — the same ABI listening rather than connecting. SPEC.md §72 is the
-  stack, layer by layer, and why TLS terminates in the host proxy.
+  (§77) — the same ABI listening rather than connecting, and the last stage of
+  docs/plans/completed/NET-STACK-PLAN.md.
 - `tools/` — host-side Python: `os88pkg.py` (validates/stamps `.bin` → `.o88`),
   `os88disk.py` (builds FAT12 images; `--verify` is a structural fsck),
   `checkdocs.py` (the doc gate every `make` runs), `os88test.py` (the suite
@@ -1014,14 +678,6 @@ in docs/TESTING.md, per capability.
   `stkwater.py`/`stkdepth.py` (how deep a task stack HAS been, and which
   call chain took it there - docs/KERNEL-MEMORY.md's "Task stacks");
   `kfzread.py` (the KFZ heartbeat out of a field screenshot);
-  `os88rdiff.py` (a size pass per ROUTINE between two commits, and whether hot code moved by an odd amount - PERFORMANCE.md Part 7);
-  `os88ladder.py` (the interactive BOOT LADDER page - every discrete
-  move of memory from reset to the first desktop frame, with the
-  timeline each one costs. **ON DEMAND: nothing in `make` runs it**,
-  because it boots the tree under MartyPC through forty breakpoints and
-  that is minutes. So the page it wrote goes STALE, and
-  `--selfcheck` - a second, no emulator - is what says whether the model
-  still describes the tree. Run that first, always).
   `os88intguide.py` (the interactive INTERRUPTS page - the first 1.5KB
   of memory, how the 8088 takes an interrupt, all 256 vectors and which
   ones os8088 and its DOS hook, and every field after them; ON DEMAND, no emulator. Every os8088
@@ -1029,21 +685,9 @@ in docs/TESTING.md, per capability.
   will not write a page whose anchors fail. Chapter 2 is the BIOS data
   area byte by byte, the 0500h page and one floppy read followed through
   them; docs/plans/completed/INTERRUPT-GUIDE-PLAN.md is how it was built).
-- `docs/` — **the directory says what a document is** (`docs/README.md`, and
-  `docs/INDEX.md` lists every one under the same six headings). `docs/`
-  itself is how the system works TODAY — instructions, contracts, maintained
-  reference such as `KERNEL-MEMORY.md`, and `FIELD-NOTES.md`/`FIELD-MACHINES.md`
-  for what real hardware said. **Everything else is NOT where to learn how
-  something works**: `docs/plans/` is work proposed or half-done,
-  `docs/plans/completed/` is how something got built (never what it does
-  now), `docs/plans/retired/` is a plan closed without its route being
-  taken and kept for its lesson, `docs/history/` is superseded, and `docs/reports/` is a dated
-  MEASUREMENT of one tree. They go stale by design; SPEC.md, the docs above
-  and the code are the authority. When you write one: a plan whose work
-  lands moves to `completed/` in that commit, one whose goal was met by
-  another route (or dropped) moves to `retired/` with that lesson written
-  at its top, and a second measurement is a
-  NEW report rather than an edit.
+- `docs/` — the maintained accounts. `*-PLAN.md` are design records for work
+  that has landed; `FIELD-NOTES.md`/`FIELD-MACHINES.md` are what real hardware
+  said.
 
 ## Package pipeline
 
@@ -1074,34 +718,30 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 `apple2disk`, `weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
 reached them.
 
-**The 128KB machine's 720KB disk, `build/small720.img`, is NOT the standard
-format** (SPEC.md 24.5.7): kern_small's two-sector FAT window refuses a
-standard 720KB FAT, so it takes 2KB clusters, and that machine reads no
-other 720KB disk.
-
-**`build/media360.img`** — `BEVERLY.MOD` is data rather than software and
-was 114 of a 360KB disk's 354 clusters before packages were compressed, so at
-that geometry it rides a disk of its own (§24.4). **It is not on `apps360.img`
-as well any more, and cannot be**: lz4-packed it is 42 clusters and that disk
-is at 346 of 354, so no trimming reaches it — taking AUDIO, MODPLUG and
-FONTVIEW off buys 27. At 360KB the module is a disk SWAP, which is what §24.4
+**`build/media360.img`** —
+`BEVERLY.MOD` is data rather than software and was 114 of a 360KB disk's 354
+clusters before packages were compressed, so at that geometry it rides a disk
+of its own (§24.4). **It is not on `apps360.img` as well any more, and cannot
+be**: lz4-packed it is 42 clusters and that disk had no room for it.
+**And `office360.img`, `network360.img`, `games360.img`, `emu360.img` and `util360.img` (§24.6)**, which
+are the same pressure met with a shape that SCALES: 354 clusters is the
+geometry that runs out first and this project keeps making applications, so
+the answer is a disk per SUBJECT — one category of program at the ROOT of the
+volume (no `APPS/` to click into when choosing the disk already said what you
+came for), the documents those programs open in `MEDIA/`, a pre-made
+`SYSTEM/APPDATA/`, and a warm `ASSOC.DAT` that costs nothing because
+`os88disk.py` writes one for any packages it is handed. It is worth the three
+disks for one measured line: `apps360.img` sat at **346 of 354 clusters,
+eight spare**, and is at **313 of 354, forty-one spare** — *while* the 360KB
+machine gained three more floppies of software. `apps360.img` is unchanged in
+kind and is now **a curated selection** out of those three plus the packages
+that live nowhere else — and §24.6.1 is the rule that matters about it:
+**being curated onto it is a decision with a date on it**, remade every time
+this geometry runs out, never a property of the package. At 360KB the module is a disk SWAP, which is what §24.4
 was always for; `tests/lzship.py` carries both halves on one scratch image
 because the harness cannot change a floppy under a running guest. Every other
 apps disk carries it in `MEDIA/`, which is why
-there is no 720KB or 1.2MB media disk to go with it.
-**And `office360.img`, `network360.img`, `games360.img`, `emu360.img` and `util360.img` (§24.6)**, which are
-the same pressure met with a shape that scales: 354 clusters is the geometry
-that runs out first and this project keeps making applications, so the answer
-is a disk per SUBJECT — one category of program at the ROOT of the volume
-(no `APPS/` to click into when choosing the disk already said what you came
-for), the documents those programs open in `MEDIA/`, a pre-made
-`SYSTEM/APPDATA/`, and a warm `ASSOC.DAT` that costs nothing because
-`os88disk.py` writes one for any packages it is handed. `apps360.img` is
-unchanged in kind and is now **a curated selection out of those three plus
-the packages that live nowhere else** — and §24.6.1 is the rule that matters
-about it: **being curated onto it is a decision with a date on it, remade
-every time this geometry runs out**, never a property of the package. The
-**core packages** ship on the system disk too, a second
+there is no 720KB or 1.2MB media disk to go with it. The **core packages** ship on the system disk too, a second
 copy and never a move (§24.3), and an application's own state goes in
 `SYSTEM/APPDATA/` rather than beside the user's documents (§19.9).
 **`THEWIRE.O88` is the exception to both halves of that** (§92): it is a
@@ -1119,317 +759,3 @@ which is precisely the fault it exists to catch. `tests/unit/t_canary.py`
 caught it and `KSIG_OFF` moved. The gates that walk "every shipped image"
 (`t_image`, `t_diskverify`, `t_canary`, `t_blobruns`) each hold their own list,
 so a new image is not covered until it is in all four of them.
-
-## Working in this fork — BRANCH-SPECIFIC, and the section to lift
-
-**Everything under this heading is `Elendilon/os8088`'s and stops at its
-edge.** It is the fork owner's standing preference and the mechanics of this
-fork's integration branch — not a property of the project — so a session
-working in a different fork should not assume any of it, and a PR going
-upstream should take this whole section out. It is one section, with no
-branch-specific rule anywhere else in this file, precisely so that removing it
-is a deletion rather than a search — the one other thing to take with it is
-the pointer to it, five lines under the map sentence at the top.
-
-### 0. `make deps` comes FIRST after `tools/session-sync.sh` (rule 9) — before `make`, before `make marty`
-
-A fresh container has `cargo` and `python3` and **has neither `nasm` nor
-`qemu` nor `libudev-dev`**. `make deps` installs the set in about half a
-minute and is **~0.2 s when everything is already there**, so it is cheap to
-type when unsure — which is the point, because the alternative that keeps
-happening costs four minutes and ends with nothing built.
-
-```sh
-make deps          # or: tools/setup-linux.sh   (--check reports, installs nothing)
-```
-
-**This rule exists because the documentation did not work.** The dependency
-was already named three times — in the Commands section above, in a
-sixty-line subsection of docs/MARTYPC-DEBUG.md, and in
-`tools/os88soak.py`'s preflight — and *every* agent still typed `make marty`
-first, waited out most of a cargo build, and read one of those only after
-`serialport` failed on a missing 200 KB header. The transcript is always the
-same shape: *"MartyPC is still compiling. Let me wait on it rather than poll
-blindly… Missing libudev-dev/pkg-config — the Linux deps CLAUDE.md names.
-Installing and rebuilding."* Two builds where one would do, every time.
-
-Three things are wrong with prose as the mechanism here, and they are worth
-naming because the same three will defeat the next warning written the same
-way:
-
-1. **The cost lands minutes late.** `make marty` clones, patches and
-   compiles most of MartyPC before cargo reaches `serialport`, so the
-   missing header is reported long after the expensive part — to somebody
-   who has by then stopped provisioning a box and started debugging a build.
-2. **It was a parenthesis.** *"(plus `libudev-dev` and `pkg-config` on
-   Linux)"* is a fact inside a sentence about cargo. It is not a command,
-   and nobody types a parenthesis.
-3. **There was no one command to type.** The recipe was two `apt` calls
-   with *opposite* cures — one package wants the newer version a refreshed
-   index names, the other wanted an older one than the index names — which
-   is a thing to get right rather than a thing to run.
-
-So the fix is not more prose, and **you should not need this rule**: two
-forcing functions below it do the work, and they are the reason it is short.
-
-- **`tools/martypc/build.sh` checks first and, HERE, heals itself.**
-  `pkg-config --exists libudev` is exactly the probe the `serialport` crate
-  makes, costs a fraction of a second, and runs *before* the clone. The
-  repair is gated on **being root with apt** — which is this container and
-  is not a contributor's workstation, because a build script that
-  apt-installs behind somebody's back is a worse failure than the one it
-  prevents — so in this fork it fixes itself silently and everywhere else it
-  stops in about a second naming the command, rather than four minutes in.
-  `OS88_NO_PREFLIGHT=1` skips it. **That gating is why the change is safe to
-  send upstream**; this rule is the only part of the work that is not.
-- **`tools/setup-linux.sh` PROBES rather than transcribing.** Every cure in
-  docs/MARTYPC-DEBUG.md is a *fallback* behind a plain attempt, because
-  those cures go stale: that document pins qemu to a base noble version
-  because the `-updates` `.deb` used to 404, and on the archive of
-  2026-09-08 both fetch fine and the plain install is **8 seconds**. A
-  script that hard-coded the pin would install an older emulator for no
-  reason.
-
-Two facts about the container that are not in the general docs, because they
-are this environment's rather than the project's: it runs **as root**, so no
-`sudo` is needed and none is missing; and `apt-get update` prints
-`W: Some index files failed to download` **for a reason that is usually
-harmless** — two third-party PPAs 403 through the agent proxy while the main
-archive fetches perfectly. docs/MARTYPC-DEBUG.md offers that warning as the
-tell of the `_apt` sandbox trap; here it is not one, so judge a refresh by
-whether the install then works and not by that line.
-
-`cargo` is the one thing `make deps` deliberately does **not** install —
-Rust comes from rustup rather than the archive, and every container here
-already has it.
-
-### 1. UNSHALLOW BEFORE YOU BELIEVE ANY ANSWER ABOUT ANCESTRY
-
-A fresh session gets a **shallow clone**, and on one `git merge-base`,
-`git log A..B` and `git merge-base --is-ancestor` do not error — they return
-*confidently wrong answers*, because the graft boundary is indistinguishable
-from a set of root commits. Before any claim about what is ahead, behind,
-merged or unrelated:
-
-```sh
-git rev-parse --is-shallow-repository     # true => every answer below is a lie
-git fetch --unshallow                     # ...so do this FIRST
-git rev-list --max-parents=0 <ref> | wc -l   # >1 root = SHALLOW, not unrelated
-```
-
-That last line is the tell, and it has been visible and ignored: **this
-repository has ONE root commit**, and a shallow clone shows six. A session
-once concluded from an empty `git merge-base` that `main` and `elendilon` had
-unrelated histories and PORTED three commits it could have merged; the real
-base was exactly where the branch was cut. If you find yourself explaining an
-implausible history shape, check the clone depth before you build anything on
-it. **docs/UPSTREAM.md carries this as its Rule 0** and everything else about
-the boundary.
-
-### 2. "Merge to elendilon" means the BRANCH, not the repository
-
-`elendilon` is the integration branch this work lands on — feature branches
-merge into it and it is what gets tested on the iron; `main` is behind it and
-is not the target. The name collides with the fork's (`Elendilon/os8088`) and
-with the owner's GitHub handle, which is exactly why it needs writing down: a
-session reading "push to elendilon" can plausibly hear "push to that person's
-repository", which is where the branch already lives, and do nothing.
-`git ls-remote --heads origin` settles it in one call.
-
-### 3. SEND the 360KB set and the two 1.44MB main disks after every commit, without being asked
-
-**All FOURTEEN of them**: the twelve 360KB images `build/os8088-360.img`,
-`build/apps360.img`, `build/media360.img`, `build/office360.img`,
-`build/network360.img`, `build/games360.img`, `build/games2-360.img`,
-`build/emu360.img`,
-`build/util360.img`, `build/small360.img`, `build/win16-360.img` and
-`build/arcrel360.img`, plus
-the two 1.44MB main disks,
-`build/os8088.img` (system) and `build/apps.img` (apps). The owner wants the full set
-every time rather than a judgement about which disks a change could reach.
-**And when the code being worked on ships on a disk OUTSIDE that set, send
-that disk too** - the owner wants the disks relevant to the work in hand,
-not only the normal set: WIN16's `build/win16.img` while WIN16 is off the
-1.44MB pair (it is expected to rejoin the system disks once it is solid),
-an on-demand application floppy (`c64disk`, `weavedisk`, ...) when its
-package changed, and the like.
-The 360KB part is exactly the 360KB images `all` builds: system, apps, the
-module's own disk (§24.4), the six category disks (§24.6), the 128KB
-machine's system disk (§24.5.7), WIN16's own disk (§124.18.1) and ARCADE's
-(ARCADE-SPEC 1.6). It was three until the category disks
-landed, six until `emu360` did, seven until `util360` did, eight until
-`small360` did, nine until `win16-360` did, ten until `arcrel360` did,
-eleven until `games2-360` did, and it will grow
-again — **`$(SHIPIMGS)` in the Makefile is the
-list**, filtered to the 360KB ones. Do NOT reach for `ls build/*360*.img`:
-that also catches `c64360`, `weave360`, `loom360` and `wire360`, which are
-on-demand disks `all` never builds and a soak leaves lying in `build/`.
-The 1.44MB pair is those two files and no others: the 720KB and 1.2MB
-geometries are not sent.
-
-**The exception: send them only when the commit could change the CONTENT of
-one of those fourteen disks.** A commit that cannot - documentation, notes, a plan,
-a test or harness file, a host tool that writes no shipped byte - sends
-nothing. The build number does not count: it is the commit count (SPEC.md
-§14.2), so every commit moves three bytes of `.text` in every image, and an
-image that differs only by that is not a change to its content. When the
-commit does reach one disk, the rule above stands and all fourteen go. Which tools
-write shipped bytes, and so are NOT in the exception, is fork rule 6's list
-(`os88disk.py`, `os88pkg.py`, `os88drv.py`, `os88mini.py`, `buildnum.py`).
-
-**"Send" means ATTACH THE FILES.** A path into the session's own `build/` or
-scratch directory is not a delivery: those live in a container the owner
-cannot reach, and the container is reclaimed when the session ends. Use
-whatever the harness offers for attaching a file — in Claude Code, the
-`SendUserFile` tool.
-
-### 4. REPORT EVERY 15 MINUTES while a long run is in flight
-
-A soak is nearly two hours; a full-tier run is minutes. Anything that will not
-finish inside one reply gets a **status report every ~15 minutes** until it
-does — not a single "started it" and then silence, and not one summary at the
-end. The owner is following along and cannot see the terminal.
-
-A report is a few lines and says what changed since the last one: elapsed,
-`reported N/M`, ok/FAIL/SKIP, the failure NAMES, and what is in flight. Name
-the new failures explicitly and say which of them are already known — a row
-that is on the books as failing at the base is not news, and burying that in a
-count makes twenty-three failures look like twenty-three problems.
-
-**The mechanics, because the naive spelling does not survive a container.** The
-run needs a held waiting task for its whole life (see `tools/os88soak.py`'s own
-note), so the tick and the hold are the same shape: a background task that
-waits up to fifteen minutes *or* until the run's marker appears, then prints
-the status. Poll `status` as often as you like on top of that — it reads a
-file and cannot perturb anything.
-
-    end=$((SECONDS+900))
-    while [ $SECONDS -lt $end ] && [ ! -f build/soak/<run>/finished ]; do
-        sleep 30
-    done
-    python3 tools/os88soak.py status
-
-### 5. Do NOT boot an image after building it
-
-Not on request, not after a commit. Build it, send it, say what is in it. The
-reasoning is the trade rather than a claim that booting is worthless: by the
-time an image is being built, the change it carries has almost always just
-been driven as part of the work, so a second cycle re-establishes what the
-first already did. When the owner wants one exercised harder, they will ask.
-
-It relaxes neither the testing that earns a commit nor rule 6 below.
-
-### 6. A merge onto the integration branch rebuilds and boots first — IF it could change a shipped byte
-
-A merge combines two trees nothing has run together, so no earlier test covers
-the result. That reason does not apply to a merge that cannot reach the
-images: documentation, notes, and harness code `make` never invokes are all in
-that class. Merge them and push — but run `python3 tools/checkdocs.py`, since
-a merge that leaves a §-number pointing at nothing fails `all` on the next
-person's machine rather than yours.
-
-**The test is "could this change a byte under `build/`", and it is NOT "is it
-under `tools/`".** Five tools write shipped bytes: `os88disk.py`,
-`os88pkg.py`, `os88drv.py`, and the two least obvious, which generate
-*prerequisites of the kernel* — `os88mini.py` and `buildnum.py`. Several
-others are build GATES (`os88ovlchk.py`, `checkdocs.py`, `checkreadme.py`), so
-a change there can turn a tree that built into one that does not: run `make`
-for those too, but not the boot.
-
-**`make test-full` is for a merge that lands MAJOR work**, not for every
-merge onto this branch. It covers the knob kernels, `kern_small`, the C
-toolchain and a boot on both 1bpp adapters — a question about the whole tree,
-worth asking the first time a piece of major work reaches the integration
-branch and again when you come back and land another large round of it. A
-minor bugfix, a documentation merge and a build-number commit do not move that
-answer; the rebuild-and-boot above is what they owe, and the row about the
-thing you changed is what tells you more than the tier would. The Testing
-section is the short form and docs/TESTING.md the authority.
-
-**A merge is where the branch's soak goes — at the branch's OWN scope, and a
-merge is never a licence for the whole tier.** That is the owner's to ask for
-(docs/TESTING.md, §`soak` under *When to run which tier*), and both runners
-refuse it unscoped. A merge does not widen what a change can reach anyway: the
-merged tree carries the artefacts the branch already tested unless the merge
-itself moved one, and the `md5sum` below is what answers that. So run the rows
-the WORK can reach, once, under fork rule 4's reporting. **The instrument that
-wants is the paragraph immediately below**, which this fork has had all along:
-a change that leaves the shipped images identical has told you that no row
-running them can see it.
-
-When in doubt, build and `md5sum` the images against the ones you already had.
-**Do that comparison at ONE commit, though**: the About box's build number is
-the commit count (SPEC.md §14.2), so every commit moves three bytes of `.text`
-and every image with them — which makes the shortcut answer "yes, a byte
-moved" across any commit and useless between two.
-
-**Either way the merge commits nothing under `build/`**, which is gitignored
-outright.
-
-### 7. Upstream squash-merges, and the branch is disposable
-
-`jggonz/os8088` keeps a linear, one-commit-per-feature history: every commit
-on `main` since PR #14 is a squash. A squash carries the branch's *content*
-into a brand-new commit with no ancestry link to its *commits*, so the
-integration branch is cut from `main` at a squash, lived in for one round, and
-replaced by a fresh cut. The gap self-heals at the boundary and needs no
-maintenance merge in between; what is lost at a re-cut is anything that never
-made it into the PR. **That is the CYCLE, it is deliberate, and it is not to
-be "fixed".**
-
-What does *not* self-heal is `main` moving **mid-cycle** with work of its own.
-**docs/UPSTREAM.md is the playbook**: how to tell the branch's own work coming
-home from upstream work that has to be fetched, how to adapt an incoming
-package to a kernel the branch has moved on from (the branch's SDK is normally
-a SUPERSET, so nothing fails to assemble and *every difference is silent* —
-greying and glyph tables have both arrived broken this way, and a stale
-stack-size sentence once manufactured a difference that did not exist), and
-how to resolve the merge without `--ours` quietly eating something only `main`
-has.
-
-### 8. "Try again" means the SESSION was interrupted, not that the work failed
-
-When a message reads only **"Try again"**, it is not the owner asking for a
-retry of the last result and not a verdict on it. It is what gets sent when
-the session was cut off by something outside both the owner's and the
-session's control: capacity, downtime, a dropped connection. The previous turn
-may have ended mid-tool-call or mid-wait with nothing reported.
-
-So pick up where the work stood: re-read the state that may have moved while
-the session was gone (a soak's `status`, `git log`, what is still running,
-which background holds ended) and carry on with the task already in hand. Do
-not ask what it refers to, and do not undo or redo work that had already
-landed. It was once read as "the fix you sent does not work, do it again",
-which it never means.
-
-### 9. Run `tools/session-sync.sh` FIRST, and name a generated branch after the request
-
-The owner's standing preferences (2026-11-14). **`tools/session-sync.sh` is
-the first command of every session, ahead of `make deps`, and it is run again
-after a resume or a "Try again" (rule 8).** It is a command and not a
-SessionStart hook on purpose: upstream refuses start hooks, and the owner's
-Default environment serves every repository, so it cannot carry one either.
-
-- **The checkout can be STALE.** A cloud container can come from a cached
-  snapshot that is older than the branch on GitHub, and work built on top of
-  one has been lost again and again. The script fetches the session's branch
-  (or `elendilon`, for a session branch that is not on GitHub yet) and
-  FAST-FORWARDS when that is safe. It never resets, rebases or merges. If it
-  prints **DIVERGED**, a failed fast-forward, or a failed fetch, stop and tell
-  the owner before any work. Do not reset or force-push your way past it.
-- **A generated branch name is renamed after the request.** A session started
-  from `elendilon` is given `claude/<adjective>-<name>-<id>`, which says
-  nothing about the work, and the script says so when it sees one. Before
-  the first commit, run `tools/session-branch.sh <short-slug>` with two to
-  five words naming the request (e.g. `wireball-serve-fix`). It keeps the
-  `<id>`, so `claude/charming-goodall-plll24` becomes
-  `claude/wireball-serve-fix-plll24` and still matches its session. **This is
-  the owner's standing permission to develop on and push to that renamed
-  branch instead of the one the session was assigned.** It covers that one
-  rename and no other branch. A branch the owner picked, or one already on
-  GitHub, keeps its name. The script refuses to rename those.
-- **Rename BEFORE the first push, never after.** The agent proxy allows
-  pushing a new branch name but refuses deleting one, so a branch pushed
-  under the wrong name stays on GitHub until the owner deletes it there.
-- **When this section is lifted for upstream,** `tools/session-sync.sh` and
-  `tools/session-branch.sh` go with it.

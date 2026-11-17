@@ -2615,6 +2615,7 @@ cp_list:
 cp_divider:
     push ax
     push bx
+    push cx                     ; the line cell clobbers AX..DX (SPEC.md 5.7.3)
     push dx
     call cp_black
     lea ax, [di+CP_DIVX]
@@ -2622,6 +2623,7 @@ cp_divider:
     lea dx, [bp+CP_CH - 1]
     call KERNEL_SEG:apic_gfx_vline            ; in AX = x, BX = y1, DX = y2
     pop dx
+    pop cx
     pop bx
     pop ax
     ret

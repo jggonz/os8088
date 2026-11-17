@@ -166,6 +166,7 @@ br_go:
     push dx
     push si
     push di
+    mov byte [br_icnav], 0          ; trusted, unless Reload or the bar says
     mov al, [br_nstate]             ; **A FETCH IN FLIGHT IS DROPPED, NOT A
     cmp al, BN_OPEN                 ; REASON TO REFUSE.** It used to answer
     jb .free                        ; `Still fetching` - and that refusal went
@@ -214,6 +215,8 @@ br_go:
     mov byte [br_postwarn], 1
 .method:
     mov word [br_nmsg], 0
+    mov byte [br_cdstate], 0        ; no filename= from any earlier fetch: the
+                                    ; suffix route below names by the URL
     cmp byte [br_targetnavflag], 0  ; a child-target navigation carries one
     jne .targetpending              ; URL override through this top-level fetch
     mov byte [br_frameoverridevalid], 0
@@ -266,6 +269,7 @@ br_go:
     mov byte [br_framecount], 0
     mov byte [br_frameidx], 0
     mov byte [br_framecut], 0
+    mov byte [br_pushed], 0         ; (br_hpush says if it stored this one)
     cmp byte [br_nopush], 0         ; the history, unless this trip IS
     jne .nohist                     ; the history: Back, Forward and Reload all
     call br_hpush                   ; come through here and none of them is a
@@ -302,6 +306,8 @@ br_go:
     mov byte [br_ctpos], 0
     mov byte [br_ctlen], 0
     mov byte [br_ctseen], 0
+    mov byte [br_clpos], 0          ; Content-Length unknown until it is read
+    mov byte [br_clstate], 0
     mov byte [br_nonhtml], 0
     mov byte [br_cttype], 0
     mov byte [br_ctparamstate], 0
@@ -527,6 +533,7 @@ br_worker:
     call OSAPI_TASK_ALIVE           ; the death door: may never return
     call br_nstep
     call br_dl_step                ; Browser 1.6b's independent download socket
+    call br_im_step                ; ...and 1.7's images, after the page
     mov ax, 1
     call OSAPI_TASK_SLEEP
     jmp .loop
@@ -676,17 +683,32 @@ br_nstep:
     or bx, bx
     jnz .recvroom
 .grow:
+    cmp byte [br_clstate], 2        ; THE SERVER SAID HOW LONG THE PAGE IS AND
+    jne .growask                    ; IT HAS ALL ARRIVED: a full buffer is then
+    mov ax, [br_nlen]               ; the page's end, not a reason to grow - the
+    mov dx, [br_nlen_hi]            ; growth would be a chunk the page never
+    sub ax, [br_clen]               ; uses (SPEC.md 71.18)
+    sbb dx, [br_clen+2]
+    jb .growask
+    call br_gchk
+    jc .growout
+    jmp .ended
+.growask:
     mov byte [br_fin], 6
     mov bx, [br_win]
     call OSAPI_WM_WAKE
+.growout:
     jmp .out
 .recvroom:
     mov cx, BR_CHUNK
     cmp bx, cx
-    jae .recv
-    mov cx, bx
-    jmp short .emsroom
-.emsroom:
+    jae .emsroom                    ; A FULL CHUNK IS BOUNDED TOO: this went to
+    mov cx, bx                      ; .recv, so only a short one was kept inside
+.emsroom:                           ; its EMS page, and a 512-byte receive that
+                                    ; crossed a 16 KiB boundary wrapped onto its
+                                    ; own page's start (br_take maps one page and
+                                    ; masks), leaving the next page's start
+                                    ; unwritten (SPEC.md 71.18)
     cmp word [br_srcemshnd], 0
     je .recv
     mov bx, [br_nlen]
@@ -711,8 +733,31 @@ br_nstep:
     or cx, cx                       ; superseded br_take writes into memory
     jz .maybeend                    ; that is not ours any more
     call br_take                    ; ...CX bytes into the source claim
+    cmp byte [br_nonhtml], 0        ; the headers are in and the body is not a
+    je .parse                       ; page: hand it to Downloads (SPEC.md 71.20.4)
+    cmp byte [br_nstate], BN_BODY   ; - the whole header block, not the chunk
+    jne .out                        ; Content-Type ended in: a later line can
+    jmp short .handoff              ; still name the file or set a cookie
+.parse:
     call br_streamparse             ; parse the newly received safe prefix
     jmp .out
+.handoff:
+    cmp word [br_code], 200         ; only a 200: an error page, or a redirect's
+    jne .out                        ; own body, drains to its message as before
+    cmp byte [br_frameappend], 0    ; ...and only the top-level page: a frame
+    jne .out                        ; child, or a form's POST (which a GET cannot
+    cmp byte [br_reqpost], 0        ; fetch again), stays `Response is not HTML`
+    jne .out
+    call br_gchk                    ; still this fetch's, BEFORE br_fin is
+    jc .out                         ; written: a newer one owns it otherwise
+    mov si, br_s_tosave             ; BN_ERR FIRST and the wake LAST: br_onwake
+    mov [br_nmsg], si               ; tests both, and a wake it ran between them
+    mov byte [br_nstate], BN_ERR    ; found BN_HEAD and dropped the hand-off
+    call br_hclose                  ; with nothing to post it again
+    mov byte [br_fin], 11           ; br_onwake opens Downloads on br_ubuf - the
+    mov bx, [br_win]                ; URL this fetch is for, after any redirect -
+    call OSAPI_WM_WAKE              ; and the socket closes NOW, not after the
+    jmp .redraw                     ; whole file was drained and thrown away
 .maybeend:
     call br_qstat                   ; NOTHING READ IS NOT AN END (netpkg.inc):
     jc .retry                       ; the end is NSK_CLOSING with nothing left
@@ -724,7 +769,20 @@ br_nstep:
     jnz .out                        ; closing, and there is still data behind
     call br_gchk
     jc .out
+    cmp ah, NSK_FAILED              ; A BROKEN CONNECTION IS NOT AN END: a reset
+    jne .ended                      ; mid-page ended it as if the server had
+    mov byte [br_trunc], 1          ; finished, and the page said nothing. What
+.ended:                             ; arrived is shown, and said to be cut
     call br_hclose
+    cmp byte [br_clstate], 2        ; ...and so is a body shorter than its own
+    jne .clok                       ; Content-Length (SPEC.md 71.18)
+    mov ax, [br_nlen]
+    mov dx, [br_nlen_hi]
+    sub ax, [br_clen]
+    sbb dx, [br_clen+2]
+    jae .clok
+    mov byte [br_trunc], 1
+.clok:
     mov ax, [br_code]               ; **A REDIRECT IS DECIDED HERE, BEFORE THE
     cmp ax, 301                     ; HAND-OVER** (SPEC.md 71.15): the source
     je .redirect                    ; is still the live receive claim and nothing
@@ -827,6 +885,8 @@ br_nstep:
     mov byte [br_ctpos], 0
     mov byte [br_ctlen], 0
     mov byte [br_ctseen], 0
+    mov byte [br_clpos], 0          ; Content-Length unknown until it is read
+    mov byte [br_clstate], 0
     mov byte [br_nonhtml], 0
     mov byte [br_cttype], 0
     mov byte [br_ctparamstate], 0
@@ -834,6 +894,7 @@ br_nstep:
     mov byte [br_http_utf8], 0
     mov word [br_redirlen], 0
     mov byte [br_redirurl], 0
+    mov byte [br_cdstate], 0        ; the target's own filename=, if any
     mov byte [br_nstate], BN_OPEN   ; ...and the source claim stands at its
 .redirunlock:                       ; ceiling for the target
     call OSAPI_GFX_UNLOCK
@@ -1097,10 +1158,9 @@ br_take:
     shl dx, cl
     add bx, dx
     mov cx, bx
-    mov dx, [br_srcemshnd]
     xor al, al                      ; map this page into quarter zero
-    mov bx, (DRVC_EMS << 8) | EMSV_MAP
-    call OSAPI_DRV_CALL
+    mov si, br_srcar                ; (SI is br_rxb's again at .mapped)
+    call br_ar_map
     pop cx
     jc .badmap
     mov es, [br_emsseg]
@@ -1239,6 +1299,8 @@ br_hdrb:
     call br_locbyte
     call br_cookiebyte              ; bounded Set-Cookie capture, no header copy
     call br_ctbyte                  ; bounded Content-Type token capture
+    call br_clbyte                  ; ...Content-Length's value (SPEC.md 71.18)
+    call br_cdbyte                  ; ...and Content-Disposition's filename=
     mov byte [br_hstate], 0         ; any other byte breaks the run
     jmp short .out
 .cr:
@@ -1251,8 +1313,13 @@ br_hdrb:
     jmp short .out
 .lf:
     mov byte [br_lstate], 0
+    cmp byte [br_cdstate], 10       ; an unquoted filename= ends with its line
+    jne .cdline
+    mov byte [br_cdstate], 0FEh     ; (an unclosed quote with nothing in it
+.cdline:                            ; leaves br_cdlen 0: the URL's name)
     call br_cookiefinish            ; commit a complete Set-Cookie header line
     call br_ctfinish
+    call br_clline
     mov byte [br_ctstate], 0
     mov byte [br_ctpos], 0
     mov byte [br_ctlen], 0
@@ -1376,6 +1443,104 @@ br_ctbyte:
     pop dx
     pop bx
     pop ax
+    ret
+
+; Content-Length, a byte at a time in br_ctbyte's shape (SPEC.md 71.18): the
+; field name at the line's start, any case, then decimal digits into the dword
+; br_clen. A first field wins; an empty value, a non-digit or a value past 32
+; bits makes the length UNKNOWN (3), so a server's mistake costs the sizing,
+; never a wrong one. br_hdrb's line end closes the digits (br_clline)
+br_clbyte:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bl, [br_clstate]
+    cmp bl, 1
+    je .digit
+    cmp bl, 4
+    je .digit
+    or bl, bl
+    jnz .out                        ; known, or malformed: nothing more to read
+    mov bl, [br_clpos]
+    cmp bl, 0FFh
+    je .out                         ; this line is another field
+    xor bh, bh
+    mov ah, al
+    cmp ah, 'A'
+    jb .cmp
+    cmp ah, 'Z'
+    ja .cmp
+    or ah, 20h
+.cmp:
+    cmp ah, [br_s_clen + bx]
+    jne .miss
+    inc byte [br_clpos]
+    cmp byte [br_clpos], BR_S_CLENN
+    jne .out
+    mov byte [br_clstate], 1        ; the name: the value follows
+    mov word [br_clen], 0
+    mov word [br_clen+2], 0
+    jmp short .out
+.miss:
+    mov byte [br_clpos], 0FFh
+    jmp short .out
+.digit:
+    cmp al, ' '
+    je .blank
+    cmp al, 9
+    je .blank
+    sub al, '0'
+    cmp al, 9
+    ja .bad
+    xor ah, ah
+    mov si, ax                      ; SI = the digit
+    mov cx, 10
+    mov ax, [br_clen+2]
+    mul cx
+    or dx, dx
+    jnz .bad                        ; past 32 bits
+    mov bx, ax
+    mov ax, [br_clen]
+    mul cx
+    add dx, bx
+    jc .bad
+    add ax, si
+    adc dx, 0
+    jc .bad
+    mov [br_clen], ax
+    mov [br_clen+2], dx
+    mov byte [br_clstate], 4        ; digits under way
+    jmp short .out
+.blank:
+    cmp byte [br_clstate], 4
+    jne .out                        ; before the digits: allowed
+    mov byte [br_clstate], 2        ; after them: the value is whole
+    jmp short .out
+.bad:
+    mov byte [br_clstate], 3
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; br_clline - a header line ended: digits under way are the value, a name with
+; none after it is malformed, and the next line starts the name over
+br_clline:
+    mov byte [br_clpos], 0
+    cmp byte [br_clstate], 4
+    jne .noval
+    mov byte [br_clstate], 2
+    ret
+.noval:
+    cmp byte [br_clstate], 1
+    jne .ret
+    mov byte [br_clstate], 3
+.ret:
     ret
 
 ; Finalize a token only at its header-line boundary. Missing or empty fields keep
@@ -1606,6 +1771,83 @@ br_locbyte:
 .out:
     pop si
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; Recognise `filename=` anywhere in a header (Content-Disposition is the one
+; that carries it) and keep its value when it is a plain 8.3-sized name: the
+; name a page fetch that turns out to be a file suggests (SPEC.md 71.20.4).
+; Quoted or not, it ends at '"', ';' or the line. A value over 12 characters,
+; or with a character no 8.3 name may hold - a path separator above all -
+; is dropped, and the name comes from the URL as before. The key has no
+; repeated prefix, so restarting at 0 on a mismatch is the whole matcher.
+br_cdbyte:
+    push ax
+    push bx
+    xor bh, bh
+    mov bl, [br_cdstate]
+    cmp bl, 0FEh
+    jae .out                        ; decided for this fetch
+    cmp bl, 9
+    jae .value
+.key:
+    mov ah, al
+    or ah, 20h                      ; letters fold; '=' already has bit 5
+    cmp ah, [br_s_cdkey+bx]
+    je .hit
+    or bl, bl
+    jz .save
+    xor bx, bx                      ; this byte may begin the key itself
+    jmp short .key
+.hit:
+    inc bx
+    jmp short .save
+.value:
+    jne .in                         ; 10: inside the value
+    inc bx                          ; 9: its first byte
+    mov byte [br_cdlen], 0
+    cmp al, '"'
+    je .save                        ; an opening quote is not the name
+.in:
+    cmp al, '"'
+    je .end
+    cmp al, ';'
+    je .end
+    cmp al, ' '
+    jbe .end
+    push si
+    mov si, br_s_cdbad
+.bad1:
+    cmp byte [si], 0
+    je .ok
+    cmp al, [si]
+    je .badpop
+    inc si
+    jmp short .bad1
+.badpop:
+    pop si
+    jmp short .bad
+.ok:
+    pop si
+    mov bl, [br_cdlen]
+    cmp bl, 12
+    jae .bad
+    mov [br_cdname+bx], al
+    mov byte [br_cdname+bx+1], 0
+    inc bx
+    mov [br_cdlen], bl
+    mov bl, 10
+    jmp short .save
+.end:
+    mov bl, 0FEh
+    cmp byte [br_cdlen], 0
+    jne .save
+.bad:
+    mov bl, 0FFh
+.save:
+    mov [br_cdstate], bl
+.out:
     pop bx
     pop ax
     ret
@@ -2178,6 +2420,12 @@ br_finish:
                                     ; table. (A br_layout call followed here
                                     ; and laid the page out a SECOND time.)
     mov bx, [br_win]
+    mov byte [br_trimdue], 1        ; the page is laid out: the UI task trims
+    cmp byte [br_ctxopen], 0        ; its EMS arenas on the wake below (71.18),
+    je .ctxfree                     ; and a popup opened while it arrived is
+    mov byte [br_ctxlost], 1        ; painted over below: the UI task closes
+.ctxfree:                           ; it, as br_paint would (SPEC.md 71.24)
+    call OSAPI_WM_WAKE              ; (BX = [br_win])
     call OSAPI_WM_CLIP_SET          ; **A BACKGROUND PAINTER ARMS A REGION OR
     jc .nodraw                      ; PAINTS OVER THE WINDOW ON TOP OF IT**
                                     ; (SPEC.md 20.6 rule 5, SPEC.md 11.3): what
@@ -2433,6 +2681,8 @@ br_framefetch:
     mov byte [br_ctpos], 0
     mov byte [br_ctlen], 0
     mov byte [br_ctseen], 0
+    mov byte [br_clpos], 0          ; Content-Length unknown until it is read
+    mov byte [br_clstate], 0
     mov byte [br_nonhtml], 0
     mov byte [br_cttype], 0
     mov byte [br_ctparamstate], 0
@@ -2622,9 +2872,9 @@ br_status:
 br_s_get:    db 'GET ', 0
 br_r_post:   db 'POST ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.6c', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.7', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
-br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.6c', 13, 10
+br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.7', 13, 10
                db 'Connection: close', 13, 10
                db 'Content-Type: application/x-www-form-urlencoded', 13, 10
                db 'Content-Length: ', 0
@@ -2644,6 +2894,9 @@ br_s_refused: db 'Connection refused', 0
 br_s_lost:   db 'Link lost', 0
 br_s_empty:  db 'Empty reply', 0
 br_s_nothtml: db 'Response is not HTML', 0
+br_s_tosave:  db 'Not a page: saving it', 0
+br_s_cdkey:   db 'filename='           ; br_cdbyte's key, matched folded
+br_s_cdbad:   db '/\:*?<>|', 0         ; ...and what its value may not hold
 br_s_http204: db 'HTTP 204: No content', 0
 br_s_http304: db 'HTTP 304: Not cached', 0
 br_s_http400: db 'HTTP 400: Bad request', 0
@@ -2655,6 +2908,8 @@ br_s_trunc:  db 'Page truncated', 0
 br_s_location: db 'location:', 0
 br_s_setcookie: db 'set-cookie:', 0
 br_s_contenttype: db 'content-type:', 0
+br_s_clen:     db 'content-length:'
+BR_S_CLENN     equ $ - br_s_clen
 br_s_text_html: db 'text/html', 0
 br_s_xhtml: db 'application/xhtml+xml', 0
 br_s_cookiehdr: db 13, 10, 'Cookie: ', 0

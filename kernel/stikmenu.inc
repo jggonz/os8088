@@ -254,7 +254,8 @@ stm_scan:
     repe cmpsb
     je .kept                    ; nothing written: the list stands
 .scan:
-%endif
+    CSDO mov byte [CSEG stm_kok], 1 ; kept - unless stm_scanvol says a read
+%endif                          ; failed, which is no answer to keep
     CSDO mov byte [CSEG stm_n], 0
     CSDO mov byte [CSEG stm_over], 0
     call COLD_SEG:drvf_drv_vol_bank
@@ -290,7 +291,6 @@ stm_scan:
 %ifdef MOD_CACHE
     call stm_kgw                ; ...and the generations it was taken under
     rep movsb
-    CSDO mov byte [CSEG stm_kok], 1
 .kept:
 %endif
     ret
@@ -346,11 +346,17 @@ stm_scanvol:
     mov di, stm_find
     mov ax, 0x0100              ; AH = 1 the token walk, AL = 0 no system
     call COLD_SEG:dsk_find_x
-    jc .ret                     ; the end, or a read that failed
+    jc .end                     ; the end, or a read that failed
     push cx
     call stm_take
     pop cx
     jmp short .f
+.end:
+%ifdef MOD_CACHE
+    cmp ax, FERR_NOENT          ; the end of the folder is an answer; a read
+    je .ret                     ; that failed leaves a SHORT list, which the
+    CSDO mov byte [CSEG stm_kok], 0 ; next press scans again (SPEC.md 110.12.2)
+%endif
 .ret:
     ret
 

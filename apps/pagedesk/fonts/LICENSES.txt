@@ -1,0 +1,43 @@
+PageDesk document faces and width tables - sources, licences, attribution
+=========================================================================
+
+STRIKES (apps/pagedesk/fonts/*.t88)
+  Bitmap strikes at 6, 7, 8, 9, 10, 12, 14, 16, 20 and 24 pixels, regular and bold
+  (8, 10 and 12 in PDRES.BIN inside PAGEDESK.O88, the rest in PDFONTX.RES)
+  (true italic at 14 and 16, the other italic sizes are synthesised by the renderer),
+  rasterised with FreeType (monochrome, TrueType-hinted) from
+
+    Liberation Fonts 2.1.5  (Sans, Serif, Mono; Regular, Bold, Italic, BoldItalic)
+    Digitized data copyright (c) 2010 Google Corporation with Reserved Font Arimo,
+    Tinos and Cousine.  Copyright (c) 2012 Red Hat, Inc. with Reserved Font Name
+    Liberation.
+    https://github.com/liberationfonts/liberation-fonts
+    archive pinned in tools/os88pdfont.py (SHA-256 7191c669...f25d0)
+
+  licensed under the SIL Open Font License 1.1 (OFL-Liberation.txt, AUTHORS-Liberation.txt).
+  The strikes are Modified Versions of the Font Software in the OFL's sense - bitmaps,
+  some hand-fixed - and are distributed under the same licence.  Following the OFL
+  they do not use the Reserved Font Name: inside os8088 they are "PD Sans", "PD Serif"
+  and "PD Mono".  Liberation is metric-compatible with Arial/Times New Roman/Courier New
+  (Arimo, Tinos and Cousine are the same designs); those are used here as stand-ins for
+  Helvetica, Times and Courier.  The strike text files are the SOURCE and are hand-fixable.
+
+WIDTH TABLES (apps/pagedesk/fonts/widths.txt)
+  Advance widths (1/1000 em) of Adobe's Core 14 AFM files, Windows-1252 codes 32..255.
+  Copyright (c) 1985-1997 Adobe Systems Incorporated.  The notice in AFM-NOTICE.txt
+  travels with them.  The AFM files themselves are not committed or shipped.
+
+ART (apps/pagedesk/art/*.art)
+  Icons, cursors, the package icon and the .PDF document glyph were drawn by hand for
+  os8088 as pixel grids and carry the repository's licence.  No generated artwork.
+
+REGENERATING
+  python3 tools/os88pdfont.py fetch     download + verify the pinned TTFs and AFMs
+                                        into build/pdfetch/
+  python3 tools/os88pdfont.py draw      rewrite apps/pagedesk/fonts/*.t88 and
+                                        widths.txt (this OVERWRITES hand fixes)
+  python3 tools/os88pdfont.py build     pack PDRES.BIN, the core (what `make` runs)
+  python3 tools/os88pdfont.py build --extra   pack PDFONTX.RES, the other sizes
+  python3 tools/os88pdfont.py notice    write PDFONTS.TXT, this file and the licences,
+                                        which travels with both on every disk
+  python3 tools/os88pdfont.py proof     PNG proofs of every strike and the icons

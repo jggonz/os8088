@@ -204,7 +204,8 @@ class Cell:
         self.ops, self.colspan, self.header, self.align = [], colspan, header, align
 
     def text_len(self):
-        return sum(len(o[1]) for o in self.ops if o[0] == "RUN")
+        return sum(len(o[1]) if o[0] == "RUN" else len(o[4])
+                   for o in self.ops if o[0] in ("RUN", "IMG"))
 
 
 class Table:
@@ -219,6 +220,45 @@ class Table:
 
     def has_text(self):
         return any(c.text_len() for r in self.rows for c in r)
+
+
+# --- SPEC.md 71.25: an <img> is a box of cells ------------------------------
+IMG_MAXCOL = 96          # BR_MAXCOL
+IMG_MAXROW = 120         # BR_IMGRMAX
+IMG_ALTMAX = 80          # BR_IALTMAX
+IMG_ALIGN = {"middle": 1, "absmiddle": 1, "center": 1, "top": 2,
+             "texttop": 2, "left": 3, "right": 4}
+
+
+def img_num(v):
+    """A pixel count, or None for missing, empty, zero or a percentage."""
+    if v is None or not v.isdigit():
+        return None
+    n = 9999 if len(v) > 4 else int(v)
+    return n or None
+
+
+def img_op(a):
+    """("IMG", cols, rows, align, alt) as br_image writes the record."""
+    alt = " ".join(unescape(a.get("alt", "")).replace("\x7f", " ").split())
+    alt = alt[:IMG_ALTMAX].rstrip()
+    border = img_num(a.get("border")) or 0
+    border = 2 * min(border, 16)
+    w, h = img_num(a.get("width")), img_num(a.get("height"))
+    cols = (min(IMG_MAXCOL, (w + border + 7) // 8) if w
+            else max(4, min(40, len(alt) + 2)))
+    rows = min(IMG_MAXROW, (h + border + 7) // 8) if h else 2
+    align = IMG_ALIGN.get(a.get("align", "").lower(), 0)
+    return ("IMG", cols, rows, align, alt)
+
+
+def img_reach(rows, align):
+    """(rows above, rows below) the line's text row - br_imgreach."""
+    if align == 1:
+        return rows // 2, rows - 1 - rows // 2
+    if align == 2:
+        return 0, rows - 1
+    return rows - 1, 0
 
 
 def parse(raw):
@@ -370,9 +410,7 @@ def parse(raw):
             emit(("CENTRE", not closing))
         elif tag == "img" and not closing:
             st["imgs"] += 1
-            alt = a.get("alt", "").strip()
-            if alt:
-                add_text(unescape(alt))
+            emit(img_op(a))
         elif tag == "input" and not closing:
             typ = a.get("type", "text").lower()
             if typ == "hidden":
@@ -475,7 +513,38 @@ def wrap(words, width):
 
 
 def cell_text(ops):
-    return "".join(o[1] for o in ops if o[0] == "RUN").strip()
+    # An image in a table cell is its alt text (SPEC.md 71.25, 4.1): the
+    # composer drops D_IMG as it drops every other marker
+    return "".join(o[1] if o[0] == "RUN" else o[4]
+                   for o in ops if o[0] in ("RUN", "IMG")).strip()
+
+
+def img_lines(items, x, kind, out):
+    """One laid-out line of words and image boxes -> its rows (SPEC.md 71.25).
+    items: str words and IMG ops in order, a str " " where the source had a
+    space. The text row is the one the words are on; each row above and below
+    is a continuation ("irow"), drawn as the boxes' slices only."""
+    boxes = [it for it in items if not isinstance(it, str)]
+    above = max((img_reach(b[2], b[3])[0] for b in boxes), default=0)
+    below = max((img_reach(b[2], b[3])[1] for b in boxes), default=0)
+    for k in range(-above, below + 1):
+        cells = ""
+        for it in items:
+            if isinstance(it, str):
+                cells += it if k == 0 else " " * len(it)
+                continue
+            _, cols, rows, align, alt = it
+            s = k + img_reach(rows, align)[0]
+            if not 0 <= s < rows:
+                cells += " " * cols
+                continue
+            edge = "+" if s in (0, rows - 1) else "|"
+            fill = "-" if s in (0, rows - 1) else " "
+            inner = fill * max(0, cols - 2)
+            if s == 0 and cols >= 3:
+                inner = (alt[:cols - 2] + inner[len(alt[:cols - 2]):])
+            cells += (edge + inner + edge)[:cols] if cols > 1 else edge
+        out.append(Line(" " * x + cells, x, kind if k == 0 else "irow"))
 
 
 def layout_table(t, width, out):
@@ -548,17 +617,61 @@ def layout(ops, width):
     """-> the line table. One entry per display line (2.3)."""
     out, pending, centre, indent, heading, quote = [], [], 0, 0, 0, 0
 
+    def flush_images(left):
+        """pending holds IMG ops among the runs: greedy over words AND boxes.
+        A box is one unbreakable unit; it starts the next line when it does
+        not fit after text, and alone it overflows (SPEC.md 71.25). Where
+        the source glued a word to a box with no space the 8086 can still
+        break between them, which this models as a break opportunity."""
+        tokens, text = [], ""
+        for p in pending:
+            if isinstance(p, str):
+                text += p
+                continue
+            sp = bool(text) and text[-1].isspace()
+            for i, w in enumerate(text.split()):
+                tokens.append((w, i > 0 or text[:1].isspace()))
+            tokens.append((p, sp))
+            text = ""
+        for i, w in enumerate(text.split()):
+            tokens.append((w, i > 0 or text[:1].isspace()))
+        avail = max(1, width - left)
+        kind = "heading" if heading else "text"
+
+        def put(line, n):
+            # br_emitline centres on the line's cells, boxes included
+            x = (width - n) // 2 if centre and n < width else left
+            img_lines(line, x, kind, out)
+
+        line, n = [], 0
+        for tok, sp in tokens:
+            size = len(tok) if isinstance(tok, str) else tok[1]
+            gap = 1 if line and sp else 0
+            if line and n + gap + size > avail:
+                put(line, n)
+                line, n, gap = [], 0, 0
+            if gap:
+                line.append(" ")
+            line.append(tok)
+            n += gap + size
+        if line:
+            put(line, n)
+
     def flush():
         nonlocal pending
+        left = indent + (min(4, quote) * 2)
+        if heading and not quote:
+            left = max(left, min(5, heading - 1))
+        if any(not isinstance(p, str) for p in pending):
+            flush_images(left)
+            pending = []
+            return
         # Concatenate FIRST and split into words after, so an inline tag
         # boundary with no whitespace across it does not become one.
         words = "".join(pending).split()
         pending = []
         if not words:
             return
-        left = indent + (min(4, quote) * 2)
-        if heading and not quote:
-            left = max(left, min(5, heading - 1))
         for ln in wrap(words, max(1, width - left)):
             s = " " * left + ln
             if centre and len(s) < width:
@@ -596,6 +709,13 @@ def layout(ops, width):
         elif k == "TABLE":
             flush()
             layout_table(op[1], width, out)
+        elif k == "IMG":
+            if op[3] >= 3:                  # left or right: a line of its own
+                flush()
+                x = max(0, width - op[1]) if op[3] == 4 else 0
+                img_lines([op], x, "image", out)
+            else:
+                pending.append(op)
         elif k == "HREF":
             pass
     flush()
@@ -703,6 +823,20 @@ def self_check():
     print("selfcheck %s  literal leading spaces in PRE lines"
           % ("ok " if pre_ok else "OFF"))
     ok = ok and pre_ok
+    # A 4x3 box aligned bottom reaches two rows above the text; a 1x3 one
+    # aligned middle reaches one above and one below, so the line is 4 rows
+    img_ops, _ = parse(b"<p>x <img width=32 height=24 alt=ab> y "
+                       b"<img width=8 height=24 align=middle> z</p>")
+    img_ops, _, _, _ = simplify(img_ops)
+    got = [(line.kind, line.cells) for line in layout(img_ops, 40)]
+    want = [("irow", "  +ab+      "), ("irow", "  |  |   +  "),
+            ("text", "x +--+ y | z"), ("irow", "         +  ")]
+    img_ok = got == want
+    print("selfcheck %s  71.25 image boxes: one unit, rows above and below"
+          % ("ok " if img_ok else "OFF"))
+    if not img_ok:
+        print("            got %r" % got)
+    ok = ok and img_ok
     return ok
 
 

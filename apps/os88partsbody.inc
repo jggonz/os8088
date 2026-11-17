@@ -1817,6 +1817,14 @@ op_cseg:
 ; in:  SI = a NUL-terminated string in our segment; out: CF=1
 ; -----------------------------------------------------------------------------
 op_say:
+%ifdef OP_HUSH
+    cmp word [OP_HUSH], 0       ; HUSHED (SPEC.md 20.12.9.7): the package's
+    je .say                     ; word, nonzero, takes the sentence instead -
+    mov [OP_HUSH], si           ; an op_fetch inside an fsx bracket, where a
+    stc                         ; toast is a drawing slot (SPEC.md 53.7), and
+    ret                         ; the package says it after the bracket
+.say:
+%endif
     push ds
     pop es                      ; OSAPI_TOAST wants ES:SI (SPEC.md 59)
     xor cx, cx
@@ -2376,6 +2384,8 @@ op_fetch:
 %if OP_HAS_BIG
     call op_lenx                ; `len` in PARAGRAPHS, 20 bits (20.12.15)
     call op_gr
+    pop dx                      ; ...which both write DX: the claim back,
+    push dx                     ; still banked for the row
 %else
     mov ax, [si+OP_R_LEN]
     add ax, 15                  ; `len` in PARAGRAPHS, rounded up - the RCR

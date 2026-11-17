@@ -198,9 +198,9 @@ snd_hwinfo:
     or ax, ax
     jz .none
     mov bl, [sbl_irq]
-    mov bh, 1                   ; this driver drives DMA channel 1 and only
-                                ; ever channel 1 - sbl_halt's own mask is the
-                                ; statement of it
+    mov bh, [sbl_dma]           ; the ESS route and the 8237 agree (34.5.8)
+    cmp bh, 0xFF
+    je .none                    ; no usable resource: no valid BLASTER string
     mov ch, [sbl_verhi]
     mov cl, [sbl_verlo]
     CLC_OR_STC .none

@@ -62,10 +62,23 @@ tests/bootstatus.py                advance     1  # pre-gate census 2026-11-15 (
 tests/bptrace.py                   passwait    1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 tests/bptrace.py                   poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/brdownload.py                poll       15  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/brdownload.py                deadline    4  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
+tests/brdownload.py                poll       18  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
+
+tests/brems.py                     tmppath     1  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
+
+tests/brganim.py                   poll        5  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
+
+tests/brkeep.py                    poll        7  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
+
+tests/brmap.py                     poll        8  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
 
 tests/brnav.py                     poll        8  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 tests/brnav.py                     sleep       1  # reverted to the qemubox stream's ownership (QEMU network rows), 2026-11-15
+
+tests/brold.py                     poll        8  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
+
+tests/brpx.py                      poll        8  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
 
 tests/brreload.py                  poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
@@ -256,7 +269,7 @@ tests/emumove.py                   poll        4  # pre-gate census 2026-11-15 (
 
 tests/ethcfg.py                    poll        8  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 
-tests/ethernet.py                  poll       19  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
+tests/ethernet.py                  poll       21  # main's Browser 1.7 rows (#358) and ethernet.py's new legs, censused at the merge onto elendilon-pr 2026-11-16 - they predate the gate on this branch; convert to guest waits, never raise
 
 tests/fddpage.py                   poll        1  # pre-gate census 2026-11-15 (docs/plans/soak-speed-2/flake.md); convert to a guest wait, never raise
 

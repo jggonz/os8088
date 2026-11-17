@@ -1,0 +1,12 @@
+Adobe Core 14 AFM files - notice (from the MustRead.html that accompanies them,
+SHA-256 b226bfc00e1b8b8a80c7b3cfbbc322d13b4b0401f94cdeafdd93b2210ad802eb)
+
+This file and the 14 PostScript(R) AFM files it accompanies may be used, copied, and distributed for any purpose and without charge, with or without modification, provided that all copyright notices are retained; that the AFM files are not distributed without this file; that all modifications to this file or any of the AFM files are prominently noted in the modified file(s); and that this paragraph is not modified. Adobe Systems has no responsibility or obligation to support the use of the AFM files.
+
+Copyright (c) 1985-1997 Adobe Systems Incorporated.  All Rights Reserved.
+PostScript is a registered trademark of Adobe Systems Incorporated.
+
+os8088 note: this tree does not distribute the AFM files themselves.  It carries
+only the advance-width numbers extracted from them (widths.txt), packed into
+PDRES.BIN.  That extraction is a modification, and is prominently noted here and in
+widths.txt's header.

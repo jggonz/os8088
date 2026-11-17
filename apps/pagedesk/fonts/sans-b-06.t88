@@ -1,0 +1,1012 @@
+# PageDesk document face strike (docs/PAGEDESK-SPEC.md 11.2).
+# Drawn once by: python3 tools/os88pdfont.py draw   (Pillow/FreeType, mono hinting)
+# SOURCE   LiberationSans-Bold.ttf, Liberation Fonts 2.1.5 (SIL OFL 1.1), see fonts/LICENSES.txt
+# THE ART IS THE SOURCE from here on: hand-fix a glyph below and `build` packs it.
+# glyph <code> w <width> lb <left bearing> top <rows above baseline of the first ink row>
+# followed by its ink rows ('#' ink, '.' paper); absent rows are paper; w 0 = blank.
+family sans
+style b
+size 6
+ascent 6
+descent 1
+
+glyph 32 w 0 lb 0 top 0
+glyph 33 w 1 lb 0 top 5
+#
+#
+glyph 34 w 2 lb 0 top 5
+##
+glyph 35 w 3 lb 0 top 5
+.##
+.##
+###
+#..
+glyph 36 w 3 lb 0 top 5
+###
+##.
+..#
+###
+glyph 37 w 5 lb 0 top 5
+##.#.
+###.#
+..###
+.#.##
+glyph 38 w 4 lb 0 top 5
+.##.
+.##.
+#.##
+####
+glyph 39 w 1 lb 0 top 5
+#
+glyph 40 w 2 lb 0 top 5
+.#
+#.
+#.
+#.
+.#
+glyph 41 w 2 lb 0 top 5
+#.
+.#
+.#
+.#
+#.
+glyph 42 w 2 lb 0 top 5
+#.
+##
+glyph 43 w 2 lb 1 top 4
+#.
+#.
+##
+#.
+glyph 44 w 1 lb 0 top 1
+#
+glyph 45 w 2 lb 0 top 2
+##
+glyph 46 w 1 lb 0 top 1
+#
+glyph 47 w 2 lb 0 top 5
+.#
+#.
+#.
+#.
+glyph 48 w 3 lb 0 top 5
+###
+#.#
+#.#
+.##
+glyph 49 w 3 lb 0 top 5
+##.
+.#.
+.#.
+###
+glyph 50 w 3 lb 0 top 5
+###
+..#
+.#.
+###
+glyph 51 w 3 lb 0 top 5
+###
+..#
+..#
+###
+glyph 52 w 3 lb 0 top 5
+.##
+.##
+###
+..#
+glyph 53 w 3 lb 0 top 5
+##.
+###
+..#
+###
+glyph 54 w 3 lb 0 top 5
+.##
+###
+#.#
+.##
+glyph 55 w 3 lb 0 top 5
+###
+..#
+.#.
+.#.
+glyph 56 w 3 lb 0 top 5
+###
+###
+#.#
+###
+glyph 57 w 3 lb 0 top 5
+###
+#.#
+.##
+###
+glyph 58 w 0 lb 0 top 0
+glyph 59 w 0 lb 0 top 0
+glyph 60 w 3 lb 0 top 3
+###
+##.
+..#
+glyph 61 w 3 lb 0 top 4
+###
+###
+glyph 62 w 3 lb 0 top 3
+.##
+.##
+#..
+glyph 63 w 3 lb 0 top 5
+###
+..#
+.#.
+.#.
+glyph 64 w 6 lb 0 top 5
+.####.
+#.##.#
+##.#.#
+#.#.#.
+.###..
+glyph 65 w 4 lb 0 top 5
+.##.
+.##.
+.###
+#..#
+glyph 66 w 4 lb 0 top 5
+####
+####
+#..#
+####
+glyph 67 w 4 lb 0 top 5
+.###
+#...
+#...
+.###
+glyph 68 w 4 lb 0 top 5
+####
+#..#
+#..#
+###.
+glyph 69 w 4 lb 0 top 5
+####
+###.
+#...
+####
+glyph 70 w 3 lb 0 top 5
+###
+#..
+###
+#..
+glyph 71 w 4 lb 0 top 5
+.###
+#...
+#..#
+.###
+glyph 72 w 4 lb 0 top 5
+#..#
+####
+#..#
+#..#
+glyph 73 w 1 lb 0 top 5
+#
+#
+#
+#
+glyph 74 w 3 lb 0 top 5
+.##
+..#
+..#
+###
+glyph 75 w 4 lb 0 top 5
+#..#
+###.
+#.#.
+#..#
+glyph 76 w 3 lb 0 top 5
+#..
+#..
+#..
+###
+glyph 77 w 5 lb 0 top 5
+##.##
+##.##
+#.#.#
+#.#.#
+glyph 78 w 4 lb 0 top 5
+##.#
+##.#
+#.##
+#..#
+glyph 79 w 4 lb 0 top 5
+.###
+#..#
+#..#
+.###
+glyph 80 w 4 lb 0 top 5
+####
+#..#
+###.
+#...
+glyph 81 w 4 lb 0 top 5
+.###
+#..#
+#..#
+.###
+..##
+glyph 82 w 4 lb 0 top 5
+####
+#..#
+###.
+#..#
+glyph 83 w 4 lb 0 top 5
+####
+###.
+...#
+####
+glyph 84 w 4 lb 0 top 5
+####
+.#..
+.#..
+.#..
+glyph 85 w 4 lb 0 top 5
+#..#
+#..#
+#..#
+.###
+glyph 86 w 4 lb 0 top 5
+#..#
+.##.
+.##.
+.##.
+glyph 87 w 6 lb 0 top 5
+#.#..#
+#.###.
+.#.##.
+.#.##.
+glyph 88 w 4 lb 0 top 5
+.##.
+.##.
+.##.
+#..#
+glyph 89 w 4 lb 0 top 5
+#..#
+.##.
+..#.
+..#.
+glyph 90 w 4 lb 0 top 5
+###.
+..#.
+.#..
+####
+glyph 91 w 1 lb 0 top 5
+#
+#
+#
+#
+#
+glyph 92 w 2 lb 0 top 5
+#.
+#.
+#.
+.#
+glyph 93 w 1 lb 1 top 5
+#
+#
+#
+#
+#
+glyph 94 w 3 lb 0 top 5
+.#.
+#.#
+#..
+glyph 95 w 3 lb -1 top 0
+###
+glyph 96 w 1 lb 1 top 5
+#
+glyph 97 w 3 lb 0 top 4
+###
+###
+###
+glyph 98 w 3 lb 0 top 5
+#..
+###
+#.#
+###
+glyph 99 w 3 lb 0 top 4
+###
+#..
+.##
+glyph 100 w 3 lb 0 top 5
+..#
+###
+#.#
+###
+glyph 101 w 3 lb 0 top 4
+###
+###
+.##
+glyph 102 w 2 lb 0 top 5
+##
+##
+#.
+#.
+glyph 103 w 3 lb 0 top 4
+###
+#.#
+.##
+###
+glyph 104 w 3 lb 0 top 5
+#..
+###
+#.#
+#.#
+glyph 105 w 1 lb 0 top 4
+#
+#
+#
+glyph 106 w 1 lb -1 top 4
+#
+#
+#
+#
+glyph 107 w 3 lb 0 top 5
+#..
+#.#
+##.
+#.#
+glyph 108 w 1 lb 0 top 5
+#
+#
+#
+#
+glyph 109 w 5 lb 0 top 4
+#####
+#.#.#
+#.#.#
+glyph 110 w 3 lb 0 top 4
+###
+#.#
+#.#
+glyph 111 w 3 lb 0 top 4
+###
+#.#
+.##
+glyph 112 w 3 lb 0 top 4
+###
+#.#
+###
+#..
+glyph 113 w 3 lb 0 top 4
+###
+#.#
+###
+..#
+glyph 114 w 2 lb 0 top 4
+##
+#.
+#.
+glyph 115 w 3 lb 0 top 4
+###
+.##
+###
+glyph 116 w 2 lb 0 top 3
+#.
+#.
+##
+glyph 117 w 3 lb 0 top 4
+#.#
+#.#
+###
+glyph 118 w 3 lb 0 top 4
+#.#
+.##
+.#.
+glyph 119 w 5 lb -1 top 4
+#.#.#
+####.
+.#.#.
+glyph 120 w 3 lb 0 top 4
+#.#
+.#.
+#.#
+glyph 121 w 3 lb 0 top 4
+#.#
+.##
+.#.
+.#.
+glyph 122 w 3 lb 0 top 4
+.##
+.#.
+###
+glyph 123 w 2 lb 0 top 5
+.#
+.#
+#.
+.#
+.#
+glyph 124 w 1 lb 0 top 5
+#
+#
+#
+#
+#
+glyph 125 w 1 lb 1 top 5
+#
+#
+#
+#
+#
+glyph 126 w 2 lb 1 top 3
+##
+glyph 127 w 2 lb 0 top 3
+##
+##
+glyph 128 w 3 lb 0 top 5
+.##
+##.
+##.
+.##
+glyph 129 w 2 lb 0 top 3
+##
+##
+glyph 130 w 1 lb 0 top 1
+#
+glyph 131 w 2 lb 1 top 5
+##
+##
+#.
+#.
+#.
+glyph 132 w 3 lb 0 top 1
+#.#
+glyph 133 w 4 lb 1 top 1
+#..#
+glyph 134 w 1 lb 1 top 5
+#
+#
+#
+#
+glyph 135 w 1 lb 1 top 5
+#
+#
+#
+#
+glyph 136 w 2 lb 0 top 5
+##
+glyph 137 w 6 lb 0 top 5
+###...
+###...
+.#####
+.#####
+glyph 138 w 4 lb 0 top 6
+.##.
+####
+###.
+...#
+####
+glyph 139 w 2 lb 0 top 3
+.#
+#.
+.#
+glyph 140 w 6 lb 0 top 5
+.#####
+#..##.
+#..#..
+.#####
+glyph 141 w 2 lb 0 top 3
+##
+##
+glyph 142 w 4 lb 0 top 6
+.#..
+###.
+..#.
+.#..
+####
+glyph 143 w 2 lb 0 top 3
+##
+##
+glyph 144 w 2 lb 0 top 3
+##
+##
+glyph 145 w 1 lb 0 top 5
+#
+#
+glyph 146 w 1 lb 0 top 5
+#
+#
+glyph 147 w 3 lb 0 top 5
+#..
+#.#
+glyph 148 w 3 lb 0 top 5
+#.#
+#..
+glyph 149 w 2 lb 0 top 3
+##
+##
+glyph 150 w 3 lb 0 top 2
+###
+glyph 151 w 6 lb 0 top 2
+######
+glyph 152 w 2 lb -1 top 5
+##
+glyph 153 w 4 lb 1 top 5
+#.##
+#...
+glyph 154 w 3 lb 0 top 5
+.#.
+#.#
+.##
+###
+glyph 155 w 2 lb 0 top 3
+#.
+.#
+#.
+glyph 156 w 5 lb 0 top 4
+#####
+#..##
+.####
+glyph 157 w 2 lb 0 top 3
+##
+##
+glyph 158 w 3 lb 0 top 5
+.#.
+..#
+.#.
+###
+glyph 159 w 4 lb 0 top 6
+.##.
+#..#
+.##.
+..#.
+..#.
+glyph 160 w 0 lb 0 top 0
+glyph 161 w 1 lb 1 top 2
+#
+glyph 162 w 3 lb 0 top 5
+.#.
+###
+###
+.#.
+glyph 163 w 3 lb 0 top 5
+.##
+##.
+#..
+###
+glyph 164 w 3 lb 0 top 3
+###
+###
+glyph 165 w 3 lb 0 top 5
+#.#
+.#.
+.#.
+.#.
+glyph 166 w 1 lb 0 top 5
+#
+#
+.
+#
+#
+glyph 167 w 3 lb 0 top 5
+###
+.##
+###
+..#
+.##
+glyph 168 w 0 lb 0 top 0
+glyph 169 w 4 lb 0 top 5
+####
+##.#
+##.#
+.###
+glyph 170 w 2 lb 0 top 5
+.#
+##
+glyph 171 w 3 lb 0 top 3
+.##
+##.
+.##
+glyph 172 w 2 lb 1 top 3
+##
+glyph 173 w 2 lb 0 top 2
+##
+glyph 174 w 4 lb 0 top 5
+####
+####
+####
+.###
+glyph 175 w 3 lb -1 top 5
+###
+glyph 176 w 2 lb 0 top 5
+##
+.#
+glyph 177 w 3 lb 0 top 4
+.#.
+###
+.#.
+###
+glyph 178 w 2 lb 0 top 5
+.#
+#.
+glyph 179 w 2 lb 0 top 5
+.#
+##
+glyph 180 w 1 lb 0 top 5
+#
+glyph 181 w 3 lb 0 top 4
+#.#
+#.#
+###
+#..
+glyph 182 w 3 lb 0 top 5
+###
+###
+.##
+.##
+.##
+glyph 183 w 0 lb 0 top 0
+glyph 184 w 1 lb 0 top 0
+#
+glyph 185 w 1 lb 1 top 5
+#
+glyph 186 w 2 lb 0 top 5
+##
+##
+glyph 187 w 3 lb 0 top 3
+#..
+.##
+#..
+glyph 188 w 4 lb 1 top 5
+#.#.
+.#..
+.#.#
+#.##
+...#
+glyph 189 w 4 lb 1 top 5
+#.#.
+.#..
+.###
+#.#.
+glyph 190 w 5 lb 0 top 5
+.#.#.
+###..
+..#.#
+.#.##
+....#
+glyph 191 w 3 lb 0 top 3
+.#.
+#..
+.##
+glyph 192 w 4 lb 0 top 6
+..#.
+.##.
+.##.
+.###
+#..#
+glyph 193 w 4 lb 0 top 6
+..#.
+.##.
+.##.
+.###
+#..#
+glyph 194 w 4 lb 0 top 6
+.##.
+.##.
+.##.
+.###
+#..#
+glyph 195 w 4 lb 0 top 6
+..#.
+.##.
+.##.
+.###
+#..#
+glyph 196 w 4 lb 0 top 6
+.#..
+.##.
+.##.
+.###
+#..#
+glyph 197 w 4 lb 0 top 6
+.##.
+.##.
+.##.
+.###
+#..#
+glyph 198 w 6 lb 0 top 5
+..####
+.#.##.
+.###..
+#..###
+glyph 199 w 4 lb 0 top 5
+.###
+#...
+#...
+.###
+..#.
+glyph 200 w 4 lb 0 top 6
+..#.
+####
+###.
+#...
+####
+glyph 201 w 4 lb 0 top 5
+####
+###.
+#...
+####
+glyph 202 w 4 lb 0 top 6
+.##.
+####
+###.
+#...
+####
+glyph 203 w 4 lb 0 top 6
+.##.
+####
+###.
+#...
+####
+glyph 204 w 1 lb -1 top 6
+#
+#
+#
+#
+#
+glyph 205 w 1 lb 0 top 6
+#
+#
+#
+#
+#
+glyph 206 w 2 lb -1 top 6
+##
+#.
+#.
+#.
+#.
+glyph 207 w 2 lb -1 top 6
+.#
+#.
+#.
+#.
+#.
+glyph 208 w 4 lb 0 top 5
+####
+##.#
+#..#
+###.
+glyph 209 w 4 lb 0 top 6
+..#.
+##.#
+##.#
+#.##
+#..#
+glyph 210 w 4 lb 0 top 6
+..#.
+.###
+#..#
+#..#
+.###
+glyph 211 w 4 lb 0 top 6
+..#.
+.###
+#..#
+#..#
+.###
+glyph 212 w 4 lb 0 top 6
+.##.
+.###
+#..#
+#..#
+.###
+glyph 213 w 4 lb 0 top 6
+.##.
+.###
+#..#
+#..#
+.###
+glyph 214 w 4 lb 0 top 6
+.#..
+.###
+#..#
+#..#
+.###
+glyph 215 w 2 lb 1 top 3
+##
+##
+glyph 216 w 4 lb 0 top 5
+.###
+#.##
+##.#
+.###
+glyph 217 w 4 lb 0 top 6
+..#.
+#..#
+#..#
+#..#
+.###
+glyph 218 w 4 lb 0 top 6
+..#.
+#..#
+#..#
+#..#
+.###
+glyph 219 w 4 lb 0 top 6
+.##.
+#..#
+#..#
+#..#
+.###
+glyph 220 w 4 lb 0 top 6
+.#..
+#..#
+#..#
+#..#
+.###
+glyph 221 w 4 lb 0 top 5
+#..#
+.##.
+..#.
+..#.
+glyph 222 w 4 lb 0 top 5
+###.
+#..#
+####
+#...
+glyph 223 w 3 lb 0 top 5
+###
+#.#
+#.#
+#.#
+glyph 224 w 3 lb 0 top 5
+.#.
+###
+###
+###
+glyph 225 w 3 lb 0 top 5
+.#.
+#.#
+###
+###
+glyph 226 w 3 lb 0 top 5
+.##
+###
+###
+###
+glyph 227 w 3 lb 0 top 5
+##.
+###
+###
+###
+glyph 228 w 3 lb 0 top 4
+###
+###
+###
+glyph 229 w 3 lb 0 top 5
+.#.
+.#.
+#.#
+###
+###
+glyph 230 w 5 lb 0 top 4
+#####
+#####
+#####
+glyph 231 w 3 lb 0 top 4
+###
+#..
+.##
+.#.
+glyph 232 w 3 lb 0 top 5
+.#.
+###
+###
+.##
+glyph 233 w 3 lb 0 top 5
+.#.
+#.#
+###
+.##
+glyph 234 w 3 lb 0 top 5
+.##
+###
+###
+.##
+glyph 235 w 3 lb 0 top 4
+###
+###
+.##
+glyph 236 w 1 lb -1 top 5
+#
+#
+#
+#
+glyph 237 w 1 lb 0 top 5
+#
+#
+#
+#
+glyph 238 w 2 lb -1 top 5
+##
+#.
+#.
+#.
+glyph 239 w 1 lb -1 top 4
+#
+#
+#
+glyph 240 w 3 lb 0 top 5
+.##
+.##
+#.#
+.##
+glyph 241 w 3 lb 0 top 5
+.##
+###
+#.#
+#.#
+glyph 242 w 3 lb 0 top 5
+.#.
+###
+#.#
+.##
+glyph 243 w 3 lb 0 top 5
+.#.
+#.#
+#.#
+.##
+glyph 244 w 3 lb 0 top 5
+.##
+###
+#.#
+.##
+glyph 245 w 3 lb 0 top 5
+.##
+###
+#.#
+.##
+glyph 246 w 3 lb 0 top 4
+###
+#.#
+.##
+glyph 247 w 2 lb 1 top 4
+#.
+..
+##
+#.
+glyph 248 w 3 lb 0 top 4
+###
+###
+###
+glyph 249 w 3 lb 0 top 5
+.#.
+#.#
+#.#
+###
+glyph 250 w 3 lb 0 top 5
+.#.
+#.#
+#.#
+###
+glyph 251 w 3 lb 0 top 5
+.##
+#.#
+#.#
+###
+glyph 252 w 3 lb 0 top 4
+#.#
+#.#
+###
+glyph 253 w 3 lb 0 top 5
+.#.
+#.#
+.##
+.#.
+.#.
+glyph 254 w 3 lb 0 top 5
+#..
+###
+#.#
+###
+#..
+glyph 255 w 3 lb 0 top 4
+#.#
+.##
+.#.
+.#.

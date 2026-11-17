@@ -776,7 +776,7 @@ network disk. SPEC.md §113 is the protocol and the contract.
 
 The OS itself is assembly and stays that way. But a **package** can be written
 in C, and several are — the Commodore 64 and the Weave family among them, plus
-the four described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
+the applications described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
 1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
 line as `apps/word` and RTF as its file format. It has both of the product's
 views — Draft, which wraps to the window, and Page, which wraps to the sheet —
@@ -890,6 +890,19 @@ developer's build and stays one** (`apps/RETIRED.txt`, kind `local`): the
 data is DMA Design's, so no release image, everything-set floppy or live
 medium redistributes it - build it from your own tree.
 
+**Breadboard XT** (`apps/breadxt/`, `BREADXT.O88`) is an original native
+breadboard editor and educational circuit simulator written in C. Place real
+pins and wires, calculate DC/LED and four-state HC logic, then explore RC
+charging and an editable pin-level NE555 flasher with two voltage traces.
+Projects save as `.BBX`; eight examples and model/tutorial notes accompany the
+package. Its models are bounded educational approximations, with exactly one
+4.5–6 V supply and a 30 mA branch-current envelope. `make breadxtdisk` builds
+all four software-disk geometries; `make breadxtbundle` builds a local WPK.
+The [developer notes](docs/breadxt/DEVELOPER.md) record checked behavior, linked
+memory costs and the status of target validation; [the diary](docs/HOW-BREADXT-WAS-BUILT.md)
+records the implementation and independent review repairs. No external source
+or network service is needed by the guest or to rebuild its examples.
+
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in
 this repository, `tools/setup-cc.sh` builds it into the gitignored `build/cc`,
@@ -957,6 +970,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/word*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Microsoft Word floppies (`make worddisk`) |
 | `build/scribe*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Scribe, the fork of Word: one parted package + its welcome documents (`make scribedisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C: one package, its overlay a part of it, and `WELCOME.RTF` (`make cworddisk`) |
+| `build/breadxt*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | Breadboard XT: one native package with its overlay inside, eight editable BBX circuits and tutorial/model help (`make breadxtdisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package (its module and the CCP inside it) + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
 | `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
 | `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64: one package (the ROMs and its overlay are parts of `C64.O88`) + `README.TXT` + `COPYING` (`make c64disk`) |

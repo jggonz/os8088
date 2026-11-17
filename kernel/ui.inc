@@ -849,7 +849,7 @@ ui_task:
 .tmr_done:
 %endif
 %ifdef FDLG_MOD
-    cmp word [mod_r_fdlg], 0    ; ...and on kern_small the question is not
+                                ; ...and on kern_small the question is not
                                 ; "is a dialog up" but "is the IMAGE held",
                                 ; which is SPEC.md 38.0.1: three of the four
                                 ; ways a dialog goes away clear [fdlg_win]
@@ -857,11 +857,14 @@ ui_task:
                                 ; guard on that word shuts the door on the
                                 ; drop that has to follow it. Same one
                                 ; compare, of a word that is 0 on a machine
-                                ; that has not opened a dialog
+                                ; that has not opened a dialog. HELD AND
+    mov ax, [mod_r_fdlg]        ; ARMED, since MOD_CACHE keeps it (SPEC.md
+    cmp ax, [FDFP+2]            ; 38.0.1.1): a live slot names MODR_SEG and
+    jne .chk_close              ; a kept one mod_gone's, so the drop runs once
 %else
     cmp word [fdlg_win], 0      ; a file dialog cancelled by its close or
-%endif
     je .chk_close               ; minimize box is only HIDDEN by that route
+%endif
     call COLD_SEG:fdlg_reap_x   ; (SPEC.md 38.1) - collect it here rather
                                 ; than leaving the menu bar on Locator
                                 ; until the user next clicks something.

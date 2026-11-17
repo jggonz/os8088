@@ -32,6 +32,11 @@ ITS claim, above 1MB) span that text, and that End paints the last lines:
      the stream through br_docmap's window, br_layout lays it out (1,205
      lines - the count the same page lays out to on the XT), and the line
      the painter composed last ([br_lbuf], br_build) is the page's last.
+  1b. SELECTION AND TAB (SPEC.md 71.19.1), on that page's last rows, all
+     past the seam: a drag selects them, Ctrl+C copies exactly their visible
+     text (part 0's walk through br_docmap, the document claim a selector),
+     and Tab reaches HIGH-OFFSET-LINK on the last line. Before 71.19.1 Copy
+     refused a page over 64KB and Tab read [br_docseg] as a segment.
   2. NETWORK: the same page over HTTP from a server this row runs on the
      host (10.0.2.2, a port the OS picks), typed into the location bar. The
      worker's receive (br_take) stores past 64KB of the source claim, the
@@ -40,6 +45,15 @@ ITS claim, above 1MB) span that text, and that End paints the last lines:
   3. SMALL: linearena.htm, 3,000 lines in a 6KB stream, over HTTP - every
      claim of the page under 64KB and so ABOVE 1MB, read through windows
      bound to pool blocks.
+  4. DOWNLOAD: dltest.zip typed into the bar, the Save chooser's prefilled
+     name taken, and the Download Manager run to DL_DONE (SPEC.md 71.20).
+     Its icons are blitted out of the download part's data through
+     [br_dl_partdseg], op_seg's SELECTOR here; the file must be on B: byte
+     for byte once the machine stops, with no NAME.$$$ beside it.
+
+Leg 1 was red from KERN-MEGA-PLAN 14.139 until its follow-up (2026-11-06):
+the owner test refused the Browser's own conventional source claim, so the
+parser had no window and DOCWIDE.HTM opened as an empty page.
 
 And over all three: no `kern_mega CLOSED` (a package's #GP, completed by
 closing it) or `kern_mega FAULT` line in e9.out. `--local` runs leg 1 alone.
@@ -68,6 +82,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 os.environ["OS88_BUILD"] = os.path.join(ROOT, "build", "megak")
 import os88bochs  # noqa: E402
+import os88flush  # noqa: E402
 import os88sym  # noqa: E402
 from os88fixture import need  # noqa: E402
 
@@ -83,6 +98,32 @@ WIDE = ("docwide.htm", 1205, b"END OF WIDE DOCUMENT ABOVE 64K",
 TALL = ("linearena.htm", -3000, b"END OF 3000 LINE ARENA TEST",
         b"END OF 3000 LINE ARENA TEST", False)
 FAILS = []
+# 4: a file, not a page - served beside the pages, downloaded to B:
+DLNAME = "dltest.zip"
+DLDATA = bytes((i * 7 + (i >> 8)) & 0xFF for i in range(12000))
+DLDONE = [False]
+DL_PICK, DL_DONE, DL_FAIL, DL_CANCEL = 1, 11, 12, 13   # brdownload_const.inc
+
+
+def visible(raw):
+    """apps/browser/brcopyselection.inc's reading of the formatted stream (the
+    same as tests/brarena.py's): a break is CR LF, a cell a tab, a marker's
+    payload and every other marker nothing, D_NBSP a space"""
+    out, i = bytearray(), 0
+    while i < len(raw):
+        c = raw[i]
+        i += 1
+        if c >= 0x20:
+            out.append(0x20 if c == 0x7F else c)
+        elif c == 14:                   # D_LNK1, three index nibbles
+            i += 3
+        elif c in (5, 24):              # D_HEAD's level, D_CMETA's span
+            i += 1
+        elif c in (1, 2, 12):           # D_PARA, D_BR, D_ROW
+            out += b"\r\n"
+        elif c == 13:                   # D_CELL
+            out.append(9)
+    return bytes(out)
 
 
 def want(cond, what):
@@ -129,6 +170,8 @@ def main():
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "brmemory.py"),
                     "--out", fix], check=True, stdout=subprocess.DEVNULL)
     page = os.path.join(fix, WIDE[0])
+    with open(os.path.join(fix, DLNAME), "wb") as fh:
+        fh.write(DLDATA)
     img = os.path.join(fix, "b.img")
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88disk.py"),
                     "-o", img, "--size", "1440",
@@ -281,15 +324,102 @@ def main():
                  % (leg, page[0], br("br_nstate", 1)[0]))
             check(leg, page)
 
+        def download():
+            """4: a .zip typed into the bar is a DOWNLOAD (SPEC.md 71.20):
+            the Save chooser, Enter on its prefilled name, and the Download
+            Manager to DL_DONE. Its icons come out of the download part's
+            own data through [br_dl_partdseg] (op_seg's selector here), so a
+            wrong one is a #GP - a CLOSED line - and the file is checked on
+            B: once the machine stops."""
+            bx0, by0, bww, _ = brwin() or (None, None, None, None)
+            if bx0 is None:
+                want(False, "dl: the Browser's window is on the desk")
+                return
+            box.click(bx0 + bww - 40, by0 + dispcp.TITLE_H + 1 + 3 + 13
+                      + 1 + 15 // 2, "the location bar")
+            for _ in range(60):
+                box.key("BackSpace")
+            box.type("http://10.0.2.2:%d/%s" % (PORT[0], DLNAME))
+            box.ui_done("the URL typed")
+            box.key("Return")
+            box.until(lambda: br("br_dl_state", 1)[0] == DL_PICK
+                      and u16(box.read("fdlg_win", 2)) != 0,
+                      "dl: the Save chooser", secs=60)
+            box.ui_done("the Save chooser painted")
+            n = len(GETS)
+            box.key("Return")
+            box.until(lambda: br("br_dl_state", 1)[0] in (DL_DONE, DL_FAIL,
+                                                          DL_CANCEL),
+                      "dl: the download to end", secs=300)
+            box.ui_done("dl: the manager painted", secs=60)
+            state = br("br_dl_state", 1)[0]
+            rb = br("br_dl_recvbytes", 4)
+            got = u16(rb) | u16(rb, 2) << 16
+            want(state == DL_DONE and GETS[n:] == ["/" + DLNAME]
+                 and got == len(DLDATA),
+                 "dl: one GET of /%s and DL_DONE with %d bytes (state %d, "
+                 "%d bytes)" % (DLNAME, len(DLDATA), state, got))
+            box.shot(os.path.join(out, "dl-manager.png"))
+            DLDONE[0] = True
+
+        def select_copy_tab():
+            """1b: on the page's last rows - all past the 64KB seam, in a
+            document claim that is a SELECTOR here - a drag selects, Ctrl+C
+            copies through part 0's walk of br_docmap, and Tab reaches the
+            link on the last line (SPEC.md 71.19.1). Copy refused a page past
+            64KB, and Tab read [br_docseg] as a segment, which is a selector
+            on kern_mega (BROWSER-1.7-ROADMAP section 3)."""
+            sel = u16(br("br_docseg", 2))
+            base = box.sel_base(sel) if sel & 4 else sel * 16
+            cx, cy = u16(br("br_cx", 2)), u16(br("br_cy", 2))
+            rows = u16(br("br_rows", 2))
+            box.goto(cx + 12, cy + 4)       # the second cell: never padding
+            box.xd("mousedown", 1)
+            box.goto(cx + 120, cy + 8 * (rows - 2) + 4)
+            box.xd("mouseup", 1)
+            box.ui_done("sel: the drag")
+            lo = u16(br("br_spanlo", 2)) | u16(br("br_spanlo", 4), 2) << 16
+            hi = u16(br("br_spanhi", 2)) | u16(br("br_spanhi", 4), 2) << 16
+            want(br("br_selkind", 1)[0] == 1 and 65536 < lo < hi,
+                 "sel: a drag on the last rows selects [%05X, %05X), past the "
+                 "seam" % (lo, hi))
+            box.key("ctrl+c")
+            box.ui_done("sel: Ctrl+C")
+            csel = u16(box.read("clip_seg", 2))
+            n = u16(box.read("clip_bytes", 2))
+            cbase = box.sel_base(csel) if csel & 4 else csel * 16
+            clip = box.read(cbase, n) if n else b""
+            wanted = visible(box.read(base + lo, hi - lo)) if hi > lo else b"?"
+            want(clip == wanted and n > 0,
+                 "sel: Ctrl+C copied the %d visible bytes of the selection "
+                 "(got %d: %r)" % (len(wanted), n, clip[:40]))
+            dl = u16(br("br_doclen", 2)) | u16(br("br_doclen_hi", 2)) << 16
+            doc = box.read(base, dl)
+            link_at = doc.rfind(WIDE[3])
+            got = None
+            for _ in range(20):
+                box.key("Tab")
+                box.ui_done("sel: Tab")
+                ts = u16(br("br_tstart", 2)) | u16(br("br_tstart", 4), 2) << 16
+                te = u16(br("br_tend", 2)) | u16(br("br_tend", 4), 2) << 16
+                got = (br("br_tfocus", 1)[0], ts, te)
+                if got[0] == 3 and ts <= link_at < te:
+                    break
+            want(got is not None and got[0] == 3 and got[1] <= link_at < got[2],
+                 "sel: Tab focused the link at %05X, past the seam (focus, "
+                 "start, end %s)" % (link_at, got))
+
         # --- 1: the page off B: --------------------------------------------
         box.dbl(591, 105, "B:'s Disk window")
         box.dbl(150, 139, "DOCWIDE.HTM - the Browser, by association")
         check("local", WIDE)
+        select_copy_tab()
 
         # --- 2, 3: over HTTP - the wide page again, then a tall small one --
         if not local_only:
             fetch("net", WIDE)
             fetch("small", TALL)
+            download()
 
         bad = box.faults()
         want(not bad, "no kern_mega FAULT or CLOSED line%s"
@@ -303,6 +433,22 @@ def main():
         except Exception:       # noqa: BLE001
             pass
         box.stop()
+        if DLDONE[0]:
+            # what the UI task committed: the temp renamed onto DLTEST.ZIP,
+            # byte for byte, and no NAME.$$$ left beside it (SPEC.md 71.20.3)
+            vol = os88flush.Volume(open(os.path.join(out, "b.img"),
+                                        "rb").read())
+            try:
+                saved = vol.read(DLNAME.upper())
+            except os88flush.FlushError:
+                saved = None
+            want(saved == DLDATA, "dl: B:\\%s is the %d bytes served (%s)"
+                 % (DLNAME.upper(), len(DLDATA), "missing" if saved is None
+                    else "%d bytes" % len(saved)))
+            left = [e.name for e in vol.listdir("")
+                    if not e.is_dir and e.name.rsplit(".", 1)[-1][:2] == "$$"]
+            want(not left, "dl: no temporary file left on B: (%s)"
+                 % (", ".join(left) or "none"))
         if srv:
             srv.shutdown()
         if keep:

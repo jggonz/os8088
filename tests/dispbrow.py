@@ -64,7 +64,7 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_both_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default="build/network360.img")
     a = ap.parse_args(argv)
 
     fail = []
@@ -88,7 +88,7 @@ def main(argv):
         dslot = dispcp.win_list(m, S)[-1]   # open_drive answers the ZONE's
                                             # (x, y) and not a slot
         dx, dy, dw, dh = dispcp.win_rect(m, S, dslot)
-        for step in ("APPS", "BROWSER.O88"):
+        for step in ("BROWSER.O88",):       # network360.img's root (71.30)
             dispcp.open_named(m, mo, S, settle, dx, dy, step, card=0)
             settle(m, card=0)
             dx, dy, dw, dh = dispcp.win_rect(m, S, dslot)

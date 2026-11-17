@@ -7469,6 +7469,9 @@ wa_pkshape:
     dw 12, 0, 44                ; shield: a tall block, yellow
     db 0x0E, 0x0F
 WA_PKSH equ 8
+%if $ - wa_pkshape != WA_NPKIND * WA_PKSH
+  %error "wa_pkshape is a row for each of WA_NPKIND pickup kinds"
+%endif
 
 wa_pickups:
     cmp word [wa_npk], 0

@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""PDREND's core of the any-PDF round (PAGEDESK-SPEC 20.22.7) held to MuPDF and
+to itself, through the host harness's stand-in occupants (hosttest/pdr_xmod.c):
+
+  * the ladder: a codec image needs its occupant, the harness loads it on
+    PDE_NEEDMOD, the page says which modules it used and what they cost;
+    PDR_NOSLOT refuses one and the page says PDF_INC_MODULE;
+  * codec images: the stand-in decoder delivers the ramp the plain image on
+    ramp.pdf's first page holds, so the DCT and JPX pages must draw it to the
+    pixel, at every adapter; two codecs on one page swap the slot per band,
+    and two on ONE band are drawn through the stash (20.22.7.10) exactly as
+    their plain twins, in the list's order;
+  * sample depths (smode 4): 1/2/4/16-bit grey, 8/16-bit RGB, CMYK and a
+    /Decode [1 0] image against mutool;
+  * the dash walker and the edit marks in PDXG: dash.pdf against mutool, and
+    without PDXG the dashes are solid and noted;
+  * with --hostile <asan binary>: the occupant answers IMG_OPEN and IMG_ROW
+    with hostile sizes, modes and failures; every render must finish clean.
+
+    pdr_xchk.py <pdr_test_real> <scratch> <resdir> [--hostile <pdr_test_real_asan>] [-n SEEDS]
+"""
+import argparse, os, re, shutil, subprocess, sys
+
+ap = argparse.ArgumentParser()
+ap.add_argument('exe'); ap.add_argument('scratch'); ap.add_argument('resdir')
+ap.add_argument('--hostile'); ap.add_argument('-n', type=int, default=40)
+a = ap.parse_args()
+exe, scratch, resdir = (os.path.abspath(x) for x in (a.exe, a.scratch, a.resdir))
+try:
+    from PIL import Image
+    import numpy as np
+except Exception as e:
+    print('pdr_xchk: SKIP - Pillow/numpy missing (%s)' % e); sys.exit(0)
+if not shutil.which('mutool'):
+    print('pdr_xchk: SKIP - mutool missing'); sys.exit(0)
+os.makedirs(scratch, exist_ok=True)
+here = os.path.dirname(os.path.abspath(__file__))
+fx = os.path.join(scratch, 'fx')
+subprocess.run([sys.executable, os.path.join(here, '..', '..', '..', 'tools', 'os88pdfx_rcore.py'), fx], check=True, capture_output=True)
+bank = os.path.join(scratch, 'fd'); os.makedirs(bank, exist_ok=True)
+data = open(os.path.join(resdir, 'PDRES.BIN'), 'rb').read()
+open(os.path.join(bank, 'PDRES.BIN'), 'wb').write(data)
+open(os.path.join(bank, 'PAGEDESK.O88'), 'wb').write(b'\x55' * 1536 + data)
+if os.path.exists(os.path.join(resdir, 'PDFONTX.RES')): shutil.copy(os.path.join(resdir, 'PDFONTX.RES'), bank)
+
+INC_MODULE, INC_IMAGE, INC_COLOUR = 0x0200, 0x0004, 0x0008
+MOD_GFX, MOD_IMG, MOD_JPX = 1 << 2, 1 << 4, 1 << 5
+fails, nchecks = [], 0
+def check(name, cond, why=''):
+    global nchecks
+    nchecks += 1
+    if cond: print('  ok   ' + name)
+    else: fails.append(name + ' ' + why); print('  FAIL ' + name + ' ' + why)
+
+ADAPT = {'vga': (1, 1, 640, 4), 'herc': (29, 45, 720, 1), 'cga': (5, 12, 640, 1)}
+def render(pdf, page=0, adapter='vga', zoom=100, env=None, binary=None, H=700, dl=29):
+    num, den, w, bpp = ADAPT[adapter]
+    out = os.path.join(scratch, 'o.ppm')
+    if os.path.exists(out): os.remove(out)
+    e = dict(os.environ, PDR_GLYPHKB='24', ASAN_OPTIONS='detect_leaks=0')
+    e.update(env or {})
+    r = subprocess.run([binary or exe, 'render', pdf, str(page), str(zoom), '0', str(bpp), '%d/%d' % (num, den), str(w), str(H),
+                        '0', '0', out, bank, str(dl)], capture_output=True, text=True, env=e, timeout=300)
+    st = dict(kv.split('=', 1) for l in r.stdout.split('\n') if l.startswith('status') for kv in l.split()[1:] if '=' in kv)
+    m = re.search(r"^xshade calls=(\d+) stepmax=(\d+) fails=(\d+)", r.stdout, re.M)
+    if m: st['xcalls'], st['xstepmax'], st['xfails'] = m.group(1), m.group(2), m.group(3)
+    m = re.search(r"^status .*first='([^']*)'", r.stdout, re.M)
+    if m: st['first'] = m.group(1)
+    im = np.asarray(Image.open(out).convert('L')).astype(int) if r.returncode == 0 and os.path.exists(out) else None
+    if int(st.get('incomplete', '0'), 0) and not st.get('first'):    # QA R16: the status line would say nothing
+        unnamed.append('%s p%d %s' % (os.path.basename(pdf), page, st))
+    return r.returncode, im, st, r.stderr
+unnamed = []
+def num(st, k):
+    v = st.get(k, '0')
+    return int(v, 16) if v.startswith('0x') else int(v)
+def mutool(pdf, page, dpi=72):
+    # -N: no ICC, so DeviceRGB to grey is PDF's own 0.3 / 0.59 / 0.11, as PDREND's
+    ref = os.path.join(scratch, 'ref.png')
+    subprocess.run(['mutool', 'draw', '-q', '-N', '-r', str(dpi), '-c', 'gray', '-o', ref, pdf, str(page + 1)], capture_output=True, check=True)
+    return np.asarray(Image.open(ref).convert('L')).astype(int)
+def cells(x, k=8):
+    H, W = x.shape; H -= H % k; W -= W % k
+    return x[:H, :W].reshape(H // k, k, W // k, k).mean(axis=(1, 3))
+def cellmatch(a, b, thresh):
+    """share of 8x8 cells differing by more than `thresh` grey levels"""
+    h = min(a.shape[0], b.shape[0]); w = min(a.shape[1], b.shape[1])
+    return float((np.abs(cells(a[:h, :w]) - cells(b[:h, :w])) > thresh).mean() * 100)
+
+ramp, depth, dash, mask = (os.path.join(fx, n) for n in ('ramp.pdf', 'depth.pdf', 'dash.pdf', 'mask.pdf'))
+
+print('-- codec images through the stand-in decoder (ramp.pdf)')
+for ad in ('vga', 'herc', 'cga'):
+    rc0, im0, st0, _ = render(ramp, 0, ad)
+    check('ramp raw %s draws' % ad, rc0 == 0 and im0 is not None and num(st0, 'incomplete') == 0, str(st0))
+    for pg, name, bit in ((1, 'DCT', MOD_IMG), (2, 'JPX', MOD_JPX)):
+        rc, im, st, err = render(ramp, pg, ad)
+        same = im is not None and im0 is not None and im.shape == im0.shape and int((im != im0).sum()) == 0
+        check('ramp %s %s = the plain image to the pixel' % (name, ad), rc == 0 and same,
+              'rc=%d diff=%s %s %s' % (rc, None if im is None or im0 is None else int((im != im0).sum()), st, err[-200:]))
+        check('ramp %s %s used its occupant, clean' % (name, ad), num(st, 'mods') & bit and num(st, 'incomplete') == 0, str(st))
+rc, im, st, _ = render(ramp, 0, 'vga')
+ref = mutool(ramp, 0)
+check('ramp raw vs mutool', rc == 0 and cellmatch(im, ref, 24) < 2.0, '%.2f%% cells' % (cellmatch(im, ref, 24) if im is not None else 100))
+rc, im, st, _ = render(ramp, 3, 'vga')
+check('a DCT and a JPX image apart: both used, one swap each, clean', rc == 0 and num(st, 'mods') & MOD_IMG and num(st, 'mods') & MOD_JPX
+      and num(st, 'incomplete') == 0 and num(st, 'swaps') == 2, str(st))
+# one slot, a band needing both decoders (20.22.7.10): the resident one's images are
+# stashed in the XC and the other is loaded - every image drawn, in the list's order
+for pg, what in ((4, 'side by side'), (6, 'overlapping, a rectangle between, the JPX twice')):
+    for ad in ('vga', 'herc', 'cga'):
+        rc, im, st, err = render(ramp, pg, ad)
+        rcp, imp, stp, _ = render(ramp, pg + 1, ad)
+        same = im is not None and imp is not None and im.shape == imp.shape and int((im != imp).sum()) == 0
+        check('DCT + JPX sharing bands, %s (%s): = the plain images to the pixel, clean' % (what, ad),
+              rc == 0 and rcp == 0 and same and num(st, 'incomplete') == 0 and num(st, 'mods') & MOD_IMG and num(st, 'mods') & MOD_JPX,
+              'rc=%d diff=%s %s %s' % (rc, None if im is None or imp is None else int((im != imp).sum()), st, err[-200:]))
+    if pg == 4:
+        check('... one decoder load a shared band (swaps bounded by the bands, not PDR_XASKS)', 2 <= num(st, 'swaps') <= 12, str(st))
+rc, im, st, _ = render(ramp, 6, 'vga', env={'PDR_NOXC': '1'})
+rcp, imp, _, _ = render(ramp, 7, 'vga')
+check('both decoders and no XC for the stash: drawn with one, PDF_INC_LIMIT (not MODULE)', rc == 0
+      and num(st, "incomplete") & 0x0080 and not num(st, 'incomplete') & INC_MODULE, str(st))
+check('negative control: without the stash page 7 is NOT its plain twin (the to-the-pixel checks can fail)',
+      im is not None and imp is not None and im.shape == imp.shape and int((im != imp).sum()) > 2000,
+      'diff=%s' % (None if im is None or imp is None else int((im != imp).sum())))
+# the primary releases the XC under a NEEDMOD answer, mid-view (20.22.7.11): the
+# view goes on - the pass runs again without it - and finishes, every band blitted
+# (before the fix: the view ended at the re-INIT, blits 1-5 and nothing noted)
+for ad in ('vga', 'herc'):
+    rc, im, st, err = render(ramp, 6, ad, env={'PDR_XCDROP': '1'})
+    check('XC released under a NEEDMOD answer (%s): the view finishes, PDF_INC_LIMIT, no MODULE' % ad,
+          rc == 0 and num(st, 'blits') >= 40 and num(st, 'incomplete') & 0x0080 and not num(st, 'incomplete') & INC_MODULE,
+          '%s %s' % (st, err[-200:]))
+# PDXF's GLYPH grant moves the glyph claim under a ladder answer, mid-view (20.22.7.11):
+# the caches start again from the new claim and the pass re-runs - the page is unchanged
+for ad in ('vga', 'herc'):
+    rc0, im0, st0, _ = render(ramp, 8, ad)
+    rc, im, st, err = render(ramp, 8, ad, env={'PDR_GLYMOVE': '1'})
+    same = im is not None and im0 is not None and im.shape == im0.shape and int((im != im0).sum()) == 0
+    check('glyph claim moved under a NEEDMOD (%s): the pass re-ran, the page is the same to the pixel, clean' % ad,
+          rc == 0 and rc0 == 0 and same and num(st, 'passes') > num(st0, 'passes') and num(st, 'incomplete') == 0
+          and im0 is not None and int((im0 < 128).sum()) > 500,
+          'rc=%d diff=%s %s %s' % (rc, None if im is None or im0 is None else int((im != im0).sum()), st, err[-200:]))
+# Flate Forms in a Flate page with ONE Flate slot (QA R14, 20.22.7.12): each parent is
+# parked and replayed, and the page draws as with two slots (where the nesting of three
+# Flate streams parks too) - and as mutool draws it
+forms = os.path.join(fx, 'forms.pdf')
+r1 = render(forms, 0, 'vga', env={'PDR_FLATE': '1'}); r2 = render(forms, 0, 'vga', env={'PDR_FLATE': '2'})
+same = r1[1] is not None and r2[1] is not None and int((r1[1] != r2[1]).sum()) == 0
+check('Flate Forms nested in a Flate page, ONE slot: = two slots to the pixel, clean', r1[0] == 0 and same
+      and num(r1[2], 'incomplete') == 0 and num(r2[2], 'incomplete') == 0, '%s %s' % (r1[2], r2[2]))
+ref = mutool(forms, 0)
+pct = cellmatch(r1[1], ref, 40) if r1[1] is not None else 100
+check('forms.pdf (one slot) vs mutool (<= 3% of cells off by 40)', pct <= 3.0, '%.2f%%' % pct)
+r1 = render(forms, 1, 'vga', env={'PDR_FLATE': '1'}); r2 = render(forms, 1, 'vga', env={'PDR_FLATE': '2'})
+check('an inline image before the Do, ONE slot: not replayable, noted (form stream); two slots clean',
+      num(r1[2], 'incomplete') & 0x0002 and num(r2[2], 'incomplete') == 0, '%s %s' % (r1[2], r2[2]))
+rc, im, st, _ = render(ramp, 6, 'vga', env={'PDR_XCKB': '2'})
+check('both decoders and a 2 KiB XC: what fits is stashed, the rest PDF_INC_LIMIT, nothing MODULE', rc == 0
+      and not num(st, 'incomplete') & INC_MODULE, str(st))
+for ad in ('vga', 'cga'):
+    rc, im, st, _ = render(ramp, 1, ad, env={'PDR_NOSLOT': '4'})
+    rcw, imw, _, _ = render(ramp, 0, ad)
+    check('DCT with the image module refused (%s): PDF_INC_MODULE, nothing drawn' % ad,
+          rc == 0 and num(st, 'incomplete') & INC_MODULE and im is not None and imw is not None and int((im != imw).sum()) > 5000, str(st))
+# a decoder whose workspace is short answers IMG_OPEN with PDE_NEEDMEM (PDXI's JBIG2 on a
+# 640 KiB VGA, QA F15): PDREND asks the primary for PDMEM_SLOT and draws the band again, so
+# the page is the plain one; refused, the page says "image decoder" and finishes
+for pg in (1, 6):
+    rcw, imw, stw, _ = render(ramp, pg, 'vga')
+    rc, im, st, _ = render(ramp, pg, 'vga', env={'PDR_XNEEDMEM': 'grant'})
+    check('page %d: IMG_OPEN answers NEEDMEM, the slot is granted: = no ask, to the pixel, clean' % pg,
+          rc == 0 and rcw == 0 and im is not None and imw is not None and int((im != imw).sum()) == 0
+          and num(st, 'incomplete') == 0, 'diff=%s %s' % (None if im is None or imw is None else int((im != imw).sum()), st))
+    rc, im, st, _ = render(ramp, pg, 'vga', env={'PDR_XNEEDMEM': 'refuse'})
+    check('page %d: the slot refused: PDF_INC_IMAGE ("image decoder"), finishes' % pg,
+          rc == 0 and num(st, 'incomplete') & INC_IMAGE, str(st))
+rc, im, st, _ = render(ramp, 1, 'vga', env={'PDR_XFAKE': 'n8'})
+check('DCT delivering RGB (PDIM_N8): drawn, clean', rc == 0 and num(st, 'incomplete') == 0 and im is not None and int((im < 250).sum()) > 1000, str(st))
+rc, im, st, _ = render(ramp, 1, 'vga', env={'PDR_XFAKE': 'bits'})
+check('DCT delivering 1-bit rows: drawn, clean', rc == 0 and num(st, 'incomplete') == 0 and im is not None and int((im < 128).sum()) > 1000, str(st))
+rc, im, st, _ = render(ramp, 1, 'vga', zoom=25)
+check('DCT at 25%: drawn, clean', rc == 0 and num(st, 'incomplete') == 0, str(st))
+
+print('-- sample depths and colour (smode 4): depth.pdf = its 8-bit grey equivalent, which = mutool')
+depthg = os.path.join(fx, 'depthg.pdf')
+for ad in ('vga', 'herc', 'cga'):
+    rc, im, st, _ = render(depth, 0, ad)
+    rcg, img, stg, _ = render(depthg, 0, ad)
+    check('depth.pdf %s = depthg.pdf to the pixel, clean' % ad, rc == 0 and rcg == 0 and im is not None and img is not None
+          and int((im != img).sum()) == 0 and num(st, 'incomplete') == 0, 'diff=%s %s' % (None if im is None or img is None else int((im != img).sum()), st))
+rcg, img, stg, _ = render(depthg, 0, 'vga')
+ref = mutool(depthg, 0)
+pct = cellmatch(img, ref, 24) if img is not None else 100
+check('depthg.pdf vga vs mutool (<= 2% of cells off by 24)', rcg == 0 and pct <= 2.0, '%.2f%%' % pct)
+
+print('-- the dash walker in PDXG (dash.pdf)')
+ref = mutool(dash, 0)
+rc, im, st, _ = render(dash, 0, 'vga')
+pct = cellmatch(im, ref, 90) if im is not None else 100
+check('dash.pdf vs mutool (<= 3% of cells off by 90)', rc == 0 and pct <= 3.0, '%.2f%% %s' % (pct, st))
+check('dash.pdf used PDXG, clean', num(st, 'mods') & MOD_GFX and num(st, 'incomplete') == 0, str(st))
+rc, im2, st2, _ = render(dash, 0, 'vga', env={'PDR_NOSLOT': '2'})
+check('dash.pdf without PDXG: solid, PDF_INC_MODULE', rc == 0 and num(st2, 'incomplete') & INC_MODULE and im2 is not None
+      and int((im2 < 128).sum()) > int((im < 128).sum()), str(st2))
+
+print('-- masks (mask.pdf): drawn, noted until blend lands')
+rc, im, st, _ = render(mask, 0, 'vga')
+check('mask.pdf finishes', rc == 0, str(st))
+
+if a.hostile:
+    print('-- hostile occupant answers (%d seeds, sanitized)' % a.n)
+    bad = 0
+    for seed in range(1, a.n + 1):
+        for f, pg in ((ramp, 1), (ramp, 3), (ramp, 2)):
+            for ad in ('vga', 'cga'):
+                rc, im, st, err = render(f, pg, ad, env={'PDR_XHOSTILE': str(seed)}, binary=os.path.abspath(a.hostile))
+                if rc != 0 or 'runtime error' in err or 'AddressSanitizer' in err:
+                    bad += 1
+                    if bad < 5: print('    seed %d p%d %s rc=%d %s' % (seed, pg, ad, rc, err[-300:]))
+    check('hostile IMG_OPEN / IMG_ROW: every render finishes clean', bad == 0, '%d bad' % bad)
+
+print('-- one-pixel strokes (hair.pdf, QA R11)')
+import math
+rc, im, st, _ = render(os.path.join(fx, 'hair.pdf'), 0, 'vga')
+gaps = steps = cover = 0
+if im is not None:
+    dark = im < 128
+    for k in range(0, 360, 7):
+        t = math.radians(k + 0.37); c, s_ = math.cos(t), math.sin(t)
+        x0, y0, x1, y1 = 200 + 30 * c, 400 - (200 + 30 * s_), 200 + 160 * c, 400 - (200 + 160 * s_)
+        steep = abs(s_) >= abs(c)
+        a0, a1 = (y0, y1) if steep else (x0, x1)
+        for v in range(int(min(a0, a1)) + 1, int(max(a0, a1))):
+            if steep:
+                u = int(math.floor(x0 + (v + 0.5 - y0) * (x1 - x0) / (y1 - y0)))
+                n, m = int(dark[v, u - 1:u + 2].sum()), int(dark[v, u - 2:u + 3].sum())
+            else:
+                u = int(math.floor(y0 + (v + 0.5 - x0) * (y1 - y0) / (x1 - x0)))
+                n, m = int(dark[u - 1:u + 2, v].sum()), int(dark[u - 2:u + 3, v].sum())
+            steps += 1; cover += m; gaps += n == 0
+check('a fan of 1 w lines at every 7 degrees: a pixel on every row (steep) or column (shallow)',
+      rc == 0 and steps > 5000 and gaps == 0, '%d gaps of %d' % (gaps, steps))
+check('... and no thicker than 1.5 pixels on the average (%.2f)' % (cover / max(steps, 1)), steps and cover / steps <= 1.5)
+check('an axis-aligned 1 w square keeps one-pixel sides', im is not None and
+      int((im[2:28, 2:28] < 128).sum()) == 80, None if im is None else str(int((im[2:28, 2:28] < 128).sum())))
+print('-- the group plan and the shading cull (small.pdf, QA R15)')
+small = os.path.join(fx, 'small.pdf')
+for ad in ('vga', 'herc', 'cga'):
+    rc, im, st, _ = render(small, 0, ad)
+    rc8, im8, st8, _ = render(small, 0, ad, dl=12)
+    check('hundreds of shapes a few rows tall (%s): a 12 KiB list draws what a 29 KiB one does, clean (%s and %s passes)'
+          % (ad, st.get('passes'), st8.get('passes')),
+          rc == 0 and rc8 == 0 and im is not None and im8 is not None and int((im != im8).sum()) == 0
+          and num(st, 'incomplete') == 0 and num(st8, 'incomplete') == 0)
+# page 2: 96 knobs, each a shading in a clip 3 to 9 pixels across (SYNTH.PDF's buttons), PDXG stood in for by PDR_XSHADE
+xs = {'PDR_XSHADE': '1'}
+rc, im, st, _ = render(small, 1, 'vga', env=xs)
+rcn, imn, stn, _ = render(small, 1, 'vga', env=dict(xs, PDR_NOSHCULL='1'))
+check('96 knobs: one PDXG call each in one pass (%s calls, %s passes; %s without the cull)' % (st.get('xcalls'), st.get('passes'), stn.get('xcalls')),
+      rc == 0 and num(st, 'incomplete') == 0 and num(st, 'xcalls') == 96 and num(st, 'passes') <= 2 and num(stn, 'xcalls') > 5 * 96)
+check('... each cut into no more bands than its clip has pixels (%s, against %s)' % (st.get('xstepmax'), stn.get('xstepmax')),
+      num(st, 'xstepmax') <= 10 and num(stn, 'xstepmax') == 32)
+for dlk in (16, 12):
+    rck, imk, stk, _ = render(small, 1, 'vga', env=xs, dl=dlk)
+    check('... a %d KiB list draws them to the pixel, asking PDXG only for a pass\'s own rows (%s calls, %s passes)' % (dlk, stk.get('xcalls'), stk.get('passes')),
+          rck == 0 and imk is not None and im is not None and int((imk != im).sum()) == 0 and num(stk, 'incomplete') == 0
+          and num(stk, 'xcalls') <= 2 * 96 and num(stk, 'passes') <= 8)
+print('-- an occupant\'s stream under the one Flate slot: the park (park.pdf, 20.22.7.12)')
+park = os.path.join(fx, 'park.pdf')
+for pg, what in ((0, 'a Flate page'), (1, 'a Flate Form in a Flate page')):
+    pe = {'PDR_XSHADE': '1', 'PDR_XSHADE_OBJ': '3'}
+    rc2, im2, st2, _ = render(park, pg, 'vga', env=dict(pe, PDR_FLATE='2'))
+    rc1, im1, st1, _ = render(park, pg, 'vga', env=dict(pe, PDR_FLATE='1'))
+    rcn, imn, stn, _ = render(park, pg, 'vga', env=dict(pe, PDR_FLATE='1', PDR_NOPARK='1'))
+    check('%s: 30 shadings whose PDXG reads a Flate stream draw with one slot as with two, clean (%s refusals parked)' % (what, st1.get('xfails')),
+          rc1 == 0 and rc2 == 0 and im1 is not None and im2 is not None and int((im1 != im2).sum()) == 0
+          and num(st1, 'incomplete') == 0 and num(st2, 'incomplete') == 0 and num(st1, 'xfails') > 0)
+    check('... and without the park they are refused and noted (first=%s), the rest of the page drawn' % stn.get('first'),
+          rcn == 0 and imn is not None and stn.get('first') == 'shading' and int((imn != im1).sum()) > 0
+          and int((imn < 64).sum()) >= int((im1 < 64).sum()) // 4)
+rc2, im2, st2, _ = render(park, 2, 'vga', env={'PDR_FLATE': '2'})
+rc1, im1, st1, _ = render(park, 2, 'vga', env={'PDR_FLATE': '1'})
+rcn, imn, stn, _ = render(park, 2, 'vga', env={'PDR_FLATE': '1', 'PDR_NOPARK': '1'})
+ref = mutool(park, 2)
+m1 = cellmatch(im1, ref, 40) if im1 is not None else 100.0
+check('a Flate image with a Flate /SMask: one slot draws as two and as MuPDF (%.1f%% of cells off), clean' % m1,
+      rc1 == 0 and rc2 == 0 and im1 is not None and im2 is not None and int((im1 != im2).sum()) == 0
+      and num(st1, 'incomplete') == 0 and m1 < 1.0)
+check('... and without the park the mask is refused and noted (first=%s)' % stn.get('first'),
+      rcn == 0 and stn.get('first') == 'transparency' and imn is not None and int((imn != im1).sum()) > 0)
+print('-- a slice bounded by time (QA R27): PDR_SLICETICK=4 ends every slice after ONE operator')
+samples = os.path.join(here, '..', 'samples')
+cases = [(os.path.join(fx, f), pg, env) for f, pg, env in (
+    ('forms.pdf', 0, {}), ('forms.pdf', 1, {}), ('depthg.pdf', 0, {}), ('mask.pdf', 0, {}), ('dash.pdf', 0, {}),
+    ('small.pdf', 1, {'PDR_XSHADE': '1'}), ('park.pdf', 0, {'PDR_XSHADE': '1', 'PDR_XSHADE_OBJ': '3', 'PDR_FLATE': '1'}),
+    ('park.pdf', 1, {'PDR_XSHADE': '1', 'PDR_XSHADE_OBJ': '3', 'PDR_FLATE': '1'}), ('park.pdf', 2, {'PDR_FLATE': '1'}))]
+cases += [(os.path.join(samples, f), pg, {}) for f, pg in (('XTGUIDE.PDF', 0), ('XTGUIDE.PDF', 3), ('MARKUP.PDF', 0), ('ACROFORM.PDF', 0), ('MONOIMG.PDF', 0))]
+bad = []
+for pdf, pg, env in cases:
+    env = dict({'PDR_FLATE': '1'}, **env)              # one slot: the park and the slice's end together
+    for ad in ('vga', 'cga'):
+        rca, ima, sta, _ = render(pdf, pg, ad, env=env)
+        rcb, imb, stb, _ = render(pdf, pg, ad, env=dict(env, PDR_SLICETICK='4'))
+        if not (rca == 0 and rcb == 0 and ima is not None and imb is not None and ima.shape == imb.shape
+                and int((ima != imb).sum()) == 0 and sta.get('incomplete') == stb.get('incomplete')):
+            bad.append('%s p%d %s: rc %s/%s inc %s/%s diff %s' % (os.path.basename(pdf), pg, ad, rca, rcb, sta.get('incomplete'),
+                       stb.get('incomplete'), 'n/a' if ima is None or imb is None or ima.shape != imb.shape else int((ima != imb).sum())))
+check('%d pages x 2 adapters, a slice per operator: the same picture and the same Incomplete bits' % len(cases), not bad, '; '.join(bad[:4]))
+print('-- annotations with no appearance stream, drawn from the dictionary (QA R6b, noap.pdf)')
+noap = os.path.join(fx, 'noap.pdf')
+an = {'PDR_RFLAGS': '1'}
+rc, im, st, _ = render(noap, 0, 'vga', env=an)
+rcn, imn, stn, _ = render(noap, 0, 'vga', env={'PDR_RFLAGS': '0'})
+ref = mutool(noap, 0)
+def ink(a, x0, y0, x1, y1): return int((a[400 - y1:400 - y0, x0:x1] < 200).sum()) if a is not None else -1
+pct = cellmatch(im, ref, 90) if im is not None else 100.0     # 90: the page's own palette (10.5) maps pure blue to light blue
+check('Text, Square (/C /IC /BS), Circle (/Border), Line (/L), Highlight, Underline, StrikeOut: as MuPDF (%.1f%% of cells off)' % pct,
+      rc == 0 and num(st, 'incomplete') == 0 and pct < 3.0)
+check('... each one inked where MuPDF inks it', im is not None and all(ink(im, *b) > 20 and ink(ref, *b) > 20 for b in (
+      (40, 330, 60, 350), (80, 330, 100, 350), (40, 200, 140, 280), (180, 200, 300, 280), (40, 100, 360, 180), (40, 40, 160, 70), (200, 40, 360, 70))))
+check('... the Highlight is under the page: the bar over it stays black, yellow round it',
+      im is not None and int((im[400 - 338:400 - 332, 205:315] < 40).all()) == 1 and 150 < int(im[400 - 342, 260]) < 250)
+check('... a Hidden Square, a Square with neither /C nor /IC and a Popup draw nothing',
+      im is not None and ink(im, 340, 198, 392, 392) == ink(ref, 340, 198, 392, 392) == 0)
+check('... and without PDRF_ANNOTS none of it is drawn (the page alone)',
+      rcn == 0 and imn is not None and ink(imn, 40, 330, 100, 350) == 0 and ink(imn, 40, 200, 300, 280) == 0)
+rc, im, st, _ = render(noap, 1, 'vga', env=an)
+miss = [i for i in range(80) if ink(im, 20 + (i // 16) * 75, 360 - (i % 16) * 22, 40 + (i // 16) * 75, 380 - (i % 16) * 22) < 20] if im is not None else ['all']
+check('80 Text notes on one page (BIG_OS\'s shape): every icon drawn, in one pass of a 29 KiB list (%s passes)' % st.get('passes'),
+      rc == 0 and not miss and num(st, 'passes') == 1, 'missing %r' % miss[:8])
+for ad in ('cga', 'herc'):
+    rc, im, st, _ = render(noap, 0, ad, env=an)
+    check('noap.pdf on %s: drawn clean, ink in the note and the shapes' % ad, rc == 0 and num(st, 'incomplete') == 0 and im is not None
+          and int((im < 128).sum()) > 2000)
+print('-- polygon clips as display-list records (clips.pdf; SYNTH and KBMIDI2 outgrew the 8-entry, 96-edge pool)')
+clips = os.path.join(fx, 'clips.pdf')
+for pg, what in ((0, '100 circle clips on a page'), (1, 'one clip of 180 edges'), (2, 'a 80-edge star nested in a disc')):
+    rc, im, st, _ = render(clips, pg, 'vga')
+    rck, imk, stk, _ = render(clips, pg, 'vga', dl=12)
+    ref = mutool(clips, pg)
+    pct = cellmatch(im, ref, 60) if im is not None else 100.0
+    check('%s: drawn clean and as MuPDF (%.1f%% of cells off; %s passes, %s with a 12 KiB list, the same pixels)' % (what, pct, st.get('passes'), stk.get('passes')),
+          rc == 0 and rck == 0 and num(st, 'incomplete') == 0 and num(stk, 'incomplete') == 0 and pct < 1.5
+          and im is not None and imk is not None and int((im != imk).sum()) == 0)
+rc, im, st, _ = render(clips, 0, 'vga')
+check('... a disc, not its box: each square\'s corners are paper and its centre ink (100 of 100)',
+      im is not None and all(im[400 - (31 + j * 36), 31 + i * 36] > 200 and im[400 - (45 + j * 36), 45 + i * 36] < 60
+                             for i in range(10) for j in range(10)))
+for ad in ('cga', 'herc'):
+    rc, im, st, _ = render(clips, 0, ad)
+    check('clips.pdf on %s: clean, the discs drawn' % ad, rc == 0 and num(st, 'incomplete') == 0 and im is not None and int((im < 128).sum()) > 5000)
+print('-- paths past 200 vertices and dash arrays past four (bigpath.pdf; KBMIDI2 path size, SYNTH dash array)')
+big = os.path.join(fx, 'bigpath.pdf')
+for pg, what in ((0, 'a 340-vertex even-odd star with a hole under a 330-segment circle'), (1, 'one clip of 300 vertices'),
+                 (2, 'dash arrays of 5, 6 and 8 elements, one on a 300-segment circle')):
+    rc, im, st, _ = render(big, pg, 'vga')
+    rck, imk, stk, _ = render(big, pg, 'vga', dl=12)
+    ref = mutool(big, pg)
+    pct = cellmatch(im, ref, 60) if im is not None else 100.0
+    check('%s: drawn clean and as MuPDF (%.1f%% of cells off; %s passes, %s with a 12 KiB list, the same pixels)' % (what, pct, st.get('passes'), stk.get('passes')),
+          rc == 0 and rck == 0 and num(st, 'incomplete') == 0 and num(stk, 'incomplete') == 0 and pct < 1.5
+          and im is not None and imk is not None and int((im != imk).sum()) == 0, str(st.get('first')))
+rc, im, st, _ = render(big, 0, 'vga')
+check('... the star is ONE even-odd fill: the hole at its centre is paper, the ring around it ink (%s passes)' % st.get('passes'),
+      im is not None and im[400 - 200, 200] > 200 and im[400 - 200, 200 + 90] < 60 and im[400 - 200, 200 - 90] < 60
+      and im[400 - 200 - 90, 200] < 60)
+rc, im, st, _ = render(big, 3, 'vga')
+check('a nine-element dash array: drawn with eight, noted (first=dash array)', rc == 0 and st.get('first') == 'dash array'
+      and im is not None and 150 < int((im[400 - 300 - 2:400 - 300 + 2, 20:380] < 128).any(axis=0).sum()) < 330, str(st))
+rc, im, st, _ = render(big, 4, 'vga')
+check('a 400-vertex path is past the table: drawn as far as it holds, noted (first=path size)', rc == 0 and st.get('first') == 'path size', str(st))
+rc, im, st, _ = render(big, 5, 'vga')
+ref = mutool(big, 5)
+pct = cellmatch(im, ref, 60) if im is not None else 100.0
+check('six discs in one path (KBMIDI2\'s shape; 360 vertices at the fine bound): the bound loosens as the table fills, so it fits, clean and as MuPDF (%.1f%% of cells off)' % pct,
+      rc == 0 and num(st, 'incomplete') == 0 and pct < 1.5, str(st.get('first')))
+print('-- a new document after a view left its ask unanswered (QA R26 c: FTYPE3 after FTTCIDMA, "form stream")')
+def seqrun(seq):
+    base = os.path.join(scratch, 'seq')
+    r = subprocess.run([exe, 'render', 'x', '0', '100', '0', '4', '1/1', '400', '400', '0', '0', base, bank, '29'], capture_output=True, text=True,
+                       env=dict(os.environ, PDR_GLYPHKB='24', PDR_SEQ=seq, ASAN_OPTIONS='detect_leaks=0'), timeout=300)
+    n = len(seq.split())
+    return r.stdout, [np.asarray(Image.open('%s.%d.ppm' % (base, k)).convert('L')) if os.path.exists('%s.%d.ppm' % (base, k)) else None for k in range(n)]
+docA, docB = os.path.join(fx, 'docA.pdf'), os.path.join(fx, 'docB.pdf')
+for k in range(3):
+    p_ = os.path.join(scratch, 'seq.%d.ppm' % k)
+    if os.path.exists(p_): os.remove(p_)
+_, (fb,) = seqrun(docB + ':0')
+_, (fa,) = seqrun(docA + ':0')
+out, (_x, ab) = seqrun(docA + ':0:A ' + docB + ':0')
+check('negative control: docA draws its one font (Courier) unlike docB (Helvetica-Bold), the same object 3 0 R as /F1',
+      fa is not None and fb is not None and int((fa != fb).sum()) > 500)
+r = subprocess.run([exe, 'render', 'x', '0', '100', '0', '4', '1/1', '400', '400', '0', '0', os.path.join(scratch, 'seq'), bank, '29'], capture_output=True, text=True,
+                   env=dict(os.environ, PDR_GLYPHKB='40', PDR_SYNPLANT='1', PDR_SEQ=docA + ':0 ' + docB + ':0', ASAN_OPTIONS='detect_leaks=0'), timeout=300)
+mg = re.findall(r'^synmagic=([0-9a-f]+)', r.stdout, re.M)
+check('a new document\'s INIT forgets the glyph claim\'s synthetic blocks (their directory names fonts by object number, which the next file reuses: FTYPE3 read FTTCIDMA\'s TrueType block for 7 0 R as its Type 3 one): the magic cleared at each INIT (%s)' % mg,
+      r.returncode == 0 and len(mg) == 2 and all(m == '0000' for m in mg), r.stderr[-200:])
+check('docB opened while docA\'s view waited on its ask (aborted, never answered) draws ITS font: the same pixels as docB opened first (%s px differ)'
+      % (int((ab != fb).sum()) if ab is not None and fb is not None else '?'),
+      'aborted at ask' in out and ab is not None and fb is not None and int((ab != fb).sum()) == 0, out[-200:])
+print('-- one slot, two occupants by turns (alt.pdf; QA QZ1035 "colour space" after eight loads)')
+alt = os.path.join(fx, 'alt.pdf')
+rc, im, st, _ = render(alt, 0, 'vga', dl=20)
+rcw, imw, stw, _ = render(alt, 0, 'vga', dl=29)
+check('PDXG and the decoder by turns, twelve loads that each drew something: clean, and the same pixels as the 29 KiB list\'s eight loads (%s loads; %s px differ)'
+      % (st.get('loads'), int((im != imw).sum()) if im is not None and imw is not None else '?'),
+      rc == 0 and num(st, 'incomplete') == 0 and int(st.get('loads', 0)) > 8 and im is not None and imw is not None and int((im != imw).sum()) == 0, str(st))
+rc, im, st, _ = render(alt, 0, 'vga', dl=8)
+check('...and a page that needs more than PDR_XASKS + PDR_XFREE (24) loads still stops and says so (%s loads, first=%s)' % (st.get('loads'), st.get('first')),
+      rc == 0 and int(st.get('loads', 99)) <= 24 and st.get('first') == 'graphics module', str(st))
+rc, im, st, _ = render(forms, 2, 'vga')
+check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
+      and st.get('first') == 'number range', str(st))
+check('every Incomplete render names its first reason (QA R16)', not unnamed, '; '.join(unnamed[:4]))
+print('pdr_xchk: %d checks, %d FAILED' % (nchecks, len(fails)))
+for f in fails: print('  FAILED ' + f)
+sys.exit(1 if fails else 0)

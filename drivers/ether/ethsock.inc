@@ -771,10 +771,9 @@ eth_v_udprx:
     push di
     cmp word [eth_uqh], 0
     je  .none
+    cmp cx, 6                   ; no room for the source is refused, and the
+    jb  .bad                    ; datagram stays queued (SPEC.md 72.24)
     sub cx, 6                   ; (the room past the source)
-    jae .room
-    xor cx, cx
-.room:
     mov ax, [eth_uq+UQ_LEN]
     push ax                     ; (the TRUE length, the answer)
     cmp ax, cx
@@ -813,6 +812,13 @@ eth_v_udprx:
     pop di
     pop si
     pop ax
+    stc
+    ret
+.bad:
+    pop di
+    pop si
+    pop ax
+    mov ax, NETE_ARG
     stc
     ret
 

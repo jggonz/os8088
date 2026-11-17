@@ -44,6 +44,11 @@ D_U1         equ 22                 ; underline starts
 D_U0         equ 23
 D_CMETA      equ 24                 ; one byte after D_CELL: span (bits 0..2),
                                     ; alignment (bits 3..4); zero-width control
+D_IMG        equ 25                 ; an inline image (SPEC.md 71.25): BR_IMGPAY
+                                    ; base-6 digits follow, then its alt text.
+                                    ; 25..31 are bytes no other walker acts on,
+                                    ; so the record costs them nothing
+D_IMGDIG     equ 26                 ; a payload digit is D_IMGDIG + 0..5
 
 D_NBSP       equ 0x7F               ; A NO-BREAK SPACE, and it is 0x7F rather
                                     ; than a marker because it is TEXT: it

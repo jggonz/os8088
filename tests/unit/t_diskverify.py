@@ -44,12 +44,18 @@ IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img", "os8088-360.img",
           # ...and the sound debug disk in four geometries (SPEC.md 127)
           "debug-sound.img", "debug-sound-120.img", "debug-sound-720.img",
           "debug-sound-360.img"]
+# ON-DEMAND images, verified when they have been built: PageDesk's own disks
+# (`make pagedeskdisk`), the 360KB pair among them (PAGEDESK-SPEC 20.22.2.8)
+OPTIONAL = ["pagedesk.img", "pagedesk120.img", "pagedesk720.img",
+            "pagedesk360.img", "pagedesk360b.img"]
 
 
 def main():
     seen = 0
-    for img in IMAGES:
+    for img in IMAGES + OPTIONAL:
         p = os.path.join(ROOT, "build", img)
+        if img in OPTIONAL and not os.path.exists(p):
+            continue
         if not check(os.path.exists(p), "%s exists" % img, "run `make` first"):
             continue
         r = subprocess.run([sys.executable, "tools/os88disk.py", "--verify", p],

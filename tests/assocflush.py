@@ -24,9 +24,10 @@ FLOPPY the guest wrote (os88flush) and never off the kernel that wrote it:
              must not grow with what it found (54.7.6.2's whole point): the
              harvest pays a read per package, the flush pays directories.
   REBOOT     a fresh boot off the floppy WRITE wrote: from B:\\MEDIA, before
-             APPS is ever browsed, .TEX opens with TEXPAD and .HTM with
-             BROWSER; browsing B:\\APPS costs a third of the reads and posts
-             nothing.
+             APPS is ever browsed, .TEX opens with TEXPAD and .MID with
+             MIDIRACK (it was .HTM with BROWSER until the Browser left
+             apps720, SPEC.md 71.30; .MOD is built in and proves nothing);
+             browsing B:\\APPS costs a third of the reads and posts nothing.
   LOCATE     the shipped cache with TEXPAD's row pointed at GAMES: a
              double-click on A:\\HELLO.TEX sweeps, finds it in B:\\APPS, and
              the flush corrects the row on disk. Then APPS and GAMES are
@@ -345,12 +346,12 @@ def leg_reboot(bad, after):
             ui.path("B:/APPS")
             d = ui.m.disk()
             w.settle()
-        print("   REBOOT: from B:\\MEDIA .TEX -> %s, .HTM -> %s; B:\\APPS "
-              "%d reads; %d flushes" % (e.get("TEX"), e.get("HTM"),
+        print("   REBOOT: from B:\\MEDIA .TEX -> %s, .MID -> %s; B:\\APPS "
+              "%d reads; %d flushes" % (e.get("TEX"), e.get("MID"),
                                          d["reads"], len(w.done)))
-        if e.get("TEX") != "TEXPAD" or e.get("HTM") != "BROWSER":
+        if e.get("TEX") != "TEXPAD" or e.get("MID") != "MIDIRACK":
             bad.append("REBOOT: the declarations were not on disk: TEX -> "
-                       "%s, HTM -> %s" % (e.get("TEX"), e.get("HTM")))
+                       "%s, MID -> %s" % (e.get("TEX"), e.get("MID")))
         if d["reads"] > 12:
             bad.append("REBOOT: B:\\APPS still cost %d reads - the harvest "
                        "read its packages again" % d["reads"])

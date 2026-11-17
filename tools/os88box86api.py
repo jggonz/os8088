@@ -63,6 +63,10 @@ and on any of them, what the name says is added:
                   for an SB16 instead (an AT only)
     _ne2k         an NE2000 at 300h on IRQ 10 on an AT, an NE1000 at 300h on
                   IRQ 3 on an XT, on slirp ($OS88_BOCHS_NE2K too)
+    _ne1k         the XT's NE1000 alone: a network card WITHOUT taking the AT
+                  (`_ne2k` picks the AT, its card being 16-bit)
+    _ems          a Lo-tech 2 MB EMS board at 260h, frame E000h - MartyPC's
+                  os8088_5150_cga_lpt_ems board, which EMS.DRV finds first
     _hdd          the row's own fixed disk: on the AT's IDE controller, on an
                   XT behind an XT-IDE (row_disk)
 
@@ -163,6 +167,8 @@ _SCAN = {
     "Space": 0x39, "ArrowUp": 0x148, "ArrowDown": 0x150,
     "ArrowLeft": 0x14B, "ArrowRight": 0x14D, "Home": 0x147, "End": 0x14F,
     "PageUp": 0x149, "PageDown": 0x151, "Insert": 0x152, "Delete": 0x153,
+    "F1": 0x3B, "F2": 0x3C, "F3": 0x3D, "F4": 0x3E, "F5": 0x3F, "F6": 0x40,
+    "F7": 0x41, "F8": 0x42, "F9": 0x43, "F10": 0x44, "F11": 0x57, "F12": 0x58,
     "ShiftLeft": 0x2A, "ShiftRight": 0x36, "ControlLeft": 0x1D,
     "ControlRight": 0x11D, "AltLeft": 0x38, "AltRight": 0x138,
     "CapsLock": 0x3A, "NumLock": 0x45, "ScrollLock": 0x46,
@@ -275,7 +281,12 @@ def machine_config(machine, mega=False, images=()):
                  (sec, "dma", "1")]
         if kind == "sb16":
             sets.append((sec, "dma16", "5"))
-    if "_ne2k" in n or os.environ.get("OS88_BOCHS_NE2K"):
+    if "_ems" in n:
+        sets += [("Other peripherals", "isamem0_type", "lotechems"),
+                 ("Lo-tech EMS Board #1", "base", "0260"),
+                 ("Lo-tech EMS Board #1", "frame", "E0000"),
+                 ("Lo-tech EMS Board #1", "size", "2048")]
+    if "_ne2k" in n or "_ne1k" in n or os.environ.get("OS88_BOCHS_NE2K"):
         if at:
             sets += [("Network", "net_01_card", "ne2k"),
                      ("Network", "net_01_net_type", "slirp"),

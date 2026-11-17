@@ -1,0 +1,8 @@
+        T _pdc_cseg
+        T _pdc_aes_tdnew
+        T _pdc_rc4_ks
+        T _pdc_rc4
+        T _pdc_aes_ks
+        T _pdc_aes_dks
+        T _pdc_aes_dec
+        T _pdc_cbc_dec

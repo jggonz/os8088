@@ -25,8 +25,8 @@ br_dl_bufkb       equ br_dl_clustersz + 2
 br_dl_needkb      equ br_dl_bufkb + 2
 br_dl_largest     equ br_dl_needkb + 2
 br_dl_membase     equ br_dl_largest + 2
-br_dl_bufseg      equ br_dl_membase + 2
-br_dl_dir         equ br_dl_bufseg + 2
+br_dl_bufsz       equ br_dl_membase + 2  ; bytes carved at BR_URLDL, 0 = none
+br_dl_dir         equ br_dl_bufsz + 2
 br_dl_port        equ br_dl_dir + 2
 br_dl_portbak     equ br_dl_port + 2
 br_dl_index       equ br_dl_portbak + 2
@@ -122,12 +122,30 @@ br_dl_barstate    equ br_dl_barnew + 2
 ; percent painter appends '%' in place, so one 13-byte field covers the
 ; longest 12-cell run plus NUL.
 br_dl_runbuf      equ br_dl_numtxt
-br_dl_partpaint   equ br_dl_barstate + 1 ; far pointers: offset, segment
-br_dl_partdoc     equ br_dl_partpaint + 4
-br_dl_partlive    equ br_dl_partdoc + 4
-br_dl_partcopy    equ br_dl_partlive + 4
+; Part 0's far entries (offset, segment each, brdownload_const.inc's BRDL_*
+; order), set by br_dl_partload and zeroed by br_dl_partdrop: a zero segment
+; is "not in"
+br_dl_vec         equ br_dl_barstate + 1
+; What the part's engine hands over this pass (DL_PENDING, DL_ENDWAIT or 0),
+; for br_dl_step to publish once the far call has returned
+br_dl_publish     equ br_dl_vec + BRDL_N*4
 ; Seqlock byte around the worker's 32-bit received-byte counter. The paint
 ; callback can be preempted while the low word rolls over; without this byte
 ; it could combine the new low word with the old high word for one frame.
-br_dl_recvseq     equ br_dl_partcopy + 4
-br_dl_bss_end     equ br_dl_recvseq + 1
+br_dl_recvseq     equ br_dl_publish + 1
+; The 8.3 name the transfer is WRITTEN under (br_dl_tmpmake), renamed onto
+; br_dl_name only once it completes (br_dl_commit).
+br_dl_tmpname     equ br_dl_recvseq + 1
+; Part 0's DATA segment (op_seg), for reading its icons; set by partload.
+br_dl_partdseg    equ br_dl_tmpname + 13
+; The rarely used UI's thunks (SPEC.md 71.24): which entry br_dl_cold calls,
+; its far vector, and how many of them are inside the part right now
+br_dl_sel         equ br_dl_partdseg + 2
+br_dl_depth       equ br_dl_sel + 1
+br_dl_coldvec     equ br_dl_depth + 1
+; A Copy's regrow of the URL store against the worker's copy into the cluster
+; buffer carved there (br_dlx_put, br_copyselection; SPEC.md 71.23): the UI's
+; byte set before it waits, the worker's set before it looks
+br_dl_ugrow       equ br_dl_coldvec + 4
+br_dl_wbusy       equ br_dl_ugrow + 1
+br_dl_bss_end     equ br_dl_wbusy + 1

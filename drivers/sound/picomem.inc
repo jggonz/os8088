@@ -38,7 +38,8 @@
 ; opl_probe, in the same routine, and nothing can get between them.
 ;
 ; THE CONFIGURATION IS VERY NEARLY FORCED, which is why this asks the user
-; nothing. DMA is channel 1 because sb.inc programs channel 1 and no other
+; nothing. PicoMEM uses DMA 1; sb.inc's ESS-specific DMA 3 path (§34.5.8)
+; does not change the PicoMEM configuration
 ; (SPEC.md 34.5, binding - channel 2 is the floppy's). The port is 220h
 ; because that is the head of sbl_bases and every later entry costs another
 ; reset scan - unless the card's own CMS emulation already holds 220h-22Fh,

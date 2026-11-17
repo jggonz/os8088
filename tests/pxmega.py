@@ -24,7 +24,7 @@ than its ground) and not the one before it.
 
 THE FAILING CASE (docs/WRITING-TESTS.md 1): put pxgif.asm's pa_comp back to
 `and di, 15` (one paragraph) and BOUNCE.GIF's first frame is a FAULT; put
-any `mov [es:...]` of pxplan.inc's pl_plan1 back to `[cs:...]` and
+any `mov [es:...]` of pxplan1.inc's pl_plan1 back to `[cs:...]` and
 BALLOONS.PNG takes thousands of traps. Both were measured red when this was
 written.
 """

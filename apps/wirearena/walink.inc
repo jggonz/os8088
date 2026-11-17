@@ -966,6 +966,7 @@ wa_lkplay:
     mov bx, [wa_win]
     xor cx, cx
     call OSAPI_FSX_RUN
+    call wa_saidin              ; (a rotation's refused arena, said now)
 .back:
     mov byte [wa_lkon], 0       ; back in the lobby, not ready
     mov byte [wa_lkst], 0
@@ -1154,6 +1155,10 @@ wa_lkhtake:
     pop bx
     pop si
     mov al, [si+12]
+    cmp al, 2                   ; (fenced: wa_lt_st's three states)
+    jbe .st
+    mov al, 2
+.st:
     mov [wa_lkps], al
     cmp byte [wa_lkon], 0       ; in the match: a HELLO saying it is not
     je .lobby                   ; is the peer gone
@@ -1170,6 +1175,10 @@ wa_lkhtake:
     mov al, [si+14]
     mov ah, al
     and al, 3
+    cmp al, 2                   ; (fenced: three skills)
+    jbe .dk
+    mov al, 2
+.dk:
     mov [wa_lkdiff], al
     mov al, ah
     mov cl, 5
@@ -2335,9 +2344,13 @@ wa_lksnapin:
     mov bx, si
     mov al, [wa_lkpslot]
     call wa_slotrec
-    mov ax, [bx+2]
-    mov [si+WR_X], ax
+    mov ax, [bx+2]              ; (x and y CLAMPED to the room, in the frame
+    call .room                  ; too - the host's bots hear a shot there
+    mov [bx+2], ax              ; below, and wa_bcell indexes its cells
+    mov [si+WR_X], ax           ; with them: wa_lists' .cc)
     mov ax, [bx+4]
+    call .room
+    mov [bx+4], ax
     mov [si+WR_Y], ax
     mov al, [bx+6]
     xor ah, ah
@@ -2385,9 +2398,14 @@ wa_lksnapin:
     mov [wa_lkhby], al
     cmp byte [si], WL_HSNAP
     jne .who
+    call wa_lkhostsays          ; (the host's alone: from any other a SNAP)
+    jne .who
     mov al, [si+13]
+    call wa_lkslotin            ; (fenced: a slot the match has)
+    jc .hb
     call wa_lklocal             ; (the slot it names: its code here)
     mov [wa_lkhby], al
+.hb:
     call wa_lkbots_in
 .who:
     cmp byte [si], WL_GSNAP     ; (a guest's hits on the bots: the host's
@@ -2442,6 +2460,19 @@ wa_lksnapin:
     or cx, cx
     jnz .d
 .out:
+    ret
+%if WA_ROOM_X1 != WA_ROOM_Y1
+  %error "wa_lksnapin clamps x and y to one room edge"
+%endif
+.room:                          ; AX = a coordinate: 0..the room's edge - 1
+    or ax, ax
+    jns .rp
+    xor ax, ax
+.rp:
+    cmp ax, WA_ROOM_X1 - 1
+    jbe .rin
+    mov ax, WA_ROOM_X1 - 1
+.rin:
     ret
 
 ; wa_lkqpop - the head of the event queue out while every player in the
@@ -2517,6 +2548,8 @@ wa_lkevin:
     je .fire
     cmp al, EV_TAKE
     je .take
+    call wa_lkhostsays          ; (the rest the host's alone: applied in
+    jne .out                    ; order still, and from any other nothing)
     cmp al, EV_FLAG
     je .flag
     cmp al, EV_GAME
@@ -2528,6 +2561,8 @@ wa_lkevin:
     xor bx, bx                  ; ROLL: a pickup back, with its kind
     mov bl, [si+4]
     cmp bx, [wa_npk]
+    jae .out
+    cmp byte [si+5], WA_NPKIND  ; (fenced: a kind the tables have)
     jae .out
     mov al, bl
     mov cl, WA_PKSZ
@@ -2580,6 +2615,11 @@ wa_lkevin:
 ; wa_lkspawn - SI = a FIRE: its projectile flies here too, its owner the
 ; figure that is its owner here (LINK-PLAN 3)
 wa_lkspawn:
+    mov al, [si+4]              ; (its owner fenced: a slot the match has -
+    mov cl, 4                   ; the nibble reaches 15)
+    shr al, cl
+    call wa_lkslotin
+    jc .none
     mov bx, si
     mov si, wa_rks
     mov di, wa_rkg
@@ -2590,6 +2630,7 @@ wa_lkspawn:
     add di, WA_RKGSZ
     cmp si, wa_rks + WA_NRK*WA_RKSZ
     jb .slot
+.none:
     ret                         ; (all four in flight: this one unseen)
 .have:
     inc byte [wa_rkn]
@@ -2819,6 +2860,31 @@ wa_lklocal:
     jae .out                    ; (above ours: the same; below: one more)
     inc al
 .out:
+    ret
+
+; wa_lkslotin - AL = a slot OFF THE WIRE: CF = 1 when the match has nobody
+; in it (at or past the players and the bots) - every slot a frame names is
+; fenced with it before it indexes a table (SPEC.md 128.7). Keeps all but
+; the flags
+wa_lkslotin:
+    push bx
+    mov bl, [wa_lknp]
+    add bl, [wa_lknb]
+    cmp al, bl
+    cmc
+    pop bx
+    ret
+
+; wa_lkhostsays - ZF = 1 when the frame in hand is the HOST'S and we are a
+; guest: what only the host says (ROLL, FLAG, GAME, NEXT, an HSNAP's own
+; fields), heard from no one else (SPEC.md 128.7). Keeps every register
+wa_lkhostsays:
+    cmp byte [wa_lkme], 0
+    je .no
+    cmp byte [wa_lkpslot], 0
+    ret
+.no:
+    or sp, sp
     ret
 
 ; wa_figslot - DI = a figure: AL = its slot. Keeps all but AX

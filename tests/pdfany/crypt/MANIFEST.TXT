@@ -1,0 +1,17 @@
+RC4_40.PDF MARKUP - owner R2_V1_RC4-40,_the_empty_user_password
+RC4_128.PDF MARKUP - owner R3_V2_RC4-128
+RC4_V4.PDF FLATE - owner R4_V4_/CFM_/V2_(RC4-128_in_a_crypt_filter),_Flate_inside
+AES_128.PDF MARKUP - owner R4_V4_AESV2
+AES_128_NM.PDF HELLO - owner R4_AESV2_with_/EncryptMetadata_false
+AES_256_R6.PDF MARKUP - owner R6_V5_AESV3,_the_empty_user_password
+AES_256_R5.PDF HELLO - owner R5_V5_AESV3_(Adobe_extension_level_3)
+RC4_40_PW.PDF HELLO secret owner R2_with_a_user_password
+RC4_128_PW.PDF FLATE secret owner R3_with_a_user_password
+AES_128_PW.PDF MARKUP secret owner R4_with_a_user_password
+AES_256_PW.PDF HELLO secret owner R6_with_a_user_password
+AES_256_NM.PDF FLATE - owner R6_with_/EncryptMetadata_false
+PAGES_AES.PDF PAGES - owner R4,_a_longer_page_tree
+GUIDE_RC4.PDF XTGUIDE - owner R3,_outlines_and_link_annotations_(strings_in_many_objects)
+GUIDE_AES.PDF XTGUIDE - owner R4,_outlines_and_link_annotations
+GUIDE_R6.PDF XTGUIDE - owner R6,_outlines_and_link_annotations
+FORM_RC4_40.PDF ACROFORM - owner R2,_form_fields_(strings_in_widgets)

@@ -51,3 +51,12 @@ parameter and the method **without needing a search to succeed**, which is
 what the daily API quota was blocking.
 
 docs/plans/completed/BROWSER-PLAN.md §1.1.2 is what this file settled and what it did not.
+
+## `images.htm`
+
+Browser 1.7's image boxes (SPEC.md 71.25): one case per rule - bottom, middle
+and top alignment, unsized with and without alt, an image inside a link, two
+of different heights on one line, left and right on lines of their own, a box
+wider than the band, a percentage width, an entity in alt, and an image in a
+table cell, which keeps its alt text alone. `make browsertest` puts it on the
+disk as `IMAGES.HTM`; the `brimages` row opens it.

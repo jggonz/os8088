@@ -219,6 +219,34 @@ sd_header:
     stosb
     ret
 
+; AX = the selected low DMA channel, FFh = refused. Version 1 was always D1.
+sd_dma:
+    xor ax, ax
+    cmp byte [sd_rec+SDG_O_VER], 2
+    jb .one
+    mov al, [sd_rec+SDG_O_AUTO]
+    and al, SDG_DMA_MASK
+    jz .one
+    cmp al, 2
+    jne .none
+    mov al, 3
+    ret
+.one:
+    mov al, 1
+    ret
+.none:
+    mov al, 0xFF
+    ret
+
+sd_dma_text:
+    call sd_dma
+    cmp al, 0xFF
+    jne .number
+    PUTS 'none'
+    ret
+.number:
+    jmp sd_dec
+
 ; --- page 1: DETECT ---------------------------------------------------------------
 sd_page1:
     ROW 1
@@ -327,7 +355,9 @@ sd_page1:
     xor ah, ah
     call sd_dec
 .dma:
-    PUTS ' DMA 1 HDMA '
+    PUTS ' DMA '
+    call sd_dma_text
+    PUTS ' HDMA '
     mov al, [sd_rec+SDG_O_HDMA]
     or al, al
     jnz .hd
@@ -339,6 +369,7 @@ sd_page1:
 .auto:
     PUTS ' auto '
     mov al, [sd_rec+SDG_O_AUTO]
+    and al, 1
     call sd_yn
     PUTS ' tier '
     cmp byte [sd_rec+SDG_O_SBUP], 0
@@ -378,6 +409,12 @@ sd_page1:
     mov al, [sd_rec+SDG_O_IMETH]
     or al, al
     jnz .im
+    call sd_dma
+    cmp al, 0xFF
+    jne .imd
+    PUTS 'not looked for (DMA route refused)'
+    jmp .irq2
+.imd:
     PUTS 'not looked for (no DSP)'
     jmp .irq2
 .im:
@@ -520,6 +557,9 @@ sd_page1:
     ROW 11
     cmp word [sd_rec+SDG_O_BASE], 0
     je .verdict
+    call sd_dma
+    cmp al, 0xFF
+    je .verdict                     ; do not invent BLASTER for a refused route
     PUTS 'BLASTER=A'
     mov ax, [sd_rec+SDG_O_BASE]
     call sd_hex3
@@ -530,7 +570,9 @@ sd_page1:
     xor ah, ah
     call sd_dec
 .bl1:
-    PUTS ' D1'
+    PUTS ' D'
+    call sd_dma
+    call sd_dec
     mov al, [sd_rec+SDG_O_HDMA]
     or al, al
     jz .bl2
@@ -590,6 +632,12 @@ sd_verdict1:
     PUTS 'no card answered: no DSP, no OPL. Check the card is in SB mode.'
     ret
 .b:
+    call sd_dma
+    cmp al, 0xFF
+    jne .bi
+    PUTS 'ESS DSP found, but its DMA route is unusable. Set DMA 1 or 3.'
+    ret
+.bi:
     cmp byte [sd_rec+SDG_O_IRQ], 0xFF
     jne .i
     cmp byte [sd_rec+SDG_O_IWIN], 5

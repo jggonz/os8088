@@ -1,0 +1,414 @@
+/* ============================================================================
+ * os8088 - apps/pagedesk/pdxgp.c    PDXG's PDF syntax reader (20.22.9)
+ *
+ * A non-recursive parser: a stack of open containers and a stack of finished
+ * values; every closing bracket turns the top of the second into a node.
+ * Nodes, kid lists and string bytes live in fixed tables in the module's bss
+ * (reset by every verb), so a hostile object can only fill a table. #included
+ * by pdxg.c after pdxgm.c.
+ * ==========================================================================*/
+#define GN_NIL   0xFFFFu
+#define GN_NUM   1
+#define GN_NAME  2
+#define GN_STR   3
+#define GN_ARR   4
+#define GN_DICT  5
+#define GN_REF   6
+#define GN_BOOL  7
+#define GN_NULL  8
+#define GN_OP    9
+
+#define GX_NODES 224
+#define GX_KIDS  420
+#define GX_HEAP  1700
+#define GX_TB    1024          /* the fetch buffer: one object's syntax    */
+#define GX_DEPTH 8
+#define GX_VS    64
+
+/* The parse arrays live in the slot WORKSPACE (gw_seg, 20.22.9 workspace map), not in bss: the part is a
+ * single 64 KiB segment and these were 4.8 KiB of it. Node fields are columns of GX_NODES entries. */
+#define GW_NT    0
+#define GW_NFL   (GW_NT + GX_NODES)
+#define GW_NA    (GW_NFL + GX_NODES)
+#define GW_NB    (GW_NA + GX_NODES * 2)
+#define GW_NH    (GW_NB + GX_NODES * 2)
+#define GW_NL    (GW_NH + GX_NODES * 2)
+#define GW_KID   (GW_NL + GX_NODES * 2)
+#define GW_HEAP  (GW_KID + GX_KIDS * 2)
+#define GW_PEND  (GW_HEAP + GX_HEAP)
+#define GN_T(i)      pd_fpeekb(gw_seg, (pdw)(GW_NT + (i)))
+#define GN_FL(i)     pd_fpeekb(gw_seg, (pdw)(GW_NFL + (i)))
+#define GN_A(i)      pd_fpeekw(gw_seg, (pdw)(GW_NA + (i) * 2))
+#define GN_B(i)      pd_fpeekw(gw_seg, (pdw)(GW_NB + (i) * 2))
+#define GN_NH(i)     ((pdi)pd_fpeekw(gw_seg, (pdw)(GW_NH + (i) * 2)))
+#define GN_NL(i)     pd_fpeekw(gw_seg, (pdw)(GW_NL + (i) * 2))
+#define GN_ST(i, v)  pd_fpokeb(gw_seg, (pdw)(GW_NT + (i)), (pdb)(v))
+#define GN_SFL(i, v) pd_fpokeb(gw_seg, (pdw)(GW_NFL + (i)), (pdb)(v))
+#define GN_SA(i, v)  pd_fpokew(gw_seg, (pdw)(GW_NA + (i) * 2), (pdw)(v))
+#define GN_SB(i, v)  pd_fpokew(gw_seg, (pdw)(GW_NB + (i) * 2), (pdw)(v))
+#define GN_SNH(i, v) pd_fpokew(gw_seg, (pdw)(GW_NH + (i) * 2), (pdw)(v))
+#define GN_SNL(i, v) pd_fpokew(gw_seg, (pdw)(GW_NL + (i) * 2), (pdw)(v))
+#define GK_GET(i)    pd_fpeekw(gw_seg, (pdw)(GW_KID + (i) * 2))
+#define GK_SET(i, v) pd_fpokew(gw_seg, (pdw)(GW_KID + (i) * 2), (pdw)(v))
+#define GH_GET(i)    ((char)pd_fpeekb(gw_seg, (pdw)(GW_HEAP + (i))))
+#define GH_SET(i, v) pd_fpokeb(gw_seg, (pdw)(GW_HEAP + (i)), (pdb)(v))
+static pdw gx_nn;
+static pdw gx_nk;
+static pdw gx_nh;
+static char gx_tb[GX_TB];
+static pdw gx_ro, gx_rg;        /* the object the last gx_res stopped at   */
+static pdw gx_perr;
+
+static void gx_reset(void) { gx_nn = 0; gx_nk = 0; gx_nh = 0; gx_ro = 0; gx_rg = 0; gx_perr = 0; }
+
+static pdw gx_new(pdb t)
+{
+    pdw i;
+    if (gx_nn >= GX_NODES) { gx_perr = 1; return GN_NIL; }
+    i = gx_nn++;
+    GN_ST(i, t); GN_SFL(i, 0); GN_SA(i, 0); GN_SB(i, 0);
+    GN_SNH(i, 0); GN_SNL(i, 0);
+    return i;
+}
+
+static int gx_isws(int c) { return c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 0; }
+static int gx_isdl(int c)
+{
+    return c == '(' || c == ')' || c == '<' || c == '>' || c == '[' || c == ']' ||
+           c == '{' || c == '}' || c == '/' || c == '%';
+}
+static int gx_hex(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+struct gxc { pdb t; pdw vs0; };      /* an open container */
+static struct gxc gx_cs[GX_DEPTH];
+static pdw gx_vs[GX_VS];
+
+/* Parse one value (or the object after "n g obj") out of p[0..len). Answers
+ * the node, or GN_NIL. Stops at endobj and at "stream" (a stream object's
+ * dictionary is the value). */
+static pdw gx_parse(const char *p, pdw len)
+{
+    pdw i = 0, nvs = 0, ncs = 0, k, nd, h, j;
+    int c, depth0;
+    while (i < len) {
+        c = (pdb)p[i];
+        if (gx_isws(c)) { i++; continue; }
+        if (c == '%') { while (i < len && p[i] != 10 && p[i] != 13) i++; continue; }
+        if (c == '<' && i + 1 < len && p[i + 1] == '<') {
+            if (ncs >= GX_DEPTH) return GN_NIL;
+            gx_cs[ncs].t = GN_DICT; gx_cs[ncs].vs0 = nvs; ncs++;
+            i += 2; continue;
+        }
+        if (c == '>' && i + 1 < len && p[i + 1] == '>') {
+            i += 2;
+            if (!ncs || gx_cs[ncs - 1].t != GN_DICT) return GN_NIL;
+            ncs--;
+            nd = gx_new(GN_DICT);
+            if (nd == GN_NIL) return GN_NIL;
+            k = nvs - gx_cs[ncs].vs0;
+            if (gx_nk + k > GX_KIDS) return GN_NIL;
+            GN_SA(nd, gx_nk); GN_SB(nd, k & ~1u);
+            for (j = 0; j < (k & ~1u); j++) GK_SET(gx_nk++, gx_vs[gx_cs[ncs].vs0 + j]);
+            nvs = gx_cs[ncs].vs0;
+            if (nvs >= GX_VS) return GN_NIL;
+            gx_vs[nvs++] = nd;
+            continue;
+        }
+        if (c == '[') {
+            if (ncs >= GX_DEPTH) return GN_NIL;
+            gx_cs[ncs].t = GN_ARR; gx_cs[ncs].vs0 = nvs; ncs++;
+            i++; continue;
+        }
+        if (c == ']') {
+            i++;
+            if (!ncs || gx_cs[ncs - 1].t != GN_ARR) return GN_NIL;
+            ncs--;
+            nd = gx_new(GN_ARR);
+            if (nd == GN_NIL) return GN_NIL;
+            k = nvs - gx_cs[ncs].vs0;
+            if (gx_nk + k > GX_KIDS) return GN_NIL;
+            GN_SA(nd, gx_nk); GN_SB(nd, k);
+            for (j = 0; j < k; j++) GK_SET(gx_nk++, gx_vs[gx_cs[ncs].vs0 + j]);
+            nvs = gx_cs[ncs].vs0;
+            gx_vs[nvs++] = nd;
+            continue;
+        }
+        if (c == '/') {
+            i++;
+            nd = gx_new(GN_NAME);
+            if (nd == GN_NIL) return GN_NIL;
+            GN_SA(nd, gx_nh);
+            while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) {
+                c = (pdb)p[i];
+                if (c == '#' && i + 2 < len && gx_hex((pdb)p[i + 1]) >= 0 && gx_hex((pdb)p[i + 2]) >= 0) {
+                    c = gx_hex((pdb)p[i + 1]) * 16 + gx_hex((pdb)p[i + 2]);
+                    i += 2;
+                }
+                if (gx_nh + 1 < GX_HEAP) GH_SET(gx_nh++, (char)c);
+                i++;
+            }
+            GN_SB(nd, gx_nh - GN_A(nd));
+            if (gx_nh < GX_HEAP) GH_SET(gx_nh++, 0);
+            if (nvs >= GX_VS) return GN_NIL;
+            gx_vs[nvs++] = nd;
+            continue;
+        }
+        if (c == '(') {
+            int lvl = 1;
+            i++;
+            nd = gx_new(GN_STR);
+            if (nd == GN_NIL) return GN_NIL;
+            GN_SA(nd, gx_nh);
+            while (i < len && lvl > 0) {
+                c = (pdb)p[i++];
+                if (c == '\\' && i < len) {
+                    c = (pdb)p[i++];
+                    if (c == 'n') c = 10; else if (c == 'r') c = 13; else if (c == 't') c = 9;
+                    else if (c == 'b') c = 8; else if (c == 'f') c = 12;
+                    else if (c >= '0' && c <= '7') {
+                        int v = c - '0', q = 0;
+                        while (q < 2 && i < len && p[i] >= '0' && p[i] <= '7') { v = v * 8 + (p[i] - '0'); i++; q++; }
+                        c = v & 255;
+                    } else if (c == 10) continue;
+                    else if (c == 13) { if (i < len && p[i] == 10) i++; continue; }
+                } else if (c == '(') lvl++;
+                else if (c == ')') { lvl--; if (!lvl) break; }
+                if (gx_nh < GX_HEAP) GH_SET(gx_nh++, (char)c);
+            }
+            GN_SB(nd, gx_nh - GN_A(nd));
+            if (nvs >= GX_VS) return GN_NIL;
+            gx_vs[nvs++] = nd;
+            continue;
+        }
+        if (c == '<') {
+            int hi = -1, v;
+            i++;
+            nd = gx_new(GN_STR);
+            if (nd == GN_NIL) return GN_NIL;
+            GN_SA(nd, gx_nh);
+            while (i < len && p[i] != '>') {
+                v = gx_hex((pdb)p[i++]);
+                if (v < 0) continue;
+                if (hi < 0) hi = v;
+                else { if (gx_nh < GX_HEAP) GH_SET(gx_nh++, (char)(hi * 16 + v)); hi = -1; }
+            }
+            if (hi >= 0 && gx_nh < GX_HEAP) GH_SET(gx_nh++, (char)(hi * 16));
+            i++;
+            GN_SB(nd, gx_nh - GN_A(nd));
+            if (nvs >= GX_VS) return GN_NIL;
+            gx_vs[nvs++] = nd;
+            continue;
+        }
+        if (c == ')' || c == '>' || c == '{' || c == '}') { i++; continue; }
+        /* a regular token: number or keyword */
+        h = i;
+        while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) i++;
+        k = i - h;
+        c = (pdb)p[h];
+        if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.') {
+            nd = gx_new(GN_NUM);
+            if (nd == GN_NIL) return GN_NIL;
+            if (c == '+') { h++; k--; }
+            { static struct pd_fx pv; if (pdm_fx_parse(&pv, p + h, k) != PDE_OK) { pv.hi = 0; pv.lo = 0; } GN_SNH(nd, pv.hi); GN_SNL(nd, pv.lo); }
+            /* an integer: remember it for "n g R" (fl = 1) */
+            GN_SFL(nd, 1);
+            for (j = 0; j < k; j++) if (p[h + j] == '.') GN_SFL(nd, 0);
+            GN_SA(nd, (pdw)GN_NH(nd));
+            if (nvs >= GX_VS) return GN_NIL;
+            gx_vs[nvs++] = nd;
+            continue;
+        }
+        if (k == 1 && c == 'R' && nvs >= 2 &&
+            GN_T(gx_vs[nvs - 1]) == GN_NUM && GN_T(gx_vs[nvs - 2]) == GN_NUM) {
+            nd = gx_new(GN_REF);
+            if (nd == GN_NIL) return GN_NIL;
+            GN_SA(nd, (pdw)GN_NH(gx_vs[nvs - 2]));
+            GN_SB(nd, (pdw)GN_NH(gx_vs[nvs - 1]));
+            nvs -= 2;
+            gx_vs[nvs++] = nd;
+            continue;
+        }
+        if (k == 3 && c == 'o' && p[h + 1] == 'b' && p[h + 2] == 'j') {     /* n g obj */
+            if (!ncs) nvs = 0;
+            continue;
+        }
+        if (k == 6 && c == 's' && p[h + 1] == 't' && p[h + 2] == 'r') break;  /* stream */
+        if (k == 6 && c == 'e' && p[h + 1] == 'n' && p[h + 2] == 'd' && p[h + 3] == 'o') break;
+        if (k == 4 && c == 't') { nd = gx_new(GN_BOOL); if (nd == GN_NIL) return GN_NIL; GN_SA(nd, 1); }
+        else if (k == 5 && c == 'f') { nd = gx_new(GN_BOOL); if (nd == GN_NIL) return GN_NIL; }
+        else if (k == 4 && c == 'n') { nd = gx_new(GN_NULL); if (nd == GN_NIL) return GN_NIL; }
+        else { nd = gx_new(GN_OP); if (nd == GN_NIL) return GN_NIL; }
+        if (nvs >= GX_VS) return GN_NIL;
+        gx_vs[nvs++] = nd;
+    }
+    depth0 = ncs;
+    if (depth0 || !nvs) return GN_NIL;
+    return gx_vs[nvs - 1];
+}
+
+/* ---- accessors ----------------------------------------------------------- */
+static int gx_ty(pdw n) { return n == GN_NIL ? 0 : GN_T(n); }
+
+static int gx_nameis(pdw n, const char *s)
+{
+    pdw k = 0;
+    if (gx_ty(n) != GN_NAME) return 0;
+    while (s[k]) { if (k >= GN_B(n) || GH_GET(GN_A(n) + k) != s[k]) return 0; k++; }
+    return k == GN_B(n);
+}
+
+static pdw gx_dget(pdw d, const char *key)
+{
+    pdw i, k, e;
+    if (gx_ty(d) != GN_DICT) return GN_NIL;
+    e = GN_B(d);
+    for (i = 0; i + 1 < e; i += 2) {
+        k = GK_GET(GN_A(d) + i);
+        if (gx_nameis(k, key)) return GK_GET(GN_A(d) + i + 1);
+    }
+    return GN_NIL;
+}
+static pdw gx_alen(pdw a) { return gx_ty(a) == GN_ARR ? GN_B(a) : 0; }
+static pdw gx_aget(pdw a, pdw i)
+{
+    if (gx_ty(a) != GN_ARR || i >= GN_B(a)) return GN_NIL;
+    return GK_GET(GN_A(a) + i);
+}
+
+/* the object syntax of n g, parsed on top of what is there; GN_NIL on any failure */
+static pdw gx_fetch_parse(pdw obj, pdw gen)
+{
+    pdw got = gx_fetch(obj, gen, gx_tb, GX_TB);
+    if (!got) return GN_NIL;
+    return gx_parse(gx_tb, got);
+}
+/* follow references (at most 8 hops); remembers the last object number */
+static pdw gx_res(pdw n)
+{
+    pdw hops = 0;
+    gx_ro = 0; gx_rg = 0;
+    while (n != GN_NIL && GN_T(n) == GN_REF) {
+        if (hops++ >= 8) return GN_NIL;
+        gx_ro = GN_A(n); gx_rg = GN_B(n);
+        n = gx_fetch_parse(gx_ro, gx_rg);
+    }
+    return n;
+}
+static pdw gx_dres(pdw d, const char *key) { return gx_res(gx_dget(d, key)); }
+static pdw gx_ares(pdw a, pdw i) { return gx_res(gx_aget(a, i)); }
+
+static void gx_num(pdw n, struct pd_fx *r)
+{
+    r->hi = 0; r->lo = 0;
+    if (n == GN_NIL) return;
+    if (GN_T(n) == GN_NUM) { r->hi = GN_NH(n); r->lo = GN_NL(n); }
+    else if (GN_T(n) == GN_BOOL) r->hi = (pdi)GN_A(n);
+}
+static pdi gx_int(pdw n, pdi dflt)
+{
+    if (gx_ty(n) != GN_NUM) return dflt;
+    return GN_NH(n);
+}
+/* up to `max` numbers of array a (dereferenced elements) into out; answers how many */
+static pdw gx_nums(pdw a, struct pd_fx *out, pdw max)
+{
+    pdw i, n = gx_alen(a);
+    if (n > max) n = max;
+    for (i = 0; i < n; i++) gx_num(gx_ares(a, i), &out[i]);
+    return n;
+}
+
+/* ---- find a key in a dictionary WITHOUT parsing it (a page's dictionary can be larger than the node tables) ---- */
+static char gx_tb2[GX_TB];      /* the second window: a dictionary reached by reference */
+
+static pdw gx_ws(const char *p, pdw len, pdw i)
+{
+    while (i < len) {
+        if (gx_isws((pdb)p[i])) i++;
+        else if (p[i] == '%') { while (i < len && p[i] != 10 && p[i] != 13) i++; }
+        else break;
+    }
+    return i;
+}
+/* the index just after the value that starts at i (a ref "n g R" counts as one value) */
+static pdw gx_vend(const char *p, pdw len, pdw i)
+{
+    pdw depth = 0, h, k;
+    int c;
+    for (;;) {
+        i = gx_ws(p, len, i);
+        if (i >= len) return len;
+        c = (pdb)p[i];
+        if (c == '<' && i + 1 < len && p[i + 1] == '<') { depth++; i += 2; continue; }
+        if (c == '>' && i + 1 < len && p[i + 1] == '>') {
+            if (!depth) return i;
+            depth--; i += 2; if (!depth) return i; continue;
+        }
+        if (c == '[') { depth++; i++; continue; }
+        if (c == ']') { if (!depth) return i; depth--; i++; if (!depth) return i; continue; }
+        if (c == '(') {
+            int lvl = 1;
+            i++;
+            while (i < len && lvl) { if (p[i] == '\\') i++; else if (p[i] == '(') lvl++; else if (p[i] == ')') lvl--; i++; }
+            if (!depth) return i; continue;
+        }
+        if (c == '<') { while (i < len && p[i] != '>') i++; i++; if (!depth) return i; continue; }
+        if (c == '/') {
+            i++;
+            while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) i++;
+            if (!depth) return i; continue;
+        }
+        h = i;
+        while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) i++;
+        if (i == h) { i++; continue; }                        /* a stray delimiter */
+        if (!depth) {
+            if (c >= '0' && c <= '9') {                       /* maybe "n g R" */
+                k = gx_ws(p, len, i);
+                if (k < len && p[k] >= '0' && p[k] <= '9') {
+                    while (k < len && p[k] >= '0' && p[k] <= '9') k++;
+                    k = gx_ws(p, len, k);
+                    if (k < len && p[k] == 'R') return k + 1;
+                }
+            }
+            return i;
+        }
+    }
+}
+/* the value of /key in the first dictionary of p[0..len): its extent in *s, *e; 1 when found */
+static int gx_find(const char *p, pdw len, const char *key, pdw *s, pdw *e)
+{
+    pdw i = 0, h, k, tl;
+    while (i + 1 < len && !(p[i] == '<' && p[i + 1] == '<')) i++;
+    i += 2;
+    for (;;) {
+        i = gx_ws(p, len, i);
+        if (i >= len || p[i] != '/') return 0;
+        i++; h = i;
+        while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) i++;
+        tl = i - h;
+        k = 0;
+        while (key[k] && k < tl && p[h + k] == key[k]) k++;
+        i = gx_ws(p, len, i);
+        *s = i; *e = gx_vend(p, len, i);
+        if (k == tl && !key[k]) return 1;
+        i = *e;
+        if (i >= len) return 0;
+    }
+}
+/* a ref "n g R" at p[s..e) -> obj, gen */
+static int gx_refat(const char *p, pdw s, pdw e, pdw *obj, pdw *gen)
+{
+    pdw a = 0, b = 0;
+    while (s < e && p[s] >= '0' && p[s] <= '9') a = (pdw)(a * 10 + (p[s++] - '0'));
+    s = gx_ws(p, e, s);
+    while (s < e && p[s] >= '0' && p[s] <= '9') b = (pdw)(b * 10 + (p[s++] - '0'));
+    s = gx_ws(p, e, s);
+    if (s >= e || p[s] != 'R' || !a) return 0;
+    *obj = a; *gen = b; return 1;
+}

@@ -1,0 +1,44 @@
+<html><head><title>Image boxes</title></head>
+<body>
+<h1>Image boxes</h1>
+<p>Browser 1.7 delivery 4.1 (SPEC.md 71.25): every image is a box at its
+declared size, a frame with the alt text in it.</p>
+
+<p>A sized logo with alt text, aligned bottom:
+<img src="logo.gif" width="200" height="48" alt="Example Corp logo">
+and the text after it.</p>
+
+<p>Middle: <img src="mid.gif" width="64" height="40" align="middle" alt="mid">
+text beside the middle of the box.</p>
+
+<p>Top: <img src="top.gif" width="64" height="24" align="top" alt="top">
+text level with the top of the box.</p>
+
+<p>No size, alt only: <img src="what.gif" alt="Unsized picture"> and
+no size, no alt: <img src="spacer.gif"> end.</p>
+
+<p><a href="next.htm"><img src="button.gif" width="88" height="31"
+alt="Next page" border="0"></a> an image inside a link is the link
+over its whole box.</p>
+
+<p>Two on one line: <img src="a.gif" width="32" height="32" alt="A">
+<img src="b.gif" width="32" height="16" alt="B"> done.</p>
+
+<img src="left.gif" width="96" height="32" align="left" alt="left">
+<p>Text after a left-aligned image starts below it.</p>
+
+<img src="right.gif" width="96" height="32" align="right" alt="right">
+<p>Text after a right-aligned image starts below it.</p>
+
+<p>Wider than the band: <img src="wide.gif" width="1000" height="16"
+alt="A banner wider than any window"> after the banner.</p>
+
+<p>Percentage width is unknown: <img src="bar.gif" width="100%" height="8"
+alt="bar"> and entities in alt: <img src="t.gif" alt="Tom &amp; Jerry"></p>
+
+<table border=1><tr><td><img src="cell.gif" width="64" height="64"
+alt="In a cell"></td><td>A table cell keeps the alt text (4.1).</td></tr>
+</table>
+
+<p>The end.</p>
+</body></html>

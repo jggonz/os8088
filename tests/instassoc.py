@@ -62,7 +62,8 @@ ASC_NAPP, ASC_NEXT = 90, 64
 # The extensions the shipped disks' packages declare (SPEC.md 54.6), and the
 # program each must reach. Named rather than counted: "5 associations" passes
 # on five wrong ones, and HTM is the one the field reported.
-WANT_EXT = {"HTM": "BROWSER", "TEX": "TEXPAD", "MOD": "TRACKER"}
+WANT_EXT = {"TEX": "TEXPAD", "MOD": "TRACKER"}  # (HTM went with the Browser
+# to network360.img, SPEC.md 71.30: neither 360KB disk installed here has it)
 
 
 def say(*a):

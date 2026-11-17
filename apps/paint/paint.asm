@@ -14294,7 +14294,7 @@ pt_load:
 
 ; -----------------------------------------------------------------------------
 ; pt_stage - a transient buffer for a file being decoded or encoded
-; in:  AX = the most KB worth taking
+; in:  AX = the most PARAGRAPHS worth taking (a KB constant * 64)
 ; out: CF=0 with [pt_gseg] set and DX:CX = its byte capacity, or CF=1;
 ;      preserves every other register
 ;
@@ -16548,7 +16548,7 @@ pt_gif_out:
     ; anything makes an undo image that is not conventionally addressable,
     ; testing the flag puts ES back at 0000 and this fault returns - which is
     ; not hypothetical: it is what the paragraph above is about.
-    mov ax, PT_GIF_MAX_KB           ; a TRANSIENT claim, like the load's
+    mov ax, PT_GIF_MAX_KB * 64      ; a TRANSIENT claim, like the load's
     call pt_stage                   ; (SPEC.md 42.6). This used to build the
     jc .nostage                     ; GIF in the undo image - and, with no
                                     ; undo image, in the twelve kilobytes of

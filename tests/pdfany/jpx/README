@@ -1,0 +1,9 @@
+PDXJ fixtures (PAGEDESK-SPEC 20.22.13.8)
+
+Made by:  python3 tools/os88pdfx_jpx.py     (deterministic: synthetic images
+          from a fixed LCG, compressed by opj_compress, OpenJPEG 2.5.4)
+Reference: python3 tools/os88pdfx_jpx.py --ref   writes ref/ (git-ignored):
+          opj_decompress -r 0..6 of every fixture, PGM/PPM.
+MANIFEST.json lists each file's size, components, depth and opj_compress args.
+The refuse_* and t_bad fixtures are valid files PDXJ must refuse with
+PDE_FILTER (reasons 5, 6 and 3).
