@@ -861,6 +861,7 @@ static unsigned fc_sighint(void)
 
 void bp_face_dirty(unsigned mask) { fc_dirty |= mask; }
 int bp_face_isdirty(void) { return fc_dirty != 0 || fc_dsp[0] != 0 || fc_dsp[1] != 0; }
+void bp_face_dirty_rect(const BPRect *r) { (void)r; fc_dirty |= BP_D_CENTER; }
 void bp_face_dirty_space(int space)
 {
     if (space < 0 || space >= BP_SPACES) return;

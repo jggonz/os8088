@@ -489,6 +489,11 @@ int    bp_w_fonth(int font);
 int    bp_w_sprite(int x, int y, int art_id);     /* -> width, 0 absent */
 unsigned bp_w_spritesz(int art_id);               /* w | h << 8 */
 int    bp_face_isdirty(void);                     /* any section dirty (the timer repaints on it) */
+/* Damage a screen rectangle inside the centre only (SPEC 131.8.5): the
+ * panels name what a key changed (a button row, the bid editor, a list row)
+ * and the face repaints only the strips it touches, drawing the panel there
+ * (QA Qqa1-4). Until the face lane refines it, it dirties the whole centre. */
+void   bp_face_dirty_rect(const BPRect *r);
 void   bp_w_fill(int x1, int y1, int x2, int y2, int colour);
 /* the log ring the sidebar shows (bounded) */
 #define BP_LOG_LINES    8
