@@ -260,6 +260,7 @@ static int bpl_send(void)
 static void bpl_send_state(int type)
 {
     int f;
+    if (type == BPF_PING && bpl.ph == BPL_MATCH) bpl_redigest();  /* the state hash, afresh */
     bpl_begin(type);
     bpl_w32(&bp_game.rev);
     bpl_w32(&bpl.dig);
@@ -562,7 +563,10 @@ static void bpl_c_result(void)
     seq = bpl_r16();
     bpl_r32(&bpl_t1);                       /* the new revision */
     bpl_r32(&bpl_t2);                       /* the host's digest */
-    if (origin == 1 && seq == bpl.cseq) bpl.cpend = 0;
+    if (origin == 1 && seq == bpl.cseq) {
+        bpl.cpend = 0;
+        bpl.tries = 0;
+    }
     if (bpl_eq(&bpl_t1, &bp_game.rev)) {
         bpl_send_state(BPF_ACK);
         return;
@@ -684,8 +688,8 @@ static void ovl_hello(void)
             bpl_say("Another Byteopoly answered: not this match's partner");
             goto bad;
         }
-        bpl.heard = bpl.clk;                /* our partner, still agreeing */
-        bpl_send_hello();
+        bpl.heard = bpl.clk;                /* our partner, still agreeing: */
+        if (!bpl_eq(&bpl_t3, &bpl.me)) bpl_send_hello();   /* (it lacks our id) */
         return;
     }
     if (!bpl_t1.lo) goto bad;
@@ -715,14 +719,17 @@ static void ovl_hello(void)
         bp_ui_link();
     }
     bpl.heard = bpl.clk;
-    if (bpl_eq(&bpl_t3, &bpl.me) && bpl.ph == BPL_UNBOUND) {
+    /* answered only while the other side lacks our id: two bound sides
+     * never echo HELLOs at each other */
+    if (!bpl_eq(&bpl_t3, &bpl.me)) bpl_send_hello();
+    else if (bpl.ph == BPL_UNBOUND) {
         bpl.ph = BPL_LOBBY;
         bpl.msg = 0;
         bpl.beat = bpl.clk;
+        bpl_send_hello();                   /* (so it learns we bound it) */
+        ovl_lobby_send();
         bp_ui_link();
     }
-    bpl_send_hello();
-    if (bpl.ph == BPL_LOBBY) ovl_lobby_send();
     return;
 bad:
     bp_diag.frame++;
@@ -1400,10 +1407,6 @@ static void ovl_resume_in(void)
     }
     if (role == bp_mode) { bpl_rs_fail("Both PCs loaded the same side's save"); goto bad; }
     if (!bpl_eq(&bpl_t2, &bpl.rsm.match_id)) goto notpair;
-    bpl_r32(&bpl_t2);
-    if (!bpl_eq(&bpl_t2, &bpl.rsm.host_id)) goto notpair;
-    bpl_r32(&bpl_t2);
-    if (!bpl_eq(&bpl_t2, &bpl.rsm.client_id)) goto notpair;
     if (!bpl_eq(&bpl_t1, &bpl.rsm.ckpt_id)) {
         /* the host's offer leads: the client rolls forward to it; the host
          * falls back to the client's only when the client cannot (ok 2) */
@@ -1416,6 +1419,12 @@ static void ovl_resume_in(void)
         }
         return;
     }
+    /* the same checkpoint: the same pair of machines wrote it, at the same
+     * revision with the same board */
+    bpl_r32(&bpl_t2);
+    if (!bpl_eq(&bpl_t2, &bpl.rsm.host_id)) goto notpair;
+    bpl_r32(&bpl_t2);
+    if (!bpl_eq(&bpl_t2, &bpl.rsm.client_id)) goto notpair;
     if (!bpl_eq(&bpl_t3, &bpl.rsm.rev) || !bpl_eq(&bpl_t4, &bpl.rsm.digest)) {
         bpl_rs_fail("Same save, different board");
         goto bad;

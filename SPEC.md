@@ -254263,7 +254263,8 @@ resuming the same match id). Anything else is BADPEER with the reason on
 the status line - "The other PC chose Host too", "Different Byteopoly
 version", "The other PC is resuming a saved match" - and changes no state;
 a compatible HELLO later still binds. While unbound both sides send HELLO
-every beat. Once a match has started, a HELLO from another id is a stranger
+every beat; a HELLO is ANSWERED only while its sender does not yet name our
+id, so two bound sides never echo HELLOs at each other. Once a match has started, a HELLO from another id is a stranger
 ("Another Byteopoly answered: not this match's partner"): counted, never
 bound. **There is no host migration and no role reversal**: the host is the
 banker for the match's whole life.
@@ -254375,8 +254376,9 @@ from a paired checkpoint (131.7.5).
 
 #### 131.6.5 Divergence and snapshot adoption
 
-The client's check of each RESULT, and a PING exchanged while neither side
-has a transaction outstanding at the same revision, compare digests. Any
+The client's check of each RESULT, and every PING at an equal revision (a
+PING's digest is computed afresh as it is sent, so damage to a board that no
+command touched is found within a few seconds), compare digests. Any
 disagreement is DIVERGED (`BP_L_DIVERGED`) on the client, and on the host
 when the client's ACK or PING carries the other digest: economic input stops
 on both. The client offers `bp_sess_adopt` ("Use the banker's board"); the
@@ -254471,10 +254473,11 @@ handshake's intent to resume with that match id. Bound, each side sends
 RESUME (role, match id, checkpoint id, revision, digest, the pair's host and
 client ids) every two beats. A side receiving the peer's offer:
 
-- refuses (BADPEER-style, with the reason) the same role, another match id
-  or another pair identity - **never a stranger's or another match's file**;
-- with the same checkpoint id, requires the same revision and digest
-  ("Same save, different board": refused);
+- refuses, with the reason, the same role or another match id - **never a
+  stranger's or another match's file**;
+- with the same checkpoint id, requires the same pair identity (both
+  endpoint ids recorded by that exchange: "These saves are not a pair"),
+  revision and digest ("Same save, different board");
 - with a different id: the client, offered a newer id by the host, looks
   for that id as its own candidate - present, it is the roll-forward and is
   committed when the resume is agreed; the host, offered an OLDER id by the
