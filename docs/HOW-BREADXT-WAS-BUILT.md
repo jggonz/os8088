@@ -188,3 +188,15 @@ bounded calculation. No hardware or strict mega runtime is claimed; Bochs and
 automated86Box were unavailable. See [the evidence record](breadxt/EVIDENCE.md),
 [measured memory/cycles](breadxt/DEVELOPER.md) and retained captures for the exact
 checks and practical limits. Nothing was published externally.
+
+## Review handoff
+
+After local delivery, a separate GUI 86Box session booted the existing
+Micronics 386DX/25 VGA profile with private copies of the system and software
+disks. A standard AUTOSTRT document link opened FLASHER.BBX in Breadboard XT;
+the workbench was observed loaded and running. The session and writable disks
+remain under build/, outside the tracked source and captured verification set.
+
+On 2026-11-16 the user authorized pushing the feature branch and opening a PR.
+This supersedes the original local-only delivery restriction for that review
+handoff; it does not authorize merging or publishing a release or website.

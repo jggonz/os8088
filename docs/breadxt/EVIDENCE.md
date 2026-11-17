@@ -1,8 +1,10 @@
-# Breadboard XT local verification record
+# Breadboard XT verification record
 
-The implementation is on the local `feature/breadboard-xt` worktree. Both
+The implementation is on the `feature/breadboard-xt` branch. Both
 milestones are present: native editor/DC/HC logic and calculated RC/NE555/scope.
-No branch, PR, release, website or software-library catalog was published.
+Implementation and verification were completed locally. On 2026-11-16 the user
+authorized publishing the branch and opening a PR. No release, website or
+software-library catalog publication is part of that authorization.
 
 ## Reproduction
 

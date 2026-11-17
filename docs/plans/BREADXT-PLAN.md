@@ -19,9 +19,11 @@ See [independent plan reviews](BREADXT-PLAN-REVIEWS.md),
 Build `BREADXT.O88` in `apps/breadxt/`: an original native breadboard editor,
 DC/four-state digital simulator, backward-Euler RC simulator, pin-level ideal
 NE555 and two-channel scope. Deliver both required milestones locally, with four
-software-disk geometries, a verified WPK and installed-package evidence. Do not
-push, open a PR, publish a release or change a website. The user's explicit
-local-only instruction overrides the port skill's external-delivery steps.
+software-disk geometries, a verified WPK and installed-package evidence. The
+implementation was completed under the user's original local-only instruction.
+On 2026-11-16, after the 86Box trial session was launched, the user authorized
+pushing the feature branch and opening a PR. Merging, release publication, website and
+software-library catalog changes remain outside this delivery.
 
 The user supplied the product name, reference, concept, scope, hardware baseline
 and complete required story list. There are no remaining intake questions.
