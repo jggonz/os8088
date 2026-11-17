@@ -535,4 +535,16 @@ void   bp_pn_sync(void);
 #define BP_SND_ERROR    7
 void   bp_sound(int cue);
 
+/* app-lane additions (SPEC.md 131.9.1-131.9.6) */
+#define BP_M_GAME       0       /* bp_ap_mode: board and game panels */
+#define BP_M_SETUP      1       /* New Game screen (the launch default) */
+#define BP_M_LOBBY      2       /* the same screen, a cable link open */
+extern BPByte bp_ap_mode;
+extern BPByte bp_opt_sound, bp_opt_fast;          /* Options menu flags */
+/* guarded actions (bp_setup.c asks the app): */
+#define BP_ACT_START    1       /* start the match the setup screen holds */
+#define BP_ACT_LOAD     2
+#define BP_ACT_CLOSE    3
+#define BP_ACT_NEW      4       /* leave a cable match for the setup screen */
+#define BP_ACT_SAVECLOSE 5      /* close once the save lands */
 #endif
