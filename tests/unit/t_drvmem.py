@@ -102,6 +102,8 @@ ROWS = [
     # kern_mega ALONE (the rest of this table is kern_big's superset, which the
     # %ifdef-blind regexes above read whole), SYSTEM.CFG bit 11
     ("PCI Ethernet", "DRVM_PCIETH", "DRVM_IMG_PCIETH", "pciether.drv"),
+    # SPEC.md 9.15's PC1 mouse: another DRVC_POINT row after all optional rows
+    ("PC1 Mouse", "DRVM_PC1", "DRVM_IMG_PC1", "pc1mouse.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)

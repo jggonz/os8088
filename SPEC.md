@@ -19201,7 +19201,7 @@ baseline of its own in docs/KERNEL-MEMORY.md, blessable by
 | drivers | `$(EMUDRIVERS)` = `$(DRIVERS)` **plus** `VMMOUSE.DRV` — an addition, where `$(SMALLDRIVERS)` is a restatement from nothing |
 | `SYSTEM.CFG` | **shipped on this disk and on §80.7's browser image, and on no other**, bit 5 set. Every row is not-wanted by default (§51.3), and a `kern_emu` machine that must be told to enable the one feature it was built for has been given nothing |
 | apps disk | the **shipped** `build/apps.img`, unchanged — `kern_emu` defines `KERN_BIG`, so it holds the same API table at the same offsets |
-| `DRV_MAX` | 7 here, 6 on `kern_big` (both counting §9.12's USB mouse), 4 on `kern_small` |
+| `DRV_MAX` | 13 on `kern_emu`, one fewer on `kern_big`/`kern_mega`, 4 on `kern_small` |
 | geometry | 1.44MB only. 360KB exists for real period hardware, and no machine that needs a 360KB floppy can execute a 386 instruction |
 
 **Rows 0-4 do not move, so `SYSTEM.CFG` stays readable both ways.** The row
@@ -19916,6 +19916,65 @@ itself (WireBall's shape, §109.1), which kern_small cannot do (no rate hook,
 there (§53.1). It is NOT in `fsx_rkeep` (§53.2.3), so a `FSXF_REAL` bracket
 on kern_mega does not have it; a protected-mode bracket does.
 
+### 9.15 The Olivetti Prodest PC1 mouse (`PC1MOUSE.DRV`)
+
+The PC1's built-in mouse is **not** a Microsoft serial mouse and is not on an
+8042 auxiliary port. It is the Yamaha V6335D's mouse interface. The DOS source
+supplied with this work (`pc1mouse.asm`, Simone Riminucci, 2016) reads signed
+movement counters by selecting registers 10h/11h at port D4h and reading port
+D5h. Its left and right buttons are presented by the PC1 keyboard controller
+as set-1 make/break codes 77h and 79h (78h is the unused middle button).
+To enable those codes, the PC1 keyboard controller receives the five-byte data
+sequence `12h, 77h, 78h, 79h, 01h` at port 60h after command 12h at port 64h
+reports that the mapping is not already active. The sequence bytes, including
+the leading 12h, are all data-port writes.
+
+`PC1MOUSE.DRV` is a `DRVC_POINT` worker driver, wanted only when the user
+selects it in the Drivers page. Its attach check asks `OSAPI_CPU_INFO` for an
+8086-class CPU (kern_mega's protected mode has no F000h segment to read) and
+then uses the PC1 BIOS signature before touching the controller; a refusal is
+`DRVE_HW`, and every verb other than attach, detach and ready is refused
+(§51.2.2). It does not install the DOS
+driver's INT 08h/09h/33h handlers and does not program the V6335 hardware
+cursor: movement and buttons enter the existing OS cursor/event path through
+`OSAPI_MOUSE_FEED`, so os8088 retains its normal cursor, clipping and click
+semantics. The worker polls both movement counters and asks `OSAPI_KEY_DOWN`
+for the PC1 button make codes; it feeds a report only for movement or a button
+change. Attach arms the kernel's key-state map before enabling the PC1 key
+codes. While the PC1 row is attached, the kernel records 77h/78h/79h in that
+map and prevents those bytes from being enqueued as typed keys. Since the PC1
+is an XT, the kernel consumes them in INT 09h, pulses bit 7 of port 61h to
+acknowledge the 8255 byte, then sends IRQ1's EOI. Ordinary scancodes keep their
+normal path. The middle code 78h is consumed but does not map to an OS button.
+Detach stops the worker, which feeds a release for any held button on its way
+out.
+
+**The controller setup is session-long.** Nothing sends the PC1 a sequence
+that turns the button codes off again - the DOS reference has none - so once
+the row is unloaded (unticked, or suspended for a DOS session or a hibernate
+sweep, where `mouse_unhook` also returns int 09h to the ROM) the kernel no
+longer consumes 77h/78h/79h and a click reaches the BIOS as a key until the
+machine is restarted. Recording what the PC1 BIOS makes of those codes is
+part of the field checklist in `docs/plans/PC1-MOUSE-PLAN.md`.
+
+The one `DRVC_POINT` publication slot means `PC1MOUSE.DRV` and
+`USBMOUSE.DRV` are alternatives: attach of the second one is refused with the
+class-in-use error. They remain separate optional rows; neither is wanted by
+default. The PC1 row is available on `kern_big`, `kern_emu` and `kern_mega`,
+the kernels with the driver framework (kern_mega's probe refuses at the CPU
+check); `kern_small` has no driver layer.
+
+The source DOS driver's comments call register 10h horizontal (negated) and
+11h vertical, and `PC1MOUSE.DRV` maps them so: the negated register 10h is
+screen X and register 11h screen Y. The first PC1 field report's sideways
+pointer was the right-button query overwriting the X delta (now banked), and
+the field PC1 confirmed the DOS mapping once that was fixed. It starts at
+one count per pixel. The normal arm doubles a signed delta whose magnitude is
+greater than two mickeys in a sample, matching the DOS driver's default
+`Max_speed_D2 = 2` acceleration. This mapping and sensitivity remain subject
+to field measurement; no emulator in this tree models the V6335D mouse. Record
+the result for horizontal and vertical sweeps, both buttons, simultaneous
+keyboard input, and detach/restart in `docs/plans/PC1-MOUSE-PLAN.md`.
 
 ## 10. events.inc
 
@@ -192056,11 +192115,13 @@ the number of drivers that went — the bitmap of classes the first body also
 answered in `AX` is withdrawn, its one reader having stored it in a word
 nothing read back. `DQ_MAXREC` is published in `os88api.inc` so a
 caller can size that buffer without mirroring the kernel's own `DRV_MAX`.
-It is 12: kern_emu has twelve rows (CD-ROM, HTTP, VESA and §125's
-`PCIETHER.DRV`), kern_big and kern_mega eleven, and kern_small four. VESA is
-kept by the suspend sweep (§120.4) and `DRVC_NET` is never suspended
-(§96.23.6), so neither of the two rows that widened it adds a record to an
-older caller's buffer.
+It is 13, the maximum `kern_emu` table size with the optional VESA and §125
+`PCIETHER.DRV` rows and the appended PC1 mouse row; `kern_big` and `kern_mega`
+can have 12 rows, and `kern_small` has four. The PC1 row does not implement
+`DRVV_HWINFO` today, but the public buffer bound follows the table maximum so
+a later driver implementation cannot overrun a caller's buffer. VESA is kept
+by the suspend sweep (§120.4) and `DRVC_NET` is never suspended (§96.23.6), so
+those rows do not add records to an older caller's buffer.
 The kernel asserts `DRV_MAX <= DQ_MAXREC` at assembly time, because a row
 added here without widening the SDK
 would write past the end of somebody's buffer.
@@ -250551,10 +250612,11 @@ stays free and `PCIETHER.DRV` attaches. Unticking the owner releases the slot
 (`drv_release` zeroes `[drv_owner]` only for the row that holds it). It must
 cross no resident rung on any of the three; `make budget-check` holds
 `KERN_BUDGET` for kern_big and kern_emu and `KERN_MEGA_RESIDENT_KB` for
-kern_mega. The row is LAST on each, so it is row 10 on kern_big and kern_mega
-(after `VESA.DRV`'s row 9) and row 11 on kern_emu, whose absolute mouse is
-its row 5; `DRV_MAX` is 11, 12 and 11, and `DQ_MAXREC` went to 12 for
-kern_emu (§51.11.2).
+kern_mega. The row was LAST on each until §9.15's PC1 mouse row followed it,
+so it is row 10 on kern_big and kern_mega (after `VESA.DRV`'s row 9) and row
+11 on kern_emu, whose absolute mouse is its row 5; the PC1 row follows the
+optional driver rows, making
+`DQ_MAXREC` 13 on kern_emu (§51.11.2).
 
 ### 125.6 Disks and machines (pinned)
 

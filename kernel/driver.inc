@@ -56,11 +56,11 @@ DRV_VX      equ 0               ; the absolute mouse's, with a SYSTEM.CFG bit
                                 ; can evaluate DRV_MAX
 %ifdef DRV_PCIETH
 DRV_PX      equ 1               ; ...plus PCIETHER.DRV's row (SPEC.md 125.5),
-%else                           ; LAST on every big build (kern_mega's alone
+%else                           ; next-to-last on every big build (kern_mega's alone
 DRV_PX      equ 0               ; until 125.1 widened it); kern_small
 %endif                          ; assembles without it
 %ifdef KERN_EMU
-DRV_MAX     equ 10 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 11 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -74,10 +74,11 @@ DRV_MAX     equ 10 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72'
                                 ; here so that row keeps index 5. The EIGHTH
                                 ; is kern_big's seventh, EMS.DRV (SPEC.md 107)
                                 ; and the NINTH its eighth, CDROM.DRV (SPEC.md
-                                ; 119), and the TENTH its ninth, HTTPFS.DRV
-                                ; (SPEC.md 122)
+                                ; 119), the TENTH its ninth, HTTPFS.DRV
+                                ; (SPEC.md 122), and PC1MOUSE.DRV is appended
+                                ; after the optional VESA/PCI rows
 %elifdef KERN_BIG
-DRV_MAX     equ 9 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.md
+DRV_MAX     equ 10 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.md
                                 ; 121), after CDROM.DRV (SPEC.md 119), after
                                 ; EMS.DRV (SPEC.md 107), after the
                                 ; CH375 USB mouse (SPEC.md
@@ -434,7 +435,7 @@ DQ_A        equ 2               ; dw: the CLASS's own three words - for
 DQ_B        equ 4               ; dw: DRVC_SOUND, the DSP base port, then
 DQ_C        equ 6               ; dw: (IRQ | DMA<<8), then the DSP version
 DQ_SIZE     equ 8
-DQ_MAXREC   equ 12              ; the most records one call can write. It is
+DQ_MAXREC   equ 13              ; the most records one call can write. It is
 %if DRV_MAX > DQ_MAXREC         ; MIRRORED in apps/os88api.inc, so a caller can
 %error "DRV_MAX exceeds DQ_MAXREC - widen it here AND in apps/os88api.inc"
 %endif                          ; size a buffer without mirroring DRV_MAX - and
@@ -1108,6 +1109,9 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 %endif                          ; build (SPEC.md 125.5): the next free one, 0-10
                                 ; being taken on every build (5 is the absolute
                                 ; mouse's even where this build has no such row)
+    db 12                       ; PC1MOUSE.DRV (SPEC.md 9.15), after the fixed
+                                 ; PCIETHER setting; bit 12 stays stable when
+                                 ; optional VESA/PCI rows are absent
 %if ($ - %1 %+ _bit) != DRV_MAX
   %error "drv_cfgbit has drifted from drv_tab: one byte per row, same order"
 %endif
@@ -1219,6 +1223,7 @@ drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
                                 ; not kern_small's: the whole driver mechanism
                                 ; is OS88_DRIVERS already, and a 128KB machine
                                 ; with a CH375 has no disk that carries the file
+drv_f_pc1:   db 'PC1MOUSE.DRV', 0 ; SPEC.md 9.15's Olivetti Prodest PC1 mouse
 %endif
 %ifdef DRV_PCIETH
 drv_f_pcieth: db 'PCI'          ; SPEC.md 125's PCI NICs: the big builds'.
@@ -1253,6 +1258,7 @@ drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
 %1_cd:      db 'CD-ROM', 0
 %1_http:    db 'HTTP Drive', 0
 %1_usbm:    db 'USB Mouse', 0
+%1_pc1:     db 'PC1 Mouse', 0
 %ifdef DRV_PCIETH
 %1_pcieth:  db 'PCI '           ; 'PCI Ethernet': its tail IS the next title,
 %endif                          ; nine bytes of both copies (SPEC.md 125.5)
@@ -1272,6 +1278,7 @@ DRVT_EMS    equ drvt_ems - drvt_base
 DRVT_CD     equ drvt_cd - drvt_base
 DRVT_HTTP   equ drvt_http - drvt_base
 DRVT_USBM   equ drvt_usbm - drvt_base
+DRVT_PC1    equ drvt_pc1 - drvt_base
 DRVT_ETH    equ drvt_eth - drvt_base
 %ifdef DRV_PCIETH
 DRVT_PCIETH equ drvt_pcieth - drvt_base
@@ -1584,7 +1591,7 @@ vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
     db 0
 %endif
 %ifdef DRV_PCIETH
-    dw PKG_DISP, 0              ; LAST: PCIETHER.DRV (SPEC.md 125.5), every
+    dw PKG_DISP, 0              ; PCIETHER.DRV (SPEC.md 125.5), on every
     dw drv_f_pcieth, DRVT_PCIETH ; big build. DRVC_NET - ETHER.DRV's class - so
     dw 0, 0                     ; packages, net_find and the DOS packet layer
     db DRVC_NET                 ; need no change; the two are ALTERNATIVES,
@@ -1596,6 +1603,14 @@ vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
     db DRVE_OK
     db 0
 %endif
+pc1_row:                         ; PC1MOUSE.DRV is a pointing-device alternative
+    dw PKG_DISP, 0              ; final row: Olivetti PC1 mouse (SPEC.md 9.15)
+    dw drv_f_pc1, DRVT_PC1
+    dw 0, 0
+    db DRVC_POINT               ; alternative to USBMOUSE.DRV; one publisher
+    db 0                        ; wanted only when selected by the user
+    db DRVE_OK
+    db 0
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1669,6 +1684,7 @@ DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
                                 ; SPEC.md 26.7) included
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 512)
 DRVM_IMG_USBM equ 3             ; ceil(build/usbmouse.drv / 512)
+DRVM_IMG_PC1 equ 1              ; ceil(build/pc1mouse.drv / 512)
 DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 17              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
@@ -1749,6 +1765,8 @@ DRVM_USBM    equ DRVM_IMG_USBM  ; the USB mouse claims nothing: its one
                                 ; buffer is the 64-byte descriptor, in the
                                 ; image. Its worker's stack is SCH_DRV_STK of
                                 ; the kernel's, not a claim
+DRVM_PC1     equ DRVM_IMG_PC1   ; PC1 counters and buttons are in its image;
+                                 ; its worker uses SCH_DRV_STK
 DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
                                 ; buffers are bss, and a driver's bss ships
                                 ; INSIDE its image (DRV_H_IMG)
@@ -1776,8 +1794,9 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 120)
 %endif
 %ifdef DRV_PCIETH
-    dw DRVM_PCIETH              ; ...and PCIETHER.DRV (SPEC.md 125), last
+    dw DRVM_PCIETH              ; ...and PCIETHER.DRV (SPEC.md 125)
 %endif
+    dw DRVM_PC1                 ; PC1MOUSE.DRV follows the optional rows
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"

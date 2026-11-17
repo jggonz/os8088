@@ -1589,6 +1589,14 @@ FAST = [
         "stops being obvious. docs/plans/HEAP-UNPIN-PLAN.md 12 question 4. "
         "SOAK and not fast: it can only fire when a SECOND driver gains a "
         "service task, which is not a build-to-build event"),
+    Row("pc1mouse", "soak", py("tests/unit/t_pc1mouse.py"), 0.1,
+        "PC1MOUSE.DRV's button polls use AL for a keyboard scancode while AX "
+        "holds the sampled horizontal delta. Bank AX around both queries or "
+        "the 79h right-button code becomes a positive cursor step each pass, "
+        "so a stationary mouse drifts to the right. The kernel must also "
+        "consume the PC1's 77h/78h/79h scans before KBM_SCAN's early BIOS-chain "
+        "exit, including its shared mem expansion; the host-side source check "
+        "guards both paths without charging every build"),
     Row("inktab", "soak", py("tests/unit/t_inktab.py"), 0.2,
         "SPEC.md 42.23.1: Paint's two ink-class masks ARE the kernel's "
         "gfx_inktab. A one-bit canvas stores what a 1bpp SCREEN shows, so the "

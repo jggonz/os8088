@@ -61,7 +61,9 @@ KR_IRR      equ 13              ; PIC1 request
 KR_IMR      equ 14              ; PIC1 mask
 KR_X        equ 15              ; 'I': bit 0 [kbd_armed], bit 1 a mouse has
                                 ; spoken, bit 2 a PS/2 aux port, bit 3 the
-                                ; ROM hands the byte over (9.7.2); 'E': the
+                                ; ROM hands the byte over (9.7.2), bit 4 the
+                                ; PC1 driver row is loaded, bit 5 this byte
+                                ; matched the PC1 scan filter; 'E': the
                                 ; bracket's CX flags
 
 ; -----------------------------------------------------------------------------
@@ -150,6 +152,16 @@ kbg_pre:
     mov al, 'I'
     call kbg_new
     mov [kbg_cur], bx
+    ; On an XT the 8255 keeps the byte in its latch until port 61h is pulsed,
+    ; so this read is non-destructive. Capture it BEFORE the kernel's PC1
+    ; button filter too: a swallowed scan never reaches kbg_post, and this is
+    ; the evidence needed to distinguish a wrong scan mapping from a missed
+    ; filter.
+    cmp byte [cpu_tier], CPU_8086
+    jne .raw_done
+    in al, 0x60
+    mov [bx+KR_DAT], al
+.raw_done:
     mov al, [kbd_armed]
     and al, 1
     cmp byte [mou_ptr], 0
@@ -167,6 +179,12 @@ kbg_pre:
     jne .n4                     ; so KR_DAT is the byte the ROM HANDED us and
     or al, 8                    ; not a re-read of port 60h
 .n4:
+%endif
+%ifdef OS88_DRIVERS
+    cmp word [pc1_row+DRVR_SEG], 0
+    je .npc1
+    or al, 0x10                 ; diagnostic only: PC1MOUSE row is loaded
+.npc1:
 %endif
     mov [bx+KR_X], al
     inc word [kbg_n1]

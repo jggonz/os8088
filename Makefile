@@ -3630,6 +3630,10 @@ DRIVERS += $(BUILD)/thmpal.drv
 # every kern_big disk, and kern_small's $(SMALLDRIVERS) is a restatement that
 # never held it
 DRIVERS += $(BUILD)/usbmouse.drv
+# ...and the Olivetti Prodest PC1's Yamaha V6335D mouse (SPEC.md 9.15).
+# It shares DRVC_POINT with USBMOUSE.DRV, so the two rows are alternatives;
+# attach's class fence refuses a second publisher. It is optional and unticked.
+DRIVERS += $(BUILD)/pc1mouse.drv
 # ...and SPEC.md 107's EMS.DRV, a LIM EMS board's page registers: a drv_tab
 # row with SYSTEM.CFG bit 7, not wanted by default (its probe writes ports),
 # so a disk that carries it costs a machine with no board one directory slot
@@ -4929,6 +4933,25 @@ $(BUILD)/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.i
 $(BUILD)/usbmouse.drv: $(BUILD)/usbmouse.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/usbmouse.bin -o $@
 
+# PC1MOUSE.DRV - the Olivetti PC1's Yamaha V6335D mouse (SPEC.md 9.15)
+$(BUILD)/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ $<
+	@echo "pc1mouse: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pc1mouse.drv: $(BUILD)/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/pc1mouse.bin -o $@
+
+# A conservative sensitivity arm on the DOS-reference axis map the shipped
+# driver uses. Fractional mickeys are carried so slow motions still advance
+# the pointer.
+$(BUILD)/pc1slow/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/pc1slow
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -DPC1_SCALE8 -o $@ $<
+	@echo "pc1mouse (1/8 scale): $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pc1slow/pc1mouse.drv: $(BUILD)/pc1slow/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/pc1slow/pc1mouse.bin -o $@
+
 # EMS.DRV - expanded memory on a LIM EMS board (SPEC.md 107)
 $(BUILD)/ems.bin: drivers/ems/ems.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ $<
@@ -5609,6 +5632,30 @@ $(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img: $(BUILD)/usbm%.img: $(BUILD)/boot360
 .PHONY: usbmousetest
 usbmousetest: $(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img
 	@echo "usbmousetest: build/usbmsim.img + build/usbmbusy.img - USBMOUSE.DRV"
+
+# PC1MOUSETEST - a 720KB field disk for the Olivetti Prodest PC1 (SPEC.md 9.15).
+# The PC1 controller is not modeled by the emulators here. This 3.5" DD disk
+# wants the optional row (stable SYSTEM.CFG bit 12); boot it on the PC1 and
+# check attach, cursor movement, left/right clicks, keyboard operation, and
+# restart/detach. USBMOUSE.DRV is not requested, so the DRVC_POINT slot is free.
+$(BUILD)/pc1cfg/system.cfg: kernel/driver.inc | $(BUILD)
+	@mkdir -p $(BUILD)/pc1cfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 12).to_bytes(2,'little') + b'\0\0')" > $@
+
+
+$(BUILD)/pc1mouse720-ref.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS720) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $(BUILD)/pc1cfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(filter-out $(addprefix SYSTEM:,$(SYS720OMIT)),$(SYSOPTIONALARGS)) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS720) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(SYSVIDARGS) $(BUILD)/pc1cfg/system.cfg $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
+
+#> [Gate disks] pc1mousetest :: field disk for the Olivetti Prodest PC1's Yamaha mouse
+.PHONY: pc1mousetest
+pc1mousetest: $(BUILD)/pc1mouse720-ref.img
+	@echo "pc1mousetest: build/pc1mouse720-ref.img - the PC1 field disk (SYSTEM.CFG bit 12)."
+	@echo "              Carries the shipped PC1MOUSE.DRV: the DOS reference axis mapping."
 
 # EMSTEST - SPEC.md 107.7's gate disk: the 360KB system disk with a SYSTEM.CFG
 # that wants EMS.DRV (bit 7) and EMSTEST.O88 in its root. MartyPC's
