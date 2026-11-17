@@ -1,0 +1,145 @@
+BREADBOARD XT 1.0 - FIRST STEPS
+
+Breadboard XT calculates educational DC, four-state digital logic and bounded
+RC transients, including a pin-level NE555 timer. It is not SPICE. It does not
+model transistor internals, heat, damage, LED avalanche, power consumption or
+realistic output-drive limits. Calculation may run slower than real time.
+
+THE BOARD
+Columns are 1 through 30. In each column, rows a-e form a five-hole strip and
+rows f-j form another. The center trench separates them. Adjacent columns
+are separate. Every power rail breaks between columns 15 and 16. A break is
+real until a wire bridges it; FLASHER explicitly bridges the bottom negative
+rail. Crossings are not junctions: wires connect only through endpoint holes
+and their internal strips. Solid marks show the selected physical strip;
+dotted marks show other strips joined to its electrical net.
+
+One inserted lead fits in each hole, including wire ends. Put a wire into a
+neighboring hole on the same strip rather than on top of a part lead. Probes
+consume no hole. Moving/deleting a part leaves wires in their physical holes;
+that complete part edit is undoable. Stable IDs let a pin probe follow a
+moved part. Deleting its target unbinds the probe; Undo restores it.
+
+BUILD A CIRCUIT
+Use Parts or F2 to choose a part. Click its destination holes and Enter to
+commit the preview; Esc cancels without changing the document. DIP packages
+span e/f. The notch and pin-1 mark show orientation; R rotates 180 degrees.
+W chooses Wire: click explicit endpoint holes, optionally use B for up to
+two orthogonal bends, then Enter. Bends change the picture, not connectivity.
+Use V to select, M to move, E to edit value, T to edit parameter and Del to
+remove. Edit also provides wire rerouting and recoloring.
+
+RUN AND MEASURE
+Space runs/pauses; period advances one numerical step. Simulate also provides
+Run/Pause/Step/Reset. A step defaults to 1 ms of SIMULATED time. Time has
+100 us resolution; the displayed clock belongs to the circuit, not the host.
+An XT may calculate slowly. Editing pauses and marks readings stale; Run/Step
+recompiles the changed circuit. Pause retains inspectable state. Reset restores
+initial capacitor, latch and clock state, and clears scope capture.
+
+P chooses Probe; Tab changes channel A/B. A hole gives voltage relative to
+actual ground plus logic 0/1/X/Z. A part-pin binding follows stable identity.
+A supported branch gives current from pin 1 to pin 2 in microamps. A source
+with positive pin 1 therefore reads NEGATIVE while delivering energy and
+positive while absorbing capacitor backdrive. Current is not node voltage.
+Pots and ICs have no single two-terminal branch current and show N/A. Floating,
+unknown, stale, failed and paused readings are labeled, never invented 0 V.
+Click an active error in the status line to locate its part/net when available.
+
+F4 opens Scope, a separate view on short displays. Its two channels contain
+calculated voltages and simulation timestamps. +/- changes time scale; G
+cycles free/rising/falling trigger on A. Monochrome traces have different
+patterns. Pause holds capture; Reset clears it. Frequency/duty come from edge
+timestamps when enough cycles exist. Insufficient cycles and undersampling
+are labeled. The first 555 startup pulse differs from settled timing.
+
+VALUES AND MODELS
+R/Pot accepts decimal ohms: 330, 330ohm, 10k, 68k, 655.35k. Resistance is
+100..655350 ohms in exact 10-ohm increments; 333ohm is rejected, not rounded.
+Cap accepts nF/uF: 10nF, 10uF, 0.1uF; range 1..60000 nF. Supply accepts
+4500..6000 mV or 4.5..6 V; use 5V. Exactly ONE ground-referenced supply is
+supported. A second supply receives a diagnostic instead of an invented
+current-sharing result. Clock accepts us/ms/s or raw 100 us units; its period
+is 2..60000 units. Fractions have at most three decimal digits. No signs,
+exponents, arbitrary SPICE suffixes, unsupported precision or silent overflow.
+
+T edits parameters: pot wiper 0..1000 permille; capacitor initial voltage
+0..6000 mV; input 0/1/2/3 means 0/1/X/Z; clock duty 1..999 permille. A pot's
+zero-length endpoint segment is an ideal connection, not division by zero.
+LED pin 1 is anode, pin 2 cathode. Its forward model is 2 V plus 10 ohms;
+reverse blocks ideally. 5 V through 330 ohms gives about 8.824 mA, compared
+with 9.091 mA for an ideal 2 V drop alone. There is NO hidden series limiter.
+Direct all-LED paths between ideal rails are diagnosed even when current is
+under 30 mA; a resistor in parallel does not provide series limiting. All
+branch currents, including total source current, must stay within +/-30 mA.
+
+An open or unpowered LED stub can have zero current and a FLOAT/Z voltage.
+Real resistor/capacitor references and stored capacitor state still matter.
+Near-zero-current cycles made only of LEDs can maintain ambiguous clamps;
+this bounded model conservatively diagnoses FLOAT instead of choosing an
+arbitrary voltage. That does not claim the physical circuit is insoluble.
+
+HC00/04/08/32/86 use verified 14-pin PDIP maps, GND 7 and VCC 14. Always wire
+power. LOW is at/below 0.3 VCC, HIGH at/above 0.7 VCC; intermediate voltage
+is X. Undriven Z is consumed as unknown, never silently zero. Conflicting
+outputs, unsupported analog/combinational feedback and event exhaustion
+diagnose. These are educational ideal logic outputs, not real drive limits.
+IC outputs supply their loads as ideal rail drivers. Their consumption is
+omitted from power-pin current; the DC source reading covers the external
+network connected to that source node, rather than a complete IC power budget.
+
+NE555 pins: 1 GND, 2 TRIG, 3 OUT, 4 RESET, 5 CONT, 6 THRES, 7 DISCH, 8 VCC.
+RESET below 0.7 V dominates, including with unwired TRIG/THRES. Otherwise
+TRIG below VCC/3 sets; then THRES above 2 VCC/3 resets; otherwise hold. OUT
+is an ideal rail driver; DISCH changes the actual connected RC network. CONT
+supports normal open/default or a capacitor to ground. External control drive
+is not modeled and receives a diagnostic. No stored waveform runs the timer.
+
+EXAMPLES TO TRY
+LEDTEST: 5 V, 330 ohms, red LED. Expect about 8.824 mA; reverse to block.
+DIVIDER: two 10k resistors. Midpoint 2.500 V, series current 250 uA.
+POT: 10k pot at 500 permille. Wiper 2.500 V; T moves toward either end.
+SWITCH: closed switch lights the limited LED; Space toggles the selection.
+LOGIC: powered HC00, two HIGH inputs -> LOW first NAND output. A LOW input
+makes it HIGH. Other unused inputs remain Z/X.
+BROKEN: LED directly across 5 V. Expect a series-resistor diagnostic. Rewire
+with a real 330-ohm series resistor, then Run again.
+RC: 10k and 10uF. Time constant 0.1 s. At 0.1 s expect about 3.15 V at a
+1 ms step (continuous ideal 3.161 V); a smaller step converges toward ideal.
+FLASHER: 5 V, RA 10k, RB 68k, timing C 10uF, CONT bypass 10nF and 330-ohm
+LED load. Channels show OUT and timing capacitor. Settled ideal estimates
+are 0.988 Hz and 53.4% HIGH duty. Change RB, break its timing wire, ground
+RESET or remove power: the calculated operation must change.
+All examples are ordinary editable BBX documents, not canned demonstrations.
+
+FILES, RECOVERY AND KEYS
+Ctrl-N/O/S = New/Open/Save. File also has Save As and examples. Unsaved work
+uses native Save/Discard/Cancel. A failed/canceled load leaves the old source
+intact; failed saves keep it dirty. Native replacement writes a new FAT chain
+before committing its directory entry, then frees the old chain. No delete-
+before-save operation exists. A power loss during final cleanup can leave
+an old chain for file-system recovery; keep another copy of valuable work.
+
+Ctrl-Z/Y = Undo/Redo, retaining 16 complete object edits. New edits after
+Undo clear redo. Arrows pan; PageUp/Down pan four rows. F1 Help, F2 palette,
+F3 inspector, F4 scope. Esc returns/cancels; Enter advances Help pages. CGA
+uses switchable readable views rather than shrinking VGA text. State,
+polarity, selection and traces remain understandable without color.
+
+LIMITS AND SOURCES
+One 30-column board; 64 parts; 128 wires; two bends per wire; 64 active nets;
+24 unknown analog nodes; 16 undo commands; two 256-sample scope channels.
+Default capture cadence 20 ms spans 5.12 s. Node domain 0..6 V; branch current
+-30..30 mA. Bounded pivots, LED passes and events diagnose difficult circuits.
+An unfinished circuit may still be saved if its source is structurally valid.
+
+Calculation is much slower than real time on a 4.77 MHz XT. The measured
+reference flasher advances about 2.5 simulated milliseconds per real second
+at a 4 ms timestep. Larger timesteps give quicker previews with less timing
+accuracy. A 256 KB machine can run the full package alone, but the measured
+session left only 3 KB free; close other programs before opening it there.
+
+Breadboard XT 1.0 is an original os8088 application. David Shah's GPL
+Breadboard Simulator inspired the workflow; none of its code, models or art
+is incorporated. Pin maps/behavior follow TI manufacturer datasheets. See
+repository docs/breadxt/SOURCES.md and FORMAT.md for provenance and format.

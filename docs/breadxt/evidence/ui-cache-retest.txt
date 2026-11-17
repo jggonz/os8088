@@ -1,0 +1,254 @@
+os88test: -x dropped 3 row(s): breadxtcapacity breadxtcore breadxtflasher
+os88test: building 3 declared artefact(s): build/breadxt-check360.img build/breadxt360.img build/BREADXT.WPK
+os88test: soak tier - 8 rows, 190s declared, budget none  (caps: cc,ffmpeg,lame,marty,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+
+os88test: 7 emulator row(s) in a lane of 2; 0 run alone
+ ok  breadxtuihost                  6.5s
+       | breadxt UI host queue: 20 checks, 0 failures
+       | breadxt UI queue: injected defect fails as intended
+       | UI appended value char: 4 glyph cells, 1 drawing calls
+       | UI unchanged inspector: 0 glyph cells, 0 drawing calls
+       | breadxt UI host modal: 18 checks, 0 failures
+       | breadxt UI modal: injected defect fails as intended
+       | breadxt UI host damage: 12 checks, 0 failures
+       | breadxt UI damage: injected defect fails as intended
+       | breadxt UI host wide: 16 checks, 0 failures
+       | breadxt UI wide: injected defect fails as intended
+       | breadxt UI host wide-dismiss: 16 checks, 0 failures
+       | breadxt UI wide-dismiss: injected defect fails as intended
+       | breadxt UI host locate-help: 13 checks, 0 failures
+       | breadxt UI host locate-scope: 15 checks, 0 failures
+       | breadxt UI host locate-offscreen: 15 checks, 0 failures
+       | breadxt UI host locate-none: 11 checks, 0 failures
+       | breadxt UI host stale: 28 checks, 0 failures
+       | breadxt UI stale: injected defect fails as intended
+       | breadxt UI host scope-hold: 12 checks, 0 failures
+       | breadxt UI scope-hold: injected defect fails as intended
+       | breadxt UI host replace-led: 69 checks, 0 failures
+       | breadxt UI replace-led: injected defect fails as intended
+       | breadxt UI host elapsed: 6.49s
+FAIL breadxttarget                 15.1s  exit 1
+       |       bootcache be7e1e6d99153634 MISS, booted (3.30 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BBNUM.O88 -> 'Breadboard XT numeric'
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open HCLOW.BBX
+       |       menu_pick Simulate -> Step
+       | HCLOW (1250, 0) (5000, 1)
+       |       menu_pick File -> Open...
+       |       chooser open HCMID.BBX
+       |       menu_pick Simulate -> Step
+       | Traceback (most recent call last):
+       |   File "/private/tmp/os8088-breadxt/tests/breadxt_target.py", line 268, in <module>
+       |     main()
+       |     ~~~~^^
+       |   File "/private/tmp/os8088-breadxt/tests/breadxt_target.py", line 220, in main
+       |     assert app.pin(0, 1)[0] == input_mv, (name, app.pin(0, 1))
+       |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       | AssertionError: ('HCMID', (-1, 3))
+ ok  breadxtmanual                 20.7s
+       |       bootcache 9bebc7d82c83f0e9 hit (0.07 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick Parts -> Power
+       |   placed Power: id1, holes(0, 30)
+       |       menu_pick Parts -> Ground
+       |   placed Ground: id2, holes(31,)
+       |       menu_pick Parts -> Resistor
+       |   placed Resistor: id3, holes(63, 70)
+       |       menu_pick Parts -> LED
+       |   placed LED: id4, holes(100, 110)
+       |   wired 1 to 93, native elbow(3, 0)
+       |   wired 32 to 140, native elbow(20, 1)
+       |       menu_pick Simulate -> Step
+       |   native source/R/LED currents: -8824/+8824/+8824uA, three nets
+       |   powered LED body at live center(300, 119): 25/25 red interior pixels
+       |   A bound to LED id4 pin1, B to source id1 pin1
+       |       menu_pick File -> Save As...
+       |       chooser save BUILT.BBX
+       |       menu_pick File -> New
+       |       menu_pick File -> Open...
+       |       chooser open BUILT.BBX
+       |       menu_pick Simulate -> Step
+       |   native source/R/LED currents: -8824/+8824/+8824uA, three nets
+       |   powered LED body at live center(300, 119): 25/25 red interior pixels
+       |   evidence /private/tmp/os8088-breadxt/build/breadxt-final/vga-manual-built-led.png
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       | breadxt manual native: PASS elapsed 20.51s
+ ok  breadxteditor                 38.4s
+       |       bootcache 9bebc7d82c83f0e9 MISS, booted (3.30 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick Parts -> Resistor
+       |       menu_pick Edit -> Undo
+       |       menu_pick Edit -> Redo
+       |       menu_pick File -> Save As...
+       |       chooser save PLACED.BBX
+       |   evidence build/breadxt-final/vga-placed-saved.png
+       |       menu_pick File -> New
+       |       menu_pick File -> Open...
+       |       chooser open PLACED.BBX
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |       menu_pick Simulate -> Step
+       |       menu_pick Edit -> Undo
+       |       menu_pick Simulate -> Step
+       |       menu_pick Edit -> Redo
+       |       menu_pick Simulate -> Step
+       |       menu_pick Edit -> Undo
+       |       menu_pick Simulate -> Step
+       |       menu_pick File -> Save As...
+       |       chooser save RUNLED.BBX
+       |   evidence build/breadxt-final/vga-led-edited-probed-saved.png
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open RUNLED.BBX -> 'UNTITLED.BBX - Breadboar'
+       |   cold-boot BBX association retained source/probes/view
+       |       menu_pick Simulate -> Step
+       |   evidence build/breadxt-final/vga-led-source-current.png
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       | breadxt native vga: PASS elapsed 35.07s
+       | breadxt native total elapsed 38.24s
+ ok  breadxtbundle                 19.2s
+       | os88disk: /var/folders/66/5snv6tls1pj03hggcyvj894w0000gp/T/breadxt-native-p7jasbab/installed-wpk.img (360KB, 9 spt, FAT12) 11 file(s) in 1 folder(s), 64/354 clusters
+       |       bootcache 0f32a55373481004 MISS, booted (3.28 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT -> 11 entries
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       open BREADXT -> 11 entries
+       |       chooser open BREADXT/LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |   evidence build/breadxt-final/bundle-fresh-install-led.png
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 640, 435, 71) press (0,0), origin (0,0), outline (0,0), pointer (198, 191, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/bundle-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/bundle-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/bundle-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (634,449), origin (640,435), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 626, 435)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |   heap free/largest before=(515584, 515072) loaded=(369152, 368640) after=(515584, 515072); close released115712bytes incl overlay and timer
+       | breadxt native bundle: PASS elapsed 15.86s
+       | breadxt native total elapsed 19.00s
+ ok  breadxtherc                   17.4s
+       |       bootcache ce2649e253745f8b MISS, booted (2.44 host s)
+       |       open_drive B: -> 'Disk' at (103,80)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |   evidence build/breadxt-final/herc-led-board.png
+       |       menu_pick View -> Oscilloscope
+       |   evidence build/breadxt-final/herc-scope.png
+       |       menu_pick View -> Breadboard
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 720, 303, 71) press (0,0), origin (0,0), outline (0,0), pointer (198, 191, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/herc-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/herc-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/herc-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (714,317), origin (720,303), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 706, 303)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |       menu_pick File -> Open...
+       |       chooser open BROKEN.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/herc-diagnostic-located.png
+       |   heap free/largest before=(518144, 517632) loaded=(394240, 393728) after=(518144, 517632); close released115712bytes incl overlay and timer
+       | breadxt native herc: PASS elapsed 14.16s
+       | breadxt native total elapsed 17.29s
+ ok  breadxtcga                    19.4s
+       |       bootcache 7a967d1392021df9 MISS, booted (2.53 host s)
+       |       open_drive B: -> 'Disk' at (103,20)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/cga-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/cga-led-board.png
+       |       menu_pick View -> Oscilloscope
+       |   evidence build/breadxt-final/cga-scope.png
+       |       menu_pick View -> Breadboard
+       |       menu_pick File -> Save
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 640, 155, 71) press (0,0), origin (0,0), outline (0,0), pointer (102, 131, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/cga-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/cga-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/cga-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (634,169), origin (640,155), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 626, 155)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |       menu_pick File -> Open...
+       |       chooser open BROKEN.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/cga-diagnostic-located.png
+       |       menu_pick File -> Save
+       |   heap free/largest before=(518144, 517632) loaded=(396288, 395776) after=(518144, 517632); close released115712bytes incl overlay and timer
+       | breadxt native cga: PASS elapsed 16.12s
+       | breadxt native total elapsed 19.26s
+ ok  breadxt256                    19.7s
+       |       bootcache 503af4669665235c MISS, booted (2.38 host s)
+       |       open_drive B: -> 'Disk' at (103,20)
+       |       open BREADXT.O88 -> 'UNTITLED.BBX - Breadboar'
+       |       menu_pick File -> Open...
+       |       chooser open LEDTEST.BBX
+       |       menu_pick Simulate -> Step
+       |   installed LED source/load direction verified
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/256-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/256-led-board.png
+       |       menu_pick View -> Oscilloscope
+       |   evidence build/breadxt-final/256-scope.png
+       |       menu_pick View -> Breadboard
+       |       menu_pick File -> Save
+       |       menu_pick View -> Breadboard
+       |   grow before (0, 20, 640, 155, 71) press (0,0), origin (0,0), outline (0,0), pointer (102, 131, 0)
+       |   grow achieved (7, 20, 322, 128)
+       |       menu_pick View -> Inspector
+       |   evidence build/breadxt-final/256-minimum-inspector.png
+       |       menu_pick View -> Breadboard
+       |   evidence build/breadxt-final/256-minimum-value.png
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/256-minimum-help.png
+       |   grow before (7, 20, 322, 128, 583) press (634,169), origin (640,155), outline (0,20), pointer (352, 125, 0)
+       |   grow achieved (7, 20, 626, 155)
+       |       menu_pick View -> Breadboard
+       |   native grow320x128 inspector/value/help and restore verified
+       |       menu_pick File -> Open...
+       |       chooser open BROKEN.BBX
+       |       menu_pick Simulate -> Step
+       |       menu_pick View -> Help
+       |   evidence build/breadxt-final/256-diagnostic-located.png
+       |       menu_pick File -> Save
+       |   heap free/largest before=(124928, 124416) loaded=(3072, 2560) after=(124928, 124928); close released115712bytes incl overlay and timer
+       | breadxt native 256: PASS elapsed 16.41s
+       | breadxt native total elapsed 19.53s
+
+os88test: 7 passed, 1 failed, 0 skipped in 120.6s, 25.1s charged (budget none)
+failed: breadxttarget

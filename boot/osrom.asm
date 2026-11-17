@@ -461,7 +461,9 @@ rom_patch:
     ; --- HMA: no module may be HELD. This runs after the mount, and a module a
     ; boot had already read would carry far references the lists below never
     ; reach - so its claim is refused rather than guessed at. None is held at
-    ; this point in any boot measured, which is what makes the refusal free
+    ; this point in any boot measured, which is what makes the refusal free:
+    ; the one mod_need before it is hibernation's P1, and hb_probe_x evicts
+    ; the image its drop kept (jggonz/os8088#370; tests/hdhiber.py)
     mov ax, RT_KSEG
     mov es, ax
     mov di, RT_MODTAB

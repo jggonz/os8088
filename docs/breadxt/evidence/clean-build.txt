@@ -1,0 +1,12 @@
+kernel: 105904 bytes (image rung + boot overlay) - build 324
+kernel: 63328 bytes (image rung + boot overlay) - build 324
+os88test: -x dropped 2 row(s): checkdocs docindex
+os88test: fast tier - 57 rows, 45s declared, budget 30s  (caps: cc,ffmpeg,lame,marty,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+os88test: 56 passed, 0 failed, 1 skipped in 18.6s, 15.3s charged (budget 30s)
+os88pkg: 'BREADXT' entry=+0x0070 image=32670 bss=32180 icon=yes assoc=1 glyph=reduced -> build/breadxt.o88
+kernel: 106272 bytes (image rung + boot overlay) - build 324
+kernel: 146497 bytes (image rung + boot overlay) - build 324
+budget-check: kern_big KERN_SIZE 95,232 of KERN_BUDGET 100,864 - 5,632 spare
+budget-check: kern_small KERN_SIZE 57,344 of KERN_BUDGET 64,000 - 6,656 spare
+budget-check: kern_emu KERN_SIZE 95,232 of KERN_BUDGET 100,864 - 5,632 spare
+budget-check: kern_mega resident 61,440 of KERN_BUDGET 68,096 - 6,656 spare

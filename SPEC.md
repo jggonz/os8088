@@ -165598,7 +165598,9 @@ is what changes them: `[api_coldseg]`'s high byte (`XMEM.DRV` puts `.cold` in
 the HMA) and `[vid_kind]` (SYSTEM.CFG's adapter switch); the HMA pool's table
 (`ROMF_HTAB`) does not exist before `XMEM.DRV` either. So `hbm_ask` takes a
 mismatch there as **not yet** while `[hb_down]` = 1 (P1): no toast, nothing
-deleted, the image dropped, and P2 asks again and decides — a P1 that deleted
+deleted, the image dropped - and under `MOD_CACHE` evicted rather than kept
+(`hb_probe_x`, jggonz/os8088#370), so `COLDHMA.SYS` finds no module held
+(2.10.7) - and P2 asks again and decides — a P1 that deleted
 an HMA image would be silent data loss. `[hb_down]` is the window's armed
 button, which nothing reads until the Hibernate window opens and zeroes it,
 so it carries the state between the two calls for no resident byte: 0 before
@@ -253454,3 +253456,333 @@ is the story list (PD-01 to PD-30), the platform record and the capability
 matrix. Nothing in the kernel changes for it: it is a package over the
 published API (`READ_SEQ`, `WRITE_SEQ`, the Standard File dialog, the
 clipboard, the parts standard of §20.12) and §73's C toolchain.
+
+
+## 130. Breadboard XT — educational circuit workbench, written in C
+
+Breadboard XT (`apps/breadxt/`, `BREADXT.O88`, `.BBX`) is a native editable
+breadboard with bounded DC, four-state HC logic and backward-Euler transient
+simulation, including an idealized pin-level NE555. This section is the
+application contract; `docs/plans/BREADXT-PLAN.md` records delivery status,
+`docs/breadxt/CONTRACT.md` the source interfaces, and
+`docs/HOW-BREADXT-WAS-BUILT.md` the measured build diary. Planned capabilities
+are not claims of implemented or tested behavior.
+
+### 130.1 Authority and boundaries
+
+The user's Breadboard XT brief and concept provide product/UI direction.
+BreadboardSim at commit `0ba38d35a9f7b9cd53a226865d20b7d94faff948` is
+workflow inspiration only: none of its GPL code, models, artwork or data is
+copied. `docs/breadxt/SOURCES.md` identifies inspected files and datasheets.
+Native controls, fonts, menus, close alerts and file dialogs use the SDK.
+The shell permits five menus: File, Edit, Parts, Simulate and View; Help is
+a View command and About uses the standard application entry. There is no
+private application menu bar and no new kernel facility.
+
+### 130.2 Document and physical topology
+
+One board has 30 columns, terminal rows a–j, and four power-rail rows.
+Hole = row*30 + zero-based column, 0..419: rows0/1 upper positive/negative,
+2..6 a..e, 7..11 f..j, 12/13 lower positive/negative. Each terminal column
+has independent a–e and f–j strips. Every rail is split between columns15
+and16, making eight separate rail segments; this break is drawn.
+
+At most64 parts and128 wires, two drawing-only orthogonal bends per wire,
+64 active electrical nets and24 unknown analog voltages. Only occupied
+strips count against the electrical-net limit. Connections are made through
+strips and wire endpoints, never a drawing intersection. One inserted lead
+per hole includes wire endpoints. Removing a part leaves independent wires
+in their holes; removal is one undoable command. Sixteen complete commands
+retain before/after records; an edit after Undo discards the redo branch.
+
+Parts and wires have stable nonzero16-bit IDs. DIP pin1 starts on row f
+with the notch at the left; lower pins increase to the right, upper pins
+return left along e. Rotation reverses this footprint while retaining pin
+identity. Resistors, LEDs, switches, capacitors, pots, ground, supply, logic
+inputs/indicators/clocks, SN74HC00/04/08/32/86N and NE555P use actual pins.
+Pin maps and validation are defined once in the model.
+
+### 130.3 Numbers, solver and publication
+
+C integers and pointers are16bits. Addressable objects are static and no
+C floating type, long integer, struct-by-value or FPU is used. The solver
+uses V/mS/mA opaque eight-byte records through the shared `apps/os88fp.inc` software
+arithmetic, never initializes its optional hardware path, and checks
+accepted ranges, pivots, finite results, residuals and iteration bounds.
+Parameters: resistance in10-ohm units (100..655350ohms), capacitance in nF
+(1..60000), supply4500..6000mV, pot wiper0..1000 permille. Time is a pair
+of unsigned words counting100us; default step10units (1ms), convergence
+fixture5units (0.5ms). Published voltages are mV, branch currents uA from
+pin1 to pin2, magnitude at most30000uA; larger values fail before conversion.
+Analog domain is0..6000mV; negative published sentinel values mean floating,
+unknown or failed, never valid zero. A supplying source has negative pin1-to-pin2
+current; current absorbed into its positive terminal is positive. Exactly one
+ground-referenced supply is supported; a second source is diagnosed rather than
+silently choosing a logic rail or inventing parallel-source currents.
+
+The absolute pivot threshold is1e-9mS, with1e-12 relative to the row maximum.
+KCL residual allowance is1e-6mA plus1e-7 times the incident absolute current;
+tiny incident sums use the absolute allowance alone. Voltage enclosure allows
+1uV rounding at0/6V. Results are rounded to integer mV/uA only after validation.
+
+Nodal analysis uses fixed ground/supply nodes, bounded pivoting and bounded
+LED active-set iteration. The LED is an ideal reverse block and a forward
+2V source plus explicitly documented10ohm on-resistance; it has no hidden
+current limiter. An active all-LED path between different ideal fixed rails
+is diagnosed even when the summed on-resistance yields less than30mA; a parallel
+resistor is not a series limiter. Zero-current
+LED boundaries are checked without their diode stamp: an otherwise unreferenced
+node publishes FLOAT/Z rather than an invented2V. Genuine resistor/capacitor
+references retain valid boundary solutions. Each step re-arms ON candidates
+within the bounded active-set iteration. Ambiguous cyclic zero-current LED-only
+references receive a conservative floating-network diagnostic; this educational
+model does not claim a general diode complementarity solver.
+Capacitors use backward-Euler companions, retaining the previous committed
+terminal voltage. A pot endpoint's zero-length segment is ideal connectivity.
+Diagnostics distinguish absent ground, floating/disconnected nets, fixed
+voltage conflict, source short, singularity, numeric range, nonconvergence,
+invalid power, contention, oscillation/event bound and unsupported bridges.
+
+HC input levels are LOW<=0.3VCC, HIGH>=0.7VCC; intermediate, undriven or
+conflicting inputs retain explicit X/Z state. Ideal HC output levels are
+0/VCC; unsupported analog feedback/output bridges are diagnosed.
+Ideal HC/555 output drivers supply loads directly; their load and quiescent
+consumption are omitted from power-pin current. The DC source reading covers
+the external stamped network at its node, not a complete IC power budget.
+NE555 pins1GND/2TRIG/3OUT/4RESET/5CONT/6THRES/7DISCH/8VCC follow TI's
+function table: RESET below0.7V dominates; otherwise TRIG belowVCC/3 sets;
+otherwise THRES above2VCC/3 resets; otherwise retain. Output and discharge
+stamps act on actual nets. Only default CONT with an optional bypass
+capacitor to ground is supported; externally driven control is diagnosed.
+
+Edits pause, invalidate results and require compile on Run/Step. Pause
+retains dynamic state and inspectable results; Reset returns capacitors,
+clocks and timer latches to initial conditions and clears scope capture.
+Simulation work occurs only in bounded lock-free wake batches, never paint.
+Publication occurs only after an entire numerical step completes; paint
+reads committed results. Simulation time is independent of wall/OS time.
+
+### 130.4 Scope and display
+
+Two channels each retain256 signed-mV samples with shared32-bit100us
+timestamps. Free/rising/falling capture and time/voltage scales derive from
+actual timestamps, with explicit undersampling and insufficient-cycle state.
+Traces hold the older sample until the next timestamp, then change vertically;
+they do not interpolate a false analog ramp between digital edges.
+The compact frequency/duty readout accepts periods through6.5535s; longer
+measured periods retain their32-bit timestamps and show `long period`.
+OUT and timing-capacitor probes use ordinary hole bindings.
+VGA640x480 shows palette, canvas, inspector and docked scope; Hercules
+720x348 uses monochrome patterns; CGA640x200 uses a readable panned canvas
+and alternate palette/inspector/scope views. Rendering follows window
+damage and caches changed instrument fields; no full-screen framebuffer.
+
+### 130.5 Persistence and distribution
+
+BBX version1 is bounded little-endian binary:48-byte header and16-byte
+part/wire records, maximum3120bytes. The final field table and host inspector
+live in `docs/breadxt/CONTRACT.md`; serialized source contains no authoritative
+netlist or solver cache. Header includes board-profile1 and hole/stable-part-
+ID/pin/branch probe bindings. Loads validate into a separate document before
+commit. Whole-file native writes use the OS's allocate-new-chain, commit
+directory, then free-old-chain replacement behavior (18.4), retaining dirty
+state on reported failure. No application delete-before-save path exists.
+
+The C package uses an embedded eager overlay when needed (73.14.2), native
+BBX association and original procedural icon/art. On-demand `breadxt`,
+`breadxtdisk` and `breadxtbundle` build the package, all four software-disk
+geometries and a conventionally verified WPK. The everything-disk/live payload
+includes its own BREADXT folder. Included examples are ordinary
+editable BBX files. There is no build-time upstream dependency. The final
+verification includes actual VGA/CGA/Hercules XT models, a256KB machine and
+kern_mega; measured sizes/memory and any unavailable emulator check belong to
+the evidence report, separately from build results.
+
+### 130.6 The workbench face
+
+The user's concept, `docs/breadxt/design/workbench-mockup.png` (2026-11-16),
+is the authority for the face; this section is how the OS answers it. The
+document model, solver, file format and every behaviour in 130.1-130.5 are
+unchanged. The face replaces the text-button strip and the bare board: a
+tool bar of picture buttons, a parts palette with categories and an examples
+list, a cream breadboard with drawn components, a right-hand inspector with
+a value spinner, a probe readout and circuit figures, a docked oscilloscope
+and a status bar.
+
+**The OS's answers to the concept.** The bar keeps `BreadXT`: `Breadboard
+XT` fits the app cell (15 characters, 12.2) but pushes View off a 640-pixel
+bar; the window title carries the full name. There is no sixth menu (`MENU_APPMAX` = 5):
+Help is View > Help and F1, and the status bar's `F1 Help` box opens it; About
+is the application menu's (`OSAPI_ABOUT_SET`). The window's title bar and
+stripes are the window manager's. Nothing else in the concept needs a kernel
+facility.
+
+#### 130.6.1 Layouts
+
+One layout is chosen at every full paint from the content box
+(`OSAPI_WM_GEOM`), largest that fits:
+
+| layout | content | adapter it is for | what is on it |
+|---|---|---|---|
+| FULL | w >= 600, h >= 380 | VGA 640x480 | tool bar, palette and examples, tabs over the board, inspector, docked scope, `Hole:` line, status bar |
+| MID | w >= 560, h >= 240 | EGA 640x350, Hercules 720x348 | as FULL without the docked scope: the centre tabs are Breadboard, Net list and Scope; the Examples list ends in `More...` when fewer than eight rows fit |
+| COMPACT | anything smaller | CGA 640x200, a small window | a short tool bar, view tabs (Board, Parts, Inspect, Scope, Nets) and one view at a time over the whole width; the palette and examples lists run in two columns |
+
+Type is the WIN16 faces, shared as SOURCE (`apps/win16/fonts/*.txt`, read by
+the art tool; Wine's System and MS Sans Serif strikes, LGPL-2.1-or-later):
+`dlg13` on FULL, `dlg10` on MID, `dlg08` on COMPACT, and the readout's
+digits from `sys16`/`sys12` (COMPACT's from `dlg08`). Board hole pitch is
+12 px across and 12/10/8 px down on FULL/MID/COMPACT; COMPACT 624 px or
+wider takes 20 px across, which is square on CGA's tall pixels. Zoom is
+20 px across. The rails stand half a row off the terminal strips and the
+trench is one row. Every hole position, hit test and test harness reads
+`bu_hx`/`bu_hy` (`gx + (col - panx) * pitch`, `gy + (row - pany) * py +
+gap(row) - gap(pany)`, gap = half a row below row 2, a row below row 7 and
+half a row below row 12), never a copy.
+
+#### 130.6.2 Drawing: one band in the card's own format
+
+Every face element is composed off the glass into ONE band and put down
+with one call. The band is already what the card wants, so nothing is
+converted on the way out: on a 4bpp display four bit planes (plane k at
+k * pw * h, pw = w / 8) for `OSAPI_GFX_BLITP` with the region-walk bit; on a
+1bpp display one plane for `OSAPI_GFX_BLIT1`, each colour becoming a 2x2
+pattern from the face's mono table. Where BLITP refuses (a window part off
+the screen) `bx_rows` says so first, the strip holds half the rows, and the
+planes are unpacked into the other half for `OSAPI_GFX_BLIT4`. An area
+taller than the band is emitted in strips; each strip recomposes only what
+falls inside it.
+
+The band is a heap claim of its own, 16 KB (51 rows a strip at 640 wide;
+the file buffer's 3,120 bytes held 9), declared movable with an
+`os88_onmove` that keeps `bx_bseg`. Refused, the package's 3,120-byte file
+buffer (`bu_workbits`; file I/O and paint never overlap, 130.3) stands in,
+so a tight machine pays in strips, never in a refused launch. Every strip
+re-walks the face's sections, so strip count is the first cost of a paint.
+
+The drawing core is `apps/breadxt/draw.inc` (`bx_*`, resident assembly):
+
+- **fill and dither** - a masked first byte, `rep stosw`, a masked last
+  byte, the even/odd row bytes swapped, nothing per row read from memory; a
+  solid one-byte-wide column (a frame side, a wire) is one OR or AND a row;
+- **sprite** - light magenta transparent, every colour through `bx_map`
+  (resistor bands, lit and dim LEDs, greyed buttons from one picture), eight
+  pixels gathered into four plane bytes and a mask a step on colour;
+- **text** - transparent glyphs over the band, a glyph row read whole and
+  merged into each plane as an OR or an AND (a solid colour is 00h or FFh a
+  plane); on 1bpp a glyph is white where its colour is all lit, else black,
+  never a grey's dot pattern;
+- **dots** - dotted lines, a patterned span for steps 2, 4 and 8;
+- **out** - the emitters above.
+
+No element writes the glass twice and the face keeps no framebuffer.
+
+Colour roles (EGA indices): window ground light grey dithered with white;
+panels white; headers black text over dark-grey pinstripes; board cream
+(white with a one-in-four yellow dither); holes dark grey; positive rails
+red, negative rails blue; trench light grey dither; selection a dark-grey
+dashed box; list selection blue with white text; scope ground black, grid
+green dots, channel A light green, channel B yellow; status lamp light
+green running, yellow paused, light red error, grey stale. Light magenta is
+the art's transparency key and is never drawn. On 1bpp, black, the blues,
+greens, reds, cyan and magenta are black; white, yellow, light green and
+light cyan are white; brown and dark grey are 50% checkers and light grey is
+75% white, so wires on the board stay black lines and traces on the scope
+stay white. Channel B is drawn dashed on 1bpp.
+
+#### 130.6.3 Art
+
+`tools/os88bbart.py` builds `BBART.BIN` from `apps/breadxt/art/sprites.txt`
+(one character per EGA colour, `.` transparent; drafted once from the codex
+master `art/master.png`, then finished by hand - `art/PROMPT.md` keeps the
+exact prompt), the WIN16 font art and `art/help.txt`. It writes a table of
+16-bit offsets in `apps/breadxt/art.h` order (`BA_*`, checked both ways);
+sprites as width, height and packed 4bpp rows; fonts as height, ascent,
+widths and, per glyph, its first lit row, its lit row count and two bytes a
+row (no glyph is wider than 16), so the core never walks bits; and the help
+text (`BA_HELP`) as NUL-terminated lines ending in an empty one, read a line
+at a time by `bx_artstr`. `--selfcheck` and `png DIR` run as for CDRack.
+
+The art is part 1 of `BREADXT.O88`, `OP_ASSET | OP_COMP | OP_LAZY`, after the
+eager overlay (`CC_PARTS_AFTER_OVL`, 73.14.2). `os88_main` fetches it when
+`os88_part_lazyok(1)` says it fits. When it does not (too little heap left -
+the 256 KB machine of 130.5 still has room, measured in
+`docs/breadxt/DEVELOPER.md`), the face is drawn PLAIN: the same layout with the kernel's 8x8 glyphs
+(`OSAPI_FONT_GLYPHS`) and text captions instead of pictures, the status bar
+says `Plain face: low memory`, and Help points at `HELP.TXT`, which every
+disk carries. The face never refuses a launch the previous one accepted.
+
+The examples are ordinary `.BBX` files in the package's own folder (130.5):
+`os88_main` notes that folder before any document is opened, and an example
+is read from it and the document's folder restored. Their builders are
+host-only (`examples.c` under `BB_HOST`), the exporter that writes them.
+
+#### 130.6.4 Sections and the cache
+
+The face is 27 SECTIONS (`S_*` in `face.c`): the tool bar, nine buttons, the
+run state, the compact tabs, the palette, the centre box, the tabs, the
+view, the `Hole:` line, the scope header and plot, the right box, the
+inspector, the probe box, the circuit figures, the status bar and its time,
+message and readout fields. Each has a rect from the layout, and a paint of
+any rect walks every section that crosses it, in that order, each laying its
+own ground, so a part of the glass is composed the same way whatever asked
+for it. **A section draws only inside its rect**: a pixel outside one is
+drawn by a full paint and missed by an incremental one. `breadxtuihost`'s
+`sections` mode holds this over every layout and view.
+
+Each section but the grounds and the scope plot keeps a 16-bit key: its
+draw code run with `bu_keying` set, hashing the primitives' arguments
+instead of drawing them. An update re-keys and repaints only the sections
+whose key moved; a full paint keys everything first, so both are one code
+path. A user event or a command (`BU_UIKEY`) re-keys every section; the
+simulation alone re-keys only the ones it can move (the run state, Run and
+Pause, the inspector, probe and circuit boxes, the `Hole:` line, the scope
+header, the view and the status fields). The board keeps 130.4's dirty row
+span. The scope recomposes at most every fourth tick while running (130.4),
+and then only its plot and the line under it. A paint caches the trace's
+points and every part's and wire's extent once, in `bb_stage` (free between
+commands), so each strip only compares.
+
+#### 130.6.5 Controls
+
+| control | does |
+|---|---|
+| Select, Wire, Probe | the tools (V, W, P); the current one is drawn pressed |
+| Rotate, Undo | Edit > Rotate, Edit > Undo |
+| Run, Pause, Step, Reset | Simulate's four commands; Pause greys while stopped, Run while running |
+| run-state field | lamp and `Running`, `Paused`, `Stale` or the diagnostic; a click on a diagnostic locates it |
+| Parts category box | cycles Basics, Logic, More (also F2, and Tab while the palette shows) |
+| a palette row | chooses that part (Wire chooses the wire tool); the chosen row is highlighted |
+| an Examples row | opens that example through the save/discard/cancel rule; `More...` opens the Examples page |
+| Breadboard / Net list / Scope tabs | the centre view; Net list prints each occupied net, its committed voltage and its connections, the selected hole's net highlighted (PgUp/PgDn page it) |
+| inspector value box | opens the value editor (E); its up/down arrows step the value through E12 (resistance), 1-2.2-4.7 (capacitance), 100 mV (supply) or 1-2-5 (clock period) and commit as one undoable edit |
+| inspector Rotate / Toggle | rotate the part; Toggle opens or closes a switch and steps a logic input |
+| probe box | switches channel A/B (Tab) |
+| scope header button | hides or shows the docked scope (F4) |
+| status bar | a click locates the diagnostic, switching to the board view; the `F1 Help` box opens Help |
+
+Every key of 130.4's UI keeps its meaning; F1-F4, the arrows, PgUp/PgDn,
+`+`/`-` (time/div) and G (trigger) are unchanged.
+
+#### 130.6.6 Cost
+
+The face spends resident bytes on its drawing core and nothing else: the
+layout, sections and controls are overlay code (`ovl_*`) except `bu_layout`,
+which every paint and click calls; the 40 help lines moved from resident
+literals into the art; the example builders moved to the host. The art part,
+the band claim, the resident image and bss, the overlay and the 640 KB and
+256 KB heap figures are recorded in `docs/breadxt/DEVELOPER.md`.
+
+Measured on MartyPC's 4.77 MHz XT, the 555 flasher opened (guest seconds for
+the paint that follows the load; main before the face in brackets):
+
+| adapter | first paint | running pace |
+|---|---|---|
+| CGA (5150) | 1.43 s (1.05 s) | 0.9 ms simulated per s (0.9) |
+| Hercules (5150) | 2.95 s (1.45 s) | 0.9 ms per s (0.7) |
+| VGA (XT) | 6.22 s (1.42 s) | 0.6 ms per s (0.7) |
+
+A paint is priced by planes: every lit byte on VGA is four read-modify-
+writes where 1bpp is one, which is why VGA's first paint is the outlier.
+While running, a VGA update (the scope plot, the readouts) costs about
+0.5 s and the simulation keeps the rest.

@@ -1,0 +1,32 @@
+breadxt UI host queue: 20 checks, 0 failures
+breadxt UI queue: injected defect fails as intended
+UI appended value char: 4 glyph cells, 1 drawing calls
+UI unchanged inspector: 0 glyph cells, 0 drawing calls
+breadxt UI host modal: 18 checks, 0 failures
+breadxt UI modal: injected defect fails as intended
+breadxt UI host damage: 12 checks, 0 failures
+breadxt UI damage: injected defect fails as intended
+breadxt UI host wide: 16 checks, 0 failures
+breadxt UI wide: injected defect fails as intended
+breadxt UI host wide-dismiss: 16 checks, 0 failures
+breadxt UI wide-dismiss: injected defect fails as intended
+breadxt UI host locate-help: 13 checks, 0 failures
+breadxt UI host locate-scope: 15 checks, 0 failures
+breadxt UI host locate-offscreen: 15 checks, 0 failures
+breadxt UI host locate-none: 11 checks, 0 failures
+breadxt UI host stale: 28 checks, 0 failures
+breadxt UI stale: injected defect fails as intended
+breadxt UI host scope-hold: 12 checks, 0 failures
+breadxt UI scope-hold: injected defect fails as intended
+FAIL ui:207 !memcmp(baseline,actual,sizeof(actual))
+FAIL ui:207 !memcmp(baseline,actual,sizeof(actual))
+breadxt UI host replace-led: 62 checks, 2 failures
+breadxt UI replace-led: injected defect fails as intended
+Traceback (most recent call last):
+  File "/private/tmp/os8088-breadxt/tests/breadxt_ui_host.py", line 52, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/private/tmp/os8088-breadxt/tests/breadxt_ui_host.py", line 46, in main
+    assert not failed, f'positive UI families failed: {failed}'
+           ^^^^^^^^^^
+AssertionError: positive UI families failed: ['replace-led']

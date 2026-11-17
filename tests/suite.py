@@ -570,6 +570,27 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
                "build/hdd.hma.bin", "build/net.hma.bin",
                "build/sound.hma.map", "build/hdd.hma.map")),
+    Row("hdhiber", "soak", py("tests/hdhiber.py"), 5.0,
+        "SPEC.md 87.5, jggonz/os8088#370: a hibernation RESUMES on a machine "
+        "that boots from the image's own fixed disk AND has an HMA - the live "
+        "USB's shape, which the 2026-11-16 release refused on every such "
+        "machine (`Hibernation: other build`, both files deleted). P1 defers "
+        "an HMA image, and its drop KEPT HIBER.DRV (MOD_CACHE), so "
+        "COLDHMA.SYS refused to move `.cold` with a module row standing and "
+        "P2 saw 08 against the image's FF. hmahiber boots the FLOPPY, so its "
+        "P1 never meets a pointer; every MartyPC row is an 8088 with no HMA - "
+        "nothing had this machine. A FAT16 C: with the kernel, XMEM.DRV, "
+        "COLDHMA.SYS and HIBER.DRV, -m 128: premise `.cold` in the HMA, "
+        "hibernate, power off, boot C: -> [hb_resumes] 1, no refusal toast, "
+        "[api_coldseg] FFFF, both files gone. RED verified with hb_probe_x's "
+        "eviction reverted: [hb_resumes] 0, 'other build', 0842. WHY QEMU: "
+        "the closed list, entry 1. NEEDS QEMU 9, as hmahiber. secs measured "
+        "3.3. timeout=300, p2hiber's reason: its two waits are GUEST-budgeted "
+        "(120 + 120 guest s) and the default 60s wall backstop would report "
+        "the red arm as a bare timeout instead of step 2's numbers",
+        needs=("qemu", "qemu9", "nasm"), timeout=300,
+        wants=("build/kernel.sys", "build/mbr.bin", "build/boothd.bin",
+               "build/xmem.drv", "build/coldhma.sys", "build/hiber.drv")),
     Row("p2hiber", "soak", py("tests/p2hiber.py"), 10.0,
         "SPEC.md 96.45.2.4, docs/plans/KERN-MEGA-PLAN.md 14.57: kern_big's "
         "PS/2 mouse after a hibernate's REBOOT-route resume. WHY QEMU: the "
@@ -1775,6 +1796,77 @@ FAST = [
     Row("ccmake", "soak", py("tests/unit/t_ccmake.py"), 2.1,
         "automatic compiler setup: missing/partial install, parallel dependents, "
         "warm reuse, setup failure propagation and fresh live-media dependencies", cpus=4),
+    Row("breadxtcore", "soak", py("tests/breadxt_core.py"), 12.1,
+        "SPEC.md 130: shipping topology, editor history, staged BBX codec, "
+        "DC/HC/RC/555 and scope against independent fixtures and randomized "
+        "Cholesky/KCL answers; six expectation and three measured-output "
+        "corruptions must fail. Host arithmetic only; target ABI has its own row",
+        needs=("cc",)),
+    Row("breadxtuihost", "soak", py("tests/breadxt_ui_host.py"), 6.3,
+        "SPEC.md 130: actual native UI callbacks under a clipped host glass "
+        "check queued-edit ownership, modal text damage, deferred repaint and "
+        "diagnostic location/staleness and sample-hold scope; eight "
+        "reintroduced defects must go red",
+        needs=("cc",)),
+    Row("breadxttarget", "soak", py("tests/breadxt_target.py"), 55.4,
+        "SPEC.md 130: real8088 software-number cdecl ABI (including a red "
+        "answer and restoration), analog HC thresholds, reset priority, "
+        "floating LED, source current direction, B-only edges, RC oracle and "
+        "measured UI stack; host-double correctness cannot establish these",
+        needs=("marty", "nasm"), timeout=360,
+        wants=("build/breadxt-check360.img",)),
+    Row("breadxtcapacity", "soak", py("tests/breadxt_target.py", "--capacity"), 15.0,
+        "SPEC.md 130: installed24-unknown series network checks every "
+        "voltage/current, accepts real Help input during elimination, and "
+        "records XT guest cycles for computation, input and scope painting",
+        needs=("marty", "nasm"), timeout=300, alone=True,
+        wants=("build/breadxt-check360.img",)),
+    Row("breadxtcga", "soak", py("tests/breadxt.py", "--only", "cga"), 17.5,
+        "SPEC.md 130: actual640x200 compact board/inspector/scope, pan, "
+        "native322x128 minimum, value/help/diagnosis and owned-claim cleanup",
+        needs=("marty", "nasm"), timeout=240,
+        wants=("build/breadxt360.img",)),
+    Row("breadxteditor", "soak",
+        py("tests/breadxt.py", "--only", "vga", "--editor-only"), 35.6,
+        "SPEC.md 130: real mouse resistor/bent-wire editing, Undo/Redo, "
+        "330-to680 LED current, stable probes and native save; flushed FAT "
+        "reboots cold, BBX association reopens and solves the saved circuit",
+        needs=("marty", "nasm"), timeout=300,
+        wants=("build/breadxt360.img",)),
+    Row("breadxtmanual", "soak", py("tests/breadxt_manual.py"), 23.4,
+        "SPEC.md 130: empty board to working LED entirely through native "
+        "Power/Ground/R/LED placement and two wires, calculated signed "
+        "current and A/B probes, SaveAs/New/Open/Step plus independent "
+        "flushed FAT/BBX decoding and full owned-claim cleanup",
+        needs=("marty", "nasm"), timeout=300,
+        wants=("build/breadxt360.img",)),
+    Row("breadxt256", "soak", py("tests/breadxt.py", "--only", "256"), 17.2,
+        "SPEC.md 130: BIOS256KB verified, full-capacity package loads and "
+        "solves LED, compact/minimum views and error navigation work, and "
+        "all115712 owned region/overlay bytes return on close",
+        needs=("marty", "nasm"), timeout=240,
+        wants=("build/breadxt360.img",)),
+    Row("breadxtherc", "soak", py("tests/breadxt.py", "--only", "herc"), 18.0,
+        "SPEC.md 130: real720x348 Hercules board/inspector/scope, native "
+        "minimum window and locatable error, LED oracle and claim cleanup",
+        needs=("marty", "nasm"), timeout=240,
+        wants=("build/breadxt360.img",)),
+    Row("breadxtbundle", "soak", py("tests/breadxt.py", "--only", "bundle"), 19.0,
+        "SPEC.md 130: verified current WPK unpacked with the canonical "
+        "reader to a fresh FAT installation, booted from its installed "
+        "folder, LED solved and minimum views/owned-claim cleanup exercised",
+        needs=("marty", "nasm"), timeout=240,
+        wants=("build/breadxt360.img", "build/BREADXT.WPK")),
+    # Measured802.8s in the final union with three absent periods after the
+    # timing-wire deletion; the guest clock gates the calculation.
+    Row("breadxtflasher", "soak",
+        py("tests/breadxt.py", "--only", "vga", "--flasher-only"), 802.8,
+        "SPEC.md 130: installed pin-level555 at68k/4ms and edited10k/1ms, "
+        "three settled periods within2% independent period/duty oracles, "
+        "actual two-channel capture, Pause/Step, timing-wire Delete/Undo and "
+        "recovery; guest-cycle speed is reported separately from simtime",
+        needs=("marty", "nasm"), timeout=2400,
+        wants=("build/breadxt360.img",)),
     Row("imager", "soak", py("tests/unit/t_imager.py"), 0.1,
         "host media detection, image compatibility, confirmation and read-back "
         "verification without writing physical devices"),

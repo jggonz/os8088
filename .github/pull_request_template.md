@@ -14,8 +14,9 @@
 ## Screenshots
 
 <!-- REQUIRED for a change to what the machine draws (CONTRIBUTING.md section 7,
-     CLAUDE.md "Pull requests show the change"). The pr-screenshots check
-     fails a PR touching apps/, kernel/, drivers/, faces/ or boot/ without one.
+     CLAUDE.md "Pull requests show the change"). A PR touching apps/,
+     kernel/, drivers/, faces/ or boot/ needs one, or a "No visible change:
+     <why>" line.
 
      - One per adapter the change reaches: VGA, CGA, Hercules (and EGA where
        it has its own layout). Crop and zoom a small change.

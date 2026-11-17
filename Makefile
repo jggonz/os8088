@@ -11323,6 +11323,89 @@ $(BUILD)/msegbz360.img: $(BUILD)/msegbzd/MSEG.O88 tools/os88disk.py | $(BUILD)
 msegb: $(BUILD)/msegb.img $(BUILD)/msegb360.img $(BUILD)/msegbz.img \
        $(BUILD)/msegbz360.img
 
+# Breadboard XT's real 8088 arithmetic bridge capability fixture.
+$(eval $(call CC_PACKAGE,bbnum,../tests/breadxtnum))
+$(BUILD)/bbnum.raw.asm: apps/breadxt/bb.h tests/breadxtnum/expected.inc
+$(BUILD)/bbnum.bin: apps/breadxt/numeric.inc apps/breadxt/draw.inc apps/os88fp.inc apps/os88ui.inc
+$(BUILD)/bbnum360.img: $(BUILD)/bbnum.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/bbnum.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] breadxtnum :: actual 8088 Breadboard XT numeric bridge fixture and negative control
+breadxtnum: $(BUILD)/bbnum360.img
+.PHONY: breadxtnum
+
+# --- Breadboard XT native circuit workbench (SPEC.md 130) ------------------
+$(eval $(call CC_PACKAGE,breadxt,breadxt,BREADXT.OVL,,part,$(BUILD)/BBART.BIN))
+BREADXTSRC := apps/breadxt/bb.h apps/breadxt/model.c apps/breadxt/sim.c \
+              apps/breadxt/file.c apps/breadxt/examples.c apps/breadxt/ui.c \
+              apps/breadxt/face.c apps/breadxt/art.h
+# The face's art (SPEC.md 130.6.3): the text art and WIN16's font art are the
+# source; the PNG master is not read.
+$(BUILD)/BBART.BIN: tools/os88bbart.py apps/breadxt/art.h apps/breadxt/art/sprites.txt apps/breadxt/art/help.txt \
+                    $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88bbart.py --selfcheck build -o $@
+$(BUILD)/breadxt.raw.asm: $(BREADXTSRC)
+$(BUILD)/breadxt.bin: $(wildcard apps/breadxt/*.inc) apps/os88fp.inc apps/os88ui.inc
+
+#> [Applications] breadxt :: Breadboard XT native breadboard editor and simulator (SPEC.md 130)
+breadxt: $(BUILD)/breadxt.o88
+
+# Examples are produced by the shipping model/codec; no host-only dialect.
+BREADXTEX := LEDTEST DIVIDER POT SWITCH LOGIC BROKEN RC FLASHER
+BREADXTFILES := $(addprefix $(BUILD)/breadxt-data/,$(addsuffix .BBX,$(BREADXTEX))) \
+                apps/breadxt/HELP.TXT
+$(BUILD)/breadxt-examples.stamp: $(BREADXTSRC) apps/breadxt/hosttest/export.c | $(BUILD)
+	@mkdir -p $(BUILD)/breadxt-data
+	$(CC) -std=c99 -O2 -DBB_HOST -I apps/breadxt apps/breadxt/hosttest/export.c -lm -o $(BUILD)/breadxt-export
+	$(BUILD)/breadxt-export $(BUILD)/breadxt-data
+	@touch $@
+$(filter %.BBX,$(BREADXTFILES)): $(BUILD)/breadxt-examples.stamp
+	@test -f $@
+
+#> [Applications] breadxtdisk :: Breadboard XT software disk in all four floppy geometries
+breadxtdisk: $(BUILD)/breadxt.img $(BUILD)/breadxt720.img $(BUILD)/breadxt120.img $(BUILD)/breadxt360.img
+$(BUILD)/breadxt.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/breadxt720.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/breadxt120.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/breadxt360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+
+#> [Applications] breadxtbundle :: build and verify the local Breadboard XT WPK installer
+breadxtbundle: $(BUILD)/BREADXT.WPK
+$(BUILD)/BREADXT.WPK: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88wire.py
+	@mkdir -p $(BUILD)/breadxt-stage
+	@cp $(BUILD)/breadxt.o88 $(BUILD)/breadxt-stage/BREADXT.O88
+	@cp $(filter %.BBX,$(BREADXTFILES)) $(BUILD)/breadxt-stage/
+	@cp apps/breadxt/HELP.TXT $(BUILD)/breadxt-stage/HELP.TXT
+	python3 tools/os88wire.py --archive $@ --srcdir $(BUILD)/breadxt-stage --home BREADXT --program BREADXT.O88
+	@python3 tools/os88wire.py --verify $@
+.PHONY: breadxt breadxtdisk breadxtbundle
+
+# Independent electrical bridge regression projects, encoded by the real core.
+$(BUILD)/breadxt-coretest: apps/breadxt/hosttest/coretest.c $(BREADXTSRC) | $(BUILD)
+	$(CC) -std=c99 -Wall -Wextra -Werror -O1 -g apps/breadxt/hosttest/coretest.c -lm -o $@
+$(BUILD)/breadxt-fixtures.stamp: $(BUILD)/breadxt-coretest
+	@mkdir -p $(BUILD)/breadxt-fixtures
+	$(BUILD)/breadxt-coretest --emit $(BUILD)/breadxt-fixtures
+	@touch $@
+BREADXTBRIDGES := $(addprefix $(BUILD)/breadxt-fixtures/,HCLOW.BBX HCMID.BBX HCHIGH.BBX BCLK.BBX RESET.BBX FLOATLED.BBX MAX24.BBX)
+$(BREADXTBRIDGES): $(BUILD)/breadxt-fixtures.stamp
+	@test -f $@
+
+#> [Gate disks] breadxtcheckdisk :: Breadboard XT installed test disk plus target arithmetic and HC regressions
+breadxtcheckdisk: $(BUILD)/breadxt-check360.img
+$(BUILD)/breadxt-check360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbnum.o88 $(BREADXTBRIDGES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbnum.o88 $(BREADXTBRIDGES)
+	@python3 tools/os88disk.py --verify $@
+.PHONY: breadxtcheckdisk
+
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and
@@ -18786,7 +18869,7 @@ N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PO
 # rides GAMES\ in the set below rather than a folder of its own.
 N1942PARTS = $(addprefix $(BUILD)/,1942V.GFX 1942VX.GFX 1942L.GFX 1942C.GFX 1942CX.GFX 1942.SFX $(N1942SCENES))
 N1942LIVE := $(BUILD)/1942.o88
-ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
+ALLAPPSFILES := $(BUILD)/breadxt.o88 $(BREADXTFILES) $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/MIDIRACK.BNK \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(CWORDDISK) \
@@ -18809,7 +18892,8 @@ ALLAPPS := $(ALLAPPSFILES) $(PX_SAMPLES_360) $(BUILD)/runcpm-src.stamp tools/get
 # volume's ASSOC.DAT (54.7.1). The LOOM=32 directory slots below are priced
 # by os88allapps.py like every other entry.
 
-ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
+ALLAPPSARGS := $(addprefix BREADXT:,$(BUILD)/breadxt.o88 $(BREADXTFILES)) \
+               $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88 \
                                  $(BUILD)/MIDIRACK.BNK) \
                $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(N1942LIVE) \
