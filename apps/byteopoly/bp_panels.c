@@ -275,7 +275,7 @@ static void ovl_gp_spec(void)
     ls = bp_link_state();
     if (!gp_kind) {
         if (bp_game.status != BP_ST_PLAY && bp_game.status != BP_ST_OVER) return;
-        if (bp_mode != BP_MODE_LOCAL && (ls == BP_L_PAUSED || ls == BP_L_RESYNC)) gp_kind = GK_PAUSE;
+        if (bp_mode != BP_MODE_LOCAL && (ls == BP_L_PAUSED || ls == BP_L_RESYNC || ls == 8)) gp_kind = GK_PAUSE;
         else if (gp_hand) gp_kind = GK_HAND;
         else if (gp_over == BP_GP_MANAGE) gp_kind = GK_MANAGE;
         else if (gp_over == BP_GP_TRADE) {
@@ -369,8 +369,9 @@ static void ovl_gp_spec(void)
             ovl_gp_add('x', "Yes, leave", BP_OK);
             ovl_gp_add(27, "No", BP_OK);
         } else {
-            ovl_gp_add('r', "Retry", BP_OK);
-            ovl_gp_add('l', "Load Pair", BP_OK);
+            if (ls == 8) { if (bp_mode == BP_MODE_CLIENT) ovl_gp_add('u', "Use host", BP_OK); }
+            else ovl_gp_add('r', "Retry", BP_OK);
+            if (ls != 8) ovl_gp_add('l', "Load Pair", BP_OK);
             ovl_gp_add('d', "Details", BP_OK);
             ovl_gp_add('x', "Leave", BP_OK);
         }
@@ -464,11 +465,12 @@ static int ovl_gp_hkey(int a, int sc)
     unsigned now;
     int fresh;
     now = os88_ticks();
-    ovl_gp_hpoll();
-    fresh = !(gp_hmapok && OS88_KEYMAP_HELD(gp_hmap, sc));
-    if (!fresh && now - gp_hlast >= 14) fresh = 1;
-    if (!gp_hmapok && now - gp_hlast < 8) fresh = 0;
+    fresh = 1;
     if (now - gp_hsince < 6) fresh = 0;
+    else if (gp_hmapok) {
+        ovl_gp_hpoll();
+        if (gp_hmapok && OS88_KEYMAP_HELD(gp_hmap, sc) && now - gp_hlast < 30) fresh = 0;
+    } else if (now - gp_hlast < 8) fresh = 0;
     gp_hlast = now;
     if (fresh && (a == 13 || a == ' ' || sc == GS_ENT)) gp_hand = 0;
     return 1;
@@ -589,7 +591,7 @@ static void ovl_gp_brow(void)
 
 /* ---- the panels ---------------------------------------------------------------- */
 static const char *gp_lstate[] = {"off", "searching", "peer found", "bad peer", "lobby",
-                                  "in sync", "PAUSED", "resyncing"};
+                                  "in sync", "PAUSED", "resyncing", "boards differ"};
 static const char *gp_phn[] = {"", "move", "release", "buy", "bid", "card", "debt", "trade", "end turn", "over"};
 
 static int ovl_gp_sprite(int art)
@@ -868,8 +870,8 @@ static void ovl_gp_dhand(void)
 }
 static void ovl_gp_dpause(void)
 {
-    ovl_gp_frame(bp_link_state() == BP_L_RESYNC ? "RESYNCING" : "CABLE LINK LOST");
-    ovl_gp_tc("Game paused", 0);
+    ovl_gp_frame(bp_link_state() == BP_L_RESYNC ? "RESYNCING" : bp_link_state() == 8 ? "BOARDS DIFFER" : "CABLE LINK LOST");
+    ovl_gp_tc(bp_link_state() == 8 ? "Economic input is stopped" : "Game paused", 0);
     ovl_gp_lb(); ovl_gp_la("Waiting for the other PC: "); ovl_gp_la(bp_link_msg());
     ovl_gp_para(gp_line, 0);
     ovl_gp_t("LAST ACTION RETAINED:", 0);
@@ -935,7 +937,6 @@ static void ovl_gp_dmanage(void)
 }
 static void ovl_gp_dcompose(void)
 {
-    static char row[24];
     int c, nl, i, idx, y, hw, x, it, me;
     me = bp_game.decider;
     ovl_gp_lb(); ovl_gp_la("Trade: "); ovl_gp_la(ovl_gp_name(me)); ovl_gp_la(" with "); ovl_gp_la(ovl_gp_name(gp_tto));
@@ -1003,7 +1004,7 @@ static void ovl_gp_ddiag(void)
     ls = bp_link_state();
     pt = bp_ck_port();
     ovl_gp_lb(); ovl_gp_la("Role: "); ovl_gp_la(bp_mode == BP_MODE_HOST ? "banker host" : bp_mode == BP_MODE_CLIENT ? "client" : "same PC");
-    ovl_gp_la("   Link: "); ovl_gp_la(gp_lstate[ls & 7]); ovl_gp_tl();
+    ovl_gp_la("   Link: "); ovl_gp_la(gp_lstate[ls > 8 ? 0 : ls]); ovl_gp_tl();
     ovl_gp_lb(); ovl_gp_la("Port: ");
     if (pt) { ovl_gp_la("COM"); ovl_gp_lu(pt); ovl_gp_la(", 2400 baud"); } else ovl_gp_la("none");
     ovl_gp_tl();
@@ -1197,6 +1198,9 @@ static int ovl_gp_act(int key)
         if (key == 'r') { if (bp_mode == BP_MODE_HOST) bp_link_host(bp_ck_port()); else bp_link_join(bp_ck_port()); }
         else if (key == 'l') { sp = bp_sess_resume_pair(); if (sp != BP_OK && sp != BP_EPENDING) gp_err = bp_err_text(sp); }
         else if (key == 'd') gp_over = BP_GP_DIAG;
+#ifdef BP_L_DIVERGED
+        else if (key == 'u') { sp = bp_sess_adopt(); if (sp != BP_OK && sp != BP_EPENDING) gp_err = bp_err_text(sp); }
+#endif
         else if (key == 'x') { if (gp_conf) { gp_conf = 0; bp_link_leave(); } else gp_conf = 1; }
         else if (key == 27) gp_conf = 0;
         return 1;

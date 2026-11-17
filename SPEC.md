@@ -254231,12 +254231,14 @@ out-of-turn local bidder or trade recipient. A machine playing one seat
 never shows it; a cable machine playing two does, between those two only.
 **A held key never confirms the next person's decision**: when the panel
 appears the key map (`os88_key_map`, armed by the app once from `os88_main`)
-is copied, and a key press is accepted only if the map shows that key was
-RELEASED since (`bp_gp_tick`, per timer tick, clears the copy's bits as keys
-come up); nothing is accepted in the first 6 ticks. Where the map is refused
-(kern_small) a quiet gap of at least 8 ticks before the press is required,
-and a key seen to repeat within 14 ticks is a held key. Mouse clicks on
-"Ready" count as fresh.
+is copied, and a press is refused while the map shows that key still down
+since then (`bp_gp_tick`, per timer tick, clears the copy's bits as keys
+come up; a key seen held for 30 ticks is let through, longer than any
+typematic delay, so a missed release cannot deadlock the panel); nothing is
+accepted in the first 6 ticks. Where the map is refused (kern_small) a
+press within 8 ticks of the previous key event is refused instead, which
+stops a repeating key but not the first repeat after a long delay. Mouse
+clicks on "Ready" count as fresh.
 
 #### 131.9.9 Trades
 
