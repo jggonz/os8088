@@ -254129,6 +254129,266 @@ and the digest; nothing is written raw from a struct. A load decodes into a
 scratch `BPState` and validates completely before anything replaces the
 running match.
 
+#### 131.7.1 The encoding
+
+`bp_encode(s, buf, cap)` writes the canonical match as exactly
+`BP_ENC_LEN` = **233** bytes (0 when `cap` is smaller; it never validates,
+so a test can encode an invalid state). Every integer is little-endian with
+the width below; nothing is a struct copy. A `BPU32` is its `lo` word then
+its `hi` word. `BP_STATE_MAX` (320) caps every encoded state; the version
+byte is the first byte so a later layout can be told apart before anything
+else is read. Offsets (version 1, `BP_ENC_VER`):
+
+| off | bytes | field | off | bytes | field |
+|---:|---:|---|---:|---:|---|
+| 0 | 1 | encoding version = 1 | 151 | 1 | `d1` |
+| 1 | 1 | `status` | 152 | 1 | `d2` |
+| 2 | 1 | `rules` | 153 | 1 | `doubles` |
+| 3 | 1 | `rounds_limit` | 154 | 1 | `rolled` |
+| 4 | 1 | `nseats` | 155 | 1 | `pending_move` |
+| 5 | 4 | `match_id` | 156 | 16 | `deck[2][8]`, deck 0 then 1 |
+| 9 | 4 | `rev` | 172 | 2 | `deck_n[2]` |
+| 13 | 2 | `turn` | 174 | 2 | `deck_top[2]` |
+| 15 | 2 | `round` | 176 | 1 | `card` |
+| 17 | 1 | `round_left` | 177 | 1 | `ret_phase` |
+| 18 | 1 | `phase` | 178 | 1 | `depth` |
+| 19 | 1 | `active` | 179 | 4 | `rng` |
+| 20 | 1 | `decider` | 183 | 1 | `auc_space` |
+| 21 | 32 | `name[4]`, 8 bytes each | 184 | 1 | `auc_open` |
+| 53 | 4 | `token[4]` | 185 | 1 | `auc_passed` |
+| 57 | 4 | `machine[4]` | 186 | 1 | `auc_turn` |
+| 61 | 4 | `alive[4]` | 187 | 1 | `auc_high` |
+| 65 | 4 | `pos[4]` | 188 | 4 | `auc_bid` |
+| 69 | 16 | `cash[4]`, 4 each | 192 | 1 | `debt_to` |
+| 85 | 4 | `detained[4]` | 193 | 1 | `debt_reason` |
+| 89 | 4 | `tries[4]` | 194 | 4 | `debt_amount` |
+| 93 | 4 | `disks[4]` | 198 | 2 | `offer_id` |
+| 97 | 18 | `owner[18]` | 200 | 1 | `offer_from` |
+| 115 | 18 | `level[18]` | 201 | 1 | `offer_to` |
+| 133 | 18 | `mortgaged[18]` | 202 | 1 | `offer_disks` |
+| | | | 203 | 1 | `offer_payer` |
+| | | | 204 | 4 | `offer_give` |
+| | | | 208 | 4 | `offer_get` |
+| | | | 212 | 4 | `offer_cash` |
+| | | | 216 | 16 | `score[4]`, 4 each |
+| | | | 232 | 1 | `winners` |
+
+A seat name is its characters then NUL padding to 8 bytes; the encoder
+writes ZERO after the first NUL whatever the struct holds (so stale bytes
+never reach a digest) and the decoder sets the ninth byte to NUL.
+
+**Digest.** `bp_digest` is a 32-bit value over the 233 bytes: `lo` =
+CRC-16/CCITT-FALSE (poly 1021h, init FFFFh, no reflection, no final xor) and
+`hi` = Fletcher-16 (`s1`, `s2` start 0; per byte `s1 = (s1 + b) mod 255`,
+`s2 = (s2 + s1) mod 255`; `hi = s2 * 256 + s1`). Two CRCs with different
+inits would differ only by a constant of the length, so the second half is a
+different family. A state's digest is therefore a property of its encoding
+alone: equal states have equal digests, and any one-field change moves it.
+
+**Fingerprint.** `bp_fingerprint` is the same 32-bit function over the byte
+stream: `BP_RULES_VER` (u16), then for each of the 28 spaces `kind, group,
+prop` (u8) and `price, rent` (u16), then for each of the 16 cards `id, deck,
+effect, arg` (u8) and `amount` (u16), all as stored in `BPSpace` / `BPCard`
+(strings excluded: a wording change must not split a pair). It is what the
+handshake (131.5) and every file carry.
+
+`bp_crc16(p, n, crc)` continues a CRC-16/CCITT-FALSE from `crc` (pass FFFFh
+to start). The codec keeps one static scratch buffer, `bp_io` (512 bytes),
+which `bp_digest` and every file function use; no caller holds it.
+
+#### 131.7.2 Validation
+
+`bp_validate(s)` answers `BP_OK` or `BP_EINVALID` and, on refusal, records
+the first failing rule, readable as `bp_invalid_rule()`. It is
+STRUCTURAL: it proves a state could have arisen, not how. `bp_decode` fills
+the caller's scratch and validates it completely; on any failure the scratch
+is undefined and nothing else has been touched, so a load never alters
+`bp_game`. A saved match is always `BP_ST_PLAY` or `BP_ST_OVER`; an empty
+match is not savable. Rules, in the order checked:
+
+1. `status` PLAY or OVER; `rules` 0 or 1; `nseats` 2..4; `rounds_limit` 0
+   for Classic and 10, 20 or 30 for Quick; Quick `round` <= `rounds_limit`.
+2. `phase` 1..9; `phase == OVER` exactly when `status == OVER`.
+3. `alive[]` 0/1, seats at and above `nseats` 0, at least two alive in PLAY
+   (one in OVER); `active` and `decider` below `nseats` and, in PLAY, alive;
+   `round_left` inside the seat mask and, in PLAY, inside the alive mask.
+4. Roster: each used seat's name is 1..8 printable characters (20h-7Eh) then
+   zero padding; tokens below 4 and distinct; `machine[]` 0 or 1; every
+   field of an unused seat (name, token, machine, position, cash, detention,
+   tries, disks, score) is 0.
+5. Seat state: `pos` < 28; `detained` 0/1 and a detained seat is on space 7;
+   `tries` <= 3 and non-zero only while detained; `disks` inside bits 0-1;
+   `cash` below 2^30 (hi word < 4000h, "sane"); an eliminated seat has no
+   cash, detention, tries or disks.
+6. Properties: an owner is an alive seat below `nseats` or `BP_NOBODY`;
+   `level` <= 5; `mortgaged` 0/1; an unowned property has level 0 and is not
+   mortgaged.
+7. Sets: a utility's level is 0; a computer with level > 0 belongs to a
+   collection owned entirely by one seat with no member mortgaged (so a
+   mortgage anywhere in a collection means level 0 group-wide), and the
+   collection's highest and lowest levels differ by at most 1.
+8. Dice: `d1`, `d2` 0..6 and both zero or both not; `rolled` 0/1 and, when
+   1, the dice are not zero; `doubles` <= 2; `pending_move` 0/1 and only in
+   DEBT with `rolled` set.
+9. Decks: at most one seat holds each deck's Recovery Disk; `deck_n[d]` is 8
+   minus the disks held from deck `d`; `deck_top[d]` < `deck_n[d]` (0 when
+   empty); the first `deck_n[d]` entries of `deck[d]` are distinct cards of
+   deck `d`, and a held disk's card is not among them. So every card id
+   appears exactly once across the two cycles and the held disks. **The card
+   shown in `CARD` stays in its cycle until ACK_CARD resolves it** (a Recovery
+   Disk leaves the cycle for the holder at that ACK). `card` is `BP_NOBODY`
+   or 0..15 outside `CARD`.
+10. `REPAIR`: the active seat is detained. `BUY`: the active seat stands on
+    an unowned computer or utility.
+11. `AUCTION`: `auc_space` is an unowned property; `auc_open` and
+    `auc_passed` are disjoint, non-empty-open, and together exactly the alive
+    mask; `auc_turn` is in `auc_open`; `auc_high` is `BP_NOBODY` with
+    `auc_bid` 0, or a seat in `auc_open` with `auc_bid` a non-zero multiple
+    of 10 not above that seat's cash. `ret_phase` is not used.
+12. `CARD`: `card` is in 0..15 and in its deck's cycle; when its effect moves
+    the active seat (TO, FORWARD, BACK) onto a utility, `rolled` is set (a
+    card-induced utility landing needs the turn's dice total, 131.2.4).
+13. `DEBT`: `debt_amount` non-zero; `debt_to` is `BP_NOBODY` or an alive seat
+    other than the active seat; `ret_phase` is MANAGE, REPAIR, BUY, CARD or
+    AFTER.
+14. `TRADE`: `ret_phase` is MANAGE, REPAIR or AFTER; `offer_from` is the
+    active seat and `offer_to` another alive seat; `offer_payer` 0/1;
+    `offer_disks` inside bits 0, 1, 4, 5 with the give bits held by
+    `offer_from` and the get bits by `offer_to`; `offer_give` / `offer_get`
+    are masks below 2^18 of properties owned by `offer_from` / `offer_to`;
+    the offer is not empty.
+15. `winners` is 0 in PLAY; in OVER it is non-zero inside the seat mask.
+
+Fields a phase does not use (`auc_*`, `debt_*`, `offer_*` outside their
+phases, deck slots past `deck_n`, `depth`, `rng`, `score`) are carried as
+they are and not constrained, so a rule that leaves a different resting
+value cannot make a saved match unloadable.
+
+#### 131.7.3 The save file
+
+One file is a 40-byte header, the 233-byte payload (131.7.1) and a 2-byte
+CRC; at most `BP_SAVE_MAX` (512), 275 bytes today. Little-endian:
+
+| off | bytes | field |
+|---:|---:|---|
+| 0 | 4 | magic `BPSV` |
+| 4 | 1 | file format version = 1 |
+| 5 | 1 | role: 0 local, 1 host, 2 client |
+| 6 | 1 | state: 1 candidate, 2 committed (a local save is 2) |
+| 7 | 1 | 0 |
+| 8 | 2 | `BP_RULES_VER` |
+| 10 | 4 | fingerprint (131.7.1) |
+| 14 | 4 | `match_id` |
+| 18 | 4 | `ckpt_id` (0 for a local save) |
+| 22 | 4 | `rev` |
+| 26 | 4 | state digest |
+| 30 | 4 | `host_id` |
+| 34 | 4 | `client_id` |
+| 38 | 2 | payload length |
+| 40 | n | payload |
+| 40+n | 2 | CRC-16/CCITT-FALSE over bytes 0 .. 40+n-1 |
+
+`bp_file_build(meta, s, buf, cap)` produces the image (the match id, rev and
+digest are taken from `s`; the rest from `meta`; 0 = no room).
+`bp_file_peek(buf, n, meta)` checks everything that does not need the
+payload decoded and answers the first failure: not `BPSV`, or the length
+field disagrees with `n` (truncated or trailing bytes), or the payload is
+over `BP_STATE_MAX`: `BP_EFORMAT`; a file or encoding format this code does
+not read, or another `BP_RULES_VER`: `BP_EVERSION`; a bad CRC: `BP_ECRC`
+(checked before the fields behind it are believed); a role or state outside
+the table: `BP_EFORMAT`; the same `BP_RULES_VER` with another fingerprint
+(the board or cards differ): `BP_EMATCH`. `bp_file_parse(buf, n, meta, out)`
+adds the decode and validation (`BP_EINVALID`, a CRC-correct file whose
+content breaks a rule), then requires the header's match id, `rev` and
+digest to be the payload's (`BP_EFORMAT`: a header that lies), a local file
+to have every `machine[]` 0 and a cable file to have seats on both machines
+(`BP_EMATCH`). `out` is written only to the caller's scratch.
+
+**The local file.** `bp_save_local(name, s)` refuses an invalid state
+(`BP_EINVALID`), builds the image and writes it in ONE `os88_file_write`.
+§18.4's write allocates and fills a new chain, flushes it, commits by
+rewriting the directory entry in a single sector and only then frees the old
+chain, so a failure or loss of power before the commit leaves the previous
+save whole; a local save therefore needs no alternate slot. The file is then
+read back and its length and CRC must equal what was built (this is the
+short-write check: the OS reports an all-or-nothing write, and the read-back
+proves the name now means the new bytes). `os88_ferr()` is mapped: disk
+full, directory full, write-protected media and a protected name are
+`BP_EFULL`; every other refusal, a missing file included, `BP_EIO`
+(`os88_ferr()` still holds the precise code for the UI); a file over
+`BP_SAVE_MAX` is `BP_EFORMAT`; an empty file is `BP_EFORMAT`.
+`bp_load_local(name, out)` reads, parses (a cable file is `BP_EMATCH`: use
+the copy action) and leaves `bp_game` to the caller.
+
+#### 131.7.4 The checkpoint files
+
+A cable match has one file per machine, and the file half of a paired save
+must never leave a machine without its last good checkpoint. Each role owns
+TWO slots, `BPHOSTA.BPC` / `BPHOSTB.BPC` (host) and `BPCLNTA.BPC` /
+`BPCLNTB.BPC` (client), in the folder the package's file calls resolve to.
+A slot holds one file of 131.7.3 with role 1 or 2. Its `state` is the
+commit marker:
+
+| call | effect |
+|---|---|
+| `bp_ckpt_write(meta, s)` | validates `s` (`meta->match_id`/`rev` must be `s`'s, and a non-zero `meta->digest` must be `bp_digest(s)`: `BP_EMATCH`), then writes a CANDIDATE (state 1) into the VICTIM slot, then deletes any slot of a different match |
+| `bp_ckpt_commit(meta)` | finds the candidate with `meta->ckpt_id` and `match_id`, checks its CRC, rewrites it with state 2 (one whole-file write, same atomicity) and reads it back; already committed answers `BP_OK`; no such candidate `BP_EMATCH` |
+| `bp_ckpt_open(role, which, meta, out)` | `which` 0 = current, 1 = previous, 2 = candidate; `out` 0 answers the header only (CRC, version, fingerprint) |
+| `bp_ckpt_load(role, meta, out)` | `bp_ckpt_open(role, 0, ...)`: the current committed checkpoint, fully decoded and validated |
+| `bp_ckpt_load_id(role, &ckpt_id, meta, out)` | the checkpoint with that id, committed (preferred) or candidate (`meta->state` 2 or 1), fully decoded and validated; absent: `BP_EIO` (or a damaged slot's error). It is how the exchange rolls a candidate forward (load by id, then `bp_ckpt_commit`) or falls back to a committed one |
+
+The VICTIM is the slot ranked lowest by (missing or invalid < candidate <
+committed, then lower `ckpt_id`, then slot B), so a committed checkpoint is
+only ever overwritten when the slot holds the OLDER of two committed ones, and
+the newest committed file is never the victim. While candidate n+2 is being
+written the slots hold committed n+1 (kept) and the candidate, so the last
+completed pair is always intact. CURRENT is the
+committed slot with the higher `ckpt_id`, PREVIOUS the other committed one.
+`bp_ckpt_load` answers CURRENT and never reaches for PREVIOUS by itself: an
+older checkpoint is a different state, and only the exchange (131.7.5), which
+knows the peer's ids, may choose it with `bp_ckpt_open(role, 1, ...)`. A slot
+file that exists but fails its CRC, version, fingerprint or role ranks as
+missing, so CURRENT may then be an older checkpoint than the machine last
+wrote: `bp_ckpt_damaged(role)` counts such slots (0-2) so the exchange can
+say so, and a resume is accepted ONLY when the peer reports the same
+`ckpt_id` and digest. When no slot ranks for the `which` asked, `bp_ckpt_open`
+answers the first damaged slot's own error (`BP_ECRC`, `BP_EFORMAT`,
+`BP_EVERSION`, `BP_EMATCH`), else `BP_EMATCH` for `which` 0 with only a
+candidate present (not a pair), else `BP_EIO`.
+
+Intermediate states, per machine (X = current, Y = other slot):
+
+| state | files | what a loader reports |
+|---|---|---|
+| steady | X committed n, Y committed n-1 or nothing | current n |
+| writing | Y being rewritten as candidate n+1 (the write is atomic: Y is n-1 or the whole candidate) | current n |
+| candidate written | X committed n, Y candidate n+1 | current n, candidate n+1 (not a pair: it is on one side, or until the peer confirms it) |
+| committed | X committed n, Y committed n+1 (current is now Y) | current n+1, previous n |
+| torn pair | one machine reached `committed n+1`, the other holds only `candidate n+1` | exchange: the machine with the candidate commits it when the peer proves `committed n+1`; otherwise both resume n (`which` 1 on the machine that committed) |
+| no peer proof | a candidate with no matching committed on the peer | never promoted; resume n |
+
+A candidate on one side only is NOT a pair, and nothing here promotes one on
+its own: only `bp_ckpt_commit`, which the exchange calls after both sides
+have exchanged readiness, does. A disk full or write-protected write fails
+before any directory entry changes, so the previous slots stay intact, and
+the call answers `BP_EFULL`; the UI must report the incomplete checkpoint and
+must not report "paired save complete" until both machines have committed.
+
+What the exchange (131.7.5) must call, in order, on EACH machine: build the
+agreed `meta` (role, `ckpt_id`, `match_id`, `rev`, `host_id`, `client_id`);
+`bp_digest(&bp_game, ...)` and compare with the peer's; `bp_ckpt_write`;
+exchange "written"; `bp_ckpt_commit`; exchange "committed"; only then report
+success. On resume: `bp_ckpt_open(role, 0, &meta, 0)` and `(role, 1, ...)`
+on each side to learn the ids, exchange them, agree on the newest id both
+machines hold as committed (committing a held candidate first when the peer
+proves it), then `bp_ckpt_open(role, which, &meta, &scratch)` for the full
+validated state and compare digests.
+
+#### 131.7.5 The checkpoint exchange
+
+(Link lane. Reserved: the frames and the order of 131.7.4's calls between
+the two machines.)
+
 ### 131.8 The face
 
 (Face lane. Reserved: layouts, the board cells, tokens and markers, the
