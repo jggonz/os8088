@@ -410,7 +410,7 @@ int bp_can(const BPState *s, int seat, int type, int arg)
     bp_cc.seat = (BPByte)seat;
     bp_cc.arg = (BPByte)arg;
     bp_u32_copy(&bp_cc.rev, &s->rev);
-    if (type < 0 || type >= BP_C_COUNT || seat < 0 || seat >= BP_SEATS) return BP_EARG;
+    if (type < 0 || type >= BP_C_COUNT) return BP_EARG;
     e = bp_check_common(s, &bp_cc);
     if (e || type == BP_C_PROPOSE) return e;
     if (type == BP_C_BID) bp_bid_min(s, &bp_cc.amount);
@@ -821,6 +821,7 @@ static void bp_x_bankrupt(void)
         if (bp_s->disks[seat] & bp_bit(d)) bp_deck_return(d);
     bp_s->disks[seat] = 0;
     bp_s->alive[seat] = 0;
+    bp_s->round_left &= (BPByte)~bp_bit(seat);
     bp_s->detained[seat] = 0;
     bp_s->tries[seat] = 0;
     bp_s->pending_move = 0;
