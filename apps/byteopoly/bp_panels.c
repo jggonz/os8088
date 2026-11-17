@@ -65,7 +65,20 @@ static BPByte gp_typed;
 static BPByte gp_mc;            /* manage cursor */
 /* handoff */
 static BPByte gp_hand;
-static unsigned gp_hlast, gp_hsince;
+/* the quiet clock (131.9.8): restarted when a handoff is raised or drawn,
+ * by every key at it, and at the END of every key's or click's handling */
+static unsigned gp_hq;
+#define GP_HQUIET 20            /* ticks: longer than any typematic delay or period */
+/* focus (131.9.7): the identity it was reset for, the revision it was checked at */
+static unsigned gp_fid;
+static BPWord gp_frev;
+/* damage (131.9.7): the topmost line a key can change, from the last draw;
+ * the panel's description before and after a key */
+static int gp_vy;
+#define GP_SN 7
+static unsigned gp_s0[GP_SN], gp_s1[GP_SN];
+static BPByte gp_hpages;        /* rules/keys pages, from the last draw (0 = not yet) */
+static int gp_tlv;              /* link state and busy, last tick */
 /* trade composer */
 static BPByte gp_tto, gp_tpay, gp_tcol, gp_tcur[2], gp_ttop[2], gp_in[2], gp_it[2][BP_PROPS + 2];
 static BPU32 gp_tgive, gp_tget;
@@ -264,6 +277,17 @@ static void ovl_gp_topen(void)
     gp_over = BP_GP_TRADE;
 }
 
+/* what a panel IS, for the focus and the stale-key rule: its kind, a
+ * confirmation, the deciding seat */
+static int ovl_gp_ident(void) { return gp_kind | (gp_conf << 5) | ((bp_game.decider & 7) << 6); }
+/* the button a panel opens on: No in a confirmation, else the first enabled */
+static int ovl_gp_first(void)
+{
+    int i;
+    for (i = 0; i < gp_nb; i++)
+        if (gp_conf ? gp_bkey[i] == 27 : !gp_bwhy[i]) return i;
+    return 0;
+}
 /* the panel the state asks for, and its buttons */
 static void ovl_gp_spec(void)
 {
@@ -338,7 +362,7 @@ static void ovl_gp_spec(void)
     case GK_DEBT:
         if (ovl_gp_mine()) {
             if (gp_conf) {
-                ovl_gp_add('k', "Yes, bankrupt", ovl_gp_can(BP_C_BANKRUPT, 0));
+                ovl_gp_add('k', "Go bankrupt", ovl_gp_can(BP_C_BANKRUPT, 0));
                 ovl_gp_add(27, "No", BP_OK);
             } else {
                 ovl_gp_add('m', "Manage", BP_OK);
@@ -404,13 +428,21 @@ static void ovl_gp_spec(void)
         break;
     case GK_RULES:
     case GK_KEYS:
-        ovl_gp_add('b', "Prev", BP_OK);
-        ovl_gp_add('n', "Next", BP_OK);
+        ovl_gp_add('b', "Prev", gp_help ? BP_OK : BP_EARG);
+        ovl_gp_add('n', "Next", gp_hpages && gp_help + 1 >= gp_hpages ? BP_EARG : BP_OK);
         ovl_gp_add(27, "Back", BP_OK);
         break;
     default:
         ovl_gp_add(27, "Back", BP_OK);
         break;
+    }
+    /* focus never carries between panels; a confirmation opens on No; a
+     * commit that greys the focused button moves it on (131.9.7) */
+    i = ovl_gp_ident();
+    if (i != (int)gp_fid) { gp_fid = (unsigned)i; gp_frev = bp_game.rev.lo; gp_foc = (BPByte)ovl_gp_first(); }
+    else if (gp_frev != bp_game.rev.lo || gp_kind == GK_RULES || gp_kind == GK_KEYS) {
+        gp_frev = bp_game.rev.lo;   /* (a page turn greys Next/Prev: move on too) */
+        if (gp_foc >= gp_nb || gp_bwhy[gp_foc]) gp_foc = (BPByte)ovl_gp_first();
     }
     if (gp_foc >= gp_nb) gp_foc = 0;
 }
@@ -428,46 +460,49 @@ static void ovl_gp_track(void)
 #endif
     }
 #endif
-    if (bp_game.match_id.lo != gp_mid) {
+    /* a new match, or a Load of an earlier position of this one (the
+     * revision went backwards): nothing the panels held still applies */
+    if (bp_game.match_id.lo != gp_mid || bp_game.rev.hi < gp_trevh ||
+        (bp_game.rev.hi == gp_trevh && bp_game.rev.lo < gp_trev)) {
         gp_mid = bp_game.match_id.lo;
         gp_ack = BP_NOBODY; gp_lastd = BP_NOBODY; gp_hand = 0; gp_over = 0; gp_conf = 0;
         gp_review = 0; gp_auto = 0; gp_oc = 0; gp_err = 0;
-        gp_trev = (BPWord)(bp_game.rev.lo ^ 1);
+        gp_trev = (BPWord)(bp_game.rev.lo ^ 1); gp_trevh = bp_game.rev.hi;
+    }
+    if (bp_game.rev.lo != gp_trev || bp_game.rev.hi != gp_trevh) {
+        gp_trev = bp_game.rev.lo; gp_trevh = bp_game.rev.hi;
+        gp_err = 0; gp_conf = 0;
+        if (bp_game.phase == BP_PH_AUCTION) ovl_gp_bidinit(); else gp_auto = 0;
     }
     if (bp_game.status != BP_ST_PLAY) {
         if (bp_game.status == BP_ST_EMPTY) { gp_ack = BP_NOBODY; gp_hand = 0; }
         return;
     }
     d = bp_game.decider;
-    if (bp_game.rev.lo != gp_trev || bp_game.rev.hi != gp_trevh) {
-        gp_trev = bp_game.rev.lo; gp_trevh = bp_game.rev.hi;
-        gp_err = 0; gp_conf = 0;
-        if (bp_game.phase == BP_PH_AUCTION) ovl_gp_bidinit(); else gp_auto = 0;
-    }
     if (d != gp_lastd) {
         gp_lastd = (BPByte)d;
         if (gp_over == BP_GP_MANAGE || gp_over == BP_GP_TRADE) gp_over = 0;
     }
+    /* a handoff follows the decider it was raised for (Qqa1-6) */
+    if (gp_hand && gp_hand - 1 != d) { gp_hand = 0; gp_ack = BP_NOBODY; }
     if (!gp_hand && d < BP_SEATS && d != gp_ack && bp_sess_mine(d)) {
         gp_ack = (BPByte)d;
         if (ovl_gp_nlocal() >= 2) {
             gp_hand = (BPByte)(d + 1);
-            gp_hlast = gp_hsince = os88_ticks();
+            gp_hq = os88_ticks();
         }
     }
 }
-/* a fresh key press, not a held one - by the clock alone, so the key map is
- * never armed (D8): nothing counts in the first 20 ticks (longer than any
- * typematic delay), and a press within 8 ticks of the previous key event is
- * a repeat. Every event, accepted or not, restarts the quiet gap. */
+/* the handoff takes Enter or Space only after GP_HQUIET ticks with no key
+ * event, no end of a key's handling and no draw of the handoff (131.9.8):
+ * a held key's repeats and a key queued during the repaint both fail it.
+ * The key map is never armed (D8). */
 static int ovl_gp_hkey(int a, int sc)
 {
     unsigned now;
-    int fresh;
     now = os88_ticks();
-    fresh = now - gp_hsince >= 20 && now - gp_hlast >= 8;
-    gp_hlast = now;
-    if (fresh && (a == 13 || a == ' ' || sc == GS_ENT)) gp_hand = 0;
+    if (now - gp_hq >= GP_HQUIET && (a == 13 || a == ' ' || sc == GS_ENT)) gp_hand = 0;
+    gp_hq = now;
     return 1;
 }
 
@@ -497,6 +532,7 @@ static void ovl_gp_frame(const char *title)
     gp_x = gp_r.x + 6; gp_xr = gp_r.x + gp_r.w - 6;
     gp_y = gp_r.y + gp_tb + 2;
     gp_btop = gp_r.y + gp_r.h - gp_bh - 3 - (ovl_gp_needstatus() ? gp_pitch : 0);
+    gp_vy = gp_r.y;
 }
 static void ovl_gp_t(const char *s, int col)
 {
@@ -672,6 +708,7 @@ static void ovl_gp_dauc(void)
     /* the editor: [-] amount [+] */
     bx = gp_bh;
     by = gp_y;
+    gp_vy = by;                     /* a bid step changes the editor and below */
     gp_xm.w = 0; gp_xp.w = 0;
     if (by + bx <= gp_btop + gp_pitch) {
         w = gp_xr - gp_x - 2 * (bx + 6);
@@ -698,9 +735,16 @@ static void ovl_gp_dcard(void)
     cd = bp_card(bp_game.card);
     if (!cd) { ovl_gp_frame("Card"); return; }
     ovl_gp_frame(cd->deck ? "System Error" : "Floppy Find");
-    if (bp_layout == BP_LAY_FULL) {
-        sw = ovl_gp_sprite(cd->deck ? BP_A_CARD_SE : BP_A_CARD_FF);
-        if (sw && sw < 100) gp_x += sw + 8;
+    if (bp_layout != BP_LAY_COMPACT) {     /* the deck picture where it fits (Qqa2-21) */
+        sw = cd->deck ? (bp_mono ? BP_A_M_CARD_SE : BP_A_CARD_SE) : (bp_mono ? BP_A_M_CARD_FF : BP_A_CARD_FF);
+#ifdef BP_A_CARD_FF_S
+        if (bp_layout == BP_LAY_MID)        /* the 24x32 deck pair (art D27) */
+            sw = cd->deck ? (bp_mono ? BP_A_M_CARD_SE_S : BP_A_CARD_SE_S) : (bp_mono ? BP_A_M_CARD_FF_S : BP_A_CARD_FF_S);
+#endif
+        if (gp_y + (int)(bp_w_spritesz(sw) >> 8) <= gp_btop) {
+            sw = ovl_gp_sprite(sw);
+            if (sw && sw < 100) gp_x += sw + 8;
+        }
     }
     ovl_gp_t(cd->title, 0);
     ovl_gp_para(cd->text, 0);
@@ -831,7 +875,8 @@ static void ovl_gp_dstand(int over)
     for (s = 0; s < bp_game.nseats; s++) {
         if (gp_y + gp_fh <= gp_btop) {
             if (over && ((bp_game.winners >> s) & 1)) bp_w_fill(gp_x - 2, gp_y - 1, gp_xr, gp_y + gp_fh, 14);
-            ovl_gp_lb(); ovl_gp_la(ovl_gp_name(s)); if (!bp_game.alive[s]) ovl_gp_la(" (out)");
+            ovl_gp_lb(); if (over && ((bp_game.winners >> s) & 1)) ovl_gp_la("* ");
+            ovl_gp_la(ovl_gp_name(s)); if (!bp_game.alive[s]) ovl_gp_la(" (out)");
             bp_w_text(gp_x, gp_y, gp_line, 0, gp_font);
             if (over) bp_u32_copy(&gp_u1, &bp_game.score[s]); else bp_score_of(&bp_game, s, &gp_u1);
             bp_u32_copy(&gp_u2, &gp_u1);
@@ -878,6 +923,12 @@ static void ovl_gp_dpause(void)
     ovl_gp_para(bp_link_state() == 8 ? "The client takes the host's board to continue." : "Reconnect to continue this turn.", 0);
     if (gp_conf) ovl_gp_t("Leaving abandons this match. Sure?", 0);
 }
+/* a list's "more" marks (131.9.7): ^ rows hidden above, v below */
+static void ovl_gp_more(int x, int y, int up, int down)
+{
+    if (up) bp_w_text(x, y, "^", 0, gp_font);
+    else if (down) bp_w_text(x, y, "v", 0, gp_font);
+}
 static void ovl_gp_ditem(int p, char *dst)
 {
     int l;
@@ -907,6 +958,7 @@ static void ovl_gp_dmanage(void)
     gp_lr[0].x = gp_x; gp_lr[0].y = gp_y; gp_lr[0].w = gp_xr - gp_x; gp_lr[0].h = i * gp_pitch;
     gp_lrow = gp_pitch;
     gp_ttop[0] = (BPByte)top;
+    gp_vy = gp_y - 1;               /* a cursor move changes the list and below */
     y = gp_y;
     for (n = top; n < top + i; n++) {
         p = gp_ml[n];
@@ -918,6 +970,7 @@ static void ovl_gp_dmanage(void)
         ovl_gp_lc(bp_space(bp_prop_space(p))->kind == BP_K_COMPUTER ? bp_group_letter(bp_space(bp_prop_space(p))->group) : 'U');
         ovl_gp_la("]");
         bp_w_text(gp_xr - 4 * gp_cw, y, gp_line, 0, gp_font);
+        ovl_gp_more(gp_xr - 6 * gp_cw, y, n == top && top > 0, n == top + i - 1 && n + 1 < gp_mn);
         y += gp_pitch;
     }
     gp_y = y;
@@ -942,10 +995,12 @@ static void ovl_gp_dcompose(void)
     ovl_gp_frame(gp_line);
     ovl_gp_tbuild();
     hw = (gp_xr - gp_x) / 2;
+    gp_vy = gp_y - 1;               /* column, cursor, toggles, cash: the lists and below */
     for (c = 0; c < 2; c++) {
         x = gp_x + c * hw;
         if (c == gp_tcol) bp_w_fill(x, gp_y - 1, x + hw - 4, gp_y + gp_fh, 14);
-        ovl_gp_lb(); ovl_gp_la(ovl_gp_name(c ? gp_tto : me)); ovl_gp_la(" gives");
+        ovl_gp_lb(); if (c == gp_tcol) ovl_gp_la("> ");     /* not by hue alone (Qqa2-3) */
+        ovl_gp_la(ovl_gp_name(c ? gp_tto : me)); ovl_gp_la(" gives");
         bp_w_text(x + 2, gp_y, gp_line, 0, gp_font);
     }
     gp_y += gp_pitch;
@@ -965,10 +1020,12 @@ static void ovl_gp_dcompose(void)
             it = gp_it[c][idx];
             if (c == gp_tcol && idx == gp_tcur[c]) bp_w_fill(x, y - 1, x + hw - 4, y + gp_fh, 14);
             ovl_gp_lb();
+            ovl_gp_la(c == gp_tcol && idx == gp_tcur[c] ? ">" : " ");
             ovl_gp_la(ovl_gp_tsel(c, idx) ? "[x] " : (it < 32 && !ovl_gp_tradable(it) ? "[-] " : "[ ] "));
             if (it >= 32) ovl_gp_la(it == 32 ? "Disk FF" : "Disk SE");
             else { ovl_gp_la(ovl_gp_pname(it)); if (bp_game.mortgaged[it]) ovl_gp_la("*"); }
             bp_w_text(x + 2, y, gp_line, 0, gp_font);
+            ovl_gp_more(x + hw - 4 - gp_cw, y, i == 0 && idx > 0, i == nl - 1 && idx + 1 < gp_in[c]);
             y += gp_pitch;
         }
     }
@@ -991,6 +1048,7 @@ static void ovl_gp_dchat(void)
     int i;
     ovl_gp_frame("Chat");
     for (i = 0; i < 3; i++) ovl_gp_t(gp_cl[i], 0);
+    gp_vy = gp_y - 1;               /* typing changes the field and below */
     ovl_gp_lb(); ovl_gp_la("> "); ovl_gp_la(gp_cbuf); ovl_gp_la("_");
     ovl_gp_t(gp_line, 0);
     ovl_gp_lb(); ovl_gp_lu(gp_cn); ovl_gp_la("/"); ovl_gp_lu(GP_CHATMAX); ovl_gp_la(" characters. Letters type here, not play.");
@@ -1026,34 +1084,48 @@ static int ovl_gp_hline(int n, char *buf)
 static void ovl_gp_dhelp(int keys)
 {
     static char buf[52];
-    static int kidx;
-    int n, lpp, i, base;
+    static int kidx, ktot;
+    int n, lpp, i, base, cnt, pg;
     ovl_gp_frame(keys ? "Keys" : "Rules");
-    if (!ovl_gp_hline(0, buf)) { ovl_gp_t("The help text is part of the art file.", 0); return; }
-    if (!kidx) {
+    if (!ovl_gp_hline(0, buf)) { ovl_gp_t("The help text is part of the art file.", 0); gp_hpages = 1; return; }
+    if (!ktot) {                    /* once: where #KEYS is, and how many lines in all */
         for (n = 0; ovl_gp_hline(n, buf); n++)
-            if (buf[0] == '#' && buf[1] == 'K') { kidx = n + 1; break; }
-        if (!kidx) kidx = 30000;
+            if (!kidx && buf[0] == '#' && buf[1] == 'K') kidx = n + 1;
+        ktot = n;
+        if (!kidx) kidx = ktot + 1;
     }
+    /* each page shows only its own section; paging stops at the last (Qqa2-5) */
     base = keys ? kidx : 0;
+    cnt = keys ? ktot - kidx : kidx - 1;
+    if (cnt < 1) cnt = 1;
     lpp = (gp_btop - gp_y) / gp_pitch;
     if (lpp < 1) lpp = 1;
-    for (i = 0; i < lpp; i++) {
+    pg = (cnt + lpp - 1) / lpp;
+    if (pg > 255) pg = 255;
+    gp_hpages = (BPByte)pg;
+    if (gp_help >= pg) gp_help = (BPByte)(pg - 1);
+    for (i = 0; i < lpp && gp_help * lpp + i < cnt; i++) {
         n = base + gp_help * lpp + i;
-        if (!ovl_gp_hline(n, buf) || buf[0] == '#') break;
+        if (!ovl_gp_hline(n, buf)) break;
         ovl_gp_t(buf, 0);
     }
-    if (i == 0 && gp_help) gp_help = 0;
+}
+/* the one-line bar over the bottom of the centre: light grey, white on 1bpp
+ * where grey is a dither under black text (Qqa2-2) */
+static void ovl_gp_bar(void)
+{
+    gp_r.h = gp_pitch + gp_bh + 14;
+    gp_r.y = bp_r_center.y + bp_r_center.h - gp_r.h - 2;
+    bp_w_box(&gp_r, bp_mono ? 15 : 7, 0);
+    gp_x = gp_r.x + 6; gp_xr = gp_r.x + gp_r.w - 6;
+    gp_btop = gp_r.y + 4;
+    gp_vy = gp_r.y;
 }
 static void ovl_gp_didle(void)
 {
     int d;
     d = bp_game.decider;
-    gp_r.h = gp_pitch + gp_bh + 14;
-    gp_r.y = bp_r_center.y + bp_r_center.h - gp_r.h - 2;
-    bp_w_box(&gp_r, 7, 0);
-    gp_x = gp_r.x + 6; gp_xr = gp_r.x + gp_r.w - 6;
-    gp_btop = gp_r.y + 4;
+    ovl_gp_bar();
     gp_y = gp_btop;
     ovl_gp_lb();
     if (gp_err) { ovl_gp_la("! "); ovl_gp_la(gp_err); }
@@ -1068,11 +1140,7 @@ static void ovl_gp_didle(void)
 }
 static void ovl_gp_dreview(void)
 {
-    gp_r.h = gp_pitch + gp_bh + 14;
-    gp_r.y = bp_r_center.y + bp_r_center.h - gp_r.h - 2;
-    bp_w_box(&gp_r, 7, 0);
-    gp_x = gp_r.x + 6; gp_xr = gp_r.x + gp_r.w - 6;
-    gp_btop = gp_r.y + 4;
+    ovl_gp_bar();
     bp_w_text(gp_x, gp_btop, "Game over - reviewing the board.", 0, gp_font);
 }
 /* the whole panel: one call per strip, so it must cost nothing but drawing */
@@ -1081,6 +1149,7 @@ static void ovl_gp_draw(void)
     ovl_gp_track();
     ovl_gp_spec();
     if (gp_kind == GK_NONE) return;
+    if (gp_kind == GK_HAND) gp_hq = os88_ticks();   /* drawn now: a key queued meanwhile is not fresh */
     ovl_gp_geom();
     switch (gp_kind) {
     case GK_IDLE: ovl_gp_didle(); break;
@@ -1149,6 +1218,12 @@ static int ovl_gp_chatkey(int a, int sc)
     if (a == 0 && sc >= 0x3B && sc <= 0x44) return 0;   /* the F keys still reach the app */
     return 1;
 }
+/* rules/keys paging stops at either end (131.9.11) */
+static void ovl_gp_page(int dir)
+{
+    if (dir < 0) { if (gp_help) gp_help--; }
+    else if (!gp_hpages || gp_help + 1 < gp_hpages) gp_help++;
+}
 /* what a button does; the key that is also its shortcut */
 static int ovl_gp_act(int key)
 {
@@ -1193,7 +1268,7 @@ static int ovl_gp_act(int key)
         if (key == 'r') gp_review = 1; else if (key == 'n') gp_oc = 2; else if (key == 'x') gp_oc = 3;
         return 1;
     case GK_REVIEW: gp_review = 0; return 1;
-    case GK_HAND: return 1;
+    case GK_HAND: gp_hand = 0; return 1;    /* only a click on Ready reaches here */
     case GK_PAUSE:
         if (key == 'r') { if (bp_mode == BP_MODE_HOST) bp_link_host(bp_ck_port()); else bp_link_join(bp_ck_port()); }
         else if (key == 'l') { sp = bp_sess_resume_pair(); if (sp != BP_OK && sp != BP_EPENDING) gp_err = bp_err_text(sp); }
@@ -1231,7 +1306,7 @@ static int ovl_gp_act(int key)
     case GK_CHAT: if (key == 13) ovl_gp_chatsend(); else gp_over = 0; return 1;
     case GK_RULES:
     case GK_KEYS:
-        if (key == 'n') gp_help++; else if (key == 'b') { if (gp_help) gp_help--; } else gp_over = 0;
+        if (key == 'n') ovl_gp_page(1); else if (key == 'b') ovl_gp_page(-1); else gp_over = 0;
         return 1;
     default:
         gp_over = 0; return 1;
@@ -1242,6 +1317,7 @@ static const char *ovl_gp_whytext(int why)
     if (why == BP_EARG && gp_kind == GK_AUC) return "Bid at least the minimum, in steps of 10";
     if (why == BP_EARG && gp_kind == GK_COMPOSE) return "Choose something to trade first";
     if (why == BP_EARG && gp_kind == GK_CHAT) return "Type a message first";
+    if (why == BP_EARG && (gp_kind == GK_RULES || gp_kind == GK_KEYS)) return "No more pages";
     return bp_err_text(why);
 }
 static int ovl_gp_press(int i)
@@ -1288,19 +1364,91 @@ static int ovl_gp_edit(int a, int nav)
         return 0;
     case GK_RULES:
     case GK_KEYS:
-        if (nav == GS_PGDN || nav == GS_DN) { gp_help++; return 1; }
-        if (nav == GS_PGUP || nav == GS_UP) { if (gp_help) gp_help--; return 1; }
+        if (nav == GS_PGDN || nav == GS_DN) { ovl_gp_page(1); return 1; }
+        if (nav == GS_PGUP || nav == GS_UP) { ovl_gp_page(-1); return 1; }
         return 0;
     default: break;
     }
     (void)d; (void)n;
     return 0;
 }
-static int ovl_gp_key(int a, int sc)
+/* ---- damage: what a key, click or open changed (131.9.7) ---------------------------- */
+static unsigned gp_h;
+static void ovl_gp_mx(unsigned v) { gp_h = gp_h * 33 + v; }
+static void ovl_gp_mz(const char *s) { while (*s) ovl_gp_mx((BPByte)*s++); }
+static void ovl_gp_mb(const void *p, int n)
 {
-    int nav, i, k;
+    const BPByte *q;
+    for (q = (const BPByte *)p; n > 0; n--) ovl_gp_mx(*q++);
+}
+/* the panel as drawn: 0 identity, 1 focus, 2 buttons, 3 hint, 4 status,
+ * 5 whole-panel text, 6 the lines from gp_vy down (a sent chat line is
+ * dirtied by bp_gp_chat itself) */
+static void ovl_gp_snap(unsigned *s)
+{
+    int i, e;
+    s[0] = (unsigned)ovl_gp_ident();
+    s[1] = gp_foc;
+    for (e = 0; e < 2; e++) {
+        gp_h = gp_nb + e;
+        for (i = 0; i < gp_nb; i++)
+            if (!e || !gp_bwhy[i]) { ovl_gp_mx(gp_bkey[i] + (e ? 0 : gp_bwhy[i] << 8)); ovl_gp_mz(gp_blab[i]); }
+        s[2 + e] = gp_h;
+    }
+    gp_h = bp_sess_busy();
+    if (gp_err) ovl_gp_mz(gp_err);
+    s[4] = gp_h;
+    s[5] = gp_tto + gp_help * 16;
+    gp_h = gp_mc + gp_tcol * 64 + gp_tpay * 128 + gp_tdk * 256;
+    ovl_gp_mx(gp_tcash);
+    ovl_gp_mb(gp_tcur, 2);
+    ovl_gp_mb(&gp_bid, 4); ovl_gp_mb(&gp_tgive, 4); ovl_gp_mb(&gp_tget, 4);
+    ovl_gp_mz(gp_cbuf);
+    s[6] = gp_h;
+}
+/* compare with gp_s0: CENTER for a new panel, else one band from the
+ * topmost changed line to the panel's bottom; HINT when the hint moved */
+static void ovl_gp_damage(void)
+{
+    static BPRect r;
+    int y, t, bot;
     ovl_gp_track();
     ovl_gp_spec();
+    ovl_gp_snap(gp_s1);
+    if (gp_s1[3] != gp_s0[3] || gp_s1[0] != gp_s0[0]) bp_face_dirty(BP_D_HINT);
+    if (gp_kind == GK_NONE && gp_s0[0] == gp_s1[0]) return;
+    if (gp_s1[0] != gp_s0[0] || gp_s1[5] != gp_s0[5] || gp_drawn != gp_kind) {
+        bp_face_dirty(BP_D_CENTER);
+        return;
+    }
+    bot = gp_r.y + gp_r.h;
+    y = bot;
+    if (gp_s1[6] != gp_s0[6]) y = gp_vy;
+    if (gp_s1[4] != gp_s0[4]) {
+        t = (gp_kind == GK_IDLE || gp_kind == GK_REVIEW) ? gp_r.y : gp_btop - 2 * gp_pitch;
+        if (t < y) y = t;
+    }
+    if (gp_s1[1] != gp_s0[1] || gp_s1[2] != gp_s0[2]) {
+        t = bot - gp_bh - 6;
+        if (t < y) y = t;
+    }
+    if (y >= bot) return;
+    if (y < gp_r.y) y = gp_r.y;
+    r.x = gp_r.x; r.y = y; r.w = gp_r.w; r.h = bot - y;
+    bp_face_dirty_rect(&r);
+}
+
+/* a key's press: a confirmation's Yes counts only after GP_HQUIET quiet
+ * ticks, so the key that armed it, held or typed twice, cannot answer it
+ * (131.9.8); otherwise it is consumed and nothing happens */
+static int ovl_gp_kpress(int i)
+{
+    if (gp_conf && gp_bkey[i] != 27 && os88_ticks() - gp_hq < GP_HQUIET) { gp_err = "Let go, then press again"; return 1; }
+    return ovl_gp_press(i);
+}
+static int ovl_gp_key1(int a, int sc)
+{
+    int nav, i, k;
 #ifdef BP_PANELS_DEMO
     if (a == 0 && sc == 0x3F) { ovl_gp_demoset(gp_demo++); return 1; }
 #endif
@@ -1310,26 +1458,41 @@ static int ovl_gp_key(int a, int sc)
     if (gp_kind == GK_CHAT) return ovl_gp_chatkey(a, sc);
     gp_err = 0;
     if (ovl_gp_edit(a, nav)) return 1;
-    if (a == 9 || nav == GS_TAB) { gp_foc = (BPByte)((gp_foc + 1) % (gp_nb ? gp_nb : 1)); return 1; }
-    if (a == 13 && gp_kind != GK_COMPOSE) { if (gp_nb) return ovl_gp_press(gp_foc); return 0; }
+    if (a == 9 || nav == GS_TAB) {          /* the next ENABLED button */
+        for (i = 1; i <= gp_nb; i++) {
+            k = (gp_foc + i) % gp_nb;
+            if (!gp_bwhy[k]) { gp_foc = (BPByte)k; break; }
+        }
+        return 1;
+    }
+    if (a == 13 && gp_kind != GK_COMPOSE) { if (gp_nb) return ovl_gp_kpress(gp_foc); return 0; }
     k = a;
     if (k >= 'A' && k <= 'Z') k += 32;
     if (nav == GS_ESC) k = 27;
     if (k == 'c' && (gp_kind == GK_IDLE || gp_kind == GK_REPAIR || gp_kind == GK_DEBT)) k = 'm';
     for (i = 0; i < gp_nb; i++)
-        if (gp_bkey[i] == k) return ovl_gp_press(i);
-    if (k == 13 && gp_nb) return ovl_gp_press(0);
+        if (gp_bkey[i] == k) return ovl_gp_kpress(i);
+    if (k == 13 && gp_nb) return ovl_gp_kpress(0);
     return 0;
+}
+/* a key, then the damage it did (131.9.7) */
+static int ovl_gp_key(int a, int sc)
+{
+    int r;
+    ovl_gp_track();
+    ovl_gp_spec();
+    ovl_gp_snap(gp_s0);
+    r = ovl_gp_key1(a, sc);
+    ovl_gp_damage();
+    return r;
 }
 static int ovl_gp_in(const BPRect *r, int x, int y)
 {
     return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h;
 }
-static int ovl_gp_click(int x, int y)
+static int ovl_gp_click1(int x, int y)
 {
     int i, row;
-    ovl_gp_track();
-    ovl_gp_spec();
     if (gp_kind == GK_NONE || gp_drawn != gp_kind) return 0;
     for (i = 0; i < gp_nb; i++)
         if (ovl_gp_in(&gp_br[i], x, y)) return ovl_gp_press(i);
@@ -1354,28 +1517,43 @@ static int ovl_gp_click(int x, int y)
     if (gp_kind == GK_IDLE || gp_kind == GK_REVIEW) return 0;
     return ovl_gp_in(&gp_r, x, y);
 }
+/* a click, then the damage it did; a click is deliberate, never a repeat */
+static int ovl_gp_click(int x, int y)
+{
+    int r;
+    ovl_gp_track();
+    ovl_gp_spec();
+    ovl_gp_snap(gp_s0);
+    r = ovl_gp_click1(x, y);
+    ovl_gp_damage();
+    return r;
+}
 static int ovl_gp_covers(void)
 {
     ovl_gp_track();
     ovl_gp_spec();
     return gp_kind != GK_NONE && gp_kind != GK_IDLE && gp_kind != GK_REVIEW;
 }
+/* the hint bar: the ENABLED buttons (Qqa2-23). Callers walk i = 0, 1, ...
+ * so the panel is worked out once, at 0 */
 static const char *ovl_gp_hint(int i)
 {
     static const char *none[] = {"Arrows Select", "F1 Rules"};
-    ovl_gp_track();
-    ovl_gp_spec();
+    int j, n;
+    if (i <= 0) { ovl_gp_track(); ovl_gp_spec(); }
     if (gp_kind == GK_NONE) return i >= 0 && i < 2 ? none[i] : 0;
     if (i < 0 || i >= gp_nb) return 0;
-    ovl_gp_kn(gp_hb[i], gp_bkey[i]);
+    for (j = 0, n = 0; j < gp_nb; j++)
+        if (!gp_bwhy[j]) { if (n == i) break; n++; }
+    if (j >= gp_nb) return 0;
+    ovl_gp_kn(gp_hb[i], gp_bkey[j]);
     os88_strcpy(gp_hb[i] + os88_strlen(gp_hb[i]), " ", 2);
-    os88_strcpy(gp_hb[i] + os88_strlen(gp_hb[i]), gp_blab[i], sizeof(gp_hb[0]) - os88_strlen(gp_hb[i]));
+    os88_strcpy(gp_hb[i] + os88_strlen(gp_hb[i]), gp_blab[j], sizeof(gp_hb[0]) - os88_strlen(gp_hb[i]));
     return gp_hb[i];
 }
-static void ovl_gp_open(int which)
+static void ovl_gp_open1(int which)
 {
     int why;
-    ovl_gp_track();
     gp_err = 0; gp_conf = 0;
     if (which == BP_GP_NONE) { gp_over = 0; return; }
     if (which == BP_GP_MANAGE) { if (bp_game.status == BP_ST_PLAY) ovl_gp_openmanage(); return; }
@@ -1386,8 +1564,17 @@ static void ovl_gp_open(int which)
         return;
     }
     gp_over = (BPByte)which;
-    gp_help = 0;
+    gp_help = 0; gp_hpages = 0;
     if (which == BP_GP_CHAT) { gp_cn = 0; gp_cbuf[0] = 0; }
+}
+/* a menu or F1 opened a panel: it names its own damage (Qqa1-1 rest) */
+static void ovl_gp_open(int which)
+{
+    ovl_gp_track();
+    ovl_gp_spec();
+    ovl_gp_snap(gp_s0);
+    ovl_gp_open1(which);
+    ovl_gp_damage();
 }
 static void ovl_gp_chat(int machine, const char *text)
 {
@@ -1395,6 +1582,16 @@ static void ovl_gp_chat(int machine, const char *text)
     for (i = 0; i < 2; i++) os88_strcpy(gp_cl[i], gp_cl[i + 1], sizeof(gp_cl[0]));
     os88_strcpy(gp_cl[2], machine == bp_here ? "You: " : "Them: ", sizeof(gp_cl[0]));
     os88_strcpy(gp_cl[2] + os88_strlen(gp_cl[2]), text, sizeof(gp_cl[0]) - os88_strlen(gp_cl[2]));
+    if (gp_over == BP_GP_CHAT) bp_face_dirty(BP_D_CENTER);
+}
+/* every timer tick: the link pausing or resuming, or a pending command
+ * settling, changes the panel without a commit (stale "Sent - waiting") */
+static void ovl_gp_tick(void)
+{
+    int v;
+    if (bp_mode == BP_MODE_LOCAL) return;
+    v = bp_link_state() * 2 + (bp_sess_busy() ? 1 : 0);
+    if (v != gp_tlv) { gp_tlv = v; bp_face_dirty(BP_D_CENTER | BP_D_HINT); }
 }
 
 #ifdef BP_PANELS_DEMO
@@ -1446,7 +1643,7 @@ static void ovl_gp_demoset(int n)
     else if (n == 7) ovl_gp_openmanage();
     else if (n == 8) ovl_gp_topen();
     else if (n == 9) { bp_game.status = BP_ST_OVER; bp_game.phase = BP_PH_OVER; bp_game.winners = 2; bp_game.rules = BP_RULES_QUICK; bp_game.rounds_limit = 20; bp_game.round = 20; }
-    else if (n == 10) { gp_hand = 2; gp_hlast = gp_hsince = os88_ticks(); bp_game.decider = 1; bp_game.phase = BP_PH_AUCTION; bp_game.auc_space = 4; }
+    else if (n == 10) { gp_hand = 2; gp_hq = os88_ticks(); bp_game.decider = 1; bp_game.phase = BP_PH_AUCTION; bp_game.auc_space = 4; }
     else if (n == 11) { gp_over = BP_GP_CHAT; os88_strcpy(gp_cl[1], "Them: hi from the other PC", 30); os88_strcpy(gp_cbuf, "good luck", 25); gp_cn = 9; }
     else if (n == 12) gp_over = BP_GP_DIAG;
     else if (n == 13) gp_over = BP_GP_RULES;
@@ -1469,5 +1666,7 @@ void bp_gp_event(const BPEvent *e)
     if (e->kind == BP_V_PASS && e->other == 1) gp_auto |= (BPByte)(1 << e->seat);
     else if (e->kind == BP_V_AUCTION) gp_auto = 0;
 }
-void bp_gp_tick(void) {}   /* kept for the app's call; the handoff is clock-only */
+void bp_gp_tick(void) { ovl_gp_tick(); }
+/* the end of a key's or click's handling, after its repaint (131.9.8) */
+void bp_gp_keyend(void) { gp_hq = os88_ticks(); }
 int bp_gp_overchoice(void) { int c; c = gp_oc; gp_oc = 0; return c; }

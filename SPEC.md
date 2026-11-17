@@ -255430,7 +255430,7 @@ Help (26). About is the application menu's (`OSAPI_ABOUT_SET`), never a Help
 item. Items grey (`OS88_MENU_DIS`) where illegal and are re-evaluated by
 `bp_pn_sync` and on every mode change; Propose Trade follows
 `bp_can(BP_C_PROPOSE)` for the active seat, Assets > My Collection needs a
-running match, and a menu command that opens a panel dirties the centre.
+running match, and `bp_gp_open` dirties what a menu-opened panel changes.
 
 | menu | items |
 |---|---|
@@ -255498,11 +255498,11 @@ trade composer > the panel of `bp_game.phase`.
 |---|---|---|
 | BUY | name, art, price, cash after (or "too little"), base rent, collection | Buy (B), Auction (A) - Buy greyed with `bp_can`'s reason |
 | AUCTION | lot, list price, high bid and bidder, the bidder's cash, the editor, the minimum, "if you win: N left", the seats auto-passed for want of a raise (from `bp_gp_event`, PASS with other = 1) | Bid N (B), Pass (P); editor: `-`/`+` or Down/Up step 10, digits type, Backspace erases |
-| CARD | deck name and art, title, wrapped text | OK (Enter) -> ACK_CARD |
+| CARD | deck name and art (FULL; MID too when the 48x64 deck picture fits above the buttons, its mono twin on 1bpp), title, wrapped text | OK (Enter) -> ACK_CARD |
 | REPAIR | detention, failed tries of 3, cash, the Recovery Disks held | Pay 50 (P), a disk per deck held (F Floppy Find, S System Error), Roll (R), Manage (M) |
-| DEBT | creditor, amount, cash, shortfall | Manage (M), Settle (S, when `bp_can` allows), Bankrupt (K) then a confirmation: Yes (K), No (Esc) |
+| DEBT | creditor, amount, cash, shortfall | Manage (M), Settle (S, when `bp_can` allows), Bankrupt (K) then a confirmation: Go bankrupt (K), No (Esc), opened focused on No |
 | TRADE | the frozen offer (131.9.9) | Accept (A), Reject (R) for the recipient; Cancel (C) for the proposer |
-| MANAGE, AFTER | a one-line bar over the BOTTOM of the centre (the centre art stays): whose move, the buttons | Roll (Space), End Turn (E), Trade (T), Manage (M) |
+| MANAGE, AFTER | a one-line bar over the BOTTOM of the centre (the centre art stays): whose move, the buttons; its ground is light grey, white on 1bpp (the status text is black on it) | Roll (Space), End Turn (E), Trade (T), Manage (M) |
 | OVER | winners, standings (131.9.11) | Review (R), New Game (N), Exit (X) |
 
 Greying is the engine's word: every button asks `bp_can(&bp_game, seat,
@@ -255518,17 +255518,41 @@ Keys (US-21): Space roll, B buy / bid, A auction / accept, P pass / pay, T
 trade, C or M collection, E end turn, R roll / reject / redeem, S settle /
 sell, K bankrupt, U upgrade, Esc back (closes an opened panel, cancels a
 confirmation, otherwise falls through to the app). Tab moves the focus along
-the buttons, Enter presses the focused one (the first button is focused when
-a panel appears). A button too wide for the panel loses its "[K]" prefix and
-the hint bar still names the key; on 1-bit adapters the focused label is
-prefixed ">" in addition to the face's focus state. Hit targets are the
-rectangles the last draw recorded, the very ones it drew.
+the ENABLED buttons, Enter presses the focused one. **Focus never carries
+from one panel to the next**: whenever the panel's identity changes - its
+kind, a confirmation opening or closing, or the deciding seat - the focus is
+reset to the first enabled button, and a confirmation opens on No, so no
+number of Enters walks from DEBT into a bankruptcy. After a commit, a focus
+left on a button the new state greys (Roll once rolled) moves to the first
+enabled one, and so does a Rules/Keys page turn that greys Next or Prev;
+an editor or list change (a bid being typed, a Collection cursor) never
+moves it, so Enter on an invalid bid explains instead of passing. A button too wide for the
+panel loses its "[K]" prefix and the hint bar still names the key; on 1-bit
+adapters the focused label is prefixed ">" in addition to the face's focus
+state. Hit targets are the rectangles the last draw recorded, the very ones
+it drew. The hint bar lists the ENABLED buttons only (the same answer as the
+greying: no "Space Roll" once the roll is spent).
+
+**The panels name their own damage** (131.8.5). Each key, click and
+`bp_gp_open` compares what the panel was before with what it is after (its
+identity, focus, buttons, status line, editor and list state) and dirties
+only that: `BP_D_CENTER` when the identity changed; otherwise ONE
+`bp_face_dirty_rect` from the topmost line that changed to the panel's
+bottom - the button row for a focus move or a relabelled button, the editor,
+minimum and buttons for a bid step, the list and the detail lines below it
+for a cursor move, the status line and buttons for a refusal - and the
+one-line bar whole on MANAGE/AFTER; `BP_D_HINT` only when the hint entries
+changed. The app dirties nothing on the panels' behalf. A key that changes
+nothing repaints nothing.
 
 Layout is picked from `bp_layout`, never the adapter: COMPACT (CGA class)
 uses 1-pixel line spacing, drops the sprite and the secondary lines (a panel
 there has about five rows, so each states its decision first), and a line
 that does not fit above the buttons is not drawn rather than overlapped.
-A status line is reserved only while it has something to say.
+A status line is reserved only while it has something to say. A list that
+shows fewer rows than it holds says so: the Collection list and each
+composer column mark their first shown row "^" when rows are hidden above
+and their last shown row "v" when rows are hidden below.
 
 The Collection panel (BP_GP_MANAGE, key M) lists the viewing seat's
 computers and utilities (cursor with the arrows or the mouse) with level,
@@ -255548,20 +255572,61 @@ seats, the centre is covered by "Pass to NAME - next: <phase>" until a FRESH
 Enter or Space. This covers the active player changing and also an
 out-of-turn local bidder or trade recipient. A machine playing one seat
 never shows it; a cable machine playing two does, between those two only.
-**A held key never confirms the next person's decision**, by the clock alone
-(the key-state map is never armed: arming it makes extended keys step twice
-on some machines): nothing counts in the first 20 ticks, longer than any
-typematic delay, and a press within 8 ticks of the previous key event is a
-repeat. Every key event, accepted or not, restarts that quiet gap. Mouse
-clicks on "Ready" count as fresh. `bp_gp_tick` is kept for the app's call and
-does nothing.
+**A held or queued key never acts for the next person**, by the clock alone.
+Two facts decide the mechanism. First, a key event says when it was
+PROCESSED, never when it was typed: during a repaint of several seconds on
+the XT (131.8.5's table) the typematic repeats of a held key - or a second
+press typed ahead - wait in the BIOS keyboard buffer and then arrive back to
+back, so a gap measured from the previous key's ARRIVAL spans that repaint
+and looks fresh (QA Qqa1-3: one held Enter ended a turn, confirmed the next
+player's handoff, rolled for them and acknowledged their card). Second, the
+key-state map (SPEC.md 9.7) would tell a held key from a fresh one, but
+arming it makes every E0-prefixed key step twice on some machines for the
+rest of the session, for every program, and kern_small refuses the map; and
+the BIOS buffer's head and tail are not a package's to read (kern_mega). So
+the quiet is measured from the END of the previous key's handling: the app
+calls `bp_gp_keyend()` as the last thing `os88_onkey` and `os88_onclick` do,
+after their repaint, and drawing the handoff restarts it too. A queued key
+then arrives within a tick of that stamp and a held key's repeats within one
+typematic period of it, however long the repaint was.
+
+- **The handoff** takes Enter or Space only after 20 ticks (1.1 s) of quiet:
+  no key event, no end of a key's handling and no draw of the handoff in that
+  time; raising it starts the quiet too. 20 ticks is longer than any
+  typematic delay (at most 1 s) and any repeat period (at most 9.1 ticks at
+  2 per second), so neither a held key nor one typed during the repaint that
+  raised the handoff can confirm it, and every rejected key restarts the
+  wait; the panel says "a held key does not count - let go first". Mouse
+  clicks on "Ready" count at once. Because a local game raises a handoff
+  whenever the decider becomes another seat played here, this is what
+  guarantees the rule: the next person's first decision is always behind a
+  fresh press.
+- **A confirmation's Yes** (Go bankrupt, Yes leave) obeys the same 20 quiet
+  ticks when pressed by key, so the K that armed it, held or typed twice,
+  cannot answer it; the status line then reads "Let go, then press again".
+  Enter on a confirmation presses No (131.9.7). A click on Yes counts at once.
+- Other keys are NOT filtered. A same-player key typed ahead of a repaint
+  acts on that player's next panel: the clock cannot tell it from a fast
+  deliberate press or from a test driver keying 1-2 ticks after the UI goes
+  idle, and it cannot act for anyone else.
+- The handoff follows the decider it was raised for: if the state changes
+  under it (a Load of an earlier position of the same match, a revision
+  going backwards) to another decider, it is dropped and raised again for
+  the new one, so it never names the wrong player.
+
+`bp_gp_tick` (every timer tick) dirties the centre and the hint when, in a
+cable game, the link state or a pending command changes without a commit, so
+"Sent - waiting" and the pause panel never outlive their cause; a received
+chat line repaints an open chat panel.
 
 #### 131.9.9 Trades
 
 Compose (BP_GP_TRADE, key T; allowed when `bp_can(PROPOSE)` is): the
 decider's tradable holdings in the left column, the recipient's in the
 right; Left/Right change column, Up/Down the cursor, Space or a click
-toggles `[x]`. A computer of a collection with any upgrade shows `[-]` and
+toggles `[x]`. The active column's heading and the cursor row are marked by
+a leading ">" as well as the highlight, because yellow is white on 1bpp and
+no meaning is carried by hue alone (131.8). A computer of a collection with any upgrade shows `[-]` and
 refuses ("Upgraded sets cannot be traded"); `*` marks a mortgage; held
 Recovery Disks are rows after the properties. Digits type the cash, `+`/`-`
 step it by 10, P switches which side pays, N cycles the recipient. A line
@@ -255600,7 +255665,11 @@ it back), New Game and Exit are handed to the app through
 do not exist on this panel. Standings (BP_GP_STANDINGS) is the same table in
 mid-match from `bp_score_of`. Rules and Keys (BP_GP_RULES, BP_GP_KEYS) page
 the art's help record (`BP_A_HELP`): lines before a `#KEYS` line are the
-rules, those after it the keys; PgUp/PgDn or the buttons page.
+rules, those after it the keys; PgUp/PgDn (or Up/Down) or the buttons page,
+by as many lines as the panel shows. Each page shows only its own section:
+the last Rules page ends at `#KEYS`, paging stops at the last page rather
+than wrapping, and Prev is greyed on the first page and Next on the last
+(so a page opens focused on Next, and Enter reads on).
 
 ### 131.10 Art
 
