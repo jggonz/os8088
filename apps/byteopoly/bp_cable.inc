@@ -17,8 +17,8 @@ LK_NTYPES   equ 24                  ; bp_link.c's BPF_N
 lk_lens     equ _bpl_lens           ; bp_link.c's table: ONE copy of the lengths
 %include "os88cable.inc"
 
-BPK_SLOTS   equ 6                   ; frames the ring holds
-BPK_SLOT    equ 32                  ; a slot: the length, then the body
+BPK_SLOTS   equ 4                   ; frames the ring holds (a refill brings 4 at most)
+BPK_SLOT    equ 30                  ; a slot: the length, then a body (29 at most)
 BPK_POLL    equ 32                  ; bytes a refill reads: at most 4 frames
 
 section .bss
