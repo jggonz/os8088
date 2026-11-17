@@ -257,8 +257,8 @@ before and after: rows of a rect with no memory operand inside the loop and
 row count, two bytes a row) instead of walked a bit at a time, with no
 multiply per row; sprites eight pixels a step through the colour remap
 instead of a call per pixel; one-byte-wide solid columns as a single OR or
-AND per row. 6.3 s. The same paint is 1.43 s on the 5150's CGA (main:
-1.05) and 2.95 s on Hercules (main: 1.50). VGA is the outlier for a reason
+AND per row. 6.2 s. The same paint is 1.43 s on the 5150's CGA (main:
+1.05) and 2.95 s on Hercules (main: 1.45). VGA is the outlier for a reason
 no loop fixes: a software band pays four read-modify-writes for every lit
 byte that a 1bpp band pays one for, and VGA's own set/reset hardware, which
 does all four planes in one write, is on the far side of the blit.
@@ -277,3 +277,10 @@ eight example builders were 2.4 KB of code that only ever produced the eight
 `.BBX` files the build already writes onto every disk; they now run on the
 host only, and the package opens the file from its own folder - which is
 what an example is, a document. That brought the overlay to 64,844.
+
+**The 256 KB machine was a guess, and the row said so.** The plan assumed
+it would get the plain face; the 256 KB row was made to say which face it
+got, and it got the art and the band - 4,608 bytes free with the flasher
+open, after the kernel shed its desktop caches. The plain face stays for
+whatever machine is tighter still. Pictures of every adapter, before and
+after, are in `docs/breadxt/face/`.

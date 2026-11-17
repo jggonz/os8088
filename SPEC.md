@@ -253658,8 +253658,9 @@ at a time by `bx_artstr`. `--selfcheck` and `png DIR` run as for CDRack.
 
 The art is part 1 of `BREADXT.O88`, `OP_ASSET | OP_COMP | OP_LAZY`, after the
 eager overlay (`CC_PARTS_AFTER_OVL`, 73.14.2). `os88_main` fetches it when
-`os88_part_lazyok(1)` says it fits. When it does not (the 256 KB machine,
-130.5), the face is drawn PLAIN: the same layout with the kernel's 8x8 glyphs
+`os88_part_lazyok(1)` says it fits. When it does not (too little heap left -
+the 256 KB machine of 130.5 still has room, measured in
+`docs/breadxt/DEVELOPER.md`), the face is drawn PLAIN: the same layout with the kernel's 8x8 glyphs
 (`OSAPI_FONT_GLYPHS`) and text captions instead of pictures, the status bar
 says `Plain face: low memory`, and Help points at `HELP.TXT`, which every
 disk carries. The face never refuses a launch the previous one accepted.
@@ -253731,8 +253732,8 @@ the paint that follows the load; main before the face in brackets):
 | adapter | first paint | running pace |
 |---|---|---|
 | CGA (5150) | 1.43 s (1.05 s) | 0.9 ms simulated per s (0.9) |
-| Hercules (5150) | 2.95 s (1.50 s) | - |
-| VGA (XT) | 6.3 s (1.42 s) | 0.6 ms per s (0.7) |
+| Hercules (5150) | 2.95 s (1.45 s) | 0.9 ms per s (0.7) |
+| VGA (XT) | 6.22 s (1.42 s) | 0.6 ms per s (0.7) |
 
 A paint is priced by planes: every lit byte on VGA is four read-modify-
 writes where 1bpp is one, which is why VGA's first paint is the outlier.

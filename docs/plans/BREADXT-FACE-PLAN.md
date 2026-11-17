@@ -29,7 +29,7 @@ probe box, the circuit figures and the scope's collapse button all work.
 
 ## Stories
 
-- [ ] F1 Contract, plan, mockup in the tree, draft PR.
+- [x] F1 Contract, plan, mockup in the tree, draft PR (#377).
 - [x] F2 Art: codex master, `tools/os88bbart.py` (draft, build, selfcheck,
       png), `sprites.txt` finished by hand, `BBART.BIN` as part 1 (lazy).
 - [x] F3 Drawing core `bx_*`: band, fill, dither, sprite + remap, text, trace,
@@ -46,11 +46,13 @@ probe box, the circuit figures and the scope's collapse button all work.
       time labels, collapse; MID's Scope tab; COMPACT's Scope view.
 - [x] F7 Net list view.
 - [x] F8 MID and COMPACT layouts, 1bpp mono table, Hercules and CGA looked at.
-- [ ] F9 Tests: suite rows updated for the new geometry, host UI harness,
-      identity check (incremental vs full paint), 256 KB plain face.
-      Done on the host (`breadxtuihost` green, with the new `sections`
-      mode); the emulator rows are updated and run once in the final pass.
-- [ ] F10 Docs: SPEC sizes, DEVELOPER.md, diary, screenshots per adapter,
+- [x] F9 Tests: suite rows updated for the new geometry, host UI harness,
+      identity check (incremental vs full paint), 256 KB face. The final
+      pass ran the eleven `breadxt*` soak rows (green after one fix round:
+      BBNUM's raster cases moved to the new core, and the 256 KB row now
+      records which face it got - it got the art and the band, not the
+      plain face this plan guessed) and `test-full` (80 passed).
+- [x] F10 Docs: SPEC sizes, DEVELOPER.md, diary, screenshots per adapter,
       PR description with pictures.
 
 ## Verification

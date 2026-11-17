@@ -11,8 +11,10 @@ static void *bn_win;
 static struct os88_pt bn_org;
 static char bn_line[48],bn_num[8];
 static BBByte bn_plot[4];
-void bb_bytes(void *out,unsigned n,unsigned value);
-void bb_scope_line(void *out,int stride,int x1,int y1,int x2,int y2,int dash);
+void bx_setup(unsigned seg,void *band,unsigned cap,unsigned artseg,int bpp);
+void bx_new(int x,int y,int w,int h,int colour);
+void bx_fill(int x1,int y1,int x2,int y2,int colour);
+void bx_dots(int x1,int y1,int x2,int y2,int step,int colour);
 void bb_alertdone(int button) { (void)button; }
 #include "expected.inc"
 static void bn_check(int ok)
@@ -56,15 +58,17 @@ static void bn_test(void)
     bb_num_error=0;bb_nset(&bn_a,32767);bb_nset(&bn_b,32767);
     bb_nop(&bn_c,&bn_a,&bn_b,BB_NMUL);
     bn_check(!bb_nop(&bn_c,&bn_c,&bn_a,BB_NMUL) && bb_num_error);
-    /* A long trace assembled from tiny sample/hold spans must retain its
-     * spatial dash phase. Two-on/two-off at y=1 is10011001, not a solidFF. */
-    bb_bytes(bn_plot,4,0);
+    /* The face's drawing core (SPEC.md 130.6.2) under the actual C ABI, on
+     * a 1bpp band 16x2 in this segment: a solid white row is FFh FFh, and
+     * channel B's dotted trace assembled from tiny sample/hold spans keeps
+     * its spatial phase - every even x lit, 10101010, not a solid FFh. */
+    bx_setup(0,bn_plot,4,0,1);bx_new(0,0,16,2,0);
     for(i=0;i<16;i+=2){
-        bb_scope_line(bn_plot,2,i,0,i+1,0,0);
-        bb_scope_line(bn_plot,2,i,1,i+1,1,1);
+        bx_fill(i,0,i+1,0,15);
+        bx_dots(i,1,i+1,1,2,15);
     }
     bn_check(bn_plot[0]==255 && bn_plot[1]==255);
-    bn_check(bn_plot[2]==0x99 && bn_plot[3]==0x99);
+    bn_check(bn_plot[2]==0xAA && bn_plot[3]==0xAA);
     bb_num_error=0;bn_done=1;
 }
 void os88_paint(void *win)

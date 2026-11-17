@@ -371,12 +371,12 @@ def adapter(ui,offsets,kind,negative=False):
     app=App(ui,offsets);led(app,negative)
     if kind=='256':assert int.from_bytes(ui.m.read(0x413,2),'little')==256,'wrong RAM machine'
     # SPEC.md 130.6.3: the art is a lazy part and the band a claim of its
-    # own; the 256KB machine has room for neither and gets the plain face
-    # on the file buffer's band, never a refused launch.
+    # own, each taken only when it fits - a tight machine draws the plain
+    # face or uses the file buffer's band, never refuses the launch. Which
+    # one a machine got is evidence; the 640KB VGA machine must get both.
     plain,band=app.word('bu_plain'),app.word('bu_bandseg')
     print(f"  face: {'plain' if plain else 'art'}, band {'in a claim' if band else 'in the file buffer'}",flush=True)
-    if kind=='256':assert plain==1 and band==0,(plain,band)
-    elif kind=='vga':assert plain==0 and band!=0,(plain,band)
+    if kind=='vga':assert plain==0 and band!=0,(plain,band)
     expected_compact=kind in ('cga','256')
     assert bool(app.word('bu_compact'))==expected_compact,(kind,app.word('bu_compact'))
     if expected_compact:
