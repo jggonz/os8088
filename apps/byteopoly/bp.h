@@ -430,6 +430,22 @@ extern BPDiag bp_diag;
 void   bp_ui_committed(const BPResult *r);        /* a revision was applied here */
 void   bp_ui_link(void);                          /* link state/msg changed */
 void   bp_ui_chat(int machine, const char *text);
+/* --- appended by the link lane (SPEC.md 131.5.1, 131.6.5, 131.7.5) --- */
+#define BP_L_DIVERGED   8       /* boards differ: economic input stopped on
+                                   both; the client may bp_sess_adopt */
+#define BP_CHAT_LEN     24      /* chat characters a line carries */
+BPWord bp_ck_rand(void);                          /* bridge: OSAPI_RAND, identities only */
+int    bp_sess_adopt(void);                       /* client, DIVERGED: take the banker's board */
+/* the paired save / resume exchange, for the UI (bp_link_msg says more) */
+#define BP_PAIR_IDLE    0
+#define BP_PAIR_BUSY    1       /* a save or a resume is being exchanged */
+#define BP_PAIR_DONE    2       /* "Paired save complete" / resumed */
+#define BP_PAIR_FAIL    3       /* failed: the previous paired save stands */
+int    bp_sess_pair(void);
+int    bp_lobby_peer_ready(void);                 /* 1: the other machine pressed Ready (D3) */
+/* host-harness convention: a hosttest/ program that includes byteoply.c
+ * gets no-op bp_ck_* / bp_ui_* from bp_link.c unless it defines
+ * BP_LINK_FAKE and supplies its own (t_link.c does) */
 
 /* ===== BP_FACE: bp_face.c ================================================= */
 /* layouts picked from the content box (SPEC.md 131.8.1) */

@@ -50,17 +50,17 @@ in emulation follows integration; then the fix round; then the final pass.
 | US-13 | Debt and bankruptcy: shortfall screen, liquidation, estate to bank or player, elimination | rules, panels | I |
 | US-14 | Finish: last survivor, Quick Match score breakdown and shared wins, Review/New/Exit | rules, panels | I |
 | US-15 | Save and resume a local game from every pending decision; bad files refused, prior save kept | save, panels | I |
-| US-16 | Connect two PCs: Host/Join, search/peer/compatible/ready/started, port conflicts, every seat split | link, panels | - |
-| US-17 | Synchronized play: banker authority, machine-gated input, matching digests | link | - |
-| US-18 | Survive a pulled cable: pause, resume the pending transaction exactly once | link | - |
-| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | - (save I: slots, commit marker; exchange is link's) |
-| US-20 | Chat and link diagnostics | link, panels | - (panels I; link pending) |
+| US-16 | Connect two PCs: Host/Join, search/peer/compatible/ready/started, port conflicts, every seat split | link, panels | - (link B: host t_link, every split; UI is panels/app) |
+| US-17 | Synchronized play: banker authority, machine-gated input, matching digests | link | B (host: t_link, real engine) |
+| US-18 | Survive a pulled cable: pause, resume the pending transaction exactly once | link | B (host: t_link) |
+| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | - (save I: slots, commit marker; link B: the exchange and resume, host t_link) |
+| US-20 | Chat and link diagnostics | link, panels | - (panels I; link B: chat, bp_diag, host t_link) |
 | US-21 | Keyboard and mouse: shortcuts, focus order, fresh input after handoff | panels, face | I |
 | US-22 | CGA and Hercules: usable layouts, no hue-only meaning, mixed-adapter pairs | face, art | I (face, art) |
 | US-23 | Distinctive computer art: 16 computers, tokens, dice, markers, corners, mono variants | art | I |
 | US-24 | Restrained sound and animation through the system's routing; mute; no idle repaint | panels | I |
 | US-25 | XT memory and latency budgets, measured | all, lead | - |
-| US-26 | Verified under faults in paired emulators; complete local and cable games | link, lead | - |
+| US-26 | Verified under faults in paired emulators; complete local and cable games | link, lead | - (link B: complete cable games under faults on the host; tests/byteopoly_link.py written, not yet run) |
 | US-27 | Maintainable, reproducible C build; module map; host harness | lead, all | I (skeleton) |
 
 ## Foundation (lead) — done

@@ -117,6 +117,10 @@ int main(void)
     /* a seat on the other PC: facts shown, no buttons, no commands */
     t_new(2);
     bp_mode = BP_MODE_HOST; bp_here = 0;
+    /* a cable match in play as the session keeps it (link lane, 131.6):
+     * the link open, the match phase, heard this tick - bp_sess_mine reads
+     * the game's machines only in a match, the lobby roster before one */
+    bpl.on = 1; bpl.ph = 2; bpl.heard = bpl.clk;
     bp_game.machine[0] = 1; bp_game.machine[1] = 1;
     bp_game.decider = 0; bp_game.active = 0;
     t_paint();
