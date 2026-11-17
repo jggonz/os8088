@@ -506,6 +506,7 @@ static void bp_ap_poll(void)
 static void bp_ap_repaint(void *win)
 {
     bp_ap_need = 0;
+    if (bp_ap_mode) bp_face_dirty(BP_D_CENTER);     /* setup draws in the centre */
     if (os88_wm_clip_set(win) == 0) bp_face_paint(win, 0);
 }
 void os88_paint(void *win) { bp_ap_need = 0; bp_face_paint(win, 1); }
@@ -545,7 +546,7 @@ void os88_ontimer(void *win)
     bp_sess_tick();
     bp_ap_cue_step();
     if (bp_ap_mode == BP_M_GAME) bp_gp_tick();
-    if (bp_ap_need) bp_ap_repaint(win);
+    if (bp_ap_need || bp_face_isdirty()) bp_ap_repaint(win);
     if (os88_wm_timer(win, 1) != 0) bp_ap_timer_ok = 0;
 }
 void *os88_main(void)
