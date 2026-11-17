@@ -14,12 +14,13 @@
 #include "bp_rules.c"
 /* canonical encoding and digest (save lane) */
 #include "bp_codec.c"
-#ifndef BP_HOST
-/* files (save lane), the session and cable (link lane), the face, the
- * game panels, the setup screens and the application (face, panels,
- * app lanes) */
-#include "bp_save.c"
+/* the session and the cable protocol (link lane): OS-free behind the
+ * bp_ck_* bridge, so the host harness runs it whole */
 #include "bp_link.c"
+#ifndef BP_HOST
+/* files (save lane), the face, the game panels, the setup screens and the
+ * application (face, panels, app lanes) */
+#include "bp_save.c"
 #include "bp_face.c"
 #include "bp_panels.c"
 #include "bp_setup.c"

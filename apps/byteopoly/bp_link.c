@@ -38,3 +38,15 @@ int bp_chat_send(const char *text) { (void)text; return BP_EIO; }
 int bp_sess_save_pair(void) { return BP_EIO; }
 int bp_sess_resume_pair(void) { return BP_EIO; }
 int bp_sess_load_local(const BPState *loaded) { (void)loaded; return BP_EIO; }
+/* the bridge's guest body is bp_cable.inc; until the link lane lands it,
+ * a closed port */
+#ifndef BP_HOST
+int bp_ck_open(int port) { (void)port; return BP_EIO; }
+void bp_ck_close(void) {}
+void bp_ck_tick(void) {}
+int bp_ck_heard(void) { return 0; }
+int bp_ck_send(const BPByte *body, unsigned n) { (void)body; (void)n; return BP_EIO; }
+int bp_ck_recv(BPByte *body) { (void)body; return 0; }
+int bp_ck_port(void) { return 0; }
+const char *bp_ck_msg(void) { return "Off"; }
+#endif

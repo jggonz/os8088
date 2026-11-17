@@ -346,6 +346,10 @@ int    bp_load_local(const char *name, BPState *out);   /* out = scratch */
 int    bp_ckpt_write(const BPCkpt *meta, const BPState *s); /* candidate */
 int    bp_ckpt_commit(const BPCkpt *meta);
 int    bp_ckpt_load(int role, BPCkpt *meta, BPState *out);  /* last committed */
+/* the rules/content fingerprint the handshake and every file carry: a CRC
+ * over the immutable board and card tables and BP_RULES_VER */
+#define BP_RULES_VER    1
+void   bp_fingerprint(BPU32 *out);
 
 /* ===== BP_LINK: bp_link.c bp_cable.inc =================================== */
 #define BP_MODE_LOCAL   0
@@ -382,6 +386,19 @@ int    bp_chat_send(const char *text);
 int    bp_sess_save_pair(void);                   /* paired checkpoint, either side */
 int    bp_sess_resume_pair(void);                 /* after both reopen */
 int    bp_sess_load_local(const BPState *loaded); /* local mode: adopt a validated load */
+/* the cable bridge (bp_cable.inc on the guest; hosttest/ supplies a fake).
+ * bp_link.c reaches the UART ONLY through these, which is what lets the
+ * whole protocol run in the host harness. Frames are apps/os88cable.inc's:
+ * byte 0 the type, at most BP_CK_MAX body bytes before its CRC. */
+#define BP_CK_MAX       30
+int    bp_ck_open(int port);                      /* 0 auto, 1 COM1, 2 COM2; BP_OK or BP_EIO */
+void   bp_ck_close(void);
+void   bp_ck_tick(void);                          /* the port search, UI task */
+int    bp_ck_heard(void);                         /* tell the search a peer answered */
+int    bp_ck_send(const BPByte *body, unsigned n);/* BP_OK, or BP_EPENDING when the TX ring is full */
+int    bp_ck_recv(BPByte *body);                  /* -> length of the next valid frame, 0 none */
+int    bp_ck_port(void);                          /* the port held, 0 none */
+const char *bp_ck_msg(void);                      /* the framer's own status line */
 /* diagnostics (US-20) */
 typedef struct { BPWord crc, retry, frame, overrun, resync, rx, tx, chatdrop; } BPDiag;
 extern BPDiag bp_diag;

@@ -31,5 +31,6 @@
 %include "os88ui.inc"
 %define BX_CORE_ONLY                ; the band core without BREADXT's own tail
 %include "breadxt/draw.inc"
-%include "byteopoly/bp_cable.inc"
+%include "byteopoly/bp_cable.inc"        ; link lane: the cable bridge
+%include "byteopoly/bp_app.inc"          ; app lane: the alert bridge
 CC_IMAGE_END

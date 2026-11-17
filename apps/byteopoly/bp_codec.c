@@ -5,3 +5,4 @@ unsigned bp_encode(const BPState *s, BPByte *buf, unsigned cap) { (void)s; (void
 int bp_decode(const BPByte *buf, unsigned n, BPState *out) { (void)buf; (void)n; (void)out; return BP_EFORMAT; }
 int bp_validate(const BPState *s) { (void)s; return BP_OK; }
 void bp_digest(const BPState *s, BPU32 *out) { (void)s; bp_u32_set(out, 0, 0); }
+void bp_fingerprint(BPU32 *out) { bp_u32_set(out, BP_RULES_VER, 0); }
