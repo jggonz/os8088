@@ -166,7 +166,8 @@ static int ovl_bp_v_head(const BPState *s)
         }
     }
     if (n < (s->status == BP_ST_PLAY ? 2 : 1)) return -3;
-    if (s->active >= s->nseats || s->decider >= s->nseats) return -3;
+    if (s->active >= s->nseats) return -3;
+    if (s->decider >= s->nseats && !(s->status == BP_ST_OVER && s->decider == BP_NOBODY)) return -3;
     if (s->round_left & ~bpc_sm) return -3;
     if (s->status == BP_ST_PLAY) {
         if (!s->alive[s->active] || !s->alive[s->decider]) return -3;
@@ -288,16 +289,19 @@ static int ovl_bp_bit(const BPU32 *m, int p)
 static int ovl_bp_v_auction(const BPState *s)
 {
     unsigned h;
-    if (s->auc_space >= BP_PROPS || s->owner[s->auc_space] != BP_NOBODY) return -11;
-    if ((s->auc_open & s->auc_passed) || !s->auc_open
-        || (BPByte)(s->auc_open | s->auc_passed) != bpc_am) return -11;
-    if (s->auc_turn >= BP_SEATS || !((s->auc_open >> s->auc_turn) & 1)) return -11;
+    const BPSpace *sp;
+    sp = bp_space(s->auc_space);                /* auc_space is a SPACE id */
+    if (!sp || sp->prop >= BP_PROPS || s->owner[sp->prop] != BP_NOBODY) return -11;
+    /* auc_open is the eligible mask fixed at the opening; passers stay in it */
+    if (s->auc_open != bpc_am || (s->auc_passed & ~s->auc_open)) return -11;
+    if (s->auc_turn >= BP_SEATS || !((s->auc_open >> s->auc_turn) & 1)
+        || ((s->auc_passed >> s->auc_turn) & 1) || s->auc_turn == s->auc_high) return -11;
     h = s->auc_high;
     if (h == BP_NOBODY) {
         if (s->auc_bid.lo || s->auc_bid.hi) return -11;
         return BP_OK;
     }
-    if (h >= BP_SEATS || !((s->auc_open >> h) & 1)) return -11;
+    if (h >= BP_SEATS || !((s->auc_open >> h) & 1) || ((s->auc_passed >> h) & 1)) return -11;
     if (!(s->auc_bid.lo | s->auc_bid.hi)) return -11;
     if (((s->auc_bid.hi % 10) * 6 + s->auc_bid.lo % 10) % 10) return -11;
     if (s->auc_bid.hi > s->cash[h].hi

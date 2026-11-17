@@ -192,7 +192,7 @@ def validate(s):
     cnt = bin(amask).count('1')
     if cnt < (2 if s['status'] == 1 else 1):
         bad(3, 'too few alive')
-    if s['active'] >= n or s['decider'] >= n:
+    if s['active'] >= n or (s['decider'] >= n and not (s['status'] == 2 and s['decider'] == NOBODY)):
         bad(3, 'active/decider')
     if s['round_left'] & ~seatmask:
         bad(3, 'round_left')
@@ -288,19 +288,21 @@ def validate(s):
         if sp[0] not in (1, 2) or s['owner'][sp[2]] != NOBODY:
             bad(10, 'buy on a non-lot')
     if phase == 4:
-        if s['auc_space'] >= 18 or s['owner'][s['auc_space']] != NOBODY:
+        sp = _B[s['auc_space']] if s['auc_space'] < 28 else None
+        if sp is None or sp[2] >= 18 or s['owner'][sp[2]] != NOBODY:
             bad(11, 'auction lot')
         op, pa = s['auc_open'], s['auc_passed']
-        if op & pa or not op or (op | pa) != amask:
+        if op != amask or pa & ~op:
             bad(11, 'auction masks')
-        if s['auc_turn'] >= 4 or not op >> s['auc_turn'] & 1:
+        t = s['auc_turn']
+        if t >= 4 or not op >> t & 1 or pa >> t & 1 or t == s['auc_high']:
             bad(11, 'auction turn')
         hi = s['auc_high']
         if hi == NOBODY:
             if s['auc_bid']:
                 bad(11, 'bid without a bidder')
         else:
-            if hi >= 4 or not op >> hi & 1:
+            if hi >= 4 or not op >> hi & 1 or pa >> hi & 1:
                 bad(11, 'high bidder')
             b = s['auc_bid']
             if b == 0 or b % 10 or b > s['cash'][hi]:
