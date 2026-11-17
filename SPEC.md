@@ -255097,8 +255097,12 @@ mortgage and upgrades have shapes.
 #### 131.8.1 Layouts
 
 `bp_face_paint` reads the window's content origin (`os88_wm_content`) and
-size (`os88_wm_geom`) on every call and lays out again only when origin, size
-or `bp_pn_covers()` changed (the cache key; a change repaints everything).
+size (`os88_wm_geom`) on every call and lays out again only when origin or
+size changed, or `bp_pn_covers()` moved into or out of `BP_PN_FULL` (the cache
+key; such a change repaints everything). A change between 0 and
+`BP_PN_CENTRE` - the bottom bar and a centre panel, both inside `bp_r_center`
+- is not a layout change: it repaints the centre and the hint bar, and
+nothing of the board or the sidebar (131.8.5).
 The adapter is never named: the content box alone picks the layout, and the
 live bit depth sets `bp_mono` (bpp < 4).
 
@@ -255137,7 +255141,7 @@ When `bp_pn_covers()` is `BP_PN_FULL` (the setup and lobby screens) the face
 sets `bp_r_center` to the whole aligned content, draws NOTHING of the board,
 and calls only `bp_pn_draw`; `bp_face_hit_space` then answers -1 and
 `bp_face_key` 0. Back to 0 or `BP_PN_CENTRE`, the layout is rebuilt and
-everything repainted.
+everything repainted - the only coverage change that costs a whole window.
 
 #### 131.8.2 A cell
 
@@ -255149,22 +255153,32 @@ the cells on the ring's rim), then, by what it is:
   (blue C, green H, cyan A, red I, magenta R, grey utility; on 1bpp always
   solid black, so the LETTER carries the meaning: C H A I R P, `U` for a
   utility) holding the letter at the left in white and the price at the right;
-  the short name centred beneath (an owner's cell shows nothing else of its
-  owner here); the picture, the biggest of SMALL / TINY that fits the room
-  left (on 1bpp the `BP_A_MTINY` twin, 131.10.5), centred in the rest; the
-  OWNER's token silhouette in the sprite row's left margin; the level in its
-  right margin: one to four `BP_A_RAM` chips (stacked in as many columns as the
-  margin holds) or one `BP_A_WORKSHOP`, drawn pips when the art part is
-  absent; a MORTGAGED property shows the `BP_A_MORTGAGE` mark under the owner
-  and a sparse grey dither over its picture.
+  the short name centred beneath (one wider than the cell is drawn with its
+  tail in lower case - "E-waste", "Power" - and only then cut; an owner's
+  cell shows nothing else of its owner here); the picture, the biggest of
+  SMALL / TINY that fits the room left (on 1bpp the `BP_A_MTINY` twin,
+  131.10.5), centred in the rest; the OWNER's mark in the collection bar,
+  right of the letter: the owner's token silhouette outlined in WHITE on the
+  bar's dark ground (on 1bpp a white ring), so it never reads as a token
+  standing on the cell (those are black-outlined on the white ground, along
+  the bottom); the level in the picture row's right margin: one to four
+  `BP_A_RAM` chips (stacked in as many columns as the margin holds) or one
+  `BP_A_WORKSHOP`, drawn pips when the art part is absent; a MORTGAGED
+  property the `BP_A_MORTGAGE` mark at the top of the left margin (inside
+  the cell on MID's 34 rows too) and a sparse grey dither over its picture.
 * A **corner or special space**: the name at the top, the picture below
   (`fc_specart`: BOOT, REPAIR, SWAP, CRASH, the two decks, DUTY, E-WASTE), and
-  for BOOT and the two charges the amount ("+200", "-100", "-75").
+  for BOOT and the two charges the amount ("+200", "-100", "-75") beside it.
+  The first that fits the room under the name wins: the SMALL picture with
+  the amount, the SMALL picture alone (FULL's charges: the details box gives
+  the amount), the TINY `BP_A_TSPECIAL` twin (on 1bpp `BP_A_MTSPECIAL`) with
+  the amount, then alone (MID), and the amount alone.
 * **COMPACT** cells (16 rows: not enough for a picture) trade it for two
-  rows: row A is an 8 x 7 collection letter chip, then the short name; row B
-  an 8 x 8 chip with the owner's SEAT NUMBER in the seat's dark colour, then
-  the price. Levels are black bars (four) or one wide block (Workshop); a
-  mortgaged cell strikes its name through with a dotted line and shows an `M`.
+  rows: row A is an 8 x 7 collection letter chip, a 2 px gap, then the short
+  name (fitted as above); row B an 8 x 8 chip with the owner's SEAT NUMBER in
+  the seat's dark colour, then the price. Levels are black bars (four) or one
+  wide block (Workshop); a mortgaged cell strikes its name through with a
+  dotted line and shows an `M` right-aligned 2 px inside the cell's edge.
 * **Selection** (`bp_sel`): the short name on a navy/black bar in white
   (visible on every adapter), and on FULL/MID a 1 px yellow (black on 1bpp)
   frame inside the edge. It is drawn over ground only, so it never erases an
@@ -255173,8 +255187,13 @@ the cells on the ring's rim), then, by what it is:
   along the bottom (COMPACT: in row B in place of the price). The silhouette's
   SHAPE is the token's identity (floppy a square, mouse a round, joystick a
   triangle, cassette a diamond) and its fill the seat's colour (red, blue,
-  yellow, green; on 1bpp white, black, white, white), a black outline always;
-  the owner mark uses the same shapes.
+  yellow, green; on 1bpp white, black, white, white), a black outline on a
+  light ground and a WHITE one on a dark ground (the owner mark on the
+  collection bar, the players box's inverted active row), so the black-filled mouse never vanishes on
+  1bpp; on 1bpp a white-outlined token keeps a black inside, so on a dark
+  ground every token is a white ring and the owner mark never reads as a
+  white-filled token standing on the cell. The owner mark uses the same
+  shapes.
 
 #### 131.8.3 The centre
 
@@ -255184,12 +255203,16 @@ a sparse light-cyan stipple (on 1bpp black with white dots), then:
 `BP_A_KEYCAP` sprite on COMPACT), above them on FULL and MID the mascot
 between the Floppy Find and System Error cards, and under them the two dice
 (`BP_A_DIE`, a drawn die when absent) of `bp_game.d1/d2`. Then, always,
-`bp_pn_draw()` runs. With `BP_PN_CENTRE` the art is skipped and the ground and
-border only are drawn.
+`bp_pn_draw()` runs. With `BP_PN_CENTRE` the panel owns every pixel of
+`bp_r_center` inset by 2 (`bp_pn_draw`'s contract, 131.9.7): the face draws
+the border and the 1 px stippled ring outside that and nothing under the
+panel - no art, and no stipple for the panel to paint over.
 
 #### 131.8.4 The sidebar and the hint bar
 
-* **Players**: title "Round N" with the dice total as "d1+d2" at the right
+* **Players**: title "Round N" (N = completed rounds + 1, held at a Quick
+  Match's limit, so a finished 10-round match says "Round 10", not 11) with
+  the dice total as "d1+d2" at the right
   (COMPACT carries both in the link row); a row per seat: token silhouette,
   name, cash (`bp_u32_fmt`). The ACTIVE seat is the whole row inverted
   (navy/black ground, white text) - readable without colour; an eliminated
@@ -255234,6 +255257,21 @@ So `bp_face_dirty(BP_D_ALL)` after a commit repaints only what the commit
 touched, and an idle board repaints nothing. `os88_paint` (`full` = 1) repaints
 the whole content, the kernel's clip region doing the rest.
 
+**Damage smaller than a section.** `bp_face_dirty_rect(r)` names a screen
+rect that changed - a panel's button row, an editor line, a list row - when
+nothing else did. The rects named before a paint are kept as their bounding
+box (the panels name one per key); at the paint it is widened to multiples
+of 8, clipped to the content and painted in strips of ITS width, with only
+the sections it touches (inside the centre: `BP_D_CENTER` alone - the
+centre's art and `bp_pn_draw` clipped to the strip). It is dropped when it
+lies inside the centre and the same pass repaints the whole centre, and by a
+`full` paint. The centre itself is painted whole only
+for `BP_D_CENTER`: a panel that changes its KIND dirties the centre, a key
+that changes a line inside one names the line.
+
+The coverage change (131.8.1) between the bottom bar and a centre panel is
+`BP_D_CENTER | BP_D_HINT`, never a whole window.
+
 Measured on MartyPC, strips per update (a strip is one `bx_new`, the scene and
 one blit; "paints" are rects). FULL (band 16 KB, 51 rows of the 640-wide
 content, 97 of the 336-wide centre):
@@ -255251,6 +255289,28 @@ content, 97 of the 336-wide centre):
 The centre is the largest single cost and is forced because a panel's
 contents are not the face's to hash; a panel that is not changing keeps the
 commit's repaint to the centre alone.
+
+What it costs on the target, MartyPC's 4.77 MHz XT with VGA (FULL), guest
+seconds from the key to the UI going idle, two seats, on the QA head (every
+coverage change a whole window) and now (QA list Qqa1-4; the method of the
+QA run's report, section 3):
+
+| update | before (QA head) | now |
+|---|---:|---:|
+| End Turn (the bar -> the handoff panel) | 7.42 | 2.14 |
+| handoff acknowledged (panel -> the bar) | 8.78 | 2.72 |
+| Collection opened / closed | 7.88 / 8.80 | 1.53 / 2.75 |
+| F1 Rules / Esc out of Rules | 10.34 / 8.80 | 4.00 / 2.74 |
+| a roll that lands on a property (bar -> Buy panel, cell, players, log) | 8.00 | 2.79 |
+| Tab on the bar (the panel names the button row) | 2.66 | 0.63 |
+| Tab in the auction | 2.20 | 0.63 |
+| bid + / - (the panel names the editor and the rows below it) | 2.30 | 1.38 / 1.35 |
+
+A centre panel itself is ~1.5-2.0 s of the figures above (four strips of
+the 336-wide centre, the panel's ground, text and the blit), and bringing
+the bar back costs the centre's art as well (its sprites - mascot, cards, dice -
+are ~40% of it); a panel key that names its rows with `bp_face_dirty_rect`
+pays for those rows' strip only.
 
 #### 131.8.6 The widget kit
 
