@@ -65,13 +65,10 @@ static BPByte gp_typed;
 static BPByte gp_mc;            /* manage cursor */
 /* handoff */
 static BPByte gp_hand;
-static unsigned gp_hq;          /* the handoff's quiet: raised, drawn, or a key handled (131.9.8) */
-/* stale keys (131.9.8): the end of the last key's handling or a panel draw,
- * the panel identity the last key was typed for, and a run being swallowed */
-static unsigned gp_kend, gp_kseen;
-static BPByte gp_kswal;
+/* the quiet clock (131.9.8): restarted when a handoff is raised or drawn,
+ * by every key at it, and at the END of every key's or click's handling */
+static unsigned gp_hq;
 #define GP_HQUIET 20            /* ticks: longer than any typematic delay or period */
-#define GP_KQUIET 10            /* ticks: longer than the slowest typematic period (9.1) */
 /* focus (131.9.7): the identity it was reset for, the revision it was checked at */
 static unsigned gp_fid;
 static BPWord gp_frev;
@@ -443,8 +440,8 @@ static void ovl_gp_spec(void)
      * commit that greys the focused button moves it on (131.9.7) */
     i = ovl_gp_ident();
     if (i != (int)gp_fid) { gp_fid = (unsigned)i; gp_frev = bp_game.rev.lo; gp_foc = (BPByte)ovl_gp_first(); }
-    else if (gp_frev != bp_game.rev.lo) {
-        gp_frev = bp_game.rev.lo;
+    else if (gp_frev != bp_game.rev.lo || gp_kind == GK_RULES || gp_kind == GK_KEYS) {
+        gp_frev = bp_game.rev.lo;   /* (a page turn greys Next/Prev: move on too) */
         if (gp_foc >= gp_nb || gp_bwhy[gp_foc]) gp_foc = (BPByte)ovl_gp_first();
     }
     if (gp_foc >= gp_nb) gp_foc = 0;
@@ -740,6 +737,10 @@ static void ovl_gp_dcard(void)
     ovl_gp_frame(cd->deck ? "System Error" : "Floppy Find");
     if (bp_layout != BP_LAY_COMPACT) {     /* the deck picture where it fits (Qqa2-21) */
         sw = cd->deck ? (bp_mono ? BP_A_M_CARD_SE : BP_A_CARD_SE) : (bp_mono ? BP_A_M_CARD_FF : BP_A_CARD_FF);
+#ifdef BP_A_CARD_FF_S
+        if (bp_layout == BP_LAY_MID)        /* the 24x32 deck pair (art D27) */
+            sw = cd->deck ? (bp_mono ? BP_A_M_CARD_SE_S : BP_A_CARD_SE_S) : (bp_mono ? BP_A_M_CARD_FF_S : BP_A_CARD_FF_S);
+#endif
         if (gp_y + (int)(bp_w_spritesz(sw) >> 8) <= gp_btop) {
             sw = ovl_gp_sprite(sw);
             if (sw && sw < 100) gp_x += sw + 8;
@@ -1148,8 +1149,7 @@ static void ovl_gp_draw(void)
     ovl_gp_track();
     ovl_gp_spec();
     if (gp_kind == GK_NONE) return;
-    gp_kend = os88_ticks();         /* a panel drawn now: a key within GP_KQUIET may predate it */
-    if (gp_kind == GK_HAND) gp_hq = gp_kend;
+    if (gp_kind == GK_HAND) gp_hq = os88_ticks();   /* drawn now: a key queued meanwhile is not fresh */
     ovl_gp_geom();
     switch (gp_kind) {
     case GK_IDLE: ovl_gp_didle(); break;
@@ -1438,10 +1438,12 @@ static void ovl_gp_damage(void)
     bp_face_dirty_rect(&r);
 }
 
-/* a press a stale key asked for is swallowed (131.9.8): consumed, no act */
+/* a key's press: a confirmation's Yes counts only after GP_HQUIET quiet
+ * ticks, so the key that armed it, held or typed twice, cannot answer it
+ * (131.9.8); otherwise it is consumed and nothing happens */
 static int ovl_gp_kpress(int i)
 {
-    if (gp_kswal) return 1;
+    if (gp_conf && gp_bkey[i] != 27 && os88_ticks() - gp_hq < GP_HQUIET) { gp_err = "Let go, then press again"; return 1; }
     return ovl_gp_press(i);
 }
 static int ovl_gp_key1(int a, int sc)
@@ -1473,19 +1475,12 @@ static int ovl_gp_key1(int a, int sc)
     if (k == 13 && gp_nb) return ovl_gp_kpress(0);
     return 0;
 }
-/* a key: is it stale (typed before its typist could see this panel)? then
- * the key itself, then the damage it did (131.9.7, 131.9.8) */
+/* a key, then the damage it did (131.9.7) */
 static int ovl_gp_key(int a, int sc)
 {
-    int r, id;
-    unsigned now;
+    int r;
     ovl_gp_track();
     ovl_gp_spec();
-    now = os88_ticks();
-    id = ovl_gp_ident();
-    if (now - gp_kend >= GP_KQUIET) gp_kswal = 0;
-    else if ((unsigned)id != gp_kseen) gp_kswal = 1;
-    gp_kseen = (unsigned)id;
     ovl_gp_snap(gp_s0);
     r = ovl_gp_key1(a, sc);
     ovl_gp_damage();
@@ -1522,14 +1517,12 @@ static int ovl_gp_click1(int x, int y)
     if (gp_kind == GK_IDLE || gp_kind == GK_REVIEW) return 0;
     return ovl_gp_in(&gp_r, x, y);
 }
-/* a click is deliberate: never stale, but it is the panel's next "seen" */
+/* a click, then the damage it did; a click is deliberate, never a repeat */
 static int ovl_gp_click(int x, int y)
 {
     int r;
     ovl_gp_track();
     ovl_gp_spec();
-    gp_kswal = 0;
-    gp_kseen = (unsigned)ovl_gp_ident();
     ovl_gp_snap(gp_s0);
     r = ovl_gp_click1(x, y);
     ovl_gp_damage();
@@ -1675,5 +1668,5 @@ void bp_gp_event(const BPEvent *e)
 }
 void bp_gp_tick(void) { ovl_gp_tick(); }
 /* the end of a key's or click's handling, after its repaint (131.9.8) */
-void bp_gp_keyend(void) { gp_kend = gp_hq = os88_ticks(); }
+void bp_gp_keyend(void) { gp_hq = os88_ticks(); }
 int bp_gp_overchoice(void) { int c; c = gp_oc; gp_oc = 0; return c; }

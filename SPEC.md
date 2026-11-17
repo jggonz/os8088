@@ -255469,8 +255469,9 @@ kind, a confirmation opening or closing, or the deciding seat - the focus is
 reset to the first enabled button, and a confirmation opens on No, so no
 number of Enters walks from DEBT into a bankruptcy. After a commit, a focus
 left on a button the new state greys (Roll once rolled) moves to the first
-enabled one; an editor change (a bid being typed) never moves it, so Enter
-on an invalid bid explains instead of passing. A button too wide for the
+enabled one, and so does a Rules/Keys page turn that greys Next or Prev;
+an editor or list change (a bid being typed, a Collection cursor) never
+moves it, so Enter on an invalid bid explains instead of passing. A button too wide for the
 panel loses its "[K]" prefix and the hint bar still names the key; on 1-bit
 adapters the focused label is prefixed ">" in addition to the face's focus
 state. Hit targets are the rectangles the last draw recorded, the very ones
@@ -255520,35 +255521,39 @@ never shows it; a cable machine playing two does, between those two only.
 Two facts decide the mechanism. First, a key event says when it was
 PROCESSED, never when it was typed: during a repaint of several seconds on
 the XT (131.8.5's table) the typematic repeats of a held key - or a second
-press typed ahead - wait in the keyboard queue and then arrive back to back,
-so a gap measured from the previous key's ARRIVAL spans that repaint and
-looks fresh (QA Qqa1-3: one held Enter ended a turn, confirmed the next
+press typed ahead - wait in the BIOS keyboard buffer and then arrive back to
+back, so a gap measured from the previous key's ARRIVAL spans that repaint
+and looks fresh (QA Qqa1-3: one held Enter ended a turn, confirmed the next
 player's handoff, rolled for them and acknowledged their card). Second, the
 key-state map (SPEC.md 9.7) would tell a held key from a fresh one, but
 arming it makes every E0-prefixed key step twice on some machines for the
-rest of the session, for every program, and kern_small refuses the map. So
-the gap is measured from the END of the previous key's handling instead:
-the app calls `bp_gp_keyend()` as the last thing `os88_onkey` and
-`os88_onclick` do, after their repaint, and the panels stamp the same clock
-whenever they draw. A queued key then arrives within a tick of that stamp,
-and a held key's repeats within one typematic period of it (at most ~9
-ticks at the slowest rate, 2 per second), however long the repaint was.
+rest of the session, for every program, and kern_small refuses the map; and
+the BIOS buffer's head and tail are not a package's to read (kern_mega). So
+the quiet is measured from the END of the previous key's handling: the app
+calls `bp_gp_keyend()` as the last thing `os88_onkey` and `os88_onclick` do,
+after their repaint, and drawing the handoff restarts it too. A queued key
+then arrives within a tick of that stamp and a held key's repeats within one
+typematic period of it, however long the repaint was.
 
 - **The handoff** takes Enter or Space only after 20 ticks (1.1 s) of quiet:
-  no key event, no end of a key's handling and no draw of the handoff in
-  that time, and the quiet restarts when the handoff is raised. 20 ticks is
-  longer than any typematic delay (at most 1 s) and any repeat period, so
-  neither a held key nor one typed during the repaint that raised the
-  handoff can confirm it; the panel says "a held key does not count - let
-  go first". Mouse clicks on "Ready" count at once.
-- **Every other panel**: a key arriving within 8 ticks of the previous
-  key's end while the panel's identity (kind, confirmation, deciding seat)
-  differs from the one that key ended on is STALE - typed before its typist
-  could see this panel - and so is every key after it until 8 quiet ticks
-  pass. A stale key may move a cursor, the focus or an editor, but never
-  presses a button. So a held Enter that dismisses the handoff, or a held
-  Space whose roll opens the purchase, stops at the new panel; and a held K
-  stops at the bankruptcy confirmation.
+  no key event, no end of a key's handling and no draw of the handoff in that
+  time; raising it starts the quiet too. 20 ticks is longer than any
+  typematic delay (at most 1 s) and any repeat period (at most 9.1 ticks at
+  2 per second), so neither a held key nor one typed during the repaint that
+  raised the handoff can confirm it, and every rejected key restarts the
+  wait; the panel says "a held key does not count - let go first". Mouse
+  clicks on "Ready" count at once. Because a local game raises a handoff
+  whenever the decider becomes another seat played here, this is what
+  guarantees the rule: the next person's first decision is always behind a
+  fresh press.
+- **A confirmation's Yes** (Go bankrupt, Yes leave) obeys the same 20 quiet
+  ticks when pressed by key, so the K that armed it, held or typed twice,
+  cannot answer it; the status line then reads "Let go, then press again".
+  Enter on a confirmation presses No (131.9.7). A click on Yes counts at once.
+- Other keys are NOT filtered. A same-player key typed ahead of a repaint
+  acts on that player's next panel: the clock cannot tell it from a fast
+  deliberate press or from a test driver keying 1-2 ticks after the UI goes
+  idle, and it cannot act for anyone else.
 - The handoff follows the decider it was raised for: if the state changes
   under it (a Load of an earlier position of the same match, a revision
   going backwards) to another decider, it is dropped and raised again for

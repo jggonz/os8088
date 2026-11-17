@@ -5,16 +5,16 @@
 #include "bphost.h"
 #include "byteoply.c"
 #include "art.h"
-/* a help record: 20 rules lines, #KEYS, 5 keys lines (0 = no art yet) */
+/* a help record: 50 rules lines, #KEYS, 5 keys lines (0 = no art yet) */
 static int bp_t_help;
 int bx_artstr(int id, int n, char *buf)
 {
     (void)id;
     buf[0] = 0;
-    if (!bp_t_help || n < 0 || n > 25) return 0;
-    if (n == 20) strcpy(buf, "#KEYS");
-    else if (n < 20) snprintf(buf, 52, "rule %02d", n);
-    else snprintf(buf, 52, "key %02d", n - 21);
+    if (!bp_t_help || n < 0 || n > 55) return 0;
+    if (n == 50) strcpy(buf, "#KEYS");
+    else if (n < 50) snprintf(buf, 52, "rule %02d", n);
+    else snprintf(buf, 52, "key %02d", n - 51);
     return 1;
 }
 /* the face's damage doors, recorded (131.9.7) */
@@ -100,7 +100,8 @@ static void t_extra(void)
     BP_CHECK(gp_bwhy[0] != 0, "Prev is grey on the first page");
     for (n = 0; n < 12; n++) t_key(0, 0x51);    /* PgDn past the end */
     BP_CHECK(gp_help + 1 == gp_hpages && gp_bwhy[1] != 0, "paging stops on the last page, Next grey");
-    BP_CHECK(t_has("rule 19") && !t_has("#KEYS") && !t_has("key 0"), "the last Rules page ends at #KEYS (Qqa2-5)");
+    BP_CHECK(t_fockey() == 'b', "the focus leaves the greyed Next for Prev");
+    BP_CHECK(gp_hpages >= 2 && t_has("rule 49") && !t_has("#KEYS") && !t_has("key 0"), "the last Rules page ends at #KEYS (Qqa2-5)");
     t_key(27, 0x01);
     BP_CHECK(!bp_gp_covers(), "Esc closes Rules");
     BP_CHECK(t_fockey() == ' ', "after Rules the bar's focus is Roll again, not index 2");
@@ -138,14 +139,12 @@ static void t_extra(void)
         for (n = 0; n < 15; n++) t_rkey(13, 0x1C);     /* the queue drains back to back */
         for (n = 0; n < 30; n++) { bp_host_ticks += 2; t_rkey(13, 0x1C); }   /* still held */
         BP_CHECK(gp_hand && (int)bp_game.rev.lo == rev, "queued and held Enters leave the handoff up");
-        bp_host_ticks += 25;
+        bp_host_ticks += 19;
+        t_rkey(13, 0x1C);                       /* 19 ticks: the slowest typematic delay is 18 */
+        BP_CHECK(gp_hand, "19 quiet ticks are not enough");
+        bp_host_ticks += 21;
         t_rkey(13, 0x1C);                       /* let go, then a fresh press */
-        BP_CHECK(!gp_hand, "a fresh Enter after letting go confirms");
-        for (n = 0; n < 20; n++) { bp_host_ticks += 2; t_rkey(13, 0x1C); }  /* held through it */
-        BP_CHECK((int)bp_game.rev.lo == rev, "the held Enter does not act on the next player's panel");
-        bp_host_ticks += 11;
-        t_rkey(13, 0x1C);
-        BP_CHECK((int)bp_game.rev.lo == rev + 1, "after 10 quiet ticks Enter acts again");
+        BP_CHECK(!gp_hand && (int)bp_game.rev.lo == rev, "a fresh Enter after letting go confirms, and only that");
     }
     /* -- damage of an editor key: the auction's + -- */
     for (n = 0; n < 200 && bp_game.phase != BP_PH_AUCTION; n++) {
@@ -184,8 +183,14 @@ static void t_extra(void)
     t_key(13, 0x1C);
     BP_CHECK(!gp_conf && bp_game.alive[0] && bp_game.phase == BP_PH_DEBT, "two Enters do not bankrupt");
     t_key('k', 0x25);
-    for (n = 0; n < 5; n++) { bp_host_ticks += 2; t_rkey('k', 0x25); }
-    BP_CHECK(bp_game.alive[0], "a held K stops at the confirmation");
+    for (n = 0; n < 12; n++) { bp_host_ticks += 2; t_rkey('k', 0x25); }   /* held */
+    BP_CHECK(bp_game.alive[0] && gp_conf, "a held K stops at the confirmation");
+    BP_CHECK(t_has("Let go, then press again"), "the confirmation says why");
+    bp_host_ticks += 6; t_rkey('k', 0x25);
+    BP_CHECK(bp_game.alive[0], "a K typed again at once does not answer");
+    bp_host_ticks += 21; t_rkey('k', 0x25);
+    BP_CHECK(!bp_game.alive[0] || bp_game.status != BP_ST_PLAY || bp_game.phase != BP_PH_DEBT,
+             "a deliberate K after letting go declares bankruptcy");
     /* -- a Load of an earlier position: the handoff names the right player (Qqa1-6) -- */
     t_new(2);
     bp_host_ticks += 40; t_paint(); t_key(13, 0x1C);
