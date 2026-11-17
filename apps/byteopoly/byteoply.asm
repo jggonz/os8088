@@ -17,6 +17,7 @@
 %define CC_HAS_ONCLOSE
 %define CC_HAS_ONTIMER
 %define CC_HAS_ONMOVE
+%define CC_HAS_FDLG
 %define CC_HAS_OVL
 %define CC_OVL_PART
 %assign CC_PARTS_AFTER_OVL 1      ; BPART.BIN follows the overlay
