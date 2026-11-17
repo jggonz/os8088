@@ -1282,6 +1282,16 @@ static void invariants(void)
     }
     for (p = 0; p < 4; p++) CK(cash(p) < 10000000u, "no wrapped balance");
     valid("script step");
+#ifdef BP_RULES_CROSS_VALIDATE
+    /* the save lane's validator must accept every state the engine leaves
+     * at rest; off until save's rules for auc_open/auc_passed, auc_space
+     * (a space id) and decider in OVER match SPEC 131.4.5-131.4.6 */
+    {
+        int e = bp_validate(&S);
+        if (e) printf("  bp_validate (save lane) refused a state the engine left at rest: phase %d\n", S.phase);
+        CK(e == BP_OK, "the save lane's bp_validate accepts every state at rest");
+    }
+#endif
 }
 /* bp_can and bp_check agree on every button (SPEC.md 131.4.9) */
 static void greying(void)
