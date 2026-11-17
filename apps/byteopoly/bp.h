@@ -517,6 +517,11 @@ int    bp_gp_click(int x, int y);                 /* 1 = consumed */
 const char *bp_gp_hint(int i);                    /* hint bar entries, 0 ends */
 void   bp_gp_sync(void);                          /* game/link state changed */
 void   bp_gp_open(int which);                     /* a menu asked for a panel */
+/* added by the panels lane (SPEC.md 131.9.7-131.9.11) */
+void   bp_gp_event(const BPEvent *e);             /* each event of a committed result (auto-pass note) */
+void   bp_gp_chat(int machine, const char *text); /* a chat line sent or received, for the panel */
+void   bp_gp_tick(void);                          /* every timer tick: a handoff watches the keys */
+int    bp_gp_overchoice(void);                    /* the end panel's pick, once: 1 review 2 new 3 exit */
 
 /* ===== BP_APP: bp_app.c bp_setup.c ======================================= */
 /* the application (SPEC.md 131.9.1-131.9.6): every os88_* callback, the
@@ -546,4 +551,16 @@ void   bp_pn_sync(void);
 #define BP_SND_ERROR    7
 void   bp_sound(int cue);
 
+/* app-lane additions (SPEC.md 131.9.1-131.9.6) */
+#define BP_M_GAME       0       /* bp_ap_mode: board and game panels */
+#define BP_M_SETUP      1       /* New Game screen (the launch default) */
+#define BP_M_LOBBY      2       /* the same screen, a cable link open */
+extern BPByte bp_ap_mode;
+extern BPByte bp_opt_sound, bp_opt_fast;          /* Options menu flags */
+/* guarded actions (bp_setup.c asks the app): */
+#define BP_ACT_START    1       /* start the match the setup screen holds */
+#define BP_ACT_LOAD     2
+#define BP_ACT_CLOSE    3
+#define BP_ACT_NEW      4       /* leave a cable match for the setup screen */
+#define BP_ACT_SAVECLOSE 5      /* close once the save lands */
 #endif

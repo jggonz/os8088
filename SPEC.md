@@ -255274,11 +255274,9 @@ layout.
 
 ### 131.9 Panels, flows and input
 
-(App lane: 131.9.1 modes and routing, 131.9.2 the New Game screen,
-131.9.3 the cable lobby, 131.9.4 menus and keys, 131.9.5 sound,
-131.9.6 files and the close decision. Panels lane: 131.9.7 the decision
-panels, 131.9.8 handoff, 131.9.9 trades, 131.9.10 pause, chat and
-diagnostics, 131.9.11 the end. Reserved.)
+131.9.1-131.9.6 are the app's half (`bp_app.c`, `bp_setup.c`: modes, the
+New Game screen, the cable lobby, menus and keys, sound, files and the close
+decision); 131.9.7-131.9.11 are the in-game panels' (`bp_panels.c`).
 
 Binding choices made before the lanes: the face calls one door
 (`bp_pn_*`); `bp_app.c` routes it to the setup screens (drawn over the whole
@@ -255286,6 +255284,260 @@ content) or to the game panels (`bp_gp_*`, drawn in the centre). Every
 decision a panel takes becomes a `BPCmd` through `bp_sess_submit`.
 About is the standard application entry (`OSAPI_ABOUT_SET`, §12.2), not a
 private menu item.
+
+#### 131.9.1 Modes and routing
+
+The application has three modes (`bp_ap_mode`): `BP_M_SETUP` (the New Game
+screen, the launch default), `BP_M_LOBBY` (the same screen with a cable link
+open) and `BP_M_GAME` (the board and the game panels). The face calls only
+the `bp_pn_*` door; `bp_app.c` routes it: setup and lobby go to the setup
+screens, which cover the WHOLE content (`bp_pn_covers` = `BP_PN_FULL`), game
+goes to `bp_gp_*`. Input order is fixed: a global hot key the app owns, then
+the door (panel or setup screen), then the board (`bp_face_key`,
+`bp_face_hit_space`). A repaint is requested only by something that changed
+(`bp_ap_need`: set by committed results, link changes, consumed input and
+cues; cleared by the repaint), so an idle match draws nothing and plays
+nothing. The window is created once and never recreated; two instances share
+nothing (every variable is the package's own, the band claim and the timer
+are per window). A match starts in exactly one place, `bp_ap_started`: it
+sets `BP_M_GAME`, snapshots the token positions for damage and dirties the
+whole face.
+
+`bp_ui_committed` turns each `BPEvent` into one log line of at most
+`BP_LOG_LEN` characters (names are `BP_NAMELEN`, spaces use their short
+names, money is `bp_u32_fmt`), dirties precisely (the players, log, hint and
+centre; a space only when its owner, level, mortgage or occupant changed,
+found by comparing each seat's position with the one last drawn), picks ONE
+sound cue by rank (win, bankruptcy, Crash!, card, rent, buy, dice), and calls
+`bp_pn_sync`. A cable commit never marks a local save as owed. Each event
+is also handed to the panels (`bp_gp_event`), each chat line
+(`bp_gp_chat`) and every timer tick in game mode (`bp_gp_tick`); after a
+key or click on a finished match the app polls `bp_gp_overchoice` (2 New
+Game: the setup screen, 3 Exit: close).
+
+#### 131.9.2 The New Game screen
+
+Tabs Same PC, Host Cable and Join Cable. A roster of 2-4 players (Same PC
+and Host: the `-` / `+` buttons), each a name (at most `BP_NAMELEN`
+characters; Enter or a click edits, Enter keeps, Esc cancels the EDIT and not
+the screen, an empty name reverts to "Player N") and a token (Floppy, Mouse,
+Joystick, Cassette: Left/Right or a click cycles). A duplicate token is
+refused at Start with a line saying so, as is any `bp_setup_check` failure
+(`bp_err_text`). Rules are Classic or Quick Match of 10, 20 or 30 rounds.
+`S` or the Start Game button starts a Same PC match through
+`bp_sess_new`; starting while an unsaved match is running first asks
+"Discard the unsaved match?". Esc or Back returns to the running match when
+there is one, else it does nothing.
+
+Layout: the screen is one panel of at most 624 px, centred; the roster is the
+left column (372 px) and rules, the link box and the Ready button are the
+right column. Every rectangle is computed on demand from `bp_r_center` (the
+face's whole content) so the draw, the click and the key paths cannot
+disagree; rows are 11 px on a content under 260 px high (CGA-class, whose
+150 px content must hold everything) and 16 px above it. Text is the
+kernel's 8x8 and every state has a mark besides colour (the selected tab or
+rule is the DEFAULT button, a disabled one is the DISABLED button, a focused
+one the FOCUS button). A disabled widget is skipped by focus and ignores a
+click.
+
+#### 131.9.3 The cable lobby
+
+Host Cable and Join Cable add the NULL-MODEM LINK box: the framer's and the
+session's one-line status (`bp_link_msg`: searching, the port, the peer
+found, compatible or the reason it is not, ready), the role, the port choice
+(Auto, COM1, COM2; refused while a link is open), 2400 baud 8N1, an Open
+Link / Close Link button (`bp_link_host` / `bp_link_join` / `bp_link_leave`)
+and a Ready toggle (`bp_lobby_ready`, enabled once the link reaches
+`BP_L_LOBBY`). Opening a link switches to `BP_M_LOBBY`: the tabs lock. The
+host edits the roster and rules; every change is sent whole with
+`bp_lobby_set`, once when the link first reaches `BP_L_LOBBY` and after each
+edit. The roster's Computer column reads This PC or Other PC from this
+machine's index (`bp_here`), so the same agreed roster reads correctly on
+both screens; the client's roster is read-only and is copied from
+`bp_lobby_setup` whenever the link changes. The host's Start Game button is
+enabled in `BP_L_LOBBY` and calls `bp_lobby_start`; both machines enter
+`BP_M_GAME` when the session reports `BP_L_PLAY`. A link that goes away in
+the lobby leaves the screen showing the message; nothing is lost. Close Link,
+Back and Esc leave the link.
+
+#### 131.9.4 Menus and keys
+
+The bar holds `Byteopoly` and five menus. `menu_relayout` drops a cell that
+would reach `vid_clk_hx` (432 px on a 640 px adapter), so after the 128 px
+name cell the titles may total 27 characters: Game, Trade, Assets, Options,
+Help (26). About is the application menu's (`OSAPI_ABOUT_SET`), never a Help
+item. Items grey (`OS88_MENU_DIS`) where illegal and are re-evaluated by
+`bp_pn_sync`.
+
+| menu | items |
+|---|---|
+| Game | New Game... / Load... F3 / Save... F2 / Paired Save / Resume Pair / Close |
+| Trade | Propose Trade... |
+| Assets | My Collection... / Standings |
+| Options | Sound: On|Off / Fast Animation: On|Off / Diagnostics |
+| Help | Rules F1 / Keys / Chat... |
+
+Load and Save are local-match items; Paired Save needs a cable match, Resume
+Pair a link in `BP_L_LOBBY`; Propose, Assets and Rules need a running match;
+Chat and Diagnostics need a cable. The Options flags are exported as
+`bp_opt_sound` and `bp_opt_fast`. Keys: F1 Rules, F2 Save, F3 Load; in the
+setup screens Tab/Down and Up move focus, Left/Right change the focused
+value, Enter/Space act, S starts, Esc goes back.
+
+#### 131.9.5 Sound
+
+`bp_sound(cue)` honours Options > Sound and the machine's `os88_snd_caps`.
+A cue is a short table of (Hz, ticks) notes ending in ticks 0, played by the
+window's 1-tick timer: the first note starts at once, each following note
+when the previous one's ticks have run out, so nothing ever sleeps. A new cue
+replaces the one playing. No tone is longer than 6 ticks; the idle match
+plays nothing.
+
+#### 131.9.6 Files and the close decision
+
+Save... and Load... use the Standard File dialog (`os88_file_dlg`; the
+result arrives in `os88_onfile`). A load refuses a file larger than
+`BP_SAVE_MAX`, decodes through `bp_load_local` into a scratch `BPState`,
+validates, and only then calls `bp_sess_load_local`; any failure leaves the
+running match untouched and says `bp_err_text` in a toast and the log. A
+save writes `bp_game` through `bp_save_local`. Load while an unsaved local
+match is running asks first ("Discard the unsaved match?"). Paired Save and
+Resume Pair call the session. Closing (the close box, Game > Close, the dock):
+a local match with moves since the last save asks Save / Discard / Cancel
+(Save opens the dialog and closes when the save lands; any later menu command
+forgets the pending close); a cable match asks "Leave the cable game?"
+Yes / No (the alert's Yes/No set; the Save/Discard/Cancel and Cancel/Proceed
+sets are the others used - the OK/Cancel set needs `OS88UI_AEXTRA`, which
+Byteopoly does not define); anything else closes. `os88_wm_close` does NOT
+consult `os88_onclose` (SPEC.md 75.2), so Game > Close, the end panel's Exit
+and a finished save-then-close all run the same decision first
+(`ovl_bp_ap_close`) and only then call it. A close releases the link
+(`bp_link_leave`) and disarms the timer; the OS frees the instance's claims,
+the band's among them, when the window goes.
+
+#### 131.9.7 The decision panels
+
+`apps/byteopoly/bp_panels.c` owns every panel inside the board's centre
+(`bp_r_center`). **One function decides what is on screen**: `gp_spec`
+maps (`bp_game`, the link state, the panel the player opened with
+`bp_gp_open`) to one panel KIND and its row of buttons, and draw, key, click
+and the hint bar all read that one answer, so a button, its key, its mouse
+rectangle and its hint entry cannot disagree. Nothing here writes `bp_game`:
+a decision is a `BPCmd` (`type`, `seat` = the decider, `rev` = the revision
+the panel was drawn from, the arguments) through `bp_sess_submit`, and a
+refusal's `bp_err_text` is shown in the panel's status line while nothing
+changes. Precedence: the panels a player opened that never act (chat,
+diagnostics, rules, keys, standings) > LINK PAUSED (any non-local mode whose
+`bp_link_state` is PAUSED or RESYNC) > HANDOFF (131.9.8) > Collection and
+trade composer > the panel of `bp_game.phase`.
+
+| phase | panel | buttons (key) |
+|---|---|---|
+| BUY | name, art, price, cash after (or "too little"), base rent, collection | Buy (B), Auction (A) - Buy greyed with `bp_can`'s reason |
+| AUCTION | lot, list price, high bid and bidder, the bidder's cash, the editor, the minimum, "if you win: N left", the seats auto-passed for want of a raise (from `bp_gp_event`, PASS with other = 1) | Bid N (B), Pass (P); editor: `-`/`+` or Down/Up step 10, digits type, Backspace erases |
+| CARD | deck name and art, title, wrapped text | OK (Enter) -> ACK_CARD |
+| REPAIR | detention, failed tries of 3, cash, the Recovery Disks held | Pay 50 (P), a disk per deck held (F Floppy Find, S System Error), Roll (R), Manage (M) |
+| DEBT | creditor, amount, cash, shortfall | Manage (M), Settle (S, when `bp_can` allows), Bankrupt (K) then a confirmation: Yes (K), No (Esc) |
+| TRADE | the frozen offer (131.9.9) | Accept (A), Reject (R) for the recipient; Cancel (C) for the proposer |
+| MANAGE, AFTER | a one-line bar over the BOTTOM of the centre (the centre art stays): whose move, the buttons | Roll (Space), End Turn (E), Trade (T), Manage (M) |
+| OVER | winners, standings (131.9.11) | Review (R), New Game (N), Exit (X) |
+
+Greying is the engine's word: every button asks `bp_can(&bp_game, seat,
+type, arg)` (or the editor's own bid test: at least the minimum, a multiple
+of 10, within cash) and shows the reason when pressed disabled. **A panel
+shows its facts even when the seat deciding is not played on this machine**;
+it then has no buttons and its status line reads "Waiting for NAME on the
+other PC", and while `bp_sess_busy` it reads "Sent - waiting for the other PC
+to confirm" and every button is grey with BP_EPENDING. Economic keys of a
+seat not on this machine do nothing.
+
+Keys (US-21): Space roll, B buy / bid, A auction / accept, P pass / pay, T
+trade, C or M collection, E end turn, R roll / reject / redeem, S settle /
+sell, K bankrupt, U upgrade, Esc back (closes an opened panel, cancels a
+confirmation, otherwise falls through to the app). Tab moves the focus along
+the buttons, Enter presses the focused one (the first button is focused when
+a panel appears). A button too wide for the panel loses its "[K]" prefix and
+the hint bar still names the key; on 1-bit adapters the focused label is
+prefixed ">" in addition to the face's focus state. Hit targets are the
+rectangles the last draw recorded, the very ones it drew.
+
+Layout is picked from `bp_layout`, never the adapter: COMPACT (CGA class)
+uses 1-pixel line spacing, drops the sprite and the secondary lines (a panel
+there has about five rows, so each states its decision first), and a line
+that does not fit above the buttons is not drawn rather than overlapped.
+A status line is reserved only while it has something to say.
+
+The Collection panel (BP_GP_MANAGE, key M) lists the viewing seat's
+computers and utilities (cursor with the arrows or the mouse) with level,
+Workshop, mortgage and collection letter, the cursor's exact amounts
+(upgrade cost, sale +half, mortgage +half price, redeem principal plus 10%)
+and Upgrade (U), Sell (S), Mortgage (M), Redeem (R), each greyed by `bp_can`.
+It stays open across revisions and closes when the decider changes. In DEBT
+the same panel is the legal liquidation view: the engine refuses an upgrade
+there, so that button is grey with its reason.
+
+#### 131.9.8 Handoff
+
+HANDOFF is presentation only: no command, no canonical byte, no peer. When
+the decider becomes a seat played on this machine other than the one the
+last handoff covered (`gp_ack`), and this machine plays two or more live
+seats, the centre is covered by "Pass to NAME - next: <phase>" until a FRESH
+Enter or Space. This covers the active player changing and also an
+out-of-turn local bidder or trade recipient. A machine playing one seat
+never shows it; a cable machine playing two does, between those two only.
+**A held key never confirms the next person's decision**, by the clock alone
+(the key-state map is never armed: arming it makes extended keys step twice
+on some machines): nothing counts in the first 20 ticks, longer than any
+typematic delay, and a press within 8 ticks of the previous key event is a
+repeat. Every key event, accepted or not, restarts that quiet gap. Mouse
+clicks on "Ready" count as fresh. `bp_gp_tick` is kept for the app's call and
+does nothing.
+
+#### 131.9.9 Trades
+
+Compose (BP_GP_TRADE, key T; allowed when `bp_can(PROPOSE)` is): the
+decider's tradable holdings in the left column, the recipient's in the
+right; Left/Right change column, Up/Down the cursor, Space or a click
+toggles `[x]`. A computer of a collection with any upgrade shows `[-]` and
+refuses ("Upgraded sets cannot be traded"); `*` marks a mortgage; held
+Recovery Disks are rows after the properties. Digits type the cash, `+`/`-`
+step it by 10, P switches which side pays, N cycles the recipient. A line
+under the lists previews both seats' cash before and after, "short" where a
+payer cannot cover it. Propose (Enter) submits `BP_C_PROPOSE` (`to`, `give`
+and `get` prop masks, `disks` bit d give / bit 4+d get, `payer`, `amount`); an
+empty offer is greyed. Review (phase TRADE) shows the frozen offer: each
+side's names with `*` for mortgages, the cash and who pays it, the cash
+before and after for both, the offer id, and who decides. Accept sends the
+low byte of the offer id; the engine re-validates and the revision check
+catches a stale view.
+
+#### 131.9.10 Pause, chat and diagnostics
+
+LINK PAUSED / RESYNCING covers the centre with the link's own message, the
+last log line ("last action retained") and Retry (R: `bp_link_host` /
+`bp_link_join` on the held port), Load Pair (L: `bp_sess_resume_pair`),
+Details (D) and Leave (X, with a confirmation: leaving abandons the match).
+The panel underneath is untouched: it reappears unchanged when the link
+resumes, and no economic key reaches it meanwhile. Chat (BP_GP_CHAT)
+is a bounded field (`BP_CHAT_LEN` = 24 characters) with sender labels
+("You:", "Them:") over the last three lines; while it is open EVERY key is
+typed text (F-keys excepted), Esc clears the line and a second Esc closes.
+Diagnostics (BP_GP_DIAG) shows role, link state, port and baud, the
+revision, pending/idle, and the `bp_diag` counters. Neither touches the
+game's RNG, log or state.
+
+#### 131.9.11 The end
+
+BP_PH_OVER (or `status` OVER) shows the winners (a shared win lists every
+name), the Quick Match round count, and per seat cash, assets (the score
+less cash: property price less mortgages plus upgrade resale) and the
+canonical score; Review hides the panel for a one-line bar (Standings brings
+it back), New Game and Exit are handed to the app through
+`bp_gp_overchoice()` (1 review, 2 new, 3 exit, read once). Economic buttons
+do not exist on this panel. Standings (BP_GP_STANDINGS) is the same table in
+mid-match from `bp_score_of`. Rules and Keys (BP_GP_RULES, BP_GP_KEYS) page
+the art's help record (`BP_A_HELP`): lines before a `#KEYS` line are the
+rules, those after it the keys; PgUp/PgDn or the buttons page.
 
 ### 131.10 Art
 
