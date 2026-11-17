@@ -474,6 +474,11 @@ int    bp_gp_click(int x, int y);                 /* 1 = consumed */
 const char *bp_gp_hint(int i);                    /* hint bar entries, 0 ends */
 void   bp_gp_sync(void);                          /* game/link state changed */
 void   bp_gp_open(int which);                     /* a menu asked for a panel */
+/* added by the panels lane (SPEC.md 131.9.7-131.9.11) */
+void   bp_gp_event(const BPEvent *e);             /* each event of a committed result (auto-pass note) */
+void   bp_gp_chat(int machine, const char *text); /* a chat line sent or received, for the panel */
+void   bp_gp_tick(void);                          /* every timer tick: a handoff watches the keys */
+int    bp_gp_overchoice(void);                    /* the end panel's pick, once: 1 review 2 new 3 exit */
 
 /* ===== BP_APP: bp_app.c bp_setup.c ======================================= */
 /* the application (SPEC.md 131.9.1-131.9.6): every os88_* callback, the
