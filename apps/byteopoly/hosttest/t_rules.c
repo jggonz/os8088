@@ -1161,6 +1161,86 @@ static void t_refusals(void)
     refuse(BP_C_MORTGAGE, 0, 1, BP_EOVERFLOW, "cash would wrap");
 }
 
+/* bp_state_check refuses each corruption a damaged or hostile save could
+ * carry (the save lane's bp_validate calls it) */
+static void bad(const char *what)
+{
+    int e = bp_state_check(&S);
+    if (e != BP_EINVALID) printf("  state_check accepted: %s\n", what);
+    CK(e == BP_EINVALID, what);
+}
+static void t_statecheck(void)
+{
+    fresh(3); valid("base");
+    S.status = BP_ST_EMPTY; bad("empty status");
+    fresh(3); S.nseats = 5; bad("5 seats");
+    fresh(3); S.rules = BP_RULES_QUICK; S.rounds_limit = 15; bad("15 rounds");
+    fresh(3); set32(&S.rev, 0); bad("revision 0");
+    fresh(3); S.phase = 0; bad("phase 0");
+    fresh(3); S.phase = BP_PH_OVER; bad("OVER while playing");
+    fresh(3); S.token[1] = S.token[0]; bad("duplicate token");
+    fresh(3); S.name[2][0] = 0; bad("empty name");
+    fresh(3); memset(S.name[1], 'A', 9); bad("unterminated name");
+    fresh(3); S.pos[1] = 28; bad("space 28");
+    fresh(3); S.detained[1] = 1; bad("detained away from 7");
+    fresh(3); S.tries[1] = 3; bad("third try outside the bail debt");
+    fresh(3); S.alive[2] = 0; bad("dead seat with cash");
+    fresh(3); S.alive[2] = 0; setcash(2, 0); S.round_left = 3; valid("dead seat");
+    S.owner[0] = 2; bad("a dead seat owns");
+    fresh(3); setcash(3, 1); bad("unused seat with cash");
+    fresh(3); own(1, 0, 1, 0); bad("level without the collection");
+    fresh(3); own(1, 0, 2, 0); own(3, 0, 0, 0); own(4, 0, 0, 0); bad("uneven levels");
+    fresh(3); own(1, 0, 1, 0); own(3, 0, 1, 1); own(4, 0, 1, 0); bad("level with a mortgage");
+    fresh(3); own(5, 0, 1, 0); bad("level on a utility");
+    fresh(3); S.owner[0] = 7; bad("owner 7");
+    fresh(3); S.mortgaged[0] = 1; bad("unowned yet mortgaged");
+    fresh(3); S.deck[0][3] = 2; bad("a card twice");
+    fresh(3); S.deck[0][3] = 9; S.deck[1][1] = 3; bad("a card in the other deck");
+    fresh(3); S.disks[0] = 1; bad("a held disk still in its deck");
+    fresh(3); hold_disk(0, 0); S.disks[1] = 1; bad("one disk held twice");
+    fresh(3); S.deck_top[1] = 8; bad("deck top out of range");
+    fresh(3); S.rolled = 1; bad("rolled without dice");
+    fresh(3); S.d1 = 3; bad("dice without a roll");
+    fresh(3); S.depth = 4; bad("depth 4");
+    fresh(3); S.round_left = 6; bad("active owes no turn");
+    fresh(3); S.card = 3; bad("a card outside CARD");
+    fresh(3); S.phase = BP_PH_CARD; S.card = 0; S.depth = 1; bad("CARD away from an event space");
+    fresh(3); S.phase = BP_PH_BUY; bad("BUY on BOOT");
+    fresh(3); S.auc_bid.lo = 10; bad("auction field outside AUCTION");
+    fresh(3); S.debt_to = 1; bad("debt field outside DEBT");
+    fresh(3); S.pending_move = 4; bad("pending move outside the bail debt");
+    fresh(3); S.offer_payer = 1; bad("offer field outside TRADE");
+    fresh(3); S.ret_phase = BP_PH_AFTER; bad("return phase outside DEBT/TRADE");
+    fresh(3); S.decider = 1; bad("decider is not the active seat");
+    fresh(3); S.winners = 1; bad("winners while playing");
+    fresh(3); S.score[2].lo = 5; bad("a score while playing");
+    /* a pending offer re-validated: the payer's cash fell below it */
+    fresh(2);
+    cmd(BP_C_PROPOSE, 0, 0); C.to = 1; set32(&C.amount, 500); okc("offer");
+    valid("offer");
+    setcash(0, 499); bad("offer the payer cannot pay");
+    /* offer ids skip 0 when they wrap */
+    fresh(2);
+    S.offer_id = 0xFFFF;
+    cmd(BP_C_PROPOSE, 0, 0); C.to = 1; set32(&C.amount, 1); okc("offer at the wrap");
+    CK(S.offer_id == 1, "offer id 65535 -> 1");
+    ok(BP_C_ACCEPT, 1, 1, "accept id 1");
+}
+
+/* a doubles roll into DEBT still owes its bonus roll once settled */
+static void t_bonus_after_debt(void)
+{
+    fresh(2);
+    own(4, 1, 0, 0); own(1, 0, 0, 0); setcash(0, 10);
+    S.pos[0] = 2; dice(1, 1);
+    ok(BP_C_ROLL, 0, 0, "doubles onto rent");
+    CK(S.phase == BP_PH_DEBT && S.doubles == 1, "debt after doubles");
+    ok(BP_C_MORTGAGE, 0, 1, "raise 60");
+    ok(BP_C_SETTLE, 0, 0, "settle");
+    CK(S.phase == BP_PH_AFTER && bp_can(&S, 0, BP_C_ROLL, 0) == BP_OK &&
+       bp_can(&S, 0, BP_C_END_TURN, 0) == BP_ERULE, "the bonus roll survives the debt");
+}
+
 /* ---- a complete scripted game ------------------------------------------ */
 static long bank_delta(void)
 {
@@ -1381,6 +1461,8 @@ int main(void)
     t_bankrupt();
     t_rounds();
     t_refusals();
+    t_statecheck();
+    t_bonus_after_debt();
     t_script();
     printf("t_rules: %d checks, %s\n", nchk, bp_host_fail ? "FAILED" : "ok");
     return bp_host_fail ? 1 : 0;
