@@ -527,6 +527,7 @@ void   bp_gp_event(const BPEvent *e);             /* each event of a committed r
 void   bp_gp_chat(int machine, const char *text); /* a chat line sent or received, for the panel */
 void   bp_gp_tick(void);                          /* every timer tick: a handoff watches the keys */
 int    bp_gp_overchoice(void);                    /* the end panel's pick, once: 1 review 2 new 3 exit */
+void   bp_gp_keyend(void);                        /* the app: last thing in os88_onkey/onclick, after the repaint (131.9.8) */
 
 /* ===== BP_APP: bp_app.c bp_setup.c ======================================= */
 /* the application (SPEC.md 131.9.1-131.9.6): every os88_* callback, the

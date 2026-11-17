@@ -24,7 +24,7 @@ static void ovl_bp_ap_started(void);
 #define SU_N      26
 
 static BPSetup su_cfg;
-static BPByte su_tab, su_foc, su_port, su_edit, su_en, su_ready, su_sent, su_rh;
+static BPByte su_tab, su_foc, su_port, su_edit, su_en, su_ready, su_sent, su_rh, su_fresh;
 static char su_eb[BP_NAMELEN + 1];
 static char su_msg[41];
 static char su_lm[32];
@@ -62,7 +62,7 @@ static void ovl_su_defaults(void)
 static void ovl_su_geom(void)
 {
     int pw, g;
-    su_rh = bp_r_center.h >= 260 ? 16 : 11;
+    su_rh = bp_r_center.h >= 260 ? 16 : 12;
     g = su_rh == 16 ? 3 : 0;
     pw = bp_r_center.w - 16;
     if (pw > 624) pw = 624;
@@ -137,7 +137,10 @@ static int ovl_su_ena(int id)
     if (id == SU_READY) return lobby && bp_link_state() == BP_L_LOBBY;
     if (id == SU_START)
         return su_tab == 0 || (lobby && bp_link_state() == BP_L_LOBBY);
-    return su_tab != 2;     /* roster, counts, rules: a client only reads */
+    if (su_tab == 2) return 0;      /* roster, counts, rules: a client only reads */
+    if (id == SU_CNTP) return su_cfg.nseats < BP_SEATS;
+    if (id == SU_CNTM) return su_cfg.nseats > 2;
+    return 1;
 }
 
 static int ovl_su_mine(int s) { return su_cfg.machine[s] == (su_tab == 2 ? 1 : 0); }
@@ -281,6 +284,7 @@ static void ovl_su_act(int id, int dir)
         su_edit = (BPByte)(k + 1);
         os88_strcpy(su_eb, su_cfg.name[k], sizeof(su_eb));
         su_en = (BPByte)os88_strlen(su_eb);
+        su_fresh = 1;           /* the first typed character replaces the name */
     } else if (id >= SU_TOK && id < SU_MACH) {
         k = id - SU_TOK;
         su_cfg.token[k] = (BPByte)((su_cfg.token[k] + (dir < 0 ? 3 : 1)) & 3);
@@ -334,8 +338,11 @@ static int ovl_su_key(int ascii, int scan)
     if (su_edit) {
         if (ascii == 27) su_edit = 0;
         else if (ascii == 13) { ovl_su_endedit(1); ovl_su_push(); }
-        else if (ascii == 8) { if (su_en) su_en--; }
-        else if (ascii >= 32 && ascii < 127 && su_en < BP_NAMELEN) su_eb[su_en++] = (char)ascii;
+        else if (ascii == 8) { if (su_en) su_en--; su_fresh = 0; }
+        else if (ascii >= 32 && ascii < 127) {
+            if (su_fresh) { su_en = 0; su_fresh = 0; }
+            if (su_en < BP_NAMELEN) su_eb[su_en++] = (char)ascii;
+        }
         return 1;
     }
     if (ascii == 27) { ovl_bp_ap_back(); return 1; }
@@ -369,6 +376,17 @@ static int ovl_su_click(int x, int y)
     return 1;
 }
 
+/* a selected tab or rule: DEFAULT, and on 1bpp a leading >, since the
+ * ring alone is one pixel there (131.9.2) */
+static const char *ovl_su_sel(const char *s)
+{
+    static char sb[12];
+    if (!bp_mono) return s;
+    sb[0] = '>';
+    os88_strcpy(sb + 1, s, sizeof(sb) - 1);
+    return sb;
+}
+
 static int ovl_su_state(int id)
 {
     int st;
@@ -392,7 +410,7 @@ static void ovl_su_draw(void)
         ovl_su_rect(id, &su_rc);
         st = ovl_su_state(id);
         if (su_tab == id) st |= BP_W_DEFAULT;
-        bp_w_button(&su_rc, su_tabs[id], st);
+        bp_w_button(&su_rc, su_tab == id ? ovl_su_sel(su_tabs[id]) : su_tabs[id], st);
     }
     /* roster header and rows */
     bp_w_text(su_gx + 8, su_hy, "PLAYER", 0, -1);
@@ -439,7 +457,7 @@ static void ovl_su_draw(void)
         ovl_su_rect(SU_RULE + id, &su_rc);
         st = ovl_su_state(SU_RULE + id);
         if (ovl_su_rule() == id) st |= BP_W_DEFAULT;
-        bp_w_button(&su_rc, su_rules[id], st);
+        bp_w_button(&su_rc, ovl_su_rule() == id ? ovl_su_sel(su_rules[id]) : su_rules[id], st);
     }
     /* the link box */
     if (su_tab != 0) {
