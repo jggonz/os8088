@@ -254086,11 +254086,6 @@ and parsing, and the boundary fixtures.)
 
 ### 131.5 The cable protocol
 
-(Link lane. Reserved: the C bridge to `apps/os88cable.inc`, frame types and
-lengths, the handshake (Byteopoly magic, protocol version, rules and content
-fingerprints, endpoint identity, role), sequence and acknowledgement, the
-bandwidth and queue arithmetic at 2,400 baud 8N1, timeouts in ticks.)
-
 Binding choices made before the lane: the framer is `apps/os88cable.inc`
 (§115, written once for any two-machine package): 7Eh/7Dh framing,
 CRC-16/CCITT-FALSE, at most 32 body bytes a frame, one length per type.
@@ -254098,11 +254093,137 @@ The port search, lease, mouse-port refusal and teardown are its own; this
 package does not touch a UART, an interrupt vector or the PIT. Byteopoly has
 its own frame identity and never answers a WireFleet or Wire Arena peer.
 
-### 131.6 Sessions, authority and recovery
+The session (`bp_link.c`) is OS-free C: it reaches the UART only through
+the `bp_ck_*` bridge in `bp.h` and time only through `os88_ticks()`, so the
+host harness (`hosttest/t_link.c`) runs the whole protocol between two
+endpoints in one process. On the guest the bridge is `bp_cable.inc`
+(131.5.1); every byte below is the protocol, not an implementation detail.
 
-(Link lane. Reserved: local / host / client sessions, seat gating, the
-stop-and-wait transaction, deduplication identities, pause and resume,
-digest disagreement and snapshot adoption, chat and diagnostics.)
+#### 131.5.1 The bridge to `apps/os88cable.inc`
+
+`bp_cable.inc` includes `os88cable.inc` and provides what it asks of an
+includer: `lk_blk` (LK_SIZE), `lk_sbuf` (SER_BUFFER_SIZE, in the package's
+own region, so §115's buffer check passes), `lk_crct` (512), `lk_lens` (the
+table below, 24 entries) and `lk_take`. Every `bp_ck_*` is a near cdecl
+function (§73.3) that keeps BP, DS and DF.
+
+| C | does |
+|---|---|
+| `bp_ck_open(port)` | 0: `lk_auto` (COM2 first, the lease moving between the two ports until a peer is heard, §114.9); 1/2: `lk_connect` with the user-named bit (§115.1.1). BP_EIO and `bp_ck_msg()` says why |
+| `bp_ck_close()` | `lk_disconnect`, the RX ring emptied |
+| `bp_ck_tick()` | `lk_tick` (the search), then the TX staging flushed; copies the framer's counters into `bp_diag.crc` (frames dropped: CRC, length, type, an escape at a delimiter) and `bp_diag.overrun` (line errors and overflows, plus frames the RX ring had no slot for) |
+| `bp_ck_heard()` | `LK_HEARD` = 1: a Byteopoly HELLO arrived, the search stops moving |
+| `bp_ck_send(body, n)` | `lk_send`; BP_EPENDING when the staging has no room for the worst case (2n + 6) |
+| `bp_ck_recv(body)` | the next valid body, without its CRC, out of a 6-slot RX ring; with the ring empty it first runs `lk_poll` for at most 32 bytes, which is at most four frames, so the ring cannot overflow from one poll |
+| `bp_ck_port()`, `bp_ck_msg()` | `LK_PORT` while the lease is open, `LK_MSG` |
+| `bp_ck_rand()` | `OSAPI_RAND`: endpoint and checkpoint identities only, never the game's dice |
+
+**The region rule.** `lk_lease` pins the region (`OSAPI_MEM_MOVABLE`, AX = 0)
+before the rings are published, as §115 requires, and `lk_disconnect` and a
+refused lease re-declare it movable with `OS88_REGION_MOVABLE`'s own `ret`.
+For a C package with an overlay that is WRONG: the region's relocation proc
+is `cc_regreloc` (= `cc_ovbind`, §73.14), which rewrites the overlay's back
+vectors, and a bare `ret` in its place would leave them naming the old base
+after the next compaction. So every bridge call that can close the lease
+(`bp_ck_open`, `bp_ck_close`, `bp_ck_tick`) ends by re-declaring the region
+with `cc_regreloc` and DX = DS when the lease is no longer held and was, or
+a lease was tried and refused.
+
+#### 131.5.2 Frames
+
+`os88cable.inc`'s framing: 7Eh, the body with 7Eh/7Dh escaped, 7Eh. Byte 0
+is the type, the last two bytes CRC-16/CCITT-FALSE over the rest, and each
+type has exactly one length (with its CRC: `lk_lens`); a frame of another
+length or an unknown type is dropped by the framer. Every multi-byte field
+is little-endian; a 32-bit field is a `BPU32`, low word first. Every frame
+but HELLO carries at [1..2] the TAG, the low word of the SENDER's endpoint
+id (131.6.1); a frame whose tag is not the bound peer's is dropped and
+counted (`bp_diag.frame`) before any other field is read.
+
+| type | name | dir | body bytes (no CRC) | fields after the type (and tag) |
+|---|---|---|---|---|
+| 1 | HELLO | both | 24 | 'BYTO', protocol version (1), role (1 host, 2 client), endpoint id (4), `bp_fingerprint` (4), the peer's id this side has bound (4, 0 none), intent (0 new match, 1 resume), match id (4, 0 for a new match) |
+| 2 | LOBBY1 | H to C | 25 | lobby revision (2), nseats, rules, rounds, token[4], machine[4], ready mask (bit 0 host, bit 1 client), name[0] (8, NUL-padded) |
+| 3 | LOBBY2 | H to C | 29 | lobby revision (2), name[1..3] (24) |
+| 4 | NAME | C to H | 15 | lobby revision (2), seat, token, name (8) - the client proposes its own seat |
+| 5 | READY | C to H | 6 | lobby revision (2), ready (0/1) |
+| 6 | START | H to C | 17 | lobby revision (2), seed (4), revision (4), digest (4) |
+| 7 | INTENT | C to H | 27 | seq (2), the command: type, seat, arg, to, rev (4), amount (4), give (4), get (4), disks, payer |
+| 8 | TERMS | H to C | 16 | origin (0 host, 1 client), seq (2), give (4), get (4), disks, payer |
+| 9 | RESULT | H to C | 25 | origin, seq (2), new revision (4), digest (4), d1, d2, card, the command: type, seat, arg, to, amount (4) |
+| 10 | REFUSE | H to C | 10 | seq (2), code, the host's revision (4) |
+| 11 | ACK | C to H | 11 | revision (4), digest (4) - the APPLIED acknowledgement |
+| 12 | PING | both | 12 | revision (4), digest (4), flags (bit 0 a transaction outstanding, bit 1 paused, bit 2 diverged) |
+| 13 | CHAT | both | 28 | chat seq, text (24, NUL-padded) |
+| 14 | CHATACK | both | 4 | chat seq |
+| 15 | SNAPREQ | C to H | 9 | match id (4), the next offset wanted (2) |
+| 16 | SNAPHEAD | H to C | 17 | match id (4), revision (4), digest (4), length (2) |
+| 17 | SNAPDATA | H to C | 29 | offset (2), 24 bytes of `bp_encode` |
+| 18 | RESUME | both | 29 | role, agreed (0 offer, 1 adopted), match id, checkpoint id, revision, digest, host id, client id (4 each) |
+| 19 | CKREQ | C to H | 7 | match id (4) |
+| 20 | CKBEGIN | H to C | 27 | match id, checkpoint id, revision, digest, host id, client id (4 each) |
+| 21 | CKREPLY | C to H | 9 | checkpoint id (4), stage (1 written, 2 committed), code |
+| 22 | CKCOMMIT | H to C | 7 | checkpoint id (4) |
+| 23 | BYE | both | 4 | reason (0 left) |
+
+The largest body is 29 bytes, 31 with its CRC (`LK_MAXF` is 32). A frame on
+the wire is at most 2 x 31 + 2 = 64 bytes escaped and typically n + 4.
+**Own identity**: WireFleet's 64-byte bodies exceed `LK_MAXF`, WireArena's
+types have other lengths, and a HELLO must carry 'BYTO', the version and
+the fingerprint, so neither is ever answered; nothing but a bound peer's
+tag reaches the session.
+
+The BPCmd crosses as INTENT (all of it) and as RESULT (all but the trade
+masks, which a PROPOSE's TERMS carries just before its RESULT; `rev` is
+implied: the revision before the new one). The host CANONICALISES a command
+before it applies it: fields its type does not use are zeroed (bp.h), so
+what the client replays is exactly what the host applied.
+
+#### 131.5.3 Time, bandwidth and capacities
+
+Every timeout is in guest ticks (18.2 a second) from `os88_ticks()`, the
+difference of two 16-bit readings. Silence is counted in SERVICE ticks: each
+`bp_sess_tick` adds at most 2, so a long paint on this machine (the session
+was not reading) never counts as the peer's silence; the lease's 255-byte
+RX ring holds the bytes meanwhile (~1 s of a saturated line, and the
+protocol's idle traffic is ~16 bytes a second).
+
+| constant | ticks | what |
+|---|---|---|
+| `BPL_BEAT` | 9 | HELLO while unbound; LOBBY1/2, READY and RESUME every 2 beats |
+| `BPL_PING` | 18 | a PING when nothing else was sent for this long |
+| `BPL_RETRY` | 27 | INTENT, START, RESULT (+TERMS), CHAT, SNAP*, CK*, RESUME re-sent; doubled while paused |
+| `BPL_QUIET` | 128 | service ticks of silence: PAUSED (in a lobby: the binding is dropped) |
+| `BPL_TRIES` | 5 | retries of one frame without an answer: PAUSED, even if PINGs arrive |
+
+At 2,400 baud 8N1 the line carries 240 bytes a second. A transaction is an
+INTENT (~33 bytes on the wire), a RESULT (~31) and an ACK (~17): about 81
+bytes, a third of a second of line, a PROPOSE 20 more. Idle, a PING a
+second each way is 7% of the line. A snapshot (at most `BP_STATE_MAX` = 320
+bytes) is 14 SNAPDATA frames of 24 bytes, ~33 on the wire each: about 2 s,
+shown as progress. A lobby rebroadcasts ~75 bytes every 2 beats (~1 s).
+
+| queue | capacity |
+|---|---|
+| the lease's rings (§115.1) | 255 bytes each way |
+| `os88cable.inc` TX staging | 136 bytes: two worst-case frames |
+| the RX ring (`bp_cable.inc`) | 6 bodies of 30 bytes; a full ring drops and counts |
+| outstanding economic transactions | 1, globally |
+| chat | 1 line in flight, 24 characters |
+| snapshot window | 3 chunks beyond the last acknowledged offset |
+
+**The parser's budget** per `bp_sess_tick`: one `lk_tick`, then at most 8
+frames out of the RX ring (each refill a `lk_poll` of at most 32 bytes),
+then at most one retry, one PING, one snapshot chunk and one chat frame.
+Nothing in a tick loops over a length a frame names: every length is the
+type's, and every offset is checked against the buffer before it is used.
+
+**Send priority.** A RESULT, ACK, REFUSE or INTENT goes out at once when it
+is made; snapshot chunks, PINGs and chat are sent only in a tick with no
+transaction frame queued behind a full staging, so chat and heartbeats
+never outrank a pending acknowledgement.
+
+### 131.6 Sessions, authority and recovery
 
 Binding choices made before the lane: ONE banker host per match for its
 whole life; one outstanding economic transaction at a time. The client
@@ -254117,6 +254238,172 @@ same `bp_apply`. The trust model is friendly: the banker is trusted;
 nothing here claims cheat resistance or secrecy from a modified peer, and
 the ordinary interface never shows a future card.
 
+The session owns `bp_game`: nothing else writes it, and every write is
+`bp_new_match`, `bp_apply`, an adopted snapshot or checkpoint (131.6.6,
+131.7.5) or an adopted local load (`bp_sess_load_local`, after the save
+lane's validation). The UI learns of a write through `bp_ui_committed`
+(with an empty result for an adoption) and of a link change through
+`bp_ui_link`.
+
+#### 131.6.1 Modes, identities and binding
+
+`bp_mode` is LOCAL, HOST or CLIENT; `bp_here` is 0 (local and host) or 1
+(client) and is the value `BPState.machine[]` and `BPSetup.machine[]` use.
+**Local** is a pass-through: `bp_sess_submit` is `bp_apply` on `bp_game`
+and the tick does nothing.
+
+`bp_link_host(port)` / `bp_link_join(port)` open the bridge and draw a fresh
+32-bit **endpoint id** (two `bp_ck_rand`s and the ticks; a low word of 0 is
+redrawn): the identity of this machine for this LINK SESSION. A session is
+bound when a compatible HELLO arrives (state PEER) and confirmed when the
+peer's HELLO names our id, or any tagged frame arrives from it (LOBBY).
+Compatible means: 'BYTO', protocol version 1, the same `bp_fingerprint`
+(rules and content), the OTHER role, and the same intent (both new, or both
+resuming the same match id). Anything else is BADPEER with the reason on
+the status line - "The other PC chose Host too", "Different Byteopoly
+version", "The other PC is resuming a saved match" - and changes no state;
+a compatible HELLO later still binds. While unbound both sides send HELLO
+every beat. Once a match has started, a HELLO from another id is a stranger
+("Another Byteopoly answered: not this match's partner"): counted, never
+bound. **There is no host migration and no role reversal**: the host is the
+banker for the match's whole life.
+
+#### 131.6.2 The lobby
+
+The host owns the `BPSetup` and a 16-bit **lobby revision**, raised by
+every change: `bp_lobby_set` on the host (checked with `bp_setup_check`,
+2-4 seats, at least one on each machine), or a NAME the host accepts. The
+client's `bp_lobby_set` proposes only the names and tokens of ITS seats
+(machine 1): one NAME a beat per changed seat until LOBBY1/2 show it, and
+the host refuses a NAME for another machine's seat, an old lobby revision
+or a token in use. The host rebroadcasts LOBBY1 + LOBBY2 every two beats;
+the client takes a setup only when both halves of the same revision have
+arrived. **Ready belongs to a revision**: `bp_lobby_ready` on the client
+sends READY (lobby revision, flag) every two beats, the host records it only
+for the current revision, and any change clears both flags. `bp_lobby_start`
+(host, both ready on the current revision) freezes the roster: the host runs
+`bp_new_match` with a fresh seed and sends START (the lobby revision, the
+seed, the revision and digest it produced) as an ordinary outstanding
+transaction (131.6.3): the client runs `bp_new_match` with the SAME setup
+and seed, checks the digest and acknowledges with ACK. Names and tokens are
+bounded (8 characters, NUL-padded on the wire; a received name is cut at
+its eighth byte).
+
+#### 131.6.3 The transaction: stop-and-wait, one outstanding
+
+**Seat gating.** A seat is played on the machine `bp_game.machine[seat]`
+names (`bp_sess_mine`). `bp_sess_submit` refuses BP_ENOTMINE for a seat of
+the other machine BEFORE any traffic, BP_EPAUSED when the link is not in
+PLAY, and BP_EPENDING (not taken) while a transaction, a checkpoint or a
+snapshot is outstanding - the UI greys with `bp_sess_busy`. The host
+refuses an INTENT whose seat is not a client seat (REFUSE BP_ENOTMINE)
+whatever the frame says; that the seat is the DECIDER is `bp_apply`'s own
+check (BP_ESEAT), so neither machine can act for the other's seats, in an
+auction or a trade response included.
+
+**Host-local command.** The host canonicalises it, `bp_apply`s it, and if
+it commits: `bp_ui_committed`, then the retained RESULT (origin 0, the
+host's seq) is sent - TERMS first for a PROPOSE - and retried every
+`BPL_RETRY` until the client's ACK names the new revision and the host's
+digest. Returns BP_OK.
+
+**Client command.** The client checks it with `bp_check` (pure: the same
+answer the banker would give, so a refusal costs no traffic), takes the next
+16-bit seq, sends INTENT and returns BP_EPENDING ("sent"). The INTENT is
+retried every `BPL_RETRY` until a RESULT for (origin 1, that seq) or a
+REFUSE for that seq arrives. The client NEVER mutates on its own: not cash,
+not ownership, not the dice, not a phase.
+
+**The host and an INTENT.** In order: the tag is the peer's; a seq at or
+below the client's high-water mark is a duplicate - the retained answer for
+exactly that seq (RESULT or REFUSE) is sent again and nothing is applied -
+or, older, dropped and counted; while a transaction is outstanding the
+answer is REFUSE BP_EPENDING, which does NOT advance the high-water mark,
+and the client keeps the intent and retries it; otherwise the seat is
+gated, the command canonicalised and applied once, the high-water mark set
+to the seq, and the answer (RESULT, or REFUSE with the engine's code and the
+host's revision) retained and sent. **One identity per command**: (the
+client's endpoint id, its seq), scoped to the link session; the tag carries
+the first, the frame the second, and `cmd.rev` is checked by the engine as
+well, so even a replayed intent that fooled the seq check is BP_ESTALE.
+
+**Sequence wrap.** A seq is 16 bits, starts at 1 in each link session and
+never wraps: at 65,535 the client refuses further commands (BP_EOVERFLOW,
+"Save and resume the match") - a resume is a new link session with new
+endpoint ids, where seqs start again and a frame of the old session carries
+the wrong tag. A game is a few thousand commands.
+
+**The client and a RESULT.** If its new revision is the client's revision
++ 1, the client rebuilds the command (TERMS supplies a PROPOSE's masks; a
+PROPOSE RESULT without matching TERMS is ignored until the retry brings
+both), applies it with `bp_apply`, compares the dice and card it consumed
+with the RESULT's, computes `bp_digest`, and sends ACK (the revision, ITS
+digest). Equal: `bp_ui_committed`, and if it was its own seq the intent is
+done. Different, or `bp_apply` refused: DIVERGED (131.6.5). A RESULT whose
+revision the client already has only resends the ACK; an older one is
+dropped; a later one (a revision skipped) is a divergence. **The host and
+an ACK**: the outstanding revision with the host's digest retires the
+transaction (the result stays retained for duplicates); the revision with
+another digest is DIVERGED; anything else is dropped. Only then is the next
+economic command admitted, from either machine.
+
+A REFUSE for the client's seq ends its intent: the status line says
+"Banker: <bp_err_text>" and the UI is told.
+
+#### 131.6.4 Pause and live resume
+
+PAUSED is entered after `BPL_QUIET` service ticks without a valid frame from
+the peer, or `BPL_TRIES` retries of one frame without its answer; PINGs keep
+a quiet but healthy link alive. While paused, economic input is refused
+(BP_EPAUSED) on both machines; the phase, the pending decision (an auction,
+a debt, a frozen trade) and the outstanding transaction are all KEPT -
+nothing reverts, nothing becomes a local game. Retries continue at half
+rate. The first valid frame from the bound peer ends the pause; the
+retained INTENT or RESULT then finishes the transaction exactly once,
+because of 131.6.3's identities: a lost intent is applied when its retry
+arrives, a result lost after the host's commit is re-sent from the retained
+copy, an ACK lost after the client's apply is answered by the client's
+revision check (resend the ACK). Nothing is rerolled, repaid, rebid or
+re-accepted. `bp_link_leave` is the only way out of a cable match: it sends
+BYE twice, closes the port and leaves the state OFF; the peer shows "The
+other PC left the match" and stays paused. A peer that comes back as a new
+instance has a new endpoint id and is a stranger; the match continues only
+from a paired checkpoint (131.7.5).
+
+#### 131.6.5 Divergence and snapshot adoption
+
+The client's check of each RESULT, and a PING exchanged while neither side
+has a transaction outstanding at the same revision, compare digests. Any
+disagreement is DIVERGED (`BP_L_DIVERGED`) on the client, and on the host
+when the client's ACK or PING carries the other digest: economic input stops
+on both. The client offers `bp_sess_adopt` ("Use the banker's board"); the
+choice is the player's, never automatic. It sends SNAPREQ (match id, offset
+0); the host answers SNAPHEAD (match id, revision, digest, length) and
+`bp_encode`'s bytes in SNAPDATA chunks, at most 3 beyond the client's last
+SNAPREQ offset, going back to that offset after `BPL_RETRY` without
+progress. The client accepts chunks only in order, only for the match id
+`bp_game` already has (**never a stranger's or another match's state**),
+decodes into a scratch `BPState` (`bp_decode` validates), checks the
+decoded digest against SNAPHEAD's, and only then copies it over `bp_game`,
+sends ACK and returns to PLAY. A failed adoption leaves `bp_game` as it was
+and stays DIVERGED. Histories are never merged and neither side is chosen by
+a clock or a turn count: the banker's board is the one adopted.
+
+#### 131.6.6 Chat and diagnostics
+
+`bp_chat_send(text)` takes at most 24 characters (more are cut) and refuses
+BP_EPENDING while a line is in flight or within `BPL_PING` ticks of the last
+one (counted in `bp_diag.chatdrop`). A line is retried until its CHATACK, at
+most `BPL_TRIES` times, then dropped and counted. A receiver shows a chat
+seq once (`bp_ui_chat(machine, text)`) and acknowledges every copy. Chat
+never touches `bp_game`, the dice or the transaction. `bp_diag` counts CRC
+and framing drops, retries, frames refused by the session (wrong tag,
+malformed, wrong match, stale), serial overruns, snapshot adoptions, frames
+received and sent, and dropped chat; reading it changes nothing.
+`bp_link_msg()` is one line: the state, the role and port, and while
+playing the synchronised revision and "waiting" when a transaction is
+outstanding.
+
 ### 131.7 Saves and paired checkpoints
 
 (Save lane: the canonical encoding, its validation, the digest, the local
@@ -254128,6 +254415,79 @@ little-endian encoding (`bp_encode`) serves the save files, the snapshot
 and the digest; nothing is written raw from a struct. A load decodes into a
 scratch `BPState` and validates completely before anything replaces the
 running match.
+
+#### 131.7.5 The checkpoint exchange
+
+The protocol half of a paired save; the files are the save lane's
+`bp_ckpt_write` (a CANDIDATE that never disturbs the newest committed
+checkpoint), `bp_ckpt_commit` (the candidate becomes the newest committed;
+the previous one stays loadable until the next commit) and `bp_ckpt_load`
+(meta's `ckpt_id` 0 for the newest committed, or a named id found as
+committed or as a candidate, `state` saying which). Role 1 is the host's
+file, role 2 the client's; each machine writes only its own.
+
+**Saving.** `bp_sess_save_pair()` on either machine; the client's sends
+CKREQ until CKBEGIN arrives. The request WAITS behind an outstanding
+transaction - it never cancels or rerolls one - and from the moment the host
+starts it, economic input is frozen on both machines (`bp_sess_busy`).
+
+1. The host draws a checkpoint id and writes its candidate: match id, that
+   id, the revision, `bp_digest`, both endpoint ids (the PAIR identity) and
+   role 1. A failure here ends the save on the host ("Save failed: <code>")
+   and nothing is sent.
+2. CKBEGIN carries the same metadata; it is retried until CKREPLY stage 1.
+   The client checks match id, revision and digest against its own
+   `bp_game` (a difference is code BP_EMATCH: no file written) and writes its
+   candidate with role 2; CKREPLY stage 1 carries the code. A repeated
+   CKBEGIN for the same id resends the stored reply without writing again.
+3. A non-zero code ends the save on both ("The other PC could not save:
+   <reason>"): neither side commits, the previous pair stands.
+4. Both written: the host commits ITS candidate; only after that succeeds
+   does it send CKCOMMIT (retried until CKREPLY stage 2). The client
+   commits its candidate and replies with the code; a repeated CKCOMMIT
+   resends it.
+5. The host reports **"Paired save complete"** on CKREPLY stage 2 with code
+   0; the client reports it once its own commit succeeded, which follows the
+   host's (CKCOMMIT is sent only after the host's commit). Before both, no
+   UI says complete.
+
+**The intermediate states, and what each side reports.** Cable or machine
+lost before step 4: two candidates or one, no commit: both newest committed
+checkpoints are still the previous pair, and the side that saw the failure
+says "Paired save incomplete - the previous save is kept". Host committed,
+client not (lost CKCOMMIT, a client crash or a full disk at its commit): the
+host has N+1 committed, the client a candidate N+1 and N committed - resume
+ROLLS FORWARD (below). A client with N+1 committed and a host without it
+cannot arise from this order and is refused as a mismatched pair.
+
+**Resuming.** After both applications are reopened: Host or Join, then
+`bp_sess_resume_pair()`, which loads this machine's newest committed
+checkpoint for its role into a scratch state (a missing or bad file is
+refused with the save lane's reason and nothing changes) and sets the
+handshake's intent to resume with that match id. Bound, each side sends
+RESUME (role, match id, checkpoint id, revision, digest, the pair's host and
+client ids) every two beats. A side receiving the peer's offer:
+
+- refuses (BADPEER-style, with the reason) the same role, another match id
+  or another pair identity - **never a stranger's or another match's file**;
+- with the same checkpoint id, requires the same revision and digest
+  ("Same save, different board": refused);
+- with a different id: the client, offered a newer id by the host, looks
+  for that id as its own candidate - present, it is the roll-forward and is
+  committed when the resume is agreed; the host, offered an OLDER id by the
+  client, looks for that id among its committed checkpoints (the previous
+  one) - present, it falls back to it. Anything else is "These saves are not
+  a pair".
+
+Agreed, each side copies its scratch state over `bp_game`, sends RESUME with
+agreed = 1 (a side that lost the offer adopts on it), and enters PLAY with no
+transaction outstanding and seqs starting again; the link session's NEW
+endpoint ids are what the next paired save records. Resume restores the last
+completed paired checkpoint: moves made after it and before the machines
+were closed are lost, and the guide says so - there is no per-action journal,
+so a crash rolls back to that checkpoint and is not called recovery. A live
+cable pull is different (131.6.4): nothing is lost, the transaction in
+memory completes.
 
 ### 131.8 The face
 
