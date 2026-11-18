@@ -255738,6 +255738,17 @@ rules lines, the `#KEYS` line, then key lines.
 2,090 of text; cap 56 KB = 57,344 unpacked), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
 included; loaded it is a 55KB lazy claim and a machine without the room draws the plain face.
 
+#### 131.10.7 The second art part (the uplift)
+
+Reserved for the prep lane (docs/plans/BYTEOPOLY-UPLIFT-PLAN.md, U3/U4):
+`BPART2.BIN`, its ID routing (`apps/byteopoly/art2.h`, `BP_A2_BASE`), the
+text records and the rule that the art parts are required.
+
+#### 131.10.8 The uplift's pictures
+
+Reserved for the art lane (U6): the pictures of `art2.h` 256..383, their
+master and prompt, and BOOT's arrows pointing up, the direction of play.
+
 ### 131.11 Memory and parts
 
 Every byte is measured, not assumed (US-25). `APP_MAX_SIZE` (65,024 bytes)
@@ -255773,3 +255784,47 @@ host harness compiles the SHIPPING rules, codec and link C with `BP_HOST`
 (16-bit stored words) under ASan/UBSan; it supplements, never replaces,
 the guest runs. (Reserved: the registered rows, the paired-emulator fault
 cases and the acceptance evidence.)
+
+## 132. The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`)
+
+The game kit is shared source for C packages (§73) that draw through the band
+core (§130.6.2): 3D widgets, data-driven scenes and a music and effects player,
+written once in assembly so a game pays for them in bytes it can measure.
+`apps/cc/gk.h` is its C contract. Byteopoly (§131) is the first user;
+docs/plans/BYTEOPOLY-UPLIFT-PLAN.md is the story list.
+
+### 132.1 Scope and inclusion
+
+Reserved for the kit lane.
+
+### 132.2 The role table
+
+Reserved for the kit lane.
+
+### 132.3 The 3D look
+
+Reserved for the kit lane.
+
+### 132.4 Surfaces and text
+
+Reserved for the kit lane.
+
+### 132.5 Widgets
+
+Reserved for the kit lane.
+
+### 132.6 Scenes
+
+Reserved for the kit lane.
+
+### 132.7 The scene compiler
+
+Reserved for the kit lane.
+
+### 132.8 Music and effects
+
+Reserved for the sound lane.
+
+### 132.9 Sizes
+
+Reserved for the kit and sound lanes: the measured bytes of every routine.

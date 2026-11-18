@@ -177,3 +177,24 @@ looks had left about 30 MartyPC instances running inside the worktrees,
 and the watchdog counts a process in a worktree as an agent at work. One
 lane sat 45 minutes after a green build with its fixes uncommitted before
 the lead noticed by hand.
+
+## The uplift
+
+*Started 2026-11-17, the day the game merged. The story list is
+[BYTEOPOLY-UPLIFT-PLAN.md](plans/BYTEOPOLY-UPLIFT-PLAN.md).*
+
+The owner put the merged game beside the five concept boards it had been
+built from and asked for the boards' look: "a high detail pass ... like a
+professional, high detail game like the design", with the 3D feel of the
+renders, play running clockwise with BOOT's arrow pointing the way, prices
+that rise around the board, a soundtrack and effects, and - in their words -
+"a re-usable drawing library for the C toolchain that we can leverage for
+future games as well".
+
+**What stood in the way was memory, not drawing.** At the merge the package's
+segment had 1,113 bytes spare, the overlay 2,085 and the art part 1.8 KB. A
+richer face drawn as C would not fit, so the plan pays in this order: the UI
+strings move out of the segment into text records in a second art part; the
+static layout of a screen becomes DATA (a "scene" record drawn by one
+interpreter) instead of code and literals; the widgets are written once in
+assembly as the game kit (SPEC.md 132), which any later C game can include.
