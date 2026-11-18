@@ -256435,12 +256435,12 @@ lane's rows (133.8) follow these.
 | `gk_radio` and its discs (`gk_disc` 103) | 157 |
 | `gk_arrow` (`gk_arw` 126) | 149 |
 | `gk_sprshadow` | 221 |
-| `gk_scene` (303) and its literal and header readers | 392 |
+| `gk_scene` (303) and its literal and header readers | 393 |
 | `gk_scene_size`, `gk_scene_rect` | 71 |
-| **code** | **2,460** |
+| **code** | **2,461** |
 | data: role tables 32, ring sets 43, button states 18, op table 42, the theme pointer 2 | 137 |
-| **image total** | **2,597** |
-| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,617** |
+| **image total** | **2,598** |
+| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,615** |
 | bss | 158 |
 
 **Per strip.** `gk_scene` reads a skipped op's length, number and two row
