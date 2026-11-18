@@ -255754,8 +255754,44 @@ text records and the rule that the art parts are required.
 
 #### 131.10.8 The uplift's pictures
 
-Reserved for the art lane (U6): the pictures of `art2.h` 256..383, their
-master and prompt, and BOOT's arrows pointing up, the direction of play.
+The pictures of `art2.h` 256..383 are `apps/byteopoly/art/sprites2.txt`, the same
+`sprite NAME W H` syntax as `sprites.txt` and THE SOURCE; they ride `BPART2.BIN`
+(131.10.7). They are drawn after the owner's concept boards, which are the design:
+`art/master5.png` is the sheet of board crops each was drawn after, and
+`art/PROMPT.md` records the method (constructed on the logical grid, finished by
+hand; no image generation) and the date. Drawing rules for every picture: a
+1-pixel black outline; light from the top-left (white lit edge, darker
+bottom-right edge); a drop shadow as a black checker on the key, down and right,
+so it dithers over any ground; beige plastic as white lit faces and a white/brown
+checker for faces in shade.
+
+| picture | size | | picture | size |
+|---|---|---|---|---|
+| `C_BOOT` (up), `M_C_BOOT` | 24x24 | | `TOK_FLOPPY/MOUSE/JOY/CASS` | 24x24 |
+| `C_REPAIR`, `C_SWAP` | 40x28 | | `TOKL_FLOPPY/MOUSE/JOY/CASS` | 32x32 |
+| `C_CRASH` | 40x32 | | `PC_SMILE`, `PC_MOUSE` | 56x52 |
+| `C_FLOPPY` / `C_SYSERR` | 24x24 / 28x24 | | `PLUG_L`, `PLUG_R` | 32x16 |
+| `CHIP` | 14x7 | | `BEACON` | 40x28 |
+| `MASCOT_UP` | 96x84 | | `MODEM` | 64x24 |
+| `CARD_FF_T`, `CARD_SE_T` (lettered) | 72x80 | | `LINKED` | 120x44 |
+| `DIE1`..`DIE6` | 32x32 | | `DISK_OK` / `DARROW` | 28x28 / 20x10 |
+| `RAYS_L`, `RAYS_R` | 24x24 | | `CHECK` / `LOCK` | 16x14 / 16x18 |
+| `TRADE_ARR` / `COINS` / `GAVEL` | 28x32 / 28x22 / 28x24 | | | |
+
+Sizes include the shadow; the face asks `bx_size`. Where a picture has a visual
+anchor it is: `RAYS_L`'s rays radiate from its bottom-right corner (`RAYS_R`
+bottom-left), placed just beyond the mascot's fingertip; the mascot's fingertip
+is at (13, 6) of its 96x84; a die's face is its top-left 28x28; the cards' and
+PCs' shadows take the last 2-3 columns and rows.
+
+Monochrome (131.10.5): only `BP_A2_M_C_BOOT` is drawn. Every other picture was
+checked through the core's mapping and reads on 1bpp as it is, so the other
+reserved `_M` IDs have no record and the face draws the colour ID on 1bpp.
+
+BOOT's four arrows in `sprites.txt` (`BP_A_BOOT`, `BP_A_M_BOOT` 32x24,
+`BP_A_T_BOOT`, `BP_A_M_T_BOOT` 16x12) point UP, the way a token leaves BOOT
+(play runs clockwise, 131.1), at their old sizes. Measured: `sprites2.txt` is 41
+records, 28,963 bytes packed (budget 30 KB); `BPART.BIN` is unchanged at 55,473.
 
 ### 131.11 Memory and parts
 
