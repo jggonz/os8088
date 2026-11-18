@@ -599,55 +599,53 @@ static void ovl_gp_status(void)
     if (m) bp_w_text(gp_x, gp_btop, m, 0, gp_font);
 }
 static void ovl_gp_srect(int tag, BPRect *r);
-/* the button row: laid out along the panel's bottom, or - on a scene panel
- * (131.9.12) - at the rect the scene tags with the button's key (+128 under
- * a confirmation), so the picture, the key and the mouse rect are one
- * table; records the mouse rectangles and the row's top (damage) */
-static void ovl_gp_brow(void)
+/* button i's label into gp_line: "[K] Label", ">" on the focus on 1bpp */
+static void ovl_gp_blabel(int i, int bare)
 {
     static char lab[10];
+    gp_line[0] = 0;
+    if (!bare) {
+        lab[0] = '[';
+        ovl_gp_kn(lab + 1, gp_bkey[i]);
+        ovl_gp_la(lab); ovl_gp_la("] ");
+    }
+    if (bp_mono && i == gp_foc) ovl_gp_la(">");
+    ovl_gp_la(gp_blab[i]);
+}
+/* the button row, spread evenly along the panel's foot or - on a scene
+ * panel (131.9.12) - along the row the scene tags #202, each button its
+ * label's width; records the mouse rectangles, the very ones drawn, and
+ * the row's top (damage) */
+static void ovl_gp_brow(void)
+{
     static int bw[GP_MAXB];
     BPRect *r;
-    int i, sum, gap, x, y, bare;
+    int i, sum, gap, x, y, w, h, bare;
     gp_brt = gp_r.y + gp_r.h;
     gp_drawn = gp_kind;
     if (!gp_nb) return;
-    bare = 0;
-    if (gp_scn) {
-        for (i = 0; i < gp_nb; i++) ovl_gp_srect(gp_bkey[i] | (gp_conf ? 0x80 : 0), &gp_br[i]);
-    } else {
-        for (;;) {
-            sum = 0;
-            for (i = 0; i < gp_nb; i++) {
-                bw[i] = bp_w_textw(gp_blab[i], gp_font) + 8 + (bp_mono ? gp_cw : 0);
-                if (!bare) { ovl_gp_kn(lab, gp_bkey[i]); bw[i] += bp_w_textw(lab, gp_font) + 3 * gp_cw; }
-                sum += bw[i];
-            }
-            if (bare || sum + 2 * (gp_nb + 1) + 8 <= gp_r.w) break;
-            bare = 1;               /* too wide: labels alone; the hint bar names the keys */
-        }
-        gap = (gp_r.w - 8 - sum) / (gp_nb + 1);
-        if (gap < 2) gap = 2;
-        x = gp_r.x + 4 + gap;
-        y = gp_r.y + gp_r.h - gp_bh - 4;
+    r = &gp_br[GP_MAXB - 1];        /* the row: a scene's #202, else the panel's foot */
+    if (gp_scn) ovl_gp_srect(202, r);
+    else { r->x = gp_r.x + 4; r->w = gp_r.w - 8; r->h = gp_bh; r->y = gp_r.y + gp_r.h - gp_bh - 4; }
+    x = r->x; y = r->y; w = r->w; h = r->h;
+    for (bare = 0; bare < 2; bare++) {  /* too wide: labels alone; the hint bar names the keys */
+        sum = 0;
         for (i = 0; i < gp_nb; i++) {
-            r = &gp_br[i];
-            r->x = x; r->y = y; r->w = bw[i]; r->h = gp_bh;
-            x += bw[i] + gap;
+            ovl_gp_blabel(i, bare);
+            bw[i] = bp_w_textw(gp_line, gp_font) + 8;
+            sum += bw[i];
         }
+        if (sum + 2 * (gp_nb + 1) <= w) break;
     }
+    gap = (w - sum) / (gp_nb + 1);
+    if (gap < 2) gap = 2;
+    x += gap;
+    gp_brt = y;
     for (i = 0; i < gp_nb; i++) {
         r = &gp_br[i];
-        if (!r->w) continue;
-        if (r->y < gp_brt) gp_brt = r->y;
-        gp_line[0] = 0;
-        if (!bare) {
-            lab[0] = '[';
-            ovl_gp_kn(lab + 1, gp_bkey[i]);
-            ovl_gp_la(lab); ovl_gp_la("] ");
-        }
-        if (bp_mono && i == gp_foc) ovl_gp_la(">");
-        ovl_gp_la(gp_blab[i]);
+        r->x = x; r->y = y; r->w = bw[i]; r->h = h;
+        x += bw[i] + gap;
+        ovl_gp_blabel(i, bare);
         bp_w_button(r, gp_line, (gp_bwhy[i] ? BP_W_DISABLED : 0) | (i == gp_foc ? BP_W_FOCUS : 0));
     }
 }
@@ -709,7 +707,8 @@ static void ovl_gp_sbeg(void)
     m = ovl_gp_stxt();
     gp_pp = (char *)gp_hb;
     *gp_pp = 0;
-    for (i = 0; i < 21; i++) gp_sv[i] = gp_pp;
+    GP_PEND[-1] = 0;                /* the pool's last byte is only ever a terminator */
+    for (i = 0; i < 21; i++) gp_sv[i] = GP_PEND - 1;
     for (i = 0; i < 15; i++) gp_iv[i] = 0;
     if (m) { gp_sv[1] = m; gp_iv[1] = 1; }
 }

@@ -5,14 +5,14 @@
 #
 # Conventions every scene here keeps (bp_panels.c ovl_gp_scene):
 #   %0 is always 0: "if %0" marks a PLACEHOLDER, an op never drawn whose
-#      rect a button takes - tag = the button's key ('b' 98, 'a' 97, 'p' 112,
-#      ' ' 32, 'e' 101, 't' 116, 'm' 109, 'r' 114, 'c' 99, 'l' 108, 'd' 100,
-#      'x' 120, 'u' 117, Esc 27), +128 while a confirmation shows. The C draws
-#      the buttons there (gk_button), so a button, its key and its mouse rect
-#      are one table.
+#      rect the C reads. #202 is the BUTTON ROW: the C spreads the panel's
+#      buttons (gp_spec's, so a button, its key and its hint entry are one
+#      table) evenly along it at its height and records the very rects it
+#      draws as the mouse targets.
 #   %1 is 1 when $1, the status line (a refusal, "Sent - waiting", "Waiting
 #      for NAME on the other PC"), has something to say.
-#   #200 is the panel's rect (damage, clicks); #201 the status line's.
+#   #200 is the panel's rect (damage, clicks); #201 the status line's;
+#   #2..#5 the trade review's list areas.
 #   Money slots arrive with " cr" on them.
 fonth BP_F_TEXT13 13
 fonth BP_F_TEXT10 10
@@ -35,8 +35,7 @@ scene 420 336 300
   if %7 text 118 244 40 "Rent" @TEXT BP_F_TEXT13 left
   if %7 text 160 244 150 "$4" @TEXT BP_F_TEXT13 left|fit
   if %8 textbox 114 244 196 13 "$1" @TEXT BP_F_TEXT13 left|fit #201
-  if %0 fill 114 260 96 26 0 #98
-  if %0 fill 214 260 96 26 0 #97
+  if %0 fill 114 260 196 26 0 #202
 end
 scene 421 384 204
   panel 10 142 364 58 0 "" BP_F_TEXT10 raised|shadow #200
@@ -50,8 +49,7 @@ scene 421 384 204
   if %7 text 226 159 32 "Rent" @TEXT BP_F_TEXT10 left
   if %7 text 260 159 108 "$4" @TEXT BP_F_TEXT10 left|fit
   if %8 textbox 92 159 276 10 "$1" @TEXT BP_F_TEXT10 left|fit #201
-  if %0 fill 92 173 100 22 0 #98
-  if %0 fill 200 173 108 22 0 #97
+  if %0 fill 92 173 216 22 0 #202
 end
 
 # ---- the auction (2-auction.png) ---------------------------------------------
@@ -84,8 +82,7 @@ scene 422 336 300
     button 252 154 34 30 "+" BP_F_BIG16 bflat #43
     text 16 189 300 "Minimum $8 • You have $9" @TEXT BP_F_TEXT13 centre|fit
   }
-  if %0 fill 34 206 130 26 0 #98
-  if %0 fill 172 206 130 26 0 #112
+  if %0 fill 34 206 268 26 0 #202
   if %7 text 16 236 300 "If you win: $10 left" @TEXT BP_F_TEXT13 centre|fit
   hline 16 253 300 0
   if !%8 text 16 258 300 "Passing leaves this auction." @TEXT BP_F_TEXT13 centre
@@ -113,8 +110,7 @@ scene 423 384 204
     button 290 104 28 24 "+" BP_F_BIG16 bflat #43
     text 10 131 364 "Minimum $8 • You have $9" @TEXT BP_F_TEXT10 centre|fit
   }
-  if %0 fill 60 144 128 20 0 #98
-  if %0 fill 196 144 128 20 0 #112
+  if %0 fill 60 144 264 20 0 #202
   if %7 text 10 166 364 "If you win: $10 left" @TEXT BP_F_TEXT10 centre|fit
   if %8 text 10 176 364 "$11" @TEXT BP_F_TEXT10 centre|fit
   textbox 10 187 364 10 "$1" @TEXT BP_F_TEXT10 centre|fit #201
@@ -180,9 +176,7 @@ scene 424 336 300
   if !%1 spr 46 243 BP_A2_LOCK
   if !%1 text 66 245 252 "Offer locked • Both sides shown above" @TEXT BP_F_TEXT13 left|fit
   if %1 textbox 12 245 312 13 "$1" @TEXT BP_F_TEXT13 centre|fit #201
-  if %0 fill 14 262 132 24 0 #97
-  if %0 fill 152 262 92 24 0 #114
-  if %0 fill 250 262 74 24 0 #99
+  if %0 fill 14 262 310 24 0 #202
 end
 scene 425 384 204
   dither 2 2 380 200 cyan lightcyan 2
@@ -227,9 +221,7 @@ scene 425 384 204
   if %3 text 226 153 142 "for $10" @TEXT BP_F_TEXT10 left|fit
   if !%1 text 12 168 360 "Offer locked • Both sides shown above" @TEXT BP_F_TEXT10 centre|fit
   if %1 textbox 12 168 360 10 "$1" @TEXT BP_F_TEXT10 centre|fit #201
-  if %0 fill 14 180 140 18 0 #97
-  if %0 fill 160 180 100 18 0 #114
-  if %0 fill 266 180 100 18 0 #99
+  if %0 fill 14 180 352 18 0 #202
 end
 
 # ---- the link lost / paused (5-linklost.png) ---------------------------------
@@ -258,13 +250,7 @@ scene 426 336 300
   if %2 vline 106 201 30 0
   if %2 text 112 209 200 "$7" @TEXT BP_F_TEXT13 centre|fit
   if !%2 text 22 209 288 "$7" @TEXT BP_F_TEXT13 centre|fit
-  if %0 fill 12 242 88 24 0 #114
-  if %0 fill 12 242 88 24 0 #117
-  if %0 fill 102 242 82 24 0 #108
-  if %0 fill 186 242 68 24 0 #100
-  if %0 fill 256 242 64 24 0 #120
-  if %0 fill 64 242 104 24 0 #248
-  if %0 fill 174 242 98 24 0 #155
+  if %0 fill 12 242 308 24 0 #202
   textbox 16 272 300 13 "$1" @TEXT BP_F_TEXT13 centre|fit #201
 end
 scene 427 384 204
@@ -282,13 +268,7 @@ scene 427 384 204
   banner 60 118 264 14 "$6" BP_F_TEXT10 -1
   titlebar 12 135 360 12 "LAST PAIRED SAVE" BP_F_TEXT10 centre
   text 12 149 360 "$7" @TEXT BP_F_TEXT10 centre|fit
-  if %0 fill 14 162 96 20 0 #114
-  if %0 fill 14 162 96 20 0 #117
-  if %0 fill 114 162 90 20 0 #108
-  if %0 fill 208 162 80 20 0 #100
-  if %0 fill 292 162 76 20 0 #120
-  if %0 fill 84 162 110 20 0 #248
-  if %0 fill 200 162 100 20 0 #155
+  if %0 fill 14 162 354 20 0 #202
   textbox 12 186 360 10 "$1" @TEXT BP_F_TEXT10 centre|fit #201
 end
 
@@ -298,18 +278,12 @@ scene 428 336 300
   panel 8 230 320 64 0 "" BP_F_TEXT13 raised|shadow #200
   spr 16 236 %6
   textbox 46 241 274 13 "$1" @TEXT BP_F_TEXT13 left|fit #201
-  if %0 fill 14 263 80 24 0 #32
-  if %0 fill 97 263 82 24 0 #101
-  if %0 fill 182 263 62 24 0 #116
-  if %0 fill 247 263 76 24 0 #109
+  if %0 fill 14 263 309 24 0 #202
 end
 scene 429 384 204
   panel 10 158 364 42 0 "" BP_F_TEXT10 raised|shadow #200
   textbox 18 162 348 10 "$1" @TEXT BP_F_TEXT10 left|fit #201
-  if %0 fill 16 175 84 21 0 #32
-  if %0 fill 104 175 86 21 0 #101
-  if %0 fill 194 175 74 21 0 #116
-  if %0 fill 272 175 96 21 0 #109
+  if %0 fill 16 175 352 21 0 #202
 end
 
 # ---- COMPACT (CGA, the centre 336x96): the same slots, IDs 455..459 ----------
@@ -320,8 +294,7 @@ scene 455 336 96
   text 170 19 156 "Rent $4" @TEXT BP_F_TEXT08 left|fit
   text 10 31 316 "Decline puts it up for auction." @TEXT BP_F_TEXT08 left|fit
   textbox 10 58 316 8 "$1" @TEXT BP_F_TEXT08 left|fit #201
-  if %0 fill 50 72 110 15 0 #98
-  if %0 fill 176 72 110 15 0 #97
+  if %0 fill 50 72 236 15 0 #202
 end
 scene 456 336 96
   panel 2 2 332 92 11 "AUCTION • $2" BP_F_TEXT08 raised #200
@@ -339,8 +312,7 @@ scene 456 336 96
   }
   if %7 text 8 56 160 "Win: $10 left" @TEXT BP_F_TEXT08 left|fit
   if %8 text 170 56 158 "$11" @TEXT BP_F_TEXT08 left|fit
-  if %0 fill 40 66 120 13 0 #98
-  if %0 fill 176 66 120 13 0 #112
+  if %0 fill 40 66 256 13 0 #202
   textbox 8 82 320 8 "$1" @TEXT BP_F_TEXT08 centre|fit #201
 end
 scene 457 336 96
@@ -363,9 +335,7 @@ scene 457 336 96
   text 170 61 160 "$7 -> $9" @TEXT BP_F_TEXT08 left|fit
   if !%1 text 6 70 324 "Offer locked. $3 decides." @TEXT BP_F_TEXT08 centre|fit
   if %1 textbox 6 70 324 8 "$1" @TEXT BP_F_TEXT08 centre|fit #201
-  if %0 fill 10 79 110 13 0 #97
-  if %0 fill 126 79 90 13 0 #114
-  if %0 fill 222 79 100 13 0 #99
+  if %0 fill 10 79 312 13 0 #202
 end
 scene 458 336 96
   panel 2 2 332 92 11 "$2" BP_F_TEXT08 raised #200
@@ -373,20 +343,11 @@ scene 458 336 96
   text 6 28 324 "Last: $5" @TEXT BP_F_TEXT08 centre|fit
   banner 40 38 256 11 "$6" BP_F_TEXT08 -1
   text 6 51 324 "Paired save: $7" @TEXT BP_F_TEXT08 centre|fit
-  if %0 fill 6 62 86 14 0 #114
-  if %0 fill 6 62 86 14 0 #117
-  if %0 fill 96 62 80 14 0 #108
-  if %0 fill 180 62 70 14 0 #100
-  if %0 fill 254 62 76 14 0 #120
-  if %0 fill 60 62 110 14 0 #248
-  if %0 fill 180 62 90 14 0 #155
+  if %0 fill 6 62 321 14 0 #202
   textbox 6 80 324 8 "$1" @TEXT BP_F_TEXT08 centre|fit #201
 end
 scene 459 336 96
   panel 2 58 332 36 0 "" BP_F_TEXT08 raised #200
   textbox 8 62 320 8 "$1" @TEXT BP_F_TEXT08 left|fit #201
-  if %0 fill 8 73 78 16 0 #32
-  if %0 fill 90 73 80 16 0 #101
-  if %0 fill 174 73 64 16 0 #116
-  if %0 fill 242 73 86 16 0 #109
+  if %0 fill 6 73 323 16 0 #202
 end
