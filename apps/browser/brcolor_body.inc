@@ -89,8 +89,10 @@ brc_cfg:
     xor bh, bh
     cmp ax, 'TH'
     jne .tp
-    cmp byte [es:si + 2], 2
+    cmp byte [es:si + 2], 3         ; the kernel's ver (kernel/driver.inc)
     jne .next
+    or bl, bl
+    jz .next
     mov dl, [es:si + 4]
     jmp short .next
 .tp:

@@ -240,7 +240,7 @@ br_tcount:
     mov al, BRT_X2ADV
     cmp byte [br_tall], BRT_X2
     je .add
-    mov al, 7
+    mov al, 8                       ; the cell's advance: brf_glyph's, br_thit's
     cmp byte [br_tall], BRT_FACE
     jne .add
 .face:
