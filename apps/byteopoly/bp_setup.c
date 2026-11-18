@@ -131,6 +131,9 @@ static int ovl_su_ena(int id)
     lobby = bp_ap_mode == BP_M_LOBBY;
     if (id <= 2) return !lobby;
     if (id == SU_BACK || id == SU_LINK) return 1;
+#ifdef BP_SETUP_DEMO
+    if (id == SU_START) return 1;
+#endif
     if (id == SU_PORT) return !lobby;
     if (id == SU_READY) return lobby && bp_link_state() == BP_L_LOBBY;
     if (id == SU_START)
@@ -484,6 +487,9 @@ static void ovl_su_slots(void)
                 (st == BP_L_SEARCH || st == BP_L_PEER) ? BP_A2_LED_YELLOW :
                 (bp_mono && bx_size(BP_A2_M_LED_RED)) ? BP_A2_M_LED_RED : BP_A2_LED_RED;
     su_sv[13] = lobby ? bp_link_msg() : TS_NOT_CONNECTED;
+#ifdef BP_SETUP_DEMO
+    su_sv[13] = "Other PC found";
+#endif
     su_sv[14] = su_tab == 1 ? TS_ROLE_HOST : TS_ROLE_GUEST;
     su_sv[15] = su_ports[su_port % 3];
     su_sv[18] = su_ports[su_port % 3];
@@ -501,7 +507,7 @@ static void ovl_su_slots(void)
     /* the line in the bottom bar */
     if (su_msg[0]) su_sv[17] = su_msg;
     else if (su_tab == 0) su_sv[17] = TS_PLAYERS_TAKE_TURNS;
-    else if (lobby) su_sv[17] = su_ready && pr && su_tab == 1 ? TS_ALL_READY :
+    else if (lobby) su_sv[17] = su_ready && pr && su_tab == 1 && ovl_su_ena(SU_START) ? TS_ALL_READY :
                                 su_tab == 1 ? TS_SET_THE_ROSTER : TS_WAITING_FOR_THE;
     else su_sv[17] = TS_PRESS_CONNECT_TO;
 }

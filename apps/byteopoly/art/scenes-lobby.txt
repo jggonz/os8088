@@ -14,153 +14,152 @@ fonth BP_F_TEXT13 13
 fonth BP_F_TEXT10 10
 fonth BP_F_TEXT08 8
 fonth BP_F_BIG16 16
+fonth BP_F_BIG12 12
 
-# ---- FULL: 640 x 418 -------------------------------------------------------
-scene BP_A2_SC_LOBBY 640 418
-  spr 166 9 BP_A2_RAYS_L
-  spr 450 9 BP_A2_RAYS_R
-  box 200 6 240 30 raised2|round|shadow @TITLE
-  textbox 200 6 240 30 $24 white BP_F_BIG16 centre|emboss
-  tab 88 46 154 22 "Same PC" BP_F_TEXT13 %0 #1
-  tab 243 46 154 22 "Host Cable" BP_F_TEXT13 %1 #2
-  tab 398 46 154 22 "Join Cable" BP_F_TEXT13 %2 #3
-  banner 74 70 492 20 $4 BP_F_TEXT13 15 #31
-  panel 13 98 384 188 18 "PLAYER ROSTER" BP_F_TEXT13 raised|shadow|pleft #28
-  box 16 117 378 144 flat -1
-  box 17 118 114 18 raised @FACE
-  textbox 17 118 114 18 "Player" @TEXT BP_F_TEXT10 centre
-  box 131 118 69 18 raised @FACE
-  textbox 131 118 69 18 "Token" @TEXT BP_F_TEXT10 centre
+# ---- FULL: 640 x 390 (the content less the hint bar) ------------------------
+scene BP_A2_SC_LOBBY 640 390
+  spr 158 12 BP_A2_RAYS_L
+  spr 458 12 BP_A2_RAYS_R
+  box 190 4 260 40 raised2|round|shadow @TITLE
+  textbox 190 4 260 40 $24 white BP_F_BIG16 centre|emboss
+  tab 88 48 154 22 "Same PC" BP_F_BIG12 %0 #1
+  tab 243 48 154 22 "Host Cable" BP_F_BIG12 %1 #2
+  tab 398 48 154 22 "Join Cable" BP_F_BIG12 %2 #3
+  banner 74 72 492 18 $4 BP_F_TEXT13 15 #31
+  panel 13 94 384 176 18 "PLAYER ROSTER" BP_F_BIG12 raised|shadow|pleft #28
+  box 16 113 378 130 flat -1
+  box 17 114 114 16 raised @FACE
+  textbox 17 114 114 16 "Player" @TEXT BP_F_TEXT10 centre
+  box 131 114 69 16 raised @FACE
+  textbox 131 114 69 16 "Token" @TEXT BP_F_TEXT10 centre
 
-  fill 17 136 114 31 @FIELD #6
-  fill 131 136 69 31 @FIELD #10
-  fill 17 167 114 31 @FIELD #7
-  fill 131 167 69 31 @FIELD #11
-  fill 17 198 114 31 @FIELD #8
-  fill 131 198 69 31 @FIELD #12
-  fill 17 229 114 31 @FIELD #9
-  fill 131 229 69 31 @FIELD #13
+  fill 17 130 114 28 @FIELD #6
+  fill 131 130 69 28 @FIELD #10
+  fill 17 158 114 28 @FIELD #7
+  fill 131 158 69 28 @FIELD #11
+  fill 17 186 114 28 @FIELD #8
+  fill 131 186 69 28 @FIELD #12
+  fill 17 214 114 28 @FIELD #9
+  fill 131 214 69 28 @FIELD #13
   if %23 {
-    box 200 118 133 18 raised @FACE
-    textbox 200 118 133 18 "Computer" @TEXT BP_F_TEXT10 centre
-    box 333 118 60 18 raised @FACE
-    textbox 333 118 60 18 "Ready" @TEXT BP_F_TEXT10 centre
-    fill 200 136 133 124 @FIELD
-    fill 333 136 60 124 @FIELD #18
-    vline 200 118 142 0
-    vline 333 118 142 0
+    box 200 114 133 16 raised @FACE
+    textbox 200 114 133 16 "Computer" @TEXT BP_F_TEXT10 centre
+    box 333 114 60 16 raised @FACE
+    textbox 333 114 60 16 "Ready" @TEXT BP_F_TEXT10 centre
+    fill 200 130 133 112 @FIELD
+    fill 333 130 60 112 @FIELD #18
+    vline 200 114 128 0
+    vline 333 114 128 0
   }
-  vline 131 118 142 0
-  hline 17 167 376 0
-  hline 17 198 376 0
-  hline 17 229 376 0
+  vline 131 114 128 0
+  hline 17 158 376 0
+  hline 17 186 376 0
+  hline 17 214 376 0
 
   if %9 {
-    box 22 144 14 14 flat 4
-    textbox 42 136 86 31 $0 @TEXT BP_F_TEXT13 left|fit
-    spr 153 140 %13
+    box 22 137 14 14 flat 4
+    textbox 42 130 86 28 $0 @TEXT BP_F_TEXT13 left|fit
+    spr 153 132 %13
   }
   if %9=2 {
-    drop 207 141 119 21 $6 BP_F_TEXT13 #14
-    check 352 142 18 %17 BP_A2_CHECK
+    drop 207 134 119 20 $6 BP_F_TEXT13 #14
+    check 352 135 18 %17 BP_A2_CHECK
   }
   if %10 {
-    box 22 175 14 14 flat 1
-    textbox 42 167 86 31 $1 @TEXT BP_F_TEXT13 left|fit
-    spr 153 171 %14
+    box 22 165 14 14 flat 1
+    textbox 42 158 86 28 $1 @TEXT BP_F_TEXT13 left|fit
+    spr 153 160 %14
   }
   if %10=2 {
-    drop 207 172 119 21 $7 BP_F_TEXT13 #15
-    check 352 173 18 %18 BP_A2_CHECK
+    drop 207 162 119 20 $7 BP_F_TEXT13 #15
+    check 352 163 18 %18 BP_A2_CHECK
   }
   if %11 {
-    box 22 206 14 14 flat 2
-    textbox 42 198 86 31 $2 @TEXT BP_F_TEXT13 left|fit
-    spr 153 202 %15
+    box 22 193 14 14 flat 2
+    textbox 42 186 86 28 $2 @TEXT BP_F_TEXT13 left|fit
+    spr 153 188 %15
   }
   if %11=2 {
-    drop 207 203 119 21 $8 BP_F_TEXT13 #16
-    check 352 204 18 %19 BP_A2_CHECK
+    drop 207 190 119 20 $8 BP_F_TEXT13 #16
+    check 352 191 18 %19 BP_A2_CHECK
   }
   if %12 {
-    box 22 237 14 14 flat 5
-    textbox 42 229 86 31 $3 @TEXT BP_F_TEXT13 left|fit
-    spr 153 233 %16
+    box 22 221 14 14 flat 5
+    textbox 42 214 86 28 $3 @TEXT BP_F_TEXT13 left|fit
+    spr 153 216 %16
   }
   if %12=2 {
-    drop 207 234 119 21 $9 BP_F_TEXT13 #17
-    check 352 235 18 %20 BP_A2_CHECK
+    drop 207 218 119 20 $9 BP_F_TEXT13 #17
+    check 352 219 18 %20 BP_A2_CHECK
   }
-  button 20 264 22 18 "-" BP_F_TEXT13 %7 #4
-  button 368 264 22 18 "+" BP_F_TEXT13 %8 #5
-  textbox 46 264 316 18 $5 @TEXT BP_F_TEXT10 centre
-  panel 13 294 384 76 18 "GAME RULES" BP_F_TEXT13 raised|shadow|pleft #29
-  radio 28 320 16 %21 #19
-  textbox 50 318 90 20 "Classic" @TEXT BP_F_TEXT13 left
-  radio 28 344 16 %22 #20
-  textbox 50 342 90 20 "Quick Match" @TEXT BP_F_TEXT13 left
-  if %22 drop 140 342 88 20 $10 BP_F_TEXT10 #21
-  vline 234 316 48 0
-  text 242 322 150 $11 @TEXT BP_F_TEXT10 left|fit
-  text 242 342 150 $12 @TEXT BP_F_TEXT10 left|fit
-  box 13 378 515 36 raised|shadow 15
-  textbox 22 378 240 36 $17 @TEXT BP_F_TEXT10 left|fit #27
-  button 270 383 148 26 "[S] Start Game" BP_F_TEXT13 %3 #25
-  button 426 383 96 26 "[Esc] Back" BP_F_TEXT13 %4 #26
+  button 20 246 22 18 "-" BP_F_TEXT13 %7 #4
+  button 368 246 22 18 "+" BP_F_TEXT13 %8 #5
+  textbox 46 246 316 18 $5 @TEXT BP_F_TEXT10 centre
+  panel 13 276 384 70 18 "GAME RULES" BP_F_BIG12 raised|shadow|pleft #29
+  radio 28 302 16 %21 #19
+  textbox 50 300 90 20 "Classic" @TEXT BP_F_TEXT13 left
+  radio 28 324 16 %22 #20
+  textbox 50 322 90 20 "Quick Match" @TEXT BP_F_TEXT13 left
+  if %22 drop 140 322 88 20 $10 BP_F_TEXT10 #21
+  vline 234 298 44 0
+  text 242 304 150 $11 @TEXT BP_F_TEXT10 left|fit
+  text 242 324 150 $12 @TEXT BP_F_TEXT10 left|fit
+  box 13 352 515 34 raised|shadow 15
+  textbox 22 352 240 34 $17 @TEXT BP_F_TEXT10 left|fit #27
+  button 270 356 148 26 "[S] Start Game" BP_F_BIG12 %3 #25
+  button 426 356 96 26 "[Esc] Back" BP_F_BIG12 %4 #26
   if %23 {
-    panel 405 98 222 272 18 "NULL-MODEM LINK" BP_F_TEXT13 raised|shadow|pleft #30
-    spr 414 126 BP_A2_PC_SMILE
-    spr 562 126 BP_A2_PC_MOUSE
-    fill 468 151 22 3 8
-    fill 540 151 24 3 8
+    panel 405 94 222 252 18 "NULL-MODEM LINK" BP_F_BIG12 raised|shadow|pleft #30
+    spr 414 122 BP_A2_PC_SMILE
+    spr 562 122 BP_A2_PC_MOUSE
+    fill 468 147 22 3 8
+    fill 540 147 24 3 8
   }
-  if %23=2 spr 484 144 BP_A2_PLUG_L
-  if %23=2 spr 516 144 BP_A2_PLUG_R
-  if %23=1 spr 474 144 BP_A2_PLUG_L
-  if %23=1 spr 526 144 BP_A2_PLUG_R
+  if %23=2 spr 484 140 BP_A2_PLUG_L
+  if %23=2 spr 516 140 BP_A2_PLUG_R
+  if %23=1 spr 474 140 BP_A2_PLUG_L
+  if %23=1 spr 526 140 BP_A2_PLUG_R
   if %23 {
-    box 414 198 204 20 raised|round 15
-    spr 421 203 %24
-    text 438 202 176 $13 @TEXT BP_F_TEXT10 left|fit
-    text 421 228 60 "Role:" @TEXT BP_F_TEXT10 left
-    text 486 228 128 $14 @TEXT BP_F_TEXT10 left|fit
-    text 421 242 60 "Port:" @TEXT BP_F_TEXT10 left
-    text 486 242 128 $15 @TEXT BP_F_TEXT10 left|fit
-    text 421 256 60 "Speed:" @TEXT BP_F_TEXT10 left
-    text 486 256 128 "2400 baud" @TEXT BP_F_TEXT10 left
-    text 421 270 60 "Format:" @TEXT BP_F_TEXT10 left
-    text 486 270 128 "8N1" @TEXT BP_F_TEXT10 left
-    hline 414 286 204 1
-    button 414 324 44 22 $18 BP_F_TEXT10 %5 #23
-    button 462 324 66 22 $19 BP_F_TEXT10 %6 #24
-    spr 532 306 BP_A2_MASCOT_UP
+    box 414 194 204 20 raised|round 15
+    spr 421 199 %24
+    text 438 198 176 $13 @TEXT BP_F_TEXT10 left|fit
+    text 421 224 60 "Role:" @TEXT BP_F_TEXT10 left
+    text 486 224 128 $14 @TEXT BP_F_TEXT10 left|fit
+    text 421 238 60 "Port:" @TEXT BP_F_TEXT10 left
+    text 486 238 128 $15 @TEXT BP_F_TEXT10 left|fit
+    text 421 252 60 "Speed:" @TEXT BP_F_TEXT10 left
+    text 486 252 128 "2400 baud" @TEXT BP_F_TEXT10 left
+    text 421 266 60 "Format:" @TEXT BP_F_TEXT10 left
+    text 486 266 128 "8N1" @TEXT BP_F_TEXT10 left
+    hline 414 282 204 1
+    button 414 318 44 22 $18 BP_F_TEXT10 %5 #23
+    button 462 318 66 22 $19 BP_F_TEXT10 %6 #24
+    spr 532 302 BP_A2_MASCOT_UP
   }
-  if %26 box 414 292 204 26 raised|round 15
-  if %26 spr 420 293 %26
-  if %26 text 448 300 166 $16 @TEXT BP_F_TEXT10 left|fit
+  if %26 box 414 288 204 26 raised|round 15
+  if %26 spr 420 289 %26
+  if %26 text 448 296 166 $16 @TEXT BP_F_TEXT10 left|fit
 end
 
-# the Same PC half: what the cable columns and the link panel say instead
-scene BP_A2_SC_LOBBY_S 640 418
-  box 200 118 193 18 raised @FACE
-  textbox 200 118 193 18 "This computer" @TEXT BP_F_TEXT10 centre
-  fill 200 136 193 124 @FIELD
-  spr 268 148 BP_A2_PC_SMILE
-  textbox 200 204 193 20 "Everyone plays here" @TEXT BP_F_TEXT13 centre
-  textbox 200 226 193 16 "Players take turns" @TEXT BP_F_TEXT10 centre
-  textbox 200 240 193 16 "at one keyboard." @TEXT BP_F_TEXT10 centre
-  vline 200 118 142 0
-  panel 405 98 222 272 18 "THIS COMPUTER" BP_F_TEXT13 raised|shadow|pleft #30
-  spr 488 130 BP_A2_PC_SMILE
-  textbox 405 200 222 20 "No cable needed" @TEXT BP_F_TEXT13 centre
-  textbox 405 226 222 14 "Host Cable and Join Cable" @TEXT BP_F_TEXT10 centre
-  textbox 405 240 222 14 "link two computers." @TEXT BP_F_TEXT10 centre
-  spr 532 306 BP_A2_MASCOT_UP
+scene BP_A2_SC_LOBBY_S 640 390
+  box 200 114 193 16 raised @FACE
+  textbox 200 114 193 16 "This computer" @TEXT BP_F_TEXT10 centre
+  fill 200 130 193 112 @FIELD
+  spr 268 138 BP_A2_PC_SMILE
+  textbox 200 192 193 20 "Everyone plays here" @TEXT BP_F_TEXT13 centre
+  textbox 200 214 193 14 "Players take turns" @TEXT BP_F_TEXT10 centre
+  textbox 200 227 193 14 "at one keyboard." @TEXT BP_F_TEXT10 centre
+  vline 200 114 128 0
+  panel 405 94 222 252 18 "THIS COMPUTER" BP_F_BIG12 raised|shadow|pleft #30
+  spr 488 126 BP_A2_PC_SMILE
+  textbox 405 190 222 20 "No cable needed" @TEXT BP_F_TEXT13 centre
+  textbox 405 216 222 14 "Host Cable and Join Cable" @TEXT BP_F_TEXT10 centre
+  textbox 405 230 222 14 "link two computers." @TEXT BP_F_TEXT10 centre
+  spr 532 302 BP_A2_MASCOT_UP
 end
 
-
-# ---- COMPACT (and MID): 640 x 142 ------------------------------------------
-scene BP_A2_SC_LOBBY_C 640 142
+# ---- COMPACT (and MID): 640 x 128 ------------------------------------------
+scene BP_A2_SC_LOBBY_C 640 128
   tab 4 3 100 12 "Same PC" BP_F_TEXT08 %0 #1
   tab 106 3 100 12 "Host Cable" BP_F_TEXT08 %1 #2
   tab 208 3 100 12 "Join Cable" BP_F_TEXT08 %2 #3
@@ -239,10 +238,10 @@ scene BP_A2_SC_LOBBY_C 640 142
   if %22 drop 540 31 70 12 $10 BP_F_TEXT08 #21
   text 384 46 84 $11 @TEXT BP_F_TEXT08 left|fit
   text 470 46 164 $12 @TEXT BP_F_TEXT08 left|fit
-  box 4 104 632 36 raised|round 15
-  textbox 10 104 350 36 $17 @TEXT BP_F_TEXT08 left|fit #27
-  button 372 109 152 26 "[S] Start Game" BP_F_TEXT10 %3 #25
-  button 532 109 96 26 "[Esc] Back" BP_F_TEXT10 %4 #26
+  box 4 104 632 22 raised|round 15
+  textbox 10 104 350 22 $17 @TEXT BP_F_TEXT08 left|fit #27
+  button 372 106 152 18 "[S] Start Game" BP_F_TEXT10 %3 #25
+  button 532 106 96 18 "[Esc] Back" BP_F_TEXT10 %4 #26
   if %23 {
     panel 380 60 256 41 12 "NULL-MODEM LINK" BP_F_TEXT08 raised|pleft #30
     spr 385 76 %24
@@ -253,7 +252,7 @@ scene BP_A2_SC_LOBBY_C 640 142
   }
 end
 
-scene BP_A2_SC_LOBBY_CS 640 142
+scene BP_A2_SC_LOBBY_CS 640 128
   box 202 29 172 10 raised @FACE
   textbox 202 29 172 10 "This computer" @TEXT BP_F_TEXT08 centre
   fill 202 39 172 48 @FIELD
