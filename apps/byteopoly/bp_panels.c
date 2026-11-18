@@ -607,6 +607,7 @@ static void ovl_gp_brow(void)
 {
     static char lab[10];
     static int bw[GP_MAXB];
+    BPRect *r;
     int i, sum, gap, x, y, bare;
     gp_brt = gp_r.y + gp_r.h;
     gp_drawn = gp_kind;
@@ -630,13 +631,15 @@ static void ovl_gp_brow(void)
         x = gp_r.x + 4 + gap;
         y = gp_r.y + gp_r.h - gp_bh - 4;
         for (i = 0; i < gp_nb; i++) {
-            gp_br[i].x = x; gp_br[i].y = y; gp_br[i].w = bw[i]; gp_br[i].h = gp_bh;
+            r = &gp_br[i];
+            r->x = x; r->y = y; r->w = bw[i]; r->h = gp_bh;
             x += bw[i] + gap;
         }
     }
     for (i = 0; i < gp_nb; i++) {
-        if (!gp_br[i].w) continue;
-        if (gp_br[i].y < gp_brt) gp_brt = gp_br[i].y;
+        r = &gp_br[i];
+        if (!r->w) continue;
+        if (r->y < gp_brt) gp_brt = r->y;
         gp_line[0] = 0;
         if (!bare) {
             lab[0] = '[';
@@ -645,8 +648,7 @@ static void ovl_gp_brow(void)
         }
         if (bp_mono && i == gp_foc) ovl_gp_la(">");
         ovl_gp_la(gp_blab[i]);
-        gk_button(gp_br[i].x, gp_br[i].y, gp_br[i].w, gp_br[i].h, gp_line, gp_font,
-                  (gp_bwhy[i] ? GK_B_DISABLED : i == gp_foc ? GK_B_FOCUS : GK_B_NORMAL) | GK_B_FLAT);
+        bp_w_button(r, gp_line, (gp_bwhy[i] ? BP_W_DISABLED : 0) | (i == gp_foc ? BP_W_FOCUS : 0));
     }
 }
 
@@ -912,12 +914,12 @@ static void ovl_gp_dtrade(void)
     ovl_gp_pm(12, &bp_game.offer_cash);
     for (c = 0; c < 2; c++) {
         s = c ? t : f;
-        gp_sv[4 + 3 * c] = ovl_gp_name(s);
-        ovl_gp_pm(5 + 3 * c, &bp_game.cash[s]);
+        gp_sv[4 + c] = ovl_gp_name(s);
+        ovl_gp_pm(6 + c, &bp_game.cash[s]);
         j = (bp_game.offer_payer != 0) == c && !bp_u32_iszero(&bp_game.offer_cash);
         gp_iv[13 + c] = j;
-        if (ovl_gp_after(s, j, &bp_game.offer_cash, &gp_u1) == BP_OK) ovl_gp_pm(6 + 3 * c, &gp_u1);
-        else { ovl_gp_pa(TP_SHORT); ovl_gp_pk(6 + 3 * c); }
+        if (ovl_gp_after(s, j, &bp_game.offer_cash, &gp_u1) == BP_OK) ovl_gp_pm(8 + c, &gp_u1);
+        else { ovl_gp_pa(TP_SHORT); ovl_gp_pk(8 + c); }
         m = c ? &bp_game.offer_get : &bp_game.offer_give;
         dk = (bp_game.offer_disks >> (c ? 4 : 0)) & 3;
         n = 0;

@@ -63,7 +63,7 @@ end
 # bid is affordable, %8 someone passed for want of a raise.
 scene 422 336 300
   dither 2 2 332 296 cyan lightcyan 2
-  panel 8 6 316 286 22 "AUCTION - $2" BP_F_BIG16 raised|shadow #200
+  panel 8 6 316 286 22 "AUCTION • $2" BP_F_BIG16 raised|shadow #200
   sprshadow 62 40 %2 2
   fill 26 78 120 6 %3
   text 16 90 140 "List price: $3" @TEXT BP_F_TEXT13 centre|fit
@@ -74,15 +74,15 @@ scene 422 336 300
   if %4 spr 176 85 %4
   if %4 text 204 90 108 "$5" @TEXT BP_F_TEXT13 left|fit
   hline 16 116 300 0
-  if %6 banner 16 122 300 24 "$6 - YOUR BID" BP_F_BIG16 -1
-  if !%6 banner 16 122 300 24 "$6 - BIDDING" BP_F_BIG16 -1
+  if %6 banner 16 122 300 24 "$6 • YOUR BID" BP_F_BIG16 -1
+  if !%6 banner 16 122 300 24 "$6 • BIDDING" BP_F_BIG16 -1
   spr 30 122 %5
   if %6 {
     button 50 154 34 30 "-" BP_F_BIG16 bflat #45
     box 90 154 156 30 sunken2 @FIELD #1
     textbox 90 156 156 26 "$7" @TEXT BP_F_BIG16 centre|fit
     button 252 154 34 30 "+" BP_F_BIG16 bflat #43
-    text 16 189 300 "Minimum $8 - You have $9" @TEXT BP_F_TEXT13 centre|fit
+    text 16 189 300 "Minimum $8 • You have $9" @TEXT BP_F_TEXT13 centre|fit
   }
   if %0 fill 34 206 130 26 0 #98
   if %0 fill 172 206 130 26 0 #112
@@ -94,7 +94,7 @@ scene 422 336 300
 end
 scene 423 384 204
   dither 2 2 380 200 cyan lightcyan 2
-  panel 6 3 372 198 16 "AUCTION - $2" BP_F_BIG12 raised|shadow #200
+  panel 6 3 372 198 16 "AUCTION • $2" BP_F_BIG12 raised|shadow #200
   sprshadow 34 26 %2 2
   fill 22 62 72 3 %3
   text 10 67 108 "List $3" @TEXT BP_F_TEXT10 centre|fit
@@ -104,14 +104,14 @@ scene 423 384 204
   if !%4 textbox 128 46 130 28 "no bid yet" @TEXT BP_F_TEXT10 centre
   if %4 spr 264 47 %4
   if %4 text 292 54 76 "$5" @TEXT BP_F_TEXT10 left|fit
-  if %6 banner 10 84 364 16 "$6 - YOUR BID" BP_F_BIG12 -1
-  if !%6 banner 10 84 364 16 "$6 - BIDDING" BP_F_BIG12 -1
+  if %6 banner 10 84 364 16 "$6 • YOUR BID" BP_F_BIG12 -1
+  if !%6 banner 10 84 364 16 "$6 • BIDDING" BP_F_BIG12 -1
   if %6 {
     button 66 104 28 24 "-" BP_F_BIG16 bflat #45
     box 100 104 184 24 sunken2 @FIELD #1
     textbox 100 105 184 22 "$7" @TEXT BP_F_BIG16 centre|fit
     button 290 104 28 24 "+" BP_F_BIG16 bflat #43
-    text 10 131 364 "Minimum $8 - You have $9" @TEXT BP_F_TEXT10 centre|fit
+    text 10 131 364 "Minimum $8 • You have $9" @TEXT BP_F_TEXT10 centre|fit
   }
   if %0 fill 60 144 128 20 0 #98
   if %0 fill 196 144 128 20 0 #112
@@ -121,8 +121,8 @@ scene 423 384 204
 end
 
 # ---- the trade review (3-trade.png) -------------------------------------------
-# $2 / $3 the proposer and the recipient in capitals, $4 / $7 their names,
-# $5 / $8 their cash, $6 / $9 their cash after; $10 who completes a set and
+# $2 / $3 the proposer and the recipient in capitals, $4 / $5 their names,
+# $6 / $7 their cash, $8 / $9 their cash after; $10 who completes a set and
 # $11 which, %3 whether one is, %4..%6 its pictures (0 = none); %2 the
 # recipient decides here. Per side c (0 the proposer, 1 the recipient): a
 # lone computer is the boards' card - %7+c set, picture %9+c, collection
@@ -131,8 +131,8 @@ end
 # the area tagged 2+c, or 4+c when the PLUS box takes the foot.
 scene 424 336 300
   dither 2 2 332 296 cyan lightcyan 2
-  panel 6 4 324 290 22 "TRADE OFFER - $2 TO $3" BP_F_BIG16 raised|shadow #200
-  if %2 banner 84 32 168 17 "$3 - YOUR DECISION" BP_F_BIG12 -1
+  panel 6 4 324 290 22 "TRADE OFFER • $2 TO $3" BP_F_BIG16 raised|shadow #200
+  if %2 banner 84 32 168 17 "$3 • YOUR DECISION" BP_F_BIG12 -1
   if !%2 banner 84 32 168 17 "WAITING FOR $3" BP_F_BIG12 -1
   panel 12 52 142 118 16 "$2 GIVES" BP_F_BIG12 raised
   panel 182 52 142 118 16 "$3 GIVES" BP_F_BIG12 raised
@@ -169,16 +169,16 @@ scene 424 336 300
   }
   panel 12 172 312 70 14 "AFTER THIS TRADE" BP_F_BIG12 raised
   box 18 191 196 17 sunken2 @FIELD
-  text 22 193 190 "$4: $5 -> $6" @TEXT BP_F_TEXT13 left|fit
+  text 22 193 190 "$4: $6 -> $8" @TEXT BP_F_TEXT13 left|fit
   box 18 209 196 17 sunken2 @FIELD
-  text 22 211 190 "$7: $8 -> $9" @TEXT BP_F_TEXT13 left|fit
+  text 22 211 190 "$5: $7 -> $9" @TEXT BP_F_TEXT13 left|fit
   vline 220 191 34 0
   if %4 spr 225 192 %4
   if %5 spr 257 192 %5
   if %6 spr 289 192 %6
   if %3 text 18 228 300 "$10 completes the $11 set" @TEXT BP_F_TEXT10 centre|fit
   if !%1 spr 46 243 BP_A2_LOCK
-  if !%1 text 66 245 252 "Offer locked - both sides shown above" @TEXT BP_F_TEXT13 left|fit
+  if !%1 text 66 245 252 "Offer locked • Both sides shown above" @TEXT BP_F_TEXT13 left|fit
   if %1 textbox 12 245 312 13 "$1" @TEXT BP_F_TEXT13 centre|fit #201
   if %0 fill 14 262 132 24 0 #97
   if %0 fill 152 262 92 24 0 #114
@@ -186,8 +186,8 @@ scene 424 336 300
 end
 scene 425 384 204
   dither 2 2 380 200 cyan lightcyan 2
-  panel 6 3 372 198 16 "TRADE OFFER - $2 TO $3" BP_F_BIG12 raised|shadow #200
-  if %2 banner 104 24 176 14 "$3 - YOUR DECISION" BP_F_TEXT10 -1
+  panel 6 3 372 198 16 "TRADE OFFER • $2 TO $3" BP_F_BIG12 raised|shadow #200
+  if %2 banner 104 24 176 14 "$3 • YOUR DECISION" BP_F_TEXT10 -1
   if !%2 banner 104 24 176 14 "WAITING FOR $3" BP_F_TEXT10 -1
   panel 12 39 166 84 12 "$2 GIVES" BP_F_TEXT10 raised
   panel 206 39 166 84 12 "$3 GIVES" BP_F_TEXT10 raised
@@ -217,15 +217,15 @@ scene 425 384 204
   if %14 box 211 104 156 16 raised|round white
   if %14 textbox 211 104 156 16 "PLUS $12" @TEXT BP_F_TEXT10 centre|fit
   panel 12 124 360 42 12 "AFTER THIS TRADE" BP_F_TEXT10 raised
-  text 18 141 200 "$4: $5 -> $6" @TEXT BP_F_TEXT10 left|fit
-  text 18 152 200 "$7: $8 -> $9" @TEXT BP_F_TEXT10 left|fit
+  text 18 141 200 "$4: $6 -> $8" @TEXT BP_F_TEXT10 left|fit
+  text 18 152 200 "$5: $7 -> $9" @TEXT BP_F_TEXT10 left|fit
   vline 220 141 22 0
   if %4 spr 226 141 %4
   if %5 spr 244 141 %5
   if %6 spr 262 141 %6
   if %3 text 282 142 86 "$11" @TEXT BP_F_TEXT10 left|fit
   if %3 text 226 153 142 "for $10" @TEXT BP_F_TEXT10 left|fit
-  if !%1 text 12 168 360 "Offer locked - both sides shown above" @TEXT BP_F_TEXT10 centre|fit
+  if !%1 text 12 168 360 "Offer locked • Both sides shown above" @TEXT BP_F_TEXT10 centre|fit
   if %1 textbox 12 168 360 10 "$1" @TEXT BP_F_TEXT10 centre|fit #201
   if %0 fill 14 180 140 18 0 #97
   if %0 fill 160 180 100 18 0 #114
@@ -255,13 +255,14 @@ scene 426 336 300
   if %2 spr 22 202 BP_A2_DISK_OK
   if %2 spr 52 211 BP_A2_DARROW
   if %2 spr 74 202 BP_A2_DISK_OK
-  vline 106 201 30 0
-  text 112 209 200 "$7" @TEXT BP_F_TEXT13 centre|fit
-  if %0 fill 14 242 92 24 0 #114
-  if %0 fill 14 242 92 24 0 #117
-  if %0 fill 110 242 82 24 0 #108
-  if %0 fill 196 242 68 24 0 #100
-  if %0 fill 268 242 52 24 0 #120
+  if %2 vline 106 201 30 0
+  if %2 text 112 209 200 "$7" @TEXT BP_F_TEXT13 centre|fit
+  if !%2 text 22 209 288 "$7" @TEXT BP_F_TEXT13 centre|fit
+  if %0 fill 12 242 88 24 0 #114
+  if %0 fill 12 242 88 24 0 #117
+  if %0 fill 102 242 82 24 0 #108
+  if %0 fill 186 242 68 24 0 #100
+  if %0 fill 256 242 64 24 0 #120
   if %0 fill 64 242 104 24 0 #248
   if %0 fill 174 242 98 24 0 #155
   textbox 16 272 300 13 "$1" @TEXT BP_F_TEXT13 centre|fit #201
@@ -297,10 +298,10 @@ scene 428 336 300
   panel 8 230 320 64 0 "" BP_F_TEXT13 raised|shadow #200
   spr 16 236 %6
   textbox 46 241 274 13 "$1" @TEXT BP_F_TEXT13 left|fit #201
-  if %0 fill 16 263 78 24 0 #32
-  if %0 fill 98 263 80 24 0 #101
+  if %0 fill 14 263 80 24 0 #32
+  if %0 fill 97 263 82 24 0 #101
   if %0 fill 182 263 62 24 0 #116
-  if %0 fill 248 263 74 24 0 #109
+  if %0 fill 247 263 76 24 0 #109
 end
 scene 429 384 204
   panel 10 158 364 42 0 "" BP_F_TEXT10 raised|shadow #200
@@ -323,12 +324,12 @@ scene 455 336 96
   if %0 fill 176 72 110 15 0 #97
 end
 scene 456 336 96
-  panel 2 2 332 92 11 "AUCTION - $2" BP_F_TEXT08 raised #200
+  panel 2 2 332 92 11 "AUCTION • $2" BP_F_TEXT08 raised #200
   if %4 text 8 18 200 "High $4 $5" @TEXT BP_F_TEXT08 left|fit
   if !%4 text 8 18 200 "High: no bid yet" @TEXT BP_F_TEXT08 left
   text 210 18 118 "List $3" @TEXT BP_F_TEXT08 right|fit
-  if %6 banner 6 28 324 11 "$6 - YOUR BID" BP_F_TEXT08 -1
-  if !%6 banner 6 28 324 11 "$6 - BIDDING" BP_F_TEXT08 -1
+  if %6 banner 6 28 324 11 "$6 • YOUR BID" BP_F_TEXT08 -1
+  if !%6 banner 6 28 324 11 "$6 • BIDDING" BP_F_TEXT08 -1
   if %6 {
     button 30 41 16 13 "-" BP_F_TEXT08 bflat #45
     box 50 41 120 13 sunken2 @FIELD #1
@@ -343,11 +344,11 @@ scene 456 336 96
   textbox 8 82 320 8 "$1" @TEXT BP_F_TEXT08 centre|fit #201
 end
 scene 457 336 96
-  panel 2 2 332 92 11 "TRADE - $2 TO $3" BP_F_TEXT08 raised #200
+  panel 2 2 332 92 11 "TRADE • $2 TO $3" BP_F_TEXT08 raised #200
   box 6 18 160 41 etched -1
   box 170 18 160 41 etched -1
   text 9 21 100 "$4 gives" @TEXT BP_F_TEXT08 left|fit
-  text 173 21 100 "$7 gives" @TEXT BP_F_TEXT08 left|fit
+  text 173 21 100 "$5 gives" @TEXT BP_F_TEXT08 left|fit
   if %13 text 110 21 52 "+$12" @TEXT BP_F_TEXT08 right|fit
   if %14 text 274 21 52 "+$12" @TEXT BP_F_TEXT08 right|fit
   if %0 fill 9 31 154 26 0 #2
@@ -358,8 +359,8 @@ scene 457 336 96
   if %7 text 9 40 154 "$15 $17" @TEXT BP_F_TEXT08 left|fit
   if %8 text 173 31 154 "$14" @TEXT BP_F_TEXT08 left|fit
   if %8 text 173 40 154 "$16 $18" @TEXT BP_F_TEXT08 left|fit
-  text 6 61 160 "$5 -> $6" @TEXT BP_F_TEXT08 left|fit
-  text 170 61 160 "$8 -> $9" @TEXT BP_F_TEXT08 left|fit
+  text 6 61 160 "$6 -> $8" @TEXT BP_F_TEXT08 left|fit
+  text 170 61 160 "$7 -> $9" @TEXT BP_F_TEXT08 left|fit
   if !%1 text 6 70 324 "Offer locked. $3 decides." @TEXT BP_F_TEXT08 centre|fit
   if %1 textbox 6 70 324 8 "$1" @TEXT BP_F_TEXT08 centre|fit #201
   if %0 fill 10 79 110 13 0 #97
@@ -368,7 +369,7 @@ scene 457 336 96
 end
 scene 458 336 96
   panel 2 2 332 92 11 "$2" BP_F_TEXT08 raised #200
-  text 6 18 324 "$3 - $4" @TEXT BP_F_TEXT08 centre|fit
+  text 6 18 324 "$3 • $4" @TEXT BP_F_TEXT08 centre|fit
   text 6 28 324 "Last: $5" @TEXT BP_F_TEXT08 centre|fit
   banner 40 38 256 11 "$6" BP_F_TEXT08 -1
   text 6 51 324 "Paired save: $7" @TEXT BP_F_TEXT08 centre|fit
