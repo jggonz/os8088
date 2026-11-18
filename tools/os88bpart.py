@@ -699,9 +699,15 @@ def build2(out_path):
                 blobs[sid] = rec
                 kinds[sid] = "scene"
     # ---- sound lane ----
-    # (the music hook: compile_music / compile_sfx into BP_A2_MUSIC / BP_A2_SFX
-    # when art/music.txt and art/sfx.txt and tools/os88gkmus.py exist; set
-    # kinds[id] = "music")
+    # The music and effects records (SPEC.md 132.8): the sound lane's
+    # sound_records(symbols) -> {BP_A2_MUSIC: ..., BP_A2_SFX: ...}, defined
+    # above `# --- mono`, {} when os88gkmus or the .txt files are absent.
+    if "sound_records" in globals():
+        for sid, rec in sound_records(defines(ART_H, ART2_H)).items():
+            if not base <= sid < count or sid in blobs:
+                fail(f"music record ID {sid} is outside art2.h or already taken")
+            blobs[sid] = rec
+            kinds[sid] = "music"
     # ---- end sound lane ----
     n = count - base
     head = bytearray(b"B2" + struct.pack("<H", n)) + bytes(2 * n)
