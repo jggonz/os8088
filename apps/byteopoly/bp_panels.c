@@ -541,7 +541,11 @@ static int ovl_gp_needstatus(void)
 }
 static void ovl_gp_frame(const char *title)
 {
-    bp_w_panel(&gp_r, title);
+    /* the bar is exactly gp_tb, the room the layout below already leaves,
+     * and its title is bold (QA-7: the face's own bar was 6 px shorter and
+     * in the dialog face, a thin strip over a grey gap) */
+    gk_panel(gp_r.x, gp_r.y, gp_r.w, gp_r.h, gp_tb, title,
+             bp_layout == BP_LAY_COMPACT ? BP_F_TEXT08 : BP_F_BIG12, GK_RAISED);
     gp_x = gp_r.x + 6; gp_xr = gp_r.x + gp_r.w - 6;
     gp_y = gp_r.y + gp_tb + 2;
     gp_btop = gp_r.y + gp_r.h - gp_bh - 3 - (ovl_gp_needstatus() ? gp_pitch : 0);

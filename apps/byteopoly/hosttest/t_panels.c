@@ -58,6 +58,8 @@ int gk_textbox(int x, int y, int w, int h, const char *s, int colour, int font, 
 { (void)h; return gk_text(x, y, w, s, colour, font, flags); }
 void gk_titlebar(int x, int y, int w, int h, const char *s, int font, int flags)
 { (void)x; (void)y; (void)w; (void)h; (void)font; (void)flags; t_ink(s); }
+int gk_panel(int x, int y, int w, int h, int bar, const char *title, int font, int style)
+{ (void)x; (void)w; (void)h; (void)font; (void)style; strcat(bp_t_ink, title); strcat(bp_t_ink, "\n"); return y + bar; }
 void gk_banner(int x, int y, int w, int h, const char *s, int font, int fill)
 { (void)x; (void)y; (void)w; (void)h; (void)font; (void)fill; t_ink(s); }
 void gk_radio(int x, int y, int size, int on) { (void)x; (void)y; (void)size; (void)on; }
