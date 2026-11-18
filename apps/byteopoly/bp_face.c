@@ -547,21 +547,13 @@ static void ovl_fc_centre(void)
 /* ---- panel boxes (the widget kit's, used by bp_w_panel/bp_w_box) ------- */
 static void fc_wpanel(const BPRect *r, const char *title)
 {
-    int th;
-    th = fc_fh + 3;
-    fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + th, 1);
-    bx_text(r->x + 4, r->y + 2, fc_fits(title, fc_fb, r->w - 8), 15, fc_fb);
+    gk_panel(r->x, r->y, r->w, r->h, fc_fh + 3, title, fc_fb, GK_RAISED);
 }
+/* a white fill is a sunken well, any other fill a raised slab (the kit) */
 static void fc_wbox(const BPRect *r, int fill, int edge)
 {
-    fc_frame(r->x, r->y, r->w, r->h, fill);
-    if (edge != 0) {
-        bx_fill(r->x, r->y, r->x + r->w - 1, r->y, edge);
-        bx_fill(r->x, r->y, r->x, r->y + r->h - 1, edge);
-        bx_fill(r->x + r->w - 1, r->y, r->x + r->w - 1, r->y + r->h - 1, edge);
-        bx_fill(r->x, r->y + r->h - 1, r->x + r->w - 1, r->y + r->h - 1, edge);
-    }
+    (void)edge;
+    gk_box(r->x, r->y, r->w, r->h, fill == 15 ? GK_SUNKEN2 : GK_RAISED, fill);
 }
 
 /* ---- the hint bar ------------------------------------------------------- */
@@ -852,23 +844,10 @@ static int ovl_fc_key(int ascii, int scan)
 /* ---- the widget kit (valid only while bp_pn_draw runs) ------------------ */
 static void fc_wbutton(const BPRect *r, const char *label, int state)
 {
-    int x, y, x2, y2, tw, ty, dis, foc, i;
-    x = r->x; y = r->y; x2 = x + r->w - 1; y2 = y + r->h - 1;
-    dis = state & BP_W_DISABLED; foc = (state & BP_W_FOCUS) && !dis;
-    fc_rect(x, y, r->w, r->h, 0);
-    if (state & BP_W_DEFAULT) fc_rect(x + 1, y + 1, r->w - 2, r->h - 2, 0), fc_rect(x + 2, y + 2, r->w - 4, r->h - 4, foc ? 1 : fc_gr);
-    else fc_rect(x + 1, y + 1, r->w - 2, r->h - 2, foc ? 1 : fc_gr);
-    if (!foc && !(state & BP_W_DEFAULT)) {              /* the bevel: light top-left, dark bottom-right */
-        if (!bp_mono) { bx_fill(x + 1, y + 1, x2 - 1, y + 1, 15); bx_fill(x + 1, y + 1, x + 1, y2 - 1, 15); }
-        bx_fill(x + 1, y2 - 1, x2 - 1, y2 - 1, bp_mono ? 0 : 8);
-        bx_fill(x2 - 1, y + 1, x2 - 1, y2 - 1, bp_mono ? 0 : 8);
-    }
-    label = fc_fits(label, fc_fb, r->w - 6);
-    tw = bx_twidth(label, fc_fb);
-    ty = y + (r->h - fc_fh) / 2;
-    bx_text(x + (r->w - tw) / 2, ty, label, foc ? 15 : dis ? (bp_mono ? 0 : 8) : 0, fc_fb);
-    if (dis && bp_mono)                                  /* a screen door over the label */
-        for (i = 0; i < fc_fh; i++) bx_dots(x + (r->w - tw) / 2 + (i & 1), ty + i, x + (r->w + tw) / 2, ty + i, 2, 15);
+    int k;
+    k = (state & BP_W_DISABLED) ? GK_B_DISABLED : (state & BP_W_FOCUS) ? GK_B_FOCUS :
+        (state & BP_W_DEFAULT) ? GK_B_DEFAULT : GK_B_NORMAL;
+    gk_button(r->x, r->y, r->w, r->h, label, fc_fb, k | GK_B_FLAT);
 }
 int bp_w_text(int x, int y, const char *s, int colour, int font) { return bx_text(x, y, s, colour, font); }
 int bp_w_textw(const char *s, int font) { return bx_twidth(s, font); }
