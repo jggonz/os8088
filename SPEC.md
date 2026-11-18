@@ -255410,28 +255410,69 @@ refused at Start with a line saying so, as is any `bp_setup_check` failure
 "Discard the unsaved match?". Esc or Back returns to the running match when
 there is one, else it does nothing.
 
-Layout: the screen is one panel of at most 624 px, centred; the roster is the
-left column (372 px) and rules, the link box and the Ready button are the
-right column. Every rectangle is computed on demand from `bp_r_center` (the
-face's whole content) so the draw, the click and the key paths cannot
-disagree; rows are 11 px on a content under 260 px high (CGA-class, whose
-150 px content must hold everything) and 16 px above it. Text is the
-kernel's 8x8 and every state has a mark besides colour (the selected tab or
-rule is the DEFAULT button, a disabled one is the DISABLED button, a focused
-one the FOCUS button; on 1bpp the selected tab or rule also starts with `>`).
-The `-` and `+` buttons grey at 2 and 4 players. Editing a name starts with
-the old name selected: the first typed character replaces it. A disabled widget is skipped by focus and ignores a
-click.
+Layout: the screen is DATA, not code. `art/scenes-lobby.txt` (SPEC.md 133.6;
+scene IDs 440-443, `art2.h`) draws every frame, label, table line and picture,
+and `bp_setup.c`'s `ovl_su_slots` fills its string slots (`$n`: names, the
+mode's one-line description, the roster footer, the rule lines, the link
+status, the peer line, the status line) and integer slots (`%n`: tab and
+button states, seat presence, token pictures, ready ticks, the LED, the link
+mode). The slots are refilled for every strip (a few string copies; the
+list of them is the scene file's header). The face gives the screen the whole
+content (`BP_PN_FULL`); the screen draws a teal ground, then the scene.
+FULL (content at least 600 x 380, VGA) is the concept board `4-lobby.png`:
+a navy "NEW GAME" / "CABLE LOBBY" plate with yellow rays (`BP_A2_RAYS_L/R`),
+the three tabs (the active one yellow), a well with the mode's description, a
+PLAYER ROSTER panel (a table Player | Token | Computer | Ready - the colour
+square is the seat's colour, the picture its token, `This PC` / `Other PC` a
+drop-down, a `BP_A2_CHECK` tick - and a footer, `2 players` or `1 player here
+- 3 players there`, with the `-` / `+` buttons), a GAME RULES panel (the
+Classic and Quick Match radios, the Quick Match round count 10 / 20 / 30 as a
+drop-down, and what the rule means - `Cash: 1,500 cr` and `Last one standing
+wins.` or `Richest after 20 rounds.`), the NULL-MODEM LINK panel, the
+mascot (`BP_A2_MASCOT_UP`) and a bottom bar with the status line and
+`[S] Start Game` / `[Esc] Back`. Same PC replaces the Computer and Ready
+columns and the link panel with a second scene (441) that says everyone
+plays on this computer and that no cable is needed - the screen never shows
+a value the game does not have. MID and COMPACT (a short content) share one
+scene (442, 640 x 142, centred across and a third of the spare height
+down) with the same parts in the 8 x 8 font, token NAMES instead of
+pictures, and a Same PC half (443). Every hit rect is read from the scene's
+own `#tag` (`gk_scene_rect`; tag = widget id + 1, 27 the status line, 28 the
+roster panel, 29 the rules panel, 30 the link panel, 31 the description), so
+the draw, the click and the key paths cannot disagree. Every state has a mark
+besides colour (the selected tab is the raised yellow one, the selected
+radio a filled dot, a disabled button the kit's DISABLED one with its screen
+door on 1bpp, the keyboard focus on a widget the scene draws plainly - a tab,
+a name, a token, a drop-down, the Ready column, a radio - a black ring inside a
+yellow one drawn after the scene; a button shows focus as its navy face). The
+`-` and `+` buttons grey at 2 and 4 players. Editing a name starts with the
+old name selected: the first typed character replaces it. A disabled widget is
+skipped by focus and ignores a click. The widget ids (and so the Tab order) are
+unchanged: 0-2 tabs, 3 `-`, 4 `+`, 5-8 names, 9-12 tokens, 13-16 computers,
+17 Ready, 18 Classic, 19 Quick Match, 20 its rounds, 22 port, 23 connect, 24
+Start, 25 Back (21 is unused). Damage (131.8.5): a key or click names the rect
+of the widget it changed (`bp_face_dirty_rect`; the pad covers the focus
+ring), of the roster / rules / link panel when a change reaches past one
+widget, or of the whole screen for a tab or a link change; the status line has
+its own tag. The face repaints only those strips once `bp_app.c` stops marking
+the whole centre dirty for every key in setup mode.
 
 #### 131.9.3 The cable lobby
 
-Host Cable and Join Cable add the NULL-MODEM LINK box: the framer's and the
-session's one-line status (`bp_link_msg`: searching, the port, the peer
-found, compatible or the reason it is not, ready), the role, the port choice
-(Auto, COM1, COM2; refused while a link is open), 2400 baud 8N1, an Open
-Link / Close Link button (`bp_link_host` / `bp_link_join` / `bp_link_leave`)
-and a Ready toggle (`bp_lobby_ready`, enabled once the link reaches
-`BP_L_LOBBY`). Opening a link switches to `BP_M_LOBBY`: the tabs lock. The
+Host Cable and Join Cable add the NULL-MODEM LINK panel: the two computers
+with the cable between them (its plugs apart until the link reaches
+`BP_L_LOBBY`, then joined), the framer's and the session's one-line status
+(`bp_link_msg`: searching, the port, the peer found, compatible or the reason
+it is not, ready) behind an LED (`BP_A2_LED_*`: red off or refused, yellow
+searching or handshaking, green linked), the role (Banker host or Guest), the
+port choice (Auto, COM1, COM2: a button that cycles; refused while a link is
+open), 2400 baud and 8N1, the other computer's line - its first player's name,
+that player's token and Ready or Waiting - once linked, a Connect / Leave
+button (`bp_link_host` / `bp_link_join` / `bp_link_leave`) and the Ready
+column's ticks (`bp_lobby_ready`, enabled once the link reaches `BP_L_LOBBY`;
+the column is one widget, its Enter or a click toggles this computer's own
+ticks). The bottom bar's line says "All players are ready. Press Start." when
+both machines are ready and "Waiting for the host." on a client. Opening a link switches to `BP_M_LOBBY`: the tabs lock. The
 host edits the roster and rules; every change is sent whole with
 `bp_lobby_set`, once when the link first reaches `BP_L_LOBBY` and after each
 edit. The roster's Computer column reads This PC or Other PC from this

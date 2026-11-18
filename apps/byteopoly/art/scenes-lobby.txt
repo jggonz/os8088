@@ -99,10 +99,10 @@ scene BP_A2_SC_LOBBY 640 418
   textbox 50 318 90 20 "Classic" @TEXT BP_F_TEXT13 left
   radio 28 344 16 %22 #20
   textbox 50 342 90 20 "Quick Match" @TEXT BP_F_TEXT13 left
-  if %22 drop 146 342 62 20 $10 BP_F_TEXT10 #21
-  vline 214 316 48 0
-  text 222 322 170 $11 @TEXT BP_F_TEXT10 left|fit
-  text 222 342 170 $12 @TEXT BP_F_TEXT10 left|fit
+  if %22 drop 140 342 88 20 $10 BP_F_TEXT10 #21
+  vline 234 316 48 0
+  text 242 322 150 $11 @TEXT BP_F_TEXT10 left|fit
+  text 242 342 150 $12 @TEXT BP_F_TEXT10 left|fit
   box 13 378 515 36 raised|shadow 15
   textbox 22 378 240 36 $17 @TEXT BP_F_TEXT10 left|fit #27
   button 270 383 148 26 "[S] Start Game" BP_F_TEXT13 %3 #25
@@ -236,7 +236,7 @@ scene BP_A2_SC_LOBBY_C 640 142
   textbox 398 31 56 12 "Classic" @TEXT BP_F_TEXT08 left
   radio 450 32 10 %22 #20
   textbox 464 31 70 12 "Quick Match" @TEXT BP_F_TEXT08 left
-  if %22 drop 540 29 62 12 $10 BP_F_TEXT08 #21
+  if %22 drop 540 31 70 12 $10 BP_F_TEXT08 #21
   text 384 46 84 $11 @TEXT BP_F_TEXT08 left|fit
   text 470 46 164 $12 @TEXT BP_F_TEXT08 left|fit
   box 4 104 632 36 raised|round 15
