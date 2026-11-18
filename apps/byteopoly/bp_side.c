@@ -355,6 +355,7 @@ static void ovl_sd_clink(void)
     fc_buf[0] = 0;
     if (fc_live()) fc_ap(fc_buf, fc_ap(fc_buf, fc_ap(fc_buf, 0, "R"), os88_utoa(ovl_fc_rnd(), sd_nb[0])), " ");
     fc_ap(fc_buf, os88_strlen(fc_buf), bp_mode == BP_MODE_LOCAL ? TD_SAME_PC : st < 8 ? fc_lnk[st] : "?");
+    if (bp_sess_busy()) fc_ap(fc_buf, os88_strlen(fc_buf), TD_X);
     sd_sv[0] = fc_buf;
     sd_iv[0] = st == BP_L_PAUSED || st == BP_L_BADPEER;
     sd_frame(&fc_rl, 0, 0, 0);

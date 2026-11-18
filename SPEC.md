@@ -255233,59 +255233,64 @@ panel - no art, and no stipple for the panel to paint over.
   embossed, a raised bevel, a 1 px outline. FULL draws every frame, title
   and fixed label as a SCENE (`art/scenes-side.txt`, ids `BP_A2_SC_SIDE` +
   0..9, 133.6) and only the live values and pictures in code; MID draws the
-  frame with `gk_panel` and the same rows and details as scenes; COMPACT keeps
-  four plain bevelled boxes. All of it is `gk_role` colour, so 1bpp is the
-  kit's mono table: the title bar is black, the highlighted row is INVERSE.
-* **Players** (FULL 192 x 130, MID 208 x 86, COMPACT four rows):
-  the title is the seat to act - "NAME - YOUR TURN" when `bp_sess_mine`, else
-  "NAME - THEIR TURN" (the other PC's seat) - with the round ("R3") at the
+  frame with `gk_panel` and the rows and the details card as scenes;
+  COMPACT keeps four plain bevelled boxes (its details lines, link line and
+  rows are scenes too). All of it is `gk_role` colour, so 1bpp is the kit's
+  mono table: the title bar is black, the highlighted row is INVERSE. A
+  panel's title bar is `bar` rows starting 3 px inside the edge with a dark
+  line under it, so a scene's first row of content starts at `bar + 5`.
+* **Players** (FULL 192 x 130, MID 208 x 86, COMPACT four rows): the title is
+  the seat to act - "PLAYER n • YOUR TURN" when `bp_sess_mine`, else
+  "NAME • THEIR TURN" (the other PC's seat) - with the round ("R3") at the
   right; during an auction "BIDDING ORDER", at the end "GAME OVER", before a
   match "Players". FULL shows the acting seat's `BP_A2_TOKL_*` beside a
   sunken white well with its cash in the big font (during an auction the
   high bid, or "No bid" beside the gavel). One row per seat: the `BP_A_TOK_*`
   token, the name, the cash right-aligned (during an auction a status word:
-  PASSED / BIDDING / HIGH BID / IN), a divider under it; the seat to act is the
-  whole row in `GK_R_HILITE` (yellow; inverse on 1bpp); an eliminated seat
-  shows "OUT" and a dotted strike through its name, a DETAINED seat an `R`
-  chip. Each row is ONE scene call (`BP_A2_SC_SIDE` + 8 FULL, + 9 MID, + 6
-  COMPACT; slots: name, right text, highlight, token, dead, divider,
-  detained; COMPACT draws its 7 x 7 token in code). Before a match: "No
-  match - Game > New Game".
-* **Details** is a card of the lot, the connection or the space, by state:
-  during an auction it is the auctioned space titled "THE LOT" (an
-  auction's list price is its Price, its owner the Bank); while the cable
-  link is not in step (`bp_mode` is not local and `bp_link_state()` is not
+  PASSED / BIDDING / HIGH BID / IN), a divider under it (FULL); the seat to
+  act is the whole row in `GK_R_HILITE` (yellow; inverse on 1bpp); an
+  eliminated seat shows "OUT" and a dotted strike through its name, a DETAINED
+  seat an `R` chip. Each row is ONE scene call (`BP_A2_SC_SIDE` + 8 FULL, + 9
+  MID, + 6 COMPACT; slots: name, right text; flags: highlight, token (+4 on
+  1bpp), dead, divider, detained; COMPACT draws its 7 x 7 token in code).
+  Before a match: "No match - Game > New Game". The dice are not drawn here
+  (the board's centre shows them).
+* **Details** is a card of the space, the lot, or (FULL only) the cable: during
+  an auction it is the auctioned space titled "THE LOT" (an auction's list
+  price is its Price, its owner the Bank); on FULL, while the cable link is
+  not in step (`bp_mode` is not local and `bp_link_state()` is not
   `BP_L_PLAY`) it is CONNECTION - `BP_A2_MODEM`, "Banker host" or "Joined
-  PC", "COMn - 2400 baud" (the port `bp_ck_port()` holds, "No port held"
-  when none; 2400 is the cable's fixed speed, 114.3), a banner with the state
-  ("Disconnected" for `BP_L_PAUSED`, else the state name) and the framer's
-  own `bp_link_msg()` line; during a trade over the cable it is OTHER PC
-  LINKED with `BP_A2_LINKED`, "Cable linked" (" - waiting" while
+  PC", "COMn • 2400 baud" (the port `bp_ck_port()` holds, "No port held" when
+  none; 2400 is the cable's fixed speed, 114.3), a banner with the state
+  ("Disconnected" for `BP_L_PAUSED`, else the state name) and the framer's own
+  `bp_link_msg()` line; on FULL during a trade over the cable it is OTHER PC
+  LINKED with `BP_A2_LINKED`, "Cable linked" (" • waiting" while
   `bp_sess_busy()`) and the port; otherwise it is the space `bp_sel`: the full
   name in the title bar; for a property the `BP_A_LARGE` picture, its
-  collection bar and name on the left and Price, Mortgage (Redeem, with
-  131.2.4's cost, once mortgaged), Owner and Level on the right (the
-  concept's "Buy / Rent / Set" lines carry the same facts); then, under a
-  rule, the rent schedule of 131.2.3 computed from the base rent - Base, Set
-  (x2), 1..4 RAM (5, 15, 30, 45, 60 x base) and Workshop - or a utility's
-  4x/10x dice rule; any other space its picture and one plain sentence (a
-  charge its amount). The values are the scene's string slots (`$1..$12`) and
-  flags; one scene per layout (+ 5 FULL, + 7 MID) serves all of them. COMPACT:
-  three lines (name; price; owner and level), the connection as the framer's
-  line.
-* **Collection / link** (FULL 192 x 76, MID 208 x 44): "YOUR COLLECTION"
-  with `BP_A_SMALL` pictures (MID `BP_A_TINY`) of the computers of the seat
-  this PC plays - the acting seat when it is ours, else our first living seat
-  (FULL ten pictures on same-PC play, five over the cable; "+n" for the
-  rest). Over the cable a sunken status line under them: the LED
-  (`BP_A2_LED_GREEN`, yellow while `bp_sess_busy()`, the 1bpp ball on a mono
-  display), "Cable linked - COMn - 2400 baud". While the link is down the box is
-  PAIRED SAVE instead: two `BP_A2_DISK_OK` and the arrow when
+  collection bar and (FULL) name on the left and Price, Mortgage (Redeem, with
+  131.2.4's cost, once mortgaged), Owner and Level on the right (the concept's
+  "Buy / Rent / Set" lines carry the same facts); then, under a rule, the rent
+  schedule of 131.2.3 computed from the base rent - Base, Set (x2), 1..4 RAM
+  (5, 15, 30, 45, 60 x base) and Workshop - or a utility's 4x/10x dice rule;
+  any other space its picture and one plain sentence (a charge its amount).
+  The values are the scene's string slots (`$1..$12`) and flags (`%0..%3`);
+  one scene per layout (+ 5 FULL, + 7 MID) serves all of them. COMPACT:
+  three lines (name; price or the sentence; owner and level).
+* **Collection / link** (FULL 192 x 76, MID 208 x 44): "YOUR COLLECTION" with
+  `BP_A_SMALL` pictures (MID `BP_A_TINY`) of the computers of the seat this PC
+  plays - the acting seat when it is ours, else our first living seat (FULL ten
+  pictures on same-PC play, five over the cable; MID nine; "+n" for the rest).
+  Over the cable a status line under them: the LED (`BP_A2_LED_GREEN`, yellow
+  while `bp_sess_busy()`, red on MID when the link is down, the 1bpp ball on
+  a mono display) and "Cable linked • 2400 baud" (" • waiting" while busy; on
+  MID the link's state word while the link is down). While the link is down
+  FULL's box is PAIRED SAVE instead: two `BP_A2_DISK_OK` and the arrow when
   `bp_sess_pair() == BP_PAIR_DONE`, and a status button - "Paired save
-  complete", "Paired save failed", "Saving...", else "Waiting for link"
-  greyed (`GK_B_DISABLED`; it is a status, the keys stay the panel's R / L /
-  D). COMPACT is one line: round, dice, the link state (PAUSED and BADPEER
-  struck through), " ..." while busy. Status never depends on colour.
+  complete", "Paired save failed", "Saving...", else "Waiting for link" greyed
+  (`GK_B_DISABLED`; it is a status, the keys stay the panel's R / L / D).
+  COMPACT is one line: the round and the link state (PAUSED and BADPEER struck
+  through), " ..." while busy. Status never depends on colour: every state
+  has its word.
 * **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters in a
   sunken white well, newest at the bottom, truncated to the box width; as
   many as the box holds.
