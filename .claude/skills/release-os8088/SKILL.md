@@ -36,8 +36,9 @@ the site's /releases/ page is that file rendered.
 
 When the release adds a whole program -- or there is a video about it -- it
 also gets a **Spotlight page** (step 4b), which is a page of its own under
-`/spotlight/` with its own screenshots. A line on the releases page does not
-carry a new program.
+`/spotlight/`. **Its main asset is a video**: a looping clip of the program
+working, recorded from a real boot, at the top of the page. Screenshots come
+under it. A line on the releases page does not carry a new program.
 
 **Every release checks the Windows applications gallery** (step 4e),
 `/spotlight/windows/`. That page has one real screenshot and one note per
@@ -768,7 +769,63 @@ page when a reader would want a page: a program that did not exist before, or a
 video that needs somewhere to live. If in doubt, ask the user rather than
 producing a page nobody asked for.
 
-**1. Capture the screenshots.** They come out of the emulator, never a mockup.
+**1. Record the hero video first.** It is the page's main asset, so it comes
+before the screenshots. `site/spotlight/breadxt.html` is the worked example:
+a 20-second clip of the 555 flasher running, which looping on the page shows
+more than all six of its screenshots.
+A picture shows that a program draws a window. A clip shows it working:
+the LED blinking, the trace filling, the game moving. It comes out of a real
+boot like the screenshots do, never a mockup or an animation built from
+stills. The clip itself is the gate the screenshots are held to: watch it.
+
+Choose **one action that is the whole program**: the run, the move, the
+result appearing. Do not record a tour. Set the scene up first (boot, open
+the disk, open the document, pick the settings), then record 15 to 25
+seconds of the action only, with the pointer parked out of the way. It loops,
+so a clip that ends where it starts reads best. `spotrec.py` in this
+skill's folder is the recorder:
+
+```bash
+R=$OS_REPO/.claude/skills/release-os8088/spotrec.py
+S=/tmp/spot/q.sock                  # short path: AF_UNIX
+python3 $R boot --sock $S --a "$OS_REPO/build/os8088.img" --b "$OS_REPO/build/<disk>.img"
+# set the scene up with tools/mouse.py and tools/qmp.py, as in the scene file
+python3 $R record --sock $S --out <scratch>/take --secs 20 --fps 15 \
+        --at "1.2:mouse_button 1;sleep 0.1;mouse_button 0" \
+        --at "2.2:mouse_move 60 60;sleep 0.06;mouse_move 60 60"
+python3 $R encode --frames <scratch>/take --out "$WEB_REPO/public/img/<name>/<id>.mp4"
+python3 $R quit --sock $S
+```
+
+Things that cost the Breadboard XT clip a take each:
+
+- **QMP takes one client.** While `record` holds the socket, a
+  `tools/mouse.py` click is silently dropped. Anything that happens *during*
+  the take (pressing Run, a key held down, the pointer moving away) goes in
+  `--at`, which sends it down the recorder's own connection.
+- **Host load halves QEMU's guest speed**, and the clip shows that
+  half-speed machine with no error. Record after the release's builds have
+  finished and with no other emulator running, and check `uptime` first.
+  `record` fails if it cannot keep its own frame rate, but it cannot see a
+  slowed guest.
+- **Make slow things visible.** Breadboard XT raised its time step to 8 ms
+  first, so 20 seconds of video show 5 seconds of the circuit's time. The
+  caption says so. Do not speed the clip up afterwards.
+
+`encode` writes the MP4 (doubled with nearest-neighbour scaling so pixels
+stay crisp, H.264, no audio; Breadboard XT's is 516 KB) plus `<id>-poster.png`
+and `<id>-poster@2x.png`, and a six-frame `<id>-sheet.png`. **Open the sheet
+with the Read tool**, then open the MP4 itself (`open <file>.mp4`) and watch
+the whole loop: a lost click is a clip of nothing happening. Delete the sheet
+before committing. Keep the clip under 2 MB. Write the `--at` timings and the
+scene setup into the `note` of `tools/scenes.<name>.json` so the next release
+can take it again.
+
+If nothing on the screen moves (a file format, a driver), say so to the user
+and ask before writing a page without a clip. Do not record a menu being
+opened just to have something moving.
+
+**2. Capture the screenshots.** They come out of the emulator, never a mockup.
 Scenes live in the website repo beside the others:
 
 ```bash
@@ -788,9 +845,11 @@ plausible-looking screenshot of the wrong thing, and file size will not tell
 you: two of Frotz's five first came out sitting on an unanswered "Do you need
 instructions?" prompt with an otherwise empty window.
 
-**2. Write the page.** Copy `site/spotlight/frotz.html` and change it. Set
-`body_class: spot` in the metadata block -- that is what turns on the article
-layout, and without it the page is the ordinary stack of one-screendump-wide
+**3. Write the page.** Copy `site/spotlight/breadxt.html` and change it. It
+is the page with a video hero. Keep its metadata exactly as it is shaped:
+`body_class: spot spot--editorial`, `og_image` pointing at the poster PNG,
+and the same image in the JSON-LD. `spot` is what turns on the article
+layout. Without it the page is the ordinary stack of one-screendump-wide
 windows, which is what these pages exist to stop being.
 
 The layout has **two widths and nothing between**: 800px for anything with
@@ -799,14 +858,15 @@ is the structure. The pieces, all in the stylesheet's `spotlight` section:
 
 | | |
 |---|---|
-| masthead | a `.grid` of two: the pitch, `.specs` with three numbers, the buttons and a `.spot-toc` of jump links -- beside the one screendump that proves it |
+| masthead | `.spot-hero`: the pitch and the buttons beside the **hero video** in a `figure.win.shot`. Use `<video autoplay muted loop playsinline preload="auto" poster="…-poster.png" width="640" height="480">` with one MP4 `<source>`, an `aria-label` describing what happens in the clip, a `<figcaption>` naming the emulator and any time step, and the inline reduced-motion script under the section, copied from the Breadboard XT page. Below it go the `.specs` with three numbers and the `.spot-toc` |
 | `.spot-band` | inverted full-width section heading, each with one line saying why you would read that section. These are the anchors somebody skims by |
 | gallery | the screendumps in a plain `.grid`, two abreast |
 | `.spot-cards` | a `.grid` of short titled cards, for what would otherwise be one window with four `h3`s in it |
 | `.spot-steps` | numbered instructions, for the part somebody follows while typing |
 
-Order: masthead, what it *is* for someone who has never heard of it, the video,
-the gallery, how it works, what it deliberately does not do, how to run it.
+Order: masthead with the hero video, what it *is* for someone who has never
+heard of it, a YouTube episode if there is one, the gallery, how it works,
+what it deliberately does not do, how to run it.
 
 The copy rules above apply, plus one more: **a Spotlight page is written for
 someone who does not know the subject at all**, so explain the domain and not
@@ -820,7 +880,9 @@ hardest: the **deck** (`.spot-deck`, one or two sentences that are the whole
 page) and the **three numbers** in the `.specs` block. If you cannot fill those
 three cells with facts, the page is probably a highlight and not a spotlight.
 
-**3. Embed the video, if there is one.** Reuse the markup on the Frotz page --
+**4. Embed a YouTube episode, if there is one.** It is in addition to the
+hero clip and never replaces it: an episode is minutes long and loads from
+another host, while the clip plays at once. Reuse the markup on the Frotz page --
 an `<a class="vid__poster" data-video="<id>">` around an
 `<img src="/videos/thumb/<id>.jpg">`, plus `<script src="/js/videos.js" defer>`
 at the foot of the page. That gets the same bargain `/videos/` makes: the
@@ -840,14 +902,18 @@ expected. `tools/linkcheck.py` knows -- `WORKER_ROUTES` -- and a new
 Worker-served path has to be added there or the link check fails on a link that
 works.
 
-**4. Add it to the index and link it.** One `figure.win.shot` block at the top
-of the list in `site/spotlight.html` (newest first), and a pointer from
+**5. Add it to the index and link it.** One `figure.win.shot` block at the top
+of the list in `site/spotlight.html` (newest first), with the clip's poster
+PNG as its picture, and a pointer from
 wherever a reader would otherwise look for it -- for Frotz that is
 `site/applications.html`, which lists the programs it is *not* among. Link the
 page from the matching `highlights[].body` in `data/releases.json` too.
 
-**5. Rebuild, link-check, and look at both pages** in the browser, the same way
-step 4a makes you look at the releases page. Three things that will fool you:
+**6. Rebuild, link-check, and look at both pages** in the browser, the same way
+step 4a makes you look at the releases page. Check that the hero clip starts
+without a click, loops and shows its poster before it loads. With reduced
+motion turned on, it must show the poster and a play control instead. Three
+things that will fool you:
 
 - **Look at it at 1600px wide.** A row of two screendumps needs a 1,360px
   viewport, so at anything narrower the page folds to one column and looks
@@ -856,8 +922,8 @@ step 4a makes you look at the releases page. Three things that will fool you:
 - **The stylesheet is cached and `build.py` does not touch it.** `public/css/`
   is committed by hand, so a CSS change plus a reload shows you the old page. A
   band that renders as plain text on the dither is that, not a broken rule.
-- **The video poster is a broken image locally** and correct in production; see
-  step 3.
+- **The YouTube poster is a broken image locally** and correct in production;
+  see step 4. The hero clip's poster is a file in `public/` and must show.
 
 #### 4c. The Wire's library, every time
 
@@ -1236,7 +1302,8 @@ the user and are not a matter of taste:
   `body` sets `background:#fff`, and nothing replaces it with the site's dark
   theme.
 - **A screenshot of every new addition.** A new program, a new feature or a
-  new look each gets a picture. Take them from what steps 4b and 4e already
+  new look each gets a picture. A video cannot go in a PDF: use its
+  `-poster@2x.png` and give the Spotlight URL where the clip plays. Take them from what steps 4b and 4e already
   captured and looked at (`$WEB_REPO/public/img/<subject>/*@2x.png` are the
   crisp ones). A change with nothing to see gets no picture, and a picture of
   something that did not change is not added to fill the space. The same rule
@@ -1330,6 +1397,9 @@ them in a status line is how they get lost.
   symbol names and register talk stay out of the notes, and so does marketing
   language. "Writing the copy" is the standard for the website entry, the
   GitHub release and any Spotlight page.
+- **Never publish a Spotlight page without its hero video**, unless the user
+  agreed that nothing on the screen moves. Never publish a clip you have not
+  watched to the end: it is checked the same way a screenshot is.
 - **Never put a screenshot on a Spotlight page that you have not looked at.**
   Step 4b captures them from a real boot and you read every one. A mockup, a
   crop of an old shot, or a scene whose click was lost are all the same defect
