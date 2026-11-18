@@ -591,13 +591,6 @@ static const char *ovl_gp_stxt(void)
     }
     return 0;
 }
-static void ovl_gp_status(void)
-{
-    const char *m;
-    ovl_gp_lb();
-    m = ovl_gp_stxt();
-    if (m) bp_w_text(gp_x, gp_btop, m, 0, gp_font);
-}
 static void ovl_gp_srect(int tag, BPRect *r);
 /* button i's label into gp_line: "[K] Label", ">" on the focus on 1bpp */
 static void ovl_gp_blabel(int i, int bare)
@@ -696,10 +689,12 @@ static void ovl_gp_pa(const char *s)
     n = os88_strlen(gp_pp);
     os88_strcpy(gp_pp + n, bx_str(s), GP_PEND - gp_pp - n);
 }
-/* money, " cr" on it (14 bytes at most) */
+/* money, " cr" on it (14 bytes at most), after what the string holds */
 static void ovl_gp_pm(int k, const BPU32 *v)
 {
-    if (GP_PEND - gp_pp > 14) { bp_u32_fmt(gp_pp, v); ovl_gp_pa(TP_CR); }
+    char *d;
+    d = gp_pp + os88_strlen(gp_pp);         /* after what is there ("Value: ") */
+    if (GP_PEND - d > 14) { bp_u32_fmt(d, v); ovl_gp_pa(TP_CR); }
     ovl_gp_pk(k);
 }
 static void ovl_gp_pw(int k, unsigned w) { bp_u32_set(&gp_u2, w, 0); ovl_gp_pm(k, &gp_u2); }
@@ -871,22 +866,6 @@ static void ovl_gp_ddebt(void)
         ovl_gp_lb(); ovl_gp_la(TP_AND_YOUR_ESTATE); ovl_gp_la(ovl_gp_name(bp_game.debt_to)); ovl_gp_tl();
     }
 }
-/* names of a prop mask (and a disk byte's side) into gp_line */
-static void ovl_gp_names(const BPU32 *m, int disks)
-{
-    int p, first;
-    first = 1;
-    for (p = 0; p < BP_PROPS; p++)
-        if (ovl_gp_bit(m, p)) {
-            if (!first) ovl_gp_la(", ");
-            first = 0;
-            ovl_gp_la(ovl_gp_pname(p));
-            if (bp_game.mortgaged[p]) ovl_gp_la("*");
-        }
-    if (disks & 1) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la(TP_DISK_FF); }
-    if (disks & 2) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la(TP_DISK_SE); }
-    if (first) ovl_gp_la(TP_NOTHING);
-}
 /* cash after a payment: *out; BP_EFUNDS when the payer cannot */
 static int ovl_gp_after(int seat, int pays, const BPU32 *amt, BPU32 *out)
 {
@@ -919,12 +898,13 @@ static void ovl_gp_dtrade(void)
 {
     const BPU32 *m;
     const BPSpace *sp;
-    int f, t, g, s, p, j, c, n, k, dk;
+    int f, t, g, s, p, j, c, n, k, dk, mk;
     f = bp_game.offer_from; t = bp_game.offer_to;
     ovl_gp_sbeg();
     ovl_gp_pu(2, ovl_gp_name(f)); ovl_gp_pu(3, ovl_gp_name(t));
     gp_iv[2] = ovl_gp_mine();
     ovl_gp_pm(12, &bp_game.offer_cash);
+    mk = 0;
     for (c = 0; c < 2; c++) {
         s = c ? t : f;
         gp_sv[4 + c] = ovl_gp_name(s);
@@ -936,17 +916,24 @@ static void ovl_gp_dtrade(void)
         m = c ? &bp_game.offer_get : &bp_game.offer_give;
         dk = (bp_game.offer_disks >> (c ? 4 : 0)) & 3;
         n = 0;
-        for (p = 0; p < BP_PROPS; p++) if (ovl_gp_bit(m, p)) { n++; k = p; }
-        if (n == 1 && !dk) {        /* the card */
+        for (p = BP_PROPS - 1; p >= 0; p--) if (ovl_gp_bit(m, p)) { n++; k = p; }
+        if ((n == 1 && !dk) || (n && bp_layout != BP_LAY_COMPACT)) {
+            /* the card: the side's (first) computer; alone, its facts,
+             * else the rest are "+ names" under it (after the scene) */
             sp = bp_space(bp_prop_space(k));
             gp_iv[7 + c] = 1;
             gp_iv[9 + c] = BP_A_LARGE(k);
             gp_iv[11 + c] = ovl_gp_gc(sp);
             gp_sv[13 + c] = sp->name;
-            ovl_gp_pw(15 + c, sp->price);
-            gp_sv[17 + c] = bp_game.mortgaged[k] ? TP_MORTGAGED : TP_NO_MORTGAGE;
-            n = bp_game.level[k];   /* RAM 1..4, Workshop: five handles in a row */
-            if (!j) gp_sv[19 + c] = n ? GP_RAM(n) : TP_NO_UPGRADES;   /* else the PLUS box */
+            mk |= bp_game.mortgaged[k] << c;
+            if (n == 1 && !dk) {
+                mk |= 4 << c;       /* alone: the card says it all */
+                if (bp_layout != BP_LAY_COMPACT) ovl_gp_pa(TP_VALUE_);
+                ovl_gp_pw(15 + c, sp->price);
+                gp_sv[17 + c] = bp_game.mortgaged[k] ? TP_MORTGAGED : TP_NO_MORTGAGE;
+                n = bp_game.level[k];   /* RAM 1..4, Workshop: five handles in a row */
+                if (!j) gp_sv[19 + c] = n ? GP_RAM(n) : TP_NO_UPGRADES;   /* else the PLUS box */
+            }
         }
     }
     s = f; g = ovl_gp_tset(f, &bp_game.offer_get, &bp_game.offer_give);
@@ -963,13 +950,34 @@ static void ovl_gp_dtrade(void)
     }
     ovl_gp_scene(2);
     g = gp_btop;
-    for (c = 0; c < 2; c++) {       /* the lists, after the scene: gp_line is free */
-        if (gp_iv[7 + c]) continue;
-        ovl_gp_srect(2 + c + 2 * gp_iv[13 + c], &gp_lr[c]);
+    for (c = 0; c < 2; c++) {
+        if ((mk >> c) & 1) {        /* the card's computer is mortgaged: the mark */
+            ovl_gp_srect(6 + c, &gp_xm);
+            if (gp_xm.w) bp_w_sprite(gp_xm.x, gp_xm.y, bp_mono ? BP_A_M_MORTGAGE : BP_A_MORTGAGE);
+        }
+        if ((mk >> 2 >> c) & 1) continue;
+        /* the names, wrapped: under the card the rest ("+ ..."; #8+c when
+         * the PLUS box shortens it), with no card the side's all (#2+c) */
+        m = c ? &bp_game.offer_get : &bp_game.offer_give;
+        k = -1;
+        ovl_gp_lb();
+        if (gp_iv[7 + c]) {
+            ovl_gp_la(TP_PLUS_);
+            for (k = 0; !ovl_gp_bit(m, k); k++) ;
+            ovl_gp_srect(8 + c, &gp_lr[c]);
+            if (!gp_iv[13 + c] || !gp_lr[c].w) ovl_gp_srect(4 + c, &gp_lr[c]);
+        } else ovl_gp_srect(2 + c, &gp_lr[c]);
         gp_x = gp_lr[c].x + 2; gp_xr = gp_lr[c].x + gp_lr[c].w - 2;
         gp_y = gp_lr[c].y; gp_btop = gp_y + gp_lr[c].h;
-        ovl_gp_lb();
-        ovl_gp_names(c ? &bp_game.offer_get : &bp_game.offer_give, (bp_game.offer_disks >> (c ? 4 : 0)) & 15);
+        n = 0;                      /* "nothing" while n stays 0 */
+        for (p = 0; p < BP_PROPS + 2; p++) {
+            if (p == k || (p < BP_PROPS ? !ovl_gp_bit(m, p)
+                           : !((bp_game.offer_disks >> (c ? 4 : 0) >> (p - BP_PROPS)) & 1))) continue;
+            if (n++) ovl_gp_la(", ");
+            ovl_gp_la(p < BP_PROPS ? ovl_gp_pname(p) : p == BP_PROPS ? TP_DISK_FF : TP_DISK_SE);
+            if (p < BP_PROPS && bp_game.mortgaged[p]) ovl_gp_la(TP_MORTGAGED_P);
+        }
+        if (!n) ovl_gp_la(TP_NOTHING);
         ovl_gp_para(gp_line, 0);
     }
     gp_btop = g;
@@ -1287,6 +1295,7 @@ static void ovl_gp_dreview(void)
 /* the whole panel: one call per strip, so it must cost nothing but drawing */
 static void ovl_gp_draw(void)
 {
+    const char *m;
     ovl_gp_track();
     ovl_gp_spec();
     if (gp_kind == GK_NONE) return;
@@ -1314,7 +1323,10 @@ static void ovl_gp_draw(void)
     case GK_KEYS: ovl_gp_dhelp(1); break;
     default: break;
     }
-    if (!gp_scn && gp_kind != GK_IDLE && gp_kind != GK_REVIEW) ovl_gp_status();
+    if (!gp_scn && gp_kind != GK_IDLE && gp_kind != GK_REVIEW) {    /* the status line */
+        ovl_gp_lb();
+        if ((m = ovl_gp_stxt()) != 0) bp_w_text(gp_x, gp_btop, m, 0, gp_font);
+    }
     ovl_gp_brow();
 }
 

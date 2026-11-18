@@ -115,9 +115,11 @@ static void t_uplift(void)
             if (t_has("Pass the keyboard")) { t_tick(30); t_key(13, 0x1C); }
             BP_CHECK(bp_t_scene == GP_SC(2), "trade review: the trade scene");
             BP_CHECK(t_has("[A] Accept") && t_has("[R] Reject"), "trade review: Accept and Reject");
-            BP_CHECK(t_has("*"), "trade review: the mortgaged computer is starred");
-            BP_CHECK(t_has(one ? bp_space(bp_prop_space(14))->name : ovl_gp_pname(14)) && (one || t_has(ovl_gp_pname(1))),
-                     "trade review: the first side's computers named (the card's full name, the list's short ones)");
+            BP_CHECK(t_has(TP_MORTGAGED_P), "trade review: a mortgaged computer says so");
+            BP_CHECK(one ? t_has(bp_space(bp_prop_space(14))->name)
+                         : t_has(ovl_gp_pname(14)) && t_has(lay == BP_LAY_COMPACT ? ovl_gp_pname(1) : bp_space(bp_prop_space(1))->name),
+                     "trade review: the first side named (its card's full name, the rest short)");
+            BP_CHECK(one || lay == BP_LAY_COMPACT || t_has(TP_PLUS_), "trade review: the rest under the card");
             BP_CHECK(!one || t_has("100 cr"), "trade review: the cash the card's side adds");
         }
     t_geom(BP_LAY_FULL);

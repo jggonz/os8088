@@ -250,6 +250,9 @@ const char *bx_str(const char *s);
 #define TP_RAM3 BPT(0x12B9, "RAM 3")
 #define TP_RAM4 BPT(0x12BA, "RAM 4")
 #define TP_WORKSHOP_2 BPT(0x12BB, "Workshop")
+#define TP_MORTGAGED_P BPT(0x12BC, " (mortgaged)")
+#define TP_VALUE_ BPT(0x12BD, "Value: ")
+#define TP_PLUS_ BPT(0x12BE, "+ ")
 /* tx-setup.txt: record 462 */
 #define TS_FLOPPY BPT(0x1400, "Floppy")
 #define TS_MOUSE BPT(0x1401, "Mouse")

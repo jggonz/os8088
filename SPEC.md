@@ -255927,7 +255927,7 @@ drawn that the game does not know):
 |---|---|---|
 | landing | a BOTTOM panel (`bp_pn_covers()` 0, DECISIONS D9: the bottom 96 / 64 rows of the centre, `bp_face_barh()`, the idle art above it): the LARGE picture in a sunken well with its collection's colour bar, a divider, "You landed on NAME", Price, Rent ("follows the dice" for a utility; the status line takes the Rent line while it has something to say), [B] Buy, [A] Auction | the whole centre: "BUY NAME?", price, rent, "Decline puts it up for auction." |
 | auction | "AUCTION • NAME"; the picture, colour bar and list price; a HIGH BID box (the bid in the big font in a white well, the bidder's token and name, or "no bid yet"); a yellow banner "BIDDER • YOUR BID" (or "• BIDDING" for a seat on the other PC) with the bidder's token; for a bidder played here the editor `[-] amount [+]`, "Minimum N • You have N", [B] Bid N, [P] Pass, "If you win: N left"; "Passing leaves this auction." or who passed for want of a raise; the status line | the same facts in lines, the editor one row |
-| trade review | "TRADE OFFER • FROM TO TO"; a banner "TO • YOUR DECISION" (or "WAITING FOR TO"); two "X GIVES" boxes with the trade arrows between: a side giving ONE computer and nothing else shows the boards' card (picture, colour bar, name, value, mortgage, upgrades - the PLUS box takes the last line when that side pays cash); any other side is its short names wrapped in the box (`*` mortgaged, the disks; "nothing"); "PLUS N cr" with the coins in the paying side; AFTER THIS TRADE: each side's cash before -> after ("short" when it cannot pay) and the collection the trade completes, with its pictures; the lock line "Offer locked • Both sides shown above" (the status line takes it while it has something to say); [A] Accept, [R] Reject, and [C] Cancel for the proposer | the boxes as two framed lists, the cash lines, "Offer locked. TO decides." |
+| trade review | "TRADE OFFER • FROM TO TO"; a banner "TO • YOUR DECISION" (or "WAITING FOR TO"); two "X GIVES" boxes with the trade arrows between: a side giving ONE computer and nothing else shows the boards' card (picture, colour bar, name, value, mortgage, upgrades - the PLUS box takes the last line when that side pays cash); a side of several shows its first computer as the card and "+ the rest" wrapped under it (short names, "(mortgaged)", the disks); a side with no computer its names ("nothing"); a card whose computer is mortgaged carries the mortgage mark on its picture; "PLUS N cr" with the coins in the paying side; AFTER THIS TRADE: each side's cash before -> after ("short" when it cannot pay) and the collection the trade completes, with its pictures; the lock line "Offer locked • Both sides shown above" (the status line takes it while it has something to say); [A] Accept, [R] Reject, and [C] Cancel for the proposer | the boxes as two framed lists (a lone computer its name, value and mortgage; "(mortgaged)" spelled out), the cash lines, "Offer locked. TO decides." |
 | link lost | the title (CABLE LINK LOST, RESYNCING, BOARDS DIFFER); the two PCs, their plugs and the beacon around a "Game paused" pill ("Input stopped" when the boards differ); "Waiting for NAME's PC..." (the first live seat not played here; the link's message when the boards differ); LAST ACTION RETAINED: the active seat's token, the newest log line, and a yellow line saying whether a move of this PC is still waiting for the other to confirm (`bp_sess_busy`); LAST PAIRED SAVE: `bp_sess_pair`'s state - "Saved on both PCs" with the two ticked disks, "Saving or resuming...", "Failed - the old pair stands", or "None made this session"; [R] Retry Link, [L] Load Pair, [D] Details (the diagnostics panel), [X] Leave; "Reconnect to continue this turn." | the same in lines |
 | turn bar | a BOTTOM panel: the mover's token, "NAME: roll the dice" (or the status line), [Space] Roll, [E] End Turn, [T] Trade, [M] Manage | the same, without the token |
 
@@ -255941,16 +255941,19 @@ log line is text; which computer it names is not kept); the turn bar keeps
 Manage (the concept's idle board has no bar to copy); "->" stands for the
 boards' arrow (the fonts have no arrow glyph); the pictures are the art's
 LARGE 48x32, smaller than the boards' renders; buttons inside panels are
-the kit's FLAT buttons (no drop shadow), as on the boards.
+the kit's FLAT buttons (no drop shadow), as on the boards. The boards' heavy
+type is the art's two faces: titles, headers, banners, names and figures in
+BP_F_BIG12 / BP_F_BIG16 (the system face) where the row allows, running text
+in the dialog face, which is already a heavy one.
 
 Damage keeps 131.9.7's discipline: a bid step names the editor (`#1`) and
 the rows under it, a focus move the button row, a refusal the status line
 (`#201`); a new panel kind dirties the centre. The landing and the turn bar
 are bottom panels, so a roll that lands on a property repaints only the
 centre's bottom bar region, the idle art staying. Costs (against the uplift
-tip, lane report): overlay +97 bytes, resident image about +70 (the
-overlay's function table and the collection colours) and bss +78 (the slot
-arrays); the scene records 6,059 bytes of `BPART2.BIN`; the panel text 598
+tip, lane report): overlay +484 bytes, resident image +62 (the overlay's
+function table and the collection colours) and bss +78 (the slot arrays);
+the scene records 6,125 bytes of `BPART2.BIN`; the panel text about 580
 bytes smaller than before (the code-drawn bodies' strings are gone).
 
 ### 131.10 Art
