@@ -1,0 +1,8 @@
+NAMED RESOURCE TEST
+===================
+LOAD "\TESTS\AUTOR3" then RUN.
+Expect ALPHA, BETA and AUTOR3 PASS: 10 CHECKS.
+
+To inspect the sample pack, open \TOOLS\2BRES\MIXED.RES in 2BRES.
+To check existing sprite packs, run \GAMES\2B99 and
+\GAMES\BLACKJAK. Use Save As with a NEW name while testing 2BRES.

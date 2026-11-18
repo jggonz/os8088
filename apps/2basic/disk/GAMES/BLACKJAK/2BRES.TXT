@@ -1,0 +1,6 @@
+CARDS.RES - 2BR3 BLACKJACK ARTWORK
+=================================
+Source: CARDS0.BMP, CARDS1.BMP, CARDS2.BMP, CARDS3.BMP
+Four 64x64 monochrome sheets; 53 sprites, 16x16, one named CARDS bank.
+Host rebuild: python tools/2br3.py build resources/cards/CARDS.MF
+Native editor: 2BRES.O88 > File > Open > CARDS.RES; Save As new file.

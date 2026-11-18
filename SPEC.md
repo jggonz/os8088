@@ -255773,3 +255773,145 @@ host harness compiles the SHIPPING rules, codec and link C with `BP_HOST`
 (16-bit stored words) under ASan/UBSan; it supplements, never replaces,
 the guest runs. (Reserved: the registered rows, the paired-emulator fault
 cases and the acceptance evidence.)
+
+## 132. 2BASIC — a BASIC interpreter and its resource editor (`apps/2basic/`, `2BASIC.O88`, `2BRES.O88`)
+
+2BASIC runs numbered BASIC programs in a console window: immediate commands,
+a stored program of up to 288 lines, integer expressions, one-dimensional
+arrays, graphics primitives, one custom form with up to twelve controls,
+modal message and input boxes, PC-speaker and AdLib FM sound, and named
+resource packs. 2BRES edits those packs. Both are hand-written 8086 assembly
+and add no kernel facility and no OSAPI slot.
+
+### 132.1 Provenance
+
+Contributed by techdistractions, from `github.com/techdistractions/2basic`
+at commit `cb41a82` (build B37 of 2BASIC, B36 of 2BRES). Upstream built it
+against this repo's SDK pinned at `d401cf8ca`, `PKG_FMT` 10. The language,
+the file formats and the user documentation are upstream's; what this tree
+changed is the port to the flag day (132.3), the conventions in 132.4 and the
+build (132.6). `apps/2basic/docs/` is upstream's documentation as shipped;
+`docs/COMMANDS.TXT` is the language reference and the authority on syntax
+and limits. `THIRD-PARTY-NOTICES.TXT` beside the source is upstream's.
+
+### 132.2 Shape
+
+| package | image | bss | windows | worker |
+|---|---|---|---|---|
+| `2BASIC.O88` | 27,018 | 23,401 | console (sizable), FORM, dialog | one, the interpreter |
+| `2BRES.O88` | 11,367 | 20,246 | editor, with a menu set | none |
+
+**The interpreter runs on a worker** (§20.6) that executes one statement per
+loop iteration and yields; every piece of interpreter state it needs across
+statements lives in bss. The UI task owns every file: a program's
+`LOADBMP`/`LOADRES` literals are preloaded on the UI task before `RUN`
+starts the worker, and the worker's variable-store write (`SVAR`) posts
+`OSAPI_WM_WAKE` and is committed by the console's `WC_ONWAKE` handler (§20.6
+rule 7, §77's shape). Esc or Ctrl+C sets a break flag the worker polls.
+
+**Memory beyond the region is three transient claims**, each claimed for one
+command and freed after it: 6 KB for a whole-file `LOAD`/`SAVE`/`LOADBMP`,
+13 KB for `HELP.TXT`, and 8 KB to stage a resource pack until it validates.
+All three are disk buffers, so none is `MEMP_CPU` (§50.2.1.1).
+
+### 132.3 The port from PKG_FMT 10 to 13
+
+Nothing built at format 10 runs on the flag-day kernel (§20.2.0), and the
+source no longer assembled. The changes, all mechanical:
+
+- **Window classes (§11.104).** The three 2BASIC templates and 2BRES's lost
+  their handler words for a `WT_CLASS` pointer to an `OS88_CLASS`. The
+  console's class carries `WF_SIZABLE` and its `ONWAKE` handler, replacing
+  the withdrawn `OSAPI_WM_SIZABLE` and `OSAPI_WM_ONWAKE` calls; FORM's
+  run-time sizable bit is `OSAPI_WM_FLAG` with `WFB_SIZABLE`.
+- **Paragraph claims (§50.3.7).** The five `OSAPI_MEM_CLAIM` sites call
+  `bas_claim_kb`, which keeps the KB door's contract (AX = KB in, DX out,
+  every other register kept) over `OSAPI_MEM_P`. `FRE(0)` reads
+  `MEMP_AVAIL` in paragraphs and reports bytes, saturating at 32,767 as
+  before.
+- **`OSAPI_GFX_PIXEL`/`_VLINE` clobber AX..DX** (§5.7.3). Every call site
+  was read: none uses those registers after the call.
+
+### 132.4 Conventions taken on in the port
+
+- **Text is runs (§6.1, §6.6).** Eight FORM and dialog captions were a fill
+  followed by `OSAPI_FONT_STR_XPARENT`; each is `OSAPI_FONT_RUN` over the
+  ground it stood on. A FRAME control's caption now breaks the frame's top
+  edge under it, a group box's usual look.
+- **Both regions are movable (§66.6.1.1)**, and the interpreter's worker is
+  declared restartable (§66.6.2): it parks only in `OSAPI_TASK_ALIVE`, at the
+  top of its loop.
+
+- **Grey grounds are white on 1bpp (§39.4).** FORM, the dialogs and 2BRES's
+  window stand on light grey in colour. On a 1bpp adapter grey is a dither,
+  and an opaque run cannot put a dither under its glyphs: every caption read
+  as a black bar on Hercules. Each package picks its ground from
+  `OSAPI_VIDEO`'s DH at entry (`bas_ui_ground`, `br_ground`): grey at 4 bpp
+  and up, white below.
+- **Two upstream layout defects fixed.** 2BRES's footer drew the current file
+  name unpadded on a partial refresh, so `MIXED.RES` opened over
+  `UNTITLED.RES` read `MIXED.RESRES`; it is padded to twelve cells. And its
+  full layout is 374 rows, which a 348-line Hercules or 350-line EGA screen
+  cuts off below the panels; the compact layout, which upstream chose below
+  300 lines, is now chosen below 400.
+
+**Not yet taken**, and recorded so they are not mistaken for decisions:
+neither package has a `WC_ABOUT` handler (§12.2 — the About card of
+§20.5.1 needs a dismiss path in the console's paint and key handlers), and
+`SVAR`'s store, `2BASIC.DAT`, is written to the current program folder
+rather than `SYSTEM\APPDATA\` (§19.9). Neither is an ABI question.
+
+**Seen and not fixed**: on CGA, 2BRES's compact window loses its status
+line below the dock; and on kern_small, a console scroll can leave the
+first rows of a long output (`HELP`) blank until the next output repaints
+the view - it did not on kern_big at the same adapter and steps.
+
+### 132.5 The B: disk
+
+`make 2basicdisk` builds `build/2basic{,720,120,360}.img`, a data disk laid
+out exactly as upstream's 360 KB one, because `README.TXT`, `HELP.TXT` and
+every sample name their files from the volume's root (`LOAD "\GAMES\2B99"`):
+
+| folder | holds |
+|---|---|
+| root | `2BASIC.O88`, `2BRES.O88`, `README.TXT`, `HELP.TXT`, `RESGUIDE.TXT` |
+| `EXAMPLES` | five short programs and `RESDEMO.RES` |
+| `GAMES\2B99`, `GAMES\BLACKJAK`, `GAMES\2BCHECK` | three games and their packs |
+| `TESTS` | upstream's acceptance programs (`TESTS\UAT.TXT`, `docs/TESTING.TXT`) |
+| `TOOLS\2BRES` | 2BRES's sample inputs and `MIXED.RES` |
+
+It uses 131 of the 360 KB disk's 354 clusters.
+
+**The live media carries the same tree one folder down**, in `2BASIC\`
+(§80.6: the live volume carries every program). There the documentation's
+root paths gain the folder - `LOAD "\2BASIC\GAMES\2B99"` - and `HELP`,
+which reads `HELP.TXT` from the launch folder, is unaffected. **2BASIC is on
+no general apps disk**: that curation is a decision with a date on it
+(§24.6.1), and the owner's to take.
+
+### 132.6 Build
+
+`make 2basic` builds both packages, and `all` names them, so an SDK change
+cannot break them unseen. `apps/2basic/disk/` mirrors the floppy; `res/`
+holds the host-side 2BR3 inputs; four files are placed in two folders each
+from one source. `apps/2basic/tools/2br3.py` is upstream's 2BR3 builder and
+validator: `build` reproduces `RESDEMO.RES` and `CARDS.RES` byte for byte
+from their manifests, and `verify` accepts all four shipped packs.
+`2B99.RES` was converted from a legacy 2BR2 pack that is not in the tree, so
+it is data rather than build output.
+
+### 132.7 Verification
+
+No suite row runs 2BASIC; the rows its build reaches are the fast tier's
+`textrules`, `stkapps`, `movable`, `livefull`, `retired` and `docindex`.
+Upstream's own acceptance programs were run by hand on the glass:
+`AUTOLANG` (36 checks), `AUTOR3` (10), `FORMISO` (6) and `AUTOFORM` (10)
+pass on kern_big in QEMU; `AUTOLANG` passes on MartyPC's 4.77 MHz CGA
+5150 within 60 guest seconds; `AUTOR3` and `HELP` run on kern_small on the
+128 KB CGA machine and on kern_mega in QEMU. FORM events, `INPUTBOX`,
+`MESSAGEBOX`, `SAVE`/`LOAD`, `SVAR`/`LVAR` (the wake path), `FRE(0)`, the
+graphics primitives, Blackjack and 2B99 were driven in QEMU, 2BRES opened
+`MIXED.RES` through the file dialog, and the FORM, a dialog and 2BRES were
+looked at on VGA, CGA and Hercules under MartyPC. Upstream's interactive
+tests (`EVENTUI`, `UTVIS`, `UTSOUND`) and a 2BRES save round trip were not
+run.

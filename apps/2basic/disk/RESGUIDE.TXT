@@ -1,0 +1,45 @@
+2BRES - RESOURCE EDITOR
+=======================
+
+2BRES.O88 creates and edits named 2BR3 resource packs for 2BASIC.
+The window has File, Resource and Help menus, with New, Open, Add,
+Remove and Save As buttons. Resources appear on the left; the selected
+item's type, size and preview appear on the right.
+
+CREATING A FILE
+---------------
+1. Launch 2BRES.O88 and choose New.
+2. Choose Add and select a resource type and source file.
+3. Select a resource from the list to view it.
+4. Press R to rename. Select a TEXT resource and press E to edit it.
+5. Choose Save As, enter an 8.3 filename and save in the desired folder.
+6. Reopen the saved file to check that all resources were preserved.
+
+RESOURCE TYPES
+--------------
+SPRITES1   16x16 1-bit image sprites, one bank of up to 99 entries.
+           Add one 16x16 BMP or a 64x64 sheet containing 16 sprites.
+IMG1       A single monochrome BMP (16x16 or 32x32).
+IMG4       A single 16-colour BMP (16x16 or 32x32).
+TEXT       Text file, editable by appending, backspacing or Enter.
+DATA       Raw bytes from a file (up to 1024 bytes per data entry).
+WORDS16    Signed 16-bit decimal numbers imported from a text file.
+
+All resource names may contain A-Z, digits and underscore, beginning
+with a letter, and up to 12 characters. Binary filenames use DOS 8.3.
+
+TEST FILES
+----------
+\TOOLS\2BRES\SAMPLE.BMP      Sample 1-bit image
+\TOOLS\2BRES\COLOR4.BMP      Sample 4-bit image
+\TOOLS\2BRES\NOTES.TXT       Sample text
+\TOOLS\2BRES\MAP.DAT         Sample binary data
+\TOOLS\2BRES\VALUES.TXT      Sample signed-number table
+\TOOLS\2BRES\MIXED.RES       Resource pack containing different types
+
+LIMITS
+------
+The editor manages one 16x16 sprite bank plus four other named entries,
+within an 8 KB file. Additional data entries are limited to 1024 bytes.
+The format can contain more data than the editor currently exposes.
+2BASIC also reads legacy 2BR2 sprite packs. The editor saves as 2BR3.

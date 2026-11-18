@@ -1,0 +1,52 @@
+2BASIC - MANUAL UAT CHECKLIST
+============================
+
+Run the tests on the OS8088 build and display mode you intend to support.
+Use a fresh 86Box session and a copy of the B: image. Run each test by
+entering RESET, LOAD "\TESTS\NAME", then RUN. Read the expected PASS text.
+
+AUTOMATED LANGUAGE AND RESOURCE TESTS
+-------------------------------------
+AUTOLANG : AUTOLANG PASS: 36 CHECKS
+AUTOR3   : AUTOR3 PASS: 10 CHECKS
+AUTOPRMT : AUTOPRMT PASS: 3 STEPS
+AUTOGFX  : AUTOGFX PASS: API SMOKE (also inspect screen visually)
+FORMISO  : FORMISO PASS: 6 CHECKS
+AUTOFORM : AUTOFORM PASS: 10 CHECKS
+EVTSCAN  : EVTSCAN PASS: 10 STAGES
+
+INTERACTIVE TESTS (SHORT)
+-------------------------
+EVENTUI: click the checkbox, NEXT button and image; type 42 in the
+input dialog and acknowledge the message. Expect EVENTUI PASS: 5 CHECKS.
+UTVIS: visually inspect pixels, colours, rotation and clipping.
+UTSOUND: confirm audio on configured AdLib-compatible hardware.
+
+WORKING DIRECTORY AND SAVE/LOAD
+-------------------------------
+1. LOAD "\GAMES\2B99"; RUN. Confirm the sprites show.
+2. RESET; LOAD "\GAMES\BLACKJAK"; RUN. Confirm cards show.
+3. RESET; enter 10 PRINT "SAVED"; SAVE "TRYONE"; NEW; LOAD "TRYONE";
+   LIST and RUN. Confirm SAVED appears. Use a writable image copy.
+4. RESET must restore the default console colours and prompt without
+   erasing the stored program.
+
+RESOURCE EDITOR ROUND TRIP
+--------------------------
+1. Launch 2BRES.O88; choose File > Open and select
+   \TOOLS\2BRES\MIXED.RES.
+2. Confirm the resource list and image/text/data previews.
+3. Choose Add; import SAMPLE.BMP and NOTES.TXT from \TOOLS\2BRES.
+4. Save As TEST.RES in a writable folder (do not overwrite MIXED.RES).
+5. Close and reopen TEST.RES; check resource names, types and previews.
+6. Verify that the other OS8088 windows remain responsive throughout.
+
+PASS CRITERIA
+-------------
+Every automated test prints its expected PASS without syntax or runtime
+errors. The interactive tests respond, SAVE/LOAD round trips retain data,
+and the desktop is not corrupted or reset. If a test fails, note its name,
+line number or error text, display mode and exact steps.
+
+The host build validates files and package headers; it does not replace
+running the code in OS8088/86Box.

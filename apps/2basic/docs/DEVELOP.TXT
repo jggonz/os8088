@@ -1,0 +1,84 @@
+2BASIC - BUILDING AND CONTRIBUTING
+=================================
+
+IN THE OS8088 TREE
+------------------
+This file describes upstream's standalone Windows build. In the os8088
+repository the packages are built by `make 2basic` against the tree's
+own apps/os88api.inc (PKG_FMT 13, not the pinned format 10 below), the
+B: disk by `make 2basicdisk`, and SPEC.md section 132 records the port.
+
+BUILD REQUIREMENTS
+------------------
+Windows with NASM installed (nasm.exe on PATH), and PowerShell.
+MAKE.BAT does not require Python. The first build obtains a pinned,
+MIT-licensed OS8088 format-10 include file using PowerShell. For an
+offline build, copy a compatible os88api.inc to sdk\apps\ first.
+
+COMPILE
+-------
+Open Command Prompt in the extracted source directory and run:
+
+  MAKE.BAT
+
+This builds exactly two native 8086 applications:
+  dist\2BASIC.O88
+  dist\2BRES.O88
+
+If NASM is in a custom location:
+  set NASM_EXE=C:\PATH\TO\NASM.EXE
+  MAKE.BAT
+
+MAKE.BAT does not package a disk image or run Python.
+
+OPTIONAL: CREATE A B: FLOPPY IMAGE
+---------------------------------
+If you want the 360 KB B: disk image, install Python 3 and run:
+
+  MAKEDISK.BAT
+
+The script uses only Python's standard library. It packages the
+already-built O88 files plus help, games, the five examples and tests.
+It then verifies the file contents and FAT12 directory structure.
+Output: dist\2BASIC-APPS360.IMG
+
+If you only want the binaries, do not run MAKEDISK.BAT.
+
+FIRST-TIME MANUAL UAT
+---------------------
+Copy the O88 files to an OS8088 disk or run MAKEDISK.BAT and mount its
+image as B: in 86Box. Launch 2BASIC.O88 and type:
+
+  PRINT "HELLO"
+  10 PRINT "TEST"
+  20 END
+  RUN
+
+Then follow docs\TESTING.TXT for the automated language/resource tests,
+short form/event interaction and resource editor round-trip.
+A successful NASM build alone is not proof of correct emulator behaviour.
+
+SOURCE LAYOUT
+-------------
+src\2basic.asm       BASIC interpreter
+src\2bres.asm        2BR3 resource editor
+examples\            Five end-user BASIC examples
+samples\             Game code, test programs and help
+resources\           2BR3 data and example artwork
+tools\               SDK check, optional disk generator and host tests
+sdk\                 Downloaded OS8088 include file
+
+CONTRIBUTING
+------------
+Code must remain 8086/8088 safe, with no required EMS and no changes
+to the OS8088 kernel. Use the compatible OS8088 ABI; callbacks need
+correct DS/ES handling and file I/O belongs on the UI task.
+
+Submit small, testable changes with source and UAT results. Update
+command/help documentation when adding language features.
+
+LICENSING
+---------
+No 2BASIC project license has yet been selected. The OS8088 SDK is MIT
+licensed; see THIRD-PARTY-NOTICES.TXT. Contributors should confirm
+project licensing with the repository owner before submitting code.

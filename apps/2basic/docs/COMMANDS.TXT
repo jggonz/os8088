@@ -1,0 +1,744 @@
+2BASIC COMMAND REFERENCE
+========================
+
+Commands are case-insensitive. Statements may be entered at READY or
+stored as numbered program lines where supported. Enter HELP or
+HELP COMMAND in 2BASIC for brief on-screen syntax.
+
+Colour values are 0 black, 1 blue, 2 green, 3 cyan, 4 red, 5 magenta,
+6 brown, 7 light grey, 8 dark grey, 9 light blue, 10 light green,
+11 light cyan, 12 light red, 13 light magenta, 14 yellow, 15 white.
+
+NUMBERED LINE
+Type: Program entry
+Syntax: <line-number> <statement>
+Description: Stores a source line in ascending line-number order. Entering an
+  existing number replaces that line.
+Limits: Line numbers are 1..65535; at most 288 indexed lines, 127 statement
+  characters per line, and 4,864 packed program bytes.
+Example: 10 PRINT "HELLO"
+
+DELETE LINE
+Type: Program entry
+Syntax: <line-number>
+Description: Deletes the stored line with that number without changing any
+  other line.
+Example: 120
+
+HELP
+Type: Direct command
+Syntax: HELP [command]
+Description: HELP displays the INDEX section in HELP.TXT beside the application. HELP command
+  displays that command's syntax, one-line description and short example.
+  Case-insensitive lookup; file is read on demand from the OS8088 current
+  directory using a temporary 13 KB claim.
+Example: HELP PRINT
+
+VERSION
+Type: Direct command
+Syntax: VERSION
+Description: Displays the running 2BASIC build label.
+Example: VERSION
+
+LIST
+Type: Direct command
+Syntax: LIST [first[-last]]
+Description: Lists all stored lines, one line, or an inclusive range in ascending
+  order. Source longer than the console row wraps onto indented continuation rows.
+Example: LIST 100-300
+
+DELETE
+Type: Direct command
+Syntax: DELETE first[-last]
+Description: Deletes one stored line or an inclusive line-number range.
+Example: DELETE 100-190
+
+EDIT
+Type: Direct command
+Syntax: EDIT line
+Description: Copies an existing numbered line into the command prompt for editing.
+  Press Enter to replace it or Escape to cancel.
+Example: EDIT 120
+
+AUTO
+Type: Direct command
+Syntax: AUTO [start[,step]]
+Description: Preloads successive line numbers for program entry. Defaults are
+  start 10 and step 10. Press Enter on a bare generated number or Escape to stop.
+Example: AUTO 100,10
+
+UP ARROW
+Type: Prompt editing
+Syntax: Up Arrow
+Description: Replaces the READY prompt with the most recently submitted non-empty
+  command or numbered source line. One entry is retained. Recalling a line stops
+  AUTO; RUN and numeric INPUT allow Escape or Ctrl+C to break execution.
+Example: Enter 100 PRINT "HELLO", then press Up Arrow.
+
+PROMPT CURSOR KEYS
+Type: Prompt editing
+Syntax: Left Arrow | Right Arrow | Home | End | Delete | Backspace
+Description: Moves the insertion cursor within the READY line. Printable keys
+  insert at the cursor; Backspace removes the previous character and Delete
+  removes the character under the cursor. Long lines scroll to keep it visible.
+Example: Recall a line, press Left Arrow, then type replacement text.
+
+NEW
+Type: Direct command
+Syntax: NEW
+Description: Deletes the current program, resets A..Z, arrays and flow stacks,
+  and restores the UNTITLED caption.
+Example: NEW
+
+RUN
+Type: Direct command
+Syntax: RUN
+Description: Resets scalar variables, arrays and flow stacks, preloads literal
+  LOADBMP statements, then executes on the OS8088 worker. During RUN,
+  Esc or Ctrl+C requests BREAK at the next statement. Ctrl+Break is also
+  recognized when delivered by the keyboard driver.
+Errors: Reports the active line for runtime errors and BREAK.
+Example: RUN
+
+SAVE
+Type: Direct command
+Syntax: SAVE "name"
+Description: Writes the current program as ASCII and updates the console
+  caption. .BAS is appended automatically.
+Limits: Base name 1..8 valid 8.3 characters; maximum source file 6,144 bytes.
+  Uses one transient 6,144-byte conventional-memory grant and frees it before return.
+Errors: ?OUT OF MEMORY if the temporary allocator grant cannot be obtained.
+Example: SAVE "DEMO"
+
+LOAD
+Type: Direct command
+Syntax: LOAD "name"
+Description: Validates a strictly increasing numbered ASCII BASIC program, then
+  commits it and updates the console caption. .BAS is appended automatically.
+Limits: Up to 6,144 source bytes; the old program is retained if validation fails.
+  Uses one transient 6,144-byte conventional-memory grant and frees it before return.
+Errors: ?OUT OF MEMORY if the temporary allocator grant cannot be obtained.
+Example: LOAD "DEMO"
+
+SVAR
+Type: Direct command and program statement
+Syntax: SVAR "app","key",integer-expression
+Description: Saves one signed integer in the shared 2BASIC.DAT application-variable
+  store. APP and KEY are case-insensitive namespaces; an existing pair is replaced.
+Limits: APP and KEY are 1..8 letters/digits/underscore; 32 stored pairs total.
+Errors: ?VARIABLE STORE FULL when no free record remains; disk errors are reported.
+Example: 900 SVAR "UTSTORE","COUNT",T
+
+LVAR
+Type: Direct command and program statement
+Syntax: LVAR "app","key",letter
+Description: Loads one signed integer from 2BASIC.DAT into A..Z. A missing APP/KEY
+  pair returns zero, making first-run defaults simple.
+Limits: Same 8-character APP/KEY and 32-record store as SVAR.
+Example: 10 LVAR "UTSTORE","COUNT",T
+
+CLS
+Type: Direct command and program statement
+Syntax: CLS
+Description: Clears retained text output using the current background colour.
+  In graphics mode it also clears retained drawing commands.
+Example: 10 CLS
+
+PRINT / ?
+Type: Direct command and program statement
+Syntax: PRINT [item[;item...]][;] | ? [item[;item...]][;]
+Description: Prints signed integer items or string expressions. String expressions
+  may combine quoted literals and STR$(integer-expression) with +. ? is an exact
+  shorthand for PRINT. Semicolons join items; a final semicolon suppresses newline.
+Example: 20 ? "VALUE="+STR$(A)
+
+INPUT
+Type: Program statement
+Syntax: INPUT ["prompt";]letter
+Description: Waits for a signed integer expression without blocking the
+  desktop, then assigns it to A..Z.
+Errors: Invalid input displays ?REDO FROM START; Esc or Ctrl+C breaks the program.
+Example: 20 INPUT "AGE";A
+
+LET / ASSIGNMENT
+Type: Direct command and program statement
+Syntax: [LET] letter=expression | [LET] letter(index)=expression
+Description: Evaluates a signed 16-bit integer expression and stores it in A..Z
+  or in a DIMensioned one-dimensional integer array element.
+Errors: ?ILLEGAL FUNCTION CALL for an undimensioned or out-of-range array index.
+Example: 30 A(I)=A(I)+1
+
+DIM
+Type: Direct command and program statement
+Syntax: DIM letter(max-index)
+Description: Creates one zero-based one-dimensional signed-integer array. The
+  maximum subscript is inclusive; DIM A(9) creates A(0) through A(9). Scalar A
+  remains independent of A().
+Limits: 26 possible array names; 512 signed-word elements shared by all arrays.
+  Arrays are cleared/released by RUN and NEW. Redimensioning an existing array
+  during the same run is not allowed.
+Errors: ?OUT OF MEMORY when the shared 512-element pool is exhausted;
+  ?ILLEGAL FUNCTION CALL for a negative/oversized dimension or redimension.
+Example: 10 DIM A(63)
+
+END
+Type: Program statement
+Syntax: END
+Description: Ends normally, stops FM notes, hides transient GUI windows, and
+  restores/fronts the console.
+Example: 900 END
+
+REM
+Type: Direct command and program statement
+Syntax: REM text
+Description: Ignores the remainder of the line. A numbered REM line is stored;
+  a direct REM command is a no-op.
+Example: 5 REM MAIN LOOP
+
+APOSTROPHE COMMENTS
+Type: Direct command and program statement suffix
+Syntax: ' text | statement ' text
+Description: An apostrophe outside a quoted string ignores the remainder of
+  the line. It may begin a line or follow a completed statement.
+Example: 20 A=A+1 ' COUNT ONE PASS
+
+GOTO
+Type: Program statement
+Syntax: GOTO line
+Description: Transfers execution to an existing numbered line.
+Errors: ?UNDEFINED LINE if the target is absent.
+Example: 90 GOTO 20
+
+GOSUB
+Type: Program statement
+Syntax: GOSUB line
+Description: Calls a numbered subroutine and remembers where RETURN should
+  resume.
+Limits: Maximum nesting: 16.
+Errors: ?OUT OF GOSUB SPACE or ?UNDEFINED LINE.
+Example: 30 GOSUB 500
+
+RETURN
+Type: Program statement
+Syntax: RETURN
+Description: Returns to the line following the most recent GOSUB.
+Errors: ?RETURN WITHOUT GOSUB when no call is active.
+Example: 590 RETURN
+
+ON...GOTO / ON...GOSUB
+Type: Program statement
+Syntax: ON expression GOTO line[,line...]
+        ON expression GOSUB line[,line...]
+Description: Uses a 1-based integer selector to choose one target from the list.
+  Selector 1 chooses the first target. Zero, negative, or a value beyond the list
+  performs no branch and execution continues. GOSUB uses the normal return stack.
+Errors: ?UNDEFINED LINE only when the selected target is absent; GOSUB also uses
+  the normal 16-entry ?OUT OF GOSUB SPACE limit.
+Example: 40 ON M GOTO 100,200,300
+
+IF...THEN
+Type: Program statement
+Syntax: IF expression THEN line [ELSE line]
+        IF expression THEN statement [ELSE statement]
+Description: Executes the THEN branch when expression is nonzero, otherwise the
+  optional ELSE branch. A bare line number means GOTO that line. Each branch is
+  one ordinary 2BASIC statement; multiline/nested IF and END IF are not used.
+Example: 60 IF A<=10 THEN A=A+1 ELSE GOTO 200
+
+FOR
+Type: Program statement
+Syntax: FOR letter=start TO limit [STEP step]
+Description: Begins a signed integer counted loop. STEP defaults to 1 and may
+  be negative.
+Limits: Maximum nesting: 8; STEP cannot be zero.
+Example: 20 FOR A=10 TO 1 STEP -1
+
+NEXT
+Type: Program statement
+Syntax: NEXT [letter]
+Description: Advances and tests the innermost matching FOR loop.
+Errors: ?NEXT WITHOUT FOR for an unmatched NEXT.
+Example: 80 NEXT A
+
+INTEGER EXPRESSIONS
+Type: Expression syntax
+Syntax: numbers, A..Z, array(index), (), + - * / MOD, comparisons, NOT, AND, OR
+Description: Uses signed 16-bit arithmetic. Comparisons and logical operators
+  return 1 for true and 0 for false. AND/OR/NOT are logical rather than bitwise.
+Precedence: arithmetic, comparisons, NOT, AND, OR. Parentheses may override it.
+  Both sides of AND and OR are evaluated; short-circuit evaluation is not used.
+Errors: Division by zero, signed overflow, and invalid array indices are reported.
+Example: IF R=0 AND J=1 THEN PRINT "MATCH"
+
+STR$
+Type: String function
+Syntax: STR$(integer-expression)
+Description: Converts a signed 16-bit integer to decimal text for a string expression.
+  String expressions combine quoted literals and STR$ terms with +; string variables
+  are not introduced in this release.
+Example: MESSAGEBOX "TIME "+STR$(T)+" SECONDS"
+
+VAL
+Type: Numeric function
+Syntax: VAL(string-expression)
+Description: Converts decimal text to a signed 16-bit integer. Leading/trailing spaces
+  and one + or - sign are accepted; the remaining text must be decimal digits.
+Errors: ?SYNTAX ERROR for nonnumeric text; ?OVERFLOW outside -32768..32767.
+Example: A=VAL(STR$(-123))
+
+COLOR
+Type: Direct command and program statement
+Syntax: COLOR fg[,bg] | COLOR ,bg
+Description: Sets the text/graphics foreground and optional console background,
+  using colour numbers 0..15.
+Example: 10 COLOR 14,1
+
+LOCATE
+Type: Direct command and program statement
+Syntax: LOCATE row,column
+Description: Moves the next PRINT position in the retained console without
+  erasing text.
+Limits: Retained text rows 1..35; columns 1..63. Taller graphics canvases are allowed.
+Example: 30 LOCATE 10,20
+
+BEEP
+Type: Direct command and program statement
+Syntax: BEEP
+Description: Plays a short os8088 tone through the configured sound device.
+Example: 40 BEEP
+
+SOUND
+Type: Direct command and program statement
+Syntax: SOUND frequency,duration
+Description: Requests an os8088 tone at the given frequency for the given tick
+  duration.
+Example: 40 SOUND 880,4
+
+SLEEP
+Type: Program statement
+Syntax: SLEEP ticks
+Description: Sleeps only the BASIC worker, yielding the desktop and checking
+  Escape between ticks.
+Limits: 0..32767 ticks; approximately 18 ticks per second.
+Example: 40 SLEEP 18
+
+RANDOMIZE
+Type: Direct command and program statement
+Syntax: RANDOMIZE [seed]
+Description: Seeds 2BASIC random-number generation; without a seed it uses the
+  current tick count.
+Example: 10 RANDOMIZE
+
+RND
+Type: Numeric function
+Syntax: RND(limit)
+Description: Returns an integer from 0 through limit-1.
+Limits: limit must be positive.
+Example: 20 A=RND(10)
+
+SCREEN
+Type: Direct command and program statement
+Syntax: SCREEN 0 | SCREEN 1
+Description: Selects retained text output or the graphics canvas.
+Example: 10 SCREEN 1
+
+PSET
+Type: Direct command and program statement
+Syntax: PSET (x,y)[,colour]
+Description: Stores and draws one pixel in the graphics canvas.
+Example: 20 PSET (40,30),14
+
+LINE
+Type: Direct command and program statement
+Syntax: LINE (x1,y1)-(x2,y2)[,colour]
+Description: Stores and draws a Bresenham line.
+Example: 20 LINE (10,10)-(200,80),12
+
+BOX
+Type: Direct command and program statement
+Syntax: BOX (x1,y1)-(x2,y2)[,colour]
+Description: Stores and draws a rectangular frame.
+Example: 30 BOX (20,20)-(120,80),10
+
+FILLBOX
+Type: Direct command and program statement
+Syntax: FILLBOX (x1,y1)-(x2,y2)[,colour]
+Description: Stores and draws a filled rectangle. Coordinates may be reversed.
+Example: 35 FILLBOX (25,25)-(115,75),9
+
+DRAWBEGIN / DRAWEND
+Type: Program statements
+Syntax: DRAWBEGIN | DRAWEND
+Description: Suppresses intermediate worker repaints. A batch containing CLS or a
+  scene reset uses the normal full retained repaint. A no-CLS batch of up to 16 new
+  graphics records uses the XT fast-delta path: only those changed records are drawn
+  live, while they still join the retained scene for later window repaint. Solid
+  FILLBOX updates prune fully covered FILLBOX/BOX/16x16 resource records. Program
+  termination and errors always cancel batching.
+Example: 15 DRAWBEGIN
+
+CIRCLE
+Type: Direct command and program statement
+Syntax: CIRCLE (x,y),radius[,colour]
+Description: Stores and draws a midpoint-algorithm circle.
+Example: 40 CIRCLE (100,70),30,9
+
+POKE
+Type: Direct command and program statement
+Syntax: POKE address,value
+Description: Writes one byte to 2BASIC private user memory, never to physical
+  or kernel memory.
+Limits: address 0..4095; value 0..255.
+Example: POKE 100,255
+
+PEEK
+Type: Numeric function
+Syntax: PEEK(address)
+Description: Reads one byte from the private 3072-byte user-memory bank.
+Example: A=PEEK(100)
+
+INKEY
+Type: Numeric function
+Syntax: INKEY
+Description: Returns and clears the last pending ASCII key, or 0 when none is
+  waiting.
+Example: 20 K=INKEY
+
+TICKS
+Type: Numeric function
+Syntax: TICKS
+Description: Returns the low 16 bits of the os8088 tick counter.
+Example: A=TICKS
+
+MOUSELX / MOUSELY
+Type: Numeric functions
+Syntax: MOUSELX | MOUSELY
+Description: Returns live mouse coordinates relative to the console drawing
+  canvas. Values may be negative when the pointer is outside the client area.
+Example: X=MOUSELX
+
+MOUSEX / MOUSEY / MOUSEB
+Type: Numeric functions
+Syntax: MOUSEX | MOUSEY | MOUSEB
+Description: Returns absolute desktop mouse coordinates or button bits from
+  os8088. Use MOUSELX/MOUSELY for graphics inside a movable console window.
+Example: A=MOUSEX
+
+SCREENW / SCREENH / SCREENBPP / VIDEOMODE
+Type: Numeric functions
+Syntax: SCREENW | SCREENH | SCREENBPP | VIDEOMODE
+Description: Reports current os8088 video geometry, colour depth, and adapter
+  mode.
+Example: PRINT SCREENW
+
+FRE
+Type: Numeric function
+Syntax: FRE(0)
+Description: Reports available conventional memory using a bounded signed
+  result.
+Example: PRINT FRE(0)
+
+CAPACITY
+Type: Direct command
+Syntax: CAPACITY
+Description: Prints package image/BSS headroom and fixed interpreter
+  capacities.
+Example: CAPACITY
+
+MEM
+Type: Direct command
+Syntax: MEM
+Description: Reports current packed-program bytes used/free, indexed line count,
+  GOSUB/FOR depth and retained graphics usage.
+Example: MEM
+
+ADLIB
+Type: Numeric function
+Syntax: ADLIB
+Description: Returns -1 when os8088 reports OPL2/FM capability, otherwise 0.
+Example: IF ADLIB=0 THEN 100
+
+FMPRESET
+Type: Direct command and program statement
+Syntax: FMPRESET channel,preset
+Description: Loads one of eight built-in OPL2 instrument patches on channel
+  0..7.
+Limits: Presets 0..7; channel 8 is left to os8088.
+Example: 20 FMPRESET 0,3
+
+FMNOTE
+Type: Direct command and program statement
+Syntax: FMNOTE channel,frequency
+Description: Starts or changes an OPL2 note on channel 0..7.
+Example: 30 FMNOTE 0,440
+
+FMOFF
+Type: Direct command and program statement
+Syntax: FMOFF channel
+Description: Stops one 2BASIC OPL2 channel.
+Example: 40 FMOFF 0
+
+FMSTOP
+Type: Direct command and program statement
+Syntax: FMSTOP
+Description: Stops all FM notes owned by 2BASIC.
+Example: 50 FMSTOP
+
+LOADBMP
+Type: Direct command and program statement
+Syntax: LOADBMP "name",slot
+Description: Loads a validated uncompressed 4bpp BMP; .BMP is appended
+  automatically. Literal program loads are staged before RUN.
+Limits: Slots 0..3; maximum 64x64 and 6,144-byte file staging. Direct/UI preload
+  uses one transient 6,144-byte conventional-memory grant; resident image slots are preserved.
+Errors: ?OUT OF MEMORY if the temporary allocator grant cannot be obtained.
+Example: 10 LOADBMP "LOGO",0
+
+PUTBMP
+Type: Direct command and program statement
+Syntax: PUTBMP slot,x,y
+        PUTBMP slot,x,y,sourceX,sourceY,width,height
+Description: Stores and draws a loaded bitmap in SCREEN 1. The extended form
+  draws one source rectangle from a sprite atlas. sourceX must be even because
+  resident images use packed 4bpp pixels; the rectangle must fit the image.
+Example: 30 PUTBMP 0,40,30,32,0,28,28
+
+LOADRES
+Type: Direct command and program statement
+Syntax: LOADRES "name"
+Description: Loads one validated 2BR3 named resource pack or legacy 2BR2 pack;
+  .RES is appended automatically. 2BR3 supports 1bpp/4bpp images, compact
+  indexed sprite banks, TEXT, DATA and signed WORDS16 tables. The first
+  supported 16x16 SPRITES1 bank is selected for numeric PUTRES automatically.
+  Program literal loads are staged before RUN; a failed validation leaves
+  the loaded resource intact.
+Limits: One resident pack, max 8192 file bytes, max 32 named resources;
+  first sprite bank for PUTRES must be 16x16 1bpp with 1..99 sprites.
+  4bpp images can be stored/accessed as bytes but not yet drawn via PUTRES.
+  2BR2 3,176-byte packs remain supported without conversion.
+Example: 10 LOADRES "2B99"
+
+RESSELECT
+Type: Direct command and program statement
+Syntax: RESSELECT "BANK"
+Description: Selects a named 16x16 1bpp SPRITES1 bank used by numeric PUTRES.
+  Requires a loaded 2BR3 pack with that bank name.
+Example: 20 RESSELECT "TILES"
+
+RESLEN
+Type: Integer expression function
+Syntax: RESLEN("NAME")
+Description: Length of the named resource payload in bytes.
+Example: PRINT RESLEN("MAP")
+
+RESCOUNT
+Type: Integer expression function
+Syntax: RESCOUNT("NAME")
+Description: Number of sprites in a SPRITES1 bank, or signed words in a
+  WORDS16 table; returns 0 for other resource types.
+Example: PRINT RESCOUNT("CARDS")
+
+RESBYTE
+Type: Integer expression function
+Syntax: RESBYTE("NAME",offset)
+Description: Reads unsigned byte 0..255 at zero-based payload offset.
+  Bounds checked. May read TEXT, DATA and image bytes.
+Example: A=RESBYTE("MAP",0)
+
+RESWORD
+Type: Integer expression function
+Syntax: RESWORD("NAME",index)
+Description: Reads signed 16-bit element from a WORDS16 table at the
+  zero-based index. Other resource types are rejected.
+Example: A=RESWORD("SCORES",1)
+
+RESLINE$
+Type: String expression function
+Syntax: RESLINE$("NAME",index)
+Description: Returns one line (starting at 0) from a named TEXT resource,
+  stopping at CR/LF/end; use PRINT or other supported string-expression sites.
+Example: PRINT RESLINE$("TARGETS",0)
+
+PUTRES
+Type: Direct command and program statement
+Syntax: PUTRES thing,x,y[,foreground[,orientation]]
+Description: Draws sprite 0..N-1 from the selected 16x16 SPRITES1 bank
+  (2BR2 uses 0..98) in SCREEN 1. Foreground 0..15 and orientation
+  0..3 selects 0/90/180/270 degrees clockwise. Zero sprite bits are
+  transparent. Retained graphical command survives repaint/resize.
+Limits: Sprite bank 1..99; foreground 0..15; orientation 0..3.
+Example: 40 PUTRES T,120,60,4,1
+
+FREEBMP
+Type: Direct command and program statement
+Syntax: FREEBMP slot
+Description: Releases one resident bitmap slot for reuse.
+Example: 100 FREEBMP 0
+
+FORM
+Type: Program statement
+Syntax: FORM "title"[,width,height[,YES|NO]]
+Description: Resets the single custom form, clears its controls/events, assigns
+  its title and optionally sets client dimensions in pixels. YES enables user
+  resizing through the host window manager; NO is fixed size and is the default.
+  Controls retain their declared coordinates and do not scale or anchor.
+Limits: One custom form; title maximum 31 characters; explicit client size at
+  least 120x72 and no larger than the current adapter's usable desktop. Omitted
+  dimensions retain the 356x220 default, clamped safely on smaller adapters.
+Errors: ?ILLEGAL FUNCTION CALL for an explicit unsafe size.
+Example: 20 FORM "CONTROL DEMO",280,160,YES
+
+LABEL
+Type: Program statement
+Syntax: LABEL id,x,y,"text"
+Description: Adds or replaces a noninteractive text label on the custom form.
+Example: 30 LABEL 1,20,20,"READY"
+
+BUTTON
+Type: Program statement
+Syntax: BUTTON id,x,y,w,h,"text"
+Description: Adds or replaces a clickable button. Clicking it makes EVENT
+  return its ID.
+Example: 40 BUTTON 2,20,50,90,20,"OK"
+
+CHECKBOX
+Type: Program statement
+Syntax: CHECKBOX id,x,y,"text"
+Description: Adds or replaces a checkbox. Clicking toggles VALUE(id) between 0
+  and 1 and posts its ID to EVENT.
+Example: 50 CHECKBOX 3,20,80,"SOUND"
+
+FRAME
+Type: Program statement
+Syntax: FRAME id,x,y,w,h,"text"
+Description: Adds or replaces a labelled rectangular frame used to group
+  controls visually.
+Example: 60 FRAME 4,8,8,230,110,"OPTIONS"
+
+IMAGE
+Type: Program statement
+Syntax: IMAGE id,slot,x,y
+Description: Adds or replaces a clickable image control using a previously
+  loaded bitmap slot.
+Example: 70 IMAGE 5,0,160,30
+
+SHOWFORM
+Type: Program statement
+Syntax: SHOWFORM
+Description: Shows, repaints, and fronts the one custom form.
+Errors: ?FORM UNAVAILABLE if the OS window could not be created.
+Example: 80 SHOWFORM
+
+CLOSEFORM
+Type: Program statement
+Syntax: CLOSEFORM
+Description: Hides the custom form and releases a waiting EVENT with -1.
+Example: 150 CLOSEFORM
+
+EVENT
+Type: Numeric function
+Syntax: EVENT
+Description: Waits cooperatively for a button, checkbox, or image click and
+  returns its control ID. Returns -1 when the form is closed or hidden.
+Limits: Program mode only; one pending event is retained.
+Example: 100 A=EVENT
+
+VALUE
+Type: Numeric function
+Syntax: VALUE(id)
+Description: Returns the current integer value of a control, principally
+  checkbox state.
+Errors: ?UNKNOWN CONTROL for an absent ID.
+Example: B=VALUE(3)
+
+SETTEXT
+Type: Program statement
+Syntax: SETTEXT id,string-expression
+Description: Changes a label, button, checkbox, or frame caption and repaints
+  the visible form.
+Limits: Caption maximum 23 characters.
+Example: 120 SETTEXT 1,"WORKING"
+
+SETVALUE
+Type: Program statement
+Syntax: SETVALUE id,value
+Description: Changes a control integer value; for a checkbox, zero is clear and
+  nonzero is checked.
+Example: 130 SETVALUE 3,1
+
+ENABLE
+Type: Program statement
+Syntax: ENABLE id,state
+Description: Enables or disables control interaction. Disabled controls ignore
+  clicks.
+Example: 140 ENABLE 2,0
+
+VISIBLE
+Type: Program statement
+Syntax: VISIBLE id,state
+Description: Shows or hides a control without deleting its record.
+Example: 145 VISIBLE 5,0
+
+MESSAGEBOX
+Type: Program statement
+Syntax: MESSAGEBOX string-expression
+Description: Shows a transient modal dialog and cooperatively waits for OK,
+  Enter, or Escape. Use STR$ inside the string expression for numeric values.
+Compatibility: The form MESSAGEBOX "text",integer-expression is accepted.
+Limits: Result maximum 63 characters; one transient dialog at a time.
+Example: 200 MESSAGEBOX "SECONDS "+STR$(T)
+
+INPUTBOX
+Type: Program statement
+Syntax: INPUTBOX string-expression,letter
+Description: Shows a transient modal integer-entry dialog; OK assigns the
+  parsed expression to A..Z, while Cancel leaves the variable unchanged.
+Limits: Input maximum 31 characters; invalid expressions remain in the dialog.
+Example: 210 INPUTBOX "VALUE",A
+
+CONSOLESIZE
+Type: Direct command and program statement
+Syntax: CONSOLESIZE columns,rows
+Description: Resizes the visible console/canvas. Retained text history remains a
+  fixed 35-row buffer, but the window may be taller when the adapter has room.
+Limits: 26..63 columns. Rows are 6 minimum and otherwise limited by the current
+  adapter's usable desktop; visible height is independent of the 35-row history.
+Errors: ?ILLEGAL FUNCTION CALL when the requested view is outside either limit.
+Example: 10 CONSOLESIZE 40,15
+
+MINCONSOLE
+Type: Program statement
+Syntax: MINCONSOLE
+Description: Uses the native os8088 instance/dock minimise path for the 2BASIC
+  console.
+Example: 10 MINCONSOLE
+
+RESTORECONSOLE
+Type: Program statement
+Syntax: RESTORECONSOLE
+Description: Restores and fronts the console through the native os8088 instance
+  path. END, BREAK, errors, and form close also restore it automatically.
+Example: 220 RESTORECONSOLE
+
+PROMPTCOLOR
+Type: Direct command and program statement
+Syntax: PROMPTCOLOR foreground,background | PROMPTCOLOR
+Description: Sets the prompt and typed-input colours independently of
+  PRINT and the console text. With no arguments, restores black on white.
+Limits: Each colour is 0..15.
+Example: PROMPTCOLOR 14,1
+
+RESET
+Type: Direct command
+Syntax: RESET
+Description: Restores the startup console appearance, text colours,
+  prompt colours, title and original working folder. It does not delete
+  the BASIC program in memory; use NEW to do that.
+Example: RESET
+
+DIRECTORY-BASED PROGRAM LOADING
+Syntax: LOAD "\GAMES\2B99" | LOAD "\TESTS\AUTOLANG.BAS"
+Description: If a folder has exactly one BAS file, LOAD accepts its
+  folder path. For folders with multiple BAS files, specify the filename.
+  On successful load, relative file and resource names use that folder.
+Example: LOAD "\GAMES\BLACKJAK"
