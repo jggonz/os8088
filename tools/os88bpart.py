@@ -172,6 +172,29 @@ def build(out_path):
           f"({fonts} font, {text} text, {len(data) - fonts - text} sprite)")
 
 
+# ---- sound lane ----------------------------------------------------------
+# The song and effects banks (SPEC.md 132.8), art IDs BP_A2_MUSIC and
+# BP_A2_SFX of the second part (art2.h 384..399), compiled from art/music.txt
+# and art/sfx.txt by tools/os88gkmus.py's pinned entries (D1). The BPART2
+# builder adds what this answers to its records; {} when the compiler or a
+# source is absent, so a branch without either still builds.
+def sound_records(symbols):
+    """{art ID: record bytes} for the two banks; symbols = art.h + art2.h's
+    #define NAME <int> (BP_A2_MUSIC, BP_A2_SFX are read from it)."""
+    music, sfx = os.path.join(ARTDIR, "music.txt"), os.path.join(ARTDIR, "sfx.txt")
+    try:
+        import os88gkmus
+    except ImportError:
+        return {}
+    out = {}
+    if os.path.exists(music) and "BP_A2_MUSIC" in symbols:
+        out[symbols["BP_A2_MUSIC"]] = os88gkmus.compile_music(music, symbols)
+    if os.path.exists(sfx) and "BP_A2_SFX" in symbols:
+        out[symbols["BP_A2_SFX"]] = os88gkmus.compile_sfx(sfx, symbols)
+    return out
+# ---- end sound lane ------------------------------------------------------
+
+
 # --- mono ---------------------------------------------------------------
 
 def mono_lit(p, x, y):

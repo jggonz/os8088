@@ -11416,6 +11416,8 @@ $(BUILD)/BPART2.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h 
 $(BUILD)/byteoply.raw.asm: $(BYTEOPOLYSRC)
 $(BUILD)/byteoply.bin: $(wildcard apps/byteopoly/*.inc) apps/breadxt/draw.inc \
                        apps/os88cable.inc apps/os88ui.inc
+$(BUILD)/byteoply.raw.asm: apps/cc/gk.h
+$(BUILD)/byteoply.bin: apps/cc/gkmus.inc
 
 #> [Applications] byteopoly :: Byteopoly vintage-computer trading game, local and null-modem (SPEC.md 131)
 byteopoly: $(BUILD)/byteoply.o88
@@ -11465,6 +11467,25 @@ $(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
 #> [Test] bpmath :: actual 8088 Byteopoly two-word arithmetic fixture and negative control
 bpmath: $(BUILD)/bpmath360.img
 .PHONY: bpmath
+
+# The game kit's music player (SPEC.md 132.8) as a jukebox: GKMJUKE.O88 plays
+# every song and effect of Byteopoly's banks, so the player can be LISTENED
+# to on an AdLib/SB or the speaker before a game wires it. A gate package;
+# its one eager part holds the two banks (os88gkmus.py part).
+$(eval $(call CC_PACKAGE,gkmjuke,../tests/gkmusdemo,,$(BUILD)/GKMBANKS.BIN))
+$(BUILD)/GKMBANKS.BIN: tools/os88gkmus.py apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt | $(BUILD)
+	python3 tools/os88gkmus.py part -o $@ apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt
+$(BUILD)/gkmjuke.raw.asm: apps/cc/gk.h
+$(BUILD)/gkmjuke.bin: apps/cc/gkmus.inc apps/breadxt/draw.inc
+$(BUILD)/gkmjuke.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/gkmjuke360.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] gkmusdemo :: the game kit's music and effects player as a jukebox over Byteopoly's banks (SPEC.md 132.8)
+gkmusdemo: $(BUILD)/gkmjuke.img $(BUILD)/gkmjuke360.img
+.PHONY: gkmusdemo
 
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw

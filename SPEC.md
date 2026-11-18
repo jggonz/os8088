@@ -255445,38 +255445,102 @@ Back and Esc leave the link.
 
 #### 131.9.4 Menus and keys
 
-The bar holds `Byteopoly` and five menus. `menu_relayout` drops a cell that
-would reach `vid_clk_hx` (432 px on a 640 px adapter), so after the 128 px
-name cell the titles may total 27 characters: Game, Trade, Assets, Options,
-Help (26). About is the application menu's (`OSAPI_ABOUT_SET`), never a Help
-item. Items grey (`OS88_MENU_DIS`) where illegal and are re-evaluated by
-`bp_pn_sync` and on every mode change; Propose Trade follows
-`bp_can(BP_C_PROPOSE)` for the active seat, Assets > My Collection needs a
-running match, and `bp_gp_open` dirties what a menu-opened panel changes.
+The bar holds `Byteopoly` and four menus. `menu_relayout` drops a cell that
+would reach `vid_clk_hx` (432 px on a 640 px adapter), and a title's cell is
+8 px a character plus 16, after the 128 px name cell (40 + 9 x 8 + 16):
+Game 48 + Collection 96 + Options 72 + Help 48 end at 128 + 264 = 392. **Do
+not add a fifth menu**: the concept boards' Trade (56) beside "Collection"
+ends at 448, past 432, and the kernel drops Help - Rules, Keys and Chat -
+on every 640 px adapter. So Trade's one item is Collection's first
+(uplift DECISIONS D5); T stays its key on the hint bar. About
+is the application menu's (`OSAPI_ABOUT_SET`), never a Help item. Items grey
+(`OS88_MENU_DIS`) where illegal and are re-evaluated by `bp_pn_sync` and on
+every mode change; Propose Trade follows `bp_can(BP_C_PROPOSE)` for the
+active seat, Collection > My Collection needs a running match, and
+`bp_gp_open` dirties what a menu-opened panel changes.
 
 | menu | items |
 |---|---|
 | Game | New Game... / Load... F3 / Save... F2 / Paired Save / Resume Pair / Close |
-| Trade | Propose Trade... |
-| Assets | My Collection... / Standings |
-| Options | Sound: On|Off / Fast Animation: On|Off / Diagnostics |
+| Collection | Propose Trade... / My Collection... / Standings |
+| Options | Sound: On|Off / Music: On|Off / Fast Animation: On|Off / Diagnostics |
 | Help | Rules F1 / Keys / Chat... |
 
 Load and Save are local-match items; Paired Save needs a cable match, Resume
-Pair a link in `BP_L_LOBBY`; Propose, Assets and Rules need a running match;
-Chat and Diagnostics need a cable. The Options flags are exported as
-`bp_opt_sound` and `bp_opt_fast`. Keys: F1 Rules, F2 Save, F3 Load; in the
+Pair a link in `BP_L_LOBBY`; Propose, My Collection and Rules need a running
+match; Chat and Diagnostics need a cable. The Options flags are exported as
+`bp_opt_sound`, `bp_opt_music` and `bp_opt_fast`. Keys: F1 Rules, F2 Save, F3 Load; in the
 setup screens Tab/Down and Up move focus, Left/Right change the focused
 value, Enter/Space act, S starts, Esc goes back.
 
 #### 131.9.5 Sound
 
-`bp_sound(cue)` honours Options > Sound and the machine's `os88_snd_caps`.
-A cue is a short table of (Hz, ticks) notes ending in ticks 0, played by the
-window's 1-tick timer: the first note starts at once, each following note
-when the previous one's ticks have run out, so nothing ever sleeps. A new cue
-replaces the one playing. No tone is longer than 6 ticks; the idle match
-plays nothing.
+Byteopoly plays through the game kit's player (§132.8): a song bank and an
+effects bank in the second art part, `BP_A2_MUSIC` (384) and `BP_A2_SFX`
+(385), compiled from `art/music.txt` and `art/sfx.txt`. Without that part the
+game is silent - the banks are art, like the pictures the plain face goes
+without (§131.10).
+
+**Options.** `Sound: On|Off` (effects) and `Music: On|Off`, both through
+`gkm_volume`. Sound starts on. Music starts on **only when `gkm_init`
+answers `GKM_FM`**: on the PC speaker the melody alone over a game is more
+nagging than musical, so it is a choice there, not a default. Turning Music
+on plays the song the state wants now; turning it off releases the FM
+channels at once.
+
+**The songs, chosen on every tick from state** (`bp_ap_music`): a song is
+started only when the choice CHANGES, so a song the driver refused (another
+program holds the channels) stays off until the state moves on, and never
+retries 18 times a second.
+
+| song | `BP_MUS_*` | when | shape |
+|---|---|---|---|
+| 0 title | `TITLE` | the New Game / lobby screen is up (`bp_ap_mode` != `BP_M_GAME`, i.e. `bp_pn_covers()` == `BP_PN_FULL`) | C major, 136.5 BPM; a 2-bar intro, then 16 bars that loop (31.6 s, loop 28.1 s) |
+| 1 game | `GAME` | a match in play | F major, 91 BPM, 16 bars, loops whole (42.2 s) |
+| 2 auction | `AUCTION` | `phase == BP_PH_AUCTION` | A minor, 136.5 BPM, 8 bars, loops whole (14.1 s) |
+| 3 fanfare | `FANFARE` | `status == BP_ST_OVER`; plays ONCE | C major, 182 BPM, 4 bars (5.3 s) |
+
+All four are original, written for this game; no melody is taken from any
+other game or song.
+
+**The effects.** One effect per committed result (`ovl_bp_ap_committed`):
+each event kind has a rank and an effect in one byte (`bp_ap_kfx`, rank << 5
+| effect), the highest rank wins and the first of equals. `bp_sound(cue)` is
+`gkm_sfx(cue)`, so the setup screens' `BP_SND_ERROR` and every `BP_SND_*` of
+bp.h are the first eight effects, unchanged in meaning.
+
+| # | effect | `BP_FX_*` | played for (rank) |
+|---|---|---|---|
+| 0 | dice rattle | `DICE` | `ROLL`, `ORDER` (2) |
+| 1 | the till, "ka-ching" | `BUY` | `BUY` (5) |
+| 2 | coins out | `RENT` | `RENT`, `CHARGE` (4) |
+| 3 | Floppy Find card | `FLOPPY` | `CARD` from deck 0 (6) |
+| 4 | CRASH! (ducks) | `CRASH` | `DETAIN` (7) |
+| 5 | bankruptcy (ducks) | `BANKRUPT` | `BANKRUPT` (7) |
+| 6 | victory (ducks) | `VICTORY` | `OVER`, only with Music off - on, the fanfare is the victory (7) |
+| 7 | error buzz | `ERROR` | `bp_sound(BP_SND_ERROR)`: refusals |
+| 8 | token step | `STEP` | `MOVE` (1) |
+| 9 | BOOT salary | `SALARY` | `SALARY` (3) |
+| 10 | System Error card, an alarm | `SYSERR` | `CARD` from deck 1 (6) |
+| 11 | upgrade, rising | `UPGRADE` | `UPGRADE`, `REDEEM` (5) |
+| 12 | mortgage, falling | `MORTGAGE` | `MORTGAGE`, `SELL` (5) |
+| 13 | bid blip | `BID` | `BID`, `AUCTION`, `OFFER` (3) |
+| 14 | the gavel | `SOLD` | `WON`, `UNSOLD` (5) |
+| 15 | trade accepted | `TRADEOK` | `TRADED` (6) |
+| 16 | trade rejected | `TRADENO` | `REJECTED`, `CANCELLED` (6) |
+| 17 | link lost (ducks) | `LINKLOST` | the link leaves `BP_L_PLAY` during a match |
+| 18 | link restored | `LINKOK` | the link returns to `BP_L_PLAY` from `PAUSED` or later |
+| 19 | your turn | `TURN` | `TURN` of a seat on this machine (every seat, on one PC) (2) |
+
+`tests/unit/t_gkmus.py` holds the three numberings together: the order of
+`sfx` and `song` blocks in the two files, `bp_app.c`'s `BP_FX_*` /
+`BP_MUS_*`, and `bp.h`'s `BP_SND_*`. A renumbering in one of them plays the
+wrong sound with no other symptom.
+
+**Costs** (against base d242a0e53+uplift): resident image +778 bytes (the
+player's 893, the old cue tables and stepper -175, the rank table +35, the
+picker +125), bss +59, overlay +220; the banks 1,129 + 357 bytes of
+BPART2.BIN.
 
 #### 131.9.6 Files and the close decision
 
@@ -255966,8 +256030,169 @@ Reserved for the kit lane.
 
 ### 132.8 Music and effects
 
-Reserved for the sound lane.
+`apps/cc/gkmus.inc` is the player and `tools/os88gkmus.py` its compiler. A
+C package includes the player after the band core (it finds its banks
+through `bx_art_at`), declares nothing else, and drives it from five places:
+`gkm_init` once (after `bx_setup`), `gkm_tick` from its timer, `gkm_play` /
+`gkm_sfx` where the game decides, `gkm_volume` from its Options, `gkm_done`
+at close. `tests/gkmusdemo` (`make gkmusdemo`, GKMJUKE.O88) is the worked
+example and a jukebox to listen with.
+
+#### 132.8.1 Routing
+
+Asked of `OSAPI_SND_CAPS` at `gkm_init` and again at every `gkm_play`, so a
+tier changed in the Control Panel is honoured by the next song:
+
+| route | when | music | effects |
+|---|---|---|---|
+| `GKM_FM` (1) | `SND_CAP_FM` **and** BL = 1 (the user's tone route is the driver) | three FM voices on channels claimed by patch-load (`OSAPI_SND_FM` verb 2), tried from 0 up to 7 | the tone tier: the driver's channel 8 |
+| `GKM_SPK` (2) | `SND_CAP_TONE`, any other answer - including an FM card the user routed to the speaker | voice 1 alone, `OSAPI_SND_TONE` at priority **20h**, each note a lease of its own length (a tick short when it is longer than 2, so repeated notes separate) | the tone tier: the speaker |
+| `GKM_NONE` (0) | neither | nothing | nothing |
+
+**Effects always go through the tone tier at priority 40h**, on both routes.
+The tier is already shared, prioritised and leased (§34.3): an effect steals
+the speaker from the melody (20h < 40h) and the melody comes back at its next
+note, with no code here to arrange it; a kernel beep (C0h) steals from both;
+and on FM the effect sounds on channel 8, which no claim ever covers, over the
+music. An effect marked **`duck`** also keys the three FM voices off and holds
+them silent until it ends - the sequencer keeps time underneath, so the song
+resumes in place, not from where it stopped.
+
+**Channels, claimed and given back** (Gorillas' rules, `apps/gorillas/
+grbgm.inc`): three or none - the first refusal releases what was claimed
+(verb 3) and the song does not play. They are released at `gkm_stop`, at
+`gkm_volume(0, …)`, at a once-song's end, at `gkm_done`, and **the moment
+any note-on or key-off is refused** (the driver was unloaded, or the claim
+revoked): music then stays off until the next `gkm_play`, so a lost claim
+costs one refusal, not one every tick. Channel 8 is never tried.
+
+**The patch is read where it lies.** Verb 2 stages its 11 bytes from the
+caller's DS (§34.2, the X stub), so the player points DS at the bank's
+segment for that one call instead of copying the patch into its own.
+
+#### 132.8.2 Timing
+
+`gkm_tick` is the clock: once per OS tick from the package's timer, never
+drawing, never waiting. It reads `OSAPI_GET_TICKS` and advances by the ticks
+that really passed since the last call - **at most 8** (`GKM_CATCHUP`), so a
+long repaint on an XT skips the tune forward in time rather than stretching
+it, and a stall of seconds does not replay seconds of notes. Within one
+step only the LAST note a voice reached is sounded. `gkm_play` and `gkm_sfx`
+sound their first note at once, not a tick late. Every note retriggers (a
+key-off, then a key-on), so a repeated pitch is heard as two notes; the
+patches' envelopes shape the rest.
+
+A duration is whole OS ticks, so a tempo is ticks per quarter note
+(`beat`): 8 is 136.5 BPM, 12 is 91, 6 is 182. The compiler refuses a note
+whose length is not a whole number of ticks at its song's `beat`, which is
+what makes every voice of a loop the same length to the tick: loops are
+seamless by construction, never by rounding luck.
+
+#### 132.8.3 The banks
+
+Both are art records (any art part the core reads; Byteopoly's are in
+BPART2.BIN), little endian, offsets from the record's first byte. Each starts
+with a two-byte magic the player checks, so an ID a part does not hold - read
+through an offset table as anything at all - is refused, not played.
+
+```
+song bank   'G' 'M' 01 nsongs  hz_off:w  patch_off:w
+            nsongs x 18: per voice 1..3 (start:w loop:w patch:b 0); start 0 = silent
+            ...voice streams, then patterns...
+            hz:w[n]           the pitches the bank uses, 19..6208 Hz
+            patch:11b[p]      20h 40h 60h 80h E0h of the modulator, the same
+                              of the carrier, then C0h (OSAPI_SND_FM verb 2)
+stream      n          00..7C  a note: 0 rest (key off), n -> hz[n-1]; the
+                               voice's last duration
+            80|n d             a note with a new duration, d = 1..255 ticks
+            7E o:w c           call the pattern at o, c (1..255) times
+            7D                 a pattern's end
+            7F                 a voice's end: to its loop offset, or silence
+effect bank 'G' 'X' 01 nfx  off:w[nfx]
+            per effect: flags (bit 0 = duck), then (ticks:b hz:w)...,
+            ticks 0 ends it; hz 0 is a rest
+```
+
+Patterns nest one level only. The first note of a stream, of a loop, of a
+pattern, and the note after a call carry their own duration. The song record
+names a patch per voice; patches and pitches are shared by every song. A
+`once` song ends when every voice has reached 7F.
+
+#### 132.8.4 The notation
+
+`tools/os88gkmus.py` compiles a text score; its docstring is the reference
+and `apps/byteopoly/art/music.txt` the worked example:
+
+```
+patch chip                       # an OPL2 instrument, registers in hex
+  mod 20=21 40=1A 60=F2 80=24 E0=00
+  car 20=21 40=12 60=F2 80=44 E0=00
+  c0  0C
+end
+pattern pc beat 8                # a phrase, at a beat, called by name
+  C3:8 C4 C3 C4 C3 C4 C3 C4
+end
+song title
+  beat 8                         # ticks a quarter note
+  time 4/4                       # for the | bar checks
+  voice 1 chip                   # voice 1 is the melody the speaker plays
+  voice 2 pluck
+  1: C5:16 E5 G5 C6 E6:8 r G6:4 E6:8 C6 | ...
+  2: C3:4 r:4 C3:8 C3 r:4 | ... % @pc | @pam |
+end
+```
+
+A note is `PITCH[:DUR]` - `C4` is middle C, `F#3`, `Bb4`, `r` a rest; `DUR`
+1/2/4/8/16/32 or any N (1/N of a whole note), with dots and `+` ties; with
+none, the last holds. `@NAME*N` calls a pattern N times. `%` marks the loop
+point - in every voice at the same tick, or in none. A `#` that starts a word
+is a comment. Effects (`sfx NAME [duck]` … `end`) are steps in OS ticks:
+`PITCH:T`, `HZ:T`, `r:T`, and `slide A B N` (N one-tick steps, geometric).
+
+The pinned entries are `compile_music(path, symbols)` and
+`compile_sfx(path, symbols)` → the record bytes (D1); `info`, `render
+--song NAME --wav OUT [--speaker] [--once]`, `render-sfx` and `part`
+(a two-record art part, the jukebox's) are for people. **The renderer is a
+preview, not an OPL2**: a two-operator FM voice with the patch's
+multipliers, levels, envelopes, waveforms and feedback, approximated; the
+sequencing under it is the player's, decision for decision (`play`, which
+the selfcheck holds to hand-worked tick lists).
+
+#### 132.8.5 What was heard
+
+QEMU 11 with `-device adlib` and `-audiodev wav`: the jukebox reported
+`GKM_FM`, played all four songs and twenty effects, and the capture's
+Goertzel magnitudes at the score's pitches matched the title's opening,
+two ticks a sixteenth; the title went on after a `duck` effect played over
+it (that the voices were silent DURING it is not separable in a mixed
+capture, and was not measured). Without a card the jukebox reported `GKM_SPK`
+and the speaker capture's per-tick pitches follow voice 1 of every song.
+Byteopoly on the same machine played the title theme on New Game, the
+game loop after Start and the auction loop when an auction opened (a
+scratch build with the banks in BPART.BIN at 384/385, before BPART2
+existed). Not heard: a Sound Blaster (the OPL2 is the same chip), real
+hardware, and the timing on a 4.77 MHz XT (MartyPC has no audio path here).
 
 ### 132.9 Sizes
 
 Reserved for the kit and sound lanes: the measured bytes of every routine.
+
+**The player** (`apps/cc/gkmus.inc`, sound lane), from the nasm listing of
+BYTEOPLY.O88 at the commit that wired it - each entry with the internal
+routines that follow it:
+
+| routine | bytes | with |
+|---|---|---|
+| `gkm_init` | 48 | `gkm_route` |
+| `gkm_playing` | 5 | |
+| `gkm_volume` | 40 | |
+| `gkm_done` | 3 | |
+| `gkm_stop` | 68 | `gkm_mbank`, `gkm_xbank`, `gkm_bank` |
+| `gkm_play` | 202 | |
+| `gkm_tick` | 335 | `gkm_mstep`, `gkm_out` |
+| `gkm_sfx` | 192 | `gkm_fstep`, `gkm_fxend` |
+| **.text** | **893** | |
+| .bss | 61 | three 14-byte voices, seven words, five flags |
+
+Byteopoly's banks: song bank 1,129 bytes (4 songs, 37 pitches, 7 patches,
+20 patterns), effects bank 357 (20 effects), of a 5 KB allowance.
