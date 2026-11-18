@@ -76,26 +76,17 @@ PAGE = (b"<html><head><title>Race</title></head><body>\r\n"
 
 
 def codeoff(name):
-    """A browser code label's offset, by assembling the source with a `dw`
-    just before OS88_IMAGE_END - which moves nothing above it."""
-    import subprocess
-    import tempfile
-    src = open(os.path.join(_OS88_ROOT, "apps/browser/browser.asm")).read()
-    probe = src.replace("    OS88_IMAGE_END",
-                        "    dw %s\n    OS88_IMAGE_END" % name, 1)
-    with tempfile.TemporaryDirectory() as td:
-        asm, binf = os.path.join(td, "p.asm"), os.path.join(td, "p.bin")
-        open(asm, "w").write(probe)
-        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                        "-I", "apps/browser/", "-I", "drivers/net/", "-o",
-                        binf, asm], cwd=_OS88_ROOT, check=True)
-        d = open(binf, "rb").read()
-    img = open(os88build.at("build/browser.bin"), "rb").read()
-    n = len(img)
-    if len(d) != n + 2:                 # the bss names move by the 2 bytes,
-        sys.exit("brrace: build/browser.bin is not what the source assembles "
-                 "to - `make browsertest` first")   # so the LENGTH is the test
-    return d[n] | (d[n + 1] << 8)
+    """A browser code label's offset, out of build/browser.map (written with
+    build/browser.bin, org 0). It used to assemble the source again with a
+    `dw` before OS88_IMAGE_END, which needs two spare bytes under
+    APP_MAX_SIZE - and 1.8 left the Browser one (SPEC.md 71.34.14)."""
+    with open(os88build.at("build/browser.map"), encoding="ascii") as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) >= 3 and fields[-1] == name:
+                return int(fields[0], 16)
+    sys.exit("brrace: %s missing from build/browser.map - `make` first"
+             % name)
 
 
 def say(*a):

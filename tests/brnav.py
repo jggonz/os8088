@@ -964,16 +964,16 @@ def main():
     # ...THE FILE ITSELF, read off the FAT, and not a search of the whole
     # image: free clusters keep whatever an earlier write left there, so a
     # string anywhere on the volume proves nothing about SAVED.HTM. The page
-    # loaded at the save is the frameset of step 9, and SPEC.md 71.15 says
-    # Save As then writes the source claim, which holds the LAST child's
-    # bytes - Frame Two, whose marker word "Phosphorus" is in no fixture on
-    # the disk and in no other page this row serves.
+    # loaded at the save is PAGE_A - step 9 fetches it after the frameset, to
+    # prove the gfx lock and the hand-over were released - so the file is
+    # PAGE_A's bytes, exactly. "Page Alpha" is in no file under tests/htm/,
+    # so only the saved page can supply it.
     saved = fat12_root_file(raw, b"SAVED   HTM")
     if saved is None:
         fails.append("SAVED.HTM could not be read off the apps image")
-    elif b"Phosphorus" not in saved:
+    elif saved != PAGE_A:
         fails.append("the saved file does not hold the server's bytes "
-                     "(%d bytes, no Frame Two marker)" % len(saved))
+                     "(%d bytes, not PAGE_A's %d)" % (len(saved), len(PAGE_A)))
     else:
         print("the image holds the server's own bytes")
 
