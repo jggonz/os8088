@@ -601,7 +601,6 @@ static void bp_ap_poll(void)
 static void bp_ap_repaint(void *win)
 {
     bp_ap_need = 0;
-    if (bp_ap_mode) bp_face_dirty(BP_D_CENTER);     /* setup draws in the centre */
     if (os88_wm_clip_set(win) == 0) bp_face_paint(win, 0);
 }
 void os88_paint(void *win) { bp_ap_need = 0; bp_face_paint(win, 1); }

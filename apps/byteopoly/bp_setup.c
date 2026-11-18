@@ -66,6 +66,7 @@ static int ovl_su_tagrect(int tag, BPRect *r)
     ovl_su_geom();
     if (!gk_scene_rect(su_sc, tag, (int *)r)) return 0;     /* BPRect is four ints, x y w h */
     r->x += su_ox; r->y += su_oy;
+    if (tag == SU_RULE + 1 || tag == SU_RULE + 2) r->w += 70;   /* the label is part of the radio */
     return 1;
 }
 
@@ -73,7 +74,6 @@ static void ovl_su_rect(int id, BPRect *r)
 {
     r->x = r->y = r->w = r->h = 0;
     ovl_su_tagrect(id + 1, r);
-    if (id == SU_RULE || id == SU_RULE + 1) r->w += 70;     /* the label is part of the radio */
 }
 
 /* name the damage (SPEC.md 131.8.5): a widget's rect, a tagged panel's, or
