@@ -33,6 +33,7 @@ UITEXT = os.path.join(ARTDIR, "uitext.txt")
 # below 12 rows and 3 px from 12, centred on the x-height with 2 px either
 # side. A text file or a scene may write it as "•" or as the escape \177.
 BULLET = 127
+SPRITE_MAXW = 120     # bx_srow under BX_ART2 is 64 bytes: (120 + 1) // 2 + 4 pad
 
 
 def bullet_glyph(font):
@@ -615,8 +616,9 @@ def read_sprites2():
         name, w, h = m.group(1), int(m.group(2)), int(m.group(3))
         if name in out:
             fail(f"{SPRITES2}:{i}: {name} twice")
-        if not (1 <= w <= 255 and 1 <= h <= 255):
-            fail(f"{SPRITES2}:{i}: {name} is {w}x{h}")
+        if not (1 <= w <= SPRITE_MAXW and 1 <= h <= 255):
+            fail(f"{SPRITES2}:{i}: {name} is {w}x{h}; at most {SPRITE_MAXW} wide "
+                 f"(the core's one-row buffer bx_srow, apps/breadxt/draw.inc)")
         rows = []
         for r in range(h):
             row = lines[i].rstrip() if i < len(lines) else ""
