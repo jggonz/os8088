@@ -9,7 +9,7 @@
  *     %define BX_CORE_ONLY
  *     %include "breadxt/draw.inc"
  *     %include "cc/gk.inc"          ; drawing kit, needs the core
- *     %include "cc/gkmus.inc"       ; music and effects, needs nothing else
+ *     %include "cc/gkmus.inc"       ; music and effects, needs the core
  *
  * and #includes this header from C. Everything here is RESIDENT code in the
  * package's own segment, so its size is the price of using it: SPEC.md 132.9
@@ -156,21 +156,31 @@ int  gk_scene_size(int id, int *wh);
 
 /* ---- music and effects (SPEC.md 132.8): apps/cc/gkmus.inc ---------------
  * A SONG BANK and an EFFECTS BANK are art records compiled by
- * tools/os88gkmus.py. Routing: three FM voices through SOUND.DRV
- * (OSAPI_SND_FM) when a sound driver is loaded, else the PC speaker
- * (OSAPI_SND_TONE) playing the melody voice only. Call gkm_tick() from the
- * package's timer callback (once per 18.2 Hz OS tick); it never draws and
- * never blocks. */
+ * tools/os88gkmus.py from a text score, found through the band core's art
+ * lookup (bx_art_at, so gkmus.inc is included AFTER the core) and resolved
+ * afresh at every use. Routing, asked at every gkm_play: three FM voices on
+ * channels 0..7 claimed by patch-load through SOUND.DRV (OSAPI_SND_FM) when a
+ * driver has FM and the user's tone route is the driver; else the melody
+ * voice alone on the tone tier (OSAPI_SND_TONE, priority 20h). Effects always
+ * play on the tone tier at 40h - the speaker, or the driver's channel 8 - so
+ * an effect takes the speaker over the melody; a `duck` effect also holds the
+ * FM voices silent while it plays. Call gkm_tick() from the package's timer
+ * callback (once per 18.2 Hz OS tick); it never draws and never blocks, and
+ * catches up by the ticks that really passed (at most 8). FM channels are
+ * released at gkm_stop, at a once-song's end, at gkm_done, and the moment a
+ * note is refused (music then stays off until the next gkm_play). */
 #define GKM_NONE   0
 #define GKM_FM     1
 #define GKM_SPK    2
-int  gkm_init(int music_id, int sfx_id);     /* answers GKM_FM / GKM_SPK / GKM_NONE */
+/* the bank art IDs; answers the route a song takes now: GKM_FM / GKM_SPK /
+ * GKM_NONE. Music and effects start ON. */
+int  gkm_init(int music_id, int sfx_id);
 void gkm_tick(void);
-void gkm_play(int song, int loop);           /* song index in the bank; loop 1 = repeat */
+void gkm_play(int song, int loop);           /* song index in the bank; loop 1 = repeat, 0 = once */
 void gkm_stop(void);                          /* silence the music, release FM voices */
-int  gkm_playing(void);                       /* the song index, -1 none */
-void gkm_sfx(int effect);                     /* an effect over (or ducking) the music */
-void gkm_volume(int music_on, int sfx_on);    /* the Options toggles */
+int  gkm_playing(void);                       /* the song index, -1 none (a once-song that ended: -1) */
+void gkm_sfx(int effect);                     /* an effect from its start, replacing the last */
+void gkm_volume(int music_on, int sfx_on);    /* the Options toggles; music off = gkm_stop */
 void gkm_done(void);                          /* at close: silence, release every voice */
 
 #endif
