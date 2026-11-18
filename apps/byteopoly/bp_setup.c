@@ -32,14 +32,14 @@ static int su_gx, su_gy, su_gw, su_gh, su_rx, su_rw, su_ty, su_hy, su_r0,
     su_fy, su_my, su_lb;
 static BPRect su_rc;
 
-static const char *su_tabs[] = {"Same PC", "Host Cable", "Join Cable"};
-static const char *su_toks[] = {"Floppy", "Mouse", "Joystick", "Cassette"};
-static const char *su_rules[] = {"Classic", "Quick 10", "Quick 20", "Quick 30"};
-static const char *su_ports[] = {"Port Auto", "Port COM1", "Port COM2"};
-static const char *su_hints[] = {"Tab Next", "Arrows Change", "Enter Edit",
-    "S Start", "Esc Back", 0};
+static const char *su_tabs[] = {TS_SAME_PC, TS_HOST_CABLE, TS_JOIN_CABLE};
+static const char *su_toks[] = {TS_FLOPPY, TS_MOUSE, TS_JOYSTICK, TS_CASSETTE};
+static const char *su_rules[] = {TS_CLASSIC, TS_QUICK_10, TS_QUICK_20, TS_QUICK_30};
+static const char *su_ports[] = {TS_PORT_AUTO, TS_PORT_COM1, TS_PORT_COM2};
+static const char *su_hints[] = {TS_TAB_NEXT, TS_ARROWS_CHANGE, TS_ENTER_EDIT,
+    TS_S_START, TS_ESC_BACK, 0};
 
-static void ovl_su_say(const char *s) { os88_strcpy(su_msg, s, sizeof(su_msg)); }
+static void ovl_su_say(const char *s) { os88_strcpy(su_msg, bx_str(s), sizeof(su_msg)); }
 
 static void ovl_su_defname(int s)
 {
@@ -180,14 +180,14 @@ static int ovl_su_check(void)
     for (i = 0; i < su_cfg.nseats; i++)
         for (j = i + 1; j < su_cfg.nseats; j++)
             if (su_cfg.token[i] == su_cfg.token[j]) {
-                ovl_su_say("Each player needs a different token.");
+                ovl_su_say(TS_EACH_PLAYER_NEEDS);
                 return 0;
             }
     if (su_tab != 0) {
         here = 0;
         for (i = 0; i < su_cfg.nseats; i++) here += su_cfg.machine[i];
         if (here == 0 || here == su_cfg.nseats) {
-            ovl_su_say("Each PC needs at least one player.");
+            ovl_su_say(TS_EACH_PC_NEEDS);
             return 0;
         }
     }
@@ -208,13 +208,13 @@ static void ovl_su_go(void)
     } else {
         e = bp_lobby_start();
         if (e != BP_OK) { ovl_su_say(bp_err_text(e)); bp_sound(BP_SND_ERROR); return; }
-        ovl_su_say("Starting...");
+        ovl_su_say(TS_STARTING);
     }
 }
 
 static void ovl_su_start(void)
 {
-    if (!ovl_su_ena(SU_START)) { ovl_su_say("The link is not ready yet."); return; }
+    if (!ovl_su_ena(SU_START)) { ovl_su_say(TS_THE_LINK_IS); return; }
     if (su_tab != 0) {
         if (!ovl_su_check()) return;
         ovl_bp_ap_guard(BP_ACT_START);
@@ -231,7 +231,7 @@ static void ovl_su_link(void)
     if (bp_ap_mode == BP_M_LOBBY) {
         bp_link_leave();
         bp_ap_mode = BP_M_SETUP; su_ready = 0; su_sent = 0;
-        ovl_su_say("Link closed.");
+        ovl_su_say(TS_LINK_CLOSED);
         return;
     }
     e = su_tab == 1 ? bp_link_host(su_port) : bp_link_join(su_port);
@@ -383,7 +383,7 @@ static const char *ovl_su_sel(const char *s)
     static char sb[12];
     if (!bp_mono) return s;
     sb[0] = '>';
-    os88_strcpy(sb + 1, s, sizeof(sb) - 1);
+    os88_strcpy(sb + 1, bx_str(s), sizeof(sb) - 1);
     return sb;
 }
 
@@ -404,7 +404,7 @@ static void ovl_su_draw(void)
     bp_w_fill(bp_r_center.x, bp_r_center.y, bp_r_center.x + bp_r_center.w - 1,
               bp_r_center.y + bp_r_center.h - 1, 3);
     su_rc.x = su_gx; su_rc.y = su_gy; su_rc.w = su_gw; su_rc.h = su_gh;
-    bp_w_panel(&su_rc, bp_ap_mode == BP_M_LOBBY ? "BYTEOPOLY - CABLE LOBBY" : "BYTEOPOLY - NEW GAME");
+    bp_w_panel(&su_rc, bp_ap_mode == BP_M_LOBBY ? TS_BYTEOPOLY_CABLE_LOBBY : TS_BYTEOPOLY_NEW_GAME);
     /* tabs */
     for (id = 0; id <= 2; id++) {
         ovl_su_rect(id, &su_rc);
@@ -413,11 +413,11 @@ static void ovl_su_draw(void)
         bp_w_button(&su_rc, su_tab == id ? ovl_su_sel(su_tabs[id]) : su_tabs[id], st);
     }
     /* roster header and rows */
-    bp_w_text(su_gx + 8, su_hy, "PLAYER", 0, -1);
-    bp_w_text(su_gx + 96, su_hy, "TOKEN", 0, -1);
+    bp_w_text(su_gx + 8, su_hy, TS_PLAYER, 0, -1);
+    bp_w_text(su_gx + 96, su_hy, TS_TOKEN, 0, -1);
     if (su_tab != 0) {
-        bp_w_text(su_gx + 176, su_hy, "COMPUTER", 0, -1);
-        bp_w_text(su_gx + 262, su_hy, "READY", 0, -1);
+        bp_w_text(su_gx + 176, su_hy, TS_COMPUTER, 0, -1);
+        bp_w_text(su_gx + 262, su_hy, TS_READY, 0, -1);
     }
     for (s = 0; s < su_cfg.nseats; s++) {
         id = SU_NAME + s;
@@ -436,14 +436,14 @@ static void ovl_su_draw(void)
         if (su_tab != 0) {
             id = SU_MACH + s;
             ovl_su_rect(id, &su_rc);
-            bp_w_button(&su_rc, ovl_su_mine(s) ? "This PC" : "Other PC", ovl_su_state(id));
+            bp_w_button(&su_rc, ovl_su_mine(s) ? TS_THIS_PC : TS_OTHER_PC, ovl_su_state(id));
             bp_w_text(su_gx + 262, su_rc.y + (su_rh - 8) / 2,
-                      (ovl_su_mine(s) ? su_ready : bp_lobby_peer_ready()) ? "Ready" : "...", 0, -1);
+                      (ovl_su_mine(s) ? su_ready : bp_lobby_peer_ready()) ? TS_READY_2 : TS_X, 0, -1);
         }
     }
     /* player count */
     if (su_tab != 2) {
-        bp_w_text(su_gx + 236, su_fy + (su_rh - 6) / 2, "Players", 0, -1);
+        bp_w_text(su_gx + 236, su_fy + (su_rh - 6) / 2, TS_PLAYERS, 0, -1);
         ovl_su_rect(SU_CNTM, &su_rc);
         bp_w_button(&su_rc, "-", ovl_su_state(SU_CNTM));
         su_lm[0] = (char)('0' + su_cfg.nseats); su_lm[1] = 0;
@@ -452,7 +452,7 @@ static void ovl_su_draw(void)
         bp_w_button(&su_rc, "+", ovl_su_state(SU_CNTP));
     }
     /* rules */
-    bp_w_text(su_rx, su_ty, "GAME RULES", 0, -1);
+    bp_w_text(su_rx, su_ty, TS_GAME_RULES, 0, -1);
     for (id = 0; id < 4; id++) {
         ovl_su_rect(SU_RULE + id, &su_rc);
         st = ovl_su_state(SU_RULE + id);
@@ -462,29 +462,29 @@ static void ovl_su_draw(void)
     /* the link box */
     if (su_tab != 0) {
         cols = su_rw / 8;
-        bp_w_text(su_rx, su_lb, "LINK 2400 8N1", 0, -1);
-        lab = bp_ap_mode == BP_M_LOBBY ? bp_link_msg() : "Not connected";
-        os88_strcpy(su_lm, lab, cols < (int)sizeof(su_lm) ? cols + 1 : (int)sizeof(su_lm));
+        bp_w_text(su_rx, su_lb, TS_LINK_2400_8N1, 0, -1);
+        lab = bp_ap_mode == BP_M_LOBBY ? bp_link_msg() : TS_NOT_CONNECTED;
+        os88_strcpy(su_lm, bx_str(lab), cols < (int)sizeof(su_lm) ? cols + 1 : (int)sizeof(su_lm));
         bp_w_text(su_rx, su_lb + 9, su_lm, 0, -1);
         ovl_su_rect(SU_PORT, &su_rc);
         bp_w_button(&su_rc, su_ports[su_port % 3], ovl_su_state(SU_PORT));
         ovl_su_rect(SU_LINK, &su_rc);
-        bp_w_button(&su_rc, bp_ap_mode == BP_M_LOBBY ? "Leave" : "Connect", ovl_su_state(SU_LINK));
+        bp_w_button(&su_rc, bp_ap_mode == BP_M_LOBBY ? TS_LEAVE : TS_CONNECT, ovl_su_state(SU_LINK));
         ovl_su_rect(SU_READY, &su_rc);
         on = su_ready ? BP_W_DEFAULT : 0;
-        bp_w_button(&su_rc, "Ready", ovl_su_state(SU_READY) | on);
+        bp_w_button(&su_rc, TS_READY_2, ovl_su_state(SU_READY) | on);
     }
     /* footer */
     if (su_tab != 2) {
         ovl_su_rect(SU_START, &su_rc);
-        bp_w_button(&su_rc, "[S] Start Game", ovl_su_state(SU_START));
+        bp_w_button(&su_rc, TS_S_START_GAME, ovl_su_state(SU_START));
     }
     ovl_su_rect(SU_BACK, &su_rc);
-    bp_w_button(&su_rc, "[Esc] Back", ovl_su_state(SU_BACK));
+    bp_w_button(&su_rc, TS_ESC_BACK_2, ovl_su_state(SU_BACK));
     if (su_msg[0]) lab = su_msg;
-    else if (su_tab == 0) lab = "Players take turns on this PC.";
-    else if (bp_ap_mode == BP_M_LOBBY) lab = su_tab == 1 ? "Set the roster, then Ready." : "Waiting for the host.";
-    else lab = "Press Connect to find the other PC.";
+    else if (su_tab == 0) lab = TS_PLAYERS_TAKE_TURNS;
+    else if (bp_ap_mode == BP_M_LOBBY) lab = su_tab == 1 ? TS_SET_THE_ROSTER : TS_WAITING_FOR_THE;
+    else lab = TS_PRESS_CONNECT_TO;
     bp_w_text(su_gx + 8, su_my, lab, 0, -1);
 }
 

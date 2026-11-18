@@ -39,6 +39,10 @@ typedef int BPInt;
 #endif
 typedef unsigned char BPByte;
 
+/* UI text lives in the art (SPEC.md 131.10.7): a TX_ name is a text handle,
+ * read with bx_text/bx_twidth or resolved with bx_str before any other use */
+#include "bptx.h"
+
 /* A logical 32-bit unsigned value: money, revisions, identities, digests. */
 typedef struct { BPWord lo, hi; } BPU32;
 

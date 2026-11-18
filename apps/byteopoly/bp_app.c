@@ -7,6 +7,7 @@
  * and tick reaches. Everything reached by a menu, a file, a lobby or a
  * commit is overlay code (ovl_*, SPEC.md 131.11). */
 int bp_ask(const char *message, void *window, int buttons);
+void bx_setart2(unsigned seg);
 void bp_alertdone(int button);
 
 BPByte bp_ap_mode, bp_opt_sound, bp_opt_fast;
@@ -84,6 +85,7 @@ void bp_sound(int cue)
 static void ovl_bp_ap_say(const char *t)
 {
     static char tb[25];
+    t = bx_str(t);
     os88_strcpy(tb, t, sizeof(tb));
     os88_toast(tb, 0);
     bp_log_add(t);
@@ -168,18 +170,18 @@ static void ovl_bp_ap_ask(const char *m, int set, int act)
 {
     if (bp_ap_asking) return;
     if (bp_ask(m, bp_win, set) == 0) { bp_ap_asking = 1; bp_ap_after = (BPByte)act; bp_ap_askset = (BPByte)set; }
-    else ovl_bp_ap_say("Question unavailable");
+    else ovl_bp_ap_say(TA_QUESTION_UNAVAILABLE);
 }
 
 static void ovl_bp_ap_load(void)
 {
-    if (os88_file_dlg(OS88_FDLG_OPEN, bp_win, 0) != 0) ovl_bp_ap_say("File dialog busy");
+    if (os88_file_dlg(OS88_FDLG_OPEN, bp_win, 0) != 0) ovl_bp_ap_say(TA_FILE_DIALOG_BUSY);
 }
 static void ovl_bp_ap_save(void)
 {
-    if (bp_game.status != BP_ST_PLAY || bp_mode != BP_MODE_LOCAL) { ovl_bp_ap_say("Nothing to save"); return; }
+    if (bp_game.status != BP_ST_PLAY || bp_mode != BP_MODE_LOCAL) { ovl_bp_ap_say(TA_NOTHING_TO_SAVE); return; }
     if (os88_file_dlg(OS88_FDLG_SAVE, bp_win, bp_ap_name[0] ? bp_ap_name : "BYTEOPLY.BPS") != 0)
-        ovl_bp_ap_say("File dialog busy");
+        ovl_bp_ap_say(TA_FILE_DIALOG_BUSY);
 }
 
 static int ovl_bp_ap_close(void)
@@ -254,7 +256,7 @@ static void ovl_bp_ap_file(int mode, const char *name, unsigned lo, unsigned hi)
         if (e != BP_OK) { ovl_bp_ap_fail(e); return; }
         bp_ap_unsaved = 0;
         os88_strcpy(bp_ap_name, name, sizeof(bp_ap_name));
-        ovl_bp_ap_say("Match saved");
+        ovl_bp_ap_say(TA_MATCH_SAVED);
         if (act == BP_ACT_SAVECLOSE) ovl_bp_ap_exit();
         return;
     }
@@ -266,7 +268,7 @@ static void ovl_bp_ap_file(int mode, const char *name, unsigned lo, unsigned hi)
     ovl_bp_ap_clear();
     ovl_bp_ap_started();
     bp_pn_sync();
-    ovl_bp_ap_say("Match loaded");
+    ovl_bp_ap_say(TA_MATCH_LOADED);
 }
 
 /* the game-over panel's choice: 2 New Game, 3 Exit */
@@ -292,8 +294,8 @@ static int ovl_bp_ap_cmd(int item, int menu, void *win)
             else ovl_bp_ap_newscreen();
         } else if (item == 1) ovl_bp_ap_guard(BP_ACT_LOAD);
         else if (item == 2) ovl_bp_ap_save();
-        else if (item == 3) ovl_bp_ap_report(bp_sess_save_pair(), "Pair save started");
-        else if (item == 4) ovl_bp_ap_report(bp_sess_resume_pair(), "Resume started");
+        else if (item == 3) ovl_bp_ap_report(bp_sess_save_pair(), TA_PAIR_SAVE_STARTED);
+        else if (item == 4) ovl_bp_ap_report(bp_sess_resume_pair(), TA_RESUME_STARTED);
         else if (item == 5) { if (ovl_bp_ap_close()) os88_wm_close(win); }
     } else if (bp_ap_mode == BP_M_GAME) {
         if (menu == 1) bp_gp_open(BP_GP_TRADE);
@@ -322,6 +324,7 @@ static int ovl_bp_ap_hotkey(int scan)
 /* ---- the event log: one bounded line per event (131.9.1) --------------- */
 static void ovl_bp_ap_c(const char *s)
 {
+    s = bx_str(s);
     while (*s && bp_ap_ll < BP_LOG_LEN) bp_ap_ln[bp_ap_ll++] = *s++;
     bp_ap_ln[bp_ap_ll] = 0;
 }
@@ -330,12 +333,12 @@ static void ovl_bp_ap_amt(const BPU32 *a)
     static char b[14];
     bp_u32_fmt(b, a);
     ovl_bp_ap_c(b);
-    ovl_bp_ap_c(" cr");
+    ovl_bp_ap_c(TA_CR);
 }
 static void ovl_bp_ap_nm(int seat)
 {
     if (seat < BP_SEATS) ovl_bp_ap_c(bp_game.name[seat]);
-    else ovl_bp_ap_c("Bank");
+    else ovl_bp_ap_c(TA_BANK);
 }
 static void ovl_bp_ap_sp(int space) { ovl_bp_ap_c(bp_space(space % BP_SPACES)->shortname); }
 
@@ -347,53 +350,53 @@ static int ovl_bp_ap_line(const BPEvent *e)
     k = e->kind;
     bp_ap_ll = 0; bp_ap_ln[0] = 0;
     if (k == BP_V_ROLL) {
-        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" rolled ");
+        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_ROLLED);
         d[0] = (char)('0' + e->other); d[1] = '+'; d[2] = 0; ovl_bp_ap_c(d);
         d[0] = (char)('0' + e->space); d[1] = 0; ovl_bp_ap_c(d);
-    } else if (k == BP_V_MOVE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" to "); ovl_bp_ap_sp(e->space); }
+    } else if (k == BP_V_MOVE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_TO); ovl_bp_ap_sp(e->space); }
     else if (k == BP_V_ORDER) {
-        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" rolls ");
+        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_ROLLS);
         d[0] = (char)('0' + ((e->amount.lo >> 4) & 15)); d[1] = '+'; d[2] = 0; ovl_bp_ap_c(d);
         d[0] = (char)('0' + (e->amount.lo & 15)); d[1] = 0; ovl_bp_ap_c(d);
-    } else if (k == BP_V_FIRST) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" goes first"); }
-    else if (k == BP_V_SALARY) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" salary +"); ovl_bp_ap_amt(&e->amount); }
+    } else if (k == BP_V_FIRST) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_GOES_FIRST); }
+    else if (k == BP_V_SALARY) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_SALARY); ovl_bp_ap_amt(&e->amount); }
     else if (k == BP_V_BUY || k == BP_V_WON) {
-        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(k == BP_V_BUY ? " bought " : " won ");
-        ovl_bp_ap_sp(e->space); ovl_bp_ap_c(" for "); ovl_bp_ap_amt(&e->amount);
+        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(k == BP_V_BUY ? TA_BOUGHT : TA_WON);
+        ovl_bp_ap_sp(e->space); ovl_bp_ap_c(TA_FOR); ovl_bp_ap_amt(&e->amount);
     } else if (k == BP_V_RENT) {
-        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" paid "); ovl_bp_ap_nm(e->other);
+        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_PAID); ovl_bp_ap_nm(e->other);
         ovl_bp_ap_c(" "); ovl_bp_ap_amt(&e->amount);
         ovl_bp_ap_c(" ("); ovl_bp_ap_sp(e->space);
         k = bp_space(e->space % BP_SPACES)->prop;
         if (k != BP_NOBODY && bp_game.level[k]) { d[0] = 'L'; d[1] = (char)('0' + bp_game.level[k]); d[2] = 0; ovl_bp_ap_c(" "); ovl_bp_ap_c(d); }
         ovl_bp_ap_c(")");
-    } else if (k == BP_V_CHARGE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" paid "); ovl_bp_ap_amt(&e->amount); }
-    else if (k == BP_V_CARD) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" drew: "); ovl_bp_ap_c(bp_card(e->other & 15)->title); }
-    else if (k == BP_V_GAIN) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" gets "); ovl_bp_ap_amt(&e->amount); }
-    else if (k == BP_V_DETAIN) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" to the Repair Shop"); }
-    else if (k == BP_V_RELEASE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" left the Repair Shop"); }
-    else if (k == BP_V_AUCTION) { ovl_bp_ap_c("Auction: "); ovl_bp_ap_sp(e->space); }
-    else if (k == BP_V_BID) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" bids "); ovl_bp_ap_amt(&e->amount); }
-    else if (k == BP_V_PASS) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" passes"); }
-    else if (k == BP_V_UNSOLD) { ovl_bp_ap_sp(e->space); ovl_bp_ap_c(" unsold"); }
+    } else if (k == BP_V_CHARGE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_PAID); ovl_bp_ap_amt(&e->amount); }
+    else if (k == BP_V_CARD) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_DREW); ovl_bp_ap_c(bp_card(e->other & 15)->title); }
+    else if (k == BP_V_GAIN) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_GETS); ovl_bp_ap_amt(&e->amount); }
+    else if (k == BP_V_DETAIN) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_TO_THE_REPAIR); }
+    else if (k == BP_V_RELEASE) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_LEFT_THE_REPAIR); }
+    else if (k == BP_V_AUCTION) { ovl_bp_ap_c(TA_AUCTION); ovl_bp_ap_sp(e->space); }
+    else if (k == BP_V_BID) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_BIDS); ovl_bp_ap_amt(&e->amount); }
+    else if (k == BP_V_PASS) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_PASSES); }
+    else if (k == BP_V_UNSOLD) { ovl_bp_ap_sp(e->space); ovl_bp_ap_c(TA_UNSOLD); }
     else if (k == BP_V_UPGRADE || k == BP_V_SELL) {
-        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(k == BP_V_UPGRADE ? " upgraded " : " sold RAM on ");
+        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(k == BP_V_UPGRADE ? TA_UPGRADED : TA_SOLD_RAM_ON);
         ovl_bp_ap_sp(e->space);
     } else if (k == BP_V_MORTGAGE || k == BP_V_REDEEM) {
-        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(k == BP_V_MORTGAGE ? " mortgaged " : " redeemed ");
+        ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(k == BP_V_MORTGAGE ? TA_MORTGAGED : TA_REDEEMED);
         ovl_bp_ap_sp(e->space);
-    } else if (k == BP_V_OFFER) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" offers "); ovl_bp_ap_nm(e->other); ovl_bp_ap_c(" a trade"); }
-    else if (k == BP_V_TRADED) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" and "); ovl_bp_ap_nm(e->other); ovl_bp_ap_c(" traded"); }
-    else if (k == BP_V_REJECTED) ovl_bp_ap_c("Trade rejected");
-    else if (k == BP_V_CANCELLED) ovl_bp_ap_c("Trade withdrawn");
-    else if (k == BP_V_DEBT) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" owes "); ovl_bp_ap_amt(&e->amount); }
-    else if (k == BP_V_SETTLED) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" settled the debt"); }
-    else if (k == BP_V_BANKRUPT) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" is bankrupt"); }
-    else if (k == BP_V_TURN) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c("'s turn"); }
-    else if (k == BP_V_DOUBLES) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" rolls again"); }
-    else if (k == BP_V_DISK) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(" keeps a Recovery Disk"); }
-    else if (k == BP_V_ROUND) { ovl_bp_ap_c("Round complete"); }
-    else if (k == BP_V_OVER) ovl_bp_ap_c("Game over!");
+    } else if (k == BP_V_OFFER) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_OFFERS); ovl_bp_ap_nm(e->other); ovl_bp_ap_c(TA_A_TRADE); }
+    else if (k == BP_V_TRADED) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_AND); ovl_bp_ap_nm(e->other); ovl_bp_ap_c(TA_TRADED); }
+    else if (k == BP_V_REJECTED) ovl_bp_ap_c(TA_TRADE_REJECTED);
+    else if (k == BP_V_CANCELLED) ovl_bp_ap_c(TA_TRADE_WITHDRAWN);
+    else if (k == BP_V_DEBT) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_OWES); ovl_bp_ap_amt(&e->amount); }
+    else if (k == BP_V_SETTLED) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_SETTLED_THE_DEBT); }
+    else if (k == BP_V_BANKRUPT) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_IS_BANKRUPT); }
+    else if (k == BP_V_TURN) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_S_TURN); }
+    else if (k == BP_V_DOUBLES) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_ROLLS_AGAIN); }
+    else if (k == BP_V_DISK) { ovl_bp_ap_nm(e->seat); ovl_bp_ap_c(TA_KEEPS_A_RECOVERY); }
+    else if (k == BP_V_ROUND) { ovl_bp_ap_c(TA_ROUND_COMPLETE); }
+    else if (k == BP_V_OVER) ovl_bp_ap_c(TA_GAME_OVER);
     else return 0;
     return 1;
 }
@@ -425,7 +428,7 @@ static void ovl_bp_ap_committed(const BPResult *r)
         c = ovl_bp_ap_cue(k);
         if (c > best) best = c;
         if (ovl_bp_ap_line(e)) {
-            if (k == BP_V_DETAIN && pk == BP_V_ROLL) ovl_bp_ap_c(" (third double)");
+            if (k == BP_V_DETAIN && pk == BP_V_ROLL) ovl_bp_ap_c(TA_THIRD_DOUBLE);
             bp_log_add(bp_ap_ln);
         }
         if (k == BP_V_MOVE) {                   /* landing on a mortgaged computer pays no rent */
@@ -433,7 +436,7 @@ static void ovl_bp_ap_committed(const BPResult *r)
             if (sp != BP_NOBODY && bp_game.mortgaged[sp] && bp_game.owner[sp] != e->seat
                 && bp_game.owner[sp] != BP_NOBODY) {
                 bp_ap_ll = 0; bp_ap_ln[0] = 0;
-                ovl_bp_ap_sp(e->space); ovl_bp_ap_c(" mortgaged: no rent");
+                ovl_bp_ap_sp(e->space); ovl_bp_ap_c(TA_MORTGAGED_NO_RENT);
                 bp_log_add(bp_ap_ln);
             }
         }
@@ -492,8 +495,12 @@ static void ovl_bp_ap_chat(int machine, const char *text)
 static int ovl_bp_ap_start(void)
 {
     os88_video(&bp_ap_video);
-    bp_ap_artseg = 0;
-    if (os88_part_lazyok(1) && os88_part_fetch(1) == 0) bp_ap_artseg = os88_part_seg(1);
+    /* both art parts or no game (SPEC.md 131.10.7): the UI text is in them */
+    if (!os88_part_lazyok(1) || !os88_part_lazyok(2)) { os88_toast("Not enough memory", 0); return 0; }
+    if (os88_part_fetch(1) != 0) { os88_toast("Cannot read the art", 0); return 0; }
+    if (os88_part_fetch(2) != 0) { os88_part_drop(1); os88_toast("Cannot read the art", 0); return 0; }
+    bp_ap_artseg = os88_part_seg(1);
+    bx_setart2(os88_part_seg(2));
     bp_ap_bandseg = os88_mem_claim_p(BP_AP_BANDP);
     if (bp_ap_bandseg) os88_mem_movable(bp_ap_bandseg, 1);
     bp_face_init(0, bp_ap_artseg, bp_ap_bandseg, BP_AP_BANDP * 16, bp_ap_video.bpp);
@@ -509,8 +516,8 @@ static int ovl_bp_ap_start(void)
     os88_wm_minsize(bp_win, 560, 160);
     os88_menu_set(bp_win, &bp_ap_menus);
     bp_ap_timer_ok = os88_wm_timer(bp_win, 1) == 0;
-    bp_log_add("Welcome to Byteopoly.");
-    bp_log_add("Choose players, then Start.");
+    bp_log_add(TA_WELCOME_TO_BYTEOPOLY);
+    bp_log_add(TA_CHOOSE_PLAYERS_THEN);
     return 1;
 }
 

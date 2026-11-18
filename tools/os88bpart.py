@@ -7,6 +7,8 @@ tools/os88bbart.py's packers (Breadboard XT's BBART.BIN, SPEC.md 130.6.3) as
 imports - the layout is the same, only the magic is 'BP'.
 
     build -o BPART.BIN          pack sprites.txt, fonts, help.txt (make)
+    build2 -o BPART2.BIN        pack art2.h's part: sprites2.txt, tx-*.txt, scenes, music (make)
+    txh                         rewrite apps/byteopoly/bptx.h from art/tx-*.txt
     --selfcheck                 every art.h ID once, sizes, key colour, twins
     draft [-o sprites.txt]      quantise art/master*.png's pictures once
     mono-draft                  (re)derive every missing _M twin into sprites.txt
@@ -26,16 +28,32 @@ ARTDIR = os.path.join(ROOT, "apps", "byteopoly", "art")
 SPRITES = os.path.join(ARTDIR, "sprites.txt")
 HELP = os.path.join(ARTDIR, "help.txt")
 UITEXT = os.path.join(ARTDIR, "uitext.txt")
-def pack_text(path):
+def help_lines(path):
     """help.txt: '# ' comment lines and blanks skipped; '#KEYS' is a real line."""
-    out = bytearray()
+    out = []
     for line in open(path).read().split("\n"):
         if not line or (line.startswith("#") and line != "#KEYS"):
             continue
         if len(line) > 47 or any(not 32 <= ord(c) < 127 for c in line):
             fail(f"{path}: {line!r}: printable ASCII, 47 characters at most")
-        out += line.encode("ascii") + b"\0"
-    return bytes(out + b"\0")
+        out.append(line)
+    return out
+
+
+def pack_itext(lines):
+    """An INDEXED text record (SPEC.md 131.10.7): dw n, n word offsets from the
+    record's start, then the n lines, each NUL-terminated."""
+    n = len(lines)
+    head = bytearray(struct.pack("<H", n))
+    body = bytearray()
+    for s in lines:
+        head += struct.pack("<H", 2 + 2 * n + len(body))
+        body += s.encode("ascii") + b"\0"
+    return bytes(head + body)
+
+
+def pack_text(path):
+    return pack_itext(help_lines(path))
 
 
 TEXTS = {"BP_A_HELP": HELP, "BP_A_UITEXT": UITEXT}
@@ -207,8 +225,8 @@ def selfcheck():
             continue
         if name in TEXTS:
             if name == "BP_A_HELP":
-                lines = pack_text(TEXTS[name]).split(b"\0")
-                if b"#KEYS" not in lines or lines.index(b"#KEYS") < 16 or len(lines) < 40:
+                lines = help_lines(TEXTS[name]) if os.path.exists(TEXTS[name]) else []
+                if "#KEYS" not in lines or lines.index("#KEYS") < 16 or len(lines) < 40:
                     fail("selfcheck: BP_A_HELP needs rules lines, a #KEYS line, then key lines")
             continue
         if name not in sprites:
@@ -232,7 +250,10 @@ def selfcheck():
     extra = set(sprites) - set(ids)
     if extra:
         fail(f"selfcheck: sprites.txt has unknown {sorted(extra)}")
-    print(f"os88bpart: selfcheck OK ({len(ids)} IDs, {len(sprites)} sprites)")
+    read_ids2()
+    read_sprites2()
+    txh(check=True)
+    print(f"os88bpart: selfcheck OK ({len(ids)} IDs, {len(sprites)} sprites, bptx.h current)")
 
 
 def size_rules():
@@ -493,9 +514,222 @@ def mono_draft():
     print("os88bpart: mono twins derived")
 
 
+# --- the second art part, BPART2.BIN (SPEC.md 131.10.7) --------------------
+
+ART2_H = os.path.join(ROOT, "apps", "byteopoly", "art2.h")
+SPRITES2 = os.path.join(ARTDIR, "sprites2.txt")
+BPTX_H = os.path.join(ROOT, "apps", "byteopoly", "bptx.h")
+MAXBYTES2 = 57344       # 56 KB unpacked: one part, one segment, one claim
+TX_FILES = ["app", "panels", "setup", "face", "side", "save", "link", "rules"]   # BP_A2_TX_APP + r
+TX_LIMIT = 63           # bx_str's slot: 63 characters and a NUL
+TX_LINES = 512          # a handle's line field is nine bits
+TX_HANDLE = 0x1000      # handle = 1000h + (r << 9) + line
+
+
+def defines(*paths):
+    """Every `#define NAME <int>` of the art headers: the symbols scenes and
+    music records may name (DECISIONS D1)."""
+    out = {}
+    for path in paths:
+        for m in re.finditer(r"^#define (\w+)\s+(\d+)\b", open(path).read(), re.M):
+            out[m.group(1)] = int(m.group(2))
+    return out
+
+
+def read_ids2():
+    d = {k: v for k, v in defines(ART2_H).items() if k.startswith("BP_A2_")}
+    base, count = d.get("BP_A2_BASE"), d.get("BP_A2_COUNT")
+    if base != 256 or not count or count <= base or count > 512:
+        fail("art2.h: BP_A2_BASE must be 256 and BP_A2_COUNT in 257..512")
+    ids = {}
+    for k, v in d.items():
+        if k in ("BP_A2_BASE", "BP_A2_COUNT"):
+            continue
+        if not base <= v < count:
+            fail(f"art2.h: {k} = {v} is outside {base}..{count - 1}")
+        if v in ids:
+            fail(f"art2.h: {k} and {ids[v]} are both {v}")
+        ids[v] = k
+    return base, count, ids
+
+
+def read_sprites2():
+    if not os.path.exists(SPRITES2):
+        return {}
+    out, lines, i = {}, open(SPRITES2).read().split("\n"), 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"sprite (BP_A2_\w+) (\d+) (\d+)$", line)
+        if not m:
+            fail(f"{SPRITES2}:{i}: expected `sprite BP_A2_NAME W H`, got {line!r}")
+        name, w, h = m.group(1), int(m.group(2)), int(m.group(3))
+        if name in out:
+            fail(f"{SPRITES2}:{i}: {name} twice")
+        if not (1 <= w <= 255 and 1 <= h <= 255):
+            fail(f"{SPRITES2}:{i}: {name} is {w}x{h}")
+        rows = []
+        for r in range(h):
+            row = lines[i].rstrip() if i < len(lines) else ""
+            i += 1
+            if len(row) != w or any(c not in CHARS for c in row):
+                fail(f"{SPRITES2}:{i}: {name} row {r} is {row!r}, want {w} of {CHARS!r}")
+            rows.append([CHARS.index(c) for c in row])
+        out[name] = (w, h, rows)
+    return out
+
+
+def c_unescape(s, where):
+    out, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c != "\\":
+            out.append(c)
+            i += 1
+            continue
+        n = s[i + 1:i + 2]
+        if n in "\\\"'":
+            out.append(n)
+            i += 2
+        elif n == "n":
+            out.append("\n")
+            i += 2
+        elif n.isdigit():
+            m = re.match(r"[0-7]{1,3}", s[i + 1:])
+            out.append(chr(int(m.group(0), 8)))
+            i += 1 + len(m.group(0))
+        else:
+            fail(f"{where}: unknown escape \\{n}")
+    return "".join(out)
+
+
+def read_tx(r):
+    """art/tx-<file>.txt: `NAME "text"` lines, in handle order."""
+    path = os.path.join(ARTDIR, f"tx-{TX_FILES[r]}.txt")
+    if not os.path.exists(path):
+        return path, []
+    out = []
+    for k, line in enumerate(open(path).read().split("\n"), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        m = re.match(r'(T[A-Z]_\w+) "((?:[^"\\]|\\.)*)"\s*$', line)
+        if not m:
+            fail(f"{path}:{k}: expected `TX_NAME \"text\"`, got {line!r}")
+        s = c_unescape(m.group(2), f"{path}:{k}")
+        if len(s) > TX_LIMIT or any(not 32 <= ord(c) < 127 for c in s):
+            fail(f"{path}:{k}: {m.group(1)}: printable ASCII, {TX_LIMIT} characters at most")
+        out.append((m.group(1), m.group(2), s))
+    if len(out) > TX_LINES:
+        fail(f"{path}: {len(out)} lines, over {TX_LINES}")
+    return path, out
+
+
+def all_tx():
+    seen, recs = {}, []
+    for r in range(len(TX_FILES)):
+        path, lines = read_tx(r)
+        for name, _, _ in lines:
+            if name in seen:
+                fail(f"{path}: {name} is also in {seen[name]}")
+            seen[name] = path
+        recs.append(lines)
+    return recs
+
+
+def bptx_text():
+    out = ["/* GENERATED by tools/os88bpart.py from apps/byteopoly/art/tx-*.txt -",
+           " * do not edit: change the .txt and run `python3 tools/os88bpart.py txh`.",
+           " * A UI string is a TEXT HANDLE (SPEC.md 131.10.7): 1000h + (record << 9)",
+           " * + line, resolved where the text is read (bx_text, bx_twidth, bx_str).",
+           " * The host harness (BP_HOST) gets the literal instead. */",
+           "#ifndef BYTEOPOLY_BPTX_H", "#define BYTEOPOLY_BPTX_H",
+           "#ifdef BP_HOST", "#define BPT(h, s) (s)", "#define bx_str(s) (s)", "#else",
+           "#define BPT(h, s) ((const char *)(h))",
+           "const char *bx_str(const char *s);", "#endif"]
+    for r, lines in enumerate(all_tx()):
+        out.append(f"/* tx-{TX_FILES[r]}.txt: record {460 + r} */")
+        for k, (name, raw, _) in enumerate(lines):
+            out.append(f'#define {name} BPT(0x{TX_HANDLE + (r << 9) + k:04X}, "{raw}")')
+    out.append("#endif")
+    return "\n".join(out) + "\n"
+
+
+def txh(check=False):
+    want = bptx_text()
+    have = open(BPTX_H).read() if os.path.exists(BPTX_H) else ""
+    if check:
+        if have != want:
+            fail("apps/byteopoly/bptx.h is stale: run `python3 tools/os88bpart.py txh`")
+        return
+    if have != want:
+        with open(BPTX_H, "w") as f:
+            f.write(want)
+    print(f"os88bpart: {BPTX_H} {'unchanged' if have == want else 'written'}")
+
+
+def build2(out_path):
+    base, count, ids = read_ids2()
+    txh(check=True)
+    blobs, kinds = {}, {}
+    sprites = read_sprites2()
+    byname = {v: k for k, v in ids.items()}
+    for name, spr in sprites.items():
+        if name not in byname:
+            fail(f"sprites2.txt defines {name}, which art2.h does not list")
+        blobs[byname[name]] = bb.pack_sprite(*spr)
+        kinds[byname[name]] = "sprite"
+    for r, lines in enumerate(all_tx()):
+        tid = defines(ART2_H).get(f"BP_A2_TX_{TX_FILES[r].upper()}")
+        if tid != 460 + r:
+            fail(f"art2.h: BP_A2_TX_{TX_FILES[r].upper()} must be {460 + r}")
+        blobs[tid] = pack_itext([s for _, _, s in lines])
+        kinds[tid] = "text"
+    if os.path.exists(os.path.join(HERE, "os88gk.py")):      # the kit's scenes (D1)
+        import glob
+        import os88gk
+        paths = sorted(glob.glob(os.path.join(ARTDIR, "scenes-*.txt")))
+        if paths:
+            for sid, rec in os88gk.compile_scenes(paths, defines(ART_H, ART2_H)).items():
+                if not base <= sid < count:
+                    fail(f"a scene's ID {sid} is outside art2.h's {base}..{count - 1}")
+                if sid in blobs:
+                    fail(f"scene ID {sid} already has a record")
+                blobs[sid] = rec
+                kinds[sid] = "scene"
+    # ---- sound lane ----
+    # (the music hook: compile_music / compile_sfx into BP_A2_MUSIC / BP_A2_SFX
+    # when art/music.txt and art/sfx.txt and tools/os88gkmus.py exist; set
+    # kinds[id] = "music")
+    # ---- end sound lane ----
+    n = count - base
+    head = bytearray(b"B2" + struct.pack("<H", n)) + bytes(2 * n)
+    body = bytearray()
+    for i in range(n):
+        if base + i not in blobs:
+            continue
+        off = len(head) + len(body)
+        if off & 1:
+            body.append(0)
+            off += 1
+        struct.pack_into("<H", head, 4 + 2 * i, off)
+        body += blobs[base + i]
+    data = bytes(head + body)
+    if len(data) > MAXBYTES2:
+        fail(f"BPART2.BIN is {len(data)} bytes, over {MAXBYTES2}")
+    with open(out_path, "wb") as f:
+        f.write(data)
+    by = {}
+    for i, k in kinds.items():
+        by[k] = by.get(k, 0) + len(blobs[i])
+    print(f"os88bpart: {out_path}: {len(data)} bytes, {len(blobs)} of {n} entries ("
+          + ", ".join(f"{v} {k}" for k, v in sorted(by.items())) + ")")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", nargs="?", choices=["draft", "build", "png", "mono-draft"])
+    ap.add_argument("cmd", nargs="?", choices=["draft", "build", "build2", "txh", "png", "mono-draft"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("-o", "--out")
     ap.add_argument("--mono", action="store_true")
@@ -509,6 +743,12 @@ def main():
         if not a.out:
             fail("build needs -o")
         build(a.out)
+    elif a.cmd == "build2":
+        if not a.out:
+            fail("build2 needs -o")
+        build2(a.out)
+    elif a.cmd == "txh":
+        txh()
     elif a.cmd == "png":
         png(a.arg or "build/bpart-png", a.mono)
     elif a.cmd == "mono-draft":

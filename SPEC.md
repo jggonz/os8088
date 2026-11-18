@@ -255151,6 +255151,15 @@ and calls only `bp_pn_draw`; `bp_face_hit_space` then answers -1 and
 `bp_face_key` 0. Back to 0 or `BP_PN_CENTRE`, the layout is rebuilt and
 everything repainted - the only coverage change that costs a whole window.
 
+**Two files.** The face is `bp_face.c` (layout, the ring and its cells, the
+centre, the hint bar, painting, damage, input and the widget kit) and
+`bp_side.c` (the sidebar: the players, details, link and log boxes, their
+signatures, the sidebar's share of the layout, `fc_sidelayout`, and the log
+ring). `byteoply.c` includes `bp_side.c` right after `bp_face.c`, which
+forward-declares the side's entry points; they share one translation unit
+and the `fc_` prefix, so the split moves code without changing it, and two
+lanes can own the board and the sidebar apart.
+
 #### 131.8.2 A cell
 
 A cell is its own repaint unit (`ovl_fc_cell`): ground white, a 1 px black
@@ -255711,10 +255720,12 @@ and `sprites.txt` is then finished by hand; from then on the text is the source.
 Little-endian, read by the shared drawing core (`bx_art_at`, 130.6.3): `'BP'`, the ID count, one
 word offset per ID (0 = absent), then the records: sprites as `db w, db h` and packed 4bpp rows (high
 nibble left, colour 13 transparent); fonts as height, ascent, first, count, widths and per-glyph
-two-byte rows; the help as NUL-terminated lines ending in an empty one (`bx_artstr`, 47
-characters at most; in `BP_A_HELP` a `#KEYS` line starts the Keys page; `BP_A_UITEXT`, last, is the same record for UI strings, empty until a lane fills `art/uitext.txt`). Packing is deterministic and shares `tools/os88bbart.py`'s packers as
-imports. It is lazy part 1 of `BYTEOPLY.O88` (`os88_part_lazyok`); without it the face is drawn
-plain.
+two-byte rows; the help and `BP_A_UITEXT` as INDEXED text records (131.10.7: a line count, a
+word offset per line, then the NUL-terminated lines; `bx_artstr`, 47 characters at most; in
+`BP_A_HELP` a `#KEYS` line starts the Keys page; `BP_A_UITEXT`, last, is empty - the UI strings
+are BPART2.BIN's `tx-*` records). Packing is deterministic and shares `tools/os88bbart.py`'s
+packers as imports. It is lazy part 1 of `BYTEOPLY.O88`, and REQUIRED (131.10.7): without it
+Byteopoly does not open.
 
 #### 131.10.4 Sizes
 
@@ -255742,15 +255753,88 @@ rules lines, the `#KEYS` line, then key lines.
 #### 131.10.6 Tool and size
 
 `os88bpart.py build -o`, `--selfcheck`, `draft`, `png DIR [--mono]`. The measured size is in
-`art/PROMPT.md` and the art lane's report: BPART.BIN is 55,473 bytes (44,296 of sprites, 9,087 of fonts,
-2,090 of text; cap 56 KB = 57,344 unpacked), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
-included; loaded it is a 55KB lazy claim and a machine without the room draws the plain face.
+`art/PROMPT.md` and the art lane's report: BPART.BIN is 55,592 bytes (44,295 of sprites, 9,087 of fonts,
+2,210 of indexed text; cap 56 KB = 57,344 unpacked), 17,614 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
+included; loaded it is a 55KB lazy claim, and a machine without the room is refused (131.10.7).
 
 #### 131.10.7 The second art part (the uplift)
 
-Reserved for the prep lane (docs/plans/BYTEOPOLY-UPLIFT-PLAN.md, U3/U4):
-`BPART2.BIN`, its ID routing (`apps/byteopoly/art2.h`, `BP_A2_BASE`), the
-text records and the rule that the art parts are required.
+**The art parts are required.** From the uplift on, Byteopoly opens only with
+both art parts in memory: the UI text lives in them (below), and a plain face
+would double every drawing path for a machine the game does not target.
+`ovl_bp_ap_start` asks `os88_part_lazyok` for each and fetches them before it
+claims anything else; when either cannot be had it drops what it fetched and
+`os88_main` answers 0 after one toast saying why - "Not enough memory" when
+the part would not fit, "Cannot read the art" when the read failed (§47: a
+refusal names a fact). Both stay lazy rather than eager so each is its own
+claim (the eager carve would be one ~180 KB block). The no-art fallbacks the
+core's callers carried (a die drawn as a number in a box, a level as drawn
+pips where the RAM chip art exists, the mortgage "M" box, the Rules page's
+"the help text is part of the art file") are gone; COMPACT's drawn pips and
+the framed keycaps of FULL and MID stay, being layout choices, not
+fallbacks.
+
+**`BPART2.BIN`** is lazy part 2 of `BYTEOPLY.O88` (OP_ASSET, OP_LAZY|OP_COMP,
+cap 56 KB unpacked = 57,344 bytes). Its IDs are `apps/byteopoly/art2.h`'s,
+256 (`BP_A2_BASE`) up to `BP_A2_COUNT`; ranges are reserved per lane there.
+The layout is BPART.BIN's (131.10.3) with magic `'B2'`, the count
+`BP_A2_COUNT - 256`, one word offset per index (ID - 256; 0 = no record),
+then the records: sprites (`art/sprites2.txt`, the same text format with
+`BP_A2_` names; an ID with no record is offset 0 and draws nothing), the
+indexed text records below (`art/tx-*.txt`), the kit's scene records
+(SPEC.md 132.6; `tools/os88gk.py`'s `compile_scenes` over every
+`art/scenes-*.txt`, only when that tool exists) and the music records (the
+sound lane's delimited block, SPEC.md 132.8). `os88bpart.py build2 -o`
+builds it; `make` rebuilds it when `art2.h`, any `art/*.txt` or the kit's
+and the player's tools change.
+
+**Routing (`BX_ART2`).** The band core (`apps/breadxt/draw.inc`) assembles
+with `BX_ART2` defined only for Byteopoly; Breadboard XT, which includes the
+same core without it, assembles byte for byte as before. Under it
+`bx_art_at` sends an ID of 256..511 to the second segment with index ID - 256,
+so `bx_spr`, `bx_size`, fonts, scenes and the music player reach either part
+by ID alone, and `void bx_setart2(unsigned seg)` names that segment (both
+parts are pinned: `CC_ONMOVE_PARTS` is not defined).
+
+**Indexed text records.** Under `BX_ART2` every text record is INDEXED: `dw n`,
+`n` word offsets from the record's start, then the `n` lines, each
+NUL-terminated - line k is found in one step, not by walking k lines. This
+holds for `BP_A_HELP` and `BP_A_UITEXT` in BPART.BIN as well (the Rules page
+used to rescan the help from line 0 for every line of every strip), so
+`bx_artstr(id, n, buf)` keeps its contract (line n, at most 47 characters
+and a NUL; 0 and "" when absent) and costs the same for line 0 and line 90.
+
+**Text handles.** A UI string that lives in a text record is named in the C
+by a HANDLE, a `const char *` whose value is 1000h + (r << 9) + k: line k
+(0..511) of text record `BP_A2_TX_APP + r` (r = 0..7). No string of the
+package can sit below 2000h (`.rodata` follows `.text`, which starts with
+the runtime), so the value cannot be mistaken for a real pointer, and NULL
+stays NULL. A handle is resolved where text is CONSUMED, never where it is
+named: `bx_text` and `bx_twidth` resolve their string argument themselves,
+and C code that reads the characters (copies, appends, hashes, a toast, an
+alert) calls `const char *bx_str(const char *s)` first, which answers a
+real pointer unchanged and a handle as the line copied into the next of four
+64-byte slots of a resident ring (63 characters at most). A slot is good
+until four more handles are resolved, so code takes a resolved pointer to
+its use at once. Handles compare equal when they name the same line, so
+`bpl.msg != why` keeps working.
+
+The text source is `apps/byteopoly/art/tx-<file>.txt`, one record per C file
+(`tx-app` 460, `tx-panels` 461, `tx-setup` 462, `tx-face` 463, `tx-side`
+464, `tx-save` 465, `tx-link` 466, `tx-rules` 467 - the engine's error texts
+and the cards' titles and texts): `#` comments and lines `NAME "text"`, NAME
+`T<letter>_...` (A app, P panels, S setup, F face, D side, V save, L link,
+R rules), C escapes, printable ASCII. Line order is handle order. `os88bpart.py`
+writes `apps/byteopoly/bptx.h` from them (checked in, as `docs/INDEX.md` is;
+`os88bpart.py --selfcheck` fails the build when it is stale and `os88bpart.py
+txh` rewrites it): one `#define NAME BPT(handle, "text")` a line, where the
+host harness (`BP_HOST`, 131.12) defines `BPT(h, s)` as the literal `s` and
+`bx_str(s)` as `s`, so the harness sees the same text the guest draws, and
+the guest defines it as the handle. Kept as literals: the menus, the About
+card and anything the OS reads or keeps (window title, file names, the file
+dialog's default name, a question an alert shows while it is up - a ring
+slot would not outlive it), the board's names (`bp_board.c`), single characters, and the
+templates whose layout code indexes into (`ovl_msg`'s "Banker COM0 2400 rev ").
 
 #### 131.10.8 The uplift's pictures
 
@@ -255798,9 +255882,23 @@ records, 29,171 bytes packed (budget 30 KB); `BPART.BIN` is unchanged at 55,473.
 
 Every byte is measured, not assumed (US-25). `APP_MAX_SIZE` (65,024 bytes)
 bounds the resident image plus bss; the eager embedded overlay (§73.14.2)
-has its own 64 KB segment and holds code only; the art is a lazy part; the
-band is a 16 KB movable heap claim with a 2 KB bss fallback. Budgets at the
-foundation (each lane measures its own and reports it):
+has its own 64 KB segment and holds code only; the art is two lazy parts,
+both required (131.10.7); the band is a 16 KB movable heap claim with a 2 KB
+bss fallback.
+
+| part | row | kind | holds | measured (uplift prep, unpacked / lz4) |
+|---|---|---|---|---|
+| resident image + bss | - | the package | runtime, core, rules, codec, link, face, side, app | 49,372 + 8,863 = 58,235 of 65,024 |
+| `BYTEOPLY.OVL` | 0 | eager, embedded (`CC_OVL_PART`) | every `ovl_*` function | 63,430 of 65,536 / 30,362 |
+| `BPART.BIN` | 1 | lazy asset, required | art.h: sprites, fonts, the help | 55,592 of 57,344 / 17,614 |
+| `BPART2.BIN` | 2 | lazy asset, required | art2.h: new sprites, the UI text, scenes, music | 7,665 of 57,344 / 5,087 (text only so far) |
+
+String literals in the resident image fell from 7,001 bytes to 941 when the
+UI text moved to `BPART2.BIN` (131.10.7); what is left is the board's names,
+the menus, the About card and what the OS reads. A literal named in overlay
+code is still resident (§73.14), so new UI text goes in a `tx-*.txt` record,
+never in the C. Budgets at the foundation (each lane measures its own and
+reports it):
 
 | part | budget | holds |
 |---|---|---|

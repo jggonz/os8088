@@ -101,7 +101,8 @@
 #define BP_A2_SC_PANB     430   /* 430..439 panels-B lane (every other centre panel) */
 #define BP_A2_SC_LOBBY    440   /* 440..449 lobby lane (New Game, cable lobby) */
 
-/* ---- text records (bx_artstr lines), one per source file: prep lane ----- */
+/* ---- text records, one per source file (indexed; a C name in bptx.h is a
+ * TEXT HANDLE into one, SPEC.md 131.10.7; source art/tx-*.txt): prep lane - */
 #define BP_A2_TX_APP      460
 #define BP_A2_TX_PANELS   461
 #define BP_A2_TX_SETUP    462
