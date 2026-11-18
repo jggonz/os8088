@@ -1,0 +1,3 @@
+# 2B99 existing sprite artwork retained losslessly from the original 2BR2.
+# Rebuild on host: python tools/2br3.py convert resources/legacy/2B99-2BR2.RES samples/2B99.RES --name THINGS --count 99
+# The original .RES is retained in source workspace resources/legacy.

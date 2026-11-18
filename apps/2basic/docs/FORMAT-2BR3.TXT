@@ -1,0 +1,54 @@
+2BR3 RESOURCE FILE FORMAT
+========================
+
+2BR3 stores independently named resources in a compact, uncompressed
+little-endian file. 2BASIC loads 2BR3 and compatible 2BR2 sprite packs.
+
+HEADER (24 BYTES)
+-----------------
+  Offset  Size   Meaning
+     0      4    ASCII 2BR3
+     4      1    version = 3
+     5      1    flags = 0
+     6      2    resource entry count
+     8      2    directory start offset (24)
+    10      2    first data offset (24 + 24 * entries)
+    12      2    total file length in bytes
+    14      1    directory record size (24)
+    15      1    reserved = 0
+    16      2    sum of all bytes from offset 24 to EOF, modulo 65536
+    18      6    reserved = 0
+
+DIRECTORY ENTRY (24 BYTES)
+--------------------------
+     0     12    resource name, uppercase ASCII, NUL-padded
+    12      1    type
+    13      1    flags
+    14      2    image width, or 0
+    16      2    image height, or 0
+    18      2    payload offset, little-endian, even
+    20      2    payload length
+    22      2    sprite count or signed-word count, otherwise 0
+
+RESOURCE TYPES
+--------------
+SPRITES1: tightly packed 1-bit 16x16 sprites (32 bytes each).
+IMG1:     single monochrome image, packed bits.
+IMG4:     4 bits per pixel, palette indexes 0..15.
+TEXT:     raw ASCII/CP437 text bytes.
+DATA:     raw unsigned bytes.
+WORDS16:  signed 16-bit little-endian values.
+
+Names start with A-Z and otherwise contain A-Z, 0-9 and underscore,
+up to 12 characters. Payloads are even-aligned; no compression is used.
+
+RUNTIME CAPACITY
+----------------
+2BASIC accepts one active pack up to 8 KB with at most 32 entries.
+2BRES manages one 16x16 sprite bank plus up to four other entries,
+limited to 8 KB total and up to 1 KB per additional data entry.
+The host packer can create larger packs than those runtime limits;
+check size and entry count before deploying them.
+
+See tools/2br3.py in the source package for conversion, packing,
+inspection, extraction and verification.

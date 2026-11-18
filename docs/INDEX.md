@@ -348,6 +348,8 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | package | source | SPEC | ships |
 |---|---|---|---|
 | 1942 | `apps/1942/1942.asm` | §101 | yes |
+| 2BASIC | `apps/2basic/2basic.asm` | §132 | no |
+| 2BRES | `apps/2basic/2bres.asm` | §132 | no |
 | APPLE2 | `apps/apple2/apple2.asm` | `docs/APPLE2-SPEC.md` | yes |
 | ARCADE | `apps/arcade/arcade.asm` | §48.1 | no |
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 | yes |
@@ -566,6 +568,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 129 | PageDesk — a native PDF viewer and editor (`apps/pagedesk/`, `PAGEDESK.O88`) |
 | 130 | Breadboard XT — educational circuit workbench, written in C |
 | 131 | Byteopoly — a vintage-computer trading game, written in C (`apps/byteopoly/`, `BYTEOPLY.O88`) |
+| 132 | 2BASIC — a BASIC interpreter and its resource editor (`apps/2basic/`, `2BASIC.O88`, `2BRES.O88`) |
 | 133 | The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`) |
 
 ## docs/
