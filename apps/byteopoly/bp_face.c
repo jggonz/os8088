@@ -678,13 +678,13 @@ static void fc_hint(void)
         lw = bx_twidth(sp, fc_fb);
         if (kw > 0 && kw < 8) {
             os88_memcpy(fc_fit, h, kw); fc_fit[kw] = 0;
-            kw = bx_twidth(fc_fit, fc_fb) + 8;
+            kw = bx_twidth(fc_fit, fc_fb) + (bp_layout == BP_LAY_FULL ? 17 : 12);   /* the kit cap's edge and shade take 5 */
             if (x + kw + 4 + lw > x2) break;
             if (bp_layout == BP_LAY_FULL) gk_keycap(x, y, kw, kh, fc_fit, fc_fb);
             else {                                      /* 8-row labels do not read inside the kit's cap (1bpp) */
                 bx_fill(x, y, x + kw - 1, y + kh - 2, 15);
                 bx_fill(x, y + kh - 1, x + kw - 1, y + kh - 1, bp_mono ? 15 : 8);
-                bx_text(x + 4, y + (kh - 1 - fc_fh) / 2, fc_fit, 0, fc_fb);
+                bx_text(x + 6, y + (kh - fc_fh) / 2 + 1, fc_fit, 0, fc_fb);
             }
             kw += 4;
         } else kw = 0;
