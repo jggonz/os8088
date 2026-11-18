@@ -255840,7 +255840,12 @@ source no longer assembled. The changes, all mechanical:
   edge under it, a group box's usual look.
 - **Both regions are movable (§66.6.1.1)**, and the interpreter's worker is
   declared restartable (§66.6.2): it parks only in `OSAPI_TASK_ALIVE`, at the
-  top of its loop.
+  top of its loop. The three claims are pinned for the length of one command
+  and registered as such (`tests/pins.txt`, bucket C).
+- **Both declare `OS88_HIGH | OS88_HIGHMEM`** (§20.18, KERN-MEGA-PLAN
+  14.51): neither does arithmetic on its own segment or a claim's - a claim
+  segment is only ever loaded into ES or DS - and neither calls the BIOS,
+  stamps a vector or hands a buffer to DMA.
 
 - **Grey grounds are white on 1bpp (§39.4).** FORM, the dialogs and 2BRES's
   window stand on light grey in colour. On a 1bpp adapter grey is a dither,
@@ -255903,12 +255908,14 @@ it is data rather than build output.
 ### 132.7 Verification
 
 No suite row runs 2BASIC; the rows its build reaches are the fast tier's
-`textrules`, `stkapps`, `movable`, `livefull`, `retired` and `docindex`.
+`textrules`, `stkapps`, `movable`, `livefull`, `retired` and `docindex`, and
+the full tier's `megahigh` and `pins`.
 Upstream's own acceptance programs were run by hand on the glass:
 `AUTOLANG` (36 checks), `AUTOR3` (10), `FORMISO` (6) and `AUTOFORM` (10)
 pass on kern_big in QEMU; `AUTOLANG` passes on MartyPC's 4.77 MHz CGA
 5150 within 60 guest seconds; `AUTOR3` and `HELP` run on kern_small on the
-128 KB CGA machine and on kern_mega in QEMU. FORM events, `INPUTBOX`,
+128 KB CGA machine, and `AUTOLANG`, `AUTOR3`, `HELP`, `SAVE`/`LOAD` and
+Blackjack on kern_mega in QEMU with both high bits declared. FORM events, `INPUTBOX`,
 `MESSAGEBOX`, `SAVE`/`LOAD`, `SVAR`/`LVAR` (the wake path), `FRE(0)`, the
 graphics primitives, Blackjack and 2B99 were driven in QEMU, 2BRES opened
 `MIXED.RES` through the file dialog, and the FORM, a dialog and 2BRES were

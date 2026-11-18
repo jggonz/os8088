@@ -3,7 +3,7 @@
 ; All file operations happen on the OS8088 UI task.
 %include "os88api.inc"
 
-    OS88_HEADER '2BRES', br_entry, 1, OS88_STACK_384
+    OS88_HEADER '2BRES', br_entry, 1, OS88_STACK_384 | OS88_HIGH | OS88_HIGHMEM
     OS88_ICON16
     ; Exactly 16 mask rows followed by 16 data rows (64 bytes total).
     dw 0FFFFh,0FFFFh,0FFFFh,0FFFFh,0FFFFh,0FFFFh,0FFFFh,0FFFFh

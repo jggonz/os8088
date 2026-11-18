@@ -5,7 +5,7 @@
 ; 
 %include "os88api.inc"
 
-    OS88_HEADER '2BASIC', bas_entry, 1, OS88_STACK_384
+    OS88_HEADER '2BASIC', bas_entry, 1, OS88_STACK_384 | OS88_HIGH | OS88_HIGHMEM
     OS88_ICON16
     dw 0FFFFh
     dw 0FFFFh
