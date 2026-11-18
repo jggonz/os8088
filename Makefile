@@ -11415,6 +11415,7 @@ $(BUILD)/BPART2.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h 
 	python3 tools/os88bpart.py build2 -o $@
 $(BUILD)/byteoply.raw.asm: $(BYTEOPOLYSRC)
 $(BUILD)/byteoply.bin: $(wildcard apps/byteopoly/*.inc) apps/breadxt/draw.inc \
+                       $(wildcard apps/cc/gk.inc apps/cc/gkmus.inc) \
                        apps/os88cable.inc apps/os88ui.inc
 $(BUILD)/byteoply.raw.asm: apps/cc/gk.h
 $(BUILD)/byteoply.bin: apps/cc/gkmus.inc
