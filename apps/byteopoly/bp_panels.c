@@ -8,6 +8,7 @@
  * Every function but the thin doors is an ovl_* (131.11: eager overlay);
  * only the data is resident. */
 
+#include "art2.h"                       /* BP_A2_* pictures and scenes (panb lane) */
 int bx_artstr(int id, int n, char *buf);
 /* #define BP_PANELS_DEMO 1 */   /* looking only: hand-made states, F5 steps; never shipped */
 
@@ -91,7 +92,9 @@ static BPByte gp_cn;
 #ifdef BP_PANELS_DEMO
 static BPByte gp_demo;
 static void ovl_gp_demoset(int n);
+#if BP_PANELS_DEMO == 2
 static void ovl_gp_demonew(void);
+#endif
 #if BP_PANELS_DEMO != 2
 #define bp_can(s, se, t, a) 0
 #endif
@@ -729,63 +732,81 @@ static void ovl_gp_dauc(void)
     if (bp_u32_sub(&gp_u2, &gp_bid) == BP_OK) { ovl_gp_la(cmp ? TP_LEFT : TP_WIN); ovl_gp_lv(&gp_u2); ovl_gp_la(cmp ? "" : TP_CR_LEFT); }
     ovl_gp_tl();
 }
+/* ---- panb: the kit-drawn panels (SPEC.md 131.9.13) ---------------------------- */
+#define GP_NOSPR 459            /* an art ID with no record: draws nothing */
+static const char *gp_sv[6];    /* a scene's string slots, its integer slots */
+static int gp_iv[10];
+static char gp_ub[3][14];       /* numbers for them */
+static int gp_ox, gp_oy;        /* the scene's origin, for the text the code adds */
+/* scene n (a CORE one h rows tall, centred in the free area; COMPACT's is
+ * drawn at the top) with variant sel */
+static void ovl_gp_usc(int n, int h, int sel)
+{
+    gp_ox = gp_r.x + (gp_r.w - 332) / 2;
+    gp_oy = gp_y;
+    if (bp_layout == BP_LAY_COMPACT) sel++;
+    else if (gp_btop - gp_y > h) gp_oy += (gp_btop - gp_y - h) / 2;
+    gp_iv[0] = sel;
+    gk_scene(BP_A2_SC_PANB + n, gp_ox, gp_oy, gp_sv, gp_iv);
+}
+/* string slot n = the number v, with its commas */
+static void ovl_gp_ns(int n, const BPU32 *v)
+{
+    ovl_gp_lb(); ovl_gp_lv(v);
+    os88_strcpy(gp_ub[n % 3], gp_line, 14);
+    gp_sv[n] = gp_ub[n % 3];
+}
+/* the labelled cell scene: a box at (x, y) w x h holding label over gp_line */
+static void ovl_gp_ucell(int x, int y, int w, int h, const char *label)
+{
+    gp_sv[0] = label; gp_sv[1] = gp_line;
+    gp_iv[1] = w; gp_iv[2] = h; gp_iv[3] = gp_fh + 4; gp_iv[4] = gp_font;
+    if (h < 2 * gp_fh) { gp_sv[0] = ""; gp_iv[3] = (h - gp_fh) / 2; }
+    gk_scene(BP_A2_SC_PANB + 4, x, y, gp_sv, gp_iv);
+}
 static void ovl_gp_dcard(void)
 {
     const BPCard *cd;
-    int sw;
+    int x, xr, y;
     cd = bp_card(bp_game.card);
     if (!cd) { ovl_gp_frame(TP_CARD_2); return; }
     ovl_gp_frame(cd->deck ? TP_SYSTEM_ERROR : TP_FLOPPY_FIND);
-    if (bp_layout != BP_LAY_COMPACT) {     /* the deck picture where it fits (Qqa2-21) */
-        sw = cd->deck ? (bp_mono ? BP_A_M_CARD_SE : BP_A_CARD_SE) : (bp_mono ? BP_A_M_CARD_FF : BP_A_CARD_FF);
-#ifdef BP_A_CARD_FF_S
-        if (bp_layout == BP_LAY_MID)        /* the 24x32 deck pair (art D27) */
-            sw = cd->deck ? (bp_mono ? BP_A_M_CARD_SE_S : BP_A_CARD_SE_S) : (bp_mono ? BP_A_M_CARD_FF_S : BP_A_CARD_FF_S);
-#endif
-        if (gp_y + (int)(bp_w_spritesz(sw) >> 8) <= gp_btop) {
-            sw = ovl_gp_sprite(sw);
-            if (sw && sw < 100) gp_x += sw + 8;
-        }
-    }
-    ovl_gp_t(cd->title, 0);
+    gp_sv[0] = ovl_gp_name(bp_game.decider); gp_sv[1] = cd->title;
+    gp_iv[1] = BP_A2_CARD_FF_T + cd->deck;
+    ovl_gp_usc(0, 150, 0);
+    x = gp_x; xr = gp_xr; y = gp_y;
+    if (bp_layout == BP_LAY_COMPACT) { gp_y += gp_pitch + 3; }
+    else { gp_x = gp_ox + 122; gp_xr = gp_ox + 320; gp_y = gp_oy + 64; }
     ovl_gp_para(cd->text, 0);
+    gp_x = x; gp_xr = xr; gp_y = y;
 }
 static void ovl_gp_drepair(void)
 {
-    int d;
+    int d, i;
     d = bp_game.decider;
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(TP_REPAIR_SHOP);
-    ovl_gp_frame(gp_line);
-    ovl_gp_lb(); ovl_gp_la(TP_DETAINED_FAILED_TRIES); ovl_gp_lu(bp_game.tries[d]); ovl_gp_la(TP_OF_3);
-    ovl_gp_tl();
-    ovl_gp_para(TP_PAY_50_CR, 0);
-    ovl_gp_lb(); ovl_gp_la(TP_CASH); ovl_gp_lm(&bp_game.cash[d]); ovl_gp_tl();
-    if (bp_game.disks[d]) {
-        ovl_gp_lb(); ovl_gp_la(TP_DISKS_HELD);
-        if (bp_game.disks[d] & 1) ovl_gp_la(TP_FLOPPY_FIND_2);
-        if (bp_game.disks[d] & 2) ovl_gp_la(TP_SYSTEM_ERROR);
-        ovl_gp_tl();
-    }
-    ovl_gp_para(TP_YOU_STILL_COLLECT, 0);
+    ovl_gp_frame(TB_REPAIR_SHOP);
+    gp_sv[0] = ovl_gp_name(d);
+    ovl_gp_ns(1, &bp_game.cash[d]);
+    bp_u32_set(&gp_u1, bp_game.tries[d], 0); ovl_gp_ns(2, &gp_u1);
+    for (i = 0; i < 3; i++) gp_iv[1 + i] = bp_game.tries[d] > i;
+    gp_iv[4] = bp_game.disks[d] & 1 ? BP_A_CARD_FF_S : GP_NOSPR;
+    gp_iv[5] = bp_game.disks[d] & 2 ? BP_A_CARD_SE_S : GP_NOSPR;
+    ovl_gp_usc(1, 150, 0);
 }
 static void ovl_gp_ddebt(void)
 {
-    int d;
+    int d, sh;
     d = bp_game.decider;
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(TP_DEBT_2);
-    ovl_gp_frame(gp_line);
-    ovl_gp_lb(); ovl_gp_la(TP_YOU_OWE); ovl_gp_la(ovl_gp_name(bp_game.debt_to)); ovl_gp_la(": ");
-    ovl_gp_lm(&bp_game.debt_amount); ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la(TP_YOUR_CASH); ovl_gp_lm(&bp_game.cash[d]); ovl_gp_tl();
+    ovl_gp_frame(TB_DEBT);
+    gp_sv[0] = ovl_gp_name(d); gp_sv[1] = ovl_gp_name(bp_game.debt_to);
+    ovl_gp_ns(2, &bp_game.debt_amount);
+    ovl_gp_ns(3, &bp_game.cash[d]);
     bp_u32_copy(&gp_u1, &bp_game.debt_amount);
-    if (bp_u32_sub(&gp_u1, &bp_game.cash[d]) == BP_OK && !bp_u32_iszero(&gp_u1)) {
-        ovl_gp_lb(); ovl_gp_la(TP_SHORT_BY); ovl_gp_lm(&gp_u1); ovl_gp_tl();
-        ovl_gp_para(TP_SELL_UPGRADES_OR, 0);
-    } else ovl_gp_t(TP_YOU_CAN_PAY, 0);
-    if (gp_conf) {
-        ovl_gp_t(TP_DECLARE_BANKRUPTCY_YOU, 0);
-        ovl_gp_lb(); ovl_gp_la(TP_AND_YOUR_ESTATE); ovl_gp_la(ovl_gp_name(bp_game.debt_to)); ovl_gp_tl();
-    }
+    sh = bp_u32_sub(&gp_u1, &bp_game.cash[d]) == BP_OK && !bp_u32_iszero(&gp_u1);
+    ovl_gp_ns(4, &gp_u1);
+    gp_iv[1] = bp_layout == BP_LAY_COMPACT ? 0 : sh ? 1 : 2;
+    gp_iv[2] = bp_mono ? 0 : 4;
+    ovl_gp_usc(2, 150, gp_conf ? 2 : 0);
 }
 /* names of a prop mask (and a disk byte's side) into gp_line */
 static void ovl_gp_names(const BPU32 *m, int disks)
@@ -844,71 +865,65 @@ static void ovl_gp_dtrade(void)
     ovl_gp_la(ovl_gp_name(t)); ovl_gp_la(TP_DECIDES);
     ovl_gp_para(gp_line, 0);
 }
-/* standings: cash + assets = score; the winners marked when the match is over */
+/* standings: cash + assets = score; the winners marked, with a victory block, when over */
+/* standings: cash + assets = score; the winners marked, with a victory block, when over */
+/* standings: cash + assets = score; the winners marked, with a victory block, when over */
+/* standings: cash + assets = score; the winners marked, with a victory block, when over */
 static void ovl_gp_dstand(int over)
 {
-    static char nb[8];
-    int s, w, c1, c2, c3, n;
+    int s, w, n, rh, cw, lay;
     ovl_gp_frame(over ? TP_GAME_OVER : TP_STANDINGS);
+    w = gp_xr - gp_x;
+    lay = bp_layout;
     if (over) {
-        n = 0;
-        for (s = 0; s < BP_SEATS; s++) n += (bp_game.winners >> s) & 1;
-        ovl_gp_lb(); ovl_gp_la(n > 1 ? TP_SHARED_WIN : TP_WINNER);
+        ovl_gp_lb();
         for (s = 0, n = 0; s < BP_SEATS; s++)
             if ((bp_game.winners >> s) & 1) {
                 if (n) ovl_gp_la(", ");
                 ovl_gp_la(ovl_gp_name(s)); n++;
             }
-        ovl_gp_tl();
+        os88_strcpy(gp_ub[0], gp_line, 14); gp_sv[0] = gp_ub[0];
+        gp_sv[1] = n > 1 ? TP_SHARED_WIN : TP_WINNER;
+        if (lay == BP_LAY_FULL) { gk_scene(BP_A2_SC_PANB + 8, gp_x, gp_y, gp_sv, gp_iv); gp_y += 90; }
+        else { gk_banner(gp_x, gp_y, w, gp_fh + 6, gp_line, gp_font, -1); gp_y += gp_fh + 10; }
     }
-    if (bp_game.rules == BP_RULES_QUICK && bp_layout != BP_LAY_COMPACT) {
-        ovl_gp_lb(); ovl_gp_la(TP_QUICK_MATCH_ROUND); ovl_gp_lu(bp_game.round); ovl_gp_la(TP_OF);
-        ovl_gp_lu(bp_game.rounds_limit); ovl_gp_tl();
-    }
-    w = gp_xr - gp_x;
-    c1 = gp_x + w * 36 / 100; c2 = gp_x + w * 58 / 100; c3 = gp_x + w * 80 / 100;
-    if (gp_y + gp_fh <= gp_btop) {
-        bp_w_text(c1, gp_y, TP_CASH_3, 0, gp_font);
-        bp_w_text(c2, gp_y, TP_ASSETS, 0, gp_font);
-        bp_w_text(c3, gp_y, TP_SCORE, 0, gp_font);
-    }
-    gp_y += gp_pitch;
+    rh = lay == BP_LAY_FULL ? 28 : lay == BP_LAY_MID ? 20 : 12;
+    cw = w / 5;
+    gp_iv[1] = w; gp_iv[6] = cw - 6; gp_iv[3] = w - 3 * cw; gp_iv[4] = gp_iv[3] + cw; gp_iv[5] = gp_iv[4] + cw;
+    gp_iv[2] = gp_iv[3] - (lay == BP_LAY_FULL ? 44 : 30);
+    gp_iv[0] = lay + 3;
+    gk_scene(BP_A2_SC_PANB + 5, gp_x, gp_y, gp_sv, gp_iv);
+    gp_y += rh + 4;
+    gp_iv[0] = lay;
     for (s = 0; s < bp_game.nseats; s++) {
-        if (gp_y + gp_fh <= gp_btop) {
-            if (over && ((bp_game.winners >> s) & 1)) bp_w_fill(gp_x - 2, gp_y - 1, gp_xr, gp_y + gp_fh, 14);
-            ovl_gp_lb(); if (over && ((bp_game.winners >> s) & 1)) ovl_gp_la("* ");
-            ovl_gp_la(ovl_gp_name(s)); if (!bp_game.alive[s]) ovl_gp_la(TP_OUT);
-            bp_w_text(gp_x, gp_y, gp_line, 0, gp_font);
-            if (over) bp_u32_copy(&gp_u1, &bp_game.score[s]); else bp_score_of(&bp_game, s, &gp_u1);
-            bp_u32_copy(&gp_u2, &gp_u1);
-            if (bp_u32_sub(&gp_u2, &bp_game.cash[s]) != BP_OK) bp_u32_set(&gp_u2, 0, 0);
-            ovl_gp_lb(); ovl_gp_lv(&bp_game.cash[s]); bp_w_text(c1, gp_y, gp_line, 0, gp_font);
-            ovl_gp_lb(); ovl_gp_lv(&gp_u2); bp_w_text(c2, gp_y, gp_line, 0, gp_font);
-            ovl_gp_lb(); ovl_gp_lv(&gp_u1); bp_w_text(c3, gp_y, gp_line, 0, gp_font);
-        }
-        gp_y += gp_pitch;
+        if (over) bp_u32_copy(&gp_u1, &bp_game.score[s]); else bp_score_of(&bp_game, s, &gp_u1);
+        bp_u32_copy(&gp_u2, &gp_u1);
+        if (bp_u32_sub(&gp_u2, &bp_game.cash[s]) != BP_OK) bp_u32_set(&gp_u2, 0, 0);
+        ovl_gp_ns(1, &bp_game.cash[s]); ovl_gp_ns(2, &gp_u2); ovl_gp_ns(3, &gp_u1);
+        ovl_gp_lb(); ovl_gp_la(ovl_gp_name(s)); if (!bp_game.alive[s]) ovl_gp_la(TP_OUT);
+        gp_sv[0] = gp_line;
+        gp_iv[7] = over && ((bp_game.winners >> s) & 1) ? 14 : 15;
+        gp_iv[8] = (lay == BP_LAY_FULL ? BP_A2_TOK_FLOPPY : BP_A_TOK_FLOPPY) + bp_game.token[s];
+        gk_scene(BP_A2_SC_PANB + 5, gp_x, gp_y, gp_sv, gp_iv);
+        gp_y += rh + 1;
     }
-    (void)nb;
-    if (over && bp_layout != BP_LAY_COMPACT) ovl_gp_para(TP_SCORE_CASH_PROPERTY, 0);
+    gp_y += 3;
+    if (bp_game.rules == BP_RULES_QUICK && lay != BP_LAY_COMPACT) {
+        ovl_gp_lb(); ovl_gp_la(TP_QUICK_MATCH_ROUND); ovl_gp_lu(bp_game.round); ovl_gp_la(TP_OF);
+        ovl_gp_lu(bp_game.rounds_limit); ovl_gp_tc(gp_line, 0);
+    }
+    if (over && lay == BP_LAY_FULL) ovl_gp_para(TP_SCORE_CASH_PROPERTY, 0);
 }
 static void ovl_gp_dhand(void)
 {
-    int s, w, x;
+    int s;
     s = gp_hand - 1;
     ovl_gp_frame(TP_PASS_THE_KEYBOARD);
-    gp_y += gp_pitch / 2;
-    w = bp_w_sprite(gp_r.x + 10, gp_y, BP_A_TOKEN(bp_game.token[s]));
-    (void)w;
-    ovl_gp_tc(TP_PASS_TO, 0);
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(s));
-    x = bp_w_textw(gp_line, BP_F_BIG16);
-    if (bp_layout != BP_LAY_COMPACT && gp_y + bp_w_fonth(BP_F_BIG16) <= gp_btop) {
-        bp_w_text(gp_r.x + (gp_r.w - x) / 2, gp_y, gp_line, 0, BP_F_BIG16);
-        gp_y += bp_w_fonth(BP_F_BIG16) + 4;
-    } else ovl_gp_tc(gp_line, 0);
-    ovl_gp_lb(); ovl_gp_la(TP_NEXT_2); ovl_gp_la(gp_phn[bp_game.phase]); ovl_gp_tc(gp_line, 0);
-    ovl_gp_tc(TP_PRESS_ENTER_WHEN, 0);
-    ovl_gp_tc(TP_DOES_NOT_COUNT, 0);
+    gp_sv[0] = ovl_gp_name(s);
+    ovl_gp_lb(); ovl_gp_la(TP_NEXT_2); ovl_gp_la(gp_phn[bp_game.phase]);
+    os88_strcpy(gp_ub[0], gp_line, 14); gp_sv[1] = gp_ub[0];
+    gp_iv[1] = BP_A2_TOKL_FLOPPY + bp_game.token[s];
+    ovl_gp_usc(9, 150, 0);
 }
 static void ovl_gp_dpause(void)
 {
@@ -930,137 +945,158 @@ static void ovl_gp_more(int x, int y, int up, int down)
     if (up) bp_w_text(x, y, "^", 0, gp_font);
     else if (down) bp_w_text(x, y, "v", 0, gp_font);
 }
-static void ovl_gp_ditem(int p, char *dst)
-{
-    int l;
-    l = bp_game.level[p];
-    os88_strcpy(dst, ovl_gp_pname(p), 8);
-    ovl_gp_lb();
-    if (l == BP_MAX_LEVEL) ovl_gp_la(TP_WORKSHOP); else if (l) { ovl_gp_la(TP_RAM); ovl_gp_lu(l); }
-    if (bp_game.mortgaged[p]) ovl_gp_la(TP_MORT);
-    os88_strcpy(dst + os88_strlen(dst), gp_line, 16);
-}
+static const char *const gp_dl[4] = {TP_UPGRADE, TP_SELL, TP_MORTGAGE, TP_REDEEM};
 static void ovl_gp_dmanage(void)
 {
-    static char row[24];
-    int i, n, top, y, p, sp, seat;
+    int seat, n, i, top, y, p, sp, rh, w, x, lay, cw, dh;
     seat = ovl_gp_mseat();
+    lay = bp_layout;
     ovl_gp_lb(); ovl_gp_la(TP_COLLECTION); ovl_gp_la(ovl_gp_name(seat));
     ovl_gp_frame(gp_line);
-    n = gp_mn;
-    ovl_gp_lb(); ovl_gp_la(TP_CASH_4); ovl_gp_lm(&bp_game.cash[seat]); ovl_gp_tl();
-    if (!n) { ovl_gp_t(TP_YOU_OWN_NO, 0); return; }
-    /* list rows: what is left after 3 detail lines */
-    i = (gp_btop - gp_y) / gp_pitch - 2;
+    n = gp_mn; w = gp_xr - gp_x; x = gp_x;
+    ovl_gp_lb(); ovl_gp_la(TB_CASH); ovl_gp_la(" "); ovl_gp_lm(&bp_game.cash[seat]);
+    dh = 2 * gp_fh + 8;
+    ovl_gp_ucell(x, gp_y, w, gp_fh + 7, 0);
+    gp_y += gp_fh + 11;
+    if (!n) { ovl_gp_para(TB_NO_PROPS, 0); return; }
+    rh = lay == BP_LAY_FULL ? 26 : lay == BP_LAY_MID ? 14 : 9;
+    if (lay == BP_LAY_COMPACT) dh = 0;
+    i = (gp_btop - gp_y - dh - 10) / rh;
     if (i < 2) i = 2;
     if (i > n) i = n;
     top = gp_mc - i + 1;
     if (top < 0) top = 0;
-    gp_lr[0].x = gp_x; gp_lr[0].y = gp_y; gp_lr[0].w = gp_xr - gp_x; gp_lr[0].h = i * gp_pitch;
-    gp_lrow = gp_pitch;
+    gk_box(x, gp_y, w, i * rh + 4, GK_SUNKEN2, 15);
+    gp_lr[0].x = x + 2; gp_lr[0].y = gp_y + 2; gp_lr[0].w = w - 4; gp_lr[0].h = i * rh;
+    gp_lrow = rh;
     gp_ttop[0] = (BPByte)top;
     gp_vy = gp_y - 1;               /* a cursor move changes the list and below */
-    y = gp_y;
+    y = gp_y + 2;
+    gp_iv[0] = lay; gp_iv[1] = w - 4; gp_iv[2] = w - 34; gp_iv[3] = w - 70;
     for (n = top; n < top + i; n++) {
-        p = gp_ml[n];
-        if (n == gp_mc) bp_w_fill(gp_x - 2, y - 1, gp_xr, y + gp_fh, 14);
-        ovl_gp_ditem(p, row);
-        ovl_gp_lb(); ovl_gp_la(n == gp_mc ? "> " : "  "); ovl_gp_la(row);
-        bp_w_text(gp_x, y, gp_line, 0, gp_font);
-        ovl_gp_lb(); ovl_gp_la("[");
-        ovl_gp_lc(bp_space(bp_prop_space(p))->kind == BP_K_COMPUTER ? bp_group_letter(bp_space(bp_prop_space(p))->group) : 'U');
-        ovl_gp_la("]");
-        bp_w_text(gp_xr - 4 * gp_cw, y, gp_line, 0, gp_font);
-        ovl_gp_more(gp_xr - 6 * gp_cw, y, n == top && top > 0, n == top + i - 1 && n + 1 < gp_mn);
-        y += gp_pitch;
+        p = gp_ml[n]; sp = bp_prop_space(p);
+        gp_sv[0] = bp_space(sp)->shortname;
+        gp_iv[4] = n == gp_mc ? 1 + lay : 0;
+        gp_iv[5] = lay == BP_LAY_FULL ? BP_A_SMALL(p) : BP_A_TINY(p);
+        gp_iv[6] = gp_iv[7] = GP_NOSPR;
+        ovl_gp_lb();
+        cw = bp_game.level[p];
+        if (cw) { gp_iv[6] = cw == BP_MAX_LEVEL ? BP_A_WORKSHOP : BP_A2_CHIP; if (cw < BP_MAX_LEVEL) { ovl_gp_lc('x'); ovl_gp_lu(cw); } else ovl_gp_la("WS"); }
+        if (bp_game.mortgaged[p]) { if (lay == BP_LAY_COMPACT) ovl_gp_la(" M"); else gp_iv[7] = BP_A_MORTGAGE; }
+        os88_strcpy(gp_ub[1], gp_line, 14); gp_sv[1] = gp_ub[1];
+        gp_ub[2][0] = bp_space(sp)->kind == BP_K_COMPUTER ? bp_group_letter(bp_space(sp)->group) : 'U'; gp_ub[2][1] = 0;
+        gp_sv[2] = gp_ub[2];
+        gk_scene(BP_A2_SC_PANB + 3, x + 2, y, gp_sv, gp_iv);
+        y += rh;
     }
-    gp_y = y;
+    ovl_gp_more(x + w - 12 * gp_cw, gp_lr[0].y, top > 0, 0);
+    ovl_gp_more(x + w - 12 * gp_cw, y - rh, 0, top + i < gp_mn);
+    gp_y = y + 6;
+    if (!dh) return;
     p = gp_ml[gp_mc]; sp = bp_prop_space(p);
-    ovl_gp_lb();
-    if (bp_space(sp)->kind != BP_K_COMPUTER) ovl_gp_la(TP_UTILITIES_ARE_NOT);
-    else {
-        ovl_gp_la(TP_UPGRADE_2); ovl_gp_lu(bp_group_upgrade_cost(bp_space(sp)->group));
-        ovl_gp_la(TP_SELL_2); ovl_gp_lu((unsigned)(bp_group_upgrade_cost(bp_space(sp)->group) / 2));
-    }
-    ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la(TP_MORTGAGE_2); ovl_gp_lu((unsigned)bp_mortgage_value(sp));
     bp_redeem_cost(sp, &gp_u2);
-    ovl_gp_la(TP_REDEEM_2); ovl_gp_lv(&gp_u2);
-    ovl_gp_tl();
+    cw = w / 4;
+    for (i = 0; i < 4; i++) {
+        ovl_gp_lb();
+        if (i < 2 && bp_space(sp)->kind == BP_K_COMPUTER) { ovl_gp_lc(i ? '+' : '-'); ovl_gp_lu((unsigned)bp_group_upgrade_cost(bp_space(sp)->group) / (1 + i)); }
+        else if (i == 2) { ovl_gp_lc('+'); ovl_gp_lu((unsigned)bp_mortgage_value(sp)); }
+        else if (i == 3) { ovl_gp_lc('-'); ovl_gp_lv(&gp_u2); }
+        else ovl_gp_lc('-');
+        ovl_gp_ucell(x + i * cw, gp_y, cw - 2, dh, gp_dl[i]);
+    }
 }
 static void ovl_gp_dcompose(void)
 {
-    int c, nl, i, idx, y, hw, x, it, me;
+    int c, nl, i, idx, y, hw, x, it, me, rh, big, cmp, w, ly, lay, k;
+    BPRect *r;
     me = bp_game.decider;
+    lay = bp_layout;
+    cmp = lay == BP_LAY_COMPACT;
     ovl_gp_lb(); ovl_gp_la(TP_TRADE_3); ovl_gp_la(ovl_gp_name(me)); ovl_gp_la(TP_WITH); ovl_gp_la(ovl_gp_name(gp_tto));
     ovl_gp_frame(gp_line);
     ovl_gp_tbuild();
-    hw = (gp_xr - gp_x) / 2;
+    big = gp_fh + 8;
+    w = gp_xr - gp_x;
+    hw = (w - (cmp ? 6 : 34)) / 2;
+    rh = lay == BP_LAY_FULL ? 18 : lay == BP_LAY_MID ? 14 : 9;
     gp_vy = gp_y - 1;               /* column, cursor, toggles, cash: the lists and below */
     for (c = 0; c < 2; c++) {
-        x = gp_x + c * hw;
-        if (c == gp_tcol) bp_w_fill(x, gp_y - 1, x + hw - 4, gp_y + gp_fh, 14);
-        ovl_gp_lb(); if (c == gp_tcol) ovl_gp_la("> ");     /* not by hue alone (Qqa2-3) */
-        ovl_gp_la(ovl_gp_name(c ? gp_tto : me)); ovl_gp_la(TP_GIVES_2);
-        bp_w_text(x + 2, gp_y, gp_line, 0, gp_font);
+        x = gp_x + c * (w - hw);
+        ovl_gp_lb(); if (c == gp_tcol) ovl_gp_la("> "); ovl_gp_la(ovl_gp_name(c ? gp_tto : me)); ovl_gp_la(TP_GIVES_2);
+        if (c == gp_tcol) gk_banner(x, gp_y, hw, gp_fh + 5, gp_line, gp_font, -1);
+        else gk_titlebar(x, gp_y, hw, gp_fh + 5, gp_line, gp_font, GK_CENTRE);
     }
-    gp_y += gp_pitch;
-    nl = (gp_btop - gp_y) / gp_pitch - 2;
+    gp_y += gp_fh + 7;
+    nl = (gp_btop - gp_y - (cmp ? 2 * gp_pitch : big + gp_fh + 22)) / rh;
     if (nl < 1) nl = 1;
-    gp_lrow = gp_pitch;
+    gp_lrow = rh;
+    ly = gp_y;
+    gp_iv[0] = lay; gp_iv[1] = hw - 4; gp_iv[2] = hw - 52;
     for (c = 0; c < 2; c++) {
-        x = gp_x + c * hw;
+        x = gp_x + c * (w - hw);
         if (gp_tcur[c] < gp_ttop[c]) gp_ttop[c] = gp_tcur[c];
         if (gp_tcur[c] >= gp_ttop[c] + nl) gp_ttop[c] = (BPByte)(gp_tcur[c] - nl + 1);
-        gp_lr[c].x = x; gp_lr[c].y = gp_y; gp_lr[c].w = hw - 4; gp_lr[c].h = nl * gp_pitch;
-        y = gp_y;
-        if (!gp_in[c] && gp_y + gp_fh <= gp_btop) bp_w_text(x + 2, y, TP_NONE_2, 0, gp_font);
+        r = &gp_lr[c]; r->x = x + 2; r->y = ly + 2; r->w = hw - 4; r->h = nl * rh;
+        gk_box(x, ly, hw, nl * rh + 4, GK_SUNKEN2, 15);
+        y = ly + 2;
         for (i = 0; i < nl; i++) {
             idx = gp_ttop[c] + i;
             if (idx >= gp_in[c]) break;
             it = gp_it[c][idx];
-            if (c == gp_tcol && idx == gp_tcur[c]) bp_w_fill(x, y - 1, x + hw - 4, y + gp_fh, 14);
+            k = ovl_gp_tsel(c, idx);
             ovl_gp_lb();
-            ovl_gp_la(c == gp_tcol && idx == gp_tcur[c] ? ">" : " ");
-            ovl_gp_la(ovl_gp_tsel(c, idx) ? TP_X_2 : (it < 32 && !ovl_gp_tradable(it) ? TP_X_3 : TP_X_4));
+            if (cmp) ovl_gp_la(k ? TP_X_2 : TP_X_4);
             if (it >= 32) ovl_gp_la(it == 32 ? TP_DISK_FF : TP_DISK_SE);
             else { ovl_gp_la(ovl_gp_pname(it)); if (bp_game.mortgaged[it]) ovl_gp_la("*"); }
-            bp_w_text(x + 2, y, gp_line, 0, gp_font);
-            ovl_gp_more(x + hw - 4 - gp_cw, y, i == 0 && idx > 0, i == nl - 1 && idx + 1 < gp_in[c]);
-            y += gp_pitch;
+            gp_sv[0] = gp_line;
+            gp_iv[4] = c == gp_tcol && idx == gp_tcur[c] ? 1 + lay : 0;
+            gp_iv[5] = k;
+            gp_iv[6] = it < 32 ? BP_A_TINY(it) : GP_NOSPR;
+            gp_iv[7] = it < 32 && !ovl_gp_tradable(it) ? 8 : 0;
+            gk_scene(BP_A2_SC_PANB + 6, x + 2, y, gp_sv, gp_iv);
+            y += rh;
         }
+        ovl_gp_more(x + hw - 2 * gp_cw, ly + 2, gp_ttop[c] > 0, 0);
+        ovl_gp_more(x + hw - 2 * gp_cw, y - rh, 0, gp_ttop[c] + nl < gp_in[c]);
+        if (!gp_in[c]) bp_w_text(x + 8, ly + 2, TP_NONE_2, 0, gp_font);
     }
-    gp_y += nl * gp_pitch;
-    ovl_gp_lb(); ovl_gp_la(TP_CASH_4); ovl_gp_lu(gp_tcash); ovl_gp_la(TP_CR_PAID_BY);
-    ovl_gp_la(ovl_gp_name(gp_tpay ? gp_tto : me));
-    ovl_gp_tl();
+    if (!cmp) gk_sprshadow(gp_x + hw + 3, ly + (nl * rh - 32) / 2, BP_A2_TRADE_ARR, 0);
+    gp_y = ly + nl * rh + 8;
     bp_u32_set(&gp_u2, gp_tcash, 0);
-    /* the preview: both cash balances before > after */
-    c = bp_game.offer_from; (void)c;
+    ovl_gp_lb(); ovl_gp_lv(&gp_u2); ovl_gp_la(TP_CR); ovl_gp_la(TB_PAID_BY); ovl_gp_la(ovl_gp_name(gp_tpay ? gp_tto : me));
+    if (!cmp) { ovl_gp_ucell(gp_x, gp_y, w, gp_fh + 7, 0); gp_y += gp_fh + 11; }
+    else ovl_gp_tl();
     ovl_gp_lb();
     ovl_gp_la(ovl_gp_name(me)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[me]); ovl_gp_la(">");
     if (ovl_gp_after(me, gp_tpay == 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
     ovl_gp_la("  "); ovl_gp_la(ovl_gp_name(gp_tto)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[gp_tto]); ovl_gp_la(">");
     if (ovl_gp_after(gp_tto, gp_tpay != 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
-    ovl_gp_tl();
+    if (!cmp) { gk_box(gp_x, gp_y, w, gp_fh + 6, GK_SUNKEN, 15); gk_textbox(gp_x, gp_y, w, gp_fh + 6, gp_line, 0, gp_font, GK_CENTRE | GK_FIT); }
+    else ovl_gp_tl();
 }
 static void ovl_gp_dchat(void)
 {
     int i;
     ovl_gp_frame(TP_CHAT);
+    gk_box(gp_x, gp_y, gp_xr - gp_x, 4 * gp_pitch + 6, GK_SUNKEN2, 15);
+    gp_x += 5; gp_y += 3;
     for (i = 0; i < 3; i++) ovl_gp_t(gp_cl[i], 0);
     gp_vy = gp_y - 1;               /* typing changes the field and below */
     ovl_gp_lb(); ovl_gp_la("> "); ovl_gp_la(gp_cbuf); ovl_gp_la("_");
     ovl_gp_t(gp_line, 0);
     ovl_gp_lb(); ovl_gp_lu(gp_cn); ovl_gp_la("/"); ovl_gp_lu(GP_CHATMAX); ovl_gp_la(TP_CHARACTERS_LETTERS_TYPE);
     ovl_gp_para(gp_line, 0);
+    gp_x -= 5;
 }
 static void ovl_gp_ddiag(void)
 {
     int ls, pt;
     ovl_gp_frame(TP_LINK_DIAGNOSTICS);
+    gk_box(gp_x, gp_y, gp_xr - gp_x, gp_btop - gp_y, GK_SUNKEN2, 15);
+    gp_x += 6; gp_y += 4;
     ls = bp_link_state();
     pt = bp_ck_port();
+    gk_sprshadow(gp_xr - 22, gp_y, BP_A2_LED_GREEN + (ls == BP_L_PLAY ? 0 : ls == 0 || ls == BP_L_BADPEER ? 1 : 2), 0);
     ovl_gp_lb(); ovl_gp_la(TP_ROLE); ovl_gp_la(bp_mode == BP_MODE_HOST ? TP_BANKER_HOST : bp_mode == BP_MODE_CLIENT ? TP_CLIENT : TP_SAME_PC);
     ovl_gp_la(TP_LINK); ovl_gp_la(gp_lstate[ls > 8 ? 0 : ls]); ovl_gp_tl();
     ovl_gp_lb(); ovl_gp_la(TP_PORT);
@@ -1075,6 +1111,7 @@ static void ovl_gp_ddiag(void)
     ovl_gp_lb(); ovl_gp_la(TP_RX); ovl_gp_lu(bp_diag.rx); ovl_gp_la(TP_TX); ovl_gp_lu(bp_diag.tx); ovl_gp_tl();
     ovl_gp_lb(); ovl_gp_la(TP_PAIRED_SAVE); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
     ovl_gp_para(bp_link_msg(), 0);
+    gp_x -= 6;
 }
 /* help text: the art record's lines; a "#KEYS" line starts the keys section */
 static int ovl_gp_hline(int n, char *buf)
@@ -1095,10 +1132,12 @@ static void ovl_gp_dhelp(int keys)
         if (!kidx) kidx = ktot + 1;
     }
     /* each page shows only its own section; paging stops at the last (Qqa2-5) */
+    gk_box(gp_x, gp_y, gp_xr - gp_x, gp_btop - gp_y, GK_SUNKEN2, 15);
+    gp_x += 6; gp_y += 4;
     base = keys ? kidx : 0;
     cnt = keys ? ktot - kidx : kidx - 1;
     if (cnt < 1) cnt = 1;
-    lpp = (gp_btop - gp_y) / gp_pitch;
+    lpp = (gp_btop - gp_y - 3) / gp_pitch;
     if (lpp < 1) lpp = 1;
     pg = (cnt + lpp - 1) / lpp;
     if (pg > 255) pg = 255;
@@ -1109,6 +1148,7 @@ static void ovl_gp_dhelp(int keys)
         if (!ovl_gp_hline(n, buf)) break;
         ovl_gp_t(buf, 0);
     }
+    gp_x -= 6;
 }
 /* the one-line bar over the bottom of the centre: light grey, white on 1bpp
  * where grey is a dither under black text (Qqa2-2) */
@@ -1600,6 +1640,7 @@ static void ovl_gp_tick(void)
 }
 
 #ifdef BP_PANELS_DEMO
+#if BP_PANELS_DEMO == 2
 static void ovl_gp_demonew(void)
 {
     static BPSetup su;
@@ -1609,6 +1650,7 @@ static void ovl_gp_demonew(void)
     su.token[1] = 1; su.token[2] = 2;
     bp_sess_new(&su);
 }
+#endif
 /* hand-made states to look at the panels before the engine lands: F5 steps */
 static void ovl_gp_demoset(int n)
 {
