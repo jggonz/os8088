@@ -2360,6 +2360,11 @@ ignored"), and `cmz_jcur` sat 18 bytes from `DISKOPS.DRV`'s end - so on
 copy ran 4 bytes past its limit and took a #GP (`mega-czto`'s first
 Uncompress To... rebooted the machine). The helpers had been those 4 bytes.
 `kern_mega` pads the cursor to `FSEQ_XSIZE` (4 zero bytes, in the tail).
+**The over-read itself is gone since 2026-11-18**: `READ_SEQ` copies the
+run's 6 bytes in only when `+3` carries `FSEQF_RUN` (§18.4.8.3), after the
+Browser 1.8 review put the parts cursor at the end of a 65,023-byte package's
+bss and `kern_mega` faulted at its first part fetch. The pad stays; it costs
+4 bytes of tail and nothing resident.
 
 **What it cost** (`kernsize`, against `8ef75fa1`): `kern_mega` `.text` +8 -
 the `mem_pg_own` row's 6 and `dsk_rah_lim`'s 2 (§18.95.13 came with it) -
@@ -40169,8 +40174,11 @@ the knowledge sits with the code that has it, and the kernel's part is a
 compare.
 
 **The cursor grows to 22 bytes for a caller that asks** (`FSEQ_XSIZE`); a
-16-byte cursor is read and written exactly as before, and the kernel copies
-16 back to every caller - the run is the caller's and is never written. `+3`,
+16-byte cursor is read and written exactly as before - the kernel reads
+`+16..+21` only when `+3` carries `FSEQF_RUN`, so a 16-byte cursor may end a
+package's bss on `kern_mega`, where it is read through the package's selector
+- and the kernel copies 16 back to every caller - the run is the caller's and
+is never written. `+3`,
 the byte that was 0, is the caller's FLAGS:
 
 | off | size | |
