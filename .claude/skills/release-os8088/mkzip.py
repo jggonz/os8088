@@ -502,6 +502,21 @@ ITEMS = [
      "and the live media too.",
      [("breadxt.img", "1.44MB", ""), ("breadxt120.img", "1.2MB", ""),
       ("breadxt720.img", "720KB", ""), ("breadxt360.img", "360KB", "")]),
+    ("progs", "Byteopoly", False,
+     "A board game about trading old computers, for two to four players: "
+     "buy the Commodore PET, the Apple II or the PC XT, collect a set and "
+     "charge rent. Play on one machine, sharing the keyboard, or on two "
+     "machines joined by a null-modem cable. The disk carries the program; "
+     "it is on the live media too.",
+     [("byteopoly.img", "1.44MB", ""), ("byteopoly120.img", "1.2MB", ""),
+      ("byteopoly720.img", "720KB", ""), ("byteopoly360.img", "360KB", "")]),
+    ("progs", "2BASIC", False,
+     "A BASIC interpreter that runs numbered programs in a window, with "
+     "graphics, sound, a form of buttons and fields, and 2BRES, an editor "
+     "for its sprite and data packs. Each disk carries both, three games, "
+     "five examples, the tests and HELP.TXT. It is on the live media too.",
+     [("2basic.img", "1.44MB", ""), ("2basic120.img", "1.2MB", ""),
+      ("2basic720.img", "720KB", ""), ("2basic360.img", "360KB", "")]),
     ("progs", "Windows 3.x programs", True,
      "WIN16, which runs Windows 3.0 and 3.1 programs in an os8088 window. "
      "The disk carries WIN16 and is otherwise empty: copy your Windows "
@@ -620,6 +635,8 @@ PROGRAMS = {
     "XTMP3": ("XTMP3", "XTMP3"),
     "PageDesk": ("PAGEDESK", "PDESK"),
     "Breadboard XT": ("BREADXT", "BREAD"),
+    "Byteopoly": ("BYTEOPLY", "BYTE"),
+    "2BASIC": ("2BASIC", "2BAS"),
     "Weave": ("WEAVE", "WEAVE"),
     "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),
