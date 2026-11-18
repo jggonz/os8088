@@ -711,6 +711,7 @@ static void fc_scene(void)
     int s;
     if ((fc_secs & BP_D_CENTER) && bp_pn_covers() == BP_PN_FULL) {
         bp_pn_draw();
+        if ((fc_secs & BP_D_HINT) && fc_hit(&bp_r_hint)) fc_hint();
         return;
     }
     if (fc_secs & BP_D_BOARD)
@@ -828,7 +829,7 @@ void bp_face_dirty_space(int space)
 }
 static void fc_fullcentre(void)
 {
-    bp_r_center.x = fc_all.x; bp_r_center.y = fc_all.y; bp_r_center.w = fc_all.w; bp_r_center.h = fc_all.h;
+    bp_r_center.x = fc_all.x; bp_r_center.y = fc_all.y; bp_r_center.w = fc_all.w; bp_r_center.h = bp_r_hint.y - fc_all.y;   /* the hint bar stays below it (D17) */
 }
 static void fc_paintall(void *win, int full)
 {
@@ -854,15 +855,18 @@ static void fc_paintall(void *win, int full)
         for (s = 0; s < BP_SPACES; s++) fc_csig[s] = fc_sigcell(s);
         fc_psig = fc_sigplayers(); fc_dsig = fc_sigdetails(); fc_lsig = fc_siglink(); fc_hsig = fc_sighint(); fc_gsig = fc_logver;
         fc_dsp[0] = fc_dsp[1] = 0; fc_dirty = 0; fc_art = cov == 0;
-        fc_paintr(&fc_all, cov == BP_PN_FULL ? BP_D_CENTER : BP_D_ALL);
+        fc_paintr(&fc_all, cov == BP_PN_FULL ? BP_D_CENTER | BP_D_HINT : BP_D_ALL);
         return;
     }
     d = fc_dirty;
     if (!d) return;
     fc_dirty = 0;
     if (cov == BP_PN_FULL) {
-        if (d & BP_D_CENTER) fc_paintr(&fc_all, BP_D_CENTER);
-        else if (d & FC_D_RECT) ovl_fc_rects(cov, 0);
+        if (d & BP_D_CENTER) { fc_hsig = fc_sighint(); fc_paintr(&fc_all, BP_D_CENTER | BP_D_HINT); }
+        else {
+            if (d & BP_D_HINT) { sg = fc_sighint(); if (sg != fc_hsig || (d & BP_D_FORCE)) { fc_hsig = sg; fc_paintr(&bp_r_hint, BP_D_HINT); } }
+            if (d & FC_D_RECT) ovl_fc_rects(cov, 0);
+        }
         return;
     }
     if (d & BP_D_BOARD) {                               /* cells whose signature moved */

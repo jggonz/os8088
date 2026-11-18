@@ -255146,8 +255146,8 @@ Every section tiles its rect completely and paints every pixel of it, so a
 strip (a rect in the band, widened to 8) never carries stale band bytes.
 
 When `bp_pn_covers()` is `BP_PN_FULL` (the setup and lobby screens) the face
-sets `bp_r_center` to the whole aligned content, draws NOTHING of the board,
-and calls only `bp_pn_draw`; `bp_face_hit_space` then answers -1 and
+sets `bp_r_center` to the whole aligned content above the hint bar, draws
+NOTHING of the board, and calls only `bp_pn_draw` and then the hint bar (D17); `bp_face_hit_space` then answers -1 and
 `bp_face_key` 0. Back to 0 or `BP_PN_CENTRE`, the layout is rebuilt and
 everything repainted - the only coverage change that costs a whole window.
 
