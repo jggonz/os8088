@@ -550,11 +550,18 @@ def img_lines(items, x, kind, out):
 
 def cell_reach(r):
     """-> (above, below): the continuation rows a table row's pictures take
-    beside its first text row (SPEC.md 71.34.2), as img_lines does a line's."""
+    beside its first text row (SPEC.md 71.34.2), as img_lines does a line's.
+    A top-aligned picture of more than one row with nothing but spaces after
+    it in its cell takes none: br_tpset puts its slices on the row's next
+    composed lines (71.34.5), which this count does not cover."""
     above = below = 0
     for c in r:
-        for o in c.ops:
+        for i, o in enumerate(c.ops):
             if o[0] == "IMG":
+                if o[3] == 2 and o[2] > 1 and not any(
+                        p[0] == "IMG" or (p[0] == "RUN" and p[1].strip())
+                        for p in c.ops[i + 1:]):
+                    continue
                 a, b = img_reach(o[2], o[3])
                 above, below = max(above, a), max(below, b)
     return above, below

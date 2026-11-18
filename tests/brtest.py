@@ -104,16 +104,35 @@ def image_rows(m, win):
     # the count holds perfectly still at the INLINE answer. Five equal reads
     # are microseconds of guest time on the guest-clock harness
     owed = [bss_offset(n, image) for n in ("br_tbw", "br_cwant", "br_fwant")]
+    # A flag of 2 is ASKED, not answered: br_fnwake sets it BEFORE the
+    # synchronous read, so it is owed until the part's binding is in. 2 with
+    # no binding is a refusal's resting state too, so one that outlasts any
+    # floppy read is reported rather than waited out (br_tbok is a byte)
+    bound = [(bss_offset("br_fwant", image), bss_offset("br_fnseg", image),
+              0xFFFF),
+             (bss_offset("br_tbw", image), bss_offset("br_tbok", image), 0xFF)]
+    asked = [None, False]           # cycles the unbound ask was first seen
 
     def held(_m):
         n = word(38)
         if any(word(o) & 0xFF == 1 for o in owed):
             n = 0
+        elif any(word(f) & 0xFF == 2 and not word(b) & k for f, b, k in bound):
+            n, c = 0, int(_m.status().get("cycles", 0))
+            asked[0] = c if asked[0] is None else asked[0]
+            if (c - asked[0]) / os88marty.GUEST_HZ > 20:
+                asked[1] = True
+                return True
+        else:
+            asked[0] = None
         seen[1] = seen[1] + 1 if n and n == seen[0] else 0
         seen[0] = n
         return seen[1] >= 5
     os88marty.until(m, held, "the image page's layout to hold still",
                     limit=90)
+    if asked[1]:
+        return ["part 7 refused: a font or table ask still had no binding "
+                "after 20 guest seconds"]
     cols, nlines = word(10), word(38)
     lseg = word(bss_offset("br_lseg", image))
     raw = m.readseg(lseg, 0, nlines * LN_SIZE)

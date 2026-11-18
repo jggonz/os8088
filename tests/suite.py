@@ -11360,7 +11360,7 @@ SOAK = [
         "SPEC.md 71: the PAGE takes the mouse - links parse in order and "
         "underline, a click on a form field focuses it, the submit button "
         "fires",
-        needs=("marty",), serial=True,
+        needs=("marty", "mtools"), serial=True,
         wants=("build/brtest360.img",)),
     Row("brlink", "soak", py("tests/brlink.py"), 30.0,
         "BROWSER-PLAN 2.6: two links with a space between them are TWO "

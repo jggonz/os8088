@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "9d6858a1",
+  "stamped": "66176f6eb",
   "strings": "720e97a330a2ceb7",
-  "why": "Browser 1.8 on main: tables, colours, fonts, frames, downloads by real name, Save As by the page name, Options menu; the page describes it"
+  "why": "Browser 1.8 on main: tables, colours, fonts, frames, downloads by real name, Save As by the page name, Options menu; the page describes it (restamped: 9d6858a1 was the contributor's pre-rebase commit)"
  },
  "C64": {
   "sources": [],

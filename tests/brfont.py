@@ -100,10 +100,11 @@ def main():
         return u16(m.readseg(pseg, sy[n] + off, 2))
 
     fails = []
-    if rb("br_fon") == 0:
-        say("brfont: fonts are off on this CPU - nothing to test")
+    if rb("br_fon") == 0:       # on for every CPU (br_fninit)
+        say("FAIL fonts are off: the default is on and this disk carries "
+            "no BROWSER.CFG")
         m.quit()
-        return 0
+        return 1
     url = "http://10.0.2.2:%d/F1.HTM" % PORT
     lx2, ly1 = rw("br_loc", 4), rw("br_loc", 2)
     mo.click(lx2 - 6, ly1 + 7)
@@ -293,6 +294,9 @@ def main():
             blue = sum(1 for y in range(ry, ry + 16) for x in range(x1, x2)
                        if im.getpixel((x, y)) == (0, 0, 168))
             say("h1 link once followed: %d blue pixels" % blue)
+            if blue > 8:
+                fails.append("the followed h1 link still has %d pixels of "
+                             "the theme's accent" % blue)
     m.quit()
     for f in fails:
         say("FAIL " + f)

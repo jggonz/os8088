@@ -237,7 +237,7 @@ K_CLAIM = re.compile(r"\b(?:call\s+(?:far\s+)?(?:COLD_SEG:)?|[A-Z_]+\s+)"
                      r"mem_claimp_hi_x|mem_claimp_dma_x|mem_claimp_sd)\b"
                      r"|\bmov\s+bp\s*,\s*mem_claim\w*\b")
 OP_LOAD = re.compile(r"\bcall\s+op_load\b")
-OP_FETCH = re.compile(r"\bcall\s+op_fetch\b")
+OP_FETCH = re.compile(r"\b(?:call|jmp)\s+op_fetch\b")  # a tail-jump fetches too
 API_DECL = re.compile(r"\bcall\s+(?:far\s+)?OSAPI_MEM_MOVABLE\b")
 K_DECL = re.compile(r"\b(?:call\s+(?:far\s+)?(?:COLD_SEG:)?|[A-Z_]+\s+)"
                     r"(?:mem_movable_x|mmf_mem_movable)\b")

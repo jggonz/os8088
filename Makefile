@@ -7702,7 +7702,8 @@ $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py $(PKGZSTAMP)
 # A third-party file is the only one that cannot share a misreading with the
 # decoder, so run it with them if you have them - and revert the .inc after.
 $(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
-                      apps/os88img.inc apps/os88api.inc | $(BUILD)
+                      apps/os88img.inc apps/os88rgb.inc apps/os88api.inc \
+                      | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/imgtest/ -o $@ apps/imgtest/imgtest.asm
 	@echo "imgtest: $(call FILESIZE,$@) bytes"
 
@@ -13971,7 +13972,7 @@ SCRIBESRC := apps/scribe/scribe.asm apps/scribe/scdoc.inc apps/scribe/scrtf.inc 
 # operation - word.o88's rule above says what a rule per half cost.
 $(BUILD)/scribe.bin: $(SCRIBESRC) apps/scribe/scicon.inc apps/os88api.inc \
                      apps/os88ui.inc apps/os88type.inc apps/os88img.inc \
-                     apps/os88dec.inc $(SBSTAMP) | $(BUILD)
+                     apps/os88rgb.inc apps/os88dec.inc $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) $(PKGSBDEF) -I apps/ -I apps/scribe/ \
 		-o $@ apps/scribe/scribe.asm
 	@echo "scribe: $(call FILESIZE,$@) bytes"

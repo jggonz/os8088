@@ -35,6 +35,7 @@ than from a screenshot: a click that lands one cell off is the failure this
 test exists to catch, so it must not be aimed by eye.
 """
 import argparse
+import atexit
 import os
 import re
 import shutil
@@ -115,6 +116,7 @@ def main():
     # would be a tall line. brfont is the tall lines' row. A copy of the disk
     # with BROWSER.CFG (SPEC.md 71.36: "BO01", the options word, no home page)
     tmpd = tempfile.mkdtemp(prefix="brclick-")
+    atexit.register(shutil.rmtree, tmpd, True)
     apps = os.path.join(tmpd, "apps.img")
     shutil.copy(a.apps, apps)
     cfg = os.path.join(tmpd, "BROWSER.CFG")
