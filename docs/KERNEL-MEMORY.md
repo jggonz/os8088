@@ -351,7 +351,7 @@ had added.
     "bss": 4882,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37714,
+    "cold": 37728,
     "coldpara": 2358,
     "colds": 3654,
     "fatpara": 288,
@@ -925,7 +925,7 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,760 | 38.6% |
+| the file system, end to end | 29,774 | 38.6% |
 | the window system and its furniture | 22,417 | 29.1% |
 | drawing: adapters, primitives, glyphs, icons | 10,545 | 13.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 7,476 | 9.7% |
@@ -933,7 +933,7 @@ there and nowhere else.
 | the Control Panel | 301 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 287 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **77,056** | |
+| **total** | **77,070** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -942,7 +942,7 @@ there and nowhere else.
 | `files.inc` — the Disk window (§22) | 1,190 | 7,680 | **8,870** | 527 | — | — |
 | `wm.inc` — the window manager (§11) | 8,424 | 154 | **8,578** | 856 | — | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 407 | 7,021 | **7,428** | 422 | — | — |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,096 | **5,120** | 180 | — | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,110 | **5,134** | 180 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,480 | 1,408 | **4,888** | 38 | 526 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,432 | 6 | **3,438** | 115 | 824 | — |
 | `memory.inc` — the claim heap (§50) | 290 | 2,621 | **2,911** | 27 | 324 | — |
@@ -1001,7 +1001,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | — | — | **0** | — | — | 3 |
-| **total** | **39,342** | **37,714** | **77,056** | **4,882** | **5,358** | **3,216** |
+| **total** | **39,342** | **37,728** | **77,070** | **4,882** | **5,358** | **3,216** |
 <!-- END generated table -->
 
 ### Reading it
