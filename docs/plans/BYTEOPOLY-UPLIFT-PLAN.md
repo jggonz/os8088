@@ -53,12 +53,12 @@ half-drawn face.
 |---|---|---|---|
 | U1 | The game kit: 3D boxes, panels, title bars, buttons, key caps, tabs, check boxes, radios, drop-downs, banners, arrows, shadowed sprites, a role table with a mono twin (SPEC.md 132.1-132.5) | kit | - |
 | U2 | Scenes: a text source compiled to an art record, drawn by `gk_scene`, hit rects by `gk_scene_rect` (132.6) | kit | - |
-| U3 | A second art part, routed by ID in the core (`BX_ART2`), built by `os88bpart.py`; art parts required | prep | - |
-| U4 | UI strings move to text records; resident relief measured | prep | - |
-| U5 | The sidebar moves to its own file `bp_side.c` (prep); `bp_w_*` drawn by the kit (lead, at integration) | prep, lead | - |
+| U3 | A second art part, routed by ID in the core (`BX_ART2`), built by `os88bpart.py`; art parts required | prep | I |
+| U4 | UI strings move to text records; resident relief measured | prep | I |
+| U5 | The sidebar moves to its own file `bp_side.c` (prep); `bp_w_*` drawn by the kit (lead, at integration) | prep, lead | I |
 | U6 | New art (art2.h 256..383) drawn from the concept boards in the EGA palette, with mono twins; BOOT's arrows point UP | art | I |
 | U7 | Prices rise monotonically along the direction of play (PET 100, VIC-20 120, C64 140); the protocol refuses a peer with the old board | rules | I |
-| U8 | Music and effects: a reusable player (FM through SOUND.DRV, speaker fallback), original title, in-game, auction and victory themes, effects for every event; Options > Music | sound | - |
+| U8 | Music and effects: a reusable player (FM through SOUND.DRV, speaker fallback), original title, in-game, auction and victory themes, effects for every event; Options > Music | sound | I |
 | U9 | The board: ivory 3D cells, collection band on top, bold names, price at the bottom, big corner art, RAM chips on the band, a yellow selection frame; the teal centre with the tilted cards, the pointing mascot, BYTEOPOLY key caps and 3D dice; the hint bar as key caps | board | - |
 | U10 | The sidebar: "PLAYER n - YOUR TURN" with the big token and cash well, the roster with tokens and a yellow active row, the details card, YOUR COLLECTION, the connection box with its art, the log well | side | - |
 | U11 | The landing (Buy/Auction), auction, trade and link-lost panels as the concept boards draw them | panelsA | - |
