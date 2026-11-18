@@ -125,6 +125,8 @@ br_imgtab:
     call br_arenacopy
     jc .out                         ; Links limited: the alt box stays
     mov [bx+IT_SRC], ax
+    call br_imgallow                ; Options > Images off: the box (71.36)
+    jc .out
     mov byte [bx+IT_ST], IS_WAIT
     mov byte [br_ipend], 1          ; the worker starts the engine after the page
 .out:
@@ -220,6 +222,8 @@ br_im_step:
 .settled:
     cmp word [br_cols], 0           ; ...and been laid out
     je .out
+    cmp byte [br_cwant], 1          ; ...and not to be parsed again (colours)
+    je .out
     test byte [br_parse_started], BR_PARSE_LAYOUT
     jnz .out
     cmp byte [br_fin], 0
@@ -253,6 +257,20 @@ br_im_step:
 ; br_im_wake - W_ONWAKE's share: the UI task's half of a hand-over. UI task,
 ; gfx lock not held; no register need be kept (br_onwake)
 br_im_wake:
+    cmp byte [br_iowe], 0           ; a layout owed: paid at the queue's end,
+    je .noowe                       ; once an animation runs, or when due
+    mov al, [br_ie]
+    cmp al, IE_END
+    je .pay
+    cmp al, IE_AFRAME
+    jae .pay
+    call br_imdue
+    jnc .noowe
+.pay:
+    call OSAPI_GFX_LOCK
+    call br_imflushc
+    call OSAPI_GFX_UNLOCK
+.noowe:
     mov al, [br_ie]
     cmp al, IE_START
     je .start
@@ -269,6 +287,7 @@ br_im_wake:
 .ret:
     ret
 .start:
+    call br_promise                 ; the pictures draw: no promise (71.11)
     call br_im_partload
     jc .refused
     call far [br_im_vec+BRIM_WAKE]  ; the store; IE_NEXT, or IE_END refused
@@ -280,6 +299,73 @@ br_im_wake:
 .end:
     call br_im_partdrop
     mov byte [br_ie], IE_OFF
+    jmp br_promise                  ; ...and standing still again
+
+; br_im_rs_owe - an image's box changed size: the page owes a layout. ONE
+; per queue, not one per image - each was the whole page laid out and painted
+; again, seconds of an XT for a page of sizeless images. Paid by br_imflush:
+; at the queue's end (br_im_wake), two seconds after it was first owed, and
+; before any paint of a line (br_paint_band, br_flush, br_selpaint,
+; br_frepaint) so no box is drawn at its old size. Lock held. All kept
+br_im_rs_owe:
+    cmp byte [br_iowe], 0
+    jne .due
+    mov byte [br_iowe], 1
+    push ax
+    call OSAPI_GET_TICKS
+    mov [br_iowet], ax
+    pop ax
+    retf
+.due:
+    call br_imdue
+    jnc .r
+    call br_imflushc
+.r:
+    retf
+
+; br_imdue - CF=1 when the owed layout is two seconds old (36 ticks). All kept
+br_imdue:
+    push ax
+    call OSAPI_GET_TICKS
+    sub ax, [br_iowet]
+    cmp ax, 36
+    cmc
+    pop ax
+    ret
+
+; br_imflushc - br_imflush, with the window's clip set first; covered, it
+; stays owed and the kernel's repaint pays it. Lock held. All kept
+br_imflushc:
+    push bx
+    mov bx, [br_win]
+    call OSAPI_WM_CLIP_SET
+    pop bx
+    jc br_imflush.r
+; br_imflush - pay an owed layout: the page laid out, the view clamped, the
+; band and the bar painted. Lock held, clip set. All kept
+br_imflush:
+    cmp byte [br_iowe], 0
+    je .r
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call br_layout                  ; (clears br_iowe)
+    xor ax, ax
+    call br_advance
+    call br_paint_band
+    call br_sbar
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
     ret
 
 ; br_imgnone - every waiting entry none. All kept
@@ -374,7 +460,7 @@ br_im_partload:
     push di
     push es
     mov al, 1
-    call op_fetch
+    call br_fetch                   ; (home first, 1.8)
     jc .bad
     mov al, 1
     call op_cseg
@@ -451,14 +537,12 @@ br_im_rtab:
 br_im_r_net_find:   dw br_dl_rs_net_find, 0
 br_im_r_docmap:     dw br_dl_rs_docmap, 0
 br_im_r_paint_band: dw br_dl_rs_paint_band, 0
-br_im_r_sbar:       dw br_dl_rs_sbar, 0
 br_im_r_imgsub:     dw br_im_rs_imgsub, 0
 br_im_r_claimp:     dw br_im_rs_claimp, 0
 br_im_r_regrowp:    dw br_im_rs_regrowp, 0
 br_im_r_memroom:    dw br_im_rs_memroom, 0
 br_im_r_movable:    dw br_im_rs_movable, 0
-br_im_r_layout:     dw br_im_rs_layout, 0
-br_im_r_advance:    dw br_im_rs_advance, 0
+br_im_r_owe:        dw br_im_rs_owe, 0
 br_im_r_emsframe:   dw br_im_rs_emsframe, 0
 br_im_r_argrow:     dw br_im_rs_argrow, 0
 br_im_r_armap:      dw br_im_rs_armap, 0
@@ -479,7 +563,7 @@ br_im_rs_pxload:
     push bp
     push ax                         ; the part, at [bp]: op_fetch keeps no
     mov bp, sp                      ; register it is not asked to
-    call op_fetch
+    call br_fetch                   ; (home first, 1.8)
     jc .no
     mov al, [bp]
     call op_cseg
@@ -527,10 +611,6 @@ br_im_rs_regrowp:   call br_regrowp
 br_im_rs_memroom:   call br_memroom
                     retf
 br_im_rs_movable:   call br_movable
-                    retf
-br_im_rs_layout:    call br_layout
-                    retf
-br_im_rs_advance:   call br_advance
                     retf
 br_im_rs_emsframe:  call br_emsframe
                     retf
@@ -1171,28 +1251,55 @@ br_runseg:
     push bx
     push cx
     push si
+    push di
+    push bp
     cmp ax, [br_cols]
     jbe .end
     mov ax, [br_cols]
 .end:
-    cmp si, ax
+    mov di, ax                      ; DI = one past the last column
+.run:
+    cmp si, di
     jae .out
-    mov bx, ax
-    add bx, br_lbuf
-    mov al, [bx]
+    mov bx, si
+    mov al, [br_lattr+bx]
+.r2:
+    inc bx                          ; ...and BX one past this run: the whole
+    cmp bx, di                      ; span when the row has no colour, else
+    jae .r3                         ; as far as the attribute holds (1.8)
+    cmp byte [br_lcolr], 0
+    je .r2
+    cmp al, [br_lattr+bx]
+    je .r2
+.r3:
+    mov bp, [br_ppen]
+    cmp byte [br_lcolr], 0
+    je .pen
+    call br_apen
+    mov bp, ax
+.pen:
+    mov al, [br_lbuf+bx]
     push ax
-    mov byte [bx], 0                ; the run stops at the box
+    mov byte [br_lbuf+bx], 0        ; the run stops here
+    push cx
+    push si
     mov ax, si
     shl ax, 1
     shl ax, 1
     shl ax, 1
     add cx, ax
     add si, br_lbuf
-    mov ax, (CWHITE << 8) | CBLACK
+    mov ax, bp
     call OSAPI_FONT_RUN
+    pop si
+    pop cx
     pop ax
-    mov [bx], al
+    mov [br_lbuf+bx], al
+    mov si, bx
+    jmp .run
 .out:
+    pop bp
+    pop di
     pop si
     pop cx
     pop bx

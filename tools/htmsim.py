@@ -513,8 +513,9 @@ def wrap(words, width):
 
 
 def cell_text(ops):
-    # An image in a table cell is its alt text (SPEC.md 71.25, 4.1): the
-    # composer drops D_IMG as it drops every other marker
+    # A cell's words. Its pictures are measured by cell_reach: since 1.8 the
+    # composer draws a box in a cell (SPEC.md 71.34.2), and its alt text is
+    # what the box shows when the picture is not there
     return "".join(o[1] if o[0] == "RUN" else o[4]
                    for o in ops if o[0] in ("RUN", "IMG")).strip()
 
@@ -545,6 +546,18 @@ def img_lines(items, x, kind, out):
                 inner = (alt[:cols - 2] + inner[len(alt[:cols - 2]):])
             cells += (edge + inner + edge)[:cols] if cols > 1 else edge
         out.append(Line(" " * x + cells, x, kind if k == 0 else "irow"))
+
+
+def cell_reach(r):
+    """-> (above, below): the continuation rows a table row's pictures take
+    beside its first text row (SPEC.md 71.34.2), as img_lines does a line's."""
+    above = below = 0
+    for c in r:
+        for o in c.ops:
+            if o[0] == "IMG":
+                a, b = img_reach(o[2], o[3])
+                above, below = max(above, a), max(below, b)
+    return above, below
 
 
 def layout_table(t, width, out):
@@ -599,6 +612,9 @@ def layout_table(t, width, out):
             cellw = sum(want[col:col + spancols]) + (spancols - 1) * 2
             wrapped.append((wrap(cell_text(c.ops).split(), max(1, cellw)) or [""], cellw))
             col += spancols
+        above, below = cell_reach(r)
+        for _ in range(above):
+            out.append(Line("", 0, "irow"))
         for k in range(max(len(w) for w in wrapped)):
             col, parts = 0, []
             for ci, c in enumerate(r):
@@ -610,6 +626,8 @@ def layout_table(t, width, out):
                 parts.append(" " * left + line + " " * (spare - left))
                 col += spancols
             out.append(Line("|" + "|".join(" " + p for p in parts) + "|", 0, "row"))
+        for _ in range(below):
+            out.append(Line("", 0, "irow"))
         out.append(Line(rule, 0, "rule"))
 
 
@@ -710,10 +728,15 @@ def layout(ops, width):
             flush()
             layout_table(op[1], width, out)
         elif k == "IMG":
-            if op[3] >= 3:                  # left or right: a line of its own
+            if op[3] == 3:                  # left: a FLOAT (71.34.5) - text
+                flush()                     # runs beside it, so each of its
+                n = len(out)                # rows is a text row with a slice
+                img_lines([op], 0, "image", out)
+                for i in range(n, len(out)):
+                    out[i].kind = "float"
+            elif op[3] == 4:                # right: a line of its own
                 flush()
-                x = max(0, width - op[1]) if op[3] == 4 else 0
-                img_lines([op], x, "image", out)
+                img_lines([op], max(0, width - op[1]), "image", out)
             else:
                 pending.append(op)
         elif k == "HREF":

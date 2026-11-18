@@ -133,9 +133,9 @@ IMG_FLIP     equ 32                ; word: 1 = the source's first row is the
 IMG_RUNC     equ 34                ; byte: PCX run bytes still owed (<= 62)
 IMG_RUNV     equ 35                ; byte: ...and the value being repeated
 IMG_PI       equ 36                ; word: img_palmap's source entry
-IMG_BESTI    equ 38                ; byte: ...its closest os8088 colour so far
+IMG_BESTI    equ 38                ; byte: unused since os88rgb.inc
 IMG_ACC      equ 39                ; byte: img_row_planes' half-built output
-IMG_SRGB     equ 40                ; 3 bytes: the source triple being matched
+IMG_SRGB     equ 40                ; 3 bytes: unused since os88rgb.inc
 IMG_PAL      equ 44                ; 16 bytes: source index -> os8088 colour
 IMG_BPP      equ 60                ; word: bits per pixel, PER PLANE: 1 or 4.
                                    ; the whole choice of row routine, and the
@@ -435,9 +435,9 @@ img_rowmask:
 ;
 ; THE TWO ORDERS ARE ONE ARM: they agree about the middle byte and differ in
 ; which end is red, so the entry is read once and the ends are exchanged for a
-; BMP. The candidate walk then steps BX by three through the table - a channel
-; at a time, so no `mul` finds a triple - and the two formats differ again only
-; in the size of an entry, DX (0 or 1) on top of three.
+; BMP. The search is apps/os88rgb.inc's `rgb_near` (shared with the Browser's
+; colours), and the two formats differ again only in the size of an entry,
+; DX (0 or 1) on top of three.
 ; -----------------------------------------------------------------------------
 img_palmap:
     call img_palident                  ; the entries the file does not carry
@@ -452,38 +452,8 @@ img_palmap:
     jz .rgb
     xchg al, cl                        ; a BMP's red is at the other end
 .rgb:
-    mov [si+IMG_SRGB], ax              ; R and G
-    mov [si+IMG_SRGB+2], cl            ; ...and B
-    mov bp, 0xFFFF                     ; BP = the best distance so far
-    xor ax, ax                         ; AH stays 0 for every `add cx, ax`
-    xor bx, bx                         ; BX = the candidate's triple
-    cwd                                ; DL = the candidate, DH = 0
-.cand:
-    push si
-    add si, IMG_SRGB
-    xor cx, cx                         ; CX = |dR|+|dG|+|dB|, under 766
-    mov dh, 3
-.chan:
-    lodsb                              ; IMG_PAL8088 IS READ THROUGH CS. It is
-    sub al, [cs:bx+img_pal8088]        ; a table in this file's own IMAGE, and
-    jnc .pos                           ; if this include is built into an
-    neg al                             ; overlay that image is not the one DS
-.pos:                                  ; points at (93.2)
-    add cx, ax
-    inc bx
-    dec dh
-    jnz .chan
-    pop si
-    cmp cx, bp
-    jae .next
-    mov bp, cx
-    mov [si+IMG_BESTI], dl
-.next:
-    inc dx                             ; DH is 0 again: this is DL
-    cmp dl, 16
-    jb .cand
+    call rgb_near                      ; apps/os88rgb.inc: AL = the nearest
     mov bx, [si+IMG_PI]
-    mov al, [si+IMG_BESTI]
     mov [bx+si+IMG_PAL], al
     pop dx
     add di, 3                          ; three bytes an entry, or four
@@ -506,14 +476,9 @@ img_palident:
     jns .l
     ret
 
-; os8088's own sixteen, CBLACK..CWHITE, as R,G,B: the table
-; tools/os88pix.py matches on the host and apps/os88chart.inc writes into a
-; BMP palette. R,G,B order because that is a PCX header's; a BMP's is
-; byte-reversed where it is read.
-img_pal8088: db 0x00,0x00,0x00,  0x00,0x00,0xAA,  0x00,0xAA,0x00,  0x00,0xAA,0xAA
-    db 0xAA,0x00,0x00,  0xAA,0x00,0xAA,  0xAA,0x55,0x00,  0xAA,0xAA,0xAA
-    db 0x55,0x55,0x55,  0x55,0x55,0xFF,  0x55,0xFF,0x55,  0x55,0xFF,0xFF
-    db 0xFF,0x55,0x55,  0xFF,0x55,0xFF,  0xFF,0xFF,0x55,  0xFF,0xFF,0xFF
+; The nearest-colour search and os8088's sixteen are apps/os88rgb.inc's,
+; shared as source with the Browser's colour part (SPEC.md 71.34)
+%include "os88rgb.inc"
 
 ; =============================================================================
 ; .PIX - the Frotz archive (61.7). Nothing is decoded: a block is already

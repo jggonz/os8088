@@ -135,7 +135,10 @@ HEADERS = [
     ('attachment; filename=""', "/get.cgi", 0xFFFF, "get.cgi"),
     ("attachment; filename*=UTF-8''x.zip", "/get.cgi", 0xFFFF, "get.cgi"),
     (None, "/files/report.zip", 0xFFFF, "report.zip"),
-    (None, "/download-test.cgi?id=7", 0xFFFF, "DOWNLOAD.BIN"),
+    (None, "/download-test.cgi?id=7", 0xFFFF, "download.cgi"),  # the REAL name, 8.3 (1.8)
+    (None, "/a/relatorio-final.zip", 0xFFFF, "relatori.zip"),
+    (None, "/~x/(1).zip", 0xFFFF, "1.zip"),
+    (None, "/!!!.zip", 0xFFFF, "DOWNLOAD.BIN"),  # nothing legal in the stem
     ('attachment; filename="REPORT.ZIP"', "/get.cgi", 3, "get.cgi"),
 ]
 

@@ -143,9 +143,13 @@ br_dl_partdseg    equ br_dl_tmpname + 13
 br_dl_sel         equ br_dl_partdseg + 2
 br_dl_depth       equ br_dl_sel + 1
 br_dl_coldvec     equ br_dl_depth + 1
-; A Copy's regrow of the URL store against the worker's copy into the cluster
-; buffer carved there (br_dlx_put, br_copyselection; SPEC.md 71.23): the UI's
-; byte set before it waits, the worker's set before it looks
+; A Copy's regrow of the transfer region against the worker's copy into the
+; cluster buffer there (br_dlx_put, br_copyselection; SPEC.md 71.23): the
+; UI's byte set before it waits, the worker's set before it looks
 br_dl_ugrow       equ br_dl_coldvec + 4
 br_dl_wbusy       equ br_dl_ugrow + 1
-br_dl_bss_end     equ br_dl_wbusy + 1
+br_dl_gohome      equ br_dl_wbusy + 1    ; byte: a file dialog left the
+                                          ; INSTANCE away from BROWSER.O88;
+                                          ; br_fetch stands it back
+                                          ; (SPEC.md 71.34.14)
+br_dl_bss_end     equ br_dl_gohome + 1

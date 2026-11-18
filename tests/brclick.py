@@ -110,7 +110,19 @@ def main():
     a = ap.parse_args()
 
     sy, fails = browser_syms(), []
-    with os88marty.launch("build/os8088-360.img", apps=a.apps,
+    # FONTS OFF, as an 8088 started before 1.8 made it on (SPEC.md 71.35):
+    # this row clicks 8x8 cells and puts a menu over them, and DEMO.HTM's h1
+    # would be a tall line. brfont is the tall lines' row. A copy of the disk
+    # with BROWSER.CFG (SPEC.md 71.36: "BO01", the options word, no home page)
+    tmpd = tempfile.mkdtemp(prefix="brclick-")
+    apps = os.path.join(tmpd, "apps.img")
+    shutil.copy(a.apps, apps)
+    cfg = os.path.join(tmpd, "BROWSER.CFG")
+    with open(cfg, "wb") as f:
+        f.write(b"BO01" + (0x01ED).to_bytes(2, "little") + b"\0")
+    subprocess.run(["mcopy", "-o", "-i", apps, cfg,
+                    "::SYSTEM/APPDATA/BROWSER.CFG"], check=True)
+    with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine=MACHINE[a.adapter]) as m:
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
@@ -123,10 +135,10 @@ def main():
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
         about = [
-            ("br_ab1", "os8088 Browser 1.7"),
+            ("br_ab1", "os8088 Browser 1.8"),
             ("br_ab2", "Bringing the web to XT PCs"),
             ("br_ab3", "Version 1.0 contributed by Elendilon"),
-            ("br_ab4", "Version 1.2-1.7 contributed by Pentagram666"),
+            ("br_ab4", "Version 1.2-1.8 contributed by Pentagram666"),
         ]
         for symbol, expected in about:
             actual = bytes(m.readseg(pseg, sy[symbol], len(expected) + 1))

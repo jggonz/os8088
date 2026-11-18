@@ -103,6 +103,34 @@ PAGE_FS = (b"<html><head><title>Frame Set</title></head>\r\n"
            b"<frame src=\"/f2.htm\"></frameset></html>\r\n")
 
 
+def fat12_root_file(img, name11):
+    """A file in a FAT12 floppy's ROOT, by hand off the BPB: its bytes, or None."""
+    bps = img[11] | (img[12] << 8)
+    spc, rsvd, nfat = img[13], img[14] | (img[15] << 8), img[16]
+    nroot = img[17] | (img[18] << 8)
+    spf = img[22] | (img[23] << 8)
+    root = (rsvd + nfat * spf) * bps
+    data = root + nroot * 32
+    fat = img[rsvd * bps:(rsvd + spf) * bps]
+    for i in range(nroot):
+        e = img[root + i * 32:root + i * 32 + 32]
+        if e[0] == 0:
+            break
+        if e[0] == 0xE5 or e[11] & 0x18 or e[:11] != name11:
+            continue
+        clus = e[26] | (e[27] << 8)
+        size = e[28] | (e[29] << 8) | (e[30] << 16) | (e[31] << 24)
+        out = b""
+        while 2 <= clus < 0xFF0 and len(out) < size:
+            off = data + (clus - 2) * spc * bps
+            out += img[off:off + spc * bps]
+            j = clus + (clus >> 1)
+            v = fat[j] | (fat[j + 1] << 8)
+            clus = (v >> 4) if clus & 1 else (v & 0xFFF)
+        return out[:size]
+    return None
+
+
 def _frame_page(title, marker, extra):
     body = b"<html><head><title>%s</title></head><body><h1>%s</h1>\r\n" \
         % (title, title)
@@ -565,7 +593,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.7":
+    if line != "User-Agent: os8088 Browser 1.8":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
@@ -888,6 +916,12 @@ def main():
         print("windows after Save As: %r (was %d)" % (wins_now, nwin))
         if len(wins_now) <= nwin:
             fails.append("File > Save As... opened no dialog")
+        # the field opens holding the page's own name (SPEC.md 71.34.14):
+        # emptied first, twelve being the longest 8.3 name it can hold
+        subprocess.run(["python3", "tools/qmp.py", SOCK]
+                       + ["sendkey backspace", "sleep 0.05"] * 12,
+                       check=True, capture_output=True)
+        os88qemu.pace(m, 0.5)
         type_url(SAVED)
         os88qemu.pace(m, 1.0)
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
@@ -927,16 +961,19 @@ def main():
         # the 8.3 directory entry is 'SAVED   HTM'
         if b"SAVED   HTM" not in raw:
             fails.append("%s is not in the apps image's directory" % SAVED)
-    # ...the page CURRENTLY loaded, which is PAGE_A - where the 303 in step
-    # 7b landed - and not the FrogFind result or PAGE_B. Assert
-    # against whatever was last served, or this reads as a broken Save As
-    # every time a fetch is added ahead of it. And assert a string NO FIXTURE
-    # on the disk carries: "FrogFind!" is in FFHOME.HTM, which is on
-    # brtest360.img before the browser writes a byte, so that check was
-    # satisfied by a file that was there already. "Page Alpha" is in no file
-    # under tests/htm/, so only the saved page can supply it.
-    if b"Page Alpha" not in raw:
-        fails.append("the saved file does not hold the server's bytes")
+    # ...THE FILE ITSELF, read off the FAT, and not a search of the whole
+    # image: free clusters keep whatever an earlier write left there, so a
+    # string anywhere on the volume proves nothing about SAVED.HTM. The page
+    # loaded at the save is the frameset of step 9, and SPEC.md 71.15 says
+    # Save As then writes the source claim, which holds the LAST child's
+    # bytes - Frame Two, whose marker word "Phosphorus" is in no fixture on
+    # the disk and in no other page this row serves.
+    saved = fat12_root_file(raw, b"SAVED   HTM")
+    if saved is None:
+        fails.append("SAVED.HTM could not be read off the apps image")
+    elif b"Phosphorus" not in saved:
+        fails.append("the saved file does not hold the server's bytes "
+                     "(%d bytes, no Frame Two marker)" % len(saved))
     else:
         print("the image holds the server's own bytes")
 

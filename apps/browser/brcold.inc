@@ -1509,3 +1509,270 @@ br_cx_crd:
     pop cx
     pop bx
     ret
+
+; === Save As's write (1.8 size pass): br_saved in the primary is a thunk ===
+; -----------------------------------------------------------------------------
+; br_saved - Save As's completion proc
+; in:  AL = mode, SI = our window, DI = the chosen name; UI task, gfx lock
+;      held, the dialog window already gone
+; out: nothing
+;
+; The name is COPIED before anything else happens: the kernel's buffer is
+; valid for this call only (SPEC.md 38.6), and OSAPI_FILE_WRITE is a mount, a
+; chain walk and a directory commit between here and reading it.
+; -----------------------------------------------------------------------------
+br_cx_saved:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [br_win], si
+    cmp byte [es:di], 0
+    je .out                         ; cancelled
+    call far [br_dl_r_getname]
+    cmp word [br_srcseg], 0
+    jne .plainwrite
+    cmp word [br_srcemshnd], 0
+    je .out                         ; the page went while the dialog was up
+    call br_cx_savesrc
+    jc .failed
+    mov si, br_s_saved
+    mov al, BN_DONE
+    jmp short .say
+.plainwrite:
+.write:
+    mov si, br_name
+    mov es, [br_srcseg]
+    xor bx, bx
+    mov cx, [br_srclen]
+    mov dx, [br_srclen_hi]          ; **DX:CX IS THE COUNT**, not a 16-bit
+    xor ax, ax
+    call far [br_dl_r_srcpin]                  ; pinned for the write (br_srcpin's header)
+    call OSAPI_FILE_WRITE           ; 32-bit: a 16-bit one here writes whatever
+    mov ax, br_reloc                ; was in DX as the high word
+    call far [br_dl_r_srcpin]                  ; ...and free to move again, CF kept
+    jc .failed
+    mov si, br_s_saved
+    mov al, BN_DONE                 ; ...and it FINISHED, which is not the same
+    jmp short .say                  ; as it failed
+.failed:
+    mov si, br_s_wfail
+    mov al, BN_ERR
+.say:
+    mov [br_nmsg], si
+    mov [br_nstate], al             ; br_status shows the message on either,
+                                    ; because both are finished states; the
+                                    ; next navigation clears it
+    call far [br_dl_r_status]
+.out:
+    pop es                          ; (br_pop7's pops: it is the primary's)
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Save an EMS-backed source without pulling it into conventional memory.
+; Chunk boundaries are multiples of the destination cluster (up to 32 KiB).
+br_cx_savesrc:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov cx, [br_srclen]             ; ONE BAR FOR THE SAVE (SPEC.md 12.8.10):
+    mov dx, [br_srclen_hi]          ; a chunk a call, so the bar filled once
+    call OSAPI_FS_OP                ; per 32 KB. Its answer is KEPT (on the
+    sbb ax, ax                      ; stack, 0 = ours): a download may own
+    push ax                         ; the Browser's one operation, and this
+                                    ; must not end that one
+    call OSAPI_FILE_DFREE
+    jc .fail
+    cmp bx, 64
+    ja .fail                        ; one EMS window cannot feed a larger FAT cluster
+    mov ax, bx
+    mov cl, 9
+    shl ax, cl                      ; cluster bytes
+    or ax, ax
+    jz .fail
+    mov [br_savecluster], ax
+    mov cx, ax
+    mov ax, 32768
+    xor dx, dx
+    div cx
+    or dx, dx
+    mov ax, 32768
+    jz .chunksize
+    mov ax, [br_savecluster]        ; unusual non-divisor cluster size
+.chunksize:
+    mov [br_savechunk], ax
+    mov word [br_saveoff], 0
+    mov word [br_saveoff+2], 0
+    mov word [br_savetoken], 0
+    mov byte [br_savemode], 0
+.next:
+    mov ax, [br_saveoff]
+    mov dx, [br_saveoff+2]
+    call far [br_dl_r_srcemsmap]
+    jc .fail
+    mov bx, si
+    mov ax, [br_srclen]
+    sub ax, [br_saveoff]
+    mov dx, [br_srclen_hi]
+    sbb dx, [br_saveoff+2]
+    or dx, dx
+    jnz .fullchunk
+    cmp ax, [br_savechunk]
+    ja .fullchunk
+    mov [br_saveamount], ax
+    jmp short .writechunk
+.fullchunk:
+    mov ax, [br_savechunk]
+    mov [br_saveamount], ax
+.writechunk:
+    mov si, br_name
+    mov cx, [br_saveamount]
+    cmp byte [br_savemode], 0
+    jne .appendchunk
+    xor dx, dx
+    call OSAPI_FILE_WRITE
+    jc .fail
+    mov byte [br_savemode], 1
+    jmp short .advanced
+.appendchunk:
+    cmp byte [br_savemode], 2
+    je .append
+    mov al, 0
+    mov di, [br_savetoken]
+    call OSAPI_FILE_WRITE_SEQ
+    jnc .seqok
+    cmp ax, FERR_NAME
+    jne .fail
+    mov byte [br_savemode], 2
+.append:
+    mov si, br_name
+    mov ax, [br_saveoff]
+    mov dx, [br_saveoff+2]
+    call far [br_dl_r_srcemsmap]
+    jc .fail
+    mov bx, si
+    mov si, br_name
+    mov cx, [br_saveamount]
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
+    jc .fail
+    jmp short .advanced
+.seqok:
+    mov [br_savetoken], di
+    mov byte [br_savemode], 1
+.advanced:
+    mov ax, [br_saveamount]
+    add [br_saveoff], ax
+    adc word [br_saveoff+2], 0
+    mov ax, [br_saveoff+2]
+    cmp ax, [br_srclen_hi]
+    jb .next
+    ja .finished
+    mov ax, [br_saveoff]
+    cmp ax, [br_srclen]
+    jb .next
+.finished:
+    cmp byte [br_savemode], 1
+    jne .ok
+    mov si, br_name
+    mov al, 0
+    mov di, [br_savetoken]
+    xor cx, cx
+    call OSAPI_FILE_WRITE_SEQ
+    jc .fail
+.ok:
+    clc
+    jmp short .out
+.fail:
+    stc
+.out:
+    pop dx                          ; the begin's answer
+    pushf
+    or dx, dx
+    jnz .notours
+    xor cx, cx                      ; DX:CX = 0: the end of ours
+    call OSAPI_FS_OP
+.notours:
+    popf
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; === Options > an item (1.8 size pass): br_optcmd in the primary is a thunk ===
+; --- br_optcmd - Options > item AL ------------------------------------------
+br_cx_optcmd:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    cmp al, OPT_N
+    jb .toggle
+    cld
+    mov si, br_ubuf                 ; Set Home Page: the address in the bar
+    mov di, br_ocfg + 6
+    mov cx, BR_UBUF - 1
+.h:
+    lodsb
+    mov [di], al
+    inc di
+    or al, al
+    jz .save
+    loop .h
+    mov byte [di], 0
+    jmp short .save
+.toggle:
+    mov cl, al
+    mov bx, 1
+    shl bx, cl
+    xor [br_opts], bx
+    call far [br_dl_r_optapply]
+.save:
+    mov word [br_ocfg], 'BO'
+    mov word [br_ocfg + 2], '01'
+    mov ax, [br_opts]
+    mov [br_ocfg + 4], ax
+    mov si, br_ocfg + 6             ; the file's length: through the URL's NUL
+    xor cx, cx
+.l:
+    inc cx
+    lodsb
+    or al, al
+    jnz .l
+    add cx, 6
+    push ds
+    pop es
+    mov bx, br_ocfg
+    mov si, br_s_optfile
+    mov di, br_ostamp
+    call far [br_dl_r_odwrite]
+    call far [br_dl_r_okrel]                   ; ...and the page again, as it now reads
+    jc .out
+    call far [br_dl_r_reload]
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+

@@ -205,6 +205,11 @@ INCLUDES = [
      "Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that "
      "OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block "
      "in SI. 8-bit files are refused by name, not approximated."),
+    ("os88rgb.inc", "93",
+     "An RGB triple to the nearest of os8088's sixteen colours "
+     "(`rgb_near`, |dR|+|dG|+|dB|, no mul) and the table of them "
+     "(`rgb_pal8088`, read through CS). Shared as source by os88img.inc's "
+     "palette map and the Browser's colour part (71.34)."),
     ("os88spkfx.inc", "34.11.9",
      "The SPEAKER SHAPER, beside os88spk.inc: 8-bit PCM made into pulse "
      "counts a 5150's cone can play - a first-difference pre-emphasis, a "

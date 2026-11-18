@@ -55,7 +55,13 @@ BRDL_SRC      equ 56                ; View and Close Source,
 BRDL_SUBMIT   equ 60                ; a form's submit,
 BRDL_BMCOMMIT equ 64                ; and a bookmark's add or remove,
 BRDL_MAPCLICK equ 68                ; and a click on an image map (71.32)
-BRDL_N        equ 18
+BRDL_SAVE     equ 72                ; Save As's write (1.8's size pass)
+BRDL_OPTCMD   equ 76                ; ...and Options > an item
+BRDL_SAVEAS   equ 80                ; ...and Save As's chooser: the folder
+                                    ; banked and the dialog raised (71.34.14)
+BRDL_FORMRESET equ 84               ; ...a form's Reset (1.8 size pass)
+BRDL_LABELFOCUS equ 88              ; ...and a <label>'s click
+BRDL_N        equ 23
 
 ; An image map's area (SPEC.md 71.32): the parser writes br_area, part 0
 ; reads it. Here because both sides include this file

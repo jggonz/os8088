@@ -55,6 +55,13 @@
 ; `%define OS88TY_NO<ROUTINE>` for each of HIT, WIDTH, WIDTHN, FIT, PUT,
 ; ADVOF, FAMN, GETASC and GETLEAD it never calls. Nothing in here calls them,
 ; so a wrong one fails the assembly rather than the machine.
+; `%define OS88TY_FACEBUF proc` (SPEC.md 6.5.5) lets ty_open read a face into
+; the INCLUDER'S OWN memory before it claims: the proc takes AX = the KB the
+; face needs and answers CF=0 with DX = a segment whose offset 0 starts a
+; buffer that large on a 512-byte linear boundary, or CF=1 to claim as usual.
+; Every other register kept. A face read there is no claim: ty_close frees
+; nothing for it and it never moves. For a package at its claim cap (the
+; Browser's part 8, SPEC.md 71.35).
 ; `%define OS88TY_NOGRAY` (apps size pass 2b) takes out ty_gray and
 ; ty_flush's greying arm, for an includer that never greys a band (Font
 ; Viewer). Because the arm is INSIDE ty_flush, the switch also RENAMES it:
@@ -783,7 +790,11 @@ ty_open:
     ja .rderr                       ; past the ceiling: what the old 8KB read
     push dx                         ; answered for it, FERR_BIG and TYE_READ
     mov ax, dx                      ; all of it is the read's (CLAIM_DMA's
-    mov cl, 6                       ; 64KB question), in paragraphs
+%ifdef OS88TY_FACEBUF                ; 64KB question)
+    call OS88TY_FACEBUF             ; THE INCLUDER'S OWN BUFFER first (SPEC.md
+    jnc .ownbuf                     ; 6.5.5): AX = KB in, DX = it out
+%endif
+    mov cl, 6                       ; ...else a claim, in paragraphs
     shl ax, cl
     mov cx, ax
     push bx
@@ -801,9 +812,17 @@ ty_open:
     mov [ty_rdlen], ax              ; the FERR_*, which is how ty_openfam
     mov al, TYE_READ                ; tells a stale bank from a bad sector
     jmp .fail
+%ifdef OS88TY_FACEBUF
+.ownbuf:
+    pop cx                          ; CX = the KB it holds
+    mov di, [ty_opdi]
+    mov word [di + TF_CLAIM], 0     ; nothing to free, nothing to move
+    jmp short .gotseg
+%endif
 .got:
     mov di, [ty_opdi]
     mov [di + TF_CLAIM], dx
+.gotseg:
     push ax
     push bx
     push dx
@@ -848,7 +867,12 @@ ty_open:
     push dx                         ; claim was a read target until here, and
     mov dx, [di + TF_CLAIM]         ; ty_reloc puts right every word that
     mov ax, ty_reloc                ; names it. A refusal only pins it
+%ifdef OS88TY_FACEBUF
+    or dx, dx                       ; (the includer's buffer is no claim)
+    jz .pinned
+%endif
     call OSAPI_MEM_MOVABLE
+.pinned:
     pop dx
     pop ax
     mov ax, di
@@ -866,7 +890,12 @@ ty_open:
     push ax
     mov di, [ty_opdi]
     mov dx, [di + TF_CLAIM]
+%ifdef OS88TY_FACEBUF
+    or dx, dx
+    jz .unclaimed
+%endif
     call OSAPI_MEM_FREE
+.unclaimed:
     mov word [di + TF_CLAIM], 0
     mov byte [di + TF_REF], 0
     pop ax

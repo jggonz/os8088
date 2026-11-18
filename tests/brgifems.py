@@ -428,8 +428,9 @@ def main():
                         say("  %s slice %d from %04X:%04X DIFFERS"
                             % (gs[k][0], sl, r["es"], r["si"]))
                 m.run()
-        m.key("Escape")                 # the keyboard back to the page
-        os88marty.settle(m)
+        m.key("Escape")                 # the keyboard back to the page - and
+        drain()                         # 1.8 repaints on it, through the armed
+                                        # breakpoint: drained, not settled
         for _ in range(4 * a.n):        # down to the end, then the top again:
             if rw("br_top") + rw("br_rows") >= rw("br_nlines"):
                 break                   # the load drew the top before its

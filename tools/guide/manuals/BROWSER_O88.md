@@ -5,12 +5,19 @@ disk or fetches them over the network, and shows them with headings, lists,
 bold, italic and underlined text, tables and simple forms. Links are
 underlined: click one to follow it.
 
-It does not show colours or styles yet. Pictures are fetched after the page
-and drawn in it, in the colours the screen can show: GIF, PNG, JPEG, BMP,
-TIFF, PCX, TGA, ICO, IFF, MacPaint, PNM and XBM. An animated GIF plays while
-it is in view. Other pictures, and a picture file of more than 60,000 bytes,
-appear as a box of their size, with their description inside if the page
-gives one. Right-click a picture and choose Save Image As to keep its
+Body text is set in Times, as the browsers of the period set it, with
+larger and smaller letters where the page asks for them. On a colour screen
+(VGA or EGA) a page shows its own colours: its background, its text and the
+ground of its table cells. Tables are drawn with a bevelled grid, or none,
+and take the widths the page gives them, and text runs beside a picture
+placed at the left.
+
+Pictures are fetched after the page and drawn in it, in the colours the
+screen can show: GIF, PNG, JPEG, BMP, TIFF, PCX, TGA, ICO, IFF, MacPaint,
+PNM and XBM, up to 64 a page. A GIF appears as it arrives, and an animated
+one plays while it is in view. Other pictures, a picture file of 192 KB or
+more, and an animation of more than 60,000 bytes appear as a box of their
+size, with their description inside if the page gives one. Right-click a picture and choose Save Image As to keep its
 file. A picture that is a map takes you to the place you click on it. A picture that is a link can be clicked anywhere in its box.
 It cannot open secure (`https`) sites by
 itself, because the encryption they use would take minutes on this machine.
@@ -55,7 +62,7 @@ page. Then these keys move through it:
 | `Ctrl+D` | Bookmark the page, or remove its bookmark |
 | `Ctrl+U` | View the page's source |
 
-**Help > Keyboard Shortcuts...** lists them.
+**Options > Keyboard Shortcuts...** lists them.
 
 The scroll bar on the right works with the mouse: click its arrows, click
 above or below the thumb to move a window at a time, or drag the thumb.
@@ -81,7 +88,7 @@ the `http://`, and you may add a port number after the name, as in
 
 The Browser follows a link from a page on a disk only if the link is a full
 `http://` address. A link that only makes sense next to the page on its
-server answers **Relative link: this page has no server**.
+server answers **Link has no server**.
 
 ![An address typed on a machine with no network driver loaded.](shot:browser-nolink){full}
 
@@ -163,7 +170,9 @@ opens the window again.
 | Go > Reload | Fetch the page again, like the Reload button |
 | History | The last eight pages you visited. Pick one to go back to it |
 | Bookmarks | Your saved pages. Pick one to go there |
-| Help > Keyboard Shortcuts... | The keys the Browser answers to |
+| Options > Keyboard Shortcuts... | The keys the Browser answers to |
+| Options > [x] Images, Images on Click, Animations, Colors, Fonts, Tables, Underline Links, Cookies, Cache | Turn each on or off; saved in SYSTEM/APPDATA/BROWSER.CFG, and the page is laid out again |
+| Options > Set Home Page | The page in the address bar opens when the Browser starts with no document |
 | Browser > About Browser | Who made it |
 | Browser > Close | Close this Browser |
 
@@ -246,5 +255,7 @@ The toolbar says **Saved**, or **Save failed**. With no page loaded it says
   too long**.
 - The Browser follows up to three redirects from a server. More answer **Too
   many redirects**.
-- Pages made of frames are joined into one page, frame after frame.
+- A page made of frames is shown as one page: its frames side by side or
+  one under another, each as wide as the page asks, and each in its own
+  colours. The frames scroll together, with the page's scroll bar.
 - If a fetch fails, open the page you want again.

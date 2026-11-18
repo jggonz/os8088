@@ -20,6 +20,9 @@ from brclick import browser_syms, MACHINE
 S = os88sym.linear
 
 
+GRID = {0x80: "-", 0x81: "|", 0x82: "+"}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="cga", choices=sorted(MACHINE))
@@ -74,8 +77,13 @@ def main():
                 if b == 14:
                     j += 4
                     continue
+                if b == 24:                 # D_CMETA and its payload byte
+                    j += 2                  # (1.8: BR_SNAP opens a cell)
+                    continue
                 j += 1
-                if b >= 0x20:
+                if b in GRID:               # 1.8's solid grid (brdocmarks.inc
+                    line.append(GRID[b])    # BR_BH/BV/BX), read as the old
+                elif b >= 0x20:             # '-', '|' and '+'
                     line.append(" " if b == 0x7f else chr(b))
             rendered.append("".join(line))
         malformed_next = next((i for i, line in enumerate(rendered)
