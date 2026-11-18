@@ -589,7 +589,8 @@ br_bmservice:
     mov byte [br_bmopwork], 3
 .work:
     mov byte [br_bmrefreshreq], 0
-    call br_bmrefresh
+    call br_ustake                  ; the store is ours until the menu is set:
+    call br_bmrefresh               ; a link arena's grow waits (71.34.8)
     mov al, [br_bmreq]
     jnc .readok
     mov byte [br_bmreq], 0          ; unreadable or foreign file: never write
@@ -631,6 +632,7 @@ br_bmservice:
 .refresh_only:
     call br_bmcheck
     call br_bmmenuset
+    mov byte [br_dl_ugrow], 0       ; (br_ustake's, at .work)
     mov byte [br_bmredraw], 1      ; repaint after the disk operation returns
 .out:
     push ds

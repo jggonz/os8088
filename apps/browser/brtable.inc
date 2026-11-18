@@ -77,6 +77,7 @@ br_tmeas:
     rep stosb
     pop es
     mov byte [br_tfix], 0           ; no column with a width of its own
+    mov byte [br_tpicm], 0          ; ...nor a picture in it
     mov byte [br_tn], 0
     mov byte [br_tany], 0
     mov word [br_tcells], 0
@@ -228,6 +229,12 @@ br_tmimg:
     xor al, al
     xchg al, ah
     xchg ax, di                     ; DI = the column, AL = COLS
+    push cx
+    mov cx, di
+    mov ah, 1
+    shl ah, cl
+    or [br_tpicm], ah               ; the column has a picture: its floor binds
+    pop cx
     cmp al, [di+br_tflr]
     jbe .nf
     mov [di+br_tflr], al
@@ -400,11 +407,15 @@ br_tfit:
     xor di, di
     xor dx, dx
     mov ah, 0
+    mov bl, [br_tpicm]              ; bit n: column n has a picture
 .t2:
     mov al, [di+br_tw]
-    cmp al, [di+br_tflr]            ; never trim a column through its floor
-    jbe .t3                         ; (a word, or a picture: 1.8); none left
-    cmp al, ah                      ; and the table overflows the band
+    shr bl, 1
+    jnc .t2w                        ; text alone trims through its words
+    cmp al, [di+br_tflr]            ; to 2, as it always did; a picture's
+    jbe .t3                         ; column never through its floor (1.8)
+.t2w:
+    cmp al, ah
     jbe .t3
     mov ah, al
     mov dx, di
@@ -413,7 +424,8 @@ br_tfit:
     cmp di, cx
     jb .t2
     cmp ah, 2
-    jbe .out                        ; cannot shrink further: let it overflow
+    jbe .out                        ; cannot shrink further: let it overflow,
+                                    ; clipped at the band (no horizontal scroll)
     mov di, dx
     dec byte [di+br_tw]
     jmp .trim
@@ -1281,6 +1293,9 @@ br_cend:
     jnc .below
 .out:
     pop es
+    mov es, [br_docseg]             ; ...the document's: a line table in its
+                                    ; claim (71.34.13) grew, and may have
+                                    ; moved it, under br_lslot
     pop di
     pop bx
     pop ax
@@ -1732,6 +1747,23 @@ br_tpset:
     push bx
     push dx
     mov bx, [br_tccol]
+    cmp byte [bx + br_tpk + 1], 0   ; the column still owes another's slices:
+    jne .below                      ; this one's rows go below, as before
+    push si                         ; ...and so they do when the cell has
+    mov dx, [bx + br_ce]            ; more to say after it - a caption, or
+.scan:                              ; text that wraps - which the slices would
+    inc si                          ; otherwise cut in two (only spaces and
+    cmp si, dx                      ; markers may follow)
+    jae .top
+    cmp byte [es:si], ' '
+    jbe .scan
+    pop si
+.below:
+    pop dx
+    pop bx
+    jmp short .no
+.top:
+    pop si
     mov dx, [br_tpst]               ; the record
     mov [bx + br_tpic], dx
     mov dx, [br_tpln]

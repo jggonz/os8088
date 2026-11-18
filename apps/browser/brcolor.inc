@@ -1053,6 +1053,8 @@ br_tlook:
     push cx
     mov byte [br_tbrd], 0
     mov byte [br_twd], 0
+    cmp byte [br_tind], 0           ; inside a table laid out inline: a nested
+    jne .out                        ; one, which br_tbord gave no slot
     mov al, [br_tlc]
     inc byte [br_tlc]
     cmp al, 64

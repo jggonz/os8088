@@ -1778,8 +1778,7 @@ br_build:
     cmp al, D_B1
     jne .style2
     or byte [br_lfmt], LNF_BOLD
-    mov byte [br_drawbitmap], 1
-    jmp .copy
+    jmp short .sbmp
 .style2:
     cmp al, D_B0
     jne .style3
@@ -1789,7 +1788,11 @@ br_build:
     cmp al, D_I1
     jne .style4
     or byte [br_lfmt], LNF_ITALIC
-    mov byte [br_drawbitmap], 1
+.sbmp:
+    cmp byte [br_lrowk], 0          ; the TEXT row only: a continuation row's
+    jne .sbx                        ; cells are blank, and its pictures go
+    mov byte [br_drawbitmap], 1     ; down first under .font's FONT_RUNs
+.sbx:
     jmp .copy
 .style4:
     cmp al, D_I0
@@ -6298,8 +6301,11 @@ br_reloc:
     call .one
     call br_lnkfix                  ; ...the arena inside it (1.8)
     call br_lsfix                   ; ...and the line table in the document's
-    mov si, br_dlseg                ; ...and the transfer's segment when it
-    call .one                       ; is the store's own
+    cmp word [br_dlclaim], 0        ; ...and the transfer's segment when it
+    jne .dl                         ; is the store's own: derived from a
+    mov si, br_dlseg                ; pinned claim of its own, it never
+    call .one                       ; follows a move (71.34.8)
+.dl:
     mov si, br_istseg               ; ...and the image store (SPEC.md 71.26)
 .one:
     cmp [si], bx
@@ -6546,7 +6552,10 @@ br_urlgrow:
 ; claims, and selectors, which take no sums) keeps the three apart.
 ; =============================================================================
 
-; br_lnkgrow - the arena to AX KB inside the store's claim. CF=1 refused
+; br_lnkgrow - the arena to AX KB inside the store's claim. CF=1 refused.
+; THE WORKER'S PARSE CALLS IT, and a grow may MOVE the store (50.3.1) from
+; under the UI task: [br_lgbusy] is its byte and [br_dl_ugrow] the UI's
+; (br_ustake), br_dlx_put's handshake turned round (SPEC.md 71.34.8)
 br_lnkgrow:
     push ax
     push cx
@@ -6556,9 +6565,18 @@ br_lnkgrow:
     mov cl, 6
     shl ax, cl                      ; KB -> paragraphs
     add ax, BR_URLSTORE / 16
+.wait:
+    mov byte [br_lgbusy], 1         ; FIRST, then the UI's byte
+    cmp byte [br_dl_ugrow], 0
+    je .grow
+    mov byte [br_lgbusy], 0
+    call OSAPI_TASK_YIELD
+    jmp short .wait
+.grow:
     mov dx, [br_urlseg]
     call br_regrowp                 ; a grow may move the store: br_reloc
-    jc .out                         ; follows it, and br_lnkfix the arena
+    mov byte [br_lgbusy], 0         ; follows it, and br_lnkfix the arena
+    jc .out                         ; (mov keeps CF)
     mov dx, [br_urlseg]
     add dx, BR_URLSTORE / 16
     mov [br_lnkseg], dx
@@ -6567,6 +6585,19 @@ br_lnkgrow:
     pop dx
     pop cx
     pop ax
+    ret
+
+; br_ustake - the UI task holds the URL store across a disk call or a copy:
+; [br_dl_ugrow] set, and a worker's arena grow under way waited out. The
+; caller clears the byte when it is done with the store. All kept
+br_ustake:
+    mov byte [br_dl_ugrow], 1
+.w:
+    cmp byte [br_lgbusy], 0
+    je .ret
+    call OSAPI_TASK_YIELD
+    jmp short .w
+.ret:
     ret
 
 ; br_lnkfree - the page's arena goes: in the store's claim, the claim shrinks
@@ -11475,6 +11506,7 @@ br_layout:
     mov byte [br_lhead], 0
     mov byte [br_tall], 0           ; no tall line, no pixels (71.35)
     mov byte [br_tlc], 0            ; no table met yet
+    mov byte [br_tind], 0           ; ...nor one inlined
     mov byte [br_zl], 0             ; the body in the cell until a page asks
     call br_tzero
     mov byte [br_lquote], 0
@@ -11670,9 +11702,12 @@ br_layout:
     je .mpre0
     cmp al, D_TAB1
     je .mtab
-    jmp .mrst                       ; D_ROW / D_CELL / D_TAB0 reached OUTSIDE
-                                    ; br_table means the table was inlined as
-                                    ; a box (3.2.1): they are line breaks
+    cmp al, D_TAB0                  ; D_ROW / D_CELL / D_TAB0 reached OUTSIDE
+    jne .mrst                       ; br_table means the table was inlined as
+    dec byte [br_tind]              ; a box (3.2.1): they are line breaks - and
+    jns .mrst                       ; its D_TAB0 ends that box ([br_tind]; one
+    inc byte [br_tind]              ; with none open is a break alone)
+    jmp .mrst
 .mcol:
     call br_szrec                   ; a size (71.35), or nothing
     push si
@@ -11815,15 +11850,18 @@ br_layout:
 .mtab:
     call br_tlook                   ; its border, as the parser read it (1.8)
     cmp word [br_doclen_hi], 0      ; legacy table walkers use a local word
-    jne .mrst                        ; span; flatten tables on large pages
+    jne .mtin                        ; span; flatten tables on large pages
     cmp byte [br_docems], 0
-    jne .mrst                        ; composer still assumes a direct segment
+    jne .mtin                        ; composer still assumes a direct segment
     cmp word [br_doclen], 0xBFF0
-    jae .mrst
+    jae .mtin
     cmp word [br_docbase], 0
-    jne .mrst
+    jne .mtin
     call br_tbcall                   ; SI = the body. CF=1 = inline it, and
-    jmp .mrst                       ; either way the walk resumes at SI
+    jnc .mrst                       ; either way the walk resumes at SI
+.mtin:
+    inc byte [br_tind]              ; ...inside it: a table met there is one
+    jmp .mrst                       ; the parser did not number (br_tlook)
 .mpara:
     call br_blank
     mov byte [br_lfmt], 0          ; malformed inline tags cannot leak into the next block
@@ -12098,13 +12136,13 @@ br_emitline:
     jnc .below
 .out:
     mov byte [br_lright], 0
-    call br_ldocback                ; the walk's ES:SI is the document again
     mov ax, [br_lnkopen]            ; ...and the NEXT line starts wherever this
     mov [br_lnkst], ax              ; one left the link state. One assignment,
                                     ; in the one routine every line comes
                                     ; through, rather than a copy at each of
                                     ; the four places br_lstart moves
     pop es
+    call br_ldocback                ; the walk's ES:SI is the document again
     pop di
     pop dx
     pop cx
@@ -12189,8 +12227,8 @@ br_blank:
     jc .out
     inc word [br_nlines]
 .out:
-    call br_ldocback                ; br_lread above maps the line table too
     pop es
+    call br_ldocback                ; br_lread above maps the line table too
     pop di
     pop dx
     pop bx
@@ -12215,8 +12253,8 @@ br_emitrule:
     jc .out
     inc word [br_nlines]
 .out:
-    call br_ldocback
     pop es
+    call br_ldocback
     pop di
     pop ax
     ret
@@ -12228,15 +12266,26 @@ br_emitrule:
 ; a big page stopped at its second line (SPEC.md 71.18). [br_docbase] is the
 ; page-aligned base the walk mapped, so mapping it again restores the same
 ; window with SI unchanged. A conventional table or document costs a compare.
-; Registers and flags' CF preserved.
+; THE TABLE IN THE DOCUMENT'S CLAIM ([br_lshare], 71.34.13) is the other
+; case: its grow regrows that claim, which may MOVE it (50.3.1), so the ES
+; the caller popped is the old block - here it is mapped again from
+; [br_docseg]. Callers pop their ES first. Registers but ES (the window) and
+; flags' CF preserved.
 br_ldocback:
+    cmp byte [br_lshare], 0
+    jne .es
     cmp byte [br_lineems], 0
     je .ret
     cmp byte [br_docems], 0
     je .ret
+    push es                         ; (EMS: the frame's pages, not its segment)
+    call .es
+    pop es
+.ret:
+    ret
+.es:
     pushf
     push di
-    push es
     push ax
     push dx
     mov ax, [br_docbase]
@@ -12244,10 +12293,8 @@ br_ldocback:
     call br_docmap
     pop dx
     pop ax
-    pop es
     pop di
     popf
-.ret:
     ret
 
 ; --- br_laddr / br_lread / br_lwrite -----------------------------------------
@@ -15286,6 +15333,8 @@ br_tcells   equ os88_image_end + 464  ; word: cells in the whole table (3.2.1)
 br_tavail   equ os88_image_end + 466  ; word: cells the columns may share
 br_tw       equ os88_image_end + 468  ; 8 bytes: each column's width
 br_tflr     equ os88_image_end + 476  ; 8 bytes: ...and its longest word
+br_tpicm    equ os88_image_end + 543  ; byte: bit n, column n has a picture
+                                      ; (a free byte, beside br_dest)
 br_cs       equ os88_image_end + 484  ; 8 words: this row's cell starts
 br_ce       equ os88_image_end + 500  ; 8 words: ...and their ends
 br_tcur     equ os88_image_end + 516  ; 8 words: ...and the wrap cursor in each
@@ -15982,7 +16031,9 @@ br_cwant         equ br_iowet + 2      ; byte: part 7 for a colour - 0 may
                                        ; ask, 1 asked, 2 never this session
 br_lshare        equ br_cwant + 1      ; byte: the line table lives in the
                                        ; document's claim (71.34.11)
-br_parse_bss_end equ br_lshare + 1
+br_tind          equ br_lshare + 1     ; byte: inlined tables the layout is in
+br_lgbusy        equ br_tind + 1       ; byte: the worker regrows the URL store
+br_parse_bss_end equ br_lgbusy + 1
 BR_BSS     equ (br_parse_bss_end - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------

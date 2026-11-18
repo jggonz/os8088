@@ -134943,9 +134943,12 @@ cell's `D_IMG` record with the other markers; it now carries it.
   decoration. A link's three nibbles are skipped as a unit, since one of them
   can read as `D_IMG`.
 - **Squeeze** (`br_tfit`): the trim that gives excess back from the widest
-  column no longer trims a column through its floor; when every column is at
-  its floor the table overflows the band (BROWSER-PLAN 3.2's horizontal
-  scroll) rather than splitting a word or a picture.
+  column no longer trims a column with a picture in it (`br_tpicm`'s bit,
+  set by `br_tmimg`) through its floor; a column of text alone is still
+  trimmed through its words, down to 2, splitting them. A table overflows the
+  band only when its pictures' columns alone are wider than it, and that
+  overflow is clipped at the band (`br_build`): the Browser has no
+  horizontal scroll.
 - **Wrap** (`br_twrap`): a picture is one unit of `COLS` cells. A fragment
   that cannot take it ends before it; alone and wider than its column it is
   placed anyway. Its record and alt text are copied whole into the composed
@@ -135063,8 +135066,12 @@ and this browser drew every one with `+---+` rules and `|` edges. The parser
 keeps one bit an OUTER table, in the order they open (`br_tbord`,
 `[br_tbits]`, 64 of them; past that, none) - its own depth count, so a 1bpp
 machine reads it too - and the layout takes the bit when it meets the table
-(`br_tlook`, `[br_tbrd]`). With none, `br_trule` writes no rule and the
-edges are spaces (`br_tbar`): the cells keep their places and lose the grid.
+(`br_tlook`, `[br_tbrd]`). A table met inside one the layout inlined as a
+box (BROWSER-PLAN 3.2.1) is a nested one the parser never numbered: the
+layout counts the boxes it is in (`[br_tind]`, up at an inlined `D_TAB1`,
+down at its `D_TAB0`) and takes no bit there, so the outer tables after it
+keep their own. With none, `br_trule` writes no rule and the edges are
+spaces (`br_tbar`): the cells keep their places and lose the grid.
 
 **IE3's bevel, in one colour** (`br_bglyph`, part 8's `brf_vline`): every
 grid line is a PAIR in its cell - a 50% dither (the lighter grey, read as
@@ -135222,7 +135229,11 @@ of its own below the line (`br_tpset`) - its column puts the next SLICE on
 each of the row's following lines instead (`br_tpslice`: `D_CMETA`, `C0h` + k,
 then a copy of its record), which `br_build` draws as slice k (`br_bslice`,
 `[br_bslc]`), so the next cell's text runs down beside the whole picture
-rather than below it. 63 slices at most, 504 pixels.
+rather than below it. 63 slices at most, 504 pixels. Only when nothing but
+spaces and markers follows it in its cell, and only one at a time in a
+column: a caption after it, text that wraps or a second top-aligned picture
+would put the cell's own lines between its slices, so its rows then go below
+the line as any other picture's do.
 
 **TEXT BESIDE A PICTURE (1.8 step 4)**: `<img align=left>` outside a table
 is written as an invisible table the band's width (`br_fltopen`,
@@ -135297,9 +135308,22 @@ the claim back at a page's end; `br_lnkfix` follows a move in `br_reloc`,
 and `br_pagepin` skips the derived word). The transfer's cluster buffer and
 Copy's text, which the store used to grow for, are **a claim of their own
 while in use** (`br_dlgrow`, `[br_dlclaim]`), addressed as ever at
-`BR_URLDL` - from `[br_dlseg]`, that claim less `BR_URLDL` / 16. A page
-standing still holds six; a PiXEL picture's decode, eight. kern_mega keeps
-the three apart: twelve claims, and selectors take no sums.
+`BR_URLDL` - from `[br_dlseg]`, that claim less `BR_URLDL` / 16. That word
+follows a move (`br_reloc`) only while it IS the store's (`[br_dlclaim]` 0):
+derived from a pinned claim of its own, it can equal a moved claim's old base
+by adjacency and must not be rewritten to the new one. A page standing still
+holds six; a PiXEL picture's decode, eight. kern_mega keeps the three apart:
+twelve claims, and selectors take no sums.
+
+**The worker's parse grows the arena, so the WORKER can move the store**
+(§50.3.1's regrow moves when it must, pins or no, and calls no relocation
+proc). `br_lnkgrow` therefore runs the two-byte handshake of `br_dlx_put`
+the other way round: it sets `[br_lgbusy]` FIRST, then reads the UI's
+`[br_dl_ugrow]`, and waits a held store out; the UI task's `br_ustake` sets
+`[br_dl_ugrow]` and waits out a grow under way. The bookmark transaction
+(`br_bmservice` - the file read into the store, the records, part 0's
+commit and write, and the menu's copy of the titles) holds the store that
+way from its read to its menu.
 
 ### 71.34.9 Browser 1.8 — progressive drawing
 
@@ -135394,7 +135418,11 @@ changed - `br_laddr` still takes `[br_lseg]` as the table's segment.
   the claim grows by the step and the table moves up by it (`br_lsresize`,
   `br_lsmove`'s backward copy - under 62 KB, and a step is a KB, so it is
   the rare move and not the per-record one).
-- **The table grows** (`br_lineensure`): the claim grows at its end.
+- **The table grows** (`br_lineensure`): the claim grows at its end - and
+  may MOVE (§50.3.1), under the layout walk's own ES. So the walk takes the
+  document's window again after every record it writes: `br_ldocback` after
+  the caller's `pop es` (`br_emitline`, `br_blank`, `br_emitrule`), and
+  `br_cend` reloads `[br_docseg]` as `br_cput` does.
 - **The document shrinks** at a page's end with no EMS: the table moves down
   first, then the claim shrinks.
 - **Either goes to EMS**: the document's spill moves the table to the

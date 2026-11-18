@@ -18,6 +18,14 @@ br_tbcall:
     jz .inline
     cmp byte [br_tbok], 0
     je .absent
+    push bx                         ; THE VECTORS BACK, stamped with our code
+    mov bx, br_tb_rtab              ; segment on EVERY call: the region is
+.seg:                               ; movable (SPEC.md 66.6.1) and part 7 is
+    mov [bx + 2], cs                ; held for the session, so a CS stamped
+    add bx, 4                       ; once would name a block the primary
+    cmp bx, br_tb_rtab + BRTB_RN * 4 ; left. Nothing moves us while a
+    jb .seg                         ; callback or the worker holds a frame
+    pop bx
     call far [br_tbvec]
     ret
 .absent:
@@ -39,13 +47,7 @@ br_tbload:
     jc .no
     mov ax, [es:BRTB_ENTRY]
     mov [br_tbvec], ax
-    mov [br_tbvec + 2], dx
-    mov bx, br_tb_rtab              ; the vectors back: our own code segment
-.seg:
-    mov [bx + 2], cs
-    add bx, 4
-    cmp bx, br_tb_rtab + BRTB_RN * 4
-    jb .seg
+    mov [br_tbvec + 2], dx          ; (the vectors back: br_tbcall's, each call)
     mov byte [br_tbok], 1
     clc
     jmp short .out
