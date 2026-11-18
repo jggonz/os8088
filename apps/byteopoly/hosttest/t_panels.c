@@ -46,6 +46,30 @@ __attribute__((weak)) int bp_ck_port(void) { return 0; }
 __attribute__((weak)) void bp_ui_committed(const BPResult *r) { (void)r; }
 __attribute__((weak)) void bp_ui_link(void) {}
 __attribute__((weak)) void bp_ui_chat(int machine, const char *text) { (void)machine; (void)text; }
+#include "../../cc/gk.h"
+/* the game kit's widgets, recorded: the text a panel hands them (and the
+ * dynamic strings of a scene) lands in the transcript like bp_w_text's */
+static void t_ink(const char *s) { if (s) { strcat(bp_t_ink, s); strcat(bp_t_ink, "\n"); } }
+void gk_box(int x, int y, int w, int h, int style, int fill) { (void)x; (void)y; (void)w; (void)h; (void)style; (void)fill; }
+void gk_hline(int x, int y, int w, int raised) { (void)x; (void)y; (void)w; (void)raised; }
+int gk_text(int x, int y, int w, const char *s, int colour, int font, int flags)
+{ (void)x; (void)y; (void)w; (void)colour; (void)font; (void)flags; t_ink(s); return s ? (int)strlen(s) * 8 : 0; }
+int gk_textbox(int x, int y, int w, int h, const char *s, int colour, int font, int flags)
+{ (void)h; return gk_text(x, y, w, s, colour, font, flags); }
+void gk_titlebar(int x, int y, int w, int h, const char *s, int font, int flags)
+{ (void)x; (void)y; (void)w; (void)h; (void)font; (void)flags; t_ink(s); }
+void gk_banner(int x, int y, int w, int h, const char *s, int font, int fill)
+{ (void)x; (void)y; (void)w; (void)h; (void)font; (void)fill; t_ink(s); }
+void gk_radio(int x, int y, int size, int on) { (void)x; (void)y; (void)size; (void)on; }
+int gk_sprshadow(int x, int y, int id, int d) { (void)x; (void)y; (void)id; (void)d; return 0; }
+int gk_role(int role) { (void)role; return 0; }
+int gk_scene(int id, int x, int y, const char *const *sv, const int *iv)
+{
+    int i;
+    (void)id; (void)x; (void)y; (void)iv;
+    for (i = 0; i < 6; i++) t_ink(sv[i]);
+    return 1;
+}
 #include "bp_panels.c"
 /* ---- helpers ---- */
 static void t_paint(void) { bp_t_ink[0] = 0; bp_t_buttons = 0; bp_gp_draw(); }
@@ -177,7 +201,7 @@ static void t_extra(void)
     bp_game.phase = BP_PH_DEBT; bp_game.debt_to = 1; bp_u32_set(&bp_game.debt_amount, 4000, 0);
     bp_game.rev.lo++;
     t_paint();
-    BP_CHECK(t_has("debt") && t_fockey() == 'm', "DEBT opens on Manage, not Bankrupt");
+    BP_CHECK(t_has("DEBT") && t_fockey() == 'm', "DEBT opens on Manage, not Bankrupt");
     t_key('k', 0x25);
     BP_CHECK(gp_conf && t_fockey() == 27 && t_has("Go bankrupt"), "the confirmation opens on No, its label whole");
     t_key(13, 0x1C);

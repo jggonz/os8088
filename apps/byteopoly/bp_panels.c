@@ -869,6 +869,7 @@ static void ovl_gp_dtrade(void)
 /* standings: cash + assets = score; the winners marked, with a victory block, when over */
 /* standings: cash + assets = score; the winners marked, with a victory block, when over */
 /* standings: cash + assets = score; the winners marked, with a victory block, when over */
+/* standings: cash + assets = score; the winners marked, with a victory block, when over */
 static void ovl_gp_dstand(int over)
 {
     int s, w, n, rh, cw, lay;
@@ -885,7 +886,10 @@ static void ovl_gp_dstand(int over)
         os88_strcpy(gp_ub[0], gp_line, 14); gp_sv[0] = gp_ub[0];
         gp_sv[1] = n > 1 ? TP_SHARED_WIN : TP_WINNER;
         if (lay == BP_LAY_FULL) { gk_scene(BP_A2_SC_PANB + 8, gp_x, gp_y, gp_sv, gp_iv); gp_y += 90; }
-        else { gk_banner(gp_x, gp_y, w, gp_fh + 6, gp_line, gp_font, -1); gp_y += gp_fh + 10; }
+        else {
+            ovl_gp_lb(); ovl_gp_la(gp_sv[1]); ovl_gp_la(gp_ub[0]);
+            gk_banner(gp_x, gp_y, w, gp_fh + 6, gp_line, gp_font, -1); gp_y += gp_fh + 10;
+        }
     }
     rh = lay == BP_LAY_FULL ? 28 : lay == BP_LAY_MID ? 20 : 12;
     cw = w / 5;
@@ -1027,7 +1031,7 @@ static void ovl_gp_dcompose(void)
         else gk_titlebar(x, gp_y, hw, gp_fh + 5, gp_line, gp_font, GK_CENTRE);
     }
     gp_y += gp_fh + 7;
-    nl = (gp_btop - gp_y - (cmp ? 2 * gp_pitch : big + gp_fh + 22)) / rh;
+    nl = (gp_btop - gp_y - (cmp ? 2 * gp_pitch + 8 : big + gp_fh + 22)) / rh;
     if (nl < 1) nl = 1;
     gp_lrow = rh;
     ly = gp_y;

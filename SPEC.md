@@ -255757,6 +255757,48 @@ the last Rules page ends at `#KEYS`, paging stops at the last page rather
 than wrapping, and Prev is greyed on the first page and Next on the last
 (so a page opens focused on Next, and Enter reads on).
 
+#### 131.9.13 The kit-drawn panels (panels B)
+
+Every centre panel the concept boards do not draw - card, Repair Shop, debt,
+handoff, Collection, the trade composer, standings and game over, chat,
+diagnostics and Rules/Keys - is drawn with the game kit (SPEC.md 133) in the
+board's 3D style: a raised panel, yellow banners that name whose decision it
+is, navy-headed sections, sunken white wells for numbers and lists, pictures
+from BPART2 and the panel's own buttons under it. `gp_spec`, the keys, the
+clicks and the damage rules of 131.9.7 are untouched; only the drawing
+changed, and `gp_x`, `gp_xr`, `gp_y`, `gp_btop`, `gp_vy`, `gp_lr`/`gp_lrow`
+and `gp_ttop` keep the meanings 131.9.7 gives them (a status line still
+reserves one line, a cursor move still dirties from `gp_vy` down).
+
+**Scene ids** 430..439 are this lane's (`apps/byteopoly/art/scenes-panb.txt`,
+133.6): 430 card, 431 Repair Shop, 432 debt, 433 a Collection row, 434 a
+labelled cell (Collection amounts, the composer's cash line, diagnostics),
+435 a standings row and its header, 436 a composer row, 438 the victory
+block, 439 handoff. `%0` is the variant: the fixed panels are CORE scenes
+332 x at most 150 rows, drawn centred in the free area of FULL and MID alike
+(COMPACT has its own block, drawn at the top, `%0` + 1), a confirming debt
+adds 2; the row scenes take the layout (0 FULL, 1 MID, 2 COMPACT).
+Dynamic values come through `gp_sv` (strings: names, numbers formatted into
+`gp_ub`, `gp_line`) and `gp_iv` (pictures, lamps, the cursor, widths); a
+picture slot with no picture holds `GP_NOSPR` (459, an ID with no record,
+which draws nothing). Two literals in one scene need the kit's `gk_lit` fix
+(an insert after the first read a wild slot under BX_ART2).
+
+| panel | FULL (centre 336 x 300) | MID (384 x 204) | COMPACT (336 x 96) |
+|---|---|---|---|
+| card | banner, the tilted deck picture in a well, title and wrapped text in a well | same, smaller | banner and the text |
+| Repair Shop | wrench and the Recovery Disks held, three failed-try lamps, cash, ways out | same | three lines |
+| debt | banner, the amount (coins) in a well, cash and shortfall cells; a confirming debt is a banner and two lines | same | banner and two lines |
+| Collection | cash strip, one picture row per computer (level chips, mortgage mark, group letter), four amount cells | tiny pictures, 14-row rows | text rows, no amounts |
+| composer | a header per column (yellow and ">" on the active one), a ticked picture row per holding, the trade arrows, the cash line, the before/after line | same | text rows |
+| standings, game over | token rows with winners yellow; game over adds the victory block | rows 20 tall, a "Winner:" banner | text rows |
+| handoff | the next player's token and name in a well | same | banner and two lines |
+| chat, diagnostics, Rules, Keys | a sunken well under the old text lines; a link lamp (green, yellow, red) | same | same |
+
+Nothing here is the only carrier of a meaning: the banner of an active
+column is also marked ">", a cursor row has an outline, a disabled holding
+is also refused, so 1bpp (yellow is white) loses nothing.
+
 ### 131.10 Art
 
 #### 131.10.1 Sources
