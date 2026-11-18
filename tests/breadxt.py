@@ -283,10 +283,41 @@ def editor(ui,symbols,folder,kind):
     return flushed,before
 
 
+S_SCOPE = 18     # apps/breadxt/face.c's section index of the docked scope
+
+
+def scope_rows(app,header,still=True):
+    """The docked scope as drawn: its header line (STALE / RUN / HOLD), or
+    the plot and the line under it."""
+    x1,y1,x2,y2=(app.word(n,2*S_SCOPE) for n in ('bu_r1','bu_r2','bu_r3','bu_r4'))
+    th=app.word('bu_th')
+    if still:app.ui.still()     # a running scope never goes still
+    w,h,rgb=app.ui.m.fbuf()
+    xa,xb,ya,yb=(x1+2,x1+90,y1+1,y1+th+3) if header else (x1+2,x2-2,y1+th+4,y2-2)
+    return b''.join(rgb[(y*w+xa)*3:(y*w+xb)*3] for y in range(ya,yb))
+
+
+def header_follows_run(app):
+    """A Run that makes the results valid repaints the scope's header with
+    the plot, not at the next click: the simulation's own scope repaints
+    covered only the plot, so the header read STALE for as long as the
+    circuit ran. Waits for the first plot repaint, which on an XT comes
+    seconds of guest time after Run, then reads the header."""
+    app.reset();stale=scope_rows(app,True);plot=scope_rows(app,False,still=False)
+    app.ui.menu_pick('Simulate','Run')
+    app.wait(lambda q:q['valid'] and q['running'] and q['count']>0 and not q['op'],'running with valid results',600)
+    app.ui._wait(lambda:scope_rows(app,False,still=False)!=plot,'the first plot repaint after Run',600)
+    M.guest_sleep(app.ui.m,0.5)
+    assert scope_rows(app,True,still=False)!=stale,'scope header still reads STALE while the circuit runs'
+    app.ui.menu_pick('Simulate','Pause');app.wait(lambda q:not q['op'] and not q['running'],'Pause commit',60)
+    print('  scope header repainted with the plot while running',flush=True)
+
+
 def flasher(app,kind):
     app.open('FLASHER.BBX',9)
     for _ in range(2):app.ui.menu_pick('Simulate','Larger timestep')
     app.wait(lambda q:q['dt']==40 and not q['op'],'4ms timestep',60)
+    if kind=='vga':header_follows_run(app)
     app.reset();slow=app.run_to(lambda q:q['cycles']>=3,'three settled flasher cycles')
     check_flasher(app,slow,68000,0.02)
     shot(app.ui,kind,'flasher-68k-paused')

@@ -107,7 +107,7 @@ are independent calculations; they are not used to animate or drive a circuit.
 | DIVIDER.BBX |4 / 0 / 3; 112 |5 V -> 10k -> midpoint -> 10k -> GND. 2.500 V, 250 uA series current. |
 | POT.BBX |3 / 0 / 3; 96 |10k track across 5 V/GND, independent midpoint wiper at 500 permille. 2.500 V; endpoints are ideal zero-length segments. |
 | SWITCH.BBX |5 / 0 / 3 closed; 128 |5 V -> 330 ohms -> closed switch -> LED -> GND. Open stops current. |
-| LOGIC.BBX |6 / 2 / 14; 176 |HC00N actual pin 14=5 V, pin 7=GND, pins 1/2=HIGH, pin 3=indicator. First NAND output LOW; other unused inputs Z/X. |
+| LOGIC.BBX |6 / 5 / 14; 224 |HC00N actual pin 14=5 V, pin 7=GND, pins 1/2=HIGH, pin 3=indicator. First NAND output LOW; other unused inputs Z/X. The inputs (g5, g9) and the indicator (g22) are wired to pins 1, 2 and 3 rather than standing in g12-g14, where they drew over the chip and each other. |
 | BROKEN.BBX |3 / 0 / 2; 96 |LED directly across 5 V/GND. Expected missing-series-resistor diagnostic; source still saves/reopens. |
 | RC.BBX |4 / 0 / 3; 112 |5 V -> 10k -> C positive; 10uF C negative to GND, initial 0 V. Tau 0.1 s, continuous 3.160603 V at 0.1 s; 1 ms BE about 3.151444 V. |
 | FLASHER.BBX |9 / 10 / 7; 352 |Verified eight-pin astable below. |
