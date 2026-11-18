@@ -35,31 +35,31 @@ in emulation follows integration; then the fix round; then the final pass.
 
 | story | what the user gets | lanes | status |
 |---|---|---|---|
-| US-01 | Launch from the desktop: window, icon, About, focus, close, two independent instances, lease released on close | lead, panels | I |
-| US-02 | Set up 2-4 seats on one PC: names, distinct tokens, Classic/Quick, roll-off, handoff needing fresh input | panels, rules | I |
-| US-03 | Read the board: 28 cells and hit targets, details pane with full rent schedule, active seat/cash/decision/dice/round/link, stacked tokens | face | I |
-| US-04 | Roll and move: recorded dice, salary, doubles, third double, board wrap, wrong-seat/phase refusals, fixed-seed fixtures | rules, panels | I |
-| US-05 | Buy a computer: purchase panel, single debit, decline -> auction | rules, panels | I |
-| US-06 | Rent and charges: set/upgrade/mortgage/utility rent, payer/recipient/calculation shown, debt on shortfall | rules, panels | I |
-| US-07 | Auctions: order, minimum, increments, pass, budget, out-of-turn handoff, no timeout | rules, panels | I |
-| US-08 | Upgrades: set, even build/sell, RAM chips/Workshop markers visible on mono | rules, face, panels | I |
-| US-09 | Mortgage and redeem: proceeds/interest shown, rent suppression, set effects | rules, panels | I |
-| US-10 | Floppy Find / System Error: all 16 cards, held disks, bounded chains | rules, panels | I |
-| US-11 | Repair Shop: visiting vs detained, pay/disk/doubles, third failure debt and pending move | rules, panels | I |
-| US-12 | Trades: compose, freeze, recipient-only accept, revalidate, atomic | rules, panels | I |
-| US-13 | Debt and bankruptcy: shortfall screen, liquidation, estate to bank or player, elimination | rules, panels | I |
-| US-14 | Finish: last survivor, Quick Match score breakdown and shared wins, Review/New/Exit | rules, panels | I |
-| US-15 | Save and resume a local game from every pending decision; bad files refused, prior save kept | save, panels | I |
-| US-16 | Connect two PCs: Host/Join, search/peer/compatible/ready/started, port conflicts, every seat split | link, panels | I |
-| US-17 | Synchronized play: banker authority, machine-gated input, matching digests | link | I |
-| US-18 | Survive a pulled cable: pause, resume the pending transaction exactly once | link | I |
-| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | I |
-| US-20 | Chat and link diagnostics | link, panels | I |
-| US-21 | Keyboard and mouse: shortcuts, focus order, fresh input after handoff | panels, face | I |
-| US-22 | CGA and Hercules: usable layouts, no hue-only meaning, mixed-adapter pairs | face, art | I |
-| US-23 | Distinctive computer art: 16 computers, tokens, dice, markers, corners, mono variants | art | I |
-| US-24 | Restrained sound and animation through the system's routing; mute; no idle repaint | panels | I |
-| US-25 | XT memory and latency budgets, measured | all, lead | - |
+| US-01 | Launch from the desktop: window, icon, About, focus, close, two independent instances, lease released on close | lead, panels | S |
+| US-02 | Set up 2-4 seats on one PC: names, distinct tokens, Classic/Quick, roll-off, handoff needing fresh input | panels, rules | S |
+| US-03 | Read the board: 28 cells and hit targets, details pane with full rent schedule, active seat/cash/decision/dice/round/link, stacked tokens | face | S |
+| US-04 | Roll and move: recorded dice, salary, doubles, third double, board wrap, wrong-seat/phase refusals, fixed-seed fixtures | rules, panels | S |
+| US-05 | Buy a computer: purchase panel, single debit, decline -> auction | rules, panels | S |
+| US-06 | Rent and charges: set/upgrade/mortgage/utility rent, payer/recipient/calculation shown, debt on shortfall | rules, panels | S |
+| US-07 | Auctions: order, minimum, increments, pass, budget, out-of-turn handoff, no timeout | rules, panels | S |
+| US-08 | Upgrades: set, even build/sell, RAM chips/Workshop markers visible on mono | rules, face, panels | S |
+| US-09 | Mortgage and redeem: proceeds/interest shown, rent suppression, set effects | rules, panels | S |
+| US-10 | Floppy Find / System Error: all 16 cards, held disks, bounded chains | rules, panels | I (seven of sixteen cards seen; the rest host-tested) |
+| US-11 | Repair Shop: visiting vs detained, pay/disk/doubles, third failure debt and pending move | rules, panels | S |
+| US-12 | Trades: compose, freeze, recipient-only accept, revalidate, atomic | rules, panels | S |
+| US-13 | Debt and bankruptcy: shortfall screen, liquidation, estate to bank or player, elimination | rules, panels | S |
+| US-14 | Finish: last survivor, Quick Match score breakdown and shared wins, Review/New/Exit | rules, panels | S |
+| US-15 | Save and resume a local game from every pending decision; bad files refused, prior save kept | save, panels | S |
+| US-16 | Connect two PCs: Host/Join, search/peer/compatible/ready/started, port conflicts, every seat split | link, panels | I (byteopolylink green on a QEMU pair; no 86Box pair or real cable) |
+| US-17 | Synchronized play: banker authority, machine-gated input, matching digests | link | I (byteopolylink green on a QEMU pair; no 86Box pair or real cable) |
+| US-18 | Survive a pulled cable: pause, resume the pending transaction exactly once | link | I (byteopolylink green on a QEMU pair; no 86Box pair or real cable) |
+| US-19 | Paired saves: synchronized checkpoint, compatible pair, resume after reopening both | link, save, panels | I (byteopolylink green on a QEMU pair; no 86Box pair or real cable) |
+| US-20 | Chat and link diagnostics | link, panels | I (byteopolylink green on a QEMU pair; no 86Box pair or real cable) |
+| US-21 | Keyboard and mouse: shortcuts, focus order, fresh input after handoff | panels, face | S |
+| US-22 | CGA and Hercules: usable layouts, no hue-only meaning, mixed-adapter pairs | face, art | S |
+| US-23 | Distinctive computer art: 16 computers, tokens, dice, markers, corners, mono variants | art | S |
+| US-24 | Restrained sound and animation through the system's routing; mute; no idle repaint | panels | S |
+| US-25 | XT memory and latency budgets, measured | all, lead | measured (see below; a Rules page turn is still ~4 s) |
 | US-26 | Verified under faults in paired emulators; complete local and cable games | link, lead | I (host t_link; byteopolylink passed on QEMU in the lane) |
 | US-27 | Maintainable, reproducible C build; module map; host harness | lead, all | I |
 

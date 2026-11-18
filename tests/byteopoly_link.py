@@ -3,9 +3,8 @@
 
 SPEC.md 131.5, 131.6, 131.7.5; US-16..US-20 and US-26's link half.
 
-UNREGISTERED. It needs the whole package (the setup screen, the panels and
-the menus are other lanes' files), so it runs on the integrated tree:
-`make byteopoly byteopolydisk`, then `python3 tests/byteopoly_link.py`.
+The `byteopolylink` soak row (tests/suite.py) runs it on the built
+package and disk: `python3 tools/os88test.py soak -k byteopolylink`.
 
 THE BRIDGE is tests/wireball.py's Cable (docs/TESTING.md item 3): the two
 guests' COM ports joined by a host thread that forwards UART bytes and
