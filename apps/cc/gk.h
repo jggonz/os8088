@@ -1,4 +1,4 @@
-/* gk.h - the os8088 GAME KIT for C packages (SPEC.md 132): 3D widgets,
+/* gk.h - the os8088 GAME KIT for C packages (SPEC.md 133): 3D widgets,
  * data-driven scenes and a music/effects player, over the band drawing core
  * (apps/breadxt/draw.inc, SPEC.md 130.6.2).
  *
@@ -12,7 +12,7 @@
  *     %include "cc/gkmus.inc"       ; music and effects, needs the core
  *
  * and #includes this header from C. Everything here is RESIDENT code in the
- * package's own segment, so its size is the price of using it: SPEC.md 132.9
+ * package's own segment, so its size is the price of using it: SPEC.md 133.9
  * carries the measured bytes per routine.
  *
  * DRAWING RULES (the band core's): every gk_ call is valid only while a
@@ -23,7 +23,7 @@
  * patterns on a 1bpp display. Fonts are art-part font IDs (a negative ID is
  * the kernel's 8x8). Nothing here writes a pixel to the glass.
  *
- * THE 3D LOOK (SPEC.md 132.3): light comes from the top left. A RAISED
+ * THE 3D LOOK (SPEC.md 133.3): light comes from the top left. A RAISED
  * surface has a light edge top/left and a shadow edge bottom/right inside a
  * 1 px black outline; SUNKEN is the reverse; a panel, a button and a key cap
  * may cast a dithered drop shadow down and to the right. Every colour the
@@ -139,7 +139,7 @@ void gk_arrow(int x, int y, int w, int h, int dir, int colour);
  * the sprite; answers the sprite's width (0 absent). */
 int  gk_sprshadow(int x, int y, int id, int d);
 
-/* ---- scenes (SPEC.md 132.6) -----------------------------------------------
+/* ---- scenes (SPEC.md 133.6) -----------------------------------------------
  * A SCENE is a list of the calls above stored as DATA in an art record,
  * compiled by tools/os88gk.py from a text source, so a screen's static
  * decoration costs record bytes in an art part instead of code and string
@@ -157,7 +157,7 @@ int  gk_scene_rect(int id, int tag, int *r);
 /* A scene's own declared size (w | h << 8 is too small: two words). */
 int  gk_scene_size(int id, int *wh);
 
-/* ---- music and effects (SPEC.md 132.8): apps/cc/gkmus.inc ---------------
+/* ---- music and effects (SPEC.md 133.8): apps/cc/gkmus.inc ---------------
  * A SONG BANK and an EFFECTS BANK are art records compiled by
  * tools/os88gkmus.py from a text score, found through the band core's art
  * lookup (bx_art_at, so gkmus.inc is included AFTER the core) and resolved

@@ -1,4 +1,4 @@
-/* gkdemo.c - the game kit's gallery (SPEC.md 132): every gk_ widget, the
+/* gkdemo.c - the game kit's gallery (SPEC.md 133): every gk_ widget, the
  * six bevel styles, the drop shadows and one compiled scene, drawn through
  * the band core in strips, so the kit is LOOKED at on VGA and on a 1bpp
  * adapter. A gate package, not shipped: `make gkdemo`. Space scrolls the

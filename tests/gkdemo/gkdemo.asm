@@ -1,4 +1,4 @@
-; The game kit's gallery (SPEC.md 132): a C gate package that draws every
+; The game kit's gallery (SPEC.md 133): a C gate package that draws every
 ; widget of apps/cc/gk.inc and one compiled scene, so the kit is LOOKED at
 ; on each adapter. Not shipped; `make gkdemo` builds build/gkdemo.img.
 %define CC_PKG_NAME 'GKDEMO'

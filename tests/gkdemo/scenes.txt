@@ -1,4 +1,4 @@
-# The game kit gallery's scene (SPEC.md 132.7): a landing panel drawn from
+# The game kit gallery's scene (SPEC.md 133.7): a landing panel drawn from
 # data. Slots: $0 the title's tail, $1 the machine, $2 the price;
 # %0 and %1 the two buttons' states, %2 "it is your turn".
 fonth GD_F_TEXT13 13

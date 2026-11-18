@@ -173,7 +173,7 @@ def build(out_path):
 
 
 # ---- sound lane ----------------------------------------------------------
-# The song and effects banks (SPEC.md 132.8), art IDs BP_A2_MUSIC and
+# The song and effects banks (SPEC.md 133.8), art IDs BP_A2_MUSIC and
 # BP_A2_SFX of the second part (art2.h 384..399), compiled from art/music.txt
 # and art/sfx.txt by tools/os88gkmus.py's pinned entries (D1). The BPART2
 # builder adds what this answers to its records; {} when the compiler or a
@@ -722,7 +722,7 @@ def build2(out_path):
                 blobs[sid] = rec
                 kinds[sid] = "scene"
     # ---- sound lane ----
-    # The music and effects records (SPEC.md 132.8): the sound lane's
+    # The music and effects records (SPEC.md 133.8): the sound lane's
     # sound_records(symbols) -> {BP_A2_MUSIC: ..., BP_A2_SFX: ...}, defined
     # above `# --- mono`, {} when os88gkmus or the .txt files are absent.
     if "sound_records" in globals():

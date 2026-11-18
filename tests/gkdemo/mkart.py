@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mkart.py - GKDART.BIN, the game kit gallery's art part (SPEC.md 132).
+"""mkart.py - GKDART.BIN, the game kit gallery's art part (SPEC.md 133).
 
 The core's art layout (SPEC.md 130.6.3, tools/os88bbart.py's packers): 'GK',
 a count, a word offset per gkd.h ID, then the records - three WIN16 fonts,

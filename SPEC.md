@@ -255475,7 +255475,7 @@ value, Enter/Space act, S starts, Esc goes back.
 
 #### 131.9.5 Sound
 
-Byteopoly plays through the game kit's player (§132.8): a song bank and an
+Byteopoly plays through the game kit's player (§133.8): a song bank and an
 effects bank in the second art part, `BP_A2_MUSIC` (384) and `BP_A2_SFX`
 (385), compiled from `art/music.txt` and `art/sfx.txt`. Without that part the
 game is silent - the banks are art, like the pictures the plain face goes
@@ -255846,9 +255846,9 @@ The layout is BPART.BIN's (131.10.3) with magic `'B2'`, the count
 then the records: sprites (`art/sprites2.txt`, the same text format with
 `BP_A2_` names; an ID with no record is offset 0 and draws nothing), the
 indexed text records below (`art/tx-*.txt`), the kit's scene records
-(SPEC.md 132.6; `tools/os88gk.py`'s `compile_scenes` over every
+(SPEC.md 133.6; `tools/os88gk.py`'s `compile_scenes` over every
 `art/scenes-*.txt`, only when that tool exists) and the music records (the
-sound lane's delimited block, SPEC.md 132.8). `os88bpart.py build2 -o`
+sound lane's delimited block, SPEC.md 133.8). `os88bpart.py build2 -o`
 builds it; `make` rebuilds it when `art2.h`, any `art/*.txt` or the kit's
 and the player's tools change.
 
@@ -255992,7 +255992,7 @@ host harness compiles the SHIPPING rules, codec and link C with `BP_HOST`
 the guest runs. (Reserved: the registered rows, the paired-emulator fault
 cases and the acceptance evidence.)
 
-## 132. The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`)
+## 133. The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`)
 
 The game kit is shared source for C packages (§73) that draw through the band
 core (§130.6.2): 3D widgets, data-driven scenes and a music and effects player,
@@ -256000,7 +256000,7 @@ written once in assembly so a game pays for them in bytes it can measure.
 `apps/cc/gk.h` is its C contract. Byteopoly (§131) is the first user;
 docs/plans/BYTEOPOLY-UPLIFT-PLAN.md is the story list.
 
-### 132.1 Scope and inclusion
+### 133.1 Scope and inclusion
 
 The drawing half is `apps/cc/gk.inc`, near cdecl assembly (§73.3: arguments
 at `[bp+4]`.., BP, DS and DF preserved, everything else the caller's) with
@@ -256017,7 +256017,7 @@ A package `#include`s `cc/gk.h`. The kit adds no kernel facility, no OSAPI
 slot and no heap claim: its bss is 158 bytes (a 64-byte text buffer, the
 scene interpreter's ten arguments, the current rect and the widgets'
 scratch), its data 137 bytes (the two role tables, the ring sets, the button
-states and the scene op table). 132.9 gives the code, routine by routine.
+states and the scene op table). 133.9 gives the code, routine by routine.
 
 Every `gk_` drawing call is legal only while a strip is composed (between
 `bx_new` and `bx_out`) and draws only into the band, clipped by the core to
@@ -256029,7 +256029,7 @@ label) is not the double draw §6.6 forbids. Coordinates are screen pixels,
 1bpp. `gk_init`, `gk_theme`, `gk_role`, `gk_scene_rect` and
 `gk_scene_size` draw nothing and are legal at any time after `bx_setup`.
 
-### 132.2 The role table
+### 133.2 The role table
 
 Every colour the kit draws with comes from the ROLE TABLE (16 bytes, an EGA
 index per role), except a label colour a caller passes and the drawn check
@@ -256066,7 +256066,7 @@ there and would vanish into a white face; title bars are black with a 50%
 top line; a key-cap skirt is a 50% checker. The core's 1bpp text rule (§130.6.2: white only where the colour
 is all lit) is why every mono text role is 0 or 15.
 
-### 132.3 The 3D look
+### 133.3 The 3D look
 
 Light comes from the top left. Every surface is a stack of RINGS drawn
 outermost first, each one pixel wide: a ring's top row and left column take
@@ -256103,7 +256103,7 @@ mask (`bx_pat` 0AAh on even rows, 55h on odd, one `bx_rect` per row inside
 the strip). The same door in the FACE colour greys a disabled label on
 1bpp, where a grey text colour would be black.
 
-### 132.4 Surfaces and text
+### 133.4 Surfaces and text
 
 - `gk_box(x,y,w,h,style,fill)`: the shadow (when asked), the rings, then
   `fill` over the inside (`-1` leaves it alone, so a box can frame what is
@@ -256137,10 +256137,10 @@ call. Under `BX_ART2` a DS string the kit is given must not lie at
 the package's bss, past its image. Without `BX_ART2` the strings are DS
 strings and nothing is resolved.
 
-### 132.5 Widgets
+### 133.5 Widgets
 
 All are built from the rings, the door and the text above; heights are the
-caller's, and 132.9 gives the ones the WIN16 faces want.
+caller's, and 133.9 gives the ones the WIN16 faces want.
 
 | widget | drawn as |
 |---|---|
@@ -256156,10 +256156,10 @@ caller's, and 132.9 gives the ones the WIN16 faces want.
 | `gk_arrow(x,y,w,h,dir,colour)` | a solid triangle centred in the box, apex toward `dir`: `n = min(along, (across + 1) / 2)` lines, line k (from the base) `2(n-1-k)+1` px long, so the base is odd and the apex one pixel |
 | `gk_sprshadow(x,y,id,d)` | the sprite's SILHOUETTE as a screen door in DROP at `(x+d, y+d)` (each run of non-transparent pixels on a row one door span), then the sprite. Answers its width, 0 absent |
 
-### 132.6 Scenes
+### 133.6 Scenes
 
 A SCENE is a record in an art part (looked up by `bx_art_at`, so it may live
-in any part the core routes), compiled by `tools/os88gk.py` (132.7):
+in any part the core routes), compiled by `tools/os88gk.py` (133.7):
 
     +0  db 'S'                  magic; anything else draws nothing, answers 0
     +1  dw w, dw h              the scene's declared size (gk_scene_size)
@@ -256213,7 +256213,7 @@ when absent; `gk_scene_rect` copies a tag's static rect (tags never carry
 slots, so the compiler refuses one on an op whose rect is not constant) and
 `gk_scene_size` the declared size, each answering 1 found or 0.
 
-### 132.7 The scene compiler
+### 133.7 The scene compiler
 
 `tools/os88gk.py` is the only writer of the format. The build interface is
 `compile_scenes(paths, symbols) -> {id: bytes}` (every `scene` in the files,
@@ -256254,7 +256254,7 @@ emboss or tab overhang and the declared font height (24 for a font with no
 `fonth`, 8 for the kernel's, a sprite 255 rows); an op whose y or height
 comes from a slot is given every row.
 
-### 132.8 Music and effects
+### 133.8 Music and effects
 
 `apps/cc/gkmus.inc` is the player and `tools/os88gkmus.py` its compiler. A
 C package includes the player after the band core (it finds its banks
@@ -256264,7 +256264,7 @@ through `bx_art_at`), declares nothing else, and drives it from five places:
 at close. `tests/gkmusdemo` (`make gkmusdemo`, GKMJUKE.O88) is the worked
 example and a jukebox to listen with.
 
-#### 132.8.1 Routing
+#### 133.8.1 Routing
 
 Asked of `OSAPI_SND_CAPS` at `gkm_init` and again at every `gkm_play`, so a
 tier changed in the Control Panel is honoured by the next song:
@@ -256296,7 +256296,7 @@ costs one refusal, not one every tick. Channel 8 is never tried.
 caller's DS (§34.2, the X stub), so the player points DS at the bank's
 segment for that one call instead of copying the patch into its own.
 
-#### 132.8.2 Timing
+#### 133.8.2 Timing
 
 `gkm_tick` is the clock: once per OS tick from the package's timer, never
 drawing, never waiting. It reads `OSAPI_GET_TICKS` and advances by the ticks
@@ -256314,7 +256314,7 @@ whose length is not a whole number of ticks at its song's `beat`, which is
 what makes every voice of a loop the same length to the tick: loops are
 seamless by construction, never by rounding luck.
 
-#### 132.8.3 The banks
+#### 133.8.3 The banks
 
 Both are art records (any art part the core reads; Byteopoly's are in
 BPART2.BIN), little endian, offsets from the record's first byte. Each starts
@@ -256344,7 +256344,7 @@ pattern, and the note after a call carry their own duration. The song record
 names a patch per voice; patches and pitches are shared by every song. A
 `once` song ends when every voice has reached 7F.
 
-#### 132.8.4 The notation
+#### 133.8.4 The notation
 
 `tools/os88gkmus.py` compiles a text score; its docstring is the reference
 and `apps/byteopoly/art/music.txt` the worked example:
@@ -256384,7 +256384,7 @@ multipliers, levels, envelopes, waveforms and feedback, approximated; the
 sequencing under it is the player's, decision for decision (`play`, which
 the selfcheck holds to hand-worked tick lists).
 
-#### 132.8.5 What was heard
+#### 133.8.5 What was heard
 
 QEMU 11 with `-device adlib` and `-audiodev wav`: the jukebox reported
 `GKM_FM`, played all four songs and twenty effects, and the capture's
@@ -256399,12 +256399,12 @@ scratch build with the banks in BPART.BIN at 384/385, before BPART2
 existed). Not heard: a Sound Blaster (the OPL2 is the same chip), real
 hardware, and the timing on a 4.77 MHz XT (MartyPC has no audio path here).
 
-### 132.9 Sizes
+### 133.9 Sizes
 
 The drawing half's bytes, measured from the listing of the core and the kit
 assembled alone: what a package pays once it includes `cc/gk.inc`. Every
 routine is reachable from `gk_scene`'s op table, so none is dead. The sound
-lane's rows (132.8) follow these.
+lane's rows (133.8) follow these.
 
 | routines | bytes |
 |---|---|
@@ -256428,7 +256428,7 @@ lane's rows (132.8) follow these.
 | **code** | **2,460** |
 | data: role tables 32, ring sets 43, button states 18, op table 42, the theme pointer 2 | 137 |
 | **image total** | **2,597** |
-| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 132.4): Byteopoly's price | **2,617** |
+| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,617** |
 | bss | 158 |
 
 **Per strip.** `gk_scene` reads a skipped op's length, number and two row

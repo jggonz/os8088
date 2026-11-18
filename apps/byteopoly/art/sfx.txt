@@ -1,4 +1,4 @@
-# Byteopoly's effects (SPEC.md 131.9.5, 132.8). Original. The source of the
+# Byteopoly's effects (SPEC.md 131.9.5, 133.8). Original. The source of the
 # effects bank BP_A2_SFX; tools/os88gkmus.py compiles it. Each effect is a
 # list of tones on the tone tier (the speaker, or channel 8 of an AdLib/SB),
 # PITCH:TICKS or HZ:TICKS at the OS's 18.2 Hz, `r` a rest, `slide A B N` N

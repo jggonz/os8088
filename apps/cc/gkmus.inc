@@ -1,4 +1,4 @@
-; gkmus.inc - the game kit's music and effects player (SPEC.md 132.8).
+; gkmus.inc - the game kit's music and effects player (SPEC.md 133.8).
 ; Original. C-callable (near cdecl, SPEC.md 73.3): arguments on the stack,
 ; AX out, BP/DS/DF kept, ES saved by every entry that loads it - a thunk the
 ; caller reaches next may still want ES = KERNEL_SEG.

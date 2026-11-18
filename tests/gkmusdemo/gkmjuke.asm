@@ -1,4 +1,4 @@
-; gkmjuke - the game kit's music player as a jukebox (SPEC.md 132.8). A gate
+; gkmjuke - the game kit's music player as a jukebox (SPEC.md 133.8). A gate
 ; package (tests/), not shipped. Its one part is the art part that holds the
 ; two banks (IDs 0 and 1), written by `tools/os88gkmus.py part`.
 %define CC_PKG_NAME 'GKMJUKE'

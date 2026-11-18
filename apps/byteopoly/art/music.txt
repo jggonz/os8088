@@ -1,4 +1,4 @@
-# Byteopoly's songs (SPEC.md 131.9.5, 132.8). ORIGINAL music, written for
+# Byteopoly's songs (SPEC.md 131.9.5, 133.8). ORIGINAL music, written for
 # this game: no melody here is taken from any other game or song. The source
 # of the song bank BP_A2_MUSIC; tools/os88gkmus.py compiles it, and
 # `tools/os88gkmus.py render apps/byteopoly/art/music.txt --song title --wav

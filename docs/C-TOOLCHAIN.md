@@ -753,13 +753,13 @@ in your shim). Adding one of the rest is a dozen lines in `os88thunk.asm`.
 ## Game kit
 
 A game or a styled application does not have to draw its 3D chrome by hand.
-The **game kit** (SPEC.md 132) is shared assembly over Breadboard XT's band
+The **game kit** (SPEC.md 133) is shared assembly over Breadboard XT's band
 drawing core (SPEC.md 130.6.2): bevelled boxes, panels with title bars,
 buttons in six states, key caps, tabs, check boxes, radio buttons, drop-down
 fields, banners, arrows, dithered drop shadows and sprites with silhouette
 shadows, every colour from a ROLE table with a black-and-white twin, plus
 SCENES - a screen's static decoration stored as data in your art part. Its C
-contract is `apps/cc/gk.h`; the music half (`gkm_*`) is SPEC.md 132.8.
+contract is `apps/cc/gk.h`; the music half (`gkm_*`) is SPEC.md 133.8.
 
 **Include it** in the shim after the core, and `#include "gk.h"` in the C:
 
@@ -815,7 +815,7 @@ if (gk_scene_rect(S_LANDING, 1, r) && hit(mx - x, my - y, r)) buy();
 `python3 tools/os88gk.py dump scenes.txt --sym art.h` prints what compiled.
 
 **What it costs**: 2,597 bytes of your segment (2,617 with `BX_ART2`) and 158 of bss for the
-whole drawing half (SPEC.md 132.9 has it routine by routine) - the price of
+whole drawing half (SPEC.md 133.9 has it routine by routine) - the price of
 two or three hand-drawn panels in C - and a scene costs its record bytes in
 the art part instead of code and string literals. The kit has no switch
 to leave a widget out: `gk_scene` can call any of them.
@@ -831,7 +831,7 @@ bevel styles and a compiled scene - onto `build/gkdemo.img` (and
 | **`apps/cc/ccsmoke.c`** + `.asm` | the SDK's template. Small and boring on purpose. `make cc-smoke` |
 | **`tests/chello/chello.c`** | the capability gate — the first C program this OS ran. Written to make every part of the round trip visible in a screendump, including a crosshair at the click point, because a swapped x/y still counts up correctly and only the mark can tell you. It also gates `os88_mem_movable()` and draws the claim's live base beside where it came from, for the same reason. `make chello` |
 | **`tests/covl/covl.c`** | the overlay gate — argument offsets across a far call, a call back out of the module, a call inside it. `make covl` |
-| **`tests/gkdemo/gkdemo.c`** | the game kit's gallery (SPEC.md 132): every `gk_` widget drawn through the band core, on colour and 1bpp, and one scene compiled from `scenes.txt`. `make gkdemo` |
+| **`tests/gkdemo/gkdemo.c`** | the game kit's gallery (SPEC.md 133): every `gk_` widget drawn through the band core, on colour and 1bpp, and one scene compiled from `scenes.txt`. `make gkdemo` |
 | **`apps/cword/cword.c`** | the application: a word processor, ~9,700 lines across nine files, RTF in and out, in two segments. Read its header comment for the redraw model and the cost table. `make cworddisk` |
 
 `apps/runcpm`, `apps/c64`, `apps/weave` and `apps/loom` are the other C

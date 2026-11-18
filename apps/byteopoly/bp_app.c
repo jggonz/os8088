@@ -50,7 +50,7 @@ static struct os88_class bp_ap_class = {OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_W
     os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, 0,
     os88_t_onclose, 0, os88_t_onresize, 0, 0, os88_t_ontimer, 0, 0};
 
-/* ---- sound: the game kit's player (SPEC.md 131.9.5, 132.8) -------------
+/* ---- sound: the game kit's player (SPEC.md 131.9.5, 133.8) -------------
  * Effects and songs are records of the second art part (BP_A2_SFX,
  * BP_A2_MUSIC), compiled from art/sfx.txt and art/music.txt; their ORDER in
  * those files is these numbers (tests/unit/t_gkmus.py holds them together).

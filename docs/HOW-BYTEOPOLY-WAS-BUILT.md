@@ -197,4 +197,4 @@ richer face drawn as C would not fit, so the plan pays in this order: the UI
 strings move out of the segment into text records in a second art part; the
 static layout of a screen becomes DATA (a "scene" record drawn by one
 interpreter) instead of code and literals; the widgets are written once in
-assembly as the game kit (SPEC.md 132), which any later C game can include.
+assembly as the game kit (SPEC.md 133), which any later C game can include.

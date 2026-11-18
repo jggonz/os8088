@@ -11469,7 +11469,7 @@ $(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
 bpmath: $(BUILD)/bpmath360.img
 .PHONY: bpmath
 
-# The C game kit's gallery (SPEC.md 132): a gate package drawing every gk_
+# The C game kit's gallery (SPEC.md 133): a gate package drawing every gk_
 # widget of apps/cc/gk.inc and one scene compiled by tools/os88gk.py, with an
 # art part of its own (three WIN16 faces, two pictures, the scene). Kit lane.
 $(eval $(call CC_PACKAGE,gkdemo,../tests/gkdemo,,$(BUILD)/GKDART.BIN))
@@ -11485,11 +11485,11 @@ $(BUILD)/gkdemo.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
 $(BUILD)/gkdemo360.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkdemo.o88
 	@python3 tools/os88disk.py --verify $@
-#> [Test] gkdemo :: the C game kit's gallery: every gk_ widget and a compiled scene (SPEC.md 132)
+#> [Test] gkdemo :: the C game kit's gallery: every gk_ widget and a compiled scene (SPEC.md 133)
 gkdemo: $(BUILD)/gkdemo.img $(BUILD)/gkdemo360.img
 .PHONY: gkdemo
 
-# The game kit's music player (SPEC.md 132.8) as a jukebox: GKMJUKE.O88 plays
+# The game kit's music player (SPEC.md 133.8) as a jukebox: GKMJUKE.O88 plays
 # every song and effect of Byteopoly's banks, so the player can be LISTENED
 # to on an AdLib/SB or the speaker before a game wires it. A gate package;
 # its one eager part holds the two banks (os88gkmus.py part).
@@ -11504,7 +11504,7 @@ $(BUILD)/gkmjuke.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
 $(BUILD)/gkmjuke360.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkmjuke.o88
 	@python3 tools/os88disk.py --verify $@
-#> [Test] gkmusdemo :: the game kit's music and effects player as a jukebox over Byteopoly's banks (SPEC.md 132.8)
+#> [Test] gkmusdemo :: the game kit's music and effects player as a jukebox over Byteopoly's banks (SPEC.md 133.8)
 gkmusdemo: $(BUILD)/gkmjuke.img $(BUILD)/gkmjuke360.img
 .PHONY: gkmusdemo
 

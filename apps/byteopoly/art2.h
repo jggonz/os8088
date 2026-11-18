@@ -2,8 +2,8 @@
  * IDs from BP_A2_BASE up live in BPART2.BIN; the drawing core routes an ID
  * >= BP_A2_BASE to the second part's segment with the ID less the base as
  * its index (BX_ART2, apps/breadxt/draw.inc). Same record formats as
- * BPART.BIN (131.10.3) plus the kit's scene records (SPEC.md 132) and the
- * music records (SPEC.md 132.8).
+ * BPART.BIN (131.10.3) plus the kit's scene records (SPEC.md 133) and the
+ * music records (SPEC.md 133.8).
  *
  * The ranges are RESERVED by owner lane (docs/plans/BYTEOPOLY-UPLIFT-PLAN.md):
  * a lane adds IDs only inside its own range, and an ID listed here is never
@@ -91,10 +91,10 @@
 /* 315..383: free for the art lane (log each addition) */
 
 /* ---- sound lane: 384..399 ---------------------------------------------- */
-#define BP_A2_MUSIC       384   /* the song bank (SPEC.md 132.8) */
+#define BP_A2_MUSIC       384   /* the song bank (SPEC.md 133.8) */
 #define BP_A2_SFX         385   /* the effects bank */
 
-/* ---- scenes (SPEC.md 132.6), ten per UI lane ----------------------------- */
+/* ---- scenes (SPEC.md 133.6), ten per UI lane ----------------------------- */
 #define BP_A2_SC_BOARD    400   /* 400..409 board lane */
 #define BP_A2_SC_SIDE     410   /* 410..419 side lane */
 #define BP_A2_SC_PANA     420   /* 420..429 panels-A lane (buy, auction, trade, link lost) */

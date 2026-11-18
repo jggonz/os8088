@@ -566,7 +566,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 129 | PageDesk — a native PDF viewer and editor (`apps/pagedesk/`, `PAGEDESK.O88`) |
 | 130 | Breadboard XT — educational circuit workbench, written in C |
 | 131 | Byteopoly — a vintage-computer trading game, written in C (`apps/byteopoly/`, `BYTEOPLY.O88`) |
-| 132 | The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`) |
+| 133 | The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`) |
 
 ## docs/
 

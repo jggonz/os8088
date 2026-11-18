@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 132.8 - the game kit's song and effects banks, read by something
+"""SPEC.md 133.8 - the game kit's song and effects banks, read by something
 that did not write them, and held to the names the C plays them by.
 
     python3 tests/unit/t_gkmus.py
@@ -8,7 +8,7 @@ tools/os88gkmus.py compiles Byteopoly's art/music.txt and art/sfx.txt into
 the two records apps/cc/gkmus.inc plays, and carries its own model of the
 player (`play`) - but that is the compiler's own code, so the failure it
 cannot see is both halves agreeing on the same wrong thing. This file walks
-the BYTES with a decoder written from SPEC.md 132.8 alone (it imports only
+the BYTES with a decoder written from SPEC.md 133.8 alone (it imports only
 the two pinned entry points, compile_music and compile_sfx, for the bytes):
 
   * every offset lands inside the record; every stream ends (7F) and every
@@ -21,7 +21,7 @@ the two pinned entry points, compile_music and compile_sfx, for the bytes):
   * a song's three voices last the same number of ticks from their starts
     AND from their loop points, so a loop is seamless by construction;
   * a patch's waveform is 0..3 and its C0h byte 0..0Fh (OPL2);
-  * the two banks fit SPEC.md 132.9's 5 KB;
+  * the two banks fit SPEC.md 133.9's 5 KB;
   * bp_app.c's BP_MUS_* / BP_FX_* name the songs and effects in file order,
     and bp.h's BP_SND_* are the first eight effects (a cue renamed or moved
     in one file and not the others plays the wrong sound, silently).

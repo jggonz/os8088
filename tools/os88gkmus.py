@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""os88gkmus.py - the game kit's music and effects compiler (SPEC.md 132.8).
+"""os88gkmus.py - the game kit's music and effects compiler (SPEC.md 133.8).
 
 A SONG BANK and an EFFECTS BANK are art records that apps/cc/gkmus.inc plays:
 three FM voices through SOUND.DRV, or the melody alone on the PC speaker, and
@@ -361,7 +361,7 @@ def parse_song(name, args, lines, where, pats, patches):
 
 
 def compile_music(path, symbols=None):
-    """music.txt -> the song bank bytes (SPEC.md 132.8). symbols: unused,
+    """music.txt -> the song bank bytes (SPEC.md 133.8). symbols: unused,
     taken for D1's signature (a future bank may name art IDs)."""
     songs, pats, patches, porder = compile_music_text(path)
     used_p = []
@@ -476,7 +476,7 @@ def parse_sfx(path):
 
 
 def compile_sfx(path, symbols=None):
-    """sfx.txt -> the effects bank bytes (SPEC.md 132.8)."""
+    """sfx.txt -> the effects bank bytes (SPEC.md 133.8)."""
     fx = parse_sfx(path)
     if len(fx) > 255:
         fail(f"{path}: more than 255 effects")

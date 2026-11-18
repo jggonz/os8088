@@ -15,7 +15,7 @@ The designs are the five concept boards of the original intake
 (`~/Repos/byteopoly-intake/concept/`: `1-board.png`, `2-auction.png`,
 `3-trade.png`, `4-lobby.png`, `5-linklost.png`; 1448x1086 renders of a
 640x480 VGA screen). The contract is SPEC.md 131 (Byteopoly) and the new
-SPEC.md 132 (the C game kit). The build diary is
+SPEC.md 133 (the C game kit). The build diary is
 [HOW-BYTEOPOLY-WAS-BUILT.md](../HOW-BYTEOPOLY-WAS-BUILT.md), section *The uplift*.
 
 Status letters: `-` planned, `B` built on its lane branch, `I` integrated on
@@ -51,8 +51,8 @@ half-drawn face.
 
 | id | story | lane | status |
 |---|---|---|---|
-| U1 | The game kit: 3D boxes, panels, title bars, buttons, key caps, tabs, check boxes, radios, drop-downs, banners, arrows, shadowed sprites, a role table with a mono twin (SPEC.md 132.1-132.5) | kit | - |
-| U2 | Scenes: a text source compiled to an art record, drawn by `gk_scene`, hit rects by `gk_scene_rect` (132.6) | kit | - |
+| U1 | The game kit: 3D boxes, panels, title bars, buttons, key caps, tabs, check boxes, radios, drop-downs, banners, arrows, shadowed sprites, a role table with a mono twin (SPEC.md 133.1-133.5) | kit | I |
+| U2 | Scenes: a text source compiled to an art record, drawn by `gk_scene`, hit rects by `gk_scene_rect` (133.6) | kit | I |
 | U3 | A second art part, routed by ID in the core (`BX_ART2`), built by `os88bpart.py`; art parts required | prep | I |
 | U4 | UI strings move to text records; resident relief measured | prep | I |
 | U5 | The sidebar moves to its own file `bp_side.c` (prep); `bp_w_*` drawn by the kit (lead, at integration) | prep, lead | I |
@@ -74,10 +74,10 @@ byte budgets set from prep's measured relief.
 
 | lane | owns | must not touch |
 |---|---|---|
-| kit | `apps/cc/gk.inc`, `apps/cc/gk.h` (implements the pinned API), `tools/os88gk.py`, `tests/unit/t_gkscene.py`, SPEC.md 132.1-132.7 and 132.9, `docs/C-TOOLCHAIN.md` (a *Game kit* section) | anything under `apps/byteopoly/` |
+| kit | `apps/cc/gk.inc`, `apps/cc/gk.h` (implements the pinned API), `tools/os88gk.py`, `tests/unit/t_gkscene.py`, SPEC.md 133.1-133.7 and 133.9, `docs/C-TOOLCHAIN.md` (a *Game kit* section) | anything under `apps/byteopoly/` |
 | prep | `apps/breadxt/draw.inc` (the `BX_ART2` hook only), `tools/os88bpart.py`, `apps/byteopoly/{byteoply.asm,byteoply.c,bp.h,bp_face.c,bp_side.c,bp_panels.c,bp_setup.c,bp_save.c,bp_link.c,bp_app.c}` for string moves and the split (bp_app.c outside its menus and sound block), `art/tx-*.txt`, Makefile's Byteopoly block, SPEC.md 131.8.1 (split note), 131.10.7, 131.11 | `art/sprites*.txt`, `art2.h` IDs below 460, `bp_board.c`, bp_app.c's menus and sound block |
 | art | `art/sprites.txt` (the BOOT arrows only), `art/sprites2.txt`, `art2.h` 256..383, `art/master5.png`, `art/PROMPT.md`, SPEC.md 131.10.8 | code |
 | rules | `bp_board.c`, `bp_link.c`'s protocol version constant, `hosttest/t_*.c` expectations, SPEC.md 131.2.1 and 131.5's version line, `docs/BYTEOPOLY-GUIDE.md`'s prices | everything else |
-| sound | `apps/cc/gkmus.inc`, `tools/os88gkmus.py`, `art/music.txt`, `art/sfx.txt`, `art2.h` 384..399, `bp_app.c`'s sound block and Options menu (and the Assets -> Collection menu rename), a delimited block in `os88bpart.py`, SPEC.md 132.8 and 131.9.5 | bp_app.c outside those |
+| sound | `apps/cc/gkmus.inc`, `tools/os88gkmus.py`, `art/music.txt`, `art/sfx.txt`, `art2.h` 384..399, `bp_app.c`'s sound block and Options menu (and the Assets -> Collection menu rename), a delimited block in `os88bpart.py`, SPEC.md 133.8 and 131.9.5 | bp_app.c outside those |
 
 Phase 2 ownership is set in its brief.

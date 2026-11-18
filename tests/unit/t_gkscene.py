@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The game kit's scene compiler writes the record SPEC.md 132.6 pins.
+"""The game kit's scene compiler writes the record SPEC.md 133.6 pins.
 
     python3 tests/unit/t_gkscene.py
 
@@ -19,7 +19,7 @@ tool's own decode(), and it holds:
   * the THREE TABLES that must agree: gk.inc's gk_ops (op number -> routine)
     against the compiler's op numbers, and gk.h's GK_* constants against the
     compiler's names for them;
-  * the REFUSALS of SPEC.md 132.7, each by its message.
+  * the REFUSALS of SPEC.md 133.7, each by its message.
 
 VERIFIED TO FAIL: swapping two rows of gk.inc's gk_ops, changing GK_SHADOW
 in the compiler, or encoding -1 as a word each turn this row red.
@@ -52,7 +52,7 @@ def compile_text(text, sym):
 
 
 def read(rec):
-    """SPEC.md 132.6, independently: -> (w, h, tags, ops)."""
+    """SPEC.md 133.6, independently: -> (w, h, tags, ops)."""
     assert rec[0:1] == b"S", "magic"
     w, h = struct.unpack_from("<HH", rec, 1)
     n = rec[5]

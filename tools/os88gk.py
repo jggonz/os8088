@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""os88gk.py - the game kit's SCENE compiler (SPEC.md 132.6, 132.7).
+"""os88gk.py - the game kit's SCENE compiler (SPEC.md 133.6, 133.7).
 
 A scene is a screen's static decoration stored as DATA in an art record and
 drawn by the kit's one resident interpreter, gk_scene (apps/cc/gk.inc). This
@@ -11,7 +11,7 @@ tool is the only writer of the record format.
     os88gk.py --selfcheck                 compile a sample, decode, check
     os88gk.py dump FILE [--sym HEADER..]  print each scene's ops
 
-Refusals raise GkError naming the file and line (132.7).
+Refusals raise GkError naming the file and line (133.7).
 """
 import argparse, os, re, struct, sys
 
@@ -359,7 +359,7 @@ class Compiler:
 
 
 def compile_scenes(paths, symbols):
-    """Every `scene` in the files -> {id: record bytes} (SPEC.md 132.7)."""
+    """Every `scene` in the files -> {id: record bytes} (SPEC.md 133.7)."""
     c, out = Compiler(symbols), {}
     for p in paths:
         c.compile_file(p, out)

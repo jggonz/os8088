@@ -1,4 +1,4 @@
-/* gkmjuke - the game kit's music player as a jukebox (SPEC.md 132.8). A
+/* gkmjuke - the game kit's music player as a jukebox (SPEC.md 133.8). A
  * gate package, not shipped: it plays every song and every effect of
  * Byteopoly's banks (apps/byteopoly/art/music.txt and sfx.txt, packed into
  * this package's one art part by tools/os88gkmus.py part), so the player can

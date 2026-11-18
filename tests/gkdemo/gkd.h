@@ -1,4 +1,4 @@
-/* gkd.h - the game kit gallery's art IDs (SPEC.md 132), in GKDART.BIN order.
+/* gkd.h - the game kit gallery's art IDs (SPEC.md 133), in GKDART.BIN order.
  * tests/gkdemo/mkart.py reads this; dense and in order. */
 #define GD_F_TEXT13 0
 #define GD_F_TEXT10 1

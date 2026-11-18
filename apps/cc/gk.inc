@@ -1,4 +1,4 @@
-; gk.inc - the os8088 GAME KIT's drawing half (SPEC.md 132.1-132.7): 3D
+; gk.inc - the os8088 GAME KIT's drawing half (SPEC.md 133.1-133.7): 3D
 ; boxes, widgets and data-driven scenes for C packages, over the band core
 ; (apps/breadxt/draw.inc, SPEC.md 130.6.2), which must be included first:
 ; the kit calls the core's INTERNAL register entries (bx_solid, bx_rect,
@@ -10,7 +10,7 @@
 ; only while a strip is composed; the core clips. Internally a widget works
 ; on gk_r, the CURRENT RECT (x1, y1, x2, y2 inclusive): gk_boxr draws a
 ; style's rings round it and leaves it the inside, gk_lab puts a label in it.
-; Every colour comes through gk_rc from the role table (132.2).
+; Every colour comes through gk_rc from the role table (133.2).
 section .text
 
 GK_ROUND    equ 10h
@@ -173,7 +173,7 @@ gk_doorr:
     call gk_rc
     xchg ax,di
 ; gk_door: a SCREEN DOOR over AX, BX, CX, DX (inclusive): DI low's colour
-; where x + y is even, the band left alone elsewhere (132.3). One bx_rect a
+; where x + y is even, the band left alone elsewhere (133.3). One bx_rect a
 ; row inside the strip, through the core's dot mask.
 gk_door:
     mov [gk_dx1],ax
@@ -282,7 +282,7 @@ gk_ring:
 
 ; gk_boxr: gk_r = the rect, AL = the style, AH = the inside's colour (bit 7:
 ; left alone). Shadow; the face over all but the outermost ring; then the
-; rings (so a ring's undrawn side or cut corner shows the face, 132.3).
+; rings (so a ring's undrawn side or cut corner shows the face, 133.3).
 ; GK_ROUND cuts the corners of the first TWO rings. Leaves gk_r = the inside.
 gk_boxr:
     mov [gk_sty],ax
@@ -482,7 +482,7 @@ gk_tdo:
     test byte [gk_tfl],GK_EMBOSS
     jz .p
     cmp word [bx_np],1
-    je .p                           ; (no emboss on 1bpp, 132.4)
+    je .p                           ; (no emboss on 1bpp, 133.4)
     push ax
     push bx
     inc ax
@@ -869,7 +869,7 @@ gk_rdisc:
     sub cx,ax
     add ax,[bp+4]
 ; gk_disc: a disc CX across at (AX, BX), in DI high's colour: row i spans
-; the columns j with (s-1-2j)^2 + (2i-s+1)^2 <= s^2 (132.5)
+; the columns j with (s-1-2j)^2 + (2i-s+1)^2 <= s^2 (133.5)
 gk_disc:
     mov [gk_dx1],ax
     mov [gk_dy2],bx
@@ -1093,7 +1093,7 @@ _gk_sprshadow:
 .er:
     ret
 
-; ---- scenes (132.6) ------------------------------------------------------
+; ---- scenes (133.6) ------------------------------------------------------
 ; int gk_scene(int id,int x,int y,const char *const *sv,const int *iv)
 _gk_scene:
     push bp
@@ -1352,7 +1352,7 @@ section .data
 gk_rt: dw gk_colr                   ; the role table in force
 gk_colr: db 0,7,15,8,15,0,1,9,15,1,15,14,0,8,0,15
 gk_monr: db 0,15,15,0,15,0,0,8,15,0,15,0,15,0,0,15
-; the ring sets (132.3): top/left, bottom/right role pairs, FFh ends
+; the ring sets (133.3): top/left, bottom/right role pairs, FFh ends
 gk_ridx: db gk_r0-gk_rings, gk_r1-gk_rings, gk_r2-gk_rings, gk_r3-gk_rings
          db gk_r4-gk_rings, gk_r5-gk_rings, gk_r6-gk_rings, gk_rings-gk_rings
 gk_rings: db GK_OUT,GK_OUT                    ; 7, the default button
@@ -1370,7 +1370,7 @@ gk_btab: db 2 | GK_ROUND | GK_SHADOW, GK_FACE, GK_TEXT        ; NORMAL
          db 2 | GK_ROUND | GK_SHADOW, GK_FACE, GK_DIS         ; DISABLED
          db 6 | GK_ROUND, GK_FACE, GK_TEXT                    ; PRESSED
          db 2 | GK_ROUND | GK_SHADOW, GK_HI, GK_HITX          ; HILITE
-; scene ops 0..20 (132.6)
+; scene ops 0..20 (133.6)
 gk_ops: dw _gk_box, _gk_hline, _gk_vline, _gk_shadow, _gk_text, _gk_textbox
         dw _gk_panel, _gk_titlebar, _gk_button, _gk_keycap, _gk_tab
         dw _gk_check, _gk_radio, _gk_drop, _gk_banner, _gk_arrow

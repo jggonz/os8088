@@ -9,7 +9,7 @@
  * is repainted only when its signature (a hash of every input it draws)
  * changed, or when it was dirtied with BP_D_FORCE. */
 #include "art.h"
-#include "gk.h"                          /* gk_*: the game kit (SPEC.md 132) */
+#include "gk.h"                          /* gk_*: the game kit (SPEC.md 133) */
 
 int bx_rows(int x, int y, int w, int h);
 void bx_new(int x, int y, int w, int h, int colour);
