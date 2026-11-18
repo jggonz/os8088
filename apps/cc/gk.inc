@@ -16,6 +16,8 @@ section .text
 GK_ROUND    equ 10h
 GK_SHADOW   equ 20h
 GK_DROPW    equ 3
+GK_PLEFT    equ 40h                 ; gk_panel style: the title left-aligned
+GK_B_FLAT   equ 10h                 ; gk_button state: no drop shadow
 GK_CENTRE   equ 1
 GK_EMBOSS   equ 10h
 GK_FIT      equ 20h
@@ -546,6 +548,10 @@ _gk_panel:
     mov si,[bp+14]
     mov dx,[bp+16]
     mov ah,GK_CENTRE
+    test byte [bp+18],GK_PLEFT
+    jz .ctr
+    dec ah                          ; GK_PLEFT: left, gk_tbar indents 6 px
+.ctr:
     call gk_tbar
     pop ax
     add ax,[bp+12]
@@ -599,6 +605,11 @@ _gk_button:
     call gk_enter
     mov bx,[bp+16]
     mov dl,0FFh
+    test bl,GK_B_FLAT
+    jz .sh
+    xor bl,GK_B_FLAT
+    mov dl,0FFh ^ GK_SHADOW         ; GK_B_FLAT: no drop shadow
+.sh:
     call gk_btn
     pop bp
     ret

@@ -256144,9 +256144,9 @@ caller's, and 132.9 gives the ones the WIN16 faces want.
 
 | widget | drawn as |
 |---|---|
-| `gk_panel(x,y,w,h,bar,title,font,style)` | `gk_box(style, FACE)`, where a FLAT or RAISED ring set becomes `GK_RAISED2 \| GK_ROUND` (the boards' panel; SUNKEN, SUNKEN2, ETCHED and the flags are kept); with `bar` > 0 a `gk_titlebar` one pixel inside the rings, `(xi+1, yi+1, wi-2, bar)` (`(x+4, y+4, w-8, bar)` in the thick edge), title centred. Answers the first row under the bar, `yi + bar + 2` (`y + bar + 5` in the thick edge; `yi`, the inside's top, with no bar) |
+| `gk_panel(x,y,w,h,bar,title,font,style)` | `gk_box(style, FACE)`, where a FLAT or RAISED ring set becomes `GK_RAISED2 \| GK_ROUND` (the boards' panel; SUNKEN, SUNKEN2, ETCHED and the flags are kept); with `bar` > 0 a `gk_titlebar` one pixel inside the rings, `(xi+1, yi+1, wi-2, bar)` (`(x+4, y+4, w-8, bar)` in the thick edge), title centred, or left-aligned 6 px in when the style has `GK_PLEFT` (40h, which the box itself ignores). Answers the first row under the bar, `yi + bar + 2` (`y + bar + 5` in the thick edge; `yi`, the inside's top, with no bar) |
 | `gk_titlebar(x,y,w,h,s,font,flags)` | one ring, TITLELT top/left (the light line over the bar) and OUTLINE bottom/right (the dark line under it), TITLE inside; `s` embossed and cut to fit in TITLETX inside the ring; `flags` is the alignment, `GK_LEFT` indenting 6 px from the ring |
-| `gk_button(...,state)` | `GK_RAISED2 \| GK_ROUND \| GK_SHADOW` (DEFAULT: style 7; PRESSED: style 6, no shadow, label 1 px down-right), label centred and cut to fit in the inside. Faces and labels per state: NORMAL, DEFAULT and PRESSED FACE/TEXT, FOCUS FOCUS/FOCUSTX, HILITE HILITE/HILITETX, DISABLED FACE/DISABLED plus the 1bpp screen door over the inside |
+| `gk_button(...,state)` | `GK_RAISED2 \| GK_ROUND \| GK_SHADOW` (DEFAULT: style 7; PRESSED: style 6, no shadow, label 1 px down-right), label centred and cut to fit in the inside. `GK_B_FLAT` (10h) ORed into the state drops the shadow of any state (a button on a busy ground) and is masked off before the state is read. Faces and labels per state: NORMAL, DEFAULT and PRESSED FACE/TEXT, FOCUS FOCUS/FOCUSTX, HILITE HILITE/HILITETX, DISABLED FACE/DISABLED plus the 1bpp screen door over the inside |
 | `gk_keycap(x,y,w,h,label,font)` | an OUTLINE ring (round), inside it the SKIRT: SHADE with a FACE screen door over it (a mid-grey checker); FACE over the upper-left body `(x+1, y+1 .. x+w-5, y+h-2-s)`, KEY over the top face `(x+2, y+1 .. x+w-6, y+h-3-s)` with `s = max(3, h / 4)`: a light left side, a 3 px skirt on the right, an `s` px skirt in front; label centred and cut to fit on the top face in TEXT |
 | `gk_tab(...,active)` | a button face without its bottom edge (the box runs 3 px past `y+h` and the strip is cut at `y+h`), no shadow; active: HILITE face, 2 px taller (from `y-2`) |
 | `gk_check(x,y,size,on,tick)` | style 6 over FIELD; on: the art sprite `tick` (when `tick` > 0 and present) centred on the box, else a drawn tick of 2x2 dots in green 2: `s/2 - 2` of them down-right from `(x+s/4, y+s/2-1)`, then up-right from two rows above the last to `x+s-3`, `s` = size |
@@ -256414,8 +256414,8 @@ lane's rows (132.8) follow these.
 | rings and boxes: `gk_ring` (84), `gk_boxr` (82), `gk_box` | 180 |
 | `gk_hline`, `gk_vline` | 50 |
 | text: `gk_tdo` (140), `gk_lab`, `gk_text`, `gk_textbox`, `gk_bxt`, `gk_tail` | 267 |
-| `gk_panel`, `gk_titlebar` | 140 |
-| `gk_button`, `gk_tab` (`gk_btn` 97) | 169 |
+| `gk_panel` (`GK_PLEFT`), `gk_titlebar` | 148 |
+| `gk_button` (`GK_B_FLAT`), `gk_tab` (`gk_btn` 97) | 179 |
 | `gk_keycap` | 80 |
 | `gk_drop` | 67 |
 | `gk_banner` | 31 |
@@ -256425,10 +256425,10 @@ lane's rows (132.8) follow these.
 | `gk_sprshadow` | 221 |
 | `gk_scene` (303) and its literal and header readers | 392 |
 | `gk_scene_size`, `gk_scene_rect` | 71 |
-| **code** | **2,442** |
+| **code** | **2,460** |
 | data: role tables 32, ring sets 43, button states 18, op table 42, the theme pointer 2 | 137 |
-| **image total** | **2,579** |
-| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 132.4): Byteopoly's price | **2,599** |
+| **image total** | **2,597** |
+| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 132.4): Byteopoly's price | **2,617** |
 | bss | 158 |
 
 **Per strip.** `gk_scene` reads a skipped op's length, number and two row

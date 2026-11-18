@@ -814,7 +814,7 @@ if (gk_scene_rect(S_LANDING, 1, r) && hit(mx - x, my - y, r)) buy();
 
 `python3 tools/os88gk.py dump scenes.txt --sym art.h` prints what compiled.
 
-**What it costs**: 2,579 bytes of your segment (2,599 with `BX_ART2`) and 158 of bss for the
+**What it costs**: 2,597 bytes of your segment (2,617 with `BX_ART2`) and 158 of bss for the
 whole drawing half (SPEC.md 132.9 has it routine by routine) - the price of
 two or three hand-drawn panels in C - and a scene costs its record bytes in
 the art part instead of code and string literals. The kit has no switch

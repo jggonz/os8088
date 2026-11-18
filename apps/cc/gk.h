@@ -70,6 +70,7 @@ int  gk_role(int role);                       /* the colour a role is now */
 #define GK_ROUND    0x10 /* OR in: cut the four corner pixels (a softened edge) */
 #define GK_SHADOW   0x20 /* OR in: cast GK_DROPW px of dithered shadow right and down */
 #define GK_DROPW    3
+#define GK_PLEFT    0x40 /* OR in, gk_panel only: the title left-aligned, 6 px in */
 
 /* A bevelled rect: edge style | GK_ROUND | GK_SHADOW, then the face filled
  * with `fill` (-1 = leave the inside alone). The shadow is drawn OUTSIDE
@@ -96,7 +97,8 @@ int  gk_textbox(int x, int y, int w, int h, const char *s, int colour, int font,
 /* ---- composite widgets -------------------------------------------------- */
 /* A 3D panel: outline, raised edge, face, a title bar `bar` px tall (0 = no
  * bar) with the title centred in GK_R_TITLETX, embossed; style may add
- * GK_SHADOW. Answers the y of the first row under the title bar. */
+ * GK_SHADOW, and GK_PLEFT to left-align the title with a 6 px indent.
+ * Answers the y of the first row under the title bar. */
 int  gk_panel(int x, int y, int w, int h, int bar, const char *title, int font, int style);
 /* A title bar alone (a section header inside a panel): ground GK_R_TITLE,
  * a highlight line on top, text centred (flags GK_LEFT to left-align with
@@ -109,8 +111,9 @@ void gk_titlebar(int x, int y, int w, int h, const char *s, int font, int flags)
 #define GK_B_DISABLED 3   /* greyed label; on 1bpp a screen-door over it */
 #define GK_B_PRESSED  4   /* sunken, label down-right 1 px */
 #define GK_B_HILITE   5   /* yellow face (the selected tab, "your turn") */
-/* A push button: rounded, GK_RAISED2, a shadow, the label centred and cut
- * to fit. */
+#define GK_B_FLAT     0x10 /* OR in: no dither drop shadow (a button on a busy ground) */
+/* A push button: rounded, GK_RAISED2, a shadow (unless the state has
+ * GK_B_FLAT), the label centred and cut to fit. */
 void gk_button(int x, int y, int w, int h, const char *label, int font, int state);
 /* A keyboard key cap: GK_R_KEY top, a thick shade on the right and bottom
  * (the cap's sides), outline, rounded; label centred on the top face. */

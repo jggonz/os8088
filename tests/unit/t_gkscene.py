@@ -123,6 +123,26 @@ def golden():
     check(rec == bytes(want), "golden record:\n  got  %s\n  want %s" % (rec.hex(), bytes(want).hex()))
 
 
+def orins():
+    """GK_PLEFT and GK_B_FLAT (DECISIONS D7) reach the record as OR-ins: a
+    flat button's constant state carries 10h and its rows lose the shadow's
+    three; a GK_PLEFT panel's style carries 40h."""
+    rec = compile_text(
+        "fonth F 10\n"
+        "scene SC 200 100\n"
+        "  panel 0 0 200 100 12 \"T\" F raised2|pleft\n"
+        "  button 4 70 60 20 \"B\" F pressed|bflat\n"
+        "  button 70 70 60 20 \"C\" F GK_B_FOCUS|GK_B_FLAT\n"
+        "  button 140 70 50 20 \"D\" F normal\n"
+        "end\n", {"SC": 1, "F": 2})[1]
+    ops = read(rec)[3]
+    check([o[0] for o in ops] == [6, 8, 8, 8], "orins: ops %r" % ([o[0] for o in ops],))
+    check(ops[0][-1][7] == 0x42, "orins: panel style %r" % (ops[0][-1][7],))
+    check(ops[1][-1][6] == 0x14 and ops[2][-1][6] == 0x11, "orins: button states")
+    check(ops[1][1:3] == (70, 89), "orins: flat button rows %r" % (ops[1][1:3],))
+    check(ops[3][1:3] == (70, 92), "orins: shadowed button rows %r" % (ops[3][1:3],))
+
+
 SCENE = r'''
 fonth BIG 16
 scene 300 400 300
@@ -248,6 +268,7 @@ def refusals():
 
 def main():
     golden()
+    orins()
     roundtrip()
     tables()
     refusals()
@@ -255,7 +276,7 @@ def main():
         print("t_gkscene: FAIL " + f)
     if FAILS:
         sys.exit(1)
-    print("t_gkscene: ok - golden record, round trip, gk_ops/gk.h tables, %d refusals"
+    print("t_gkscene: ok - golden record, D7 OR-ins, round trip, gk_ops/gk.h tables, %d refusals"
           % (len(REFUSE) + 3))
 
 

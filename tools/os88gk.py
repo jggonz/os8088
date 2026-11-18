@@ -67,9 +67,10 @@ COLOURS = ["black", "blue", "green", "cyan", "red", "magenta", "brown",
 KIT = {
     "GK_FLAT": 0, "GK_RAISED": 1, "GK_RAISED2": 2, "GK_SUNKEN": 3,
     "GK_SUNKEN2": 4, "GK_ETCHED": 5, "GK_ROUND": 0x10, "GK_SHADOW": 0x20,
-    "GK_DROPW": 3, "GK_LEFT": 0, "GK_CENTRE": 1, "GK_RIGHT": 2,
+    "GK_DROPW": 3, "GK_PLEFT": 0x40, "GK_LEFT": 0, "GK_CENTRE": 1, "GK_RIGHT": 2,
     "GK_EMBOSS": 0x10, "GK_FIT": 0x20, "GK_B_NORMAL": 0, "GK_B_FOCUS": 1,
     "GK_B_DEFAULT": 2, "GK_B_DISABLED": 3, "GK_B_PRESSED": 4, "GK_B_HILITE": 5,
+    "GK_B_FLAT": 0x10,
 }
 KIT.update({f"GK_R_{r}": i for i, r in enumerate(ROLES)})
 ALIAS = {
@@ -77,6 +78,7 @@ ALIAS = {
     "etched": 5, "round": 0x10, "shadow": 0x20, "left": 0, "centre": 1,
     "center": 1, "right": 2, "emboss": 0x10, "fit": 0x20, "normal": 0,
     "focus": 1, "default": 2, "disabled": 3, "pressed": 4, "hilite": 5,
+    "pleft": 0x40, "bflat": 0x10,
 }
 ALIAS.update({c: i for i, c in enumerate(COLOURS)})
 ALIAS["lightgray"], ALIAS["darkgray"] = 7, 8
@@ -196,8 +198,8 @@ class Compiler:
             st = c(4) if op == "box" else c(7)
             if st is None or st & 0x20:
                 bot += 3
-        if op in SHADOWED:
-            bot += 3
+        if op in SHADOWED and (c(6) is None or not c(6) & 0x10):
+            bot += 3                # unless a constant state says GK_B_FLAT
         if op == "shadow":
             d = c(4)
             if d is None:
