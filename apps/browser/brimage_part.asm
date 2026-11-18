@@ -215,8 +215,10 @@ bri_next:
 .fetch:
     xor ax, ax
     mov [bri_rx], ax
+    mov [bri_rxh], ax
     mov [bri_code], ax
     mov [bri_clen], ax
+    mov [bri_clenh], ax
     mov [bri_sent], ax
     mov [bri_hcol], al
     mov [bri_hst], al
@@ -229,6 +231,7 @@ bri_next:
     mov es, [cs:PXP_SELF]
     mov [es:bri_lm], al
     mov [es:bri_etag], al
+    mov [es:bri_sgk], ax            ; no granule's segment kept (bri_stash)
     pop es
     mov al, IE_OPEN
     jmp bri_go
@@ -359,8 +362,8 @@ bri_recv:
     jne .fail
     cmp byte [bri_hasc], 0
     je .nolen
-    cmp word [bri_clen], BR_IFMAX
-    ja .fail                        ; said too long before a byte is kept
+    cmp word [bri_clenh], BR_IFMAXH
+    jae .fail                       ; said too long before a byte is kept
 .nolen:
     mov al, IE_BODY
     call bri_go
@@ -374,9 +377,8 @@ bri_recv:
     jc .fail
     cmp byte [bri_hasc], 0
     je .ret
-    mov ax, [bri_rx]
-    cmp ax, [bri_clen]
-    jb .ret
+    call bri_rxlt                   ; CF = fewer than Content-Length
+    jc .ret
     jmp bri_ended                   ; Content-Length's worth: done
 .maybeend:                          ; nothing read is not an end (netpkg.inc)
     call bri_qstat
@@ -393,59 +395,235 @@ bri_recv:
     je .fail                        ; broken: what arrived is cut short
     cmp byte [bri_hasc], 0
     je bri_ended
-    mov ax, [bri_rx]
-    cmp ax, [bri_clen]
-    jb .fail
+    call bri_rxlt
+    jc .fail
     jmp bri_ended
 .fail:
     jmp bri_fail
 
 ; bri_room - AX = the bytes the staging still holds: the store past the ready
-; copies, BR_IFMAX at most, less what is staged. Others kept
+; copies, less what is staged, at most FFF0h at a time (a stash's CX). Others
+; kept. 32 bits since 1.8: a picture may pass 64 KB
 bri_room:
     push cx
+    push dx
     mov ax, [br_istpar]
-    sub ax, [br_iready]
-    cmp ax, BR_IFMAX / 16
-    jbe .b
-    mov ax, BR_IFMAX / 16
-.b:
-    mov cl, 4
-    shl ax, cl
+    sub ax, [br_iready]             ; the staging's paragraphs
+    xor dx, dx
+    mov cx, 4
+.sh:
+    shl ax, 1
+    rcl dx, 1
+    loop .sh                        ; DX:AX = its bytes
     sub ax, [bri_rx]
-    jae .out
+    sbb dx, [bri_rxh]
+    jb .none
+    or dx, dx
+    jnz .max
+    cmp ax, 0FFF0h
+    jbe .out
+.max:
+    mov ax, 0FFF0h
+    jmp short .out
+.none:
     xor ax, ax
 .out:
+    pop dx
     pop cx
     ret
 
-; bri_stash - CX bytes at DS:SI onto the staging's end. CF=1 the file would
-; pass BR_IFMAX. The caller has bounded CX by bri_room. AX, DX, DI clobbered
+; bri_stash - CX bytes at DS:SI onto the staging's end, which is addressed
+; in 32 KB GRANULES (a segment every 2,048 paragraphs, an offset under 32 KB,
+; as bri_frebase reads it), so no stash - BR_CHUNK at most - crosses 64 KB,
+; and kern_mega makes one SEG_SUB a granule, not one a chunk: each is an LDT
+; entry until the store is freed. CF=1 the file would reach BR_IFMAXH x 64
+; KB, or SEG_SUB was refused. The caller has bounded CX by bri_room. AX, DX,
+; DI clobbered
 bri_stash:
     mov ax, [bri_rx]
+    mov dx, [bri_rxh]
     add ax, cx
-    jc .big
-    cmp ax, BR_IFMAX
-    ja .big
+    adc dx, 0
+    cmp dx, BR_IFMAXH
+    jae .big
     push es
-    mov dx, [br_istseg]             ; loaded this pass: a running worker pins
-    mov ax, [br_iready]             ; the store, and it parks only at the top
-    call far [br_im_r_imgsub]       ; of its loop
+    push cx
+    mov ax, [bri_rx]                ; the end's granule, (rxh:rx) >> 15...
+    mov dx, [bri_rxh]
+    shl ax, 1
+    rcl dx, 1
+    mov cl, 11
+    shl dx, cl                      ; ...as paragraphs
+    mov ax, [br_iready]
+    add ax, dx                      ; ...past the ready copies, in ONE sum:
+    mov dx, [br_istseg]             ; on kern_mega the store is a selector,
+    cmp ax, [cs:bri_sgp]            ; and only SEG_SUB may add to it (a
+    jne .sub                        ; running worker pins the store, and it
+    cmp dx, [cs:bri_sgk]            ; parks only at the top of its loop)
+    jne .sub
+    mov dx, [cs:bri_sgs]            ; the granule's segment, asked already
+    jmp short .es
+.sub:
+    mov es, [cs:PXP_SELF]
+    mov [es:bri_sgk], dx
+    mov [es:bri_sgp], ax
+    call far [br_im_r_imgsub]
+    jc .ref
+    mov [es:bri_sgs], dx
+.es:
     mov es, dx
-    mov di, [bri_rx]
+    mov di, [bri_rx]                ; ...and its offset in it
+    and di, 7FFFh
+    pop cx
     add [bri_rx], cx
+    adc word [bri_rxh], 0
     cld
     rep movsb
     pop es
     clc
     ret
+.ref:
+    mov word [es:bri_sgk], 0        ; refused: nothing kept
+    pop cx
+    pop es
 .big:
     stc
     ret
 
+; bri_rxlt - CF=1 fewer bytes are staged than Content-Length said. All kept
+bri_rxlt:
+    push ax
+    mov ax, [bri_rxh]
+    cmp ax, [bri_clenh]
+    jne .o
+    mov ax, [bri_rx]
+    cmp ax, [bri_clen]
+.o:
+    pop ax
+    ret
+
+; bri_clendig - Content-Length = 10 x itself + BX, saturating. AX, DX clobbered
+bri_clendig:
+    push cx
+    mov ax, [bri_clenh]
+    cmp ax, 1000h
+    jae .sat
+    mov cx, 10
+    mul cx                          ; the high word x 10
+    mov cx, ax
+    mov ax, [bri_clen]
+    push cx
+    mov cx, 10
+    mul cx                          ; DX:AX = the low word x 10
+    pop cx
+    add dx, cx
+    add ax, bx
+    adc dx, 0
+    mov [bri_clen], ax
+    mov [bri_clenh], dx
+    pop cx
+    ret
+.sat:
+    mov word [bri_clen], 0FFFFh
+    mov word [bri_clenh], 0FFFFh
+    pop cx
+    ret
+
+; bri_rxpar - AX = the staged file's paragraphs, rounded up, 32 bits in. CL
+; clobbered, all else kept
+bri_rxpar:
+    push dx
+    mov ax, [bri_rx]
+    mov dx, [bri_rxh]
+    add ax, 15
+    adc dx, 0
+    mov cl, 4
+.s:
+    shr dx, 1
+    rcr ax, 1
+    dec cl
+    jnz .s
+    pop dx
+    ret
+
+; bri_rx16 - AX = the staged length, or FFF0h past 64 KB (a header's or a
+; scan's bound: they read the first 64 KB). bri_bp16 - the same into BP
+bri_rx16:
+    mov ax, [bri_rx]
+    cmp word [bri_rxh], 0
+    je .r
+    mov ax, 0FFF0h
+.r:
+    ret
+bri_bp16:
+    push ax
+    call bri_rx16
+    mov bp, ax
+    pop ax
+    ret
+
+; bri_aplanbig - an animation is played only from a file under 60,000 bytes
+; (its frames' table holds words); past it the first frame is the picture
+bri_aplanbig:
+    test word [br_opts], OPT_ANIM   ; Options > Animations off (71.36)
+    jz .still
+    cmp word [bri_rxh], 0
+    jne .still
+    cmp word [bri_rx], BR_IFMAX
+    ja .still
+    jmp bri_aplan
+.still:
+    stc
+    ret
+
+; bri_frebase - bri_fill's cursor past 32 KB: its segment moves up 2,048
+; paragraphs and the cursor down 32 KB, so a sub-block never crosses 64 KB.
+; All kept
+bri_frebase:
+    cmp word [bri_fpos], 8000h
+    jb .r
+    sub word [bri_fpos], 8000h
+    push ax                         ; the segment 2,048 paragraphs on - by
+    push dx                         ; SEG_SUB, never a sum: on kern_mega it
+    mov dx, [bri_fseg]              ; is a selector (1.8 cleanup 6)
+    mov ax, 800h
+    call far [br_im_r_imgsub]
+    mov [bri_fseg], dx
+    pop dx
+    pop ax
+    add word [bri_fbase], 8000h
+    adc word [bri_fbase + 2], 0
+.r:
+    ret
+
+; bri_fleft - AX = the bytes left after the cursor (FFFFh at most), ZF=1 none.
+; All else kept
+bri_fleft:
+    push dx
+    mov ax, [bri_rx]
+    mov dx, [bri_rxh]
+    sub ax, [bri_fbase]
+    sbb dx, [bri_fbase + 2]
+    sub ax, [bri_fpos]
+    sbb dx, 0
+    jb .none
+    or dx, dx
+    jz .z
+    mov ax, 0FFFFh
+.z:
+    or ax, ax
+    pop dx
+    ret
+.none:
+    xor ax, ax
+    pop dx
+    ret
+
 ; the staging is full and the body is not over: the UI task grows it
 bri_needgrow:
-    cmp word [bri_rx], BR_IFMAX
+    cmp word [bri_rxh], BR_IFMAXH - 1
+    jb .grow
+    cmp word [bri_rx], 0FFF0h       ; bri_ugrow's cap, (BR_IFMAXH - 1):FFF0h
     jb .grow
     jmp bri_fail                    ; at the cap and still coming: too long
 .grow:
@@ -532,6 +710,7 @@ bri_hbyte:
     mov byte [bri_hm], 1
     mov byte [bri_hasc], 1
     mov word [bri_clen], 0
+    mov word [bri_clenh], 0
     jmp .col
 .x1:
     and byte [bri_hmask], 0FEh
@@ -599,17 +778,7 @@ bri_hbyte:
     ja .dend
     xor ah, ah
     mov bx, ax
-    mov ax, [bri_clen]
-    cmp ax, 6553
-    ja .sat
-    mov dx, 10
-    mul dx
-    add ax, bx
-    jnc .cst
-.sat:
-    mov ax, 0xFFFF                  ; past BR_IFMAX anyway
-.cst:
-    mov [bri_clen], ax
+    call bri_clendig                ; Content-Length = 10 x itself + BX, 32 bits
     jmp .col
 .dend:
     mov byte [bri_hm], 2
@@ -970,7 +1139,7 @@ bri_gifhdr:
     mov ax, [br_iready]
     call far [br_im_r_imgsub]
     mov es, dx                      ; ES = the staged file
-    mov bp, [bri_rx]                ; BP = its end
+    call bri_bp16                   ; BP = its end (the header is in 64 KB)
     cmp bp, 13
     jb .bad
     cmp word [es:0], 'GI'
@@ -1120,6 +1289,10 @@ bri_palsz:
 ; =============================================================================
 bri_wake:
     mov al, [br_ie]
+    cmp al, IE_DEC
+    jne .start
+    jmp bri_uprog                   ; the worker asked for a draw (1.8)
+.start:
     cmp al, IE_START
     je bri_ustart
     cmp al, IE_GROW
@@ -1155,8 +1328,15 @@ bri_ustart:
     xor ax, ax
     mov [bri_apend], al
     mov [bri_anum], al
-    mov [bri_amask], ax
+    mov [bri_preq], ax              ; no progressive draw asked or under way
+    mov [bri_pon], al
+    mov [bri_amask], ax             ; BR_IMGTMAX / 8 bytes: one bit an image
     mov [bri_amask + 2], ax
+    mov [bri_amask + 4], ax
+    mov [bri_amask + 6], ax
+%if BR_IMGTMAX / 8 != 8
+%error "bri_ustart clears bri_amask as four words"
+%endif
     mov es, [cs:PXP_SELF]
     mov di, bri_arec
     mov cx, BRI_AMAX * A_SIZE / 2
@@ -1213,23 +1393,34 @@ bri_ustart:
 ; IE_GROW - the staging is full: grow it to the file's whole length when the
 ; server said it, else by 4 KB
 bri_ugrow:
-    mov ax, [bri_rx]
+    mov ax, [bri_rx]                ; DX:AX = the stage + 4 KB...
+    mov dx, [bri_rxh]
     add ax, 4096
-    jc .max
+    adc dx, 0
     cmp byte [bri_hasc], 0
     je .cap
-    cmp [bri_clen], ax
-    jb .cap
+    cmp dx, [bri_clenh]             ; ...or Content-Length, when larger
+    ja .cap
+    jb .cl
+    cmp ax, [bri_clen]
+    jae .cap
+.cl:
     mov ax, [bri_clen]
+    mov dx, [bri_clenh]
 .cap:
-    cmp ax, BR_IFMAX
-    jbe .p
-.max:
-    mov ax, BR_IFMAX
+    cmp dx, BR_IFMAXH
+    jb .p
+    mov dx, BR_IFMAXH - 1
+    mov ax, 0FFF0h
 .p:
     add ax, 15
+    adc dx, 0
     mov cl, 4
-    shr ax, cl
+.ps:
+    shr dx, 1
+    rcr ax, 1
+    dec cl
+    jnz .ps                         ; AX = its paragraphs
     call bri_ustore
     jc .fail
     mov byte [br_ie], IE_BODY
@@ -1788,8 +1979,7 @@ bri_compact:
     cmp al, BRI_AMAX
     jb .cr
     push cx
-    mov ax, [bri_rx]
-    call bri_paras                  ; (CL clobbered)
+    call bri_rxpar                  ; (CL clobbered)
     pop cx
     mov dx, ax
     mov ax, [br_iready]
@@ -1925,10 +2115,7 @@ bri_spnew:
     jnz .base
     mov dx, BR_IDBUF / 16
 .base:                              ; DX = the new base
-    mov ax, [bri_rx]
-    add ax, 15
-    mov cl, 4
-    shr ax, cl                      ; the stage's paragraphs,
+    call bri_rxpar                  ; the stage's paragraphs,
     add ax, dx
     add ax, [br_iready]
     sub ax, [br_ibase]
@@ -2621,6 +2808,8 @@ bri_kstart:
     mov byte [br_ickeep], 0
     cmp byte [br_islocal], 0
     jne .ret
+    test word [br_opts], OPT_CACHE  ; Options > Cache off: nothing kept (71.36)
+    jz .ret
     xor ax, ax                      ; the page: its host, path and port
     xor dx, dx
     mov si, br_host
@@ -2921,7 +3110,9 @@ bri_kput:
 ; page laid out as the header would have, then drawn. Otherwise the image
 ; is fetched after all
 bri_ucached:
-    mov word [bri_rx], 0            ; no stage
+    xor ax, ax
+    mov [bri_rx], ax                ; no stage
+    mov [bri_rxh], ax
     mov es, [cs:PXP_SELF]
     mov al, [bri_slot]
     call bri_slotp
@@ -3076,7 +3267,7 @@ bri_uprep:
     jc .none
     call bri_urecord
     call bri_isanim                 ; animated (71.29)?
-    call bri_aplan                  ; CF=0 it is to play: [bri_apar] its block
+    call bri_aplanbig               ; CF=0 it is to play: [bri_apar] its block
     jc .still
     mov ax, [bri_rbytes]
     call bri_paras
@@ -3087,8 +3278,8 @@ bri_uprep:
     jc .still0
     call bri_ustore0                ; (no animation let go for this one)
     jc .still0
-    mov ax, [bri_rx]                ; the file up past where the copy goes:
-    call bri_paras                  ; the decode writes the copy in its
+    call bri_rxpar                  ; the file up past where the copy goes:
+                                    ; the decode writes the copy in its
     mov cx, ax                      ; place, and the file stays behind it
     mov bx, [br_iready]             ; as the block's start
     mov ax, bx
@@ -3102,15 +3293,13 @@ bri_uprep:
 .still0:
     mov byte [bri_apend], 0         ; refused: decoded as a still one
 .still:
-    mov ax, [bri_rx]
-    add ax, 15
-    mov cl, 4
-    shr ax, cl
+    mov ax, [bri_rbytes]            ; the copy's paragraphs first: bri_rxpar
+    call bri_paras                  ; leaves CL at 0 (1.8's 32-bit stage), and
+    mov bx, ax                      ; a shift by it took bytes for paragraphs
+    call bri_rxpar
     mov dx, ax                      ; DX = the staged file's paragraphs
     add ax, BRI_LZWPAR
-    mov bx, [bri_rbytes]
-    add bx, 15
-    shr bx, cl
+    jc .none
     add ax, bx
     jc .none
     call bri_ustore                 ; (the copies may go to EMS here)
@@ -3233,7 +3422,24 @@ bri_size:
     mov [bri_rbytes], ax
     clc
     ret
-.big:
+.big:                               ; THE COPY PASSES 64 KB (a VGA's four
+    mov ax, [bri_tw]                ; planes: 480 x 400 is 96,000 bytes):
+    mov cl, 3                       ; the picture an eighth smaller each way,
+    mov bx, ax                      ; as .cut fits it to the page, until it
+    shr bx, cl                      ; fits - where it was refused and the
+    sub ax, bx                      ; page kept its alt text (1.8)
+    mov dx, [bri_th]
+    mov bx, dx
+    shr bx, cl
+    sub dx, bx
+    cmp ax, 8                       ; (a picture this small fits long before
+    jb .no                          ; it gets here; never loop on nothing)
+    cmp dx, 8
+    jb .no
+    mov [bri_tw], ax
+    mov [bri_th], dx
+    jmp .hok
+.no:
     stc
     ret
 
@@ -3254,8 +3460,9 @@ bri_muldiv:
     ret
 
 ; bri_urecord - the record's COLS and ROWS := the box's; if that changed, the
-; page laid out again and put up (header-first sizing). Under the gfx lock:
-; the document can share the EMS frame
+; page OWES a layout (br_im_rs_owe): one for the whole queue, paid when it
+; ends, every two seconds of a slow one, or before anything paints a line.
+; Under the gfx lock: the document can share the EMS frame
 bri_urecord:
     call OSAPI_GFX_LOCK
     mov bl, [br_ik]
@@ -3285,14 +3492,7 @@ bri_urecord:
     xor ah, ah
     mov cx, 3
     call bri_put6
-    call far [br_im_r_layout]       ; the page again, at the box's real size
-    xor ax, ax
-    call far [br_im_r_advance]      ; ...and the view inside it
-    mov bx, [br_win]
-    call OSAPI_WM_CLIP_SET          ; covered: the kernel's repaint draws it
-    jc .out
-    call far [br_im_r_paint_band]
-    call far [br_im_r_sbar]
+    call far [br_im_r_owe]          ; the page again, at the box's real size
 .out:
     call OSAPI_GFX_UNLOCK
     ret
@@ -3402,6 +3602,7 @@ bri_dec:
     mov dx, [br_istseg]
     call far [br_im_r_imgsub]
     mov [bri_stgs], dx
+    mov word [bri_pgc], 0           ; no progressive draw yet (1.8)
     mov dx, [br_istseg]
     mov ax, [bri_lzwp]
     call far [br_im_r_imgsub]
@@ -3417,7 +3618,7 @@ bri_dec:
     call bri_bgrows
     jc .stale
     mov ax, [bri_data]
-    mov [bri_fpos], ax
+    call bri_fstart                 ; the cursor and the fill's segment (1.8)
     xor ax, ax
     mov [bri_blk], al
     mov [bri_bend], al
@@ -3436,6 +3637,16 @@ bri_dec:
     cmp ax, BRI_DONE
     jne .short                      ; a code the table never built
 .done:                              ; (bri_pxdec's end too)
+    pushf                           ; no progressive draw asked past here,
+    cli                             ; and none still on the copy it would
+    mov word [bri_preq], 0          ; move (bri_uprog)
+    mov al, [bri_pon]
+    popf
+    or al, al
+    jz .drawn
+    call OSAPI_TASK_YIELD
+    jmp .done
+.drawn:
     cmp byte [bri_apend], 0
     jne .inplace                    ; written where it stays (71.29)
     call bri_movedown
@@ -3445,18 +3656,22 @@ bri_dec:
     mov bl, [br_ik]
     xor bh, bh
     call bri_ent
-    mov ax, [br_iready]
-    mov [bx+IT_PARA], ax
-    mov ax, [bri_bc]
-    mov [bx+IT_COLS], al
-    mov al, [bri_br]
-    mov [bx+IT_ROWS], al
     mov ax, [bri_rbytes]
     add ax, 15
     mov cl, 4
     shr ax, cl
+    mov dx, [br_iready]
     add [br_iready], ax
+    pushf                           ; READY for good, and the UI task's
+    cli                             ; draw told so in the same step
+    mov [bx+IT_PARA], dx
+    mov ax, [bri_bc]
+    mov [bx+IT_COLS], al
+    mov al, [bri_br]
+    mov [bx+IT_ROWS], al
     mov byte [bx+IT_ST], IS_READY
+    mov byte [bri_pon], 0
+    popf
     jmp .show
 .short:
     call bri_none
@@ -3715,10 +3930,11 @@ bri_fill:
     jne .done
     cmp byte [bri_blk], 0
     jne .copy
+    call bri_frebase
+    call bri_fleft
+    jz .stop
     mov si, [bri_fpos]              ; a sub-block's length
-    cmp si, [bri_rx]
-    jae .stop
-    mov dx, [bri_stgs]
+    mov dx, [bri_fseg]
     push ds
     mov ds, dx
     mov al, [si]
@@ -3728,10 +3944,10 @@ bri_fill:
     jz .stop                        ; the terminator
     mov [bri_blk], al
 .copy:
+    call bri_frebase
+    call bri_fleft                  ; AX = the file's bytes...
+    jz .stop
     mov si, [bri_fpos]
-    mov ax, [bri_rx]
-    sub ax, si                      ; the file's bytes...
-    jbe .stop
     mov dl, [bri_blk]
     xor dh, dh
     cmp ax, dx                      ; ...the block's...
@@ -3749,7 +3965,7 @@ bri_fill:
     add bx, ax
     push cx
     mov cx, ax
-    mov dx, [bri_stgs]
+    mov dx, [bri_fseg]
     push ds
     mov ds, dx
     cld
@@ -3846,10 +4062,12 @@ bri_rowdone:
 .ty:
     mov bx, [bri_ty]
     cmp bx, [bri_ty1]
-    jae .next
+    jae .prog
     call bri_convrow
     inc word [bri_ty]
     jmp .ty
+.prog:
+    call bri_prog                   ; what is in, on the glass (1.8)
 .next:
     inc word [bri_frow]
     mov ax, [bri_frow]
@@ -4114,6 +4332,9 @@ bri_cr0:    dw 0                    ; K_COLS's block: its rows,
 bri_cr1:    dw 0
 bri_cc0:    dw 0                    ; its columns,
 bri_cc1:    dw 0
+bri_sgk:    dw 0                    ; bri_stash's granule: the store asked of,
+bri_sgp:    dw 0                    ; ...its paragraph in it,
+bri_sgs:    dw 0                    ; ...and SEG_SUB's answer
 bri_cbs:    dw 0                    ; where it is,
 bri_cbo:    dw 0
 bri_cbr:    dw 0                    ; and a row's bytes
@@ -4200,3 +4421,115 @@ px_hsd:
 px_hmin:
 px_hmax:    times 776 db 0          ; PLANS's alone (above)
 bri_pxhend:
+
+; =============================================================================
+; PROGRESSIVE DRAWING (1.8 step 5): a still GIF is put on the glass as it
+; decodes, the way Navigator and IE3 drew it - every quarter of its height,
+; or every 16 rows if that is more - so a slow picture on a slow machine
+; shows itself rather than a blank box. An interlaced one shows its passes,
+; the venetian blind of the period. The copy's ground is already laid
+; (bri_ground), so what is not in yet is the page's paper.
+; =============================================================================
+
+; bri_prog - bri_rowdone's box row is in: when its turn comes, ask the UI
+; task to draw the copy so far (bri_uprog). The worker never takes the gfx
+; lock: br_imghalt, under a callback's lock, waits on br_ibusy. All kept
+bri_prog:
+    cmp byte [bri_amode], 0
+    jne .ret                        ; an animation draws its own frames...
+    cmp byte [bri_apend], 0
+    jne .ret                        ; ...frame 0's copy included (71.29)
+    cmp word [bri_gh], 32
+    jb .ret                         ; too small to be worth a draw
+    push ax
+    push bx
+    inc word [bri_pgc]
+    mov ax, [bri_gh]
+    shr ax, 1
+    shr ax, 1
+    cmp ax, 16
+    jae .q
+    mov ax, 16
+.q:
+    cmp [bri_pgc], ax
+    jb .out
+    mov word [bri_pgc], 0
+    mov al, [br_ik]
+    inc ax
+    mov ah, [br_igen0]              ; AX = the request: k + 1, this engine's
+    cmp ax, [bri_preq]
+    je .out                         ; the last is not drawn yet
+    mov [bri_preq], ax
+    call bri_kick
+.out:
+    pop bx
+    pop ax
+.ret:
+    ret
+
+; bri_uprog - IE_DEC, UI task, no lock: the worker's request. The entry is
+; READY for the one images-only pass, on the copy in progress ([bri_newp]),
+; then WAITING again - unless the decode's end made it READY for good while
+; it drew ([bri_pon] cleared: bri_dec's .inplace)
+bri_uprog:
+    mov bl, [br_ik]
+    xor bh, bh
+    call bri_ent
+    pushf
+    cli
+    mov ax, [bri_preq]
+    mov word [bri_preq], 0
+    dec al
+    js .no                          ; none asked
+    cmp al, [br_ik]
+    jne .no                         ; another picture's...
+    cmp ah, [br_igen]
+    jne .no                         ; ...or a stopped engine's
+    cmp byte [bx+IT_ST], IS_WAIT
+    jne .no
+    mov ax, [bri_newp]
+    mov [bx+IT_PARA], ax
+    mov ax, [bri_bc]
+    mov [bx+IT_COLS], al
+    mov al, [bri_br]
+    mov [bx+IT_ROWS], al
+    mov byte [bx+IT_ST], IS_READY
+    mov byte [bri_pon], 1
+    popf
+    call OSAPI_GFX_LOCK
+    push bx
+    mov bx, [br_win]
+    call OSAPI_WM_CLIP_SET
+    jc .unlock
+    mov al, [br_ik]
+    inc al
+    mov [br_ionly], al
+    call far [br_im_r_paint_band]
+    mov byte [br_ionly], 0
+.unlock:
+    call OSAPI_GFX_UNLOCK
+    pop bx
+    pushf
+    cli
+    cmp byte [bri_pon], 0
+    je .no                          ; READY for good meanwhile
+    mov byte [bx+IT_ST], IS_WAIT
+    mov byte [bri_pon], 0
+.no:
+    popf
+    ret
+
+; bri_fstart - AX = the code bytes' first offset in the staged file: the
+; fill's cursor, and its segment and base back at the file's start - EVERY
+; frame's decode, an animation's too, or it reads where the last one left
+; the rebased segment (1.8). All kept
+bri_fstart:
+    mov [bri_fpos], ax
+    push ax
+    mov ax, [bri_stgs]
+    mov [bri_fseg], ax
+    xor ax, ax
+    mov [bri_fbase], ax
+    mov [bri_fbase + 2], ax
+    pop ax
+    ret

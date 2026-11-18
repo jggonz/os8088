@@ -154,7 +154,7 @@ br_copyselection:
     mov si, [br_copybase]
     mov cx, di
     sub cx, si
-    mov es, [br_urlseg]
+    mov es, [br_dlseg]             ; (1.8: the region's segment)
     xor ax, ax                      ; the store MOVES and the clipboard claims
     call far [br_dl_r_pagepin]      ; its own copy, so ES:SI is pinned for the
     call OSAPI_CLIP_PUT             ; call (SPEC.md 66.3 rule 5)
@@ -180,7 +180,7 @@ br_copyemit:
     cmp di, [br_copycap]
     jae .full
     push es
-    mov es, [br_urlseg]
+    mov es, [br_dlseg]             ; (1.8: the region's segment)
     mov [es:di], bl
     pop es
     inc di

@@ -120,6 +120,8 @@ br_dlx_link:
     pop es
     call far [br_dl_r_copyz]
     jmp .resolved
+.absfull:                           ; (jcxz has no near form)
+    jmp .badrestore
 .absolute:
     mov di, br_dl_url
     mov cx, BR_DL_URLMAX-1
@@ -128,7 +130,7 @@ br_dlx_link:
     inc si
     or al, al
     jz .absterm
-    jcxz .badrestore
+    jcxz .absfull
     mov [di], al
     inc di
     loop .absloop
@@ -140,9 +142,25 @@ br_dlx_link:
     pop es
     jmp .resolved
 .direct:
-    mov si, br_ubuf
-    mov di, br_dl_url
-    mov cx, BR_DL_URLMAX
+    mov si, br_ubuf                 ; AN ADDRESS TYPED WITHOUT ITS SCHEME
+    mov di, br_dl_url               ; (1.8): a page opens from one, so a
+    mov cx, BR_DL_URLMAX            ; download must too - "http://" first,
+    mov bx, br_s_scheme             ; where it said "Invalid download URL"
+    call far [br_dl_r_prefix]
+    jnc .copyurl
+    push si
+    mov si, br_s_scheme
+.scheme:
+    lodsb
+    or al, al
+    jz .schemed
+    mov [di], al
+    inc di
+    dec cx
+    jmp short .scheme
+.schemed:
+    pop si
+.copyurl:
     call far [br_dl_r_copyz]
 .resolved:
     cmp byte [br_dl_url], 'h'
@@ -154,6 +172,12 @@ br_dlx_link:
     call br_dl_split
     jc .badrestore
     call br_dl_defaultname
+    call OSAPI_FILE_HERE            ; WHERE WE STAND BEFORE THE DIALOG MOVES
+    mov [br_dl_dirbak], dx          ; US (SPEC.md 71.34.14): the transfer
+    mov [br_dl_drivebak], bl        ; writes where the user chose, and its end
+                                    ; - br_dl_commit or br_dl_partial_delete -
+                                    ; stands us back HERE, where BROWSER.O88
+                                    ; is, not where the dialog left us
     mov byte [br_dl_state], DL_PICK
     mov al, FDLG_SAVE
     mov bx, [br_win]
@@ -217,7 +241,7 @@ br_dl_defaultname:
     cmp byte [br_cdlen], 0          ; index never reads it
     je .url
     mov si, br_cdname
-    jmp short .named                ; ...the copy loop below, from SI
+    jmp short .leaf                 ; ...the 8.3 builder below, from SI
 .url:
     mov si, br_dl_path
     mov bx, si
@@ -238,17 +262,45 @@ br_dl_defaultname:
     inc si
     jmp .scan
 .end:
-    mov cx, si
-    sub cx, bx
-    or cx, cx
-    jz .fallback
-    cmp cx, 12
-    ja .fallback
+    mov si, bx
+.leaf:                              ; THE REAL NAME, MADE 8.3 (1.8): the stem
+    xor dx, dx                      ; up to the LAST dot, eight legal
+    mov bx, si                      ; characters of it, then three of the
+.dots:                              ; extension - where a name over twelve
+    lodsb                           ; used to become DOWNLOAD.BIN, so a
+    call br_dl_nameend              ; relatorio-final.zip is RELATORI.ZIP
+    je .dotted
+    cmp al, '.'
+    jne .dots
+    lea dx, [si-1]
+    jmp short .dots
+.dotted:
+    lea ax, [si-1]
+    or dx, dx
+    jnz .hasdot
+    mov dx, ax                      ; no dot: the stem runs to the end
+.hasdot:
     mov si, bx
     mov di, br_dl_name
-    rep movsb
+    mov cx, 8
+    call br_dl_legal                ; the stem, to DX
+    cmp di, br_dl_name
+    je .fallback                    ; nothing legal in it
+    mov si, dx
+    call br_dl_nameend.at
+    je .term
+    inc si                          ; past the dot
+    mov byte [di], '.'
+    inc di
+    mov cx, 3
+    mov dx, 0FFFFh
+    call br_dl_legal
+    cmp byte [di-1], '.'
+    jne .term
+    dec di                          ; an extension with nothing legal in it
+.term:
     mov byte [di], 0
-    jmp .out
+    jmp short .out
 .fallback:
     mov si, br_dl_s_default
 .named:
@@ -267,6 +319,53 @@ br_dl_defaultname:
     pop ax
     ret
 
+; br_dl_nameend - is AL a leaf's end (NUL, '?' or '#')? ZF=1 if so.
+; .at: the same of [SI]. Every register kept
+br_dl_nameend:
+    cmp al, 0
+    je .r
+    cmp al, '?'
+    je .r
+    cmp al, '#'
+.r: ret
+.at:
+    push ax
+    mov al, [si]
+    call br_dl_nameend
+    pop ax
+    ret
+
+; br_dl_legal - copy at most CX legal 8.3 characters (letters, 0-9, - and _,
+; case kept) from SI to DI, stopping at the leaf's end or at SI = DX. DI advances
+br_dl_legal:
+.l: cmp si, dx
+    je .r
+    lodsb
+    call br_dl_nameend
+    je .r
+    cmp al, '-'
+    je .ok
+    cmp al, '_'
+    je .ok
+    cmp al, '0'
+    jb .l
+    cmp al, '9'
+    jbe .ok
+    push ax
+    and al, 0DFh                    ; (the case is the volume's to fold)
+    cmp al, 'A'
+    pop ax
+    jb .l
+    push ax
+    and al, 0DFh
+    cmp al, 'Z'
+    pop ax
+    ja .l
+.ok:
+    stosb
+    loop .l
+.r: ret
+
 br_dlx_saved:
     push ax
     push bx
@@ -282,16 +381,53 @@ br_dlx_saved:
     mov [br_dl_state], al
     jmp .out
 .chosen:
-    mov si, di
+    push di                         ; THE SUGGESTED EXTENSION, banked: a
+    mov si, br_dl_name              ; name typed WITHOUT one gets it back,
+.sdot:                              ; as Windows' lpstrDefExt (1.8)
+    lodsb
+    cmp al, '.'
+    je .sext
+    or al, al
+    jnz .sdot
+.sext:
+    dec si                          ; the dot, or (none) the NUL: an empty one
+    mov di, br_dl_dest              ; (scratch until br_dl_commit builds it)
+    mov cx, 5
+.scopy:
+    lodsb
+    mov [di], al
+    inc di
+    or al, al
+    loopnz .scopy
+    pop si
     mov di, br_dl_name
     mov cx, 13
+    xor bx, bx                      ; BX = 1 once a dot is seen
 .name:
     mov al, [es:si]
     mov [di], al
     inc si
     inc di
+    cmp al, '.'
+    jne .nodot
+    mov bl, 1
+.nodot:
     or al, al
     jnz .name
+    or bx, bx
+    jnz .typedext
+    dec di                          ; DI -> its NUL
+    lea ax, [di+4]
+    cmp ax, br_dl_name + 12
+    ja .typedext                    ; no room: dskw_name83 judges it as typed
+    mov si, br_dl_dest
+.addext:
+    lodsb
+    mov [di], al
+    inc di
+    or al, al
+    jnz .addext
+.typedext:
     call br_dl_openwin
     cmp word [br_dl_win], 0
     je .uiunavailable
@@ -731,9 +867,6 @@ br_dl_commit:
     push dx
     push si
     push di
-    call OSAPI_FILE_HERE
-    mov [br_dl_dirbak], dx
-    mov [br_dl_drivebak], bl
     mov dx, [br_dl_dir]
     mov bl, [br_dl_drive]
     call OSAPI_FILE_GOTO
@@ -754,6 +887,8 @@ br_dl_commit:
     mov dx, [br_dl_dirbak]
     mov bl, [br_dl_drivebak]
     call OSAPI_FILE_GOTO
+    inc byte [br_dl_gohome]         ; ...the MACHINE moved; the instance
+                                    ; follows at the next br_fetch
     pop ax
     popf
     pop di
@@ -1304,7 +1439,7 @@ br_dlx_onwake:
     call OSAPI_FS_OP
 .wr:
     mov si, br_dl_tmpname
-    mov es, [br_urlseg]             ; the buffer is carved in the URL store
+    mov es, [br_dlseg]              ; the buffer: [br_dlseg]:BR_URLDL (1.8)
     mov bx, BR_URLDL                ; (SPEC.md 71.23), 512-aligned there
     mov cx, [br_dl_fill]
     cmp byte [br_dl_seq], 2
@@ -1322,7 +1457,7 @@ br_dlx_onwake:
     mov byte [br_dl_seq], 2
 .append:
     mov si, br_dl_tmpname
-    mov es, [br_urlseg]             ; the buffer is carved in the URL store
+    mov es, [br_dlseg]              ; the buffer: [br_dlseg]:BR_URLDL (1.8)
     mov bx, BR_URLDL                ; (SPEC.md 71.23), 512-aligned there
     mov cx, [br_dl_fill]
     xor ax, ax
@@ -1445,16 +1580,13 @@ br_dlx_onwake:
     pop ax
     ret
 
-; The save dialog's destination is br_dl_dir/br_dl_drive. Restore that exact
-; instance folder around deletion so a later directory change cannot leave
-; the partial file behind.
+; The save dialog's destination is br_dl_dir/br_dl_drive: stand there for the
+; deletion, so a later directory change cannot leave the partial file behind,
+; then back where we stood before the dialog (br_dl_dirbak), as the commit does.
 br_dl_partial_delete:
     push bx
     push dx
     push si
-    call OSAPI_FILE_HERE
-    mov [br_dl_dirbak], dx
-    mov [br_dl_drivebak], bl
     mov dx, [br_dl_dir]
     mov bl, [br_dl_drive]
     call OSAPI_FILE_GOTO
@@ -1471,6 +1603,8 @@ br_dl_partial_delete:
     mov dx, [br_dl_dirbak]
     mov bl, [br_dl_drivebak]
     call OSAPI_FILE_GOTO
+    inc byte [br_dl_gohome]         ; ...the MACHINE moved; the instance
+                                    ; follows at the next br_fetch
     pop ax
     popf
     pop si
@@ -1537,7 +1671,7 @@ br_dlx_put:
     jmp short .wait
 .copy:
     mov ax, [br_dl_fill]
-    mov es, [br_urlseg]
+    mov es, [br_dlseg]              ; the transfer region (1.8)
     mov di, BR_URLDL
     add di, ax
     cld

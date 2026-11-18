@@ -262,7 +262,16 @@ br_bmcommit:
     mov byte [br_dl_sel], BRDL_BMCOMMIT
 br_dl_cold:
     call br_dl_partload
+    jnc .in
+    cmp byte [br_dl_sel], BRDL_SUBMIT ; A SUBMIT OR A MAP CLICK LEAVES THE
+    je .shed                        ; PAGE: refused at the eight claims a
+    cmp byte [br_dl_sel], BRDL_MAPCLICK ; page of pictures holds (SPEC.md
+    jne .refused                    ; 50), its pictures go now rather than
+.shed:                              ; at br_go's br_free_all, and the part
+    call br_imgstop                 ; comes in
+    call br_dl_partload
     jc .refused
+.in:
     push bx
     push ax
     mov bl, [br_dl_sel]
@@ -302,7 +311,7 @@ br_dl_partload:
     push di
     push es
     mov al, 0
-    call op_fetch
+    call br_fetch                   ; (home first, 1.8)
     jc .bad
     mov al, 0                       ; op_fetch may clobber AL
     call op_cseg
@@ -473,8 +482,41 @@ br_dl_r_targetgo:      dw br_dl_rs_targetgo, 0
 br_dl_r_bmfindurl:     dw br_dl_rs_bmfindurl, 0
 br_dl_r_bcopyz:        dw br_dl_rs_bcopyz, 0
 br_dl_r_odwrite:       dw br_dl_rs_odwrite, 0
+br_dl_r_getname:       dw br_dl_rs_getname, 0   ; Save As's write (1.8)
+br_dl_r_srcpin:        dw br_dl_rs_srcpin, 0
+br_dl_r_srcemsmap:     dw br_dl_rs_srcemsmap, 0
+br_dl_r_optapply:      dw br_dl_rs_optapply, 0  ; Options > an item (1.8)
+br_dl_r_okrel:         dw br_dl_rs_okrel, 0
+br_dl_r_reload:        dw br_dl_rs_reload, 0
+br_dl_r_choicepaint:    dw br_dl_rs_choicepaint, 0
+br_dl_r_fsetval:        dw br_dl_rs_fsetval, 0
+br_dl_r_seloption:      dw br_dl_rs_seloption, 0
+br_dl_r_srcabs:         dw br_dl_rs_srcabs, 0
+br_dl_r_selvalue:       dw br_dl_rs_selvalue, 0
+br_dl_r_copyspan:       dw br_dl_rs_copyspan, 0
+br_dl_r_choiceclick:    dw br_dl_rs_choiceclick, 0
+br_dl_r_ffocus:         dw br_dl_rs_ffocus, 0
+br_dl_r_selcycle:       dw br_dl_rs_selcycle, 0
 BRDL_RN equ ($ - br_dl_rtab) / 4
 
+br_dl_rs_choicepaint:  call br_choicepaint
+                    retf
+br_dl_rs_fsetval:     call br_fsetval
+                    retf
+br_dl_rs_seloption:   call br_seloption
+                    retf
+br_dl_rs_srcabs:      call br_srcabs
+                    retf
+br_dl_rs_selvalue:    call br_selvalue
+                    retf
+br_dl_rs_copyspan:    call br_copyspan
+                    retf
+br_dl_rs_choiceclick:  call br_choiceclick
+                    retf
+br_dl_rs_ffocus:      call br_ffocus
+                    retf
+br_dl_rs_selcycle:    call br_selcycle
+                    retf
 br_dl_rs_errst:     call br_errst
                     retf
 br_dl_rs_split:     call br_split
@@ -571,6 +613,18 @@ br_dl_rs_bcopyz:    call br_copyz
                     retf
 br_dl_rs_odwrite:   call od_write
                     retf
+br_dl_rs_getname:   call br_getname
+                    retf
+br_dl_rs_srcpin:    call br_srcpin
+                    retf
+br_dl_rs_srcemsmap: call br_srcems_map
+                    retf
+br_dl_rs_optapply:  call br_optapply
+                    retf
+br_dl_rs_okrel:     call br_okrel
+                    retf
+br_dl_rs_reload:    call br_reload
+                    retf
 
 br_dl_copyz:
     push ax
@@ -661,11 +715,7 @@ br_dl_extmatch:
     or al, al
     jz .end
     mov ah, [si]
-    cmp ah, 'A'
-    jb .compare
-    cmp ah, 'Z'
-    ja .compare
-    or ah, 0x20
+    call br_lcah
 .compare:
     cmp ah, al
     jne .no
@@ -703,11 +753,7 @@ br_dl_prefix:
     or al, al
     jz .yes
     mov ah, [si]
-    cmp ah, 'A'
-    jb .cmp
-    cmp ah, 'Z'
-    ja .cmp
-    or ah, 0x20
+    call br_lcah
 .cmp:
     cmp al, ah
     jne .no
@@ -775,7 +821,7 @@ br_dl_sockclose:
 br_dl_s_get: db 'GET ', 0
 br_dl_s_http10: db ' HTTP/1.0', 13, 10, 0
 br_dl_s_host: db 'Host: ', 0
-br_dl_s_agent: db 13, 10, 'User-Agent: os8088 Browser 1.7', 0
+br_dl_s_agent: db 13, 10, 'User-Agent: os8088 Browser 1.8', 0
 br_dl_s_conn: db 13, 10, 'Connection: close', 13, 10, 13, 10, 0
 
 br_dl_s_cl: db 'content-length:', 0

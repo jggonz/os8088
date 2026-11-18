@@ -158,3 +158,10 @@ apps/snddiag/sdtext.inc 1        # A LABEL, not a kern_mega arm: Sound Debug's
     # Detect page prints ", kern_mega protected mode" after the CPU when
     # OSAPI_CPU_INFO's CPU_F_PM is set (SPEC.md 127.4), so a photograph says
     # which kernel it came from. One test, nothing that runs only there
+apps/browser/brfont_body.inc 1   # THE FACE IN PART 8'S OWN MEMORY, real mode
+    # only (SPEC.md 71.35, 6.5.5 OS88TY_FACEBUF): one test that sends a
+    # kern_mega machine to the ordinary claim, because a segment sum means
+    # nothing on a selector. No code that runs only there
+apps/browser/brcolor_body.inc 1  # THE THEME'S LINK COLOUR read off SYSTEM.CFG
+    # into part 7's own memory (SPEC.md 71.34): real mode only, one test that
+    # leaves kern_mega with blue links. No code that runs only there

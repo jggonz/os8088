@@ -11360,7 +11360,7 @@ SOAK = [
         "SPEC.md 71: the PAGE takes the mouse - links parse in order and "
         "underline, a click on a form field focuses it, the submit button "
         "fires",
-        needs=("marty",), serial=True,
+        needs=("marty", "mtools"), serial=True,
         wants=("build/brtest360.img",)),
     Row("brlink", "soak", py("tests/brlink.py"), 30.0,
         "BROWSER-PLAN 2.6: two links with a space between them are TWO "
@@ -23079,6 +23079,40 @@ SOAK = [
         "the animation playing, each file asked for once",
         needs=("86box",), serial=True, timeout=1800,
         wants=("build/mega.img", "build/browser.o88")),
+    Row("brtabimg", "soak", py("tests/brtabimg.py"), 150.0,
+        "SPEC.md 71.33 (Browser 1.8): pictures in table cells - alone, between "
+        "words, linked, right-aligned, beside a nested table, wider than the "
+        "band, aligned top, and CNN's right-aligned cell squeezed under its "
+        "picture (the negative spare that never ended the table): every "
+        "picture laid out, fetched once and byte for byte its reference, its "
+        "picture rows written, the text after the table laid out. QEMU by "
+        "name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/brtest360.img",
+               "build/browser.o88"),
+        locks=("port:8096",)),
+    Row("brcolor", "soak", py("tests/brcolor.py"), 150.0,
+        "SPEC.md 71.34 (Browser 1.8): a page's colours on VGA - body bgcolor, "
+        "text and link with the margins, <font color> in a sentence and "
+        "across a wrapped paragraph, a cell's bgcolor, a background picture "
+        "with no bgcolor kept black on white, and a <font> left open in a "
+        "cell ending with the table - read off a screendump by colour. QEMU "
+        "by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/brtest360.img",
+               "build/browser.o88"),
+        locks=("port:8097",)),
+    Row("brfont", "soak", py("tests/brfont.py"), 120.0,
+        "SPEC.md 71.35 (Browser 1.8): tall headings - part 8 fetched on "
+        "demand by the first <h1>-<h3>, the Times face found on the "
+        "Browser's own volume, h1 as the doubled cell and h2 in the face, "
+        "each a tall record and its continuation row, and on the glass h1 "
+        "over 12 rows of ink, h2 over 8, the body 8. QEMU by name: MartyPC "
+        "has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/brtest360.img",
+               "build/browser.o88"),
+        locks=("port:8100",)),
     Row("brkeep", "soak", py("tests/brkeep.py"), 90.0,
         "SPEC.md 71.28: the Browser opened from a hard disk (build/brkeep.img, "
         "TESTHD=) keeps every picture of a page in C:'s BRCACHE - each copy, "

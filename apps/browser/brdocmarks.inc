@@ -49,6 +49,12 @@ D_IMG        equ 25                 ; an inline image (SPEC.md 71.25): BR_IMGPAY
                                     ; 25..31 are bytes no other walker acts on,
                                     ; so the record costs them nothing
 D_IMGDIG     equ 26                 ; a payload digit is D_IMGDIG + 0..5
+D_COL        equ 31                 ; a colour (SPEC.md 71.34, 1.8): two
+                                    ; digits D_IMGDIG + 0..5 follow, the
+                                    ; value high * 6 + low (brcolor.inc).
+                                    ; 31 is also a digit, so only a walker
+                                    ; that has consumed the D_IMG and D_LNK1
+                                    ; payloads before it may read it as one
 
 D_NBSP       equ 0x7F               ; A NO-BREAK SPACE, and it is 0x7F rather
                                     ; than a marker because it is TEXT: it
@@ -59,3 +65,14 @@ D_NBSP       equ 0x7F               ; A NO-BREAK SPACE, and it is 0x7F rather
                                     ; space. 0x7F is past the last ROM glyph
                                     ; (0x20..0x7E), so it can never reach
                                     ; font_char even if a walk here is wrong
+
+; A TABLE'S LINES (1.8): the composer writes these in its composed rows, and
+; br_paintstyled draws them as solid lines - IE3's grid - where the 8x8 cell
+; font had '-', '|' and '+' dotted. Above 0x7F, so every walker counts them
+; as a cell
+BR_BH       equ 80h                ; a horizontal line across the cell
+BR_BV       equ 81h                ; a vertical one down its middle
+BR_BX       equ 82h                ; both: a crossing
+BR_SNAP     equ 0FFh               ; D_CMETA's payload in a COMPOSED row: the
+                                   ; next cell starts a table cell, and a
+                                   ; tall row's pen snaps to its column (71.35)

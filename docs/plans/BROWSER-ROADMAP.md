@@ -33,6 +33,7 @@ review outcomes and engineering lessons forward after the PR is merged.
 | 1.6b | Separate Download Manager window and transfer lifecycle | One commit after validation. Add Save Link As and fixed-size disk writes without staging a whole response; Save Image As follows in 1.7 |
 | 1.7 | Inline images and adapter-aware colour output, initially static GIF/JPEG | Delivered (SPEC.md 71.25-71.32): GIF (animated too), PNG, JPEG, BMP, TIFF, PCX, TGA, ICO, IFF, MacPaint, PNM and XBM; a store with EMS and disk tiers; kept pages; Save Image As and image maps. docs/plans/BROWSER-1.7-ROADMAP.md and BROWSER-IMAGES-PLAN.md are the record |
 | 1.8 | Compatibility and integration against early-Web pages; refine progressive rendering and interactions | Follow image and memory work |
+| 1.8b | JavaScript for early-Web pages: a subset chosen by a survey of what period pages use and what breaks without it, in a lazy part, behind Options > JavaScript (off by default); the brief is BROWSER-1.8B-JS-PLAN.md | After 1.8; the survey first |
 | 1.9 | Full audit: code reuse, allocations, binary/RAM footprint and 8088 execution cost | Broad optimization after features stabilize |
 | 2.0 | Consolidated stable Browser for early-Web use | Release milestone |
 

@@ -12063,6 +12063,15 @@ Three knobs, set before the `%include`:
   Font Viewer sets it (§90.12); Word, Scribe and CWORD pass `clc` at their one
   call site too and could.
 - `OS88TY_SLANT` (§6.5.3) is the one opt-IN.
+- **`%define OS88TY_FACEBUF proc`** is the other: `ty_open` asks the
+  INCLUDER for a buffer before it claims one. The proc takes AX = the KB the
+  face needs and answers CF=0 with DX = a segment whose offset 0 starts that
+  many KB on a 512-byte linear boundary, or CF=1 to claim as usual. A face
+  read there holds no claim - `ty_close` frees nothing for it and it never
+  moves. It exists for a package at §50's cap of eight claims: the Browser's
+  part 8 (§71.35) is the ninth thing the Browser would hold, and a claim for
+  its face was refused with 355KB free. Real mode only, in the one includer:
+  under kern_mega a segment is a selector and its sum is nothing.
 
 **`TY_BSS_SIZE` is exact** and `TY_BSS` asserts it against the last label it
 lays out, so a scalar added to the block without growing the size fails the
@@ -60098,7 +60107,12 @@ stays on `apps720.img`, and `more720.img` takes it too; the owner left the
 choice to the agent, The Wire (§92) fetching what a disk leaves off. **CDRack
 followed** (11 clusters, §119.6) once `main`'s tree of the same day put the
 disk back at 708 of 713: a CD-ROM drive is an AT's, whose 1.44 MB system disk
-keeps it, and `more720.img` carries it at 720 KB.
+keeps it, and `more720.img` carries it at 720 KB. **The Browser itself
+followed** on 2026-11-14, the owner's decision: Browser 1.8 (§71.34) took it
+to 109 clusters and that disk to 6 KB free, under the floor. It is on no
+primary 720 KB disk - `apps720.img` left it off on 2026-11-11 and
+`more720.img` has 62 clusters spare, so `SYS720MORE` keeps it off that one -
+and a 720 KB machine takes it from The Wire (§92) or another geometry's disk.
 
 **kern_mega's system disks carry it too**, in `APPS/` beside the other core
 tools, and as the same shipped build: there is no `PKG_MEGA` arm. They left it
@@ -133571,7 +133585,7 @@ Three things are load-bearing. **Every rect is derived in `br_locrect`**, on
 live content box on every measure. **The state's field is a CAP and not a
 size**: `br_srect` gives it whatever is left between the last button and the
 content's right edge and only clamps at `BR_SCELLS`, because the field was
-fixed at 22 cells and cut `Relative link: this page has no server` in half on
+fixed at 22 cells and cut the no-server refusal (then `Relative link: this page has no server`) in half on
 the one path that produces it. And **`br_toolbar` is called wherever the
 history moves** — after `br_hpush` and on a fetch completing — because Back
 and Forward grey on a fact (§47 rule 3) that the fetch itself has just
@@ -134145,9 +134159,9 @@ its box. A cell outside every box on a continuation row names nothing.
 
 **What 4.1 does not do**, and which delivery does:
 
-- inside a composed table the composer drops `D_IMG` as it drops every other
-  marker, so an image in a table cell is its alt text and no box (a later
-  delivery, with the composer);
+- inside a composed table the composer dropped `D_IMG` as it drops every
+  other marker, so an image in a table cell was its alt text and no box,
+  until §71.33 (1.8) carried it;
 - no pixels: the store, the fetch and the decoders are 4.2 to 4.6;
 - `hspace` and `vspace` are ignored (`usemap` and `ismap`: §71.32).
 
@@ -134188,7 +134202,7 @@ critical section (`br_imgsetlaid`) and bumps `[br_ilgen]`. The worker's
 layout's boxes or this one's and never a half-walked page; when the count
 moved during a scan that found nothing, `IE_NEXT` stands and the next pass
 looks again rather than ending the engine. An image in a composed table
-cell is not a box (§71.25), so it is never fetched.
+cell is a box since §71.33, laid and fetched like any other.
 
 **The fetch (D8).** One image at a time, on the worker, after the page has
 settled (`br_nstate` outside `BN_OPEN..BN_BODY`, the layout done), in INDEX
@@ -134921,6 +134935,694 @@ bytes to 12,592: the menu row, the click and the shapes. The row is `brmap`
 `href` and the border on one map, an `ismap` link's `?13,7`, and Save Image
 As from both menus, each read off the requests the server got or the
 Download Manager's URL.
+
+### 71.33 Browser 1.8 — pictures in table cells
+
+docs/plans/BROWSER-1.8-PLAN.md step 1. Most pictures on a 1996-1999 page sit
+in table cells: the survey of eleven archived front pages found about 230
+pictures and fewer than 20 outside a table, so before this step a period
+page showed almost none of them. The composer (BROWSER-PLAN 3.2) dropped a
+cell's `D_IMG` record with the other markers; it now carries it.
+
+- **Measure** (`br_tmeas`, `br_tmimg`): a picture is `COLS` cells of its
+  column's width and a word of its own, and its whole width is the column's
+  FLOOR - not capped at `BR_TFLRMAX` as a word is. A table whose cells hold
+  only pictures has content (`br_tany`) and is no longer dropped as
+  decoration. A link's three nibbles are skipped as a unit, since one of them
+  can read as `D_IMG`.
+- **Squeeze** (`br_tfit`): the trim that gives excess back from the widest
+  column no longer trims a column with a picture in it (`br_tpicm`'s bit,
+  set by `br_tmimg`) through its floor; a column of text alone is still
+  trimmed through its words, down to 2, splitting them. A table overflows the
+  band only when its pictures' columns alone are wider than it, and that
+  overflow is clipped at the band (`br_build`): the Browser has no
+  horizontal scroll.
+- **Wrap** (`br_twrap`): a picture is one unit of `COLS` cells. A fragment
+  that cannot take it ends before it; alone and wider than its column it is
+  placed anyway. Its record and alt text are copied whole into the composed
+  row (`br_twimg`), the picture is laid out (`br_imglaid`, so §71.26 fetches
+  it) and the rows it reaches above and below the text row are kept for the
+  row (`br_creach`). A cell's alignment spare is never negative.
+- **Emit** (`br_cend`): a composed row is written as §71.25 writes a line -
+  its picture rows above (`LNF_IROW`, `LN_X` = +d, the span its start), the
+  text row, and its rows below (`LN_X` = -d, the span its end) - so the
+  painter, the click, the map (§71.32) and the menu need nothing new. Other
+  cells' text sits on the text row, as text beside a picture does.
+
+**A bug the survey found, in the step's own first build:** CNN's top table
+squeezes a right-aligned 120-pixel cell under its picture, and the
+alignment's spare (`di - cx`) went negative and padded 65,000 spaces: the
+table never ended. The floor and the clamp are both the fix.
+
+**Still not done:** the image table is `BR_IMGTMAX` = 32 a page (CNN has 63
+pictures, Apple 55); raising it changes §71.28's kept-page index and is a
+decision of its own.
+
+**What it cost**: 325 bytes of code and 6 of BSS resident, image + BSS
+59,899. The row is `brtabimg` (`tests/brtabimg.py`, QEMU): eight tables,
+every picture laid out, fetched once and byte for byte its reference, its
+picture rows written and the text after the table laid out.
+
+### 71.34 Browser 1.8 — a page's colours
+
+docs/plans/BROWSER-1.8-PLAN.md step 2, `apps/browser/brcolor.inc`. On VGA
+and EGA the browser draws `<body bgcolor text link>`, `<font color>`, and
+the `bgcolor` of a `<table>`, `<tr>`, `<td>` and `<th>`. A 1bpp adapter
+reaches none of it: the parser writes no colour there and every row draws
+as 1.7 drew it.
+
+**Part 7** (`brcolor_part.asm`, `brcolor_const.inc`) holds what a
+monochrome machine has no use for: the colour names, the hex reader and the
+layout's checkpoints. It is fetched once, on the UI task, when the window
+opens on a colour display, and held for the session - the parser that
+calls it may be on the network worker, which may not read a file. A
+Hercules or CGA machine never reads it; refused for memory, the page is
+black on white.
+
+**A colour is a name or six hex digits**, with or without `#`: the sixteen
+HTML 3.2 names and `grey`, `magenta`, `cyan`, `orange`, `darkblue` and
+`darkred`. It is matched to the nearest of the sixteen by
+`apps/os88rgb.inc`'s `rgb_near` - the picture decoders' own search
+(`os88img.inc`, section 93), shared as source so a page and a picture never
+disagree. Anything else is no colour.
+
+**The record** is `D_COL` (31) and two digits `D_IMGDIG + 0..5`, the value
+`high * 6 + low`: 0 the page's ink again, 1..16 ink `v - 1`, 17 the page's
+ground again, 18..33 ground `v - 18`. It ends no line and occupies no cell.
+`<font>` keeps a stack of eight inks; a `</table>` that closes the
+outermost table puts back the ink it opened in, so a `<font>` left open in
+a cell does not colour the page after it.
+
+**The layout** keeps a checkpoint of every ink change it walks (`br_cprec`,
+128 a page, in part 7; past that a line starts in the page's ink), so `br_build` knows
+the colour a line starts in without scanning backward (`br_cplook`). A
+ground in the document's own lines is not drawn: a ground belongs to a
+cell.
+
+**The composer** re-opens a cell's colours at the head of each fragment and
+closes them at its tail (`br_tcolon`, `br_tcoloff`) - the link's discipline
+(`br_tlnk`) - so a composed row is complete in itself; the inset before a
+cell takes its ground, and a cell's ink starts as the table's.
+
+**Drawing.** `br_build` gives each cell an attribute, ground << 4 | ink
+(`br_lattr`); a row with any cell not in the page's colours is drawn as one
+`font_run` per run of equal attributes (`br_runseg`), and a row without is
+the one call it was. Ink equal to its ground is replaced by black or white.
+A link takes the page's link colour, the underline the link colour, a
+styled (bold, italic) row the pen of its first lettered cell, and the
+band's right margin and last part-row the page's ground (`br_margin`, two
+fills, none on a white page that was white).
+
+**A page with `background` and no `bgcolor`** is black on white and its
+`text` and `link` are dropped: they were chosen against a picture this
+browser does not tile.
+
+**A link is in the SYSTEM's accent** unless the page names `link`, the way
+IE3 had a default: part 7's `BRCL_THEME` (UI task, at the window's start)
+reads `SYSTEM.CFG` off the system disk's root into its own memory - `TH`
+byte 0 the theme, `TP` byte 2 the focused title bar's ground (§76.14.14) -
+and under Color and Windows that colour is the links' (`[br_tlink]`, put in
+`[br_plink]` by `br_cdefault`): blue on Classic, green on Forest, red on
+Desert. Bright, Dark, kern_mega, a missing or foreign file and a black accent
+are blue (`CBLUE`). There is no API cell for the theme's colours, and the
+file is the one place they are written (§76.14.14).
+
+**A FOLLOWED link is in the text's colour** (black on a page that names
+none), the accent only on one not yet followed. Followed means the History's
+eight URLs (`BR_HISTN`): an absolute href equal to one, a relative one that
+one ENDS with - no resolve, so a frame's or a `<base>`'s relative link may
+read unvisited. It is asked once a link and page and kept two bits a link
+(`[br_lvc]`, `BR_LNKMAX` / 4 bytes, cleared by `br_cdefault`); `br_build`
+asks at a `D_LNK1` (`br_bvisit`) and, for a line that begins inside a link,
+through `br_linkat` (`br_bvline`), and `br_battr` gives a followed link's
+cells the text's ink.
+
+**Not done:** tiling `background`; a picture's transparent pixels stay
+white on a coloured ground.
+
+**What it cost**: image + BSS 61,702 bytes of 65,024 (`APP_MAX_SIZE`),
+1,803 more than step 1; the names, the matcher and the 512-byte checkpoint
+table are part 7's, in a heap claim a colour display alone takes. The row is
+`brcolor` (`tests/brcolor.py`, QEMU): six pages read off a screendump by
+colour.
+
+### 71.34.1 Browser 1.8 — tables, IE3's way: the grid
+
+**`border` decides whether a table has a grid at all**, as it did in IE3 and
+Navigator: most of the period's tables are `border=0`, laying a page out,
+and this browser drew every one with `+---+` rules and `|` edges. The parser
+keeps one bit an OUTER table, in the order they open (`br_tbord`,
+`[br_tbits]`, 64 of them; past that, none) - its own depth count, so a 1bpp
+machine reads it too - and the layout takes the bit when it meets the table
+(`br_tlook`, `[br_tbrd]`). A table met inside one the layout inlined as a
+box (BROWSER-PLAN 3.2.1) is a nested one the parser never numbered: the
+layout counts the boxes it is in (`[br_tind]`, up at an inlined `D_TAB1`,
+down at its `D_TAB0`) and takes no bit there, so the outer tables after it
+keep their own. With none, `br_trule` writes no rule and the edges are
+spaces (`br_tbar`): the cells keep their places and lose the grid.
+
+**IE3's bevel, in one colour** (`br_bglyph`, part 8's `brf_vline`): every
+grid line is a PAIR in its cell - a 50% dither (the lighter grey, read as
+such at this size) on the left or top, a solid line on the right or bottom.
+One shape serves every place a line is: a cell's light bottom and right
+beside the next cell's dark top and left, so cells read sunken, and the
+table's own edge the same way round, raised. `cellpadding` and
+`cellspacing` are not read: below a cell of 8 pixels there is nothing to
+give, and the inset each cell already has is a cell.
+
+**A grid is solid lines**, not the cell font's dotted `-`, `|` and `+`: the
+composer writes `BR_BH`, `BR_BV` and `BR_BX` (80h-82h, brdocmarks.inc),
+which `br_build` sends down the bitmap path (`br_bline`) and
+`br_paintstyled` draws as a line across row 3, one down column 3, or both
+(`br_bglyph`). On a colour display they are dark grey (`br_bgrey`), and the
+bitmap path now puts each raster row up a RUN OF EQUAL ATTRIBUTE at a time
+(`br_strun`), so a styled row keeps its cells' colours where it used to take
+its first letter's pen for all of them.
+
+### 71.34.2 Browser 1.8 — the table composer left the primary
+
+**The composer left the primary whole** (`apps/browser/brtable.inc`, in part
+7, `brext_part.asm`): `br_table` to `br_tskip` - the measure, the wrap, the
+rows and the composed-text arena - and the table-only colour helpers that
+were brcolor.inc's (`br_ccol`, `br_tcabs`..`br_twcol`, `br_tbar`). It runs
+with DS = the primary, every `br_*` datum and the eight constants `BRTBLK`
+names imported from browser.map by `tools/brdlsyms.py`, and reaches the ten
+primary routines it calls far, through `br_tb_rtab`'s shims (`brtabres.inc`),
+whose segment words `br_tbload` fills with the primary's own CS - part 1's
+shape (§71.26). It freed 2,203 bytes of the primary's image, which is what
+the composer's next waves (pixel columns, a cell's own type, `cellpadding`,
+frames) are built into.
+
+**ONE PART FOR COLOURS, FONTS AND TABLES** (part 7, `brext_part.asm` with
+`brcolor_body.inc`, `brfont_body.inc` and `brtable.inc`). They were parts 7,
+8 and 9, and a lazy part is a HEAP CLAIM of its own: with the page's own
+arenas the Browser then held §50's eight, the image engine had none, and no
+picture in a table was ever fetched (`brtabimg` caught it: asked for 0
+times). One part is one claim. Its entry block is the colour block's
+(`BRCL_*`, the 512-byte checkpoint table inside it) and then the fonts'
+(`BRFN_*`) and the composer's (`BRTB_ENTRY`); each body keeps its own
+convention (§71.34, §71.35, above). `br_tbcall` answers CF=1 while it is
+not in - inline it, the box `br_table` itself falls back to (BROWSER-PLAN
+3.2.1) - and sets `[br_tbw]`, and `br_fnwake` fetches part 7 on the UI
+task's next wake with the page standing still and lays the page out again.
+The Times face is still read only by the first tall line.
+
+**Part 7 is held only by a page that uses it** (1.8 cleanup 5). It is
+~12 KB, and holding it from the window's start cost every page on a colour
+display that much heap: a 384 KB XT had 174 KB at a page's load against
+1.7's 189. `br_cpload` still fetches it at the start, on a colour display,
+for one thing - the theme's link colour, which reads SYSTEM.CFG - and then
+drops it (`op_drop`). A colour is
+resolved at PARSE time, so `br_colattr` with no part only notes that a
+colour was named (`[br_cwant]` = 1); when the page is all in, `br_fnwake`
+fetches the part, binds the matcher (`br_cpbind`), parses the page again
+from its kept source (`br_reparse`, not a frameset) and lays it out. The
+pictures wait for that parse (the engine's start in `brimage.inc`), which
+rewrites their table.
+`[br_cwant]` = 2 is "asked this session", answered or refused, as
+`[br_fwant]` is for the face.
+
+### 71.34.3 Browser 1.8 — a cell's own type
+
+**A table cell sets its letters in the face the page asks for** (§71.35's
+sizes), the rest of the row in the cell, columns where they were. The
+composer measures and wraps in cells as before - the face is narrower than
+the 8x8 cell on average, so a column sized in cells holds it - and:
+
+- **copies a size record** (`D_COL` 34/35) into its row where it copied only
+  colours (`br_twcol`), keeps each column's size across its fragments
+  (`[br_tsz]`, a word a column like `[br_tclr]`; `br_tcolon` reopens it,
+  `br_tcoloff` closes it back to the cell), and takes one a cell OPENS with
+  as the cell's state (`br_tcabs`);
+- **marks each cell's first letter** with `D_CMETA`, `BR_SNAP` (0FFh) - a
+  payload no source cell hint has - which `br_build` turns into `LM_SNAP`
+  (16) on the cell after it;
+- **makes a composed row tall** when a face record is on it (`[br_cface]`,
+  `br_cend`: `LN_X` bit 7, base the cell, one continuation row), unless a
+  picture reaches the row.
+
+Part 8 then snaps its pen to the column at every `LM_SNAP` letter and every
+grid line, so a narrower face never drifts the next column over, and draws a
+grid's verticals down both slices (`brf_vline`); `br_thit` snaps the same way,
+so a click in a cell finds its letter. Rows with no face record are drawn and
+measured exactly as before.
+
+### 71.34.4 Browser 1.8 — widths: pixels or a percent
+
+**A `width` is PIXELS or a PERCENT**, on a `<table>` and on a `<td>`/`<th>`, as
+IE3 and Navigator read it; this browser read neither. One byte carries
+either (`br_wattr`): 0 none, `80h` + pixels / 16 rounded up (two cells a
+unit, at most 63 = 1,008 pixels, so `C0h`-`FEh` stay a picture's slices and
+`0FFh` `BR_SNAP`), `20h` + percent / 2 (2% steps, at most 100).
+
+- **The table's** rides beside its border bit (`[br_twid]`, 64 outer tables,
+  `br_tbord`), and `br_tlook` takes it with the border (`[br_twd]`).
+  `br_ttarget` turns it into cells - a percent of the band - and `br_tfit`
+  squeezes the columns to it when it is narrower than the band
+  (`[br_ttin]`, less the separators), then GROWS them to it (`br_tgrow`).
+- **A cell's** is a second `D_CMETA` after its span's (`br_tcwput`), payload
+  20h and up so no span byte (0..23) is mistaken for it. The measure makes it
+  its column's wanted width at least (`br_tcwidth`; a percent is of the
+  table's width, else of the band), and marks the column as having one
+  (`[br_tfix]`). `br_tcells_of` steps over it so a cell's content still
+  starts at its own first byte.
+- **Growing is IE3's**: a cell at a time round the columns WITHOUT a width of
+  their own, so a `width="30%"` column keeps its 30%; round all of them when
+  every column has one. A spanning cell's width is not applied.
+
+**The UI task is woken when a layout wants a part** (`br_tkick`, at
+`br_layout`'s end): the worker may post its last wake BEFORE the layout that
+asks, and a page with a table and no heading then never fetched part 9.
+
+### 71.34.5 Browser 1.8 — frames, and what a cell holds
+
+**Frames are a table** (§71.15), so they take everything §71.34.1-4 gave
+tables - the bevelled grid as IE3's dividers, a cell's own type, widths -
+once three gaps are closed:
+
+- **A frameset's tables are counted.** They are written straight into the
+  stream (`br_frameset`, brnet.inc's frame row), not by a `<table>` tag, so
+  every table after them took the wrong border and width bit; `br_tbfake`
+  counts each as a bordered table the band's full width.
+- **`cols` is read** (`br_fcols`: pixels, a percent or `*`), each frame takes
+  the next width (`br_fwnext`, `[br_framew]`), and its cell carries it as a
+  `<td width>` does (`br_fcellw`). `rows` keeps its frames one under another.
+- **A frame's `<body bgcolor text>` is its cell's** (`br_fbody`): records at
+  the head of the frame's cell, which the composer takes as the cell's
+  state, where they had painted the whole page.
+- **On a colour display part 7 is bound before the children are fetched**
+  (`br_frameclaim`): a frame's `<body bgcolor text>` is read as the child is
+  parsed, and a frameset is never parsed again (`br_reparse` - the children's
+  sources are not kept), so the part arriving after them left every frame
+  black on white.
+- **A frameset carries up to `BR_FRMAX` = 16 frames** (it was 8, and a 4x4
+  grid lost its second half without a word). Each frame costs 10 bss bytes
+  across `br_frameflags`, `br_frameurls`, `br_framebaseoff`,
+  `br_framebaseseen`, `br_frametargetoff`, `br_framenameoff` and
+  `[br_framew]`; the room came from sharing `br_s_webbrowser` with the tail
+  of `br_s_titlesfx`, a shorter no-server refusal (`Link has no server`) and
+  one fill for the two adjacent offset tables.
+
+**A cell's text breaks its line at a block** - `<br>`, `<p>`, a heading, an
+item, a rule, and a nested table's own D_TAB1/D_ROW/D_CELL (`br_isbrk`) -
+where it ran the blocks together ("MenuHomeNews"): the wrap ends the fragment
+at one, and the emit stops at one once its characters are out, so the
+records after it (a nested cell's ground) open the next line instead of
+colouring the end of this one. A nested table is still inlined, a line a
+cell; its plain cells say the default ground (`br_cellbg`) and `</table>`
+puts the ground back, so a sibling's colour does not run on.
+
+**A top-aligned picture in a cell runs beside its text**: it keeps no rows
+of its own below the line (`br_tpset`) - its column puts the next SLICE on
+each of the row's following lines instead (`br_tpslice`: `D_CMETA`, `C0h` + k,
+then a copy of its record), which `br_build` draws as slice k (`br_bslice`,
+`[br_bslc]`), so the next cell's text runs down beside the whole picture
+rather than below it. 63 slices at most, 504 pixels. Only when nothing but
+spaces and markers follows it in its cell, and only one at a time in a
+column: a caption after it, text that wraps or a second top-aligned picture
+would put the cell's own lines between its slices, so its rows then go below
+the line as any other picture's do.
+
+**TEXT BESIDE A PICTURE (1.8 step 4)**: `<img align=left>` outside a table
+is written as an invisible table the band's width (`br_fltopen`,
+`br_fltcell`, `br_fltend`): one row, the picture's cell its own width and
+top-aligned, the text's cell after it, to the next block, `<br clear>` or the
+end of the page. A row of cells is what this renderer has; IE3's float is a
+picture beside a run of text, which is exactly that row. `align=right` stays
+a line of its own: its picture would have to be written AFTER the text that
+wraps beside it, and an image's record is its place in the document (71.26).
+
+**Not done**: a frame scrolls with the page, not on its own; IE3 gave each
+frame its own scroll bar.
+
+### 71.34.6 Browser 1.8 — sixty-four pictures a page
+
+**`BR_IMGTMAX` is 64** (was 32): a page of the period with a picture a link
+of its menu, a picture a bullet and a counter at the bottom ran out at 32
+and kept the rest as alt boxes. Three bitmaps were a DWORD and so 32 images
+wide - `bri_amask` (part 1's animated images, now at the end of
+`br_iwork`, `BR_IMGTMAX` / 8 bytes), `br_iseen` (the drawn ones) and
+`br_ilaid` (the layout's boxes, which `br_imgsetlaid` makes `IF_LAID` a byte
+at a time) - and are `BR_IMGTMAX` / 8 now: a dword `br_ilaid` set images
+32-63's bits in `br_ilgen` and `br_idoff1` and never fetched them. **`BR_RIMGMAX` is 32** (was 8): the boxes one
+display row records for its frames AND its blits, so a row of nineteen small
+pictures drew eight. The kept-page index stays `BRI_SLOTS` = 32 copies a page
+(SPEC.md 71.28): past it a picture is fetched again rather than kept. Cost:
+720 bytes of the primary's bss.
+
+### 71.34.7 Browser 1.8 — pictures past 64 KB
+
+**A picture may be staged to 192 KB** (`BR_IFMAXH` = 3, the staged length's
+high word): `bri_rx` and `bri_clen` gained high words (`bri_rxh`,
+`bri_clenh`), Content-Length is read in 32 bits (`bri_clendig`), the
+staging is addressed in 32 KB GRANULES - a segment every 2,048 paragraphs and
+an offset under 32 KB (`bri_stash`, the segment kept in `bri_sgk`/`bri_sgp`/
+`bri_sgs` until the granule changes) - so no stash crosses 64 KB and
+kern_mega spends one `SEG_SUB` LDT entry a granule, not one a chunk (a
+refused `SEG_SUB` refuses the picture), and `bri_room`, `bri_ugrow` and
+every paragraph count (`bri_rxpar`) are 32 bits. The stage stops at
+`bri_ugrow`'s cap, (`BR_IFMAXH` - 1):FFF0h bytes: a body still coming there
+is refused (`bri_needgrow`), not grown again. Every reset of the stage
+clears `bri_rxh` with `bri_rx`, or compaction moves a 64 KB+ stage that is
+no longer there. The GIF
+reader rebases its own segment every 32 KB (`bri_fill`'s `[bri_fseg]`,
+`[bri_fbase]`, `bri_frebase`, `bri_fleft`); a header and an animation's
+scan read the first 64 KB (`bri_rx16`), and an ANIMATION plays only from a
+file under `BR_IFMAX` = 60,000 bytes (`bri_aplanbig`: its frames' table
+holds words) - past it the first frame is the picture. PiXEL's decoders are
+handed the flat file's 32-bit length (`px_flatlen`), but **a PNG or a JPEG
+over 65,520 bytes is refused** (`bri_pxsniff`): those two read the file
+through `K_NEXT`, one window of the first 64 KB, and would decode it cut
+short. Measured: a 96,766-byte GIF decodes and draws.
+
+**The ready copy is still one segment** (`BR_IRMAX` = 65,520 bytes, a word of
+`bri_rbytes`), and a VGA's copy is four planes: 480 x 400 is 96,000 bytes.
+Such a picture was refused and the page kept its alt text; `bri_box` now
+makes it an eighth smaller each way until the copy fits (`.big`, as `.cut`
+fits a picture to the page) - the test page's 480 x 400 GIF draws at about
+368 x 307.
+
+### 71.34.8 Browser 1.8 — the URL store and the link arena share a claim
+
+**Each claim a package holds is one of eight** (§50, `MEM_OWNER_MAX`), and
+1.8's part 7 made a page with a PNG or a JPEG need nine: the URL store, the
+source, the document, the line table, the link arena, the image store and
+part 7, then part 1 and PiXEL's decoder part - so every such picture was
+refused (`brpx`). In real mode **the link arena now lives in the URL
+store's claim**, after the store (`br_lnkgrow`: the claim grows to
+`BR_URLSTORE` + the arena; `[br_lnkseg]` = the store's segment +
+`BR_URLSTORE` / 16, so no offset in the arena moved; `br_lnkfree` shrinks
+the claim back at a page's end; `br_lnkfix` follows a move in `br_reloc`,
+and `br_pagepin` skips the derived word). The transfer's cluster buffer and
+Copy's text, which the store used to grow for, are **a claim of their own
+while in use** (`br_dlgrow`, `[br_dlclaim]`), addressed as ever at
+`BR_URLDL` - from `[br_dlseg]`, that claim less `BR_URLDL` / 16. That word
+follows a move (`br_reloc`) only while it IS the store's (`[br_dlclaim]` 0):
+derived from a pinned claim of its own, it can equal a moved claim's old base
+by adjacency and must not be rewritten to the new one. A page standing still
+holds six; a PiXEL picture's decode, eight. kern_mega keeps the three apart:
+twelve claims, and selectors take no sums.
+
+**The worker's parse grows the arena, so the WORKER can move the store**
+(§50.3.1's regrow moves when it must, pins or no, and calls no relocation
+proc). `br_lnkgrow` therefore runs the two-byte handshake of `br_dlx_put`
+the other way round: it sets `[br_lgbusy]` FIRST, then reads the UI's
+`[br_dl_ugrow]`, and waits a held store out; the UI task's `br_ustake` sets
+`[br_dl_ugrow]` and waits out a grow under way. The bookmark transaction
+(`br_bmservice` - the file read into the store, the records, part 0's
+commit and write, and the menu's copy of the titles) holds the store that
+way from its read to its menu.
+
+### 71.34.9 Browser 1.8 — progressive drawing
+
+**A still GIF is drawn as it decodes** (`bri_prog`, from `bri_rowdone`), the
+way Navigator and IE3 drew one: every quarter of its height or every 16
+rows, whichever is more, the worker ASKS for the copy so far on the glass -
+`[bri_preq]` = k + 1 with the generation in its high byte, and
+`OSAPI_WM_WAKE` - and the UI task draws it (`bri_uprog`, IE_DEC's wake):
+the entry made READY on the copy in progress (`[bri_newp]`) for the one
+images-only pass (`[br_ionly]`) and WAITING again after, unless IE_DEC's end
+made it READY for good meanwhile (`[bri_pon]`, cleared in the same critical
+section as that READY). The worker never takes the gfx lock: `br_imghalt`,
+called under a key or click callback's lock, waits on `br_ibusy`, so a
+worker blocked on the lock inside the decode froze the desktop. IE_DEC's end
+clears the request and waits out a draw under way before moving the copy
+down. An images-only pass leaves the margins (`br_margin`) alone. What is not in yet is the copy's ground, laid before the
+decode (`bri_ground`); an interlaced picture shows its passes. Pictures under
+32 rows, animations (their frame 0 too) and PiXEL's decoders draw at the end
+as before.
+
+**Every frame's decode restarts the GIF reader's rebased segment**
+(`bri_fstart`): §71.34.7 set it for a still picture alone, and an
+animation's frames then read where the last decode left it - `brganim`
+caught it, every copy none of its frames.
+
+### 71.34.10 Browser 1.8 — a drop-down's labels
+
+**A `<select>` is as wide as its widest option** (`br_selwidth`, 4 to 30
+cells), as IE3 sized one, where it was 8 cells whatever its options said and
+cut "Tom & Jerry here" to "Tom & Je". **Its label decodes entities**
+(`br_tentity`, the title's decoder) where `&amp;` showed as written, both
+where the field is drawn (`br_select`) and where a click moves it on
+(`br_fsetval`); an `&` with no `;` before the option's end stays a literal
+one. A TEXT field's `value=` is not decoded, by Reset (`br_fsetval` decodes a
+select's only) any more than by `br_input` when the page is drawn: the field
+a page shows, Reset restores and a submit sends are the same bytes. A bare `&` no longer eats the text up to the next option - the plan's
+item had already gone with 1.7's entity rework, and the page that
+reproduced it shows "R&D dept" whole.
+
+**What a submit sends is what the field shows**: an option's value - its
+`value` attribute, or its label without one - is copied with its entities
+decoded (`br_copyent`, `br_tentity` again, from `br_selvalue`), where it
+went as written and a form sent `Op%26ccedil%3B`. A value is still
+`BR_VALMAX` - 1 = 11 characters.
+
+### 71.34.11 Browser 1.8 — the decoder part goes when the pictures are in
+
+**A page that animates kept its last decoder part for the page's life.**
+Part 1 holds one decoder at a time (`[bri_pxheld]`, §71.30) and lets it go
+only for the next one or with itself at IE_END - and an animation keeps part
+1 up. The 1.8 test page then held §50's eight: the URL store, the source,
+the document, the line table, part 7, part 1, the image store and the XBM
+decoder (part 6), so its form's submit found no claim for part 0. IE_AGO
+(`bri_uago`, every picture in, the animations taking over) **drops the held
+decoder**, and such a page stands at seven. A submit or a map click that
+still meets the eight sheds the pictures and asks again (`br_dl_cold`,
+§71.20.5).
+
+### 71.34.12 Browser 1.8 — the save-under promise waits for the pictures
+
+**§71.11's promise was made at BN_DONE**, which was the page standing still
+until 1.7: pictures arrive after it, an animation never stops, and 1.8's
+parts lay the page out again when they come in (§71.34.2, §71.35). A window
+raised over the Browser after BN_DONE was put back off the save-under cache
+- a Task Manager dragged off a page of pictures left the page as it had been
+when it was opened, its colours gone and the Task Manager's columns in it.
+`br_promise` now also asks that the image engine be off (`[br_ie]` IE_OFF),
+no picture waiting (`[br_ipend]`) and neither part 7 nor its faces wanted
+(`[br_cwant]`, `[br_fwant]`); the engine's start withdraws it (`br_im_wake`
+IE_START), its end and `br_fnwake`'s answer put it back. A page that
+animates never promises. A table's part (`[br_tbw]`) is not asked: the 8
+bytes it costs are the 8 the Browser does not have (SPEC.md 20.1.1, and the
+image + bss AT the cap failed to load on kern_mega - six bytes under it
+did not), and the part follows BN_DONE by a wake.
+
+### 71.34.13 Browser 1.8 — a size pass, and the document and line table in one claim
+
+**The primary had six bytes left** (§71.34.12) and 1.8b's script needs room
+in it, so two things only a user's command runs went to part 0 (§71.20.5's
+`br_dl_cold`, a thunk under the old name): Save As's write - `br_saved`'s
+body and its EMS chunk writer, `br_cx_saved` / `br_cx_savesrc` in
+`brcold.inc`, reaching `br_getname`, `br_srcpin` and `br_srcems_map` through
+three shims - and Options > an item (`br_cx_optcmd`, through `br_optapply`,
+`br_okrel` and `br_reload`'s). Each costs the command a read of part 0;
+reading BROWSER.CFG at a window's start (`br_optwake`) stays resident, or
+every start would read it. 425 + 74 bytes.
+
+**Then the line table moved into the document's claim** (real mode): the
+claim is `[br_dockb]` + `[br_linekb]` KB, `[br_lseg]` = `[br_docseg]` +
+`[br_dockb]` x 64, and `[br_lshare]` says so. Nothing that addresses a record
+changed - `br_laddr` still takes `[br_lseg]` as the table's segment.
+
+- **The document grows** (`br_docensure`, the table composer through it):
+  the claim grows by the step and the table moves up by it (`br_lsresize`,
+  `br_lsmove`'s backward copy - under 62 KB, and a step is a KB, so it is
+  the rare move and not the per-record one).
+- **The table grows** (`br_lineensure`): the claim grows at its end - and
+  may MOVE (§50.3.1), under the layout walk's own ES. So the walk takes the
+  document's window again after every record it writes: `br_ldocback` after
+  the caller's `pop es` (`br_emitline`, `br_blank`, `br_emitrule`), and
+  `br_cend` reloads `[br_docseg]` as `br_cput` does.
+- **The document shrinks** at a page's end with no EMS: the table moves down
+  first, then the claim shrinks.
+- **Either goes to EMS**: the document's spill moves the table to the
+  claim's base and shrinks the claim to it, which is then the table's own
+  (`[br_lshare]` 0); the table's spill shrinks the claim to the document.
+- **A move** (`br_reloc`) is followed by `br_lsfix`; `br_pagepin`,
+  `br_free_all` and `br_frameclaim` skip the derived word (`br_lsdrop`), as
+  they do the arena's.
+
+A page standing still holds five claims, the 1.8 test page with its
+animation six - two free for part 0, a decoder or 1.8b's script. kern_mega
+keeps the two apart: twelve claims, and selectors take no sums. The primary
+is 64,927 of `APP_MAX_SIZE`'s 65,024.
+
+### 71.34.14 Browser 1.8 — after a file dialog, and the name a download suggests
+
+**A lazy part is read by its bare name in the INSTANCE's folder** (§19.2.1),
+and a Save dialog leaves the instance where the user put the file. After one
+Save As every part was "unavailable" - the Download Manager, bookmarks, the
+source view, the context menu - because `BROWSER.O88` was not in that
+folder. Save As now does what a download always did: part 0 comes in
+before the dialog (`br_dl_partload`) and banks the folder it opened from
+(`br_dl_dirbak`), and the dialog's opening raises `[br_dl_gohome]` and
+HOLDS NOTHING - a cancel, a close box or a minimize calls nothing back
+(§38.6), so a hold taken there was never given back and pinned part 0 for
+the session, and the next part fetch stands the instance home wherever the
+chooser browsed. `br_saved` banks the folder chosen (`OSAPI_FILE_HERE`,
+carried into the part in AL:DX, which `br_dl_cold` keeps), part 0 is read
+at home, and `br_cx_saved` stands back in the chosen folder
+(`OSAPI_FILE_GOTO_QM`, wfetch.inc's quiet stand), writes the file, raises
+the flag again, and `br_saved` repaints the whole content - §38's
+completion owes its own repaint, and the one the dialog's close drew had
+run while the colour part could not be read, so the links came back cut
+where the dialog had been.
+
+**A download does the same, at its end.** The transfer writes its `.$$$`
+by bare name where the user chose, so the instance stays there for the
+transfer's length; `br_dlx_link` banks where it stood before the dialog
+(`br_dl_dirbak`). The commit and the partial delete run where
+`OSAPI_FILE_GOTO` moves the MACHINE and not the instance, so they raise
+`[br_dl_gohome]` instead, and `br_fetch` - every `op_fetch` site - stands
+the instance back (`OSAPI_FILE_GOTO_QM`) before the next part read. Save
+As's chooser is part 0's (`BRDL_SAVEAS`), suggests the page's own name
+the way a download does (`br_dlf_pagename`: the leaf of `br_path` made
+8.3, `.HTM` when it has no extension, `INDEX.HTM` when it has no leaf,
+built in `br_basescratch` because the chooser copies it on opening),
+banks the same words, and
+`br_saved` raises the same flag. **A transfer owns those words**, from
+`DL_OPEN` up to `DL_DONE`, so Save As is refused then (`Download Manager is
+busy`): banked over, the download's commit stood the instance where the
+download went, and a commit landing while the chooser was up stood it at
+the download's folder before the page was written. The primary is 65,023
+of `APP_MAX_SIZE`'s 65,024.
+
+**The suggested name is the REAL one, made 8.3** (`br_dl_defaultname`): the
+stem up to the leaf's LAST dot, its first eight letters, digits, `-` and `_`
+(case kept, the volume folds it), then three of the extension.
+`relatorio-final.zip` suggests `relatori.zip` where any leaf past twelve
+characters used to become `DOWNLOAD.BIN`, which is now only a stem with
+nothing legal in it. The server's `filename=` takes the same builder.
+
+**A name typed with no extension gets the suggested one** (`br_dlx_saved`),
+Windows' `lpstrDefExt` and the Disk window's rename rule (§22.10): `MEU`
+saves `MEU.ZIP`. A typed `.` - even a trailing one - is the user's and wins.
+A suggestion with no extension (`LICENSE`, `download`) gives none: it
+banked its last letter until the scan stopped on the NUL, and `LICENSE`
+saved as `LICENSEE`.
+The kernel's Save chooser has no default extension, so this is the Browser's,
+in part 0. `tests/unit/t_brautosave.py` holds the names.
+
+### 71.35 Browser 1.8 — tall headings
+
+`<h1>`, `<h2>` and `<h3>` are set **two rows tall** (16 pixels) where the
+body stays in the 8x8 cell: `<h1>` in the kernel's cell doubled and struck
+twice for bold, `<h2>` and `<h3>` in the system's Times face
+(`SYSTEM/FONTS/TIMES.F88`, §6.4, §19.8; Tinos, Times' metric twin) struck
+twice a pixel apart. `<h4>`–`<h6>` keep the bold cell. The face is the
+machine's and not the Browser's: nothing ships a second copy.
+
+**Part 7's font body** (`apps/browser/brfont_body.inc`, `brfont_const.inc`) holds
+`apps/os88type.inc` (§6.5), the doubled cell and the draw; the primary keeps
+`apps/browser/brfont.inc`. Its entries are far: `BRFN_OPEN` (UI task, finds
+the family with `ty_scan` and opens it), `BRFN_ADV` (AL = a character -> AL =
+its advance, memory only, so the worker's layout may call it) and
+`BRFN_DRAW` (ES:SI the text, CX its length, DI a `BRFP_*` block in the
+caller's DS -> one 8-row slice put up with one `OSAPI_GFX_BLIT1`). The part
+switches DS to its own data segment at each entry, because os88type keeps
+its state and band in DS.
+
+**On demand, twice over.** Nothing is read at launch. A layout that meets one
+of the three headings with the part absent sets `[br_fwant]` and lays the
+line in the cell; the UI task's next wake with the page standing still
+(`[br_fin]` 0, no layout running) fetches the part, reads the face, and lays
+the page out again (`br_fnwake`). A page with no such heading reads neither.
+A refusal of the part is asked once a session and leaves the cell; a machine
+with no `SYSTEM/FONTS` (the 360KB system disk, §24.3.1.5) keeps the part and
+its doubled `<h1>`, and sets `<h2>` and `<h3>` in the cell (`[br_fface]`). `[br_fon]` is on at
+every start, an 8086's too (the owner's choice of 2026-11-15: it was off
+there), and **Options > Fonts** (§71.36) turns it off.
+
+**A tall line** is a text record with `LN_X` bit 7 set (a column is below
+`BR_MAXCOL` = 96) and one `LNF_IROW` continuation row below it, the picture
+rows' own record. Its kind rides in `LNF_UNDER`, which a tall line does not
+otherwise use: set is the doubled cell. The paint draws the top slice on the
+text row and the bottom slice on the continuation row, each from the whole
+line composed again, so a band that repaints one row alone draws it right.
+The wrap measures a tall line in pixels (`[br_tpx]` beside the cell count it
+already keeps) and breaks where its own letters reach the edge; its cell
+count, which centring reads, is the pixels rounded up. A line that also
+holds a picture stays one row, in the cell.
+
+**The face lives in part 8's own memory** (`OS88TY_FACEBUF`, §6.5.5): by
+the time a page has a heading the Browser holds §50's eight claims, and a
+ninth for the face was refused with 355KB free. Under kern_mega (twelve
+claims, and a segment that is a selector) the face claims as usual.
+
+**A click on a tall line** (`br_thit`, in `br_hitofs`) is rebased to the
+text row from either slice and to the character under it by the letters'
+own advances, so a link in a heading is hit where it is drawn. A picture in
+a heading keeps the line one row, and its box answers its own cells as
+everywhere (§71.25).
+
+**The page chooses the face** (1.8 step 3c, the owner's rule): the body is
+the 8x8 cell by default, and the page's own markup sets letters in the face -
+`<font size>` 3 and up or any `+`, `<font face>`, `<big>`, a heading. A
+size of 1 or 2, any `-` and `<small>` set them in the cell. The parser keeps
+0 the default, 1 the cell asked for, 2 the face asked for; the record is 35
+for the face and 34 otherwise. Bold letters (`<b>`, a heading) are struck
+twice, a link's or `<u>`'s take a rule on visual row 14 (`brf_ul`), and a
+selected or focused letter is inverted in the band (`brf_inv`). **Colours
+are the page's, letter by letter**: part 8 keeps each letter's first pixel
+(`brf_px`) and puts the slice up in one `OSAPI_GFX_BLIT1` per run of equal
+attribute (`br_lattr`), each run's left edge rounded down to its byte - a
+link's colour beside the text's on one line. PRE, form fields and table
+cells stay in the cell.
+
+**Big letters among small ones** (1.8 step 3b): (superseded in its sizes by
+3c above) `<big>`/`<small>`/`<font size>` choose the face or the cell. The three share one stack, as tags nest (`br_zstk`), and leave
+a `D_COL` record of value 34 (the cell) or 35 (the face) - outside the
+colours' 0..33, so every colour reader refuses it through `br_coldec`. A
+line with a big letter on it is tall; its other letters stay in the 8x8
+cell, drawn on the face's baseline (visual rows 5-12 of the 16). A tall
+line's `LN_FL` is the paint's: bit 32 the face is its base kind (h2, h3),
+128 the doubled cell (h1), neither the cell; 64 its first letter is big,
+which is the size the line starts in, since a wrapped `<big>` span opens on
+a line with no record of its own. A letter's kind rides in its cell mark as
+`LM_BIG` (2), which `br_build` sets from the records, and both the draw and
+the click (`br_thit`) read it. Inside a table's composed rows the size
+records are not copied (`br_twcol` takes colours only): a cell's big text
+is the cell's.
+
+**Not done:** `<font face>`. The body is the 8x8 cell on every machine, so
+a face name could only change big letters and headings, from Times to
+Helvetica or Courier - a second and third face for part 8 to hold.
+
+**What it cost**: image + BSS 63,130 bytes of 65,024 (`APP_MAX_SIZE`),
+1,428 more than §71.34; part 8 is 2,736 bytes packed (8,207 unpacked, the
+face's 2.5KB buffer among them) in a claim only a page with a tall line
+takes. The row is `brfont`
+(`tests/brfont.py`, QEMU).
+
+### 71.36 Browser 1.8 — the Options menu
+
+**A menu of switches**, not a dialog (`apps/browser/bropts.inc`): each item
+reads `[x] Name` or `[ ] Name` and a pick toggles it in place - the kernel
+reads a menu's items when it drops it (§12.2) - saves the options at once and
+reloads the page. The bar holds five menus (`MENU_APPMAX`), so **Options takes
+Help's place** and Help's one item, Keyboard Shortcuts..., is its last.
+
+| item | `br_opts` bit | what it turns off |
+|---|---|---|
+| Images | `OPT_IMG` | the image engine: every picture keeps its box (`br_imgallow` in `br_imgtab`) |
+| Images on Click | `OPT_IMGCLK` | with Images off, a click on a picture's box reloads the page WITH its pictures, for that load (`br_imgclick`, `[br_imgforce]`, `br_imgnav`) |
+| Animations | `OPT_ANIM` | an animated GIF plays (`bri_aplanbig`): off, its first frame is the picture |
+| Colors | `OPT_COLOR` | the page's colours (`br_colput`, `br_colattr`); the theme's link accent stays |
+| Fonts | `OPT_FONT` | the faces (§71.35, `[br_fon]`); its default is off on an 8086 |
+| Tables | `OPT_TABLE` | the composer (`br_tbcall`): every table inlined |
+| Underline Links | `OPT_ULINK` | the rule under a link (`[br_ulmask]`, `br_ultest`, part 7's `BRFP_ULM`); `<u>` keeps its |
+| Cookies | `OPT_COOKIE` | the session cookie, neither kept nor sent |
+| Cache | `OPT_CACHE` | BRCACHE (§71.27/71.28): nothing kept |
+| Set Home Page | - | the address bar's URL becomes the home page |
+
+**`SYSTEM/APPDATA/BROWSER.CFG`** is `'BO01'`, the options word and the home
+page's URL with its NUL (`[br_ocfg]`, `BR_OCFGSZ`), written with `od_write` and
+read once, at the first `W_ONWAKE` (`br_optwake`), where the bookmarks are; a
+missing or foreign file leaves the defaults - everything on but Images on
+Click, and Fonts on a CPU past the 8086. A Browser opened with no document
+goes to the home page then, under the gfx lock it takes for that one
+`br_go` (`W_ONWAKE` runs without it, and §71.14's generation check relies on
+`br_go` running under it). There is no password store.
 
 ## 72. `ETHER.DRV` — an Ethernet card and a TCP/IP stack (`drivers/ether/`)
 

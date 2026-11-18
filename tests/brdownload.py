@@ -50,6 +50,9 @@ AUTO = "--automatic" in sys.argv
 CTYPE = "--content-type" in sys.argv
 AUTO = AUTO or CTYPE
 DLPATH = b"/get.cgi?id=7" if CTYPE else b"/download-test.zip"
+# ...and the name the Browser suggests for it: the header's, or the leaf
+# made 8.3 (SPEC.md 71.34.14). The seeded file and the read-back use it
+DLNAME = "DOWNLOAD.BIN" if CTYPE else "DOWNLOAD.ZIP"
 CANCEL_MODE = next((arg for arg in ("--cancel-active", "--close-active",
                                     "--close-complete")
                     if arg in sys.argv), None)
@@ -234,13 +237,13 @@ def main():
     dlimg = os.path.join(ethernet.os88qemu.RUNDIR, "brdownload360.img")
     seed = os.path.join(ethernet.os88qemu.RUNDIR, "brdlseed")
     os.makedirs(seed, exist_ok=True)
-    with open(os.path.join(seed, "DOWNLOAD.BIN"), "wb") as f:
+    with open(os.path.join(seed, DLNAME), "wb") as f:
         f.write(OLD)
     subprocess.run(["python3", "tools/os88disk.py", "-o",
                     dlimg, "--size", "360",
                     "--folder", "SYSTEM/APPDATA",
                     os88build.at("build/browser.o88"),
-                    os.path.join(seed, "DOWNLOAD.BIN")],
+                    os.path.join(seed, DLNAME)],
                    check=True, stdout=subprocess.DEVNULL)
     ethernet.os88qemu.make_test("ETHER=1", "TESTIMG=build/ether360.img",
                                 "TESTAPPS=" + dlimg)
@@ -481,7 +484,7 @@ def main():
                                             "DL_FAIL: states %s" % sorted(seen))
                         volume = os88flush.Volume(open(dlimg, "rb").read())
                         try:
-                            kept = volume.read("DOWNLOAD.BIN")
+                            kept = volume.read(DLNAME)
                         except os88flush.FlushError:
                             kept = None
                         if kept != OLD:
@@ -589,7 +592,7 @@ def main():
                         volume = os88flush.Volume(open(
                             dlimg, "rb").read())
                         try:
-                            kept = volume.read("DOWNLOAD.BIN")
+                            kept = volume.read(DLNAME)
                         except os88flush.FlushError:
                             kept = None
                         if kept != OLD:
@@ -685,7 +688,7 @@ def main():
                         m.quit()
                         volume = os88flush.Volume(open(
                             dlimg, "rb").read())
-                        if volume.read("DOWNLOAD.BIN") != PAYLOAD:
+                        if volume.read(DLNAME) != PAYLOAD:
                             failures.append("closing completed manager changed the downloaded file")
                         if failures:
                             raise RuntimeError("; ".join(failures))
@@ -841,7 +844,7 @@ def main():
     try:
         volume = os88flush.Volume(open(
             dlimg, "rb").read())
-        got = volume.read("DOWNLOAD.BIN")
+        got = volume.read(DLNAME)
         if got != PAYLOAD:
             first = next((i for i, (a, b) in enumerate(zip(got, PAYLOAD))
                           if a != b), min(len(got), len(PAYLOAD)))

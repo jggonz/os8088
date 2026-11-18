@@ -187,7 +187,7 @@ bri_isanim:
     mov ax, [br_iready]
     call far [br_im_r_imgsub]
     mov es, dx
-    mov bp, [bri_rx]
+    call bri_bp16                   ; (64 KB: an animation is under it)
     mov si, [bri_data]
     dec si                          ; its minimum-code byte
     call bri_skipdata
@@ -289,8 +289,7 @@ bri_aplan:
     mov [es:di + A_MST], si         ; (the master's paragraphs, for IE_ASET)
     pop es
     call bri_ascan                  ; [bri_ahas3]
-    mov ax, [bri_rx]
-    call bri_paras                  ; the file's
+    call bri_rxpar                  ; the file's
     add ax, si                      ; the master's
     cmp byte [bri_ahas3], 0
     je .ns
@@ -328,7 +327,7 @@ bri_ascan:
     mov ax, [br_iready]
     call far [br_im_r_imgsub]
     mov es, dx
-    mov bp, [bri_rx]
+    call bri_bp16                   ; (64 KB: an animation is under it)
     mov ax, [bri_trans]
     push ax
     call bri_hstart                 ; SI = the blocks before frame 0
@@ -466,7 +465,7 @@ bri_aset:
     call bri_arp
     push es                         ; the file's global table, and the
     mov es, [bri_stgs]              ; header's loop and frame 0's GCE
-    mov bp, [bri_rx]
+    call bri_bp16                   ; (64 KB: an animation is under it)
     xor ax, ax
     xor cx, cx
     mov bl, [es:10]
@@ -556,6 +555,7 @@ bri_aload:
     mov [bri_stgs], dx
     mov ax, [es:si + A_FLEN]
     mov [bri_rx], ax
+    mov word [bri_rxh], 0           ; an animation is under BR_IFMAX
     mov dx, [br_istseg]
     mov ax, [es:si + A_MST]
     call far [br_im_r_imgsub]
@@ -665,7 +665,7 @@ bri_arestart:
     mov ax, [es:di + A_T0]
     mov [bri_trans], ax
     mov ax, [es:di + A_I0]
-    mov [bri_fpos], ax
+    call bri_fstart                 ; the cursor and the fill's segment
     mov byte [bri_aident], 1        ; frame 0's indices are the master's
     call bri_adraw
     jc .out
@@ -1192,7 +1192,7 @@ bri_aframe:
 .walk:
     push es
     mov es, [bri_stgs]
-    mov bp, [bri_rx]
+    call bri_bp16                   ; (64 KB: an animation is under it)
 .again:
     call bri_xreset
     call bri_aext
@@ -1269,7 +1269,7 @@ bri_aframe:
     ja .passp
     mov [bri_min], al
     lea ax, [si + 1]
-    mov [bri_fpos], ax
+    call bri_fstart                 ; the cursor and the fill's segment
     call bri_skipdata
     mov [bri_anew], si
     jnc .data
@@ -1430,6 +1430,13 @@ bri_uaframe:
 ; given back, and it is asked again (bri_ustore's order); none left, the
 ; pictures stay still
 bri_uago:
+    mov al, [cs:bri_pxheld]         ; EVERY PICTURE IS IN: the decoder part
+    or al, al                       ; held for the next one goes, or a page
+    jz .nopx                        ; that animates keeps it the page's life -
+    call far [br_im_r_pxdrop]       ; the claim part 0 (a submit, a download)
+    mov es, [cs:PXP_SELF]           ; and the next page's arenas need (SPEC.md
+    mov byte [es:bri_pxheld], 0     ; 71.30, 50)
+.nopx:
     mov ax, [br_iready]
     add ax, BRI_LZWPAR
     jc .drop
@@ -1438,8 +1445,10 @@ bri_uago:
 .drop:
     call bri_adrop                  ; CF=1 none left
     jc bri_uaend
-    mov word [bri_rx], 0            ; no stage: compact must not move the
-    mov ax, [br_ibase]              ; last file staged
+    xor ax, ax
+    mov [bri_rx], ax                ; no stage: compact must not move the
+    mov [bri_rxh], ax               ; last file staged, nor a still's 64 KB+
+    mov ax, [br_ibase]
     call bri_compact                ; its block given back
     jmp bri_uago
 .go:
@@ -1454,7 +1463,9 @@ bri_uago:
 bri_uaend:
     call bri_adrop
     jnc bri_uaend
-    mov word [bri_rx], 0            ; no stage (bri_aload left a block's)
+    xor ax, ax
+    mov [bri_rx], ax                ; no stage (bri_aload left a block's)
+    mov [bri_rxh], ax               ; (and a still's high word: 1.8)
     mov ax, [br_ibase]
     call bri_compact
     call bri_ushrink

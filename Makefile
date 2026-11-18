@@ -3973,7 +3973,15 @@ COREAPPSARGS := $(addprefix APPS:,$(CORE_TOOLS)) \
 # rest"). ...AND CDRACK (11 clusters), after main's tree of 2026-11-11 put
 # the disk back at 708 of 713: a CD-ROM drive is an AT's, whose 1.44MB
 # system disk keeps it, and more720.img carries it here
-SYS720OMIT := $(BUILD)/redline.o88 $(BUILD)/telnet.o88 $(BUILD)/cdrack.o88
+# ...AND THE BROWSER (2026-11-14, the owner's decision): 1.8's colours, fonts,
+# tables and 192 KB pictures took it to 109 clusters and this disk to 6 KB
+# free, under t_sysfree's floor of ten. No primary 720KB disk carries it:
+# apps720.img left it off on 2026-11-11 and more720.img has 62 clusters
+# spare, so SYS720MORE keeps it off that one too. The Wire fetches it, and
+# every other geometry's disks carry it
+SYS720OMIT := $(BUILD)/redline.o88 $(BUILD)/telnet.o88 $(BUILD)/cdrack.o88 \
+              $(BUILD)/browser.o88
+SYS720MORE := $(filter-out $(BUILD)/browser.o88,$(SYS720OMIT))
 COREAPPS720 := $(filter-out $(SYS720OMIT),$(COREAPPS))
 COREAPPSARGS720 := $(filter-out $(addprefix APPS:,$(SYS720OMIT)),$(COREAPPSARGS))
 
@@ -7694,7 +7702,8 @@ $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py $(PKGZSTAMP)
 # A third-party file is the only one that cannot share a misreading with the
 # decoder, so run it with them if you have them - and revert the .inc after.
 $(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
-                      apps/os88img.inc apps/os88api.inc | $(BUILD)
+                      apps/os88img.inc apps/os88rgb.inc apps/os88api.inc \
+                      | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/imgtest/ -o $@ apps/imgtest/imgtest.asm
 	@echo "imgtest: $(call FILESIZE,$@) bytes"
 
@@ -7816,7 +7825,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/browser/brdocmarks.inc \
                       apps/browser/brdownload_paint.inc \
                       apps/browser/brcopyselection.inc \
-                      apps/browser/brimage.inc apps/browser/brimage_const.inc \
+                      apps/browser/brimage.inc apps/browser/brimage_const.inc apps/browser/brcolor.inc apps/browser/brcolor_const.inc apps/browser/brfont.inc apps/browser/brfont_const.inc apps/browser/brtabres.inc apps/browser/bropts.inc \
                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                       apps/os88data.inc \
                       apps/os88api.inc \
@@ -8944,7 +8953,7 @@ $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 
 # The primary's CONSTANTS the rarely used UI (apps/browser/brcold.inc, SPEC.md
 # 71.24) reads: a part is assembled alone, and these are the primary's equs
-BRCOLDK := BN_ERR BR_ACTMAX BR_BMCOUNT BR_BMHEADER BR_BMMAX BR_BMREC \
+BRCOLDK := BN_ERR BN_DONE OPT_N br_saved FLD_SCAN FLD_FIRST FLD_W BR_IDMAX BR_ACTMAX BR_BMCOUNT BR_BMHEADER BR_BMMAX BR_BMREC \
            BR_BMRECSZ BR_BMTITLE BR_BMURL BR_BMURLBASE BR_CTXGAP BR_CTXH \
            BR_CTXH_COPY BR_CTXH_LINK BR_CTXPAD BR_HIDMAX BR_SUBSZ BR_URLBM \
            FLD_FORM FLD_LEN FLD_NAME FLD_OFS FLD_TYPE FLD_VALUE SUB_AEND SUB_ASTART
@@ -8985,7 +8994,7 @@ $(BUILD)/browser.part.bin: $(BUILD)/browser.bin $(BUILD)/brdownload_part_symbols
 # PART 1, the images (SPEC.md 71.26): the engine, the GIF reader on the shared
 # LZW, and PiXEL's plan search and threshold assembled from PiXEL's own source
 # (apps/pixel/pxplan1.inc, pxt1.inc, pxbayer.inc) - shared, never copied
-BRIMGK := BR_CHUNK BR_IMGRMAX BR_CELL
+BRIMGK := BR_CHUNK BR_IMGRMAX BR_CELL OPT_ANIM OPT_CACHE
 $(BUILD)/brimage_part_symbols.inc: $(BUILD)/browser.bin \
                            apps/browser/brimage_part.asm \
                            apps/browser/brimage_anim.inc \
@@ -9047,11 +9056,31 @@ $(BUILD)/brxbm.bin: apps/browser/brxbm.asm $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
 	$(NASM) -f bin -w+error -I $(BUILD)/brpx/ -I apps/ \
 	        -I apps/pixel/ -o $@ apps/browser/brxbm.asm
 
+# PART 7, the 1.8 renderer's on-demand half (SPEC.md 71.34, 71.35): colours,
+# fonts and the table composer, ONE part so ONE heap claim - with the table
+# body's every br_* imported from browser.map
+BRTBLK := BR_TCOLS BR_TFLRMAX COL_BGDEF COL_FGDEF LN_END LN_FL LN_OFS LN_X
+$(BUILD)/brtable_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brext_part.asm \
+                           apps/browser/brtable.inc tools/brdlsyms.py | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brext_part.asm apps/browser/brtable.inc \
+	        --also $(BRTBLK) -o $@
+
+$(BUILD)/brcolor.bin: apps/browser/brext_part.asm \
+                      apps/browser/brcolor_body.inc apps/browser/brfont_body.inc \
+                      apps/browser/brtable.inc $(BUILD)/brtable_part_symbols.inc \
+                      apps/browser/brcolor_const.inc apps/browser/brfont_const.inc \
+                      apps/browser/brdocmarks.inc apps/os88rgb.inc \
+                      apps/os88type.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I $(BUILD)/ -o $@ \
+	        apps/browser/brext_part.asm
+
 $(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
                       $(BUILD)/browser.imgpart.bin \
                       $(BUILD)/brpxpng.bin $(BUILD)/brpxjpeg.bin \
                       $(BUILD)/brpxextra.bin $(BUILD)/brpxsimp.bin \
-                      $(BUILD)/brxbm.bin \
+                      $(BUILD)/brxbm.bin $(BUILD)/brcolor.bin \
                       tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $(BUILD)/browser.bin -o $@ \
 	        --part $(BUILD)/browser.part.bin \
@@ -9060,7 +9089,8 @@ $(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
 	        --part $(BUILD)/brpxjpeg.bin \
 	        --part $(BUILD)/brpxextra.bin \
 	        --part $(BUILD)/brpxsimp.bin \
-	        --part $(BUILD)/brxbm.bin --part-compress lz4
+	        --part $(BUILD)/brxbm.bin \
+	        --part $(BUILD)/brcolor.bin --part-compress lz4
 
 # ...and the REFERENCE build, which letters every history row where the
 # shipped one scrolls the band (SPEC.md 65.4.1). It is the A/B for that
@@ -13942,7 +13972,7 @@ SCRIBESRC := apps/scribe/scribe.asm apps/scribe/scdoc.inc apps/scribe/scrtf.inc 
 # operation - word.o88's rule above says what a rule per half cost.
 $(BUILD)/scribe.bin: $(SCRIBESRC) apps/scribe/scicon.inc apps/os88api.inc \
                      apps/os88ui.inc apps/os88type.inc apps/os88img.inc \
-                     apps/os88dec.inc $(SBSTAMP) | $(BUILD)
+                     apps/os88rgb.inc apps/os88dec.inc $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) $(PKGSBDEF) -I apps/ -I apps/scribe/ \
 		-o $@ apps/scribe/scribe.asm
 	@echo "scribe: $(call FILESIZE,$@) bytes"
@@ -15561,8 +15591,12 @@ $(BUILD)/br16c-check360.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA $(BRFILES)
 
-$(BUILD)/brtest360.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES)
+# ...with the Times face in SYSTEM/FONTS on the BROWSER's own volume, where
+# ty_gofonts looks when the 360KB system disk has none (24.3.1.5): the face
+# tests/brfont.py sets <h2> in (SPEC.md 71.35)
+$(BUILD)/brtest360.img: $(BRFILES) $(BUILD)/faces/times.f88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES) \
+	        SYSTEM/FONTS:$(BUILD)/faces/times.f88
 
 # Browser memory gate: put Note Pad at the top of its test-only disk listing so
 # QEMU can launch the second app without depending on a blind scrollbar walk.
@@ -18397,11 +18431,9 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # wave 3 left media360.img (SPEC.md 123.13's 360 KB note, 2026-10-27).
 # ...AND THE BROWSER'S SECOND COPY IS NOT ON IT (SPEC.md 24.6.1's rule, the
 # owner's decision of 2026-11-11): its PNG and JPEG parts (71.30) are 25 KB
-# and put this disk 20 clusters over. The 720KB system disk carries it, as a
-# core package (24.3), so every 720KB machine has it from the disk it boots.
-# BROWSER.HTM stays in MEDIA/ here (3 clusters): the system disk carries the
-# program and not its manual (SPEC.md 71.12), so the page rides the disk in
-# B: beside the other documents rather than on no 720KB disk at all.
+# and put this disk 20 clusters over. The 720KB system disk carried it until
+# 2026-11-14, when 1.8 took it past that disk's room too (SYS720OMIT): no
+# primary 720KB disk carries it now, and The Wire fetches it.
 APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
              $(BUILD)/browser.o88 \
              $(RDG_SHIP) $(RDG_DEMO) $(WA_SHIP),$(APPS))
@@ -18592,9 +18624,9 @@ $(APPSIMG720): $(APPS720) tools/os88disk.py
 # to change - 24.6.1's rule, a decision with a date on it.
 MORE720_SONGS := $(filter-out $(MIDISONGS720),$(MIDISONGS))
 MORE720 := $(BUILD)/pixel.o88 $(BUILD)/midirack.o88 $(RDG_SHIP) $(DM_SHIP) $(WA_SHIP) $(RDG_DEMO) $(LOGOVID) \
-           $(MORE720_SONGS) $(PX_SAMPLES_360) $(SYS720OMIT)
+           $(MORE720_SONGS) $(PX_SAMPLES_360) $(SYS720MORE)
 MOREARGS720 := APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/midirack.o88 \
-               $(addprefix APPS:,$(SYS720OMIT)) \
+               $(addprefix APPS:,$(SYS720MORE)) \
                $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP) $(WA_SHIP)) \
                MEDIA:$(RDG_DEMO) $(LOGOVIDARG) \
                $(addprefix MEDIA/MIDI:,$(MORE720_SONGS)) \

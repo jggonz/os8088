@@ -1001,7 +1001,9 @@ DRV_CFG_MAPN equ 8
                                 ; rung with 49 in it) on a setting that is
                                 ; reached from the Theme page and belongs to
                                 ; the same question: what the machine spends
-                                ; on looking like itself
+                                ; on looking like itself.
+                                ; apps/browser/brcolor_body.inc parses this
+                                ; record too: a ver bump changes it there
 %ifdef DOCK_OPT
     dw 'DK'                     ; DocK - its edge and Auto-hide (SPEC.md 30.5).
     db 1, 1, CFG_DOCK           ; A key of its own rather than a byte on 'TH':

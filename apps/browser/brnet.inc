@@ -147,7 +147,16 @@ br_promise:
     jb .say                         ; BN_IDLE - nothing fetched yet, so still
     cmp byte [br_nstate], BN_DONE
     jb .say                         ; BN_OPEN..BN_BODY: AL stays 0
-    inc ax                          ; BN_DONE / BN_ERR: the page has settled
+    cmp [br_ie], al                 ; ...AND IT STILL DRAWS AFTER THAT (1.8):
+    jne .say                        ; pictures (IE_OFF is AL's 0), an
+    cmp [br_ipend], al              ; animation, a part that lays the page out
+    jne .say                        ; again. A promise over any of them let a
+    mov ah, 1                       ; raise put back pixels from before it - a
+    cmp [br_cwant], ah              ; window dragged off the Browser left
+    je .say                         ; itself behind, the page under it
+    cmp [br_fwant], ah              ; without its colours
+    je .say
+    mov al, 1                       ; BN_DONE / BN_ERR: the page has settled
                                     ; (it is two colours for good: br_cls is
                                     ; born WF_1BPP, SPEC.md 11.96.17)
 .say:
@@ -166,6 +175,7 @@ br_go:
     push dx
     push si
     push di
+    call br_imgnav                  ; a click's pictures last one load (71.36)
     mov byte [br_icnav], 0          ; trusted, unless Reload or the bar says
     mov al, [br_nstate]             ; **A FETCH IN FLIGHT IS DROPPED, NOT A
     cmp al, BN_OPEN                 ; REASON TO REFUSE.** It used to answer
@@ -293,28 +303,13 @@ br_go:
                                     ; a file load and nothing cleared on this
                                     ; path, so one truncated page would have
                                     ; reported every page after it as cut
-    mov [br_hcol], ax               ; per-fetch header state
-    mov [br_hstate], al
-    mov byte [br_lstate], 0
+    call br_hreset                  ; per-fetch header state
     mov byte [br_ckstate], 0       ; a header token never crosses responses
     mov byte [br_ckattrstate], 0
     mov word [br_cklen], 0
     mov byte [br_ckbuf], 0
     mov word [br_ckattrlen], 0
     mov byte [br_ckpathbuf], 0
-    mov byte [br_ctstate], 0
-    mov byte [br_ctpos], 0
-    mov byte [br_ctlen], 0
-    mov byte [br_ctseen], 0
-    mov byte [br_clpos], 0          ; Content-Length unknown until it is read
-    mov byte [br_clstate], 0
-    mov byte [br_nonhtml], 0
-    mov byte [br_cttype], 0
-    mov byte [br_ctparamstate], 0
-    mov byte [br_httpcharsetseen], 0
-    mov byte [br_http_utf8], 0
-    mov word [br_redirlen], 0
-    mov byte [br_redirurl], 0
     mov byte [br_redirs], 0
                                     ; [br_hcol] only ever counts up, so it sat
                                     ; at 12 after the first reply's status line
@@ -878,22 +873,7 @@ br_nstep:
     mov word [br_nlen_hi], 0
     mov word [br_code], 0
     mov byte [br_trunc], 0
-    mov word [br_hcol], 0
-    mov byte [br_hstate], 0
-    mov byte [br_lstate], 0
-    mov byte [br_ctstate], 0
-    mov byte [br_ctpos], 0
-    mov byte [br_ctlen], 0
-    mov byte [br_ctseen], 0
-    mov byte [br_clpos], 0          ; Content-Length unknown until it is read
-    mov byte [br_clstate], 0
-    mov byte [br_nonhtml], 0
-    mov byte [br_cttype], 0
-    mov byte [br_ctparamstate], 0
-    mov byte [br_httpcharsetseen], 0
-    mov byte [br_http_utf8], 0
-    mov word [br_redirlen], 0
-    mov byte [br_redirurl], 0
+    call br_hreset
     mov byte [br_cdstate], 0        ; the target's own filename=, if any
     mov byte [br_nstate], BN_OPEN   ; ...and the source claim stands at its
 .redirunlock:                       ; ceiling for the target
@@ -969,7 +949,10 @@ br_abort:
     mov [br_nstate], al             ; BN_IDLE
     mov [br_nmsg], ax
     pop ax
-    ret
+    jmp br_tkick                    ; THE PAGE STANDS STILL NOW: a part a
+                                    ; layout wanted while the dropped fetch
+                                    ; was in flight is br_fnwake's to fetch,
+                                    ; and no worker will post the wake (1.8)
 
 ; --- br_gchk - CF=1 if br_go started another fetch under this worker pass ----
 ; Preserves every register INCLUDING AX, which .open needs: the handle it is
@@ -1468,11 +1451,7 @@ br_clbyte:
     je .out                         ; this line is another field
     xor bh, bh
     mov ah, al
-    cmp ah, 'A'
-    jb .cmp
-    cmp ah, 'Z'
-    ja .cmp
-    or ah, 20h
+    call br_lcah
 .cmp:
     cmp ah, [br_s_clen + bx]
     jne .miss
@@ -1929,11 +1908,7 @@ br_cookiebyte:
     je .out
     cmp al, 9
     je .out
-    cmp al, 'A'
-    jb .seeklower
-    cmp al, 'Z'
-    ja .seeklower
-    or al, 0x20
+    call br_lcal
 .seeklower:
     cmp al, 'p'
     jne .out
@@ -1959,11 +1934,7 @@ br_cookiebyte:
     jne .keybad
     jmp .pathsep
 .keycmp:
-    cmp al, 'A'
-    jb .keylower
-    cmp al, 'Z'
-    ja .keylower
-    or al, 0x20
+    call br_lcal
 .keylower:
     cmp al, cl
     jne .keybad
@@ -2117,6 +2088,8 @@ br_cookiefinish:
     rep movsb
     mov byte [di], 0
 .pathsaved:
+    test word [br_opts], OPT_COOKIE ; Options > Cookies off: not kept (71.36)
+    jz .reset
     mov byte [br_cookievalid], 1
 .reset:
     mov byte [br_ckstate], 0
@@ -2141,8 +2114,11 @@ br_reqcookie:
     push dx
     push si
     push di                           ; request cursor, while DI compares hosts
+    test word [br_opts], OPT_COOKIE   ; Options > Cookies off: none sent
+    jz .nock
     cmp byte [br_cookievalid], 0
     jne .check
+.nock:
     pop di
     jmp short .return
 .check:
@@ -2151,17 +2127,9 @@ br_reqcookie:
 .host:
     mov al, [si]
     mov ah, [di]
-    cmp al, 'A'
-    jb .hostcase
-    cmp al, 'Z'
-    ja .hostcase
-    or al, 0x20
+    call br_lcal
 .hostcase:
-    cmp ah, 'A'
-    jb .compare
-    cmp ah, 'Z'
-    ja .compare
-    or ah, 0x20
+    call br_lcah
 .compare:
     cmp al, ah
     jne .no
@@ -2443,6 +2411,9 @@ br_finish:
                                     ; below
     call br_paint_band
     call br_sbar
+    call br_ldraw                   ; ...the address bar, which a W_PAINT
+                                    ; during the layout (.busy: the ground
+                                    ; alone) left white (1.8)
     call br_toolbar                 ; ...AND THE STRIP, not just br_status: a
                                     ; fetch that completes is the one moment
                                     ; Back and Forward change what they are
@@ -2639,6 +2610,7 @@ br_framefetch:
     jne .tableopen
     mov al, D_TAB1
     call br_put
+    call br_tbfake                  ; counted as a table (71.34.5)
     mov byte [br_factive], 1
 .tableopen:
     test ah, 1
@@ -2648,6 +2620,7 @@ br_framefetch:
 .cell:
     mov al, D_CELL
     call br_put
+    call br_fcellw                  ; its cols width (71.34.5)
     jmp .markers
 .fullwidth:
     cmp byte [br_factive], 0
@@ -2674,22 +2647,7 @@ br_framefetch:
     mov byte [br_on], 0
     mov word [br_code], 0
     mov byte [br_trunc], 0
-    mov word [br_hcol], 0
-    mov byte [br_hstate], 0
-    mov byte [br_lstate], 0
-    mov byte [br_ctstate], 0
-    mov byte [br_ctpos], 0
-    mov byte [br_ctlen], 0
-    mov byte [br_ctseen], 0
-    mov byte [br_clpos], 0          ; Content-Length unknown until it is read
-    mov byte [br_clstate], 0
-    mov byte [br_nonhtml], 0
-    mov byte [br_cttype], 0
-    mov byte [br_ctparamstate], 0
-    mov byte [br_httpcharsetseen], 0
-    mov byte [br_http_utf8], 0
-    mov word [br_redirlen], 0
-    mov byte [br_redirurl], 0
+    call br_hreset
     mov byte [br_redirs], 0
     inc byte [br_frameidx]
     mov byte [br_nstate], BN_OPEN
@@ -2734,6 +2692,7 @@ br_frameclose:
     call br_put
     mov byte [br_factive], 0
 .end:
+    call br_fltend                  ; an open float closes with the page
     mov al, D_END
     call br_put
     call br_flushbuf
@@ -2872,9 +2831,9 @@ br_status:
 br_s_get:    db 'GET ', 0
 br_r_post:   db 'POST ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.7', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.8', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
-br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.7', 13, 10
+br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.8', 13, 10
                db 'Connection: close', 13, 10
                db 'Content-Type: application/x-www-form-urlencoded', 13, 10
                db 'Content-Length: ', 0
@@ -2919,3 +2878,32 @@ br_s_redirbad: db 'Redirect failed', 0
 br_s_framebad: db 'Frame URL invalid', 0
 br_s_linklim: db 'Links limited', 0
 br_s_nomem:  db 'Not enough memory', 0
+
+; --- br_hreset - a response's header state, before its first byte: the
+; status line's column and state, the line state, Content-Type's and
+; Content-Length's recognisers, the charset, and no redirect yet. One copy
+; for a fetch, a redirect and a frame (it was three, kept in step by hand).
+; All kept
+br_hreset:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    xor ax, ax
+    mov [br_hcol], ax
+    mov [br_redirlen], ax
+    mov [br_clpos], ax              ; ...and br_clstate beside it
+    mov [br_hstate], al
+    mov [br_lstate], al
+    mov [br_redirurl], al
+    mov di, br_ctstate              ; br_ctstate .. br_http_utf8 are one run
+    mov cx, br_http_utf8 + 1 - br_ctstate
+    cld
+    rep stosb
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret

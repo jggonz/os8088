@@ -2,7 +2,7 @@
 ; Browser 1.7 images (SPEC.md 71.26): what the primary and part 1 both read.
 ; =============================================================================
 
-BR_IMGTMAX  equ 32                  ; image table entries: INDEX 0..31
+BR_IMGTMAX  equ 64                  ; image table entries: INDEX 0..63 (1.8: was 32)
 BR_ITSZ     equ 16                  ; bytes an entry
 
 IT_ST       equ 0                   ; byte: IS_*
@@ -54,7 +54,9 @@ IE_ANIM     equ 16                  ; worker: the frames, when due
 IE_AFRAME   equ 17                  ; UI: a frame drawn
 IE_AGO      equ 18                  ; UI: the LZW table, then IE_ANIM
 
-BR_IFMAX    equ 60000               ; a GIF staged whole, at most
+BR_IFMAX    equ 60000               ; an ANIMATED GIF staged whole, at most
+BR_IFMAXH   equ 3                   ; any other picture: under 3 x 64 KB, the
+                                    ; staged length's high word (1.8)
 BR_ISCR     equ 23040               ; LZW table (18 KB) and the decode scratch
 BR_IRMAX    equ 65520               ; a ready copy, at most
 BR_IHOSTMAX equ 64                  ; an image's host, as br_host
@@ -143,7 +145,10 @@ bri_acur    equ br_iwork + 206      ; byte: the record in hand
 bri_xdisp   equ br_iwork + 207      ; byte: the GCE's disposal
 bri_xdelay  equ br_iwork + 208      ; word: ...its delay, hundredths
 bri_xloop   equ br_iwork + 210      ; word: NETSCAPE2.0's count, FFFFh none
-bri_amask   equ br_iwork + 212      ; dword: images found animated
+bri_preq    equ br_iwork + 212      ; word: a progressive draw asked of the
+                                    ; UI task: k + 1, the generation high
+bri_pon     equ br_iwork + 214      ; byte: the UI task made image k READY
+                                    ; for that draw (+215 spare)
 bri_atab    equ br_iwork + 216      ; word: the frame's table in the file
 bri_atabn   equ br_iwork + 218      ; word: ...its entries
 bri_amseg   equ br_iwork + 220      ; word: the master's segment
@@ -169,7 +174,13 @@ bri_bi      equ br_iwork + 253      ; byte: ...the best entry so far
 bri_best    equ br_iwork + 254      ; dword: ...and its distance
 bri_lsy     equ br_iwork + 258      ; word: the master row in bri_rowbuf
 bri_at0     equ br_iwork + 260      ; word: frame 0's key, FFFFh none
-BR_IWORK    equ 262
+bri_amask   equ br_iwork + 262      ; BR_IMGTMAX / 8: images found animated
+bri_rxh     equ bri_amask + BR_IMGTMAX / 8 ; word: bri_rx's high word (1.8)
+bri_clenh   equ bri_rxh + 2         ; word: bri_clen's
+bri_fseg    equ bri_clenh + 2       ; word: bri_fill's segment, rebased
+bri_fbase   equ bri_fseg + 2        ; dword: ...the bytes rebased past
+bri_pgc     equ bri_fbase + 4       ; word: rows since the last progressive draw
+BR_IWORK    equ 262 + BR_IMGTMAX / 8 + 12
 
 ; an animation's record in part 1 (SPEC.md 71.29), BRI_AMAX of them
 BRI_AMAX    equ 4

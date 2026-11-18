@@ -95,8 +95,44 @@ def image_rows(m, win):
         raw = m.readseg(pseg, image + off, 2)
         return raw[0] | (raw[1] << 8)
 
-    os88marty.until(m, lambda _m: word(38) > 0, "the image page's layout",
-                    limit=60)
+    # The layout is laid out AGAIN as each picture's size arrives, so the
+    # first nonzero count can be an early one: wait for it to hold still
+    seen = [0, 0]
+    # ...AND NO PART IS STILL OWED (1.8): a layout that met a table, a colour
+    # or a tall heading laid it out inline and wants part 7 or 8, which the UI
+    # task reads off the floppy - seconds of a 4.77MHz machine, during which
+    # the count holds perfectly still at the INLINE answer. Five equal reads
+    # are microseconds of guest time on the guest-clock harness
+    owed = [bss_offset(n, image) for n in ("br_tbw", "br_cwant", "br_fwant")]
+    # A flag of 2 is ASKED, not answered: br_fnwake sets it BEFORE the
+    # synchronous read, so it is owed until the part's binding is in. 2 with
+    # no binding is a refusal's resting state too, so one that outlasts any
+    # floppy read is reported rather than waited out (br_tbok is a byte)
+    bound = [(bss_offset("br_fwant", image), bss_offset("br_fnseg", image),
+              0xFFFF),
+             (bss_offset("br_tbw", image), bss_offset("br_tbok", image), 0xFF)]
+    asked = [None, False]           # cycles the unbound ask was first seen
+
+    def held(_m):
+        n = word(38)
+        if any(word(o) & 0xFF == 1 for o in owed):
+            n = 0
+        elif any(word(f) & 0xFF == 2 and not word(b) & k for f, b, k in bound):
+            n, c = 0, int(_m.status().get("cycles", 0))
+            asked[0] = c if asked[0] is None else asked[0]
+            if (c - asked[0]) / os88marty.GUEST_HZ > 20:
+                asked[1] = True
+                return True
+        else:
+            asked[0] = None
+        seen[1] = seen[1] + 1 if n and n == seen[0] else 0
+        seen[0] = n
+        return seen[1] >= 5
+    os88marty.until(m, held, "the image page's layout to hold still",
+                    limit=90)
+    if asked[1]:
+        return ["part 7 refused: a font or table ask still had no binding "
+                "after 20 guest seconds"]
     cols, nlines = word(10), word(38)
     lseg = word(bss_offset("br_lseg", image))
     raw = m.readseg(lseg, 0, nlines * LN_SIZE)
@@ -105,13 +141,19 @@ def image_rows(m, win):
         r = raw[i * LN_SIZE:(i + 1) * LN_SIZE]
         recs.append((int.from_bytes(r[0:4], "little"),
                      int.from_bytes(r[4:8], "little"), r[8], r[9]))
+    if os.environ.get("BRIMDUMP"):
+        for i, (ofs, end, x, fl) in enumerate(recs):
+            say("  ln %2d ofs %5d end %5d x %3d fl %02x" % (i, ofs, end, x, fl))
     irows = 0
     for i, (ofs, end, x, fl) in enumerate(recs):
         if not fl & LNF_IROW:
             continue
-        irows += 1
         d = x - 256 if x >= 128 else x
         t = i + d
+        if 0 <= t < nlines and recs[t][2] & 0x80 and d == -1:
+            continue    # a TALL line's second row (SPEC.md 71.35), with Fonts
+                        # on: a heading's, not a picture's, and htmsim has none
+        irows += 1
         if fl != LNF_IROW or d == 0 or not 0 <= t < nlines:
             fails.append("line %d: a continuation row naming line %d" % (i, t))
             continue

@@ -24,7 +24,10 @@ bri_pxsniff:
     mov ax, [br_iready]
     call far [br_im_r_imgsub]
     mov es, dx
-    mov cx, [bri_rx]
+    push ax
+    call bri_rx16
+    mov cx, ax
+    pop ax
     cmp cx, 8
     jb .ext
     mov ax, BRK_PNG | (PXF_PNG << 8)
@@ -147,10 +150,16 @@ bri_pxsniff:
     mov al, BRK_XBM
     cmp ah, BRX_XBM
     je .yes
+.no:
     pop es
     stc
     ret
 .yes:
+    cmp al, BRK_JPEG                ; a PNG or a JPEG reads the file through
+    ja .kind                        ; K_NEXT, one window of 64 KB: past it,
+    cmp word [bri_rxh], 0           ; refused, not cut short (71.34.7)
+    jne .no
+.kind:
     mov es, [cs:PXP_SELF]
     mov [es:bri_kind], al
     mov [es:bri_fmt], ah
@@ -316,13 +325,15 @@ bri_pxprep:
     mov [es:px_k + PXK_HSEG], dx
     mov [es:px_flatseg], dx
     mov [es:px_hseg], dx
-    mov ax, [bri_rx]
+    call bri_rx16                   ; the header's window: 64 KB at most
     mov [es:px_k + PXK_HLEN], ax
     mov [es:px_hlen], ax
     mov [es:px_cur + PXR_FSIZE], ax ; (a PCX's tail is found from it)
     mov [es:px_k + PXK_FSZ], ax
+    mov ax, [bri_rx]                ; ...the flat file whole, 32 bits (1.8)
     mov [es:px_flatlen], ax
-    mov word [es:px_flatlen + 2], 0
+    mov ax, [bri_rxh]
+    mov [es:px_flatlen + 2], ax
     mov byte [es:px_rflat], 1
     mov word [es:px_hcap], 2048
     mov word [es:px_clsz], 512
@@ -430,8 +441,8 @@ bri_pxprep:
     mov cl, 4
     shr ax, cl
     mov [es:bri_pxrp], ax
-    mov ax, [bri_rx]                ; the store: the file, the scratch, the
-    call bri_paras                  ; row buffer and the copy
+    call bri_rxpar                  ; the store: the file, the scratch, the
+                                    ; row buffer and the copy
     add ax, [cs:bri_pxdp]
     jc .none
     add ax, [cs:bri_pxrp]
@@ -473,8 +484,7 @@ bri_pxdec:
     call far [br_im_r_imgsub]
     mov [bri_stgs], dx              ; the file
     mov bx, ax
-    mov ax, [bri_rx]
-    call bri_paras
+    call bri_rxpar
     add ax, bx
     mov dx, [br_istseg]
     call far [br_im_r_imgsub]
@@ -506,7 +516,7 @@ bri_pxdec:
     mov [es:px_rbase + 2], ax
     mov [es:px_sbase], ax
     mov [es:px_sbase + 2], ax
-    mov ax, [bri_rx]
+    call bri_rx16
     mov [es:px_rend], ax
     mov dx, [br_istseg]
     mov ax, [bri_newp]
@@ -575,7 +585,10 @@ bri_sv_next:
     pop ax
     mov es, [bri_stgs]
     xor si, si
-    mov cx, [bri_rx]
+    push ax
+    call bri_rx16
+    mov cx, ax
+    pop ax
     pop ds
     clc
     retf
