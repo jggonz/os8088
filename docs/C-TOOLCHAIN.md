@@ -750,6 +750,80 @@ in your shim). Adding one of the rest is a dozen lines in `os88thunk.asm`.
 
 ---
 
+## Game kit
+
+A game or a styled application does not have to draw its 3D chrome by hand.
+The **game kit** (SPEC.md 132) is shared assembly over Breadboard XT's band
+drawing core (SPEC.md 130.6.2): bevelled boxes, panels with title bars,
+buttons in six states, key caps, tabs, check boxes, radio buttons, drop-down
+fields, banners, arrows, dithered drop shadows and sprites with silhouette
+shadows, every colour from a ROLE table with a black-and-white twin, plus
+SCENES - a screen's static decoration stored as data in your art part. Its C
+contract is `apps/cc/gk.h`; the music half (`gkm_*`) is SPEC.md 132.8.
+
+**Include it** in the shim after the core, and `#include "gk.h"` in the C:
+
+```nasm
+%define BX_CORE_ONLY
+%include "breadxt/draw.inc"     ; the band core: bx_setup, bx_new, bx_out ...
+%include "cc/gk.inc"            ; the drawing kit (needs the core)
+```
+
+Call `bx_setup` and then `gk_init(bpp)` once. Every `gk_` drawing call is
+legal only between `bx_new` and `bx_out`: a paint is strips, and each strip
+draws the WHOLE face again, clipped to its rows by the core, so nothing is
+written to the glass twice and a widget never needs to know where the strip
+is.
+
+```c
+static void face(int x, int y)          /* called once per strip */
+{
+    int top;
+    top = gk_panel(x, y, 296, 120, 18, "PLAYER ROSTER", F_TEXT13, GK_RAISED | GK_SHADOW);
+    gk_check(x + 10, top + 6, 14, ready, 0);
+    gk_drop(x + 140, top + 4, 140, 22, "This PC", F_TEXT13);
+    gk_button(x + 10, y + 90, 96, 22, "[S] Start", F_TEXT13, GK_B_FOCUS);
+}
+```
+
+**Scenes** move a panel's static layout out of your segment. Write it as
+text, one call per line, positional arguments in `gk.h` order:
+
+```text
+fonth F_TEXT13 13
+scene S_LANDING 288 128
+  panel 0 0 284 124 18 "YOU LANDED ON $0" F_TEXT13 raised|shadow
+  textbox 64 44 112 16 "$1 cr" @TEXT F_TEXT13 right
+  button 64 88 96 22 "[B] Buy" F_TEXT13 %0 #1
+  if %2 banner 6 76 46 16 "YOU" F_TEXT10 -1
+end
+```
+
+and your art tool compiles it with `tools/os88gk.py`'s
+`compile_scenes(paths, symbols)` into a record of the part. Then one call
+draws it, `$n` from a string array and `%n` from an int array, and the
+button's hit rect comes from the same record:
+
+```c
+static const char *sv[2];
+static int iv[3], r[4];
+sv[0] = name; sv[1] = price; iv[0] = GK_B_FOCUS; iv[2] = my_turn;
+gk_scene(S_LANDING, x, y, sv, iv);
+if (gk_scene_rect(S_LANDING, 1, r) && hit(mx - x, my - y, r)) buy();
+```
+
+`python3 tools/os88gk.py dump scenes.txt --sym art.h` prints what compiled.
+
+**What it costs**: 2,589 bytes of your segment and 160 of bss for the
+whole drawing half (SPEC.md 132.9 has it routine by routine) - the price of
+two or three hand-drawn panels in C - and a scene costs its record bytes in
+the art part instead of code and string literals. The kit has no switch
+to leave a widget out: `gk_scene` can call any of them.
+
+**See it**: `make gkdemo` builds `tests/gkdemo/` - every widget, the six
+bevel styles and a compiled scene - onto `build/gkdemo.img` (and
+`gkdemo360.img`). Space scrolls it on a short screen.
+
 ## Worked examples to read
 
 | | |
@@ -757,6 +831,7 @@ in your shim). Adding one of the rest is a dozen lines in `os88thunk.asm`.
 | **`apps/cc/ccsmoke.c`** + `.asm` | the SDK's template. Small and boring on purpose. `make cc-smoke` |
 | **`tests/chello/chello.c`** | the capability gate — the first C program this OS ran. Written to make every part of the round trip visible in a screendump, including a crosshair at the click point, because a swapped x/y still counts up correctly and only the mark can tell you. It also gates `os88_mem_movable()` and draws the claim's live base beside where it came from, for the same reason. `make chello` |
 | **`tests/covl/covl.c`** | the overlay gate — argument offsets across a far call, a call back out of the module, a call inside it. `make covl` |
+| **`tests/gkdemo/gkdemo.c`** | the game kit's gallery (SPEC.md 132): every `gk_` widget drawn through the band core, on colour and 1bpp, and one scene compiled from `scenes.txt`. `make gkdemo` |
 | **`apps/cword/cword.c`** | the application: a word processor, ~9,700 lines across nine files, RTF in and out, in two segments. Read its header comment for the redraw model and the cost table. `make cworddisk` |
 
 `apps/runcpm`, `apps/c64`, `apps/weave` and `apps/loom` are the other C

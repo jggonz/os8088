@@ -255807,9 +255807,10 @@ the core in the same assembly:
     %include "cc/gk.inc"
 
 A package `#include`s `cc/gk.h`. The kit adds no kernel facility, no OSAPI
-slot and no heap claim: its bss is 102 bytes (a 64-byte text buffer, the
-scene interpreter's ten arguments and the current rect), its data 68 bytes
-(the two role tables, the bevel ring table and the scene op table).
+slot and no heap claim: its bss is 160 bytes (a 64-byte text buffer, the
+scene interpreter's ten arguments, the current rect and the widgets'
+scratch), its data 139 bytes (the two role tables, the ring sets, the button
+states and the scene op table). 132.9 gives the code, routine by routine.
 
 Every `gk_` drawing call is legal only while a strip is composed (between
 `bx_new` and `bx_out`) and draws only into the band, clipped by the core to
@@ -255922,11 +255923,11 @@ caller's, and 132.9 gives the ones the WIN16 faces want.
 | `gk_panel(x,y,w,h,bar,title,font,style)` | `gk_box(style, FACE)`; with `bar` > 0 a `gk_titlebar` one pixel inside the rings, `(xi+1, yi+1, wi-2, bar)`, title centred. Answers the first row under the bar, `yi + bar + 2` (`yi`, the inside's top, with no bar) |
 | `gk_titlebar(x,y,w,h,s,font,flags)` | TITLE fill, a TITLELT top row, `s` embossed and cut to fit in TITLETX; `flags` is the alignment, `GK_LEFT` indenting 6 px |
 | `gk_button(...,state)` | `GK_RAISED2 \| GK_ROUND \| GK_SHADOW` (DEFAULT: style 7; PRESSED: style 6, no shadow, label 1 px down-right), label centred and cut to fit in the inside. Faces and labels per state: NORMAL, DEFAULT and PRESSED FACE/TEXT, FOCUS FOCUS/FOCUSTX, HILITE HILITE/HILITETX, DISABLED FACE/DISABLED plus the 1bpp screen door over the inside |
-| `gk_keycap(x,y,w,h,label,font)` | an OUTLINE ring (round), SHADE inside; FACE over the upper-left body `(x+1, y+1 .. x+w-4, y+h-2-s)`, KEY over the top face `(x+2, y+1 .. x+w-5, y+h-3-s)` with `s = max(2, h / 5)` the cap's front: a light left side, a 2 px shaded right side, an `s` px shaded front; label centred on the top face in TEXT |
+| `gk_keycap(x,y,w,h,label,font)` | an OUTLINE ring (round), SHADE inside; FACE over the upper-left body `(x+1, y+1 .. x+w-4, y+h-2-s)`, KEY over the top face `(x+2, y+1 .. x+w-5, y+h-3-s)` with `s = max(2, h / 4)` the cap's front: a light left side, a 2 px shaded right side, an `s` px shaded front; label centred and cut to fit on the top face in TEXT |
 | `gk_tab(...,active)` | a button face without its bottom edge (the box runs 3 px past `y+h` and the strip is cut at `y+h`), no shadow; active: HILITE face, 2 px taller (from `y-2`) |
-| `gk_check(x,y,size,on,tick)` | style 6 over FIELD; on: the art sprite `tick` (when `tick` > 0 and present) centred on the box, else a drawn tick of 2x2 dots in green 2 from `(x+s/5, y+s/2-1)` down-right to the bottom then up-right to `(x+s-3, y+1)`, `s` = size |
+| `gk_check(x,y,size,on,tick)` | style 6 over FIELD; on: the art sprite `tick` (when `tick` > 0 and present) centred on the box, else a drawn tick of 2x2 dots in green 2: `s/2 - 2` of them down-right from `(x+s/4, y+s/2-1)`, then up-right from two rows above the last to `x+s-3`, `s` = size |
 | `gk_radio(x,y,size,on)` | a disc of OUTLINE `size` across, a FIELD disc 2 smaller inside, on: a TEXT disc `size - 6` across; a disc row spans the columns whose centres lie within `size/2` of the disc's centre |
-| `gk_drop(x,y,w,h,label,font)` | `GK_RAISED2 \| GK_ROUND` over FACE; label left with a 3 px indent, cut to `w - h - 4`; a TEXT down-triangle in the `h/2`-square at `(x+w-h+h/4, y+h/4)` |
+| `gk_drop(x,y,w,h,label,font)` | `GK_RAISED2 \| GK_ROUND` over FACE; label left at `x+4`, cut at `x+w-h-4`; a TEXT down-triangle in the `h/2`-square at `(x+w-h+h/4, y+h/4)` |
 | `gk_banner(x,y,w,h,s,font,fill)` | `GK_RAISED \| GK_ROUND` over `fill` (`-1`: HILITE), `s` centred in HILITETX |
 | `gk_arrow(x,y,w,h,dir,colour)` | a solid triangle centred in the box, apex toward `dir`: `n = min(along, (across + 1) / 2)` lines, line k (from the base) `2(n-1-k)+1` px long, so the base is odd and the apex one pixel |
 | `gk_sprshadow(x,y,id,d)` | the sprite's SILHOUETTE as a screen door in DROP at `(x+d, y+d)` (each run of non-transparent pixels on a row one door span), then the sprite. Answers its width, 0 absent |
@@ -256035,4 +256036,53 @@ Reserved for the sound lane.
 
 ### 132.9 Sizes
 
-Reserved for the kit and sound lanes: the measured bytes of every routine.
+The drawing half's bytes, measured from the listing of the core and the kit
+assembled alone: what a package pays once it includes `cc/gk.inc`. Every
+routine is reachable from `gk_scene`'s op table, so none is dead. The sound
+lane's rows (132.8) follow these.
+
+| routines | bytes |
+|---|---|
+| roles: `gk_init`, `gk_theme`, `gk_role`, `gk_rc`, `gk_rc2` | 74 |
+| the current rect and fills: `gk_ld`, `gk_enter`, `gk_setr`, `gk_setxywh`, `gk_setsq`, `gk_inset`, `gk_fill`, `gk_fillro` | 113 |
+| the screen door and shadows: `gk_door` (84), `gk_shad`, `gk_shadow` | 132 |
+| rings and boxes: `gk_ring` (84), `gk_boxr` (68), `gk_box` | 166 |
+| `gk_hline`, `gk_vline` | 50 |
+| text: `gk_tdo` (148), `gk_lab`, `gk_text`, `gk_textbox`, `gk_bxt`, `gk_tail` | 275 |
+| `gk_panel`, `gk_titlebar` | 132 |
+| `gk_button`, `gk_tab` (`gk_btn` 97) | 169 |
+| `gk_keycap` | 71 |
+| `gk_drop` | 67 |
+| `gk_banner` | 31 |
+| `gk_check` and its drawn tick | 176 |
+| `gk_radio` and its discs (`gk_disc` 103) | 157 |
+| `gk_arrow` (`gk_arw` 126) | 149 |
+| `gk_sprshadow` | 225 |
+| `gk_scene` (303) and its literal and header readers | 392 |
+| `gk_scene_size`, `gk_scene_rect` | 71 |
+| **code** | **2,450** |
+| data: role tables 32, ring sets 43, button states 18, op table 42, theme pointers 4 | 139 |
+| **image total** | **2,589** |
+| bss | 160 |
+
+**Per strip.** `gk_scene` reads a skipped op's length, number and two row
+words and compares them with the strip: about 20 instructions, a few hundred
+8088 cycles (estimated from the instruction count, not measured), so a
+40-op scene costs a strip whose rows it misses on the order of 10 ms. An op
+the strip does reach costs its routine's work only inside the strip: every
+fill is clipped by the core, `gk_door` walks only the strip's rows, and
+`gk_sprshadow` skips the sprite rows outside it before reading them.
+
+**Metrics for callers** (the WIN16 faces: `dlg13` 13 rows, `dlg10` 10,
+`dlg08` 8, `sys16` 16, `sys12` 12):
+
+- a box's inside starts 1 (FLAT, SUNKEN), 2 (RAISED, SUNKEN2, ETCHED), 3
+  (RAISED2) or 4 (a default button) px in from every edge;
+- `GK_SHADOW`, and every button but a pressed one, needs 3 px right and
+  below; an active tab rises 2 px above its `y`;
+- a title bar wants the font's rows + 4 or more (`dlg13`: 18, `sys16`: 22);
+  `gk_panel` puts it at `(x+3, y+3)` in a RAISED panel and answers
+  `y + bar + 4`;
+- a button or drop-down wants the font's rows + 7 or more (`dlg13`: 20-22,
+  `dlg10`: 17); a key cap the font's rows + `h/4` + 4 (`sys16` caps 28-30
+  tall, `dlg10` caps 20-22).
