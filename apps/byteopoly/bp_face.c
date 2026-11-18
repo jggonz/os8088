@@ -500,6 +500,10 @@ static void fc_cfull(int s, int x, int y, int x2, int y2, const BPSpace *sp, int
             ny = y + 17;
         } else ny += (y2 - 1 - ny - ph) / 2;
         if (z) bx_spr(x + (cw - pw) / 2, ny, id);
+        /* the seats standing here (QA-1): over the picture's foot, or under
+         * the name where BOOT and a charge print their bottom rows */
+        if (fc_seatat(s, 0) >= 0)
+            fc_tokens(x, sp->kind == BP_K_BOOT || c ? y + 11 : y2 - 9, cw, s, 0);
     }
 }
 static void fc_cell(int s)
