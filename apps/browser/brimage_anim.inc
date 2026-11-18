@@ -555,6 +555,7 @@ bri_aload:
     mov [bri_stgs], dx
     mov ax, [es:si + A_FLEN]
     mov [bri_rx], ax
+    mov word [bri_rxh], 0           ; an animation is under BR_IFMAX
     mov dx, [br_istseg]
     mov ax, [es:si + A_MST]
     call far [br_im_r_imgsub]
@@ -1444,8 +1445,10 @@ bri_uago:
 .drop:
     call bri_adrop                  ; CF=1 none left
     jc bri_uaend
-    mov word [bri_rx], 0            ; no stage: compact must not move the
-    mov ax, [br_ibase]              ; last file staged
+    xor ax, ax
+    mov [bri_rx], ax                ; no stage: compact must not move the
+    mov [bri_rxh], ax               ; last file staged, nor a still's 64 KB+
+    mov ax, [br_ibase]
     call bri_compact                ; its block given back
     jmp bri_uago
 .go:
@@ -1460,7 +1463,9 @@ bri_uago:
 bri_uaend:
     call bri_adrop
     jnc bri_uaend
-    mov word [bri_rx], 0            ; no stage (bri_aload left a block's)
+    xor ax, ax
+    mov [bri_rx], ax                ; no stage (bri_aload left a block's)
+    mov [bri_rxh], ax               ; (and a still's high word: 1.8)
     mov ax, [br_ibase]
     call bri_compact
     call bri_ushrink

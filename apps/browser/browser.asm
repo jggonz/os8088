@@ -1198,7 +1198,10 @@ br_paint_band:
     inc bx
     jmp .row
 .done:
+    cmp byte [br_ionly], 0
+    jne .nomargin                   ; one image's boxes: the margins stand
     call br_margin                  ; the margins in the page's ground (1.8)
+.nomargin:
     mov ax, [br_top]                ; the glass now shows this
     mov [br_ptop], ax
     jmp br_pop5
@@ -15871,9 +15874,10 @@ br_hiimg         equ br_hislice + 1    ; word: ...the image's INDEX
 br_imap          equ br_hiimg + 2      ; BR_IMGTMAX words: each image's map,
                                        ; 0 none, 1 ismap, else a name hash
 br_areas         equ br_imap + BR_IMGTMAX * 2 ; BR_AREAMAX * BR_ARSZ
-br_ilaid         equ br_areas + BR_AREAMAX * BR_ARSZ ; dword: the walk's boxes,
-                                       ; bit k image k, IF_LAID at its end
-br_ilgen         equ br_ilaid + 4      ; byte: bumped as IF_LAID is set (71.26)
+br_ilaid         equ br_areas + BR_AREAMAX * BR_ARSZ ; BR_IMGTMAX / 8: the
+                                       ; walk's boxes, bit k image k, IF_LAID
+                                       ; at its end
+br_ilgen         equ br_ilaid + BR_IMGTMAX / 8 ; byte: bumped as IF_LAID is set (71.26)
 br_idoff1        equ br_ilgen + 1      ; dword: the paint buffer's SECOND
 br_idlen1        equ br_idoff1 + 4     ; window, as br_idoff/br_idlen (71.27)
 br_idlast        equ br_idlen1 + 2     ; byte: the window the last hit was in

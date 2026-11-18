@@ -150,10 +150,16 @@ bri_pxsniff:
     mov al, BRK_XBM
     cmp ah, BRX_XBM
     je .yes
+.no:
     pop es
     stc
     ret
 .yes:
+    cmp al, BRK_JPEG                ; a PNG or a JPEG reads the file through
+    ja .kind                        ; K_NEXT, one window of 64 KB: past it,
+    cmp word [bri_rxh], 0           ; refused, not cut short (71.34.7)
+    jne .no
+.kind:
     mov es, [cs:PXP_SELF]
     mov [es:bri_kind], al
     mov [es:bri_fmt], ah

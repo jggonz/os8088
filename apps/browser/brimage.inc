@@ -161,9 +161,18 @@ br_imglaid:
 
 ; --- br_imgunlaid - no box yet (br_layout's start). IF_LAID is untouched
 ; until the walk ends: the worker's IE_NEXT never sees a half-laid page
+%if BR_IMGTMAX % 16
+%error "br_ilaid is BR_IMGTMAX bits, cleared and walked a word and a byte at a time"
+%endif
 br_imgunlaid:
-    mov word [br_ilaid], 0
-    mov word [br_ilaid+2], 0
+    push ax
+    xor ax, ax
+%assign bril_i 0
+%rep BR_IMGTMAX / 16
+    mov [br_ilaid + bril_i], ax
+%assign bril_i bril_i + 2
+%endrep
+    pop ax
     ret
 
 ; --- br_imgsetlaid - every entry's IF_LAID := its bit in [br_ilaid], in one
@@ -173,25 +182,28 @@ br_imgsetlaid:
     push ax
     push bx
     push cx
-    push dx
-    mov ax, [br_ilaid]
-    mov dx, [br_ilaid+2]            ; DX:AX, bit k image k
+    push si
     mov bx, br_itab + IT_FLG
-    mov cx, BR_IMGTMAX
+    xor si, si                      ; SI = the bitmap's byte, k >> 3
     pushf
     cli
+.byte:
+    mov al, [br_ilaid + si]         ; AL, bit k & 7 image k
+    mov cx, 8
 .l:
     and byte [bx], ~IF_LAID & 0xFF
-    shr dx, 1
-    rcr ax, 1                       ; CF = this image's bit
+    shr al, 1                       ; CF = this image's bit
     jnc .n
     or byte [bx], IF_LAID
 .n:
     add bx, BR_ITSZ
     loop .l
+    inc si
+    cmp si, BR_IMGTMAX / 8
+    jb .byte
     inc byte [br_ilgen]
     popf
-    pop dx
+    pop si
     pop cx
     pop bx
     pop ax
@@ -278,9 +290,8 @@ br_im_wake:
     je .end
     cmp al, IE_GROW
     jb .ret
-    cmp al, IE_DEC
-    je .ret
-.part:                              ; GROW, PREP, SHOW: the part's
+.part:                              ; GROW, PREP, SHOW, and DEC's progressive
+                                    ; draw (bri_uprog): the part's
     cmp word [br_im_vec+2], 0
     je .ret
     call far [br_im_vec+BRIM_WAKE]

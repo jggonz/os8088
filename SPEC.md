@@ -135240,10 +135240,12 @@ frame its own scroll bar.
 
 **`BR_IMGTMAX` is 64** (was 32): a page of the period with a picture a link
 of its menu, a picture a bullet and a counter at the bottom ran out at 32
-and kept the rest as alt boxes. Two bitmaps were a DWORD and so 32 images
+and kept the rest as alt boxes. Three bitmaps were a DWORD and so 32 images
 wide - `bri_amask` (part 1's animated images, now at the end of
-`br_iwork`, `BR_IMGTMAX` / 8 bytes) and `br_iseen` (the drawn ones) - and
-are `BR_IMGTMAX` / 8 now. **`BR_RIMGMAX` is 32** (was 8): the boxes one
+`br_iwork`, `BR_IMGTMAX` / 8 bytes), `br_iseen` (the drawn ones) and
+`br_ilaid` (the layout's boxes, which `br_imgsetlaid` makes `IF_LAID` a byte
+at a time) - and are `BR_IMGTMAX` / 8 now: a dword `br_ilaid` set images
+32-63's bits in `br_ilgen` and `br_idoff1` and never fetched them. **`BR_RIMGMAX` is 32** (was 8): the boxes one
 display row records for its frames AND its blits, so a row of nineteen small
 pictures drew eight. The kept-page index stays `BRI_SLOTS` = 32 copies a page
 (SPEC.md 71.28): past it a picture is fetched again rather than kept. Cost:
@@ -135254,16 +135256,25 @@ pictures drew eight. The kept-page index stays `BRI_SLOTS` = 32 copies a page
 **A picture may be staged to 192 KB** (`BR_IFMAXH` = 3, the staged length's
 high word): `bri_rx` and `bri_clen` gained high words (`bri_rxh`,
 `bri_clenh`), Content-Length is read in 32 bits (`bri_clendig`), the
-staging is addressed NORMALISED - a segment for its paragraph and an offset
-under 16 (`bri_stash`) - so no stash crosses 64 KB, and `bri_room`,
-`bri_ugrow` and every paragraph count (`bri_rxpar`) are 32 bits. The GIF
+staging is addressed in 32 KB GRANULES - a segment every 2,048 paragraphs and
+an offset under 32 KB (`bri_stash`, the segment kept in `bri_sgk`/`bri_sgp`/
+`bri_sgs` until the granule changes) - so no stash crosses 64 KB and
+kern_mega spends one `SEG_SUB` LDT entry a granule, not one a chunk (a
+refused `SEG_SUB` refuses the picture), and `bri_room`, `bri_ugrow` and
+every paragraph count (`bri_rxpar`) are 32 bits. The stage stops at
+`bri_ugrow`'s cap, (`BR_IFMAXH` - 1):FFF0h bytes: a body still coming there
+is refused (`bri_needgrow`), not grown again. Every reset of the stage
+clears `bri_rxh` with `bri_rx`, or compaction moves a 64 KB+ stage that is
+no longer there. The GIF
 reader rebases its own segment every 32 KB (`bri_fill`'s `[bri_fseg]`,
 `[bri_fbase]`, `bri_frebase`, `bri_fleft`); a header and an animation's
 scan read the first 64 KB (`bri_rx16`), and an ANIMATION plays only from a
 file under `BR_IFMAX` = 60,000 bytes (`bri_aplanbig`: its frames' table
 holds words) - past it the first frame is the picture. PiXEL's decoders are
-handed the flat file's 32-bit length (`px_flatlen`). Measured: a 96,766-byte
-GIF decodes and draws.
+handed the flat file's 32-bit length (`px_flatlen`), but **a PNG or a JPEG
+over 65,520 bytes is refused** (`bri_pxsniff`): those two read the file
+through `K_NEXT`, one window of the first 64 KB, and would decode it cut
+short. Measured: a 96,766-byte GIF decodes and draws.
 
 **The ready copy is still one segment** (`BR_IRMAX` = 65,520 bytes, a word of
 `bri_rbytes`), and a VGA's copy is four planes: 480 x 400 is 96,000 bytes.
@@ -135294,10 +135305,17 @@ the three apart: twelve claims, and selectors take no sums.
 
 **A still GIF is drawn as it decodes** (`bri_prog`, from `bri_rowdone`), the
 way Navigator and IE3 drew one: every quarter of its height or every 16
-rows, whichever is more, the worker puts the copy so far on the glass - the
-entry made READY on the copy in progress (`[bri_newp]`) for the one
-images-only pass (`[br_ionly]`) and WAITING again after; IE_DEC's end makes
-it READY for good. What is not in yet is the copy's ground, laid before the
+rows, whichever is more, the worker ASKS for the copy so far on the glass -
+`[bri_preq]` = k + 1 with the generation in its high byte, and
+`OSAPI_WM_WAKE` - and the UI task draws it (`bri_uprog`, IE_DEC's wake):
+the entry made READY on the copy in progress (`[bri_newp]`) for the one
+images-only pass (`[br_ionly]`) and WAITING again after, unless IE_DEC's end
+made it READY for good meanwhile (`[bri_pon]`, cleared in the same critical
+section as that READY). The worker never takes the gfx lock: `br_imghalt`,
+called under a key or click callback's lock, waits on `br_ibusy`, so a
+worker blocked on the lock inside the decode froze the desktop. IE_DEC's end
+clears the request and waits out a draw under way before moving the copy
+down. An images-only pass leaves the margins (`br_margin`) alone. What is not in yet is the copy's ground, laid before the
 decode (`bri_ground`); an interlaced picture shows its passes. Pictures under
 32 rows, animations (their frame 0 too) and PiXEL's decoders draw at the end
 as before.

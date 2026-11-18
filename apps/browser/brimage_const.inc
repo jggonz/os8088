@@ -145,7 +145,10 @@ bri_acur    equ br_iwork + 206      ; byte: the record in hand
 bri_xdisp   equ br_iwork + 207      ; byte: the GCE's disposal
 bri_xdelay  equ br_iwork + 208      ; word: ...its delay, hundredths
 bri_xloop   equ br_iwork + 210      ; word: NETSCAPE2.0's count, FFFFh none
-                                    ; (+212: bri_amask was a dword here)
+bri_preq    equ br_iwork + 212      ; word: a progressive draw asked of the
+                                    ; UI task: k + 1, the generation high
+bri_pon     equ br_iwork + 214      ; byte: the UI task made image k READY
+                                    ; for that draw (+215 spare)
 bri_atab    equ br_iwork + 216      ; word: the frame's table in the file
 bri_atabn   equ br_iwork + 218      ; word: ...its entries
 bri_amseg   equ br_iwork + 220      ; word: the master's segment
