@@ -11459,6 +11459,64 @@ $(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
 bpmath: $(BUILD)/bpmath360.img
 .PHONY: bpmath
 
+# --- 2BASIC, a BASIC interpreter, and 2BRES, its resource editor (SPEC.md 132)
+# Contributed by techdistractions (github.com/techdistractions/2basic) and
+# ported to the flag day's ABI (PKG_FMT 13). Two asm packages and a B: disk
+# that mirrors the upstream one exactly, because the shipped docs, HELP.TXT and
+# every sample name their files from the disk's ROOT ("\GAMES\2B99").
+# apps/2basic/disk/ is that tree; res/ holds the host-side 2BR3 inputs, and
+# the four files shared between folders are listed once and placed twice.
+# `all` builds both packages so an SDK change cannot break them unseen
+# (RECORDER's arrangement, above); the disk is on demand.
+TWOB := apps/2basic
+$(BUILD)/2basic.bin: $(TWOB)/2basic.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/2basic.lst -o $@ $<
+$(BUILD)/2bres.bin: $(TWOB)/2bres.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/2bres.lst -o $@ $<
+$(BUILD)/2basic.o88: $(BUILD)/2basic.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+$(BUILD)/2bres.o88: $(BUILD)/2bres.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+all: $(BUILD)/2basic.o88 $(BUILD)/2bres.o88
+TWOBROOT := $(BUILD)/2basic.o88 $(BUILD)/2bres.o88 \
+            $(addprefix $(TWOB)/disk/,README.TXT HELP.TXT RESGUIDE.TXT)
+TWOBDATA := $(wildcard $(TWOB)/disk/EXAMPLES/*.* $(TWOB)/disk/GAMES/*/*.* \
+                       $(TWOB)/disk/TESTS/*.* $(TWOB)/disk/TESTS/MULTIBAS/*.* \
+                       $(TWOB)/disk/TOOLS/2BRES/*.*) \
+            $(addprefix $(TWOB)/res/demo/,RESDEMO.RES TARGETS.TXT MAP.DAT)
+TWOBARGS := $(TWOBROOT) \
+            $(addprefix EXAMPLES:,$(wildcard $(TWOB)/disk/EXAMPLES/*.*) \
+                                  $(TWOB)/res/demo/RESDEMO.RES) \
+            $(addprefix GAMES/2B99:,$(wildcard $(TWOB)/disk/GAMES/2B99/*.*)) \
+            $(addprefix GAMES/BLACKJAK:,$(wildcard $(TWOB)/disk/GAMES/BLACKJAK/*.*)) \
+            $(addprefix GAMES/2BCHECK:,$(wildcard $(TWOB)/disk/GAMES/2BCHECK/*.*)) \
+            $(addprefix TESTS:,$(wildcard $(TWOB)/disk/TESTS/*.*) \
+                               $(addprefix $(TWOB)/res/demo/,RESDEMO.RES TARGETS.TXT MAP.DAT) \
+                               $(TWOB)/disk/GAMES/2B99/2B99.RES) \
+            $(addprefix TESTS/MULTIBAS:,$(wildcard $(TWOB)/disk/TESTS/MULTIBAS/*.*)) \
+            $(addprefix TOOLS/2BRES:,$(wildcard $(TWOB)/disk/TOOLS/2BRES/*.*))
+# THE LIVE VOLUME CARRIES THE SAME TREE ONE FOLDER DOWN, in 2BASIC/ (SPEC.md
+# 132.5, 80.6), so there the docs' root paths read \2BASIC\GAMES\2B99.
+TWOBLIVEARGS := $(addprefix 2BASIC:,$(TWOBROOT)) \
+                $(addprefix 2BASIC/,$(filter-out $(TWOBROOT),$(TWOBARGS)))
+#> [Applications] 2basic :: 2BASIC interpreter and 2BRES resource editor packages (SPEC.md 132)
+2basic: $(BUILD)/2basic.o88 $(BUILD)/2bres.o88
+#> [Applications] 2basicdisk :: 2BASIC's B: disk (programs, games, examples, tests) in all four floppy geometries
+2basicdisk: $(BUILD)/2basic.img $(BUILD)/2basic720.img $(BUILD)/2basic120.img $(BUILD)/2basic360.img
+$(BUILD)/2basic.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic720.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic120.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic360.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+.PHONY: 2basic 2basicdisk
+
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and
@@ -19356,7 +19414,7 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # $(ALLAPPSARGS); the songs are not there, MIDIRack's songs' reason - the
 # everything-floppy's RunCPM fill would pay for them.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
-               $(BUILD)/byteoply.o88 \
+               $(BUILD)/byteoply.o88 $(TWOBROOT) $(TWOBDATA) \
                $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3) \
                $(WRDEMOWAVS) \
                $(PX_SAMPLES)
@@ -19365,6 +19423,7 @@ LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
 # name, so the ten pictures are here once and not twice.
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix BYTEOPLY:,$(BUILD)/byteoply.o88) \
+               $(TWOBLIVEARGS) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
                $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3) $(WRDEMOWAVS)) \
                $(MIDISONGARGS) $(PX_GALLERY)

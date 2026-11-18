@@ -1,0 +1,20 @@
+2BASIC - QUICK TESTS
+====================
+Run each program from READY using RESET, LOAD, then RUN.
+
+AUTOMATED
+  LOAD "\TESTS\AUTOLANG"  / RUN  -> AUTOLANG PASS: 36 CHECKS
+  LOAD "\TESTS\AUTOR3"    / RUN  -> AUTOR3 PASS: 10 CHECKS
+  LOAD "\TESTS\FORMISO"   / RUN  -> FORMISO PASS: 6 CHECKS
+  LOAD "\TESTS\AUTOFORM"  / RUN  -> AUTOFORM PASS: 10 CHECKS
+  LOAD "\TESTS\EVTSCAN"   / RUN  -> EVTSCAN PASS: 10 STAGES
+  LOAD "\TESTS\AUTOGFX"   / RUN  -> AUTOGFX PASS: API SMOKE
+  LOAD "\TESTS\AUTOPRMT"  / RUN  -> AUTOPRMT PASS: 3 STEPS
+
+INTERACTIVE
+  LOAD "\TESTS\EVENTUI"  / RUN: click checkbox, NEXT, image;
+    enter 42 and dismiss the dialog. Expect EVENTUI PASS: 5 CHECKS.
+  Run UTVIS for graphical appearance and UTSOUND for audio.
+
+Inspect the graphics visually. An API-smoke PASS does not guarantee
+pixel-perfect rendering on every adapter.

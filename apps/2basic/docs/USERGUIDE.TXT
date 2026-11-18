@@ -1,0 +1,93 @@
+2BASIC USER GUIDE
+=================
+
+ABOUT
+-----
+2BASIC runs BASIC programs within OS8088. It has a text console,
+numbered program lines, graphics drawing, a single custom form with
+controls, simple dialogs, sound and file/resource commands.
+
+GETTING STARTED
+---------------
+Open the B: disk and run 2BASIC.O88. Enter PRINT "HELLO" for immediate
+execution. Enter lines prefixed with a line number to store a program:
+
+  10 FOR I=1 TO 5
+  20 PRINT I
+  30 NEXT I
+  40 END
+  LIST
+  RUN
+
+Type HELP for the index or HELP PRINT for a command example. LIST shows
+the program. EDIT n edits a numbered line; DELETE n removes a line.
+NEW deletes the program, RESET restores startup colours, console and
+working directory without deleting the program. Esc or Ctrl+C breaks RUN.
+
+OPENING AND SAVING PROGRAMS
+---------------------------
+LOAD "NAME" loads NAME.BAS from the current program directory.
+SAVE "NAME" saves NAME.BAS to the current directory.
+LOAD "\GAMES\2B99" finds the only BAS file in that folder. If several
+BAS files are present, supply an explicit name:
+LOAD "\TESTS\MULTIBAS\ONE.BAS".
+
+After a successful LOAD, relative paths for BAS, BMP and RES files use
+the loaded program's directory. If LOAD fails, the previous directory
+and program remain available. HELP always uses the application help file.
+
+GRAPHICS
+--------
+SCREEN, PSET, LINE, BOX, CIRCLE and related commands draw primitives.
+LOADBMP loads an indexed bitmap; PUTBMP draws a loaded bitmap.
+LOADRES opens a resource pack; PUTRES draws the selected sprite bank.
+Use DRAWBEGIN/DRAWEND to group graphics updates when appropriate.
+
+RESOURCES
+---------
+A .RES file can contain named sprite banks, images, text, binary data
+and signed 16-bit numeric tables. Use RESSELECT, RESCOUNT, RESLEN,
+RESBYTE, RESWORD and RESLINE$ to access named entries. 2BRES.O88 is a
+separate application for preparing packs. See docs/RESOURCES.TXT.
+
+FORMS AND INPUT
+---------------
+FORM creates one custom form; LABEL, BUTTON, CHECKBOX, FRAME and IMAGE
+add controls. SHOWFORM shows it; EVENT waits for a supported control
+interaction, and VALUE(id) reads a control value. CLOSEFORM hides it.
+MESSAGEBOX and INPUTBOX provide simple modal dialogs.
+
+SAMPLES
+-------
+GAMES\2B99: play 99 Things with a five-type quick game.
+GAMES\BLACKJAK: play Blackjack using resource sprites.
+GAMES\2BCHECK: checker game.
+EXAMPLES: five small programs covering language, drawing, forms,
+sound and named resources (see list below).
+TESTS: automated and visual acceptance programs.
+
+IMPORTANT LIMITS
+----------------
+288 stored program lines; 4,864 bytes for the source program.
+One custom form with up to 12 controls and one transient dialog.
+Console retained text history: 35 rows of up to 63 columns.
+One resident resource pack up to 8,192 bytes, with at most 32 named entries.
+IMG4 can be stored in 2BR3 but PUTRES draws 16x16 1-bit sprite banks.
+Program statements and commands have individual syntax restrictions.
+See docs/COMMANDS.TXT for full limits and examples.
+
+DISPLAY AND PERFORMANCE
+-----------------------
+The interface uses the OS8088 graphics driver. VGA/EGA, Hercules and
+CGA have different colour and display capabilities. On XT-class systems,
+full-console scrolling and heavy graphics operations can be slow.
+
+FIVE INCLUDED EXAMPLES
+----------------------
+LOAD one of these from B: and type RUN:
+  \EXAMPLES\BASICS.BAS    Loops, arrays and string conversions
+  \EXAMPLES\DRAWING.BAS   Shapes and batched graphics
+  \EXAMPLES\FORMS.BAS     Buttons, checkbox and event handling
+  \EXAMPLES\SOUND.BAS     PC speaker and optional AdLib FM
+  \EXAMPLES\RESDEMO.BAS   Named sprites, text and game data
+The resource demo uses RESDEMO.RES from the same folder.

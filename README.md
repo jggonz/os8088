@@ -890,6 +890,15 @@ developer's build and stays one** (`apps/RETIRED.txt`, kind `local`): the
 data is DMA Design's, so no release image, everything-set floppy or live
 medium redistributes it - build it from your own tree.
 
+**2BASIC** (`apps/2basic/`, `2BASIC.O88` and `2BRES.O88`) is a BASIC
+interpreter contributed by techdistractions
+([upstream](https://github.com/techdistractions/2basic)): numbered programs,
+graphics, a custom form with controls, message and input boxes, PC-speaker and
+AdLib sound, and named resource packs, which 2BRES edits. `make 2basicdisk`
+builds its B: disk in all four geometries - examples, three games and upstream's
+acceptance tests - and the live media carries the same tree in `2BASIC\`.
+SPEC.md §132 records the port to this kernel's ABI.
+
 **Breadboard XT** (`apps/breadxt/`, `BREADXT.O88`) is an original native
 breadboard editor and educational circuit simulator written in C. Place real
 pins and wires, calculate DC/LED and four-state HC logic, then explore RC
@@ -970,6 +979,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/word*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Microsoft Word floppies (`make worddisk`) |
 | `build/scribe*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Scribe, the fork of Word: one parted package + its welcome documents (`make scribedisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C: one package, its overlay a part of it, and `WELCOME.RTF` (`make cworddisk`) |
+| `build/2basic*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | 2BASIC and 2BRES, with `EXAMPLES`, `GAMES`, `TESTS` and `TOOLS` laid out as upstream's B: disk (`make 2basicdisk`) |
 | `build/breadxt*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | Breadboard XT: one native package with its overlay inside, eight editable BBX circuits and tutorial/model help (`make breadxtdisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package (its module and the CCP inside it) + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
 | `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
