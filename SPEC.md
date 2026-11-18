@@ -255166,6 +255166,30 @@ A cell is its own repaint unit (`ovl_fc_cell`): ground white, a 1 px black
 line along its top and left edges (the outer right and bottom edges belong to
 the cells on the ring's rim), then, by what it is:
 
+**FULL cells (56 x 50, the concept board's ivory cards; `fc_cfull`)** are
+laid out top to bottom, every picture by `bx_size`: a collection band 7 rows
+tall in the collection's colour (black on 1bpp) with the collection LETTER in
+white at the left, the owner's token mark (the white-outlined silhouette)
+after it and the level on the band's right - one `BP_A2_CHIP` per RAM level,
+overlapped five pixels apart, or the `BP_A_WORKSHOP` block; the NAME in bold
+8-row type, centred, in one or two lines (the text handles `TF_CELL00` + space
+in `art/tx-face.txt`, `/` breaking the line; `i` has no dot in the 8-row face,
+so the names that carry one are in capitals); the SMALL picture - the TINY one
+when the name took two lines, whichever `fc_pick` finds room for in the rows
+down to the price - centred, with the mortgage mark at the left of its row and
+a sparse grey dither over it when mortgaged; and the price as "120 cr"
+centred in the last row. TOKENS standing on the cell take the price's row
+(its details are in the sidebar). Corners and specials have no band: the name
+in the bold 10-row face, two lines for REPAIR / SHOP, SWAP / MEET, FLOPPY /
+FIND and SYSTEM / ERROR, one for BOOT and CRASH! (CRASH! in the 12-row System
+face, which is the one with a real `!`), the `BP_A2_C_*` picture below it
+(BOOT's red arrow points UP, the way play leaves it; its 1bpp twin
+`BP_A2_M_C_BOOT`) and, for BOOT, "Collect" / "200" under the arrow; the two
+charges (IMPORT / DUTY, E-WASTE / FEE) set their name in the 8-row face over
+their SMALL picture and the amount. The SELECTED cell has a 2 px yellow frame
+inside its black edge, drawn over the band and under every mark (on 1bpp a 3 px
+black frame); there is no name bar. MID and COMPACT keep the layouts below.
+
 * A **property** (computer or utility): a bar of the collection's colour
   (blue C, green H, cyan A, red I, magenta R, grey utility; on 1bpp always
   solid black, so the LETTER carries the meaning: C H A I R P, `U` for a
@@ -255196,9 +255220,9 @@ the cells on the ring's rim), then, by what it is:
   the seat's dark colour, then the price. Levels are black bars (four) or one
   wide block (Workshop); a mortgaged cell strikes its name through with a
   dotted line and shows an `M` right-aligned 2 px inside the cell's edge.
-* **Selection** (`bp_sel`): the short name on a navy/black bar in white
-  (visible on every adapter), and on FULL/MID a 1 px yellow (black on 1bpp)
-  frame inside the edge. It is drawn over ground only, so it never erases an
+* **Selection** (`bp_sel`): on MID and COMPACT the short name on a navy/black
+  bar in white (visible on every adapter), and on MID a 1 px yellow (black on
+  1bpp) frame inside the edge; FULL is the 2 px frame described above. It is drawn over ground only, so it never erases an
   owner mark, level, token or the mortgage mark.
 * **Tokens**: up to four on one cell, a 7 x 7 silhouette each, side by side
   along the bottom (COMPACT: in row B in place of the price). The silhouette's
@@ -255215,15 +255239,28 @@ the cells on the ring's rim), then, by what it is:
 #### 131.8.3 The centre
 
 With no panel over it (`bp_pn_covers() == 0`) the centre is a teal ground with
-a sparse light-cyan stipple (on 1bpp black with white dots), then:
-`BYTEOPOLY` as nine keycaps (drawn frames with BIG letters on FULL and MID, the
-`BP_A_KEYCAP` sprite on COMPACT), above them on FULL and MID the mascot
-between the Floppy Find and System Error cards, and under them the two dice
-(`BP_A_DIE`, a drawn die when absent) of `bp_game.d1/d2`. Then, always,
-`bp_pn_draw()` runs. With `BP_PN_CENTRE` the panel owns every pixel of
-`bp_r_center` inset by 2 (`bp_pn_draw`'s contract, 131.9.7): the face draws
-the border and the 1 px stippled ring outside that and nothing under the
-panel - no art, and no stipple for the panel to paint over.
+a sparse light-cyan stipple (on 1bpp black with white dots) in a 2 px sunken
+well (`GK_SUNKEN2`), then, on FULL (scene `BP_A2_SC_BOARD`, 336 x 300): the
+mascot (`BP_A2_MASCOT_UP`) pointing, with `BP_A2_RAYS_L` at its fingertip,
+between the tilted Floppy Find and System Error cards, `BYTEOPOLY` as nine
+`gk_keycap`s in the bold 16-row face beneath them, and under those the two 3D
+dice (`BP_A2_DIE1..6`) of `bp_game.d1/d2` (drawn only while a match is live).
+MID (scene 401, 384 x 204) has the key caps on top, then the older 64 x 64
+mascot between two small cards and the small dice. COMPACT is code: a dithered
+ground and the nine `BP_A_KEYCAP` sprites above the dice. Then, always,
+`bp_pn_draw()` runs.
+
+**The bottom bar belongs to the panel** (DECISIONS D9): with no panel over the
+centre the landing / Buy panel and the turn bar are bottom panels of
+`bp_face_barh()` rows of `bp_r_center` - FULL 96, MID 64, COMPACT 0 (the panel
+sizes its own there). The face paints the teal ground under them and the art
+only above; `fc_aty`, the line of the dice row (FULL: 152 rows down the centre,
+MID: 40), is where a centre repaint with the art standing starts, so the key
+caps, mascot and cards are not redrawn for a dice change. With `BP_PN_CENTRE`
+the panel owns every pixel of `bp_r_center` inset by 2: the face draws only
+the 2 px sunken edge and nothing under the panel - no art, no stipple. A
+sprite wider than 64 px needs the band core's 64-byte `bx_srow` (`BX_ART2`
+builds: draw.inc).
 
 #### 131.8.4 The sidebar and the hint bar
 
@@ -255249,8 +255286,11 @@ panel - no art, and no stipple for the panel to paint over.
 * **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters, newest at
   the bottom, truncated to the box width; as many as the box holds.
 * **Hint bar**: navy/black; each `bp_pn_hint(i)` is split at its first space:
-  the head (under 8 characters) becomes a white key cap, the rest its label;
-  entries that no longer fit are dropped.
+  the head (under 8 characters) becomes a key cap, the rest its label beside
+  it; the entries are spread evenly along the bar (the concept's bottom row),
+  and one that no longer fits is dropped. On FULL the cap is `gk_keycap`; on
+  MID and COMPACT, whose 8-row labels do not read inside the kit's cap once
+  colour is 2 x 2 patterns, a flat white cap with a shade line.
 
 #### 131.8.5 Sections, dirty bits and what an update costs
 
@@ -255332,13 +255372,16 @@ pays for those rows' strip only.
 #### 131.8.6 The widget kit
 
 `bp_w_*` is valid only while `bp_pn_draw` runs (it draws into the current
-strip's band). `bp_w_panel` is a 1 px black frame, a ground (light grey; white
-on 1bpp) and a navy title bar with white text; `bp_w_button` draws one of:
-NORMAL (ground, light/dark bevel; on 1bpp a black shadow), FOCUS (navy ground,
-white text; black on 1bpp), DEFAULT (an extra black ring), DISABLED (dark grey
-text; on 1bpp a screen-door of white dots across the label, so it reads
-without colour). A label wider than the button is cut to fit. Everything else
-(`bp_w_text`, `_sprite`, `_fill`, `_box`) is the band core's call.
+strip's band) and is the game kit's (133): `bp_w_panel` is `gk_panel` (a raised
+slab with a navy title bar `fc_fh + 3` tall and the title embossed, no drop
+shadow: a panel's shadow would fall outside its rect), `bp_w_box` a sunken
+white well (`GK_SUNKEN2`) for a white fill and a raised slab for any other,
+`bp_w_button` `gk_button` with `GK_B_FLAT` (no drop shadow; the panels' button
+rows sit tight): NORMAL, FOCUS (navy face, white text), DEFAULT (an extra
+ring) and DISABLED (greyed text; on 1bpp a screen-door over the label). A label
+wider than the button is cut to fit. Everything else (`bp_w_text`, `_sprite`,
+`_fill`) is the band core's call, and a panel may call `gk_*` or `gk_scene`
+directly.
 
 #### 131.8.7 Keys and hits
 
