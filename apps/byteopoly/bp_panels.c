@@ -612,9 +612,9 @@ static void ovl_gp_blabel(int i, int bare)
     if (bp_mono && i == gp_foc) ovl_gp_la(">");
     ovl_gp_la(gp_blab[i]);
 }
-/* the button row, spread evenly along the panel's foot or - on a scene
- * panel (131.9.12) - along the row the scene tags #202, each button its
- * label's width; records the mouse rectangles, the very ones drawn, and
+/* the button row: label-wide buttons spread evenly along the panel's foot
+ * or - on a scene panel (131.9.12) - stretched to fill the row the scene
+ * tags #202, 4 px apart; records the mouse rectangles, the very ones drawn, and
  * the row's top (damage) */
 static void ovl_gp_brow(void)
 {
@@ -638,8 +638,12 @@ static void ovl_gp_brow(void)
         if (sum + 2 * (gp_nb + 1) <= w) break;
     }
     gap = (w - sum) / (gp_nb + 1);
+    if (gp_scn) {                   /* a scene's row is filled, as on the boards */
+        gap = (gap * (gp_nb + 1) - 4 * (gp_nb - 1)) / gp_nb;
+        if (gap > 0) for (i = 0; i < gp_nb; i++) bw[i] += gap;
+        gap = 4;
+    } else x += gap;
     if (gap < 2) gap = 2;
-    x += gap;
     gp_brt = y;
     for (i = 0; i < gp_nb; i++) {
         r = &gp_br[i];

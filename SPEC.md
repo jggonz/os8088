@@ -255614,7 +255614,7 @@ enabled one, and so does a Rules/Keys page turn that greys Next or Prev;
 an editor or list change (a bid being typed, a Collection cursor) never
 moves it, so Enter on an invalid bid explains instead of passing. Each button is its label's
 width (plus the kit's edge) and the row's buttons are spread evenly along the panel's foot - or,
-on a scene panel, along the row the scene tags (131.9.12); a row too narrow for every
+on a scene panel, stretched to fill the row the scene tags (131.9.12); a row too narrow for every
 "[K] Label" drops the "[K]" prefixes and the hint bar still names the keys; on 1-bit
 adapters the focused label is prefixed ">" in addition to the face's focus
 state. Hit targets are the rectangles the last draw recorded, the very ones
@@ -255785,7 +255785,7 @@ scene keeps one set of conventions:
   while a panel draws because the face asks for each hint entry afresh and
   uses it at once; a string that does not fit is cut, never overflowing.
 - The BUTTONS are 131.9.7's, from `gp_spec`, drawn by the C along `#202`:
-  each its label's width, the row's buttons spread evenly, the rects drawn
+  the row's buttons share it evenly, 4 px apart, as on the boards; the rects drawn
   recorded as the mouse targets. So a button, its key, its hint entry and
   its click are still one table, and a confirmation (Yes, leave / No) or a
   missing button (a seat on the other PC) needs no scene of its own.
