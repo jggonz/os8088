@@ -542,9 +542,9 @@ static void t_repair(void)
     valid("bail debt");
     refuse(BP_C_SETTLE, 0, 0, BP_EFUNDS, "cannot settle yet");
     ok(BP_C_MORTGAGE, 0, 1, "mortgage PET");
-    CK(cash(0) == 90, "+60");
+    CK(cash(0) == 80, "+50");
     ok(BP_C_SETTLE, 0, 0, "settle");
-    CK(cash(0) == 40 && !S.detained[0] && S.pos[0] == 10 && S.phase == BP_PH_CARD &&
+    CK(cash(0) == 30 && !S.detained[0] && S.pos[0] == 10 && S.phase == BP_PH_CARD &&
        !S.pending_move && S.debt_to == BP_NOBODY, "settled, then moved");
     valid("after the pending move");
     /* bankruptcy cancels the pending move */
@@ -562,7 +562,7 @@ static void t_repair(void)
     S.pos[1] = 7; S.detained[1] = 1; own(4, 1, 0, 0);
     S.pos[0] = 1; dice(1, 2);
     ok(BP_C_ROLL, 0, 0, "land on the detained player's C64");
-    CK(cash(1) == 1518 && cash(0) == 1482, "rent to a detained owner");
+    CK(cash(1) == 1510 && cash(0) == 1490, "rent to a detained owner");
 }
 
 static void land_rent(int start, int d1, int d2)
@@ -573,16 +573,16 @@ static void land_rent(int start, int d1, int d2)
 }
 static void t_rent(void)
 {
-    static const uint32_t lv[6] = {0, 90, 270, 540, 810, 1080};
+    static const uint32_t lv[6] = {0, 50, 150, 300, 450, 600};
     int L;
-    /* C64: base 18 */
+    /* C64: base 10 */
     fresh(2); own(4, 1, 0, 0); land_rent(1, 1, 2);
-    CK(cash(0) == 1482 && cash(1) == 1518 && ev(BP_V_RENT) && v32(&ev(BP_V_RENT)->amount) == 18 &&
-       ev(BP_V_RENT)->seat == 0 && ev(BP_V_RENT)->other == 1 && ev(BP_V_RENT)->space == 4, "stock rent 18");
+    CK(cash(0) == 1490 && cash(1) == 1510 && ev(BP_V_RENT) && v32(&ev(BP_V_RENT)->amount) == 10 &&
+       ev(BP_V_RENT)->seat == 0 && ev(BP_V_RENT)->other == 1 && ev(BP_V_RENT)->space == 4, "stock rent 10");
     fresh(2); own(1, 1, 0, 0); own(3, 1, 0, 0); own(4, 1, 0, 0); land_rent(1, 1, 2);
-    CK(cash(0) == 1464 && cash(1) == 1536, "set doubles to 36");
+    CK(cash(0) == 1480 && cash(1) == 1520, "set doubles to 20");
     fresh(2); own(1, 1, 0, 0); own(3, 1, 0, 1); own(4, 1, 0, 0); land_rent(1, 1, 2);
-    CK(cash(0) == 1482, "a mortgaged member cancels the doubling");
+    CK(cash(0) == 1490, "a mortgaged member cancels the doubling");
     fresh(2); own(1, 1, 0, 0); own(3, 1, 0, 0); own(4, 1, 0, 1); land_rent(1, 1, 2);
     CK(cash(0) == 1500 && cash(1) == 1500 && !ev(BP_V_RENT) && S.phase == BP_PH_AFTER, "mortgaged: no rent");
     for (L = 1; L <= 5; L++) {
@@ -637,13 +637,13 @@ static void t_mortgage(void)
 {
     fresh(2);
     own(1, 0, 0, 0); own(5, 0, 0, 0); own(3, 1, 0, 0);
-    CK(bp_mortgage_value(1) == 60 && bp_mortgage_value(5) == 75 && bp_mortgage_value(26) == 210, "half price");
+    CK(bp_mortgage_value(1) == 50 && bp_mortgage_value(5) == 75 && bp_mortgage_value(26) == 210, "half price");
     CK(bp_mortgage_value(6) == 0 && bp_mortgage_value(0) == 0 && bp_mortgage_value(28) == 0, "not a property");
-    bp_redeem_cost(1, &T); CK(v32(&T) == 66, "PET redeem 60 + 6");
+    bp_redeem_cost(1, &T); CK(v32(&T) == 55, "PET redeem 50 + 5");
     bp_redeem_cost(5, &T); CK(v32(&T) == 83, "POWER redeem 75 + 7.5 rounded up");
     bp_redeem_cost(20, &T); CK(v32(&T) == 187, "PC AT 170 + 17");
     ok(BP_C_MORTGAGE, 0, 1, "mortgage PET");
-    CK(cash(0) == 1560 && S.mortgaged[P(1)] && ev(BP_V_MORTGAGE) && v32(&ev(BP_V_MORTGAGE)->amount) == 60, "+60");
+    CK(cash(0) == 1550 && S.mortgaged[P(1)] && ev(BP_V_MORTGAGE) && v32(&ev(BP_V_MORTGAGE)->amount) == 50, "+50");
     refuse(BP_C_MORTGAGE, 0, 1, BP_ERULE, "twice");
     refuse(BP_C_MORTGAGE, 0, 3, BP_EOWNER, "foreign");
     refuse(BP_C_MORTGAGE, 0, 4, BP_EOWNER, "unowned");
@@ -652,7 +652,7 @@ static void t_mortgage(void)
     refuse(BP_C_MORTGAGE, 1, 3, BP_ESEAT, "not the decider");
     refuse(BP_C_REDEEM, 0, 5, BP_ERULE, "redeem unmortgaged");
     ok(BP_C_MORTGAGE, 0, 5, "mortgage POWER");
-    CK(cash(0) == 1635, "+75");
+    CK(cash(0) == 1625, "+75");
     setcash(0, 82);
     refuse(BP_C_REDEEM, 0, 5, BP_EFUNDS, "82 < 83");
     setcash(0, 83);
@@ -660,7 +660,7 @@ static void t_mortgage(void)
     CK(cash(0) == 0 && !S.mortgaged[P(5)], "paid 83");
     setcash(0, 1000);
     ok(BP_C_REDEEM, 0, 1, "redeem PET");
-    CK(cash(0) == 934, "paid 66");
+    CK(cash(0) == 945, "paid 55");
     /* a computer mortgages only when the whole collection is at level 0 */
     fresh(2);
     own(1, 0, 1, 0); own(3, 0, 1, 0); own(4, 0, 0, 0);
@@ -782,10 +782,10 @@ static void t_auction(void)
     CK(S.auc_open == 3, "only the living");
     /* unaffordable purchase: BUY refused, auction instead */
     open_auction(2);
-    setcash(0, 219);
-    refuse(BP_C_BUY, 0, 0, BP_EFUNDS, "219 < 220");
-    setcash(0, 220);
-    ok(BP_C_BUY, 0, 0, "buy at 220");
+    setcash(0, 139);
+    refuse(BP_C_BUY, 0, 0, BP_EFUNDS, "139 < 140");
+    setcash(0, 140);
+    ok(BP_C_BUY, 0, 0, "buy at 140");
     CK(cash(0) == 0 && S.owner[P(4)] == 0 && S.phase == BP_PH_AFTER, "bought once");
     refuse_c(BP_ESTALE, "repeated BUY");
 }
@@ -948,7 +948,7 @@ static void t_cards(void)
     CK(S.phase == BP_PH_DEBT && S.debt_reason == BP_DR_CARD && v32(&S.debt_amount) == 100 && cash(0) == 60, "card debt");
     ok(BP_C_MORTGAGE, 0, 1, "mortgage");
     ok(BP_C_SETTLE, 0, 0, "settle");
-    CK(cash(0) == 20 && S.phase == BP_PH_AFTER, "paid once");
+    CK(cash(0) == 10 && S.phase == BP_PH_AFTER, "paid once");
     refuse(BP_C_SETTLE, 0, 0, BP_EPHASE, "settle twice");
     /* both disks held at once: both out of their decks */
     fresh(2);
@@ -985,10 +985,10 @@ static void t_debt(void)
     fresh(2);
     own(1, 0, 2, 0); own(3, 0, 2, 0); own(4, 0, 2, 0); own(25, 0, 0, 0); own(26, 0, 0, 0);
     own(8, 1, 4, 0); own(9, 1, 4, 0); own(11, 1, 4, 0);
-    setcash(0, 100);
+    setcash(0, 110);
     S.pos[0] = 8; dice(1, 2);
     ok(BP_C_ROLL, 0, 0, "onto ZX at 4 chips");
-    CK(S.phase == BP_PH_DEBT && v32(&S.debt_amount) == 720 && S.debt_to == 1 && cash(0) == 100 &&
+    CK(S.phase == BP_PH_DEBT && v32(&S.debt_amount) == 720 && S.debt_to == 1 && cash(0) == 110 &&
        cash(1) == 1500 && ev(BP_V_DEBT), "720 owed, nothing paid");
     valid("debt");
     refuse(BP_C_ROLL, 0, 0, BP_EPHASE, "no roll in debt");
@@ -999,15 +999,15 @@ static void t_debt(void)
     refuse(BP_C_SETTLE, 1, 0, BP_ESEAT, "the creditor cannot settle");
     cmd(BP_C_PROPOSE, 0, 0); C.to = 1; set32(&C.amount, 1); refuse_c(BP_EPHASE, "no trade in debt");
     ok(BP_C_SELL, 0, 1, "sell PET");
-    CK(cash(0) == 125, "+25");
+    CK(cash(0) == 135, "+25");
     refuse(BP_C_SELL, 0, 1, BP_ERULE, "even selling");
     refuse(BP_C_MORTGAGE, 0, 1, BP_ERULE, "upgrades in the set");
     ok(BP_C_SELL, 0, 3, "VIC"); ok(BP_C_SELL, 0, 4, "C64");
     ok(BP_C_SELL, 0, 1, "PET"); ok(BP_C_SELL, 0, 3, "VIC"); ok(BP_C_SELL, 0, 4, "C64");
-    CK(cash(0) == 250, "six steps at 25");
+    CK(cash(0) == 260, "six steps at 25");
     ok(BP_C_MORTGAGE, 0, 25, "386DX +200"); ok(BP_C_MORTGAGE, 0, 26, "486DX2 +210");
     refuse(BP_C_SETTLE, 0, 0, BP_EFUNDS, "660 < 720");
-    ok(BP_C_MORTGAGE, 0, 1, "PET +60");
+    ok(BP_C_MORTGAGE, 0, 1, "PET +50");
     CK(cash(0) == 720, "exactly enough");
     ok(BP_C_SETTLE, 0, 0, "settle");
     CK(cash(0) == 0 && cash(1) == 2220 && S.phase == BP_PH_AFTER && S.debt_to == BP_NOBODY &&
@@ -1056,13 +1056,13 @@ static void t_bankrupt(void)
     valid("after bank bankruptcy");
     /* voluntary: the excess follows the estate */
     fresh(2);
-    own(4, 1, 0, 0); setcash(0, 10); S.pos[0] = 1; dice(1, 2);
-    ok(BP_C_ROLL, 0, 0, "rent 18 > 10");
+    own(4, 1, 0, 0); setcash(0, 9); S.pos[0] = 1; dice(1, 2);
+    ok(BP_C_ROLL, 0, 0, "rent 10 > 9");
     setcash(0, 300);
     ok(BP_C_BANKRUPT, 0, 0, "concede anyway");
     CK(cash(1) == 1800 && S.status == BP_ST_OVER && S.phase == BP_PH_OVER && S.winners == 2 &&
        ev(BP_V_OVER) && ev(BP_V_OVER)->other == 2, "all 300 to B; B wins");
-    CK(v32(&S.score[1]) == 1800 + 220 && v32(&S.score[0]) == 0, "scores");
+    CK(v32(&S.score[1]) == 1800 + 140 && v32(&S.score[0]) == 0, "scores");
     valid("over");
     refuse(BP_C_ROLL, 1, 0, BP_EOUT, "a resolved match refuses everything");
     refuse(BP_C_END_TURN, 1, 0, BP_EOUT, "end turn");
@@ -1097,12 +1097,12 @@ static void t_rounds(void)
     CK(bp_new_match(&S, &SU, &T, &R) == BP_OK, "quick match");
     S.active = S.decider = 1; S.round = 9; S.round_left = 2; S.phase = BP_PH_AFTER;
     setcash(0, 1000); own(1, 0, 0, 1); own(4, 0, 0, 0);
-    setcash(1, 1280);
+    setcash(1, 1190);
     valid("last turn of round 10");
     ok(BP_C_END_TURN, 1, 0, "end the last turn");
     CK(S.round == 10 && S.status == BP_ST_OVER && S.phase == BP_PH_OVER && ev(BP_V_ROUND) &&
        v32(&ev(BP_V_ROUND)->amount) == 10, "10 rounds");
-    CK(v32(&S.score[0]) == 1000 + 60 + 220 && v32(&S.score[1]) == 1280 && S.winners == 3, "tie: shared win");
+    CK(v32(&S.score[0]) == 1000 + 50 + 140 && v32(&S.score[1]) == 1190 && S.winners == 3, "tie: shared win");
     valid("quick over");
     /* score: price less mortgage principal, plus upgrade resale */
     fresh(3);
@@ -1110,7 +1110,7 @@ static void t_rounds(void)
     hold_disk(0, 0);
     setcash(0, 7);
     bp_score_of(&S, 0, &T);
-    CK(v32(&T) == 7 + 120 + 140 + 220 + 75 + 3 * 2 * 25, "cash + prices - principal + resale; disk 0");
+    CK(v32(&T) == 7 + 100 + 120 + 140 + 75 + 3 * 2 * 25, "cash + prices - principal + resale; disk 0");
     bp_score_of(&S, 1, &T); CK(v32(&T) == 1500, "cash only");
     CK(bp_seat_assets(&S, 0, &T) == 4 && v32(&T) == 0xF, "asset mask");
     CK(bp_group_owner(&S, BP_G_COMMODORE) == 0 && bp_group_owner(&S, BP_G_HOME) == BP_NOBODY, "group owner");
@@ -1157,7 +1157,7 @@ static void t_refusals(void)
     refuse(BP_C_MORTGAGE, 0, 1, BP_EOVERFLOW, "revision would wrap");
     /* cash overflow is refused whole */
     fresh(2);
-    setcash(0, 0xFFFFFFFFu - 50); own(1, 0, 0, 0);
+    setcash(0, 0xFFFFFFFFu - 49); own(1, 0, 0, 0);
     refuse(BP_C_MORTGAGE, 0, 1, BP_EOVERFLOW, "cash would wrap");
 }
 
@@ -1231,7 +1231,7 @@ static void t_statecheck(void)
 static void t_bonus_after_debt(void)
 {
     fresh(2);
-    own(4, 1, 0, 0); own(1, 0, 0, 0); setcash(0, 10);
+    own(4, 1, 0, 0); own(1, 0, 0, 0); setcash(0, 9);
     S.pos[0] = 2; dice(1, 1);
     ok(BP_C_ROLL, 0, 0, "doubles onto rent");
     CK(S.phase == BP_PH_DEBT && S.doubles == 1, "debt after doubles");

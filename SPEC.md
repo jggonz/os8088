@@ -253848,10 +253848,10 @@ Binding in full. Money is exact integer credits (`cr`), held as logical
 | id | space | kind | collection | price | base rent |
 |---:|---|---|---|---:|---:|
 | 0 | BOOT | start, salary | | | |
-| 1 | Commodore PET | computer | C | 120 | 8 |
+| 1 | Commodore PET | computer | C | 100 | 6 |
 | 2 | Floppy Find | event deck 0 | | | |
-| 3 | VIC-20 | computer | C | 140 | 10 |
-| 4 | Commodore 64 | computer | C | 220 | 18 |
+| 3 | VIC-20 | computer | C | 120 | 8 |
+| 4 | Commodore 64 | computer | C | 140 | 10 |
 | 5 | POWER | utility | | 150 | special |
 | 6 | Import Duty | charge 100 | | | |
 | 7 | REPAIR SHOP | visiting / detention | | | |
@@ -253875,6 +253875,11 @@ Binding in full. Money is exact integer credits (`cr`), held as logical
 | 25 | 386DX | computer | P | 400 | 36 |
 | 26 | 486DX2 | computer | P | 420 | 40 |
 | 27 | E-waste Fee | charge 75 | | | |
+
+Computer prices never decrease along the ids (100, 120, 140, 160, ... 420;
+rent 6 ... 40), as the classic board's prices rise round the track. The two
+utilities stay at a flat 150, as utilities do in the classic game, so they
+are outside that rule.
 
 16 computers, 2 utilities, 4 event spaces, 2 charges, 4 corners. The
 eighteen purchasable spaces have a PROP INDEX 0..17 in id order
@@ -254461,7 +254466,7 @@ counted (`bp_diag.frame`) before any other field is read.
 
 | type | name | dir | body bytes (no CRC) | fields after the type (and tag) |
 |---|---|---|---|---|
-| 1 | HELLO | both | 24 | 'BYTO', protocol version (1), role (1 host, 2 client), endpoint id (4), `bp_fingerprint` (4), the peer's id this side has bound (4, 0 none), intent (0 new match, 1 resume), match id (4, 0 for a new match) |
+| 1 | HELLO | both | 24 | 'BYTO', protocol version (2; 1 was the board before the monotonic prices, and is refused as a bad peer), role (1 host, 2 client), endpoint id (4), `bp_fingerprint` (4), the peer's id this side has bound (4, 0 none), intent (0 new match, 1 resume), match id (4, 0 for a new match) |
 | 2 | LOBBY1 | H to C | 25 | lobby revision (2), nseats, rules, rounds, token[4], machine[4], ready mask (bit 0 host, bit 1 client), name[0] (8, NUL-padded) |
 | 3 | LOBBY2 | H to C | 29 | lobby revision (2), name[1..3] (24) |
 | 4 | NAME | C to H | 15 | lobby revision (2), seat, token, name (8) - the client proposes its own seat |
@@ -254914,7 +254919,10 @@ over `BP_STATE_MAX`: `BP_EFORMAT`; a file or encoding format this code does
 not read, or another `BP_RULES_VER`: `BP_EVERSION`; a bad CRC: `BP_ECRC`
 (checked before the fields behind it are believed); a role or state outside
 the table: `BP_EFORMAT`; the same `BP_RULES_VER` with another fingerprint
-(the board or cards differ): `BP_EMATCH`. `bp_file_parse(buf, n, meta, out)`
+(the board or cards differ): `BP_EMATCH`. Saves carry no prices, only the
+fingerprint over the board table, so a save made under the old prices
+(PET 120, VIC-20 140, C64 220) is refused with `BP_EMATCH`, not loaded under
+the new ones. `bp_file_parse(buf, n, meta, out)`
 adds the decode and validation (`BP_EINVALID`, a CRC-correct file whose
 content breaks a rule), then requires the header's match id, `rev` and
 digest to be the payload's (`BP_EFORMAT`: a header that lies), a local file
