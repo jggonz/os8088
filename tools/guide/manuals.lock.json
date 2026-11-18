@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "66176f6eb",
+  "stamped": "73b44ed03",
   "strings": "720e97a330a2ceb7",
-  "why": "Browser 1.8 on main: tables, colours, fonts, frames, downloads by real name, Save As by the page name, Options menu; the page describes it (restamped: 9d6858a1 was the contributor's pre-rebase commit)"
+  "why": "Browser 1.8 (#383) squash-merged as 73b44ed03: restamped from 66176f6eb, the review branch's commit, which the squash left out of main's history"
  },
  "C64": {
   "sources": [],
