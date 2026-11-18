@@ -1252,6 +1252,7 @@ gk_lit:
     cbw                             ; AH = 0: AL < 20h, and AH is stale (the
                                     ; caller's, or the last insert's xchg)
     push si
+    cbw                             ; AH is stale after an insert (bx_hstr, lodsb)
     dec ax
     shl ax,1
     mov bx,[bp+10]
@@ -1332,7 +1333,7 @@ _gk_scene_rect:
     push bp
     mov bp,sp
     call gk_shdr
-    jc gk_no
+    jc .no                          ; (gk_no is just out of a short jump's reach)
     add si,6
     xor ch,ch
     jcxz .no
