@@ -14,13 +14,13 @@
  * selected space; the third box is the collection of the seat this PC plays,
  * or the paired-save card while the link is down. */
 #include "art2.h"
-#define SD_S_RP   (BP_A2_SC_SIDE + 0)           /* FULL; MID's is +6 */
-#define SD_S_CONN (BP_A2_SC_SIDE + 1)
-#define SD_S_OTH  (BP_A2_SC_SIDE + 2)
-#define SD_S_PAIR (BP_A2_SC_SIDE + 3)
-#define SD_S_COLL (BP_A2_SC_SIDE + 4)
-#define SD_S_DET  (BP_A2_SC_SIDE + 5)           /* FULL; MID's is +7 */
-#define SD_S_ROW  (BP_A2_SC_SIDE + 8)           /* FULL; MID's is +9 */
+#define SD_S_RP    (BP_A2_SC_SIDE + 0)          /* the players box, FULL */
+#define SD_S_CONN  (BP_A2_SC_SIDE + 1)          /* CONNECTION / OTHER PC LINKED */
+#define SD_S_DETC  (BP_A2_SC_SIDE + 2)          /* COMPACT's details lines */
+#define SD_S_LINKC (BP_A2_SC_SIDE + 3)          /* COMPACT's link line */
+#define SD_S_COLL  (BP_A2_SC_SIDE + 4)          /* YOUR COLLECTION / PAIRED SAVE */
+#define SD_S_DET   (BP_A2_SC_SIDE + 5)          /* the details card, FULL; MID's is + 2 */
+#define SD_S_ROW   (BP_A2_SC_SIDE + 8)          /* a roster row, FULL; MID's is + 1, COMPACT's - 2 */
 
 static const char *const fc_lnk[8] = {TD_OFF, TD_SEARCHING, TD_PEER_FOUND, TD_BAD_PEER,
     TD_LOBBY, TD_LINKED, TD_PAUSED, TD_RESYNC};
@@ -28,21 +28,21 @@ static char fc_log[BP_LOG_LINES][BP_LOG_LEN + 1];
 static const char *sd_sv[13];
 static int sd_iv[5];
 static char sd_nb[12][6];
+static int sd_w;                        /* the width the boxes are drawn at (a wider column keeps a face margin at the right) */
 
 /* the sidebar's four boxes tile the column exactly (SPEC.md 131.8.1) */
 static void fc_sidelayout(void)
 {
+    static const BPByte hh[2][3] = {{130, 124, 76}, {86, 104, 44}};     /* FULL, MID: players, details, collection */
     int hp, hd, hl, rem, side_h, rh;
     side_h = bp_r_side.h;
-    if (bp_layout == BP_LAY_COMPACT) {
-        rh = fc_fh + 3;
-        hp = 4 * rh + 4;
-        hl = rh + 4;
-        hd = (side_h - hp - hl) / 2;
-    } else if (bp_layout == BP_LAY_FULL) { hp = 130; hd = 124; hl = 76; }
-    else { hp = 86; hd = 104; hl = 44; }
+    rh = fc_fh + 3;
+    hp = 4 * rh + 4; hl = rh + 4; hd = (side_h - hp - hl) / 2;          /* COMPACT */
+    if (bp_layout != BP_LAY_COMPACT) { hp = hh[bp_layout][0]; hd = hh[bp_layout][1]; hl = hh[bp_layout][2]; }
     rem = side_h - hp - hd - hl;
     if (rem < 0) { hd += rem; rem = 0; }
+    sd_w = bp_layout == BP_LAY_FULL ? 192 : bp_layout == BP_LAY_MID ? 208 : bp_r_side.w;
+    if (sd_w > bp_r_side.w) sd_w = bp_r_side.w;
     fc_rp.x = fc_rd.x = fc_rl.x = fc_rg.x = bp_r_side.x;
     fc_rp.w = fc_rd.w = fc_rl.w = fc_rg.w = bp_r_side.w;
     fc_rp.y = bp_r_side.y; fc_rp.h = hp;
@@ -72,14 +72,6 @@ static int sd_lost(void)
 }
 /* the seat whose turn it is (the bidder, in an auction) */
 static int sd_turn(void) { return sd_auc() ? bp_game.auc_turn : bp_game.active; }
-/* the width the boxes are drawn at, and where they start in a wider column */
-static int sd_nw(const BPRect *r)
-{
-    int n;
-    n = bp_layout == BP_LAY_FULL ? 192 : bp_layout == BP_LAY_MID ? 208 : r->w;
-    return n > r->w ? r->w : n;
-}
-static int sd_ox(const BPRect *r) { return r->x + (r->w - sd_nw(r)) / 2; }
 /* a sprite that is skipped outright when it is off the strip */
 static void sd_spr(int x, int y, int id, int h)
 {
@@ -90,12 +82,12 @@ static void sd_spr(int x, int y, int id, int h)
 static int sd_frame(const BPRect *r, int sc, int scm, const char *title)
 {
     int bar;
-    bar = bp_layout == BP_LAY_FULL ? 16 : bp_layout == BP_LAY_MID ? 14 : 0;
+    bar = bp_layout == BP_LAY_FULL ? 14 : bp_layout == BP_LAY_MID ? 12 : 0;
     if (bp_layout == BP_LAY_MID) sc = scm;
     bx_fill(r->x, r->y, r->x + r->w - 1, r->y + r->h - 1, gk_role(GK_R_FACE));
-    if (sc && bp_layout != BP_LAY_COMPACT) gk_scene(sc, sd_ox(r), r->y, sd_sv, sd_iv);
-    else gk_panel(sd_ox(r), r->y, sd_nw(r), r->h, bar, title, fc_ft, GK_RAISED | GK_PLEFT);
-    return r->y + bar;
+    if (sc && bp_layout != BP_LAY_COMPACT) gk_scene(sc, r->x, r->y, sd_sv, sd_iv);
+    else gk_panel(r->x, r->y, sd_w, r->h, bar, title, fc_ft, GK_RAISED | GK_PLEFT);
+    return r->y + bar + 2;
 }
 /* a number into a scene slot */
 static void sd_num(int slot, unsigned v) { sd_sv[slot] = os88_utoa(v, sd_nb[slot]); }
@@ -122,12 +114,15 @@ static const char *sd_astat(int i)
  * the bidding order; before a match "Players" */
 static const char *sd_title(void)
 {
-    int t;
+    int t, n;
     if (!fc_live()) return TD_PLAYERS;
     if (bp_game.status == BP_ST_OVER) return TD_GAME_OVER;
     if (sd_auc()) return TD_BIDDING_ORDER;
     t = bp_game.active;
-    fc_ap(fc_buf, fc_ap(fc_buf, 0, bp_game.name[t]), bp_sess_mine(t) ? TD_YOUR_TURN : TD_THEIR_TURN);
+    n = 0;
+    if (bp_sess_mine(t)) { n = fc_ap(fc_buf, 0, TD_PLAYER_SP); fc_buf[n++] = (char)('1' + t); fc_buf[n] = 0; }
+    else n = fc_ap(fc_buf, 0, bp_game.name[t]);
+    fc_ap(fc_buf, n, bp_sess_mine(t) ? TD_YOUR_TURN : TD_THEIR_TURN);
     return fc_buf;
 }
 static void fc_players(void)
@@ -137,7 +132,7 @@ static void fc_players(void)
     r = &fc_rp;
     live = fc_live();
     big = bp_layout == BP_LAY_FULL;
-    ox = sd_ox(r);
+    ox = r->x;
     t = sd_turn();
     sd_sv[0] = sd_title();
     sd_sv[1] = TD_NO_BID;
@@ -150,7 +145,7 @@ static void fc_players(void)
         else sd_sv[1] = sd_cash(&bp_game.cash[t]);
     }
     sd_frame(r, SD_S_RP, 0, sd_sv[0]);
-    if (bp_layout == BP_LAY_MID && live && fc_num[0]) fc_rtext(ox + sd_nw(r) - 6, r->y + 5, fc_num, gk_role(GK_R_TITLETX), fc_fs);
+    if (bp_layout == BP_LAY_MID && live && fc_num[0]) fc_rtext(ox + sd_w - 6, r->y + 5, fc_num, gk_role(GK_R_TITLETX), fc_fs);
     if (big) {
         if (live && cw == BP_NOBODY) sd_spr(ox + 8, r->y + 22, BP_A2_GAVEL, 24);
         else if (live) sd_spr(ox + 6, r->y + 18, BP_A2_TOKL_FLOPPY + bp_game.token[cw], 32);
@@ -214,7 +209,7 @@ static void ovl_sd_det(int s, const char *title)
     sp = bp_space(s);
     prop = sp->prop;
     big = bp_layout == BP_LAY_FULL;
-    ox = sd_ox(r); w = sd_nw(r);
+    ox = r->x; w = sd_w;
     own = TD_BANK; lvl = 0; mort = 0;
     if (prop != BP_NOBODY && fc_live() && bp_game.owner[prop] < bp_game.nseats) {
         own = bp_game.name[bp_game.owner[prop]]; lvl = bp_game.level[prop]; mort = bp_game.mortgaged[prop];
@@ -234,16 +229,20 @@ static void ovl_sd_det(int s, const char *title)
     }
     y = sd_frame(r, SD_S_DET, SD_S_DET + 2, sd_sv[0]);
     if (bp_layout == BP_LAY_COMPACT) {                  /* three lines */
-        y = r->y + 2; cx = fc_fh + 3; cw = w - 12; ox += 4;
-        fc_t(ox, y, fc_fits(sp->name, fc_fb, cw), 0, fc_fb);
-        fc_t(ox, y + cx, fc_fits(prop == BP_NOBODY ? ovl_fc_plain(s) : ovl_fc_cat(TD_PRICE, " ", os88_utoa(sp->price, sd_nb[0]), TD_CR), fc_fb, cw), 0, fc_fb);
-        if (prop != BP_NOBODY) fc_t(ox, y + cx * 2, fc_fits(ovl_fc_cat(TD_OWNER, own, " ", lvl || mort ? fc_lvltxt(lvl, mort) : ""), fc_fb, cw), 0, fc_fb);
+        sd_sv[0] = sp->name;
+        sd_sv[1] = prop == BP_NOBODY ? ovl_fc_plain(s) : ovl_fc_cat(TD_PRICE, " ", os88_utoa(sp->price, sd_nb[0]), TD_CR);
+        sd_sv[2] = "";
+        if (prop != BP_NOBODY) {
+            fc_ap(fc_fit, fc_ap(fc_fit, fc_ap(fc_fit, fc_ap(fc_fit, 0, TD_OWNER), " "), own), lvl || mort ? fc_lvltxt(lvl, mort) : "");
+            sd_sv[2] = fc_fit;
+        }
+        gk_scene(SD_S_DETC, ox, r->y, sd_sv, sd_iv);
         return;
     }
     if (prop == BP_NOBODY) {                            /* a corner, a card, a charge */
         id = fc_specart(sp, s);
         if (id >= 0 && bx_size(id)) { sd_spr(ox + (w - (int)(bx_size(id) & 255)) / 2, y + 4, id, 40); y += (int)(bx_size(id) >> 8) + 8; }
-        fc_t(ox + 4, y, fc_fits(ovl_fc_plain(s), fc_fs, w - 8), 0, fc_fs);
+        fc_ctext(ox, ox + w - 1, y, fc_fits(ovl_fc_plain(s), fc_fs, w - 8), 0, fc_fs);
         if (sp->kind == BP_K_CHARGE) fc_t(ox + 6, y + 11, ovl_fc_cat(TD_CHARGE, os88_utoa(sp->price, sd_nb[0]), TD_CR, ""), 0, fc_fs);
         return;
     }
@@ -266,33 +265,28 @@ static const char *sd_port(void)
     fc_ap(fc_buf, 4, TD_BAUD);
     return fc_buf;
 }
-/* the cards that replace the details box over the cable: CONNECTION while the
- * link is not in step, OTHER PC LINKED during a trade */
+/* the link's state word: "Disconnected" for a paused link, else the state's name */
+static const char *sd_lstate(void)
+{
+    int st;
+    st = bp_link_state();
+    return st == BP_L_PAUSED ? TD_DISCONNECTED : st < 8 ? fc_lnk[st] : TD_DIVERGED;
+}
+/* FULL's cards that replace the details box over the cable: CONNECTION while
+ * the link is not in step, OTHER PC LINKED during a trade (MID and COMPACT
+ * keep the space's card and show the link as a line in the third box) */
 static void ovl_sd_conn(void)
 {
-    const BPRect *r;
-    const char *p;
-    int y, ox, w, st, big, oth;
-    r = &fc_rd;
-    big = bp_layout == BP_LAY_FULL;
+    int oth;
     oth = !sd_lost();
-    ox = sd_ox(r); w = sd_nw(r);
-    st = bp_link_state();
-    p = sd_port();
+    sd_iv[0] = oth;
+    sd_sv[4] = oth ? TD_OTHER_PC_LINKED : TD_CONNECTION;
     sd_sv[0] = oth ? TD_CABLE_LINKED : bp_mode == BP_MODE_HOST ? TD_BANKER_HOST : TD_JOINED_PC;
     if (oth && bp_sess_busy()) sd_sv[0] = ovl_fc_cat(TD_CABLE_LINKED, TD_WAITING_X, "", "");
-    sd_sv[1] = p;
-    sd_sv[2] = st == BP_L_PAUSED ? TD_DISCONNECTED : st < 8 ? fc_lnk[st] : TD_DIVERGED;
+    sd_sv[1] = sd_port();
+    sd_sv[2] = sd_lstate();
     sd_sv[3] = bp_link_msg();
-    y = sd_frame(r, oth ? SD_S_OTH : SD_S_CONN, 0, oth ? TD_OTHER_PC_LINKED : TD_CONNECTION);
-    if (big) return;
-    y = r->y + (bp_layout == BP_LAY_MID ? 17 : 2);
-    fc_t(ox + 8, y, sd_sv[0], 0, fc_fb);
-    fc_t(ox + 8, y + fc_fh + 1, sd_sv[1], 0, fc_fb);
-    if (!oth) {
-        if (bp_layout == BP_LAY_MID) gk_banner(ox + 8, y + 24, w - 16, 16, sd_sv[2], fc_ft, -1);
-        fc_t(ox + 8, y + (bp_layout == BP_LAY_MID ? 44 : 2 * fc_fh + 2), fc_fits(sd_sv[3], fc_fs, w - 16), gk_role(GK_R_DISABLED), fc_fs);
-    }
+    sd_frame(&fc_rd, SD_S_CONN, 0, 0);
 }
 /* the seat this PC plays and whose computers are shown: the active one when
  * it is ours, else our first living seat */
@@ -306,33 +300,34 @@ static int sd_cseat(void)
     return bp_game.active;
 }
 /* the third box: YOUR COLLECTION (small pictures of the seat's computers; over
- * the cable a status well under them), or PAIRED SAVE while the link is down */
+ * the cable a status line under them: the LED and "Cable linked • 2400 baud",
+ * or the link's state word while it is down), or on FULL PAIRED SAVE while the
+ * link is down */
 static void ovl_sd_coll(void)
 {
     const BPRect *r;
-    const char *t;
-    int y, ox, w, big, seat, p, n, per, rows, cw, ch, lost;
+    int y, ox, w, big, seat, p, n, per, rows, cw, ch, lost, cab;
     r = &fc_rl;
     big = bp_layout == BP_LAY_FULL;
     lost = sd_lost();
-    ox = sd_ox(r); w = sd_nw(r);
+    ox = r->x; w = sd_w;
     p = bp_sess_pair();
-    sd_iv[0] = bp_mode == BP_MODE_LOCAL ? 0 : bp_sess_busy() ? 2 : bp_mono ? 3 : 1;
+    cab = bp_mode == BP_MODE_LOCAL ? 0 : bp_sess_busy() ? 2 : bp_mono ? 3 : 1;
+    sd_iv[0] = cab; sd_iv[2] = sd_iv[3] = 0;
     sd_sv[0] = TD_NO_PORT;
-    if (lost) {                                         /* paired save: its status, and the button's state */
-        sd_iv[1] = p == BP_PAIR_DONE ? GK_B_NORMAL : GK_B_DISABLED; sd_iv[0] = p == BP_PAIR_DONE;
+    sd_sv[5] = TD_YOUR_COLLECTION;
+    if (lost && big) {                                  /* paired save: its status, and the button's state */
+        sd_iv[0] = 0; sd_iv[1] = p == BP_PAIR_DONE ? GK_B_NORMAL : GK_B_DISABLED; sd_iv[2] = 1; sd_iv[3] = p == BP_PAIR_DONE;
+        sd_sv[5] = TD_PAIRED_SAVE;
         sd_sv[0] = p == BP_PAIR_DONE ? TL_PAIRED_SAVE_COMPLETE : p == BP_PAIR_FAIL ? TD_PAIR_FAILED : p == BP_PAIR_BUSY ? TD_PAIR_SAVING : TD_WAITING_LINK;
-    } else if (sd_iv[0]) {                              /* "Cable linked - COM2 - 2400 baud" */
-        fc_ap(fc_buf, fc_ap(fc_buf, 0, TD_CABLE_LINKED), sd_iv[0] == 2 ? TD_WAITING_X : TD_BAUD);
-        sd_sv[0] = fc_buf;
+    } else if (cab) {                                   /* "Cable linked • 2400 baud" */
+        fc_ap(fc_buf, fc_ap(fc_buf, 0, TD_CABLE_LINKED), cab == 2 ? TD_WAITING_X : TD_BAUD);
+        sd_sv[0] = lost ? sd_lstate() : fc_buf;
     }
-    y = sd_frame(r, lost ? SD_S_PAIR : SD_S_COLL, 0, lost ? TD_PAIRED_SAVE : TD_YOUR_COLLECTION);
-    if (lost) {
-        if (!big) gk_button(ox + 8, y + 4, w - 16, 16, sd_sv[0], fc_fb, sd_iv[1]);
-        return;
-    }
+    y = sd_frame(r, SD_S_COLL, 0, TD_YOUR_COLLECTION);
+    if (lost && big) return;
     seat = sd_cseat();
-    if (big) { per = 5; cw = 36; ch = 26; rows = sd_iv[0] ? 1 : 2; }
+    if (big) { per = 5; cw = 36; ch = 26; rows = cab ? 1 : 2; }
     else { per = 9; cw = 22; ch = 14; rows = 1; }
     y += big ? 3 : 2;
     n = 0;
@@ -347,30 +342,29 @@ static void ovl_sd_coll(void)
         fc_num[0] = '+'; os88_utoa(n - per * rows, fc_num + 1);
         fc_rtext(ox + w - 7, y + (rows - 1) * ch + (big ? 8 : 1), fc_num, 0, fc_fb);
     }
-    if (!big && sd_iv[0]) {                             /* MID: the link line under the pictures */
-        sd_spr(ox + 8, r->y + 30, sd_iv[0] == 2 ? BP_A2_LED_YELLOW : bp_mono ? BP_A2_M_LED_RED : BP_A2_LED_GREEN, 10);
+    if (!big && cab) {                                  /* MID: the link line under the pictures */
+        sd_spr(ox + 8, r->y + 30, bp_mono ? BP_A2_M_LED_RED : lost ? BP_A2_LED_RED : cab == 2 ? BP_A2_LED_YELLOW : BP_A2_LED_GREEN, 10);
         fc_t(ox + 24, r->y + 30, fc_fits(sd_sv[0], fc_fb, w - 32), 0, fc_fb);
     }
 }
 /* COMPACT keeps one line for the link: the round and the state */
 static void ovl_sd_clink(void)
 {
-    const BPRect *r;
     int st;
-    r = &fc_rl;
-    sd_frame(r, 0, 0, 0);
     st = bp_link_state();
     fc_buf[0] = 0;
     if (fc_live()) fc_ap(fc_buf, fc_ap(fc_buf, fc_ap(fc_buf, 0, "R"), os88_utoa(ovl_fc_rnd(), sd_nb[0])), " ");
     fc_ap(fc_buf, os88_strlen(fc_buf), bp_mode == BP_MODE_LOCAL ? TD_SAME_PC : st < 8 ? fc_lnk[st] : "?");
-    fc_t(r->x + 5, r->y + 2, fc_buf, 0, fc_fb);
-    if (st == BP_L_PAUSED || st == BP_L_BADPEER) fc_strike(r->x + 5, r->y + 1, r->w - 10);
+    sd_sv[0] = fc_buf;
+    sd_iv[0] = st == BP_L_PAUSED || st == BP_L_BADPEER;
+    sd_frame(&fc_rl, 0, 0, 0);
+    gk_scene(SD_S_LINKC, fc_rl.x, fc_rl.y, sd_sv, sd_iv);
 }
 
 /* ---- the entry points bp_face.c calls ---------------------------------------- */
 static void ovl_fc_details(void)
 {
-    if (sd_lost() || (fc_live() && bp_game.phase == BP_PH_TRADE && bp_mode != BP_MODE_LOCAL)) ovl_sd_conn();
+    if (bp_layout == BP_LAY_FULL && (sd_lost() || (fc_live() && bp_game.phase == BP_PH_TRADE && bp_mode != BP_MODE_LOCAL))) ovl_sd_conn();
     else if (sd_auc()) ovl_sd_det(bp_game.auc_space, TD_THE_LOT);
     else ovl_sd_det(bp_sel, 0);
 }
@@ -384,7 +378,7 @@ static void fc_logbox(void)
     const BPRect *r;
     int n, i, y, rh, x1, ox, w;
     r = &fc_rg;
-    ox = sd_ox(r); w = sd_nw(r);
+    ox = r->x; w = sd_w;
     bx_fill(r->x, r->y, r->x + r->w - 1, r->y + r->h - 1, gk_role(GK_R_FACE));
     gk_box(ox, r->y, w, r->h, bp_layout == BP_LAY_COMPACT ? GK_SUNKEN : GK_SUNKEN2, gk_role(GK_R_FIELD));
     rh = fc_fh + 2;
@@ -409,20 +403,18 @@ static unsigned fc_sigplayers(void)
     h = fc_live() ? 7 : 3;
     if (!fc_live()) return h;
     h = fc_mix(fc_mix(fc_mix(h, bp_game.round), bp_game.active * 4 + bp_game.status), bp_game.phase);
-    h = fc_hb(h, &bp_game.auc_space, 5);
+    h = fc_hb(h, &bp_game.auc_space, 5);                /* the auction: space, open, passed, turn, high */
     h = fc_mix(h, bp_game.auc_bid.lo ^ bp_game.auc_bid.hi);
-    h = fc_hb(h, bp_game.name, sizeof(bp_game.name));
+    h = fc_hb(h, bp_game.name, sizeof(bp_game.name) + 3 * BP_SEATS);    /* names, tokens, machines, alive */
     h = fc_hb(h, bp_game.cash, sizeof(bp_game.cash));
-    h = fc_hb(h, bp_game.alive, BP_SEATS);
-    h = fc_hb(h, bp_game.detained, BP_SEATS);
-    return fc_hb(h, bp_game.token, BP_SEATS);
+    return fc_hb(h, bp_game.detained, BP_SEATS);
 }
 /* the link's state, for the cards that show it */
 static unsigned sd_sigl(unsigned h)
 {
     const char *m;
     h = fc_mix(fc_mix(fc_mix(h, bp_link_state()), bp_sess_busy()), bp_ck_port() * 4 + bp_mode);
-    h = fc_mix(h, bp_sess_pair() * 4 + fc_live() * 2 + sd_lost());
+    h = fc_mix(h, bp_sess_pair() * 4 + sd_lost());
     if (sd_lost()) for (m = bx_str(bp_link_msg()); *m; m++) h = fc_mix(h, *m);
     return h;
 }
@@ -432,25 +424,17 @@ static unsigned fc_sigdetails(void)
     h = fc_mix(bp_sel, fc_live());
     if (!fc_live()) return h;
     h = fc_mix(fc_mix(h, bp_game.phase), bp_game.auc_space);
-    h = fc_hb(h, bp_game.owner, BP_PROPS);
-    h = fc_hb(h, bp_game.level, BP_PROPS);
-    h = fc_hb(h, bp_game.mortgaged, BP_PROPS);
+    h = fc_hb(h, bp_game.owner, 3 * BP_PROPS);          /* owner, level, mortgaged */
     h = fc_hb(h, bp_game.name, sizeof(bp_game.name));
     return bp_mode == BP_MODE_LOCAL ? h : sd_sigl(h);
 }
 static unsigned fc_siglink(void)
 {
     unsigned h;
-    const char *m;
-    h = sd_sigl(0);
-    if (bp_layout == BP_LAY_COMPACT) {                  /* its one line: round, dice, message */
-        h = fc_mix(fc_mix(fc_mix(h, bp_game.round), bp_game.d1 * 8 + bp_game.d2 + bp_game.rolled * 64), bp_game.active * 4 + bp_game.status);
-        for (m = bx_str(bp_link_msg()); *m; m++) h = fc_mix(h, *m);
-        return h;
-    }
+    h = sd_sigl(fc_live());
+    if (bp_layout == BP_LAY_COMPACT) return fc_mix(h, bp_game.round);     /* its one line: round, state */
     if (!fc_live()) return h;
-    h = fc_mix(h, bp_game.active);
-    return fc_hb(h, bp_game.owner, BP_PROPS);
+    return fc_hb(fc_mix(h, bp_game.active), bp_game.owner, BP_PROPS);
 }
 /* ---- the log ------------------------------------------------------------ */
 void bp_log_add(const char *line)

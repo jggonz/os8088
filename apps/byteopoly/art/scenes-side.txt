@@ -12,46 +12,55 @@ fonth BP_F_BIG16 16
 # +0 the players box, FULL, 192 x 130: $0 the title, $1 the cash (or the high
 # bid), $2 the round; the big token stands left of the cash well, drawn by code.
 scene 410 192 130
-  panel 0 0 192 130 16 "$0" BP_F_TEXT10 raised|pleft
+  panel 0 0 192 130 14 "$0" BP_F_TEXT10 raised|pleft
   text 150 7 36 "$2" @TITLETX BP_F_TEXT08 right
   box 44 18 144 32 sunken2 @FIELD
   textbox 46 20 140 28 "$1" @TEXT BP_F_BIG16 centre
   box 3 53 186 75 sunken @FIELD
 end
 
-# +1 CONNECTION, FULL, 192 x 124 (the link is not in step): $0 the role, $1 the
-# port and speed, $2 the state banner, $3 the framer's own line.
+# +1 CONNECTION / OTHER PC LINKED, FULL, 192 x 124: $4 the title, %0 the trade
+# card (else the connection card). Connection (the link is not in step): $0 the
+# role, $1 the port and speed, $2 the state banner, $3 the framer's own line.
+# Other PC linked (a trade over the cable): $0 and $1 the lines.
 scene 411 192 124
-  panel 0 0 192 124 16 "CONNECTION" BP_F_TEXT13 raised|pleft
-  spr 64 21 BP_A2_MODEM
-  text 8 49 176 "$0" @TEXT BP_F_TEXT10 left|fit
-  text 8 62 176 "$1" @TEXT BP_F_TEXT10 left|fit
-  banner 8 80 176 20 "$2" BP_F_TEXT13 -1
-  text 8 106 176 "$3" @DISABLED BP_F_TEXT08 left|fit
+  panel 0 0 192 124 14 "$4" BP_F_TEXT13 raised|pleft
+  if !%0 {
+    spr 64 21 BP_A2_MODEM
+    text 8 49 176 "$0" @TEXT BP_F_TEXT10 left|fit
+    text 8 62 176 "$1" @TEXT BP_F_TEXT10 left|fit
+    banner 8 80 176 20 "$2" BP_F_TEXT13 -1
+    text 8 106 176 "$3" @DISABLED BP_F_TEXT08 left|fit
+  }
+  if %0 {
+    spr 36 24 BP_A2_LINKED
+    text 8 80 176 "$0" @TEXT BP_F_TEXT10 left|fit
+    text 8 94 176 "$1" @TEXT BP_F_TEXT10 left|fit
+  }
 end
 
-# +2 OTHER PC LINKED, FULL, 192 x 124 (a trade over the cable): $0 and $1 the lines.
-scene 412 192 124
-  panel 0 0 192 124 16 "OTHER PC LINKED" BP_F_TEXT13 raised|pleft
-  spr 36 24 BP_A2_LINKED
-  text 8 80 176 "$0" @TEXT BP_F_TEXT10 left|fit
-  text 8 94 176 "$1" @TEXT BP_F_TEXT10 left|fit
+# +2 DETAILS, COMPACT, three lines in a box 190 wide: $0 the name, $1 the price
+# or the plain sentence, $2 the owner and level.
+scene 412 190 32
+  text 6 2 178 "$0" @TEXT BP_F_TEXT08 left|fit
+  text 6 12 178 "$1" @TEXT BP_F_TEXT08 left|fit
+  text 6 22 178 "$2" @TEXT BP_F_TEXT08 left|fit
 end
 
-# +3 PAIRED SAVE, FULL, 192 x 76: %0 a paired save is on both disks, $0 the
-# status in the button, %1 its state (disabled until the link is back).
-scene 413 192 76
-  panel 0 0 192 76 16 "PAIRED SAVE" BP_F_TEXT10 raised|pleft
-  if %0 spr 26 19 BP_A2_DISK_OK
-  if %0 spr 86 28 BP_A2_DARROW
-  if %0 spr 138 19 BP_A2_DISK_OK
-  button 8 49 176 20 "$0" BP_F_TEXT10 %1
+# +3 the link line, COMPACT: $0 the round and the state, %0 struck through
+# (paused, a bad peer).
+scene 413 190 14
+  text 5 2 180 "$0" @TEXT BP_F_TEXT08 left|fit
+  if %0 dots 5 6 180 1 2 0
 end
 
-# +4 YOUR COLLECTION, FULL, 192 x 76: %0 over the cable, the status well below
-# with $0 its line and the LED: 1 green, 2 yellow, 3 the 1bpp ball.
+# +4 YOUR COLLECTION / PAIRED SAVE, FULL, 192 x 76: $5 the title. Collection:
+# %0 over the cable (the status well below with $0 its line and the LED: 1
+# green, 2 yellow, 3 the 1bpp ball). Paired save (the link is down): %2 the
+# card, $0 the status button's label, %1 its state, %3 a paired save is on both
+# disks.
 scene 414 192 76
-  panel 0 0 192 76 16 "YOUR COLLECTION" BP_F_TEXT10 raised|pleft
+  panel 0 0 192 76 14 "$5" BP_F_TEXT10 raised|pleft
   if %0 {
     box 3 49 186 24 sunken @FIELD
     text 24 55 158 "$0" @TEXT BP_F_TEXT10 left|fit
@@ -59,6 +68,12 @@ scene 414 192 76
   if %0=1 spr 8 56 BP_A2_LED_GREEN
   if %0=2 spr 8 56 BP_A2_LED_YELLOW
   if %0=3 spr 8 56 BP_A2_M_LED_RED
+  if %2 button 8 49 176 20 "$0" BP_F_TEXT10 %1
+  if %3 {
+    spr 26 19 BP_A2_DISK_OK
+    spr 86 28 BP_A2_DARROW
+    spr 138 19 BP_A2_DISK_OK
+  }
 end
 
 # +5 DETAILS, FULL, 192 x 124: $0 the title; %0 a computer or utility (the
@@ -67,7 +82,7 @@ end
 # mortgage or redeem, $3 owner, $4 level, $5..$11 base, set, 1..4 RAM, Workshop
 # rents; $12 the collection's name under the picture drawn by code.
 scene 415 192 124
-  panel 0 0 192 124 16 "$0" BP_F_TEXT13 raised|pleft
+  panel 0 0 192 124 14 "$0" BP_F_TEXT13 raised|pleft
   if %0 {
     text 68 19 117 "Price" @TEXT BP_F_TEXT10 left
     text 68 19 117 "$1 cr" @TEXT BP_F_TEXT10 right
@@ -115,7 +130,7 @@ end
 
 # +7 DETAILS, MID, 208 x 104: the slots of +5 (no $12).
 scene 417 208 104
-  panel 0 0 208 104 14 "$0" BP_F_TEXT10 raised|pleft
+  panel 0 0 208 104 12 "$0" BP_F_TEXT10 raised|pleft
   if %0 {
     text 64 17 137 "Price" @TEXT BP_F_TEXT08 left
     text 64 17 137 "$1 cr" @TEXT BP_F_TEXT08 right
