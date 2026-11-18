@@ -747,12 +747,6 @@ static const char *gp_lstate[] = {TP_OFF, TP_SEARCHING, TP_PEER_FOUND, TP_BAD_PE
 static const char *gp_pairs[] = {TP_IDLE, TP_SAVING_OR_RESUMING, TP_COMPLETE, TP_FAILED_OLD_PAIR};
 static const char *gp_phn[] = {"", TP_MOVE, TP_RELEASE, TP_BUY_2, TP_BID_2, TP_CARD, TP_DEBT, TP_TRADE_2, TP_END_TURN_2, TP_OVER};
 
-static int ovl_gp_sprite(int art)
-{
-    int w;
-    w = bp_w_sprite(gp_x, gp_y, art);
-    return w;
-}
 /* the landing (131.9.12): scene 0, on FULL and MID a bottom panel under
  * the centre art */
 static void ovl_gp_dbuy(void)
@@ -813,8 +807,6 @@ static void ovl_gp_dauc(void)
 }
 /* ---- panb: the kit-drawn panels (SPEC.md 131.9.13) ---------------------------- */
 #define GP_NOSPR 459            /* an art ID with no record: draws nothing */
-static const char *gp_sv[6];    /* a scene's string slots, its integer slots */
-static int gp_iv[10];
 static char gp_ub[3][14];       /* numbers for them */
 static int gp_ox, gp_oy;        /* the scene's origin, for the text the code adds */
 /* scene n (a CORE one h rows tall, centred in the free area; COMPACT's is
@@ -1093,12 +1085,6 @@ static void ovl_gp_dpause(void)
     gp_sv[7] = GP_PAIR(pr);   /* four handles in BP_PAIR_* order */
     ovl_gp_scene(3);
 }
-/* a list's "more" marks (131.9.7): ^ rows hidden above, v below */
-static void ovl_gp_more(int x, int y, int up, int down)
-{
-    if (up) bp_w_text(x, y, "^", 0, gp_font);
-    else if (down) bp_w_text(x, y, "v", 0, gp_font);
-}
 static const char *const gp_dl[4] = {TP_UPGRADE, TP_SELL, TP_MORTGAGE, TP_REDEEM};
 static void ovl_gp_dmanage(void)
 {
@@ -1143,8 +1129,6 @@ static void ovl_gp_dmanage(void)
         gk_scene(BP_A2_SC_PANB + 3, x + 2, y, gp_sv, gp_iv);
         y += rh;
     }
-    ovl_gp_more(x + w - 12 * gp_cw, gp_lr[0].y, top > 0, 0);
-    ovl_gp_more(x + w - 12 * gp_cw, y - rh, 0, top + i < gp_mn);
     gp_y = y + 6;
     if (!dh) return;
     p = gp_ml[gp_mc]; sp = bp_prop_space(p);
@@ -1210,22 +1194,21 @@ static void ovl_gp_dcompose(void)
             gk_scene(BP_A2_SC_PANB + 6, x + 2, y, gp_sv, gp_iv);
             y += rh;
         }
-        ovl_gp_more(x + hw - 2 * gp_cw, ly + 2, gp_ttop[c] > 0, 0);
-        ovl_gp_more(x + hw - 2 * gp_cw, y - rh, 0, gp_ttop[c] + nl < gp_in[c]);
-        if (!gp_in[c]) bp_w_text(x + 8, ly + 2, TP_NONE_2, 0, gp_font);
+                if (!gp_in[c]) bp_w_text(x + 8, ly + 2, TP_NONE_2, 0, gp_font);
     }
-    if (!cmp) gk_sprshadow(gp_x + hw + 3, ly + (nl * rh - 32) / 2, BP_A2_TRADE_ARR, 0);
     gp_y = ly + nl * rh + 8;
     bp_u32_set(&gp_u2, gp_tcash, 0);
     ovl_gp_lb(); ovl_gp_lv(&gp_u2); ovl_gp_la(TP_CR); ovl_gp_la(TB_PAID_BY); ovl_gp_la(ovl_gp_name(gp_tpay ? gp_tto : me));
     if (!cmp) { ovl_gp_ucell(gp_x, gp_y, w, gp_fh + 7, 0); gp_y += gp_fh + 11; }
     else ovl_gp_tl();
     ovl_gp_lb();
-    ovl_gp_la(ovl_gp_name(me)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[me]); ovl_gp_la(">");
-    if (ovl_gp_after(me, gp_tpay == 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
-    ovl_gp_la("  "); ovl_gp_la(ovl_gp_name(gp_tto)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[gp_tto]); ovl_gp_la(">");
-    if (ovl_gp_after(gp_tto, gp_tpay != 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
-    if (!cmp) { gk_box(gp_x, gp_y, w, gp_fh + 6, GK_SUNKEN, 15); gk_textbox(gp_x, gp_y, w, gp_fh + 6, gp_line, 0, gp_font, GK_CENTRE | GK_FIT); }
+    for (c = 0; c < 2; c++) {
+        k = c ? gp_tto : me;
+        if (c) ovl_gp_la("  ");
+        ovl_gp_la(ovl_gp_name(k)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[k]); ovl_gp_la(">");
+        if (ovl_gp_after(k, (gp_tpay != 0) == c, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
+    }
+    if (!cmp) gk_textbox(gp_x, gp_y, w, gp_fh + 6, gp_line, 0, gp_font, GK_CENTRE | GK_FIT);
     else ovl_gp_tl();
 }
 static void ovl_gp_dchat(void)
@@ -1250,7 +1233,6 @@ static void ovl_gp_ddiag(void)
     gp_x += 6; gp_y += 4;
     ls = bp_link_state();
     pt = bp_ck_port();
-    gk_sprshadow(gp_xr - 22, gp_y, BP_A2_LED_GREEN + (ls == BP_L_PLAY ? 0 : ls == 0 || ls == BP_L_BADPEER ? 1 : 2), 0);
     ovl_gp_lb(); ovl_gp_la(TP_ROLE); ovl_gp_la(bp_mode == BP_MODE_HOST ? TP_BANKER_HOST : bp_mode == BP_MODE_CLIENT ? TP_CLIENT : TP_SAME_PC);
     ovl_gp_la(TP_LINK); ovl_gp_la(gp_lstate[ls > 8 ? 0 : ls]); ovl_gp_tl();
     ovl_gp_lb(); ovl_gp_la(TP_PORT);
