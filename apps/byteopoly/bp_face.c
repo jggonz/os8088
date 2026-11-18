@@ -9,6 +9,7 @@
  * is repainted only when its signature (a hash of every input it draws)
  * changed, or when it was dirtied with BP_D_FORCE. */
 #include "art.h"
+#include "art2.h"
 #include "gk.h"                          /* gk_*: the game kit (SPEC.md 133) */
 
 int bx_rows(int x, int y, int w, int h);
@@ -401,6 +402,106 @@ static void fc_lvl(int xr, int y, int lvl, int mw)
     for (i = 0; i < lvl; i++)
         bx_spr(xr - (i % cols + 1) * (pw + 1) + 2, y + (i / cols) * (ph + 1), fc_mono(id));
 }
+/* ---- a FULL cell (56 x 50): the concept's ivory card (SPEC.md 131.8.2) ---- */
+static char fc_nm[28];                                  /* a cell name's first line */
+/* the cell's name from its text handle: fc_nm the first line, the answer the
+ * second (0 when it is one line); "/" is the break */
+static const char *fc_names(int s)
+{
+    char *p;
+    os88_strcpy(fc_nm, bx_str((const char *)((unsigned)TF_CELL00 + s)), sizeof(fc_nm));
+    for (p = fc_nm; *p; p++)
+        if (*p == '/') { *p++ = 0; return p; }
+    return 0;
+}
+static void fc_ln(int x, int y, int w, const char *s, int font)
+{
+    gk_text(x + 1, y, w, s, 0, font, GK_CENTRE | GK_FIT);
+}
+/* the colour or 1bpp twin of a corner picture */
+static int fc_cpic(const BPSpace *sp, int s)
+{
+    int id;
+    switch (sp->kind) {
+    case BP_K_BOOT: id = BP_A2_C_BOOT; break;
+    case BP_K_REPAIR: id = BP_A2_C_REPAIR; break;
+    case BP_K_SWAP: id = BP_A2_C_SWAP; break;
+    case BP_K_CRASH: id = BP_A2_C_CRASH; break;
+    case BP_K_EVENT: id = sp->group ? BP_A2_C_SYSERR : BP_A2_C_FLOPPY; break;
+    default: return fc_mono(fc_specart(sp, s));
+    }
+    if (bp_mono && id == BP_A2_C_BOOT) return BP_A2_M_C_BOOT;
+    return id;
+}
+/* the selection: yellow 2 px inside the cell's black edge (black, 3 px, on 1bpp) */
+static void fc_selframe(int x, int y, int x2, int y2)
+{
+    int c, k;
+    k = bp_mono ? 0 : 14;
+    for (c = 1; c <= (bp_mono ? 3 : 2); c++) {
+        bx_fill(x + c, y + c, x2 - c, y + c, k);
+        bx_fill(x + c, y2 - c, x2 - c, y2 - c, k);
+        bx_fill(x + c, y + c, x + c, y2 - c, k);
+        bx_fill(x2 - c, y + c, x2 - c, y2 - c, k);
+    }
+}
+static void fc_cfull(int s, int x, int y, int x2, int y2, const BPSpace *sp, int own, int lvl, int mort, int sel)
+{
+    const char *l2;
+    int cw, nw, prop, ny, id, i, pw, ph, c;
+    unsigned z;
+    cw = fc_cw; nw = cw - 2;
+    prop = sp->prop;
+    l2 = fc_names(s);
+    if (prop != BP_NOBODY) {
+        c = sp->kind == BP_K_UTILITY ? BP_GROUPS - 1 : sp->group;
+        bx_fill(x + 1, y + 1, x2 - 1, y + 7, bp_mono ? 0 : fc_gcol[c]);
+        if (sel) fc_selframe(x, y, x2, y2);
+        fc_buf[0] = sp->kind == BP_K_UTILITY ? 'U' : bp_group_letter(sp->group); fc_buf[1] = 0;
+        bx_text(x + 4, y + 1, fc_buf, 15, fc_fs);
+        if (own != BP_NOBODY) fc_tok(x + 14, y + 1, own, bp_game.token[own], 15);
+        ny = y + 9;
+        fc_ln(x, ny, nw, fc_nm, fc_fs);
+        if (l2) { ny += 8; fc_ln(x, ny, nw, l2, fc_fs); }
+        ny += 7;
+        i = y + 40 - ny;                                /* the picture's rows: down to the price line */
+        id = fc_pick(prop, nw, i);
+        if (mort) bx_dither(x + 3, ny, x2 - 3, y + 39, 15, 7, 2);
+        if (id >= 0) bx_spr(x + (cw - fc_pw) / 2, ny + (i - fc_ph) / 2, id);
+        if (mort) bx_spr(x + 3, ny, fc_mono(BP_A_MORTGAGE));
+        if (fc_seatat(s, 0) >= 0) fc_tokens(x, y + 41, cw, s, 0);
+        else {
+            i = fc_ap(fc_buf, 0, fc_dec(sp->price));
+            fc_ap(fc_buf, i, TA_CR);
+            fc_ln(x, y + 41, nw, fc_buf, fc_fs);
+        }
+        if (lvl >= BP_MAX_LEVEL) bx_spr(x2 - 15, y + 1, fc_mono(BP_A_WORKSHOP));
+        else
+            for (i = 0; i < lvl; i++) bx_spr(x2 - 17 - (lvl - 1 - i) * 5, y + 1, BP_A2_CHIP);
+    } else {                                            /* a corner, a deck, a charge */
+        if (sel) fc_selframe(x, y, x2, y2);
+        c = sp->kind == BP_K_CHARGE;
+        i = c ? fc_fs : sp->kind == BP_K_CRASH ? BP_F_BIG12 : fc_fb;   /* charges are small print, CRASH! wants a real '!' */
+        ny = y + (sp->kind == BP_K_BOOT ? 1 : 3);
+        fc_ln(x, ny, nw, fc_nm, i);
+        ny += bx_fonth(i);
+        if (l2) { fc_ln(x, ny, nw, l2, i); ny += bx_fonth(i); }
+        id = fc_cpic(sp, s);
+        z = bx_size(id);
+        pw = z & 255; ph = z >> 8;
+        if (sp->kind == BP_K_BOOT) {                    /* BOOT / arrow / Collect 200 */
+            ny = y + 10;
+            l2 = fc_names(28);
+            fc_ln(x, y2 - 15, nw, fc_nm, fc_fs);
+            fc_ln(x, y2 - 8, nw, l2, fc_fs);
+        } else if (c) {
+            fc_buf[0] = '-'; os88_strcpy(fc_buf + 1, fc_dec(sp->price), 8);
+            fc_ln(x, y2 - 8, nw, fc_buf, fc_fs);
+            ny = y + 17;
+        } else ny += (y2 - 1 - ny - ph) / 2;
+        if (z) bx_spr(x + (cw - pw) / 2, ny, id);
+    }
+}
 static void fc_cell(int s)
 {
     static BPRect r;
@@ -422,7 +523,8 @@ static void fc_cell(int s)
     bx_fill(x, y, x, y2, 0);
     if (fc_col(s) == 7) bx_fill(x2, y, x2, y2, 0);
     if (fc_row(s) == 7) bx_fill(x, y2, x2, y2, 0);
-    if (ch >= 28) {                                     /* FULL and MID cells */
+    if (ch >= 44) fc_cfull(s, x, y, x2, y2, sp, own, lvl, mort, sel);
+    else if (ch >= 28) {                                /* MID cells */
         bar = fc_sh;
         nw = cw - 6;
         if (prop != BP_NOBODY) {
@@ -433,11 +535,11 @@ static void fc_cell(int s)
                 fc_tok(x + 7 + id, y + 2 + (bar - 7) / 2, own, bp_game.token[own], 15);
             fc_rtext(x2 - 3, y + 2, fc_dec(sp->price), 15, fc_fs);
         }
-        sy = y + (prop != BP_NOBODY ? bar + 2 + (ch >= 44) : 2 + (ch >= 44));
+        sy = y + (prop != BP_NOBODY ? bar + 2 : 2);
         if (sel) bx_fill(x + 2, sy, x2 - 2, sy + fc_sh, 1);
         fc_ctext(x + 2, x2 - 2, sy, ovl_fc_cfits(sp->shortname, nw), ink, fc_fs);
-        sy += fc_sh + (ch >= 44);
-        ah = y2 - sy - (ch >= 44 ? 4 : 1);
+        sy += fc_sh;
+        ah = y2 - sy - 1;
         id = prop != BP_NOBODY ? fc_pick(prop, nw, ah) : -1;
         if (mort) bx_dither(x + 2, sy, x2 - 2, y2 - 2, 15, 7, 2);
         if (id >= 0) bx_spr(x + (cw - fc_pw) / 2, sy + (ah - fc_ph) / 2, id);
@@ -489,108 +591,101 @@ static unsigned fc_sigcell(int s)
 }
 
 /* ---- the centre --------------------------------------------------------- */
+/* the bottom bar the panel owns while the centre shows its art (DECISIONS D9):
+ * the landing / Buy panel and the turn bar draw into the bottom BARH rows of
+ * bp_r_center, the art stands above them. 0 on COMPACT: the panel sizes its own bar */
+#define FC_BAR_FULL 96
+#define FC_BAR_MID 64
+int bp_face_barh(void)
+{
+    return bp_layout == BP_LAY_FULL ? FC_BAR_FULL : bp_layout == BP_LAY_MID ? FC_BAR_MID : 0;
+}
 static void ovl_fc_die(int x, int y, int n) { bx_spr(x, y, BP_A_DIE(n)); }
 static void ovl_fc_centre(void)
 {
     static const char logo[] = "BYTEOPOLY";
-    int x, y, w, h, kw, kh, i, lx, ly, dsz, my, cid;
+    static int iv[3];
+    int x, y, w, h, kw, kh, i, ly, dsz, live;
     unsigned z;
     x = bp_r_center.x; y = bp_r_center.y; w = bp_r_center.w; h = bp_r_center.h;
-    bx_fill(x, y, x + w - 1, y, 0); bx_fill(x, y + h - 1, x + w - 1, y + h - 1, 0);
-    bx_fill(x, y, x, y + h - 1, 0); bx_fill(x + w - 1, y, x + w - 1, y + h - 1, 0);
-    if (bp_pn_covers() == BP_PN_CENTRE) {              /* the panel owns all but the 1 px ring */
-        bx_dither(x + 1, y + 1, x + w - 2, y + 1, 3, 11, 2);
-        bx_dither(x + 1, y + h - 2, x + w - 2, y + h - 2, 3, 11, 2);
-        bx_dither(x + 1, y + 2, x + 1, y + h - 3, 3, 11, 2);
-        bx_dither(x + w - 2, y + 2, x + w - 2, y + h - 3, 3, 11, 2);
+    if (bp_pn_covers() == BP_PN_CENTRE) {              /* the panel owns all but the 2 px edge */
+        gk_box(x, y, w, h, GK_SUNKEN2, -1);
         return;
     }
+    live = fc_live() && bp_game.d1 > 0 && bp_game.d1 < 7 && bp_game.d2 > 0 && bp_game.d2 < 7;
+    if (bp_layout != BP_LAY_COMPACT) {                  /* the scene: ground, cards, mascot, key caps, dice */
+        iv[0] = BP_A2_DIE1 - 1 + bp_game.d1; iv[1] = BP_A2_DIE1 - 1 + bp_game.d2; iv[2] = live;
+        if (bp_layout == BP_LAY_MID) iv[0] = BP_A_DIE1 - 1 + bp_game.d1, iv[1] = BP_A_DIE1 - 1 + bp_game.d2;
+        gk_scene(BP_A2_SC_BOARD + (bp_layout == BP_LAY_MID), x, y, 0, iv);
+        fc_aty = y + (bp_layout == BP_LAY_MID ? 40 : 152);   /* above this line the art stands */
+        return;
+    }
+    bx_fill(x, y, x + w - 1, y, 0); bx_fill(x, y + h - 1, x + w - 1, y + h - 1, 0);
+    bx_fill(x, y, x, y + h - 1, 0); bx_fill(x + w - 1, y, x + w - 1, y + h - 1, 0);
     bx_dither(x + 1, y + 1, x + w - 2, y + h - 2, 3, 11, 2);
-    kh = bp_layout == BP_LAY_FULL ? 28 : bp_layout == BP_LAY_MID ? 20 : 16;
-    kw = kh;
-    z = bp_layout == BP_LAY_COMPACT ? bx_size(BP_A_KEYCAP) : 0;
-    if (z) { kw = (int)(z & 255) + 1; kh = (int)(z >> 8) + 1; }
-    lx = x + (w - 9 * kw) / 2;
-    ly = bp_layout == BP_LAY_COMPACT ? y + 8 : y + h / 2 - kh / 2;
+    z = bx_size(BP_A_KEYCAP);
+    kw = (int)(z & 255) + 1; kh = (int)(z >> 8) + 1;
+    ly = y + 8;
     for (i = 0; i < 9; i++) {
-        if (z) bx_spr(lx + i * kw, ly, BP_A_KEYCAP);
-        else fc_frame(lx + i * kw, ly, kw - 2, kh - 2, 15);
+        bx_spr(x + (w - 9 * kw) / 2 + i * kw, ly, BP_A_KEYCAP);
         fc_buf[0] = logo[i]; fc_buf[1] = 0;
-        fc_ctext(lx + i * kw, lx + i * kw + kw - 3, ly + (kh - 2 - bx_fonth(fc_ft)) / 2, fc_buf, 0, fc_ft);
+        fc_ctext(x + (w - 9 * kw) / 2 + i * kw, x + (w - 9 * kw) / 2 + i * kw + kw - 3, ly + (kh - 2 - bx_fonth(fc_ft)) / 2, fc_buf, 0, fc_ft);
     }
-    fc_aty = bp_layout == BP_LAY_COMPACT ? y : ly + kh + 6;
-    my = y + 6;
-    if (bp_layout != BP_LAY_COMPACT) {                  /* the mascot between the two card decks */
-        z = bx_size(BP_A_MASCOT);
-        if (z && (int)(z >> 8) <= ly - my - 2) {
-            bx_spr(x + (w - (int)(z & 255)) / 2, my, BP_A_MASCOT);
-            cid = fc_mono(BP_A_CARD_FF);
-            z = bx_size(cid);
-            if (z && (int)(z >> 8) <= ly - my - 2 && w >= 300) {
-                bx_spr(x + w / 2 - 56 - (int)(z & 255), my, cid);
-                bx_spr(x + w / 2 + 56, my, fc_mono(BP_A_CARD_SE));
-            }
-        }
-    }
-    if (fc_live() && bp_game.d1 > 0 && bp_game.d1 < 7 && bp_game.d2 > 0 && bp_game.d2 < 7) {
+    fc_aty = y;
+    if (live) {
         dsz = (int)(bx_size(BP_A_DIE1) & 255);
-        if (bp_layout == BP_LAY_COMPACT) {
-            ovl_fc_die(x + 12, ly, bp_game.d1);
-            ovl_fc_die(x + w - 12 - dsz, ly, bp_game.d2);
-        } else {
-            ovl_fc_die(x + w / 2 - dsz - 6, ly + kh + 10, bp_game.d1);
-            ovl_fc_die(x + w / 2 + 6, ly + kh + 10, bp_game.d2);
-        }
+        ovl_fc_die(x + 12, ly, bp_game.d1);
+        ovl_fc_die(x + w - 12 - dsz, ly, bp_game.d2);
     }
 }
 
 /* ---- panel boxes (the widget kit's, used by bp_w_panel/bp_w_box) ------- */
 static void fc_wpanel(const BPRect *r, const char *title)
 {
-    int th;
-    th = fc_fh + 3;
-    fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + th, 1);
-    bx_text(r->x + 4, r->y + 2, fc_fits(title, fc_fb, r->w - 8), 15, fc_fb);
+    gk_panel(r->x, r->y, r->w, r->h, fc_fh + 3, title, fc_fb, GK_RAISED);
 }
+/* a white fill is a sunken well, any other fill a raised slab (the kit) */
 static void fc_wbox(const BPRect *r, int fill, int edge)
 {
-    fc_frame(r->x, r->y, r->w, r->h, fill);
-    if (edge != 0) {
-        bx_fill(r->x, r->y, r->x + r->w - 1, r->y, edge);
-        bx_fill(r->x, r->y, r->x, r->y + r->h - 1, edge);
-        bx_fill(r->x + r->w - 1, r->y, r->x + r->w - 1, r->y + r->h - 1, edge);
-        bx_fill(r->x, r->y + r->h - 1, r->x + r->w - 1, r->y + r->h - 1, edge);
-    }
+    (void)edge;
+    gk_box(r->x, r->y, r->w, r->h, fill == 15 ? GK_SUNKEN2 : GK_RAISED, fill);
 }
 
 /* ---- the hint bar ------------------------------------------------------- */
 static void fc_hint(void)
 {
     const char *h, *sp;
-    int i, x, y, n, kw, lw, x2;
-    x = bp_r_hint.x + 6;
+    int i, n, x, y, kw, lw, x2, ch, step, kh;
     x2 = bp_r_hint.x + bp_r_hint.w - 1;
-    y = bp_r_hint.y + (bp_r_hint.h - fc_fh) / 2;
     bx_fill(bp_r_hint.x, bp_r_hint.y, x2, bp_r_hint.y + bp_r_hint.h - 1, 1);
-    for (i = 0; (h = bp_pn_hint(i)) != 0; i++) {
-        h = bx_str(h);
+    for (n = 0; bp_pn_hint(n) != 0; n++) ;
+    if (n == 0) return;
+    kh = fc_fh + 5;                                     /* a key cap: the label's rows and its sides */
+    if (kh > bp_r_hint.h - 2) kh = bp_r_hint.h - 2;
+    y = bp_r_hint.y + (bp_r_hint.h - kh) / 2;
+    ch = bp_r_hint.w - 12;
+    step = ch / n;
+    for (i = 0; i < n; i++) {                           /* the entries spread across the bar */
+        h = bx_str(bp_pn_hint(i));
         for (sp = h; *sp && *sp != ' '; sp++) ;
-        n = sp - h;
-        if (!*sp) { n = 0; sp = h; } else sp++;
-        if (n > 0 && n < 8) {
-            os88_memcpy(fc_fit, h, n); fc_fit[n] = 0;
-            kw = bx_twidth(fc_fit, fc_fb) + 6;
-        } else { n = 0; kw = 0; }
+        kw = sp - h;
+        if (!*sp) { kw = 0; sp = h; } else sp++;
+        x = bp_r_hint.x + 6 + i * step;
         lw = bx_twidth(sp, fc_fb);
-        if (x + kw + 4 + lw > x2) break;
-        if (n) {
-            bx_fill(x, y - 2, x + kw - 1, y + fc_fh + 1, 15);
-            bx_fill(x, y + fc_fh + 2, x + kw - 1, y + fc_fh + 2, bp_mono ? 15 : 8);
-            bx_text(x + 3, y, fc_fit, 0, fc_fb);
-        }
-        bx_text(x + kw + 4, y, sp, 15, fc_fb);
-        x += kw + 4 + lw + 14;
+        if (kw > 0 && kw < 8) {
+            os88_memcpy(fc_fit, h, kw); fc_fit[kw] = 0;
+            kw = bx_twidth(fc_fit, fc_fb) + 8;
+            if (x + kw + 4 + lw > x2) break;
+            if (bp_layout == BP_LAY_FULL) gk_keycap(x, y, kw, kh, fc_fit, fc_fb);
+            else {                                      /* 8-row labels do not read inside the kit's cap (1bpp) */
+                bx_fill(x, y, x + kw - 1, y + kh - 2, 15);
+                bx_fill(x, y + kh - 1, x + kw - 1, y + kh - 1, bp_mono ? 15 : 8);
+                bx_text(x + 4, y + (kh - 1 - fc_fh) / 2, fc_fit, 0, fc_fb);
+            }
+            kw += 4;
+        } else kw = 0;
+        if (x + kw + lw > x2) break;
+        gk_text(x + kw, bp_r_hint.y + (bp_r_hint.h - fc_fh) / 2, 0, sp, 15, fc_fb, 0);
     }
 }
 
@@ -852,23 +947,10 @@ static int ovl_fc_key(int ascii, int scan)
 /* ---- the widget kit (valid only while bp_pn_draw runs) ------------------ */
 static void fc_wbutton(const BPRect *r, const char *label, int state)
 {
-    int x, y, x2, y2, tw, ty, dis, foc, i;
-    x = r->x; y = r->y; x2 = x + r->w - 1; y2 = y + r->h - 1;
-    dis = state & BP_W_DISABLED; foc = (state & BP_W_FOCUS) && !dis;
-    fc_rect(x, y, r->w, r->h, 0);
-    if (state & BP_W_DEFAULT) fc_rect(x + 1, y + 1, r->w - 2, r->h - 2, 0), fc_rect(x + 2, y + 2, r->w - 4, r->h - 4, foc ? 1 : fc_gr);
-    else fc_rect(x + 1, y + 1, r->w - 2, r->h - 2, foc ? 1 : fc_gr);
-    if (!foc && !(state & BP_W_DEFAULT)) {              /* the bevel: light top-left, dark bottom-right */
-        if (!bp_mono) { bx_fill(x + 1, y + 1, x2 - 1, y + 1, 15); bx_fill(x + 1, y + 1, x + 1, y2 - 1, 15); }
-        bx_fill(x + 1, y2 - 1, x2 - 1, y2 - 1, bp_mono ? 0 : 8);
-        bx_fill(x2 - 1, y + 1, x2 - 1, y2 - 1, bp_mono ? 0 : 8);
-    }
-    label = fc_fits(label, fc_fb, r->w - 6);
-    tw = bx_twidth(label, fc_fb);
-    ty = y + (r->h - fc_fh) / 2;
-    bx_text(x + (r->w - tw) / 2, ty, label, foc ? 15 : dis ? (bp_mono ? 0 : 8) : 0, fc_fb);
-    if (dis && bp_mono)                                  /* a screen door over the label */
-        for (i = 0; i < fc_fh; i++) bx_dots(x + (r->w - tw) / 2 + (i & 1), ty + i, x + (r->w + tw) / 2, ty + i, 2, 15);
+    int k;
+    k = (state & BP_W_DISABLED) ? GK_B_DISABLED : (state & BP_W_FOCUS) ? GK_B_FOCUS :
+        (state & BP_W_DEFAULT) ? GK_B_DEFAULT : GK_B_NORMAL;
+    gk_button(r->x, r->y, r->w, r->h, label, fc_fb, k | GK_B_FLAT);
 }
 int bp_w_text(int x, int y, const char *s, int colour, int font) { return bx_text(x, y, s, colour, font); }
 int bp_w_textw(const char *s, int font) { return bx_twidth(s, font); }
