@@ -79,12 +79,15 @@ br_p7get:
     jz .no
     mov es, ax
     mov [es:BRCL_SELF], ax
+    mov [br_stv + 2], dx            ; br_strun's runs (BRST_CODE's segment)
     clc
     ret
 .no:
     stc
 .ret:
     ret
+
+br_stv:     dw BRST_CODE, 0         ; part 7's brs_f_run: 0 segment, not in
 
 ; --- the primary routines the table body calls: a far vector each onto a shim -------
 br_tb_rtab:

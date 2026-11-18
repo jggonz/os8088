@@ -555,20 +555,27 @@ brf_name:   db 'TIMES.F88', 0
 ; --- brf_facebuf - os88type's hook: the face in THIS part's memory ----------
 ; The Browser holds eight claims by the time a page has a heading - the cap a
 ; package has (SPEC.md 50) - so a claim for the face is refused with 355KB
-; free. Real mode only: under kern_mega a segment is a selector, its sum is
-; nothing, and the cap there is twelve, so the face claims as usual.
-; in: AX = KB; out: CF=0 DX = the buffer's segment, CF=1 claim. All else kept
+; free. AND A CLAIM FROM HERE IS REFUSED ANYWAY, on every kernel: this is a
+; part, and SPEC.md 20.12.5 keeps OSAPI_MEM_P and its relatives to the
+; primary - the kernel reads the caller's DS as who is asking, finds part
+; 7's, and says no. So the face is read into brf_fbuf on both:
+;   real mode  the segment is a sum: the first 512-byte boundary in brf_fbuf
+;   kern_mega  a segment is a selector and its sum is nothing, so the same
+;              boundary is found in LINEAR terms (SEG_LIN) and a data
+;              selector is asked for it (SEG_SUB) - one over our own block,
+;              which moves with it and goes with it (SPEC.md 71.35)
+; in: AX = KB; out: CF=0 DX = the buffer's segment, CF=1 claim (refused, so
+; no face). All else kept
 BRF_FBKB    equ 2                   ; a face is 1,498-1,688 bytes (6.4.1)
 brf_facebuf:
     cmp ax, BRF_FBKB
     ja .no
     push ax
+    push bx
+    push cx
     call OSAPI_CPU_INFO
     test ah, CPU_F_PM
-    pop ax
-    jnz .no
-    push ax
-    push cx
+    jnz .pm
     mov dx, ds
     mov ax, brf_fbuf + 15
     mov cl, 4
@@ -576,10 +583,33 @@ brf_facebuf:
     add dx, ax                      ; the buffer's first whole paragraph...
     add dx, 31
     and dx, 0FFE0h                  ; ...up to 32 of them: 512 bytes, linear
+    jmp short .ok
+.pm:
+    mov dx, ds
+    mov bl, SEG_LIN
+    call OSAPI_SEG                  ; DX:AX = our base, linear
+    jc .pmno
+    mov cx, ax                      ; THE OFFSET OF THE FIRST 512-BYTE LINEAR
+    add ax, brf_fbuf + 511          ; BOUNDARY AT OR PAST brf_fbuf: the low
+    and ax, 0FE00h                  ; word alone decides it, and the distance
+    sub ax, cx                      ; fits a word (brf_fbuf's 512 + 16 spare)
+    mov cl, 4
+    shr ax, cl                      ; ...in paragraphs (a base off a paragraph
+    mov dx, ds                      ; lands off the boundary, and ty_open's own
+    mov cx, BRF_FBKB * 64           ; SEG_LIN check refuses it)
+    mov bl, SEG_SUB
+    call OSAPI_SEG                  ; DX = a data selector there
+    jc .pmno
+.ok:
     pop cx
+    pop bx
     pop ax
     clc
     ret
+.pmno:
+    pop cx
+    pop bx
+    pop ax
 .no:
     stc
     ret

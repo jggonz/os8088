@@ -32,9 +32,85 @@ org 0
     dw brf_f_adv                    ; BRFN_ADV
     dw brf_f_draw                   ; BRFN_DRAW
     dw brt_f_table                  ; BRTB_ENTRY
-%if ($ - $$) != BRTB_ENTRY + 2
+%if ($ - $$) != BRTB_ENTRY + 2 || ($ - $$) != BRST_CODE
 %error "part 7's entry table does not match brcolor_const.inc / brfont_const.inc"
 %endif
+
+; --- brs_f_run - br_strun's row when it has colours (71.34.15): far, from the
+; primary, DS = it. In: as br_strun - AX x, BX y, CX width, DX 1, BP = the
+; stride ([br_cols]); the row is at DS:br_stylebuf and is scan line
+; [br_bmrow] of eight. Out: CF = BLIT1's; every register kept.
+;
+; A RUN ONCE, EIGHT ROWS TALL. The scan line is banked in the font band; on
+; the eighth, each run of equal attribute is one pen and one BLIT1 with DX = 8
+; - not one a scan line, which made a bordered table's text row 8 x (2N + 1)
+; BLIT1s where an uncoloured row takes 8. The band is idle here: brf_draw
+; fills it afresh for every tall slice, and br_paintstyled's eight rows are
+; one call with nothing between them.
+brs_f_run:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [cs:BRCL_SELF]          ; ES = our data: the band
+    mov al, [br_bmrow]
+    mul byte [br_cols]              ; AX = the scan line's place (a byte MUL:
+    add ax, ty_bandbuf              ; DX is not written)
+    mov di, ax
+    mov si, br_stylebuf
+    mov cx, [br_cols]
+    cld
+    rep movsb
+    mov al, [br_bmrow]
+    xor al, 7                       ; CF = 0: banked, nothing drawn yet
+    jnz .out
+    mov bx, [br_bmpy]               ; the line's TOP row, eight of them
+    mov dl, 8
+    xor di, di                      ; DI = a run's first cell
+.r:
+    cmp di, [br_cols]
+    jae .out                        ; (CF = 0)
+    mov si, di
+    mov al, [br_lattr + si]
+.e:
+    inc si
+    cmp si, [br_cols]
+    jae .emit
+    cmp al, [br_lattr + si]
+    je .e
+.emit:                              ; cells DI..SI-1, one attribute
+    mov ah, al                      ; br_apen's: AL ink, AH ground
+    and al, 0Fh
+    mov cl, 4
+    shr ah, cl
+    call OSAPI_GFX_BLIT1_PEN
+    mov cx, si
+    sub cx, di
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1                       ; its pixels
+    mov ax, di
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, [br_bmpx]
+    push si                         ; (the next run's first cell)
+    lea si, [di + ty_bandbuf]
+    call OSAPI_GFX_BLIT1
+    pop di
+    jnc .r
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf
 
 brt_f_table:
     call br_table
@@ -43,3 +119,7 @@ brt_f_table:
 %include "brtable.inc"
 %include "brcolor_body.inc"
 %include "brfont_body.inc"
+
+%if 8 * BR_MAXCOL > TY_BANDSZ
+%error "brs_f_run banks eight scan lines of BR_MAXCOL cells in the font band"
+%endif

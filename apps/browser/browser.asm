@@ -406,6 +406,7 @@ br_size:
     push si
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = the dock's first row
     mov [br_bpp], dh                ; ...and DH = bits per pixel, which is the
+    mov [br_wbpp], dh               ; (the window's, until br_keeph can ask)
     call br_cdefault                ; black on white until a <body> says not
     mov byte [br_mcol], CWHITE
                                     ; polarity br_paintstyled hands its band in
@@ -445,6 +446,12 @@ br_keeph:
     push bx                         ; **BX IS THE WINDOW AND THE ANSWER COMES
     call OSAPI_WM_DISPLAY           ; BACK IN IT**, so asking the adapter first
     pop bx                          ; and passing BX afterwards hands WM_KEEPH
+    cmp [br_wbpp], dh               ; THE COLOUR DECISION FOLLOWS THE WINDOW
+    je .samebpp                     ; (71.34.16): a drag onto the other card
+    mov [br_wbpp], dh               ; is exactly when it changes. The page was
+    mov byte [br_cwant], 1          ; parsed under the other display's gates
+    call br_tkick                   ; - its pen, its records - so the UI
+.samebpp:                           ; task's next wake parses it again
                                     ; the number 200 as a window pointer. It
                                     ; cost one run: the window came back at the
                                     ; band's 155 rows, which is exactly what a
@@ -1556,7 +1563,7 @@ br_paintstyled:
     push ds
     pop es
     mov si, br_stylebuf
-    cmp byte [br_bpp], 1            ; THE PEN IS NOT READ ON A 1bpp ADAPTER
+    cmp byte [br_wbpp], 1           ; THE PEN IS NOT READ ON A 1bpp DISPLAY
     jne .polar                      ; (SPEC.md 5.4.2.2): a set bit is a LIT
     mov cx, [br_cols]               ; pixel there, so the band - composed with
 .invert:                            ; 1 = ink - goes over complemented, in
@@ -7932,7 +7939,7 @@ br_frameclaim:
     push ax
     push dx
     push si
-    cmp byte [br_bpp], 1            ; PART 7 BEFORE THE CHILDREN (1.8), on a
+    cmp byte [br_wbpp], 1           ; PART 7 BEFORE THE CHILDREN (1.8), on a
     je .p7                          ; colour display: a frame's <body bgcolor>
     cmp word [br_cpseg], 0          ; is read as it is parsed, and a frameset
     jne .p7                         ; is never parsed again (br_reparse) - its
@@ -15191,11 +15198,6 @@ br_s_radio:   db 'radio', 0
 br_s_option:  db 'option', 0
 br_s_selected: db 'selected', 0
 br_s_select:  db 'select', 0
-br_s_subbtn:  db '<', D_NBSP, 'Submit', D_NBSP, '>', 0   ; ONE WORD, so the
-                                    ; wrap moves the whole button to the next
-                                    ; line rather than splitting it. FrogFind's
-                                    ; is at the end of a line and came out as
-                                    ; `< Submit` with the `>` alone below
 br_s_scheme:  db 'http://', 0
 br_s_httpcolon: db 'http:', 0
 br_s_schemes: db 'https://', 0
@@ -16038,7 +16040,11 @@ br_lshare        equ br_cwant + 1      ; byte: the line table lives in the
                                        ; document's claim (71.34.11)
 br_tind          equ br_lshare + 1     ; byte: inlined tables the layout is in
 br_lgbusy        equ br_tind + 1       ; byte: the worker regrows the URL store
-br_parse_bss_end equ br_lgbusy + 1
+br_wbpp          equ br_lgbusy + 1     ; byte: bits per pixel of the display
+                                       ; the WINDOW is on (71.34.16) - every
+                                       ; colour decision's, where br_bpp stays
+                                       ; the primary's: the image store's format
+br_parse_bss_end equ br_wbpp + 1
 BR_BSS     equ (br_parse_bss_end - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------

@@ -9059,7 +9059,7 @@ $(BUILD)/brxbm.bin: apps/browser/brxbm.asm $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
 # PART 7, the 1.8 renderer's on-demand half (SPEC.md 71.34, 71.35): colours,
 # fonts and the table composer, ONE part so ONE heap claim - with the table
 # body's every br_* imported from browser.map
-BRTBLK := BR_TCOLS BR_TFLRMAX COL_BGDEF COL_FGDEF LN_END LN_FL LN_OFS LN_X
+BRTBLK := BR_MAXCOL BR_TCOLS BR_TFLRMAX COL_BGDEF COL_FGDEF LN_END LN_FL LN_OFS LN_X
 $(BUILD)/brtable_part_symbols.inc: $(BUILD)/browser.bin \
                            apps/browser/brext_part.asm \
                            apps/browser/brtable.inc tools/brdlsyms.py | $(BUILD)
