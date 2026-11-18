@@ -60,7 +60,7 @@ static int bpl_h_open2(int r, int w, BPCkpt *m, BPState *o) { (void)r; (void)w; 
 #endif
 
 /* ---- protocol constants (SPEC.md 131.5.2, 131.5.3) ----------------------- */
-#define BPL_VER         1
+#define BPL_VER         2
 #define BPL_BEAT        9
 #define BPL_PING        18
 #define BPL_RETRY       27
