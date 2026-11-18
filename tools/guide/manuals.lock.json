@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "80235ef47",
+  "stamped": "60b0d6f0c",
   "strings": "511e2c056170a587",
-  "why": "unchanged: the page already promises Times headings, colours and table grids; the fixes are below its level of detail (fewer drawing calls, the kern_mega face buffer, colour per display)"
+  "why": "restamp at #389's squash; the branch stamp 80235ef47 is not in main's history. Strings unchanged."
  },
  "C64": {
   "sources": [],
