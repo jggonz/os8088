@@ -3767,13 +3767,23 @@ dwf_dskw_read_seq:
     pop es                      ; ES = ours; SI is the NAME, which READ_AT
     mov si, di                  ; still needs, and CX the capacity
     mov di, dwr_c
-%ifdef DSK_RUN
-    mov cx, FSEQ_XSIZE / 2      ; (22: the run's 6 too, 18.4.8.3. A 16-byte
-%else                           ; cursor's 6 past it are read and ignored)
-    mov cx, FSEQ_SIZE / 2
-%endif
+    mov cx, FSEQ_SIZE / 2       ; 16 bytes: every cursor has those...
     cld
     rep movsw                   ; DI = dwr_c + the copy: [DWC(n)] is +n
+%ifdef DSK_RUN
+    test byte [si+FSEQ_FLG-FSEQ_SIZE], FSEQF_RUN ; ...and the run's 6 ONLY
+    jz .xno                     ; when +3 says the cursor has them (18.4.8.3).
+%if FSEQ_XSIZE - FSEQ_SIZE != 6
+  %error "the run is three words past a 16-byte cursor: three movsw below"
+%endif
+    movsw                       ; A 16-byte cursor's 6 past it are not
+    movsw                       ; read: on kern_mega it is read through its
+    movsw                       ; package's selector, and a cursor ending
+    jmp short .xin              ; its bss took a #GP 6 bytes early
+.xno:
+    add di, FSEQ_XSIZE - FSEQ_SIZE ; (the base DWC needs; .norun voids the
+.xin:                           ; run the 6 would have held)
+%endif
     push es
     pop ds                      ; DS = KERNEL_SEG again
     pop cx

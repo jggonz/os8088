@@ -3959,7 +3959,8 @@ cmz_jtok:   dw 0                ; the result's WRITE_SEQ token (18.4.9).
     ; is read through the image's selector, whose LIMIT is the image's end:
     ; 22 bytes from here ran 4 past it - a #GP the KSEG helpers after this
     ; hid until they moved below the scratch tail (SPEC.md 2.8.3.3,
-    ; mega-czto). Zeros, in the tail
+    ; mega-czto). Zeros, in the tail. READ_SEQ reads the 6 only for a
+    ; FSEQF_RUN cursor since 2026-11-18 (18.4.8.3); the pad stays
     times FSEQ_XSIZE - ($ - cmz_jcur) db 0
 %endif
 %endif
