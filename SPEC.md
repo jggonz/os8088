@@ -255137,17 +255137,18 @@ never painted):
   14..21 descend the right column to CRASH!, 21..27 return along the bottom.
 * `bp_r_center` = (ax + cw, ay + ch, 6 cw, 6 ch): the inner 6 x 6.
 * `bp_r_side` = (ax + 8 cw, ay, aw - 8 cw, 8 ch), tiled exactly by four boxes
-  top to bottom: players (title bar + four rows, none in COMPACT), details
-  (3/5, 14/25 and 1/2 of what is left on FULL, MID, COMPACT), the link box
-  (two rows on FULL, one otherwise) and the log, which takes the remainder.
+  top to bottom (131.8.4): players (FULL 130, MID 86, COMPACT four 11 px
+  rows + 4), details (124, 104, half of the rest), collection / link (76, 44,
+  one row + 4) and the log, which takes the remainder. A column wider than
+  the 192 / 208 px the boxes are drawn at centres them on a face-grey ground.
 * `bp_r_hint` = (ax, ay + 8 ch, aw, h - 8 ch).
 
 Every section tiles its rect completely and paints every pixel of it, so a
 strip (a rect in the band, widened to 8) never carries stale band bytes.
 
 When `bp_pn_covers()` is `BP_PN_FULL` (the setup and lobby screens) the face
-sets `bp_r_center` to the whole aligned content, draws NOTHING of the board,
-and calls only `bp_pn_draw`; `bp_face_hit_space` then answers -1 and
+sets `bp_r_center` to the whole aligned content above the hint bar, draws
+NOTHING of the board, and calls only `bp_pn_draw` and then the hint bar (D17); `bp_face_hit_space` then answers -1 and
 `bp_face_key` 0. Back to 0 or `BP_PN_CENTRE`, the layout is rebuilt and
 everything repainted - the only coverage change that costs a whole window.
 
@@ -255165,6 +255166,30 @@ lanes can own the board and the sidebar apart.
 A cell is its own repaint unit (`ovl_fc_cell`): ground white, a 1 px black
 line along its top and left edges (the outer right and bottom edges belong to
 the cells on the ring's rim), then, by what it is:
+
+**FULL cells (56 x 50, the concept board's ivory cards; `fc_cfull`)** are
+laid out top to bottom, every picture by `bx_size`: a collection band 7 rows
+tall in the collection's colour (black on 1bpp) with the collection LETTER in
+white at the left, the owner's token mark (the white-outlined silhouette)
+after it and the level on the band's right - one `BP_A2_CHIP` per RAM level,
+overlapped five pixels apart, or the `BP_A_WORKSHOP` block; the NAME in bold
+8-row type, centred, in one or two lines (the text handles `TF_CELL00` + space
+in `art/tx-face.txt`, `/` breaking the line; `i` has no dot in the 8-row face,
+so the names that carry one are in capitals); the SMALL picture - the TINY one
+when the name took two lines, whichever `fc_pick` finds room for in the rows
+down to the price - centred, with the mortgage mark at the left of its row and
+a sparse grey dither over it when mortgaged; and the price as "120 cr"
+centred in the last row. TOKENS standing on the cell take the price's row
+(its details are in the sidebar). Corners and specials have no band: the name
+in the bold 10-row face, two lines for REPAIR / SHOP, SWAP / MEET, FLOPPY /
+FIND and SYSTEM / ERROR, one for BOOT and CRASH! (CRASH! in the 12-row System
+face, which is the one with a real `!`), the `BP_A2_C_*` picture below it
+(BOOT's red arrow points UP, the way play leaves it; its 1bpp twin
+`BP_A2_M_C_BOOT`) and, for BOOT, "Collect" / "200" under the arrow; the two
+charges (IMPORT / DUTY, E-WASTE / FEE) set their name in the 8-row face over
+their SMALL picture and the amount. The SELECTED cell has a 2 px yellow frame
+inside its black edge, drawn over the band and under every mark (on 1bpp a 3 px
+black frame); there is no name bar. MID and COMPACT keep the layouts below.
 
 * A **property** (computer or utility): a bar of the collection's colour
   (blue C, green H, cyan A, red I, magenta R, grey utility; on 1bpp always
@@ -255196,9 +255221,9 @@ the cells on the ring's rim), then, by what it is:
   the seat's dark colour, then the price. Levels are black bars (four) or one
   wide block (Workshop); a mortgaged cell strikes its name through with a
   dotted line and shows an `M` right-aligned 2 px inside the cell's edge.
-* **Selection** (`bp_sel`): the short name on a navy/black bar in white
-  (visible on every adapter), and on FULL/MID a 1 px yellow (black on 1bpp)
-  frame inside the edge. It is drawn over ground only, so it never erases an
+* **Selection** (`bp_sel`): on MID and COMPACT the short name on a navy/black
+  bar in white (visible on every adapter), and on MID a 1 px yellow (black on
+  1bpp) frame inside the edge; FULL is the 2 px frame described above. It is drawn over ground only, so it never erases an
   owner mark, level, token or the mortgage mark.
 * **Tokens**: up to four on one cell, a 7 x 7 silhouette each, side by side
   along the bottom (COMPACT: in row B in place of the price). The silhouette's
@@ -255215,42 +255240,103 @@ the cells on the ring's rim), then, by what it is:
 #### 131.8.3 The centre
 
 With no panel over it (`bp_pn_covers() == 0`) the centre is a teal ground with
-a sparse light-cyan stipple (on 1bpp black with white dots), then:
-`BYTEOPOLY` as nine keycaps (drawn frames with BIG letters on FULL and MID, the
-`BP_A_KEYCAP` sprite on COMPACT), above them on FULL and MID the mascot
-between the Floppy Find and System Error cards, and under them the two dice
-(`BP_A_DIE`, a drawn die when absent) of `bp_game.d1/d2`. Then, always,
-`bp_pn_draw()` runs. With `BP_PN_CENTRE` the panel owns every pixel of
-`bp_r_center` inset by 2 (`bp_pn_draw`'s contract, 131.9.7): the face draws
-the border and the 1 px stippled ring outside that and nothing under the
-panel - no art, and no stipple for the panel to paint over.
+a sparse light-cyan stipple (on 1bpp black with white dots) in a 2 px sunken
+well (`GK_SUNKEN2`), then, on FULL (scene `BP_A2_SC_BOARD`, 336 x 300): the
+mascot (`BP_A2_MASCOT_UP`) pointing, with `BP_A2_RAYS_L` at its fingertip,
+between the tilted Floppy Find and System Error cards, `BYTEOPOLY` as nine
+`gk_keycap`s in the bold 16-row face beneath them, and under those the two 3D
+dice (`BP_A2_DIE1..6`) of `bp_game.d1/d2` (drawn only while a match is live).
+MID (scene 401, 384 x 204) has the key caps on top, then the older 64 x 64
+mascot between two small cards and the small dice. COMPACT is code: a dithered
+ground and the nine `BP_A_KEYCAP` sprites above the dice. Then, always,
+`bp_pn_draw()` runs.
+
+**The bottom bar belongs to the panel** (DECISIONS D9): with no panel over the
+centre the landing / Buy panel and the turn bar are bottom panels of
+`bp_face_barh()` rows of `bp_r_center` - FULL 96, MID 64, COMPACT 0 (the panel
+sizes its own there). The face paints the teal ground under them and the art
+only above; `fc_aty`, the line of the dice row (FULL: 152 rows down the centre,
+MID: 40), is where a centre repaint with the art standing starts, so the key
+caps, mascot and cards are not redrawn for a dice change. With `BP_PN_CENTRE`
+the panel owns every pixel of `bp_r_center` inset by 2: the face draws only
+the 2 px sunken edge and nothing under the panel - no art, no stipple. A
+sprite wider than 64 px needs the band core's 64-byte `bx_srow` (`BX_ART2`
+builds: draw.inc).
 
 #### 131.8.4 The sidebar and the hint bar
 
-* **Players**: title "Round N" (N = completed rounds + 1, held at a Quick
-  Match's limit, so a finished 10-round match says "Round 10", not 11) with
-  the dice total as "d1+d2" at the right
-  (COMPACT carries both in the link row); a row per seat: token silhouette,
-  name, cash (`bp_u32_fmt`). The ACTIVE seat is the whole row inverted
-  (navy/black ground, white text) - readable without colour; an eliminated
-  seat shows "OUT" and a dotted strike through its name; a DETAINED seat an
-  inverse `R` chip. Before a match: "No match - Game > New Game".
-* **Details** for `bp_sel`: the full name in a title bar; for a property
-  Price, Mortgage (Redeem, with 131.2.4's cost, once mortgaged), Owner, Level,
-  and on FULL its `BP_A_LARGE` picture beside them; then the rent schedule of
-  131.2.3, computed here from the base rent: Base, Set (x2), 1..4 RAM (5, 15,
-  30, 45, 60 x base) and Workshop. A utility shows its 4x/10x dice rule; any
-  other space one plain sentence (and a charge its amount). COMPACT: three
-  lines (name, collection, price; rent, set, Workshop; owner, level, MORT).
-* **Link**: "Same PC" in local mode, else the state name (Off, Searching, Peer
-  found, Bad peer, Lobby, Linked, PAUSED, Resync) with " ..." while
-  `bp_sess_busy()`, PAUSED and BADPEER struck through, and on FULL the
-  `bp_link_msg()` line beneath. Status never depends on colour.
-* **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters, newest at
-  the bottom, truncated to the box width; as many as the box holds.
+* **The column** is four boxes on a face-grey ground (131.8.1), each a kit
+  panel (SPEC.md 133.3): a navy title bar with the title left-aligned and
+  embossed, a raised bevel, a 1 px outline. FULL draws every frame, title
+  and fixed label as a SCENE (`art/scenes-side.txt`, ids `BP_A2_SC_SIDE` +
+  0..9, 133.6) and only the live values and pictures in code; MID draws the
+  frame with `gk_panel` and the rows and the details card as scenes;
+  COMPACT keeps four plain bevelled boxes (its details lines, link line and
+  rows are scenes too). All of it is `gk_role` colour, so 1bpp is the kit's
+  mono table: the title bar is black, the highlighted row is INVERSE. A
+  panel's title bar is `bar` rows starting 3 px inside the edge with a dark
+  line under it, so a scene's first row of content starts at `bar + 5`.
+* **Players** (FULL 192 x 130, MID 208 x 86, COMPACT four rows): the title is
+  the seat to act - "PLAYER n • YOUR TURN" when `bp_sess_mine`, else
+  "NAME • THEIR TURN" (the other PC's seat) - with the round ("R3") at the
+  right; during an auction "BIDDING ORDER", at the end "GAME OVER", before a
+  match "Players". FULL shows the acting seat's `BP_A2_TOKL_*` beside a
+  sunken white well with its cash in the big font (during an auction the
+  high bid, or "No bid" beside the gavel). One row per seat: the `BP_A_TOK_*`
+  token, the name, the cash right-aligned (during an auction a status word:
+  PASSED / BIDDING / HIGH BID / IN), a divider under it (FULL); the seat to
+  act is the whole row in `GK_R_HILITE` (yellow; inverse on 1bpp); an
+  eliminated seat shows "OUT" and a dotted strike through its name, a DETAINED
+  seat an `R` chip. Each row is ONE scene call (`BP_A2_SC_SIDE` + 8 FULL, + 9
+  MID, + 6 COMPACT; slots: name, right text; flags: highlight, token (+4 on
+  1bpp), dead, divider, detained; COMPACT draws its 7 x 7 token in code).
+  Before a match: "No match - Game > New Game". The dice are not drawn here
+  (the board's centre shows them).
+* **Details** is a card of the space, the lot, or (FULL only) the cable: during
+  an auction it is the auctioned space titled "THE LOT" (an auction's list
+  price is its Price, its owner the Bank); on FULL, while the cable link is
+  not in step (`bp_mode` is not local and `bp_link_state()` is not
+  `BP_L_PLAY`) it is CONNECTION - `BP_A2_MODEM`, "Banker host" or "Joined
+  PC", "COMn • 2400 baud" (the port `bp_ck_port()` holds, "No port held" when
+  none; 2400 is the cable's fixed speed, 114.3), a banner with the state
+  ("Disconnected" for `BP_L_PAUSED`, else the state name) and the framer's own
+  `bp_link_msg()` line; on FULL during a trade over the cable it is OTHER PC
+  LINKED with `BP_A2_LINKED`, "Cable linked" (" • waiting" while
+  `bp_sess_busy()`) and the port; otherwise it is the space `bp_sel`: the full
+  name in the title bar; for a property the `BP_A_LARGE` picture, its
+  collection bar and (FULL) name on the left and Price, Mortgage (Redeem, with
+  131.2.4's cost, once mortgaged), Owner and Level on the right (the concept's
+  "Buy / Rent / Set" lines carry the same facts); then, under a rule, the rent
+  schedule of 131.2.3 computed from the base rent - Base, Set (x2), 1..4 RAM
+  (5, 15, 30, 45, 60 x base) and Workshop - or a utility's 4x/10x dice rule;
+  any other space its picture and one plain sentence (a charge its amount).
+  The values are the scene's string slots (`$1..$12`) and flags (`%0..%3`);
+  one scene per layout (+ 5 FULL, + 7 MID) serves all of them. COMPACT:
+  three lines (name; price or the sentence; owner and level).
+* **Collection / link** (FULL 192 x 76, MID 208 x 44): "YOUR COLLECTION" with
+  `BP_A_SMALL` pictures (MID `BP_A_TINY`) of the computers of the seat this PC
+  plays - the acting seat when it is ours, else our first living seat (FULL ten
+  pictures on same-PC play, five over the cable; MID nine; "+n" for the rest).
+  Over the cable a status line under them: the LED (`BP_A2_LED_GREEN`, yellow
+  while `bp_sess_busy()`, red on MID when the link is down, the 1bpp ball on
+  a mono display) and "Cable linked • 2400 baud" (" • waiting" while busy; on
+  MID the link's state word while the link is down). While the link is down
+  FULL's box is PAIRED SAVE instead: two `BP_A2_DISK_OK` and the arrow when
+  `bp_sess_pair() == BP_PAIR_DONE`, and a status button - "Paired save
+  complete", "Paired save failed", "Saving...", else "Waiting for link" greyed
+  (`GK_B_DISABLED`; it is a status, the keys stay the panel's R / L / D).
+  COMPACT is one line: the round and the link state (PAUSED and BADPEER struck
+  through), " ..." while busy. Status never depends on colour: every state
+  has its word.
+* **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters in a
+  sunken white well, newest at the bottom, truncated to the box width; as
+  many as the box holds.
 * **Hint bar**: navy/black; each `bp_pn_hint(i)` is split at its first space:
-  the head (under 8 characters) becomes a white key cap, the rest its label;
-  entries that no longer fit are dropped.
+  the head (under 8 characters) becomes a key cap, the rest its label beside
+  it; the entries are spread evenly along the bar (the concept's bottom row),
+  and one that no longer fits is dropped. On FULL the cap is `gk_keycap`; on
+  MID and COMPACT, whose 8-row labels do not read inside the kit's cap once
+  colour is 2 x 2 patterns, a flat white cap with a shade line.
 
 #### 131.8.5 Sections, dirty bits and what an update costs
 
@@ -255263,9 +255349,9 @@ rect, a sidebar line by its y.
 |---|---|---|
 | `BP_D_BOARD` | a cell's signature (owner, level, mortgage, the tokens standing on it, selected) changed, or `bp_face_dirty_space` named it; more than ten cells: the four sides of the ring | each cell |
 | `BP_D_CENTER` | always (the panel's state is not the face's to hash) | `bp_r_center` |
-| `BP_D_PLAYERS` | signature (round, dice, active seat, status, cash, alive, detained, token, name) changed | players box |
-| `BP_D_DETAILS` | signature (`bp_sel`, every owner/level/mortgage, names) changed | details box |
-| `BP_D_LINK` | signature (state, busy, mode, message text, round/dice off FULL) changed | link box |
+| `BP_D_PLAYERS` | signature (round, active seat, status, phase, the auction's seat/bid fields, cash, alive, detained, token, name) changed - the dice are no longer drawn here | players box |
+| `BP_D_DETAILS` | signature (`bp_sel`, phase, the auctioned space, every owner/level/mortgage, names; over the cable the link state, busy, port and, while down, the message) changed | details box |
+| `BP_D_LINK` | signature (link state, busy, mode, port, pair state, the active seat and every owner; COMPACT: round, dice, message text) changed | collection / link box |
 | `BP_D_LOG` | `bp_log_add` was called (a version counter) | log box |
 | `BP_D_HINT` | signature of the hint strings changed | hint bar |
 | `BP_D_FORCE` | with other bits: repaint them even when the signature says nothing changed | |
@@ -255332,13 +255418,16 @@ pays for those rows' strip only.
 #### 131.8.6 The widget kit
 
 `bp_w_*` is valid only while `bp_pn_draw` runs (it draws into the current
-strip's band). `bp_w_panel` is a 1 px black frame, a ground (light grey; white
-on 1bpp) and a navy title bar with white text; `bp_w_button` draws one of:
-NORMAL (ground, light/dark bevel; on 1bpp a black shadow), FOCUS (navy ground,
-white text; black on 1bpp), DEFAULT (an extra black ring), DISABLED (dark grey
-text; on 1bpp a screen-door of white dots across the label, so it reads
-without colour). A label wider than the button is cut to fit. Everything else
-(`bp_w_text`, `_sprite`, `_fill`, `_box`) is the band core's call.
+strip's band) and is the game kit's (133): `bp_w_panel` is `gk_panel` (a raised
+slab with a navy title bar `fc_fh + 3` tall and the title embossed, no drop
+shadow: a panel's shadow would fall outside its rect), `bp_w_box` a sunken
+white well (`GK_SUNKEN2`) for a white fill and a raised slab for any other,
+`bp_w_button` `gk_button` with `GK_B_FLAT` (no drop shadow; the panels' button
+rows sit tight): NORMAL, FOCUS (navy face, white text), DEFAULT (an extra
+ring) and DISABLED (greyed text; on 1bpp a screen-door over the label). A label
+wider than the button is cut to fit. Everything else (`bp_w_text`, `_sprite`,
+`_fill`) is the band core's call, and a panel may call `gk_*` or `gk_scene`
+directly.
 
 #### 131.8.7 Keys and hits
 
@@ -255410,28 +255499,69 @@ refused at Start with a line saying so, as is any `bp_setup_check` failure
 "Discard the unsaved match?". Esc or Back returns to the running match when
 there is one, else it does nothing.
 
-Layout: the screen is one panel of at most 624 px, centred; the roster is the
-left column (372 px) and rules, the link box and the Ready button are the
-right column. Every rectangle is computed on demand from `bp_r_center` (the
-face's whole content) so the draw, the click and the key paths cannot
-disagree; rows are 11 px on a content under 260 px high (CGA-class, whose
-150 px content must hold everything) and 16 px above it. Text is the
-kernel's 8x8 and every state has a mark besides colour (the selected tab or
-rule is the DEFAULT button, a disabled one is the DISABLED button, a focused
-one the FOCUS button; on 1bpp the selected tab or rule also starts with `>`).
-The `-` and `+` buttons grey at 2 and 4 players. Editing a name starts with
-the old name selected: the first typed character replaces it. A disabled widget is skipped by focus and ignores a
-click.
+Layout: the screen is DATA, not code. `art/scenes-lobby.txt` (SPEC.md 133.6;
+scene IDs 440-443, `art2.h`) draws every frame, label, table line and picture,
+and `bp_setup.c`'s `ovl_su_slots` fills its string slots (`$n`: names, the
+mode's one-line description, the roster footer, the rule lines, the link
+status, the peer line, the status line) and integer slots (`%n`: tab and
+button states, seat presence, token pictures, ready ticks, the LED, the link
+mode). The slots are refilled for every strip (a few string copies; the
+list of them is the scene file's header). The face gives the screen the whole
+content (`BP_PN_FULL`); the screen draws a teal ground, then the scene.
+FULL (content at least 600 x 380, VGA) is the concept board `4-lobby.png`:
+a navy "NEW GAME" / "CABLE LOBBY" plate with yellow rays (`BP_A2_RAYS_L/R`),
+the three tabs (the active one yellow), a well with the mode's description, a
+PLAYER ROSTER panel (a table Player | Token | Computer | Ready - the colour
+square is the seat's colour, the picture its token, `This PC` / `Other PC` a
+drop-down, a `BP_A2_CHECK` tick - and a footer, `2 players` or `1 player here
+- 3 players there`, with the `-` / `+` buttons), a GAME RULES panel (the
+Classic and Quick Match radios, the Quick Match round count 10 / 20 / 30 as a
+drop-down, and what the rule means - `Cash: 1,500 cr` and `Last one standing
+wins.` or `Richest after 20 rounds.`), the NULL-MODEM LINK panel, the
+mascot (`BP_A2_MASCOT_UP`) and a bottom bar with the status line and
+`[S] Start Game` / `[Esc] Back`. Same PC replaces the Computer and Ready
+columns and the link panel with a second scene (441) that says everyone
+plays on this computer and that no cable is needed - the screen never shows
+a value the game does not have. MID and COMPACT (a short content) share one
+scene (442, 640 x 142, centred across and a third of the spare height
+down) with the same parts in the 8 x 8 font, token NAMES instead of
+pictures, and a Same PC half (443). Every hit rect is read from the scene's
+own `#tag` (`gk_scene_rect`; tag = widget id + 1, 27 the status line, 28 the
+roster panel, 29 the rules panel, 30 the link panel, 31 the description), so
+the draw, the click and the key paths cannot disagree. Every state has a mark
+besides colour (the selected tab is the raised yellow one, the selected
+radio a filled dot, a disabled button the kit's DISABLED one with its screen
+door on 1bpp, the keyboard focus on a widget the scene draws plainly - a tab,
+a name, a token, a drop-down, the Ready column, a radio - a black ring inside a
+yellow one drawn after the scene; a button shows focus as its navy face). The
+`-` and `+` buttons grey at 2 and 4 players. Editing a name starts with the
+old name selected: the first typed character replaces it. A disabled widget is
+skipped by focus and ignores a click. The widget ids (and so the Tab order) are
+unchanged: 0-2 tabs, 3 `-`, 4 `+`, 5-8 names, 9-12 tokens, 13-16 computers,
+17 Ready, 18 Classic, 19 Quick Match, 20 its rounds, 22 port, 23 connect, 24
+Start, 25 Back (21 is unused). Damage (131.8.5): a key or click names the rect
+of the widget it changed (`bp_face_dirty_rect`; the pad covers the focus
+ring), of the roster / rules / link panel when a change reaches past one
+widget, or of the whole screen for a tab or a link change; the status line has
+its own tag. The face repaints only those strips once `bp_app.c` stops marking
+the whole centre dirty for every key in setup mode.
 
 #### 131.9.3 The cable lobby
 
-Host Cable and Join Cable add the NULL-MODEM LINK box: the framer's and the
-session's one-line status (`bp_link_msg`: searching, the port, the peer
-found, compatible or the reason it is not, ready), the role, the port choice
-(Auto, COM1, COM2; refused while a link is open), 2400 baud 8N1, an Open
-Link / Close Link button (`bp_link_host` / `bp_link_join` / `bp_link_leave`)
-and a Ready toggle (`bp_lobby_ready`, enabled once the link reaches
-`BP_L_LOBBY`). Opening a link switches to `BP_M_LOBBY`: the tabs lock. The
+Host Cable and Join Cable add the NULL-MODEM LINK panel: the two computers
+with the cable between them (its plugs apart until the link reaches
+`BP_L_LOBBY`, then joined), the framer's and the session's one-line status
+(`bp_link_msg`: searching, the port, the peer found, compatible or the reason
+it is not, ready) behind an LED (`BP_A2_LED_*`: red off or refused, yellow
+searching or handshaking, green linked), the role (Banker host or Guest), the
+port choice (Auto, COM1, COM2: a button that cycles; refused while a link is
+open), 2400 baud and 8N1, the other computer's line - its first player's name,
+that player's token and Ready or Waiting - once linked, a Connect / Leave
+button (`bp_link_host` / `bp_link_join` / `bp_link_leave`) and the Ready
+column's ticks (`bp_lobby_ready`, enabled once the link reaches `BP_L_LOBBY`;
+the column is one widget, its Enter or a click toggles this computer's own
+ticks). The bottom bar's line says "All players are ready. Press Start." when
+both machines are ready and "Waiting for the host." on a client. Opening a link switches to `BP_M_LOBBY`: the tabs lock. The
 host edits the roster and rules; every change is sent whole with
 `bp_lobby_set`, once when the link first reaches `BP_L_LOBBY` and after each
 edit. The roster's Computer column reads This PC or Other PC from this
@@ -255582,13 +255712,13 @@ trade composer > the panel of `bp_game.phase`.
 
 | phase | panel | buttons (key) |
 |---|---|---|
-| BUY | name, art, price, cash after (or "too little"), base rent, collection | Buy (B), Auction (A) - Buy greyed with `bp_can`'s reason |
+| BUY | a BOTTOM panel on FULL and MID (131.9.12): the picture, "You landed on NAME", price, rent; COMPACT covers the centre | Buy (B), Auction (A) - Buy greyed with `bp_can`'s reason |
 | AUCTION | lot, list price, high bid and bidder, the bidder's cash, the editor, the minimum, "if you win: N left", the seats auto-passed for want of a raise (from `bp_gp_event`, PASS with other = 1) | Bid N (B), Pass (P); editor: `-`/`+` or Down/Up step 10, digits type, Backspace erases |
 | CARD | deck name and art (FULL; MID too when the 48x64 deck picture fits above the buttons, its mono twin on 1bpp), title, wrapped text | OK (Enter) -> ACK_CARD |
 | REPAIR | detention, failed tries of 3, cash, the Recovery Disks held | Pay 50 (P), a disk per deck held (F Floppy Find, S System Error), Roll (R), Manage (M) |
 | DEBT | creditor, amount, cash, shortfall | Manage (M), Settle (S, when `bp_can` allows), Bankrupt (K) then a confirmation: Go bankrupt (K), No (Esc), opened focused on No |
 | TRADE | the frozen offer (131.9.9) | Accept (A), Reject (R) for the recipient; Cancel (C) for the proposer |
-| MANAGE, AFTER | a one-line bar over the BOTTOM of the centre (the centre art stays): whose move, the buttons; its ground is light grey, white on 1bpp (the status text is black on it) | Roll (Space), End Turn (E), Trade (T), Manage (M) |
+| MANAGE, AFTER | the TURN BAR, a bottom panel (131.9.12; the centre art stays): the mover's token, whose move, the buttons | Roll (Space), End Turn (E), Trade (T), Manage (M) |
 | OVER | winners, standings (131.9.11) | Review (R), New Game (N), Exit (X) |
 
 Greying is the engine's word: every button asks `bp_can(&bp_game, seat,
@@ -255612,8 +255742,10 @@ number of Enters walks from DEBT into a bankruptcy. After a commit, a focus
 left on a button the new state greys (Roll once rolled) moves to the first
 enabled one, and so does a Rules/Keys page turn that greys Next or Prev;
 an editor or list change (a bid being typed, a Collection cursor) never
-moves it, so Enter on an invalid bid explains instead of passing. A button too wide for the
-panel loses its "[K]" prefix and the hint bar still names the key; on 1-bit
+moves it, so Enter on an invalid bid explains instead of passing. Each button is its label's
+width (plus the kit's edge) and the row's buttons are spread evenly along the panel's foot - or,
+on a scene panel, stretched to fill the row the scene tags (131.9.12); a row too narrow for every
+"[K] Label" drops the "[K]" prefixes and the hint bar still names the keys; on 1-bit
 adapters the focused label is prefixed ">" in addition to the face's focus
 state. Hit targets are the rectangles the last draw recorded, the very ones
 it drew. The hint bar lists the ENABLED buttons only (the same answer as the
@@ -255727,8 +255859,8 @@ catches a stale view.
 
 #### 131.9.10 Pause, chat and diagnostics
 
-LINK PAUSED / RESYNCING covers the centre with the link's own message, the
-last log line ("last action retained") and Retry (R: `bp_link_host` /
+LINK PAUSED / RESYNCING covers the centre (131.9.12 draws it) with whose PC
+is awaited, the last log line ("last action retained") and Retry (R: `bp_link_host` /
 `bp_link_join` on the held port), Load Pair (L: `bp_sess_resume_pair`),
 Details (D) and Leave (X, with a confirmation: leaving abandons the match).
 The panel underneath is untouched: it reappears unchanged when the link
@@ -255756,6 +255888,73 @@ by as many lines as the panel shows. Each page shows only its own section:
 the last Rules page ends at `#KEYS`, paging stops at the last page rather
 than wrapping, and Prev is greyed on the first page and Next on the last
 (so a page opens focused on Next, and Enter reads on).
+
+#### 131.9.12 The uplifted panels
+
+The landing, the auction, the trade review, the link-lost panel and the turn
+bar are drawn after the concept boards (`1-board.png`, `2-auction.png`,
+`3-trade.png`, `5-linklost.png`; the uplift's U11) as game-kit SCENES
+(§133.6), records in `BPART2.BIN` compiled from `apps/byteopoly/art/
+scenes-pana.txt`: panel n is scene `BP_A2_SC_PANA + 2n` on FULL, the next ID
+on MID and `BP_A2_SC_PANAC + n` on COMPACT (n = 0 landing, 1 auction, 2 trade
+review, 3 link lost, 4 turn bar; 420..429 and 455..459). A scene is the
+panel's whole static layout - its frames, title bars, wells, banners, rules,
+pictures and words - and the C only fills SLOTS and draws once:
+`ovl_gp_sbeg` empties them, the panel's function fills them, `ovl_gp_scene`
+calls `gk_scene` and takes the panel's rects back with `gk_scene_rect`. Every
+scene keeps one set of conventions:
+
+- `%0` is always 0, so `if %0` marks a PLACEHOLDER: an op never drawn whose
+  rect the C reads. `#200` is the panel (damage, clicks), `#201` the status
+  line (a refusal's damage starts there), `#202` the BUTTON ROW, and the
+  auction's `#1`, `#45`, `#43` the editor and its `-` / `+`, the trade's
+  `#2`..`#5` its list areas.
+- `$1` is the status line (a refusal, "Sent - waiting ...", "Waiting for NAME
+  on the other PC") and `%1` says it has something to say. Money slots carry
+  " cr". The strings are pooled in the hint entries' buffer (`gp_hb`), free
+  while a panel draws because the face asks for each hint entry afresh and
+  uses it at once; a string that does not fit is cut, never overflowing.
+- The BUTTONS are 131.9.7's, from `gp_spec`, drawn by the C along `#202`:
+  the row's buttons share it evenly, 4 px apart, as on the boards; the rects drawn
+  recorded as the mouse targets. So a button, its key, its hint entry and
+  its click are still one table, and a confirmation (Yes, leave / No) or a
+  missing button (a seat on the other PC) needs no scene of its own.
+
+What each shows (all facts the engine and the session hold; nothing is
+drawn that the game does not know):
+
+| panel | FULL / MID | COMPACT |
+|---|---|---|
+| landing | a BOTTOM panel (`bp_pn_covers()` 0, DECISIONS D9: the bottom 96 / 64 rows of the centre, `bp_face_barh()`, the idle art above it): the LARGE picture in a sunken well with its collection's colour bar, a divider, "You landed on NAME", Price, Rent ("follows the dice" for a utility; the status line takes the Rent line while it has something to say), [B] Buy, [A] Auction | the whole centre: "BUY NAME?", price, rent, "Decline puts it up for auction." |
+| auction | "AUCTION • NAME"; the picture, colour bar and list price; a HIGH BID box (the bid in the big font in a white well, the bidder's token and name, or "no bid yet"); a yellow banner "BIDDER • YOUR BID" (or "• BIDDING" for a seat on the other PC) with the bidder's token; for a bidder played here the editor `[-] amount [+]`, "Minimum N • You have N", [B] Bid N, [P] Pass, "If you win: N left"; "Passing leaves this auction." or who passed for want of a raise; the status line | the same facts in lines, the editor one row |
+| trade review | "TRADE OFFER • FROM TO TO"; a banner "TO • YOUR DECISION" (or "WAITING FOR TO"); two "X GIVES" boxes with the trade arrows between: a side giving ONE computer and nothing else shows the boards' card (picture, colour bar, name, value, mortgage, upgrades - the PLUS box takes the last line when that side pays cash); a side of several shows its first computer as the card and "+ the rest" wrapped under it (short names, "(mortgaged)", the disks); a side with no computer its names ("nothing"); a card whose computer is mortgaged carries the mortgage mark on its picture; "PLUS N cr" with the coins in the paying side; AFTER THIS TRADE: each side's cash before -> after ("short" when it cannot pay) and the collection the trade completes, with its pictures; the lock line "Offer locked • Both sides shown above" (the status line takes it while it has something to say); [A] Accept, [R] Reject, and [C] Cancel for the proposer | the boxes as two framed lists (a lone computer its name, value and mortgage; "(mortgaged)" spelled out), the cash lines, "Offer locked. TO decides." |
+| link lost | the title (CABLE LINK LOST, RESYNCING, BOARDS DIFFER); the two PCs, their plugs and the beacon around a "Game paused" pill ("Input stopped" when the boards differ); "Waiting for NAME's PC..." (the first live seat not played here; the link's message when the boards differ); LAST ACTION RETAINED: the active seat's token, the newest log line, and a yellow line saying whether a move of this PC is still waiting for the other to confirm (`bp_sess_busy`); LAST PAIRED SAVE: `bp_sess_pair`'s state - "Saved on both PCs" with the two ticked disks, "Saving or resuming...", "Failed - the old pair stands", or "None made this session"; [R] Retry Link, [L] Load Pair, [D] Details (the diagnostics panel), [X] Leave; "Reconnect to continue this turn." | the same in lines |
+| turn bar | a BOTTOM panel: the mover's token, "NAME: roll the dice" (or the status line), [Space] Roll, [E] End Turn, [T] Trade, [M] Manage | the same, without the token |
+
+Deliberate departures from the boards, and why: the concept's "[D] Details"
+on the trade review is not drawn (no trade detail view exists; Details is
+the link panel's, where it opens the diagnostics); the link panel's paired
+save shows its state, not "Round 6 • Turn 23" or "unsaved moves" (the session
+does not record the round of the last paired save, nor whether moves were
+made since), and the last action's picture is the active seat's token (the
+log line is text; which computer it names is not kept); the turn bar keeps
+Manage (the concept's idle board has no bar to copy); "->" stands for the
+boards' arrow (the fonts have no arrow glyph); the pictures are the art's
+LARGE 48x32, smaller than the boards' renders; buttons inside panels are
+the kit's FLAT buttons (no drop shadow), as on the boards. The boards' heavy
+type is the art's two faces: titles, headers, banners, names and figures in
+BP_F_BIG12 / BP_F_BIG16 (the system face) where the row allows, running text
+in the dialog face, which is already a heavy one.
+
+Damage keeps 131.9.7's discipline: a bid step names the editor (`#1`) and
+the rows under it, a focus move the button row, a refusal the status line
+(`#201`); a new panel kind dirties the centre. The landing and the turn bar
+are bottom panels, so a roll that lands on a property repaints only the
+centre's bottom bar region, the idle art staying. Costs (against the uplift
+tip, lane report): overlay +484 bytes, resident image +62 (the overlay's
+function table and the collection colours) and bss +78 (the slot arrays);
+the scene records 6,125 bytes of `BPART2.BIN`; the panel text about 580
+bytes smaller than before (the code-drawn bodies' strings are gone).
 
 #### 131.9.13 The kit-drawn panels (panels B)
 
@@ -255941,6 +256140,15 @@ card and anything the OS reads or keeps (window title, file names, the file
 dialog's default name, a question an alert shows while it is up - a ring
 slot would not outlive it), the board's names (`bp_board.c`), single characters, and the
 templates whose layout code indexes into (`ovl_msg`'s "Banker COM0 2400 rev ").
+
+**The bullet.** The concept boards separate words with a bullet
+("AUCTION • COMMODORE 64"), which no WIN16 strike has, so every Byteopoly font
+carries one more glyph, code 127: a 2 px (3 px from 12 rows) square dot centred
+on the face's x-height with 2 px either side, made by `os88bpart.py` and passed
+to the shared packer as an extra glyph (`os88bbart.pack_font(name, extra)`;
+without it the record is byte-identical, so Breadboard XT's art does not
+change). A `tx-*.txt` line or a scene literal writes it as `•` (or `\177`
+in a text file). Cost: 46 bytes of BPART.BIN.
 
 #### 131.10.8 The uplift's pictures
 
@@ -256296,6 +256504,9 @@ emboss or tab overhang and the declared font height (24 for a font with no
 `fonth`, 8 for the kernel's, a sprite 255 rows); an op whose y or height
 comes from a slot is given every row.
 
+A literal may contain the bullet `•` (U+2022), stored as byte 127; a package
+whose fonts have no glyph 127 draws nothing for it (Byteopoly's do, 131.10.7).
+
 ### 133.8 Music and effects
 
 `apps/cc/gkmus.inc` is the player and `tools/os88gkmus.py` its compiler. A
@@ -256465,12 +256676,12 @@ lane's rows (133.8) follow these.
 | `gk_radio` and its discs (`gk_disc` 103) | 157 |
 | `gk_arrow` (`gk_arw` 126) | 149 |
 | `gk_sprshadow` | 221 |
-| `gk_scene` (303) and its literal and header readers | 392 |
+| `gk_scene` (303) and its literal and header readers | 393 |
 | `gk_scene_size`, `gk_scene_rect` | 71 |
-| **code** | **2,460** |
+| **code** | **2,461** |
 | data: role tables 32, ring sets 43, button states 18, op table 42, the theme pointer 2 | 137 |
-| **image total** | **2,597** |
-| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,617** |
+| **image total** | **2,598** |
+| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,615** |
 | bss | 158 |
 
 **Per strip.** `gk_scene` reads a skipped op's length, number and two row

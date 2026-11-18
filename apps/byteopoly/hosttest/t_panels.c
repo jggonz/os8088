@@ -63,16 +63,32 @@ void gk_banner(int x, int y, int w, int h, const char *s, int font, int fill)
 void gk_radio(int x, int y, int size, int on) { (void)x; (void)y; (void)size; (void)on; }
 int gk_sprshadow(int x, int y, int id, int d) { (void)x; (void)y; (void)id; (void)d; return 0; }
 int gk_role(int role) { (void)role; return 0; }
+/* the kit's scenes (131.9.12), faked: a scene's string slots go to the
+ * transcript (a handle is its literal here), its tags are plausible rects:
+ * #200 the panel, #202 the button row at its foot, #201 the status line
+ * above it, any other (the auction's editor, the trade's lists) mid-panel */
+static int bp_t_scene;
 int gk_scene(int id, int x, int y, const char *const *sv, const int *iv)
 {
     int i;
-    (void)id; (void)x; (void)y; (void)iv;
-    for (i = 0; i < 6; i++) t_ink(sv[i]);
+    (void)x; (void)y; (void)iv;
+    bp_t_scene = id;
+    if (id >= 430 && id < 440) { for (i = 0; i < 6; i++) if (sv[i]) { strcat(bp_t_ink, sv[i]); strcat(bp_t_ink, "\n"); } return 1; }
+    for (i = 1; i < 21; i++)
+        if (sv[i] && sv[i][0]) { strcat(bp_t_ink, sv[i]); strcat(bp_t_ink, "\n"); }
+    return 1;
+}
+int gk_scene_rect(int id, int tag, int *r)
+{
+    (void)id;
+    r[0] = 10; r[2] = bp_r_center.w - 20; r[3] = 20;
+    r[1] = tag == 200 ? 4 : tag == 202 ? bp_r_center.h - 30 : tag == 201 ? bp_r_center.h - 50 : 60;
+    if (tag == 200) r[3] = bp_r_center.h - 8;
     return 1;
 }
 #include "bp_panels.c"
 /* ---- helpers ---- */
-static void t_paint(void) { bp_t_ink[0] = 0; bp_t_buttons = 0; bp_gp_draw(); }
+static void t_paint(void) { bp_t_ink[0] = 0; bp_t_buttons = 0; bp_t_scene = 0; bp_gp_draw(); }
 static int t_has(const char *s) { return strstr(bp_t_ink, s) != 0; }
 static void t_geom(int layout)
 {
@@ -95,6 +111,46 @@ static void t_rkey(int a, int sc) { t_clean(); bp_gp_key(a, sc); t_paint(); bp_g
 static void t_key(int a, int sc) { bp_host_ticks += 25; t_rkey(a, sc); }
 static int t_fockey(void) { return gp_bkey[gp_foc]; }
 static void t_tick(int n) { while (n--) { bp_host_ticks++; bp_gp_tick(); } }
+/* the uplifted panels (131.9.12), every layout: a trade of SEVERAL assets
+ * each way (the wrapped list) and of one computer plus cash (the card), and
+ * the link-lost panel of a cable match */
+static void t_uplift(void)
+{
+    int lay, one;
+    for (lay = BP_LAY_FULL; lay <= BP_LAY_COMPACT; lay++)
+        for (one = 0; one < 2; one++) {
+            t_geom(lay);
+            t_new(2);
+            bp_game.owner[1] = 0; bp_game.owner[14] = 0; bp_game.owner[2] = 1; bp_game.owner[11] = 1;
+            bp_game.mortgaged[11] = 1; bp_game.disks[0] = 1;
+            bp_game.phase = BP_PH_TRADE; bp_game.offer_from = 0; bp_game.offer_to = 1;
+            bp_game.decider = 1; gp_ack = 1; gp_lastd = 1;
+            bp_game.offer_give.lo = one ? 1u << 14 : (1u << 14) | (1u << 1);
+            bp_game.offer_disks = one ? 0 : 1;
+            bp_game.offer_get.lo = (1u << 2) | (1u << 11);
+            bp_u32_set(&bp_game.offer_cash, 100, 0);
+            t_paint();
+            if (t_has("Pass the keyboard")) { t_tick(30); t_key(13, 0x1C); }
+            BP_CHECK(bp_t_scene == GP_SC(2), "trade review: the trade scene");
+            BP_CHECK(t_has("[A] Accept") && t_has("[R] Reject"), "trade review: Accept and Reject");
+            BP_CHECK(t_has(TP_MORTGAGED_P), "trade review: a mortgaged computer says so");
+            BP_CHECK(one ? t_has(bp_space(bp_prop_space(14))->name)
+                         : t_has(ovl_gp_pname(14)) && t_has(lay == BP_LAY_COMPACT ? ovl_gp_pname(1) : bp_space(bp_prop_space(1))->name),
+                     "trade review: the first side named (its card's full name, the rest short)");
+            BP_CHECK(one || lay == BP_LAY_COMPACT || t_has(TP_PLUS_), "trade review: the rest under the card");
+            BP_CHECK(!one || t_has("100 cr"), "trade review: the cash the card's side adds");
+        }
+    t_geom(BP_LAY_FULL);
+    t_new(2);
+    bp_mode = BP_MODE_HOST; bp_here = 0;
+    bpl.on = 1; bpl.ph = 2; bpl.heard = bpl.clk; bpl.left = 1;
+    bp_game.machine[1] = 1; bp_game.decider = 0; bp_game.active = 0;
+    t_paint();
+    BP_CHECK(bp_t_scene == GP_SC(3), "link lost: the pause scene");
+    BP_CHECK(t_has("Retry Link") && t_has(TP_PAIR_NONE), "link lost: Retry and the paired save's state");
+    BP_CHECK(t_has(TP_S_PC), "link lost: whose PC is awaited");
+    bpl.left = 0; bpl.on = 0; bp_mode = BP_MODE_LOCAL;
+}
 /* the fix round's checks (QA Qqa1-2, -3, -4, -6, Qqa2-4, -5, -14, -22, -23) */
 static void t_extra(void)
 {
@@ -315,7 +371,8 @@ int main(void)
             if (bp_game.phase == BP_PH_MANAGE) t_key(' ', 0x39);
             else if (bp_game.phase == BP_PH_AFTER) t_key('e', 0x12);
             else if (bp_game.phase == BP_PH_BUY) {
-                BP_CHECK(bp_gp_covers() && t_has("Price:"), "buy panel shows the price");
+                BP_CHECK(bp_t_scene == GP_SC(0) && !bp_gp_covers() == (bp_layout != BP_LAY_COMPACT) && t_has(" cr"),
+                         "buy panel: the landing scene, a bottom panel, the price");
                 if (!bought) {
                     t_key('b', 0x30);
                     BP_CHECK(bp_game.phase != BP_PH_BUY, "B buys");
@@ -324,7 +381,7 @@ int main(void)
                     t_key('a', 0x1E);
                     BP_CHECK(bp_game.phase == BP_PH_AUCTION, "A opens the auction");
                     t_paint();
-                    BP_CHECK(t_has("Auction:") && t_has("[B] Bid 10"), "auction shows the opening bid");
+                    BP_CHECK(bp_t_scene == GP_SC(1) && t_has("[B] Bid 10"), "auction shows the opening bid");
                     t_key('3', 0x04); t_key('0', 0x0B);
                     t_paint();
                     BP_CHECK(t_has("[B] Bid 30"), "typed digits set the bid");
@@ -345,6 +402,8 @@ int main(void)
         BP_CHECK(bought && auc, "a purchase and an auction were played through the panels");
     }
     t_extra();
+    t_uplift();
+    t_geom(BP_LAY_FULL);
     /* a seat on the other PC: facts shown, no buttons, no commands */
     t_new(2);
     bp_mode = BP_MODE_HOST; bp_here = 0;

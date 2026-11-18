@@ -154,15 +154,24 @@ def pack_sprite(w, h, rows):
     return bytes(b)
 
 
-def pack_font(name):
+def pack_font(name, extra=None):
+    """extra: optional {code: (w, rows)} for codes 127, 128, ... appended
+    after 126 (Byteopoly's bullet, SPEC.md 131.10.7); without it the record
+    is byte-identical to what it always was."""
     height, ascent, glyphs = read_font(name)
-    n = 95
+    codes = list(range(32, 127))
+    for c in sorted(extra or {}):
+        if c != codes[-1] + 1:
+            fail(f"{name}: extra glyph {c} does not follow {codes[-1]}")
+        glyphs[c] = extra[c]
+        codes.append(c)
+    n = len(codes)
     head = bytearray([height, ascent, 32, n])
-    head += bytes(glyphs[c][0] for c in range(32, 127))
+    head += bytes(glyphs[c][0] for c in codes)
     table_at = len(head)
     head += bytes(2 * n)
     body = bytearray()
-    for k, c in enumerate(range(32, 127)):
+    for k, c in enumerate(codes):
         w, rows = glyphs[c]
         if w > 16:
             fail(f"{name}: glyph {c} is {w} wide; a row is two bytes")

@@ -10,6 +10,7 @@
 
 #include "art2.h"                       /* BP_A2_* pictures and scenes (panb lane) */
 int bx_artstr(int id, int n, char *buf);
+#include "art2.h"                       /* the scenes and pictures (131.9.12) */
 /* #define BP_PANELS_DEMO 1 */   /* looking only: hand-made states, F5 steps; never shipped */
 
 #define GP_MAXB 6
@@ -51,7 +52,7 @@ static BPByte gp_bkey[GP_MAXB], gp_bwhy[GP_MAXB], gp_nb, gp_foc, gp_kind, gp_dra
 static char gp_blab[GP_MAXB][12];
 static int gp_font, gp_fh, gp_pitch, gp_bh, gp_tb, gp_x, gp_y, gp_btop, gp_xr, gp_cw, gp_lrow;
 static char gp_line[52];
-static char gp_hb[GP_MAXB + 1][14];
+static char gp_hb[GP_MAXB + 1][14];   /* hint entries; between them, the scene slots' pool */
 static const char *gp_err;
 static BPByte gp_over;          /* a panel the player opened (BP_GP_*) */
 static BPByte gp_conf;          /* a confirmation is showing (bankrupt, leave) */
@@ -80,6 +81,12 @@ static int gp_vy;
 static unsigned gp_s0[GP_SN], gp_s1[GP_SN];
 static BPByte gp_hpages;        /* rules/keys pages, from the last draw (0 = not yet) */
 static int gp_tlv;              /* link state and busy, last tick */
+/* the uplifted panels are kit scenes (131.9.12): the scene the buttons'
+ * rects come from (0 = laid out), the button row's top (damage), the slots */
+static int gp_scn, gp_brt;
+static const char *gp_sv[21];
+static int gp_iv[15];
+static char *gp_pp;
 /* trade composer */
 static BPByte gp_tto, gp_tpay, gp_tcol, gp_tcur[2], gp_ttop[2], gp_in[2], gp_it[2][BP_PROPS + 2];
 static BPU32 gp_tgive, gp_tget;
@@ -91,6 +98,9 @@ static BPByte gp_cn;
 
 #ifdef BP_PANELS_DEMO
 static BPByte gp_demo;
+static BPByte gp_dls;               /* a link state to show (15: the paused panel) */
+static int ovl_gp_dls(void) { return gp_dls ? gp_dls : bp_link_state(); }
+#define bp_link_state ovl_gp_dls
 static void ovl_gp_demoset(int n);
 #if BP_PANELS_DEMO == 2
 static void ovl_gp_demonew(void);
@@ -400,7 +410,7 @@ static void ovl_gp_spec(void)
             ovl_gp_add(27, "No", BP_OK);
         } else {
             if (ls == 8) { if (bp_mode == BP_MODE_CLIENT) ovl_gp_add('u', TP_USE_HOST, BP_OK); }
-            else ovl_gp_add('r', TP_RETRY, BP_OK);
+            else ovl_gp_add('r', TP_RETRY_LINK, BP_OK);
             if (ls != 8) ovl_gp_add('l', TP_LOAD_PAIR, BP_OK);
             ovl_gp_add('d', TP_DETAILS, BP_OK);
             ovl_gp_add('x', TP_LEAVE, BP_OK);
@@ -572,56 +582,163 @@ static void ovl_gp_para(const char *s, int col)
         while (*s == ' ') s++;
     }
 }
-static void ovl_gp_status(void)
+/* the status line's text, or 0 when it has nothing to say; builds into
+ * gp_line, which the caller has emptied */
+static const char *ovl_gp_stxt(void)
 {
-    const char *m;
-    m = 0;
-    if (gp_err) { ovl_gp_lb(); ovl_gp_la("! "); ovl_gp_la(gp_err); m = gp_line; }
-    else if (bp_sess_busy()) m = TP_SENT_WAITING_FOR;
-    else if (gp_kind >= GK_IDLE && gp_kind <= GK_TRADE && !ovl_gp_mine()) {
-        ovl_gp_lb(); ovl_gp_la(TP_WAITING_FOR); ovl_gp_la(ovl_gp_name(bp_game.decider));
-        ovl_gp_la(TP_ON_THE_OTHER); m = gp_line;
+    if (gp_err) { ovl_gp_la("! "); ovl_gp_la(gp_err); return gp_line; }
+    if (bp_sess_busy()) return TP_SENT_WAITING_FOR;
+    if (gp_kind >= GK_IDLE && gp_kind <= GK_TRADE && !ovl_gp_mine()) {
+        ovl_gp_la(TP_WAITING_FOR); ovl_gp_la(ovl_gp_name(bp_game.decider));
+        ovl_gp_la(TP_ON_THE_OTHER); return gp_line;
     }
-    if (!m) return;
-    bp_w_text(gp_x, gp_btop, m, 0, gp_font);
+    return 0;
 }
-/* the button row, bottom of the panel; records the mouse rectangles */
-static void ovl_gp_brow(void)
+static void ovl_gp_srect(int tag, BPRect *r);
+/* button i's label into gp_line: "[K] Label", ">" on the focus on 1bpp */
+static void ovl_gp_blabel(int i, int bare)
 {
     static char lab[10];
+    gp_line[0] = 0;
+    if (!bare) {
+        lab[0] = '[';
+        ovl_gp_kn(lab + 1, gp_bkey[i]);
+        ovl_gp_la(lab); ovl_gp_la("] ");
+    }
+    if (bp_mono && i == gp_foc) ovl_gp_la(">");
+    ovl_gp_la(gp_blab[i]);
+}
+/* the button row: label-wide buttons spread evenly along the panel's foot
+ * or - on a scene panel (131.9.12) - stretched to fill the row the scene
+ * tags #202, 4 px apart; records the mouse rectangles, the very ones drawn, and
+ * the row's top (damage) */
+static void ovl_gp_brow(void)
+{
     static int bw[GP_MAXB];
-    int i, sum, gap, x, y, bare;
-    if (!gp_nb) { gp_drawn = gp_kind; return; }
-    bare = 0;
-    for (;;) {
+    BPRect *r;
+    int i, sum, gap, x, y, w, h, bare;
+    gp_brt = gp_r.y + gp_r.h;
+    gp_drawn = gp_kind;
+    if (!gp_nb) return;
+    r = &gp_br[GP_MAXB - 1];        /* the row: a scene's #202, else the panel's foot */
+    if (gp_scn) ovl_gp_srect(202, r);
+    else { r->x = gp_r.x + 4; r->w = gp_r.w - 8; r->h = gp_bh; r->y = gp_r.y + gp_r.h - gp_bh - 4; }
+    x = r->x; y = r->y; w = r->w; h = r->h;
+    for (bare = 0; bare < 2; bare++) {  /* too wide: labels alone; the hint bar names the keys */
         sum = 0;
         for (i = 0; i < gp_nb; i++) {
-            bw[i] = bp_w_textw(gp_blab[i], gp_font) + 8 + (bp_mono ? gp_cw : 0);
-            if (!bare) { ovl_gp_kn(lab, gp_bkey[i]); bw[i] += bp_w_textw(lab, gp_font) + 3 * gp_cw; }
+            ovl_gp_blabel(i, bare);
+            bw[i] = bp_w_textw(gp_line, gp_font) + 8;
             sum += bw[i];
         }
-        if (bare || sum + 2 * (gp_nb + 1) + 8 <= gp_r.w) break;
-        bare = 1;                   /* too wide: labels alone; the hint bar names the keys */
+        if (sum + 2 * (gp_nb + 1) <= w) break;
     }
-    gap = (gp_r.w - 8 - sum) / (gp_nb + 1);
+    gap = (w - sum) / (gp_nb + 1);
+    if (gp_scn) {                   /* a scene's row is filled, as on the boards */
+        gap = (gap * (gp_nb + 1) - 4 * (gp_nb - 1)) / gp_nb;
+        if (gap > 0) for (i = 0; i < gp_nb; i++) bw[i] += gap;
+        gap = 4;
+    } else x += gap;
     if (gap < 2) gap = 2;
-    x = gp_r.x + 4 + gap;
-    y = gp_r.y + gp_r.h - gp_bh - 4;
+    gp_brt = y;
     for (i = 0; i < gp_nb; i++) {
-        gp_br[i].x = x; gp_br[i].y = y; gp_br[i].w = bw[i]; gp_br[i].h = gp_bh;
-        gp_line[0] = 0;
-        if (!bare) {
-            lab[0] = '[';
-            ovl_gp_kn(lab + 1, gp_bkey[i]);
-            ovl_gp_la(lab); ovl_gp_la("] ");
-        }
-        if (bp_mono && i == gp_foc) ovl_gp_la(">");
-        ovl_gp_la(gp_blab[i]);
-        bp_w_button(&gp_br[i], gp_line,
-                    (gp_bwhy[i] ? BP_W_DISABLED : 0) | (i == gp_foc ? BP_W_FOCUS : 0));
+        r = &gp_br[i];
+        r->x = x; r->y = y; r->w = bw[i]; r->h = h;
         x += bw[i] + gap;
+        ovl_gp_blabel(i, bare);
+        bp_w_button(r, gp_line, (gp_bwhy[i] ? BP_W_DISABLED : 0) | (i == gp_foc ? BP_W_FOCUS : 0));
     }
-    gp_drawn = gp_kind;
+}
+
+/* ---- the uplifted panels' slots (131.9.12) ---------------------------------
+ * Scene panel n is BP_A2_SC_PANA + 2n on FULL, the next ID on MID, and
+ * BP_A2_SC_PANAC + n on COMPACT;
+ * its dynamic text arrives through gp_sv (strings, pooled in gp_line after
+ * the status line) and gp_iv (numbers). */
+/* consecutive tx lines are consecutive handles; the host's are literals */
+#ifdef BP_HOST
+static const char *const gp_hram[4] = { TP_RAM1, TP_RAM2, TP_RAM3, TP_RAM4 };
+static const char *const gp_hpair[4] = { TP_PAIR_NONE, TP_PAIR_BUSY, TP_PAIR_DONE, TP_PAIR_FAIL };
+#define GP_RAM(n) gp_hram[(n) - 1]
+#define GP_PAIR(p) gp_hpair[p]
+#else
+#define GP_RAM(n) (TP_RAM1 + (n) - 1)
+#define GP_PAIR(p) (TP_PAIR_NONE + (p))
+#endif
+#define GP_SC(n) (bp_layout == BP_LAY_COMPACT ? BP_A2_SC_PANAC + (n) : \
+                  BP_A2_SC_PANA + 2 * (n) + (bp_layout == BP_LAY_MID))
+static const BPByte gp_gcol[BP_GROUPS] = {1, 2, 3, 4, 5, 8};    /* the face's collection colours */
+static int ovl_gp_gc(const BPSpace *sp)
+{
+    if (bp_mono) return 0;
+    return gp_gcol[sp->kind == BP_K_UTILITY ? BP_GROUPS - 1 : sp->group];
+}
+/* The POOL the slot strings are built in is the hint entries' buffer: a
+ * panel's draw consumes its slots before it returns, and the face asks for
+ * each hint entry afresh and uses it at once, so the two never overlap. A
+ * string that does not fit is cut, and the pool never overflows. */
+#define GP_PEND ((char *)gp_hb + sizeof(gp_hb))
+/* the string built at gp_pp becomes slot k; the next starts after it */
+static void ovl_gp_pk(int k)
+{
+    gp_sv[k] = gp_pp;
+    gp_pp += os88_strlen(gp_pp) + 1;
+    if (gp_pp >= GP_PEND) gp_pp = GP_PEND - 1;
+    *gp_pp = 0;
+}
+static void ovl_gp_pa(const char *s)
+{
+    int n;
+    n = os88_strlen(gp_pp);
+    os88_strcpy(gp_pp + n, bx_str(s), GP_PEND - gp_pp - n);
+}
+/* money, " cr" on it (14 bytes at most), after what the string holds */
+static void ovl_gp_pm(int k, const BPU32 *v)
+{
+    char *d;
+    d = gp_pp + os88_strlen(gp_pp);         /* after what is there ("Value: ") */
+    if (GP_PEND - d > 14) { bp_u32_fmt(d, v); ovl_gp_pa(TP_CR); }
+    ovl_gp_pk(k);
+}
+static void ovl_gp_pw(int k, unsigned w) { bp_u32_set(&gp_u2, w, 0); ovl_gp_pm(k, &gp_u2); }
+/* in capitals: the titles and the banners */
+static void ovl_gp_pu(int k, const char *s)
+{
+    char *d;
+    ovl_gp_pa(s);
+    for (d = gp_pp; *d; d++) if (*d >= 'a' && *d <= 'z') *d -= 32;
+    ovl_gp_pk(k);
+}
+/* a scene panel begins: every slot empty, %0 = 0 (the placeholders'
+ * "never"), $1 the status line and %1 whether it has anything to say */
+static void ovl_gp_sbeg(void)
+{
+    int i;
+    const char *m;
+    ovl_gp_lb();
+    m = ovl_gp_stxt();
+    gp_pp = (char *)gp_hb;
+    *gp_pp = 0;
+    GP_PEND[-1] = 0;                /* the pool's last byte is only ever a terminator */
+    for (i = 0; i < 21; i++) gp_sv[i] = GP_PEND - 1;
+    for (i = 0; i < 15; i++) gp_iv[i] = 0;
+    if (m) { gp_sv[1] = m; gp_iv[1] = 1; }
+}
+/* a rect the drawn scene tags, on the screen; w 0 when it has none */
+static void ovl_gp_srect(int tag, BPRect *r)
+{
+    if (!gk_scene_rect(gp_scn, tag, (int *)r)) r->w = 0;
+    r->x += bp_r_center.x; r->y += bp_r_center.y;
+}
+/* draw scene n and take the panel's rects from it */
+static void ovl_gp_scene(int n)
+{
+    gp_scn = GP_SC(n);
+    gk_scene(gp_scn, bp_r_center.x, bp_r_center.y, gp_sv, gp_iv);
+    ovl_gp_srect(200, &gp_r);
+    gp_vy = gp_btop = gp_r.y;
+    ovl_gp_srect(201, &gp_xm);      /* scratch: the auction sets its own after */
+    if (gp_xm.w) gp_btop = gp_xm.y;
 }
 
 /* ---- the panels ---------------------------------------------------------------- */
@@ -636,101 +753,63 @@ static int ovl_gp_sprite(int art)
     w = bp_w_sprite(gp_x, gp_y, art);
     return w;
 }
+/* the landing (131.9.12): scene 0, on FULL and MID a bottom panel under
+ * the centre art */
 static void ovl_gp_dbuy(void)
 {
     const BPSpace *sp;
-    int seat, sw;
-    seat = bp_game.active;
-    sp = bp_space(bp_game.pos[seat]);
-    ovl_gp_lb(); ovl_gp_la(TP_BUY_3); ovl_gp_la(sp->name); ovl_gp_la("?");
-    ovl_gp_frame(gp_line);
-    sw = ovl_gp_sprite(BP_A_LARGE(sp->prop));
-    if (sw) gp_x += sw + 8;
-    ovl_gp_lb(); ovl_gp_la(TP_PRICE); bp_u32_set(&gp_u1, sp->price, 0); ovl_gp_lm(&gp_u1); ovl_gp_tl();
-    bp_u32_copy(&gp_u2, &bp_game.cash[seat]);
-    ovl_gp_lb();
-    if (bp_u32_subw(&gp_u2, sp->price) == BP_OK) { ovl_gp_la(TP_CASH_AFTER); ovl_gp_lm(&gp_u2); }
-    else { ovl_gp_la(TP_CASH); ovl_gp_lm(&gp_u2); ovl_gp_la(TP_TOO_LITTLE); }
-    ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la(TP_BASE_RENT); bp_u32_set(&gp_u1, sp->rent, 0); ovl_gp_lm(&gp_u1);
-    if (sp->kind == BP_K_UTILITY) { ovl_gp_lb(); ovl_gp_la(TP_UTILITY_RENT_FOLLOWS); }
-    ovl_gp_tl();
-    if (sp->kind == BP_K_COMPUTER) {
-        ovl_gp_lb(); ovl_gp_la(TP_SET); ovl_gp_la(bp_group_name(sp->group));
-        ovl_gp_la(" ("); ovl_gp_lc(bp_group_letter(sp->group)); ovl_gp_la(")"); ovl_gp_tl();
-    }
-    ovl_gp_para(TP_DECLINE_PUTS_IT, 0);
+    sp = bp_space(bp_game.pos[bp_game.active]);
+    ovl_gp_sbeg();
+    gp_sv[2] = sp->name;
+    gp_iv[2] = BP_A_LARGE(sp->prop);
+    gp_iv[3] = ovl_gp_gc(sp);
+    ovl_gp_pw(3, sp->price);
+    if (sp->kind == BP_K_UTILITY) gp_sv[4] = TP_FOLLOWS_DICE; else ovl_gp_pw(4, sp->rent);
+    gp_iv[7] = !gp_iv[1]; gp_iv[8] = gp_iv[1];
+    ovl_gp_scene(0);
 }
+/* the auction (131.9.12): scene 1 */
 static void ovl_gp_dauc(void)
 {
     const BPSpace *sp;
-    int sw, bidder, top, w, bx, by, cmp;
-    cmp = bp_layout == BP_LAY_COMPACT;
+    int bidder, w, hb;
     sp = bp_space(bp_game.auc_space);
     bidder = bp_game.decider;
-    ovl_gp_lb(); ovl_gp_la(TP_AUCTION_2); ovl_gp_la(sp->name);
-    ovl_gp_frame(gp_line);
-    top = gp_y;
-    sw = 0;
-    if (!cmp) { sw = ovl_gp_sprite(BP_A_LARGE(sp->prop)); gp_x += sw + 8; }
-    bp_u32_set(&gp_u1, sp->price, 0);
-    ovl_gp_lb();
-    if (cmp) {
-        ovl_gp_la(TP_HIGH);
-        if (bp_game.auc_high == BP_NOBODY) ovl_gp_la(TP_NONE); else { ovl_gp_lv(&bp_game.auc_bid); ovl_gp_la(" "); ovl_gp_la(ovl_gp_name(bp_game.auc_high)); }
-        ovl_gp_la(TP_LIST); ovl_gp_lv(&gp_u1);
-        ovl_gp_tl();
-    } else {
-        ovl_gp_la(TP_LIST_PRICE); ovl_gp_lm(&gp_u1); ovl_gp_tl();
-        ovl_gp_lb(); ovl_gp_la(TP_HIGH_BID);
-        if (bp_game.auc_high == BP_NOBODY) ovl_gp_la(TP_NONE_YET); else ovl_gp_lm(&bp_game.auc_bid);
-        ovl_gp_tl();
-        if (bp_game.auc_high != BP_NOBODY) {
-            ovl_gp_lb(); ovl_gp_la(TP_BY); ovl_gp_la(ovl_gp_name(bp_game.auc_high)); ovl_gp_tl();
-        }
+    hb = bp_game.auc_high;
+    ovl_gp_sbeg();
+    ovl_gp_pu(2, sp->name);
+    gp_iv[2] = BP_A_LARGE(sp->prop);
+    gp_iv[3] = ovl_gp_gc(sp);
+    ovl_gp_pw(3, sp->price);
+    if (hb != BP_NOBODY) {
+        ovl_gp_pm(4, &bp_game.auc_bid);
+        gp_sv[5] = ovl_gp_name(hb);
+        gp_iv[4] = BP_A2_TOK_FLOPPY + bp_game.token[hb];
+    }
+    ovl_gp_pu(6, ovl_gp_name(bidder));
+    gp_iv[5] = BP_A2_TOK_FLOPPY + bp_game.token[bidder];
+    if (ovl_gp_mine()) {
+        gp_iv[6] = 1;
+        ovl_gp_pm(7, &gp_bid);
+        ovl_gp_minbid(&gp_u1); ovl_gp_pm(8, &gp_u1);
+        ovl_gp_pm(9, &bp_game.cash[bidder]);
+        bp_u32_copy(&gp_u1, &bp_game.cash[bidder]);
+        if (bp_u32_sub(&gp_u1, &gp_bid) == BP_OK) { gp_iv[7] = 1; ovl_gp_pm(10, &gp_u1); }
     }
     if (gp_auto) {
-        ovl_gp_lb();
         for (w = 0; w < BP_SEATS; w++)
-            if ((gp_auto >> w) & 1) { ovl_gp_la(ovl_gp_name(w)); ovl_gp_la(" "); }
-        ovl_gp_la(TP_PASSED_NO_RAISE);
-        ovl_gp_tl();
+            if ((gp_auto >> w) & 1) { ovl_gp_pa(ovl_gp_name(w)); ovl_gp_pa(" "); }
+        ovl_gp_pa(TP_PASSED_NO_RAISE);
+        ovl_gp_pk(11);
+        gp_iv[8] = 1;
     }
-    gp_x = gp_r.x + 6;
-    if (!cmp && gp_y < top + 42) gp_y = top + 42;
-    gp_y += 1;
-    /* whose bid */
-    if (gp_y + gp_fh <= gp_btop) {
-        bp_w_fill(gp_x, gp_y - 1, gp_xr, gp_y + gp_fh, 14);
-        ovl_gp_lb(); ovl_gp_la(ovl_gp_name(bidder)); ovl_gp_la(TP_YOUR_BID);
-        bp_w_text(gp_x + 3, gp_y, gp_line, 0, gp_font);
-        ovl_gp_lb(); ovl_gp_la(TP_CASH_2); ovl_gp_lm(&bp_game.cash[bidder]);
-        bp_w_text(gp_xr - 3 - bp_w_textw(gp_line, gp_font), gp_y, gp_line, 0, gp_font);
-    }
-    gp_y += gp_pitch + 1;
-    if (!ovl_gp_mine()) return;
-    /* the editor: [-] amount [+] */
-    bx = gp_bh;
-    by = gp_y;
-    gp_vy = by;                     /* a bid step changes the editor and below */
+    ovl_gp_scene(1);
     gp_xm.w = 0; gp_xp.w = 0;
-    if (by + bx <= gp_btop + gp_pitch) {
-        w = gp_xr - gp_x - 2 * (bx + 6);
-        gp_xm.x = gp_x; gp_xm.y = by; gp_xm.w = bx; gp_xm.h = bx;
-        gp_xp.x = gp_xr - bx; gp_xp.y = by; gp_xp.w = bx; gp_xp.h = bx;
-        bp_w_button(&gp_xm, "-", 0);
-        bp_w_button(&gp_xp, "+", 0);
-        gp_lr[0].x = gp_x + bx + 6; gp_lr[0].y = by; gp_lr[0].w = w; gp_lr[0].h = bx;
-        bp_w_box(&gp_lr[0], 15, 0);
-        ovl_gp_lb(); ovl_gp_lm(&gp_bid);
-        bp_w_text(gp_lr[0].x + (w - bp_w_textw(gp_line, gp_font)) / 2, by + (bx - gp_fh) / 2, gp_line, 0, gp_font);
-        gp_y = by + bx + 1;
+    if (gp_iv[6]) {                 /* the editor: a bid step changes it and below */
+        ovl_gp_srect(45, &gp_xm);
+        ovl_gp_srect(43, &gp_xp);
+        gp_vy = gp_xm.y;
     }
-    ovl_gp_minbid(&gp_u1);
-    ovl_gp_lb(); ovl_gp_la(TP_MIN); ovl_gp_lv(&gp_u1); if (!cmp) ovl_gp_la(TP_STEPS_OF_10);
-    bp_u32_copy(&gp_u2, &bp_game.cash[bidder]);
-    if (bp_u32_sub(&gp_u2, &gp_bid) == BP_OK) { ovl_gp_la(cmp ? TP_LEFT : TP_WIN); ovl_gp_lv(&gp_u2); ovl_gp_la(cmp ? "" : TP_CR_LEFT); }
-    ovl_gp_tl();
 }
 /* ---- panb: the kit-drawn panels (SPEC.md 131.9.13) ---------------------------- */
 #define GP_NOSPR 459            /* an art ID with no record: draws nothing */
@@ -808,22 +887,6 @@ static void ovl_gp_ddebt(void)
     gp_iv[2] = bp_mono ? 0 : 4;
     ovl_gp_usc(2, 150, gp_conf ? 2 : 0);
 }
-/* names of a prop mask (and a disk byte's side) into gp_line */
-static void ovl_gp_names(const BPU32 *m, int disks)
-{
-    int p, first;
-    first = 1;
-    for (p = 0; p < BP_PROPS; p++)
-        if (ovl_gp_bit(m, p)) {
-            if (!first) ovl_gp_la(", ");
-            first = 0;
-            ovl_gp_la(ovl_gp_pname(p));
-            if (bp_game.mortgaged[p]) ovl_gp_la("*");
-        }
-    if (disks & 1) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la(TP_DISK_FF); }
-    if (disks & 2) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la(TP_DISK_SE); }
-    if (first) ovl_gp_la(TP_NOTHING);
-}
 /* cash after a payment: *out; BP_EFUNDS when the payer cannot */
 static int ovl_gp_after(int seat, int pays, const BPU32 *amt, BPU32 *out)
 {
@@ -831,39 +894,114 @@ static int ovl_gp_after(int seat, int pays, const BPU32 *amt, BPU32 *out)
     if (pays) return bp_u32_sub(out, amt);
     return bp_u32_add(out, amt);
 }
-static void ovl_gp_aftline(int from, int to, const BPU32 *amt, int payer)
+/* the collection a trade completes for seat s, which gets `in` and gives
+ * `out`: every member owned after it, one of them new; -1 none */
+static int ovl_gp_tset(int s, const BPU32 *in, const BPU32 *out)
 {
-    ovl_gp_lb();
-    ovl_gp_la(ovl_gp_name(from)); ovl_gp_la(" ");
-    ovl_gp_lv(&bp_game.cash[from]); ovl_gp_la(">");
-    if (ovl_gp_after(from, payer == 0, amt, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
-    ovl_gp_la(TP_X); ovl_gp_la(ovl_gp_name(to)); ovl_gp_la(" ");
-    ovl_gp_lv(&bp_game.cash[to]); ovl_gp_la(">");
-    if (ovl_gp_after(to, payer != 0, amt, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
-    ovl_gp_tl();
+    const BPSpace *sp;
+    int g, p, all, got;
+    for (g = 0; g < BP_GROUPS; g++) {
+        all = 1; got = 0;
+        for (p = 0; p < BP_PROPS; p++) {
+            sp = bp_space(bp_prop_space(p));
+            if (sp->kind != BP_K_COMPUTER || sp->group != g) continue;
+            if (ovl_gp_bit(in, p)) got = 1;
+            else if (bp_game.owner[p] != s || ovl_gp_bit(out, p)) all = 0;
+        }
+        if (all && got) return g;
+    }
+    return -1;
 }
+/* the trade review (131.9.12): scene 2. Per side, a lone computer is the
+ * boards' card (slots); anything else is a list of names the code wraps in
+ * the side's area (several computers, disks, nothing) */
 static void ovl_gp_dtrade(void)
 {
-    int f, t;
+    const BPU32 *m;
+    const BPSpace *sp;
+    int f, t, g, s, p, j, c, n, k, dk, mk;
     f = bp_game.offer_from; t = bp_game.offer_to;
-    ovl_gp_lb(); ovl_gp_la(TP_TRADE_OFFER); ovl_gp_la(ovl_gp_name(f)); ovl_gp_la(TP_TO); ovl_gp_la(ovl_gp_name(t));
-    ovl_gp_frame(gp_line);
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(f)); ovl_gp_la(TP_GIVES);
-    ovl_gp_names(&bp_game.offer_give, bp_game.offer_disks & 15);
-    ovl_gp_para(gp_line, 0);
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(t)); ovl_gp_la(TP_GIVES);
-    ovl_gp_names(&bp_game.offer_get, (bp_game.offer_disks >> 4) & 15);
-    ovl_gp_para(gp_line, 0);
-    if (bp_u32_iszero(&bp_game.offer_cash)) ovl_gp_t(TP_NO_CASH_CHANGES, 0);
-    else {
-        ovl_gp_lb(); ovl_gp_la(TP_PLUS); ovl_gp_lm(&bp_game.offer_cash); ovl_gp_la(TP_FROM);
-        ovl_gp_la(ovl_gp_name(bp_game.offer_payer ? t : f)); ovl_gp_tl();
+    ovl_gp_sbeg();
+    ovl_gp_pu(2, ovl_gp_name(f)); ovl_gp_pu(3, ovl_gp_name(t));
+    gp_iv[2] = ovl_gp_mine();
+    ovl_gp_pm(12, &bp_game.offer_cash);
+    mk = 0;
+    for (c = 0; c < 2; c++) {
+        s = c ? t : f;
+        gp_sv[4 + c] = ovl_gp_name(s);
+        ovl_gp_pm(6 + c, &bp_game.cash[s]);
+        j = (bp_game.offer_payer != 0) == c && !bp_u32_iszero(&bp_game.offer_cash);
+        gp_iv[13 + c] = j;
+        if (ovl_gp_after(s, j, &bp_game.offer_cash, &gp_u1) == BP_OK) ovl_gp_pm(8 + c, &gp_u1);
+        else { ovl_gp_pa(TP_SHORT); ovl_gp_pk(8 + c); }
+        m = c ? &bp_game.offer_get : &bp_game.offer_give;
+        dk = (bp_game.offer_disks >> (c ? 4 : 0)) & 3;
+        n = 0;
+        for (p = BP_PROPS - 1; p >= 0; p--) if (ovl_gp_bit(m, p)) { n++; k = p; }
+        if ((n == 1 && !dk) || (n && bp_layout != BP_LAY_COMPACT)) {
+            /* the card: the side's (first) computer; alone, its facts,
+             * else the rest are "+ names" under it (after the scene) */
+            sp = bp_space(bp_prop_space(k));
+            gp_iv[7 + c] = 1;
+            gp_iv[9 + c] = BP_A_LARGE(k);
+            gp_iv[11 + c] = ovl_gp_gc(sp);
+            gp_sv[13 + c] = sp->name;
+            mk |= bp_game.mortgaged[k] << c;
+            if (n == 1 && !dk) {
+                mk |= 4 << c;       /* alone: the card says it all */
+                if (bp_layout != BP_LAY_COMPACT) ovl_gp_pa(TP_VALUE_);
+                ovl_gp_pw(15 + c, sp->price);
+                gp_sv[17 + c] = bp_game.mortgaged[k] ? TP_MORTGAGED : TP_NO_MORTGAGE;
+                n = bp_game.level[k];   /* RAM 1..4, Workshop: five handles in a row */
+                if (!j) gp_sv[19 + c] = n ? GP_RAM(n) : TP_NO_UPGRADES;   /* else the PLUS box */
+            }
+        }
     }
-    if (bp_layout != BP_LAY_COMPACT) ovl_gp_t(TP_AFTER_THIS_TRADE, 0);
-    ovl_gp_aftline(f, t, &bp_game.offer_cash, bp_game.offer_payer);
-    ovl_gp_lb(); ovl_gp_la(TP_OFFER); ovl_gp_lu(bp_game.offer_id); ovl_gp_la(TP_LOCKED_MORTGAGED);
-    ovl_gp_la(ovl_gp_name(t)); ovl_gp_la(TP_DECIDES);
-    ovl_gp_para(gp_line, 0);
+    s = f; g = ovl_gp_tset(f, &bp_game.offer_get, &bp_game.offer_give);
+    if (g < 0) { s = t; g = ovl_gp_tset(t, &bp_game.offer_give, &bp_game.offer_get); }
+    if (g >= 0) {
+        gp_iv[3] = 1;
+        gp_sv[10] = ovl_gp_name(s);
+        gp_sv[11] = bp_group_name(g);
+        for (p = 0, j = 4; p < BP_PROPS && j < 7; p++) {
+            sp = bp_space(bp_prop_space(p));
+            if (sp->kind == BP_K_COMPUTER && sp->group == g)
+                gp_iv[j++] = bp_layout == BP_LAY_FULL ? BP_A_SMALL(p) : bp_mono ? BP_A_MTINY(p) : BP_A_TINY(p);
+        }
+    }
+    ovl_gp_scene(2);
+    g = gp_btop;
+    for (c = 0; c < 2; c++) {
+        if ((mk >> c) & 1) {        /* the card's computer is mortgaged: the mark */
+            ovl_gp_srect(6 + c, &gp_xm);
+            if (gp_xm.w) bp_w_sprite(gp_xm.x, gp_xm.y, bp_mono ? BP_A_M_MORTGAGE : BP_A_MORTGAGE);
+        }
+        if ((mk >> 2 >> c) & 1) continue;
+        /* the names, wrapped: under the card the rest ("+ ..."; #8+c when
+         * the PLUS box shortens it), with no card the side's all (#2+c) */
+        m = c ? &bp_game.offer_get : &bp_game.offer_give;
+        k = -1;
+        ovl_gp_lb();
+        if (gp_iv[7 + c]) {
+            ovl_gp_la(TP_PLUS_);
+            for (k = 0; !ovl_gp_bit(m, k); k++) ;
+            ovl_gp_srect(8 + c, &gp_lr[c]);
+            if (!gp_iv[13 + c] || !gp_lr[c].w) ovl_gp_srect(4 + c, &gp_lr[c]);
+        } else ovl_gp_srect(2 + c, &gp_lr[c]);
+        gp_x = gp_lr[c].x + 2; gp_xr = gp_lr[c].x + gp_lr[c].w - 2;
+        gp_y = gp_lr[c].y; gp_btop = gp_y + gp_lr[c].h;
+        n = 0;                      /* "nothing" while n stays 0 */
+        for (p = 0; p < BP_PROPS + 2; p++) {
+            if (p == k || (p < BP_PROPS ? !ovl_gp_bit(m, p)
+                           : !((bp_game.offer_disks >> (c ? 4 : 0) >> (p - BP_PROPS)) & 1))) continue;
+            if (n++) ovl_gp_la(", ");
+            ovl_gp_la(p < BP_PROPS ? ovl_gp_pname(p) : p == BP_PROPS ? TP_DISK_FF : TP_DISK_SE);
+            if (p < BP_PROPS && bp_game.mortgaged[p]) ovl_gp_la(TP_MORTGAGED_P);
+        }
+        if (!n) ovl_gp_la(TP_NOTHING);
+        ovl_gp_para(gp_line, 0);
+    }
+    gp_btop = g;
 }
 /* standings: cash + assets = score; the winners marked, with a victory block, when over */
 /* standings: cash + assets = score; the winners marked, with a victory block, when over */
@@ -929,19 +1067,31 @@ static void ovl_gp_dhand(void)
     gp_iv[1] = BP_A2_TOKL_FLOPPY + bp_game.token[s];
     ovl_gp_usc(9, 150, 0);
 }
+/* the link lost / paused (131.9.12): scene 3, only what the session knows -
+ * the link state, whose PC is awaited, the last log line, whether a move is
+ * waiting to be confirmed, the paired save's state */
 static void ovl_gp_dpause(void)
 {
-    ovl_gp_frame(bp_link_state() == BP_L_RESYNC ? TP_RESYNCING_2 : bp_link_state() == 8 ? TP_BOARDS_DIFFER_2 : TP_CABLE_LINK_LOST);
-    ovl_gp_tc(bp_link_state() == 8 ? TP_ECONOMIC_INPUT_IS : TP_GAME_PAUSED, 0);
-    ovl_gp_lb(); ovl_gp_la(bp_link_state() == 8 ? TP_BOARDS_DIFFER_3 : TP_WAITING_FOR_THE); ovl_gp_la(bp_link_msg());
-    ovl_gp_para(gp_line, 0);
-    ovl_gp_t(TP_LAST_ACTION_RETAINED, 0);
-    ovl_gp_para(bp_log_line(0), 0);
-    if (bp_sess_pair() == BP_PAIR_BUSY || bp_sess_pair() == BP_PAIR_FAIL) {
-        ovl_gp_lb(); ovl_gp_la(TP_PAIRED_SAVE); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
-    }
-    ovl_gp_para(bp_link_state() == 8 ? TP_THE_CLIENT_TAKES : TP_RECONNECT_TO_CONTINUE, 0);
-    if (gp_conf) ovl_gp_t(TP_LEAVING_ABANDONS_THIS, 0);
+    int ls, s, pr;
+    ls = bp_link_state();
+    ovl_gp_sbeg();
+    if (!gp_iv[1]) gp_sv[1] = gp_conf ? TP_LEAVING_ABANDONS_THIS : ls == 8 ? TP_THE_CLIENT_TAKES : TP_RECONNECT_TO_CONTINUE;
+    gp_sv[2] = ls == BP_L_RESYNC ? TP_RESYNCING_2 : ls == 8 ? TP_BOARDS_DIFFER_2 : TP_CABLE_LINK_LOST;
+    gp_sv[3] = ls == 8 ? TP_INPUT_STOPPED : TP_GAME_PAUSED;
+    gp_sv[4] = TP_WAITING_OTHER;
+    if (ls == 8) gp_sv[4] = bp_link_msg();
+    else for (s = 0; s < bp_game.nseats; s++)
+        if (bp_game.alive[s] && !bp_sess_mine(s)) {
+            ovl_gp_pa(TP_WAITING_FOR); ovl_gp_pa(ovl_gp_name(s)); ovl_gp_pa(TP_S_PC); ovl_gp_pk(4);
+            break;
+        }
+    gp_sv[5] = bp_log_line(0);
+    gp_iv[3] = BP_A2_TOKL_FLOPPY + bp_game.token[bp_game.active];
+    gp_sv[6] = bp_sess_busy() ? TP_WAIT_CONFIRM : TP_NOTHING_WAITING;
+    pr = bp_sess_pair() & 3;
+    gp_iv[2] = pr == BP_PAIR_DONE;
+    gp_sv[7] = GP_PAIR(pr);   /* four handles in BP_PAIR_* order */
+    ovl_gp_scene(3);
 }
 /* a list's "more" marks (131.9.7): ^ rows hidden above, v below */
 static void ovl_gp_more(int x, int y, int up, int down)
@@ -1165,22 +1315,21 @@ static void ovl_gp_bar(void)
     gp_btop = gp_r.y + 4;
     gp_vy = gp_r.y;
 }
+/* the turn bar (131.9.12): scene 4, a bottom panel - the mover's token and
+ * whose move (or the status line), Roll / End Turn / Trade / Manage */
 static void ovl_gp_didle(void)
 {
     int d;
     d = bp_game.decider;
-    ovl_gp_bar();
-    gp_y = gp_btop;
-    ovl_gp_lb();
-    if (gp_err) { ovl_gp_la("! "); ovl_gp_la(gp_err); }
-    else if (bp_sess_busy()) ovl_gp_la(TP_SENT_WAITING_FOR_THE);
-    else if (!ovl_gp_mine()) { ovl_gp_la(TP_WAITING_FOR); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(TP_ON_THE_OTHER); }
-    else {
-        ovl_gp_la(ovl_gp_name(d));
-        if (bp_game.phase == BP_PH_AFTER) ovl_gp_la(bp_game.doubles ? TP_DOUBLES_ROLL_AGAIN : TP_END_YOUR_TURN);
-        else ovl_gp_la(TP_ROLL_THE_DICE);
+    ovl_gp_sbeg();
+    if (!gp_iv[1]) {
+        ovl_gp_pa(ovl_gp_name(d));
+        ovl_gp_pa(bp_game.phase != BP_PH_AFTER ? TP_ROLL_THE_DICE :
+                  bp_game.doubles ? TP_DOUBLES_ROLL_AGAIN : TP_END_YOUR_TURN);
+        ovl_gp_pk(1);
     }
-    bp_w_text(gp_x, gp_y, gp_line, 0, gp_font);
+    gp_iv[6] = BP_A2_TOK_FLOPPY + bp_game.token[d];
+    ovl_gp_scene(4);
 }
 static void ovl_gp_dreview(void)
 {
@@ -1190,11 +1339,13 @@ static void ovl_gp_dreview(void)
 /* the whole panel: one call per strip, so it must cost nothing but drawing */
 static void ovl_gp_draw(void)
 {
+    const char *m;
     ovl_gp_track();
     ovl_gp_spec();
     if (gp_kind == GK_NONE) return;
     if (gp_kind == GK_HAND) gp_hq = os88_ticks();   /* drawn now: a key queued meanwhile is not fresh */
     ovl_gp_geom();
+    gp_scn = 0;
     switch (gp_kind) {
     case GK_IDLE: ovl_gp_didle(); break;
     case GK_REVIEW: ovl_gp_dreview(); break;
@@ -1216,7 +1367,10 @@ static void ovl_gp_draw(void)
     case GK_KEYS: ovl_gp_dhelp(1); break;
     default: break;
     }
-    if (gp_kind != GK_IDLE && gp_kind != GK_REVIEW) ovl_gp_status();
+    if (!gp_scn && gp_kind != GK_IDLE && gp_kind != GK_REVIEW) {    /* the status line */
+        ovl_gp_lb();
+        if ((m = ovl_gp_stxt()) != 0) bp_w_text(gp_x, gp_btop, m, 0, gp_font);
+    }
     ovl_gp_brow();
 }
 
@@ -1478,7 +1632,7 @@ static void ovl_gp_damage(void)
         if (t < y) y = t;
     }
     if (gp_s1[1] != gp_s0[1] || gp_s1[2] != gp_s0[2]) {
-        t = bot - gp_bh - 4;                    /* the button row's own top */
+        t = gp_brt;                             /* the button row's own top */
         if (t < y) y = t;
     }
     if (y >= bot) return;
@@ -1581,6 +1735,7 @@ static int ovl_gp_covers(void)
 {
     ovl_gp_track();
     ovl_gp_spec();
+    if (gp_kind == GK_BUY) return bp_layout == BP_LAY_COMPACT;  /* a bottom panel (131.9.12) */
     return gp_kind != GK_NONE && gp_kind != GK_IDLE && gp_kind != GK_REVIEW;
 }
 /* the hint bar: the ENABLED buttons (Qqa2-23). Callers walk i = 0, 1, ...
@@ -1659,7 +1814,8 @@ static void ovl_gp_demonew(void)
 static void ovl_gp_demoset(int n)
 {
     int s;
-    n = n % 15;
+    n = n % 16;
+    gp_dls = 0; bp_mode = BP_MODE_LOCAL;
     os88_memset(&bp_game, 0, sizeof(bp_game));
     bp_game.status = BP_ST_PLAY; bp_game.nseats = 3; bp_game.match_id.lo = 77;
     bp_game.rev.lo = (BPWord)(n + 5);
@@ -1699,6 +1855,10 @@ static void ovl_gp_demoset(int n)
     else if (n == 12) gp_over = BP_GP_DIAG;
     else if (n == 13) gp_over = BP_GP_RULES;
     else if (n == 14) gp_over = BP_GP_STANDINGS;
+    else if (n == 15) {             /* a cable match whose link went quiet */
+        bp_mode = BP_MODE_HOST; gp_dls = BP_L_PAUSED; bp_game.active = 2;
+        bp_log_add("Alan bought C64 for 250 cr");
+    }
     if (n != 10) gp_ack = gp_lastd = bp_game.decider;
 }
 #endif
