@@ -255776,7 +255776,7 @@ checker for faces in shade.
 | `CARD_FF_T`, `CARD_SE_T` (lettered) | 72x80 | | `LINKED` | 120x44 |
 | `DIE1`..`DIE6` | 32x32 | | `DISK_OK` / `DARROW` | 28x28 / 20x10 |
 | `RAYS_L`, `RAYS_R` | 24x24 | | `CHECK` / `LOCK` | 16x14 / 16x18 |
-| `TRADE_ARR` / `COINS` / `GAVEL` | 28x32 / 28x22 / 28x24 | | | |
+| `TRADE_ARR` / `COINS` / `GAVEL` | 28x32 / 28x22 / 28x24 | | `LED_GREEN/RED/YELLOW`, `M_LED_RED` (311..314) | 10x10 |
 
 Sizes include the shadow; the face asks `bx_size`. Where a picture has a visual
 anchor it is: `RAYS_L`'s rays radiate from its bottom-right corner (`RAYS_R`
@@ -255784,14 +255784,15 @@ bottom-left), placed just beyond the mascot's fingertip; the mascot's fingertip
 is at (13, 6) of its 96x84; a die's face is its top-left 28x28; the cards' and
 PCs' shadows take the last 2-3 columns and rows.
 
-Monochrome (131.10.5): only `BP_A2_M_C_BOOT` is drawn. Every other picture was
-checked through the core's mapping and reads on 1bpp as it is, so the other
+Monochrome (131.10.5): only `BP_A2_M_C_BOOT` and `BP_A2_M_LED_RED` (green and red
+both map to white, so red's twin is a black ball) are drawn. Every other picture
+was checked through the core's mapping and reads on 1bpp as it is, so the other
 reserved `_M` IDs have no record and the face draws the colour ID on 1bpp.
 
 BOOT's four arrows in `sprites.txt` (`BP_A_BOOT`, `BP_A_M_BOOT` 32x24,
 `BP_A_T_BOOT`, `BP_A_M_T_BOOT` 16x12) point UP, the way a token leaves BOOT
-(play runs clockwise, 131.1), at their old sizes. Measured: `sprites2.txt` is 41
-records, 28,963 bytes packed (budget 30 KB); `BPART.BIN` is unchanged at 55,473.
+(play runs clockwise, 131.1), at their old sizes. Measured: `sprites2.txt` is 45
+records, 29,171 bytes packed (budget 30 KB); `BPART.BIN` is unchanged at 55,473.
 
 ### 131.11 Memory and parts
 

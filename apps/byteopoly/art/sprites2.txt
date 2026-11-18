@@ -1368,3 +1368,51 @@ kwwkkkkkkkkkkkkkkkkkkk..
 .......kkkkkkkkk.k......
 ........k.k.k.k.k.......
 .........k.k.k.k........
+
+sprite BP_A2_LED_GREEN 10 10
+..kkkkkk..
+.kGGGGGGk.
+kGwwGGGGgk
+kGwGGGGGgk
+kGGGGGGGgk
+kGGGGGGggk
+kGGGGGgggk
+.kggggggkk
+..kkkkkkk.
+...k.k.k..
+
+sprite BP_A2_LED_RED 10 10
+..kkkkkk..
+.kRRRRRRk.
+kRwwRRRRrk
+kRwRRRRRrk
+kRRRRRRRrk
+kRRRRRRrrk
+kRRRRRrrrk
+.krrrrrrkk
+..kkkkkkk.
+...k.k.k..
+
+sprite BP_A2_LED_YELLOW 10 10
+..kkkkkk..
+.kyyyyyyk.
+kywwyyyynk
+kywyyyyynk
+kyyyyyyynk
+kyyyyyynnk
+kyyyyynnnk
+.knnnnnnkk
+..kkkkkkk.
+...k.k.k..
+
+sprite BP_A2_M_LED_RED 10 10
+..kkkkkk..
+.kkkkkkkk.
+kkwwkkkkkk
+kkwkkkkkkk
+kkkkkkkkkk
+kkkkkkkkkk
+kkkkkkkkkk
+.kkkkkkkkk
+..kkkkkkk.
+...k.k.k..

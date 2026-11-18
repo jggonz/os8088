@@ -132,7 +132,9 @@ fit under a two-line corner label in a 50-pixel cell.
 
 Mono: every colour picture was looked at through the core's 2x2 mapping
 (SPEC.md 131.10.5) on white and on the centre's ground. Only BOOT's new arrow has
-a twin (`BP_A2_M_C_BOOT`, black with a white lit edge); the rest read as they
-are, so the other reserved `_M` IDs have no record. Measured: 41 records,
-28,963 bytes of packed 4bpp sprite records. BOOT's four arrows in `sprites.txt`
+a twin (`BP_A2_M_C_BOOT`, black with a white lit edge), and the red status LED
+(`BP_A2_M_LED_RED`, a black ball: green and red both map to white); the rest read
+as they are, so the other reserved `_M` IDs have no record. Measured: 45
+records, 29,171 bytes of packed 4bpp sprite records (the LEDs, IDs 311..314,
+were added for the link status ball of 2-auction.png). BOOT's four arrows in `sprites.txt`
 were redrawn pointing UP at their old sizes, so BPART.BIN stays 55,473 bytes.

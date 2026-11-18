@@ -83,7 +83,12 @@
 #define BP_A2_M_MASCOT_UP   308
 #define BP_A2_M_CARD_FF_T   309
 #define BP_A2_M_CARD_SE_T   310
-/* 311..383: free for the art lane (log each addition) */
+/* status LEDs (2-auction.png's "Cable linked" ball): 10x10 with a 1px shadow */
+#define BP_A2_LED_GREEN   311   /* linked / ready */
+#define BP_A2_LED_RED     312   /* disconnected */
+#define BP_A2_LED_YELLOW  313   /* waiting */
+#define BP_A2_M_LED_RED   314   /* 1bpp: a black ball (green and red both map to white) */
+/* 315..383: free for the art lane (log each addition) */
 
 /* ---- sound lane: 384..399 ---------------------------------------------- */
 #define BP_A2_MUSIC       384   /* the song bank (SPEC.md 132.8) */
