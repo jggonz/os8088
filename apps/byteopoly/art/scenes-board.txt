@@ -1,0 +1,47 @@
+# Byteopoly board scenes (SPEC.md 131.8.3, 133.6): the idle centre.
+# Slots: %0 / %1 the two dice (BP_A2_DIE1 - 1 + face), %2 1 when a match is
+# live (dice shown). The bar region at the bottom of the centre belongs to
+# the panel (bp_face_barh); a scene paints the whole ground, the art above it.
+fonth BP_F_BIG16 16
+fonth BP_F_BIG12 12
+
+# FULL: 336 x 300, the art in the top 204 rows
+scene BP_A2_SC_BOARD 336 300
+  box 0 0 336 300 sunken2 3
+  dither 2 2 332 296 3 11 2
+  spr 109 4 BP_A2_RAYS_L
+  spr 52 28 BP_A2_CARD_FF_T
+  spr 212 28 BP_A2_CARD_SE_T
+  spr 120 22 BP_A2_MASCOT_UP
+  keycap 15 116 32 30 "B" BP_F_BIG16
+  keycap 49 116 32 30 "Y" BP_F_BIG16
+  keycap 83 116 32 30 "T" BP_F_BIG16
+  keycap 117 116 32 30 "E" BP_F_BIG16
+  keycap 151 116 32 30 "O" BP_F_BIG16
+  keycap 185 116 32 30 "P" BP_F_BIG16
+  keycap 219 116 32 30 "O" BP_F_BIG16
+  keycap 253 116 32 30 "L" BP_F_BIG16
+  keycap 287 116 32 30 "Y" BP_F_BIG16
+  if %2 spr 130 156 %0
+  if %2 spr 174 156 %1
+end
+
+# MID: 384 x 204, the art in the top 140 rows
+scene 401 384 204
+  box 0 0 384 204 sunken2 3
+  dither 2 2 380 200 3 11 2
+  keycap 12 8 38 24 "B" BP_F_BIG12
+  keycap 52 8 38 24 "Y" BP_F_BIG12
+  keycap 92 8 38 24 "T" BP_F_BIG12
+  keycap 132 8 38 24 "E" BP_F_BIG12
+  keycap 172 8 38 24 "O" BP_F_BIG12
+  keycap 212 8 38 24 "P" BP_F_BIG12
+  keycap 252 8 38 24 "O" BP_F_BIG12
+  keycap 292 8 38 24 "L" BP_F_BIG12
+  keycap 332 8 38 24 "Y" BP_F_BIG12
+  spr 160 46 BP_A_MASCOT
+  spr 60 62 BP_A_CARD_FF_S
+  spr 296 62 BP_A_CARD_SE_S
+  if %2 spr 108 54 %0
+  if %2 spr 244 54 %1
+end
