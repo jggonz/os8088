@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "73b44ed03",
-  "strings": "720e97a330a2ceb7",
-  "why": "Browser 1.8 (#383) squash-merged as 73b44ed03: restamped from 66176f6eb, the review branch's commit, which the squash left out of main's history"
+  "stamped": "80235ef47",
+  "strings": "511e2c056170a587",
+  "why": "unchanged: the page already promises Times headings, colours and table grids; the fixes are below its level of detail (fewer drawing calls, the kern_mega face buffer, colour per display)"
  },
  "C64": {
   "sources": [],
