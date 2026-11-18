@@ -94,7 +94,15 @@ br_dlf_save:    call br_cx_saved
                 retf
 br_dlf_optcmd:  call br_cx_optcmd
                 retf
-br_dlf_saveas:  call OSAPI_FILE_HERE        ; where the instance stands, for
+br_dlf_saveas:  mov al, [br_dl_state]       ; A TRANSFER OWNS THOSE WORDS: its
+                cmp al, DL_OPEN             ; commit stands us back by them,
+                jb .free                    ; and a Save As's would be where
+                cmp al, DL_DONE             ; the download is going. Refused
+                jae .free                   ; until it ends (SPEC.md 71.34.14)
+                mov si, br_dl_s_busy
+                call far [br_dl_r_errst]
+                retf
+.free:          call OSAPI_FILE_HERE        ; where the instance stands, for
                 mov [br_dl_dirbak], dx      ; br_fetch's way back (the words
                 mov [br_dl_drivebak], bl    ; a download's dialog banks too)
                 call br_dlf_pagename        ; SI = the page's own name
@@ -103,9 +111,10 @@ br_dlf_saveas:  call OSAPI_FILE_HERE        ; where the instance stands, for
                 mov di, br_saved
                 call OSAPI_FILE_DLG
                 jc .r                       ; refused: no answer will come
-                inc byte [br_dl_depth]      ; raised: the part is held until
-.r:             retf                        ; br_saved answers (br_dl_cold's
-                                            ; own dec leaves this one)
+                mov byte [br_dl_gohome], 1  ; raised: NOTHING is held, since a
+.r:             retf                        ; cancel calls nothing back - the
+                                            ; next part fetch stands us home,
+                                            ; wherever the chooser browsed
 
 ; br_dlf_pagename - Save As suggests the PAGE'S OWN NAME, 8.3, as a download
 ; does (SPEC.md 71.34.14): the leaf of br_path, its stem to the last dot cut

@@ -82,8 +82,10 @@ br_optwake:
     inc di
     or al, al
     jnz .cp
-    mov si, br_ubuf
-    call br_go
+    call OSAPI_GFX_LOCK             ; W_ONWAKE is unlocked, and br_go draws
+    mov si, br_ubuf                 ; and runs under the lock (SPEC.md 71.14),
+    call br_go                      ; as br_onwake's other bursts do
+    call OSAPI_GFX_UNLOCK
 .out:
     pop es
     pop si

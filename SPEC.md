@@ -135357,7 +135357,9 @@ cut "Tom & Jerry here" to "Tom & Je". **Its label decodes entities**
 (`br_tentity`, the title's decoder) where `&amp;` showed as written, both
 where the field is drawn (`br_select`) and where a click moves it on
 (`br_fsetval`); an `&` with no `;` before the option's end stays a literal
-one. A bare `&` no longer eats the text up to the next option - the plan's
+one. A TEXT field's `value=` is not decoded, by Reset (`br_fsetval` decodes a
+select's only) any more than by `br_input` when the page is drawn: the field
+a page shows, Reset restores and a submit sends are the same bytes. A bare `&` no longer eats the text up to the next option - the plan's
 item had already gone with 1.7's entity rework, and the page that
 reproduced it shows "R&D dept" whole.
 
@@ -135444,12 +135446,19 @@ and a Save dialog leaves the instance where the user put the file. After one
 Save As every part was "unavailable" - the Download Manager, bookmarks, the
 source view, the context menu - because `BROWSER.O88` was not in that
 folder. Save As now does what a download always did: part 0 comes in
-before the dialog (`br_dl_partload`), `br_dlghere` banks the folder it
-opened from, and `br_saved` writes the file, stands the instance back
-(`OSAPI_FILE_GOTO_QM`, wfetch.inc's quiet stand) and repaints
-the whole content - §38's completion owes its own repaint, and the one the
-dialog's close drew had run while the colour part could not be read, so the
-links came back cut where the dialog had been.
+before the dialog (`br_dl_partload`) and banks the folder it opened from
+(`br_dl_dirbak`), and the dialog's opening raises `[br_dl_gohome]` and
+HOLDS NOTHING - a cancel, a close box or a minimize calls nothing back
+(§38.6), so a hold taken there was never given back and pinned part 0 for
+the session, and the next part fetch stands the instance home wherever the
+chooser browsed. `br_saved` banks the folder chosen (`OSAPI_FILE_HERE`,
+carried into the part in AL:DX, which `br_dl_cold` keeps), part 0 is read
+at home, and `br_cx_saved` stands back in the chosen folder
+(`OSAPI_FILE_GOTO_QM`, wfetch.inc's quiet stand), writes the file, raises
+the flag again, and `br_saved` repaints the whole content - §38's
+completion owes its own repaint, and the one the dialog's close drew had
+run while the colour part could not be read, so the links came back cut
+where the dialog had been.
 
 **A download does the same, at its end.** The transfer writes its `.$$$`
 by bare name where the user chose, so the instance stays there for the
@@ -135463,8 +135472,12 @@ the way a download does (`br_dlf_pagename`: the leaf of `br_path` made
 8.3, `.HTM` when it has no extension, `INDEX.HTM` when it has no leaf,
 built in `br_basescratch` because the chooser copies it on opening),
 banks the same words, and
-`br_saved` raises the same flag. The primary is 65,012 of
-`APP_MAX_SIZE`'s 65,024.
+`br_saved` raises the same flag. **A transfer owns those words**, from
+`DL_OPEN` up to `DL_DONE`, so Save As is refused then (`Download Manager is
+busy`): banked over, the download's commit stood the instance where the
+download went, and a commit landing while the chooser was up stood it at
+the download's folder before the page was written. The primary is 65,023
+of `APP_MAX_SIZE`'s 65,024.
 
 **The suggested name is the REAL one, made 8.3** (`br_dl_defaultname`): the
 stem up to the leaf's LAST dot, its first eight letters, digits, `-` and `_`
@@ -135476,6 +135489,9 @@ nothing legal in it. The server's `filename=` takes the same builder.
 **A name typed with no extension gets the suggested one** (`br_dlx_saved`),
 Windows' `lpstrDefExt` and the Disk window's rename rule (§22.10): `MEU`
 saves `MEU.ZIP`. A typed `.` - even a trailing one - is the user's and wins.
+A suggestion with no extension (`LICENSE`, `download`) gives none: it
+banked its last letter until the scan stopped on the NUL, and `LICENSE`
+saved as `LICENSEE`.
 The kernel's Save chooser has no default extension, so this is the Browser's,
 in part 0. `tests/unit/t_brautosave.py` holds the names.
 
@@ -135596,7 +135612,9 @@ page's URL with its NUL (`[br_ocfg]`, `BR_OCFGSZ`), written with `od_write` and
 read once, at the first `W_ONWAKE` (`br_optwake`), where the bookmarks are; a
 missing or foreign file leaves the defaults - everything on but Images on
 Click, and Fonts on a CPU past the 8086. A Browser opened with no document
-goes to the home page then. There is no password store.
+goes to the home page then, under the gfx lock it takes for that one
+`br_go` (`W_ONWAKE` runs without it, and §71.14's generation check relies on
+`br_go` running under it). There is no password store.
 
 ## 72. `ETHER.DRV` — an Ethernet card and a TCP/IP stack (`drivers/ether/`)
 

@@ -1513,7 +1513,8 @@ br_cx_crd:
 ; === Save As's write (1.8 size pass): br_saved in the primary is a thunk ===
 ; -----------------------------------------------------------------------------
 ; br_saved - Save As's completion proc
-; in:  AL = mode, SI = our window, DI = the chosen name; UI task, gfx lock
+; in:  AL:DX = the folder chosen (br_saved's OSAPI_FILE_HERE, its drive and
+;      cluster), SI = our window, DI = the chosen name; UI task, gfx lock
 ;      held, the dialog window already gone
 ; out: nothing
 ;
@@ -1530,9 +1531,13 @@ br_cx_saved:
     push di
     push es
     mov [br_win], si
+    mov byte [br_dl_gohome], 1      ; home again at the next part fetch
     cmp byte [es:di], 0
     je .out                         ; cancelled
     call far [br_dl_r_getname]
+    mov bl, al                      ; AL:DX = br_saved's bank of the folder
+    call OSAPI_FILE_GOTO_QM         ; chosen: the part was read at home, the
+    jc .failed                      ; file goes where the user put it
     cmp word [br_srcseg], 0
     jne .plainwrite
     cmp word [br_srcemshnd], 0

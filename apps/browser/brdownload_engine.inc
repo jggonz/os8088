@@ -389,9 +389,8 @@ br_dlx_saved:
     je .sext
     or al, al
     jnz .sdot
-    dec si                          ; none: an empty one
 .sext:
-    dec si
+    dec si                          ; the dot, or (none) the NUL: an empty one
     mov di, br_dl_dest              ; (scratch until br_dl_commit builds it)
     mov cx, 5
 .scopy:

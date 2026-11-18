@@ -5352,8 +5352,10 @@ br_fsetval:
     jae .gathered
     mov al, [es:si]
     inc si
-    cmp al, '&'                     ; an entity, as br_select's label (1.8)
-    jne .ch
+    cmp al, '&'                     ; an entity, as br_select's label (1.8) -
+    jne .ch                         ; a SELECT's only: a text field's value=
+    cmp byte [bx+FLD_TYPE], 1       ; is copied as written, as br_input's
+    jne .ch                         ; .initial draws it, so Reset matches it
     push si
     call br_tentity
     cmp si, cx
@@ -8054,9 +8056,10 @@ br_saveas:
     call br_dl_cold                 ; pass): the part comes in BEFORE the
     jmp short .out                  ; dialog, as a download's does - its walk
                                     ; leaves us where BROWSER.O88 is not -
-                                    ; banks where we stand, raises the dialog
-                                    ; and holds itself until br_saved answers;
-                                    ; refused, br_dl_cold said so
+                                    ; banks where we stand and raises the
+                                    ; dialog, holding nothing (a cancel never
+                                    ; answers); refused, it or br_dl_cold
+                                    ; said so
 .none:
     mov si, br_s_nopage
 .say:
@@ -8075,10 +8078,12 @@ br_saveas:
 ; register, and the part does what this did.
 ; -----------------------------------------------------------------------------
 br_saved:
-    dec byte [br_dl_depth]          ; (br_saveas's hold: br_dl_cold takes it)
+    call OSAPI_FILE_HERE            ; THE FOLDER CHOSEN, banked in AL:DX (which
+    xchg ax, bx                     ; br_dl_cold keeps): the dialog held no part,
+    inc byte [br_dl_gohome]         ; so part 0 is read at home (br_fetch)...
     mov byte [br_dl_sel], BRDL_SAVE
-    call br_dl_cold                 ; the write, in the folder chosen...
-    inc byte [br_dl_gohome]         ; ...then home at the next part fetch
+    call br_dl_cold                 ; ...and stands back there to write, then
+                                    ; raises home for the next part fetch
     mov si, [br_win]                ; (br_fetch), which the repaint makes now:
     jmp br_paint                    ; the dialog's close had repainted under
                                     ; it while we stood away, where part 7
