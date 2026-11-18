@@ -28,6 +28,30 @@ ARTDIR = os.path.join(ROOT, "apps", "byteopoly", "art")
 SPRITES = os.path.join(ARTDIR, "sprites.txt")
 HELP = os.path.join(ARTDIR, "help.txt")
 UITEXT = os.path.join(ARTDIR, "uitext.txt")
+# The bullet "•" (U+2022), the concept boards' separator ("AUCTION • C64"),
+# is glyph 127 of every Byteopoly font (SPEC.md 131.10.7): a square dot, 2 px
+# below 12 rows and 3 px from 12, centred on the x-height with 2 px either
+# side. A text file or a scene may write it as "•" or as the escape \177.
+BULLET = 127
+
+
+def bullet_glyph(font):
+    height, ascent, glyphs = bb.read_font(font)
+    d = 2 if height < 12 else 3
+    w = d + 4
+    lit = [j for j, row in enumerate(glyphs[ord("x")][1]) if any(row)]
+    mid = (lit[0] + lit[-1]) // 2 if lit else ascent // 2
+    top = max(0, mid - (d - 1) // 2)
+    rows = [[1 if (top <= j < top + d and 2 <= i < 2 + d) else 0 for i in range(w)]
+            for j in range(height)]
+    return w, rows
+
+
+def bullets(s):
+    return s.replace("\u2022", chr(BULLET))
+
+
+
 def help_lines(path):
     """help.txt: '# ' comment lines and blanks skipped; '#KEYS' is a real line."""
     out = []
@@ -144,7 +168,7 @@ def build(out_path):
     blobs = {}
     for name in ids:
         if name in FONTS:
-            blobs[name] = bb.pack_font(FONTS[name])
+            blobs[name] = bb.pack_font(FONTS[name], {BULLET: bullet_glyph(FONTS[name])})
         elif name in TEXTS:
             blobs[name] = pack_text(TEXTS[name])
         elif name in sprites:
@@ -640,8 +664,8 @@ def read_tx(r):
         m = re.match(r'(T[A-Z]_\w+) "((?:[^"\\]|\\.)*)"\s*$', line)
         if not m:
             fail(f"{path}:{k}: expected `TX_NAME \"text\"`, got {line!r}")
-        s = c_unescape(m.group(2), f"{path}:{k}")
-        if len(s) > TX_LIMIT or any(not 32 <= ord(c) < 127 for c in s):
+        s = bullets(c_unescape(m.group(2), f"{path}:{k}"))
+        if len(s) > TX_LIMIT or any(not 32 <= ord(c) <= BULLET for c in s):
             fail(f"{path}:{k}: {m.group(1)}: printable ASCII, {TX_LIMIT} characters at most")
         out.append((m.group(1), m.group(2), s))
     if len(out) > TX_LINES:
