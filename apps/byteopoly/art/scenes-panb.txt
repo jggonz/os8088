@@ -95,6 +95,7 @@ end
 scene 439 332 150
   if %0=0 {
     text 8 4 316 "NEXT PLAYER" black BP_F_TEXT13 centre
+    box 39 21 254 64 flat -1
     box 40 22 252 62 sunken2 @FIELD
     sprshadow 56 37 %1 2
     textbox 98 22 190 62 "$0" black BP_F_BIG16 left|fit
@@ -112,11 +113,11 @@ end
 # ---- 438 victory block, drawn at the table's left edge on FULL: $0 the
 # winners' names, $1 "Winner: " or "Shared win: "
 scene 438 320 88
-  spr 20 16 BP_A2_PC_SMILE
+  spr 4 2 BP_A2_MASCOT_UP
   spr 112 4 BP_A2_RAYS_L
   spr 290 4 BP_A2_RAYS_R
-  text 96 28 224 "$1" black BP_F_TEXT13 centre
-  textbox 96 40 224 24 "$0" black BP_F_BIG16 centre|fit
+  text 108 28 212 "$1" black BP_F_TEXT13 centre
+  textbox 108 40 212 24 "$0" black BP_F_BIG16 centre|fit
 end
 
 # ---- 433 a Collection row. %0 layout (0 FULL rows 26 tall, 1 MID 14, 2
@@ -222,11 +223,13 @@ scene 436 160 18
     check 5 3 11 %5 BP_A2_CHECK
     spr 22 3 %6
     text 44 2 %2 "$0" %7 BP_F_TEXT13 left|fit
+    spr %3 3 %8
   }
   if %0=1 {
     check 5 1 11 %5 BP_A2_CHECK
     spr 22 1 %6
     text 44 0 %2 "$0" %7 BP_F_TEXT10 left|fit
+    spr %3 1 %8
   }
   if %0=2 {
     text 2 0 %2 "$0" %7 BP_F_TEXT08 left|fit

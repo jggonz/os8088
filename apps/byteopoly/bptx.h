@@ -163,7 +163,7 @@ const char *bx_str(const char *s);
 #define TP_ASSETS BPT(0x1262, "assets")
 #define TP_SCORE BPT(0x1263, "score")
 #define TP_OUT BPT(0x1264, " (out)")
-#define TP_SCORE_CASH_PROPERTY BPT(0x1265, "Score = cash + property - mortgages + upgrades.")
+#define TP_SCORE_CASH_PROPERTY BPT(0x1265, "Score = cash + assets - mortgages")
 #define TP_PASS_THE_KEYBOARD BPT(0x1266, "Pass the keyboard")
 #define TP_PASS_TO BPT(0x1267, "Pass to")
 #define TP_NEXT_2 BPT(0x1268, "Next: ")

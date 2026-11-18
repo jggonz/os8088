@@ -1173,7 +1173,7 @@ static void ovl_gp_dcompose(void)
     if (nl < 1) nl = 1;
     gp_lrow = rh;
     ly = gp_y;
-    gp_iv[0] = lay; gp_iv[1] = hw - 4; gp_iv[2] = hw - 52;
+    gp_iv[0] = lay; gp_iv[1] = hw - 4; gp_iv[2] = hw - 70; gp_iv[3] = hw - 26;
     for (c = 0; c < 2; c++) {
         x = gp_x + c * (w - hw);
         if (gp_tcur[c] < gp_ttop[c]) gp_ttop[c] = gp_tcur[c];
@@ -1189,17 +1189,19 @@ static void ovl_gp_dcompose(void)
             ovl_gp_lb();
             if (cmp) ovl_gp_la(k ? TP_X_2 : TP_X_4);
             if (it >= 32) ovl_gp_la(it == 32 ? TP_DISK_FF : TP_DISK_SE);
-            else { ovl_gp_la(ovl_gp_pname(it)); if (bp_game.mortgaged[it]) ovl_gp_la("*"); }
+            else { ovl_gp_la(ovl_gp_pname(it)); if (cmp && bp_game.mortgaged[it]) ovl_gp_la(" M"); }
             gp_sv[0] = gp_line;
             gp_iv[4] = c == gp_tcol && idx == gp_tcur[c] ? 1 + lay : 0;
             gp_iv[5] = k;
             gp_iv[6] = it < 32 ? BP_A_TINY(it) : GP_NOSPR;
             gp_iv[7] = it < 32 && !ovl_gp_tradable(it) ? 8 : 0;
+            gp_iv[8] = it < 32 && bp_game.mortgaged[it] ? BP_A_MORTGAGE : GP_NOSPR;
             gk_scene(BP_A2_SC_PANB + 6, x + 2, y, gp_sv, gp_iv);
             y += rh;
         }
                 if (!gp_in[c]) bp_w_text(x + 8, ly + 2, TP_NONE_2, 0, gp_font);
     }
+    if (!cmp) gk_sprshadow(gp_x + hw + 3, ly + (nl * rh - 32) / 2, BP_A2_TRADE_ARR, 0);
     gp_y = ly + nl * rh + 8;
     bp_u32_set(&gp_u2, gp_tcash, 0);
     ovl_gp_lb(); ovl_gp_lv(&gp_u2); ovl_gp_la(TP_CR); ovl_gp_la(TB_PAID_BY); ovl_gp_la(ovl_gp_name(gp_tpay ? gp_tto : me));
