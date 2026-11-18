@@ -86,7 +86,9 @@ static int fc_hit(const BPRect *r)
     return r->w > 0 && r->x <= fc_sx2 && r->x + r->w - 1 >= fc_sx1 &&
            r->y <= fc_sy2 && r->y + r->h - 1 >= fc_sy1;
 }
-static unsigned fc_mix(unsigned h, unsigned v) { return (h << 3) + (h >> 13) + v + 1; }
+/* the repaint signatures' mix (QA-3): h*33 ^ v. The old rotate-and-add was
+ * linear, so two state changes could cancel and leave a section unpainted */
+static unsigned fc_mix(unsigned h, unsigned v) { return ((h << 5) + h) ^ v; }
 static char *fc_dec(unsigned v) { return os88_utoa(v, fc_num); }
 static int fc_ap(char *d, int n, const char *s)
 {
