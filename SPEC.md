@@ -255137,9 +255137,10 @@ never painted):
   14..21 descend the right column to CRASH!, 21..27 return along the bottom.
 * `bp_r_center` = (ax + cw, ay + ch, 6 cw, 6 ch): the inner 6 x 6.
 * `bp_r_side` = (ax + 8 cw, ay, aw - 8 cw, 8 ch), tiled exactly by four boxes
-  top to bottom: players (title bar + four rows, none in COMPACT), details
-  (3/5, 14/25 and 1/2 of what is left on FULL, MID, COMPACT), the link box
-  (two rows on FULL, one otherwise) and the log, which takes the remainder.
+  top to bottom (131.8.4): players (FULL 130, MID 86, COMPACT four 11 px
+  rows + 4), details (124, 104, half of the rest), collection / link (76, 44,
+  one row + 4) and the log, which takes the remainder. A column wider than
+  the 192 / 208 px the boxes are drawn at centres them on a face-grey ground.
 * `bp_r_hint` = (ax, ay + 8 ch, aw, h - 8 ch).
 
 Every section tiles its rect completely and paints every pixel of it, so a
@@ -255264,27 +255265,72 @@ builds: draw.inc).
 
 #### 131.8.4 The sidebar and the hint bar
 
-* **Players**: title "Round N" (N = completed rounds + 1, held at a Quick
-  Match's limit, so a finished 10-round match says "Round 10", not 11) with
-  the dice total as "d1+d2" at the right
-  (COMPACT carries both in the link row); a row per seat: token silhouette,
-  name, cash (`bp_u32_fmt`). The ACTIVE seat is the whole row inverted
-  (navy/black ground, white text) - readable without colour; an eliminated
-  seat shows "OUT" and a dotted strike through its name; a DETAINED seat an
-  inverse `R` chip. Before a match: "No match - Game > New Game".
-* **Details** for `bp_sel`: the full name in a title bar; for a property
-  Price, Mortgage (Redeem, with 131.2.4's cost, once mortgaged), Owner, Level,
-  and on FULL its `BP_A_LARGE` picture beside them; then the rent schedule of
-  131.2.3, computed here from the base rent: Base, Set (x2), 1..4 RAM (5, 15,
-  30, 45, 60 x base) and Workshop. A utility shows its 4x/10x dice rule; any
-  other space one plain sentence (and a charge its amount). COMPACT: three
-  lines (name, collection, price; rent, set, Workshop; owner, level, MORT).
-* **Link**: "Same PC" in local mode, else the state name (Off, Searching, Peer
-  found, Bad peer, Lobby, Linked, PAUSED, Resync) with " ..." while
-  `bp_sess_busy()`, PAUSED and BADPEER struck through, and on FULL the
-  `bp_link_msg()` line beneath. Status never depends on colour.
-* **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters, newest at
-  the bottom, truncated to the box width; as many as the box holds.
+* **The column** is four boxes on a face-grey ground (131.8.1), each a kit
+  panel (SPEC.md 133.3): a navy title bar with the title left-aligned and
+  embossed, a raised bevel, a 1 px outline. FULL draws every frame, title
+  and fixed label as a SCENE (`art/scenes-side.txt`, ids `BP_A2_SC_SIDE` +
+  0..9, 133.6) and only the live values and pictures in code; MID draws the
+  frame with `gk_panel` and the rows and the details card as scenes;
+  COMPACT keeps four plain bevelled boxes (its details lines, link line and
+  rows are scenes too). All of it is `gk_role` colour, so 1bpp is the kit's
+  mono table: the title bar is black, the highlighted row is INVERSE. A
+  panel's title bar is `bar` rows starting 3 px inside the edge with a dark
+  line under it, so a scene's first row of content starts at `bar + 5`.
+* **Players** (FULL 192 x 130, MID 208 x 86, COMPACT four rows): the title is
+  the seat to act - "PLAYER n • YOUR TURN" when `bp_sess_mine`, else
+  "NAME • THEIR TURN" (the other PC's seat) - with the round ("R3") at the
+  right; during an auction "BIDDING ORDER", at the end "GAME OVER", before a
+  match "Players". FULL shows the acting seat's `BP_A2_TOKL_*` beside a
+  sunken white well with its cash in the big font (during an auction the
+  high bid, or "No bid" beside the gavel). One row per seat: the `BP_A_TOK_*`
+  token, the name, the cash right-aligned (during an auction a status word:
+  PASSED / BIDDING / HIGH BID / IN), a divider under it (FULL); the seat to
+  act is the whole row in `GK_R_HILITE` (yellow; inverse on 1bpp); an
+  eliminated seat shows "OUT" and a dotted strike through its name, a DETAINED
+  seat an `R` chip. Each row is ONE scene call (`BP_A2_SC_SIDE` + 8 FULL, + 9
+  MID, + 6 COMPACT; slots: name, right text; flags: highlight, token (+4 on
+  1bpp), dead, divider, detained; COMPACT draws its 7 x 7 token in code).
+  Before a match: "No match - Game > New Game". The dice are not drawn here
+  (the board's centre shows them).
+* **Details** is a card of the space, the lot, or (FULL only) the cable: during
+  an auction it is the auctioned space titled "THE LOT" (an auction's list
+  price is its Price, its owner the Bank); on FULL, while the cable link is
+  not in step (`bp_mode` is not local and `bp_link_state()` is not
+  `BP_L_PLAY`) it is CONNECTION - `BP_A2_MODEM`, "Banker host" or "Joined
+  PC", "COMn • 2400 baud" (the port `bp_ck_port()` holds, "No port held" when
+  none; 2400 is the cable's fixed speed, 114.3), a banner with the state
+  ("Disconnected" for `BP_L_PAUSED`, else the state name) and the framer's own
+  `bp_link_msg()` line; on FULL during a trade over the cable it is OTHER PC
+  LINKED with `BP_A2_LINKED`, "Cable linked" (" • waiting" while
+  `bp_sess_busy()`) and the port; otherwise it is the space `bp_sel`: the full
+  name in the title bar; for a property the `BP_A_LARGE` picture, its
+  collection bar and (FULL) name on the left and Price, Mortgage (Redeem, with
+  131.2.4's cost, once mortgaged), Owner and Level on the right (the concept's
+  "Buy / Rent / Set" lines carry the same facts); then, under a rule, the rent
+  schedule of 131.2.3 computed from the base rent - Base, Set (x2), 1..4 RAM
+  (5, 15, 30, 45, 60 x base) and Workshop - or a utility's 4x/10x dice rule;
+  any other space its picture and one plain sentence (a charge its amount).
+  The values are the scene's string slots (`$1..$12`) and flags (`%0..%3`);
+  one scene per layout (+ 5 FULL, + 7 MID) serves all of them. COMPACT:
+  three lines (name; price or the sentence; owner and level).
+* **Collection / link** (FULL 192 x 76, MID 208 x 44): "YOUR COLLECTION" with
+  `BP_A_SMALL` pictures (MID `BP_A_TINY`) of the computers of the seat this PC
+  plays - the acting seat when it is ours, else our first living seat (FULL ten
+  pictures on same-PC play, five over the cable; MID nine; "+n" for the rest).
+  Over the cable a status line under them: the LED (`BP_A2_LED_GREEN`, yellow
+  while `bp_sess_busy()`, red on MID when the link is down, the 1bpp ball on
+  a mono display) and "Cable linked • 2400 baud" (" • waiting" while busy; on
+  MID the link's state word while the link is down). While the link is down
+  FULL's box is PAIRED SAVE instead: two `BP_A2_DISK_OK` and the arrow when
+  `bp_sess_pair() == BP_PAIR_DONE`, and a status button - "Paired save
+  complete", "Paired save failed", "Saving...", else "Waiting for link" greyed
+  (`GK_B_DISABLED`; it is a status, the keys stay the panel's R / L / D).
+  COMPACT is one line: the round and the link state (PAUSED and BADPEER struck
+  through), " ..." while busy. Status never depends on colour: every state
+  has its word.
+* **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters in a
+  sunken white well, newest at the bottom, truncated to the box width; as
+  many as the box holds.
 * **Hint bar**: navy/black; each `bp_pn_hint(i)` is split at its first space:
   the head (under 8 characters) becomes a key cap, the rest its label beside
   it; the entries are spread evenly along the bar (the concept's bottom row),
@@ -255303,9 +255349,9 @@ rect, a sidebar line by its y.
 |---|---|---|
 | `BP_D_BOARD` | a cell's signature (owner, level, mortgage, the tokens standing on it, selected) changed, or `bp_face_dirty_space` named it; more than ten cells: the four sides of the ring | each cell |
 | `BP_D_CENTER` | always (the panel's state is not the face's to hash) | `bp_r_center` |
-| `BP_D_PLAYERS` | signature (round, dice, active seat, status, cash, alive, detained, token, name) changed | players box |
-| `BP_D_DETAILS` | signature (`bp_sel`, every owner/level/mortgage, names) changed | details box |
-| `BP_D_LINK` | signature (state, busy, mode, message text, round/dice off FULL) changed | link box |
+| `BP_D_PLAYERS` | signature (round, active seat, status, phase, the auction's seat/bid fields, cash, alive, detained, token, name) changed - the dice are no longer drawn here | players box |
+| `BP_D_DETAILS` | signature (`bp_sel`, phase, the auctioned space, every owner/level/mortgage, names; over the cable the link state, busy, port and, while down, the message) changed | details box |
+| `BP_D_LINK` | signature (link state, busy, mode, port, pair state, the active seat and every owner; COMPACT: round, dice, message text) changed | collection / link box |
 | `BP_D_LOG` | `bp_log_add` was called (a version counter) | log box |
 | `BP_D_HINT` | signature of the hint strings changed | hint bar |
 | `BP_D_FORCE` | with other bits: repaint them even when the signature says nothing changed | |
