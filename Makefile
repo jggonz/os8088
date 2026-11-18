@@ -11401,11 +11401,18 @@ $(BUILD)/breadxt-check360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbn
 # (73.14.2) and the art as a lazy part after it (131.10), Breadboard XT's
 # shape. Every included .c/.h and .inc is a prerequisite (131.12): make
 # cannot see through #include or %include.
-$(eval $(call CC_PACKAGE,byteoply,byteopoly,BYTEOPLY.OVL,,part,$(BUILD)/BPART.BIN))
+# The second art part BPART2.BIN (131.10.7) is art2.h's IDs: sprites2.txt,
+# the tx-*.txt text records, the kit's scenes and the music, each tool only
+# when it exists - so its prerequisites name the tools by wildcard.
+$(eval $(call CC_PACKAGE,byteoply,byteopoly,BYTEOPLY.OVL,,part,$(BUILD)/BPART.BIN $(BUILD)/BPART2.BIN))
 BYTEOPOLYSRC := $(wildcard apps/byteopoly/*.c apps/byteopoly/*.h)
 $(BUILD)/BPART.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h \
                     $(wildcard apps/byteopoly/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
 	python3 tools/os88bpart.py build -o $@
+$(BUILD)/BPART2.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h apps/byteopoly/art2.h \
+                     apps/byteopoly/bptx.h $(wildcard apps/byteopoly/art/*.txt) \
+                     $(wildcard tools/os88gk.py tools/os88gkmus.py) | $(BUILD)
+	python3 tools/os88bpart.py build2 -o $@
 $(BUILD)/byteoply.raw.asm: $(BYTEOPOLYSRC)
 $(BUILD)/byteoply.bin: $(wildcard apps/byteopoly/*.inc) apps/breadxt/draw.inc \
                        apps/os88cable.inc apps/os88ui.inc

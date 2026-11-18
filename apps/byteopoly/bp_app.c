@@ -7,6 +7,7 @@
  * and tick reaches. Everything reached by a menu, a file, a lobby or a
  * commit is overlay code (ovl_*, SPEC.md 131.11). */
 int bp_ask(const char *message, void *window, int buttons);
+void bx_setart2(unsigned seg);
 void bp_alertdone(int button);
 
 BPByte bp_ap_mode, bp_opt_sound, bp_opt_fast;
@@ -492,8 +493,12 @@ static void ovl_bp_ap_chat(int machine, const char *text)
 static int ovl_bp_ap_start(void)
 {
     os88_video(&bp_ap_video);
-    bp_ap_artseg = 0;
-    if (os88_part_lazyok(1) && os88_part_fetch(1) == 0) bp_ap_artseg = os88_part_seg(1);
+    /* both art parts or no game (SPEC.md 131.10.7): the UI text is in them */
+    if (!os88_part_lazyok(1) || !os88_part_lazyok(2)) { os88_toast("Not enough memory", 0); return 0; }
+    if (os88_part_fetch(1) != 0) { os88_toast("Cannot read the art", 0); return 0; }
+    if (os88_part_fetch(2) != 0) { os88_part_drop(1); os88_toast("Cannot read the art", 0); return 0; }
+    bp_ap_artseg = os88_part_seg(1);
+    bx_setart2(os88_part_seg(2));
     bp_ap_bandseg = os88_mem_claim_p(BP_AP_BANDP);
     if (bp_ap_bandseg) os88_mem_movable(bp_ap_bandseg, 1);
     bp_face_init(0, bp_ap_artseg, bp_ap_bandseg, BP_AP_BANDP * 16, bp_ap_video.bpp);
