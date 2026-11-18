@@ -306,6 +306,14 @@ FAST = [
         "when the unit moved assembles cleanly and reads 32 times too far "
         "into the file. Tracks the loaded VALUE, so a later unrelated shift "
         "is not one; red on rw_jpart's old conversion put back"),
+    Row("gkscene", "fast", py("tests/unit/t_gkscene.py"), 0.2,
+        "THE GAME KIT'S SCENE RECORD IS THE ONE SPEC.md 132.6 PINS. "
+        "tools/os88gk.py is its only writer and gk_scene (apps/cc/gk.inc) its "
+        "only guest reader, and a drifted byte draws the wrong widget or reads "
+        "an argument as an op, silently. A second reader written from the SPEC "
+        "table holds a golden record, a round trip of every op, gk.inc's "
+        "gk_ops and gk.h's GK_* against the compiler's, and the 132.7 "
+        "refusals; red on two gk_ops rows swapped"),
     Row("coldsym", "soak", py("tests/unit/t_coldsym.py"), 1.2,
         "SOAK (owner, 2026-11-11): about the suite's own harness and "
         "fixtures, not the OS - the release soak runs every row "

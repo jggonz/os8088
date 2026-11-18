@@ -11459,6 +11459,26 @@ $(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
 bpmath: $(BUILD)/bpmath360.img
 .PHONY: bpmath
 
+# The C game kit's gallery (SPEC.md 132): a gate package drawing every gk_
+# widget of apps/cc/gk.inc and one scene compiled by tools/os88gk.py, with an
+# art part of its own (three WIN16 faces, two pictures, the scene). Kit lane.
+$(eval $(call CC_PACKAGE,gkdemo,../tests/gkdemo,,$(BUILD)/GKDART.BIN))
+$(BUILD)/GKDART.BIN: tests/gkdemo/mkart.py tests/gkdemo/gkd.h tests/gkdemo/sprites.txt \
+                     tests/gkdemo/scenes.txt tools/os88gk.py tools/os88bbart.py \
+                     $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tests/gkdemo/mkart.py -o $@
+$(BUILD)/gkdemo.raw.asm: tests/gkdemo/gkd.h apps/cc/gk.h
+$(BUILD)/gkdemo.bin: apps/cc/gk.inc apps/breadxt/draw.inc
+$(BUILD)/gkdemo.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/gkdemo.o88
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/gkdemo360.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkdemo.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] gkdemo :: the C game kit's gallery: every gk_ widget and a compiled scene (SPEC.md 132)
+gkdemo: $(BUILD)/gkdemo.img $(BUILD)/gkdemo360.img
+.PHONY: gkdemo
+
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and

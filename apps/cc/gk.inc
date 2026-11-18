@@ -1170,7 +1170,9 @@ _gk_scene:
     cmp al,0C2h
     je .role
     ja .yes                         ; C3h-DFh: not a code
+    push di
     call gk_lit
+    pop di
     jmp short .v
 .neg:
     cbw
