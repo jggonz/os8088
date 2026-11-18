@@ -100,6 +100,9 @@
 #define BP_A2_SC_PANA     420   /* 420..429 panels-A lane (buy, auction, trade, link lost) */
 #define BP_A2_SC_PANB     430   /* 430..439 panels-B lane (every other centre panel) */
 #define BP_A2_SC_LOBBY    440   /* 440..449 lobby lane (New Game, cable lobby) */
+#define BP_A2_SC_LOBBY_S  441   /*   FULL, the Same PC half */
+#define BP_A2_SC_LOBBY_C  442   /*   COMPACT (MID too) */
+#define BP_A2_SC_LOBBY_CS 443   /*   COMPACT, the Same PC half */
 
 /* ---- text records, one per source file (indexed; a C name in bptx.h is a
  * TEXT HANDLE into one, SPEC.md 131.10.7; source art/tx-*.txt): prep lane - */

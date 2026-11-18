@@ -1,0 +1,266 @@
+# The New Game screen and the cable lobby (SPEC.md 131.9.2, 131.9.3), the
+# lobby lane's scenes. Slots the C fills (bp_setup.c ovl_su_slots):
+#  $0-3 names  $4 description  $5 roster footer  $6-9 computer labels
+#  $10 rounds label  $11-12 rule lines  $13 link status  $14 role  $15 port
+#  $16 peer line  $17 status line  $18 port button  $19 link button
+#  $20-23 token names  $24 title
+#  %0-2 tab active  %3 start  %4 back  %5 port  %6 link  %7 minus  %8 plus
+#  button states (flat)  %9-12 seat: 0 absent 1 present (same PC) 2 (cable)
+#  %13-16 token art  %17-20 ready tick  %21 classic %22 quick radio
+#  %23 link mode 0 none 1 cable 2 linked  %24 led art  %26 peer token art
+# Tags are widget id + 1 (the Tab order of bp_setup.c); 27 status line,
+# 28 roster panel, 29 rules panel, 30 link panel, 31 description.
+fonth BP_F_TEXT13 13
+fonth BP_F_TEXT10 10
+fonth BP_F_TEXT08 8
+fonth BP_F_BIG16 16
+
+# ---- FULL: 640 x 418 -------------------------------------------------------
+scene BP_A2_SC_LOBBY 640 418
+  spr 166 9 BP_A2_RAYS_L
+  spr 450 9 BP_A2_RAYS_R
+  box 200 6 240 30 raised2|round|shadow @TITLE
+  textbox 200 6 240 30 $24 white BP_F_BIG16 centre|emboss
+  tab 88 46 154 22 "Same PC" BP_F_TEXT13 %0 #1
+  tab 243 46 154 22 "Host Cable" BP_F_TEXT13 %1 #2
+  tab 398 46 154 22 "Join Cable" BP_F_TEXT13 %2 #3
+  banner 74 70 492 20 $4 BP_F_TEXT13 15 #31
+  panel 13 98 384 188 18 "PLAYER ROSTER" BP_F_TEXT13 raised|shadow|pleft #28
+  box 16 117 378 144 flat -1
+  box 17 118 114 18 raised @FACE
+  textbox 17 118 114 18 "Player" @TEXT BP_F_TEXT10 centre
+  box 131 118 69 18 raised @FACE
+  textbox 131 118 69 18 "Token" @TEXT BP_F_TEXT10 centre
+
+  fill 17 136 114 31 @FIELD #6
+  fill 131 136 69 31 @FIELD #10
+  fill 17 167 114 31 @FIELD #7
+  fill 131 167 69 31 @FIELD #11
+  fill 17 198 114 31 @FIELD #8
+  fill 131 198 69 31 @FIELD #12
+  fill 17 229 114 31 @FIELD #9
+  fill 131 229 69 31 @FIELD #13
+  if %23 {
+    box 200 118 133 18 raised @FACE
+    textbox 200 118 133 18 "Computer" @TEXT BP_F_TEXT10 centre
+    box 333 118 60 18 raised @FACE
+    textbox 333 118 60 18 "Ready" @TEXT BP_F_TEXT10 centre
+    fill 200 136 133 124 @FIELD
+    fill 333 136 60 124 @FIELD #18
+    vline 200 118 142 0
+    vline 333 118 142 0
+  }
+  vline 131 118 142 0
+  hline 17 167 376 0
+  hline 17 198 376 0
+  hline 17 229 376 0
+
+  if %9 {
+    box 22 144 14 14 flat 4
+    textbox 42 136 86 31 $0 @TEXT BP_F_TEXT13 left|fit
+    spr 153 140 %13
+  }
+  if %9=2 {
+    drop 207 141 119 21 $6 BP_F_TEXT13 #14
+    check 352 142 18 %17 BP_A2_CHECK
+  }
+  if %10 {
+    box 22 175 14 14 flat 1
+    textbox 42 167 86 31 $1 @TEXT BP_F_TEXT13 left|fit
+    spr 153 171 %14
+  }
+  if %10=2 {
+    drop 207 172 119 21 $7 BP_F_TEXT13 #15
+    check 352 173 18 %18 BP_A2_CHECK
+  }
+  if %11 {
+    box 22 206 14 14 flat 2
+    textbox 42 198 86 31 $2 @TEXT BP_F_TEXT13 left|fit
+    spr 153 202 %15
+  }
+  if %11=2 {
+    drop 207 203 119 21 $8 BP_F_TEXT13 #16
+    check 352 204 18 %19 BP_A2_CHECK
+  }
+  if %12 {
+    box 22 237 14 14 flat 5
+    textbox 42 229 86 31 $3 @TEXT BP_F_TEXT13 left|fit
+    spr 153 233 %16
+  }
+  if %12=2 {
+    drop 207 234 119 21 $9 BP_F_TEXT13 #17
+    check 352 235 18 %20 BP_A2_CHECK
+  }
+  button 20 264 22 18 "-" BP_F_TEXT13 %7 #4
+  button 368 264 22 18 "+" BP_F_TEXT13 %8 #5
+  textbox 46 264 316 18 $5 @TEXT BP_F_TEXT10 centre
+  panel 13 294 384 76 18 "GAME RULES" BP_F_TEXT13 raised|shadow|pleft #29
+  radio 28 320 16 %21 #19
+  textbox 50 318 90 20 "Classic" @TEXT BP_F_TEXT13 left
+  radio 28 344 16 %22 #20
+  textbox 50 342 90 20 "Quick Match" @TEXT BP_F_TEXT13 left
+  if %22 drop 146 342 62 20 $10 BP_F_TEXT10 #21
+  vline 214 316 48 0
+  text 222 322 170 $11 @TEXT BP_F_TEXT10 left|fit
+  text 222 342 170 $12 @TEXT BP_F_TEXT10 left|fit
+  box 13 378 515 36 raised|shadow 15
+  textbox 22 378 240 36 $17 @TEXT BP_F_TEXT10 left|fit #27
+  button 270 383 148 26 "[S] Start Game" BP_F_TEXT13 %3 #25
+  button 426 383 96 26 "[Esc] Back" BP_F_TEXT13 %4 #26
+  if %23 {
+    panel 405 98 222 272 18 "NULL-MODEM LINK" BP_F_TEXT13 raised|shadow|pleft #30
+    spr 414 126 BP_A2_PC_SMILE
+    spr 562 126 BP_A2_PC_MOUSE
+    fill 468 151 22 3 8
+    fill 540 151 24 3 8
+  }
+  if %23=2 spr 484 144 BP_A2_PLUG_L
+  if %23=2 spr 516 144 BP_A2_PLUG_R
+  if %23=1 spr 474 144 BP_A2_PLUG_L
+  if %23=1 spr 526 144 BP_A2_PLUG_R
+  if %23 {
+    box 414 198 204 20 raised|round 15
+    spr 421 203 %24
+    text 438 202 176 $13 @TEXT BP_F_TEXT10 left|fit
+    text 421 228 60 "Role:" @TEXT BP_F_TEXT10 left
+    text 486 228 128 $14 @TEXT BP_F_TEXT10 left|fit
+    text 421 242 60 "Port:" @TEXT BP_F_TEXT10 left
+    text 486 242 128 $15 @TEXT BP_F_TEXT10 left|fit
+    text 421 256 60 "Speed:" @TEXT BP_F_TEXT10 left
+    text 486 256 128 "2400 baud" @TEXT BP_F_TEXT10 left
+    text 421 270 60 "Format:" @TEXT BP_F_TEXT10 left
+    text 486 270 128 "8N1" @TEXT BP_F_TEXT10 left
+    hline 414 286 204 1
+    button 414 324 44 22 $18 BP_F_TEXT10 %5 #23
+    button 462 324 66 22 $19 BP_F_TEXT10 %6 #24
+    spr 532 306 BP_A2_MASCOT_UP
+  }
+  if %26 box 414 292 204 26 raised|round 15
+  if %26 spr 420 293 %26
+  if %26 text 448 300 166 $16 @TEXT BP_F_TEXT10 left|fit
+end
+
+# the Same PC half: what the cable columns and the link panel say instead
+scene BP_A2_SC_LOBBY_S 640 418
+  box 200 118 193 18 raised @FACE
+  textbox 200 118 193 18 "This computer" @TEXT BP_F_TEXT10 centre
+  fill 200 136 193 124 @FIELD
+  spr 268 148 BP_A2_PC_SMILE
+  textbox 200 204 193 20 "Everyone plays here" @TEXT BP_F_TEXT13 centre
+  textbox 200 226 193 16 "Players take turns" @TEXT BP_F_TEXT10 centre
+  textbox 200 240 193 16 "at one keyboard." @TEXT BP_F_TEXT10 centre
+  vline 200 118 142 0
+  panel 405 98 222 272 18 "THIS COMPUTER" BP_F_TEXT13 raised|shadow|pleft #30
+  spr 488 130 BP_A2_PC_SMILE
+  textbox 405 200 222 20 "No cable needed" @TEXT BP_F_TEXT13 centre
+  textbox 405 226 222 14 "Host Cable and Join Cable" @TEXT BP_F_TEXT10 centre
+  textbox 405 240 222 14 "link two computers." @TEXT BP_F_TEXT10 centre
+  spr 532 306 BP_A2_MASCOT_UP
+end
+
+
+# ---- COMPACT (and MID): 640 x 142 ------------------------------------------
+scene BP_A2_SC_LOBBY_C 640 142
+  tab 4 3 100 12 "Same PC" BP_F_TEXT08 %0 #1
+  tab 106 3 100 12 "Host Cable" BP_F_TEXT08 %1 #2
+  tab 208 3 100 12 "Join Cable" BP_F_TEXT08 %2 #3
+  banner 316 3 320 12 $4 BP_F_TEXT08 15 #31
+  panel 4 16 372 86 12 "PLAYER ROSTER" BP_F_TEXT08 raised|pleft #28
+  box 5 29 370 60 flat -1
+  box 6 30 132 10 raised @FACE
+  textbox 6 30 132 10 "Player" @TEXT BP_F_TEXT08 centre
+  box 138 30 64 10 raised @FACE
+  textbox 138 30 64 10 "Token" @TEXT BP_F_TEXT08 centre
+
+  fill 6 40 132 12 @FIELD #6
+  fill 138 40 64 12 @FIELD #10
+  fill 6 52 132 12 @FIELD #7
+  fill 138 52 64 12 @FIELD #11
+  fill 6 64 132 12 @FIELD #8
+  fill 138 64 64 12 @FIELD #12
+  fill 6 76 132 12 @FIELD #9
+  fill 138 76 64 12 @FIELD #13
+  if %23 {
+    box 202 31 100 10 raised @FACE
+    textbox 202 31 100 10 "Computer" @TEXT BP_F_TEXT08 centre
+    box 302 31 72 10 raised @FACE
+    textbox 302 31 72 10 "Ready" @TEXT BP_F_TEXT08 centre
+    fill 202 41 100 48 @FIELD
+    fill 302 41 72 48 @FIELD #18
+    vline 202 31 58 0
+    vline 302 31 58 0
+  }
+  vline 138 31 58 0
+
+  if %9 {
+    box 9 43 8 8 flat 4
+    textbox 20 41 116 12 $0 @TEXT BP_F_TEXT08 left|fit
+    textbox 138 41 64 12 $20 @TEXT BP_F_TEXT08 centre|fit
+  }
+  if %9=2 {
+    drop 204 41 96 12 $6 BP_F_TEXT08 #14
+    check 328 42 10 %17 0
+  }
+  if %10 {
+    box 9 55 8 8 flat 1
+    textbox 20 53 116 12 $1 @TEXT BP_F_TEXT08 left|fit
+    textbox 138 53 64 12 $21 @TEXT BP_F_TEXT08 centre|fit
+  }
+  if %10=2 {
+    drop 204 53 96 12 $7 BP_F_TEXT08 #15
+    check 328 54 10 %18 0
+  }
+  if %11 {
+    box 9 67 8 8 flat 2
+    textbox 20 65 116 12 $2 @TEXT BP_F_TEXT08 left|fit
+    textbox 138 65 64 12 $22 @TEXT BP_F_TEXT08 centre|fit
+  }
+  if %11=2 {
+    drop 204 65 96 12 $8 BP_F_TEXT08 #16
+    check 328 66 10 %19 0
+  }
+  if %12 {
+    box 9 79 8 8 flat 5
+    textbox 20 77 116 12 $3 @TEXT BP_F_TEXT08 left|fit
+    textbox 138 77 64 12 $23 @TEXT BP_F_TEXT08 centre|fit
+  }
+  if %12=2 {
+    drop 204 77 96 12 $9 BP_F_TEXT08 #17
+    check 328 78 10 %20 0
+  }
+  button 7 90 18 10 "-" BP_F_TEXT08 %7 #4
+  button 353 90 18 10 "+" BP_F_TEXT08 %8 #5
+  textbox 30 90 320 11 $5 @TEXT BP_F_TEXT08 centre
+  panel 380 16 256 42 12 "GAME RULES" BP_F_TEXT08 raised|pleft #29
+  radio 384 32 10 %21 #19
+  textbox 398 31 56 12 "Classic" @TEXT BP_F_TEXT08 left
+  radio 450 32 10 %22 #20
+  textbox 464 31 70 12 "Quick Match" @TEXT BP_F_TEXT08 left
+  if %22 drop 540 29 62 12 $10 BP_F_TEXT08 #21
+  text 384 46 84 $11 @TEXT BP_F_TEXT08 left|fit
+  text 470 46 164 $12 @TEXT BP_F_TEXT08 left|fit
+  box 4 104 632 36 raised|round 15
+  textbox 10 104 350 36 $17 @TEXT BP_F_TEXT08 left|fit #27
+  button 372 109 152 26 "[S] Start Game" BP_F_TEXT10 %3 #25
+  button 532 109 96 26 "[Esc] Back" BP_F_TEXT10 %4 #26
+  if %23 {
+    panel 380 60 256 41 12 "NULL-MODEM LINK" BP_F_TEXT08 raised|pleft #30
+    spr 385 76 %24
+    text 399 76 232 $13 @TEXT BP_F_TEXT08 left|fit
+    button 384 88 40 11 $18 BP_F_TEXT08 %5 #23
+    button 428 88 52 11 $19 BP_F_TEXT08 %6 #24
+    text 486 90 146 $16 @TEXT BP_F_TEXT08 left|fit
+  }
+end
+
+scene BP_A2_SC_LOBBY_CS 640 142
+  box 202 29 172 10 raised @FACE
+  textbox 202 29 172 10 "This computer" @TEXT BP_F_TEXT08 centre
+  fill 202 39 172 48 @FIELD
+  textbox 202 50 172 10 "Everyone plays here:" @TEXT BP_F_TEXT08 centre
+  textbox 202 62 172 10 "take turns at one keyboard" @TEXT BP_F_TEXT08 centre
+  vline 202 29 58 0
+  panel 380 60 256 40 12 "THIS COMPUTER" BP_F_TEXT08 raised|pleft #30
+  textbox 384 76 248 10 "No cable needed. Host Cable and Join" @TEXT BP_F_TEXT08 left
+  textbox 384 87 248 10 "Cable link two computers." @TEXT BP_F_TEXT08 left
+end
