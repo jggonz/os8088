@@ -123,8 +123,7 @@ br_onmenu:
     BR_JE .file
     cmp ah, 1
     BR_JE .resource
-    mov word [br_status], br_s_about
-    jmp .refresh
+    jmp .done                   ; About is the app-name menu's (WC_ABOUT)
 .file:
     cmp al, 0
     BR_JE .new
@@ -213,6 +212,10 @@ br_onmenu:
 ; A selected TEXT resource is directly editable by typing; ESC finishes.
 ; R starts a bounded 12-character resource rename, Enter commits, ESC cancels.
 br_onkey:
+    cmp byte [br_abon], 0
+    je .no_about
+    jmp br_abdismiss            ; the key is spent on the card
+.no_about:
     push ax
     push bx
     push cx
@@ -321,6 +324,10 @@ br_onkey:
 ; Absolute screen click => local content coords, computed by last W_PAINT.
 ; The Add palette is *inside* the detail pane and never overlaps a file dialog.
 br_onclick:
+    cmp byte [br_abon], 0
+    je .no_about
+    jmp br_abdismiss            ; the click is spent on the card
+.no_about:
     push ax
     push bx
     push cx
@@ -2769,6 +2776,12 @@ br_paint:
     mov ah, [br_ground]
     call OSAPI_FONT_RUN
 .out:
+    cmp byte [br_abon], 0
+    je .no_about
+    mov bx, [br_window]
+    mov si, br_ablines
+    call os88ui_about_d         ; LAST: br_paint armed the region
+.no_about:
     pop es
     pop bp
     pop di
@@ -3427,7 +3440,9 @@ br_paint_compact:
     mov cx, [br_left]
     add cx, 18
     mov dx, [br_top]
-    add dx, 140
+    add dx, 36                  ; between the toolbar (12..34) and the panels
+                                ; (45..): at +140 a CGA window, clamped above
+                                ; the dock to ~136 content rows, lost it
     mov si, br_s_detail_line
     mov al, 0
     mov ah, [br_ground]
@@ -4109,13 +4124,36 @@ br_template:
     dw br_title, br_cls
 ; The window's class (SPEC.md 11.104): every handler it has.
     OS88_CLASS br_cls, 0, PAINT, br_paint, ONKEY, br_onkey, \
-               ONCLICK, br_onclick
+               ONCLICK, br_onclick, ABOUT, br_about
+
+; 'About 2BRES' - the standard card (SPEC.md 12.2, 20.5.1)
+; br_about - WC_ABOUT. SI = our window; UI task, lock held.
+br_about:
+    mov byte [br_abon], 1
+    mov bx, si
+    mov si, br_ablines
+    jmp os88ui_about            ; arms the clip itself
+; br_abdismiss - SI = our window, lock held. Clobbers AX and BX.
+br_abdismiss:
+    mov bx, br_abon
+    mov ax, br_ab_repaint
+    jmp os88ui_abdismiss
+; br_ab_repaint - SI = BX = our window: the whole window, not a refresh
+br_ab_repaint:
+    mov byte [br_partial], 0
+    jmp br_paint
+br_abon:                 db 0          ; 1 = the About card is up
+br_ablines:              dw br_ab1, br_ab2, br_abz, br_abc, br_abn, 0
+br_ab1:                  db '2BRES B36 for os8088', 0
+br_ab2:                  db 'the 2BASIC resource editor', 0
+br_abz:                  db 0
+br_abc:                  db 'Contributed by', 0
+br_abn:                  db 'techdistractions', 0
 br_ground:               db 7          ; window ground: br_entry picks it
 br_title:                db '2BRES B36',0
 br_menu_name:            db '2BRES',0
 br_menu_file:            db 'File',0
 br_menu_edit:            db 'Resource',0
-br_menu_help:            db 'Help',0
 br_menu_new:             db 'New',0
 br_menu_open:            db 'Open .RES...',0
 br_menu_save:            db 'Save As...',0
@@ -4128,20 +4166,17 @@ br_menu_adddata:         db 'Add Binary...',0
 br_menu_remove_data:     db 'Remove Named Resource',0
 br_menu_prev:            db 'Rename...',0
 br_menu_next:            db 'Edit Text',0
-br_menu_about:           db 'About 2BRES',0
 br_menu_img1:            db 'Add 1-bit Image...',0
 br_menu_img4:            db 'Add 4-bit Image...',0
 br_menu_words:           db 'Add WORDS16 Table...',0
 ; 2BRES application menu set: header {name,oncmd,count}, menu descriptors
 ; {title,items,count}. Items arrays are strings, no NASM-only macros used.
 br_menus:
-    dw br_menu_name, br_onmenu, 3
+    dw br_menu_name, br_onmenu, 2
     dw br_menu_file, br_menu_file_items, 3
     dw br_menu_edit, br_menu_edit_items, 10
-    dw br_menu_help, br_menu_help_items, 1
 br_menu_file_items: dw br_menu_new, br_menu_open, br_menu_save
 br_menu_edit_items: dw br_menu_addicon, br_menu_addsheet, br_menu_img1, br_menu_img4, br_menu_addtext, br_menu_adddata, br_menu_words, br_menu_remove_data, br_menu_prev, br_menu_next
-br_menu_help_items: dw br_menu_about
 br_s_new:                db 'NEW',0
 br_s_open:               db 'OPEN',0
 br_s_icon:               db 'ADD ICON',0
@@ -4175,7 +4210,6 @@ br_s_invalid_res:        db 'ERROR: UNSUPPORTED OR INVALID RES FILE',0
 br_s_opened:             db 'PACK OPENED - ADD/REMOVE THEN SAVE AS',0
 br_s_saved:              db 'RESOURCE PACK SAVED',0
 br_s_save_error:         db 'ERROR: NAME MUST END IN .RES / WRITE FAILED',0
-br_s_about:              db '2BRES B36 - NAMED 2BR3 RESOURCE EDITOR',0
 br_s_count:              db 'SPRITES:',0
 br_s_footer:             db '2BR3 - NAMED, CHECKSUMMED RESOURCES',0
 br_s_default_bank:       db 'ICONS',0
@@ -4292,6 +4326,12 @@ BR_O_BMP_OFFSET      equ BR_O_BMP_HEIGHT + 2
 BR_O_NUM_COUNT       equ BR_O_BMP_OFFSET + 2
 BR_O_NUM_SIGN        equ BR_O_NUM_COUNT + 2
 BR_BSS_TOTAL         equ BR_O_NUM_SIGN + 2
+
+; --- the shared controls: the standard About card and nothing else ---------
+%define OS88UI_ABOUT
+%define OS88UI_NOBTN
+%define OS88UI_ABDISMISS
+%include "os88ui.inc"
 
     OS88_BSS BR_BSS_TOTAL
     OS88_IMAGE_END

@@ -2,8 +2,8 @@
 =======================
 
 2BRES.O88 creates and edits named 2BR3 resource packs for 2BASIC.
-The window has File, Resource and Help menus, with New, Open, Add,
-Remove and Save As buttons. Resources appear on the left; the selected
+The window has File and Resource menus (About is under 2BRES), with
+New, Open, Add, Remove and Save As buttons. Resources appear on the left; the selected
 item's type, size and preview appear on the right.
 
 CREATING A FILE

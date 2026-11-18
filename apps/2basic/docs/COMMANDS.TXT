@@ -125,6 +125,8 @@ Type: Direct command and program statement
 Syntax: SVAR "app","key",integer-expression
 Description: Saves one signed integer in the shared 2BASIC.DAT application-variable
   store. APP and KEY are case-insensitive namespaces; an existing pair is replaced.
+  On os8088 the store is SYSTEM\APPDATA\2BASIC.DAT on the disk 2BASIC was started
+  from. On a disk with no SYSTEM\APPDATA the values are kept until 2BASIC closes.
 Limits: APP and KEY are 1..8 letters/digits/underscore; 32 stored pairs total.
 Errors: ?VARIABLE STORE FULL when no free record remains; disk errors are reported.
 Example: 900 SVAR "UTSTORE","COUNT",T

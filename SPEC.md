@@ -255798,8 +255798,8 @@ and limits. `THIRD-PARTY-NOTICES.TXT` beside the source is upstream's.
 
 | package | image | bss | windows | worker |
 |---|---|---|---|---|
-| `2BASIC.O88` | 27,018 | 23,401 | console (sizable), FORM, dialog | one, the interpreter |
-| `2BRES.O88` | 11,367 | 20,246 | editor, with a menu set | none |
+| `2BASIC.O88` | 27,826 | 23,401 | console (sizable), FORM, dialog | one, the interpreter |
+| `2BRES.O88` | 11,692 | 20,246 | editor, with a menu set | none |
 
 **The interpreter runs on a worker** (§20.6) that executes one statement per
 loop iteration and yields; every piece of interpreter state it needs across
@@ -255860,16 +255860,34 @@ source no longer assembled. The changes, all mechanical:
   cuts off below the panels; the compact layout, which upstream chose below
   300 lines, is now chosen below 400.
 
-**Not yet taken**, and recorded so they are not mistaken for decisions:
-neither package has a `WC_ABOUT` handler (§12.2 — the About card of
-§20.5.1 needs a dismiss path in the console's paint and key handlers), and
-`SVAR`'s store, `2BASIC.DAT`, is written to the current program folder
-rather than `SYSTEM\APPDATA\` (§19.9). Neither is an ABI question.
-
-**Seen and not fixed**: on CGA, 2BRES's compact window loses its status
-line below the dock; and on kern_small, a console scroll can leave the
-first rows of a long output (`HELP`) blank until the next output repaints
-the view - it did not on kern_big at the same adapter and steps.
+- **The About card (§12.2, §20.5.1).** Both classes register `ABOUT`, and
+  each package draws the standard card from `apps/os88ui.inc`
+  (`OS88UI_ABOUT`, `OS88UI_ABDISMISS`). A key or a click takes it down and
+  repaints the window. The painters draw it last, so a repaint under it
+  keeps it on top. 2BASIC's worker holds a running program between
+  statements while the card is up, and its presenter leaves the dirty mark
+  for the dismissal's repaint, so a program's output never lands on the
+  card. 2BRES's upstream `Help ▸ About 2BRES`, which only rewrote the
+  status line, is gone; the app-name menu's `About 2BRES` replaces it.
+- **The variable store is in `SYSTEM\APPDATA\` (§19.9).** `SVAR`/`LVAR`'s
+  `2BASIC.DAT` goes through `apps/os88data.inc` (`od_read`, `od_write`) on
+  the volume 2BASIC was launched from, where upstream wrote it to whichever
+  program folder was current, so a game's `SVAR` scattered stores across
+  `GAMES\`. A volume without the folder answers `FERR_NOENT`; the store
+  then lives in memory for the session and nothing is reported, which is
+  19.9's rule. `make 2basicdisk` builds the folder.
+- **2BRES's compact status line sits under the toolbar**, at +36, between
+  the buttons (12..34) and the panels (45..). Upstream drew it at +140; a
+  CGA window clamped above the dock has about 136 content rows, so the line
+  was off the bottom.
+- **The worker presents under the gfx lock.** It read and cleared the
+  console's dirty kind and then waited for `OSAPI_GFX_LOCK`. An immediate
+  command on the UI task, which holds that lock in its key callback, could
+  meanwhile append rows and restart the row range. The worker then painted
+  only the new range, and the rows it had taken stayed blank until the next
+  output: `HELP`'s first three rows on kern_small, whose slower disk read
+  is what let the worker run inside the command. The worker now takes the
+  lock first and reads the kind and its range under it.
 
 ### 132.5 The B: disk
 
@@ -255885,7 +255903,8 @@ every sample name their files from the volume's root (`LOAD "\GAMES\2B99"`):
 | `TESTS` | upstream's acceptance programs (`TESTS\UAT.TXT`, `docs/TESTING.TXT`) |
 | `TOOLS\2BRES` | 2BRES's sample inputs and `MIXED.RES` |
 
-It uses 131 of the 360 KB disk's 354 clusters.
+It also carries an empty `SYSTEM\APPDATA\` for `2BASIC.DAT` (§19.9). It
+uses 134 of the 360 KB disk's 354 clusters.
 
 **The live media carries the same tree one folder down**, in `2BASIC\`
 (§80.6: the live volume carries every program). There the documentation's
@@ -255919,6 +255938,11 @@ Blackjack on kern_mega in QEMU with both high bits declared. FORM events, `INPUT
 `MESSAGEBOX`, `SAVE`/`LOAD`, `SVAR`/`LVAR` (the wake path), `FRE(0)`, the
 graphics primitives, Blackjack and 2B99 were driven in QEMU, 2BRES opened
 `MIXED.RES` through the file dialog, and the FORM, a dialog and 2BRES were
-looked at on VGA, CGA and Hercules under MartyPC. Upstream's interactive
+looked at on VGA, CGA and Hercules under MartyPC. On MartyPC's CGA 5150 a
+`SVAR` was flushed back to the host and found in `SYSTEM\APPDATA\`, and
+`LVAR` read it back after 2BASIC was closed and reopened. Both About cards
+were opened and dismissed there, and 2BASIC's over a running 2B99 on VGA.
+2BRES's compact status line was checked on CGA, and `HELP` on kern_small's
+128 KB CGA machine drew every row. Upstream's interactive
 tests (`EVENTUI`, `UTVIS`, `UTSOUND`) and a 2BRES save round trip were not
 run.

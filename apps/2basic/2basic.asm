@@ -945,6 +945,63 @@ bas_claim_kb:
     pop ax
     ret
 
+; Write the variable table to SYSTEM\APPDATA\2BASIC.DAT on our own volume
+; (SPEC.md 19.9, through apps/os88data.inc). UI task only. A disk with no
+; APPDATA folder - a user's own floppy - keeps the store in memory and says
+; nothing, which is 19.9's rule for a missing folder.
+; out: CF=0 written (or kept in memory), dirty mark cleared; CF=1 AX=FERR_*
+bas_var_commit:
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov bx, bas_var_data
+    mov cx, BAS_VAR_BYTES
+    mov si, bas_s_var_file
+    mov di, bas_var_odst
+    call od_write
+    jnc .done
+    cmp ax, FERR_NOENT
+    stc
+    jne .out
+.done:
+    mov byte [bas_var_dirty], 0
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; 'About 2BASIC' - the standard card (SPEC.md 12.2, 20.5.1)
+; -----------------------------------------------------------------------------
+; bas_about - the console's WC_ABOUT. SI = our window; UI task, lock held.
+bas_about:
+    mov byte [bas_abon], 1
+    mov bx, si
+    mov si, bas_ablines
+    jmp os88ui_about                ; arms the clip itself
+
+; bas_abdismiss - take the card down if it is up. ALSO the console's
+; WC_ONCLICK: it has no other use for a click. SI = our window, lock held.
+; out: CF = 1 the event was spent on the card; clobbers AX and BX
+bas_abdismiss:
+    mov bx, bas_abon
+    mov ax, bas_ab_repaint
+    jmp os88ui_abdismiss
+
+; bas_ab_repaint - SI = BX = our window, a clip region armed. bas_paint
+; clears the whole content itself; when a statement is mid-flight it marks
+; the console dirty instead and the worker repaints it.
+bas_ab_repaint:
+    jmp bas_paint
+
 bas_onwake:
     push ax
     push bx
@@ -956,16 +1013,8 @@ bas_onwake:
     je .out
     ; The wake can race a second SVAR: write the current complete table,
     ; which is authoritative, rather than an obsolete queued snapshot.
-    push ds
-    pop es
-    mov bx, bas_var_data
-    mov cx, BAS_VAR_BYTES
-    xor dx, dx
-    mov si, bas_s_var_file
-    call OSAPI_FILE_WRITE
-    jc .failed
-    mov byte [bas_var_dirty], 0
-    jmp .out
+    call bas_var_commit
+    jnc .out
 .failed:
     ; Keep the dirty mark for a later wake. The next SVAR/worker redraw
     ; retries, and the in-memory values remain available through LVAR.
@@ -1296,6 +1345,12 @@ bas_paint:
     mov bx, [bas_window]
     call OSAPI_WM_GROW
 .no_grow:
+    cmp byte [bas_abon], 0
+    je .no_about
+    mov bx, [bas_window]
+    mov si, bas_ablines
+    call os88ui_about_d             ; LAST: this paint's region is armed
+.no_about:
     pop bp
     pop di
     pop si
@@ -1313,6 +1368,15 @@ bas_paint:
 ; Keyboard callback. Enter commits a command; Escape clears current input.
 ; -----------------------------------------------------------------------------
 bas_onkey:
+    cmp byte [bas_abon], 0
+    je .no_about
+    push ax
+    push bx
+    call bas_abdismiss              ; the key is spent on the card
+    pop bx
+    pop ax
+    ret
+.no_about:
     push es
     push ds
     pop es
@@ -3919,6 +3983,14 @@ bas_worker:
 .running:
     cmp byte [bas_break_req], 0
     jne .break
+    ; The About card is up: hold the program between statements, so nothing
+    ; it draws lands on the card. A key or a click takes the card down.
+    cmp byte [bas_abon], 0
+    je .exec
+    mov ax, 1
+    call OSAPI_TASK_SLEEP
+    jmp .loop
+.exec:
     mov byte [bas_exec_busy], 1
     mov byte [bas_worker_active], 1
 
@@ -3993,6 +4065,8 @@ bas_worker_redraw:
 .no_var_wake:
     cmp byte [bas_draw_batch], 0
     jne .out
+    cmp byte [bas_abon], 0          ; the About card is up: the dirty mark
+    jne .out                        ; waits, and its dismissal repaints
     mov al, [bas_dirty]
     test al, al
     jz .out
@@ -4016,15 +4090,23 @@ bas_worker_redraw:
     mov [bas_view_last_tick], bx
     pop bx
 .present:
-    ; GET_TICKS answered in AX: reload the saved dirty kind before it becomes
-    ; the renderer dispatch selector. Otherwise a tick value can select FULL.
+    ; TAKE THE LOCK FIRST, then read and clear the dirty kind. The UI task
+    ; marks rows inside its callbacks, which hold this lock. Clearing the kind
+    ; before the lock let an immediate command (HELP, on kern_small's slow
+    ; disk) restart the row range while this worker waited, so the rows the
+    ; worker had taken were never painted: 4..7 of a HELP stayed blank until
+    ; the next output. Under the lock, the kind and its range are one state.
+    call OSAPI_GFX_LOCK
+    ; GET_TICKS answered in AX: reload the dirty kind before it becomes the
+    ; renderer dispatch selector. Otherwise a tick value can select FULL.
     mov al, [bas_dirty]
+    test al, al
+    jz .unlock                      ; the UI task presented it meanwhile
     ; SDK 0.2: the retired double-buffer API cannot be used. The kernel now
     ; renders the locked, clipped dirty span or retained graphics delta
     ; directly. No clear is issued on the two incremental paths.
     mov byte [bas_dirty], 0
     push ax
-    call OSAPI_GFX_LOCK
     mov bx, [bas_window]
     call OSAPI_WM_GEOM
     jc .discard
@@ -10437,7 +10519,7 @@ bas_varstore_load:
     mov cx, BAS_VAR_BYTES
     mov si, bas_s_var_file
     xor dx, dx
-    call OSAPI_FILE_READ
+    call od_read                    ; SYSTEM\APPDATA on our volume (SPEC.md 19.9)
     BAS_JC .read_error
     cmp ax, BAS_VAR_BYTES
     BAS_JNZ .bad
@@ -10453,7 +10535,8 @@ bas_varstore_load:
     jmp .out
 .read_error:
     cmp ax, FERR_NOENT
-    BAS_JZ .out                    ; first run: empty store is normal
+    BAS_JZ .out                    ; first run, or a disk with no APPDATA:
+                                   ; an empty store is normal
 .bad:
     call bas_varstore_reset
     mov byte [bas_var_bad], 1
@@ -10613,20 +10696,10 @@ bas_varstore_write:
     clc                             ; queued or retried on next redraw
     jmp .out
 .ui_write:
-    push ds
-    pop es
-    mov bx, bas_var_data
-    mov cx, BAS_VAR_BYTES
-    mov si, bas_s_var_file
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    BAS_JNC .ok
+    call bas_var_commit
+    BAS_JNC .out
     call bas_set_file_error
     stc
-    jmp .out
-.ok:
-    mov byte [bas_var_dirty], 0
-    clc
     jmp .out
 .bad_store:
     mov byte [bas_error_code], BERR_VARSTORE
@@ -12300,6 +12373,13 @@ bas_dialog_onkey:
 bas_tpl:
     dw 30, 34, 580, 390
     dw bas_title, bas_win_cls
+bas_abon:        db 0            ; 1 = the About card is up
+bas_ablines:     dw bas_ab1, bas_ab2, bas_abz, bas_abc, bas_abn, 0
+bas_ab1:         db '2BASIC B37 for os8088', 0
+bas_ab2:         db 'a BASIC interpreter', 0
+bas_abz:         db 0
+bas_abc:         db 'Contributed by', 0
+bas_abn:         db 'techdistractions', 0
 bas_ui_ground:   db CLGRAY       ; FORM/dialog ground: bas_init picks it
 bas_title:       db '2BASIC B37', 0
                  times 32 - ($ - bas_title) db 0
@@ -12316,7 +12396,7 @@ bas_dialog_tpl:
 ; window is born with. FORM's sizable bit is the program's to set at run
 ; time (OSAPI_WM_FLAG, WFB_SIZABLE).
     OS88_CLASS bas_win_cls, WF_SIZABLE, PAINT, bas_paint, ONKEY, bas_onkey, \
-               ONWAKE, bas_onwake
+               ONCLICK, bas_abdismiss, ABOUT, bas_about, ONWAKE, bas_onwake
     OS88_CLASS bas_form_cls, 0, PAINT, bas_form_paint, \
                ONKEY, bas_form_onkey, ONCLICK, bas_form_onclick
     OS88_CLASS bas_dialog_cls, 0, PAINT, bas_dialog_paint, \
@@ -12435,6 +12515,8 @@ bas_ext_bas:       db 'BAS'
 bas_ext_bmp:       db 'BMP'
 bas_ext_res:       db 'RES'
 bas_s_var_file:    db '2BASIC.DAT', 0
+bas_var_odst:      db 0         ; os88data's state byte for 2BASIC.DAT
+%include "os88data.inc"
 bas_s_help_file:   db 'HELP.TXT', 0
 bas_s_help_index:  db 'INDEX', 0
 bas_var_magic:     db '2BD1'
@@ -12524,6 +12606,12 @@ bas_fm_patches:
     db 21h,08h,0F1h,34h,00h, 01h,00h,0F2h,24h,00h, 01h ; lead
     db 31h,00h,0F7h,08h,00h, 01h,00h,0F7h,08h,00h, 01h ; laser
     db 31h,00h,0FFh,0Fh,00h, 21h,00h,0FFh,0Fh,00h, 07h ; explosion
+
+; --- the shared controls: the standard About card and nothing else ---------
+%define OS88UI_ABOUT
+%define OS88UI_NOBTN
+%define OS88UI_ABDISMISS
+%include "os88ui.inc"
 
     OS88_BSS BAS_BSS_TOTAL
     OS88_IMAGE_END

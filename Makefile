@@ -11504,16 +11504,16 @@ TWOBLIVEARGS := $(addprefix 2BASIC:,$(TWOBROOT)) \
 #> [Applications] 2basicdisk :: 2BASIC's B: disk (programs, games, examples, tests) in all four floppy geometries
 2basicdisk: $(BUILD)/2basic.img $(BUILD)/2basic720.img $(BUILD)/2basic120.img $(BUILD)/2basic360.img
 $(BUILD)/2basic.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(TWOBARGS)
+	python3 tools/os88disk.py -o $@ --size 1440 $(TWOBARGS) --folder SYSTEM/APPDATA
 	@python3 tools/os88disk.py --verify $@
 $(BUILD)/2basic720.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 720 $(TWOBARGS)
+	python3 tools/os88disk.py -o $@ --size 720 $(TWOBARGS) --folder SYSTEM/APPDATA
 	@python3 tools/os88disk.py --verify $@
 $(BUILD)/2basic120.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1200 $(TWOBARGS)
+	python3 tools/os88disk.py -o $@ --size 1200 $(TWOBARGS) --folder SYSTEM/APPDATA
 	@python3 tools/os88disk.py --verify $@
 $(BUILD)/2basic360.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(TWOBARGS)
+	python3 tools/os88disk.py -o $@ --size 360 $(TWOBARGS) --folder SYSTEM/APPDATA
 	@python3 tools/os88disk.py --verify $@
 .PHONY: 2basic 2basicdisk
 
