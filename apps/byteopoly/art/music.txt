@@ -1,0 +1,191 @@
+# Byteopoly's songs (SPEC.md 131.9.5, 133.8). ORIGINAL music, written for
+# this game: no melody here is taken from any other game or song. The source
+# of the song bank BP_A2_MUSIC; tools/os88gkmus.py compiles it, and
+# `tools/os88gkmus.py render apps/byteopoly/art/music.txt --song title --wav
+# x.wav` plays it on the host. The ORDER OF THE SONGS is the song number
+# bp_app.c's BP_MUS_* name (tests/unit/t_gkmus.py holds the two together).
+# Voice 1 is the melody: it is all the PC speaker plays.
+#
+# The tick is the OS's 18.2 Hz, so `beat` (ticks a quarter note) sets the
+# tempo: 8 = 136.5 BPM, 12 = 91 BPM, 6 = 182 BPM.
+
+# ---- instruments: OPL2 registers, modulator then carrier, then C0h --------
+# Carrier levels (40h) sit 9..15 dB down: the effects play on the tone
+# tier's channel 8 at full level, over the music.
+patch chip          # the title's lead: a bright, held square-ish voice
+  mod 20=21 40=1A 60=F2 80=24 E0=00
+  car 20=21 40=12 60=F2 80=44 E0=00
+  c0  0C
+end
+patch pluck         # bass: a plucked, decaying low voice
+  mod 20=01 40=1E 60=F5 80=56 E0=00
+  car 20=01 40=0E 60=F3 80=55 E0=00
+  c0  06
+end
+patch keys          # chord stabs
+  mod 20=02 40=24 60=F6 80=56 E0=00
+  car 20=01 40=16 60=F5 80=56 E0=00
+  c0  04
+end
+patch mallet        # the in-game lead: soft, round, decaying
+  mod 20=01 40=2A 60=F5 80=75 E0=00
+  car 20=01 40=12 60=F4 80=74 E0=00
+  c0  02
+end
+patch pad           # in-game harmony: a slow, quiet swell
+  mod 20=21 40=2C 60=74 80=26 E0=00
+  car 20=21 40=1A 60=73 80=26 E0=01
+  c0  00
+end
+patch tick          # the auction's clock
+  mod 20=04 40=22 60=F8 80=F8 E0=00
+  car 20=01 40=16 60=F8 80=F8 E0=00
+  c0  00
+end
+patch brass         # the fanfare
+  mod 20=21 40=16 60=B2 80=16 E0=00
+  car 20=21 40=0E 60=92 80=16 E0=00
+  c0  0E
+end
+
+# ---- shared phrases --------------------------------------------------------
+# an octave pump on the root, one bar or half a bar (beat 8)
+pattern pc beat 8
+  C3:8 C4 C3 C4 C3 C4 C3 C4
+end
+pattern pam beat 8
+  A2:8 A3 A2 A3 A2 A3 A2 A3
+end
+pattern pf beat 8
+  F2:8 F3 F2 F3 F2 F3 F2 F3
+end
+pattern pg beat 8
+  G2:8 G3 G2 G3 G2 G3 G2 G3
+end
+pattern pem beat 8
+  E2:8 E3 E2 E3 E2 E3 E2 E3
+end
+pattern pdm beat 8
+  D3:8 D4 D3 D4 D3 D4 D3 D4
+end
+pattern pdh beat 8
+  D3:8 D4 D3 D4
+end
+pattern pgh beat 8
+  G2:8 G3 G2 G3
+end
+pattern pfh beat 8
+  F2:8 F3 F2 F3
+end
+# off-beat chord stabs, a bar (beat 8)
+pattern sc beat 8
+  r:8 G4 r E4 r G4 r E4
+end
+pattern sam beat 8
+  r:8 A4 r E4 r A4 r E4
+end
+pattern sf beat 8
+  r:8 A4 r F4 r A4 r F4
+end
+pattern sg beat 8
+  r:8 B4 r G4 r B4 r G4
+end
+pattern sem beat 8
+  r:8 G4 r E4 r B4 r G4
+end
+pattern sdm beat 8
+  r:8 A4 r F4 r A4 r F4
+end
+pattern sdg beat 8
+  r:8 F4 r A4 r B4 r G4
+end
+# the auction's clock: off-beat chord tones (beat 8)
+pattern ta beat 8
+  r:8 E4 r C4 r E4 r C4
+end
+pattern tf beat 8
+  r:8 F4 r C4 r F4 r C4
+end
+pattern te beat 8
+  r:8 G#4 r E4 r G#4 r E4
+end
+pattern td beat 8
+  r:8 F4 r D4 r F4 r D4
+end
+
+# ---- 0 title: "Byte Shop" - the New Game screen and the cable lobby -------
+# C major, 136.5 BPM; a two-bar intro, then sixteen bars that loop
+# (A: C Am F G C Am Dm-G C, B: F G Em Am Dm G F-G C).
+song title
+  beat 8
+  time 4/4
+  voice 1 chip
+  voice 2 pluck
+  voice 3 keys
+  1: C5:16 E5 G5 C6 E6:8 r G6:4 E6:8 C6 | D6:8 r B5 r G5:16 A5 B5 D6 C6:4 |
+  1: % E5:8 G5 C6:4 B5:8 C6 G5:4 | A5:8 C6 E6:4 D6:8 C6 A5:4 |
+  1: F5:8 A5 C6:4 A5:8 F5 G5 A5 | G5:4. D5:8 G5:4 B5:4 |
+  1: E5:8 G5 C6:4 B5:8 C6 E6:4 | D6:8 C6 A5 C6 E6:4 A5:4 |
+  1: F5:8 A5 D6:4 B5:8 G5 D6:4 | C6:2. r:4 |
+  1: A5:4 C6:8 A5 F6:4 E6:8 C6 | D6:4. B5:8 G5:4 D6:4 |
+  1: E6:8 D6 B5 G5 E5:4 G5:4 | A5:8 B5 C6 E6 A6:2 |
+  1: F6:8 E6 D6 C6 A5:4 D6:4 | B5:8 C6 D6 G6 F6:4 D6:4 |
+  1: C6:8 A5 F5 A5 B5 D6 G6:4 | C6:4 G5:8 E5 C5:4 r:4 |
+  2: C3:4 r:4 C3:8 C3 r:4 | G2:4 r:4 G2:8 A2 B2:4 |
+  2: % @pc | @pam | @pf | @pg | @pc | @pam | @pdh @pgh | @pc |
+  2: @pf | @pg | @pem | @pam | @pdm | @pg | @pfh @pgh | @pc |
+  3: r:1 | r:2 G4:4 B4:4 |
+  3: % @sc | @sam | @sf | @sg | @sc | @sam | @sdg | @sc |
+  3: @sf | @sg | @sem | @sam | @sdm | @sg | @sdg | @sc |
+end
+
+# ---- 1 game: "Garage Sale" - in play, quiet and unobtrusive ---------------
+# F major, 91 BPM, sixteen bars (42 s) that loop whole.
+song game
+  beat 12
+  time 4/4
+  voice 1 mallet
+  voice 2 pluck
+  voice 3 pad
+  1: % A4:4 C5:8 F5 E5:4 C5:4 | D5:2 F5:4 A5:4 | G5:4. F5:8 D5:4 Bb4:4 | C5:2. r:4 |
+  1: A4:4 C5:8 F5 A5:4 G5:8 F5 | E5:2 C5:4 E5:4 | D5:4 F5:4 E5:4 G5:4 | F5:2. r:4 |
+  1: D5:8 F5 Bb5:4 A5:8 G5 F5:4 | E5:4. G5:8 C6:2 | C6:8 Bb5 A5 G5 E5:2 | F5:4. E5:8 D5:2 |
+  1: Bb4:8 D5 G5 A5 Bb5:4 A5:4 | G5:2 E5:4 C5:4 | A4:4 C5:4 F5:4 A5:4 | G5:2. r:4 |
+  2: % F2:2 C3:2 | D3:2 A2:2 | Bb2:2 F2:2 | C3:2 G2:2 |
+  2: F2:2 C3:2 | A2:2 E2:2 | Bb2:2 C3:2 | F2:2 C3:4 F2:4 |
+  2: Bb2:2 F2:2 | C3:2 G2:2 | A2:2 E2:2 | D3:2 A2:2 |
+  2: G2:2 D3:2 | C3:2 G2:2 | F2:2 C3:2 | C3:2 G2:4 C3:4 |
+  3: % A3:4 C4 F4 C4 | F3:4 A3 D4 A3 | F3:4 Bb3 D4 Bb3 | E3:4 G3 C4 G3 |
+  3: A3:4 C4 F4 C4 | E3:4 A3 C4 A3 | F3:4 Bb3 E3 G3 | A3:4 C4 F4 C4 |
+  3: F3:4 Bb3 D4 Bb3 | E3:4 G3 C4 G3 | E3:4 A3 C4 A3 | F3:4 A3 D4 A3 |
+  3: G3:4 Bb3 D4 Bb3 | E3:4 G3 C4 G3 | A3:4 C4 F4 C4 | E3:4 G3 Bb3 G3 |
+end
+
+# ---- 2 auction: "Going Once" - an auction is open; light tension ----------
+# A minor, 136.5 BPM, eight bars (14 s) that loop whole.
+song auction
+  beat 8
+  time 4/4
+  voice 1 chip
+  voice 2 pluck
+  voice 3 tick
+  1: % A4:8 r C5 r E5 D5 C5 B4 | A4:8 r C5 r E5:4 G#4:4 |
+  1: F5:8 r E5 r D5 C5 B4 A4 | G#4:4 B4:4 E5:2 |
+  1: A5:8 r G5 r E5 F5 E5 C5 | D5:8 F5 A5 F5 D5:4 A4:4 |
+  1: B4:8 D5 F5 D5 G#4:4 B4:4 | E5:4 D#5:4 E5:4 r:4 |
+  2: % @pam | @pam | @pf | @pem | @pam | @pdm | @pem | @pem |
+  3: % @ta | @ta | @tf | @te | @ta | @td | @te | @te |
+end
+
+# ---- 3 fanfare: "Top Collector" - the match is won; plays once -----------
+# C major, 182 BPM, four bars (5 s).
+song fanfare
+  beat 6
+  time 4/4
+  voice 1 brass
+  voice 2 pluck
+  voice 3 brass
+  1: G4:8 C5 E5 G5 C6:4 G5:8 C6 | E6:2 D6:8 C6 D6 E6 | C6:4 G5:8 E5 G5:4 B5:4 | C6:1 |
+  2: C3:4 C3 E3:8 F3 G3:4 | A3:4 F3 G3 G2 | C3:4 E3 G3 G2 | C3:1 |
+  3: E4:4 E4 G4:8 A4 B4:4 | C5:4 A4 B4 G4 | E4:4 G4 B4 D5 | E5:1 |
+end

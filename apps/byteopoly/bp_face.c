@@ -1,5 +1,5 @@
-/* Byteopoly - the face: layouts, the board, the sidebar, the widget kit
- * (SPEC.md 131.8). Lane: face. Drawing goes through Breadboard XT's band
+/* Byteopoly - the face: layouts, the board, the widget kit (SPEC.md 131.8;
+ * the sidebar is bp_side.c, 131.8.1). Lane: face. Drawing goes through Breadboard XT's band
  * core (apps/breadxt/draw.inc, shared as source, SPEC.md 130.6.2): every
  * repaint is strips, each one band composed and put down with one call.
  *
@@ -9,6 +9,8 @@
  * is repainted only when its signature (a hash of every input it draws)
  * changed, or when it was dirtied with BP_D_FORCE. */
 #include "art.h"
+#include "art2.h"
+#include "gk.h"                          /* gk_*: the game kit (SPEC.md 133) */
 
 int bx_rows(int x, int y, int w, int h);
 void bx_new(int x, int y, int w, int h, int colour);
@@ -51,7 +53,6 @@ static int fc_pw, fc_ph;                        /* the sprite fc_pick chose */
 static BPByte fc_ready;
 static BPByte fc_art;                           /* the bar's centre art is on the glass */
 static int fc_aty;                              /* its art line: the dice row and the bar lie below */
-static char fc_log[BP_LOG_LINES][BP_LOG_LEN + 1];
 static char fc_buf[48], fc_num[16], fc_fit[48];
 static BPU32 fc_u;
 #ifdef BP_FACE_COUNT
@@ -67,8 +68,16 @@ static const BPByte fc_slite[BP_SEATS] = {12, 9, 14, 10};
 static const BPByte fc_shape[4][7] = {
     {3, 3, 3, 3, 3, 3, 3}, {1, 2, 3, 3, 3, 2, 1},
     {0, 1, 1, 2, 2, 3, 3}, {0, 1, 2, 3, 2, 1, 0}};
-static const char *const fc_lnk[8] = {"Off", "Searching", "Peer found", "Bad peer",
-    "Lobby", "Linked", "PAUSED", "Resync"};
+
+/* the sidebar (bp_side.c, included after this file: SPEC.md 131.8.1) */
+static void fc_sidelayout(void);
+static void fc_players(void);
+static void ovl_fc_details(void);
+static void fc_link(void);
+static void fc_logbox(void);
+static unsigned fc_sigplayers(void);
+static unsigned fc_sigdetails(void);
+static unsigned fc_siglink(void);
 
 /* ---- small helpers ------------------------------------------------------ */
 static int fc_live(void) { return bp_game.status != BP_ST_EMPTY; }
@@ -77,10 +86,13 @@ static int fc_hit(const BPRect *r)
     return r->w > 0 && r->x <= fc_sx2 && r->x + r->w - 1 >= fc_sx1 &&
            r->y <= fc_sy2 && r->y + r->h - 1 >= fc_sy1;
 }
-static unsigned fc_mix(unsigned h, unsigned v) { return (h << 3) + (h >> 13) + v + 1; }
+/* the repaint signatures' mix (QA-3): h*33 ^ v. The old rotate-and-add was
+ * linear, so two state changes could cancel and leave a section unpainted */
+static unsigned fc_mix(unsigned h, unsigned v) { return ((h << 5) + h) ^ v; }
 static char *fc_dec(unsigned v) { return os88_utoa(v, fc_num); }
 static int fc_ap(char *d, int n, const char *s)
 {
+    s = bx_str(s);
     while (*s && n < 46) d[n++] = *s++;
     d[n] = 0;
     return n;
@@ -97,7 +109,7 @@ static const char *fc_cut(int font, int maxw)
 static const char *fc_fits(const char *s, int font, int maxw)
 {
     if (bx_twidth(s, font) <= maxw) return s;
-    os88_strcpy(fc_fit, s, sizeof(fc_fit));
+    os88_strcpy(fc_fit, bx_str(s), sizeof(fc_fit));
     return fc_cut(font, maxw);
 }
 /* a cell's short name: too wide, its tail goes lower case ("E-waste",
@@ -146,14 +158,6 @@ static void fc_frame(int x, int y, int w, int h, int fill)
     if (w < 96 || h < 24) fc_rect(x, y, w, h, 0);
     else ovl_fc_edges(x, y, x + w - 1, y + h - 1);
     fc_rect(x + 1, y + 1, w - 2, h - 2, fill);
-}
-/* the round shown: completed + 1, held at a Quick Match's limit */
-static unsigned ovl_fc_rnd(void)
-{
-    unsigned n;
-    n = bp_game.round + 1;
-    if (bp_game.rounds_limit && n > bp_game.rounds_limit) n = bp_game.rounds_limit;
-    return n;
 }
 /* strike a text line through (greyed, eliminated, disabled on 1bpp) */
 static void fc_strike(int x, int y, int w) { bx_dots(x, y, x + w - 1, y, 2, bp_mono ? 15 : 0); }
@@ -220,6 +224,7 @@ int bp_face_init(void *win, unsigned artseg, unsigned bandseg, unsigned bandcap,
     fc_gr = bp_mono ? 15 : 7;
     if (bandseg) bx_setup(bandseg, 0, bandcap, artseg, bpp >= 4 ? 4 : 1);
     else bx_setup(0, fallback, sizeof(fallback), artseg, bpp >= 4 ? 4 : 1);
+    gk_init(bpp);                       /* the kit's role table: colour, or mono under 4 bpp */
     fc_dirty = BP_D_ALL;
     fc_ready = 0;
     bp_sel = 0;
@@ -230,7 +235,7 @@ int bp_face_init(void *win, unsigned artseg, unsigned bandseg, unsigned bandcap,
 }
 static void fc_layout(int w, int h)
 {
-    int ax, aw, sw, hb, hp, hl, rem, side_h, rh, th;
+    int ax, aw, sw, hb;
     ax = (fc_org.x + 7) & ~7;
     aw = (fc_org.x + w - ax) & ~7;
     bp_layout = (w >= 600 && h >= 380) ? BP_LAY_FULL : (w >= 560 && h >= 240) ? BP_LAY_MID : BP_LAY_COMPACT;
@@ -250,20 +255,7 @@ static void fc_layout(int w, int h)
     bp_r_center.x = ax + fc_cw; bp_r_center.y = fc_org.y + fc_ch; bp_r_center.w = fc_cw * 6; bp_r_center.h = fc_ch * 6;
     bp_r_side.x = ax + fc_cw * 8; bp_r_side.y = fc_org.y; bp_r_side.w = aw - fc_cw * 8; bp_r_side.h = fc_ch * 8;
     bp_r_hint.x = ax; bp_r_hint.y = fc_org.y + fc_ch * 8; bp_r_hint.w = aw; bp_r_hint.h = h - fc_ch * 8;
-    /* the sidebar's four boxes tile the column exactly */
-    side_h = bp_r_side.h;
-    rh = fc_fh + 3;
-    th = fc_sh + 4;
-    hp = (bp_layout == BP_LAY_COMPACT ? 0 : th) + 4 * rh + 3;
-    hl = (bp_layout == BP_LAY_FULL ? 2 * rh : rh) + 3;
-    rem = side_h - hp - hl;
-    fc_rp.x = fc_rd.x = fc_rl.x = fc_rg.x = bp_r_side.x;
-    fc_rp.w = fc_rd.w = fc_rl.w = fc_rg.w = bp_r_side.w;
-    fc_rp.y = bp_r_side.y; fc_rp.h = hp;
-    fc_rd.y = fc_rp.y + hp;
-    fc_rd.h = bp_layout == BP_LAY_FULL ? rem * 3 / 5 : bp_layout == BP_LAY_MID ? rem * 14 / 25 : rem / 2;
-    fc_rl.y = fc_rd.y + fc_rd.h; fc_rl.h = hl;
-    fc_rg.y = fc_rl.y + hl; fc_rg.h = side_h - hp - fc_rd.h - hl;
+    fc_sidelayout();
 }
 
 /* ---- tokens ------------------------------------------------------------- */
@@ -404,14 +396,117 @@ static void fc_lvl(int xr, int y, int lvl, int mw)
     unsigned z;
     int id, i, pw, ph, cols;
     id = lvl >= BP_MAX_LEVEL ? BP_A_WORKSHOP : BP_A_RAM;
-    z = bx_size(id);
-    if (!z) { fc_pips(xr, y, lvl); return; }
+    z = bx_size(id);                                    /* the art is required (131.10.7) */
     pw = z & 255; ph = z >> 8;
     if (lvl >= BP_MAX_LEVEL) { bx_spr(xr - pw + 1, y, id); return; }
     cols = mw / (pw + 1);
     if (cols < 1) cols = 1;
     for (i = 0; i < lvl; i++)
         bx_spr(xr - (i % cols + 1) * (pw + 1) + 2, y + (i / cols) * (ph + 1), fc_mono(id));
+}
+/* ---- a FULL cell (56 x 50): the concept's ivory card (SPEC.md 131.8.2) ---- */
+static char fc_nm[28];                                  /* a cell name's first line */
+/* the cell's name from its text handle: fc_nm the first line, the answer the
+ * second (0 when it is one line); "/" is the break */
+static const char *fc_names(int s)
+{
+    char *p;
+    os88_strcpy(fc_nm, bx_str((const char *)((unsigned)TF_CELL00 + s)), sizeof(fc_nm));
+    for (p = fc_nm; *p; p++)
+        if (*p == '/') { *p++ = 0; return p; }
+    return 0;
+}
+static void fc_ln(int x, int y, int w, const char *s, int font)
+{
+    gk_text(x + 1, y, w, s, 0, font, GK_CENTRE | GK_FIT);
+}
+/* the colour or 1bpp twin of a corner picture */
+static int fc_cpic(const BPSpace *sp, int s)
+{
+    int id;
+    switch (sp->kind) {
+    case BP_K_BOOT: id = BP_A2_C_BOOT; break;
+    case BP_K_REPAIR: id = BP_A2_C_REPAIR; break;
+    case BP_K_SWAP: id = BP_A2_C_SWAP; break;
+    case BP_K_CRASH: id = BP_A2_C_CRASH; break;
+    case BP_K_EVENT: id = sp->group ? BP_A2_C_SYSERR : BP_A2_C_FLOPPY; break;
+    default: return fc_mono(fc_specart(sp, s));
+    }
+    if (bp_mono && id == BP_A2_C_BOOT) return BP_A2_M_C_BOOT;
+    return id;
+}
+/* the selection: yellow 2 px inside the cell's black edge (black, 3 px, on 1bpp) */
+static void fc_selframe(int x, int y, int x2, int y2)
+{
+    int c, k;
+    k = bp_mono ? 0 : 14;
+    for (c = 1; c <= (bp_mono ? 3 : 2); c++) {
+        bx_fill(x + c, y + c, x2 - c, y + c, k);
+        bx_fill(x + c, y2 - c, x2 - c, y2 - c, k);
+        bx_fill(x + c, y + c, x + c, y2 - c, k);
+        bx_fill(x2 - c, y + c, x2 - c, y2 - c, k);
+    }
+}
+static void fc_cfull(int s, int x, int y, int x2, int y2, const BPSpace *sp, int own, int lvl, int mort, int sel)
+{
+    const char *l2;
+    int cw, nw, prop, ny, id, i, pw, ph, c;
+    unsigned z;
+    cw = fc_cw; nw = cw - 2;
+    prop = sp->prop;
+    l2 = fc_names(s);
+    if (prop != BP_NOBODY) {
+        c = sp->kind == BP_K_UTILITY ? BP_GROUPS - 1 : sp->group;
+        bx_fill(x + 1, y + 1, x2 - 1, y + 7, bp_mono ? 0 : fc_gcol[c]);
+        if (sel) fc_selframe(x, y, x2, y2);
+        fc_buf[0] = sp->kind == BP_K_UTILITY ? 'U' : bp_group_letter(sp->group); fc_buf[1] = 0;
+        bx_text(x + 4, y + 1, fc_buf, 15, fc_fs);
+        if (own != BP_NOBODY) fc_tok(x + 14, y + 1, own, bp_game.token[own], 15);
+        ny = y + 9;
+        fc_ln(x, ny, nw, fc_nm, fc_fs);
+        if (l2) { ny += 8; fc_ln(x, ny, nw, l2, fc_fs); }
+        ny += 7;
+        i = y + 40 - ny;                                /* the picture's rows: down to the price line */
+        id = fc_pick(prop, nw, i);
+        if (mort) bx_dither(x + 3, ny, x2 - 3, y + 39, 15, 7, 2);
+        if (id >= 0) bx_spr(x + (cw - fc_pw) / 2, ny + (i - fc_ph) / 2, id);
+        if (mort) bx_spr(x + 3, ny, fc_mono(BP_A_MORTGAGE));
+        if (fc_seatat(s, 0) >= 0) fc_tokens(x, y + 41, cw, s, 0);
+        else {
+            i = fc_ap(fc_buf, 0, fc_dec(sp->price));
+            fc_ap(fc_buf, i, TA_CR);
+            fc_ln(x, y + 41, nw, fc_buf, fc_fs);
+        }
+        if (lvl >= BP_MAX_LEVEL) bx_spr(x2 - 15, y + 1, fc_mono(BP_A_WORKSHOP));
+        else
+            for (i = 0; i < lvl; i++) bx_spr(x2 - 17 - (lvl - 1 - i) * 5, y + 1, BP_A2_CHIP);
+    } else {                                            /* a corner, a deck, a charge */
+        if (sel) fc_selframe(x, y, x2, y2);
+        c = sp->kind == BP_K_CHARGE;
+        i = c ? fc_fs : sp->kind == BP_K_CRASH ? BP_F_BIG12 : fc_fb;   /* charges are small print, CRASH! wants a real '!' */
+        ny = y + (sp->kind == BP_K_BOOT ? 1 : 3);
+        fc_ln(x, ny, nw, fc_nm, i);
+        ny += bx_fonth(i);
+        if (l2) { fc_ln(x, ny, nw, l2, i); ny += bx_fonth(i); }
+        id = fc_cpic(sp, s);
+        z = bx_size(id);
+        pw = z & 255; ph = z >> 8;
+        if (sp->kind == BP_K_BOOT) {                    /* BOOT / arrow / Collect 200 */
+            ny = y + 10;
+            l2 = fc_names(28);
+            fc_ln(x, y2 - 15, nw, fc_nm, fc_fs);
+            fc_ln(x, y2 - 8, nw, l2, fc_fs);
+        } else if (c) {
+            fc_buf[0] = '-'; os88_strcpy(fc_buf + 1, fc_dec(sp->price), 8);
+            fc_ln(x, y2 - 8, nw, fc_buf, fc_fs);
+            ny = y + 17;
+        } else ny += (y2 - 1 - ny - ph) / 2;
+        if (z) bx_spr(x + (cw - pw) / 2, ny, id);
+        /* the seats standing here (QA-1): over the picture's foot, or under
+         * the name where BOOT and a charge print their bottom rows */
+        if (fc_seatat(s, 0) >= 0)
+            fc_tokens(x, sp->kind == BP_K_BOOT || c ? y + 11 : y2 - 9, cw, s, 0);
+    }
 }
 static void fc_cell(int s)
 {
@@ -434,7 +529,8 @@ static void fc_cell(int s)
     bx_fill(x, y, x, y2, 0);
     if (fc_col(s) == 7) bx_fill(x2, y, x2, y2, 0);
     if (fc_row(s) == 7) bx_fill(x, y2, x2, y2, 0);
-    if (ch >= 28) {                                     /* FULL and MID cells */
+    if (ch >= 44) fc_cfull(s, x, y, x2, y2, sp, own, lvl, mort, sel);
+    else if (ch >= 28) {                                /* MID cells */
         bar = fc_sh;
         nw = cw - 6;
         if (prop != BP_NOBODY) {
@@ -445,22 +541,18 @@ static void fc_cell(int s)
                 fc_tok(x + 7 + id, y + 2 + (bar - 7) / 2, own, bp_game.token[own], 15);
             fc_rtext(x2 - 3, y + 2, fc_dec(sp->price), 15, fc_fs);
         }
-        sy = y + (prop != BP_NOBODY ? bar + 2 + (ch >= 44) : 2 + (ch >= 44));
+        sy = y + (prop != BP_NOBODY ? bar + 2 : 2);
         if (sel) bx_fill(x + 2, sy, x2 - 2, sy + fc_sh, 1);
         fc_ctext(x + 2, x2 - 2, sy, ovl_fc_cfits(sp->shortname, nw), ink, fc_fs);
-        sy += fc_sh + (ch >= 44);
-        ah = y2 - sy - (ch >= 44 ? 4 : 1);
+        sy += fc_sh;
+        ah = y2 - sy - 1;
         id = prop != BP_NOBODY ? fc_pick(prop, nw, ah) : -1;
         if (mort) bx_dither(x + 2, sy, x2 - 2, y2 - 2, 15, 7, 2);
         if (id >= 0) bx_spr(x + (cw - fc_pw) / 2, sy + (ah - fc_ph) / 2, id);
         else if (prop == BP_NOBODY) ovl_fc_special(sp, s, x, sy, nw, ah);
         if (lvl) fc_lvl(x2 - 3, sy + 1, lvl, id >= 0 ? (cw - fc_pw) / 2 - 3 : 20);
         if (mort) {                                     /* the left margin, top of the picture row */
-            if (bx_size(BP_A_MORTGAGE)) bx_spr(x + 3, sy + 1, fc_mono(BP_A_MORTGAGE));
-            else {
-                fc_rect(x + 3, sy + 1, 9, 9, 0);
-                bx_text(x + 4, sy + 1, "M", 15, BP_F_TEXT08);
-            }
+            bx_spr(x + 3, sy + 1, fc_mono(BP_A_MORTGAGE));
         }
         fc_tokens(x, y2 - 8, cw, s, 0);
         if (sel) {                                      /* a frame inside the edge, over the ground only */
@@ -505,307 +597,101 @@ static unsigned fc_sigcell(int s)
 }
 
 /* ---- the centre --------------------------------------------------------- */
-static void ovl_fc_die(int x, int y, int sz, int n)
+/* the bottom bar the panel owns while the centre shows its art (DECISIONS D9):
+ * the landing / Buy panel and the turn bar draw into the bottom BARH rows of
+ * bp_r_center, the art stands above them. 0 on COMPACT: the panel sizes its own bar */
+#define FC_BAR_FULL 96
+#define FC_BAR_MID 64
+int bp_face_barh(void)
 {
-    int id;
-    id = BP_A_DIE(n);
-    if (bx_size(id)) { bx_spr(x, y, id); return; }
-    fc_frame(x, y, sz, sz, 15);                     /* no art: the number in a box */
-    fc_num[0] = (char)('0' + n); fc_num[1] = 0;
-    fc_ctext(x, x + sz - 1, y + (sz - 8) / 2, fc_num, 0, BP_F_TEXT08);
+    return bp_layout == BP_LAY_FULL ? FC_BAR_FULL : bp_layout == BP_LAY_MID ? FC_BAR_MID : 0;
 }
+static void ovl_fc_die(int x, int y, int n) { bx_spr(x, y, BP_A_DIE(n)); }
 static void ovl_fc_centre(void)
 {
     static const char logo[] = "BYTEOPOLY";
-    int x, y, w, h, kw, kh, i, lx, ly, dsz, my, cid;
+    static int iv[3];
+    int x, y, w, h, kw, kh, i, ly, dsz, live;
     unsigned z;
     x = bp_r_center.x; y = bp_r_center.y; w = bp_r_center.w; h = bp_r_center.h;
-    bx_fill(x, y, x + w - 1, y, 0); bx_fill(x, y + h - 1, x + w - 1, y + h - 1, 0);
-    bx_fill(x, y, x, y + h - 1, 0); bx_fill(x + w - 1, y, x + w - 1, y + h - 1, 0);
-    if (bp_pn_covers() == BP_PN_CENTRE) {              /* the panel owns all but the 1 px ring */
-        bx_dither(x + 1, y + 1, x + w - 2, y + 1, 3, 11, 2);
-        bx_dither(x + 1, y + h - 2, x + w - 2, y + h - 2, 3, 11, 2);
-        bx_dither(x + 1, y + 2, x + 1, y + h - 3, 3, 11, 2);
-        bx_dither(x + w - 2, y + 2, x + w - 2, y + h - 3, 3, 11, 2);
+    if (bp_pn_covers() == BP_PN_CENTRE) {              /* the panel owns all but the 2 px edge */
+        gk_box(x, y, w, h, GK_SUNKEN2, -1);
         return;
     }
+    live = fc_live() && bp_game.d1 > 0 && bp_game.d1 < 7 && bp_game.d2 > 0 && bp_game.d2 < 7;
+    if (bp_layout != BP_LAY_COMPACT) {                  /* the scene: ground, cards, mascot, key caps, dice */
+        iv[0] = BP_A2_DIE1 - 1 + bp_game.d1; iv[1] = BP_A2_DIE1 - 1 + bp_game.d2; iv[2] = live;
+        if (bp_layout == BP_LAY_MID) iv[0] = BP_A_DIE1 - 1 + bp_game.d1, iv[1] = BP_A_DIE1 - 1 + bp_game.d2;
+        gk_scene(BP_A2_SC_BOARD + (bp_layout == BP_LAY_MID), x, y, 0, iv);
+        fc_aty = y + (bp_layout == BP_LAY_MID ? 40 : 152);   /* above this line the art stands */
+        return;
+    }
+    bx_fill(x, y, x + w - 1, y, 0); bx_fill(x, y + h - 1, x + w - 1, y + h - 1, 0);
+    bx_fill(x, y, x, y + h - 1, 0); bx_fill(x + w - 1, y, x + w - 1, y + h - 1, 0);
     bx_dither(x + 1, y + 1, x + w - 2, y + h - 2, 3, 11, 2);
-    kh = bp_layout == BP_LAY_FULL ? 28 : bp_layout == BP_LAY_MID ? 20 : 16;
-    kw = kh;
-    z = bp_layout == BP_LAY_COMPACT ? bx_size(BP_A_KEYCAP) : 0;
-    if (z) { kw = (int)(z & 255) + 1; kh = (int)(z >> 8) + 1; }
-    lx = x + (w - 9 * kw) / 2;
-    ly = bp_layout == BP_LAY_COMPACT ? y + 8 : y + h / 2 - kh / 2;
+    z = bx_size(BP_A_KEYCAP);
+    kw = (int)(z & 255) + 1; kh = (int)(z >> 8) + 1;
+    ly = y + 8;
     for (i = 0; i < 9; i++) {
-        if (z) bx_spr(lx + i * kw, ly, BP_A_KEYCAP);
-        else fc_frame(lx + i * kw, ly, kw - 2, kh - 2, 15);
+        bx_spr(x + (w - 9 * kw) / 2 + i * kw, ly, BP_A_KEYCAP);
         fc_buf[0] = logo[i]; fc_buf[1] = 0;
-        fc_ctext(lx + i * kw, lx + i * kw + kw - 3, ly + (kh - 2 - bx_fonth(fc_ft)) / 2, fc_buf, 0, fc_ft);
+        fc_ctext(x + (w - 9 * kw) / 2 + i * kw, x + (w - 9 * kw) / 2 + i * kw + kw - 3, ly + (kh - 2 - bx_fonth(fc_ft)) / 2, fc_buf, 0, fc_ft);
     }
-    fc_aty = bp_layout == BP_LAY_COMPACT ? y : ly + kh + 6;
-    my = y + 6;
-    if (bp_layout != BP_LAY_COMPACT) {                  /* the mascot between the two card decks */
-        z = bx_size(BP_A_MASCOT);
-        if (z && (int)(z >> 8) <= ly - my - 2) {
-            bx_spr(x + (w - (int)(z & 255)) / 2, my, BP_A_MASCOT);
-            cid = fc_mono(BP_A_CARD_FF);
-            z = bx_size(cid);
-            if (z && (int)(z >> 8) <= ly - my - 2 && w >= 300) {
-                bx_spr(x + w / 2 - 56 - (int)(z & 255), my, cid);
-                bx_spr(x + w / 2 + 56, my, fc_mono(BP_A_CARD_SE));
-            }
-        }
-    }
-    if (fc_live() && bp_game.d1 > 0 && bp_game.d1 < 7 && bp_game.d2 > 0 && bp_game.d2 < 7) {
-        z = bx_size(BP_A_DIE1);
-        dsz = z ? (int)(z & 255) : bp_layout == BP_LAY_FULL ? 24 : bp_layout == BP_LAY_MID ? 20 : 14;
-        if (bp_layout == BP_LAY_COMPACT) {
-            ovl_fc_die(x + 12, ly, dsz, bp_game.d1);
-            ovl_fc_die(x + w - 12 - dsz, ly, dsz, bp_game.d2);
-        } else {
-            ovl_fc_die(x + w / 2 - dsz - 6, ly + kh + 10, dsz, bp_game.d1);
-            ovl_fc_die(x + w / 2 + 6, ly + kh + 10, dsz, bp_game.d2);
-        }
+    fc_aty = y;
+    if (live) {
+        dsz = (int)(bx_size(BP_A_DIE1) & 255);
+        ovl_fc_die(x + 12, ly, bp_game.d1);
+        ovl_fc_die(x + w - 12 - dsz, ly, bp_game.d2);
     }
 }
 
-/* ---- the sidebar -------------------------------------------------------- */
+/* ---- panel boxes (the widget kit's, used by bp_w_panel/bp_w_box) ------- */
 static void fc_wpanel(const BPRect *r, const char *title)
 {
-    int th;
-    th = fc_fh + 3;
-    fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + th, 1);
-    bx_text(r->x + 4, r->y + 2, fc_fits(title, fc_fb, r->w - 8), 15, fc_fb);
+    gk_panel(r->x, r->y, r->w, r->h, fc_fh + 3, title, fc_fb, GK_RAISED);
 }
+/* a white fill is a sunken well, any other fill a raised slab (the kit) */
 static void fc_wbox(const BPRect *r, int fill, int edge)
 {
-    fc_frame(r->x, r->y, r->w, r->h, fill);
-    if (edge != 0) {
-        bx_fill(r->x, r->y, r->x + r->w - 1, r->y, edge);
-        bx_fill(r->x, r->y, r->x, r->y + r->h - 1, edge);
-        bx_fill(r->x + r->w - 1, r->y, r->x + r->w - 1, r->y + r->h - 1, edge);
-        bx_fill(r->x, r->y + r->h - 1, r->x + r->w - 1, r->y + r->h - 1, edge);
-    }
-}
-static void fc_head(const BPRect *r, const char *title, const char *right)
-{
-    int th;
-    th = fc_sh + 4;
-    fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + th - 1, 1);
-    bx_text(r->x + 4, r->y + 2, title, 15, fc_fs);
-    if (right) fc_rtext(r->x + r->w - 5, r->y + 2, right, 15, fc_fs);
-}
-static void fc_players(void)
-{
-    const BPRect *r;
-    int i, y, rh, x2, th, cw;
-    unsigned hi;
-    r = &fc_rp;
-    rh = fc_fh + 3;
-    th = bp_layout == BP_LAY_COMPACT ? 0 : fc_sh + 4;
-    x2 = r->x + r->w - 1;
-    if (th) {
-        if (fc_live()) {
-            fc_buf[0] = 0; i = fc_ap(fc_buf, 0, "Round ");
-            fc_ap(fc_buf, i, fc_dec(ovl_fc_rnd()));
-            fc_head(r, fc_buf, 0);
-            if (bp_game.d1 && bp_game.rolled) {
-                fc_num[0] = (char)('0' + bp_game.d1); fc_num[1] = '+'; fc_num[2] = (char)('0' + bp_game.d2); fc_num[3] = 0;
-                fc_rtext(x2 - 5, r->y + 2, fc_num, 15, fc_fs);
-            }
-        } else fc_head(r, "Players", 0);
-    } else fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    y = r->y + th + 1;
-    if (!fc_live()) { fc_t(r->x + 6, y + 1, "No match - Game > New Game", 0, fc_fb); return; }
-    for (i = 0; i < bp_game.nseats && i < BP_SEATS; i++, y += rh) {
-        hi = (bp_game.status == BP_ST_PLAY && bp_game.active == i && bp_game.alive[i]);
-        if (hi) bx_fill(r->x + 1, y, x2 - 1, y + rh - 1, 1);
-        fc_tok(r->x + 4, y + (rh - 7) / 2, i, bp_game.token[i], hi ? 15 : 0);
-        fc_t(r->x + 15, y + 1, bp_game.name[i], hi ? 15 : 0, fc_fb);
-        if (!bp_game.alive[i]) {
-            fc_strike(r->x + 15, y + rh / 2, bx_twidth(bp_game.name[i], fc_fb));
-            fc_rtext(x2 - 4, y + 1, "OUT", 0, fc_fb);
-        } else {
-            fc_rtext(x2 - 4, y + 1, bp_u32_fmt(fc_fit, &bp_game.cash[i]), hi ? 15 : 0, fc_fb);
-            if (bp_game.detained[i]) {
-                cw = bx_twidth(bp_u32_fmt(fc_fit, &bp_game.cash[i]), fc_fb);
-                fc_rect(x2 - 4 - cw - 12, y + 2, 9, rh - 4, hi ? 15 : 0);
-                fc_t(x2 - 4 - cw - 11, y + 1, "R", hi ? 1 : 15, BP_F_TEXT08);
-            }
-        }
-    }
-}
-/* one "label ....... value" line */
-static void ovl_fc_kv(int x1, int x2, int y, const char *k, const char *v)
-{
-    fc_t(x1, y, k, 0, fc_fb);
-    fc_rtext(x2, y, v, 0, fc_fb);
-}
-static const char *ovl_fc_plain(int s)
-{
-    switch (bp_space(s)->kind) {
-    case BP_K_BOOT: return "Start. Passing BOOT pays 200 cr.";
-    case BP_K_EVENT: return bp_space(s)->group ? "Draw a System Error card." : "Draw a Floppy Find card.";
-    case BP_K_CHARGE: return "Pay the bank.";
-    case BP_K_REPAIR: return "Visiting is safe; detained here.";
-    case BP_K_SWAP: return "A free rest. Nothing happens.";
-    case BP_K_CRASH: return "Go to the Repair Shop.";
-    }
-    return "";
-}
-/* a..d joined into fc_buf; numbers come from ovl_fc_nn's two slots */
-static char fc_n[2][8];
-static const char *ovl_fc_nn(int k, unsigned v) { return os88_utoa(v, fc_n[k]); }
-static const char *ovl_fc_cat(const char *a, const char *b, const char *c, const char *d)
-{
-    int n;
-    fc_buf[0] = 0;
-    n = fc_ap(fc_buf, 0, a);
-    n = fc_ap(fc_buf, n, b);
-    n = fc_ap(fc_buf, n, c);
-    fc_ap(fc_buf, n, d);
-    return fc_buf;
-}
-static const char *fc_lvltxt(int lvl, int mort)
-{
-    static char b[8];
-    if (mort) return "Mortgaged";
-    if (lvl >= BP_MAX_LEVEL) return "Workshop";
-    b[0] = (char)('0' + lvl); os88_strcpy(b + 1, " RAM", 6);
-    return b;
-}
-static void ovl_fc_details(void)
-{
-    static const BPByte mul[5] = {5, 15, 30, 45, 60};
-    static const char *const rl[5] = {"1 RAM", "2 RAM", "3 RAM", "4 RAM", "Workshop"};
-    const BPRect *r;
-    const BPSpace *sp;
-    const char *own;
-    int x1, x2, y, rh, i, id, prop, lvl, mort, cw, cp;
-    unsigned base;
-    r = &fc_rd;
-    sp = bp_space(bp_sel);
-    prop = sp->prop;
-    rh = fc_fh + 3;
-    cp = bp_layout == BP_LAY_COMPACT;
-    x1 = r->x + 5; x2 = r->x + r->w - 6;
-    own = "Bank"; lvl = 0; mort = 0;
-    if (prop != BP_NOBODY && fc_live() && bp_game.owner[prop] < bp_game.nseats) {
-        own = bp_game.name[bp_game.owner[prop]]; lvl = bp_game.level[prop]; mort = bp_game.mortgaged[prop];
-    }
-    fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    y = r->y + 2;
-    if (!cp) {                                          /* the title bar: the full name */
-        bx_fill(r->x + 1, r->y + 1, r->x + r->w - 2, r->y + bx_fonth(fc_ft) + 3, 1);
-        fc_t(x1, r->y + 2, fc_fits(sp->name, fc_ft, r->w - 10), 15, fc_ft);
-        y += bx_fonth(fc_ft) + 3;
-    }
-    if (prop == BP_NOBODY) {
-        id = fc_specart(sp, bp_sel);
-        if (cp) { fc_t(x1, y, sp->name, 0, fc_fb); y += rh; }
-        else if (id >= 0 && bx_size(id)) { bx_spr(r->x + (r->w - (int)(bx_size(id) & 255)) / 2, y, id); y += (int)(bx_size(id) >> 8) + 4; }
-        fc_t(x1, y, fc_fits(ovl_fc_plain(bp_sel), fc_fb, r->w - 10), 0, fc_fb);
-        if (sp->kind == BP_K_CHARGE) fc_t(x1, y + rh, ovl_fc_cat("Charge: ", ovl_fc_nn(0, sp->price), " cr", ""), 0, fc_fb);
-        return;
-    }
-    base = sp->rent;
-    if (cp) {                                           /* COMPACT: three lines */
-        fc_t(x1, y, ovl_fc_cat(sp->name, "  ", ovl_fc_nn(0, sp->price), " cr"), 0, fc_fb);
-        fc_t(x1, y + rh, sp->kind == BP_K_UTILITY ? "Rent 4x dice, 10x both" :
-                 ovl_fc_cat("Rent ", ovl_fc_nn(0, base), " set ", ovl_fc_nn(1, base * 2)), 0, fc_fb);
-        fc_t(x1, y + rh * 2, fc_fits(ovl_fc_cat("Owner ", own, " ", lvl || mort ? fc_lvltxt(lvl, mort) : ""), fc_fb, r->w - 10), 0, fc_fb);
-        return;
-    }
-    id = bp_layout == BP_LAY_FULL ? BP_A_LARGE(prop) : -1;      /* top block; LARGE art to its right on FULL */
-    cw = r->w - 10;
-    if (id >= 0 && bx_size(id) && (int)(bx_size(id) & 255) <= r->w / 2) {
-        bx_spr(x2 - (int)(bx_size(id) & 255) + 1, y, id);
-        cw -= (int)(bx_size(id) & 255) + 4;
-    }
-    ovl_fc_kv(x1, x1 + cw - 1, y, "Price", ovl_fc_cat(ovl_fc_nn(0, sp->price), " cr", "", ""));
-    if (mort) bp_redeem_cost(bp_sel, &fc_u);
-    ovl_fc_kv(x1, x1 + cw - 1, y + rh, mort ? "Redeem" : "Mortgage",
-              ovl_fc_cat(mort ? bp_u32_fmt(fc_fit, &fc_u) : ovl_fc_nn(0, (unsigned)bp_mortgage_value(bp_sel)), " cr", "", ""));
-    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 2, "Owner", own);
-    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 3, "Level", sp->kind == BP_K_UTILITY ? (mort ? "Mortgaged" : "-") : fc_lvltxt(lvl, mort));
-    y += rh * 4 + 3;
-    if (sp->kind == BP_K_UTILITY) {
-        fc_t(x1, y, "Rent: 4 x dice total,", 0, fc_fb);
-        fc_t(x1, y + rh, "10 x with both utilities.", 0, fc_fb);
-        return;
-    }
-    bx_fill(r->x + 1, y - 2, x2 + 4, y - 2, 0);         /* the rent schedule, two columns (131.2.3) */
-    cw = (r->w - 10) / 2;
-    ovl_fc_kv(x1, x1 + cw - 6, y, "Base", ovl_fc_cat(ovl_fc_nn(0, base), "", "", ""));
-    ovl_fc_kv(x1 + cw + 4, x2, y, "Set", ovl_fc_cat(ovl_fc_nn(0, base * 2), "", "", ""));
-    for (i = 0; i < 5; i++) {
-        y += (i & 1) == 0 ? rh : 0;
-        ovl_fc_kv(i == 4 ? x1 : x1 + (i & 1) * (cw + 4), i == 4 || (i & 1) ? x2 : x1 + cw - 6, y, rl[i],
-                  ovl_fc_cat(ovl_fc_nn(0, base * mul[i]), "", "", ""));
-    }
-}
-static void fc_link(void)
-{
-    static char pre[16], dd[5];
-    const BPRect *r;
-    int st, loc;
-    r = &fc_rl;
-    fc_frame(r->x, r->y, r->w, r->h, fc_gr);
-    st = bp_link_state();
-    loc = bp_mode == BP_MODE_LOCAL;
-    pre[0] = 0;
-    if (bp_layout != BP_LAY_FULL && fc_live()) {    /* round and dice ride the link row off FULL */
-        dd[0] = ' '; dd[1] = (char)('0' + bp_game.d1); dd[2] = '+'; dd[3] = (char)('0' + bp_game.d2); dd[4] = 0;
-        os88_strcpy(pre, ovl_fc_cat("R", ovl_fc_nn(0, ovl_fc_rnd()), bp_game.rolled && bp_game.d1 ? dd : "", " "), sizeof(pre));
-    }
-    fc_t(r->x + 5, r->y + 2, ovl_fc_cat(pre, loc ? "Same PC" : st < 8 ? fc_lnk[st] : "?", bp_sess_busy() ? " ..." : "", ""), 0, fc_fb);
-    if (st == BP_L_PAUSED || st == BP_L_BADPEER) fc_strike(r->x + 5, r->y + 1, r->w - 10);
-    if (bp_layout == BP_LAY_FULL) fc_t(r->x + 5, r->y + 5 + fc_fh, fc_fits(loc ? "Cable: off" : bp_link_msg(), fc_fb, r->w - 10), 0, fc_fb);
-}
-static void fc_logbox(void)
-{
-    const BPRect *r;
-    int n, i, y, rh, th, x1;
-    r = &fc_rg;
-    rh = fc_fh + 2;
-    if (bp_layout == BP_LAY_COMPACT) { fc_frame(r->x, r->y, r->w, r->h, fc_gr); th = 0; }
-    else { fc_head(r, "Log", 0); th = fc_sh + 4; }
-    x1 = r->x + 4;
-    n = (r->h - th - 3) / rh;
-    if (n > BP_LOG_LINES) n = BP_LOG_LINES;
-    y = r->y + r->h - 2 - rh;
-    for (i = 0; i < n; i++, y -= rh)                    /* newest at the bottom */
-        if (fc_log[i][0] && y + 13 >= fc_sy1 && y <= fc_sy2) fc_t(x1, y, fc_fits(fc_log[i], fc_fb, r->w - 8), 0, fc_fb);
+    (void)edge;
+    gk_box(r->x, r->y, r->w, r->h, fill == 15 ? GK_SUNKEN2 : GK_RAISED, fill);
 }
 
 /* ---- the hint bar ------------------------------------------------------- */
 static void fc_hint(void)
 {
     const char *h, *sp;
-    int i, x, y, n, kw, lw, x2;
-    x = bp_r_hint.x + 6;
+    int i, n, x, y, kw, lw, x2, ch, step, kh;
     x2 = bp_r_hint.x + bp_r_hint.w - 1;
-    y = bp_r_hint.y + (bp_r_hint.h - fc_fh) / 2;
     bx_fill(bp_r_hint.x, bp_r_hint.y, x2, bp_r_hint.y + bp_r_hint.h - 1, 1);
-    for (i = 0; (h = bp_pn_hint(i)) != 0; i++) {
+    for (n = 0; bp_pn_hint(n) != 0; n++) ;
+    if (n == 0) return;
+    kh = fc_fh + 5;                                     /* a key cap: the label's rows and its sides */
+    if (kh > bp_r_hint.h - 2) kh = bp_r_hint.h - 2;
+    y = bp_r_hint.y + (bp_r_hint.h - kh) / 2;
+    ch = bp_r_hint.w - 12;
+    step = ch / n;
+    for (i = 0; i < n; i++) {                           /* the entries spread across the bar */
+        h = bx_str(bp_pn_hint(i));
         for (sp = h; *sp && *sp != ' '; sp++) ;
-        n = sp - h;
-        if (!*sp) { n = 0; sp = h; } else sp++;
-        if (n > 0 && n < 8) {
-            os88_memcpy(fc_fit, h, n); fc_fit[n] = 0;
-            kw = bx_twidth(fc_fit, fc_fb) + 6;
-        } else { n = 0; kw = 0; }
+        kw = sp - h;
+        if (!*sp) { kw = 0; sp = h; } else sp++;
+        x = bp_r_hint.x + 6 + i * step;
         lw = bx_twidth(sp, fc_fb);
-        if (x + kw + 4 + lw > x2) break;
-        if (n) {
-            bx_fill(x, y - 2, x + kw - 1, y + fc_fh + 1, 15);
-            bx_fill(x, y + fc_fh + 2, x + kw - 1, y + fc_fh + 2, bp_mono ? 15 : 8);
-            bx_text(x + 3, y, fc_fit, 0, fc_fb);
-        }
-        bx_text(x + kw + 4, y, sp, 15, fc_fb);
-        x += kw + 4 + lw + 14;
+        if (kw > 0 && kw < 8) {
+            os88_memcpy(fc_fit, h, kw); fc_fit[kw] = 0;
+            kw = bx_twidth(fc_fit, fc_fb) + (bp_layout == BP_LAY_FULL ? 17 : 12);   /* the kit cap's edge and shade take 5 */
+            if (x + kw + 4 + lw > x2) break;
+            if (bp_layout == BP_LAY_FULL) gk_keycap(x, y, kw, kh, fc_fit, fc_fb);
+            else {                                      /* 8-row labels do not read inside the kit's cap (1bpp) */
+                bx_fill(x, y, x + kw - 1, y + kh - 2, 15);
+                bx_fill(x, y + kh - 1, x + kw - 1, y + kh - 1, bp_mono ? 15 : 8);
+                bx_text(x + 6, y + (kh - fc_fh) / 2 + 1, fc_fit, 0, fc_fb);
+            }
+            kw += 4;
+        } else kw = 0;
+        if (x + kw + lw > x2) break;
+        gk_text(x + kw, bp_r_hint.y + (bp_r_hint.h - fc_fh) / 2, 0, sp, 15, fc_fb, 0);
     }
 }
 
@@ -831,6 +717,7 @@ static void fc_scene(void)
     int s;
     if ((fc_secs & BP_D_CENTER) && bp_pn_covers() == BP_PN_FULL) {
         bp_pn_draw();
+        if ((fc_secs & BP_D_HINT) && fc_hit(&bp_r_hint)) fc_hint();
         return;
     }
     if (fc_secs & BP_D_BOARD)
@@ -880,54 +767,13 @@ static void fc_paint(int x1, int y1, int w, int h, unsigned secs)
 static void fc_paintr(const BPRect *r, unsigned secs) { fc_paint(r->x, r->y, r->w, r->h, secs); }
 
 /* ---- signatures of the sections that need no explicit dirty ------------- */
-static unsigned fc_hb(unsigned h, const void *p, int n)
-{
-    const BPByte *q;
-    for (q = (const BPByte *)p; n > 0; n--) h = fc_mix(h, *q++);
-    return h;
-}
-static unsigned fc_sigscal(unsigned h)
-{
-    return fc_mix(fc_mix(fc_mix(h, bp_game.round), bp_game.d1 * 8 + bp_game.d2 + bp_game.rolled * 64), bp_game.active * 4 + bp_game.status);
-}
-static unsigned fc_sigplayers(void)
-{
-    unsigned h;
-    h = fc_live() ? 7 : 3;
-    if (!fc_live()) return h;
-    h = fc_sigscal(h);
-    h = fc_hb(h, bp_game.name, sizeof(bp_game.name));
-    h = fc_hb(h, bp_game.cash, sizeof(bp_game.cash));
-    h = fc_hb(h, bp_game.alive, BP_SEATS);
-    h = fc_hb(h, bp_game.detained, BP_SEATS);
-    return fc_hb(h, bp_game.token, BP_SEATS);
-}
-static unsigned fc_sigdetails(void)
-{
-    unsigned h;
-    h = fc_mix(bp_sel, fc_live());
-    if (!fc_live()) return h;
-    h = fc_hb(h, bp_game.owner, BP_PROPS);
-    h = fc_hb(h, bp_game.level, BP_PROPS);
-    h = fc_hb(h, bp_game.mortgaged, BP_PROPS);
-    return fc_hb(h, bp_game.name, sizeof(bp_game.name));
-}
-static unsigned fc_siglink(void)
-{
-    unsigned h;
-    const char *m;
-    h = fc_mix(fc_mix(bp_link_state(), bp_sess_busy()), bp_mode);
-    if (bp_layout != BP_LAY_FULL) h = fc_sigscal(h);
-    for (m = bp_link_msg(); *m; m++) h = fc_mix(h, *m);
-    return h;
-}
 static unsigned fc_sighint(void)
 {
     unsigned h;
     const char *m;
     int i;
     h = 5;
-    for (i = 0; (m = bp_pn_hint(i)) != 0; i++) { h = fc_mix(h, i); for (; *m; m++) h = fc_mix(h, *m); }
+    for (i = 0; (m = bp_pn_hint(i)) != 0; i++) { h = fc_mix(h, i); for (m = bx_str(m); *m; m++) h = fc_mix(h, *m); }
     return h;
 }
 
@@ -989,7 +835,7 @@ void bp_face_dirty_space(int space)
 }
 static void fc_fullcentre(void)
 {
-    bp_r_center.x = fc_all.x; bp_r_center.y = fc_all.y; bp_r_center.w = fc_all.w; bp_r_center.h = fc_all.h;
+    bp_r_center.x = fc_all.x; bp_r_center.y = fc_all.y; bp_r_center.w = fc_all.w; bp_r_center.h = bp_r_hint.y - fc_all.y;   /* the hint bar stays below it (D17) */
 }
 static void fc_paintall(void *win, int full)
 {
@@ -1015,15 +861,18 @@ static void fc_paintall(void *win, int full)
         for (s = 0; s < BP_SPACES; s++) fc_csig[s] = fc_sigcell(s);
         fc_psig = fc_sigplayers(); fc_dsig = fc_sigdetails(); fc_lsig = fc_siglink(); fc_hsig = fc_sighint(); fc_gsig = fc_logver;
         fc_dsp[0] = fc_dsp[1] = 0; fc_dirty = 0; fc_art = cov == 0;
-        fc_paintr(&fc_all, cov == BP_PN_FULL ? BP_D_CENTER : BP_D_ALL);
+        fc_paintr(&fc_all, cov == BP_PN_FULL ? BP_D_CENTER | BP_D_HINT : BP_D_ALL);
         return;
     }
     d = fc_dirty;
     if (!d) return;
     fc_dirty = 0;
     if (cov == BP_PN_FULL) {
-        if (d & BP_D_CENTER) fc_paintr(&fc_all, BP_D_CENTER);
-        else if (d & FC_D_RECT) ovl_fc_rects(cov, 0);
+        if (d & BP_D_CENTER) { fc_hsig = fc_sighint(); fc_paintr(&fc_all, BP_D_CENTER | BP_D_HINT); }
+        else {
+            if (d & BP_D_HINT) { sg = fc_sighint(); if (sg != fc_hsig || (d & BP_D_FORCE)) { fc_hsig = sg; fc_paintr(&bp_r_hint, BP_D_HINT); } }
+            if (d & FC_D_RECT) ovl_fc_rects(cov, 0);
+        }
         return;
     }
     if (d & BP_D_BOARD) {                               /* cells whose signature moved */
@@ -1108,23 +957,10 @@ static int ovl_fc_key(int ascii, int scan)
 /* ---- the widget kit (valid only while bp_pn_draw runs) ------------------ */
 static void fc_wbutton(const BPRect *r, const char *label, int state)
 {
-    int x, y, x2, y2, tw, ty, dis, foc, i;
-    x = r->x; y = r->y; x2 = x + r->w - 1; y2 = y + r->h - 1;
-    dis = state & BP_W_DISABLED; foc = (state & BP_W_FOCUS) && !dis;
-    fc_rect(x, y, r->w, r->h, 0);
-    if (state & BP_W_DEFAULT) fc_rect(x + 1, y + 1, r->w - 2, r->h - 2, 0), fc_rect(x + 2, y + 2, r->w - 4, r->h - 4, foc ? 1 : fc_gr);
-    else fc_rect(x + 1, y + 1, r->w - 2, r->h - 2, foc ? 1 : fc_gr);
-    if (!foc && !(state & BP_W_DEFAULT)) {              /* the bevel: light top-left, dark bottom-right */
-        if (!bp_mono) { bx_fill(x + 1, y + 1, x2 - 1, y + 1, 15); bx_fill(x + 1, y + 1, x + 1, y2 - 1, 15); }
-        bx_fill(x + 1, y2 - 1, x2 - 1, y2 - 1, bp_mono ? 0 : 8);
-        bx_fill(x2 - 1, y + 1, x2 - 1, y2 - 1, bp_mono ? 0 : 8);
-    }
-    label = fc_fits(label, fc_fb, r->w - 6);
-    tw = bx_twidth(label, fc_fb);
-    ty = y + (r->h - fc_fh) / 2;
-    bx_text(x + (r->w - tw) / 2, ty, label, foc ? 15 : dis ? (bp_mono ? 0 : 8) : 0, fc_fb);
-    if (dis && bp_mono)                                  /* a screen door over the label */
-        for (i = 0; i < fc_fh; i++) bx_dots(x + (r->w - tw) / 2 + (i & 1), ty + i, x + (r->w + tw) / 2, ty + i, 2, 15);
+    int k;
+    k = (state & BP_W_DISABLED) ? GK_B_DISABLED : (state & BP_W_FOCUS) ? GK_B_FOCUS :
+        (state & BP_W_DEFAULT) ? GK_B_DEFAULT : GK_B_NORMAL;
+    gk_button(r->x, r->y, r->w, r->h, label, fc_fb, k | GK_B_FLAT);
 }
 int bp_w_text(int x, int y, const char *s, int colour, int font) { return bx_text(x, y, s, colour, font); }
 int bp_w_textw(const char *s, int font) { return bx_twidth(s, font); }
@@ -1133,16 +969,6 @@ int bp_w_sprite(int x, int y, int art_id) { return bx_spr(x, y, art_id); }
 unsigned bp_w_spritesz(int art_id) { return bx_size(art_id); }
 void bp_w_fill(int x1, int y1, int x2, int y2, int colour) { bx_fill(x1, y1, x2, y2, colour); }
 
-/* ---- the log ------------------------------------------------------------ */
-void bp_log_add(const char *line)
-{
-    int i;
-    for (i = BP_LOG_LINES - 1; i > 0; i--) os88_strcpy(fc_log[i], fc_log[i - 1], BP_LOG_LEN + 1);
-    os88_strcpy(fc_log[0], line, BP_LOG_LEN + 1);
-    fc_logver++;
-    fc_dirty |= BP_D_LOG;
-}
-const char *bp_log_line(int i) { if (i < 0 || i >= BP_LOG_LINES) return ""; return fc_log[i]; }
 
 /* the public doors are one resident wrapper each: the bodies are overlay code */
 void bp_face_layout(int w, int h) { fc_layout(w, h); }

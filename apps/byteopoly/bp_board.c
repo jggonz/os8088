@@ -5,10 +5,10 @@
 
 static const BPSpace bp_spaces[BP_SPACES] = {
     {BP_K_BOOT,     0, BP_NOBODY,   0,  0, "BOOT",            "BOOT"},
-    {BP_K_COMPUTER, BP_G_COMMODORE, 0, 120,  8, "Commodore PET", "PET"},
+    {BP_K_COMPUTER, BP_G_COMMODORE, 0, 100,  6, "Commodore PET", "PET"},
     {BP_K_EVENT,    0, BP_NOBODY,   0,  0, "Floppy Find",     "FLOPPY"},
-    {BP_K_COMPUTER, BP_G_COMMODORE, 1, 140, 10, "VIC-20",        "VIC-20"},
-    {BP_K_COMPUTER, BP_G_COMMODORE, 2, 220, 18, "Commodore 64",  "C64"},
+    {BP_K_COMPUTER, BP_G_COMMODORE, 1, 120,  8, "VIC-20",        "VIC-20"},
+    {BP_K_COMPUTER, BP_G_COMMODORE, 2, 140, 10, "Commodore 64",  "C64"},
     {BP_K_UTILITY,  0, 3,         150,  0, "POWER",           "POWER"},
     {BP_K_CHARGE,   0, BP_NOBODY, 100,  0, "Import Duty",     "DUTY"},
     {BP_K_REPAIR,   0, BP_NOBODY,   0,  0, "REPAIR SHOP",     "REPAIR"},

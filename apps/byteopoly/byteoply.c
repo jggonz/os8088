@@ -22,6 +22,7 @@
  * application (face, panels, app lanes) */
 #include "bp_save.c"
 #include "bp_face.c"
+#include "bp_side.c"
 #include "bp_panels.c"
 #include "bp_setup.c"
 #include "bp_app.c"

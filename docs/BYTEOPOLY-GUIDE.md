@@ -213,6 +213,17 @@ shows its facts and says who it is waiting for.
 
 ## Sound
 
-Short tones for dice, purchases, rent, cards, CRASH!, bankruptcy and the
-win, through whatever sound device the system uses. **Options > Sound**
-turns them off. An idle game is silent and draws nothing.
+Byteopoly has a soundtrack and sound effects. With an AdLib or a Sound
+Blaster and the system's sound driver loaded, the music is three FM voices:
+a title theme on the New Game screen, a quiet loop while you play, a tenser
+one while an auction is open, and a fanfare for the winner. With the PC
+speaker only, the music plays its tune alone and starts **off** - turn it on
+if you like it. The effects - dice, a step, buying, rent, BOOT's salary,
+each kind of card, CRASH!, upgrades, mortgages, bids, the gavel, trades,
+your turn, the cable dropping and coming back, bankruptcy and the win - play
+on either, over the music.
+
+**Options > Sound** turns the effects off and on, **Options > Music** the
+music. The songs and effects ride the game's second art file, so on a
+machine too short of memory to load it the game is silent. An idle game
+draws nothing.

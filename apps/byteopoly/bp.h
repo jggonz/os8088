@@ -39,6 +39,10 @@ typedef int BPInt;
 #endif
 typedef unsigned char BPByte;
 
+/* UI text lives in the art (SPEC.md 131.10.7): a TX_ name is a text handle,
+ * read with bx_text/bx_twidth or resolved with bx_str before any other use */
+#include "bptx.h"
+
 /* A logical 32-bit unsigned value: money, revisions, identities, digests. */
 typedef struct { BPWord lo, hi; } BPU32;
 
@@ -495,6 +499,11 @@ int    bp_face_isdirty(void);                     /* any section dirty (the time
  * (QA Qqa1-4). Until the face lane refines it, it dirties the whole centre. */
 void   bp_face_dirty_rect(const BPRect *r);
 void   bp_w_fill(int x1, int y1, int x2, int y2, int colour);
+/* The centre's bottom bar (DECISIONS D9, SPEC 131.8.3): with bp_pn_covers() == 0
+ * the landing / Buy panel and the turn bar draw into the bottom bp_face_barh()
+ * rows of bp_r_center (FULL 96, MID 64) and the idle art stands above them.
+ * COMPACT answers 0: the panel sizes its own bar there. */
+int    bp_face_barh(void);
 /* the log ring the sidebar shows (bounded) */
 #define BP_LOG_LINES    8
 #define BP_LOG_LEN      40

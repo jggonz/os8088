@@ -17,6 +17,13 @@
 ; segment; with none, text uses the kernel's 8x8 glyphs and sprites draw
 ; nothing (the plain face, 130.6.3).
 section .text
+%ifdef BX_ART2
+  %ifndef BX_TXID
+    %fatal "BX_ART2 needs BX_TXID: the art ID of the first of the eight text records a handle names"
+  %endif
+BX_TSLOT  equ 64                    ; one resolved handle: 63 characters and a NUL
+BX_TSLOTS equ 4                     ; ...four of them in the ring
+%endif
 
 ; void bx_setup(unsigned seg,void *band,unsigned cap,unsigned artseg,int bpp)
 ; seg:band is the band, cap bytes; seg 0 = the package's own segment (DS,
@@ -554,6 +561,106 @@ _bx_size:
 ; int bx_artstr(int id,int n,char *buf) - the art text record's line n (from
 ; 0) into buf, at most 47 characters and a NUL. Answers 0 with buf = "" when
 ; there is no art part or no such line, else 1.
+%ifdef BX_ART2
+; Under BX_ART2 every text record is INDEXED (SPEC.md 131.10.7): dw n, n word
+; offsets from the record's start, then the NUL-terminated lines - line n is
+; one lookup, not a walk past n lines.
+_bx_artstr:
+    push bp
+    mov bp,sp
+    mov di,[bp+8]
+    mov byte [di],0
+    mov bx,[bp+4]
+    mov ax,[bp+6]
+    call bx_tline
+    jc .no
+    mov cx,47
+    call bx_tcopy
+    mov ax,1
+    pop bp
+    ret
+.no:
+    xor ax,ax
+    pop bp
+    ret
+
+; bx_tline: BX = art ID, AX = line -> ES:SI = that line of the indexed text
+; record; CF = 1 no such record or line. Clobbers AX, BX.
+bx_tline:
+    push ax
+    call bx_art_at
+    pop bx
+    jc .no
+    cmp bx,[es:si]
+    jae .no
+    shl bx,1
+    add si,[es:si+bx+2]
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; bx_tcopy: ES:SI -> DS:DI, at most CX characters, then a NUL. Clobbers AL,
+; CX, SI, DI.
+bx_tcopy:
+    mov al,[es:si]
+    inc si
+    mov [di],al
+    inc di
+    test al,al
+    jz .r
+    loop bx_tcopy
+    mov byte [di],0
+.r:
+    ret
+
+; const char *bx_str(const char *s) - a text handle (1000h..1FFFh: line
+; s & 1FFh of text record BX_TXID + ((s >> 9) & 7)) as a DS string in the
+; next slot of the ring; any other value comes back unchanged (SPEC.md
+; 131.10.7). A slot holds 63 characters and lasts four resolutions.
+_bx_str:
+    mov bx,sp
+    mov ax,[ss:bx+2]
+; bx_hstr: AX = a string or a handle -> AX = a DS string. Clobbers BX, CX,
+; DX, SI, DI, ES.
+bx_hstr:
+    cmp ax,1000h
+    jb .r
+    cmp ax,2000h
+    jae .r
+    mov dx,[bx_tnext]               ; this slot; the next one after it
+    mov bx,dx
+    add bx,BX_TSLOT
+    cmp bx,bx_tring + BX_TSLOT * BX_TSLOTS
+    jb .k
+    mov bx,bx_tring
+.k:
+    mov [bx_tnext],bx
+    mov bx,ax
+    mov cl,9
+    shr bx,cl
+    add bx,BX_TXID - 8
+    and ax,1FFh
+    call bx_tline
+    mov di,dx
+    mov byte [di],0
+    jc .e
+    mov cx,BX_TSLOT - 1
+    call bx_tcopy
+.e:
+    mov ax,dx
+.r:
+    ret
+
+; void bx_setart2(unsigned seg) - the second art part's segment: art IDs
+; 256..511 are read from it with index ID - 256 (0 = none)
+_bx_setart2:
+    mov bx,sp
+    mov ax,[ss:bx+2]
+    mov [bx_art2],ax
+    ret
+%else
 _bx_artstr:
     push bp
     mov bp,sp
@@ -594,11 +701,20 @@ _bx_artstr:
     xor ax,ax
     pop bp
     ret
+%endif
 
 ; bx_art_at: BX = art ID -> ES:SI = its record; CF = 1 absent (no art part,
-; or the ID has no record). Clobbers AX, BX.
+; or the ID has no record). Clobbers AX, BX. Under BX_ART2 an ID of 256..511
+; is the second part's, index ID - 256 (SPEC.md 131.10.7).
 bx_art_at:
     mov ax,[bx_art]
+%ifdef BX_ART2
+    test bh,bh
+    jz .p1
+    mov ax,[bx_art2]
+    mov bh,0
+.p1:
+%endif
     test ax,ax
     jz .no
     mov es,ax
@@ -946,6 +1062,11 @@ bx_gwid:
 _bx_twidth:
     push bp
     mov bp,sp
+%ifdef BX_ART2
+    mov ax,[bp+4]                   ; a text handle names a record's line
+    call bx_hstr
+    mov [bp+4],ax
+%endif
     mov ax,[bp+6]
     call bx_face
     xor dx,dx
@@ -984,6 +1105,11 @@ _bx_fonth:
 _bx_text:
     push bp
     mov bp,sp
+%ifdef BX_ART2
+    mov ax,[bp+8]                   ; a text handle names a record's line
+    call bx_hstr
+    mov [bp+8],ax
+%endif
     mov ax,[bp+10]
     cmp word [bx_np],1              ; 1bpp: a glyph in a grey's dot pattern
     jne .ink                        ; cannot be read, so text is white where
@@ -1339,10 +1465,21 @@ bx_bits: db 80h,40h,20h,10h,8,4,2,1
 ; 2x2 lit pattern per colour: bit0 (even x, even y), bit1 (odd x, even y),
 ; bit2 (even x, odd y), bit3 (odd x, odd y). SPEC.md 130.6.2's mono table.
 _bx_mono: db 0,0,0,0,0,0,9,7,6,0,15,15,15,15,15,15
+%ifdef BX_ART2
+bx_tnext: dw bx_tring               ; the ring slot bx_hstr fills next
+%endif
 section .bss
+%ifdef BX_ART2
+bx_art2: resw 1
+bx_tring: resb BX_TSLOT * BX_TSLOTS
+%endif
 bx_band: resw 1
 bx_bs: resw 1
+%ifdef BX_ART2
+bx_srow: resb 64                    ; a row of up to 120 pixels (BPART2's LINKED), packed, plus 4 pad
+%else
 bx_srow: resb 36
+%endif
 bx_sg: resb 5
 bx_sgn: resw 1
 bx_cap: resw 1
