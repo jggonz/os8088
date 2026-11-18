@@ -134987,9 +134987,10 @@ picture rows written and the text after the table laid out.
 
 docs/plans/BROWSER-1.8-PLAN.md step 2, `apps/browser/brcolor.inc`. On VGA
 and EGA the browser draws `<body bgcolor text link>`, `<font color>`, and
-the `bgcolor` of a `<table>`, `<tr>`, `<td>` and `<th>`. A 1bpp adapter
-reaches none of it: the parser writes no colour there and every row draws
-as 1.7 drew it.
+the `bgcolor` of a `<table>`, `<tr>`, `<td>` and `<th>`. A window on a
+1bpp display reaches none of it: the parser writes no colour there and every
+row draws as 1.7 drew it. That is the display the WINDOW is on, not the
+primary (§71.34.16).
 
 **Part 7** (`brcolor_part.asm`, `brcolor_const.inc`) holds what a
 monochrome machine has no use for: the colour names, the hex reader and the
@@ -135095,9 +135096,10 @@ composer writes `BR_BH`, `BR_BV` and `BR_BX` (80h-82h, brdocmarks.inc),
 which `br_build` sends down the bitmap path (`br_bline`) and
 `br_paintstyled` draws as a line across row 3, one down column 3, or both
 (`br_bglyph`). On a colour display they are dark grey (`br_bgrey`), and the
-bitmap path now puts each raster row up a RUN OF EQUAL ATTRIBUTE at a time
+bitmap path now puts a styled row up a RUN OF EQUAL ATTRIBUTE at a time
 (`br_strun`), so a styled row keeps its cells' colours where it used to take
-its first letter's pen for all of them.
+its first letter's pen for all of them - each run ONCE, eight rows tall
+(§71.34.15).
 
 ### 71.34.2 Browser 1.8 — the table composer left the primary
 
@@ -135503,6 +135505,84 @@ saved as `LICENSEE`.
 The kernel's Save chooser has no default extension, so this is the Browser's,
 in part 0. `tests/unit/t_brautosave.py` holds the names.
 
+### 71.34.15 Browser 1.8 — a coloured styled row is a run once, eight rows tall
+
+**A bordered table cost eight times the drawing calls on a colour display.**
+`br_bgrey` gives every grid cell dark grey ink, so every text row of a
+bordered table is a coloured row and goes down `br_paintstyled`, which
+composes a cell-font row one scan line at a time. `br_strun` then put up
+each scan line a run of equal attribute at a time: a row of N bordered cells
+alternates grey line and text ink, about 2N + 1 runs, and was 8 x (2N + 1)
+`OSAPI_GFX_BLIT1` calls (and as many pens) where the same row on a 1bpp
+display, or without colour, is 8. A four-column table's row was 72 calls,
+about 55 ms more a line on an XT at §PERFORMANCE's 756 us a call, and about
+a second more for a 20-row table's band. Any bold or italic row with a
+coloured span paid the same.
+
+**Part 7 puts each run up once** (`brs_f_run`, `brext_part.asm`): it banks
+the eight scan lines in its font band (`ty_bandbuf`, 8 x `[br_cols]` bytes,
+stride `[br_cols]`) and on the eighth puts each run up with one pen and one
+`OSAPI_GFX_BLIT1` with DX = 8, which is 2N + 1 calls for the row, as part
+8's tall slices already did. The band is idle: `brf_draw` fills it afresh
+for every tall slice, and `br_paintstyled`'s eight scan lines are one call
+with nothing between them. It costs no memory. Its entry is CODE at a fixed
+offset (`BRST_CODE`, right after the entry table), so the primary keeps one
+far vector (`br_stv`), binds its segment in `br_p7get` and clears it when
+`br_cpload` drops the part.
+
+**A row coloured with part 7 out still pays a run a scan line** (`br_strun`'s
+`.rows`): a link in the theme's colour needs no part (§71.34), so a bold
+line holding one is coloured with nothing to bank in. Such a row has three
+runs, not a table's nine.
+
+**What it cost**: the primary went DOWN. This, §71.34.16 and §71.35's
+kern_mega buffer together took image + BSS from 65,023 to 65,013 bytes of
+65,024 (`APP_MAX_SIZE`). The hook, its bind and §71.34.16's byte and
+crossing test are less than the four strings nothing referenced, which are
+gone: `br_s_subbtn`,
+`br_s_crlf`, `br_dl_s_open` (which repeated `br_s_ctxopen`) and
+`br_dl_s_stream`. Part 7 grew 174 bytes, from 15,971 to 16,145 unpacked.
+
+### 71.34.16 Browser 1.8 — the colour decision follows the window
+
+**On a two-display machine the colour decision followed the PRIMARY.**
+`br_size` read bits per pixel once, at launch, from `OSAPI_VIDEO`, which
+answers about the primary (§39.2.1). A Browser opened on a VGA primary and
+dragged onto the Hercules kept parsing and drawing colours there. §39.4's
+table reduces them, so a `<body bgcolor=blue text=green>` page went black on
+black. `br_paintstyled`'s polarity read the same byte, and a styled row went
+up in the wrong sense.
+
+**`[br_wbpp]` is the window's display**: `br_size` seeds it from
+`OSAPI_VIDEO`, because `br_cpload` runs before the window exists, and
+`br_keeph` sets it from `OSAPI_WM_DISPLAY` (§39.16.4) at launch and on every
+`OSAPI_WM_ONRESIZE`, which fires on a drag across the seam. Every colour gate
+reads it: the parser's (`br_colput`, `br_body`, `br_font`, `br_tcolhook`,
+`br_cellbg`), `br_cpload`, `br_frameclaim`, the paint's (`br_bcstart`,
+`br_bgrey`, `br_strun`) and `br_paintstyled`'s polarity.
+
+**A crossing parses the page again.** The paint gates alone are not enough,
+because the page was PARSED under the other display's gates. `<body>` put its
+colours in the page pen (`[br_ppen]`), and every plain row is one `font_run`
+in that pen, so a blue-and-green page dragged onto the Hercules stayed black
+on black. A page parsed on the Hercules never wrote its colour records, so
+dragged onto the VGA it had none. So when `br_keeph` sees the bits per pixel
+change, it sets `[br_cwant]` = 1 and calls `br_tkick`. The UI task's next
+wake (`br_fnwake`, once the page stands still) binds part 7, fetching it if a
+1bpp start never did, and parses the kept source again (`br_reparse`) under
+the new gates. Then it lays the page out and repaints it. The kernel's own
+repaint after the drag comes first, in the old pen, so a crossing draws the
+band twice. That costs one extra paint per drag across the seam, not per
+paint. A frameset and a plain-text page are not parsed again (`br_reparse`),
+and they keep what they were parsed with. The theme's link colour is read
+only at a window's start on a colour display, so a window started on a 1bpp
+one has links in the text's colour.
+
+**`[br_bpp]` stays the primary's**, because it is the IMAGE STORE's format.
+A picture is decoded four planes or one by it (`bri_csize`, `bri_plans`),
+and a store that changed format under a drag would be read at the wrong
+stride.
+
 ### 71.35 Browser 1.8 — tall headings
 
 `<h1>`, `<h2>` and `<h3>` are set **two rows tall** (16 pixels) where the
@@ -135546,8 +135626,17 @@ holds a picture stays one row, in the cell.
 
 **The face lives in part 8's own memory** (`OS88TY_FACEBUF`, §6.5.5): by
 the time a page has a heading the Browser holds §50's eight claims, and a
-ninth for the face was refused with 355KB free. Under kern_mega (twelve
-claims, and a segment that is a selector) the face claims as usual.
+ninth for the face was refused with 355KB free. It would be refused on
+kern_mega too, with claims to spare: `ty_open` runs in the part, and a part
+may not claim (§20.12.5) - the kernel reads the caller's DS as who is
+asking. So `brf_facebuf` answers on both kernels. In real mode the buffer is
+a segment sum, the first 512-byte boundary in `brf_fbuf`. Under kern_mega a
+segment is a selector and its sum is nothing, so it finds the same boundary
+in linear terms (`OSAPI_SEG` `SEG_LIN`) and asks for a data selector there
+(`SEG_SUB`), which is over the part's own block, moves with it and goes with
+it. Before this, `ty_open` fell through to `OSAPI_MEM_P` from the part, was
+refused, and every h2, h3 and big letter on kern_mega was set in the 8x8
+cell with no word said.
 
 **A click on a tall line** (`br_thit`, in `br_hitofs`) is rebased to the
 text row from either slice and to the character under it by the letters'

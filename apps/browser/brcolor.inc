@@ -71,7 +71,7 @@ br_coldec:
 br_colput:
     test word [br_opts], OPT_COLOR  ; Options > Colors off (71.36)
     jz .out
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .out
     push ax
     push ax
@@ -179,7 +179,7 @@ br_cpload:
     mov word [br_cpseg], 0
     mov byte [br_cwant], 2          ; no part to ask for...
     mov byte [br_tlink], 0FFh       ; no part: links in the text's colour
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .ret
     push ax
     push cx
@@ -202,8 +202,10 @@ br_cpload:
     add sp, 4
     pop bp
     mov [br_tlink], al
-    mov word [br_cpseg], 0          ; nothing holds a vector into it yet
-    mov byte [br_cwant], 0          ; ...until a page names a colour
+    xor ax, ax
+    mov [br_cpseg], ax              ; nothing holds a vector into it yet
+    mov [br_stv + 2], ax            ; (br_p7get bound br_strun's)
+    mov [br_cwant], al              ; ...until a page names a colour
     mov al, 7
     call op_drop
 .no:
@@ -269,7 +271,7 @@ br_cdefault:
 br_body:
     cmp byte [br_close], 0
     jne .ret
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .ret
     cmp byte [br_frameappend], 0    ; A FRAME'S <body> (71.34.5): its colours
     je .page                        ; are its cell's, as IE3 painted a frame,
@@ -327,7 +329,7 @@ br_body:
 
 ; --- br_font - <font color> and </font>: a stack of 8 foregrounds -----------
 br_font:
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .ret
     push ax
     push bx
@@ -373,7 +375,7 @@ br_font:
 ; --- br_tcolhook - <table> and <tr> bgcolor, and the font state a table
 ; leaves as it found. AL = the tag's action, kept; everything kept
 br_tcolhook:
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .ret
     cmp al, TA_TAB
     je .tab
@@ -456,7 +458,7 @@ br_tcolhook:
 
 ; --- br_cellbg - a <td>/<th>'s ground: its own, its row's or its table's ----
 br_cellbg:
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .ret
     push ax
     push bx
@@ -596,7 +598,7 @@ br_cplook:
 
 ; --- br_bcstart - br_build's colour state at a line's start ------------------
 br_bcstart:
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .ret
     push ax
     push cx
@@ -1133,15 +1135,20 @@ br_bglyph:
 
 ; --- br_strun - br_paintstyled's raster row: AX = x, BX = y, CX = width,
 ; DX = 1, ES:SI = the row, BP = its stride. A run of equal attribute a BLIT1
-; and a pen when the row has colours (and the adapter shows them); else the
-; row at once. CF = BLIT1's
+; and a pen when the row has colours (and the display shows them); else the
+; row at once. CF = BLIT1's.
+;
+; WITH PART 7 IN, the coloured row is ITS (brs_f_run, 71.34.15): it banks the
+; eight scan lines and puts each run up once, eight rows tall. Only a row
+; coloured with part 7 out - a link in the theme's colour, which needs no
+; part - still pays a run a scan line, here
 br_strun:
     cmp byte [br_lcolr], 0
     je .one
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     jne .runs
 .one:
-    cmp byte [br_bpp], 1            ; (a 1bpp adapter reads no pen)
+    cmp byte [br_wbpp], 1           ; (a 1bpp display reads no pen)
     je .blit
     push ax                         ; THE PEN AGAIN, EVERY ROW: it holds for
     call br_stpen                   ; one lock hold (SPEC.md 5.4.2.2), and on
@@ -1151,6 +1158,11 @@ br_strun:
     call OSAPI_GFX_BLIT1
     ret
 .runs:
+    cmp word [br_stv + 2], 0        ; part 7's, a run once (above)
+    je .rows
+    call far [br_stv]
+    ret
+.rows:
     push ax
     push cx
     push si
@@ -1196,7 +1208,7 @@ br_strun:
 ; --- br_bgrey - br_build's cell at DI: a table's line takes dark grey ink on
 ; a colour display, the way IE3 drew its grid. All kept
 br_bgrey:
-    cmp byte [br_bpp], 1
+    cmp byte [br_wbpp], 1
     je .ret
     cmp byte [di], BR_BH
     jb .ret

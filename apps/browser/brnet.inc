@@ -2872,7 +2872,6 @@ BR_S_CLENN     equ $ - br_s_clen
 br_s_text_html: db 'text/html', 0
 br_s_xhtml: db 'application/xhtml+xml', 0
 br_s_cookiehdr: db 13, 10, 'Cookie: ', 0
-br_s_crlf: db 13, 10, 0
 br_s_redirect: db 'Too many redirects', 0
 br_s_redirbad: db 'Redirect failed', 0
 br_s_framebad: db 'Frame URL invalid', 0

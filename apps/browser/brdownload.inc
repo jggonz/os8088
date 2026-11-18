@@ -5,7 +5,6 @@
 
 %include "brdownload_const.inc"
 
-br_dl_s_open:       db 'Open Link', 0
 br_dl_s_busy:       db 'Download Manager is busy', 0
 br_dl_s_cancelling: db 'Previous download is cancelling', 0
 br_dl_s_nodisk:     db 'No writable destination', 0
@@ -25,7 +24,6 @@ br_dl_s_chunked:    db 'Chunked transfer unsupported', 0
 br_dl_s_httpcode:   db 'HTTP server returned an error', 0
 br_dl_s_incomplete: db 'Connection ended before file completed', 0
 br_dl_s_write:      db 'Disk write failed', 0
-br_dl_s_stream:     db 'Streaming writes unavailable', 0
 br_dl_s_redirect:   db 'Too many or invalid redirects', 0
 br_dl_s_url:        db 'Invalid download URL', 0
 br_dl_s_cancel:     db 'Cancel', 0

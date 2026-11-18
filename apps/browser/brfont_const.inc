@@ -11,6 +11,9 @@ BRFN_DRAW   equ BRCL_CODE + 4                   ; word: far, ES:SI = the text, C
                                     ; DS -> one 8-row slice of a tall line drawn
 BRFN_SELF   equ BRCL_SELF           ; the data segment: the colour block's word
 BRTB_ENTRY  equ BRCL_CODE + 6       ; word: far, the table composer's br_table
+BRST_CODE   equ BRCL_CODE + 8       ; CODE, not a word: far, br_strun's coloured
+                                    ; row (brs_f_run) - at a fixed offset, so
+                                    ; the primary binds a segment and no entry
 
 ; the draw's parameters, BRFP_SIZE bytes in the caller's segment
 BRFP_X      equ 0                   ; word: the row's screen x
