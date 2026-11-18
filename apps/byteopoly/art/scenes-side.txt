@@ -1,0 +1,200 @@
+# Byteopoly sidebar scenes (SPEC.md 131.8.4, 133.6): the fixed frames, titles,
+# labels and rows of the sidebar, one scene per box state. Scene IDs 410..419
+# (BP_A2_SC_SIDE + n); the C names them SD_S_*. Coordinates are relative to the
+# box's origin. The FULL boxes are 192 px wide, MID's 208; the dynamic values
+# come from the slots ($n strings, %n numbers) bp_side.c fills. Everything a
+# scene can say is data here instead of calls in the package's segment.
+fonth BP_F_TEXT13 13
+fonth BP_F_TEXT10 10
+fonth BP_F_TEXT08 8
+fonth BP_F_BIG16 16
+
+# +0 the players box, FULL, 192 x 130: $0 the title, $1 the cash (or the high
+# bid), $2 the round; the big token stands left of the cash well, drawn by code.
+scene 410 192 130
+  panel 0 0 192 130 16 "$0" BP_F_TEXT10 raised|pleft
+  text 150 7 36 "$2" @TITLETX BP_F_TEXT08 right
+  box 44 18 144 32 sunken2 @FIELD
+  textbox 46 20 140 28 "$1" @TEXT BP_F_BIG16 centre
+  box 3 53 186 75 sunken @FIELD
+end
+
+# +1 CONNECTION, FULL, 192 x 124 (the link is not in step): $0 the role, $1 the
+# port and speed, $2 the state banner, $3 the framer's own line.
+scene 411 192 124
+  panel 0 0 192 124 16 "CONNECTION" BP_F_TEXT13 raised|pleft
+  spr 64 21 BP_A2_MODEM
+  text 8 49 176 "$0" @TEXT BP_F_TEXT10 left|fit
+  text 8 62 176 "$1" @TEXT BP_F_TEXT10 left|fit
+  banner 8 80 176 20 "$2" BP_F_TEXT13 -1
+  text 8 106 176 "$3" @DISABLED BP_F_TEXT08 left|fit
+end
+
+# +2 OTHER PC LINKED, FULL, 192 x 124 (a trade over the cable): $0 and $1 the lines.
+scene 412 192 124
+  panel 0 0 192 124 16 "OTHER PC LINKED" BP_F_TEXT13 raised|pleft
+  spr 36 24 BP_A2_LINKED
+  text 8 80 176 "$0" @TEXT BP_F_TEXT10 left|fit
+  text 8 94 176 "$1" @TEXT BP_F_TEXT10 left|fit
+end
+
+# +3 PAIRED SAVE, FULL, 192 x 76: %0 a paired save is on both disks, $0 the
+# status in the button, %1 its state (disabled until the link is back).
+scene 413 192 76
+  panel 0 0 192 76 16 "PAIRED SAVE" BP_F_TEXT10 raised|pleft
+  if %0 spr 26 19 BP_A2_DISK_OK
+  if %0 spr 86 28 BP_A2_DARROW
+  if %0 spr 138 19 BP_A2_DISK_OK
+  button 8 49 176 20 "$0" BP_F_TEXT10 %1
+end
+
+# +4 YOUR COLLECTION, FULL, 192 x 76: %0 over the cable, the status well below
+# with $0 its line and the LED: 1 green, 2 yellow, 3 the 1bpp ball.
+scene 414 192 76
+  panel 0 0 192 76 16 "YOUR COLLECTION" BP_F_TEXT10 raised|pleft
+  if %0 {
+    box 3 49 186 24 sunken @FIELD
+    text 24 55 158 "$0" @TEXT BP_F_TEXT10 left|fit
+  }
+  if %0=1 spr 8 56 BP_A2_LED_GREEN
+  if %0=2 spr 8 56 BP_A2_LED_YELLOW
+  if %0=3 spr 8 56 BP_A2_M_LED_RED
+end
+
+# +5 DETAILS, FULL, 192 x 124: $0 the title; %0 a computer or utility (the
+# price block and the line under it), %1 a computer (the rent schedule), %2 a
+# utility (its dice rule), %3 the mortgage line: 1 Redeem (mortgaged), 2 Mortgage. $1 price, $2
+# mortgage or redeem, $3 owner, $4 level, $5..$11 base, set, 1..4 RAM, Workshop
+# rents; $12 the collection's name under the picture drawn by code.
+scene 415 192 124
+  panel 0 0 192 124 16 "$0" BP_F_TEXT13 raised|pleft
+  if %0 {
+    text 68 19 117 "Price" @TEXT BP_F_TEXT10 left
+    text 68 19 117 "$1 cr" @TEXT BP_F_TEXT10 right
+    text 68 45 117 "Owner" @TEXT BP_F_TEXT10 left
+    text 68 45 117 "$3" @TEXT BP_F_TEXT10 right|fit
+    text 68 58 117 "Level" @TEXT BP_F_TEXT10 left
+    text 68 58 117 "$4" @TEXT BP_F_TEXT10 right
+    text 2 64 65 "$12" @TEXT BP_F_TEXT08 centre|fit
+    hline 6 73 180 0
+  }
+  if %3=1 text 68 32 117 "Redeem" @TEXT BP_F_TEXT10 left
+  if %3=2 text 68 32 117 "Mortgage" @TEXT BP_F_TEXT10 left
+  if %0 text 68 32 117 "$2 cr" @TEXT BP_F_TEXT10 right
+  if %1 {
+    text 8 77 82 "Base" @TEXT BP_F_TEXT08 left
+    text 8 77 82 "$5" @TEXT BP_F_TEXT08 right
+    text 100 77 83 "Set" @TEXT BP_F_TEXT08 left
+    text 100 77 83 "$6" @TEXT BP_F_TEXT08 right
+    text 8 88 82 "1 RAM" @TEXT BP_F_TEXT08 left
+    text 8 88 82 "$7" @TEXT BP_F_TEXT08 right
+    text 100 88 83 "2 RAM" @TEXT BP_F_TEXT08 left
+    text 100 88 83 "$8" @TEXT BP_F_TEXT08 right
+    text 8 99 82 "3 RAM" @TEXT BP_F_TEXT08 left
+    text 8 99 82 "$9" @TEXT BP_F_TEXT08 right
+    text 100 99 83 "4 RAM" @TEXT BP_F_TEXT08 left
+    text 100 99 83 "$10" @TEXT BP_F_TEXT08 right
+    text 8 110 175 "Workshop" @TEXT BP_F_TEXT08 left
+    text 8 110 175 "$11" @TEXT BP_F_TEXT08 right
+  }
+  if %2 {
+    text 8 77 176 "Rent: 4 x dice total," @TEXT BP_F_TEXT08 left
+    text 8 88 176 "10 x with both utilities." @TEXT BP_F_TEXT08 left
+  }
+end
+
+# +6 a roster row, COMPACT, 186 x 11: the slots of +8 (the token is drawn by code).
+scene 416 186 11
+  if %0 fill 0 0 186 11 @HILITE
+  if %0 text 14 1 90 "$0" @HILITETX BP_F_TEXT08 left|fit
+  if !%0 text 14 1 90 "$0" @TEXT BP_F_TEXT08 left|fit
+  if %0 text 100 1 82 "$1" @HILITETX BP_F_TEXT08 right|fit
+  if !%0 text 100 1 82 "$1" @TEXT BP_F_TEXT08 right|fit
+  if %2 dots 14 5 60 1 2 0
+end
+
+# +7 DETAILS, MID, 208 x 104: the slots of +5 (no $12).
+scene 417 208 104
+  panel 0 0 208 104 14 "$0" BP_F_TEXT10 raised|pleft
+  if %0 {
+    text 64 17 137 "Price" @TEXT BP_F_TEXT08 left
+    text 64 17 137 "$1 cr" @TEXT BP_F_TEXT08 right
+    text 64 39 137 "Owner" @TEXT BP_F_TEXT08 left
+    text 64 39 137 "$3" @TEXT BP_F_TEXT08 right|fit
+    text 64 50 137 "Level" @TEXT BP_F_TEXT08 left
+    text 64 50 137 "$4" @TEXT BP_F_TEXT08 right
+    hline 6 62 196 0
+  }
+  if %3=1 text 64 28 137 "Redeem" @TEXT BP_F_TEXT08 left
+  if %3=2 text 64 28 137 "Mortgage" @TEXT BP_F_TEXT08 left
+  if %0 text 64 28 137 "$2 cr" @TEXT BP_F_TEXT08 right
+  if %1 {
+    text 8 66 90 "Base" @TEXT BP_F_TEXT08 left
+    text 8 66 90 "$5" @TEXT BP_F_TEXT08 right
+    text 108 66 92 "Set" @TEXT BP_F_TEXT08 left
+    text 108 66 92 "$6" @TEXT BP_F_TEXT08 right
+    text 8 75 90 "1 RAM" @TEXT BP_F_TEXT08 left
+    text 8 75 90 "$7" @TEXT BP_F_TEXT08 right
+    text 108 75 92 "2 RAM" @TEXT BP_F_TEXT08 left
+    text 108 75 92 "$8" @TEXT BP_F_TEXT08 right
+    text 8 84 90 "3 RAM" @TEXT BP_F_TEXT08 left
+    text 8 84 90 "$9" @TEXT BP_F_TEXT08 right
+    text 108 84 92 "4 RAM" @TEXT BP_F_TEXT08 left
+    text 108 84 92 "$10" @TEXT BP_F_TEXT08 right
+    text 8 93 192 "Workshop" @TEXT BP_F_TEXT08 left
+    text 8 93 192 "$11" @TEXT BP_F_TEXT08 right
+  }
+  if %2 {
+    text 8 66 192 "Rent: 4 x dice total," @TEXT BP_F_TEXT08 left
+    text 8 75 192 "10 x with both utilities." @TEXT BP_F_TEXT08 left
+  }
+end
+
+# +8 a roster row, FULL, 184 x 18: $0 the name, $1 the right-hand text (cash, or
+# the auction status); %0 the row is the seat to act (the highlight; inverse on
+# 1bpp), %1 the token 0..3 (+4 on 1bpp), %2 eliminated, %3 draw the divider
+# under it, %4 detained (the R chip).
+scene 418 184 18
+  if %0 fill 0 0 184 18 @HILITE
+  if %1=0 spr 2 1 BP_A_TOK_FLOPPY
+  if %1=1 spr 2 1 BP_A_TOK_MOUSE
+  if %1=2 spr 2 1 BP_A_TOK_JOYSTICK
+  if %1=3 spr 2 1 BP_A_TOK_CASSETTE
+  if %1=4 spr 2 1 BP_A_M_TOK_FLOPPY
+  if %1=5 spr 2 1 BP_A_TOK_MOUSE
+  if %1=6 spr 2 1 BP_A_M_TOK_JOYSTICK
+  if %1=7 spr 2 1 BP_A_TOK_CASSETTE
+  if %0 text 22 4 70 "$0" @HILITETX BP_F_TEXT10 left|fit
+  if !%0 text 22 4 70 "$0" @TEXT BP_F_TEXT10 left|fit
+  if %0 text 96 4 82 "$1" @HILITETX BP_F_TEXT10 right|fit
+  if !%0 text 96 4 82 "$1" @TEXT BP_F_TEXT10 right|fit
+  if %2 dots 22 9 56 1 2 0
+  if %3 fill 2 17 180 1 8
+  if %4 {
+    box 74 3 11 12 flat @FIELD
+    text 74 5 11 "R" @TEXT BP_F_TEXT08 centre
+  }
+end
+
+# +9 a roster row, MID, 201 x 17: the slots of +8.
+scene 419 201 17
+  if %0 fill 0 0 201 17 @HILITE
+  if %1=0 spr 2 0 BP_A_TOK_FLOPPY
+  if %1=1 spr 2 0 BP_A_TOK_MOUSE
+  if %1=2 spr 2 0 BP_A_TOK_JOYSTICK
+  if %1=3 spr 2 0 BP_A_TOK_CASSETTE
+  if %1=4 spr 2 0 BP_A_M_TOK_FLOPPY
+  if %1=5 spr 2 0 BP_A_TOK_MOUSE
+  if %1=6 spr 2 0 BP_A_M_TOK_JOYSTICK
+  if %1=7 spr 2 0 BP_A_TOK_CASSETTE
+  if %0 text 22 4 80 "$0" @HILITETX BP_F_TEXT08 left|fit
+  if !%0 text 22 4 80 "$0" @TEXT BP_F_TEXT08 left|fit
+  if %0 text 100 4 96 "$1" @HILITETX BP_F_TEXT08 right|fit
+  if !%0 text 100 4 96 "$1" @TEXT BP_F_TEXT08 right|fit
+  if %2 dots 22 8 56 1 2 0
+  if %3 fill 2 16 197 1 8
+  if %4 {
+    box 84 3 11 11 flat @FIELD
+    text 84 4 11 "R" @TEXT BP_F_TEXT08 centre
+  }
+end
