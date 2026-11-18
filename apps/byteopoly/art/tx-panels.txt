@@ -193,4 +193,7 @@ TP_RAM2 "RAM 2"
 TP_RAM3 "RAM 3"
 TP_RAM4 "RAM 4"
 TP_WORKSHOP_2 "Workshop"
+TP_MORTGAGED_P " (mortgaged)"
+TP_VALUE_ "Value: "
+TP_PLUS_ "+ "
 # ---- panb ----
