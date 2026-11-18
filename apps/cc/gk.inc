@@ -42,25 +42,22 @@ GK_DROP equ 14
 GK_KEY equ 15
 
 ; ---- roles ---------------------------------------------------------------
-; void gk_init(int bpp)
+; void gk_init(int bpp) - the default table for the display bx_setup was
+; given (its bpp is this bpp; the kit reads the core's plane count)
 _gk_init:
-    mov bx,sp
-    mov ax,gk_colr
-    cmp word [ss:bx+2],4
-    jge .c
-    mov ax,gk_monr
-.c:
-    mov [gk_def],ax
-    mov [gk_rt],ax
-    ret
-
-; void gk_theme(const unsigned char *roles) - 0 = the default gk_init chose
+    xor ax,ax
+    jmp short gk_thm
+; void gk_theme(const unsigned char *roles) - 0 = the default
 _gk_theme:
     mov bx,sp
     mov ax,[ss:bx+2]
+gk_thm:
     test ax,ax
     jnz .s
-    mov ax,[gk_def]
+    mov ax,gk_colr
+    cmp word [bx_np],1
+    jne .s
+    mov ax,gk_monr
 .s:
     mov [gk_rt],ax
     ret
@@ -238,11 +235,11 @@ gk_shad:
 
 ; ---- rings and boxes -----------------------------------------------------
 ; gk_ring: AL = top/left colour, AH = bottom/right colour (bit 7: that half
-; not drawn), CX = the corner cut (0, or 1 to leave the corners). Frames
+; not drawn), CL = the corner cut (0, or 1 to leave the corners). Frames
 ; gk_r, then insets it by one.
 gk_ring:
     mov [gk_col],ax
-    mov [gk_cut],cx
+    mov [gk_cut],cl
     xor si,si                       ; the side: top, left, bottom, right
 .e:
     push si
@@ -282,7 +279,9 @@ gk_ring:
     jmp gk_inset1
 
 ; gk_boxr: gk_r = the rect, AL = the style, AH = the inside's colour (bit 7:
-; left alone). Shadow, rings, fill; leaves gk_r = the inside.
+; left alone). Shadow; the face over all but the outermost ring; then the
+; rings (so a ring's undrawn side or cut corner shows the face, 132.3).
+; GK_ROUND cuts the corners of the first TWO rings. Leaves gk_r = the inside.
 gk_boxr:
     mov [gk_sty],ax
     test al,GK_SHADOW
@@ -290,30 +289,40 @@ gk_boxr:
     mov si,GK_DROPW
     call gk_shad
 .ns:
+    call gk_ld
+    inc ax
+    inc bx
+    dec cx
+    dec dx
+    mov di,[gk_sty+1]
+    call gk_fill
     mov bl,[gk_sty]
     and bx,7
     mov bl,[gk_ridx+bx]
     add bx,gk_rings
-    xor cx,cx
+    xor cx,cx                       ; CL the cut, CH the ring
     test byte [gk_sty],GK_ROUND
     jz .r
     inc cx
 .r:
     mov ax,[bx]
     cmp al,0FFh
-    je .fill
+    je .x
     push bx
+    push cx
     call gk_rc2
     call gk_ring
+    pop cx
     pop bx
     inc bx
     inc bx
-    xor cx,cx                       ; only the outermost ring is cut
+    inc ch
+    cmp ch,2
+    jb .r
+    xor cl,cl                       ; rings 0 and 1 are cut, no more
     jmp .r
-.fill:
-    call gk_ld
-    mov di,[gk_sty+1]
-    jmp gk_fill
+.x:
+    ret
 
 ; void gk_box(int x,int y,int w,int h,int style,int fill)
 _gk_box:
@@ -416,6 +425,11 @@ gk_lab:
 ; gk_tdo: draw gk_tx.. (x, y, w, h, s, colour, font, flags; h = 0: y is the
 ; top row, else the text is centred in h). AX = the drawn width.
 gk_tdo:
+%ifdef BX_ART2
+    mov ax,[gk_ts]                  ; a text handle (131.10.7): its line
+    call bx_hstr
+    mov [gk_ts],ax
+%endif
     mov ax,[gk_tf]
     call bx_face
     mov si,[gk_ts]
@@ -449,18 +463,12 @@ gk_tdo:
 .e:
     mov byte [di],0
     push dx
-    mov ax,[gk_tw]                  ; x: the slack, by the alignment
+    mov ax,[gk_tw]                  ; x: slack * alignment / 2
     sub ax,dx
-    mov cl,[gk_tfl]
-    and cl,3
-    jz .l
-    dec cl
-    jnz .x
+    mov cx,[gk_tfl]
+    and cx,3
+    imul cx
     sar ax,1
-    jmp short .x
-.l:
-    xor ax,ax
-.x:
     add ax,[gk_tx]
     mov bx,[gk_th]                  ; y
     test bx,bx
@@ -518,6 +526,11 @@ _gk_panel:
     mov ah,GK_FACE
     call gk_rcah
     mov al,[bp+18]
+    test al,0Eh
+    jnz .st
+    and al,0F0h                     ; a plain or raised panel: the thick edge
+    or al,2 | GK_ROUND
+.st:
     call gk_boxr
     mov ax,[gk_r+2]                 ; the inside's top
     mov cx,[bp+12]
@@ -562,12 +575,12 @@ gk_tbar:
     push si
     push dx
     push ax
+    mov ax,GK_OUT << 8 | GK_TITLELT ; a light line over it, a dark one under
+    call gk_rc2
+    xor cl,cl
+    call gk_ring
     call gk_ld
     mov di,GK_TITLE
-    call gk_fillro
-    call gk_ld
-    mov dx,bx
-    mov di,GK_TITLELT
     call gk_fillro
     pop ax
     test ah,3
@@ -662,15 +675,18 @@ _gk_keycap:
     mov ax,GK_SH << 8 | GK_ROUND
     call gk_rcah
     call gk_boxr                    ; outline, SHADE inside
+    call gk_ld                      ; the skirt: FACE over it, a checker
+    mov di,GK_FACE
+    call gk_doorr
     mov ax,[bp+10]
     shr ax,1
     shr ax,1
-    cmp ax,2
+    cmp ax,3
     jae .s
-    mov al,2
+    mov al,3
 .s:
     sub [gk_r+6],ax                 ; the front, s rows
-    sub word [gk_r+4],2             ; the right side
+    sub word [gk_r+4],3             ; the right side
     call gk_ld
     mov di,GK_FACE
     call gk_fillro
@@ -763,12 +779,11 @@ _gk_check:
     add sp,6
     jmp short .done
 .drawn:
-    mov ax,[bp+8]                   ; c1 = s/2 - 2 dots down-right
-    shr ax,1
-    dec ax
-    dec ax
+    mov cx,[bp+8]                   ; s/2 - 2 dots down-right
+    shr cx,1
+    dec cx
+    dec cx
     jle .done
-    mov [gk_t1],ax
     mov ax,[bp+8]
     shr ax,1
     shr ax,1
@@ -777,16 +792,9 @@ _gk_check:
     shr bx,1
     dec bx
     add bx,[bp+6]
-    mov cx,[gk_t1]
     mov si,1
-    push ax
-    push bx
-    call gk_walk
-    pop bx
-    pop ax
-    add ax,[gk_t1]                  ; then up-right to x + s - 3
-    add bx,[gk_t1]
-    dec bx
+    call gk_walk                    ; (AX, BX: just past the last dot)
+    dec bx                          ; then up-right to x + s - 3
     dec bx
     mov cx,[bp+4]
     add cx,[bp+8]
@@ -799,7 +807,8 @@ _gk_check:
 .done:
     pop bp
     ret
-; gk_walk: CX 2x2 green dots from (AX, BX), x +1 and y +SI a step
+; gk_walk: CX 2x2 green dots from (AX, BX), x +1 and y +SI a step; leaves
+; AX, BX one step past the last
 gk_walk:
     push ax
     push bx
@@ -1024,17 +1033,14 @@ _gk_sprshadow:
     mov bx,cx
     shr bx,1
     mov al,[es:bx+si]
-    mov ah,0D0h
+    xor al,0DDh                     ; the key nibble becomes 0
+    mov ah,0F0h
     test cl,1
-    jz .hi
-    mov ah,0Dh
-    and al,0Fh
-    jmp short .t
-.hi:
-    and al,0F0h
+    jz .t
+    mov ah,0Fh
 .t:
-    cmp al,ah
-    je .key
+    test al,ah
+    jz .key
     cmp dx,-1
     jne .nx
     mov dx,cx
@@ -1237,7 +1243,17 @@ gk_lit:
     shl ax,1
     mov bx,[bp+10]
     add bx,ax
+%ifdef BX_ART2
+    push di                         ; a text handle (131.10.7): its line
+    push es
+    mov ax,[bx]
+    call bx_hstr
+    pop es
+    pop di
+    xchg ax,si
+%else
     mov si,[bx]
+%endif
 .i:
     lodsb
     test al,al
@@ -1323,14 +1339,13 @@ _gk_scene_rect:
 
 section .data
 gk_rt: dw gk_colr                   ; the role table in force
-gk_def: dw gk_colr                  ; ...and gk_theme(0)'s
 gk_colr: db 0,7,15,8,15,0,1,9,15,1,15,14,0,8,0,15
 gk_monr: db 0,15,15,0,15,0,0,8,15,0,15,0,15,0,0,15
 ; the ring sets (132.3): top/left, bottom/right role pairs, FFh ends
 gk_ridx: db gk_r0-gk_rings, gk_r1-gk_rings, gk_r2-gk_rings, gk_r3-gk_rings
          db gk_r4-gk_rings, gk_r5-gk_rings, gk_r6-gk_rings, gk_rings-gk_rings
 gk_rings: db GK_OUT,GK_OUT                    ; 7, the default button
-gk_r2: db GK_OUT,GK_OUT, GK_LT,GK_SH, GK_NONE,GK_SH, 0FFh
+gk_r2: db GK_OUT,GK_OUT, GK_LT,GK_SH, GK_LT,GK_SH, 0FFh
 gk_r1: db GK_OUT,GK_OUT, GK_LT,GK_SH, 0FFh
 gk_r0: db GK_OUT,GK_OUT, 0FFh
 gk_r6: db GK_OUT,GK_OUT, GK_SH,GK_NONE, 0FFh
@@ -1361,7 +1376,7 @@ gk_tf: resw 1
 gk_tfl: resw 1
 gk_tb: resb 64                      ; the text drawn: a copy, cut to fit
 gk_col: resw 1
-gk_cut: resw 1
+gk_cut: resw 1                      ; (a byte: the high one stays 0)
 gk_sty: resw 1
 gk_bst: resb 1
 gk_op: resb 1
@@ -1371,7 +1386,6 @@ gk_dy2: resw 1
 gk_dc: resw 1
 gk_ds: resw 1
 gk_s2: resw 1
-gk_t1: resw 1
 gk_ac: resw 1
 gk_ad: resw 1
 gk_an: resw 1
