@@ -306,7 +306,7 @@ FAST = [
         "when the unit moved assembles cleanly and reads 32 times too far "
         "into the file. Tracks the loaded VALUE, so a later unrelated shift "
         "is not one; red on rw_jpart's old conversion put back"),
-    Row("gkscene", "fast", py("tests/unit/t_gkscene.py"), 0.2,
+    Row("gkscene", "soak", py("tests/unit/t_gkscene.py"), 0.2,
         "THE GAME KIT'S SCENE RECORD IS THE ONE SPEC.md 132.6 PINS. "
         "tools/os88gk.py is its only writer and gk_scene (apps/cc/gk.inc) its "
         "only guest reader, and a drifted byte draws the wrong widget or reads "

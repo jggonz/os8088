@@ -103,6 +103,7 @@ gk_ld:
 ; gk_enter: a widget's frame (push bp / mov bp,sp, for the CALLER) and
 ; gk_setr: gk_r = the caller's x, y, w, h at [bp+4]..[bp+10]
 gk_enter:
+    ; STKBALANCE-NET: +1 - banks the caller's BP on its own stack; the caller's `pop bp` takes it off
     pop ax
     push bp
     mov bp,sp
@@ -1202,6 +1203,7 @@ _gk_scene:
     ja .yes
     shl bx,1
     mov [gk_na],di
+    ; STKBALANCE-LOOP: pushes the op's decoded arguments, a count in DI; `add sp,[gk_na]` takes them off after the call
 .p:
     sub di,2
     jb .c
