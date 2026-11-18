@@ -103,6 +103,7 @@
 #define BP_A2_SC_LOBBY_S  441   /*   FULL, the Same PC half */
 #define BP_A2_SC_LOBBY_C  442   /*   COMPACT (MID too) */
 #define BP_A2_SC_LOBBY_CS 443   /*   COMPACT, the Same PC half */
+#define BP_A2_SC_PANAC    455   /* 455..459 panels-A lane, COMPACT (DECISIONS D13) */
 
 /* ---- text records, one per source file (indexed; a C name in bptx.h is a
  * TEXT HANDLE into one, SPEC.md 131.10.7; source art/tx-*.txt): prep lane - */

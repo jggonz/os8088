@@ -255712,13 +255712,13 @@ trade composer > the panel of `bp_game.phase`.
 
 | phase | panel | buttons (key) |
 |---|---|---|
-| BUY | name, art, price, cash after (or "too little"), base rent, collection | Buy (B), Auction (A) - Buy greyed with `bp_can`'s reason |
+| BUY | a BOTTOM panel on FULL and MID (131.9.12): the picture, "You landed on NAME", price, rent; COMPACT covers the centre | Buy (B), Auction (A) - Buy greyed with `bp_can`'s reason |
 | AUCTION | lot, list price, high bid and bidder, the bidder's cash, the editor, the minimum, "if you win: N left", the seats auto-passed for want of a raise (from `bp_gp_event`, PASS with other = 1) | Bid N (B), Pass (P); editor: `-`/`+` or Down/Up step 10, digits type, Backspace erases |
 | CARD | deck name and art (FULL; MID too when the 48x64 deck picture fits above the buttons, its mono twin on 1bpp), title, wrapped text | OK (Enter) -> ACK_CARD |
 | REPAIR | detention, failed tries of 3, cash, the Recovery Disks held | Pay 50 (P), a disk per deck held (F Floppy Find, S System Error), Roll (R), Manage (M) |
 | DEBT | creditor, amount, cash, shortfall | Manage (M), Settle (S, when `bp_can` allows), Bankrupt (K) then a confirmation: Go bankrupt (K), No (Esc), opened focused on No |
 | TRADE | the frozen offer (131.9.9) | Accept (A), Reject (R) for the recipient; Cancel (C) for the proposer |
-| MANAGE, AFTER | a one-line bar over the BOTTOM of the centre (the centre art stays): whose move, the buttons; its ground is light grey, white on 1bpp (the status text is black on it) | Roll (Space), End Turn (E), Trade (T), Manage (M) |
+| MANAGE, AFTER | the TURN BAR, a bottom panel (131.9.12; the centre art stays): the mover's token, whose move, the buttons | Roll (Space), End Turn (E), Trade (T), Manage (M) |
 | OVER | winners, standings (131.9.11) | Review (R), New Game (N), Exit (X) |
 
 Greying is the engine's word: every button asks `bp_can(&bp_game, seat,
@@ -255742,8 +255742,10 @@ number of Enters walks from DEBT into a bankruptcy. After a commit, a focus
 left on a button the new state greys (Roll once rolled) moves to the first
 enabled one, and so does a Rules/Keys page turn that greys Next or Prev;
 an editor or list change (a bid being typed, a Collection cursor) never
-moves it, so Enter on an invalid bid explains instead of passing. A button too wide for the
-panel loses its "[K]" prefix and the hint bar still names the key; on 1-bit
+moves it, so Enter on an invalid bid explains instead of passing. Each button is its label's
+width (plus the kit's edge) and the row's buttons are spread evenly along the panel's foot - or,
+on a scene panel, stretched to fill the row the scene tags (131.9.12); a row too narrow for every
+"[K] Label" drops the "[K]" prefixes and the hint bar still names the keys; on 1-bit
 adapters the focused label is prefixed ">" in addition to the face's focus
 state. Hit targets are the rectangles the last draw recorded, the very ones
 it drew. The hint bar lists the ENABLED buttons only (the same answer as the
@@ -255857,8 +255859,8 @@ catches a stale view.
 
 #### 131.9.10 Pause, chat and diagnostics
 
-LINK PAUSED / RESYNCING covers the centre with the link's own message, the
-last log line ("last action retained") and Retry (R: `bp_link_host` /
+LINK PAUSED / RESYNCING covers the centre (131.9.12 draws it) with whose PC
+is awaited, the last log line ("last action retained") and Retry (R: `bp_link_host` /
 `bp_link_join` on the held port), Load Pair (L: `bp_sess_resume_pair`),
 Details (D) and Leave (X, with a confirmation: leaving abandons the match).
 The panel underneath is untouched: it reappears unchanged when the link
@@ -255886,6 +255888,70 @@ by as many lines as the panel shows. Each page shows only its own section:
 the last Rules page ends at `#KEYS`, paging stops at the last page rather
 than wrapping, and Prev is greyed on the first page and Next on the last
 (so a page opens focused on Next, and Enter reads on).
+
+#### 131.9.12 The uplifted panels
+
+The landing, the auction, the trade review, the link-lost panel and the turn
+bar are drawn after the concept boards (`1-board.png`, `2-auction.png`,
+`3-trade.png`, `5-linklost.png`; the uplift's U11) as game-kit SCENES
+(§133.6), records in `BPART2.BIN` compiled from `apps/byteopoly/art/
+scenes-pana.txt`: panel n is scene `BP_A2_SC_PANA + 2n` on FULL, the next ID
+on MID and `BP_A2_SC_PANAC + n` on COMPACT (n = 0 landing, 1 auction, 2 trade
+review, 3 link lost, 4 turn bar; 420..429 and 455..459). A scene is the
+panel's whole static layout - its frames, title bars, wells, banners, rules,
+pictures and words - and the C only fills SLOTS and draws once:
+`ovl_gp_sbeg` empties them, the panel's function fills them, `ovl_gp_scene`
+calls `gk_scene` and takes the panel's rects back with `gk_scene_rect`. Every
+scene keeps one set of conventions:
+
+- `%0` is always 0, so `if %0` marks a PLACEHOLDER: an op never drawn whose
+  rect the C reads. `#200` is the panel (damage, clicks), `#201` the status
+  line (a refusal's damage starts there), `#202` the BUTTON ROW, and the
+  auction's `#1`, `#45`, `#43` the editor and its `-` / `+`, the trade's
+  `#2`..`#5` its list areas.
+- `$1` is the status line (a refusal, "Sent - waiting ...", "Waiting for NAME
+  on the other PC") and `%1` says it has something to say. Money slots carry
+  " cr". The strings are pooled in the hint entries' buffer (`gp_hb`), free
+  while a panel draws because the face asks for each hint entry afresh and
+  uses it at once; a string that does not fit is cut, never overflowing.
+- The BUTTONS are 131.9.7's, from `gp_spec`, drawn by the C along `#202`:
+  the row's buttons share it evenly, 4 px apart, as on the boards; the rects drawn
+  recorded as the mouse targets. So a button, its key, its hint entry and
+  its click are still one table, and a confirmation (Yes, leave / No) or a
+  missing button (a seat on the other PC) needs no scene of its own.
+
+What each shows (all facts the engine and the session hold; nothing is
+drawn that the game does not know):
+
+| panel | FULL / MID | COMPACT |
+|---|---|---|
+| landing | a BOTTOM panel (`bp_pn_covers()` 0, DECISIONS D9: the bottom 96 / 64 rows of the centre, `bp_face_barh()`, the idle art above it): the LARGE picture in a sunken well with its collection's colour bar, a divider, "You landed on NAME", Price, Rent ("follows the dice" for a utility; the status line takes the Rent line while it has something to say), [B] Buy, [A] Auction | the whole centre: "BUY NAME?", price, rent, "Decline puts it up for auction." |
+| auction | "AUCTION • NAME"; the picture, colour bar and list price; a HIGH BID box (the bid in the big font in a white well, the bidder's token and name, or "no bid yet"); a yellow banner "BIDDER • YOUR BID" (or "• BIDDING" for a seat on the other PC) with the bidder's token; for a bidder played here the editor `[-] amount [+]`, "Minimum N • You have N", [B] Bid N, [P] Pass, "If you win: N left"; "Passing leaves this auction." or who passed for want of a raise; the status line | the same facts in lines, the editor one row |
+| trade review | "TRADE OFFER • FROM TO TO"; a banner "TO • YOUR DECISION" (or "WAITING FOR TO"); two "X GIVES" boxes with the trade arrows between: a side giving ONE computer and nothing else shows the boards' card (picture, colour bar, name, value, mortgage, upgrades - the PLUS box takes the last line when that side pays cash); any other side is its short names wrapped in the box (`*` mortgaged, the disks; "nothing"); "PLUS N cr" with the coins in the paying side; AFTER THIS TRADE: each side's cash before -> after ("short" when it cannot pay) and the collection the trade completes, with its pictures; the lock line "Offer locked • Both sides shown above" (the status line takes it while it has something to say); [A] Accept, [R] Reject, and [C] Cancel for the proposer | the boxes as two framed lists, the cash lines, "Offer locked. TO decides." |
+| link lost | the title (CABLE LINK LOST, RESYNCING, BOARDS DIFFER); the two PCs, their plugs and the beacon around a "Game paused" pill ("Input stopped" when the boards differ); "Waiting for NAME's PC..." (the first live seat not played here; the link's message when the boards differ); LAST ACTION RETAINED: the active seat's token, the newest log line, and a yellow line saying whether a move of this PC is still waiting for the other to confirm (`bp_sess_busy`); LAST PAIRED SAVE: `bp_sess_pair`'s state - "Saved on both PCs" with the two ticked disks, "Saving or resuming...", "Failed - the old pair stands", or "None made this session"; [R] Retry Link, [L] Load Pair, [D] Details (the diagnostics panel), [X] Leave; "Reconnect to continue this turn." | the same in lines |
+| turn bar | a BOTTOM panel: the mover's token, "NAME: roll the dice" (or the status line), [Space] Roll, [E] End Turn, [T] Trade, [M] Manage | the same, without the token |
+
+Deliberate departures from the boards, and why: the concept's "[D] Details"
+on the trade review is not drawn (no trade detail view exists; Details is
+the link panel's, where it opens the diagnostics); the link panel's paired
+save shows its state, not "Round 6 • Turn 23" or "unsaved moves" (the session
+does not record the round of the last paired save, nor whether moves were
+made since), and the last action's picture is the active seat's token (the
+log line is text; which computer it names is not kept); the turn bar keeps
+Manage (the concept's idle board has no bar to copy); "->" stands for the
+boards' arrow (the fonts have no arrow glyph); the pictures are the art's
+LARGE 48x32, smaller than the boards' renders; buttons inside panels are
+the kit's FLAT buttons (no drop shadow), as on the boards.
+
+Damage keeps 131.9.7's discipline: a bid step names the editor (`#1`) and
+the rows under it, a focus move the button row, a refusal the status line
+(`#201`); a new panel kind dirties the centre. The landing and the turn bar
+are bottom panels, so a roll that lands on a property repaints only the
+centre's bottom bar region, the idle art staying. Costs (against the uplift
+tip, lane report): overlay +97 bytes, resident image about +70 (the
+overlay's function table and the collection colours) and bss +78 (the slot
+arrays); the scene records 6,059 bytes of `BPART2.BIN`; the panel text 598
+bytes smaller than before (the code-drawn bodies' strings are gone).
 
 ### 131.10 Art
 
