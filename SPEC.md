@@ -255807,9 +255807,9 @@ the core in the same assembly:
     %include "cc/gk.inc"
 
 A package `#include`s `cc/gk.h`. The kit adds no kernel facility, no OSAPI
-slot and no heap claim: its bss is 160 bytes (a 64-byte text buffer, the
+slot and no heap claim: its bss is 158 bytes (a 64-byte text buffer, the
 scene interpreter's ten arguments, the current rect and the widgets'
-scratch), its data 139 bytes (the two role tables, the ring sets, the button
+scratch), its data 137 bytes (the two role tables, the ring sets, the button
 states and the scene op table). 132.9 gives the code, routine by routine.
 
 Every `gk_` drawing call is legal only while a strip is composed (between
@@ -255827,8 +255827,9 @@ label) is not the double draw §6.6 forbids. Coordinates are screen pixels,
 Every colour the kit draws with comes from the ROLE TABLE (16 bytes, an EGA
 index per role), except a label colour a caller passes and the drawn check
 mark (green 2, black on 1bpp). `gk_init(bpp)` picks the kit's colour table
-when `bpp >= 4`, else the mono one; `gk_theme(t)` swaps in a caller's static
-table (read in place), `gk_theme(0)` restores the default `gk_init` chose.
+on a colour display, else the mono one, reading the plane count `bx_setup`
+took (its bpp is this bpp); `gk_theme(t)` swaps in a caller's static table
+(read in place), `gk_theme(0)` restores that default.
 `gk_role(r)` answers a role's colour now, for a package drawing its own
 pieces in the same theme. Until `gk_init` runs the colour table is in force.
 
@@ -255837,11 +255838,11 @@ pieces in the same theme. Until `gk_init` runs the colour table is in force.
 | `GK_R_OUTLINE` 0 | black 0 | 0 | the 1 px outline; the emboss under a title |
 | `GK_R_FACE` 1 | light grey 7 | 15 | panel, button and key-cap side faces |
 | `GK_R_LIGHT` 2 | white 15 | 15 | the lit (top/left) edge |
-| `GK_R_SHADE` 3 | dark grey 8 | 0 | the shaded (bottom/right) edge, key-cap sides |
+| `GK_R_SHADE` 3 | dark grey 8 | 0 | the shaded (bottom/right) edge; with FACE, the key-cap skirt's checker |
 | `GK_R_FIELD` 4 | white 15 | 15 | check and radio wells, sunken fields |
 | `GK_R_TEXT` 5 | black 0 | 0 | labels on face and field, the radio dot, the drop-down triangle |
 | `GK_R_TITLE` 6 | blue 1 | 0 | title-bar ground |
-| `GK_R_TITLELT` 7 | light blue 9 | 8 | the title bar's top line |
+| `GK_R_TITLELT` 7 | light blue 9 | 8 | the title bar's top line and left column |
 | `GK_R_TITLETX` 8 | white 15 | 15 | title text |
 | `GK_R_FOCUS` 9 | blue 1 | 0 | a focused button's face |
 | `GK_R_FOCUSTX` 10 | white 15 | 15 | its label |
@@ -255855,7 +255856,7 @@ On 1bpp, white surfaces carry black edges, so a bevel reads as a black
 outline with a heavier black bottom/right, the Mac System 1 convention; a
 highlight is INVERSE (black ground, white text), because yellow is white
 there and would vanish into a white face; title bars are black with a 50%
-top line. The core's 1bpp text rule (§130.6.2: white only where the colour
+top line; a key-cap skirt is a 50% checker. The core's 1bpp text rule (§130.6.2: white only where the colour
 is all lit) is why every mono text role is 0 or 15.
 
 ### 132.3 The 3D look
@@ -255864,23 +255865,26 @@ Light comes from the top left. Every surface is a stack of RINGS drawn
 outermost first, each one pixel wide: a ring's top row and left column take
 its first role, its bottom row and right column its second (so the
 top-right and bottom-left corner pixels take the second), and `-` draws no
-side. After the rings the face fill covers what is left inside.
+side. The face fill is laid FIRST, over everything inside the outermost
+ring, and the rings over it, so a side a ring does not draw and a corner it
+cuts show the face, never what was under the box.
 
 | style | rings, outermost first | inside from the edge |
 |---|---|---|
 | `GK_FLAT` 0 | OUTLINE/OUTLINE | 1 |
 | `GK_RAISED` 1 | OUTLINE/OUTLINE, LIGHT/SHADE | 2 |
-| `GK_RAISED2` 2 | OUTLINE/OUTLINE, LIGHT/SHADE, -/SHADE | 3 (light 1 px, shade 2 px) |
+| `GK_RAISED2` 2 | OUTLINE/OUTLINE, LIGHT/SHADE, LIGHT/SHADE | 3 (light 2 px, shade 2 px: the concept boards' moulded edge) |
 | `GK_SUNKEN` 3 | SHADE/LIGHT | 1 |
 | `GK_SUNKEN2` 4 | SHADE/LIGHT, OUTLINE/FACE | 2 |
 | `GK_ETCHED` 5 | SHADE/LIGHT, LIGHT/SHADE | 2 |
 | (pressed) 6 | OUTLINE/OUTLINE, SHADE/- | 2 |
-| (default) 7 | OUTLINE/OUTLINE, OUTLINE/OUTLINE, LIGHT/SHADE, -/SHADE | 4 |
+| (default) 7 | OUTLINE/OUTLINE, OUTLINE/OUTLINE, LIGHT/SHADE, LIGHT/SHADE | 4 |
 
 Styles 6 and 7 are the kit's own (a pressed button, a default button's
 extra ring); a caller may pass them to `gk_box` too. `GK_ROUND` leaves the
-four corner pixels of the OUTERMOST ring undrawn, so whatever is beneath
-shows through and the corner reads as a one-pixel bevel. `GK_SHADOW` casts
+four corner pixels of the first TWO rings undrawn: the outline's corners
+show what is beneath the box, the bevel's show the face, and the corner
+reads as moulded, two pixels round. `GK_SHADOW` casts
 `GK_DROPW` (3) px of DROP right and down, outside the rect: the strip
 `(x+w .. x+w+2, y+3 .. y+h+2)` and the strip `(x+3 .. x+w-1, y+h .. y+h+2)`.
 
@@ -255913,6 +255917,19 @@ the strip). The same door in the FACE colour greys a disabled label on
 - `gk_textbox(x,y,w,h,...)`: the same, its top row at
   `y + (h - fontheight) / 2`.
 
+**Text handles.** Every `const char *` the kit takes is read in exactly
+two places, `gk_tdo` (every label and text call, which copies it to measure
+and cut it) and the scene's `$n` insertion into a literal. Assembled with
+`BX_ART2` (Byteopoly, SPEC.md 131.10.7) both pass it through the core's
+`bx_hstr` first, so a TEXT HANDLE (1000h-1FFFh) is drawn as its record's
+line and a DS string as itself; the kit then draws only its own copy, with
+`bx_text`, so a widget, a slot or a scene literal may be either. The copy
+lives in the kit's buffer, so a handle's ring slot is not held past the
+call. Under `BX_ART2` a DS string the kit is given must not lie at
+1000h-1FFFh, where it would read as a handle; the kit's own buffer is in
+the package's bss, past its image. Without `BX_ART2` the strings are DS
+strings and nothing is resolved.
+
 ### 132.5 Widgets
 
 All are built from the rings, the door and the text above; heights are the
@@ -255920,15 +255937,15 @@ caller's, and 132.9 gives the ones the WIN16 faces want.
 
 | widget | drawn as |
 |---|---|
-| `gk_panel(x,y,w,h,bar,title,font,style)` | `gk_box(style, FACE)`; with `bar` > 0 a `gk_titlebar` one pixel inside the rings, `(xi+1, yi+1, wi-2, bar)`, title centred. Answers the first row under the bar, `yi + bar + 2` (`yi`, the inside's top, with no bar) |
-| `gk_titlebar(x,y,w,h,s,font,flags)` | TITLE fill, a TITLELT top row, `s` embossed and cut to fit in TITLETX; `flags` is the alignment, `GK_LEFT` indenting 6 px |
+| `gk_panel(x,y,w,h,bar,title,font,style)` | `gk_box(style, FACE)`, where a FLAT or RAISED ring set becomes `GK_RAISED2 \| GK_ROUND` (the boards' panel; SUNKEN, SUNKEN2, ETCHED and the flags are kept); with `bar` > 0 a `gk_titlebar` one pixel inside the rings, `(xi+1, yi+1, wi-2, bar)` (`(x+4, y+4, w-8, bar)` in the thick edge), title centred. Answers the first row under the bar, `yi + bar + 2` (`y + bar + 5` in the thick edge; `yi`, the inside's top, with no bar) |
+| `gk_titlebar(x,y,w,h,s,font,flags)` | one ring, TITLELT top/left (the light line over the bar) and OUTLINE bottom/right (the dark line under it), TITLE inside; `s` embossed and cut to fit in TITLETX inside the ring; `flags` is the alignment, `GK_LEFT` indenting 6 px from the ring |
 | `gk_button(...,state)` | `GK_RAISED2 \| GK_ROUND \| GK_SHADOW` (DEFAULT: style 7; PRESSED: style 6, no shadow, label 1 px down-right), label centred and cut to fit in the inside. Faces and labels per state: NORMAL, DEFAULT and PRESSED FACE/TEXT, FOCUS FOCUS/FOCUSTX, HILITE HILITE/HILITETX, DISABLED FACE/DISABLED plus the 1bpp screen door over the inside |
-| `gk_keycap(x,y,w,h,label,font)` | an OUTLINE ring (round), SHADE inside; FACE over the upper-left body `(x+1, y+1 .. x+w-4, y+h-2-s)`, KEY over the top face `(x+2, y+1 .. x+w-5, y+h-3-s)` with `s = max(2, h / 4)` the cap's front: a light left side, a 2 px shaded right side, an `s` px shaded front; label centred and cut to fit on the top face in TEXT |
+| `gk_keycap(x,y,w,h,label,font)` | an OUTLINE ring (round), inside it the SKIRT: SHADE with a FACE screen door over it (a mid-grey checker); FACE over the upper-left body `(x+1, y+1 .. x+w-5, y+h-2-s)`, KEY over the top face `(x+2, y+1 .. x+w-6, y+h-3-s)` with `s = max(3, h / 4)`: a light left side, a 3 px skirt on the right, an `s` px skirt in front; label centred and cut to fit on the top face in TEXT |
 | `gk_tab(...,active)` | a button face without its bottom edge (the box runs 3 px past `y+h` and the strip is cut at `y+h`), no shadow; active: HILITE face, 2 px taller (from `y-2`) |
 | `gk_check(x,y,size,on,tick)` | style 6 over FIELD; on: the art sprite `tick` (when `tick` > 0 and present) centred on the box, else a drawn tick of 2x2 dots in green 2: `s/2 - 2` of them down-right from `(x+s/4, y+s/2-1)`, then up-right from two rows above the last to `x+s-3`, `s` = size |
 | `gk_radio(x,y,size,on)` | a disc of OUTLINE `size` across, a FIELD disc 2 smaller inside, on: a TEXT disc `size - 6` across; a disc row spans the columns whose centres lie within `size/2` of the disc's centre |
 | `gk_drop(x,y,w,h,label,font)` | `GK_RAISED2 \| GK_ROUND` over FACE; label left at `x+4`, cut at `x+w-h-4`; a TEXT down-triangle in the `h/2`-square at `(x+w-h+h/4, y+h/4)` |
-| `gk_banner(x,y,w,h,s,font,fill)` | `GK_RAISED \| GK_ROUND` over `fill` (`-1`: HILITE), `s` centred in HILITETX |
+| `gk_banner(x,y,w,h,s,font,fill)` | `GK_RAISED \| GK_ROUND` over `fill`, `s` centred and cut to fit in TEXT; `fill` -1 is HILITE with HILITETX |
 | `gk_arrow(x,y,w,h,dir,colour)` | a solid triangle centred in the box, apex toward `dir`: `n = min(along, (across + 1) / 2)` lines, line k (from the base) `2(n-1-k)+1` px long, so the base is odd and the apex one pixel |
 | `gk_sprshadow(x,y,id,d)` | the sprite's SILHOUETTE as a screen door in DROP at `(x+d, y+d)` (each run of non-transparent pixels on a row one door span), then the sprite. Answers its width, 0 absent |
 
@@ -256043,27 +256060,28 @@ lane's rows (132.8) follow these.
 
 | routines | bytes |
 |---|---|
-| roles: `gk_init`, `gk_theme`, `gk_role`, `gk_rc`, `gk_rc2` | 74 |
+| roles: `gk_init`, `gk_theme`, `gk_role`, `gk_rc`, `gk_rc2` | 66 |
 | the current rect and fills: `gk_ld`, `gk_enter`, `gk_setr`, `gk_setxywh`, `gk_setsq`, `gk_inset`, `gk_fill`, `gk_fillro` | 113 |
 | the screen door and shadows: `gk_door` (84), `gk_shad`, `gk_shadow` | 132 |
-| rings and boxes: `gk_ring` (84), `gk_boxr` (68), `gk_box` | 166 |
+| rings and boxes: `gk_ring` (84), `gk_boxr` (82), `gk_box` | 180 |
 | `gk_hline`, `gk_vline` | 50 |
-| text: `gk_tdo` (148), `gk_lab`, `gk_text`, `gk_textbox`, `gk_bxt`, `gk_tail` | 275 |
-| `gk_panel`, `gk_titlebar` | 132 |
+| text: `gk_tdo` (140), `gk_lab`, `gk_text`, `gk_textbox`, `gk_bxt`, `gk_tail` | 267 |
+| `gk_panel`, `gk_titlebar` | 140 |
 | `gk_button`, `gk_tab` (`gk_btn` 97) | 169 |
-| `gk_keycap` | 71 |
+| `gk_keycap` | 80 |
 | `gk_drop` | 67 |
 | `gk_banner` | 31 |
-| `gk_check` and its drawn tick | 176 |
+| `gk_check` and its drawn tick | 157 |
 | `gk_radio` and its discs (`gk_disc` 103) | 157 |
 | `gk_arrow` (`gk_arw` 126) | 149 |
-| `gk_sprshadow` | 225 |
+| `gk_sprshadow` | 221 |
 | `gk_scene` (303) and its literal and header readers | 392 |
 | `gk_scene_size`, `gk_scene_rect` | 71 |
-| **code** | **2,450** |
-| data: role tables 32, ring sets 43, button states 18, op table 42, theme pointers 4 | 139 |
-| **image total** | **2,589** |
-| bss | 160 |
+| **code** | **2,442** |
+| data: role tables 32, ring sets 43, button states 18, op table 42, the theme pointer 2 | 137 |
+| **image total** | **2,579** |
+| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 132.4): Byteopoly's price | **2,599** |
+| bss | 158 |
 
 **Per strip.** `gk_scene` reads a skipped op's length, number and two row
 words and compares them with the strip: about 20 instructions, a few hundred
@@ -256081,8 +256099,8 @@ fill is clipped by the core, `gk_door` walks only the strip's rows, and
 - `GK_SHADOW`, and every button but a pressed one, needs 3 px right and
   below; an active tab rises 2 px above its `y`;
 - a title bar wants the font's rows + 4 or more (`dlg13`: 18, `sys16`: 22);
-  `gk_panel` puts it at `(x+3, y+3)` in a RAISED panel and answers
-  `y + bar + 4`;
+  its text sits inside its 1 px ring. `gk_panel` (the thick edge) puts it
+  at `(x+4, y+4, w-8, bar)` and answers `y + bar + 5`;
 - a button or drop-down wants the font's rows + 7 or more (`dlg13`: 20-22,
   `dlg10`: 17); a key cap the font's rows + `h/4` + 4 (`sys16` caps 28-30
-  tall, `dlg10` caps 20-22).
+  tall, `dlg10` caps 20-22; the skirt is 3 px right and `max(3, h/4)` below).
