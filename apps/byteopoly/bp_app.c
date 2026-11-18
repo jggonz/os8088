@@ -128,9 +128,9 @@ static void ovl_bp_ap_menus(void)
     bp_ap_game[3] = ovl_bp_ap_it(bp_ap_s_psave, play && cab);
     bp_ap_game[4] = ovl_bp_ap_it(bp_ap_s_resume, bp_ap_mode == BP_M_LOBBY && bp_link_state() == BP_L_LOBBY);
     bp_ap_game[5] = bp_ap_s_close;
-    bp_ap_coll[0] = ovl_bp_ap_it(bp_ap_s_coll, play);
-    bp_ap_coll[1] = ovl_bp_ap_it(bp_ap_s_stand, g && bp_game.status != BP_ST_EMPTY);
-    bp_ap_coll[2] = ovl_bp_ap_it(bp_ap_s_prop, play && bp_can(&bp_game, bp_game.active, BP_C_PROPOSE, 0) == BP_OK);
+    bp_ap_coll[0] = ovl_bp_ap_it(bp_ap_s_prop, play && bp_can(&bp_game, bp_game.active, BP_C_PROPOSE, 0) == BP_OK);
+    bp_ap_coll[1] = ovl_bp_ap_it(bp_ap_s_coll, play);
+    bp_ap_coll[2] = ovl_bp_ap_it(bp_ap_s_stand, g && bp_game.status != BP_ST_EMPTY);
     bp_ap_opts[0] = bp_opt_sound ? "Sound: On" : "Sound: Off";
     bp_ap_opts[1] = bp_opt_music ? "Music: On" : "Music: Off";
     bp_ap_opts[2] = bp_opt_fast ? "Fast Animation: On" : "Fast Animation: Off";
@@ -319,7 +319,7 @@ static int ovl_bp_ap_cmd(int item, int menu, void *win)
         else if (item == 4) ovl_bp_ap_report(bp_sess_resume_pair(), "Resume started");
         else if (item == 5) { if (ovl_bp_ap_close()) os88_wm_close(win); }
     } else if (bp_ap_mode == BP_M_GAME) {
-        if (menu == 1) bp_gp_open(item == 0 ? BP_GP_MANAGE : item == 1 ? BP_GP_STANDINGS : BP_GP_TRADE);
+        if (menu == 1) bp_gp_open(item == 0 ? BP_GP_TRADE : item == 1 ? BP_GP_MANAGE : BP_GP_STANDINGS);
         else if (menu == 3) bp_gp_open(item == 0 ? BP_GP_RULES : item == 1 ? BP_GP_KEYS : BP_GP_CHAT);
         else if (menu == 2 && item == 3) bp_gp_open(BP_GP_DIAG);
     }

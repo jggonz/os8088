@@ -255430,10 +255430,12 @@ Back and Esc leave the link.
 
 The bar holds `Byteopoly` and four menus. `menu_relayout` drops a cell that
 would reach `vid_clk_hx` (432 px on a 640 px adapter), and a title's cell is
-8 px a character plus 16, after the 128 px name cell: Game, Collection,
-Options, Help end at 392. The concept boards' fifth title, Trade, does not
-fit beside "Collection" - five cells end at 448 and the kernel drops Help -
-so Trade's one item lives in Collection (the uplift, §131.9.5's lane). About
+8 px a character plus 16, after the 128 px name cell (40 + 9 x 8 + 16):
+Game 48 + Collection 96 + Options 72 + Help 48 end at 128 + 264 = 392. **Do
+not add a fifth menu**: the concept boards' Trade (56) beside "Collection"
+ends at 448, past 432, and the kernel drops Help - Rules, Keys and Chat -
+on every 640 px adapter. So Trade's one item is Collection's first
+(uplift DECISIONS D5); T stays its key on the hint bar. About
 is the application menu's (`OSAPI_ABOUT_SET`), never a Help item. Items grey
 (`OS88_MENU_DIS`) where illegal and are re-evaluated by `bp_pn_sync` and on
 every mode change; Propose Trade follows `bp_can(BP_C_PROPOSE)` for the
@@ -255443,7 +255445,7 @@ active seat, Collection > My Collection needs a running match, and
 | menu | items |
 |---|---|
 | Game | New Game... / Load... F3 / Save... F2 / Paired Save / Resume Pair / Close |
-| Collection | My Collection... / Standings / Propose Trade... |
+| Collection | Propose Trade... / My Collection... / Standings |
 | Options | Sound: On|Off / Music: On|Off / Fast Animation: On|Off / Diagnostics |
 | Help | Rules F1 / Keys / Chat... |
 
