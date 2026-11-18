@@ -1475,7 +1475,7 @@ bx_tring: resb BX_TSLOT * BX_TSLOTS
 %endif
 bx_band: resw 1
 bx_bs: resw 1
-bx_srow: resb 68                   ; a 128-wide sprite row (64 bytes) and its 4 pad bytes (96-wide mascot, 120-wide LINKED overran the old 36)
+bx_srow: resb 36
 bx_sg: resb 5
 bx_sgn: resw 1
 bx_cap: resw 1
