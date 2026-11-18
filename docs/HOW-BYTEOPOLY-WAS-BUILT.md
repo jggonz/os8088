@@ -198,3 +198,59 @@ strings move out of the segment into text records in a second art part; the
 static layout of a screen becomes DATA (a "scene" record drawn by one
 interpreter) instead of code and literals; the widgets are written once in
 assembly as the game kit (SPEC.md 133), which any later C game can include.
+
+### How it was built: ten lanes, two phases
+
+The work went out to ten sub-agents, each in its own worktree with a file
+list it owned, and was merged into `feat/byteopoly-uplift` as each one
+finished. Phase 1 laid the floor: **kit** (the game kit's widgets and the
+scene interpreter, `apps/cc/gk.inc`), **prep** (strings out to text records,
+the second art part `BPART2.BIN`, the sidebar split into `bp_side.c`),
+**art** (45 new pictures from the boards, in the EGA palette), **rules** (the
+board re-ordered so prices rise clockwise from BOOT: PET 100, VIC-20 120,
+C64 140 ... 486DX2 420) and **sound** (a reusable FM player through
+SOUND.DRV with a PC-speaker fallback, four songs and twenty effects).
+Phase 2 drew the screens on that floor: **board**, **side**, **panels A**
+(landing, auction, trade review, link lost, the turn bar), **panels B**
+(every other centre panel) and **lobby** (New Game and the cable lobby).
+
+Prep's string move freed 5,676 resident bytes; the kit cost 2,617 of them
+back. Phase 2's screens were paid for mostly in scene records: the second
+art part ended near 55.7 KB of its 56 KB, the overlay at 64,908 of 65,024.
+
+**Bugs the lanes found in shared code, on the way:**
+
+- *The row buffer.* The band core's one-row sprite buffer held 64 pixels;
+  the 96-pixel mascot, the 72-pixel tilted cards and the 120-pixel linked
+  PCs overran it into the core's own variables. Board saw garbage after the
+  first strip, lobby and panels B a hang. Fixed under `BX_ART2` only, so
+  Breadboard XT assembles byte for byte as before; the art tool now refuses
+  a picture wider than 120.
+- *The stale AH.* A scene literal with two inserts ("$0 owes $1") drew
+  garbage for the second: `gk_lit` reloaded AL per character but kept AH from
+  the first insert. One `cbw`.
+- *The bullet.* The boards separate words with "•", which no font had; every
+  Byteopoly font now carries it as glyph 127, synthesized at build time.
+
+### The QA pass
+
+One pass in emulation over the merged head, driving a real game through
+MartyPC on the VGA XT, a CGA 5150 and a Hercules 5150 (the list, with
+shots, is kept outside the repo; the findings are below).
+
+| | found | fixed |
+|---|---|---|
+| QA-1 | on VGA no token was drawn on a corner, a deck or a charge cell, so a player on BOOT or REPAIR vanished | tokens drawn in that branch too |
+| QA-2 | the "Arrows" key cap was narrower than its label | caps sized to the label |
+| QA-3 | after Player 1 bought the TRS-80 the cash still read 1,500 | a *signature collision*: the repaint hash was linear, and the buy's cash and phase changes cancelled, so the box was never repainted. Both mixes are now `h*33 ^ v` |
+| QA-6 | on Hercules the handoff's name well had two edges | a flat frame under it |
+| QA-7 | the panels-B frames had a thin title bar in the dialog face, 6 px short of the room their layout left | one shared bar, full height, bold |
+| QA-8, QA-9 | "PC*" in the trade composer; the score rule cut off | the mortgage mark; a shorter rule |
+| QA-12 | every New Game keystroke repainted the whole centre: 32 M cycles, about 6.8 s on a 4.77 MHz XT | only the changed widgets: 4.3 M, about 0.9 s (MartyPC, measured by the lobby lane) |
+
+Deferred, with the reason: the "more" marks on the scrolling lists (QA-11),
+about 165 bytes of overlay with 114 left; and a dedicated Hercules lobby
+(QA-5), about 2 KB of an art part with 1.6 KB left - the Hercules lobby
+uses the compact layout. One finding was the instrument, not the game: the
+Hercules capture drops the leftmost 8 pixels on every screen, the desktop's
+own menu included.

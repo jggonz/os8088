@@ -81,3 +81,19 @@ byte budgets set from prep's measured relief.
 | sound | `apps/cc/gkmus.inc`, `tools/os88gkmus.py`, `art/music.txt`, `art/sfx.txt`, `art2.h` 384..399, `bp_app.c`'s sound block and Options menu (and the Assets -> Collection menu rename), a delimited block in `os88bpart.py`, SPEC.md 133.8 and 131.9.5 | bp_app.c outside those |
 
 Phase 2 ownership is set in its brief.
+
+## 4. QA run (U14)
+
+One pass in emulation on the integrated head (MartyPC: `os8088_xt_vga`,
+`os8088_5150_cga_gla`, `os8088_5150_herc_gla`), driving a real two-seat game:
+New Game, start, handoff, rolls, a landing, a buy, the turn bar, menus
+(Options > Music, Collection > Standings) and every panel through the lanes'
+looks. Findings and fixes are in the diary's *The QA pass*. Fixed and merged:
+QA-1, 2, 3, 6, 7, 8, 9, 12. Deferred with reasons: QA-5 (a MID lobby scene,
+~2 KB of BPART2 with 1.6 KB left), QA-11 (list more-marks, ~165 B of overlay
+with 114 left). Not a defect: QA-4 (the Hercules capture's left 8 px).
+
+Not seen on the glass in this run: the cable states over a real link (the
+side lane looked at them with a faked state; `byteopolylink` drives the real
+protocol in the final pass) and FULL on a 1bpp adapter (no 1bpp adapter
+reaches 640x418).
