@@ -255900,6 +255900,15 @@ dialog's default name, a question an alert shows while it is up - a ring
 slot would not outlive it), the board's names (`bp_board.c`), single characters, and the
 templates whose layout code indexes into (`ovl_msg`'s "Banker COM0 2400 rev ").
 
+**The bullet.** The concept boards separate words with a bullet
+("AUCTION • COMMODORE 64"), which no WIN16 strike has, so every Byteopoly font
+carries one more glyph, code 127: a 2 px (3 px from 12 rows) square dot centred
+on the face's x-height with 2 px either side, made by `os88bpart.py` and passed
+to the shared packer as an extra glyph (`os88bbart.pack_font(name, extra)`;
+without it the record is byte-identical, so Breadboard XT's art does not
+change). A `tx-*.txt` line or a scene literal writes it as `•` (or `\177`
+in a text file). Cost: 46 bytes of BPART.BIN.
+
 #### 131.10.8 The uplift's pictures
 
 The pictures of `art2.h` 256..383 are `apps/byteopoly/art/sprites2.txt`, the same
@@ -256253,6 +256262,9 @@ scene id, a record over 4,096 bytes, and anything after a `scene` with no
 emboss or tab overhang and the declared font height (24 for a font with no
 `fonth`, 8 for the kernel's, a sprite 255 rows); an op whose y or height
 comes from a slot is given every row.
+
+A literal may contain the bullet `•` (U+2022), stored as byte 127; a package
+whose fonts have no glyph 127 draws nothing for it (Byteopoly's do, 131.10.7).
 
 ### 133.8 Music and effects
 

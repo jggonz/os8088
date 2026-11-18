@@ -1249,6 +1249,8 @@ gk_lit:
     jz .e
     cmp al,20h
     jae .ch
+    cbw                             ; AH = 0: AL < 20h, and AH is stale (the
+                                    ; caller's, or the last insert's xchg)
     push si
     dec ax
     shl ax,1
