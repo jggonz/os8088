@@ -655,6 +655,16 @@ static void ovl_gp_brow(void)
  * BP_A2_SC_PANAC + n on COMPACT;
  * its dynamic text arrives through gp_sv (strings, pooled in gp_line after
  * the status line) and gp_iv (numbers). */
+/* consecutive tx lines are consecutive handles; the host's are literals */
+#ifdef BP_HOST
+static const char *const gp_hram[4] = { TP_RAM1, TP_RAM2, TP_RAM3, TP_RAM4 };
+static const char *const gp_hpair[4] = { TP_PAIR_NONE, TP_PAIR_BUSY, TP_PAIR_DONE, TP_PAIR_FAIL };
+#define GP_RAM(n) gp_hram[(n) - 1]
+#define GP_PAIR(p) gp_hpair[p]
+#else
+#define GP_RAM(n) (TP_RAM1 + (n) - 1)
+#define GP_PAIR(p) (TP_PAIR_NONE + (p))
+#endif
 #define GP_SC(n) (bp_layout == BP_LAY_COMPACT ? BP_A2_SC_PANAC + (n) : \
                   BP_A2_SC_PANA + 2 * (n) + (bp_layout == BP_LAY_MID))
 static const BPByte gp_gcol[BP_GROUPS] = {1, 2, 3, 4, 5, 8};    /* the face's collection colours */
@@ -932,7 +942,7 @@ static void ovl_gp_dtrade(void)
             ovl_gp_pw(15 + c, sp->price);
             gp_sv[17 + c] = bp_game.mortgaged[k] ? TP_MORTGAGED : TP_NO_MORTGAGE;
             n = bp_game.level[k];   /* RAM 1..4, Workshop: five handles in a row */
-            if (!j) gp_sv[19 + c] = n ? TP_RAM1 + n - 1 : TP_NO_UPGRADES;   /* else the PLUS box */
+            if (!j) gp_sv[19 + c] = n ? GP_RAM(n) : TP_NO_UPGRADES;   /* else the PLUS box */
         }
     }
     s = f; g = ovl_gp_tset(f, &bp_game.offer_get, &bp_game.offer_give);
@@ -1049,7 +1059,7 @@ static void ovl_gp_dpause(void)
     gp_sv[6] = bp_sess_busy() ? TP_WAIT_CONFIRM : TP_NOTHING_WAITING;
     pr = bp_sess_pair() & 3;
     gp_iv[2] = pr == BP_PAIR_DONE;
-    gp_sv[7] = TP_PAIR_NONE + pr;   /* four handles in BP_PAIR_* order */
+    gp_sv[7] = GP_PAIR(pr);   /* four handles in BP_PAIR_* order */
     ovl_gp_scene(3);
 }
 /* a list's "more" marks (131.9.7): ^ rows hidden above, v below */
