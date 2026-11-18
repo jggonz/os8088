@@ -392,10 +392,14 @@ static void fc_logbox(void)
 }
 
 /* ---- signatures of the sidebar's sections ------------------------------- */
+/* h * 33 ^ v. bp_face.c's fc_mix is a rotate-and-add, linear: a P1 buy of TRS-80
+ * (cash -160, phase +1) cancelled to the same 16 bits and the cash well never
+ * repainted (QA-3). The xor makes the sections' signatures non-linear. */
+static unsigned sd_mix(unsigned h, unsigned v) { return ((h << 5) + h) ^ v; }
 static unsigned fc_hb(unsigned h, const void *p, int n)
 {
     const BPByte *q;
-    for (q = (const BPByte *)p; n > 0; n--) h = fc_mix(h, *q++);
+    for (q = (const BPByte *)p; n > 0; n--) h = sd_mix(h, *q++);
     return h;
 }
 static unsigned fc_sigplayers(void)
@@ -403,9 +407,9 @@ static unsigned fc_sigplayers(void)
     unsigned h;
     h = fc_live() ? 7 : 3;
     if (!fc_live()) return h;
-    h = fc_mix(fc_mix(fc_mix(h, bp_game.round), bp_game.active * 4 + bp_game.status), bp_game.phase);
+    h = sd_mix(sd_mix(sd_mix(h, bp_game.round), bp_game.active * 4 + bp_game.status), bp_game.phase);
     h = fc_hb(h, &bp_game.auc_space, 5);                /* the auction: space, open, passed, turn, high */
-    h = fc_mix(h, bp_game.auc_bid.lo ^ bp_game.auc_bid.hi);
+    h = sd_mix(h, bp_game.auc_bid.lo ^ bp_game.auc_bid.hi);
     h = fc_hb(h, bp_game.name, sizeof(bp_game.name) + 3 * BP_SEATS);    /* names, tokens, machines, alive */
     h = fc_hb(h, bp_game.cash, sizeof(bp_game.cash));
     return fc_hb(h, bp_game.detained, BP_SEATS);
@@ -414,17 +418,17 @@ static unsigned fc_sigplayers(void)
 static unsigned sd_sigl(unsigned h)
 {
     const char *m;
-    h = fc_mix(fc_mix(fc_mix(h, bp_link_state()), bp_sess_busy()), bp_ck_port() * 4 + bp_mode);
-    h = fc_mix(h, bp_sess_pair() * 4 + sd_lost());
-    if (sd_lost()) for (m = bx_str(bp_link_msg()); *m; m++) h = fc_mix(h, *m);
+    h = sd_mix(sd_mix(sd_mix(h, bp_link_state()), bp_sess_busy()), bp_ck_port() * 4 + bp_mode);
+    h = sd_mix(h, bp_sess_pair() * 4 + sd_lost());
+    if (sd_lost()) for (m = bx_str(bp_link_msg()); *m; m++) h = sd_mix(h, *m);
     return h;
 }
 static unsigned fc_sigdetails(void)
 {
     unsigned h;
-    h = fc_mix(bp_sel, fc_live());
+    h = sd_mix(bp_sel, fc_live());
     if (!fc_live()) return h;
-    h = fc_mix(fc_mix(h, bp_game.phase), bp_game.auc_space);
+    h = sd_mix(sd_mix(h, bp_game.phase), bp_game.auc_space);
     h = fc_hb(h, bp_game.owner, 3 * BP_PROPS);          /* owner, level, mortgaged */
     h = fc_hb(h, bp_game.name, sizeof(bp_game.name));
     return bp_mode == BP_MODE_LOCAL ? h : sd_sigl(h);
@@ -433,9 +437,9 @@ static unsigned fc_siglink(void)
 {
     unsigned h;
     h = sd_sigl(fc_live());
-    if (bp_layout == BP_LAY_COMPACT) return fc_mix(h, bp_game.round);     /* its one line: round, state */
+    if (bp_layout == BP_LAY_COMPACT) return sd_mix(h, bp_game.round);     /* its one line: round, state */
     if (!fc_live()) return h;
-    return fc_hb(fc_mix(h, bp_game.active), bp_game.owner, BP_PROPS);
+    return fc_hb(sd_mix(h, bp_game.active), bp_game.owner, BP_PROPS);
 }
 /* ---- the log ------------------------------------------------------------ */
 void bp_log_add(const char *line)
