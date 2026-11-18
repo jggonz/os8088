@@ -34,4 +34,5 @@
 %include "breadxt/draw.inc"
 %include "byteopoly/bp_cable.inc"        ; link lane: the cable bridge
 %include "byteopoly/bp_app.inc"          ; app lane: the alert bridge
+%include "cc/gkmus.inc"                  ; sound lane: the kit's music and effects (132.8)
 CC_IMAGE_END
