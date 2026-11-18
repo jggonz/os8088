@@ -9,6 +9,7 @@
  * is repainted only when its signature (a hash of every input it draws)
  * changed, or when it was dirtied with BP_D_FORCE. */
 #include "art.h"
+#include "gk.h"                          /* gk_*: the game kit (SPEC.md 132) */
 
 int bx_rows(int x, int y, int w, int h);
 void bx_new(int x, int y, int w, int h, int colour);
@@ -220,6 +221,7 @@ int bp_face_init(void *win, unsigned artseg, unsigned bandseg, unsigned bandcap,
     fc_gr = bp_mono ? 15 : 7;
     if (bandseg) bx_setup(bandseg, 0, bandcap, artseg, bpp >= 4 ? 4 : 1);
     else bx_setup(0, fallback, sizeof(fallback), artseg, bpp >= 4 ? 4 : 1);
+    gk_init(bpp);                       /* the kit's role table: colour, or mono under 4 bpp */
     fc_dirty = BP_D_ALL;
     fc_ready = 0;
     bp_sel = 0;

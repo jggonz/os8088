@@ -35,6 +35,7 @@
 %define BX_ART2                     ; art IDs 256.. in BPART2.BIN, indexed text,
 %define BX_TXID 460                 ; text handles from BP_A2_TX_APP (131.10.7)
 %include "breadxt/draw.inc"
+%include "cc/gk.inc"                     ; kit lane: the 3D widgets and scenes (SPEC.md 132)
 %include "byteopoly/bp_cable.inc"        ; link lane: the cable bridge
 %include "byteopoly/bp_app.inc"          ; app lane: the alert bridge
 %include "cc/gkmus.inc"                  ; sound lane: the kit's music and effects (132.8)
