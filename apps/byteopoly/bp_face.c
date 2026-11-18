@@ -88,6 +88,7 @@ static unsigned fc_mix(unsigned h, unsigned v) { return (h << 3) + (h >> 13) + v
 static char *fc_dec(unsigned v) { return os88_utoa(v, fc_num); }
 static int fc_ap(char *d, int n, const char *s)
 {
+    s = bx_str(s);
     while (*s && n < 46) d[n++] = *s++;
     d[n] = 0;
     return n;
@@ -104,7 +105,7 @@ static const char *fc_cut(int font, int maxw)
 static const char *fc_fits(const char *s, int font, int maxw)
 {
     if (bx_twidth(s, font) <= maxw) return s;
-    os88_strcpy(fc_fit, s, sizeof(fc_fit));
+    os88_strcpy(fc_fit, bx_str(s), sizeof(fc_fit));
     return fc_cut(font, maxw);
 }
 /* a cell's short name: too wide, its tail goes lower case ("E-waste",
@@ -390,8 +391,7 @@ static void fc_lvl(int xr, int y, int lvl, int mw)
     unsigned z;
     int id, i, pw, ph, cols;
     id = lvl >= BP_MAX_LEVEL ? BP_A_WORKSHOP : BP_A_RAM;
-    z = bx_size(id);
-    if (!z) { fc_pips(xr, y, lvl); return; }
+    z = bx_size(id);                                    /* the art is required (131.10.7) */
     pw = z & 255; ph = z >> 8;
     if (lvl >= BP_MAX_LEVEL) { bx_spr(xr - pw + 1, y, id); return; }
     cols = mw / (pw + 1);
@@ -442,11 +442,7 @@ static void fc_cell(int s)
         else if (prop == BP_NOBODY) ovl_fc_special(sp, s, x, sy, nw, ah);
         if (lvl) fc_lvl(x2 - 3, sy + 1, lvl, id >= 0 ? (cw - fc_pw) / 2 - 3 : 20);
         if (mort) {                                     /* the left margin, top of the picture row */
-            if (bx_size(BP_A_MORTGAGE)) bx_spr(x + 3, sy + 1, fc_mono(BP_A_MORTGAGE));
-            else {
-                fc_rect(x + 3, sy + 1, 9, 9, 0);
-                bx_text(x + 4, sy + 1, "M", 15, BP_F_TEXT08);
-            }
+            bx_spr(x + 3, sy + 1, fc_mono(BP_A_MORTGAGE));
         }
         fc_tokens(x, y2 - 8, cw, s, 0);
         if (sel) {                                      /* a frame inside the edge, over the ground only */
@@ -491,15 +487,7 @@ static unsigned fc_sigcell(int s)
 }
 
 /* ---- the centre --------------------------------------------------------- */
-static void ovl_fc_die(int x, int y, int sz, int n)
-{
-    int id;
-    id = BP_A_DIE(n);
-    if (bx_size(id)) { bx_spr(x, y, id); return; }
-    fc_frame(x, y, sz, sz, 15);                     /* no art: the number in a box */
-    fc_num[0] = (char)('0' + n); fc_num[1] = 0;
-    fc_ctext(x, x + sz - 1, y + (sz - 8) / 2, fc_num, 0, BP_F_TEXT08);
-}
+static void ovl_fc_die(int x, int y, int n) { bx_spr(x, y, BP_A_DIE(n)); }
 static void ovl_fc_centre(void)
 {
     static const char logo[] = "BYTEOPOLY";
@@ -543,14 +531,13 @@ static void ovl_fc_centre(void)
         }
     }
     if (fc_live() && bp_game.d1 > 0 && bp_game.d1 < 7 && bp_game.d2 > 0 && bp_game.d2 < 7) {
-        z = bx_size(BP_A_DIE1);
-        dsz = z ? (int)(z & 255) : bp_layout == BP_LAY_FULL ? 24 : bp_layout == BP_LAY_MID ? 20 : 14;
+        dsz = (int)(bx_size(BP_A_DIE1) & 255);
         if (bp_layout == BP_LAY_COMPACT) {
-            ovl_fc_die(x + 12, ly, dsz, bp_game.d1);
-            ovl_fc_die(x + w - 12 - dsz, ly, dsz, bp_game.d2);
+            ovl_fc_die(x + 12, ly, bp_game.d1);
+            ovl_fc_die(x + w - 12 - dsz, ly, bp_game.d2);
         } else {
-            ovl_fc_die(x + w / 2 - dsz - 6, ly + kh + 10, dsz, bp_game.d1);
-            ovl_fc_die(x + w / 2 + 6, ly + kh + 10, dsz, bp_game.d2);
+            ovl_fc_die(x + w / 2 - dsz - 6, ly + kh + 10, bp_game.d1);
+            ovl_fc_die(x + w / 2 + 6, ly + kh + 10, bp_game.d2);
         }
     }
 }
@@ -585,6 +572,7 @@ static void fc_hint(void)
     y = bp_r_hint.y + (bp_r_hint.h - fc_fh) / 2;
     bx_fill(bp_r_hint.x, bp_r_hint.y, x2, bp_r_hint.y + bp_r_hint.h - 1, 1);
     for (i = 0; (h = bp_pn_hint(i)) != 0; i++) {
+        h = bx_str(h);
         for (sp = h; *sp && *sp != ' '; sp++) ;
         n = sp - h;
         if (!*sp) { n = 0; sp = h; } else sp++;
@@ -681,7 +669,7 @@ static unsigned fc_sighint(void)
     const char *m;
     int i;
     h = 5;
-    for (i = 0; (m = bp_pn_hint(i)) != 0; i++) { h = fc_mix(h, i); for (; *m; m++) h = fc_mix(h, *m); }
+    for (i = 0; (m = bp_pn_hint(i)) != 0; i++) { h = fc_mix(h, i); for (m = bx_str(m); *m; m++) h = fc_mix(h, *m); }
     return h;
 }
 

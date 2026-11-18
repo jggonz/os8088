@@ -5,8 +5,8 @@
  * right after bp_face.c, which declares the entry points), so the fc_
  * helpers, state and rects are shared as before. */
 
-static const char *const fc_lnk[8] = {"Off", "Searching", "Peer found", "Bad peer",
-    "Lobby", "Linked", "PAUSED", "Resync"};
+static const char *const fc_lnk[8] = {TD_OFF, TD_SEARCHING, TD_PEER_FOUND, TD_BAD_PEER,
+    TD_LOBBY, TD_LINKED, TD_PAUSED, TD_RESYNC};
 static char fc_log[BP_LOG_LINES][BP_LOG_LEN + 1];
 
 /* the sidebar's four boxes tile the column exactly (SPEC.md 131.8.1) */
@@ -56,17 +56,17 @@ static void fc_players(void)
     x2 = r->x + r->w - 1;
     if (th) {
         if (fc_live()) {
-            fc_buf[0] = 0; i = fc_ap(fc_buf, 0, "Round ");
+            fc_buf[0] = 0; i = fc_ap(fc_buf, 0, TD_ROUND);
             fc_ap(fc_buf, i, fc_dec(ovl_fc_rnd()));
             fc_head(r, fc_buf, 0);
             if (bp_game.d1 && bp_game.rolled) {
                 fc_num[0] = (char)('0' + bp_game.d1); fc_num[1] = '+'; fc_num[2] = (char)('0' + bp_game.d2); fc_num[3] = 0;
                 fc_rtext(x2 - 5, r->y + 2, fc_num, 15, fc_fs);
             }
-        } else fc_head(r, "Players", 0);
+        } else fc_head(r, TD_PLAYERS, 0);
     } else fc_frame(r->x, r->y, r->w, r->h, fc_gr);
     y = r->y + th + 1;
-    if (!fc_live()) { fc_t(r->x + 6, y + 1, "No match - Game > New Game", 0, fc_fb); return; }
+    if (!fc_live()) { fc_t(r->x + 6, y + 1, TD_NO_MATCH_GAME, 0, fc_fb); return; }
     for (i = 0; i < bp_game.nseats && i < BP_SEATS; i++, y += rh) {
         hi = (bp_game.status == BP_ST_PLAY && bp_game.active == i && bp_game.alive[i]);
         if (hi) bx_fill(r->x + 1, y, x2 - 1, y + rh - 1, 1);
@@ -74,7 +74,7 @@ static void fc_players(void)
         fc_t(r->x + 15, y + 1, bp_game.name[i], hi ? 15 : 0, fc_fb);
         if (!bp_game.alive[i]) {
             fc_strike(r->x + 15, y + rh / 2, bx_twidth(bp_game.name[i], fc_fb));
-            fc_rtext(x2 - 4, y + 1, "OUT", 0, fc_fb);
+            fc_rtext(x2 - 4, y + 1, TD_OUT, 0, fc_fb);
         } else {
             fc_rtext(x2 - 4, y + 1, bp_u32_fmt(fc_fit, &bp_game.cash[i]), hi ? 15 : 0, fc_fb);
             if (bp_game.detained[i]) {
@@ -94,12 +94,12 @@ static void ovl_fc_kv(int x1, int x2, int y, const char *k, const char *v)
 static const char *ovl_fc_plain(int s)
 {
     switch (bp_space(s)->kind) {
-    case BP_K_BOOT: return "Start. Passing BOOT pays 200 cr.";
-    case BP_K_EVENT: return bp_space(s)->group ? "Draw a System Error card." : "Draw a Floppy Find card.";
-    case BP_K_CHARGE: return "Pay the bank.";
-    case BP_K_REPAIR: return "Visiting is safe; detained here.";
-    case BP_K_SWAP: return "A free rest. Nothing happens.";
-    case BP_K_CRASH: return "Go to the Repair Shop.";
+    case BP_K_BOOT: return TD_START_PASSING_BOOT;
+    case BP_K_EVENT: return bp_space(s)->group ? TD_DRAW_A_SYSTEM : TD_DRAW_A_FLOPPY;
+    case BP_K_CHARGE: return TD_PAY_THE_BANK;
+    case BP_K_REPAIR: return TD_VISITING_IS_SAFE;
+    case BP_K_SWAP: return TD_A_FREE_REST;
+    case BP_K_CRASH: return TD_GO_TO_THE;
     }
     return "";
 }
@@ -119,15 +119,15 @@ static const char *ovl_fc_cat(const char *a, const char *b, const char *c, const
 static const char *fc_lvltxt(int lvl, int mort)
 {
     static char b[8];
-    if (mort) return "Mortgaged";
-    if (lvl >= BP_MAX_LEVEL) return "Workshop";
+    if (mort) return TD_MORTGAGED;
+    if (lvl >= BP_MAX_LEVEL) return TD_WORKSHOP;
     b[0] = (char)('0' + lvl); os88_strcpy(b + 1, " RAM", 6);
     return b;
 }
 static void ovl_fc_details(void)
 {
     static const BPByte mul[5] = {5, 15, 30, 45, 60};
-    static const char *const rl[5] = {"1 RAM", "2 RAM", "3 RAM", "4 RAM", "Workshop"};
+    static const char *const rl[5] = {TD_1_RAM, TD_2_RAM, TD_3_RAM, TD_4_RAM, TD_WORKSHOP};
     const BPRect *r;
     const BPSpace *sp;
     const char *own;
@@ -139,7 +139,7 @@ static void ovl_fc_details(void)
     rh = fc_fh + 3;
     cp = bp_layout == BP_LAY_COMPACT;
     x1 = r->x + 5; x2 = r->x + r->w - 6;
-    own = "Bank"; lvl = 0; mort = 0;
+    own = TD_BANK; lvl = 0; mort = 0;
     if (prop != BP_NOBODY && fc_live() && bp_game.owner[prop] < bp_game.nseats) {
         own = bp_game.name[bp_game.owner[prop]]; lvl = bp_game.level[prop]; mort = bp_game.mortgaged[prop];
     }
@@ -155,15 +155,15 @@ static void ovl_fc_details(void)
         if (cp) { fc_t(x1, y, sp->name, 0, fc_fb); y += rh; }
         else if (id >= 0 && bx_size(id)) { bx_spr(r->x + (r->w - (int)(bx_size(id) & 255)) / 2, y, id); y += (int)(bx_size(id) >> 8) + 4; }
         fc_t(x1, y, fc_fits(ovl_fc_plain(bp_sel), fc_fb, r->w - 10), 0, fc_fb);
-        if (sp->kind == BP_K_CHARGE) fc_t(x1, y + rh, ovl_fc_cat("Charge: ", ovl_fc_nn(0, sp->price), " cr", ""), 0, fc_fb);
+        if (sp->kind == BP_K_CHARGE) fc_t(x1, y + rh, ovl_fc_cat(TD_CHARGE, ovl_fc_nn(0, sp->price), TD_CR, ""), 0, fc_fb);
         return;
     }
     base = sp->rent;
     if (cp) {                                           /* COMPACT: three lines */
-        fc_t(x1, y, ovl_fc_cat(sp->name, "  ", ovl_fc_nn(0, sp->price), " cr"), 0, fc_fb);
-        fc_t(x1, y + rh, sp->kind == BP_K_UTILITY ? "Rent 4x dice, 10x both" :
-                 ovl_fc_cat("Rent ", ovl_fc_nn(0, base), " set ", ovl_fc_nn(1, base * 2)), 0, fc_fb);
-        fc_t(x1, y + rh * 2, fc_fits(ovl_fc_cat("Owner ", own, " ", lvl || mort ? fc_lvltxt(lvl, mort) : ""), fc_fb, r->w - 10), 0, fc_fb);
+        fc_t(x1, y, ovl_fc_cat(sp->name, "  ", ovl_fc_nn(0, sp->price), TD_CR), 0, fc_fb);
+        fc_t(x1, y + rh, sp->kind == BP_K_UTILITY ? TD_RENT_4X_DICE :
+                 ovl_fc_cat(TD_RENT, ovl_fc_nn(0, base), TD_SET, ovl_fc_nn(1, base * 2)), 0, fc_fb);
+        fc_t(x1, y + rh * 2, fc_fits(ovl_fc_cat(TD_OWNER, own, " ", lvl || mort ? fc_lvltxt(lvl, mort) : ""), fc_fb, r->w - 10), 0, fc_fb);
         return;
     }
     id = bp_layout == BP_LAY_FULL ? BP_A_LARGE(prop) : -1;      /* top block; LARGE art to its right on FULL */
@@ -172,22 +172,22 @@ static void ovl_fc_details(void)
         bx_spr(x2 - (int)(bx_size(id) & 255) + 1, y, id);
         cw -= (int)(bx_size(id) & 255) + 4;
     }
-    ovl_fc_kv(x1, x1 + cw - 1, y, "Price", ovl_fc_cat(ovl_fc_nn(0, sp->price), " cr", "", ""));
+    ovl_fc_kv(x1, x1 + cw - 1, y, TD_PRICE, ovl_fc_cat(ovl_fc_nn(0, sp->price), TD_CR, "", ""));
     if (mort) bp_redeem_cost(bp_sel, &fc_u);
-    ovl_fc_kv(x1, x1 + cw - 1, y + rh, mort ? "Redeem" : "Mortgage",
-              ovl_fc_cat(mort ? bp_u32_fmt(fc_fit, &fc_u) : ovl_fc_nn(0, (unsigned)bp_mortgage_value(bp_sel)), " cr", "", ""));
-    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 2, "Owner", own);
-    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 3, "Level", sp->kind == BP_K_UTILITY ? (mort ? "Mortgaged" : "-") : fc_lvltxt(lvl, mort));
+    ovl_fc_kv(x1, x1 + cw - 1, y + rh, mort ? TD_REDEEM : TD_MORTGAGE,
+              ovl_fc_cat(mort ? bp_u32_fmt(fc_fit, &fc_u) : ovl_fc_nn(0, (unsigned)bp_mortgage_value(bp_sel)), TD_CR, "", ""));
+    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 2, TD_OWNER_2, own);
+    ovl_fc_kv(x1, x1 + cw - 1, y + rh * 3, TD_LEVEL, sp->kind == BP_K_UTILITY ? (mort ? TD_MORTGAGED : "-") : fc_lvltxt(lvl, mort));
     y += rh * 4 + 3;
     if (sp->kind == BP_K_UTILITY) {
-        fc_t(x1, y, "Rent: 4 x dice total,", 0, fc_fb);
-        fc_t(x1, y + rh, "10 x with both utilities.", 0, fc_fb);
+        fc_t(x1, y, TD_RENT_4_X, 0, fc_fb);
+        fc_t(x1, y + rh, TD_10_X_WITH, 0, fc_fb);
         return;
     }
     bx_fill(r->x + 1, y - 2, x2 + 4, y - 2, 0);         /* the rent schedule, two columns (131.2.3) */
     cw = (r->w - 10) / 2;
-    ovl_fc_kv(x1, x1 + cw - 6, y, "Base", ovl_fc_cat(ovl_fc_nn(0, base), "", "", ""));
-    ovl_fc_kv(x1 + cw + 4, x2, y, "Set", ovl_fc_cat(ovl_fc_nn(0, base * 2), "", "", ""));
+    ovl_fc_kv(x1, x1 + cw - 6, y, TD_BASE, ovl_fc_cat(ovl_fc_nn(0, base), "", "", ""));
+    ovl_fc_kv(x1 + cw + 4, x2, y, TD_SET_2, ovl_fc_cat(ovl_fc_nn(0, base * 2), "", "", ""));
     for (i = 0; i < 5; i++) {
         y += (i & 1) == 0 ? rh : 0;
         ovl_fc_kv(i == 4 ? x1 : x1 + (i & 1) * (cw + 4), i == 4 || (i & 1) ? x2 : x1 + cw - 6, y, rl[i],
@@ -208,9 +208,9 @@ static void fc_link(void)
         dd[0] = ' '; dd[1] = (char)('0' + bp_game.d1); dd[2] = '+'; dd[3] = (char)('0' + bp_game.d2); dd[4] = 0;
         os88_strcpy(pre, ovl_fc_cat("R", ovl_fc_nn(0, ovl_fc_rnd()), bp_game.rolled && bp_game.d1 ? dd : "", " "), sizeof(pre));
     }
-    fc_t(r->x + 5, r->y + 2, ovl_fc_cat(pre, loc ? "Same PC" : st < 8 ? fc_lnk[st] : "?", bp_sess_busy() ? " ..." : "", ""), 0, fc_fb);
+    fc_t(r->x + 5, r->y + 2, ovl_fc_cat(pre, loc ? TD_SAME_PC : st < 8 ? fc_lnk[st] : "?", bp_sess_busy() ? TD_X : "", ""), 0, fc_fb);
     if (st == BP_L_PAUSED || st == BP_L_BADPEER) fc_strike(r->x + 5, r->y + 1, r->w - 10);
-    if (bp_layout == BP_LAY_FULL) fc_t(r->x + 5, r->y + 5 + fc_fh, fc_fits(loc ? "Cable: off" : bp_link_msg(), fc_fb, r->w - 10), 0, fc_fb);
+    if (bp_layout == BP_LAY_FULL) fc_t(r->x + 5, r->y + 5 + fc_fh, fc_fits(loc ? TD_CABLE_OFF : bp_link_msg(), fc_fb, r->w - 10), 0, fc_fb);
 }
 static void fc_logbox(void)
 {
@@ -219,7 +219,7 @@ static void fc_logbox(void)
     r = &fc_rg;
     rh = fc_fh + 2;
     if (bp_layout == BP_LAY_COMPACT) { fc_frame(r->x, r->y, r->w, r->h, fc_gr); th = 0; }
-    else { fc_head(r, "Log", 0); th = fc_sh + 4; }
+    else { fc_head(r, TD_LOG, 0); th = fc_sh + 4; }
     x1 = r->x + 4;
     n = (r->h - th - 3) / rh;
     if (n > BP_LOG_LINES) n = BP_LOG_LINES;
@@ -267,7 +267,7 @@ static unsigned fc_siglink(void)
     const char *m;
     h = fc_mix(fc_mix(bp_link_state(), bp_sess_busy()), bp_mode);
     if (bp_layout != BP_LAY_FULL) h = fc_sigscal(h);
-    for (m = bp_link_msg(); *m; m++) h = fc_mix(h, *m);
+    for (m = bx_str(bp_link_msg()); *m; m++) h = fc_mix(h, *m);
     return h;
 }
 /* ---- the log ------------------------------------------------------------ */
@@ -275,7 +275,7 @@ void bp_log_add(const char *line)
 {
     int i;
     for (i = BP_LOG_LINES - 1; i > 0; i--) os88_strcpy(fc_log[i], fc_log[i - 1], BP_LOG_LEN + 1);
-    os88_strcpy(fc_log[0], line, BP_LOG_LEN + 1);
+    os88_strcpy(fc_log[0], bx_str(line), BP_LOG_LEN + 1);
     fc_logver++;
     fc_dirty |= BP_D_LOG;
 }

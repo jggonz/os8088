@@ -403,19 +403,19 @@ int bp_sess_pair(void)
 }
 
 static const char *const bpl_states[9] = {
-    "Not linked", "", "Other PC found: agreeing", "The other PC cannot play this match",
-    "Linked: lobby", "", "Link paused: waiting for the other PC", "Sending the board",
-    "Boards differ: use the banker's board?"
+    TL_NOT_LINKED, "", TL_OTHER_PC_FOUND, TL_THE_OTHER_PC,
+    TL_LINKED_LOBBY, "", TL_LINK_PAUSED_WAITING, TL_SENDING_THE_BOARD,
+    TL_BOARDS_DIFFER_USE
 };
 
 static const char *ovl_msg(void)
 {
     int s;
-    if (bp_mode == BP_MODE_LOCAL) return "Same PC";
+    if (bp_mode == BP_MODE_LOCAL) return TL_SAME_PC;
     s = bp_link_state();
     if (s == BP_L_SEARCH) return bp_ck_msg();
     if (bpl.msg && s != BP_L_RESYNC) return bpl.msg;
-    if (s == BP_L_DIVERGED && bp_mode == BP_MODE_HOST) return "Boards differ: the other PC must resync";
+    if (s == BP_L_DIVERGED && bp_mode == BP_MODE_HOST) return TL_BOARDS_DIFFER_THE;
     if (s != BP_L_PLAY) return bpl_states[s];
     /* playing: role, port, baud, the synchronised revision, waiting */
     os88_strcpy(bpl_line, bp_mode == BP_MODE_HOST ? "Banker COM0 2400 rev " : "Linked COM0 2400 rev ",
@@ -534,7 +534,7 @@ int bp_sess_submit(const BPCmd *c)
         return bpl_commit(0, bpl.hseq);
     }
     if (bpl.cseq == 0xFFFFu) {
-        bpl.msg = "Save and resume the match";
+        bpl.msg = TL_SAVE_AND_RESUME;
         return BP_EOVERFLOW;
     }
     e = bp_check(&bp_game, &bpl_wc);
@@ -679,7 +679,7 @@ static void bpl_c_refuse(void)
     bpl.cpend = 0;
     bpl.tries = 0;
     os88_strcpy(bpl_line, "Banker: ", sizeof bpl_line);
-    os88_strcpy(bpl_line + 8, bp_err_text(code), sizeof bpl_line - 8);
+    os88_strcpy(bpl_line + 8, bx_str(bp_err_text(code)), sizeof bpl_line - 8);
     bpl_say(bpl_line);
 }
 
@@ -742,7 +742,7 @@ static void ovl_hello(void)
     bpl_r32(&bpl_t4);                       /* the match they resume */
     if (bpl.ph == BPL_MATCH) {
         if (!bpl_eq(&bpl_t1, &bpl.peer)) {
-            bpl_say("Another Byteopoly answered: not this match's partner");
+            bpl_say(TL_ANOTHER_BYTEOPOLY_ANSWERED);
             goto bad;
         }
         bpl.heard = bpl.clk;                /* our partner, still agreeing: */
@@ -751,13 +751,13 @@ static void ovl_hello(void)
     }
     if (!bpl_t1.lo) goto bad;
     why = 0;
-    if (intent && !bpl_eq(&bpl_t4, &bpl.rsm.match_id)) why = "The other PC's save is another match";
+    if (intent && !bpl_eq(&bpl_t4, &bpl.rsm.match_id)) why = TL_THE_OTHER_PC_S;
     if (intent != bpl.intent)
-        why = intent ? "The other PC is resuming a saved match" : "The other PC is starting a new match";
-    if (role == bp_mode) why = bp_mode == BP_MODE_HOST ? "The other PC chose Host too" : "The other PC chose Join too";
+        why = intent ? TL_THE_OTHER_PC_IS : TL_THE_OTHER_PC_IS_STARTING;
+    if (role == bp_mode) why = bp_mode == BP_MODE_HOST ? TL_THE_OTHER_PC_CHOSE : TL_THE_OTHER_PC_CHOSE_JOIN;
     if (role != BP_MODE_HOST && role != BP_MODE_CLIENT) goto bad;
     bp_fingerprint(&bpl_t4);
-    if (bpl_rx[5] != BPL_VER || !bpl_eq(&bpl_t2, &bpl_t4)) why = "Different Byteopoly version";
+    if (bpl_rx[5] != BPL_VER || !bpl_eq(&bpl_t2, &bpl_t4)) why = TL_DIFFERENT_BYTEOPOLY_VERSION;
     if (why) {
         if (bpl.ph == BPL_UNBOUND && (!bpl.bad || bpl.msg != why)) {
             bpl.bad = 1;
@@ -852,7 +852,7 @@ static void ovl_lobby_send(void)
     }
     if (bpl.nameout && ++bpl.nametries > BPL_TRIES) {
         bpl.nameout = 0;
-        bpl_say("The banker kept the old name or token");
+        bpl_say(TL_THE_BANKER_KEPT);
     }
 }
 
@@ -1197,7 +1197,7 @@ static void ovl_snap_in(void)
         bpl_r32(&bpl.sdig);
         n = bpl_r16();
         if (!bpl_eq(&bpl_t1, &bp_game.match_id) || !n || n > BP_STATE_MAX) {
-            bpl_say("That board is another match");
+            bpl_say(TL_THAT_BOARD_IS);
             goto bad;
         }
         bpl.sn = n;
@@ -1226,7 +1226,7 @@ static void ovl_snap_in(void)
             || !bpl_eq(&bpl_scr.match_id, &bp_game.match_id)) e = BP_EMATCH;
     }
     if (e != BP_OK) {
-        bpl_say("The banker's board did not check");
+        bpl_say(TL_THE_BANKER_S);
         return;
     }
     os88_memcpy(&bp_game, &bpl_scr, sizeof(BPState));
@@ -1236,7 +1236,7 @@ static void ovl_snap_in(void)
     bpl.tok = 0;
     bp_diag.resync++;
     bpl_send_state(BPF_ACK);
-    ovl_adopted("Using the banker's board");
+    ovl_adopted(TL_USING_THE_BANKER);
     return;
 bad:
     bp_diag.frame++;
@@ -1307,7 +1307,7 @@ static void ovl_ck_begin(void)
     bpl.ckm.role = BP_MODE_HOST;
     bpl.ckm.state = 1;
     e = bp_ckpt_write(&bpl.ckm, &bp_game);
-    if (e != BP_OK) { ovl_ck_end(e, "Save failed on this PC"); return; }
+    if (e != BP_OK) { ovl_ck_end(e, TL_SAVE_FAILED_ON); return; }
     bpl.ck = BPL_CK_WRITTEN;
     bpl.cktries = 0;
     ovl_ck_frame(BPF_CKBEGIN);
@@ -1347,14 +1347,14 @@ static void ovl_ck_host(void)
     stage = bpl_r8();
     e = bpl_r8();
     if (bpl.ck == BPL_CK_WRITTEN && stage == 1) {
-        if (e) { ovl_ck_end(e, "The other PC could not save"); return; }
+        if (e) { ovl_ck_end(e, TL_THE_OTHER_PC_COULD); return; }
         e = bp_ckpt_commit(&bpl.ckm);
-        if (e) { ovl_ck_end(e, "Save failed on this PC"); return; }
+        if (e) { ovl_ck_end(e, TL_SAVE_FAILED_ON); return; }
         bpl.ck = BPL_CK_COMMIT;
         bpl.cktries = 0;
         ovl_ck_frame(BPF_CKCOMMIT);
     } else if (bpl.ck == BPL_CK_COMMIT && stage == 2)
-        ovl_ck_end(e, e ? "Save incomplete: resume will finish it" : "Paired save complete");
+        ovl_ck_end(e, e ? TL_SAVE_INCOMPLETE_RESUME : TL_PAIRED_SAVE_COMPLETE);
     return;
 bad:
     bp_diag.frame++;
@@ -1393,7 +1393,7 @@ static void ovl_ck_client(void)
         bpl.ck = BPL_CK_CAND;
         bpl.pair = BP_PAIR_BUSY;
         ovl_ck_frame(BPF_CKREPLY);
-        if (e) ovl_ck_end(e, "Save failed on this PC");
+        if (e) ovl_ck_end(e, TL_SAVE_FAILED_ON);
         else bp_ui_link();
         return;
     }
@@ -1404,7 +1404,7 @@ static void ovl_ck_client(void)
         bpl.ck = BPL_CK_DONE;
         bpl.ckcode = (BPByte)e;
         ovl_ck_frame(BPF_CKREPLY);
-        ovl_ck_end(e, e ? "Save incomplete: resume will finish it" : "Paired save complete");
+        ovl_ck_end(e, e ? TL_SAVE_INCOMPLETE_RESUME : TL_PAIRED_SAVE_COMPLETE);
         bpl.ck = BPL_CK_DONE;
         return;
     }
@@ -1428,7 +1428,7 @@ static int ovl_resume_pair(void)
     bpl.rscommit = 0;
     bpl.bad = 0;
     ovl_unbind();
-    bpl_say(e ? "No paired save for this side on this disk" : 0);
+    bpl_say(e ? TL_NO_PAIRED_SAVE : 0);
     return e;
 }
 int bp_sess_resume_pair(void) { return ovl_resume_pair(); }
@@ -1481,7 +1481,7 @@ static void ovl_resume_in(void)
         if (bpl_eq(&bpl_t1, &bpl.rsm.ckpt_id)) ovl_lobby_send();
         return;
     }
-    if (role == bp_mode) { ovl_rs_fail("Both PCs loaded the same side's save"); goto bad; }
+    if (role == bp_mode) { ovl_rs_fail(TL_BOTH_PCS_LOADED); goto bad; }
     if (!bpl_eq(&bpl_t2, &bpl.rsm.match_id)) goto notpair;
     if (!bpl_eq(&bpl_t1, &bpl.rsm.ckpt_id)) {
         /* the host's offer leads: the client rolls forward to it; the host
@@ -1502,13 +1502,13 @@ static void ovl_resume_in(void)
     bpl_r32(&bpl_t2);
     if (!bpl_eq(&bpl_t2, &bpl.rsm.client_id)) goto notpair;
     if (!bpl_eq(&bpl_t3, &bpl.rsm.rev) || !bpl_eq(&bpl_t4, &bpl.rsm.digest)) {
-        ovl_rs_fail("Same save, different board");
+        ovl_rs_fail(TL_SAME_SAVE_DIFFERENT);
         goto bad;
     }
     if (bpl.rscommit) {                     /* the roll forward */
         bpl.rsm.state = 2;
         e = bp_ckpt_commit(&bpl.rsm);
-        if (e != BP_OK) { ovl_rs_fail("Could not finish the last save"); goto bad; }
+        if (e != BP_OK) { ovl_rs_fail(TL_COULD_NOT_FINISH); goto bad; }
         bpl.rscommit = 0;
     }
     os88_memcpy(&bp_game, &bpl_scr, sizeof(BPState));
@@ -1516,10 +1516,10 @@ static void ovl_resume_in(void)
     bpl.rsok = 1;
     bpl.pair = BP_PAIR_DONE;
     ovl_lobby_send();
-    ovl_adopted("Resumed the paired save");
+    ovl_adopted(TL_RESUMED_THE_PAIRED);
     return;
 notpair:
-    ovl_rs_fail("These saves are not a pair");
+    ovl_rs_fail(TL_THESE_SAVES_ARE);
 bad:
     bp_diag.frame++;
 }
@@ -1561,10 +1561,10 @@ static void bpl_frame(int n)
     case BPF_BYE:
         if (bpl.ph == BPL_MATCH) {
             bpl.left = 1;
-            bpl_say("The other PC left the match");
+            bpl_say(TL_THE_OTHER_PC_LEFT);
         } else {
             ovl_unbind();
-            bpl_say("The other PC left the lobby");
+            bpl_say(TL_THE_OTHER_PC_LEFT_THE);
         }
         break;
     default:
@@ -1619,7 +1619,7 @@ static void ovl_lobby_timers(void)
     if (bpl.ph == BPL_LOBBY) {
         if ((BPWord)(bpl.clk - bpl.heard) >= BPL_QUIET) {
             ovl_unbind();                   /* a lobby partner went quiet */
-            bpl_say("The other PC went quiet");
+            bpl_say(TL_THE_OTHER_PC_WENT);
         } else if ((BPWord)(bpl.clk - bpl.beat) >= 2 * BPL_BEAT) {
             bpl.beat = bpl.clk;
             ovl_lobby_send();
@@ -1708,7 +1708,7 @@ static void ovl_leave(void)
     bp_mode = BP_MODE_LOCAL;                /* D3: the match ENDS - never a */
     bp_here = 0;                            /* local game made of it */
     bp_game.status = BP_ST_EMPTY;
-    bpl_say("Left the cable match");
+    bpl_say(TL_LEFT_THE_CABLE);
 }
 void bp_link_leave(void) { ovl_leave(); }
 

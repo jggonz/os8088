@@ -103,7 +103,7 @@ static void ovl_gp_la(const char *s)
 {
     unsigned n;
     n = os88_strlen(gp_line);
-    os88_strcpy(gp_line + n, s, sizeof(gp_line) - n);
+    os88_strcpy(gp_line + n, bx_str(s), sizeof(gp_line) - n);
 }
 static void ovl_gp_lc(int c)
 {
@@ -121,10 +121,10 @@ static void ovl_gp_lv(const BPU32 *v)
     static char mb[14];
     ovl_gp_la(bp_u32_fmt(mb, v));
 }
-static void ovl_gp_lm(const BPU32 *v) { ovl_gp_lv(v); ovl_gp_la(" cr"); }
+static void ovl_gp_lm(const BPU32 *v) { ovl_gp_lv(v); ovl_gp_la(TP_CR); }
 static const char *ovl_gp_name(int seat)
 {
-    if (seat < 0 || seat >= BP_SEATS) return "the bank";
+    if (seat < 0 || seat >= BP_SEATS) return TP_THE_BANK;
     return bp_game.name[seat];
 }
 static int ovl_gp_bit(const BPU32 *m, int p)
@@ -169,7 +169,7 @@ static void ovl_gp_add(int key, const char *lab, int why)
 {
     if (gp_nb >= GP_MAXB) return;
     gp_bkey[gp_nb] = (BPByte)key;
-    os88_strcpy(gp_blab[gp_nb], lab, sizeof(gp_blab[0]));
+    os88_strcpy(gp_blab[gp_nb], bx_str(lab), sizeof(gp_blab[0]));
     gp_bwhy[gp_nb] = (BPByte)why;
     gp_nb++;
 }
@@ -255,7 +255,7 @@ static void ovl_gp_ttoggle(int c, int idx)
     if (!gp_in[c]) return;
     it = gp_it[c][idx];
     if (it >= 32) { gp_tdk ^= (BPByte)(1 << ((it - 32) + (c ? 4 : 0))); return; }
-    if (!ovl_gp_tradable(it)) { gp_err = "Upgraded sets cannot be traded"; return; }
+    if (!ovl_gp_tradable(it)) { gp_err = TP_UPGRADED_SETS_CANNOT; return; }
     ovl_gp_tog(c ? &gp_tget : &gp_tgive, it);
 }
 static int ovl_gp_tdefault(void)
@@ -325,25 +325,25 @@ static void ovl_gp_spec(void)
     switch (gp_kind) {
     case GK_IDLE:
         if (ovl_gp_mine()) {
-            ovl_gp_add(' ', "Roll", ovl_gp_can(BP_C_ROLL, 0));
-            ovl_gp_add('e', "End Turn", ovl_gp_can(BP_C_END_TURN, 0));
-            ovl_gp_add('t', "Trade", ovl_gp_can(BP_C_PROPOSE, 0));
+            ovl_gp_add(' ', TP_ROLL, ovl_gp_can(BP_C_ROLL, 0));
+            ovl_gp_add('e', TP_END_TURN, ovl_gp_can(BP_C_END_TURN, 0));
+            ovl_gp_add('t', TP_TRADE, ovl_gp_can(BP_C_PROPOSE, 0));
         }
-        ovl_gp_add('m', "Manage", BP_OK);
+        ovl_gp_add('m', TP_MANAGE, BP_OK);
         break;
     case GK_BUY:
         if (ovl_gp_mine()) {
-            ovl_gp_add('b', "Buy", ovl_gp_can(BP_C_BUY, 0));
-            ovl_gp_add('a', "Auction", ovl_gp_can(BP_C_DECLINE, 0));
+            ovl_gp_add('b', TP_BUY, ovl_gp_can(BP_C_BUY, 0));
+            ovl_gp_add('a', TP_AUCTION, ovl_gp_can(BP_C_DECLINE, 0));
         }
         break;
     case GK_AUC:
         if (ovl_gp_mine()) {
             why = ovl_gp_can(BP_C_BID, 0);
             if (!why) why = ovl_gp_bidwhy();
-            ovl_gp_lb(); ovl_gp_la("Bid "); ovl_gp_lv(&gp_bid);
+            ovl_gp_lb(); ovl_gp_la(TP_BID); ovl_gp_lv(&gp_bid);
             ovl_gp_add('b', gp_line, why);
-            ovl_gp_add('p', "Pass", ovl_gp_can(BP_C_PASS, 0));
+            ovl_gp_add('p', TP_PASS, ovl_gp_can(BP_C_PASS, 0));
         }
         break;
     case GK_CARD:
@@ -352,55 +352,55 @@ static void ovl_gp_spec(void)
     case GK_REPAIR:
         if (ovl_gp_mine()) {
             dk = bp_game.disks[d];
-            ovl_gp_add('p', "Pay 50", ovl_gp_can(BP_C_PAY_BAIL, 0));
-            if (dk & 1) ovl_gp_add('f', "Disk Find", ovl_gp_can(BP_C_USE_DISK, 0));
-            if (dk & 2) ovl_gp_add('s', "Disk Error", ovl_gp_can(BP_C_USE_DISK, 1));
-            ovl_gp_add('r', "Roll", ovl_gp_can(BP_C_ROLL, 0));
+            ovl_gp_add('p', TP_PAY_50, ovl_gp_can(BP_C_PAY_BAIL, 0));
+            if (dk & 1) ovl_gp_add('f', TP_DISK_FIND, ovl_gp_can(BP_C_USE_DISK, 0));
+            if (dk & 2) ovl_gp_add('s', TP_DISK_ERROR, ovl_gp_can(BP_C_USE_DISK, 1));
+            ovl_gp_add('r', TP_ROLL, ovl_gp_can(BP_C_ROLL, 0));
         }
-        ovl_gp_add('m', "Manage", BP_OK);
+        ovl_gp_add('m', TP_MANAGE, BP_OK);
         break;
     case GK_DEBT:
         if (ovl_gp_mine()) {
             if (gp_conf) {
-                ovl_gp_add('k', "Go bankrupt", ovl_gp_can(BP_C_BANKRUPT, 0));
+                ovl_gp_add('k', TP_GO_BANKRUPT, ovl_gp_can(BP_C_BANKRUPT, 0));
                 ovl_gp_add(27, "No", BP_OK);
             } else {
-                ovl_gp_add('m', "Manage", BP_OK);
-                ovl_gp_add('s', "Settle", ovl_gp_can(BP_C_SETTLE, 0));
-                ovl_gp_add('k', "Bankrupt", ovl_gp_can(BP_C_BANKRUPT, 0));
+                ovl_gp_add('m', TP_MANAGE, BP_OK);
+                ovl_gp_add('s', TP_SETTLE, ovl_gp_can(BP_C_SETTLE, 0));
+                ovl_gp_add('k', TP_BANKRUPT, ovl_gp_can(BP_C_BANKRUPT, 0));
             }
-        } else ovl_gp_add('m', "Manage", BP_OK);
+        } else ovl_gp_add('m', TP_MANAGE, BP_OK);
         break;
     case GK_TRADE:
         if (ovl_gp_mine()) {
-            ovl_gp_add('a', "Accept", ovl_gp_can(BP_C_ACCEPT, bp_game.offer_id & 255));
-            ovl_gp_add('r', "Reject", ovl_gp_can(BP_C_REJECT, 0));
+            ovl_gp_add('a', TP_ACCEPT, ovl_gp_can(BP_C_ACCEPT, bp_game.offer_id & 255));
+            ovl_gp_add('r', TP_REJECT, ovl_gp_can(BP_C_REJECT, 0));
         }
         if (bp_sess_mine(bp_game.offer_from))
-            ovl_gp_add('c', "Cancel", bp_sess_busy() ? BP_EPENDING :
+            ovl_gp_add('c', TP_CANCEL, bp_sess_busy() ? BP_EPENDING :
                        bp_can(&bp_game, bp_game.offer_from, BP_C_CANCEL, 0));
         break;
     case GK_OVER:
-        ovl_gp_add('r', "Review", BP_OK);
-        ovl_gp_add('n', "New Game", BP_OK);
-        ovl_gp_add('x', "Exit", BP_OK);
+        ovl_gp_add('r', TP_REVIEW, BP_OK);
+        ovl_gp_add('n', TP_NEW_GAME, BP_OK);
+        ovl_gp_add('x', TP_EXIT, BP_OK);
         break;
     case GK_REVIEW:
-        ovl_gp_add('s', "Standings", BP_OK);
+        ovl_gp_add('s', TP_STANDINGS, BP_OK);
         break;
     case GK_HAND:
-        ovl_gp_add(13, "Ready", BP_OK);
+        ovl_gp_add(13, TP_READY, BP_OK);
         break;
     case GK_PAUSE:
         if (gp_conf) {
-            ovl_gp_add('x', "Yes, leave", BP_OK);
+            ovl_gp_add('x', TP_YES_LEAVE, BP_OK);
             ovl_gp_add(27, "No", BP_OK);
         } else {
-            if (ls == 8) { if (bp_mode == BP_MODE_CLIENT) ovl_gp_add('u', "Use host", BP_OK); }
-            else ovl_gp_add('r', "Retry", BP_OK);
-            if (ls != 8) ovl_gp_add('l', "Load Pair", BP_OK);
-            ovl_gp_add('d', "Details", BP_OK);
-            ovl_gp_add('x', "Leave", BP_OK);
+            if (ls == 8) { if (bp_mode == BP_MODE_CLIENT) ovl_gp_add('u', TP_USE_HOST, BP_OK); }
+            else ovl_gp_add('r', TP_RETRY, BP_OK);
+            if (ls != 8) ovl_gp_add('l', TP_LOAD_PAIR, BP_OK);
+            ovl_gp_add('d', TP_DETAILS, BP_OK);
+            ovl_gp_add('x', TP_LEAVE, BP_OK);
         }
         break;
     case GK_MANAGE:
@@ -408,32 +408,32 @@ static void ovl_gp_spec(void)
         if (gp_mc >= gp_mn) gp_mc = (BPByte)(gp_mn ? gp_mn - 1 : 0);
         i = gp_mn ? bp_prop_space(gp_ml[gp_mc]) : 0;
         why = gp_mn ? 0 : BP_EOWNER;
-        ovl_gp_add('u', "Upgrade", why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_UPGRADE, i)));
-        ovl_gp_add('s', "Sell", why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_SELL, i)));
-        ovl_gp_add('m', "Mortgage", why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_MORTGAGE, i)));
-        ovl_gp_add('r', "Redeem", why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_REDEEM, i)));
-        ovl_gp_add(27, "Back", BP_OK);
+        ovl_gp_add('u', TP_UPGRADE, why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_UPGRADE, i)));
+        ovl_gp_add('s', TP_SELL, why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_SELL, i)));
+        ovl_gp_add('m', TP_MORTGAGE, why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_MORTGAGE, i)));
+        ovl_gp_add('r', TP_REDEEM, why ? why : (ovl_gp_mseat() != d ? BP_ESEAT : ovl_gp_can(BP_C_REDEEM, i)));
+        ovl_gp_add(27, TP_BACK, BP_OK);
         break;
     case GK_COMPOSE:
         why = (ovl_gp_isempty(&gp_tgive) && ovl_gp_isempty(&gp_tget) && !gp_tdk && !gp_tcash) ? BP_EARG
               : ovl_gp_can(BP_C_PROPOSE, 0);
-        ovl_gp_add(13, "Propose", why);
-        ovl_gp_add('n', "Next", BP_OK);
-        ovl_gp_add('p', "Payer", BP_OK);
-        ovl_gp_add(27, "Cancel", BP_OK);
+        ovl_gp_add(13, TP_PROPOSE, why);
+        ovl_gp_add('n', TP_NEXT, BP_OK);
+        ovl_gp_add('p', TP_PAYER, BP_OK);
+        ovl_gp_add(27, TP_CANCEL, BP_OK);
         break;
     case GK_CHAT:
-        ovl_gp_add(13, "Send", gp_cn ? BP_OK : BP_EARG);
-        ovl_gp_add(27, "Close", BP_OK);
+        ovl_gp_add(13, TP_SEND, gp_cn ? BP_OK : BP_EARG);
+        ovl_gp_add(27, TP_CLOSE, BP_OK);
         break;
     case GK_RULES:
     case GK_KEYS:
-        ovl_gp_add('b', "Prev", gp_help ? BP_OK : BP_EARG);
-        ovl_gp_add('n', "Next", gp_hpages && gp_help + 1 >= gp_hpages ? BP_EARG : BP_OK);
-        ovl_gp_add(27, "Back", BP_OK);
+        ovl_gp_add('b', TP_PREV, gp_help ? BP_OK : BP_EARG);
+        ovl_gp_add('n', TP_NEXT, gp_hpages && gp_help + 1 >= gp_hpages ? BP_EARG : BP_OK);
+        ovl_gp_add(27, TP_BACK, BP_OK);
         break;
     default:
-        ovl_gp_add(27, "Back", BP_OK);
+        ovl_gp_add(27, TP_BACK, BP_OK);
         break;
     }
     /* focus never carries between panels; a confirmation opens on No; a
@@ -515,7 +515,7 @@ static void ovl_gp_geom(void)
     gp_pitch = gp_fh + (bp_layout == BP_LAY_COMPACT ? 1 : 2);
     gp_bh = gp_fh + (bp_layout == BP_LAY_COMPACT ? 4 : 6);
     gp_tb = gp_fh + (bp_layout == BP_LAY_COMPACT ? 5 : 6);
-    gp_cw = bp_w_textw("0123456789", gp_font) / 10;
+    gp_cw = bp_w_textw(TP_0123456789, gp_font) / 10;
     if (gp_cw < 4) gp_cw = 4;
     gp_r.x = bp_r_center.x + 2; gp_r.y = bp_r_center.y + 2;
     gp_r.w = bp_r_center.w - 4; gp_r.h = bp_r_center.h - 4;
@@ -557,6 +557,7 @@ static void ovl_gp_para(const char *s, int col)
     cpl = ((gp_xr - gp_x) * 10) / (gp_cw * 11);
     if (cpl > 50) cpl = 50;
     if (cpl < 8) cpl = 8;
+    s = bx_str(s);
     while (*s == ' ') s++;
     while (*s) {
         n = 0; last = -1;
@@ -573,10 +574,10 @@ static void ovl_gp_status(void)
     const char *m;
     m = 0;
     if (gp_err) { ovl_gp_lb(); ovl_gp_la("! "); ovl_gp_la(gp_err); m = gp_line; }
-    else if (bp_sess_busy()) m = "Sent - waiting for the other PC to confirm";
+    else if (bp_sess_busy()) m = TP_SENT_WAITING_FOR;
     else if (gp_kind >= GK_IDLE && gp_kind <= GK_TRADE && !ovl_gp_mine()) {
-        ovl_gp_lb(); ovl_gp_la("Waiting for "); ovl_gp_la(ovl_gp_name(bp_game.decider));
-        ovl_gp_la(" on the other PC"); m = gp_line;
+        ovl_gp_lb(); ovl_gp_la(TP_WAITING_FOR); ovl_gp_la(ovl_gp_name(bp_game.decider));
+        ovl_gp_la(TP_ON_THE_OTHER); m = gp_line;
     }
     if (!m) return;
     bp_w_text(gp_x, gp_btop, m, 0, gp_font);
@@ -621,10 +622,10 @@ static void ovl_gp_brow(void)
 }
 
 /* ---- the panels ---------------------------------------------------------------- */
-static const char *gp_lstate[] = {"off", "searching", "peer found", "bad peer", "lobby",
-                                  "in sync", "PAUSED", "resyncing", "boards differ"};
-static const char *gp_pairs[] = {"idle", "saving or resuming", "complete", "failed - old pair stands"};
-static const char *gp_phn[] = {"", "move", "release", "buy", "bid", "card", "debt", "trade", "end turn", "over"};
+static const char *gp_lstate[] = {TP_OFF, TP_SEARCHING, TP_PEER_FOUND, TP_BAD_PEER, TP_LOBBY,
+                                  TP_IN_SYNC, TP_PAUSED, TP_RESYNCING, TP_BOARDS_DIFFER};
+static const char *gp_pairs[] = {TP_IDLE, TP_SAVING_OR_RESUMING, TP_COMPLETE, TP_FAILED_OLD_PAIR};
+static const char *gp_phn[] = {"", TP_MOVE, TP_RELEASE, TP_BUY_2, TP_BID_2, TP_CARD, TP_DEBT, TP_TRADE_2, TP_END_TURN_2, TP_OVER};
 
 static int ovl_gp_sprite(int art)
 {
@@ -638,24 +639,24 @@ static void ovl_gp_dbuy(void)
     int seat, sw;
     seat = bp_game.active;
     sp = bp_space(bp_game.pos[seat]);
-    ovl_gp_lb(); ovl_gp_la("Buy "); ovl_gp_la(sp->name); ovl_gp_la("?");
+    ovl_gp_lb(); ovl_gp_la(TP_BUY_3); ovl_gp_la(sp->name); ovl_gp_la("?");
     ovl_gp_frame(gp_line);
     sw = ovl_gp_sprite(BP_A_LARGE(sp->prop));
     if (sw) gp_x += sw + 8;
-    ovl_gp_lb(); ovl_gp_la("Price: "); bp_u32_set(&gp_u1, sp->price, 0); ovl_gp_lm(&gp_u1); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la(TP_PRICE); bp_u32_set(&gp_u1, sp->price, 0); ovl_gp_lm(&gp_u1); ovl_gp_tl();
     bp_u32_copy(&gp_u2, &bp_game.cash[seat]);
     ovl_gp_lb();
-    if (bp_u32_subw(&gp_u2, sp->price) == BP_OK) { ovl_gp_la("Cash after: "); ovl_gp_lm(&gp_u2); }
-    else { ovl_gp_la("Cash: "); ovl_gp_lm(&gp_u2); ovl_gp_la(" - too little"); }
+    if (bp_u32_subw(&gp_u2, sp->price) == BP_OK) { ovl_gp_la(TP_CASH_AFTER); ovl_gp_lm(&gp_u2); }
+    else { ovl_gp_la(TP_CASH); ovl_gp_lm(&gp_u2); ovl_gp_la(TP_TOO_LITTLE); }
     ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("Base rent: "); bp_u32_set(&gp_u1, sp->rent, 0); ovl_gp_lm(&gp_u1);
-    if (sp->kind == BP_K_UTILITY) { ovl_gp_lb(); ovl_gp_la("Utility: rent follows the dice"); }
+    ovl_gp_lb(); ovl_gp_la(TP_BASE_RENT); bp_u32_set(&gp_u1, sp->rent, 0); ovl_gp_lm(&gp_u1);
+    if (sp->kind == BP_K_UTILITY) { ovl_gp_lb(); ovl_gp_la(TP_UTILITY_RENT_FOLLOWS); }
     ovl_gp_tl();
     if (sp->kind == BP_K_COMPUTER) {
-        ovl_gp_lb(); ovl_gp_la("Set: "); ovl_gp_la(bp_group_name(sp->group));
+        ovl_gp_lb(); ovl_gp_la(TP_SET); ovl_gp_la(bp_group_name(sp->group));
         ovl_gp_la(" ("); ovl_gp_lc(bp_group_letter(sp->group)); ovl_gp_la(")"); ovl_gp_tl();
     }
-    ovl_gp_para("Decline puts it up for auction.", 0);
+    ovl_gp_para(TP_DECLINE_PUTS_IT, 0);
 }
 static void ovl_gp_dauc(void)
 {
@@ -664,7 +665,7 @@ static void ovl_gp_dauc(void)
     cmp = bp_layout == BP_LAY_COMPACT;
     sp = bp_space(bp_game.auc_space);
     bidder = bp_game.decider;
-    ovl_gp_lb(); ovl_gp_la("Auction: "); ovl_gp_la(sp->name);
+    ovl_gp_lb(); ovl_gp_la(TP_AUCTION_2); ovl_gp_la(sp->name);
     ovl_gp_frame(gp_line);
     top = gp_y;
     sw = 0;
@@ -672,24 +673,24 @@ static void ovl_gp_dauc(void)
     bp_u32_set(&gp_u1, sp->price, 0);
     ovl_gp_lb();
     if (cmp) {
-        ovl_gp_la("High: ");
-        if (bp_game.auc_high == BP_NOBODY) ovl_gp_la("none"); else { ovl_gp_lv(&bp_game.auc_bid); ovl_gp_la(" "); ovl_gp_la(ovl_gp_name(bp_game.auc_high)); }
-        ovl_gp_la("  List "); ovl_gp_lv(&gp_u1);
+        ovl_gp_la(TP_HIGH);
+        if (bp_game.auc_high == BP_NOBODY) ovl_gp_la(TP_NONE); else { ovl_gp_lv(&bp_game.auc_bid); ovl_gp_la(" "); ovl_gp_la(ovl_gp_name(bp_game.auc_high)); }
+        ovl_gp_la(TP_LIST); ovl_gp_lv(&gp_u1);
         ovl_gp_tl();
     } else {
-        ovl_gp_la("List price: "); ovl_gp_lm(&gp_u1); ovl_gp_tl();
-        ovl_gp_lb(); ovl_gp_la("High bid: ");
-        if (bp_game.auc_high == BP_NOBODY) ovl_gp_la("none yet"); else ovl_gp_lm(&bp_game.auc_bid);
+        ovl_gp_la(TP_LIST_PRICE); ovl_gp_lm(&gp_u1); ovl_gp_tl();
+        ovl_gp_lb(); ovl_gp_la(TP_HIGH_BID);
+        if (bp_game.auc_high == BP_NOBODY) ovl_gp_la(TP_NONE_YET); else ovl_gp_lm(&bp_game.auc_bid);
         ovl_gp_tl();
         if (bp_game.auc_high != BP_NOBODY) {
-            ovl_gp_lb(); ovl_gp_la("by "); ovl_gp_la(ovl_gp_name(bp_game.auc_high)); ovl_gp_tl();
+            ovl_gp_lb(); ovl_gp_la(TP_BY); ovl_gp_la(ovl_gp_name(bp_game.auc_high)); ovl_gp_tl();
         }
     }
     if (gp_auto) {
         ovl_gp_lb();
         for (w = 0; w < BP_SEATS; w++)
             if ((gp_auto >> w) & 1) { ovl_gp_la(ovl_gp_name(w)); ovl_gp_la(" "); }
-        ovl_gp_la("passed: no raise left");
+        ovl_gp_la(TP_PASSED_NO_RAISE);
         ovl_gp_tl();
     }
     gp_x = gp_r.x + 6;
@@ -698,9 +699,9 @@ static void ovl_gp_dauc(void)
     /* whose bid */
     if (gp_y + gp_fh <= gp_btop) {
         bp_w_fill(gp_x, gp_y - 1, gp_xr, gp_y + gp_fh, 14);
-        ovl_gp_lb(); ovl_gp_la(ovl_gp_name(bidder)); ovl_gp_la(" - your bid");
+        ovl_gp_lb(); ovl_gp_la(ovl_gp_name(bidder)); ovl_gp_la(TP_YOUR_BID);
         bp_w_text(gp_x + 3, gp_y, gp_line, 0, gp_font);
-        ovl_gp_lb(); ovl_gp_la("cash "); ovl_gp_lm(&bp_game.cash[bidder]);
+        ovl_gp_lb(); ovl_gp_la(TP_CASH_2); ovl_gp_lm(&bp_game.cash[bidder]);
         bp_w_text(gp_xr - 3 - bp_w_textw(gp_line, gp_font), gp_y, gp_line, 0, gp_font);
     }
     gp_y += gp_pitch + 1;
@@ -723,9 +724,9 @@ static void ovl_gp_dauc(void)
         gp_y = by + bx + 1;
     }
     ovl_gp_minbid(&gp_u1);
-    ovl_gp_lb(); ovl_gp_la("Min "); ovl_gp_lv(&gp_u1); if (!cmp) ovl_gp_la(", steps of 10");
+    ovl_gp_lb(); ovl_gp_la(TP_MIN); ovl_gp_lv(&gp_u1); if (!cmp) ovl_gp_la(TP_STEPS_OF_10);
     bp_u32_copy(&gp_u2, &bp_game.cash[bidder]);
-    if (bp_u32_sub(&gp_u2, &gp_bid) == BP_OK) { ovl_gp_la(cmp ? ". Left " : ". Win: "); ovl_gp_lv(&gp_u2); ovl_gp_la(cmp ? "" : " cr left"); }
+    if (bp_u32_sub(&gp_u2, &gp_bid) == BP_OK) { ovl_gp_la(cmp ? TP_LEFT : TP_WIN); ovl_gp_lv(&gp_u2); ovl_gp_la(cmp ? "" : TP_CR_LEFT); }
     ovl_gp_tl();
 }
 static void ovl_gp_dcard(void)
@@ -733,8 +734,8 @@ static void ovl_gp_dcard(void)
     const BPCard *cd;
     int sw;
     cd = bp_card(bp_game.card);
-    if (!cd) { ovl_gp_frame("Card"); return; }
-    ovl_gp_frame(cd->deck ? "System Error" : "Floppy Find");
+    if (!cd) { ovl_gp_frame(TP_CARD_2); return; }
+    ovl_gp_frame(cd->deck ? TP_SYSTEM_ERROR : TP_FLOPPY_FIND);
     if (bp_layout != BP_LAY_COMPACT) {     /* the deck picture where it fits (Qqa2-21) */
         sw = cd->deck ? (bp_mono ? BP_A_M_CARD_SE : BP_A_CARD_SE) : (bp_mono ? BP_A_M_CARD_FF : BP_A_CARD_FF);
 #ifdef BP_A_CARD_FF_S
@@ -753,37 +754,37 @@ static void ovl_gp_drepair(void)
 {
     int d;
     d = bp_game.decider;
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(" - Repair Shop");
+    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(TP_REPAIR_SHOP);
     ovl_gp_frame(gp_line);
-    ovl_gp_lb(); ovl_gp_la("Detained. Failed tries: "); ovl_gp_lu(bp_game.tries[d]); ovl_gp_la(" of 3");
+    ovl_gp_lb(); ovl_gp_la(TP_DETAINED_FAILED_TRIES); ovl_gp_lu(bp_game.tries[d]); ovl_gp_la(TP_OF_3);
     ovl_gp_tl();
-    ovl_gp_para("Pay 50 cr, use a Recovery Disk, or roll for doubles.", 0);
-    ovl_gp_lb(); ovl_gp_la("Cash: "); ovl_gp_lm(&bp_game.cash[d]); ovl_gp_tl();
+    ovl_gp_para(TP_PAY_50_CR, 0);
+    ovl_gp_lb(); ovl_gp_la(TP_CASH); ovl_gp_lm(&bp_game.cash[d]); ovl_gp_tl();
     if (bp_game.disks[d]) {
-        ovl_gp_lb(); ovl_gp_la("Disks held: ");
-        if (bp_game.disks[d] & 1) ovl_gp_la("Floppy Find ");
-        if (bp_game.disks[d] & 2) ovl_gp_la("System Error");
+        ovl_gp_lb(); ovl_gp_la(TP_DISKS_HELD);
+        if (bp_game.disks[d] & 1) ovl_gp_la(TP_FLOPPY_FIND_2);
+        if (bp_game.disks[d] & 2) ovl_gp_la(TP_SYSTEM_ERROR);
         ovl_gp_tl();
     }
-    ovl_gp_para("You still collect rent, bid, trade and manage.", 0);
+    ovl_gp_para(TP_YOU_STILL_COLLECT, 0);
 }
 static void ovl_gp_ddebt(void)
 {
     int d;
     d = bp_game.decider;
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(" - debt");
+    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(TP_DEBT_2);
     ovl_gp_frame(gp_line);
-    ovl_gp_lb(); ovl_gp_la("You owe "); ovl_gp_la(ovl_gp_name(bp_game.debt_to)); ovl_gp_la(": ");
+    ovl_gp_lb(); ovl_gp_la(TP_YOU_OWE); ovl_gp_la(ovl_gp_name(bp_game.debt_to)); ovl_gp_la(": ");
     ovl_gp_lm(&bp_game.debt_amount); ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("Your cash: "); ovl_gp_lm(&bp_game.cash[d]); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la(TP_YOUR_CASH); ovl_gp_lm(&bp_game.cash[d]); ovl_gp_tl();
     bp_u32_copy(&gp_u1, &bp_game.debt_amount);
     if (bp_u32_sub(&gp_u1, &bp_game.cash[d]) == BP_OK && !bp_u32_iszero(&gp_u1)) {
-        ovl_gp_lb(); ovl_gp_la("Short by: "); ovl_gp_lm(&gp_u1); ovl_gp_tl();
-        ovl_gp_para("Sell upgrades or mortgage to raise cash.", 0);
-    } else ovl_gp_t("You can pay now: Settle.", 0);
+        ovl_gp_lb(); ovl_gp_la(TP_SHORT_BY); ovl_gp_lm(&gp_u1); ovl_gp_tl();
+        ovl_gp_para(TP_SELL_UPGRADES_OR, 0);
+    } else ovl_gp_t(TP_YOU_CAN_PAY, 0);
     if (gp_conf) {
-        ovl_gp_t("Declare bankruptcy? You leave the game", 0);
-        ovl_gp_lb(); ovl_gp_la("and your estate goes to "); ovl_gp_la(ovl_gp_name(bp_game.debt_to)); ovl_gp_tl();
+        ovl_gp_t(TP_DECLARE_BANKRUPTCY_YOU, 0);
+        ovl_gp_lb(); ovl_gp_la(TP_AND_YOUR_ESTATE); ovl_gp_la(ovl_gp_name(bp_game.debt_to)); ovl_gp_tl();
     }
 }
 /* names of a prop mask (and a disk byte's side) into gp_line */
@@ -798,9 +799,9 @@ static void ovl_gp_names(const BPU32 *m, int disks)
             ovl_gp_la(ovl_gp_pname(p));
             if (bp_game.mortgaged[p]) ovl_gp_la("*");
         }
-    if (disks & 1) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la("Disk FF"); }
-    if (disks & 2) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la("Disk SE"); }
-    if (first) ovl_gp_la("nothing");
+    if (disks & 1) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la(TP_DISK_FF); }
+    if (disks & 2) { if (!first) ovl_gp_la(", "); first = 0; ovl_gp_la(TP_DISK_SE); }
+    if (first) ovl_gp_la(TP_NOTHING);
 }
 /* cash after a payment: *out; BP_EFUNDS when the payer cannot */
 static int ovl_gp_after(int seat, int pays, const BPU32 *amt, BPU32 *out)
@@ -814,33 +815,33 @@ static void ovl_gp_aftline(int from, int to, const BPU32 *amt, int payer)
     ovl_gp_lb();
     ovl_gp_la(ovl_gp_name(from)); ovl_gp_la(" ");
     ovl_gp_lv(&bp_game.cash[from]); ovl_gp_la(">");
-    if (ovl_gp_after(from, payer == 0, amt, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la("short");
-    ovl_gp_la("   "); ovl_gp_la(ovl_gp_name(to)); ovl_gp_la(" ");
+    if (ovl_gp_after(from, payer == 0, amt, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
+    ovl_gp_la(TP_X); ovl_gp_la(ovl_gp_name(to)); ovl_gp_la(" ");
     ovl_gp_lv(&bp_game.cash[to]); ovl_gp_la(">");
-    if (ovl_gp_after(to, payer != 0, amt, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la("short");
+    if (ovl_gp_after(to, payer != 0, amt, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
     ovl_gp_tl();
 }
 static void ovl_gp_dtrade(void)
 {
     int f, t;
     f = bp_game.offer_from; t = bp_game.offer_to;
-    ovl_gp_lb(); ovl_gp_la("Trade offer: "); ovl_gp_la(ovl_gp_name(f)); ovl_gp_la(" to "); ovl_gp_la(ovl_gp_name(t));
+    ovl_gp_lb(); ovl_gp_la(TP_TRADE_OFFER); ovl_gp_la(ovl_gp_name(f)); ovl_gp_la(TP_TO); ovl_gp_la(ovl_gp_name(t));
     ovl_gp_frame(gp_line);
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(f)); ovl_gp_la(" gives: ");
+    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(f)); ovl_gp_la(TP_GIVES);
     ovl_gp_names(&bp_game.offer_give, bp_game.offer_disks & 15);
     ovl_gp_para(gp_line, 0);
-    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(t)); ovl_gp_la(" gives: ");
+    ovl_gp_lb(); ovl_gp_la(ovl_gp_name(t)); ovl_gp_la(TP_GIVES);
     ovl_gp_names(&bp_game.offer_get, (bp_game.offer_disks >> 4) & 15);
     ovl_gp_para(gp_line, 0);
-    if (bp_u32_iszero(&bp_game.offer_cash)) ovl_gp_t("No cash changes hands.", 0);
+    if (bp_u32_iszero(&bp_game.offer_cash)) ovl_gp_t(TP_NO_CASH_CHANGES, 0);
     else {
-        ovl_gp_lb(); ovl_gp_la("PLUS "); ovl_gp_lm(&bp_game.offer_cash); ovl_gp_la(" from ");
+        ovl_gp_lb(); ovl_gp_la(TP_PLUS); ovl_gp_lm(&bp_game.offer_cash); ovl_gp_la(TP_FROM);
         ovl_gp_la(ovl_gp_name(bp_game.offer_payer ? t : f)); ovl_gp_tl();
     }
-    if (bp_layout != BP_LAY_COMPACT) ovl_gp_t("After this trade (cash):", 0);
+    if (bp_layout != BP_LAY_COMPACT) ovl_gp_t(TP_AFTER_THIS_TRADE, 0);
     ovl_gp_aftline(f, t, &bp_game.offer_cash, bp_game.offer_payer);
-    ovl_gp_lb(); ovl_gp_la("Offer #"); ovl_gp_lu(bp_game.offer_id); ovl_gp_la(" locked. * = mortgaged. ");
-    ovl_gp_la(ovl_gp_name(t)); ovl_gp_la(" decides.");
+    ovl_gp_lb(); ovl_gp_la(TP_OFFER); ovl_gp_lu(bp_game.offer_id); ovl_gp_la(TP_LOCKED_MORTGAGED);
+    ovl_gp_la(ovl_gp_name(t)); ovl_gp_la(TP_DECIDES);
     ovl_gp_para(gp_line, 0);
 }
 /* standings: cash + assets = score; the winners marked when the match is over */
@@ -848,11 +849,11 @@ static void ovl_gp_dstand(int over)
 {
     static char nb[8];
     int s, w, c1, c2, c3, n;
-    ovl_gp_frame(over ? "Game over" : "Standings");
+    ovl_gp_frame(over ? TP_GAME_OVER : TP_STANDINGS);
     if (over) {
         n = 0;
         for (s = 0; s < BP_SEATS; s++) n += (bp_game.winners >> s) & 1;
-        ovl_gp_lb(); ovl_gp_la(n > 1 ? "Shared win: " : "Winner: ");
+        ovl_gp_lb(); ovl_gp_la(n > 1 ? TP_SHARED_WIN : TP_WINNER);
         for (s = 0, n = 0; s < BP_SEATS; s++)
             if ((bp_game.winners >> s) & 1) {
                 if (n) ovl_gp_la(", ");
@@ -861,22 +862,22 @@ static void ovl_gp_dstand(int over)
         ovl_gp_tl();
     }
     if (bp_game.rules == BP_RULES_QUICK && bp_layout != BP_LAY_COMPACT) {
-        ovl_gp_lb(); ovl_gp_la("Quick Match: round "); ovl_gp_lu(bp_game.round); ovl_gp_la(" of ");
+        ovl_gp_lb(); ovl_gp_la(TP_QUICK_MATCH_ROUND); ovl_gp_lu(bp_game.round); ovl_gp_la(TP_OF);
         ovl_gp_lu(bp_game.rounds_limit); ovl_gp_tl();
     }
     w = gp_xr - gp_x;
     c1 = gp_x + w * 36 / 100; c2 = gp_x + w * 58 / 100; c3 = gp_x + w * 80 / 100;
     if (gp_y + gp_fh <= gp_btop) {
-        bp_w_text(c1, gp_y, "cash", 0, gp_font);
-        bp_w_text(c2, gp_y, "assets", 0, gp_font);
-        bp_w_text(c3, gp_y, "score", 0, gp_font);
+        bp_w_text(c1, gp_y, TP_CASH_3, 0, gp_font);
+        bp_w_text(c2, gp_y, TP_ASSETS, 0, gp_font);
+        bp_w_text(c3, gp_y, TP_SCORE, 0, gp_font);
     }
     gp_y += gp_pitch;
     for (s = 0; s < bp_game.nseats; s++) {
         if (gp_y + gp_fh <= gp_btop) {
             if (over && ((bp_game.winners >> s) & 1)) bp_w_fill(gp_x - 2, gp_y - 1, gp_xr, gp_y + gp_fh, 14);
             ovl_gp_lb(); if (over && ((bp_game.winners >> s) & 1)) ovl_gp_la("* ");
-            ovl_gp_la(ovl_gp_name(s)); if (!bp_game.alive[s]) ovl_gp_la(" (out)");
+            ovl_gp_la(ovl_gp_name(s)); if (!bp_game.alive[s]) ovl_gp_la(TP_OUT);
             bp_w_text(gp_x, gp_y, gp_line, 0, gp_font);
             if (over) bp_u32_copy(&gp_u1, &bp_game.score[s]); else bp_score_of(&bp_game, s, &gp_u1);
             bp_u32_copy(&gp_u2, &gp_u1);
@@ -888,40 +889,40 @@ static void ovl_gp_dstand(int over)
         gp_y += gp_pitch;
     }
     (void)nb;
-    if (over && bp_layout != BP_LAY_COMPACT) ovl_gp_para("Score = cash + property - mortgages + upgrades.", 0);
+    if (over && bp_layout != BP_LAY_COMPACT) ovl_gp_para(TP_SCORE_CASH_PROPERTY, 0);
 }
 static void ovl_gp_dhand(void)
 {
     int s, w, x;
     s = gp_hand - 1;
-    ovl_gp_frame("Pass the keyboard");
+    ovl_gp_frame(TP_PASS_THE_KEYBOARD);
     gp_y += gp_pitch / 2;
     w = bp_w_sprite(gp_r.x + 10, gp_y, BP_A_TOKEN(bp_game.token[s]));
     (void)w;
-    ovl_gp_tc("Pass to", 0);
+    ovl_gp_tc(TP_PASS_TO, 0);
     ovl_gp_lb(); ovl_gp_la(ovl_gp_name(s));
     x = bp_w_textw(gp_line, BP_F_BIG16);
     if (bp_layout != BP_LAY_COMPACT && gp_y + bp_w_fonth(BP_F_BIG16) <= gp_btop) {
         bp_w_text(gp_r.x + (gp_r.w - x) / 2, gp_y, gp_line, 0, BP_F_BIG16);
         gp_y += bp_w_fonth(BP_F_BIG16) + 4;
     } else ovl_gp_tc(gp_line, 0);
-    ovl_gp_lb(); ovl_gp_la("Next: "); ovl_gp_la(gp_phn[bp_game.phase]); ovl_gp_tc(gp_line, 0);
-    ovl_gp_tc("Press Enter when ready. A held key", 0);
-    ovl_gp_tc("does not count - let go first.", 0);
+    ovl_gp_lb(); ovl_gp_la(TP_NEXT_2); ovl_gp_la(gp_phn[bp_game.phase]); ovl_gp_tc(gp_line, 0);
+    ovl_gp_tc(TP_PRESS_ENTER_WHEN, 0);
+    ovl_gp_tc(TP_DOES_NOT_COUNT, 0);
 }
 static void ovl_gp_dpause(void)
 {
-    ovl_gp_frame(bp_link_state() == BP_L_RESYNC ? "RESYNCING" : bp_link_state() == 8 ? "BOARDS DIFFER" : "CABLE LINK LOST");
-    ovl_gp_tc(bp_link_state() == 8 ? "Economic input is stopped" : "Game paused", 0);
-    ovl_gp_lb(); ovl_gp_la(bp_link_state() == 8 ? "Boards differ: " : "Waiting for the other PC: "); ovl_gp_la(bp_link_msg());
+    ovl_gp_frame(bp_link_state() == BP_L_RESYNC ? TP_RESYNCING_2 : bp_link_state() == 8 ? TP_BOARDS_DIFFER_2 : TP_CABLE_LINK_LOST);
+    ovl_gp_tc(bp_link_state() == 8 ? TP_ECONOMIC_INPUT_IS : TP_GAME_PAUSED, 0);
+    ovl_gp_lb(); ovl_gp_la(bp_link_state() == 8 ? TP_BOARDS_DIFFER_3 : TP_WAITING_FOR_THE); ovl_gp_la(bp_link_msg());
     ovl_gp_para(gp_line, 0);
-    ovl_gp_t("LAST ACTION RETAINED:", 0);
+    ovl_gp_t(TP_LAST_ACTION_RETAINED, 0);
     ovl_gp_para(bp_log_line(0), 0);
     if (bp_sess_pair() == BP_PAIR_BUSY || bp_sess_pair() == BP_PAIR_FAIL) {
-        ovl_gp_lb(); ovl_gp_la("Paired save: "); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
+        ovl_gp_lb(); ovl_gp_la(TP_PAIRED_SAVE); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
     }
-    ovl_gp_para(bp_link_state() == 8 ? "The client takes the host's board to continue." : "Reconnect to continue this turn.", 0);
-    if (gp_conf) ovl_gp_t("Leaving abandons this match. Sure?", 0);
+    ovl_gp_para(bp_link_state() == 8 ? TP_THE_CLIENT_TAKES : TP_RECONNECT_TO_CONTINUE, 0);
+    if (gp_conf) ovl_gp_t(TP_LEAVING_ABANDONS_THIS, 0);
 }
 /* a list's "more" marks (131.9.7): ^ rows hidden above, v below */
 static void ovl_gp_more(int x, int y, int up, int down)
@@ -935,8 +936,8 @@ static void ovl_gp_ditem(int p, char *dst)
     l = bp_game.level[p];
     os88_strcpy(dst, ovl_gp_pname(p), 8);
     ovl_gp_lb();
-    if (l == BP_MAX_LEVEL) ovl_gp_la(" Workshop"); else if (l) { ovl_gp_la(" RAM "); ovl_gp_lu(l); }
-    if (bp_game.mortgaged[p]) ovl_gp_la(" MORT");
+    if (l == BP_MAX_LEVEL) ovl_gp_la(TP_WORKSHOP); else if (l) { ovl_gp_la(TP_RAM); ovl_gp_lu(l); }
+    if (bp_game.mortgaged[p]) ovl_gp_la(TP_MORT);
     os88_strcpy(dst + os88_strlen(dst), gp_line, 16);
 }
 static void ovl_gp_dmanage(void)
@@ -944,11 +945,11 @@ static void ovl_gp_dmanage(void)
     static char row[24];
     int i, n, top, y, p, sp, seat;
     seat = ovl_gp_mseat();
-    ovl_gp_lb(); ovl_gp_la("Collection - "); ovl_gp_la(ovl_gp_name(seat));
+    ovl_gp_lb(); ovl_gp_la(TP_COLLECTION); ovl_gp_la(ovl_gp_name(seat));
     ovl_gp_frame(gp_line);
     n = gp_mn;
-    ovl_gp_lb(); ovl_gp_la("Cash "); ovl_gp_lm(&bp_game.cash[seat]); ovl_gp_tl();
-    if (!n) { ovl_gp_t("You own no computers yet.", 0); return; }
+    ovl_gp_lb(); ovl_gp_la(TP_CASH_4); ovl_gp_lm(&bp_game.cash[seat]); ovl_gp_tl();
+    if (!n) { ovl_gp_t(TP_YOU_OWN_NO, 0); return; }
     /* list rows: what is left after 3 detail lines */
     i = (gp_btop - gp_y) / gp_pitch - 2;
     if (i < 2) i = 2;
@@ -976,22 +977,22 @@ static void ovl_gp_dmanage(void)
     gp_y = y;
     p = gp_ml[gp_mc]; sp = bp_prop_space(p);
     ovl_gp_lb();
-    if (bp_space(sp)->kind != BP_K_COMPUTER) ovl_gp_la("Utilities are not upgraded");
+    if (bp_space(sp)->kind != BP_K_COMPUTER) ovl_gp_la(TP_UTILITIES_ARE_NOT);
     else {
-        ovl_gp_la("Upgrade -"); ovl_gp_lu(bp_group_upgrade_cost(bp_space(sp)->group));
-        ovl_gp_la("  Sell +"); ovl_gp_lu((unsigned)(bp_group_upgrade_cost(bp_space(sp)->group) / 2));
+        ovl_gp_la(TP_UPGRADE_2); ovl_gp_lu(bp_group_upgrade_cost(bp_space(sp)->group));
+        ovl_gp_la(TP_SELL_2); ovl_gp_lu((unsigned)(bp_group_upgrade_cost(bp_space(sp)->group) / 2));
     }
     ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("Mortgage +"); ovl_gp_lu((unsigned)bp_mortgage_value(sp));
+    ovl_gp_lb(); ovl_gp_la(TP_MORTGAGE_2); ovl_gp_lu((unsigned)bp_mortgage_value(sp));
     bp_redeem_cost(sp, &gp_u2);
-    ovl_gp_la("  Redeem -"); ovl_gp_lv(&gp_u2);
+    ovl_gp_la(TP_REDEEM_2); ovl_gp_lv(&gp_u2);
     ovl_gp_tl();
 }
 static void ovl_gp_dcompose(void)
 {
     int c, nl, i, idx, y, hw, x, it, me;
     me = bp_game.decider;
-    ovl_gp_lb(); ovl_gp_la("Trade: "); ovl_gp_la(ovl_gp_name(me)); ovl_gp_la(" with "); ovl_gp_la(ovl_gp_name(gp_tto));
+    ovl_gp_lb(); ovl_gp_la(TP_TRADE_3); ovl_gp_la(ovl_gp_name(me)); ovl_gp_la(TP_WITH); ovl_gp_la(ovl_gp_name(gp_tto));
     ovl_gp_frame(gp_line);
     ovl_gp_tbuild();
     hw = (gp_xr - gp_x) / 2;
@@ -1000,7 +1001,7 @@ static void ovl_gp_dcompose(void)
         x = gp_x + c * hw;
         if (c == gp_tcol) bp_w_fill(x, gp_y - 1, x + hw - 4, gp_y + gp_fh, 14);
         ovl_gp_lb(); if (c == gp_tcol) ovl_gp_la("> ");     /* not by hue alone (Qqa2-3) */
-        ovl_gp_la(ovl_gp_name(c ? gp_tto : me)); ovl_gp_la(" gives");
+        ovl_gp_la(ovl_gp_name(c ? gp_tto : me)); ovl_gp_la(TP_GIVES_2);
         bp_w_text(x + 2, gp_y, gp_line, 0, gp_font);
     }
     gp_y += gp_pitch;
@@ -1013,7 +1014,7 @@ static void ovl_gp_dcompose(void)
         if (gp_tcur[c] >= gp_ttop[c] + nl) gp_ttop[c] = (BPByte)(gp_tcur[c] - nl + 1);
         gp_lr[c].x = x; gp_lr[c].y = gp_y; gp_lr[c].w = hw - 4; gp_lr[c].h = nl * gp_pitch;
         y = gp_y;
-        if (!gp_in[c] && gp_y + gp_fh <= gp_btop) bp_w_text(x + 2, y, "(none)", 0, gp_font);
+        if (!gp_in[c] && gp_y + gp_fh <= gp_btop) bp_w_text(x + 2, y, TP_NONE_2, 0, gp_font);
         for (i = 0; i < nl; i++) {
             idx = gp_ttop[c] + i;
             if (idx >= gp_in[c]) break;
@@ -1021,8 +1022,8 @@ static void ovl_gp_dcompose(void)
             if (c == gp_tcol && idx == gp_tcur[c]) bp_w_fill(x, y - 1, x + hw - 4, y + gp_fh, 14);
             ovl_gp_lb();
             ovl_gp_la(c == gp_tcol && idx == gp_tcur[c] ? ">" : " ");
-            ovl_gp_la(ovl_gp_tsel(c, idx) ? "[x] " : (it < 32 && !ovl_gp_tradable(it) ? "[-] " : "[ ] "));
-            if (it >= 32) ovl_gp_la(it == 32 ? "Disk FF" : "Disk SE");
+            ovl_gp_la(ovl_gp_tsel(c, idx) ? TP_X_2 : (it < 32 && !ovl_gp_tradable(it) ? TP_X_3 : TP_X_4));
+            if (it >= 32) ovl_gp_la(it == 32 ? TP_DISK_FF : TP_DISK_SE);
             else { ovl_gp_la(ovl_gp_pname(it)); if (bp_game.mortgaged[it]) ovl_gp_la("*"); }
             bp_w_text(x + 2, y, gp_line, 0, gp_font);
             ovl_gp_more(x + hw - 4 - gp_cw, y, i == 0 && idx > 0, i == nl - 1 && idx + 1 < gp_in[c]);
@@ -1030,7 +1031,7 @@ static void ovl_gp_dcompose(void)
         }
     }
     gp_y += nl * gp_pitch;
-    ovl_gp_lb(); ovl_gp_la("Cash "); ovl_gp_lu(gp_tcash); ovl_gp_la(" cr paid by ");
+    ovl_gp_lb(); ovl_gp_la(TP_CASH_4); ovl_gp_lu(gp_tcash); ovl_gp_la(TP_CR_PAID_BY);
     ovl_gp_la(ovl_gp_name(gp_tpay ? gp_tto : me));
     ovl_gp_tl();
     bp_u32_set(&gp_u2, gp_tcash, 0);
@@ -1038,41 +1039,41 @@ static void ovl_gp_dcompose(void)
     c = bp_game.offer_from; (void)c;
     ovl_gp_lb();
     ovl_gp_la(ovl_gp_name(me)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[me]); ovl_gp_la(">");
-    if (ovl_gp_after(me, gp_tpay == 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la("short");
+    if (ovl_gp_after(me, gp_tpay == 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
     ovl_gp_la("  "); ovl_gp_la(ovl_gp_name(gp_tto)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[gp_tto]); ovl_gp_la(">");
-    if (ovl_gp_after(gp_tto, gp_tpay != 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la("short");
+    if (ovl_gp_after(gp_tto, gp_tpay != 0, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
     ovl_gp_tl();
 }
 static void ovl_gp_dchat(void)
 {
     int i;
-    ovl_gp_frame("Chat");
+    ovl_gp_frame(TP_CHAT);
     for (i = 0; i < 3; i++) ovl_gp_t(gp_cl[i], 0);
     gp_vy = gp_y - 1;               /* typing changes the field and below */
     ovl_gp_lb(); ovl_gp_la("> "); ovl_gp_la(gp_cbuf); ovl_gp_la("_");
     ovl_gp_t(gp_line, 0);
-    ovl_gp_lb(); ovl_gp_lu(gp_cn); ovl_gp_la("/"); ovl_gp_lu(GP_CHATMAX); ovl_gp_la(" characters. Letters type here, not play.");
+    ovl_gp_lb(); ovl_gp_lu(gp_cn); ovl_gp_la("/"); ovl_gp_lu(GP_CHATMAX); ovl_gp_la(TP_CHARACTERS_LETTERS_TYPE);
     ovl_gp_para(gp_line, 0);
 }
 static void ovl_gp_ddiag(void)
 {
     int ls, pt;
-    ovl_gp_frame("Link diagnostics");
+    ovl_gp_frame(TP_LINK_DIAGNOSTICS);
     ls = bp_link_state();
     pt = bp_ck_port();
-    ovl_gp_lb(); ovl_gp_la("Role: "); ovl_gp_la(bp_mode == BP_MODE_HOST ? "banker host" : bp_mode == BP_MODE_CLIENT ? "client" : "same PC");
-    ovl_gp_la("   Link: "); ovl_gp_la(gp_lstate[ls > 8 ? 0 : ls]); ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("Port: ");
-    if (pt) { ovl_gp_la("COM"); ovl_gp_lu(pt); ovl_gp_la(", 2400 baud"); } else ovl_gp_la("none");
+    ovl_gp_lb(); ovl_gp_la(TP_ROLE); ovl_gp_la(bp_mode == BP_MODE_HOST ? TP_BANKER_HOST : bp_mode == BP_MODE_CLIENT ? TP_CLIENT : TP_SAME_PC);
+    ovl_gp_la(TP_LINK); ovl_gp_la(gp_lstate[ls > 8 ? 0 : ls]); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la(TP_PORT);
+    if (pt) { ovl_gp_la(TP_COM); ovl_gp_lu(pt); ovl_gp_la(TP_2400_BAUD); } else ovl_gp_la(TP_NONE);
     ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("Revision "); ovl_gp_lv(&bp_game.rev); ovl_gp_la(bp_sess_busy() ? ", pending" : ", idle");
+    ovl_gp_lb(); ovl_gp_la(TP_REVISION); ovl_gp_lv(&bp_game.rev); ovl_gp_la(bp_sess_busy() ? TP_PENDING : TP_IDLE_2);
     ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("CRC "); ovl_gp_lu(bp_diag.crc); ovl_gp_la("  retry "); ovl_gp_lu(bp_diag.retry);
-    ovl_gp_la("  frame "); ovl_gp_lu(bp_diag.frame); ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("overrun "); ovl_gp_lu(bp_diag.overrun); ovl_gp_la("  resync "); ovl_gp_lu(bp_diag.resync);
-    ovl_gp_la("  chat lost "); ovl_gp_lu(bp_diag.chatdrop); ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("rx "); ovl_gp_lu(bp_diag.rx); ovl_gp_la("  tx "); ovl_gp_lu(bp_diag.tx); ovl_gp_tl();
-    ovl_gp_lb(); ovl_gp_la("Paired save: "); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la(TP_CRC); ovl_gp_lu(bp_diag.crc); ovl_gp_la(TP_RETRY_2); ovl_gp_lu(bp_diag.retry);
+    ovl_gp_la(TP_FRAME); ovl_gp_lu(bp_diag.frame); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la(TP_OVERRUN); ovl_gp_lu(bp_diag.overrun); ovl_gp_la(TP_RESYNC); ovl_gp_lu(bp_diag.resync);
+    ovl_gp_la(TP_CHAT_LOST); ovl_gp_lu(bp_diag.chatdrop); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la(TP_RX); ovl_gp_lu(bp_diag.rx); ovl_gp_la(TP_TX); ovl_gp_lu(bp_diag.tx); ovl_gp_tl();
+    ovl_gp_lb(); ovl_gp_la(TP_PAIRED_SAVE); ovl_gp_la(gp_pairs[bp_sess_pair() & 3]); ovl_gp_tl();
     ovl_gp_para(bp_link_msg(), 0);
 }
 /* help text: the art record's lines; a "#KEYS" line starts the keys section */
@@ -1086,8 +1087,7 @@ static void ovl_gp_dhelp(int keys)
     static char buf[52];
     static int kidx, ktot;
     int n, lpp, i, base, cnt, pg;
-    ovl_gp_frame(keys ? "Keys" : "Rules");
-    if (!ovl_gp_hline(0, buf)) { ovl_gp_t("The help text is part of the art file.", 0); gp_hpages = 1; return; }
+    ovl_gp_frame(keys ? TP_KEYS : TP_RULES);
     if (!ktot) {                    /* once: where #KEYS is, and how many lines in all */
         for (n = 0; ovl_gp_hline(n, buf); n++)
             if (!kidx && buf[0] == '#' && buf[1] == 'K') kidx = n + 1;
@@ -1129,19 +1129,19 @@ static void ovl_gp_didle(void)
     gp_y = gp_btop;
     ovl_gp_lb();
     if (gp_err) { ovl_gp_la("! "); ovl_gp_la(gp_err); }
-    else if (bp_sess_busy()) ovl_gp_la("Sent - waiting for the other PC");
-    else if (!ovl_gp_mine()) { ovl_gp_la("Waiting for "); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(" on the other PC"); }
+    else if (bp_sess_busy()) ovl_gp_la(TP_SENT_WAITING_FOR_THE);
+    else if (!ovl_gp_mine()) { ovl_gp_la(TP_WAITING_FOR); ovl_gp_la(ovl_gp_name(d)); ovl_gp_la(TP_ON_THE_OTHER); }
     else {
         ovl_gp_la(ovl_gp_name(d));
-        if (bp_game.phase == BP_PH_AFTER) ovl_gp_la(bp_game.doubles ? ": doubles - roll again" : ": end your turn");
-        else ovl_gp_la(": roll the dice");
+        if (bp_game.phase == BP_PH_AFTER) ovl_gp_la(bp_game.doubles ? TP_DOUBLES_ROLL_AGAIN : TP_END_YOUR_TURN);
+        else ovl_gp_la(TP_ROLL_THE_DICE);
     }
     bp_w_text(gp_x, gp_y, gp_line, 0, gp_font);
 }
 static void ovl_gp_dreview(void)
 {
     ovl_gp_bar();
-    bp_w_text(gp_x, gp_btop, "Game over - reviewing the board.", 0, gp_font);
+    bp_w_text(gp_x, gp_btop, TP_GAME_OVER_REVIEWING, 0, gp_font);
 }
 /* the whole panel: one call per strip, so it must cost nothing but drawing */
 static void ovl_gp_draw(void)
@@ -1314,10 +1314,10 @@ static int ovl_gp_act(int key)
 }
 static const char *ovl_gp_whytext(int why)
 {
-    if (why == BP_EARG && gp_kind == GK_AUC) return "Bid at least the minimum, in steps of 10";
-    if (why == BP_EARG && gp_kind == GK_COMPOSE) return "Choose something to trade first";
-    if (why == BP_EARG && gp_kind == GK_CHAT) return "Type a message first";
-    if (why == BP_EARG && (gp_kind == GK_RULES || gp_kind == GK_KEYS)) return "No more pages";
+    if (why == BP_EARG && gp_kind == GK_AUC) return TP_BID_AT_LEAST;
+    if (why == BP_EARG && gp_kind == GK_COMPOSE) return TP_CHOOSE_SOMETHING_TO;
+    if (why == BP_EARG && gp_kind == GK_CHAT) return TP_TYPE_A_MESSAGE;
+    if (why == BP_EARG && (gp_kind == GK_RULES || gp_kind == GK_KEYS)) return TP_NO_MORE_PAGES;
     return bp_err_text(why);
 }
 static int ovl_gp_press(int i)
@@ -1375,7 +1375,7 @@ static int ovl_gp_edit(int a, int nav)
 /* ---- damage: what a key, click or open changed (131.9.7) ---------------------------- */
 static unsigned gp_h;
 static void ovl_gp_mx(unsigned v) { gp_h = gp_h * 33 + v; }
-static void ovl_gp_mz(const char *s) { while (*s) ovl_gp_mx((BPByte)*s++); }
+static void ovl_gp_mz(const char *s) { s = bx_str(s); while (*s) ovl_gp_mx((BPByte)*s++); }
 static void ovl_gp_mb(const void *p, int n)
 {
     const BPByte *q;
@@ -1448,7 +1448,7 @@ static void ovl_gp_damage(void)
  * (131.9.8); otherwise it is consumed and nothing happens */
 static int ovl_gp_kpress(int i)
 {
-    if (gp_conf && gp_bkey[i] != 27 && os88_ticks() - gp_hq < GP_HQUIET) { gp_err = "Let go, then press again"; return 1; }
+    if (gp_conf && gp_bkey[i] != 27 && os88_ticks() - gp_hq < GP_HQUIET) { gp_err = TP_LET_GO_THEN; return 1; }
     return ovl_gp_press(i);
 }
 static int ovl_gp_key1(int a, int sc)
@@ -1543,7 +1543,7 @@ static int ovl_gp_covers(void)
  * so the panel is worked out once, at 0 */
 static const char *ovl_gp_hint(int i)
 {
-    static const char *none[] = {"Arrows Select", "F1 Rules"};
+    static const char *none[] = {TP_ARROWS_SELECT, TP_F1_RULES};
     int j, n;
     if (i <= 0) { ovl_gp_track(); ovl_gp_spec(); }
     if (gp_kind == GK_NONE) return i >= 0 && i < 2 ? none[i] : 0;

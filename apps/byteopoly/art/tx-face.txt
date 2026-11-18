@@ -1,0 +1,4 @@
+# Byteopoly UI text, record BP_A2_TX_FACE (SPEC.md 131.10.7): NAME "text",
+# one per line; line order is handle order. After any change run
+# `python3 tools/os88bpart.py txh` to rewrite bptx.h. C escapes; printable
+# ASCII, 63 characters at most. The C names a line by NAME only.
