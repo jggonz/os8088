@@ -1,0 +1,3 @@
+# Rebuild with: python tools/2br3.py build resources/cards/CARDS.MF
+OUT CARDS.RES
+SPRITES1 CARDS 16 16 53 CARDS0.BMP CARDS1.BMP CARDS2.BMP CARDS3.BMP

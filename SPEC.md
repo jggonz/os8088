@@ -254439,3 +254439,3100 @@ A paint is priced by planes: every lit byte on VGA is four read-modify-
 writes where 1bpp is one, which is why VGA's first paint is the outlier.
 While running, a VGA update (the scope plot, the readouts) costs about
 0.5 s and the simulation keeps the rest.
+
+## 131. Byteopoly — a vintage-computer trading game, written in C (`apps/byteopoly/`, `BYTEOPLY.O88`)
+
+Byteopoly is a property-trading board game for 2-4 players: on one machine
+(the seats share a keyboard and optional mouse), or on two machines joined by
+a null-modem cable with one or more seats on each (1+1, 1+2, 2+1, 2+2, 1+3,
+3+1). It is a native C package (§73) over the existing window, band-drawing,
+file, serial-lease (§115) and sound facilities; it adds no kernel facility
+and no OSAPI slot. `docs/plans/BYTEOPOLY-PLAN.md` is the story list and the
+evidence, `docs/HOW-BYTEOPOLY-WAS-BUILT.md` the build diary,
+`docs/BYTEOPOLY-GUIDE.md` the player guide. Planned behaviour is not a claim
+of implemented or tested behaviour: the plan says which is which.
+
+### 131.1 Authority, scope and boundaries
+
+The owner's build brief and five concept screenshots are the product
+direction: navy headers, an ivory perimeter board, small collectible
+computer sprites, a teal centre, floppy-disk event cards, a right sidebar,
+bitmap text and compact bevelled controls. Where a screenshot repeats a
+property or contradicts the rules, this section wins. All code, text and
+art are original; no commercial board-game artwork, rules text or trademark
+lettering is copied.
+
+Out of scope: computer opponents, TCP/IP, modems, more than two machines,
+accounts, downloads and board editors. The engine's seat interface admits a
+computer seat later; none is built. No gameplay dependency on protected
+mode, an FPU, EMS/XMS, the network or a host process. Target: an 8088 at
+4.77 MHz with 640 KB; later machines run the same rules and protocol.
+
+**Board orientation.** The 28 spaces run CLOCKWISE on the glass: BOOT
+(0) at the bottom-left, up the left side to REPAIR SHOP (7) at the
+top-left, across the top to SWAP MEET (14) at the top-right, down the right
+to CRASH! (21) at the bottom-right, and back along the bottom. This is the
+brief's "clockwise ring" and the concept screenshots' corners; the brief's
+one sentence listing the sides in the other order is read as a slip.
+Selection and movement use space ids, never pixels.
+
+### 131.2 Rules
+
+Binding in full. Money is exact integer credits (`cr`), held as logical
+32-bit values (131.4.1); a balance never goes negative and never wraps.
+
+#### 131.2.1 The board
+
+| id | space | kind | collection | price | base rent |
+|---:|---|---|---|---:|---:|
+| 0 | BOOT | start, salary | | | |
+| 1 | Commodore PET | computer | C | 100 | 6 |
+| 2 | Floppy Find | event deck 0 | | | |
+| 3 | VIC-20 | computer | C | 120 | 8 |
+| 4 | Commodore 64 | computer | C | 140 | 10 |
+| 5 | POWER | utility | | 150 | special |
+| 6 | Import Duty | charge 100 | | | |
+| 7 | REPAIR SHOP | visiting / detention | | | |
+| 8 | TRS-80 | computer | H | 160 | 12 |
+| 9 | Atari 800 | computer | H | 180 | 14 |
+| 10 | System Error | event deck 1 | | | |
+| 11 | ZX Spectrum | computer | H | 200 | 16 |
+| 12 | Apple II | computer | A | 240 | 20 |
+| 13 | Apple IIe | computer | A | 260 | 22 |
+| 14 | SWAP MEET | rest | | | |
+| 15 | Macintosh 128K | computer | A | 280 | 24 |
+| 16 | BBS | utility | | 150 | special |
+| 17 | IBM PC 5150 | computer | I | 300 | 26 |
+| 18 | Floppy Find | event deck 0 | | | |
+| 19 | PC XT 5160 | computer | I | 320 | 28 |
+| 20 | PC AT 5170 | computer | I | 340 | 30 |
+| 21 | CRASH! | go to Repair Shop | | | |
+| 22 | Amiga 500 | computer | R | 360 | 32 |
+| 23 | Atari ST | computer | R | 380 | 34 |
+| 24 | System Error | event deck 1 | | | |
+| 25 | 386DX | computer | P | 400 | 36 |
+| 26 | 486DX2 | computer | P | 420 | 40 |
+| 27 | E-waste Fee | charge 75 | | | |
+
+Computer prices never decrease along the ids (100, 120, 140, 160, ... 420;
+rent 6 ... 40), as the classic board's prices rise round the track. The two
+utilities stay at a flat 150, as utilities do in the classic game, so they
+are outside that rule.
+
+16 computers, 2 utilities, 4 event spaces, 2 charges, 4 corners. The
+eighteen purchasable spaces have a PROP INDEX 0..17 in id order
+(`bp_board.c`); ownership, levels and mortgages are indexed by it.
+Collections and the price of one upgrade step: C Commodore 3 members 50,
+H Home Micros 3 75, A Apple 3 100, I IBM 3 125, R 16-bit Rivals 2 150,
+P Power PCs 2 200.
+
+#### 131.2.2 Money, order and salary
+
+Each of 2-4 seats starts on BOOT with 1,500 cr. The bank has no finite
+cash. The first player is chosen by the authority's dice: every seat rolls
+two dice; ties among the highest re-roll among themselves; play then runs in
+roster order from the winner. Forward movement that crosses or lands on BOOT
+pays 200 cr once per crossing; backward movement and transport to detention
+pay nothing; card text may say otherwise explicitly. Purchases and auctions
+pay the bank; rent pays the owner; charges and card payments pay the bank.
+Every payment names its reason, debtor, creditor and exact amount (the
+result's events, 131.3.4). Classic ends when one player remains; a resolved
+match accepts no economic command.
+
+#### 131.2.3 Sets and upgrades
+
+A computer has level 0..5: stock, 1-4 RAM chips, 5 a Workshop (which
+replaces the four chips). Owning every member of a collection doubles the
+base rent of an unupgraded member, provided no member is mortgaged. An
+upgrade needs the whole collection, no mortgage in it, the cash, and a
+management phase; building and selling are EVEN: after each step the
+collection's highest and lowest levels differ by at most one. Rent at levels
+1..5 is 5, 15, 30, 45, 60 times base rent, replacing (not multiplying) the
+set doubling. A step costs the collection's price; selling one returns half,
+rounded down (5 -> 4 is one step). Utilities are never upgraded. Selling is
+allowed in debt; buying is not.
+
+#### 131.2.4 Mortgages and utilities
+
+A property or utility mortgages for half its price, rounded down, and earns
+no rent while mortgaged. A computer mortgages only when every member of its
+collection is at level 0. Redemption costs principal plus 10% of principal
+rounded up, shown before confirmation. POWER/BBS rent is 4 x the movement
+dice total when the owner holds one unmortgaged utility, 10 x with both
+unmortgaged. A card-induced utility landing uses the turn's recorded dice
+total (BPState.d1 + d2, `rolled` set); a state lacking it is invalid. An
+unowned utility is bought or auctioned like a computer.
+
+#### 131.2.5 Turns and the Repair Shop
+
+Management -> roll -> move -> resolve the landing and every consequence ->
+management -> end turn, or roll again on doubles. Normal doubles grant
+another roll after the landing fully resolves; a third consecutive double
+sends the player straight to detention before moving. CRASH! transports to
+space 7 detained, without salary, ending the turn once obligations resolve.
+Landing on 7 is visiting. SWAP MEET does nothing. A detained player may pay
+50 cr, use a held Recovery Disk, or roll for doubles at the start of the
+turn; paying or the disk restores a normal turn including its doubles. A
+doubles release moves the rolled sum with no bonus roll; a failed attempt
+ends the first or second detained turn; the third failure creates a 50 cr
+obligation, after whose payment the recorded total is moved and resolved
+(no bonus roll); bankruptcy cancels that movement. Detained players receive
+rent, bid in auctions, trade and manage. The consecutive-doubles count
+resets at turn end or detention; tries, the pending payment and the pending
+movement are saved and replicated.
+
+#### 131.2.6 Auctions
+
+Declining, or being unable to afford, a direct purchase opens an auction
+among all solvent players including the decliner. Order starts with the
+landing player, then roster order. Opening minimum 10 cr; a later bid is a
+multiple of 10 and at least 10 above the high bid; no bid exceeds the
+bidder's cash. On each turn a seat bids or passes permanently. The high
+bidder is skipped until outbid. A seat that cannot make a legal higher bid
+is passed automatically, with a visible reason (event PASS, other = 1).
+When every other eligible seat has passed, the high bidder pays exactly the
+bid and receives the lot in the same transaction; if all pass without a
+bid, the bank keeps it. During an auction only BID and PASS are legal: no
+trade, upgrade, mortgage or roll, no wall-clock deadline, no proxy bid for a
+disconnected seat.
+
+#### 131.2.7 Trades
+
+The current player may propose a trade with one other solvent player in a
+management phase (MANAGE, REPAIR, AFTER), never past an unresolved debt,
+landing, auction or card. Terms: any subset of either side's properties and
+utilities, either side's Recovery Disks, and one cash amount with an
+explicit payer; a one-sided gift is legal, an empty proposal is not. No
+property of a collection with any upgrade may be traded. A mortgaged
+property may be traded and stays mortgaged. The offer is FROZEN under an
+offer id and the revision it was made at; the recipient alone accepts or
+rejects, the proposer may cancel. Acceptance re-validates every asset and
+balance and applies the whole exchange in one transaction or none of it.
+While an offer is pending nothing else economic happens; a disconnect pauses
+it and is never consent.
+
+#### 131.2.8 Debt, bankruptcy, rounds and scoring
+
+An obligation larger than cash opens DEBT for the active seat (the debtor is
+always the active seat: rent, charges, cards and the Repair Shop's third
+failure are its own). DEBT shows amount, creditor, cash and shortfall and
+permits only even upgrade sales, legal mortgages, SETTLE (when cash
+suffices; pays the whole obligation once) and BANKRUPT. On bankruptcy:
+every upgrade is sold at resale value; the debtor's cash goes to the
+creditor up to the debt, and any excess follows the estate; a PLAYER
+creditor receives every property, utility and Recovery Disk, mortgages
+kept, no interest; the BANK absorbs cash, returns properties at level 0
+unmortgaged (offered normally on later landings, no liquidation auctions)
+and Recovery Disks to the bottom of their decks. The seat is eliminated:
+removed from turn, round and bidding order, its pending commands invalid.
+Victory is evaluated only after the whole transaction. Quick Match ends
+after 10, 20 or 30 completed rounds (a round: every seat active at its start
+has completed a turn or been eliminated; bonus rolls belong to their turn);
+the final turn's consequences finish, then score = cash + each owned
+property's price minus outstanding mortgage principal + upgrade resale
+value (Recovery Disks score 0); ties share the win.
+
+#### 131.2.9 Cards
+
+Two original eight-card decks, shuffled once at setup by the authority's
+PRNG; drawn from the top, resolved cards returned to the bottom; a held
+Recovery Disk is out of the cycle until used (then to its own deck's bottom)
+or transferred. Card ids are `deck * 8 + n` (`bp_cards.c`).
+
+| deck | card | effect |
+|---|---|---|
+| Floppy Find | Boxed New Old Stock | receive 100 |
+| Floppy Find | Garage Sale Treasure | receive 50 |
+| Floppy Find | Duplicate Manual | receive 25 |
+| Floppy Find | Reboot to BOOT | advance to BOOT; receive 200 once, also when already there |
+| Floppy Find | Dial Into the BBS | advance to 16, salary only if crossing BOOT, resolve the BBS |
+| Floppy Find | Turbo Button | forward 3, collecting crossed salary, resolve |
+| Floppy Find | Recovery Disk | keep |
+| Floppy Find | Replacement Cable | pay 25 |
+| System Error | Leaking Battery | pay 100 |
+| System Error | Failed Capacitor | pay 50 |
+| System Error | Shipping Damage | pay 35 |
+| System Error | Bench Service | pay 25 per RAM chip + 100 per Workshop owned (a Workshop is no chips) |
+| System Error | General Protection Fault | detained, no salary, end turn |
+| System Error | Roll Back | back 3, no salary, resolve |
+| System Error | Warranty Replacement | receive 50 |
+| System Error | Recovery Disk | keep |
+
+Card destinations resolve through the ordinary landing code. The chains on
+this board terminate (Roll Back from 10 lands on 7, from 24 on 21; neither
+draws); the engine still bounds continuation depth (`BPState.depth`) and
+answers BP_EDEPTH rather than drop a payment or a move.
+
+### 131.3 The canonical match, phases and commands
+
+`apps/byteopoly/bp.h` is the source of truth for every record named here.
+
+#### 131.3.1 Canonical state
+
+`BPState` holds everything that decides the game and nothing that does not:
+match id and revision, turn and round, status/rules, phase, active and
+deciding seats, the roster (names, tokens, machine assignment, alive,
+position, cash, detention, tries, held disks), owner/level/mortgage per prop
+index, dice and doubles, pending movement, deck order and positions, the
+current card, the return phase, continuation depth, PRNG state, the auction,
+the debt, the frozen offer and the scores. Selection, focus, animation,
+sound, the log and window state are presentation and live outside it; they
+never enter a digest. Booleans and enums are explicit bytes, validated on
+every decode.
+
+#### 131.3.2 Phases
+
+`BP_PH_MANAGE` (before the roll), `REPAIR` (detained, before a release
+choice), `BUY`, `AUCTION`, `CARD` (the drawn card is shown; ACK_CARD
+resolves its effect), `DEBT`, `TRADE` (an offer awaits its recipient),
+`AFTER` (landing resolved: END_TURN, or ROLL for a doubles bonus), `OVER`.
+MOVING, RESOLVE_LANDING and TURN_COMPLETE are inside one transaction and
+never observable. START_ROLL is inside `bp_new_match`. HANDOFF is
+presentation only: it changes no canonical byte and needs no peer. LINK
+PAUSED is a session overlay that leaves the underlying phase intact.
+Dismissing a card is canonical (ACK_CARD); dismissing a handoff is not.
+
+#### 131.3.3 Commands
+
+`BPCmd` carries the type, the actor seat and the revision the actor saw,
+plus the arguments its type uses. `bp_apply` is the single mutation door: it
+checks phase, actor (`decider`), revision, ownership, cash and every rule,
+and either commits the whole transaction (BP_OK, `rev` + 1) or changes
+nothing and answers a `BP_E*` with a readable reason (`bp_err_text`).
+Wrong seat, wrong phase, stale revision, foreign asset, insufficient cash,
+malformed offer and an eliminated actor are each refused without change.
+
+#### 131.3.4 Results
+
+A committed transaction reports a `BPResult`: the dice and card it consumed
+and up to `BP_EV_MAX` events naming every payment (debtor, creditor,
+amount, reason), movement, ownership change and phase-relevant fact, in
+order. The log, the sounds and the client's cross-check read events; the
+renderer reads only `bp_game`.
+
+#### 131.3.5 Ownership of source
+
+One owner per file (the table in `bp.h`'s header). `bp_game` is mutated
+only by the session (`bp_link.c`) through `bp_apply` / `bp_new_match` /
+an adopted load or snapshot. The face and panels read it; they never write
+cash or ownership.
+
+### 131.4 The engine
+
+The engine is four files of the one translation unit: `bp_board.c` and
+`bp_cards.c` (the immutable tables of 131.2.1 and 131.2.9), `bp_math.c`
+(131.4.1) and `bp_rules.c` (everything below). It is OS-free: the same
+source runs in the host harness under `BP_HOST` and on the guest. It has
+no recursion, and every loop is bounded by a constant of the board (28
+spaces, 18 props, 4 seats, 8 cards), so a transaction's cost is bounded
+whatever the state holds. The arithmetic is 131.4.1; the transitions are
+131.4.2-131.4.9.
+
+**The door.**
+
+`bp_apply(s, c, r)` is the only function that changes a match. It runs
+`bp_check(s, c)` (pure), then copies `*s` into a static scratch record,
+executes the command there, adds one to the scratch `rev`, and copies the
+scratch back over `*s` only if every step answered `BP_OK`. Any later
+refusal (`BP_EOVERFLOW` on a balance, `BP_EDEPTH` on a full result or a
+card chain past its bound, `BP_EINVALID` on a state that cannot be
+resolved) therefore leaves `*s` byte-identical, and `r->n` is 0. The
+scratch record is the engine's (one `BPState` of bss); the engine is
+called only from the UI task, so it is never re-entered.
+
+`bp_check` refuses in this order, and the first refusal is the answer:
+
+| # | refusal | when |
+|---:|---|---|
+| 1 | `BP_EARG` | `c->type` is 0 or not below `BP_C_COUNT` |
+| 2 | `BP_EOUT` | `s->status` is not `BP_ST_PLAY` (an OVER match refuses everything) |
+| 3 | `BP_ESEAT` | `c->seat` is not below `s->nseats` |
+| 4 | `BP_EOUT` | the seat is eliminated |
+| 5 | `BP_ESTALE` | `c->rev` is not `s->rev` (both words) |
+| 6 | `BP_EPHASE` | the phase table below does not list `c->type` in `s->phase` |
+| 7 | `BP_ESEAT` | `c->seat` is not the command's actor (below) |
+| 8 | the command's own checks | ownership `BP_EOWNER`, cash `BP_EFUNDS`, a rule `BP_ERULE`, a malformed argument `BP_EARG` |
+
+The actor is `s->decider` for every command except `BP_C_CANCEL`, whose
+actor is the proposer `s->offer_from`. The decider is the active seat in
+every phase except AUCTION (the seat whose bid is required, `auc_turn`)
+and TRADE (the recipient, `offer_to`).
+
+#### 131.4.1 Two-word arithmetic
+
+A `BPU32` is a logical 32-bit unsigned value held as two named 16-bit
+words, value = `hi` x 65,536 + `lo`. Money, revisions, identities, digests
+and the PRNG state are BPU32s, and every arithmetic operation on one is a
+function in `bp_math.c`; no other file adds, subtracts or multiplies the
+words (reading them, `bp_u32_set` and `bp_u32_copy` are free).
+
+| function | contract |
+|---|---|
+| `bp_u32_set`, `bp_u32_copy` | never fail |
+| `bp_u32_add(r, a)`, `bp_u32_addw(r, v)` | r += a; a carry out of `hi` is `BP_EOVERFLOW` |
+| `bp_u32_sub(r, a)`, `bp_u32_subw(r, v)` | r -= a; a borrow out of `hi` is `BP_EFUNDS` (a balance never goes negative) |
+| `bp_u32_mulw(r, a, b)` | r = a x b, the exact 32-bit product of two words; never overflows (at most FFFE0001h) |
+| `bp_u32_mul(r, a, b)` | r = a x b for a BPU32 and a word; a product above FFFFFFFFh is `BP_EOVERFLOW` |
+| `bp_u32_cmp`, `bp_u32_cmpw` | -1, 0, 1 |
+| `bp_u32_iszero` | 1 when both words are 0 |
+| `bp_u32_fmt(buf14, a)` | decimal with a comma every three digits from the right, no sign, no leading zero ("0", "1,280", "4,294,967,295"); at most 13 characters and the NUL; answers `buf14` |
+| `bp_u32_parse(r, s)` | one or more decimal digits, commas allowed between them and ignored; anything else, or nothing, is `BP_EARG`; a value above FFFFFFFFh `BP_EOVERFLOW` |
+
+**Overflow policy.** Every mutator answers `BP_OK` or an error and leaves
+`*r` unchanged on error; nothing saturates, truncates or wraps. The engine
+turns the error into a refusal of the whole transaction (131.4's door), so
+a corrupt or hostile state can stop a command but can never mint money.
+Nothing in a real match approaches 2^32 credits; the policy exists so the
+question never has to be asked.
+
+**Why multiplication is by hand.** On the 8088, C's `unsigned * unsigned`
+keeps the low 16 bits and SmallerC has no 32-bit type to widen into, so
+`bp_u32_mulw` forms the product from four byte-by-byte partial products
+(each at most 65,025, which fits in a word on either compiler) and adds
+them with explicit carries. Division by ten for `bp_u32_fmt` is long
+division a byte at a time: the running remainder times 256 plus a byte is
+at most 2,559, so every intermediate is a 16-bit value.
+
+**The host discipline** (131.12): under `BP_HOST`, `BPWord` is `unsigned
+short` but C promotes it to a 32-bit `int`. Every intermediate is cast back
+to `BPWord` before it is stored or compared, and every carry and borrow is
+derived from the 16-bit results (`(BPWord)(x + y) < x`), never from a
+wider sum, so the host computes exactly the guest's numbers and an
+overflow the guest would suffer cannot hide in a host register.
+
+**Fixtures.** `hosttest/t_rules.c` checks the boundaries by values
+computed by hand: carry from `lo` FFFFh into `hi`, borrow from `hi`, add
+and sub at FFFFFFFFh and 0 (refused, target unchanged), `mulw` of FFFFh x
+FFFFh, 100h x 100h, 0 and 1, `mul` across the overflow line, `fmt` and
+`parse` round trips at 0, 999, 1,000, 65,535, 65,536, 999,999, 1,000,000
+and 4,294,967,295, and the parse refusals. `tests/bpmath/` runs the same
+table on the 8088 itself (`make bpmath`): a target-execution fixture, so
+the host's integer promotion cannot hide a defect the guest would have.
+
+#### 131.4.2 Phases and their commands
+
+| phase | decider | legal | leaves to |
+|---|---|---|---|
+| MANAGE | active | ROLL; UPGRADE SELL MORTGAGE REDEEM; PROPOSE | landing outcome; TRADE |
+| REPAIR | active | ROLL (attempt), PAY_BAIL, USE_DISK; UPGRADE SELL MORTGAGE REDEEM; PROPOSE | MANAGE (paid / disk), landing outcome (doubles), AFTER (failed), DEBT (third failure, short); TRADE |
+| BUY | active | BUY, DECLINE | AFTER; AUCTION |
+| AUCTION | `auc_turn` | BID, PASS | AUCTION; AFTER |
+| CARD | active | ACK_CARD | landing outcome |
+| DEBT | active | SELL, MORTGAGE, SETTLE, BANKRUPT | `ret_phase` or the pending move; the next turn or OVER |
+| TRADE | `offer_to` | ACCEPT, REJECT; CANCEL (by `offer_from`) | `ret_phase` |
+| AFTER | active | ROLL (bonus), END_TURN; UPGRADE SELL MORTGAGE REDEEM; PROPOSE | landing outcome; the next turn or OVER; TRADE |
+| OVER | - | nothing | - |
+
+A "landing outcome" is the phase the landing dispatcher (131.4.4)
+leaves: BUY, CARD, DEBT, or AFTER when nothing is left to decide.
+
+#### 131.4.3 Turns, rolls and the Repair Shop
+
+**A turn begins** (`bp_new_match`, END_TURN, a bankruptcy): `active` and
+`decider` become the seat, `turn` + 1, `doubles`, `rolled`, `d1`, `d2`
+and `depth` 0, event TURN, and the phase is REPAIR if the seat is
+detained, else MANAGE.
+
+**ROLL in MANAGE, or the bonus ROLL in AFTER.** The bonus is legal only
+while `doubles` > 0 and the seat is not detained; END_TURN is refused
+(`BP_ERULE`) while it is legal, so a doubles roll is never skipped. The
+roll draws `d1` then `d2` (131.4.7), sets `rolled`, and reports ROLL.
+Not doubles: `doubles` = 0. Doubles: `doubles` + 1; the third detains
+before moving (event DETAIN; `doubles` 0) and the phase is AFTER;
+otherwise event DOUBLES, and the move runs. `depth` is 0 for a dice move.
+
+**Movement.** Forward by n: every step that reaches space 0 pays salary
+200 (event SALARY; one crossing per lap), then event MOVE with the
+destination, then the landing dispatcher. Backward movement (Roll Back) and
+transport to detention pay nothing. **Detention**: `pos` 7, `detained` 1,
+`tries` 0, `doubles` 0, event DETAIN, no landing; the phase becomes AFTER
+with no bonus roll, and the turn passes on END_TURN.
+
+**REPAIR.** PAY_BAIL (cash at least 50, else `BP_EFUNDS`) pays the bank 50;
+USE_DISK `arg` = deck needs bit `arg` of the seat's `disks`, clears it and
+returns that deck's Recovery Disk to the bottom of its deck. Either one
+clears `detained` and `tries`, reports RELEASE (other 0 pay, 1 disk) and
+makes the phase MANAGE: a normal turn, doubles included. ROLL is an
+attempt: `doubles` stays 0 whatever it shows. Doubles release (RELEASE
+other 2) and move the total with no bonus roll. A failed first or second
+attempt adds one to `tries` and the phase is AFTER (the turn is spent).
+The third failure owes 50 to the bank with `pending_move` = `d1` + `d2`:
+paid at once when cash suffices (RELEASE other 3, then the move), else
+DEBT with reason `BP_DR_BAIL`; SETTLE pays it, releases and moves;
+BANKRUPT cancels the move. Detention is cleared only when the 50 is paid.
+
+**END_TURN** (AFTER, no bonus owed): the seat's bit leaves `round_left`
+(masked to the living); if that leaves it empty, `round` + 1 (event ROUND)
+and, in a Quick Match whose `round` has reached `rounds_limit`, the match
+ends by score (131.4.6); otherwise `round_left` becomes every living seat
+and the next living seat in roster order after the active one begins its
+turn.
+
+#### 131.4.4 The landing dispatcher
+
+One function resolves every arrival, by dice, release or card, and it
+never calls itself:
+
+| space | outcome |
+|---|---|
+| BOOT, REPAIR SHOP (visiting), SWAP MEET | nothing; AFTER |
+| computer or utility, unowned | BUY (decider active) |
+| owned by the lander, or mortgaged | nothing; AFTER |
+| owned by another seat | rent (below) paid to the owner; AFTER, or DEBT |
+| charge | its amount to the bank (event CHARGE); AFTER, or DEBT |
+| event space | the deck's top card is shown: `card` = its id, event CARD, phase CARD |
+| CRASH! | detention (131.4.3); AFTER |
+
+**Rent.** A computer at level 1..5 pays base x 5, 15, 30, 45, 60; at level
+0 it pays base x 2 when its owner holds the whole collection and no member
+is mortgaged, else base. A utility pays 4 x (`d1` + `d2`) when its owner
+holds one unmortgaged utility, 10 x with both; a utility landing with
+`rolled` 0 is `BP_EINVALID`. Every amount is a 16 x 16 product
+(`bp_u32_mulw`), so none overflows. `bp_rent_quote` is this function.
+
+**Payment.** A debt the active seat cannot cover in full opens DEBT: nothing
+is paid, `debt_to` (creditor seat or `BP_NOBODY` for the bank),
+`debt_amount`, `debt_reason` (`BP_DR_RENT`, `BP_DR_CHARGE`, `BP_DR_CARD`,
+`BP_DR_BAIL`) and `ret_phase` = AFTER are set and event DEBT reports it.
+Otherwise the whole amount moves at once (event RENT or CHARGE).
+
+**Cards.** The card is drawn when the token lands and resolved when the
+active seat sends ACK_CARD, so a redraw, a handoff or a save in between
+cannot apply it twice. The deck is a cycle of `deck_n[d]` ids in
+`deck[d][0..n-1]` read from `deck_top[d]`; the shown card is
+`deck[d][deck_top[d]]`. ACK_CARD first returns the card to the bottom
+(`deck_top` + 1 modulo n) or, for a Recovery Disk, takes it out of the
+cycle (delete at `deck_top`, n - 1, the seat's `disks` bit d set, event
+DISK). A disk coming back is inserted just before `deck_top` (the bottom),
+`deck_top` + 1. Then the effect: GAIN pays from the bank; PAY and Bench
+Service (25 per level 1..4 computer level, 100 per Workshop, over the
+seat's computers) pay the bank; TO advances to the space forward (a
+distance of 0 is a full lap, so Reboot to BOOT pays 200 also from BOOT),
+FORWARD moves forward, BACK moves backward without salary, DETAIN detains;
+movement ends in the landing dispatcher. `depth` counts the cards drawn since
+the last dice move: every draw adds one, and a draw that would take it
+beyond `BP_DEPTH_MAX` (3) refuses the whole transaction with `BP_EDEPTH`. No chain on this
+board draws twice (131.2.9), so the bound is never met by play.
+
+#### 131.4.5 Auctions, trades, management and debt
+
+**DECLINE** (allowed whatever the cash) opens the auction on `auc_space` =
+the landed space: `auc_open` = every living seat (a mask), `auc_passed` 0,
+`auc_high` `BP_NOBODY`, `auc_bid` 0, event AUCTION, and the turn goes to
+the landing seat. **Seeking the next bidder** walks roster order from the
+seat after the last one to act (from the landing seat itself at the
+opening), at most four steps: a seat not in `auc_open`, passed or holding
+the high bid is skipped; a seat whose cash is below the minimum is passed
+for it (event PASS, other 1). The first seat left is `auc_turn` and
+`decider`. When none is left the lot goes to the high bidder for exactly
+`auc_bid` (event WON) or, with no bid, stays with the bank (event UNSOLD);
+the phase is AFTER. Every bid is a multiple of 10; the minimum is 10 with
+no bid and `auc_bid` + 10 after one (`bp_bid_min`); a bid below the
+minimum or not a multiple of 10 is `BP_ERULE`, one above the bidder's cash
+`BP_EFUNDS`. PASS is
+permanent for this auction.
+
+**PROPOSE** (MANAGE, REPAIR, AFTER; the active seat) carries `to`, `give`
+(prop mask of the proposer's), `get` (of the recipient's), `disks` (bit d:
+the proposer gives deck d's disk; bit 4 + d: receives it), `amount` and
+`payer` (0 proposer, 1 recipient). Refused: `to` not a living other seat,
+a mask bit above 17 or a disks bit other than 0, 1, 4, 5, a payer other
+than 0/1 (`BP_EARG`); everything empty (`BP_EARG`); an asset its side does
+not hold (`BP_EOWNER`); a computer of a collection with any upgrade on it
+(`BP_ERULE`); cash above the payer's (`BP_EFUNDS`). It freezes the terms in
+`offer_*` with `offer_id` + 1 (0 skipped), `ret_phase` = the phase, event
+OFFER, phase TRADE. ACCEPT (`arg` = low byte of `offer_id`, else
+`BP_EARG`) re-runs every PROPOSE check on the current state and exchanges
+all of it at once (event TRADED); REJECT and CANCEL change nothing but the
+phase (events REJECTED, CANCELLED). All three clear `offer_*` back to idle
+and return to `ret_phase` with the active seat deciding. Mortgages travel
+with their property; no interest is charged.
+
+**UPGRADE** a computer: the seat owns the whole collection, none of it
+mortgaged, the level is below 5 and equal to the collection's lowest, and
+the seat has the step's price; not in DEBT. **SELL** one step: level above
+0 and equal to the collection's highest; refunds half the price, rounded
+down. **MORTGAGE**: owned, not mortgaged, and for a computer every member
+of the collection at level 0; pays half the price rounded down.
+**REDEEM**: mortgaged and owned, cost principal + ceil(principal / 10)
+(`bp_redeem_cost`); not in DEBT.
+
+**DEBT.** SETTLE needs cash at least `debt_amount` and pays it once to
+the creditor (event SETTLED, then RENT/CHARGE naming the reason); the
+record returns to idle; with `pending_move` the seat is released (RELEASE
+other 3) and moves, else the phase is `ret_phase`. **BANKRUPT** (any time in
+DEBT): every upgrade of the seat is sold to the bank at resale value (one
+event SELL a computer, other 0); all of the seat's cash goes to a player
+creditor or is absorbed by the bank (event ESTATE, other = creditor); a
+player creditor takes every property (mortgages kept) and the Recovery
+Disks; with the bank every property returns unowned at level 0 and
+unmortgaged and each disk goes to the bottom of its deck. The seat is
+eliminated: `alive` 0, cash, detention, tries, disks and `pending_move` 0,
+its bit out of `round_left`, event BANKRUPT. Then, with one seat left the
+match ends (131.4.6); otherwise the turn passes as END_TURN would.
+
+#### 131.4.6 The end
+
+Classic ends when one seat is alive; a Quick Match also ends when its
+round count is reached. Either way, every living seat's score is computed
+(`bp_score_of`: cash + each owned property's price, less half of it when
+mortgaged, + level x half the collection's step price; disks 0; an
+eliminated seat 0), `winners` is the mask of the highest scores in a Quick
+Match and the survivor in Classic, `status` and `phase` become OVER and
+event OVER carries the mask. Victory is evaluated only at the end of the
+transaction that eliminated a seat or completed the round.
+
+#### 131.4.7 The PRNG (`BP_RNG_ALG` 1)
+
+xorshift32 with shifts 13, 17, 5 over `BPState.rng`, done in two 16-bit
+words (`bp_rand_next`): a state of 0 is first replaced by 92D68CA2h (the
+generator's one fixed point is never stepped). After the step the
+answer is the high word of (new high word x bound), i.e. 0..bound-1; a
+bound of 0 answers the new high word itself. Dice are `1 + next(6)`, `d1`
+first. **`bp_new_match` consumes the stream in this order**, so a fixed
+seed reproduces a match: `rng` = seed; `match_id.lo`, `match_id.hi` (two
+bound-0 draws); deck 0 then deck 1 shuffled Fisher-Yates from the last
+index down (`j = next(i + 1)` for i = 7..1, swapping `deck[i]` and
+`deck[j]`, starting from `deck[d][i] = d * 8 + i`); then the roll-off, each
+round rolling `d1`, `d2` for every candidate seat in roster order (event
+ORDER, amount `d1 * 16 + d2`) and keeping the tied highest totals until
+one remains (at most 16 rounds; a result that cannot hold the events is
+`BP_EDEPTH`, and the caller seeds again). Only rolls, shuffles and the
+match id consume randomness: no text, redraw, retry or animation does.
+
+#### 131.4.8 The new match and the idle record
+
+`bp_setup_check`: 2..4 seats, rules 0/1, rounds 0 for Classic and 10, 20
+or 30 for Quick, every name 1..8 printable characters with its NUL inside
+the field, tokens below 4 and distinct, machines 0/1 (`BP_EARG`).
+`bp_new_match` builds the record in scratch and copies it out only on
+`BP_OK`: `status` PLAY, `rev` 1 (a zeroed record never matches a live
+match), every seat 1,500 cr on BOOT, unused seats zero with `alive` 0,
+every prop unowned (`BP_NOBODY`), level 0, unmortgaged, both decks full
+(n 8, top 0), `round_left` = every seat, events ORDER..., FIRST, TURN, and
+the first seat's MANAGE.
+
+Idle values, which `bp_state_check` requires outside their phase: `card`
+`BP_NOBODY` outside CARD; `auc_space`, `auc_turn` and `auc_high`
+`BP_NOBODY`, `auc_open`, `auc_passed` and `auc_bid` 0 outside AUCTION;
+`debt_to` `BP_NOBODY`, `debt_reason` and `debt_amount` 0 outside DEBT;
+`offer_from`, `offer_to` `BP_NOBODY`, the other `offer_*` terms 0 outside
+TRADE (`offer_id` keeps counting); `ret_phase` `BP_PH_NONE` outside DEBT and
+TRADE; `pending_move` 0 unless DEBT with reason `BP_DR_BAIL`.
+
+#### 131.4.9 Queries (pure; the UI greys with these)
+
+`bp_can(s, seat, type, arg)` builds the command a button would send (the
+current `rev`; `arg` as given; for BID the seat's minimum bid; for PROPOSE
+only the phase and actor, since the terms are not yet chosen) and answers
+exactly what `bp_check` would: the same predicates, so a greyed button and
+a refused command never disagree. What only execution can find
+(`BP_EOVERFLOW`, `BP_EDEPTH`, `BP_EINVALID` from a corrupt record) it does
+not predict; `hosttest/t_rules.c` compares the two on every button at
+every sixteenth step of its scripted games. `bp_rent_quote(s, space, out)`: BP_OK
+with the rent the active seat would pay now; for a utility with no
+recorded total, `BP_ERULE` with `*out` = the multiplier (4 or 10); for an
+unowned, own or non-property space, `BP_EOWNER` with 0.
+`bp_mortgage_value`, `bp_redeem_cost`, `bp_group_owner` (seat holding the
+whole collection, or `BP_NOBODY`), `bp_score_of`, `bp_seat_assets` (prop
+mask, answer = count), `bp_bid_min`. `bp_state_check(s)` answers
+`BP_OK` or `BP_EINVALID` for every rule-level invariant: enums in range,
+seat fields of unused and eliminated seats, one owner per prop and only
+living owners, levels only on fully held unmortgaged collections and even,
+no level on a utility, every card id 0..15 exactly once across the two
+cycles and the held disks, each in its own deck, the idle values above, the
+phase's own fields (the deciding seat alive, the shown card on top, the
+auction lot unowned, the debt owed by the active seat). The save lane's
+`bp_validate` calls it; it is the rules' own description of a legal
+match, kept beside the code that makes one.
+
+### 131.5 The cable protocol
+
+Binding choices made before the lane: the framer is `apps/os88cable.inc`
+(§115, written once for any two-machine package): 7Eh/7Dh framing,
+CRC-16/CCITT-FALSE, at most 32 body bytes a frame, one length per type.
+The port search, lease, mouse-port refusal and teardown are its own; this
+package does not touch a UART, an interrupt vector or the PIT. Byteopoly has
+its own frame identity and never answers a WireFleet or Wire Arena peer.
+
+The session (`bp_link.c`) is OS-free C: it reaches the UART only through
+the `bp_ck_*` bridge in `bp.h` and time only through `os88_ticks()`, so the
+host harness (`hosttest/t_link.c`) runs the whole protocol between two
+endpoints in one process. On the guest the bridge is `bp_cable.inc`
+(131.5.1); every byte below is the protocol, not an implementation detail.
+
+#### 131.5.1 The bridge to `apps/os88cable.inc`
+
+`bp_cable.inc` includes `os88cable.inc` and provides what it asks of an
+includer: `lk_blk` (LK_SIZE), `lk_sbuf` (SER_BUFFER_SIZE, in the package's
+own region, so §115's buffer check passes), `lk_crct` (512), `lk_lens` (the
+table below, 24 entries) and `lk_take`. Every `bp_ck_*` is a near cdecl
+function (§73.3) that keeps BP, DS and DF.
+
+| C | does |
+|---|---|
+| `bp_ck_open(port)` | 0: `lk_auto` (COM2 first, the lease moving between the two ports until a peer is heard, §114.9); 1/2: `lk_connect` with the user-named bit (§115.1.1). BP_EIO and `bp_ck_msg()` says why |
+| `bp_ck_close()` | `lk_disconnect`, the RX ring emptied |
+| `bp_ck_tick()` | `lk_tick` (the search), then the TX staging flushed; copies the framer's counters into `bp_diag.crc` (frames dropped: CRC, length, type, an escape at a delimiter) and `bp_diag.overrun` (line errors and overflows, plus frames the RX ring had no slot for) |
+| `bp_ck_heard()` | `LK_HEARD` = 1: a Byteopoly HELLO arrived, the search stops moving |
+| `bp_ck_send(body, n)` | `lk_send`; BP_EPENDING when the staging has no room for the worst case (2n + 6) |
+| `bp_ck_recv(body)` | the next valid body, without its CRC, out of a 4-slot RX ring; with the ring empty it first runs `lk_poll` for at most 32 bytes, which completes at most four frames (the shortest is 8 bytes on the wire, the first may need only its closing delimiter), so the ring cannot overflow from one poll |
+| `bp_ck_port()`, `bp_ck_msg()` | `LK_PORT` while the lease is open, `LK_MSG` |
+| `bp_ck_rand()` | `OSAPI_RAND`: endpoint and checkpoint identities only, never the game's dice |
+
+**The region rule.** `lk_lease` pins the region (`OSAPI_MEM_MOVABLE`, AX = 0)
+before the rings are published, as §115 requires, and `lk_disconnect` and a
+refused lease re-declare it movable with `OS88_REGION_MOVABLE`'s own `ret`.
+For a C package with an overlay that is WRONG: the region's relocation proc
+is `cc_regreloc` (= `cc_ovbind`, §73.14), which rewrites the overlay's back
+vectors, and a bare `ret` in its place would leave them naming the old base
+after the next compaction. So every bridge call that can close the lease
+(`bp_ck_open`, `bp_ck_close`, `bp_ck_tick`) ends by re-declaring the region
+with `cc_regreloc` and DX = DS when the lease is no longer held and was, or
+a lease was tried and refused.
+
+#### 131.5.2 Frames
+
+`os88cable.inc`'s framing: 7Eh, the body with 7Eh/7Dh escaped, 7Eh. Byte 0
+is the type, the last two bytes CRC-16/CCITT-FALSE over the rest, and each
+type has exactly one length (with its CRC: `lk_lens`); a frame of another
+length or an unknown type is dropped by the framer. Every multi-byte field
+is little-endian; a 32-bit field is a `BPU32`, low word first. Every frame
+but HELLO carries at [1..2] the TAG, the low word of the SENDER's endpoint
+id (131.6.1); a frame whose tag is not the bound peer's is dropped and
+counted (`bp_diag.frame`) before any other field is read.
+
+| type | name | dir | body bytes (no CRC) | fields after the type (and tag) |
+|---|---|---|---|---|
+| 1 | HELLO | both | 24 | 'BYTO', protocol version (2; 1 was the board before the monotonic prices, and is refused as a bad peer), role (1 host, 2 client), endpoint id (4), `bp_fingerprint` (4), the peer's id this side has bound (4, 0 none), intent (0 new match, 1 resume), match id (4, 0 for a new match) |
+| 2 | LOBBY1 | H to C | 25 | lobby revision (2), nseats, rules, rounds, token[4], machine[4], ready mask (bit 0 host, bit 1 client), name[0] (8, NUL-padded) |
+| 3 | LOBBY2 | H to C | 29 | lobby revision (2), name[1..3] (24) |
+| 4 | NAME | C to H | 15 | lobby revision (2), seat, token, name (8) - the client proposes its own seat |
+| 5 | READY | C to H | 6 | lobby revision (2), ready (0/1) |
+| 6 | START | H to C | 17 | lobby revision (2), seed (4), revision (4), digest (4) |
+| 7 | INTENT | C to H | 27 | seq (2), the command: type, seat, arg, to, rev (4), amount (4), give (4), get (4), disks, payer |
+| 8 | TERMS | H to C | 16 | origin (0 host, 1 client), seq (2), give (4), get (4), disks, payer |
+| 9 | RESULT | H to C | 25 | origin, seq (2), new revision (4), digest (4), d1, d2, card, the command: type, seat, arg, to, amount (4) |
+| 10 | REFUSE | H to C | 10 | seq (2), code, the host's revision (4) |
+| 11 | ACK | C to H | 11 | revision (4), digest (4) - the APPLIED acknowledgement |
+| 12 | PING | both | 12 | revision (4), digest (4), flags (bit 0 a transaction outstanding, bit 1 paused, bit 2 diverged) |
+| 13 | CHAT | both | 28 | chat seq, text (24, NUL-padded) |
+| 14 | CHATACK | both | 4 | chat seq |
+| 15 | SNAPREQ | C to H | 9 | match id (4), the next offset wanted (2) |
+| 16 | SNAPHEAD | H to C | 17 | match id (4), revision (4), digest (4), length (2) |
+| 17 | SNAPDATA | H to C | 29 | offset (2), 24 bytes of `bp_encode` |
+| 18 | RESUME | both | 29 | role, agreed (0 offer, 1 adopted), match id, checkpoint id, revision, digest, host id, client id (4 each) |
+| 19 | CKREQ | C to H | 7 | match id (4) |
+| 20 | CKBEGIN | H to C | 27 | match id, checkpoint id, revision, digest, host id, client id (4 each) |
+| 21 | CKREPLY | C to H | 9 | checkpoint id (4), stage (1 written, 2 committed), code |
+| 22 | CKCOMMIT | H to C | 7 | checkpoint id (4) |
+| 23 | BYE | both | 4 | reason (0 left) |
+
+The largest body is 29 bytes, 31 with its CRC (`LK_MAXF` is 32). A frame on
+the wire is at most 2 x 31 + 2 = 64 bytes escaped and typically n + 4.
+**Own identity**: WireFleet's 64-byte bodies exceed `LK_MAXF`, WireArena's
+types have other lengths, and a HELLO must carry 'BYTO', the version and
+the fingerprint, so neither is ever answered; nothing but a bound peer's
+tag reaches the session.
+
+The BPCmd crosses as INTENT (all of it) and as RESULT (all but the trade
+masks, which a PROPOSE's TERMS carries just before its RESULT; `rev` is
+implied: the revision before the new one). The host CANONICALISES a command
+before it applies it: fields its type does not use are zeroed (bp.h), so
+what the client replays is exactly what the host applied.
+
+#### 131.5.3 Time, bandwidth and capacities
+
+Every timeout is in guest ticks (18.2 a second) from `os88_ticks()`, the
+difference of two 16-bit readings. Silence is counted in SERVICE ticks: each
+`bp_sess_tick` adds at most 2, so a long paint on this machine (the session
+was not reading) never counts as the peer's silence; the lease's 255-byte
+RX ring holds the bytes meanwhile (~1 s of a saturated line, and the
+protocol's idle traffic is ~16 bytes a second).
+
+| constant | ticks | what |
+|---|---|---|
+| `BPL_BEAT` | 9 | HELLO while unbound; LOBBY1/2, READY and RESUME every 2 beats |
+| `BPL_PING` | 18 | a PING when nothing else was sent for this long |
+| `BPL_RETRY` | 27 | INTENT, START, RESULT (+TERMS), CHAT, SNAP*, CK*, RESUME re-sent; doubled while paused |
+| `BPL_QUIET` | 128 | service ticks of silence: PAUSED (in a lobby: the binding is dropped) |
+| `BPL_TRIES` | 5 | retries of one frame without an answer: PAUSED, even if PINGs arrive |
+
+At 2,400 baud 8N1 the line carries 240 bytes a second. A transaction is an
+INTENT (~33 bytes on the wire), a RESULT (~31) and an ACK (~17): about 81
+bytes, a third of a second of line, a PROPOSE 20 more. Idle, a PING a
+second each way is 7% of the line. A snapshot (at most `BP_STATE_MAX` = 320
+bytes) is 14 SNAPDATA frames of 24 bytes, ~33 on the wire each: about 2 s,
+shown as progress. A lobby rebroadcasts ~75 bytes every 2 beats (~1 s).
+
+| queue | capacity |
+|---|---|
+| the lease's rings (§115.1) | 255 bytes each way |
+| `os88cable.inc` TX staging | 136 bytes: two worst-case frames |
+| the RX ring (`bp_cable.inc`) | 4 slots of 30 bytes (a length and a body); a full ring drops and counts |
+| outstanding economic transactions | 1, globally |
+| chat | 1 line in flight, 24 characters |
+| snapshot window | 3 chunks beyond the last acknowledged offset |
+
+**The parser's budget** per `bp_sess_tick`: one `lk_tick`, then at most 8
+frames out of the RX ring (each refill a `lk_poll` of at most 32 bytes),
+then at most one retry, one PING, one snapshot chunk and one chat frame.
+Nothing in a tick loops over a length a frame names: every length is the
+type's, and every offset is checked against the buffer before it is used.
+
+**Send priority.** A RESULT, ACK, REFUSE or INTENT goes out at once when it
+is made; snapshot chunks, PINGs and chat are sent only in a tick with no
+transaction frame queued behind a full staging, so chat and heartbeats
+never outrank a pending acknowledgement.
+
+### 131.6 Sessions, authority and recovery
+
+Binding choices made before the lane: ONE banker host per match for its
+whole life; one outstanding economic transaction at a time. The client
+sends INTENTs only and never optimistically mutates. The host applies a
+legal intent once, retains the result, and publishes it with the new
+revision and the canonical digest (131.7). The client then applies the SAME
+command with the SAME production engine: the PRNG state is canonical, so
+the replay is deterministic, and it cross-checks the result's dice/card and
+the digest; any disagreement stops economic input and offers the banker's
+snapshot within the same match. Local play and both cable roles call the
+same `bp_apply`. The trust model is friendly: the banker is trusted;
+nothing here claims cheat resistance or secrecy from a modified peer, and
+the ordinary interface never shows a future card.
+
+The session owns `bp_game`: nothing else writes it, and every write is
+`bp_new_match`, `bp_apply`, an adopted snapshot or checkpoint (131.6.6,
+131.7.5) or an adopted local load (`bp_sess_load_local`, after the save
+lane's validation). The UI learns of a write through `bp_ui_committed`
+(with an empty result for an adoption) and of a link change through
+`bp_ui_link`.
+
+#### 131.6.1 Modes, identities and binding
+
+`bp_mode` is LOCAL, HOST or CLIENT; `bp_here` is 0 (local and host) or 1
+(client) and is the value `BPState.machine[]` and `BPSetup.machine[]` use.
+**Local** is a pass-through: `bp_sess_submit` is `bp_apply` on `bp_game`
+and the tick does nothing.
+
+`bp_link_host(port)` / `bp_link_join(port)` open the bridge and draw a fresh
+32-bit **endpoint id** (two `bp_ck_rand`s and the ticks; a low word of 0 is
+redrawn): the identity of this machine for this LINK SESSION. A session is
+bound when a compatible HELLO arrives (state PEER) and confirmed when the
+peer's HELLO names our id, or any tagged frame arrives from it (LOBBY).
+Compatible means: 'BYTO', protocol version 1, the same `bp_fingerprint`
+(rules and content), the OTHER role, and the same intent (both new, or both
+resuming the same match id). Anything else is BADPEER with the reason on
+the status line - "The other PC chose Host too", "Different Byteopoly
+version", "The other PC is resuming a saved match" - and changes no state;
+a compatible HELLO later still binds. While unbound both sides send HELLO
+every beat; a HELLO is ANSWERED only while its sender does not yet name our
+id, so two bound sides never echo HELLOs at each other. Once a match has started, a HELLO from another id is a stranger
+("Another Byteopoly answered: not this match's partner"): counted, never
+bound. **There is no host migration and no role reversal**: the host is the
+banker for the match's whole life.
+
+#### 131.6.2 The lobby
+
+The host owns the `BPSetup` and a 16-bit **lobby revision**, raised by
+every change: `bp_lobby_set` on the host (checked with `bp_setup_check`,
+2-4 seats, at least one on each machine), or a NAME the host accepts. The
+client's `bp_lobby_set` proposes only the names and tokens of ITS seats
+(machine 1): one NAME a beat per changed seat until LOBBY1/2 show it, and
+the host refuses a NAME for another machine's seat, an old lobby revision
+or a token in use. The host rebroadcasts LOBBY1 + LOBBY2 every two beats;
+the client takes a setup only when both halves of the same revision have
+arrived. **Ready belongs to a revision**: `bp_lobby_ready` on the client
+sends READY (lobby revision, flag) every two beats, the host records it only
+for the current revision, and any change clears both flags
+(`bp_lobby_peer_ready` answers the other machine's flag). `bp_lobby_start`
+(host, both ready on the current revision) freezes the roster: the host runs
+`bp_new_match` with a fresh seed (another, up to four draws, when the
+engine answers BP_EDEPTH - a roll-off tie storm, 131.4.7 - so a client never
+reseeds by itself) and sends START (the lobby revision, the seed, the
+revision and digest it produced) as an ordinary outstanding
+transaction (131.6.3): the client runs `bp_new_match` with the SAME setup
+and seed, checks the digest and acknowledges with ACK. Names and tokens are
+bounded (8 characters, NUL-padded on the wire; a received name is cut at
+its eighth byte).
+
+#### 131.6.3 The transaction: stop-and-wait, one outstanding
+
+**Seat gating.** A seat is played on the machine `bp_game.machine[seat]`
+names (`bp_sess_mine`). `bp_sess_submit` refuses BP_ENOTMINE for a seat of
+the other machine BEFORE any traffic, BP_EPAUSED when the link is not in
+PLAY, and BP_EPENDING (not taken) while a transaction, a checkpoint or a
+snapshot is outstanding - the UI greys with `bp_sess_busy`. The host
+refuses an INTENT whose seat is not a client seat (REFUSE BP_ENOTMINE)
+whatever the frame says; that the seat is the DECIDER is `bp_apply`'s own
+check (BP_ESEAT), so neither machine can act for the other's seats, in an
+auction or a trade response included.
+
+**Host-local command.** The host canonicalises it, `bp_apply`s it, and if
+it commits: `bp_ui_committed`, then the retained RESULT (origin 0, the
+host's seq) is sent - TERMS first for a PROPOSE - and retried every
+`BPL_RETRY` until the client's ACK names the new revision and the host's
+digest. Returns BP_OK.
+
+**Client command.** The client checks it with `bp_check` (pure: the same
+answer the banker would give, so a refusal costs no traffic), takes the next
+16-bit seq, sends INTENT and returns BP_EPENDING ("sent"). The INTENT is
+retried every `BPL_RETRY` until a RESULT for (origin 1, that seq) or a
+REFUSE for that seq arrives. The client NEVER mutates on its own: not cash,
+not ownership, not the dice, not a phase.
+
+**The host and an INTENT.** In order: the tag is the peer's; a seq at or
+below the client's high-water mark is a duplicate - the retained answer for
+exactly that seq (RESULT or REFUSE) is sent again and nothing is applied -
+or, older, dropped and counted; while a transaction is outstanding the
+answer is REFUSE BP_EPENDING, which does NOT advance the high-water mark,
+and the client keeps the intent and retries it; otherwise the seat is
+gated, the command canonicalised and applied once, the high-water mark set
+to the seq, and the answer (RESULT, or REFUSE with the engine's code and the
+host's revision) retained and sent. **One identity per command**: (the
+client's endpoint id, its seq), scoped to the link session; the tag carries
+the first, the frame the second, and `cmd.rev` is checked by the engine as
+well, so even a replayed intent that fooled the seq check is BP_ESTALE.
+
+**Sequence wrap.** A seq is 16 bits, starts at 1 in each link session and
+never wraps: at 65,535 the client refuses further commands (BP_EOVERFLOW,
+"Save and resume the match") - a resume is a new link session with new
+endpoint ids, where seqs start again and a frame of the old session carries
+the wrong tag. A game is a few thousand commands.
+
+**The client and a RESULT.** If its new revision is the client's revision
++ 1, the client rebuilds the command (TERMS supplies a PROPOSE's masks; a
+PROPOSE RESULT without matching TERMS is ignored until the retry brings
+both), applies it with `bp_apply`, compares the dice and card it consumed
+with the RESULT's, computes `bp_digest`, and sends ACK (the revision, ITS
+digest). Equal: `bp_ui_committed`, and if it was its own seq the intent is
+done. Different, or `bp_apply` refused: DIVERGED (131.6.5). A RESULT whose
+revision the client already has only resends the ACK; an older one is
+dropped; a later one (a revision skipped) is a divergence. **The host and
+an ACK**: the outstanding revision with the host's digest retires the
+transaction (the result stays retained for duplicates); the revision with
+another digest is DIVERGED; anything else is dropped. Only then is the next
+economic command admitted, from either machine.
+
+A REFUSE for the client's seq ends its intent: the status line says
+"Banker: <bp_err_text>" and the UI is told.
+
+#### 131.6.4 Pause and live resume
+
+PAUSED is entered after `BPL_QUIET` service ticks without a valid frame from
+the peer, or `BPL_TRIES` retries of one frame without its answer; PINGs keep
+a quiet but healthy link alive. While paused, economic input is refused
+(BP_EPAUSED) on both machines; the phase, the pending decision (an auction,
+a debt, a frozen trade) and the outstanding transaction are all KEPT -
+nothing reverts, nothing becomes a local game. Retries continue at half
+rate. The first valid frame from the bound peer ends the pause; the
+retained INTENT or RESULT then finishes the transaction exactly once,
+because of 131.6.3's identities: a lost intent is applied when its retry
+arrives, a result lost after the host's commit is re-sent from the retained
+copy, an ACK lost after the client's apply is answered by the client's
+revision check (resend the ACK). Nothing is rerolled, repaid, rebid or
+re-accepted. `bp_link_leave` is the only way out of a cable match, and it
+ENDS the match on this machine: BYE twice, the port let go, `bp_mode` back
+to LOCAL and `bp_game.status` EMPTY - the match is never turned into a local
+game, and a paired checkpoint stays on disk to resume. The peer shows "The
+other PC left the match" and stays paused. A peer that comes back as a new
+instance has a new endpoint id and is a stranger; the match continues only
+from a paired checkpoint (131.7.5).
+
+#### 131.6.5 Divergence and snapshot adoption
+
+The client's check of each RESULT, and every PING at an equal revision (a
+PING's digest is computed afresh as it is sent, so damage to a board that no
+command touched is found within a few seconds), compare digests. Any
+disagreement is DIVERGED (`BP_L_DIVERGED`) on the client, and on the host
+when the client's ACK or PING carries the other digest: economic input stops
+on both. The client offers `bp_sess_adopt` ("Use the banker's board"); the
+choice is the player's, never automatic. It sends SNAPREQ (match id, offset
+0); the host answers SNAPHEAD (match id, revision, digest, length) and
+`bp_encode`'s bytes in SNAPDATA chunks, at most 3 beyond the client's last
+SNAPREQ offset, going back to that offset after `BPL_RETRY` without
+progress. The client accepts chunks only in order, only for the match id
+`bp_game` already has (**never a stranger's or another match's state**),
+decodes into a scratch `BPState` (`bp_decode` validates), checks the
+decoded digest against SNAPHEAD's, and only then copies it over `bp_game`,
+sends ACK and returns to PLAY. A failed adoption leaves `bp_game` as it was
+and stays DIVERGED. Histories are never merged and neither side is chosen by
+a clock or a turn count: the banker's board is the one adopted.
+
+#### 131.6.6 Chat and diagnostics
+
+`bp_chat_send(text)` takes at most 24 characters (more are cut) and refuses
+BP_EPENDING while a line is in flight or within `BPL_PING` ticks of the last
+one (counted in `bp_diag.chatdrop`). A line is retried until its CHATACK, at
+most `BPL_TRIES` times, then dropped and counted. A receiver shows a chat
+seq once (`bp_ui_chat(machine, text)`) and acknowledges every copy. Chat
+never touches `bp_game`, the dice or the transaction. `bp_diag` counts CRC
+and framing drops, retries, frames refused by the session (wrong tag,
+malformed, wrong match, stale), serial overruns, snapshot adoptions, frames
+received and sent, and dropped chat; reading it changes nothing.
+`bp_link_msg()` is one line: the state, the role and port, and while
+playing the synchronised revision and "waiting" when a transaction is
+outstanding.
+
+### 131.7 Saves and paired checkpoints
+
+(Save lane: the canonical encoding, its validation, the digest, the local
+save file and the file half of a paired checkpoint. Link lane: the
+checkpoint protocol between the machines. Reserved.)
+
+Binding choices made before the lane: one canonical field-by-field
+little-endian encoding (`bp_encode`) serves the save files, the snapshot
+and the digest; nothing is written raw from a struct. A load decodes into a
+scratch `BPState` and validates completely before anything replaces the
+running match.
+
+#### 131.7.1 The encoding
+
+`bp_encode(s, buf, cap)` writes the canonical match as exactly
+`BP_ENC_LEN` = **233** bytes (0 when `cap` is smaller; it never validates,
+so a test can encode an invalid state). Every integer is little-endian with
+the width below; nothing is a struct copy. A `BPU32` is its `lo` word then
+its `hi` word. `BP_STATE_MAX` (320) caps every encoded state; the version
+byte is the first byte so a later layout can be told apart before anything
+else is read. Offsets (version 1, `BP_ENC_VER`):
+
+| off | bytes | field | off | bytes | field |
+|---:|---:|---|---:|---:|---|
+| 0 | 1 | encoding version = 1 | 151 | 1 | `d1` |
+| 1 | 1 | `status` | 152 | 1 | `d2` |
+| 2 | 1 | `rules` | 153 | 1 | `doubles` |
+| 3 | 1 | `rounds_limit` | 154 | 1 | `rolled` |
+| 4 | 1 | `nseats` | 155 | 1 | `pending_move` |
+| 5 | 4 | `match_id` | 156 | 16 | `deck[2][8]`, deck 0 then 1 |
+| 9 | 4 | `rev` | 172 | 2 | `deck_n[2]` |
+| 13 | 2 | `turn` | 174 | 2 | `deck_top[2]` |
+| 15 | 2 | `round` | 176 | 1 | `card` |
+| 17 | 1 | `round_left` | 177 | 1 | `ret_phase` |
+| 18 | 1 | `phase` | 178 | 1 | `depth` |
+| 19 | 1 | `active` | 179 | 4 | `rng` |
+| 20 | 1 | `decider` | 183 | 1 | `auc_space` |
+| 21 | 32 | `name[4]`, 8 bytes each | 184 | 1 | `auc_open` |
+| 53 | 4 | `token[4]` | 185 | 1 | `auc_passed` |
+| 57 | 4 | `machine[4]` | 186 | 1 | `auc_turn` |
+| 61 | 4 | `alive[4]` | 187 | 1 | `auc_high` |
+| 65 | 4 | `pos[4]` | 188 | 4 | `auc_bid` |
+| 69 | 16 | `cash[4]`, 4 each | 192 | 1 | `debt_to` |
+| 85 | 4 | `detained[4]` | 193 | 1 | `debt_reason` |
+| 89 | 4 | `tries[4]` | 194 | 4 | `debt_amount` |
+| 93 | 4 | `disks[4]` | 198 | 2 | `offer_id` |
+| 97 | 18 | `owner[18]` | 200 | 1 | `offer_from` |
+| 115 | 18 | `level[18]` | 201 | 1 | `offer_to` |
+| 133 | 18 | `mortgaged[18]` | 202 | 1 | `offer_disks` |
+| | | | 203 | 1 | `offer_payer` |
+| | | | 204 | 4 | `offer_give` |
+| | | | 208 | 4 | `offer_get` |
+| | | | 212 | 4 | `offer_cash` |
+| | | | 216 | 16 | `score[4]`, 4 each |
+| | | | 232 | 1 | `winners` |
+
+A seat name is its characters then NUL padding to 8 bytes; the encoder
+writes ZERO after the first NUL whatever the struct holds (so stale bytes
+never reach a digest) and the decoder sets the ninth byte to NUL.
+
+**Digest.** `bp_digest` is a 32-bit value over the 233 bytes: `lo` =
+CRC-16/CCITT-FALSE (poly 1021h, init FFFFh, no reflection, no final xor) and
+`hi` = Fletcher-16 (`s1`, `s2` start 0; per byte `s1 = (s1 + b) mod 255`,
+`s2 = (s2 + s1) mod 255`; `hi = s2 * 256 + s1`). Two CRCs with different
+inits would differ only by a constant of the length, so the second half is a
+different family. A state's digest is therefore a property of its encoding
+alone: equal states have equal digests, and any one-field change moves it.
+
+**Fingerprint.** `bp_fingerprint` is the same 32-bit function over the byte
+stream: `BP_RULES_VER` (u16), then for each of the 28 spaces `kind, group,
+prop` (u8) and `price, rent` (u16), then for each of the 16 cards `id, deck,
+effect, arg` (u8) and `amount` (u16), all as stored in `BPSpace` / `BPCard`
+(strings excluded: a wording change must not split a pair). It is what the
+handshake (131.5) and every file carry.
+
+`bp_crc16(p, n, crc)` continues a CRC-16/CCITT-FALSE from `crc` (pass FFFFh
+to start). The codec keeps one static scratch buffer, `bp_io` (512 bytes),
+which `bp_digest` and every file function use; no caller holds it.
+
+#### 131.7.2 Validation
+
+`bp_validate(s)` answers `BP_OK` or `BP_EINVALID` and, on refusal, records
+the first failing rule, readable as `bp_invalid_rule()`. It is
+STRUCTURAL: it proves a state could have arisen, not how. `bp_decode` fills
+the caller's scratch and validates it completely; on any failure the scratch
+is undefined and nothing else has been touched, so a load never alters
+`bp_game`. A saved match is always `BP_ST_PLAY` or `BP_ST_OVER`; an empty
+match is not savable. Rules, in the order checked:
+
+1. `status` PLAY or OVER; `rules` 0 or 1; `nseats` 2..4; `rounds_limit` 0
+   for Classic and 10, 20 or 30 for Quick; Quick `round` <= `rounds_limit`.
+2. `phase` 1..9; `phase == OVER` exactly when `status == OVER`.
+3. `alive[]` 0/1, seats at and above `nseats` 0, at least two alive in PLAY
+   (one in OVER); `active` below `nseats` and `decider` too (in OVER `decider` may be
+   `BP_NOBODY`), both alive in PLAY;
+   `round_left` inside the seat mask and, in PLAY, inside the alive mask.
+4. Roster: each used seat's name is 1..8 printable characters (20h-7Eh) then
+   a NUL (bytes after it are not state: the encoder writes zeros, and a
+   decoded payload with a non-zero byte there is refused as rule 4); tokens below 4 and distinct; `machine[]` 0 or 1; every
+   field of an unused seat (name, token, machine, position, cash, detention,
+   tries, disks, score) is 0.
+5. Seat state: `pos` < 28; `detained` 0/1 and a detained seat is on space 7;
+   `tries` <= 3 and non-zero only while detained; `disks` inside bits 0-1;
+   `cash` below 2^30 (hi word < 4000h, "sane"); an eliminated seat has no
+   cash, detention, tries or disks.
+6. Properties: an owner is an alive seat below `nseats` or `BP_NOBODY`;
+   `level` <= 5; `mortgaged` 0/1; an unowned property has level 0 and is not
+   mortgaged.
+7. Sets: a utility's level is 0; a computer with level > 0 belongs to a
+   collection owned entirely by one seat with no member mortgaged (so a
+   mortgage anywhere in a collection means level 0 group-wide), and the
+   collection's highest and lowest levels differ by at most 1.
+8. Dice: `d1`, `d2` 0..6 and both zero or both not; `rolled` 0/1 and, when
+   1, the dice are not zero; `doubles` <= 2; `pending_move` 0/1 and only in
+   DEBT with `rolled` set.
+9. Decks: at most one seat holds each deck's Recovery Disk; `deck_n[d]` is 8
+   minus the disks held from deck `d`; `deck_top[d]` < `deck_n[d]` (0 when
+   empty); the first `deck_n[d]` entries of `deck[d]` are distinct cards of
+   deck `d`, and a held disk's card is not among them. So every card id
+   appears exactly once across the two cycles and the held disks. **The card
+   shown in `CARD` stays in its cycle until ACK_CARD resolves it** (a Recovery
+   Disk leaves the cycle for the holder at that ACK). `card` is `BP_NOBODY`
+   or 0..15 outside `CARD`.
+10. `REPAIR`: the active seat is detained. `BUY`: the active seat stands on
+    an unowned computer or utility.
+11. `AUCTION`: `auc_space` is a SPACE id (0..27) of an unowned property;
+    `auc_open` is the eligible mask fixed at the opening, exactly the alive
+    mask, and `auc_passed` a subset of it (passers stay in `auc_open`);
+    `auc_turn` is in `auc_open`, not in `auc_passed` and not the high bidder;
+    `auc_high` is `BP_NOBODY` with `auc_bid` 0, or a seat in `auc_open` and not
+    passed with `auc_bid` a non-zero multiple of 10 not above that seat's
+    cash. `ret_phase` is not used.
+12. `CARD`: `card` is in 0..15 and in its deck's cycle; when its effect moves
+    the active seat (TO, FORWARD, BACK) onto a utility, `rolled` is set (a
+    card-induced utility landing needs the turn's dice total, 131.2.4).
+13. `DEBT`: `debt_amount` non-zero; `debt_to` is `BP_NOBODY` or an alive seat
+    other than the active seat; `ret_phase` is MANAGE, REPAIR, BUY, CARD or
+    AFTER.
+14. `TRADE`: `ret_phase` is MANAGE, REPAIR or AFTER; `offer_from` is the
+    active seat and `offer_to` another alive seat; `offer_payer` 0/1;
+    `offer_disks` inside bits 0, 1, 4, 5 with the give bits held by
+    `offer_from` and the get bits by `offer_to`; `offer_give` / `offer_get`
+    are masks below 2^18 of properties owned by `offer_from` / `offer_to`;
+    the offer is not empty.
+15. `winners` is 0 in PLAY; in OVER it is non-zero inside the seat mask.
+
+Fields a phase does not use (`auc_*`, `debt_*`, `offer_*` outside their
+phases, deck slots past `deck_n`, `depth`, `rng`, `score`) are carried as
+they are and not constrained, so a rule that leaves a different resting
+value cannot make a saved match unloadable.
+
+#### 131.7.3 The save file
+
+One file is a 40-byte header, the 233-byte payload (131.7.1) and a 2-byte
+CRC; at most `BP_SAVE_MAX` (512), 275 bytes today. Little-endian:
+
+| off | bytes | field |
+|---:|---:|---|
+| 0 | 4 | magic `BPSV` |
+| 4 | 1 | file format version = 1 |
+| 5 | 1 | role: 0 local, 1 host, 2 client |
+| 6 | 1 | state: 1 candidate, 2 committed (a local save is 2) |
+| 7 | 1 | 0 |
+| 8 | 2 | `BP_RULES_VER` |
+| 10 | 4 | fingerprint (131.7.1) |
+| 14 | 4 | `match_id` |
+| 18 | 4 | `ckpt_id` (0 for a local save) |
+| 22 | 4 | `rev` |
+| 26 | 4 | state digest |
+| 30 | 4 | `host_id` |
+| 34 | 4 | `client_id` |
+| 38 | 2 | payload length |
+| 40 | n | payload |
+| 40+n | 2 | CRC-16/CCITT-FALSE over bytes 0 .. 40+n-1 |
+
+`bp_file_build(meta, s, buf, cap)` produces the image (the match id, rev and
+digest are taken from `s`; the rest from `meta`; 0 = no room).
+`bp_file_peek(buf, n, meta)` checks everything that does not need the
+payload decoded and answers the first failure: not `BPSV`, or the length
+field disagrees with `n` (truncated or trailing bytes), or the payload is
+over `BP_STATE_MAX`: `BP_EFORMAT`; a file or encoding format this code does
+not read, or another `BP_RULES_VER`: `BP_EVERSION`; a bad CRC: `BP_ECRC`
+(checked before the fields behind it are believed); a role or state outside
+the table: `BP_EFORMAT`; the same `BP_RULES_VER` with another fingerprint
+(the board or cards differ): `BP_EMATCH`. Saves carry no prices, only the
+fingerprint over the board table, so a save made under the old prices
+(PET 120, VIC-20 140, C64 220) is refused with `BP_EMATCH`, not loaded under
+the new ones. `bp_file_parse(buf, n, meta, out)`
+adds the decode and validation (`BP_EINVALID`, a CRC-correct file whose
+content breaks a rule), then requires the header's match id, `rev` and
+digest to be the payload's (`BP_EFORMAT`: a header that lies), a local file
+to have every `machine[]` 0 and a cable file to have seats on both machines
+(`BP_EMATCH`). `out` is written only to the caller's scratch.
+
+**The local file.** `bp_save_local(name, s)` refuses an invalid state
+(`BP_EINVALID`), builds the image and writes it in ONE `os88_file_write`.
+§18.4's write allocates and fills a new chain, flushes it, commits by
+rewriting the directory entry in a single sector and only then frees the old
+chain, so a failure or loss of power before the commit leaves the previous
+save whole; a local save therefore needs no alternate slot. The file is then
+read back and its length and CRC must equal what was built (this is the
+short-write check: the OS reports an all-or-nothing write, and the read-back
+proves the name now means the new bytes). `os88_ferr()` is mapped: disk
+full, directory full, write-protected media and a protected name are
+`BP_EFULL`; every other refusal, a missing file included, `BP_EIO`
+(`os88_ferr()` still holds the precise code for the UI); a file over
+`BP_SAVE_MAX` is `BP_EFORMAT`; an empty file is `BP_EFORMAT`.
+`bp_load_local(name, out)` reads, parses (a cable file is `BP_EMATCH`: use
+the copy action) and leaves `bp_game` to the caller.
+
+#### 131.7.4 The checkpoint files
+
+A cable match has one file per machine, and the file half of a paired save
+must never leave a machine without its last good checkpoint. Each role owns
+TWO slots, `BPHOSTA.BPC` / `BPHOSTB.BPC` (host) and `BPCLNTA.BPC` /
+`BPCLNTB.BPC` (client), in the folder the package's file calls resolve to.
+A slot holds one file of 131.7.3 with role 1 or 2. Its `state` is the
+commit marker:
+
+| call | effect |
+|---|---|
+| `bp_ckpt_write(meta, s)` | validates `s` (`meta->match_id`/`rev` must be `s`'s, and a non-zero `meta->digest` must be `bp_digest(s)`: `BP_EMATCH`), then writes a CANDIDATE (state 1) into the VICTIM slot, then deletes any slot of a different match |
+| `bp_ckpt_commit(meta)` | finds the candidate with `meta->ckpt_id` and `match_id`, checks its CRC, rewrites it with state 2 (one whole-file write, same atomicity) and reads it back; already committed answers `BP_OK`; no such candidate `BP_EMATCH` |
+| `bp_ckpt_open(role, which, meta, out)` | `which` 0 = current, 1 = previous, 2 = candidate; `out` 0 answers the header only (CRC, version, fingerprint) |
+| `bp_ckpt_load(role, meta, out)` | `bp_ckpt_open(role, 0, ...)`: the current committed checkpoint, fully decoded and validated |
+| `bp_ckpt_load_id(role, &ckpt_id, meta, out)` | the checkpoint with that id, committed (preferred) or candidate (`meta->state` 2 or 1), fully decoded and validated; absent: `BP_EIO` (or a damaged slot's error). It is how the exchange rolls a candidate forward (load by id, then `bp_ckpt_commit`) or falls back to a committed one |
+
+The VICTIM is the slot ranked lowest by (missing or invalid < candidate <
+committed, then lower `ckpt_id`, then slot B), so a committed checkpoint is
+only ever overwritten when the slot holds the OLDER of two committed ones, and
+the newest committed file is never the victim. While candidate n+2 is being
+written the slots hold committed n+1 (kept) and the candidate, so the last
+completed pair is always intact. CURRENT is the
+committed slot with the higher `ckpt_id`, PREVIOUS the other committed one.
+`bp_ckpt_load` answers CURRENT and never reaches for PREVIOUS by itself: an
+older checkpoint is a different state, and only the exchange (131.7.5), which
+knows the peer's ids, may choose it with `bp_ckpt_open(role, 1, ...)`. A slot
+file that exists but fails its CRC, version, fingerprint or role ranks as
+missing, so CURRENT may then be an older checkpoint than the machine last
+wrote: `bp_ckpt_damaged(role)` counts such slots (0-2) so the exchange can
+say so, and a resume is accepted ONLY when the peer reports the same
+`ckpt_id` and digest. When no slot ranks for the `which` asked, `bp_ckpt_open`
+answers the first damaged slot's own error (`BP_ECRC`, `BP_EFORMAT`,
+`BP_EVERSION`, `BP_EMATCH`), else `BP_EMATCH` for `which` 0 with only a
+candidate present (not a pair), else `BP_EIO`.
+
+Intermediate states, per machine (X = current, Y = other slot):
+
+| state | files | what a loader reports |
+|---|---|---|
+| steady | X committed n, Y committed n-1 or nothing | current n |
+| writing | Y being rewritten as candidate n+1 (the write is atomic: Y is n-1 or the whole candidate) | current n |
+| candidate written | X committed n, Y candidate n+1 | current n, candidate n+1 (not a pair: it is on one side, or until the peer confirms it) |
+| committed | X committed n, Y committed n+1 (current is now Y) | current n+1, previous n |
+| torn pair | one machine reached `committed n+1`, the other holds only `candidate n+1` | exchange: the machine with the candidate commits it when the peer proves `committed n+1`; otherwise both resume n (`which` 1 on the machine that committed) |
+| no peer proof | a candidate with no matching committed on the peer | never promoted; resume n |
+
+A candidate on one side only is NOT a pair, and nothing here promotes one on
+its own: only `bp_ckpt_commit`, which the exchange calls after both sides
+have exchanged readiness, does. A disk full or write-protected write fails
+before any directory entry changes, so the previous slots stay intact, and
+the call answers `BP_EFULL`; the UI must report the incomplete checkpoint and
+must not report "paired save complete" until both machines have committed.
+
+What the exchange (131.7.5) must call, in order, on EACH machine: build the
+agreed `meta` (role, `ckpt_id`, `match_id`, `rev`, `host_id`, `client_id`);
+`bp_digest(&bp_game, ...)` and compare with the peer's; `bp_ckpt_write`;
+exchange "written"; `bp_ckpt_commit`; exchange "committed"; only then report
+success. On resume: `bp_ckpt_open(role, 0, &meta, 0)` and `(role, 1, ...)`
+on each side to learn the ids, exchange them, agree on the newest id both
+machines hold as committed (committing a held candidate first when the peer
+proves it), then `bp_ckpt_open(role, which, &meta, &scratch)` for the full
+validated state and compare digests.
+
+#### 131.7.5 The checkpoint exchange
+
+The protocol half of a paired save; the files are the save lane's
+`bp_ckpt_write` (a CANDIDATE that never disturbs the newest committed
+checkpoint), `bp_ckpt_commit` (the candidate becomes the newest committed;
+the previous one stays loadable until the next commit) and `bp_ckpt_load`
+(meta's `ckpt_id` 0 for the newest committed, or a named id found as
+committed or as a candidate, `state` saying which). Role 1 is the host's
+file, role 2 the client's; each machine writes only its own.
+
+**Saving.** `bp_sess_save_pair()` on either machine; the client's sends
+CKREQ until CKBEGIN arrives. The request WAITS behind an outstanding
+transaction - it never cancels or rerolls one - and from the moment the host
+starts it, economic input is frozen on both machines (`bp_sess_busy`). The
+host starts only with no RESULT of its own outstanding, so a client INTENT
+that crossed the request has not been applied: the host refuses it
+(BP_EPENDING, the client keeps retrying) until the save ends, and the client
+answers CKBEGIN with that intent still out, since CKBEGIN's revision is its
+own. (Holding CKBEGIN until the intent is answered would deadlock: each side
+would be waiting on the other.)
+
+1. The host takes a checkpoint id one above every id this match has in its
+   own slots (`bp_ckpt_open`, all three: the files rank slots by id, so ids
+   only grow) and writes its candidate: match id, that id, the revision,
+   `bp_digest`, both endpoint ids (the PAIR identity) and role 1. A failure here ends the save on the host ("Save failed: <code>")
+   and nothing is sent.
+2. CKBEGIN carries the same metadata; it is retried until CKREPLY stage 1.
+   The client checks match id, revision and digest against its own
+   `bp_game` (a difference is code BP_EMATCH: no file written) and writes its
+   candidate with role 2; CKREPLY stage 1 carries the code. A repeated
+   CKBEGIN for the same id resends the stored reply without writing again.
+3. A non-zero code ends the save on both ("The other PC could not save:
+   <reason>"): neither side commits, the previous pair stands.
+4. Both written: the host commits ITS candidate; only after that succeeds
+   does it send CKCOMMIT (retried until CKREPLY stage 2). The client
+   commits its candidate and replies with the code; a repeated CKCOMMIT
+   resends it.
+5. The host reports **"Paired save complete"** on CKREPLY stage 2 with code
+   0; the client reports it once its own commit succeeded, which follows the
+   host's (CKCOMMIT is sent only after the host's commit). Before both, no
+   UI says complete.
+
+**The intermediate states, and what each side reports.** Cable or machine
+lost before step 4: two candidates or one, no commit: both newest committed
+checkpoints are still the previous pair, and the side that saw the failure
+says "Paired save incomplete - the previous save is kept". Host committed,
+client not (lost CKCOMMIT, a client crash or a full disk at its commit): the
+host has N+1 committed, the client a candidate N+1 and N committed - resume
+ROLLS FORWARD (below). A client with N+1 committed and a host without it
+cannot arise from this order and is refused as a mismatched pair.
+
+**Resuming.** After both applications are reopened: Host or Join, then
+`bp_sess_resume_pair()`, which loads this machine's newest committed
+checkpoint for its role into a scratch state (a missing or bad file is
+refused with the save lane's reason and nothing changes) and sets the
+handshake's intent to resume with that match id. Bound, each side sends
+RESUME (role, match id, checkpoint id, revision, digest, the pair's host and
+client ids) every two beats. A side receiving the peer's offer:
+
+- refuses, with the reason, the same role or another match id - **never a
+  stranger's or another match's file**;
+- with the same checkpoint id, requires the same pair identity (both
+  endpoint ids recorded by that exchange: "These saves are not a pair"),
+  revision and digest ("Same save, different board");
+- with a different id: the client, offered a newer id by the host, looks
+  for that id as its own candidate - present, it is the roll-forward and is
+  committed when the resume is agreed; the host, offered an OLDER id by the
+  client, looks for that id among its committed checkpoints (the previous
+  one) - present, it falls back to it. Anything else is "These saves are not
+  a pair".
+
+Agreed, each side copies its scratch state over `bp_game`, sends RESUME with
+agreed = 1 (a side that lost the offer adopts on it), and enters PLAY with no
+transaction outstanding and seqs starting again; the link session's NEW
+endpoint ids are what the next paired save records. Resume restores the last
+completed paired checkpoint: moves made after it and before the machines
+were closed are lost, and the guide says so - there is no per-action journal,
+so a crash rolls back to that checkpoint and is not called recovery. A live
+cable pull is different (131.6.4): nothing is lost, the transaction in
+memory completes.
+
+### 131.8 The face
+
+Binding choices made before the lane: drawing is Breadboard XT's band core
+(`apps/breadxt/draw.inc`, §130.6.2), shared as SOURCE with `BX_CORE_ONLY`
+leaving out Breadboard's own tail: every repaint is strips, each composed in
+one band (four planes on colour, one on 1bpp, 2x2 patterns standing in for
+colour) and put down with one call. Three layouts are picked from the
+content box, never from the adapter's name: FULL (VGA 640x480 class), MID
+(Hercules 720x348 class) and COMPACT (CGA 640x200 class). No meaning is
+carried by hue alone: collections have letters, owners have token marks,
+mortgage and upgrades have shapes.
+
+#### 131.8.1 Layouts
+
+`bp_face_paint` reads the window's content origin (`os88_wm_content`) and
+size (`os88_wm_geom`) on every call and lays out again only when origin or
+size changed, or `bp_pn_covers()` moved into or out of `BP_PN_FULL` (the cache
+key; such a change repaints everything). A change between 0 and
+`BP_PN_CENTRE` - the bottom bar and a centre panel, both inside `bp_r_center`
+- is not a layout change: it repaints the centre and the hint bar, and
+nothing of the board or the sidebar (131.8.5).
+The adapter is never named: the content box alone picks the layout, and the
+live bit depth sets `bp_mono` (bpp < 4).
+
+| layout | picked when (content w x h) | reference box | side | cell w x h | ring | font (body / small) |
+|---|---|---|---:|---|---|---|
+| `BP_LAY_FULL` | w >= 600 and h >= 380 | VGA 640 x 418 | 192 | 56 x 50 | 448 x 400 | TEXT10 / TEXT08 |
+| `BP_LAY_MID` | w >= 560 and h >= 240 | Hercules 720 x 288 | 208 | 64 x 34 | 512 x 272 | TEXT08 / TEXT08 |
+| `BP_LAY_COMPACT` | otherwise | CGA 640 x 142 | 192 | 56 x 16 | 448 x 128 | TEXT08 / TEXT08 |
+
+The reference boxes are what the window gives on a 640x480, 720x348 and
+640x200 screen (menu bar, title bar and dock taken). A bigger window grows
+the sidebar; a smaller one shrinks the cell down to 16 x 16 and, under 96 px
+of sidebar, drops the sidebar.
+
+The geometry, all from (ax, ay, aw, h) = the content box with x rounded UP and
+w rounded down to multiples of 8 (the band's contract; a sliver left over is
+never painted):
+
+* `cw` = ((aw - side) / 8) rounded down to a multiple of 8, `ch` = (h - hint
+  minimum) / 8, where the hint bar needs body-font height + 4 rows.
+* `bp_r_board` = (ax, ay, 8 cw, 8 ch). The ring is 8 x 8 cells; space ids run
+  CLOCKWISE from BOOT at the bottom-left (131.1): ids 0..7 climb the left
+  column (7, REPAIR SHOP, is top-left), 7..14 run the top row to SWAP MEET,
+  14..21 descend the right column to CRASH!, 21..27 return along the bottom.
+* `bp_r_center` = (ax + cw, ay + ch, 6 cw, 6 ch): the inner 6 x 6.
+* `bp_r_side` = (ax + 8 cw, ay, aw - 8 cw, 8 ch), tiled exactly by four boxes
+  top to bottom (131.8.4): players (FULL 130, MID 86, COMPACT four 11 px
+  rows + 4), details (124, 104, half of the rest), collection / link (76, 44,
+  one row + 4) and the log, which takes the remainder. A column wider than
+  the 192 / 208 px the boxes are drawn at centres them on a face-grey ground.
+* `bp_r_hint` = (ax, ay + 8 ch, aw, h - 8 ch).
+
+Every section tiles its rect completely and paints every pixel of it, so a
+strip (a rect in the band, widened to 8) never carries stale band bytes.
+
+When `bp_pn_covers()` is `BP_PN_FULL` (the setup and lobby screens) the face
+sets `bp_r_center` to the whole aligned content above the hint bar, draws
+NOTHING of the board, and calls only `bp_pn_draw` and then the hint bar (D17); `bp_face_hit_space` then answers -1 and
+`bp_face_key` 0. Back to 0 or `BP_PN_CENTRE`, the layout is rebuilt and
+everything repainted - the only coverage change that costs a whole window.
+
+**Two files.** The face is `bp_face.c` (layout, the ring and its cells, the
+centre, the hint bar, painting, damage, input and the widget kit) and
+`bp_side.c` (the sidebar: the players, details, link and log boxes, their
+signatures, the sidebar's share of the layout, `fc_sidelayout`, and the log
+ring). `byteoply.c` includes `bp_side.c` right after `bp_face.c`, which
+forward-declares the side's entry points; they share one translation unit
+and the `fc_` prefix, so the split moves code without changing it, and two
+lanes can own the board and the sidebar apart.
+
+#### 131.8.2 A cell
+
+A cell is its own repaint unit (`ovl_fc_cell`): ground white, a 1 px black
+line along its top and left edges (the outer right and bottom edges belong to
+the cells on the ring's rim), then, by what it is:
+
+**FULL cells (56 x 50, the concept board's ivory cards; `fc_cfull`)** are
+laid out top to bottom, every picture by `bx_size`: a collection band 7 rows
+tall in the collection's colour (black on 1bpp) with the collection LETTER in
+white at the left, the owner's token mark (the white-outlined silhouette)
+after it and the level on the band's right - one `BP_A2_CHIP` per RAM level,
+overlapped five pixels apart, or the `BP_A_WORKSHOP` block; the NAME in bold
+8-row type, centred, in one or two lines (the text handles `TF_CELL00` + space
+in `art/tx-face.txt`, `/` breaking the line; `i` has no dot in the 8-row face,
+so the names that carry one are in capitals); the SMALL picture - the TINY one
+when the name took two lines, whichever `fc_pick` finds room for in the rows
+down to the price - centred, with the mortgage mark at the left of its row and
+a sparse grey dither over it when mortgaged; and the price as "120 cr"
+centred in the last row. TOKENS standing on the cell take the price's row
+(its details are in the sidebar). Corners and specials have no band: the name
+in the bold 10-row face, two lines for REPAIR / SHOP, SWAP / MEET, FLOPPY /
+FIND and SYSTEM / ERROR, one for BOOT and CRASH! (CRASH! in the 12-row System
+face, which is the one with a real `!`), the `BP_A2_C_*` picture below it
+(BOOT's red arrow points UP, the way play leaves it; its 1bpp twin
+`BP_A2_M_C_BOOT`) and, for BOOT, "Collect" / "200" under the arrow; the two
+charges (IMPORT / DUTY, E-WASTE / FEE) set their name in the 8-row face over
+their SMALL picture and the amount. The SELECTED cell has a 2 px yellow frame
+inside its black edge, drawn over the band and under every mark (on 1bpp a 3 px
+black frame); there is no name bar. MID and COMPACT keep the layouts below.
+
+* A **property** (computer or utility): a bar of the collection's colour
+  (blue C, green H, cyan A, red I, magenta R, grey utility; on 1bpp always
+  solid black, so the LETTER carries the meaning: C H A I R P, `U` for a
+  utility) holding the letter at the left in white and the price at the right;
+  the short name centred beneath (one wider than the cell is drawn with its
+  tail in lower case - "E-waste", "Power" - and only then cut; an owner's
+  cell shows nothing else of its owner here); the picture, the biggest of
+  SMALL / TINY that fits the room left (on 1bpp the `BP_A_MTINY` twin,
+  131.10.5), centred in the rest; the OWNER's mark in the collection bar,
+  right of the letter: the owner's token silhouette outlined in WHITE on the
+  bar's dark ground (on 1bpp a white ring), so it never reads as a token
+  standing on the cell (those are black-outlined on the white ground, along
+  the bottom); the level in the picture row's right margin: one to four
+  `BP_A_RAM` chips (stacked in as many columns as the margin holds) or one
+  `BP_A_WORKSHOP`, drawn pips when the art part is absent; a MORTGAGED
+  property the `BP_A_MORTGAGE` mark at the top of the left margin (inside
+  the cell on MID's 34 rows too) and a sparse grey dither over its picture.
+* A **corner or special space**: the name at the top, the picture below
+  (`fc_specart`: BOOT, REPAIR, SWAP, CRASH, the two decks, DUTY, E-WASTE), and
+  for BOOT and the two charges the amount ("+200", "-100", "-75") beside it.
+  The first that fits the room under the name wins: the SMALL picture with
+  the amount, the SMALL picture alone (FULL's charges: the details box gives
+  the amount), the TINY `BP_A_TSPECIAL` twin (on 1bpp `BP_A_MTSPECIAL`) with
+  the amount, then alone (MID), and the amount alone.
+* **COMPACT** cells (16 rows: not enough for a picture) trade it for two
+  rows: row A is an 8 x 7 collection letter chip, a 2 px gap, then the short
+  name (fitted as above); row B an 8 x 8 chip with the owner's SEAT NUMBER in
+  the seat's dark colour, then the price. Levels are black bars (four) or one
+  wide block (Workshop); a mortgaged cell strikes its name through with a
+  dotted line and shows an `M` right-aligned 2 px inside the cell's edge.
+* **Selection** (`bp_sel`): on MID and COMPACT the short name on a navy/black
+  bar in white (visible on every adapter), and on MID a 1 px yellow (black on
+  1bpp) frame inside the edge; FULL is the 2 px frame described above. It is drawn over ground only, so it never erases an
+  owner mark, level, token or the mortgage mark.
+* **Tokens**: up to four on one cell, a 7 x 7 silhouette each, side by side
+  along the bottom (COMPACT: in row B in place of the price). The silhouette's
+  SHAPE is the token's identity (floppy a square, mouse a round, joystick a
+  triangle, cassette a diamond) and its fill the seat's colour (red, blue,
+  yellow, green; on 1bpp white, black, white, white), a black outline on a
+  light ground and a WHITE one on a dark ground (the owner mark on the
+  collection bar, the players box's inverted active row), so the black-filled mouse never vanishes on
+  1bpp; on 1bpp a white-outlined token keeps a black inside, so on a dark
+  ground every token is a white ring and the owner mark never reads as a
+  white-filled token standing on the cell. The owner mark uses the same
+  shapes.
+
+#### 131.8.3 The centre
+
+With no panel over it (`bp_pn_covers() == 0`) the centre is a teal ground with
+a sparse light-cyan stipple (on 1bpp black with white dots) in a 2 px sunken
+well (`GK_SUNKEN2`), then, on FULL (scene `BP_A2_SC_BOARD`, 336 x 300): the
+mascot (`BP_A2_MASCOT_UP`) pointing, with `BP_A2_RAYS_L` at its fingertip,
+between the tilted Floppy Find and System Error cards, `BYTEOPOLY` as nine
+`gk_keycap`s in the bold 16-row face beneath them, and under those the two 3D
+dice (`BP_A2_DIE1..6`) of `bp_game.d1/d2` (drawn only while a match is live).
+MID (scene 401, 384 x 204) has the key caps on top, then the older 64 x 64
+mascot between two small cards and the small dice. COMPACT is code: a dithered
+ground and the nine `BP_A_KEYCAP` sprites above the dice. Then, always,
+`bp_pn_draw()` runs.
+
+**The bottom bar belongs to the panel** (DECISIONS D9): with no panel over the
+centre the landing / Buy panel and the turn bar are bottom panels of
+`bp_face_barh()` rows of `bp_r_center` - FULL 96, MID 64, COMPACT 0 (the panel
+sizes its own there). The face paints the teal ground under them and the art
+only above; `fc_aty`, the line of the dice row (FULL: 152 rows down the centre,
+MID: 40), is where a centre repaint with the art standing starts, so the key
+caps, mascot and cards are not redrawn for a dice change. With `BP_PN_CENTRE`
+the panel owns every pixel of `bp_r_center` inset by 2: the face draws only
+the 2 px sunken edge and nothing under the panel - no art, no stipple. A
+sprite wider than 64 px needs the band core's 64-byte `bx_srow` (`BX_ART2`
+builds: draw.inc).
+
+#### 131.8.4 The sidebar and the hint bar
+
+* **The column** is four boxes on a face-grey ground (131.8.1), each a kit
+  panel (SPEC.md 133.3): a navy title bar with the title left-aligned and
+  embossed, a raised bevel, a 1 px outline. FULL draws every frame, title
+  and fixed label as a SCENE (`art/scenes-side.txt`, ids `BP_A2_SC_SIDE` +
+  0..9, 133.6) and only the live values and pictures in code; MID draws the
+  frame with `gk_panel` and the rows and the details card as scenes;
+  COMPACT keeps four plain bevelled boxes (its details lines, link line and
+  rows are scenes too). All of it is `gk_role` colour, so 1bpp is the kit's
+  mono table: the title bar is black, the highlighted row is INVERSE. A
+  panel's title bar is `bar` rows starting 3 px inside the edge with a dark
+  line under it, so a scene's first row of content starts at `bar + 5`.
+* **Players** (FULL 192 x 130, MID 208 x 86, COMPACT four rows): the title is
+  the seat to act - "PLAYER n • YOUR TURN" when `bp_sess_mine`, else
+  "NAME • THEIR TURN" (the other PC's seat) - with the round ("R3") at the
+  right; during an auction "BIDDING ORDER", at the end "GAME OVER", before a
+  match "Players". FULL shows the acting seat's `BP_A2_TOKL_*` beside a
+  sunken white well with its cash in the big font (during an auction the
+  high bid, or "No bid" beside the gavel). One row per seat: the `BP_A_TOK_*`
+  token, the name, the cash right-aligned (during an auction a status word:
+  PASSED / BIDDING / HIGH BID / IN), a divider under it (FULL); the seat to
+  act is the whole row in `GK_R_HILITE` (yellow; inverse on 1bpp); an
+  eliminated seat shows "OUT" and a dotted strike through its name, a DETAINED
+  seat an `R` chip. Each row is ONE scene call (`BP_A2_SC_SIDE` + 8 FULL, + 9
+  MID, + 6 COMPACT; slots: name, right text; flags: highlight, token (+4 on
+  1bpp), dead, divider, detained; COMPACT draws its 7 x 7 token in code).
+  Before a match: "No match - Game > New Game". The dice are not drawn here
+  (the board's centre shows them).
+* **Details** is a card of the space, the lot, or (FULL only) the cable: during
+  an auction it is the auctioned space titled "THE LOT" (an auction's list
+  price is its Price, its owner the Bank); on FULL, while the cable link is
+  not in step (`bp_mode` is not local and `bp_link_state()` is not
+  `BP_L_PLAY`) it is CONNECTION - `BP_A2_MODEM`, "Banker host" or "Joined
+  PC", "COMn • 2400 baud" (the port `bp_ck_port()` holds, "No port held" when
+  none; 2400 is the cable's fixed speed, 114.3), a banner with the state
+  ("Disconnected" for `BP_L_PAUSED`, else the state name) and the framer's own
+  `bp_link_msg()` line; on FULL during a trade over the cable it is OTHER PC
+  LINKED with `BP_A2_LINKED`, "Cable linked" (" • waiting" while
+  `bp_sess_busy()`) and the port; otherwise it is the space `bp_sel`: the full
+  name in the title bar; for a property the `BP_A_LARGE` picture, its
+  collection bar and (FULL) name on the left and Price, Mortgage (Redeem, with
+  131.2.4's cost, once mortgaged), Owner and Level on the right (the concept's
+  "Buy / Rent / Set" lines carry the same facts); then, under a rule, the rent
+  schedule of 131.2.3 computed from the base rent - Base, Set (x2), 1..4 RAM
+  (5, 15, 30, 45, 60 x base) and Workshop - or a utility's 4x/10x dice rule;
+  any other space its picture and one plain sentence (a charge its amount).
+  The values are the scene's string slots (`$1..$12`) and flags (`%0..%3`);
+  one scene per layout (+ 5 FULL, + 7 MID) serves all of them. COMPACT:
+  three lines (name; price or the sentence; owner and level).
+* **Collection / link** (FULL 192 x 76, MID 208 x 44): "YOUR COLLECTION" with
+  `BP_A_SMALL` pictures (MID `BP_A_TINY`) of the computers of the seat this PC
+  plays - the acting seat when it is ours, else our first living seat (FULL ten
+  pictures on same-PC play, five over the cable; MID nine; "+n" for the rest).
+  Over the cable a status line under them: the LED (`BP_A2_LED_GREEN`, yellow
+  while `bp_sess_busy()`, red on MID when the link is down, the 1bpp ball on
+  a mono display) and "Cable linked • 2400 baud" (" • waiting" while busy; on
+  MID the link's state word while the link is down). While the link is down
+  FULL's box is PAIRED SAVE instead: two `BP_A2_DISK_OK` and the arrow when
+  `bp_sess_pair() == BP_PAIR_DONE`, and a status button - "Paired save
+  complete", "Paired save failed", "Saving...", else "Waiting for link" greyed
+  (`GK_B_DISABLED`; it is a status, the keys stay the panel's R / L / D).
+  COMPACT is one line: the round and the link state (PAUSED and BADPEER struck
+  through), " ..." while busy. Status never depends on colour: every state
+  has its word.
+* **Log**: `BP_LOG_LINES` (8) lines of `BP_LOG_LEN` (40) characters in a
+  sunken white well, newest at the bottom, truncated to the box width; as
+  many as the box holds.
+* **Hint bar**: navy/black; each `bp_pn_hint(i)` is split at its first space:
+  the head (under 8 characters) becomes a key cap, the rest its label beside
+  it; the entries are spread evenly along the bar (the concept's bottom row),
+  and one that no longer fits is dropped. On FULL the cap is `gk_keycap`; on
+  MID and COMPACT, whose 8-row labels do not read inside the kit's cap once
+  colour is 2 x 2 patterns, a flat white cap with a shade line.
+
+#### 131.8.5 Sections, dirty bits and what an update costs
+
+A paint is a list of rects, each painted in strips of the band
+(`bx_rows` rows at a time, `bx_new`, the scene, one `bx_out`). The scene is
+run per strip, so it skips whatever does not touch the strip: a cell by its
+rect, a sidebar line by its y.
+
+| bit | repainted when | rect |
+|---|---|---|
+| `BP_D_BOARD` | a cell's signature (owner, level, mortgage, the tokens standing on it, selected) changed, or `bp_face_dirty_space` named it; more than ten cells: the four sides of the ring | each cell |
+| `BP_D_CENTER` | always (the panel's state is not the face's to hash) | `bp_r_center` |
+| `BP_D_PLAYERS` | signature (round, active seat, status, phase, the auction's seat/bid fields, cash, alive, detained, token, name) changed - the dice are no longer drawn here | players box |
+| `BP_D_DETAILS` | signature (`bp_sel`, phase, the auctioned space, every owner/level/mortgage, names; over the cable the link state, busy, port and, while down, the message) changed | details box |
+| `BP_D_LINK` | signature (link state, busy, mode, port, pair state, the active seat and every owner; COMPACT: round, dice, message text) changed | collection / link box |
+| `BP_D_LOG` | `bp_log_add` was called (a version counter) | log box |
+| `BP_D_HINT` | signature of the hint strings changed | hint bar |
+| `BP_D_FORCE` | with other bits: repaint them even when the signature says nothing changed | |
+
+So `bp_face_dirty(BP_D_ALL)` after a commit repaints only what the commit
+touched, and an idle board repaints nothing. `os88_paint` (`full` = 1) repaints
+the whole content, the kernel's clip region doing the rest.
+
+**Damage smaller than a section.** `bp_face_dirty_rect(r)` names a screen
+rect that changed - a panel's button row, an editor line, a list row - when
+nothing else did. The rects named before a paint are kept as their bounding
+box (the panels name one per key); at the paint it is widened to multiples
+of 8, clipped to the content and painted in strips of ITS width, with only
+the sections it touches (inside the centre: `BP_D_CENTER` alone - the
+centre's art and `bp_pn_draw` clipped to the strip). It is dropped when it
+lies inside the centre and the same pass repaints the whole centre, and by a
+`full` paint. The centre itself is painted whole only
+for `BP_D_CENTER`: a panel that changes its KIND dirties the centre, a key
+that changes a line inside one names the line.
+
+The coverage change (131.8.1) between the bottom bar and a centre panel is
+`BP_D_CENTER | BP_D_HINT`, never a whole window.
+
+Measured on MartyPC, strips per update (a strip is one `bx_new`, the scene and
+one blit; "paints" are rects). FULL (band 16 KB, 51 rows of the 640-wide
+content, 97 of the 336-wide centre):
+
+| update | paints | strips FULL | strips MID | strips COMPACT |
+|---|---:|---:|---:|---:|
+| arrow key / click: selection moves | 3 (two cells, details) | 4 | 3 | 3 |
+| click on the selected cell | 0 | 0 | 0 | 0 |
+| a token moves | 3 (two cells, centre) | 6 | 3 | 3 |
+| one player's cash changes | 2 (players, centre) | 5 | 2 | 2 |
+| a property is bought and upgraded | 3 (cell, details, centre) | 7 | 3 | 3 |
+| a log line | 1 | 1 | 1 | 1 |
+| an expose (`full`) | whole content | 9 | 2 | 1 |
+
+The centre is the largest single cost and is forced because a panel's
+contents are not the face's to hash; a panel that is not changing keeps the
+commit's repaint to the centre alone.
+
+What it costs on the target, MartyPC's 4.77 MHz XT with VGA (FULL), guest
+seconds from the key to the UI going idle, two seats, on the QA head (every
+coverage change a whole window) and now (QA list Qqa1-4; the method of the
+QA run's report, section 3):
+
+| update | before (QA head) | now |
+|---|---:|---:|
+| End Turn (the bar -> the handoff panel) | 7.42 | 2.14 |
+| handoff acknowledged (panel -> the bar) | 8.78 | 2.72 |
+| Collection opened / closed | 7.88 / 8.80 | 1.53 / 2.75 |
+| F1 Rules / Esc out of Rules | 10.34 / 8.80 | 4.00 / 2.74 |
+| a roll that lands on a property (bar -> Buy panel, cell, players, log) | 8.00 | 2.79 |
+| Tab on the bar (the panel names the button row) | 2.66 | 0.63 |
+| Tab in the auction | 2.20 | 0.63 |
+| bid + / - (the panel names the editor and the rows below it) | 2.30 | 1.38 / 1.35 |
+
+A centre panel itself is ~1.5-2.0 s of the figures above (four strips of
+the 336-wide centre, the panel's ground, text and the blit), and bringing
+the bar back costs the centre's art as well (its sprites - mascot, cards, dice -
+are ~40% of it); a panel key that names its rows with `bp_face_dirty_rect`
+pays for those rows' strip only.
+
+#### 131.8.6 The widget kit
+
+`bp_w_*` is valid only while `bp_pn_draw` runs (it draws into the current
+strip's band) and is the game kit's (133): `bp_w_panel` is `gk_panel` (a raised
+slab with a navy title bar `fc_fh + 3` tall and the title embossed, no drop
+shadow: a panel's shadow would fall outside its rect), `bp_w_box` a sunken
+white well (`GK_SUNKEN2`) for a white fill and a raised slab for any other,
+`bp_w_button` `gk_button` with `GK_B_FLAT` (no drop shadow; the panels' button
+rows sit tight): NORMAL, FOCUS (navy face, white text), DEFAULT (an extra
+ring) and DISABLED (greyed text; on 1bpp a screen-door over the label). A label
+wider than the button is cut to fit. Everything else (`bp_w_text`, `_sprite`,
+`_fill`) is the band core's call, and a panel may call `gk_*` or `gk_scene`
+directly.
+
+#### 131.8.7 Keys and hits
+
+`bp_face_key`: the arrow keys move `bp_sel` along the ring spatially (a step
+that would leave the ring crosses to the far side of the same row or column);
+Home selects the active player's space. Both answer 1. `bp_face_hit_space`
+answers the space under a screen point (exact: the cell grid is 8 x 8 and the
+centre and sidebar answer -1), so every cell is one hit target in every
+layout.
+
+### 131.9 Panels, flows and input
+
+131.9.1-131.9.6 are the app's half (`bp_app.c`, `bp_setup.c`: modes, the
+New Game screen, the cable lobby, menus and keys, sound, files and the close
+decision); 131.9.7-131.9.11 are the in-game panels' (`bp_panels.c`).
+
+Binding choices made before the lanes: the face calls one door
+(`bp_pn_*`); `bp_app.c` routes it to the setup screens (drawn over the whole
+content) or to the game panels (`bp_gp_*`, drawn in the centre). Every
+decision a panel takes becomes a `BPCmd` through `bp_sess_submit`.
+About is the standard application entry (`OSAPI_ABOUT_SET`, §12.2), not a
+private menu item.
+
+#### 131.9.1 Modes and routing
+
+The application has three modes (`bp_ap_mode`): `BP_M_SETUP` (the New Game
+screen, the launch default), `BP_M_LOBBY` (the same screen with a cable link
+open) and `BP_M_GAME` (the board and the game panels). The face calls only
+the `bp_pn_*` door; `bp_app.c` routes it: setup and lobby go to the setup
+screens, which cover the WHOLE content (`bp_pn_covers` = `BP_PN_FULL`), game
+goes to `bp_gp_*`. Input order is fixed: a global hot key the app owns, then
+the door (panel or setup screen), then the board (`bp_face_key`,
+`bp_face_hit_space`). A repaint is requested only by something that changed
+(`bp_ap_need`: set by committed results, link changes, consumed input and
+cues; cleared by the repaint), so an idle match draws nothing and plays
+nothing. The window is created once and never recreated; two instances share
+nothing (every variable is the package's own, the band claim and the timer
+are per window). A match starts in exactly one place, `bp_ap_started`: it
+sets `BP_M_GAME`, snapshots the token positions for damage and dirties the
+whole face.
+
+`bp_ui_committed` turns each `BPEvent` into one log line of at most
+`BP_LOG_LEN` characters (names are `BP_NAMELEN`, spaces use their short
+names, money is `bp_u32_fmt`), dirties precisely (the players, log, hint and
+centre; a space only when its owner, level, mortgage or occupant changed,
+found by comparing each seat's position with the one last drawn), picks ONE
+sound cue by rank (win, bankruptcy, Crash!, card, rent, buy, dice), and calls
+`bp_pn_sync`. A new, loaded or adopted match clears the log first; each
+roll-off roll reads "NAME rolls a+b" and one line says who goes first; a rent
+line names the space and its RAM level, a landing on a mortgaged computer logs
+"no rent", and a detention straight after a roll is marked "third double". A
+commit also dirties the link row. A cable commit never marks a local save as owed. Each event
+is also handed to the panels (`bp_gp_event`), each chat line
+(`bp_gp_chat`) and every timer tick in game mode (`bp_gp_tick`); after a
+key or click on a finished match the app polls `bp_gp_overchoice` (2 New
+Game: the setup screen, 3 Exit: close).
+
+#### 131.9.2 The New Game screen
+
+Tabs Same PC, Host Cable and Join Cable. A roster of 2-4 players (Same PC
+and Host: the `-` / `+` buttons), each a name (at most `BP_NAMELEN`
+characters; Enter or a click edits, Enter keeps, Esc cancels the EDIT and not
+the screen, an empty name reverts to "Player N") and a token (Floppy, Mouse,
+Joystick, Cassette: Left/Right or a click cycles). A duplicate token is
+refused at Start with a line saying so, as is any `bp_setup_check` failure
+(`bp_err_text`). Rules are Classic or Quick Match of 10, 20 or 30 rounds.
+`S` or the Start Game button starts a Same PC match through
+`bp_sess_new`; starting while an unsaved match is running first asks
+"Discard the unsaved match?". Esc or Back returns to the running match when
+there is one, else it does nothing.
+
+Layout: the screen is DATA, not code. `art/scenes-lobby.txt` (SPEC.md 133.6;
+scene IDs 440-443, `art2.h`) draws every frame, label, table line and picture,
+and `bp_setup.c`'s `ovl_su_slots` fills its string slots (`$n`: names, the
+mode's one-line description, the roster footer, the rule lines, the link
+status, the peer line, the status line) and integer slots (`%n`: tab and
+button states, seat presence, token pictures, ready ticks, the LED, the link
+mode). The slots are refilled for every strip (a few string copies; the
+list of them is the scene file's header). The face gives the screen the whole
+content (`BP_PN_FULL`); the screen draws a teal ground, then the scene.
+FULL (content at least 600 x 380, VGA) is the concept board `4-lobby.png`:
+a navy "NEW GAME" / "CABLE LOBBY" plate with yellow rays (`BP_A2_RAYS_L/R`),
+the three tabs (the active one yellow), a well with the mode's description, a
+PLAYER ROSTER panel (a table Player | Token | Computer | Ready - the colour
+square is the seat's colour, the picture its token, `This PC` / `Other PC` a
+drop-down, a `BP_A2_CHECK` tick - and a footer, `2 players` or `1 player here
+- 3 players there`, with the `-` / `+` buttons), a GAME RULES panel (the
+Classic and Quick Match radios, the Quick Match round count 10 / 20 / 30 as a
+drop-down, and what the rule means - `Cash: 1,500 cr` and `Last one standing
+wins.` or `Richest after 20 rounds.`), the NULL-MODEM LINK panel, the
+mascot (`BP_A2_MASCOT_UP`) and a bottom bar with the status line and
+`[S] Start Game` / `[Esc] Back`. Same PC replaces the Computer and Ready
+columns and the link panel with a second scene (441) that says everyone
+plays on this computer and that no cable is needed - the screen never shows
+a value the game does not have. MID and COMPACT (a short content) share one
+scene (442, 640 x 142, centred across and a third of the spare height
+down) with the same parts in the 8 x 8 font, token NAMES instead of
+pictures, and a Same PC half (443). Every hit rect is read from the scene's
+own `#tag` (`gk_scene_rect`; tag = widget id + 1, 27 the status line, 28 the
+roster panel, 29 the rules panel, 30 the link panel, 31 the description), so
+the draw, the click and the key paths cannot disagree. Every state has a mark
+besides colour (the selected tab is the raised yellow one, the selected
+radio a filled dot, a disabled button the kit's DISABLED one with its screen
+door on 1bpp, the keyboard focus on a widget the scene draws plainly - a tab,
+a name, a token, a drop-down, the Ready column, a radio - a black ring inside a
+yellow one drawn after the scene; a button shows focus as its navy face). The
+`-` and `+` buttons grey at 2 and 4 players. Editing a name starts with the
+old name selected: the first typed character replaces it. A disabled widget is
+skipped by focus and ignores a click. The widget ids (and so the Tab order) are
+unchanged: 0-2 tabs, 3 `-`, 4 `+`, 5-8 names, 9-12 tokens, 13-16 computers,
+17 Ready, 18 Classic, 19 Quick Match, 20 its rounds, 22 port, 23 connect, 24
+Start, 25 Back (21 is unused). Damage (131.8.5): a key or click names the rect
+of the widget it changed (`bp_face_dirty_rect`; the pad covers the focus
+ring), of the roster / rules / link panel when a change reaches past one
+widget, or of the whole screen for a tab or a link change; the status line has
+its own tag. The face repaints only those strips once `bp_app.c` stops marking
+the whole centre dirty for every key in setup mode.
+
+#### 131.9.3 The cable lobby
+
+Host Cable and Join Cable add the NULL-MODEM LINK panel: the two computers
+with the cable between them (its plugs apart until the link reaches
+`BP_L_LOBBY`, then joined), the framer's and the session's one-line status
+(`bp_link_msg`: searching, the port, the peer found, compatible or the reason
+it is not, ready) behind an LED (`BP_A2_LED_*`: red off or refused, yellow
+searching or handshaking, green linked), the role (Banker host or Guest), the
+port choice (Auto, COM1, COM2: a button that cycles; refused while a link is
+open), 2400 baud and 8N1, the other computer's line - its first player's name,
+that player's token and Ready or Waiting - once linked, a Connect / Leave
+button (`bp_link_host` / `bp_link_join` / `bp_link_leave`) and the Ready
+column's ticks (`bp_lobby_ready`, enabled once the link reaches `BP_L_LOBBY`;
+the column is one widget, its Enter or a click toggles this computer's own
+ticks). The bottom bar's line says "All players are ready. Press Start." when
+both machines are ready and "Waiting for the host." on a client. Opening a link switches to `BP_M_LOBBY`: the tabs lock. The
+host edits the roster and rules; every change is sent whole with
+`bp_lobby_set`, once when the link first reaches `BP_L_LOBBY` and after each
+edit. The roster's Computer column reads This PC or Other PC from this
+machine's index (`bp_here`), so the same agreed roster reads correctly on
+both screens; the client's roster is read-only and is copied from
+`bp_lobby_setup` whenever the link changes. The host's Start Game button is
+enabled in `BP_L_LOBBY` and calls `bp_lobby_start`; both machines enter
+`BP_M_GAME` when the session reports `BP_L_PLAY`. A link that goes away in
+the lobby leaves the screen showing the message; nothing is lost. Close Link,
+Back and Esc leave the link.
+
+#### 131.9.4 Menus and keys
+
+The bar holds `Byteopoly` and four menus. `menu_relayout` drops a cell that
+would reach `vid_clk_hx` (432 px on a 640 px adapter), and a title's cell is
+8 px a character plus 16, after the 128 px name cell (40 + 9 x 8 + 16):
+Game 48 + Collection 96 + Options 72 + Help 48 end at 128 + 264 = 392. **Do
+not add a fifth menu**: the concept boards' Trade (56) beside "Collection"
+ends at 448, past 432, and the kernel drops Help - Rules, Keys and Chat -
+on every 640 px adapter. So Trade's one item is Collection's first
+(uplift DECISIONS D5); T stays its key on the hint bar. About
+is the application menu's (`OSAPI_ABOUT_SET`), never a Help item. Items grey
+(`OS88_MENU_DIS`) where illegal and are re-evaluated by `bp_pn_sync` and on
+every mode change; Propose Trade follows `bp_can(BP_C_PROPOSE)` for the
+active seat, Collection > My Collection needs a running match, and
+`bp_gp_open` dirties what a menu-opened panel changes.
+
+| menu | items |
+|---|---|
+| Game | New Game... / Load... F3 / Save... F2 / Paired Save / Resume Pair / Close |
+| Collection | Propose Trade... / My Collection... / Standings |
+| Options | Sound: On|Off / Music: On|Off / Fast Animation: On|Off / Diagnostics |
+| Help | Rules F1 / Keys / Chat... |
+
+Load and Save are local-match items; Paired Save needs a cable match, Resume
+Pair a link in `BP_L_LOBBY`; Propose, My Collection and Rules need a running
+match; Chat and Diagnostics need a cable. The Options flags are exported as
+`bp_opt_sound`, `bp_opt_music` and `bp_opt_fast`. Keys: F1 Rules, F2 Save, F3 Load; in the
+setup screens Tab/Down and Up move focus, Left/Right change the focused
+value, Enter/Space act, S starts, Esc goes back.
+
+#### 131.9.5 Sound
+
+Byteopoly plays through the game kit's player (§133.8): a song bank and an
+effects bank in the second art part, `BP_A2_MUSIC` (384) and `BP_A2_SFX`
+(385), compiled from `art/music.txt` and `art/sfx.txt`. Without that part the
+game is silent - the banks are art, like the pictures the plain face goes
+without (§131.10).
+
+**Options.** `Sound: On|Off` (effects) and `Music: On|Off`, both through
+`gkm_volume`. Sound starts on. Music starts on **only when `gkm_init`
+answers `GKM_FM`**: on the PC speaker the melody alone over a game is more
+nagging than musical, so it is a choice there, not a default. Turning Music
+on plays the song the state wants now; turning it off releases the FM
+channels at once.
+
+**The songs, chosen on every tick from state** (`bp_ap_music`): a song is
+started only when the choice CHANGES, so a song the driver refused (another
+program holds the channels) stays off until the state moves on, and never
+retries 18 times a second.
+
+| song | `BP_MUS_*` | when | shape |
+|---|---|---|---|
+| 0 title | `TITLE` | the New Game / lobby screen is up (`bp_ap_mode` != `BP_M_GAME`, i.e. `bp_pn_covers()` == `BP_PN_FULL`) | C major, 136.5 BPM; a 2-bar intro, then 16 bars that loop (31.6 s, loop 28.1 s) |
+| 1 game | `GAME` | a match in play | F major, 91 BPM, 16 bars, loops whole (42.2 s) |
+| 2 auction | `AUCTION` | `phase == BP_PH_AUCTION` | A minor, 136.5 BPM, 8 bars, loops whole (14.1 s) |
+| 3 fanfare | `FANFARE` | `status == BP_ST_OVER`; plays ONCE | C major, 182 BPM, 4 bars (5.3 s) |
+
+All four are original, written for this game; no melody is taken from any
+other game or song.
+
+**The effects.** One effect per committed result (`ovl_bp_ap_committed`):
+each event kind has a rank and an effect in one byte (`bp_ap_kfx`, rank << 5
+| effect), the highest rank wins and the first of equals. `bp_sound(cue)` is
+`gkm_sfx(cue)`, so the setup screens' `BP_SND_ERROR` and every `BP_SND_*` of
+bp.h are the first eight effects, unchanged in meaning.
+
+| # | effect | `BP_FX_*` | played for (rank) |
+|---|---|---|---|
+| 0 | dice rattle | `DICE` | `ROLL`, `ORDER` (2) |
+| 1 | the till, "ka-ching" | `BUY` | `BUY` (5) |
+| 2 | coins out | `RENT` | `RENT`, `CHARGE` (4) |
+| 3 | Floppy Find card | `FLOPPY` | `CARD` from deck 0 (6) |
+| 4 | CRASH! (ducks) | `CRASH` | `DETAIN` (7) |
+| 5 | bankruptcy (ducks) | `BANKRUPT` | `BANKRUPT` (7) |
+| 6 | victory (ducks) | `VICTORY` | `OVER`, only with Music off - on, the fanfare is the victory (7) |
+| 7 | error buzz | `ERROR` | `bp_sound(BP_SND_ERROR)`: refusals |
+| 8 | token step | `STEP` | `MOVE` (1) |
+| 9 | BOOT salary | `SALARY` | `SALARY` (3) |
+| 10 | System Error card, an alarm | `SYSERR` | `CARD` from deck 1 (6) |
+| 11 | upgrade, rising | `UPGRADE` | `UPGRADE`, `REDEEM` (5) |
+| 12 | mortgage, falling | `MORTGAGE` | `MORTGAGE`, `SELL` (5) |
+| 13 | bid blip | `BID` | `BID`, `AUCTION`, `OFFER` (3) |
+| 14 | the gavel | `SOLD` | `WON`, `UNSOLD` (5) |
+| 15 | trade accepted | `TRADEOK` | `TRADED` (6) |
+| 16 | trade rejected | `TRADENO` | `REJECTED`, `CANCELLED` (6) |
+| 17 | link lost (ducks) | `LINKLOST` | the link leaves `BP_L_PLAY` during a match |
+| 18 | link restored | `LINKOK` | the link returns to `BP_L_PLAY` from `PAUSED` or later |
+| 19 | your turn | `TURN` | `TURN` of a seat on this machine (every seat, on one PC) (2) |
+
+`tests/unit/t_gkmus.py` holds the three numberings together: the order of
+`sfx` and `song` blocks in the two files, `bp_app.c`'s `BP_FX_*` /
+`BP_MUS_*`, and `bp.h`'s `BP_SND_*`. A renumbering in one of them plays the
+wrong sound with no other symptom.
+
+**Costs** (against base d242a0e53+uplift): resident image +778 bytes (the
+player's 893, the old cue tables and stepper -175, the rank table +35, the
+picker +125), bss +59, overlay +220; the banks 1,129 + 357 bytes of
+BPART2.BIN.
+
+#### 131.9.6 Files and the close decision
+
+Save... and Load... use the Standard File dialog (`os88_file_dlg`; the
+result arrives in `os88_onfile`). A load refuses a file larger than
+`BP_SAVE_MAX`, decodes through `bp_load_local` into a scratch `BPState`,
+validates, and only then calls `bp_sess_load_local`; any failure leaves the
+running match untouched and says `bp_err_text` in a toast and the log. A
+save writes `bp_game` through `bp_save_local`. Load while an unsaved local
+match is running asks first ("Discard the unsaved match?"). Paired Save and
+Resume Pair call the session. Closing (the close box, Game > Close, the dock):
+a local match with moves since the last save asks Save / Discard / Cancel
+(Save opens the dialog and closes when the save lands; any later menu command
+forgets the pending close); a cable match asks "Leave the cable game?"
+Yes / No (the alert's Yes/No set; the Save/Discard/Cancel and Cancel/Proceed
+sets are the others used - the OK/Cancel set needs `OS88UI_AEXTRA`, which
+Byteopoly does not define); anything else closes. `os88_wm_close` does NOT
+consult `os88_onclose` (SPEC.md 75.2), so Game > Close, the end panel's Exit
+and a finished save-then-close all run the same decision first
+(`ovl_bp_ap_close`) and only then call it. A close releases the link
+(`bp_link_leave`) and disarms the timer; the OS frees the instance's claims,
+the band's among them, when the window goes.
+
+#### 131.9.7 The decision panels
+
+`apps/byteopoly/bp_panels.c` owns every panel inside the board's centre
+(`bp_r_center`). **One function decides what is on screen**: `gp_spec`
+maps (`bp_game`, the link state, the panel the player opened with
+`bp_gp_open`) to one panel KIND and its row of buttons, and draw, key, click
+and the hint bar all read that one answer, so a button, its key, its mouse
+rectangle and its hint entry cannot disagree. Nothing here writes `bp_game`:
+a decision is a `BPCmd` (`type`, `seat` = the decider, `rev` = the revision
+the panel was drawn from, the arguments) through `bp_sess_submit`, and a
+refusal's `bp_err_text` is shown in the panel's status line while nothing
+changes. Precedence: the panels a player opened that never act (chat,
+diagnostics, rules, keys, standings) > LINK PAUSED (any non-local mode whose
+`bp_link_state` is PAUSED or RESYNC) > HANDOFF (131.9.8) > Collection and
+trade composer > the panel of `bp_game.phase`.
+
+| phase | panel | buttons (key) |
+|---|---|---|
+| BUY | a BOTTOM panel on FULL and MID (131.9.12): the picture, "You landed on NAME", price, rent; COMPACT covers the centre | Buy (B), Auction (A) - Buy greyed with `bp_can`'s reason |
+| AUCTION | lot, list price, high bid and bidder, the bidder's cash, the editor, the minimum, "if you win: N left", the seats auto-passed for want of a raise (from `bp_gp_event`, PASS with other = 1) | Bid N (B), Pass (P); editor: `-`/`+` or Down/Up step 10, digits type, Backspace erases |
+| CARD | deck name and art (FULL; MID too when the 48x64 deck picture fits above the buttons, its mono twin on 1bpp), title, wrapped text | OK (Enter) -> ACK_CARD |
+| REPAIR | detention, failed tries of 3, cash, the Recovery Disks held | Pay 50 (P), a disk per deck held (F Floppy Find, S System Error), Roll (R), Manage (M) |
+| DEBT | creditor, amount, cash, shortfall | Manage (M), Settle (S, when `bp_can` allows), Bankrupt (K) then a confirmation: Go bankrupt (K), No (Esc), opened focused on No |
+| TRADE | the frozen offer (131.9.9) | Accept (A), Reject (R) for the recipient; Cancel (C) for the proposer |
+| MANAGE, AFTER | the TURN BAR, a bottom panel (131.9.12; the centre art stays): the mover's token, whose move, the buttons | Roll (Space), End Turn (E), Trade (T), Manage (M) |
+| OVER | winners, standings (131.9.11) | Review (R), New Game (N), Exit (X) |
+
+Greying is the engine's word: every button asks `bp_can(&bp_game, seat,
+type, arg)` (or the editor's own bid test: at least the minimum, a multiple
+of 10, within cash) and shows the reason when pressed disabled. **A panel
+shows its facts even when the seat deciding is not played on this machine**;
+it then has no buttons and its status line reads "Waiting for NAME on the
+other PC", and while `bp_sess_busy` it reads "Sent - waiting for the other PC
+to confirm" and every button is grey with BP_EPENDING. Economic keys of a
+seat not on this machine do nothing.
+
+Keys (US-21): Space roll, B buy / bid, A auction / accept, P pass / pay, T
+trade, C or M collection, E end turn, R roll / reject / redeem, S settle /
+sell, K bankrupt, U upgrade, Esc back (closes an opened panel, cancels a
+confirmation, otherwise falls through to the app). Tab moves the focus along
+the ENABLED buttons, Enter presses the focused one. **Focus never carries
+from one panel to the next**: whenever the panel's identity changes - its
+kind, a confirmation opening or closing, or the deciding seat - the focus is
+reset to the first enabled button, and a confirmation opens on No, so no
+number of Enters walks from DEBT into a bankruptcy. After a commit, a focus
+left on a button the new state greys (Roll once rolled) moves to the first
+enabled one, and so does a Rules/Keys page turn that greys Next or Prev;
+an editor or list change (a bid being typed, a Collection cursor) never
+moves it, so Enter on an invalid bid explains instead of passing. Each button is its label's
+width (plus the kit's edge) and the row's buttons are spread evenly along the panel's foot - or,
+on a scene panel, stretched to fill the row the scene tags (131.9.12); a row too narrow for every
+"[K] Label" drops the "[K]" prefixes and the hint bar still names the keys; on 1-bit
+adapters the focused label is prefixed ">" in addition to the face's focus
+state. Hit targets are the rectangles the last draw recorded, the very ones
+it drew. The hint bar lists the ENABLED buttons only (the same answer as the
+greying: no "Space Roll" once the roll is spent).
+
+**The panels name their own damage** (131.8.5). Each key, click and
+`bp_gp_open` compares what the panel was before with what it is after (its
+identity, focus, buttons, status line, editor and list state) and dirties
+only that: `BP_D_CENTER` when the identity changed; otherwise ONE
+`bp_face_dirty_rect` from the topmost line that changed to the panel's
+bottom - the button row for a focus move or a relabelled button, the editor,
+minimum and buttons for a bid step, the list and the detail lines below it
+for a cursor move, the status line and buttons for a refusal - and the
+one-line bar whole on MANAGE/AFTER; `BP_D_HINT` only when the hint entries
+changed. The app dirties nothing on the panels' behalf. A key that changes
+nothing repaints nothing.
+
+Layout is picked from `bp_layout`, never the adapter: COMPACT (CGA class)
+uses 1-pixel line spacing, drops the sprite and the secondary lines (a panel
+there has about five rows, so each states its decision first), and a line
+that does not fit above the buttons is not drawn rather than overlapped.
+A status line is reserved only while it has something to say. A list that
+shows fewer rows than it holds says so: the Collection list and each
+composer column mark their first shown row "^" when rows are hidden above
+and their last shown row "v" when rows are hidden below.
+
+The Collection panel (BP_GP_MANAGE, key M) lists the viewing seat's
+computers and utilities (cursor with the arrows or the mouse) with level,
+Workshop, mortgage and collection letter, the cursor's exact amounts
+(upgrade cost, sale +half, mortgage +half price, redeem principal plus 10%)
+and Upgrade (U), Sell (S), Mortgage (M), Redeem (R), each greyed by `bp_can`.
+It stays open across revisions and closes when the decider changes. In DEBT
+the same panel is the legal liquidation view: the engine refuses an upgrade
+there, so that button is grey with its reason.
+
+#### 131.9.8 Handoff
+
+HANDOFF is presentation only: no command, no canonical byte, no peer. When
+the decider becomes a seat played on this machine other than the one the
+last handoff covered (`gp_ack`), and this machine plays two or more live
+seats, the centre is covered by "Pass to NAME - next: <phase>" until a FRESH
+Enter or Space. This covers the active player changing and also an
+out-of-turn local bidder or trade recipient. A machine playing one seat
+never shows it; a cable machine playing two does, between those two only.
+**A held or queued key never acts for the next person**, by the clock alone.
+Two facts decide the mechanism. First, a key event says when it was
+PROCESSED, never when it was typed: during a repaint of several seconds on
+the XT (131.8.5's table) the typematic repeats of a held key - or a second
+press typed ahead - wait in the BIOS keyboard buffer and then arrive back to
+back, so a gap measured from the previous key's ARRIVAL spans that repaint
+and looks fresh (QA Qqa1-3: one held Enter ended a turn, confirmed the next
+player's handoff, rolled for them and acknowledged their card). Second, the
+key-state map (SPEC.md 9.7) would tell a held key from a fresh one, but
+arming it makes every E0-prefixed key step twice on some machines for the
+rest of the session, for every program, and kern_small refuses the map; and
+the BIOS buffer's head and tail are not a package's to read (kern_mega). So
+the quiet is measured from the END of the previous key's handling: the app
+calls `bp_gp_keyend()` as the last thing `os88_onkey` and `os88_onclick` do,
+after their repaint, and drawing the handoff restarts it too. A queued key
+then arrives within a tick of that stamp and a held key's repeats within one
+typematic period of it, however long the repaint was.
+
+- **The handoff** takes Enter or Space only after 20 ticks (1.1 s) of quiet:
+  no key event, no end of a key's handling and no draw of the handoff in that
+  time; raising it starts the quiet too. 20 ticks is longer than any
+  typematic delay (at most 1 s) and any repeat period (at most 9.1 ticks at
+  2 per second), so neither a held key nor one typed during the repaint that
+  raised the handoff can confirm it, and every rejected key restarts the
+  wait; the panel says "a held key does not count - let go first". Mouse
+  clicks on "Ready" count at once. Because a local game raises a handoff
+  whenever the decider becomes another seat played here, this is what
+  guarantees the rule: the next person's first decision is always behind a
+  fresh press.
+- **A confirmation's Yes** (Go bankrupt, Yes leave) obeys the same 20 quiet
+  ticks when pressed by key, so the K that armed it, held or typed twice,
+  cannot answer it; the status line then reads "Let go, then press again".
+  Enter on a confirmation presses No (131.9.7). A click on Yes counts at once.
+- Other keys are NOT filtered. A same-player key typed ahead of a repaint
+  acts on that player's next panel: the clock cannot tell it from a fast
+  deliberate press or from a test driver keying 1-2 ticks after the UI goes
+  idle, and it cannot act for anyone else.
+- The handoff follows the decider it was raised for: if the state changes
+  under it (a Load of an earlier position of the same match, a revision
+  going backwards) to another decider, it is dropped and raised again for
+  the new one, so it never names the wrong player.
+
+`bp_gp_tick` (every timer tick) dirties the centre and the hint when, in a
+cable game, the link state or a pending command changes without a commit, so
+"Sent - waiting" and the pause panel never outlive their cause; a received
+chat line repaints an open chat panel.
+
+#### 131.9.9 Trades
+
+Compose (BP_GP_TRADE, key T; allowed when `bp_can(PROPOSE)` is): the
+decider's tradable holdings in the left column, the recipient's in the
+right; Left/Right change column, Up/Down the cursor, Space or a click
+toggles `[x]`. The active column's heading and the cursor row are marked by
+a leading ">" as well as the highlight, because yellow is white on 1bpp and
+no meaning is carried by hue alone (131.8). A computer of a collection with any upgrade shows `[-]` and
+refuses ("Upgraded sets cannot be traded"); `*` marks a mortgage; held
+Recovery Disks are rows after the properties. Digits type the cash, `+`/`-`
+step it by 10, P switches which side pays, N cycles the recipient. A line
+under the lists previews both seats' cash before and after, "short" where a
+payer cannot cover it. Propose (Enter) submits `BP_C_PROPOSE` (`to`, `give`
+and `get` prop masks, `disks` bit d give / bit 4+d get, `payer`, `amount`); an
+empty offer is greyed. Review (phase TRADE) shows the frozen offer: each
+side's names with `*` for mortgages, the cash and who pays it, the cash
+before and after for both, the offer id, and who decides. Accept sends the
+low byte of the offer id; the engine re-validates and the revision check
+catches a stale view.
+
+#### 131.9.10 Pause, chat and diagnostics
+
+LINK PAUSED / RESYNCING covers the centre (131.9.12 draws it) with whose PC
+is awaited, the last log line ("last action retained") and Retry (R: `bp_link_host` /
+`bp_link_join` on the held port), Load Pair (L: `bp_sess_resume_pair`),
+Details (D) and Leave (X, with a confirmation: leaving abandons the match).
+The panel underneath is untouched: it reappears unchanged when the link
+resumes, and no economic key reaches it meanwhile. Chat (BP_GP_CHAT)
+is a bounded field (`BP_CHAT_LEN` = 24 characters) with sender labels
+("You:", "Them:") over the last three lines; while it is open EVERY key is
+typed text (F-keys excepted), Esc clears the line and a second Esc closes.
+Diagnostics (BP_GP_DIAG) shows role, link state, port and baud, the
+revision, pending/idle, and the `bp_diag` counters. Neither touches the
+game's RNG, log or state.
+
+#### 131.9.11 The end
+
+BP_PH_OVER (or `status` OVER) shows the winners (a shared win lists every
+name), the Quick Match round count, and per seat cash, assets (the score
+less cash: property price less mortgages plus upgrade resale) and the
+canonical score; Review hides the panel for a one-line bar (Standings brings
+it back), New Game and Exit are handed to the app through
+`bp_gp_overchoice()` (1 review, 2 new, 3 exit, read once). Economic buttons
+do not exist on this panel. Standings (BP_GP_STANDINGS) is the same table in
+mid-match from `bp_score_of`. Rules and Keys (BP_GP_RULES, BP_GP_KEYS) page
+the art's help record (`BP_A_HELP`): lines before a `#KEYS` line are the
+rules, those after it the keys; PgUp/PgDn (or Up/Down) or the buttons page,
+by as many lines as the panel shows. Each page shows only its own section:
+the last Rules page ends at `#KEYS`, paging stops at the last page rather
+than wrapping, and Prev is greyed on the first page and Next on the last
+(so a page opens focused on Next, and Enter reads on).
+
+#### 131.9.12 The uplifted panels
+
+The landing, the auction, the trade review, the link-lost panel and the turn
+bar are drawn after the concept boards (`1-board.png`, `2-auction.png`,
+`3-trade.png`, `5-linklost.png`; the uplift's U11) as game-kit SCENES
+(§133.6), records in `BPART2.BIN` compiled from `apps/byteopoly/art/
+scenes-pana.txt`: panel n is scene `BP_A2_SC_PANA + 2n` on FULL, the next ID
+on MID and `BP_A2_SC_PANAC + n` on COMPACT (n = 0 landing, 1 auction, 2 trade
+review, 3 link lost, 4 turn bar; 420..429 and 455..459). A scene is the
+panel's whole static layout - its frames, title bars, wells, banners, rules,
+pictures and words - and the C only fills SLOTS and draws once:
+`ovl_gp_sbeg` empties them, the panel's function fills them, `ovl_gp_scene`
+calls `gk_scene` and takes the panel's rects back with `gk_scene_rect`. Every
+scene keeps one set of conventions:
+
+- `%0` is always 0, so `if %0` marks a PLACEHOLDER: an op never drawn whose
+  rect the C reads. `#200` is the panel (damage, clicks), `#201` the status
+  line (a refusal's damage starts there), `#202` the BUTTON ROW, and the
+  auction's `#1`, `#45`, `#43` the editor and its `-` / `+`, the trade's
+  `#2`..`#5` its list areas.
+- `$1` is the status line (a refusal, "Sent - waiting ...", "Waiting for NAME
+  on the other PC") and `%1` says it has something to say. Money slots carry
+  " cr". The strings are pooled in the hint entries' buffer (`gp_hb`), free
+  while a panel draws because the face asks for each hint entry afresh and
+  uses it at once; a string that does not fit is cut, never overflowing.
+- The BUTTONS are 131.9.7's, from `gp_spec`, drawn by the C along `#202`:
+  the row's buttons share it evenly, 4 px apart, as on the boards; the rects drawn
+  recorded as the mouse targets. So a button, its key, its hint entry and
+  its click are still one table, and a confirmation (Yes, leave / No) or a
+  missing button (a seat on the other PC) needs no scene of its own.
+
+What each shows (all facts the engine and the session hold; nothing is
+drawn that the game does not know):
+
+| panel | FULL / MID | COMPACT |
+|---|---|---|
+| landing | a BOTTOM panel (`bp_pn_covers()` 0, DECISIONS D9: the bottom 96 / 64 rows of the centre, `bp_face_barh()`, the idle art above it): the LARGE picture in a sunken well with its collection's colour bar, a divider, "You landed on NAME", Price, Rent ("follows the dice" for a utility; the status line takes the Rent line while it has something to say), [B] Buy, [A] Auction | the whole centre: "BUY NAME?", price, rent, "Decline puts it up for auction." |
+| auction | "AUCTION • NAME"; the picture, colour bar and list price; a HIGH BID box (the bid in the big font in a white well, the bidder's token and name, or "no bid yet"); a yellow banner "BIDDER • YOUR BID" (or "• BIDDING" for a seat on the other PC) with the bidder's token; for a bidder played here the editor `[-] amount [+]`, "Minimum N • You have N", [B] Bid N, [P] Pass, "If you win: N left"; "Passing leaves this auction." or who passed for want of a raise; the status line | the same facts in lines, the editor one row |
+| trade review | "TRADE OFFER • FROM TO TO"; a banner "TO • YOUR DECISION" (or "WAITING FOR TO"); two "X GIVES" boxes with the trade arrows between: a side giving ONE computer and nothing else shows the boards' card (picture, colour bar, name, value, mortgage, upgrades - the PLUS box takes the last line when that side pays cash); a side of several shows its first computer as the card and "+ the rest" wrapped under it (short names, "(mortgaged)", the disks); a side with no computer its names ("nothing"); a card whose computer is mortgaged carries the mortgage mark on its picture; "PLUS N cr" with the coins in the paying side; AFTER THIS TRADE: each side's cash before -> after ("short" when it cannot pay) and the collection the trade completes, with its pictures; the lock line "Offer locked • Both sides shown above" (the status line takes it while it has something to say); [A] Accept, [R] Reject, and [C] Cancel for the proposer | the boxes as two framed lists (a lone computer its name, value and mortgage; "(mortgaged)" spelled out), the cash lines, "Offer locked. TO decides." |
+| link lost | the title (CABLE LINK LOST, RESYNCING, BOARDS DIFFER); the two PCs, their plugs and the beacon around a "Game paused" pill ("Input stopped" when the boards differ); "Waiting for NAME's PC..." (the first live seat not played here; the link's message when the boards differ); LAST ACTION RETAINED: the active seat's token, the newest log line, and a yellow line saying whether a move of this PC is still waiting for the other to confirm (`bp_sess_busy`); LAST PAIRED SAVE: `bp_sess_pair`'s state - "Saved on both PCs" with the two ticked disks, "Saving or resuming...", "Failed - the old pair stands", or "None made this session"; [R] Retry Link, [L] Load Pair, [D] Details (the diagnostics panel), [X] Leave; "Reconnect to continue this turn." | the same in lines |
+| turn bar | a BOTTOM panel: the mover's token, "NAME: roll the dice" (or the status line), [Space] Roll, [E] End Turn, [T] Trade, [M] Manage | the same, without the token |
+
+Deliberate departures from the boards, and why: the concept's "[D] Details"
+on the trade review is not drawn (no trade detail view exists; Details is
+the link panel's, where it opens the diagnostics); the link panel's paired
+save shows its state, not "Round 6 • Turn 23" or "unsaved moves" (the session
+does not record the round of the last paired save, nor whether moves were
+made since), and the last action's picture is the active seat's token (the
+log line is text; which computer it names is not kept); the turn bar keeps
+Manage (the concept's idle board has no bar to copy); "->" stands for the
+boards' arrow (the fonts have no arrow glyph); the pictures are the art's
+LARGE 48x32, smaller than the boards' renders; buttons inside panels are
+the kit's FLAT buttons (no drop shadow), as on the boards. The boards' heavy
+type is the art's two faces: titles, headers, banners, names and figures in
+BP_F_BIG12 / BP_F_BIG16 (the system face) where the row allows, running text
+in the dialog face, which is already a heavy one.
+
+Damage keeps 131.9.7's discipline: a bid step names the editor (`#1`) and
+the rows under it, a focus move the button row, a refusal the status line
+(`#201`); a new panel kind dirties the centre. The landing and the turn bar
+are bottom panels, so a roll that lands on a property repaints only the
+centre's bottom bar region, the idle art staying. Costs (against the uplift
+tip, lane report): overlay +484 bytes, resident image +62 (the overlay's
+function table and the collection colours) and bss +78 (the slot arrays);
+the scene records 6,125 bytes of `BPART2.BIN`; the panel text about 580
+bytes smaller than before (the code-drawn bodies' strings are gone).
+
+#### 131.9.13 The kit-drawn panels (panels B)
+
+Every centre panel the concept boards do not draw - card, Repair Shop, debt,
+handoff, Collection, the trade composer, standings and game over, chat,
+diagnostics and Rules/Keys - is drawn with the game kit (SPEC.md 133) in the
+board's 3D style: a raised panel, yellow banners that name whose decision it
+is, navy-headed sections, sunken white wells for numbers and lists, pictures
+from BPART2 and the panel's own buttons under it. `gp_spec`, the keys, the
+clicks and the damage rules of 131.9.7 are untouched; only the drawing
+changed, and `gp_x`, `gp_xr`, `gp_y`, `gp_btop`, `gp_vy`, `gp_lr`/`gp_lrow`
+and `gp_ttop` keep the meanings 131.9.7 gives them (a status line still
+reserves one line, a cursor move still dirties from `gp_vy` down).
+
+**Scene ids** 430..439 are this lane's (`apps/byteopoly/art/scenes-panb.txt`,
+133.6): 430 card, 431 Repair Shop, 432 debt, 433 a Collection row, 434 a
+labelled cell (Collection amounts, the composer's cash line, diagnostics),
+435 a standings row and its header, 436 a composer row, 438 the victory
+block, 439 handoff. `%0` is the variant: the fixed panels are CORE scenes
+332 x at most 150 rows, drawn centred in the free area of FULL and MID alike
+(COMPACT has its own block, drawn at the top, `%0` + 1), a confirming debt
+adds 2; the row scenes take the layout (0 FULL, 1 MID, 2 COMPACT).
+Dynamic values come through `gp_sv` (strings: names, numbers formatted into
+`gp_ub`, `gp_line`) and `gp_iv` (pictures, lamps, the cursor, widths); a
+picture slot with no picture holds `GP_NOSPR` (459, an ID with no record,
+which draws nothing). Two literals in one scene need the kit's `gk_lit` fix
+(an insert after the first read a wild slot under BX_ART2).
+
+| panel | FULL (centre 336 x 300) | MID (384 x 204) | COMPACT (336 x 96) |
+|---|---|---|---|
+| card | banner, the tilted deck picture in a well, title and wrapped text in a well | same, smaller | banner and the text |
+| Repair Shop | wrench and the Recovery Disks held, three failed-try lamps, cash, ways out | same | three lines |
+| debt | banner, the amount (coins) in a well, cash and shortfall cells; a confirming debt is a banner and two lines | same | banner and two lines |
+| Collection | cash strip, one picture row per computer (level chips, mortgage mark, group letter), four amount cells | tiny pictures, 14-row rows | text rows, no amounts |
+| composer | a header per column (yellow and ">" on the active one), a ticked picture row per holding, the trade arrows, the cash line, the before/after line | same | text rows |
+| standings, game over | token rows with winners yellow; game over adds the victory block | rows 20 tall, a "Winner:" banner | text rows |
+| handoff | the next player's token and name in a well | same | banner and two lines |
+| chat, diagnostics, Rules, Keys | a sunken well under the old text lines; a link lamp (green, yellow, red) | same | same |
+
+Nothing here is the only carrier of a meaning: the banner of an active
+column is also marked ">", a cursor row has an outline, a disabled holding
+is also refused, so 1bpp (yellow is white) loses nothing.
+
+### 131.10 Art
+
+#### 131.10.1 Sources
+
+THE TEXT ART IS THE SOURCE (the Breadboard XT model, 130.6.3): `apps/byteopoly/art/sprites.txt`
+holds every picture as `sprite BP_A_NAME W H` and H rows of W characters, one per EGA colour
+(`kbgcrmnldBGCR.yw`, `.` = 13 light magenta = transparent); `art/help.txt` is the in-game rules
+and key list (`BP_A_HELP`); the type is WIN16's committed strikes (`apps/win16/fonts/`:
+`dlg13`/`dlg10`/`dlg08` for `BP_F_TEXT13/10/08`, `sys16`/`sys12` for `BP_F_BIG16/12`), shared as
+source. `apps/byteopoly/art.h` is the ID list; IDs are dense and in order and `BP_A_COUNT` and
+`BP_A_HELP` are last. `make` reads only those text files, never a PNG and never a service.
+
+#### 131.10.2 The master and the prompt
+
+The pictures were drafted ONCE from three codex-generated master sheets
+(`art/master1.png` computers, `master2.png` icons, `master3.png` mascot and card backs; the one
+sanctioned binary, as Breadboard XT's). `art/PROMPT.md` keeps the exact prompts, the date and the
+tool version (codex-cli 0.169.0, 2026-11-17). The sheets are original pixel art on a light-magenta
+key in the 16 EGA colours with no lettering or trademark marks and nothing taken from a
+commercial board game. `os88bpart.py draft` quantises each picture's extent to its logical size
+and `sprites.txt` is then finished by hand; from then on the text is the source.
+
+#### 131.10.3 BPART.BIN
+
+Little-endian, read by the shared drawing core (`bx_art_at`, 130.6.3): `'BP'`, the ID count, one
+word offset per ID (0 = absent), then the records: sprites as `db w, db h` and packed 4bpp rows (high
+nibble left, colour 13 transparent); fonts as height, ascent, first, count, widths and per-glyph
+two-byte rows; the help and `BP_A_UITEXT` as INDEXED text records (131.10.7: a line count, a
+word offset per line, then the NUL-terminated lines; `bx_artstr`, 47 characters at most; in
+`BP_A_HELP` a `#KEYS` line starts the Keys page; `BP_A_UITEXT`, last, is empty - the UI strings
+are BPART2.BIN's `tx-*` records). Packing is deterministic and shares `tools/os88bbart.py`'s
+packers as imports. It is lazy part 1 of `BYTEOPLY.O88`, and REQUIRED (131.10.7): without it
+Byteopoly does not open.
+
+#### 131.10.4 Sizes
+
+TINY 16x12 props, and TINY specials `BP_A_T_BOOT..EWASTE` for MID cells (`BP_A_TSPECIAL(id)` maps `BP_A_BOOT..BP_A_EWASTE`), small card backs `BP_A_CARD_FF_S`/`_SE_S` 24x32 for the MID card panel (COMPACT and MID cells; every one has a mono twin `BP_A_M_T_*`, 131.10.5), SMALL 32x24 (FULL cells, sidebar, specials), LARGE 48x32
+(panels), tokens 16x16, dice 24x24, RAM 8x6, Workshop 12x10, mortgage 12x10, mascot 64x64, card
+backs 48x64, cable 32x12, keycap 16x16 (see the table printed by `--selfcheck`; the face asks
+`bx_size`).
+
+#### 131.10.5 Monochrome
+
+On 1bpp the core draws each colour as a 2x2 pattern (`bx_mono`): black for black and every dark
+chromatic colour, grey 3/4 (light grey), 1/2 (dark grey, brown), white for the light colours.
+A dark chromatic fill therefore merges with its black outline. Where that turns a picture to
+mush it has a `_M` twin drawn in black and white only (dark chromatic fills as a 50% checker),
+as an ID added after the colour ones; the face prefers `BP_A_M_x` when `bp_mono`. `art.h` lists
+which exist. `os88bpart.py png DIR --mono` previews every sprite through the core's mapping.
+
+The Apple IIe, PC AT, Atari ST and 486 were redrawn from a fourth master (`art/master4.png`) so no two
+machines are near-twins: a light-grey keyboard with a separate amber monitor, a tall grey case with
+three bays and a yellow screen, a dark-grey wedge with a blue-screen monitor, and a lone black tower.
+The Keys page of `BP_A_HELP` states exactly the keys of 131.9.7 and 131.9.4 (F1, P, R, S, K, U, Home,
+PgUp/PgDn; C and M are one Collection panel; Esc does not open the menu); `--selfcheck` requires
+rules lines, the `#KEYS` line, then key lines.
+
+#### 131.10.6 Tool and size
+
+`os88bpart.py build -o`, `--selfcheck`, `draft`, `png DIR [--mono]`. The measured size is in
+`art/PROMPT.md` and the art lane's report: BPART.BIN is 55,592 bytes (44,295 of sprites, 9,087 of fonts,
+2,210 of indexed text; cap 56 KB = 57,344 unpacked), 17,614 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
+included; loaded it is a 55KB lazy claim, and a machine without the room is refused (131.10.7).
+
+#### 131.10.7 The second art part (the uplift)
+
+**The art parts are required.** From the uplift on, Byteopoly opens only with
+both art parts in memory: the UI text lives in them (below), and a plain face
+would double every drawing path for a machine the game does not target.
+`ovl_bp_ap_start` asks `os88_part_lazyok` for each and fetches them before it
+claims anything else; when either cannot be had it drops what it fetched and
+`os88_main` answers 0 after one toast saying why - "Not enough memory" when
+the part would not fit, "Cannot read the art" when the read failed (§47: a
+refusal names a fact). Both stay lazy rather than eager so each is its own
+claim (the eager carve would be one ~180 KB block). The no-art fallbacks the
+core's callers carried (a die drawn as a number in a box, a level as drawn
+pips where the RAM chip art exists, the mortgage "M" box, the Rules page's
+"the help text is part of the art file") are gone; COMPACT's drawn pips and
+the framed keycaps of FULL and MID stay, being layout choices, not
+fallbacks.
+
+**`BPART2.BIN`** is lazy part 2 of `BYTEOPLY.O88` (OP_ASSET, OP_LAZY|OP_COMP,
+cap 56 KB unpacked = 57,344 bytes). Its IDs are `apps/byteopoly/art2.h`'s,
+256 (`BP_A2_BASE`) up to `BP_A2_COUNT`; ranges are reserved per lane there.
+The layout is BPART.BIN's (131.10.3) with magic `'B2'`, the count
+`BP_A2_COUNT - 256`, one word offset per index (ID - 256; 0 = no record),
+then the records: sprites (`art/sprites2.txt`, the same text format with
+`BP_A2_` names; an ID with no record is offset 0 and draws nothing), the
+indexed text records below (`art/tx-*.txt`), the kit's scene records
+(SPEC.md 133.6; `tools/os88gk.py`'s `compile_scenes` over every
+`art/scenes-*.txt`, only when that tool exists) and the music records (the
+sound lane's delimited block, SPEC.md 133.8). `os88bpart.py build2 -o`
+builds it; `make` rebuilds it when `art2.h`, any `art/*.txt` or the kit's
+and the player's tools change.
+
+**Routing (`BX_ART2`).** The band core (`apps/breadxt/draw.inc`) assembles
+with `BX_ART2` defined only for Byteopoly; Breadboard XT, which includes the
+same core without it, assembles byte for byte as before. Under it
+`bx_art_at` sends an ID of 256..511 to the second segment with index ID - 256,
+so `bx_spr`, `bx_size`, fonts, scenes and the music player reach either part
+by ID alone, and `void bx_setart2(unsigned seg)` names that segment (both
+parts are pinned: `CC_ONMOVE_PARTS` is not defined).
+
+**Indexed text records.** Under `BX_ART2` every text record is INDEXED: `dw n`,
+`n` word offsets from the record's start, then the `n` lines, each
+NUL-terminated - line k is found in one step, not by walking k lines. This
+holds for `BP_A_HELP` and `BP_A_UITEXT` in BPART.BIN as well (the Rules page
+used to rescan the help from line 0 for every line of every strip), so
+`bx_artstr(id, n, buf)` keeps its contract (line n, at most 47 characters
+and a NUL; 0 and "" when absent) and costs the same for line 0 and line 90.
+
+**Text handles.** A UI string that lives in a text record is named in the C
+by a HANDLE, a `const char *` whose value is 1000h + (r << 9) + k: line k
+(0..511) of text record `BP_A2_TX_APP + r` (r = 0..7). No string of the
+package can sit below 2000h (`.rodata` follows `.text`, which starts with
+the runtime), so the value cannot be mistaken for a real pointer, and NULL
+stays NULL. A handle is resolved where text is CONSUMED, never where it is
+named: `bx_text` and `bx_twidth` resolve their string argument themselves,
+and C code that reads the characters (copies, appends, hashes, a toast, an
+alert) calls `const char *bx_str(const char *s)` first, which answers a
+real pointer unchanged and a handle as the line copied into the next of four
+64-byte slots of a resident ring (63 characters at most). A slot is good
+until four more handles are resolved, so code takes a resolved pointer to
+its use at once. Handles compare equal when they name the same line, so
+`bpl.msg != why` keeps working.
+
+The text source is `apps/byteopoly/art/tx-<file>.txt`, one record per C file
+(`tx-app` 460, `tx-panels` 461, `tx-setup` 462, `tx-face` 463, `tx-side`
+464, `tx-save` 465, `tx-link` 466, `tx-rules` 467 - the engine's error texts
+and the cards' titles and texts): `#` comments and lines `NAME "text"`, NAME
+`T<letter>_...` (A app, P panels, S setup, F face, D side, V save, L link,
+R rules), C escapes, printable ASCII. Line order is handle order. `os88bpart.py`
+writes `apps/byteopoly/bptx.h` from them (checked in, as `docs/INDEX.md` is;
+`os88bpart.py --selfcheck` fails the build when it is stale and `os88bpart.py
+txh` rewrites it): one `#define NAME BPT(handle, "text")` a line, where the
+host harness (`BP_HOST`, 131.12) defines `BPT(h, s)` as the literal `s` and
+`bx_str(s)` as `s`, so the harness sees the same text the guest draws, and
+the guest defines it as the handle. Kept as literals: the menus, the About
+card and anything the OS reads or keeps (window title, file names, the file
+dialog's default name, a question an alert shows while it is up - a ring
+slot would not outlive it), the board's names (`bp_board.c`), single characters, and the
+templates whose layout code indexes into (`ovl_msg`'s "Banker COM0 2400 rev ").
+
+**The bullet.** The concept boards separate words with a bullet
+("AUCTION • COMMODORE 64"), which no WIN16 strike has, so every Byteopoly font
+carries one more glyph, code 127: a 2 px (3 px from 12 rows) square dot centred
+on the face's x-height with 2 px either side, made by `os88bpart.py` and passed
+to the shared packer as an extra glyph (`os88bbart.pack_font(name, extra)`;
+without it the record is byte-identical, so Breadboard XT's art does not
+change). A `tx-*.txt` line or a scene literal writes it as `•` (or `\177`
+in a text file). Cost: 46 bytes of BPART.BIN.
+
+#### 131.10.8 The uplift's pictures
+
+The pictures of `art2.h` 256..383 are `apps/byteopoly/art/sprites2.txt`, the same
+`sprite NAME W H` syntax as `sprites.txt` and THE SOURCE; they ride `BPART2.BIN`
+(131.10.7). They are drawn after the owner's concept boards, which are the design:
+`art/master5.png` is the sheet of board crops each was drawn after, and
+`art/PROMPT.md` records the method (constructed on the logical grid, finished by
+hand; no image generation) and the date. Drawing rules for every picture: a
+1-pixel black outline; light from the top-left (white lit edge, darker
+bottom-right edge); a drop shadow as a black checker on the key, down and right,
+so it dithers over any ground; beige plastic as white lit faces and a white/brown
+checker for faces in shade.
+
+| picture | size | | picture | size |
+|---|---|---|---|---|
+| `C_BOOT` (up), `M_C_BOOT` | 24x24 | | `TOK_FLOPPY/MOUSE/JOY/CASS` | 24x24 |
+| `C_REPAIR`, `C_SWAP` | 40x28 | | `TOKL_FLOPPY/MOUSE/JOY/CASS` | 32x32 |
+| `C_CRASH` | 40x32 | | `PC_SMILE`, `PC_MOUSE` | 56x52 |
+| `C_FLOPPY` / `C_SYSERR` | 24x24 / 28x24 | | `PLUG_L`, `PLUG_R` | 32x16 |
+| `CHIP` | 14x7 | | `BEACON` | 40x28 |
+| `MASCOT_UP` | 96x84 | | `MODEM` | 64x24 |
+| `CARD_FF_T`, `CARD_SE_T` (lettered) | 72x80 | | `LINKED` | 120x44 |
+| `DIE1`..`DIE6` | 32x32 | | `DISK_OK` / `DARROW` | 28x28 / 20x10 |
+| `RAYS_L`, `RAYS_R` | 24x24 | | `CHECK` / `LOCK` | 16x14 / 16x18 |
+| `TRADE_ARR` / `COINS` / `GAVEL` | 28x32 / 28x22 / 28x24 | | `LED_GREEN/RED/YELLOW`, `M_LED_RED` (311..314) | 10x10 |
+
+Sizes include the shadow; the face asks `bx_size`. Where a picture has a visual
+anchor it is: `RAYS_L`'s rays radiate from its bottom-right corner (`RAYS_R`
+bottom-left), placed just beyond the mascot's fingertip; the mascot's fingertip
+is at (13, 6) of its 96x84; a die's face is its top-left 28x28; the cards' and
+PCs' shadows take the last 2-3 columns and rows.
+
+Monochrome (131.10.5): only `BP_A2_M_C_BOOT` and `BP_A2_M_LED_RED` (green and red
+both map to white, so red's twin is a black ball) are drawn. Every other picture
+was checked through the core's mapping and reads on 1bpp as it is, so the other
+reserved `_M` IDs have no record and the face draws the colour ID on 1bpp.
+
+BOOT's four arrows in `sprites.txt` (`BP_A_BOOT`, `BP_A_M_BOOT` 32x24,
+`BP_A_T_BOOT`, `BP_A_M_T_BOOT` 16x12) point UP, the way a token leaves BOOT
+(play runs clockwise, 131.1), at their old sizes. Measured: `sprites2.txt` is 45
+records, 29,171 bytes packed (budget 30 KB); `BPART.BIN` is unchanged at 55,473.
+
+### 131.11 Memory and parts
+
+Every byte is measured, not assumed (US-25). `APP_MAX_SIZE` (65,024 bytes)
+bounds the resident image plus bss; the eager embedded overlay (§73.14.2)
+has its own 64 KB segment and holds code only; the art is two lazy parts,
+both required (131.10.7); the band is a 16 KB movable heap claim with a 2 KB
+bss fallback.
+
+| part | row | kind | holds | measured (uplift prep, unpacked / lz4) |
+|---|---|---|---|---|
+| resident image + bss | - | the package | runtime, core, rules, codec, link, face, side, app | 49,372 + 8,863 = 58,235 of 65,024 |
+| `BYTEOPLY.OVL` | 0 | eager, embedded (`CC_OVL_PART`) | every `ovl_*` function | 63,430 of 65,536 / 30,362 |
+| `BPART.BIN` | 1 | lazy asset, required | art.h: sprites, fonts, the help | 55,592 of 57,344 / 17,614 |
+| `BPART2.BIN` | 2 | lazy asset, required | art2.h: new sprites, the UI text, scenes, music | 7,665 of 57,344 / 5,087 (text only so far) |
+
+String literals in the resident image fell from 7,001 bytes to 941 when the
+UI text moved to `BPART2.BIN` (131.10.7); what is left is the board's names,
+the menus, the About card and what the OS reads. A literal named in overlay
+code is still resident (§73.14), so new UI text goes in a `tx-*.txt` record,
+never in the C. Budgets at the foundation (each lane measures its own and
+reports it):
+
+| part | budget | holds |
+|---|---|---|
+| runtime, thunks, draw core, os88ui | ~14 KB (measured 14,102 with the skeleton) | |
+| rules (resident) | 16 KB | the engine, the tables, the arithmetic |
+| codec (resident) | 3 KB | encode, digest |
+| link (resident) | 8 KB | serial service, parser, the session |
+| face (resident) | 10 KB | layout, board, sidebar, widgets |
+| app glue (resident) | 3 KB | callbacks, routing |
+| bss | 8 KB | three BPState-sized records, buffers, the link's rings |
+| overlay | 64 KB | panels and flows, saves/loads, lobby, checkpoint and snapshot, help |
+
+A resident function called on every paint, key, click or timer tick stays
+resident; anything reached from a menu, a dialog, a file or a lobby goes in
+the overlay (`ovl_*`), split by frequency (§73.14).
+
+### 131.12 Build, distribution and verification
+
+`make byteopoly` builds `build/byteoply.o88` (SmallerC at the pin
+`tools/setup-cc.sh` fetches, then `tools/cc8086.py` with its gates, then the
+ordinary package pipeline); `make byteopolydisk` the software disk in all
+four geometries; `make byteopolyhost` the host harness; `make
+byteopoly-pair` two 86Box XTs on a COM2 null modem. Every included `.c`,
+`.h` and `.inc`, the art text and the art tool are make prerequisites. The
+host harness compiles the SHIPPING rules, codec and link C with `BP_HOST`
+(16-bit stored words) under ASan/UBSan; it supplements, never replaces,
+the guest runs. (Reserved: the registered rows, the paired-emulator fault
+cases and the acceptance evidence.)
+
+## 132. 2BASIC — a BASIC interpreter and its resource editor (`apps/2basic/`, `2BASIC.O88`, `2BRES.O88`)
+
+2BASIC runs numbered BASIC programs in a console window: immediate commands,
+a stored program of up to 288 lines, integer expressions, one-dimensional
+arrays, graphics primitives, one custom form with up to twelve controls,
+modal message and input boxes, PC-speaker and AdLib FM sound, and named
+resource packs. 2BRES edits those packs. Both are hand-written 8086 assembly
+and add no kernel facility and no OSAPI slot.
+
+### 132.1 Provenance
+
+Contributed by techdistractions, from `github.com/techdistractions/2basic`
+at commit `cb41a82` (build B37 of 2BASIC, B36 of 2BRES). Upstream built it
+against this repo's SDK pinned at `d401cf8ca`, `PKG_FMT` 10. The language,
+the file formats and the user documentation are upstream's; what this tree
+changed is the port to the flag day (132.3), the conventions in 132.4 and the
+build (132.6). `apps/2basic/docs/` is upstream's documentation as shipped;
+`docs/COMMANDS.TXT` is the language reference and the authority on syntax
+and limits. `THIRD-PARTY-NOTICES.TXT` beside the source is upstream's.
+
+### 132.2 Shape
+
+| package | image | bss | windows | worker |
+|---|---|---|---|---|
+| `2BASIC.O88` | 27,826 | 23,401 | console (sizable), FORM, dialog | one, the interpreter |
+| `2BRES.O88` | 11,692 | 20,246 | editor, with a menu set | none |
+
+**The interpreter runs on a worker** (§20.6) that executes one statement per
+loop iteration and yields; every piece of interpreter state it needs across
+statements lives in bss. The UI task owns every file: a program's
+`LOADBMP`/`LOADRES` literals are preloaded on the UI task before `RUN`
+starts the worker, and the worker's variable-store write (`SVAR`) posts
+`OSAPI_WM_WAKE` and is committed by the console's `WC_ONWAKE` handler (§20.6
+rule 7, §77's shape). Esc or Ctrl+C sets a break flag the worker polls.
+
+**Memory beyond the region is three transient claims**, each claimed for one
+command and freed after it: 6 KB for a whole-file `LOAD`/`SAVE`/`LOADBMP`,
+13 KB for `HELP.TXT`, and 8 KB to stage a resource pack until it validates.
+All three are disk buffers, so none is `MEMP_CPU` (§50.2.1.1).
+
+### 132.3 The port from PKG_FMT 10 to 13
+
+Nothing built at format 10 runs on the flag-day kernel (§20.2.0), and the
+source no longer assembled. The changes, all mechanical:
+
+- **Window classes (§11.104).** The three 2BASIC templates and 2BRES's lost
+  their handler words for a `WT_CLASS` pointer to an `OS88_CLASS`. The
+  console's class carries `WF_SIZABLE` and its `ONWAKE` handler, replacing
+  the withdrawn `OSAPI_WM_SIZABLE` and `OSAPI_WM_ONWAKE` calls; FORM's
+  run-time sizable bit is `OSAPI_WM_FLAG` with `WFB_SIZABLE`.
+- **Paragraph claims (§50.3.7).** The five `OSAPI_MEM_CLAIM` sites call
+  `bas_claim_kb`, which keeps the KB door's contract (AX = KB in, DX out,
+  every other register kept) over `OSAPI_MEM_P`. `FRE(0)` reads
+  `MEMP_AVAIL` in paragraphs and reports bytes, saturating at 32,767 as
+  before.
+- **`OSAPI_GFX_PIXEL`/`_VLINE` clobber AX..DX** (§5.7.3). Every call site
+  was read: none uses those registers after the call.
+
+### 132.4 Conventions taken on in the port
+
+- **Text is runs (§6.1, §6.6).** Eight FORM and dialog captions were a fill
+  followed by `OSAPI_FONT_STR_XPARENT`; each is `OSAPI_FONT_RUN` over the
+  ground it stood on. A FRAME control's caption now breaks the frame's top
+  edge under it, a group box's usual look.
+- **Both regions are movable (§66.6.1.1)**, and the interpreter's worker is
+  declared restartable (§66.6.2): it parks only in `OSAPI_TASK_ALIVE`, at the
+  top of its loop. The three claims are pinned for the length of one command
+  and registered as such (`tests/pins.txt`, bucket C).
+- **Both declare `OS88_HIGH | OS88_HIGHMEM`** (§20.18, KERN-MEGA-PLAN
+  14.51): neither does arithmetic on its own segment or a claim's - a claim
+  segment is only ever loaded into ES or DS - and neither calls the BIOS,
+  stamps a vector or hands a buffer to DMA.
+
+- **Grey grounds are white on 1bpp (§39.4).** FORM, the dialogs and 2BRES's
+  window stand on light grey in colour. On a 1bpp adapter grey is a dither,
+  and an opaque run cannot put a dither under its glyphs: every caption read
+  as a black bar on Hercules. Each package picks its ground from
+  `OSAPI_VIDEO`'s DH at entry (`bas_ui_ground`, `br_ground`): grey at 4 bpp
+  and up, white below.
+- **Two upstream layout defects fixed.** 2BRES's footer drew the current file
+  name unpadded on a partial refresh, so `MIXED.RES` opened over
+  `UNTITLED.RES` read `MIXED.RESRES`; it is padded to twelve cells. And its
+  full layout is 374 rows, which a 348-line Hercules or 350-line EGA screen
+  cuts off below the panels; the compact layout, which upstream chose below
+  300 lines, is now chosen below 400.
+
+- **The About card (§12.2, §20.5.1).** Both classes register `ABOUT`, and
+  each package draws the standard card from `apps/os88ui.inc`
+  (`OS88UI_ABOUT`, `OS88UI_ABDISMISS`). A key or a click takes it down and
+  repaints the window. The painters draw it last, so a repaint under it
+  keeps it on top. 2BASIC's worker holds a running program between
+  statements while the card is up, and its presenter leaves the dirty mark
+  for the dismissal's repaint, so a program's output never lands on the
+  card. 2BRES's upstream `Help ▸ About 2BRES`, which only rewrote the
+  status line, is gone; the app-name menu's `About 2BRES` replaces it.
+- **The variable store is in `SYSTEM\APPDATA\` (§19.9).** `SVAR`/`LVAR`'s
+  `2BASIC.DAT` goes through `apps/os88data.inc` (`od_read`, `od_write`) on
+  the volume 2BASIC was launched from, where upstream wrote it to whichever
+  program folder was current, so a game's `SVAR` scattered stores across
+  `GAMES\`. A volume without the folder answers `FERR_NOENT`; the store
+  then lives in memory for the session and nothing is reported, which is
+  19.9's rule. `make 2basicdisk` builds the folder.
+- **2BRES's compact status line sits under the toolbar**, at +36, between
+  the buttons (12..34) and the panels (45..). Upstream drew it at +140; a
+  CGA window clamped above the dock has about 136 content rows, so the line
+  was off the bottom.
+- **The worker presents under the gfx lock.** It read and cleared the
+  console's dirty kind and then waited for `OSAPI_GFX_LOCK`. An immediate
+  command on the UI task, which holds that lock in its key callback, could
+  meanwhile append rows and restart the row range. The worker then painted
+  only the new range, and the rows it had taken stayed blank until the next
+  output: `HELP`'s first three rows on kern_small, whose slower disk read
+  is what let the worker run inside the command. The worker now takes the
+  lock first and reads the kind and its range under it.
+
+### 132.5 The B: disk
+
+`make 2basicdisk` builds `build/2basic{,720,120,360}.img`, a data disk laid
+out exactly as upstream's 360 KB one, because `README.TXT`, `HELP.TXT` and
+every sample name their files from the volume's root (`LOAD "\GAMES\2B99"`):
+
+| folder | holds |
+|---|---|
+| root | `2BASIC.O88`, `2BRES.O88`, `README.TXT`, `HELP.TXT`, `RESGUIDE.TXT` |
+| `EXAMPLES` | five short programs and `RESDEMO.RES` |
+| `GAMES\2B99`, `GAMES\BLACKJAK`, `GAMES\2BCHECK` | three games and their packs |
+| `TESTS` | upstream's acceptance programs (`TESTS\UAT.TXT`, `docs/TESTING.TXT`) |
+| `TOOLS\2BRES` | 2BRES's sample inputs and `MIXED.RES` |
+
+It also carries an empty `SYSTEM\APPDATA\` for `2BASIC.DAT` (§19.9). It
+uses 134 of the 360 KB disk's 354 clusters.
+
+**The live media carries the same tree one folder down**, in `2BASIC\`
+(§80.6: the live volume carries every program). There the documentation's
+root paths gain the folder - `LOAD "\2BASIC\GAMES\2B99"` - and `HELP`,
+which reads `HELP.TXT` from the launch folder, is unaffected. **2BASIC is on
+no general apps disk**: that curation is a decision with a date on it
+(§24.6.1), and the owner's to take.
+
+### 132.6 Build
+
+`make 2basic` builds both packages, and `all` names them, so an SDK change
+cannot break them unseen. `apps/2basic/disk/` mirrors the floppy; `res/`
+holds the host-side 2BR3 inputs; four files are placed in two folders each
+from one source. `apps/2basic/tools/2br3.py` is upstream's 2BR3 builder and
+validator: `build` reproduces `RESDEMO.RES` and `CARDS.RES` byte for byte
+from their manifests, and `verify` accepts all four shipped packs.
+`2B99.RES` was converted from a legacy 2BR2 pack that is not in the tree, so
+it is data rather than build output.
+
+### 132.7 Verification
+
+No suite row runs 2BASIC; the rows its build reaches are the fast tier's
+`textrules`, `stkapps`, `movable`, `livefull`, `retired` and `docindex`, and
+the full tier's `megahigh` and `pins`.
+Upstream's own acceptance programs were run by hand on the glass:
+`AUTOLANG` (36 checks), `AUTOR3` (10), `FORMISO` (6) and `AUTOFORM` (10)
+pass on kern_big in QEMU; `AUTOLANG` passes on MartyPC's 4.77 MHz CGA
+5150 within 60 guest seconds; `AUTOR3` and `HELP` run on kern_small on the
+128 KB CGA machine, and `AUTOLANG`, `AUTOR3`, `HELP`, `SAVE`/`LOAD` and
+Blackjack on kern_mega in QEMU with both high bits declared. FORM events, `INPUTBOX`,
+`MESSAGEBOX`, `SAVE`/`LOAD`, `SVAR`/`LVAR` (the wake path), `FRE(0)`, the
+graphics primitives, Blackjack and 2B99 were driven in QEMU, 2BRES opened
+`MIXED.RES` through the file dialog, and the FORM, a dialog and 2BRES were
+looked at on VGA, CGA and Hercules under MartyPC. On MartyPC's CGA 5150 a
+`SVAR` was flushed back to the host and found in `SYSTEM\APPDATA\`, and
+`LVAR` read it back after 2BASIC was closed and reopened. Both About cards
+were opened and dismissed there, and 2BASIC's over a running 2B99 on VGA.
+2BRES's compact status line was checked on CGA, and `HELP` on kern_small's
+128 KB CGA machine drew every row. Upstream's interactive
+tests (`EVENTUI`, `UTVIS`, `UTSOUND`) and a 2BRES save round trip were not
+run.
+
+## 133. The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`)
+
+The game kit is shared source for C packages (§73) that draw through the band
+core (§130.6.2): 3D widgets, data-driven scenes and a music and effects player,
+written once in assembly so a game pays for them in bytes it can measure.
+`apps/cc/gk.h` is its C contract. Byteopoly (§131) is the first user;
+docs/plans/BYTEOPOLY-UPLIFT-PLAN.md is the story list.
+
+### 133.1 Scope and inclusion
+
+The drawing half is `apps/cc/gk.inc`, near cdecl assembly (§73.3: arguments
+at `[bp+4]`.., BP, DS and DF preserved, everything else the caller's) with
+the `gk_` prefix, over the band core `apps/breadxt/draw.inc` (§130.6.2),
+which it calls by its INTERNAL register entries (`bx_solid`, `bx_rect`,
+`bx_art_at`, `bx_face`, `bx_gwid`) as well as its C ones, so it must follow
+the core in the same assembly:
+
+    %define BX_CORE_ONLY
+    %include "breadxt/draw.inc"
+    %include "cc/gk.inc"
+
+A package `#include`s `cc/gk.h`. The kit adds no kernel facility, no OSAPI
+slot and no heap claim: its bss is 158 bytes (a 64-byte text buffer, the
+scene interpreter's ten arguments, the current rect and the widgets'
+scratch), its data 137 bytes (the two role tables, the ring sets, the button
+states and the scene op table). 133.9 gives the code, routine by routine.
+
+Every `gk_` drawing call is legal only while a strip is composed (between
+`bx_new` and `bx_out`) and draws only into the band, clipped by the core to
+the strip; a panel or a scene is drawn WHOLE for every strip it touches and
+costs per strip only what falls inside it. Nothing reaches the glass but
+`bx_out`, so layering inside a strip (a face filled, then its edge, then its
+label) is not the double draw §6.6 forbids. Coordinates are screen pixels,
+`w`/`h` sizes, colours EGA indices that the core turns into 2x2 patterns on
+1bpp. `gk_init`, `gk_theme`, `gk_role`, `gk_scene_rect` and
+`gk_scene_size` draw nothing and are legal at any time after `bx_setup`.
+
+### 133.2 The role table
+
+Every colour the kit draws with comes from the ROLE TABLE (16 bytes, an EGA
+index per role), except a label colour a caller passes and the drawn check
+mark (green 2, black on 1bpp). `gk_init(bpp)` picks the kit's colour table
+on a colour display, else the mono one, reading the plane count `bx_setup`
+took (its bpp is this bpp); `gk_theme(t)` swaps in a caller's static table
+(read in place), `gk_theme(0)` restores that default.
+`gk_role(r)` answers a role's colour now, for a package drawing its own
+pieces in the same theme. Until `gk_init` runs the colour table is in force.
+
+| role | colour | mono | used for |
+|---|---|---|---|
+| `GK_R_OUTLINE` 0 | black 0 | 0 | the 1 px outline; the emboss under a title |
+| `GK_R_FACE` 1 | light grey 7 | 15 | panel, button and key-cap side faces |
+| `GK_R_LIGHT` 2 | white 15 | 15 | the lit (top/left) edge |
+| `GK_R_SHADE` 3 | dark grey 8 | 0 | the shaded (bottom/right) edge; with FACE, the key-cap skirt's checker |
+| `GK_R_FIELD` 4 | white 15 | 15 | check and radio wells, sunken fields |
+| `GK_R_TEXT` 5 | black 0 | 0 | labels on face and field, the radio dot, the drop-down triangle |
+| `GK_R_TITLE` 6 | blue 1 | 0 | title-bar ground |
+| `GK_R_TITLELT` 7 | light blue 9 | 8 | the title bar's top line and left column |
+| `GK_R_TITLETX` 8 | white 15 | 15 | title text |
+| `GK_R_FOCUS` 9 | blue 1 | 0 | a focused button's face |
+| `GK_R_FOCUSTX` 10 | white 15 | 15 | its label |
+| `GK_R_HILITE` 11 | yellow 14 | 0 | the active tab, banners, `GK_B_HILITE` |
+| `GK_R_HILITETX` 12 | black 0 | 15 | text on a highlight |
+| `GK_R_DISABLED` 13 | dark grey 8 | 0 | a disabled label (1bpp adds the screen door) |
+| `GK_R_DROP` 14 | black 0 | 0 | drop-shadow ink |
+| `GK_R_KEY` 15 | white 15 | 15 | a key cap's top face |
+
+On 1bpp, white surfaces carry black edges, so a bevel reads as a black
+outline with a heavier black bottom/right, the Mac System 1 convention; a
+highlight is INVERSE (black ground, white text), because yellow is white
+there and would vanish into a white face; title bars are black with a 50%
+top line; a key-cap skirt is a 50% checker. The core's 1bpp text rule (§130.6.2: white only where the colour
+is all lit) is why every mono text role is 0 or 15.
+
+### 133.3 The 3D look
+
+Light comes from the top left. Every surface is a stack of RINGS drawn
+outermost first, each one pixel wide: a ring's top row and left column take
+its first role, its bottom row and right column its second (so the
+top-right and bottom-left corner pixels take the second), and `-` draws no
+side. The face fill is laid FIRST, over everything inside the outermost
+ring, and the rings over it, so a side a ring does not draw and a corner it
+cuts show the face, never what was under the box.
+
+| style | rings, outermost first | inside from the edge |
+|---|---|---|
+| `GK_FLAT` 0 | OUTLINE/OUTLINE | 1 |
+| `GK_RAISED` 1 | OUTLINE/OUTLINE, LIGHT/SHADE | 2 |
+| `GK_RAISED2` 2 | OUTLINE/OUTLINE, LIGHT/SHADE, LIGHT/SHADE | 3 (light 2 px, shade 2 px: the concept boards' moulded edge) |
+| `GK_SUNKEN` 3 | SHADE/LIGHT | 1 |
+| `GK_SUNKEN2` 4 | SHADE/LIGHT, OUTLINE/FACE | 2 |
+| `GK_ETCHED` 5 | SHADE/LIGHT, LIGHT/SHADE | 2 |
+| (pressed) 6 | OUTLINE/OUTLINE, SHADE/- | 2 |
+| (default) 7 | OUTLINE/OUTLINE, OUTLINE/OUTLINE, LIGHT/SHADE, LIGHT/SHADE | 4 |
+
+Styles 6 and 7 are the kit's own (a pressed button, a default button's
+extra ring); a caller may pass them to `gk_box` too. `GK_ROUND` leaves the
+four corner pixels of the first TWO rings undrawn: the outline's corners
+show what is beneath the box, the bevel's show the face, and the corner
+reads as moulded, two pixels round. `GK_SHADOW` casts
+`GK_DROPW` (3) px of DROP right and down, outside the rect: the strip
+`(x+w .. x+w+2, y+3 .. y+h+2)` and the strip `(x+3 .. x+w-1, y+h .. y+h+2)`.
+
+**A shadow is a screen door, not a fill**: only the pixels with `x + y` even
+take the DROP colour and the others keep what was under them, so a shadow
+darkens a teal dither, a cream cell or a white well alike, and on 1bpp is a
+50% black checker. It is drawn a strip row at a time with the core's dot
+mask (`bx_pat` 0AAh on even rows, 55h on odd, one `bx_rect` per row inside
+the strip). The same door in the FACE colour greys a disabled label on
+1bpp, where a grey text colour would be black.
+
+### 133.4 Surfaces and text
+
+- `gk_box(x,y,w,h,style,fill)`: the shadow (when asked), the rings, then
+  `fill` over the inside (`-1` leaves it alone, so a box can frame what is
+  already in the band).
+- `gk_hline(x,y,w,raised)`, `gk_vline(x,y,h,raised)`: a two-pixel line, a
+  GROOVE (SHADE then LIGHT, `raised` 0) or a RIDGE (LIGHT then SHADE), drawn
+  as one ring of a w x 2 (2 x h) rect; its two end pixels are the ring's
+  corners.
+- `gk_shadow(x,y,w,h,d)`: the screen door alone, `d` px right and down.
+- `gk_text(x,y,w,s,colour,font,flags)`: `s` in a `w`-wide slot, `y` the
+  face's top row. `GK_LEFT` puts it at `x`, `GK_CENTRE` at
+  `x + (w - width) / 2`, `GK_RIGHT` at `x + w - width` (a negative slack
+  puts it left of `x`: a zero `w` centres on `x`). `GK_FIT` cuts it at the
+  last whole glyph that fits in `w` (no ellipsis). `GK_EMBOSS` draws a copy
+  in OUTLINE 1 px down and right first, on colour only (on 1bpp a dark copy
+  under light text on a dark ground is invisible, and under dark text it is
+  a blur). At most 63 characters are drawn. Answers the drawn width.
+- `gk_textbox(x,y,w,h,...)`: the same, its top row at
+  `y + (h - fontheight) / 2`.
+
+**Text handles.** Every `const char *` the kit takes is read in exactly
+two places, `gk_tdo` (every label and text call, which copies it to measure
+and cut it) and the scene's `$n` insertion into a literal. Assembled with
+`BX_ART2` (Byteopoly, SPEC.md 131.10.7) both pass it through the core's
+`bx_hstr` first, so a TEXT HANDLE (1000h-1FFFh) is drawn as its record's
+line and a DS string as itself; the kit then draws only its own copy, with
+`bx_text`, so a widget, a slot or a scene literal may be either. The copy
+lives in the kit's buffer, so a handle's ring slot is not held past the
+call. Under `BX_ART2` a DS string the kit is given must not lie at
+1000h-1FFFh, where it would read as a handle; the kit's own buffer is in
+the package's bss, past its image. Without `BX_ART2` the strings are DS
+strings and nothing is resolved.
+
+### 133.5 Widgets
+
+All are built from the rings, the door and the text above; heights are the
+caller's, and 133.9 gives the ones the WIN16 faces want.
+
+| widget | drawn as |
+|---|---|
+| `gk_panel(x,y,w,h,bar,title,font,style)` | `gk_box(style, FACE)`, where a FLAT or RAISED ring set becomes `GK_RAISED2 \| GK_ROUND` (the boards' panel; SUNKEN, SUNKEN2, ETCHED and the flags are kept); with `bar` > 0 a `gk_titlebar` one pixel inside the rings, `(xi+1, yi+1, wi-2, bar)` (`(x+4, y+4, w-8, bar)` in the thick edge), title centred, or left-aligned 6 px in when the style has `GK_PLEFT` (40h, which the box itself ignores). Answers the first row under the bar, `yi + bar + 2` (`y + bar + 5` in the thick edge; `yi`, the inside's top, with no bar) |
+| `gk_titlebar(x,y,w,h,s,font,flags)` | one ring, TITLELT top/left (the light line over the bar) and OUTLINE bottom/right (the dark line under it), TITLE inside; `s` embossed and cut to fit in TITLETX inside the ring; `flags` is the alignment, `GK_LEFT` indenting 6 px from the ring |
+| `gk_button(...,state)` | `GK_RAISED2 \| GK_ROUND \| GK_SHADOW` (DEFAULT: style 7; PRESSED: style 6, no shadow, label 1 px down-right), label centred and cut to fit in the inside. `GK_B_FLAT` (10h) ORed into the state drops the shadow of any state (a button on a busy ground) and is masked off before the state is read. Faces and labels per state: NORMAL, DEFAULT and PRESSED FACE/TEXT, FOCUS FOCUS/FOCUSTX, HILITE HILITE/HILITETX, DISABLED FACE/DISABLED plus the 1bpp screen door over the inside |
+| `gk_keycap(x,y,w,h,label,font)` | an OUTLINE ring (round), inside it the SKIRT: SHADE with a FACE screen door over it (a mid-grey checker); FACE over the upper-left body `(x+1, y+1 .. x+w-5, y+h-2-s)`, KEY over the top face `(x+2, y+1 .. x+w-6, y+h-3-s)` with `s = max(3, h / 4)`: a light left side, a 3 px skirt on the right, an `s` px skirt in front; label centred and cut to fit on the top face in TEXT |
+| `gk_tab(...,active)` | a button face without its bottom edge (the box runs 3 px past `y+h` and the strip is cut at `y+h`), no shadow; active: HILITE face, 2 px taller (from `y-2`) |
+| `gk_check(x,y,size,on,tick)` | style 6 over FIELD; on: the art sprite `tick` (when `tick` > 0 and present) centred on the box, else a drawn tick of 2x2 dots in green 2: `s/2 - 2` of them down-right from `(x+s/4, y+s/2-1)`, then up-right from two rows above the last to `x+s-3`, `s` = size |
+| `gk_radio(x,y,size,on)` | a disc of OUTLINE `size` across, a FIELD disc 2 smaller inside, on: a TEXT disc `size - 6` across; a disc row spans the columns whose centres lie within `size/2` of the disc's centre |
+| `gk_drop(x,y,w,h,label,font)` | `GK_RAISED2 \| GK_ROUND` over FACE; label left at `x+4`, cut at `x+w-h-4`; a TEXT down-triangle in the `h/2`-square at `(x+w-h+h/4, y+h/4)` |
+| `gk_banner(x,y,w,h,s,font,fill)` | `GK_RAISED \| GK_ROUND` over `fill`, `s` centred and cut to fit in TEXT; `fill` -1 is HILITE with HILITETX |
+| `gk_arrow(x,y,w,h,dir,colour)` | a solid triangle centred in the box, apex toward `dir`: `n = min(along, (across + 1) / 2)` lines, line k (from the base) `2(n-1-k)+1` px long, so the base is odd and the apex one pixel |
+| `gk_sprshadow(x,y,id,d)` | the sprite's SILHOUETTE as a screen door in DROP at `(x+d, y+d)` (each run of non-transparent pixels on a row one door span), then the sprite. Answers its width, 0 absent |
+
+### 133.6 Scenes
+
+A SCENE is a record in an art part (looked up by `bx_art_at`, so it may live
+in any part the core routes), compiled by `tools/os88gk.py` (133.7):
+
+    +0  db 'S'                  magic; anything else draws nothing, answers 0
+    +1  dw w, dw h              the scene's declared size (gk_scene_size)
+    +5  db ntags
+    +6  ntags x { db tag, dw x, dw y, dw w, dw h }    (gk_scene_rect)
+    then ops, then db 0:
+        db len                  bytes of this op, len included
+        db op                   bits 0-5 the op number, bit 7 = conditional
+        dw top, dw bot          the rows it can touch, relative, inclusive
+        [db c, db k]            when conditional (below)
+        args...                 to the end of the op
+
+`gk_scene` skips an op with `len` and no decoding whenever
+`y + bot < bx_y0` or `y + top >= bx_y0 + bx_h`: a strip pays a few compares
+for each op outside it. A conditional op reads `v = iv[c & 31]` and `k` (a
+signed byte); bit 5 of `c` set draws it when `v == k`, clear when `v != k`
+(`if %n` is clear with k 0, `if !%n` set with k 0). Bits 6-7 of `c` are 0.
+
+Each ARG is one of:
+
+| byte | value |
+|---|---|
+| 00h-7Fh | that number |
+| 80h-9Fh | `iv[b - 80h]` (int slot `%n`) |
+| A0h-BFh | `sv[b - A0h]` (string slot `$n`) |
+| C0h, word | the word |
+| C1h, bytes, 00h | a string literal; inside it a byte 01h-1Fh inserts `sv[b - 1]` |
+| C2h, role | the role's colour now (`gk_role`) |
+| E0h-FFh | -32 .. -1 |
+
+C3h-DFh are refused (nothing is drawn after them). Literals and slot
+insertions are copied into the kit's 64-byte text buffer (at most 63
+characters, the rest dropped). Args 0 and 1 of every op are x and y and get
+the scene origin added; for `fill`, `dither` and `dots` args 2 and 3 are x2
+and y2 and get it too. The arguments are then pushed and the op's routine
+called with the C convention:
+
+| op | routine | op | routine | op | routine |
+|---|---|---|---|---|---|
+| 0 | `gk_box` | 7 | `gk_titlebar` | 14 | `gk_banner` |
+| 1 | `gk_hline` | 8 | `gk_button` | 15 | `gk_arrow` |
+| 2 | `gk_vline` | 9 | `gk_keycap` | 16 | `gk_sprshadow` |
+| 3 | `gk_shadow` | 10 | `gk_tab` | 17 | `bx_spr` |
+| 4 | `gk_text` | 11 | `gk_check` | 18 | `bx_fill` |
+| 5 | `gk_textbox` | 12 | `gk_radio` | 19 | `bx_dither` |
+| 6 | `gk_panel` | 13 | `gk_drop` | 20 | `bx_dots` |
+
+An op number past 20 ends the scene. At most ten arguments. `gk_scene`
+answers 1 when the record was found (drawn or wholly outside the strip), 0
+when absent; `gk_scene_rect` copies a tag's static rect (tags never carry
+slots, so the compiler refuses one on an op whose rect is not constant) and
+`gk_scene_size` the declared size, each answering 1 found or 0.
+
+### 133.7 The scene compiler
+
+`tools/os88gk.py` is the only writer of the format. The build interface is
+`compile_scenes(paths, symbols) -> {id: bytes}` (every `scene` in the files,
+`symbols` every `#define NAME <int>` the package's art headers hold); the
+CLI is `--selfcheck` (compiles its own sample, decodes it and checks every
+field) and `dump FILE [--sym HEADER ...]` (prints each compiled op).
+
+    # a comment; blank lines are ignored
+    fonth BP_F_TEXT13 13            # rows a font takes (default 24): the row range
+    scene BP_S_LANDING 400 120      # id (a symbol or a number), w, h
+      panel 0 0 400 120 16 "YOU LANDED ON $0" BP_F_TEXT13 raised|shadow
+      textbox 8 24 200 14 $1 @TEXT BP_F_TEXT13 left|fit
+      button 8 90 96 20 "[B] Buy" BP_F_TEXT13 %2 #1
+      if %3 banner 120 90 120 20 "Your turn" BP_F_TEXT13 -1
+      if %4=2 {
+        arrow 300 40 16 16 1 red
+      }
+    end
+
+One op per line, its arguments POSITIONAL in the `gk.h` order (for `fill`,
+`dither` and `dots`: `x y w h` and the rest, converted to inclusive corners,
+which must then be constants). An argument is a number (`-1`, `0x10`), a
+symbol, a `|`-joined set of the kit's constants (`GK_RAISED`, or lower case
+without the prefix: `raised|round|shadow`, `centre|emboss|fit`, `focus`,
+`pressed`), an EGA colour name (`black` .. `white`, `lightgrey`,
+`darkgrey`), `@ROLE` (`@FACE`, a role's colour at draw time), `%n` or `$n`
+(n < 32), or a `"literal"` (`$n` inside it inserts that string slot, `$$` is
+a dollar sign; 63 characters at most). A trailing `#tag` (0-255 or a symbol)
+makes the op's rect findable by `gk_scene_rect`. A leading `if %n`,
+`if !%n`, `if %n=k` or `if %n!=k` (k -128..127) makes it conditional; the
+same head with `{` applies to every op up to the matching `}`, and blocks do
+not nest. The compiler refuses, naming the file and line: an unknown op or
+name, a wrong argument count, a slot past 31, a string where a number goes
+(or the reverse), a tag on an op without a constant rect, a duplicate tag or
+scene id, a record over 4,096 bytes, and anything after a `scene` with no
+`end`. The row range of each op is computed from its arguments, its shadow,
+emboss or tab overhang and the declared font height (24 for a font with no
+`fonth`, 8 for the kernel's, a sprite 255 rows); an op whose y or height
+comes from a slot is given every row.
+
+A literal may contain the bullet `•` (U+2022), stored as byte 127; a package
+whose fonts have no glyph 127 draws nothing for it (Byteopoly's do, 131.10.7).
+
+### 133.8 Music and effects
+
+`apps/cc/gkmus.inc` is the player and `tools/os88gkmus.py` its compiler. A
+C package includes the player after the band core (it finds its banks
+through `bx_art_at`), declares nothing else, and drives it from five places:
+`gkm_init` once (after `bx_setup`), `gkm_tick` from its timer, `gkm_play` /
+`gkm_sfx` where the game decides, `gkm_volume` from its Options, `gkm_done`
+at close. `tests/gkmusdemo` (`make gkmusdemo`, GKMJUKE.O88) is the worked
+example and a jukebox to listen with.
+
+#### 133.8.1 Routing
+
+Asked of `OSAPI_SND_CAPS` at `gkm_init` and again at every `gkm_play`, so a
+tier changed in the Control Panel is honoured by the next song:
+
+| route | when | music | effects |
+|---|---|---|---|
+| `GKM_FM` (1) | `SND_CAP_FM` **and** BL = 1 (the user's tone route is the driver) | three FM voices on channels claimed by patch-load (`OSAPI_SND_FM` verb 2), tried from 0 up to 7 | the tone tier: the driver's channel 8 |
+| `GKM_SPK` (2) | `SND_CAP_TONE`, any other answer - including an FM card the user routed to the speaker | voice 1 alone, `OSAPI_SND_TONE` at priority **20h**, each note a lease of its own length (a tick short when it is longer than 2, so repeated notes separate) | the tone tier: the speaker |
+| `GKM_NONE` (0) | neither | nothing | nothing |
+
+**Effects always go through the tone tier at priority 40h**, on both routes.
+The tier is already shared, prioritised and leased (§34.3): an effect steals
+the speaker from the melody (20h < 40h) and the melody comes back at its next
+note, with no code here to arrange it; a kernel beep (C0h) steals from both;
+and on FM the effect sounds on channel 8, which no claim ever covers, over the
+music. An effect marked **`duck`** also keys the three FM voices off and holds
+them silent until it ends - the sequencer keeps time underneath, so the song
+resumes in place, not from where it stopped.
+
+**Channels, claimed and given back** (Gorillas' rules, `apps/gorillas/
+grbgm.inc`): three or none - the first refusal releases what was claimed
+(verb 3) and the song does not play. They are released at `gkm_stop`, at
+`gkm_volume(0, …)`, at a once-song's end, at `gkm_done`, and **the moment
+any note-on or key-off is refused** (the driver was unloaded, or the claim
+revoked): music then stays off until the next `gkm_play`, so a lost claim
+costs one refusal, not one every tick. Channel 8 is never tried.
+
+**The patch is read where it lies.** Verb 2 stages its 11 bytes from the
+caller's DS (§34.2, the X stub), so the player points DS at the bank's
+segment for that one call instead of copying the patch into its own.
+
+#### 133.8.2 Timing
+
+`gkm_tick` is the clock: once per OS tick from the package's timer, never
+drawing, never waiting. It reads `OSAPI_GET_TICKS` and advances by the ticks
+that really passed since the last call - **at most 8** (`GKM_CATCHUP`), so a
+long repaint on an XT skips the tune forward in time rather than stretching
+it, and a stall of seconds does not replay seconds of notes. Within one
+step only the LAST note a voice reached is sounded. `gkm_play` and `gkm_sfx`
+sound their first note at once, not a tick late. Every note retriggers (a
+key-off, then a key-on), so a repeated pitch is heard as two notes; the
+patches' envelopes shape the rest.
+
+A duration is whole OS ticks, so a tempo is ticks per quarter note
+(`beat`): 8 is 136.5 BPM, 12 is 91, 6 is 182. The compiler refuses a note
+whose length is not a whole number of ticks at its song's `beat`, which is
+what makes every voice of a loop the same length to the tick: loops are
+seamless by construction, never by rounding luck.
+
+#### 133.8.3 The banks
+
+Both are art records (any art part the core reads; Byteopoly's are in
+BPART2.BIN), little endian, offsets from the record's first byte. Each starts
+with a two-byte magic the player checks, so an ID a part does not hold - read
+through an offset table as anything at all - is refused, not played.
+
+```
+song bank   'G' 'M' 01 nsongs  hz_off:w  patch_off:w
+            nsongs x 18: per voice 1..3 (start:w loop:w patch:b 0); start 0 = silent
+            ...voice streams, then patterns...
+            hz:w[n]           the pitches the bank uses, 19..6208 Hz
+            patch:11b[p]      20h 40h 60h 80h E0h of the modulator, the same
+                              of the carrier, then C0h (OSAPI_SND_FM verb 2)
+stream      n          00..7C  a note: 0 rest (key off), n -> hz[n-1]; the
+                               voice's last duration
+            80|n d             a note with a new duration, d = 1..255 ticks
+            7E o:w c           call the pattern at o, c (1..255) times
+            7D                 a pattern's end
+            7F                 a voice's end: to its loop offset, or silence
+effect bank 'G' 'X' 01 nfx  off:w[nfx]
+            per effect: flags (bit 0 = duck), then (ticks:b hz:w)...,
+            ticks 0 ends it; hz 0 is a rest
+```
+
+Patterns nest one level only. The first note of a stream, of a loop, of a
+pattern, and the note after a call carry their own duration. The song record
+names a patch per voice; patches and pitches are shared by every song. A
+`once` song ends when every voice has reached 7F.
+
+#### 133.8.4 The notation
+
+`tools/os88gkmus.py` compiles a text score; its docstring is the reference
+and `apps/byteopoly/art/music.txt` the worked example:
+
+```
+patch chip                       # an OPL2 instrument, registers in hex
+  mod 20=21 40=1A 60=F2 80=24 E0=00
+  car 20=21 40=12 60=F2 80=44 E0=00
+  c0  0C
+end
+pattern pc beat 8                # a phrase, at a beat, called by name
+  C3:8 C4 C3 C4 C3 C4 C3 C4
+end
+song title
+  beat 8                         # ticks a quarter note
+  time 4/4                       # for the | bar checks
+  voice 1 chip                   # voice 1 is the melody the speaker plays
+  voice 2 pluck
+  1: C5:16 E5 G5 C6 E6:8 r G6:4 E6:8 C6 | ...
+  2: C3:4 r:4 C3:8 C3 r:4 | ... % @pc | @pam |
+end
+```
+
+A note is `PITCH[:DUR]` - `C4` is middle C, `F#3`, `Bb4`, `r` a rest; `DUR`
+1/2/4/8/16/32 or any N (1/N of a whole note), with dots and `+` ties; with
+none, the last holds. `@NAME*N` calls a pattern N times. `%` marks the loop
+point - in every voice at the same tick, or in none. A `#` that starts a word
+is a comment. Effects (`sfx NAME [duck]` … `end`) are steps in OS ticks:
+`PITCH:T`, `HZ:T`, `r:T`, and `slide A B N` (N one-tick steps, geometric).
+
+The pinned entries are `compile_music(path, symbols)` and
+`compile_sfx(path, symbols)` → the record bytes (D1); `info`, `render
+--song NAME --wav OUT [--speaker] [--once]`, `render-sfx` and `part`
+(a two-record art part, the jukebox's) are for people. **The renderer is a
+preview, not an OPL2**: a two-operator FM voice with the patch's
+multipliers, levels, envelopes, waveforms and feedback, approximated; the
+sequencing under it is the player's, decision for decision (`play`, which
+the selfcheck holds to hand-worked tick lists).
+
+#### 133.8.5 What was heard
+
+QEMU 11 with `-device adlib` and `-audiodev wav`: the jukebox reported
+`GKM_FM`, played all four songs and twenty effects, and the capture's
+Goertzel magnitudes at the score's pitches matched the title's opening,
+two ticks a sixteenth; the title went on after a `duck` effect played over
+it (that the voices were silent DURING it is not separable in a mixed
+capture, and was not measured). Without a card the jukebox reported `GKM_SPK`
+and the speaker capture's per-tick pitches follow voice 1 of every song.
+Byteopoly on the same machine played the title theme on New Game, the
+game loop after Start and the auction loop when an auction opened (a
+scratch build with the banks in BPART.BIN at 384/385, before BPART2
+existed). Not heard: a Sound Blaster (the OPL2 is the same chip), real
+hardware, and the timing on a 4.77 MHz XT (MartyPC has no audio path here).
+
+### 133.9 Sizes
+
+The drawing half's bytes, measured from the listing of the core and the kit
+assembled alone: what a package pays once it includes `cc/gk.inc`. Every
+routine is reachable from `gk_scene`'s op table, so none is dead. The sound
+lane's rows (133.8) follow these.
+
+| routines | bytes |
+|---|---|
+| roles: `gk_init`, `gk_theme`, `gk_role`, `gk_rc`, `gk_rc2` | 66 |
+| the current rect and fills: `gk_ld`, `gk_enter`, `gk_setr`, `gk_setxywh`, `gk_setsq`, `gk_inset`, `gk_fill`, `gk_fillro` | 113 |
+| the screen door and shadows: `gk_door` (84), `gk_shad`, `gk_shadow` | 132 |
+| rings and boxes: `gk_ring` (84), `gk_boxr` (82), `gk_box` | 180 |
+| `gk_hline`, `gk_vline` | 50 |
+| text: `gk_tdo` (140), `gk_lab`, `gk_text`, `gk_textbox`, `gk_bxt`, `gk_tail` | 267 |
+| `gk_panel` (`GK_PLEFT`), `gk_titlebar` | 148 |
+| `gk_button` (`GK_B_FLAT`), `gk_tab` (`gk_btn` 97) | 179 |
+| `gk_keycap` | 80 |
+| `gk_drop` | 67 |
+| `gk_banner` | 31 |
+| `gk_check` and its drawn tick | 157 |
+| `gk_radio` and its discs (`gk_disc` 103) | 157 |
+| `gk_arrow` (`gk_arw` 126) | 149 |
+| `gk_sprshadow` | 221 |
+| `gk_scene` (303) and its literal and header readers | 393 |
+| `gk_scene_size`, `gk_scene_rect` | 71 |
+| **code** | **2,461** |
+| data: role tables 32, ring sets 43, button states 18, op table 42, the theme pointer 2 | 137 |
+| **image total** | **2,598** |
+| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,615** |
+| bss | 158 |
+
+**Per strip.** `gk_scene` reads a skipped op's length, number and two row
+words and compares them with the strip: about 20 instructions, a few hundred
+8088 cycles (estimated from the instruction count, not measured), so a
+40-op scene costs a strip whose rows it misses on the order of 10 ms. An op
+the strip does reach costs its routine's work only inside the strip: every
+fill is clipped by the core, `gk_door` walks only the strip's rows, and
+`gk_sprshadow` skips the sprite rows outside it before reading them.
+
+**Metrics for callers** (the WIN16 faces: `dlg13` 13 rows, `dlg10` 10,
+`dlg08` 8, `sys16` 16, `sys12` 12):
+
+- a box's inside starts 1 (FLAT, SUNKEN), 2 (RAISED, SUNKEN2, ETCHED), 3
+  (RAISED2) or 4 (a default button) px in from every edge;
+- `GK_SHADOW`, and every button but a pressed one, needs 3 px right and
+  below; an active tab rises 2 px above its `y`;
+- a title bar wants the font's rows + 4 or more (`dlg13`: 18, `sys16`: 22);
+  its text sits inside its 1 px ring. `gk_panel` (the thick edge) puts it
+  at `(x+4, y+4, w-8, bar)` and answers `y + bar + 5`;
+- a button or drop-down wants the font's rows + 7 or more (`dlg13`: 20-22,
+  `dlg10`: 17); a key cap the font's rows + `h/4` + 4 (`sys16` caps 28-30
+  tall, `dlg10` caps 20-22; the skirt is 3 px right and `max(3, h/4)` below).
+
+**The player** (`apps/cc/gkmus.inc`, sound lane), from the nasm listing of
+BYTEOPLY.O88 at the commit that wired it - each entry with the internal
+routines that follow it:
+
+| routine | bytes | with |
+|---|---|---|
+| `gkm_init` | 48 | `gkm_route` |
+| `gkm_playing` | 5 | |
+| `gkm_volume` | 40 | |
+| `gkm_done` | 3 | |
+| `gkm_stop` | 68 | `gkm_mbank`, `gkm_xbank`, `gkm_bank` |
+| `gkm_play` | 202 | |
+| `gkm_tick` | 335 | `gkm_mstep`, `gkm_out` |
+| `gkm_sfx` | 192 | `gkm_fstep`, `gkm_fxend` |
+| **.text** | **893** | |
+| .bss | 61 | three 14-byte voices, seven words, five flags |
+
+Byteopoly's banks: song bank 1,129 bytes (4 songs, 37 pitches, 7 patches,
+20 patterns), effects bank 357 (20 effects), of a 5 KB allowance.

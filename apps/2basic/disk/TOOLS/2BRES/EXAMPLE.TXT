@@ -1,0 +1,3 @@
+# Standalone 2BRES single-icon demonstration.
+OUT SAMPLE.RES
+I 0 SAMPLE.BMP

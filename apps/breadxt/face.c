@@ -79,6 +79,9 @@ static BBWord bu_hash;
 static int bu_sx1,bu_sy1,bu_sx2,bu_sy2;
 static int bu_r1[S_N],bu_r2[S_N],bu_r3[S_N],bu_r4[S_N];
 static BBWord bu_key[S_N];
+/* The scope's header line - STALE, RUN or HOLD and the trigger - as last
+ * painted; the simulation's own repaints cover only the plot under it. */
+static BBWord bu_shead;
 #ifdef BB_HOST
 static int bu_host_sec=-1;   /* the host harness checks each section stays in its rect */
 #endif
@@ -1217,7 +1220,12 @@ static int ovl_bu_update(unsigned flags)
         ovl_bu_paint(bu_bx,bu_dirty_top,bu_bx+bu_bw-1,bu_dirty_bottom);
     if((flags&BU_SCOPE_DIRTY)){
         /* the simulation moves only the plot and the line under it; a user
-         * event or a command repaints the legend and run state too */
+         * event or a command repaints the legend and run state too, and so
+         * does the simulation when it changes the run state the header
+         * reads: a Run that makes the results valid would otherwise leave
+         * STALE there until the next click */
+        k=(bb_valid?4:0)|(bb_running?8:0)|bb_doc.trigger;
+        if(k!=bu_shead){bu_shead=k;flags|=BU_UIKEY;}
         if(bu_r1[S_SCOPE]<=bu_r3[S_SCOPE]){
             if(flags&BU_UIKEY)ovl_bu_paint_s(S_SCOPE);
             else ovl_bu_paint(bu_r1[S_SCOPE]+(bu_compact?26:32),bu_r2[S_SCOPE]+bu_th+3,bu_r3[S_SCOPE]-6,bu_r4[S_SCOPE]-1);

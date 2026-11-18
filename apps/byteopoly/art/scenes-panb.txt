@@ -1,0 +1,237 @@
+# Byteopoly centre panels, lane panb (SPEC.md 131.9.13): scene ids 430..439
+# (BP_A2_SC_PANB + n). A CORE scene is 332 x <=150, drawn centred in the
+# panel's free area on FULL and MID alike; %0 selects the variant: 0 core,
+# 1 COMPACT (332 x ~62, drawn at the top), +2 for a confirming panel.
+fonth BP_F_TEXT13 13
+fonth BP_F_TEXT10 10
+fonth BP_F_TEXT08 8
+fonth BP_F_BIG16 16
+fonth BP_F_BIG12 12
+
+# ---- 430 card: $0 decider, $1 card title; %1 the card picture
+scene 430 332 150
+  if %0=0 {
+    banner 8 2 316 22 "$0 draws a card" BP_F_BIG12 -1
+    box 8 30 100 112 sunken2 @FIELD
+    sprshadow 22 46 %1 2
+    box 116 30 208 112 sunken2 @FIELD
+    textbox 122 34 196 22 "$1" black BP_F_BIG12 left|fit
+    hline 122 58 196 1
+  }
+  if %0=1 {
+    banner 6 1 320 12 "$0: $1" BP_F_TEXT08 -1
+  }
+end
+
+# ---- 431 repair: $0 decider, $1 cash, $2 failed tries (a digit); %1..%3 the
+# three try lamps, %4 / %5 the Floppy Find / System Error disk picture when
+# held, else GP_NOSPR (an ID with no record, which draws nothing)
+scene 431 332 150
+  if %0=0 {
+    banner 8 2 316 22 "$0 is detained" BP_F_BIG12 -1
+    box 8 30 96 76 sunken2 @FIELD
+    spr 36 36 BP_A2_C_REPAIR
+    spr 26 70 %4
+    spr 58 70 %5
+    box 112 30 100 76 raised -1
+    titlebar 113 31 98 17 "TRIES" BP_F_BIG12 centre
+    radio 124 56 14 %1
+    radio 152 56 14 %2
+    radio 180 56 14 %3
+    text 112 80 100 "$2 of 3" black BP_F_TEXT13 centre
+    box 220 30 104 76 raised -1
+    titlebar 221 31 102 17 "CASH" BP_F_BIG12 centre
+    box 226 54 92 24 sunken2 @FIELD
+    textbox 226 54 92 24 "$1 cr" black BP_F_BIG12 centre|fit
+    box 8 112 316 36 sunken2 @FIELD
+    text 12 117 308 "Pay 50 cr, use a Recovery Disk, or roll for doubles." black BP_F_TEXT10 centre|fit
+    text 12 131 308 "You still collect rent, bid, trade and manage." black BP_F_TEXT10 centre|fit
+  }
+  if %0=1 {
+    banner 6 1 320 12 "$0 is detained: failed tries $2 of 3" BP_F_TEXT08 -1
+    text 6 17 320 "Cash: $1 cr" black BP_F_TEXT08 left|fit
+    text 6 28 320 "Pay 50 cr, use a Recovery Disk, or roll for doubles." black BP_F_TEXT08 left|fit
+  }
+end
+
+# ---- 432 debt: $0 decider, $1 creditor, $2 amount, $3 cash, $4 short; %1 is
+# 1 when short of cash, 2 when covered (0 on COMPACT), %2 the shortfall's colour
+scene 432 332 150
+  if %0=0 {
+    banner 8 2 316 22 "$0 owes $1" BP_F_BIG12 -1
+    box 8 30 316 42 sunken2 @FIELD
+    spr 20 40 BP_A2_COINS
+    textbox 8 30 316 42 "$2 cr" black BP_F_BIG16 centre
+    box 8 78 154 48 raised -1
+    titlebar 9 79 152 17 "YOUR CASH" BP_F_BIG12 centre
+    box 14 98 142 24 sunken2 @FIELD
+    textbox 14 98 142 24 "$3 cr" black BP_F_BIG12 centre
+    box 170 78 154 48 raised -1
+    titlebar 171 79 152 17 "SHORT BY" BP_F_BIG12 centre
+    box 176 98 142 24 sunken2 @FIELD
+    text 8 132 316 "Sell upgrades or mortgage to raise cash." black BP_F_TEXT13 centre|fit
+  }
+  if %1=1 textbox 176 98 142 24 "$4 cr" %2 BP_F_BIG12 centre
+  if %1=2 textbox 176 98 142 24 "Covered" black BP_F_TEXT13 centre
+  if %0=1 {
+    banner 6 1 320 12 "$0 owes $1: $2 cr" BP_F_TEXT08 -1
+    text 6 17 320 "Cash $3 cr   Short by $4" black BP_F_TEXT08 left|fit
+    text 6 28 320 "Sell upgrades or mortgage to raise cash." black BP_F_TEXT08 left|fit
+  }
+  if %0=2 {
+    banner 8 2 316 22 "Declare bankruptcy?" BP_F_BIG12 -1
+    box 8 30 316 70 sunken2 @FIELD
+    text 12 44 308 "You leave the game for good and" black BP_F_TEXT13 centre|fit
+    text 12 62 308 "your estate goes to $1." black BP_F_TEXT13 centre|fit
+  }
+  if %0=3 {
+    banner 6 1 320 12 "Declare bankruptcy?" BP_F_TEXT08 -1
+    text 6 17 320 "You leave the game; your estate" black BP_F_TEXT08 left|fit
+    text 6 28 320 "goes to $1." black BP_F_TEXT08 left|fit
+  }
+end
+
+# ---- 439 handoff: $0 next player, $1 "Next: <phase>"; %1 the large token
+scene 439 332 150
+  if %0=0 {
+    text 8 4 316 "NEXT PLAYER" black BP_F_TEXT13 centre
+    box 39 21 254 64 flat -1
+    box 40 22 252 62 sunken2 @FIELD
+    sprshadow 56 37 %1 2
+    textbox 98 22 190 62 "$0" black BP_F_BIG16 left|fit
+    banner 8 92 316 22 "$1" BP_F_BIG12 -1
+    text 8 122 316 "Press Enter when ready. A held key" black BP_F_TEXT13 centre
+    text 8 136 316 "does not count - let go first." black BP_F_TEXT13 centre
+  }
+  if %0=1 {
+    banner 6 1 320 12 "Pass to $0 - $1" BP_F_TEXT08 -1
+    text 6 17 320 "Press Enter when ready. A held key" black BP_F_TEXT08 left|fit
+    text 6 28 320 "does not count - let go first." black BP_F_TEXT08 left|fit
+  }
+end
+
+# ---- 438 victory block, drawn at the table's left edge on FULL: $0 the
+# winners' names, $1 "Winner: " or "Shared win: "
+scene 438 320 88
+  spr 4 2 BP_A2_MASCOT_UP
+  spr 112 4 BP_A2_RAYS_L
+  spr 290 4 BP_A2_RAYS_R
+  text 108 28 212 "$1" black BP_F_TEXT13 centre
+  textbox 108 40 212 24 "$0" black BP_F_BIG16 centre|fit
+end
+
+# ---- 433 a Collection row. %0 layout (0 FULL rows 26 tall, 1 MID 14, 2
+# COMPACT); %1 row width, %2 / %3 the x of the group letter / mortgage mark;
+# %4 the cursor (0 no, else 1 + layout); %5 the computer's picture, %6 the
+# upgrade chip picture, %7 the mortgage mark (GP_NOSPR when absent);
+# $0 name, $1 upgrades, $2 group letter
+scene 433 316 26
+  if %4=1 box 0 0 %1 26 flat 14
+  if %4=2 box 0 0 %1 14 flat 14
+  if %4=3 box 0 0 %1 9 flat 14
+  if %0=0 {
+    spr 4 1 %5
+    text 44 6 112 "$0" black BP_F_TEXT13 left|fit
+    spr 164 9 %6
+    text 182 6 44 "$1" black BP_F_TEXT13 left|fit
+    spr %3 8 %7
+    box %2 4 22 18 raised -1
+    textbox %2 4 22 18 "$2" black BP_F_TEXT13 centre
+  }
+  if %0=1 {
+    spr 4 1 %5
+    text 26 2 100 "$0" black BP_F_TEXT10 left|fit
+    spr 136 4 %6
+    text 154 2 44 "$1" black BP_F_TEXT10 left|fit
+    spr %3 2 %7
+    box %2 0 22 14 raised -1
+    textbox %2 0 22 14 "$2" black BP_F_TEXT10 centre
+  }
+  if %0=2 {
+    text 4 0 100 "$0" black BP_F_TEXT08 left|fit
+    text 110 0 160 "$1" black BP_F_TEXT08 left|fit
+    text %2 0 20 "$2" black BP_F_TEXT08 centre
+  }
+end
+
+# ---- 434 a labelled cell (Collection details, diagnostics counters, the
+# trade's cash lines): %1 w, %2 h, %3 the value's y, %4 the font;
+# $0 label, $1 value
+scene 434 160 40
+  box 0 0 %1 %2 raised -1
+  text 0 2 %1 "$0" black %4 centre|fit
+  text 0 %3 %1 "$1" black %4 centre|fit
+end
+
+# ---- 435 a standings row (%0 0 FULL rows 28 tall, 1 MID 20, 2 COMPACT 12)
+# and its header (%0 + 3). %1 row width, %2 name width, %3 / %4 / %5 the x of
+# the cash / assets / score columns, %6 their width, %7 the row's fill (14 a
+# winner, else 15), %8 the token picture; $0 name, $1 cash, $2 assets, $3 score
+scene 435 320 28
+  if %0=0 {
+    box 0 0 %1 28 sunken %7
+    spr 4 2 %8
+    text 40 8 %2 "$0" black BP_F_TEXT13 left|fit
+    text %3 8 %6 "$1" black BP_F_TEXT13 right
+    text %4 8 %6 "$2" black BP_F_TEXT13 right
+    text %5 8 %6 "$3" black BP_F_TEXT13 right
+  }
+  if %0=1 {
+    box 0 0 %1 20 sunken %7
+    spr 4 2 %8
+    text 26 5 %2 "$0" black BP_F_TEXT10 left|fit
+    text %3 5 %6 "$1" black BP_F_TEXT10 right
+    text %4 5 %6 "$2" black BP_F_TEXT10 right
+    text %5 5 %6 "$3" black BP_F_TEXT10 right
+  }
+  if %0=2 {
+    box 0 0 %1 12 sunken %7
+    text 6 2 %2 "$0" black BP_F_TEXT08 left|fit
+    text %3 2 %6 "$1" black BP_F_TEXT08 right
+    text %4 2 %6 "$2" black BP_F_TEXT08 right
+    text %5 2 %6 "$3" black BP_F_TEXT08 right
+  }
+  if %0=3 {
+    titlebar 0 0 %1 18 "PLAYER" BP_F_BIG12 left
+    text %3 2 %6 "cash" white BP_F_TEXT13 right
+    text %4 2 %6 "assets" white BP_F_TEXT13 right
+    text %5 2 %6 "score" white BP_F_TEXT13 right
+  }
+  if %0=4 {
+    titlebar 0 0 %1 14 "PLAYER" BP_F_TEXT10 left
+    text %3 2 %6 "cash" white BP_F_TEXT10 right
+    text %4 2 %6 "assets" white BP_F_TEXT10 right
+    text %5 2 %6 "score" white BP_F_TEXT10 right
+  }
+  if %0=5 {
+    titlebar 0 0 %1 12 "PLAYER" BP_F_TEXT08 left
+    text %3 2 %6 "cash" white BP_F_TEXT08 right
+    text %4 2 %6 "assets" white BP_F_TEXT08 right
+    text %5 2 %6 "score" white BP_F_TEXT08 right
+  }
+end
+
+# ---- 436 one row of a trade's give / get list. %0 layout (0 FULL rows 18
+# tall, 1 MID 14, 2 COMPACT); %1 row width, %2 name width; %4 the cursor (0
+# no, else 1 + layout); %5 ticked, %6 the picture (GP_NOSPR when none), %7
+# the name's colour; $0 the name (COMPACT: with its "[x]")
+scene 436 160 18
+  if %4=1 box 0 0 %1 18 flat 14
+  if %4=2 box 0 0 %1 14 flat 14
+  if %4=3 box 0 0 %1 9 flat 14
+  if %0=0 {
+    check 5 3 11 %5 BP_A2_CHECK
+    spr 22 3 %6
+    text 44 2 %2 "$0" %7 BP_F_TEXT13 left|fit
+    spr %3 3 %8
+  }
+  if %0=1 {
+    check 5 1 11 %5 BP_A2_CHECK
+    spr 22 1 %6
+    text 44 0 %2 "$0" %7 BP_F_TEXT10 left|fit
+    spr %3 1 %8
+  }
+  if %0=2 {
+    text 2 0 %2 "$0" %7 BP_F_TEXT08 left|fit
+  }
+end

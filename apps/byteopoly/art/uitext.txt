@@ -1,0 +1,3 @@
+# Byteopoly UI strings (BP_A_UITEXT): one line each, 47 characters at most,
+# plain ASCII. Kept empty and in place so art.h's IDs stay dense: the UI text
+# lives in BPART2.BIN's records, art/tx-*.txt (SPEC.md 131.10.7).

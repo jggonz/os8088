@@ -1,0 +1,19 @@
+# The game kit gallery's scene (SPEC.md 133.7): a landing panel drawn from
+# data. Slots: $0 the title's tail, $1 the machine, $2 the price;
+# %0 and %1 the two buttons' states, %2 "it is your turn".
+fonth GD_F_TEXT13 13
+fonth GD_F_TEXT10 10
+scene GD_S_LANDING 288 128
+  panel 0 0 284 124 18 "SCENE: $0" GD_F_TEXT13 raised|shadow
+  box 8 28 40 40 sunken2 @FIELD
+  sprshadow 20 40 GD_A_DISK 2
+  vline 56 28 88 0
+  text 64 26 212 "You landed on $1" black GD_F_TEXT13 left|fit
+  text 64 46 100 "Price" black GD_F_TEXT10 left
+  textbox 160 44 112 16 "$2 cr" @TEXT GD_F_TEXT13 right
+  hline 64 66 208 1
+  button 64 88 96 22 "[B] Buy" GD_F_TEXT13 %0 #1
+  button 168 88 104 22 "[A] Auction" GD_F_TEXT13 %1 #2
+  if %2 banner 6 76 46 16 "YOU" GD_F_TEXT10 -1
+  if !%2 radio 22 78 12 0
+end

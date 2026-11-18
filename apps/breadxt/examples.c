@@ -72,11 +72,18 @@ static int ovl_bb_example(unsigned which)
         bb_expart(BB_POWER,bb_exhole(0,0),bb_exhole(1,0),BB_NONE,5000,0,0);
         bb_expart(BB_GROUND,bb_exhole(1,1),BB_NONE,BB_NONE,0,0,0);
         u=bb_expart(BB_HC00,bb_exhole(7,11),BB_NONE,BB_NONE,0,0,0);
-        bb_expart(BB_INPUT,bb_exhole(8,11),BB_NONE,BB_NONE,0,BB_HIGH,0);
-        bb_expart(BB_INPUT,bb_exhole(8,12),BB_NONE,BB_NONE,0,BB_HIGH,0);
-        bb_expart(BB_INDICATOR,bb_exhole(8,13),BB_NONE,BB_NONE,0,0,0);
+        /* The inputs and the indicator stand clear of the chip and of each
+         * other, wired to pins 1, 2 and 3: a single-pin part draws upward
+         * and its tag is wider than a column, so three of them in g12-g14
+         * piled onto the chip and onto each other's tags. */
+        bb_expart(BB_INPUT,bb_exhole(8,4),BB_NONE,BB_NONE,0,BB_HIGH,0);
+        bb_expart(BB_INPUT,bb_exhole(8,8),BB_NONE,BB_NONE,0,BB_HIGH,0);
+        bb_expart(BB_INDICATOR,bb_exhole(8,21),BB_NONE,BB_NONE,0,0,0);
         bb_exwire(bb_exhole(2,11),bb_exhole(0,11),4);
         bb_exwire(bb_exhole(8,17),bb_exhole(1,10),1);
+        bb_exwire(bb_exhole(11,11),bb_exhole(11,4),2);
+        bb_exwire(bb_exhole(10,12),bb_exhole(10,8),2);
+        bb_exwire(bb_exhole(11,13),bb_exhole(11,21),5);
         bb_exprobe(0,u,3);bb_exprobe(1,u,1);
     } else if(which==6) {
         bb_exsupply(3,23);

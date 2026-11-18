@@ -306,6 +306,14 @@ FAST = [
         "when the unit moved assembles cleanly and reads 32 times too far "
         "into the file. Tracks the loaded VALUE, so a later unrelated shift "
         "is not one; red on rw_jpart's old conversion put back"),
+    Row("gkscene", "soak", py("tests/unit/t_gkscene.py"), 0.2,
+        "THE GAME KIT'S SCENE RECORD IS THE ONE SPEC.md 133.6 PINS. "
+        "tools/os88gk.py is its only writer and gk_scene (apps/cc/gk.inc) its "
+        "only guest reader, and a drifted byte draws the wrong widget or reads "
+        "an argument as an op, silently. A second reader written from the SPEC "
+        "table holds a golden record, a round trip of every op, gk.inc's "
+        "gk_ops and gk.h's GK_* against the compiler's, and the 133.7 "
+        "refusals; red on two gk_ops rows swapped"),
     Row("coldsym", "soak", py("tests/unit/t_coldsym.py"), 1.2,
         "SOAK (owner, 2026-11-11): about the suite's own harness and "
         "fixtures, not the OS - the release soak runs every row "
@@ -3325,6 +3333,31 @@ SOAK = [
         "WireFleet on VGA/CGA/Hercules: native deployment, bounds/overlap refusal, rotation, removal, auto, Ready, release/cancel and About (SPEC.md 114)",
         needs=("marty", "nasm", "pil"),
         wants=("build/wireflet360.img", "build/os8088-360.img"), timeout=240),
+    Row("byteopolyhost", "soak", py("tests/byteopoly_host.py"), 9.5,
+        "SPEC.md 131.12: the shipped Byteopoly C sources under ASan/UBSan on "
+        "the host - 21 scripted complete games with conservation and "
+        "invariant checks every step, save's validator on every resting "
+        "state, the codec against damaged files, complete cable games under "
+        "dropped/duplicated/corrupted/delayed frames and a pulled cable, and "
+        "the panels' handoff and greying; a salary of 210 turns it red",
+        inputs=("apps/byteopoly/**",)),
+    Row("gkmus", "soak", py("tests/unit/t_gkmus.py"), 0.1,
+        "SPEC.md 133.8: Byteopoly's song and effects banks walked by a decoder "
+        "written from the spec, not the compiler's - every stream ends, every "
+        "pattern returns, every note a table entry in OSAPI_SND_FM's range, "
+        "every voice the same length from its start and its loop point (a "
+        "seamless loop), 5 KB - and bp_app.c's BP_MUS_*/BP_FX_* and bp.h's "
+        "BP_SND_* in the files' order. Swapping two sfx blocks turns it red. "
+        "Soak until the owner's tierlock line puts it in fast (0.06 s)",
+        inputs=("apps/byteopoly/art/*.txt", "apps/byteopoly/bp_app.c",
+                "apps/byteopoly/bp.h", "tools/os88gkmus.py")),
+    Row("byteopolylink", "soak", py("tests/byteopoly_link.py"), 120.0,
+        "SPEC.md 131.5-131.7.5: two shipped BYTEOPLY.O88 on two QEMU guests "
+        "joined by a fault-injecting relay - lobby, start, six frame faults, "
+        "a pulled cable, a paired save, close and reopen both, Resume Pair, "
+        "play on to the end with the same digest at every revision",
+        needs=("qemu", "nasm"), timeout=600,
+        wants=("build/byteopoly.img", "build/os8088.img")),
     Row("wireballphysics", "soak", py("tests/wireball.py", "--physics"), 30.0,
         "WireBall 8088 physics: center/end contact, paddle motion, ball extent, "
         "rally acceleration, swept end contact and remaining substep motion (SPEC.md 109)",

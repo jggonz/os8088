@@ -103,7 +103,7 @@ def prepare():
 def main():
     global PAIR, TITLE, APP_IMAGE, APP_DISK
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--game', choices=('wireball', 'wirefleet', 'wirearena'), default='wireball', help='game to put on the paired XTs')
+    parser.add_argument('--game', choices=('wireball', 'wirefleet', 'wirearena', 'byteopoly'), default='wireball', help='game to put on the paired XTs')
     parser.add_argument('--86box', dest='box', metavar='PATH', help='86Box executable or macOS .app (also accepts BOX environment variable)')
     parser.add_argument('--roms', type=Path, metavar='DIR', help='override the installed 86Box ROM directory')
     parser.add_argument('--prepare-only', action='store_true', help='build disks and write configs without opening 86Box')
@@ -115,6 +115,9 @@ def main():
     if args.game == 'wirearena':     # (docs/plans/completed/WIREARENA-LINK-PLAN.md L3.2:
         TITLE, APP_IMAGE, APP_DISK = 'Wire Arena', 'wirerena360.img', 'wirerena.img'
         PAIR = BUILD / '86box-wirearena-pair'  # 2400 baud on two 4.77 MHz XTs)
+    if args.game == 'byteopoly':     # (SPEC.md 131.5: the cable game at 2400 8N1)
+        TITLE, APP_IMAGE, APP_DISK = 'Byteopoly', 'byteopoly360.img', 'byteopoly.img'
+        PAIR = BUILD / '86box-byteopoly-pair'
     if sys.platform not in ('darwin', 'linux'):
         raise RuntimeError('This FIFO launcher supports macOS and Linux.')
     if args.roms and not args.roms.expanduser().is_dir():
@@ -157,6 +160,11 @@ def main():
             print('Open B: → WIREFLET on each PC; each finds the other on COM2 by itself (move the mouse once).\n'
                   'Place or auto-place (A), then Ready (Y). The lower-identity captain fires first.\n'
                   'T: chat, F: fullscreen, S/O: save/load. Link → Connect COM2 is the manual fallback.')
+        elif args.game == 'byteopoly':
+            print('Open B: → BYTEOPLY on each PC. One chooses Host Cable, the other Join Cable,\n'
+                  'Port Auto (or COM2), Open Link; each finds the other on COM2 (move the mouse once).\n'
+                  'The host sets the roster (This PC / Other PC per seat); both press Ready; the host Starts.\n'
+                  'Game > Paired Save on either PC; Game > Resume Pair after reopening both.')
         else:
             print('Open B: → WIREBALL and choose Serial Match (S) on each PC.\n'
                   'COM2 is linked; click a VM to control its paddle with Up/Down or W/S.')

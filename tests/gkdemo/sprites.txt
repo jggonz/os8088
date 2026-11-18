@@ -1,0 +1,35 @@
+# The game kit gallery's two pictures, drawn by hand for the gate (no
+# package's art). One character per EGA colour, as tools/os88bbart.py reads
+# them: k=0 b=1 g=2 c=3 r=4 m=5 n=6 l=7 d=8 B=9 G=10 C=11 R=12 .=13 y=14 w=15.
+
+sprite GD_A_TICK 14 12
+............kk
+...........kGk
+..........kGGk
+.........kGGk.
+k.......kGGk..
+kk.....kGGk...
+kGk...kGGk....
+kGGk.kGGk.....
+.kGGkGGk......
+..kGGGk.......
+...kGk........
+....k.........
+
+sprite GD_A_DISK 16 16
+kkkkkkkkkkkkkkk.
+kBBkwwwwwwwwkBBk
+kBBkwwwwwkkwkBBk
+kBBkwwwwwkkwkBBk
+kBBkwwwwwkkwkBBk
+kBBkwwwwwwwwkBBk
+kBBBkkkkkkkkBBBk
+kBBBBBBBBBBBBBBk
+kBBkkkkkkkkkkBBk
+kBkllllllllllkBk
+kBklwwwwwwwwlkBk
+kBkllllllllllkBk
+kBklwwwwwwwwlkBk
+kBkllllllllllkBk
+kBkllllllllllkBk
+kkkkkkkkkkkkkkkk

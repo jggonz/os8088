@@ -194,6 +194,12 @@ X apps/syscheck/disk.inc sc_fseg         # FSCHECK.DRV, KERNEL CODE the kernel f
 C apps/notepad/notepad.asm np_stgseg     # the save's CR/LF staging, held only
                                          # across the OSAPI_FILE_WRITE it is the
                                          # ES:BX of
+C apps/2basic/2basic.asm bas_io_seg       # 2BASIC's whole-file staging (SPEC.md 132.2):
+                                          # claimed and freed inside one HELP, LOAD,
+                                          # SAVE or LOADBMP command (bas_free_io)
+C apps/2basic/2basic.asm bas_res_stage    # LOADRES's 8KB stage, held only until the
+                                          # pack validates and is copied resident,
+                                          # freed before the command returns
 C apps/word/word.asm wd_stgseg           # the load/save staging, claimed and freed
                                          # inside one command, a transfer's buffer
                                          # throughout (SPEC.md 68.3.2)

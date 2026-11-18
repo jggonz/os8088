@@ -11425,6 +11425,176 @@ $(BUILD)/breadxt-check360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbn
 	@python3 tools/os88disk.py --verify $@
 .PHONY: breadxtcheckdisk
 
+# --- Byteopoly, the vintage-computer trading game, in C (SPEC.md 131) -------
+# One C package, BYTEOPLY.O88: the resident image, an eager embedded overlay
+# (73.14.2) and the art as a lazy part after it (131.10), Breadboard XT's
+# shape. Every included .c/.h and .inc is a prerequisite (131.12): make
+# cannot see through #include or %include.
+# The second art part BPART2.BIN (131.10.7) is art2.h's IDs: sprites2.txt,
+# the tx-*.txt text records, the kit's scenes and the music, each tool only
+# when it exists - so its prerequisites name the tools by wildcard.
+$(eval $(call CC_PACKAGE,byteoply,byteopoly,BYTEOPLY.OVL,,part,$(BUILD)/BPART.BIN $(BUILD)/BPART2.BIN))
+BYTEOPOLYSRC := $(wildcard apps/byteopoly/*.c apps/byteopoly/*.h)
+$(BUILD)/BPART.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h \
+                    $(wildcard apps/byteopoly/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88bpart.py build -o $@
+$(BUILD)/BPART2.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h apps/byteopoly/art2.h \
+                     apps/byteopoly/bptx.h $(wildcard apps/byteopoly/art/*.txt) \
+                     $(wildcard tools/os88gk.py tools/os88gkmus.py) | $(BUILD)
+	python3 tools/os88bpart.py build2 -o $@
+$(BUILD)/byteoply.raw.asm: $(BYTEOPOLYSRC)
+$(BUILD)/byteoply.bin: $(wildcard apps/byteopoly/*.inc) apps/breadxt/draw.inc \
+                       $(wildcard apps/cc/gk.inc apps/cc/gkmus.inc) \
+                       apps/os88cable.inc apps/os88ui.inc
+$(BUILD)/byteoply.raw.asm: apps/cc/gk.h
+$(BUILD)/byteoply.bin: apps/cc/gkmus.inc
+
+#> [Applications] byteopoly :: Byteopoly vintage-computer trading game, local and null-modem (SPEC.md 131)
+byteopoly: $(BUILD)/byteoply.o88
+BYTEOPOLYFILES := $(BUILD)/byteoply.o88 $(wildcard apps/byteopoly/disk/*)
+#> [Applications] byteopolydisk :: Byteopoly software disk in all four floppy geometries
+byteopolydisk: $(BUILD)/byteopoly.img $(BUILD)/byteopoly720.img $(BUILD)/byteopoly120.img $(BUILD)/byteopoly360.img
+$(BUILD)/byteopoly.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly720.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly120.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly360.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+
+# The host harness (131.12): every apps/byteopoly/hosttest/t_*.c is one
+# program over the SHIPPING rules/codec/link C with BP_HOST (16-bit stored
+# words), built with ASan/UBSan and run. A supplement to the guest, never a
+# substitute: it proves no SS/DS, stack, thunk or 8088 promotion fact.
+BYTEOPOLYHOSTT := $(patsubst apps/byteopoly/hosttest/%.c,$(BUILD)/bphost/%,$(wildcard apps/byteopoly/hosttest/t_*.c))
+$(BUILD)/bphost/%: apps/byteopoly/hosttest/%.c apps/byteopoly/hosttest/bphost.h $(BYTEOPOLYSRC)
+	@mkdir -p $(BUILD)/bphost
+	$(CC) -std=c99 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+		-DBP_HOST -I apps/byteopoly -I apps/byteopoly/hosttest $< -o $@
+#> [Test] byteopolyhost :: Byteopoly host harness over the shipping C (rules, codec, link) under ASan/UBSan
+byteopolyhost: $(BYTEOPOLYHOSTT)
+	@set -e; for t in $(BYTEOPOLYHOSTT); do echo "== $$t"; $$t; done
+
+#> [Applications] byteopoly-pair :: two 86Box XTs joined by a COM2 null modem, Byteopoly on each
+byteopoly-pair: byteopolydisk
+	python3 tools/wireball-pair.py --game byteopoly
+.PHONY: byteopoly byteopolydisk byteopolyhost byteopoly-pair
+
+# Byteopoly's two-word arithmetic executed on the 8088 (SPEC.md 131.4.1): the
+# shipping bp_math.c under the real C ABI, against hand-worked literals, with
+# a negative control on N. The host harness cannot see an 8088 promotion
+# fact; this can. Rules lane.
+$(eval $(call CC_PACKAGE,bpmath,../tests/bpmath))
+$(BUILD)/bpmath.raw.asm: apps/byteopoly/bp.h apps/byteopoly/bp_math.c
+$(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/bpmath.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] bpmath :: actual 8088 Byteopoly two-word arithmetic fixture and negative control
+bpmath: $(BUILD)/bpmath360.img
+.PHONY: bpmath
+
+# The C game kit's gallery (SPEC.md 133): a gate package drawing every gk_
+# widget of apps/cc/gk.inc and one scene compiled by tools/os88gk.py, with an
+# art part of its own (three WIN16 faces, two pictures, the scene). Kit lane.
+$(eval $(call CC_PACKAGE,gkdemo,../tests/gkdemo,,$(BUILD)/GKDART.BIN))
+$(BUILD)/GKDART.BIN: tests/gkdemo/mkart.py tests/gkdemo/gkd.h tests/gkdemo/sprites.txt \
+                     tests/gkdemo/scenes.txt tools/os88gk.py tools/os88bbart.py \
+                     $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tests/gkdemo/mkart.py -o $@
+$(BUILD)/gkdemo.raw.asm: tests/gkdemo/gkd.h apps/cc/gk.h
+$(BUILD)/gkdemo.bin: apps/cc/gk.inc apps/breadxt/draw.inc
+$(BUILD)/gkdemo.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/gkdemo.o88
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/gkdemo360.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkdemo.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] gkdemo :: the C game kit's gallery: every gk_ widget and a compiled scene (SPEC.md 133)
+gkdemo: $(BUILD)/gkdemo.img $(BUILD)/gkdemo360.img
+.PHONY: gkdemo
+
+# The game kit's music player (SPEC.md 133.8) as a jukebox: GKMJUKE.O88 plays
+# every song and effect of Byteopoly's banks, so the player can be LISTENED
+# to on an AdLib/SB or the speaker before a game wires it. A gate package;
+# its one eager part holds the two banks (os88gkmus.py part).
+$(eval $(call CC_PACKAGE,gkmjuke,../tests/gkmusdemo,,$(BUILD)/GKMBANKS.BIN))
+$(BUILD)/GKMBANKS.BIN: tools/os88gkmus.py apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt | $(BUILD)
+	python3 tools/os88gkmus.py part -o $@ apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt
+$(BUILD)/gkmjuke.raw.asm: apps/cc/gk.h
+$(BUILD)/gkmjuke.bin: apps/cc/gkmus.inc apps/breadxt/draw.inc
+$(BUILD)/gkmjuke.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/gkmjuke360.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] gkmusdemo :: the game kit's music and effects player as a jukebox over Byteopoly's banks (SPEC.md 133.8)
+gkmusdemo: $(BUILD)/gkmjuke.img $(BUILD)/gkmjuke360.img
+.PHONY: gkmusdemo
+
+# --- 2BASIC, a BASIC interpreter, and 2BRES, its resource editor (SPEC.md 132)
+# Contributed by techdistractions (github.com/techdistractions/2basic) and
+# ported to the flag day's ABI (PKG_FMT 13). Two asm packages and a B: disk
+# that mirrors the upstream one exactly, because the shipped docs, HELP.TXT and
+# every sample name their files from the disk's ROOT ("\GAMES\2B99").
+# apps/2basic/disk/ is that tree; res/ holds the host-side 2BR3 inputs, and
+# the four files shared between folders are listed once and placed twice.
+# `all` builds both packages so an SDK change cannot break them unseen
+# (RECORDER's arrangement, above); the disk is on demand.
+TWOB := apps/2basic
+$(BUILD)/2basic.bin: $(TWOB)/2basic.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/2basic.lst -o $@ $<
+$(BUILD)/2bres.bin: $(TWOB)/2bres.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/2bres.lst -o $@ $<
+$(BUILD)/2basic.o88: $(BUILD)/2basic.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+$(BUILD)/2bres.o88: $(BUILD)/2bres.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+all: $(BUILD)/2basic.o88 $(BUILD)/2bres.o88
+TWOBROOT := $(BUILD)/2basic.o88 $(BUILD)/2bres.o88 \
+            $(addprefix $(TWOB)/disk/,README.TXT HELP.TXT RESGUIDE.TXT)
+TWOBDATA := $(wildcard $(TWOB)/disk/EXAMPLES/*.* $(TWOB)/disk/GAMES/*/*.* \
+                       $(TWOB)/disk/TESTS/*.* $(TWOB)/disk/TESTS/MULTIBAS/*.* \
+                       $(TWOB)/disk/TOOLS/2BRES/*.*) \
+            $(addprefix $(TWOB)/res/demo/,RESDEMO.RES TARGETS.TXT MAP.DAT)
+TWOBARGS := $(TWOBROOT) \
+            $(addprefix EXAMPLES:,$(wildcard $(TWOB)/disk/EXAMPLES/*.*) \
+                                  $(TWOB)/res/demo/RESDEMO.RES) \
+            $(addprefix GAMES/2B99:,$(wildcard $(TWOB)/disk/GAMES/2B99/*.*)) \
+            $(addprefix GAMES/BLACKJAK:,$(wildcard $(TWOB)/disk/GAMES/BLACKJAK/*.*)) \
+            $(addprefix GAMES/2BCHECK:,$(wildcard $(TWOB)/disk/GAMES/2BCHECK/*.*)) \
+            $(addprefix TESTS:,$(wildcard $(TWOB)/disk/TESTS/*.*) \
+                               $(addprefix $(TWOB)/res/demo/,RESDEMO.RES TARGETS.TXT MAP.DAT) \
+                               $(TWOB)/disk/GAMES/2B99/2B99.RES) \
+            $(addprefix TESTS/MULTIBAS:,$(wildcard $(TWOB)/disk/TESTS/MULTIBAS/*.*)) \
+            $(addprefix TOOLS/2BRES:,$(wildcard $(TWOB)/disk/TOOLS/2BRES/*.*))
+# THE LIVE VOLUME CARRIES THE SAME TREE ONE FOLDER DOWN, in 2BASIC/ (SPEC.md
+# 132.5, 80.6), so there the docs' root paths read \2BASIC\GAMES\2B99.
+TWOBLIVEARGS := $(addprefix 2BASIC:,$(TWOBROOT)) \
+                $(addprefix 2BASIC/,$(filter-out $(TWOBROOT),$(TWOBARGS)))
+#> [Applications] 2basic :: 2BASIC interpreter and 2BRES resource editor packages (SPEC.md 132)
+2basic: $(BUILD)/2basic.o88 $(BUILD)/2bres.o88
+#> [Applications] 2basicdisk :: 2BASIC's B: disk (programs, games, examples, tests) in all four floppy geometries
+2basicdisk: $(BUILD)/2basic.img $(BUILD)/2basic720.img $(BUILD)/2basic120.img $(BUILD)/2basic360.img
+$(BUILD)/2basic.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic720.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic120.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic360.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+.PHONY: 2basic 2basicdisk
+
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and
@@ -19324,6 +19494,7 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # $(ALLAPPSARGS); the songs are not there, MIDIRack's songs' reason - the
 # everything-floppy's RunCPM fill would pay for them.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
+               $(BUILD)/byteoply.o88 $(TWOBROOT) $(TWOBDATA) \
                $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3) \
                $(WRDEMOWAVS) \
                $(PX_SAMPLES)
@@ -19331,6 +19502,8 @@ LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
 # the everything sets carry the 360KB selection, which $(ALLAPPSARGS) does not
 # name, so the ten pictures are here once and not twice.
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
+               $(addprefix BYTEOPLY:,$(BUILD)/byteoply.o88) \
+               $(TWOBLIVEARGS) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
                $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3) $(WRDEMOWAVS)) \
                $(MIDISONGARGS) $(PX_GALLERY)

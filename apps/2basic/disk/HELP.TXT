@@ -1,0 +1,429 @@
+@INDEX
+2BASIC - QUICK HELP
+HELP command  = syntax, description, example
+EDITING: LIST EDIT AUTO DELETE NEW RESET RUN SAVE LOAD
+BASIC: PRINT INPUT LET DIM IF FOR NEXT GOTO GOSUB RETURN
+GRAPHICS: SCREEN PSET LINE BOX CIRCLE PUTBMP PUTRES
+MORE: FORM BUTTON SOUND SVAR LVAR MEM VERSION
+RES: LOADRES RESSELECT RESCOUNT RESLEN RESBYTE RESWORD RESLINE$
+See the GitHub docs for the complete command reference
+@NUMBER
+SYNTAX: n statement
+ABOUT: Stores a source line in ascending line-number...
+EXAMPLE: 10 PRINT "HELLO"
+@DEL-LINE
+SYNTAX: n
+ABOUT: Deletes the stored line with that number without...
+EXAMPLE: 120
+@HELP
+SYNTAX: HELP [command]
+ABOUT: Show the index or help for one command.
+EXAMPLE: HELP PRINT
+@VERSION
+SYNTAX: VERSION
+ABOUT: Displays the exact running 2BASIC semantic version.
+EXAMPLE: VERSION
+@LIST
+SYNTAX: LIST [first[-last]]
+ABOUT: Lists all stored lines, one line, or an inclusive...
+EXAMPLE: LIST 100-300
+@DELETE
+SYNTAX: DELETE first[-last]
+ABOUT: Deletes one stored line or an inclusive...
+EXAMPLE: DELETE 100-190
+@EDIT
+SYNTAX: EDIT line
+ABOUT: Copies an existing numbered line into the command...
+EXAMPLE: EDIT 120
+@AUTO
+SYNTAX: AUTO [start[,step]]
+ABOUT: Preloads successive line numbers for program...
+EXAMPLE: AUTO 100,10
+@UP
+SYNTAX: Up Arrow
+ABOUT: Replaces the READY prompt with the most recently...
+EXAMPLE: Enter 100 PRINT "HELLO", then press Up Arrow.
+@CURSOR
+SYNTAX: Left/Right/Home/End/Del/Backspace
+ABOUT: Moves the insertion cursor within the READY line....
+EXAMPLE: Recall a line, press Left Arrow, then type...
+@NEW
+SYNTAX: NEW
+ABOUT: Deletes the current program and numeric variables.
+EXAMPLE: NEW
+@RESET
+SYNTAX: RESET
+ABOUT: Restores startup console, title, colours and folder.
+EXAMPLE: RESET
+@RUN
+SYNTAX: RUN
+ABOUT: Runs program. ESC or Ctrl+C requests BREAK.
+EXAMPLE: RUN
+@SAVE
+SYNTAX: SAVE "name"
+ABOUT: Writes the current program as ASCII and updates...
+EXAMPLE: SAVE "DEMO"
+@LOAD
+SYNTAX: LOAD "name" or LOAD "\folder\subfolder"
+ABOUT: One BAS in folder loads by folder; else name the BAS.
+EXAMPLE: LOAD "\GAMES\2B99"
+@SVAR
+SYNTAX: SVAR "app","key",expr
+ABOUT: Saves one integer in the shared 2BASIC.DAT...
+EXAMPLE: 900 SVAR "UTSTORE","COUNT",T
+@LVAR
+SYNTAX: LVAR "app","key",letter
+ABOUT: Loads one integer from 2BASIC.DAT into A..Z. A...
+EXAMPLE: 10 LVAR "UTSTORE","COUNT",T
+@CLS
+SYNTAX: CLS
+ABOUT: Clears retained text output using the current...
+EXAMPLE: 10 CLS
+@PRINT
+SYNTAX: PRINT item[;item...]
+ABOUT: Prints integer items or string expressions. String...
+EXAMPLE: 20 ? "VALUE="+STR$(A)
+@?
+SYNTAX: PRINT item[;item...]
+ABOUT: Prints integer items or string expressions. String...
+EXAMPLE: 20 ? "VALUE="+STR$(A)
+@INPUT
+SYNTAX: INPUT ["prompt";]letter
+ABOUT: Waits for a signed expr without blocking the
+EXAMPLE: 20 INPUT "AGE";A
+@LET
+SYNTAX: [LET] A=expr
+ABOUT: Evaluates a signed 16-bit expr and stores it in A..Z
+EXAMPLE: 30 A(I)=A(I)+1
+@ASSIGNMENT
+SYNTAX: [LET] A=expr
+ABOUT: Evaluates a signed 16-bit expr and stores it in A..Z
+EXAMPLE: 30 A(I)=A(I)+1
+@DIM
+SYNTAX: DIM letter(max-index)
+ABOUT: Creates one zero-based 1D signed-integer array. The
+EXAMPLE: 10 DIM A(63)
+@END
+SYNTAX: END
+ABOUT: Ends normally, stops FM notes, hides transient GUI...
+EXAMPLE: 900 END
+@REM
+SYNTAX: REM text
+ABOUT: Ignores the remainder of the line. A numbered REM...
+EXAMPLE: 5 REM MAIN LOOP
+@COMMENT
+SYNTAX: ' comment
+ABOUT: An apostrophe outside a quoted string ignores the...
+EXAMPLE: 20 A=A+1 ' COUNT ONE PASS
+@'
+SYNTAX: ' comment
+ABOUT: An apostrophe outside a quoted string ignores the...
+EXAMPLE: 20 A=A+1 ' COUNT ONE PASS
+@GOTO
+SYNTAX: GOTO line
+ABOUT: Transfers execution to an existing numbered line.
+EXAMPLE: 90 GOTO 20
+@GOSUB
+SYNTAX: GOSUB line
+ABOUT: Calls a numbered subroutine and remembers where...
+EXAMPLE: 30 GOSUB 500
+@RETURN
+SYNTAX: RETURN
+ABOUT: Returns to the line following the most recent GOSUB.
+EXAMPLE: 590 RETURN
+@ON
+SYNTAX: ON n GOTO line[,line...]
+ABOUT: Uses a 1-based integer selector to choose one...
+EXAMPLE: 40 ON M GOTO 100,200,300
+@IF
+SYNTAX: IF expr THEN stmt [ELSE stmt]
+ABOUT: Executes the THEN branch when expression is...
+EXAMPLE: 60 IF A<=10 THEN A=A+1 ELSE GOTO 200
+@FOR
+SYNTAX: FOR letter=start TO limit [STEP step]
+ABOUT: Begins a integer counted loop. STEP defaults to 1...
+EXAMPLE: 20 FOR A=10 TO 1 STEP -1
+@NEXT
+SYNTAX: NEXT [letter]
+ABOUT: Advances and tests the innermost matching FOR loop.
+EXAMPLE: 80 NEXT A
+@EXPR
+SYNTAX: A=expression
+ABOUT: Uses signed 16-bit arithmetic. Comparisons and...
+EXAMPLE: IF R=0 AND J=1 THEN PRINT "MATCH"
+@STR$
+SYNTAX: STR$(expr)
+ABOUT: Converts a signed 16-bit integer to decimal text...
+EXAMPLE: MESSAGEBOX "TIME "+STR$(T)+" SECONDS"
+@VAL
+SYNTAX: VAL(text)
+ABOUT: Converts decimal text to a signed 16-bit integer....
+EXAMPLE: A=VAL(STR$(-123))
+@PROMPTCOLOR
+SYNTAX: PROMPTCOLOR fg,bg | PROMPTCOLOR
+ABOUT: Sets prompt colours; no args restores defaults.
+EXAMPLE: PROMPTCOLOR 14,1
+@COLOR
+SYNTAX: COLOR fg[,bg] | COLOR ,bg
+ABOUT: Sets the text/graphics foreground and optional...
+EXAMPLE: 10 COLOR 14,1
+@LOCATE
+SYNTAX: LOCATE row,column
+ABOUT: Moves the next PRINT position in the retained...
+EXAMPLE: 30 LOCATE 10,20
+@BEEP
+SYNTAX: BEEP
+ABOUT: Plays a short OS8088 tone through the configured...
+EXAMPLE: 40 BEEP
+@SOUND
+SYNTAX: SOUND frequency,duration
+ABOUT: Requests an OS8088 tone at the given frequency for...
+EXAMPLE: 40 SOUND 880,4
+@SLEEP
+SYNTAX: SLEEP ticks
+ABOUT: Sleeps only the BASIC worker, yielding the desktop...
+EXAMPLE: 40 SLEEP 18
+@RANDOMIZE
+SYNTAX: RANDOMIZE [seed]
+ABOUT: Seeds 2BASIC random-number generation; without a...
+EXAMPLE: 10 RANDOMIZE
+@RND
+SYNTAX: RND(limit)
+ABOUT: Returns an integer from 0 through limit-1.
+EXAMPLE: 20 A=RND(10)
+@SCREEN
+SYNTAX: SCREEN 0 | SCREEN 1
+ABOUT: Selects retained text output or the graphics canvas.
+EXAMPLE: 10 SCREEN 1
+@PSET
+SYNTAX: PSET (x,y)[,colour]
+ABOUT: Stores and draws one pixel in the graphics canvas.
+EXAMPLE: 20 PSET (40,30),14
+@LINE
+SYNTAX: LINE (x1,y1)-(x2,y2)[,colour]
+ABOUT: Stores and draws a Bresenham line.
+EXAMPLE: 20 LINE (10,10)-(200,80),12
+@BOX
+SYNTAX: BOX (x1,y1)-(x2,y2)[,colour]
+ABOUT: Stores and draws a rectangular frame.
+EXAMPLE: 30 BOX (20,20)-(120,80),10
+@FILLBOX
+SYNTAX: FILLBOX (x1,y1)-(x2,y2)[,colour]
+ABOUT: Stores and draws a filled rectangle. Coordinates...
+EXAMPLE: 35 FILLBOX (25,25)-(115,75),9
+@DRAWBEGIN
+SYNTAX: DRAWBEGIN ... DRAWEND
+ABOUT: Suppresses intermediate worker repaints. A batch...
+EXAMPLE: 15 DRAWBEGIN
+@DRAWEND
+SYNTAX: DRAWBEGIN ... DRAWEND
+ABOUT: Suppresses intermediate worker repaints. A batch...
+EXAMPLE: 15 DRAWBEGIN
+@CIRCLE
+SYNTAX: CIRCLE (x,y),radius[,colour]
+ABOUT: Stores and draws a midpoint-algorithm circle.
+EXAMPLE: 40 CIRCLE (100,70),30,9
+@POKE
+SYNTAX: POKE address,value
+ABOUT: Writes one byte to 2BASIC private user memory,...
+EXAMPLE: POKE 100,255
+@PEEK
+SYNTAX: PEEK(address)
+ABOUT: Reads one byte from the private 3072-byte...
+EXAMPLE: A=PEEK(100)
+@INKEY
+SYNTAX: INKEY
+ABOUT: Returns and clears the last pending ASCII key, or...
+EXAMPLE: 20 K=INKEY
+@TICKS
+SYNTAX: TICKS
+ABOUT: Returns the low 16 bits of the OS8088 tick counter.
+EXAMPLE: A=TICKS
+@MOUSELX
+SYNTAX: MOUSELX or MOUSELY
+ABOUT: Returns live mouse coordinates relative to the...
+EXAMPLE: X=MOUSELX
+@MOUSELY
+SYNTAX: MOUSELX or MOUSELY
+ABOUT: Returns live mouse coordinates relative to the...
+EXAMPLE: X=MOUSELX
+@MOUSEX
+SYNTAX: MOUSEX or MOUSEY or MOUSEB
+ABOUT: Returns absolute desktop mouse coordinates or...
+EXAMPLE: A=MOUSEX
+@MOUSEY
+SYNTAX: MOUSEX or MOUSEY or MOUSEB
+ABOUT: Returns absolute desktop mouse coordinates or...
+EXAMPLE: A=MOUSEX
+@MOUSEB
+SYNTAX: MOUSEX or MOUSEY or MOUSEB
+ABOUT: Returns absolute desktop mouse coordinates or...
+EXAMPLE: A=MOUSEX
+@SCREENW
+SYNTAX: SCREENW / SCREENH / SCREENBPP / VIDEOMODE
+ABOUT: Reports current OS8088 video geometry, colour...
+EXAMPLE: PRINT SCREENW
+@SCREENH
+SYNTAX: SCREENW / SCREENH / SCREENBPP / VIDEOMODE
+ABOUT: Reports current OS8088 video geometry, colour...
+EXAMPLE: PRINT SCREENW
+@SCREENBPP
+SYNTAX: SCREENW / SCREENH / SCREENBPP / VIDEOMODE
+ABOUT: Reports current OS8088 video geometry, colour...
+EXAMPLE: PRINT SCREENW
+@VIDEOMODE
+SYNTAX: SCREENW / SCREENH / SCREENBPP / VIDEOMODE
+ABOUT: Reports current OS8088 video geometry, colour...
+EXAMPLE: PRINT SCREENW
+@FRE
+SYNTAX: FRE(0)
+ABOUT: Reports available conventional memory using a...
+EXAMPLE: PRINT FRE(0)
+@CAPACITY
+SYNTAX: CAPACITY
+ABOUT: Prints package image/BSS headroom and fixed...
+EXAMPLE: CAPACITY
+@MEM
+SYNTAX: MEM
+ABOUT: Reports current packed-program bytes used/free,...
+EXAMPLE: MEM
+@ADLIB
+SYNTAX: ADLIB
+ABOUT: Returns -1 when OS8088 reports OPL2/FM capability,...
+EXAMPLE: IF ADLIB=0 THEN 100
+@FMPRESET
+SYNTAX: FMPRESET channel,preset
+ABOUT: Loads one of eight built-in OPL2 instrument...
+EXAMPLE: 20 FMPRESET 0,3
+@FMNOTE
+SYNTAX: FMNOTE channel,frequency
+ABOUT: Starts or changes an OPL2 note on channel 0..7.
+EXAMPLE: 30 FMNOTE 0,440
+@FMOFF
+SYNTAX: FMOFF channel
+ABOUT: Stops one 2BASIC OPL2 channel.
+EXAMPLE: 40 FMOFF 0
+@FMSTOP
+SYNTAX: FMSTOP
+ABOUT: Stops all FM notes owned by 2BASIC.
+EXAMPLE: 50 FMSTOP
+@LOADBMP
+SYNTAX: LOADBMP "name",slot
+ABOUT: Loads a validated uncompressed 4bpp BMP; .BMP is...
+EXAMPLE: 10 LOADBMP "LOGO",0
+@PUTBMP
+SYNTAX: PUTBMP slot,x,y
+ABOUT: Stores and draws a loaded bitmap in SCREEN 1. The...
+EXAMPLE: 30 PUTBMP 0,40,30,32,0,28,28
+@LOADRES
+SYNTAX: LOADRES "name"
+ABOUT: Loads one compact 2BR2 resource pack; .RES is...
+EXAMPLE: 10 LOADRES "2B99"
+@PUTRES
+SYNTAX: PUTRES thing,x,y[,foreground[,orientation]]
+ABOUT: Draws thing 0..98 from the active 2BR2 pack in...
+EXAMPLE: 40 PUTRES T,120,60,4,1
+@FREEBMP
+SYNTAX: FREEBMP slot
+ABOUT: Releases one resident bitmap slot for reuse.
+EXAMPLE: 100 FREEBMP 0
+@FORM
+SYNTAX: FORM "title"[,width,height[,YES|NO]]
+ABOUT: Resets the single custom form, clears its...
+EXAMPLE: 20 FORM "CONTROL DEMO",280,160,YES
+@LABEL
+SYNTAX: LABEL id,x,y,"text"
+ABOUT: Adds or replaces a noninteractive text label on...
+EXAMPLE: 30 LABEL 1,20,20,"READY"
+@BUTTON
+SYNTAX: BUTTON id,x,y,w,h,"text"
+ABOUT: Adds or replaces a clickable button. Clicking it...
+EXAMPLE: 40 BUTTON 2,20,50,90,20,"OK"
+@CHECKBOX
+SYNTAX: CHECKBOX id,x,y,"text"
+ABOUT: Adds or replaces a checkbox. Clicking toggles...
+EXAMPLE: 50 CHECKBOX 3,20,80,"SOUND"
+@FRAME
+SYNTAX: FRAME id,x,y,w,h,"text"
+ABOUT: Adds or replaces a labelled rectangular frame used...
+EXAMPLE: 60 FRAME 4,8,8,230,110,"OPTIONS"
+@IMAGE
+SYNTAX: IMAGE id,slot,x,y
+ABOUT: Adds or replaces a clickable image control using a...
+EXAMPLE: 70 IMAGE 5,0,160,30
+@SHOWFORM
+SYNTAX: SHOWFORM
+ABOUT: Shows, repaints, and fronts the one custom form.
+EXAMPLE: 80 SHOWFORM
+@CLOSEFORM
+SYNTAX: CLOSEFORM
+ABOUT: Hides the custom form and releases a waiting EVENT...
+EXAMPLE: 150 CLOSEFORM
+@EVENT
+SYNTAX: EVENT
+ABOUT: Waits cooperatively for a button, checkbox, or...
+EXAMPLE: 100 A=EVENT
+@VALUE
+SYNTAX: VALUE(id)
+ABOUT: Returns the current integer value of a control,...
+EXAMPLE: B=VALUE(3)
+@SETTEXT
+SYNTAX: SETTEXT id,text
+ABOUT: Changes a label, button, checkbox, or frame...
+EXAMPLE: 120 SETTEXT 1,"WORKING"
+@SETVALUE
+SYNTAX: SETVALUE id,value
+ABOUT: Changes a control integer value; for a checkbox,...
+EXAMPLE: 130 SETVALUE 3,1
+@ENABLE
+SYNTAX: ENABLE id,state
+ABOUT: Enables or disables control interaction. Disabled...
+EXAMPLE: 140 ENABLE 2,0
+@VISIBLE
+SYNTAX: VISIBLE id,state
+ABOUT: Shows or hides a control without deleting its record.
+EXAMPLE: 145 VISIBLE 5,0
+@MESSAGEBOX
+SYNTAX: MESSAGEBOX text
+ABOUT: Shows a transient modal dialog and cooperatively...
+EXAMPLE: 200 MESSAGEBOX "SECONDS "+STR$(T)
+@INPUTBOX
+SYNTAX: INPUTBOX text,letter
+ABOUT: Shows a transient modal integer-entry dialog; OK...
+EXAMPLE: 210 INPUTBOX "VALUE",A
+@CONSOLESIZE
+SYNTAX: CONSOLESIZE columns,rows
+ABOUT: Resizes the visible console/canvas. Retained text...
+EXAMPLE: 10 CONSOLESIZE 40,15
+@MINCONSOLE
+SYNTAX: MINCONSOLE
+ABOUT: Uses the native OS8088 instance/dock minimise path...
+EXAMPLE: 10 MINCONSOLE
+@RESTORECONSOLE
+SYNTAX: RESTORECONSOLE
+ABOUT: Restores and fronts the console through the native...
+EXAMPLE: 220 RESTORECONSOLE
+@RESSELECT
+SYNTAX: RESSELECT "BANK"
+ABOUT: Selects one named 16x16 sprite bank.
+EXAMPLE: RESSELECT "TILES"
+@RESLEN
+SYNTAX: RESLEN("NAME")
+ABOUT: Returns payload length in bytes.
+EXAMPLE: PRINT RESLEN("MAP")
+@RESCOUNT
+SYNTAX: RESCOUNT("NAME")
+ABOUT: Returns SPRITES1 or WORDS16 item count.
+EXAMPLE: PRINT RESCOUNT("TILES")
+@RESBYTE
+SYNTAX: RESBYTE("NAME",index)
+ABOUT: Returns byte at zero-based resource offset.
+EXAMPLE: PRINT RESBYTE("MAP",0)
+@RESWORD
+SYNTAX: RESWORD("NAME",index)
+ABOUT: Returns signed WORDS16 item by index.
+EXAMPLE: PRINT RESWORD("SCORES",1)
+@RESLINE$
+SYNTAX: RESLINE$("NAME",line)
+ABOUT: Reads line from named TEXT resource.
+EXAMPLE: PRINT RESLINE$("TARGETS",0)
