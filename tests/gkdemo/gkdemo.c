@@ -34,7 +34,7 @@ static struct os88_class gd_cls = {OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWN
     os88_t_paint, os88_t_onkey, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 static const char *gd_bn[6] = {"Normal", "Focus", "Default", "Disabled", "Pressed", "Hilite"};
-static const char *gd_sn[6] = {"Flat", "Raised", "Raised2", "Sunken", "Sunken2", "Etched"};
+static const char *gd_sn[6] = {"Flat", "Raise", "Raise2", "Sunk", "Sunk2", "Etch"};
 static const char *gd_kn[3] = {"Tab", "Enter", "Esc"};
 static const char gd_word[] = "GAMEKIT";
 

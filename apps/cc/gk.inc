@@ -73,18 +73,15 @@ _gk_role:
     xor ah,ah
     ret
 
-; gk_rc: AL = a role -> AL = its colour; bit 7 set (none) -> FFh.
+; gk_rc: AL = a role (0-15) -> AL = its colour; bit 7 set (none) is kept.
 gk_rc:
     test al,al
     js .n
     push bx
-    and al,15
     mov bx,[gk_rt]
     xlat
     pop bx
-    ret
 .n:
-    mov al,0FFh
     ret
 
 ; gk_rc2: AL and AH roles -> colours
@@ -103,7 +100,13 @@ gk_ld:
     mov dx,[gk_r+6]
     ret
 
+; gk_enter: a widget's frame (push bp / mov bp,sp, for the CALLER) and
 ; gk_setr: gk_r = the caller's x, y, w, h at [bp+4]..[bp+10]
+gk_enter:
+    pop ax
+    push bp
+    mov bp,sp
+    push ax
 gk_setr:
     mov ax,[bp+4]
     mov bx,[bp+6]
@@ -313,9 +316,7 @@ gk_boxr:
 
 ; void gk_box(int x,int y,int w,int h,int style,int fill)
 _gk_box:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov al,[bp+12]
     mov ah,[bp+14]
     call gk_boxr
@@ -352,9 +353,7 @@ gk_line:
 
 ; void gk_shadow(int x,int y,int w,int h,int d)
 _gk_shadow:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov si,[bp+12]
     call gk_shad
     pop bp
@@ -514,9 +513,7 @@ gk_tail:
 ; int gk_panel(int x,int y,int w,int h,int bar,const char *title,int font,
 ;              int style)
 _gk_panel:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov ah,GK_FACE
     call gk_rcah
     mov al,[bp+18]
@@ -552,9 +549,7 @@ gk_rcah:
 
 ; void gk_titlebar(int x,int y,int w,int h,const char *s,int font,int flags)
 _gk_titlebar:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov si,[bp+12]
     mov dx,[bp+14]
     mov ah,[bp+16]
@@ -587,9 +582,7 @@ gk_tbar:
 
 ; void gk_button(int x,int y,int w,int h,const char *label,int font,int state)
 _gk_button:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov bx,[bp+16]
     mov dl,0FFh
     call gk_btn
@@ -637,9 +630,7 @@ gk_btn:
 
 ; void gk_tab(int x,int y,int w,int h,const char *label,int font,int active)
 _gk_tab:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     push word [bx_h]
     mov ax,[gk_r+6]                 ; the strip ends at the tab's bottom row
     inc ax
@@ -666,17 +657,14 @@ _gk_tab:
 
 ; void gk_keycap(int x,int y,int w,int h,const char *label,int font)
 _gk_keycap:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov ax,GK_SH << 8 | GK_ROUND
     call gk_rcah
     call gk_boxr                    ; outline, SHADE inside
     mov ax,[bp+10]
-    mov cl,5
-    div cl
-    xor ah,ah
-    cmp al,2
+    shr ax,1
+    shr ax,1
+    cmp ax,2
     jae .s
     mov al,2
 .s:
@@ -696,9 +684,7 @@ _gk_keycap:
 
 ; void gk_drop(int x,int y,int w,int h,const char *label,int font)
 _gk_drop:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov ax,GK_FACE << 8 | 2 | GK_ROUND
     call gk_rcah
     call gk_boxr
@@ -709,6 +695,9 @@ _gk_drop:
     sub ax,4
     mov [gk_r+4],ax
     inc word [gk_r]
+    mov al,GK_TEXT
+    call gk_rc
+    xchg ax,di
     mov cx,[bp+10]                  ; the triangle: an h/2 square
     shr cx,1
     mov bx,cx
@@ -718,20 +707,13 @@ _gk_drop:
     add bx,[bp+6]
     mov dx,cx
     mov si,2
-    push ax
-    mov al,GK_TEXT
-    call gk_rc
-    xchg ax,di
-    pop ax
     call gk_arw
     mov ax,(GK_FIT << 8) | GK_TEXT
     jmp gk_tail
 
 ; void gk_banner(int x,int y,int w,int h,const char *s,int font,int fill)
 _gk_banner:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     mov ah,[bp+16]
     mov dl,GK_TEXT
     test ah,ah
@@ -787,10 +769,9 @@ _gk_check:
     jle .done
     mov [gk_t1],ax
     mov ax,[bp+8]
-    mov cl,5
-    div cl
-    xor ah,ah
-    add ax,[bp+4]                   ; from (x + s/5, y + s/2 - 1)
+    shr ax,1
+    shr ax,1
+    add ax,[bp+4]                   ; from (x + s/4, y + s/2 - 1)
     mov bx,[bp+8]
     shr bx,1
     dec bx
@@ -920,9 +901,7 @@ gk_disc:
 
 ; void gk_arrow(int x,int y,int w,int h,int dir,int colour)
 _gk_arrow:
-    push bp
-    mov bp,sp
-    call gk_setr
+    call gk_enter
     call gk_ld
     mov cx,[bp+8]
     mov dx,[bp+10]
@@ -1142,9 +1121,7 @@ _gk_scene:
     add bx,[bp+12]
     cmp ax,[bx]
     je .eq
-    test cl,20h
-    jnz .next
-    jmp short .args
+    xor cl,20h                      ; unequal: draw when bit 5 is clear
 .eq:
     test cl,20h
     jz .next
