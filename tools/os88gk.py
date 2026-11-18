@@ -169,8 +169,10 @@ class Compiler:
                 out.append(int(m.group(1)) + 1)
                 i += len(m.group(0))
             else:
-                if not 32 <= ord(c) < 127:
-                    raise GkError(f"{where}: {c!r}: printable ASCII only")
+                if c == "\u2022":          # the bullet: glyph 127 (SPEC.md 133.7)
+                    c = chr(127)
+                if not 32 <= ord(c) <= 127:
+                    raise GkError(f"{where}: {c!r}: printable ASCII or the bullet only")
                 out.append(ord(c))
                 i += 1
             n += 1
