@@ -11396,6 +11396,69 @@ $(BUILD)/breadxt-check360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbn
 	@python3 tools/os88disk.py --verify $@
 .PHONY: breadxtcheckdisk
 
+# --- Byteopoly, the vintage-computer trading game, in C (SPEC.md 131) -------
+# One C package, BYTEOPLY.O88: the resident image, an eager embedded overlay
+# (73.14.2) and the art as a lazy part after it (131.10), Breadboard XT's
+# shape. Every included .c/.h and .inc is a prerequisite (131.12): make
+# cannot see through #include or %include.
+$(eval $(call CC_PACKAGE,byteoply,byteopoly,BYTEOPLY.OVL,,part,$(BUILD)/BPART.BIN))
+BYTEOPOLYSRC := $(wildcard apps/byteopoly/*.c apps/byteopoly/*.h)
+$(BUILD)/BPART.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h \
+                    $(wildcard apps/byteopoly/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88bpart.py build -o $@
+$(BUILD)/byteoply.raw.asm: $(BYTEOPOLYSRC)
+$(BUILD)/byteoply.bin: $(wildcard apps/byteopoly/*.inc) apps/breadxt/draw.inc \
+                       apps/os88cable.inc apps/os88ui.inc
+
+#> [Applications] byteopoly :: Byteopoly vintage-computer trading game, local and null-modem (SPEC.md 131)
+byteopoly: $(BUILD)/byteoply.o88
+BYTEOPOLYFILES := $(BUILD)/byteoply.o88 $(wildcard apps/byteopoly/disk/*)
+#> [Applications] byteopolydisk :: Byteopoly software disk in all four floppy geometries
+byteopolydisk: $(BUILD)/byteopoly.img $(BUILD)/byteopoly720.img $(BUILD)/byteopoly120.img $(BUILD)/byteopoly360.img
+$(BUILD)/byteopoly.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly720.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly120.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly360.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+
+# The host harness (131.12): every apps/byteopoly/hosttest/t_*.c is one
+# program over the SHIPPING rules/codec/link C with BP_HOST (16-bit stored
+# words), built with ASan/UBSan and run. A supplement to the guest, never a
+# substitute: it proves no SS/DS, stack, thunk or 8088 promotion fact.
+BYTEOPOLYHOSTT := $(patsubst apps/byteopoly/hosttest/%.c,$(BUILD)/bphost/%,$(wildcard apps/byteopoly/hosttest/t_*.c))
+$(BUILD)/bphost/%: apps/byteopoly/hosttest/%.c apps/byteopoly/hosttest/bphost.h $(BYTEOPOLYSRC)
+	@mkdir -p $(BUILD)/bphost
+	$(CC) -std=c99 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+		-DBP_HOST -I apps/byteopoly -I apps/byteopoly/hosttest $< -o $@
+#> [Test] byteopolyhost :: Byteopoly host harness over the shipping C (rules, codec, link) under ASan/UBSan
+byteopolyhost: $(BYTEOPOLYHOSTT)
+	@set -e; for t in $(BYTEOPOLYHOSTT); do echo "== $$t"; $$t; done
+
+#> [Applications] byteopoly-pair :: two 86Box XTs joined by a COM2 null modem, Byteopoly on each
+byteopoly-pair: byteopolydisk
+	python3 tools/wireball-pair.py --game byteopoly
+.PHONY: byteopoly byteopolydisk byteopolyhost byteopoly-pair
+
+# Byteopoly's two-word arithmetic executed on the 8088 (SPEC.md 131.4.1): the
+# shipping bp_math.c under the real C ABI, against hand-worked literals, with
+# a negative control on N. The host harness cannot see an 8088 promotion
+# fact; this can. Rules lane.
+$(eval $(call CC_PACKAGE,bpmath,../tests/bpmath))
+$(BUILD)/bpmath.raw.asm: apps/byteopoly/bp.h apps/byteopoly/bp_math.c
+$(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/bpmath.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] bpmath :: actual 8088 Byteopoly two-word arithmetic fixture and negative control
+bpmath: $(BUILD)/bpmath360.img
+.PHONY: bpmath
+
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and
@@ -19293,6 +19356,7 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # $(ALLAPPSARGS); the songs are not there, MIDIRack's songs' reason - the
 # everything-floppy's RunCPM fill would pay for them.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
+               $(BUILD)/byteoply.o88 \
                $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3) \
                $(WRDEMOWAVS) \
                $(PX_SAMPLES)
@@ -19300,6 +19364,7 @@ LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
 # the everything sets carry the 360KB selection, which $(ALLAPPSARGS) does not
 # name, so the ten pictures are here once and not twice.
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
+               $(addprefix BYTEOPLY:,$(BUILD)/byteoply.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
                $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3) $(WRDEMOWAVS)) \
                $(MIDISONGARGS) $(PX_GALLERY)

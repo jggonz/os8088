@@ -3325,6 +3325,21 @@ SOAK = [
         "WireFleet on VGA/CGA/Hercules: native deployment, bounds/overlap refusal, rotation, removal, auto, Ready, release/cancel and About (SPEC.md 114)",
         needs=("marty", "nasm", "pil"),
         wants=("build/wireflet360.img", "build/os8088-360.img"), timeout=240),
+    Row("byteopolyhost", "soak", py("tests/byteopoly_host.py"), 9.5,
+        "SPEC.md 131.12: the shipped Byteopoly C sources under ASan/UBSan on "
+        "the host - 21 scripted complete games with conservation and "
+        "invariant checks every step, save's validator on every resting "
+        "state, the codec against damaged files, complete cable games under "
+        "dropped/duplicated/corrupted/delayed frames and a pulled cable, and "
+        "the panels' handoff and greying; a salary of 210 turns it red",
+        inputs=("apps/byteopoly/**",)),
+    Row("byteopolylink", "soak", py("tests/byteopoly_link.py"), 120.0,
+        "SPEC.md 131.5-131.7.5: two shipped BYTEOPLY.O88 on two QEMU guests "
+        "joined by a fault-injecting relay - lobby, start, six frame faults, "
+        "a pulled cable, a paired save, close and reopen both, Resume Pair, "
+        "play on to the end with the same digest at every revision",
+        needs=("qemu", "nasm"), timeout=600,
+        wants=("build/byteopoly.img", "build/os8088.img")),
     Row("wireballphysics", "soak", py("tests/wireball.py", "--physics"), 30.0,
         "WireBall 8088 physics: center/end contact, paddle motion, ball extent, "
         "rally acceleration, swept end contact and remaining substep motion (SPEC.md 109)",

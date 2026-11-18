@@ -1,0 +1,63 @@
+# Byteopoly's built-in rules and key list (SPEC.md 131.2, 131.10): one line a
+# row, plain ASCII, 47 characters at most. A line `#KEYS` starts the Keys
+# page (rules lines come before it); every other # line is a comment. tools/os88bpart.py packs it into
+# BPART.BIN as BP_A_HELP; the Rules and Keys panels page it.
+RULES 1/4  The goal
+2-4 players start on BOOT with 1,500 cr.
+Roll two dice, move clockwise, land.
+Buy the computer, or it goes to auction.
+Pass or land on BOOT: collect 200 cr.
+Rent goes to the owner of the space.
+Last player standing wins; broke players
+go bankrupt and leave the match.
+RULES 2/4  Collections and upgrades
+Own every member of a collection: base
+rent doubles while none is mortgaged.
+Then add RAM chips, 1 to 4 a computer,
+and a Workshop as the fifth step.
+Build and sell evenly across the set.
+Selling an upgrade returns half its cost.
+Rent at levels 1-5: 5 15 30 45 60 x base.
+POWER and BBS: 4 x dice, 10 x with both.
+RULES 3/4  Repair Shop and cards
+REPAIR SHOP: visiting is free. CRASH! sends
+you there with no salary. Pay 50 cr or use
+a Recovery Disk, or roll doubles to leave;
+the third failed try costs 50 cr.
+Floppy Find and System Error draw a card.
+Import Duty costs 100 cr, E-waste Fee 75.
+Three doubles in a row send you there too.
+RULES 4/4  Auctions, trades, debt
+A declined buy opens an auction: bids are
+multiples of 10 cr, and you may pass.
+Trade properties, cash and disks one to
+one; the other player accepts or refuses.
+A mortgage pays half price; redeeming
+costs the loan plus 10 percent.
+Short of cash? Sell upgrades, mortgage,
+settle the debt or declare bankruptcy.
+#KEYS
+KEYS 1/3  Play
+Space - roll the dice
+B - buy the computer, or bid
+A - start an auction, or accept a trade
+P - pass in an auction, or pay 50 cr
+T - propose a trade
+C or M - open your Collection
+E - end your turn
+KEYS 2/3  Decisions
+R - roll to leave, reject, or redeem
+S - settle a debt, or sell an upgrade
+U - upgrade the chosen computer
+K - declare bankruptcy, then K to confirm
+F or S - use a disk in the Repair Shop
+Esc - go back, close a panel, or cancel
+Enter - press the focused button
+KEYS 3/3  Anywhere
+F1 - Rules.  F2 - Save.  F3 - Load
+Arrows - move the selection on the board
+Home - select the active player's space
+Tab - move the focus along the buttons
+PgUp and PgDn - page Rules and Keys
+Mouse - click a space, button or row
+Enter or Space - confirm a hand-over
