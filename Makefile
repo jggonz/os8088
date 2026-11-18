@@ -11401,14 +11401,24 @@ $(BUILD)/breadxt-check360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbn
 # (73.14.2) and the art as a lazy part after it (131.10), Breadboard XT's
 # shape. Every included .c/.h and .inc is a prerequisite (131.12): make
 # cannot see through #include or %include.
-$(eval $(call CC_PACKAGE,byteoply,byteopoly,BYTEOPLY.OVL,,part,$(BUILD)/BPART.BIN))
+# The second art part BPART2.BIN (131.10.7) is art2.h's IDs: sprites2.txt,
+# the tx-*.txt text records, the kit's scenes and the music, each tool only
+# when it exists - so its prerequisites name the tools by wildcard.
+$(eval $(call CC_PACKAGE,byteoply,byteopoly,BYTEOPLY.OVL,,part,$(BUILD)/BPART.BIN $(BUILD)/BPART2.BIN))
 BYTEOPOLYSRC := $(wildcard apps/byteopoly/*.c apps/byteopoly/*.h)
 $(BUILD)/BPART.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h \
                     $(wildcard apps/byteopoly/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
 	python3 tools/os88bpart.py build -o $@
+$(BUILD)/BPART2.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h apps/byteopoly/art2.h \
+                     apps/byteopoly/bptx.h $(wildcard apps/byteopoly/art/*.txt) \
+                     $(wildcard tools/os88gk.py tools/os88gkmus.py) | $(BUILD)
+	python3 tools/os88bpart.py build2 -o $@
 $(BUILD)/byteoply.raw.asm: $(BYTEOPOLYSRC)
 $(BUILD)/byteoply.bin: $(wildcard apps/byteopoly/*.inc) apps/breadxt/draw.inc \
+                       $(wildcard apps/cc/gk.inc apps/cc/gkmus.inc) \
                        apps/os88cable.inc apps/os88ui.inc
+$(BUILD)/byteoply.raw.asm: apps/cc/gk.h
+$(BUILD)/byteoply.bin: apps/cc/gkmus.inc
 
 #> [Applications] byteopoly :: Byteopoly vintage-computer trading game, local and null-modem (SPEC.md 131)
 byteopoly: $(BUILD)/byteoply.o88
@@ -11478,6 +11488,25 @@ $(BUILD)/gkdemo360.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
 #> [Test] gkdemo :: the C game kit's gallery: every gk_ widget and a compiled scene (SPEC.md 132)
 gkdemo: $(BUILD)/gkdemo.img $(BUILD)/gkdemo360.img
 .PHONY: gkdemo
+
+# The game kit's music player (SPEC.md 132.8) as a jukebox: GKMJUKE.O88 plays
+# every song and effect of Byteopoly's banks, so the player can be LISTENED
+# to on an AdLib/SB or the speaker before a game wires it. A gate package;
+# its one eager part holds the two banks (os88gkmus.py part).
+$(eval $(call CC_PACKAGE,gkmjuke,../tests/gkmusdemo,,$(BUILD)/GKMBANKS.BIN))
+$(BUILD)/GKMBANKS.BIN: tools/os88gkmus.py apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt | $(BUILD)
+	python3 tools/os88gkmus.py part -o $@ apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt
+$(BUILD)/gkmjuke.raw.asm: apps/cc/gk.h
+$(BUILD)/gkmjuke.bin: apps/cc/gkmus.inc apps/breadxt/draw.inc
+$(BUILD)/gkmjuke.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/gkmjuke360.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] gkmusdemo :: the game kit's music and effects player as a jukebox over Byteopoly's banks (SPEC.md 132.8)
+gkmusdemo: $(BUILD)/gkmjuke.img $(BUILD)/gkmjuke360.img
+.PHONY: gkmusdemo
 
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw

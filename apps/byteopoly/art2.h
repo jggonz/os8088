@@ -20,14 +20,14 @@
 /* ---- art lane: 256..383 ------------------------------------------------ */
 /* board corners and specials, FULL cells (about 48x30) */
 #define BP_A2_C_BOOT      256   /* red arrow pointing UP (clockwise play) 24x24 */
-#define BP_A2_C_REPAIR    257   /* big wrench, 40x32 */
-#define BP_A2_C_SWAP      258   /* two overlapping floppies, 40x32 */
+#define BP_A2_C_REPAIR    257   /* big wrench, 40x28 (fits under a two-line corner label) */
+#define BP_A2_C_SWAP      258   /* two overlapping floppies, 40x28 */
 #define BP_A2_C_CRASH     259   /* CRT monitor with a cracked green screen, 40x32 */
 #define BP_A2_C_FLOPPY    260   /* Floppy Find cell icon, blue floppy, 24x24 */
 #define BP_A2_C_SYSERR    261   /* System Error cell icon, red warning triangle, 28x24 */
 #define BP_A2_CHIP        262   /* RAM-chip upgrade on a collection band, 14x7 */
 /* centre (idle board) */
-#define BP_A2_MASCOT_UP   263   /* beige PC mascot, green smile, finger up, 72x72 */
+#define BP_A2_MASCOT_UP   263   /* beige PC mascot, green smile, finger up, 96x84 (1-board.png's scale) */
 #define BP_A2_CARD_FF_T   264   /* Floppy Find card tilted left, lettered, 72x80 */
 #define BP_A2_CARD_SE_T   265   /* System Error card tilted right, lettered, 72x80 */
 #define BP_A2_DIE1        266   /* white 3D die with a dither shadow, 32x32, faces 1..6 */
@@ -43,7 +43,7 @@
 #define BP_A2_TOK_MOUSE   275
 #define BP_A2_TOK_JOY     276
 #define BP_A2_TOK_CASS    277
-#define BP_A2_TOKL_FLOPPY 278   /* 40x36 */
+#define BP_A2_TOKL_FLOPPY 278   /* 32x32 (the turn header's token in 1-board.png) */
 #define BP_A2_TOKL_MOUSE  279
 #define BP_A2_TOKL_JOY    280
 #define BP_A2_TOKL_CASS   281
@@ -63,7 +63,11 @@
 #define BP_A2_COINS       293   /* a stack of gold coins, 28x22 */
 #define BP_A2_LOCK        294   /* a yellow padlock, 16x18 */
 #define BP_A2_GAVEL       295   /* an auction gavel, 28x24 */
-/* black-and-white twins (where the core's 2x2 mapping turns a picture to mush) */
+/* black-and-white twins (where the core's 2x2 mapping turns a picture to mush).
+ * Only BP_A2_M_C_BOOT is drawn: every other colour picture was checked through
+ * the core's mono mapping (SPEC.md 131.10.5) and reads on 1bpp as it is, so the
+ * IDs below it have NO record (offset 0, draws nothing). On 1bpp draw the
+ * colour ID for those; the ID stays reserved in case a twin is wanted later. */
 #define BP_A2_M_TOK_FLOPPY  296
 #define BP_A2_M_TOK_MOUSE   297
 #define BP_A2_M_TOK_JOY     298
@@ -79,7 +83,12 @@
 #define BP_A2_M_MASCOT_UP   308
 #define BP_A2_M_CARD_FF_T   309
 #define BP_A2_M_CARD_SE_T   310
-/* 311..383: free for the art lane (log each addition) */
+/* status LEDs (2-auction.png's "Cable linked" ball): 10x10 with a 1px shadow */
+#define BP_A2_LED_GREEN   311   /* linked / ready */
+#define BP_A2_LED_RED     312   /* disconnected */
+#define BP_A2_LED_YELLOW  313   /* waiting */
+#define BP_A2_M_LED_RED   314   /* 1bpp: a black ball (green and red both map to white) */
+/* 315..383: free for the art lane (log each addition) */
 
 /* ---- sound lane: 384..399 ---------------------------------------------- */
 #define BP_A2_MUSIC       384   /* the song bank (SPEC.md 132.8) */
@@ -92,7 +101,8 @@
 #define BP_A2_SC_PANB     430   /* 430..439 panels-B lane (every other centre panel) */
 #define BP_A2_SC_LOBBY    440   /* 440..449 lobby lane (New Game, cable lobby) */
 
-/* ---- text records (bx_artstr lines), one per source file: prep lane ----- */
+/* ---- text records, one per source file (indexed; a C name in bptx.h is a
+ * TEXT HANDLE into one, SPEC.md 131.10.7; source art/tx-*.txt): prep lane - */
 #define BP_A2_TX_APP      460
 #define BP_A2_TX_PANELS   461
 #define BP_A2_TX_SETUP    462

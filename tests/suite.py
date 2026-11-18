@@ -3341,6 +3341,16 @@ SOAK = [
         "dropped/duplicated/corrupted/delayed frames and a pulled cable, and "
         "the panels' handoff and greying; a salary of 210 turns it red",
         inputs=("apps/byteopoly/**",)),
+    Row("gkmus", "soak", py("tests/unit/t_gkmus.py"), 0.1,
+        "SPEC.md 132.8: Byteopoly's song and effects banks walked by a decoder "
+        "written from the spec, not the compiler's - every stream ends, every "
+        "pattern returns, every note a table entry in OSAPI_SND_FM's range, "
+        "every voice the same length from its start and its loop point (a "
+        "seamless loop), 5 KB - and bp_app.c's BP_MUS_*/BP_FX_* and bp.h's "
+        "BP_SND_* in the files' order. Swapping two sfx blocks turns it red. "
+        "Soak until the owner's tierlock line puts it in fast (0.06 s)",
+        inputs=("apps/byteopoly/art/*.txt", "apps/byteopoly/bp_app.c",
+                "apps/byteopoly/bp.h", "tools/os88gkmus.py")),
     Row("byteopolylink", "soak", py("tests/byteopoly_link.py"), 120.0,
         "SPEC.md 131.5-131.7.5: two shipped BYTEOPLY.O88 on two QEMU guests "
         "joined by a fault-injecting relay - lobby, start, six frame faults, "

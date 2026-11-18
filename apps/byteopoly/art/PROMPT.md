@@ -96,3 +96,45 @@ screen." followed by the preamble; the full text is kept at
 Measured: BPART.BIN 52,033 bytes.
 
 Update (D14): the LARGE cut was re-made at 48x32 from master1 (the prompt above asked for 64x40 cells; the draft fits each picture to its bbox). BPART.BIN 52,033 bytes, lz4 16,180.
+
+## Master 5: the uplift's pictures (art lane U6, 2026-11-17)
+
+`art/sprites2.txt` (BPART2.BIN, SPEC.md 131.10.8) was drawn after the owner's
+five concept boards (`1-board.png` .. `5-linklost.png` in the owner's intake:
+1448x1086 renders of a 640x480 VGA screen, about 2.26 render pixels per VGA
+pixel). The boards ARE the design, so no image generation was used this round
+and there is no prompt: `master5.png` is a sheet of the crops of those boards
+that each picture was drawn after, labelled with its art2.h name. `BP_A2_GAVEL`
+has no picture on the boards and was drawn without one.
+
+Method. A crop-and-quantise draft (each target pixel takes the EGA colour with
+the most area, black favoured, the board's ground flood-filled to the key) came
+out mushy at these sizes - doubled outlines, smeared letters, stray dither - so
+every picture was instead CONSTRUCTED on its logical grid and then finished by
+hand in the text: polygons, ellipses and stamped hand-drawn parts (the gloves,
+the chip, the padlock, the rays, BOOT's small arrows), one 1-pixel black
+outline, light from the top-left (a white top-left edge, a darker bottom-right
+edge), and a drop shadow as a black checker on the key so it dithers over
+whatever ground the picture lands on. Beige plastic, which EGA does not have, is
+white for lit faces and a white/brown checker for faces in shade (it reads as
+tan, close to the boards' (208,176,144)), solid brown only at the far edge. The
+two cards were built upright at 8x with their lettering set in a bold sans
+(the host's Tahoma Bold, used only to draw the bitmap), turned 10 degrees left
+(Floppy Find) and 11 right (System Error) as the boards tilt them, and voted
+down to 1x with ink favoured. The construction scripts were throwaway: from the
+first commit on, the text is the source, as for sprites.txt.
+
+Sizes that differ from art2.h's first plan, measured against the boards at the
+FULL layout's 56x50 cells: the mascot is 96x84 (the board draws it about 105 VGA
+pixels wide; 72x72 was half its area), the turn header's tokens are 32x32 (the
+board's is 33x31), and the Repair Shop and Swap Meet corners are 40x28 so they
+fit under a two-line corner label in a 50-pixel cell.
+
+Mono: every colour picture was looked at through the core's 2x2 mapping
+(SPEC.md 131.10.5) on white and on the centre's ground. Only BOOT's new arrow has
+a twin (`BP_A2_M_C_BOOT`, black with a white lit edge), and the red status LED
+(`BP_A2_M_LED_RED`, a black ball: green and red both map to white); the rest read
+as they are, so the other reserved `_M` IDs have no record. Measured: 45
+records, 29,171 bytes of packed 4bpp sprite records (the LEDs, IDs 311..314,
+were added for the link status ball of 2-auction.png). BOOT's four arrows in `sprites.txt`
+were redrawn pointing UP at their old sizes, so BPART.BIN stays 55,473 bytes.

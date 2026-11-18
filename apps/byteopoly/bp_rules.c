@@ -8,12 +8,12 @@
  * board constant (28 spaces, 18 props, 4 seats, 8 cards). */
 
 static const char *bp_errs[BP_ECOUNT] = {
-    "OK", "Not now", "Not your decision", "Out of date - try again",
-    "Not enough cash", "Not yours", "The rules refuse that", "Too large",
-    "Bad request", "Out of the game", "Invalid game state", "Too deep",
-    "Waiting for the other PC", "Link paused", "Played on the other PC",
-    "Disk error", "Bad file", "Wrong version", "Damaged data", "Wrong match",
-    "Disk full or protected"
+    "OK", TR_NOT_NOW, TR_NOT_YOUR_DECISION, TR_OUT_OF_DATE,
+    TR_NOT_ENOUGH_CASH, TR_NOT_YOURS, TR_THE_RULES_REFUSE, TR_TOO_LARGE,
+    TR_BAD_REQUEST, TR_OUT_OF_THE, TR_INVALID_GAME_STATE, TR_TOO_DEEP,
+    TR_WAITING_FOR_THE, TR_LINK_PAUSED, TR_PLAYED_ON_THE,
+    TR_DISK_ERROR, TR_BAD_FILE, TR_WRONG_VERSION, TR_DAMAGED_DATA, TR_WRONG_MATCH,
+    TR_DISK_FULL_OR
 };
 
 /* phase masks: bit p = BP_PH_p */

@@ -20,18 +20,22 @@
 %define CC_HAS_FDLG
 %define CC_HAS_OVL
 %define CC_OVL_PART
-%assign CC_PARTS_AFTER_OVL 1      ; BPART.BIN follows the overlay
+%assign CC_PARTS_AFTER_OVL 2      ; BPART.BIN and BPART2.BIN follow the overlay
 %include "cc/crt0.asm"
-; The overlay first and eager; the art after it and LAZY, fetched by
-; os88_main when it fits (SPEC.md 131.10), as Breadboard XT does.
-    CC_PARTS_BEGIN 2
+; The overlay first and eager; the two art parts after it and LAZY, each its
+; own claim, both fetched by os88_main and REQUIRED (SPEC.md 131.10.7).
+    CC_PARTS_BEGIN 3
       CC_OVL_ROW                                   ; 0 the overlay
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP        ; 1 BPART.BIN
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP        ; 2 BPART2.BIN (art2.h, 256..)
     CC_PARTS_END
 %include "byteoply.gen.asm"
 %include "os88ui.inc"
 %define BX_CORE_ONLY                ; the band core without BREADXT's own tail
+%define BX_ART2                     ; art IDs 256.. in BPART2.BIN, indexed text,
+%define BX_TXID 460                 ; text handles from BP_A2_TX_APP (131.10.7)
 %include "breadxt/draw.inc"
 %include "byteopoly/bp_cable.inc"        ; link lane: the cable bridge
 %include "byteopoly/bp_app.inc"          ; app lane: the alert bridge
+%include "cc/gkmus.inc"                  ; sound lane: the kit's music and effects (132.8)
 CC_IMAGE_END

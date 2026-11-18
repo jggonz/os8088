@@ -1,0 +1,74 @@
+# Byteopoly's effects (SPEC.md 131.9.5, 132.8). Original. The source of the
+# effects bank BP_A2_SFX; tools/os88gkmus.py compiles it. Each effect is a
+# list of tones on the tone tier (the speaker, or channel 8 of an AdLib/SB),
+# PITCH:TICKS or HZ:TICKS at the OS's 18.2 Hz, `r` a rest, `slide A B N` N
+# one-tick steps. `duck` silences the FM music while it plays.
+#
+# THE ORDER IS THE EFFECT NUMBER, and bp_app.c's BP_FX_* name them (the
+# first eight are bp.h's BP_SND_* cues, in their order); tests/unit/t_gkmus.py
+# holds the three together.
+
+sfx dice           # 0 BP_SND_DICE: two dice rattling in a cup
+  1400:1 600:1 1150:1 480:1 1300:1 700:1 900:1
+end
+sfx buy            # 1 BP_SND_BUY: the till drawer, "ka-ching"
+  C6:1 r:1 E6:1 G6:1 C7:3
+end
+sfx rent            # 2 BP_SND_RENT: coins going out
+  G5:2 E5:2 C5:3
+end
+sfx floppy          # 3 BP_SND_CARD: a Floppy Find card - a drive chirps, a chime
+  2200:1 r:1 2200:1 E6:2 A6:3
+end
+sfx crash duck      # 4 BP_SND_CRASH: CRASH! to the Repair Shop
+  slide 700 90 8
+  r:1 70:3
+end
+sfx bankrupt duck   # 5 BP_SND_BANKRUPT: out of the game
+  G4:3 F#4:3 F4:3 E4:6
+end
+sfx victory duck    # 6 BP_SND_WIN: the winner (with music off; on, the fanfare)
+  C5:2 E5:2 G5:2 C6:6
+end
+sfx error           # 7 BP_SND_ERROR: refused
+  150:2 r:1 150:3
+end
+sfx step            # 8 a token steps one space
+  1800:1
+end
+sfx salary          # 9 BOOT pays salary
+  G5:1 C6:1 E6:1 G6:1 C7:3
+end
+sfx syserr          # 10 a System Error card: a two-tone alarm
+  880:2 660:2 880:2 660:2
+end
+sfx upgrade         # 11 RAM upgraded
+  slide 400 1600 6
+  2000:2
+end
+sfx mortgage        # 12 mortgaged or redeemed
+  D4:3 A3:4
+end
+sfx bid             # 13 a bid
+  A5:1 E6:2
+end
+sfx sold            # 14 the gavel: going, going, gone
+  300:1 r:2 300:1 r:2 240:3
+end
+sfx tradeok         # 15 trade accepted
+  C5:2 G5:2 C6:3
+end
+sfx tradeno         # 16 trade rejected or withdrawn
+  G4:2 C4:4
+end
+sfx linklost duck   # 17 the cable went quiet
+  slide 1200 300 6
+  r:1 300:2 r:1 300:2
+end
+sfx linkok          # 18 the cable is back
+  slide 300 1200 6
+  E6:2
+end
+sfx yourturn        # 19 your turn
+  G5:2 C6:3
+end
