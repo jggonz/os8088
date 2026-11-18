@@ -255795,31 +255795,239 @@ docs/plans/BYTEOPOLY-UPLIFT-PLAN.md is the story list.
 
 ### 132.1 Scope and inclusion
 
-Reserved for the kit lane.
+The drawing half is `apps/cc/gk.inc`, near cdecl assembly (§73.3: arguments
+at `[bp+4]`.., BP, DS and DF preserved, everything else the caller's) with
+the `gk_` prefix, over the band core `apps/breadxt/draw.inc` (§130.6.2),
+which it calls by its INTERNAL register entries (`bx_solid`, `bx_rect`,
+`bx_art_at`, `bx_face`, `bx_gwid`) as well as its C ones, so it must follow
+the core in the same assembly:
+
+    %define BX_CORE_ONLY
+    %include "breadxt/draw.inc"
+    %include "cc/gk.inc"
+
+A package `#include`s `cc/gk.h`. The kit adds no kernel facility, no OSAPI
+slot and no heap claim: its bss is 102 bytes (a 64-byte text buffer, the
+scene interpreter's ten arguments and the current rect), its data 68 bytes
+(the two role tables, the bevel ring table and the scene op table).
+
+Every `gk_` drawing call is legal only while a strip is composed (between
+`bx_new` and `bx_out`) and draws only into the band, clipped by the core to
+the strip; a panel or a scene is drawn WHOLE for every strip it touches and
+costs per strip only what falls inside it. Nothing reaches the glass but
+`bx_out`, so layering inside a strip (a face filled, then its edge, then its
+label) is not the double draw §6.6 forbids. Coordinates are screen pixels,
+`w`/`h` sizes, colours EGA indices that the core turns into 2x2 patterns on
+1bpp. `gk_init`, `gk_theme`, `gk_role`, `gk_scene_rect` and
+`gk_scene_size` draw nothing and are legal at any time after `bx_setup`.
 
 ### 132.2 The role table
 
-Reserved for the kit lane.
+Every colour the kit draws with comes from the ROLE TABLE (16 bytes, an EGA
+index per role), except a label colour a caller passes and the drawn check
+mark (green 2, black on 1bpp). `gk_init(bpp)` picks the kit's colour table
+when `bpp >= 4`, else the mono one; `gk_theme(t)` swaps in a caller's static
+table (read in place), `gk_theme(0)` restores the default `gk_init` chose.
+`gk_role(r)` answers a role's colour now, for a package drawing its own
+pieces in the same theme. Until `gk_init` runs the colour table is in force.
+
+| role | colour | mono | used for |
+|---|---|---|---|
+| `GK_R_OUTLINE` 0 | black 0 | 0 | the 1 px outline; the emboss under a title |
+| `GK_R_FACE` 1 | light grey 7 | 15 | panel, button and key-cap side faces |
+| `GK_R_LIGHT` 2 | white 15 | 15 | the lit (top/left) edge |
+| `GK_R_SHADE` 3 | dark grey 8 | 0 | the shaded (bottom/right) edge, key-cap sides |
+| `GK_R_FIELD` 4 | white 15 | 15 | check and radio wells, sunken fields |
+| `GK_R_TEXT` 5 | black 0 | 0 | labels on face and field, the radio dot, the drop-down triangle |
+| `GK_R_TITLE` 6 | blue 1 | 0 | title-bar ground |
+| `GK_R_TITLELT` 7 | light blue 9 | 8 | the title bar's top line |
+| `GK_R_TITLETX` 8 | white 15 | 15 | title text |
+| `GK_R_FOCUS` 9 | blue 1 | 0 | a focused button's face |
+| `GK_R_FOCUSTX` 10 | white 15 | 15 | its label |
+| `GK_R_HILITE` 11 | yellow 14 | 0 | the active tab, banners, `GK_B_HILITE` |
+| `GK_R_HILITETX` 12 | black 0 | 15 | text on a highlight |
+| `GK_R_DISABLED` 13 | dark grey 8 | 0 | a disabled label (1bpp adds the screen door) |
+| `GK_R_DROP` 14 | black 0 | 0 | drop-shadow ink |
+| `GK_R_KEY` 15 | white 15 | 15 | a key cap's top face |
+
+On 1bpp, white surfaces carry black edges, so a bevel reads as a black
+outline with a heavier black bottom/right, the Mac System 1 convention; a
+highlight is INVERSE (black ground, white text), because yellow is white
+there and would vanish into a white face; title bars are black with a 50%
+top line. The core's 1bpp text rule (§130.6.2: white only where the colour
+is all lit) is why every mono text role is 0 or 15.
 
 ### 132.3 The 3D look
 
-Reserved for the kit lane.
+Light comes from the top left. Every surface is a stack of RINGS drawn
+outermost first, each one pixel wide: a ring's top row and left column take
+its first role, its bottom row and right column its second (so the
+top-right and bottom-left corner pixels take the second), and `-` draws no
+side. After the rings the face fill covers what is left inside.
+
+| style | rings, outermost first | inside from the edge |
+|---|---|---|
+| `GK_FLAT` 0 | OUTLINE/OUTLINE | 1 |
+| `GK_RAISED` 1 | OUTLINE/OUTLINE, LIGHT/SHADE | 2 |
+| `GK_RAISED2` 2 | OUTLINE/OUTLINE, LIGHT/SHADE, -/SHADE | 3 (light 1 px, shade 2 px) |
+| `GK_SUNKEN` 3 | SHADE/LIGHT | 1 |
+| `GK_SUNKEN2` 4 | SHADE/LIGHT, OUTLINE/FACE | 2 |
+| `GK_ETCHED` 5 | SHADE/LIGHT, LIGHT/SHADE | 2 |
+| (pressed) 6 | OUTLINE/OUTLINE, SHADE/- | 2 |
+| (default) 7 | OUTLINE/OUTLINE, OUTLINE/OUTLINE, LIGHT/SHADE, -/SHADE | 4 |
+
+Styles 6 and 7 are the kit's own (a pressed button, a default button's
+extra ring); a caller may pass them to `gk_box` too. `GK_ROUND` leaves the
+four corner pixels of the OUTERMOST ring undrawn, so whatever is beneath
+shows through and the corner reads as a one-pixel bevel. `GK_SHADOW` casts
+`GK_DROPW` (3) px of DROP right and down, outside the rect: the strip
+`(x+w .. x+w+2, y+3 .. y+h+2)` and the strip `(x+3 .. x+w-1, y+h .. y+h+2)`.
+
+**A shadow is a screen door, not a fill**: only the pixels with `x + y` even
+take the DROP colour and the others keep what was under them, so a shadow
+darkens a teal dither, a cream cell or a white well alike, and on 1bpp is a
+50% black checker. It is drawn a strip row at a time with the core's dot
+mask (`bx_pat` 0AAh on even rows, 55h on odd, one `bx_rect` per row inside
+the strip). The same door in the FACE colour greys a disabled label on
+1bpp, where a grey text colour would be black.
 
 ### 132.4 Surfaces and text
 
-Reserved for the kit lane.
+- `gk_box(x,y,w,h,style,fill)`: the shadow (when asked), the rings, then
+  `fill` over the inside (`-1` leaves it alone, so a box can frame what is
+  already in the band).
+- `gk_hline(x,y,w,raised)`, `gk_vline(x,y,h,raised)`: a two-pixel line, a
+  GROOVE (SHADE then LIGHT, `raised` 0) or a RIDGE (LIGHT then SHADE), drawn
+  as one ring of a w x 2 (2 x h) rect; its two end pixels are the ring's
+  corners.
+- `gk_shadow(x,y,w,h,d)`: the screen door alone, `d` px right and down.
+- `gk_text(x,y,w,s,colour,font,flags)`: `s` in a `w`-wide slot, `y` the
+  face's top row. `GK_LEFT` puts it at `x`, `GK_CENTRE` at
+  `x + (w - width) / 2`, `GK_RIGHT` at `x + w - width` (a negative slack
+  puts it left of `x`: a zero `w` centres on `x`). `GK_FIT` cuts it at the
+  last whole glyph that fits in `w` (no ellipsis). `GK_EMBOSS` draws a copy
+  in OUTLINE 1 px down and right first, on colour only (on 1bpp a dark copy
+  under light text on a dark ground is invisible, and under dark text it is
+  a blur). At most 63 characters are drawn. Answers the drawn width.
+- `gk_textbox(x,y,w,h,...)`: the same, its top row at
+  `y + (h - fontheight) / 2`.
 
 ### 132.5 Widgets
 
-Reserved for the kit lane.
+All are built from the rings, the door and the text above; heights are the
+caller's, and 132.9 gives the ones the WIN16 faces want.
+
+| widget | drawn as |
+|---|---|
+| `gk_panel(x,y,w,h,bar,title,font,style)` | `gk_box(style, FACE)`; with `bar` > 0 a `gk_titlebar` one pixel inside the rings, `(xi+1, yi+1, wi-2, bar)`, title centred. Answers the first row under the bar, `yi + bar + 2` (`yi`, the inside's top, with no bar) |
+| `gk_titlebar(x,y,w,h,s,font,flags)` | TITLE fill, a TITLELT top row, `s` embossed and cut to fit in TITLETX; `flags` is the alignment, `GK_LEFT` indenting 6 px |
+| `gk_button(...,state)` | `GK_RAISED2 \| GK_ROUND \| GK_SHADOW` (DEFAULT: style 7; PRESSED: style 6, no shadow, label 1 px down-right), label centred and cut to fit in the inside. Faces and labels per state: NORMAL, DEFAULT and PRESSED FACE/TEXT, FOCUS FOCUS/FOCUSTX, HILITE HILITE/HILITETX, DISABLED FACE/DISABLED plus the 1bpp screen door over the inside |
+| `gk_keycap(x,y,w,h,label,font)` | an OUTLINE ring (round), SHADE inside; FACE over the upper-left body `(x+1, y+1 .. x+w-4, y+h-2-s)`, KEY over the top face `(x+2, y+1 .. x+w-5, y+h-3-s)` with `s = max(2, h / 5)` the cap's front: a light left side, a 2 px shaded right side, an `s` px shaded front; label centred on the top face in TEXT |
+| `gk_tab(...,active)` | a button face without its bottom edge (the box runs 3 px past `y+h` and the strip is cut at `y+h`), no shadow; active: HILITE face, 2 px taller (from `y-2`) |
+| `gk_check(x,y,size,on,tick)` | style 6 over FIELD; on: the art sprite `tick` (when `tick` > 0 and present) centred on the box, else a drawn tick of 2x2 dots in green 2 from `(x+s/5, y+s/2-1)` down-right to the bottom then up-right to `(x+s-3, y+1)`, `s` = size |
+| `gk_radio(x,y,size,on)` | a disc of OUTLINE `size` across, a FIELD disc 2 smaller inside, on: a TEXT disc `size - 6` across; a disc row spans the columns whose centres lie within `size/2` of the disc's centre |
+| `gk_drop(x,y,w,h,label,font)` | `GK_RAISED2 \| GK_ROUND` over FACE; label left with a 3 px indent, cut to `w - h - 4`; a TEXT down-triangle in the `h/2`-square at `(x+w-h+h/4, y+h/4)` |
+| `gk_banner(x,y,w,h,s,font,fill)` | `GK_RAISED \| GK_ROUND` over `fill` (`-1`: HILITE), `s` centred in HILITETX |
+| `gk_arrow(x,y,w,h,dir,colour)` | a solid triangle centred in the box, apex toward `dir`: `n = min(along, (across + 1) / 2)` lines, line k (from the base) `2(n-1-k)+1` px long, so the base is odd and the apex one pixel |
+| `gk_sprshadow(x,y,id,d)` | the sprite's SILHOUETTE as a screen door in DROP at `(x+d, y+d)` (each run of non-transparent pixels on a row one door span), then the sprite. Answers its width, 0 absent |
 
 ### 132.6 Scenes
 
-Reserved for the kit lane.
+A SCENE is a record in an art part (looked up by `bx_art_at`, so it may live
+in any part the core routes), compiled by `tools/os88gk.py` (132.7):
+
+    +0  db 'S'                  magic; anything else draws nothing, answers 0
+    +1  dw w, dw h              the scene's declared size (gk_scene_size)
+    +5  db ntags
+    +6  ntags x { db tag, dw x, dw y, dw w, dw h }    (gk_scene_rect)
+    then ops, then db 0:
+        db len                  bytes of this op, len included
+        db op                   bits 0-5 the op number, bit 7 = conditional
+        dw top, dw bot          the rows it can touch, relative, inclusive
+        [db c, db k]            when conditional (below)
+        args...                 to the end of the op
+
+`gk_scene` skips an op with `len` and no decoding whenever
+`y + bot < bx_y0` or `y + top >= bx_y0 + bx_h`: a strip pays a few compares
+for each op outside it. A conditional op reads `v = iv[c & 31]` and `k` (a
+signed byte); bit 5 of `c` set draws it when `v == k`, clear when `v != k`
+(`if %n` is clear with k 0, `if !%n` set with k 0). Bits 6-7 of `c` are 0.
+
+Each ARG is one of:
+
+| byte | value |
+|---|---|
+| 00h-7Fh | that number |
+| 80h-9Fh | `iv[b - 80h]` (int slot `%n`) |
+| A0h-BFh | `sv[b - A0h]` (string slot `$n`) |
+| C0h, word | the word |
+| C1h, bytes, 00h | a string literal; inside it a byte 01h-1Fh inserts `sv[b - 1]` |
+| C2h, role | the role's colour now (`gk_role`) |
+| E0h-FFh | -32 .. -1 |
+
+C3h-DFh are refused (nothing is drawn after them). Literals and slot
+insertions are copied into the kit's 64-byte text buffer (at most 63
+characters, the rest dropped). Args 0 and 1 of every op are x and y and get
+the scene origin added; for `fill`, `dither` and `dots` args 2 and 3 are x2
+and y2 and get it too. The arguments are then pushed and the op's routine
+called with the C convention:
+
+| op | routine | op | routine | op | routine |
+|---|---|---|---|---|---|
+| 0 | `gk_box` | 7 | `gk_titlebar` | 14 | `gk_banner` |
+| 1 | `gk_hline` | 8 | `gk_button` | 15 | `gk_arrow` |
+| 2 | `gk_vline` | 9 | `gk_keycap` | 16 | `gk_sprshadow` |
+| 3 | `gk_shadow` | 10 | `gk_tab` | 17 | `bx_spr` |
+| 4 | `gk_text` | 11 | `gk_check` | 18 | `bx_fill` |
+| 5 | `gk_textbox` | 12 | `gk_radio` | 19 | `bx_dither` |
+| 6 | `gk_panel` | 13 | `gk_drop` | 20 | `bx_dots` |
+
+An op number past 20 ends the scene. At most ten arguments. `gk_scene`
+answers 1 when the record was found (drawn or wholly outside the strip), 0
+when absent; `gk_scene_rect` copies a tag's static rect (tags never carry
+slots, so the compiler refuses one on an op whose rect is not constant) and
+`gk_scene_size` the declared size, each answering 1 found or 0.
 
 ### 132.7 The scene compiler
 
-Reserved for the kit lane.
+`tools/os88gk.py` is the only writer of the format. The build interface is
+`compile_scenes(paths, symbols) -> {id: bytes}` (every `scene` in the files,
+`symbols` every `#define NAME <int>` the package's art headers hold); the
+CLI is `--selfcheck` (compiles its own sample, decodes it and checks every
+field) and `dump FILE [--sym HEADER ...]` (prints each compiled op).
+
+    # a comment; blank lines are ignored
+    fonth BP_F_TEXT13 13            # rows a font takes (default 24): the row range
+    scene BP_S_LANDING 400 120      # id (a symbol or a number), w, h
+      panel 0 0 400 120 16 "YOU LANDED ON $0" BP_F_TEXT13 raised|shadow
+      textbox 8 24 200 14 $1 @TEXT BP_F_TEXT13 left|fit
+      button 8 90 96 20 "[B] Buy" BP_F_TEXT13 %2 #1
+      if %3 banner 120 90 120 20 "Your turn" BP_F_TEXT13 -1
+      if %4=2 {
+        arrow 300 40 16 16 1 red
+      }
+    end
+
+One op per line, its arguments POSITIONAL in the `gk.h` order (for `fill`,
+`dither` and `dots`: `x y w h` and the rest, converted to inclusive corners,
+which must then be constants). An argument is a number (`-1`, `0x10`), a
+symbol, a `|`-joined set of the kit's constants (`GK_RAISED`, or lower case
+without the prefix: `raised|round|shadow`, `centre|emboss|fit`, `focus`,
+`pressed`), an EGA colour name (`black` .. `white`, `lightgrey`,
+`darkgrey`), `@ROLE` (`@FACE`, a role's colour at draw time), `%n` or `$n`
+(n < 32), or a `"literal"` (`$n` inside it inserts that string slot, `$$` is
+a dollar sign; 63 characters at most). A trailing `#tag` (0-255 or a symbol)
+makes the op's rect findable by `gk_scene_rect`. A leading `if %n`,
+`if !%n`, `if %n=k` or `if %n!=k` (k -128..127) makes it conditional; the
+same head with `{` applies to every op up to the matching `}`, and blocks do
+not nest. The compiler refuses, naming the file and line: an unknown op or
+name, a wrong argument count, a slot past 31, a string where a number goes
+(or the reverse), a tag on an op without a constant rect, a duplicate tag or
+scene id, a record over 4,096 bytes, and anything after a `scene` with no
+`end`. The row range of each op is computed from its arguments, its shadow,
+emboss or tab overhang and the declared font height (24 for a font with no
+`fonth`, 8 for the kernel's, a sprite 255 rows); an op whose y or height
+comes from a slot is given every row.
 
 ### 132.8 Music and effects
 
