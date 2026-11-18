@@ -255941,6 +255941,15 @@ dialog's default name, a question an alert shows while it is up - a ring
 slot would not outlive it), the board's names (`bp_board.c`), single characters, and the
 templates whose layout code indexes into (`ovl_msg`'s "Banker COM0 2400 rev ").
 
+**The bullet.** The concept boards separate words with a bullet
+("AUCTION • COMMODORE 64"), which no WIN16 strike has, so every Byteopoly font
+carries one more glyph, code 127: a 2 px (3 px from 12 rows) square dot centred
+on the face's x-height with 2 px either side, made by `os88bpart.py` and passed
+to the shared packer as an extra glyph (`os88bbart.pack_font(name, extra)`;
+without it the record is byte-identical, so Breadboard XT's art does not
+change). A `tx-*.txt` line or a scene literal writes it as `•` (or `\177`
+in a text file). Cost: 46 bytes of BPART.BIN.
+
 #### 131.10.8 The uplift's pictures
 
 The pictures of `art2.h` 256..383 are `apps/byteopoly/art/sprites2.txt`, the same
@@ -256295,6 +256304,9 @@ emboss or tab overhang and the declared font height (24 for a font with no
 `fonth`, 8 for the kernel's, a sprite 255 rows); an op whose y or height
 comes from a slot is given every row.
 
+A literal may contain the bullet `•` (U+2022), stored as byte 127; a package
+whose fonts have no glyph 127 draws nothing for it (Byteopoly's do, 131.10.7).
+
 ### 133.8 Music and effects
 
 `apps/cc/gkmus.inc` is the player and `tools/os88gkmus.py` its compiler. A
@@ -256464,12 +256476,12 @@ lane's rows (133.8) follow these.
 | `gk_radio` and its discs (`gk_disc` 103) | 157 |
 | `gk_arrow` (`gk_arw` 126) | 149 |
 | `gk_sprshadow` | 221 |
-| `gk_scene` (303) and its literal and header readers | 392 |
+| `gk_scene` (303) and its literal and header readers | 393 |
 | `gk_scene_size`, `gk_scene_rect` | 71 |
-| **code** | **2,460** |
+| **code** | **2,461** |
 | data: role tables 32, ring sets 43, button states 18, op table 42, the theme pointer 2 | 137 |
-| **image total** | **2,597** |
-| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,617** |
+| **image total** | **2,598** |
+| ...assembled with `BX_ART2` (the text-handle calls in `gk_tdo` and `gk_lit`, 133.4): Byteopoly's price | **2,615** |
 | bss | 158 |
 
 **Per strip.** `gk_scene` reads a skipped op's length, number and two row
