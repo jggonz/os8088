@@ -1208,7 +1208,7 @@ static void ovl_gp_dcompose(void)
         ovl_gp_la(ovl_gp_name(k)); ovl_gp_la(" "); ovl_gp_lv(&bp_game.cash[k]); ovl_gp_la(">");
         if (ovl_gp_after(k, (gp_tpay != 0) == c, &gp_u2, &gp_u1) == BP_OK) ovl_gp_lv(&gp_u1); else ovl_gp_la(TP_SHORT);
     }
-    if (!cmp) gk_textbox(gp_x, gp_y, w, gp_fh + 6, gp_line, 0, gp_font, GK_CENTRE | GK_FIT);
+    if (!cmp) { gk_box(gp_x, gp_y, w, gp_fh + 6, GK_SUNKEN, 15); gk_textbox(gp_x, gp_y, w, gp_fh + 6, gp_line, 0, gp_font, GK_CENTRE | GK_FIT); }
     else ovl_gp_tl();
 }
 static void ovl_gp_dchat(void)
@@ -1233,6 +1233,7 @@ static void ovl_gp_ddiag(void)
     gp_x += 6; gp_y += 4;
     ls = bp_link_state();
     pt = bp_ck_port();
+    gk_sprshadow(gp_xr - 22, gp_y, BP_A2_LED_GREEN + (ls == BP_L_PLAY ? 0 : ls == 0 || ls == BP_L_BADPEER ? 1 : 2), 0);
     ovl_gp_lb(); ovl_gp_la(TP_ROLE); ovl_gp_la(bp_mode == BP_MODE_HOST ? TP_BANKER_HOST : bp_mode == BP_MODE_CLIENT ? TP_CLIENT : TP_SAME_PC);
     ovl_gp_la(TP_LINK); ovl_gp_la(gp_lstate[ls > 8 ? 0 : ls]); ovl_gp_tl();
     ovl_gp_lb(); ovl_gp_la(TP_PORT);
