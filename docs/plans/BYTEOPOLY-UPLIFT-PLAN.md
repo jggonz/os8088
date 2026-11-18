@@ -59,11 +59,11 @@ half-drawn face.
 | U6 | New art (art2.h 256..383) drawn from the concept boards in the EGA palette, with mono twins; BOOT's arrows point UP | art | I |
 | U7 | Prices rise monotonically along the direction of play (PET 100, VIC-20 120, C64 140); the protocol refuses a peer with the old board | rules | I |
 | U8 | Music and effects: a reusable player (FM through SOUND.DRV, speaker fallback), original title, in-game, auction and victory themes, effects for every event; Options > Music | sound | I |
-| U9 | The board: ivory 3D cells, collection band on top, bold names, price at the bottom, big corner art, RAM chips on the band, a yellow selection frame; the teal centre with the tilted cards, the pointing mascot, BYTEOPOLY key caps and 3D dice; the hint bar as key caps | board | - |
+| U9 | The board: ivory 3D cells, collection band on top, bold names, price at the bottom, big corner art, RAM chips on the band, a yellow selection frame; the teal centre with the tilted cards, the pointing mascot, BYTEOPOLY key caps and 3D dice; the hint bar as key caps | board | I |
 | U10 | The sidebar: "PLAYER n - YOUR TURN" with the big token and cash well, the roster with tokens and a yellow active row, the details card, YOUR COLLECTION, the connection box with its art, the log well | side | - |
 | U11 | The landing (Buy/Auction), auction, trade and link-lost panels as the concept boards draw them | panelsA | - |
 | U12 | Every other centre panel in the same kit and style (cards, repair, debt, manage, compose trade, handoff, rules, chat, diagnostics, standings) | panelsB | - |
-| U13 | New Game and the cable lobby as the concept board draws them: tabs, the roster table, rules radios, the null-modem box, the mascot | lobby | - |
+| U13 | New Game and the cable lobby as the concept board draws them: tabs, the roster table, rules radios, the null-modem box, the mascot | lobby | I |
 | U14 | QA in emulation on VGA, Hercules, CGA (and MartyPC for the XT costs), fixes, the final pass | lead | - |
 
 ## 3. Lanes, files and budgets
