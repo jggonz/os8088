@@ -11,7 +11,7 @@ fonth BP_F_BIG12 12
 # ---- 430 card: $0 decider, $1 card title; %1 the card picture
 scene 430 332 150
   if %0=0 {
-    banner 8 2 316 22 "$0 draws a card" BP_F_TEXT13 -1
+    banner 8 2 316 22 "$0 draws a card" BP_F_BIG12 -1
     box 8 30 100 112 sunken2 @FIELD
     sprshadow 22 46 %1 2
     box 116 30 208 112 sunken2 @FIELD
@@ -28,19 +28,19 @@ end
 # held, else GP_NOSPR (an ID with no record, which draws nothing)
 scene 431 332 150
   if %0=0 {
-    banner 8 2 316 22 "$0 is detained" BP_F_TEXT13 -1
+    banner 8 2 316 22 "$0 is detained" BP_F_BIG12 -1
     box 8 30 96 76 sunken2 @FIELD
     spr 36 36 BP_A2_C_REPAIR
     spr 26 70 %4
     spr 58 70 %5
     box 112 30 100 76 raised -1
-    titlebar 113 31 98 17 "TRIES" BP_F_TEXT13 centre
+    titlebar 113 31 98 17 "TRIES" BP_F_BIG12 centre
     radio 124 56 14 %1
     radio 152 56 14 %2
     radio 180 56 14 %3
     text 112 80 100 "$2 of 3" black BP_F_TEXT13 centre
     box 220 30 104 76 raised -1
-    titlebar 221 31 102 17 "CASH" BP_F_TEXT13 centre
+    titlebar 221 31 102 17 "CASH" BP_F_BIG12 centre
     box 226 54 92 24 sunken2 @FIELD
     textbox 226 54 92 24 "$1 cr" black BP_F_BIG12 centre|fit
     box 8 112 316 36 sunken2 @FIELD
@@ -58,16 +58,16 @@ end
 # 1 when short of cash, 2 when covered (0 on COMPACT), %2 the shortfall's colour
 scene 432 332 150
   if %0=0 {
-    banner 8 2 316 22 "$0 owes $1" BP_F_TEXT13 -1
+    banner 8 2 316 22 "$0 owes $1" BP_F_BIG12 -1
     box 8 30 316 42 sunken2 @FIELD
     spr 20 40 BP_A2_COINS
     textbox 8 30 316 42 "$2 cr" black BP_F_BIG16 centre
     box 8 78 154 48 raised -1
-    titlebar 9 79 152 17 "YOUR CASH" BP_F_TEXT13 centre
+    titlebar 9 79 152 17 "YOUR CASH" BP_F_BIG12 centre
     box 14 98 142 24 sunken2 @FIELD
     textbox 14 98 142 24 "$3 cr" black BP_F_BIG12 centre
     box 170 78 154 48 raised -1
-    titlebar 171 79 152 17 "SHORT BY" BP_F_TEXT13 centre
+    titlebar 171 79 152 17 "SHORT BY" BP_F_BIG12 centre
     box 176 98 142 24 sunken2 @FIELD
     text 8 132 316 "Sell upgrades or mortgage to raise cash." black BP_F_TEXT13 centre|fit
   }
@@ -79,7 +79,7 @@ scene 432 332 150
     text 6 28 320 "Sell upgrades or mortgage to raise cash." black BP_F_TEXT08 left|fit
   }
   if %0=2 {
-    banner 8 2 316 22 "Declare bankruptcy?" BP_F_TEXT13 -1
+    banner 8 2 316 22 "Declare bankruptcy?" BP_F_BIG12 -1
     box 8 30 316 70 sunken2 @FIELD
     text 12 44 308 "You leave the game for good and" black BP_F_TEXT13 centre|fit
     text 12 62 308 "your estate goes to $1." black BP_F_TEXT13 centre|fit
@@ -98,7 +98,7 @@ scene 439 332 150
     box 40 22 252 62 sunken2 @FIELD
     sprshadow 56 37 %1 2
     textbox 98 22 190 62 "$0" black BP_F_BIG16 left|fit
-    banner 8 92 316 22 "$1" BP_F_TEXT13 -1
+    banner 8 92 316 22 "$1" BP_F_BIG12 -1
     text 8 122 316 "Press Enter when ready. A held key" black BP_F_TEXT13 centre
     text 8 136 316 "does not count - let go first." black BP_F_TEXT13 centre
   }
@@ -191,7 +191,7 @@ scene 435 320 28
     text %5 2 %6 "$3" black BP_F_TEXT08 right
   }
   if %0=3 {
-    titlebar 0 0 %1 18 "PLAYER" BP_F_TEXT13 left
+    titlebar 0 0 %1 18 "PLAYER" BP_F_BIG12 left
     text %3 2 %6 "cash" white BP_F_TEXT13 right
     text %4 2 %6 "assets" white BP_F_TEXT13 right
     text %5 2 %6 "score" white BP_F_TEXT13 right

@@ -806,7 +806,7 @@ static void ovl_gp_dauc(void)
     }
 }
 /* ---- panb: the kit-drawn panels (SPEC.md 131.9.13) ---------------------------- */
-#define GP_NOSPR 459            /* an art ID with no record: draws nothing */
+#define GP_NOSPR 383            /* an art ID with no record: draws nothing */
 static char gp_ub[3][14];       /* numbers for them */
 static int gp_ox, gp_oy;        /* the scene's origin, for the text the code adds */
 /* scene n (a CORE one h rows tall, centred in the free area; COMPACT's is
