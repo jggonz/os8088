@@ -255745,9 +255745,9 @@ rules lines, the `#KEYS` line, then key lines.
 #### 131.10.6 Tool and size
 
 `os88bpart.py build -o`, `--selfcheck`, `draft`, `png DIR [--mono]`. The measured size is in
-`art/PROMPT.md` and the art lane's report: BPART.BIN is 55,473 bytes (44,296 of sprites, 9,087 of fonts,
-2,090 of text; cap 56 KB = 57,344 unpacked), 17,417 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
-included; loaded it is a 55KB lazy claim and a machine without the room draws the plain face.
+`art/PROMPT.md` and the art lane's report: BPART.BIN is 55,592 bytes (44,295 of sprites, 9,087 of fonts,
+2,210 of indexed text; cap 56 KB = 57,344 unpacked), 17,614 packed in `BYTEOPLY.O88` (lz4), so it rides every disk geometry, the 360KB one
+included; loaded it is a 55KB lazy claim, and a machine without the room is refused (131.10.7).
 
 #### 131.10.7 The second art part (the uplift)
 
@@ -255761,9 +255761,10 @@ the part would not fit, "Cannot read the art" when the read failed (§47: a
 refusal names a fact). Both stay lazy rather than eager so each is its own
 claim (the eager carve would be one ~180 KB block). The no-art fallbacks the
 core's callers carried (a die drawn as a number in a box, a level as drawn
-pips where the RAM chip art exists, the mortgage "M" box, the board's
-keycaps as framed boxes) are gone; COMPACT's drawn pips stay, being a layout
-choice, not a fallback.
+pips where the RAM chip art exists, the mortgage "M" box, the Rules page's
+"the help text is part of the art file") are gone; COMPACT's drawn pips and
+the framed keycaps of FULL and MID stay, being layout choices, not
+fallbacks.
 
 **`BPART2.BIN`** is lazy part 2 of `BYTEOPLY.O88` (OP_ASSET, OP_LAZY|OP_COMP,
 cap 56 KB unpacked = 57,344 bytes). Its IDs are `apps/byteopoly/art2.h`'s,
@@ -255813,16 +255814,18 @@ its use at once. Handles compare equal when they name the same line, so
 The text source is `apps/byteopoly/art/tx-<file>.txt`, one record per C file
 (`tx-app` 460, `tx-panels` 461, `tx-setup` 462, `tx-face` 463, `tx-side`
 464, `tx-save` 465, `tx-link` 466, `tx-rules` 467 - the engine's error texts
-and the cards' titles and texts): `#` comments and lines `NAME "text"`
-(C escapes; printable ASCII). Line order is handle order. `os88bpart.py`
+and the cards' titles and texts): `#` comments and lines `NAME "text"`, NAME
+`T<letter>_...` (A app, P panels, S setup, F face, D side, V save, L link,
+R rules), C escapes, printable ASCII. Line order is handle order. `os88bpart.py`
 writes `apps/byteopoly/bptx.h` from them (checked in, as `docs/INDEX.md` is;
 `os88bpart.py --selfcheck` fails the build when it is stale and `os88bpart.py
 txh` rewrites it): one `#define NAME BPT(handle, "text")` a line, where the
 host harness (`BP_HOST`, 131.12) defines `BPT(h, s)` as the literal `s` and
 `bx_str(s)` as `s`, so the harness sees the same text the guest draws, and
 the guest defines it as the handle. Kept as literals: the menus, the About
-card and anything the OS reads (window title, file names, the file dialog's
-default name), the board's names (`bp_board.c`), single characters, and the
+card and anything the OS reads or keeps (window title, file names, the file
+dialog's default name, a question an alert shows while it is up - a ring
+slot would not outlive it), the board's names (`bp_board.c`), single characters, and the
 templates whose layout code indexes into (`ovl_msg`'s "Banker COM0 2400 rev ").
 
 #### 131.10.8 The uplift's pictures
@@ -255834,9 +255837,23 @@ master and prompt, and BOOT's arrows pointing up, the direction of play.
 
 Every byte is measured, not assumed (US-25). `APP_MAX_SIZE` (65,024 bytes)
 bounds the resident image plus bss; the eager embedded overlay (§73.14.2)
-has its own 64 KB segment and holds code only; the art is a lazy part; the
-band is a 16 KB movable heap claim with a 2 KB bss fallback. Budgets at the
-foundation (each lane measures its own and reports it):
+has its own 64 KB segment and holds code only; the art is two lazy parts,
+both required (131.10.7); the band is a 16 KB movable heap claim with a 2 KB
+bss fallback.
+
+| part | row | kind | holds | measured (uplift prep, unpacked / lz4) |
+|---|---|---|---|---|
+| resident image + bss | - | the package | runtime, core, rules, codec, link, face, side, app | 49,372 + 8,863 = 58,235 of 65,024 |
+| `BYTEOPLY.OVL` | 0 | eager, embedded (`CC_OVL_PART`) | every `ovl_*` function | 63,430 of 65,536 / 30,362 |
+| `BPART.BIN` | 1 | lazy asset, required | art.h: sprites, fonts, the help | 55,592 of 57,344 / 17,614 |
+| `BPART2.BIN` | 2 | lazy asset, required | art2.h: new sprites, the UI text, scenes, music | 7,665 of 57,344 / 5,087 (text only so far) |
+
+String literals in the resident image fell from 7,001 bytes to 941 when the
+UI text moved to `BPART2.BIN` (131.10.7); what is left is the board's names,
+the menus, the About card and what the OS reads. A literal named in overlay
+code is still resident (§73.14), so new UI text goes in a `tx-*.txt` record,
+never in the C. Budgets at the foundation (each lane measures its own and
+reports it):
 
 | part | budget | holds |
 |---|---|---|
