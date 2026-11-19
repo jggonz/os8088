@@ -20066,14 +20066,18 @@ it only after all of that instance's consumers have finished. Closing the
 last client with BIOS input selected disarms callbacks and drops the
 module. A stamped package entry may HOLD before its record is published;
 the loader abort sweep calls the same instance grant release before the
-reserved slot is reused. A live IRQ entry is pinned and is never relocated or freed under
+reserved slot is reused. Final SET/RELEASE leaves every module frame before
+tail-transferring to the resident drop helper; its original FAR return is
+still the core controller's. A live IRQ entry is pinned and is never relocated or freed under
 its handler. Module data uses a writable alias on kern_mega; no protected
 code writes through CS or carries a selector into a real-mode bracket.
 
 The module has a raw-scan entry and a control entry. A raw scan is observed
 after existing physical-key tracking, with the original set-1 byte intact.
 The scan entry preserves registers: CF = 1 passes the scan, including the
-unloaded `mod_gone` refusal, and CF = 0 means consumed. The default slot
+unloaded `mod_gone` refusal, and CF = 0 means consumed. Entry offset and
+segment are published together under the existing interrupt mask, so an IRQ
+cannot observe a torn FAR pointer while a new image is armed. The default slot
 therefore passes without an additional resident activation flag. The
 hardware adapter owns acknowledgement, BIOS chaining and the exact
 INT 15h return flags. The handler performs no file I/O, allocation, module

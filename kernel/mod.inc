@@ -809,6 +809,8 @@ mod_need:
     jb .badarm
     cmp ax, bp
     jae .badarm
+    pushf
+    cli                        ; IRQ-reachable entries publish as one FAR pair
     mov [di], ax                ; offset...
 %ifdef KERN_MEGA
     push ax                     ; kern_mega: the slot is a FAR CALL's, so it
@@ -824,6 +826,7 @@ mod_need:
 %else
     mov [di+2], es              ; ...and segment, which ES IS: it was loaded
 %endif
+    popf
                                 ; from [bx+MODR_SEG] at the top of this
                                 ; routine and no segment register is written
                                 ; in between

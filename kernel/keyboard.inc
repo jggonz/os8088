@@ -28,10 +28,8 @@ osapi_keyboard:
     call inst_caller
     cmp al, KBDV_HOLD
     jb .call
-    cmp al, KBDV_RELEASE
-    jbe .owner
-    cmp al, KBDV_RAW
-    jne .call
+    cmp al, KBDV_CANCEL
+    je .call
 .owner:
     cmp dh, INST_MAX
     jb .call
@@ -78,8 +76,6 @@ kl_control_x:
     push bx
     push cx
     push dx
-    push si
-    mov si, ax                 ; verb survives module status return
     cmp al, KBDV_RAW
     je .raw
     or al, al
@@ -130,25 +126,9 @@ kl_control_x:
     pop ax
 .invoke:
     call far [KLFP+KL_CMD]
-    jc .out
-    or ax, ax
-    jnz .out                   ; explicit layout and/or glyph hold
-    mov bx, si
-    cmp bl, KBDV_SET
-    je .drop
-    cmp bl, KBDV_RELEASE
-    jne .out                   ; QUERY/CANCEL cannot drop an in-flight load
-.drop:
-    pushf
-    cli                        ; no IRQ sees disarmed slots with a live row
-%ifdef KERN_MEGA
-    mov word [kl_rfp+2], 0
-%endif
-    push ax
-    mov al, MOD_KEYBOARD
-    call mod_drop
-    pop ax
-    popf
+    jnc .out
+    or al, al
+    jz .zero                   ; QUERY before the allocated image is armed
     jmp short .out
 .raw:
     cmp dh, INST_MAX
@@ -179,10 +159,22 @@ kl_control_x:
 .zero:
     xor ax, ax
 .out:
-    pop si
     pop dx
     pop cx
     pop bx
+    retf
+
+; Tail target after the controller has restored all module frames. The
+; original FAR return belongs to kl_control_x; no module instruction remains
+; reachable on the stack when mod_drop frees its image. Its slots disarm
+; atomically, and a real IRQ alias is cleared before that final free.
+kl_drop_x:
+%ifdef KERN_MEGA
+    mov word [kl_rfp+2], 0
+%endif
+    mov al, MOD_KEYBOARD
+    call mod_drop
+    xor ax, ax
     retf
 
 %ifdef KERN_MEGA
@@ -324,7 +316,7 @@ klm_status:
     cmp bl, KBDV_CANCEL
     je .done
     call klf_disable
-    jmp short .done
+    jmp klm_return.drop
 .held:
     inc ah
 .done:
@@ -342,6 +334,15 @@ klm_return:
     pop cx
     pop bx
     retf
+.drop:                          ; second FAR epilogue, same original frame
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    jmp COLD_SEG:kl_drop_x      ; leave the image before freeing its claim
 
 ; Seed a newly selected layout from the BIOS's lock/modifier snapshot.
 klm_seed:
@@ -556,7 +557,10 @@ klm_focus_owner:
     mov byte [es:klm_dead], 0
     or dl, dl
     jnz .done
+    mov bp, ax                 ; raw caller has not yet assigned scan BP
     call klm_seed              ; BIOS may have owned IRQs in a foreign session
+    mov ax, bp
+    mov [es:klm_focus], al      ; retain focus for the first native dead key
 .done:
     ret
 
