@@ -561,17 +561,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "805fccbe",
-  "strings": "9d5f6081625c240a",
-  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
+  "stamped": "6f9f8a73d",
+  "strings": "12ae53aede3434e9",
+  "why": "Mount takes the logical drives in an extended partition (SPEC 52.4.1) - said in the Mount bullet; Format's unmount-first and the installer's Past BIOS Reach are below the page's detail (the reasons are examples, INSTALL says each greyed line says why)"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "805fccbe",
-  "strings": "9d5f6081625c240a",
-  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
+  "stamped": "6f9f8a73d",
+  "strings": "12ae53aede3434e9",
+  "why": "logical drives in an extended partition now mount, after the primaries, up to six: said in the opening paragraph (SPEC 52.4.1); LBA/packet-call reach is below the page's detail"
  },
  "HELLO_O88": {
   "sources": [

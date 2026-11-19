@@ -24,7 +24,8 @@ disk, then a button:
 - **Format** opens the Format window.
 - **Install** starts [[INSTALL.O88]], the installer, from the system disk.
 - **Mount** gives each usable partition a drive letter and a desktop icon
-  (C:, D: and on). It reads **Unmount** while they are mounted.
+  (C:, D: and on), the logical drives inside an extended partition
+  included. It reads **Unmount** while they are mounted.
 
 ## The Format window
 

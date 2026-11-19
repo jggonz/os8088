@@ -2,7 +2,9 @@
 
 `HDD.DRV` lets os8088 use a hard disk. With it, each FAT partition on the
 disk appears on the desktop as a drive, starting at C:, and opens in a Disk
-window like a floppy. It is also the way to partition and format a new disk
+window like a floppy. That includes the logical drives MS-DOS's `FDISK`
+makes inside an extended partition, which follow the primary partitions:
+up to six drives in all. It is also the way to partition and format a new disk
 and to install os8088 on it so the machine starts from the hard disk.
 
 ![The Control Panel's Hard Drive page, with one disk found through the BIOS and mounted.](shot:hdd-drv-page)
