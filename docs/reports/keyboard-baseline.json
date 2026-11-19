@@ -1,0 +1,78 @@
+{
+  "core_revision": "b82e4e94310e",
+  "contract_revision": "c3526d626",
+  "toolchain": "NASM version 3.02 compiled on Jun 29 2026",
+  "variants": {
+    "big": {
+      "build_number": 343,
+      "sections": {
+        ".text": 39342,
+        ".vga": 2218,
+        ".cold": 37728,
+        ".vgabuf": 336,
+        ".lowbss": 5358,
+        ".bss": 4882
+      },
+      "permanent_bytes": 90376,
+      "resident_bytes": 95232,
+      "kernel_rung_bytes": 95232,
+      "core_bytes": 106000,
+      "shipped_bytes": 84480,
+      "core_sha256": "78c98dfc7e080c5a82e933f2cd47d767e49b1548c67f34f2e8ed853bb964aab0",
+      "heap_segment": 6048
+    },
+    "small": {
+      "build_number": 343,
+      "sections": {
+        ".text": 28960,
+        ".cold": 21136,
+        ".vgabuf": 0,
+        ".lowbss": 2868,
+        ".bss": 2831
+      },
+      "permanent_bytes": 56307,
+      "resident_bytes": 57344,
+      "kernel_rung_bytes": 57344,
+      "core_bytes": 63328,
+      "shipped_bytes": 53072,
+      "core_sha256": "ca51ab068e1f5f741181131a60a80e7a45482670be32188edc092c7264baff0f",
+      "heap_segment": 3680
+    },
+    "emu": {
+      "build_number": 343,
+      "sections": {
+        ".text": 39588,
+        ".vga": 2218,
+        ".cold": 37728,
+        ".vgabuf": 336,
+        ".lowbss": 5358,
+        ".bss": 4882
+      },
+      "permanent_bytes": 90622,
+      "resident_bytes": 95744,
+      "kernel_rung_bytes": 95744,
+      "core_bytes": 106352,
+      "shipped_bytes": 84704,
+      "core_sha256": "d6d7f0f4e08cce09a32810a96803514f89d984402bc79de856023bde5f215215",
+      "heap_segment": 6080
+    },
+    "mega": {
+      "build_number": 343,
+      "sections": {
+        ".text": 44943,
+        ".cold": 48639,
+        ".mega": 24768,
+        ".vgabuf": 336,
+        ".lowbss": 5600,
+        ".bss": 4920
+      },
+      "permanent_bytes": 129718,
+      "resident_bytes": 61440,
+      "kernel_rung_bytes": 136704,
+      "core_bytes": 146497,
+      "shipped_bytes": 117040,
+      "core_sha256": "9ae7ec173d59b5e59dc8e8a0eb182bd2404bb0fe3ce3d2c513882d536a277b2d",
+      "heap_segment": 8640
+    }
+  }
+}
