@@ -19990,6 +19990,146 @@ to field measurement; no emulator in this tree models the V6335D mouse. Record
 the result for horizontal and vertical sweeps, both buttons, simultaneous
 keyboard input, and detach/restart in `docs/plans/PC1-MOUSE-PLAN.md`.
 
+### 9.16 Optional international keyboard module (`KEYBOARD.DRV`)
+
+**Delivery contract, issue #385.** The story list is
+`docs/plans/INTERNATIONAL-KEYBOARD-PLAN.md`; checked stories and recorded
+verification, rather than this contract alone, establish shipped behavior.
+
+#### 9.16.1 Ownership and module control
+
+International input is a §2.8 internal module, `KEYBOARD.DRV`, built with
+the kernel and extracted by `tools/os88mod.py`. Its translation code,
+layout tables, composition data, mutable state and extended glyph storage
+are absent from the stripped core kernel. The default is BIOS input with
+no keyboard-module claim or module read. An explicit US, Spanish (Spain),
+Latin American Spanish or French legacy AZERTY selection loads the module
+in task context; a saved explicit selection may load it during boot.
+
+The narrow public control surface is `OSAPI_KEYBOARD`: AL = verb, AH =
+layout ID for SET; all registers except AX and flags are preserved. A
+successful call clears carry and returns AL = current layout, AH = 1 while
+an explicit layout or glyph client holds the module, otherwise zero.
+Failure sets carry and returns AX = an error; an absent module or failed
+load never disables usable BIOS input. QUERY with no module succeeds with
+AX = 0. No existing package's entry or slot moves.
+
+| verb | value | effect |
+| --- | --- | --- |
+| QUERY | 0 | Return selection/hold state without loading anything. |
+| SET | 1 | AH = 0 BIOS default, 1 US QWERTY, 2 Spanish (Spain), 3 Latin American Spanish, 4 French legacy AZERTY. Validate and publish atomically; failure retains the prior selection. |
+| HOLD | 2 | Ensure the glyph provider exists and retain it for the calling instance. Repeated holds for that instance are idempotent. |
+| RELEASE | 3 | Release that instance's glyph hold; its teardown also releases it. |
+| CANCEL | 4 | Cancel pending composition without changing the layout. |
+
+HOLD/RELEASE are instance-scoped: the kernel supplies the caller's identity,
+as with the serial lease. An instance may keep its hold while its document
+or controls contain extended text; clearing/replacing that content releases
+it only after all of that instance's consumers have finished. Closing the
+last client with BIOS input selected disarms callbacks and drops the
+module. A live IRQ entry is pinned and is never relocated or freed under
+its handler. Module data uses a writable alias on kern_mega; no protected
+code writes through CS or carries a selector into a real-mode bracket.
+
+The module has a raw-scan entry and a control entry. A raw scan is observed
+after existing physical-key tracking, with the original set-1 byte intact.
+The scan entry preserves registers and returns a consumed/pass verdict;
+the hardware adapter owns acknowledgement, BIOS chaining and the exact
+INT 15h return flags. The handler performs no file I/O, allocation, module
+load, rendering or arbitrary kernel/API calls. IRQ stack use is bounded
+and measured before delivery.
+
+#### 9.16.2 Translation and physical keys
+
+There is one translator with separately reviewed definitions for US,
+Spanish (Spain), Latin American Spanish and French legacy AZERTY. Modifier
+state belongs to the arriving scan, not to the time a later INT 16h read
+drains the ring. E0/E1 handling distinguishes right Alt from left Alt and
+the ISO extra key at scan 56h. Each layout defines Shift/Caps behavior,
+AltGr/Ctrl+Alt, control-letter output and dead-key composition explicitly.
+
+`OSAPI_KEY_DOWN`, `OSAPI_KEY_MAP` and their make/break semantics remain
+physical. Printable output reaches the existing BIOS ring once, retaining
+its physical scan in AH; navigation and other BIOS special-key spellings
+remain compatible. Alt+Enter's existing edge latch, the keyboard mouse,
+function keys, Num Lock/keypad behavior and Ctrl+Alt+Del remain usable.
+
+A dead accent waits for the next key. A supported pair emits its single
+encoded character; accent plus Space emits the literal accent. An
+unsupported printable pair emits the literal accent then the character,
+reserving both ring slots before publishing either. Repeating an accent
+and cancellation are pinned by the layout vectors. Focus/ownership and
+layout changes cancel pending composition. A full ring obeys §9.8's
+overrun policy without publishing half a two-character result.
+
+The XT IRQ1, AT INT 15h AH=4Fh and mega native paths adapt the same module
+contract. They add no second port-60h read on the 8042 path. DOS, WIN16 and
+foreign guests have explicit conversion/bypass boundaries; a native
+CP850 byte must not be displayed silently with a CP437 meaning. Restoring
+the desktop restores its selection and callable module state.
+
+#### 9.16.3 Optional glyphs and native text
+
+Native extended text uses CP850 byte positions for the supported Spanish
+and French characters. ASCII and control meanings are unchanged. The
+encoding is independent of the selected input layout. Euro/Unicode input
+and international filenames are outside this contract.
+
+The optional provider supplies its extended glyphs to the existing opaque
+text renderers and glyph-copy interface, preserving the original ASCII
+face. It is acquired in task context before rendering extended content;
+paint routines never load it. A glyph client can hold it with BIOS input
+selected, so accented text survives a layout switch or a file reopen.
+Borrowed pointers cannot outlive the module's hold. The provider restores
+the original font state before its last drop, including ROM, baked and
+slow-ROM-copy paths. Private seam glyphs remain private.
+
+Shared text controls and Notepad accept and edit the supported bytes,
+including find/replace and raw-byte save/reopen. Fields with an ASCII-only
+domain retain that validation. Console codepages and proportional/PDF font
+formats keep their existing interpretation; no global reinterpretation of
+their high bytes is implied.
+
+#### 9.16.4 Selection and persistence
+
+Control Panel's Keyboard page offers BIOS default and the four explicit
+layouts with the existing controls and scrolling item list. Its UI and
+loading requests are in CTRL.DRV. The page includes a typing sample and
+does not grow the window beyond the supported adapter geometry.
+
+Big, emu and mega persist the ID in a versioned SYSTEM.CFG record through
+the existing shared parser/save discipline. Old, absent, invalid or unknown
+records use BIOS default without resetting other settings. Kern_small
+offers live selection for the session and says it lasts until restart;
+this feature does not add settings persistence to that kernel. Save failure
+retains the working in-memory selection and uses the panel's feedback.
+
+#### 9.16.5 No core kernel growth
+
+For each of big, small, emu and mega, the stripped core image and default
+resident footprint must not increase against the implementation baseline,
+built with identical options/toolchain/metadata. Exact unrounded core
+code/data/BSS totals also must not increase: rung slack is not a saving.
+Hooks, entry cells, module rows, preference staging and glyph routing count
+in full and must be paid for by equal or larger savings in this change.
+Record the compressed shipped image size as well. All existing budget,
+near-window, boot-floor and small-heap guards remain unchanged.
+
+Report optional module file, image/BSS and enabled claims separately at
+§50.2.1's 512-byte granule. Adding another layout adds no core bytes.
+Selecting BIOS default and closing the last glyph client releases the
+active optional footprint; an unexplained pinned claim is a failure.
+
+#### 9.16.6 Delivery evidence
+
+The plan's final pass covers independent assembled-code vectors, all three
+international layouts, persistence/refusal, glyph-client teardown and the
+existing keyboard regressions. Check VGA/CGA/Hercules visually, XT cycle
+cost and stack use, the 8042 queued-byte case, and protected/real-mode
+transitions on mega. Publish four baseline/final size rows and screenshots
+of the tested head. Planned stories remain unchecked until their evidence
+exists.
+
 ## 10. events.inc
 
 Event record, 8 bytes: `EV_TYPE` dw, `EV_A` dw, `EV_B` dw, `EV_C` dw.
