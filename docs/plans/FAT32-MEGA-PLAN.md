@@ -1,10 +1,10 @@
 # FAT32-MEGA-PLAN — reading FAT32 on kern_mega
 
-**Status: a plan, nothing built.** It came out of issue #386, alongside the
+**Status: in progress on `feat/fat32`.** §5's decisions were taken by the
+owner on 2026-11-19 and the contract is SPEC.md §19.12; §6 is the story list
+and what each wave has actually shown. It came out of issue #386, alongside the
 logical drives and the large-disk transports that shipped with
-[HDD-EXTENDED-PLAN.md](HDD-EXTENDED-PLAN.md). Those were driver work. FAT32
-is kernel work, and it is a decision for the owner before it is code: §5's
-open questions need answers before P1 can start.
+[HDD-EXTENDED-PLAN.md](HDD-EXTENDED-PLAN.md).
 
 ## 1. Why kern_mega, and why not the XT
 
@@ -103,35 +103,34 @@ is not a DOS volume until kern_dos reads it too.
   guess), so the same driver on `kern_big` keeps refusing them with a reason
   on the page.
 
-## 5. Open decisions for the owner
+## 5. The owner's decisions (2026-11-19)
 
-- **O1. Folder numbers past 65,535.** Either (a) new 32-bit door forms with
-  the high word in a second register, the existing doors refusing (CF = 1) a
-  folder they cannot name, so no built package changes; or (b) a per-volume
-  folder TOKEN table, so DX stays a word everywhere and means "folder n"
-  rather than "cluster n". (a) is the smaller change and an ABI addition
-  (no `PKG_FMT` bump); (b) touches no door but adds a table and an eviction
-  rule. Recommendation: (a).
-- **O2. The volume ceiling.** The staged BPB's `DSK_B_TOTHI` is one byte, an
-  8GB volume. FAT32's own is 2TB. Recommendation: 8GB in P1, which is past
-  every CF card a period machine takes.
-- **O3. DOS.** A FAT32 volume hidden from DOS sessions in P1 and P2
-  (recommended), or kern_dos gains FAT32 as well.
-- **O4. Read-only first** (D7) — or straight to read-write.
+| | asked | decided |
+|---|---|---|
+| O1 | folder numbers past 65,535 | **(a) 32-bit door forms**, high word in a second register; the old doors refuse what they cannot name. With three door indices left (125 of 128) that is ONE RN door, `OSAPI_FILE_PLACE`, with a verb in AL (SPEC.md 19.12.8) |
+| O2 | the volume ceiling | **2TB**, the format's own (not the recommended 8GB): TotSec32 whole, FAT sector numbers 32-bit. The transport is the lower bound in practice: rung 1's LBA28 reaches 128GB |
+| O3 | DOS | **hidden** from DOS sessions |
+| O4 | read-only first? | **straight to read-write** |
 
-## 6. Stories, once §5 is answered
+## 6. Stories
 
-- [ ] **P1. A FAT32 volume on kern_mega lists and launches.** Mount, BPB rules
-  for FAT32, the 4-byte window, the root chain, FstClusHI on read, the
-  doors per O1, read-only. Gate: a host-made FAT32 image (mtools
-  `mformat -F`) on Bochs, a package launched off it, and a folder past
-  cluster 65,535.
-- [ ] **P2. ...and writes.** Allocation, free chains, directory growth,
-  FSInfo (D6), the compression hint's FAT32 rule (D5), the copy engine.
-  Gate: a copy onto it read back by mtools on the host, byte for byte.
-- [ ] **P3. The rest of the inventory**: the loader's runs, Sticky Apps,
-  the file dialog, assoc, hibernation's directory records.
-- [ ] **P4. (if O3 says so) DOS sees it.**
+Each wave closes with `tools/kernsize.py` on kern_mega and a hash of the other
+three kernels against the merge base. Soak rows run once, after the last wave.
+
+- [ ] **W1. The FAT layer is 32-bit on kern_mega.** `OS88_FAT32`, the `CLU_*`
+  macros and `[dsk_ch]` (19.12.3); the FAT32 BPB rules and layout (19.12.2);
+  the 4-byte window (19.12.4); the root chain called 0 (19.12.5); FstClusHI on
+  read and write and the listing's high word (19.12.6); allocation, free
+  chains, root growth, FSInfo (19.12.7); the Disk window, the loader and the
+  instance folders widened. HDD.DRV accepts 0Bh/0Ch under `CPU_F_FAT32`
+  (19.12.10). Verified by: the three other kernels byte-identical; a host
+  mtools FAT32 image listed, entered, launched from, written to under QEMU.
+- [ ] **W2. The API.** `OSAPI_FILE_PLACE`, the 0FFFFh rule, FIND's
+  `OSAPI_FIND_FAR`, `OSAPI_FCP_FAR`, VOL_STAT scaling, READ_SEQ's cursor and
+  the RUN/MAP refusal (19.12.8); the C SDK; the copy engine, the file dialog,
+  assoc and Sticky Apps widened; the refusals of 19.12.9.
+- [ ] **W3. The gate.** `tests/fat32.py` (19.12.11), the host FAT32 reader in
+  `tests/instdeep.py`, the suite rows, the final pass.
 
 **Measure first, then cost**: each phase opens with `tools/kernsize.py` on
 kern_mega and closes with the same, and the resident line is the one that
