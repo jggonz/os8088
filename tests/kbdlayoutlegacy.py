@@ -48,6 +48,8 @@ def main(argv=None):
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--fixture", default="build/kbdlayoutlegacy.img")
+    ap.add_argument("--break-raw", action="store_true",
+                    help="negative control: clear DOS RAW ownership before its key probe")
     a = ap.parse_args(argv)
     require(not os.environ.get("OS88_MEGA"),
             "kbdlayoutlegacy targets the real-mode DOS/WIN16 entries, not kern_mega")
@@ -109,6 +111,27 @@ def main(argv=None):
                         (caption, ["%04x" % w for w in got], expected))
                 print(caption, "BIOS words", " ".join("%04x" % w for w in got))
 
+            def alt_enter(want):
+                # A chord injected as four immediate events can lose its Alt
+                # break across the fullscreen mode handoff. Keep the actual
+                # keys down until DOS observes the chord, then release them.
+                # This also spans the fullscreen consumer's level poll (the
+                # reason dosaltenter holds its leaving chord).
+                m.key("AltLeft", down=True, up=False)
+                try:
+                    ui._wait(lambda: m.read(0x417, 1)[0] & 8,
+                             "BIOS to observe physical Alt make", os88ui.T_SHORT)
+                    m.key("Enter", down=True, up=False)
+                    require(dosaltenter._settle_bracket(ui, want) == want,
+                            "DOS Alt+Enter did not reach bracket %02x" % want)
+                finally:
+                    m.key("Enter", down=False, up=True)
+                    m.key("AltLeft", down=False, up=True)
+                ui._wait(lambda: not m.read(0x417, 1)[0] & 0x0f and
+                         not m.read(S("kbd_dnmap") + (0x38 >> 3), 1)[0] & 1 and
+                         not m.read(S("kbd_dnmap") + (0x1c >> 3), 1)[0] & 16,
+                         "physical Alt/Enter breaks after DOS handoff", os88ui.T_SHORT)
+
             def native():
                 require(page.layout() == 4, "legacy focus changed the selected French layout")
                 page.open()
@@ -123,22 +146,23 @@ def main(argv=None):
             dos = ui.path("A:/APPS/DOS.O88")
             ui.raise_window(dos)
             os88marty.ui_done(m, "the current DOS entry to publish")
-            dos_slot, _, _ = owner(dos)
+            dos_slot, dos_at, _ = owner(dos)
+            if a.break_raw:
+                def break_raw(mm):
+                    flags = dos_at + eq["I_FLAGS"]
+                    mm.write(flags, bytes([mm.read(flags, 1)[0] & ~RAW]))
+                os88marty.heap_read(m, break_raw, "negative DOS RAW ownership control")
             words(BIOS, "DOS window")
             for _ in KEYS:
                 ui.press("Backspace", need=True)  # undo the idle console's typed probe
             require(dosaltenter._bracket(ui) == dosaltenter.FSX_NONE,
                     "DOS already owns a fullscreen bracket before Alt+Enter")
-            m.alt("Enter")
-            require(dosaltenter._settle_bracket(ui, 0) == 0,
-                    "actual DOS did not enter its fullscreen UI")
+            alt_enter(0)
             require(owner(dos)[0] == dos_slot, "DOS fullscreen changed its RAW owner")
             words(BIOS, "DOS fullscreen", idle=False)
             for _ in KEYS:
                 os88marty.key_taken(m, "Backspace", ui=False)
-            m.alt("Enter", hold=0.08)
-            require(dosaltenter._settle_bracket(ui, dosaltenter.FSX_NONE) ==
-                    dosaltenter.FSX_NONE, "DOS did not return to its native window")
+            alt_enter(dosaltenter.FSX_NONE)
             os88marty.ui_done(m, "DOS fullscreen restore to complete")
             owner(dos)
             native()
