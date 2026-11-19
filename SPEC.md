@@ -17598,7 +17598,11 @@ Five things hold it up.
   `8F00`, `9000` for `-`, `5`, `+`), and Pause (`E1 1D 45 E1 9D C5`) and
   Ctrl+Break (`E0 46`) are swallowed whole: the ROM's E1 flag (40:96 bit 0)
   and its pause bit (40:18 bit 3) take exactly the one byte each expects, so a
-  keyboard that sends no `45` loses no key. `tests/megakbcodes.py` is the row.
+  keyboard that sends no `45` loses no key. These are the scans the adapter
+  passes to `mega_k09`: on a machine whose real pointer has not spoken,
+  §9.6.4's keyboard mouse may claim keypad 5 first. `tests/megakbcodes.py`
+  establishes a real serial pointer before checking the ROM-code matrix;
+  the keyboard-mouse rows retain their separate mouseless coverage.
 
   **This replaced a `kbd_aeclaim` that decoded `AL` instead** (`AH = 1C` whose
   `AL` is neither `0Dh` typed-or-shifted nor `0Ah` with Ctrl), and the
