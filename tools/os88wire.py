@@ -139,7 +139,7 @@ WIRE_CELL_LEVELS = ()
 # 0x0239 since OSAPI_MOUSE_REL (SPEC.md 9.14) joined it at 0x0236, the same
 # way: still no release at PKG_FMT 13. 0x023C since OSAPI_KEY_MAP (SPEC.md
 # 9.7.3) joined at 0x0239, the same way again.
-WIRE_TABLE_END = 0x023C
+WIRE_TABLE_END = 0x0244
 # ...and the DOOR's (SPEC.md 20.3.4): a rare cell is `int 81h` and an index
 # byte, and a kernel that has no word for an index REFUSES it - CF = 1, AX =
 # 1, the caller's registers kept - rather than jumping anywhere. So a package

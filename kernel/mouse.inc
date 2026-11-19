@@ -2699,6 +2699,8 @@ KBM_PC1_R   equ 0x79            ; but none of the three may reach the BIOS
 %endif
     call kbd_track              ; SPEC.md 9.7 - preserves AL
 %%p5:
+    call far [KLFP+KL_SCAN]     ; original physical byte already tracked
+    jnc .kleat
 %ifdef OS88_DRIVERS
     ; PC1 button scans must be tested before the early exits below. Otherwise
     ; an ordinary scan (77h/78h/79h included) jumps straight to the BIOS chain
@@ -2811,6 +2813,9 @@ kbm_isr:
 %else
     KBM_SCAN .chain
 %endif
+%ifndef OS88_DRIVERS
+    jmp .chain                 ; small keeps its original keypad-5 chain
+%endif
 %ifdef OS88_DRIVERS
 .pc1eat:
 %ifdef KBD_DIAG
@@ -2820,6 +2825,20 @@ kbm_isr:
     mov bx, [kbg_cur]
     or byte [bx+KR_X], 0x20
     pop bx
+%endif
+%endif
+.kleat:
+%ifdef KBD_I15
+    cmp byte [kbm_ivec], 0x54   ; AT AH=4Fh: refuse in the saved FLAGS frame
+    jne .klxt
+    push bp
+    mov bp, sp
+    and word [ss:bp+10], 0xfffe ; BP, DS, AX, IP, CS, FLAGS
+    pop bp
+    pop ds
+    pop ax
+    iret
+.klxt:
 %endif
     ; On the PC1 XT, port 60h is the 8255 latch and reading it does not
     ; acknowledge the byte. Pulse bit 7 of port 61h as the ROM handler does,
@@ -2835,7 +2854,6 @@ kbm_isr:
     pop ds
     pop ax
     iret
-%endif
 .chain:
     ; A CHAIN TO OURSELVES IS A DEAD MACHINE, so it is refused rather than
     ; taken (SPEC.md 9.6.5). mouse_unhook puts int 09h back now and that is

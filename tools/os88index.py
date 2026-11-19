@@ -56,7 +56,7 @@ GROUPS = [
     ("Text and fonts", ["6", "83"],
      ["FONT_"]),
     ("Input - keyboard and mouse", ["9", "10", "13"],
-     ["KEY_", "MOUSE", "EVQ_", "CUR_"]),
+     ["KEY_", "KEYBOARD", "MOUSE", "EVQ_", "CUR_"]),
     ("Files and volumes", ["18", "19", "22", "38", "54", "20.13"],
      ["FILE_", "VOL_", "FS_", "ASSOC", "ARG_FILE", "ARG_TEXT", "BATCH_", "DECOMP",
       "DSK_", "FERR_"]),
@@ -116,6 +116,11 @@ INCLUDES = [
      "no check box or radio sheds that code with `%define OS88UI_NOGLYPH`, "
      "and one whose every button is a picture sheds the caption, ink and "
      "default-ring paths with `%define OS88UI_BIMGONLY`."),
+    ("os88kbd.inc", "9.16",
+     "Optional CP850 glyph lifetime for native text: prepare a bounded buffer "
+     "from the UI task before drawing, retain an idempotent instance hold "
+     "while extended content remains, and release it after all consumers clear. "
+     "Painting and workers never load the keyboard module."),
     ("os88alt.inc", "11.2.1.1",
      "Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - "
      "where no event is dispatched, so the kernel's synthesised keystroke "

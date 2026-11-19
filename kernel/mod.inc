@@ -40,7 +40,8 @@
 
 %ifdef FCP_MOD
 MOD_SER     equ 5
-MOD_NIMG    equ 6               ; SMALL: file operations, no hibernate, and
+MOD_KEYBOARD equ 6
+MOD_NIMG    equ 7               ; SMALL: file operations, no hibernate, and
                                 ; no Dock module (SPEC.md 30.5)
 %else
 MOD_DOCK    equ 4
@@ -49,7 +50,8 @@ MOD_WIN     equ 6               ; ...and the Windows theme's chrome (76.14)
 MOD_DESK    equ 7               ; ...and the desk layer's verbs (11.103.10)
 MOD_STIKM   equ 8               ; ...and the Sticky Apps menu (SPEC.md 110.12)
 MOD_SER     equ 9
-MOD_NIMG    equ 10              ; BIG: hibernate, resident file operations,
+MOD_KEYBOARD equ 10
+MOD_NIMG    equ 11              ; BIG: hibernate, resident file operations,
                                 ; the optional Dock, EXTD.DRV, WIN95.DRV,
                                 ; DESK.DRV and STIKMENU.DRV
 %endif
@@ -248,6 +250,7 @@ mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
             dw BUILD_NUM        ; MOD_H_BUILD
             dw MOD_STAMP        ; MOD_H_STAMP
 
+mod_f_keyboard: db 'KEYBOARD.DRV',0
 mod_f_serial: db 'SERIAL.DRV',0 ; SPEC.md 115: explicit Connect loads it
 mod_f_kbm:  db 'KBMOUSE', 0     ; SPEC.md 2.8.8: no file has this name - it is
                                 ; what the RAM view calls the claim
@@ -285,6 +288,8 @@ mod_r_dock:
     dw 0, mod_f_stikm           ; MOD_STIKM, kern_big's alone (SPEC.md 110.12)
 %endif
     dw 0, mod_f_serial          ; MOD_SER, both builds (SPEC.md 115)
+mod_r_keyboard:
+    dw 0, mod_f_keyboard        ; MOD_KEYBOARD, SPEC.md 9.16
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif

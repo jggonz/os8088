@@ -20014,6 +20014,12 @@ Failure sets carry and returns AX = an error; an absent module or failed
 load never disables usable BIOS input. QUERY with no module succeeds with
 AX = 0. No existing package's entry or slot moves.
 
+QUERY and RAW are legal from every task. SET, HOLD, RELEASE and CANCEL
+require the UI task (task 0); a worker receives CF = 1, AX = 3 before any
+load or mutation. AX = 1 means an invalid verb, layout or owner, and AX = 2
+means unavailable module resources. QUERY and CANCEL never drop an
+activation still being established by another control call.
+
 | verb | value | effect |
 | --- | --- | --- |
 | QUERY | 0 | Return selection/hold state without loading anything. |
@@ -20028,7 +20034,9 @@ as with the serial lease. An instance may keep its hold while its document
 or controls contain extended text; clearing/replacing that content releases
 it only after all of that instance's consumers have finished. Closing the
 last client with BIOS input selected disarms callbacks and drops the
-module. A live IRQ entry is pinned and is never relocated or freed under
+module. A stamped package entry may HOLD before its record is published;
+the loader abort sweep calls the same instance grant release before the
+reserved slot is reused. A live IRQ entry is pinned and is never relocated or freed under
 its handler. Module data uses a writable alias on kern_mega; no protected
 code writes through CS or carries a selector into a real-mode bracket.
 
@@ -20037,7 +20045,7 @@ after existing physical-key tracking, with the original set-1 byte intact.
 The scan entry preserves registers: CF = 1 passes the scan, including the
 unloaded `mod_gone` refusal, and CF = 0 means consumed. The default slot
 therefore passes without an additional resident activation flag. The
-the hardware adapter owns acknowledgement, BIOS chaining and the exact
+hardware adapter owns acknowledgement, BIOS chaining and the exact
 INT 15h return flags. The handler performs no file I/O, allocation, module
 load, rendering or arbitrary kernel/API calls. IRQ stack use is bounded
 and measured before delivery.

@@ -141,6 +141,7 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                ".modc": None, ".modf": None, ".modl": None, ".modh": None,
                ".modp": None, ".modd": None, ".modk": None, ".modx": None,
                ".modw": None, ".modj": None, ".modn": None,
+               ".modq": None, ".modqb": None,
                ".modmap": None,
                # ...and the module halves and bss sections that grew after
                # the list was written (CTRL.DRV's panel half and buffer,

@@ -326,6 +326,18 @@ mega_r15:
     je .n
     call kbd_track                  ; preserves AL and every register
 .n:
+    cmp word [kl_rfp+2], 0
+    je .pass
+    call far [kl_rfp]           ; conventional real alias, no second 60h read
+    jc .pass
+    pop ds
+    popf
+    push bp
+    mov bp, sp
+    and word [ss:bp+6], 0xfffe ; saved INT15 carry, not live FLAGS
+    pop bp
+    iret
+.pass:
     pop ds
     popf
 .c:
