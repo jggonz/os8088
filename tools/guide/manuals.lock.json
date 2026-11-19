@@ -272,9 +272,9 @@
   "sources": [
    "kernel/ctrl.inc"
   ],
-  "stamped": "38069791",
-  "strings": "968a5adf84f05f2f",
-  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
+  "stamped": "51ded3c12",
+  "strings": "9ad9501242322293",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "CWORD": {
   "sources": [],
@@ -332,9 +332,9 @@
   "sources": [
    "kernel/diskops.inc"
   ],
-  "stamped": "faab005c",
+  "stamped": "51ded3c12",
   "strings": "676cabf40e203a01",
-  "why": "Clone and Write Image give the target a serial of its own (SPEC.md 18.8.2.1); added one sentence each, nothing quoted changed"
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "DOCK_DRV": {
   "sources": [
@@ -657,6 +657,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "KEYBOARD_DRV": {
+  "sources": [
+   "kernel/keyboard.inc"
+  ],
+  "stamped": "51ded3c12",
+  "strings": "075d3ddf5a3a826e",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
+ },
  "KOROBEIN_MID": {
   "sources": [],
   "stamped": "e4576a70",
@@ -779,9 +787,9 @@
   "sources": [
    "apps/notepad"
   ],
-  "stamped": "9deeee7d",
-  "strings": "b93994888feea78c",
-  "why": "New asks about unsaved changes (checked on MartyPC)"
+  "stamped": "51ded3c12",
+  "strings": "a1a773a4678f2c0d",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "NOTES": {
   "sources": [],
@@ -1332,9 +1340,9 @@
    "kernel/vidext.inc",
    "kernel/ctrl.inc"
   ],
-  "stamped": "38069791",
-  "strings": "9a119e740c33a0bb",
-  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
+  "stamped": "51ded3c12",
+  "strings": "f9650272015e5b0e",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "VIDEO_O88": {
   "sources": [
