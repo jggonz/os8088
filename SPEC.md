@@ -20021,6 +20021,7 @@ AX = 0. No existing package's entry or slot moves.
 | HOLD | 2 | Ensure the glyph provider exists and retain it for the calling instance. Repeated holds for that instance are idempotent. |
 | RELEASE | 3 | Release that instance's glyph hold; its teardown also releases it. |
 | CANCEL | 4 | Cancel pending composition without changing the layout. |
+| RAW | 5 | AH = 0 native / nonzero BIOS/guest input for the calling instance. Stores `IF_RAWKBD` in its existing flags byte and never loads the module. |
 
 HOLD/RELEASE are instance-scoped: the kernel supplies the caller's identity,
 as with the serial lease. An instance may keep its hold while its document
@@ -20033,7 +20034,9 @@ code writes through CS or carries a selector into a real-mode bracket.
 
 The module has a raw-scan entry and a control entry. A raw scan is observed
 after existing physical-key tracking, with the original set-1 byte intact.
-The scan entry preserves registers and returns a consumed/pass verdict;
+The scan entry preserves registers: CF = 1 passes the scan, including the
+unloaded `mod_gone` refusal, and CF = 0 means consumed. The default slot
+therefore passes without an additional resident activation flag. The
 the hardware adapter owns acknowledgement, BIOS chaining and the exact
 INT 15h return flags. The handler performs no file I/O, allocation, module
 load, rendering or arbitrary kernel/API calls. IRQ stack use is bounded
@@ -20067,6 +20070,13 @@ contract. They add no second port-60h read on the 8042 path. DOS, WIN16 and
 foreign guests have explicit conversion/bypass boundaries; a native
 CP850 byte must not be displayed silently with a CP437 meaning. Restoring
 the desktop restores its selection and callable module state.
+
+RAW uses bit 3 of the existing instance `I_FLAGS` byte (`IF_RAWKBD = 8`),
+with caller identity supplied by the kernel. The optional handler reads the
+front visible window's owning instance and bypasses translation while its
+bit is set, still tracking modifiers. This flag persists if the layout is
+activated after the foreign window opens; no module or extra instance byte
+is needed to register it. Instance teardown clears the flag with the record.
 
 #### 9.16.3 Optional glyphs and native text
 
