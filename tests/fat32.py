@@ -159,61 +159,17 @@ def stage(tmp):
     return hd
 
 
-class Vol(object):
-    """the volume read back by hand: BPB, FAT, a directory's entries"""
+def ents(v, first):
+    """{NAME: (attr, first cluster, size)} of one directory, through
+    tests/instdeep.py's reader - the suite's host FAT reader, FAT32 included
+    since this row (SPEC.md 19.12.11) - folder 0 the root chain"""
+    return {n.upper(): (a, c, z) for n, a, c, z in v.entries(first)}
 
-    def __init__(self, hd):
-        self.d = open(hd, "rb").read()
-        v = self.v = BASE * SECTOR
-        self.spc = self.d[v + 13]
-        self.rsv, = struct.unpack_from("<H", self.d, v + 14)
-        self.nf = self.d[v + 16]
-        self.fsz, = struct.unpack_from("<I", self.d, v + 36)
-        self.root, = struct.unpack_from("<I", self.d, v + 44)
-        self.fsi, = struct.unpack_from("<H", self.d, v + 48)
-        self.data = self.rsv + self.nf * self.fsz
 
-    def sec(self, n):
-        return self.d[self.v + n * SECTOR: self.v + (n + 1) * SECTOR]
-
-    def fat(self, c):
-        o = self.v + self.rsv * SECTOR + 4 * c
-        return struct.unpack_from("<I", self.d, o)[0] & 0x0FFFFFFF
-
-    def chain(self, c):
-        out = []
-        while 2 <= c < 0x0FFFFFF8 and len(out) < 1 << 20:
-            out.append(c)
-            c = self.fat(c)
-        return out
-
-    def entries(self, c):
-        """{name: (attr, first cluster, size)}"""
-        out = {}
-        for cl in self.chain(c):
-            for k in range(self.spc):
-                s = self.sec(self.data + (cl - 2) * self.spc + k)
-                for i in range(0, SECTOR, 32):
-                    e = s[i:i + 32]
-                    if e[0] == 0:
-                        return out
-                    if e[0] == 0xE5 or e[11] == 0x0F or e[11] & 8:
-                        continue
-                    n = e[:8].rstrip().decode("ascii", "replace")
-                    x = e[8:11].rstrip().decode("ascii", "replace")
-                    lo, = struct.unpack_from("<H", e, 26)
-                    hi, = struct.unpack_from("<H", e, 20)
-                    out[n + ("." + x if x else "")] = (
-                        e[11], hi << 16 | lo,
-                        struct.unpack_from("<I", e, 28)[0])
-        return out
-
-    def read(self, c, size):
-        b = bytearray()
-        for cl in self.chain(c):
-            for k in range(self.spc):
-                b += self.sec(self.data + (cl - 2) * self.spc + k)
-        return bytes(b[:size])
+def body(v, ent):
+    """a file's bytes off its (attr, cluster, size)"""
+    return b"".join(v.sec(v.data_lba + (c - 2) * v.spc, v.spc)
+                    for c in v.chain(ent[1]))[:ent[2]]
 
 
 def boot(tmp, hd):
@@ -359,14 +315,20 @@ def guest(q, bad):
 
 
 def host(hd, bad):
-    v = Vol(hd)
-    root = v.entries(v.root)
+    import instdeep                     # (lazily, as hdext does: it brings
+    with open(hd, "rb") as f:           # os88marty with it)
+        f.seek(BASE * SECTOR)
+        v = instdeep.Vol(f.read())
+    if v.bits != 32:
+        bad.append("5. the host's reader sees FAT%d, not FAT32" % v.bits)
+        return
+    root = ents(v, 0)
     far = root.get("FAR")
     if not far or far[1] <= 0xFFFF:
         bad.append("5. FAR is %r - not past cluster 65,535, so this tested "
                    "nothing" % (far,))
         return
-    fe = v.entries(far[1])
+    fe = ents(v, far[1])
     if "HELLO.TXT" in fe:
         bad.append("5. the host still sees FAR/HELLO.TXT")
     nd = fe.get("NEWDIR")
@@ -375,7 +337,7 @@ def host(hd, bad):
     else:
         if nd[1] <= 0xFFFF:
             bad.append("5. NEWDIR's cluster %d is not past 65,535" % nd[1])
-        ne = v.entries(nd[1])
+        ne = ents(v, nd[1])
         if ne.get(".", (0, -1))[1] != nd[1]:
             bad.append("5. NEWDIR's . is %r, want %d" % (ne.get("."), nd[1]))
         if ne.get("..", (0, -1))[1] != far[1]:
@@ -386,7 +348,7 @@ def host(hd, bad):
         if not cp:
             bad.append("6. the host sees no FAR/NEWDIR/CALC.O88: %r"
                        % sorted(ne))
-        elif cp[1] <= 0xFFFF or v.read(cp[1], cp[2]) != want:
+        elif cp[1] <= 0xFFFF or body(v, cp) != want:
             bad.append("6. FAR/NEWDIR/CALC.O88 is cluster %d, %d bytes - "
                        "not a chain past 65,535 holding the package"
                        % (cp[1], cp[2]))
@@ -406,9 +368,9 @@ def host(hd, bad):
             bad.append("5. mdir sees FAR as %r (exit %d)"
                        % (sorted(got), r.returncode))
     fl = root.get("FILLER.BIN")
-    if not fl or v.read(fl[1], fl[2]) != filler():
+    if not fl or body(v, fl) != filler():
         bad.append("5. FILLER.BIN is not its bytes")
-    fsi = v.sec(v.fsi)
+    fsi = v.sec(v.fsinfo)
     if fsi[488:492] != b"\xff\xff\xff\xff":
         bad.append("5. FSInfo's free count is %s, not 0FFFFFFFFh (19.12.7)"
                    % fsi[488:492].hex())

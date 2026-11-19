@@ -142,8 +142,23 @@ three kernels against the merge base. Soak rows run once, after the last wave.
   Disk window's sync handed `dsk_chdir` the high word as the low, three
   listing sites dropped the +14 high word, and the status line truncated a
   free count past 65,535 clusters (now KB on FAT32, printed K/M/G).
-- [ ] **W3. The gate.** `tests/fat32.py` (19.12.11), the host FAT32 reader in
+- [x] **W3. The gate.** `tests/fat32.py` (19.12.11), the host FAT32 reader in
   `tests/instdeep.py`, the suite rows, the final pass.
+  *Done 2026-11-19.* `instdeep.Vol` reads FAT32 (RootClus, 4-byte entries,
+  FstClusHI) and the fat32 row reads through it. The final pass, once:
+  - The host's 37 rows (QEMU and MartyPC): hdext*, hdtake*, hdhiber,
+    cdrom*, pciether, pcibig, hdboot, the inst* rows, bigvol, hdsize,
+    hdmap, hdauto, fcproom, hibernate*, fcpapi, fcpcopy, hddgeom,
+    installabi, hddcp, hdnoclaim, fat32 and fat32big. All 37 passed.
+    hdbounce was not run (it needs 86Box).
+  - 50 kern_mega rows on Bochs (the os8088-bochs image): every mega row
+    over files, disks, the copy engine, the file dialog, assoc, hibernation
+    and install. All 50 passed. megahibfull and mega-install failed in the
+    four-lane pass (a knob tree two rows built at once; a Bochs pacing
+    timeout) and passed re-run alone. megafrotz first skipped for want of
+    `inform` in the image; it passed once ZBIG.Z8 was built on the host.
+  - `make test-full`: 81/81 rows passed. The five C-toolchain rows ran
+    after `tools/setup-cc.sh` and `make build/pagedesk.o88`.
 
 **Measure first, then cost**: each phase opens with `tools/kernsize.py` on
 kern_mega and closes with the same, and the resident line is the one that
