@@ -7,7 +7,8 @@ are in `docs/reports/keyboard-final.json`.
 
 `keyboard-*` shows the new Control Panel page; `text-*` shows physical input
 from Spain, Latin American Spanish and French layouts in Note Pad. VGA,
-CGA and Hercules captures use MartyPC; `text-mega.png` uses Bochs with
+CGA and Hercules captures use the verified patched MartyPC recorded in
+`docs/reports/keyboard-instruments.json`; `text-mega.png` uses Bochs with
 kern_mega. Every image is a direct emulator capture. The PR links these
 files at their committed SHA.
 

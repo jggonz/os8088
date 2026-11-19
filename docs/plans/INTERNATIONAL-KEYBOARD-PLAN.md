@@ -2,7 +2,7 @@
 
 Issue: [#385 — International Keyboard Mapping](https://github.com/jggonz/os8088/issues/385).
 Baseline inspected: `b82e4e94310e` (2026-11-19).
-Status: waves 0–3 implemented and observed in combined QA; final regression pass in progress.
+Status: all delivery stories complete; final regression and strict size gates passed.
 PR: [#396](https://github.com/jggonz/os8088/pull/396).
 Build diary: [How international keyboards were built](../HOW-INTERNATIONAL-KEYBOARDS-WERE-BUILT.md).
 
@@ -301,7 +301,7 @@ result on VGA, CGA and Hercules; all extra glyph data/code stays optional.
 
 ### Wave 4 — Final verification and contributor guidance
 
-- [ ] Complete the final test pass below, fix failures and record actual
+- [x] Complete the final test pass below, fix failures and record actual
   evidence against every supported kernel and input path.
 - [x] Publish the before/after core-image, uncompressed section/BSS and
   default resident byte table for big/small/emu/mega. Require non-positive
@@ -397,7 +397,7 @@ clock preservation, malformed records and missing/mismatched module refusal.
 | Fullscreen test released Alt before the input handoff completed | Hold the physical chord through the observed transition, then release; DOS fullscreen and WIN16 owner tests pass. |
 
 The XT trace measures the complete KL_SCAN call/return: the armed unloaded
-path is 123 cycles; observed explicit-layout paths span 1,595–6,936 cycles
+path is 118–124 cycles; observed explicit-layout paths span 1,475–6,911 cycles
 (about 0.33–1.45 ms at 4.77 MHz). These are measured cases, including the
 unsupported-composition slow path, rather than a hardware worst-case claim.
 Actual module execution peaks at 26 bytes of stack, within the 48-byte
@@ -421,3 +421,18 @@ The earlier copied binary omitted keyboard buffering/pacing patches, so its
 stress results are discarded. [Instrument hashes](../reports/keyboard-instruments.json)
 identify the corrected binary and each patch. The final native suite runs
 from a frozen source/build snapshot with boot-cache reuse disabled.
+
+## Final verification record
+
+The deduplicated scope is **45 passing soak rows**: eight host/QEMU rows,
+30 native rows with the verified MartyPC, six Bochs rows and one 86Box row.
+There are no remaining failures or scope skips. `make test-full` passed
+76 checks with zero failures and five declared optional C/PageDesk skips.
+`make budget-check` passed all four shipped kernels without a budget change.
+See the [validation record](../reports/INTERNATIONAL-KEYBOARD-VALIDATION.md)
+for row names, commands, instrument repairs and limits.
+
+The final size capture after the budget build exactly matches every size
+and core hash in `keyboard-final.json`. Screenshots were refreshed with the
+verified instrument; the plan is also available in a white-background
+Markdown browser viewer in this feature worktree.

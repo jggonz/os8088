@@ -111,8 +111,8 @@ module hold is retained until its original owner releases it.
 
 ## XT cost and visible evidence
 
-The full KL_SCAN call/return is 123 cycles with the already-armed observer
-and no module. Tested explicit paths range from 1,595 to 6,936 cycles,
+The full KL_SCAN call/return is 118–124 cycles with the already-armed observer
+and no module. Tested explicit paths range from 1,475 to 6,911 cycles,
 including an unsupported dead-key pair that searches the whole bounded
 composition table. At 4.77 MHz that maximum is about 1.45 ms. Actual module
 execution uses at most 26 stack bytes. No allocation, file I/O or kernel API
@@ -145,3 +145,29 @@ The unchanged kernel then passed the original burst, modifier-preemption
 and read-only image-folder cases. No kernel fast bypass, stack budget or
 stress-input delay was added. The final native suite uses that verified
 instrument in a frozen tree, without old boot snapshots.
+
+## Final checks
+
+All 45 scoped soak rows passed: eight host/QEMU, 30 native UI, six Bochs and
+one 86Box. The native rows ran from a frozen source/build snapshot with the
+verified emulator and boot cache disabled. Full OS verification passed
+76 checks with five declared optional C/PageDesk skips and no failures;
+the strict budget gate passed all four kernels. A final capture matches
+every committed core hash and size from the A/B report.
+
+The copied machine configuration also lacked the full gate's VGA 128KB
+profile. Synchronizing the verified configuration bundle resolved that
+launch failure; existing named machine and overlay definitions were
+unchanged. The complete full gate was then rerun alone and passed.
+
+The 86Box code matrix initially had a different premise problem: before a
+serial mouse speaks, keyboard-mouse fallback owns keypad 5. Both the
+starting and feature kernels consumed Ctrl+keypad-5 there. Establishing one
+genuine serial packet makes both produce the expected 8F00 BIOS word.
+The test states that prerequisite, and corrupting the actual keypad table
+still makes it fail. No kernel behavior or bytes changed for either
+instrument diagnosis.
+
+The [validation record](reports/INTERNATIONAL-KEYBOARD-VALIDATION.md) lists
+the final rows and limits. VGA/CGA/Hercules screenshots were recaptured
+with the verified emulator; Mega's text capture is from Bochs.

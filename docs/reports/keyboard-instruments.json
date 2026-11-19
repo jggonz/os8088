@@ -30,5 +30,15 @@
     "event1ms"
   ],
   "source_diff_check": "PASS",
-  "purpose": "Final native keyboard verification uses the repository pin with all 17 patches; the earlier copied binary omitted keyboard pacing patches and its stress results were discarded."
+  "purpose": "Final native keyboard verification uses the repository pin with all 17 patches; the earlier copied binary omitted keyboard pacing patches and its stress results were discarded.",
+  "machine_config_sha256": {
+    "machines/compaq_deskpro.toml": "c76e7f591573736f05ef92abc3741ba541eba19958a5ebd0c7efb980e1442634",
+    "machines/compaq_portable.toml": "8de43a4bb33fd44e7a02306ca6706b751a2395062c332c4bd82bed8bae604c8f",
+    "machines/config_overlays.toml": "619360477d1555b1e1b3047c13a0528437bdf1854783f6d2494bf7f0e3c0e096",
+    "machines/generic_xt.toml": "c49c23763cca9ee9b3a5a6eb7a8e0cca509888f0dccb94b0857971ddc68b60a3",
+    "machines/ibm5150.toml": "56abe9d0eb2a937ed213dd901f99ae8b40b9cb15c735d5ce5e77e2774469d689",
+    "machines/ibm5160.toml": "993c3a3b98bc8b1c760b13def3ea5e54d59691305b378b2eb7d261603dd226bd",
+    "machines/ibm_pcjr.toml": "98f740fbffffd6c200ad732d1cdb5335e4fa637f0dca137ea3717da53ceea61f",
+    "machines/tandy1000.toml": "2b9611b87fc9976fb9ca8aab281aaf087f8fc57c3d3f82f960a84bf249983590"
+  }
 }
