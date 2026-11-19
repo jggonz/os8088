@@ -5874,8 +5874,12 @@ $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) 
 # an application carries one (SPEC.md 19.9).
 # Makefile is a prerequisite for dirsw360.img's reason: the folder list IS
 # the payload and lives in the recipe.
+# --spc 4 gives it a HARD DISK's cluster, 2KB, and not a floppy's: a big
+# entry's pieces must be whole clusters of the destination (SPEC.md 92.13.1,
+# issue #381), and 63KB is a multiple of 512 and 1KB, so on the IBM geometry
+# assertion 13 could never see a piece cut at the wrong size.
 $(BUILD)/thewiredata.img: tools/os88disk.py Makefile | $(BUILD)
-	python3 tools/os88disk.py -o $@ --size 1440 \
+	python3 tools/os88disk.py -o $@ --size 1440 --spc 4 \
 		--folder MEDIA --folder SYSTEM/APPDATA
 
 .PHONY: thewiretest
