@@ -4749,7 +4749,9 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 ; -----------------------------------------------------------------------------
 %macro CFG_SHARED 1
 
-; %1_pack - the live settings into the struct. All registers preserved.
+; %1_pack - the live settings into the struct. The cpc writer preserves all
+; registers. The boot reader keeps AX (the read byte count); its sole caller
+; %1_load already banks every other register this helper spends.
 ;
 ; The struct is KERNEL-PRIVATE and positional: only the FILE has to be
 ; self-describing. What a key the file does not carry falls back to is
@@ -4760,10 +4762,12 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %endif
 %1 %+ _pack:
     push ax
+%ifidn %1, cpc
     push bx
     push cx
     push si
     push di
+%endif                          ; writer keeps its complete register bank
 %ifdef KERN_BIG
     xor ax, ax
 %ifidn %1, cpc                  ; writer queries; boot seeds the default only
@@ -4805,7 +4809,9 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     ;
     ; **kern_small's differs and always did**, because its table never had the
     ; RAM disk row (SPEC.md 62.9.15) so the two after it sat one lower.
+%ifidn %1, cpc
     push dx
+%endif
     xor ax, ax                  ; AX = WANT
 %ifdef KERN_BIG
     cwd                         ; DX = ANS (AX is 0, so its sign is)
@@ -4836,7 +4842,9 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %ifdef KERN_BIG
     mov [drv_cfg+CFG_ANS], dx
 %endif
+%ifidn %1, cpc
     pop dx
+%endif
     mov al, [sch_coop]          ; the live mode, through DS (kernel size
     mov [drv_cfg+CFG_SCH], al   ; pass 20: the far call to sched_mode_get, -2)
     mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
@@ -4862,10 +4870,12 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %endif
 %endif
 %endif
+%ifidn %1, cpc
     pop di
     pop si
     pop cx
     pop bx
+%endif
     pop ax
     ret
 
@@ -4879,7 +4889,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %macro CFG_BOOT 1
 
 ; %1_want_set - in AX = the bitmap. See %1_pack's walk for why the bit is not the
-; row. All registers preserved.
+; row. Private to %1_unpack: AX/BX/CX/DX/SI and flags are spent. That
+; caller reads none of them before reloading them, and %1_load owns the bank.
 ;
 ; **ONLY AN ANSWERED ROW TAKES THE FILE'S BIT** (SPEC.md 51.5.4): [drv_cfg+
 ; CFG_ANS] is stored into every row's DRVR_ANS here, and a row with it clear
@@ -4888,11 +4899,6 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 ; disk off, and a file saved on one that had it cannot switch it on where
 ; there is none: that row was never the user's choice.
 %1 %+ _want_set:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov si, %1 %+ _bit
     mov cx, DRV_MAX
     mov bx, drv_tab
@@ -4915,20 +4921,11 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     inc si
     add bx, DRVR_SIZE
     loop %%ws_next
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
-; %1_unpack - the struct back out into the live bytes. All registers preserved.
+; %1_unpack - the struct back out into the live bytes. Private to %1_load:
+; its outer frame restores the reader's inputs, and no helper result is read.
 %1 %+ _unpack:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
     mov si, %1 %+ _map
     mov cx, DRV_CFG_MAPN
 %%up_u:
@@ -5001,17 +4998,12 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     popf                        ; normalising it did, and a call to a far
                                 ; entry was five bytes against these thirteen
 %%up_out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; %1_key - in AX = a key; out CF=0 and DI = its entry in %1_keys (read `cs:`),
-; CF=1 = this kernel does not know it. Clobbers DI and flags.
+; CF=1 = this kernel does not know it. Clobbers CX/DI and flags. The sole
+; caller reloads CX with the table's expected length, or starts the next record.
 %1 %+ _key:
-    push cx
     mov di, %1 %+ _keys
     mov cx, CFG_NKEY
 %%scan:
@@ -5021,13 +5013,13 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     loop %%scan                 ; the second `pop cx / ret` went, -3)
     stc
 %%hit:
-    pop cx
     ret
 
 ; %1_deser - the file's records into the struct.
 ; in:  AX = bytes read into %1_buf
 ; out: CF = 0 the struct holds this file's settings; CF = 1 nothing usable
-; clobbers: flags
+; clobbers: AX/BX/CX/DX/SI/DI and flags. %1_load owns their bank; after
+; this call it tests CF alone, then %1_unpack reloads every input it needs.
 ;
 ; **Defaults first, records second.** %1_load packs the LIVE state before this
 ; runs, so a key that is absent - or present with a ver this kernel does not
@@ -5044,12 +5036,6 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 ; meant (SPEC.md 2.8.6). The destination stays DS - it is drv_cfg - so ES is
 ; not touched at all and no longer has to be banked.
 %1 %+ _deser:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     cmp ax, CFG_REC0            ; too short to hold even a header
     jb %%bad
     mov dx, ax                  ; DX = the file's length, the only bound
@@ -5094,7 +5080,6 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     cmp al, [cs:bx+%1 %+ _buf+CFR_VER]
     jne %%ds_next                  ; right key, DIFFERENT MEANING: the default
                                 ; stands, which is the whole point of ver
-    push si
     mov al, [cs:di+4]           ; where it lives in the struct: under 128
     cbw                         ; (the %if at %1_pack), so AH = 0
     mov di, ax
@@ -5106,7 +5091,6 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     inc si
     inc di
     loop %%cp
-    pop si
 %%ds_next:
     pop si                      ; ...the next record, bounded above
     jmp %%rec
@@ -5116,12 +5100,6 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %%ds_done:                      ; CF = 0 on all three ways in: two `ja`s
 %%dout:                         ; and the terminator's EQUAL compare (pass
                                 ; 18: the `clc / jmp short` went, -3)
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; %1_load - read SYSTEM.CFG and apply everything in it but the buffer
