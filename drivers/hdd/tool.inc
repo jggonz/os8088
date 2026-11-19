@@ -208,6 +208,15 @@ hd_tw_geomok:
                                 ; the other
     mov dx, [si+HP_LBA+2]
     call hd_lba_chs             ; [hd_cyl]/[hd_head]/[hd_sec] at OUR geometry
+    jnc .cmp                    ; ...past what an entry's CHS can name, the
+    cmp byte [si+HP_SCYL], 0xFF ; entry must SAY so - cylinder 1,023, the
+    jne .bad                    ; marker every tool writes there, with its
+    mov al, [si+HP_SSEC]        ; own head and sector, so only the cylinder
+    and al, 0xC0                ; is compared; the LBA is the whole of the
+    cmp al, 0xC0                ; address (SPEC.md 52.1.5)
+    jne .bad
+    jmp short .ok
+.cmp:
     call hd_chs_pack            ; AL = sector|cyl-high, AH = cyl-low
     cmp al, [si+HP_SSEC]
     jne .bad
@@ -848,6 +857,13 @@ hd_tw_format:
     call hd_fmt_plan            ; -> the cluster size and the FAT type
     jc .nofit
 
+    mov al, [hd_tsel]           ; THE VOLUME GOES BEFORE THE FORMAT, Delete's
+    mov ah, [hd_tdev]           ; own rule (SPEC.md 52.2.3): a volume left
+    call hd_tw_unmount_slot     ; mounted goes on caching a FAT and a root the
+    cmp byte [hd_tdrop], 0      ; format is about to rewrite - and on an
+    je .unmounted               ; Extended row it is every logical drive
+    call hd_cfg_mark            ; inside it (52.4.1). Staged, like Delete's
+.unmounted:
     mov word [hd_tmsg], hd_s_tdoing
     call hd_tw_repaint          ; say so BEFORE the writes: a 32MB format is
                                 ; hundreds of sectors and the user should not

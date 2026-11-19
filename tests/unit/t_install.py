@@ -125,13 +125,14 @@ eq(kdrvu, adrvu, "DRVU_* agree between the kernel and the SDK",
    why="the kernel defines OSAPI_DRV_USE's verbs for itself; a package that "
        "sends DRVU_CALL by the SDK's number must reach the CALL arm")
 
-# --- HDD.DRV stays on its 4KB rung --------------------------------------------
+# --- HDD.DRV stays on its 4.5KB rung ------------------------------------------
 drv = os.path.join(BUILD, "hdd.drv")
 if os.path.exists(drv):
     image = os88drv.image_unwrap(open(drv, "rb").read())
-    check(len(image) <= 4096, "HDD.DRV's image is within 4,096 bytes "
+    check(len(image) <= 4608, "HDD.DRV's image is within 4,608 bytes "
           "(%d)" % len(image),
-          why="SPEC.md 117.4: HDV_TOOL was paid for inside the driver; a "
-              "fifth kilobyte is claimed on every machine with a hard disk")
+          why="SPEC.md 52.4.1: the owner took the ninth half-KB for logical "
+              "drives and the large-disk transports (2026-11-18); a tenth is "
+              "claimed on every machine with a hard disk")
 
 done("t_install")

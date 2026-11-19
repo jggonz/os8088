@@ -43,12 +43,16 @@ HD_TOOLFILE  equ 0              ; (the name itself is in the resident: a
                                 ; string is not an ABI number)
 
 HD_MAXDEV    equ 4              ; devices the probe will report
-HD_MAXVOL    equ 4              ; volumes mountable at once: ONE PER FAT
-                                ; PARTITION, because four primaries is the
-                                ; whole of what a partition table holds and
-                                ; each is its own drive letter and its own
-                                ; desktop icon (SPEC.md 52.4). The kernel's
-                                ; DVOL_MAX (8) holds them beside the floppies
+HD_MAXVOL    equ 6              ; volumes mountable at once: ONE PER FAT
+                                ; PARTITION, primary or logical, each its own
+                                ; drive letter and desktop icon (SPEC.md 52.4,
+                                ; 52.4.1). Six is the kernel's DVOL_MAX (8)
+                                ; less the two floppies: a seventh could never
+                                ; be registered, so its row would be dead
+HD_MAXLOG    equ 24             ; links an extended partition's chain is
+                                ; followed for (SPEC.md 52.4.1): DOS letters
+                                ; D: to Z: are 23 logical drives, and the cap
+                                ; is what ends a chain that points at itself
 
 ; --- one device row, stride HDD_SIZE ----------------------------------------
 HDD_KIND     equ 0              ; db: HDK_*
@@ -57,6 +61,19 @@ HDD_UNIT     equ 1              ; db: int 13h drive (80h/81h), or 0/1 on the
                                 ; read HDD_BIOS, which a BIOS row also holds)
 HDD_FLAGS    equ 2              ; db: bit 0 = geometry known, bit 1 typed by
                                 ; hand; HDF_CYLASK/HDF_CYLOK below
+HDF_LBA      equ 0x04           ; ...rung 1: IDENTIFY word 49 bit 9 said the
+                                ; drive takes LBA addressing, so a sector its
+                                ; CHS geometry cannot name goes out in LBA mode
+                                ; (SPEC.md 52.1.5)
+HDF_EBIOS    equ 0x08           ; ...rung 0: AH=41h said the ROM has the
+                                ; packet calls, so a sector past cylinder
+                                ; 1,023 goes out as AH=42h/43h (SPEC.md 52.1.6)
+HDF_XCYL     equ 0x10           ; ...rung 1: this IDE drive may be addressed
+                                ; past cylinder 1,023, because no unpaired BIOS
+                                ; row could be the same disk under a BIOS's
+                                ; translation (SPEC.md 52.1.5) - without it a
+                                ; drive past 504MB keeps the 1,024 bound and
+                                ; stays unusable, as it always was
 HDF_CYLASK   equ 0x40           ; ...rung 0's ROM has been ASKED whether one
                                 ; int 13h may carry a read across a head
 HDF_CYLOK    equ 0x80           ; ...and it may (SPEC.md 18.91.5): hd_bios_run
@@ -92,7 +109,9 @@ HMB_NONE     equ 2              ; it read fine and is unpartitioned
 HDV_USED     equ 0              ; db: 1 = live
 HDV_DEV      equ 1              ; db: which device row
 HDV_VOL      equ 2              ; db: the kernel's volume index
-HDV_PART     equ 3              ; db: which partition slot (0..3)
+HDV_PART     equ 3              ; db: which partition slot: 0..3 a primary,
+                                ; 4 + n the n-th record of the extended
+                                ; partition's chain (SPEC.md 52.4.1)
 HDV_BASE     equ 4              ; dd: its first LBA on the device
 HDV_SECS     equ 8              ; dw: its length, 0 = past 32MB (SPEC.md 18.7.5)
                                 ; HDV_LSEG WAS HERE - the 6KB listing claim
@@ -100,6 +119,11 @@ HDV_SECS     equ 8              ; dw: its length, 0 = past 32MB (SPEC.md 18.7.5)
                                 ; with the donation itself (SPEC.md 22.6)
 HDV_VOLH     equ 10             ; db: OUR handle for it - the row's own index,
                                 ; which is what comes back in DSV_BLK's AH
+HDV_PARENT   equ 11             ; db: the PRIMARY slot it lives in: its own
+                                ; for a primary, the extended partition's for
+                                ; a logical drive - what hd_vol_find matches a
+                                ; slot by as well, so dropping the extended
+                                ; slot drops every drive inside it (52.4.1)
 HDV_LEN      equ 12             ; dd: its WHOLE length, which hd_blk bounds
                                 ; every transfer by: past 32MB HDV_SECS says
                                 ; 'unknown' and rule 13 checks nothing, so
@@ -129,6 +153,8 @@ HPT_FAT16S   equ 0x04           ; FAT16 under 32MB - what DOS 3.3 wrote, and
                                 ; what this driver writes up to 32MB
 HPT_FAT16B   equ 0x06           ; FAT16 at or over 32MB - what it writes past
                                 ; that since SPEC.md 52.3.1 - and
+HPT_EXT      equ 0x05           ; an EXTENDED partition: a chain of logical
+HPT_EXTL     equ 0x0F           ; drives, CHS- or LBA-flavoured (52.4.1)
 HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it, which is
                                 ; MOUNTABLE even though this driver never
                                 ; writes one: another machine's FDISK did, and

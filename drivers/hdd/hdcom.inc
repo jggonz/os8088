@@ -115,13 +115,14 @@ hd_dev_row_ck:
 ; hd_chs - a 32-bit LBA as CHS, for the geometry in DI (module internal)
 ; in:  DI = the device row, [hd_lba] = the LBA
 ; out: CF = 0 and [hd_cyl]/[hd_head]/[hd_sec]; CF = 1 = past what CHS can
-;      name (cylinder 1,024 and up) - not the drive's own HDD_CYL
+;      name: cylinder 1,024 and up on a BIOS row (int 13h's ten bits); on an
+;      IDE row, 1,024 and up AND the drive's own HDD_CYL and up (52.1.5)
 ; clobbers: flags
 ;
 ; ONE `div` pair and no 32/16 two-step, and that is provable rather than
-; lucky: spt*heads is at most 63*255, the highest LBA CHS can name is
-; 1024*255*63, and the quotient - the cylinder - is under 1024. DX before
-; each divide is therefore far below the divisor.
+; lucky: the first divide is refused unless DX is below the divisor, so its
+; quotient - the cylinder - fits a word, and the second divides a remainder
+; already below spt*heads.
 ; -----------------------------------------------------------------------------
 hd_chs:
     push ax
@@ -140,8 +141,14 @@ hd_chs:
     cmp dx, cx
     jae .bad                    ; the quotient would not fit a word
     div cx                      ; AX = cylinder, DX = the rest
-    cmp ax, 1024
-    jae .bad
+    cmp ax, 1024                ; int 13h's ten bits of cylinder, on every
+    jb .cyl                     ; row - a BIOS reserves the drive's last
+                                ; cylinder from AH=08h and it is still there
+    cmp byte [di+HDD_KIND], HDK_IDE
+    jne .bad
+    cmp ax, [di+HDD_CYL]        ; ...and past them the task file's sixteen,
+    jae .bad                    ; to the drive's OWN geometry: past THAT is
+.cyl:                           ; LBA mode's, or nobody's (SPEC.md 52.1.5)
     mov [hd_cyl], ax
     mov ax, dx
     xor dx, dx
@@ -556,8 +563,11 @@ hd_geom_ok:
     mov ax, [di+HDD_CYL]
     test ax, ax
     jz .no
-    cmp ax, 1024
-    ja .no
+    test byte [di+HDD_FLAGS], HDF_XCYL
+    jnz .heads                  ; the task file carries sixteen bits of
+    cmp ax, 1024                ; cylinder and int 13h ten: an IDE drive past
+    ja .no                      ; 504MB is ADDRESSABLE when nothing else can
+.heads:                         ; be the same disk (SPEC.md 52.1.5)
     mov ax, [di+HDD_HEADS]
     test ax, ax
     jz .no

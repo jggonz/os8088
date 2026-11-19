@@ -1677,7 +1677,7 @@ DRVM_IMG_SND equ 21             ; ceil(build/sound.drv / 512) - t_drvmem
                                 ; (as LOADED it holds less: DRV_H_KEEP hands
                                 ; the tail back, with a mixer or without -
                                 ; SPEC.md 34.15.1)
-DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv / 512)   checks
+DRVM_IMG_HDD equ 9              ; ceil(build/hdd.drv / 512)   checks
 DRVM_IMG_ETH equ 35             ; ceil(build/ether.drv / 512)   every one
 DRVM_IMG_RAM equ 11              ; ceil(build/ramdisk.drv / 512)   of these
 DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
@@ -1826,7 +1826,7 @@ section .text
 ; A LITERAL and not `equ DRVM_HDD`, because t_mirror compares the text when it
 ; is not a number and the SDK cannot see DRVM_HDD. The %if is what makes the
 ; literal safe, and it is the half a package could never have had.
-DRVM_CEIL_DISK equ 4            ; MIRRORED in apps/os88api.inc - t_mirror
+DRVM_CEIL_DISK equ 5            ; MIRRORED in apps/os88api.inc - t_mirror
 DRVM_CEIL_NET  equ 34           ; ...ditto: ETHER.DRV's row alone (the %if)
 DRVM_CEIL_NET_PCI equ 40        ; ...and DRVC_NET's on every big build
                                 ; (SPEC.md 125.5): ETHER.DRV and PCIETHER.DRV

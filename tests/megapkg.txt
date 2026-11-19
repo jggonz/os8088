@@ -52,6 +52,13 @@ apps/vbattle/vbattle.asm 2      # VIDEO BATTLE PLAYS ON kern_mega IN THE
 apps/os88real.inc 1             # os88real_swap's `test ah, CPU_F_PM`: a
     # bracket the kernel ran in protected mode keeps its selectors. Shipped
     # in Video Battle for the reason on the line above
+drivers/hdd/hdd.asm 1           # hd_xfer_ext's `test ah, CPU_F_PM`: the
+    # int 13h packet calls REFUSED in protected mode (SPEC.md 52.1.6), ten
+    # bytes, paid for inside the same routine. Fail-safe in both directions:
+    # a real-mode kernel never sets the bit, and on kern_mega a sector past
+    # BIOS cylinder 1,023 on a ROM-only controller answers 04h as it did
+    # before the packet calls existed. It cannot be under PKG_MEGA because
+    # the driver is ONE image on every kernel's system disk.
 drivers/hdd/hdxms.inc 1         # HDD.DRV's fill straight into XMS refused
     # under protected mode (hd_xa_arm): its loaded-base trick loads DS =
     # FFFFh, which is a #GP there (KERN-MEGA-PLAN 14.16). A correctness
