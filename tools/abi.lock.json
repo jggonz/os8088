@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "fa1b058e4aff37818f40b13f2da0a9238124a85459a4c48733df77dca576a841",
+  "fingerprint": "5e86484521019423443d4e22ae6e802569aaee163f1275224a0081bdb40457c0",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "172c2e7961e01deb103f0de33ba0f9dad4a63ec4ccf2e5f43f1c4637bb46f80c",
+  "fingerprint": "dd2d64169e355dd63c7c41c4d891a809235e0a2e789d941892f3645b18dea0ff",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2435,6 +2435,20 @@
    "guard": "HD_ABI_VER",
    "reason": "DRVM_CEIL_DISK 4 -> 5: HDD.DRV's image is 4.5KB for logical drives and the large-disk transports (SPEC.md 52.4.1); a quoted ceiling, nothing built before stops running",
    "to": 7
+  },
+  {
+   "fingerprint": "dd2d64169e355dd63c7c41c4d891a809235e0a2e789d941892f3645b18dea0ff",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Append compatible OSAPI_KEYBOARD cell; existing cells and format unchanged",
+   "to": 13
+  },
+  {
+   "fingerprint": "5e86484521019423443d4e22ae6e802569aaee163f1275224a0081bdb40457c0",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Append compatible OSAPI_KEYBOARD cell; existing cells and format unchanged",
+   "to": 14
   }
  ]
 }

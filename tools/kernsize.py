@@ -294,7 +294,7 @@ THEMES = (
     # knob-only (`make KBDDIAG=1`), 0 in every shipped build, and what a byte
     # it grows is is the input hardware's question.
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "mouproto.inc", "moudiag.inc", "kbddiag.inc", "vmmouse.inc", "clock.inc",
+     ("mouse.inc", "keyboard.inc", "mouproto.inc", "moudiag.inc", "kbddiag.inc", "vmmouse.inc", "clock.inc",
       "driver.inc", "hiber.inc", "snd.inc", "serial.inc", "cpudet.inc", "xmem.inc")),
     # mouproto.inc (SPEC.md 9.5) goes beside mouse.inc, and it always MEASURES
     # ZERO: it is the serial packet's arithmetic as a macro, so its bytes are
