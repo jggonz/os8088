@@ -291,6 +291,24 @@ def main(argv=None):
             require(not p.word("mod_r_keyboard"),
                     "a clean panel close leaked the sample glyph hold")
             print("clean close: BIOS-only accented sample releases KEYBOARD.DRV")
+            # The existing writer must refuse a foreign system volume while
+            # preserving the already selected keyboard and retry flag.
+            p.open(); p.pick(4, expected=4)
+            restored, foreign = scratch / "before-save-failure.img", scratch / "foreign.img"
+            os88flush.Flush(marty=ui.m).save(0, str(restored))
+            shutil.copyfile(apps, foreign)
+            ui.m.mount(0, str(foreign))
+            tick = int.from_bytes(ui.m.read(0x46c, 4), "little")
+            ui._wait(lambda: (int.from_bytes(ui.m.read(0x46c, 4), "little") - tick) &
+                     0xffffffff >= 40, "the XT motor timeout before detecting swapped media", 5)
+            p.close()
+            ui.wait_toast(says="Not Saved: No Sys in A:")
+            require(p.byte("cp_dsave") == 1 and p.byte("cp_wdirty") and p.layout() == 4,
+                    "save failure lost the working layout or retry flag")
+            require(not os88flush.Flush(marty=ui.m).dirty(0),
+                    "a refused settings save wrote to the foreign disk")
+            ui.m.mount(0, str(restored))
+            print("save refusal: French remains active, retry retained, foreign disk untouched")
 
         for name, replacement in (("missing", b""),
                                   ("wrong-version", b"KL\x02\x01\x04"),

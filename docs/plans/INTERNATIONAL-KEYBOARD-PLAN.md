@@ -2,7 +2,8 @@
 
 Issue: [#385 — International Keyboard Mapping](https://github.com/jggonz/os8088/issues/385).
 Baseline inspected: `b82e4e94310e` (2026-11-19).
-Status: implementation started; stories remain unchecked until verified.
+Status: waves 0–3 implemented and observed in combined QA; final regression pass in progress.
+PR: [#396](https://github.com/jggonz/os8088/pull/396).
 Build diary: [How international keyboards were built](../HOW-INTERNATIONAL-KEYBOARDS-WERE-BUILT.md).
 
 ## Outcome and scope
@@ -66,11 +67,11 @@ revise it before proceeding; do not relax the requirement.
 | Existing glyph source | [`tools/cp437font.py`](../../tools/cp437font.py), [`apps/os88cp437.inc`](../../apps/os88cp437.inc) (§70.8.6) | Reuse the authored glyph shapes where they match; consoles retain their existing CP437 meaning. |
 | DOS ownership changes | [`kernel/fsx.inc`](../../kernel/fsx.inc), [`apps/dos/dosw.inc`](../../apps/dos/dosw.inc), [`kerndos/kdkbd.inc`](../../kerndos/kdkbd.inc) (§53, §96.50, §96.54) | A window callback, a fullscreen INT 16h reader and kern_dos do not share one lifetime. Specify each boundary. |
 
-## Proposed design
+## Implemented design
 
 ### Put the feature in an optional keyboard module
 
-Use a §2.8 internal module, proposed filename **KEYBOARD.DRV**, assembled
+Use a §2.8 internal module, filename **KEYBOARD.DRV**, assembled
 with each kernel and cut out of the core image by `tools/os88mod.py`.
 This uses the existing module mechanism; the `.DRV` suffix does not make
 it a new §51 device-driver class or require a second loader.
@@ -139,7 +140,7 @@ including focus changes and entry to a foreign session.
 
 ### Keep encoding stable across layout changes
 
-The proposed native extension uses **CP850 byte positions** for Spanish and
+The native extension uses **CP850 byte positions** for Spanish and
 French characters beyond ASCII. Its mapping is defined by the
 [published CP850 table](https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC/CP850.TXT).
 ASCII, control bytes and the `W_ONKEY` register shape retain their meanings.
@@ -213,13 +214,13 @@ configuration must meet the stronger no-growth requirement above.
 
 ### Wave 0 — Contract and compatibility decisions
 
-- [ ] Add the keyboard-module contract to SPEC.md §2.8 and §9 and update the
+- [x] Add the keyboard-module contract to SPEC.md §2.8 and §9 and update the
   affected portions of §6, §13, §31, §51.5 and §83 **before implementation**.
-- [ ] Record a reproducible core-image/resident baseline for all four
+- [x] Record a reproducible core-image/resident baseline for all four
   kernels and a byte budget for each proposed hook, slot and settings
   change. Identify the savings that pay for them before implementing the
   complete translator. Adding another layout must add no core bytes.
-- [ ] Pin all three international variants, complete scan/modifier vectors,
+- [x] Pin all three international variants, complete scan/modifier vectors,
   encoding, dead-key rules, layout IDs, default and settings-record format. Use the
   [Spanish (Spain) reference](https://learn.microsoft.com/en-us/globalization/keyboards/kbdsp),
   [Latin American reference](https://learn.microsoft.com/en-us/globalization/keyboards/kbdla)
@@ -228,11 +229,11 @@ configuration must meet the stronger no-growth requirement above.
   committed vectors. The
   [keyboard layout samples](https://learn.microsoft.com/en-us/samples/microsoft/windows-driver-samples/keyboard-layout-samples/)
   are a primary source for scan and modifier table structure.
-- [ ] Write a compatibility table for native windowed/fullscreen packages,
+- [x] Write a compatibility table for native windowed/fullscreen packages,
   DOS prompt and windowed/fullscreen programs, kern_dos, WIN16 and emulated
   guests. Name where translation is active, bypassed or converted, and how
   the desktop layout is restored. Cover mega's real-mode brackets too.
-- [ ] Define module entry/state/selector contracts, keyboard and glyph
+- [x] Define module entry/state/selector contracts, keyboard and glyph
   holds, IRQ pinning and final drop. Record code/data/stack costs and
   ownership; all new international translation and extra-glyph bodies
   remain outside the core image.
@@ -245,15 +246,15 @@ net core-image or default resident growth on any shipped kernel.
 
 ### Wave 1 — Optional module and ASCII milestone
 
-- [ ] Build KEYBOARD.DRV with the existing module tools and build stamps.
+- [x] Build KEYBOARD.DRV with the existing module tools and build stamps.
   Put the translator, all explicit layout definitions and mutable state
   in its image/BSS. Ship it separately for each kernel in the supported
   disk geometries; the core image contains none of its payload.
-- [ ] Connect the XT, AT 4Fh and mega adapters through the minimal costed
+- [x] Connect the XT, AT 4Fh and mega adapters through the minimal costed
   dispatch, with BIOS-default bypass and safe missing-module behavior.
-- [ ] Preserve make/break tracking, buffer ordering, modifier-at-arrival
+- [x] Preserve make/break tracking, buffer ordering, modifier-at-arrival
   semantics and existing special keys. Exercise the ISO 56h key explicitly.
-- [ ] Add independent vectors against the assembled guest code, including
+- [x] Add independent vectors against the assembled guest code, including
   unsupported keys, interleaved modifiers and a full BIOS ring. Expected
   results must not be generated from the implementation's map.
 
@@ -265,13 +266,13 @@ This is a partial milestone, not issue closure.
 
 ### Wave 2 — Selection and persistence
 
-- [ ] Add the Keyboard page using the existing Control Panel table and
+- [x] Add the Keyboard page using the existing Control Panel table and
   controls, including scrolling when the extra row requires it.
-- [ ] Implement atomic selection, failed-load rollback, the typing sample,
+- [x] Implement atomic selection, failed-load rollback, the typing sample,
   versioned persistence on big/emu/mega and session-only behavior on small.
-- [ ] Check both Spanish variants independently: their punctuation/AltGr
+- [x] Check both Spanish variants independently: their punctuation/AltGr
   positions must come from separate definitions rather than one alias.
-- [ ] Verify boot selection, missing/corrupt data, save failure, switching
+- [x] Verify boot selection, missing/corrupt data, save failure, switching
   with keys queued and closing/reopening the panel.
 
 Acceptance: a user can select either Spanish variant or French without
@@ -280,16 +281,16 @@ persistence. BIOS-default boot needs no optional module or new module read.
 
 ### Wave 3 — Accents and native text round trips
 
-- [ ] Implement the specified Spanish and French extended characters and
+- [x] Implement the specified Spanish and French extended characters and
   dead keys in the module, including a shared optional glyph provider and
   seam handling with stable encoding across layouts.
-- [ ] Implement the glyph-client holds and final release. Verify switching
+- [x] Implement the glyph-client holds and final release. Verify switching
   to BIOS default with an accented document open, closing the last client,
   and reopening that document with translation still disabled.
-- [ ] Update shared text controls and Notepad's insertion, find/replace,
+- [x] Update shared text controls and Notepad's insertion, find/replace,
   rendering and save/reopen paths. Audit unsigned-byte classification and
   narrowly fix semantic shortcuts affected by the new layout.
-- [ ] Apply the compatibility policies from wave 0, with explicit conversion
+- [x] Apply the compatibility policies from wave 0, with explicit conversion
   or bypass wherever native bytes meet a different character set.
 
 Acceptance: on each Spanish variant type `ñ Ñ á é í ó ú ü ¿ ¡`, and on
@@ -372,3 +373,43 @@ layout has loaded.
 Spanish and French hardware validation is useful final evidence, but request
 it only after an emulator-tested image and a short, precise checklist are ready;
 do not contact the issue author without explicit authorization.
+
+## Combined QA observations and fixes
+
+The real UI passed Spanish (Spain), Latin American Spanish and French typing
+on VGA, CGA and Hercules. Note Pad passed accented edit/find/replace,
+two-instance ownership, BIOS-default repaint, independent FAT byte checks,
+save/reopen and final release. The 128KB CGA machine passed all five choices
+and session-only restart. Settings tests passed KL save/reboot, unrelated
+clock preservation, malformed records and missing/mismatched module refusal.
+
+| Defect found in combined QA | Fix and evidence |
+| --- | --- |
+| Small kernel crossed its locked heap floor; permanent glue grew | Move only directory-mutation bodies into DISKOPS, retain the loader's transitive helpers, compact boot-only settings saves; all four exact size totals now shrink. |
+| Legacy ASCII glyph callers could sample a changing pointer | Snapshot bounds, entry slot and original pointer under saved FLAGS/CLI; missing-CLI negative fails. |
+| Worker QUERY during allocation could enter unarmed slots | Return read-only BIOS default until slots publish atomically; actual-instruction interleaving and missing-CLI control pass. |
+| Failed package entry leaked a glyph hold | Unreserve follows the existing all-grants cleanup; real aborted entry and same-slot reuse pass; removing cleanup leaks and fails. |
+| Hibernate font repair overwrote the optional module header and hung | Suspend provider around original-font repair and rearm without loading or dropping; active-layout and glyph-only resumes pass on XT and Mega. |
+| Mega lost the instance stamp while deriving a module alias | Preserve DX around alias setup; two-instance text holds now pass under Bochs, missing-save control fails. |
+| A real-mode fullscreen bracket interpreted a protected font selector as a paragraph | Borrow the conventional provider with bracket-only ASCII bounds; real high-memory package proves protected/real/protected transitions and restored CP850. |
+| Small display footer clipped | Shorten the caption and place it inside the 132-pixel panel; fresh CGA/Hercules captures show the whole page. |
+| Fullscreen test released Alt before the input handoff completed | Hold the physical chord through the observed transition, then release; DOS fullscreen and WIN16 owner tests pass. |
+
+The XT trace measures the complete KL_SCAN call/return: the armed unloaded
+path is 123 cycles; observed explicit-layout paths span 1,595–6,936 cycles
+(about 0.33–1.45 ms at 4.77 MHz). These are measured cases, including the
+unsupported-composition slow path, rather than a hardware worst-case claim.
+Actual module execution peaks at 26 bytes of stack, within the 48-byte
+contract. Rapid typing and keyboard-mouse compatibility are in the final
+scoped regression union.
+
+The [size report](../reports/INTERNATIONAL-KEYBOARD-SIZE.md) records all
+sections and raw/shipped/resident totals. Stripped cores shrink by 176,
+128, 176 and 16 bytes on big/small/emu/mega. Optional claims are 5.5 KiB
+(6 KiB on mega), shared by layout and glyph clients. No budgets were raised.
+Folder mutation now requires the matching system-disk DISKOPS module.
+
+Physical Spanish/French keyboards have not been exercised. WIN16 coverage
+uses its actual idle entry and a synthetic owner-name change; it does not
+claim execution of a reference NE program. Broader DOS/WIN16 language input,
+modern AZERTY, Unicode and translated filenames remain outside this scope.

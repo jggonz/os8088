@@ -37716,8 +37716,8 @@ a layout decision (`kerndos/kdlayout.inc`).
 
 #### 18.5.3 Directory mutations in the on-demand disk module
 
-**Planned integration for optional keyboards (§9.16):** the private bodies
-for Rename, New Folder and folder removal move into the existing
+**Optional-keyboard integration (§9.16):** the private bodies
+for Rename, New Folder and folder removal live in the existing
 `DISKOPS.DRV` (§2.8). Their public register, CF, validation and disk-integrity
 contracts remain those in §18.4–§18.6. File reads, ordinary file writes,
 boot, module loading and the shared FAT/directory commit helpers remain

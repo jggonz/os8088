@@ -19,7 +19,8 @@ restart; its panel says so.
 ## Optional memory
 
 BIOS default does not load `KEYBOARD.DRV`. Selecting an explicit layout loads
-that file from the system disk into an optional heap claim. Once loaded,
+that file from the system disk into an optional heap claim: 5.5 KiB on
+big/small/emu, or 6 KiB on mega. Once loaded,
 typing does not require the disk to remain inserted. Keep the driver from
 the same build and kernel variant as your system disk.
 

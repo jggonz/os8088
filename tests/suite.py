@@ -8949,11 +8949,11 @@ SOAK = [
         "the cleanup call leaks the claim. 6.02s measured.",
         needs=("marty",), serial=True,
         wants=("build/os8088-360.img", "build/kbdlayoutabort.img", "build/kbdhold.bin")),
-    Row("kbdsettings", "soak", py("tests/kbdsettings.py"), 40.0,
+    Row("kbdsettings", "soak", py("tests/kbdsettings.py"), 50.0,
         "SPEC.md 31.16: all five Keyboard radios, physical sample/clear, clean "
         "close, glyph-only lifetime, independent saved KL decode/reboot and "
         "unrelated clock setting; malformed/missing KL and missing/mismatched "
-        "module refuse without disk changes. Wrong saved layout is red. "
+        "module refuse without disk changes; foreign-media save failure keeps the working layout and retry flag. Wrong saved layout is red. "
         "34.86s measured on Hercules.",
         needs=("marty",), serial=True,
         wants=("build/os8088-360.img", "build/apps360.img")),
@@ -8968,7 +8968,7 @@ SOAK = [
         "replace, two live instances, BIOS-default repaint, save/read by an "
         "independent FAT reader, reopen/New/final drop. Trace the complete "
         "XT KL_SCAN call/return, including unsupported dead-key composition; "
-        "removing RELEASE must leak. 45.62s measured including profiling.",
+        "removing RELEASE must leak. 45.62s measured including profiling; system media is swapped out for accented typing/repaint.",
         needs=("marty", "nasm", "pil"), serial=True,
         wants=("build/os8088-360.img", "build/apps360.img", "build/notepad.bin")),
     Row("kbdlayouttext-cga", "soak",
@@ -8995,6 +8995,21 @@ SOAK = [
                "build/keyboard.drv", "build/hiber.drv", "build/ctrl.drv",
                "build/format.drv", "build/diskops.drv", "build/notepad.o88",
                "build/notepad.bin")),
+    Row("kbdlayoutlegacy", "soak", py("tests/kbdlayoutlegacy.py"), 24.0,
+        "SPEC.md 9.16: actual DOS window/fullscreen and idle WIN16 entries "
+        "publish RAW on their real owner and retain BIOS q/a/w/z with French "
+        "selected. Renaming/focus changes retain the flag; returning native "
+        "focus produces French again. Clearing RAW must fail the byte vector. "
+        "No reference NE execution is claimed. 19.82s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/kbdlayoutlegacy.img")),
+    Row("kbdlayoutreal", "soak", ["env", "OS88_MEGA=1"] + py("tests/kbdlayoutreal.py"), 16.0,
+        "SPEC.md 6.7, 53: an actual high-memory package selects Spanish, borrows "
+        "legacy ASCII glyphs before/inside FSXF_REAL/after, proves CR0.PE and "
+        "real CS inside the bracket, then retains CP850 and native input. "
+        "12.13s measured under Bochs.",
+        needs=("bochs", "nasm"), serial=True,
+        wants=("build/mega.img", "build/kbdlayoutreal.img", "build/kbdreal.bin")),
     Row("diskmut", "soak", py("tests/diskmut.py"), 25.0,
         "SPEC.md 18.5.3: Rename/New Folder/empty removal/recursive removal "
         "through actual public APIs on a B: subdirectory. Success, absent "

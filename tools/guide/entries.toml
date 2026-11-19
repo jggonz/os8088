@@ -113,7 +113,7 @@ short = "Support for desktop widgets"
 ["DISKOPS.DRV"]
 title = "Disk operations"
 kind = "system"
-summary = "Copies a whole floppy sector for sector, to another floppy or to an image file and back, and compresses or expands files."
+summary = "Copies a whole floppy sector for sector, to another floppy or to an image file and back; compresses or expands files; and creates, renames or removes folders."
 short = "Copy disks, compress files"
 
 ["DOCK.DRV"]

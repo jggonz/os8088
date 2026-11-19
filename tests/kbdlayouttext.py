@@ -271,6 +271,24 @@ def main(argv=None):
                     report_irq(trace, item, irq_entry, irq_finish)
                 print("physical layout", item, expected.hex())
             first.expect(EXPECTED)
+            if a.profile:
+                # A real media swap proves the active translator and repaint
+                # need no system-file read. Preserve the guest's saved CFG,
+                # substitute a private APPS disk without KEYBOARD.DRV, type an
+                # accented key, redraw it, undo it and restore the system disk.
+                swapped = scratch / "system-before-swap.img"
+                foreign = scratch / "foreign-apps.img"
+                os88flush.Flush(marty=m).save(0, str(swapped))
+                shutil.copyfile(apps, foreign)
+                m.mount(0, str(foreign))
+                ui.press("Digit2", need=True)
+                first.expect(EXPECTED + b"\x82")
+                first.front(); ui.still()
+                first.expect(EXPECTED + b"\x82")
+                ui.press("Backspace", need=True)
+                first.expect(EXPECTED)
+                m.mount(0, str(swapped))
+                print("media: French accented typing/repaint works with system disk removed")
             # A middle insertion and deletion must move CP850 bytes exactly.
             ui.press("Home").press("ArrowRight").press("ArrowRight").press("ArrowRight")
             ui.press("Digit2", need=True)

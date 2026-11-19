@@ -3,7 +3,7 @@
 `CTRL.DRV` is the Control Panel: the window where you set how the machine
 schedules programs, the date and time, which drivers are loaded, which
 display it uses, the sound hardware, the look of the desktop, where the dock
-stands and how the floppy drives are treated.
+stands, how the floppy drives are treated and which keyboard layout you use.
 
 ![The Control Panel open on its first page.](shot:ctrl-drv-scheduler)
 
@@ -143,10 +143,22 @@ panel.
 
 These settings apply at the next restart, as the page says.
 
+## Keyboard
+
+Choose **BIOS default**, **US QWERTY**, **Spanish (Spain)**,
+**Latin American Spanish** or **French AZERTY**. The change takes effect
+immediately. Type in the sample below the choices to check it; Backspace
+edits the sample and Escape clears it.
+
+An explicit layout loads [[KEYBOARD.DRV]] from the system disk. Native text
+uses CP850 accents; DOS and WIN16 keep their existing input. Close the
+panel to save the choice. On a small system the choice lasts until restart.
+If saving fails, the working layout stays active and closing again retries.
+
 ## Good to know
 
 - The system disk must be in drive A: to open the Control Panel. Without it
   the menu bar says **Needs Sys Disk A:**.
-- On the small system disks for 128KB machines the Control Panel has four
-  pages: Scheduler, Date/Time, Display and Sound.
+- On the small system disks for 128KB machines the Control Panel has five
+  pages: Scheduler, Date/Time, Display, Sound and Keyboard.
 - When the list of pages is longer than the panel, it scrolls.
