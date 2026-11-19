@@ -303,17 +303,17 @@ result on VGA, CGA and Hercules; all extra glyph data/code stays optional.
 
 - [ ] Complete the final test pass below, fix failures and record actual
   evidence against every supported kernel and input path.
-- [ ] Publish the before/after core-image, uncompressed section/BSS and
+- [x] Publish the before/after core-image, uncompressed section/BSS and
   default resident byte table for big/small/emu/mega. Require non-positive
   core deltas independently of `make budget-check`; report enabled-module
   and glyph-client RAM separately, including 512-byte rounding and the
   return to baseline after release. Do not declare completion without it.
-- [ ] Add a short keyboard guide, README discoverability and an example of
+- [x] Add a short keyboard guide, README discoverability and an example of
   adding a layout from independently reviewed vectors. Document character
   and guest-session limits beside the supported behavior.
-- [ ] Regenerate docs/INDEX.md after contract changes and update memory and
+- [x] Regenerate docs/INDEX.md after contract changes and update memory and
   heap-claim documentation when their measured values change.
-- [ ] Prepare one feature PR with screenshots of the Keyboard page and
+- [x] Prepare one feature PR with screenshots of the Keyboard page and
   accented text on every affected adapter, hosted at its tested SHA. Link
   this plan and #385. Merge and issue closure require the user's instruction.
 
@@ -393,6 +393,7 @@ clock preservation, malformed records and missing/mismatched module refusal.
 | Mega lost the instance stamp while deriving a module alias | Preserve DX around alias setup; two-instance text holds now pass under Bochs, missing-save control fails. |
 | A real-mode fullscreen bracket interpreted a protected font selector as a paragraph | Borrow the conventional provider with bracket-only ASCII bounds; real high-memory package proves protected/real/protected transitions and restored CP850. |
 | Small display footer clipped | Shorten the caption and place it inside the 132-pixel panel; fresh CGA/Hercules captures show the whole page. |
+| Copied MartyPC binary omitted keyboard pacing patches; stress checks failed even on the baseline | Rebuild the exact upstream pin with all 17 repository patches; unchanged burst, preemption and image-folder checks pass. Instrument hashes are recorded separately. |
 | Fullscreen test released Alt before the input handoff completed | Hold the physical chord through the observed transition, then release; DOS fullscreen and WIN16 owner tests pass. |
 
 The XT trace measures the complete KL_SCAN call/return: the armed unloaded
@@ -413,3 +414,10 @@ Physical Spanish/French keyboards have not been exercised. WIN16 coverage
 uses its actual idle entry and a synthetic owner-name change; it does not
 claim execution of a reference NE program. Broader DOS/WIN16 language input,
 modern AZERTY, Unicode and translated filenames remain outside this scope.
+
+Final native verification uses MartyPC pin
+`e15cb04f7b3747676b7a230e8586d15742a1e479` with all 17 repository patches.
+The earlier copied binary omitted keyboard buffering/pacing patches, so its
+stress results are discarded. [Instrument hashes](../reports/keyboard-instruments.json)
+identify the corrected binary and each patch. The final native suite runs
+from a frozen source/build snapshot with boot-cache reuse disabled.

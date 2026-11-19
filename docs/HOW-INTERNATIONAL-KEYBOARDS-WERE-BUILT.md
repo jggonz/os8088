@@ -128,3 +128,20 @@ The [plan's QA table](plans/INTERNATIONAL-KEYBOARD-PLAN.md#combined-qa-observati
 records the defects and repairs. Screenshots and final suite results are
 attached to the feature PR. Physical international keyboard testing and a
 reference Windows program run are not claimed.
+
+## Verify the instrument before changing the kernel
+
+The wider keyboard regressions initially reported a stack-guard stop and
+lost Backspaces. Rebuilding the starting kernel byte for byte reproduced
+the stack failure too. Inspection showed that the copied MartyPC binary
+omitted this repository's keyboard hold and byte-pacing patches. Its
+emulated PPI delivered bytes faster than a physical keyboard can, nesting
+many ROM interrupt frames. A private instruction bypass changed the timing
+and masked one symptom, but was not evidence for a kernel repair.
+
+The exact pinned source was rebuilt with all 17 patches and its binary and
+patch hashes recorded in [keyboard-instruments.json](reports/keyboard-instruments.json).
+The unchanged kernel then passed the original burst, modifier-preemption
+and read-only image-folder cases. No kernel fast bypass, stack budget or
+stress-input delay was added. The final native suite uses that verified
+instrument in a frozen tree, without old boot snapshots.
