@@ -421,8 +421,13 @@ hd_xfer_out:
 hd_xfer_ext:
     test byte [di+HDD_FLAGS], HDF_EBIOS
     jz hd_xfer_fail4
-    mov word [hd_sec], 1        ; a whole track's worth for hd_bios_run: the
-    mov word [hd_head], 0       ; packet has no track, only the page
+    call OSAPI_CPU_INFO         ; NEVER IN PROTECTED MODE (SPEC.md 52.1.6),
+    test ah, CPU_F_PM           ; and it is asked HERE: a boot driver attaches
+    jnz hd_xfer_fail4           ; before mega_enter, so attach cannot know
+    mov ax, 1                   ; a whole track's worth for hd_bios_run: the
+    mov [hd_sec], ax            ; packet has no track, only the page
+    dec ax
+    mov [hd_head], ax
     call hd_bios_run
     jc hd_xfer_fail9
     mov [hd_run], ax
@@ -441,10 +446,7 @@ hd_xfer_ext:
     push ax                     ; +0  the packet's size, 16
     mov si, sp
     mov ax, 0x4200              ; AL = 0: no verify, which 43h reads too
-    cmp byte [hd_bop], 0
-    je .go
-    mov ah, 0x43
-.go:
+    add ah, [hd_bop]            ; 42h read, 43h write: hd_bop is 0 or 1
     mov dl, [di+HDD_BIOS]
 %ifdef INSTBENCH
     call hd_bn_hit
@@ -454,16 +456,10 @@ hd_xfer_ext:
     pop ds                      ; DS:SI = the packet
     int 0x13
     pop ds
-    pop cx                      ; the packet off the stack, eight words: a
-    pop cx                      ; POP moves no flag, so the int 13h's CF
-    pop cx                      ; survives it (and `lea sp` would be a depth
-    pop cx                      ; tools/stkbalance.py cannot follow)
-    pop cx
-    pop cx
-    pop cx
-    pop cx
+    sbb cx, cx                  ; CX = -1 on the int 13h's CF, banked before
+    add sp, 16                  ; the ADD that takes the packet off moves it
     pop si
-    jnc .next
+    jcxz .next
     push ax
     mov ah, 0x00                ; reset and try again, CHS's own retry
     mov dl, [di+HDD_BIOS]
@@ -1470,10 +1466,9 @@ hd_at_bios:
     mov [di+HDD_UNIT], bl
     mov [di+HDD_BIOS], bl       ; ...which is what rung 0 transfers ask by
     call hd_at_geom             ; (in the run with us since kernel size pass 19)
-    call OSAPI_CPU_INFO         ; THE PACKET CALLS (SPEC.md 52.1.6), never
-    test ah, CPU_F_PM           ; under kern_mega: its reflection carries
-    jnz .out                    ; ES:BX, and the packet is DS:SI
-    mov ah, 0x41
+    mov ah, 0x41                ; THE PACKET CALLS (SPEC.md 52.1.6): what the
+                                ; ROM has, on every kernel - hd_xfer_ext is
+                                ; what refuses them in protected mode
     mov bx, 0x55AA
     mov dl, [di+HDD_BIOS]
     int 0x13

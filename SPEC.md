@@ -108181,10 +108181,18 @@ packet calls, AH=42h read and AH=43h write, take a 64-bit LBA and no geometry.
   a track's worth (63 sectors) and the DMA page, `hd_bios_run`'s, because a ROM
   that moves sectors by DMA still has the 8237's page. Three attempts with an
   AH=00h reset between them, as on the CHS path.
-- **Never under kern_mega** (`CPU_F_PM`): its reflection of int 13h carries
-  ES:BX and not DS:SI. On a 286 or better the drives a BIOS knows are rung 1's
-  anyway (§52.1.1, §52.1.5); what stays on rung 0 there is the ROM-only
-  controllers, which keep the ten-bit reach.
+- **Never in protected mode** (`CPU_F_PM`): kern_mega's reflection of int 13h
+  carries ES:BX and not DS:SI. On a 286 or better the drives a BIOS knows are
+  rung 1's anyway (§52.1.1, §52.1.5); what stays on rung 0 there is the
+  ROM-only controllers, which keep the ten-bit reach. **The test is made at
+  each transfer, in `hd_xfer_ext`, not at attach**: a driver kern_mega loads at
+  boot attaches BEFORE `mega_enter` (§51.3), in real mode, so an attach-time
+  `CPU_F_PM` test passed there and banked `HDF_EBIOS` for a session that then
+  ran in protected mode - while the same driver loaded from the Control Panel
+  got a different row, which is how `megahddtick` caught it. `HDF_EBIOS` is
+  therefore the ROM's answer on every kernel, and the row is the same however
+  the driver came to be loaded. It cost no byte: the gate's ten were taken
+  out of the same routine.
 
 `hdextebios` is the gate: QEMU, a 9GB drive SeaBIOS translates to 1,024/255/63
 and one FAT16 partition at LBA 16,600,000 — past BIOS cylinder 1,023 — that
