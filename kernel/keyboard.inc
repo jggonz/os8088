@@ -137,10 +137,12 @@ kl_control_x:
     xor bh, bh
     mov cl, 5
     shl bx, cl                 ; I_RECSZ=32, existing instance flags byte
-    and byte [bx+inst_tab+I_FLAGS], ~IF_RAWKBD & 0xff
     or ah, ah
-    jz .query
+    jz .native
     or byte [bx+inst_tab+I_FLAGS], IF_RAWKBD
+    jmp short .query
+.native:
+    and byte [bx+inst_tab+I_FLAGS], ~IF_RAWKBD & 0xff
 .query:
     mov al, KBDV_QUERY
     jmp .which
@@ -259,14 +261,17 @@ klm_set:
     jz .publish
     call klf_enable
     jc klm_bad
+.publish:
+    pushf
+    cli                        ; seed and selection publish see the same scan
+    or ah, ah
+    jz .store
     cmp byte [es:klm_layout], 0
-    jne .publish
+    jne .store
     push ax
     call klm_seed
     pop ax
-.publish:
-    pushf
-    cli
+.store:
     mov [es:klm_layout], ah
     mov byte [es:klm_dead], 0
     popf
