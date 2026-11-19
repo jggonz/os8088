@@ -6,6 +6,11 @@
 ; for both: an include costs each package its own copy and can be revised
 ; freely because it is source, where a slot costs a published contract.
 ;
+; OS88LINE_CP850 opts this field into native extended text (SPEC.md 83.7).
+; The default remains ASCII for address/name fields. An extended key or a
+; replacement/resync acquires the optional provider before it is drawn.
+; Replacement calls belong in task context; never set/resync from a painter.
+;
 ; It exists because the two things stages C and D need most is somewhere to
 ; TYPE AN ADDRESS: a browser's location bar and a terminal's host box are the
 ; same control with a different label on it, and the alternative was two
@@ -702,7 +707,16 @@ os88line_key:
     cmp al, 0x20
     jb .ctrl
     cmp al, 0x7E
+%ifdef OS88LINE_CP850
+    jbe .printable
+    cmp al, 0x7F
+    je .not
+    call os88kbd_hold
+    jc .not
+.printable:
+%else
     ja .not
+%endif
     jmp short os88line_ins
 .ctrl:
     or al, al
@@ -930,6 +944,9 @@ os88line_resync:
     mov [si+LN_LEN], ax
     mov [si+LN_CAR], ax         ; the caret lands at the END, as `set` leaves it
     mov word [si+LN_VIEW], 0
+%ifdef OS88LINE_CP850
+    call os88line_glyphs
+%endif
     pop cx
     pop bx
     pop ax
@@ -973,9 +990,31 @@ os88line_set:
     mov [si+LN_LEN], ax
     mov [si+LN_CAR], ax
     mov word [si+LN_VIEW], 0
+%ifdef OS88LINE_CP850
+    call os88line_glyphs
+%endif
     pop di
     pop cx
     pop bx
     pop ax
     ret
 %endif                          ; OS88LINE_NOSET
+
+%ifdef OS88LINE_CP850
+; Prepare an externally filled field before painting. CF is a load refusal;
+; bytes remain intact so the caller can report it without losing text.
+os88line_glyphs:
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, [si+LN_BUF]
+    mov cx, [si+LN_LEN]
+    call os88kbd_prepare
+    pop es
+    pop di
+    pop cx
+    ret
+%include "os88kbd.inc"
+%endif

@@ -421,9 +421,14 @@ section .text
 ; body is longer than a short one reaches. Both are cold: no cell that fits its
 ; display and no machine with one card ever arrives at either.
 ; -----------------------------------------------------------------------------
-font_ch_hi:                     ; AL is past FONT_LAST - normally nothing to
-    cmp byte [font_ch_on], 0    ; draw, and still nothing unless the cut is the
-    je font_ch_drop             ; caller. The counter is what keeps the two
+font_ch_hi:                     ; AL is past the original ASCII face
+    cmp byte [font_ch_on], 0
+    jne .seam
+    cmp al, [font_last]         ; the optional module's live CP850 range
+    jbe font_char.chok
+    jmp short font_ch_drop
+.seam:                          ; the private cut still uses its own table
+                                ; The counter is what keeps the two
                                 ; codes PRIVATE, so OSAPI_FONT_CHAR with 128
                                 ; draws what it has always drawn
     cmp al, FONT_SEAM_A         ; the part that IS here, masked in both axes -
@@ -512,7 +517,8 @@ font_ch_drop:
 ; out:      nothing
 ; clobbers: nothing
 ;
-; Characters outside 32..126 draw nothing (the caller's pen still advances).
+; Characters outside the live face draw nothing (SPEC.md 6.7); the
+; caller's pen still advances. The default face is ASCII32..126.
 ; Clipping: a cell that would leave the SCREEN is skipped entirely (on a
 ; SEAMCUT kernel a cell a display seam crosses is cut there instead, SPEC.md
 ; 39.14.11). Against an armed clip region the cell is cut to the ROWS
@@ -546,7 +552,7 @@ font_char:
 .edgeok:                        ; nothing for it on either kernel
 %else                           ; ...and with no seam cut `.done` is already in
     jb .done                    ; short reach, so these five aim straight at it
-    cmp al, FONT_LAST
+    cmp al, [font_last]
     ja .done
     cmp cx, [vid_cwm8]          ; unsigned: negative x fails this too
     ja .done
@@ -593,12 +599,12 @@ font_char:
 .rows:
 
     sub al, FONT_FIRST          ; SI = glyph row data. The arithmetic stays in
-    cbw                         ; AX and lands in SI with an `xchg`: `add
+    xor ah, ah                  ; the CP850 index is unsigned (SPEC.md 6.7)
     shl ax, 1                   ; ax,imm16` is the 3-byte accumulator form
     shl ax, 1                   ; where `add si,imm16` is 4, and `xchg ax,si`
-    shl ax, 1                   ; is 1 where `mov si,ax` is 2. AL is 0..94
-    add ax, [font_base]         ; here - the two range tests above proved it -
-    xchg ax, si                 ; so `cbw` lands AH = 0 in one byte. The
+    shl ax, 1                   ; is 1 where `mov si,ax` is 2
+    add ax, [font_base]         ; range checks proved the unsigned index valid
+    xchg ax, si                 ; the original face or optional module table
                                 ; table is at [font_seg]:[font_base] - the
                                 ; ROM's own (SPEC.md 6)
     mov al, [wm_clip_r0]        ; AL is spent (SI carries the glyph now, and
@@ -1447,9 +1453,9 @@ font_run_x:
     or al, al                   ; as well, which none of them reads: .p1none
     jz .p1end                   ; and .p1full both pop the string's start)
     sub al, FONT_FIRST          ; ONE unsigned test for both ends: below
-    cmp al, FONT_LAST - FONT_FIRST ; FONT_FIRST wraps to the top of the byte
+    cmp al, [font_span]         ; controls wrap past the valid unsigned span
     ja .p1blank
-    cbw                         ; AL is 0..94: the test above proved it
+    xor ah, ah                  ; CP850 indexes may exceed 127 (6.7)
     shl ax, 1
     shl ax, 1
     shl ax, 1
@@ -2147,10 +2153,10 @@ font_run_cell:
 .have_rows:
     cmp al, FONT_FIRST
     jb .blank
-    cmp al, FONT_LAST
+    cmp al, [font_last]
     ja .blank
     sub al, FONT_FIRST
-    cbw                         ; 0..94, and the arithmetic stays in AX for the
+    xor ah, ah                  ; unsigned CP850 index; arithmetic in AX for the
     shl ax, 1                   ; accumulator form of the `add` - see font_char
     shl ax, 1
     shl ax, 1
@@ -2391,9 +2397,9 @@ font_str_run:
     or al, al
     jz .p1end
     sub al, FONT_FIRST
-    cmp al, FONT_LAST - FONT_FIRST
+    cmp al, [font_span]
     ja .blank
-    cbw
+    xor ah, ah
     shl ax, 1
     shl ax, 1
     shl ax, 1
@@ -2806,4 +2812,14 @@ snap_cur:   dw 0                ; the window whose callback is running, 0 =
 snap_win:   dw 0                ; the HOST's filter: only this window's glyphs
                                 ; go to snap_h*, 0 = any. Written from outside
                                 ; the guest by tools/os88snap.py
+%endif
+
+section .text
+; SPEC.md 6.7: two live bounds, changed only while an optional provider holds
+; the original face. Adjacent so KEYBOARD.DRV publishes/restores them in one
+; word; no table or translation state is resident here.
+font_last: db FONT_LAST
+font_span: db FONT_LAST - FONT_FIRST
+%if font_span != font_last + 1
+  %error "font_last/font_span are one published bounds word"
 %endif
