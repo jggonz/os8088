@@ -1156,6 +1156,8 @@ fnt_unlazy:
     CURUNLAZY
 .out:
     ret
+    nop                         ; PARITY, never executed: optional glyph range
+                                ; checks moved this run by an odd byte
 
 font_run:
     GFXAUDIT_HOOK
@@ -2013,10 +2015,8 @@ font_run_x:
     jmp short .cells_nx
 %endif
 
-    nop                         ; PARITY, never executed (kernel hot-paths
-                                ; pass 1): font_run_x came out an odd 3 bytes
-                                ; shorter on kern_big and an odd 1 on
-                                ; kern_small
+    ; The run's PARITY byte is before font_run now. Keeping one here too
+    ; would move font_run_cell away from its measured alignment.
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; fnt_rn_edge - internal: one of an unaligned run's two edge COLUMNS

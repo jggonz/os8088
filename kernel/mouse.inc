@@ -2276,6 +2276,9 @@ mou_p2_off:
     ret
 
 
+    nop                         ; PARITY, never executed: follows mou_p2_off's
+                                ; return, before the IRQ12/keyboard ISR run
+
 ; -----------------------------------------------------------------------------
 ; mou_p2_isr - IRQ12, int 74h (SPEC.md 9.9.3)
 ;
@@ -3994,6 +3997,9 @@ kbd_ovn     db 0                ; SPEC.md 9.8: beeps this overrun burst has
                                 ; .text with a real initialiser for
                                 ; kbd_armed's reason - the ISR reads it on
                                 ; the machine's first keystroke
+
+    nop                         ; PARITY, never executed: the preceding key
+                                ; state bytes are data, not a fall-through path
 
 ; -----------------------------------------------------------------------------
 
