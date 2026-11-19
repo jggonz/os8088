@@ -3740,4 +3740,11 @@ wr_catpara  equ os88_image_end + WR_B7 + 58         ; word: the paragraphs the
                                                     ; catalog claim holds now
                                                     ; (wr_onwake shrinks it,
                                                     ; wr_refresh grows it back)
-WR_BSS      equ WR_B7 + 60
+wr_apmax    equ os88_image_end + WR_B7 + 60         ; word: a big entry's
+                                                    ; PIECE - the claim rounded
+                                                    ; down to the destination's
+                                                    ; cluster, because an
+                                                    ; append wants the size on
+                                                    ; a cluster boundary
+                                                    ; (SPEC.md 92.13.1, #381)
+WR_BSS      equ WR_B7 + 62
