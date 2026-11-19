@@ -208,9 +208,15 @@ hd_tw_geomok:
                                 ; the other
     mov dx, [si+HP_LBA+2]
     call hd_lba_chs             ; [hd_cyl]/[hd_head]/[hd_sec] at OUR geometry
-    jc .ok                      ; ...past what an entry's CHS can name: every
-                                ; tool writes its own marker there, and the
-                                ; LBA is the whole of the address (52.1.5)
+    jnc .cmp                    ; ...past what an entry's CHS can name, the
+    cmp byte [si+HP_SCYL], 0xFF ; entry must SAY so - cylinder 1,023, the
+    jne .bad                    ; marker every tool writes there, with its
+    mov al, [si+HP_SSEC]        ; own head and sector, so only the cylinder
+    and al, 0xC0                ; is compared; the LBA is the whole of the
+    cmp al, 0xC0                ; address (SPEC.md 52.1.5)
+    jne .bad
+    jmp short .ok
+.cmp:
     call hd_chs_pack            ; AL = sector|cyl-high, AH = cyl-low
     cmp al, [si+HP_SSEC]
     jne .bad

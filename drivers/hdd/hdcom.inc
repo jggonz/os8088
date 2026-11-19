@@ -115,8 +115,8 @@ hd_dev_row_ck:
 ; hd_chs - a 32-bit LBA as CHS, for the geometry in DI (module internal)
 ; in:  DI = the device row, [hd_lba] = the LBA
 ; out: CF = 0 and [hd_cyl]/[hd_head]/[hd_sec]; CF = 1 = past what CHS can
-;      name: cylinder 1,024 and up on a BIOS row (int 13h's ten bits), the
-;      drive's own HDD_CYL and up on an IDE row (SPEC.md 52.1.5)
+;      name: cylinder 1,024 and up on a BIOS row (int 13h's ten bits); on an
+;      IDE row, 1,024 and up AND the drive's own HDD_CYL and up (52.1.5)
 ; clobbers: flags
 ;
 ; ONE `div` pair and no 32/16 two-step, and that is provable rather than
@@ -141,14 +141,14 @@ hd_chs:
     cmp dx, cx
     jae .bad                    ; the quotient would not fit a word
     div cx                      ; AX = cylinder, DX = the rest
+    cmp ax, 1024                ; int 13h's ten bits of cylinder, on every
+    jb .cyl                     ; row - a BIOS reserves the drive's last
+                                ; cylinder from AH=08h and it is still there
     cmp byte [di+HDD_KIND], HDK_IDE
-    je .ide
-    cmp ax, 1024                ; int 13h's ten bits of cylinder...
-    jmp short .cyl
-.ide:
-    cmp ax, [di+HDD_CYL]        ; ...and the task file's sixteen, bounded by
-.cyl:                           ; the drive's OWN geometry: past it is LBA
-    jae .bad                    ; mode's, or nobody's (SPEC.md 52.1.5)
+    jne .bad
+    cmp ax, [di+HDD_CYL]        ; ...and past them the task file's sixteen,
+    jae .bad                    ; to the drive's OWN geometry: past THAT is
+.cyl:                           ; LBA mode's, or nobody's (SPEC.md 52.1.5)
     mov [hd_cyl], ax
     mov ax, dx
     xor dx, dx

@@ -107849,8 +107849,8 @@ reference copy (nine files, 175KB, HDD C to HDD D): 1,918 commands became 394.
 no 32/16 two-step**, provably: the first divide is refused unless DX is below
 `spt × heads`, so its quotient — the cylinder — fits a word, and the second
 divides a remainder already below the divisor. The cylinder it then accepts is
-the rung's: under 1,024 on a BIOS row (int 13h's ten bits), under the drive's
-own `HDD_CYL` on an IDE row (§52.1.5).
+the rung's: under 1,024 on every row (int 13h's ten bits), and on an IDE row
+past that, under the drive's own `HDD_CYL` (§52.1.5).
 
 **Geometry the probe could not determine is the user's to type in**, and that
 is an ordinary state rather than an exotic one: it is a 286 with an early IDE
@@ -108099,9 +108099,10 @@ past 8GB) was listed with an unusable geometry and never mounted. The task
 file carries sixteen bits of cylinder, and an LBA-capable drive takes 28 bits
 of address with no geometry at all.
 
-- **An IDE row's cylinder bound is its own `HDD_CYL`**, in `hd_chs`. Below it
-  the transfer is CHS exactly as before, with the high cylinder byte in
-  `IDE_CYLH`; at or past it, `hd_xfer_ide` goes to **LBA mode** — drive/head
+- **An IDE row's cylinder bound is 1,024 or its own `HDD_CYL`, whichever is
+  larger**, in `hd_chs`. Below it the transfer is CHS exactly as before, with
+  the high cylinder byte in `IDE_CYLH`; at or past it, `hd_xfer_ide` goes to
+  **LBA mode** — drive/head
   bit 6 set and the address's bits 24..27 in the head nibble, bits 0..23 where
   the sector and the cylinder go, so the four register writes below it are the
   same either way. `hd_ide_select` masks the head with `4Fh` where it masked
@@ -108134,11 +108135,17 @@ of address with no geometry at all.
   `BOOTHD.SYS`'s int 13h AH=02h before any driver loads (§52.10.3), so a
   partition rung 1 can mount is no longer one the boot can read. It asks the
   LAST sector because the kernel's file may land anywhere in a kept volume
-  (§52.10.15).
+  (§52.10.15). **It is a 1,024-cylinder test and never the row's own count**:
+  a drive rung 1 takes carries the BIOS's geometry (§52.1.1), and a BIOS
+  reserves the drive's last cylinder from AH=08h while still reading it - a
+  first cut bounded `hd_chs` by `HDD_CYL` alone, and `hmadrv`'s install, whose
+  partition runs into that cylinder, stopped on the partition page.
 - **An entry's CHS halves past cylinder 1,023 are the 1023/254/63 marker**
   (`hd_lba_chs` clamps there now on an IDE row too, CF = 1), and
-  `hd_tw_geomok` no longer compares a start past it: every tool writes its own
-  marker there, and the LBA is the whole of the address.
+  `hd_tw_geomok` compares only the CYLINDER of a start past it: the entry must
+  say 1,023, which every tool writes there, while the head and sector beside
+  it are each tool's own (254 or 255, 63 or the drive's). An entry that names
+  some other cylinder is still `Wrong Geometry` — `inststate`'s disk b.
 
 **What it does not do**: the partitioner still sizes a disk from its CHS
 geometry, so a drive past 8.4GB is offered its first 16,383 cylinders — four
