@@ -289,16 +289,7 @@ section .text
 ; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
 cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_cls
 cp_cls:     dw cp_cls_end - cp_cls, 0   ; its CLASS (SPEC.md 11.104)
-%ifdef KERN_BIG
             dw cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
-%else                           ; **NO KEYBOARD ON kern_small** (SPEC.md
-                                ; 62.9.15): the one field in the machine that
-                                ; can be typed into is the RAM disk's size, and
-                                ; kern_small has no RAM disk. The word goes
-                                ; back to 0, which is what it was for the whole
-                                ; life of the panel before SPEC.md 31.9.2
-            dw cpf_cp_paint, 0, cpf_cp_onclick
-%endif
             dw 0, 0, 0              ; About, wake, close
             dw cpf_cp_onup          ; the release, a COLD offset (2.6.3)
 %ifdef KERN_BIG
@@ -504,17 +495,19 @@ CP_ITHM   equ 5                 ; ...and Theme (SPEC.md 76.4)
 %ifdef DOCK_OPT
 CP_IDOCK  equ 6                 ; ...and Dock (SPEC.md 31.13)
 %endif
-CP_IFDD   equ 7                 ; ...and Floppy (SPEC.md 31.14), the LAST - the
+CP_IFDD   equ 7                 ; ...and Floppy (SPEC.md 31.14) - the
                                 ; table is in the image, so a host tool that
                                 ; wants the record reads this equate rather
                                 ; than the table (tests/fddpage.py)
 %else
-CP_IVID   equ 2                 ; no Drivers row, so Display and Sound each
-CP_ISND   equ 3                 ; come up one (SPEC.md 51.0)
+CP_IVID   equ 2                 ; no Drivers row: Display and Sound move up
+CP_ISND   equ 3
 %ifdef OS88_THEME
 CP_ITHM   equ 4
 %endif
 %endif
+
+CP_IKEY   equ CP_ITEMS - 1      ; Keyboard appends without renumbering peers
 
 ; How many static rows the list is showing RIGHT NOW - CP_ITEMS, or one fewer
 ; when the Display page is hidden. It is the boundary between a static row and
@@ -530,8 +523,9 @@ CP_ITHM   equ 4
 cp_nst:   db CP_ITEMS
 
 ; ...and WHICH of them are not shown: bit n = static record n is hidden. One
-; byte, so CP_ITEMS may reach 8 before this needs to be a word - and the
-; %error below already stops the list growing that far.
+; byte for the first eight records. Later records are always visible: shifting
+; the byte by their index yields zero. Display is the sole hideable page,
+; and the assertion beside cp_items keeps its index inside this bitmap.
 ;
 ; It is the reason cp_items has no ordering rule any more. [cp_nst] alone
 ; could only ever say HOW MANY rows are shown, which is enough to draw a
@@ -980,11 +974,12 @@ CPE_DLG     equ CPE_B + 8       ; and CPE_DLG OSAPI_DRV_DLG's (51.10), both
 CP_NENT     equ CPE_B + 10      ; kern_big's alone: kern_small has no drivers
 %endif
 %else
+CPE_ONKEY   equ CPE_B + 5       ; Keyboard's sample is offered on small too
 %ifdef DOCK_OPT
-CPE_DOCK_GEOM equ CPE_B + 5
-CP_NENT     equ CPE_B + 7
+CPE_DOCK_GEOM equ CPE_B + 6
+CP_NENT     equ CPE_B + 8
 %else
-CP_NENT     equ CPE_B + 6
+CP_NENT     equ CPE_B + 7
 %endif
 %endif
 
@@ -1022,8 +1017,8 @@ modc_hdr:
     dw modc_e_onup              ; CPE_ONUP
 %ifdef KERN_BIG
     dw modc_e_ondrag            ; CPE_ONDRAG
-    dw modc_e_onkey             ; CPE_ONKEY
 %endif
+    dw modc_e_onkey             ; CPE_ONKEY, including small's typing sample
 %ifdef DOCK_OPT
     dw modc_e_dock_geom         ; CPE_DOCK_GEOM: Dock and Display settings
 %endif
@@ -1176,8 +1171,10 @@ modc_e_dlg:
     stc
     jmp short .out
 
+%endif
+
 ; -----------------------------------------------------------------------------
-; modc_e_onkey - CPE_ONKEY: the Control Panel's W_ONKEY (SPEC.md 31.9.2)
+; modc_e_onkey - CPE_ONKEY: driver fields and the Keyboard sample (31.16)
 ; in:  AL = ASCII, AH = scan code, SI = the window; the gfx lock is HELD
 ; out: nothing; every register preserved
 ;
@@ -1203,14 +1200,25 @@ modc_e_dlg:
 ; -----------------------------------------------------------------------------
 modc_e_onkey:
     call kentm_bp                ; KENT: push ax..bp
+    cmp byte [cp_sel], CP_IKEY
+    jne .driver
+    push ax                     ; cp_origin spends AX: preserve the typed word
+    mov bx, si
+    call cp_origin
+    add di, CP_RX
+    pop ax
+    call cp_key_key
+    jmp short .out
+.driver:
+%ifdef KERN_BIG
     xchg dx, ax                 ; DX = the KEY: cp_drv_ev hands DX to the page
     mov ax, DSV_CPKEY           ; in BX, which is where 31.9.2 wants it - and
     call cp_drv_ev              ; NOT in AX, which is the dispatcher's CLASS.
                                 ; A static page, a page that went away or one
                                 ; that takes no keys: the key is dropped
+%endif
 .out:
     jmp kretf_bp
-%endif
 
 %ifdef DOCK_OPT
 modc_e_dock_geom: call cpd_geom
@@ -1421,6 +1429,7 @@ cp_onclick_x:
     call cp_item_click          ; kern_small acts on the press, which is what
 %endif                          ; it did before and all it can afford
 .done:
+    call cp_key_apply           ; page/popup returned: now optional file I/O
     jmp kretf_bp
 
 ; -----------------------------------------------------------------------------
@@ -1468,6 +1477,7 @@ cp_onup_x:
     call cp_pgact               ; ...and only now does anything happen
 %endif
 .done:
+    call cp_key_apply
     jmp kretf_bp
 
 %ifdef KERN_BIG
@@ -1800,7 +1810,7 @@ cp_v2r:
     jae .hit                    ; the terminator (see above)
     mov cl, bl
     mov al, 1
-    shl al, cl                  ; CP_ITEMS < 8, so the bit is in one byte
+    shl al, cl                  ; records 8+ are always visible (31.16)
     test [cp_hide], al
     jnz .next                   ; hidden: it takes no ordinal
     cmp bh, ch
@@ -1879,7 +1889,7 @@ cp_drv_item:
 ; the view.
 ;
 ; It walks cp_v2r rather than re-implementing the hide test: CP_ITEMS is under
-; eight, this is arithmetic with no drawing in it, and one walker that can
+; sixteen, this is arithmetic with no drawing in it, and one walker that can
 ; disagree with another is what SPEC.md 31.10.1 is about.
 ; -----------------------------------------------------------------------------
 cp_r2v:
@@ -3523,6 +3533,226 @@ cp_dock_click:
 TOASTSTR cp_dock_fail, 'Dock Module Unavailable'
 
 %endif
+
+; =============================================================================
+; Keyboard page (SPEC.md 31.16). Its pick is staged in module scratch;
+; the outer callback loads only after the page procedure has returned.
+CPQ_R0Y equ 22
+CPQ_ROWH equ 14
+CPQ_NROW equ 5
+CPQ_SY1 equ 110
+CPQ_SY2 equ 123
+CPQ_TEXTX equ 6
+CPQ_TEXTY equ 113
+CPQ_CELLS equ 24
+
+section .modcb
+cp_key_state: resb CPQ_CELLS + 2  ; independent of desktop/settings saves
+section .modu
+cp_key_len equ cp_key_state
+cp_key_pending equ cp_key_state + 1
+cp_key_text equ cp_key_state + 2
+
+cp_key_paint:
+    call kentm_si
+    xor si, si
+    mov dx, CPQ_R0Y + CP_PLDY
+.row:
+    push si
+    push dx
+    CPSTAGEX cp_key_names
+    mov cx, CP_PLX
+    call cp_runp
+    pop dx
+    pop si
+    add dx, CPQ_ROWH
+    add si, 2
+    cmp si, CPQ_NROW * 2
+    jb .row
+    call cp_key_ctls
+    call cp_lbl
+    dw cp_s_ktype, CP_PMX, 98
+    lea ax, [di+2]
+    lea cx, [di+217]
+    lea bx, [bp+CPQ_SY1]
+    lea dx, [bp+CPQ_SY2]
+    call KERNEL_SEG:cw_gfx_frame
+    call cp_key_sample
+    call cp_lbl
+    dw cp_s_ksave, CP_PMX, 124
+    jmp kretm_si
+
+cp_key_ctls:
+    call kentm_si
+    xor ax, ax                  ; QUERY never loads the keyboard module
+    call COLD_SEG:kl_control_x
+    mov bl, al
+    xor al, al
+.row:
+    call cp_key_dot
+    inc al
+    cmp al, CPQ_NROW
+    jb .row
+    jmp kretm_si
+
+; AL=row, BL=selected layout. Existing radio glyph/pressed-state machinery.
+cp_key_dot:
+    call kentm_si
+    mov bh, al
+    mov ah, CPQ_ROWH
+    mul ah
+    add ax, bp
+    add ax, CPQ_R0Y
+    mov dx, ax
+    lea cx, [di+CP_PGX]
+    mov al, bh
+    inc bh                      ; control IDs 1..5
+    cmp al, bl
+    call cp_rad
+    jmp kretm_si
+
+cp_key_sample:
+    mov bx, cp_sbuf
+    mov cx, CPQ_CELLS
+    mov al, ' '
+.pad:
+    mov [bx], al
+    inc bx
+    loop .pad
+    mov byte [bx], 0
+    xor bx, bx
+    xor cx, cx
+    mov cl, [cs:cp_key_len]
+    jcxz .draw
+.copy:
+    mov al, [cs:bx+cp_key_text]
+    mov [bx+cp_sbuf], al
+    inc bx
+    loop .copy
+.draw:
+    lea cx, [di+CPQ_TEXTX]
+    lea dx, [bp+CPQ_TEXTY]
+    mov si, cp_sbuf
+    jmp cp_brun
+
+cp_key_click:
+    call kentm_si
+    cmp cx, CP_PGX
+    jl .out
+    cmp cx, CP_PRGT
+    jg .out
+    sub dx, CPQ_R0Y
+    jl .out
+    cmp dx, CPQ_NROW * CPQ_ROWH
+    jae .out
+    mov ax, dx
+    mov bl, CPQ_ROWH
+    div bl
+%ifdef KERN_BIG
+    call cp_ctli                ; arm on press, choose only on matching release
+    jc .out
+%endif
+    inc al                      ; zero means no staged transaction
+    CSDO mov [CSEG cp_key_pending], al
+.out:
+    jmp kretm_si
+
+cp_key_apply:
+    mov bl, [cs:cp_key_pending]
+    or bl, bl
+    jz .out
+    CSDO mov byte [CSEG cp_key_pending], 0
+    dec bl
+    xor ax, ax
+    call COLD_SEG:kl_control_x
+    cmp al, bl
+    je .out                     ; picking the current layout owes no write
+    mov bh, al                  ; old dot, only redrawn after successful SET
+    mov ah, bl
+    mov al, 1                   ; SET preserves prior choice on failure
+    call COLD_SEG:kl_control_x
+    jc .failed
+    call cp_wdset
+    mov bl, al                  ; selected row after commit
+    mov al, bh
+    call cp_key_dot
+    mov al, bl
+    jmp cp_key_dot
+.failed:
+    CPSTAGE cp_s_kfailed
+    push es
+    push ds
+    pop es
+    xor cx, cx
+    KDOOR toast_show
+    pop es
+.out:
+    ret
+
+cp_key_key:
+    xor bx, bx
+    mov bl, [cs:cp_key_len]
+    cmp al, 27
+    je .clear
+    cmp al, 8
+    je .back
+    cmp al, 32
+    jb .out
+    cmp al, 127
+    je .out
+    cmp bl, CPQ_CELLS
+    jae .out
+    test al, 0x80
+    jz .put
+    push ax                     ; HOLD before accepting an extended byte
+    mov al, 2                   ; FFh is private Control Panel ownership
+    mov dh, 0xFF
+    call COLD_SEG:kl_control_x
+    pop ax
+    jc .out
+.put:
+    CSDO mov [CSEG bx+cp_key_text], al
+    inc bl
+    CSDO mov [CSEG cp_key_len], bl
+    jmp cp_key_sample
+.back:
+    or bl, bl
+    jz .out
+    dec bl
+    jmp short .cut
+.clear:
+    xor bl, bl
+.cut:
+    CSDO mov [CSEG cp_key_len], bl
+    mov cx, bx
+    jcxz .release
+.scan:
+    dec bx
+    test byte [cs:bx+cp_key_text], 0x80
+    jnz .draw
+    loop .scan
+.release:
+    mov al, 3                   ; no remaining extended sample bytes
+    mov dh, 0xFF
+    call COLD_SEG:kl_control_x
+.draw:
+    jmp cp_key_sample
+.out:
+    ret
+
+cp_key_names: dw cp_key_bios, cp_key_us, cp_key_es, cp_key_la, cp_key_fr
+CPS cp_key_bios, 'BIOS default'
+CPS cp_key_us, 'US QWERTY'
+CPS cp_key_es, 'Spanish (Spain)'
+CPS cp_key_la, 'Latin American Spanish'
+CPS cp_key_fr, 'French AZERTY'
+CPS cp_s_ktype, 'Type here (Esc clears)'
+%ifdef OS88_DRIVERS
+CPS cp_s_ksave, 'Saved when panel closes'
+%else
+CPS cp_s_ksave, 'Until the next restart'
+%endif
+TOASTSTR cp_s_kfailed, 'Keyboard not loaded'
 
 %ifdef OS88_DRIVERS
 ; =============================================================================
@@ -5514,6 +5744,13 @@ section .modu                   ; ...the clock's half is the PANEL's: only a
 ; failure path handles the third.
 ; -----------------------------------------------------------------------------
 cp_flush_close_x:
+    push ax
+    push dx
+    mov al, 3                   ; private RELEASE of the sample's glyph hold
+    mov dh, 0xFF
+    call COLD_SEG:kl_control_x
+    pop dx
+    pop ax
 %ifdef OS88_RTC
     cmp byte [clk_dirty], 0     ; THE HARDWARE CLOCK FIRST (SPEC.md 37.94), and
     je .cfg                     ; before the floppy: this is port I/O in
@@ -7377,9 +7614,7 @@ cp_items:
     CPITEM cp_s_vid,   cp_vid_paint,   cp_vid_click,   cp_vid_ctls
     ; THE ORDER IS THE LIST'S, and it is grouped (SPEC.md 31.14.2): Sound,
     ; Theme and Dock are how the machine looks and sounds, so they stand
-    ; together; Floppy is LAST, so the first DRIVER page - the hard disk's,
-    ; DRVC_DISK being the lowest class that publishes one - lands directly
-    ; under it and the two disk pages read as a pair
+    ; together; the appended Keyboard row preserves every existing page ID
     CPITEM cp_s_snd,   cp_snd_paint,   cp_snd_click,   cp_snd_ctls
 %ifdef OS88_THEME
     CPITEM cp_s_thm,   cp_thm_paint,   cp_thm_click,   cp_thm_ctls
@@ -7390,15 +7625,14 @@ cp_items:
 %ifdef OS88_DRIVERS             ; SPEC.md 31.14: the page is SYSTEM.CFG's, and
     CPITEM cp_s_fdd,   cp_fdd_paint,   cp_fdd_click,   cp_ret ; kern_small
 %endif                                                         ; reads none
+    CPITEM cp_s_key,   cp_key_paint,   cp_key_click,   cp_key_ctls
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
-%if CP_ITEMS > 8
-%error "ctrl: [cp_hide] is one byte, so the static list stops at eight rows"
+%if CP_IVID >= 8 || CP_ITEMS > 16
+%error "ctrl: the hideable Display record must fit cp_hide; later records are always visible"
 %endif
-%ifdef OS88_DRIVERS
-%if CP_IFDD != CP_ITEMS - 1
-%error "ctrl: CP_IFDD must name the Floppy record, the table's last"
-%endif
+%if CP_IKEY != CP_ITEMS - 1
+%error "ctrl: Keyboard must append without renumbering existing page records"
 %endif
 %ifndef DOCK_OPT
 %if CP_ITEMS + 3 > (CP_CH - CP_I0Y) / CP_IROWH
@@ -7419,6 +7653,7 @@ CPS cp_s_drv,   'Drivers'
 CPS cp_s_fdd,   'Floppy'
 %endif
 CPS cp_s_vid,   'Display'
+CPS cp_s_key,   'Keyboard'
 CPS cp_s_snd,   'Sound'
 %ifdef OS88_THEME
 CPS cp_s_thm,   'Theme'
@@ -7758,11 +7993,9 @@ cpf_cp_onclick:
     call far [CPFP + CPE_ONCLICK*4]
 .c_gone:
     ret
-%ifdef KERN_BIG
 cpf_cp_onkey:
     call far [CPFP + CPE_ONKEY*4]
     ret
-%endif
 
 ; SPEC.md 13.8.3's two edges. They do NOT call mod_need, and that is the
 ; difference from every shim above: a release or a drag can only follow a
@@ -7793,14 +8026,14 @@ cpf_cp_ondrag:
 ; write - which is what ui_cmd_reboot would otherwise do on every warm boot.
 cpf_cp_flush_close:
     cmp byte [cp_wdirty], 0
-    je .f_drop                  ; nothing to persist - but still drop, because
-                                ; closing a panel that changed nothing is the
-                                ; commonest close there is
+    je .f_call                  ; clean close still releases sample glyphs;
+                                ; unloaded CPE_FLUSH is the harmless mod_gone
     call cpf_need
     jc .f_drop                  ; the disk went away between opening the panel
                                 ; and closing it: [cp_wdirty] stays set, which
                                 ; is exactly what cp_flush_close_x's own
                                 ; failure path does (SPEC.md 59.6)
+.f_call:
     call far [CPFP + CPE_FLUSH*4]
 .f_drop:
     push ax
