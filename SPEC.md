@@ -180565,6 +180565,24 @@ before. Nothing else moves: one claim, one transfer, the status cell's
 A failure in any piece is `Could not write <name>` and leaves the pieces
 before it on the disk, which is 92.8's rule.
 
+**A piece is a whole number of the DESTINATION's clusters** (issue #381).
+An append is refused unless the file's size is a cluster multiple (18.4.7.3),
+so every piece but the last must leave the file on a cluster boundary. The
+claim's 64,512 bytes are 63 KB: a multiple of a floppy's 512-byte and 1KB
+clusters and of nothing larger, so on a hard disk - 2KB to 32KB clusters
+(52.3) - the first piece landed and the second was refused, leaving a 63KB
+file and `Could not write <name>`. So `wr_arcbase`, standing in `home` on
+the volume the tree is going to, asks `OSAPI_FILE_DFREE` for its sectors per
+cluster on a version 2 archive (the only kind with a piece; one FAT count,
+~105 ms on a 20MB disk at 4.77MHz, once a tree) and keeps **`[wr_apmax]`**,
+the claim rounded DOWN to that cluster: 64,512 on a floppy, 63,488 on 2KB
+clusters, 32,768 on 32KB ones. `wr_aentck` and `wr_anext` size a piece by it;
+`[wr_dmax]` is still the claim and still what an ordinary entry must fit. A
+refused `DFREE`, or a cluster larger than the claim (none: the kernel's
+clusters stop at 32KB), keeps the claim whole - today's behaviour, and the
+append says so. `tests/thewire.py` writes onto a 2KB-cluster data disk so
+that assertion 13 crosses a piece boundary that is not a 63KB one.
+
 **What it costs**: 182 bytes of image and 7 of bss in `THEWIRE.O88` - the
 image 11,521 -> **11,703** of the 12,288 ceiling (92.11), 585 to spare - and
 no kernel byte: `OSAPI_FILE_APPEND` (18.4) is an existing cell.
