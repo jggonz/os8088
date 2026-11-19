@@ -1322,6 +1322,12 @@ dskw_chdir_dl:
 ; nearly-full 20MB partition.
 ; -----------------------------------------------------------------------------
 dskw_clok:
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: AX:[dsk_ch], against a dword max
+    jne .w16                    ; (SPEC.md 19.12.3)
+    jmp dsk_f32_clok
+.w16:
+%endif
     cmp ax, 2
     jb .out                     ; CF = 1: below the first data cluster
     cmp [dsk_maxclus], ax       ; CF = 1 exactly when AX is past the last -
@@ -5435,6 +5441,24 @@ dskw_setfat:
     push es
     call dskw_clok
     jc .ok
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32 (SPEC.md 19.12.4): the value is
+    jne .w16                    ; DX:[dsk_vh], written under the 28-bit mask
+    call dsk_f32_ent            ; ES:BX = the entry, which never straddles
+    jc .out
+    mov [es:bx], dx
+    mov ax, [es:bx+2]
+    and ax, 0xF000              ; the top four bits are the format's
+    mov cx, [dsk_vh]
+    and ch, 0x0F
+    or ax, cx
+    mov [es:bx+2], ax
+    mov ax, bx                  ; one sector dirty
+    mov cl, 9
+    call dskw_dirty
+    jmp short .ok
+.w16:
+%endif
     mov si, dx                  ; SI = the value: DX is dsk_fat_ofs's second
                                 ; output and cannot carry it
     call dsk_fat_ofs_x  ; BX = window-relative, DX = abs sector
@@ -5487,7 +5511,9 @@ dskw_setfat:
 ; -----------------------------------------------------------------------------
 dskw_dirty:
     shr ax, cl                  ; the sector within the window...
-    add ax, [dsk_fatw0]         ; ...made absolute
+%ifndef OS88_FAT32              ; (kern_mega keeps it WINDOW-RELATIVE: an
+    add ax, [dsk_fatw0]         ; absolute FAT32 sector's low word can be
+%endif                          ; the "clean" 0FFFFh, SPEC.md 19.12.4)
     cmp ax, [dsk_fatd0]
     jae .hi
     mov [dsk_fatd0], ax
@@ -5530,6 +5556,42 @@ dskw_flush_x:
     mov bx, [dsk_fatw0]         ; nothing resident: there is no buffer the
     cmp bx, 0xFFFF              ; dirty range could be read out of, and
     je .stale                   ; writing one anyway is what would corrupt
+%ifdef OS88_FAT32
+    ; kern_mega: the range is WINDOW-RELATIVE (19.12.4), so it is inside the
+    ; window exactly when its top is under [dsk_fatwn], and every LBA is
+    ; 32-bit: the window's start has a high word on FAT32 (0 on FAT12/16)
+    mov cx, [dsk_fatd1]
+    cmp cx, [dsk_fatwn]
+    jae .stale
+    sub cx, ax
+    inc cx                      ; CX = sectors to write
+    mov es, [dsk_fatseg]
+    mov bh, al                  ; BX = the range's offset in the window, x512
+    mov bl, 0
+    shl bh, 1
+    push di
+    mov di, [dsk_fatw0h]
+    add ax, [dsk_fatw0]
+    adc di, 0
+    add ax, [dsk_fatlba]        ; FAT1
+    adc di, 0
+    mov [dsk_lbahi], di
+    call disk_write_x
+    jc .ioerr32
+    cmp byte [dsk_nfats], 2
+    jne .done32
+    add ax, [dsk_fatsz]         ; FAT2 = FAT1 + FATSz (32-bit on FAT32)
+    adc di, [dsk_fatsz32]
+    mov [dsk_lbahi], di
+    call disk_write_x
+    jc .ioerr32
+.done32:
+    pop di
+    jmp short .done
+.ioerr32:
+    pop di
+    jmp short .ioerr
+%else
     cmp ax, bx
     jb .stale                   ; the range starts below the window
     mov cx, [dsk_fatd1]
@@ -5553,6 +5615,7 @@ dskw_flush_x:
     add ax, [dsk_fatsz]         ; FAT2 = FAT1 + FATSz16
     call disk_write_x
     jc .ioerr
+%endif
 .done:
     xor ax, ax                  ; (CF = 0 with it)
 .reset:                         ; the range is EMPTY now, whichever way out

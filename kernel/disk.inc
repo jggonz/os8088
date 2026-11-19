@@ -115,6 +115,63 @@ DSK_B_HEADS  equ 26              ; BPB_NumHeads (word)
 %else
   %define LBARES resw           ; ...or the 16 it always was
 %endif
+; --- FAT32 (SPEC.md 19.12) --------------------------------------------------
+; kern_mega alone reads and writes it. A cluster is AX plus [dsk_ch], its HIGH
+; word (19.12.3); what holds one for longer is CLURES, a dword here and a word
+; on every other build, and the CLU_* macros move the pair without spending a
+; register - on the other builds they are the word instruction they replace,
+; so kern_big, kern_small and kern_dos assemble to the bytes they were.
+%ifdef KERN_MEGA
+  %define OS88_FAT32
+  %define CLURES resd
+%else
+  %define CLURES resw
+%endif
+%macro CLU_LD 1                 ; AX:[dsk_ch] = the cluster held at %1
+    mov ax, [%1]
+  %ifdef OS88_FAT32
+    push word [%1+2]
+    pop word [dsk_ch]
+  %endif
+%endmacro
+%macro CLU_ST 1                 ; ...and stored there
+    mov [%1], ax
+  %ifdef OS88_FAT32
+    push word [dsk_ch]
+    pop word [%1+2]
+  %endif
+%endmacro
+%macro CLU_HI0 0                ; AX holds a cluster that is a WORD by
+  %ifdef OS88_FAT32             ; construction (0, the root, a FAT12/16
+    mov word [dsk_ch], 0        ; volume's): its high word is 0
+  %endif
+%endmacro
+%macro CLU_ZST 1                ; a zero cluster at %1 (AX untouched)
+    mov word [%1], 0
+  %ifdef OS88_FAT32
+    mov word [%1+2], 0
+  %endif
+%endmacro
+%macro CLU_TST 1                ; ZF = 1 when the cluster at %1 is 0 (the
+    cmp word [%1], 0            ; root): flags only
+  %ifdef OS88_FAT32
+    jne %%x
+    cmp word [%1+2], 0
+%%x:
+  %endif
+%endmacro
+%macro CLU_TAX 0-1              ; ZF = 1 when AX:[dsk_ch] is 0: flags only
+  %if %0                        ; (CLU_TAX or: the `or` spelling a site had)
+    or ax, ax
+  %else
+    test ax, ax
+  %endif
+  %ifdef OS88_FAT32
+    jnz %%x
+    cmp word [dsk_ch], 0
+%%x:
+  %endif
+%endmacro
 %macro DSK_RD1D 1               ; one sector into dsk_secbuf, its LBA the
   %ifdef OS88_BIGVOL            ; (d)word at %1
     mov bx, %1
@@ -151,10 +208,25 @@ DSK_B_TOTHI  equ 28              ; NOT the sector's byte 28 (HiddSec's low
                                  ; 0 otherwise (SPEC.md 18.7.5). One byte
                                  ; names 8GB, four times FAT16's reach, so the
                                  ; bank grows by nothing
+%ifdef OS88_FAT32
+DSK_BPB_SZ   equ 40              ; ...and on kern_mega through FAT32's FSInfo
+                                 ; word @48 (SPEC.md 19.12.2): TotSec32 @32,
+                                 ; FATSz32 @36, ExtFlags @40, FSVer @42,
+                                 ; RootClus @44, so a fixed FAT32 volume is
+                                 ; re-mounted from the bank like any other
+DSK_B_TOT32  equ 32              ; BPB_TotSec32 (dword) - the RAW field; the
+                                 ; fold above writes TOT16/TOTHI, never this
+DSK_B_FSZ32  equ 36              ; BPB_FATSz32 (dword)
+DSK_B_EXTF   equ 40              ; BPB_ExtFlags (word)
+DSK_B_FSVER  equ 42              ; BPB_FSVer (word), must be 0
+DSK_B_RCLUS  equ 44              ; BPB_RootClus (dword)
+DSK_B_FSINF  equ 48              ; BPB_FSInfo (word)
+%else
 DSK_BPB_SZ   equ 18              ; bytes staged and banked per volume: the BPB
                                  ; from DSK_B_BPS through DSK_B_HEADS+1 (even,
                                  ; for rep movsw). DSK_B_JMP is asked of the
                                  ; sector itself, beside rule 1 (SPEC.md 18.9.2)
+%endif
 %if DSK_BPB_SZ < DSK_B_HEADS + 2 - DSK_B_BPS
   %error "DSK_BPB_SZ no longer covers DSK_B_BPS..DSK_B_HEADS"
 %endif
@@ -1183,6 +1255,12 @@ dsk_fatwc:   times MEM_P_FATW_N dw 0    ; ...the claim it lives in, 0 = none,
 dsk_fatwsig: times DVOL_MAX dw 0        ; ...and the SIGNATURE of the disk
                                  ; those bytes came off (18.8.2), 0 = none
                                  ; banked, so a fresh row can never match
+%ifdef OS88_FAT32
+dsk_fatwwh:  times DVOL_MAX dw 0        ; ...and [dsk_fatww]'s HIGH word, FAT32
+                                        ; sectors being 32-bit (19.12.4). .text
+                                        ; beside it so the bank reaches it at a
+                                        ; constant offset from [dsk_fatww]
+%endif
 dsk_sigcur:  dw 0                ; the signature of the volume mounted NOW,
                                  ; computed once per mount off the boot sector
                                  ; that mount already reads
@@ -1193,6 +1271,9 @@ dsk_fatd0:   dw 0xFFFF           ; the dirty range's low end, 0xFFFF = clean
                                  ; mount and a zeroed word there reads as
                                  ; "sector 0 resident and dirty" - which would
                                  ; flush an unloaded window over a real FAT
+;%ifdef OS88_FAT32: [dsk_fatd0]/[dsk_fatd1] are WINDOW-RELATIVE on kern_mega
+; (0..[dsk_fatwn]-1), because an absolute FAT32 sector's low word can be
+; 0FFFFh, the "clean" sentinel (SPEC.md 19.12.4)
 dsk_fatseg:  dw FAT_SEG          ; WHERE the FAT window lives (SPEC.md 18.8.1).
                                  ; The shared one below the stacks by default;
                                  ; a driver-backed volume that could claim its
@@ -1201,6 +1282,12 @@ dsk_fatseg:  dw FAT_SEG          ; WHERE the FAT window lives (SPEC.md 18.8.1).
                                  ; nothing. In .text with a real initialiser
                                  ; because drv_boot's very first mount reads it
 dsk_cwd:     dw 0                ; current directory's first cluster
+%ifdef OS88_FAT32
+             dw 0                ; ...its high word (SPEC.md 19.12.3)
+dsk_fsimask: db 0                ; a bit a volume: FSInfo already "unknown"
+                                 ; this boot (19.12.7). .text: read at the
+                                 ; first mount, and -f bin zeroes no .bss
+%endif
 dsk_keepcwd: db 0                ; 1 = this mount is a dsk_chdir: keep it
 dsk_quiet:   db 0                ; 1 = this mount is a VOLUME switch, not a
                                  ; listing (SPEC.md 18.9) - here for
@@ -4120,6 +4207,9 @@ dsk_fat_window:
     jc .out
 .ok:
     mov [dsk_fatw0], dx
+%ifdef OS88_FAT32
+    mov word [dsk_fatw0h], 0    ; a FAT12/16 window's high word
+%endif
 .out:
     cmp word [dsk_fatw0], 0xFFFF    ; ZF = 1: none resident (the banner)
     pop es                      ; (pop writes no flag, nor does kretc_di)
@@ -4253,6 +4343,11 @@ disk_mount_x:
     ; its three words are dskw_refat's, called below rather than spelled again.
     xor ax, ax
     mov [disk_nfiles], ax       ; stays 0 unless the mount fully succeeds
+%ifdef OS88_FAT32
+    mov [dsk_fattype], al       ; no FAT32 arm runs for a volume whose BPB
+                                ; was never read (a redirected one, a torn
+                                ; mount): the type is re-derived per mount
+%endif
     mov [dsk_mntok], al         ; the write gate (SPEC.md 18.4) closes for
                                 ; the whole mount: a torn mount leaves it
                                 ; closed, so nothing can write a volume
@@ -4266,6 +4361,9 @@ disk_mount_x:
     cmp [dsk_keepcwd], al       ; a remount always lands at the root, and
     jne .cwd_kept               ; dskw_* resolve there until dsk_chdir
     mov [dsk_cwd], ax           ; moves - EXCEPT when dsk_chdir is the
+%ifdef OS88_FAT32
+    mov [dsk_cwd+2], ax         ; (the whole cluster, 19.12.3)
+%endif
 .cwd_kept:                      ; caller, which is how navigation reuses
                                 ; this whole validated pipeline (19.2).
                                 ; Asked while AX is still 0: -4 bytes
@@ -4377,6 +4475,9 @@ disk_mount_x:
     call desk_learn_x           ; ...which is what settles a floppy drive's
                                 ; KIND when its ROM would not (SPEC.md 26.4.1)
     call dsk_bpb_bank_put       ; ...and remember it, if this volume is fixed
+%ifdef OS88_FAT32
+    call dsk_f32_fsi            ; FSInfo "unknown", once a boot (19.12.7)
+%endif
 
     ; --- 2. the FAT WINDOW's first load (SPEC.md 18.8; ES only, never DS) ---
     ; Not the whole FAT any more - a 32MB FAT16 volume's is 64 sectors and the
@@ -4399,6 +4500,16 @@ disk_mount_x:
                                 ; can spare it (SPEC.md 18.8.2)
     call dsk_fatw_pick          ; this volume's own window, if it has one and
     jnc .fat_ok                 ; this is a quiet switch back to it (18.8.1)
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32's first window: sector 0, 32-bit
+    jne .fw16
+    xor ax, ax
+    cwd
+    call dsk_f32_win
+    jnc .fat_ok
+    jmp .fail
+.fw16:
+%endif
     xor dx, dx
     call dsk_fat_window         ; ZF = 0: the window is resident
     jne .fat_ok
@@ -4424,16 +4535,25 @@ disk_mount_x:
     ; not, and it self-corrects the window too - fmv_load (SPEC.md 22.1)
     ; already records what really happened rather than what it asked for,
     ; so the view's FS_CWD follows us here instead of dangling.
-    mov ax, [dsk_cwd]
-    test ax, ax
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; a FAT12/16 folder is a WORD: whatever high
+    je .cw32                    ; word the caller carried, it is 0 here, so
+    mov word [dsk_cwd+2], 0     ; every root test sees the root (19.12.3)
+.cw32:
+%endif
+    CLU_LD dsk_cwd
+    CLU_TAX
     jz .cwd_ok                  ; the root is not a cluster and cannot go
     call dsk_next_clus_x          ; CF = outside [2, dsk_maxclus]
     jc .cwd_lost
-    test ax, ax                 ; 0 = free: the directory was removed
+    CLU_TAX                     ; 0 = free: the directory was removed
     jnz .cwd_ok
 .cwd_lost:
     xor ax, ax
     mov [dsk_cwd], ax
+%ifdef OS88_FAT32
+    mov [dsk_cwd+2], ax
+%endif
 .cwd_ok:
 
     ; --- 2b. a QUIET mount stops here (SPEC.md 18.9) -------------------------
@@ -4493,7 +4613,7 @@ disk_mount_x:
 %ifdef OS88_DRIVERS             ; (kern_small keeps the pair: there the -3
     call dsk_dirw_cwd           ; puts the FAT walk odd, and the entry would
 %else                           ; buy that build nothing)
-    mov ax, [dsk_cwd]           ; the current directory (0 = root at mount;
+    CLU_LD dsk_cwd              ; the current directory (0 = root at mount;
     call dsk_dirw_start_x         ; dsk_chdir re-enters here, SPEC.md 19.2)
 %endif
 .rootsec:
@@ -4549,7 +4669,7 @@ disk_mount_x:
     mov es, [dsk_dseg]          ; the sort reads and writes the LISTING, so
     mov bx, [dsk_doff]          ; ES leaves the sector buffer for it
     mov cx, bp                  ; folders first, then by name, and BEFORE the harvest:
-    cmp word [dsk_cwd], 0       ; slot i is then filled for whatever entry
+    CLU_TST dsk_cwd             ; slot i is then filled for whatever entry
     je .sortall                 ; ended up at i, so the icons never have to be
     add bx, DSK_DE_STRIDE       ; permuted alongside the entries (19.4). The
     dec cx                      ; parent link is not IN the sort - it is
@@ -4876,6 +4996,10 @@ disk_mount_x:
                                 ; two mounts of 1,024 entries is the most one
                                 ; listing ever asks of it
     mov ax, [si+18]             ; first cluster - or, on a redirected volume,
+%ifdef OS88_FAT32
+    push word [si+14]           ; ...whose high word is the name's +14 on
+    pop word [dsk_ch]           ; FAT32 and 0 everywhere else (19.12.6)
+%endif
                                 ; THE DRIVER'S OPAQUE HANDLE, which is what
                                 ; rd_stage puts at @18 and what FSV_READAT
                                 ; takes (SPEC.md 62.9.1)
@@ -5131,6 +5255,9 @@ disk_mount_x:
 .fail:
     xor ax, ax                  ; ...and the same here: 15 bytes against 18
     mov [dsk_cwd], ax           ; a failed chdir must not leave the volume
+%ifdef OS88_FAT32
+    mov [dsk_cwd+2], ax
+%endif
     mov al, 2                   ; pointed inside a directory nothing listed
     mov [disk_heads], ax        ; ...and sane fallback geometry is left behind
     mov al, 9
@@ -5244,6 +5371,21 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
     dec ax                      ; {1, 2} as "value-1 <= 1": 0 wraps to 0xFF
     cmp al, 1
     ja .jfail1
+%ifdef OS88_FAT32
+    ; FATSz16 = 0 is FAT32's layout (SPEC.md 19.12.2). [dsk_fatsz] is a COPY
+    ; on kern_mega - FAT32's FATSz32 is not where FATSz16 is staged, and the
+    ; staged 0 cannot be overwritten because the bank re-checks it
+    mov ax, [dsk_bpb+DSK_B_FATSZ]
+    mov [dsk_fatsz], ax
+    xor ax, ax
+    mov [dsk_fatsz32], ax       ; ...and the FAT12/16 layout's high words
+    mov [dsk_datalbh], ax
+    mov [dsk_maxclus+2], ax
+    cmp [dsk_bpb+DSK_B_FATSZ], ax
+    jne .r7
+    jmp .f32
+.r7:
+%endif
     ; rule 7: root entries >= 1, <= 512, and a whole-sector count
     ; ((RootEntCnt*32) mod 512 == 0 <=> RootEntCnt mod 16 == 0)
     mov ax, [dsk_bpb+DSK_B_ROOTN]
@@ -5456,6 +5598,7 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
     mov ax, DSK_FAT_SECS
 .wsz:
     mov [dsk_fatwn], ax
+.geom:
 
     ; all 16 rules passed: the geometry fields become disk_read's own
     mov ax, [dsk_bpb+DSK_B_SPT]
@@ -5484,6 +5627,134 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
                                 ; one.
     clc
     ret
+%ifdef OS88_FAT32
+; --- FAT32's rules (SPEC.md 19.12.2), BH = [dsk_vflop] as above. Every count
+; is 32-bit and every sum carry-checked: a hostile FATSz32 must refuse, not
+; wrap into a data area that starts inside the FAT
+.f32:
+    test bh, bh                 ; no floppy is FAT32 - the format needs
+    jnz .f32no                  ; 65,525 clusters, and a floppy claiming it is
+    cmp [dsk_bpb+DSK_B_ROOTN], ax   ; hostile or broken. Rule 7: no root
+    jne .f32no                  ; region, the root is a chain (AX = 0 here)
+    cmp [dsk_bpb+DSK_B_FSVER], ax
+    jne .f32no
+    mov al, [dsk_bpb+DSK_B_MEDIA]   ; rule 9
+    cmp al, 0xF0
+    je .f32m
+    cmp al, 0xF8
+    jb .f32no
+.f32m:
+    mov ax, [dsk_bpb+DSK_B_SPT]     ; rules 11 and 12, a fixed disk's
+    dec ax
+    cmp ax, 62
+    ja .f32no
+    mov ax, [dsk_bpb+DSK_B_HEADS]
+    dec ax
+    cmp ax, 254
+    ja .f32no
+    mov ax, [dsk_bpb+DSK_B_EXTF]    ; mirroring off with a live FAT other
+    and ax, 0x8F                ; than the first is refused: this kernel
+    cmp ax, 0x80                ; reads FAT 0 (19.12.2)
+    ja .f32no
+    mov ax, [dsk_bpb+DSK_B_FSZ32]   ; rule 10: FATSz32 >= 1
+    mov dx, [dsk_bpb+DSK_B_FSZ32+2]
+    mov [dsk_fatsz], ax
+    mov [dsk_fatsz32], dx
+    mov cx, ax
+    or cx, dx
+    jz .f32no
+    cmp byte [dsk_nfats], 1     ; FirstDataSec = Rsvd + NumFATs * FATSz32
+    je .f32one
+    add ax, ax
+    adc dx, dx
+    jc .f32no
+.f32one:
+    add ax, [dsk_fatlba]
+    adc dx, 0
+    jc .f32no
+    mov [dsk_datalba], ax
+    mov [dsk_datalbh], dx
+    mov [dsk_rootlba], ax       ; no root region: an empty one where the data
+    mov word [dsk_rootsecs], 0  ; starts, so nothing classifies a sector as it
+    or word [dsk_totsec], -1    ; past 64K sectors by construction (the cache
+                                ; never serves past 32MB, 18.7.5)
+    mov si, [dsk_bpb+DSK_B_TOT32]   ; DI:SI = TotSec32, all 32 bits: 2TB
+    mov di, [dsk_bpb+DSK_B_TOT32+2]
+    mov cx, [dsk_vsecs]         ; rule 13: a length the driver declared
+    jcxz .f32r14                ; bounds it (0 = unknown, past a word)
+    or di, di
+    jnz .f32no
+    cmp si, cx
+    ja .f32no
+.f32r14:
+    sub si, ax                  ; rule 14: DataSec = TotSec32 - FirstDataSec,
+    sbb di, dx                  ; and not negative
+    jc .f32no
+    mov bl, [dsk_spc]
+    xor bh, bh
+    mov ax, di                  ; CountOfClusters = DataSec / spc, 32 over 8
+    xor dx, dx                  ; in two divides that cannot overflow
+    div bx
+    mov cx, ax
+    mov ax, si
+    div bx                      ; CX:AX = the count
+    jcxz .f32low                ; rule 15: 65,525 <= count <= 0FFFFFF5h
+    cmp cx, 0x0FFF
+    jb .f32cnt
+    ja .f32no
+    cmp ax, 0xFFF5
+    ja .f32no
+    jmp short .f32cnt
+.f32low:
+    cmp ax, 65525
+    jb .f32no
+.f32cnt:
+    add ax, 1                   ; [dsk_maxclus] = count + 1, a dword
+    adc cx, 0
+    mov [dsk_maxclus], ax
+    mov [dsk_maxclus+2], cx
+    mov byte [dsk_fattype], 2
+    mov si, [dsk_bpb+DSK_B_RCLUS]   ; RootClus in [2, maxclus]
+    mov di, [dsk_bpb+DSK_B_RCLUS+2]
+    mov [dsk_rclus], si
+    mov [dsk_rclus+2], di
+    or di, di
+    jnz .f32rhi
+    cmp si, 2
+    jb .f32no
+.f32rhi:
+    cmp di, cx
+    ja .f32no
+    jb .f32rok
+    cmp si, ax
+    ja .f32no
+.f32rok:
+    mov si, [dsk_bpb+DSK_B_FSINF]   ; FSInfo: a sector inside the reserved
+    cmp si, [dsk_fatlba]        ; area, or none (0, 0FFFFh, or anything that
+    jb .f32fs                   ; is not inside it - advisory, so a bad one is
+    xor si, si                  ; ignored rather than refused, 19.12.7)
+.f32fs:
+    mov [dsk_fsinfo], si
+    add ax, 1+127               ; rule 16: the FAT holds an entry for every
+    adc cx, 0                   ; cluster, 0..maxclus, at 128 a sector:
+    mov dx, 7                   ; ceil((maxclus + 1) / 128) <= FATSz32
+.f32sh:
+    shr cx, 1
+    rcr ax, 1
+    dec dx
+    jnz .f32sh
+    cmp cx, [dsk_fatsz32]
+    ja .f32no
+    jb .f32win
+    cmp ax, [dsk_fatsz]
+    ja .f32no
+.f32win:
+    mov word [dsk_fatwn], DSK_FAT_SECS  ; FATSz32 >= 512 by rule 15: the
+    jmp .geom                   ; window is always full
+.f32no:
+    stc
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_ent_zero - blank the staged directory entry (module-internal)
@@ -5576,6 +5847,16 @@ dsk_synth_x:
     ; --- @18: first cluster = raw FstClusLO, verbatim even when type=0 ---
     mov ax, [es:si+DSK_R_CLUS]  ; ...and HELD in AX for the range test below
     mov [dsk_ent+18], ax
+%ifdef OS88_FAT32
+    mov word [dsk_ch], 0        ; FAT12/16: FstClusHI is ignored (19.1)
+    cmp byte [dsk_fattype], 2
+    jne .hi16
+    mov dx, [es:si+DSK_R_CZL]   ; FAT32: FstClusHI @20 is the cluster's high
+    and dh, 0x0F                ; word, and the listing carries it in the
+    mov [dsk_ch], dx            ; name's +14 (SPEC.md 19.12.6), which a
+    mov [dsk_ent+14], dx        ; twelve-character name never reaches
+.hi16:
+%endif
     ; --- @20: size dword - lo word at 20, hi at 22 (SPEC.md 19). It was one
     ;     word clamped to 0xFFFF, and a 116KB module listed as 65535. HELD in
     ;     DX:BX and stored at .size, by every species but a walkable folder ---
@@ -5663,7 +5944,7 @@ dsk_synth_x:
 ; -----------------------------------------------------------------------------
 dsk_up_open:
     xor bp, bp
-    cmp word [dsk_cwd], 0
+    CLU_TST dsk_cwd
     je .out                     ; the root has no parent
     push cx
     push di
@@ -5680,8 +5961,16 @@ dsk_up_open:
     call dsk_dotdot_x           ; answered it and disk_mount banked it in
     jnc .have                   ; [dsk_fsup] (SPEC.md 62.9.1). The handle is
     xor ax, ax                  ; opaque, so this is the ONLY source there is
+    CLU_HI0
 .have:
     mov [dsk_ent+18], ax
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: the listing's high word is in the
+    jne .h16                    ; name's +14 (SPEC.md 19.12.6); FAT12/16's
+    push word [dsk_ch]          ; stays the 0 dsk_ent_zero left
+    pop word [dsk_ent+14]
+.h16:
+%endif
     pop di
     pop cx
     xor ax, ax                  ; ...at index 0
@@ -5826,6 +6115,13 @@ dsk_peek_x:
 ; -----------------------------------------------------------------------------
 dsk_clus2lba_x:
     push dx
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: AX:[dsk_ch] (SPEC.md 19.12.3)
+    jne .w16
+    call dsk_f32_c2lba
+    jmp short .out
+.w16:
+%endif
     cmp ax, 2
     jb .bad
     cmp ax, [dsk_maxclus]
@@ -5934,6 +6230,10 @@ dsk_fatw_park:
     jc .out
     mov ax, [dsk_fatw0]
     mov [bx], ax                ; unconditional: banking 0xFFFF is what makes
+%ifdef OS88_FAT32
+    mov ax, [dsk_fatw0h]        ; ...and its high word (19.12.4)
+    mov [bx+dsk_fatwwh-dsk_fatww], ax
+%endif
                                 ; an invalidate stick across a switch (the
                                 ; pick reads it as "owe a load", one 9-sector
                                 ; reload at worst)
@@ -5978,6 +6278,10 @@ dsk_fatw_pick:                  ; (no bank: disk_mount_x reads neither AX nor
     jne .load                   ; a different disk: reload, do not trust it
     mov ax, [bx]                ; (the equal compare left CF = 0, and `mov`
     mov [dsk_fatw0], ax         ; keeps it) still resident, and nothing can
+%ifdef OS88_FAT32
+    mov ax, [bx+dsk_fatwwh-dsk_fatww]
+    mov [dsk_fatw0h], ax
+%endif
 %ifdef DSK_STREAM               ; have overwritten it: this window is ours
     jmp dws_hret                ; ...and so is a held stream's dirt (18.8.5):
 %else                           ; its tail, CF = 0 as the equal compare left
@@ -6526,6 +6830,13 @@ dsk_free_clus_x:
 .fat:
     xor di, di                  ; DI = free clusters
     mov si, 2                   ; SI = cluster under test
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32 (SPEC.md 19.12.7): the count is
+    jne .w16                    ; AX:[dsk_ch], a window sector at a time
+    jmp .f32
+.w16:
+    mov word [dsk_ch], 0        ; a FAT12/16 count is a word
+%endif
     mov cx, [dsk_maxclus]       ; CX = the last cluster, held through the FAT12
     cmp si, cx                  ; walk and .slow (dsk_next_clus_x keeps it);
                                 ; .f16 spends CX and reads the word - pass 15
@@ -6640,6 +6951,69 @@ dsk_free_clus_x:
     stc
 .out:
     jmp dskw_find.out           ; the same six pops (a pop writes no flag)
+%ifdef OS88_FAT32
+; --- FAT32: SI:[dsk_fcih] the cluster under test, DI:[dsk_fcnh] the count.
+; 128 entries a sector, free when the low 28 bits are 0; the early stop is
+; .f16's, past [dsk_fcgoal] (a word: any count with a high word passes it)
+.f32:
+    xor ax, ax
+    mov [dsk_fcih], ax
+    mov [dsk_fcnh], ax
+.f32s:
+    mov ax, si
+    push word [dsk_fcih]
+    pop word [dsk_ch]
+    call dsk_f32_ent            ; ES:BX = cluster SI's entry, its sector in
+    jc .f32n                    ; the window
+    inc byte [sch_lock]         ; .f16's bank, for .f16's reason
+    mov cx, si                  ; CX = 128 - (SI & 127), this sector's rest
+    and cx, 127
+    neg cx
+    add cx, 128
+    mov ax, [dsk_maxclus]       ; ...but never past the last cluster
+    mov dx, [dsk_maxclus+2]
+    sub ax, si
+    sbb dx, [dsk_fcih]
+    add ax, 1
+    adc dx, 0
+    or dx, dx
+    jnz .f32r
+    cmp cx, ax
+    jbe .f32r
+    mov cx, ax
+.f32r:
+    add si, cx
+    adc word [dsk_fcih], 0
+.f32e:
+    mov ax, [es:bx]
+    or ax, ax
+    jnz .f32x
+    mov ax, [es:bx+2]
+    and ah, 0x0F
+    jnz .f32x
+    add di, 1
+    adc word [dsk_fcnh], 0
+.f32x:
+    add bx, 4
+    loop .f32e
+    dec byte [sch_lock]
+    cmp word [dsk_fcnh], 0
+    jne .f32n
+    cmp di, [dsk_fcgoal]
+    ja .f32n
+    mov ax, [dsk_fcih]
+    cmp ax, [dsk_maxclus+2]
+    jb .f32s
+    ja .f32n
+    cmp si, [dsk_maxclus]
+    jbe .f32s
+.f32n:
+    mov ax, di
+    push word [dsk_fcnh]
+    pop word [dsk_ch]
+    clc
+    jmp .out
+%endif
 
 ; .slow - the per-cluster fallback: a windowed FAT12 bigger than DSK_FAT_SECS,
 ; where dsk_next_clus reloads the window as the scan crosses it, which is the
@@ -6695,6 +7069,14 @@ dsk_next_clus_x:
     push cx
     push dx
     push es
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: AX:[dsk_ch] in and out (19.12.3)
+    jne .w16
+    call dsk_f32_next
+    jmp short .out
+.w16:
+    mov word [dsk_ch], 0        ; a FAT12/16 answer's high word is 0
+%endif
     cmp ax, 2
     jb .bad
     cmp ax, [dsk_maxclus]
@@ -6726,6 +7108,252 @@ dsk_next_clus_x:
     pop bx
     ret
 
+%ifdef OS88_FAT32
+; =============================================================================
+; FAT32's entry access (SPEC.md 19.12.4) - kern_mega only, all of it here in
+; .cold. A cluster is AX:[dsk_ch]; a FAT sector is 32-bit, DX:AX
+; =============================================================================
+; dsk_f32_next - AX:[dsk_ch] = cluster -> its entry, masked to 28 bits; CF=1
+; outside [2, maxclus] or when the window will not load. Clobbers BX, DX, ES
+; (dsk_next_clus_x's frame keeps them)
+dsk_f32_next:
+    call dsk_f32_clok
+    jc .r
+    call dsk_f32_ent
+    jc .r
+    mov ax, [es:bx]
+    mov dx, [es:bx+2]
+    and dh, 0x0F                ; the top four bits are reserved (19.12.4)
+    mov [dsk_ch], dx            ; CF = 0 from the `and`
+.r:
+    ret
+
+; dsk_f32_c2lba - dsk_clus2lba_x's FAT32 arm: AX:[dsk_ch] -> AX = the LBA's
+; low word, [dsk_c2hi] its high; CF=1 out of range. Clobbers DX (the caller's
+; frame keeps it); [dsk_ch] and the rest preserved
+dsk_f32_c2lba:
+    call dsk_f32_clok
+    jc .r
+    push bx
+    push cx
+    mov cx, [dsk_ch]
+    sub ax, 2
+    sbb cx, 0                   ; CX:AX = cluster - 2
+    mov bl, [dsk_spc]
+    xor bh, bh
+    mul bx                      ; DX:AX = its low word x spc
+    xchg ax, cx                 ; CX = that product's low word, AX = the
+    push dx                     ; cluster's high word
+    mul bx                      ; ...x spc: under 2^18, so DX = 0
+    pop dx
+    add dx, ax                  ; DX:CX = (cluster - 2) x spc
+    mov ax, cx
+    add ax, [dsk_datalba]
+    adc dx, [dsk_datalbh]       ; CF = 1 only past 2^32 sectors, which rule
+    mov [dsk_c2hi], dx          ; 14 refused: refused here as well
+    pop cx
+    pop bx
+.r:
+    ret
+
+; dsk_f32_clok - CF=1 unless 2 <= AX:[dsk_ch] <= [dsk_maxclus] (a dword);
+; preserves every register
+dsk_f32_clok:
+    push dx
+    mov dx, [dsk_ch]
+    cmp dx, [dsk_maxclus+2]
+    ja .no
+    jb .lo
+    cmp [dsk_maxclus], ax
+    jb .no                      ; past [dsk_maxclus]
+.lo:
+    or dx, dx
+    jnz .ok
+    cmp ax, 2
+    jb .no                      ; 0 and 1 are not clusters
+.ok:
+    clc
+    pop dx
+    ret
+.no:
+    stc
+    pop dx
+    ret
+
+; dsk_f32_ent - ES:BX -> the 4-byte entry of cluster AX:[dsk_ch] (already
+; range-checked), resident in the window; CF=1 when it will not load.
+; Preserves every other register
+dsk_f32_ent:
+    push ax
+    push dx
+    mov bx, ax
+    and bx, 127                 ; 128 entries a sector...
+    shl bx, 1
+    shl bx, 1                   ; ...4 bytes each: BX = the offset in it
+    mov dx, [dsk_ch]            ; DX:AX >> 7 is (DX:AX << 1) >> 8: one
+    shl ax, 1                   ; shift and three byte moves
+    rcl dx, 1
+    mov al, ah
+    mov ah, dl
+    mov dl, dh
+    mov dh, 0                   ; DX:AX = the FAT sector
+    call dsk_f32_win            ; AX = its index in the window
+    jc .out
+    shl al, 1                   ; x512 is x2 into the high byte: the index
+    add bh, al                  ; is under DSK_FAT_SECS, so it is all in AL
+    mov es, [dsk_fatseg]        ; CF = 0 from the add (BX < 4,608)
+.out:
+    pop dx
+    pop ax
+    ret
+
+; dsk_f32_win - make FAT sector DX:AX resident; out AX = its index in the
+; window, CF=1 when the window will not load (then [dsk_fatw0] = 0FFFFh).
+; Preserves every other register. The window starts at the sector asked for,
+; clamped so it stays whole at the FAT's end, and NEVER at a low word of
+; 0FFFFh: that is "nothing resident", so such a start moves down one sector,
+; which still covers the sector asked for (SPEC.md 19.12.4)
+dsk_f32_win:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp word [dsk_fatw0], 0xFFFF
+    je .load
+    mov bx, ax
+    mov cx, dx
+    sub bx, [dsk_fatw0]
+    sbb cx, [dsk_fatw0h]
+    jc .load                    ; below the window
+    jnz .load                   ; ...or 64K sectors and more above it
+    cmp bx, [dsk_fatwn]
+    jae .load
+    xchg ax, bx                 ; AX = the index; CF = 0 from the `jae`
+    jmp short .out
+.load:
+    push ax                     ; the sector asked for, for the index
+    push dx
+    call dskw_flush_x           ; anything dirty goes back before the window
+                                ; moves (18.4), as dsk_fat_window does
+    pop dx
+    pop ax
+    mov si, ax                  ; DX:SI = the start, first the sector itself
+    mov di, dx
+    mov bx, [dsk_fatsz]         ; CX:BX = the highest start that keeps the
+    mov cx, [dsk_fatsz32]       ; window whole
+    sub bx, [dsk_fatwn]
+    sbb cx, 0
+    cmp di, cx
+    jb .st
+    ja .clamp
+    cmp si, bx
+    jbe .st
+.clamp:
+    mov si, bx
+    mov di, cx
+.st:
+    cmp si, 0xFFFF
+    jne .rd
+    dec si                      ; never a start whose low word is 0FFFFh
+.rd:
+    push ax                     ; the sector asked for, again
+    push dx
+    or word [dsk_fatw0], -1
+    mov es, [dsk_fatseg]
+    xor bx, bx
+    mov cx, [dsk_fatwn]
+    mov ax, si
+    mov dx, di
+    add ax, [dsk_fatlba]        ; FAT 1's LBA: Rsvd + the start, 32-bit
+    adc dx, 0
+    mov [dsk_lbahi], dx         ; armed for exactly this transfer (18.7.5)
+    call disk_read_x
+    jnc .ok
+    cmp byte [dsk_nfats], 2     ; FAT 1 unreadable: FAT 2 is the format's
+    jne .bad                    ; own redundancy (18.3)
+    add ax, [dsk_fatsz]
+    adc dx, [dsk_fatsz32]
+    mov [dsk_lbahi], dx
+    call disk_read_x
+    jc .bad
+.ok:
+    mov [dsk_fatw0], si
+    mov [dsk_fatw0h], di
+    pop dx
+    pop ax
+    sub ax, si                  ; the index: the asked-for sector less the
+    clc                         ; start, under DSK_FAT_SECS - the low words
+    jmp short .out              ; are enough
+.bad:
+    pop dx
+    pop ax
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; dsk_f32_fsi - FSInfo's free count and next-free hint written as 0FFFFFFFFh,
+; "unknown", once per volume per boot, at the mount while dsk_secbuf is the
+; mount's own (SPEC.md 19.12.7). Advisory: every failure is swallowed, and a
+; sector without FSInfo's three signatures is not written. Clobbers AX..DI
+dsk_f32_fsi:
+    cmp byte [dsk_fattype], 2
+    jne .r
+    mov ax, [dsk_fsinfo]
+    or ax, ax
+    jz .r
+    mov cl, [disk_drive]
+    cmp cl, 8
+    jae .r
+    mov bl, 1
+    shl bl, cl
+    test [dsk_fsimask], bl
+    jnz .r
+    or [dsk_fsimask], bl        ; once, whatever happens below
+    push es
+    push ss
+    pop es
+    call dsk_rd1_x              ; AX = the sector, under Rsvd: a word
+    jc .pop
+    mov di, dsk_secbuf
+    cmp word [es:di], 0x5252    ; 41615252h, 'RRaA'
+    jne .pop
+    cmp word [es:di+2], 0x4161
+    jne .pop
+    cmp word [es:di+484], 0x7272    ; 61417272h, 'rrAa'
+    jne .pop
+    cmp word [es:di+486], 0x6141
+    jne .pop
+    cmp word [es:di+510], 0xAA55    ; AA550000h's high word
+    jne .pop
+    add di, 488                 ; FSI_Free_Count, then FSI_Nxt_Free
+    mov cx, 4
+    mov si, cx                  ; SI = 4: "already all unknown" if it stays
+.chk:
+    cmp word [es:di], 0xFFFF
+    je .same
+    mov word [es:di], 0xFFFF
+    inc si
+.same:
+    inc di
+    inc di
+    loop .chk
+    cmp si, 4
+    je .pop
+    call dsk_wr1_x
+.pop:
+    pop es
+.r:
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; dsk_dirw_start / dsk_dirw_next - iterate a directory's sectors (SPEC 19.2)
 ;
@@ -6754,13 +7382,42 @@ DSK_DIRW_MAX equ 256             ; hostile-FAT guard: max sectors per walk
 
 %ifdef OS88_DRIVERS
 dsk_dirw_cwd:                   ; ...of the CURRENT directory: the two
-    mov ax, [dsk_cwd]           ; callers that loaded it first (pass 17, -3)
+    CLU_LD dsk_cwd              ; callers that loaded it first (pass 17, -3)
 %endif
 dsk_dirw_start_x:
+%ifdef OS88_FAT32
+    ; kern_mega: AX:[dsk_ch], and on FAT32 cluster 0 IS RootClus (SPEC.md
+    ; 19.12.5) - so the root is walked as the chain it is, [dsk_wlast] is
+    ; set by its steps, and dskw_dirgrow grows it. Every register and
+    ; [dsk_ch] preserved, as before
+    push ax
+    push word [dsk_ch]
+    cmp byte [dsk_fattype], 2
+    je .f32
+    mov word [dsk_ch], 0        ; FAT12/16: a word, and 0 is the region
+.f32:
+    push ax
+    or ax, [dsk_ch]
+    pop ax
+    jnz .st
+    cmp byte [dsk_fattype], 2
+    jne .st
+    mov ax, [dsk_rclus]
+    push word [dsk_rclus+2]
+    pop word [dsk_ch]
+.st:
+    CLU_ST dsk_wclus
+    pop word [dsk_ch]
+    pop ax
+    CLU_ZST dsk_wlast
+%else
     mov [dsk_wclus], ax
+%endif
     and word [dsk_wsec], 0
+%ifndef OS88_FAT32
 %ifndef KD_BUILD                ; (kern_dos grows no folder: KD_IMG_KB)
     and word [dsk_wlast], 0     ; no step taken yet: 0 is no cluster
+%endif
 %endif
     mov word [dsk_wguard], DSK_DIRW_MAX
     ret
@@ -6771,6 +7428,10 @@ dsk_dirw_next_x:
     dec word [dsk_wguard]
     mov ax, [dsk_wclus]
     or ax, ax
+%ifdef OS88_FAT32
+    jnz .sub
+    cmp [dsk_wclus+2], ax       ; ...and cluster 10000h is not the root
+%endif
     jnz .sub
 
     mov ax, [dsk_wsec]          ; the root: a flat run of sectors
@@ -6789,10 +7450,16 @@ dsk_dirw_next_x:
                                 ; at most 64 (rule 4) - so BX is not borrowed
                                 ; and the bank round the routine went (kernel
                                 ; size pass 18, -5)
-    mov ax, [dsk_wclus]
+    CLU_LD dsk_wclus
     call dsk_next_clus_x          ; CF=1 only if the CURRENT link is invalid
     jc .end
-%ifdef KD_BUILD
+%ifdef OS88_FAT32
+    push word [dsk_wclus]       ; the one it came FROM is banked, whole
+    pop word [dsk_wlast]
+    push word [dsk_wclus+2]
+    pop word [dsk_wlast+2]
+    CLU_ST dsk_wclus
+%elifdef KD_BUILD
     mov [dsk_wclus], ax         ; the new link is validated by clus2lba
 %else
     xchg ax, [dsk_wclus]        ; the new link is validated by clus2lba -
@@ -6802,7 +7469,7 @@ dsk_dirw_next_x:
                                 ; to (SPEC.md 18.5.2, BR-60)
     and word [dsk_wsec], 0
 .have:
-    mov ax, [dsk_wclus]
+    CLU_LD dsk_wclus
     call dsk_clus2lba_x           ; CF=1 = outside [2, dsk_maxclus]: the end
     jc .end
 .step:
@@ -8448,7 +9115,7 @@ dsk_find_x:
     pop bx                      ; slot to resume at, BP = 0 entries to step
     push bp                     ; over, and the banked answer 0 - which no
 .ord:                           ; ordinal's successor is - until the walk
-    mov ax, [dsk_cwd]           ; says where the next call starts
+    CLU_LD dsk_cwd              ; says where the next call starts
     call dsk_dscan              ; FERR_NOENT or FERR_IO
     jc .fail
     pop bx                      ; the token walk answers dsk_dscan's own CX,
@@ -8462,7 +9129,7 @@ dsk_find_x:
     je .stage                   ; FSV_ENUM's answer: no raw entry behind it
 %endif
 %else
-    mov ax, [dsk_cwd]
+    CLU_LD dsk_cwd
 %ifdef OS88_REDIR
     cmp byte [dsk_vkind], DVK_FILE
     je .fsenum                  ; A REDIRECTED VOLUME (SPEC.md 62.9.17): no
@@ -8570,6 +9237,12 @@ dsk_find_x:
 %define DSKF_RAW es:bx
 %endif
     mov al, [DSKF_RAW+DSK_R_CZM]   ; whether it is COMPRESSED, which is the +22
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: the hint is never written there and
+    jne .czok                   ; never trusted, @20 being FstClusHI (SPEC.md
+    mov al, 0                   ; 19.12.6): a mark that fails the test below
+.czok:
+%endif
     sub al, DSK_CZ_MARK         ; word: the mark LESS its format (20.14.2.4),
     cmp al, LZ_LZB              ; so 0xA4 and 0xA5 both pass and nothing else.
                                 ; Asked FIRST, so the flags ride the four
@@ -8632,6 +9305,18 @@ dsk_find_x:
     mov [es:di], ax             ; +14 the type word (1 file, 2 dir, 3 parent)
     mov ax, [dsk_ent+18]
     mov [es:di+2], ax           ; +16 the first cluster
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; ...which a word cannot always name: past
+    jne .near                   ; 0FFFFh it reads 0FFFFh, a folder every
+    cmp word [dsk_ent+14], 0    ; GOTO refuses, and the flags say FAR (SPEC.md
+    jne .far                    ; 19.12.8) - OSAPI_FILE_PLACE's FPL_STAT
+    inc ax                      ; names it whole. Cluster 0FFFFh itself is
+    jnz .near                   ; FAR too: the word cannot name it either
+.far:
+    mov word [es:di+2], 0xFFFF
+    or byte [es:di+8], 2        ; OSAPI_FIND_FAR, +22 bit 1
+.near:
+%endif
     pop dx
     pop ax
     mov [es:di+4], ax           ; +18 the size, all 32 bits of it
@@ -8683,7 +9368,7 @@ dsk_find_x:
 ; the OTHER drive's directory, and that is a bug you find by data loss.
 ; -----------------------------------------------------------------------------
 dsk_chdir_x:
-    mov [dsk_cwd], ax
+    CLU_ST dsk_cwd              ; AX:[dsk_ch] (SPEC.md 19.12.3)
     mov byte [dsk_keepcwd], 1
     call disk_mount_x
     mov byte [dsk_keepcwd], 0
@@ -8706,6 +9391,13 @@ dsk_chdir_q_x:
     jne .go                     ; 17, -3): the last mount worked, it is this
     cmp ax, [dsk_cwd]           ; volume and this directory...
     jne .go
+%ifdef OS88_FAT32
+    push ax                     ; ...all of it: a FAT32 folder's high word
+    mov ax, [dsk_ch]            ; (a FAT12/16 one's is 0 on both sides, the
+    cmp ax, [dsk_cwd+2]         ; mount sees to [dsk_cwd]'s)
+    pop ax
+    jne .go
+%endif
     call dsk_media_ok           ; ...and the MEDIA half answers the rest
     jnc .here
 .go:
@@ -8902,6 +9594,23 @@ dsk_goto:
     cmp byte [dsk_vkind], DVK_FILE
     je .fsgo                    ; a REDIRECTED volume: below
 %endif
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: BX:[dsk_ch], 0 the root or a
+    jne .g16                    ; cluster in range (SPEC.md 19.12.3)
+    push ax
+    mov ax, bx
+    CLU_TAX
+    jz .g32                     ; (CF = 0 out of the test)
+    call dsk_f32_clok
+.g32:
+    pop ax
+    jc .bad
+    mov [dsk_cwd], bx
+    push word [dsk_ch]
+    pop word [dsk_cwd+2]
+    jmp short .ok
+.g16:
+%endif
     cmp bx, 1                   ; 1 is never a cluster; 0 is the root and
     je .bad                     ; always legal, which the unsigned compare
     cmp bx, [dsk_maxclus]       ; below lets through as it lets 2 and up -
@@ -8909,6 +9618,9 @@ dsk_goto:
                                 ; three (kernel size pass 14, -4)
 .quiet:
     mov [dsk_cwd], bx
+%ifdef OS88_FAT32
+    mov word [dsk_cwd+2], 0     ; a FAT12/16 folder, or a driver's handle
+%endif
 .ok:
     pop dx
     clc
@@ -9119,11 +9831,15 @@ dsk_path_x:
     dec bx                      ; BX = the NUL's home, and the result's end
     mov di, bx
     mov byte [es:di], 0
-    mov ax, [dsk_cwd]
+    CLU_LD dsk_cwd
 .level:
-    or ax, ax
+    CLU_TAX or
     jz .done                    ; 0 is the root: the walk is over
     mov dx, ax                  ; DX = the child being named...
+%ifdef OS88_FAT32
+    push word [dsk_ch]          ; ...whole: DX:[dsk_vh] (dsk_byclus_x)
+    pop word [dsk_vh]
+%endif
     call dsk_up_x               ; ...AX = its parent, without standing there
     jc .corrupt
     call dsk_byclus_x           ; dsk_ent = the child's name, CX = its length
@@ -9217,6 +9933,9 @@ dsk_byclus_x:
     push bx                     ; its own KENT frame: only ES is owed there -
     push di                     ; kernel size pass 20, -6)
 %endif
+%ifdef OS88_FAT32
+    push word [dsk_ch]          ; AX is preserved, so its high word is too
+%endif                          ; (the walk below moves [dsk_ch], 19.12.3)
     push es
     call dsk_dirw_start_x
 .sector:
@@ -9235,6 +9954,17 @@ dsk_byclus_x:
     test byte [ss:si+DSK_R_ATTR], 0x10
     jz .next                    ; only a subdirectory can be the one
     cmp dx, [ss:si+DSK_R_CLUS]
+%ifdef OS88_FAT32
+    jne .next                   ; FAT32: DX:[dsk_vh] is the cluster sought,
+    cmp byte [dsk_fattype], 2   ; and FstClusHI @20 is its high word (SPEC.md
+    jne .found                  ; 19.12.6)
+    mov al, [ss:si+DSK_R_CZL+1]
+    and al, 0x0F
+    cmp al, [dsk_vh+1]
+    jne .next
+    mov al, [ss:si+DSK_R_CZL]
+    cmp al, [dsk_vh]
+%endif
     je .found
 .next:
     add si, DSK_DE_SIZE
@@ -9251,6 +9981,9 @@ dsk_byclus_x:
     stc
 .out:
     pop es
+%ifdef OS88_FAT32
+    pop word [dsk_ch]
+%endif
 %ifndef KERN_SMALL
     pop di
     pop bx
@@ -9285,7 +10018,7 @@ dsk_byclus_x:
 ; way round so that CF IS the answer, with no clc.
 ; -----------------------------------------------------------------------------
 dsk_dotdot_x:
-    mov ax, [dsk_cwd]           ; ...and fall into dsk_up
+    CLU_LD dsk_cwd              ; ...and fall into dsk_up
 dsk_up_x:
     call dsk_dirw_start_x
     call dsk_dirw_get_x         ; the directory's very first sector - the
@@ -9296,6 +10029,30 @@ dsk_up_x:
     cmp word [ss:dsk_secbuf + DSK_DE_SIZE], '..'   ; entry 1 is '..' by spec
     jne .bad
     mov ax, [ss:dsk_secbuf + DSK_DE_SIZE + DSK_R_CLUS]
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: AX:[dsk_ch], FstClusHI @20, and a
+    jne .u16                    ; '..' naming RootClus names the root, 0
+    push word [ss:dsk_secbuf + DSK_DE_SIZE + DSK_R_CZL]   ; (SPEC.md 19.12.5)
+    pop word [dsk_ch]
+    and byte [dsk_ch+1], 0x0F
+    cmp ax, [dsk_rclus]
+    jne .nr
+    push ax
+    mov ax, [dsk_ch]
+    cmp ax, [dsk_rclus+2]
+    pop ax
+    jne .nr
+    xor ax, ax
+    mov [dsk_ch], ax
+.nr:
+    CLU_TAX
+    jz .ok                      ; the root (CF = 0 out of the test)
+    jmp dsk_f32_clok            ; ...or a cluster in range: CF its answer
+.ok:
+    ret
+.u16:
+    mov word [dsk_ch], 0
+%endif
     cmp [dsk_maxclus], ax       ; ...and CF IS the answer, so a jb to .bad's
     ret                         ; stc only said it again (kernel size pass 16)
 .bad:
@@ -9380,6 +10137,9 @@ dsk_read_chain_x:
     pop dx                      ; (the sector count, spent)
     pop ax                      ; AX = the first cluster: the HANDLE here
     mov [dsk_chain_end], ax     ; the handle, where .done's own store would
+%ifdef OS88_FAT32
+    mov word [dsk_chain_end+2], 0
+%endif
                                 ; have put it: SI is READAT's OFFSET below,
                                 ; so it cannot bank it any more. Nothing has
                                 ; ever read it on this arm - fcp_rdnext is
@@ -9426,6 +10186,12 @@ dsk_read_chain_x:
 %ifndef KERN_SMALL
     add dl, [dsk_csk]           ; READ_AT's sectors into the first cluster
     adc dh, 0                   ; (18.4.4.2): walked as read, not moved
+%endif
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: the same walk, each cluster whole
+    jne .w16                    ; (below, SPEC.md 19.12.3)
+    jmp .w32
+.w16:
 %endif
     mov si, ax                  ; SI = current cluster
     xor cx, cx                  ; CX = run_len (0 = no pending run)
@@ -9475,6 +10241,9 @@ dsk_read_chain_x:
     jc .fail1
 .done:
     mov [dsk_chain_end], si     ; where a chunked caller resumes from
+%ifdef OS88_FAT32
+    mov word [dsk_chain_end+2], 0
+%endif
 .done2:                         ; ...and where the redirected read above joins,
     clc                         ; having stored its handle already
 .fin:
@@ -9498,6 +10267,81 @@ dsk_read_chain_x:
     mov [bp+12], al             ; kentc_bp's frame is bp di si dx cx bx ax, so
     stc                         ; the ladder's `pop ax` is what hands it back
     jmp short .fin              ; with AH the caller's. It used to ride across
+%ifdef OS88_FAT32
+; --- FAT32's walk (SPEC.md 19.12.3): .walk's, with each cluster's high word
+; in memory beside the register that holds its low one - SI:[dsk_rcsh] the
+; current, DI:[dsk_rcdh] the run's first, BP:[dsk_rcph] the one before
+.w32:
+    mov si, ax
+    push word [dsk_ch]
+    pop word [dsk_rcsh]
+    xor cx, cx
+.n32:
+    mov ax, si
+    push word [dsk_rcsh]
+    pop word [dsk_ch]
+    call dsk_f32_clok           ; the range test, as .next's clus2lba is
+    jc .f2
+    mov al, [dsk_spc]
+    cbw
+    cmp ax, dx
+    jbe .t32
+    mov ax, dx
+.t32:
+    jcxz .nr32
+    push ax                     ; contiguous when the one before, plus one,
+    push dx                     ; is this one - all 32 bits
+    mov ax, bp
+    mov dx, [dsk_rcph]
+    add ax, 1
+    adc dx, 0
+    cmp ax, si
+    jne .nc32
+    cmp dx, [dsk_rcsh]
+.nc32:
+    pop dx
+    pop ax
+    je .ex32
+    call .flush32
+    jc .f1
+.nr32:
+    mov di, si
+    push word [dsk_rcsh]
+    pop word [dsk_rcdh]
+    mov cx, ax
+    jmp short .cs32
+.ex32:
+    add cx, ax
+.cs32:
+    mov bp, si
+    push word [dsk_rcsh]
+    pop word [dsk_rcph]
+    sub dx, ax
+    jz .fn32
+    mov ax, si
+    push word [dsk_rcsh]
+    pop word [dsk_ch]
+    call dsk_next_clus_x
+    jc .f2
+    mov si, ax
+    push word [dsk_ch]
+    pop word [dsk_rcsh]
+    jmp short .n32
+.fn32:
+    call .flush32
+    jc .f1
+    mov [dsk_chain_end], si
+    push word [dsk_rcsh]
+    pop word [dsk_chain_end+2]
+    jmp .done2
+.f1:
+    jmp .fail1
+.f2:
+    jmp .fail2
+.flush32:                       ; .flush with DI's high word in [dsk_ch]:
+    push word [dsk_rcdh]        ; DSK_C2LBA there takes AX:[dsk_ch]
+    pop word [dsk_ch]
+%endif
                                 ; a hand-rolled pop run in a .bss byte
                                 ; (dsk_cherr) that nothing else ever read
 .flush:                         ; move the pending run (DI = its first
@@ -11710,10 +12554,30 @@ dsk_bpb       equ dsk_bpbh - DSK_B_BPS  ; ...addressed as sector offsets, so
 ; last one's, and every consumer is gated on the mount either way (above).
 dsk_spc       equ dsk_bpb + DSK_B_SPC   ; BPB_SecPerClus (validated power of two)
 dsk_fatlba    equ dsk_bpb + DSK_B_RSVD  ; = RsvdSecCnt (FAT1 start LBA)
+%ifdef OS88_FAT32
+dsk_fatsz:    resw 1            ; on kern_mega a COPY, FATSz16 or FATSz32's
+                                ; low word, because FAT32's is not the staged
+                                ; FATSZ16 (which is 0, and is what tells the
+                                ; mount it is FAT32 - so it cannot be written)
+%else
 dsk_fatsz     equ dsk_bpb + DSK_B_FATSZ ; = FATSz16 (SPEC.md 18.2 rule 10
+%endif
                                 ; caps a BIOS floppy's by refusing it)
 dsk_nfats     equ dsk_bpb + DSK_B_NFATS ; 1 or 2
-dsk_fattype:  resb 1            ; 0 = FAT12, 1 = FAT16 (SPEC.md 19)
+dsk_fattype:  resb 1            ; 0 = FAT12, 1 = FAT16 (SPEC.md 19), 2 =
+                                ; FAT32 (kern_mega, SPEC.md 19.12)
+%ifdef OS88_FAT32
+dsk_ch:       resw 1            ; A CLUSTER'S HIGH WORD, beside AX (19.12.3)
+dsk_vh:       resw 1            ; ...and dskw_setfat's VALUE's (19.12.7)
+dsk_fatw0h:   resw 1            ; [dsk_fatw0]'s high word: FAT32 sectors are
+                                ; 32-bit (19.12.4); valid while fatw0 is not
+                                ; 0FFFFh, which on FAT32 no window starts at
+dsk_fatsz32:  resw 1            ; the FAT's size's HIGH word; the low is
+                                ; [dsk_fatsz]'s, a copy on kern_mega (below)
+dsk_datalbh:  resw 1            ; [dsk_datalba]'s high word
+dsk_rclus:    resd 1            ; RootClus: what cluster 0 means (19.12.5)
+dsk_fsinfo:   resw 1            ; FSInfo's sector, 0 = none (19.12.7)
+%endif
 dsk_fatwn:    resw 1            ; ...and how many are resident. On a floppy
                                 ; this is the whole FAT and the window never
                                 ; moves - the degenerate case, byte for byte
@@ -11757,8 +12621,8 @@ dsk_datalba:  resw 1            ; FirstDataSec
 dsk_c2hi:     resw 1            ; dsk_clus2lba_x's answer's HIGH word, and
                                 ; the directory walker's (SPEC.md 18.7.5)
 %endif
-dsk_maxclus:  resw 1            ; CountOfClusters+1 = highest valid cluster
-dsk_chain_end: resw 1           ; dsk_read_chain: the last cluster it touched,
+dsk_maxclus:  CLURES 1          ; CountOfClusters+1 = highest valid cluster
+dsk_chain_end: CLURES 1          ; dsk_read_chain: the last cluster it touched,
                                 ; so a chunked read can resume (SPEC.md 18)
 %ifndef KERN_SMALL
 dsk_csk:      resb 1            ; READ_AT's sectors into the first cluster,
@@ -11772,11 +12636,18 @@ dsk_chwr:     resb 1            ; ...and which way it is moving (SPEC.md
 ; --- the directory walker's scratch (SPEC.md 19.2) --------------------------
 ; Safe in .bss: dsk_dirw_start writes all four before any walk reads them.
 ; [dsk_cwd] and [dsk_keepcwd] are NOT - see the module data block up top.
-dsk_wclus:    resw 1            ; dirw: the cluster being walked, 0 = root
+dsk_wclus:    CLURES 1          ; dirw: the cluster being walked, 0 = root
+%ifdef OS88_FAT32
+dsk_rcsh:     resw 1            ; dsk_read_chain_x's FAT32 walk: the high
+dsk_rcdh:     resw 1            ; words of SI, DI and BP's clusters
+dsk_rcph:     resw 1
+dsk_fcih:     resw 1            ; dsk_free_clus_x's FAT32 cluster, high word
+dsk_fcnh:     resw 1            ; ...and its count's
+%endif
 dsk_wsec:     resw 1            ; dirw: sector index inside it
 dsk_wguard:   resw 1            ; dirw: sectors left before the walk gives up
 %ifndef KD_BUILD
-dsk_wlast:    resw 1            ; dirw: the cluster the last step LEFT, 0 =
+dsk_wlast:    CLURES 1          ; dirw: the cluster the last step LEFT, 0 =
                                 ; none yet - at a subdirectory's end, its last
                                 ; one (BR-60). A step is taken only from a
                                 ; cluster dsk_next_clus_x accepted, so a
@@ -11851,7 +12722,7 @@ dsk_mntok:    resb 1            ; 1 only between a fully successful mount and
                                 ; nothing; dsk_mntok above is `mov byte` /
                                 ; `cmp byte` at all six sites, so nothing
                                 ; wider was writing through it either)
-dsk_rover:    resw 1            ; next cluster the allocator examines
+dsk_rover:    CLURES 1          ; next cluster the allocator examines
 dsk_fatd1:    resw 1            ; the dirty range's high end; the low end is
                                 ; dsk_fatd0 in .text (it must read CLEAN before
                                 ; the first mount, and .bss reads as 0)
