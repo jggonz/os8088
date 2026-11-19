@@ -26,6 +26,7 @@ import os88fat                                                  # noqa: E402
 import os88flush                                                # noqa: E402
 import os88geom                                                 # noqa: E402
 import os88marty                                                # noqa: E402
+import os88lz                                                   # noqa: E402
 import os88sym                                                  # noqa: E402
 import os88ui                                                   # noqa: E402
 
@@ -176,7 +177,17 @@ def main(argv=None):
     ap.add_argument("--machine", default="os8088_5150_herc_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--small", action="store_true", help="128KB small-kernel session-only choices")
+    ap.add_argument("--negative-persistence", action="store_true",
+                    help="corrupt the saved choice; the reboot assertion must fail")
     a = ap.parse_args(argv)
+    if a.small:
+        os88build.use_build("build/smallk")
+        os.environ["OS88_DEFINES"] = "KERN_SMALL"
+        if a.image == "build/os8088-360.img":
+            a.image = "build/small360.img"
+        if a.machine == "os8088_5150_herc_gla":
+            a.machine = "os8088_5150_cga_128k"
     image = Path(os88build.at(a.image)).resolve()
     apps = str(Path(os88build.at(a.apps)).resolve())
     eq, syms = os88sym.equates(), os88sym.syms()
@@ -221,18 +232,41 @@ def main(argv=None):
             p.pick(4, expected=4)
             ui.press("Digit2", need=True)
             p.expect_sample(b"\x82")
-            clock = p.byte("clk_h12") ^ 1
-            ui.m.write(ui.sym("clk_h12"), bytes([clock]))
-            require(p.byte("cp_wdirty"), "layout picks did not mark settings dirty")
-            p.close()
-            require(not p.byte("cp_dsave"), "closing did not write SYSTEM.CFG")
-            require(p.keyboard("klm_builtin") == b"\0",
-                    "closing left the Control Panel glyph hold alive")
-            flush = os88flush.Flush(marty=ui.m)
-            cfg = bytes(flush.volume(0).read("SYSTEM.CFG"))
-            require(records(cfg).get(b"KL") == (1, b"\x04"),
-                    "saved keyboard record is not KL v1/length1/French")
-            flush.save(0, str(saved))
+            if a.small:
+                p.close()
+                require(p.layout() == 4, "closing small panel lost the live layout")
+                flush = os88flush.Flush(marty=ui.m)
+                require(not flush.dirty(0), "small session-only choice wrote to disk")
+                flush.save(0, str(saved))
+            else:
+                clock = p.byte("clk_h12") ^ 1
+                ui.m.write(ui.sym("clk_h12"), bytes([clock]))
+                require(p.byte("cp_wdirty"), "layout picks did not mark settings dirty")
+                p.close()
+                require(not p.byte("cp_dsave"), "closing did not write SYSTEM.CFG")
+                require(p.keyboard("klm_builtin") == b"\0",
+                        "closing left the Control Panel glyph hold alive")
+                flush = os88flush.Flush(marty=ui.m)
+                cfg = bytes(flush.volume(0).read("SYSTEM.CFG"))
+                require(records(cfg).get(b"KL") == (1, b"\x04"),
+                        "saved keyboard record is not KL v1/length1/French")
+                flush.save(0, str(saved))
+
+        if a.small:
+            with boot(saved) as ui:
+                p = KeyboardPage(ui, eq, syms)
+                require(not p.word("mod_r_keyboard") and p.layout() == 0,
+                        "small session-only choice persisted across restart")
+                p.open()
+                ui.press("KeyQ", need=True)
+                p.expect_sample(b"q")
+                p.close()
+            print("PASS small128 all choices, sample holds and session-only restart")
+            return
+
+        if a.negative_persistence:
+            set_file(saved, "SYSTEM.CFG", replace_kl(cfg, b"KL\x01\x01\x01"), scratch)
+            print("negative control: saved French replaced with US; expecting reboot failure")
 
         with boot(saved) as ui:
             p = KeyboardPage(ui, eq, syms)
@@ -273,24 +307,30 @@ def main(argv=None):
                         "%s KL record lost the unrelated preference" % name)
             print("fallback:", name)
 
-        absent = scratch / "absent.img"
-        shutil.copyfile(fresh, absent)
-        set_file(absent, "KEYBOARD.DRV", None, scratch)
-        with boot(absent) as ui:
-            p = KeyboardPage(ui, eq, syms)
-            p.open()
-            require(not p.byte("cp_wdirty"), "refusal arm began dirty")
-            p.pick(2)
-            ui.wait_toast(says="Keyboard not loaded")
-            require(p.layout() == 0 and not p.word("mod_r_keyboard"),
-                    "missing module changed the working BIOS choice")
-            require(not p.byte("cp_wdirty"), "refused activation dirtied preferences")
-            ui.press("KeyQ", need=True)
-            p.expect_sample(b"q")
-            p.close()
-            require(not os88flush.Flush(marty=ui.m).dirty(0),
-                    "a refused choice wrote to the system disk")
-            print("refusal: absent KEYBOARD.DRV keeps BIOS input and disk untouched")
+        mismatch = bytearray(os88lz.cz_unwrap(
+            os88fat.Fat12(str(image)).read("KEYBOARD.DRV")))
+        require(mismatch[:2] == b"O8", "keyboard refusal fixture has no module header")
+        mismatch[4] ^= 0x40                  # valid image, wrong build number
+        mismatched_file, _ = os88lz.cz_wrap(bytes(mismatch), os88lz.LZ4, filt=True)
+        for label, data in (("absent", None), ("mismatched", mismatched_file)):
+            refused = scratch / (label + ".img")
+            shutil.copyfile(fresh, refused)
+            set_file(refused, "KEYBOARD.DRV", data, scratch)
+            with boot(refused) as ui:
+                p = KeyboardPage(ui, eq, syms)
+                p.open()
+                require(not p.byte("cp_wdirty"), "refusal arm began dirty")
+                p.pick(2)
+                ui.wait_toast(says="Keyboard not loaded")
+                require(p.layout() == 0 and not p.word("mod_r_keyboard"),
+                        "refused module changed the working BIOS choice")
+                require(not p.byte("cp_wdirty"), "refused activation dirtied preferences")
+                ui.press("KeyQ", need=True)
+                p.expect_sample(b"q")
+                p.close()
+                require(not os88flush.Flush(marty=ui.m).dirty(0),
+                        "a refused choice wrote to the system disk")
+                print("refusal:", label, "KEYBOARD.DRV keeps BIOS input and disk untouched")
 
     print("PASS Keyboard choices, sample, persistence, fallback and refusal")
 

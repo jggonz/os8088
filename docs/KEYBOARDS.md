@@ -68,6 +68,10 @@ implementation. Update the stable ID contract, selection and settings
 validation together, and regenerate the tables with
 `python3 tools/keyboardmaps.py`.
 
+Folder creation, renaming and folder removal also use the existing optional
+disk-operations module. Keep the system disk available when first using
+those commands.
+
 The [delivery plan](plans/INTERNATIONAL-KEYBOARD-PLAN.md) and
 [build diary](HOW-INTERNATIONAL-KEYBOARDS-WERE-BUILT.md) record the architecture,
 measured memory costs and validation evidence.

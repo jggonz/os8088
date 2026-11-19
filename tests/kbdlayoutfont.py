@@ -237,6 +237,14 @@ def main():
             assert "preemptible" in str(error), error
         else:
             raise AssertionError("negative control: missing CLI was not detected")
+        broken = bytearray(code)
+        broken[names["klf_table"] + (0xA4 - 32) * 8] ^= 1
+        try:
+            check_provider(bytes(broken), names)
+        except AssertionError as error:
+            assert "0xa4" in str(error), error
+        else:
+            raise AssertionError("negative control: damaged enie glyph was not detected")
     print("kbdlayoutfont: provider, stable ASCII snapshot, unsigned glyph indexes and negative control passed")
 
 

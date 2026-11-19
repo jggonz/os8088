@@ -86,12 +86,8 @@ def main(argv=None):
             empty("default boot")
             disk = ui.open_drive("B")
             before = {w.i for w in ui.windows()}
-            m.bp_exec(S("ld_unreserve"))
-            try:
-                # The click is resolved by filename. Completion is the
-                # cleanup breakpoint, rather than a new-window wait.
-                ui.open("KBDABORT.O88", expect=None, win=disk)
-                require(m.wait_stop(60), "failed entry never reached ld_unreserve")
+            proof = {}
+            def before_unwind(mm, record):
                 rec = word("ld_rec")
                 offset = rec - syms["inst_tab"]
                 require(offset >= 0 and offset % eq["I_RECSZ"] == 0,
@@ -102,6 +98,7 @@ def main(argv=None):
                         "failed entry did not acquire exactly its own glyph hold")
                 require(len(keyboard_claims()) == 1,
                         "failed entry did not load exactly one optional module claim")
+                proof["slot"] = slot
                 print("before unwind: reserved slot", slot, "has its glyph hold")
 
                 if a.negative_cleanup:
@@ -117,9 +114,10 @@ def main(argv=None):
                             "failed-entry release negative-control CALL anchor moved")
                     m.write(sites[0], b"\x90" * 3)
                     print("negative control armed: instance sweep omits keyboard release")
-            finally:
-                m.bp_exec()
-                m.run()
+            with os88marty.bp_trace(m, S("ld_unreserve"), on_hit=before_unwind) as trace:
+                ui.open("KBDABORT.O88", expect=None, win=disk)
+                trace.until(lambda: "slot" in proof, "failed entry before its cleanup", 60)
+            slot = proof["slot"]
             os88marty.ui_done(m, "failed-entry cleanup to complete")
             require(m.read(S("ld_status"), 1)[0] == eq["LD_EABORT"],
                     "fixture did not report LD_EABORT")

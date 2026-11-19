@@ -3540,10 +3540,10 @@ TOASTSTR cp_dock_fail, 'Dock Module Unavailable'
 CPQ_R0Y equ 22
 CPQ_ROWH equ 14
 CPQ_NROW equ 5
-CPQ_SY1 equ 110
-CPQ_SY2 equ 123
+CPQ_SY1 equ 108
+CPQ_SY2 equ 121
 CPQ_TEXTX equ 6
-CPQ_TEXTY equ 113
+CPQ_TEXTY equ 111
 CPQ_CELLS equ 24
 
 section .modcb
@@ -3571,7 +3571,7 @@ cp_key_paint:
     jb .row
     call cp_key_ctls
     call cp_lbl
-    dw cp_s_ktype, CP_PMX, 98
+    dw cp_s_ktype, CP_PMX, 96
     lea ax, [di+2]
     lea cx, [di+217]
     lea bx, [bp+CPQ_SY1]
@@ -3579,7 +3579,7 @@ cp_key_paint:
     call KERNEL_SEG:cw_gfx_frame
     call cp_key_sample
     call cp_lbl
-    dw cp_s_ksave, CP_PMX, 124
+    dw cp_s_ksave, CP_PMX, 122
     jmp kretm_si
 
 cp_key_ctls:

@@ -1536,3 +1536,13 @@ worker-stack-slots merge had added without blessing. A merge that moves a
 rung and does not bless is a rung charged to whoever blesses next. After the
 two passes the SEGMENT bound on `kern_big` for the first time; the 2026-10-11
 budget reset put the footprint back in front ("Which guard binds" above).
+
+## Optional international keyboards
+
+[The four-kernel comparison](reports/INTERNATIONAL-KEYBOARD-SIZE.md) records
+the exact core and resident baseline for §9.16. `KEYBOARD.DRV` owns its
+translator, layout tables, mutable state and CP850 provider in an optional
+claim; no layout payload is part of the permanent kernel. Directory
+mutations move to the existing disk module (§18.5.3) to pay for the hooks.
+Final integrated measurements, rather than allocation slack, decide the
+no-growth gate.

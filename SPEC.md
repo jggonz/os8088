@@ -1776,8 +1776,10 @@ sector nothing: unset, the `%ifdef` is not assembled.
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
 finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
-`FORMAT.DRV`, the floppy formatter (§18.96), and `DISKOPS.DRV`, the disk cloner
-(§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
+`FORMAT.DRV`, the floppy formatter (§18.96), `DISKOPS.DRV`, the disk cloner
+and directory-mutation bodies (§18.99, §18.5.3), `SERIAL.DRV`, the serial
+service (§9.15), and `KEYBOARD.DRV`, optional input layouts and CP850 glyphs
+(§9.16). `kern_big` also carries `HIBER.DRV` (§87), the optional
 `DOCK.DRV`, advanced Dock behavior (§30.5), `EXTD.DRV`, the extended
 desktop's placement policy (§39.19.6), `WIN95.DRV`, the Windows theme's
 chrome (§76.14), `DESK.DRV`, the desk layer's verbs, hover edge, show
@@ -1798,10 +1800,9 @@ against 9,214, `HIBER.DRV` 4,814 against 5,489 and `FORMAT.DRV` 1,097 against
 four still give the 360KB disk five clusters. Every fetch decodes about 6KB,
 ~50 ms on the 8088, against the sectors it no longer reads.
 
-**A module's claim is its image rounded UP to whole KB** (`mem_bytes_kb_x`), and
-its own bss lives in that rounding's slack, asserted at assembly - so a byte
-moves the claim only where it crosses a KB, and that is the number a machine
-feels. The second size pass on the two biggest images took all four of their
+**A module's claim includes its image and BSS, rounded UP to512 bytes**
+(§50.2.1). A byte changes the allocation when it crosses that granule.
+The following whole-KB figures are historical: the second size pass on the two biggest images took all four of their
 claims down one: `CTRL.DRV` **12 → 11 KB** on `kern_big` (11,119 bytes and
 `cpc_buf`'s 131 of bss, against 11,649 with the buffer in the image) and
 **6 → 5 KB** on `kern_small` (4,363 against 5,347); `DISKOPS.DRV` **10 → 9 KB**
@@ -5636,6 +5637,7 @@ VIEW_KB       equ 1          ; a listing claim's floor (2, fixed, on
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19); and `dsk_ncopy`, the **counted DS:SI→DS:DI byte copy the whole `.cold` segment shares** — `diskw.inc`, `filecp.inc`, `files.inc` and `fdlg.inc` all call it, and it lives here because `disk.inc` is the first `.cold` `%include`, so every site is a backward near reference. It was the same seventeen bytes in four files. (Its NUL string compare, `dsk_streq`, was down to one caller and is written at it since kernel size pass 14.) Not to be confused with a NUL-stopping bounded copy, which answers a different question |
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write`. **`.cold`** (§2.6) |
 | `kernel/diskops.inc`  | the disk cloner (§18.99): the on-demand `DISKOPS.DRV` — sector-for-sector copy between any two floppy drives or one drive twice, its XMS/heap planner, its own geometry probe and its status-line prompts — prefix `clo_`; the resident half is one word and one thunk, both **`.cold`**/`.text` (§2.6) |
+| `kernel/diskmut.inc` | `DISKOPS.DRV` directory mutation bodies (§18.5.3): New Folder, Rename, empty-folder removal and recursive folder removal; prefix `dmo_`; shared FAT commit/rollback and load dispatch stay resident |
 | `kernel/hiber.inc`  | hibernate and resume (§87): the on-demand `HIBER.DRV` — the Hibernate window, the image write, the boot-time question, the extent walk, the stub that puts memory back from the text framebuffer and the wake — prefix `hbm_`/`hbs_`; the resident half is the template, the state block, the `.text` thunks a kernel window needs, and in **`.cold`** the boot probe, the greying predicate and the loading thunks (`hb_`/`hbf_`/`hbk_`) |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21). **`.cold`** (§2.6) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22). **`.cold`** (§2.6), with its strings and dispatch tables toggled back to `.text` |
@@ -74343,15 +74345,17 @@ staged, then applied after the page returns. Load failure retains the prior
 choice and reports it. Selecting the current choice changes nothing.
 Only the previous and new selected glyphs are redrawn after activation.
 
-The sample caption is at (4,98), its frame is (2,110)–(217,123), and 24
-character cells start at (6,113). While this page is selected it receives
+The sample caption is at (4,96), its frame is (2,108)–(217,121), and 24
+character cells start at (6,111). While this page is selected it receives
 ordinary typed keys, including the supported CP850 characters; Backspace
 removes its last character and Escape clears it. This is a sample, with no
 document or file format of its own. The field uses opaque padded runs, so
 a shorter replacement does not need an erase-and-letter pass.
 
-The saved-setting caption at (4,124) says `Saved when panel closes` on
+The saved-setting caption at (4,122) says `Saved when panel closes` on
 kernels with settings persistence and `Until the next restart` on small.
+The shared label helper adds 2 pixels to the text position, so its final row spans
+y124–131, wholly inside the 132-pixel content pane on CGA.
 Changing a layout marks the existing deferred settings write owed; closing
 Control Panel saves once. The sample and pending transaction reside in
 26 bytes of CTRL.DRV's own BSS, separate from the save buffer: desktop

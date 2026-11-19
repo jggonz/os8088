@@ -13,6 +13,10 @@ disables the module's RELEASE body after the positive typing/save checks;
 the ownership assertions must then fail. No fixture is built by this row.
 """
 import argparse
+import contextlib
+import functools
+import re
+import subprocess
 import os
 from pathlib import Path
 import shutil
@@ -47,12 +51,33 @@ EXPECTED = ES + LA + FR
 REPLACED = ES + LA + b"fr a \x88 \x88 \x85"
 
 
+@functools.lru_cache(maxsize=4)
+def guest_offsets(binary):
+    # The shared source reader counts NPVARs in inactive NPBENCH blocks.
+    # Later fields (np_named, in particular) need actual NASM equates.
+    # Assemble only in scratch and require byte identity with the shipped
+    # image before trusting ANY symbol from this map.
+    with tempfile.TemporaryDirectory(prefix="kbd-note-symbols-") as directory:
+        directory = Path(directory)
+        image, mapping = directory / "note.bin", directory / "note.map"
+        root = Path(__file__).resolve().parents[1]
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", str(root / "apps") + "/",
+                        "--before", "[map all %s]" % mapping,
+                        "-o", str(image), str(root / "apps/notepad/notepad.asm")], check=True)
+        require(image.read_bytes() == Path(binary).read_bytes(),
+                "Note Pad symbol assembly differs from the shipped raw image")
+        return {name: int(value, 16) for value, name in re.findall(
+            r"^\s*(?:[0-9A-F]+\s+)?([0-9A-F]+)\s+(np_\w+)$",
+            mapping.read_text(), re.M)}
+
+
 class Note:
     """State offsets from the shipped raw binary, every read through Pkg."""
     def __init__(self, ui, win, binary):
         self.ui, self.m, self.win = ui, ui.m, win
         self.pkg = os88marty.Pkg(self.m, win, sym=ui.sym)
         self.state = npstate.State(self, str(binary))
+        self.state.off.update(guest_offsets(str(binary)))
         self.off = self.state.off
         self.state.check(0)
 
@@ -114,6 +139,8 @@ def main(argv=None):
     ap.add_argument("--npbin", default="build/notepad.bin")
     ap.add_argument("--notepad", default="B:/APPS/NOTEPAD.O88")
     ap.add_argument("--evidence", type=Path)
+    ap.add_argument("--profile", action="store_true",
+                    help="measure raw module body cycles on the emulated XT")
     ap.add_argument("--negative-release", action="store_true",
                     help="deliberately disable RELEASE; this run must fail")
     a = ap.parse_args(argv)
@@ -186,10 +213,33 @@ def main(argv=None):
             for item, keys, expected in KEYS:
                 layout(item)
                 first.front()
-                for key in keys:
-                    ui.press(key)          # a dead key intentionally emits no word
-                accumulated += expected
-                first.expect(accumulated)
+                if a.profile:
+                    seg = page.word("mod_r_keyboard")
+                    entry, finish = ((seg << 4) + syms[name]
+                                     for name in ("klm_scan", "klm_scanret"))
+                    context = os88marty.bp_trace(m, entry, finish, log=True)
+                else:
+                    context = contextlib.nullcontext()
+                with context as trace:
+                    for key in keys:
+                        ui.press(key)      # a dead key intentionally emits no word
+                    accumulated += expected
+                    first.expect(accumulated)
+                if a.profile:
+                    hits = trace.hits
+                    require(hits and not trace.overflowed, "raw trace is empty or overflowed")
+                    spans, start = [], None
+                    for hit in hits:
+                        if hit["addr"] == entry:
+                            require(start is None, "nested raw scan in trace")
+                            start = hit["cycles"]
+                        elif hit["addr"] == finish:
+                            require(start is not None, "raw exit without entry")
+                            spans.append(hit["cycles"] - start); start = None
+                    require(start is None and spans, "raw trace has no complete sample")
+                    require(max(spans) < 20000, "raw body exceeds 20000 XT cycles")
+                    print("XT raw body cycles (entry through return epilogue):", item,
+                          "samples", len(spans), "min", min(spans), "max", max(spans))
                 print("physical layout", item, expected.hex())
             first.expect(EXPECTED)
             # A middle insertion and deletion must move CP850 bytes exactly.
@@ -240,7 +290,7 @@ def main(argv=None):
                     "BIOS default discarded a live document's font provider")
             first.front()
             ui.press("Home")                 # dismiss any document selection
-            ui.menu_pick("Find", "Find")     # both transitions force full text redraw
+            ui.menu_pick("Find", "Find...")     # both transitions force full text redraw
             ui.press("Escape", need=True)
             first.expect(REPLACED)
             require(glyph(first) == before,
@@ -252,10 +302,16 @@ def main(argv=None):
             first.front()
             ui.menu_pick("File", "Save As")
             ui.chooser_save("KBTEXT.TXT")
+            os88marty.ui_done(m, "first Note Pad save to finish")
+            ui._wait(lambda: first.byte("np_named") == 1, "first save to commit",
+                     os88ui.T_WINDOW, snapshot=ui.toast)
             first.expect(REPLACED)
             second.front()
             ui.menu_pick("File", "Save As")
             ui.chooser_save("KBTWO.TXT")
+            os88marty.ui_done(m, "second Note Pad save to finish")
+            ui._wait(lambda: second.byte("np_named") == 1, "second save to commit",
+                     os88ui.T_WINDOW, snapshot=ui.toast)
             second.expect(b"\xa4")
             flush = os88flush.Flush(marty=m)
             require(bytes(flush.volume(1).read("MEDIA/KBTEXT.TXT")) ==

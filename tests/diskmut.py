@@ -26,6 +26,7 @@ import os88build                                                # noqa: E402
 import os88fat                                                  # noqa: E402
 import os88flush                                                # noqa: E402
 import os88marty                                                # noqa: E402
+import os88lz                                                   # noqa: E402
 import os88sym                                                  # noqa: E402
 import os88ui                                                   # noqa: E402
 from kbdsettings import require, set_file                        # noqa: E402
@@ -55,11 +56,12 @@ def main(argv=None):
             "build the declared diskmut fixture before running this row")
     rawbin = binary.read_bytes()
     eq, syms = os88sym.equates(), os88sym.syms()
-    source_module = bytes(os88fat.Fat12(str(image)).read("DISKOPS.DRV"))
+    source_module = os88lz.cz_unwrap(os88fat.Fat12(str(image)).read("DISKOPS.DRV"))
     require(source_module[:3] == b"O8" + bytes([eq["MOD_VER"]]),
             "DISKOPS.DRV fixture is not a module header")
     corrupt = bytearray(source_module)
     corrupt[4] ^= 1                         # valid shape, wrong BUILD_NUM
+    corrupt_file, _ = os88lz.cz_wrap(bytes(corrupt), os88lz.LZ4, filt=True)
     build = Path(os88build.at("build")).resolve()
     build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="diskmut-", dir=build) as tmp:
@@ -69,7 +71,7 @@ def main(argv=None):
             shutil.copyfile(image, system)
             set_file(system, "SYSTEM.CFG", None, scratch)
             if case != "success":
-                set_file(system, "DISKOPS.DRV", None if case == "missing" else bytes(corrupt), scratch)
+                set_file(system, "DISKOPS.DRV", None if case == "missing" else corrupt_file, scratch)
             with os88ui.boot(str(system), apps=str(fixture), machine=a.machine,
                              quick=True) as ui:
                 m, S = ui.m, ui.sym

@@ -14395,7 +14395,7 @@ NPBENCHSRC := apps/notepad/notepad.asm tests/npbench.inc
 npbench: $(BUILD)/npbench.img $(BUILD)/npbench360.img \
          $(BUILD)/nprun.img $(BUILD)/nprun360.img
 
-$(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc apps/os88ui.inc apps/os88kbd.inc | $(BUILD)
 	$(NASM) -f bin -w+error -DNPBENCH -I apps/ -I tests/ \
 		-o $@ apps/notepad/notepad.asm
 	@echo "npbench: $(call FILESIZE,$@) bytes"
@@ -22985,3 +22985,30 @@ $(BUILD)/PDX8.MOD: apps/pagedesk/pdx8.asm apps/pagedesk/pdrx8.inc $(BUILD)/pdx8.
 	    sys.exit(1 if t>$(PDX8_CAP) else 0)"
 pdx8: $(BUILD)/PDX8.MOD
 # ---- end PageDesk: PDX8 ----
+
+# SPEC.md9.16: failed package-entry glyph ownership and same-slot reuse.
+$(BUILD)/kbdabort.bin: tests/kbdlayoutabort/kbdlayoutabort.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/kbdhold.bin: tests/kbdlayoutabort/kbdlayoutabort.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DKA_LIVE -o $@ $<
+$(BUILD)/kbdabort.o88: $(BUILD)/kbdabort.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdhold.o88: $(BUILD)/kbdhold.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdlayoutabort.img: $(BUILD)/kbdabort.o88 $(BUILD)/kbdhold.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/kbdabort.o88 $(BUILD)/kbdhold.o88
+#> [Gate disks] kbdlayoutaborttest :: failed-entry keyboard hold and instance reuse fixtures
+.PHONY: kbdlayoutaborttest
+kbdlayoutaborttest: $(BUILD)/kbdlayoutabort.img
+
+# SPEC.md18.5.3: file mutations execute through the existing disk module.
+$(BUILD)/diskmut.bin: tests/diskmut/diskmut.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/diskmut.o88: $(BUILD)/diskmut.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/diskmut.img: $(BUILD)/diskmut.o88 tests/diskmut/old.txt tests/diskmut/leaf.txt tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder CASE/EMPTY \
+		CASE:$(BUILD)/diskmut.o88 CASE:tests/diskmut/old.txt CASE/TREE/CHILD:tests/diskmut/leaf.txt
+#> [Gate disks] diskmuttest :: directory mutations, target restoration and missing-module refusals
+.PHONY: diskmuttest
+diskmuttest: $(BUILD)/diskmut.img
