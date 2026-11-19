@@ -20097,12 +20097,26 @@ layouts with the existing controls and scrolling item list. Its UI and
 loading requests are in CTRL.DRV. The page includes a typing sample and
 does not grow the window beyond the supported adapter geometry.
 
+The page's five radio rows use full layout names. A changed pick is staged
+in the panel's own BSS; the outer mouse callback applies it only after the
+page procedure has returned. File loading follows the existing UI
+callback's graphics-lock discipline. The typing sample accepts printable
+characters, Backspace and Escape (clear). Its optional glyph hold uses the
+private built-in owner FFh and is released when no extended sample bytes
+remain or the panel closes; public callers cannot claim that owner.
+
 Big, emu and mega persist the ID in a versioned SYSTEM.CFG record through
 the existing shared parser/save discipline. Old, absent, invalid or unknown
 records use BIOS default without resetting other settings. Kern_small
 offers live selection for the session and says it lasts until restart;
 this feature does not add settings persistence to that kernel. Save failure
 retains the working in-memory selection and uses the panel's feedback.
+
+The record is `KL`, version 1, length 1, containing the layout ID above.
+The live selection is queried when settings are packed, so changing it
+outside the panel cannot leave a stale duplicate. CFG_KL is staging only.
+Boot validates it before activation; mega defers activation until its font
+and module pointers have reached their protected-mode form.
 
 #### 9.16.5 No core kernel growth
 
@@ -74233,6 +74247,41 @@ The box is always four cells, so one opaque run replaces whatever it held
 the kernel's DS (§12.4), so CTRL.DRV stages a menu into `cp_sbuf`, and 28
 bytes do not hold twelve items. Widening it is resident `.bss` for one view;
 the arrows are none. `kern_small` has none of this: there is no driver to pin.
+
+### 31.16 Keyboard page — optional layouts and typing sample
+
+The Keyboard item appends after the existing static items, preserving their
+record IDs. The frame remains 320×151, with the existing list scrolling on
+big kernels and the shorter static list on small.
+Display remains the only hidden static page. The hide bitmap covers the
+first eight records; additional records are always visible. The build
+asserts that the hideable Display record stays in that bitmap.
+
+The right pane has five existing radio controls at x4, y22/36/50/64/78,
+with full labels at x22, two pixels below each glyph: BIOS default,
+US QWERTY, Spanish (Spain), Latin American Spanish and French AZERTY.
+The selected ID is queried from the keyboard module. A changed choice is
+staged, then applied after the page returns. Load failure retains the prior
+choice and reports it. Selecting the current choice changes nothing.
+Only the previous and new selected glyphs are redrawn after activation.
+
+The sample caption is at (4,98), its frame is (2,110)–(217,123), and 24
+character cells start at (6,113). While this page is selected it receives
+ordinary typed keys, including the supported CP850 characters; Backspace
+removes its last character and Escape clears it. This is a sample, with no
+document or file format of its own. The field uses opaque padded runs, so
+a shorter replacement does not need an erase-and-letter pass.
+
+The saved-setting caption at (4,124) says `Saved when panel closes` on
+kernels with settings persistence and `Until the next restart` on small.
+Changing a layout marks the existing deferred settings write owed; closing
+Control Panel saves once. The sample and pending transaction reside in
+26 bytes of CTRL.DRV's own BSS, separate from the save buffer: desktop
+placement gestures can save settings while the panel is still open. A clean
+close also reaches the existing module flush entry to release the sample's
+glyph hold, without loading an absent module or writing settings.
+The page reuses the existing 28-byte kernel string staging buffer without
+expanding its backing.
 
 ## 32. softgfx.inc — the software renderer (§39's 1bpp driver)
 

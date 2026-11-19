@@ -878,7 +878,8 @@ CFG_THMC    equ CFG_THMS + 1    ; 5 bytes: the Color row's colours a preset
                                 ; _map byte by byte ONTO THE ROW, so the boot
                                 ; restores a preset with the loop that restores
                                 ; everything else and no table of presets
-CFG_NB      equ CFG_THMC + 5    ; ...the struct's size
+CFG_KL      equ CFG_THMC + 5    ; staged keyboard ID, not a live-state copy
+CFG_NB      equ CFG_KL + 1      ; one new record byte (SPEC.md 31.16, 9.16.4)
 %if DRV_PBLOB_SZ != 1
   %error "driver: ctrl.inc's cp_ppin finds the sound row's pin ONE byte under the Ethernet row's"
 %endif
@@ -1037,7 +1038,9 @@ DRV_CFG_MAPN equ 8
                                 ; the screen saver's three settings once, for
                                 ; a feature that touches neither (76.11's own
                                 ; 'DK' precedent, word for word)
-CFG_NKEY    equ 15              ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
+    dw 'KL'                     ; Keyboard Layout: explicit map or BIOS default
+    db 1, 1, CFG_KL
+CFG_NKEY    equ 16              ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
                                 ; went into 'VM' (CFG_VGCB)
 %else
     dw 'TP'                     ; same key, same reason, on kern_small too -
@@ -4761,6 +4764,13 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     push cx
     push si
     push di
+%ifdef KERN_BIG
+    xor ax, ax
+%ifidn %1, cpc                  ; writer queries; boot seeds the default only
+    call COLD_SEG:kl_control_x  ; QUERY has no file I/O or module activation
+%endif
+    mov [drv_cfg+CFG_KL], al
+%endif
     mov si, %1 %+ _map          ; the table is the IMAGE's (51.5.3); the
     mov cx, DRV_CFG_MAPN        ; ADDRESSES in it are the kernel's, and DS
 %%p:                            ; still names the kernel - so the `mov [di]`
@@ -4966,6 +4976,21 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
                                 ; TICKS blk_pass compares against are derived
                                 ; from it and clamped (SPEC.md 79.4), which is
                                 ; not a store and so cannot be a map row
+%ifdef KERN_BIG
+    mov ah, [drv_cfg+CFG_KL]
+    cmp ah, 4
+    jbe %%klvalid
+    xor ah, ah                  ; malformed/future ID keeps usable BIOS input
+    mov [drv_cfg+CFG_KL], ah
+%%klvalid:
+%ifndef KERN_MEGA               ; mega activates after its font-pointer fixup
+    or ah, ah
+    jz %%klready                ; BIOS default reads no optional module
+    mov al, 1                   ; SET, AH = validated saved layout
+    call COLD_SEG:kl_control_x
+%%klready:
+%endif
+%endif
     mov al, [drv_cfg+CFG_SCH]
     cmp al, 1
     ja %%up_out                    ; a byte from a future version: leave the
