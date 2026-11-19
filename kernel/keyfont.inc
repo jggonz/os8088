@@ -49,6 +49,8 @@ klf_disable:
     call klf_lock
     cmp byte [es:klf_active], 0
     je .done
+    cmp byte [es:klf_active], 2
+    je .suspended
     pushf
     cli
     mov ax, [es:klf_saved_seg]
@@ -58,10 +60,32 @@ klf_disable:
     mov word [font_last], ((FONT_LAST-FONT_FIRST) << 8) | FONT_LAST
     mov byte [es:klf_active], 0
     popf
+    jmp short .done
+.suspended:
+    mov byte [es:klf_active], 0
 .done:
     call klf_unlock
     pop bx
     pop ax
+    clc
+    ret
+
+; Private wake bracket: 2 means a live provider temporarily unbound. The
+; existing byte retains this fact; layout/client pins belong to keyboard.inc.
+klf_suspend:
+    cmp byte [es:klf_active], 1
+    jne .done
+    call klf_disable
+    mov byte [es:klf_active], 2
+.done:
+    clc
+    ret
+klf_rearm:
+    cmp byte [es:klf_active], 2
+    jne .done
+    mov byte [es:klf_active], 0
+    jmp klf_enable              ; sample the repaired original pointer afresh
+.done:
     clc
     ret
 

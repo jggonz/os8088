@@ -8,6 +8,8 @@
 KL_NENT equ 2
 KL_SCAN equ 0
 KL_CMD equ 4
+KLC_SUSPEND equ 6             ; private HIBER font repair, never public SDK
+KLC_REARM equ 7
 KBDV_QUERY equ 0
 KBDV_SET equ 1
 KBDV_HOLD equ 2
@@ -107,12 +109,14 @@ kl_control_x:
     jc .resource
 %ifdef KERN_MEGA
     push ax
+    push dx                    ; SEG_REAL must not replace the stamped owner
     mov dx, [mod_r_keyboard]
     mov bl, SEG_REAL
     call COLD_SEG:osapi_seg
     ; SEG_REAL cannot refuse this valid conventional module claim.
     mov word [kl_rfp], klm_scan
     mov [kl_rfp+2], dx
+    pop dx
     pop ax
 %endif
 .call:
@@ -250,6 +254,10 @@ klm_control:
     je klm_hold
     cmp al, KBDV_RELEASE
     je klm_release
+    cmp al, KLC_SUSPEND
+    je klm_suspend
+    cmp al, KLC_REARM
+    je klm_rearm
     cmp al, KBDV_CANCEL
     jne klm_bad
     mov byte [es:klm_dead], 0
@@ -306,6 +314,21 @@ klm_release:
     jmp short klm_status
 .built:
     mov byte [es:klm_builtin], 0
+    jmp short klm_status
+; Wake's private commands leave layout/client holds pinned and never drop.
+klm_suspend:
+    call klf_suspend
+    jmp short klm_private
+klm_rearm:
+    call klf_rearm
+    pushf
+    cli                        ; BIOS wake state and compose cancellation agree
+    call klm_seed
+    mov byte [es:klm_dead], 0
+    mov byte [es:klm_prefix], 0 ; discard the restored pending prefix, too
+    popf
+klm_private:
+    xor di, di                 ; status only: the QUERY path cannot drop
 klm_status:
     mov al, [es:klm_layout]
     xor ah, ah

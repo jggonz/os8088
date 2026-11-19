@@ -10365,6 +10365,10 @@ tenth sector moves where the image's runs split, and that boot's `int 13h`
 lost a revolution.
 
 **The resume re-asks** (`hbm_wake` step 4a, HIBER.DRV - no resident byte).
+When the optional CP850 provider is held, private SUSPEND/REARM commands
+bracket this repair. FONT_PICK sees the original font pointer throughout,
+not KEYBOARD.DRV's table; the provider is rebound only after the repaired
+cache or replacement ROM pointer is ready (§9.16.1).
 The image carries the pointer the writing machine's boot chose; the reading
 machine runs the same timed `FONT_PICK`, refills a heap copy in place (its
 claim came back with the image) or replaces a ROM pointer. It makes no
@@ -12312,6 +12316,10 @@ repository-authored glyph source. `klf_disable` restores the original
 `font_seg`/`font_base` and ASCII bounds before that module is dropped.
 The original slow-ROM-copy claim stays pinned and valid; on mega,
 activation must follow any boot-time relocation of that original face.
+A hibernate or DOS-return wake suspends this binding before FONT_PICK and
+its heap/ROM repair, so a nonzero-offset module table is never mistaken for
+a heap font at offset zero; it rearms after that original face is repaired.
+The module remains pinned by the same layout or glyph-only client holds.
 Activation/restoration reuse the caller's drawing-lock hold, or acquire
 and release that lock when called without one. This protects a worker
 paused between reading the font offset and reading its segment; an atomic
@@ -12324,7 +12332,12 @@ by eight: `cbw` is incorrect for extended codes whose index exceeds 127.
 `OSAPI_FONT_GLYPHS` preserves its ASCII-only range 32..126 and returns
 its original stable face pointer even while native rendering uses the
 optional table. Existing clients that cache that pointer or allocate only
-95 glyph cells therefore need no new hold or larger buffer. The private
+95 glyph cells therefore need no new hold or larger buffer.
+Inside a kern_mega FSXF_REAL bracket this slot instead borrows the held
+conventional provider's ASCII facet until the bracket returns, as it already
+borrows a service-area copy for an original pool font. Live bounds are
+clamped to ASCII only for that bracket, avoiding a protected module-selector
+lookup in real mode, then restored before protected callers resume. The private
 seam cells still use their private guard and temporary table and are not exposed as alternate CP850 glyphs.
 
 The generated source reuses `tools/cp437font.py`'s authored shapes by
@@ -20085,6 +20098,16 @@ hardware adapter owns acknowledgement, BIOS chaining and the exact
 INT 15h return flags. The handler performs no file I/O, allocation, module
 load, rendering or arbitrary kernel/API calls. IRQ stack use is bounded
 and measured before delivery.
+
+Only the private KL_CMD module entry accepts SUSPEND (6) and REARM (7),
+used by HIBER.DRV around wake's existing font selection and repair. They
+never load or drop the module and never change layout/client holds.
+SUSPEND restores the original face, retaining a suspended state in the
+provider's existing active byte. REARM only rebinds a suspended provider:
+it refreshes its ASCII face from the repaired original pointer, cancels
+composition/prefix state and seeds modifiers from the current BIOS data
+area in the same interrupt-masked window. Neither verb is in the public
+SDK; OSAPI_KEYBOARD continues to refuse values above RAW.
 
 #### 9.16.2 Translation and physical keys
 
@@ -112557,6 +112580,16 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
     `OSAPI_FSX_PAGE`, `OSAPI_VIDEO`, `OSAPI_FONT_GLYPHS`, `OSAPI_KEY_DOWN`,
     `OSAPI_KEY_MAP` (§9.7.3), `OSAPI_SND_CAPS`, `OSAPI_WM_CONTENT` and
     `OSAPI_WM_WAKE` (MEGA-VIDEO-REALMODE-PLAN 7.2);
+  When the optional native provider is held (§9.16.3), its table is already
+  conventional and needs no service-area copy. The existing `fsx_rfont`
+  word carries FFFFh for this case (every normal copy offset is even).
+  Entry keeps its converted real segment and nonzero base, and clamps live
+  bounds to 32..126 so FONT_GLYPHS does not inspect protected KLFP selectors.
+  The returned ASCII pointer is borrowed only until the bracket returns;
+  the provider stays pinned by the unchanged layout/glyph clients. Return
+  restores the provider's 255/223 bound/span after the selector walk, before
+  another protected-mode caller can run. Ordinary pool-font copies and
+  default-face brackets retain their existing behavior.
   * **as it is, with a real-mode arm** of a few bytes: `OSAPI_FSX_WAIT`,
     whose `FSXW_FRAME` waits on `hlt` (there is no scheduler to yield to),
     and `OSAPI_MOUSE`, which answers the pointer's words and does not run
