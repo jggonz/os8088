@@ -101,21 +101,9 @@ dmo_mkbody:
     DMO_TAIL dskw_relold.flush
 
 .exists:
-    mov al, FERR_EXIST
-    SKIPF2
-.dirfull:
-    mov al, FERR_DIRFULL
-    SKIPF2
-.nospace:
-    mov al, FERR_FULL
-    cbw
+    mov ax, FERR_EXIST
     stc
     ret
-.badclus:
-    mov ax, FERR_IO
-    jmp short .rollax
-.wfail:
-    DMO_CALL dskw_ioerr
 .rollax:
     push ax
     mov byte [dskw_isdir], 0
