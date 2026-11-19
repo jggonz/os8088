@@ -37685,6 +37685,32 @@ publisher, and the walker that already followed the chain. `kern_dos` refuses
 as before (`KD_BUILD`): its image is at `KD_IMG_KB`'s edge, and raising it is
 a layout decision (`kerndos/kdlayout.inc`).
 
+#### 18.5.3 Directory mutations in the on-demand disk module
+
+**Planned integration for optional keyboards (§9.16):** the private bodies
+for Rename, New Folder and folder removal move into the existing
+`DISKOPS.DRV` (§2.8). Their public register, CF, validation and disk-integrity
+contracts remain those in §18.4–§18.6. File reads, ordinary file writes,
+boot, module loading and the shared FAT/directory commit helpers remain
+available without loading this module. No operation in `mod_need`'s
+transitive cone may move into a module that it loads.
+
+A directory mutation loads the module on the UI task before making changes.
+The system disk must therefore be available when first invoking these
+commands. The loader preserves/restores the caller's mounted target volume;
+loading must not redirect a mutation to the system disk. A missing or
+mismatched module refuses through the existing file-error path before any
+metadata is modified. It must never report success or partially rename,
+create or remove a directory on a load refusal.
+
+Module code reaches the shared resident helpers through documented private
+gates and preserves their segment/register contracts. No paint callback or
+IRQ loads it. The operation releases its module claim when finished, using
+the existing disk-module cache/drop policy; no new default boot claim or
+permanent scratch buffer is permitted. This split pays for the keyboard
+hooks with measured permanent-byte savings on every kernel. Allocation
+rounding alone is insufficient evidence for the no-growth requirement.
+
 ### 18.6 `dskw_rmdir` — removing an empty subdirectory
 
 ```
