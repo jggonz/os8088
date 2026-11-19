@@ -1,14 +1,14 @@
 {
  "DRV_VER": {
-  "fingerprint": "74fd2ec6535203e7af47b39ba33a3ed36362c3fd3a5c77c71e3e7b17cf274158",
+  "fingerprint": "fa1b058e4aff37818f40b13f2da0a9238124a85459a4c48733df77dca576a841",
   "version": 14
  },
  "HD_ABI_VER": {
-  "fingerprint": "6334dfeda1fd56beca273195d029dd1b3e31b9270359bd11435a1d77fa174bdf",
+  "fingerprint": "6a6338a0ced60206a6481ad09bf867865d77a622495d564cf1b6b707b55f8fdb",
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "fefae92887b1da94c79cc83ffa9c4503d999c6c62fd089d12e3536a9aeb8bda7",
+  "fingerprint": "172c2e7961e01deb103f0de33ba0f9dad4a63ec4ccf2e5f43f1c4637bb46f80c",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2414,6 +2414,27 @@
    "guard": "DRV_VER",
    "reason": "publish room for the appended PC1 driver in DRVC_HWINFO record buffers",
    "to": 14
+  },
+  {
+   "fingerprint": "172c2e7961e01deb103f0de33ba0f9dad4a63ec4ccf2e5f43f1c4637bb46f80c",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "DRVM_CEIL_DISK 4 -> 5: HDD.DRV's image is 4.5KB for logical drives and the large-disk transports (SPEC.md 52.4.1); a quoted ceiling, nothing built before stops running",
+   "to": 13
+  },
+  {
+   "fingerprint": "fa1b058e4aff37818f40b13f2da0a9238124a85459a4c48733df77dca576a841",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "DRVM_CEIL_DISK 4 -> 5: HDD.DRV's image is 4.5KB for logical drives and the large-disk transports (SPEC.md 52.4.1); a quoted ceiling, nothing built before stops running",
+   "to": 14
+  },
+  {
+   "fingerprint": "6a6338a0ced60206a6481ad09bf867865d77a622495d564cf1b6b707b55f8fdb",
+   "from": 7,
+   "guard": "HD_ABI_VER",
+   "reason": "DRVM_CEIL_DISK 4 -> 5: HDD.DRV's image is 4.5KB for logical drives and the large-disk transports (SPEC.md 52.4.1); a quoted ceiling, nothing built before stops running",
+   "to": 7
   }
  ]
 }

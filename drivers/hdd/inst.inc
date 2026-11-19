@@ -258,6 +258,10 @@ hd_iw_slot:
     mov bx, hd_s_tgeom
     call hd_tw_geomok           ; before the read, which a geometry fault
     jc .popput                  ; points at the wrong sector (SPEC.md 52.2.6)
+    mov bx, hd_s_ireach
+    call hd_iw_reach            ; ...and where the BIOS can BOOT it: rung 1
+    jc .popput                  ; reaches past cylinder 1,023 and the boot
+                                ; sector's int 13h does not (SPEC.md 52.1.5)
     xor bx, bx
     call hd_fmt_isfat
     jc .unfmt
@@ -302,6 +306,33 @@ hd_iw_slot:
     mov ax, [hd_iscur+2]
     mov [bx+hd_isecs+2], ax
     jmp os88_r_bp
+
+; -----------------------------------------------------------------------------
+; hd_iw_reach - can the BIOS boot this slot? (SPEC.md 52.1.5)
+; in:  SI = the entry, DI = its device row
+; out: CF = 0 yes; CF = 1 = its last sector is past cylinder 1,023 at this
+;      geometry
+; clobbers: flags
+;
+; The installed machine boots through BOOTHD.SYS, whose reads are int 13h
+; AH=02h - ten bits of cylinder - before any driver loads (SPEC.md 52.10.3).
+; Rung 1 addresses an IDE drive past 504MB now, so a partition the driver can
+; mount is no longer one the boot can read; asked of the LAST sector because
+; the kernel's file may land anywhere in the volume (52.10.15 keeps the files
+; that were there). A BIOS that translates reports more heads, and then the
+; same partition is well inside its reach - the geometry in DI is the one the
+; BIOS was asked for when it knows the drive (SPEC.md 52.1.1).
+; -----------------------------------------------------------------------------
+hd_iw_reach:
+    push ax
+    push dx
+    call hd_ent_end             ; one past the last sector...
+    sub ax, 1
+    sbb dx, 0
+    call hd_lba_chs             ; ...and CF = 1 past what CHS names
+    pop dx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; hd_iw_letter - the drive letter a FAT slot is on the desktop as
@@ -3663,6 +3694,7 @@ hd_s_iunread: db 'Unreadable', 0    ; the table itself would not read
 hd_s_ismall:  db 'Too Small', 0
 hd_s_inone:   db 'No Room', 0
 hd_s_ibig:    db 'Too Big', 0       ; FAT, past FAT16's ceiling (18.7.5)
+hd_s_ireach:  db 'Past BIOS Reach', 0   ; ends past cylinder 1,023 (52.1.5)
 hd_s_icolon:  db ': ', 0
 hd_s_icomma:  db ', ', 0
 hd_s_itype:   db 'Type ', 0

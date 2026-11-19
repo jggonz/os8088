@@ -3690,6 +3690,50 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
                "build/calc.o88")),
+    Row("hdext", "soak", py("tests/hdext.py"), 5.0,
+        "SPEC.md 52.4.1, issue #386: a primary C: and an extended partition "
+        "(0Fh) holding two logical drives, written sector by sector as DOS's "
+        "FDISK writes them, on QEMU's 386. HDD.DRV must mount all three - "
+        "hd_vols slots 0, 4 and 5, the logical ones parented on slot 1 - stop "
+        "the walk at the last record, and launch CALC.O88 off E:, the second "
+        "logical drive",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
+               "build/calc.o88")),
+    Row("hdextloop", "soak", py("tests/hdext.py", "--loop"), 5.0,
+        "SPEC.md 52.4.1's hostile chain: the second record's link points "
+        "BACK at the first. The walk must stop there (links move forward "
+        "only) and mount the two logical drives once each - broken on "
+        "purpose it mounts them again and again under new slot numbers",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
+               "build/calc.o88")),
+    Row("hdextxt", "soak", py("tests/hdext.py", "--xt"), 10.0,
+        "SPEC.md 52.4.1 on issue #386's own machine: hdext's disk - a "
+        "primary and two logical drives - as a 654/16/63 VHD behind "
+        "MartyPC's XT-IDE on an 8088, so the chain is read through the "
+        "card's ROM on rung 0. Row 0 the BIOS's, the same three volumes, the "
+        "walk stopped at slot 5, CALC.O88 opened off E:",
+        needs=("marty", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088-360.img", "build/apps360.img",
+               "build/hdd.bin", "build/calc.o88")),
+    Row("hdextlba", "soak", py("tests/hdext.py", "--lba"), 5.0,
+        "SPEC.md 52.1.5: a 1GB drive whose BIOS reports 1,024/16/63, taken "
+        "by rung 1 with the BIOS's geometry, and one FAT16 partition past "
+        "cylinder 1,023 - reachable only in LBA mode. Row 0 IDE with "
+        "HDF_LBA, the volume mounted, CALC.O88 launched off it",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
+               "build/calc.o88")),
+    Row("hdextebios", "soak", py("tests/hdext.py", "--ebios"), 5.0,
+        "SPEC.md 52.1.6: a 9GB drive SeaBIOS translates to 1,024/255/63 and "
+        "a partition past BIOS cylinder 1,023, reachable only through "
+        "AH=42h. Row 0 the BIOS's with HDF_EBIOS; the IDE row of the same "
+        "disk WITHOUT HDF_XCYL (52.1.5's double-mount guard); ONE volume, "
+        "and CALC.O88 launched off it",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
+               "build/calc.o88")),
     Row("hdtakeboot", "soak", py("tests/hdtake.py", "--boot"), 10.0,
         "SPEC.md 52.1.1 on an INSTALLED machine (QEMU, booted from the IDE "
         "disk): C:, the kernel's own int 13h boot volume, must be HANDED to "

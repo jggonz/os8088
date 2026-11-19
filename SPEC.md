@@ -107747,8 +107747,8 @@ system disk; `drv_dlg_done_x`, a kernel window's completion, stays resident.
 
 ## 52. HDD.DRV — the hard-disk driver (drivers/hdd/)
 
-MFM through an XT controller card's own ROM, and CHS-only IDE, as a loadable
-driver (§51.8). **Everything the user can see is in the driver** — the Control
+MFM through an XT controller card's own ROM, and IDE through the task file in
+CHS or LBA mode (§52.1.5), as a loadable driver (§51.8). **Everything the user can see is in the driver** — the Control
 Panel's Hard Drive page, the partitioner, the FAT formatter and the Mount
 button — because the kernel's half of this is four API slots and a volume
 table, and nothing above them belongs in a kernel that boots machines with no
@@ -107846,9 +107846,11 @@ reference copy (nine files, 175KB, HDD C to HDD D): 1,918 commands became 394.
   further. One sector always fits both, so the run is never zero.
 
 `hd_chs` needs **one `div` pair and
-no 32/16 two-step**, provably: `spt × heads` is at most 63 × 255, the highest
-LBA CHS can name is 1024 × 255 × 63, and the quotient — the cylinder — is under
-1024, so DX before each divide is far below the divisor.
+no 32/16 two-step**, provably: the first divide is refused unless DX is below
+`spt × heads`, so its quotient — the cylinder — fits a word, and the second
+divides a remainder already below the divisor. The cylinder it then accepts is
+the rung's: under 1,024 on a BIOS row (int 13h's ten bits), under the drive's
+own `HDD_CYL` on an IDE row (§52.1.5).
 
 **Geometry the probe could not determine is the user's to type in**, and that
 is an ordinary state rather than an exotic one: it is a 286 with an early IDE
@@ -108086,6 +108088,104 @@ of sectors is the 286's shape and stays parked with its wave L2.
 416 bytes went into the 451 the `align 512` in front of hd_mbr (52.13.6) was
 padding with nothing. No kernel byte.
 
+#### 52.1.5 Rung 1 past 504MB: the whole cylinder register, then LBA mode (2026-11-18)
+
+**Rung 1 stopped where int 13h stops, and nothing about the task file made it
+stop there.** `hd_chs` refused cylinder 1,024 on every row and `hd_geom_ok`
+called any geometry past 1,024 cylinders unusable — int 13h's ten bits — so an
+IDE drive at 16 heads and 63 sectors ended at 1,024 × 16 × 63 sectors, 504MB,
+and every drive over that reported by IDENTIFY (16,383 cylinders for anything
+past 8GB) was listed with an unusable geometry and never mounted. The task
+file carries sixteen bits of cylinder, and an LBA-capable drive takes 28 bits
+of address with no geometry at all.
+
+- **An IDE row's cylinder bound is its own `HDD_CYL`**, in `hd_chs`. Below it
+  the transfer is CHS exactly as before, with the high cylinder byte in
+  `IDE_CYLH`; at or past it, `hd_xfer_ide` goes to **LBA mode** — drive/head
+  bit 6 set and the address's bits 24..27 in the head nibble, bits 0..23 where
+  the sector and the cylinder go, so the four register writes below it are the
+  same either way. `hd_ide_select` masks the head with `4Fh` where it masked
+  with `0Fh`: bit 4, the other drive, is still the one it must never set.
+- **Only on a drive that said so**: `IDENTIFY` word 49 bit 9, read at attach
+  (`hd_at_ident` keeps word 49 as `hd_idbuf`'s eighth word) into
+  `HDF_LBA` on the row, a taken BIOS row (§52.1.1) included. To a drive that
+  predates LBA, bit 6 is part of a different address, so a sector its geometry
+  cannot name is refused (04h) there as it always was.
+- **Mixing the two modes is safe because they name the same sectors**: the
+  row's geometry is the one `91h INITIALIZE DEVICE PARAMETERS` told the drive,
+  and LBA = (cylinder × heads + head) × spt + sector − 1 under that geometry,
+  so a volume that used to be reached by CHS is read through the same sectors
+  now, and CHS is still what reaches it.
+- **A geometry past 1,024 cylinders is usable on an IDE row only with
+  `HDF_XCYL`, and that is the double-mount guard.** A BIOS that TRANSLATES a
+  big drive — 32, 64, 128 or 255 heads, the scheme every BIOS past 1994 uses —
+  reports a geometry `hd_at_dup` cannot pair (heads must be equal), so that
+  drive has a BIOS row AND an IDE row, and what kept the second from mounting
+  every partition a second time, through another transport, was only the
+  1,024-cylinder refusal this section lifts. So `hd_at_xcyl`, at attach, sets
+  `HDF_XCYL` only when no BIOS row the pairing left unspent has this drive's
+  sectors per track — the one field a translation keeps. A drive that fails
+  it is exactly as it was: listed, unusable, and its BIOS row reaching it
+  through rung 0 and §52.1.6. One that passes is a drive no BIOS row can be:
+  the BIOS does not know it, or knows it exactly and paired it.
+- **The installer refuses what the BIOS cannot boot**: `Past BIOS Reach`,
+  for a slot whose last sector is past cylinder 1,023 at the row's geometry
+  (`hd_iw_reach`). An installed machine reads its kernel through
+  `BOOTHD.SYS`'s int 13h AH=02h before any driver loads (§52.10.3), so a
+  partition rung 1 can mount is no longer one the boot can read. It asks the
+  LAST sector because the kernel's file may land anywhere in a kept volume
+  (§52.10.15).
+- **An entry's CHS halves past cylinder 1,023 are the 1023/254/63 marker**
+  (`hd_lba_chs` clamps there now on an IDE row too, CF = 1), and
+  `hd_tw_geomok` no longer compares a start past it: every tool writes its own
+  marker there, and the LBA is the whole of the address.
+
+**What it does not do**: the partitioner still sizes a disk from its CHS
+geometry, so a drive past 8.4GB is offered its first 16,383 cylinders — four
+FAT16 primaries of 2GB fit in that with room left over. The rest of such a drive
+is reachable by partitions another machine made.
+
+`hdextlba` is the gate (QEMU, `ide-hd` with the drive's geometry and the
+BIOS's set apart): a 1GB drive at 2,080/16/63 that SeaBIOS reports as
+1,024/16/63, so rung 1 TAKES it with the BIOS's geometry and the one partition,
+at LBA 1,100,000, is reachable only in LBA mode. Broken on purpose — the LBA
+arm refused — nothing mounts. `hdextebios` holds the guard: a 9GB drive SeaBIOS
+translates to 255 heads, whose IDE row must stay without `HDF_XCYL`; with
+`hd_at_xcyl`'s scan skipped it mounts its one volume TWICE.
+
+#### 52.1.6 Rung 0 past cylinder 1,023: the packet calls (2026-11-18)
+
+**A BIOS row ends at cylinder 1,023 because AH=02h has ten bits of it**: with
+the 255 heads a translating BIOS reports, that is 1,024 × 255 × 63 sectors,
+8.4GB, and a partition past it — another machine's, on a CF card or a big IDE
+drive — was one `hd_chs` refused (04h) on every transfer. The BIOS extensions'
+packet calls, AH=42h read and AH=43h write, take a 64-bit LBA and no geometry.
+
+- **Asked at attach**, `hd_at_bios`: AH=41h with BX = 55AAh, and a ROM that
+  answers CF = 0, BX = AA55h and CX bit 0 (the packet functions) gets
+  `HDF_EBIOS` on its row. An XT ROM answers "bad command" with CF = 1.
+- **Used only where CHS cannot name the sector** (`hd_xfer_ext`, reached when
+  `hd_chs` refuses): everything a BIOS row could reach before is reached
+  exactly as before, through the call every ROM has.
+- **The packet is on the stack**, and the ROM reads it through DS = SS. The
+  driver's own segment is the HMA's on a kern_big that put it there, which is
+  no address to hand a ROM; the stack is conventional memory on every kernel
+  that asks. The buffer in it is the transfer's own, bounded as a CHS run is —
+  a track's worth (63 sectors) and the DMA page, `hd_bios_run`'s, because a ROM
+  that moves sectors by DMA still has the 8237's page. Three attempts with an
+  AH=00h reset between them, as on the CHS path.
+- **Never under kern_mega** (`CPU_F_PM`): its reflection of int 13h carries
+  ES:BX and not DS:SI. On a 286 or better the drives a BIOS knows are rung 1's
+  anyway (§52.1.1, §52.1.5); what stays on rung 0 there is the ROM-only
+  controllers, which keep the ten-bit reach.
+
+`hdextebios` is the gate: QEMU, a 9GB drive SeaBIOS translates to 1,024/255/63
+and one FAT16 partition at LBA 16,600,000 — past BIOS cylinder 1,023 — that
+must mount through device row 0 (the BIOS's, `HDF_EBIOS`), once, and launch
+`CALC.O88`.
+
+**The two sections' cost**, with §52.4.1's: see there.
+
 ### 52.2 The disk tool — one window, one button
 
 Partitioning and formatting are **one operation to the user and one window in
@@ -108303,7 +108403,10 @@ each other — arming Format and then clicking Delete asks Delete's question, it
 does not delete. Two words that had to agree would have been the obvious shape
 and the wrong one.
 
-**The table entry goes down before the volume**, which is the same argument as
+**Whatever is mounted on the slot goes first** (§52.4.1): `hd_tw_unmount_slot`,
+as Delete does (§52.2.4), and the mounted set staged — on an Extended row that
+is every logical drive in it. **Then the table entry goes down before the
+volume**, which is the same argument as
 the boot sector going last inside the format: every way this can be
 interrupted has to leave a state the tool can describe and re-offer. Entry
 first, volume second means an interruption leaves `Not Formatted` — a claimed
@@ -108706,32 +108809,123 @@ control ids, `hd_btn_ok`'s indices and `hd_page_button`'s CL are still
 and says so.
 
 **Mount is per PARTITION, not per drive.** It walks all four slots and mounts
-every one that is FAT, so a disk partitioned into three comes up as three
+every one that is FAT, then the logical drives of the disk's extended
+partition (§52.4.1), so a disk partitioned into three comes up as three
 volumes, three drive letters and three desktop icons. Two tests decide, and
 both are needed:
 
-- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh. Extended (05h/0Fh)
-  and FAT32 (0Bh/0Ch) are not — the first is a chain this driver does not walk
-  and the second a format this kernel does not read;
+- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh. An extended
+  partition (05h/0Fh) is not a volume but a chain of them, and is walked
+  rather than mounted (§52.4.1); FAT32 (0Bh/0Ch) is a format this kernel does
+  not read (docs/plans/FAT32-MEGA-PLAN.md is what reading it would take);
 - and the volume actually **mounts**. A partition whose type says FAT and
   whose content does not gets its row and its claim handed straight back, and
   the walk carries on to the next slot. That is the half a type byte cannot
   answer.
 
-A partition over 65,535 sectors is skipped for §18.7's reason. Each volume
-claims its own listing buffer first (§22.6); a refused claim is not an error,
-it is a 32-entry listing.
+A partition past FAT16's own ceiling — just under 2GB, `hd_part_big` — is
+skipped and the page says `Partition is over 2GB` (§18.7.5; it was 65,535
+sectors, §18.7's, until the LBA's high word). A mounted volume claims no
+listing buffer of the driver's (§22.6).
 
 **The kernel names them.** The driver passes no label, because the drive
 letter is the kernel's to assign and the driver could not know it: a
-driver-backed volume with no label of its own derives `HDD C`..`HDD F` from
-its index the way a floppy derives `Disk A` (§26.1). So "HDD C appearing under
+driver-backed volume with no label of its own is captioned with its drive
+letter, `C:` to `H:`, built from its index as a floppy's `A:` is (§26.4; it
+was `HDD C`, §26.1). So "HDD C appearing under
 Disk B" is not something this driver arranges — and on CGA it appears *beside*
 Disk A instead, which is the column wrap and also not something it knows
 about.
 
 **Unmount is the other half**: it drops every volume the selected device has,
 not the first.
+
+### 52.4.1 Logical drives: the extended partition's chain (2026-11-18)
+
+**Issue #386: "On DOS, my CF (XTIDE) shows 2 partitions (C: and D:), os8088
+shows only C:".** MS-DOS's FDISK makes ONE primary DOS partition per disk, and
+that is C:; every other letter on that disk is a **logical drive** inside an
+**extended partition** (type 05h, or 0Fh for the LBA flavour), and this
+driver read only the four primaries. §52.9 justified that with "four
+primaries of ≤32MB is 128MB" — true when a volume was 32MB, and beside the
+point once a user's disk was the one DOS had partitioned.
+
+**The format is DOS's, and it is two different bases.** The extended
+partition's first sector is an **extended boot record**: a partition table
+of its own, signature and all, whose **entry 0** is a logical drive — its LBA
+relative to THAT record — and whose **entry 1** links the next record, its LBA
+relative to the EXTENDED PARTITION's start. The chain ends at a record whose
+entry 1 is not an extended type.
+
+`hd_mount` walks it **after** the four primaries — `hd_mount_chain` reads
+each record into `hd_mbr`, the buffer the primary loop is still reading
+entries out of, so the extended slot is only banked on the way past (the
+first one: DOS writes one per disk) — and turns entry 0's LBA into the
+device's in place, so the one partition routine every primary goes through
+(`hd_mount_slot`: type, ceiling, already-mounted, the kernel's own boot
+volume, then `hd_mount_one`) is the logical drive's too.
+
+- **A logical drive is slot 4 + n**, n its record's place in the chain, in
+  `HDV_PART` — and `HDV_PARENT` (offset 11, a spare byte) carries the PRIMARY
+  slot it lives in: its own for a primary, the extended partition's for a
+  logical drive. `hd_vol_find` matches a slot by either, so **every volume
+  inside the extended slot is that slot's**: the disk tool's Delete and Format
+  and the installer's unmount-first (§52.2.4, §52.10.8), which name a slot,
+  drop every logical drive in it before the table changes — a volume left on
+  sectors the table no longer calls its own is the failure §52.2.4 exists to
+  prevent. The installer's State column letters an Extended row with its
+  first logical drive's letter, by the same match.
+- **Format unmounts first now, as Delete always did** (`hd_tw_format`,
+  §52.2.3). It never had to: it rewrote a volume nobody but the formatter had
+  mounted, or the boot partition, which it refuses. A mounted logical drive
+  under an Extended row Format is about to reclaim is the case that made it
+  matter, and a mounted primary had the same fault without anybody hitting
+  it: a FAT window and cached directory sectors (§18.8, §19.2.3) describing a
+  volume the format had just replaced.
+- **`HD_MAXVOL` is 6** — the kernel's `DVOL_MAX` (8) less the two floppies, so
+  a seventh row could never be registered. A chain with more FAT drives than
+  rows stops at `No free volume`, and stops READING there too.
+
+**The chain comes off a disk, so it is hostile** (§18.2's rule), and three
+things bound it:
+
+- **A link must point FORWARD**, past the record it is in, so no record is
+  read twice and no drive mounted twice. Without it a link back to the first
+  record mounts the same two logical drives again and again under new slot
+  numbers until the volume table is full — measured, `hdextloop` broken on
+  purpose: six volumes over three partitions. A chain written out of disk
+  order (Linux's `fdisk` after a deletion) stops at its first backward link: a
+  drive missing rather than a volume doubled.
+- **`HD_MAXLOG` (24) links and no more**, whatever they say. DOS letters D:
+  to Z: are 23 logical drives.
+- **A logical drive must END inside the extended partition**, with every sum
+  carried in 32 bits and an overflow refused, so it cannot alias a partition
+  outside it. A link that points outside reads a record whose drive cannot
+  pass that test. A drive whose start lands on its own record reads that
+  record as a boot sector, which BPB rule 2 refuses.
+
+**What it costs**: `HDD.DRV`'s image is **4,608 bytes, 4,096 before** — a
+ninth half-KB claimed on every machine with a hard disk, and the owner's
+decision (2026-11-18) rather than a build fix: `tests/unit/t_install.py`
+held it at 4,096 and holds it at 4,608 now, `DRVM_IMG_HDD` is 9 and the
+class ceiling `DRVM_CEIL_DISK` 5 KB. That half-KB is §52.4.1, §52.1.5 and
+§52.1.6 together — the resident proper grew 2,889 → 3,364 bytes (the walk and
+the slot routine it shares with the primaries, two `hd_vols` rows, LBA mode,
+the packet calls) and the attach-only code beside it by the IDENTIFY word,
+`hd_at_xcyl` and the AH=41h probe, with 4 bytes left before the `align 512`
+in front of `hd_mbr`. `HDDTOOL.DRV` grew ~100 bytes (Format's unmount, the
+installer's reach test, the clamp) and that crossed ITS `hd_mbr` alignment:
+16,153 → 16,665, half a KB more claimed while the tool is open. **No kernel
+byte**: `DRVM_IMG_HDD` and the ceiling are values in words already there.
+
+`hdext` is the gate (QEMU's 386, the disk written sector by sector as FDISK
+writes it): C: a primary and an extended partition with two logical drives;
+`hd_vols` rows on slots 0, 4 and 5, the two logical ones parented on slot 1,
+the walk stopped at slot 5, and `CALC.O88` launched off E:. `hdextloop` is
+the hostile chain above. `hdextxt` is issue #386's own machine — the same
+disk on MartyPC's 8088 behind an XT-IDE, read through the card's ROM on rung
+0. Broken on purpose, `hd_mount_chain`'s call taken out, the default leg
+finds one volume.
 
 ### 52.6 The mount survives a reboot
 
@@ -108891,8 +109085,16 @@ stays 3,584 and the claim 4 KB.
 - **Low-level (surface) MFM formatting**, §52.3.
 - **The XT DCB register path**, §52.1. The row exists in the ladder so the
   page can one day say "not supported" rather than "no drive".
-- **Extended partitions.** Four primaries of ≤32MB is 128MB of usable disk,
-  against MFM drives of 10–40MB and early IDE drives of 20–120MB.
+- ~~**Extended partitions.**~~ **Retired — this is §52.4.1.** It said "four
+  primaries of ≤32MB is 128MB of usable disk, against MFM drives of 10–40MB
+  and early IDE drives of 20–120MB", which was a fair count of capacity and
+  missed the user: a disk DOS's FDISK partitioned has ONE primary and every
+  other letter in an extended partition (issue #386). Making logical drives
+  in the disk tool is still out of scope — DOS's FDISK does that — and an
+  install target is still a primary, which is what a BIOS boots.
+- **FAT32.** A format, not a partition type: cluster numbers are words through
+  the whole of the kernel's file system and its API. docs/plans/FAT32-MEGA-PLAN.md
+  is the survey and the plan, kern_mega first.
 
 ## 52.10 Install — booting os8088 from a hard-disk partition
 

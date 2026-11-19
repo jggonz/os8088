@@ -15,14 +15,19 @@
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; hd_mount - mount the selected device's first FAT partition
+; hd_mount - mount every FAT volume on the selected device: the four primary
+;            slots, then the logical drives of its extended partition
 ; in:  nothing; the gfx lock is HELD (a page click)
 ; out: nothing; [hd_msgc] (an HDM_*) says what happened
 ; clobbers: flags
 ;
-; It mounts the FIRST FAT partition and stops; the loop that takes all four is
-; hd_mount_all's. Neither claims anything: SPEC.md 22.6 retired the listing
-; donation, so a mounted volume costs this driver a hd_vols row and no heap.
+; Neither half claims anything: SPEC.md 22.6 retired the listing donation, so
+; a mounted volume costs this driver a hd_vols row and no heap.
+;
+; **The extended partition is walked AFTER the four primaries** (SPEC.md
+; 52.4.1), because the walk reads each extended boot record into hd_mbr - the
+; buffer the primary loop is still reading entries out of. Its slot is banked
+; on the way past and the chain is hd_mount_chain's.
 ; -----------------------------------------------------------------------------
 hd_mount:
     push ax
@@ -31,9 +36,11 @@ hd_mount:
     push dx
     push si
     push di
+    push es
 
     mov byte [hd_nmnt], 0
     mov byte [hd_msgc], HDM_MNOTAB
+    mov byte [hd_xslot], 0xFF   ; no extended partition seen yet
     mov al, [hd_sel]
     call hd_dev_row
     call hd_part_load
@@ -44,8 +51,53 @@ hd_mount:
 .slot:
     mov al, [hd_pslot]
     call hd_part_ent
+    call hd_part_isext
+    jc .prim
+    cmp byte [hd_xslot], 0xFF   ; the FIRST extended entry and only it: DOS
+    jne .next                   ; writes one per disk, and a second would be
+    mov [hd_xslot], al          ; a second chain over the same sectors
+    jmp short .next
+.prim:
+    call hd_mount_slot
+.next:
+    inc byte [hd_pslot]
+    cmp byte [hd_pslot], 4
+    jb .slot
+
+    cmp byte [hd_xslot], 0xFF
+    je .count
+    call hd_mount_chain         ; the logical drives (SPEC.md 52.4.1)
+.count:
+    cmp byte [hd_nmnt], 0
+    je .out                     ; the caption is whichever refusal got here
+    mov byte [hd_msgc], HDM_MOUNTED ; 'Mounted n volume(s)': a CODE, and the
+                                ; count is [hd_nmnt], which the page's renderer
+                                ; reads anyway (hddabi.inc's rule about a
+                                ; caption being a pointer only in the image
+                                ; that letters it)
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_mount_slot - mount one entry if it is a FAT volume nobody has (internal)
+; in:  SI = the entry, with its LBA ABSOLUTE on the device; [hd_pslot] = its
+;      slot (0..3 primary, 4 and up a logical drive, SPEC.md 52.4.1); DI = the
+;      device row; the gfx lock is HELD
+; out: [hd_nmnt] / [hd_msgc] as hd_mount_one leaves them; every register kept
+; -----------------------------------------------------------------------------
+hd_mount_slot:
+    push ax
+    push bx
+    push dx
     call hd_part_isfat
-    jc .next                    ; free, or a type that is not a FAT volume:
+    jc .out                     ; free, or a type that is not a FAT volume:
                                 ; SKIPPED, which is the whole of "and if it
                                 ; is not FAT, do not" (SPEC.md 52.4)
     call hd_part_big
@@ -68,42 +120,140 @@ hd_mount:
     jne .have                   ; the BIOS (52.1.1) - the one IDE row hd_kvol
                                 ; can say yes about: then the kernel's volume
                                 ; is handed to us as it is, by hd_mount_one,
-                                ; which asks hd_kvol again (DI is the row
-                                ; throughout this loop)
+                                ; which asks hd_kvol again
 .mount:
     call hd_mount_one
-    jmp short .next
+    jmp short .out
 .have:
     mov byte [hd_msgc], HDM_MHAVE   ; and SAY so: the caption was still
                                     ; 'No FAT partition on it' from the top of
                                     ; the loop, which about a partition that is
                                     ; mounted and on the desktop is the one
                                     ; answer that is not true
-    jmp short .next
+    jmp short .out
 .big:
     mov byte [hd_msgc], HDM_MBIG    ; the tool calls this slot Unmountable and
                                     ; so does the page, rather than reporting
                                     ; 'no FAT partition' about a partition that
                                     ; plainly is one (SPEC.md 52.2.2)
-.next:
-    inc byte [hd_pslot]
-    cmp byte [hd_pslot], 4
-    jb .slot
-
-    cmp byte [hd_nmnt], 0
-    je .out                     ; the caption is whichever refusal got here
-    mov byte [hd_msgc], HDM_MOUNTED ; 'Mounted n volume(s)': a CODE, and the
-                                ; count is [hd_nmnt], which the page's renderer
-                                ; reads anyway (hddabi.inc's rule about a
-                                ; caption being a pointer only in the image
-                                ; that letters it)
 .out:
-    pop di
-    pop si
     pop dx
-    pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_mount_chain - walk the extended partition's chain and mount its logical
+;                  drives (SPEC.md 52.4.1)
+; in:  [hd_xslot] = the extended partition's slot, hd_mbr still holding the
+;      table it is in; DI = the device row; the gfx lock is HELD
+; out: [hd_nmnt] / [hd_msgc] as hd_mount_slot leaves them; hd_mbr holds the
+;      last record read
+; clobbers: AX, BX, CX, DX, SI, flags (DI kept); ES = DS on the way out
+;
+; Each extended boot record is a partition table of its own, read into hd_mbr:
+; entry 0 is the logical drive, its LBA relative to THIS record; entry 1 is the
+; link to the next record, its LBA relative to the EXTENDED PARTITION's start.
+; Two different bases, and that is the DOS format, not a choice.
+;
+; **The chain comes off a disk, so it is hostile** (SPEC.md 18.2's rule), and
+; three things bound it. A link must point FORWARD, past the record it is in,
+; so no record is read twice and no drive mounted twice; a chain written out
+; of disk order stops at its first backward link, a drive missing rather than
+; a volume doubled. HD_MAXLOG links and no more, whatever they say. And a
+; logical drive must END inside the extended partition, so it cannot alias the
+; partitions outside it - a link that points outside reads a record whose
+; drive cannot pass that test. The rest is the mount's: a drive whose start
+; lands on its own record reads that record as a boot sector, which BPB rule
+; 2 refuses. The walk also stops at a full volume table - every record past
+; it is a read that can mount nothing.
+; -----------------------------------------------------------------------------
+hd_mount_chain:
+    push di
+    mov al, [hd_xslot]
+    call hd_part_ent            ; SI = the entry, still in hd_mbr
+    add si, HP_LBA              ; its base and length, the walk's frame: hd_mbr
+    mov di, hd_xbase            ; is about to stop holding them
+    push ds
+    pop es
+    movsw
+    movsw
+    movsw
+    movsw
+    pop di
+    xor ax, ax
+    cwd                         ; DX:AX = 0: the first record is the
+    mov byte [hd_pslot], 4      ; partition's own first sector
+.ebr:
+    mov [hd_xcur], ax
+    mov [hd_xcur+2], dx
+    add ax, [hd_xbase]
+    adc dx, [hd_xbase+2]
+    mov bx, hd_mbr
+    mov cx, 1
+    mov [hd_rawop], ch          ; a read
+    call hd_raw
+    jc .end                     ; an unreadable record ends the chain
+    cmp word [hd_mbr+510], 0xAA55
+    jne .end
+    mov si, hd_mbr + HP_TBL     ; entry 0: the logical drive
+    call hd_part_used
+    jc .link                    ; a record with no drive is legal: a link only
+    mov ax, [si+HP_LBA]
+    mov dx, [si+HP_LBA+2]
+    add ax, [hd_xcur]           ; -> its start, relative to the partition
+    adc dx, [hd_xcur+2]
+    jc .link
+    mov cx, ax
+    mov bx, dx
+    add ax, [si+HP_SECS]        ; -> its end
+    adc dx, [si+HP_SECS+2]
+    jc .link
+    cmp [hd_xlen+2], dx         ; CF = 1 = past the partition's end
+    jne .inside
+    cmp [hd_xlen], ax
+.inside:
+    jc .link
+    add cx, [hd_xbase]          ; absolute, in place: hd_mount_one reads the
+    adc bx, [hd_xbase+2]        ; entry's LBA as the device's
+    mov [si+HP_LBA], cx
+    mov [si+HP_LBA+2], bx
+    call hd_mount_slot
+    cmp byte [hd_msgc], HDM_MFULL
+    je .end
+.link:
+    mov si, hd_mbr + HP_TBL + HP_ESZ
+    call hd_part_isext
+    jc .end                     ; the last drive in the chain
+    mov ax, [si+HP_LBA]
+    mov dx, [si+HP_LBA+2]
+    cmp dx, [hd_xcur+2]         ; THE CHAIN MUST MOVE FORWARD: a link at or
+    jb .end                     ; behind the record it is in would read a
+    ja .fwd                     ; record twice and mount its drive again,
+    cmp ax, [hd_xcur]           ; under a new slot number
+    jbe .end
+.fwd:
+    inc byte [hd_pslot]
+    cmp byte [hd_pslot], 4 + HD_MAXLOG
+    jb .ebr
+.end:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_part_isext - is this entry an extended partition? (SPEC.md 52.4.1)
+; in:  SI = the entry
+; out: CF = 0 yes (05h or 0Fh, with a non-zero length); CF = 1 no
+; clobbers: flags
+; -----------------------------------------------------------------------------
+hd_part_isext:
+    cmp byte [si+HP_TYPE], HPT_EXT
+    je .used
+    cmp byte [si+HP_TYPE], HPT_EXTL
+    stc
+    jne .out
+.used:
+    jmp hd_part_used            ; a typed entry with no length is free
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -138,6 +288,11 @@ hd_mount_one:
     mov [bx+HDV_DEV], al
     mov al, [hd_pslot]
     mov [bx+HDV_PART], al
+    cmp al, 4
+    jb .parent                  ; a primary is its own parent...
+    mov al, [hd_xslot]          ; ...a logical drive's is the extended slot
+.parent:                        ; (SPEC.md 52.4.1)
+    mov [bx+HDV_PARENT], al
     mov ax, [si+HP_LBA]
     mov [bx+HDV_BASE], ax
     mov ax, [si+HP_LBA+2]
@@ -368,6 +523,10 @@ hd_vol_find:
     je .yes
     cmp [bx+HDV_PART], dh       ; ...and so is this one when it matches
     je .yes
+    cmp [bx+HDV_PARENT], dh     ; ...and a logical drive INSIDE the slot: the
+    je .yes                     ; extended partition's volumes are its own,
+                                ; so Delete and Format drop them with it
+                                ; (SPEC.md 52.4.1)
 .next:
     add bx, HDV_SIZE
     jmp short hd_vol_find

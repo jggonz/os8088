@@ -494,8 +494,10 @@ hd_part_chs:
 ; -----------------------------------------------------------------------------
 ; hd_lba_chs - hd_chs against an LBA in registers (module internal)
 ; in:  DX:AX = the LBA, DI = the device row
-; out: [hd_cyl]/[hd_head]/[hd_sec]; a value past the geometry clamps to the
-;      1023/255/63 form rather than failing
+; out: [hd_cyl]/[hd_head]/[hd_sec], CF = 0; a value an entry cannot carry
+;      clamps to the 1023/254/63 form rather than failing, and says so with
+;      CF = 1 - past the geometry, or past cylinder 1,023, which an IDE row
+;      can address and an entry's ten bits cannot name (SPEC.md 52.1.5)
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_lba_chs:
@@ -504,10 +506,15 @@ hd_lba_chs:
     mov [hd_lba], ax
     mov [hd_lba+2], dx
     call hd_chs
+    jc .clamp
+    cmp word [hd_cyl], 1024     ; CF = 1 below it: the entry can carry it
+    cmc
     jnc .out
+.clamp:
     mov word [hd_cyl], 1023
     mov word [hd_head], 254
     mov word [hd_sec], 63
+    stc
 .out:
     pop dx
     pop ax
