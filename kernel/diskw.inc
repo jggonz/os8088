@@ -458,7 +458,12 @@ dskw_delete_x:
 ; clobbers: AX (the output), CF
 ; -----------------------------------------------------------------------------
 dskw_rename_x:
+%ifndef KD_BUILD
+    mov ax, CLV_RENAME
+    jmp dskw_dircall
+%else
     mov ax, dskw_nbody
+%endif
                                 ; ...and THE LADDER, once. Three public
                                 ; wrappers differ only in the body they call;
                                 ; each of them takes SI (rename SI and DI) and
@@ -568,10 +573,16 @@ dwf_dskw_vstat:                 ; THE FAR ENTRY IS THE BODY (SPEC.md 2.6.1):
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 dskw_mkdir_x:
+%ifndef KD_BUILD
+    mov ax, CLV_MKDIR
+    jmp dskw_dircall
+%else
     mov ax, dskw_mkbody         ; dskw_wrap7's argument. It had a ladder of
     jmp dskw_wrap7              ; its own one push shorter (neither of these
                                 ; two spends BP); two bytes of stack buy the
                                 ; fifteen of the copy
+
+%endif                          ; KD_BUILD
 
 ; -----------------------------------------------------------------------------
 ; dskw_mounted - the write gate (SPEC.md 18.4): is there a volume to write to?
@@ -689,6 +700,7 @@ dws_gate:
 ; could match a name that is not in this directory at all.
 ; -----------------------------------------------------------------------------
 dskw_mkbody:
+%ifdef KD_BUILD
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: mkdir's
     mov ax, FSV_MKDIR
 %endif                          ; OS88_REDIR
@@ -721,6 +733,7 @@ dskw_mkbody:
     jmp dskw_relold.flush       ; coherence by remount (SPEC.md 18.4); the
                                 ; FAT is clean, so the flush is AX = 0, CF = 0
 
+%endif                          ; KD_BUILD; shared failures stay resident
 .exists:                        ; (these three answer for dskw_nbody,
     mov al, FERR_EXIST          ; dskw_wbody and dskw_wdata too: one
     SKIPF2                      ; spelling each). ONE tail for the three:
@@ -966,6 +979,7 @@ dskw_rmdir:                     ; dwf_dskw_rmany spells it itself (pass 17)
 ; inside the cluster we are about to free, so the moment it is gone nothing
 ; on the volume names them any more - there is no fsck answer to that.
 ; -----------------------------------------------------------------------------
+%ifdef KD_BUILD
 dskw_rmbody:
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: rmdir's
     mov ax, FSV_RMDIR           ; EMPTINESS is the driver's test, exactly as
@@ -975,7 +989,9 @@ dskw_rmbody:
     call dskw_gate              ; '.' and '..' cannot be spelled (18.4), and
                                 ; the root has no entry, so neither can be
                                 ; the target
+%endif
 dskw_rmbody_n83:                ; the same pipeline with dskw_n83 already
+%ifdef KD_BUILD
                                 ; filled - what dskw_rmtree calls, because it
                                 ; works from raw 11-byte names it read off the
                                 ; disk rather than from display names
@@ -986,6 +1002,7 @@ dskw_rmbody_n83:                ; the same pipeline with dskw_n83 already
     call dskw_isempty           ; CF=1 with AX = FERR_PROT / FERR_IO
     jc .out
 
+%endif
 .delent:                        ; ...dskw_dbody's commit too, entered with
                                 ; [dskw_oldclus] set as this body has set it
     mov byte [dskw_raw], 0xE5   ; THE commit: one directory sector (18.6)
@@ -1008,6 +1025,7 @@ dskw_rmbody_n83:                ; the same pipeline with dskw_n83 already
 ;      corruption - and a walk we refuse is cheaper than one we bound
 ; clobbers: as dskw_find
 ; -----------------------------------------------------------------------------
+%ifdef KD_BUILD
 dskw_fdir:
     call dskw_find
     jc .out
@@ -1024,6 +1042,7 @@ dskw_fdir:
     jmp dskw_wbody.prot         ; AX = FERR_PROT, CF = 1
 .out equ dskw_rmbody_n83.out   ; its neighbour's ret (kernel size pass 16)
 
+%endif
 ; -----------------------------------------------------------------------------
 ; dskw_relold - the shared TAIL of the three bodies that replace or remove an
 ;               entry: the commit has landed, so free the chain it let go of
@@ -1120,191 +1139,8 @@ DSKW_RT_MAX equ 4096            ; iterations: one per entry removed or level
                                 ; `filecp.inc`, neither of which is in a
                                 ; kerndos root
 dskw_rmtree:
-    mov ax, dskw_rtbody
-    jmp dskw_wrap7
-
-; -----------------------------------------------------------------------------
-; dskw_rtbody - the recursive-delete pipeline (module-internal)
-; in:  SI = the name; out: CF/AX as dskw_rmtree
-; -----------------------------------------------------------------------------
-dskw_rtbody:
-    call dskw_mounted           ; returns only when there is a volume
-%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
-    jne .fat                    ; A REDIRECTED VOLUME HAS NO DIRECTORY SECTORS
-                                ; (SPEC.md 62.9) and everything below this line
-                                ; reads them - dskw_find, dskw_rt_scan,
-                                ; dsk_dotdot and dskw_rt_byclus all walk the
-                                ; disk. Without this the walk went straight
-                                ; into dsk_xfer, which REFUSES a DVK_FILE
-                                ; volume outright, so Delete on a folder of a
-                                ; network or RAM-disk volume did nothing at
-                                ; all, silently, and left the folder on screen
-                                ; with no verdict. This is the tenth of ten
-                                ; write bodies in this file and the only one
-                                ; that never grew the branch: SPEC.md
-                                ; 62.10.4.5 verified the os8088 side with
-                                ; `File > New Folder` alone - the one verb
-                                ; with no application behind it - and nothing
-                                ; ever drove a Delete from this end.
-                                ;
-                                ; SO THE TREE IS WALKED BY THE SIDE THAT HOLDS
-                                ; IT (SPEC.md 62.10.7). FSV_RMTREE is one
-                                ; command frame and one status where a
-                                ; kernel-side walk is an FSV_ENUM plus an
-                                ; FSV_DELETE per file and an FSV_CHDIR per
-                                ; level - FSV_COPY's argument (62.9.8) in the
-                                ; other direction, against the same 3,741
-                                ; bytes a second.
-.fsrt:
-    mov bp, FSV_RMTREE          ; SI = the name, which is what we were handed
-    call dskw_fsop              ; ...AND NOT drv_fs_call: that is the whole of
-                                ; what this shares with the other nine write
-                                ; bodies, and the half that is not the call is
-                                ; dskw_sync_x - the ONE routine a successful
-                                ; file operation passes through, so no
-                                ; operation can forget to mark the folder it
-                                ; changed (SPEC.md 22.8). Hand-rolled around
-                                ; it, the delete WORKED and the Disk window
-                                ; went on listing the folder that was gone:
-                                ; a stale row is a wrong FILE the moment
-                                ; anything resolves an index against it
-                                ; (docs/FIELD-NOTES.md 4). BP is spent by
-                                ; drv_fs_call and dskw_rmtree banks it
-    jnc .fsok
-    or ax, ax
-    jnz .fsno                   ; THE FAR SIDE TRIED AND SAID NO, and that is
-                                ; its FERR_* to report: a whole volume, a
-                                ; protected file, a read-only run
-                                ;
-                                ; AX = 0 IS THE OTHER THING ENTIRELY - it is
-                                ; what drv_fs_call answers for a verb the
-                                ; driver does not publish, and it is the same
-                                ; word an absent FSV_ENUM gives (62.9.7). So
-                                ; a driver that declines this falls back to
-                                ; the empty-only FSV_RMDIR, which is exactly
-                                ; what a redirected volume did before the verb
-                                ; existed: emptiness is the driver's test, a
-                                ; folder with anything in it comes back
-                                ; FERR_PROT, and the file manager says so.
-                                ; RAMDISK.DRV declines on purpose, which is
-                                ; what keeps this branch tested.
-    jmp dskw_rmbody             ; ...and it goes THERE rather than to
-                                ; dskw_fsop so that "what a redirected rmdir
-                                ; is" has one answer: that body's own
-                                ; DVK_FILE arm two hundred lines up. It
-                                ; re-runs the [dsk_mntok] gate, which is free
-%else                           ; kern_small: no redirected volume can exist,
-    jmp short .fat              ; so over the relay (kernel size pass 11)
-%endif
-%ifdef OS88_REDIR
-.fsno:                          ; (`or` cleared CF on the way here)
-    stc
-%endif
-.fsok:                          ; ...and CF = 0 is the `jnc`'s
-    ret
-.fat:
-    mov ax, [dsk_cwd]           ; where we must end up, whatever happens
-    mov [dskw_rt_home], ax
-    mov di, dskw_rt_name        ; keep the caller's name: the last removal
-    call dskw_name83            ; happens back here, and by then the walk has
-                                ; overwritten dskw_n83 many times over
-    jnc .named
-    jmp dskw_nbody.badarg       ; FERR_NAME, spelled once
-.named:
-    call dskw_rtn83             ; dskw_fdir matches through dskw_n83
-    call dskw_fdir              ; a plain folder with a real cluster...
-    jc .fsok                    ; ...or AX = the FERR_* already - and .fsok
-                                ; is a bare `ret` a hop back (this routine's
-                                ; own, at its foot, was one past short reach,
-                                ; and nothing else reached it)
-    mov [dskw_rt_top], ax
-    call dskw_chdir_dl           ; into the folder we are about to empty
-    jc .ioerr
-
-    mov word [dskw_rt_guard], DSKW_RT_MAX
-.loop:
-    dec word [dskw_rt_guard]
-    jz .corrupt                 ; a cycle, or a tree past any real disk
-    call dskw_rt_scan           ; CF=1 = this directory holds nothing
-    jc .empty
-    cmp byte [dskw_rt_attr], 0x0F
-    je .lfn
-    test byte [dskw_rt_attr], DSKW_DIR
-    jnz .down
-    call dskw_dbody_n83         ; a file: delete it where we stand
-    jc .home                    ; FERR_PROT included - stop, and go home
-    jmp short .loop
-.lfn:
-    and word [dskw_oldclus], 0  ; an orphaned long-name fragment: no chain,
-    call dskw_rmbody_n83.delent ; so the slot is the whole of it - a delete's
-    jc .home                    ; commit with nothing to release (pass 17:
-                                ; dskw_rt_zap written at its one call, -3)
-    jmp short .loop
-.down:
-    mov ax, [dskw_rt_clus]
-    call dskw_clok
-    jc .corrupt_home
-    call dskw_chdir_dl
-    jc .iohome
-    jmp short .loop
-
-.empty:
-    cmp byte [dskw_rt_ioerr], 0 ; the scan stopped on a read error: that is
-    jne .iohome                 ; not the same as a directory with nothing in
-    mov ax, [dsk_cwd]           ; it, and treating it as one would free the
-    cmp ax, [dskw_rt_top]       ; clusters of files we simply could not see
-    je .finish                  ; the folder the caller named is empty now
-    mov [dskw_rt_clus], ax      ; the child we are leaving...
-    call dsk_dotdot_x ; ...and the parent the disk says it has
-    jc .corrupt_home
-    call dskw_chdir_dl
-    jc .iohome
-    call dskw_rt_byclus         ; find that child again, by cluster
-    jc .corrupt_home
-    call dskw_rmbody_n83        ; and remove it, emptiness re-checked
-    jc .home
-    jmp short .loop
-
-.corrupt_home:                  ; a corrupt link and an I/O error are the same
-.iohome:                        ; answer, so the two pairs are one: go home,
-    call dskw_rt_go_home        ; then FERR_IO
-.corrupt:
-.ioerr:
-    jmp dskw_rdata.corrupt      ; FERR_IO, spelled once
-.home:                          ; a failure part-way down: report it from
-    push ax                     ; where the caller left us, not from wherever
-    call dskw_rt_go_home        ; the walk happened to stop
-    pop ax
-    stc
-    ret
-
-.finish:                        ; BELOW the shared tail, which it only jumps
-    call dskw_rt_go_home        ; into: above it, it kept the dskw_clok's
-    jc .ioerr                   ; `jc .corrupt` five bytes past short reach
-    call dskw_rtn83
-    jmp dskw_rmbody_n83         ; the target itself, from where we began - a
-                                ; tail call, both ends `.cold`
-
-; -----------------------------------------------------------------------------
-; dskw_rt_go_home - put the volume back where dskw_rmtree was called
-; out: CF=1 = even that failed (the mount has landed at the root, SPEC 19.2)
-; clobbers: AX, CF
-; -----------------------------------------------------------------------------
-dskw_rt_go_home:
-    mov ax, [dskw_rt_home]
-    ; fall through
-
-; -----------------------------------------------------------------------------
-; dskw_chdir_dl - dsk_chdir on the drive that is mounted (module-internal)
-; in:  AX = the directory's first cluster; out: CF as dsk_chdir
-; clobbers: AX, CF
-; -----------------------------------------------------------------------------
-dskw_chdir_dl:
-    push dx
-    mov dl, [disk_drive]
-    call dsk_chdir_x
-    pop dx
-    ret
+    mov ax, CLV_RMTREE
+    jmp dskw_dircall
 
 %endif                          ; KD_BUILD - and `dskw_clok` below is NOT in the
                                 ; band: `dskw_rmdir` asks it too (the header
@@ -1342,105 +1178,11 @@ dskw_clok:
 ; Species rules are dskw_isempty's, because the two answers have to agree:
 ; anything that routine calls "occupied" this one has to be able to name.
 ; -----------------------------------------------------------------------------
-dskw_rt_scan:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov byte [dskw_rt_ioerr], 0
-    push ss
-    pop es
-    mov ax, [dsk_cwd]
-    call dskw_scan1             ; the walk is dskw_isempty's, shared
-    jnc .found
-    jz .none
-    mov byte [dskw_rt_ioerr], 1
-.none:
-    stc
-    jmp short .out
-.found:
-    mov [dskw_cursec], dx       ; ...and its high word is the walker's
-
-    call dskw_hit               ; the WHOLE entry, and where it is - exactly
-                                ; as dskw_find does, so dskw_rtbody's .lfn can
-                                ; rewrite the slot without a name lookup
-                                ; (dskw_find refuses to match an LFN entry at
-                                ; all, by design)
-    call dskw_rawn83
-    mov al, [dskw_raw+DSK_R_ATTR]
-    mov [dskw_rt_attr], al
-    mov ax, [dskw_raw+DSK_R_CLUS]
-    mov [dskw_rt_clus], ax
-    clc
-.out:
-    jmp dskw_find.out           ; the same six pushes in the same order, so
-                                ; dskw_find's pop run is this one's too
-
-; -----------------------------------------------------------------------------
-; dskw_rt_byclus - find the subdirectory of the CURRENT directory whose first
-;                  cluster is [dskw_rt_clus]
-; out: CF=0 with dskw_n83 = its 11 raw name bytes; CF=1 = no such entry
-; clobbers: AX, BP, CF
-;
-; How the walk gets back the name of the folder it just emptied without
-; having carried one down. The cluster is the identity: two directory entries
-; cannot legitimately share one, and if a corrupt volume makes them, removing
-; either is removing the thing this cluster is.
-;
-; THE SCAN IS disk.inc's dsk_byclus (SPEC.md 19.2.4): OSAPI_FILE_PATH names
-; each level of a path by exactly this search, and the slot's first cycle
-; carried a second copy of it. What is left here is the raw entry's trip
-; into dskw_raw and dskw_n83, which the remove body reads.
-; -----------------------------------------------------------------------------
-dskw_rt_byclus:
-    call kentc_di               ; KENT: push ax..di (AX is restored too: no
-                                ; caller reads it - kernel size pass 15)
-    mov ax, [dsk_cwd]
-    mov dx, [dskw_rt_clus]
-    call dsk_byclus_x           ; SS:SI -> the entry; dsk_ent is a by-product
-    jc .out
-    mov di, dskw_raw            ; 32, not 11: dsk_copy_in copies WORDS
-    mov cx, 32
-    call dsk_copy_in_x
-    call dskw_rawn83
-    clc
-.out:
-    jmp kretc_di
-
-; -----------------------------------------------------------------------------
-; dskw_rt_zap - mark the entry dskw_n83 names deleted, and free no chain
-; out: CF=0, or CF=1 with AX = FERR_*
-; clobbers: AX, CF
-;
-; For an LFN fragment (attr 0x0F), whose FstClusLO is a name checksum field
-; and not a cluster. Marking the slot is the whole removal; going anywhere
-; near dskw_free_chain with that word would free somebody else's data.
-; -----------------------------------------------------------------------------
-; (dskw_rt_zap is written at dskw_rtbody's .lfn now: kernel size pass 17)
-                                ; dskw_rt_scan staged the entry and published
-                                ; [dskw_dsec]/[dskw_doff] with it, so there is
-                                ; nothing here to read back off the disk
-
-; -----------------------------------------------------------------------------
-; dskw_isempty - does a subdirectory hold nothing but '.', '..' and free slots?
-; in:  [dskw_oldclus] = its first cluster, already bounded by the caller
-; out: CF=0 = empty; CF=1 with AX = FERR_PROT (occupied) or FERR_IO (unread)
-; clobbers: AX (the output), CF
-;
-; The walk is dsk_dirw_start / dsk_dirw_next, so the DSK_DIRW_MAX guard
-; (SPEC.md 19.2) terminates a cross-linked chain instead of spinning on it
-; with [sch_lock] raised. Four things are allowed in a slot and everything
-; else - an LFN fragment a host left behind included - counts as occupied.
-; That last case is the one worth stating: os8088 never matches or reuses LFN
-; entries (SPEC.md 18.4), so it also declines to delete the directory they
-; sit in.
-; -----------------------------------------------------------------------------
 %endif                          ; KD_BUILD - **`dskw_isempty` IS LIVE** and is
                                 ; why the band stops here: `dskw_rmdir` calls
                                 ; it to refuse a populated directory, which is
                                 ; exactly what AH=3Ah is
+%ifdef KD_BUILD
 dskw_isempty:
     push bx
     push cx
@@ -1461,7 +1203,13 @@ dskw_isempty:
 .out:
     pop es
     jmp dskw_find.psi           ; SI, DX, CX, BX, ret (size pass 13)
-
+%else
+; drvvol.inc's compressed-header reader shares this exact saved-register tail.
+dskw_isempty:
+.out:
+    pop es
+    jmp dskw_find.psi
+%endif
 ; -----------------------------------------------------------------------------
 ; dskw_scan1 - the first LIVE entry of a directory: not free, not deleted,
 ;              not '.' or '..' - the one walk dskw_isempty and dskw_rt_scan
@@ -1476,6 +1224,7 @@ dskw_isempty:
 ; name like '.XT     TXT', but a foreign disk may carry one, and this module
 ; trusts nothing it reads (SPEC.md 18.6) - so such an entry is live.
 ; -----------------------------------------------------------------------------
+%ifdef KD_BUILD
 dskw_scan1:
     call dsk_dirw_start_x
 .sector:
@@ -1509,6 +1258,7 @@ dskw_scan1:
 .out:
     ret
 
+%endif
 ; -----------------------------------------------------------------------------
 ; dskw_wbody - the write pipeline (module-internal; dskw_write saves regs)
 ; in:  SI -> name; [dskw_seg]:[dskw_src] = the bytes,
@@ -3230,6 +2980,7 @@ dskw_dbody_n83:                 ; dskw_n83 already filled (dskw_rmtree)
 ; and SPEC.md 18.4 for why replace and delete may not do the same.
 ; -----------------------------------------------------------------------------
 dskw_nbody:
+%ifdef KD_BUILD
     call dskw_mounted           ; returns only when there is a volume
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: rename's
     jne .fatn
@@ -3242,10 +2993,12 @@ dskw_nbody:
     call dskw_name83n           ; it is free
     pop si
     jnc .named
+%endif
 .badarg:                        ; (dskw_rtbody and dskw_wabody answer here too)
     mov ax, FERR_NAME
     stc
     ret
+%ifdef KD_BUILD
 .named:
     push si
     mov si, dskw_n83            ; keep it: dskw_find works out of dskw_n83,
@@ -3280,6 +3033,12 @@ dskw_nbody:
     pop si
     and word [dskw_oldclus], 0  ; the entry store, then dskw_relold's sync -
     jmp dskw_rmbody_n83.entrel  ; with no chain to free (dskw_clok refuses 0)
+
+%else
+.out:
+    stc
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dskw_sync - make the read-path caches a mount snapshot again (SPEC.md 18.4)
@@ -5129,15 +4888,6 @@ dskw_here:
 ; dskw_rt_name: dskw_rmtree's four `mov si / mov di / call` triples
 ; (size pass 10, -13). SI and DI come back as those sites left them
 ; -----------------------------------------------------------------------------
-%ifndef KD_BUILD
-dskw_rawn83:
-    mov si, dskw_raw
-    jmp short dskw_n83go
-dskw_rtn83:
-    mov si, dskw_rt_name
-dskw_n83go:
-    mov di, dskw_n83
-%endif                          ; ...and falls into dskw_copy11
 dskw_copy11:
     push cx                     ; banked HERE and popped by dsk_ncopy's own
     mov cx, 11                  ; tail, so the caller's CX comes back (pass
@@ -7443,13 +7193,57 @@ dwf_dskw_wat_no:    stc         ; every caller tests CF (SPEC.md 18.4.7.4).
 ; thunk: both bodies are already cold, so branching here costs one far entry
 ; and one `.text` thunk instead of two of each (SPEC.md 18.6).
 %ifndef KD_BUILD            ; ...and AL=1 is the tree arm, gated with it
-dwf_dskw_rmany:         or  al, al
-                    mov ax, dskw_rmbody     ; `mov` writes no flag: the
-                    jz  .go                 ; `or`'s ZF picks the body, and
-                    mov ax, dskw_rtbody     ; dskw_rmdir/dskw_rmtree are
-.go:                call dskw_wrap7         ; these two lines each (pass
-                    retf                    ; 17, -4 with rmdir gated)
+dwf_dskw_rmany:         or al, al
+                    mov ax, CLV_RMDIR
+                    jz .go
+                    mov ax, CLV_RMTREE
+.go:                call dskw_dircall
+                    retf
 %endif                      ; KD_BUILD - the file manager is the only caller
                             ; and no kerndos root has one
+
+%ifndef KD_BUILD
+; Directory mutation boundary (SPEC.md 18.5.3). Only a new hold is dropped:
+; Compress calls Rename from inside this same image and must retain its code.
+; mod_need/clo_need read and restore the target mount before any verb executes.
+dskw_dircall:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov dl, al
+    mov al, MOD_DISKOPS
+    call mod_live
+    pushf                       ; CF = 1: this operation acquires the hold
+    call clo_need
+    jc .noload
+    call far [CLFP + CLE_DISP*4]
+    jmp short .returned
+.noload:
+    mov ax, FERR_IO             ; existing file-error surface; no mutation ran
+.returned:
+    pop bp                      ; entry liveness, leaving result CF untouched
+    pushf
+    push ax
+    test bp, 1
+    jz .kept
+    call clo_drop
+.kept:
+    pop ax
+    popf
+    jmp dskw_wrp.pop            ; same seven saved registers in the same order
+
+dskw_dir_mkclus_f:              ; mkclus's BP is its near cold callback
+    call dskw_mkclus
+    retf
+%ifdef OS88_REDIR
+dskw_dir_fsop_f:                ; fsop's BP is its FSV_* verb
+    call dskw_fsop
+    retf
+%endif
+%endif
 
 section .text
