@@ -128,7 +128,7 @@ class KeyboardPage:
         y += row * self.eq["CP_IROWH"] + self.eq["CP_IROWH"] // 2
         self.ui.mo.click(x, y, settle=0)
         self.ui._wait(lambda: self.byte("cp_sel") == record,
-                      "the Keyboard page to be selected")
+                      "the Keyboard page to be selected", os88ui.T_NAV)
         os88marty.ui_done(self.m, "the Keyboard page to finish drawing")
 
     def pick(self, item, expected=None):
@@ -139,12 +139,12 @@ class KeyboardPage:
         self.ui.mo.click(x, y, settle=0)
         if expected is not None:
             self.ui._wait(lambda: self.layout() == expected,
-                          "layout %s to activate" % CHOICES[expected])
+                          "layout %s to activate" % CHOICES[expected], os88ui.T_WINDOW)
         os88marty.ui_done(self.m, "the Keyboard transaction to finish")
 
     def expect_sample(self, expected):
         self.ui._wait(lambda: self.sample() == expected,
-                      "sample bytes %r (got %r)" % (expected, self.sample()))
+                      "sample bytes %r (got %r)" % (expected, self.sample()), os88ui.T_NAV)
 
     def bios_byte(self, value):
         """Fixture for a BIOS that produces CP850 while the module is absent.
@@ -217,7 +217,7 @@ def main(argv=None):
                     "BIOS default dropped the sample's glyph hold")
             ui.press("Escape", need=True)
             ui._wait(lambda: not p.word("mod_r_keyboard"),
-                     "clearing the accented sample to release KEYBOARD.DRV")
+                     "clearing the accented sample to release KEYBOARD.DRV", os88ui.T_NAV)
             p.pick(4, expected=4)
             ui.press("Digit2", need=True)
             p.expect_sample(b"\x82")

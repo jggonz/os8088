@@ -81,7 +81,7 @@ class Note:
 
     def expect(self, expected):
         self.ui._wait(lambda: self.text() == expected,
-                      "Note Pad bytes %r" % expected,
+                      "Note Pad bytes %r" % expected, os88ui.T_NAV,
                       snapshot=lambda: self.text())
         self.state.check(len(expected))
 
@@ -162,7 +162,7 @@ def main(argv=None):
 
             def count(n):
                 ui._wait(lambda: clients().bit_count() == n,
-                         "%d Note Pad glyph clients" % n,
+                         "%d Note Pad glyph clients" % n, os88ui.T_NAV,
                          snapshot=lambda: "clients=%04x" % clients())
 
             def glyph(note):
@@ -201,7 +201,7 @@ def main(argv=None):
 
             ui.menu_pick("Find", "Replace")
             ui._wait(lambda: first.byte("np_fpan") == 2 and
-                     first.byte("np_ffield") == 0, "the Replace panel's Find field")
+                     first.byte("np_ffield") == 0, "the Replace panel's Find field", os88ui.T_NAV)
             ui.press("Digit2", need=True)
             require(first.pkg.read(first.off["np_fpat"], 2) == b"\x82\0",
                     "Find field did not accept CP850 e-acute")
@@ -294,7 +294,7 @@ def main(argv=None):
             evidence("note-reopened")
             second.new()
             ui._wait(lambda: not page.word("mod_r_keyboard"),
-                     "the final New to release KEYBOARD.DRV")
+                     "the final New to release KEYBOARD.DRV", os88ui.T_NAV)
             require(clients() == 0, "final glyph ownership remains")
             ui.close(second.win)
             print("PASS physical layouts, CP850 edit/find/replace/save/reopen and two-instance lifetime")
