@@ -12300,6 +12300,36 @@ for them exactly what §6.6.3 says it does for a tree it arrives in: it took the
 count they had - 21 sites in two more files - and stopped it going up. Both
 lines are mixed, and both say which halves are cases and which are the pair.
 
+### 6.7 Optional CP850 extension (`kernel/keyfont.inc`)
+
+The native keyboard module (§9.16) can supply glyphs 128..255 in CP850
+without adding their bytes to the core kernel. Its `klf_enable` helper
+copies the current ASCII face (32..126) into a module-owned 32..255 table,
+clears DEL's cell and fills the extended rows from the generated,
+repository-authored glyph source. `klf_disable` restores the original
+`font_seg`/`font_base` and ASCII bounds before that module is dropped.
+The original slow-ROM-copy claim stays pinned and valid; on mega,
+activation must follow any boot-time relocation of that original face.
+Activation/restoration reuse the caller's drawing-lock hold, or acquire
+and release that lock when called without one. This protects a worker
+paused between reading the font offset and reading its segment; an atomic
+pointer store alone cannot protect that caller.
+
+The core retains only the live last-code/span fields and the existing
+renderer routing. The live upper bound is 126 with the provider absent
+and 255 while held. Every glyph index is zero-extended before multiplying
+by eight: `cbw` is incorrect for extended codes whose index exceeds 127.
+`OSAPI_FONT_GLYPHS` preserves its ASCII-only range 32..126 and returns
+its original stable face pointer even while native rendering uses the
+optional table. Existing clients that cache that pointer or allocate only
+95 glyph cells therefore need no new hold or larger buffer. The private
+seam cells still use their private guard and temporary table and are not exposed as alternate CP850 glyphs.
+
+The generated source reuses `tools/cp437font.py`'s authored shapes by
+character identity, rather than by code-page byte. New accented capitals
+and symbols are derived/authored in `tools/cp850font.py`. No font download
+or generation service is part of a guest load or a build.
+
 ## 7. Concurrency model (read carefully — this is the crux)
 
 - **gfx lock**: byte `gfx_lock_flag` in vga12.inc. `gfx_lock`:
@@ -20075,13 +20105,13 @@ and French characters. ASCII and control meanings are unchanged. The
 encoding is independent of the selected input layout. Euro/Unicode input
 and international filenames are outside this contract.
 
-The optional provider supplies its extended glyphs to the existing opaque
-text renderers and glyph-copy interface, preserving the original ASCII
-face. It is acquired in task context before rendering extended content;
-paint routines never load it. A glyph client can hold it with BIOS input
+The optional provider supplies extended glyphs to the existing opaque
+text renderers, preserving the original ASCII face. The glyph-copy slot
+retains its original stable ASCII pointer and range 32..126; it never
+exposes the optional table to legacy callers. The provider is acquired in
+task context before rendering extended content; paint routines never load it. A glyph client can hold it with BIOS input
 selected, so accented text survives a layout switch or a file reopen.
-Borrowed pointers cannot outlive the module's hold. The provider restores
-the original font state before its last drop, including ROM, baked and
+The provider restores the original font state before its last drop, including ROM, baked and
 slow-ROM-copy paths. Private seam glyphs remain private.
 
 Shared text controls and Notepad accept and edit the supported bytes,
@@ -162898,6 +162928,30 @@ wants the stipple keeps font_run. WireChat never disables its field.
 It is `OS88LINE_PENS`' shape (§83.5): each site a macro that is the call it
 replaced when nothing is defined, so every other package assembles
 byte-identical.
+
+### 83.7 CP850 text input and explicit glyph holds
+
+`apps/os88kbd.inc` provides `os88kbd_hold`, `os88kbd_release` and a bounded
+buffer probe. They preserve registers and pass failures as carry. Calls
+that can load the provider belong in task/key/file-load context, never in
+a paint routine. Holds are idempotent per instance (§9.16.1).
+
+`OS88LINE_CP850` opts a one-line field into extended native input; its
+absence retains the existing ASCII-only contract for addresses, filenames
+and other restricted fields. An opted-in field accepts 32..126 and
+128..255 after acquiring a glyph hold. DEL (127) stays a control byte.
+The multiline prose field accepts the same set by default; defining
+`OS88TEXT_ASCII` restores its ASCII-only input contract.
+
+Neither control guesses that another control's buffer is gone: a caller
+releasing an instance hold must first finish all its extended-text users.
+Instance teardown supplies the final release. Notepad uses these same
+holds for keyboard, file and clipboard input, preserves extended document
+bytes through line-ending normalization and save/reopen, and releases the
+hold on New when no remaining find/replace buffer needs extended glyphs.
+If extended file content cannot acquire the provider, the bytes remain
+preserved and the app reports that the keyboard module is needed; it
+never substitutes a different codepage or silently deletes those bytes.
 
 ## 84. Software floating point (`apps/os88fp.inc`)
 

@@ -64,6 +64,9 @@
 ; os88line.inc, where Enter is the caller's submit.
 ;
 ; REGISTERS: every routine preserves everything except its documented output.
+; Extended prose input uses CP850 (SPEC.md 83.7); OS88TEXT_ASCII keeps an
+; ASCII-only field. Set/preparation may load the provider, so perform it in
+; task context before painting, never from a paint callback.
 ; =============================================================================
 
 TX_X1     equ 0
@@ -588,7 +591,16 @@ os88text_key:
     cmp al, 0x20
     jb .scancodes
     cmp al, 0x7E
+%ifdef OS88TEXT_ASCII
     ja .theirs
+%else
+    jbe .printable
+    cmp al, 0x7F
+    je .theirs
+    call os88kbd_hold
+    jc .theirs
+.printable:
+%endif
     call os88text_ins
     call os88text_show
     clc
@@ -851,6 +863,9 @@ os88text_set:
     mov [si + TX_LEN], cx
     mov word [si + TX_CAR], 0
     mov word [si + TX_TOP], 0
+%ifndef OS88TEXT_ASCII
+    call os88text_glyphs
+%endif
     pop di
     pop si
     pop dx
@@ -858,3 +873,22 @@ os88text_set:
     pop bx
     pop ax
     ret
+
+%ifndef OS88TEXT_ASCII
+; Prepare text filled by a caller before its first paint. CF=1 if the
+; optional module refused; no byte is replaced with a different codepage.
+os88text_glyphs:
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, [si+TX_BUF]
+    mov cx, [si+TX_LEN]
+    call os88kbd_prepare
+    pop es
+    pop di
+    pop cx
+    ret
+%include "os88kbd.inc"
+%endif

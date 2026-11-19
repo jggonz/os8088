@@ -5772,11 +5772,20 @@ osapi_rand:
 ; int 10h and carried the kernel's F000:FA6E fallback - 40 lines to arrive
 ; at a table the kernel already had.
 osapi_font_glyphs:
-    mov si, [font_base]         ; wherever font_init found it: the ROM's own
-    mov dx, [font_seg]          ; table, its MEM_K_FONT heap copy on a slow-ROM
-                                ; machine (SPEC.md 6.0.1), or a baked face's
-                                ; copy in LOW_SEG
-    mov ax, FONT_FIRST | (FONT_LAST << 8)   ; AL and AH in one instruction
+    pushf
+    cli                         ; snapshot before a module can be disabled
+    mov si, [font_base]
+    mov dx, [font_seg]
+    cmp byte [font_last], FONT_LAST
+    jbe .table
+    push es
+    mov es, [KLFP + KL_CMD + 2] ; readable image+BSS code alias, also on mega
+    mov si, [es:klf_saved_base] ; old clients always borrow the stable ASCII
+    mov dx, [es:klf_saved_seg]  ; face, never the optional provider's storage
+    pop es
+.table:
+    popf
+    mov ax, FONT_FIRST | (FONT_LAST << 8)
     mov cx, 8
     ret
 
