@@ -74590,15 +74590,14 @@ hands its row to unit 2), so `cp_fdltr` reads the letter off the unit's row
 when it has one and otherwise names the one `dsk_flop_add_x`'s order would give
 it — A:, B:, D:, E: on a machine that has not put something there first.
 
-#### 31.14.2 Where the row sits: last, so the hard disk's page is under it
+#### 31.14.2 Static category order
 
-The static list is grouped rather than appended: Scheduler, Date/Time,
-Drivers, Display, then **Sound, Theme and Dock** together — how the machine
-sounds and looks — and **Floppy last**. Driver pages follow the static rows in
-class order (§31.9), and `DRVC_DISK` is the lowest class that publishes one
-(`DRVC_SOUND` publishes none), so when `HDD.DRV` is loaded its page is the row
-directly under Floppy and the two disk pages read as a pair. Without it,
-Floppy is simply the last row.
+The static list groups Scheduler, Date/Time, Drivers, Display, Sound, Theme,
+Dock and Floppy. Keyboard (§31.16) is appended after Floppy so the existing
+category IDs remain stable. Driver pages follow all static rows in class
+order (§31.9); `DRVC_DISK` is the lowest class that publishes one
+(`DRVC_SOUND` publishes none). Thus a loaded `HDD.DRV` page follows Keyboard.
+The keyboard page also exists on kern_small, after its existing categories.
 
 Nothing keys on the order but the record constants, which moved with it:
 `CP_IVID` 4 → 3 and `CP_ISND` 3 → 4 (and 3 ↔ 2 on kern_small), and
