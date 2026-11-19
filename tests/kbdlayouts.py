@@ -14,6 +14,9 @@ from unicorn import x86_const as X
 from keymap import Kernel
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT/'tools'))
+import os88build
+RAW_PEAK_STACK = 0
 KSEG, MSEG, SSEG = 0x60, 0x7000, 0x6000
 RET = 0xfff0
 REG = [X.UC_X86_REG_AX, X.UC_X86_REG_BX, X.UC_X86_REG_CX,
@@ -88,6 +91,7 @@ class Machine:
         return out
 
     def feed(self, scan):
+        global RAW_PEAK_STACK
         u=self.u
         physical=bytes(u.mem_read(KSEG*16+self.k.v('kbd_dnmap'),16))
         values=[0xa500|scan,0x1234,0x2345,0x3456,0x4567,0x5678,0x6789,KSEG,0x4000]
@@ -103,6 +107,7 @@ class Machine:
         require([u.reg_read(r) for r in REG]==values,'scan corrupted registers')
         require(u.reg_read(X.UC_X86_REG_SP)==0xff00,'scan stack imbalance')
         require(self.low>=0xfed0,'raw entry exceeds 48-byte stack budget')
+        RAW_PEAK_STACK=max(RAW_PEAK_STACK,0xff00-self.low)
         require(bytes(u.mem_read(KSEG*16+self.k.v('kbd_dnmap'),16))==physical,
                 'translation changed the physical game key map')
         return bool(u.reg_read(X.UC_X86_REG_EFLAGS)&1)
@@ -270,15 +275,17 @@ def exercise(k):
 
 EQUATES={}
 def main():
-    global EQUATES
+    global EQUATES, RAW_PEAK_STACK
     trees=sys.argv[1:] or ['build','build/smallk','build/emuk','build/megak']
     for tree in trees:
-        k=Kernel(str(ROOT/tree) if not Path(tree).is_absolute() else tree)
+        k=Kernel(str(Path(os88build.at(tree)).resolve()))
+        RAW_PEAK_STACK=0
         require(k.ok, f'missing built kernel: {tree}')
         # Equates are emitted in the real NASM map, not remembered strides.
         import re
         EQUATES={n:int(v,16) for v,n in re.findall(r'^([0-9A-F]+)\s+(\w+)$',Path(k.mapf).read_text(),re.M)}
         exercise(k)
+        print('  raw stack peak including FAR frame:',RAW_PEAK_STACK,'bytes')
         check_controls(k)
         check_publication(k)
         try:check_publication(k,broken=True)

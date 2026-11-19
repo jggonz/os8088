@@ -208,16 +208,49 @@ def main(argv=None):
                 require(len(set(tile)) > 1, "accented glyph is a blank/solid tile")
                 return tile
 
+            def report_irq(trace, label, entry, finish):
+                hits = trace.hits
+                require(hits and not trace.overflowed, "IRQ trace is empty or overflowed")
+                spans, start = [], None
+                for hit in hits:
+                    if hit["addr"] == entry:
+                        require(start is None, "nested keyboard dispatch in trace")
+                        start = hit["cycles"]
+                    elif hit["addr"] == finish:
+                        require(start is not None, "IRQ return without entry")
+                        spans.append(hit["cycles"] - start); start = None
+                require(start is None and spans, "IRQ trace has no complete sample")
+                require(max(spans) < 20000, "keyboard dispatch exceeds 20000 XT cycles")
+                print("XT KL_SCAN call/return cycles:", label, "samples", len(spans),
+                      "min", min(spans), "max", max(spans))
+
             first = launch()
+            if a.profile:
+                require(not getattr(m, "bochs", False), "XT profiling requires MartyPC")
+                scan = ui.sym("kbm_isr.scan")
+                pattern = b"\xff\x1e" + syms["KLFP"].to_bytes(2, "little")
+                code = bytes(m.read(scan, 160))
+                require(code.count(pattern) == 1, "raw dispatch CALL anchor moved")
+                irq_entry = scan + code.index(pattern)
+                irq_finish = irq_entry + len(pattern)
+                require(not page.word("mod_r_keyboard"), "default profile loaded a module")
+                # Fixture for the already-armed observer used by a physical-key
+                # client. kbdlayout's actual-instruction tests prove its arm.
+                m.pause()
+                if not page.byte("kbd_armed"):
+                    m.write(ui.sym("kbd_dnmap"), bytes(16))
+                    m.write(ui.sym("kbd_armed"), b"\x01")
+                m.run()
+                with os88marty.bp_trace(m, irq_entry, irq_finish, log=True) as trace:
+                    ui.press("KeyA").press("Backspace")
+                    first.expect(b""); ui.still()
+                report_irq(trace, "unloaded BIOS", irq_entry, irq_finish)
             accumulated = b""
             for item, keys, expected in KEYS:
                 layout(item)
                 first.front()
                 if a.profile:
-                    seg = page.word("mod_r_keyboard")
-                    entry, finish = ((seg << 4) + syms[name]
-                                     for name in ("klm_scan", "klm_scanret"))
-                    context = os88marty.bp_trace(m, entry, finish, log=True)
+                    context = os88marty.bp_trace(m, irq_entry, irq_finish, log=True)
                 else:
                     context = contextlib.nullcontext()
                 with context as trace:
@@ -225,21 +258,17 @@ def main(argv=None):
                         ui.press(key)      # a dead key intentionally emits no word
                     accumulated += expected
                     first.expect(accumulated)
+                    if a.profile and item == 4:
+                        # Unsupported compose scans the complete bounded table
+                        # and atomically emits two BIOS words, the slow case.
+                        ui.press("BracketLeft").press("KeyB")
+                        first.expect(accumulated + b"^b")
+                        ui.press("Backspace").press("Backspace")
+                        first.expect(accumulated)
+                    if a.profile:
+                        ui.still()
                 if a.profile:
-                    hits = trace.hits
-                    require(hits and not trace.overflowed, "raw trace is empty or overflowed")
-                    spans, start = [], None
-                    for hit in hits:
-                        if hit["addr"] == entry:
-                            require(start is None, "nested raw scan in trace")
-                            start = hit["cycles"]
-                        elif hit["addr"] == finish:
-                            require(start is not None, "raw exit without entry")
-                            spans.append(hit["cycles"] - start); start = None
-                    require(start is None and spans, "raw trace has no complete sample")
-                    require(max(spans) < 20000, "raw body exceeds 20000 XT cycles")
-                    print("XT raw body cycles (entry through return epilogue):", item,
-                          "samples", len(spans), "min", min(spans), "max", max(spans))
+                    report_irq(trace, item, irq_entry, irq_finish)
                 print("physical layout", item, expected.hex())
             first.expect(EXPECTED)
             # A middle insertion and deletion must move CP850 bytes exactly.

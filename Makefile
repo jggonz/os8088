@@ -23012,3 +23012,21 @@ $(BUILD)/diskmut.img: $(BUILD)/diskmut.o88 tests/diskmut/old.txt tests/diskmut/l
 #> [Gate disks] diskmuttest :: directory mutations, target restoration and missing-module refusals
 .PHONY: diskmuttest
 diskmuttest: $(BUILD)/diskmut.img
+
+# SPEC.md9.16/53.2.3: protected-mode REAL glyph borrowing, not shipped software.
+$(BUILD)/kbdreal.bin: tests/kbdlayoutreal/fixture.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/kbdreal.o88: $(BUILD)/kbdreal.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdlayoutreal.img: $(BUILD)/kbdreal.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/kbdreal.o88
+#> [Gate disks] kbdlayoutrealtest :: protected-to-REAL keyboard glyph borrowing fixture
+.PHONY: kbdlayoutrealtest
+kbdlayoutrealtest: $(BUILD)/kbdlayoutreal.img
+
+# SPEC.md9.16: existing legacy frontends retain BIOS character input.
+$(BUILD)/kbdlayoutlegacy.img: $(BUILD)/win16.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/win16.o88
+#> [Gate disks] kbdlayoutlegacytest :: DOS and WIN16 keyboard ownership fixture
+.PHONY: kbdlayoutlegacytest
+kbdlayoutlegacytest: $(BUILD)/kbdlayoutlegacy.img
