@@ -117,18 +117,31 @@ is not a DOS volume until kern_dos reads it too.
 Each wave closes with `tools/kernsize.py` on kern_mega and a hash of the other
 three kernels against the merge base. Soak rows run once, after the last wave.
 
-- [ ] **W1. The FAT layer is 32-bit on kern_mega.** `OS88_FAT32`, the `CLU_*`
+- [x] **W1. The FAT layer is 32-bit on kern_mega.** `OS88_FAT32`, the `CLU_*`
   macros and `[dsk_ch]` (19.12.3); the FAT32 BPB rules and layout (19.12.2);
   the 4-byte window (19.12.4); the root chain called 0 (19.12.5); FstClusHI on
   read and write and the listing's high word (19.12.6); allocation, free
   chains, root growth, FSInfo (19.12.7); the Disk window, the loader and the
-  instance folders widened. HDD.DRV accepts 0Bh/0Ch under `CPU_F_FAT32`
-  (19.12.10). Verified by: the three other kernels byte-identical; a host
+  instance folders widened. HDD.DRV offers 0Bh/0Ch to the kernel's mount, which
+  is the fence (19.12.10). Verified by: the three other kernels byte-identical; a host
   mtools FAT32 image listed, entered, launched from, written to under QEMU.
-- [ ] **W2. The API.** `OSAPI_FILE_PLACE`, the 0FFFFh rule, FIND's
+- [x] **W2. The API.** `OSAPI_FILE_PLACE`, the 0FFFFh rule, FIND's
   `OSAPI_FIND_FAR`, `OSAPI_FCP_FAR`, VOL_STAT scaling, READ_SEQ's cursor and
   the RUN/MAP refusal (19.12.8); the C SDK; the copy engine, the file dialog,
   assoc and Sticky Apps widened; the refusals of 19.12.9.
+  *Done 2026-11-19, W1 and W2 together.* Evidence: kern_small, kd and kdm
+  byte-identical to the merge base with the build number pinned; kern_big
+  differs by W2's door row alone (`RDREF` + `api_refusec`, KERN_SIZE +0
+  steps); `t_api_abi --all` 3,429 checks on all four kernels; `make` green;
+  `tests/fat32.py` passes under QEMU - mount, list, enter FAR (cluster
+  81,923), launch, delete, New Folder, a Ctrl+C/Ctrl+V copy into the new
+  folder - and the host reads it back through its own reader, `mtype`,
+  `mdir` and `fsck.fat -n` (clean); `--big` sees kern_big refuse. Found by
+  the row and fixed: the free count and the allocator tested only half an
+  entry's high word, the FAT window's hit path returned with CF set, the
+  Disk window's sync handed `dsk_chdir` the high word as the low, three
+  listing sites dropped the +14 high word, and the status line truncated a
+  free count past 65,535 clusters (now KB on FAT32, printed K/M/G).
 - [ ] **W3. The gate.** `tests/fat32.py` (19.12.11), the host FAT32 reader in
   `tests/instdeep.py`, the suite rows, the final pass.
 

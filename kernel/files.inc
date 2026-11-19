@@ -381,6 +381,12 @@ FS_USEDH    equ FS_FREEH+2      ; FS_USED, which on this build are BYTES in
                                 ; a K or an M need what a KB word threw away.
                                 ; 0xFFFF here is the not-known sentinel - a
                                 ; FAT volume never reaches 4GB
+%ifdef OS88_FAT32
+FS_CWDH     equ FS_USEDH+2      ; word: FS_CWD's HIGH word, a FAT32 folder
+                                ; (SPEC.md 19.12.3) - kern_mega only, so
+                                ; kern_big's block is the size it was
+FS_SIZE     equ FS_CWDH+2
+%else
 FS_SIZE     equ FS_USEDH+2      ; = the Disk kind's KD_SSIZE. The MULTI-
                                 ; SELECTION (SPEC.md 22.27) is not in it any
                                 ; more: it was 8 bytes here, one bit per entry
@@ -392,6 +398,7 @@ FS_SIZE     equ FS_USEDH+2      ; = the Disk kind's KD_SSIZE. The MULTI-
                                 ; anchor is ONE word for every window,
                                 ; fm_anch: only the front window takes a
                                 ; gesture
+%endif
 %else
 FS_SIZE     equ 24              ; = the Disk kind's KD_SSIZE
 %endif
@@ -517,6 +524,9 @@ files_init_x:
     mov [fm_vseg], ax           ; no acting window yet: two of the three
     mov [fm_vinst], ax          ; published words are 0 - the global snapshot
     mov [fm_seed_cwd], ax       ; rather than a cache - and the third is slot
+%ifdef OS88_FAT32
+    mov [fm_seed_cwh], ax
+%endif
     mov [fm_seed_nam], ax       ; 0, below
     inc ax
     mov [fm_seed_drv], al       ; the seed the first launch would consume
@@ -665,6 +675,10 @@ fm_kinit_x:
 
     mov al, [fm_seed_drv]
     mov dx, [fm_seed_cwd]
+%ifdef OS88_FAT32
+    push word [fm_seed_cwh]     ; DX:[dsk_ch] (SPEC.md 19.12.3)
+    pop word [dsk_ch]
+%endif
     call fmv_load               ; DI = block: mount, then fill its own cache
     mov si, [fm_seed_nam]       ; the folder's name when the caller knew it
 %ifdef KERN_BIG
@@ -1061,7 +1075,7 @@ fmv_inext:
 ; -----------------------------------------------------------------------------
 fmv_here:
     mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    FS_CWD_LD dx, di            ; DX:[dsk_ch] on kern_mega (SPEC.md 19.12.3)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1079,6 +1093,12 @@ fmv_ishere:
     mov dl, [di+FS_DRV]         ; DL and not AL, at the same size: all three
     cmp dl, [disk_drive]        ; callers bank DX in their KENT frame
     jne .r
+%ifdef OS88_FAT32
+    mov ax, [di+FS_CWDH]        ; the high word in [dsk_ch], where every
+    mov [dsk_ch], ax            ; caller's next dsk_chdir* wants it, and AX
+    cmp ax, [dsk_cwd+2]         ; left the LOW word: AX holding the high one
+    jne .r                      ; sent New Folder into cluster 10001h
+%endif
     mov ax, [di+FS_CWD]
     cmp ax, [dsk_cwd]
 .r:
@@ -1550,7 +1570,7 @@ fmv_icorefs:
                                 ; so hand it back and let a re-list settle it
 
     mov dl, [di+FS_DRV]         ; stand where the window stands, QUIETLY: no
-    mov ax, [di+FS_CWD]         ; scan, no sort, no harvest - and free when we
+    FS_CWD_LD ax, di            ; scan, no sort, no harvest - and free when we
     call dsk_chdir_q_x          ; are already there (SPEC.md 18.9.1)
     jc .no
 %ifdef OS88_ASSOC
@@ -1666,6 +1686,7 @@ fmv_load:
     cmp dl, [di+FS_DRV]         ; THE FOLDER IT ALREADY SHOWS? A delete, a
     jne .nav                    ; paste, a Refresh or a sync re-lists in
     cmp ax, [di+FS_CWD]         ; place, and the claim it has is the size
+    FS_CWD_CMPH di
 .nav:                           ; that folder needed a moment ago - so only
     pushf                       ; NAVIGATION cuts it back (ZF = 1: in place)
     mov word [dsk_hbud], DSK_HARV_MAX   ; the icon peeks THIS LISTING may
@@ -1700,10 +1721,10 @@ fmv_load:
 
     mov al, [disk_drive]        ; ...and now record what really happened
     mov [di+FS_DRV], al
-    mov ax, [dsk_cwd]
-    mov [di+FS_CWD], ax
+    CLU_LD dsk_cwd
+    FS_CWD_ST ax, di
 %ifdef KERN_BIG
-    or ax, ax                   ; AT A ROOT - asked for, or fallen back to by
+    CLU_TAX or                  ; AT A ROOT - asked for, or fallen back to by
     jnz .haspath                ; a failed mount (SPEC.md 19.2) - so whatever
     lea bx, [di+FS_PATH]        ; this window remembers walking down through,
                                 ; it is not in it. THE ONLY CLEAR SITE: every
@@ -1807,7 +1828,7 @@ fmv_load:
     jcxz .done                  ; ...a cut, and nothing more to do
     push ax                     ; ...a grow: list again, where the first
     mov dl, [di+FS_DRV]         ; mount actually landed, with AX banked as the
-    mov ax, [di+FS_CWD]         ; "flags": its KB is <= 32, so bit 6 - ZF's -
+    FS_CWD_LD ax, di            ; "flags": its KB is <= 32, so bit 6 - ZF's -
     jmp .again                  ; is clear and reads "navigated", which lets
                                 ; that pass cut the doubling back
 .done:
@@ -1845,6 +1866,25 @@ fm_measure:
 
     call dsk_free_clus_x ; --- free: clusters -> KB, once per mount ---
     jc .used
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: AX:[dsk_ch] clusters, and the figure
+    jne .m16                    ; is KB, not bytes - a free 4GB is past a
+    mov bl, [dsk_spc]           ; dword of them (SPEC.md 19.12.7). Sectors =
+    xor bh, bh                  ; clusters x spc, under 2^32 by the 2TB
+    mul bx                      ; ceiling (19.12.1): DX:AX = low word x spc
+    xchg ax, cx                 ; CX = its low half
+    mov ax, [dsk_ch]
+    push dx
+    mul bx                      ; AX = the high word x spc (DX is 0 under
+    pop dx                      ; the ceiling)
+    add dx, ax                  ; DX:CX = free sectors
+    shr dx, 1                   ; ...and a sector is half a KB
+    rcr cx, 1
+    mov [di+FS_FREEH], dx       ; under 2^31: never the 0FFFFh sentinel
+    mov [di+FS_FREE], cx
+    jmp short .used
+.m16:
+%endif
 %ifdef OS88_BIGVOL
     mov dh, [dsk_spc]           ; DX = spc x 256, which is at most 8000h at
     xor dl, dl                  ; the 18.2-legal spc = 128 where spc x 512
@@ -2743,6 +2783,10 @@ files_open_x:
     call kentc_di
     mov al, [disk_drive]
     mov dx, [dsk_cwd]
+%ifdef OS88_FAT32
+    push word [dsk_cwd+2]       ; DX:[dsk_ch]
+    pop word [dsk_ch]
+%endif
     jmp short fm_open_body      ; files_open_drive's body and its epilogue
 
 ; -----------------------------------------------------------------------------
@@ -2760,6 +2804,7 @@ files_open_x:
 files_open_drive_x:
     call kentc_di
     xor dx, dx
+    CLU_HI0                     ; a drive's ROOT
 fm_open_body:
     xor si, si                  ; no name known: the title derives (SPEC 22)
     call fm_choose
@@ -2787,6 +2832,7 @@ fm_choose:
     cmp al, [di+FS_DRV]
     jne .next
     cmp dx, [di+FS_CWD]
+    FS_CWD_CMPH di
     mov di, si                  ; the record, not the block: I_WIN and
     je .seen                    ; I_FLAGS below (CF = 0: EQUAL; `mov` keeps it)
 .next:
@@ -3037,6 +3083,10 @@ fm_seed:
     call kentc_di
     mov [fm_seed_drv], al
     mov [fm_seed_cwd], dx
+%ifdef OS88_FAT32
+    push word [dsk_ch]
+    pop word [fm_seed_cwh]
+%endif
     mov [fm_seed_nam], si       ; 0 for no name - and a name's pointer is
     or si, si                   ; replaced below (kernel size pass 17, -2)
     jz .out
@@ -4536,6 +4586,7 @@ fm_open_sel:
     mov di, [fm_vp]
     call fmv_gdtype             ; SI -> the staged 32-byte entry, and its
     mov bx, [si+18]             ; type against 2 (a `mov` writes no flag).
+    LST_HI si                   ; ...and its high word (19.12.6)
                                 ; Its first cluster, banked before the mount
                                 ; (kernel size pass 18: the compare is
                                 ; fmv_gdtype's own, -4).
@@ -4720,7 +4771,7 @@ fm_pthseed:
     push bx
     lea bx, [di+FS_PATH]
     call pth_clear
-    cmp word [di+FS_CWD], 0
+    FS_CWD_TST di
     je .out                     ; a root has no path, whatever it was asked for
     or si, si
     jz .out
@@ -4934,7 +4985,7 @@ fm_settitle:
 .cap:                           ; (SPEC.md 38.8), only the dock's 16 bytes
     add di, I_NAME              ; DI -> the 16 bytes the caption points at
     mov bx, [fm_vp]             ; (BX is banked)
-    cmp word [bx+FS_CWD], 0
+    FS_CWD_TST bx
     jne .named
     mov si, fm_s_root
     jmp short .copy
@@ -5414,7 +5465,7 @@ fm_fmt_home:
     je .next                    ; the acting window: its caller owns it
     cmp byte [di+FS_DRV], dl
     jne .next
-    cmp word [di+FS_CWD], 0
+    FS_CWD_TST di
     je .next                    ; already at the root, so the caption is right
                                 ; and only the listing is stale - which is the
                                 ; ordinary shape a sibling is left in by any
@@ -5422,6 +5473,9 @@ fm_fmt_home:
                                 ; new one for free
     xor ax, ax
     mov [di+FS_CWD], ax
+%ifdef OS88_FAT32
+    mov [di+FS_CWDH], ax
+%endif
     mov [di+FS_SCRL], ax        ; indices into a listing that no longer
     dec ax                      ; describes anything
     mov [di+FS_SEL], ax
@@ -6100,7 +6154,7 @@ fm_dgarm:                       ; (DI is fm_drag's to lose: fm_dgwait has)
 
 fm_c_paste:                     ; File > Paste - into THIS window's folder
     call fm_vpdrv
-    mov bx, [di+FS_CWD]
+    FS_CWD_LD bx, di
     jmp short fm_c_pasteto
 
 fm_c_pastein:                   ; context menu > Paste Into - the folder the
@@ -6113,6 +6167,7 @@ fm_c_pastein:                   ; context menu > Paste Into - the folder the
     call fmv_gdtype             ; (It was fm_selfold, kernel size pass 12: -4.)
     jb fm_c_pasteno             ; 0xFFFF, no selection, fails fm_sel_ok; CF = 1
     mov bx, [si+18]             ; from fmv_gdtype is not a folder: a no-op.
+    LST_HI si                   ; ...and its high word (19.12.6)
     mov al, [di+FS_DRV]         ; It banked CX, SI and DI, which no caller
                                 ; reads: fm_docmd reloads SI from
                                 ; [fm_cmdwin] and its neighbours (fm_c_paste)
@@ -6136,6 +6191,7 @@ fm_c_opennew:                   ; Nav > Open in New Window - the selection
     call fmv_gdtype             ; SI -> the staged entry
     jne fm_nw_none              ; only a folder has somewhere to open INTO
     mov dx, [si+18]             ; its first cluster
+    LST_HI si                   ; ...and its high word (19.12.6)
     call fm_stage_name          ; AX is still the index
     mov si, fm_name
     mov al, [di+FS_DRV]
@@ -6173,7 +6229,7 @@ fm_c_nop equ fm_nw_none         ; the File and Disk menus' separators
 
 fm_c_up:                        ; Nav > Up One Folder
     mov di, [fm_vp]
-    cmp word [di+FS_CWD], 0
+    FS_CWD_TST di
     je .none                    ; already at the root: nothing is above it,
                                 ; and saying so is not worth an error line
     call fmv_ishere             ; ONLY A WINDOW THE GLOBALS DO NOT DESCRIBE
@@ -6192,6 +6248,7 @@ fm_c_up:                        ; Nav > Up One Folder
     cmp word [si+16], 3         ; filled it for whichever volume kind this is:
     jne .none                   ; from '..' on a FAT disk, from [dsk_fsup] on
     mov ax, [si+18]             ; a REDIRECTED one, which has no sectors at
+    LST_HI si                   ; ...and its high word (19.12.6)
                                 ; all. This used to call dsk_dotdot, which
                                 ; reads a directory SECTOR - so Backspace and
                                 ; Nav > Up One Folder were silently DEAD on
@@ -7156,7 +7213,7 @@ fm_dgdrop:
 
     call fm_vpdrv
     mov [fm_dgdrv], al          ; BANKED: fm_hit clobbers AX, and the target
-    mov bx, [di+FS_CWD]         ; drive has to outlive it. Leaving it in AL
+    FS_CWD_LD bx, di            ; drive has to outlive it. Leaving it in AL
                                 ; is what made every drop paste to a garbage
                                 ; drive, fail FERR_NODISK and look inert
     call fm_hit                 ; AX = directory index, CF=1 = not a row
@@ -7164,6 +7221,7 @@ fm_dgdrop:
     call fmv_gdtype             ; SI -> the staged entry (SPEC.md 19); BX is
     jb .have                    ; fmv_get_dir's to keep (kernel size pass 16)
     mov bx, [si+18]             ; a folder (or '..'): into THAT one
+    LST_HI si                   ; ...whole: the listing's high word (19.12.6)
 %ifdef FM_MSEL
     jne .have                   ; ('..' is never in a list: fm_armset's walk)
     cmp word [fcp_lcnt], 0      ; a LIST dropped on one of its OWN folders,
@@ -7197,6 +7255,13 @@ fm_dgdrop:
     jne .go                     ; drag went nowhere and there is nothing
 %endif
     cmp bx, [fcp_cbcwd]           ; to do - not a copy of it into itself
+%ifdef OS88_FAT32
+    jne .go
+    push ax
+    mov ax, [dsk_ch]
+    cmp ax, [fcp_cbcwh]
+    pop ax
+%endif
     je .out
 %ifdef FM_MSEL
     jmp short .go
@@ -9205,7 +9270,11 @@ fm_draw_status:
     call fm_scat
     mov ax, [bx+FS_FREE]
     mov dx, [bx+FS_FREEH]
+%ifdef OS88_FAT32
+    call fm_szfig_free          ; bytes, or a FAT32 volume's KB (19.12.7)
+%else
     call fm_szfig_k
+%endif
 %else
     mov ax, [bx+FS_USED]
     call fm_kbfig
@@ -9511,6 +9580,32 @@ fm_szfig_x:
     jnz fm_szfig_k
     cmp ax, 10240
     jb fm_ultoa_x               ; bytes: the dword printer, tail-called
+%ifdef OS88_FAT32
+; fm_szfig_free - the status line's free figure, DX:AX, for the window at BX:
+; fm_measure stored it in KB on a FAT32 volume and in bytes on any other
+fm_szfig_free:
+    push cx
+    mov cl, [bx+FS_DRV]
+    mov ch, 1
+    shl ch, cl
+    test [dsk_f32mask], ch
+    pop cx
+    jz fm_szfig_k
+; fm_szfig_kb - fm_szfig_k for a figure already in KB (a FAT32 volume's free
+; space, SPEC.md 19.12.7): the same sentinel, the same two decimals, K, M or G
+fm_szfig_kb:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cx, '?'
+    inc dx
+    jz fm_szfig_k.unit1
+    dec dx
+    mov cl, 'K'
+    xor bx, bx                  ; nothing fell off yet: .00
+    jmp short fm_szfig_k.kb
+%endif
 fm_szfig_k:
     push ax
     push bx
@@ -9536,10 +9631,17 @@ fm_szfig_k:
     rcr ax, 1
     inc cx
     inc cx
+.kb:
     or dx, dx                   ; still 10,240 of this unit or more: the
     jnz .step                   ; next one. Bytes -> K always stops by M,
     cmp ax, 10240               ; whose most is 4,095 - so this loop runs
     jae .step                   ; once or twice
+%ifdef OS88_FAT32
+    cmp cl, 'O'                 ; fm_szfig_kb's third unit: K, M, then G
+    jne .unit                   ; (its most is 2,048, the 2TB ceiling)
+    mov cl, 'G'
+.unit:
+%endif
     call fm_ultoa_x             ; the whole units (DX = 0 here)
     mov byte [di], '.'
     inc di
@@ -9628,10 +9730,17 @@ fmv_uy1:    resw 1              ; every Disk window's frame is folded into,
 fmv_ux2:    resw 1              ; spent as ONE wm_paint_dmg so that no window
 fmv_uy2:    resw 1              ; is painted twice; -1 = nothing folded in
 %ifdef FM_MSEL
+%ifdef OS88_FAT32
+fm_pool:    resb 5*63           ; kern_mega: FS_CWDH, SPEC.md 19.12.3
+ %if FM_NSLOT*FS_SIZE != 5*63
+  %error "files: fm_pool's literal has drifted from FM_NSLOT x FS_SIZE"
+ %endif
+%else
 fm_pool:    resb 5*61           ; FM_NSLOT x FS_SIZE: SPEC.md 22.27's 8 a
  %if FM_NSLOT*FS_SIZE != 5*61   ; block went into the listing claim (22.6.4)
   %error "files: fm_pool's literal has drifted from FM_NSLOT x FS_SIZE"
  %endif
+%endif
 fm_anch:    resw 1              ; the Shift anchor (SPEC.md 22.27), an index
                                 ; into the front window's listing, 0FFFFh none
                                 ; - a WORD since SPEC.md 22.6.4
@@ -9655,6 +9764,9 @@ fm_vinst:   resw 1              ; -> its instance record, 0 = unowned
 ; --- app_launch has no argument channel: the target rides here (SPEC 22.1) --
 fm_seed_drv: resb 1             ; drive for the next fm_kinit
 fm_seed_cwd: resw 1             ; its directory's first cluster
+%ifdef OS88_FAT32
+fm_seed_cwh: resw 1             ; ...its high word (19.12.3)
+%endif
 fm_seed_nam: resw 1             ; -> fm_snam, or 0 = derive the title
 fm_snam:     resb 17            ; the seeded folder name, COPIED (fm_name is
                                 ; reused by the repaint before the drain)

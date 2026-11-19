@@ -328,5 +328,4 @@ hd_svc_res:
     mov al, [hd_req+HRQ_RES]
     ret
 
-hd_pslot:    db 0               ; the partition hd_mount_one is to mount
 hd_mvol:     db 0               ; ...and the kernel volume index it became

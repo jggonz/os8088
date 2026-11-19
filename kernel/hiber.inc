@@ -1578,8 +1578,17 @@ hbm_root:
     push dx
     mov dl, [hb_vol]
     xor ax, ax                  ; the root: both files live in it (87.3)
+    CLU_HI0
     mov bp, dsk_chdir_x         ; ...through the one far entry (SPEC.md 2.6)
     call hbm_cb         
+%ifdef OS88_FAT32
+    jc .r
+    cmp byte [dsk_fattype], 2   ; NOT ON FAT32: the image's records are
+    clc                         ; cluster words (SPEC.md 19.12.9)
+    jne .r
+    stc
+.r:
+%endif
     pop dx                      ; ...and a pop does not touch the chdir's CF
     ret
 
@@ -3073,6 +3082,15 @@ hbm_dosrun:
     mov ax, DVK_FREE            ; AL = DVK_FREE, AH = unit 0, base 0
     cmp si, DVOL_MAX            ; this kernel may have FEWER rows than the
     jae .vput                   ; block has room for - kern_small's four -
+%ifdef OS88_FAT32
+    push cx                     ; A FAT32 VOLUME IS NO DOS DRIVE (O3, SPEC.md
+    mov cx, si                  ; 19.12.9): kern_dos's FAT code would misread
+    mov ch, 1                   ; it, so its row goes over as FREE
+    shl ch, cl
+    test [dsk_f32mask], ch
+    pop cx
+    jnz .vput
+%endif
                                 ; and the tail is FREE rather than absent
     cmp byte [bx+DV_KIND], DVK_BIOS
     je .vbios
@@ -3138,6 +3156,8 @@ hbm_dosrun:
     ; --- 2. stand where DOS.O88 is, and find it -----------------------------
     call hbm_vbn                        ; hbm_enter's first half: bank where
     mov ax, [cs:hbm_dosrec + KDH_DIR]   ; the user stands, then stand where
+    CLU_HI0                             ; (a WORD: DOS.O88 asked FILE_HERE,
+                                        ; whose far answer is 0FFFFh, 19.12.8)
     mov dl, [cs:hbm_dosrec + KDH_VOL]   ; DOS.O88 is - a FOLDER cluster, not
     mov bp, dsk_chdir_x                 ; hbm_root's zero, because a package
     call hbm_cb                         ; lives in APPS/ and not in the root

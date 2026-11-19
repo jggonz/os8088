@@ -1553,6 +1553,18 @@ cmz_sizes:
     mov si, fm_onam
     call COLD_SEG:dwf_dskw_stat ; AL = attribute, BX = cluster, DX:CX = size
     jc .out
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32 HAS NO HINT (SPEC.md 19.12.6): @12/@13
+    jne .hinted                 ; are its own bytes and @20 its cluster's high
+    push ax                     ; word, so the file's header is read, and
+    push cx                     ; stages the mark, CZH and [dskw_czl] that
+    push dx                     ; the hint's three cells would have held
+    call COLD_SEG:dwf_dskw_czknow
+    pop dx
+    pop cx
+    pop ax
+.hinted:
+%endif
     CSDO_ON
     mov [CSEG cmz_p], cx        ; ANY size: both sides of the codec cross 64KB
     mov [CSEG cmz_p+2], dx      ; now (SPEC.md 20.14.5.1, 20.15.4)
@@ -1567,7 +1579,13 @@ cmz_sizes:
 .out:
     ret
 .cz:
+%ifdef OS88_FAT32
+    mov ax, [dskw_czl]          ; (FAT32: the header's U, staged above)
+    cmp byte [dsk_fattype], 2
+    je .czh
+%endif
     mov ax, [dskw_raw+DSK_R_CZL]    ; U, 24 bits out of the hint
+.czh:
     mov dl, [dskw_raw+DSK_R_CZH]
     xor dh, dh                  ; ...and CF = 0. NOT `mov dh, 0`: the `jbe`
     ret                         ; above is taken with CF SET for an LZ4 mark,

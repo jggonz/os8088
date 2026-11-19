@@ -385,6 +385,10 @@ FDBODY fdlg_open_x
 %endif
     shl bx, 1
     mov dx, [inst_fcwd+bx]
+%ifdef OS88_FAT32
+    push word [inst_fcwh+bx]    ; DX:[dsk_ch] (SPEC.md 19.12.3)
+    pop word [dsk_ch]
+%endif
     xor si, si
 %ifndef NOFDMEDIA
     jmp short .seeded
@@ -392,6 +396,7 @@ FDBODY fdlg_open_x
     push ax
     mov dl, al
     xor ax, ax
+    CLU_HI0
     FDX dsk_chdir_x             ; the root - and only for the volume and
     mov si, fdlg_s_media        ; folder it publishes: a mount with no
     jc .root                    ; listing store lists nothing, so MEDIA
@@ -409,6 +414,7 @@ FDBODY fdlg_open_x
     jnz .got                    ; a FILE called MEDIA is not the folder
 .root:
     xor bx, bx                  ; the root, and no name for the title
+    CLU_HI0
     xor si, si
 .got:
     mov dx, bx
@@ -418,6 +424,10 @@ FDBODY fdlg_open_x
 
     mov FDV(fdlg_sdrv), al         ; where it OPENED, so a cancel that never
     mov FDV(fdlg_scwd), dx         ; moved records nothing (SPEC.md 38.10)
+%ifdef OS88_FAT32
+    push word [dsk_ch]
+    pop word [fdlg_scwd+2]
+%endif
     FDX fm_seed                 ; parked for fm_kinit, as a drive icon does
 
     or word [fdlg_win], -1      ; fm_kinit adopts the window being built:
@@ -497,6 +507,10 @@ fdlg_home_dir:
     shl bx, 1
     mov ax, FDV(fdlg_scwd)
     mov [inst_fcwd+bx], ax
+%ifdef OS88_FAT32
+    push word [fdlg_scwd+2]
+    pop word [inst_fcwh+bx]
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -579,8 +593,19 @@ FDBODY fdlg_reap_x
     cmp al, FDV(fdlg_sdrv)
     jne .moved
     cmp dx, FDV(fdlg_scwd)
+%ifdef OS88_FAT32
+    jne .moved
+    push ax
+    mov ax, [si+FS_CWDH]
+    cmp ax, [fdlg_scwd+2]
+    pop ax
+%endif
     je .kept
 .moved:
+%ifdef OS88_FAT32
+    push word [si+FS_CWDH]
+    pop word [fdlg_scwd+2]
+%endif
     mov FDV(fdlg_sdrv), al
     mov FDV(fdlg_scwd), dx
     push bx                     ; (fdlg_home_dir spends BX and SI, and both
@@ -613,9 +638,20 @@ FDBODY fdlg_reap_x
 .commit:
     mov dl, FDV(fdlg_sdrv)         ; the callback's contract: the file's volume
     mov ax, FDV(fdlg_scwd)         ; is mounted and its folder is current - put
+%ifdef OS88_FAT32
+    push word [fdlg_scwd+2]     ; AX:[dsk_ch]
+    pop word [dsk_ch]
+%endif
     cmp dl, [disk_drive]        ; them back if anything moved them, which
     jne .cd                     ; costs nothing when nothing did
     cmp ax, [dsk_cwd]
+%ifdef OS88_FAT32
+    jne .cd
+    push ax
+    mov ax, [dsk_ch]
+    cmp ax, [dsk_cwd+2]
+    pop ax
+%endif
     je .here
 .cd:
     FDX dsk_chdir_x
@@ -1249,7 +1285,7 @@ fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR: the staleness
 %endif                          ; triple of SPEC.md 38.6 (kern_big's is in
                                 ; memory.inc's mem_rr_lone - pass 15)
 fdlg_sdrv:  resb 1              ; where the chooser OPENED - and, from
-fdlg_scwd:  resw 1              ; fdlg_reap's close on, where it STOOD
+fdlg_scwd:  CLURES 1            ; fdlg_reap's close on, where it STOOD
 %ifdef KERN_SMALL
 fdlg_down:  resb 1              ; the column button drawn pressed, 0 = none
 %endif

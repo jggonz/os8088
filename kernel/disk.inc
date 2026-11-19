@@ -115,63 +115,7 @@ DSK_B_HEADS  equ 26              ; BPB_NumHeads (word)
 %else
   %define LBARES resw           ; ...or the 16 it always was
 %endif
-; --- FAT32 (SPEC.md 19.12) --------------------------------------------------
-; kern_mega alone reads and writes it. A cluster is AX plus [dsk_ch], its HIGH
-; word (19.12.3); what holds one for longer is CLURES, a dword here and a word
-; on every other build, and the CLU_* macros move the pair without spending a
-; register - on the other builds they are the word instruction they replace,
-; so kern_big, kern_small and kern_dos assemble to the bytes they were.
-%ifdef KERN_MEGA
-  %define OS88_FAT32
-  %define CLURES resd
-%else
-  %define CLURES resw
-%endif
-%macro CLU_LD 1                 ; AX:[dsk_ch] = the cluster held at %1
-    mov ax, [%1]
-  %ifdef OS88_FAT32
-    push word [%1+2]
-    pop word [dsk_ch]
-  %endif
-%endmacro
-%macro CLU_ST 1                 ; ...and stored there
-    mov [%1], ax
-  %ifdef OS88_FAT32
-    push word [dsk_ch]
-    pop word [%1+2]
-  %endif
-%endmacro
-%macro CLU_HI0 0                ; AX holds a cluster that is a WORD by
-  %ifdef OS88_FAT32             ; construction (0, the root, a FAT12/16
-    mov word [dsk_ch], 0        ; volume's): its high word is 0
-  %endif
-%endmacro
-%macro CLU_ZST 1                ; a zero cluster at %1 (AX untouched)
-    mov word [%1], 0
-  %ifdef OS88_FAT32
-    mov word [%1+2], 0
-  %endif
-%endmacro
-%macro CLU_TST 1                ; ZF = 1 when the cluster at %1 is 0 (the
-    cmp word [%1], 0            ; root): flags only
-  %ifdef OS88_FAT32
-    jne %%x
-    cmp word [%1+2], 0
-%%x:
-  %endif
-%endmacro
-%macro CLU_TAX 0-1              ; ZF = 1 when AX:[dsk_ch] is 0: flags only
-  %if %0                        ; (CLU_TAX or: the `or` spelling a site had)
-    or ax, ax
-  %else
-    test ax, ax
-  %endif
-  %ifdef OS88_FAT32
-    jnz %%x
-    cmp word [dsk_ch], 0
-%%x:
-  %endif
-%endmacro
+%include "clu.inc"              ; OS88_FAT32 and the CLU_* macros
 %macro DSK_RD1D 1               ; one sector into dsk_secbuf, its LBA the
   %ifdef OS88_BIGVOL            ; (d)word at %1
     mov bx, %1
@@ -212,8 +156,9 @@ DSK_B_TOTHI  equ 28              ; NOT the sector's byte 28 (HiddSec's low
 DSK_BPB_SZ   equ 40              ; ...and on kern_mega through FAT32's FSInfo
                                  ; word @48 (SPEC.md 19.12.2): TotSec32 @32,
                                  ; FATSz32 @36, ExtFlags @40, FSVer @42,
-                                 ; RootClus @44, so a fixed FAT32 volume is
-                                 ; re-mounted from the bank like any other
+                                 ; RootClus @44 - STAGED. The bank keeps
+                                 ; DSK_BPB_BANK, FAT12/16's 18: a FAT32 head
+                                 ; is never banked (19.12.2)
 DSK_B_TOT32  equ 32              ; BPB_TotSec32 (dword) - the RAW field; the
                                  ; fold above writes TOT16/TOTHI, never this
 DSK_B_FSZ32  equ 36              ; BPB_FATSz32 (dword)
@@ -226,6 +171,10 @@ DSK_BPB_SZ   equ 18              ; bytes staged and banked per volume: the BPB
                                  ; from DSK_B_BPS through DSK_B_HEADS+1 (even,
                                  ; for rep movsw). DSK_B_JMP is asked of the
                                  ; sector itself, beside rule 1 (SPEC.md 18.9.2)
+%endif
+DSK_BPB_BANK equ 18              ; bytes a BANK row keeps (dsk_bpbv): FAT12/16's
+%if DSK_BPB_BANK < DSK_B_HEADS + 2 - DSK_B_BPS || DSK_BPB_BANK > DSK_BPB_SZ
+  %error "DSK_BPB_BANK no longer covers DSK_B_BPS..DSK_B_HEADS"
 %endif
 %if DSK_BPB_SZ < DSK_B_HEADS + 2 - DSK_B_BPS
   %error "DSK_BPB_SZ no longer covers DSK_B_BPS..DSK_B_HEADS"
@@ -1150,12 +1099,12 @@ dsk_bpb_bank:                   ; (no frame: disk_mount_x carries nothing
                                 ; 16: assoc_tryfold's SKIPDL1 is the odd byte
                                 ; that keeps dsk_xfer and the FAT walk where
                                 ; they were measured)
-    mov al, DSK_BPB_SZ          ; (it was dsk_bpb_slot, kernel size pass 12)
-    mul bl                      ; index * DSK_BPB_SZ (AX = AL*BL; DX untouched)
+    mov al, DSK_BPB_BANK        ; (it was dsk_bpb_slot, kernel size pass 12)
+    mul bl                      ; index * DSK_BPB_BANK (AX = AL*BL; DX untouched)
     add ax, dsk_bpbv            ; CF = 0: the slot is inside the segment,
     push ds                     ; and nothing below writes a flag but DF
     pop es
-    mov cx, DSK_BPB_SZ / 2
+    mov cx, DSK_BPB_BANK / 2
     cld
     or dx, dx
     jnz .put
@@ -1172,6 +1121,13 @@ dsk_bpb_bank:                   ; (no frame: disk_mount_x carries nothing
     rep movsw                   ; staging, and only those. (The copy written
     ret                         ; out where a `jmp short .move` was: one byte
 .put:                           ; for the hot path's parity, pass 15)
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; A FAT32 HEAD IS NOT BANKED (19.12.2): the
+    jne .bput                   ; row says so, and the next mount reads
+    mov [bx+dsk_bpbok], bh      ; sector 0 (BH = 0: the index is < DVOL_MAX)
+    ret
+.bput:
+%endif
     mov di, ax
     mov si, [dsk_sigcur]
     add bx, bx
@@ -1287,6 +1243,9 @@ dsk_cwd:     dw 0                ; current directory's first cluster
 dsk_fsimask: db 0                ; a bit a volume: FSInfo already "unknown"
                                  ; this boot (19.12.7). .text: read at the
                                  ; first mount, and -f bin zeroes no .bss
+dsk_f32mask: db 0                ; a bit a volume: its last mount was FAT32 -
+                                 ; what the DOS session's gather drops (O3,
+                                 ; 19.12.9), which a table row cannot say
 %endif
 dsk_keepcwd: db 0                ; 1 = this mount is a dsk_chdir: keep it
 dsk_quiet:   db 0                ; 1 = this mount is a VOLUME switch, not a
@@ -3693,6 +3652,13 @@ dsk_vol_add:
     sub ax, dsk_vtab
     mov cl, 4                   ; / DV_SIZE
     shr ax, cl
+%ifdef OS88_FAT32
+    mov cl, al                  ; a NEW volume in this slot: its FSInfo has
+    mov ch, 0xFE                ; not been made "unknown" (SPEC.md 19.12.7)
+    rol ch, cl                  ; and is not known to be FAT32
+    and [dsk_fsimask], ch
+    and [dsk_f32mask], ch
+%endif
     call dsk_fatw_claim         ; and its own FAT window, if the heap will
                                 ; fund one (SPEC.md 18.8.1) - a refusal just
                                 ; leaves it sharing, as every volume did
@@ -6989,18 +6955,21 @@ dsk_free_clus_x:
     or ax, ax
     jnz .f32x
     mov ax, [es:bx+2]
-    and ah, 0x0F
-    jnz .f32x
+    and ax, 0x0FFF              ; the WHOLE high word (AH alone let 0001h
+    jnz .f32x                   ; through as free), the top nibble reserved
     add di, 1
     adc word [dsk_fcnh], 0
 .f32x:
     add bx, 4
     loop .f32e
     dec byte [sch_lock]
+    cmp word [dsk_fcgoal], 0xFFFF   ; 0FFFFh = COUNT IT ALL (DFREE, and a
+    je .f32all                  ; copy past 65,535 clusters): no early stop
     cmp word [dsk_fcnh], 0
     jne .f32n
     cmp di, [dsk_fcgoal]
     ja .f32n
+.f32all:
     mov ax, [dsk_fcih]
     cmp ax, [dsk_maxclus+2]
     jb .f32s
@@ -7230,7 +7199,8 @@ dsk_f32_win:
     jnz .load                   ; ...or 64K sectors and more above it
     cmp bx, [dsk_fatwn]
     jae .load
-    xchg ax, bx                 ; AX = the index; CF = 0 from the `jae`
+    xchg ax, bx                 ; AX = the index - and CF = 0 by hand: the
+    clc                         ; `jae` falls through exactly when it is SET
     jmp short .out
 .load:
     push ax                     ; the sector asked for, for the index
@@ -7302,18 +7272,26 @@ dsk_f32_win:
 ; dsk_f32_fsi - FSInfo's free count and next-free hint written as 0FFFFFFFFh,
 ; "unknown", once per volume per boot, at the mount while dsk_secbuf is the
 ; mount's own (SPEC.md 19.12.7). Advisory: every failure is swallowed, and a
-; sector without FSInfo's three signatures is not written. Clobbers AX..DI
+; sector without FSInfo's three signatures is not written. FIRST it records
+; whether this volume is FAT32 at all, in [dsk_f32mask], on every mount and
+; for every kind (the DOS gather's question, 19.12.9). Clobbers AX..DI
 dsk_f32_fsi:
-    cmp byte [dsk_fattype], 2
-    jne .r
-    mov ax, [dsk_fsinfo]
-    or ax, ax
-    jz .r
-    mov cl, [disk_drive]
+    and word [dsk_rover+2], 0   ; the mount reset the rover's low word to 2
+    mov cl, [disk_drive]        ; and its high word is this kernel's to clear
     cmp cl, 8
     jae .r
     mov bl, 1
     shl bl, cl
+    or [dsk_f32mask], bl        ; THIS volume's kind, for the DOS gather:
+    cmp byte [dsk_fattype], 2   ; set, then cleared unless it is FAT32
+    je .f32
+    not bl
+    and [dsk_f32mask], bl
+    ret
+.f32:
+    mov ax, [dsk_fsinfo]
+    or ax, ax
+    jz .r
     test [dsk_fsimask], bl
     jnz .r
     or [dsk_fsimask], bl        ; once, whatever happens below
@@ -7352,6 +7330,170 @@ dsk_f32_fsi:
     pop es
 .r:
     ret
+
+; -----------------------------------------------------------------------------
+; THE 16-BIT DOORS' WAY IN on kern_mega (SPEC.md 19.12.8): a word that names a
+; folder is a FAT12/16 cluster with a zero high word, and 0FFFFh is refused by
+; name, because on FAT32 it could be a real folder the word cannot reach. Far
+; entries beside the ones the doors called, so the doors' `.text` is the size
+; it was: osapi_file_goto calls dkf_dsk_chdir16 (AX = the word; AX is the
+; door's to restore), osapi_file_goto_q dskf_dsk_goto16 (BX; CF=1 and AX =
+; FERR_NAME, the door's documented answer), osapi_file_here dsk_here16f.
+; -----------------------------------------------------------------------------
+dkf_dsk_chdir16:
+    CLU_HI0
+    cmp ax, 0xFFFF
+    je dsk_no16
+    call dsk_chdir_x            ; dkf_dsk_chdir's body: a `jmp` to it across
+    retf                        ; `.cold` would not settle (nasm's passes)
+dskf_dsk_goto16:
+    CLU_HI0
+    cmp bx, 0xFFFF
+    je dsk_no16
+    call dsk_goto               ; dskf_dsk_goto's body, for the same reason
+    retf
+dsk_no16:
+    mov ax, FERR_NAME
+    stc
+    retf
+
+; dsk_farok - may a 32-bit form name this folder? in: BL = the volume, AX =
+; the folder's HIGH word. CF = 1 when AX is not 0 and the volume is not known
+; to be FAT32 ([dsk_f32mask], set at its mount): a FAT12/16 folder is a word,
+; and a far form naming one with a high word would otherwise land in the
+; folder its low half names (dsk_goto and the mount forgive a stale high word
+; on FAT12/16, which internal callers rely on). Every register kept.
+dsk_farok:
+    or ax, ax
+    jz .r                       ; (CF = 0 out of the `or`)
+    push cx
+    mov cl, bl
+    cmp cl, 8
+    jae .no
+    mov ch, 1
+    shl ch, cl
+    test [dsk_f32mask], ch
+    jnz .yes
+.no:
+    pop cx
+    stc
+    ret
+.yes:
+    pop cx
+    clc
+.r:
+    ret
+
+; dsk_here16f - OSAPI_FILE_HERE's body: BL = the drive, DX = the folder, CF=1
+; and DX = 0FFFFh when its high word is not 0 (the 0FFFFh rule). AX and BH
+; kept, DH spent as before
+dsk_here16f:
+    push bp
+    push ax
+    mov bp, inst_where          ; DL = the drive, AX:[dsk_ch] = the folder
+    call ct_cw_mem_disp
+    mov bl, dl
+    xchg ax, dx
+    pop ax
+    pop bp
+    cmp word [dsk_ch], 0        ; (CF = 0 out of it either way)
+    je .r
+    mov dx, 0xFFFF
+    stc
+.r:
+    retf
+
+; -----------------------------------------------------------------------------
+; dsk_fpl_door - OSAPI_FILE_PLACE, the 32-bit forms (SPEC.md 19.12.8). An RN
+; cell: SI = the staged name (FPL_STAT's), DS = KERNEL, and the calling
+; instance's folder already entered. AL = the verb; a folder is DX = low, CX
+; = high, BL = the volume. Far-called by the door, so `retf`.
+; -----------------------------------------------------------------------------
+dsk_fpl_door:
+    push bp
+    cmp al, DSK_FPL_STAT
+    ja .bad
+    je .stat
+    cmp al, DSK_FPL_ARG
+    je .arg
+    or al, al
+    jz .here
+    push ax                     ; the GOTO forms: DX:CX - a high word only
+    mov ax, cx                  ; where the volume is FAT32
+    call dsk_farok
+    pop ax
+    jnc .farok
+    mov ax, FERR_NAME
+    jmp short .out
+.farok:
+    mov [dsk_ch], cx
+    cmp al, DSK_FPL_GOTO_Q
+    jae .q
+    push ax                     ; FPL_GOTO: OSAPI_FILE_GOTO's - a listing, and
+    push dx                     ; the instance follows
+    mov ax, dx
+    mov dl, bl
+    call dsk_chdir_x
+    pop dx
+    jc .gout
+    mov bp, inst_vol_mark
+    call ct_cw_mem_disp
+.gout:
+    pop ax
+    jmp short .out
+.q:                             ; FPL_GOTO_Q / _QM: the quiet stand
+    push bx
+    push dx
+    mov ah, al
+    push ax                     ; (the verb, in AH)
+    mov al, bl
+    mov bx, dx
+    call dsk_goto               ; CF = 1 and AX = FERR_*
+    pop bx                      ; BH = the verb
+    jc .qout
+    cmp bh, DSK_FPL_GOTO_QM
+    jne .q0
+    mov bp, inst_vol_mark       ; ...and _QM moves the instance (74.1)
+    call ct_cw_mem_disp
+.q0:
+    xor ax, ax
+.qout:
+    pop dx
+    pop bx
+    jmp short .out
+.here:
+    push ax
+    mov bp, inst_where          ; DL = the drive, AX:[dsk_ch] = the folder
+    call ct_cw_mem_disp
+    mov bl, dl
+    xchg ax, dx
+    mov cx, [dsk_ch]
+    pop ax
+    clc
+    jmp short .out
+.arg:
+%ifdef OS88_ASSOC
+    mov dx, [assoc_dclus]       ; the pending document's folder, WHOLE,
+    mov cx, [assoc_dcluh]       ; whether or not OSAPI_ARG_FILE has spent
+    mov bl, [assoc_ddrv]        ; the document already
+    clc
+    jmp short .out
+%endif
+.bad:
+    mov ax, 1
+    stc
+    jmp short .out
+.stat:                          ; FPL_STAT: SI's first cluster, whole
+    push bx
+    call dskw_stat_x            ; AL = the attribute, BX:[dsk_ch]
+    jc .sout
+    mov dx, bx
+    mov cx, [dsk_ch]
+.sout:
+    pop bx
+.out:
+    pop bp
+    retf
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -12498,7 +12640,7 @@ section .bss
 ; volumes it was written for. The split 18.9.2 makes is between PERMANENT
 ; (fixed, 1) and BATCH-SCOPED (floppy, 2), not between volumes that use this
 ; and volumes that do not.
-dsk_bpbv:     resb DVOL_MAX * DSK_BPB_SZ
+dsk_bpbv:     resb DVOL_MAX * DSK_BPB_BANK
 dsk_bpbsg:    resw DVOL_MAX
 dsk_bpbok:    resb DVOL_MAX     ; 0 = nothing banked, 1 = banked and good
                                 ; for ever (a fixed disk), 2 = good only until

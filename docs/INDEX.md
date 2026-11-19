@@ -141,6 +141,7 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `door 0x58` | `OSAPI_FILE_DELETE` | SI = name; out CF=0 AX=0, else FERR_* |
 | `0x00D3` | `OSAPI_FILE_RENAME` | SI = old name, DI = new name; out as above |
 | `door 0x5D` | `OSAPI_FILE_COPY` | COPY OR MOVE ONE ENTRY, source folder to destination (SPEC.md 22.24)... |
+| `door 0x60` | `OSAPI_FILE_PLACE` | A FOLDER IN 32 BITS (SPEC.md 19.12.8): AL = an FPL_* verb, the folder DX = low, CX = HIGH, BL = the volume... |
 | `door 0x5E` | `OSAPI_FILE_WRITE_AT` | SI = a NUL 8.3 name, ES:BX = the bytes, CX = how many (>= 1), DX:AX = the byte offset (a multiple of the volume's CLUSTER)... |
 | `door 0x09` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster... |
 | `door 0x24` | `OSAPI_VOL_STAT` | THE VOLUME YOU ARE STANDING ON, in four registers (SPEC.md 18.4.6): out CF=0 with AX = sectors per cluster, BX = free clusters, CX = bytes per sector... |

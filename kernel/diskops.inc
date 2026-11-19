@@ -150,6 +150,10 @@ CLE_IMG      equ 0xFE           ; ...and the volume index that means "not a
                                 ; volume at all, a file" (SPEC.md 18.99.8). It
                                 ; is outside DVOL_MAX by construction, so no
                                 ; row lookup can be handed it by accident
+%ifdef OS88_FAT32
+CL_FCLUH     equ 72             ; dw: CL_FCLUS's high word (SPEC.md 19.12.3),
+                                ; past CL_FCUR's 16 bytes, kern_mega only
+%endif
 CL_BOOT      equ 256            ; 512 bytes: the source's sector 0, kept to
                                 ; the end (SPEC.md 18.99.2)
 CL_HDRPARA   equ 64             ; the header is 1KB of the claim
@@ -1043,6 +1047,10 @@ clo_fbank:
     mov [es:CL_FDRV], al
     mov ax, [dsk_cwd]           ; ...AND THE FOLDER. [dsk_cwd] is one global
     mov [es:CL_FCLUS], ax       ; word for the whole machine, and `Write Img`
+%ifdef OS88_FAT32
+    mov ax, [dsk_cwd+2]         ; (its high word, 19.12.3)
+    mov [es:CL_FCLUH], ax
+%endif
                                 ; puts a KEYSTROKE between the dialog that
                                 ; chose the file and the Enter that reads it -
                                 ; the UI mounts what it likes in between, and
@@ -1085,6 +1093,10 @@ clo_fend:
     mov [disk_drive], al
     mov ax, [es:CL_FCLUS]       ; ...and the folder, which a raw transfer on
     mov [dsk_cwd], ax           ; the disk end does not touch but which one
+%ifdef OS88_FAT32
+    mov ax, [es:CL_FCLUH]
+    mov [dsk_cwd+2], ax
+%endif
                                 ; word is cheaper to restore than to reason
                                 ; about (clo_imgrun's own note)
     pop ax
@@ -1881,6 +1893,10 @@ clo_imgrun:
 %endif
     mov al, [es:CL_FDRV]        ; STAND WHERE THE FILE IS, once, before
     mov bx, [es:CL_FCLUS]       ; anything reads or writes it. Free when the
+%ifdef OS88_FAT32
+    push word [es:CL_FCLUH]     ; BX:[dsk_ch]
+    pop word [dsk_ch]
+%endif
     call COLD_SEG:dskf_dsk_goto ; volume has not moved - dsk_goto re-aims
     jc .badgo                   ; [dsk_cwd] and returns - and a real remount
                                 ; when it has, which is what makes the global
@@ -3128,7 +3144,7 @@ clo_mount:
                                 ; reads through DS (SPEC.md 18.99.8)
     mov di, [fm_vp]             ; ...and the window's own folder current: the
     mov al, [di+FS_DRV]         ; listing it was clicked in may not be what is
-    mov bx, [di+FS_CWD]         ; mounted now
+    FS_CWD_LD bx, di            ; mounted now
     call COLD_SEG:dskf_dsk_goto
     jc .ioerr
 .named:                         ; the host current: [dsk_cwd] is its folder
@@ -3141,6 +3157,10 @@ clo_mount:
     ; --- the host must have SECTORS, and must not be an image itself -------
     cmp byte [dsk_vkind], DVK_FILE
     je .nohost
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; an image's claim keeps its host folder and
+    je .nohost                  ; cluster as WORDS (IMG_M_DIR/CLUS, 19.12.9)
+%endif
     push bx
     mov al, [disk_drive]        ; the host's own row, through the image test
     call clo_mrowal             ; the walkers use: ZF = 1 an image's. The

@@ -169,6 +169,7 @@ sc_walk:
     xchg ax, bp                 ; BP holds both for the walk
     call drv_vol_bank
     xor bx, bx                  ; the volume's ROOT first
+    CLU_HI0
 .dir:
     mov ax, bp
     call dsk_goto               ; CF = no disk, or no such folder
@@ -219,6 +220,10 @@ sc_walk:
     je .run
     mov ax, [dsk_cwd]           ; a DOCUMENT: the locator is the name, the
     mov [assoc_dclus], ax       ; directory it is in and the volume
+%ifdef OS88_FAT32
+    mov ax, [dsk_cwd+2]
+    mov [assoc_dcluh], ax
+%endif
     mov ax, bp
     mov [assoc_ddrv], al
     push ds
@@ -1156,6 +1161,10 @@ sc_m_go:
     call COLD_SEG:drvf_drv_vol_bank
     mov al, [fcp_cbdrv]
     mov bx, [fcp_cbcwd]
+%ifdef OS88_FAT32
+    push word [fcp_cbcwh]       ; BX:[dsk_ch] (SPEC.md 19.12.3)
+    pop word [dsk_ch]
+%endif
     call COLD_SEG:dskf_dsk_goto
     ret
 
