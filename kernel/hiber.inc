@@ -710,6 +710,15 @@ hb_pick1:                       ; is volume BL one? out: CF = 0 and AL = BL
     jz .no
     cmp ah, DVK_FILE
     je .no
+%ifdef OS88_FAT32
+    push cx                     ; NOR A FAT32 ONE (SPEC.md 19.12.9): passed
+    mov cl, bl                  ; over HERE, so the item, the probe and the
+    mov ch, 1                   ; DOS handoff all go on to the next fixed
+    shl ch, cl                  ; volume; hbm_root's test stays the backstop
+    test [dsk_f32mask], ch      ; for a volume this bit has not seen mounted
+    pop cx
+    jnz .no
+%endif
     mov al, bl
     CLC_OR_STC .no              ; CF = 0 AL = BL, or (.no) CF = 1
     ret

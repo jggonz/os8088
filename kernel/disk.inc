@@ -9441,6 +9441,9 @@ dsk_find_x:
 %ifndef DSK_DSCAN
     pop es
 %endif
+%ifdef OS88_FAT32
+    call dsk_find_czu           ; FAT32: no hint, so the file's own header
+%endif                          ; (SPEC.md 19.12.6) - the raw entry is spent
 %ifdef OS88_REDIR               ; (.stage's two ways in, the FSV_ENUM arm and
     jmp short .staged           ; DSK_DSCAN's redirected test, are both
 .stage:                         ; OS88_REDIR's: kern_small has neither, so
@@ -9515,6 +9518,53 @@ dsk_find_x:
     pop dx
     pop bx
     retf
+
+%ifdef OS88_FAT32
+; dsk_find_czu - FIND's size on a FAT32 volume, which carries no hint (SPEC.md
+; 19.12.6): what the file BECOMES, out of its own 'CZ' header, as FILE_READ
+; and cmz_sizes ask it (dskw_czknow)
+; in:  DX:AX = the size it occupies, CL = its attribute, CH = 0; dsk_ent
+;      staged, and the walk's sector no longer wanted - the peek reads
+;      into dsk_secbuf, so this runs only once the raw entry is spent
+; out: compressed - CH = 1 (+22 bit 0) and, unless a COPIER asked
+;      ([dsk_fdraw]), DX:AX = the unpacked size; otherwise as it came
+; clobbers: dskw_raw's cluster cells and [dsk_ch], flags
+dsk_find_czu:
+    cmp byte [dsk_fattype], 2
+    jne .r
+    test cl, 0x10               ; a folder has no header
+    jnz .r
+    or dx, dx
+    jnz .go
+    cmp ax, DSK_CZ_HDR          ; nor a file shorter than one
+    jb .r
+.go:
+    push bx
+    push es
+    push ax
+    push dx
+    push cx
+    mov ax, [dsk_ent+18]        ; the first cluster, low and high (19.12.6),
+    mov [dskw_raw+DSK_R_CLUS], ax   ; where dskw_czsniff reads it
+    mov ax, [dsk_ent+14]
+    mov [dskw_raw+DSK_R_CLHI], ax
+    call dskw_czknow            ; BE: compressed, U staged; one sector,
+    pop cx                      ; out of SPEC.md 18.95's cache for a read
+    pop dx                      ; that follows (`pop` keeps the flags)
+    pop ax
+    ja .out
+    mov ch, 1                   ; the flag either way, as the hinted path
+    cmp byte [dsk_fdraw], 0     ; sets it...
+    jne .out                    ; ...and P for a copier
+    call dskw_czlget            ; AX = U's low word ([dskw_czl])
+    mov dl, [dskw_raw+DSK_R_CZH]
+    mov dh, 0
+.out:
+    pop es
+    pop bx
+.r:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_chdir - make a directory the current one and re-list the volume

@@ -9576,29 +9576,10 @@ fm_kbfig:
     inc di
     ret
 %else
-; -----------------------------------------------------------------------------
-; fm_szfig_x - a size in the unit a person reads (SPEC.md 22.7.1)
-; fm_szfig_k - ...never below K, and DX = 0xFFFF draws '?'
-; in:  DX:AX = bytes, DI = destination (10 bytes: `10239.99K` and a NUL)
-; out: DI -> the stored NUL
-; clobbers: DI (the output), flags
-;
-; Bytes under 10KB, exact and short: `1234`. From 10KB whole KB and two
-; decimals with a K, from 10MB whole MB and two decimals with an M -
-; `113.37K`, `40.00M`. The decimals are hundredths of the unit, TRUNCATED
-; like the whole part, so no figure ever claims more than is there. The
-; columns take the first entry; the status line takes the second, because a
-; free-space figure without a unit is a number to wonder about, and its
-; sentinel is the one a failed mount leaves (22.7).
-; -----------------------------------------------------------------------------
-fm_szfig_x:
-    or dx, dx
-    jnz fm_szfig_k
-    cmp ax, 10240
-    jb fm_ultoa_x               ; bytes: the dword printer, tail-called
 %ifdef OS88_FAT32
 ; fm_szfig_free - the status line's free figure, DX:AX, for the window at BX:
-; fm_measure stored it in KB on a FAT32 volume and in bytes on any other
+; fm_measure stored it in KB on a FAT32 volume and in bytes on any other.
+; ABOVE fm_szfig_x, whose 10KB-64KB arm falls into fm_szfig_k and never here
 fm_szfig_free:
     push cx
     mov cl, [bx+FS_DRV]
@@ -9622,6 +9603,26 @@ fm_szfig_kb:
     xor bx, bx                  ; nothing fell off yet: .00
     jmp short fm_szfig_k.kb
 %endif
+; -----------------------------------------------------------------------------
+; fm_szfig_x - a size in the unit a person reads (SPEC.md 22.7.1)
+; fm_szfig_k - ...never below K, and DX = 0xFFFF draws '?'
+; in:  DX:AX = bytes, DI = destination (10 bytes: `10239.99K` and a NUL)
+; out: DI -> the stored NUL
+; clobbers: DI (the output), flags
+;
+; Bytes under 10KB, exact and short: `1234`. From 10KB whole KB and two
+; decimals with a K, from 10MB whole MB and two decimals with an M -
+; `113.37K`, `40.00M`. The decimals are hundredths of the unit, TRUNCATED
+; like the whole part, so no figure ever claims more than is there. The
+; columns take the first entry; the status line takes the second, because a
+; free-space figure without a unit is a number to wonder about, and its
+; sentinel is the one a failed mount leaves (22.7).
+; -----------------------------------------------------------------------------
+fm_szfig_x:
+    or dx, dx
+    jnz fm_szfig_k
+    cmp ax, 10240
+    jb fm_ultoa_x               ; bytes: the dword printer, tail-called
 fm_szfig_k:
     push ax
     push bx

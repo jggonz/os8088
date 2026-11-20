@@ -8268,8 +8268,11 @@ dos_pkgwhere:
     pop ds
     push ds
     push es
-    call dos_be_here            ; DX = the folder we stand in, BL = its drive
-    jc .out
+    call dos_be_here            ; DX = the folder we stand in, BL = its drive -
+                                ; KEPT on CF = 1 too: that is a FAT32 folder
+                                ; past a word, DX = 0FFFFh, which every GOTO
+                                ; and the handoff then refuse (SPEC.md
+                                ; 19.12.8) rather than searching A:\
     mov [dos_pkgdir], dx
     mov [dos_pkgvol], bl
 .out:

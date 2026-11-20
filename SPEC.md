@@ -40580,7 +40580,7 @@ buffering, written once and costing the kernel nothing - the write side of
 
 | call | in | does |
 |---|---|---|
-| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_VOL_STAT` for that volume's cluster ONCE - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
+| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_FILE_DFREE` for that volume's cluster ONCE (its BX: `OSAPI_VOL_STAT`'s AX scales on FAT32, §19.12.8) - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
 | `os88_wseq_put` | DS:DI = the stream, ES:SI = any bytes, CX = any count (0 legal) | copies into the buffer; a full buffer writes the largest whole number of clusters it holds and moves the rest to its front - so a buffer that is itself a cluster multiple never moves a byte |
 | `os88_wseq_close` | DS:DI = the stream | writes what is buffered, any size: the last chunk is the one the slots let be short |
 
@@ -40789,8 +40789,10 @@ DOS was the only caller of the offset door and of `OSAPI_VOL_STAT` when
 they were cut, and it does not ship on the small disks (§24.5, `SMALLPKGS`).
 So on `kern_small` both cells are `stc`/`ret` stubs — legitimate here because
 every caller tests `CF` (KERN-SMALL-CUT-PLAN §10): `apps/os88data.inc`'s
-`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`'s
-open refuses its stream, so REDLINE's Inspect report is refused there —
+`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`,
+which was refused at its open here, no longer asks `OSAPI_VOL_STAT`: it takes
+`OSAPI_FILE_DFREE`'s cluster (§18.4.9.4) and appends every chunk through the
+offset cell's append, so REDLINE's Inspect report is written here too —
 and with them go the INSIDE
 arm of the body, `dsk_write_chain` and its direction byte, and the two far
 entries: **395 bytes of that kernel** (`.text` −11, `.bss` −1, `.cold` −383).
@@ -47082,8 +47084,14 @@ trusted there**: its size word is @20, which IS FstClusHI on this format, so
 writing it would point the file's first cluster into another file. The hint is
 a cache and the read path already checks the file's own `CZ` header
 (`DSK_R_CZL`, §20.14.3), so on FAT32 the mark bytes @12/@13 are cleared, @20
-holds the cluster, and a compressed file's unpacked size comes from its header,
-at one extra sector read per FIND of a compressed file.
+holds the cluster, and a compressed file's unpacked size comes from its header.
+FIND (`dsk_find_czu`) therefore reads that header for every FILE it reports
+of at least `DSK_CZ_HDR` bytes - one sector a FIND, a folder or a shorter file
+none, out of §18.95's cache for the read that usually follows - after the
+walk's directory sector is spent, since the peek reads into `dsk_secbuf`.
++22 bit 0 is set either way and +18 is the unpacked size, except to
+`OSAPI_FILE_FIND_RAW`, which keeps the size the file occupies, as the hinted
+path does.
 
 **The staged listing (§19.1) keeps its 24-byte stride**: the cluster's high
 word goes in the NAME field's last two bytes, +14..+15. A display name is at
@@ -47177,7 +47185,11 @@ until both fit, so AX × CX × BX is still the free bytes to within one cluster;
 past AX = 32,768 the counts clamp at 0FFFFh. `OSAPI_FILE_DFREE` answers free
 BYTES in DX:AX, exact below 4GB and clamped at 0FFFFFFFFh above — a package
 that needs the figure on a larger volume multiplies `VOL_STAT`'s registers,
-which is within a cluster of it.
+which is within a cluster of it. **A scaled AX is therefore NOT the cluster
+size**, and AX × CX passes a word at AX = 128: a package that chunks, aligns
+or masks by the cluster takes `OSAPI_FILE_DFREE`'s BX, which is the true
+sectors per cluster (1..64) on every volume - `os88wseq.inc` (§18.4.9.4),
+PIXEL's ring and XTMP3's destination test do.
 
 **`OSAPI_FILE_READ_SEQ`'s cursor** is the caller's 16 bytes and has no room for
 a second word. On a FAT32 volume `RSQ_CUR` is the cluster's low word and the
@@ -47197,7 +47209,11 @@ handle refusal (a redirected volume has always refused it).
   a FAT32 row (O3), so a DOS program sees no such drive rather than one its
   FAT code would misread.
 - **Hibernation** (§99) refuses a FAT32 volume as its target; its image
-  records are cluster words.
+  records are cluster words. `hb_pick`, THE predicate (§47 rule 5), passes
+  over a volume whose `[dsk_f32mask]` bit is set and goes on to the next
+  fixed one, so the menu item, the probe, the write and the DOS handoff's
+  no-park image all agree; `hbm_root`'s refusal stays as the backstop for a
+  volume that bit has not seen mounted.
 - **The installer** (§117) does not offer a FAT32 partition as a target: the
   boot path reads FAT12/16.
 - **Mounting a disk image** whose file is on a FAT32 volume answers 'Cannot
@@ -47230,6 +47246,16 @@ writes is FAT16): the partition's own 32-bit length is the volume's
 ATA is LBA28, **128GB**, and a transfer past what the drive's rung addresses
 fails as a disk error. The installer (§117) names the slot "FAT32" and does
 not offer it as a target (§19.12.9).
+
+**On `kern_mega` a FAT32 partition takes its letter in slot order like any
+other volume** - DOS's and Windows' lettering of the same disk - so a volume
+after it on that disk moves one letter later than in builds before this one:
+a FAT32 primary ahead of a FAT16 logical drive makes the FAT32 volume C: and
+the FAT16 one D:, where it was C:. What was saved against the old letter
+names the FAT32 volume now - a desk shortcut's `SC_R_VOL` is a bare volume
+index - and misses there ('not found'); nothing is written to the wrong
+volume. The other kernels drop the refused row before the next slot mounts,
+so their letters are unchanged.
 
 #### 19.12.11 Gates
 
