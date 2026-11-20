@@ -64,6 +64,9 @@ physical key and the opposite hand's Shift. Mouse keyboard clicks are hints,
 never scored characters. Letter shortcuts exist only outside active typing.
 Native and CGA faces share one pure US QWERTY map for physical base key,
 finger name and opposite-hand Shift; the CGA row includes backquote/tilde.
+CGA keeps a190-byte ASCII-to-key-cell table, built from that shared map at
+scene entry. Static keyboard rows survive ordinary input; only old/new
+target and mistake cells change. Its shadow compare skips identical rows.
 
 Window fullscreen is SPEC.md §11.2's native latch. CGA four-color gameplay
 uses SPEC.md §53's exclusive bracket and FSXM_CGA320; its compact renderer

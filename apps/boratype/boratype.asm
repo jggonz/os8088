@@ -31,6 +31,5 @@
 %include "breadxt/draw.inc"
 %include "cc/gk.inc"
 %include "cc/gkmus.inc"
-%include "boratype/bt_voice.inc"
 %include "boratype/bt_native.inc"
 CC_IMAGE_END

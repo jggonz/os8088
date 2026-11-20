@@ -20,11 +20,11 @@ static const char *bt_about_lines[] = {"Borat Teaches Typing", "Native C typing 
 static const char *bt_file_items[] = {"Profile...", "Save progress", "Close  Ctrl+Q"};
 static const char *bt_lesson_items[] = {"Lessons  F2", "Practice", "Challenge", "Records"};
 static const char *bt_view_items[] = {"Pause / Resume  F4", "Full screen  F6", "Settings"};
-static const char *bt_sound_items[] = {"Sound On / Off  F3", "Test Music", "Test Voice"};
+static const char *bt_sound_items[] = {"Sound On / Off  F3", "Test Music"};
 static const char *bt_help_items[] = {"Help  F1"};
 static struct os88_menuset bt_menus = {"Borat Typing", 0, 5,
     {{"File", bt_file_items, 3}, {"Lesson", bt_lesson_items, 4},
-     {"View", bt_view_items, 3}, {"Sound", bt_sound_items, 3}, {"Help", bt_help_items, 1}}};
+     {"View", bt_view_items, 3}, {"Sound", bt_sound_items, 2}, {"Help", bt_help_items, 1}}};
 
 int bt_data_enter(void);
 void bt_data_back(void);
@@ -196,13 +196,12 @@ void bt_action(int a)
     } else if (a == BT_A_PAUSE) { bt_pause_ui(); return;
     } else if (a == BT_A_FULL) { if (!bt_in_cga) bt_fullscreen_toggle(); return;
     } else if (a == BT_A_SAVE) { bt_schedule_save();
-    } else if (a == BT_A_TEST_MUSIC || a == BT_A_TEST_VOICE) {
-        if (a == BT_A_TEST_MUSIC && !bt_store.music) bt_message("Enable Music to audition the soundtrack.");
-        else { bt_audio_test(a == BT_A_TEST_VOICE); if (a == BT_A_TEST_VOICE) bt_message(bt_voice_status()); }
+    } else if (a == BT_A_TEST_MUSIC) {
+        if (!bt_store.music) bt_message("Enable Music to audition the soundtrack.");
+        else bt_audio_test();
     } else {
         if (a == BT_A_MUSIC) bt_store.music ^= 1;
         else if (a == BT_A_EFFECTS) bt_store.effects ^= 1;
-        else if (a == BT_A_VOICE) bt_store.voice ^= 1;
         else if (a == BT_A_KEYCLICK) bt_store.keyclick ^= 1;
         else if (a == BT_A_ROAST) bt_store.roast = (bt_store.roast + 1) % 3;
         else if (a == BT_A_DISPLAY) {
@@ -226,12 +225,10 @@ static void ovl_bt_menu_key(int ascii, int scan)
         if (ascii >= 'a' && ascii <= 'z') ascii -= 32;
         if (ascii == 'M') bt_action(BT_A_MUSIC);
         else if (ascii == 'E') bt_action(BT_A_EFFECTS);
-        else if (ascii == 'V') bt_action(BT_A_VOICE);
         else if (ascii == 'K') bt_action(BT_A_KEYCLICK);
         else if (ascii == 'R') bt_action(BT_A_ROAST);
         else if (ascii == 'D') bt_action(BT_A_DISPLAY);
         else if (ascii == 'T') bt_action(BT_A_TEST_MUSIC);
-        else if (ascii == 'A') bt_action(BT_A_TEST_VOICE);
         else if (ascii == 13) bt_action(BT_A_BACK);
         return;
     }
@@ -395,7 +392,7 @@ static void ovl_bt_oncmd(int item, int menu, void *win)
     else if (menu == 2) bt_action(item == 0 ? BT_A_PAUSE : item == 1 ? BT_A_FULL : BT_A_SETTINGS);
     else if (menu == 3) {
         if (item == 0) { bt_master_sound ^= 1; bt_audio_sync(); bt_redraw(0); }
-        else bt_audio_test(item == 2);
+        else bt_audio_test();
     } else bt_action(BT_A_HELP);
 }
 int os88_onclose(void *win)
@@ -420,7 +417,6 @@ void os88_onmove(unsigned was, unsigned now)
     if (artnow != bt_art) { bt_face_move(bt_art, artnow); bt_art = artnow; }
     bt_soundpart = os88_part_seg(1);
     bx_setart2(bt_soundpart);
-    bt_audio_move(was, now);
 }
 static struct os88_class bt_class = {OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWNBG,
     os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,

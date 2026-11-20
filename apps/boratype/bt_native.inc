@@ -113,14 +113,29 @@ _bt_copy_font:
 ; The 8KB drawing band becomes CGA's 2KB cell shadow while the native
 ; renderer is parked. No additional claim or full-screen framebuffer.
 _bt_cga_grid_clear:
+    mov bx,sp
     push es
     mov ax,ds
     mov es,ax
     mov di,_bt_io
     mov ax,0020h
+    cmp word [ss:bx+2],0
+    jne .keep
     mov cx,1000
     cld
     rep stosw
+    jmp short .out
+.keep:
+    mov cx,160                    ; rows0..3; retain the finger-hint row4
+    cld
+    rep stosw
+    add di,80
+    mov cx,440                    ; rows5..15; retain physical keys16..20
+    rep stosw
+    add di,480                    ; keyboard plus blank row21
+    mov cx,120                    ; caption/footer rows22..24
+    rep stosw
+.out:
     pop es
     ret
 
@@ -186,7 +201,18 @@ _bt_cga_flush:
     push es
     mov es,[_bt_band]
     xor di,di
-    mov cx,1000
+    mov si,_bt_io
+    mov bp,25
+    cld
+.row:
+    push di
+    push si
+    mov cx,40
+    repe cmpsw                    ; most rows are byte-identical, skip them
+    pop si
+    pop di
+    je .same
+    mov cx,40
 .cell:
     mov bx,di
     mov ax,[_bt_io+bx]
@@ -196,13 +222,23 @@ _bt_cga_flush:
     push cx
     push di
     push es
+    push si
     call bt_cga_cell
+    pop si
     pop es
     pop di
     pop cx
 .next:
     add di,2
     loop .cell
+    add si,80
+    jmp short .rowdone
+.same:
+    add di,80
+    add si,80
+.rowdone:
+    dec bp
+    jnz .row
     pop es
     pop bp
     ret

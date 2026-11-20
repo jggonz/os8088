@@ -22,7 +22,7 @@ void bt_cga_pointer(int x, int y);
 /* Bounded native row composition and clear, the same character/attribute
  * workspace. Repeated C byte stores cost the XT more than the VRAM commit. */
 void bt_cga_text(int x, int y, const char *s, int ink, int paper);
-void bt_cga_grid_clear(void);
+void bt_cga_grid_clear(int keep_keys);
 static void bt_cga_number(int x, int y, unsigned n)
 {
     os88_utoa(n, bt_cga_num);
@@ -50,38 +50,90 @@ static void bt_cga_stats(void)
     bt_cga_text(29, 13, "SEC", 1, 0);
     bt_cga_number(33, 13, bt_session.mode == BT_CHALLENGE ? bt_session.remaining : bt_session.seconds);
 }
-static void bt_cga_keyboard(void)
+static BTWord bt_cga_keycell[95];
+static int bt_cga_keys_cached, bt_cga_target_cell, bt_cga_wrong_cell;
+static int bt_cga_old_target, bt_cga_old_wrong, bt_cga_raw_target = -1;
+static int bt_cga_shift = -1;
+/* Only cold scene setup visits every physical key. The pure native face map
+ * supplies case/punctuation normalization, so both presentations teach one
+ * physical US keyboard. Values are workspace word indices, never pointers. */
+static void ovl_bt_cga_keys_init(void)
 {
     static const char *rows[4] = {"`1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./"};
-    int r, c, x, target, wrong, shifted;
     const char *s;
-    target = bt_session.pos < bt_session.length ? bt_session.passage[bt_session.pos] : 0;
-    shifted = bt_key_shift(target);
-    bt_cga_text(1, 4, "Finger:", 1, 0);
-    bt_cga_text(9, 4, bt_key_finger(target), 3, 0);
-    if (shifted) bt_cga_text(22, 4, shifted == 1 ? "+ left Shift" : "+ right Shift", 1, 0);
-    target = bt_key_base(target);
-    wrong = bt_key_base(bt_session.last_wrong);
+    int r, c, x, at, base;
+    for (c = 0; c < 95; c++) bt_cga_keycell[c] = 0;
     for (r = 0; r < 4; r++) {
-        s = rows[r]; x = r < 2 ? 0 : 2 + r - 2;
+        s = rows[r]; x = r < 2 ? 0 : r;
         for (c = 0; s[c]; c++) {
-            bt_cga_grid[(16 + r) * 40 + x] = (s[c] == target ? '>' : '[') | 0x0100;
-            bt_cga_grid[(16 + r) * 40 + x + 1] = (BTByte)s[c] | (s[c] == target ? 0x0300 : s[c] == wrong ? 0x0200 : 0x0100);
-            bt_cga_grid[(16 + r) * 40 + x + 2] = (s[c] == wrong ? '!' : ']') | 0x0100;
+            at = (16 + r) * 40 + x;
+            bt_cga_keycell[(BTByte)s[c] - 32] = at;
+            bt_cga_grid[at] = '[' | 0x0100;
+            bt_cga_grid[at + 1] = (BTByte)s[c] | 0x0100;
+            bt_cga_grid[at + 2] = ']' | 0x0100;
             x += 3;
         }
     }
-    bt_cga_text(1, 20, shifted == 1 ? "[LShift*] [SPACE] [RShift ] [BACK]" :
-        shifted == 2 ? "[LShift ] [SPACE] [RShift*] [BACK]" :
-        "[LShift ] [SPACE] [RShift ] [BACK]", 1, 0);
-    if (target == ' ') bt_cga_text(11, 20, "SPACE", 0, 3);
+    bt_cga_keycell[0] = 811; /* '[' before SPACE at row20,column11 */
+    for (c = 32; c < 127; c++) {
+        base = bt_key_base(c);
+        if (base >= 32) bt_cga_keycell[c - 32] = bt_cga_keycell[base - 32];
+    }
+    bt_cga_old_target = bt_cga_old_wrong = 0;
+    bt_cga_raw_target = bt_cga_shift = -1;
 }
+static void bt_cga_keypaint(int at)
+{
+    int ink;
+    if (!at) return;
+    if (at == 811) {
+        bt_cga_text(12, 20, "SPACE", bt_cga_target_cell == at ? 0 : 1,
+            bt_cga_target_cell == at ? 3 : 0);
+        bt_cga_grid[817] = (bt_cga_wrong_cell == at ? '!' : ']') | 0x0100;
+        return;
+    }
+    ink = at == bt_cga_target_cell ? 3 : at == bt_cga_wrong_cell ? 2 : 1;
+    bt_cga_grid[at] = (at == bt_cga_target_cell ? '>' : '[') | 0x0100;
+    bt_cga_grid[at + 1] = (bt_cga_grid[at + 1] & 255) | (ink << 8);
+    bt_cga_grid[at + 2] = (at == bt_cga_wrong_cell ? '!' : ']') | 0x0100;
+}
+static void bt_cga_keyboard(void)
+{
+    int raw, wrong, shifted, initialized;
+    initialized = !bt_cga_keys_cached;
+    if (initialized) ovl_bt_cga_keys_init();
+    raw = bt_session.pos < bt_session.length ? bt_session.passage[bt_session.pos] : 0;
+    wrong = bt_session.last_wrong;
+    bt_cga_target_cell = raw >= 32 && raw < 127 ? bt_cga_keycell[raw - 32] : 0;
+    bt_cga_wrong_cell = wrong >= 32 && wrong < 127 ? bt_cga_keycell[wrong - 32] : 0;
+    if (raw != bt_cga_raw_target) {
+        bt_cga_text(0, 4, "                                        ", 0, 0);
+        bt_cga_text(1, 4, "Finger:", 1, 0);
+        bt_cga_text(9, 4, bt_key_finger(raw), 3, 0);
+        shifted = bt_key_shift(raw);
+        if (shifted) bt_cga_text(22, 4, shifted == 1 ? "+ left Shift" : "+ right Shift", 1, 0);
+        if (shifted != bt_cga_shift) {
+            bt_cga_text(1, 20, shifted == 1 ? "[LShift*] [SPACE] [RShift ] [BACK]" :
+                shifted == 2 ? "[LShift ] [SPACE] [RShift*] [BACK]" :
+                "[LShift ] [SPACE] [RShift ] [BACK]", 1, 0);
+            bt_cga_keypaint(811);
+            bt_cga_shift = shifted;
+        }
+        bt_cga_raw_target = raw;
+    }
+    if (initialized || bt_cga_target_cell != bt_cga_old_target || bt_cga_wrong_cell != bt_cga_old_wrong) {
+        bt_cga_keypaint(bt_cga_old_target); bt_cga_keypaint(bt_cga_old_wrong);
+        bt_cga_keypaint(bt_cga_target_cell); bt_cga_keypaint(bt_cga_wrong_cell);
+        bt_cga_old_target = bt_cga_target_cell; bt_cga_old_wrong = bt_cga_wrong_cell;
+    }
+}
+
 static void bt_cga_paint(void)
 {
     int i, start, at, limit, pose, portrait, portrait_x;
     BTProfile *p;
     if (bt_cga_pointer_up) { bt_cga_pointer(bt_cga_mx, bt_cga_my); bt_cga_pointer_up = 0; }
-    bt_cga_grid_clear();
+    bt_cga_grid_clear(bt_cga_keys_cached && (bt_screen == BT_S_PLAY || bt_screen == BT_S_PAUSE));
     p = &bt_store.profile[bt_store.selected];
     bt_cga_text(0, 0, "      BORAT TEACHES TYPING       F6 EXIT", 0, 1);
     bt_cga_text(1, 1, "L Lessons  P Practice  C Test  R Records", 1, 0);
@@ -152,11 +204,10 @@ static void bt_cga_paint(void)
         bt_cga_text(1, 4, "SOUND AND DISPLAY", 3, 0);
         bt_cga_text(1, 7, bt_store.music ? "M Music ON" : "M Music OFF", 1, 0);
         bt_cga_text(21, 7, bt_store.effects ? "E Effects ON" : "E Effects OFF", 1, 0);
-        bt_cga_text(1, 9, bt_store.voice ? "V Voice ON" : "V Voice OFF", 1, 0);
-        bt_cga_text(21, 9, bt_store.keyclick ? "K Key ticks ON" : "K Key ticks OFF", 1, 0);
+        bt_cga_text(1, 9, bt_store.keyclick ? "K Key ticks ON" : "K Key ticks OFF", 1, 0);
         bt_cga_text(1, 11, "R Roast level:", 1, 0); bt_cga_number(17, 11, bt_store.roast + 1);
-        bt_cga_text(1, 13, "T Test music     A Test voice", 1, 0);
-        bt_cga_text(1, 15, bt_voice_status(), 3, 0);
+        bt_cga_text(1, 13, "T Test music", 1, 0);
+        bt_cga_text(1, 15, "Music and effects follow OS output.", 3, 0);
         bt_cga_text(1, 18, "F6 native display; Enter returns Menu.", 1, 0);
     } else if (bt_screen == BT_S_HELP) {
         bt_cga_text(1, 4, "Correct keys advance; wrong keys wait.", 3, 0);
@@ -188,6 +239,7 @@ static void bt_cga_paint(void)
         i = bt_expression();
         bt_cga_portrait(i == 1 && bt_blink_frame ? BT_ART_BLINK_CGA : BT_ART_CGA + i, portrait_x, 40);
     }
+    bt_cga_keys_cached = bt_screen == BT_S_PLAY || bt_screen == BT_S_PAUSE;
     bt_cga_oldpose = pose;
     bt_cga_pointer(bt_cga_mx, bt_cga_my); bt_cga_pointer_up = 1;
     bt_scene_drawn();
@@ -225,9 +277,9 @@ static void bt_cga_click(int col, int row)
     } else if (bt_screen == BT_S_PROFILE && row >= 7 && row <= 13) bt_action(BT_A_PROFILE_BASE + (row - 7) / 2);
     else if (bt_screen == BT_S_SETTINGS) {
         if (row == 7) bt_action(col < 20 ? BT_A_MUSIC : BT_A_EFFECTS);
-        else if (row == 9) bt_action(col < 20 ? BT_A_VOICE : BT_A_KEYCLICK);
+        else if (row == 9) bt_action(BT_A_KEYCLICK);
         else if (row == 11) bt_action(BT_A_ROAST);
-        else if (row == 13) bt_action(col < 17 ? BT_A_TEST_MUSIC : BT_A_TEST_VOICE);
+        else if (row == 13) bt_action(BT_A_TEST_MUSIC);
     }
 }
 void bt_cga_entry(void)
@@ -243,7 +295,7 @@ void bt_cga_entry(void)
     bt_cga_palette();
     bt_cga_exit = 0; bt_guard_scan = 0; bt_last_scan = 0;
     bt_cga_pointer_up = 0; bt_cga_mdown = 1; bt_cga_mx = 160; bt_cga_my = 100;
-    bt_cga_oldpose = -1;
+    bt_cga_oldpose = -1; bt_cga_keys_cached = 0;
     bt_cga_clear_shadow(); bt_cga_paint();
     bt_cga_last = os88_ticks();
     while (!bt_cga_exit) {
