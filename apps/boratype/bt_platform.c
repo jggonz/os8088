@@ -11,6 +11,7 @@ static int bt_timer_ok, bt_worker_live, bt_save_pending, bt_about_up;
 static int bt_focused = 1, bt_guard_scan, bt_last_scan, bt_in_cga;
 static int bt_cga_exit, bt_quit_pending, bt_closing;
 static int bt_return_screen;
+static int bt_ready_paint;
 static BTByte bt_io[BT_FILE_SIZE]; /* canonical2136B save, also2000B CGA cells */
 static BTWord bt_saved_generation;
 static const char *bt_slots[2] = {"BORATA.BTT", "BORATB.BTT"};
@@ -45,12 +46,20 @@ static void bt_audio_sync(void)
     bt_audio_state(screen);
     bt_audio_tick(os88_ticks(), bt_focused && !bt_readonly);
 }
+static void bt_scene_drawn(void)
+{
+    if (bt_ready_paint) {
+        bt_ready_visible(os88_ticks());
+        bt_ready_paint = 0;
+    }
+}
 static void bt_redraw(int all)
 {
     if (!bt_win || bt_in_cga) return;
     if (os88_wm_clip_set(bt_win) == 0) {
         bt_face_paint(bt_win, all);
         os88_wm_grow(bt_win);
+        if (all) bt_scene_drawn();
     }
 }
 
@@ -96,6 +105,7 @@ static void bt_begin(int mode)
     bt_start(mode, mode == BT_PRACTICE && bt_practice_weak ? -1 : bt_selection,
         bt_ch_duration, bt_ch_diff, os88_ticks());
     bt_screen = BT_S_PLAY;
+    bt_ready_paint = mode == BT_CHALLENGE;
     bt_guard_scan = bt_last_scan;
     bt_about_up = 0;
     bt_notice[0] = 0;
@@ -109,6 +119,7 @@ static void bt_pause_ui(void)
 {
     if (bt_screen == BT_S_PAUSE && bt_session.status == BT_PAUSED) {
         bt_resume(os88_ticks()); bt_screen = BT_S_PLAY;
+        if (bt_session.status == BT_READY) bt_ready_paint = 1;
     } else if (bt_screen == BT_S_PLAY) {
         bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
     } else return;
@@ -319,7 +330,7 @@ static void bt_pulse(void)
     }
     bt_focused = focus;
     if (bt_guard_scan && !os88_key_down(bt_guard_scan)) bt_guard_scan = 0;
-    bt_events(bt_tick(now));
+    if (!bt_ready_paint) bt_events(bt_tick(now));
     bt_audio_tick(now, focus && !bt_readonly);
     if (focus) bt_redraw(0);
 }
@@ -327,7 +338,7 @@ static void bt_pulse(void)
 void os88_paint(void *win)
 {
     if (bt_about_up) os88_about_card_d(win, bt_about_lines);
-    else { bt_face_paint(win, 1); os88_wm_grow(win); }
+    else { bt_face_paint(win, 1); os88_wm_grow(win); bt_scene_drawn(); }
     if (!bt_timer_ok && !bt_worker_live) {
         if (os88_task_spawn(win) == 0) bt_worker_live = 1;
         else bt_message("Timer busy. Close another app and reopen.");

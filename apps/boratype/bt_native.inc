@@ -112,6 +112,61 @@ _bt_copy_font:
 
 ; The 8KB drawing band becomes CGA's 2KB cell shadow while the native
 ; renderer is parked. No additional claim or full-screen framebuffer.
+_bt_cga_grid_clear:
+    push es
+    mov ax,ds
+    mov es,ax
+    mov di,_bt_io
+    mov ax,0020h
+    mov cx,1000
+    cld
+    rep stosw
+    pop es
+    ret
+
+; void bt_cga_text(int x,int y,const char *s,int ink,int paper).
+; C ABI scratch registers, preserves BP/DS/ES. Only a bounded package-owned
+; character/attribute row is composed; this routine never draws or calls OS.
+_bt_cga_text:
+    push bp
+    mov bp,sp
+    mov ax,[bp+4]
+    test ax,ax
+    js .out
+    cmp ax,40
+    jae .out
+    shl ax,1
+    mov di,ax
+    mov ax,[bp+6]
+    test ax,ax
+    js .out
+    cmp ax,25
+    jae .out
+    mov dx,80
+    mul dx
+    add di,ax
+    add di,_bt_io
+    mov ax,[bp+12]
+    mov cl,4
+    shl al,cl
+    or al,[bp+10]
+    and al,33h
+    mov ah,al
+    mov cx,40
+    sub cx,[bp+4]
+    mov si,[bp+8]
+    cld
+.copy:
+    lodsb
+    test al,al
+    jz .out
+    mov [di],ax
+    add di,2
+    loop .copy
+.out:
+    pop bp
+    ret
+
 _bt_cga_clear_shadow:
     push es
     mov es,[_bt_band]

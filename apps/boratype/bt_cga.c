@@ -19,16 +19,10 @@ void bt_cga_portrait(int id, int x, int y);
 void bt_cga_palette(void);
 void bt_cga_pointer(int x, int y);
 
-static void bt_cga_text(int x, int y, const char *s, int ink, int paper)
-{
-    int at;
-    if (y < 0 || y >= 25 || x < 0 || x >= 40) return;
-    at = y * 40 + x;
-    while (*s && x < 40) {
-        bt_cga_grid[at++] = (BTByte)*s++ | ((ink | (paper << 4)) << 8);
-        x++;
-    }
-}
+/* Bounded native row composition and clear, the same character/attribute
+ * workspace. Repeated C byte stores cost the XT more than the VRAM commit. */
+void bt_cga_text(int x, int y, const char *s, int ink, int paper);
+void bt_cga_grid_clear(void);
 static void bt_cga_number(int x, int y, unsigned n)
 {
     os88_utoa(n, bt_cga_num);
@@ -87,7 +81,7 @@ static void bt_cga_paint(void)
     int i, start, at, limit, pose, portrait, portrait_x;
     BTProfile *p;
     if (bt_cga_pointer_up) { bt_cga_pointer(bt_cga_mx, bt_cga_my); bt_cga_pointer_up = 0; }
-    for (i = 0; i < 1000; i++) bt_cga_grid[i] = 0x0020;
+    bt_cga_grid_clear();
     p = &bt_store.profile[bt_store.selected];
     bt_cga_text(0, 0, "      BORAT TEACHES TYPING       F6 EXIT", 0, 1);
     bt_cga_text(1, 1, "L Lessons  P Practice  C Test  R Records", 1, 0);
@@ -196,6 +190,7 @@ static void bt_cga_paint(void)
     }
     bt_cga_oldpose = pose;
     bt_cga_pointer(bt_cga_mx, bt_cga_my); bt_cga_pointer_up = 1;
+    bt_scene_drawn();
 }
 static void bt_cga_click(int col, int row)
 {

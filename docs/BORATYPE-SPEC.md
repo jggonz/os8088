@@ -29,6 +29,10 @@ and punctuation included; no attempts/time displays a dash. Intermediate
 products use checked two-word arithmetic. Pauses exclude elapsed ticks.
 Finished statistics freeze exactly once. Challenges have a three-second ready
 countdown, then 60/180/300 active seconds and expire without keyboard input.
+The native adapter reports its initial scene visible exactly once before
+starting that countdown: `bt_ready_visible(now)` resets only a READY session's
+last tick, remaining ready ticks (55) and displayed count (3). Initial drawing
+does not spend ready or scored time. ACTIVE/finished sessions ignore this call.
 Focus loss, manual pause or display transition makes a challenge unranked.
 
 24 authored lessons declare keys, introduced characters, instructions and
