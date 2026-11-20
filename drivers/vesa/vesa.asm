@@ -2197,7 +2197,9 @@ vxp_spans:
 ; VX_FONTRUN - font_run's planar arm, no region armed and not disabled: CX =
 ;              x, DX = y, ES:SI the ASCIIZ string, [font_rn_fg]/[font_rn_bg]
 ;              through VXB_FONTFG; the glyphs at [font_seg]:[font_base] +
-;              (c - 32) * 8, an unprintable cell painted blank. A cell off
+;              (c - 32) * 8 up to the LIVE [font_span] through VXB_FONTLIM
+;              (94, or 223 while the CP850 face is bound - SPEC.md 6.7),
+;              an unprintable cell painted blank. A cell off
 ;              the display's edges is skipped and the run goes on (SPEC.md
 ;              6.1); [gfx_color] is left at the foreground, the contract's
 ;              "pen spent"
@@ -2215,6 +2217,9 @@ vxp_fontrun:
     mov [vx_fseg], ax
     mov ax, [es:di+2]           ; font_base
     mov [vx_fbase], ax
+    mov di, [vx_p_fontlim]
+    mov al, [es:di+1]           ; font_span, read with the table it bounds
+    mov [vx_fspan], al
     pop es
     mov ax, [vx_y]
     sub ax, 8
@@ -2243,8 +2248,8 @@ vxp_fontrun:
     mov si, [cs:vx_bsrc]
     mov al, [si-1]              ; the character again
     pop ds
-    sub al, VX_FONT_FIRST
-    cmp al, VX_FONT_LAST - VX_FONT_FIRST
+    sub al, VX_FONT_FIRST       ; ONE unsigned test for both ends, as the
+    cmp al, [vx_fspan]          ; kernel's: a control wraps past the span
     jbe .glyph
     xor al, al                  ; unprintable: the blank cell, which is SPACE
 .glyph:
@@ -2553,6 +2558,7 @@ vx_p_fontfg dw 0
 vx_p_cfgve  dw 0
 vx_p_kret   dw 0                ; a kernel `ret`: where a tail hook goes back
 vx_p_null   dw 0                ; ...and the kernel's draw-nothing entry
+vx_p_fontlim dw 0               ; font_last, font_span: the LIVE glyph bounds
 %if $ - vx_p_tabrow != VXB_SIZE - 2
   %error "the pointer bank has drifted from vxabi.inc's VXB_* layout"
 %endif
@@ -2605,7 +2611,7 @@ vx_bnb      dw 0
 vx_bmask    db 0
 vx_b1adp    db 0
 vx_b1hm     db 0
-            db 0
+vx_fspan    db 0                ; VX_FONTRUN's copy of [font_span]
 vx_sstep    dw 0
 vx_sdy      dw 0
 vx_fbase    dw 0

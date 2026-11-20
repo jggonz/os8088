@@ -249,6 +249,7 @@ vesacp secs=50   # the Display page in protected mode: VXV_NEXT cycles the class
 vesablit4 secs=20   # a package's OSAPI_GFX_BLIT4 on VID_VESA, WireBall's title art pixel for pixel (565 re-expanded QEMU's way, vesa.px)
 vesafsx secs=20   # Gorillas' BIOS-mode bracket from the VESA desktop and back: the mode restored through VX_SETMODE, the margin's dither whole
 vesashut secs=40   # Shut Down on the VESA desktop: every driver detached (vx_detach points [vx_ep] at KERNEL_SEG:vx_null, the code selector on kern_mega), mode 12h and the sentence drawn
+vesakbd secs=30   # CP850 text in protected mode: Spanish on the Keyboard page, n-tilde typed into its sample and its eight rows read off the glass - VX_FONTRUN reads font_span through the kernel's data selector; red: the run bounded by 126 (a blank cell)
 
 # MOVES AND THE HEAP (wave 2)
 # On a 1MB kern_mega (@OS88_BOCHS_MEGS=1: no pool) every claim is conventional

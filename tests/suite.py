@@ -7087,6 +7087,19 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=400,
         wants=("build/os8088.img", "build/apps.img", "build/vesapref.img",
                "build/solitair.o88")),
+    Row("vesakbd", "soak", py("tests/vesakbd.py"), 7.0,
+        "CP850 text on the packed display (SPEC.md 6.7, 120.3.2): on "
+        "vesa.img's 1024x768x16 desktop the Control Panel's Keyboard page "
+        "picks Spanish (Spain) and `a` and the n-tilde key go into its typing "
+        "sample, a font_run and so VESA.DRV's VX_FONTRUN. Asserts the sample "
+        "bytes, font_last/font_span 255/223 (the sample's glyph hold), then "
+        "the glass: n-tilde's eight authored rows exact in cell 1, ink in "
+        "cell 0, none in the padding. As first shipped the driver bounded "
+        "the index by the constant 126 and every CP850 cell drew blank; "
+        "putting that bound back fails cell 1. 6.8s measured. QEMU by name, "
+        "vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
     Row("vesagor", "soak", py("tests/vesagor.py"), 32.0,
         "Gorillas' field on the packed desktop (SPEC.md 120.5, the package "
         "rule for DH): build/vesafsx.img's autostart opens Gorillas on the "
