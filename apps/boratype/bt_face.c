@@ -138,7 +138,7 @@ static void tf_lines(int x,int y,int w,int rows,const char *s)
 static void tf_button(int x,int y,int w,int h,const char *s,int a,int selected)
 {
     if(tf_nhit<TF_HITS){tf_hit[tf_nhit][0]=x;tf_hit[tf_nhit][1]=y;tf_hit[tf_nhit][2]=w;tf_hit[tf_nhit][3]=h;tf_hit[tf_nhit++][4]=a;}
-    gk_button(x,y,w,h,s,tf_font,(selected?GK_B_HILITE:GK_B_NORMAL)|GK_B_FLAT);
+    gk_button(x,y,w,h,s,tf_font,(selected?(tf_mono?GK_B_FOCUS:GK_B_HILITE):GK_B_NORMAL)|GK_B_FLAT);
 }
 static int tf_kx,tf_ky0,tf_kww,tf_khh;
 static int tf_ktarget,tf_kshift,tf_kwrong,tf_kcorrect;

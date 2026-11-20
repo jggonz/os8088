@@ -125,9 +125,12 @@ SmallerC plus `cc8086.py --max-frame96` passes with a26-byte maximum frame. Full
 with the native clipped fill service, so OWNBG windows never retain stale
 pixels there; typing updates continue through the band core.
 A face-only assembled size probe with external references resolved to zero
-measured `.text`9266, `.data`450, `.rodata`2913, `.modc`4913 and `.bss`975
+measured `.text`9263, `.data`450, `.rodata`2913, `.modc`4913 and `.bss`975
 bytes. This excludes the shared drawing core/game kit, runtime and integration
 thunks; the final package build is the authority for combined cost.
+
+The host compile/run measured0.35seconds on this host. Truncated, malformed
+dimension and transparency-bearing art sources are rejected.
 
 The new host harness should be registered as `boratypeface` with its measured
 runtime. Parent integration owns that registration, installed guest rows and
