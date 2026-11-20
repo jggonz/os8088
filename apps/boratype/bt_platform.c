@@ -10,7 +10,7 @@ static struct os88_video bt_video;
 static int bt_timer_ok, bt_worker_live, bt_save_pending, bt_about_up;
 static int bt_focused = 1, bt_guard_scan, bt_last_scan, bt_in_cga;
 static int bt_cga_exit, bt_quit_pending, bt_closing;
-static BTByte bt_io[BT_SAVE_CAP];
+static BTByte bt_io[BT_FILE_SIZE]; /* canonical2136B save, also2000B CGA cells */
 static BTWord bt_saved_generation;
 static const char *bt_slots[2] = {"BORATA.BTT", "BORATB.BTT"};
 static const char *bt_about_lines[] = {"Borat Teaches Typing", "Native C typing tutor for os8088",
@@ -102,7 +102,8 @@ static void bt_pause_ui(void)
 
 static void bt_fullscreen_toggle(void)
 {
-    int caps, kind, was;
+    int caps, was;
+    static int kind; /* API out-parameter: SS is not DS. */
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY) {
         bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
     }
@@ -339,7 +340,7 @@ void os88_worker(void *win)
 {
     for (;;) { os88_task_alive(win); os88_wm_wake(win); os88_task_sleep(1); }
 }
-void os88_about(void *win)
+static void ovl_bt_about(void *win)
 {
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY) {
         bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
@@ -347,7 +348,7 @@ void os88_about(void *win)
     bt_audio_state(BT_S_PAUSE);
     bt_about_up = 1; os88_about_card(win, bt_about_lines);
 }
-void os88_oncmd(int item, int menu, void *win)
+static void ovl_bt_oncmd(int item, int menu, void *win)
 {
     (void)win;
     bt_last_scan = 0;
@@ -388,7 +389,7 @@ void os88_onmove(unsigned was, unsigned now)
 static struct os88_class bt_class = {OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWNBG,
     os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
     os88_t_onclose, 0, os88_t_onresize, 0, 0, os88_t_ontimer, 0, 0};
-void *os88_main(void)
+static void *ovl_bt_main(void)
 {
     bt_init();
     bt_readonly = bt_other_instance();
@@ -417,3 +418,9 @@ void *os88_main(void)
     bt_audio_state(bt_screen);
     return bt_win;
 }
+
+/* Cold startup/native-menu code occupies the embedded second code segment.
+ * The callbacks themselves remain resident runtime targets. */
+void os88_about(void *win) { ovl_bt_about(win); }
+void os88_oncmd(int item, int menu, void *win) { ovl_bt_oncmd(item, menu, win); }
+void *os88_main(void) { return ovl_bt_main(); }

@@ -23049,21 +23049,21 @@ $(BUILD)/BTSOUND.BIN: tools/os88gkmus.py tools/os88btart.py tools/os88bbart.py a
 boratype: $(BUILD)/boratype.o88
 #> [Applications] boratypedisk :: Borat Teaches Typing software disk in all four floppy geometries
 boratypedisk: $(BUILD)/boratype.img $(BUILD)/boratype720.img $(BUILD)/boratype120.img $(BUILD)/boratype360.img
-$(BUILD)/boratype.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+$(BUILD)/boratype.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/boratype720.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+$(BUILD)/boratype720.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/boratype120.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+$(BUILD)/boratype120.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/boratype360.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+$(BUILD)/boratype360.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
 #> [Applications] boratypebundle :: build and validate a local Borat Teaches Typing WPK installer
 boratypebundle: $(BUILD)/BORATYPE.WPK
-$(BUILD)/BORATYPE.WPK: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88wire.py
+$(BUILD)/BORATYPE.WPK: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88wire.py Makefile
 	@mkdir -p $(BUILD)/boratype-stage
 	@cp $(BUILD)/boratype.o88 $(BUILD)/boratype-stage/BORATYPE.O88
 	@cp apps/boratype/HELP.TXT $(BUILD)/boratype-stage/HELP.TXT

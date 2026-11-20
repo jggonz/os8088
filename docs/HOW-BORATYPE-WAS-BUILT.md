@@ -34,4 +34,42 @@ licensed audio.
 
 ## Measurements and observations
 
-Pending. The delivery plan records actual evidence as it is collected.
+The engine lane runs the production C under target-width host types: all
+65,536 tick conversions, 200,000 multiply/divide cases, all24 complete
+lessons and four intentionally broken production variants. Its standalone
+native fixture passed the compiler/frame gate. These are host/compile
+observations, not a guest acceptance pass.
+
+The face lane checked24 color/mono geometries, with minimum480x128 content,
+normal616x410 and640x480, EGA-height and VESA-sized layouts. It checks all95
+printable characters, shifted physical keys, opposite-hand Shift, I versus J,
+and zero output for unchanged state. A first VGA character emitted9 opaque
+bands covering17,808 pixels; that is a drawing bound, not measured XT latency.
+
+The newly generated portrait master contains eight coherent expressions.
+Art0 is63,677 bytes; the blink records share a9,542-byte second part with
+music/effects. Each converter reads committed exact-pixel source, and no
+image service or PNG decoder is in make. The three original loops last35.2,
+49.2 and31.6 seconds, with three stingers and eleven effects.
+
+The file transport's35 fault checks passed under sanitizers, including
+truncation, corruption, stale valid read-back, missing/read-only storage and
+generation wrap. The PCM bridge's actual8086 mock tests reject19 malformed
+packs and verify byte-exact ring refill after relocating its source. An
+actual sound card, audible result and subjective listening remain guest QA.
+
+The first fully integrated package hit the expected segment fence:54,142
+resident bytes plus12,031 BSS exceeded0xFE00 by1,149. Startup and native menu/
+About bodies moved to the existing embedded C overlay; the typing and CGA
+foreign-mode paths stayed resident. No OS budget was raised. The exact-size2,136-byte file buffer replaced a4KB buffer and still holds
+CGA's2,000-byte cell workspace. The resulting package is53,908 resident +
+10,071 BSS =63,979 bytes,1,045 below0xFE00; overlay8,313, total compressed
+package80,925. All four software disks and an85KB WPK build and validate.
+The disks explicitly pre-create SYSTEM/APPDATA so a direct B: launch can save.
+
+Downloaded character clips and local test packs live outside the repository.
+No redistribution permission is established, so the base package includes
+original captions/music/effects and a real optional local PCM import path.
+The rights/candidate log is [audio sources](boratype/audio-sources.md).
+This is a specific unfinished requirement, not a claim that subtitles pass
+as voice playback. No external publishing has occurred.

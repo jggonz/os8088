@@ -8,10 +8,10 @@ static void ovl_bt_load(void)
     BTWord first, candidate;
     int valid;
     if (bt_data_enter() != 0) return;
-    n = os88_file_read(bt_slots[0], bt_io, BT_SAVE_CAP);
+    n = os88_file_read(bt_slots[0], bt_io, sizeof(bt_io));
     valid = !os88_ferr() && n && bt_decode(bt_io, n);
     first = bt_store.generation;
-    n = os88_file_read(bt_slots[1], bt_io, BT_SAVE_CAP);
+    n = os88_file_read(bt_slots[1], bt_io, sizeof(bt_io));
     candidate = n >= 10 ? bt_io[8] | ((BTWord)bt_io[9] << 8) : 0;
     if (!os88_ferr() && n && (!valid || (short)(candidate - first) > 0) &&
         bt_decode(bt_io, n)) valid = 1;
@@ -28,13 +28,13 @@ static void ovl_bt_save(void)
     if (bt_readonly) { bt_message("Read-only: another Borat session owns progress."); return; }
     if (bt_data_enter() != 0) { bt_message("Save failed. Use a writable installed disk."); return; }
     bt_store.generation = bt_saved_generation + 1;
-    n = bt_encode(bt_io, BT_SAVE_CAP);
+    n = bt_encode(bt_io, sizeof(bt_io));
     slot = bt_store.generation & 1;
     expected = bt_store.generation;
     checksum = n >= 20 ? bt_io[18] | ((BTWord)bt_io[19] << 8) : 0;
     ok = n && os88_file_write(bt_slots[slot], bt_io, n) == 0;
     if (ok) {
-        check = os88_file_read(bt_slots[slot], bt_io, BT_SAVE_CAP);
+        check = os88_file_read(bt_slots[slot], bt_io, sizeof(bt_io));
         ok = !os88_ferr() && check == n && check >= 20 &&
             (bt_io[8] | ((BTWord)bt_io[9] << 8)) == expected &&
             (bt_io[18] | ((BTWord)bt_io[19] << 8)) == checksum && bt_decode(bt_io, check);
