@@ -15,6 +15,7 @@ typedef unsigned char BTByte;
 #define BT_PASSAGE 192
 #define BT_DIFFS 4
 #define BT_SAVE_CAP 4096
+#define BT_MASTERY 95
 #define BT_LESSON 0
 #define BT_PRACTICE 1
 #define BT_CHALLENGE 2
@@ -48,7 +49,10 @@ typedef struct {
     BTWord key_attempt[BT_KEYS], key_error[BT_KEYS];
     BTWord record_wpm[3][BT_DIFFS], record_accuracy[3][BT_DIFFS];
     BTWord achievements, best_streak, practice_minutes, baseline_wpm;
+    BTWord best_wpm;
     BTByte next_lesson;
+    BTWord recent_wpm[4], recent_accuracy[4], recent_seconds[4];
+    BTByte recent_mode[4], recent_next;
 } BTProfile;
 typedef struct {
     BTProfile profile[BT_PROFILES];
@@ -58,9 +62,11 @@ typedef struct {
 typedef struct {
     BTByte mode, status, lesson, difficulty, duration, ranked, started, committed;
     BTByte last_wrong, error_run, countdown, new_record;
+    BTByte profile, paused_ready;
     BTWord attempts, correct, errors, net, pos, length, completed;
     BTWord streak, best_streak, backspaces, elapsed, last_tick, ready_ticks;
     BTWord wpm, accuracy, seconds, remaining, seed, events, achievement_new;
+    BTWord key_attempt[BT_KEYS], key_error[BT_KEYS];
     char passage[BT_PASSAGE + 1];
 } BTSession;
 extern BTStore bt_store;
@@ -96,6 +102,7 @@ int bt_validate_lessons(void);
 #define BT_S_PROFILE 10
 extern int bt_screen, bt_selection, bt_ch_duration, bt_ch_diff, bt_master_sound;
 extern int bt_full, bt_readonly, bt_profile_edit;
+extern int bt_practice_weak;
 extern char bt_notice[64];
 /* Face bridge owned by UI lane. Main paints with full=1 for W_PAINT and
  * full=0 for state changes. Mouse coordinates are absolute, as OS events. */
