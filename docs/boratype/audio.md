@@ -91,7 +91,9 @@ lesson, error and result music; observes the real error-effect call; exercises
 master mute and verifies all app-owned heap claims are freed at close. The
 optional OS route probe pauses a lesson, changes the real speaker route,
 resumes normally, detaches SOUND, resumes through the speaker, reattaches,
-and resumes FM. It does not inject score state or simulate hardware removal.
+and resumes FM. Each route must produce a nonzero captured waveform after
+ordinary Resume; route/status bytes alone cannot pass. It does not inject
+score state or simulate hardware removal.
 
 ```
 make boratype mixertest build/os8088-360.img
@@ -103,11 +105,36 @@ python3 tests/boratype_audio_target.py --route-probe --evidence /tmp/bt-audio-ro
 The default fixture is just the installed package and its save directory;
 there are no local audio packs, synthetic clips, downloads or network needs.
 `--negative` disables Music through the actual Settings UI and must fail the
-ordinary title-waveform assertion. Historical pre-removal speaker captures
-measured RMS 0.654 / 0.623 / 0.278 / 0.611 for title / lesson / error / record,
-with an exactly silent mute span. FM title/lesson/record were approximately
-0.0104 / 0.0029 / 0.0105 with a 0.000049 residual mute floor. These measurements
-are prior evidence; final no-clip source requires its own target run.
+ordinary title-waveform assertion.
+
+The final no-clip package from source `743da2621` was captured on both XT
+machines. Its SHA256 is
+`946461362cc2597703aa19904574634065fe560817a40dd2d27f128ee360c360`;
+the matching `kernel.bin` is
+`9a88e1725f4378664e1852d662276221bbe928280ac34863ba49765518081b1f`.
+
+| Technical run | Measured host seconds | Title / lesson / error / result RMS | Mute RMS |
+| --- | ---: | --- | ---: |
+| FM, real OS route and driver changes | 36.601 | .010397 / .005813 / .019814 / .010507 | .000048565 |
+| Speaker, no SOUND driver | 19.495 | .650591 / .689712 / .316454 / .608120 | 0 |
+| Music disabled through Settings | 11.693 | Expected title assertion failure | — |
+
+The route run additionally measured .670909 on the selected speaker,
+.475606 after actual SOUND detach, and .006029 after reattaching and
+resuming FM. Both positive runs observed real START then WRONG effect calls,
+three-error captions, committed results, and an empty app-owned heap ledger
+after Close. OPL key-on bits were clear and the no-driver speaker gate was
+off at exit. JSON, PNG and WAV evidence is outside the repository in
+`boratype-logs/audio-effects-routes-serviced` and
+`boratype-logs/audio-effects-pass-speaker-serviced`.
+
+The initial full PLAY paint and each full Resume paint prevented sequencer
+service for 132–136 OS ticks (about 7.3 seconds) in these captures. Short
+speaker leases therefore expire during that draw. The harness records this
+delay and starts steady-music waveform windows after a real sequencer tick;
+it does not claim continuous music across full paints. FM can sustain an
+already-keyed note during that interval. Ordinary incremental typing and
+the final renderer latency measurements are separate integration evidence.
 
 All captures remain technical evidence. The audio helper explicitly reported
 that this environment does not support audio input. Subjective listening and

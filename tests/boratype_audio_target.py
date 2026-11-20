@@ -67,6 +67,10 @@ def validate_signals(ev):
         assert rows and rows[0]['rms']>.0005,(stage,'missing actual output')
     muted=[x for x in ev['signals'] if x['stage']=='mute' and sink in x['sink']]
     assert muted and muted[0]['rms']<.0002,'master mute left audible output'
+    if ev.get('os_route_change'):
+        for stage,route_sink in (('route-speaker','pc_speaker'),('detached-speaker','pc_speaker'),('route-fm','adlib')):
+            rows=[x for x in ev['signals'] if x['stage']==stage and route_sink in x['sink']]
+            assert rows and rows[0]['rms']>.0005,(stage,'route selected but output stayed silent')
 
 class Probe:
     def __init__(self,ui,app,evidence,cap,backend):
@@ -101,6 +105,13 @@ class Probe:
     def tickwait(self,n):
         start=self.ui._word('ticks')
         self.wait(lambda:((self.ui._word('ticks')-start)&65535)>=n,'guest ticks',n/18.2+10)
+    def serviced(self,stage):
+        # Full scene paints publish their state before completing. A speaker
+        # note's lease can expire during that draw; measure resumed music
+        # after an actual sequencer tick, and retain the startup delay.
+        initial=self.v('gkm_last');start=self.ui._word('ticks')
+        self.wait(lambda:self.v('gkm_last')!=initial,stage+' sequencer service',40)
+        self.ev.setdefault('service_wait_ticks',{})[stage]=(self.ui._word('ticks')-start)&65535
     def mark(self,name):
         item={'name':name,'guest_cycles':self.m.status()['cycles'],'ticks':self.ui._word('ticks'),
               'audio':self.audio(),'sinks':{p.name:wav_meta(p) for p in self.cap.parent.glob(self.cap.name+'.*.wav')}}
@@ -114,10 +125,18 @@ class Probe:
         self.m.pause();self.m.bp_exec((self.app.p.seg<<4)+self.app.sym['_gkm_sfx']);self.m.run()
         before=self.app.state()['attempts']
         try:
-            self.m.key('KeyX');assert self.m.wait_stop(guest=20)=='breakpoint'
-            regs=self.m.regs();arg=int.from_bytes(self.m.read((regs['ss']<<4)+regs['sp']+2,2),'little')
-            assert arg==3,'wrong input did not request the distinct error effect'
-            self.ev.setdefault('effect_cues',[]).append(arg)
+            self.m.key('KeyX')
+            for _ in range(4):
+                assert self.m.wait_stop(guest=20)=='breakpoint'
+                regs=self.m.regs()
+                arg=int.from_bytes(self.m.read((regs['ss']<<4)+regs['sp']+2,2),'little')
+                self.ev.setdefault('effect_cues',[]).append(arg)
+                if arg==3:break
+                # The first printable attempt also starts timing and emits
+                # the legitimate lesson-start cue before its wrong-key cue.
+                assert arg==1,('unexpected effect before wrong-key cue',arg)
+                self.m.run()
+            else:raise AssertionError('wrong-key effect never requested')
         finally:self.m.bp_exec();self.m.run()
         self.wait(lambda:self.app.state()['attempts']==before+1,'wrong key consumed')
 
@@ -163,15 +182,20 @@ def route_probe(p):
     p.wait(lambda:p.v('gkm_held',1)==0,'paused app releases FM channels')
     tier(cp,0,E['SND_RT_SPK']);ui.close(cp);ui.raise_window(app.win);p.press('F4','PLAY')
     p.wait(lambda:p.v('gkm_rt',1)==2 and p.v('gkm_cur')==2,'ordinary resume selects speaker')
+    p.serviced('route-speaker')
     p.mark('route-speaker-start');p.tickwait(36);p.mark('route-speaker-end')
     p.press('F4','PAUSE');cp=panel(E['CP_IDRV']);ui.mo.click(*soundbutton(cp),settle=0)
     ui._wait(lambda:ui._word('drv_fseg')==0,'actual SOUND driver detached',30)
     ui.close(cp);ui.raise_window(app.win);p.press('F4','PLAY')
     p.wait(lambda:p.v('gkm_rt',1)==2 and p.v('gkm_cur')==2,'ordinary resume after detach uses speaker')
+    p.serviced('detached-speaker')
+    p.mark('detached-speaker-start');p.tickwait(36);p.mark('detached-speaker-end')
     p.press('F4','PAUSE');cp=panel(E['CP_IDRV']);ui.mo.click(*soundbutton(cp),settle=0)
     ui._wait(lambda:ui._word('drv_fseg')!=0,'actual SOUND driver reattached',45)
     panel_page(p,cp,E['CP_ISND'],E);tier(cp,2,E['SND_RT_SB']);ui.close(cp);ui.raise_window(app.win)
     p.press('F4','PLAY');p.wait(lambda:p.v('gkm_rt',1)==1 and p.v('gkm_cur')==2,'ordinary resume restores FM')
+    p.serviced('route-fm')
+    p.mark('route-fm-start');p.tickwait(36);p.mark('route-fm-end')
     assert app.state()['pos']==position
     ev['os_route_change']='PASS Pause/OS speaker route/Resume, real SOUND detach/Resume fallback, reattach/Resume FM; no Test Music or hardware-loss simulation'
 
@@ -185,6 +209,7 @@ def scenario(p,args):
     titlepath=next(cap.parent/x for x in end['sinks'] if sink in x)
     assert signal(titlepath,start['sinks'][titlepath.name]['samples'],end['sinks'][titlepath.name]['samples'])['rms']>.001,'title waveform silent (intentional with --negative)'
     p.press('F2','LESSONS');p.press('Enter','PLAY');p.wait(lambda:p.v('gkm_cur')==2,'lesson score')
+    p.serviced('lesson')
     p.mark('lesson-start');p.tickwait(40);p.mark('lesson-end')
     p.wait(lambda:((ui._word('ticks')-p.v('bta_spoke'))&65535)>=219,'visual reaction cooldown')
     p.mark('error-start');p.wrong_with_effect();p.type_one('x');p.type_one('x')
@@ -222,6 +247,7 @@ def main():
     if args.backend=='sb':assert Fat12(boot).read('SOUND.DRV')==(build/'sound.drv').read_bytes()
     symbols=T.app_symbols(build);layout=T.target_layout();os88sym.syms()
     ev={'status':'RUNNING','backend':args.backend,'machine':args.machine,
+        'app_build':str(build),
         'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
         'package_sha256':sha(build/'boratype.o88'),'kernel_sha256':sha(build/'kernel.sys'),
         'boot_sha256':sha(boot),'scratch_sha256':sha(disk),
@@ -240,7 +266,7 @@ def main():
         for path in cap.parent.glob(cap.name+'.*.wav'):finish_wav(path)
         ev['captures']={path.name:signal(path,0,10**12) for path in cap.parent.glob(cap.name+'.*.wav')}
         ev['signals']=[];marks={m['name']:m for m in ev.get('markers',[])}
-        for stage in ('title','lesson','error','mute','success','route-speaker'):
+        for stage in ('title','lesson','error','mute','success','route-speaker','detached-speaker','route-fm'):
             if stage+'-start' not in marks or stage+'-end' not in marks:continue
             a,b=marks[stage+'-start'],marks[stage+'-end']
             for name,stop in b['sinks'].items():
