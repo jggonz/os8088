@@ -35,7 +35,8 @@ import sys
 
 # --- SPEC.md 26.8.1 / 26.8.6 / 110.2 -----------------------------------------
 SC_REC = 128
-SC_VER = 2
+SC_VER = 3                      # what the kernel writes: whole-byte cells
+SC_VER2 = 2                     # ...and still reads: what cfg() writes
 SC_MAX = 15
 SC_R_VOL = 0
 SC_R_SLOT = 1
@@ -50,7 +51,8 @@ SC_R_BODY = 64
 STIK_MARK = 0x44                 # 'D'
 DESK_SC0 = 9                    # the pins block: zones 0..8
 DVOL_MAX = 8
-DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F
+DSL_NONE = 0xFF                 # desk_zslot / desk_zpin: no cell (26.9.2)
+DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F  # SC_VER2's cell byte only
 CFG_SIG = b"O88CFG\0\0"
 CFG_GEN_V = 3
 CFG_REC0 = 10
@@ -340,7 +342,7 @@ def cfg(rows=(), pins=None, head=None):
         raise DiaError("the pins block is %d bytes" % DESK_SC0)
     if not rows and all(b == 0xFF for b in pins):
         return head
-    tail = b"".join(rows) + pins + b"SC" + bytes([SC_VER, len(rows)])
+    tail = b"".join(rows) + pins + b"SC" + bytes([SC_VER2, len(rows)])
     # A file of CFG_FBUF or less is never read for a trailer (ovl_sc_load's
     # first compare). The kernel's own writer cannot make one - it rewrites
     # EVERY key, so its head alone is CFG_FBUF (SPEC.md 26.8.6) - but a
@@ -356,10 +358,17 @@ def cfg(rows=(), pins=None, head=None):
     return out
 
 
-def parse_row(r):
+def cell_of(b, ver):
+    """A trailer's cell byte as a cell (or DSL_NONE), as ovl_sc_load's .cell
+    decodes it: SC_VER2's placed and gone bits dropped, SC_VER's as it is."""
+    return b if ver != SC_VER2 or b == DSL_NONE else b & DSL_SLOT
+
+
+def parse_row(r, ver=SC_VER):
     r = bytes(r)
     return {
-        "vol": r[SC_R_VOL], "slot": r[SC_R_SLOT], "kind": r[SC_R_KIND],
+        "vol": r[SC_R_VOL], "slot": cell_of(r[SC_R_SLOT], ver),
+        "kind": r[SC_R_KIND],
         "mark": r[SC_R_STIK], "stik": r[SC_R_STIK] == STIK_MARK,
         "path": _cstr(r[SC_R_PATH:SC_R_PATH + SC_PATHMAX - 1]),
         "cap": _cstr(r[SC_R_CAP:SC_R_CAP + SC_CAPMAX - 1]),
@@ -382,7 +391,8 @@ def parse_cfg(data):
     if len(data) <= CFG_FBUF or len(data) >= CFG_MAXFILE:
         return none
     end = len(data) - 4 - DESK_SC0
-    if end < 0 or data[-4:-2] != b"SC" or data[-2] != SC_VER:
+    ver = data[-2]
+    if end < 0 or data[-4:-2] != b"SC" or ver not in (SC_VER2, SC_VER):
         return none
     n = data[-1]
     if n > SC_MAX:
@@ -397,9 +407,10 @@ def parse_cfg(data):
         if r[SC_R_KIND] > 2 or r[SC_R_VOL] >= DVOL_MAX:
             rows.append(None)
         else:
-            rows.append(parse_row(r))
-    return {"head": data[:start], "rows": rows,
-            "pins": list(data[end:end + DESK_SC0]), "trailer": True}
+            rows.append(parse_row(r, ver))
+    return {"head": data[:start], "rows": rows, "ver": ver,
+            "pins": [cell_of(b, ver) for b in data[end:end + DESK_SC0]],
+            "trailer": True}
 
 
 def stik_rows(data):
@@ -914,6 +925,13 @@ def selfcheck():
     ok(p["head"][:len(settings_head())] == settings_head(),
        "the settings head untouched")
     ok(p["pins"] == [0xFF] * DESK_SC0, "nine pins, none placed")
+    ok(p["ver"] == SC_VER2 and p["rows"][0]["slot"] == 3,
+       "SC_VER2's placed-bit byte reads back as cell 3")
+    v3 = bytearray(f)
+    v3[-2] = SC_VER
+    p3 = parse_cfg(bytes(v3))
+    ok(p3["trailer"] and p3["rows"][0]["slot"] == DSL_PIN | 3,
+       "SC_VER 3's byte IS the cell - 0x43 is cell 67")
     ok(len(stik_rows(f)) == 1, "stik_rows finds one")
     ok(cfg([]) == settings_head(), "nothing to keep, no trailer")
     ok(len(cfg([r])) > CFG_FBUF and parse_cfg(cfg([r]))["trailer"],

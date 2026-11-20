@@ -64,8 +64,12 @@ SC_R_BODY   equ 64              ; 64: the 16x16 picture (SPEC.md 25 body form),
 SC_REC      equ 128
 SC_PERKB    equ 8               ; rows a KB: 8 * 128, exactly. SC_MAX, the
                                 ; rows [sc_nrows] never exceeds, is desk.inc's
-SC_VER      equ 2               ; the trailer's own version (SPEC.md 26.8.6):
-                                ; 2 carries the placed drives' cells
+SC_VER      equ 3               ; the trailer's own version (SPEC.md 26.8.6):
+                                ; 2 carries the placed drives' cells, 3 every
+                                ; cell as a whole byte - [desk_zpin] verbatim.
+SC_VER2     equ 2               ; 2's byte was the table's old one, 0x40 (the
+                                ; placed bit) | 0x80 (gone) | a 6-bit cell,
+                                ; and the boot reader still takes it
 %if SC_PERKB * SC_REC > 1024
   %error "desksc: SC_PERKB records must fit one KB of the claim"
 %endif
@@ -840,8 +844,8 @@ sc_m_new:
     xor bh, bh                  ; 26.9) - and posted, so ui_task paints it
     mov al, [cs:sc_bc]
     call sc_m_cmark
-    or al, DSL_PIN
-    mov [bx+desk_zslot], al
+    mov [bx+desk_zslot], al     ; shown there...
+    mov [bx+desk_zpin], al      ; ...and placed there
     jmp sc_m_save
 
 ; -----------------------------------------------------------------------------
@@ -911,11 +915,11 @@ sc_m_add:
     call sc_m_cold              ; a link nobody can see
     jc .full
     mov al, [es:di+SC_R_SLOT]   ; THE CELL IT ASKED FOR, as a wish: the
-    or al, DSL_PIN | DSL_GONE   ; reflow in sc_m_save gives it that cell if it
-.zs:                            ; can and the first free one if not (SPEC.md
-    mov bl, [cs:sc_mz]          ; 26.9) - 0xFF stays 0xFF, "any"
-    xor bh, bh
-    mov [bx+desk_zslot], al
+.zs:                            ; reflow in sc_m_save gives it that cell if it
+    mov bl, [cs:sc_mz]          ; can and the first free one if not (SPEC.md
+    xor bh, bh                  ; 26.9) - DSL_NONE is "any"
+    mov [bx+desk_zpin], al
+    mov byte [bx+desk_zslot], DSL_NONE  ; ...not shown until it is granted
     push bx
     call sc_m_save
     pop ax                      ; AL = the zone
@@ -1478,14 +1482,13 @@ sc_m_move:
     mov bl, [cs:sc_mz]
     xor bh, bh
     mov al, [bx+desk_zslot]
-    and al, DSL_SLOT
     cmp al, [cs:sc_bc]
     je .ret                     ; it went nowhere: nothing to write
     call sc_m_cmark    ; the old cell, bare desktop or the next
     mov al, [cs:sc_bc]          ; drive to pack into it...
     call sc_m_cmark    ; ...and the new one
-    or al, DSL_PIN              ; PLACED, whatever it is: a drive dragged is
-    mov [bx+desk_zslot], al     ; where the user put it (SPEC.md 26.9)
+    mov [bx+desk_zslot], al     ; PLACED, whatever it is: a drive dragged is
+    mov [bx+desk_zpin], al      ; where the user put it (SPEC.md 26.9)
     jmp sc_m_save
 .ret:
     ret
@@ -1587,12 +1590,10 @@ sc_m_del:
 .ns:
     mov bl, al                  ; its cell goes, and is posted bare (SPEC.md
     xor bh, bh                  ; 26.9)
-    mov al, 0xFF
+    mov al, DSL_NONE
+    mov [bx+desk_zpin], al
     xchg al, [bx+desk_zslot]
-    cmp al, DSL_GONE
-    jae .kbz
-    and al, DSL_SLOT
-    call sc_m_cmark
+    call sc_m_cmark             ; (desk_cmark passes over DSL_NONE)
 .kbz:
     mov cl, [sc_nrows]          ; the highest row still in use decides the KB
 .h:
@@ -1668,10 +1669,10 @@ sc_m_ser:
     call sc_m_off
     cmp byte [es:di+SC_R_VOL], 0xFF
     je .cn
-    push bx                     ; the table's byte into the row: the FILE's
-    mov bl, al                  ; copy of where it is (SPEC.md 26.9)
+    push bx                     ; the PLACED cell into the row: the FILE's
+    mov bl, al                  ; copy of where it is (SPEC.md 26.9, 26.8.6)
     xor bh, bh
-    mov ah, [bx+desk_zslot]
+    mov ah, [bx+desk_zpin]
     mov [es:di+SC_R_SLOT], ah
     pop bx
     inc dx
@@ -1685,17 +1686,14 @@ sc_m_ser:
     or dl, dl
     jnz .go
     push cx                     ; no shortcut - but a PLACED drive is kept
-    mov si, desk_zslot          ; the same way
+    mov si, desk_zpin           ; the same way
     mov cx, DESK_SC0
     cld
 .anyp:
     mov al, [si]                ; the KERNEL's table, through DS
     inc si
-    cmp al, 0xFF
-    je .anyn
-    test al, DSL_PIN
-    jnz .anyy
-.anyn:
+    cmp al, DSL_NONE
+    jne .anyy
     loop .anyp
     pop cx
     jmp .plain                  ; nothing placed at all
@@ -1745,18 +1743,9 @@ sc_m_ser:
     jnz .r
     pop ds
 .rows:
-    mov si, desk_zslot          ; ...the placed drives' cells, the table's
-    mov cx, DESK_SC0            ; own bytes, 0xFF for any that flows...
-.pin:
-    mov al, [si]
-    inc si
-    test al, DSL_PIN            ; placed - or 0xFF, which has the bit too -
-    jnz .sp                     ; goes as it is, for the boot to read back
-
-    mov al, 0xFF
-.sp:
-    stosb
-    loop .pin
+    mov si, desk_zpin           ; ...the placed drives' cells, verbatim:
+    mov cx, DESK_SC0            ; DSL_NONE for any that flows...
+    rep movsb
     mov ax, 'SC'                ; ...and the footer
     stosw
     mov al, SC_VER
@@ -1885,8 +1874,10 @@ ovl_sc_load:
     jb .stage
     cmp word [es:di+DESK_SC0], 'SC'
     jne .stage
-    cmp byte [es:di+DESK_SC0+2], SC_VER
-    jne .stage
+    mov al, [es:di+DESK_SC0+2]  ; 2 or 3: SC_VER2's six-bit cells are
+    sub al, SC_VER2             ; decoded below, and anything else is a
+    cmp al, SC_VER - SC_VER2    ; trailer this kernel cannot read
+    ja .stage
     mov al, [es:di+DESK_SC0+3]
     cmp al, SC_MAX              ; 0..SC_MAX: none is legal, the file may be
     ja .stage                   ; keeping only placed drives
@@ -1897,8 +1888,8 @@ ovl_sc_load:
     jb .stage
     cmp di, CFG_REC0 + 2
     jb .stage
-    mov dx, di                  ; ...unless a trailer is there
-    inc bh
+    xchg dx, di                 ; ...unless a trailer is there: DX = the
+    mov bh, [es:di-2]           ; rows, BH = its version, never 0
 .stage:
     mov cx, dx                  ; the settings head, into ovc_buf
     cmp cx, CFG_FBUF
@@ -1933,20 +1924,30 @@ ovl_sc_load:
     rep movsb                   ; ...which leaves DS:SI on the placed cells
     pop es                      ; ES = the kernel
     push es
-    mov di, desk_zslot          ; THE TABLE'S zones 0..DESK_SC0-1, verbatim
-    mov cl, DESK_SC0            ; (SPEC.md 26.9): the writer put them in their
-    rep movsb                   ; final form, and the boot's rowcalc drops any
-    pop ds                      ; cell this screen does not have
+    mov di, desk_zpin           ; zones 0..DESK_SC0-1's PLACED cells (SPEC.md
+    mov cl, DESK_SC0            ; 26.9.2), as the file has them, and the
+    rep movsb                   ; reflow shows one this screen has not got
+    pop ds                      ; elsewhere, keeping it (SPEC.md 26.9.3)
     pop es                      ; ES = the claim
     mov [sc_nrows], bl
+    mov dl, bh                  ; DL = the trailer's version, for .cell
+    mov si, desk_zpin           ; ...decoded where it is SC_VER2's
+    mov cl, DESK_SC0
+.dv:
+    mov al, [si]
+    call .cell
+    mov [si], al
+    inc si
+    loop .dv
     mov cl, bl
     jcxz .none                  ; placed drives and no shortcut: no claim
     xor di, di                  ; every string terminated, whatever the file
-    mov bx, desk_zslot + DESK_SC0   ; said, and each row's cell into the table
+    mov bx, desk_zpin + DESK_SC0    ; said, and each row's cell into the table
 .san:
     mov byte [es:di+SC_R_PATH+SC_PATHMAX-1], 0
     mov byte [es:di+SC_R_CAP+SC_CAPMAX-1], 0
     mov ax, [es:di+SC_R_SLOT]   ; AL = the cell, AH = SC_R_KIND, the next
+    call .cell
     cmp ah, 2                   ; byte - and a row sc_m_add would refuse is
     ja .kill                    ; a FREE row: a kind or a volume no open can
     cmp byte [es:di+SC_R_VOL], DVOL_MAX ; follow (SPEC.md 26.9.6)
@@ -1963,9 +1964,28 @@ ovl_sc_load:
 .none:
     call ovl_sc_free            ; no trailer after all: give the claim back
 .done:
+    push es                     ; EVERY PLACED ITEM STARTS SHOWN in its cell,
+    push ds                     ; as the old byte's placed-and-not-gone did:
+    pop es                      ; the first reflow keeps it there if it is
+    mov si, desk_zpin           ; live and lets it go bare if not - and a
+    mov di, desk_zslot          ; flowing drive earlier in index order cannot
+    mov cx, DESK_NZ             ; take its cell first (SPEC.md 26.9.3)
+    rep movsb
+    pop es
     pop ax                      ; the head's length
     clc
     jmp ovl_sc_out
+
+; .cell - AL = a placed cell as trailer version DL wrote it, as a cell now:
+; SC_VER2's byte less its placed and gone bits, DSL_NONE kept (SPEC.md 26.8.6)
+.cell:
+    cmp dl, SC_VER2
+    jne .cv
+    cmp al, DSL_NONE
+    je .cv
+    and al, 0x3F
+.cv:
+    ret
 
 ;
 ; =============================================================================

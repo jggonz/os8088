@@ -25,8 +25,8 @@ GUEST'S OWN STATE:
      SYSTEM.CFG has no trailer again.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): take the header stamp out
-of sc_m_add and A fails on `1, 16`; take the wish out (store `DSL_PIN | cell`
-without DSL_GONE, so the reflow never places it) and A fails on cell 5; make
+of sc_m_add and A fails on `1, 16`; take the wish out (leave `desk_zpin`
+DSL_NONE, so the reflow gives it the first free cell) and A fails on cell 5; make
 sc_m_pdel jump straight into sc_m_del and C fails on the row going.
 
 The floppies are COPIED to a scratch directory first: the guest writes
@@ -47,7 +47,7 @@ import os88marty   # noqa: E402
 ROOT = os.path.join(HERE, "..")
 SC_REC = geom.SC_REC
 DESK_SC0 = 9
-DSL_SLOT, DSL_PIN, DSL_GONE = 0x3F, 0x40, 0x80
+DSL_NONE = geom.DSL_NONE     # desk_zslot / desk_zpin: no cell (26.9.2)
 
 fails = []
 
@@ -120,8 +120,11 @@ def main():
         lin = getattr(ui.m, "lin", lambda s, o=0: (s << 4) + o)
         m = ui.m
 
-        def zbyte(z):
+        def zbyte(z):           # the cell it is SHOWN in...
             return m.read(ui._S("desk_zslot") + z, 1)[0]
+
+        def zpin(z):            # ...and the cell it is PLACED in
+            return m.read(ui._S("desk_zpin") + z, 1)[0]
 
         def fresh():
             m.write(ui._S("toast_buf"), b"\0")
@@ -131,9 +134,9 @@ def main():
         fresh()
         ui.menu_pick("File", "Add")
         ui.wait_toast(says="Saved", limit=90)
-        v = zbyte(DESK_SC0)
-        check(v == DSL_PIN | 5, "the link is PLACED in cell 5, the one it "
-              "asked for (%#x)" % v)
+        v = (zbyte(DESK_SC0), zpin(DESK_SC0))
+        check(v == (5, 5), "the link is SHOWN and PLACED in cell 5, the one "
+              "it asked for (%r)" % (v,))
         seg = ui._word("sc_seg")
         row = bytes(m.read(lin(seg), SC_REC)) if seg else bytes(SC_REC)
         check(row[0] == 1 and row[2] == 1,
@@ -181,7 +184,7 @@ def main():
         check(m.read(res, 1)[0] == ord("r"),
               "Remove REFUSED: no row holds the link (%r)"
               % chr(m.read(res, 1)[0]))
-        check(zbyte(DESK_SC0) == DSL_PIN | 5 and path0() == ord("X"),
+        check(zbyte(DESK_SC0) == 5 == zpin(DESK_SC0) and path0() == ord("X"),
               "...and the row in it is still there (%#x)" % zbyte(DESK_SC0))
         m.write(lin(ui._word("sc_seg"), 4), b"D")
 

@@ -172,7 +172,7 @@ def zone_rect(q):
     shown = sum(1 for i in range(DVOL_MAX)
                 if vtab[i * DV_SIZE + DV_FLAGS] & 1)
     v = q.read(os88sym.linear("desk_zslot") + DVOL_MAX, 1)[0]
-    cell = v & 0x3F if v < 0x80 else shown
+    cell = v if v != 0xFF else shown    # its shown cell (SPEC.md 26.9.2)
     col, row = divmod(cell, rows)
     x = zx - DESK_PX * col
     y = DESK_ZY0 + step * row

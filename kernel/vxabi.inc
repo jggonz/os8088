@@ -19,6 +19,15 @@ VX_ABI_VER  equ 5               ; bump on ANY change to the contract below
                                 ;     selector's address IS the far return,
                                 ;     VX_CONT, VXB_KRET and VXB_NULL)
 
+; --- the widest primary VESA.DRV will choose (SPEC.md 120.2.2) ---------------
+; Here and not in the driver, because the KERNEL is sized for it: the menu
+; bar's MENU_BCMAX (menu.inc) and the desktop grid's DESK_FITS check against
+; DESK_CMAX (desk.inc, SPEC.md 26.9.1). Raising either is a kernel build that
+; checks it can hold the new screen - the 63-cell grid was a 1024x768
+; desktop whose icons could only be dropped in its right-hand 600 px.
+VXG_WMAX    equ 1024            ; VESA.DRV's VX_XMAX / VX_YMAX are these
+VXG_HMAX    equ 768
+
 ; --- the verbs, past DRVV_* -------------------------------------------------
 ; DRVV_ATTACH (0) probes and chooses a mode and answers SI = the VXS_* table
 ; below, in the driver's segment; DRVV_DETACH (1) points the kernel's far

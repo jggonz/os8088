@@ -63187,7 +63187,7 @@ there would be nothing to keep one in.
 | off | len | field |
 |---|---|---|
 | 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
-| 1 | 1 | its byte of `[desk_zslot]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
+| 1 | 1 | its PLACED cell, its byte of `[desk_zpin]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
 | 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
 | 3 | 1 | NOT spare, whatever this table said until §110: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a Sticky App row (§110.2). The Sticky App mark is an EQUALITY, so neither of the other two values can be read as one |
 | 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
@@ -63359,16 +63359,29 @@ a shortcut, or an item the user PLACED (§26.9.5):
 +0     'O88CFG',0,0  dw 3            ; unchanged
 +10    records ... dw 0              ; unchanged - every reader stops here
 +T     count * SC_REC                ; the live rows, verbatim and compacted,
-                                     ;   each row's +1 its table byte
-+T'    DESK_SC0 bytes                ; zones 0..8's table bytes: a PLACED
-                                     ;   one's, 0xFF for everything else
-+end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 2
+                                     ;   each row's +1 its placed cell
++T'    DESK_SC0 bytes                ; zones 0..8's [desk_zpin]: a PLACED
+                                     ;   one's cell, 0xFF for one that flows
++end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 3
 ```
 
 The footer is read from the END, so the reader never walks the records to
 find it. With nothing placed the file is byte for byte what it was before.
 Version 1 (no pins block, a two-byte column/row cell) is refused rather than
 read: it went to nobody.
+
+**Version 3 is version 2 with whole-byte cells.** A cell byte in a version-2
+file was the old table byte (§26.9.2's history): `0x40`, the placed bit,
+over a six-bit cell, with `0x80` on a placed item that was not shown.
+Version 3 writes `[desk_zpin]` itself, the cell 0..254 or `0xFF`, because
+a VESA desktop's cells go past 63. The boot reader takes both. On a version 2
+byte other than `0xFF`, `ovl_sc_load`'s `.cell` keeps the low six bits, so
+every file an older kernel wrote keeps its layout. It writes version 3, and
+an older kernel finds no trailer in a version 3 file and boots with no
+shortcuts and nothing placed, but with its settings. The host tools that make
+fixture and demo-disk files (`tools/os88deskcfg.py`, `os88pmcfg.py`,
+`os88stik.py`'s `cfg`) still write version 2, so the shipped disks keep
+exercising the decode.
 
 - **The writer is `CTRL.DRV`'s.** `sc_m_ser` composes settings, rows, pins
   and footer in a claim of its own, PINNED, for the length of the write.
@@ -63386,9 +63399,14 @@ read: it went to nobody.
   untouched for a file of `CFG_FBUF` or less, which is every file with no
   trailer. A bigger file is read whole into the shortcut claim; a valid
   trailer's rows move down to the claim's base with every string
-  force-terminated, and the pins block and each row's table byte go into
-  `[desk_zslot]` VERBATIM, because the file is untrusted only in what it can
-  break and §26.9.3's first reflow drops any cell this screen has not got.
+  force-terminated, and the pins block and each row's cell go into
+  `[desk_zpin]` (decoded from a version 2 file, above) and are copied into
+  `[desk_zslot]` as well, so every placed item starts SHOWN in its cell, as
+  the old byte's placed-and-not-gone state did. That way the first reflow
+  keeps it there if it is live, and a flowing drive earlier in index order
+  cannot take its cell first. Nothing else is validated: the file is
+  untrusted only in what it can break, and §26.9.3's reflow shows an item
+  whose cell this screen has not got somewhere else, keeping the cell.
 - **An OLDER kernel refuses a file that carries a trailer, and loses every
   setting.** Its `ovc_load` reads with `CX = CFG_FBUF` and `dskw_read`
   answers a larger file with `FERR_BIG` before any I/O. It cannot be fixed
@@ -63473,26 +63491,48 @@ of adapters.** Two rules make that true, and both were wrong once:
 | Hercules 720×348 | 5 | 7 | 35 |
 | EGA geometry 640×350 | 5 | 6 | 30 |
 | CGA 640×200 | 4 | 6 | 24 |
+| VESA 800×600 (§120) | 9 | 7 | 63 — exactly the old cap |
+| VESA 1024×768 | 12 | 10 | 120 |
 
 `[desk_ncell]` (kern_big) is how many cells this screen has: the columns from
 cell 0's left to the band's left edge, a left dock included, times
-`[desk_rows]`, capped at 63. `desk_rowcalc` computes it with the rows, so a
+`[desk_rows]`, capped at `DESK_CMAX`. `desk_rowcalc` computes it with the rows, so a
 display switch (§39.11.2) or a dock move re-shapes the grid and reflows it in
 the same call. The ITEM count does not follow the cell count: it stays at
 24 (§26.8.1's `SC_MAX` is 15), the CGA's cells. More cells means more places
 to put the same items.
 
+**`DESK_CMAX` is 255, and the build proves every screen fits under it.** A cell
+is a whole byte, `DSL_NONE` (`0xFF`) being "no cell", so 255 cells is what the
+tables can name. Until VESA it was 63: six bits of a byte that also carried
+a placed bit and a gone bit. A 1024×768 desktop has 120 cells, so the grid
+stopped after the 63rd and an item could be dropped only in the six or so
+columns nearest the right edge, about 600 px of a 1024 px screen.
+`DESK_FITS` (`desk.inc`) works out the cell count of a screen with no dock
+in the way and fails the build when it exceeds `DESK_CMAX`. It is applied to
+Hercules's 720×348 and, under `VID_EXT`, to `vxabi.inc`'s `VXG_WMAX` ×
+`VXG_HMAX`, the widest primary `VESA.DRV` will choose (§120.2.2, the
+driver's `VX_XMAX`/`VX_YMAX`). So **a larger VESA mode is a kernel build that
+checks the grid can hold it**: 1280×1024 (12 × 16 = 192 cells) fits, and
+1600×1200 (285) fails here, and then needs a 16-bit cell. The runtime cap
+stays as the guard behind that check. `kern_small` keeps 64, because its
+volumes take the first cells in order and never the 64th.
+
 #### 26.9.2 The table
 
-`[desk_zslot]` holds ONE BYTE PER ZONE, and that byte is the whole answer to
-"where is it, and is it shown":
+Two bytes per zone, in two adjacent tables, answer "where is it, and is it
+shown":
 
-| bits | | |
+| table | holds | `DSL_NONE` (`0xFF`) |
 |---|---|---|
-| 0..5 | `DSL_SLOT` | the cell, 0..`[desk_ncell]`−1 |
-| 6 | `DSL_PIN` | PLACED: the user put it there. A shortcut always is |
-| 7 | `DSL_GONE` | not shown. On a placed item it is a REMEMBERED cell — an unmounted drive's, or the cell an `OSAPI_DESK_ITEM` caller asked for — which it gets back when it is live and the cell is free |
-| `0xFF` | | nothing: no item, or a flowing one that is not live |
+| `[desk_zslot]` | the cell it is SHOWN in, 0..`[desk_ncell]`−1 | not shown |
+| `[desk_zpin]` (kern_big) | the cell it is PLACED in: the user put it there (a shortcut always is). While the item is not shown it is a REMEMBERED cell — an unmounted drive's, or the cell an `OSAPI_DESK_ITEM` caller asked for — which it gets back when it is live and the cell is free. Shown and placed, the two are the same cell | it FLOWS |
+
+A third, `[desk_zold]`, is `desk_reflow`'s scratch (§26.9.4). The tables were
+one byte, with the cell in bits 0..5, `DSL_PIN` at bit 6 and `DSL_GONE` at
+bit 7, and that is the 63-cell cap §26.9.1 retired. `desk_init` fills
+`[desk_zslot]` and `[desk_zpin]` with one `rep stosb`, because they are
+adjacent.
 
 The ZONE INDEX says what the item is: 0..`DVOL_MAX`−1 the volumes, `DESK_SVZ`
 = 8 the service item, `DESK_SC0` = 9 .. `DESK_NZ`−1 = 23 the shortcuts.
@@ -63504,8 +63544,11 @@ live, so it holds no cell and is never painted or hit. That test has to be
 resident, on the reflow's own path, which never touches a disk. `desk_owner` answers the inverse, which
 zone a cell is showing.
 
-**A cell no screen has is DSL_SLOT itself**, 63, which `[desk_ncell]` is
-capped below — so "nothing" needs no test of its own in the reflow's compares.
+**A cell no screen has is `DSL_NONE` itself**, which `[desk_ncell]` (at most
+`DESK_CMAX`, 255) never reaches, so in the reflow's compares "nothing" needs
+no test of its own: a flowing item's `[desk_zpin]` is past every screen's
+cells and goes to the first free one. `desk_cmark` passes over any cell at
+or past `DESK_CMAX`, so posting "no cell" is harmless.
 
 #### 26.9.3 The placement rule: `desk_reflow`
 
@@ -63515,20 +63558,41 @@ live — so it is the whole of "a volume came", "a volume went", "the Wire
 came", "an item was moved or removed" and "the screen changed shape". Two
 passes, and their order is the design:
 
-1. **Let go.** Every FLOWING item releases its cell (kept under `DSL_GONE`
-   for the repaint). A PLACED item that is no longer live goes from the
-   screen but REMEMBERS its cell. Any item in a cell this screen has not got
-   is forgotten.
+1. **Let go.** Every item releases its cell UNLESS it is placed, live, and
+   shown in its own `[desk_zpin]` cell. A FLOWING item always lets go. So
+   does a DISPLACED one, shown somewhere else because its cell was taken or
+   this screen has not got it, so that it tries its own cell again first. A
+   PLACED item that is no longer live goes from the screen and keeps
+   `[desk_zpin]`, so it REMEMBERS its cell.
 2. **Take.** Every live item without a cell, IN INDEX ORDER, takes one: a
-   placed one its remembered cell if that is free, otherwise — and every
-   flowing one — the first free cell. Index order is volumes, then the
-   service item, then shortcuts, so the Wire follows the drives whichever
-   driver loaded first, exactly as it did.
+   placed one its own cell if this screen has it and it is free, otherwise
+   — and every flowing one — the first free cell, and **the cell of its own
+   is kept**. Index order is volumes, then the service item, then shortcuts,
+   so the Wire follows the drives whichever driver loaded first, exactly as
+   it did. A shortcut with no cell of its own (a wish of `0xFF`) is placed
+   wherever it lands.
+
+**`[desk_zpin]` is never forgotten by the reflow.** It was: an item in a cell
+the screen had not got lost its placement, and a placed item whose cell was
+taken became a flowing one. With 63 cells on every screen that cost little.
+With VESA it cost every placement past the VGA's 42 cells on every boot,
+because kmain runs the first pass (`[desk_ready]`, below) on the boot's VGA
+grid and `vx_boot_x` switches the desktop to 1024×768 only after it. A drive
+dragged to the left of a VESA desktop came back in the right-hand column.
+Now that item is shown in the first free cell of the small grid and goes back
+to its own cell in the reflow `vid_switch`'s `desk_rowcalc` runs. A trip
+through the Display page to a smaller adapter and back keeps the layout for
+the same reason. Only the user (a drag, a remove) and `OSAPI_DESK_ITEM`
+write `[desk_zpin]`, and the boot reader seeds it from SYSTEM.CFG. Two items
+whose own cells are the same (a drive dragged elsewhere while unmounted,
+then a shortcut dropped into its cell) settle without flapping. Pass 1 keeps
+whichever one is shown there, the other takes the same first free cell on
+every pass, and it goes back once the cell is free.
 
 So the plan's D2 — *gapless, by re-adding every unplaced drive on any
 change* — costs no knowledge of what changed: an unplaced item is a "drive"
 to the reflow whatever it is. **A WISH IS A REMEMBERED CELL**: `OSAPI_DESK_ITEM`
-writes the asked-for cell as `DSL_PIN | DSL_GONE | cell` and pass 2 grants it
+writes the asked-for cell into `[desk_zpin]`, not shown, and pass 2 grants it
 if it can — "the slot you ask for, or the first available" is this routine
 and nothing new.
 
@@ -63551,8 +63615,13 @@ answer written down, and it needs neither `desk_owner` nor `[desk_ready]`.
 #### 26.9.4 What a change repaints
 
 `desk_reflow` posts every cell it CHANGED — the one an item left and the one
-it took — through `desk_cmark`, which sets the cell's bit in the 64-bit
-`[desk_cdirty]` and `[desk_zdirty]`, and posts `ui_task`. Nothing else is
+it took — through `desk_cmark`, which sets the cell's bit in
+`[desk_cdirty]` (`DESK_CMAX` bits, 32 bytes on kern_big) and
+`[desk_zdirty]`, and posts `ui_task`. It is a DIFF: pass 1 copies every
+`[desk_zslot]` into `[desk_zold]`, and pass 2 posts a zone's old and new cell
+only when they differ, so an item that went nowhere costs nothing.
+`desk_zones_paint` steps over a clean `[desk_cdirty]` byte eight cells at a
+time, so 255 cells cost it 32 compares when only one is dirty. Nothing else is
 needed to repaint a mount, an unmount, a driver attaching, a drag or a
 remove. `desk_zones_paint` runs `wm_paint_dmg` (§11.91) once per dirty cell:
 the desktop dither under it, any item now in it, and only the windows that

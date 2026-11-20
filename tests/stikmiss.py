@@ -38,8 +38,7 @@ import megafix     # noqa: E402  (kern_mega: the fixture rebuilt on mega.img)
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 DESK_SC0 = os88stik.DESK_SC0
-DSL_PIN, DSL_GONE, DSL_SLOT = os88stik.DSL_PIN, os88stik.DSL_GONE, \
-    os88stik.DSL_SLOT
+DSL_NONE = os88stik.DSL_NONE
 
 fails = []
 
@@ -72,12 +71,13 @@ def downgraded(ui, zone, cap):
     """The row in `zone` lost its mark and holds a cell, PLACED."""
     r = os88stik.parse_row(row(ui, zone - DESK_SC0))
     zb = ui.m.read(ui._S("desk_zslot") + zone, 1)[0]
+    zp = ui.m.read(ui._S("desk_zpin") + zone, 1)[0]
     check(not r["stik"] and r["kind"] == 1,
           "the row lost its mark - a plain package shortcut now (+3 = %#x)"
           % r["mark"])
-    check(zb < DSL_GONE and zb & DSL_PIN and (zb & DSL_SLOT)
-          < ui.m.read(ui._S("desk_ncell"), 1)[0],
-          "...PLACED in a desktop cell (%#x)" % zb)
+    check(zb == zp != DSL_NONE
+          and zb < ui.m.read(ui._S("desk_ncell"), 1)[0],
+          "...SHOWN and PLACED in a desktop cell (%#x, %#x)" % (zb, zp))
     check(r["cap"] == cap, "...captioned %r (%r)" % (cap, r["cap"]))
 
 

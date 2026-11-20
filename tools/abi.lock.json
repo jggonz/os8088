@@ -12,7 +12,7 @@
   "version": 13
  },
  "VX_ABI_VER": {
-  "fingerprint": "b26a7f8a6dfbab464ffa1b307794abd27e804282c5747840eb468f25b429d984",
+  "fingerprint": "588b28e8e7a3988a20ee100864decdca5f0ec0eeedcc059ed4c012846ad1b514",
   "version": 5
  },
  "XM_ABI_VER": {
@@ -2470,6 +2470,13 @@
    "guard": "DRV_VER",
    "reason": "Merge of main's OSAPI_FILE_PLACE (door 0x60, SPEC.md 19.12.8) with #396's OSAPI_KEYBOARD cell 0x023C (SPEC.md 9.16): both additions at the end, every package built before still runs",
    "to": 14
+  },
+  {
+   "fingerprint": "588b28e8e7a3988a20ee100864decdca5f0ec0eeedcc059ed4c012846ad1b514",
+   "from": 5,
+   "guard": "VX_ABI_VER",
+   "reason": "vxabi.inc gains VXG_WMAX/VXG_HMAX, the widest primary VESA.DRV may choose, moved out of vesa.asm so the kernel sizes its grid (DESK_CMAX) and menu bar against it; no selector, block or register contract moved, so a driver built before still runs - VX_ABI_VER stays 5",
+   "to": 5
   }
  ]
 }

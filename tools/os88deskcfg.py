@@ -40,9 +40,9 @@ left (26.9.1), so column c from the right, row r, is cell c * rows + r. The
 rightmost column is the drives' and is never used, nor is the one beside it.
 
 The grid is SPEC.md 26.9.1's table, kern_big, the dock at the bottom; on a
-screen of another shape the kernel's first reflow (26.9.3) forgets any cell
-that screen has not got and the shortcut flows to the first free one, so a
-wrong guess costs the layout and not the shortcut.
+screen of another shape the kernel's reflow (26.9.3) shows a shortcut whose
+cell that screen has not got in the first free one, and keeps its cell for a
+screen that has it, so a wrong guess costs the layout and not the shortcut.
 """
 import argparse
 import os
@@ -56,9 +56,11 @@ import os88pkg   # noqa: E402
 
 # the kernel's own numbers, through os88geom's checked mirror (kern_big's:
 # SC_REC and SC_MAX are OS88_SHORTCUTS', which kern_small has not got)
-SC_REC, SC_MAX, DSL_PIN, DSL_SLOT, DVOL_MAX = (
-    os88geom.SC_REC, os88geom.SC_MAX, os88geom.DSL_PIN, os88geom.DSL_SLOT,
-    os88geom.DVOL_MAX)
+SC_REC, SC_MAX, DVOL_MAX = os88geom.SC_REC, os88geom.SC_MAX, os88geom.DVOL_MAX
+# SC_VER 2's cell byte (SPEC.md 26.8.6): the placed bit over a six-bit cell.
+# The kernel writes 3, a whole-byte cell, and still reads this - and every
+# grid this tool lays out (GRIDS, below) is far inside six bits
+DSL_PIN, DSL_SLOT = 0x40, 0x3F
 # SPEC.md 26.8.1 / 26.8.6, the row's layout and the footer
 SC_VER, DESK_SC0 = 2, 9
 SC_R_VOL, SC_R_SLOT, SC_R_KIND, SC_R_MARK = 0, 1, 2, 3

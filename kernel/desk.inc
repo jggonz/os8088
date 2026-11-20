@@ -58,10 +58,35 @@ DESK_PICX   equ (DESK_CW - DESK_ZW) / 2     ; a drive's picture in its cell
 %endif
 %endif
 
-; --- the table's byte (SPEC.md 26.9) ------------------------------------------
-DSL_SLOT    equ 0x3F            ; the cell...
-DSL_PIN     equ 0x40            ; ...PLACED by the user (a shortcut always is)
-DSL_GONE    equ 0x80            ; ...not shown. 0xFF is "nothing"
+; --- the two tables (SPEC.md 26.9.2) ------------------------------------------
+; [desk_zslot] is the cell a zone is SHOWN in, [desk_zpin] (kern_big) the cell
+; it is PLACED in - remembered while it is not shown, a wish until granted.
+; A cell is a whole byte, so DSL_NONE is "no cell" in both and DESK_CMAX, the
+; most cells a screen may have, is the one number that bounds the grid. It
+; was 63, six bits of a byte that also held a placed bit and a gone bit, and a
+; 1024x768 VESA desktop has 120 cells: everything past the 63rd - all but the
+; right-hand 600 px - could not be dropped on.
+DSL_NONE    equ 0xFF            ; no cell: not shown / not placed
+%ifdef KERN_SMALL
+DESK_CMAX   equ 64              ; its volumes take the first cells, in order
+%else
+DESK_CMAX   equ 255             ; every byte but DSL_NONE
+%endif
+%if DESK_CMAX > DSL_NONE
+  %error "desk: DESK_CMAX must leave DSL_NONE outside the grid"
+%endif
+; THE WIDEST SCREEN THERE IS MUST FIT (SPEC.md 26.9.1). The cells a screen
+; has are DESK_GRID's arithmetic below with no dock in the way: columns from
+; the right edge at DESK_PX, rows at DESK_ZSTEP under DESK_ZY0. A geometry
+; whose grid is bigger than DESK_CMAX still works - the cells past the cap are
+; simply not offered - but that is the defect this check exists for, so
+; raising vxabi.inc's VXG_WMAX/VXG_HMAX (VESA.DRV's widest) past what fits
+; fails HERE.
+%macro DESK_FITS 2
+  %if ((%1 - DESK_ZXOFF) / DESK_PX + 1) * ((%2 - DESK_ZY0 - 32 - DESK_ZGAP - DESK_LBLH) / DESK_ZSTEP + 1) > DESK_CMAX
+    %error "desk: a %1 x %2 screen has more cells than DESK_CMAX - widen the cell (SPEC.md 26.9.1)"
+  %endif
+%endmacro
 
 DESK_ZW     equ 32              ; hit zone width (zx .. zx+31) - the icon's
                                 ; own width now. It was 48, because the label
@@ -87,6 +112,12 @@ DESK_COLW   equ 44              ; column-to-column pitch, leftwards: the zone
                                 ; which is what stops two columns' captions
                                 ; reading as one run of text
 DESK_DBLT   equ 9               ; double-click window, ticks
+%ifndef KERN_SMALL                  ; (DESK_FITS, above: the widest screens)
+DESK_FITS 720, 348              ; Hercules, the widest adapter in the kernel
+  %ifdef VID_EXT
+DESK_FITS VXG_WMAX, VXG_HMAX    ; ...and the widest VESA.DRV will choose
+  %endif
+%endif
 
 ; --- the ZONE INDICES (SPEC.md 26.9) ------------------------------------------
 ; 0 .. DVOL_MAX-1 are the volumes, DESK_SVZ the service item a DRIVER registers
@@ -156,11 +187,11 @@ desk_init:
     push dx
     push di
     push es
-    push ds                     ; THE TABLE starts as "nothing" in every
+    push ds                     ; THE TABLES start as "nothing" in every
     pop es                      ; zone (SPEC.md 26.9): .bss is zero, and 0
     mov di, desk_zslot          ; is cell 0. Here, in the boot overlay, it
-    mov cx, DESK_NZ             ; costs no resident byte
-    mov al, 0xFF
+    mov cx, DESK_ZTAB           ; costs no resident byte. [desk_zpin] is
+    mov al, DSL_NONE            ; the next DESK_NZ (kern_big)
     cld
     rep stosb
     pop es
@@ -552,9 +583,10 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 %ifndef KERN_SMALL
     ; --- ...and how many CELLS that is (SPEC.md 26.9) ------------------------
     ; Columns from cell 0's left to the band's left edge, at DESK_PX each,
-    ; capped at what a table byte can name. An item whose cell is past the new
-    ; count loses it in the reflow - a placed one flows, a shortcut is placed
-    ; anew - and everything packs round what is left.
+    ; capped at DESK_CMAX - which DESK_FITS holds above every screen this
+    ; kernel can show, so the cap is a guard and never a shape. An item whose
+    ; cell is past the new count is shown in the first free one and KEEPS its
+    ; own [desk_zpin], to have back on a screen that has it (desk_reflow).
     mov cx, ax                  ; CX = rows
     mov ax, [vid_desk_zx]
 %ifdef DOCK_OPT
@@ -565,9 +597,9 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
     div bx
     inc ax                      ; AX = columns
     mul cx
-    cmp ax, DSL_SLOT            ; DSL_SLOT itself is "no cell" (desk_reflow)
+    cmp ax, DESK_CMAX           ; DSL_NONE is never a cell (desk_reflow)
     jbe %%nc
-    mov al, DSL_SLOT
+    mov al, DESK_CMAX
 %%nc:
     mov [desk_ncell], al
 %endif
@@ -601,9 +633,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
     inc cx
 %%cset:
     mov [di+desk_zslot], al
-    and al, DSL_SLOT            ; "nothing" is DSL_SLOT's cell, which no
-    and dl, DSL_SLOT            ; screen has
-    cmp al, dl
+    cmp al, dl                  ; (desk_cmark passes over DSL_NONE)
     je %%n
     %2 desk_cmark
     mov al, dl
@@ -645,15 +675,18 @@ section .cold
 ; grid it sits in. That byte is the whole answer to "where is it and is it
 ; shown"; nothing walks the volume table to find a position any more.
 ;
-;   DSL_SLOT  bits 0..5   the cell, 0..[desk_ncell]-1
-;   DSL_PIN   bit 6       PLACED: the user put it there (a shortcut always is)
-;   DSL_GONE  bit 7       not shown. On a PLACED item it is a remembered
-;                         cell - an unmounted drive's, or a cell an
-;                         OSAPI_DESK_ITEM caller asked for - which it gets
-;                         back when it is live and the cell is free; on a
-;                         FLOWING one it only lives inside desk_reflow,
-;                         holding the old cell for the repaint
-;   0xFF                  nothing
+;   [desk_zslot]  the cell it is SHOWN in, 0..[desk_ncell]-1, or DSL_NONE
+;   [desk_zpin]   kern_big: the cell it is PLACED in - the user put it there
+;                 (a shortcut always is) - or DSL_NONE, it FLOWS. While the
+;                 item is not shown it is a REMEMBERED cell: an unmounted
+;                 drive's, or the one an OSAPI_DESK_ITEM caller asked for,
+;                 which it gets back when it is live and the cell is free.
+;                 Shown and placed, the two bytes are the same cell
+;   [desk_zold]   kern_big: desk_reflow's own - every [desk_zslot] as the
+;                 pass found it, so it posts exactly the cells that moved
+;
+; Two whole bytes, where it was one byte of six cell bits, a PLACED bit and a
+; GONE bit: 63 cells, and a 1024x768 VESA desktop has 120 (SPEC.md 26.9.1).
 ;
 ; Cells are numbered column-major from the TOP-RIGHT: down a column, then the
 ; next column to the LEFT - SPEC.md 26.1's flow - so "the first free cell" is
@@ -671,11 +704,8 @@ desk_zs:
     mov bx, desk_zslot          ; [desk_zslot + AL], AL a zone index below
     xlatb                       ; DESK_NZ (kernel size pass 18, -4, and
     pop bx                      ; fewer clocks)
-    cmp al, DSL_GONE            ; GONE, and 0xFF, are "not shown": CF = 0
-    cmc                         ; there, so complemented CF = 1 is the answer
-    jc .no
-    and al, DSL_SLOT            ; ...which also leaves CF = 0
-.no:
+    cmp al, DSL_NONE            ; CF = 1 below it, a cell: complemented, CF =
+    cmc                         ; 1 is "not shown" and AL is the cell else
     ret
 
 ; -----------------------------------------------------------------------------
@@ -735,16 +765,11 @@ desk_live:                      ; caller, DESK_ROWCALC: kernel size pass 15)
 desk_owner:
     push bx
     push cx
-    mov bx, desk_zslot
-    mov cx, DESK_NZ
+    mov bx, desk_zslot          ; AL is a cell, never DSL_NONE: every caller
+    mov cx, DESK_NZ             ; holds it below [desk_ncell]
 .o:
-    mov ah, [bx]
-    cmp ah, DSL_GONE
-    jae .n
-    and ah, DSL_SLOT
-    cmp ah, al
+    cmp [bx], al
     je .hit                     ; equal: CF = 0
-.n:
     inc bx
     loop .o
     stc
@@ -790,7 +815,9 @@ desk_free:
 ; high-water mark of ordinals.
 ; -----------------------------------------------------------------------------
 desk_cmark:
-    push ax
+    cmp al, DESK_CMAX           ; DSL_NONE, and anything past the grid, is no
+    jae .no                     ; cell: [desk_cdirty] has a bit for each cell
+    push ax                     ; and none past them (SPEC.md 26.9.4)
     push bx
     call desk_cbit
     or [bx+desk_cdirty], ah
@@ -799,14 +826,15 @@ desk_cmark:
     mov [ui_post], al           ; ...and SAY SO once (SPEC.md 13.13)
     pop bx
     pop ax
+.no:
     ret
 
 ; desk_cbit - cell AL's bit in [desk_cdirty]: BX = the byte, AH = the mask.
 ; Clobbers AH, BX.
 desk_cbit:
     push cx
-    cbw                         ; (a cell is <= DSL_SLOT, and AH is a clobber:
-    mov bx, ax                  ; kernel size pass 17, -1)
+    mov ah, 0                   ; a cell is a whole byte: zero-extended, not
+    mov bx, ax                  ; cbw's sign (and AH is a clobber)
     mov cl, bl
     and cl, 7
     mov ah, 1
@@ -818,7 +846,7 @@ desk_cbit:
 
 ; -----------------------------------------------------------------------------
 ; desk_reflow - pack every FLOWING item into the first free cells (SPEC.md 26.9)
-; in:  the table, and each kind's liveness
+; in:  the tables, and each kind's liveness
 ; out: nothing (all registers preserved); every cell that changed is posted
 ;
 ; It knows NOTHING about what was added or removed - only which zones are live
@@ -826,29 +854,37 @@ desk_cbit:
 ; "a shortcut was moved or removed" and "the screen changed shape". Two passes,
 ; and the order is the design:
 ;
-;   1. every FLOWING item lets go of its cell (keeping it, under DSL_GONE, for
-;      the repaint); a PLACED one that is no longer live goes from the screen
-;      but REMEMBERS its cell; any item in a cell this screen has not got is
-;      forgotten;
-;   2. every live item without a cell, IN INDEX ORDER, takes one: a PLACED
-;      one its remembered cell if that is free, else - and every flowing one
-;      - the first free cell. Index order is volumes, then the service item,
-;      then shortcuts, so the Wire is after the drives whichever driver loaded
-;      first - today's order. A shortcut reaches this pass only when it has
-;      no cell at all (the screen shrank under it), and is PLACED wherever it
-;      lands.
+;   1. every item lets go of its cell UNLESS it is placed, live and shown in
+;      its own [desk_zpin] cell; a flowing one always does, and so does one
+;      DISPLACED - shown somewhere else because its cell was taken or this
+;      screen has not got it - so it tries its own cell again first;
+;   2. every live item not shown, IN INDEX ORDER, takes a cell: its
+;      [desk_zpin] if this screen has it and it is free, else the first free
+;      one. Index order is volumes, then the service item, then shortcuts, so
+;      the Wire is after the drives whichever driver loaded first. A shortcut
+;      with no cell of its own is PLACED wherever it lands.
 ;
-; A WISH IS A REMEMBERED CELL. OSAPI_DESK_ITEM writes the cell its caller
-; asked for as DSL_PIN | DSL_GONE | cell, and pass 2 gives it that cell if it
-; can and the first free one if it cannot - so "the slot you ask for, or the
-; first available" is this routine and nothing new. A wish of 0xFF is already
-; 0xFF, which is "nothing", and simply flows.
+; [desk_zpin] IS NEVER FORGOTTEN HERE (SPEC.md 26.9.3). A placed item whose
+; cell this screen has not got is shown in the first free one and keeps its
+; own, so a layout made on a 1024x768 VESA desktop survives the boot's first
+; pass - run on the VGA's 42 cells, before VESA.DRV switches the display -
+; and any trip through a smaller screen. Only the user (a drag, a remove) and
+; OSAPI_DESK_ITEM write it.
+;
+; THE PAINT IS A DIFF. Pass 1 copies every [desk_zslot] into [desk_zold], and
+; pass 2 posts the old cell and the new one of each zone whose two differ - so
+; an item that went nowhere costs nothing, however many passes ran.
+;
+; A WISH IS A PLACED CELL NOT YET SHOWN. OSAPI_DESK_ITEM writes the cell its
+; caller asked for into [desk_zpin], and pass 2 gives it that cell if it can
+; and the first free one if it cannot - so "the slot you ask for, or the first
+; available" is this routine and nothing new. A wish of DSL_NONE flows.
 ;
 ; NOTHING HAPPENS UNTIL [desk_ready]. The boot reads SYSTEM.CFG - the placed
 ; cells - and then the drivers add their volumes one at a time; a pass run
-; between the two would forget a placed hard disk because its volume had not
-; arrived yet. kmain sets the byte once everything is in and runs the first
-; pass itself.
+; between the two would show a placed hard disk's cell bare because its volume
+; had not arrived yet. kmain sets the byte once everything is in and runs the
+; first pass itself.
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL              ; (kern_small's - one pass, every live volume
                                 ; in index order to the next cell - is written
@@ -861,87 +897,55 @@ desk_reflow:
     xor di, di                  ; --- 1: let go -----------------------------
 .a:
     mov al, [di+desk_zslot]
-    cmp al, DSL_GONE
-    jae .an                     ; nothing here, or a place remembered
-    mov ah, al
-    and ah, DSL_SLOT
-    cmp ah, [desk_ncell]
-    jae .forget                 ; a cell this screen has not got
-    test al, DSL_PIN
-    jz .rel                     ; flowing: let go, keep the cell for the paint
+    mov [di+desk_zold], al      ; (the paint's memory)
+    cmp al, DSL_NONE
+    je .an                      ; not shown: nothing to let go of
+    cmp al, [desk_ncell]
+    jae .rel                    ; a cell this screen has not got
+    cmp al, [di+desk_zpin]
+    jne .rel                    ; flowing (DSL_NONE), or displaced
     mov bx, di
     call desk_live
-    jz .pgone
-    mov al, ah                  ; placed and live: it stays - unless an
-    call desk_owner             ; EARLIER item is in that cell, which only a
-    mov bx, di                  ; damaged SYSTEM.CFG can say: then it is a
-    cmp ah, bl                  ; wish again, placed in pass 2 (desk_owner
-    je .an                      ; answers the lowest zone, so never a later)
-    jmp short .rel
-.pgone:
-    mov al, ah                  ; placed and gone: its cell goes bare and the
-    call desk_cmark             ; item REMEMBERS it, to have back (pass 2)
-.rel:
-    mov al, DSL_GONE
-    SKIPF2                      ; (test ax, imm16 over the mov: AL kept, the `or` sets the flags - pass 15)
-.forget:
-    mov al, 0xFF                ; (OR with all ones is the store)
-.orit:
-    or [di+desk_zslot], al
+    jz .rel                     ; placed and gone: bare, [desk_zpin] kept
+    call desk_owner             ; placed, live and home: it stays - unless
+    mov bx, di                  ; an EARLIER item is in that cell, which only
+    cmp ah, bl                  ; a damaged SYSTEM.CFG can say: then it is a
+    je .an                      ; wish again, placed in pass 2 (desk_owner
+.rel:                           ; answers the lowest zone, so never a later)
+    mov byte [di+desk_zslot], DSL_NONE
 .an:
     inc di
     cmp di, DESK_NZ
     jb .a
     xor di, di                  ; --- 2: place, in index order ---------------
 .c:
-    mov dl, [di+desk_zslot]     ; DL = the old byte
-    cmp dl, DSL_GONE
-    jb .cn                      ; shown: placed, and staying
+    cmp byte [di+desk_zslot], DSL_NONE
+    jne .post                   ; shown: placed, home, and staying
     mov bx, di
     call desk_live
-    mov dh, dl                  ; dead: a PLACED one keeps what it remembers
-    jz .cdead                   ; (0xFF has the bit too and stays 0xFF)...
-    test dl, DSL_PIN            ; live and PLACED: its own cell back, if this
-    jz .first                   ; screen has it and nothing else is in it -
-    mov al, dl                  ; which is also what a wish is, the cell an
-    and al, DSL_SLOT            ; OSAPI_DESK_ITEM caller asked for
-    cmp al, [desk_ncell]
-    jae .first
-    call desk_owner
-    jnc .first
-    and dh, ~DSL_GONE & 0FFh
-    jmp short .cset
+    jz .post                    ; dead: not shown, [desk_zpin] as it is
+    mov al, [di+desk_zpin]      ; live and PLACED: its own cell back, if this
+    cmp al, [desk_ncell]        ; screen has it and nothing else is in it -
+    jae .first                  ; which is also what a wish is. DSL_NONE is
+    call desk_owner             ; past every [desk_ncell] (<= DESK_CMAX), so
+    jc .take                    ; a flowing item goes to .first here
 .first:
-    call desk_free              ; ...else the first free one, FLOWING from
-    jc .none                    ; here on - unless it is a shortcut, which is
-    mov dh, al                  ; placed wherever it lands
+    call desk_free              ; ...else the first free one, the cell of its
+    jc .post                    ; own kept (none free: it is not shown)
 %ifdef OS88_SHORTCUTS
-    cmp di, DESK_SC0
-    jb .cset
-    or dh, DSL_PIN
+    cmp di, DESK_SC0            ; a SHORTCUT with no cell of its own is
+    jb .take                    ; placed wherever it lands
+    cmp byte [di+desk_zpin], DSL_NONE
+    jne .take
+    mov [di+desk_zpin], al
 %endif
-    jmp short .cset
-.cdead:
-    test dl, DSL_PIN
-    jnz .cset
-.none:
-    mov dh, 0xFF                ; ...and a flowing one has nothing
-.cset:
-    mov [di+desk_zslot], dh
-    mov al, DSL_SLOT            ; --- ...and post what moved. AL = the cell
-    test dl, DSL_PIN            ; it WAS shown in - only a flowing one this
-    jnz .m1                     ; pass let go of had one, and "none" is
-    mov al, dl                  ; DSL_SLOT's cell, which no screen has
-    and al, DSL_SLOT            ; (desk_ncell stops short of it)
-.m1:
-    mov ah, DSL_SLOT            ; AH = the cell it IS shown in
-    cmp dh, DSL_GONE
-    jae .m2
-    mov ah, dh
-    and ah, DSL_SLOT
-.m2:
-    cmp al, ah
-    je .cn                      ; the same cell: nothing moved
+.take:
+    mov [di+desk_zslot], al
+.post:
+    mov al, [di+desk_zold]      ; --- ...and post what moved: the cell it was
+    mov ah, [di+desk_zslot]     ; shown in and the cell it is, when the two
+    cmp al, ah                  ; differ (desk_cmark passes over DSL_NONE)
+    je .cn
     call desk_cmark
     mov al, ah
     call desk_cmark
@@ -973,6 +977,11 @@ desk_zones_paint_x:
 .c:
     mov ax, si
     call desk_cbit
+    cmp byte [bx+desk_cdirty], 0
+    jne .bit
+    or si, 7                    ; a clean BYTE: past its eight cells at once,
+    jmp short .n                ; so DESK_CMAX's 255 cost 32 compares idle
+.bit:
     test [bx+desk_cdirty], ah
     jz .n
     xor [bx+desk_cdirty], ah    ; ...known SET, so xor clears exactly it (kernel
@@ -992,7 +1001,7 @@ desk_zones_paint_x:
     KDOOR wm_paint_dmg
 .n:
     inc si
-    cmp si, DSL_SLOT            ; ...and "no cell" is never painted
+    cmp si, DESK_CMAX           ; ...and DSL_NONE is never painted
     jb .c
     jmp kretfc_di
 
@@ -1009,9 +1018,8 @@ desk_zones_paint_x:
 desk_cell_xy:
     push bx
     push cx
-    cbw                         ; AL is a CELL, < desk_ncell <= DSL_SLOT, so
-    cwd                         ; cbw zero-extends it (kernel size pass 16, -1)
-                                ; (AX < 8000h: DX = 0)
+    mov ah, 0                   ; AL is a CELL, a whole byte: zero-extended
+    cwd                         ; (AX < 8000h: DX = 0)
     div word [desk_rows]        ; AX = column, DX = row within it
     mov cx, dx
     mov bx, DESK_PX
@@ -2232,10 +2240,10 @@ osapi_desk_item_x:
                                 ; repaint, and without a NUL font_run letters
                                 ; the rest of .bss across the screen for ever
     mov al, [desk_svc_cell]     ; THE CELL IT ASKED FOR, as a wish the
-    cmp byte [desk_zslot + DESK_SVZ], 0xFF  ; reflow grants if it can - unless
-    jne .flow                   ; the user placed it already (SYSTEM.CFG's
-    or al, DSL_PIN | DSL_GONE   ; cell wins). 0xFF stays 0xFF: it flows
-    mov [desk_zslot + DESK_SVZ], al
+    cmp byte [desk_zpin + DESK_SVZ], DSL_NONE   ; reflow grants if it can -
+    jne .flow                   ; unless the user placed it already
+    mov [desk_zpin + DESK_SVZ], al  ; (SYSTEM.CFG's cell wins). DSL_NONE
+                                ; stays DSL_NONE: it flows
 .flow:
     call desk_reflow
     mov al, DESK_SVZ
@@ -2336,14 +2344,22 @@ desk_rows    resw 1             ; zones that fit in one column above the dock
                                 ; Hercules, 4 on CGA
 %ifndef KERN_SMALL
 desk_ready   resb 1             ; 0 until kmain has everything in: no reflow
-desk_ncell   resb 1             ; cells on this screen, <= DSL_SLOT
+desk_ncell   resb 1             ; cells on this screen, <= DESK_CMAX
 %endif
 desk_zdirty  resb 1             ; 1 = [desk_cdirty] holds cells that owe a
                                 ; repaint (SPEC.md 26.9), posted - 0 or 1
                                 ; ONLY: ui_task tests it with `shr`
-desk_cdirty  resb (DSL_SLOT + 1) / 8    ; ...one bit a cell
-desk_zslot   resb DESK_NZ       ; THE TABLE: one byte a zone (SPEC.md 26.9).
-                                ; desk_init fills it with 0xFF, "nothing"
+desk_cdirty  resb (DESK_CMAX + 7) / 8   ; ...one bit a cell
+desk_zslot   resb DESK_NZ       ; THE TABLE: the cell each zone is SHOWN in
+                                ; (SPEC.md 26.9.2)...
+%ifndef KERN_SMALL
+desk_zpin    resb DESK_NZ       ; ...the cell it is PLACED in - adjacent, so
+                                ; desk_init's one fill of DSL_NONE is both...
+desk_zold    resb DESK_NZ       ; ...and desk_reflow's copy of the first
+DESK_ZTAB    equ 2 * DESK_NZ
+%else
+DESK_ZTAB    equ DESK_NZ
+%endif
 %if DESK_NZ > 16
 desk_dmgm    resw 2             ; desk_dmg_zones -> desk_paint_mask, a dword
 %else

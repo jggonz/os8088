@@ -480,9 +480,9 @@ def bss_offsets():
 # =============================================================================
 def svc_ordinal(m):
     v = m.read(S("desk_zslot") + dispcp.DVOL_MAX, 1)[0]
-    if v >= 0x80:
+    if v == 0xFF:                       # DSL_NONE: not shown (26.9.2)
         raise RuntimeError("the Wire's service item has no cell (%#x)" % v)
-    return v & 0x3F
+    return v
 
 
 def live_vols(m):
