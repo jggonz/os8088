@@ -108,6 +108,34 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def drive_root(ui, letter):
+    """Raise an existing Disk by its live volume, even behind a full app.
+
+    A desktop drive icon can be covered. Clicking through the application is
+    not navigation; os88ui's dock/title raise is the valid route to its Disk.
+    """
+    drive = ord(letter.upper()) - ord("A")
+    candidates = [w for w in ui.windows() if (lambda fs: fs is not None and fs[0] == drive)(ui.fs_of(w))]
+    if not candidates:
+        return ui.open_drive(letter)
+    win = ui.raise_window(candidates[-1])
+    for _ in range(32):
+        state = ui.fs_of(win)
+        assert state is not None and state[0] == drive
+        if state[1] == 0:
+            return win
+        win = ui.open("..", expect="nav", win=win)
+    raise AssertionError("Disk did not reach its volume root")
+
+
+def open_package(ui, path):
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    if parts and len(parts[0]) == 2 and parts[0][1] == ":":
+        drive_root(ui, parts.pop(0)[0])
+    assert parts
+    return ui.path("/".join(parts), limit=90)
+
+
 class App:
     def __init__(self, ui, win, symbols, layout, evidence):
         self.ui, self.win, self.sym, self.L, self.evidence = ui, win, symbols, layout, evidence
@@ -201,7 +229,10 @@ class App:
         before = self.state()
         cycles = self.ui.m.status()["cycles"]
         if foreign:
-            M.text_taken(self.ui.m, character, ui=False)
+            # FSX can bypass the BIOS ring that text_taken follows. Its
+            # 0.675s fallback cap is not a key acknowledgement or a latency
+            # measurement. Inject one real physical key and witness scoring.
+            self.ui.m.type_text(character)
         else:
             self.ui.type(character, limit=90)
         self.ui._wait(lambda: self.state()["attempts"] == before["attempts"] + 1,
@@ -383,9 +414,15 @@ def window_checks(app, directory):
         app.press("Enter").wait_screen("PLAY")
         app.key(app.state()["passage"][0], True)
     before = app.state()
+    app.press("F1").wait_screen("HELP")
+    assert app.state()["status"] == L["BT_PAUSED"] and app.state()["pos"] == before["pos"]
+    app.shot(directory, "window-live-lesson-help")
+    app.press("Escape").wait_screen("PAUSE")
+    assert app.state()["pos"] == before["pos"]
+    app.press("F4").wait_screen("PLAY")
     live = ui._refresh(app.win)
     original = [live.x, live.y, live.w, live.h]
-    disk = ui.open_drive("B")
+    disk = drive_root(ui, "B")
     ui._wait(lambda: app.state()["status"] == L["BT_PAUSED"], "focus loss pauses guided lesson", 30)
     covered = ui._refresh(disk)
     assert max(live.x, covered.x) < min(live.x + live.w, covered.x + covered.w)
@@ -417,6 +454,50 @@ def window_checks(app, directory):
     app.evidence["window_checks"] = {"minimum_frame": list(minimum),
                                     "actual_minimum": [shrunk.w, shrunk.h],
                                     "restored": original, "focus_requires_resume": True}
+
+
+def cga_key_cycles(app, character):
+    """Physical-key route to first completed CGA VRAM flush, actual XT cycles.
+
+    No pacing cap, no guest patch and no synthetic scoring. FSX pins its
+    running region. The card's later raster scanout remains a separate cost.
+    """
+    m = app.ui.m
+    before = app.state()
+    base = app.p.seg * 16
+    route = base + app.sym["_bt_key_route"]
+    flush = base + app.sym["_bt_cga_flush"]
+    stamps = []
+
+    def hit(mm, record):
+        regs = record["regs"]
+        if not stamps:
+            ascii_code = int.from_bytes(mm.read(regs["ss"] * 16 + regs["sp"] + 2, 2), "little")
+            assert ascii_code == ord(character), (ascii_code, character)
+            stamps.append(record["cycles"])
+            mm.breakpoints([{"type": "exec", "addr": flush}])
+        elif len(stamps) == 1:
+            stamps.append(record["cycles"])
+            returned = int.from_bytes(mm.read(regs["ss"] * 16 + regs["sp"], 2), "little")
+            mm.breakpoints([{"type": "exec", "addr": regs["cs"] * 16 + returned}])
+        else:
+            stamps.append(record["cycles"])
+            mm.breakpoints([])
+
+    with M.bp_trace(m, route, regs=True, on_hit=hit) as trace:
+        m.type_text(character)
+        trace.until(lambda: len(stamps) == 3, "correct-key route and CGA flush return", limit=20)
+    after = app.state()
+    assert after["attempts"] == before["attempts"] + 1 and after["correct"] == before["correct"] + 1
+    assert after["net"] == before["net"] + 1
+    assert stamps[2] > stamps[1] >= stamps[0]
+    cycles = stamps[2] - stamps[0]
+    app.evidence["cga_key_commit"] = {
+        "route_to_flush_return_cycles": cycles,
+        "route_to_flush_return_ms": round(cycles * 1000 / M.GUEST_HZ, 3),
+        "flush_cycles": stamps[2] - stamps[1],
+        "commit_within_100ms": cycles <= M.GUEST_HZ / 10,
+        "scanout": "VRAM committed; raster presentation may add up to one refresh"}
 
 
 def adapter_probe(app, directory, requested):
@@ -468,7 +549,7 @@ def adapter_probe(app, directory, requested):
     target = app.state()["passage"][app.state()["pos"]]
     app.key("x" if target != "x" else "q", False, foreign=True)
     app.shot(directory, "adapter-cga320-error", foreign=True)
-    app.key(target, True, foreign=True)
+    cga_key_cycles(app, target)
     app.finish_passage(foreign=True)
     result = app.state()
     assert result["committed"] and result["errors"] == 1 and result["net"] == result["length"]
@@ -479,6 +560,10 @@ def adapter_probe(app, directory, requested):
     assert app.state()["net"] == result["net"]
     app.shot(directory, "adapter-cga640-restored")
     app.evidence["cga320_result"] = result
+    app.evidence["cga_claims"] = {"lesson_and_restoration": "PASS", "key_commit_100ms":
+        "PASS" if app.evidence["cga_key_commit"]["commit_within_100ms"] else "FAIL"}
+    assert app.evidence["cga_key_commit"]["commit_within_100ms"], \
+        "CGA event-to-VRAM commit exceeds100ms: " + str(app.evidence["cga_key_commit"])
 
 
 def smoke(app, directory, negative):
@@ -668,12 +753,12 @@ def audio_probe(app, directory):
 def persistence_and_readonly(ui, app, args, symbols, layout, evidence):
     expected, music = app.profile(), app.store_byte("music")
     ui.close(app.win, limit=90)
-    reopened = App(ui, ui.path(args.path, limit=90), symbols, layout, evidence)
+    reopened = App(ui, open_package(ui, args.path), symbols, layout, evidence)
     assert reopened.profile() == expected, "save/close/reopen lost profile fields"
     assert reopened.store_byte("music") == music, "saved music preference lost"
     reopened.shot(args.evidence, "09-reopened")
     generation = reopened.generation()
-    second = App(ui, ui.path(args.path, limit=90), symbols, layout, evidence)
+    second = App(ui, open_package(ui, args.path), symbols, layout, evidence)
     assert second.global_word("bt_readonly") == 1, "second instance acquired writer ownership"
     assert second.profile() == expected
     second.menu("File", "Save progress")
@@ -728,7 +813,7 @@ def reboot_verify(args, symbols, layout, evidence, saved):
         with os88ui.boot(saved["system"], apps=saved["apps"], machine=args.machine,
                          quick=True, label="boratype-reboot") as ui:
             verify_adapter(ui, args.adapter, evidence)
-            app = App(ui, ui.path(args.path, limit=90), symbols, layout, evidence)
+            app = App(ui, open_package(ui, args.path), symbols, layout, evidence)
             assert app.profile().hex() == saved["profile"], "cold reboot lost progress/statistics"
             assert app.store_byte("music") == saved["music"], "cold reboot lost preference"
             assert app.generation() == saved["generation"], "cold reboot loaded wrong save generation"
@@ -741,6 +826,25 @@ def reboot_verify(args, symbols, layout, evidence, saved):
             os.environ.pop("OS88_BOOTCACHE", None)
         else:
             os.environ["OS88_BOOTCACHE"] = previous
+
+
+def reboot_probe(app, directory):
+    """Bounded cold-reboot diagnosis: one real lesson and a saved preference."""
+    L = app.L
+    app.press("F2").wait_screen("LESSONS")
+    app.click_action(L["BT_A_LESSON_BASE"])
+    app.press("Enter").wait_screen("PLAY")
+    result = app.finish_passage()
+    assert result["correct"] == result["net"] == result["length"]
+    assert result["attempts"] == result["correct"] and not result["errors"] and result["accuracy"] == 100
+    app.shot(directory, "reboot-lesson-complete")
+    app.press("Escape").wait_screen("HOME")
+    app.press("KeyS").wait_screen("SETTINGS")
+    old = app.store_byte("music")
+    app.press("KeyM")
+    assert app.store_byte("music") == (old ^ 1)
+    app.press("Escape").wait_screen("HOME")
+    app.evidence["reboot_lesson_result"] = result
 
 
 def select_instrument(args):
@@ -769,7 +873,7 @@ def main():
     parser.add_argument("--backend", choices=("marty", "qemu", "86box"))
     parser.add_argument("--adapter", choices=("auto", "vga", "cga", "herc", "ega", "vesa800", "vesa1024"), default="auto")
     parser.add_argument("--evidence", type=Path, default=ROOT / "build/boratype-target")
-    parser.add_argument("--scenario", choices=("smoke", "challenges", "audio", "adapters", "windows"), default="smoke")
+    parser.add_argument("--scenario", choices=("smoke", "challenges", "audio", "adapters", "windows", "reboot"), default="smoke")
     parser.add_argument("--image", type=Path)
     parser.add_argument("--apps", type=Path)
     parser.add_argument("--path", default="B:/BORATYPE.O88", help="installed guest path to open with os88ui")
@@ -819,7 +923,7 @@ def main():
             try:
                 verify_adapter(ui, args.adapter, evidence)
                 ui.open_drive("B")
-                app = App(ui, ui.path(args.path, limit=90), symbols, layout, evidence)
+                app = App(ui, open_package(ui, args.path), symbols, layout, evidence)
                 evidence["start_cycles"] = ui.m.status()["cycles"]
                 evidence["resources_launch"] = app.resource_snapshot()
                 if args.scenario == "smoke":
@@ -832,6 +936,10 @@ def main():
                     adapter_probe(app, args.evidence, args.adapter)
                 elif args.scenario == "windows":
                     window_checks(app, args.evidence)
+                elif args.scenario == "reboot":
+                    reboot_probe(app, args.evidence)
+                    saved = persistence_and_readonly(ui, app, args, symbols, layout, evidence)
+                    app = None
                 else:
                     audio_probe(app, args.evidence)
                 evidence["end_cycles"] = ui.m.status()["cycles"]
@@ -840,10 +948,13 @@ def main():
                 evidence["status"] = "FAIL"
                 if app is not None:
                     try:
-                        evidence["failure_state"] = app.state()
                         app.shot(args.evidence, "FAIL-current-guest", settled=False)
                     except Exception as capture_error:
                         evidence["capture_error"] = str(capture_error)
+                    try:
+                        evidence["failure_state"] = app.state()
+                    except Exception as state_error:
+                        evidence["state_read_error"] = str(state_error)
                 raise
         if saved is not None:
             reboot_verify(args, symbols, layout, evidence, saved)

@@ -21,6 +21,7 @@ python3 tests/boratype_target.py --scenario adapters --adapter ega --backend 86b
 python3 tests/boratype_target.py --scenario adapters --adapter vesa800 --evidence build/boratype-qa-vesa800
 python3 tests/boratype_target.py --scenario adapters --adapter vesa1024 --evidence build/boratype-qa-vesa1024
 python3 tests/boratype_target.py --scenario windows --evidence build/boratype-qa-windows
+python3 tests/boratype_target.py --scenario reboot --adapter ega --evidence build/boratype-qa-reboot
 ```
 
 The default images are `os8088-360.img` and `boratype360.img` beside the exact
@@ -105,6 +106,24 @@ Resume, types at that size, and grows back. Grow geometry comes from the
 current kernel's `wm_grow_rect`; tracked outline/origin fields prove the
 gesture. No kernel variable is cleared to manufacture that proof. Other OS
 gestures use `os88ui` directly.
+It also opens Help from a live lesson, returns to the intentional Pause
+screen with Escape, and resumes without changing the accepted position.
+
+The bounded `reboot` arm completes one real beginner lesson and changes a
+saved preference, then exercises close/reopen, writer exclusion, disk export
+and cold reboot. It is useful independently of the longer smoke flow.
+
+Inside FSX, individual physical keys are injected with `Marty.type_text` and
+acknowledged by production attempts/progress; the BIOS ring that `text_taken`
+watches can be bypassed there, so its fallback0.675s cap would merely pace
+every character and is not a latency measurement. The CGA adapter arm also
+arms debugger breakpoints on `_bt_key_route`, `_bt_cga_flush`, and its near
+caller return around one actual correct key. The resulting guest cycles
+measure event routing through committed VRAM, without a guest patch or a
+fixed input delay. Raster scanout may add one display refresh; that remains
+explicitly separate from the measured commit cost.
+The adapter arm completes its lesson/restoration evidence, then fails if the
+measured commit exceeds100ms; a functional result cannot hide that budget.
 
 The challenges scenario runs actual 60-, 180- and 300-second deadlines without
 typing or modifying guest state. Countdown time is outside scoring; elapsed
@@ -157,3 +176,23 @@ fingerprint only after the build succeeds. `OS88_86BOX` and
 `OS88_86BOX_ROMS` can point the runner at it from another worktree. The
 installed GUI86Box and the automation instrument are distinct binaries;
 a GUI installation alone does not prove the socket is available.
+
+## Initial diagnostic observations
+
+These are measurements of intermediate implementation heads, not final
+release acceptance. The associated reports and captures are build artifacts.
+
+| Configuration | Observed |
+|---|---|
+| actualEGA640x350x4 on the private Mac86Box instrument | native launch, real wrong/correct, F6entry/exit passed; captures inspected |
+| QEMU/VESA.DRV800x600x8 and1024x768x16, real driver CFG disks | attached geometry, real wrong/correct, F6entry/exit passed; captures inspected; no XT timing claim |
+| MartyPC/CGA640x200mono on the older native face | first wrong key producedA1/E1/N0, but `ui_done` never became true; input was processed; idle gate failed |
+| MartyPC/CGA320x200four-color from Home | full real lesson, A50/K49/E1/N49,98%, and native restoration passed; captures inspected |
+| same CGA, precise breakpoint probe before row-helper optimization | event-to-VRAM898684cycles=188.296ms, flush222244cycles;100ms target failed |
+| EGA bounded reboot diagnosis | perfect real beginner lesson, preference save, close/reopen, second writer refused, both RAM-written floppy exports independently read, fresh boot loaded identical whole profile and latest generation;80.29host seconds; captures inspected |
+
+The initial readonly-instance probe exposed a harness navigation fault: the
+full application covered the desktop drive icon. `drive_root` now raises an
+existing Disk through `os88ui` by its live volume and navigates parents to
+the root before `path`, rather than trying to click through the application.
+Later optimized-head measurements belong in the final evidence table.
