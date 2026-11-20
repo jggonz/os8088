@@ -13,6 +13,7 @@
 #define BT_ART_BLINK_SMALL 259
 #define BT_ART_BLINK_MONO 260
 #define BT_ART_BLINK_CGA 261
+#define BT_F_LARGE 262
 #define BT_ART_CGA_W 32
 #define BT_ART_CGA_H 40
 #endif

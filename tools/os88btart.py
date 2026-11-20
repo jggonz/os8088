@@ -119,7 +119,7 @@ def build_sound(path, music, sfx):
     # Standard-library-only shared score compiler; no audio or image renderer.
     import os88gkmus as mus
     ids = dict((n, int(v)) for n, v in re.findall(r'^#define (BT_\w+) (\d+)$', (ROOT / 'apps/boratype/art.h').read_text(), re.M))
-    expected = dict(BT_ART_BLINK_BIG=258, BT_ART_BLINK_SMALL=259, BT_ART_BLINK_MONO=260, BT_ART_BLINK_CGA=261)
+    expected = dict(BT_ART_BLINK_BIG=258, BT_ART_BLINK_SMALL=259, BT_ART_BLINK_MONO=260, BT_ART_BLINK_CGA=261, BT_F_LARGE=262)
     if any(ids.get(n) != v for n, v in expected.items()): raise ValueError('blink IDs differ from sound directory')
     try:
         records = {0: mus.compile_music(str(music)), 1: mus.compile_sfx(str(sfx))}
@@ -127,16 +127,44 @@ def build_sound(path, music, sfx):
         raise ValueError(str(e)) from e
     for i, (_, w, h, rows) in enumerate(sources(blink=True), 2):
         records[i] = bb.pack_sprite(w, h, rows)
+    # The same committed font source syntax and packer as every other face.
+    # An absolute source stem is accepted by read_font's path join.
+    records[6] = bb.pack_font(str(ART / 'large'))
     data = mus.art_part(records)
-    if len(data) > 10240:
-        raise ValueError(f'sound/blink bank {len(data)} exceeds10KB budget')
+    if len(data) > 16384:
+        raise ValueError(f'sound/blink/font bank {len(data)} exceeds16KB budget')
     for i, record in records.items():
         off, = struct.unpack_from('<H', data, 4 + 2 * i)
         if off & 1 or data[off:off + len(record)] != record:
             raise ValueError('sound/blink directory validation failed')
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_bytes(data)
-    print(f'os88btart: {len(data)} bytes, music/SFX +4blink sprites -> {path}')
+    print(f'os88btart: {len(data)} bytes, music/SFX +4blink sprites +24px font -> {path}')
+
+
+def draft_font(path):
+    # A development operation only. The selected exact rows are committed;
+    # make reads them through the existing shared font packer.
+    height, ascent, glyphs = bb.read_font('dlg10')
+    target_h = 24
+    lines = ['# Boratype large face, derived from WIN16 dlg10.txt.',
+             '# Wine MS Sans Serif bold bitmap art; source/provenance/license',
+             '# remain apps/win16/fonts/dlg10.txt (LGPL-2.1-or-later).',
+             '# Generated once by tools/os88btart.py draft-font; exact rows',
+             '# below are the selected source. Nearest-neighbour scaling:',
+             '# height24, width min(16, ceil(original advance * 3 / 2)).',
+             f'face {target_h} {ascent * target_h // height}', '']
+    for code, (width, rows) in sorted(glyphs.items()):
+        target_w = min(16, (width * 3 + 1) // 2)
+        lines.append(f'char {code} {chr(code)!r} {target_w}')
+        for y in range(target_h):
+            row = rows[y * height // target_h]
+            lines.append(''.join('#' if row[x * width // target_w] else '.'
+                                 for x in range(target_w)))
+        lines.append('')
+    Path(path).write_text('\n'.join(lines) + '\n')
+    bb.pack_font(str(Path(path).resolve().with_suffix('')))
+    print(f'os88btart: wrote selected24px font source {path}')
 
 
 def preview(path):
@@ -161,6 +189,7 @@ def main():
     q = sp.add_parser('draft'); q.add_argument('master'); q.add_argument('-o', default=str(ART / 'sprites.txt')); q.add_argument('--blink-output', default=str(ART / 'blink.txt'))
     q = sp.add_parser('build-sound'); q.add_argument('-o', required=True); q.add_argument('--music', default=str(ART / 'music.txt')); q.add_argument('--sfx', default=str(ART / 'sfx.txt'))
     q = sp.add_parser('preview'); q.add_argument('-o', required=True)
+    q = sp.add_parser('draft-font'); q.add_argument('-o', default=str(ART / 'large.txt'))
     sp.add_parser('check')
     a = p.parse_args()
     try:
@@ -168,6 +197,7 @@ def main():
         elif a.cmd == 'draft': draft(a.master, a.o, a.blink_output)
         elif a.cmd == 'build-sound': build_sound(a.o, a.music, a.sfx)
         elif a.cmd == 'preview': preview(a.o)
+        elif a.cmd == 'draft-font': draft_font(a.o)
         else:
             ss = sources() + sources(blink=True)
             for n, w, h, rows in ss:
