@@ -12313,7 +12313,11 @@ The native keyboard module (§9.16) can supply glyphs 128..255 in CP850
 without adding their bytes to the core kernel. Its `klf_enable` helper
 copies the current ASCII face (32..126) into a module-owned 32..255 table,
 clears DEL's cell and fills the extended rows from the generated,
-repository-authored glyph source. `klf_disable` restores the original
+repository-authored glyph source. That cleared DEL cell, `FONT_BYTES` past
+glyph 32, is the blank an unprintable cell draws on a `BAKED_FONT` build
+(§6.2), as `font_zero` is beside the baked copy: `FONT_BLANK` and the run
+walkers address it from the live `[font_base]`, so it follows the table
+(the ROM arm draws the live table's SPACE). `klf_disable` restores the original
 `font_seg`/`font_base` and ASCII bounds before that module is dropped.
 The original slow-ROM-copy claim stays pinned and valid; on mega,
 activation must follow any boot-time relocation of that original face.

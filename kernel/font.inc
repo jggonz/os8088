@@ -45,8 +45,10 @@ FONT_SEAM_B equ FONT_LAST + 3   ; font_seam_a/font_seam_b through the glyph
 %endif
 %ifdef BAKED_FONT
  %macro FONT_BLANK 1            ; the blank cell an unprintable character
-    mov %1, font_zero           ; draws: the copy's own, beside it in LOW_SEG
- %endmacro
+    mov %1, [font_base]         ; draws: the zero cell past the face, which is
+    add %1, FONT_BYTES          ; font_zero beside the copy or the CP850
+ %endmacro                      ; table's DEL (SPEC.md 6.7) - read through
+                                ; [font_seg], so it follows the live table
 %else
  %macro FONT_BLANK 1            ; ...and on the ROM's table its SPACE, which
     mov %1, [font_base]         ; is glyph FONT_FIRST and eight zero rows on
@@ -1472,8 +1474,9 @@ font_run_x:
     jmp short .p1end
 .p1blank:                       ; (out of line: the printable cell falls through)
 %ifdef BAKED_FONT
-    mov ax, font_zero + 8       ; an unprintable cell is still PAINTED (the
-%else                           ; same bias)
+    mov ax, FONT_BYTES          ; an unprintable cell is still PAINTED (the
+    add ax, dx                  ; same bias): the live table's zero cell past
+%else                           ; the face, FONT_BLANK's
     mov ax, dx                  ; an unprintable cell is still PAINTED: the
 %endif                          ; ROM's SPACE, glyph FONT_FIRST
     jmp short .p1put
@@ -2412,7 +2415,7 @@ font_str_run:
     jmp short .p1end
 .blank:                         ; an unprintable cell draws nothing: the blank
 %ifdef BAKED_FONT               ; cell's eight zero rows, which merge nothing
-    mov ax, font_zero + 8
+    lea ax, [di + FONT_BYTES]   ; (FONT_BLANK's, past the live table's face)
 %else
     mov ax, di
 %endif
