@@ -1,0 +1,44 @@
+{
+  "pin": "e15cb04f7b3747676b7a230e8586d15742a1e479",
+  "binary": "build/martypc/run/martypc_headless",
+  "binary_sha256": "c114d6a43561665be0e5d846d5a1410ffbbde1071a7eb24fbf04dce71911778f",
+  "old_binary_sha256": "0168abe0fb46c475dac41eb1cc8353e18f5074b60c303e1555838eeed3c92d3b",
+  "patches": {
+    "01-headless-debug-server.patch": "656413cffbac4bacd9e6d34d00cc53b70303f2d334b480681b72a8c662da11f2",
+    "02-hercules-page1-decode.patch": "f4cdeb9c8861779483a7b3d8f61029eca73da2953e45ff4580f24e6bf2d81c60",
+    "03-video-dip-config.patch": "65425da9f04e6dd23db3bd16fdc2d5827ec437bed0533ccf2d8f86d1af249747",
+    "04-floppy-disk-timing.patch": "d3f20653de7ecac3fdbfb69f53264e9896fb795aa2193b32d064075ac6015ace",
+    "05-fdc-recal-one-interrupt.patch": "2ad2727102b374780b8a8964d3337f36a230e8795b714cde8755b0d5e22ba6d9",
+    "06-sblaster-adpcm4.patch": "5613861496692f52ef166a80a505a409336a764a2a19dcf249b7cfe622e4382a",
+    "07-v20-mode-flag-protect.patch": "3b724588610704678aaf25dfc5efe499f33e746e636b0e4ea18df881614016a0",
+    "08-hlt-override-lost.patch": "903380f459bbaa40b3db6b4ad6bc7538d767cac3a5c65bd1cd97c14c20fb785f",
+    "09-mpu401-uart.patch": "56f37980faf88da7efba0d7dc670caef6a05c4c7760ce4e207fe8a9e148abd64",
+    "10-covox-lpt-dac.patch": "552b4f521cf95f148e1a6b4709c5e045c53209686640944ce3b3377a1d67a321",
+    "11-keyboard-hold-scancode.patch": "0b9deb952295c5dc00b31486c09dbbacd876d13794f922bf8f1db8c584602590",
+    "12-vga-write-mode-3.patch": "5e60727a4df5012e5a218afdfabd50d935e3ca381c82a5c8742950ac70d30bf6",
+    "13-hercules-page1-lone-card.patch": "e3c524bcde9575f082f8c90b77d40d7c0ac41f37926bf705d934ff5e106cbdf3",
+    "14-keyboard-byte-pacing.patch": "b33cdc782567980d566f4b6810d6e789710a029fa13f875cda2df0d294aae23b",
+    "15-serial-mouse-wheel.patch": "6f1845a025bfd3298d50ba12475b4242592a5d60d7833efda13e9f36582e0112",
+    "16-pit-mode3-parity.patch": "b03fb0d09dac9153ae52b487dc16aad1507c4cba69e8bf827b0c85983ab57567",
+    "17-picomem.patch": "9c3f336692ad357fcd4b41c9b505340040e5343dcf15e4d6bfefdef568a27c79"
+  },
+  "debug_server_sha256": "1ac6a5c301f169573243f79fea0881218bfe5282e5ae296edd6734f8ea988552",
+  "source_checks": [
+    "buffer16",
+    "heldscancode",
+    "byte1ms",
+    "event1ms"
+  ],
+  "source_diff_check": "PASS",
+  "purpose": "Final native keyboard verification uses the repository pin with all 17 patches; the earlier copied binary omitted keyboard pacing patches and its stress results were discarded.",
+  "machine_config_sha256": {
+    "machines/compaq_deskpro.toml": "c76e7f591573736f05ef92abc3741ba541eba19958a5ebd0c7efb980e1442634",
+    "machines/compaq_portable.toml": "8de43a4bb33fd44e7a02306ca6706b751a2395062c332c4bd82bed8bae604c8f",
+    "machines/config_overlays.toml": "619360477d1555b1e1b3047c13a0528437bdf1854783f6d2494bf7f0e3c0e096",
+    "machines/generic_xt.toml": "c49c23763cca9ee9b3a5a6eb7a8e0cca509888f0dccb94b0857971ddc68b60a3",
+    "machines/ibm5150.toml": "56abe9d0eb2a937ed213dd901f99ae8b40b9cb15c735d5ce5e77e2774469d689",
+    "machines/ibm5160.toml": "993c3a3b98bc8b1c760b13def3ea5e54d59691305b378b2eb7d261603dd226bd",
+    "machines/ibm_pcjr.toml": "98f740fbffffd6c200ad732d1cdb5335e4fa637f0dca137ea3717da53ceea61f",
+    "machines/tandy1000.toml": "2b9611b87fc9976fb9ca8aab281aaf087f8fc57c3d3f82f960a84bf249983590"
+  }
+}

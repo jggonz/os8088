@@ -9,7 +9,7 @@ at 0x016A - so what is checked is the code the machine boots, not a model of
 it. Per kernel:
 
   (a) THE CELL: 0x0239 is `jmp near osapi_key_map` and the table ends at
-      0x023C, where the SDK (apps/os88api.inc) and the Wire's fence
+      0x0244, where the SDK (apps/os88api.inc) and the Wire's fence
       (tools/os88wire.py WIRE_TABLE_END) say it does.
   (b) THE ARM: with the map unarmed and its 16 bytes poisoned, one call
       clears and arms it (kbd_armed = 1) and answers 16 zero bytes - the
@@ -53,7 +53,7 @@ from unicorn import Uc, UC_ARCH_X86, UC_MODE_16             # noqa: E402
 from unicorn import x86_const as X                           # noqa: E402
 
 KERNEL_SEG = 0x0060
-CELL_MAP, CELL_DOWN, TABLE_END = 0x0239, 0x016A, 0x023C
+CELL_MAP, CELL_DOWN, TABLE_END = 0x0239, 0x016A, 0x0244
 MAPSZ = 16
 NEAR_RET = 0xFFF0               # KERNEL_SEG:FFF0 - past every kernel's .bss
 FAR_SEG, FAR_IP = 0x9000, 0x0000

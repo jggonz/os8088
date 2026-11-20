@@ -1,0 +1,1 @@
+The renamed file must keep these bytes.

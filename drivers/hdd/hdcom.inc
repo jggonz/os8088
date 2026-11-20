@@ -34,6 +34,9 @@
 ; --- the device table, and the scratch the shared routines work in ----------
 hd_ndev:     db 0
 hd_sel:      db 0               ; the device row the page (or the tool) shows
+hd_pslot:    db 0               ; the partition being mounted - hd_sel's
+                                ; NEIGHBOUR, so hd_mount_slot loads the two as
+                                ; DL/DH in one word (both images)
 hd_devs:     times HD_MAXDEV * HDD_SIZE db 0
 
 ; --- THE THREE THE PAGE READS AND THE RESIDENT OWNS (SPEC.md 52.13) --------
@@ -380,30 +383,29 @@ hd_part_big:
 ; The TYPE byte, and the type byte only: whether the volume inside is really
 ; a FAT one is the mount's question, and `osapi_vol_mount` answering CF=1 is
 ; how a partition that lies gets dropped again (SPEC.md 52.4). Extended
-; (05h/0Fh) and FAT32 (0Bh/0Ch) are deliberately not here - the first is a
-; chain this driver does not walk and the second is a format this kernel
-; does not read.
+; (05h/0Fh) is not here - it is a chain, walked rather than mounted. FAT32
+; (0Bh/0Ch) IS, on every kernel: the kernel's mount is the fence (SPEC.md
+; 19.12.10) - kern_mega reads it, and every other kernel's BPB check refuses
+; FATSz16 = 0 as it refuses any boot sector that is not its format.
 ; -----------------------------------------------------------------------------
 hd_part_isfat:
     push ax
     call hd_part_used
     jc .no
     mov al, [si+HP_TYPE]
-    cmp al, HPT_FAT12
-    je .yes
-    cmp al, HPT_FAT16S
-    je .yes
-    cmp al, HPT_FAT16B
-    je .yes
-    cmp al, HPT_FAT16L
-    je .yes
+    cmp al, 15
+    ja .no
+    push cx                     ; ONE BIT A TYPE: HPT_NOTFAT's bit n = type n
+    xchg cx, ax                 ; is not one, so CL = the type shifts the
+    mov ax, HPT_NOTFAT          ; answer down to bit 0 and out into CF
+    shr ax, cl
+    pop cx
+    shr al, 1
+    pop ax
+    ret
 .no:
     pop ax
     stc
-    ret
-.yes:
-    pop ax
-    clc
     ret
 
 %ifdef HD_TOOL                 ; hd_win_erase, hd_scat and hd_utoa draw and

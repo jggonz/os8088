@@ -367,6 +367,7 @@ stm_scanvol:
 stm_gohome:
     mov al, [cs:stm_vol]
     xor bx, bx
+    CLU_HI0                     ; the root's high word too (SPEC.md 19.12.3)
     call COLD_SEG:dskf_dsk_goto
     jc .r
     mov si, stm_s_dir
@@ -375,7 +376,12 @@ stm_gohome:
     jc .r
     test al, 0x10
     jz .no                      ; a FILE of that name is not the folder
+%ifdef OS88_FAT32
+    mov ax, bx                  ; BX:[dsk_ch], the stat's cluster: a folder
+    CLU_TAX                     ; at k*10000h is not cluster 0 (19.12.3)
+%else
     or bx, bx
+%endif
     jz .no
     mov al, [cs:stm_vol]
     call COLD_SEG:dskf_dsk_goto

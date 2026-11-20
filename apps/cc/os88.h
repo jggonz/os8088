@@ -251,9 +251,29 @@ struct os88_find {                               /* OSAPI_FILE_FIND, 19.7.1 */
 };
 
 struct os88_place {                              /* where your instance stands */
-    unsigned clus;                               /* 0 = the volume root */
+    unsigned clus;                               /* 0 = the volume root;
+                                                  * 0xFFFF = a FAT32 folder
+                                                  * this word cannot name
+                                                  * (SPEC.md 19.12.8) */
     int vol;                                     /* 0 = A: */
 };
+
+/* struct os88_fplace - a place in 32 bits, for os88_file_place() (SPEC.md
+ * 19.12.8). Only kern_mega has FAT32; everywhere else os88_file_place()
+ * answers -1 with os88_ferr() == 1, and struct os88_place is complete. */
+struct os88_fplace {
+    unsigned clus_lo, clus_hi;                   /* 0:0 = the volume root */
+    int vol;                                     /* 0 = A: */
+};
+#define OS88_FIND_FAR  2      /* struct os88_find's rsvd bit: clus is 0xFFFF
+                               * because the cluster needs 32 bits - ask
+                               * os88_file_place(OS88_FPL_STAT, ...) */
+#define OS88_FPL_HERE    0    /* os88_file_place's verbs: fill p */
+#define OS88_FPL_GOTO    1    /* ...stand at p, a listing (a remount) */
+#define OS88_FPL_GOTO_Q  2    /* ...stand at p quietly */
+#define OS88_FPL_GOTO_QM 3    /* ...quietly, and the instance moves too */
+#define OS88_FPL_ARG     4    /* ...fill p with the launch document's folder */
+#define OS88_FPL_STAT    5    /* ...fill p's cluster with name's first one */
 
 /* An app menu set (SPEC.md 12.2 - the AM_ and AMENU_ offsets in
  * apps/os88api.inc). The
@@ -1244,6 +1264,11 @@ int  os88_file_goto(struct os88_place *p);       /* ...and come back. A
  * -1 refused (os88_ferr() says why). It does not fill any Disk window's
  * listing, so it is not the one to call before showing a folder. */
 int  os88_file_goto_q_mark(unsigned clus, int vol);
+/* os88_file_place - OSAPI_FILE_PLACE, a folder in 32 bits (SPEC.md 19.12.8).
+ * verb = an OS88_FPL_*; name is read by OS88_FPL_STAT only and may be 0 for
+ * every other verb. 0, or -1 with os88_ferr() set (1 = no such door: this is
+ * not kern_mega, and struct os88_place says everything). */
+int  os88_file_place(int verb, struct os88_fplace *p, const char *name);
 int  os88_vol_sys(void);                         /* the volume this machine
                                                   * BOOTED from */
 

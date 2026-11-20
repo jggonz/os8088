@@ -1306,6 +1306,9 @@ w16_entry:
     jc .out
     mov [w16_win], bx
     mov [w16_jwin], bx
+    mov ax, 0x0100 | KBDV_RAW        ; SPEC.md 9.16.1: keep the guest keyboard
+    call OSAPI_KEYBOARD             ; contract independently of I_NAME,
+                                    ; which w16_ownname changes below.
     mov word [w16_titleptr], w16_name
     call w16_cputest                ; [w16_cpu186]: once, before anything runs
     push es                         ; the CD's volume, for int 2Fh 15xxh (124.33.3)

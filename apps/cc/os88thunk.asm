@@ -2030,6 +2030,38 @@ _os88_file_goto_q_mark:
     ret
 %endif
 
+; int os88_file_place(int verb, struct os88_fplace *p, const char *name) -
+; OSAPI_FILE_PLACE (SPEC.md 19.12.8): AL = the verb, DX:CX = p's cluster (low,
+; high), BL = p's volume, SI = name (0 is fine: the door stages DS:SI for
+; every verb, and offset 0 is our own header). What the door answers in BL,
+; DX and CX goes back into p, so HERE, ARG and STAT fill it and the GOTO
+; forms leave it as it was. 0, or -1 with os88_ferr() = the FERR_* (1 off
+; kern_mega, which has no such door).
+CC_GATE _os88_file_place
+%ifdef CC_U__os88_file_place
+_os88_file_place:
+    push bp
+    mov bp, sp
+    mov di, [bp+6]
+    mov dx, [di]
+    mov cx, [di+2]
+    mov bl, [di+4]
+    mov si, [bp+8]
+    mov al, [bp+4]
+    call OSAPI_FILE_PLACE
+    jc .err
+    mov [di], dx
+    mov [di+2], cx
+    mov [di+4], bl
+    mov byte [di+5], 0
+    xor ax, ax                      ; CF = 0
+.err:
+    mov [cc_ferr], ax
+    sbb ax, ax                      ; CF -> 0 / -1
+    pop bp
+    ret
+%endif
+
 ; int os88_vol_sys(void) - BL = the volume this machine BOOTED from (SPEC.md
 ; 19.7): A: on a floppy machine, the installed partition on one that boots
 ; from its hard disk. No disk I/O and it cannot fail. BH is cleared here

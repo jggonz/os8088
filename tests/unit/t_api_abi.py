@@ -301,9 +301,16 @@ INLINE = {
 # a kernel has no body for holds its INDEX with a refusal entry (RDREF, or an
 # RDPUB naming a refusal by equ), so one package binary reaches the same
 # index on every kernel. The value is the routine the entry must name there.
+# OSAPI_FILE_PLACE (SPEC.md 19.12.8) has a body on kern_mega alone: kern_big
+# and kern_emu hold its index with `.cold`'s api_refusec (an RN refusal must
+# far-return), kern_small ends its table before it (20.3.4), and kern_mega's
+# body is disk.inc's dsk_fpl_door
 DOOR_OWN = {
-    "big": {"OSAPI_XMEM_SEL": "api_refuse", "OSAPI_XMEM_RUN": "api_refuse"},
-    "emu": {"OSAPI_XMEM_SEL": "api_refuse", "OSAPI_XMEM_RUN": "api_refuse"},
+    "big": {"OSAPI_XMEM_SEL": "api_refuse", "OSAPI_XMEM_RUN": "api_refuse",
+            "OSAPI_FILE_PLACE": "api_refusec"},
+    "emu": {"OSAPI_XMEM_SEL": "api_refuse", "OSAPI_XMEM_RUN": "api_refuse",
+            "OSAPI_FILE_PLACE": "api_refusec"},
+    "mega": {"OSAPI_FILE_PLACE": "dsk_fpl_door"},
     # kern_small's api_refuse IS xm_copy (`mov ax, 1 / stc / ret`), and its
     # OSAPI_FS_OP body is that refusal too (no file-list engine ops); the one
     # RCS refusal is `.cold`'s api_refusec (no volume check)
@@ -599,6 +606,17 @@ def check_kernel(kernel, kbin, maps):
     dpub = {n for n, _ in os88cells.sdk_doors(ROOT)}
     downs = DOOR_OWN.get(kernel, {})
     for name in sorted(dpub):
+        # PAST THIS KERNEL'S TABLE is a refusal too (SPEC.md 20.3.4): the
+        # door's limit compare (`.lim`, `jae .ref`) answers an index at or
+        # past RD_N - RD_P with RDREF's CF = 1, AX = 1, so a kernel with no
+        # room for a refusal entry (kern_small's locked rung) may simply end
+        # its table before a cell it refuses - never MID-table, where the
+        # next cell's index would move
+        bix = block.get(name)
+        if name not in doors and bix and "RD_N" in equ and "RD_P" in equ \
+                and bix[0] >= equ["RD_N"] - equ["RD_P"]:
+            check(True, "%s is past this kernel's door, which refuses it" % name)
+            continue
         if not check(name in doors, "%s is in this kernel's door" % name,
                      "the SDK says OS88_DOOR and rd_tab has no RDPUB/RDREF for it - "
                      "a package's site reaches whatever index it was given"):

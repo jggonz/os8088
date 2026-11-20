@@ -282,7 +282,8 @@ a Standard File dialog for opening and saving.
   tile per instance.
 - **Task Manager** — live CPU and RAM, one row per instance, with the work
   done inside an app's window callbacks billed to that app.
-- **Control Panel** — Scheduler, Buffer, Display, Sound and Date/Time.
+- **Control Panel** — Scheduler, Buffer, Display, Sound, Date/Time and optional
+  [Spanish and French keyboard layouts](docs/KEYBOARDS.md).
 - **Desk Calendar** — the first *Sticky App*: a widget
   in `STIKAPPS/` on the system disk that lives ON the desktop, under every
   window, with no frame and no dock tile - three white cards (today and a

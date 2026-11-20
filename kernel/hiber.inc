@@ -457,6 +457,7 @@ hb_probe_x:
     call COLD_SEG:drvf_drv_vol_bank
     mov dl, al
     xor ax, ax                  ; the root
+    CLU_HI0                     ; ...and its high word (SPEC.md 19.12.3)
     call COLD_SEG:dkf_dsk_chdir_q
     jc .back
     mov si, hb_s_ptr
@@ -709,6 +710,15 @@ hb_pick1:                       ; is volume BL one? out: CF = 0 and AL = BL
     jz .no
     cmp ah, DVK_FILE
     je .no
+%ifdef OS88_FAT32
+    push cx                     ; NOR A FAT32 ONE (SPEC.md 19.12.9): passed
+    mov cl, bl                  ; over HERE, so the item, the probe and the
+    mov ch, 1                   ; DOS handoff all go on to the next fixed
+    shl ch, cl                  ; volume; hbm_root's test stays the backstop
+    test [dsk_f32mask], ch      ; for a volume this bit has not seen mounted
+    pop cx
+    jnz .no
+%endif
     mov al, bl
     CLC_OR_STC .no              ; CF = 0 AL = BL, or (.no) CF = 1
     ret
@@ -1578,8 +1588,17 @@ hbm_root:
     push dx
     mov dl, [hb_vol]
     xor ax, ax                  ; the root: both files live in it (87.3)
+    CLU_HI0
     mov bp, dsk_chdir_x         ; ...through the one far entry (SPEC.md 2.6)
     call hbm_cb         
+%ifdef OS88_FAT32
+    jc .r
+    cmp byte [dsk_fattype], 2   ; NOT ON FAT32: the image's records are
+    clc                         ; cluster words (SPEC.md 19.12.9)
+    jne .r
+    stc
+.r:
+%endif
     pop dx                      ; ...and a pop does not touch the chdir's CF
     ret
 
@@ -3073,6 +3092,15 @@ hbm_dosrun:
     mov ax, DVK_FREE            ; AL = DVK_FREE, AH = unit 0, base 0
     cmp si, DVOL_MAX            ; this kernel may have FEWER rows than the
     jae .vput                   ; block has room for - kern_small's four -
+%ifdef OS88_FAT32
+    push cx                     ; A FAT32 VOLUME IS NO DOS DRIVE (O3, SPEC.md
+    mov cx, si                  ; 19.12.9): kern_dos's FAT code would misread
+    mov ch, 1                   ; it, so its row goes over as FREE
+    shl ch, cl
+    test [dsk_f32mask], ch
+    pop cx
+    jnz .vput
+%endif
                                 ; and the tail is FREE rather than absent
     cmp byte [bx+DV_KIND], DVK_BIOS
     je .vbios
@@ -3138,6 +3166,8 @@ hbm_dosrun:
     ; --- 2. stand where DOS.O88 is, and find it -----------------------------
     call hbm_vbn                        ; hbm_enter's first half: bank where
     mov ax, [cs:hbm_dosrec + KDH_DIR]   ; the user stands, then stand where
+    CLU_HI0                             ; (a WORD: DOS.O88 asked FILE_HERE,
+                                        ; whose far answer is 0FFFFh, 19.12.8)
     mov dl, [cs:hbm_dosrec + KDH_VOL]   ; DOS.O88 is - a FOLDER cluster, not
     mov bp, dsk_chdir_x                 ; hbm_root's zero, because a package
     call hbm_cb                         ; lives in APPS/ and not in the root
@@ -5386,6 +5416,8 @@ hbm_wake:
     ;     read in place, which is slower and never wrong. The same TIMED
     ;     pick, so the fastest candidate is still the one taken. Nothing is live across
     ;     it - every register below is reloaded before it is read.
+    mov al, KLC_SUSPEND
+    call far [KLFP+KL_CMD]      ; original face for repair; no load/drop
     FONT_PICK hbf               ; DX:BP = this machine's fastest table
 %ifdef KERN_MEGA
     MEGA_ISHI word [font_seg]   ; a POOL block is the heap copy too: kern_mega
@@ -5414,6 +5446,8 @@ hbm_wake:
     mov [font_seg], dx
     mov [font_base], bp
 .fdone:
+    mov al, KLC_REARM
+    call far [KLFP+KL_CMD]      ; refresh provider and current BIOS key state
 %endif
     mov byte [hb_mode], HB_M_GONE   ; before the close: app_close_win's hook
     call hbm_win                ; leaves a GONE window's image to the thunk

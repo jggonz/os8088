@@ -1154,6 +1154,10 @@ dos_entry:
     call OSAPI_WM_CREATE            ; dos_size is GONE: it computed 90% of the
     jc .out                         ; desktop band with a mul and a div, and
     mov [dos_win], bx               ; the requirement is a COUNT of columns
+%ifndef KD_BACKEND
+    mov ax, 0x0100 | KBDV_RAW        ; SPEC.md 9.16.1: this instance keeps
+    call OSAPI_KEYBOARD             ; its guest BIOS/CP437 input, even when
+%endif                              ; a native layout is selected later.
     WIN_ONLYF                       ; THE WINDOW'S FURNITURE
     mov si, dos_menus               ; ...and the menu bar gains a Program menu
     call OSAPI_MENU_SET             ; (SPEC.md 96.32.3)

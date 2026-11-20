@@ -117,6 +117,10 @@ ascw_flush_x:
     CSDO mov [CSEG bp+asw_udrv-asw_v], al
     mov ax, [dsk_cwd]
     CSDO mov [CSEG bp+asw_ucwd-asw_v], ax
+%ifdef OS88_FAT32
+    mov ax, [dsk_cwd+2]         ; ...whole (SPEC.md 19.12.3)
+    CSDO mov [CSEG bp+asw_ucwh-asw_v], ax
+%endif
     mov ax, ASW_KB              ; --- 3. the work claim ---
     mov bx, MEM_K_ASC
     ASWX mem_claim_x
@@ -124,8 +128,15 @@ ascw_flush_x:
     CSDO mov [CSEG bp+asw_seg-asw_v], dx
     mov al, [cs:bp+asw_vol-asw_v]
     xor bx, bx                  ; the root
+%ifdef OS88_FAT32
+    mov [dsk_ch], bx
+%endif
     ASWX dsk_goto
     jc .ferr
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; a FAT32 volume keeps no cache: a row's
+    je .back                    ; folder is a cluster WORD (SPEC.md 19.12.9)
+%endif
 
     call asw_begin              ; counters, and the new file zeroed
     xor ax, ax
@@ -205,6 +216,10 @@ ascw_flush_x:
     mov byte [ico_capn], 0      ; per ACTION, whatever happened (54.7.6.2)
     mov al, [cs:bp+asw_udrv-asw_v]
     mov bx, [cs:bp+asw_ucwd-asw_v]
+%ifdef OS88_FAT32
+    push word [cs:bp+asw_ucwh-asw_v]    ; BX:[dsk_ch]
+    pop word [dsk_ch]
+%endif
     ASWX dsk_goto               ; a failure leaves what assoc_back's would
     mov dx, [cs:bp+asw_seg-asw_v]
     or dx, dx
@@ -1054,6 +1069,9 @@ asw_mode:   db 0
 asw_udrv:   db 0                  ; the user's volume...
 asw_ix:     db 0                  ; the new row being written
 asw_ucwd:   dw 0                  ; ...and folder, banked
+%ifdef OS88_FAT32
+asw_ucwh:   dw 0                  ; ...its high word (19.12.3)
+%endif
 asw_seg:    dw 0                  ; the work claim, 0 = none
 asw_err:    dw 0                  ; the answer: 0 or FERR_*
 asw_nf:     dw 0                  ; the next FRONT row (declaring)

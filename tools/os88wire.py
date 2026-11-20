@@ -116,18 +116,21 @@ WIRE_SCMAX = 32
 # that far-calls a cell at or past 0x046D too (92.2's cell fence), 4 = one at
 # or past 0x04A5 too, 5 = one at or past 0x04D7 too, 6 = one at or past
 # 0x04E3 (OSAPI_SEG) too, 7 = one at or past 0x04E9 (OSAPI_MEM_P, SPEC.md
-# 50.3.7) or 0x04EF (OSAPI_FS_OP, SPEC.md 12.8.10) too.
-WIRE_LEVEL = 7
+# 50.3.7) or 0x04EF (OSAPI_FS_OP, SPEC.md 12.8.10) too, 8 = one at or past
+# 0x023C (OSAPI_KEYBOARD, SPEC.md 9.16) too - the first PKG_FMT 13 row.
+WIRE_LEVEL = 8
 # THE CELL FENCE (SPEC.md 92.2): (first cell, level) rows. A record whose
 # package far-calls a cell at or past a row's cell needs that row's level.
 # Each row's cell is the table end of the OLDEST RELEASED kernel the level
 # fences, AT THIS PKG_FMT - a new PKG_FMT starts a new generation, every older
 # package refused by WC_PKGFMT anyway, so the rows describe only kernels
 # released at it. PKG_FMT 13 (kernel size pass 19's flag day, which also put
-# every rare cell behind the door and renumbered the table) has none yet, so
-# there are no rows: the first release at 13 is the fence's floor, and the
-# release that first adds a cell after it adds the first row.
-WIRE_CELL_LEVELS = ()
+# every rare cell behind the door and renumbered the table) was first
+# released in v1.0.20261116 - and 20261117 and 20261118 after it - with the
+# table ending at 0x023C: that release is the fence's floor, and
+# OSAPI_KEYBOARD (SPEC.md 9.16), the first cell appended after it, cuts the
+# first row.
+WIRE_CELL_LEVELS = ((0x023C, 8),)
 # The end of the API table the TOP level's kernel has (kernel.asm's
 # osapi_table_end) - at PKG_FMT 13, the flag day's table. A call at or past it
 # is newer than any Wire in the field can be told about, so --verify refuses
@@ -138,8 +141,11 @@ WIRE_CELL_LEVELS = ()
 # same unreleased generation - the end moves, and no row or level is cut.
 # 0x0239 since OSAPI_MOUSE_REL (SPEC.md 9.14) joined it at 0x0236, the same
 # way: still no release at PKG_FMT 13. 0x023C since OSAPI_KEY_MAP (SPEC.md
-# 9.7.3) joined at 0x0239, the same way again.
-WIRE_TABLE_END = 0x023C
+# 9.7.3) joined at 0x0239, the same way again - and v1.0.20261116 then
+# released that table. 0x0244 since OSAPI_KEYBOARD (SPEC.md 9.16) was
+# appended at 0x023C, PAST a released end, so it is fenced: the level-8 row
+# above, and WIRE_LEVEL raised here and in wcat.inc.
+WIRE_TABLE_END = 0x0244
 # ...and the DOOR's (SPEC.md 20.3.4): a rare cell is `int 81h` and an index
 # byte, and a kernel that has no word for an index REFUSES it - CF = 1, AX =
 # 1, the caller's registers kept - rather than jumping anywhere. So a package

@@ -10,7 +10,8 @@
 ; instance count is bounded by the region pool instead of a hard-coded 2.
 ;
 ; Editing behaviour is unchanged from the built-in (SPEC.md 14): printable
-; 32..126 append, backspace deletes, Enter stores a newline byte; text wraps
+; ASCII and supported native CP850 append, backspace deletes, Enter stores
+; a newline byte; text wraps
 ; at the content width BY WORD (SPEC.md 27.11), with 6px margins, rows that
 ; would overflow the
 ; content bottom are dropped rather than scrolled, and a 1px caret follows
@@ -4644,9 +4645,8 @@ np_save:
 ; out: DI = one past the last byte kept; CF = 1 a byte to keep met [np_cap]
 ;      and the fold stopped there. Clobbers AX, CX, SI
 ;
-; CR LF folds to one 13 and so does a lone LF, and anything else outside
-; 32..126 is dropped: a file and the clipboard are both bytes another program
-; wrote, and a stray control code would draw as a random glyph.
+; CR LF folds to one 13 and so does a lone LF. Other controls and DEL are
+; dropped; native CP850 high bytes are preserved without transcoding.
 ; -----------------------------------------------------------------------------
 np_nlfold:
     xor ah, ah                  ; AH = the byte before
@@ -4664,8 +4664,8 @@ np_nlfold:
     je .keep
     cmp al, 32
     jb .skip
-    cmp al, 126
-    ja .skip
+    cmp al, 127                ; DEL stays a control; CP850 bytes survive
+    je .skip
 .keep:
     cmp di, [np_cap]
     jae .full
@@ -4685,9 +4685,8 @@ np_nlfold:
 ; in:  nothing
 ; out: nothing; the outcome is said as a toast; preserves all registers
 ;
-; CR LF folds back to a single 13, and so does a lone LF - a note written by
-; a Unix editor loads correctly too. Anything else outside 32..126 is
-; dropped rather than rendered as a stray glyph, and a file longer than the
+; CR LF folds back to a single 13, and so does a lone LF. Native CP850 high
+; bytes are preserved; controls and DEL are dropped. A file longer than the
 ; buffer fills it and says so.
 ; -----------------------------------------------------------------------------
 np_load:
@@ -4767,6 +4766,8 @@ np_load:
     call np_setmsg
     call np_mark                ; what came off the disk IS the disk's version
     mov byte [np_named], 1      ; (SPEC.md 27.15), and this note is that file
+    call np_kbd_recheck         ; prepare extended file text before its paint
+    jc .done                    ; bytes preserved; the refusal was announced
     test dh, dh
     jz .done
     mov ax, np_m_trunc
@@ -5490,8 +5491,8 @@ np_onkey:
     je .append
     cmp al, 32
     jb .out
-    cmp al, 126
-    ja .out
+    call np_kbd_char           ; high bytes need the optional glyph hold
+    jc .out
     call np_selkill                 ; typing REPLACES a selection (SPEC.md
     call np_fastok                  ; 27.8), and the two halves land in one
     jmp short .doins                ; undo group. A printable at the caret is
@@ -6341,6 +6342,7 @@ np_new:
     xor ax, ax                  ; (AX is the menu item, and spent)
     mov [np_len], ax
     mov [np_cur], ax
+    call np_kbd_recheck         ; New releases unless the find fields need it
     mov ax, np_s_nul            ; retire the toast: 'Loaded NOTES.TXT' over an
     call np_saymsg              ; empty note is a lie. An EMPTY string is how
     call np_clamp               ; SPEC.md 59.3 spells that, so no flag of ours
@@ -7556,8 +7558,8 @@ np_cut:
 ; What arrives is then FILTERED in place, because the clipboard is shared and
 ; the bytes in it were put there by another program: a stray control code
 ; would draw as a random glyph and a lone LF would show as a missing line
-; break. CR LF folds to one 13, a lone LF likewise, and anything else outside
-; 32..126 is dropped - exactly np_load's rule, for exactly np_load's reason.
+; break. CR LF folds to one 13, a lone LF likewise. Other controls and DEL
+; are dropped; CP850 high bytes survive as in np_load.
 ; -----------------------------------------------------------------------------
 np_paste:
     push ax
@@ -7601,6 +7603,14 @@ np_paste:
     pop cx
     sub [np_len], dx
     add [np_len], cx            ; the gap was n; only CX of it is text
+    mov di, bx                  ; ES:DI = the CX bytes that survived
+    call os88kbd_scan           ; clipboard bytes use the same native encoding:
+    jnc .held                   ; ACQUIRE only. The selection this replaced is
+    call os88kbd_hold           ; in the undo arena, and Undo puts its high
+    jnc .held                   ; bytes back, so release stays at New and
+    mov ax, np_e_keyfont        ; load (SPEC.md 83.7)
+    call np_saymsg
+.held:
     mov ax, bx
     call np_urec_ins            ; AX = where, CX = how many
     add bx, cx
@@ -10476,8 +10486,8 @@ np_fpkey:
     je .bksp
     cmp al, 32
     jb .no
-    cmp al, 126
-    ja .no
+    call np_kbd_char
+    jc .no
     cmp cx, NP_PATMAX
     jae .yes                    ; full: the keystroke is dropped, as a full
                                 ; note's is
@@ -11088,6 +11098,7 @@ TOASTSTR np_e_noent, 'Not found'     ; Find's miss (np_fmiss); a FILE's
                                      ; refusal is the kernel's words now
                                      ; (np_errmsg, SPEC.md 18.4.11)
 %endif
+TOASTSTR np_e_keyfont, 'Keyboard module needed'
 TOASTSTR np_e_nomem, 'No memory'     ; the staging claim was refused (50.3)
 
 ; --- the find panel and the clipboard (SPEC.md 27.8/27.10/55) ----------------
@@ -11158,6 +11169,68 @@ TOASTSTR np_e_cbig, 'Too big to copy'   ; over CLIP_MAXKB, or the heap could
 %endif
 %define OS88UI_1BPP             ; OSAPI_SAVEU_1BPP: a greyed caption keeps its ink (SPEC.md 13.8.11)
 %include "os88ui.inc"
+%include "os88kbd.inc"          ; optional provider, never called by a painter
+
+; SPEC.md 83.7: native extended text has one instance-scoped glyph hold.
+; A typed byte is accepted only after the provider is available. All
+; registers kept; CF=1 rejected (DEL or a provider load refusal).
+np_kbd_char:
+    cmp al, 127
+    je .no
+    cmp al, 128
+    jb .ok
+    call os88kbd_hold
+    jnc .ok
+    push ax
+    mov ax, np_e_keyfont
+    call np_saymsg
+    pop ax
+.no:
+    stc
+    ret
+.ok:
+    clc
+    ret
+
+; Re-evaluate at document replacement/New, never per keystroke, paste or
+; during paint. This bounded pass retains the provider if any document or
+; find/replace buffer needs it, otherwise releases the instance's hold.
+; Refusal preserves all document bytes and announces the missing module.
+np_kbd_recheck:
+    push ax
+    push cx
+    push di
+    push es
+    mov es, [np_dseg]
+    xor di, di
+    mov cx, [np_len]
+    call os88kbd_scan
+    jc .need
+%ifdef NPF_FIND
+    push ds
+    pop es
+    mov di, np_fpat
+    mov cx, [np_fpatn]
+    call os88kbd_scan
+    jc .need
+    mov di, np_frep
+    mov cx, [np_frepn]
+    call os88kbd_scan
+    jc .need
+%endif
+    call os88kbd_release
+    jmp short .out
+.need:
+    call os88kbd_hold
+    jnc .out
+    mov ax, np_e_keyfont
+    call np_saymsg
+.out:
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
 
 ; ...and it is ABOVE the bss counter below because that block sizes a field
 ; from OS88UI_AMAX: an %assign is evaluated where it stands, so a constant it

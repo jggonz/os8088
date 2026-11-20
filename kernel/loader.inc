@@ -234,7 +234,7 @@ ld_unreserve:
 %ifdef KERN_BIG
     COLDCALL desk_drop_x        ; ld_alloc's early IF_DESK off, and DESK.DRV
 %endif                          ; with it if nobody else is a widget (11.103.10)
-    KDOOR xm_release_rec                ; DI = the record
+    KDOOR inst_rel_rec          ; DI = unpublished record: all entry grants
     call ld_slot
     call mem_free_owner_x
     mov bx, [ld_base]
@@ -632,10 +632,15 @@ loader_run_x:
     jne .move
     mov dx, [di+FS_CWD]
     cmp dx, [dsk_cwd]
+%ifdef OS88_FAT32
+    jne .move                   ; ...all of it (SPEC.md 19.12.3)
+    mov dx, [di+FS_CWDH]
+    cmp dx, [dsk_cwd+2]
+%endif
     je .stage
 .move:
     push ax                     ; the index: dsk_chdir_q_x wants AX
-    mov ax, [di+FS_CWD]         ; stand where the poster stands, QUIETLY
+    FS_CWD_LD ax, di            ; stand where the poster stands, QUIETLY
     mov dl, [di+FS_DRV]         ; (assoc_back's shape, SPEC.md 18.9/54.9)
     call dsk_chdir_q_x
     pop ax
@@ -793,12 +798,24 @@ ld_take:
                                     ; here, it is answered by a number
                                     ; belonging to another disk
 %endif
+%ifdef OS88_FAT32
+    push ax                     ; BX:[dsk_ch], range-checked whole (19.12.3)
+    mov ax, bx
+    call dskw_clok
+    pop ax
+    jc .bad
+%else
     cmp bx, 2                   ; mount already validated (SPEC.md 21 step 1 -
     jb .bad                     ; this check stands alone if the mount code
     cmp bx, [dsk_maxclus]       ; ever changes)
     ja .bad
+%endif
 .clusok:
     mov [ld_clus], bx
+%ifdef OS88_FAT32
+    push word [dsk_ch]
+    pop word [ld_clus+2]
+%endif
     xchg ax, bx                 ; ...AND IN AX: `.peek` takes the cluster (or
     clc                         ; the handle) from the register, and one byte
                                 ; does it - BX becomes the old AX, which is
@@ -899,6 +916,10 @@ ld_run_body_x:
     mov dx, [si+LD_DE_SIZE+2]   ; the size and the cluster, in dskw_stat_x's
     mov cx, [si+LD_DE_SIZE]     ; own registers, because ld_take answers for
     mov bx, [si+LD_DE_CLUS]     ; both entries and that is its input shape.
+%ifdef OS88_FAT32
+    push word [si+14]           ; ...and the listing's high word, the name's
+    pop word [dsk_ch]           ; +14 (SPEC.md 19.12.6)
+%endif
     call ld_take                ; BX, CX and DX are loader_run_x's to bank and
     jc .ret1                    ; it does. On the error arm ld_take answers
                                 ; with CF=1 as well as AL, and CF=1 on the way
@@ -981,7 +1002,7 @@ ld_run_body_x:
                                 ; BX HELD to the read: dsk_bytes_secs_x spends
                                 ; CL alone (kernel size pass 18, -10)
     call dsk_bytes_secs_x       ; DX = ceil(AX/512)
-    mov ax, [ld_clus]           ; (ES = the package's OWN segment: ld_where)
+    CLU_LD ld_clus              ; (ES = the package's OWN segment: ld_where)
     call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
@@ -1518,7 +1539,8 @@ ld_start:
     ; nothing believed, and the sweep only ever touches records wm_create
     ; stamped itself. BEFORE ld_unreserve, so no window outlives the region
     ; its procs live in - a survivor's repaint would far-call a freed claim.
-    ; The reserved instance record was never published, so it needs nothing.
+    ; The reserved record is unpublished; ld_unreserve still sweeps every
+    ; stamped entry grant, including optional keyboard glyph holds.
     call .sweep
     ; ...but NOT its toast (SPEC.md 20.12.4). A refusal the entry proc SAID -
     ; os88parts.inc's four, a C package's - carries the reserved slot as its
@@ -1982,6 +2004,9 @@ ld_pkg_byname:
                                 ; an instruction for it
     push si                     ; the staged NAME, across the document's copy
     mov si, di
+%ifdef OS88_FAT32
+    mov word [assoc_dcluh], 0   ; a locator's folder is a WORD (19.12.8)
+%endif
     mov di, assoc_doc
     mov cx, 16                  ; **THE WHOLE LOCATOR, ONE WALK** (21.5.3.3):
     call assoc_stage            ; name, directory word and volume byte land in
@@ -1989,6 +2014,10 @@ ld_pkg_byname:
                                 ; order. It was a 13-byte stage and then
                                 ; `mov ax, [es:si]` / `mov al, [es:si+2]`
                                 ; against the two fields SI had been left on
+%ifdef OS88_FAT32
+    cmp word [assoc_dclus], 0xFFFF  ; ARG_FILE's far folder, which refuses
+    je .ebad                    ; wherever it is taken (19.12.8)
+%endif
 
     ; --- THE CACHE IS SEEDED HERE, because no caller's path does it ---------
     ; (SPEC.md 21.5.3.1) assoc_app_of and assoc_find read an IN-RAM table that
@@ -2129,7 +2158,7 @@ ld_said:    resb 1              ; 1 = the aborting entry proc's own toast is
                                 ; up and ld_say_status must not talk over it
                                 ; (set at .abort, consumed by the next
                                 ; ld_say_status - SPEC.md 20.12.4)
-ld_clus:    resw 1              ; loader_run scratch: the file's first cluster
+ld_clus:    CLURES 1            ; loader_run scratch: the file's first cluster
 ld_fsz:     resw 2              ; file size, BYTES, in 32 bits: a package
                                 ; that carries parts is bigger than its image
                                 ; and may be bigger than a segment (SPEC.md

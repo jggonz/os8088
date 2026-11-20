@@ -258,6 +258,9 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define KERN_BIG
  %endif
 %endif
+%include "clu.inc"              ; OS88_FAT32 and the CLU_* macros (SPEC.md
+                                ; 19.12.3): kern_mega's FAT32, named by
+                                ; instance.inc and others before disk.inc
 ; --- KHP_* - kernel hot-paths pass 1's optimisations, ONE KNOB A GROUP ------
 ; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
 ; Each knob selects the rewritten body of a hot path; undefined, the source
@@ -2438,6 +2441,8 @@ section .modwb   nobits vstart=MODW_IMG ; WIN95.DRV's own scratch: one
 section .modn    start=MODN_START vstart=0  ; STIKMENU.DRV (SPEC.md 110.12)
 %endif
 section .mods    start=MODSER_START vstart=0 ; SERIAL.DRV (SPEC.md 115)
+section .modq    start=MODQ_START vstart=0   ; KEYBOARD.DRV (SPEC.md 9.16)
+section .modqb   nobits vstart=MODQ_IMG
 %ifdef OS88_FSCKIMG
 section .modfs   start=MODFS_START vstart=0 ; FSCHECK.DRV (SPEC.md 118.14)
 %endif
@@ -3504,7 +3509,8 @@ rmk_11:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          9.7.3): DS:DI = 16 bytes, filled
                                   ;          with the held keys' bits; CF = 0
 rmk_11e:          ; (a real-mode bracket keeps it: fsx_rkeep)
-osapi_table_end:                  ; 0x023C today (0x0239 before KEY_MAP;
+    OSAPI_SLOT osapi_keyboard     ; 0x023C - optional native input (9.16)
+osapi_table_end:                  ; 0x0244 today (0x0239 before KEY_MAP;
                                   ; 0x0236 before MOUSE_REL;
                                   ; 0x0233 before FIND_SEQ;
                                   ; 0x046D before kernel size
@@ -3554,8 +3560,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 45*8 + 15*7 + 8*3 + 6 + 7*5 + 3*6 + 8
-%error "os8088 API jump table must be exactly 0x022C bytes: 45 SLOT (8, the yield's YSLOT among them), 15 XCELL (7, OSAPI_FILE_READ_SEQ's NCELL among them), 8 JCELL (3, OSAPI_KEY_MAP the last), 1 FCELL (6), 11 ICELL (7 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19's T5 moved every RARE cell behind the door (SPEC.md 20.3.4) - the table holds no six-byte cell any more - and promoted OSAPI_GFX_DESK to a SLOT (V7)"
+%if OSAPI_TABLE_LEN != 46*8 + 15*7 + 8*3 + 6 + 7*5 + 3*6 + 8
+%error "os8088 API jump table must be exactly 0x0234 bytes: 46 SLOT (8, the yield's YSLOT among them), 15 XCELL (7, OSAPI_FILE_READ_SEQ's NCELL among them), 8 JCELL (3, OSAPI_KEY_MAP the last), 1 FCELL (6), 11 ICELL (7 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19's T5 moved every RARE cell behind the door (SPEC.md 20.3.4) - the table holds no six-byte cell any more - and promoted OSAPI_GFX_DESK to a SLOT (V7)"
 %endif
                                 ; (THE PARITY PAD kernel size pass 19 left
                                 ; here went with OSAPI_FILE_FIND_SEQ's three
@@ -3716,6 +3722,12 @@ api_refuse:                     ; OSAPI_XMEM_SEL's and _XMEM_RUN's index here
     mov ax, 1
     stc
     ret
+section .cold                   ; ...and OSAPI_FILE_PLACE's, an RN cell whose
+api_refusec:                    ; body is kern_mega's alone (SPEC.md 19.12.8):
+    mov ax, 1                   ; small's six bytes, and an even count keeps
+    cmp al, 2                   ; .cold's hot dsk_* routines at their parity
+    retf                        ; (t_hotpar)
+section .text
  %endif
 %ifndef FPG_PARK
 osapi_fs_op equ api_refuse      ; kern_small: OSAPI_FS_OP refused, and DISKOPS's
@@ -5353,6 +5365,7 @@ kmain_hic:
     call COLD_SEG:drv_hiboot_f  ; ...the boot's drivers above 1MB, now that
                                 ; there is a pool (item 82)...
     call COLD_SEG:mem_hicaches_f ; ...and its caches (item 84)
+    call COLD_SEG:kl_boot_x     ; optional keyboard after font promotion
 %ifdef OS88_SHORTCUTS
     call stik_boot              ; ...the Sticky Apps, bound in the mode they
                                 ; run in (KERN-MEGA-PLAN 14.78; drv_notice_x
@@ -5772,11 +5785,20 @@ osapi_rand:
 ; int 10h and carried the kernel's F000:FA6E fallback - 40 lines to arrive
 ; at a table the kernel already had.
 osapi_font_glyphs:
-    mov si, [font_base]         ; wherever font_init found it: the ROM's own
-    mov dx, [font_seg]          ; table, its MEM_K_FONT heap copy on a slow-ROM
-                                ; machine (SPEC.md 6.0.1), or a baked face's
-                                ; copy in LOW_SEG
-    mov ax, FONT_FIRST | (FONT_LAST << 8)   ; AL and AH in one instruction
+    pushf
+    cli                         ; snapshot before a module can be disabled
+    mov si, [font_base]
+    mov dx, [font_seg]
+    cmp byte [font_last], FONT_LAST
+    jbe .table
+    push es
+    mov es, [KLFP + KL_CMD + 2] ; readable image+BSS code alias, also on mega
+    mov si, [es:klf_saved_base] ; old clients always borrow the stable ASCII
+    mov dx, [es:klf_saved_seg]  ; face, never the optional provider's storage
+    pop es
+.table:
+    popf
+    mov ax, FONT_FIRST | (FONT_LAST << 8)
     mov cx, 8
     ret
 
@@ -5860,12 +5882,17 @@ osapi_vol_stat equ osapi_snd_fm     ; a refusal on this kernel (SPEC.md
 ; DX and BL are the outputs; SPEC.md 1 makes everything else this routine's
 ; to preserve, BH and AX included.
 osapi_file_here:
+%ifdef OS88_FAT32
+    call COLD_SEG:dsk_here16f   ; kern_mega: the 0FFFFh rule (SPEC.md 19.12.8),
+    ret                         ; in `.cold`, which this segment is short of
+%else
     push ax                     ; the reading is instance.inc's inst_where (DL
     call inst_where             ; = drive, AX = directory, the machine's own for
     mov bl, dl                  ; no instance), which banks BX - so BH is still
     xchg ax, dx                 ; the caller's here - and spends only DH, an
     pop ax                      ; output. (`xchg`, a byte under `mov dx, ax`:
     ret                         ; AX is the pushed one - kernel size pass 16)
+%endif
 
 ; OSAPI_VOL_SYS (out BL = [dsk_bootvol], nothing else touched, flags
 ; included) is an INLINE cell (SPEC.md 20.3). [dsk_bootvol] is A: on a floppy
@@ -5878,7 +5905,11 @@ osapi_file_goto:
     push ax
     mov ax, dx
     mov dl, bl
+%ifdef OS88_FAT32
+    call COLD_SEG:dkf_dsk_chdir16   ; (0FFFFh refused, 19.12.8)
+%else
     call COLD_SEG:dkf_dsk_chdir ; CF = the mount failed; it has already put
+%endif
     jc .out                     ; the volume back at the root
     call inst_vol_mark          ; ...and the instance follows the machine:
                                 ; this is a deliberate move, so it is where
@@ -5932,7 +5963,11 @@ osapi_file_goto_q:
     push dx
     mov al, bl                  ; dsk_goto takes AL = drive, BX = cluster
     mov bx, dx
+%ifdef OS88_FAT32
+    call COLD_SEG:dskf_dsk_goto16   ; (0FFFFh refused, 19.12.8)
+%else
     call COLD_SEG:dskf_dsk_goto ; ...already published for DISKOPS.DRV (18.99.8)
+%endif
     jc .out
     xor ax, ax                  ; the documented AX = 0, and it clears CF with
 .out:                           ; it; on the CF=1 arm AX is dsk_goto's FERR_*
@@ -6456,6 +6491,7 @@ EXT_DEAD    equ 14              ; ui_drag_dead, UNGATED: registers kept (12 and
 %include "stikmenu.inc"           ; STIKMENU.DRV, the Sticky Apps menu (110.12)
                                   ; (SPEC.md 39.19.6) - kern_big only
 %include "serial.inc"             ; SERIAL.DRV, desktop UART lease (115)
+%include "keyboard.inc"           ; KEYBOARD.DRV and narrow lifetime glue
 %include "fsck.inc"               ; FSCHECK.DRV, the disk checker and
                                   ; defragmenter System Check loads (118.14)
 %include "ctrl.inc"
@@ -6513,6 +6549,7 @@ mod_fpt:
     MODFP SMNFP, MOD_STIKM, SMN_NENT
 %endif
     MODFP SERFP, MOD_SER, SER_NENT
+    MODFP KLFP, MOD_KEYBOARD, KL_NENT
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
 %endif
@@ -7233,7 +7270,7 @@ rd_tab:
     RDENT RDK_RS, wm_paint_dmg
     RDENT RDK_RS, wm_rect_empty     ; fm_paste_res's union (kernel size pass
     RDENT RDK_RS, wm_runion         ; 20: its own seed and compares were 30)
-    RDENT RDK_RS, xm_release_rec
+    RDENT RDK_RS, inst_rel_rec
     RDENT RDK_RS, wm_win_rect
 %assign rd_p rd_n
 RD_P        equ rd_p            ; the published block's first index (the
@@ -8079,6 +8116,21 @@ RD_RK       equ 3               ; (fsx_rdownf's bound, past the private block)
                                   ;          size once, at the close or when
                                   ;          the UI unlocks. kern_big; the
                                   ;          small door refuses
+%ifdef OS88_FAT32
+    RDPUB RDK_RN, dsk_fpl_door, FILE_PLACE ; N: A FOLDER IN 32 BITS (SPEC.md
+                                  ;          19.12.8): AL = FPL_* verb, a
+                                  ;          folder DX = low, CX = high, BL =
+                                  ;          the volume; SI = FPL_STAT's name.
+                                  ;          kern_mega; every other kernel
+                                  ;          refuses (CF=1, AX=1) - its 16-bit
+                                  ;          doors are already complete
+%elifndef KERN_SMALL
+    RDREF RDK_RN, api_refusec, FILE_PLACE
+%endif                            ; kern_small: NO ENTRY. Its heap rung is
+                                  ; locked (guard 1b) and this is the
+                                  ; table's LAST cell, so its index is past
+                                  ; small's RD_N and .lim's `jae .ref` gives
+                                  ; RDREF's own answer for no bytes (20.3.4)
 %if rd_n > 128
  %error "rd_tab: the door compares index x 2 in one byte, so 128 entries at most"
 %endif
@@ -9072,11 +9124,12 @@ MODJ_START   equ MODW_START + MODW_SIZE   ; DESK.DRV (SPEC.md 11.103.10) and
 MODN_START   equ MODJ_START + MODJ_SIZE   ; STIKMENU.DRV (SPEC.md 110.12) are
 MODSER_START equ MODN_START + MODN_SIZE   ; serial follows the big desktop modules
 %endif
+MODQ_START   equ MODSER_START + SER_IMAGE_SIZE
 %ifdef OS88_FSCKIMG
-MODFS_START  equ MODSER_START + SER_IMAGE_SIZE ; FSCHECK.DRV: an image and NO
+MODFS_START  equ MODQ_START + MODQ_SIZE ; FSCHECK.DRV: an image and NO
 MODMAP_START equ MODFS_START + MODFS_SIZE      ; mod_tab row (SPEC.md 118.14.1)
 %else
-MODMAP_START equ MODSER_START + SER_IMAGE_SIZE
+MODMAP_START equ MODQ_START + MODQ_SIZE
 %endif
 
 ; MODB_TAIL img, bss - A MODULE'S BSS IS ZEROS IN ITS OWN FILE
@@ -9227,6 +9280,17 @@ modd_end:
 MODD_SIZE equ modd_end - $$
 %endif
 
+section .modqb
+modqb_end:
+MODQ_BSS equ modqb_end - $$
+section .modq
+    MODB_TAIL MODQ_IMG, MODQ_BSS
+modq_end:
+MODQ_SIZE equ modq_end - $$
+%if MODQ_SIZE > MOD_MAX_KB*1024
+%error "the keyboard module is over MOD_MAX_KB"
+%endif
+
 ; ...and each of them has to fit the claim mod_need makes for it. MOD_MAX_KB
 ; (mod.inc) is a RUN-TIME test - a module over it is refused cleanly, the
 ; feature simply does not open - so nothing would say a word at build time
@@ -9309,6 +9373,8 @@ mod_map:
 %endif
     dd MODSER_START, SER_IMAGE_SIZE
     dw SER_NENT
+    dd MODQ_START, MODQ_SIZE
+    dw KL_NENT
 %ifdef OS88_FSCKIMG
     dd MODFS_START, MODFS_SIZE  ; FSCHECK.DRV, LAST: the package loads it, so
     dw FSK_NENT                 ; its id is past every mod_tab row's (118.14.1)

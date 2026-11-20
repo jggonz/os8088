@@ -1,0 +1,199 @@
+{
+  "comparison_build_number": 343,
+  "variants": {
+    "big": {
+      "build_number": 343,
+      "sections": {
+        ".text": 39497,
+        ".bss": 4891,
+        ".cold": 37378,
+        ".vga": 2218,
+        ".lowbss": 5358,
+        ".vgabuf": 336
+      },
+      "permanent_bytes": 90190,
+      "resident_bytes": 95232,
+      "kernel_rung_bytes": 95232,
+      "core_bytes": 105824,
+      "shipped_bytes": 84320,
+      "heap_segment": 6048,
+      "core_sha256": "f809857dbf9f1d6e580e0a35f6bc5fb6e27dcdc9abadff1a0ea6d55d752beeb4",
+      "keyboard_module": {
+        "image_bytes": 5594,
+        "emitted_bytes": 5610,
+        "bss_bytes": 16,
+        "runtime_bytes": 5610,
+        "claim_bytes": 5632,
+        "file_bytes": 2906,
+        "excluded_from_core": true,
+        "claim_kib": 5.5
+      },
+      "delta": {
+        "permanent_bytes": -186,
+        "resident_bytes": 0,
+        "kernel_rung_bytes": 0,
+        "core_bytes": -176,
+        "shipped_bytes": -160,
+        "heap_segment": 0
+      },
+      "section_deltas": {
+        ".bss": 9,
+        ".cold": -350,
+        ".lowbss": 0,
+        ".text": 155,
+        ".vga": 0,
+        ".vgabuf": 0
+      },
+      "diskops_module": {
+        "emitted_bytes": 11120,
+        "baseline_emitted_bytes": 10216
+      }
+    },
+    "small": {
+      "build_number": 343,
+      "sections": {
+        ".text": 29112,
+        ".bss": 2843,
+        ".cold": 20818,
+        ".lowbss": 2868,
+        ".vgabuf": 0
+      },
+      "permanent_bytes": 56153,
+      "resident_bytes": 57344,
+      "kernel_rung_bytes": 57344,
+      "core_bytes": 63200,
+      "shipped_bytes": 52912,
+      "heap_segment": 3680,
+      "core_sha256": "18d39979ba37916b0652092fe658750fbece4b3eee32e13d9ac0ed8327bcf7b4",
+      "keyboard_module": {
+        "image_bytes": 5594,
+        "emitted_bytes": 5610,
+        "bss_bytes": 16,
+        "runtime_bytes": 5610,
+        "claim_bytes": 5632,
+        "file_bytes": 2906,
+        "excluded_from_core": true,
+        "claim_kib": 5.5
+      },
+      "delta": {
+        "permanent_bytes": -154,
+        "resident_bytes": 0,
+        "kernel_rung_bytes": 0,
+        "core_bytes": -128,
+        "shipped_bytes": -160,
+        "heap_segment": 0
+      },
+      "section_deltas": {
+        ".bss": 12,
+        ".cold": -318,
+        ".lowbss": 0,
+        ".text": 152,
+        ".vgabuf": 0
+      },
+      "diskops_module": {
+        "emitted_bytes": 8020,
+        "baseline_emitted_bytes": 7195
+      }
+    },
+    "emu": {
+      "build_number": 343,
+      "sections": {
+        ".text": 39743,
+        ".bss": 4891,
+        ".cold": 37378,
+        ".vga": 2218,
+        ".lowbss": 5358,
+        ".vgabuf": 336
+      },
+      "permanent_bytes": 90436,
+      "resident_bytes": 95232,
+      "kernel_rung_bytes": 95232,
+      "core_bytes": 106176,
+      "shipped_bytes": 84576,
+      "heap_segment": 6048,
+      "core_sha256": "53c522e71c13677a1651de50299dc331fb09fc13faad4643de9685e0e0561743",
+      "keyboard_module": {
+        "image_bytes": 5594,
+        "emitted_bytes": 5610,
+        "bss_bytes": 16,
+        "runtime_bytes": 5610,
+        "claim_bytes": 5632,
+        "file_bytes": 2906,
+        "excluded_from_core": true,
+        "claim_kib": 5.5
+      },
+      "delta": {
+        "permanent_bytes": -186,
+        "resident_bytes": -512,
+        "kernel_rung_bytes": -512,
+        "core_bytes": -176,
+        "shipped_bytes": -128,
+        "heap_segment": -32
+      },
+      "section_deltas": {
+        ".bss": 9,
+        ".cold": -350,
+        ".lowbss": 0,
+        ".text": 155,
+        ".vga": 0,
+        ".vgabuf": 0
+      },
+      "diskops_module": {
+        "emitted_bytes": 11120,
+        "baseline_emitted_bytes": 10216
+      }
+    },
+    "mega": {
+      "build_number": 343,
+      "sections": {
+        ".text": 45138,
+        ".bss": 4929,
+        ".cold": 48350,
+        ".mega": 24800,
+        ".lowbss": 5600,
+        ".vgabuf": 336
+      },
+      "permanent_bytes": 129665,
+      "resident_bytes": 61440,
+      "kernel_rung_bytes": 136704,
+      "core_bytes": 146481,
+      "shipped_bytes": 116960,
+      "heap_segment": 8640,
+      "core_sha256": "5d78c29d4f1115173e6d4846b1c173742a63d57673b62fde646778d9de566fc8",
+      "keyboard_module": {
+        "image_bytes": 5634,
+        "emitted_bytes": 5650,
+        "bss_bytes": 16,
+        "runtime_bytes": 5650,
+        "claim_bytes": 6144,
+        "file_bytes": 2923,
+        "excluded_from_core": true,
+        "claim_kib": 6.0
+      },
+      "delta": {
+        "permanent_bytes": -53,
+        "resident_bytes": 0,
+        "kernel_rung_bytes": 0,
+        "core_bytes": -16,
+        "shipped_bytes": -80,
+        "heap_segment": 0
+      },
+      "section_deltas": {
+        ".bss": 9,
+        ".cold": -289,
+        ".lowbss": 0,
+        ".mega": 32,
+        ".text": 195,
+        ".vgabuf": 0
+      },
+      "diskops_module": {
+        "emitted_bytes": 12299,
+        "baseline_emitted_bytes": 11395
+      }
+    }
+  },
+  "core_revision": "c8a3160b9705611a91b47366b22133bdcd8d74dd",
+  "baseline_revision": "b82e4e94310e",
+  "toolchain": "NASM version 3.02 compiled on Jun 29 2026",
+  "strict_totals_nonpositive": true
+}

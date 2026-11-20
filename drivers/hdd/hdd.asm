@@ -973,7 +973,6 @@ hd_bn_rst:   dw 0               ; ...and controller resets, which are retries
                                 ; hd_idbuf is in hd_mbr's 512 bytes, with the
                                 ; probe that fills it (SPEC.md 52.13.6)
 
-hd_pslot:    db 0               ; the partition hd_mount is working on
 hd_xslot:    db 0               ; the extended partition's primary slot, 0FFh
                                 ; = none (SPEC.md 52.4.1)...
 hd_xbase:    dd 0               ; ...its first LBA and its length, ADJACENT:

@@ -1,6 +1,6 @@
 # Disk operations
 
-`DISKOPS.DRV` holds four of the Disk window's bigger jobs: copying a whole
+`DISKOPS.DRV` holds the Disk window's disk and folder jobs: copying a whole
 floppy, turning a floppy into an image file and back, and compressing and
 expanding files. It is read off the system disk when you pick one of them
 and put away again when the job is done.
@@ -58,6 +58,14 @@ also joins a file that was split into parts across several floppies, asking
 for each disk in turn.
 
 All three are on the right-click menu of a file as well.
+
+## Folder commands
+
+**New Folder**, renaming a file or folder, and deleting a folder load this
+module from the system disk before changing anything. Keep the matching
+system disk available, even when working on a folder on another disk.
+If the module is missing or belongs to a different build, the command
+refuses and leaves the attempted change untouched.
 
 ## Why it is a separate file
 

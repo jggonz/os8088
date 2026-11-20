@@ -24,6 +24,12 @@ Type, and the text appears at the caret. Press `Enter` to start a new line.
 Lines wrap at the last word that fits, so you only press `Enter` to end a
 paragraph.
 
+For Spanish or French input, select a layout in the [[CTRL.DRV]] Keyboard
+page. Accented text uses CP850 bytes, and can be edited, found, replaced,
+saved and reopened. It stays readable after returning to BIOS input.
+[[KEYBOARD.DRV]] supplies its extra glyphs while the note or Find fields
+need them; clearing the text or closing the last such window frees it.
+
 | Key | What it does |
 |---|---|
 | Arrow keys | Move the caret one character or one line |
@@ -158,9 +164,10 @@ change.
 ## Files
 
 Note Pad reads and writes plain text. On disk each line ends the DOS way, and
-it reads files with DOS or Unix line endings alike. Characters other than
-ordinary letters, digits, spaces and punctuation are left out when a file is
-loaded, so tab characters disappear. A file larger than 16KB is refused.
+it reads files with DOS or Unix line endings alike. It preserves CP850 accented bytes. Other control characters are left out
+when a file is loaded, so tab characters disappear. If the extra glyph
+provider cannot be loaded, the bytes are kept and a message names the
+needed keyboard module. A file larger than 16KB is refused.
 
 ## Good to know
 

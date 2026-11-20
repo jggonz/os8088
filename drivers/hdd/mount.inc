@@ -100,15 +100,19 @@ hd_mount_slot:
     jc .out                     ; free, or a type that is not a FAT volume:
                                 ; SKIPPED, which is the whole of "and if it
                                 ; is not FAT, do not" (SPEC.md 52.4)
+    mov al, [si+HP_TYPE]        ; FAT32's fence is its own length, not
+    sub al, HPT_FAT32           ; FAT16's ceiling (SPEC.md 19.12.10)
+    cmp al, HPT_FAT32L-HPT_FAT32+1
+    jb .fits
     call hd_part_big
     jc .big                     ; longer than any FAT16 volume: not one this
                                 ; kernel can carry (SPEC.md 18.7.5)
-    mov dl, [hd_sel]
-    mov dh, [hd_pslot]
-    mov bx, hd_vols
+.fits:
+    mov dx, [hd_sel]            ; DL = the device, DH = [hd_pslot], its
+    mov bx, hd_vols             ; neighbour (hdcom.inc)
     call hd_vol_find
     jnc .have                   ; this one is already mounted - by us...
-    mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
+    mov al, dl                  ; ...or by the KERNEL, which adopted the
     call hd_kvol                ; partition it booted from before we were
     jc .mount                   ; loaded at all (SPEC.md 52.10.3). Mounting it
                                 ; again is a second icon on the same sectors.
@@ -125,17 +129,19 @@ hd_mount_slot:
     call hd_mount_one
     jmp short .out
 .have:
-    mov byte [hd_msgc], HDM_MHAVE   ; and SAY so: the caption was still
-                                    ; 'No FAT partition on it' from the top of
-                                    ; the loop, which about a partition that is
-                                    ; mounted and on the desktop is the one
-                                    ; answer that is not true
-    jmp short .out
+    mov al, HDM_MHAVE           ; and SAY so: the caption was still
+                                ; 'No FAT partition on it' from the top of
+                                ; the loop, which about a partition that is
+                                ; mounted and on the desktop is the one
+                                ; answer that is not true
+    jmp short .msg
 .big:
-    mov byte [hd_msgc], HDM_MBIG    ; the tool calls this slot Unmountable and
-                                    ; so does the page, rather than reporting
-                                    ; 'no FAT partition' about a partition that
-                                    ; plainly is one (SPEC.md 52.2.2)
+    mov al, HDM_MBIG            ; the tool calls this slot Unmountable and
+                                ; so does the page, rather than reporting
+                                ; 'no FAT partition' about a partition that
+                                ; plainly is one (SPEC.md 52.2.2)
+.msg:
+    mov [hd_msgc], al           ; (AX is this routine's to spend: pushed)
 .out:
     pop dx
     pop bx

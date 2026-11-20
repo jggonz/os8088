@@ -1776,8 +1776,10 @@ sector nothing: unset, the `%ifdef` is not assembled.
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
 finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
-`FORMAT.DRV`, the floppy formatter (§18.96), and `DISKOPS.DRV`, the disk cloner
-(§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
+`FORMAT.DRV`, the floppy formatter (§18.96), `DISKOPS.DRV`, the disk cloner
+and directory-mutation bodies (§18.99, §18.5.3), `SERIAL.DRV`, the serial
+service (§9.15), and `KEYBOARD.DRV`, optional input layouts and CP850 glyphs
+(§9.16). `kern_big` also carries `HIBER.DRV` (§87), the optional
 `DOCK.DRV`, advanced Dock behavior (§30.5), `EXTD.DRV`, the extended
 desktop's placement policy (§39.19.6), `WIN95.DRV`, the Windows theme's
 chrome (§76.14), `DESK.DRV`, the desk layer's verbs, hover edge, show
@@ -1798,10 +1800,9 @@ against 9,214, `HIBER.DRV` 4,814 against 5,489 and `FORMAT.DRV` 1,097 against
 four still give the 360KB disk five clusters. Every fetch decodes about 6KB,
 ~50 ms on the 8088, against the sectors it no longer reads.
 
-**A module's claim is its image rounded UP to whole KB** (`mem_bytes_kb_x`), and
-its own bss lives in that rounding's slack, asserted at assembly - so a byte
-moves the claim only where it crosses a KB, and that is the number a machine
-feels. The second size pass on the two biggest images took all four of their
+**A module's claim includes its image and BSS, rounded UP to512 bytes**
+(§50.2.1). A byte changes the allocation when it crosses that granule.
+The following whole-KB figures are historical: the second size pass on the two biggest images took all four of their
 claims down one: `CTRL.DRV` **12 → 11 KB** on `kern_big` (11,119 bytes and
 `cpc_buf`'s 131 of bss, against 11,649 with the buffer in the image) and
 **6 → 5 KB** on `kern_small` (4,363 against 5,347); `DISKOPS.DRV` **10 → 9 KB**
@@ -1883,13 +1884,14 @@ in the tree.
   bytes) allocated and never armed on each kernel, made an eighth entry a hard
   NASM error in whichever module grew, and could not be per-build because the
   host tool scraped it with a regex. Removing it was −36 bytes on `kern_big`
-  and −38 on `kern_small`. `MOD_MAX` is 12 on `kern_big` (ten images,
-  `MOD_SETS`, §2.8.7, and `MOD_KBM`, §2.8.8) and 7 on `kern_small`. BIG has
+  and −38 on `kern_small`. `MOD_MAX` is 13 on `kern_big` (eleven images,
+  `MOD_SETS`, §2.8.7, and `MOD_KBM`, §2.8.8) and 8 on `kern_small`. BIG has
   `MOD_HIBER` 3, `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7
   (`DKD_NENT` 4, §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12),
-  `MOD_SER` 9 (`SERIAL.DRV`, §115), `MOD_SETS` 10 and `MOD_KBM` 11
-  (`KBM_NENT` 3); SMALL has `MOD_FCP` 3, `MOD_FDLG` 4, `MOD_SER` 5 and
-  `MOD_KBM` 6.
+  `MOD_SER` 9 (`SERIAL.DRV`, §115), `MOD_KEYBOARD` 10 (`KEYBOARD.DRV`,
+  `KL_NENT` 2, §9.16), `MOD_SETS` 11 and `MOD_KBM` 12 (`KBM_NENT` 3); SMALL
+  has `MOD_FCP` 3, `MOD_FDLG` 4, `MOD_SER` 5, `MOD_KEYBOARD` 6 and
+  `MOD_KBM` 7.
 - **`mod_fpr` indexes by `MOD_TAB_OFF` and not `mod_tab`, and that is an
   ASSEMBLER constraint rather than a taste.** An expression like
   `mod_fpt - mod_tab/2` is label arithmetic nasm 3 refuses outright
@@ -2756,7 +2758,7 @@ first.**
 |---|---|---:|
 | `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, `cp_toast`/`sc_m_say`, and the image's epilogue ladder | `MODS_SIZE` = 2,838 bytes, 6 sectors (with main's Color presets, at the `elendilon -> main` merge; kernel size pass 12 had it at 2,615, and 2,650 before) |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 12,502 in all (`MODC_SIZE`) |
-| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 159 bytes): BSS, as zeros at the file's end (§2.8.1) | 159 |
+| `.modcb` | BSS, as zeros at the file's end (§2.8.1): the Keyboard page's sample and pending pick, `cp_key_state` (26 bytes, §31.16), the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 164 bytes with the `KL` key), and the scratch tail `cps_scr` .. `modcb_end` (22 bytes, §2.8.3) | `MODC_BSS` = 212 on `kern_big` |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
 one image at one set of offsets, and the panel reaches the core with a near
@@ -2829,8 +2831,8 @@ in all**.
 
 #### 2.8.8 A row adopted from memory: `KBMOUSE`, the keyboard mouse's pointer half
 
-**One row has no file.** `MOD_KBM` (`kernel/mod.inc`, the last row: 11 on
-kern_big, kern_emu and kern_mega, 6 on kern_small, so `MOD_MAX` is 12 and 7)
+**One row has no file.** `MOD_KBM` (`kernel/mod.inc`, the last row: 12 on
+kern_big, kern_emu and kern_mega, 7 on kern_small, so `MOD_MAX` is 13 and 8)
 is the keyboard mouse's pointer half (§9.6.7): the direction table, the key
 test, the button, the right button, the step and paint, keypad 5's spend and
 the end-of-pass service - what only a machine with **no** pointer runs. Its
@@ -5636,6 +5638,7 @@ VIEW_KB       equ 1          ; a listing claim's floor (2, fixed, on
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19); and `dsk_ncopy`, the **counted DS:SI→DS:DI byte copy the whole `.cold` segment shares** — `diskw.inc`, `filecp.inc`, `files.inc` and `fdlg.inc` all call it, and it lives here because `disk.inc` is the first `.cold` `%include`, so every site is a backward near reference. It was the same seventeen bytes in four files. (Its NUL string compare, `dsk_streq`, was down to one caller and is written at it since kernel size pass 14.) Not to be confused with a NUL-stopping bounded copy, which answers a different question |
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write`. **`.cold`** (§2.6) |
 | `kernel/diskops.inc`  | the disk cloner (§18.99): the on-demand `DISKOPS.DRV` — sector-for-sector copy between any two floppy drives or one drive twice, its XMS/heap planner, its own geometry probe and its status-line prompts — prefix `clo_`; the resident half is one word and one thunk, both **`.cold`**/`.text` (§2.6) |
+| `kernel/diskmut.inc` | `DISKOPS.DRV` directory mutation bodies (§18.5.3): New Folder, Rename, empty-folder removal and recursive folder removal; prefix `dmo_`; shared FAT commit/rollback and load dispatch stay resident |
 | `kernel/hiber.inc`  | hibernate and resume (§87): the on-demand `HIBER.DRV` — the Hibernate window, the image write, the boot-time question, the extent walk, the stub that puts memory back from the text framebuffer and the wake — prefix `hbm_`/`hbs_`; the resident half is the template, the state block, the `.text` thunks a kernel window needs, and in **`.cold`** the boot probe, the greying predicate and the loading thunks (`hb_`/`hbf_`/`hbk_`) |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21). **`.cold`** (§2.6) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22). **`.cold`** (§2.6), with its strings and dispatch tables toggled back to `.text` |
@@ -10363,6 +10366,10 @@ tenth sector moves where the image's runs split, and that boot's `int 13h`
 lost a revolution.
 
 **The resume re-asks** (`hbm_wake` step 4a, HIBER.DRV - no resident byte).
+When the optional CP850 provider is held, private SUSPEND/REARM commands
+bracket this repair. FONT_PICK sees the original font pointer throughout,
+not KEYBOARD.DRV's table; the provider is rebound only after the repaired
+cache or replacement ROM pointer is ready (§9.16.1).
 The image carries the pointer the writing machine's boot chose; the reading
 machine runs the same timed `FONT_PICK`, refills a heap copy in place (its
 claim came back with the image) or replaces a ROM pointer. It makes no
@@ -12299,6 +12306,49 @@ they met the rule at a merge rather than at a keystroke, and the ratchet did
 for them exactly what §6.6.3 says it does for a tree it arrives in: it took the
 count they had - 21 sites in two more files - and stopped it going up. Both
 lines are mixed, and both say which halves are cases and which are the pair.
+
+### 6.7 Optional CP850 extension (`kernel/keyfont.inc`)
+
+The native keyboard module (§9.16) can supply glyphs 128..255 in CP850
+without adding their bytes to the core kernel. Its `klf_enable` helper
+copies the current ASCII face (32..126) into a module-owned 32..255 table,
+clears DEL's cell and fills the extended rows from the generated,
+repository-authored glyph source. That cleared DEL cell, `FONT_BYTES` past
+glyph 32, is the blank an unprintable cell draws on a `BAKED_FONT` build
+(§6.2), as `font_zero` is beside the baked copy: `FONT_BLANK` and the run
+walkers address it from the live `[font_base]`, so it follows the table
+(the ROM arm draws the live table's SPACE). `klf_disable` restores the original
+`font_seg`/`font_base` and ASCII bounds before that module is dropped.
+The original slow-ROM-copy claim stays pinned and valid; on mega,
+activation must follow any boot-time relocation of that original face.
+A hibernate or DOS-return wake suspends this binding before FONT_PICK and
+its heap/ROM repair, so a nonzero-offset module table is never mistaken for
+a heap font at offset zero; it rearms after that original face is repaired.
+The module remains pinned by the same layout or glyph-only client holds.
+Activation/restoration reuse the caller's drawing-lock hold, or acquire
+and release that lock when called without one. This protects a worker
+paused between reading the font offset and reading its segment; an atomic
+pointer store alone cannot protect that caller.
+
+The core retains only the live last-code/span fields and the existing
+renderer routing. The live upper bound is 126 with the provider absent
+and 255 while held. Every glyph index is zero-extended before multiplying
+by eight: `cbw` is incorrect for extended codes whose index exceeds 127.
+`OSAPI_FONT_GLYPHS` preserves its ASCII-only range 32..126 and returns
+its original stable face pointer even while native rendering uses the
+optional table. Existing clients that cache that pointer or allocate only
+95 glyph cells therefore need no new hold or larger buffer.
+Inside a kern_mega FSXF_REAL bracket this slot instead borrows the held
+conventional provider's ASCII facet until the bracket returns, as it already
+borrows a service-area copy for an original pool font. Live bounds are
+clamped to ASCII only for that bracket, avoiding a protected module-selector
+lookup in real mode, then restored before protected callers resume. The private
+seam cells still use their private guard and temporary table and are not exposed as alternate CP850 glyphs.
+
+The generated source reuses `tools/cp437font.py`'s authored shapes by
+character identity, rather than by code-page byte. New accented capitals
+and symbols are derived/authored in `tools/cp850font.py`. No font download
+or generation service is part of a guest load or a build.
 
 ## 7. Concurrency model (read carefully — this is the crux)
 
@@ -17553,7 +17603,11 @@ Five things hold it up.
   `8F00`, `9000` for `-`, `5`, `+`), and Pause (`E1 1D 45 E1 9D C5`) and
   Ctrl+Break (`E0 46`) are swallowed whole: the ROM's E1 flag (40:96 bit 0)
   and its pause bit (40:18 bit 3) take exactly the one byte each expects, so a
-  keyboard that sends no `45` loses no key. `tests/megakbcodes.py` is the row.
+  keyboard that sends no `45` loses no key. These are the scans the adapter
+  passes to `mega_k09`: on a machine whose real pointer has not spoken,
+  §9.6.4's keyboard mouse may claim keypad 5 first. `tests/megakbcodes.py`
+  establishes a real serial pointer before checking the ROM-code matrix;
+  the keyboard-mouse rows retain their separate mouseless coverage.
 
   **This replaced a `kbd_aeclaim` that decoded `AL` instead** (`AH = 1C` whose
   `AL` is neither `0Dh` typed-or-shifted nor `0Ah` with Ctrl), and the
@@ -19989,6 +20043,201 @@ greater than two mickeys in a sample, matching the DOS driver's default
 to field measurement; no emulator in this tree models the V6335D mouse. Record
 the result for horizontal and vertical sweeps, both buttons, simultaneous
 keyboard input, and detach/restart in `docs/plans/PC1-MOUSE-PLAN.md`.
+
+### 9.16 Optional international keyboard module (`KEYBOARD.DRV`)
+
+**Delivery contract, issue #385.** The story list is
+`docs/plans/INTERNATIONAL-KEYBOARD-PLAN.md`; checked stories and recorded
+verification, rather than this contract alone, establish shipped behavior.
+
+#### 9.16.1 Ownership and module control
+
+International input is a §2.8 internal module, `KEYBOARD.DRV`, built with
+the kernel and extracted by `tools/os88mod.py`. Its translation code,
+layout tables, composition data, mutable state and extended glyph storage
+are absent from the stripped core kernel. The default is BIOS input with
+no keyboard-module claim or module read. An explicit US, Spanish (Spain),
+Latin American Spanish or French legacy AZERTY selection loads the module
+in task context; a saved explicit selection may load it during boot.
+
+The narrow public control surface is `OSAPI_KEYBOARD`: AL = verb, AH =
+layout ID for SET; all registers except AX and flags are preserved. A
+successful call clears carry and returns AL = current layout, AH = 1 while
+an explicit layout or glyph client holds the module, otherwise zero.
+Failure sets carry and returns AX = an error; an absent module or failed
+load never disables usable BIOS input. QUERY with no module succeeds with
+AX = 0. No existing package's entry or slot moves. The cell is appended at
+0x023C, past the table v1.0.20261116 released at `PKG_FMT` 13, so a
+package that calls it needs Wire level 8 (§92.2's cell fence).
+
+QUERY and RAW are legal from every task. SET, HOLD, RELEASE and CANCEL
+require the UI task (task 0); a worker receives CF = 1, AX = 3 before any
+load or mutation. A worker's QUERY/RAW runs interrupt-masked from the
+controller's entry to its return, so the UI task's final RELEASE/SET cannot
+drop the module while the worker is inside its image. AX = 1 means an invalid verb, layout or owner, and AX = 2
+means unavailable module resources. QUERY and CANCEL never drop an
+activation still being established by another control call.
+
+| verb | value | effect |
+| --- | --- | --- |
+| QUERY | 0 | Return selection/hold state without loading anything. |
+| SET | 1 | AH = 0 BIOS default, 1 US QWERTY, 2 Spanish (Spain), 3 Latin American Spanish, 4 French legacy AZERTY. Validate and publish atomically; failure retains the prior selection. |
+| HOLD | 2 | Ensure the glyph provider exists and retain it for the calling instance. Repeated holds for that instance are idempotent. |
+| RELEASE | 3 | Release that instance's glyph hold; its teardown also releases it. |
+| CANCEL | 4 | Cancel pending composition without changing the layout. |
+| RAW | 5 | AH = 0 native / nonzero BIOS/guest input for the calling instance. Stores `IF_RAWKBD` in its existing flags byte and never loads the module. |
+
+HOLD/RELEASE are instance-scoped: the kernel supplies the caller's identity,
+as with the serial lease. An instance may keep its hold while its document
+or controls contain extended text; clearing/replacing that content releases
+it only after all of that instance's consumers have finished. Closing the
+last client with BIOS input selected disarms callbacks and drops the
+module. A stamped package entry may HOLD before its record is published;
+the loader abort sweep calls the same instance grant release before the
+reserved slot is reused. Final SET/RELEASE leaves every module frame before
+tail-transferring to the resident drop helper; its original FAR return is
+still the core controller's. A live IRQ entry is pinned and is never relocated or freed under
+its handler. Module data uses a writable alias on kern_mega; no protected
+code writes through CS or carries a selector into a real-mode bracket.
+
+The module has a raw-scan entry and a control entry. A raw scan is observed
+after existing physical-key tracking, with the original set-1 byte intact.
+The scan entry preserves registers: CF = 1 passes the scan, including the
+unloaded `mod_gone` refusal, and CF = 0 means consumed. Entry offset and
+segment are published together under the existing interrupt mask, so an IRQ
+cannot observe a torn FAR pointer while a new image is armed. The default slot
+therefore passes without an additional resident activation flag. The
+hardware adapter owns acknowledgement, BIOS chaining and the exact
+INT 15h return flags. The handler performs no file I/O, allocation, module
+load, rendering or arbitrary kernel/API calls. IRQ stack use is bounded
+and measured before delivery.
+
+Only the private KL_CMD module entry accepts SUSPEND (6) and REARM (7),
+used by HIBER.DRV around wake's existing font selection and repair. They
+never load or drop the module and never change layout/client holds.
+SUSPEND restores the original face, retaining a suspended state in the
+provider's existing active byte. REARM only rebinds a suspended provider:
+it refreshes its ASCII face from the repaired original pointer, cancels
+composition/prefix state and seeds modifiers from the current BIOS data
+area in the same interrupt-masked window. Neither verb is in the public
+SDK; OSAPI_KEYBOARD continues to refuse values above RAW.
+
+#### 9.16.2 Translation and physical keys
+
+There is one translator with separately reviewed definitions for US,
+Spanish (Spain), Latin American Spanish and French legacy AZERTY. Modifier
+state belongs to the arriving scan, not to the time a later INT 16h read
+drains the ring. E0/E1 handling distinguishes right Alt from left Alt and
+the ISO extra key at scan 56h. While the BIOS holds a Pause (BDA 40:18
+bit 3), a printable make passes untranslated and cancels a pending accent,
+so the ROM's own resume path ends the pause and discards the key. Each layout defines Shift/Caps behavior,
+AltGr/Ctrl+Alt, control-letter output and dead-key composition explicitly.
+
+`OSAPI_KEY_DOWN`, `OSAPI_KEY_MAP` and their make/break semantics remain
+physical. Printable output reaches the existing BIOS ring once, retaining
+its physical scan in AH; navigation and other BIOS special-key spellings
+remain compatible. Alt+Enter's existing edge latch, the keyboard mouse,
+function keys, Num Lock/keypad behavior and Ctrl+Alt+Del remain usable.
+
+A dead accent waits for the next key. A supported pair emits its single
+encoded character; accent plus Space emits the literal accent. An
+unsupported printable pair emits the literal accent then the character,
+reserving both ring slots before publishing either. The composition table
+is one run per accent, so a miss scans that accent's pairs only. Repeating
+an accent and cancellation are pinned by the layout vectors.
+Focus/ownership and layout changes cancel pending composition. A full ring
+obeys §9.8's overrun policy without publishing half a two-character result:
+a pair with no room for its second word is dropped whole and announced with
+§9.8's beep, under the same per-burst cap.
+
+The XT IRQ1, AT INT 15h AH=4Fh and mega native paths adapt the same module
+contract. They add no second port-60h read on the 8042 path. DOS, WIN16 and
+foreign guests have explicit conversion/bypass boundaries; a native
+CP850 byte must not be displayed silently with a CP437 meaning. Restoring
+the desktop restores its selection and callable module state.
+
+RAW uses bit 3 of the existing instance `I_FLAGS` byte (`IF_RAWKBD = 8`),
+with caller identity supplied by the kernel. The optional handler reads the
+front visible window's owning instance and bypasses translation while its
+bit is set, still tracking modifiers. This flag persists if the layout is
+activated after the foreign window opens; no module or extra instance byte
+is needed to register it. Instance teardown clears the flag with the record.
+
+#### 9.16.3 Optional glyphs and native text
+
+Native extended text uses CP850 byte positions for the supported Spanish
+and French characters. ASCII and control meanings are unchanged. The
+encoding is independent of the selected input layout. Euro/Unicode input
+and international filenames are outside this contract.
+
+The optional provider supplies extended glyphs to the existing opaque
+text renderers, preserving the original ASCII face. The glyph-copy slot
+retains its original stable ASCII pointer and range 32..126; it never
+exposes the optional table to legacy callers. The provider is acquired in
+task context before rendering extended content; paint routines never load it. A glyph client can hold it with BIOS input
+selected, so accented text survives a layout switch or a file reopen.
+The provider restores the original font state before its last drop, including ROM, baked and
+slow-ROM-copy paths. Private seam glyphs remain private.
+
+Shared text controls and Notepad accept and edit the supported bytes,
+including find/replace and raw-byte save/reopen. Fields with an ASCII-only
+domain retain that validation. Console codepages and proportional/PDF font
+formats keep their existing interpretation; no global reinterpretation of
+their high bytes is implied.
+
+#### 9.16.4 Selection and persistence
+
+Control Panel's Keyboard page offers BIOS default and the four explicit
+layouts with the existing controls and scrolling item list. Its UI and
+loading requests are in CTRL.DRV. The page includes a typing sample and
+does not grow the window beyond the supported adapter geometry.
+
+The page's five radio rows use full layout names. A changed pick is staged
+in the panel's own BSS; the outer mouse callback applies it only after the
+page procedure has returned. File loading follows the existing UI
+callback's graphics-lock discipline. The typing sample accepts printable
+characters, Backspace and Escape (clear). Its optional glyph hold uses the
+private built-in owner FFh and is released when no extended sample bytes
+remain or the panel closes; public callers cannot claim that owner.
+
+Big, emu and mega persist the ID in a versioned SYSTEM.CFG record through
+the existing shared parser/save discipline. Old, absent, invalid or unknown
+records use BIOS default without resetting other settings. Kern_small
+offers live selection for the session and says it lasts until restart;
+this feature does not add settings persistence to that kernel. Save failure
+retains the working in-memory selection and uses the panel's feedback.
+
+The record is `KL`, version 1, length 1, containing the layout ID above.
+The live selection is queried when settings are packed, so changing it
+outside the panel cannot leave a stale duplicate. CFG_KL is staging only.
+Boot validates it before activation; mega defers activation until its font
+and module pointers have reached their protected-mode form.
+
+#### 9.16.5 No core kernel growth
+
+For each of big, small, emu and mega, the stripped core image and default
+resident footprint must not increase against the implementation baseline,
+built with identical options/toolchain/metadata. Exact unrounded core
+code/data/BSS totals also must not increase: rung slack is not a saving.
+Hooks, entry cells, module rows, preference staging and glyph routing count
+in full and must be paid for by equal or larger savings in this change.
+Record the compressed shipped image size as well. All existing budget,
+near-window, boot-floor and small-heap guards remain unchanged.
+
+Report optional module file, image/BSS and enabled claims separately at
+§50.2.1's 512-byte granule. Adding another layout adds no core bytes.
+Selecting BIOS default and closing the last glyph client releases the
+active optional footprint; an unexplained pinned claim is a failure.
+
+#### 9.16.6 Delivery evidence
+
+The plan's final pass covers independent assembled-code vectors, all three
+international layouts, persistence/refusal, glyph-client teardown and the
+existing keyboard regressions. Check VGA/CGA/Hercules visually, XT cycle
+cost and stack use, the 8042 queued-byte case, and protected/real-mode
+transitions on mega. Publish four baseline/final size rows and screenshots
+of the tested head. Planned stories remain unchecked until their evidence
+exists.
 
 ## 10. events.inc
 
@@ -37483,6 +37732,53 @@ publisher, and the walker that already followed the chain. `kern_dos` refuses
 as before (`KD_BUILD`): its image is at `KD_IMG_KB`'s edge, and raising it is
 a layout decision (`kerndos/kdlayout.inc`).
 
+#### 18.5.3 Directory mutations in the on-demand disk module
+
+**Optional-keyboard integration (§9.16):** the private bodies
+for Rename, New Folder and folder removal live in the existing
+`DISKOPS.DRV` (§2.8). Their public register, CF, validation and disk-integrity
+contracts remain those in §18.4–§18.6. File reads, ordinary file writes,
+boot, module loading and the shared FAT/directory commit helpers remain
+available without loading this module. No operation in `mod_need`'s
+transitive cone may move into a module that it loads.
+
+A directory mutation loads the module on the UI task before making changes.
+The system disk must therefore be available when first invoking these
+commands. The loader preserves/restores the caller's mounted target volume;
+loading must not redirect a mutation to the system disk. **The mount gate is
+tested BEFORE the module is loaded**: `dskw_dircall` refuses `[dsk_mntok]` ≠
+1 with CF=1, AX = `FERR_NODISK` (§18.4's gate answer) and loads nothing,
+because a shut gate is exactly the state in which `mod_need`'s
+`drv_vol_bank` banks the BOOT volume's root (§51.5.2.1: a failed mount is
+not banked), so the load would open the gate there and the verb would run on the
+system disk. The module's own gate stays, for the state after a load. A
+missing or mismatched module refuses through the existing file-error path before any
+metadata is modified. It must never report success or partially rename,
+create or remove a directory on a load refusal.
+
+Module code reaches the shared resident helpers through documented private
+gates and preserves their segment/register contracts. No paint callback or
+IRQ loads it. The operation releases its module claim when finished, using
+the existing disk-module cache/drop policy; no new default boot claim or
+permanent scratch buffer is permitted. This split pays for the keyboard
+hooks with measured permanent-byte savings on every kernel. Allocation
+rounding alone is insufficient evidence for the no-growth requirement.
+
+**A folder paste (§22.3) takes the module's hold BEFORE its copy buffer.**
+`fcp_claim` sizes the buffer from the largest free run, up to 64KB, and
+counts every cache as free (§22.5), so a buffer claimed first can take the
+room the module needs and shed a kept image - on a 128KB machine every
+mkdir of the walk would then refuse `FERR_IO`. So `fcp_step`, when the entry
+is a folder, asks `mod_live` and `clo_need`s the image before `fcp_claim`,
+recording in `fcp_dhold` whether the hold is its own (the image was not
+LIVE). It is held across the overwrite question, like the buffer, and
+`fcp_stop` - every end of the operation, the stop a closed window's
+`.pastegone` sends included - drops only its own hold, through `fm_cldrop`,
+so a clone armed meanwhile keeps the image it now owns. A load refused at
+that point refuses nothing: each mkdir still tries its own load. Inside the
+hold each mkdir, rename and rmtree finds the image LIVE and neither reloads
+nor drops it.
+
 ### 18.6 `dskw_rmdir` — removing an empty subdirectory
 
 ```
@@ -40580,7 +40876,7 @@ buffering, written once and costing the kernel nothing - the write side of
 
 | call | in | does |
 |---|---|---|
-| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_VOL_STAT` for that volume's cluster ONCE - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
+| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_FILE_DFREE` for that volume's cluster ONCE (its BX: `OSAPI_VOL_STAT`'s AX scales on FAT32, §19.12.8) - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
 | `os88_wseq_put` | DS:DI = the stream, ES:SI = any bytes, CX = any count (0 legal) | copies into the buffer; a full buffer writes the largest whole number of clusters it holds and moves the rest to its front - so a buffer that is itself a cluster multiple never moves a byte |
 | `os88_wseq_close` | DS:DI = the stream | writes what is buffered, any size: the last chunk is the one the slots let be short |
 
@@ -40789,8 +41085,10 @@ DOS was the only caller of the offset door and of `OSAPI_VOL_STAT` when
 they were cut, and it does not ship on the small disks (§24.5, `SMALLPKGS`).
 So on `kern_small` both cells are `stc`/`ret` stubs — legitimate here because
 every caller tests `CF` (KERN-SMALL-CUT-PLAN §10): `apps/os88data.inc`'s
-`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`'s
-open refuses its stream, so REDLINE's Inspect report is refused there —
+`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`,
+which was refused at its open here, no longer asks `OSAPI_VOL_STAT`: it takes
+`OSAPI_FILE_DFREE`'s cluster (§18.4.9.4) and appends every chunk through the
+offset cell's append, so REDLINE's Inspect report is written here too —
 and with them go the INSIDE
 arm of the body, `dsk_write_chain` and its direction byte, and the two far
 entries: **395 bytes of that kernel** (`.text` −11, `.bss` −1, `.cold` −383).
@@ -44997,7 +45295,7 @@ DataSec         = TotSec16 - FirstDataSec
 CountOfClusters = DataSec / SecPerClus
 CountOfClusters <  4085  -> FAT12
 CountOfClusters < 65525  -> FAT16
-else                     -> reject (FAT32 out of scope)
+else                     -> reject (FAT32 out of scope; kern_mega: §19.12)
 ```
 
 Reachability: detection runs after §18.2 rule 13 has passed, so TotSec16 ≤
@@ -45089,7 +45387,7 @@ at a stride of 24. `kernel/dskwin.inc` carries the `%error` for each.
 |-----|------|--------------------------------------------------------------|
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
 | 16  | 2    | type: 1 = loadable package, 2 = subdirectory, 3 = the parent link (§19.5), else 0 (rules below) |
-| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
+| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored (on a FAT32 volume, `kern_mega` only, the high word is in the name field's +14, §19.12.6) |
 | 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`, or in K/M by `fm_szfig_x` per §22.7.1); forced to 0 for type 2 |
 | 24  | 8    | zero — except that a `DRVC_FILE` driver's `FSV_ENUM` may put a FAT attribute byte at **+24**, which FIND reports (§62.9.17.1) — and **not stored in a staged listing**: `DSK_DE_STRIDE` stops at 24, `dsk_ent` is still 32 wide, and no consumer in the tree reads these eight bytes |
 
@@ -46933,6 +47231,341 @@ the Makefile, where an `.OVL` may only be a cut (`os88ovl.py -o`), a
 exemption is `tests/cfsx`, the C SDK's sidecar mode's own fixture, which
 ships nowhere.
 
+### 19.12 FAT32 — read and written on `kern_mega` (2026-11-19)
+
+**FAT32 is a format, and `kern_mega` reads and writes it; no other kernel
+does.** §19's own arithmetic stops at 65,524 clusters because every cluster
+number in this file system was a word. FAT32 widens the CLUSTER, not only the
+data area's sectors (§18.7.5), and that is resident code on every file
+operation's path — so on `kern_big` it fails the module test (§2.8) inside a
+budget held at zero growth, and on the XT it would also be slow
+(docs/plans/FAT32-MEGA-PLAN.md §1). On `kern_mega` the `.cold` rung is above
+1MB and costs no conventional memory, which is where almost all of this lives.
+**The XT's answer stays FAT16**: up to six volumes of up to 2GB, primary or
+logical (§52.4.1).
+
+The owner's decisions (2026-11-19, the plan's §5): the API names a far folder
+through **new 32-bit forms with the high word in a second register**, the old
+doors refusing what they cannot name (O1); the ceiling is **2TB**, the format's
+own (O2); a FAT32 volume is **hidden from DOS sessions** (O3); and it is
+**read-write from the first build that mounts it** (O4).
+
+#### 19.12.1 One switch, `OS88_FAT32`, and the bytes it does not cost
+
+`OS88_FAT32` is defined by `KERN_MEGA` and nothing else. Every site that
+differs is an `%ifdef` on it or one of the `CLU_*` macros (§19.12.3), which
+assemble to the word-wide instruction they replace on every other build — so
+**`kern_big`, `kern_small` and `kern_dos` assemble to the bytes they were**,
+and that is checked by hashing the three images before and after, not
+asserted. Code goes in `.cold`; what must be resident is `.bss`, counted
+against `KERN_MEGA_RESIDENT_KB` and `tests/megaseg.txt`.
+
+`[dsk_fattype]` gains a third value: 0 = FAT12, 1 = FAT16, **2 = FAT32**.
+Every FAT32 arm is reached by `cmp byte [dsk_fattype], 2` (or by the
+`jb`/`ja` the existing 0/1 tests already make), so a FAT12/16 volume on
+`kern_mega` takes the path it takes on `kern_big`.
+
+#### 19.12.2 The mount: what FAT32's boot sector must say
+
+The staged BPB (§18.9.2) grows on `kern_mega` to cover the sector's bytes
+11..50 (`DSK_BPB_SZ` = 40, 22 bytes of `.bss`). **The per-volume bank does
+not** (`DSK_BPB_BANK` stays 18): a FAT32 head is never banked, so a FAT32
+volume's remount reads its sector 0 again — one transfer on a 286-class
+machine's fixed disk, against 176 bytes of the kernel segment for every
+volume row, which is the one segment `kern_mega` is short of (tests/
+megaseg.txt). The type is still decided by the cluster count alone (§19), but the
+count is reached by a different layout, chosen by **`BPB_FATSz16` = 0**:
+
+| field | FAT12/16 | FAT32 |
+|---|---|---|
+| RootEntCnt (rule 7) | 1..512, ×16 | **must be 0** |
+| FATSz16 (rule 10) | ≥ 1 | **0**, and FATSz32 @36 ≥ 1 |
+| TotSec | TotSec16, or TotSec32 folded (§18.7.5) | **TotSec32 @32, all 32 bits** — 2TB |
+| FSVer @42 | — | **must be 0** |
+| RootClus @44 | — | in [2, CountOfClusters+1] |
+| FSInfo @48 | — | 0 or 0FFFFh = none; else < RsvdSecCnt |
+| ExtFlags @40 | — | bit 7 set = mirroring off: refused unless the live FAT (`ExtFlags & 0Fh`) is FAT 0 |
+| CountOfClusters (rule 15) | < 65,525 | **≥ 65,525** and ≤ 0FFFFFF5h |
+
+**A FAT32 BPB is refused on a floppy** (rule 13's `[dsk_vflop]` test): the
+format needs at least 65,525 clusters and no floppy has them, so a floppy that
+claims to be FAT32 is hostile or broken. **And it is refused on every kernel
+that is not `kern_mega`**, by rules 7 and 10 as before — the arms below do not
+exist there.
+
+Layout, all of it 32-bit: `FirstDataSec = RsvdSecCnt + NumFATs × FATSz32`;
+`[dsk_rootsecs]` = 0; the root region does not exist (§19.12.5). The live FAT's
+first sector is `RsvdSecCnt`, as on FAT16: a volume with mirroring off is
+mounted only when its live FAT is the first (`(ExtFlags & 8Fh) > 80h` is
+refused), and writes go to every copy either way — with mirroring on (bit 7
+clear, every volume mtools, DOS and Windows make) that is the rule, and with
+it off the other copies are unused, so refreshing them is what a driver
+turning mirroring back on does anyway. Reading a FAT other than the first is
+not worth its bytes: no tool this project knows of makes such a volume. **Nor
+does a FAT 1 read error fall back to FAT 2 with mirroring off** (§18.3's
+redundancy is a mirror's): FAT 2 is then stale, and the window's next flush
+would write it over the live FAT 1, so the load fails and the caller answers
+`FERR_IO`.
+
+#### 19.12.3 A cluster is AX and `[dsk_ch]`
+
+A cluster number is 28 bits. The FAT layer's contracts all say "AX =
+cluster", and they keep saying it: on `kern_mega` **the high word rides in
+`[dsk_ch]`**, a `.bss` word that is to a cluster what `[dsk_lbahi]` is to an
+LBA — the second half of one value — except that it is a register, not a
+one-shot. Every routine whose input or output is a cluster in AX takes or
+answers its high word there. On a FAT12/16 volume it is 0, and stays 0 because
+nothing that can only make a 16-bit cluster writes it non-zero.
+
+This is safe for the reason the rest of the FAT layer's module state is: the
+file system runs on the UI task alone (§18.4's single-task rule), so nothing
+can be inside it twice, and an ISR never touches it.
+
+What HOLDS a cluster for longer holds all 32 bits: every `.bss` cluster
+variable is `CLURES` — `resd` on `kern_mega`, `resw` elsewhere — and the
+macros load and store the pair: `CLU_LD v` is `mov ax, [v]` plus `push word
+[v+2] / pop word [dsk_ch]` (no register spent), `CLU_ST v` the reverse,
+`CLU_Z` zeroes both, `CLU_CMPMAX` compares the pair against
+`[dsk_maxclus]`'s dword. A sentinel that used to be 0FFFFh becomes
+0FFFFFFFFh, which no FAT32 cluster can be (the entry is 28 bits).
+
+**`[dsk_ch]` is scratch that every FAT call rewrites** — a listing, a stat, a
+chain step, a free count — so a caller that hands a cluster to `dsk_goto` or
+`dsk_chdir` SETS it: `CLU_HI0` for one that is a word by construction (the
+root, 0), and a folder kept across other file calls keeps its high word with
+it (Root Folder, a drive's mount, the Sticky Apps scan, an Alt-drop's link,
+a join's two folders).
+
+#### 19.12.4 The FAT window holds 4-byte entries
+
+The window (§18.8) is the same 4,608 bytes, 1,152 FAT32 entries. An entry is
+read masked to 28 bits; a write preserves the top four (the format reserves
+them); end-of-chain is any value ≥ 0FFFFFF8h, which the range test already
+treats as "the chain ends here" because it is past `[dsk_maxclus]`. A FAT32
+entry is 4-byte aligned and never straddles a sector. FAT sector numbers are
+32-bit: `[dsk_fatw0]` carries a high word (`[dsk_fatw0h]`, banked per volume
+beside it), every FAT transfer arms `[dsk_lbahi]`, and the dirty range is kept
+as LOW words, which is sufficient because it never leaves the window: the
+range's offset into the window is `d − w0` in sixteen bits, correct across a
+65,536-sector boundary. **No window starts at a low word of 0FFFFh**, which is
+`[dsk_fatw0]`'s "nothing resident": such a start moves down one sector, or,
+when it was clamped to keep the window whole at the FAT's end, UP one — down
+would drop the FAT's last sector, the one asked for. The sector past the end
+is then read (FAT 2's first, or the data area's) and never addressed: rule 16
+puts no entry in it, so nothing dirties it.
+
+#### 19.12.5 The root is a chain, and everything above the walker calls it 0
+
+On FAT32 the root directory is an ordinary cluster chain starting at RootClus.
+**"Cluster 0 is the root" stays true above the walker**: `dsk_dirw_start_x`
+resolves 0 to RootClus on a FAT32 volume, `[dsk_cwd]` is 0 at the root, every
+door's 0 still means the root, and a `..` entry whose cluster is 0 — or
+RootClus, which some tools write — goes to the root. A subdirectory's `..`
+written HERE is 0 when its parent is the root, as the format says.
+
+Because the walker resolves the root to a real chain, `[dsk_wlast]` is set by
+the root walk too, and **`dskw_dirgrow` grows the root** on FAT32 with no code
+of its own; on FAT12/16 the root region is fixed and still cannot.
+`dsk_byclus_x` (the path walk, §19.2.4) treats RootClus as 0 for the same
+reason.
+
+#### 19.12.6 FstClusHI, the listing's high word, and the compression hint
+
+**Every read of an entry's first cluster on a FAT32 volume combines FstClusHI
+@20 with FstClusLO @26**; every write of one writes both, `.` and `..`
+included. On FAT12/16 @20 is ignored, as §19.1 has always said.
+
+**The compression hint (§20.14) is not written on a FAT32 volume and not
+trusted there**: its size word is @20, which IS FstClusHI on this format, so
+writing it would point the file's first cluster into another file. The hint is
+a cache and the read path already checks the file's own `CZ` header
+(`DSK_R_CZL`, §20.14.3), so on FAT32 the mark bytes @12/@13 are cleared, @20
+holds the cluster, and a compressed file's unpacked size comes from its header,
+for `FILE_READ` (`dskw_czknow`) and for the compressor's sizes (`cmz_sizes`).
+**`OSAPI_FILE_FIND` does NOT read it on FAT32**: +18 is the size the file
+occupies and +22 bit 0 is clear, because there is no hint to report from and
+the header's peek goes through `dskw_raw` and `dsk_secbuf`, which the write
+paths own (a sniff there, tried in review, broke a paste). So a package that
+sizes a claim off FIND's +18 for a packed file on a FAT32 volume is refused
+`FERR_BIG` by the read; a package that must read such a file sizes it with
+the read's own answer. Open: a FIND-side header read that owns its buffers.
+
+**The staged listing (§19.1) keeps its 24-byte stride**: the cluster's high
+word goes in the NAME field's last two bytes, +14..+15. A display name is at
+most twelve characters and its NUL is at or before +12, so those two bytes are
+never read as text — the trick `IMG_DVSEG` plays on a volume label (§18.101).
+On FAT12/16 they are zero, as before.
+
+#### 19.12.7 Writes: allocation, root growth and FSInfo
+
+The allocator scans the window for a zero entry **under the 28-bit mask** and
+marks the cluster 0FFFFFFFh; the rover, the free count and the chain walks are
+32-bit. `dskw_free_chain` writes 0 under the mask.
+
+**FSInfo's free count is advisory, so it is never trusted and never kept**:
+the first mount of each volume in a boot (`dsk_f32_fsi`, from `disk_mount_x`;
+`[dsk_fsimask]` holds one bit a volume, cleared when `dsk_vol_add` reuses the
+slot) writes FSInfo's FSI_Free_Count and FSI_Nxt_Free as 0FFFFFFFFh,
+"unknown", after checking its three signatures (41615252h @0, 61417272h @484,
+AA550000h @508) — a sector that does not carry them is not written, and
+neither is one already saying unknown. Every FAT32 driver must recompute an
+unknown count, so the value is always truthful whatever this kernel then
+writes. It is at the mount and not at the first FAT flush because the flush
+runs with `dsk_secbuf` in use by its caller; the cost is one read and at most
+one write per volume per boot, including a boot that only reads. The free count this kernel answers is its own FAT scan
+(`dsk_free_clus_x`, §18.4.10), a window at a time — on a large volume that is
+the FAT's whole size read, which is why the copy engine's room test keeps its
+early stop (`[dsk_fcgoal]`, which is a dword here). The Disk window's status line
+(§22.7) keeps that count in **KB** on a FAT32 volume rather than bytes - a
+free 4GB is past a dword of bytes and not of KB under the 2TB ceiling - and
+prints it with a third unit, `G`, after K and M (`fm_szfig_kb`); every other
+volume's figure is the bytes it was.
+
+#### 19.12.8 The API: `OSAPI_FILE_PLACE`, and the 0FFFFh rule
+
+**A 16-bit door cannot name a folder past cluster 65,535, and it says so
+instead of guessing.** The rule, on every kernel:
+
+- a door that ANSWERS a cluster (`OSAPI_FILE_HERE`, `OSAPI_ARG_FILE`, FIND's
+  +16) answers **0FFFFh** when the high word is non-zero — `HERE` with CF = 1
+  as well; `ARG_FILE` with CF = 0, because its CF says whether there IS a
+  document and there is (the name is answered, and the folder word then
+  refuses wherever it is taken); FIND with its record's flags bit
+  `OSAPI_FIND_FAR` (+22 bit 1) set and the entry still listed;
+- a door that TAKES one (`OSAPI_FILE_GOTO`, `GOTO_Q`, `GOTO_QM`,
+  `OSAPI_FILE_COPY`'s DX/CX) **refuses 0FFFFh** with CF = 1 — and AX =
+  `FERR_NAME` where the door answers a code in AX (`GOTO_Q`, `GOTO_QM`,
+  `FILE_COPY`; `FILE_GOTO` keeps AX, as it always has). On FAT12/16 it
+  always did (0FFFFh is past `[dsk_maxclus]`); on `kern_mega` it is refused
+  by name, because on FAT32 it could be a real folder. The doors' `.text` is
+  unchanged: each calls a `.cold` far entry (`dkf_dsk_chdir16`,
+  `dskf_dsk_goto16`, `dsk_here16f`) in place of the one it called.
+  `OSAPI_PKG_START`'s document locator (§21.5.3), whose folder is a word,
+  refuses it on `kern_mega` with AL = `LD_EBAD`.
+
+So a package built before this reaches a far folder and is refused there,
+loudly, and never lands in the wrong one. Cluster 65,535 itself is nameable
+only through the 32-bit forms.
+
+**`OSAPI_FILE_PLACE`** (an RN door, so it is an ABI addition with no
+`PKG_FMT` bump) is the 32-bit form, one verb in AL. The cluster is DX = low,
+**CX = high**; BL = the volume. Being RN, it stages DS:SI as a name for
+every verb, so SI must address the caller's own data even where the verb
+reads no name (SI = 0, the package's header, will do):
+
+| AL | verb | in | out |
+|---|---|---|---|
+| 0 | `FPL_HERE` | — | BL, DX, CX: `OSAPI_FILE_HERE`'s answer, whole |
+| 1 | `FPL_GOTO` | BL, DX, CX | `OSAPI_FILE_GOTO` |
+| 2 | `FPL_GOTO_Q` | BL, DX, CX | `OSAPI_FILE_GOTO_Q` |
+| 3 | `FPL_GOTO_QM` | BL, DX, CX | `OSAPI_FILE_GOTO_QM` |
+| 4 | `FPL_ARG` | — | BL, DX, CX: `OSAPI_ARG_FILE`'s folder, whole (the name comes from `ARG_FILE`, which answers it even when its DX is 0FFFFh) |
+| 5 | `FPL_STAT` | SI = an 8.3 name in the current folder | AL = its attribute, DX, CX = its first cluster |
+
+An unknown verb is refused with CF = 1, AX = 1. **Only `kern_mega` has a
+body** (`dsk_fpl_door`, `.cold`); every other kernel holds the index with a
+refusal (CF = 1, AX = 1, `RDREF`), because no folder there needs a second
+word and a body would be resident bytes for nothing (docs/KERNEL-MEMORY.md).
+A package written to the 32-bit forms asks `FPL_HERE` once: CF = 1 with
+AX = 1 means the 16-bit doors are complete on this kernel, and it uses
+them. `OSAPI_FILE_COPY`
+gains **`OSAPI_FCP_FAR`** (AL bit 7): ES:DI points at four words, the source
+folder's low and high then the destination's, in place of DX and CX. Every
+other kernel refuses the bit for nothing: AL is then a verb its door does not
+name (`cmp al, 1 / ja`), CF = 1 - which `FPL_HERE`'s refusal already told the
+package to expect.
+
+**`OSAPI_VOL_STAT`** answers DOS's four registers, and on a volume whose count
+does not fit a word it SCALES: AX (sectors per cluster) doubles and BX/DX halve
+until both fit, so AX × CX × BX is still the free bytes to within one cluster;
+past AX = 32,768 the counts clamp at 0FFFFh. `OSAPI_FILE_DFREE` answers free
+BYTES in DX:AX, exact below 4GB and clamped at 0FFFFFFFFh above — a package
+that needs the figure on a larger volume multiplies `VOL_STAT`'s registers,
+which is within a cluster of it. **A scaled AX is therefore NOT the cluster
+size**, and AX × CX passes a word at AX = 128: a package that chunks, aligns
+or masks by the cluster takes `OSAPI_FILE_DFREE`'s BX, which is the true
+sectors per cluster (1..64) on every volume - `os88wseq.inc` (§18.4.9.4),
+PIXEL's ring and XTMP3's destination test do.
+
+**`OSAPI_FILE_READ_SEQ`'s cursor** is the caller's 16 bytes and has no room for
+a second word. On a FAT32 volume `RSQ_CUR` is the cluster's low word and the
+kernel keeps its high word in its own copy of the last cursor (`dwr_c`); a
+cursor whose high word the kernel does not hold — another stream read in
+between — walks from the file's first cluster, which is correct and slower.
+**`FSEQF_RUN` and `FSEQF_MAP` are refused on a FAT32 volume** (CF = 1, AX =
+`FERR_NAME`): their runs are word pairs, and a caller of MAP must already
+handle refusal (a redirected volume has always refused it).
+
+#### 19.12.9 What refuses FAT32, by name
+
+- **FSCHECK** (§60) answers `FSKE_NOFAT`: its bitmaps are a bit a cluster in
+  one segment, which cannot cover 2^28.
+- **The formatter and the disk tool** format FAT12/16, which an XT can read too.
+- **DOS sessions** (§96): the gather that builds kern_dos's volume table drops
+  a FAT32 row (O3), so a DOS program sees no such drive rather than one its
+  FAT code would misread.
+- **Hibernation** (§99) refuses a FAT32 volume as its target; its image
+  records are cluster words. `hb_pick`, THE predicate (§47 rule 5), passes
+  over a volume whose `[dsk_f32mask]` bit is set and goes on to the next
+  fixed one, so the menu item, the probe, the write and the DOS handoff's
+  no-park image all agree; `hbm_root`'s refusal stays as the backstop for a
+  volume that bit has not seen mounted.
+- **The installer** (§117) does not offer a FAT32 partition as a target: the
+  boot path reads FAT12/16.
+- **Mounting a disk image** whose file is on a FAT32 volume answers 'Cannot
+  mount from here': the claim keeps the host folder and the file's first
+  cluster as words (`IMG_M_DIR`/`IMG_M_CLUS`). Clone's image end is whole
+  (`CL_FCLUH`).
+- **The association cache** (§54.7): `ASSOC.DAT`'s rows hold a program's
+  folder as a cluster word, so the writer keeps no cache on a FAT32 volume
+  and a row read there is a hint with a zero high word — a miss costs the
+  search the cache exists to save, nothing worse. The in-memory hints and
+  the pending document's folder are whole (`assoc_cluh`, `assoc_dcluh`).
+
+#### 19.12.10 HDD.DRV offers 0Bh/0Ch; the kernel's mount decides
+
+`HDD.DRV` hands partition types 0Bh and 0Ch to `osapi_vol_mount` on every
+kernel, and the kernel is the fence: `kern_mega` reads the volume, and every
+other kernel's BPB check refuses FATSz16 = 0 as it refuses any boot sector
+not in its format, so the slot is dropped again exactly as a partition whose
+type lies is (§52.4). No flag says which kernel reads FAT32, because none is
+needed — and the driver had no byte to spend on asking: it is on its 4,608-
+byte rung (§52.4.1), and the acceptance was paid for inside it
+(`hd_part_isfat` became a one-word bit table, `hd_sel`/`hd_pslot` one word
+load). The cost on the other kernels is one boot-sector read at the
+automount for a partition that would have been skipped by type.
+
+A FAT32 slot is mounted without the 2GB FAT16 bound (`hd_part_big` is not
+asked at the mount; the Format window still clamps to it, because what it
+writes is FAT16): the partition's own 32-bit length is the volume's
+(`HDV_LEN`, §18.7.5), and the transport is the last bound — rung 1's native
+ATA is LBA28, **128GB**, and a transfer past what the drive's rung addresses
+fails as a disk error. The installer (§117) names the slot "FAT32" and does
+not offer it as a target (§19.12.9).
+
+**On `kern_mega` a FAT32 partition takes its letter in slot order like any
+other volume** - DOS's and Windows' lettering of the same disk - so a volume
+after it on that disk moves one letter later than in builds before this one:
+a FAT32 primary ahead of a FAT16 logical drive makes the FAT32 volume C: and
+the FAT16 one D:, where it was C:. What was saved against the old letter
+names the FAT32 volume now - a desk shortcut's `SC_R_VOL` is a bare volume
+index - and misses there ('not found'); nothing is written to the wrong
+volume. The other kernels drop the refused row before the next slot mounts,
+so their letters are unchanged.
+
+#### 19.12.11 Gates
+
+`tests/fat32.py` builds a FAT32 volume on the host with mtools (`mformat -F`)
+behind a hand-made MBR, with files and a folder placed past cluster 65,535, and
+boots `kern_mega` with `HDD.DRV` on it. The guest lists the root, enters the
+far folder, launches a package off the volume, copies a file onto it, makes a
+folder and deletes a file; the host then reads the volume back with mtools
+(`mdir`, `mtype`, `fsck.fat -n` where present) byte for byte. A second leg
+checks that `kern_big` still refuses the partition with the driver's caption.
+That the three other kernels are the bytes they were is checked by hashing
+their images at the merge base and at the head (the PR's evidence), not by a
+row: a row cannot know the base's bytes once the build number has moved.
+
 ## 20. Loadable programs — the .o88 package format
 
 ### 20.1 A package owns a segment, and its region is a heap claim
@@ -48121,7 +48754,14 @@ real-mode answer, the inline `mov ax, dx / cmp ax, 1` it was, is a five-byte
 `.text` body off kern_mega. `tests/unit/t_api_abi.py --all` decodes `rd_tab`
 on all four kernels and fails on an index that differs, a kind out of its
 range, or an entry naming the wrong routine (`DOOR_OWN` ledgers the
-refusals).
+refusals). **A kernel may instead END its table before a cell it refuses**,
+but only the table's LAST cells: step 3 below answers an index at or past
+its `RD_N` with the refusal entry's own CF = 1, AX = 1, for no bytes, while
+a gap mid-table would move every later index. kern_small does this for
+`OSAPI_FILE_PLACE` (§19.12.8), its heap rung being locked; kern_big holds
+an `RDREF` row for it (`api_refusec`, six `.cold` bytes) because the SDK's
+indices are generated from kern_big's table, and t_api_abi passes a cell
+past a kernel's `RD_N - RD_P` as refused.
 
 **The door, step by step.** The `int` pushes FLAGS, CS and an IP that names
 the index byte, and clears IF and TF.
@@ -63432,7 +64072,7 @@ makes a link.
 `fm_dgdrop` asks `fm_mods`, which now answers Alt (bit 3) beside Ctrl and
 Shift, AT THE DROP. The drag's armed Cut is disarmed as a desktop drop's is,
 and the gesture goes to CTRL.DRV as `SC_OP_LNK` with the destination's volume
-and folder. `sc_m_lnk` composes the record in `cpc_buf` from the drag's
+and folder (on `kern_mega` its high word too, in CX, §19.12.3). `sc_m_lnk` composes the record in `cpc_buf` from the drag's
 `fcp_cb*`, sc_m_new's path code minus the picture, writes it with
 `dskw_write` (an existing link of that name is replaced) and ends in
 `fm_paste_res`, so the listing is re-read and repainted like a paste's.
@@ -73706,8 +74346,10 @@ number* as a keystroke. Measured, that is a field that takes the caret and then
 ignores every digit typed into it — no error, no diagnostic, and the caret
 still blinking to say the machine is listening.
 
-**A driver's page only**, and that is not a gap to be filled in later: a key
-that reached a static page would have nothing to do there.
+**A driver's page and the Keyboard page (§31.16) only**, on both kernels: a
+key that reached any other static page would have nothing to do there, so
+`modc_e_onkey` hands the selected `CP_IKEY` record's keys to `cp_key_key` and
+everything else to the driver's page (kern_big) or drops it.
 
 **It is in the image, beside `cp_item_click`, as `CPE_ONKEY`** — and it was
 resident for most of its life, as a size decision that has since expired. When
@@ -73716,8 +74358,10 @@ spent (paint, click, flush, tick), so a fifth doubled that table for *every*
 module, in `.bss` every machine carries, and forty-one resident bytes was the
 cheaper of the two. §2.8.1's per-module blocks retired the cap: an entry costs
 `CTRL.DRV`'s own four bytes, so the body moved and what stays resident is
-`cpf_cp_onkey`, a far call and a `ret` — **−32 resident bytes on `kern_big`**
-(`kern_small` has no key handler, §62.9.15). It does NOT call `mod_need`: a key
+`cpf_cp_onkey`, a far call and a `ret` — **−32 resident bytes on `kern_big`**.
+`kern_small` had no key handler (§62.9.15) until the Keyboard page's sample
+gave it one: `cp_tpl` names `cpf_cp_onkey` there too, with `CPE_ONKEY` in its
+own slot block. It does NOT call `mod_need`: a key
 reaches the panel only while its window is up, and the image is loaded before
 the window opens and dropped when it closes, so a load here could only ever be
 a floppy read on a keystroke — and a slot resting on `mod_gone` drops the key,
@@ -74094,6 +74738,48 @@ the kernel's DS (§12.4), so CTRL.DRV stages a menu into `cp_sbuf`, and 28
 bytes do not hold twelve items. Widening it is resident `.bss` for one view;
 the arrows are none. `kern_small` has none of this: there is no driver to pin.
 
+### 31.16 Keyboard page — optional layouts and typing sample
+
+The Keyboard item appends after the existing static items, preserving their
+record IDs. The frame remains 320×151, with the existing list scrolling on
+big kernels and the shorter static list on small.
+Display remains the only hidden static page. The hide bitmap covers the
+first eight records; additional records are always visible. The build
+asserts that the hideable Display record stays in that bitmap.
+
+The right pane has five existing radio controls at x4, y22/36/50/64/78,
+with full labels at x22, two pixels below each glyph: BIOS default,
+US QWERTY, Spanish (Spain), Latin American Spanish and French AZERTY.
+The selected ID is queried from the keyboard module. A changed choice is
+staged, then applied after the page returns. Load failure retains the prior
+choice and reports it. Selecting the current choice changes nothing.
+An extended sample byte (80h and up) first HOLDs the keyboard module, which
+may load it; a refused HOLD drops the byte and shows the same `Keyboard not
+loaded` toast. Nothing latches the refusal, since on `kern_mega` CTRL.DRV
+is a few bytes short of the `MOD_MAX_KB` claim kernel.asm asserts, so each
+later extended byte asks, and is answered, again.
+Only the previous and new selected glyphs are redrawn after activation.
+
+The sample caption is at (4,96), its frame is (2,108)–(217,121), and 24
+character cells start at (6,111). While this page is selected it receives
+ordinary typed keys, including the supported CP850 characters; Backspace
+removes its last character and Escape clears it. This is a sample, with no
+document or file format of its own. The field uses opaque padded runs, so
+a shorter replacement does not need an erase-and-letter pass.
+
+The saved-setting caption at (4,122) says `Saved when panel closes` on
+kernels with settings persistence and `Until the next restart` on small.
+The shared label helper adds 2 pixels to the text position, so its final row spans
+y124–131, wholly inside the 132-pixel content pane on CGA.
+Changing a layout marks the existing deferred settings write owed; closing
+Control Panel saves once. The sample and pending transaction reside in
+26 bytes of CTRL.DRV's own BSS, separate from the save buffer: desktop
+placement gestures can save settings while the panel is still open. A clean
+close also reaches the existing module flush entry to release the sample's
+glyph hold, without loading an absent module or writing settings.
+The page reuses the existing 28-byte kernel string staging buffer without
+expanding its backing.
+
 ## 32. softgfx.inc — the software renderer (§39's 1bpp driver)
 
 **What it is.** A latch-free, port-free CPU implementation of `vga12.inc`'s
@@ -74440,15 +75126,14 @@ hands its row to unit 2), so `cp_fdltr` reads the letter off the unit's row
 when it has one and otherwise names the one `dsk_flop_add_x`'s order would give
 it — A:, B:, D:, E: on a machine that has not put something there first.
 
-#### 31.14.2 Where the row sits: last, so the hard disk's page is under it
+#### 31.14.2 Static category order
 
-The static list is grouped rather than appended: Scheduler, Date/Time,
-Drivers, Display, then **Sound, Theme and Dock** together — how the machine
-sounds and looks — and **Floppy last**. Driver pages follow the static rows in
-class order (§31.9), and `DRVC_DISK` is the lowest class that publishes one
-(`DRVC_SOUND` publishes none), so when `HDD.DRV` is loaded its page is the row
-directly under Floppy and the two disk pages read as a pair. Without it,
-Floppy is simply the last row.
+The static list groups Scheduler, Date/Time, Drivers, Display, Sound, Theme,
+Dock and Floppy. Keyboard (§31.16) is appended after Floppy so the existing
+category IDs remain stable. Driver pages follow all static rows in class
+order (§31.9); `DRVC_DISK` is the lowest class that publishes one
+(`DRVC_SOUND` publishes none). Thus a loaded `HDD.DRV` page follows Keyboard.
+The keyboard page also exists on kern_small, after its existing categories.
 
 Nothing keys on the order but the record constants, which moved with it:
 `CP_IVID` 4 → 3 and `CP_ISND` 3 → 4 (and 3 ↔ 2 on kern_small), and
@@ -108829,10 +109514,11 @@ partition (§52.4.1), so a disk partitioned into three comes up as three
 volumes, three drive letters and three desktop icons. Two tests decide, and
 both are needed:
 
-- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh. An extended
-  partition (05h/0Fh) is not a volume but a chain of them, and is walked
-  rather than mounted (§52.4.1); FAT32 (0Bh/0Ch) is a format this kernel does
-  not read (docs/plans/FAT32-MEGA-PLAN.md is what reading it would take);
+- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh, 0Bh, 0Ch. An
+  extended partition (05h/0Fh) is not a volume but a chain of them, and is
+  walked rather than mounted (§52.4.1); FAT32 (0Bh/0Ch) is offered to every
+  kernel's mount, which only `kern_mega`'s accepts (§19.12.10), and without
+  the 2GB bound below;
 - and the volume actually **mounts**. A partition whose type says FAT and
   whose content does not gets its row and its claim handed straight back, and
   the walk carries on to the next slot. That is the half a type byte cannot
@@ -109107,9 +109793,9 @@ stays 3,584 and the claim 4 KB.
   other letter in an extended partition (issue #386). Making logical drives
   in the disk tool is still out of scope — DOS's FDISK does that — and an
   install target is still a primary, which is what a BIOS boots.
-- **FAT32.** A format, not a partition type: cluster numbers are words through
-  the whole of the kernel's file system and its API. docs/plans/FAT32-MEGA-PLAN.md
-  is the survey and the plan, kern_mega first.
+- **FAT32** on `kern_big`. A format, not a partition type: cluster numbers are
+  words through the whole of that kernel's file system. `kern_mega` reads and
+  writes it (§19.12); docs/plans/FAT32-MEGA-PLAN.md is the survey and the plan.
 
 ## 52.10 Install — booting os8088 from a hard-disk partition
 
@@ -112287,6 +112973,16 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
     `OSAPI_FSX_PAGE`, `OSAPI_VIDEO`, `OSAPI_FONT_GLYPHS`, `OSAPI_KEY_DOWN`,
     `OSAPI_KEY_MAP` (§9.7.3), `OSAPI_SND_CAPS`, `OSAPI_WM_CONTENT` and
     `OSAPI_WM_WAKE` (MEGA-VIDEO-REALMODE-PLAN 7.2);
+  When the optional native provider is held (§9.16.3), its table is already
+  conventional and needs no service-area copy. The existing `fsx_rfont`
+  word carries FFFFh for this case (every normal copy offset is even).
+  Entry keeps its converted real segment and nonzero base, and clamps live
+  bounds to 32..126 so FONT_GLYPHS does not inspect protected KLFP selectors.
+  The returned ASCII pointer is borrowed only until the bracket returns;
+  the provider stays pinned by the unchanged layout/glyph clients. Return
+  restores the provider's 255/223 bound/span after the selector walk, before
+  another protected-mode caller can run. Ordinary pool-font copies and
+  default-face brackets retain their existing behavior.
   * **as it is, with a real-mode arm** of a few bytes: `OSAPI_FSX_WAIT`,
     whose `FSXW_FRAME` waits on `hlt` (there is no scheduler to yield to),
     and `OSAPI_MOUSE`, which answers the pointer's words and does not run
@@ -162373,7 +163069,7 @@ closed:
 |---|---|---|
 | a module calling resident code | every `SHOUT` (`call far [sh_v_*]`) and `CHFP` (`call far [ch_v_*]`): 1,170 + 18 sites in `CHART.OVL`, 336 in `MACRO.OVL` | the shim is `CHX` → **`ch_xthunk`** (`apps/os88chartovl.inc`) |
 | `MACRO.OVL` calling `CHART.OVL` | `CHOUT`, 17 sites: `call far [ch_ovfar]` straight across | `SHOUT ch_ovcall` — through resident code like any other call out |
-| a module calling a kernel slot that can claim | `WM_CREATE`/`SHOW`/`DESTROY` (raise caches), every `FILE_*` (sector cache, FAT window, mount): 30 sites in `CHART.OVL` (one of them `os88chart.inc`'s BMP export, `CH_FWRITE`), 9 in `MACRO.OVL` | **`SHK`**: a vector, a `CHX` shim and a two-instruction resident stub (`sh_k_*`) — one byte SHORTER a site than the far call it replaces |
+| a module calling a kernel slot that can claim | `WM_CREATE`/`SHOW`/`DESTROY` (raise caches), every `FILE_*` (sector cache, FAT window, mount): 30 sites in `CHART.OVL` (one of them `os88chart.inc`'s BMP export, `CH_FWRITE`), 9 in `MACRO.OVL`; and `KEYBOARD` (a HOLD loads `KEYBOARD.DRV`, §9.16.1): `os88kbd.inc`'s two sites in `CHART.OVL`, the Note box's CP850 (§83.7), through `OS88KBD_CALL` | **`SHK`**: a vector, a `CHX` shim and a two-instruction resident stub (`sh_k_*`) — one byte SHORTER a site than the far call it replaces |
 | `ES` = the module's own claim across a file call | `MACRO.OVL`'s text channels read into and write from its own tail (§81.91.1, `push cs / pop es`) | `SHK m2read` / `m2write`: the claim is PINNED for the call and declared again after (`sh_m2pin`/`sh_m2unpin`, §66.5.7.1's `np_dmov` pair), because `dsk_xfer` pins a destination per transfer and not the walk between them (§66.3 rule 5) |
 
 **`ch_xthunk` is `cc_ovthunk`'s shape done in place**, because no register
@@ -162399,7 +163095,8 @@ the loop. No `jmp far`/`call far` with an immediate segment exists in either
 module, and no resident code far-calls a vector. The slots a module still calls
 DIRECTLY are the ones that cannot reach `mem_claim`: the drawing and font
 slots, `SET_COLOR`, `WM_CONTENT`, `VIDEO`, `KEY_DOWN`, `WM_KEEPH`,
-`WM_ONWHEEL`, and `MEM_AVAIL` (which plans and moves nothing).
+`WM_ONWHEEL`, and `MEM_AVAIL` (which plans and moves nothing). `KEYBOARD` is
+NOT one of them: its HOLD loads a module (`mod_need`, which claims).
 
 **Declared after the read and the stamp check**, never before — the read
 holds `ES:BX` in the claim: `ch_ovneed` with `ch_ovreloc` (two stores,
@@ -162758,6 +163455,37 @@ wants the stipple keeps font_run. WireChat never disables its field.
 It is `OS88LINE_PENS`' shape (§83.5): each site a macro that is the call it
 replaced when nothing is defined, so every other package assembles
 byte-identical.
+
+### 83.7 CP850 text input and explicit glyph holds
+
+`apps/os88kbd.inc` provides `os88kbd_hold`, `os88kbd_release` and a bounded
+buffer probe. They preserve registers and pass failures as carry. Calls
+that can load the provider belong in task/key/file-load context, never in
+a paint routine. Holds are idempotent per instance (§9.16.1).
+A HOLD can load `KEYBOARD.DRV` and so claim, which may compact: an includer
+whose copy of the file sits in a movable module defines `OS88KBD_CALL`
+before the include to route the slot call through resident code, as SHEET's
+chart module does with `SHK keyboard` (§82.16.11). The default is the plain
+`call OSAPI_KEYBOARD`.
+
+`OS88LINE_CP850` opts a one-line field into extended native input; its
+absence retains the existing ASCII-only contract for addresses, filenames
+and other restricted fields. An opted-in field accepts 32..126 and
+128..255 after acquiring a glyph hold. DEL (127) stays a control byte.
+The multiline prose field accepts the same set by default; defining
+`OS88TEXT_ASCII` restores its ASCII-only input contract.
+
+Neither control guesses that another control's buffer is gone: a caller
+releasing an instance hold must first finish all its extended-text users.
+Instance teardown supplies the final release. Notepad uses these same
+holds for keyboard, file and clipboard input, preserves extended document
+bytes through line-ending normalization and save/reopen, and releases the
+hold on New when no remaining find/replace buffer needs extended glyphs.
+A paste only ACQUIRES: the selection it replaced is in the undo arena, and
+Undo can restore extended bytes no scan of the document would find.
+If extended file content cannot acquire the provider, the bytes remain
+preserved and the app reports that the keyboard module is needed; it
+never substitutes a different codepage or silently deletes those bytes.
 
 ## 84. Software floating point (`apps/os88fp.inc`)
 
@@ -179825,7 +180553,7 @@ WC_PKGFMT with ITS OWN `PKG_FMT`, which needs nothing from the kernel: a
 running package's format IS the kernel's, or the loader would not have
 started it (§20.2.0). Higher greys both buttons with `Needs a newer os8088 -
 update the system disk`, lower with `Made for an older os8088`; a WC_NEEDW
-above `WIRE_LEVEL` (7) greys them with `Needs a newer Wire - update the
+above `WIRE_LEVEL` (8) greys them with `Needs a newer Wire - update the
 system disk`. 0 in either is a catalog from before the bytes and is not
 judged. **Every Wire released before these bytes reads none of them** - the
 reader never looked past +252 - so the bytes protect machines from the
@@ -179851,16 +180579,18 @@ disk beside its kernel, so `Needs a newer Wire - update the system disk` is
 the true sentence for it too. The rows are `WIRE_CELL_LEVELS` in
 `tools/os88wire.py`.
 
-**A new `PKG_FMT` starts a new generation, and `PKG_FMT` 13 has no rows yet.**
+**A new `PKG_FMT` starts a new generation, and `PKG_FMT` 13 has one row.**
 A row describes a RELEASED kernel at this format; every older package is
 fenced by WC_PKGFMT whatever its level. Kernel size pass 19's flag day moved
 `PKG_FMT` 10 -> 13 and renumbered the table (§20.3.4), so the rows that
 stood for v1.0.20261014 .. the level-6 Wire (levels 3 to 7, 0x046D ..
 0x04E9 in the pre-flag-day numbering) describe no kernel a format-13 package
-can meet, and `WIRE_CELL_LEVELS` is empty: the first release at 13 is the
-floor, and the release after it that first adds a cell adds the first row.
-`WIRE_LEVEL` stays 7 - it is also the reader's capability (the archive
-formats, §92.13.1), which the generation does not reset.
+can meet, and were dropped: the first release at 13 is the floor.
+v1.0.20261116 was that release (20261117 and 20261118 followed at the same
+format), its table ending at 0x023C, so `OSAPI_KEYBOARD` (§9.16), the first
+cell appended after it, cuts the first row: `(0x023C, 8)`. `WIRE_LEVEL` did
+not restart at 3 - it is also the reader's capability (the archive formats,
+§92.13.1), which the generation does not reset - so the row is level 8.
 
 **A DOOR cell needs no level.** A rare cell is an index into the kernel's
 door table (§20.3.4), and a kernel with no word for an index REFUSES it - CF
@@ -179873,10 +180603,11 @@ image carrying data spells `CD 81 FF` by chance.
 of the last release** (the rule the PKG_FMT 10 rows were cut by: two
 releases shared that format and both Wires were level 2, so one byte had to
 hold both back, and the older table decided).
-`WIRE_TABLE_END` (0x023C, the flag day's `osapi_table_end` with `OSAPI_FILE_FIND_SEQ` (§19.7.1.1),
+`WIRE_TABLE_END` (0x0244: the flag day's `osapi_table_end` with `OSAPI_FILE_FIND_SEQ` (§19.7.1.1),
 `OSAPI_MOUSE_REL` (§9.14) and `OSAPI_KEY_MAP` (§9.7.3) appended before any kernel at `PKG_FMT` 13 was released - a cell added to an UNRELEASED generation moves the
-end and cuts no row) is the end of the table the TOP level's kernel
-has. **A call at or past `WIRE_TABLE_END` is refused** by `--verify
+end and cuts no row - which made 0x023C, and then `OSAPI_KEYBOARD` (§9.16)
+appended after that table was released, which cut the level-8 row) is the
+end of the table the TOP level's kernel has. **A call at or past `WIRE_TABLE_END` is refused** by `--verify
 --pkgdir`, because no Wire in the field can be told about it: the release
 that first publishes such a package adds a row (the next level, its first
 cell), moves `WIRE_TABLE_END` to that kernel's `osapi_table_end`, and raises

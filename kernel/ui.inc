@@ -2866,7 +2866,7 @@ ui_sys_open:
 .disk:
 %endif
     call inst_where             ; bank where the user was: AX = the directory
-    mov [ui_tm_cwd], ax         ; cluster, DL = the drive. Two module words
+    CLU_ST ui_tm_cwd            ; cluster, DL = the drive. Two module words
     mov [ui_tm_drv], dl         ; rather than the stack, because this is
                                 ; UI-task-only and one load at a time, like
                                 ; ld_fp. (inst_where is osapi_file_here's own
@@ -2881,6 +2881,7 @@ ui_sys_open:
                                 ; installed PARTITION on a machine that boots
                                 ; from its hard disk (SPEC.md 52.10.3)
     xor ax, ax                  ; ...at its root, where SYSTEM lives
+    CLU_HI0
     call dsk_chdir_q            ; QUIET (SPEC.md 18.9/28.3.1), which this could
                                 ; not be until ld_run_name existed. It was a
                                 ; full disk_mount, and the reason written here
@@ -2919,7 +2920,7 @@ ui_sys_open:
     test al, 0x10               ; a subdirectory, not a file of that name
     jz .nofile
     xchg ax, bx                 ; its first cluster (BX is reloaded below)
-    or ax, ax
+    CLU_TAX or                  ; (AX:[dsk_ch], dskw_stat_x's - 19.12.3)
     jz .nofile                  ; 0 is the root: a directory entry naming it
     mov dl, [dsk_bootvol]       ; would be a loop, not a folder. The DRIVE is
     call dsk_chdir_q            ; the one just mounted: this was `xor dl, dl`
@@ -2986,7 +2987,7 @@ ui_sys_open:
 ; write gate shut (not A: - the bank holds whatever drive the user was on),
 ; which is a survivable place to be.
 ui_tm_back:
-    mov ax, [ui_tm_cwd]
+    CLU_LD ui_tm_cwd            ; AX:[dsk_ch] (SPEC.md 19.12.3)
     mov dl, [ui_tm_drv]
     jmp dsk_chdir_q             ; QUIET, on drv_vol_back's terms (SPEC.md
                                 ; 51.5.2): putting the user's VOLUME back is
@@ -3001,6 +3002,9 @@ ui_tm_back:
                                 ; tail jump: CF is nobody's question here
 
 ui_tm_cwd:  dw 0                ; the directory and drive to go back to. In
+%ifdef OS88_FAT32
+            dw 0                ; (its high word, 19.12.3)
+%endif
 ui_tm_drv:  db 0                ; .text, though .bss would give the same 0: A:'s root
                                 ; is the right answer before the first load
 
