@@ -67,7 +67,8 @@ redistributed. The generated art is original source; no movie frame or audio
 clip is included by this lane.
 
 Expression order: welcome, attentive, pleased, smug, disappointed, laughing,
-shocked. The eighth blink cell is retained only in the source master.
+shocked. The eighth generated cell supplies an idle blink through sound part1, as
+described below. Art part0 stays byte-identical.
 
 | IDs | Records |
 | --- | --- |
@@ -125,7 +126,7 @@ SmallerC plus `cc8086.py --max-frame96` passes with a26-byte maximum frame. Full
 with the native clipped fill service, so OWNBG windows never retain stale
 pixels there; typing updates continue through the band core.
 A face-only assembled size probe with external references resolved to zero
-measured `.text`9263, `.data`450, `.rodata`2913, `.modc`4913 and `.bss`975
+measured `.text`9483, `.data`450, `.rodata`2860, `.modc`5100 and `.bss`975
 bytes. This excludes the shared drawing core/game kit, runtime and integration
 thunks; the final package build is the authority for combined cost.
 
@@ -138,3 +139,52 @@ the final deduplicated union. Appropriate existing mechanism rows are
 `breadxtuihost` and `gkdemo` only if the shared core/kit itself is changed;
 this lane changes neither. Actual guest screenshots, aspect inspection,
 clip/uncover/focus/fullscreen behavior and XT timing remain integration work.
+
+
+## Idle blink in sound part1
+
+The root owns `bt_blink_frame`: a two-tick frame every91OS ticks, independent
+of session/scoring time. The face selects blink art only for attentive
+expression1 while this flag is nonzero, and includes that condition in the
+portrait signature. Other expressions ignore the flag. Repaints do not
+advance animation or change any session field. Color/mid/mono portraits use
+IDs258/259/260; the root's CGA renderer selects261. The short native layout
+still omits illustration as designed.
+
+`draft` now writes the eighth cell's four exact-size variants to committed
+`art/blink.txt`. The existing `sprites.txt` and63,677-byte art0 remain
+byte-for-byte unchanged. `build-sound` uses only the standard library and
+existing `os88gkmus.compile_music`, `compile_sfx`, `art_part`. It writes bank
+indices0=music,1=effects,2=96x120blink,3=40x48blink,4=40x48mono blink,
+5=32x40CGA blink. Music and effect record bytes are preserved exactly.
+The combined bank from current score sources is9,542 bytes, below10KB.
+
+Root Makefile recipe (this lane does not edit Makefile):
+
+```
+$(BUILD)/BTSOUND.BIN: tools/os88btart.py tools/os88bbart.py tools/os88gkmus.py apps/boratype/art.h apps/boratype/art/blink.txt apps/boratype/art/music.txt apps/boratype/art/sfx.txt | $(BUILD)
+        python3 tools/os88btart.py build-sound -o $@
+```
+
+The host face harness verifies attentive-only selection, correct big/small/
+mono ID, normal-expression restoration, zero work for unchanged/nonattentive
+frames, and byte-for-byte session immutability at all24layout cases. ASan/
+UBSan and the native26-byte-frame compiler gate pass. The combined bank
+builds deterministically and all six record offsets/dimensions are checked.
+This proves selection and bounded invalidation; actual91-tick scheduling and
+seen-on-glass animation remain root integration evidence.
+
+
+## Audio status, caption and compact controls
+
+The face reads the pure audio helpers `bt_voice_status`, `bt_voice_caption`,
+and `bt_reaction_history`. A spoken clip appears separately in the footer,
+labelled "Voice reaction:"; the original joke keeps its own caption panel.
+Results show the most recent original reactions, up to four as space permits.
+Settings includes the live pack/device/mute status even at480x128. Its3-column
+4-row grid exposes Music/Effects/Voice, Keyticks/Roast/Display,
+Testmusic/Testvoice/Fullscreen, then Save/Back. Display preference is therefore
+mouse-accessible on native CGA. Labels advertise M/E/V/K/R/D/T/A; Help also
+shows1-4/Up/Down practice selection. No platform action or audio state is
+mutated by painting. Host assertions cover all11Settings actions, live status,
+labelled voice captions, result history and their compact bounds.

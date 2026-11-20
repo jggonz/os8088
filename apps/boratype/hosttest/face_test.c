@@ -22,7 +22,7 @@ const BTLesson bt_lessons[BT_LESSONS]={
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON};
 int bt_screen,bt_selection,bt_ch_duration,bt_ch_diff,bt_master_sound=1;
-int bt_full,bt_readonly,bt_profile_edit,bt_modifiers,bt_practice_weak;
+int bt_full,bt_readonly,bt_profile_edit,bt_modifiers,bt_practice_weak,bt_blink_frame;
 char bt_notice[64];
 static int hw=640,hh=440,hbpp=4;
 void os88_set_color(int c){(void)c;}
@@ -30,8 +30,13 @@ void os88_gfx_fill(int a,int b,int c,int d){(void)a;(void)b;(void)c;(void)d;}
 static unsigned flushes,area;
 static int bandx,bandy,bandw,bandh;
 unsigned bx_bseg;
+static int expression=1,last_sprite=-1,status_seen,voice_label_seen,reaction_seen;
+static const char *voice_text="";
 static const char *caption="Your fingers have returned from holiday.";
-const char *bt_caption(void){return caption;}int bt_expression(void){return 1;}
+const char *bt_caption(void){return caption;}int bt_expression(void){return expression;}
+const char *bt_voice_status(void){return "Local voice pack ready";}
+const char *bt_voice_caption(void){return voice_text;}
+const char *bt_reaction_history(int back){return back<4?"Your fingers have returned from holiday.":"";}
 int bt_weak(int rank){return rank==0?'f':0;}
 void os88_wm_content(void *w,struct os88_pt *p){(void)w;p->x=8;p->y=24;}
 int os88_wm_geom(void *w,struct os88_size *s){(void)w;s->w=hw;s->h=hh;return 0;}
@@ -41,7 +46,7 @@ char *os88_utoa(unsigned v,char *s){snprintf(s,8,"%u",v);return s;}
 int bx_rows(int x,int y,int w,int h){(void)x;(void)y;(void)h;return 8192/(hbpp==1?w/8:w/2);}
 void bx_new(int x,int y,int w,int h,int c){(void)c;assert(!(x&7)&&!(w&7));assert(x>=8&&x+w<=8+hw);assert(y>=24&&y+h<=24+hh);bandx=x;bandy=y;bandw=w;bandh=h;}
 void bx_fill(int a,int b,int c,int d,int col){(void)a;(void)b;(void)c;(void)d;(void)col;}
-int bx_spr(int x,int y,int id){(void)x;(void)y;(void)id;return 40;}
+int bx_spr(int x,int y,int id){(void)x;(void)y;last_sprite=id;return 40;}
 int bx_twidth(const char *s,int f){return (int)strlen(s)*(f==BT_F_TITLE?9:f==BT_F_TEXT?6:5);}
 int bx_fonth(int f){return f==BT_F_TITLE?16:f==BT_F_TEXT?10:8;}
 int bx_text(int x,int y,const char *s,int c,int f){(void)x;(void)y;(void)c;return bx_twidth(s,f);}
@@ -49,7 +54,7 @@ int bx_out(void){flushes++;area+=bandw*bandh;return 0;}
 void bx_setup(unsigned a,void *b,unsigned c,unsigned d,int e){(void)b;(void)c;(void)d;(void)e;bx_bseg=a;}
 void bx_setart2(unsigned a){(void)a;}
 void gk_init(int a){(void)a;}void gk_theme(const unsigned char *a){(void)a;}
-int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
+int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){if(!strcmp(s,bt_voice_status()))status_seen++;if(!strncmp(s,"Voice reaction: ",16))voice_label_seen++;if(!strncmp(s,"Borat: ",7))reaction_seen++;(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
 int gk_textbox(int x,int y,int w,int h,const char *s,int c,int f,int fl){(void)h;return gk_text(x,y,w,s,c,f,fl);}
 void gk_box(int x,int y,int w,int h,int s,int f){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;}
 void gk_button(int x,int y,int w,int h,const char *s,int f,int st){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;(void)st;}
@@ -71,11 +76,34 @@ static void keyboard(void)
  assert(tf_shift('A')==52&&tf_shift('J')==51&&tf_shift('?')==51&&tf_shift('!')==52);
  for(i=32;i<127;i++)assert(tf_keyid(i)>=0);
 }
+static void blink(void)
+{
+ static BTSession before;
+ int expected;
+ memcpy(&before,&bt_session,sizeof(before));
+ bt_blink_frame=0;expression=1;bt_face_paint(0,1);
+ area=flushes=0;last_sprite=-1;bt_blink_frame=1;bt_face_paint(0,0);
+ if(!tf_compact){
+  expected=tf_mono?BT_ART_BLINK_MONO:(tf_ph>=150?BT_ART_BLINK_BIG:BT_ART_BLINK_SMALL);
+  assert(last_sprite==expected);assert(flushes>0&&area<=(unsigned)(((tf_pw+7)&~7)*tf_ph));
+ }else assert(!area&&!flushes);
+ area=flushes=0;bt_face_paint(0,0);assert(!area&&!flushes);
+ bt_blink_frame=0;last_sprite=-1;bt_face_paint(0,0);
+ if(!tf_compact)assert(last_sprite==(tf_mono?BT_ART_MONO+1:(tf_ph>=150?BT_ART_BIG+1:BT_ART_SMALL+1)));
+ expression=2;bt_blink_frame=1;bt_face_paint(0,1);area=flushes=0;
+ bt_blink_frame=0;bt_face_paint(0,0);assert(!area&&!flushes);
+ voice_text="Very nice.";voice_label_seen=0;bt_face_paint(0,0);assert(voice_label_seen);voice_text="";bt_face_paint(0,0);
+ assert(!memcmp(&before,&bt_session,sizeof(before)));expression=1;
+}
 static void screens(void)
 {
  int s,i;
  for(s=0;s<=BT_S_PROFILE;s++){
-  bt_screen=s;bt_face_paint(0,1);
+  bt_screen=s;status_seen=reaction_seen=0;bt_face_paint(0,1);
+  if(s==BT_S_SETTINGS)assert(status_seen);
+  if(s==BT_S_RESULTS)assert(reaction_seen);
+  if(s==BT_S_SETTINGS){int required[]={BT_A_MUSIC,BT_A_EFFECTS,BT_A_VOICE,BT_A_KEYCLICK,BT_A_ROAST,BT_A_DISPLAY,BT_A_TEST_MUSIC,BT_A_TEST_VOICE,BT_A_FULL,BT_A_SAVE,BT_A_BACK};
+   assert(tf_nhit==11);for(unsigned a=0;a<sizeof(required)/sizeof(required[0]);a++){int found=0;for(i=0;i<tf_nhit;i++)if(tf_hit[i][4]==required[a])found=1;assert(found);}}
   for(i=0;i<tf_nhit;i++){
    assert(tf_hit[i][0]>=tf_x&&tf_hit[i][0]+tf_hit[i][2]<=tf_x+tf_w);
    if(tf_hit[i][1]<tf_top||tf_hit[i][1]+tf_hit[i][3]>tf_bottom){fprintf(stderr,"outside screen%d %dx%d hit%d y%d h%d top%d bottom%d\n",s,hw,hh,i,tf_hit[i][1],tf_hit[i][3],tf_top,tf_bottom);abort();}
@@ -95,7 +123,9 @@ int main(void)
   fullarea=hw*hh;bt_session.pos=1;bt_session.streak=1;bt_session.correct=1;bt_session.attempts=1;bt_face_paint(0,0);
   if(area>fullarea/6){fprintf(stderr,"too much repaint %dx%d %u/%u\n",hw,hh,area,fullarea);abort();}
   printf("face %dx%d %dbpp: geometry/screens/clicks pass, key %u pixels, %u bands\n",hw,hh,hbpp,area,flushes);
+  blink();
  }
  hw=304;hh=130;bt_face_init(1,2,8192,4);area=flushes=0;bt_face_paint(0,1);assert(!area&&!flushes&&!tf_nhit);
+ puts("face: attentive blink selection/cache/restoration and session immutability pass");
  puts("face: all printable keys, opposite Shift, I/J finger map, bounded caches pass");return 0;
 }

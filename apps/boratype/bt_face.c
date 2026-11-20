@@ -17,6 +17,10 @@ int bx_out(void);
 void bx_setup(unsigned seg,void *band,unsigned cap,unsigned artseg,int bpp);
 void bx_setart2(unsigned seg);
 extern unsigned bx_bseg;
+/* Pure audio status/review getters, matching bt_audio.h. */
+const char *bt_voice_status(void);
+const char *bt_voice_caption(void);
+const char *bt_reaction_history(int back);
 
 #define TF_NAVY 1
 #define TF_BLUE 9
@@ -235,6 +239,7 @@ static void tf_drawheader(void)
 }
 static void tf_drawfooter(void)
 {
+    if(bt_voice_caption()[0]){tf_append(tf_append(0,"Voice reaction: "),bt_voice_caption());tf_line(tf_x+6,tf_bottom+1,tf_w-12,tf_buf);return;}
     if(bt_notice[0]){tf_line(tf_x+6,tf_bottom+1,tf_w-12,bt_notice);return;}
     tf_line(tf_x+6,tf_bottom+1,tf_w-12,bt_readonly?"READ ONLY  F1 Help  F2 Lessons  F3 Sound  F4 Pause  F6 Full  Esc Menu":"F1 Help   F2 Lessons   F3 Sound   F4 Pause   F6 Full   Esc Menu");
 }
@@ -244,7 +249,8 @@ static void tf_drawportrait(void)
     if(tf_compact)return;
     e=bt_expression();if(e<0||e>6)e=0;
     id=tf_mono?BT_ART_MONO+e:(tf_ph>=150?BT_ART_BIG+e:BT_ART_SMALL+e);
-    w=(id<7)?96:40;h=(id<7)?120:48;
+    w=(!tf_mono&&tf_ph>=150)?96:40;h=(!tf_mono&&tf_ph>=150)?120:48;
+    if(e==1&&bt_blink_frame)id=tf_mono?BT_ART_BLINK_MONO:(tf_ph>=150?BT_ART_BLINK_BIG:BT_ART_BLINK_SMALL);
     gk_box(tf_px,tf_py,tf_pw,tf_ph,GK_RAISED,tf_ground());
     bx_spr(tf_px+(tf_pw-w)/2,tf_py+6,id);
     tf_text(tf_px+6,tf_py+h+12,tf_pw-12,bt_store.profile[bt_store.selected].name,TF_YELLOW,tf_font);
@@ -387,7 +393,9 @@ static void ovl_tf_drawbody(void)
             if(bt_session.achievement_new&BT_ACH_95)n=tf_append(n,"95% challenge! ");
             if(bt_session.achievement_new&BT_ACH_PERFECT)n=tf_append(n,"Perfect! ");
             if(bt_session.achievement_new&BT_ACH_BEST)tf_append(n,"Personal best! ");tf_line(x,y,w,tf_buf);y+=rh;
-            tf_lines(x,y,w,2,bt_session.accuracy>=95?"Great success! Keep your fingers on their home keys. Continue to the next lesson.":"Slow down and aim for 95% accuracy. Practice the keys that caused the most errors.");y+=32;tf_lines(x,y,w,2,bt_caption());y+=28;}
+            tf_lines(x,y,w,2,bt_session.accuracy>=95?"Great success! Keep your fingers on their home keys. Continue to the next lesson.":"Slow down and aim for 95% accuracy. Practice the keys that caused the most errors.");y+=32;}
+        for(i=0;i<4&&y+tf_th+2+bh+4<=tf_bottom;i++){
+            if(!bt_reaction_history(i)[0])break;n=tf_append(0,"Borat: ");tf_append(n,bt_reaction_history(i));tf_line(x,y,w,tf_buf);y+=tf_th+2;}
         c=(w-12)/4;tf_button(x,y,c,bh,"Retry",BT_A_RETRY,1);tf_button(x+c+4,y,c,bh,"Next lesson",BT_A_NEXT,0);tf_button(x+2*(c+4),y,c,bh,"Weak keys",BT_A_WEAK,0);tf_button(x+3*(c+4),y,c,bh,"Menu",BT_A_BACK,0);
     }else if(bt_screen==BT_S_RECORDS){
         n=tf_append(0,"Profile ");n=tf_append(n,p->name);n=tf_append(n,"   Best streak ");tf_number(n,p->best_streak);tf_line(x,y,w,tf_buf);y+=rh;
@@ -400,17 +408,18 @@ static void ovl_tf_drawbody(void)
             static const char *names[]={"First lesson","95% mastery","25-key streak","50-key streak","95% challenge","Perfect lesson","Personal best"};
             for(i=0;i<7;i++){n=tf_append(0,(p->achievements&(1<<i))?"[*] ":"[ ] ");tf_append(n,names[i]);tf_line(x+(i%2)*(w/2),y+(i/2)*rh,w/2,tf_buf);}}
     }else if(bt_screen==BT_S_SETTINGS){
-        c=(w-8)/2;row=0;
-        n=tf_append(0,"Music: ");tf_append(n,bt_store.music?"ON":"OFF");tf_button(x,y,c,bh,tf_buf,BT_A_MUSIC,bt_store.music);
-        n=tf_append(0,"Effects: ");tf_append(n,bt_store.effects?"ON":"OFF");tf_button(x+c+8,y,c,bh,tf_buf,BT_A_EFFECTS,bt_store.effects);y+=bh+3;
-        n=tf_append(0,"Voice: ");tf_append(n,bt_store.voice?"ON":"OFF");tf_button(x,y,c,bh,tf_buf,BT_A_VOICE,bt_store.voice);
-        n=tf_append(0,"Key ticks: ");tf_append(n,bt_store.keyclick?"ON":"OFF");tf_button(x+c+8,y,c,bh,tf_buf,BT_A_KEYCLICK,bt_store.keyclick);y+=bh+3;
-        n=tf_append(0,"Roast: ");tf_append(n,bt_store.roast==0?"Gentle":bt_store.roast==1?"Classic":"Extra Roast");tf_button(x,y,c,bh,tf_buf,BT_A_ROAST,0);
-        tf_button(x+c+8,y,c,bh,bt_full?"Leave fullscreen":"Enter fullscreen",BT_A_FULL,0);y+=bh+3;
-        tf_button(x,y,c,bh,"Test music",BT_A_TEST_MUSIC,0);tf_button(x+c+8,y,c,bh,"Test voice",BT_A_TEST_VOICE,0);y+=bh+3;
-        if(!tf_compact){tf_line(x,y,w,"Voice captions always work. Optional local PCM pack: see status below.");y+=rh;
-            tf_line(x,y,w,bt_master_sound?"Master sound: ON (F3 toggles)":"Master sound: MUTED (F3 toggles)");y+=rh;
-            tf_button(x,y,c,bh,"Display preference",BT_A_DISPLAY,0);tf_button(x+c+8,y,c,bh,"Save settings",BT_A_SAVE,0);}
+        c=(w-8)/3;row=bh+2;
+        n=tf_append(0,"M Music: ");tf_append(n,bt_store.music?"ON":"OFF");tf_button(x,y,c,bh,tf_buf,BT_A_MUSIC,bt_store.music);
+        n=tf_append(0,"E Effects: ");tf_append(n,bt_store.effects?"ON":"OFF");tf_button(x+c+4,y,c,bh,tf_buf,BT_A_EFFECTS,bt_store.effects);
+        n=tf_append(0,"V Voice: ");tf_append(n,bt_store.voice?"ON":"OFF");tf_button(x+2*(c+4),y,c,bh,tf_buf,BT_A_VOICE,bt_store.voice);y+=row;
+        n=tf_append(0,"K Key ticks: ");tf_append(n,bt_store.keyclick?"ON":"OFF");tf_button(x,y,c,bh,tf_buf,BT_A_KEYCLICK,bt_store.keyclick);
+        n=tf_append(0,"R Roast: ");tf_append(n,bt_store.roast==0?"Gentle":bt_store.roast==1?"Classic":"Extra");tf_button(x+c+4,y,c,bh,tf_buf,BT_A_ROAST,0);
+        n=tf_append(0,"D Display: ");tf_append(n,bt_store.display?"CGA color":"Native");tf_button(x+2*(c+4),y,c,bh,tf_buf,BT_A_DISPLAY,0);y+=row;
+        tf_button(x,y,c,bh,"T Test music",BT_A_TEST_MUSIC,0);tf_button(x+c+4,y,c,bh,"A Test voice",BT_A_TEST_VOICE,0);
+        tf_button(x+2*(c+4),y,c,bh,bt_full?"F6 Leave full":"F6 Fullscreen",BT_A_FULL,0);y+=row;
+        tf_button(x,y,c,bh,"Save settings",BT_A_SAVE,0);tf_button(x+c+4,y,c,bh,"Back",BT_A_BACK,0);y+=row;
+        tf_text(x,y,w,bt_voice_status(),TF_YELLOW,tf_font);
+        if(!tf_compact){y+=rh;tf_line(x,y,w,bt_master_sound?"Master sound: ON (F3 toggles)":"Master sound: MUTED (F3 toggles)");}
     }else if(bt_screen==BT_S_PROFILE){
         for(i=0;i<4;i++){
             n=tf_number(0,i+1);n=tf_append(n,". ");n=tf_append(n,bt_store.profile[i].name);
@@ -424,7 +433,7 @@ static void ovl_tf_drawbody(void)
         c=(w-8)/2;tf_button(x,y,c,bh,"Resume (F4)",BT_A_PAUSE,1);tf_button(x+c+8,y,c,bh,"Restart",BT_A_RETRY,0);y+=bh+4;
         tf_button(x,y,c,bh,"Display / Fullscreen",BT_A_FULL,0);tf_button(x+c+8,y,c,bh,"Exit to menu",BT_A_BACK,0);
     }else if(bt_screen==BT_S_HELP){
-        static const char *help[]={"F/J bumps: left index on F, right index on J. Keep eyes on the prompt.","Correct keys advance. Wrong keys count as errors and keep the same target.","Backspace retracts this passage. Earlier mistakes and attempts stay counted.","WPM = accepted characters x 12 / active seconds; spaces count. Aim for 95%.","Target: double outline. Wrong: !. Underline: accepted or latched modifier.","Shifted symbols: use the outlined key plus the Shift on the opposite hand.","Challenges last 1, 3 or 5 minutes. Pause/focus/display changes make unranked.","F1 Help, F2 Lessons, F3 Sound, F4 Pause, F6 Fullscreen, Escape Menu."};
+        static const char *help[]={"F/J bumps: left index on F, right index on J. Keep eyes on the prompt.","Correct keys advance. Wrong keys count as errors and keep the same target.","Backspace retracts this passage. Earlier mistakes and attempts stay counted.","WPM = accepted characters x 12 / active seconds; spaces count. Aim for 95%.","Target: outline. Wrong: !. Shifted symbols use opposite-hand Shift.","Challenges last 1/3/5 minutes; pause/focus/display changes make unranked.","F1 Help, F2 Lessons, F3 Sound, F4 Pause, F6 Fullscreen, Escape Menu.","Settings: M/E/V/K/R/D/T/A. Practice: 1-4 or Up/Down, Enter starts."};
         rh=(tf_bottom-y-3)/8;if(rh>28)rh=28;
         for(i=0;i<8;i++)tf_text(x,y+i*rh,w,help[i],TF_WHITE,tf_compact?BT_F_SMALL:BT_F_TEXT);
     }
@@ -466,8 +475,9 @@ static unsigned tf_menukey(void)
     h=tf_mix(h,bt_store.music+2*bt_store.effects+4*bt_store.voice+8*bt_store.keyclick+16*bt_store.roast+64*bt_store.display);
     h=tf_mix(h,bt_practice_weak+2*bt_full+4*bt_profile_edit+8*bt_readonly+16*bt_master_sound);
     h=tf_string(h,bt_notice);h=tf_string(h,p->name);
+    if(bt_screen==BT_S_SETTINGS)h=tf_string(h,bt_voice_status());
     if(bt_screen==BT_S_PROFILE)for(i=0;i<4;i++)h=tf_string(h,bt_store.profile[i].name);
-    if(bt_screen==BT_S_RESULTS){h=tf_mix(h,bt_session.wpm);h=tf_mix(h,bt_session.accuracy);h=tf_string(h,bt_caption());}
+    if(bt_screen==BT_S_RESULTS){h=tf_mix(h,bt_session.wpm);h=tf_mix(h,bt_session.accuracy);h=tf_string(h,bt_caption());for(i=0;i<4;i++)h=tf_string(h,bt_reaction_history(i));}
     return h;
 }
 void bt_face_init(unsigned art,unsigned band,unsigned cap,int bpp)
@@ -501,7 +511,7 @@ void bt_face_paint(void *win,int full)
     }
     key=tf_mix(5381,bt_screen);key=tf_mix(key,bt_store.selected);
     if(full||key!=tf_header){tf_render(tf_x,tf_y,tf_w,tf_top-tf_y,1,0);tf_header=key;}
-    key=tf_string(tf_mix(5381,bt_readonly+2*bt_master_sound),bt_notice);
+    key=tf_string(tf_string(tf_mix(5381,bt_readonly+2*bt_master_sound),bt_notice),bt_voice_caption());
     if(full||key!=tf_footer){tf_render(tf_x,tf_bottom,tf_w,tf_h-(tf_bottom-tf_y),2,0);tf_footer=key;}
     if(bt_screen!=BT_S_PLAY){key=tf_menukey();if(full||key!=tf_bodykey){tf_render(tf_x,tf_top,tf_w,tf_bottom-tf_top,3,0);tf_bodykey=key;}return;}
     tf_nhit=0;oldview=tf_view;oldinput=tf_inputview;tf_keyrefresh();
@@ -509,7 +519,8 @@ void bt_face_paint(void *win,int full)
     tf_inputview=(bt_session.pos/tf_cols)*tf_cols;
     ncells=tf_compact&&tf_h<140?2*tf_cols:3*tf_cols;
     if(full){tf_render(tf_x,tf_top,tf_w,tf_bottom-tf_top,4,0);}
-    key=bt_expression();if(full||tf_portrait!=key){if(!full&&!tf_compact)tf_render(tf_px,tf_py,tf_pw,tf_ph,5,0);tf_portrait=key;}
+    key=bt_expression();if(key==1&&bt_blink_frame)key|=8;
+    if(full||tf_portrait!=key){if(!full&&!tf_compact)tf_render(tf_px,tf_py,tf_pw,tf_ph,5,0);tf_portrait=key;}
     key=tf_string(5381,bt_caption());
     if(full||key!=tf_captionkey){if(!full){if(tf_compact)tf_render(tf_x+8,tf_statsy-10,tf_w-16,10,6,0);
         else tf_render(tf_px+4,tf_py+(tf_ph>=150?146:74),tf_pw-8,tf_ph-(tf_ph>=150?146:74),6,0);}tf_captionkey=key;}
