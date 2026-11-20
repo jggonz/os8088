@@ -63189,7 +63189,7 @@ there would be nothing to keep one in.
 | off | len | field |
 |---|---|---|
 | 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
-| 1 | 1 | its PLACED cell, its byte of `[desk_zpin]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
+| 1 | 1 | its PLACED cell as a v2 byte (`0x40` + a cell below 63, else `0xFF`; the whole byte is in the `SX` block's `DZ`) — in the FILE only: CTRL.DRV writes it from `[desk_zpin]` and the boot reader puts it back (§26.8.6, §26.8.6.1) |
 | 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
 | 3 | 1 | NOT spare, whatever this table said until §110: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a Sticky App row (§110.2). The Sticky App mark is an EQUALITY, so neither of the other two values can be read as one |
 | 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
@@ -63360,30 +63360,26 @@ a shortcut, or an item the user PLACED (§26.9.5):
 ```
 +0     'O88CFG',0,0  dw 3            ; unchanged
 +10    records ... dw 0              ; unchanged - every reader stops here
++X     the SX block (26.8.6.1)       ; a v2 reader never looks here
 +T     count * SC_REC                ; the live rows, verbatim and compacted,
-                                     ;   each row's +1 its placed cell
-+T'    DESK_SC0 bytes                ; zones 0..8's [desk_zpin]: a PLACED
-                                     ;   one's cell, 0xFF for one that flows
-+end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 3
+                                     ;   each row's +1 its cell as a v2 byte
++T'    DESK_SC0 bytes                ; zones 0..8's cells as v2 bytes: a
+                                     ;   PLACED one's, 0xFF for one that flows
++end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 2, for ever
 ```
+
+A **v2 byte** is `0x40` over a cell 0..62, or `0xFF`. That is the byte the
+table itself was until §26.9.2 split it, and it is what every kernel since
+version 2 decodes.
 
 The footer is read from the END, so the reader never walks the records to
 find it. With nothing placed the file is byte for byte what it was before.
 Version 1 (no pins block, a two-byte column/row cell) is refused rather than
 read: it went to nobody.
 
-**Version 3 is version 2 with whole-byte cells.** A cell byte in a version-2
-file was the old table byte (§26.9.2's history): `0x40`, the placed bit,
-over a six-bit cell, with `0x80` on a placed item that was not shown.
-Version 3 writes `[desk_zpin]` itself, the cell 0..254 or `0xFF`, because
-a VESA desktop's cells go past 63. The boot reader takes both. On a version 2
-byte other than `0xFF`, `ovl_sc_load`'s `.cell` keeps the low six bits, so
-every file an older kernel wrote keeps its layout. It writes version 3, and
-an older kernel finds no trailer in a version 3 file and boots with no
-shortcuts and nothing placed, but with its settings. The host tools that make
-fixture and demo-disk files (`tools/os88deskcfg.py`, `os88pmcfg.py`,
-`os88stik.py`'s `cfg`) still write version 2, so the shipped disks keep
-exercising the decode.
+**`SC_VER` is frozen at 2** (§26.8.6.1). The cells §26.9.1 widened to a
+whole byte travel in an `SX` record that a version-2 reader never sees, so a
+file this kernel writes is a file every older shortcut-reading kernel reads.
 
 - **The writer is `CTRL.DRV`'s.** `sc_m_ser` composes settings, rows, pins
   and footer in a claim of its own, PINNED, for the length of the write.
@@ -63402,7 +63398,8 @@ exercising the decode.
   trailer. A bigger file is read whole into the shortcut claim; a valid
   trailer's rows move down to the claim's base with every string
   force-terminated, and the pins block and each row's cell go into
-  `[desk_zpin]` (decoded from a version 2 file, above) and are copied into
+  `[desk_zpin]`, taken from the `SX` block's `DZ` record when the file has
+  one and decoded from the v2 bytes when it does not, and are copied into
   `[desk_zslot]` as well, so every placed item starts SHOWN in its cell, as
   the old byte's placed-and-not-gone state did. That way the first reflow
   keeps it there if it is live, and a flowing drive earlier in index order
@@ -63414,6 +63411,68 @@ exercising the decode.
   answers a larger file with `FERR_BIG` before any I/O. It cannot be fixed
   from this side, and it bites only on a downgrade, since the file sits
   beside `KERNEL.SYS` on the one boot volume.
+
+##### 26.8.6.1 Upgrading SYSTEM.CFG: the trailer only grows, and only where old readers do not look
+
+§51.5's settings already evolve safely. Every value is a record with a key, a
+`ver` and a `len`, an unknown key is skipped (rule 1), and a changed meaning
+is a new `ver` (rule 2). The trailer is positional and has a single version,
+so bumping it is the one change that costs a downgraded kernel something. A
+version 3 that held whole-byte cells was written once, on the branch that
+widened the cells, and never shipped. Under it an older kernel found no
+trailer and booted with its settings but without a single shortcut or
+placement. So the rule for the trailer is:
+
+1. **`SC_VER` stays 2.** The rows, the pins block and the footer keep the
+   layout and the encoding a version-2 kernel reads.
+2. **What a newer kernel adds goes in the `SX` block**, between the settings'
+   terminator and the rows. Every settings reader stops at the `dw 0`, and
+   the trailer reader works back from the END of the file to where the rows
+   start, so neither reads a byte of it:
+
+   ```
+   records: dw key  db ver  db len  data[len]   ...as §51.5's, one after another
+   tail:    dw length-of-the-records  dw 'SX'   ...ending where the rows start
+   ```
+
+   `ovl_sc_load`'s `.sx` finds the tail, walks the records, and skips any key
+   or `ver` it does not know by its length, as §51.5 rule 1 does. A length
+   that runs past either end is not a block, and the v2 bytes stand.
+3. **A value too wide for its v2 byte is written in both places.** The v2 byte
+   says what an older kernel can use, and the `SX` record carries the whole
+   value. Today there is one record:
+
+   | key | ver | len | data |
+   |---|---|---|---|
+   | `DZ` | 1 | `DESK_SC0` + count | every placed cell as a whole byte, `[desk_zpin]`'s: the table zones 0..8, then each row in file order |
+
+   The row's own byte holds that cell as a v2 byte: `0x40` + the cell below
+   63, and `0xFF` above it, which an older kernel places in its first free
+   cell. CTRL.DRV writes the block with every trailer, so the path runs on
+   every save and is not a special case for VESA.
+
+**What each pairing gets:**
+
+| writer → reader | shortcuts | placements |
+|---|---|---|
+| this kernel → this kernel | all | all, every cell up to 254 (`DZ`) |
+| this kernel → a v2 kernel | all | every cell below 63: all of VGA, EGA, CGA, Hercules and VESA 800×600. A cell past that flows to the reader's first free one |
+| a v2 kernel → this kernel | all | all it had (v2 bytes, decoded) |
+| this → v2 → this | all | the v2 kernel's save drops `SX` (§51.5 rule 1), so cells past 62 come back as it left them |
+
+The cost is no resident byte. The writer is CTRL.DRV's settings core, the
+reader is `.boot3`, and `.sx` copies the `DZ` record into `[desk_zold]`,
+which nothing reads before the first reflow. The file grows by
+8 + `DESK_SC0` + count bytes, 32 with fifteen shortcuts.
+
+**The gate is a frozen version-2 reader.** `tools/os88stik.py`'s `parse_cfg_v2`
+is the version-2 kernel's `ovl_sc_load` written once in Python and never
+edited. `tests/unit/t_stik.py` holds `os88stik.cfg`'s files to it: the
+shortcuts come back, each cell below 63 is that cell, a wider one is `0xFF`,
+and the settings head parses to its terminator. `tests/desksc.py` holds the
+SYSTEM.CFG the KERNEL writes to it as well, after a drag, so the writer cannot
+drift from the host's copy. **A change that makes a file it writes unreadable
+to a version-2 kernel fails both.**
 
 #### 26.8.7 What is resident, and what is CTRL.DRV's
 

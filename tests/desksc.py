@@ -55,6 +55,7 @@ import os88ui      # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88fat     # noqa: E402
 import os88marty   # noqa: E402
+import os88stik    # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 SC_REC = geom.SC_REC
@@ -292,7 +293,21 @@ def main():
         cnt, frows = trailer(after)
         check(cnt == 1, "the trailer's count is 1 (%d, file %d bytes)"
               % (cnt, len(after)))
-        check(frows and frows[0] == r0, "the row is the claim's, verbatim")
+        cell = zpin(ui, DESK_SC0)
+        check(frows and frows[0][:1] + frows[0][2:] == r0[:1] + r0[2:]
+              and frows[0][1] == os88stik.v2_cell(cell),
+              "the row is the claim's, verbatim, its +1 the cell as a v2 "
+              "byte (%r)" % (frows[0][1] if frows else None,))
+        # SPEC.md 26.8.6.1: what a VERSION-2 kernel makes of the file this
+        # one wrote - the frozen reader - and what this kernel makes of it
+        old, new = os88stik.parse_cfg_v2(after), os88stik.parse_cfg(after)
+        check(old["trailer"] and len(old["rows"]) == 1
+              and old["rows"][0] is not None
+              and os88stik.settings_end(old["head"]) is not None,
+              "a version-2 kernel reads the trailer, the row and the settings")
+        check(new["dz"] and new["rows"][0]["slot"] == cell,
+              "...and this one reads the whole-byte cell out of 'DZ' (%r)"
+              % (new["rows"][0]["slot"] if new["rows"] else None,))
         check(after[:8] == b"O88CFG\0\0",
               "the settings head is SYSTEM.CFG's own container")
 
@@ -525,9 +540,11 @@ def main():
               % zslot(ui, 1))
         cnt, _ = trailer(live_cfg(m, tmp))
         data = live_cfg(m, tmp)
-        check(data[-4:-2] == b"SC" and data[-4 - DESK_SC0] == 3,
-              "SYSTEM.CFG keeps A:'s cell with no shortcut at all (%r)"
-              % data[-4 - DESK_SC0:])
+        check(data[-4:-2] == b"SC"
+              and data[-4 - DESK_SC0] == os88stik.v2_cell(3)
+              and os88stik.parse_cfg(data)["pins"][0] == 3,
+              "SYSTEM.CFG keeps A:'s cell with no shortcut at all, as a v2 "
+              "byte and in 'DZ' (%r)" % data[-4 - DESK_SC0:])
         if shots:
             ui.settle()
             shot(m, os.path.join(shots, "l_drive_moved.png"))
