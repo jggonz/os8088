@@ -42,48 +42,7 @@ static void bt_redraw(int all)
     }
 }
 
-/* Two independent generations. Replacing the older one never frees the
- * newest one's chain. A corrupt candidate cannot mutate the live store. */
-static void ovl_bt_load(void)
-{
-    unsigned n;
-    BTWord first;
-    int valid;
-    if (bt_data_enter() != 0) return;
-    n = os88_file_read(bt_slots[0], bt_io, BT_SAVE_CAP);
-    valid = !os88_ferr() && n && bt_decode(bt_io, n);
-    first = bt_store.generation;
-    n = os88_file_read(bt_slots[1], bt_io, BT_SAVE_CAP);
-    if (!os88_ferr() && n && bt_decode(bt_io, n)) {
-        if (valid && (short)(bt_store.generation - first) < 0) {
-            n = os88_file_read(bt_slots[0], bt_io, BT_SAVE_CAP);
-            if (!os88_ferr() && n) bt_decode(bt_io, n);
-        }
-        valid = 1;
-    }
-    bt_saved_generation = bt_store.generation;
-    if (!valid) bt_message("New profiles. Progress saves on this disk.");
-    bt_data_back();
-}
-
-static void ovl_bt_save(void)
-{
-    unsigned n, check;
-    int slot, ok;
-    if (bt_readonly) { bt_message("Read-only: another Borat session owns progress."); return; }
-    if (bt_data_enter() != 0) { bt_message("Save failed. Use a writable installed disk."); return; }
-    bt_store.generation = bt_saved_generation + 1;
-    n = bt_encode(bt_io, BT_SAVE_CAP);
-    slot = bt_store.generation & 1;
-    ok = n && os88_file_write(bt_slots[slot], bt_io, n) == 0;
-    if (ok) {
-        check = os88_file_read(bt_slots[slot], bt_io, BT_SAVE_CAP);
-        ok = !os88_ferr() && check == n && bt_decode(bt_io, check);
-    }
-    bt_data_back();
-    if (ok) { bt_saved_generation = bt_store.generation; bt_message("Progress saved."); }
-    else { bt_store.generation = bt_saved_generation; bt_message("Save failed. Previous copy kept; free disk space."); }
-}
+#include "bt_files.c"
 
 static void bt_schedule_save(void)
 {
@@ -183,6 +142,7 @@ void bt_action(int a)
     } else if (a >= BT_A_DIFFICULTY_BASE && a < BT_A_DIFFICULTY_BASE + BT_DIFFS) {
         bt_ch_diff = a - BT_A_DIFFICULTY_BASE;
     } else if (a == BT_A_START) {
+        if (bt_screen == BT_S_HOME) bt_selection = bt_recommend();
         bt_begin(bt_screen == BT_S_CHALLENGE ? BT_CHALLENGE : bt_screen == BT_S_PRACTICE ? BT_PRACTICE : BT_LESSON); return;
     } else if (a == BT_A_LESSONS) { bt_setscreen(BT_S_LESSONS); return;
     } else if (a >= BT_A_PRACTICE_BASE && a < BT_A_PRACTICE_BASE + BT_DIFFS) {
@@ -194,7 +154,10 @@ void bt_action(int a)
     } else if (a == BT_A_SETTINGS) { bt_setscreen(BT_S_SETTINGS); return;
     } else if (a == BT_A_HELP) { bt_setscreen(BT_S_HELP); return;
     } else if (a == BT_A_PROFILE) { bt_profile_edit = 0; bt_setscreen(BT_S_PROFILE); return;
-    } else if (a == BT_A_RETRY) { bt_begin(bt_session.mode); return;
+    } else if (a == BT_A_RETRY) {
+        bt_selection = bt_session.lesson;
+        bt_ch_duration = bt_session.duration; bt_ch_diff = bt_session.difficulty;
+        bt_begin(bt_session.mode); return;
     } else if (a == BT_A_NEXT) { bt_selection = bt_recommend(); bt_begin(BT_LESSON); return;
     } else if (a == BT_A_BACK) { bt_schedule_save(); bt_setscreen(BT_S_HOME); return;
     } else if (a == BT_A_PAUSE) { bt_pause_ui(); return;
@@ -272,7 +235,11 @@ static void bt_key_route(int ascii, int scan)
         if (ascii >= '1' && ascii <= '3') bt_ch_duration = ascii - '1';
         if (scan == 0x48 || scan == 0x50) bt_ch_diff = (bt_ch_diff + (scan == 0x48 ? 3 : 1)) & 3;
     }
-    if (ascii == 13) { bt_action(bt_screen == BT_S_RESULTS ? BT_A_NEXT : bt_screen == BT_S_PAUSE ? BT_A_PAUSE : BT_A_START); return; }
+    if (ascii == 13) {
+        bt_action(bt_screen == BT_S_RESULTS ? BT_A_NEXT : bt_screen == BT_S_PAUSE ? BT_A_PAUSE :
+            bt_screen == BT_S_HELP || bt_screen == BT_S_SETTINGS || bt_screen == BT_S_RECORDS ? BT_A_BACK : BT_A_START);
+        return;
+    }
     if (ascii == 'l' || ascii == 'L') bt_action(BT_A_LESSONS);
     else if (ascii == 'p' || ascii == 'P') bt_action(BT_A_PRACTICE);
     else if (ascii == 'c' || ascii == 'C') bt_action(BT_A_CHALLENGE);
@@ -355,7 +322,7 @@ void os88_oncmd(int item, int menu, void *win)
     if (menu == 0) {
         if (item == 0) bt_action(BT_A_PROFILE);
         else if (item == 1) bt_action(BT_A_SAVE);
-        else os88_wm_close(bt_win);
+        else { os88_onclose(bt_win); os88_wm_close(bt_win); }
     } else if (menu == 1) bt_action(item == 0 ? BT_A_LESSONS : item == 1 ? BT_A_PRACTICE : item == 2 ? BT_A_CHALLENGE : BT_A_RECORDS);
     else if (menu == 2) bt_action(item == 0 ? BT_A_PAUSE : item == 1 ? BT_A_FULL : BT_A_SETTINGS);
     else if (menu == 3) {
@@ -404,7 +371,7 @@ void *os88_main(void)
     bt_win = os88_wm_create(8, OS88_MBAR_H + 2, bt_video.w - 16,
         bt_video.dock_top - OS88_MBAR_H - 4, "Borat Teaches Typing", &bt_class);
     if (!bt_win) { bt_audio_done(); return 0; }
-    os88_wm_minsize(bt_win, 312, 152);
+    os88_wm_minsize(bt_win, 488, 150); /* content480x128, measured font/hitbox minimum */
     os88_menu_set(bt_win, &bt_menus);
     bt_timer_ok = os88_wm_timer(bt_win, 1) == 0;
     bt_audio_state(bt_screen);
