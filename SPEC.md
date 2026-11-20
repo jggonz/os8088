@@ -37731,8 +37731,14 @@ transitive cone may move into a module that it loads.
 A directory mutation loads the module on the UI task before making changes.
 The system disk must therefore be available when first invoking these
 commands. The loader preserves/restores the caller's mounted target volume;
-loading must not redirect a mutation to the system disk. A missing or
-mismatched module refuses through the existing file-error path before any
+loading must not redirect a mutation to the system disk. **The mount gate is
+tested BEFORE the module is loaded**: `dskw_dircall` refuses `[dsk_mntok]` ≠
+1 with CF=1, AX = `FERR_NODISK` (§18.4's gate answer) and loads nothing,
+because a shut gate is exactly the state in which `mod_need`'s
+`drv_vol_bank` banks the BOOT volume's root (§51.5.2.1: a failed mount is
+not banked), so the load would open the gate there and the verb would run on the
+system disk. The module's own gate stays, for the state after a load. A
+missing or mismatched module refuses through the existing file-error path before any
 metadata is modified. It must never report success or partially rename,
 create or remove a directory on a load refusal.
 
@@ -37743,6 +37749,21 @@ the existing disk-module cache/drop policy; no new default boot claim or
 permanent scratch buffer is permitted. This split pays for the keyboard
 hooks with measured permanent-byte savings on every kernel. Allocation
 rounding alone is insufficient evidence for the no-growth requirement.
+
+**A folder paste (§22.3) takes the module's hold BEFORE its copy buffer.**
+`fcp_claim` sizes the buffer from the largest free run, up to 64KB, and
+counts every cache as free (§22.5), so a buffer claimed first can take the
+room the module needs and shed a kept image - on a 128KB machine every
+mkdir of the walk would then refuse `FERR_IO`. So `fcp_step`, when the entry
+is a folder, asks `mod_live` and `clo_need`s the image before `fcp_claim`,
+recording in `fcp_dhold` whether the hold is its own (the image was not
+LIVE). It is held across the overwrite question, like the buffer, and
+`fcp_stop` - every end of the operation, the stop a closed window's
+`.pastegone` sends included - drops only its own hold, through `fm_cldrop`,
+so a clone armed meanwhile keeps the image it now owns. A load refused at
+that point refuses nothing: each mkdir still tries its own load. Inside the
+hold each mkdir, rename and rmtree finds the image LIVE and neither reloads
+nor drops it.
 
 ### 18.6 `dskw_rmdir` — removing an empty subdirectory
 

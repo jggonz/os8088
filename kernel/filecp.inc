@@ -908,6 +908,12 @@ fcp_stop:
     mov bx, MEM_K_COPY          ; mem_free takes the owner word too, and
     FCPX mem_free_x             ; refuses a base that is not this owner's.
 .nobuf:                         ; It preserves AX, so AL survives it
+    shr byte FCV(fcp_dhold), 1  ; ...then fcp_step's DISKOPS hold, if it took
+    jnc .nohold                 ; one (cleared either way) - unless a clone
+    push ax                     ; armed while the question was up owns the
+    FCPX fm_cldrop              ; image now (fm_cldrop's own rule). Never at
+    pop ax                      ; .ask: a pause keeps it, like the buffer
+.nohold:
     mov byte [fcp_busy], 0
                                 ; ...and INTO fcp_unbatch (it was a call and a
                                 ; ret): the deferred remount is spent by the
@@ -1005,6 +1011,13 @@ fcp_step:
     stc                         ; below with CF set: .fail is one byte past a
     jnz .jcfail                 ; short jnz's reach from here (size pass 8)
 .copyit:
+    cmp word [fcp_type], 2      ; A FOLDER'S mkdirs (and a Cut's rmtree) run
+    jb .claim                   ; in DISKOPS.DRV (SPEC.md 18.5.3): its image
+    mov al, MOD_DISKOPS         ; goes in FIRST, so the buffer below is sized
+    FCPX mod_live               ; from what it leaves. CF = 1: not live, so
+    rcl byte FCV(fcp_dhold), 1  ; the hold is OURS (0 here: fcp_stop clears
+    FCPX clo_need               ; it) - and a refusal is no refusal: each
+.claim:                         ; mkdir still tries the load itself
     call fcp_claim              ; THE COPY BUFFER, CLAIMED ONLY NOW - after the
 .jcfail:
     jc .fail                    ; re-link has had its chance, and before the
@@ -2343,6 +2356,8 @@ fcp_ovw:    resb 1              ; that verdict: 1 = replace it. The byte after
 %if fcp_ovw - fcp_pend != 1
   %error "fcp_file1 clears fcp_pend and fcp_ovw with one word store"
 %endif
+fcp_dhold:  resb 1              ; 1 = fcp_step took DISKOPS's hold, which
+                                ; fcp_stop drops (SPEC.md 18.5.3)
 %ifndef FCP_MOD
 section .bss
 %else

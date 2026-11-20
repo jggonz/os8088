@@ -7910,6 +7910,10 @@ dskw_dircall:
     push di
     push bp
     push es
+    cmp byte [dsk_mntok], 1     ; THE GATE FIRST, before anything loads: a
+    jne .nodisk                 ; shut gate makes mod_need bank the BOOT
+                                ; volume's root, and the load would leave
+                                ; the verb standing there with the gate open
     mov dl, al
     mov al, MOD_DISKOPS
     call mod_live
@@ -7931,6 +7935,10 @@ dskw_dircall:
     pop ax
     popf
     jmp dskw_wrp.pop            ; same seven saved registers in the same order
+.nodisk:
+    mov ax, FERR_NODISK         ; dskw_gate's own answer (SPEC.md 18.5.3):
+    stc                         ; nothing is held yet, so nothing is dropped
+    jmp dskw_wrp.pop
 
 dskw_dir_mkclus_f:              ; mkclus's BP is its near cold callback
     call dskw_mkclus
