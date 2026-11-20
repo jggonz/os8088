@@ -64,6 +64,9 @@ physical key and the opposite hand's Shift. Mouse keyboard clicks are hints,
 never scored characters. Letter shortcuts exist only outside active typing.
 Native and CGA faces share one pure US QWERTY map for physical base key,
 finger name and opposite-hand Shift; the CGA row includes backquote/tilde.
+Results with no printable attempts show accuracy as a dash and useful
+start-typing guidance. The noncompact result face puts portrait/caption beside
+larger statistics; the compact face retains all result actions.
 CGA keeps a190-byte ASCII-to-key-cell table, built from that shared map at
 scene entry. Static keyboard rows survive ordinary input; only old/new
 target and mistake cells change. Its shadow compare skips identical rows.
@@ -77,6 +80,9 @@ VESA uses the installed OS display driver and live dimensions, including
 F1 help, F2 lessons, F3 master mute, F4 pause, F6 fullscreen, Escape pause/menu.
 Fullscreen transitions preserve session position, profile and seed.
 Return to typing requires intentional resume; transition keys are not scored.
+Native geometry changes also pause, including an OWNBG pure shrink that owes
+no resize/damage callback. The package compares live geometry at UI service
+boundaries and excludes the interval since its last serviced active tick.
 Help, Settings and Records opened from a live or paused lesson return to its
 Pause screen. Returning from these views never silently starts a fresh run.
 
@@ -115,6 +121,8 @@ bursts, poor results, recovery and records are actual triggers. Last four
 captions cannot repeat immediately; the default reaction gap is12seconds. Jokes
 never change scoring. Slow jokes require baseline and elapsed-time evidence.
 Caption and portrait animation clocks are independent from scoring.
+A no-input completion receives neutral guidance, never success praise; it
+does not create a record or an achievement.
 
 The user-selected scope is original music, sound effects and visual messages.
 There are no sound clips, voice packs, speech controls, PCM transport or audio
