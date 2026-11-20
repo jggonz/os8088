@@ -44,16 +44,6 @@ osapi_keyboard:
     pop dx
     ret
 
-; No load, including from a painter. The unloaded entry's refusal means
-; BIOS default. AX only; FLAGS are outputs, all other registers kept.
-kl_query:
-    mov al, KBDV_QUERY
-    call far [KLFP+KL_CMD]
-    jnc .out
-    xor ax, ax
-.out:
-    ret
-
 ; Instance teardown already has AL=owner; preserve it for later releases.
 kl_release_inst:
     push ax
@@ -78,6 +68,11 @@ kl_control_x:
     push bx
     push cx
     push dx
+    pushf
+    cmp byte [sch_cur], 0
+    je .ui                     ; the UI task's verbs may load, run and drop
+    cli                        ; a worker's QUERY/RAW: no drop while in the image
+.ui:
     cmp al, KBDV_RAW
     je .raw
     or al, al
@@ -165,6 +160,9 @@ kl_control_x:
 .zero:
     xor ax, ax
 .out:
+    sbb cx, cx                 ; carry the result's CF across the popf
+    popf
+    shr cx, 1
     pop dx
     pop cx
     pop bx
@@ -467,6 +465,12 @@ klm_scan:
     jnz klm_pass
     cmp byte [es:klm_foreign], 0
     jne klm_pass
+    push es
+    KLM_BDA
+    test byte [es:0x18], 8     ; BIOS Pause: its resume key goes to the ROM
+    pop es
+    jnz .special
+    mov bx, bp                 ; KLM_BDA took BX (and AX on mega)
     cmp bl, 0x0e
     jne .printable
     cmp byte [es:klm_dead], 0
@@ -701,17 +705,28 @@ klm_character:
     cmp dl, ' '
     je klm_single
     mov si, klm_compose
-    mov cx, KLM_COMPOSE_N
+.accent:
+    mov cx, [cs:si]            ; CL = accent, CH = its run's pair count
+    inc si
+    inc si
+    jcxz .miss                 ; dw 0 ends the table
+    cmp al, cl
+    mov cl, ch
+    mov ch, 0
+    je .find                   ; scan only this accent's run
+    add si, cx
+    add si, cx
+    jmp short .accent
 .find:
-    cmp al, [cs:si]
+    cmp dl, [cs:si]
     jne .next
-    cmp dl, [cs:si+1]
-    jne .next
-    mov al, [cs:si+2]
+    mov al, [cs:si+1]
     jmp klm_single
 .next:
-    add si, 3
+    inc si
+    inc si
     loop .find
+.miss:
     mov cx, bp
     mov ch, cl                 ; CX = second word, physical scan and character
     mov cl, dl
@@ -743,7 +758,7 @@ klm_store:
     jcxz .publish
     call klm_next
     cmp si, [es:0x1a]
-    je klm_eaten               ; reserve both before writing either
+    je klm_lost                ; reserve both before writing either
 .publish:
     mov [es:bx], ax
     jcxz .tail
@@ -751,6 +766,14 @@ klm_store:
     mov [es:bx], cx
 .tail:
     mov [es:0x1c], si          ; publish completed word(s) last
+    jmp short klm_eaten
+; Neither half of a pair fits: drop both and say so, SPEC.md 9.8's way.
+klm_lost:
+    cmp byte [kbd_ovn], KBD_OVBEEPS
+    jae klm_eaten
+    inc byte [kbd_ovn]
+    mov byte [kbd_ovb], 1      ; the UI task beeps (kbd_ovspend)
+    inc byte [ui_post]
 klm_eaten:
     clc
     jmp short klm_scanret

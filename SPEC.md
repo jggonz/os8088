@@ -1884,13 +1884,14 @@ in the tree.
   bytes) allocated and never armed on each kernel, made an eighth entry a hard
   NASM error in whichever module grew, and could not be per-build because the
   host tool scraped it with a regex. Removing it was −36 bytes on `kern_big`
-  and −38 on `kern_small`. `MOD_MAX` is 12 on `kern_big` (ten images,
-  `MOD_SETS`, §2.8.7, and `MOD_KBM`, §2.8.8) and 7 on `kern_small`. BIG has
+  and −38 on `kern_small`. `MOD_MAX` is 13 on `kern_big` (eleven images,
+  `MOD_SETS`, §2.8.7, and `MOD_KBM`, §2.8.8) and 8 on `kern_small`. BIG has
   `MOD_HIBER` 3, `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7
   (`DKD_NENT` 4, §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12),
-  `MOD_SER` 9 (`SERIAL.DRV`, §115), `MOD_SETS` 10 and `MOD_KBM` 11
-  (`KBM_NENT` 3); SMALL has `MOD_FCP` 3, `MOD_FDLG` 4, `MOD_SER` 5 and
-  `MOD_KBM` 6.
+  `MOD_SER` 9 (`SERIAL.DRV`, §115), `MOD_KEYBOARD` 10 (`KEYBOARD.DRV`,
+  `KL_NENT` 2, §9.16), `MOD_SETS` 11 and `MOD_KBM` 12 (`KBM_NENT` 3); SMALL
+  has `MOD_FCP` 3, `MOD_FDLG` 4, `MOD_SER` 5, `MOD_KEYBOARD` 6 and
+  `MOD_KBM` 7.
 - **`mod_fpr` indexes by `MOD_TAB_OFF` and not `mod_tab`, and that is an
   ASSEMBLER constraint rather than a taste.** An expression like
   `mod_fpt - mod_tab/2` is label arithmetic nasm 3 refuses outright
@@ -2830,8 +2831,8 @@ in all**.
 
 #### 2.8.8 A row adopted from memory: `KBMOUSE`, the keyboard mouse's pointer half
 
-**One row has no file.** `MOD_KBM` (`kernel/mod.inc`, the last row: 11 on
-kern_big, kern_emu and kern_mega, 6 on kern_small, so `MOD_MAX` is 12 and 7)
+**One row has no file.** `MOD_KBM` (`kernel/mod.inc`, the last row: 12 on
+kern_big, kern_emu and kern_mega, 7 on kern_small, so `MOD_MAX` is 13 and 8)
 is the keyboard mouse's pointer half (§9.6.7): the direction table, the key
 test, the button, the right button, the step and paint, keypad 5's spend and
 the end-of-pass service - what only a machine with **no** pointer runs. Its
@@ -20067,7 +20068,9 @@ package that calls it needs Wire level 8 (§92.2's cell fence).
 
 QUERY and RAW are legal from every task. SET, HOLD, RELEASE and CANCEL
 require the UI task (task 0); a worker receives CF = 1, AX = 3 before any
-load or mutation. AX = 1 means an invalid verb, layout or owner, and AX = 2
+load or mutation. A worker's QUERY/RAW runs interrupt-masked from the
+controller's entry to its return, so the UI task's final RELEASE/SET cannot
+drop the module while the worker is inside its image. AX = 1 means an invalid verb, layout or owner, and AX = 2
 means unavailable module resources. QUERY and CANCEL never drop an
 activation still being established by another control call.
 
@@ -20121,7 +20124,9 @@ There is one translator with separately reviewed definitions for US,
 Spanish (Spain), Latin American Spanish and French legacy AZERTY. Modifier
 state belongs to the arriving scan, not to the time a later INT 16h read
 drains the ring. E0/E1 handling distinguishes right Alt from left Alt and
-the ISO extra key at scan 56h. Each layout defines Shift/Caps behavior,
+the ISO extra key at scan 56h. While the BIOS holds a Pause (BDA 40:18
+bit 3), a printable make passes untranslated and cancels a pending accent,
+so the ROM's own resume path ends the pause and discards the key. Each layout defines Shift/Caps behavior,
 AltGr/Ctrl+Alt, control-letter output and dead-key composition explicitly.
 
 `OSAPI_KEY_DOWN`, `OSAPI_KEY_MAP` and their make/break semantics remain
@@ -20133,10 +20138,13 @@ function keys, Num Lock/keypad behavior and Ctrl+Alt+Del remain usable.
 A dead accent waits for the next key. A supported pair emits its single
 encoded character; accent plus Space emits the literal accent. An
 unsupported printable pair emits the literal accent then the character,
-reserving both ring slots before publishing either. Repeating an accent
-and cancellation are pinned by the layout vectors. Focus/ownership and
-layout changes cancel pending composition. A full ring obeys §9.8's
-overrun policy without publishing half a two-character result.
+reserving both ring slots before publishing either. The composition table
+is one run per accent, so a miss scans that accent's pairs only. Repeating
+an accent and cancellation are pinned by the layout vectors.
+Focus/ownership and layout changes cancel pending composition. A full ring
+obeys §9.8's overrun policy without publishing half a two-character result:
+a pair with no room for its second word is dropped whole and announced with
+§9.8's beep, under the same per-burst cap.
 
 The XT IRQ1, AT INT 15h AH=4Fh and mega native paths adapt the same module
 contract. They add no second port-60h read on the 8042 path. DOS, WIN16 and

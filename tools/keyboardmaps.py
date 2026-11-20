@@ -90,10 +90,14 @@ def render():
                 lines.append("    dw " + ",".join(f"0x{x:04x}" for x in values[i:i + 8]))
         lines.append("    db " + ",".join(f"0x{x:02x}" for x in caps))
     # Independent Unicode composition rules, filtered to the declared encoding.
+    # One run per accent: a header (accent, pair count), then its (letter,
+    # result) pairs; dw 0 ends the table. A miss in the IRQ then scans one
+    # accent's run rather than every pair (SPEC.md 9.16.2).
     lines.append("klm_compose:")
     count = 0
     for accent, mark in (("´", "\u0301"), ("`", "\u0300"), ("^", "\u0302"),
                          ("¨", "\u0308"), ("~", "\u0303")):
+        pairs = []
         for letter in "aAeEiIoOuUyYnN":
             combined = unicodedata.normalize("NFC", letter + mark)
             if len(combined) != 1:
@@ -102,9 +106,13 @@ def render():
                 value = char(combined)
             except UnicodeEncodeError:
                 continue
-            lines.append(f"    db 0x{char(accent):02x},0x{ord(letter):02x},0x{value:02x}")
-            count += 1
-    lines += ["KLM_COMPOSE_N equ " + str(count), ""]
+            pairs.append(f"    db 0x{ord(letter):02x},0x{value:02x}")
+        # A zero header word is the end; the run's loop needs a count >= 1.
+        assert char(accent) and 0 < len(pairs) < 256, accent
+        lines.append(f"    db 0x{char(accent):02x},{len(pairs)}")
+        lines += pairs
+        count += len(pairs)
+    lines += ["    dw 0", "KLM_COMPOSE_N equ " + str(count), ""]
     return "\n".join(lines)
 
 
