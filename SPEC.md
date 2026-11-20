@@ -2758,7 +2758,7 @@ first.**
 |---|---|---:|
 | `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, `cp_toast`/`sc_m_say`, and the image's epilogue ladder | `MODS_SIZE` = 2,838 bytes, 6 sectors (with main's Color presets, at the `elendilon -> main` merge; kernel size pass 12 had it at 2,615, and 2,650 before) |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 12,502 in all (`MODC_SIZE`) |
-| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 159 bytes): BSS, as zeros at the file's end (§2.8.1) | 159 |
+| `.modcb` | BSS, as zeros at the file's end (§2.8.1): the Keyboard page's sample and pending pick, `cp_key_state` (26 bytes, §31.16), the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 164 bytes with the `KL` key), and the scratch tail `cps_scr` .. `modcb_end` (22 bytes, §2.8.3) | `MODC_BSS` = 212 on `kern_big` |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
 one image at one set of offsets, and the panel reaches the core with a near
@@ -74346,8 +74346,10 @@ number* as a keystroke. Measured, that is a field that takes the caret and then
 ignores every digit typed into it — no error, no diagnostic, and the caret
 still blinking to say the machine is listening.
 
-**A driver's page only**, and that is not a gap to be filled in later: a key
-that reached a static page would have nothing to do there.
+**A driver's page and the Keyboard page (§31.16) only**, on both kernels: a
+key that reached any other static page would have nothing to do there, so
+`modc_e_onkey` hands the selected `CP_IKEY` record's keys to `cp_key_key` and
+everything else to the driver's page (kern_big) or drops it.
 
 **It is in the image, beside `cp_item_click`, as `CPE_ONKEY`** — and it was
 resident for most of its life, as a size decision that has since expired. When
@@ -74356,8 +74358,10 @@ spent (paint, click, flush, tick), so a fifth doubled that table for *every*
 module, in `.bss` every machine carries, and forty-one resident bytes was the
 cheaper of the two. §2.8.1's per-module blocks retired the cap: an entry costs
 `CTRL.DRV`'s own four bytes, so the body moved and what stays resident is
-`cpf_cp_onkey`, a far call and a `ret` — **−32 resident bytes on `kern_big`**
-(`kern_small` has no key handler, §62.9.15). It does NOT call `mod_need`: a key
+`cpf_cp_onkey`, a far call and a `ret` — **−32 resident bytes on `kern_big`**.
+`kern_small` had no key handler (§62.9.15) until the Keyboard page's sample
+gave it one: `cp_tpl` names `cpf_cp_onkey` there too, with `CPE_ONKEY` in its
+own slot block. It does NOT call `mod_need`: a key
 reaches the panel only while its window is up, and the image is loaded before
 the window opens and dropped when it closes, so a load here could only ever be
 a floppy read on a keystroke — and a slot resting on `mod_gone` drops the key,
@@ -74749,6 +74753,11 @@ US QWERTY, Spanish (Spain), Latin American Spanish and French AZERTY.
 The selected ID is queried from the keyboard module. A changed choice is
 staged, then applied after the page returns. Load failure retains the prior
 choice and reports it. Selecting the current choice changes nothing.
+An extended sample byte (80h and up) first HOLDs the keyboard module, which
+may load it; a refused HOLD drops the byte and shows the same `Keyboard not
+loaded` toast. Nothing latches the refusal, since on `kern_mega` CTRL.DRV
+is a few bytes short of the `MOD_MAX_KB` claim kernel.asm asserts, so each
+later extended byte asks, and is answered, again.
 Only the previous and new selected glyphs are redrawn after activation.
 
 The sample caption is at (4,96), its frame is (2,108)–(217,121), and 24

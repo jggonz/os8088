@@ -283,8 +283,9 @@ section .text
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
 ; Content is CP_CW x CP_CH (318x132). The onkey word was 0 for the panel's
 ; whole life - it is mouse-only, every control on the five static pages being
-; a radio, a check box or a button - and it is non-zero on kern_big alone,
-; where SPEC.md 31.9.2 gave a DRIVER's page a typed field (SPEC.md 62.9.15).
+; a radio, a check box or a button - until SPEC.md 31.9.2 gave a DRIVER's page
+; a typed field (SPEC.md 62.9.15) on kern_big; the Keyboard page's sample
+; (SPEC.md 31.16) made it non-zero on both kernels.
 ; The callbacks are the RESIDENT `.cold` entries below, NEAR procs there:
 ; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
 cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_cls
@@ -3570,15 +3571,16 @@ cp_key_paint:
     cmp si, CPQ_NROW * 2
     jb .row
     call cp_key_ctls
-    call cp_lbl
+    call cp_blbl                ; the radios' glyphs leave their own pen
     dw cp_s_ktype, CP_PMX, 96
     lea ax, [di+2]
     lea cx, [di+217]
     lea bx, [bp+CPQ_SY1]
     lea dx, [bp+CPQ_SY2]
-    call KERNEL_SEG:cw_gfx_frame
+    call cp_penlive             ; a run clipped whole leaves the pen at its
+    call KERNEL_SEG:cw_gfx_frame    ; GROUND (font_run), so set it outright
     call cp_key_sample
-    call cp_lbl
+    call cp_blbl                ; ...and so does the sample's
     dw cp_s_ksave, CP_PMX, 122
     jmp kretm_si
 
@@ -3709,7 +3711,7 @@ cp_key_key:
     mov dh, 0xFF
     call COLD_SEG:kl_control_x
     pop ax
-    jc .out
+    jc cp_key_apply.failed      ; dropped, and said as a refused SET is
 .put:
     CSDO mov [CSEG bx+cp_key_text], al
     inc bl
@@ -7625,14 +7627,20 @@ cp_items:
 %ifdef OS88_DRIVERS             ; SPEC.md 31.14: the page is SYSTEM.CFG's, and
     CPITEM cp_s_fdd,   cp_fdd_paint,   cp_fdd_click,   cp_ret ; kern_small
 %endif                                                         ; reads none
+cp_items_key:
     CPITEM cp_s_key,   cp_key_paint,   cp_key_click,   cp_key_ctls
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
 %if CP_IVID >= 8 || CP_ITEMS > 16
 %error "ctrl: the hideable Display record must fit cp_hide; later records are always visible"
 %endif
-%if CP_IKEY != CP_ITEMS - 1
+%if (cp_items_key - cp_items) / CP_ISTRIDE != CP_IKEY
 %error "ctrl: Keyboard must append without renumbering existing page records"
+%endif
+%ifdef OS88_DRIVERS
+%if CP_IFDD != (cp_items_key - cp_items) / CP_ISTRIDE - 1
+%error "ctrl: CP_IFDD must name the Floppy record, just before Keyboard"
+%endif
 %endif
 %ifndef DOCK_OPT
 %if CP_ITEMS + 3 > (CP_CH - CP_I0Y) / CP_IROWH

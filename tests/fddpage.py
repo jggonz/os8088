@@ -245,7 +245,8 @@ def main(argv=None):
 
         # the page's RECORD. cp_items is in CTRL.DRV's image now (kernel
         # size pass 8), so it is the kernel's own equate rather than a walk of
-        # the table - ctrl.inc asserts CP_IFDD is the Floppy row at build time
+        # the table - ctrl.inc asserts at build time that CP_IFDD is the
+        # Floppy row, the record just before cp_items_key (Keyboard's)
         rec = [os88sym.equates()["CP_IFDD"]]
         f = os88flush.Flush(marty=m)
         mo = os88mouse.Mouse(marty=m)
