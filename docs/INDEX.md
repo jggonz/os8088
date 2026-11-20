@@ -574,6 +574,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 131 | Byteopoly — a vintage-computer trading game, written in C (`apps/byteopoly/`, `BYTEOPLY.O88`) |
 | 132 | 2BASIC — a BASIC interpreter and its resource editor (`apps/2basic/`, `2BASIC.O88`, `2BRES.O88`) |
 | 133 | The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`) |
+| 134 | Borat Teaches Typing (`apps/boratype/`) |
 
 ## docs/
 
