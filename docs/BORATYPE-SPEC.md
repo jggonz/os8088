@@ -46,6 +46,11 @@ awarded from completed runs or measured streak events, never from repaint.
 
 Use apps/breadxt/draw.inc and apps/cc/gk.inc (SPEC.md §130.6, §133), not
 private desktop video code. Compose opaque strips and commit through bx_out.
+The measured exception is a medium/full key's thin state indicator on a known
+flat face: existing native frame/hline and opaque font_run may update it
+directly under the window's armed clip/graphics ownership. Reserved badge
+columns and indicator bounds must not touch label or bevel pixels; full damage
+paint composes the identical pixels. Compact keys retain opaque bands.
 Cache and invalidate independent regions: title/navigation, portrait/caption,
 prompt/input, statistics, keyboard cells, footer. A keystroke never repaints
 the whole window. Unchanged timer passes skip cell/key scans before composing
