@@ -1,0 +1,120 @@
+# Borat Teaches Typing
+
+Binding package contract for BORATYPE.O88, SPEC.md §134. This describes the
+intended implementation; the checked plan and evidence distinguish what has
+been built and observed. The supplied build prompt and nine images define
+the product scope. No external publication is authorized by this task.
+
+## 1. Platform and ownership
+
+Native C, one translation unit, SmallerC → cc8086 → NASM → CC_PACKAGE.
+No kernel resident bytes or new API slots. The C restrictions in SPEC.md §73
+apply. A package instance owns one window and its session. Four local profiles
+share a bounded versioned store on the package volume's SYSTEM/APPDATA.
+Only one writer may own the store at a time; another instance must display
+its read-only state. UI callbacks own all state; paint is read-only, and no
+worker opens files. A first printable attempt starts lesson timing.
+
+## 2. Session and arithmetic
+
+English US QWERTY, printable ASCII 32–126. Correct printable attempts advance;
+wrong attempts leave the target. Controls are not mistakes. Backspace retracts
+only the current passage, resets streak, and never removes historical attempts.
+Counters A, K, E, net progress N and active OS ticks are explicit 16-bit words;
+A = K + E. Stop a run before any counter overflows. Subtraction of successive
+16-bit tick samples handles wrap; updates occur every OS tick. OS clock is
+1,193,182 / 65,536 Hz (SPEC.md §37), not an assumed 18 Hz integer clock.
+Accuracy is nearest integer 100*K/A. WPM is floor(12*N/active_seconds), spaces
+and punctuation included; no attempts/time displays a dash. Intermediate
+products use checked two-word arithmetic. Pauses exclude elapsed ticks.
+Finished statistics freeze exactly once. Challenges have a three-second ready
+countdown, then 60/180/300 active seconds and expire without keyboard input.
+Focus loss, manual pause or display transition makes a challenge unranked.
+
+24 authored lessons declare keys, introduced characters, instructions and
+drills. A complete run at ≥95% masters it; any lesson stays selectable.
+Practice uses its own reproducible PRNG and valid groups. Weak keys require
+20 samples, are ranked by error ratio, and report their samples. Records are
+separate for each duration and difficulty. Achievements are persistent bits,
+awarded from completed runs or measured streak events, never from repaint.
+
+## 3. Drawing and input
+
+Use apps/breadxt/draw.inc and apps/cc/gk.inc (SPEC.md §130.6, §133), not
+private desktop video code. Compose opaque strips and commit through bx_out.
+Cache and invalidate independent regions: title/navigation, portrait/caption,
+prompt/input, statistics, keyboard cells, footer. A keystroke never repaints
+the whole window. Layout derives from live content and display geometry.
+Color roles are navy/cobalt, cyan rules, yellow title/target, white text,
+green accepted, red mistake, and finger zones. Mono uses symbols/outlines.
+All keys include required punctuation; shifted characters identify their
+physical key and the opposite hand's Shift. Mouse keyboard clicks are hints,
+never scored characters. Letter shortcuts exist only outside active typing.
+
+Window fullscreen is SPEC.md §11.2's native latch. CGA four-color gameplay
+uses SPEC.md §53's exclusive bracket and FSXM_CGA320; its compact renderer
+is confined to that bracket, uses returned FSI geometry and VRAM segment,
+and returns through FSX. Desktop drawing is prohibited in a foreign mode.
+VESA uses the installed OS display driver and live dimensions, including
+800×600 and 1024×768 when advertised; there is no private VBE driver.
+F1 help, F2 lessons, F3 master mute, F4 pause, F6 fullscreen, Escape pause/menu.
+Fullscreen transitions preserve session position, profile and seed.
+Return to typing requires intentional resume; transition keys are not scored.
+
+## 4. Resources and budgets
+
+BORATYPE is eight characters, a legal 8.3 stem. All runtime assets are package
+parts or a selected local voice pack. Fonts reuse the committed WIN16 font
+strikes. Artwork masters, prompts and exact-size palette sprite source are
+committed; deterministic conversion is offline. Source PNG is never parsed
+by the guest. Resident code+data+BSS must fit §73's 63.5KB ceiling; split cold
+menu/result/file routines into an overlay when needed, never raise a budget.
+Initial allowances: engine and lesson data 18KB, UI and platform 26KB,
+sound/reaction code and data 8KB, BSS 10KB. Art part ≤64KB, audio part ≤16KB,
+drawing band 8KB (512 paragraphs), optional voice staging ≤32KB. Every claim
+is movable with a relocation callback, or explicitly pinned during transfer.
+The final evidence records actual costs; these are planning allowances.
+
+## 5. Audio and reactions
+
+Original menu, lesson and challenge loops (30–90 seconds), plus three
+stingers and nine or more effects, compiled with tools/os88gkmus.py.
+Reuse gkmus.inc's speaker/three-channel FM routing and priority leases.
+Independent music/effects/voice toggles; key ticks default off. Pause/focus
+loss silences music, exit releases every app-owned resource. No audio file
+read, decode, busy wait or blocking clip call in paint or input.
+
+At least 48 tagged original captions, at least 24 roasts; Gentle/Classic/
+Extra, Classic default. Three errors, <85% after 20 attempts, correction
+bursts, poor results, recovery and records are actual triggers. Last four
+captions cannot repeat immediately; spoken roasts ≥12 seconds apart. Jokes
+never change scoring. Slow jokes require baseline and elapsed-time evidence.
+Caption and portrait animation clocks are independent from scoring.
+
+Voice import is bounded and validated: IDs, event, priority, caption, mono
+unsigned 8-bit PCM rate and exact length. Existing Borat clips must actually
+be found and auditioned, with source and rights recorded. Restricted clips
+stay local, never in the package. Only established redistribution permission
+allows shipping. Guest playback must be nonblocking on supported PCM hardware;
+subtitles/speaker effects alone do not pass the voice story.
+
+## 6. Persistence
+
+Canonical little-endian fields, magic/version/length/checksum, no struct dumps
+or pointers. Four names ≤12 ASCII characters, 24 lesson results per profile,
+bounded per-key attempts/errors, achievements and 3×difficulty challenge
+records. Validate into a staging store before replacing live data. Corrupt,
+truncated or newer-version files preserve the live session. Save only at
+result/settings/profile boundaries; errors stay visible and play continues.
+Use alternating generations or validated temporary/backup replacement as
+supported by the filesystem; do not delete the last valid save first.
+
+## 7. Verification boundary
+
+Host harness exercises production engine, target-width overflow, independent
+score examples, lesson declarations, pause/wrap/deadline, deterministic
+practice, achievements, reactions, codec corruption and audio imports.
+Native validation must drive installed packages with os88ui, inspect captured
+screens, audition captured audio and measure XT cycles; host tests cannot
+substitute. The final pass runs affected soak rows together, then test-full
+alone and budget-check. Evidence marks pass/fail/blocked per real scenario.
