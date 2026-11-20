@@ -75,7 +75,7 @@ static const BTReaction bt_jokes[BT_MSGS] = {
 };
 static BTWord bta_now, bta_spoke, bta_lastkey, bta_idle, bta_caption_at;
 static BTWord bta_errorfx, bta_backmark, bta_samplemark, bta_voice_at;
-static BTByte bta_voice_have;
+static BTByte bta_voice_have, bta_welcome;
 static BTByte bta_recent[4], bta_recentpos, bta_pick, bta_have, bta_haderror;
 static BTByte bta_low, bta_finished, bta_focus, bta_on, bta_hold, bta_voice;
 static int bta_screen, bta_song, bta_stinger, bta_message;
@@ -186,13 +186,13 @@ void bt_audio_init(void)
     bta_now=0; bta_have=0; bta_lastkey=0; bta_idle=0;
     bta_recentpos=0; bta_pick=0; bta_message=-1; bta_screen=BT_S_HOME;
     bta_song=-1; bta_stinger=-1; bta_on=0; bta_focus=0; bta_hold=0;
-    bta_voice=0; bta_pack=0; bta_packstate=0; bta_voice_have=0;
+    bta_voice=0; bta_pack=0; bta_packstate=0; bta_voice_have=0; bta_welcome=1;
     bta_errorfx=65530u; bta_backmark=0; bta_samplemark=0;
     bta_low=0; bta_haderror=0; bta_finished=0;
     for(i=0;i<4;i++) bta_recent[i]=255;
     gkm_init(256,257);
     if(!bt_readonly) bt_audio_reload("BORAT.VPK");
-    bta_react(BT_R_WELCOME,1);
+    /* First focused tick supplies the real clock and live sound policy. */
 }
 static void bta_fx(int n) { if(bta_on && bta_focus && bt_store.effects) gkm_sfx(n); }
 void bt_audio_state(int screen)
@@ -257,6 +257,10 @@ void bt_audio_tick(BTWord now, int focused)
         bta_voice=0; bta_song=-1;
     }
     bta_on=on;
+    if(!on) bta_welcome=0;
+    else if(bta_focus && bta_welcome) {
+        bta_welcome=0; bta_react(BT_R_WELCOME,1);
+    }
     if(bta_voice) bta_voice=bt_vtick();
     if((!on || !bt_store.voice || !bta_focus) && bta_voice) {
         bt_vstop(); bta_voice=0;
@@ -301,5 +305,5 @@ void bt_audio_done(void)
 {
     bt_mhold(0); bta_hold=0; gkm_done(); bt_vstop(); bt_vset(0);
     if(bta_pack) { os88_mem_free(bta_pack); bta_pack=0; }
-    bta_voice=0; bta_on=0;
+    bta_voice=0; bta_on=0; bta_welcome=0;
 }

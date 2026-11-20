@@ -43,6 +43,22 @@ static void reset(void)
 int main(void)
 {
  int i,j,roasts=0,old,prior[4],f;
+ static BTSession before_welcome;
+ reset();
+ /* Automatic welcome uses actual first-focus ticks, never init's tick0.
+  * It cannot claim sound before focus and must leave every score byte alone. */
+ bt_audio_done();bt_audio_init();bta_pack=1;vplays=0;
+ memcpy(&before_welcome,&bt_session,sizeof(bt_session));
+ bt_audio_tick(500,0);assert(bta_welcome && !bta_have && vplays==0);
+ bt_audio_tick(600,1);assert(!bta_welcome && bta_spoke==600 && bta_caption_at==600);
+ assert(bta_lasttag==BT_R_WELCOME && vplays==1 && bta_voice_at==600);
+ assert(!memcmp(&before_welcome,&bt_session,sizeof(bt_session)));
+ bt_audio_tick(601,1);assert(vplays==1); /* exactly once */
+ bt_audio_done();bt_audio_init();bta_pack=1;vplays=0;bt_master_sound=0;
+ bt_audio_tick(700,1);assert(!bta_welcome && !bta_have && vplays==0);
+ bt_master_sound=1;bt_audio_tick(701,1);assert(vplays==0); /* mute cancelled */
+ bt_audio_done();bt_audio_init();bta_pack=1;vplays=0;bt_audio_done();
+ bt_audio_tick(800,1);assert(!bta_welcome && vplays==0); /* close cancelled */
  reset();
  for(i=0;i<BT_MSGS;i++) {
   assert(strlen(bt_jokes[i].text)<48);
