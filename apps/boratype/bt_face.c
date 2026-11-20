@@ -164,6 +164,12 @@ static int tf_shift(int c)
     int i;i=tf_keyid(c);if(i<0||c==32||c==tf_keys[i][0])return -1;
     return tf_keys[i][5]<=4?52:51;
 }
+int bt_key_base(int c)
+{int i;i=tf_keyid(c);return i<0?0:tf_keys[i][0];}
+const char *bt_key_finger(int c)
+{int i;i=tf_keyid(c);return i<0?"None":tf_fingers[tf_keys[i][5]];}
+int bt_key_shift(int c)
+{int i;i=tf_shift(c);return i<0?0:i==51?1:2;}
 static void tf_keyrefresh(void)
 {
     int c;c=tf_target();tf_ktarget=tf_keyid(c);tf_kshift=tf_shift(c);
