@@ -206,6 +206,7 @@ release acceptance. The associated reports and captures are build artifacts.
 | same CGA, precise breakpoint probe before row-helper optimization | event-to-VRAM898684cycles=188.296ms, flush222244cycles;100ms target failed |
 | CGA after native row/clear helpers (`ad573be52`) | event-to-VRAM637153cycles=133.499ms, flush218113cycles; full lesson/native restoration passed,100ms target still failed; current error/restoration captures inspected |
 | EGA bounded reboot diagnosis | perfect real beginner lesson, preference save, close/reopen, second writer refused, both RAM-written floppy exports independently read, fresh boot loaded identical whole profile and latest generation;80.29host seconds; captures inspected |
+| protected-mode Mega on actual86Box286 (`at286-port` backend) | protected mode asserted; normal native package, real wrong/correct input and F6 pause/restore passed;46.36host seconds; input/fullscreen captures inspected; no XT timing claim |
 
 The initial readonly-instance probe exposed a harness navigation fault: the
 full application covered the desktop drive icon. `drive_root` now raises an
