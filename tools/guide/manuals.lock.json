@@ -627,9 +627,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "adbf66f33",
-  "strings": "f1565744de501e24",
-  "why": "apps/install changed only in OS88VER.TXT (release 20261118's date and what-is-new lines); the page quotes neither, so it stands unchanged"
+  "stamped": "6f69783df",
+  "strings": "14f4489f09c1e084",
+  "why": "apps/install changed only in OS88VER.TXT (release 20261120's date and what-is-new lines); the page quotes neither, so it stands unchanged"
  },
  "INTRO_MID": {
   "sources": [],
