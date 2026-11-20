@@ -5,7 +5,7 @@
  * The native UI, timing, input rules, audio and profiles remain the same.
  * F6 returns through FSX; Escape opens/resumes the pause screen. */
 static BTByte bt_cga_fsi[OS88_FSI_SIZE];
-static BTByte bt_cga_font[768];
+static BTByte bt_cga_font[760];
 static unsigned bt_cga_seg, bt_cga_stride, bt_cga_bstep;
 static int bt_cga_exit, bt_cga_oldpose = -1;
 static char bt_cga_num[8];

@@ -98,7 +98,7 @@ _bt_copy_font:
     add si,bx
     mov es,dx
     mov di,_bt_cga_font
-    mov cx,768
+    mov cx,760
 .copy:
     mov al,[es:si]
     mov [di],al
@@ -171,7 +171,7 @@ bt_cga_cell:
     xor ah,ah
     cmp al,32
     jb .space
-    cmp al,127
+    cmp al,126
     jbe .glyph
 .space:
     mov al,32
