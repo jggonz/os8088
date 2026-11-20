@@ -54,7 +54,11 @@ paint composes the identical pixels. Compact keys retain opaque bands.
 Cache and invalidate independent regions: title/navigation, portrait/caption,
 prompt/input, statistics, keyboard cells, footer. A keystroke never repaints
 the whole window. Unchanged timer passes skip cell/key scans before composing
-any band. Input feedback precedes cosmetic portrait/caption work; cosmetic
+any band. A timer services timing/audio before optional drawing. Before an idle redraw,
+a non-consuming BIOS keyboard peek may defer that drawing so the OS can
+dispatch a waiting key. It never reads a key or changes scoring; all scored
+characters still come through the normal OS callback.
+Input feedback precedes cosmetic portrait/caption work; cosmetic
 updates coalesce to the newest expression and are bounded so they cannot hold
 the UI through a long animation. Full native damage paints remain complete. Layout derives from live content and display geometry.
 Color roles are navy/cobalt, cyan rules, yellow title/target, white text,
@@ -83,6 +87,8 @@ Return to typing requires intentional resume; transition keys are not scored.
 Native geometry changes also pause, including an OWNBG pure shrink that owes
 no resize/damage callback. The package compares live geometry at UI service
 boundaries and excludes the interval since its last serviced active tick.
+Focus loss uses that same conservative observed boundary so a delayed UI
+service cannot turn a covered/dragged challenge into a ranked deadline finish.
 Help, Settings and Records opened from a live or paused lesson return to its
 Pause screen. Returning from these views never silently starts a fresh run.
 
