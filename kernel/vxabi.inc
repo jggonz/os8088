@@ -11,13 +11,15 @@
 ; Drivers-page line and not a wrong pixel.
 ; =============================================================================
 
-VX_ABI_VER  equ 5               ; bump on ANY change to the contract below
+VX_ABI_VER  equ 6               ; bump on ANY change to the contract below
                                 ; (2: the S2 block pointers and selectors;
                                 ;  3: the VE class at attach, PICK and NEXT;
                                 ;  4: VX_BLITD, the package's depth blit;
                                 ;  5: the hook is the far call itself - the
                                 ;     selector's address IS the far return,
-                                ;     VX_CONT, VXB_KRET and VXB_NULL)
+                                ;     VX_CONT, VXB_KRET and VXB_NULL;
+                                ;  6: VXB_FONTLIM, the live glyph bounds
+                                ;     the CP850 face moves, SPEC.md 6.7)
 
 ; --- the verbs, past DRVV_* -------------------------------------------------
 ; DRVV_ATTACH (0) probes and chooses a mode and answers SI = the VXS_* table
@@ -123,12 +125,16 @@ VXB_CFGVE   equ 52              ; -> drv_cfg + CFG_VE: the class byte the
 VXB_KRET    equ 54              ; = vx_kret: a kernel `ret`, where a hook whose
                                 ;    selector has VX_CONT clear goes back to
 VXB_NULL    equ 56              ; = vx_null: what the detach points vx_ep at
-VXB_SIZE    equ 58
+VXB_FONTLIM equ 58              ; -> font_last (db), font_span (db): the LIVE
+                                ;    glyph bounds - 126/94 on the ROM face,
+                                ;    255/223 while KEYBOARD.DRV's CP850 table
+                                ;    is bound (SPEC.md 6.7)
+VXB_SIZE    equ 60
 
-; font_char's glyph range, which the run body paints a blank cell for: the
-; kernel's FONT_FIRST/FONT_LAST, asserted equal in vidext.inc
+; font_char's first glyph, which the run body indexes from; the LAST one is
+; live, through VXB_FONTLIM. The kernel's FONT_FIRST, asserted equal in
+; vidext.inc
 VX_FONT_FIRST equ 32
-VX_FONT_LAST  equ 126
 
 VXA_BIT     equ 0x10            ; VID_A_VESA: 1 << VID_VESA, VID_VESA being 4
 
