@@ -1912,7 +1912,8 @@ in the tree.
   of those zeros, and `MOD_H_IMG`, the module map and the directory size are
   all image + bss. `mod_need` claims the FILE through the paragraph door, to
   the granule (§50.2.1; the `MOD_MAX_KB` bound is taken on the bytes, before
-  the round-up), so the claim holds the bss with no figure of it in the
+  the round-up - 17KB since kern_mega's `CTRL.DRV` passed 16KB with
+  §26.8.6.1's `SX` writer, which moved the refusal and no claim), so the claim holds the bss with no figure of it in the
   kernel, and the read - or the ROM's copy (§2.10.5) - delivers it zeroed on
   every load. A packed module pays a handful of disk bytes for the zeros; a
   plain one (`kern_big`'s `CTRL.DRV`, §2.8.7) pays them in full. It replaced
@@ -34144,8 +34145,14 @@ onkey. Kind behavior:
   `[sch_coop]`): "pre-emptive" or "cooperative", and the adapter the
   boot probe found (§39.1): "VGA - 640x480 - 16 colors",
   "Hercules - 720x348 - mono", "CGA - 640x200 - mono" or, on kern_big,
-  "EGA - 640x350 - 16 colors" (a VESA desktop, kind 4, has no row yet:
-  §39.29.4). The geometry cannot
+  "EGA - 640x350 - 16 colors". **A VESA desktop (kind 4, §120) has no
+  row: its line is COMPOSED** from the mode VESA.DRV chose — the width and
+  height in `vid_vxrow` and the depth in `[vx_bpp]`, which the Display
+  page's label reads too (§120.6) — as "VESA - 1024x768 - 8-bit", staged in
+  `fm_hdrbuf` (borrowed: every painter of that buffer stages it afresh, and
+  this paint holds the gfx lock as they do). Until it was, the paint indexed
+  the four-row table with 4 and lettered whatever words followed it as a
+  string pointer: a garbled fourth line on every VESA machine. The geometry cannot
   be a constant in the third line any more, which is why it moved into a
   fourth; `app_about_center` re-measures every string, so unequal line
   lengths cost nothing. No onkey. Singleton (cap 1).
@@ -63183,7 +63190,7 @@ there would be nothing to keep one in.
 | off | len | field |
 |---|---|---|
 | 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
-| 1 | 1 | its byte of `[desk_zslot]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
+| 1 | 1 | its PLACED cell as a v2 byte (`0x40` + a cell below 63, else `0xFF`; the whole byte is in the `SX` block's `DZ`) — in the FILE only: CTRL.DRV writes it from `[desk_zpin]` and the boot reader puts it back (§26.8.6, §26.8.6.1) |
 | 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
 | 3 | 1 | NOT spare, whatever this table said until §110: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a Sticky App row (§110.2). The Sticky App mark is an EQUALITY, so neither of the other two values can be read as one |
 | 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
@@ -63354,17 +63361,26 @@ a shortcut, or an item the user PLACED (§26.9.5):
 ```
 +0     'O88CFG',0,0  dw 3            ; unchanged
 +10    records ... dw 0              ; unchanged - every reader stops here
++X     the SX block (26.8.6.1)       ; a v2 reader never looks here
 +T     count * SC_REC                ; the live rows, verbatim and compacted,
-                                     ;   each row's +1 its table byte
-+T'    DESK_SC0 bytes                ; zones 0..8's table bytes: a PLACED
-                                     ;   one's, 0xFF for everything else
-+end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 2
+                                     ;   each row's +1 its cell as a v2 byte
++T'    DESK_SC0 bytes                ; zones 0..8's cells as v2 bytes: a
+                                     ;   PLACED one's, 0xFF for one that flows
++end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 2, for ever
 ```
+
+A **v2 byte** is `0x40` over a cell 0..62, or `0xFF`. That is the byte the
+table itself was until §26.9.2 split it, and it is what every kernel since
+version 2 decodes.
 
 The footer is read from the END, so the reader never walks the records to
 find it. With nothing placed the file is byte for byte what it was before.
 Version 1 (no pins block, a two-byte column/row cell) is refused rather than
 read: it went to nobody.
+
+**`SC_VER` is frozen at 2** (§26.8.6.1). The cells §26.9.1 widened to a
+whole byte travel in an `SX` record that a version-2 reader never sees, so a
+file this kernel writes is a file every older shortcut-reading kernel reads.
 
 - **The writer is `CTRL.DRV`'s.** `sc_m_ser` composes settings, rows, pins
   and footer in a claim of its own, PINNED, for the length of the write.
@@ -63382,14 +63398,84 @@ read: it went to nobody.
   untouched for a file of `CFG_FBUF` or less, which is every file with no
   trailer. A bigger file is read whole into the shortcut claim; a valid
   trailer's rows move down to the claim's base with every string
-  force-terminated, and the pins block and each row's table byte go into
-  `[desk_zslot]` VERBATIM, because the file is untrusted only in what it can
-  break and §26.9.3's first reflow drops any cell this screen has not got.
+  force-terminated, and the pins block and each row's cell go into
+  `[desk_zpin]`, taken from the `SX` block's `DZ` record when the file has
+  one and decoded from the v2 bytes when it does not, and are copied into
+  `[desk_zslot]` as well, so every placed item starts SHOWN in its cell, as
+  the old byte's placed-and-not-gone state did. That way the first reflow
+  keeps it there if it is live, and a flowing drive earlier in index order
+  cannot take its cell first. Nothing else is validated: the file is
+  untrusted only in what it can break, and §26.9.3's reflow shows an item
+  whose cell this screen has not got somewhere else, keeping the cell.
 - **An OLDER kernel refuses a file that carries a trailer, and loses every
   setting.** Its `ovc_load` reads with `CX = CFG_FBUF` and `dskw_read`
   answers a larger file with `FERR_BIG` before any I/O. It cannot be fixed
   from this side, and it bites only on a downgrade, since the file sits
   beside `KERNEL.SYS` on the one boot volume.
+
+##### 26.8.6.1 Upgrading SYSTEM.CFG: the trailer only grows, and only where old readers do not look
+
+§51.5's settings already evolve safely. Every value is a record with a key, a
+`ver` and a `len`, an unknown key is skipped (rule 1), and a changed meaning
+is a new `ver` (rule 2). The trailer is positional and has a single version,
+so bumping it is the one change that costs a downgraded kernel something. A
+version 3 that held whole-byte cells was written once, on the branch that
+widened the cells, and never shipped. Under it an older kernel found no
+trailer and booted with its settings but without a single shortcut or
+placement. So the rule for the trailer is:
+
+1. **`SC_VER` stays 2.** The rows, the pins block and the footer keep the
+   layout and the encoding a version-2 kernel reads.
+2. **What a newer kernel adds goes in the `SX` block**, between the settings'
+   terminator and the rows. Every settings reader stops at the `dw 0`, and
+   the trailer reader works back from the END of the file to where the rows
+   start, so neither reads a byte of it:
+
+   ```
+   records: dw key  db ver  db len  data[len]   ...as §51.5's, one after another
+   tail:    dw length-of-the-records  dw 'SX'   ...ending where the rows start
+   ```
+
+   `ovl_sc_load`'s `.sx` finds the tail, walks the records, and skips any key
+   or `ver` it does not know by its length, as §51.5 rule 1 does. A length
+   that runs past either end is not a block, and the v2 bytes stand.
+3. **A value too wide for its v2 byte is written in both places.** The v2 byte
+   says what an older kernel can use, and the `SX` record carries the whole
+   value. Today there is one record:
+
+   | key | ver | len | data |
+   |---|---|---|---|
+   | `DZ` | 1 | `DESK_SC0` + count | every placed cell as a whole byte, `[desk_zpin]`'s: the table zones 0..8, then each row in file order |
+
+   The row's own byte holds that cell as a v2 byte: `0x40` + the cell below
+   63, and `0xFF` above it, which an older kernel places in its first free
+   cell. CTRL.DRV writes the block with every trailer, so the path runs on
+   every save and is not a special case for VESA.
+
+**What each pairing gets:**
+
+| writer → reader | shortcuts | placements |
+|---|---|---|
+| this kernel → this kernel | all | all, every cell up to 254 (`DZ`) |
+| this kernel → a v2 kernel | all | every cell below 63: all of VGA, EGA, CGA, Hercules and VESA 800×600. A cell past that flows to the reader's first free one |
+| a v2 kernel → this kernel | all | all it had (v2 bytes, decoded) |
+| this → v2 → this | all | the v2 kernel's save drops `SX` (§51.5 rule 1), so cells past 62 come back as it left them |
+
+The cost is no resident byte. The writer is CTRL.DRV's settings core (about
+74 bytes, which took `kern_mega`'s image to 16,430 and `MOD_MAX_KB` from 16
+to 17 - the owner's call, 2026-11-20: a refusal bound, so only that one
+claim grows, by a 512-byte granule while it is loaded), the reader is `.boot3`, and `.sx` copies the `DZ` record into `[desk_zold]`,
+which nothing reads before the first reflow. The file grows by
+8 + `DESK_SC0` + count bytes, 32 with fifteen shortcuts.
+
+**The gate is a frozen version-2 reader.** `tools/os88stik.py`'s `parse_cfg_v2`
+is the version-2 kernel's `ovl_sc_load` written once in Python and never
+edited. `tests/unit/t_stik.py` holds `os88stik.cfg`'s files to it: the
+shortcuts come back, each cell below 63 is that cell, a wider one is `0xFF`,
+and the settings head parses to its terminator. `tests/desksc.py` holds the
+SYSTEM.CFG the KERNEL writes to it as well, after a drag, so the writer cannot
+drift from the host's copy. **A change that makes a file it writes unreadable
+to a version-2 kernel fails both.**
 
 #### 26.8.7 What is resident, and what is CTRL.DRV's
 
@@ -63469,26 +63555,48 @@ of adapters.** Two rules make that true, and both were wrong once:
 | Hercules 720×348 | 5 | 7 | 35 |
 | EGA geometry 640×350 | 5 | 6 | 30 |
 | CGA 640×200 | 4 | 6 | 24 |
+| VESA 800×600 (§120) | 9 | 7 | 63 — exactly the old cap |
+| VESA 1024×768 | 12 | 10 | 120 |
 
 `[desk_ncell]` (kern_big) is how many cells this screen has: the columns from
 cell 0's left to the band's left edge, a left dock included, times
-`[desk_rows]`, capped at 63. `desk_rowcalc` computes it with the rows, so a
+`[desk_rows]`, capped at `DESK_CMAX`. `desk_rowcalc` computes it with the rows, so a
 display switch (§39.11.2) or a dock move re-shapes the grid and reflows it in
 the same call. The ITEM count does not follow the cell count: it stays at
 24 (§26.8.1's `SC_MAX` is 15), the CGA's cells. More cells means more places
 to put the same items.
 
+**`DESK_CMAX` is 255, and the build proves every screen fits under it.** A cell
+is a whole byte, `DSL_NONE` (`0xFF`) being "no cell", so 255 cells is what the
+tables can name. Until VESA it was 63: six bits of a byte that also carried
+a placed bit and a gone bit. A 1024×768 desktop has 120 cells, so the grid
+stopped after the 63rd and an item could be dropped only in the six or so
+columns nearest the right edge, about 600 px of a 1024 px screen.
+`DESK_FITS` (`desk.inc`) works out the cell count of a screen with no dock
+in the way and fails the build when it exceeds `DESK_CMAX`. It is applied to
+Hercules's 720×348 and, under `VID_EXT`, to `vxabi.inc`'s `VXG_WMAX` ×
+`VXG_HMAX`, the widest primary `VESA.DRV` will choose (§120.2.2, the
+driver's `VX_XMAX`/`VX_YMAX`). So **a larger VESA mode is a kernel build that
+checks the grid can hold it**: 1280×1024 (12 × 16 = 192 cells) fits, and
+1600×1200 (285) fails here, and then needs a 16-bit cell. The runtime cap
+stays as the guard behind that check. `kern_small` keeps 64, because its
+volumes take the first cells in order and never the 64th.
+
 #### 26.9.2 The table
 
-`[desk_zslot]` holds ONE BYTE PER ZONE, and that byte is the whole answer to
-"where is it, and is it shown":
+Two bytes per zone, in two adjacent tables, answer "where is it, and is it
+shown":
 
-| bits | | |
+| table | holds | `DSL_NONE` (`0xFF`) |
 |---|---|---|
-| 0..5 | `DSL_SLOT` | the cell, 0..`[desk_ncell]`−1 |
-| 6 | `DSL_PIN` | PLACED: the user put it there. A shortcut always is |
-| 7 | `DSL_GONE` | not shown. On a placed item it is a REMEMBERED cell — an unmounted drive's, or the cell an `OSAPI_DESK_ITEM` caller asked for — which it gets back when it is live and the cell is free |
-| `0xFF` | | nothing: no item, or a flowing one that is not live |
+| `[desk_zslot]` | the cell it is SHOWN in, 0..`[desk_ncell]`−1 | not shown |
+| `[desk_zpin]` (kern_big) | the cell it is PLACED in: the user put it there (a shortcut always is). While the item is not shown it is a REMEMBERED cell — an unmounted drive's, or the cell an `OSAPI_DESK_ITEM` caller asked for — which it gets back when it is live and the cell is free. Shown and placed, the two are the same cell | it FLOWS |
+
+A third, `[desk_zold]`, is `desk_reflow`'s scratch (§26.9.4). The tables were
+one byte, with the cell in bits 0..5, `DSL_PIN` at bit 6 and `DSL_GONE` at
+bit 7, and that is the 63-cell cap §26.9.1 retired. `desk_init` fills
+`[desk_zslot]` and `[desk_zpin]` with one `rep stosb`, because they are
+adjacent.
 
 The ZONE INDEX says what the item is: 0..`DVOL_MAX`−1 the volumes, `DESK_SVZ`
 = 8 the service item, `DESK_SC0` = 9 .. `DESK_NZ`−1 = 23 the shortcuts.
@@ -63500,8 +63608,11 @@ live, so it holds no cell and is never painted or hit. That test has to be
 resident, on the reflow's own path, which never touches a disk. `desk_owner` answers the inverse, which
 zone a cell is showing.
 
-**A cell no screen has is DSL_SLOT itself**, 63, which `[desk_ncell]` is
-capped below — so "nothing" needs no test of its own in the reflow's compares.
+**A cell no screen has is `DSL_NONE` itself**, which `[desk_ncell]` (at most
+`DESK_CMAX`, 255) never reaches, so in the reflow's compares "nothing" needs
+no test of its own: a flowing item's `[desk_zpin]` is past every screen's
+cells and goes to the first free one. `desk_cmark` passes over any cell at
+or past `DESK_CMAX`, so posting "no cell" is harmless.
 
 #### 26.9.3 The placement rule: `desk_reflow`
 
@@ -63511,20 +63622,41 @@ live — so it is the whole of "a volume came", "a volume went", "the Wire
 came", "an item was moved or removed" and "the screen changed shape". Two
 passes, and their order is the design:
 
-1. **Let go.** Every FLOWING item releases its cell (kept under `DSL_GONE`
-   for the repaint). A PLACED item that is no longer live goes from the
-   screen but REMEMBERS its cell. Any item in a cell this screen has not got
-   is forgotten.
+1. **Let go.** Every item releases its cell UNLESS it is placed, live, and
+   shown in its own `[desk_zpin]` cell. A FLOWING item always lets go. So
+   does a DISPLACED one, shown somewhere else because its cell was taken or
+   this screen has not got it, so that it tries its own cell again first. A
+   PLACED item that is no longer live goes from the screen and keeps
+   `[desk_zpin]`, so it REMEMBERS its cell.
 2. **Take.** Every live item without a cell, IN INDEX ORDER, takes one: a
-   placed one its remembered cell if that is free, otherwise — and every
-   flowing one — the first free cell. Index order is volumes, then the
-   service item, then shortcuts, so the Wire follows the drives whichever
-   driver loaded first, exactly as it did.
+   placed one its own cell if this screen has it and it is free, otherwise
+   — and every flowing one — the first free cell, and **the cell of its own
+   is kept**. Index order is volumes, then the service item, then shortcuts,
+   so the Wire follows the drives whichever driver loaded first, exactly as
+   it did. A shortcut with no cell of its own (a wish of `0xFF`) is placed
+   wherever it lands.
+
+**`[desk_zpin]` is never forgotten by the reflow.** It was: an item in a cell
+the screen had not got lost its placement, and a placed item whose cell was
+taken became a flowing one. With 63 cells on every screen that cost little.
+With VESA it cost every placement past the VGA's 42 cells on every boot,
+because kmain runs the first pass (`[desk_ready]`, below) on the boot's VGA
+grid and `vx_boot_x` switches the desktop to 1024×768 only after it. A drive
+dragged to the left of a VESA desktop came back in the right-hand column.
+Now that item is shown in the first free cell of the small grid and goes back
+to its own cell in the reflow `vid_switch`'s `desk_rowcalc` runs. A trip
+through the Display page to a smaller adapter and back keeps the layout for
+the same reason. Only the user (a drag, a remove) and `OSAPI_DESK_ITEM`
+write `[desk_zpin]`, and the boot reader seeds it from SYSTEM.CFG. Two items
+whose own cells are the same (a drive dragged elsewhere while unmounted,
+then a shortcut dropped into its cell) settle without flapping. Pass 1 keeps
+whichever one is shown there, the other takes the same first free cell on
+every pass, and it goes back once the cell is free.
 
 So the plan's D2 — *gapless, by re-adding every unplaced drive on any
 change* — costs no knowledge of what changed: an unplaced item is a "drive"
 to the reflow whatever it is. **A WISH IS A REMEMBERED CELL**: `OSAPI_DESK_ITEM`
-writes the asked-for cell as `DSL_PIN | DSL_GONE | cell` and pass 2 grants it
+writes the asked-for cell into `[desk_zpin]`, not shown, and pass 2 grants it
 if it can — "the slot you ask for, or the first available" is this routine
 and nothing new.
 
@@ -63547,8 +63679,13 @@ answer written down, and it needs neither `desk_owner` nor `[desk_ready]`.
 #### 26.9.4 What a change repaints
 
 `desk_reflow` posts every cell it CHANGED — the one an item left and the one
-it took — through `desk_cmark`, which sets the cell's bit in the 64-bit
-`[desk_cdirty]` and `[desk_zdirty]`, and posts `ui_task`. Nothing else is
+it took — through `desk_cmark`, which sets the cell's bit in
+`[desk_cdirty]` (`DESK_CMAX` bits, 32 bytes on kern_big) and
+`[desk_zdirty]`, and posts `ui_task`. It is a DIFF: pass 1 copies every
+`[desk_zslot]` into `[desk_zold]`, and pass 2 posts a zone's old and new cell
+only when they differ, so an item that went nowhere costs nothing.
+`desk_zones_paint` steps over a clean `[desk_cdirty]` byte eight cells at a
+time, so 255 cells cost it 32 compares when only one is dirty. Nothing else is
 needed to repaint a mount, an unmount, a driver attaching, a drag or a
 remove. `desk_zones_paint` runs `wm_paint_dmg` (§11.91) once per dirty cell:
 the desktop dither under it, any item now in it, and only the windows that
@@ -74758,8 +74895,9 @@ choice and reports it. Selecting the current choice changes nothing.
 An extended sample byte (80h and up) first HOLDs the keyboard module, which
 may load it; a refused HOLD drops the byte and shows the same `Keyboard not
 loaded` toast. Nothing latches the refusal, since on `kern_mega` CTRL.DRV
-is a few bytes short of the `MOD_MAX_KB` claim kernel.asm asserts, so each
-later extended byte asks, and is answered, again.
+was a few bytes short of the `MOD_MAX_KB` claim kernel.asm asserts when this
+was written (the bound is 17KB since §26.8.6.1), so each later extended byte
+asks, and is answered, again.
 Only the previous and new selected glyphs are redrawn after activation.
 
 The sample caption is at (4,96), its frame is (2,108)–(217,121), and 24
@@ -143560,8 +143698,8 @@ therefore refused rather than reduced, and the refusal lives in `thm_set` —
 the one routine both callers go through — rather than at the callers.
 
 **The test is the PRIMARY's kind mapped to a depth, and NOT `[vid_mono]`.**
-`VID_VGA` and `VID_EGA` are the two four-plane kinds and qualify; `VID_HERC`
-and `VID_CGA` are 1bpp and are refused. It was `cmp [vid_kind], VID_VGA` for
+`VID_VGA` and `VID_EGA` are the two four-plane kinds and qualify, as does
+`VID_VESA` (§120); `VID_HERC` and `VID_CGA` are 1bpp and are refused. It was `cmp [vid_kind], VID_VGA` for
 as long as VGA was the only colour adapter, where the identity and the
 capability were the same fact; `VID_EGA` (§39.24) is a colour adapter that is
 not a VGA, so the identity test refused Color on the one machine class this
@@ -143576,6 +143714,17 @@ while the same panel on the VGA accepted it. `[vid_kind]` is the primary's and
 `vid_ctx_act` never moves it (§39.12), so `cp_thm_colgrey` reads the same byte
 as `thm_set` and the greying and the refusal cannot disagree — with each
 other, or with which monitor the panel happens to be on.
+
+**`cp_thm_colgrey` is `thm_set`'s own arithmetic, not a list of kinds.** Both
+take `[vid_kind]` − 1 and compare it unsigned against 2, which is below for
+`VID_HERC` and `VID_CGA` (the 1bpp kinds) and not below for every other kind.
+`VID_VESA` (§120) is 8 or 16 bits deep and draws the same 16-colour desktop
+through its DAC (§120.1), so it qualifies. The predicate used to name `VID_VGA`
+and `VID_EGA`, and when kind 4 arrived `thm_set` accepted Color on a VESA
+desktop while the Theme page greyed the row and refused the click: the two
+had drifted apart, which is exactly what §47 rule 1 forbids. A kind added
+after VESA is colour by default to both of them, so a new 1bpp kind has to
+be numbered below `VID_EGA` or change the ONE compare in both places.
 
 - The Control Panel's row is **greyed** on a 1bpp machine (§47 rule 3: grey a
   *fact*), and `cp_thm_colgrey` is the single predicate behind the greying,

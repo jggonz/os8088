@@ -230,10 +230,8 @@ _MIRROR = {
     # twelve-glyph caption wide
     "DESK_CW": ("kernel/desk.inc", {"big": 96, "small": 32}),
     "DESK_PX": ("kernel/desk.inc", {"big": 102, "small": 44}),
-    "DSL_SLOT": ("kernel/desk.inc", 0x3F),
-    "DSL_PIN": ("kernel/desk.inc", 0x40),   # a placed item: tools/os88pmcfg.py
-                                            # and os88deskcfg.py write it
-    "DSL_GONE": ("kernel/desk.inc", 0x80),
+    # desk_zslot / desk_zpin: one whole byte, the cell, or DSL_NONE (26.9.2)
+    "DSL_NONE": ("kernel/desk.inc", 0xFF),
     # kernel/desksc.inc - one LINK row, which is OSAPI_DESK_ITEM's record too
     "SC_REC": ("kernel/desksc.inc", {"big": 128}),   # OS88_SHORTCUTS: big only
     # ...and the rows the table never exceeds - tests/desksc.py's and
@@ -1040,7 +1038,7 @@ def drive_ordinal(m, letter="B", sym=None):
 
     NOT the drive number, and since SPEC.md 26.9 not a position you can count
     either: every desktop item - volume, service item, shortcut - is a zone
-    with one byte of `desk_zslot` naming its cell, and a drive packs round
+    with one byte of `desk_zslot` naming the cell it is shown in, and a drive packs round
     whatever is placed in the grid. So the table is read, which also turns
     "no window opened" into "B: has no cell", the difference between a test
     that fails and a test that says why. The name stays for its callers.
@@ -1058,9 +1056,7 @@ def drive_ordinal(m, letter="B", sym=None):
     if not word(m, "desk_rows", sym):
         return None
     v = m.read(_sym(m, sym)("desk_zslot") + want, 1)[0]
-    if v >= DSL_GONE:
-        return None
-    return v & DSL_SLOT
+    return None if v == DSL_NONE else v
 
 
 def drive_xy(m, ordinal, sym=None):

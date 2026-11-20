@@ -55,6 +55,7 @@ import os88ui      # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88fat     # noqa: E402
 import os88marty   # noqa: E402
+import os88stik    # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 SC_REC = geom.SC_REC
@@ -62,7 +63,7 @@ SC_MAX = 15
 DESK_SC0 = 9                            # 8 volumes and the service item
 DESK_CW, DESK_PX, DESK_ZW = geom.DESK_CW, geom.DESK_PX, geom.DESK_ZW
 SC_PICX = (DESK_CW - DESK_ZW) // 2 + DESK_ZW - 16
-DSL_SLOT, DSL_PIN, DSL_GONE = 0x3F, 0x40, 0x80
+DSL_NONE = geom.DSL_NONE                # no cell (SPEC.md 26.9.2)
 DESK_ZY0 = 32
 FCP_NONE = 0
 
@@ -177,9 +178,15 @@ def cell_mid(ui, cell):
 
 
 def zslot(ui, zone):
-    """Zone `zone`'s byte of the one table: its cell, or None if not shown."""
+    """Zone `zone`'s SHOWN cell, or None if it is not shown."""
     v = ui.m.read(ui._S("desk_zslot") + zone, 1)[0]
-    return None if v >= DSL_GONE else v & DSL_SLOT
+    return None if v == DSL_NONE else v
+
+
+def zpin(ui, zone):
+    """Zone `zone`'s PLACED cell, or None if it flows (SPEC.md 26.9.2)."""
+    v = ui.m.read(ui._S("desk_zpin") + zone, 1)[0]
+    return None if v == DSL_NONE else v
 
 
 def saved(ui):
@@ -262,9 +269,9 @@ def main():
         check(cstr(r0[49:62]) == "CALCULATOR",
               "the header-name caption (%r)" % cstr(r0[49:62]))
         cell = zslot(ui, DESK_SC0)
-        check(cell == far, "the cell nearest the drop (%r, want %d), PLACED "
-              "(%#x)" % (cell, far, m.read(ui._S("desk_zslot") + DESK_SC0,
-                                            1)[0]))
+        check(cell == far and zpin(ui, DESK_SC0) == far,
+              "the cell nearest the drop (%r, want %d), PLACED (%r)"
+              % (cell, far, zpin(ui, DESK_SC0)))
         cx, cy = cell_xy(ui, cell)
         ui.mo.to(cx + DESK_PX + DESK_CW, cy)    # the arrow is drawn INTO the
         ui.still()                        # framebuffer: off the badge first
@@ -286,7 +293,21 @@ def main():
         cnt, frows = trailer(after)
         check(cnt == 1, "the trailer's count is 1 (%d, file %d bytes)"
               % (cnt, len(after)))
-        check(frows and frows[0] == r0, "the row is the claim's, verbatim")
+        cell = zpin(ui, DESK_SC0)
+        check(frows and frows[0][:1] + frows[0][2:] == r0[:1] + r0[2:]
+              and frows[0][1] == os88stik.v2_cell(cell),
+              "the row is the claim's, verbatim, its +1 the cell as a v2 "
+              "byte (%r)" % (frows[0][1] if frows else None,))
+        # SPEC.md 26.8.6.1: what a VERSION-2 kernel makes of the file this
+        # one wrote - the frozen reader - and what this kernel makes of it
+        old, new = os88stik.parse_cfg_v2(after), os88stik.parse_cfg(after)
+        check(old["trailer"] and len(old["rows"]) == 1
+              and old["rows"][0] is not None
+              and os88stik.settings_end(old["head"]) is not None,
+              "a version-2 kernel reads the trailer, the row and the settings")
+        check(new["dz"] and new["rows"][0]["slot"] == cell,
+              "...and this one reads the whole-byte cell out of 'DZ' (%r)"
+              % (new["rows"][0]["slot"] if new["rows"] else None,))
         check(after[:8] == b"O88CFG\0\0",
               "the settings head is SYSTEM.CFG's own container")
 
@@ -513,15 +534,17 @@ def main():
         fresh(ui)
         ui.mo.drag(*cell_mid(ui, 0), tx, ty)
         saved(ui)
-        av = m.read(ui._S("desk_zslot"), 1)[0]
-        check(av == DSL_PIN | 3, "A: is PLACED in cell 3 (%#x)" % av)
+        av = (zslot(ui, 0), zpin(ui, 0))
+        check(av == (3, 3), "A: is SHOWN and PLACED in cell 3 (%r)" % (av,))
         check(zslot(ui, 1) == 0, "B: packed up into cell 0 (%r)"
               % zslot(ui, 1))
         cnt, _ = trailer(live_cfg(m, tmp))
         data = live_cfg(m, tmp)
-        check(data[-4:-2] == b"SC" and data[-4 - DESK_SC0] == DSL_PIN | 3,
-              "SYSTEM.CFG keeps A:'s cell with no shortcut at all (%r)"
-              % data[-4 - DESK_SC0:])
+        check(data[-4:-2] == b"SC"
+              and data[-4 - DESK_SC0] == os88stik.v2_cell(3)
+              and os88stik.parse_cfg(data)["pins"][0] == 3,
+              "SYSTEM.CFG keeps A:'s cell with no shortcut at all, as a v2 "
+              "byte and in 'DZ' (%r)" % data[-4 - DESK_SC0:])
         if shots:
             ui.settle()
             shot(m, os.path.join(shots, "l_drive_moved.png"))

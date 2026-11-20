@@ -102,8 +102,10 @@ VM_SIZE     equ 16
 VX_NMODES   equ 16              ; the most this image offers
 VX_LISTMAX  equ 64              ; the most mode numbers it walks
 
-VX_XMAX     equ 1024            ; the geometry it accepts (SPEC.md 120.2.2)
-VX_YMAX     equ 768
+VX_XMAX     equ VXG_WMAX        ; the geometry it accepts (SPEC.md 120.2.2):
+VX_YMAX     equ VXG_HMAX        ; the widest is vxabi.inc's, because the
+                                ; kernel sizes for it (the menu bar's cells,
+                                ; the desktop grid's DESK_CMAX)
 VX_XMIN     equ 640
 VX_YMIN     equ 400
 VX_BPSLMAX  equ 4096

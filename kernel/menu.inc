@@ -188,9 +188,9 @@ MENU_TITLE_PAD equ 16           ; per-title cell padding (8px each side)
 MENU_TXT_X0 equ 32              ; the menus segment's left edge (8-aligned,
                                 ; and clear of MENU_SYS_XR = 29)
 %ifdef VID_EXT
-MENU_BCMAX  equ (1024 - 8 - MENU_TXT_X0) / 8    ; cells on the bar, worst
+MENU_BCMAX  equ (VXG_WMAX - 8 - MENU_TXT_X0) / 8; cells on the bar, worst
                                 ; case: VESA.DRV's widest primary is 1024
-                                ; (SPEC.md 120.2.2, VX_XMAX), so 123 cells.
+                                ; (SPEC.md 120.2.2, VXG_WMAX), so 123 cells.
                                 ; IT WAS 720's 85 HERE TOO, and a 1024 bar's
                                 ; clock field starts at cell 98: every
                                 ; composition wrote the clock, its padding and

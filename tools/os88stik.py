@@ -35,7 +35,9 @@ import sys
 
 # --- SPEC.md 26.8.1 / 26.8.6 / 110.2 -----------------------------------------
 SC_REC = 128
-SC_VER = 2
+SC_VER = 2                      # FROZEN (SPEC.md 26.8.6.1): what is new
+                                # rides in the SX block a v2 reader skips
+SC_DZVER = 1                    # 'DZ': every placed cell as a whole byte
 SC_MAX = 15
 SC_R_VOL = 0
 SC_R_SLOT = 1
@@ -50,11 +52,13 @@ SC_R_BODY = 64
 STIK_MARK = 0x44                 # 'D'
 DESK_SC0 = 9                    # the pins block: zones 0..8
 DVOL_MAX = 8
-DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F
+DSL_NONE = 0xFF                 # desk_zslot / desk_zpin: no cell (26.9.2)
+DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F  # a v2 trailer's cell byte
+V2MAX = 63                      # ...which holds a cell below this, or 0xFF
 CFG_SIG = b"O88CFG\0\0"
 CFG_GEN_V = 3
 CFG_REC0 = 10
-CFG_FBUF = 159                  # SPEC.md 2.8.7: a file this size or less
+CFG_FBUF = 164                  # SPEC.md 2.8.7: a file this size or less
                                 # carries no trailer the boot will read.
                                 # kern_big's - the only kernel that reads a
                                 # trailer - and DERIVED there (driver.inc), so
@@ -63,7 +67,11 @@ CFG_FBUF = 159                  # SPEC.md 2.8.7: a file this size or less
                                 # it: it was 131 until #248's two pin keys,
                                 # and 152 until #249's 'TP' theme preset,
                                 # and 163 until SPEC.md 120.2.3's class byte
-                                # grew the 'VM' record by one
+                                # grew the 'VM' record by one - and 159, after
+                                # later size passes, until #396's 'KL'
+                                # keyboard layout key: every Sticky App
+                                # fixture was then one byte too short to
+                                # carry a trailer, and five rows failed
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 
 # --- SPEC.md 110.5 ------------------------------------------------------------
@@ -328,9 +336,26 @@ def settings_head(records=b""):
     return CFG_SIG + struct.pack("<H", CFG_GEN_V) + records + b"\0\0"
 
 
-def cfg(rows=(), pins=None, head=None):
+def v2_cell(cell):
+    """A whole-byte cell as the trailer's v2 byte (CTRL.DRV's .v2): the
+    placed bit over a cell below V2MAX, else 0xFF - which a v2 kernel flows."""
+    return DSL_PIN | cell if cell < V2MAX else DSL_NONE
+
+
+def sx_block(cells):
+    """The SX block (SPEC.md 26.8.6.1) holding one 'DZ' record: `cells` is
+    every placed cell as a whole byte, the DESK_SC0 table zones then each
+    row's, in file order."""
+    rec = b"DZ" + bytes([SC_DZVER, len(cells)]) + bytes(cells)
+    return rec + struct.pack("<H", len(rec)) + b"SX"
+
+
+def cfg(rows=(), pins=None, head=None, cells=None):
     """A whole SYSTEM.CFG: the settings head, then the trailer when there is
-    anything to keep (SPEC.md 26.8.6)."""
+    anything to keep (SPEC.md 26.8.6). `pins` and each row's +1 are the v2
+    bytes as given; `cells` - DESK_SC0 + len(rows) whole-byte cells - adds
+    the SX block CTRL.DRV writes with them (26.8.6.1). Without it the file is
+    one a version-2 kernel wrote."""
     head = settings_head() if head is None else head
     rows = list(rows)
     if len(rows) > SC_MAX:
@@ -338,9 +363,14 @@ def cfg(rows=(), pins=None, head=None):
     pins = bytes([0xFF] * DESK_SC0) if pins is None else bytes(pins)
     if len(pins) != DESK_SC0:
         raise DiaError("the pins block is %d bytes" % DESK_SC0)
-    if not rows and all(b == 0xFF for b in pins):
+    if not rows and all(b == 0xFF for b in pins) and cells is None:
         return head
-    tail = b"".join(rows) + pins + b"SC" + bytes([SC_VER, len(rows)])
+    sx = b""
+    if cells is not None:
+        if len(cells) != DESK_SC0 + len(rows):
+            raise DiaError("'DZ' holds DESK_SC0 + one cell a row")
+        sx = sx_block(cells)
+    tail = sx + b"".join(rows) + pins + b"SC" + bytes([SC_VER, len(rows)])
     # A file of CFG_FBUF or less is never read for a trailer (ovl_sc_load's
     # first compare). The kernel's own writer cannot make one - it rewrites
     # EVERY key, so its head alone is CFG_FBUF (SPEC.md 26.8.6) - but a
@@ -367,22 +397,33 @@ def parse_row(r):
     }
 
 
-def parse_cfg(data):
-    """SYSTEM.CFG as the boot reader sees it. Answers a dict: `head` (bytes),
-    `rows` (a list of parse_row, FREE rows - the kernel's refusals - kept as
-    None), `pins` and `trailer` (False when there is none the boot reads).
-    Raises DiaError only for a file the settings reader itself refuses."""
+def settings_end(data):
+    """Where SYSTEM.CFG's settings records end - just past the `dw 0` - as
+    the settings reader walks them (SPEC.md 51.5), or None when a record
+    runs past the file first."""
+    i = CFG_REC0
+    while i + 2 <= len(data):
+        if data[i] == 0 and data[i + 1] == 0:
+            return i + 2
+        if i + 4 > len(data):
+            return None
+        i += 4 + data[i + 3]
+    return None
+
+
+def parse_cfg_v2(data):
+    """SYSTEM.CFG as a VERSION-2 kernel's ovl_sc_load reads it - FROZEN: the
+    reader every kernel since SC_VER 2 carries, written once and never
+    edited, so tests/unit/t_stik.py and tests/desksc.py can hold whatever is
+    written now to what an older kernel will make of it (SPEC.md 26.8.6.1).
+    Answers `head`, `rows` (raw rows; FREE ones None), `pins` (the raw v2
+    bytes) and `trailer`."""
     data = bytes(data)
-    if len(data) < CFG_REC0 or data[:8] != CFG_SIG:
-        raise DiaError("not a SYSTEM.CFG: no O88CFG signature")
-    if struct.unpack_from("<H", data, 8)[0] != CFG_GEN_V:
-        raise DiaError("SYSTEM.CFG generation %d, not %d"
-                       % (struct.unpack_from("<H", data, 8)[0], CFG_GEN_V))
     none = {"head": data, "rows": [], "pins": None, "trailer": False}
     if len(data) <= CFG_FBUF or len(data) >= CFG_MAXFILE:
         return none
     end = len(data) - 4 - DESK_SC0
-    if end < 0 or data[-4:-2] != b"SC" or data[-2] != SC_VER:
+    if end < 0 or data[-4:-2] != b"SC" or data[-2] != 2:
         return none
     n = data[-1]
     if n > SC_MAX:
@@ -393,13 +434,59 @@ def parse_cfg(data):
     rows = []
     for i in range(n):
         r = data[start + i * SC_REC:start + (i + 1) * SC_REC]
-        # ovl_sc_load: a kind above 2 or a volume past DVOL_MAX is a FREE row
-        if r[SC_R_KIND] > 2 or r[SC_R_VOL] >= DVOL_MAX:
-            rows.append(None)
-        else:
-            rows.append(parse_row(r))
+        rows.append(None if r[SC_R_KIND] > 2 or r[SC_R_VOL] >= DVOL_MAX
+                    else r)
     return {"head": data[:start], "rows": rows,
             "pins": list(data[end:end + DESK_SC0]), "trailer": True}
+
+
+def _v2_decode(b):
+    return b if b == DSL_NONE else b & DSL_SLOT
+
+
+def parse_cfg(data):
+    """SYSTEM.CFG as THIS kernel's boot reader sees it. Answers a dict:
+    `head` (bytes, up to the SX block when there is one), `rows` (a list of
+    parse_row whose "slot" is the whole-byte cell; FREE rows - the kernel's
+    refusals - kept as None), `pins` (whole-byte cells), `dz` (an SX block's
+    'DZ' supplied them) and `trailer` (False when there is none the boot
+    reads). Raises DiaError only for a file the settings reader refuses."""
+    data = bytes(data)
+    if len(data) < CFG_REC0 or data[:8] != CFG_SIG:
+        raise DiaError("not a SYSTEM.CFG: no O88CFG signature")
+    if struct.unpack_from("<H", data, 8)[0] != CFG_GEN_V:
+        raise DiaError("SYSTEM.CFG generation %d, not %d"
+                       % (struct.unpack_from("<H", data, 8)[0], CFG_GEN_V))
+    v2 = parse_cfg_v2(data)
+    if not v2["trailer"]:
+        return {"head": data, "rows": [], "pins": None, "trailer": False,
+                "dz": False}
+    n = len(v2["rows"])
+    start = len(v2["head"])
+    head, cells = v2["head"], None
+    # ovl_sc_load's .sx: the tail ends where the rows start
+    if data[start - 2:start] == b"SX":
+        ln = struct.unpack_from("<H", data, start - 4)[0]
+        lo, hi = start - 4 - ln, start - 4
+        if lo >= CFG_REC0 + 2:
+            head, i = data[:lo], lo
+            while i + 4 <= hi and i + 4 + data[i + 3] <= hi:
+                if (data[i:i + 2] == b"DZ" and data[i + 2] == SC_DZVER
+                        and data[i + 3] == DESK_SC0 + n):
+                    cells = list(data[i + 4:i + 4 + DESK_SC0 + n])
+                    break
+                i += 4 + data[i + 3]
+    rows = []
+    for k, r in enumerate(v2["rows"]):
+        if r is None:
+            rows.append(None)
+            continue
+        p = parse_row(r)
+        p["slot"] = cells[DESK_SC0 + k] if cells else _v2_decode(p["slot"])
+        rows.append(p)
+    pins = cells[:DESK_SC0] if cells else [_v2_decode(b) for b in v2["pins"]]
+    return {"head": head, "rows": rows, "pins": pins, "trailer": True,
+            "dz": cells is not None}
 
 
 def stik_rows(data):
@@ -914,6 +1001,37 @@ def selfcheck():
     ok(p["head"][:len(settings_head())] == settings_head(),
        "the settings head untouched")
     ok(p["pins"] == [0xFF] * DESK_SC0, "nine pins, none placed")
+    ok(not p["dz"] and p["rows"][0]["slot"] == 3,
+       "with no SX block, the v2 placed-bit byte reads back as cell 3")
+
+    # SPEC.md 26.8.6.1: the SX block - whole-byte cells for this kernel,
+    # and the v2 bytes a version-2 kernel reads, in the same file
+    cells = [0xFF] * DESK_SC0 + [70, 0xFF]
+    cells[0] = 114                      # A: placed past the v2 byte's reach
+    cells[1] = 5
+    s70 = row(0, "SYSTEM\\TASKMGR.O88", "TASKMGR", kind=1, mark=0x5C,
+              slot=v2_cell(70))
+    pins = [v2_cell(c) for c in cells[:DESK_SC0]]
+    fx = cfg([s70, r], pins=pins, cells=cells)
+    px = parse_cfg(fx)
+    ok(px["dz"] and px["pins"][:2] == [114, 5]
+       and px["rows"][0]["slot"] == 70 and px["rows"][1]["slot"] == 0xFF,
+       "this kernel reads every whole-byte cell out of 'DZ'")
+    ok(settings_end(px["head"]) == len(settings_head()),
+       "...and the head it hands the settings reader ends at the terminator")
+    o = parse_cfg_v2(fx)
+    ok(o["trailer"] and len(o["rows"]) == 2 and o["rows"][1][SC_R_STIK]
+       == STIK_MARK, "a VERSION-2 reader finds the trailer and both rows")
+    ok(o["pins"][:2] == [0xFF, DSL_PIN | 5]
+       and o["rows"][0][SC_R_SLOT] == 0xFF,
+       "...a cell below 63 as its v2 byte, a wider one as 0xFF (it flows)")
+    ok(settings_end(o["head"]) == len(settings_head()),
+       "...and its settings walk stops at the terminator, before the SX block")
+    bad = bytearray(fx)
+    i = len(fx) - 4 - DESK_SC0 - 2 * SC_REC - 4
+    bad[i:i + 2] = struct.pack("<H", 4000)    # a length past the file's start
+    ok(parse_cfg(bytes(bad))["trailer"] and not parse_cfg(bytes(bad))["dz"],
+       "an SX block that does not hold together: the v2 bytes stand")
     ok(len(stik_rows(f)) == 1, "stik_rows finds one")
     ok(cfg([]) == settings_head(), "nothing to keep, no trailer")
     ok(len(cfg([r])) > CFG_FBUF and parse_cfg(cfg([r]))["trailer"],

@@ -12,7 +12,7 @@
   "version": 13
  },
  "VX_ABI_VER": {
-  "fingerprint": "667638d196c3dfbd1bcc0780388d403a99be4901a335d95d3380b763ee831332",
+  "fingerprint": "371c177248034bb699bdb70d7ea356c328c6b11cacbc17f301f4230d0b629105",
   "version": 6
  },
  "XM_ABI_VER": {
@@ -2476,6 +2476,13 @@
    "from": 5,
    "guard": "VX_ABI_VER",
    "reason": "VX_ABI_VER 6: vx_blk grows VXB_FONTLIM, a pointer to font_last/font_span, so VESA.DRV's VX_FONTRUN bounds the glyph index by the live span (SPEC.md 6.7) instead of the constant 126 - accented CP850 text drew blank on a VESA desktop. The block's layout moved, so a VESA.DRV of version 5 cannot run beside this kernel: bump, and the attach refuses the mismatch.",
+   "to": 6
+  },
+  {
+   "fingerprint": "371c177248034bb699bdb70d7ea356c328c6b11cacbc17f301f4230d0b629105",
+   "from": 6,
+   "guard": "VX_ABI_VER",
+   "reason": "vxabi.inc gains VXG_WMAX/VXG_HMAX (merged over #398's VX_ABI_VER 6): the widest primary VESA.DRV may choose, which the kernel sizes its desktop grid (DESK_CMAX) and menu bar against; no selector, block or register contract moved, so VX_ABI_VER stays 6",
    "to": 6
   }
  ]

@@ -14,8 +14,8 @@ hidden every one of them at the next boot. The mark is an EQUALITY with
 them (`\\` at +3) - a package, a folder and a document, PLACED in cells 3, 4
 and 5 - and no Sticky App row. One boot on a VGA XT:
 
-  A  each of the three is SHOWN, in its own cell: [desk_zslot] is
-     DSL_PIN | cell with no DSL_GONE, and the cell's pixels are not the bare
+  A  each of the three is SHOWN, in its own cell: [desk_zslot] and
+     [desk_zpin] are both the cell, and the cell's pixels are not the bare
      desktop's (a free cell beside them is the control);
   B  each row still carries `\\` at +3 - nothing rewrote it;
   C  nothing was launched, and nothing was "not found".
@@ -86,9 +86,10 @@ def main():
         bare = solid(ui, FREE_CELL)
         print("A/B: each shortcut shown in its cell, its +3 untouched")
         for k, (cell, cap) in enumerate(SHORTS):
-            zb = m.read(ui._S("desk_zslot") + DESK_SC0 + k, 1)[0]
-            check(zb == os88stik.DSL_PIN | cell,
-                  "%s is SHOWN in cell %d (%#x)" % (cap, cell, zb))
+            zb = (m.read(ui._S("desk_zslot") + DESK_SC0 + k, 1)[0],
+                  m.read(ui._S("desk_zpin") + DESK_SC0 + k, 1)[0])
+            check(zb == (cell, cell),
+                  "%s is SHOWN and PLACED in cell %d (%r)" % (cap, cell, zb))
             r = os88stik.parse_row(m.read(lin(seg) + k * os88stik.SC_REC,
                                          os88stik.SC_REC))
             check(r["mark"] == 0x5C and r["cap"] == cap,

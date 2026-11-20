@@ -467,16 +467,22 @@ def main():
                       "timings, by name in SPEC.md 30.6")
 
         # D ---------------------------------------------------------------
+        # ...and the trailer's encoding (SPEC.md 26.8.6.1): the frozen v2
+        # reader --selfcheck holds the host's writer to (leg A) is only a
+        # gate while the host writes what CTRL.DRV writes
+        same = {"CFG_FBUF": "CFG_FBUF", "DESK_SC0": "DESK_SC0",
+                "SC_VER": "SC_VER", "SC_DZVER": "SC_DZVER",
+                "SC_V2MAX": "V2MAX", "SC_V2PIN": "DSL_PIN"}
         try:
-            k = nasm_eval(["CFG_FBUF", "DESK_SC0"], "big", tmp)
+            k = nasm_eval(list(same), "big", tmp)
         except (KeyError, RuntimeError) as e:
             k = {}
-            check(False, "the kernel's CFG_FBUF and DESK_SC0 evaluate",
-                  got=str(e), want="two words")
-        for name in ("CFG_FBUF", "DESK_SC0"):
-            check(k.get(name) == getattr(os88stik, name),
-                  "tools/os88stik.py's %s is kern_big's" % name,
-                  got=getattr(os88stik, name), want=k.get(name),
+            check(False, "the kernel's CFG_FBUF, DESK_SC0 and trailer "
+                  "constants evaluate", got=str(e), want="six words")
+        for name, mine in same.items():
+            check(k.get(name) == getattr(os88stik, mine),
+                  "tools/os88stik.py's %s is kern_big's %s" % (mine, name),
+                  got=getattr(os88stik, mine), want=k.get(name),
                   why="the host tool is the second reader of SYSTEM.CFG's "
                       "trailer; a stale copy disagrees with ovl_sc_load "
                       "about which files carry one, and no gate fails")
