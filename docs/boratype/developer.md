@@ -14,7 +14,7 @@ Open BORATYPE.O88 from the software disk. The360KB image is
 `build/boratype360.img`;720KB,1.2MB and1.44MB counterparts are built together.
 `build/BORATYPE.WPK` is produced by the existing os88wire archive tool. The
 base distribution includes every lesson, original caption, score, effect,
-font and portrait; imported restricted voice files are never build inputs.
+font and portrait. Recorded voice clips were removed from scope by the owner.
 The disk pre-creates SYSTEM/APPDATA for installed-volume progress.
 
 ## Architecture and real reference paths
@@ -35,10 +35,9 @@ existing FSX bracket, whose returned geometry/bank/segment it checks.
 ## Resource ownership
 
 The runtime owns the movable resident region and eager art/overlay parts.
-The UI allocates an8KB movable opaque drawing band. Optional voice loading
-uses one28KB source claim, pinned for its single file read and then movable;
-relocation updates both C and native holders. SOUND.DRV owns its copied4KB
-stream grant. The package retains no driver pointer after stop. Files are
+The UI allocates an8KB movable opaque drawing band. Music and sound effects
+use the existing OS tone/FM leases; there are no PCM buffers, audio file
+imports or stream grants. Files are
 read or saved only on the UI task outside paint/input/audio callbacks.
 The timer fallback worker only posts wakes and is restartable. Close cancels
 timers, stops/releases audio, saves validated progress and returns through
@@ -56,9 +55,9 @@ The binding [BORATYPE-SPEC](../BORATYPE-SPEC.md) pins the2136-byte BTT1 store.
 Alternating generations keep the previous valid save intact until a new
 write has been read back and verified. [Engine notes](engine.md) describe
 strict input, arithmetic, sample thresholds, timing and profile attribution.
-[Audio notes](audio.md) document the bounded VPK importer and routing;
-[source research](audio-sources.md) distinguishes local evaluation from
-established redistribution permission. [Face notes](face.md) cover native
+[Audio notes](audio.md) document the composed scores, effects and OS routing.
+The BTT v1 voice byte is retained as an unused legacy field; it defaults off
+and cannot enable a clip path. [Face notes](face.md) cover native
 geometry and asset IDs.
 
 `tools/os88btart.py build` and `build-sound` use the existing sprite/font
@@ -82,8 +81,8 @@ was recorded before changing the face. Initial cache fixes reduced face-only
 work from338,162cycles/70.85ms to29,008/6.08ms. Cosmetic slicing and actual
 key-to-glass latency still require final measurements; QEMU cannot prove them.
 
-Technical guest captures have established FM note activity and PCM source
-identity through a real emulated driver, with stream/grant cleanup. Those
-checks do not establish subjective intelligibility or pleasant music. No
-audio-input listening tool is available in this session; captured files and
-rights status must remain explicit in final evidence.
+Technical guest captures established FM and speaker activity, muting, route
+changes and cleanup. They do not establish subjective musical quality. The
+audio forwarding tool explicitly refused audio input in this session, so
+listening remains unverified. Voice clips and their importer were removed
+from the product when the owner chose sound effects and visual messages.

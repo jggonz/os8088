@@ -70,9 +70,9 @@ The disks explicitly pre-create SYSTEM/APPDATA so a direct B: launch can save.
 Downloaded character clips and local test packs live outside the repository.
 No redistribution permission is established, so the base package includes
 original captions/music/effects and a real optional local PCM import path.
-The rights/candidate log is [audio sources](boratype/audio-sources.md).
-This is a specific unfinished requirement, not a claim that subtitles pass
-as voice playback. No external publishing has occurred.
+The source/candidate log remains in the session evidence outside the repository.
+This was an unfinished requirement at that point, not a claim that subtitles
+passed as voice playback. No external publishing occurred.
 
 
 ## The first real lesson exposed the cost the host could not see
@@ -90,3 +90,21 @@ work, with actual key-to-feedback cycle measurements still required.
 The initial guest pictures also expose typography smaller than the supplied
 concept and a duplicated saved-status line. These are observed mismatches;
 merely generating a screenshot does not pass the visual comparison.
+
+
+## The owner chose effects and visual messages
+
+During the repair round the owner explicitly removed recorded clips from
+scope: “Just use sound effects and visual messages, no sound clips.” The
+product therefore keeps the original composed music, short speaker/FM effects
+and original visual jokes, and removes the PCM transport/importer, voice
+controls, local-pack loading and audio staging claims. Earlier PCM experiments
+are historical diagnostics, not a dependency or an unfinished shipping story.
+The BTT v1 legacy voice byte stays compatible and defaults off.
+
+Measured native feedback after reusing clipped OS frame/hline/font_run calls
+was51–79ms for six queued hardware-key cases on the VGA XT, including a third
+error reaction. Complete callbacks97–147ms and first visible feedback are
+different measurements; secondary mirror/hint/counter work is coalesced.
+The final acceptance run must repeat the key measurements on the integrated
+no-clip head and inspect every adapter.
