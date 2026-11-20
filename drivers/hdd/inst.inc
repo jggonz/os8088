@@ -237,8 +237,13 @@ hd_iw_slot:
     mov [hd_iscur], ax
     mov ax, [si+HP_SECS+2]
     mov [hd_iscur+2], ax
+    mov al, [si+HP_TYPE]        ; FAT32 is never an install TARGET, even on
+    sub al, HPT_FAT32           ; the kernel that reads it: the boot path
+    cmp al, HPT_FAT32L-HPT_FAT32+1  ; reads FAT12/16 (SPEC.md 19.12.9)
+    jb .alien
     call hd_part_isfat
     jnc .fat
+.alien:
     mov al, [si+HP_TYPE]        ; SOMEBODY ELSE'S, and its name is the reason
     call hd_ptype_name          ; DX = the name, 0 = 'Type nnh' at draw time
     mov al, HIS_ALIEN

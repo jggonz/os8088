@@ -169,6 +169,7 @@ sc_walk:
     xchg ax, bp                 ; BP holds both for the walk
     call drv_vol_bank
     xor bx, bx                  ; the volume's ROOT first
+    CLU_HI0
 .dir:
     mov ax, bp
     call dsk_goto               ; CF = no disk, or no such folder
@@ -219,6 +220,10 @@ sc_walk:
     je .run
     mov ax, [dsk_cwd]           ; a DOCUMENT: the locator is the name, the
     mov [assoc_dclus], ax       ; directory it is in and the volume
+%ifdef OS88_FAT32
+    mov ax, [dsk_cwd+2]
+    mov [assoc_dcluh], ax
+%endif
     mov ax, bp
     mov [assoc_ddrv], al
     push ds
@@ -1028,7 +1033,8 @@ sc_m_same:
 ; -----------------------------------------------------------------------------
 ; sc_m_lnk - SC_OP_LNK: a Disk window's entry Alt-dropped on a Disk window
 ; in:  AL = the destination's volume, DX = its folder's first cluster (the
-;      folder under the drop, fm_dgdrop's own reading); the drag's [fcp_cb*]
+;      folder under the drop, fm_dgdrop's own reading), and on kern_mega CX
+;      its high word (SPEC.md 19.12.3); the drag's [fcp_cb*]
 ;      = the entry (the Cut fm_drag armed, which the caller has disarmed)
 ; out: nothing; <STEM>.LNK written there and every Disk window owed the new
 ;      listing, or the reason it was not, said
@@ -1044,6 +1050,9 @@ sc_m_same:
 sc_m_lnk:
     push ax                     ; the destination, for after the path
     push dx
+%ifdef OS88_FAT32
+    push cx                     ; ...whole: sc_m_go and the path's walk both
+%endif                          ; rewrite [dsk_ch] (SPEC.md 19.12.3)
     call sc_m_go                ; ...standing in the ENTRY's folder
     jc .nopath
     push ds                     ; THE LINK'S NAME, the entry's stem and .LNK,
@@ -1087,12 +1096,19 @@ sc_m_lnk:
     stosb                       ; LNK_VOL...
     call sc_m_kind
     stosb                       ; ...and LNK_KIND
+%ifdef OS88_FAT32
+    pop cx                      ; (its high word)
+%endif
     pop bx                      ; the destination's folder...
     pop ax                      ; ...and volume
     cmp al, [fcp_cbdrv]         ; A LINK OVER ITS OWN SOURCE: FOO.LNK dropped
     jne .other                  ; into its own folder would be rewritten as a
     cmp bx, [fcp_cbcwd]         ; link to itself, and what it named is lost
     jne .other
+%ifdef OS88_FAT32
+    cmp cx, [fcp_cbcwh]
+    jne .other
+%endif
     mov si, fcp_cbname
     mov di, assoc_doc
 .same:
@@ -1108,6 +1124,9 @@ sc_m_lnk:
     jmp sc_m_say
 .other:
     mov [fcp_ddrv], al          ; fmv_reload_all's question: which volumes
+%ifdef OS88_FAT32
+    mov [dsk_ch], cx            ; BX:[dsk_ch], the destination whole
+%endif
     call COLD_SEG:dskf_dsk_goto ; changed
     jc .err
     lea bx, [cs:cpc_buf]        ; ES = CS still: dsk_goto writes AX alone
@@ -1121,6 +1140,9 @@ sc_m_lnk:
 .nopath:
     pop ax
     pop ax
+%ifdef OS88_FAT32
+    pop ax
+%endif
     call COLD_SEG:drvf_drv_vol_back
     mov si, sc_s_path
     jmp sc_m_say
@@ -1156,6 +1178,10 @@ sc_m_go:
     call COLD_SEG:drvf_drv_vol_bank
     mov al, [fcp_cbdrv]
     mov bx, [fcp_cbcwd]
+%ifdef OS88_FAT32
+    push word [fcp_cbcwh]       ; BX:[dsk_ch] (SPEC.md 19.12.3)
+    pop word [dsk_ch]
+%endif
     call COLD_SEG:dskf_dsk_goto
     ret
 
@@ -1992,6 +2018,7 @@ ovl_sc_load:
                                 ; and could write the disk under the image
                                 ; (SPEC.md 26.10.5, 87.5; stik_boot's test)
     xor bx, bx
+    CLU_HI0                     ; (SPEC.md 19.12.3)
     call .go                    ; the boot volume's ROOT
     jc .out
 %ifdef KERN_MEGA
@@ -2100,6 +2127,7 @@ ovl_sc_load:
 %endif
 .root:
     xor bx, bx                  ; ...and the boot volume's root again, where
+    CLU_HI0                     ; (SPEC.md 19.12.3)
     call .go                    ; the boot left it
 .out:
     retf

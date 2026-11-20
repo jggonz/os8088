@@ -1,14 +1,14 @@
 {
  "DRV_VER": {
-  "fingerprint": "fa1b058e4aff37818f40b13f2da0a9238124a85459a4c48733df77dca576a841",
+  "fingerprint": "c8835bd0471c16ab4fc259e06d38a80647ed576e988f1fafeb1eb943e4f4a8c2",
   "version": 14
  },
  "HD_ABI_VER": {
-  "fingerprint": "6a6338a0ced60206a6481ad09bf867865d77a622495d564cf1b6b707b55f8fdb",
+  "fingerprint": "beb2409210c773233d4634fd4d3bd96f6a43d6a11202ee6cf9219265e856eeca",
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "172c2e7961e01deb103f0de33ba0f9dad4a63ec4ccf2e5f43f1c4637bb46f80c",
+  "fingerprint": "d057432301f2a22ee4fa121576cb326ec39180872a71b35d2892d13ee446fd27",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2434,6 +2434,27 @@
    "from": 7,
    "guard": "HD_ABI_VER",
    "reason": "DRVM_CEIL_DISK 4 -> 5: HDD.DRV's image is 4.5KB for logical drives and the large-disk transports (SPEC.md 52.4.1); a quoted ceiling, nothing built before stops running",
+   "to": 7
+  },
+  {
+   "fingerprint": "d057432301f2a22ee4fa121576cb326ec39180872a71b35d2892d13ee446fd27",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_FILE_PLACE (door 0x60, RN) added at the end of the table, FPL_* verbs, OSAPI_FCP_FAR/OSAPI_FIND_FAR bits and the C SDK's os88_file_place - additions only, every package built before still runs (SPEC.md 19.12.8, FAT32 on kern_mega)",
+   "to": 13
+  },
+  {
+   "fingerprint": "c8835bd0471c16ab4fc259e06d38a80647ed576e988f1fafeb1eb943e4f4a8c2",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_FILE_PLACE (door 0x60, RN) added at the end of the table, FPL_* verbs, OSAPI_FCP_FAR/OSAPI_FIND_FAR bits and the C SDK's os88_file_place - additions only, every package built before still runs (SPEC.md 19.12.8, FAT32 on kern_mega)",
+   "to": 14
+  },
+  {
+   "fingerprint": "beb2409210c773233d4634fd4d3bd96f6a43d6a11202ee6cf9219265e856eeca",
+   "from": 7,
+   "guard": "HD_ABI_VER",
+   "reason": "OSAPI_FILE_PLACE (door 0x60, RN) added at the end of the table, FPL_* verbs, OSAPI_FCP_FAR/OSAPI_FIND_FAR bits and the C SDK's os88_file_place - additions only, every package built before still runs (SPEC.md 19.12.8, FAT32 on kern_mega)",
    "to": 7
   }
  ]

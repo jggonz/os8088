@@ -258,6 +258,9 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define KERN_BIG
  %endif
 %endif
+%include "clu.inc"              ; OS88_FAT32 and the CLU_* macros (SPEC.md
+                                ; 19.12.3): kern_mega's FAT32, named by
+                                ; instance.inc and others before disk.inc
 ; --- KHP_* - kernel hot-paths pass 1's optimisations, ONE KNOB A GROUP ------
 ; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
 ; Each knob selects the rewritten body of a hot path; undefined, the source
@@ -3716,6 +3719,12 @@ api_refuse:                     ; OSAPI_XMEM_SEL's and _XMEM_RUN's index here
     mov ax, 1
     stc
     ret
+section .cold                   ; ...and OSAPI_FILE_PLACE's, an RN cell whose
+api_refusec:                    ; body is kern_mega's alone (SPEC.md 19.12.8):
+    mov ax, 1                   ; small's six bytes, and an even count keeps
+    cmp al, 2                   ; .cold's hot dsk_* routines at their parity
+    retf                        ; (t_hotpar)
+section .text
  %endif
 %ifndef FPG_PARK
 osapi_fs_op equ api_refuse      ; kern_small: OSAPI_FS_OP refused, and DISKOPS's
@@ -5860,12 +5869,17 @@ osapi_vol_stat equ osapi_snd_fm     ; a refusal on this kernel (SPEC.md
 ; DX and BL are the outputs; SPEC.md 1 makes everything else this routine's
 ; to preserve, BH and AX included.
 osapi_file_here:
+%ifdef OS88_FAT32
+    call COLD_SEG:dsk_here16f   ; kern_mega: the 0FFFFh rule (SPEC.md 19.12.8),
+    ret                         ; in `.cold`, which this segment is short of
+%else
     push ax                     ; the reading is instance.inc's inst_where (DL
     call inst_where             ; = drive, AX = directory, the machine's own for
     mov bl, dl                  ; no instance), which banks BX - so BH is still
     xchg ax, dx                 ; the caller's here - and spends only DH, an
     pop ax                      ; output. (`xchg`, a byte under `mov dx, ax`:
     ret                         ; AX is the pushed one - kernel size pass 16)
+%endif
 
 ; OSAPI_VOL_SYS (out BL = [dsk_bootvol], nothing else touched, flags
 ; included) is an INLINE cell (SPEC.md 20.3). [dsk_bootvol] is A: on a floppy
@@ -5878,7 +5892,11 @@ osapi_file_goto:
     push ax
     mov ax, dx
     mov dl, bl
+%ifdef OS88_FAT32
+    call COLD_SEG:dkf_dsk_chdir16   ; (0FFFFh refused, 19.12.8)
+%else
     call COLD_SEG:dkf_dsk_chdir ; CF = the mount failed; it has already put
+%endif
     jc .out                     ; the volume back at the root
     call inst_vol_mark          ; ...and the instance follows the machine:
                                 ; this is a deliberate move, so it is where
@@ -5932,7 +5950,11 @@ osapi_file_goto_q:
     push dx
     mov al, bl                  ; dsk_goto takes AL = drive, BX = cluster
     mov bx, dx
+%ifdef OS88_FAT32
+    call COLD_SEG:dskf_dsk_goto16   ; (0FFFFh refused, 19.12.8)
+%else
     call COLD_SEG:dskf_dsk_goto ; ...already published for DISKOPS.DRV (18.99.8)
+%endif
     jc .out
     xor ax, ax                  ; the documented AX = 0, and it clears CF with
 .out:                           ; it; on the CF=1 arm AX is dsk_goto's FERR_*
@@ -8079,6 +8101,21 @@ RD_RK       equ 3               ; (fsx_rdownf's bound, past the private block)
                                   ;          size once, at the close or when
                                   ;          the UI unlocks. kern_big; the
                                   ;          small door refuses
+%ifdef OS88_FAT32
+    RDPUB RDK_RN, dsk_fpl_door, FILE_PLACE ; N: A FOLDER IN 32 BITS (SPEC.md
+                                  ;          19.12.8): AL = FPL_* verb, a
+                                  ;          folder DX = low, CX = high, BL =
+                                  ;          the volume; SI = FPL_STAT's name.
+                                  ;          kern_mega; every other kernel
+                                  ;          refuses (CF=1, AX=1) - its 16-bit
+                                  ;          doors are already complete
+%elifndef KERN_SMALL
+    RDREF RDK_RN, api_refusec, FILE_PLACE
+%endif                            ; kern_small: NO ENTRY. Its heap rung is
+                                  ; locked (guard 1b) and this is the
+                                  ; table's LAST cell, so its index is past
+                                  ; small's RD_N and .lim's `jae .ref` gives
+                                  ; RDREF's own answer for no bytes (20.3.4)
 %if rd_n > 128
  %error "rd_tab: the door compares index x 2 in one byte, so 128 entries at most"
 %endif

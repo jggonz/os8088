@@ -29,22 +29,24 @@
 ; failed (every later call answers the same) and what reached the disk
 ; stays there.
 ;
-; THE BUFFER IS FLUSHED IN WHOLE CLUSTERS. The open asks OSAPI_VOL_STAT for
+; THE BUFFER IS FLUSHED IN WHOLE CLUSTERS. The open asks OSAPI_FILE_DFREE for
 ; the cluster of the volume the instance stands on - which is where the file
 ; is - once: that is a FAT walk, ~105 ms on a 20 MB disk on a 4.77 MHz 8088
-; (SPEC.md 18.4.5), paid per STREAM and not per put. A full buffer writes the
+; (SPEC.md 18.4.5), paid per STREAM and not per put. DFREE and not
+; OSAPI_VOL_STAT, whose AX SCALES on a FAT32 volume and is then no cluster:
+; at 128 of it the mask was 0FFFFh, the flush a close, and the next put's
+; copy 64KB over our own segment (SPEC.md 19.12.8). A full buffer writes the
 ; largest whole number of clusters it holds and keeps the rest, so a buffer
 ; that is itself a cluster multiple never moves a byte. A buffer smaller
 ; than one cluster is refused at the open, FERR_NAME.
 ;
-; ON kern_small THE OPEN IS REFUSED, and no chunk is reached: OSAPI_VOL_STAT
-; is a bare `stc` there (kernel.asm's osapi_vol_stat), so os88_wseq_open
-; answers CF=1 with AX = 0, which is no FERR_* code. The APPEND arm in
-; os88_wseq_out was written for that kernel's FERR_NAME WRITE_SEQ - the same
-; rule, the same chunks, a lookup and a walk a call - and on kern_big it only
-; repeats WRITE_SEQ's refusal of a misaligned chunk. The stream is PLAIN (not
-; WSEQF_HELD): every flush is committed, so nothing is held across the
-; caller's callbacks.
+; ON kern_small EVERY CHUNK IS AN APPEND: that kernel's WRITE_SEQ answers
+; FERR_NAME, and the APPEND arm in os88_wseq_out was written for it - the
+; same rule, the same chunks, a lookup and a walk a call - while on kern_big
+; it only repeats WRITE_SEQ's refusal of a misaligned chunk. (The open used
+; to be refused there, by OSAPI_VOL_STAT's bare `stc`, with AX = 0.) The
+; stream is PLAIN (not WSEQF_HELD): every flush is committed, so nothing is
+; held across the caller's callbacks.
 ;
 ; UI TASK ONLY - every call is a file slot (SPEC.md 20.6 rule 7).
 ; =============================================================================
@@ -82,10 +84,12 @@ os88_wseq_open:
     push bx
     push cx
     push di
-    call OSAPI_VOL_STAT             ; AX = sectors a cluster, CX = bytes one
-    pop di
-    jc .stat
-    mul cx                          ; AX = the cluster's bytes (a power of two)
+    call OSAPI_FILE_DFREE           ; BX = sectors a cluster, 1..64: the
+    pop di                          ; TRUE one, where VOL_STAT's AX scales
+    jc .stat                        ; on FAT32 (SPEC.md 19.12.8)
+    xchg ax, bx
+    mov cl, 9
+    shl ax, cl                      ; AX = the cluster's bytes (a power of two)
     pop cx
     pop bx
     mov dx, FERR_NAME

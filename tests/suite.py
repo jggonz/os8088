@@ -3734,6 +3734,35 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
                "build/calc.o88")),
+    Row("fat32", "soak", py("tests/fat32.py"), 20.0,
+        "SPEC.md 19.12 (docs/plans/FAT32-MEGA-PLAN.md): kern_mega on QEMU "
+        "with a FAT32 partition (type 0Ch, mformat -F, one sector a "
+        "cluster) whose 40MB FILLER.BIN puts FAR/ at cluster 81,923 - past "
+        "65,535, so every high word is live. C: mounts, its root lists, FAR "
+        "opens and CALC.O88 launches out of it; HELLO.TXT is deleted and "
+        "New Folder makes NEWDIR there, and Ctrl+C / Ctrl+V copies the "
+        "root's CALC.O88 into it; the host then reads the volume back "
+        "through tests/instdeep.py's reader (FAT32 since this row), mtype, "
+        "mdir and fsck.fat -n where present - FAR without HELLO.TXT, "
+        "NEWDIR's . and .. right, the copy a chain past 65,535 holding the "
+        "package, FILLER.BIN byte-exact and FSInfo's count 0FFFFFFFFh. "
+        "Broken on purpose (the "
+        "Disk window's sync handing dsk_chdir the folder's HIGH word as its "
+        "low) the New Folder lands in FILLER.BIN's chain. Measured 17.7s on "
+        "2026-11-19. kern_mega's selectors decoded as tests/pciether.py's "
+        "MQemu does",
+        needs=("qemu", "nasm", "mtools"), serial=True, timeout=300,
+        wants=("build/mega.img", "build/megaapps.img",
+               "build/megak/kernel.map", "build/hdd.bin",
+               "build/calc.o88")),
+    Row("fat32big", "soak", py("tests/fat32.py", "--big"), 5.0,
+        "SPEC.md 19.12.1: the fat32 row's disk under kern_big, which has no "
+        "FAT32 - HDD.DRV offers the 0Ch partition and the kernel's BPB "
+        "check refuses it, so no C: appears and nothing on it is written. "
+        "Measured 1.9s on 2026-11-19",
+        needs=("qemu", "nasm", "mtools"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
+               "build/calc.o88")),
     Row("hdtakeboot", "soak", py("tests/hdtake.py", "--boot"), 10.0,
         "SPEC.md 52.1.1 on an INSTALLED machine (QEMU, booted from the IDE "
         "disk): C:, the kernel's own int 13h boot volume, must be HANDED to "

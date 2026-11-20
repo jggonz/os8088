@@ -52,6 +52,7 @@ drv_mounted:
                                 ; installed PARTITION on a machine that boots
                                 ; from its hard disk (SPEC.md 52.10.3)
     xor ax, ax                  ; ...at its root, which is where 19.6 puts
+    CLU_HI0
                                 ; KERNEL.SYS, SYSTEM.CFG and every *.DRV
     call dsk_chdir_q_x            ; QUIET (SPEC.md 18.9): all three callers here
                                 ; read or write a file BY NAME - drv_find is
@@ -136,9 +137,16 @@ drv_mounted:
 drv_vol_bank:
     push ax
     xor ax, ax                  ; the boot volume's ROOT, cluster 0
+%ifdef OS88_FAT32
+    mov [drv_vol_cwd+2], ax     ; (and its high word: the gate-open arm
+%endif                          ; below copies [dsk_cwd]'s over it)
     cmp [dsk_mntok], al
     je .cwd                     ; the gate is shut: nothing validated to keep
     mov ax, [dsk_cwd]
+%ifdef OS88_FAT32
+    push word [dsk_cwd+2]       ; ...whole (SPEC.md 19.12.3)
+    pop word [drv_vol_cwd+2]
+%endif
 .cwd:
     mov [drv_vol_cwd], ax
     mov al, [dsk_bootvol]       ; `mov` writes no flag, so the compare above
@@ -153,11 +161,23 @@ drv_vol_back:
     pushf
     push ax
     push bx
+%ifdef OS88_FAT32
+    push word [dsk_ch]
+    push word [drv_vol_cwd+2]   ; BX:[dsk_ch], dsk_goto's (19.12.3)
+    pop word [dsk_ch]
+%endif
     mov bx, [drv_vol_cwd]       ; dsk_goto's arguments, loaded before the
     mov al, [drv_vol_drv]       ; compare because they ARE the compare
     cmp al, [disk_drive]        ; still where the user left us? then there is
     jne .go                     ; nothing to undo, and the remount is the
     cmp bx, [dsk_cwd]           ; whole cost
+%ifdef OS88_FAT32
+    jne .go
+    push ax
+    mov ax, [dsk_ch]
+    cmp ax, [dsk_cwd+2]
+    pop ax
+%endif
     je .out
 .go:
     call dsk_goto               ; CF = the move failed; swallowed by the
@@ -183,6 +203,9 @@ drv_vol_back:
                                 ; global snapshot, and whoever reads it next
                                 ; pays for the rebuild if it is ever needed
 .out:
+%ifdef OS88_FAT32
+    pop word [dsk_ch]
+%endif
     pop bx
     pop ax
     popf
@@ -192,6 +215,9 @@ section .text                   ; DATA, so back to the kernel segment
 
 
 drv_vol_cwd: dw 0               ; the directory and drive to go back to
+%ifdef OS88_FAT32
+             dw 0               ; ...its high word (19.12.3)
+%endif
 drv_vol_drv: db 0
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,
@@ -247,7 +273,14 @@ dskw_czsize:
     pop dx
     pop cx
     ja .r
+%ifdef OS88_FAT32
+    push ax                     ; FAT32: the header's U, not @20 (19.12.6)
+    call dskw_czlget
+    xchg cx, ax
+    pop ax
+%else
     mov cx, [dskw_raw+DSK_R_CZL]
+%endif
     mov dl, [dskw_raw+DSK_R_CZH]
     mov dh, 0
 .r: ret

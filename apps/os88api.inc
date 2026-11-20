@@ -1130,6 +1130,27 @@ OSAPI_LZ_BIG equ 0x80            ; ...OR'd in: AH:CX is the length (20.13.3)
                                  ; to assemble
 OSAPI_FCP_COPY equ 0             ; ...and its two verbs, in AL
 OSAPI_FCP_MOVE equ 1
+%define OSAPI_FILE_PLACE    OS88_DOOR           ; A FOLDER IN 32 BITS (SPEC.md
+                                 ; 19.12.8): AL = an FPL_* verb, the folder DX
+                                 ; = low, CX = HIGH, BL = the volume. An N
+                                 ; cell: DS:SI is staged for EVERY verb, so SI
+                                 ; must address your data (0 will do) even
+                                 ; where no name is read. kern_mega only:
+                                 ; elsewhere CF=1 AX=1, and the 16-bit doors
+                                 ; are complete there (no folder needs more)
+FPL_HERE       equ 0             ; out BL, DX, CX = OSAPI_FILE_HERE, whole
+FPL_GOTO       equ 1             ; in BL, DX, CX: OSAPI_FILE_GOTO
+FPL_GOTO_Q     equ 2             ; ...OSAPI_FILE_GOTO_Q (AX = 0 / FERR_*)
+FPL_GOTO_QM    equ 3             ; ...OSAPI_FILE_GOTO_QM
+FPL_ARG        equ 4             ; out BL, DX, CX = OSAPI_ARG_FILE's folder
+FPL_STAT       equ 5             ; SI = a name here: AL = attribute, DX:CX =
+                                 ; its first cluster (low, high)
+OSAPI_FCP_FAR  equ 0x80          ; ...OR'd into AL (SPEC.md 19.12.8): ES:DI ->
+                                 ; four words - the source folder's low and
+                                 ; high, then the destination's - in place of
+                                 ; DX and CX, so a FAT32 folder past cluster
+                                 ; 65,535 can be named. Without it DX/CX =
+                                 ; 0FFFFh is refused (FERR_NAME) on FAT32
 %define OSAPI_FILE_WRITE_AT OS88_DOOR           ; SI = a NUL 8.3 name, ES:BX =
                                  ; the bytes, CX = how many (>= 1), DX:AX =
                                  ; the byte offset (a multiple of the
@@ -6436,6 +6457,10 @@ WSEQF_CKPT  equ 8               ; AL bit 3 on a CLOSE (CX = 0): commit what is
 ;                  reserved and zero. This word WAS reserved and zero, so a
 ;                  package written before it still works
 OSAPI_FIND_CZ equ 1              ; ...that bit
+OSAPI_FIND_FAR equ 2             ; ...and bit 1 (SPEC.md 19.12.8): +16 is
+                                 ; 0FFFFh because the first cluster does not
+                                 ; fit a word (a FAT32 volume, kern_mega) -
+                                 ; OSAPI_FILE_PLACE's FPL_STAT names it
 OSAPI_FIND_SZ equ 24
 
 ; The type word at +14, and the one thing about this record that has already
@@ -7103,4 +7128,5 @@ DRVU_CALL    equ 2
 %xdefine OSAPI_FILE_COPY        __OSAPI_RARE 0x5D ; RN
 %xdefine OSAPI_FILE_WRITE_AT    __OSAPI_RARE 0x5E ; RN
 %xdefine OSAPI_FILE_WRITE_SEQ   __OSAPI_RARE 0x5F ; RN
+%xdefine OSAPI_FILE_PLACE       __OSAPI_RARE 0x60 ; RN
 ; ---- END CELL KINDS -------------------------------------------------------------
