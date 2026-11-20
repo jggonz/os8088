@@ -23035,3 +23035,37 @@ $(BUILD)/kbdlayoutlegacy.img: $(BUILD)/win16.o88 tools/os88disk.py
 #> [Gate disks] kbdlayoutlegacytest :: DOS and WIN16 keyboard ownership fixture
 .PHONY: kbdlayoutlegacytest
 kbdlayoutlegacytest: $(BUILD)/kbdlayoutlegacy.img
+
+# Native Borat typing tutor, SPEC.md 134 / docs/BORATYPE-SPEC.md.
+$(eval $(call CC_PACKAGE,boratype,boratype,BORATYPE.OVL,$(BUILD)/BTART.BIN $(BUILD)/BTSOUND.BIN,part))
+BORATYPESRC := $(wildcard apps/boratype/*.c apps/boratype/*.h)
+$(BUILD)/boratype.raw.asm: $(BORATYPESRC) apps/cc/gk.h
+$(BUILD)/boratype.bin: $(wildcard apps/boratype/*.inc) apps/breadxt/draw.inc apps/cc/gk.inc apps/cc/gkmus.inc apps/os88data.inc apps/os88ui.inc
+$(BUILD)/BTART.BIN: tools/os88btart.py tools/os88bbart.py apps/boratype/art.h $(wildcard apps/boratype/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88btart.py build -o $@
+$(BUILD)/BTSOUND.BIN: tools/os88gkmus.py apps/boratype/art/music.txt apps/boratype/art/sfx.txt | $(BUILD)
+	python3 tools/os88gkmus.py part -o $@ apps/boratype/art/music.txt apps/boratype/art/sfx.txt
+#> [Applications] boratype :: Borat Teaches Typing native C lessons, practice and challenges (SPEC.md 134)
+boratype: $(BUILD)/boratype.o88
+#> [Applications] boratypedisk :: Borat Teaches Typing software disk in all four floppy geometries
+boratypedisk: $(BUILD)/boratype.img $(BUILD)/boratype720.img $(BUILD)/boratype120.img $(BUILD)/boratype360.img
+$(BUILD)/boratype.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype720.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype120.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype360.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT
+	python3 tools/os88disk.py --verify $@
+#> [Applications] boratypebundle :: build and validate a local Borat Teaches Typing WPK installer
+boratypebundle: $(BUILD)/BORATYPE.WPK
+$(BUILD)/BORATYPE.WPK: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88wire.py
+	@mkdir -p $(BUILD)/boratype-stage
+	@cp $(BUILD)/boratype.o88 $(BUILD)/boratype-stage/BORATYPE.O88
+	@cp apps/boratype/HELP.TXT $(BUILD)/boratype-stage/HELP.TXT
+	python3 tools/os88wire.py --archive $@ --srcdir $(BUILD)/boratype-stage --home BORATYPE --program BORATYPE.O88
+.PHONY: boratype boratypedisk boratypebundle

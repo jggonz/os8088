@@ -2,7 +2,7 @@
  * All state changes run on the UI task. The timer fallback worker only
  * posts a wake; it never scores, draws, plays audio or touches a file. */
 int bt_screen, bt_selection, bt_ch_duration, bt_ch_diff, bt_master_sound = 1;
-int bt_full, bt_readonly, bt_profile_edit;
+int bt_full, bt_readonly, bt_profile_edit, bt_modifiers, bt_practice_weak;
 char bt_notice[64];
 static void *bt_win;
 static unsigned bt_band, bt_art, bt_soundpart;
@@ -27,6 +27,8 @@ int bt_data_enter(void);
 void bt_data_back(void);
 int bt_other_instance(void);
 void bt_copy_font(void);
+int bt_modifier_state(void);
+void bx_setart2(unsigned seg);
 void bt_cga_entry(void);
 void bt_action(int action);
 
@@ -42,7 +44,7 @@ static void bt_redraw(int all)
 
 /* Two independent generations. Replacing the older one never frees the
  * newest one's chain. A corrupt candidate cannot mutate the live store. */
-static void bt_load(void)
+static void ovl_bt_load(void)
 {
     unsigned n;
     BTWord first;
@@ -64,7 +66,7 @@ static void bt_load(void)
     bt_data_back();
 }
 
-static void bt_save(void)
+static void ovl_bt_save(void)
 {
     unsigned n, check;
     int slot, ok;
@@ -86,7 +88,7 @@ static void bt_save(void)
 static void bt_schedule_save(void)
 {
     bt_save_pending = 1;
-    if (bt_win) os88_wm_wake(bt_win);
+    if (bt_win && !bt_in_cga) os88_wm_wake(bt_win);
 }
 
 static void bt_events(unsigned ev)
@@ -115,7 +117,8 @@ static void bt_setscreen(int screen)
 
 static void bt_begin(int mode)
 {
-    bt_start(mode, bt_selection, bt_ch_duration, bt_ch_diff, os88_ticks());
+    bt_start(mode, mode == BT_PRACTICE && bt_practice_weak ? -1 : bt_selection,
+        bt_ch_duration, bt_ch_diff, os88_ticks());
     bt_screen = BT_S_PLAY;
     bt_guard_scan = bt_last_scan;
     bt_about_up = 0;
@@ -151,6 +154,7 @@ static void bt_fullscreen_toggle(void)
         bt_in_cga = 1;
         if (os88_fsx_run(bt_cga_entry, bt_win, 0) != 0) bt_message("Full screen is busy or unavailable.");
         bt_in_cga = 0;
+        if (bt_save_pending) os88_wm_wake(bt_win);
         bt_guard_scan = 0x40;
         bt_audio_state(bt_screen);
         bt_redraw(1);
@@ -181,7 +185,10 @@ void bt_action(int a)
     } else if (a == BT_A_START) {
         bt_begin(bt_screen == BT_S_CHALLENGE ? BT_CHALLENGE : bt_screen == BT_S_PRACTICE ? BT_PRACTICE : BT_LESSON); return;
     } else if (a == BT_A_LESSONS) { bt_setscreen(BT_S_LESSONS); return;
-    } else if (a == BT_A_PRACTICE || a == BT_A_WEAK) { bt_setscreen(BT_S_PRACTICE); return;
+    } else if (a >= BT_A_PRACTICE_BASE && a < BT_A_PRACTICE_BASE + BT_DIFFS) {
+        bt_ch_diff = a - BT_A_PRACTICE_BASE; bt_practice_weak = 0;
+    } else if (a == BT_A_PRACTICE || a == BT_A_WEAK) {
+        bt_practice_weak = a == BT_A_WEAK; bt_setscreen(BT_S_PRACTICE); return;
     } else if (a == BT_A_CHALLENGE) { bt_setscreen(BT_S_CHALLENGE); return;
     } else if (a == BT_A_RECORDS) { bt_setscreen(BT_S_RECORDS); return;
     } else if (a == BT_A_SETTINGS) { bt_setscreen(BT_S_SETTINGS); return;
@@ -218,6 +225,7 @@ static void bt_key_route(int ascii, int scan)
     char *name;
     unsigned n;
     bt_last_scan = scan;
+    bt_modifiers = bt_modifier_state();
     if (bt_guard_scan) {
         if (os88_key_down(bt_guard_scan)) return;
         bt_guard_scan = 0;
@@ -226,7 +234,9 @@ static void bt_key_route(int ascii, int scan)
     if (scan == 0x3d) {
         bt_master_sound ^= 1; bt_audio_state(bt_screen); bt_redraw(0); return;
     }
-    if (scan == 0x40) { if (!bt_in_cga) bt_fullscreen_toggle(); return; }
+    if (scan == 0x40 || (!ascii && scan == OS88_SCAN_ENTER)) {
+        if (!bt_in_cga) bt_fullscreen_toggle(); return;
+    }
     if (scan == 0x3b) { bt_action(BT_A_HELP); return; }
     if (scan == 0x3c) { bt_action(BT_A_LESSONS); return; }
     if (scan == 0x3e || ascii == 27) {
@@ -266,7 +276,8 @@ static void bt_key_route(int ascii, int scan)
     if (ascii == 'l' || ascii == 'L') bt_action(BT_A_LESSONS);
     else if (ascii == 'p' || ascii == 'P') bt_action(BT_A_PRACTICE);
     else if (ascii == 'c' || ascii == 'C') bt_action(BT_A_CHALLENGE);
-    else if (ascii == 'r' || ascii == 'R') bt_action(bt_screen == BT_S_RESULTS ? BT_A_RETRY : BT_A_RECORDS);
+    else if (ascii == 'r' || ascii == 'R') bt_action(bt_screen == BT_S_RESULTS || bt_screen == BT_S_PAUSE ? BT_A_RETRY : BT_A_RECORDS);
+    else if ((ascii == 'x' || ascii == 'X') && bt_screen == BT_S_PAUSE) bt_action(BT_A_BACK);
     else if (ascii == 's' || ascii == 'S') bt_action(BT_A_SETTINGS);
     else if (ascii == 'n' || ascii == 'N') bt_action(BT_A_PROFILE);
     bt_redraw(0);
@@ -277,6 +288,7 @@ static void bt_pulse(void)
     int focus;
     BTWord now;
     now = os88_ticks();
+    bt_modifiers = bt_modifier_state();
     focus = os88_menu_owner() == bt_win;
     if (bt_focused && !focus && (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY)) {
         bt_pause(now); bt_screen = BT_S_PAUSE;
@@ -317,7 +329,7 @@ void os88_onresize(int w, int h, void *win)
 void os88_ontimer(void *win) { bt_pulse(); os88_wm_timer(win, 1); }
 void os88_onwake(void *win)
 {
-    if (bt_save_pending) { bt_save_pending = 0; bt_save(); }
+    if (bt_save_pending) { bt_save_pending = 0; ovl_bt_save(); }
     os88_gfx_lock();
     if (!bt_timer_ok) bt_pulse();
     else bt_redraw(0);
@@ -355,7 +367,7 @@ int os88_onclose(void *win)
 {
     os88_wm_timer(win, 0);
     bt_audio_done();
-    bt_save();
+    ovl_bt_save();
     if (bt_full) { bt_full = 0; os88_fullscreen(win, 0); }
     return 1;
 }
@@ -367,18 +379,19 @@ void os88_onmove(unsigned was, unsigned now)
     bt_face_move(was, now);
 }
 static struct os88_class bt_class = {OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWNBG,
-    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, 0,
-    os88_t_onclose, 0, os88_t_onresize, 0, 0, os88_t_ontimer, os88_t_onwake, 0};
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    os88_t_onclose, 0, os88_t_onresize, 0, 0, os88_t_ontimer, 0, 0};
 void *os88_main(void)
 {
     bt_init();
     bt_readonly = bt_other_instance();
-    bt_load();
+    ovl_bt_load();
     if (bt_readonly) bt_message("Read-only progress: another Borat session is open.");
     bt_selection = bt_recommend();
     bt_screen = BT_S_HOME;
     os88_video(&bt_video);
     os88_key_down(OS88_SCAN_ALT); /* arms the OS Alt+Enter synthesizer */
+    os88_task_restartable(1); /* fallback worker only posts idempotent wakes */
     bt_copy_font();
     bt_art = os88_part_seg(0);
     bt_soundpart = os88_part_seg(1);

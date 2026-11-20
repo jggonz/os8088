@@ -359,6 +359,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 | yes |
 | AUDIO PLAYER | `apps/audio/audio.asm` | §86 | yes |
 | ArtfulType | `apps/artful/artful.asm` | §46 | yes |
+| BORATYPE | `apps/boratype/boratype.asm` | §134 | yes |
 | BREADXT | `apps/breadxt/breadxt.asm` |  | yes |
 | BROWSER | `apps/browser/browser.asm` | §71 | yes |
 | BYTEOPOLY | `apps/byteopoly/byteoply.asm` | §131 | no |
