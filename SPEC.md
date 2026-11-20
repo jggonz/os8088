@@ -47084,14 +47084,15 @@ trusted there**: its size word is @20, which IS FstClusHI on this format, so
 writing it would point the file's first cluster into another file. The hint is
 a cache and the read path already checks the file's own `CZ` header
 (`DSK_R_CZL`, §20.14.3), so on FAT32 the mark bytes @12/@13 are cleared, @20
-holds the cluster, and a compressed file's unpacked size comes from its header.
-FIND (`dsk_find_czu`) therefore reads that header for every FILE it reports
-of at least `DSK_CZ_HDR` bytes - one sector a FIND, a folder or a shorter file
-none, out of §18.95's cache for the read that usually follows - after the
-walk's directory sector is spent, since the peek reads into `dsk_secbuf`.
-+22 bit 0 is set either way and +18 is the unpacked size, except to
-`OSAPI_FILE_FIND_RAW`, which keeps the size the file occupies, as the hinted
-path does.
+holds the cluster, and a compressed file's unpacked size comes from its header,
+for `FILE_READ` (`dskw_czknow`) and for the compressor's sizes (`cmz_sizes`).
+**`OSAPI_FILE_FIND` does NOT read it on FAT32**: +18 is the size the file
+occupies and +22 bit 0 is clear, because there is no hint to report from and
+the header's peek goes through `dskw_raw` and `dsk_secbuf`, which the write
+paths own (a sniff there, tried in review, broke a paste). So a package that
+sizes a claim off FIND's +18 for a packed file on a FAT32 volume is refused
+`FERR_BIG` by the read; a package that must read such a file sizes it with
+the read's own answer. Open: a FIND-side header read that owns its buffers.
 
 **The staged listing (§19.1) keeps its 24-byte stride**: the cluster's high
 word goes in the NAME field's last two bytes, +14..+15. A display name is at
