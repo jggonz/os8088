@@ -10,6 +10,7 @@ static struct os88_video bt_video;
 static int bt_timer_ok, bt_worker_live, bt_save_pending, bt_about_up;
 static int bt_focused = 1, bt_guard_scan, bt_last_scan, bt_in_cga;
 static int bt_cga_exit, bt_quit_pending, bt_closing;
+static int bt_return_screen;
 static BTByte bt_io[BT_FILE_SIZE]; /* canonical2136B save, also2000B CGA cells */
 static BTWord bt_saved_generation;
 static const char *bt_slots[2] = {"BORATA.BTT", "BORATB.BTT"};
@@ -66,6 +67,11 @@ static void bt_events(unsigned ev)
 
 static void bt_setscreen(int screen)
 {
+    if (screen == BT_S_HELP || screen == BT_S_SETTINGS || screen == BT_S_RECORDS) {
+        if (bt_screen == BT_S_PLAY || bt_screen == BT_S_PAUSE) bt_return_screen = BT_S_PAUSE;
+        else if (bt_screen != BT_S_HELP && bt_screen != BT_S_SETTINGS && bt_screen != BT_S_RECORDS)
+            bt_return_screen = BT_S_HOME;
+    }
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY)
         bt_pause(os88_ticks());
     bt_screen = screen;
@@ -162,7 +168,9 @@ void bt_action(int a)
         bt_ch_duration = bt_session.duration; bt_ch_diff = bt_session.difficulty;
         bt_begin(bt_session.mode); return;
     } else if (a == BT_A_NEXT) { bt_selection = bt_recommend(); bt_begin(BT_LESSON); return;
-    } else if (a == BT_A_BACK) { bt_schedule_save(); bt_setscreen(BT_S_HOME); return;
+    } else if (a == BT_A_BACK) {
+        n = bt_screen == BT_S_HELP || bt_screen == BT_S_SETTINGS || bt_screen == BT_S_RECORDS ? bt_return_screen : BT_S_HOME;
+        bt_schedule_save(); bt_setscreen(n); return;
     } else if (a == BT_A_PAUSE) { bt_pause_ui(); return;
     } else if (a == BT_A_FULL) { if (!bt_in_cga) bt_fullscreen_toggle(); return;
     } else if (a == BT_A_SAVE) { bt_schedule_save();

@@ -65,6 +65,8 @@ VESA uses the installed OS display driver and live dimensions, including
 F1 help, F2 lessons, F3 master mute, F4 pause, F6 fullscreen, Escape pause/menu.
 Fullscreen transitions preserve session position, profile and seed.
 Return to typing requires intentional resume; transition keys are not scored.
+Help, Settings and Records opened from a live or paused lesson return to its
+Pause screen. Returning from these views never silently starts a fresh run.
 
 ## 4. Resources and budgets
 
