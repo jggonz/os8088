@@ -163069,7 +163069,7 @@ closed:
 |---|---|---|
 | a module calling resident code | every `SHOUT` (`call far [sh_v_*]`) and `CHFP` (`call far [ch_v_*]`): 1,170 + 18 sites in `CHART.OVL`, 336 in `MACRO.OVL` | the shim is `CHX` → **`ch_xthunk`** (`apps/os88chartovl.inc`) |
 | `MACRO.OVL` calling `CHART.OVL` | `CHOUT`, 17 sites: `call far [ch_ovfar]` straight across | `SHOUT ch_ovcall` — through resident code like any other call out |
-| a module calling a kernel slot that can claim | `WM_CREATE`/`SHOW`/`DESTROY` (raise caches), every `FILE_*` (sector cache, FAT window, mount): 30 sites in `CHART.OVL` (one of them `os88chart.inc`'s BMP export, `CH_FWRITE`), 9 in `MACRO.OVL` | **`SHK`**: a vector, a `CHX` shim and a two-instruction resident stub (`sh_k_*`) — one byte SHORTER a site than the far call it replaces |
+| a module calling a kernel slot that can claim | `WM_CREATE`/`SHOW`/`DESTROY` (raise caches), every `FILE_*` (sector cache, FAT window, mount): 30 sites in `CHART.OVL` (one of them `os88chart.inc`'s BMP export, `CH_FWRITE`), 9 in `MACRO.OVL`; and `KEYBOARD` (a HOLD loads `KEYBOARD.DRV`, §9.16.1): `os88kbd.inc`'s two sites in `CHART.OVL`, the Note box's CP850 (§83.7), through `OS88KBD_CALL` | **`SHK`**: a vector, a `CHX` shim and a two-instruction resident stub (`sh_k_*`) — one byte SHORTER a site than the far call it replaces |
 | `ES` = the module's own claim across a file call | `MACRO.OVL`'s text channels read into and write from its own tail (§81.91.1, `push cs / pop es`) | `SHK m2read` / `m2write`: the claim is PINNED for the call and declared again after (`sh_m2pin`/`sh_m2unpin`, §66.5.7.1's `np_dmov` pair), because `dsk_xfer` pins a destination per transfer and not the walk between them (§66.3 rule 5) |
 
 **`ch_xthunk` is `cc_ovthunk`'s shape done in place**, because no register
@@ -163095,7 +163095,8 @@ the loop. No `jmp far`/`call far` with an immediate segment exists in either
 module, and no resident code far-calls a vector. The slots a module still calls
 DIRECTLY are the ones that cannot reach `mem_claim`: the drawing and font
 slots, `SET_COLOR`, `WM_CONTENT`, `VIDEO`, `KEY_DOWN`, `WM_KEEPH`,
-`WM_ONWHEEL`, and `MEM_AVAIL` (which plans and moves nothing).
+`WM_ONWHEEL`, and `MEM_AVAIL` (which plans and moves nothing). `KEYBOARD` is
+NOT one of them: its HOLD loads a module (`mod_need`, which claims).
 
 **Declared after the read and the stamp check**, never before — the read
 holds `ES:BX` in the claim: `ch_ovneed` with `ch_ovreloc` (two stores,
@@ -163461,6 +163462,11 @@ byte-identical.
 buffer probe. They preserve registers and pass failures as carry. Calls
 that can load the provider belong in task/key/file-load context, never in
 a paint routine. Holds are idempotent per instance (§9.16.1).
+A HOLD can load `KEYBOARD.DRV` and so claim, which may compact: an includer
+whose copy of the file sits in a movable module defines `OS88KBD_CALL`
+before the include to route the slot call through resident code, as SHEET's
+chart module does with `SHK keyboard` (§82.16.11). The default is the plain
+`call OSAPI_KEYBOARD`.
 
 `OS88LINE_CP850` opts a one-line field into extended native input; its
 absence retains the existing ASCII-only contract for addresses, filenames
@@ -163475,6 +163481,8 @@ Instance teardown supplies the final release. Notepad uses these same
 holds for keyboard, file and clipboard input, preserves extended document
 bytes through line-ending normalization and save/reopen, and releases the
 hold on New when no remaining find/replace buffer needs extended glyphs.
+A paste only ACQUIRES: the selection it replaced is in the undo arena, and
+Undo can restore extended bytes no scan of the document would find.
 If extended file content cannot acquire the provider, the bytes remain
 preserved and the app reports that the keyboard module is needed; it
 never substitutes a different codepage or silently deletes those bytes.

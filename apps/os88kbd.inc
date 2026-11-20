@@ -4,19 +4,25 @@
 ; at teardown. Call only from task/key/file-load context, never a painter.
 %ifndef OS88KBD_INCLUDED
 %define OS88KBD_INCLUDED
+; OS88KBD_CALL is the slot call itself. A HOLD can load KEYBOARD.DRV and so
+; claim; an includer whose copy sits in a MOVABLE module routes it through
+; resident code (SHEET: `SHK keyboard`, SPEC.md 82.16.11)
+%ifndef OS88KBD_CALL
+%define OS88KBD_CALL call OSAPI_KEYBOARD
+%endif
 
 ; Every register kept; CF=1 if the optional provider could not be acquired.
 os88kbd_hold:
     push ax
     mov ax, 2
-    call OSAPI_KEYBOARD
+    OS88KBD_CALL
     pop ax
     ret
 
 os88kbd_release:
     push ax
     mov ax, 3
-    call OSAPI_KEYBOARD
+    OS88KBD_CALL
     pop ax
     ret
 

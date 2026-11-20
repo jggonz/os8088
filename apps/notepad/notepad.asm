@@ -7603,12 +7603,19 @@ np_paste:
     pop cx
     sub [np_len], dx
     add [np_len], cx            ; the gap was n; only CX of it is text
+    mov di, bx                  ; ES:DI = the CX bytes that survived
+    call os88kbd_scan           ; clipboard bytes use the same native encoding:
+    jnc .held                   ; ACQUIRE only. The selection this replaced is
+    call os88kbd_hold           ; in the undo arena, and Undo puts its high
+    jnc .held                   ; bytes back, so release stays at New and
+    mov ax, np_e_keyfont        ; load (SPEC.md 83.7)
+    call np_saymsg
+.held:
     mov ax, bx
     call np_urec_ins            ; AX = where, CX = how many
     add bx, cx
     mov [np_cur], bx
     call np_editinv
-    call np_kbd_recheck         ; clipboard bytes use the same native encoding
     clc
     jmp short .out
 .nomem:
@@ -11185,7 +11192,7 @@ np_kbd_char:
     clc
     ret
 
-; Re-evaluate at document replacement/New/paste, never per keystroke or
+; Re-evaluate at document replacement/New, never per keystroke, paste or
 ; during paint. This bounded pass retains the provider if any document or
 ; find/replace buffer needs it, otherwise releases the instance's hold.
 ; Refusal preserves all document bytes and announces the missing module.
