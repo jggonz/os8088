@@ -1912,7 +1912,8 @@ in the tree.
   of those zeros, and `MOD_H_IMG`, the module map and the directory size are
   all image + bss. `mod_need` claims the FILE through the paragraph door, to
   the granule (§50.2.1; the `MOD_MAX_KB` bound is taken on the bytes, before
-  the round-up), so the claim holds the bss with no figure of it in the
+  the round-up - 17KB since kern_mega's `CTRL.DRV` passed 16KB with
+  §26.8.6.1's `SX` writer, which moved the refusal and no claim), so the claim holds the bss with no figure of it in the
   kernel, and the read - or the ROM's copy (§2.10.5) - delivers it zeroed on
   every load. A packed module pays a handful of disk bytes for the zeros; a
   plain one (`kern_big`'s `CTRL.DRV`, §2.8.7) pays them in full. It replaced
@@ -63460,8 +63461,10 @@ placement. So the rule for the trailer is:
 | a v2 kernel → this kernel | all | all it had (v2 bytes, decoded) |
 | this → v2 → this | all | the v2 kernel's save drops `SX` (§51.5 rule 1), so cells past 62 come back as it left them |
 
-The cost is no resident byte. The writer is CTRL.DRV's settings core, the
-reader is `.boot3`, and `.sx` copies the `DZ` record into `[desk_zold]`,
+The cost is no resident byte. The writer is CTRL.DRV's settings core (about
+74 bytes, which took `kern_mega`'s image to 16,430 and `MOD_MAX_KB` from 16
+to 17 - the owner's call, 2026-11-20: a refusal bound, so only that one
+claim grows, by a 512-byte granule while it is loaded), the reader is `.boot3`, and `.sx` copies the `DZ` record into `[desk_zold]`,
 which nothing reads before the first reflow. The file grows by
 8 + `DESK_SC0` + count bytes, 32 with fifteen shortcuts.
 
@@ -74892,8 +74895,9 @@ choice and reports it. Selecting the current choice changes nothing.
 An extended sample byte (80h and up) first HOLDs the keyboard module, which
 may load it; a refused HOLD drops the byte and shows the same `Keyboard not
 loaded` toast. Nothing latches the refusal, since on `kern_mega` CTRL.DRV
-is a few bytes short of the `MOD_MAX_KB` claim kernel.asm asserts, so each
-later extended byte asks, and is answered, again.
+was a few bytes short of the `MOD_MAX_KB` claim kernel.asm asserts when this
+was written (the bound is 17KB since §26.8.6.1), so each later extended byte
+asks, and is answered, again.
 Only the previous and new selected glyphs are redrawn after activation.
 
 The sample caption is at (4,96), its frame is (2,108)–(217,121), and 24
