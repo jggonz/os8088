@@ -149,10 +149,11 @@ must preserve its previous comparable record. This is about eleven guest
 minutes, plus UI work. Its host runtime has not been measured; do not register
 a guessed suite `secs` value.
 
-`--scenario audio` probes a three-error reaction after the real cooldown,
-and master mute/unmute while input remains usable. It explicitly makes no
-audibility, PCM clip, mixing, FM or speaker capture/listening claim. Root's
-audio QA provides that evidence separately.
+`--scenario audio` probes a three-error visual reaction after the real
+cooldown, and master mute/unmute while input remains usable. It makes no
+music/effects listening or capture claim; root's audio QA provides that
+evidence separately. The persisted v1 `voice` byte remains a legacy field
+with default zero, and no voice action is required by this harness.
 
 Every screenshot comes from `ui.m.fbuf()` after the native UI finishes, and
 each is paired with the actual session snapshot in `report.json`. Captures

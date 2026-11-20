@@ -44,7 +44,7 @@ CONSTANTS = ("BT_LESSONS BT_PROFILES BT_KEYS BT_PASSAGE BT_MASTERY BT_LESSON BT_
              "BT_ACH_MASTER BT_ACH_25 BT_ACH_50 BT_S_HOME BT_S_LESSONS BT_S_PLAY BT_S_RESULTS "
              "BT_S_PRACTICE BT_S_CHALLENGE BT_S_RECORDS BT_S_SETTINGS BT_S_HELP BT_S_PAUSE "
              "BT_S_PROFILE BT_A_START BT_A_LESSON_BASE BT_A_RETRY BT_A_MUSIC BT_A_EFFECTS "
-             "BT_A_VOICE BT_A_KEYCLICK BT_A_ROAST BT_A_TEST_MUSIC BT_A_TEST_VOICE "
+             "BT_A_KEYCLICK BT_A_ROAST BT_A_TEST_MUSIC "
              "BT_A_DURATION_BASE BT_A_DIFFICULTY_BASE BT_A_PAUSE").split()
 
 
@@ -748,7 +748,7 @@ def audio_probe(app, directory):
     app.press("F3")
     assert app.global_word("bt_master_sound") == 1
     app.press("F4").wait_screen("PAUSE")
-    app.evidence["audio_limit"] = "Reaction/mute/input probe only; no listening or PCM/FM/speaker capture claim."
+    app.evidence["audio_limit"] = "Visual reaction/mute/input probe only; music/effects require separate listening or capture evidence."
 
 
 def persistence_and_readonly(ui, app, args, symbols, layout, evidence):

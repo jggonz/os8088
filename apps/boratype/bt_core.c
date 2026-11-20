@@ -75,7 +75,8 @@ void bt_init(void)
         for (j = 0; bt_default[j]; j++) bt_store.profile[i].name[j] = bt_default[j];
         bt_store.profile[i].name[7] = '1' + i;
     }
-    bt_store.music = bt_store.effects = bt_store.voice = 1;
+    bt_store.music = bt_store.effects = 1;
+    bt_store.voice = 0; /* BTT v1 legacy flag; no speech transport. */
     bt_store.roast = 1;
 }
 

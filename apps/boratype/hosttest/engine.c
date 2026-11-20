@@ -65,6 +65,7 @@ static void check_curriculum(void)
     int i;
     assert(bt_validate_lessons());
     bt_init();
+    assert(bt_store.music && bt_store.effects && !bt_store.voice && !bt_store.keyclick);
     for (i = 0; i < BT_LESSONS; i++) {
         bt_start(BT_LESSON, i, 0, 0, 100);
         assert(!strcmp(bt_session.passage, bt_lessons[i].drill));
@@ -282,6 +283,7 @@ static void check_codec(void)
     unsigned i, j, k, n;
     BTProfile *p;
     bt_init();
+    bt_store.voice = 1; /* Accept older v1 saves without changing their layout. */
     bt_store.generation = 65535; bt_store.selected = 3; bt_store.roast = 2;
     bt_store.keyclick = bt_store.display = 1; bt_store.music = 0;
     for (i = 0; i < BT_PROFILES; i++) {
