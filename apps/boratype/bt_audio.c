@@ -8,7 +8,7 @@
 #define BT_ROAST_GAP 219 /* ceil(12 * 18.2065), wrap-safe unsigned delta */
 #define BT_IDLE_GAP 1093
 #define BT_CAPTION_TICKS 146
-#define BT_MSGS 60
+#define BT_MSGS 63
 /* Severity: 0 praise/help, 1 gentle, 2 classic, 3 extra roast. */
 typedef struct { const char *text; BTByte tag, level, expression; } BTReaction;
 static const BTReaction bt_jokes[BT_MSGS] = {
@@ -71,7 +71,10 @@ static const BTReaction bt_jokes[BT_MSGS] = {
  {"Backspace is winning this election.",5,2,3},
  {"You are polishing the previous letter.",5,3,5},
  {"The cursor would like some company.",6,2,1},
- {"We can hear the dust settling.",6,3,5}
+ {"We can hear the dust settling.",6,3,5},
+ {"No keys yet. Try a short lesson first.",11,0,1},
+ {"Start with F and J, then try again.",11,0,1},
+ {"Give the first letter one careful tap.",11,0,1}
 };
 static BTWord bta_now, bta_spoke, bta_lastkey, bta_idle, bta_caption_at;
 static BTWord bta_errorfx, bta_backmark, bta_samplemark;
@@ -177,7 +180,9 @@ void bt_audio_event(unsigned ev, BTWord now)
     } else if(bt_session.accuracy>=90) bta_low=0;
     if((ev&BT_EV_FINISH) && !bta_finished) {
         bta_finished=1;
-        if(bt_session.new_record || (bt_session.achievement_new&BT_ACH_BEST)) {
+        if(!bt_session.attempts) {
+            bta_stinger=4; bta_fx(8); bta_react(BT_R_EMPTY,1);
+        } else if(bt_session.new_record || (bt_session.achievement_new&BT_ACH_BEST)) {
             bta_stinger=5; bta_fx(9); bta_react(BT_R_RECORD,1);
         } else if(bt_session.accuracy<85 && bt_session.attempts>=20) {
             bta_stinger=4; bta_fx(8); bta_react(BT_R_POOR,0);

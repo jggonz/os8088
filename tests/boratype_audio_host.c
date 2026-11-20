@@ -107,6 +107,24 @@ int main(void)
  memcpy(&before_welcome,&bt_session,sizeof(bt_session));
  bt_audio_tick(1314,1);assert(!bta_on && bta_focus && bta_lasttag==BT_R_IDLE && fx==f);
  assert(!memcmp(&before_welcome,&bt_session,sizeof(bt_session)));
- printf("boratype audio:60messages,%droasts;threshold/cooldown/wrap/intensity/history/music/mute/readonly visual checks passed\n",roasts);
+ /* No-input completion must replace a recent caption with useful neutral
+  * guidance, even if stale result flags are present. Never edit scoring. */
+ reset();bt_session.accuracy=100;bt_session.new_record=1;
+ bt_session.achievement_new=BT_ACH_BEST;
+ memcpy(&before_welcome,&bt_session,sizeof(bt_session));
+ bt_audio_event(BT_EV_FINISH,2);
+ assert(bta_lasttag==BT_R_EMPTY && bta_stinger==4 && lastfx==8);
+ assert(bt_jokes[bta_message].level==0);
+ assert(!memcmp(&before_welcome,&bt_session,sizeof(bt_session)));
+ old=bta_message;f=fx;bt_audio_event(BT_EV_FINISH,300);
+ assert(bta_message==old && fx==f); /* completed guard remains one-shot */
+ assert(!memcmp(&before_welcome,&bt_session,sizeof(bt_session)));
+ reset();bt_session.attempts=1;bt_session.accuracy=100;
+ bt_audio_event(BT_EV_FINISH,300);
+ assert(bta_lasttag==BT_R_SUCCESS && bta_stinger==3 && lastfx==7);
+ reset();bt_session.attempts=1;bt_session.new_record=1;
+ bt_audio_event(BT_EV_FINISH,2);
+ assert(bta_lasttag==BT_R_RECORD && bta_stinger==5 && lastfx==9);
+ printf("boratype audio:%dmessages,%droasts;threshold/cooldown/wrap/intensity/history/music/mute/readonly/empty-result checks passed\n",BT_MSGS,roasts);
  return 0;
 }

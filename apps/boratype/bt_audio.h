@@ -11,6 +11,7 @@
 #define BT_R_STREAK 8
 #define BT_R_SUCCESS 9
 #define BT_R_RECORD 10
+#define BT_R_EMPTY 11
 const char *bt_reaction_history(int back);
 void bt_mhold(int held); /* phase-preserving music pause, near cdecl */
 #endif
