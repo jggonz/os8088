@@ -2711,10 +2711,22 @@ dsk_xfer:
 ; directory, which a file operation's bar does not count (SPEC.md 12.8.8):
 ; dsk_dbg_class's own boundary, [dsk_datalba]. Everything else preserved
 dsk_fpgdata:
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32's FAT CAN be that far in (19.12.2):
+    jne .f16                    ; the boundary is the whole dword, high
+    push ax                     ; words first
+    mov ax, [dsk_lbahi]
+    cmp ax, [dsk_datalbh]
+    pop ax                      ; (`pop` writes no flag)
+    jne .r                      ; CF = 1 below the data area, 0 above it
+    jmp short .lo
+.f16:
+%endif
 %ifdef OS88_BIGVOL
     cmp word [dsk_lbahi], 1     ; past the first 64K sectors is data: CF = 0
     jnc .r                      ; there (no FAT is that far in)
 %endif
+.lo:
     cmp di, [dsk_datalba]       ; CF = 1: below the data area
 .r:
     ret
@@ -5161,6 +5173,9 @@ disk_mount_x:
                                 ; answers CLUSTERS, so a redirected volume's
                                 ; "cluster" is one sector and both consumers
                                 ; of the free figure are untouched (22.7)
+%ifdef OS88_FAT32
+    mov word [dsk_cwd+2], 0     ; a driver's handle is a WORD: whatever high
+%endif                          ; word the caller carried is 0 here (19.12.3)
     mov ax, [dsk_cwd]           ; the opaque handle (62.9.1); 0 = the root
     mov bp, FSV_CHDIR
     call drv_fs_call
@@ -7181,7 +7196,8 @@ dsk_f32_ent:
 ; Preserves every other register. The window starts at the sector asked for,
 ; clamped so it stays whole at the FAT's end, and NEVER at a low word of
 ; 0FFFFh: that is "nothing resident", so such a start moves down one sector,
-; which still covers the sector asked for (SPEC.md 19.12.4)
+; which still covers the sector asked for - or, when it was clamped, UP one,
+; because down would not (SPEC.md 19.12.4)
 dsk_f32_win:
     push bx
     push cx
@@ -7201,7 +7217,7 @@ dsk_f32_win:
     jae .load
     xchg ax, bx                 ; AX = the index - and CF = 0 by hand: the
     clc                         ; `jae` falls through exactly when it is SET
-    jmp short .out
+    jmp .out
 .load:
     push ax                     ; the sector asked for, for the index
     push dx
@@ -7223,6 +7239,11 @@ dsk_f32_win:
 .clamp:
     mov si, bx
     mov di, cx
+    cmp si, 0xFFFF              ; ...and a CLAMPED start of 0FFFFh moves UP:
+    jne .rd                     ; down would drop the FAT's last sector, the
+    add si, 1                   ; one it was clamped for. The sector past
+    adc di, 0                   ; the end is read and never addressed (rule
+    jmp short .rd               ; 16 puts no entry in it)
 .st:
     cmp si, 0xFFFF
     jne .rd
@@ -7243,6 +7264,10 @@ dsk_f32_win:
     jnc .ok
     cmp byte [dsk_nfats], 2     ; FAT 1 unreadable: FAT 2 is the format's
     jne .bad                    ; own redundancy (18.3)
+    test byte [dsk_bpb+DSK_B_EXTF], 0x80
+    jnz .bad                    ; ...unless mirroring is OFF: FAT 2 is then
+                                ; stale, and a flush would write it over the
+                                ; live FAT 1 (19.12.2)
     add ax, [dsk_fatsz]
     adc dx, [dsk_fatsz32]
     mov [dsk_lbahi], dx
@@ -7385,8 +7410,8 @@ dsk_farok:
     ret
 
 ; dsk_here16f - OSAPI_FILE_HERE's body: BL = the drive, DX = the folder, CF=1
-; and DX = 0FFFFh when its high word is not 0 (the 0FFFFh rule). AX and BH
-; kept, DH spent as before
+; and DX = 0FFFFh when its high word is not 0 or it is cluster 0FFFFh (the
+; 0FFFFh rule). AX and BH kept, DH spent as before
 dsk_here16f:
     push bp
     push ax
@@ -7396,11 +7421,16 @@ dsk_here16f:
     xchg ax, dx
     pop ax
     pop bp
-    cmp word [dsk_ch], 0        ; (CF = 0 out of it either way)
-    je .r
+    cmp word [dsk_ch], 0
+    jne .far
+    cmp dx, 0xFFFF              ; ...and cluster 0FFFFh itself, which every
+    jne .ok                     ; GOTO refuses by name: HERE may not answer
+.far:                           ; a word the doors will not take
     mov dx, 0xFFFF
     stc
-.r:
+    retf
+.ok:
+    clc                         ; (the `cmp` left CF = 1 for any DX below it)
     retf
 
 ; -----------------------------------------------------------------------------

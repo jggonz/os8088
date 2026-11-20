@@ -47003,7 +47003,11 @@ refused), and writes go to every copy either way — with mirroring on (bit 7
 clear, every volume mtools, DOS and Windows make) that is the rule, and with
 it off the other copies are unused, so refreshing them is what a driver
 turning mirroring back on does anyway. Reading a FAT other than the first is
-not worth its bytes: no tool this project knows of makes such a volume.
+not worth its bytes: no tool this project knows of makes such a volume. **Nor
+does a FAT 1 read error fall back to FAT 2 with mirroring off** (§18.3's
+redundancy is a mirror's): FAT 2 is then stale, and the window's next flush
+would write it over the live FAT 1, so the load fails and the caller answers
+`FERR_IO`.
 
 #### 19.12.3 A cluster is AX and `[dsk_ch]`
 
@@ -47038,7 +47042,12 @@ entry is 4-byte aligned and never straddles a sector. FAT sector numbers are
 beside it), every FAT transfer arms `[dsk_lbahi]`, and the dirty range is kept
 as LOW words, which is sufficient because it never leaves the window: the
 range's offset into the window is `d − w0` in sixteen bits, correct across a
-65,536-sector boundary.
+65,536-sector boundary. **No window starts at a low word of 0FFFFh**, which is
+`[dsk_fatw0]`'s "nothing resident": such a start moves down one sector, or,
+when it was clamped to keep the window whole at the FAT's end, UP one — down
+would drop the FAT's last sector, the one asked for. The sector past the end
+is then read (FAT 2's first, or the data area's) and never addressed: rule 16
+puts no entry in it, so nothing dirties it.
 
 #### 19.12.5 The root is a chain, and everything above the walker calls it 0
 
@@ -47107,7 +47116,8 @@ instead of guessing.** The rule, on every kernel:
 
 - a door that ANSWERS a cluster (`OSAPI_FILE_HERE`, `OSAPI_ARG_FILE`, FIND's
   +16) answers **0FFFFh** when the high word is non-zero — `HERE` with CF = 1
-  as well; `ARG_FILE` with CF = 0, because its CF says whether there IS a
+  as well, and for cluster 0FFFFh itself, the word every GOTO refuses;
+  `ARG_FILE` with CF = 0, because its CF says whether there IS a
   document and there is (the name is answered, and the folder word then
   refuses wherever it is taken); FIND with its record's flags bit
   `OSAPI_FIND_FAR` (+22 bit 1) set and the entry still listed;
