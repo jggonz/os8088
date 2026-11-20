@@ -28,4 +28,8 @@
 #define BT_A_ROAST 94
 #define BT_A_DISPLAY 95
 #define BT_A_HINT_BASE 256
+/* UI globals: Shift left/right and Caps latch; weak-key practice selection. */
+extern int bt_modifiers, bt_practice_weak;
+#define BT_A_PRACTICE_BASE 100
+
 #endif
