@@ -110,6 +110,11 @@ NINETEEN ASSERTIONS.
    chain writes the big file as a piece through the claim and two pieces
    appended onto it, then goes on to `ZZ/AFTER.TXT`; and after `quit` all
    three files under `BIG/` are compared byte for byte on the host.
+   B: has 2KB clusters, a hard disk's and not a floppy's (Makefile,
+   `thewiredata.img`), so the pieces are 63,488 bytes - the claim rounded
+   down to a cluster - and not the claim's 64,512: an append is refused
+   unless the file's size is a cluster multiple, and a 64,512-byte first
+   piece was the 63KB stub and `Could not write` of issue #381.
 
 14-16. A PACKAGE FOR ANOTHER os8088 (SPEC.md 92.2, 20.2.0). NEWHELLO's
    catalog byte claims the next package format: both buttons grey, the click
@@ -382,8 +387,9 @@ def fixture_big(root):
       README.TXT     depth 0, LZSS - an ordinary entry BEFORE the big one
       DATA/HUGE.BIN  150,000 bytes of noise: past WIRE_FILEMAX, so the writer
                      stores it and makes the archive version 2, and the
-                     machine writes it as a piece of 64,512 bytes, a second
-                     appended, and the last 20,976 appended
+                     machine writes it as a piece of 63,488 bytes (the
+                     claim rounded down to B:'s 2KB cluster), a second
+                     appended, and the last 23,024 appended
       ZZ/AFTER.TXT   an ordinary entry AFTER it, in a folder of its own - the
                      proof that the stream picks up at the next entry header
                      once the pieces are done, and that the folder walk still
@@ -2063,10 +2069,12 @@ def main():
             first = next((i for i in range(min(len(blob), len(want)))
                           if blob[i] != want[i]), min(len(blob), len(want)))
             no("%s/%s is %d bytes on B: and the source is %d; they first "
-               "differ at byte %d. The pieces are 64,512 bytes, so a first "
-               "difference at a multiple of that is a piece boundary: an "
-               "append that rewrote instead of extending, or a counter not "
-               "reset by wr_anext (SPEC.md 92.13.1)"
+               "differ at byte %d. The pieces are 63,488 bytes on B:'s 2KB "
+               "clusters, so a first difference at a multiple of that is a "
+               "piece boundary: an append that rewrote instead of extending, "
+               "or a counter not reset by wr_anext; a file 63,488 or 64,512 "
+               "bytes long is the second piece refused, a piece that was not "
+               "whole clusters (SPEC.md 92.13.1, issue #381)"
                % (BIG_HOME, rel, len(blob), len(want), first))
         else:
             say("%s/%s: %d bytes, byte-identical to what was packed"

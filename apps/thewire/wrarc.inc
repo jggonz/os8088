@@ -283,8 +283,9 @@ wr_aentck:
     mov [wr_abrem], ax
     mov [wr_abrem + 2], bx
     inc byte [wr_abig]
-    mov ax, [wr_dmax]               ; the first piece is a whole claim, and
-    mov [wr_asize], ax              ; wr_anext sizes the rest
+    mov ax, [wr_apmax]              ; the first piece is a claim's worth of
+    mov [wr_asize], ax              ; whole clusters, and wr_anext sizes the
+                                    ; rest
     mov [wr_asto], ax
 .sok:
     mov cl, [wr_ehdr + WA_DEPTH]
@@ -556,6 +557,29 @@ wr_arcbase:
     call OSAPI_FILE_HERE            ; DX = the folder, BL = the drive
     mov [wr_bclus], dx
     mov [wr_bdrv], bl
+    ; --- A PIECE IS WHOLE CLUSTERS (SPEC.md 92.13.1, issue #381). Every
+    ; piece after a big entry's first is an append, and an append wants the
+    ; file's size on a cluster boundary: 63KB is one on a floppy and is not
+    ; on a hard disk's 2KB+. Asked HERE, standing on the volume the tree
+    ; goes to, and only for version 2 - the one kind with a piece.
+    mov ax, [wr_dmax]
+    mov [wr_apmax], ax              ; the claim whole, unless...
+    cmp byte [wr_ahdr + WA_VER], WARC_VER2
+    jb .piece
+    call OSAPI_FILE_DFREE           ; BX = sectors per cluster (<= 64)
+    jc .piece
+    mov cl, 9
+    shl bx, cl                      ; ...the cluster in BYTES, <= 32KB
+    or bx, bx
+    jz .piece                       ; no answer: keep the claim
+    mov ax, [wr_dmax]
+    xor dx, dx
+    div bx
+    or ax, ax                       ; a cluster past the claim: keep it
+    jz .piece                       ; whole, and the append will say so
+    mul bx
+    mov [wr_apmax], ax              ; the claim, rounded DOWN to a cluster
+.piece:
     mov cx, [wr_ahdr + WA_TOTAL]    ; --- ONE BAR FOR THE TREE (SPEC.md
     mov dx, [wr_ahdr + WA_TOTAL + 2] ; 12.8.10): an entry is written a wake,
     call OSAPI_FS_OP                ; so the widget blinked once per entry.
@@ -726,7 +750,7 @@ wr_aname:
 wr_anext:
     push ax
     inc byte [wr_apiece]
-    mov ax, [wr_dmax]
+    mov ax, [wr_apmax]
     cmp word [wr_abrem + 2], 0
     jne .full
     cmp ax, [wr_abrem]
