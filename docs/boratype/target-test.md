@@ -58,6 +58,21 @@ native header sizes and hot entry instructions are compared to the mapped
 binary as a further stale-install check. All runtime reads use `M.Pkg` so
 compaction cannot leave a banked package segment behind.
 
+`--app-build` separates the package artifacts from the kernel artifacts. For
+an actual protected-mode 286 probe, use the normal package with the existing
+Mega86Box backend and `make mega`'s map and compressed SYS:
+
+```
+OS88_MEGA=1 OS88_MEGA_EMU=86box python3 tests/boratype_target.py --backend 86box --adapter vga --scenario adapters --app-build build --evidence build/boratype-qa-mega286
+```
+
+`OS88_MEGA_BUILD` selects the tree containing `mega.img` and `megak/` when
+needed. The native package map still must reproduce `boratype.bin` exactly;
+the system disk must contain that Mega tree's exact `kernel.sys`. The report
+records both raw kernel and build-written Mega map hashes. Package reads use
+the backend's selector translation. This is a functional 286 assertion, not
+an XT timing measurement; the CGA cycle probe is for MartyPC real mode.
+
 The driver compiles a tiny host C helper against the actual production
 `bt.h`, with `BT_HOST` selecting `uint16_t`. It derives every `BTSession`,
 `BTProfile` and `BTStore` field offset and size using `offsetof`/`sizeof`.
@@ -189,6 +204,7 @@ release acceptance. The associated reports and captures are build artifacts.
 | MartyPC/CGA640x200mono on the older native face | first wrong key producedA1/E1/N0, but `ui_done` never became true; input was processed; idle gate failed |
 | MartyPC/CGA320x200four-color from Home | full real lesson, A50/K49/E1/N49,98%, and native restoration passed; captures inspected |
 | same CGA, precise breakpoint probe before row-helper optimization | event-to-VRAM898684cycles=188.296ms, flush222244cycles;100ms target failed |
+| CGA after native row/clear helpers (`ad573be52`) | event-to-VRAM637153cycles=133.499ms, flush218113cycles; full lesson/native restoration passed,100ms target still failed; current error/restoration captures inspected |
 | EGA bounded reboot diagnosis | perfect real beginner lesson, preference save, close/reopen, second writer refused, both RAM-written floppy exports independently read, fresh boot loaded identical whole profile and latest generation;80.29host seconds; captures inspected |
 
 The initial readonly-instance probe exposed a harness navigation fault: the

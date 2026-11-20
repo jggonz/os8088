@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = Path(os.environ.get("OS88_SRC", ROOT)).resolve()
 sys.path.insert(0, str(ROOT / "tools"))
 import os88geom as geom
+import os88build
 import os88marty as M
 import os88sym
 import os88ui
@@ -146,7 +147,7 @@ class App:
                       "Boratype installed native menus", 30)
         # Prove this running image matches the map's resident instructions as
         # well as its header sizes. These hot entries have no bound far cells.
-        native = (Path(os88sym.kernel_image()).parent / "boratype.bin").read_bytes()
+        native = (Path(evidence["app_build"]) / "boratype.bin").read_bytes()
         live = self.p.read(0, 26)
         assert live[:2] == b"O8" and live[16:25] == b"BORATYPE\0", live
         assert live[8:12] == native[8:12], "loaded package image/BSS differs from mapped build"
@@ -857,6 +858,8 @@ def select_instrument(args):
     backend = M.emulator()
     if args.adapter in ("cga", "herc") and backend == "qemu":
         raise ValueError("QEMU has no actual CGA/Hercules; use the MartyPC card model")
+    if args.adapter == "cga" and args.scenario == "adapters" and backend != "marty":
+        raise ValueError("the CGA adapter arm measures raw XT cycles and requires MartyPC")
     if args.adapter == "ega" and backend != "86box":
         raise ValueError("actual EGA350 requires the automation-capable 86Box card model")
     if args.adapter.startswith("vesa") and backend != "qemu":
@@ -876,6 +879,7 @@ def main():
     parser.add_argument("--scenario", choices=("smoke", "challenges", "audio", "adapters", "windows", "reboot"), default="smoke")
     parser.add_argument("--image", type=Path)
     parser.add_argument("--apps", type=Path)
+    parser.add_argument("--app-build", type=Path, help="mapped Boratype artifacts; defaults to the selected build root")
     parser.add_argument("--path", default="B:/BORATYPE.O88", help="installed guest path to open with os88ui")
     parser.add_argument("--negative", action="store_true", help="intentional wrong-count assertion; smoke must fail")
     parser.add_argument("--host-check", action="store_true", help="derive/check offsets only; never boot a guest")
@@ -886,13 +890,18 @@ def main():
         print(json.dumps(layout, indent=2, sort_keys=True))
         print("boratype_target: host offsets checked; guest NOT RUN")
         return
-    build = Path(os88sym.kernel_image()).parent
+    mega = bool(os.environ.get("OS88_MEGA"))
+    kernel_build = Path(os88build.mega_build()) / "megak" if mega else Path(os88sym.kernel_image()).parent
+    build = (args.app_build or (Path(os88build.mega_build()) if mega else kernel_build)).resolve()
     args.evidence = args.evidence.resolve()
     args.evidence.mkdir(parents=True, exist_ok=True)
     args.apps = (args.apps or build / "boratype360.img").resolve()
+    if mega and args.image is None:
+        args.image = Path(os88build.mega_build()) / "mega.img"
     evidence = {"status": "RUNNING", "scenario": args.scenario, "machine": args.machine,
                 "adapter": args.adapter, "backend": backend,
-                "layout": layout, "source": str(SRC), "build": str(build),
+                "layout": layout, "source": str(SRC), "build": str(kernel_build), "app_build": str(build),
+                "kernel": "mega" if mega else "real-mode",
                 "visual_inspection": "required; screenshots alone do not pass appearance claims"}
     started = time.monotonic()
     ui = app = saved = None
@@ -904,12 +913,15 @@ def main():
         # This disk's kernel must be the exact file os88sym reassembles/maps.
         # The disk carries the KZ-wrapped shipped SYS; os88sym verifies the
         # assembled BIN separately. Comparing those two formats is invalid.
-        assert Fat12(args.image).read("KERNEL.SYS") == Path(os88sym.kernel_image()).with_name("kernel.sys").read_bytes(), \
+        assert Fat12(args.image).read("KERNEL.SYS") == (kernel_build / "kernel.sys").read_bytes(), \
             "boot disk kernel differs from the verified symbol map"
         if args.path.upper() == "B:/BORATYPE.O88":
             assert Fat12(args.apps).read("BORATYPE.O88") == (build / "boratype.o88").read_bytes(), \
                 "software disk contains a stale package"
         os88sym.syms()  # byte-identical source/kernel check before launch
+        evidence["kernel_bin_sha256"] = digest(kernel_build / "kernel.bin")
+        if mega:
+            evidence["kernel_map_sha256"] = digest(kernel_build / "kernel.map")
         evidence["system_cfg"] = config_records(args.image)
         if args.adapter.startswith("vesa"):
             records = evidence["system_cfg"]
@@ -921,6 +933,9 @@ def main():
                     "800x600x8 SYSTEM.CFG class was not requested"
         with os88ui.boot(str(args.image), apps=str(args.apps), machine=args.machine, quick=True) as ui:
             try:
+                if mega:
+                    evidence["protected_mode"] = bool(ui.m.protected())
+                    assert evidence["protected_mode"], "Mega probe did not enter protected mode"
                 verify_adapter(ui, args.adapter, evidence)
                 ui.open_drive("B")
                 app = App(ui, open_package(ui, args.path), symbols, layout, evidence)
