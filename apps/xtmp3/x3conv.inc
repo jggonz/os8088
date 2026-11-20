@@ -848,12 +848,14 @@ x3c_vscan:
     xor dx, dx
     call OSAPI_FILE_GOTO_QM         ; its root
     jc .gone
-    call OSAPI_VOL_STAT             ; AX = sectors/cluster, BX = free
-    jc .gone
-    mov cx, ax                      ; free KB = free x spc / 2
-    mul bx
-    shr dx, 1
+    call OSAPI_FILE_DFREE           ; DX:AX = free bytes, BX = sectors a
+    jc .gone                        ; cluster - the TRUE one: VOL_STAT's AX
+    mov cx, 10                      ; scales on FAT32 (SPEC.md 19.12.8)
+.kb:
+    shr dx, 1                       ; free KB = free bytes / 1024
     rcr ax, 1
+    loop .kb
+    mov cx, bx
     pop bx                          ; (BL = the volume)
     push bx
     mov bl, [x3c_nv]

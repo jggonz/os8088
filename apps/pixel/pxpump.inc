@@ -71,7 +71,7 @@ px_dmaclaim:
 ; px_clbytes - AX = the volume's cluster in bytes (512 if it will not say).
 ; Preserves all but AX
 px_clbytes:
-    cmp byte [px_clok], 0           ; ONE VOL_STAT an open (its FAT walk is
+    cmp byte [px_clok], 0           ; ONE DFREE an open (its FAT walk is
     je .ask                         ; ~105 ms on a 20 MB disk; wave-1 review
     mov ax, [px_clsz]               ; MIN-7) - not one a caller, and not one
     ret                             ; a session: a swapped floppy may differ
@@ -79,11 +79,11 @@ px_clbytes:
     push bx
     push cx
     push dx
-    call OSAPI_VOL_STAT             ; AX = sectors a cluster, CX = bytes each
-    jc .def
-    mul cx
-    or dx, dx
-    jnz .def
+    call OSAPI_FILE_DFREE           ; BX = sectors a cluster, the TRUE one
+    jc .def                         ; (VOL_STAT's AX scales on FAT32, SPEC.md
+    mov ax, bx                      ; 19.12.8, and READ_SEQ starts on a REAL
+    mov cl, 9                       ; cluster) - the same 13 bytes as the
+    shl ax, cl                      ; `mul` it replaces, so MC7's parity holds
     cmp ax, 512
     jae .out
 .def:
@@ -93,7 +93,7 @@ px_clbytes:
     mov byte [px_clok], 1
     pop dx
     pop cx
-    pop bx                          ; (VOL_STAT clobbers it: free clusters)
+    pop bx                          ; (DFREE clobbers it: the cluster)
     ret
 
 ; =============================================================================

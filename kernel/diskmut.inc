@@ -14,6 +14,12 @@ section .modl
     DMO_CALL %1
     ret
 %endmacro
+%macro DMO_RAWCLU 0             ; diskw.inc's RAW_CLU_LD ax, from this image:
+    mov ax, [dskw_raw+DSK_R_CLUS]
+  %ifdef OS88_FAT32             ; [dsk_ch] = FstClusHI (SPEC.md 19.12.6)
+    DMO_CALL dskw_rawhi
+  %endif
+%endmacro
 
 ; These four verbs are private constants, dispatched before clone state.
 dmo_dispatch:
@@ -126,7 +132,7 @@ dmo_rmbody_n83:
 
     call dmo_fdir
     jc .out
-    mov [dskw_oldclus], ax
+    CLU_ST dskw_oldclus
 
     call dmo_isempty
     jc .out
@@ -143,7 +149,7 @@ dmo_fdir:
     jnz .prot
     test al, DSKW_DIR
     jz .prot
-    mov ax, [dskw_raw+DSK_R_CLUS]
+    DMO_RAWCLU
     DMO_CALL dskw_clok
     jnc .out
     DMO_TAIL dskw_rdata.corrupt
@@ -179,8 +185,8 @@ dmo_rtbody:
 .fsok:
     ret
 .fat:
-    mov ax, [dsk_cwd]
-    mov [dskw_rt_home], ax
+    CLU_LD dsk_cwd
+    CLU_ST dskw_rt_home
     mov di, dskw_rt_name
     DMO_CALL dskw_name83
 
@@ -191,7 +197,7 @@ dmo_rtbody:
     call dmo_fdir
     jc .fsok
 
-    mov [dskw_rt_top], ax
+    CLU_ST dskw_rt_top
     call dmo_chdir_dl
     jc .ioerr
 
@@ -210,12 +216,15 @@ dmo_rtbody:
     jmp short .loop
 .lfn:
     and word [dskw_oldclus], 0
+%ifdef OS88_FAT32
+    and word [dskw_oldclus+2], 0
+%endif
     DMO_CALL dskw_rmbody_n83.delent
     jc .home
 
     jmp short .loop
 .down:
-    mov ax, [dskw_rt_clus]
+    CLU_LD dskw_rt_clus
     DMO_CALL dskw_clok
     jc .corrupt_home
     call dmo_chdir_dl
@@ -225,10 +234,21 @@ dmo_rtbody:
 .empty:
     cmp byte [dskw_rt_ioerr], 0
     jne .iohome
-    mov ax, [dsk_cwd]
+    CLU_LD dsk_cwd
     cmp ax, [dskw_rt_top]
+%ifdef OS88_FAT32
+    jne .notop                  ; all 32 bits on kern_mega
+    push ax
+    mov ax, [dsk_ch]
+    cmp ax, [dskw_rt_top+2]
+    pop ax
+    jne .notop
+    jmp .finish
+.notop:
+%else
     je .finish
-    mov [dskw_rt_clus], ax
+%endif
+    CLU_ST dskw_rt_clus
     DMO_CALL dsk_dotdot_x
     jc .corrupt_home
     call dmo_chdir_dl
@@ -237,7 +257,11 @@ dmo_rtbody:
     jc .corrupt_home
     call dmo_rmbody_n83
     jc .home
+%ifdef OS88_FAT32
+    jmp .loop
+%else
     jmp short .loop
+%endif
 
 .corrupt_home:
 .iohome:
@@ -259,7 +283,7 @@ dmo_rtbody:
     jmp dmo_rmbody_n83
 
 dmo_rt_go_home:
-    mov ax, [dskw_rt_home]
+    CLU_LD dskw_rt_home
 
 dmo_chdir_dl:
     push dx
@@ -280,7 +304,7 @@ dmo_rt_scan:
     mov byte [dskw_rt_ioerr], 0
     push ss
     pop es
-    mov ax, [dsk_cwd]
+    CLU_LD dsk_cwd
     call dmo_scan1
     jnc .found
     jz .none
@@ -296,8 +320,8 @@ dmo_rt_scan:
     call dmo_rawn83
     mov al, [dskw_raw+DSK_R_ATTR]
     mov [dskw_rt_attr], al
-    mov ax, [dskw_raw+DSK_R_CLUS]
-    mov [dskw_rt_clus], ax
+    DMO_RAWCLU
+    CLU_ST dskw_rt_clus
     clc
 .out:
     pop es
@@ -316,8 +340,12 @@ dmo_rt_byclus:
     push si
     push di
 
-    mov ax, [dsk_cwd]
+    CLU_LD dsk_cwd
     mov dx, [dskw_rt_clus]
+%ifdef OS88_FAT32
+    push word [dskw_rt_clus+2]  ; DX:[dsk_vh] = the cluster sought
+    pop word [dsk_vh]
+%endif
     DMO_CALL dsk_byclus_x
     jc .out
     mov di, dskw_raw
@@ -343,7 +371,7 @@ dmo_isempty:
     push es
     push ss
     pop es
-    mov ax, [dskw_oldclus]
+    CLU_LD dskw_oldclus
     call dmo_scan1
     cmc
     jnc .none
@@ -445,6 +473,9 @@ dmo_nbody:
     DMO_CALL dskw_copy11
     pop si
     and word [dskw_oldclus], 0
+%ifdef OS88_FAT32
+    and word [dskw_oldclus+2], 0
+%endif
     DMO_TAIL dskw_rmbody_n83.entrel
 
 .protected:
@@ -462,4 +493,5 @@ dmo_n83go:
 
 %unmacro DMO_CALL 1
 %unmacro DMO_TAIL 1
+%unmacro DMO_RAWCLU 0
 section .text

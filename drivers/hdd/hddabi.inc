@@ -159,6 +159,13 @@ HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it, which is
                                 ; MOUNTABLE even though this driver never
                                 ; writes one: another machine's FDISK did, and
                                 ; the volume inside is the same FAT16
+HPT_FAT32    equ 0x0B           ; FAT32, CHS- and LBA-flavoured: offered to
+HPT_FAT32L   equ 0x0C           ; the kernel's mount on every kernel, which
+                                ; reads it only on kern_mega (SPEC.md
+                                ; 19.12.10), and never bounded by HP_MAX
+HPT_NOTFAT   equ 0xFFFF & ~((1 << HPT_FAT12) | (1 << HPT_FAT16S) | (1 << HPT_FAT16B) | (1 << HPT_FAT16L) | (1 << HPT_FAT32) | (1 << HPT_FAT32L))
+                                ; hd_part_isfat's table: bit n SET = type n
+                                ; (< 16) is not a FAT volume
 HP_MAXHI     equ 0x003F         ; the volume ceiling since SPEC.md 18.7.5 (it
                                 ; was 65,535 sectors while an LBA was a word),
                                 ; the

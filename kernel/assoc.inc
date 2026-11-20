@@ -173,6 +173,9 @@ assoc_ext:
 ; hint is a place to LOOK and never an answer: a cluster means nothing on a
 ; disk that has been swapped, so the open path re-checks the name on arrival.
 assoc_clus:  times ASSOC_NAPP dw 0     ; the directory it was last SEEN in
+%ifdef OS88_FAT32
+assoc_cluh:  times ASSOC_NAPP dw 0     ; ...its high word (19.12.3)
+%endif
 assoc_drv:   times ASSOC_NAPP db 0xFF  ; ...on which volume (0xFF = never seen)
 ; ...and the one part of a default that cannot be a cluster, because no
 ; cluster is knowable at build time: its FOLDER. It was a sixteen-byte table,
@@ -275,6 +278,10 @@ assoc_hint_here:
     shl bx, 1
     mov ax, [dsk_cwd]
     mov [assoc_clus+bx], ax
+%ifdef OS88_FAT32
+    mov ax, [dsk_cwd+2]         ; ...whole (SPEC.md 19.12.3)
+    mov [assoc_cluh+bx], ax
+%endif
     pop bx
     ret
 
@@ -912,6 +919,10 @@ assoc_go:
 assoc_try_ix:
     shl bx, 1
     mov ax, [assoc_clus+bx]
+%ifdef OS88_FAT32
+    push word [assoc_cluh+bx]   ; AX:[dsk_ch]
+    pop word [dsk_ch]
+%endif
 assoc_try:
     call kentc_di               ; KENT: push ax..di
     call assoc_go               ; QUIET (SPEC.md 18.9): the question here is
@@ -944,6 +955,7 @@ assoc_tryfold:
 .named:
     push si
     xor ax, ax                  ; the volume's root first
+    CLU_HI0
     call assoc_go               ; quiet, for assoc_try's reason
     pop si
     jc .no
@@ -995,8 +1007,10 @@ assoc_tryvol:
     push bx
     push dx
     xor ax, ax
+    CLU_HI0
     call assoc_try              ; the volume's root - and AX is still 0 after
     jnc .out                    ; it, assoc_try restoring AX on both exits
+    CLU_HI0                     ; (but not [dsk_ch]: the stat set it)
     call assoc_go               ; standing on it - a word, being where the
                                 ; root's miss left us - or it would not mount
     jc .fold
@@ -1032,6 +1046,7 @@ assoc_tryvol:
 ; -----------------------------------------------------------------------------
 assoc_tryext:
     xor ax, ax
+    CLU_HI0
     call assoc_go               ; the volume's root
     jc .out
     call asc_use_x
@@ -1164,6 +1179,10 @@ assoc_locate:
 .rung2:
     mov dl, [assoc_ddrv]
     mov ax, [assoc_dclus]
+%ifdef OS88_FAT32
+    push word [assoc_dcluh]
+    pop word [dsk_ch]
+%endif
     call assoc_try
     jnc .found
 
@@ -1198,6 +1217,11 @@ assoc_locate:
     jne .learn                  ; says; where the program really is differs
     mov dx, [assoc_clus+bx+di]  ; when the file never had it, or had it
     cmp dx, [dsk_cwd]           ; somewhere else - both worth writing back,
+%ifdef OS88_FAT32
+    jne .learn
+    mov dx, [assoc_cluh+bx+di]
+    cmp dx, [dsk_cwd+2]
+%endif
     je .known                   ; and a search is quiet mounts, so no harvest
 .learn:                         ; ever saw this. (DX is .out's to restore)
     call asc_post               ; AL = the volume, still; BX survives it
@@ -1262,6 +1286,10 @@ assoc_run_x:
                                 ; here, and every Disk window paints from
                                 ; its own cache (SPEC.md 22.1)
 .curvol:
+%ifdef OS88_FAT32
+    push word [dsk_cwd+2]       ; DX:[dsk_ch], as fmv_here answers
+    pop word [dsk_ch]
+%endif
     mov dx, [dsk_cwd]           ; no poster and no locator, so the
     mov al, [disk_drive]        ; volume the machine is on IS the home
 .located:
@@ -1271,6 +1299,10 @@ assoc_run_x:
                                 ; zero - one byte, and what keeps dsk_xfer
                                 ; behind this on an EVEN shift, t_hotpar):
     mov [assoc_dclus], dx       ; every volume may be asked, once (assoc_go) -
+%ifdef OS88_FAT32
+    push word [dsk_ch]
+    pop word [assoc_dcluh]
+%endif
                                 ; ONCE A RUN and not once a locate, so an
                                 ; empty drive the search below found empty is
                                 ; not asked again by the locate after it
@@ -1504,6 +1536,10 @@ assoc_ownex:
 ; volume that is still spinning, and that is a word rather than a remount.
 assoc_back:
     mov bx, [assoc_dclus]
+%ifdef OS88_FAT32
+    push word [assoc_dcluh]     ; BX:[dsk_ch], dsk_goto's
+    pop word [dsk_ch]
+%endif
     mov al, [assoc_ddrv]
     jmp dsk_goto                ; QUIET (SPEC.md 18.9/54.9): this restores the
                                 ; volume so the app can READ ITS DOCUMENT, and
@@ -1546,6 +1582,10 @@ section .bss
 ; cannot have a line inserted into it: ld_pkg_byname copies the locator in a
 ; single assoc_stage of 16 (SPEC.md 21.5.3.3) and that is legal only while
 ; this holds.
+%ifdef OS88_FAT32
+assoc_dcluh: resw 1             ; assoc_dclus's HIGH word (19.12.3): every
+                                ; writer of the one writes the other
+%endif
 assoc_dblk:  resb 16            ; the locator, one block
 assoc_doc    equ assoc_dblk     ; 13: the pending document's 8.3 name
 assoc_dclus  equ assoc_dblk+13  ; ...and where it lives: directory cluster
@@ -1597,6 +1637,12 @@ osapi_arg_file_x:
     jc .none                    ; byte is spent - and armed answers CF=0,
     mov si, assoc_doc           ; which no `mov` below disturbs. An empty
     mov dx, [assoc_dclus]       ; launch - the ordinary case - still leaves
+%ifdef OS88_FAT32
+    cmp word [assoc_dcluh], 0   ; THE 0FFFFh RULE (SPEC.md 19.12.8): a folder
+    je .near                    ; this word cannot name is 0FFFFh, never its
+    mov dx, 0xFFFF              ; low half (cmp/je/mov leave CF = 0)
+.near:
+%endif
     mov bl, [assoc_ddrv]        ; SI, DX and BL exactly as they came: every
 .none:                          ; package that takes a document asks here
     retf
@@ -2216,6 +2262,9 @@ asc_use_x:
     mov ax, [es:di+ASC_ROWCLUS]
     mov si, bx                  ; [assoc_clus + 2*slot] through BX+SI: SI is
     mov [assoc_clus+bx+si], ax  ; reloaded below (kernel size pass 18, -2)
+%ifdef OS88_FAT32
+    mov word [assoc_cluh+bx+si], 0  ; a row is a WORD: a FAT32 volume keeps no
+%endif                          ; cache (19.12.9), and a stale hint is a miss
     ; ...and WHAT IT LOOKS LIKE (SPEC.md 54.7.3). The row carries the whole
     ; 64-byte body - and, in every cache read now, the glyph the package SHIPS
     ; (54.3.2) - so the glyph costs no read either; without it a DECLARED

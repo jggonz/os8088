@@ -1553,6 +1553,18 @@ cmz_sizes:
     mov si, fm_onam
     call COLD_SEG:dwf_dskw_stat ; AL = attribute, BX = cluster, DX:CX = size
     jc .out
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32 HAS NO HINT (SPEC.md 19.12.6): @12/@13
+    jne .hinted                 ; are its own bytes and @20 its cluster's high
+    push ax                     ; word, so the file's header is read, and
+    push cx                     ; stages the mark, CZH and [dskw_czl] that
+    push dx                     ; the hint's three cells would have held
+    call COLD_SEG:dwf_dskw_czknow
+    pop dx
+    pop cx
+    pop ax
+.hinted:
+%endif
     CSDO_ON
     mov [CSEG cmz_p], cx        ; ANY size: both sides of the codec cross 64KB
     mov [CSEG cmz_p+2], dx      ; now (SPEC.md 20.14.5.1, 20.15.4)
@@ -1567,7 +1579,13 @@ cmz_sizes:
 .out:
     ret
 .cz:
+%ifdef OS88_FAT32
+    mov ax, [dskw_czl]          ; (FAT32: the header's U, staged above)
+    cmp byte [dsk_fattype], 2
+    je .czh
+%endif
     mov ax, [dskw_raw+DSK_R_CZL]    ; U, 24 bits out of the hint
+.czh:
     mov dl, [dskw_raw+DSK_R_CZH]
     xor dh, dh                  ; ...and CF = 0. NOT `mov dh, 0`: the `jbe`
     ret                         ; above is taken with CF SET for an LZ4 mark,
@@ -2405,6 +2423,10 @@ cmz_jstart:
     mov al, [disk_drive]        ; source and target are this one folder, so
     mov ah, al                  ; every hop is a word (dsk_goto's quiet arm)
     mov dx, [dsk_cwd]
+%ifdef OS88_FAT32
+    push word [dsk_cwd+2]       ; ...and its high word in [dsk_ch], as
+    pop word [dsk_ch]           ; cmz_jwhere takes it (SPEC.md 19.12.3)
+%endif
     call cmz_jwhere
     call COLD_SEG:dkf_dsk_batch_begin
 %else
@@ -2779,6 +2801,10 @@ cmz_jrmtmp:
     push bx                     ; and cmz_go's failure path IS cmz_jerr - so a
     mov al, [cs:cmz_jtgtd]      ; hop that failed here went back round with
     mov bx, [cs:cmz_jtgtc]      ; [cmz_jwrote] still set, for ever (SPEC.md
+%ifdef OS88_FAT32
+    push word [cs:cmz_jtgth]    ; (BX:[dsk_ch], SPEC.md 19.12.3)
+    pop word [dsk_ch]
+%endif
     call COLD_SEG:dskf_dsk_goto ; 22.23.6.1). A target it cannot reach keeps
     pop bx                      ; its CMPRESS~.TMP, as a failed rename does
     pop ax
@@ -3127,12 +3153,20 @@ cmz_gosrc:
     push bx
     mov al, [cs:cmz_jsrcd]
     mov bx, [cs:cmz_jsrcc]
+%ifdef OS88_FAT32
+    push word [cs:cmz_jsrch]    ; BX:[dsk_ch], the folder whole (SPEC.md
+    pop word [dsk_ch]           ; 19.12.3)
+%endif
     jmp short cmz_go
 cmz_godst:
     push ax
     push bx
     mov al, [cs:cmz_jtgtd]
     mov bx, [cs:cmz_jtgtc]
+%ifdef OS88_FAT32
+    push word [cs:cmz_jtgth]
+    pop word [dsk_ch]
+%endif
 cmz_go:
     call COLD_SEG:dskf_dsk_goto
     jc .err
@@ -3219,7 +3253,7 @@ cmz_jgo:
     mov si, [fm_vp]             ; the source's drive and the target's...
     mov al, [si+FS_DRV]
     mov ah, [disk_drive]
-    mov dx, [si+FS_CWD]         ; ...and the parts' folder
+    FS_CWD_LD dx, si            ; ...and the parts' folder
     mov bl, 1                   ; Uncompress To...
     call cmz_jwhere
     mov si, clo_fnbuf           ; the part's name where the file layer and
@@ -3251,8 +3285,9 @@ cmz_jgo:
 
 ; -----------------------------------------------------------------------------
 ; cmz_jwhere - the join's places, in cmz_jst's order: AL/AH = the parts' and
-;              the result's drive, DX = the parts' folder, BL = cmz_jto; the
-;              result's folder is [dsk_cwd] on both callers. DF = 0.
+;              the result's drive, DX = the parts' folder (on kern_mega
+;              DX:[dsk_ch], SPEC.md 19.12.3), BL = cmz_jto; the result's
+;              folder is [dsk_cwd] on both callers. DF = 0.
 ;              clobbers: AX, DI, ES, flags
 cmz_jwhere:
     PUSH_CSDATA
@@ -3265,6 +3300,13 @@ cmz_jwhere:
     stosw                       ; cmz_jtgtc
     xchg ax, bx
     stosb                       ; cmz_jto
+%ifdef OS88_FAT32
+    mov di, cmz_jsrch           ; ...and both folders' high words
+    mov ax, [dsk_ch]
+    stosw                       ; cmz_jsrch
+    mov ax, [dsk_cwd+2]
+    stosw                       ; cmz_jtgth
+%endif
     ret
 
 ; cmz_jdisp - mode 7's verbs while the join owns [clo_seg] (SPEC.md 22.23.6)
@@ -3320,6 +3362,9 @@ cmz_jdisp:
     CSDO_ON
     mov word [CSEG cmz_jsrcc], 0 ; the ROOT of the disk now in the drive: a
                                 ; folder is a cluster on the OLD disk
+%ifdef OS88_FAT32
+    mov word [CSEG cmz_jsrch], 0
+%endif
     mov ax, [cs:cmz_jk]         ; the part Enter says is in now - a miss of
     mov [CSEG cmz_jretry], ax   ; THAT one is news, and of a later one is not
     CSDO_OFF
@@ -3870,6 +3915,10 @@ cmz_jnam:   times 13 db 0       ; the result's
 cmz_jop:    db 0, 0             ; (a pad byte for parity) 1 = cmz_jloop's OSAPI_FS_OP is ours to end:
                                 ; in the state block, so a paused join keeps it
 %endif
+%ifdef OS88_FAT32
+cmz_jsrch:  dw 0                ; the two folders' high words (SPEC.md
+cmz_jtgth:  dw 0                ; 19.12.3), last: the runs above keep their
+%endif                          ; offsets, and cmz_jwhere stosw's the pair
 CMZ_JSTL    equ $ - cmz_jst
 cmz_jretry: dw 0                ; the part Enter said is in: a miss of it is news
 cmz_jext:   dw 0                ; where fm_onam's three digits are

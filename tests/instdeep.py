@@ -90,7 +90,13 @@ WANT_RAW = ["README.TXT"]
 
 # --- a FAT reader that is not os88disk.py's ----------------------------------
 class Vol:
-    """One FAT12/FAT16 volume out of a blob, walked by directory."""
+    """One FAT12/FAT16/FAT32 volume out of a blob, walked by directory.
+
+    FAT32 (SPEC.md 19.12) is told apart the way the format says, by a zero
+    FATSz16: its FAT is BPB_FATSz32, its root is a CHAIN at BPB_RootClus
+    (asked for as folder 0, the kernel's own spelling - 19.12.5), its
+    entries are 28 bits of 4 bytes and a directory entry's cluster carries
+    FstClusHI at +20. `fsinfo` is FSInfo's sector, 0 on FAT12/16."""
 
     def __init__(self, blob):
         self.b = blob
@@ -98,18 +104,26 @@ class Vol:
          self.tot16) = struct.unpack_from("<HBHBHH", blob, 11)
         self.fatsz = struct.unpack_from("<H", blob, 22)[0]
         self.tot32 = struct.unpack_from("<I", blob, 32)[0]
+        self.rootclus = self.fsinfo = 0
+        if self.fatsz == 0:
+            self.fatsz = struct.unpack_from("<I", blob, 36)[0]
+            self.rootclus = struct.unpack_from("<I", blob, 44)[0]
+            self.fsinfo = struct.unpack_from("<H", blob, 48)[0]
         tot = self.tot16 or self.tot32
         self.root_lba = self.rsvd + self.nfats * self.fatsz
         self.root_secs = (self.rootn * 32 + self.bps - 1) // self.bps
         self.data_lba = self.root_lba + self.root_secs
         clusters = (tot - self.data_lba) // self.spc
-        self.bits = 12 if clusters < 4085 else 16
+        self.bits = (12 if clusters < 4085 else 16 if clusters < 65525
+                     else 32)
 
     def sec(self, lba, n=1):
         return self.b[lba * self.bps:(lba + n) * self.bps]
 
     def fat(self, n):
         f = self.rsvd * self.bps
+        if self.bits == 32:
+            return struct.unpack_from("<I", self.b, f + n * 4)[0] & 0x0FFFFFFF
         if self.bits == 16:
             return struct.unpack_from("<H", self.b, f + n * 2)[0]
         o = f + n + n // 2
@@ -117,20 +131,24 @@ class Vol:
         return v >> 4 if n & 1 else v & 0xFFF
 
     def chain(self, first):
-        end = 0xFF8 if self.bits == 12 else 0xFFF8
+        end = {12: 0xFF8, 16: 0xFFF8, 32: 0x0FFFFFF8}[self.bits]
         c, out = first, []
         while 2 <= c < end and c not in out:
             out.append(c)
             c = self.fat(c)
         return out
 
+    def dir_raw(self, first):
+        """One directory's bytes: the root region, or a chain - and on FAT32
+        folder 0 is the chain at RootClus (SPEC.md 19.12.5)."""
+        if first == 0 and not self.rootclus:
+            return self.sec(self.root_lba, self.root_secs)
+        return b"".join(self.sec(self.data_lba + (c - 2) * self.spc, self.spc)
+                        for c in self.chain(first or self.rootclus))
+
     def entries(self, first):
         """(name, attr, cluster, size) of one directory, root when first is 0."""
-        if first == 0:
-            raw = self.sec(self.root_lba, self.root_secs)
-        else:
-            raw = b"".join(self.sec(self.data_lba + (c - 2) * self.spc, self.spc)
-                           for c in self.chain(first))
+        raw = self.dir_raw(first)
         out = []
         for o in range(0, len(raw), 32):
             e = raw[o:o + 32]
@@ -142,8 +160,10 @@ class Vol:
                 continue
             stem, ext = e[0:8].decode("latin1").rstrip(), e[8:11].decode("latin1").rstrip()
             name = stem + ("." + ext if ext else "")
-            out.append((name, e[11],
-                        struct.unpack_from("<H", e, 26)[0],
+            clus = struct.unpack_from("<H", e, 26)[0]
+            if self.bits == 32:                 # FstClusHI (19.12.6)
+                clus |= (struct.unpack_from("<H", e, 20)[0] & 0x0FFF) << 16
+            out.append((name, e[11], clus,
                         struct.unpack_from("<I", e, 28)[0]))
         return out
 
@@ -181,11 +201,7 @@ class Vol:
                     break
             else:
                 return None
-        if first == 0:
-            raw = self.sec(self.root_lba, self.root_secs)
-        else:
-            raw = b"".join(self.sec(self.data_lba + (c - 2) * self.spc,
-                                    self.spc) for c in self.chain(first))
+        raw = self.dir_raw(first)
         stem, _, ext = parts[-1].upper().partition(".")
         key = (stem.ljust(8) + ext.ljust(3)).encode()
         for o in range(0, len(raw), 32):

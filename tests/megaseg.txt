@@ -210,4 +210,23 @@
 #             +192 under the same window and kern_mega's own .text shrinks
 #             -16 with their size pass. The allowance comes down by what
 #             this change moved, keeping the slack it had
-3555
+# 2026-11-19: +185, to 3,740, FAT32 on kern_mega (SPEC.md 19.12, docs/
+#             plans/FAT32-MEGA-PLAN.md W1/W2) - DATA the shared file layer
+#             reads through DS, which `.mega` cannot hold: a cluster's high
+#             word beside every word that names one ([dsk_ch], [dsk_vh], the
+#             FAT window's 32-bit sector, the walk's CLURES cells in disk.inc
+#             and diskw.inc, the copy engine's frames 8 -> 10 bytes, the
+#             instances' and the Disk windows' folders, the fdlg/assoc/loader
+#             banks; +193 .bss) and the `.text` file routines both modes run
+#             that move it (inst_where/inst_vol_enter, assoc's hints; +126).
+#             Already kept OUT: the per-volume BPB bank stays 18 bytes (a
+#             FAT32 head is re-read, 19.12.2: -176), and the 16-bit doors'
+#             0FFFFh rule and OSAPI_FILE_PLACE are `.cold` far entries
+# 2026-11-19: +38, to 3,778, #396's international keyboards meeting FAT32
+#             in one tree: measured 3,421 at the merge base ac822227b, 3,461
+#             (+40) at #396's head and 3,740 at main's d546b6c3c, which set
+#             the figure to its own and left no slack. #396's share is
+#             mega_r15's KEYBOARD.DRV intercept (+25 in mega.inc), the INT
+#             15h hook the real-mode BIOS calls (SPEC.md 9.16), so `.mega`
+#             cannot hold it; the rest is macros (+8) and keyboard.inc (+4)
+3778

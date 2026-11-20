@@ -405,6 +405,10 @@ fsk_mounted:
     jne .no
     cmp byte [dsk_vkind], DVK_FILE
     je .no
+%ifdef OS88_FAT32
+    cmp byte [dsk_fattype], 2   ; FAT32: a bit a cluster in one segment
+    je .no                      ; cannot cover 2^28 (SPEC.md 19.12.9)
+%endif
     ret
 .no:
     mov ax, FSKE_NOFAT

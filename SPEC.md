@@ -40841,7 +40841,7 @@ buffering, written once and costing the kernel nothing - the write side of
 
 | call | in | does |
 |---|---|---|
-| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_VOL_STAT` for that volume's cluster ONCE - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
+| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_FILE_DFREE` for that volume's cluster ONCE (its BX: `OSAPI_VOL_STAT`'s AX scales on FAT32, §19.12.8) - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
 | `os88_wseq_put` | DS:DI = the stream, ES:SI = any bytes, CX = any count (0 legal) | copies into the buffer; a full buffer writes the largest whole number of clusters it holds and moves the rest to its front - so a buffer that is itself a cluster multiple never moves a byte |
 | `os88_wseq_close` | DS:DI = the stream | writes what is buffered, any size: the last chunk is the one the slots let be short |
 
@@ -41050,8 +41050,10 @@ DOS was the only caller of the offset door and of `OSAPI_VOL_STAT` when
 they were cut, and it does not ship on the small disks (§24.5, `SMALLPKGS`).
 So on `kern_small` both cells are `stc`/`ret` stubs — legitimate here because
 every caller tests `CF` (KERN-SMALL-CUT-PLAN §10): `apps/os88data.inc`'s
-`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`'s
-open refuses its stream, so REDLINE's Inspect report is refused there —
+`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`,
+which was refused at its open here, no longer asks `OSAPI_VOL_STAT`: it takes
+`OSAPI_FILE_DFREE`'s cluster (§18.4.9.4) and appends every chunk through the
+offset cell's append, so REDLINE's Inspect report is written here too —
 and with them go the INSIDE
 arm of the body, `dsk_write_chain` and its direction byte, and the two far
 entries: **395 bytes of that kernel** (`.text` −11, `.bss` −1, `.cold` −383).
@@ -45258,7 +45260,7 @@ DataSec         = TotSec16 - FirstDataSec
 CountOfClusters = DataSec / SecPerClus
 CountOfClusters <  4085  -> FAT12
 CountOfClusters < 65525  -> FAT16
-else                     -> reject (FAT32 out of scope)
+else                     -> reject (FAT32 out of scope; kern_mega: §19.12)
 ```
 
 Reachability: detection runs after §18.2 rule 13 has passed, so TotSec16 ≤
@@ -45350,7 +45352,7 @@ at a stride of 24. `kernel/dskwin.inc` carries the `%error` for each.
 |-----|------|--------------------------------------------------------------|
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
 | 16  | 2    | type: 1 = loadable package, 2 = subdirectory, 3 = the parent link (§19.5), else 0 (rules below) |
-| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
+| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored (on a FAT32 volume, `kern_mega` only, the high word is in the name field's +14, §19.12.6) |
 | 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`, or in K/M by `fm_szfig_x` per §22.7.1); forced to 0 for type 2 |
 | 24  | 8    | zero — except that a `DRVC_FILE` driver's `FSV_ENUM` may put a FAT attribute byte at **+24**, which FIND reports (§62.9.17.1) — and **not stored in a staged listing**: `DSK_DE_STRIDE` stops at 24, `dsk_ent` is still 32 wide, and no consumer in the tree reads these eight bytes |
 
@@ -47194,6 +47196,341 @@ the Makefile, where an `.OVL` may only be a cut (`os88ovl.py -o`), a
 exemption is `tests/cfsx`, the C SDK's sidecar mode's own fixture, which
 ships nowhere.
 
+### 19.12 FAT32 — read and written on `kern_mega` (2026-11-19)
+
+**FAT32 is a format, and `kern_mega` reads and writes it; no other kernel
+does.** §19's own arithmetic stops at 65,524 clusters because every cluster
+number in this file system was a word. FAT32 widens the CLUSTER, not only the
+data area's sectors (§18.7.5), and that is resident code on every file
+operation's path — so on `kern_big` it fails the module test (§2.8) inside a
+budget held at zero growth, and on the XT it would also be slow
+(docs/plans/FAT32-MEGA-PLAN.md §1). On `kern_mega` the `.cold` rung is above
+1MB and costs no conventional memory, which is where almost all of this lives.
+**The XT's answer stays FAT16**: up to six volumes of up to 2GB, primary or
+logical (§52.4.1).
+
+The owner's decisions (2026-11-19, the plan's §5): the API names a far folder
+through **new 32-bit forms with the high word in a second register**, the old
+doors refusing what they cannot name (O1); the ceiling is **2TB**, the format's
+own (O2); a FAT32 volume is **hidden from DOS sessions** (O3); and it is
+**read-write from the first build that mounts it** (O4).
+
+#### 19.12.1 One switch, `OS88_FAT32`, and the bytes it does not cost
+
+`OS88_FAT32` is defined by `KERN_MEGA` and nothing else. Every site that
+differs is an `%ifdef` on it or one of the `CLU_*` macros (§19.12.3), which
+assemble to the word-wide instruction they replace on every other build — so
+**`kern_big`, `kern_small` and `kern_dos` assemble to the bytes they were**,
+and that is checked by hashing the three images before and after, not
+asserted. Code goes in `.cold`; what must be resident is `.bss`, counted
+against `KERN_MEGA_RESIDENT_KB` and `tests/megaseg.txt`.
+
+`[dsk_fattype]` gains a third value: 0 = FAT12, 1 = FAT16, **2 = FAT32**.
+Every FAT32 arm is reached by `cmp byte [dsk_fattype], 2` (or by the
+`jb`/`ja` the existing 0/1 tests already make), so a FAT12/16 volume on
+`kern_mega` takes the path it takes on `kern_big`.
+
+#### 19.12.2 The mount: what FAT32's boot sector must say
+
+The staged BPB (§18.9.2) grows on `kern_mega` to cover the sector's bytes
+11..50 (`DSK_BPB_SZ` = 40, 22 bytes of `.bss`). **The per-volume bank does
+not** (`DSK_BPB_BANK` stays 18): a FAT32 head is never banked, so a FAT32
+volume's remount reads its sector 0 again — one transfer on a 286-class
+machine's fixed disk, against 176 bytes of the kernel segment for every
+volume row, which is the one segment `kern_mega` is short of (tests/
+megaseg.txt). The type is still decided by the cluster count alone (§19), but the
+count is reached by a different layout, chosen by **`BPB_FATSz16` = 0**:
+
+| field | FAT12/16 | FAT32 |
+|---|---|---|
+| RootEntCnt (rule 7) | 1..512, ×16 | **must be 0** |
+| FATSz16 (rule 10) | ≥ 1 | **0**, and FATSz32 @36 ≥ 1 |
+| TotSec | TotSec16, or TotSec32 folded (§18.7.5) | **TotSec32 @32, all 32 bits** — 2TB |
+| FSVer @42 | — | **must be 0** |
+| RootClus @44 | — | in [2, CountOfClusters+1] |
+| FSInfo @48 | — | 0 or 0FFFFh = none; else < RsvdSecCnt |
+| ExtFlags @40 | — | bit 7 set = mirroring off: refused unless the live FAT (`ExtFlags & 0Fh`) is FAT 0 |
+| CountOfClusters (rule 15) | < 65,525 | **≥ 65,525** and ≤ 0FFFFFF5h |
+
+**A FAT32 BPB is refused on a floppy** (rule 13's `[dsk_vflop]` test): the
+format needs at least 65,525 clusters and no floppy has them, so a floppy that
+claims to be FAT32 is hostile or broken. **And it is refused on every kernel
+that is not `kern_mega`**, by rules 7 and 10 as before — the arms below do not
+exist there.
+
+Layout, all of it 32-bit: `FirstDataSec = RsvdSecCnt + NumFATs × FATSz32`;
+`[dsk_rootsecs]` = 0; the root region does not exist (§19.12.5). The live FAT's
+first sector is `RsvdSecCnt`, as on FAT16: a volume with mirroring off is
+mounted only when its live FAT is the first (`(ExtFlags & 8Fh) > 80h` is
+refused), and writes go to every copy either way — with mirroring on (bit 7
+clear, every volume mtools, DOS and Windows make) that is the rule, and with
+it off the other copies are unused, so refreshing them is what a driver
+turning mirroring back on does anyway. Reading a FAT other than the first is
+not worth its bytes: no tool this project knows of makes such a volume. **Nor
+does a FAT 1 read error fall back to FAT 2 with mirroring off** (§18.3's
+redundancy is a mirror's): FAT 2 is then stale, and the window's next flush
+would write it over the live FAT 1, so the load fails and the caller answers
+`FERR_IO`.
+
+#### 19.12.3 A cluster is AX and `[dsk_ch]`
+
+A cluster number is 28 bits. The FAT layer's contracts all say "AX =
+cluster", and they keep saying it: on `kern_mega` **the high word rides in
+`[dsk_ch]`**, a `.bss` word that is to a cluster what `[dsk_lbahi]` is to an
+LBA — the second half of one value — except that it is a register, not a
+one-shot. Every routine whose input or output is a cluster in AX takes or
+answers its high word there. On a FAT12/16 volume it is 0, and stays 0 because
+nothing that can only make a 16-bit cluster writes it non-zero.
+
+This is safe for the reason the rest of the FAT layer's module state is: the
+file system runs on the UI task alone (§18.4's single-task rule), so nothing
+can be inside it twice, and an ISR never touches it.
+
+What HOLDS a cluster for longer holds all 32 bits: every `.bss` cluster
+variable is `CLURES` — `resd` on `kern_mega`, `resw` elsewhere — and the
+macros load and store the pair: `CLU_LD v` is `mov ax, [v]` plus `push word
+[v+2] / pop word [dsk_ch]` (no register spent), `CLU_ST v` the reverse,
+`CLU_Z` zeroes both, `CLU_CMPMAX` compares the pair against
+`[dsk_maxclus]`'s dword. A sentinel that used to be 0FFFFh becomes
+0FFFFFFFFh, which no FAT32 cluster can be (the entry is 28 bits).
+
+**`[dsk_ch]` is scratch that every FAT call rewrites** — a listing, a stat, a
+chain step, a free count — so a caller that hands a cluster to `dsk_goto` or
+`dsk_chdir` SETS it: `CLU_HI0` for one that is a word by construction (the
+root, 0), and a folder kept across other file calls keeps its high word with
+it (Root Folder, a drive's mount, the Sticky Apps scan, an Alt-drop's link,
+a join's two folders).
+
+#### 19.12.4 The FAT window holds 4-byte entries
+
+The window (§18.8) is the same 4,608 bytes, 1,152 FAT32 entries. An entry is
+read masked to 28 bits; a write preserves the top four (the format reserves
+them); end-of-chain is any value ≥ 0FFFFFF8h, which the range test already
+treats as "the chain ends here" because it is past `[dsk_maxclus]`. A FAT32
+entry is 4-byte aligned and never straddles a sector. FAT sector numbers are
+32-bit: `[dsk_fatw0]` carries a high word (`[dsk_fatw0h]`, banked per volume
+beside it), every FAT transfer arms `[dsk_lbahi]`, and the dirty range is kept
+as LOW words, which is sufficient because it never leaves the window: the
+range's offset into the window is `d − w0` in sixteen bits, correct across a
+65,536-sector boundary. **No window starts at a low word of 0FFFFh**, which is
+`[dsk_fatw0]`'s "nothing resident": such a start moves down one sector, or,
+when it was clamped to keep the window whole at the FAT's end, UP one — down
+would drop the FAT's last sector, the one asked for. The sector past the end
+is then read (FAT 2's first, or the data area's) and never addressed: rule 16
+puts no entry in it, so nothing dirties it.
+
+#### 19.12.5 The root is a chain, and everything above the walker calls it 0
+
+On FAT32 the root directory is an ordinary cluster chain starting at RootClus.
+**"Cluster 0 is the root" stays true above the walker**: `dsk_dirw_start_x`
+resolves 0 to RootClus on a FAT32 volume, `[dsk_cwd]` is 0 at the root, every
+door's 0 still means the root, and a `..` entry whose cluster is 0 — or
+RootClus, which some tools write — goes to the root. A subdirectory's `..`
+written HERE is 0 when its parent is the root, as the format says.
+
+Because the walker resolves the root to a real chain, `[dsk_wlast]` is set by
+the root walk too, and **`dskw_dirgrow` grows the root** on FAT32 with no code
+of its own; on FAT12/16 the root region is fixed and still cannot.
+`dsk_byclus_x` (the path walk, §19.2.4) treats RootClus as 0 for the same
+reason.
+
+#### 19.12.6 FstClusHI, the listing's high word, and the compression hint
+
+**Every read of an entry's first cluster on a FAT32 volume combines FstClusHI
+@20 with FstClusLO @26**; every write of one writes both, `.` and `..`
+included. On FAT12/16 @20 is ignored, as §19.1 has always said.
+
+**The compression hint (§20.14) is not written on a FAT32 volume and not
+trusted there**: its size word is @20, which IS FstClusHI on this format, so
+writing it would point the file's first cluster into another file. The hint is
+a cache and the read path already checks the file's own `CZ` header
+(`DSK_R_CZL`, §20.14.3), so on FAT32 the mark bytes @12/@13 are cleared, @20
+holds the cluster, and a compressed file's unpacked size comes from its header,
+for `FILE_READ` (`dskw_czknow`) and for the compressor's sizes (`cmz_sizes`).
+**`OSAPI_FILE_FIND` does NOT read it on FAT32**: +18 is the size the file
+occupies and +22 bit 0 is clear, because there is no hint to report from and
+the header's peek goes through `dskw_raw` and `dsk_secbuf`, which the write
+paths own (a sniff there, tried in review, broke a paste). So a package that
+sizes a claim off FIND's +18 for a packed file on a FAT32 volume is refused
+`FERR_BIG` by the read; a package that must read such a file sizes it with
+the read's own answer. Open: a FIND-side header read that owns its buffers.
+
+**The staged listing (§19.1) keeps its 24-byte stride**: the cluster's high
+word goes in the NAME field's last two bytes, +14..+15. A display name is at
+most twelve characters and its NUL is at or before +12, so those two bytes are
+never read as text — the trick `IMG_DVSEG` plays on a volume label (§18.101).
+On FAT12/16 they are zero, as before.
+
+#### 19.12.7 Writes: allocation, root growth and FSInfo
+
+The allocator scans the window for a zero entry **under the 28-bit mask** and
+marks the cluster 0FFFFFFFh; the rover, the free count and the chain walks are
+32-bit. `dskw_free_chain` writes 0 under the mask.
+
+**FSInfo's free count is advisory, so it is never trusted and never kept**:
+the first mount of each volume in a boot (`dsk_f32_fsi`, from `disk_mount_x`;
+`[dsk_fsimask]` holds one bit a volume, cleared when `dsk_vol_add` reuses the
+slot) writes FSInfo's FSI_Free_Count and FSI_Nxt_Free as 0FFFFFFFFh,
+"unknown", after checking its three signatures (41615252h @0, 61417272h @484,
+AA550000h @508) — a sector that does not carry them is not written, and
+neither is one already saying unknown. Every FAT32 driver must recompute an
+unknown count, so the value is always truthful whatever this kernel then
+writes. It is at the mount and not at the first FAT flush because the flush
+runs with `dsk_secbuf` in use by its caller; the cost is one read and at most
+one write per volume per boot, including a boot that only reads. The free count this kernel answers is its own FAT scan
+(`dsk_free_clus_x`, §18.4.10), a window at a time — on a large volume that is
+the FAT's whole size read, which is why the copy engine's room test keeps its
+early stop (`[dsk_fcgoal]`, which is a dword here). The Disk window's status line
+(§22.7) keeps that count in **KB** on a FAT32 volume rather than bytes - a
+free 4GB is past a dword of bytes and not of KB under the 2TB ceiling - and
+prints it with a third unit, `G`, after K and M (`fm_szfig_kb`); every other
+volume's figure is the bytes it was.
+
+#### 19.12.8 The API: `OSAPI_FILE_PLACE`, and the 0FFFFh rule
+
+**A 16-bit door cannot name a folder past cluster 65,535, and it says so
+instead of guessing.** The rule, on every kernel:
+
+- a door that ANSWERS a cluster (`OSAPI_FILE_HERE`, `OSAPI_ARG_FILE`, FIND's
+  +16) answers **0FFFFh** when the high word is non-zero — `HERE` with CF = 1
+  as well; `ARG_FILE` with CF = 0, because its CF says whether there IS a
+  document and there is (the name is answered, and the folder word then
+  refuses wherever it is taken); FIND with its record's flags bit
+  `OSAPI_FIND_FAR` (+22 bit 1) set and the entry still listed;
+- a door that TAKES one (`OSAPI_FILE_GOTO`, `GOTO_Q`, `GOTO_QM`,
+  `OSAPI_FILE_COPY`'s DX/CX) **refuses 0FFFFh** with CF = 1 — and AX =
+  `FERR_NAME` where the door answers a code in AX (`GOTO_Q`, `GOTO_QM`,
+  `FILE_COPY`; `FILE_GOTO` keeps AX, as it always has). On FAT12/16 it
+  always did (0FFFFh is past `[dsk_maxclus]`); on `kern_mega` it is refused
+  by name, because on FAT32 it could be a real folder. The doors' `.text` is
+  unchanged: each calls a `.cold` far entry (`dkf_dsk_chdir16`,
+  `dskf_dsk_goto16`, `dsk_here16f`) in place of the one it called.
+  `OSAPI_PKG_START`'s document locator (§21.5.3), whose folder is a word,
+  refuses it on `kern_mega` with AL = `LD_EBAD`.
+
+So a package built before this reaches a far folder and is refused there,
+loudly, and never lands in the wrong one. Cluster 65,535 itself is nameable
+only through the 32-bit forms.
+
+**`OSAPI_FILE_PLACE`** (an RN door, so it is an ABI addition with no
+`PKG_FMT` bump) is the 32-bit form, one verb in AL. The cluster is DX = low,
+**CX = high**; BL = the volume. Being RN, it stages DS:SI as a name for
+every verb, so SI must address the caller's own data even where the verb
+reads no name (SI = 0, the package's header, will do):
+
+| AL | verb | in | out |
+|---|---|---|---|
+| 0 | `FPL_HERE` | — | BL, DX, CX: `OSAPI_FILE_HERE`'s answer, whole |
+| 1 | `FPL_GOTO` | BL, DX, CX | `OSAPI_FILE_GOTO` |
+| 2 | `FPL_GOTO_Q` | BL, DX, CX | `OSAPI_FILE_GOTO_Q` |
+| 3 | `FPL_GOTO_QM` | BL, DX, CX | `OSAPI_FILE_GOTO_QM` |
+| 4 | `FPL_ARG` | — | BL, DX, CX: `OSAPI_ARG_FILE`'s folder, whole (the name comes from `ARG_FILE`, which answers it even when its DX is 0FFFFh) |
+| 5 | `FPL_STAT` | SI = an 8.3 name in the current folder | AL = its attribute, DX, CX = its first cluster |
+
+An unknown verb is refused with CF = 1, AX = 1. **Only `kern_mega` has a
+body** (`dsk_fpl_door`, `.cold`); every other kernel holds the index with a
+refusal (CF = 1, AX = 1, `RDREF`), because no folder there needs a second
+word and a body would be resident bytes for nothing (docs/KERNEL-MEMORY.md).
+A package written to the 32-bit forms asks `FPL_HERE` once: CF = 1 with
+AX = 1 means the 16-bit doors are complete on this kernel, and it uses
+them. `OSAPI_FILE_COPY`
+gains **`OSAPI_FCP_FAR`** (AL bit 7): ES:DI points at four words, the source
+folder's low and high then the destination's, in place of DX and CX. Every
+other kernel refuses the bit for nothing: AL is then a verb its door does not
+name (`cmp al, 1 / ja`), CF = 1 - which `FPL_HERE`'s refusal already told the
+package to expect.
+
+**`OSAPI_VOL_STAT`** answers DOS's four registers, and on a volume whose count
+does not fit a word it SCALES: AX (sectors per cluster) doubles and BX/DX halve
+until both fit, so AX × CX × BX is still the free bytes to within one cluster;
+past AX = 32,768 the counts clamp at 0FFFFh. `OSAPI_FILE_DFREE` answers free
+BYTES in DX:AX, exact below 4GB and clamped at 0FFFFFFFFh above — a package
+that needs the figure on a larger volume multiplies `VOL_STAT`'s registers,
+which is within a cluster of it. **A scaled AX is therefore NOT the cluster
+size**, and AX × CX passes a word at AX = 128: a package that chunks, aligns
+or masks by the cluster takes `OSAPI_FILE_DFREE`'s BX, which is the true
+sectors per cluster (1..64) on every volume - `os88wseq.inc` (§18.4.9.4),
+PIXEL's ring and XTMP3's destination test do.
+
+**`OSAPI_FILE_READ_SEQ`'s cursor** is the caller's 16 bytes and has no room for
+a second word. On a FAT32 volume `RSQ_CUR` is the cluster's low word and the
+kernel keeps its high word in its own copy of the last cursor (`dwr_c`); a
+cursor whose high word the kernel does not hold — another stream read in
+between — walks from the file's first cluster, which is correct and slower.
+**`FSEQF_RUN` and `FSEQF_MAP` are refused on a FAT32 volume** (CF = 1, AX =
+`FERR_NAME`): their runs are word pairs, and a caller of MAP must already
+handle refusal (a redirected volume has always refused it).
+
+#### 19.12.9 What refuses FAT32, by name
+
+- **FSCHECK** (§60) answers `FSKE_NOFAT`: its bitmaps are a bit a cluster in
+  one segment, which cannot cover 2^28.
+- **The formatter and the disk tool** format FAT12/16, which an XT can read too.
+- **DOS sessions** (§96): the gather that builds kern_dos's volume table drops
+  a FAT32 row (O3), so a DOS program sees no such drive rather than one its
+  FAT code would misread.
+- **Hibernation** (§99) refuses a FAT32 volume as its target; its image
+  records are cluster words. `hb_pick`, THE predicate (§47 rule 5), passes
+  over a volume whose `[dsk_f32mask]` bit is set and goes on to the next
+  fixed one, so the menu item, the probe, the write and the DOS handoff's
+  no-park image all agree; `hbm_root`'s refusal stays as the backstop for a
+  volume that bit has not seen mounted.
+- **The installer** (§117) does not offer a FAT32 partition as a target: the
+  boot path reads FAT12/16.
+- **Mounting a disk image** whose file is on a FAT32 volume answers 'Cannot
+  mount from here': the claim keeps the host folder and the file's first
+  cluster as words (`IMG_M_DIR`/`IMG_M_CLUS`). Clone's image end is whole
+  (`CL_FCLUH`).
+- **The association cache** (§54.7): `ASSOC.DAT`'s rows hold a program's
+  folder as a cluster word, so the writer keeps no cache on a FAT32 volume
+  and a row read there is a hint with a zero high word — a miss costs the
+  search the cache exists to save, nothing worse. The in-memory hints and
+  the pending document's folder are whole (`assoc_cluh`, `assoc_dcluh`).
+
+#### 19.12.10 HDD.DRV offers 0Bh/0Ch; the kernel's mount decides
+
+`HDD.DRV` hands partition types 0Bh and 0Ch to `osapi_vol_mount` on every
+kernel, and the kernel is the fence: `kern_mega` reads the volume, and every
+other kernel's BPB check refuses FATSz16 = 0 as it refuses any boot sector
+not in its format, so the slot is dropped again exactly as a partition whose
+type lies is (§52.4). No flag says which kernel reads FAT32, because none is
+needed — and the driver had no byte to spend on asking: it is on its 4,608-
+byte rung (§52.4.1), and the acceptance was paid for inside it
+(`hd_part_isfat` became a one-word bit table, `hd_sel`/`hd_pslot` one word
+load). The cost on the other kernels is one boot-sector read at the
+automount for a partition that would have been skipped by type.
+
+A FAT32 slot is mounted without the 2GB FAT16 bound (`hd_part_big` is not
+asked at the mount; the Format window still clamps to it, because what it
+writes is FAT16): the partition's own 32-bit length is the volume's
+(`HDV_LEN`, §18.7.5), and the transport is the last bound — rung 1's native
+ATA is LBA28, **128GB**, and a transfer past what the drive's rung addresses
+fails as a disk error. The installer (§117) names the slot "FAT32" and does
+not offer it as a target (§19.12.9).
+
+**On `kern_mega` a FAT32 partition takes its letter in slot order like any
+other volume** - DOS's and Windows' lettering of the same disk - so a volume
+after it on that disk moves one letter later than in builds before this one:
+a FAT32 primary ahead of a FAT16 logical drive makes the FAT32 volume C: and
+the FAT16 one D:, where it was C:. What was saved against the old letter
+names the FAT32 volume now - a desk shortcut's `SC_R_VOL` is a bare volume
+index - and misses there ('not found'); nothing is written to the wrong
+volume. The other kernels drop the refused row before the next slot mounts,
+so their letters are unchanged.
+
+#### 19.12.11 Gates
+
+`tests/fat32.py` builds a FAT32 volume on the host with mtools (`mformat -F`)
+behind a hand-made MBR, with files and a folder placed past cluster 65,535, and
+boots `kern_mega` with `HDD.DRV` on it. The guest lists the root, enters the
+far folder, launches a package off the volume, copies a file onto it, makes a
+folder and deletes a file; the host then reads the volume back with mtools
+(`mdir`, `mtype`, `fsck.fat -n` where present) byte for byte. A second leg
+checks that `kern_big` still refuses the partition with the driver's caption.
+That the three other kernels are the bytes they were is checked by hashing
+their images at the merge base and at the head (the PR's evidence), not by a
+row: a row cannot know the base's bytes once the build number has moved.
+
 ## 20. Loadable programs — the .o88 package format
 
 ### 20.1 A package owns a segment, and its region is a heap claim
@@ -48382,7 +48719,14 @@ real-mode answer, the inline `mov ax, dx / cmp ax, 1` it was, is a five-byte
 `.text` body off kern_mega. `tests/unit/t_api_abi.py --all` decodes `rd_tab`
 on all four kernels and fails on an index that differs, a kind out of its
 range, or an entry naming the wrong routine (`DOOR_OWN` ledgers the
-refusals).
+refusals). **A kernel may instead END its table before a cell it refuses**,
+but only the table's LAST cells: step 3 below answers an index at or past
+its `RD_N` with the refusal entry's own CF = 1, AX = 1, for no bytes, while
+a gap mid-table would move every later index. kern_small does this for
+`OSAPI_FILE_PLACE` (§19.12.8), its heap rung being locked; kern_big holds
+an `RDREF` row for it (`api_refusec`, six `.cold` bytes) because the SDK's
+indices are generated from kern_big's table, and t_api_abi passes a cell
+past a kernel's `RD_N - RD_P` as refused.
 
 **The door, step by step.** The `int` pushes FLAGS, CS and an IP that names
 the index byte, and clears IF and TF.
@@ -63693,7 +64037,7 @@ makes a link.
 `fm_dgdrop` asks `fm_mods`, which now answers Alt (bit 3) beside Ctrl and
 Shift, AT THE DROP. The drag's armed Cut is disarmed as a desktop drop's is,
 and the gesture goes to CTRL.DRV as `SC_OP_LNK` with the destination's volume
-and folder. `sc_m_lnk` composes the record in `cpc_buf` from the drag's
+and folder (on `kern_mega` its high word too, in CX, §19.12.3). `sc_m_lnk` composes the record in `cpc_buf` from the drag's
 `fcp_cb*`, sc_m_new's path code minus the picture, writes it with
 `dskw_write` (an existing link of that name is replaced) and ends in
 `fm_paste_res`, so the listing is re-read and repainted like a paste's.
@@ -109126,10 +109470,11 @@ partition (§52.4.1), so a disk partitioned into three comes up as three
 volumes, three drive letters and three desktop icons. Two tests decide, and
 both are needed:
 
-- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh. An extended
-  partition (05h/0Fh) is not a volume but a chain of them, and is walked
-  rather than mounted (§52.4.1); FAT32 (0Bh/0Ch) is a format this kernel does
-  not read (docs/plans/FAT32-MEGA-PLAN.md is what reading it would take);
+- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh, 0Bh, 0Ch. An
+  extended partition (05h/0Fh) is not a volume but a chain of them, and is
+  walked rather than mounted (§52.4.1); FAT32 (0Bh/0Ch) is offered to every
+  kernel's mount, which only `kern_mega`'s accepts (§19.12.10), and without
+  the 2GB bound below;
 - and the volume actually **mounts**. A partition whose type says FAT and
   whose content does not gets its row and its claim handed straight back, and
   the walk carries on to the next slot. That is the half a type byte cannot
@@ -109404,9 +109749,9 @@ stays 3,584 and the claim 4 KB.
   other letter in an extended partition (issue #386). Making logical drives
   in the disk tool is still out of scope — DOS's FDISK does that — and an
   install target is still a primary, which is what a BIOS boots.
-- **FAT32.** A format, not a partition type: cluster numbers are words through
-  the whole of the kernel's file system and its API. docs/plans/FAT32-MEGA-PLAN.md
-  is the survey and the plan, kern_mega first.
+- **FAT32** on `kern_big`. A format, not a partition type: cluster numbers are
+  words through the whole of that kernel's file system. `kern_mega` reads and
+  writes it (§19.12); docs/plans/FAT32-MEGA-PLAN.md is the survey and the plan.
 
 ## 52.10 Install — booting os8088 from a hard-disk partition
 

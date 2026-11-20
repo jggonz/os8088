@@ -1068,6 +1068,9 @@ inst_vol_enter:
                                 ; nothing else - disk_mount_x banks the rest
                                 ; itself. Five more pairs stood here until
                                 ; size pass 10
+%ifdef OS88_FAT32
+    push word [dsk_ch]          ; ...and AX's high word (SPEC.md 19.12.3)
+%endif
     call inst_where             ; DL:AX = where the instance behind this call
                                 ; is standing - dsk_chdir's arguments, loaded
                                 ; before the compare because they ARE the
@@ -1077,10 +1080,20 @@ inst_vol_enter:
     cmp dl, [disk_drive]
     jne .go
     cmp ax, [dsk_cwd]
+%ifdef OS88_FAT32
+    jne .go
+    push ax
+    mov ax, [dsk_ch]
+    cmp ax, [dsk_cwd+2]
+    pop ax
+%endif
     je .out                     ; already standing there: nothing to undo,
 .go:                            ; and the remount is the whole cost
     call dsk_chdir_q
 .out:
+%ifdef OS88_FAT32
+    pop word [dsk_ch]
+%endif
     pop dx
     pop ax
     popf
@@ -1089,7 +1102,8 @@ inst_vol_enter:
 ; -----------------------------------------------------------------------------
 ; inst_where - where the CALLING instance believes it is standing (19.2.1)
 ; in:  nothing
-; out: DL = its drive, AX = its directory cluster (0 = the root) - or, with no
+; out: DL = its drive, AX = its directory cluster (0 = the root; [dsk_ch] its
+;      high word on kern_mega, SPEC.md 19.12.3) - or, with no
 ;      instance behind the call (the kernel, a driver), the machine's own
 ;      [disk_drive] and [dsk_cwd]
 ; clobbers: DH, flags (BX is banked)
@@ -1101,7 +1115,7 @@ inst_where:
     push bx
     call inst_caller            ; DH = the instance behind this call
     mov dl, [disk_drive]        ; ...the machine's, until it says otherwise
-    mov ax, [dsk_cwd]
+    CLU_LD dsk_cwd
     mov bl, dh
     xor bh, bh
     cmp bl, INST_MAX
@@ -1109,6 +1123,10 @@ inst_where:
     mov dl, [inst_fdrv+bx]
     shl bx, 1
     mov ax, [inst_fcwd+bx]
+%ifdef OS88_FAT32
+    push word [inst_fcwh+bx]
+    pop word [dsk_ch]
+%endif
 .out:
     pop bx
     ret
@@ -1159,6 +1177,10 @@ inst_fhome_here:
     shl bx, 1
     mov ax, [dsk_cwd]
     mov [inst_fcwd+bx], ax
+%ifdef OS88_FAT32
+    push word [dsk_cwd+2]
+    pop word [inst_fcwh+bx]
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2473,6 +2495,9 @@ inst_icobuf: resb DSK_ICO_SIZE  ; inst_icon_ptr's staging slot: its own, and
 ; instance does a file operation. So a Disk window taking the volume to C:
 ; moves the machine and moves nobody's idea of where their documents are.
 inst_fdrv:   resb INST_MAX      ; the volume this instance is standing in...
+%ifdef OS88_FAT32
+inst_fcwh:   resw INST_MAX      ; ...its HIGH word, a FAT32 folder (19.12.3)
+%endif
 inst_fcwd:   resw INST_MAX      ; ...and the directory inside it. Seeded at
                                 ; inst_alloc from wherever the app was
                                 ; LAUNCHED from, so an instance has a folder
