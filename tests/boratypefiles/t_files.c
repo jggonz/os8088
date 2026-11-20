@@ -8,7 +8,7 @@
 #include "../../apps/boratype/bt_core.c"
 #include "../../apps/boratype/bt_codec.c"
 int bt_practice_weak;
-static int bt_readonly;
+int bt_readonly;
 static BTByte bt_io[BT_SAVE_CAP];
 static BTWord bt_saved_generation;
 static const char *bt_slots[2] = {"BORATA.BTT", "BORATB.BTT"};

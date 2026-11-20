@@ -1,3 +1,4 @@
+cpu 8086
 ; Real runtime/overlay compile fixture, never shipped as an application.
 %define CC_PKG_NAME 'BTENGTEST'
 %define CC_HAS_OVL

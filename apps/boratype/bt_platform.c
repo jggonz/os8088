@@ -340,10 +340,15 @@ int os88_onclose(void *win)
 }
 void os88_onmove(unsigned was, unsigned now)
 {
+    unsigned artnow;
     if (bt_band == was) bt_band = now;
-    if (bt_art == was) bt_art = now;
-    if (bt_soundpart == was) bt_soundpart = now;
     bt_face_move(was, now);
+    /* The eager parts move as one carve. Its base is not necessarily the
+     * segment of either record: reread the runtime's already-relocated rows. */
+    artnow = os88_part_seg(0);
+    if (artnow != bt_art) { bt_face_move(bt_art, artnow); bt_art = artnow; }
+    bt_soundpart = os88_part_seg(1);
+    bx_setart2(bt_soundpart);
 }
 static struct os88_class bt_class = {OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWNBG,
     os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,

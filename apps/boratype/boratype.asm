@@ -14,6 +14,7 @@
 %define CC_HAS_WORKER
 %define CC_HAS_FSX
 %define CC_HAS_PARTS
+%define CC_ONMOVE_PARTS
 %define CC_HAS_OVL
 %define CC_OVL_PART
 %include "cc/crt0.asm"
