@@ -4,7 +4,8 @@
 Sprites reuse Breadboard XT's packed nibble format and WIN16 font converter.
 BA directory offsets are unsigned 16-bit (draw.inc bx_art_at loads a word).
 The original eight-cell master is a 4-column x 2-row sheet, row-major;
-only the seven documented expression states are used. No PNG/Pillow at build.
+seven expression states stay in art part0; the eighth blink goes in sound part1.
+No PNG/Pillow at build.
 """
 import argparse
 from pathlib import Path
@@ -21,8 +22,8 @@ FONTS = ['dlg10', 'dlg08', 'sys16']
 CGA = [0, 11, 5, 15]
 
 
-def sources(path=None):
-    path = Path(path or ART / 'sprites.txt')
+def sources(path=None, blink=False):
+    path = Path(path or ART / ('blink.txt' if blink else 'sprites.txt'))
     out = []
     lines = iter(path.read_text().splitlines())
     for line in lines:
@@ -40,9 +41,9 @@ def sources(path=None):
         if name.startswith('mono') and inks - {bb.CHARS[0], bb.CHARS[15]}: raise ValueError('mono ink')
         if name.startswith('cga') and inks - {bb.CHARS[k] for k in CGA}: raise ValueError('CGA ink')
         out.append((name, w, h, [[bb.CHARS.index(c) for c in r] for r in rows]))
-    expected = [(f'{name}{e}', w, h) for name, w, h in SIZES for e in range(7)]
+    expected = [(f'{name}{e}', w, h) for name, w, h in SIZES for e in ([7] if blink else range(7))]
     if [(n, w, h) for n, w, h, _ in out] != expected:
-        raise ValueError('source must contain all 28 sprites in header order')
+        raise ValueError('source must contain all expected sprites in header order')
     return out
 
 
@@ -71,7 +72,7 @@ def build(path):
     print(f'os88btart: {len(out)} bytes, 28 sprites, 3 shared WIN16 fonts -> {path}')
 
 
-def draft(master, path):
+def draft(master, path, blink_path):
     from PIL import Image, ImageOps
     im = Image.open(master).convert('RGB')
     if im.width < 400 or im.height < 200:
@@ -79,8 +80,9 @@ def draft(master, path):
     cw, ch = im.width / 4, im.height / 2
     out = ['# Selected original image master; generated once by os88btart draft.',
            '# Palette kbgcrmnldBGCR.yw; . is transparent index13.']
+    blink_out = ['# Eighth generated cell: attentive idle blink. Same palette and converter as sprites.txt.']
     for name, w, h in SIZES:
-        for e in range(7):
+        for e in range(8):
             cell = im.crop(tuple(round(v) for v in ((e % 4) * cw, (e // 4) * ch, (e % 4 + 1) * cw, (e // 4 + 1) * ch)))
             # A little border is retained: same anchor and framing in every state.
             cell = ImageOps.fit(cell, (w, h), Image.Resampling.LANCZOS)
@@ -105,20 +107,46 @@ def draft(master, path):
                     if name in ('big', 'small') and background[y * w + x]: k = 1
                     row += bb.CHARS[k]
                 rows.append(row)
-            out += [f'sprite {name}{e} {w} {h}', *rows, '']
+            (blink_out if e == 7 else out).extend([f'sprite {name}{e} {w} {h}', *rows, ''])
     Path(path).write_text('\n'.join(out) + '\n')
-    sources(path)
-    print(f'os88btart: wrote exact-size sources {path}')
+    Path(blink_path).write_text('\n'.join(blink_out) + '\n')
+    sources(path); sources(blink_path, blink=True)
+    print(f'os88btart: wrote exact-size sources {path} and {blink_path}')
+
+
+
+def build_sound(path, music, sfx):
+    # Standard-library-only shared score compiler; no audio or image renderer.
+    import os88gkmus as mus
+    ids = dict((n, int(v)) for n, v in re.findall(r'^#define (BT_\w+) (\d+)$', (ROOT / 'apps/boratype/art.h').read_text(), re.M))
+    expected = dict(BT_ART_BLINK_BIG=258, BT_ART_BLINK_SMALL=259, BT_ART_BLINK_MONO=260, BT_ART_BLINK_CGA=261)
+    if any(ids.get(n) != v for n, v in expected.items()): raise ValueError('blink IDs differ from sound directory')
+    try:
+        records = {0: mus.compile_music(str(music)), 1: mus.compile_sfx(str(sfx))}
+    except mus.GkmError as e:
+        raise ValueError(str(e)) from e
+    for i, (_, w, h, rows) in enumerate(sources(blink=True), 2):
+        records[i] = bb.pack_sprite(w, h, rows)
+    data = mus.art_part(records)
+    if len(data) > 10240:
+        raise ValueError(f'sound/blink bank {len(data)} exceeds10KB budget')
+    for i, record in records.items():
+        off, = struct.unpack_from('<H', data, 4 + 2 * i)
+        if off & 1 or data[off:off + len(record)] != record:
+            raise ValueError('sound/blink directory validation failed')
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_bytes(data)
+    print(f'os88btart: {len(data)} bytes, music/SFX +4blink sprites -> {path}')
 
 
 def preview(path):
     from PIL import Image
-    ss = sources()
-    im = Image.new('RGB', (7 * 100, 272), bb.EGA[1])
+    ss = sources(); blink = sources(blink=True)
+    im = Image.new('RGB', (8 * 100, 272), bb.EGA[1])
     yy = 0
     for name, w, h in SIZES:
-        for e in range(7):
-            _, _, _, rows = ss[SIZES.index((name, w, h)) * 7 + e]
+        for e in range(8):
+            _, _, _, rows = blink[SIZES.index((name, w, h))] if e == 7 else ss[SIZES.index((name, w, h)) * 7 + e]
             cell = Image.new('RGB', (w, h))
             cell.putdata([bb.EGA[k] for row in rows for k in row])
             im.paste(cell, (e * 100, yy))
@@ -130,16 +158,18 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     sp = p.add_subparsers(dest='cmd', required=True)
     q = sp.add_parser('build'); q.add_argument('-o', required=True)
-    q = sp.add_parser('draft'); q.add_argument('master'); q.add_argument('-o', default=str(ART / 'sprites.txt'))
+    q = sp.add_parser('draft'); q.add_argument('master'); q.add_argument('-o', default=str(ART / 'sprites.txt')); q.add_argument('--blink-output', default=str(ART / 'blink.txt'))
+    q = sp.add_parser('build-sound'); q.add_argument('-o', required=True); q.add_argument('--music', default=str(ART / 'music.txt')); q.add_argument('--sfx', default=str(ART / 'sfx.txt'))
     q = sp.add_parser('preview'); q.add_argument('-o', required=True)
     sp.add_parser('check')
     a = p.parse_args()
     try:
         if a.cmd == 'build': build(a.o)
-        elif a.cmd == 'draft': draft(a.master, a.o)
+        elif a.cmd == 'draft': draft(a.master, a.o, a.blink_output)
+        elif a.cmd == 'build-sound': build_sound(a.o, a.music, a.sfx)
         elif a.cmd == 'preview': preview(a.o)
         else:
-            ss = sources()
+            ss = sources() + sources(blink=True)
             for n, w, h, rows in ss:
                 if n.startswith('mono') and any(k not in [0, 15] for r in rows for k in r): raise ValueError('mono ink')
                 if n.startswith('cga') and any(k not in CGA for r in rows for k in r): raise ValueError('CGA ink')

@@ -9,6 +9,10 @@
 #define BT_F_SMALL 29
 #define BT_F_TITLE 30
 #define BT_ART_COUNT 31
+#define BT_ART_BLINK_BIG 258
+#define BT_ART_BLINK_SMALL 259
+#define BT_ART_BLINK_MONO 260
+#define BT_ART_BLINK_CGA 261
 #define BT_ART_CGA_W 32
 #define BT_ART_CGA_H 40
 #endif

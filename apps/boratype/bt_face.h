@@ -30,6 +30,8 @@
 #define BT_A_HINT_BASE 256
 /* UI globals: Shift left/right and Caps latch; weak-key practice selection. */
 extern int bt_modifiers, bt_practice_weak;
+/* Root advances this from OS ticks independently of scoring. */
+extern int bt_blink_frame;
 #define BT_A_PRACTICE_BASE 100
 
 #endif
