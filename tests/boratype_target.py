@@ -482,7 +482,9 @@ def main():
     try:
         symbols = app_symbols(build)
         # This disk's kernel must be the exact file os88sym reassembles/maps.
-        assert Fat12(args.image).read("KERNEL.SYS") == Path(os88sym.kernel_image()).read_bytes(), \
+        # The disk carries the KZ-wrapped shipped SYS; os88sym verifies the
+        # assembled BIN separately. Comparing those two formats is invalid.
+        assert Fat12(args.image).read("KERNEL.SYS") == Path(os88sym.kernel_image()).with_name("kernel.sys").read_bytes(), \
             "boot disk kernel differs from the verified symbol map"
         if args.path.upper() == "B:/BORATYPE.O88":
             assert Fat12(args.apps).read("BORATYPE.O88") == (build / "boratype.o88").read_bytes(), \

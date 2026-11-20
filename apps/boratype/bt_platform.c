@@ -176,7 +176,7 @@ void bt_action(int a)
         else if (a == BT_A_KEYCLICK) bt_store.keyclick ^= 1;
         else if (a == BT_A_ROAST) bt_store.roast = (bt_store.roast + 1) % 3;
         else if (a == BT_A_DISPLAY) {
-            os88_wm_display(bt_win, &bt_video);
+            if (!bt_in_cga) os88_wm_display(bt_win, &bt_video);
             if (bt_video.kind == OS88_VID_CGA) bt_store.display ^= 1;
             else bt_message("Display follows the OS Control Panel selection.");
         } else return;
@@ -367,6 +367,7 @@ int os88_onclose(void *win)
 {
     if (bt_closing) return 1;
     bt_closing = 1;
+    bt_save_pending = 0;
     os88_wm_timer(win, 0);
     bt_audio_done();
     ovl_bt_save();
