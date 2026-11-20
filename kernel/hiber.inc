@@ -457,6 +457,7 @@ hb_probe_x:
     call COLD_SEG:drvf_drv_vol_bank
     mov dl, al
     xor ax, ax                  ; the root
+    CLU_HI0                     ; ...and its high word (SPEC.md 19.12.3)
     call COLD_SEG:dkf_dsk_chdir_q
     jc .back
     mov si, hb_s_ptr

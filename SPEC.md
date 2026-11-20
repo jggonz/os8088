@@ -47031,6 +47031,13 @@ macros load and store the pair: `CLU_LD v` is `mov ax, [v]` plus `push word
 `[dsk_maxclus]`'s dword. A sentinel that used to be 0FFFFh becomes
 0FFFFFFFFh, which no FAT32 cluster can be (the entry is 28 bits).
 
+**`[dsk_ch]` is scratch that every FAT call rewrites** — a listing, a stat, a
+chain step, a free count — so a caller that hands a cluster to `dsk_goto` or
+`dsk_chdir` SETS it: `CLU_HI0` for one that is a word by construction (the
+root, 0), and a folder kept across other file calls keeps its high word with
+it (Root Folder, a drive's mount, the Sticky Apps scan, an Alt-drop's link,
+a join's two folders).
+
 #### 19.12.4 The FAT window holds 4-byte entries
 
 The window (§18.8) is the same 4,608 bytes, 1,152 FAT32 entries. An entry is
@@ -47129,6 +47136,8 @@ instead of guessing.** The rule, on every kernel:
   by name, because on FAT32 it could be a real folder. The doors' `.text` is
   unchanged: each calls a `.cold` far entry (`dkf_dsk_chdir16`,
   `dskf_dsk_goto16`, `dsk_here16f`) in place of the one it called.
+  `OSAPI_PKG_START`'s document locator (§21.5.3), whose folder is a word,
+  refuses it on `kern_mega` with AL = `LD_EBAD`.
 
 So a package built before this reaches a far folder and is refused there,
 loudly, and never lands in the wrong one. Cluster 65,535 itself is nameable
@@ -63741,7 +63750,7 @@ makes a link.
 `fm_dgdrop` asks `fm_mods`, which now answers Alt (bit 3) beside Ctrl and
 Shift, AT THE DROP. The drag's armed Cut is disarmed as a desktop drop's is,
 and the gesture goes to CTRL.DRV as `SC_OP_LNK` with the destination's volume
-and folder. `sc_m_lnk` composes the record in `cpc_buf` from the drag's
+and folder (on `kern_mega` its high word too, in CX, §19.12.3). `sc_m_lnk` composes the record in `cpc_buf` from the drag's
 `fcp_cb*`, sc_m_new's path code minus the picture, writes it with
 `dskw_write` (an existing link of that name is replaced) and ends in
 `fm_paste_res`, so the listing is re-read and repainted like a paste's.

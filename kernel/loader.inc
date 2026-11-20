@@ -2013,6 +2013,10 @@ ld_pkg_byname:
                                 ; order. It was a 13-byte stage and then
                                 ; `mov ax, [es:si]` / `mov al, [es:si+2]`
                                 ; against the two fields SI had been left on
+%ifdef OS88_FAT32
+    cmp word [assoc_dclus], 0xFFFF  ; ARG_FILE's far folder, which refuses
+    je .ebad                    ; wherever it is taken (19.12.8)
+%endif
 
     ; --- THE CACHE IS SEEDED HERE, because no caller's path does it ---------
     ; (SPEC.md 21.5.3.1) assoc_app_of and assoc_find read an IN-RAM table that

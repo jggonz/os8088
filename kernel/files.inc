@@ -2005,6 +2005,9 @@ fmv_sync_x:
     jmp short .out
 .load:
     call fmv_here
+%ifdef OS88_FAT32
+    push word [di+FS_CWDH]      ; the asked folder's high word (19.12.3)
+%endif
     mov bx, [di+FS_SEL]
     push bx
 %ifdef FM_MSEL
@@ -2026,8 +2029,16 @@ fmv_sync_x:
     ; then the root titles itself, which is the one caption fm_settitle can
     ; always name without help. Every OTHER path that changes FS_CWD is
     ; navigation and retitles itself with a real name.
+%ifdef OS88_FAT32
+    pop ax                      ; BOTH words: a folder at k*10000h that fell
+    cmp ax, [di+FS_CWDH]        ; back to the root matches it in the low one
+    jne .moved                  ; (AX is kretc_di's to restore)
+%endif
     cmp dx, [di+FS_CWD]
     je .out
+%ifdef OS88_FAT32
+.moved:
+%endif
 %ifdef FM_MSEL
     call fm_mzero               ; ...and a multi-selection was of the folder
 %endif                          ; that went: its indices name the ROOT now
@@ -4712,6 +4723,7 @@ fm_mount:
     call kentc_di
     mov al, dl
     xor dx, dx                  ; the root
+    CLU_HI0                     ; ...and its high word (SPEC.md 19.12.3)
     mov di, [fm_vp]
     call fmv_load
     call fm_settitle0           ; ...which titles itself
@@ -6271,6 +6283,7 @@ fm_c_up:                        ; Nav > Up One Folder
 
 fm_c_root:                      ; Nav > Root Folder
     xor ax, ax
+    CLU_HI0                     ; ...and its high word (SPEC.md 19.12.3)
     xor si, si
     jmp fm_go
 
@@ -7242,6 +7255,9 @@ fm_dgdrop:
     mov al, [fm_dgdrv]          ; its own folder too, which is where a link
     jz .noalt                   ; is most often made. The Cut the drag armed
     mov dx, bx                  ; is disarmed, as a desktop drop's is (.dsc)
+%ifdef OS88_FAT32
+    mov cx, [dsk_ch]            ; ...and its high word (SPEC.md 19.12.3)
+%endif
     mov ah, SC_OP_LNK           ; CTRL.DRV writes it, as it writes a shortcut
     jmp short .dsc
 .noalt:
