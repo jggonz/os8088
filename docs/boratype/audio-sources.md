@@ -51,9 +51,13 @@ The host's `afplay` was invoked on the two converted 8 kHz clips and returned
 exit 0. **This agent has no audio-input/listening tool and cannot attest that
 it heard or subjectively verified the clips.** The file labels/captions remain
 provisional until a person listens. There is no claim of completed audition,
-verified spoken transcript, guest PCM audibility or sound quality. A guest
-Sound Blaster capture with the imported pack and actual listening is still
-required. Speaker beeps and original on-screen captions do not pass that test.
+verified spoken transcript or subjective sound quality. A real guest Sound
+Blaster capture has now exercised automatic/manual greetings and the error
+reaction; staged bytes match the source and the captured greeting waveform
+correlates 0.938 with the imported recording. The real driver also exposed
+mid-clip pauses caused by rendering starvation, so uninterrupted speech is
+still failing pending that repair. Actual listening remains required.
+Speaker beeps and original on-screen captions do not pass that test.
 
 Clip speech is kept separate from original written roasts. For example the
 local error clip has its own provisional short spoken caption; the original

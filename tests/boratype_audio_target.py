@@ -29,6 +29,30 @@ from os88fat import Fat12
 import boratype_target as T
 import os88btvoice as V
 
+def synthetic_pack(directory):
+    """An original stdlib-only transport fixture, never character/package audio."""
+    directory.mkdir(parents=True,exist_ok=True)
+    rows=bytearray();payload=bytearray();meta=[];offset=V.HEADER+3*V.ROW
+    for ident,tag,hz in ((0,1,440),(1,2,180),(2,9,880)):
+        label={1:'welcome',2:'error',9:'success'}[tag]
+        pcm=bytearray()
+        for i in range(8000):
+            freq=hz if i<4000 else hz*1.5
+            envelope=min(1,i/80,(7999-i)/80)
+            pcm.append(128+int(96*envelope*math.sin(2*math.pi*freq*i/8000)))
+        pcm+=b'\x80'*192
+        caption=('Test tone: '+label).encode('ascii')
+        rows+=struct.pack('<BBBBHH48s',ident,tag,1,ident,offset,len(pcm),caption)
+        payload+=pcm;offset+=len(pcm)
+        with wave.open(str(directory/(label+'.wav')),'wb') as w:
+            w.setparams((1,1,8000,0,'NONE','not compressed'));w.writeframes(pcm)
+        meta.append({'id':ident,'tag':tag,'caption':caption.decode(),'rights':'Original synthetic test signal'})
+    data=bytearray(struct.pack('<4sBBHHH4s',b'BTV1',3,0,8000,offset,0,b'\0'*4))+rows+payload
+    struct.pack_into('<H',data,10,V.checksum(data));V.check(data)
+    pack=directory/'TEST.VPK';pack.write_bytes(data)
+    (directory/'sources.json').write_text(json.dumps(meta,indent=2)+'\n')
+    return pack
+
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
 def wav_meta(path):
@@ -85,27 +109,36 @@ def pcm_identity(path,pack):
             'source_rate':inputrate,'physical_rate':physicalrate,'capture_rate':rate}
 
 def validate_signals(ev):
+    sink='adlib' if ev['backend']=='sb' else 'pc_speaker'
     for stage in ('title','lesson','success'):
-        rows=[x for x in ev['signals'] if x['stage']==stage and 'adlib' in x['sink']]
+        rows=[x for x in ev['signals'] if x['stage']==stage and sink in x['sink']]
         assert rows and rows[0]['rms']>(.001 if stage=='title' else .0005),(stage,'missing OPL activity')
-    muted=[x for x in ev['signals'] if x['stage']=='mute' and 'adlib' in x['sink']]
+    muted=[x for x in ev['signals'] if x['stage']=='mute' and sink in x['sink']]
     assert muted and muted[0]['rms']<.0002,'master mute left audible OPL output'
-    assert ev['captures']['audio.sound_blaster.wav']['rms']>.01,'PCM capture silent'
-    assert ev['pcm_waveform_identity']['correlation']>.8,'captured PCM differs from imported voice'
+    if ev['backend']=='sb':
+        gaps=[x for x in ev.get('pcm_midclip_pause_observations',[]) if x['samples']]
+        assert not gaps,'PCM ring paused before clip end: UI rendering starved the nonblocking stream'
+        assert ev['captures']['audio.sound_blaster.wav']['rms']>.01,'PCM capture silent'
+        assert ev['pcm_waveform_identity']['correlation']>.8,'captured PCM differs from imported voice'
 
 class Driver:
     def __init__(self,m,base,sym):self.m,self.base,self.sym=m,base,sym
-    def read(self,off,n):return self.m.read(self.base+off,n)
+    def read(self,off,n):return self.m.read((self.base() if callable(self.base) else self.base)+off,n)
     def byte(self,name):return self.read(self.sym[name],1)[0]
     def word(self,name):return int.from_bytes(self.read(self.sym[name],2),'little')
 
 class Probe:
-    def __init__(self,ui,app,evidence,cap):
+    def __init__(self,ui,app,evidence,cap,backend="sb"):
         self.ui,self.app,self.m,self.ev,self.cap=ui,app,ui.m,evidence,cap
         self.D=os88drvsym.symbols('sound.bin')
-        seg=ui._word('drv_fseg');assert seg,'SOUND.DRV not attached'
+        seg=ui._word('drv_fseg')
+        self.driver=None
+        if backend=='speaker':
+            assert not seg,'speaker fixture unexpectedly attached SOUND.DRV'
+            self.markers=[];return
+        assert seg,'SOUND.DRV not attached'
         origin=os88sym.equates()['DRV_HMA_ORG'] if seg>=0xf000 else 0
-        self.driver=Driver(self.m,(seg<<4)+origin,self.D)
+        self.driver=Driver(self.m,lambda:(ui._word('drv_fseg')<<4)+origin,self.D)
         assert self.driver.byte('sbl_up')==1,'attached driver has no Sound Blaster'
         self.markers=[]
     def v(self,name,n=2):
@@ -152,7 +185,15 @@ class Probe:
             'bytes_compared':len(source),'length':state['btv_length'],'rate':state['btv_rate'],
             'caption':self.app.p.read(self.app.sym['btv_text'],48).split(b'\0')[0].decode('ascii')})
         self.shot('voice-'+str(tag)+'-playing')
-        self.wait(lambda:self.v('btv_live',1)==0,'PCM padded clip reached end',15)
+        midclip=[]
+        def finished():
+            if not self.v('btv_live',1):return True
+            if self.driver.byte('sbl_paused') and self.driver.word('sbl_consumed')<state['btv_length']:
+                midclip.append({'cycles':self.m.status()['cycles'],'consumed':self.driver.word('sbl_consumed'),
+                                'total':self.v('btv_total')})
+            return False
+        M.until(self.m,lambda _:finished(),'PCM padded clip reached end',poll=.005,guest=15)
+        self.ev.setdefault('pcm_midclip_pause_observations',[]).append({'tag':tag,'samples':midclip})
         assert self.driver.byte('sbl_str_act')==0 and self.v('btv_granted',1)==0
         self.tickwait(8)
         if tag==2:
@@ -169,37 +210,84 @@ class Probe:
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--voice-pack',type=Path,required=True)
-    ap.add_argument('--evidence',type=Path,required=True)
-    ap.add_argument('--machine',default='os8088_xt_vga_sb')
+    ap.add_argument('--voice-pack',type=Path,help='optional real local pack; default is original synthetic Test tones')
+    ap.add_argument('--evidence',type=Path,default=ROOT/'build/boratype-audio-target')
+    ap.add_argument('--validate-report',type=Path,help='recheck captured waveform/continuity assertions without another guest run')
+    ap.add_argument('--machine')
+    ap.add_argument('--backend',choices=('sb','speaker'),default='sb')
+    ap.add_argument('--route-probe',action='store_true',help='also change the actual OS output route and detach SOUND')
     ap.add_argument('--negative',action='store_true')
-    args=ap.parse_args();args.evidence=args.evidence.resolve();args.evidence.mkdir(parents=True,exist_ok=True)
+    args=ap.parse_args()
+    if args.validate_report:
+        validate_signals(json.loads(args.validate_report.read_text()))
+        print('Captured audio assertions PASS');return
+    args.evidence=args.evidence.resolve();args.evidence.mkdir(parents=True,exist_ok=True)
     # Keep restricted sources and captures out of the source checkout/build distribution.
-    assert not args.evidence.is_relative_to(ROOT),'evidence must be outside repository'
+    actual_pack=args.voice_pack is not None
+    if actual_pack:assert not args.evidence.is_relative_to(ROOT),'restricted local pack evidence must be outside repository'
+    else:args.voice_pack=synthetic_pack(args.evidence/'synthetic-transport-fixture')
     args.voice_pack=args.voice_pack.resolve();V.check(args.voice_pack.read_bytes())
+    if not args.machine:args.machine='os8088_xt_vga_sb' if args.backend=='sb' else 'os8088_xt_vga'
     build=Path(os88sym.kernel_image()).parent
     stage=args.evidence/'scratch';stage.mkdir(exist_ok=True)
     shutil.copy2(build/'boratype.o88',stage/'BORATYPE.O88');shutil.copy2(args.voice_pack,stage/'BORAT.VPK')
     disk=args.evidence/'scratch-apps.img'
     subprocess.run([sys.executable,str(ROOT/'tools/os88disk.py'),'-o',str(disk),'--size','360',
         str(stage/'BORATYPE.O88'),str(stage/'BORAT.VPK'),'--folder','SYSTEM/APPDATA'],check=True)
-    boot=build/'mixer360.img'
+    boot=build/('mixer360.img' if args.backend=='sb' else 'os8088-360.img')
     assert Fat12(boot).read('KERNEL.SYS')==(build/'kernel.sys').read_bytes(), 'boot disk contains a stale compressed kernel'
     assert Fat12(disk).read('BORATYPE.O88')==(build/'boratype.o88').read_bytes()
+    if args.backend=='sb':assert Fat12(boot).read('SOUND.DRV')==(build/'sound.drv').read_bytes(), 'boot driver differs from mapped artifact'
     syms=T.app_symbols(build);layout=T.target_layout();os88sym.syms()
     ev={'status':'RUNNING','source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
         'machine':args.machine,'kernel_sha256':sha(os88sym.kernel_image()),'package_sha256':sha(build/'boratype.o88'),
         'boot_sha256':sha(boot),'scratch_disk_sha256':sha(disk),'voice_pack_sha256':sha(args.voice_pack),
         'subjective_listening':'BLOCKED: no audio-input/listening tool; no claim from waveform/ffprobe/afplay',
-        'restricted_audio':'external local test only; no distribution assets'}
+        'voice_fixture':'actual restricted local pack' if actual_pack else 'synthetic transport fixture; does not pass character-voice US10',
+        'backend':args.backend,'driver_sha256':sha(build/'sound.drv') if args.backend=='sb' else None,'restricted_audio':'external local test only; no distribution assets' if actual_pack else 'none'}
     cap=args.evidence/'audio';os.environ['MARTYPC_WAV']=str(cap)
     started=time.monotonic()
     try:
       with os88ui.boot(str(boot),apps=str(disk),machine=args.machine,quick=True) as ui:
         ev['emulator_ping']=ui.m.cmd(cmd='ping')
         ui.open_drive('B');app=T.App(ui,ui.path('B:/BORATYPE.O88',limit=90),syms,layout,ev)
-        p=Probe(ui,app,ev,cap);assert p.v('bta_pack') and p.v('bta_packstate')==1,'local PCM pack did not preload'
+        p=Probe(ui,app,ev,cap,args.backend);assert p.v('bta_pack') and p.v('bta_packstate')==1,'local PCM pack did not preload'
+        if args.backend=='speaker':
+            speaker_scenario(p,args)
+        else:
+            sb_scenario(p,args)
+      ev['status']='PASS_TECHNICAL'
+    except BaseException as error:
+      ev['status']='FAIL';ev['error']=repr(error);ev['traceback']=traceback.format_exc();raise
+    finally:
+      os.environ.pop('MARTYPC_WAV',None)
+      ev['host_seconds']=round(time.monotonic()-started,3)
+      for path in cap.parent.glob(cap.name+'.*.wav'):finish_wav(path)
+      ev['captures']={path.name:signal(path,0,10**12) for path in cap.parent.glob(cap.name+'.*.wav')}
+      ev['signals']=[]
+      marks={m['name']:m for m in ev.get('markers',[])}
+      for name in ('title','lesson','mute','success','error','route-speaker'):
+        if name+'-start' not in marks or name+'-end' not in marks:continue
+        a,b=marks[name+'-start'],marks[name+'-end']
+        for sink,end in b['sinks'].items():
+          path=cap.parent/sink;start=a['sinks'].get(sink,{'samples':0})['samples']
+          ev['signals'].append({'stage':name,'sink':sink,**signal(path,start,end['samples'])})
+      try:
+        if ev['status']=='PASS_TECHNICAL':
+          if args.backend=='sb':
+            ev['pcm_waveform_identity']=pcm_identity(cap.parent/'audio.sound_blaster.wav',args.voice_pack.read_bytes())
+          validate_signals(ev)
+      except BaseException as error:
+        ev['status']='FAIL';ev['error']=repr(error);ev['traceback']=traceback.format_exc();raise
+      finally:(args.evidence/'report.json').write_text(json.dumps(ev,indent=2)+'\n')
+    print(json.dumps(ev,indent=2));print('Boratype actual guest technical audio checks complete; subjective listening remains blocked')
+
+def sb_scenario(p,args):
+        ui,app,ev,cap=p.ui,p.app,p.ev,p.cap
         p.wait(lambda:p.v('gkm_cur')==1,'menu score playing')
+        assert p.v('bta_voice_have',1)==1 and p.v('btv_length')>0,'automatic welcome never streamed'
+        assert p.v('bta_voice_at')>0 and p.v('bta_spoke')==p.v('bta_voice_at'),'welcome used stale tick0'
+        ev['automatic_welcome']='PASS first-focused tick streamed imported welcome without Test Voice input'
         if args.negative:
             # Break the subject through actual UI: a muted title must fail
             # the same audible-title assertion, not a synthetic threshold.
@@ -236,38 +324,95 @@ def main():
         assert app.state()['committed']==1 and app.state()['net']==len(text)
         p.wait(lambda:p.v('gkm_cur')==1,'result stinger returned to menu loop',60)
         p.mark('success-end')
+        if args.route_probe:route_probe(p)
         # Close while a real voice is live: kernel teardown must free its grant.
         p.press('Escape','HOME');p.press('KeyS','SETTINGS');p.m.key('KeyA')
         p.wait(lambda:p.v('btv_live',1)==1,'voice active before close');p.mark('close-voice')
-        p.m.key('ControlLeft',down=True,up=False);p.press('KeyQ');p.m.key('ControlLeft',down=False,up=True)
-        p.wait(lambda:not any(w.title=='Borat Teaches Typing' for w in ui.windows()),'window closed',40)
-        p.tickwait(36);assert p.driver.byte('sbl_str_act')==0
+        close_probe(p);assert p.driver.byte('sbl_str_act')==0
         assert not any(x&32 for x in p.driver.read(p.D['opl_b0'],9))
         ev['close_cleanup']='PASS no stream and no OPL key-on after real close'
-      ev['status']='PASS_TECHNICAL'
-    except BaseException as error:
-      ev['status']='FAIL';ev['error']=repr(error);ev['traceback']=traceback.format_exc();raise
-    finally:
-      os.environ.pop('MARTYPC_WAV',None)
-      ev['host_seconds']=round(time.monotonic()-started,3)
-      for path in cap.parent.glob(cap.name+'.*.wav'):
-        finish_wav(path)
-      ev['captures']={path.name:signal(path,0,10**12) for path in cap.parent.glob(cap.name+'.*.wav')}
-      ev['signals']=[]
-      marks={m['name']:m for m in ev.get('markers',[])}
-      for name in ('title','lesson','mute','success'):
-        if name+'-start' not in marks or name+'-end' not in marks:continue
-        a,b=marks[name+'-start'],marks[name+'-end']
-        for sink,end in b['sinks'].items():
-          path=cap.parent/sink;start=a['sinks'].get(sink,{'samples':0})['samples']
-          row={'stage':name,'sink':sink,**signal(path,start,end['samples'])};ev['signals'].append(row)
-      try:
-        if ev['status']=='PASS_TECHNICAL':
-          ev['pcm_waveform_identity']=pcm_identity(cap.parent/'audio.sound_blaster.wav',args.voice_pack.read_bytes())
-          validate_signals(ev)
-      except BaseException as error:
-        ev['status']='FAIL';ev['error']=repr(error);ev['traceback']=traceback.format_exc();raise
-      finally:
-        (args.evidence/'report.json').write_text(json.dumps(ev,indent=2)+'\n')
-    print(json.dumps(ev,indent=2));print('Boratype actual guest technical audio checks complete; subjective listening remains blocked')
+
+def close_probe(p):
+    ledger=p.app.resource_snapshot();owner=ledger['instance'];oldseg=ledger['package_segment']
+    p.ev['owned_before_close']=ledger
+    p.m.key('ControlLeft',down=True,up=False);p.press('KeyQ');p.m.key('ControlLeft',down=False,up=True)
+    p.wait(lambda:not any(w.title=='Borat Teaches Typing' for w in p.ui.windows()),'window closed',40)
+    p.tickwait(36)
+    E=os88sym.equates()
+    def owned(mm):
+        raw=mm.read(p.ui._S('mem_tab'),E['MEM_MAX']*E['MC_SIZE']);claims=[]
+        for i in range(E['MEM_MAX']):
+            row=raw[i*E['MC_SIZE']:(i+1)*E['MC_SIZE']]
+            seg=struct.unpack_from('<H',row,E['MC_SEG'])[0]
+            own=struct.unpack_from('<H',row,E['MC_OWN'])[0]
+            if seg and own in (owner,oldseg):claims.append((seg,own))
+        return claims
+    claims=M.heap_read(p.m,owned,'closed app resource accounting')
+    p.ev['owned_after_close']=claims
+    assert not claims,'closing Boratype leaked its heap claims'
+
+def speaker_scenario(p,args):
+    app,ui,ev=p.app,p.ui,p.ev
+    assert p.v('gkm_rt',1)==2 and not ui._word('drv_fseg')
+    p.wait(lambda:p.v('gkm_cur')==1,'speaker menu loop');p.mark('title-start');p.tickwait(45);p.mark('title-end')
+    p.press('F2','LESSONS');p.press('Enter','PLAY')
+    p.wait(lambda:p.v('gkm_cur')==2,'speaker lesson loop');p.mark('lesson-start');p.tickwait(40);p.mark('lesson-end')
+    p.wait(lambda:((ui._word('ticks')-p.v('bta_spoke'))&65535)>=219,'caption cooldown',30)
+    p.mark('error-start')
+    for _ in range(3):p.type_one('x')
+    p.wait(lambda:p.v('bta_lasttag')==2,'visual roast with speaker fallback')
+    p.tickwait(12);p.mark('error-end');p.shot('speaker-error')
+    assert not p.v('btv_live',1) and not p.v('btv_granted',1)
+    ev['pcm_unavailable']='PASS no sound driver; original written roast and speaker cue, no PCM claim'
+    text=app.state()['passage'];p.mark('completion-before')
+    for ch in text:p.type_one(ch)
+    app.wait_screen('RESULTS');p.wait(lambda:p.v('gkm_cur') in (4,5,6),'speaker result stinger',60)
+    ev['result_stinger']=p.v('gkm_cur')-1;p.mark('success-start')
+    p.wait(lambda:p.v('gkm_cur')==1,'speaker stinger returned to menu loop',60);p.mark('success-end')
+    p.press('F3');p.wait(lambda:p.v('gkm_cur')==0,'speaker master mute')
+    p.tickwait(36);p.mark('mute-start');p.tickwait(36);p.mark('mute-end')
+    assert p.m.inb(0x61)&3==0,'muted speaker gate remains on'
+    p.press('F3');p.wait(lambda:p.v('gkm_cur')==1,'speaker unmute')
+    close_probe(p);assert p.m.inb(0x61)&3==0
+    ev['close_cleanup']='PASS speaker gate off and every app-owned heap claim freed'
+
+def route_probe(p):
+    """Actual OS controls: focus loss precedes route changes/detach.
+
+    This is supported user-facing reconfiguration, not a simulated hot-unplug.
+    Control rectangles come from live window geometry and assembled equates.
+    """
+    ui,app,ev=p.ui,p.app,p.ev;E=os88sym.equates()
+    p.press('Escape','HOME');p.press('KeyS','SETTINGS');p.m.key('KeyA')
+    p.wait(lambda:p.v('btv_live',1)==1,'voice active before OS panel');p.mark('route-before-panel')
+    ui.menu_pick('Apple','Control Panel');cp=ui.wait_window('Control Panel')
+    p.wait(lambda:p.v('bta_focus',1)==0 and p.v('btv_live',1)==0 and p.v('gkm_held',1)==0,
+           'focus loss releases voice and FM before reconfiguration',30)
+    def select(record):
+        hide=ui._byte('cp_hide');row=sum(not(hide&(1<<r)) for r in range(record))
+        cx,cy=cp.content[:2]
+        ui.mo.click(cx+E['CP_IX']+30,cy+E['CP_I0Y']+row*E['CP_IROWH']+E['CP_IROWH']//2,settle=0)
+        ui._wait(lambda:ui._byte('cp_sel')==record,'OS control page selected',20)
+    def tier(row,route):
+        cx,cy=cp.content[:2]
+        ui.mo.click(cx+E['CP_RX']+E['CP_PGX']+8,
+            cy+E['CP_B0Y1']+row*E['CP_PROWH']+E['CP_PROWH']//2,settle=0)
+        ui._wait(lambda:ui._byte('snd_route')==route,'OS audio output route changed',30)
+    select(E['CP_ISND']);tier(0,E['SND_RT_SPK']);ui.close(cp)
+    ui.raise_window(app.win);p.wait(lambda:p.v('gkm_rt',1)==2 and p.v('gkm_cur')==1,'app resumes on real speaker route',30)
+    p.mark('route-speaker-start');p.tickwait(36);p.mark('route-speaker-end')
+    # Detach using Drivers after foreground focus has been relinquished.
+    ui.menu_pick('Apple','Control Panel');cp=ui.wait_window('Control Panel');select(E['CP_IDRV'])
+    p.wait(lambda:p.v('gkm_held',1)==0 and not p.v('btv_live',1),'app audio released for detach')
+    cx,cy=cp.content[:2]
+    table=p.m.read(ui._S('drv_tab'),E['DRV_MAX']*E['DRVR_SIZE'])
+    soundrow=next(i for i in range(E['DRV_MAX']) if table[i*E['DRVR_SIZE']+E['DRVR_CLASS']]==E['DRVC_SOUND'])
+    visible=soundrow-ui._byte('cp_dtop');assert 0<=visible<E['CP_DVIS']
+    button=(cx+E['CP_RX']+40,cy+E['CP_DBY1']+visible*E['CP_DROWH']+E['CP_DROWH']//2)
+    ui.mo.click(*button,settle=0);ui._wait(lambda:ui._word('drv_fseg')==0,'actual SOUND driver detached',30)
+    ev['device_change']='PASS actual Drivers detach after focus cleanup; no hot-unplug/hardware-loss claim'
+    ui.mo.click(*button,settle=0);ui._wait(lambda:ui._word('drv_fseg')!=0,'actual SOUND driver reattached',45)
+    select(E['CP_ISND']);tier(2,E['SND_RT_SB']);ui.close(cp);ui.raise_window(app.win)
+    p.wait(lambda:p.v('gkm_rt',1)==1 and p.v('gkm_cur')==1,'FM restored after OS reattach',30)
+    ev['os_route_change']='PASS Sound page speaker route and restored Sound Blaster route; focus cleanup verified'
 if __name__=='__main__':main()

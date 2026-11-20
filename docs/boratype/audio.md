@@ -129,8 +129,85 @@ code/state. Source pack and driver staging are optional as above.
 
 Affected existing rows are`gkmus`,`sbtest` and the C compiler gates; the root
 integration adds the Boratype host gate and runs the deduplicated final suite.
-No soak or test-full was run by this lane. PCM guest capture/listening,
-OPL/speaker capture/listening, mute/focus/exit sound behavior and the 4.77 MHz
-latency measurement remain guest evidence owned by the integration pass.
-Host ffprobe/PCM validation and afplay exit 0 do not establish subjective
-intelligibility: this agent has no audio-input/listening tool.
+No soak or test-full was run by this lane. Actual guest capture results are
+below. Subjective listening and the final 4.77 MHz key-to-visible-feedback
+measurement remain open. Host ffprobe/PCM validation and afplay exit 0 do not
+establish subjective intelligibility: this agent has no audio-input tool.
+
+
+## Real guest transport checks
+
+`tests/boratype_audio_target.py` drives the installed package through real OS
+keyboard/menu events on the 4.77 MHz MartyPC XT. It proves the exact package,
+compressed boot kernel and sound driver match the mapped build. It does not
+inject scoring state or call application functions from the debugger. All
+waits follow guest state/ticks. The source and staged software disk are private
+to each run.
+
+The default generates an original, deterministic 8 kHz unsigned mono PCM
+transport fixture using only the Python standard library. Its three captions
+say `Test tone: welcome`, `Test tone: error` and `Test tone: success`. It is a
+24,760-byte optional pack on the scratch disk, never part of the application.
+No network, ffmpeg, restricted recording or separately supplied file is needed
+for this routine row. **A synthetic fixture does not pass US10's character
+voice/audition requirement.** The optional `--voice-pack` uses a real local
+pack instead and requires an evidence destination outside the repository.
+
+```
+make boratype mixertest build/os8088-360.img
+python3 tests/boratype_audio_target.py --evidence /tmp/bt-audio-sb
+python3 tests/boratype_audio_target.py --backend speaker --evidence /tmp/bt-audio-speaker
+python3 tests/boratype_audio_target.py --voice-pack /local/BORAT.VPK   --route-probe --evidence /external/bt-local-audio
+```
+
+The SB machine is `os8088_xt_vga_sb`, with the mixer test's SOUND-wanted boot
+configuration; the speaker machine is `os8088_xt_vga`, with no attached sound
+driver. MartyPC records separate OPL, DAC and speaker WAVs. The test checks
+menu/lesson/result-stinger waveform levels, written/spoken reaction metadata,
+actual source bytes in the driver's staging grant, native PCM completion,
+master mute during speech, close during speech and every app-owned heap claim
+being freed. The greeting starts automatically on the first focused enabled
+tick using that tick's actual timestamp, once; init at tick zero cannot start
+it. Master mute, readonly mode and close cancel its pending flag.
+
+With `--route-probe`, actual Control Panel geometry and assembled equates
+select the speaker route, detach the actual SOUND driver, reattach it, and
+restore the Sound Blaster route. Opening the OS panel first takes application
+focus, and the app releases its stream/FM channels before reconfiguration.
+This is a supported user route/detach test, **not a hot-unplug or physical
+hardware-loss test**. Driver rows are located by their class fields, rather
+than treating a class number as a table-row index.
+
+Measured before the renderer's final repair, on source containing platform
+sync fix `f23097186`, package SHA-256
+`6b38fb45c011b13212ce43c2e727b855c79e3c66c4254ccc97c50323b6fa04c2`:
+
+| Claim | Result | Evidence |
+| --- | --- | --- |
+| Speaker menu/lesson/error/record stinger | PASS, earlier `cde9eb842` build | RMS 0.654 / 0.623 / 0.278 / 0.611 |
+| Speaker mute and close | PASS | zero mute waveform, gate off, no owned heap claims |
+| OPL menu/lesson/record stinger | PASS | RMS approximately 0.0104 / 0.0027–0.0029 / 0.0105 |
+| Automatic and manual PCM greeting, error reaction | PASS transport/content | 4,096 staged bytes match source per reaction; real captured waveform |
+| Captured PCM source identity | PASS | correlation 0.983 for synthetic 8 kHz, 0.938 for local 6 kHz greeting |
+| Master mute during live PCM | PASS after platform sync fix | stream/grant cleared before repaint; OPL residual RMS 0.000049 |
+| Real OS speaker route and detach/reattach | PASS | speaker RMS 0.660; restored FM; no hardware-loss claim |
+| Close during PCM and heap cleanup | PASS | no stream/key-on, no owned heap claims |
+| Uninterrupted speech | **FAIL before final renderer repair** | real driver pauses at 4,096 consumed bytes before clip end |
+| Subjective listening / intelligibility | **BLOCKED** | no audio-input/listening tool; never inferred from API success or RMS |
+
+The strict continuity assertion checks `sbl_paused` and `sbl_consumed` while a
+clip is live. A pause before consumed reaches the clip length fails the row.
+This matters because the DAC capture only contains active samples and can
+retain a high source correlation while the guest pauses between refills.
+The 4 KB ring supplies 512 ms at 8 kHz, about 680 ms at 6 kHz; a longer render
+burst can starve it. Both local and synthetic captures exposed that defect:
+13 paused observations during the manual greeting and five during the error
+reaction, at consumed = total = 4,096. Final evidence must rerun this assertion
+after the rendering repair; waveform activity alone is insufficient.
+
+The positive transport/cleanup runs took 104.0 s (default synthetic SB),
+117.7 s (local pack plus OS reconfiguration), and 37.7 s (speaker). Those are
+measured historical times, not final row budgets. `--negative` disables Music
+through the actual Settings UI and fails the ordinary title-waveform assertion.
+`--validate-report PATH` reruns signal/continuity assertions over recorded
+telemetry; the captured underrun record demonstrably fails it.
