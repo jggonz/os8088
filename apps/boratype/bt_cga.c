@@ -322,7 +322,7 @@ void bt_cga_entry(void)
         if ((BTWord)(now - bt_cga_last) >= 2) {
             bt_blink_frame = now % 91 < 2;
             bt_events(bt_tick(now));
-            bt_audio_tick(now, !bt_readonly);
+            bt_audio_tick(now, 1);
             bt_cga_last = now;
             bt_cga_paint();
         }

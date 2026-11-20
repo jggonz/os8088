@@ -44,7 +44,7 @@ static void bt_audio_sync(void)
         (screen == BT_S_HELP || screen == BT_S_SETTINGS || screen == BT_S_RECORDS))
         screen = BT_S_PAUSE;
     bt_audio_state(screen);
-    bt_audio_tick(os88_ticks(), bt_focused && !bt_readonly);
+    bt_audio_tick(os88_ticks(), bt_focused);
 }
 static void bt_scene_drawn(void)
 {
@@ -328,7 +328,7 @@ static void bt_pulse(void)
     bt_focused = focus;
     if (bt_guard_scan && !os88_key_down(bt_guard_scan)) bt_guard_scan = 0;
     if (!bt_ready_paint) bt_events(bt_tick(now));
-    bt_audio_tick(now, focus && !bt_readonly);
+    bt_audio_tick(now, focus);
     if (focus) bt_redraw(0);
 }
 
