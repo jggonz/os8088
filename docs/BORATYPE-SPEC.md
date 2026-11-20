@@ -12,7 +12,8 @@ No kernel resident bytes or new API slots. The C restrictions in SPEC.md §73
 apply. A package instance owns one window and its session. Four local profiles
 share a bounded versioned store on the package volume's SYSTEM/APPDATA.
 Only one writer may own the store at a time; another instance must display
-its read-only state. UI callbacks own all state; paint is read-only, and no
+its read-only state. UI callbacks own all state; face rendering is read-only (the outer paint
+callback may detect geometry change and pause before drawing), and no
 worker opens files. A first printable attempt starts lesson timing.
 
 ## 2. Session and arithmetic

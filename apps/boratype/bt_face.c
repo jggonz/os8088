@@ -494,7 +494,8 @@ static void ovl_tf_resultcard(int x,int y,int w,BTProfile *p)
     for(i=0;i<3;i++){k=bt_weak(i);if(k){tf_char[0]=k;tf_char[1]=0;n=tf_append(n,tf_char);n=tf_append(n," (");n=tf_number(n,p->key_error[k-32]);n=tf_append(n,"/");n=tf_number(n,p->key_attempt[k-32]);n=tf_append(n,") ");}}
     if(n==11)tf_append(n,"20 samples per key needed");
     k=bx_twidth(tf_buf,tf_font)>sw?2:1;ovl_tf_lines(sx,sy,sw,k,tf_buf);sy+=k*(tf_th+2)+2;
-    ovl_tf_lines(sx,sy,sw,2,!bt_session.attempts?"No keys were entered. Try F and J, or Retry the test.":bt_session.accuracy>=95?"Great success! Continue, or practice the next keys.":"Aim for 95% accuracy. Practice these keys before adding speed.");sy+=2*(tf_th+2)+3;
+    k=(tf_bottom-34-sy)/(tf_th+2);if(k>2)k=2;
+    ovl_tf_lines(sx,sy,sw,k,!bt_session.attempts?"No keys were entered. Try F and J, or Retry the test.":bt_session.accuracy>=95?"Great success! Continue, or practice the next keys.":"Aim for 95% accuracy. Practice these keys before adding speed.");sy+=k*(tf_th+2)+3;
     if(sy+tf_th+2<=tf_bottom-34){
         n=tf_append(0,"New achievements: ");
         for(i=0;i<7;i++)if(bt_session.achievement_new&(1<<i)){n=tf_append(n,tf_achnames[i]);n=tf_append(n,"! ");}
