@@ -73,3 +73,20 @@ original captions/music/effects and a real optional local PCM import path.
 The rights/candidate log is [audio sources](boratype/audio-sources.md).
 This is a specific unfinished requirement, not a claim that subtitles pass
 as voice playback. No external publishing has occurred.
+
+
+## The first real lesson exposed the cost the host could not see
+
+The installed 360KB software disk launched successfully on MartyPC's VGA XT.
+The first Enter then failed the native UI-idle check after270 guest seconds.
+This was a real failure, not a reason to lengthen a wait. Paused CPU samples
+and captured strips showed the full lesson paint making progress and returning;
+subsequent timer callbacks kept executing. The face was rescanning84 prompt
+cells and60 keys every tick even when the host harness reported zero bands.
+Quadratic prefix-width caption wrapping also ran for strips outside its area,
+and portrait changes monopolized large bands. The repair targets that measured
+work, with actual key-to-feedback cycle measurements still required.
+
+The initial guest pictures also expose typography smaller than the supplied
+concept and a duplicated saved-status line. These are observed mismatches;
+merely generating a screenshot does not pass the visual comparison.

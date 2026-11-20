@@ -44,7 +44,10 @@ Use apps/breadxt/draw.inc and apps/cc/gk.inc (SPEC.md §130.6, §133), not
 private desktop video code. Compose opaque strips and commit through bx_out.
 Cache and invalidate independent regions: title/navigation, portrait/caption,
 prompt/input, statistics, keyboard cells, footer. A keystroke never repaints
-the whole window. Layout derives from live content and display geometry.
+the whole window. Unchanged timer passes skip cell/key scans before composing
+any band. Input feedback precedes cosmetic portrait/caption work; cosmetic
+updates coalesce to the newest expression and are bounded so they cannot hold
+the UI through a long animation. Full native damage paints remain complete. Layout derives from live content and display geometry.
 Color roles are navy/cobalt, cyan rules, yellow title/target, white text,
 green accepted, red mistake, and finger zones. Mono uses symbols/outlines.
 All keys include required punctuation; shifted characters identify their

@@ -10,26 +10,26 @@ no PR, push, website publication or release is part of this build.
 
 | Story | Outcome | Status | Verification |
 |---|---|---|---|
-| US01 | installed launch, profile, menus, About, close | P | fresh guest |
-| US02 | 24 declared and validated lessons, 95% mastery | P | host + beginner lesson |
-| US03 | strict input, correction, segmentation | P | oracle + injected events |
-| US04 | accurate QWERTY, Shift/finger/mistake hints | P | geometry + guest |
-| US05 | honest tick-based WPM/accuracy/streak | P | independent arithmetic |
-| US06 | reproducible groups/weak keys | P | sample thresholds + guest |
-| US07 | 1/3/5 minute tests, unranked pauses | P | no-input deadlines |
-| US08 | results, next/retry/practice, achievements | P | full session |
-| US09 | 48 reactions, 24 roasts, thresholds/intensity | P | host + guest |
+| US01 | installed launch, profile, menus, About, close | I | fresh guest |
+| US02 | 24 declared and validated lessons, 95% mastery | I | host + beginner lesson |
+| US03 | strict input, correction, segmentation | I | oracle + injected events |
+| US04 | accurate QWERTY, Shift/finger/mistake hints | I | geometry + guest |
+| US05 | honest tick-based WPM/accuracy/streak | I | independent arithmetic |
+| US06 | reproducible groups/weak keys | I | sample thresholds + guest |
+| US07 | 1/3/5 minute tests, unranked pauses | I | no-input deadlines |
+| US08 | results, next/retry/practice, achievements | I | full session |
+| US09 | 48 reactions, 24 roasts, thresholds/intensity | I | host + guest |
 | US10 | sourced, rights-recorded voice pack and PCM | P | search, audition, guest |
-| US11 | three composed loops + stingers | P | scores + listened captures |
-| US12 | effects, priorities, cleanup | P | listened guest capture |
-| US13 | window clipping/focus/resize/instances | P | guest interaction |
-| US14 | safe fullscreen transitions | P | native latch + CGA FSX |
-| US15 | CGA/EGA/VGA/VESA paths | P | adapter evidence matrix |
-| US16 | compact layouts, keyboard controls | P | minimum geometry |
-| US17 | four profiles, validated safe persistence | P | failure tests + reboot |
-| US18 | XT responsiveness and bounded work | P | MartyPC cycles |
-| US19 | working help and settings | P | guest click/key tour |
-| US20 | four disk geometries and WPK | P | packaged installation |
+| US11 | three composed loops + stingers | I | scores + listened captures |
+| US12 | effects, priorities, cleanup | I | listened guest capture |
+| US13 | window clipping/focus/resize/instances | I | guest interaction |
+| US14 | safe fullscreen transitions | I | native latch + CGA FSX |
+| US15 | CGA/EGA/VGA/VESA paths | I | adapter evidence matrix |
+| US16 | compact layouts, keyboard controls | I | minimum geometry |
+| US17 | four profiles, validated safe persistence | I | failure tests + reboot |
+| US18 | XT responsiveness and bounded work | I | MartyPC cycles |
+| US19 | working help and settings | I | guest click/key tour |
+| US20 | four disk geometries and WPK | I | packaged installation |
 
 Waves: foundation/platform map; independent engine/UI/audio; integrate and
 boot to inspect; all adapter/audio/persistence QA; repair; final affected
@@ -38,5 +38,10 @@ cmemmove, breadxt_target, fullscreen. Exact rows will be checked in suite.py.
 
 ## QA and evidence
 
-No native evidence collected yet. Art references are design input, not guest
-screenshots. Every incomplete or blocked requirement stays open above.
+Native VGA launch and home rendering have been observed in MartyPC and QEMU.
+The first integrated QA run failed: an unchanged one-tick paint scan kept the
+UI busy, and portrait updates consumed seconds on the XT. The repair round is
+in progress. Scoring, transitions, save/reboot, adapter paths and audible audio
+remain unverified in the real guest. Art references are design input, not
+evidence. US10 also lacks established clip redistribution rights; US11/US12
+need actual listening, not successful API returns. I means integrated, not done.
