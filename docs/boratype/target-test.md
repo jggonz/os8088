@@ -6,8 +6,8 @@ keyboard/mouse events, and reads the production session/profile. It does not
 write application state, patch the guest, advance frames or wait on host time.
 MartyPC is the default. Actual EGA uses automation-capable86Box; VESA uses
 QEMU's VBE and the shipped VESA driver. The live adapter, dimensions and depth
-are asserted after boot. Initial adapter diagnoses have run; final repaired-head
-smoke, reboot, windows and challenge evidence remains integration work.
+are asserted after boot. Integrated adapter acceptance has run on one frozen
+package; smoke, reboot, windows and challenge acceptance is coordinated by root.
 
 Build the complete application and its source disk first:
 
@@ -107,8 +107,10 @@ The smoke scenario asserts:
   exact whole profile, preference and newest generation, with no obsolete
   writer ownership. Exported images remain evidence for inspection.
 
-Ordinary completion sends one printable character at a time and waits for
-its production A/K/E/N witness. Queuing a whole drill at once is BIOS-ring
+Ordinary completion injects one physical printable character at a time with
+`Marty.type_text` and waits for its production A/K/E/N witness. Native and
+FSX use the same acknowledgement, without waiting for generic UI idle on
+each key. Queuing a whole drill at once is BIOS-ring
 stress and can lose characters while a handler paints; that is a different
 experiment. Stress needs queue instrumentation before attributing lost input
 to the app.
@@ -132,11 +134,13 @@ Inside FSX, individual physical keys are injected with `Marty.type_text` and
 acknowledged by production attempts/progress; the BIOS ring that `text_taken`
 watches can be bypassed there, so its fallback0.675s cap would merely pace
 every character and is not a latency measurement. The CGA adapter arm also
-arms debugger breakpoints on `_bt_key_route`, `_bt_cga_flush`, and its near
-caller return around one actual correct key. The resulting guest cycles
-measure event routing through committed VRAM, without a guest patch or a
-fixed input delay. Raster scanout may add one display refresh; that remains
-explicitly separate from the measured commit cost.
+arms debugger breakpoints on `_bt_key_route`, `_bt_cga_flush`, the first
+changed prompt cell's `bt_cga_cell` return and the flush's near caller return
+around one actual correct key. The resulting guest cycles measure production
+key-route entry through committed VRAM, without a guest patch or fixed input
+delay. Hardware input polling before that entry is separate. Raster scanout
+may add one display refresh; that remains separate from the measured commit
+cost. The first cell is verified as the accepted prompt character/style.
 The adapter arm completes its lesson/restoration evidence, then fails if the
 measured commit exceeds100ms; a functional result cannot hide that budget.
 
@@ -157,6 +161,9 @@ with default zero, and no voice action is required by this harness.
 
 Every screenshot comes from `ui.m.fbuf()` after the native UI finishes, and
 each is paired with the actual session snapshot in `report.json`. Captures
+in Play also wait for live hint/stat/footer flags and the accepted-input dirty
+row to drain: `ui_done` can hold between intentionally sliced idle paints.
+No clock delay substitutes for that production paint-state witness. Captures
 are marked `inspection: required`; a path alone is not a passed appearance
 claim. A failed assertion records its traceback, current guest state and a
 best-effort raw current-guest screenshot before exiting nonzero. A failed
@@ -164,9 +171,10 @@ capture bypasses a potentially broken idle gate and is marked `settled:false`;
 it is diagnostic evidence. FSX waits on actual VRAM stability instead of
 `ui_done`, since the bracket owns the UI callback. The report also includes image
 hashes, guest cycles and a heap-consistent package/owned-claim memory ledger.
-Individual input cycle readings include OS consumption and UI completion;
-they are upper-bound observations for those gestures, not isolated renderer
-benchmarks or a proven 100ms XT claim.
+`score_witness_cycles` records input injection through observed scoring;
+those readings do not claim draw completion, isolated renderer performance
+or a physical-monitor latency. The separate breakpoint probe measures CGA
+render completion from production key-route entry.
 
 Prove a target assertion can go red after the integrated smoke run works:
 
@@ -214,3 +222,30 @@ full application covered the desktop drive icon. `drive_root` now raises an
 existing Disk through `os88ui` by its live volume and navigates parents to
 the root before `path`, rather than trying to click through the application.
 Later optimized-head measurements belong in the final evidence table.
+
+## Integrated adapter acceptance
+
+Source `743da2621`, native image SHA256
+`b79d0d896a978826698ffa95ae27d56b91c90129f00573c43d05e1e7c327d2ff`,
+package SHA256
+`946461362cc2597703aa19904574634065fe560817a40dd2d27f128ee360c360`.
+All rows use the same frozen artifact copy; each report records both hashes
+and source tree `513e776117336a8888e22be3eba44efa228754a2`. Home, input
+and fullscreen captures were inspected. No source application edits were
+made during this acceptance pass.
+
+| Actual configuration | Accepted scope | Evidence under engine worktree `build/` |
+|---|---|---|
+| MartyPC CGA640x200mono / FSX320x200four-color | native Home/F6, real wrong plus complete49-key lesson, results and restored mono;100ms program-side commit PASS | `boratype-final-cga-primary` |
+| automation86Box EGA640x350x4 | real wrong/correct input and nativeF6 pause/return PASS | `boratype-final-ega` |
+| QEMU VESA.DRV800x600x8 | actual CFG/driver/mode, real input and nativeF6 pause/return PASS | `boratype-final-vesa800-drained` |
+| QEMU VESA.DRV1024x768x16 | actual CFG/driver/mode, real input and nativeF6 pause/return PASS | `boratype-final-vesa1024-drained` |
+| Mega86Box286 VGA640x480x4 | protected mode asserted; ordinary package, real input and nativeF6 pause/return PASS | `boratype-final-mega286-drained` |
+
+The CGA first accepted prompt cell completed328754cycles/68.882ms after key
+route entry; the full flush completed434336cycles/91.004ms. Another run
+measured437233cycles/91.611ms for the full flush. These are VRAM completion
+measurements. At60Hz, one further refresh is about16.7ms, giving an approximate
+85.6ms first-feedback bound from key-route entry under that refresh assumption;
+this is not a physical-monitor end-to-end latency measurement. VESA and86Box
+results make functional claims only, with no XT cycle-performance claim.

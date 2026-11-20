@@ -229,20 +229,17 @@ class App:
     def key(self, character, expected_correct, foreign=False):
         before = self.state()
         cycles = self.ui.m.status()["cycles"]
-        if foreign:
-            # FSX can bypass the BIOS ring that text_taken follows. Its
-            # 0.675s fallback cap is not a key acknowledgement or a latency
-            # measurement. Inject one real physical key and witness scoring.
-            self.ui.m.type_text(character)
-        else:
-            self.ui.type(character, limit=90)
+        # Native animation slices and FSX need a scoring acknowledgement,
+        # not generic UI idle or a BIOS-ring fallback. Keep just one real
+        # printable key unacknowledged, then witness production counters.
+        self.ui.m.type_text(character)
         self.ui._wait(lambda: self.state()["attempts"] == before["attempts"] + 1,
                       "one printable attempt", 30, snapshot=self.state)
         after = self.state()
         assert after["correct"] == before["correct"] + int(expected_correct), after
         assert after["errors"] == before["errors"] + int(not expected_correct), after
         assert after["pos"] == before["pos"] + int(expected_correct), after
-        self.evidence.setdefault("foreign_input_cycles" if foreign else "key_to_ui_done_cycles", []).append(
+        self.evidence.setdefault("score_witness_cycles", []).append(
             self.ui.m.status()["cycles"] - cycles)
         return after
 
@@ -271,6 +268,16 @@ class App:
             M.quiesce(self.ui.m, lambda: self.ui.m.read(base, 16384), guest=0.15,
                       budget=15, what="CGA painted VRAM stable")
         elif settled:
+            if self.global_word("bt_screen") == self.L["BT_S_PLAY"]:
+                # Idle callbacks drain the deliberately sliced hint, stats
+                # and accepted-input rows after urgent prompt feedback.
+                # ui_done alone may be true between those callbacks.
+                def primary_pending():
+                    return (self.global_word("tf_hintpending"), self.global_word("tf_statpend"),
+                            self.global_word("tf_footpending"),
+                            self.p.word(self.sym["_tf_dirtyfirst"] + 4))
+                self.ui._wait(lambda: primary_pending() == (0, 0, 0, 65535),
+                              "native primary field paint queue drained", 30, snapshot=primary_pending)
             self.ui.still()
         w, h, rgb = self.ui.m.fbuf()
         path = directory / (name + ".png")
@@ -468,7 +475,9 @@ def cga_key_cycles(app, character):
     base = app.p.seg * 16
     route = base + app.sym["_bt_key_route"]
     flush = base + app.sym["_bt_cga_flush"]
+    cell = base + app.sym["bt_cga_cell"]
     stamps = []
+    primary = {}
 
     def hit(mm, record):
         regs = record["regs"]
@@ -480,10 +489,26 @@ def cga_key_cycles(app, character):
         elif len(stamps) == 1:
             stamps.append(record["cycles"])
             returned = int.from_bytes(mm.read(regs["ss"] * 16 + regs["sp"], 2), "little")
-            mm.breakpoints([{"type": "exec", "addr": regs["cs"] * 16 + returned}])
-        else:
+            primary["flush_return"] = regs["cs"] * 16 + returned
+            mm.breakpoints([{"type": "exec", "addr": cell},
+                            {"type": "exec", "addr": primary["flush_return"]}])
+        elif record["addr"] == primary["flush_return"]:
+            assert "return_cycles" in primary, "flush completed without a changed prompt cell"
             stamps.append(record["cycles"])
             mm.breakpoints([])
+        elif record["addr"] == cell:
+            row, col = divmod(regs["di"] // 2, 40)
+            if row in (5, 6) and 6 <= col < 39:
+                primary.update(row=row, col=col, character=chr(regs["ax"] & 255),
+                               attribute=regs["ax"] >> 8, entry_cycles=record["cycles"])
+                returned = int.from_bytes(mm.read(regs["ss"] * 16 + regs["sp"], 2), "little")
+                primary["cell_return"] = regs["cs"] * 16 + returned
+                mm.breakpoints([{"type": "exec", "addr": primary["cell_return"]},
+                                {"type": "exec", "addr": primary["flush_return"]}])
+        else:
+            assert record["addr"] == primary["cell_return"]
+            primary["return_cycles"] = record["cycles"]
+            mm.breakpoints([{"type": "exec", "addr": primary["flush_return"]}])
 
     with M.bp_trace(m, route, regs=True, on_hit=hit) as trace:
         m.type_text(character)
@@ -491,13 +516,20 @@ def cga_key_cycles(app, character):
     after = app.state()
     assert after["attempts"] == before["attempts"] + 1 and after["correct"] == before["correct"] + 1
     assert after["net"] == before["net"] + 1
+    assert primary["character"] == character and primary["attribute"] & 3 == 1, primary
     assert stamps[2] > stamps[1] >= stamps[0]
+    assert stamps[1] < primary["return_cycles"] < stamps[2]
     cycles = stamps[2] - stamps[0]
+    feedback_cycles = primary["return_cycles"] - stamps[0]
     app.evidence["cga_key_commit"] = {
         "route_to_flush_return_cycles": cycles,
         "route_to_flush_return_ms": round(cycles * 1000 / M.GUEST_HZ, 3),
         "flush_cycles": stamps[2] - stamps[1],
+        "route_to_first_prompt_cell_return_cycles": feedback_cycles,
+        "route_to_first_prompt_cell_return_ms": round(feedback_cycles * 1000 / M.GUEST_HZ, 3),
+        "first_prompt_cell": {k: primary[k] for k in ("row", "col", "character", "attribute")},
         "commit_within_100ms": cycles <= M.GUEST_HZ / 10,
+        "scope": "production key-route entry to VRAM; hardware input polling and monitor scanout are separate",
         "scanout": "VRAM committed; raster presentation may add up to one refresh"}
 
 
@@ -910,6 +942,10 @@ def main():
         evidence["image_sha256"] = digest(args.image)
         evidence["apps_sha256"] = digest(args.apps)
         symbols = app_symbols(build)
+        evidence["app_bin_sha256"] = digest(build / "boratype.bin")
+        evidence["app_package_sha256"] = digest(build / "boratype.o88")
+        evidence["app_source_tree"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD:apps/boratype"], cwd=SRC, text=True).strip()
         # This disk's kernel must be the exact file os88sym reassembles/maps.
         # The disk carries the KZ-wrapped shipped SYS; os88sym verifies the
         # assembled BIN separately. Comparing those two formats is invalid.
