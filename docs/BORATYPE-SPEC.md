@@ -83,7 +83,7 @@ Pause screen. Returning from these views never silently starts a fresh run.
 ## 4. Resources and budgets
 
 BORATYPE is eight characters, a legal 8.3 stem. All runtime assets are package
-parts or a selected local voice pack. Fonts reuse the committed WIN16 font
+parts. Fonts reuse the committed WIN16 font
 strikes. Artwork masters, prompts and exact-size palette sprite source are
 committed; deterministic conversion is offline. Source PNG is never parsed
 by the guest. Resident code+data+BSS must fit §73's 63.5KB ceiling; split cold
@@ -92,7 +92,8 @@ Geometry arrangement and non-typing menu-key handling are cold overlay work;
 the unchanged-layout check and active lesson-key route remain resident.
 Initial allowances: engine and lesson data 18KB, UI and platform 26KB,
 sound/reaction code and data 8KB, BSS 10KB. Art part ≤64KB, audio part ≤16KB,
-drawing band 8KB (512 paragraphs), optional voice staging ≤32KB. Every claim
+drawing band 8KB (512 paragraphs). Music and effects require no application
+audio heap claims. Every claim
 is movable with a relocation callback, or explicitly pinned during transfer.
 The final evidence records actual costs; these are planning allowances.
 
@@ -101,7 +102,7 @@ The final evidence records actual costs; these are planning allowances.
 Original menu, lesson and challenge loops (30–90 seconds), plus three
 stingers and nine or more effects, compiled with tools/os88gkmus.py.
 Reuse gkmus.inc's speaker/three-channel FM routing and priority leases.
-Independent music/effects/voice toggles; key ticks default off. Pause/focus
+Independent music/effects toggles; key ticks default off. Pause/focus
 loss silences music, exit releases every app-owned resource. No audio file
 read, decode, busy wait or blocking clip call in paint or input.
 Mute, audio-setting changes and pause apply their transport policy before
@@ -111,16 +112,16 @@ its music held until deliberate resume or return to the main menu.
 At least 48 tagged original captions, at least 24 roasts; Gentle/Classic/
 Extra, Classic default. Three errors, <85% after 20 attempts, correction
 bursts, poor results, recovery and records are actual triggers. Last four
-captions cannot repeat immediately; spoken roasts ≥12 seconds apart. Jokes
+captions cannot repeat immediately; the default reaction gap is12seconds. Jokes
 never change scoring. Slow jokes require baseline and elapsed-time evidence.
 Caption and portrait animation clocks are independent from scoring.
 
-Voice import is bounded and validated: IDs, event, priority, caption, mono
-unsigned 8-bit PCM rate and exact length. Existing Borat clips must actually
-be found and auditioned, with source and rights recorded. Restricted clips
-stay local, never in the package. Only established redistribution permission
-allows shipping. Guest playback must be nonblocking on supported PCM hardware;
-subtitles/speaker effects alone do not pass the voice story.
+The user-selected scope is original music, sound effects and visual messages.
+There are no sound clips, voice packs, speech controls, PCM transport or audio
+importer. Reactions never depend on sound being enabled: muted and readonly
+instances retain their captions, expressions, cooldowns and focused idle jokes.
+The BTT1 voice byte remains an unused legacy field for format compatibility;
+it cannot enable an audio feature.
 
 ## 6. Persistence
 
@@ -141,16 +142,12 @@ Alternating BORATA.BTT/BORATB.BTT generations are compared modulo65536;
 a header generation is only a hint before full validation. A read-back must
 match written generation and checksum before it may replace in-memory state.
 
-The optional voice source is pinned during its one file read, then declared
-movable. The relocation callback updates both the C holder and the assembly
-source base while preserving playback offsets and caption. The driver owns
-its copied staging bytes; it retains no pointer into this source.
 
 ## 7. Verification boundary
 
 Host harness exercises production engine, target-width overflow, independent
 score examples, lesson declarations, pause/wrap/deadline, deterministic
-practice, achievements, reactions, codec corruption and audio imports.
+practice, achievements, reactions, codec corruption and music/effect banks.
 Native validation must drive installed packages with os88ui, inspect captured
 screens, audition captured audio and measure XT cycles; host tests cannot
 substitute. The final pass runs affected soak rows together, then test-full

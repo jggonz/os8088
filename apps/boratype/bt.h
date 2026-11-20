@@ -120,5 +120,5 @@ void bt_audio_done(void);
 const char *bt_caption(void);
 int bt_expression(void); /* 0 welcome, 1 attentive, 2 pleased, 3 smug,
                          * 4 disappointed, 5 laughing, 6 shocked */
-void bt_audio_test(int voice);
+void bt_audio_test(void);
 #endif
