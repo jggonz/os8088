@@ -56,7 +56,7 @@ DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F  # SC_VER2's cell byte only
 CFG_SIG = b"O88CFG\0\0"
 CFG_GEN_V = 3
 CFG_REC0 = 10
-CFG_FBUF = 159                  # SPEC.md 2.8.7: a file this size or less
+CFG_FBUF = 164                  # SPEC.md 2.8.7: a file this size or less
                                 # carries no trailer the boot will read.
                                 # kern_big's - the only kernel that reads a
                                 # trailer - and DERIVED there (driver.inc), so
@@ -65,7 +65,11 @@ CFG_FBUF = 159                  # SPEC.md 2.8.7: a file this size or less
                                 # it: it was 131 until #248's two pin keys,
                                 # and 152 until #249's 'TP' theme preset,
                                 # and 163 until SPEC.md 120.2.3's class byte
-                                # grew the 'VM' record by one
+                                # grew the 'VM' record by one - and 159, after
+                                # later size passes, until #396's 'KL'
+                                # keyboard layout key: every Sticky App
+                                # fixture was then one byte too short to
+                                # carry a trailer, and five rows failed
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 
 # --- SPEC.md 110.5 ------------------------------------------------------------
