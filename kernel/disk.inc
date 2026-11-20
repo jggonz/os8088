@@ -7410,8 +7410,8 @@ dsk_farok:
     ret
 
 ; dsk_here16f - OSAPI_FILE_HERE's body: BL = the drive, DX = the folder, CF=1
-; and DX = 0FFFFh when its high word is not 0 or it is cluster 0FFFFh (the
-; 0FFFFh rule). AX and BH kept, DH spent as before
+; and DX = 0FFFFh when its high word is not 0 (the 0FFFFh rule). AX and BH
+; kept, DH spent as before
 dsk_here16f:
     push bp
     push ax
@@ -7421,16 +7421,11 @@ dsk_here16f:
     xchg ax, dx
     pop ax
     pop bp
-    cmp word [dsk_ch], 0
-    jne .far
-    cmp dx, 0xFFFF              ; ...and cluster 0FFFFh itself, which every
-    jne .ok                     ; GOTO refuses by name: HERE may not answer
-.far:                           ; a word the doors will not take
+    cmp word [dsk_ch], 0        ; (CF = 0 out of it either way)
+    je .r
     mov dx, 0xFFFF
     stc
-    retf
-.ok:
-    clc                         ; (the `cmp` left CF = 1 for any DX below it)
+.r:
     retf
 
 ; -----------------------------------------------------------------------------

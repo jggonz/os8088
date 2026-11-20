@@ -47132,8 +47132,7 @@ instead of guessing.** The rule, on every kernel:
 
 - a door that ANSWERS a cluster (`OSAPI_FILE_HERE`, `OSAPI_ARG_FILE`, FIND's
   +16) answers **0FFFFh** when the high word is non-zero — `HERE` with CF = 1
-  as well, and for cluster 0FFFFh itself, the word every GOTO refuses;
-  `ARG_FILE` with CF = 0, because its CF says whether there IS a
+  as well; `ARG_FILE` with CF = 0, because its CF says whether there IS a
   document and there is (the name is answered, and the folder word then
   refuses wherever it is taken); FIND with its record's flags bit
   `OSAPI_FIND_FAR` (+22 bit 1) set and the entry still listed;
