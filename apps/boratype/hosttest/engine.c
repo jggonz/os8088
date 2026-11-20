@@ -178,6 +178,37 @@ static void check_time_and_oracle(void)
     assert(bt_session.status == BT_FINISHED && (bt_tick(6000) & BT_EV_FINISH));
     bt_commit(); assert(!bt_tick(6001));
 }
+static void check_visible_countdown(void)
+{
+    int i;
+    BTWord visible, active, deadline;
+    for (i = 0; i < 3; i++) {
+        bt_init(); bt_start(BT_CHALLENGE, 7, i, 2, 64000);
+        memcpy(&oldsession, &bt_session, sizeof(oldsession));
+        memcpy(&oldstore, &bt_store, sizeof(oldstore));
+        visible = 65520; /* blocking initial paint lasted far longer than3s */
+        bt_ready_visible(visible);
+        oldsession.last_tick = visible; oldsession.ready_ticks = 55; oldsession.countdown = 3;
+        assert(!memcmp(&bt_session, &oldsession, sizeof(oldsession)));
+        assert(!memcmp(&bt_store, &oldstore, sizeof(oldstore)));
+        active = (BTWord)(visible + 55);
+        bt_tick((BTWord)(active - 1));
+        assert(bt_session.status == BT_READY && bt_session.ready_ticks == 1 && !bt_session.elapsed);
+        bt_tick(active);
+        assert(bt_session.status == BT_ACTIVE && !bt_session.elapsed && bt_session.ranked);
+        memcpy(&oldsession, &bt_session, sizeof(oldsession));
+        bt_ready_visible((BTWord)(active + 500)); /* later paints must not rewind an active run */
+        assert(!memcmp(&bt_session, &oldsession, sizeof(oldsession)));
+        deadline = (BTWord)(active + tick_at_seconds(bt_duration_seconds[i]));
+        bt_tick((BTWord)(deadline - 1)); assert(bt_session.status == BT_ACTIVE);
+        bt_tick(deadline);
+        assert(bt_session.status == BT_FINISHED && bt_session.seconds == bt_duration_seconds[i]);
+        assert(bt_session.elapsed == tick_at_seconds(bt_duration_seconds[i]) && !bt_session.attempts);
+        memcpy(&oldsession, &bt_session, sizeof(oldsession));
+        bt_ready_visible(12);
+        assert(!memcmp(&bt_session, &oldsession, sizeof(oldsession)));
+    }
+}
 static void check_limits_and_profiles(void)
 {
     unsigned i;
@@ -307,7 +338,7 @@ static void check_codec(void)
 }
 int main(void)
 {
-    check_arithmetic(); check_curriculum(); check_input(); check_time_and_oracle();
+    check_arithmetic(); check_curriculum(); check_input(); check_time_and_oracle(); check_visible_countdown();
     check_limits_and_profiles(); check_practice(); check_codec();
     printf("boratype_host: production engine PASS; store=%zu session=%zu codec=%u bytes\n",
         sizeof(bt_store), sizeof(bt_session), BT_FILE_SIZE);

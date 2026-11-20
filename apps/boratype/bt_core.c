@@ -205,6 +205,17 @@ void bt_start(int mode, int lesson, int duration, int difficulty, BTWord now)
     }
 }
 
+/* Initial full paints can outlast the ready countdown on an XT. The UI calls
+ * this once after the scene is actually visible, before its next clock
+ * sample. ready_ticks is a REMAINING count, not an elapsed accumulator. */
+void bt_ready_visible(BTWord now)
+{
+    if (bt_session.status != BT_READY) return;
+    bt_session.last_tick = now;
+    bt_session.ready_ticks = 55;
+    bt_session.countdown = 3;
+}
+
 static void bt_metrics(void)
 {
     BTWord tenth;

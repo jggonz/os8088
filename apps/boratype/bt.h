@@ -74,6 +74,7 @@ extern BTSession bt_session;
 extern const BTLesson bt_lessons[BT_LESSONS];
 void bt_init(void);
 void bt_start(int mode, int lesson, int duration, int difficulty, BTWord now);
+void bt_ready_visible(BTWord now); /* once after initial scene is visible; READY only */
 unsigned bt_key(int ascii, BTWord now);
 unsigned bt_tick(BTWord now);
 void bt_pause(BTWord now);
