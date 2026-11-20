@@ -12332,7 +12332,9 @@ pointer store alone cannot protect that caller.
 
 The core retains only the live last-code/span fields and the existing
 renderer routing. The live upper bound is 126 with the provider absent
-and 255 while held. Every glyph index is zero-extended before multiplying
+and 255 while held. A renderer outside the kernel reads the same two
+bytes, never a constant: VESA.DRV's one-pass run takes them through
+`VXB_FONTLIM` (§120.3.2). Every glyph index is zero-extended before multiplying
 by eight: `cbw` is incorrect for extended codes whose index exceeds 127.
 `OSAPI_FONT_GLYPHS` preserves its ASCII-only range 32..126 and returns
 its original stable face pointer even while native rendering uses the
@@ -239893,7 +239895,10 @@ Then one private verb, `VXV_INIT` (0x40), hands the driver `vx_blk` in DX:SI
 state that already exists (`vid_tab` row 4, `gfx_color`, `vga_xorm`,
 `vga_pn`, `gfx_sub_st`, `font_seg`, `wm_clip_r0`, `wm_clip_cm`, `cur_tabp`,
 `cur_hx`, `cur_drawn_x`, the `ico_*` cells, `vid_kind`, `gfx_pat`, `vx_ep`
-itself, and the two kernel addresses `vx_kret` and `vx_null`). The driver
+itself, the two kernel addresses `vx_kret` and `vx_null`, and `font_last`
+with `font_span` - §6.7's LIVE glyph bounds, `VXB_FONTLIM`, which
+`VX_FONTRUN` reads with the table it bounds; until `VX_ABI_VER` 6 the run
+tested the constant 126 and drew every CP850 code as a blank cell). The driver
 banks the kernel's segment (ES) and COPIES the pointers, and **fills
 `vid_tab` row 4** (`vid_vxrow`, which is that row where the table is
 resident and the one resident row where it is not, §39.2) from the chosen
@@ -240191,8 +240196,11 @@ sixteen back off the glass (white is white, black is black). `tests/vesacp.py`
 (S4) drives the Display page: the VESA row at the four-row pitch, two clicks
 on it cycling the class 0 → 128 → 132 with the label changing and a longer
 label's tail erased, then Set Primary landing on 640x480x8 with `vx_class`
-0x84 and a 640x480 screendump. All three are soak rows (QEMU by name,
-CLAUDE.md's closed list). The resident hook is measured by
+0x84 and a 640x480 screendump. `tests/vesakbd.py` types n-tilde into the
+Keyboard page's sample under Spanish (Spain) and reads its eight authored
+rows back off the glass - §6.7's CP850 face through `VX_FONTRUN`, which
+drew every code past 126 as a blank cell until `VXB_FONTLIM`. All four are
+soak rows (QEMU by name, CLAUDE.md's closed list). The resident hook is measured by
 `tests/unit/t_buildmatrix.py`'s `novidext` row, and `t_vidext.py` keeps the
 selector inventory of §120.3.1 honest. The fullscreen round trip is S8's
 driving pass, not a row of its own: `fsx_capstab`'s VESA row is VGA's and

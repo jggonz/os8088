@@ -12,8 +12,8 @@
   "version": 13
  },
  "VX_ABI_VER": {
-  "fingerprint": "b26a7f8a6dfbab464ffa1b307794abd27e804282c5747840eb468f25b429d984",
-  "version": 5
+  "fingerprint": "667638d196c3dfbd1bcc0780388d403a99be4901a335d95d3380b763ee831332",
+  "version": 6
  },
  "XM_ABI_VER": {
   "fingerprint": "114f77439b31382fb16b939b64cda26da58be28cebac546af3f9223102db339b",
@@ -2470,6 +2470,13 @@
    "guard": "DRV_VER",
    "reason": "Merge of main's OSAPI_FILE_PLACE (door 0x60, SPEC.md 19.12.8) with #396's OSAPI_KEYBOARD cell 0x023C (SPEC.md 9.16): both additions at the end, every package built before still runs",
    "to": 14
+  },
+  {
+   "fingerprint": "667638d196c3dfbd1bcc0780388d403a99be4901a335d95d3380b763ee831332",
+   "from": 5,
+   "guard": "VX_ABI_VER",
+   "reason": "VX_ABI_VER 6: vx_blk grows VXB_FONTLIM, a pointer to font_last/font_span, so VESA.DRV's VX_FONTRUN bounds the glyph index by the live span (SPEC.md 6.7) instead of the constant 126 - accented CP850 text drew blank on a VESA desktop. The block's layout moved, so a VESA.DRV of version 5 cannot run beside this kernel: bump, and the attach refuses the mismatch.",
+   "to": 6
   }
  ]
 }

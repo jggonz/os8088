@@ -180,8 +180,11 @@ vx_b1:
 %if font_rn_bg - font_rn_fg != 1
   %error "VXB_FONTFG reads font_rn_fg then font_rn_bg"
 %endif
-%if FONT_FIRST != VX_FONT_FIRST || FONT_LAST != VX_FONT_LAST
-  %error "vxabi.inc's glyph range has drifted from font.inc's"
+%if FONT_FIRST != VX_FONT_FIRST
+  %error "vxabi.inc's first glyph has drifted from font.inc's"
+%endif
+%if font_span - font_last != 1
+  %error "VXB_FONTLIM reads font_last then font_span"
 %endif
 %endmacro
 
@@ -321,6 +324,7 @@ vx_blk:
     dw drv_cfg + CFG_VE             ; VXB_CFGVE (a byte)
     dw vx_kret                      ; VXB_KRET (an address, not a cell)
     dw vx_null                      ; VXB_NULL (likewise)
+    dw font_last                    ; VXB_FONTLIM (font_span follows)
 %if $ - vx_blk != VXB_SIZE
   %error "vx_blk has drifted from vxabi.inc's VXB_* layout"
 %endif
