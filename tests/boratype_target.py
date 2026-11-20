@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -26,6 +27,7 @@ import os88marty as M
 import os88sym
 import os88ui
 from os88fat import Fat12
+from os88flush import Flush, Volume
 
 SESSION_BYTES = ("mode status lesson difficulty duration ranked started committed "
                  "last_wrong error_run countdown new_record profile paused_ready").split()
@@ -42,7 +44,7 @@ CONSTANTS = ("BT_LESSONS BT_PROFILES BT_KEYS BT_PASSAGE BT_MASTERY BT_LESSON BT_
              "BT_S_PRACTICE BT_S_CHALLENGE BT_S_RECORDS BT_S_SETTINGS BT_S_HELP BT_S_PAUSE "
              "BT_S_PROFILE BT_A_START BT_A_LESSON_BASE BT_A_RETRY BT_A_MUSIC BT_A_EFFECTS "
              "BT_A_VOICE BT_A_KEYCLICK BT_A_ROAST BT_A_TEST_MUSIC BT_A_TEST_VOICE "
-             "BT_A_DURATION_BASE BT_A_DIFFICULTY_BASE").split()
+             "BT_A_DURATION_BASE BT_A_DIFFICULTY_BASE BT_A_PAUSE").split()
 
 
 def target_layout():
@@ -164,6 +166,7 @@ class App:
         return self
 
     def press(self, key):
+        print("      Boratype key %s from screen=%d" % (key, self.global_word("bt_screen")), flush=True)
         self.ui.press(key, limit=90)
         return self
 
@@ -194,26 +197,54 @@ class App:
         M.ui_done(self.ui.m, "Boratype application button", limit=90)
         return self
 
-    def key(self, character, expected_correct):
+    def key(self, character, expected_correct, foreign=False):
         before = self.state()
         cycles = self.ui.m.status()["cycles"]
-        self.ui.type(character, limit=90)
+        if foreign:
+            M.text_taken(self.ui.m, character, ui=False)
+        else:
+            self.ui.type(character, limit=90)
         self.ui._wait(lambda: self.state()["attempts"] == before["attempts"] + 1,
                       "one printable attempt", 30, snapshot=self.state)
         after = self.state()
         assert after["correct"] == before["correct"] + int(expected_correct), after
         assert after["errors"] == before["errors"] + int(not expected_correct), after
         assert after["pos"] == before["pos"] + int(expected_correct), after
-        self.evidence.setdefault("key_to_ui_done_cycles", []).append(self.ui.m.status()["cycles"] - cycles)
+        self.evidence.setdefault("foreign_input_cycles" if foreign else "key_to_ui_done_cycles", []).append(
+            self.ui.m.status()["cycles"] - cycles)
         return after
 
-    def shot(self, directory, name):
-        self.ui.still()
+    def finish_passage(self, foreign=False):
+        """Ordinary tutoring input: acknowledge each accepted character.
+
+        Queuing an entire passage at once tests BIOS-ring stress, not an
+        ordinary completed lesson. Keep that separate from this oracle.
+        """
+        count = 0
+        while self.state()["status"] == self.L["BT_ACTIVE"]:
+            state = self.state()
+            assert state["mode"] != self.L["BT_CHALLENGE"]
+            assert count < self.L["BT_PASSAGE"], "passage failed to make progress"
+            self.key(state["passage"][state["pos"]], True, foreign=foreign)
+            count += 1
+        self.wait_screen("RESULTS")
+        return self.state()
+
+    def shot(self, directory, name, foreign=False, settled=True):
+        if settled and foreign:
+            # FSX owns the UI callback until it exits; ui_done cannot hold
+            # there. Wait for its actual VRAM to stop changing across several
+            # refreshes; a tick stamp written before paint is not a witness.
+            base = self.global_word("bt_cga_seg") * 16
+            M.quiesce(self.ui.m, lambda: self.ui.m.read(base, 16384), guest=0.15,
+                      budget=15, what="CGA painted VRAM stable")
+        elif settled:
+            self.ui.still()
         w, h, rgb = self.ui.m.fbuf()
         path = directory / (name + ".png")
         M.write_png_rgb(str(path), w, h, rgb)
         self.evidence.setdefault("captures", []).append({"path": str(path), "w": w, "h": h,
-                                                        "inspection": "required"})
+                                                        "inspection": "required", "settled": settled})
         self.evidence.setdefault("states", {})[name] = self.state()
 
     def resource_snapshot(self):
@@ -244,6 +275,212 @@ def wait_ticks(ui, ticks):
              "guest tick counter to advance", ticks * 65536 / 1193182 + 5)
 
 
+def display_state(ui):
+    return {"kind": ui._byte("vid_kind"), "w": ui._word("vid_cw"),
+            "h": ui._word("vid_ch"), "bpp": ui._byte("vid_planes")}
+
+
+def config_records(image):
+    """Inspect the real SYSTEM.CFG shipped on the selected driver disk."""
+    try:
+        raw = Fat12(image).read("SYSTEM.CFG")
+    except KeyError:
+        return {}
+    assert raw[:8] == b"O88CFG\0\0" and len(raw) >= 12, "invalid driver-disk SYSTEM.CFG"
+    records, at = {}, 10
+    while at + 2 <= len(raw) and raw[at:at + 2] != b"\0\0":
+        assert at + 4 <= len(raw), "truncated SYSTEM.CFG record"
+        key, version, length = raw[at:at + 2].decode("ascii"), raw[at + 2], raw[at + 3]
+        assert at + 4 + length <= len(raw), "truncated SYSTEM.CFG payload"
+        records[key] = {"version": version, "data": list(raw[at + 4:at + 4 + length])}
+        at += 4 + length
+    return records
+
+
+def prepare_driver_disk(args, build):
+    """Private shipped-system copy with the established VESA CFG records.
+
+    Never alter a source disk or introduce a display implementation. The
+    real driver must attach and the live mode must match afterward.
+    """
+    if args.image is not None or not args.adapter.startswith("vesa"):
+        return args.image or build / "os8088-360.img"
+    fixture = build / ("vesa8.img" if args.adapter == "vesa800" else "vesa.img")
+    if fixture.exists():
+        return fixture
+    base = build / "os8088.img"
+    assert base.is_file(), "prepare the shipped system image first: make " + str(base)
+    dst = args.evidence / (args.adapter + "-system.img")
+    shutil.copyfile(base, dst)
+    cfg = b"O88CFG\0\0" + struct.pack("<H", 3) + b"DW\x01\x02" + struct.pack("<H", 1 << 9)
+    if args.adapter == "vesa800":
+        cfg += b"VM\x03\x04\x00\x00\x00\x8a"
+    cfg += b"\0\0"
+    cfgfile = args.evidence / (args.adapter + "-SYSTEM.CFG")
+    cfgfile.write_bytes(cfg)
+    volume = Fat12(dst)
+    if volume.find("SYSTEM.CFG")[2] is not None:
+        volume.delete("SYSTEM.CFG")
+    volume.add(cfgfile, "SYSTEM.CFG")
+    if volume.find("VESA.DRV")[2] is None:
+        driver = build / "vesa.drv"
+        assert driver.is_file(), "build the shipped VESA.DRV before this scenario"
+        volume.add(driver, "VESA.DRV")
+    volume.save()
+    return dst
+
+
+def verify_adapter(ui, requested, evidence):
+    actual = display_state(ui)
+    expected = {"vga": (0, 640, 480, 4), "cga": (2, 640, 200, 1),
+                "herc": (1, 720, 348, 1), "ega": (3, 640, 350, 4),
+                "vesa800": (4, 800, 600, 8), "vesa1024": (4, 1024, 768, 16)}
+    if requested != "auto":
+        assert tuple(actual[k] for k in ("kind", "w", "h", "bpp")) == expected[requested], \
+            ("requested adapter was not actually attached", requested, actual)
+    evidence["actual_display"] = actual
+    evidence["timing_instrument"] = ("guest cycles at 4.77MHz" if not getattr(ui.m, "qemu", False)
+                                     and not getattr(ui.m, "box86", False)
+                                     else "emulated clock only; no XT cycle-performance claim")
+
+
+def grow_window(ui, win, width, height):
+    """Real grow gesture, from the kernel's source-defined grow rectangle.
+
+    os88ui has no resize verb. Use its mouse/geometry and prove both the
+    press and tracked outline, without clearing or writing kernel statics.
+    """
+    body = (SRC / "kernel/wm.inc").read_text().split("\nwm_grow_rect:", 1)[1].split("\n    ret", 1)[0]
+    inset = re.search(r"sub ax,\s*(\d+)", body)
+    span = re.search(r"add cx,\s*(\d+)", body)
+    assert inset and span, "kernel grow-box geometry changed; derive its current center"
+    offset = int(inset[1]) - int(span[1]) // 2
+    live = ui._refresh(win)
+    ui.raise_window(live)
+    gx, gy = live.x + live.w - offset, live.y + live.h - offset
+    tx, ty = live.x + width - offset, live.y + height - offset
+    record = ui._wrec(live)
+    ui.mo.to(gx, gy)
+    ui._edge_until(lambda: ui._word("ui_dragwin") == record and
+                   ui._word("ui_origx") == live.w and ui._word("ui_origy") == live.h,
+                   "grow-box press accepted for this geometry", 20)
+    ui.mo.to(tx, ty, l=True)
+    tracked = M.quiesce(ui.m, lambda: (ui._word("ui_dragw"), ui._word("ui_dragh")),
+                        guest=0.2, budget=15, what="grow outline settled")
+    assert tracked is not None
+    ui.mo._edge(False)
+    ui._wait(lambda: ui.m.read(ui._S("gfx_lock_flag"), 1)[0] == 0 and
+             (ui._refresh(win).w, ui._refresh(win).h) != (live.w, live.h),
+             "resize commit and drawing complete", 90)
+    return ui._refresh(win)
+
+
+def window_checks(app, directory):
+    L, ui = app.L, app.ui
+    if app.state()["status"] != L["BT_ACTIVE"]:
+        app.press("F2").wait_screen("LESSONS")
+        app.click_action(L["BT_A_LESSON_BASE"])
+        app.press("Enter").wait_screen("PLAY")
+        app.key(app.state()["passage"][0], True)
+    before = app.state()
+    live = ui._refresh(app.win)
+    original = [live.x, live.y, live.w, live.h]
+    disk = ui.open_drive("B")
+    ui._wait(lambda: app.state()["status"] == L["BT_PAUSED"], "focus loss pauses guided lesson", 30)
+    covered = ui._refresh(disk)
+    assert max(live.x, covered.x) < min(live.x + live.w, covered.x + covered.w)
+    assert max(live.y, covered.y) < min(live.y + live.h, covered.y + covered.h)
+    app.shot(directory, "window-covered-focus-lost")
+    paused = app.state()
+    wait_ticks(ui, 8)
+    assert app.state()["elapsed"] == paused["elapsed"] and app.state()["pos"] == before["pos"]
+    ui.raise_window(app.win)
+    assert app.state()["status"] == L["BT_PAUSED"], "focus return resumed without intent"
+    app.shot(directory, "window-uncovered-still-paused")
+    app.press("F4").wait_screen("PLAY")
+    minimum = struct.unpack("<HH", ui.m.read(os88sym.wfield(app.win.i, "W_MINW"), 4))
+    assert minimum[0] and minimum[1], "app did not publish a usable minimum"
+    shrunk = grow_window(ui, app.win, minimum[0] // 2, minimum[1] // 2)
+    app.wait_screen("PAUSE")
+    assert shrunk.w >= minimum[0] and shrunk.h >= minimum[1], (minimum, shrunk)
+    assert app.global_word("tf_w") >= 480 and app.global_word("tf_h") >= 128
+    assert app.state()["pos"] == before["pos"]
+    app.shot(directory, "window-minimum")
+    # Essential controls must remain hit-testable at the actual clamped size.
+    app.click_action(L["BT_A_PAUSE"])
+    app.wait_screen("PLAY")
+    app.key(app.state()["passage"][app.state()["pos"]], True)
+    app.press("F4").wait_screen("PAUSE")
+    enlarged = grow_window(ui, app.win, original[2], original[3])
+    assert [enlarged.x, enlarged.y, enlarged.w, enlarged.h] == original
+    app.shot(directory, "window-size-restored")
+    app.evidence["window_checks"] = {"minimum_frame": list(minimum),
+                                    "actual_minimum": [shrunk.w, shrunk.h],
+                                    "restored": original, "focus_requires_resume": True}
+
+
+def adapter_probe(app, directory, requested):
+    """Short real-key flow on the ACTUAL attached adapter and native latch."""
+    L, ui = app.L, app.ui
+    app.shot(directory, "adapter-native-home")
+    cga = display_state(ui)["kind"] == 2
+    if cga and app.store_byte("display"):
+        app.press("KeyS").wait_screen("SETTINGS").press("KeyD")
+        app.press("Escape").wait_screen("HOME")
+    if not cga:
+        app.press("F2").wait_screen("LESSONS")
+        app.click_action(L["BT_A_LESSON_BASE"])
+        app.press("Enter").wait_screen("PLAY")
+        first = app.state()["passage"][0]
+        app.key("x" if first != "x" else "q", False)
+        app.key(first, True)
+        app.shot(directory, "adapter-native-input")
+    app.press("F6").wait_screen("HOME" if cga else "PAUSE")
+    assert app.global_word("bt_full") and ui._word("wm_fs")
+    app.shot(directory, "adapter-native-fullscreen")
+    app.press("F6")
+    ui._wait(lambda: not app.global_word("bt_full") and not ui._word("wm_fs"), "native mode restored", 45)
+    if not cga:
+        return
+    app.press("KeyS").wait_screen("SETTINGS")
+    if not app.store_byte("display"):
+        app.press("KeyD")
+        ui._wait(lambda: app.store_byte("display") == 1, "CGA color preference selected", 20)
+    app.press("Escape").wait_screen("HOME")
+    # FSX runs inside the original callback: only its own state/frame can be
+    # a witness. Never ask ui_done while that callback owns the bracket.
+    ui.press("F6", done=False)
+    ui._wait(lambda: app.global_word("bt_in_cga") == 1 and app.global_word("bt_cga_seg") != 0,
+             "CGA320 FSX bracket and framebuffer accepted", 30)
+    fsi = app.p.read(app.sym["_bt_cga_fsi"], 16)
+    assert struct.unpack_from("<HH", fsi, 2) == (320, 200) and fsi[9] == 2, fsi.hex()
+    app.shot(directory, "adapter-cga320-home", foreign=True)
+    ui.press("F2", done=False)
+    app.wait_screen("LESSONS")
+    for _ in range(L["BT_LESSONS"]):
+        if not app.global_word("bt_selection"):
+            break
+        ui.press("ArrowUp", done=False)
+    assert app.global_word("bt_selection") == 0
+    ui.press("Enter", done=False)
+    app.wait_screen("PLAY")
+    assert app.state()["status"] == L["BT_ACTIVE"] and not app.state()["attempts"]
+    target = app.state()["passage"][app.state()["pos"]]
+    app.key("x" if target != "x" else "q", False, foreign=True)
+    app.shot(directory, "adapter-cga320-error", foreign=True)
+    app.key(target, True, foreign=True)
+    app.finish_passage(foreign=True)
+    result = app.state()
+    assert result["committed"] and result["errors"] == 1 and result["net"] == result["length"]
+    app.shot(directory, "adapter-cga320-result", foreign=True)
+    ui.press("F6", done=False)
+    ui._wait(lambda: not app.global_word("bt_in_cga"), "CGA FSX returned through OS restoration", 30)
+    assert display_state(ui) == {"kind": 2, "w": 640, "h": 200, "bpp": 1}
+    assert app.state()["net"] == result["net"]
+    app.shot(directory, "adapter-cga640-restored")
+    app.evidence["cga320_result"] = result
+
+
 def smoke(app, directory, negative):
     L, ui, ev = app.L, app.ui, app.evidence
     app.shot(directory, "01-home")
@@ -267,8 +504,7 @@ def smoke(app, directory, negative):
     assert (backed["attempts"], backed["correct"], backed["errors"], backed["net"], backed["streak"]) == (2, 1, 1, 0, 0)
     assert backed["backspaces"] == 1
     app.key(passage[0], True)
-    ui.type(passage[1:], limit=90)
-    app.wait_screen("RESULTS")
+    app.finish_passage()
     ui._wait(lambda: app.state()["committed"] == 1, "frozen result committed once", 30)
     result = app.state()
     n = len(passage)
@@ -293,8 +529,7 @@ def smoke(app, directory, negative):
     app.press("Enter").wait_screen("PLAY")
     mixed = app.state()["passage"]
     assert any(c.isupper() for c in mixed) and any(c in ".,!;" for c in mixed)
-    ui.type(mixed, limit=90)
-    app.wait_screen("RESULTS")
+    app.finish_passage()
     mixed_result = app.state()
     assert (mixed_result["attempts"], mixed_result["correct"], mixed_result["errors"], mixed_result["net"]) == (len(mixed), len(mixed), 0, len(mixed))
     assert mixed_result["accuracy"] == 100 and mixed_result["committed"]
@@ -304,8 +539,7 @@ def smoke(app, directory, negative):
     app.press("F2").wait_screen("LESSONS")
     app.click_action(L["BT_A_LESSON_BASE"])
     app.press("Enter").wait_screen("PLAY")
-    ui.type(app.state()["passage"], limit=90)
-    app.wait_screen("RESULTS")
+    app.finish_passage()
     app.press("KeyR").wait_screen("PLAY")
     assert app.state()["lesson"] == 0 and not app.state()["attempts"]
     app.key(app.state()["passage"][0], True)
@@ -330,6 +564,7 @@ def smoke(app, directory, negative):
     ui._wait(lambda: not app.global_word("bt_full") and not ui._word("wm_fs"), "native fullscreen restored", 45)
     restored = next(w for w in ui.windows() if w.i == app.win.i)
     assert [restored.x, restored.y, restored.w, restored.h] == old_geometry
+    window_checks(app, directory)
     app.press("KeyX").wait_screen("HOME")
     app.press("F1").wait_screen("HELP").shot(directory, "06-help")
     app.press("Escape").wait_screen("HOME")
@@ -449,37 +684,118 @@ def persistence_and_readonly(ui, app, args, symbols, layout, evidence):
     ui.raise_window(reopened.win)
     assert reopened.generation() == generation and reopened.profile() == expected
     ui.close(reopened.win, limit=90)
-    evidence["persistence"] = "PASS save-close-reopen and second-instance writer exclusion; reboot not exercised"
+    # MartyPC holds guest writes only in RAM. Export the live, closed-save
+    # disks before terminating this machine, then actually cold-boot them.
+    exported = []
+    for drive, label in ((0, "system"), (1, "apps")):
+        path = args.evidence / ("reboot-" + label + ".img")
+        Flush(marty=ui.m).save(drive, str(path))
+        exported.append(path)
+    drive = ord(args.path[0].upper()) - ord("A") if len(args.path) > 1 and args.path[1] == ":" else 1
+    assert drive in (0, 1), "reboot export currently covers the two floppy volumes"
+    volume = Volume(exported[drive].read_bytes(), "exported package disk")
+    copies = []
+    for slot in ("BORATA.BTT", "BORATB.BTT"):
+        path = "SYSTEM/APPDATA/" + slot
+        if path not in (e.path for e in volume.walk()):
+            continue
+        raw = volume.read(path)
+        assert len(raw) == 2136 and raw[:4] == b"BTT1", (path, len(raw))
+        assert struct.unpack_from("<HH", raw, 4) == (1, len(raw))
+        a = b = 0
+        for i, byte in enumerate(raw):
+            a = (a + (0 if i in (18, 19) else byte)) % 255
+            b = (b + a) % 255
+        assert struct.unpack_from("<H", raw, 18)[0] == a | (b << 8), path
+        copies.append({"path": path, "generation": struct.unpack_from("<H", raw, 8)[0],
+                       "sha256": hashlib.sha256(raw).hexdigest()})
+    assert copies, "no independent host-readable save on exported package volume"
+    newest = copies[0]
+    for copy in copies[1:]:
+        delta = (copy["generation"] - newest["generation"]) & 65535
+        if 0 < delta < 32768:
+            newest = copy
+    evidence["persistence"] = {"close_reopen": "PASS", "single_writer": "PASS",
+                               "exported_save_copies": copies, "reboot": "PENDING"}
+    return {"profile": expected.hex(), "music": music, "generation": newest["generation"],
+            "system": str(exported[0]), "apps": str(exported[1])}
+
+
+def reboot_verify(args, symbols, layout, evidence, saved):
+    previous = os.environ.get("OS88_BOOTCACHE")
+    os.environ["OS88_BOOTCACHE"] = "0"  # a fresh machine, not a fork snapshot
+    try:
+        with os88ui.boot(saved["system"], apps=saved["apps"], machine=args.machine,
+                         quick=True, label="boratype-reboot") as ui:
+            verify_adapter(ui, args.adapter, evidence)
+            app = App(ui, ui.path(args.path, limit=90), symbols, layout, evidence)
+            assert app.profile().hex() == saved["profile"], "cold reboot lost progress/statistics"
+            assert app.store_byte("music") == saved["music"], "cold reboot lost preference"
+            assert app.generation() == saved["generation"], "cold reboot loaded wrong save generation"
+            assert not app.global_word("bt_readonly"), "fresh machine retained obsolete writer ownership"
+            app.shot(args.evidence, "11-reboot-restored")
+            evidence["persistence"]["reboot"] = "PASS"
+            ui.close(app.win, limit=90)
+    finally:
+        if previous is None:
+            os.environ.pop("OS88_BOOTCACHE", None)
+        else:
+            os.environ["OS88_BOOTCACHE"] = previous
+
+
+def select_instrument(args):
+    if args.backend:
+        os.environ["OS88_EMU"] = "" if args.backend == "marty" else args.backend
+    elif args.adapter.startswith("vesa"):
+        os.environ["OS88_EMU"] = "qemu"
+    elif args.adapter == "ega":
+        os.environ["OS88_EMU"] = "86box"
+    backend = M.emulator()
+    if args.adapter in ("cga", "herc") and backend == "qemu":
+        raise ValueError("QEMU has no actual CGA/Hercules; use the MartyPC card model")
+    if args.adapter == "ega" and backend != "86box":
+        raise ValueError("actual EGA350 requires the automation-capable 86Box card model")
+    if args.adapter.startswith("vesa") and backend != "qemu":
+        raise ValueError("VESA display QA uses QEMU's actual VBE and VESA.DRV")
+    if not args.machine:
+        args.machine = {"cga": "os8088_5150_cga_gla", "herc": "os8088_5150_herc_gla",
+                        "ega": "os8088_xt_ega_640k"}.get(args.adapter, "os8088_xt_vga")
+    return backend
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--machine", default="os8088_xt_vga")
+    parser.add_argument("--machine", help="defaults to the actual requested adapter's machine")
+    parser.add_argument("--backend", choices=("marty", "qemu", "86box"))
+    parser.add_argument("--adapter", choices=("auto", "vga", "cga", "herc", "ega", "vesa800", "vesa1024"), default="auto")
     parser.add_argument("--evidence", type=Path, default=ROOT / "build/boratype-target")
-    parser.add_argument("--scenario", choices=("smoke", "challenges", "audio"), default="smoke")
+    parser.add_argument("--scenario", choices=("smoke", "challenges", "audio", "adapters", "windows"), default="smoke")
     parser.add_argument("--image", type=Path)
     parser.add_argument("--apps", type=Path)
     parser.add_argument("--path", default="B:/BORATYPE.O88", help="installed guest path to open with os88ui")
     parser.add_argument("--negative", action="store_true", help="intentional wrong-count assertion; smoke must fail")
     parser.add_argument("--host-check", action="store_true", help="derive/check offsets only; never boot a guest")
     args = parser.parse_args()
+    backend = select_instrument(args)
     layout = target_layout()
     if args.host_check:
         print(json.dumps(layout, indent=2, sort_keys=True))
         print("boratype_target: host offsets checked; guest NOT RUN")
         return
     build = Path(os88sym.kernel_image()).parent
-    args.image = (args.image or build / "os8088-360.img").resolve()
-    args.apps = (args.apps or build / "boratype360.img").resolve()
     args.evidence = args.evidence.resolve()
     args.evidence.mkdir(parents=True, exist_ok=True)
+    args.apps = (args.apps or build / "boratype360.img").resolve()
     evidence = {"status": "RUNNING", "scenario": args.scenario, "machine": args.machine,
+                "adapter": args.adapter, "backend": backend,
                 "layout": layout, "source": str(SRC), "build": str(build),
-                "image_sha256": digest(args.image), "apps_sha256": digest(args.apps),
                 "visual_inspection": "required; screenshots alone do not pass appearance claims"}
     started = time.monotonic()
-    ui = app = None
+    ui = app = saved = None
     try:
+        args.image = Path(prepare_driver_disk(args, build)).resolve()
+        evidence["image_sha256"] = digest(args.image)
+        evidence["apps_sha256"] = digest(args.apps)
         symbols = app_symbols(build)
         # This disk's kernel must be the exact file os88sym reassembles/maps.
         # The disk carries the KZ-wrapped shipped SYS; os88sym verifies the
@@ -490,17 +806,32 @@ def main():
             assert Fat12(args.apps).read("BORATYPE.O88") == (build / "boratype.o88").read_bytes(), \
                 "software disk contains a stale package"
         os88sym.syms()  # byte-identical source/kernel check before launch
+        evidence["system_cfg"] = config_records(args.image)
+        if args.adapter.startswith("vesa"):
+            records = evidence["system_cfg"]
+            assert "DW" in records and int.from_bytes(bytes(records["DW"]["data"]), "little") & (1 << 9), \
+                "real driver disk did not request VESA.DRV"
+            assert Fat12(args.image).read("VESA.DRV"), "real driver disk lacks VESA.DRV"
+            if args.adapter == "vesa800":
+                assert records.get("VM", {}).get("data", [])[-1:] == [0x8A], \
+                    "800x600x8 SYSTEM.CFG class was not requested"
         with os88ui.boot(str(args.image), apps=str(args.apps), machine=args.machine, quick=True) as ui:
             try:
+                verify_adapter(ui, args.adapter, evidence)
                 ui.open_drive("B")
                 app = App(ui, ui.path(args.path, limit=90), symbols, layout, evidence)
                 evidence["start_cycles"] = ui.m.status()["cycles"]
+                evidence["resources_launch"] = app.resource_snapshot()
                 if args.scenario == "smoke":
                     smoke(app, args.evidence, args.negative)
-                    persistence_and_readonly(ui, app, args, symbols, layout, evidence)
+                    saved = persistence_and_readonly(ui, app, args, symbols, layout, evidence)
                     app = None
                 elif args.scenario == "challenges":
                     challenges(app, args.evidence)
+                elif args.scenario == "adapters":
+                    adapter_probe(app, args.evidence, args.adapter)
+                elif args.scenario == "windows":
+                    window_checks(app, args.evidence)
                 else:
                     audio_probe(app, args.evidence)
                 evidence["end_cycles"] = ui.m.status()["cycles"]
@@ -510,10 +841,12 @@ def main():
                 if app is not None:
                     try:
                         evidence["failure_state"] = app.state()
-                        app.shot(args.evidence, "FAIL-current-guest")
+                        app.shot(args.evidence, "FAIL-current-guest", settled=False)
                     except Exception as capture_error:
                         evidence["capture_error"] = str(capture_error)
                 raise
+        if saved is not None:
+            reboot_verify(args, symbols, layout, evidence, saved)
     except BaseException as error:
         evidence["status"] = "FAIL"
         evidence["error"] = repr(error)
