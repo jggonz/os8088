@@ -110,7 +110,7 @@ WIRE_NMAX   equ 255             ; the format's ceiling. WIRE_CATMAX is the
                                 ; with no sidecar table at all - and it is
                                 ; what keeps WIRE_HDR + WIRE_REC*i inside 16
                                 ; bits, which the reader's addressing needs
-WIRE_LEVEL  equ 7               ; what THIS reader installs (SPEC.md 92.2):
+WIRE_LEVEL  equ 8               ; what THIS reader installs (SPEC.md 92.2):
                                 ; 1 = plain records and version 1 archives,
                                 ; 2 = version 2 archives too (92.13.1), 3 =
                                 ; a package that far-calls a cell at or past
@@ -118,7 +118,9 @@ WIRE_LEVEL  equ 7               ; what THIS reader installs (SPEC.md 92.2):
                                 ; too, 5 = one at or past 0x04D7 too, 6 =
                                 ; one at or past 0x04E3 (OSAPI_SEG) too, 7 =
                                 ; one at or past 0x04E9 (OSAPI_MEM_P, and
-                                ; OSAPI_FS_OP at 0x04EF) too
+                                ; OSAPI_FS_OP at 0x04EF) too, 8 = one at or
+                                ; past 0x023C (OSAPI_KEYBOARD, SPEC.md 9.16)
+                                ; too - the first row at PKG_FMT 13
                                 ; (92.2's cell fence: the level is
                                 ; this kernel's API table generation, and
                                 ; tools/os88wire.py's WIRE_CELL_LEVELS is
