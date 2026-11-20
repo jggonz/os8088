@@ -2,19 +2,20 @@
  * All state changes run on the UI task. The timer fallback worker only
  * posts a wake; it never scores, draws, plays audio or touches a file. */
 int bt_screen, bt_selection, bt_ch_duration, bt_ch_diff, bt_master_sound = 1;
-int bt_full, bt_readonly, bt_profile_edit, bt_modifiers, bt_practice_weak;
+int bt_full, bt_readonly, bt_profile_edit, bt_modifiers, bt_practice_weak, bt_blink_frame;
 char bt_notice[64];
 static void *bt_win;
 static unsigned bt_band, bt_art, bt_soundpart;
 static struct os88_video bt_video;
 static int bt_timer_ok, bt_worker_live, bt_save_pending, bt_about_up;
 static int bt_focused = 1, bt_guard_scan, bt_last_scan, bt_in_cga;
+static int bt_cga_exit, bt_quit_pending, bt_closing;
 static BTByte bt_io[BT_SAVE_CAP];
 static BTWord bt_saved_generation;
 static const char *bt_slots[2] = {"BORATA.BTT", "BORATB.BTT"};
 static const char *bt_about_lines[] = {"Borat Teaches Typing", "Native C typing tutor for os8088",
     "24 lessons, practice and timed tests", "Original jokes and soundtrack", "F1: help   F6: full screen", 0};
-static const char *bt_file_items[] = {"Profile...", "Save progress", "Close"};
+static const char *bt_file_items[] = {"Profile...", "Save progress", "Close  Ctrl+Q"};
 static const char *bt_lesson_items[] = {"Lessons  F2", "Practice", "Challenge", "Records"};
 static const char *bt_view_items[] = {"Pause / Resume  F4", "Full screen  F6", "Settings"};
 static const char *bt_sound_items[] = {"Sound On / Off  F3", "Test Music", "Test Voice"};
@@ -113,6 +114,7 @@ static void bt_fullscreen_toggle(void)
         bt_in_cga = 1;
         if (os88_fsx_run(bt_cga_entry, bt_win, 0) != 0) bt_message("Full screen is busy or unavailable.");
         bt_in_cga = 0;
+        if (bt_quit_pending) { os88_onclose(bt_win); os88_wm_close(bt_win); return; }
         if (bt_save_pending) os88_wm_wake(bt_win);
         bt_guard_scan = 0x40;
         bt_audio_state(bt_screen);
@@ -163,7 +165,9 @@ void bt_action(int a)
     } else if (a == BT_A_PAUSE) { bt_pause_ui(); return;
     } else if (a == BT_A_FULL) { if (!bt_in_cga) bt_fullscreen_toggle(); return;
     } else if (a == BT_A_SAVE) { bt_schedule_save();
-    } else if (a == BT_A_TEST_MUSIC || a == BT_A_TEST_VOICE) { bt_audio_test(a == BT_A_TEST_VOICE);
+    } else if (a == BT_A_TEST_MUSIC || a == BT_A_TEST_VOICE) {
+        if (a == BT_A_TEST_MUSIC && !bt_store.music) bt_message("Enable Music to audition the soundtrack.");
+        else { bt_audio_test(a == BT_A_TEST_VOICE); if (a == BT_A_TEST_VOICE) bt_message(bt_voice_status()); }
     } else {
         if (a == BT_A_MUSIC) bt_store.music ^= 1;
         else if (a == BT_A_EFFECTS) bt_store.effects ^= 1;
@@ -189,6 +193,12 @@ static void bt_key_route(int ascii, int scan)
     unsigned n;
     bt_last_scan = scan;
     bt_modifiers = bt_modifier_state();
+    if (ascii == 17) { /* Ctrl+Q is a control chord, never printable typing. */
+        bt_quit_pending = 1;
+        if (bt_in_cga) bt_cga_exit = 1;
+        else { os88_onclose(bt_win); os88_wm_close(bt_win); }
+        return;
+    }
     if (bt_guard_scan) {
         if (os88_key_down(bt_guard_scan)) return;
         bt_guard_scan = 0;
@@ -209,6 +219,19 @@ static void bt_key_route(int ascii, int scan)
     }
     if (bt_screen == BT_S_PLAY) {
         bt_events(bt_key(ascii, os88_ticks())); bt_redraw(0); return;
+    }
+    if (bt_screen == BT_S_SETTINGS) {
+        if (ascii >= 'a' && ascii <= 'z') ascii -= 32;
+        if (ascii == 'M') bt_action(BT_A_MUSIC);
+        else if (ascii == 'E') bt_action(BT_A_EFFECTS);
+        else if (ascii == 'V') bt_action(BT_A_VOICE);
+        else if (ascii == 'K') bt_action(BT_A_KEYCLICK);
+        else if (ascii == 'R') bt_action(BT_A_ROAST);
+        else if (ascii == 'D') bt_action(BT_A_DISPLAY);
+        else if (ascii == 'T') bt_action(BT_A_TEST_MUSIC);
+        else if (ascii == 'A') bt_action(BT_A_TEST_VOICE);
+        else if (ascii == 13) bt_action(BT_A_BACK);
+        return;
     }
     if (bt_screen == BT_S_PROFILE) {
         if (ascii == 13) { bt_schedule_save(); bt_setscreen(BT_S_HOME); return; }
@@ -235,6 +258,14 @@ static void bt_key_route(int ascii, int scan)
         if (ascii >= '1' && ascii <= '3') bt_ch_duration = ascii - '1';
         if (scan == 0x48 || scan == 0x50) bt_ch_diff = (bt_ch_diff + (scan == 0x48 ? 3 : 1)) & 3;
     }
+    if (bt_screen == BT_S_PRACTICE) {
+        if (ascii >= '1' && ascii <= '4') { bt_action(BT_A_PRACTICE_BASE + ascii - '1'); return; }
+        if (scan == 0x48 || scan == 0x50) {
+            bt_ch_diff = (bt_ch_diff + (scan == 0x48 ? 3 : 1)) & 3;
+            bt_practice_weak = 0;
+        }
+        if (ascii == 'w' || ascii == 'W') { bt_action(BT_A_WEAK); return; }
+    }
     if (ascii == 13) {
         bt_action(bt_screen == BT_S_RESULTS ? BT_A_NEXT : bt_screen == BT_S_PAUSE ? BT_A_PAUSE :
             bt_screen == BT_S_HELP || bt_screen == BT_S_SETTINGS || bt_screen == BT_S_RECORDS ? BT_A_BACK : BT_A_START);
@@ -255,6 +286,7 @@ static void bt_pulse(void)
     int focus;
     BTWord now;
     now = os88_ticks();
+    bt_blink_frame = now % 91 < 2;
     bt_modifiers = bt_modifier_state();
     focus = os88_menu_owner() == bt_win;
     if (bt_focused && !focus && (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY)) {
@@ -332,6 +364,8 @@ void os88_oncmd(int item, int menu, void *win)
 }
 int os88_onclose(void *win)
 {
+    if (bt_closing) return 1;
+    bt_closing = 1;
     os88_wm_timer(win, 0);
     bt_audio_done();
     ovl_bt_save();
@@ -349,6 +383,7 @@ void os88_onmove(unsigned was, unsigned now)
     if (artnow != bt_art) { bt_face_move(bt_art, artnow); bt_art = artnow; }
     bt_soundpart = os88_part_seg(1);
     bx_setart2(bt_soundpart);
+    bt_audio_move(was, now);
 }
 static struct os88_class bt_class = {OS88_CLASS_LEN, OS88_WF_SIZABLE | OS88_WF_OWNBG,
     os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,

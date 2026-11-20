@@ -158,16 +158,26 @@ int bt_audio_reload(const char *path)
     bt_vset(0);
     if(bta_pack) { os88_mem_free(bta_pack); bta_pack=0; }
     /* Rounded by the allocator to 512B, base aligned for disk transfers.
-     * Pinned by default: the stream's source is immutable and freed at close.
+     * Pinned during this file transfer; movable after the validated load.
      * One 28KB source plus the driver's 4KB staging grant, no RAM framebuffer. */
     bta_pack=os88_mem_claim_p(1792);
     if(!bta_pack) { bta_packstate=3; return 0; }
     n=os88_file_read_seg(path,bta_pack,28672);
     if(!n) { bta_packstate=(os88_ferr()==1 || os88_ferr()==4)?0:2; }
-    else if(bt_vvalidate(bta_pack,n)) { bta_packstate=1; bt_vset(bta_pack); return 1; }
+    else if(bt_vvalidate(bta_pack,n)) {
+        bta_packstate=1; bt_vset(bta_pack);
+        os88_mem_movable(bta_pack,1);
+        return 1;
+    }
     else bta_packstate=2;
     os88_mem_free(bta_pack); bta_pack=0;
     return 0;
+}
+void bt_audio_move(unsigned was,unsigned now)
+{
+    /* Relocation callback: assignments only, no claims/files/audio calls.
+     * Driver staging owns copied bytes, never an address into this source. */
+    if(bta_pack==was) { bta_pack=now; bt_vmove(now); }
 }
 
 void bt_audio_init(void)
@@ -251,7 +261,8 @@ void bt_audio_tick(BTWord now, int focused)
     if((!on || !bt_store.voice || !bta_focus) && bta_voice) {
         bt_vstop(); bta_voice=0;
     }
-    held=!bta_focus || bta_screen==BT_S_PAUSE || bt_session.status==BT_PAUSED || bta_voice;
+    held=!bta_focus || bta_screen==BT_S_PAUSE ||
+        (bta_screen==BT_S_PLAY && bt_session.status==BT_PAUSED) || bta_voice;
     if(!on) return;
     gkm_volume(bt_store.music,bt_store.effects);
     if(!bt_store.music) { bt_mhold(0); bta_hold=0; bta_song=-1; }
@@ -281,7 +292,10 @@ void bt_audio_test(int voice)
             bt_vstop(); bta_voice=bt_vplay(BT_R_WELCOME)==1;
             if(bta_voice && !bta_hold) { bt_mhold(1); bta_hold=1; }
         }
-    } else bta_fx(9);
+    } else if(bta_on && bta_focus && bt_store.music) {
+        /* Audition the composed menu loop through the real music route. */
+        bta_stinger=-1; bta_song=0; gkm_play(0,1);
+    }
 }
 void bt_audio_done(void)
 {

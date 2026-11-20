@@ -22,12 +22,14 @@ void bt_mhold(int h) {held=h;}
 int bt_vcaps(void) {return caps;}
 int bt_vvalidate(unsigned seg,unsigned len) {(void)seg;(void)len;return 1;}
 void bt_vset(unsigned seg) {(void)seg;}
+void bt_vmove(unsigned seg) {(void)seg;}
 int bt_vplay(int tag) {(void)tag;vplays++;vplaying=vmatches;return vmatches;}
 int bt_vtick(void) {return vplaying;}
 void bt_vstop(void) {vplaying=0;}
 const char *bt_vcaption(void) {return "test reaction";}
 unsigned os88_mem_claim_p(unsigned n) {(void)n;return 1;}
 int os88_mem_free(unsigned seg) {(void)seg;return 0;}
+int os88_mem_movable(unsigned seg,int on) {(void)seg;(void)on;return 0;}
 unsigned os88_file_read_seg(const char *p,unsigned s,unsigned c) {(void)p;(void)s;(void)c;return 0;}
 int os88_ferr(void) {return 4;}
 #include "../apps/boratype/bt_audio.c"
@@ -81,6 +83,10 @@ int main(void)
  bt_audio_tick(5,0);assert(held);bt_audio_tick(6,1);assert(!held);
  assert(plays==old); /* director did not restart unchanged tune */
  bt_store.music=0;bt_audio_tick(7,1);assert(song==-1);
+ bt_store.music=1;bt_audio_tick(7,1);bt_audio_state(BT_S_SETTINGS);
+ bt_session.status=BT_PAUSED;bt_audio_tick(7,1);assert(!held);
+ old=plays;bt_audio_test(0);assert(plays==old+1&&song==0);
+ bt_audio_state(BT_S_PLAY);bt_session.status=BT_ACTIVE;
  bt_master_sound=0;bt_audio_tick(8,1);assert(!bta_on&&stops>0);
  f=fx;bt_audio_event(BT_EV_WRONG,300);assert(fx==f);
  /* Different sound toggles and no scoring mutation. */

@@ -382,3 +382,13 @@ And behind both: **every undeclared row above.** A pinned block is a barrier
 whatever its size — the measured case was a 3KB cache holding 40KB out of
 reach, and unpinning it moved a 114KB module and the sound driver's pool on
 the very next run with nothing else changed (§66.5.6).
+
+## Borat Teaches Typing (SPEC.md 134)
+
+| claim | size/lifetime | verdict | holder and relocation |
+|---|---|---|---|
+| native package region | measured by package build; instance lifetime | MOVABLE | C runtime region relocation; fallback worker is restartable and posts wakes only |
+| eager art/audio/overlay carve | art63,677B plus audio/overlay; instance lifetime | MOVABLE | `CC_ONMOVE_PARTS`; callback rereads `os88_part_seg(0/1)` and fixes face and second-bank holders |
+| drawing band | 8KB; instance lifetime, reused as CGA cell shadow | MOVABLE | `bt_band`, face holder and `bx_bseg` updated by callback |
+| optional voice source | at most28KB; installed local pack until close/reload | MOVABLE after file read | `bta_pack` and assembly `btv_seg`; immutable offsets survive relocation, driver keeps copied staging bytes |
+| PCM staging grant | 4KB; one reaction | driver-owned active DMA staging | OS sound protocol owns allocation/release and its DMA fence; app closes it on end/failure/mute/focus loss |

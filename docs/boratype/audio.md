@@ -92,10 +92,13 @@ and brief speaker/FM effect. Imported spoken captions are separate from the
 original joke, available as`bt_voice_caption()`; label them"Voice reaction:"
 so a generic clip is never presented as speech of the original joke.
 
-Preload owns one pinned 28 KB claim. A stream owns a 4 KB driver grant, making
+Preload owns one28KB source claim, pinned during its file read and movable
+after validation. A stream owns a4KB driver grant, making
 32 KB of source+staging, plus SOUND.DRV's own accounting/DMA fallback if needed.
-The immutable source claim stays pinned until close: no relocation callback or
-selector arithmetic is used. All disk transfers use the claim's aligned base.
+The relocation callback updates both`bta_pack`and the bridge's`btv_seg`;
+playback offsets and captions remain intact. The driver retains only copied
+staging bytes. No selector arithmetic is used. All disk transfers use the
+claim's aligned base.
 The real stream bridge uses verbs7grant,6stage,0open-ring,3status,1feed,2close
 and7release; it never uses blocking`SND_PLAY`/`os88pcm_play`. Startup stages at
 most4KB, each tick at most 2 KB; total is published after the bytes. The card

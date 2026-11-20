@@ -7,13 +7,17 @@
 static BTByte bt_cga_fsi[OS88_FSI_SIZE];
 static BTByte bt_cga_font[760];
 static unsigned bt_cga_seg, bt_cga_stride, bt_cga_bstep;
-static int bt_cga_exit, bt_cga_oldpose = -1;
+static int bt_cga_oldpose = -1;
 static char bt_cga_num[8];
 static BTWord bt_cga_last;
+static struct os88_mouse bt_cga_mouse;
+static int bt_cga_mx, bt_cga_my, bt_cga_mdown, bt_cga_pointer_up;
 #define bt_cga_grid ((BTWord *)bt_io)
 void bt_cga_clear_shadow(void);
 void bt_cga_flush(void);
 void bt_cga_portrait(int id, int x, int y);
+void bt_cga_palette(void);
+void bt_cga_pointer(int x, int y);
 
 static void bt_cga_text(int x, int y, const char *s, int ink, int paper)
 {
@@ -79,8 +83,9 @@ static void bt_cga_keyboard(void)
 }
 static void bt_cga_paint(void)
 {
-    int i, start, at, limit, pose;
+    int i, start, at, limit, pose, portrait, portrait_x;
     BTProfile *p;
+    if (bt_cga_pointer_up) { bt_cga_pointer(bt_cga_mx, bt_cga_my); bt_cga_pointer_up = 0; }
     for (i = 0; i < 1000; i++) bt_cga_grid[i] = 0x0020;
     p = &bt_store.profile[bt_store.selected];
     bt_cga_text(0, 0, "      BORAT TEACHES TYPING       F6 EXIT", 0, 1);
@@ -91,16 +96,16 @@ static void bt_cga_paint(void)
             bt_cga_text(10, 6, "GET READY", 3, 0);
             bt_cga_number(23, 6, bt_session.countdown);
         } else {
-            start = (bt_session.pos / 72) * 72;
-            limit = start + 72;
+            start = (bt_session.pos / 66) * 66;
+            limit = start + 66;
             if (limit > bt_session.length) limit = bt_session.length;
             for (i = start; i < limit; i++) {
-                at = (5 + (i - start) / 36) * 40 + 2 + (i - start) % 36;
+                at = (5 + (i - start) / 33) * 40 + 6 + (i - start) % 33;
                 bt_cga_grid[at] = (BTByte)bt_session.passage[i] | (i < bt_session.pos ? 0x0100 : i == bt_session.pos ? 0x3000 : 0x0300);
             }
-            bt_cga_text(1, 9, "YOU:", 1, 0);
-            start = bt_session.pos > 31 ? bt_session.pos - 31 : 0;
-            for (i = start; i < bt_session.pos; i++) bt_cga_grid[9 * 40 + 6 + i - start] = (BTByte)bt_session.passage[i] | 0x0100;
+            bt_cga_text(5, 9, "YOU:", 1, 0);
+            start = bt_session.pos > 28 ? bt_session.pos - 28 : 0;
+            for (i = start; i < bt_session.pos; i++) bt_cga_grid[9 * 40 + 10 + i - start] = (BTByte)bt_session.passage[i] | 0x0100;
             if (bt_screen == BT_S_PAUSE) bt_cga_text(5, 11, "PAUSED - Enter resumes; R retries", 0, 3);
             else bt_cga_text(1, 11, "Target >  Wrong !  Shift*  Back retracts", 1, 0);
         }
@@ -135,11 +140,29 @@ static void bt_cga_paint(void)
             bt_cga_number(2, 13 + i, i == 0 ? 1 : i == 1 ? 3 : 5);
             bt_cga_text(5, 13 + i, "minute WPM", 1, 0); bt_cga_number(20, 13 + i, p->record_wpm[i][bt_ch_diff]);
         }
+    } else if (bt_screen == BT_S_PRACTICE) {
+        bt_cga_text(1, 4, "PRACTICE YOUR KEYS", 3, 0);
+        bt_cga_text(1, 7, "1 Home  2 Letters  3 Digits  4 Mixed", 1, 0);
+        bt_cga_text(1, 10, "Group:", 3, 0); bt_cga_number(8, 10, bt_ch_diff + 1);
+        bt_cga_text(1, 13, "W weak-key recommendation", 1, 0);
+        bt_cga_text(1, 15, bt_practice_weak ? "Weak-key drill selected" : "Group drill selected", 3, 0);
+        bt_cga_text(1, 18, "Enter starts. Up/Down changes group.", 1, 0);
+    } else if (bt_screen == BT_S_PROFILE) {
+        bt_cga_text(1, 4, "YOUR NAME, GREAT TYPIST?", 3, 0);
+        for (i = 0; i < BT_PROFILES; i++) bt_cga_text(2, 7 + i * 2, bt_store.profile[i].name,
+            i == bt_store.selected ? 0 : 3, i == bt_store.selected ? 3 : 0);
+        bt_cga_text(1, 17, "Up/Down chooses profile. Type a name.", 1, 0);
+        bt_cga_text(1, 19, "Enter saves and returns to Menu.", 1, 0);
     } else if (bt_screen == BT_S_SETTINGS) {
         bt_cga_text(1, 4, "SOUND AND DISPLAY", 3, 0);
-        bt_cga_text(1, 7, "F3 master sound toggles immediately.", 1, 0);
-        bt_cga_text(1, 10, "F6 returns to native settings.", 1, 0);
-        bt_cga_text(1, 13, "CGA 320x200 - four colors", 3, 0);
+        bt_cga_text(1, 7, bt_store.music ? "M Music ON" : "M Music OFF", 1, 0);
+        bt_cga_text(21, 7, bt_store.effects ? "E Effects ON" : "E Effects OFF", 1, 0);
+        bt_cga_text(1, 9, bt_store.voice ? "V Voice ON" : "V Voice OFF", 1, 0);
+        bt_cga_text(21, 9, bt_store.keyclick ? "K Key ticks ON" : "K Key ticks OFF", 1, 0);
+        bt_cga_text(1, 11, "R Roast level:", 1, 0); bt_cga_number(17, 11, bt_store.roast + 1);
+        bt_cga_text(1, 13, "T Test music     A Test voice", 1, 0);
+        bt_cga_text(1, 15, bt_voice_status(), 3, 0);
+        bt_cga_text(1, 18, "F6 native display; Enter returns Menu.", 1, 0);
     } else if (bt_screen == BT_S_HELP) {
         bt_cga_text(1, 4, "Correct keys advance; wrong keys wait.", 3, 0);
         bt_cga_text(1, 6, "Back retracts, keeps historical errors.", 1, 0);
@@ -155,24 +178,65 @@ static void bt_cga_paint(void)
         bt_cga_text(1, 11, "C: challenge   R: records", 1, 0);
         bt_cga_text(1, 13, "F1: help       F3: sound", 1, 0);
         bt_cga_text(1, 15, p->name, 3, 0);
-        bt_cga_text(1, 17, "F6 returns to your desktop window.", 1, 0);
+        bt_cga_text(1, 17, "F6 Desktop     Ctrl+Q Quit", 1, 0);
     }
     bt_cga_wrap(1, 22, bt_caption(), 38, 2, 3);
     bt_cga_text(0, 24, "F1 Help F2 Lessons F3 Sound F4 Pause Esc", 0, 1);
-    bt_cga_flush();
-    /* A portrait occupies the rightmost32x40 region only on non-typing
-     * menus. Invalidate that region's shadow before returning to text. */
     pose = bt_expression();
-    if (bt_screen == BT_S_HOME && pose != bt_cga_oldpose) {
-        bt_cga_portrait(BT_ART_CGA + pose, 280, 40);
-        bt_cga_oldpose = pose;
-    } else if (bt_screen != BT_S_HOME && bt_cga_oldpose >= 0) {
-        bt_cga_oldpose = -1; bt_cga_clear_shadow(); bt_cga_flush();
+    portrait = bt_screen == BT_S_HOME || bt_screen == BT_S_PLAY || bt_screen == BT_S_PAUSE;
+    portrait_x = bt_screen == BT_S_HOME ? 280 : 0;
+    pose = portrait ? pose + (bt_blink_frame && pose == 1 ? 8 : 0) + (portrait_x ? 32 : 16) : -1;
+    if ((pose < 0 && bt_cga_oldpose >= 0) ||
+        (pose >= 0 && bt_cga_oldpose >= 0 && ((pose ^ bt_cga_oldpose) & 48))) bt_cga_clear_shadow();
+    bt_cga_flush();
+    if (portrait && pose != bt_cga_oldpose) {
+        i = bt_expression();
+        bt_cga_portrait(i == 1 && bt_blink_frame ? BT_ART_BLINK_CGA : BT_ART_CGA + i, portrait_x, 40);
+    }
+    bt_cga_oldpose = pose;
+    bt_cga_pointer(bt_cga_mx, bt_cga_my); bt_cga_pointer_up = 1;
+}
+static void bt_cga_click(int col, int row)
+{
+    bt_last_scan = 0;
+    if (row == 1) { bt_action(col < 10 ? BT_A_LESSONS : col < 22 ? BT_A_PRACTICE : col < 31 ? BT_A_CHALLENGE : BT_A_RECORDS); return; }
+    if (row == 24) {
+        if (col < 8) bt_action(BT_A_HELP);
+        else if (col < 19) bt_action(BT_A_LESSONS);
+        else bt_key_route(col >= 36 ? 27 : 0, col < 28 ? 0x3d : 0x3e);
+        return;
+    }
+    if (bt_screen == BT_S_HOME) {
+        if (row == 7) bt_action(BT_A_START);
+        else if (row == 9) bt_action(col < 15 ? BT_A_LESSONS : BT_A_PRACTICE);
+        else if (row == 11) bt_action(col < 15 ? BT_A_CHALLENGE : BT_A_RECORDS);
+        else if (row == 13) { if (col < 15) bt_action(BT_A_HELP); else bt_key_route(0, 0x3d); }
+    } else if (bt_screen == BT_S_LESSONS) {
+        if (row >= 4 && row < 16) bt_action(BT_A_LESSON_BASE + (bt_selection / 12) * 12 + row - 4);
+        else if (row == 18) bt_action(BT_A_START);
+    } else if (bt_screen == BT_S_RESULTS && row == 17) {
+        bt_action(col < 12 ? BT_A_NEXT : col < 23 ? BT_A_RETRY : BT_A_WEAK);
+    } else if (bt_screen == BT_S_PAUSE && row == 11) bt_action(BT_A_PAUSE);
+    else if (bt_screen == BT_S_PLAY && row >= 16 && row <= 20) bt_action(BT_A_HINT_BASE + ' ');
+    else if (bt_screen == BT_S_CHALLENGE) {
+        if (row == 7) bt_action(BT_A_DURATION_BASE + (col < 12 ? 0 : col < 24 ? 1 : 2));
+        else if (row == 13) bt_action(BT_A_DIFFICULTY_BASE + (bt_ch_diff + 1) % 4);
+        else if (row == 12) bt_action(BT_A_START);
+    } else if (bt_screen == BT_S_PRACTICE) {
+        if (row == 7) bt_action(BT_A_PRACTICE_BASE + (col < 9 ? 0 : col < 20 ? 1 : col < 30 ? 2 : 3));
+        else if (row == 13) bt_action(BT_A_WEAK);
+        else if (row == 18) bt_action(BT_A_START);
+    } else if (bt_screen == BT_S_PROFILE && row >= 7 && row <= 13) bt_action(BT_A_PROFILE_BASE + (row - 7) / 2);
+    else if (bt_screen == BT_S_SETTINGS) {
+        if (row == 7) bt_action(col < 20 ? BT_A_MUSIC : BT_A_EFFECTS);
+        else if (row == 9) bt_action(col < 20 ? BT_A_VOICE : BT_A_KEYCLICK);
+        else if (row == 11) bt_action(BT_A_ROAST);
+        else if (row == 13) bt_action(col < 17 ? BT_A_TEST_MUSIC : BT_A_TEST_VOICE);
     }
 }
 void bt_cga_entry(void)
 {
-    int k;
+    int k, mx, my;
     unsigned now;
     if (os88_fsx_mode(OS88_FSXM_CGA320, bt_cga_fsi) != 0) return;
     bt_cga_seg = bt_cga_fsi[0] | ((unsigned)bt_cga_fsi[1] << 8);
@@ -180,7 +244,9 @@ void bt_cga_entry(void)
     bt_cga_bstep = bt_cga_fsi[12] | ((unsigned)bt_cga_fsi[13] << 8);
     if (bt_cga_fsi[2] != 64 || bt_cga_fsi[3] != 1 || bt_cga_fsi[4] != 200 || bt_cga_fsi[5] ||
         bt_cga_fsi[9] != 2 || bt_cga_stride != 80 || bt_cga_bstep != 8192) return;
+    bt_cga_palette();
     bt_cga_exit = 0; bt_guard_scan = 0; bt_last_scan = 0;
+    bt_cga_pointer_up = 0; bt_cga_mdown = 1; bt_cga_mx = 160; bt_cga_my = 100;
     bt_cga_oldpose = -1;
     bt_cga_clear_shadow(); bt_cga_paint();
     bt_cga_last = os88_ticks();
@@ -191,7 +257,22 @@ void bt_cga_entry(void)
             else { bt_key_route(k & 255, (unsigned)k >> 8); bt_cga_paint(); }
         }
         now = os88_ticks();
+        os88_mouse(&bt_cga_mouse);
+        mx = bt_muldiv(bt_cga_mouse.x, 320, bt_video.w);
+        my = bt_muldiv(bt_cga_mouse.y, 200, bt_video.h);
+        if (mx < 2) mx = 2; if (mx > 317) mx = 317;
+        if (my < 2) my = 2; if (my > 197) my = 197;
+        if (mx != bt_cga_mx || my != bt_cga_my) {
+            if (bt_cga_pointer_up) bt_cga_pointer(bt_cga_mx, bt_cga_my);
+            bt_cga_mx = mx; bt_cga_my = my;
+            bt_cga_pointer(mx, my); bt_cga_pointer_up = 1;
+        }
+        if ((bt_cga_mouse.btn & 1) && !bt_cga_mdown) {
+            bt_cga_click(mx / 8, my / 8); bt_cga_paint();
+        }
+        bt_cga_mdown = bt_cga_mouse.btn & 1;
         if ((BTWord)(now - bt_cga_last) >= 2) {
+            bt_blink_frame = now % 91 < 2;
             bt_events(bt_tick(now));
             bt_audio_tick(now, !bt_readonly);
             bt_cga_last = now;

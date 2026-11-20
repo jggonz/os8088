@@ -22,6 +22,11 @@ _bt_vset:
 _bt_vcaption:
     mov ax,btv_text
     ret
+_bt_vmove:
+    mov bx,sp
+    mov ax,[ss:bx+2]
+    mov [btv_seg],ax
+    ret
 ; int bt_vvalidate(seg,len). Full structural + additive integrity check.
 ; Header16: BTV1,count:u8,format=0,rate:u16,total:u16,sum:u16,reserved=0:u32.
 ; Row56: id:u8,tag:u8,priority:u8,expression:u8,off:u16,len:u16,caption[48].

@@ -23043,8 +23043,8 @@ $(BUILD)/boratype.raw.asm: $(BORATYPESRC) apps/cc/gk.h
 $(BUILD)/boratype.bin: $(wildcard apps/boratype/*.inc) apps/breadxt/draw.inc apps/cc/gk.inc apps/cc/gkmus.inc apps/os88data.inc apps/os88ui.inc
 $(BUILD)/BTART.BIN: tools/os88btart.py tools/os88bbart.py apps/boratype/art.h $(wildcard apps/boratype/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
 	python3 tools/os88btart.py build -o $@
-$(BUILD)/BTSOUND.BIN: tools/os88gkmus.py apps/boratype/art/music.txt apps/boratype/art/sfx.txt | $(BUILD)
-	python3 tools/os88gkmus.py part -o $@ apps/boratype/art/music.txt apps/boratype/art/sfx.txt
+$(BUILD)/BTSOUND.BIN: tools/os88gkmus.py tools/os88btart.py tools/os88bbart.py apps/boratype/art.h apps/boratype/art/blink.txt apps/boratype/art/music.txt apps/boratype/art/sfx.txt | $(BUILD)
+	python3 tools/os88btart.py build-sound -o $@
 #> [Applications] boratype :: Borat Teaches Typing native C lessons, practice and challenges (SPEC.md 134)
 boratype: $(BUILD)/boratype.o88
 #> [Applications] boratypedisk :: Borat Teaches Typing software disk in all four floppy geometries

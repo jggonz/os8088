@@ -109,6 +109,19 @@ result/settings/profile boundaries; errors stay visible and play continues.
 Use alternating generations or validated temporary/backup replacement as
 supported by the filesystem; do not delete the last valid save first.
 
+Canonical BTT1 v1 image: 2,136 bytes. Magic at0, version LE16 at4,
+length LE16 at6, generation LE16 at8, selected/music/effects/voice/keyclick/
+roast/display bytes10–16, reserved zero at17, Fletcher16 at18 (those two
+bytes treated as zero), and four explicit529-byte profiles from20.
+Alternating BORATA.BTT/BORATB.BTT generations are compared modulo65536;
+a header generation is only a hint before full validation. A read-back must
+match written generation and checksum before it may replace in-memory state.
+
+The optional voice source is pinned during its one file read, then declared
+movable. The relocation callback updates both the C holder and the assembly
+source base while preserving playback offsets and caption. The driver owns
+its copied staging bytes; it retains no pointer into this source.
+
 ## 7. Verification boundary
 
 Host harness exercises production engine, target-width overflow, independent

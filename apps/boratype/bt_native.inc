@@ -322,5 +322,68 @@ bt_cga_pseg: dw 0
 bt_cga_prow: dw 0
 bt_cga_line: times 8 db 0
 
+; CGA colour select belongs to this exclusive mode borrow. WireFleet uses
+; the same palette1 bright selection; FSX restores the desktop on return.
+_bt_cga_palette:
+    mov dx,03D9h
+    mov al,30h
+    out dx,al
+    ret
+
+; void bt_cga_pointer(int x,int y): reversible5px crosshair. Caller clamps
+; x2..317,y2..197. Only the foreign VRAM's own2bpp cells are touched.
+_bt_cga_pointer:
+    push bp
+    mov bp,sp
+    push es
+    mov es,[_bt_cga_seg]
+    mov cx,[bp+4]
+    mov bx,[bp+6]
+    sub cx,2
+    mov di,5
+.horizontal:
+    call bt_cga_xpixel
+    inc cx
+    dec di
+    jnz .horizontal
+    mov cx,[bp+4]
+    mov bx,[bp+6]
+    sub bx,2
+    mov di,5
+.vertical:
+    cmp bx,[bp+6]
+    je .skipcentre
+    call bt_cga_xpixel
+.skipcentre:
+    inc bx
+    dec di
+    jnz .vertical
+    pop es
+    pop bp
+    ret
+bt_cga_xpixel:                 ; CX=x,BX=y, ES=foreignVRAM; preservesinputs
+    push bx
+    push cx
+    mov ax,bx
+    shr ax,1
+    mul word [_bt_cga_stride]
+    test bx,1
+    jz .even
+    add ax,[_bt_cga_bstep]
+.even:
+    mov bx,cx
+    shr bx,1
+    shr bx,1
+    add bx,ax
+    and cl,3
+    xor cl,3
+    shl cl,1
+    mov al,3
+    shl al,cl
+    xor [es:bx],al
+    pop cx
+    pop bx
+    ret
+
 %include "os88data.inc"
 section .text

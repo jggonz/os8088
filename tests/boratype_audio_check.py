@@ -33,7 +33,7 @@ def checked_bad(data):
 class Machine:
  def __init__(self,blob):
     self.u=Uc(UC_ARCH_X86,UC_MODE_16);self.u.mem_map(0,0x100000)
-    self.u.mem_write(0x20000,blob);self.syms=struct.unpack_from('<8H',blob)
+    self.u.mem_write(0x20000,blob);self.syms=struct.unpack_from('<10H',blob)
     self.calls=[];self.staged=bytearray(4096);self.consumed=0;self.fail='';self.live=False
     self.u.hook_add(UC_HOOK_INTR,self.intr)
     self.u.hook_add(UC_HOOK_CODE,self.code)
@@ -89,7 +89,7 @@ def main():
 %xdefine OSAPI_SND_STREAM fake_stream
 GKM_VSZ equ 14
 section .text
- dw _bt_vvalidate,_bt_vplay,_bt_vtick,_bt_vstop,_bt_vset,_bt_mhold,btv_live,btv_granted
+ dw _bt_vvalidate,_bt_vplay,_bt_vtick,_bt_vstop,_bt_vset,_bt_mhold,btv_live,btv_granted,_bt_vmove,btv_seg
 %include "boratype/bt_voice.inc"
 fake_caps: int 0xf0
  ret
@@ -122,6 +122,13 @@ section .text
     assert machine.call(1,2)==1
     assert machine.live and machine.staged==good[16+112+2048:16+112+2048+4096]
     assert machine.call(1,1)==0 # coalesce while active
+    # A compaction changes the immutable source base, never the ring's
+    # published bytes or logical offsets. Remove the old source to prove
+    # the following refill reads the relocated block.
+    machine.u.mem_write(0x50000,good)
+    machine.call(8,0x5000)
+    assert machine.u.mem_read(0x20000+machine.syms[9],2)==b'\x00\x50'
+    machine.u.mem_write(0x40000,bytes(len(good)))
     machine.consumed=2048;assert machine.call(2)==1
     assert machine.staged[:2048]==good[-2048:]
     machine.consumed=6144;assert machine.call(2)==0

@@ -44,10 +44,13 @@ Clicking a pictured key gives a hint and never adds scored input.
 
 CONTROLS
 F1 Help   F2 Lessons   F3 Master sound   F4 Pause/Resume   F6 Full screen
+Ctrl+Q closes the application, including either fullscreen path.
 Escape opens/resumes Pause while typing; elsewhere it returns to the menu.
 Menu letters: L Lessons, P Practice, C Challenge, R Records, S Settings,
 N Profile. Ordinary letters and Space are typing input during a lesson.
 Up/Down chooses a lesson or challenge key group; Enter starts or continues.
+Practice: 1-4 chooses a group, W chooses weak keys. Settings: M Music,
+E Effects, V Voice, K key ticks, R roast, D display, T test music, A test voice.
 Native menu actions provide equivalents for the function keys.
 
 WINDOW AND DISPLAY

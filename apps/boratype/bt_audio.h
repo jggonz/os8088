@@ -17,12 +17,14 @@ const char *bt_voice_status(void);
 const char *bt_voice_caption(void);
 const char *bt_reaction_history(int back);
 int bt_audio_reload(const char *path); /* UI entry/onwake ONLY: disk I/O */
+void bt_audio_move(unsigned was,unsigned now); /* relocation assignments only */
 /* Assembly bridge. All are near cdecl, preserve BP/DS/ES and clear DF. */
 int bt_vvalidate(unsigned seg, unsigned len);
 int bt_vplay(int tag);
 int bt_vtick(void);
 void bt_vstop(void);
 void bt_vset(unsigned seg);
+void bt_vmove(unsigned seg); /* preserve playback offsets/caption, change base */
 const char *bt_vcaption(void);
 int bt_vcaps(void);
 void bt_mhold(int held); /* phase-preserving sequencer pause */
