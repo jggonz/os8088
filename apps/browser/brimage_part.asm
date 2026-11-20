@@ -1636,6 +1636,10 @@ bri_grow:
     jc .out
     mov [br_istseg], dx
     mov [br_istpar], ax
+    push es                         ; bri_stash's kept granule ends where
+    mov es, [cs:PXP_SELF]           ; the store used to (SEG_SUB's CX = 0
+    mov word [es:bri_sgk], 0        ; is "to its end" when it was asked):
+    pop es                          ; ask again
 .ok:
     clc
 .out:
