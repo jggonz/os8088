@@ -143558,8 +143558,8 @@ therefore refused rather than reduced, and the refusal lives in `thm_set` —
 the one routine both callers go through — rather than at the callers.
 
 **The test is the PRIMARY's kind mapped to a depth, and NOT `[vid_mono]`.**
-`VID_VGA` and `VID_EGA` are the two four-plane kinds and qualify; `VID_HERC`
-and `VID_CGA` are 1bpp and are refused. It was `cmp [vid_kind], VID_VGA` for
+`VID_VGA` and `VID_EGA` are the two four-plane kinds and qualify, as does
+`VID_VESA` (§120); `VID_HERC` and `VID_CGA` are 1bpp and are refused. It was `cmp [vid_kind], VID_VGA` for
 as long as VGA was the only colour adapter, where the identity and the
 capability were the same fact; `VID_EGA` (§39.24) is a colour adapter that is
 not a VGA, so the identity test refused Color on the one machine class this
@@ -143574,6 +143574,17 @@ while the same panel on the VGA accepted it. `[vid_kind]` is the primary's and
 `vid_ctx_act` never moves it (§39.12), so `cp_thm_colgrey` reads the same byte
 as `thm_set` and the greying and the refusal cannot disagree — with each
 other, or with which monitor the panel happens to be on.
+
+**`cp_thm_colgrey` is `thm_set`'s own arithmetic, not a list of kinds.** Both
+take `[vid_kind]` − 1 and compare it unsigned against 2, which is below for
+`VID_HERC` and `VID_CGA` (the 1bpp kinds) and not below for every other kind.
+`VID_VESA` (§120) is 8 or 16 bits deep and draws the same 16-colour desktop
+through its DAC (§120.1), so it qualifies. The predicate used to name `VID_VGA`
+and `VID_EGA`, and when kind 4 arrived `thm_set` accepted Color on a VESA
+desktop while the Theme page greyed the row and refused the click: the two
+had drifted apart, which is exactly what §47 rule 1 forbids. A kind added
+after VESA is colour by default to both of them, so a new 1bpp kind has to
+be numbered below `VID_EGA` or change the ONE compare in both places.
 
 - The Control Panel's row is **greyed** on a 1bpp machine (§47 rule 3: grey a
   *fact*), and `cp_thm_colgrey` is the single predicate behind the greying,

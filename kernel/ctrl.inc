@@ -3134,14 +3134,22 @@ cp_thmv_fname: db 'THMPAL.DRV', 0   ; staged into cp_sbuf above (ss_fname's
 ; panel dragged onto the Hercules greyed Color, and cancelled the click, on a
 ; machine whose primary is a VGA. [vid_kind] is the primary's and vid_ctx_act
 ; never moves it.
+;
+; IT IS thm_set's OWN ARITHMETIC (vga12.inc), not a list of kinds: kind - 1
+; below 2 is HERC or CGA, the 1bpp pair, and every other kind is colour. It
+; named VID_VGA and VID_EGA, so when VID_VESA came thm_set took Color on a
+; VESA desktop and this row greyed it - the drift rule 1 forbids (SPEC.md
+; 76.12.1).
 %ifdef KERN_BIG
+%if VID_VGA != 0 || VID_HERC != 1 || VID_CGA != 2
+  %error "cp_thm_colgrey: kind - 1 < 2 must be exactly the 1bpp kinds, as in thm_set"
+%endif
 cp_thm_colgrey:
-    cmp byte [vid_kind], VID_VGA
-    je .live
-    cmp byte [vid_kind], VID_EGA
-    je .live                    ; ...an equal `cmp` leaves CF = 0
-    stc
-.live:
+    push ax
+    mov al, [vid_kind]
+    dec ax                      ; VGA -> FF, HERC -> 0, CGA -> 1, EGA -> 2,
+    cmp al, 2                   ; VESA -> 3: CF = 1 on 1bpp, and pop keeps it
+    pop ax
     ret
 
 %endif
