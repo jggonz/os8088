@@ -58,19 +58,18 @@ static void bt_cga_stats(void)
 }
 static void bt_cga_keyboard(void)
 {
-    static const char *rows[4] = {"1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./"};
+    static const char *rows[4] = {"`1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./"};
     int r, c, x, target, wrong, shifted;
     const char *s;
     target = bt_session.pos < bt_session.length ? bt_session.passage[bt_session.pos] : 0;
-    shifted = target >= 'A' && target <= 'Z';
-    if (shifted) target += 32;
-    s = "!@#$%^&*()_+{}|:\"<>?";
-    c = 0;
-    while (s[c]) { if (target == s[c]) { target = "1234567890-=[]\\;',./"[c]; shifted = 1; break; } c++; }
-    wrong = bt_session.last_wrong;
-    if (wrong >= 'A' && wrong <= 'Z') wrong += 32;
+    shifted = bt_key_shift(target);
+    bt_cga_text(1, 4, "Finger:", 1, 0);
+    bt_cga_text(9, 4, bt_key_finger(target), 3, 0);
+    if (shifted) bt_cga_text(22, 4, shifted == 1 ? "+ left Shift" : "+ right Shift", 1, 0);
+    target = bt_key_base(target);
+    wrong = bt_key_base(bt_session.last_wrong);
     for (r = 0; r < 4; r++) {
-        s = rows[r]; x = r == 1 ? 0 : 2 + (r > 1 ? r - 2 : 0);
+        s = rows[r]; x = r < 2 ? 0 : 2 + r - 2;
         for (c = 0; s[c]; c++) {
             bt_cga_grid[(16 + r) * 40 + x] = (s[c] == target ? '>' : '[') | 0x0100;
             bt_cga_grid[(16 + r) * 40 + x + 1] = (BTByte)s[c] | (s[c] == target ? 0x0300 : s[c] == wrong ? 0x0200 : 0x0100);
@@ -78,8 +77,10 @@ static void bt_cga_keyboard(void)
             x += 3;
         }
     }
-    bt_cga_text(4, 20, shifted ? "[SHIFT*] [    SPACE    ] [BACK]" : "[SHIFT ] [    SPACE    ] [BACK]", 1, 0);
-    if (target == ' ') bt_cga_text(15, 20, ">SPACE<", 3, 0);
+    bt_cga_text(1, 20, shifted == 1 ? "[LShift*] [SPACE] [RShift ] [BACK]" :
+        shifted == 2 ? "[LShift ] [SPACE] [RShift*] [BACK]" :
+        "[LShift ] [SPACE] [RShift ] [BACK]", 1, 0);
+    if (target == ' ') bt_cga_text(11, 20, "SPACE", 0, 3);
 }
 static void bt_cga_paint(void)
 {

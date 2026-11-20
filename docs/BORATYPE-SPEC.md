@@ -53,6 +53,8 @@ green accepted, red mistake, and finger zones. Mono uses symbols/outlines.
 All keys include required punctuation; shifted characters identify their
 physical key and the opposite hand's Shift. Mouse keyboard clicks are hints,
 never scored characters. Letter shortcuts exist only outside active typing.
+Native and CGA faces share one pure US QWERTY map for physical base key,
+finger name and opposite-hand Shift; the CGA row includes backquote/tilde.
 
 Window fullscreen is SPEC.md §11.2's native latch. CGA four-color gameplay
 uses SPEC.md §53's exclusive bracket and FSXM_CGA320; its compact renderer
@@ -72,6 +74,8 @@ strikes. Artwork masters, prompts and exact-size palette sprite source are
 committed; deterministic conversion is offline. Source PNG is never parsed
 by the guest. Resident code+data+BSS must fit §73's 63.5KB ceiling; split cold
 menu/result/file routines into an overlay when needed, never raise a budget.
+Geometry arrangement and non-typing menu-key handling are cold overlay work;
+the unchanged-layout check and active lesson-key route remain resident.
 Initial allowances: engine and lesson data 18KB, UI and platform 26KB,
 sound/reaction code and data 8KB, BSS 10KB. Art part ≤64KB, audio part ≤16KB,
 drawing band 8KB (512 paragraphs), optional voice staging ≤32KB. Every claim

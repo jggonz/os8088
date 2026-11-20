@@ -188,39 +188,10 @@ void bt_action(int a)
     bt_redraw(0);
 }
 
-static void bt_key_route(int ascii, int scan)
+static void ovl_bt_menu_key(int ascii, int scan)
 {
     char *name;
     unsigned n;
-    bt_last_scan = scan;
-    bt_modifiers = bt_modifier_state();
-    if (ascii == 17) { /* Ctrl+Q is a control chord, never printable typing. */
-        bt_quit_pending = 1;
-        if (bt_in_cga) bt_cga_exit = 1;
-        else { os88_onclose(bt_win); os88_wm_close(bt_win); }
-        return;
-    }
-    if (bt_guard_scan) {
-        if (os88_key_down(bt_guard_scan)) return;
-        bt_guard_scan = 0;
-    }
-    if (bt_about_up) { bt_about_up = 0; bt_redraw(1); return; }
-    if (scan == 0x3d) {
-        bt_master_sound ^= 1; bt_audio_state(bt_screen); bt_redraw(0); return;
-    }
-    if (scan == 0x40 || (!ascii && scan == OS88_SCAN_ENTER)) {
-        if (!bt_in_cga) bt_fullscreen_toggle(); return;
-    }
-    if (scan == 0x3b) { bt_action(BT_A_HELP); return; }
-    if (scan == 0x3c) { bt_action(BT_A_LESSONS); return; }
-    if (scan == 0x3e || ascii == 27) {
-        if (bt_screen == BT_S_PLAY || bt_screen == BT_S_PAUSE) bt_pause_ui();
-        else bt_action(BT_A_BACK);
-        return;
-    }
-    if (bt_screen == BT_S_PLAY) {
-        bt_events(bt_key(ascii, os88_ticks())); bt_redraw(0); return;
-    }
     if (bt_screen == BT_S_SETTINGS) {
         if (ascii >= 'a' && ascii <= 'z') ascii -= 32;
         if (ascii == 'M') bt_action(BT_A_MUSIC);
@@ -280,6 +251,40 @@ static void bt_key_route(int ascii, int scan)
     else if (ascii == 's' || ascii == 'S') bt_action(BT_A_SETTINGS);
     else if (ascii == 'n' || ascii == 'N') bt_action(BT_A_PROFILE);
     bt_redraw(0);
+}
+
+static void bt_key_route(int ascii, int scan)
+{
+    bt_last_scan = scan;
+    bt_modifiers = bt_modifier_state();
+    if (ascii == 17) { /* Ctrl+Q is a control chord, never printable typing. */
+        bt_quit_pending = 1;
+        if (bt_in_cga) bt_cga_exit = 1;
+        else { os88_onclose(bt_win); os88_wm_close(bt_win); }
+        return;
+    }
+    if (bt_guard_scan) {
+        if (os88_key_down(bt_guard_scan)) return;
+        bt_guard_scan = 0;
+    }
+    if (bt_about_up) { bt_about_up = 0; bt_redraw(1); return; }
+    if (scan == 0x3d) {
+        bt_master_sound ^= 1; bt_audio_state(bt_screen); bt_redraw(0); return;
+    }
+    if (scan == 0x40 || (!ascii && scan == OS88_SCAN_ENTER)) {
+        if (!bt_in_cga) bt_fullscreen_toggle(); return;
+    }
+    if (scan == 0x3b) { bt_action(BT_A_HELP); return; }
+    if (scan == 0x3c) { bt_action(BT_A_LESSONS); return; }
+    if (scan == 0x3e || ascii == 27) {
+        if (bt_screen == BT_S_PLAY || bt_screen == BT_S_PAUSE) bt_pause_ui();
+        else bt_action(BT_A_BACK);
+        return;
+    }
+    if (bt_screen == BT_S_PLAY) {
+        bt_events(bt_key(ascii, os88_ticks())); bt_redraw(0); return;
+    }
+    ovl_bt_menu_key(ascii, scan);
 }
 
 static void bt_pulse(void)
