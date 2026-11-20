@@ -1425,6 +1425,9 @@ dsk_bytes_secs_x:
     mov dx, ax
     ret
 
+    nop                         ; PARITY, never executed: dsk_bytes_secs_x
+                                ; returned; read/write entries still fall through
+
 ; -----------------------------------------------------------------------------
 ; dsk_rd1_x / dsk_wr1_x - ONE sector, to or from dsk_secbuf (SPEC.md 18.94.1)
 ; in:  AX = LBA; ES = LOW_SEG (dsk_secbuf is .lowbss, SPEC.md 2.1)

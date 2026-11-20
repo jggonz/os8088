@@ -523,7 +523,7 @@ snd_release_inst:
 ; extended-memory one were always called as an adjacent PAIR, in that order,
 ; at all three, and each separately converted the same DI into the same slot.
 ; One caller-side helper does the conversion once and tail-jumps into
-; xm_release_rec, which keeps its own entry for loader.inc's fourth caller.
+; xm_release_rec, reached by the same sweep for a reserved entry abort.
 ; The helper is in instance.inc because the record is instance.inc's and the
 ; pair is what SPEC.md 29.4 asks for, not something sound owns.
 

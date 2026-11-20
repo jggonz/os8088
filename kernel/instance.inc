@@ -42,6 +42,7 @@ IF_FSMIN equ 2                  ; I_FLAGS bit1: ...and it went down from
                                 ; splash card the user is never going to see
                                 ; is a promise about where the window is
                                 ; going that is not kept
+IF_RAWKBD equ 8                ; I_FLAGS bit3: owner uses BIOS/guest input
 IF_DESK  equ 4                  ; I_FLAGS bit2: this instance's window is a
                                 ; DESK window (SPEC.md 11.103), so it has NO
                                 ; dock tile (SPEC.md 30). Set by ld_alloc for an
@@ -834,39 +835,24 @@ inst_idx:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_rel_rec - free every grant an instance holds, BY RECORD (SPEC.md 29.4)
+; inst_rel_rec - free every grant a live/reserved instance holds, BY RECORD (SPEC.md 29.4)
 ;
 ; in:  DI = instance record ptr
 ; out: nothing
 ; clobbers: nothing (flags)
 ;
-; THE SOUND RELEASE AND THE EXTENDED-MEMORY ONE ARE A PAIR, and were written
-; out as one at all three teardown sites - app_close_win's synchronous leg,
-; inst_task_die, and inst_pkg_alive's winless leg - each of them separately
-; converting the same DI into the same slot with inst_idx. This is that pair
-; called once, with the conversion done once. THE ORDER IS PART OF IT: sound
-; first, blocks second (SPEC.md 34.3 then 41.5), which is what the sites'
-; comments already asked for by name.
-;
-; It is NOT a merge of the two releases. xm_release_rec keeps its own entry
-; and its DI contract, because it has a FOURTH caller that owes no sound
-; grant: ld_unreserve (loader.inc), SPEC.md 41.5.1's abort sweep, which
-; reaches it far through cw_xm_release_rec. A grep for snd_release_rec cannot
-; find that one - it is in the wrong file and names the wrong routine - and it
-; is the reason the two bodies are not simply folded together.
-;
-; No CX bank: inst_idx preserves CX itself (its own header says so, and the
-; push this replaces was a leftover from before that), and snd_release_inst
-; is documented "clobbers: nothing".
-;
-; The tail is a JUMP and not a call: DI is still the record, so
-; xm_release_rec is entered exactly as the three sites entered it, at the same
-; stack depth as its own direct callers.
+; Live close paths and the loader's unpublished-entry abort sweep share this
+; release order: sound, optional keyboard glyph client, serial, then extended
+; grants. Entry callbacks already carry a valid slot stamp before I_STATE is
+; published, so an abort must release that slot's holds before it is reused.
+; inst_idx preserves CX and kl_release_inst preserves the slot in AL.
+; The tail jump keeps the extended-memory sweep at its existing stack depth.
 ; -----------------------------------------------------------------------------
 inst_rel_rec:
     push ax
     call inst_idx               ; AL = the instance slot, once for the pair
     call snd_release_inst       ; "clobbers: nothing", so AL survives it
+    call kl_release_inst        ; also for an unpublished entry that aborts
     call ser_release_inst       ; no IRQ may retain the soon-to-be-freed region
     pop ax
 %ifdef KERN_BIG

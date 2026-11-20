@@ -654,19 +654,11 @@ xm_copy:
 ; out:      nothing
 ; clobbers: nothing (flags)
 ;
-; FOUR CALLERS, and the routine's own header claimed three for a year. Three
-; are the SPEC.md 29.4 teardown sites, and they no longer arrive here directly:
-; instance.inc's inst_rel_rec does the record -> slot conversion once for the
-; sound release and this one together and TAIL-JUMPS in, so this entry is
-; reached at the same depth it always was. The fourth is ld_unreserve
-; (loader.inc), SPEC.md 41.5.1's abort sweep, which owes the blocks and
-; not a sound grant and comes in far through cw_xm_release_rec.
-;
-; That fourth caller is why the two releases are not simply one body: it is in
-; another file, it names this routine and not the sound one, and the grep this
-; header used to recommend - `git grep snd_release_rec kernel/instance.inc` -
-; could not find it by construction. It very nearly cost a size pass a wrong
-; finding. The list is `grep -rn xm_release_rec`, over the whole tree.
+; Live teardown and unpublished loader abort both arrive through
+; instance.inc's inst_rel_rec. That common sweep releases the slot's sound,
+; keyboard glyph and serial grants first, then tail-jumps here with DI still
+; naming the record. This body retains its own DI contract for extended
+; memory/EMS/network ownership, at the same stack depth as before.
 ;
 ; It was called from none of them for a year: the #51 integration merge
 ; dropped all three and the comment describing them survived the code, which
@@ -693,8 +685,8 @@ xm_release_rec:
                                 ; it): no driver, no door, CF = 1 and nothing
                                 ; done. The driver keeps every register but
                                 ; AX and BX for this verb; it is HERE and not
-                                ; in inst_rel_rec because this has the fourth
-                                ; caller, ld_unreserve's abort sweep
+                                ; with the extended-grant sweep for both live
+                                ; teardown and ld_unreserve's abort path
     push ax
     KES                         ; ...AND THE NETWORK CARD'S, the same shape
     mov bx, DRVC_NET * 256 + NETV_GONE ; (SPEC.md 72.13.4): ETHER.DRV drops the

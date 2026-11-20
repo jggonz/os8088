@@ -222,4 +222,11 @@
 #             Already kept OUT: the per-volume BPB bank stays 18 bytes (a
 #             FAT32 head is re-read, 19.12.2: -176), and the 16-bit doors'
 #             0FFFFh rule and OSAPI_FILE_PLACE are `.cold` far entries
-3740
+# 2026-11-19: +38, to 3,778, #396's international keyboards meeting FAT32
+#             in one tree: measured 3,421 at the merge base ac822227b, 3,461
+#             (+40) at #396's head and 3,740 at main's d546b6c3c, which set
+#             the figure to its own and left no slack. #396's share is
+#             mega_r15's KEYBOARD.DRV intercept (+25 in mega.inc), the INT
+#             15h hook the real-mode BIOS calls (SPEC.md 9.16), so `.mega`
+#             cannot hold it; the rest is macros (+8) and keyboard.inc (+4)
+3778

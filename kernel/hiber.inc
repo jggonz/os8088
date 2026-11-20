@@ -5416,6 +5416,8 @@ hbm_wake:
     ;     read in place, which is slower and never wrong. The same TIMED
     ;     pick, so the fastest candidate is still the one taken. Nothing is live across
     ;     it - every register below is reloaded before it is read.
+    mov al, KLC_SUSPEND
+    call far [KLFP+KL_CMD]      ; original face for repair; no load/drop
     FONT_PICK hbf               ; DX:BP = this machine's fastest table
 %ifdef KERN_MEGA
     MEGA_ISHI word [font_seg]   ; a POOL block is the heap copy too: kern_mega
@@ -5444,6 +5446,8 @@ hbm_wake:
     mov [font_seg], dx
     mov [font_base], bp
 .fdone:
+    mov al, KLC_REARM
+    call far [KLFP+KL_CMD]      ; refresh provider and current BIOS key state
 %endif
     mov byte [hb_mode], HB_M_GONE   ; before the close: app_close_win's hook
     call hbm_win                ; leaves a GONE window's image to the thunk

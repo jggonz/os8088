@@ -2776,6 +2776,8 @@ sch_dphex2:
     mov si, sch_dphc            ; hex path and the text path are the same two
     jmp short sch_dpstr         ; lines of drawing code and not two copies
 
+    nop                         ; PARITY, never executed: after the tail jump,
+                                ; beside diagnostic strings; restores ui_task
 sch_s_over: db 'STACK OVERFLOW  TASK ', 0   ; grep the tree for this sentence
 sch_s_sp:   db '  SP ', 0                ; and SPEC.md 8.8 is the first hit
 sch_s_in    equ fm_s_colsp + 1  ; '  ', 0 - the tail of the Disk window's

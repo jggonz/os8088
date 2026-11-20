@@ -76,7 +76,7 @@ S_FILEMAX = 64512
 S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261002.1)
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
-S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 7   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
+S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 8   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
 S_PKGFMT = 13                           # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
@@ -1686,20 +1686,27 @@ def archive_refusals(tmp, mod):
 # 4. THE CELL FENCE (SPEC.md 92.2)
 # =============================================================================
 def fence(tmp, mod):
-    """THE CELL FENCE at a new PKG_FMT (SPEC.md 92.2): no kernel has been
-    released at PKG_FMT 13 yet, so WIRE_CELL_LEVELS has no rows and every
-    package built here is level 0 - and a call past WIRE_TABLE_END, the
-    table every Wire's kernel at this format has, is still refused. A DOOR
-    cell (SPEC.md 20.3.4) needs no level: a kernel that lacks an index
-    refuses it (CF = 1, AX = 1), so door_top fences nothing.
+    """THE CELL FENCE at a new PKG_FMT (SPEC.md 92.2): v1.0.20261116 released
+    PKG_FMT 13 with the table ending at 0x023C, so OSAPI_KEYBOARD (SPEC.md
+    9.16), appended there, cuts the one row - a package calling it is level
+    8, every other package built here is level 0 - and a call past
+    WIRE_TABLE_END, the table every Wire's kernel at this format has, is
+    still refused. A DOOR cell (SPEC.md 20.3.4) needs no level: a kernel that
+    lacks an index refuses it (CF = 1, AX = 1), so door_top fences nothing.
     """
-    eq(mod.WIRE_CELL_LEVELS, (), "PKG_FMT 13 starts a new generation: no rows",
-       "a row describes a RELEASED kernel at this PKG_FMT, and there is none")
+    eq(mod.WIRE_CELL_LEVELS, ((0x023C, 8),),
+       "PKG_FMT 13 has one row: OSAPI_KEYBOARD past the released 0x023C",
+       "a row describes a RELEASED kernel at this PKG_FMT")
+    np = os.path.join(BUILD, "notepad.o88")
+    if os.path.exists(np):
+        lvl, top = mod.cell_level([open(np, "rb").read()])
+        eq(lvl, 8, "Note Pad, which calls OSAPI_KEYBOARD, is level 8",
+           "an older machine's Wire would offer it a cell past its table")
     pkgs = [os.path.join(BUILD, f) for f in ("wirechat.o88", "hello.o88",
                                              "pixel.o88", "taskmgr.o88")]
     pkgs = [p for p in pkgs if os.path.exists(p)]
     lvl, top = mod.cell_level([open(p, "rb").read() for p in pkgs])
-    eq(lvl, 0, "every package is level 0 with no rows")
+    eq(lvl, 0, "every package that calls no cell past 0x023C is level 0")
     check(top is not None and top < mod.WIRE_TABLE_END,
           "no package far-calls past WIRE_TABLE_END 0x%04X" % mod.WIRE_TABLE_END,
           got=top)

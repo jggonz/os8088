@@ -2009,8 +2009,10 @@ fsx_rsvcf:
     mov [es:rms_slot - rms_lo], al
     mov al, [cpu_tier]
     mov [es:rms_tier - rms_lo], al
-    mov di, [ss:fsx_rfont]      ; the glyph table's copy, out of the pool
-    or di, di
+    mov di, [ss:fsx_rfont]      ; even copy offset, 0 none, FFFF provider
+    inc di
+    jz .nf                     ; conventional provider needs no copy
+    dec di
     jz .nf
     push ds
     mov si, [font_base]
@@ -2059,6 +2061,11 @@ fsx_rsvcsz:
 .nser:
     mov [ss:fsx_rserb], dx
     xor dx, dx                  ; ...and THE GLYPH TABLE'S COPY last, when it
+    cmp byte [font_last], 255
+    jne .fpool
+    dec dx                      ; FFFF: held conventional provider, no copy
+    jmp short .nfnt
+.fpool:
     push ax                     ; is above 1MB (MEM_K_FONT, KERN-MEGA-PLAN
     mov ax, [font_seg]          ; 14.120/14.131): no real segment reaches it
     call MEGA_SEL_CODE:mega_ishif ; (MEGA_ISHI less its real-mode test:
@@ -2471,13 +2478,20 @@ fsx_rdownf:
     mov ax, fsx_rvdn
     call mega_vwalk
     mov ax, [ss:fsx_rfont]      ; THE GLYPH TABLE above 1MB (fsx_rvdn left
-    or ax, ax                   ; its selector, which real mode cannot use):
+    inc ax                     ; FFFF marks the held conventional provider
+    jz .fprovider
+    dec ax
     jz .fnt                     ; the service area's copy instead, in the
     add ax, rms_lo              ; twins' own paragraph (KERN-MEGA-PLAN
     xchg ax, [font_base]        ; 14.131). [font_seg] goes back off the
     mov [ss:fsx_rfbase], ax     ; bank at the return, [font_base] off this
     mov ax, [ss:fsx_rmsseg]
     mov [font_seg], ax
+    jmp short .fnt
+.fprovider:
+    mov word [font_last], ((FONT_LAST-FONT_FIRST) << 8) | FONT_LAST
+                                ; only the bracket borrows provider ASCII:
+                                ; no protected KLFP selector lookup in RM
 .fnt:
 %ifdef VID_EXT
     mov ax, [vx_ep]             ; the VESA desktop's hook: VESA.DRV's code
@@ -3024,10 +3038,16 @@ fsx_rupf:
     mov si, fsx_rbank
     mov ax, fsx_rvup
     call mega_vwalk
-    cmp word [ss:fsx_rfont], 0  ; the glyph table's offset back (the drop's
-    je .fnt                     ; copy: KERN-MEGA-PLAN 14.131)
+    mov ax, [ss:fsx_rfont]      ; even copy offset, 0 none, FFFF provider
+    inc ax
+    jz .fprovider
+    dec ax
+    jz .fnt
     mov ax, [ss:fsx_rfbase]
     mov [font_base], ax
+    jmp short .fnt
+.fprovider:
+    mov word [font_last], (223 << 8) | 255 ; selector walk already restored it
 .fnt:
     mov byte [fsx_rmode], 0
     sti                         ; the copy back at IF = 1: no other task runs
@@ -4276,8 +4296,8 @@ fsx_rserb   resw 1              ; a SERIAL.DRV lease's ring copy (W7): its
                                 ; lease (fsx_rsvcf)
 fsx_rfont   resw 1              ; the GLYPH TABLE's copy in the service area
                                 ; (KERN-MEGA-PLAN 14.131): its offset in the
-                                ; claim, 0 = none - the table is not above
-                                ; 1MB (fsx_rsvcf)
+                                ; claim (even), 0 = no high table, FFFF = held
+                                ; conventional provider: borrow ASCII in RM
 fsx_rfbase  resw 1              ; ...and [font_base], banked at the drop
 fsx_rsfp    resw 1              ; ...SERFP's code selector, banked
 fsx_rsrsg   resw 1              ; ...and the module's srl_seg and srl_buf -

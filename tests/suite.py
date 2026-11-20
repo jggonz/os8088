@@ -8944,11 +8944,114 @@ SOAK = [
         "4 (an 8042); MartyPC's 8255 keeps the peek. 8s is 5.1 measured",
         needs=("qemu",), serial=True,
         wants=("build/os8088.img", "build/apps.img")),
+    Row("kbdlayouts", "soak", py("tests/kbdlayouts.py"), 3.0,
+        "SPEC.md 9.16: actual module bytes from all four kernels execute 375 "
+        "independent layout facts, dead keys, modifier/RAW/ring rules, bounded "
+        "stack, no-allocation worker QUERY and atomic module-slot publication. "
+        "Deliberate table/AltGr/CLI corruptions must be detected. 2.42s measured.",
+        needs=("unicorn",),
+        wants=("build/os8088.img", "build/small360.img", "build/emu.img", "build/mega.img")),
+    Row("kbdlayoutfont", "soak", py("tests/kbdlayoutfont.py"), 1.0,
+        "SPEC.md 6.7: actual provider/render-index source under Unicorn keeps "
+        "the original ASCII face, unsigned CP850 indexes, mutex ownership and "
+        "atomic legacy FONT_GLYPHS snapshots. Missing CLI and damaged enie "
+        "glyph are negative controls. 0.13s measured.",
+        needs=("nasm", "unicorn")),
+    Row("kbdlayouttransitions", "soak", py("tests/kbdlayouttransitions.py"), 2.0,
+        "SPEC.md 6.7, 9.16: actual HIBER/FSX source and module bytes preserve "
+        "layout/glyph-only holds across heap/ROM font repair, Mega owner stamps "
+        "and bracket-only ASCII borrowing. Missing suspend, missing DX save "
+        "and missing bounds clamp must fail. 1.23s measured.",
+        needs=("nasm", "unicorn"),
+        wants=("build/os8088.img", "build/mega.img")),
+    Row("kbdlayoutat", "soak", py("tests/kbdlayoutat.py"), 2.0,
+        "SPEC.md 9.16: QEMU's real 8042/INT15-4F path consumes French keys "
+        "exactly once, including batched make/break, AltGr and composition, "
+        "with physical key bits released. Removing saved-FLAGS carry clear "
+        "duplicates BIOS words. 1.49s measured.",
+        needs=("qemu",), serial=True,
+        wants=("build/os8088.img", "build/apps.img")),
+    Row("kbdlayoutabort", "soak", py("tests/kbdlayoutabort.py"), 8.0,
+        "SPEC.md 9.16: a real package HOLDs then refuses entry; ld_unreserve "
+        "must release its provider. Reusing the instance slot may reacquire, "
+        "repeat HOLD idempotently, RELEASE, reacquire and close. Removing "
+        "the cleanup call leaks the claim. 6.02s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/kbdlayoutabort.img", "build/kbdhold.bin")),
+    Row("kbdsettings", "soak", py("tests/kbdsettings.py"), 50.0,
+        "SPEC.md 31.16: all five Keyboard radios, physical sample/clear, clean "
+        "close, glyph-only lifetime, independent saved KL decode/reboot and "
+        "unrelated clock setting; malformed/missing KL and missing/mismatched "
+        "module refuse without disk changes; foreign-media save failure keeps the working layout and retry flag. Wrong saved layout is red. "
+        "34.86s measured on Hercules.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img")),
+    Row("kbdsettings-small", "soak", py("tests/kbdsettings.py", "--small"), 10.0,
+        "SPEC.md 31.16: the real 128KB CGA machine can select all five layouts "
+        "and exercise sample glyph holds, then returns to BIOS at restart "
+        "without writing session settings. 8.61s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img", "build/apps360.img")),
+    Row("kbdlayouttext-vga", "soak", py("tests/kbdlayouttext.py", "--profile"), 52.0,
+        "SPEC.md 6.7, 9.16, 83.7: physical ES/LA/FR typing, CP850 edit/find/"
+        "replace, two live instances, BIOS-default repaint, save/read by an "
+        "independent FAT reader, reopen/New/final drop. Trace the complete "
+        "XT KL_SCAN call/return, including unsupported dead-key composition; "
+        "removing RELEASE must leak. 45.62s measured including profiling; system media is swapped out for accented typing/repaint.",
+        needs=("marty", "nasm", "pil"), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img", "build/notepad.bin")),
+    Row("kbdlayouttext-cga", "soak",
+        py("tests/kbdlayouttext.py", "--machine", "os8088_5150_cga"), 37.0,
+        "The complete CP850 text round trip and provider lifetime on CGA's "
+        "1bpp renderer. Independent file bytes and exact accented glyph "
+        "occupancy are checked, not inferred from VGA. 31.35s measured.",
+        needs=("marty", "nasm", "pil"), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img", "build/notepad.bin")),
+    Row("kbdlayouttext-herc", "soak",
+        py("tests/kbdlayouttext.py", "--machine", "os8088_5150_herc_gla"), 37.0,
+        "The complete CP850 text round trip and provider lifetime on Hercules' "
+        "1bpp renderer, including stable accented pixels after choosing BIOS. "
+        "31.52s measured.",
+        needs=("marty", "nasm", "pil"), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img", "build/notepad.bin")),
+    Row("kbdlayouthiber", "soak", py("tests/kbdlayouthiber.py"), 38.0,
+        "SPEC.md 6.7: actual fixed-disk hibernate/resume with Spanish active "
+        "and BIOS plus a glyph-only Note Pad hold. Module header/code, glyph, "
+        "document/layout and a post-resume key survive; the original font "
+        "repair overwrote the module header and hung. 32.32s measured.",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088.img", "build/boothd.bin", "build/mbr.bin",
+               "build/keyboard.drv", "build/hiber.drv", "build/ctrl.drv",
+               "build/format.drv", "build/diskops.drv", "build/notepad.o88",
+               "build/notepad.bin")),
+    Row("kbdlayoutlegacy", "soak", py("tests/kbdlayoutlegacy.py"), 24.0,
+        "SPEC.md 9.16: actual DOS window/fullscreen and idle WIN16 entries "
+        "publish RAW on their real owner and retain BIOS q/a/w/z with French "
+        "selected. Renaming/focus changes retain the flag; returning native "
+        "focus produces French again. Clearing RAW must fail the byte vector. "
+        "No reference NE execution is claimed. 19.82s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/kbdlayoutlegacy.img")),
+    Row("kbdlayoutreal", "soak", ["env", "OS88_MEGA=1"] + py("tests/kbdlayoutreal.py"), 16.0,
+        "SPEC.md 6.7, 53: an actual high-memory package selects Spanish, borrows "
+        "legacy ASCII glyphs before/inside FSXF_REAL/after, proves CR0.PE and "
+        "real CS inside the bracket, then retains CP850 and native input. "
+        "12.13s measured under Bochs.",
+        needs=("bochs", "nasm"), serial=True,
+        wants=("build/mega.img", "build/kbdlayoutreal.img", "build/kbdreal.bin")),
+    Row("diskmut", "soak", py("tests/diskmut.py"), 25.0,
+        "SPEC.md 18.5.3: Rename/New Folder/empty removal/recursive removal "
+        "through actual public APIs on a B: subdirectory. Success, absent "
+        "and mismatched DISKOPS modules preserve registers, mount/CWD and "
+        "write gate; independent FAT fsck checks success, refusal must leave "
+        "both disk images byte-identical. 20.86s measured across twelve cases.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/diskmut.img", "build/diskmut.bin")),
     Row("keymap", "soak", py("tests/keymap.py"), 1.0,
         "OSAPI_KEY_MAP (0x0239) COPIES THE WHOLE KEY-STATE MAP (SPEC.md 9.7.3). "
         "Each built kernel's own bytes under Unicorn - the jump cell, kbd_track "
         "(the int 09h writer) and the kbd_down slot: the cell jumps to the body "
-        "and the table ends at 0x023C; with the map unarmed and poisoned one "
+        "and the table ends at 0x0244; with the map unarmed and poisoned one "
         "call ARMS it and answers 16 zero bytes; scancodes fed through "
         "kbd_track (makes, breaks, E0-prefixed grey keys on the keypad bits) "
         "copy out as bit s&7 of byte s>>3 into an odd offset of a foreign DS, "

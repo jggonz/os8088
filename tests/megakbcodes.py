@@ -20,6 +20,11 @@ takes it, so the word `mega_k09` stored for a key is at the tail it found
 the word stored there, or that nothing was stored and the shift state at
 40:17 is what it was.
 
+The serial mouse must first speak. Until then SPEC.md 9.6.4's keyboard
+mouse claims keypad 5 before mega_k09 sees it, including Ctrl+keypad 5.
+This row checks the native ROM-code handler; the keyboard-mouse rows check
+the mouseless adapter policy separately.
+
 THE FAILING CASE (docs/WRITING-TESTS.md 1): on the kernel before 14.145 the
 first Ctrl key fails - `ctrl+left stored 4BE0, wanted 73E0` - and Pause
 turns Num Lock over.
@@ -76,6 +81,13 @@ def main():
                   machine="at286_vga", label="megakbcodes")
     with m:
         m.b.cmd("step 500")
+        m.b.cmd("mouse 1 0 0")
+        for _ in range(20):
+            if m.read(m.sym("mou_ptr"), 1)[0]:
+                break
+            m.b.cmd("step 10")
+        else:
+            raise RuntimeError("megakbcodes: serial pointer never spoke")
         for combo, want in STORED:
             got, _s0, s1 = one(m, combo)
             if got != want:

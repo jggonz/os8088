@@ -2477,6 +2477,8 @@ sh_x_k_m2read:
     CHX sh_k_m2read
 sh_x_k_m2write:
     CHX sh_k_m2write
+sh_x_k_keyboard:                    ; 83.7: os88kbd.inc's HOLD, the Note box's
+    CHX sh_k_keyboard               ; CP850 - KEYBOARD.DRV loads, so it claims
 sh_k_wm_create:
     call OSAPI_WM_CREATE
     ret
@@ -2485,6 +2487,9 @@ sh_k_wm_show:
     ret
 sh_k_wm_destroy:
     call OSAPI_WM_DESTROY
+    ret
+sh_k_keyboard:
+    call OSAPI_KEYBOARD
     ret
 ; sh_k_file_read / sh_k_file_write - EVERY OSAPI_FILE_READ/WRITE this package
 ; makes from its own data is one of these two (the module's twelve SHK sites
@@ -2627,6 +2632,7 @@ sh_ovshims:
     dw sh_x_k_wm_destroy, sh_x_k_file_read, sh_x_k_file_write
     dw sh_x_k_file_here, sh_x_k_file_goto_qm, sh_x_k_file_find
     dw sh_x_k_file_delete, sh_x_k_m2read, sh_x_k_m2write
+    dw sh_x_k_keyboard                                               ; 83.7
 SH_OVSHIMS_N equ ($ - sh_ovshims) / 2  ; ...asserted against SH_NVEC there
 sh_entry:
     push ax
@@ -57382,6 +57388,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; conventions (caller owns the block, passed in SI; no storage of its own).
 ; First consumer: Formula > Note..., which is Excel 2.1's cell notes and the
 ; first place in this app where free text can be typed at all.
+%define OS88KBD_CALL SHK keyboard     ; its CP850 HOLD can load KEYBOARD.DRV
 section SH_MODSEC                      ; 81.102: the chart module, with its only
 %include "os88text.inc"                ; consumer, the Note dialog
 section .text
@@ -57461,7 +57468,7 @@ section .text                          ; fragment, so nothing lands after this
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9492                     ; +2 for sh_m2dseg, the macro module as DATA under kern_mega (MC7); +3 for KERN-MEGA-MEMORY-PLAN MC7: OP_BSS grew by op_at's second window and op_seg's verb; +102 for 82.16.12: the parts standard's own OP_BSS, at the chain's head (the two modules are parts of SHEET.O88 now); +48 for 82.16.11: twelve vectors, CHOUT and the SHK kernel slots; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, the chart module's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in the chart module, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9496                     ; +4 for SHK keyboard's vector (83.7, os88kbd.inc's HOLD from the chart module); +2 for sh_m2dseg, the macro module as DATA under kern_mega (MC7); +3 for KERN-MEGA-MEMORY-PLAN MC7: OP_BSS grew by op_at's second window and op_seg's verb; +102 for 82.16.12: the parts standard's own OP_BSS, at the chain's head (the two modules are parts of SHEET.O88 now); +48 for 82.16.11: twelve vectors, CHOUT and the SHK kernel slots; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, the chart module's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in the chart module, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -58556,7 +58563,7 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 163                  ; +12 for 82.16.11 (CHOUT, SHK)
+SH_NVEC       equ 164                  ; +12 for 82.16.11 (CHOUT, SHK); +1 SHK keyboard (83.7)
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
@@ -58579,7 +58586,8 @@ sh_v_k_file_find             equ sh_v_k_file_goto_qm + 4
 sh_v_k_file_delete           equ sh_v_k_file_find + 4
 sh_v_k_m2read                equ sh_v_k_file_delete + 4
 sh_v_k_m2write               equ sh_v_k_m2read + 4
-sh_v_end      equ sh_v_k_m2write + 4
+sh_v_k_keyboard              equ sh_v_k_m2write + 4  ; 83.7
+sh_v_end      equ sh_v_k_keyboard + 4
 %if (sh_v_end - sh_v_first) != SH_NVEC * 4
   %error "SH_NVEC must count the sh_v_* chain (sh_ovbind fills SH_NVEC)"
 %endif

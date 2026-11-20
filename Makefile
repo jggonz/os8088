@@ -2751,6 +2751,8 @@ checkdocs:
 	@python3 tools/os88index.py --check
 	@python3 tools/os88help.py --check
 	@python3 tools/cp437font.py --check
+	@python3 tools/cp850font.py --check
+	@python3 tools/keyboardmaps.py --check
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -2809,7 +2811,7 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 # (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
 # this is what stops it happening in the first place.
 KMODDIR = $(BUILD)
-KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODDIR)/serial.drv
+KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODDIR)/serial.drv $(KMODDIR)/keyboard.drv
 # ...and kern_big's FOURTH, hibernate (SPEC.md 87, MOD_HIBER). It is NOT in
 # $(KMODS) because $(SMALLDRIVERS) is $(KMODS) and kern_small has no hibernate
 # at all now - no mod_tab row, no name and no module - so a small floppy that
@@ -2868,12 +2870,12 @@ KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
 ifneq ($(KERN_SMALL),)
 KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
-KMODARGS += -m 5=$(BUILD)/serial.drv
+KMODARGS += -m 5=$(BUILD)/serial.drv -m 6=$(BUILD)/keyboard.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
             -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
             -m 8=$(BUILD)/stikmenu.drv -m 9=$(BUILD)/serial.drv \
-            -m 10=$(BUILD)/fscheck.drv
+            -m 10=$(BUILD)/keyboard.drv -m 11=$(BUILD)/fscheck.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -7629,7 +7631,7 @@ $(DOSNETSTAMP): | $(BUILD)
 # presents as a fix that did not work, on a binary that never contained it.
 # Four other rules had the same hole and were fixed with this one.
 SHEET_SRC := apps/sheet/sheet.asm apps/os88api.inc \
-             apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+             apps/os88ui.inc apps/os88line.inc apps/os88text.inc apps/os88kbd.inc \
              apps/os88chart.inc apps/os88chartbss.inc \
              apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
              apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
@@ -7734,7 +7736,7 @@ $(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAM
 	$(OS88PKGB) $(BUILD)/chart.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
-$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc \
+$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc apps/os88kbd.inc \
                      $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(PKGSBDEF) -o $@ apps/notepad/notepad.asm
 	@echo "notepad: $(call FILESIZE,$@) bytes"
@@ -14397,7 +14399,7 @@ NPBENCHSRC := apps/notepad/notepad.asm tests/npbench.inc
 npbench: $(BUILD)/npbench.img $(BUILD)/npbench360.img \
          $(BUILD)/nprun.img $(BUILD)/nprun360.img
 
-$(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc apps/os88ui.inc apps/os88kbd.inc | $(BUILD)
 	$(NASM) -f bin -w+error -DNPBENCH -I apps/ -I tests/ \
 		-o $@ apps/notepad/notepad.asm
 	@echo "npbench: $(call FILESIZE,$@) bytes"
@@ -17105,7 +17107,7 @@ run-pcibig: $(BUILD)/pcibigtest.img $(BUILD)/apps.img
 # kernel reads both (20.13.3), so nothing refused and nothing looked wrong.
 # The flags byte is where it shows - 0x09 on a packed package against 0x01 -
 # and `tools/os88pkgsize.py`'s "on disk" line is what prints the cost.
-$(SMALLAPPDIR)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc \
+$(SMALLAPPDIR)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88kbd.inc \
                             apps/os88ui.inc $(SBSTAMP) | $(BUILD)
 	@mkdir -p $(SMALLAPPDIR)
 	$(NASM) -f bin -w+error -I apps/ -DAPP_SMALL $(PKGSBDEF) -o $@ \
@@ -22987,3 +22989,48 @@ $(BUILD)/PDX8.MOD: apps/pagedesk/pdx8.asm apps/pagedesk/pdrx8.inc $(BUILD)/pdx8.
 	    sys.exit(1 if t>$(PDX8_CAP) else 0)"
 pdx8: $(BUILD)/PDX8.MOD
 # ---- end PageDesk: PDX8 ----
+
+# SPEC.md9.16: failed package-entry glyph ownership and same-slot reuse.
+$(BUILD)/kbdabort.bin: tests/kbdlayoutabort/kbdlayoutabort.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/kbdhold.bin: tests/kbdlayoutabort/kbdlayoutabort.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DKA_LIVE -o $@ $<
+$(BUILD)/kbdabort.o88: $(BUILD)/kbdabort.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdhold.o88: $(BUILD)/kbdhold.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdlayoutabort.img: $(BUILD)/kbdabort.o88 $(BUILD)/kbdhold.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/kbdabort.o88 $(BUILD)/kbdhold.o88
+#> [Gate disks] kbdlayoutaborttest :: failed-entry keyboard hold and instance reuse fixtures
+.PHONY: kbdlayoutaborttest
+kbdlayoutaborttest: $(BUILD)/kbdlayoutabort.img
+
+# SPEC.md18.5.3: file mutations execute through the existing disk module.
+$(BUILD)/diskmut.bin: tests/diskmut/diskmut.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/diskmut.o88: $(BUILD)/diskmut.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/diskmut.img: $(BUILD)/diskmut.o88 tests/diskmut/old.txt tests/diskmut/leaf.txt tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder CASE/EMPTY \
+		CASE:$(BUILD)/diskmut.o88 CASE:tests/diskmut/old.txt CASE/TREE/CHILD:tests/diskmut/leaf.txt
+#> [Gate disks] diskmuttest :: directory mutations, target restoration and missing-module refusals
+.PHONY: diskmuttest
+diskmuttest: $(BUILD)/diskmut.img
+
+# SPEC.md9.16/53.2.3: protected-mode REAL glyph borrowing, not shipped software.
+$(BUILD)/kbdreal.bin: tests/kbdlayoutreal/fixture.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/kbdreal.o88: $(BUILD)/kbdreal.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdlayoutreal.img: $(BUILD)/kbdreal.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/kbdreal.o88
+#> [Gate disks] kbdlayoutrealtest :: protected-to-REAL keyboard glyph borrowing fixture
+.PHONY: kbdlayoutrealtest
+kbdlayoutrealtest: $(BUILD)/kbdlayoutreal.img
+
+# SPEC.md9.16: existing legacy frontends retain BIOS character input.
+$(BUILD)/kbdlayoutlegacy.img: $(BUILD)/win16.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/win16.o88
+#> [Gate disks] kbdlayoutlegacytest :: DOS and WIN16 keyboard ownership fixture
+.PHONY: kbdlayoutlegacytest
+kbdlayoutlegacytest: $(BUILD)/kbdlayoutlegacy.img

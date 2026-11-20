@@ -234,7 +234,7 @@ ld_unreserve:
 %ifdef KERN_BIG
     COLDCALL desk_drop_x        ; ld_alloc's early IF_DESK off, and DESK.DRV
 %endif                          ; with it if nobody else is a widget (11.103.10)
-    KDOOR xm_release_rec                ; DI = the record
+    KDOOR inst_rel_rec          ; DI = unpublished record: all entry grants
     call ld_slot
     call mem_free_owner_x
     mov bx, [ld_base]
@@ -1539,7 +1539,8 @@ ld_start:
     ; nothing believed, and the sweep only ever touches records wm_create
     ; stamped itself. BEFORE ld_unreserve, so no window outlives the region
     ; its procs live in - a survivor's repaint would far-call a freed claim.
-    ; The reserved instance record was never published, so it needs nothing.
+    ; The reserved record is unpublished; ld_unreserve still sweeps every
+    ; stamped entry grant, including optional keyboard glyph holds.
     call .sweep
     ; ...but NOT its toast (SPEC.md 20.12.4). A refusal the entry proc SAID -
     ; os88parts.inc's four, a C package's - carries the reserved slot as its

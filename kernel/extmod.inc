@@ -1300,13 +1300,16 @@ ext_fcut:                       ; [gfx_dnest] = 1 was asked by the caller,
 
     mov es, [font_seg]          ; ES:SI -> the source rows, wherever the table
     sub al, FONT_FIRST          ; is (SPEC.md 6) - and this is the same
-    cbw                         ; arithmetic that will address the scratch
-    shl ax, 1                   ; cell on the way back in. `cbw` AFTER the
-    shl ax, 1                   ; subtract, and this is the ONE site with no
-    shl ax, 1                   ; range test above it: AL can also be
-    add ax, [font_base]         ; FONT_SEAM_A/_B (96/97), and 97-32 = 65, still
+    xor ah, ah                  ; arithmetic that will address the scratch
+    shl ax, 1                   ; cell on the way back in. ZERO-extend AFTER
+    shl ax, 1                   ; the subtract, and this is the ONE site with
+    shl ax, 1                   ; no range test above it: AL is anything up to
+    add ax, [font_base]         ; [font_last] (255 with the CP850 provider, an
     xchg ax, si                 ; (ES is font_char's to clobber: it banked it)
-                                ; positive. AX carries SI's old value out of
+                                ; index of 223), or FONT_SEAM_A/_B under
+                                ; [font_ch_on] - `cbw` would send an index
+                                ; past 127 below the table (SPEC.md 6.7).
+                                ; AX carries SI's old value out of
                                 ; the xchg and is spent below - `mov al,1`
                                 ; then ext_ctx_ptr, which takes its index in
                                 ; AL (a branch: no `mul`), and the load after

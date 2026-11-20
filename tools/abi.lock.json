@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "c8835bd0471c16ab4fc259e06d38a80647ed576e988f1fafeb1eb943e4f4a8c2",
+  "fingerprint": "a8f72a915b39c66209a9e4ebd7f3ff2809b98c8e3943c31058e8970f4af37b99",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "d057432301f2a22ee4fa121576cb326ec39180872a71b35d2892d13ee446fd27",
+  "fingerprint": "78d9a6aeaf42b14a7e9ff44e3a9493639ab52ecd4166769ac38ceda37300db9a",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2456,6 +2456,20 @@
    "guard": "HD_ABI_VER",
    "reason": "OSAPI_FILE_PLACE (door 0x60, RN) added at the end of the table, FPL_* verbs, OSAPI_FCP_FAR/OSAPI_FIND_FAR bits and the C SDK's os88_file_place - additions only, every package built before still runs (SPEC.md 19.12.8, FAT32 on kern_mega)",
    "to": 7
+  },
+  {
+   "fingerprint": "78d9a6aeaf42b14a7e9ff44e3a9493639ab52ecd4166769ac38ceda37300db9a",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of main's OSAPI_FILE_PLACE (door 0x60, SPEC.md 19.12.8) with #396's OSAPI_KEYBOARD cell 0x023C (SPEC.md 9.16): both additions at the end, every package built before still runs",
+   "to": 13
+  },
+  {
+   "fingerprint": "a8f72a915b39c66209a9e4ebd7f3ff2809b98c8e3943c31058e8970f4af37b99",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of main's OSAPI_FILE_PLACE (door 0x60, SPEC.md 19.12.8) with #396's OSAPI_KEYBOARD cell 0x023C (SPEC.md 9.16): both additions at the end, every package built before still runs",
+   "to": 14
   }
  ]
 }

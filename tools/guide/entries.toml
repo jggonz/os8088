@@ -113,7 +113,7 @@ short = "Support for desktop widgets"
 ["DISKOPS.DRV"]
 title = "Disk operations"
 kind = "system"
-summary = "Copies a whole floppy sector for sector, to another floppy or to an image file and back, and compresses or expands files."
+summary = "Copies a whole floppy sector for sector, to another floppy or to an image file and back; compresses or expands files; and creates, renames or removes folders."
 short = "Copy disks, compress files"
 
 ["DOCK.DRV"]
@@ -707,6 +707,12 @@ kind = "driver"
 summary = "Puts the desktop on a VGA card's high-resolution screen, up to 1024 by 768, when the card has a VESA BIOS. The desktop keeps 16 colours; a program can draw a picture in up to 65,536."
 short = "High-resolution desktop on a VESA card"
 needs = "A VGA card with a VESA BIOS (VBE 1.2 or later), in a 286 or better"
+
+["KEYBOARD.DRV"]
+title = "Keyboard layouts"
+kind = "system"
+summary = "Optional US, Spanish (Spain), Latin American Spanish and French AZERTY input, selected in Control Panel. Supplies accented CP850 glyphs for native text and unloads when no longer needed."
+short = "Optional international keyboard layouts"
 
 ["SERIAL.DRV"]
 title = "Desktop serial service"

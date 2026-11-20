@@ -231,7 +231,7 @@ FIXTURE = {
         # needs_wire 7: the tree carries build/mseg.o88, whose parts library
         # calls OSAPI_MEM_P (a door cell) and OSAPI_FS_OP (a door cell, SPEC.md 12.8.10)
         # - the cell fence (SPEC.md 92.2), declared as the site's own entries
-        # declare it, and what this tree's Wire (WIRE_LEVEL 7) installs
+        # declare it, and what this tree's Wire (WIRE_LEVEL 8) installs
         {"stem": "TREEONE", "title": "A whole tree", "kind": 0, "tier": 0,
          "needs_wire": 7,
          "archive": {"file": "TREEONE.WPK"},
