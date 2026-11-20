@@ -34142,8 +34142,14 @@ onkey. Kind behavior:
   `[sch_coop]`): "pre-emptive" or "cooperative", and the adapter the
   boot probe found (§39.1): "VGA - 640x480 - 16 colors",
   "Hercules - 720x348 - mono", "CGA - 640x200 - mono" or, on kern_big,
-  "EGA - 640x350 - 16 colors" (a VESA desktop, kind 4, has no row yet:
-  §39.29.4). The geometry cannot
+  "EGA - 640x350 - 16 colors". **A VESA desktop (kind 4, §120) has no
+  row: its line is COMPOSED** from the mode VESA.DRV chose — the width and
+  height in `vid_vxrow` and the depth in `[vx_bpp]`, which the Display
+  page's label reads too (§120.6) — as "VESA - 1024x768 - 8-bit", staged in
+  `fm_hdrbuf` (borrowed: every painter of that buffer stages it afresh, and
+  this paint holds the gfx lock as they do). Until it was, the paint indexed
+  the four-row table with 4 and lettered whatever words followed it as a
+  string pointer: a garbled fourth line on every VESA machine. The geometry cannot
   be a constant in the third line any more, which is why it moved into a
   fourth; `app_about_center` re-measures every string, so unequal line
   lengths cost nothing. No onkey. Singleton (cap 1).

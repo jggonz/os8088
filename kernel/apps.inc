@@ -67,6 +67,11 @@ app_about_v2:   db 'CGA - 640x200 - mono', 0
 %ifdef GFX_VGA
 app_about_v3:   db 'EGA - 640x350 - 16 colors', 0
 %endif
+%ifdef VID_EXT                  ; ...and VID_VESA, kind 4, is COMPOSED from the
+app_about_vx0:  db 'VESA - ', 0 ; mode VESA.DRV chose (SPEC.md 14): it has
+app_about_vx1:  db ' - ', 0     ; no fixed geometry to spell, and a fifth row
+app_about_vx2:  db '-bit', 0    ; read whatever followed this table
+%endif
 
 ; =============================================================================
 ; EVERYTHING BELOW IS COLD (SPEC.md 2.6). The data above is not, and cannot
@@ -115,17 +120,39 @@ app_about_paint_x:
 .s3:
     call app_about_center_x
     mov al, [vid_kind]          ; fourth line: the adapter in use. Indexed
+%ifdef VID_EXT
+    cmp al, VID_VESA            ; VID_VESA has NO ROW: it is composed below,
+    je .vesa                    ; and indexing the table with it read past
+%endif                          ; its end - the garbled line (SPEC.md 14)
     cbw                         ; through SI, which is about to hold the
     xchg si, ax                 ; string anyway, rather than borrowing BX -
     add si, si                  ; that is the window ptr app_about_center
     mov si, [si + app_about_vid]   ; wants. cbw is safe because [vid_kind] is
-    call app_about_center_x        ; 0..3 (kernel/viddet.inc) - but 4,
-                                   ; VID_VESA under VID_EXT, has no row here
-                                   ; (SPEC.md 39.29.4). xchg, not
-                                   ; mov: AX is the helper's to write next
+.line4:                            ; 0..3 here (kernel/viddet.inc). xchg, not
+    call app_about_center_x        ; mov: AX is the helper's to write next
                                    ; (kernel size pass 17, -1)
 
     jmp kretc_di
+%ifdef VID_EXT
+.vesa:                          ; 'VESA - 1024x768 - 8-bit': the live mode,
+    mov di, fm_hdrbuf           ; read where the Display page reads it
+    mov si, app_about_vx0       ; (cp_vid_vxlabel), staged in fm_hdrbuf -
+    call fm_scat                ; BORROWED, as files.inc's verdicts borrow
+    mov ax, [vid_vxrow + 14]    ; it: every painter of it stages it afresh,
+    call fm_utoa                ; and this paint holds the gfx lock as they
+    mov byte [di], 'x'          ; do. 31 bytes at the most, of 48
+    inc di
+    mov ax, [vid_vxrow + 16]
+    call fm_utoa
+    mov si, app_about_vx1
+    call fm_scat
+    mov ax, [vx_bpp]
+    call fm_utoa
+    mov si, app_about_vx2
+    call fm_scat                ; ...and its NUL
+    mov si, fm_hdrbuf
+    jmp short .line4
+%endif
 
 ; -----------------------------------------------------------------------------
 ; app_about_center - step down a line and draw one string centered
