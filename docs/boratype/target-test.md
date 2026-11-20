@@ -237,7 +237,7 @@ made during this acceptance pass.
 | Actual configuration | Accepted scope | Evidence under engine worktree `build/` |
 |---|---|---|
 | MartyPC CGA640x200mono / FSX320x200four-color | native Home/F6, real wrong plus complete49-key lesson, results and restored mono;100ms program-side commit PASS | `boratype-final-cga-primary` |
-| automation86Box EGA640x350x4 | real wrong/correct input and nativeF6 pause/return PASS | `boratype-final-ega` |
+| automation86Box EGA640x350x4 | raw physical wrong/correct keys with scoring witness, drained fields and nativeF6 pause/return PASS | `boratype-final-ega-witness` |
 | QEMU VESA.DRV800x600x8 | actual CFG/driver/mode, real input and nativeF6 pause/return PASS | `boratype-final-vesa800-drained` |
 | QEMU VESA.DRV1024x768x16 | actual CFG/driver/mode, real input and nativeF6 pause/return PASS | `boratype-final-vesa1024-drained` |
 | Mega86Box286 VGA640x480x4 | protected mode asserted; ordinary package, real input and nativeF6 pause/return PASS | `boratype-final-mega286-drained` |
