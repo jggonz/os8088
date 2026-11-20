@@ -554,7 +554,7 @@ static void ovl_tf_drawbody(void)
     }else if(bt_screen==BT_S_RESULTS){
         if(!tf_compact){ovl_tf_resultcard(x,y,w,p);return;}
         n=tf_append(0,!bt_session.attempts?"No keys entered":bt_session.ranked?"Completed":"Practice / unranked");if(bt_session.new_record)tf_append(n,"  PERSONAL BEST!");tf_line(x,y,w,tf_buf);y+=rh;
-        n=tf_append(0,"WPM ");n=tf_number(n,bt_session.wpm);n=tf_append(n,"   Accuracy ");if(bt_session.attempts){n=tf_number(n,bt_session.accuracy);n=tf_append(n,"%");}else n=tf_append(n,"-");n=tf_append(n,"   Errors ");tf_number(n,bt_session.errors);tf_line(x,y,w,tf_buf);y+=rh;
+        n=tf_append(0,"WPM ");n=bt_session.seconds?tf_number(n,bt_session.wpm):tf_append(n,"-");n=tf_append(n,"   Accuracy ");if(bt_session.attempts){n=tf_number(n,bt_session.accuracy);n=tf_append(n,"%");}else n=tf_append(n,"-");n=tf_append(n,"   Errors ");tf_number(n,bt_session.errors);tf_line(x,y,w,tf_buf);y+=rh;
         n=tf_append(0,"Time ");n=tf_number(n,bt_session.seconds);n=tf_append(n,"s   Best streak ");tf_number(n,bt_session.best_streak);tf_line(x,y,w,tf_buf);y+=rh;
         n=tf_append(0,"Weak keys: ");
         for(i=0;i<3;i++){k=bt_weak(i);if(k){tf_char[0]=k;tf_char[1]=0;n=tf_append(n,tf_char);n=tf_append(n," (");n=tf_number(n,p->key_error[k-32]);n=tf_append(n,"/");n=tf_number(n,p->key_attempt[k-32]);n=tf_append(n,") ");}}

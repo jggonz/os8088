@@ -178,7 +178,7 @@ static void bt_cga_paint(void)
         bt_cga_text(1, 12, "Active seconds:", 1, 0); bt_cga_number(16, 12, bt_session.seconds);
         bt_cga_text(1, 14, bt_session.ranked ? "Uninterrupted result" : "Practice / unranked", 3, 0);
         bt_cga_text(1, 17, "Enter Next  R Retry  P Practice", 1, 0);
-        bt_cga_text(1, 18, bt_session.attempts ? "Aim for 95% accuracy. Practice weak keys." : "No keys entered. Try F and J, or Retry.", 1, 0);
+        bt_cga_text(1, 18, bt_session.attempts ? "Aim for 95%. Practice these weak keys." : "No keys entered. Try F and J, or Retry.", 1, 0);
         bt_cga_text(1, 20, "Weak:", 1, 0);
         for (i = 0; i < 2; i++) {
             key = bt_weak(i); if (!key) break;
