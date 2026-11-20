@@ -79,6 +79,24 @@ _bt_modifier_state:
     pop bp
     ret
 
+; Idle-drawing deferral only: leave every pending key for the normal OS
+; event pump. The existing BIOS bridge also covers kern_mega. Scoring never
+; calls this peek or consumes BIOS input outside the exclusive FSX bracket.
+_bt_key_pending:
+    push bp
+    push ds
+    push es
+    mov ah,01h
+    int 16h
+    mov ax,0                     ; MOV preserves BIOS ZF
+    jz .empty
+    inc ax
+.empty:
+    pop es
+    pop ds
+    pop bp
+    ret
+
 ; Copy the kernel's actual 8x8 ASCII glyphs BEFORE a foreign mode. The font
 ; is returned as DX:SI, not DS or KERNEL_SEG. All rendering then uses ours.
 _bt_copy_font:

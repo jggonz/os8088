@@ -64,8 +64,6 @@ def fixture(work, build, case, good):
     disk = folder / "apps.img"
     command = [sys.executable, str(ROOT / "tools/os88disk.py"), "-o", str(disk),
                "--size", "360", str(build / "boratype.o88")]
-    if case != "missing-folder":
-        command += ["--folder", "SYSTEM/APPDATA"]
     for slot, generation in (("BORATA.BTT", 42), ("BORATB.BTT", 41)):
         data = bytearray(good)
         struct.pack_into("<H", data, 8, generation)
@@ -80,6 +78,8 @@ def fixture(work, build, case, good):
             path = folder / slot
             path.write_bytes(data)
             command.append("SYSTEM/APPDATA:" + str(path))
+    if case != "missing-folder":
+        command += ["--folder", "SYSTEM/APPDATA"]
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
     if case == "read-only-files":
         raw = bytearray(disk.read_bytes())
@@ -102,6 +102,8 @@ def fixture(work, build, case, good):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, default=ROOT / "build/boratype-storage")
+    parser.add_argument("--case", action="append", choices=("missing-folder", "missing-files", "truncated",
+                        "old-version", "invalid-fields", "read-only-files", "full-disk"))
     args = parser.parse_args()
     args.evidence.mkdir(parents=True, exist_ok=True)
     build = Path(os88sym.kernel_image()).parent
@@ -115,10 +117,10 @@ def main():
         with tempfile.TemporaryDirectory(prefix="boratype-storage-") as temporary:
             work = Path(temporary)
             good = canonical(work)
-            for case in ("missing-folder", "missing-files", "truncated", "old-version",
-                         "invalid-fields", "read-only-files", "full-disk"):
+            for case in args.case or ("missing-folder", "missing-files", "truncated", "old-version",
+                                      "invalid-fields", "read-only-files", "full-disk"):
                 disk = fixture(work, build, case, good)
-                row = {"case": case, "status": "RUNNING"}
+                row = {"case": case, "status": "RUNNING", "app_build": str(build)}
                 report["rows"].append(row)
                 with os88ui.boot(str(build / "os8088-360.img"), apps=str(disk),
                                  machine="os8088_xt_vga", quick=True) as ui:

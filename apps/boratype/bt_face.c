@@ -460,6 +460,56 @@ static void tf_playbase(void)
     for(i=0;i<5;i++)ovl_tf_drawstat(i);
     for(i=0;i<TF_KEYS;i++)tf_drawkey(i,0);
 }
+static const char *tf_achnames[]={"First lesson","95% mastery","25-key streak","50-key streak","95% challenge","Perfect lesson","Personal best"};
+static void ovl_tf_resultcard(int x,int y,int w,BTProfile *p)
+{
+    static const char *labels[]={"SPEED","ACCURACY","ERRORS","BEST STREAK","TIME"};
+    int pw,ph,sx,sw,sy,rh,i,n,k,e,iw,ih;
+    pw=w>=740?180:136;ph=tf_bottom-y-36;sx=x+pw+12;sw=w-pw-12;
+    e=bt_expression();if(e<0||e>6)e=0;
+    iw=!tf_mono&&ph>=188?96:40;ih=iw==96?120:48;
+    if(x+pw>tf_sx&&x<tf_sx+tf_sw&&y+ph>tf_sy&&y<tf_sy+tf_sh){
+        gk_box(x,y,pw,ph,GK_RAISED,tf_ground());
+        bx_spr(x+(pw-iw)/2,y+8,tf_mono?BT_ART_MONO+e:iw==96?BT_ART_BIG+e:BT_ART_SMALL+e);
+        tf_append(tf_append(0,"Borat: "),bt_caption());
+        ovl_tf_lines(x+6,y+ih+16,pw-12,(ph-ih-22)/(tf_th+2),tf_buf);
+    }
+    n=tf_append(0,!bt_session.attempts?"No keys entered":bt_session.ranked?"Completed":"Practice / unranked");
+    if(bt_session.new_record)tf_append(n,"  PERSONAL BEST!");tf_line(sx,y,sw,tf_buf);
+    sy=y+14;rh=ph>=250?26:18;
+    gk_box(sx,sy,sw,rh*5,GK_SUNKEN2,tf_ground());
+    for(i=0;i<5;i++){
+        if(sy+i*rh+rh<=tf_sy||sy+i*rh>=tf_sy+tf_sh)continue;
+        tf_text(sx+6,sy+i*rh+2,sw/2-8,labels[i],TF_WHITE,BT_F_TITLE);
+        n=0;
+        if(i==0){n=bt_session.seconds?tf_number(0,bt_session.wpm):tf_append(0,"-");tf_append(n," WPM");}
+        else if(i==1){if(bt_session.attempts){n=tf_number(0,bt_session.accuracy);tf_append(n,"%");}else tf_append(0,"-");}
+        else if(i==2)tf_number(0,bt_session.errors);
+        else if(i==3)tf_number(0,bt_session.best_streak);
+        else{n=tf_number(0,bt_session.seconds);tf_append(n," sec");}
+        tf_text(sx+sw/2,sy+i*rh+2,sw/2-6,tf_buf,TF_YELLOW,BT_F_TITLE);
+        if(i<4)bx_fill(sx+3,sy+(i+1)*rh-1,sx+sw-4,sy+(i+1)*rh-1,tf_ink(TF_CYAN));
+    }
+    sy+=5*rh+6;n=tf_append(0,"Weak keys: ");
+    for(i=0;i<3;i++){k=bt_weak(i);if(k){tf_char[0]=k;tf_char[1]=0;n=tf_append(n,tf_char);n=tf_append(n," (");n=tf_number(n,p->key_error[k-32]);n=tf_append(n,"/");n=tf_number(n,p->key_attempt[k-32]);n=tf_append(n,") ");}}
+    if(n==11)tf_append(n,"20 samples per key needed");
+    k=bx_twidth(tf_buf,tf_font)>sw?2:1;ovl_tf_lines(sx,sy,sw,k,tf_buf);sy+=k*(tf_th+2)+2;
+    ovl_tf_lines(sx,sy,sw,2,!bt_session.attempts?"No keys were entered. Try F and J, or Retry the test.":bt_session.accuracy>=95?"Great success! Continue, or practice the next keys.":"Aim for 95% accuracy. Practice these keys before adding speed.");sy+=2*(tf_th+2)+3;
+    if(sy+tf_th+2<=tf_bottom-34){
+        n=tf_append(0,"New achievements: ");
+        for(i=0;i<7;i++)if(bt_session.achievement_new&(1<<i)){n=tf_append(n,tf_achnames[i]);n=tf_append(n,"! ");}
+        if(!bt_session.achievement_new)tf_append(n,"Keep practicing");
+        k=sy+2*(tf_th+2)<=tf_bottom-34?2:1;ovl_tf_lines(sx,sy,sw,k,tf_buf);sy+=k*(tf_th+2)+3;
+    }
+    for(i=0;i<4&&sy+tf_th<=tf_bottom-34;i++){
+        if(!bt_reaction_history(i)[0])break;
+        n=tf_append(0,"Borat: ");tf_append(n,bt_reaction_history(i));tf_line(sx,sy,sw,tf_buf);sy+=tf_th+2;
+    }
+    n=(w-12)/4;y=tf_bottom-29;
+    tf_button(x,y,n,25,"Retry",BT_A_RETRY,1);tf_button(x+n+4,y,n,25,"Next lesson",BT_A_NEXT,0);
+    tf_button(x+2*(n+4),y,n,25,"Weak keys",BT_A_WEAK,0);tf_button(x+3*(n+4),y,n,25,"Menu",BT_A_BACK,0);
+}
+
 /* Cold menu screens share this body; all coordinates are in live content. */
 static void ovl_tf_drawbody(void)
 {
@@ -501,8 +551,9 @@ static void ovl_tf_drawbody(void)
         if(!tf_compact){ovl_tf_lines(x,y,w,2,"Three seconds to get ready. Pausing, losing focus or changing display makes a challenge unranked.");y+=32;}
         tf_button(x,y,w,bh,"Start challenge",BT_A_START,1);
     }else if(bt_screen==BT_S_RESULTS){
-        n=tf_append(0,bt_session.ranked?"Completed":"Practice / unranked");if(bt_session.new_record)tf_append(n,"  PERSONAL BEST!");tf_line(x,y,w,tf_buf);y+=rh;
-        n=tf_append(0,"WPM ");n=tf_number(n,bt_session.wpm);n=tf_append(n,"   Accuracy ");n=tf_number(n,bt_session.accuracy);n=tf_append(n,"%   Errors ");tf_number(n,bt_session.errors);tf_line(x,y,w,tf_buf);y+=rh;
+        if(!tf_compact){ovl_tf_resultcard(x,y,w,p);return;}
+        n=tf_append(0,!bt_session.attempts?"No keys entered":bt_session.ranked?"Completed":"Practice / unranked");if(bt_session.new_record)tf_append(n,"  PERSONAL BEST!");tf_line(x,y,w,tf_buf);y+=rh;
+        n=tf_append(0,"WPM ");n=tf_number(n,bt_session.wpm);n=tf_append(n,"   Accuracy ");if(bt_session.attempts){n=tf_number(n,bt_session.accuracy);n=tf_append(n,"%");}else n=tf_append(n,"-");n=tf_append(n,"   Errors ");tf_number(n,bt_session.errors);tf_line(x,y,w,tf_buf);y+=rh;
         n=tf_append(0,"Time ");n=tf_number(n,bt_session.seconds);n=tf_append(n,"s   Best streak ");tf_number(n,bt_session.best_streak);tf_line(x,y,w,tf_buf);y+=rh;
         n=tf_append(0,"Weak keys: ");
         for(i=0;i<3;i++){k=bt_weak(i);if(k){tf_char[0]=k;tf_char[1]=0;n=tf_append(n,tf_char);n=tf_append(n," (");n=tf_number(n,p->key_error[k-32]);n=tf_append(n,"/");n=tf_number(n,p->key_attempt[k-32]);n=tf_append(n,") ");}}
@@ -521,15 +572,30 @@ static void ovl_tf_drawbody(void)
             if(!bt_reaction_history(i)[0])break;n=tf_append(0,"Borat: ");tf_append(n,bt_reaction_history(i));tf_line(x,y,w,tf_buf);y+=tf_th+2;}
         c=(w-12)/4;tf_button(x,y,c,bh,"Retry",BT_A_RETRY,1);tf_button(x+c+4,y,c,bh,"Next lesson",BT_A_NEXT,0);tf_button(x+2*(c+4),y,c,bh,"Weak keys",BT_A_WEAK,0);tf_button(x+3*(c+4),y,c,bh,"Menu",BT_A_BACK,0);
     }else if(bt_screen==BT_S_RECORDS){
-        n=tf_append(0,"Profile ");n=tf_append(n,p->name);n=tf_append(n,"   Best streak ");tf_number(n,p->best_streak);tf_line(x,y,w,tf_buf);y+=rh;
-        tf_line(x,y,w,"DURATION       HOME ROW     LETTERS     DIGITS      MIXED");y+=rh;
-        for(d=0;d<3;d++){
-            n=tf_number(0,d==0?1:d==1?3:5);n=tf_append(n," min");tf_line(x,y,80,tf_buf);
-            for(i=0;i<4;i++){n=tf_number(0,p->record_wpm[d][i]);n=tf_append(n," WPM ");n=tf_number(n,p->record_accuracy[d][i]);tf_append(n,"%");tf_line(x+86+i*(w-86)/4,y,(w-86)/4,tf_buf);}y+=rh;
+        if(tf_compact){
+            n=tf_append(0,p->name);tf_append(n,"  H-home L-letters D-digits M-mixed");
+            tf_text(x+78,y-13,w-78,tf_buf,TF_WHITE,BT_F_SMALL);
+            rh=9;c=(w-40)/4;
+            for(d=0;d<3;d++){
+                n=tf_number(0,d==0?1:d==1?3:5);tf_append(n,"m");tf_text(x,y,38,tf_buf,TF_YELLOW,BT_F_SMALL);
+                for(i=0;i<4;i++){
+                    tf_char[0]="HLDM"[i];tf_char[1]=' ';tf_char[2]=0;n=tf_append(0,tf_char);
+                    n=tf_number(n,p->record_wpm[d][i]);n=tf_append(n,"/");n=tf_number(n,p->record_accuracy[d][i]);tf_append(n,"%");
+                    tf_text(x+40+i*c,y,c,tf_buf,TF_WHITE,BT_F_SMALL);
+                }y+=rh;
+            }
+            y+=2;
+            for(i=0;i<7;i++){n=tf_append(0,(p->achievements&(1<<i))?"[*] ":"[ ] ");tf_append(n,tf_achnames[i]);tf_text(x+(i%2)*(w/2),y+(i/2)*rh,w/2,tf_buf,TF_YELLOW,BT_F_SMALL);}
+        }else{
+            n=tf_append(0,"Profile ");n=tf_append(n,p->name);n=tf_append(n,"   Best streak ");tf_number(n,p->best_streak);tf_line(x,y,w,tf_buf);y+=rh;
+            tf_line(x,y,w,"DURATION       HOME ROW     LETTERS     DIGITS      MIXED");y+=rh;
+            for(d=0;d<3;d++){
+                n=tf_number(0,d==0?1:d==1?3:5);n=tf_append(n," min");tf_line(x,y,80,tf_buf);
+                for(i=0;i<4;i++){n=tf_number(0,p->record_wpm[d][i]);n=tf_append(n," WPM ");n=tf_number(n,p->record_accuracy[d][i]);tf_append(n,"%");tf_line(x+86+i*(w-86)/4,y,(w-86)/4,tf_buf);}y+=rh;
+            }
+            y+=4;tf_line(x,y,w,"ACHIEVEMENTS");y+=tf_th+3;rh=tf_th+3;
+            for(i=0;i<7;i++){n=tf_append(0,(p->achievements&(1<<i))?"[*] ":"[ ] ");tf_append(n,tf_achnames[i]);tf_line(x+(i%2)*(w/2),y+(i/2)*rh,w/2,tf_buf);}
         }
-        if(!tf_compact){y+=8;tf_line(x,y,w,"ACHIEVEMENTS");y+=rh;
-            static const char *names[]={"First lesson","95% mastery","25-key streak","50-key streak","95% challenge","Perfect lesson","Personal best"};
-            for(i=0;i<7;i++){n=tf_append(0,(p->achievements&(1<<i))?"[*] ":"[ ] ");tf_append(n,names[i]);tf_line(x+(i%2)*(w/2),y+(i/2)*rh,w/2,tf_buf);}}
     }else if(bt_screen==BT_S_SETTINGS){
         c=(w-8)/3;row=bh+2;
         n=tf_append(0,"M Music: ");tf_append(n,bt_store.music?"ON":"OFF");tf_button(x,y,c,bh,tf_buf,BT_A_MUSIC,bt_store.music);
@@ -595,7 +661,7 @@ static int ovl_tf_settings_delta(unsigned diff)
 {
     int i,a,bit;
     for(i=0;i<tf_nhit;i++){a=tf_hit[i][4];bit=0;
-        if(a==BT_A_MUSIC)bit=1;else if(a==BT_A_EFFECTS)bit=2;else if(a==BT_A_VOICE)bit=4;
+        if(a==BT_A_MUSIC)bit=1;else if(a==BT_A_EFFECTS)bit=2;
         else if(a==BT_A_KEYCLICK)bit=8;else if(a==BT_A_ROAST)bit=48;else if(a==BT_A_DISPLAY)bit=64;else if(a==BT_A_FULL)bit=128;
         if(diff&bit)tf_render(tf_hit[i][0],tf_hit[i][1],tf_hit[i][2],tf_hit[i][3],3,0);
     }

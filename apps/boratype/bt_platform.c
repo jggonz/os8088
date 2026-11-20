@@ -12,6 +12,9 @@ static int bt_focused = 1, bt_guard_scan, bt_last_scan, bt_in_cga;
 static int bt_cga_exit, bt_quit_pending, bt_closing;
 static int bt_return_screen;
 static int bt_ready_paint;
+static struct os88_size bt_client;
+static struct os88_pt bt_client_origin;
+static int bt_client_w, bt_client_h, bt_client_x, bt_client_y;
 static BTByte bt_io[BT_FILE_SIZE]; /* canonical2136B save, also2000B CGA cells */
 static BTWord bt_saved_generation;
 static const char *bt_slots[2] = {"BORATA.BTT", "BORATB.BTT"};
@@ -31,6 +34,7 @@ void bt_data_back(void);
 int bt_other_instance(void);
 void bt_copy_font(void);
 int bt_modifier_state(void);
+int bt_key_pending(void);
 void bx_setart2(unsigned seg);
 void bt_cga_entry(void);
 void bt_action(int action);
@@ -45,6 +49,25 @@ static void bt_audio_sync(void)
         screen = BT_S_PAUSE;
     bt_audio_state(screen);
     bt_audio_tick(os88_ticks(), bt_focused);
+}
+static int bt_geometry_changed(void)
+{
+    int changed;
+    if (!bt_win || bt_in_cga || os88_wm_geom(bt_win, &bt_client) != 0) return 0;
+    os88_wm_content(bt_win, &bt_client_origin);
+    changed = bt_client_w && (bt_client_w != bt_client.w || bt_client_h != bt_client.h ||
+        bt_client_x != bt_client_origin.x || bt_client_y != bt_client_origin.y);
+    bt_client_w = bt_client.w; bt_client_h = bt_client.h;
+    bt_client_x = bt_client_origin.x; bt_client_y = bt_client_origin.y;
+    if (changed && (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY)) {
+        /* Grow/drag tracking owns the UI meanwhile. Last serviced active
+         * tick is the only app-observed boundary before that modal work. */
+        bt_pause(bt_session.last_tick); bt_screen = BT_S_PAUSE;
+        bt_guard_scan = bt_last_scan;
+        bt_audio_sync();
+        return 1;
+    }
+    return 0;
 }
 static void bt_scene_drawn(void)
 {
@@ -271,7 +294,7 @@ static void ovl_bt_menu_key(int ascii, int scan)
         return;
     }
     if (ascii == 'l' || ascii == 'L') bt_action(BT_A_LESSONS);
-    else if (ascii == 'p' || ascii == 'P') bt_action(BT_A_PRACTICE);
+    else if (ascii == 'p' || ascii == 'P') bt_action(bt_screen == BT_S_RESULTS ? BT_A_WEAK : BT_A_PRACTICE);
     else if (ascii == 'c' || ascii == 'C') bt_action(BT_A_CHALLENGE);
     else if (ascii == 'r' || ascii == 'R') bt_action(bt_screen == BT_S_RESULTS || bt_screen == BT_S_PAUSE ? BT_A_RETRY : BT_A_RECORDS);
     else if ((ascii == 'x' || ascii == 'X') && bt_screen == BT_S_PAUSE) bt_action(BT_A_BACK);
@@ -290,6 +313,7 @@ static void bt_key_route(int ascii, int scan)
         else { os88_onclose(bt_win); os88_wm_close(bt_win); }
         return;
     }
+    if (bt_geometry_changed()) { bt_redraw(1); return; }
     if (bt_guard_scan) {
         if (os88_key_down(bt_guard_scan)) return;
         bt_guard_scan = 0;
@@ -321,19 +345,21 @@ static void bt_pulse(void)
     now = os88_ticks();
     bt_blink_frame = now % 91 < 2;
     bt_modifiers = bt_modifier_state();
-    focus = os88_menu_owner() == bt_win;
+    focus = os88_wm_top() == bt_win && os88_menu_owner() == bt_win;
     if (bt_focused && !focus && (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY)) {
-        bt_pause(now); bt_screen = BT_S_PAUSE;
+        bt_pause(bt_session.last_tick); bt_screen = BT_S_PAUSE;
     }
     bt_focused = focus;
+    bt_geometry_changed();
     if (bt_guard_scan && !os88_key_down(bt_guard_scan)) bt_guard_scan = 0;
     if (!bt_ready_paint) bt_events(bt_tick(now));
     bt_audio_tick(now, focus);
-    if (focus) bt_redraw(0);
+    if (focus && !bt_key_pending() && !os88_evq_pending()) bt_redraw(0);
 }
 
 void os88_paint(void *win)
 {
+    bt_geometry_changed();
     if (bt_about_up) os88_about_card_d(win, bt_about_lines);
     else { bt_face_paint(win, 1); os88_wm_grow(win); bt_scene_drawn(); }
     if (!bt_timer_ok && !bt_worker_live) {
@@ -353,7 +379,7 @@ void os88_onresize(int w, int h, void *win)
 {
     (void)w; (void)h; (void)win;
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY) {
-        bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
+        bt_pause(bt_session.last_tick); bt_screen = BT_S_PAUSE;
         bt_audio_sync();
     }
     bt_redraw(1);
@@ -446,6 +472,7 @@ static void *ovl_bt_main(void)
     if (!bt_win) { bt_audio_done(); return 0; }
     os88_wm_minsize(bt_win, 488, 150); /* content480x128, measured font/hitbox minimum */
     os88_menu_set(bt_win, &bt_menus);
+    bt_geometry_changed();
     bt_timer_ok = os88_wm_timer(bt_win, 1) == 0;
     bt_audio_state(bt_screen);
     return bt_win;

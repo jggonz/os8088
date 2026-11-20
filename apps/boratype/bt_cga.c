@@ -130,7 +130,7 @@ static void bt_cga_keyboard(void)
 
 static void bt_cga_paint(void)
 {
-    int i, start, at, limit, pose, portrait, portrait_x;
+    int i, start, at, limit, pose, portrait, portrait_x, key, column;
     BTProfile *p;
     if (bt_cga_pointer_up) { bt_cga_pointer(bt_cga_mx, bt_cga_my); bt_cga_pointer_up = 0; }
     bt_cga_grid_clear(bt_cga_keys_cached && (bt_screen == BT_S_PLAY || bt_screen == BT_S_PAUSE));
@@ -166,13 +166,29 @@ static void bt_cga_paint(void)
         }
         bt_cga_text(1, 18, "Up/Down choose. Enter starts lesson.", 1, 0);
     } else if (bt_screen == BT_S_RESULTS) {
-        bt_cga_text(1, 3, "GREAT SUCCESS? YOUR RESULT:", 3, 0);
-        bt_cga_text(1, 5, "Speed WPM:", 1, 0); bt_cga_number(16, 5, bt_session.wpm);
-        bt_cga_text(1, 7, "Accuracy %:", 1, 0); bt_cga_number(16, 7, bt_session.accuracy);
+        bt_cga_text(1, 3, "YOUR TYPING RESULT", 3, 0);
+        bt_cga_text(1, 5, "Speed WPM:", 1, 0);
+        if (bt_session.seconds) bt_cga_number(16, 5, bt_session.wpm);
+        else bt_cga_text(16, 5, "--", 3, 0);
+        bt_cga_text(1, 7, "Accuracy %:", 1, 0);
+        if (bt_session.attempts) bt_cga_number(16, 7, bt_session.accuracy);
+        else bt_cga_text(16, 7, "--", 3, 0);
         bt_cga_text(1, 9, "Errors:", 1, 0); bt_cga_number(16, 9, bt_session.errors);
         bt_cga_text(1, 11, "Best streak:", 1, 0); bt_cga_number(16, 11, bt_session.best_streak);
+        bt_cga_text(1, 12, "Active seconds:", 1, 0); bt_cga_number(16, 12, bt_session.seconds);
         bt_cga_text(1, 14, bt_session.ranked ? "Uninterrupted result" : "Practice / unranked", 3, 0);
         bt_cga_text(1, 17, "Enter Next  R Retry  P Practice", 1, 0);
+        bt_cga_text(1, 18, bt_session.attempts ? "Aim for 95% accuracy. Practice weak keys." : "No keys entered. Try F and J, or Retry.", 1, 0);
+        bt_cga_text(1, 20, "Weak:", 1, 0);
+        for (i = 0; i < 2; i++) {
+            key = bt_weak(i); if (!key) break;
+            column = 7 + i * 16;
+            if (key == 32) { bt_cga_text(column, 20, "SP ", 3, 0); column += 3; }
+            else { bt_cga_num[0] = key; bt_cga_num[1] = ' '; bt_cga_num[2] = 0; bt_cga_text(column, 20, bt_cga_num, 3, 0); column += 2; }
+            bt_cga_number(column, 20, p->key_error[key - 32]); column += os88_strlen(bt_cga_num);
+            bt_cga_text(column++, 20, "/", 1, 0); bt_cga_number(column, 20, p->key_attempt[key - 32]);
+        }
+        if (!i) bt_cga_text(7, 20, "20 attempts per key needed", 3, 0);
     } else if (bt_screen == BT_S_CHALLENGE) {
         bt_cga_text(1, 4, "CHOOSE YOUR CHALLENGE", 3, 0);
         bt_cga_text(1, 7, "1 = 1 min   2 = 3 min   3 = 5 min", 1, 0);

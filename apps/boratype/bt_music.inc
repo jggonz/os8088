@@ -1,6 +1,6 @@
 ; Boratype game-kit music pause/resume. No PCM, files or private driver.
 section .text
-; Preserve phase while releasing FM channels at focus loss/pause/speech.
+; Preserve phase while releasing FM channels at focus loss or pause.
 ; Save the sequencer's per-voice stream/duration state, reacquire patches
 ; on resume, then restore only the first12 bytes (the new channels stay).
 _bt_mhold:

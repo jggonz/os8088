@@ -35,7 +35,8 @@ void os88_font_run(int x,int y,const char *s,int ink,int paper){(void)s;(void)in
 static unsigned flushes,area;
 static int bandx,bandy,bandw,bandh;
 unsigned bx_bseg;
-static int expression=1,last_sprite=-1,status_seen,reaction_seen;
+static int expression=1,last_sprite=-1,status_seen,reaction_seen,accuracy_y,accuracy_dash;
+static unsigned achievement_seen;
 static const char *caption="Your fingers have returned from holiday.";
 const char *bt_caption(void){return caption;}int bt_expression(void){return expression;}
 const char *bt_reaction_history(int back){return back<4?"Your fingers have returned from holiday.":"";}
@@ -56,7 +57,7 @@ int bx_out(void){flushes++;area+=bandw*bandh;return 0;}
 void bx_setup(unsigned a,void *b,unsigned c,unsigned d,int e){(void)b;(void)c;(void)d;(void)e;bx_bseg=a;}
 void bx_setart2(unsigned a){(void)a;}
 void gk_init(int a){(void)a;}void gk_theme(const unsigned char *a){(void)a;}
-int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){if(!strcmp(s,tf_soundstatus()))status_seen++;if(!strncmp(s,"Borat: ",7))reaction_seen++;(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
+int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){if(!strcmp(s,tf_soundstatus()))status_seen++;if(!strncmp(s,"Borat: ",7))reaction_seen++;if(!strcmp(s,"ACCURACY"))accuracy_y=y;if((!strcmp(s,"-")&&y==accuracy_y)||strstr(s,"Accuracy -"))accuracy_dash++;for(int a=0;a<7;a++)if(strstr(s,tf_achnames[a]))achievement_seen|=1u<<a;(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
 int gk_textbox(int x,int y,int w,int h,const char *s,int c,int f,int fl){(void)h;return gk_text(x,y,w,s,c,f,fl);}
 void gk_box(int x,int y,int w,int h,int s,int f){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;}
 void gk_button(int x,int y,int w,int h,const char *s,int f,int st){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;(void)st;}
@@ -106,9 +107,10 @@ static void screens(void)
 {
  int s,i;
  for(s=0;s<=BT_S_PROFILE;s++){
-  bt_screen=s;status_seen=reaction_seen=0;bt_face_paint(0,1);
+  bt_screen=s;status_seen=reaction_seen=accuracy_dash=0;accuracy_y=-1;achievement_seen=0;bt_face_paint(0,1);
   if(s==BT_S_SETTINGS)assert(status_seen);
-  if(s==BT_S_RESULTS)assert(reaction_seen);
+  if(s==BT_S_RESULTS){assert(reaction_seen);if(!bt_session.attempts)assert(accuracy_dash);}
+  if(s==BT_S_RECORDS)assert(achievement_seen==127);
   if(s==BT_S_SETTINGS){int required[]={BT_A_MUSIC,BT_A_EFFECTS,BT_A_KEYCLICK,BT_A_ROAST,BT_A_DISPLAY,BT_A_TEST_MUSIC,BT_A_FULL,BT_A_SAVE,BT_A_BACK};
    assert(tf_nhit==9);for(unsigned a=0;a<sizeof(required)/sizeof(required[0]);a++){int found=0;for(i=0;i<tf_nhit;i++)if(tf_hit[i][4]==required[a])found=1;assert(found);}}
   for(i=0;i<tf_nhit;i++){
