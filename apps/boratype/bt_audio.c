@@ -8,7 +8,7 @@
 #define BT_ROAST_GAP 219 /* ceil(12 * 18.2065), wrap-safe unsigned delta */
 #define BT_IDLE_GAP 1093
 #define BT_CAPTION_TICKS 146
-#define BT_MSGS 63
+#define BT_MSGS 65
 /* Severity: 0 praise/help, 1 gentle, 2 classic, 3 extra roast. */
 typedef struct { const char *text; BTByte tag, level, expression; } BTReaction;
 static const BTReaction bt_jokes[BT_MSGS] = {
@@ -74,7 +74,9 @@ static const BTReaction bt_jokes[BT_MSGS] = {
  {"We can hear the dust settling.",6,3,5},
  {"No keys yet. Try a short lesson first.",11,0,1},
  {"Start with F and J, then try again.",11,0,1},
- {"Give the first letter one careful tap.",11,0,1}
+ {"Give the first letter one careful tap.",11,0,1},
+ {"Try the marked key to begin.",11,0,1},
+ {"Take one letter at a time.",11,0,1}
 };
 static BTWord bta_now, bta_spoke, bta_lastkey, bta_idle, bta_caption_at;
 static BTWord bta_errorfx, bta_backmark, bta_samplemark;

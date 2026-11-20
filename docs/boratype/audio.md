@@ -6,7 +6,7 @@ PCM playback paths or application audio heap claims. The BTT1 save format keeps
 its old voice byte as an unused compatibility field; it cannot enable sound.
 
 `bt_audio.c` consumes engine events and never changes scoring, lesson
-randomness, focus or prompts. Its 63 original messages include 40 roasts, tagged
+randomness, focus or prompts. Its 65 original messages include 40 roasts, tagged
 by measured events and severity. Gentle permits severity 1, Classic 1–2 and
 Extra 1–3. The director detects three consecutive errors, accuracy below 85%
 after at least 20 attempts, eight Backspaces, a ten-key recovery, real streak
@@ -19,6 +19,7 @@ Selection skips the previous four caption IDs. Ordinary reactions have a
 An empty run selects neutral instruction tag11 before record/poor/success
 classification, with the short poor-result stinger rather than a success or
 achievement cue. Its completed guard prevents repeated finish reactions.
+Five neutral choices guarantee one remains outside the recent-four history.
 There is no reaction queue. The latest four captions are available through
 `bt_reaction_history(0..3)` for results. Expressions remain active for eight
 seconds; captions stay until another reaction. Welcome is selected on the

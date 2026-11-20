@@ -119,6 +119,19 @@ int main(void)
  old=bta_message;f=fx;bt_audio_event(BT_EV_FINISH,300);
  assert(bta_message==old && fx==f); /* completed guard remains one-shot */
  assert(!memcmp(&before_welcome,&bt_session,sizeof(bt_session)));
+ /* Three empty runs followed by a cancelled streak can fill recent four
+  * with all original neutral choices plus praise. A0 must still replace
+  * that praise without selecting any of those four caption IDs. */
+ reset();
+ for(i=0;i<3;i++){bta_now=(BTWord)(300+i*300);bta_react(BT_R_EMPTY,1);}
+ bta_now=1200;bta_react(BT_R_STREAK,1);assert(bta_lasttag==BT_R_STREAK);
+ for(i=0;i<4;i++)prior[i]=bta_recent[i];
+ bt_audio_event(BT_EV_START,1201);
+ memcpy(&before_welcome,&bt_session,sizeof(bt_session));
+ bt_audio_event(BT_EV_FINISH,1202);
+ assert(bta_lasttag==BT_R_EMPTY && bta_stinger==4 && lastfx==8);
+ for(i=0;i<4;i++)assert(bta_message!=prior[i]);
+ assert(!memcmp(&before_welcome,&bt_session,sizeof(bt_session)));
  reset();bt_session.attempts=1;bt_session.accuracy=100;
  bt_audio_event(BT_EV_FINISH,300);
  assert(bta_lasttag==BT_R_SUCCESS && bta_stinger==3 && lastfx==7);
