@@ -293,7 +293,13 @@ def guest(q, bad):
         return
     # 6: a COPY across the far folders - the root's CALC.O88 into
     # FAR/NEWDIR with Ctrl+C / Ctrl+V (SPEC.md 22.3): the copy engine with a
-    # destination folder past 65,535, and a new chain allocated there
+    # destination folder past 65,535, and a new chain allocated there.
+    # New Folder's remount re-counts the free space (fm_measure, ~2,200
+    # sector reads on this disk) and with the mkdir in DISKOPS.DRV (SPEC.md
+    # 18.5.3) NEWDIR is listed BEFORE that count ends, so the UI is still
+    # busy: wait for it, or the '..' and the click below land inside the
+    # count and the click selects nothing
+    q.done(15.0)
     dbl(q, S, ui, w, "..")
     if not os88qemu.acted(q, lambda: "FILLER.BIN" in names(ui, w), secs=30,
                           what="the root again"):
