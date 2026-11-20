@@ -92,6 +92,9 @@ Reuse gkmus.inc's speaker/three-channel FM routing and priority leases.
 Independent music/effects/voice toggles; key ticks default off. Pause/focus
 loss silences music, exit releases every app-owned resource. No audio file
 read, decode, busy wait or blocking clip call in paint or input.
+Mute, audio-setting changes and pause apply their transport policy before
+drawing the resulting screen. Informational views over a paused lesson keep
+its music held until deliberate resume or return to the main menu.
 
 At least 48 tagged original captions, at least 24 roasts; Gentle/Classic/
 Extra, Classic default. Three errors, <85% after 20 attempts, correction

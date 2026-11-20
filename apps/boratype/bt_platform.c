@@ -35,6 +35,16 @@ void bt_cga_entry(void);
 void bt_action(int action);
 
 static void bt_message(const char *s) { os88_strcpy(bt_notice, s, sizeof(bt_notice)); }
+static void bt_audio_sync(void)
+{
+    int screen;
+    screen = bt_screen;
+    if (bt_return_screen == BT_S_PAUSE &&
+        (screen == BT_S_HELP || screen == BT_S_SETTINGS || screen == BT_S_RECORDS))
+        screen = BT_S_PAUSE;
+    bt_audio_state(screen);
+    bt_audio_tick(os88_ticks(), bt_focused && !bt_readonly);
+}
 static void bt_redraw(int all)
 {
     if (!bt_win || bt_in_cga) return;
@@ -77,7 +87,7 @@ static void bt_setscreen(int screen)
     bt_screen = screen;
     bt_about_up = 0;
     bt_guard_scan = bt_last_scan;
-    bt_audio_state(screen);
+    bt_audio_sync();
     bt_redraw(1);
 }
 
@@ -91,6 +101,7 @@ static void bt_begin(int mode)
     bt_notice[0] = 0;
     bt_audio_state(bt_screen);
     bt_audio_event(BT_EV_START, os88_ticks());
+    bt_audio_sync();
     bt_redraw(1);
 }
 
@@ -102,7 +113,7 @@ static void bt_pause_ui(void)
         bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
     } else return;
     bt_guard_scan = bt_last_scan;
-    bt_audio_state(bt_screen);
+    bt_audio_sync();
     bt_redraw(1);
 }
 
@@ -113,7 +124,7 @@ static void bt_fullscreen_toggle(void)
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY) {
         bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
     }
-    bt_audio_state(bt_screen);
+    bt_audio_sync();
     os88_wm_display(bt_win, &bt_video);
     if (!bt_full && bt_video.kind == OS88_VID_CGA && bt_store.display == 1) {
         caps = os88_fsx_caps(bt_win, &kind);
@@ -124,7 +135,7 @@ static void bt_fullscreen_toggle(void)
         if (bt_quit_pending) { os88_onclose(bt_win); os88_wm_close(bt_win); return; }
         if (bt_save_pending) os88_wm_wake(bt_win);
         bt_guard_scan = 0x40;
-        bt_audio_state(bt_screen);
+        bt_audio_sync();
         bt_redraw(1);
         return;
     }
@@ -188,7 +199,7 @@ void bt_action(int a)
             if (bt_video.kind == OS88_VID_CGA) bt_store.display ^= 1;
             else bt_message("Display follows the OS Control Panel selection.");
         } else return;
-        bt_audio_state(bt_screen);
+        bt_audio_sync();
         bt_schedule_save();
     }
     n = bt_readonly;
@@ -277,7 +288,7 @@ static void bt_key_route(int ascii, int scan)
     }
     if (bt_about_up) { bt_about_up = 0; bt_redraw(1); return; }
     if (scan == 0x3d) {
-        bt_master_sound ^= 1; bt_audio_state(bt_screen); bt_redraw(0); return;
+        bt_master_sound ^= 1; bt_audio_sync(); bt_redraw(0); return;
     }
     if (scan == 0x40 || (!ascii && scan == OS88_SCAN_ENTER)) {
         if (!bt_in_cga) bt_fullscreen_toggle(); return;
@@ -335,7 +346,7 @@ void os88_onresize(int w, int h, void *win)
     (void)w; (void)h; (void)win;
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY) {
         bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
-        bt_audio_state(bt_screen);
+        bt_audio_sync();
     }
     bt_redraw(1);
 }
@@ -358,7 +369,7 @@ static void ovl_bt_about(void *win)
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY) {
         bt_pause(os88_ticks()); bt_screen = BT_S_PAUSE;
     }
-    bt_audio_state(BT_S_PAUSE);
+    bt_audio_sync();
     bt_about_up = 1; os88_about_card(win, bt_about_lines);
 }
 static void ovl_bt_oncmd(int item, int menu, void *win)
@@ -372,7 +383,7 @@ static void ovl_bt_oncmd(int item, int menu, void *win)
     } else if (menu == 1) bt_action(item == 0 ? BT_A_LESSONS : item == 1 ? BT_A_PRACTICE : item == 2 ? BT_A_CHALLENGE : BT_A_RECORDS);
     else if (menu == 2) bt_action(item == 0 ? BT_A_PAUSE : item == 1 ? BT_A_FULL : BT_A_SETTINGS);
     else if (menu == 3) {
-        if (item == 0) { bt_master_sound ^= 1; bt_audio_state(bt_screen); bt_redraw(0); }
+        if (item == 0) { bt_master_sound ^= 1; bt_audio_sync(); bt_redraw(0); }
         else bt_audio_test(item == 2);
     } else bt_action(BT_A_HELP);
 }
