@@ -22,6 +22,7 @@ int main(void)
   hw=dims[d][0];hh=dims[d][1];hbpp=mono?1:4;bt_face_init(1,2,8192,hbpp);
   screens();assert(!memcmp(&menu_store_before,&bt_store,sizeof(bt_store)));
   assert(!memcmp(&menu_session_before,&bt_session,sizeof(bt_session)));
+  if(!tf_compact)assert(menu_has(BT_A_BACK)); /* final screen is Profile */
   if(hw>=600&&hh>=360){
    bt_screen=BT_S_LESSONS;bt_selection=23;bt_face_paint(0,1);
    assert(menu_has(BT_A_LESSON_BASE+23)&&menu_has(BT_A_START)&&menu_has(BT_A_BACK));

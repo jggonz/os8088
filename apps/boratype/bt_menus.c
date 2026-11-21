@@ -1,4 +1,4 @@
-/* Cold native menus. BORATYPE-SPEC3.1. Included by bt_face.c, shared band
+/* Cold native menus. BORATYPE-SPEC3.2. Included by bt_face.c, shared band
  * primitives and hit registry; every function stays in the eager overlay.
  * No new UI state, audio calls, claims or scoring changes. */
 static void tf_render(int x,int y,int w,int h,int kind,int item);
@@ -11,6 +11,16 @@ static const char *tf_resultlabels[]={"SPEED","ACCURACY","ERRORS","BEST STREAK",
 
 static int ovl_tm_visible(int x,int y,int w,int h)
 {return w>0&&h>0&&x<tf_sx+tf_sw&&x+w>tf_sx&&y<tf_sy+tf_sh&&y+h>tf_sy;}
+/* Tables keep their navy ground regardless of the common button theme.
+ * Register the same action rectangle, then compose one opaque row band. */
+static void ovl_tm_row(int x,int y,int w,int h,int action,int selected)
+{
+    if(tf_nhit<TF_HITS){tf_hit[tf_nhit][0]=x;tf_hit[tf_nhit][1]=y;tf_hit[tf_nhit][2]=w;tf_hit[tf_nhit][3]=h;tf_hit[tf_nhit++][4]=action;}
+    if(!ovl_tm_visible(x,y,w,h))return;
+    bx_fill(x,y,x+w-1,y+h-1,selected?(tf_mono?15:TF_YELLOW):tf_ground());
+    if(selected&&tf_mono){bx_fill(x,y,x+w-1,y,0);bx_fill(x,y,x+2,y+h-1,0);}
+    bx_fill(x,y+h-1,x+w-1,y+h-1,tf_ink(TF_CYAN));
+}
 static void ovl_tm_panel(int x,int y,int w,int h,const char *title)
 {
     if(!ovl_tm_visible(x,y,w,h))return;
@@ -145,12 +155,12 @@ static void ovl_tm_lessons(int x,int y,int w,int h,BTProfile *p,int rich)
     tf_text(x+c-55,y+9,49,"STATUS",TF_WHITE,BT_F_SMALL);
     for(i=first;i<first+rows&&i<BT_LESSONS;i++){
         n=y+27+(i-first)*rh;
-        tf_button(x+4,n,c-8,rh-1,"",BT_A_LESSON_BASE+i,bt_selection==i);
-        tf_text(x+10,n+4,c-122,bt_lessons[i].name,bt_selection==i?0:TF_WHITE,tf_font);
+        ovl_tm_row(x+4,n,c-8,rh-1,BT_A_LESSON_BASE+i,bt_selection==i);
+        tf_text(x+10,n+2,c-122,bt_lessons[i].name,bt_selection==i?(tf_mono?15:0):TF_WHITE,BT_F_TITLE);
         if(p->lesson_done[i]){tf_number(0,p->lesson_best[i]);tf_append(tf_number(0,p->lesson_best[i]),"%");}
         else tf_append(0,"-");
-        tf_text(x+c-107,n+4,48,tf_buf,bt_selection==i?0:TF_YELLOW,tf_font);
-        tf_text(x+c-55,n+4,49,p->lesson_best[i]>=95?"*":p->lesson_done[i]?"+":"Ready",bt_selection==i?0:TF_GREEN,BT_F_SMALL);
+        tf_text(x+c-107,n+2,48,tf_buf,bt_selection==i?(tf_mono?15:0):TF_YELLOW,BT_F_TITLE);
+        tf_text(x+c-55,n+5,49,p->lesson_best[i]>=95?"*":p->lesson_done[i]?"+":"Ready",bt_selection==i?(tf_mono?15:0):TF_GREEN,BT_F_SMALL);
     }
     n=y+ph-22;
     tf_button(x+6,n,54,17,"Prev",BT_A_LESSON_BASE+(first?first-1:0),0);
@@ -191,10 +201,12 @@ static void ovl_tm_records(int x,int y,int w,int h,BTProfile *p,int rich)
     tf_text(x+3*table/4,yy+6,table/4-16,"ACCURACY",TF_WHITE,BT_F_SMALL);
     d=bt_ch_duration;
     for(i=0;i<4;i++){
-        n=yy+23+i*24;tf_button(x+4,n,table-16,23,"",BT_A_DIFFICULTY_BASE+i,bt_ch_diff==i);
-        tf_text(x+10,n+5,table/2-12,tf_group[i],bt_ch_diff==i?0:TF_WHITE,tf_font);
-        tf_number(0,p->record_wpm[d][i]);tf_text(x+table/2,n+5,table/4,tf_buf,bt_ch_diff==i?0:TF_YELLOW,tf_font);
-        tf_number(0,p->record_accuracy[d][i]);tf_append(tf_number(0,p->record_accuracy[d][i]),"%");tf_text(x+3*table/4,n+5,table/4-16,tf_buf,bt_ch_diff==i?0:TF_YELLOW,tf_font);
+        n=yy+23+i*24;ovl_tm_row(x+4,n,table-16,23,BT_A_DIFFICULTY_BASE+i,bt_ch_diff==i);
+        tf_text(x+10,n+3,table/2-12,tf_group[i],bt_ch_diff==i?(tf_mono?15:0):TF_WHITE,BT_F_TITLE);
+        if(p->record_wpm[d][i]||p->record_accuracy[d][i])tf_number(0,p->record_wpm[d][i]);else tf_append(0,"-");
+        tf_text(x+table/2,n+3,table/4,tf_buf,bt_ch_diff==i?(tf_mono?15:0):TF_YELLOW,BT_F_TITLE);
+        if(p->record_wpm[d][i]||p->record_accuracy[d][i])tf_append(tf_number(0,p->record_accuracy[d][i]),"%");else tf_append(0,"-");
+        tf_text(x+3*table/4,n+3,table/4-16,tf_buf,bt_ch_diff==i?(tf_mono?15:0):TF_YELLOW,BT_F_TITLE);
     }
     ovl_tm_mascot(x+table,y,w-table,160);
     yy=y+162;mastered=ovl_tm_mastered(p);earned=0;for(i=0;i<7;i++)if(p->achievements&(1<<i))earned++;
@@ -224,7 +236,7 @@ static void ovl_tf_resultcard(int x,int y,int w,BTProfile *p)
     tf_text(sx,y,sw,!bt_session.attempts?"No keys entered":bt_session.new_record?"PERSONAL BEST!":bt_session.ranked?"Completed":"Practice / unranked",TF_YELLOW,tf_font);
     sy=y+18;rh=h>=260?24:18;ovl_tm_panel(sx,sy,sw,5*rh+3,"");
     for(i=0;i<5;i++){
-        tf_text(sx+7,sy+i*rh+3,sw/2-12,tf_resultlabels[i],TF_WHITE,tf_font);n=0;
+        tf_text(sx+7,sy+i*rh+3,sw/2-12,tf_resultlabels[i],TF_WHITE,rh>=24?BT_F_TITLE:tf_font);n=0;
         if(i==0){n=bt_session.seconds?tf_number(0,bt_session.wpm):tf_append(0,"-");tf_append(n," WPM");}
         else if(i==1){if(bt_session.attempts){n=tf_number(0,bt_session.accuracy);tf_append(n,"%");}else tf_append(0,"-");}
         else if(i==2)tf_number(0,bt_session.errors);else if(i==3)tf_number(0,bt_session.best_streak);
@@ -329,6 +341,7 @@ static void ovl_tm_other(int x,int y,int w,int h,int rich,BTProfile *p)
             tf_button(x+(rich?i%2:0)*(c+8),yy,c,rich?rh-6:bh,tf_buf,BT_A_PROFILE_BASE+i,i==bt_store.selected);
         }
         if(rich){y+=2*rh+10;ovl_tf_lines(x,y,w,2,bt_profile_edit?"Type name; Enter saves.":"Select a profile. First key replaces its name.");y+=38;ovl_tm_profile(x,y,w,p);}
+        if(!tf_compact)tf_button(x,tf_bottom-29,w,25,"Continue",BT_A_BACK,1);
     }else if(bt_screen==BT_S_PAUSE){
         if(rich){c=w/3;ovl_tm_mascot(x,y,c,h);x+=c+12;w-=c+12;}
         if(!tf_compact){tf_line(x,y,w,"Your passage and score are safe.");y+=24;}
@@ -345,13 +358,20 @@ static void ovl_tm_other(int x,int y,int w,int h,int rich,BTProfile *p)
 }
 static void ovl_tf_drawbody(void)
 {
-    int x,y,w,h,rich,n,c,i;BTProfile *p;
+    int x,y,w,h,rich,n,c,i;BTProfile *p;const char *heading;
     p=&bt_store.profile[bt_store.selected];tf_nhit=0;
     x=tf_x+12;y=tf_top+5;w=tf_w-24;rich=tf_w>=600&&tf_h>=360;
-    tf_text(x,y,w,tf_screenname[bt_screen],TF_YELLOW,tf_title);
+    heading=tf_screenname[bt_screen];
+    if(rich){
+        if(bt_screen==BT_S_LESSONS)heading="CHOOSE YOUR LESSON";
+        else if(bt_screen==BT_S_RECORDS)heading="YOUR GREAT SUCCESSES";
+        else if(bt_screen==BT_S_SETTINGS)heading="SOUND AND DISPLAY";
+        else if(bt_screen==BT_S_RESULTS&&bt_session.mode==BT_CHALLENGE&&bt_session.status==BT_FINISHED)heading="CHALLENGE COMPLETE";
+    }
+    tf_text(x,y,w,heading,TF_YELLOW,tf_title);
     if(rich&&bt_screen==BT_S_RECORDS){
         n=tf_append(0,p->name);n=tf_append(n,"  Practice: ");n=tf_number(n,p->practice_minutes);tf_append(n," min");
-        tf_text(x+w/2,y+6,w/2,tf_buf,TF_WHITE,BT_F_SMALL);
+        tf_text(x+w-220,y+8,220,tf_buf,TF_WHITE,BT_F_SMALL);
     }
     y+=tf_compact?14:28;h=tf_bottom-y-4;
     if(bt_screen==BT_S_HOME)ovl_tm_home(x,y,w,h,p,rich);
