@@ -190,6 +190,7 @@ void bt_action(int a)
         bt_selection = a - BT_A_LESSON_BASE;
     } else if (a >= BT_A_PROFILE_BASE && a < BT_A_PROFILE_BASE + BT_PROFILES) {
         bt_store.selected = a - BT_A_PROFILE_BASE;
+        bt_profile_edit = 0;
         bt_selection = bt_recommend(); bt_schedule_save();
     } else if (a >= BT_A_DURATION_BASE && a < BT_A_DURATION_BASE + 3) {
         bt_ch_duration = a - BT_A_DURATION_BASE;

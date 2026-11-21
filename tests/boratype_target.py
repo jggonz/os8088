@@ -43,9 +43,9 @@ CONSTANTS = ("BT_LESSONS BT_PROFILES BT_KEYS BT_PASSAGE BT_MASTERY BT_LESSON BT_
              "BT_CHALLENGE BT_IDLE BT_READY BT_ACTIVE BT_PAUSED BT_FINISHED BT_ACH_FIRST "
              "BT_ACH_MASTER BT_ACH_25 BT_ACH_50 BT_S_HOME BT_S_LESSONS BT_S_PLAY BT_S_RESULTS "
              "BT_S_PRACTICE BT_S_CHALLENGE BT_S_RECORDS BT_S_SETTINGS BT_S_HELP BT_S_PAUSE "
-             "BT_S_PROFILE BT_A_START BT_A_LESSON_BASE BT_A_RETRY BT_A_MUSIC BT_A_EFFECTS "
+             "BT_S_PROFILE BT_A_START BT_A_LESSON_BASE BT_A_PROFILE_BASE BT_A_RETRY BT_A_MUSIC BT_A_EFFECTS "
              "BT_A_KEYCLICK BT_A_ROAST BT_A_TEST_MUSIC "
-             "BT_A_DURATION_BASE BT_A_DIFFICULTY_BASE BT_A_PAUSE").split()
+             "BT_A_DURATION_BASE BT_A_DIFFICULTY_BASE BT_A_PAUSE BT_R_EMPTY").split()
 
 
 def target_layout():
@@ -58,7 +58,7 @@ def target_layout():
     types = {"BTSession": SESSION_BYTES + SESSION_WORDS + ["key_attempt", "key_error", "passage"],
              "BTProfile": PROFILE_FIELDS, "BTStore": STORE_FIELDS}
     lines = ['#include <stddef.h>', '#include <stdio.h>', '#define BT_HOST',
-             '#include "bt.h"', '#include "bt_face.h"', 'int main(void) {',
+             '#include "bt.h"', '#include "bt_face.h"', '#include "bt_audio.h"', 'int main(void) {',
              'printf("word %u\\n", (unsigned)sizeof(BTWord));']
     for typ, names in types.items():
         lines += [f'printf("{typ}.size %u\\n", (unsigned)sizeof({typ}));',
@@ -213,6 +213,8 @@ class App:
         def locate():
             n = self.global_word("tf_nhit")
             assert 0 <= n <= 32, n
+            if not n:  # A sliced scene may be between cache clear and first button.
+                return False
             raw = self.p.read(self.sym["_tf_hit"], n * 10)
             hits = [struct.unpack_from("<5h", raw, i * 10) for i in range(n)]
             found["hits"] = hits
@@ -602,6 +604,15 @@ def adapter_probe(app, directory, requested):
 def smoke(app, directory, negative):
     L, ui, ev = app.L, app.ui, app.evidence
     app.shot(directory, "01-home")
+    app.press("KeyN").wait_screen("PROFILE")
+    for number in range(4):
+        app.click_action(L["BT_A_PROFILE_BASE"] + number)
+        name = "QA" + str(number + 1)
+        ui.type(name)
+        assert app.profile(number).split(b"\0")[0].decode("ascii") == name
+    app.click_action(L["BT_A_PROFILE_BASE"])
+    app.shot(directory, "01b-four-profiles")
+    app.press("Enter").wait_screen("HOME")
     app.press("F2").wait_screen("LESSONS")
     # Select lesson1 deliberately even on a reused store with later Continue.
     app.click_action(L["BT_A_LESSON_BASE"])
@@ -647,6 +658,14 @@ def smoke(app, directory, negative):
     app.press("Enter").wait_screen("PLAY")
     mixed = app.state()["passage"]
     assert any(c.isupper() for c in mixed) and any(c in ".,!;" for c in mixed)
+    for character in mixed[:8]:
+        app.key(character, True)
+    app.shot(directory, "03c-mixed-native-input")
+    app.press("F6").wait_screen("PAUSE")
+    app.press("F4").wait_screen("PLAY")
+    app.shot(directory, "03d-mixed-fullscreen-input")
+    app.press("F6").wait_screen("PAUSE")
+    app.press("F4").wait_screen("PLAY")
     app.finish_passage()
     mixed_result = app.state()
     assert (mixed_result["attempts"], mixed_result["correct"], mixed_result["errors"], mixed_result["net"]) == (len(mixed), len(mixed), 0, len(mixed))
@@ -726,6 +745,7 @@ def challenges(app, directory):
         assert result["ranked"] and result["started"] and result["committed"]
         assert result["attempts"] == result["errors"] == result["correct"] == result["net"] == 0
         assert not result["new_record"]
+        assert app.global_word("bta_lasttag") == L["BT_R_EMPTY"], "empty challenge received success praise"
         off = L["BTProfile.record_wpm"]
         end = L["BTProfile.record_accuracy"] + 24
         assert app.profile()[off:end] == old[off:end], "no-input test replaced a record"
@@ -785,9 +805,10 @@ def audio_probe(app, directory):
 
 def persistence_and_readonly(ui, app, args, symbols, layout, evidence):
     expected, music = app.profile(), app.store_byte("music")
+    profiles = [app.profile(i).hex() for i in range(4)]
     ui.close(app.win, limit=90)
     reopened = App(ui, open_package(ui, args.path), symbols, layout, evidence)
-    assert reopened.profile() == expected, "save/close/reopen lost profile fields"
+    assert [reopened.profile(i).hex() for i in range(4)] == profiles, "save/close/reopen lost profile fields"
     assert reopened.store_byte("music") == music, "saved music preference lost"
     reopened.shot(args.evidence, "09-reopened")
     generation = reopened.generation()
@@ -798,7 +819,10 @@ def persistence_and_readonly(ui, app, args, symbols, layout, evidence):
     ui._wait(lambda: second.text("bt_notice").startswith("Read-only:"), "second instance save refused", 30)
     assert second.generation() == generation
     second.shot(args.evidence, "10-readonly-instance")
+    second.press("F6")
+    ui._wait(lambda: second.global_word("bt_full") == 1, "readonly instance fullscreen", 30)
     ui.close(second.win, limit=90)
+    assert not ui._word("wm_fs"), "closing fullscreen instance retained the desktop latch"
     ui.raise_window(reopened.win)
     assert reopened.generation() == generation and reopened.profile() == expected
     ui.close(reopened.win, limit=90)
@@ -835,7 +859,7 @@ def persistence_and_readonly(ui, app, args, symbols, layout, evidence):
             newest = copy
     evidence["persistence"] = {"close_reopen": "PASS", "single_writer": "PASS",
                                "exported_save_copies": copies, "reboot": "PENDING"}
-    return {"profile": expected.hex(), "music": music, "generation": newest["generation"],
+    return {"profile": expected.hex(), "profiles": profiles, "music": music, "generation": newest["generation"],
             "system": str(exported[0]), "apps": str(exported[1])}
 
 
@@ -847,7 +871,7 @@ def reboot_verify(args, symbols, layout, evidence, saved):
                          quick=True, label="boratype-reboot") as ui:
             verify_adapter(ui, args.adapter, evidence)
             app = App(ui, open_package(ui, args.path), symbols, layout, evidence)
-            assert app.profile().hex() == saved["profile"], "cold reboot lost progress/statistics"
+            assert [app.profile(i).hex() for i in range(4)] == saved["profiles"], "cold reboot lost progress/statistics"
             assert app.store_byte("music") == saved["music"], "cold reboot lost preference"
             assert app.generation() == saved["generation"], "cold reboot loaded wrong save generation"
             assert not app.global_word("bt_readonly"), "fresh machine retained obsolete writer ownership"
