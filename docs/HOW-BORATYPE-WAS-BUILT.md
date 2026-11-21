@@ -188,3 +188,20 @@ strip signatures let static hair, shoulders and scenery stay on screen while
 the eyes or mouth move. The revisions to the timing probe examine signatures
 only after a completed display write. A guest can now fail the animation
 check even when its logical frame counter continues to advance.
+
+A 25 MHz 386 running 86Box exposed a fault that the host geometry checks
+couldn't see. The first 208-pixel lesson illustration overran a packed
+sprite row intended for 120 pixels. The compositor subsequently read the
+overwritten bytes as its plane count. The finished scene format skips that
+scratch row entirely. The packer emits four bitplanes, and the native
+renderer copies just the intersection with the active window band.
+On the same emulated 386, opening Lessons from Home took 439 ms to show
+the complete selector body, down from 639 ms with the enlarged nibble
+buffer. The comparison sampled the guest display every 25 ms.
+
+Guest captures also informed the composition. A center crop lost the
+Settings tutor's mouth. The final card keeps the complete drawing and
+speech balloon. The small Records plaques now have separate 16-pixel
+locked and earned badges, and the white spacebar spans most of the home
+keyboard. The full QWERTY symbol set and all seven achievement states
+remain selectable or visible on the appropriate screens.
