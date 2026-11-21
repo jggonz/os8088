@@ -1847,6 +1847,11 @@ FAST = [
         "reactions, sampled F weakness, recommended drill and independently selected digits practice",
         needs=("marty", "nasm", "cc"), timeout=360,
         wants=("build/boratype360.img",)),
+    Row("boratypemotion", "soak", py("tests/boratype_motion.py"), 31.1,
+        "SPEC.md 134: three hardware mistakes must show six complete VGA reaction poses "
+        "in order on the 4.77 MHz XT, identified from actual scanout pixels",
+        needs=("marty", "nasm", "cc"), timeout=240,
+        wants=("build/boratype360.img", "build/os8088-360.img")),
     Row("boratypeperformance", "soak", py("tests/boratype_performance.py",
         "--evidence", "build/boratype-final/performance"), 19.3,
         "SPEC.md 134: real4.77MHz input through30 hardware keys, completed "
