@@ -67,7 +67,9 @@ static unsigned tf_asig[5],tf_astart,tf_aframe_at,tf_ablink_at;
 static int tf_aready,tf_bigready,tf_aframe,tf_aseq,tf_aexpr=-1,tf_apos,tf_abase=-1;
 static int tf_adone,tf_aload=-1,tf_aphase,tf_ashown=-1,tf_amask,tf_acapturn,tf_idleturn;
 static int tf_ax,tf_ay,tf_aw,tf_ah,tf_avariant,tf_avisible;
-static const char *tf_acaption;
+static const char *tf_acaption,*tf_capmsg;
+static unsigned char tf_capstart[16],tf_caplen[16];
+static int tf_capwidth,tf_capfont,tf_capcount;
 int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw);
 int bt_anim_planar(unsigned seg,unsigned off,int x,int y,int height);
 void bt_anim_rawstrip(unsigned seg,unsigned off);
@@ -496,51 +498,37 @@ static void ovl_tf_drawportrait(void)
     gk_box(tf_px,tf_py,tf_pw,tf_ph,GK_RAISED,tf_ground());
     ovl_bt_portrait_scene(tf_px,tf_py+6,tf_pw,tf_ph>=150?120:48);
 }
-/* A four-row repaint can intersect the same 10px speech line three times.
- * Cache word boundaries by immutable director string/width/font. Only copy
- * and stamp glyphs for lines inside the current band. */
-static const char *tf_cap_source;
-static unsigned char tf_cap_start[6],tf_cap_length[6],tf_cap_count;
-static int tf_cap_width,tf_cap_font;
-static void ovl_tf_wrapcaption(const char *s,int width)
+static void ovl_tf_caption_prepare(const char *text,int width)
 {
-    int start,n,space,used,c;
-    tf_cap_source=s;tf_cap_width=width;tf_cap_font=tf_font;tf_cap_count=0;
-    start=0;
-    while(s[start] && tf_cap_count<6){
-        n=0;space=0;used=0;
-        while(s[start+n] && n<78){
-            c=(unsigned char)s[start+n];if(c<32 || c>126)c=32;
-            used+=tf_glyphw[c-32];if(used>width)break;
-            if(c==32)space=n;n++;
+    int pos,n,last,advance,c;
+    if(tf_capmsg==text&&tf_capwidth==width&&tf_capfont==tf_font)return;
+    tf_capmsg=text;tf_capwidth=width;tf_capfont=tf_font;tf_capcount=0;pos=0;
+    while(text[pos]&&tf_capcount<16){
+        n=0;last=0;advance=0;
+        while(text[pos+n]&&n<78){
+            c=(unsigned char)text[pos+n];if(c<32||c>126)c=32;
+            advance+=tf_glyphw[c-32];if(advance>width)break;
+            if(text[pos+n]==' ')last=n;n++;
         }
-        if(s[start+n] && space)n=space;
-        if(!n)n=1;
-        tf_cap_start[tf_cap_count]=start;tf_cap_length[tf_cap_count++]=n;
-        start+=n;while(s[start]==' ')start++;
+        if(text[pos+n]&&last>0)n=last;if(!n)n=1;
+        tf_capstart[tf_capcount]=pos;tf_caplen[tf_capcount]=n;tf_capcount++;
+        pos+=n;while(text[pos]==' ')pos++;
     }
 }
 static void ovl_tf_drawcaption(void)
 {
-    int x,y,w,rows,i,n,line,ink,bottom;
-    const char *s;
-    if(tf_compact){x=tf_x+8;y=tf_statsy-10;w=tf_w-16;rows=1;ink=tf_ink(TF_WHITE);}
-    else{
-        x=tf_px+5;y=tf_py+(tf_ph>=150?132:60);w=tf_pw-10;
-        bottom=tf_py+tf_ph-5;
-        if(w<=12 || bottom<=y || y>tf_sy+tf_sh || bottom<tf_sy)return;
-        bx_fill(x,y,x+w-1,bottom,0);
-        bx_fill(x+2,y+1,x+w-3,bottom-1,15);
-        x+=5;w-=10;y+=2;rows=(bottom-y)/(tf_th+2);ink=0;
-    }
-    if(rows<1)return;
-    s=bt_caption();
-    if(tf_cap_source!=s || tf_cap_width!=w || tf_cap_font!=tf_font)ovl_tf_wrapcaption(s,w);
-    for(line=0;line<rows && line<tf_cap_count;line++,y+=tf_th+2){
-        if(y>=tf_sy+tf_sh || y+tf_th<=tf_sy)continue;
-        n=tf_cap_length[line];
-        for(i=0;i<n;i++)tf_wrap[i]=s[tf_cap_start[line]+i];
-        tf_wrap[n]=0;bx_text(x,y,tf_wrap,ink,tf_font);
+    int x,y,w,rows,i,k,line;
+    if(tf_compact){x=tf_x+8;y=tf_statsy-10;w=tf_w-16;rows=1;}
+    else{x=tf_px+6;y=tf_py+(tf_ph>=150?132:60);w=tf_pw-12;rows=(tf_py+tf_ph-y-5)/(tf_th+2);}
+    ovl_tf_caption_prepare(bt_caption(),w);
+    if(rows>tf_capcount)rows=tf_capcount;
+    for(i=0;i<rows;i++){
+        line=y+i*(tf_th+2);
+        if(line>=tf_sy+tf_sh||line+tf_th<=tf_sy)continue;
+        for(k=0;k<tf_caplen[i];k++)tf_wrap[k]=tf_capmsg[tf_capstart[i]+k];tf_wrap[k]=0;
+        /* The cached line already fits. Avoid a second full metric/fit pass;
+         * bx_text composes into the same opaque clipped drawing band. */
+        bx_text(x,line,tf_wrap,tf_ink(TF_WHITE),tf_font);
     }
 }
 static void ovl_tf_drawhint(void)
@@ -884,7 +872,7 @@ static unsigned tf_menukey(void)
 void bt_face_init(unsigned art,unsigned band,unsigned cap,int bpp)
 {
     int i;
-    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;tf_adone=0;tf_aload=-1;tf_ashown=-1;tf_acapturn=0;tf_idleturn=0;
+    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;tf_adone=0;tf_aload=-1;tf_ashown=-1;tf_acapturn=0;tf_idleturn=0;tf_capmsg=0;
     ovl_tf_anim_load(bpp);
     for(i=0;i<TF_KEYS;i++)tf_keycache[i]=255;
     for(i=0;i<TF_CELLS;i++){tf_cellchar[i]=255;tf_cellstyle[i]=255;}

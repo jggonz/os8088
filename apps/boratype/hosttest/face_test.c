@@ -236,6 +236,13 @@ static void caption_change(void)
   assert(n<2*((tf_ph+3)/4+24)-1);
  }
  area=flushes=0;bt_face_paint(0,0);assert(!area&&!flushes);
+ assert(tf_capmsg==caption&&tf_capcount>0);
+ {int pos=0;for(int i=0;i<tf_capcount;i++){
+   assert(tf_caplen[i]>0&&tf_caplen[i]<=78);
+   for(int k=0;k<tf_caplen[i];k++)tf_wrap[k]=caption[tf_capstart[i]+k];tf_wrap[tf_caplen[i]]=0;
+   assert(bx_twidth(tf_wrap,tf_font)<=tf_capwidth);
+   for(int k=0;k<tf_caplen[i];k++)if(tf_wrap[k]!=' '){while(caption[pos]==' ')pos++;assert(tf_wrap[k]==caption[pos++]);}
+  }while(caption[pos]==' ')pos++;assert(!caption[pos]);}
  assert(!memcmp(&before,&bt_session,sizeof(before)));caption=old;bt_face_paint(0,1);
 }
 static void screens(void)

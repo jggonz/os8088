@@ -150,6 +150,9 @@ one-shot only after completion and its minimum dwell; delayed painting does
 not skip its remaining poses. Neutral idle is a completed stable frame between
 blinks. Cosmetic jobs receive alternate idle opportunities before deferred mirror,
 footer, counter and hint work; urgent typing feedback keeps priority.
+Caption line breaks are cached per caption/font/width using the existing glyph
+advance table. Only intersecting fitted lines compose glyphs; four-row updates
+do not repeat whole-message wrapping or text-fit work.
 Caption strips and portrait strips share those opportunities fairly; blink
 gets its small eye update first. There is no unbounded frame queue.
 
