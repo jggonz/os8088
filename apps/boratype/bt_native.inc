@@ -527,6 +527,7 @@ section .text
 _bt_scene_copy:
     push bp
     mov bp,sp
+    push word [bx_psz]              ; destination plane size before changing DS
     push ds
     push es
     push si
@@ -564,7 +565,7 @@ _bt_scene_copy:
     jnz .row
     pop di
     pop si
-    add di,[cs:bx_psz]
+    add di,[bp-2]
     add si,[bp+14]
     pop ax
     dec ax
@@ -573,6 +574,7 @@ _bt_scene_copy:
     pop si
     pop es
     pop ds
+    add sp,2
     pop bp
     ret
 section .text
