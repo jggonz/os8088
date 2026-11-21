@@ -282,6 +282,7 @@ class Probe:
             pending["mirror_cell"] = self.app.p.word(self.S["_tf_dirtyfirst"] + 4)
             ret = self.return_offset(regs)
             paints = 0
+            rectangles = []
             for _ in range(50):
                 self.arm(ret, *(self.S[name] for name in OUTPUTS))
                 self.m.run()
@@ -289,6 +290,8 @@ class Probe:
                 if regs["ip"] == ret:
                     break
                 paints += 1
+                rectangles.append({name: self.app.p.word(self.S[name]) for name in
+                                   ("bx_x0", "bx_y0", "bx_w", "bx_h")})
             else:
                 raise AssertionError("periodic callback did not finish")
             cycles = self.m.status()["cycles"] - start
@@ -296,6 +299,7 @@ class Probe:
             sig = struct.unpack("<5H", self.app.p.read(self.S["_tf_asig"], 10))
             displayed.update(complete.get(sig, ()))
             records.append({"index": i, "cycles": cycles, "ms": ms(cycles), "output_entries": paints,
+                            "output_bands": rectangles,
                             "complete_portrait_frames": complete.get(sig, []), "pending_at_entry": pending})
             assert cycles <= int(HZ * limit_ms / 1000), records[-1]
             if i + 1 < count:
@@ -522,8 +526,8 @@ def main():
                     burst(probe, 8, args.feedback_ms, result["bursts"])
                 result["periodic"] = probe.periodic(args.periodic_samples, args.periodic_ms)
                 result["stack"] = guard.report()
-                ui.still(); w, h, rgb = ui.m.fbuf(); capture = args.evidence / "performance-play.png"
-                M.write_png_rgb(str(capture), w, h, rgb)
+                app.shot(args.evidence, "performance-play")
+                capture = args.evidence / "performance-play.png"
                 result["capture"] = str(capture)
                 result["sound_after"] = probe.sound()
         if args.relocation or args.relocation_only:

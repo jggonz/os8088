@@ -148,6 +148,9 @@ static void mirror_and_stat_damage(void)
  bt_face_paint(0,1);tf_cosneeded=tf_capneeded=0;tf_statpend=1;tf_statrow[0]=0;steps=0;
  while(tf_statpend){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
   assert(area<=(unsigned)((tf_statsw/5+8)*4));assert(++steps<=4);}
+ tf_hintpending=1;tf_hintrow=0;steps=0;
+ while(tf_hintpending){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
+  assert(area<=(unsigned)(tf_w*4));assert(++steps<=4);}
  assert(!memcmp(&before,&bt_session,sizeof(before)));bt_face_paint(0,1);
 }
 static unsigned char animbank[3][65000];static unsigned animlen[3],unpacks;

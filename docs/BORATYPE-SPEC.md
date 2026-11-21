@@ -233,7 +233,7 @@ wait for queued accepted text to finish, and a new dirty range starts with
 only its changed cells. Periodic statistics repaint their value bands;
 their frames and static labels belong to full damage.
 Each idle pass advances at most one accepted-input cell or four scanlines
-of one statistic value, so queued typing can run between those chunks.
+of one hint/statistic value, so queued typing can run between those chunks.
 
 Urgent target cells and physical-key feedback precede statistics, hints,
 progress and portrait cosmetics. Progress damages only the changed fill

@@ -72,7 +72,7 @@ int os88_part_fetch(int i);int os88_part_movable(int i);void os88_part_drop(int 
 unsigned os88_part_seg(int i);
 void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n);
 static int tf_cosneeded,tf_capline,tf_capneeded;
-static int tf_statsx,tf_statsw,tf_hintpending,tf_statpend,tf_statnext,tf_footpending,tf_footrow;
+static int tf_statsx,tf_statsw,tf_hintpending,tf_hintrow,tf_statpend,tf_statnext,tf_footpending,tf_footrow;
 static unsigned char tf_statrow[5];
 static int tf_dirtyfirst[3],tf_dirtylast[3];
 static int tf_vsx,tf_vsy; /* independent sound-settings status line */
@@ -886,7 +886,7 @@ void bt_face_paint(void *win,int full)
     key=tf_string(5381,bt_caption());
     if(full||key!=tf_captionkey){tf_captionkey=key;tf_cosneeded=1;tf_capneeded=1;tf_capline=0;}
     key=tf_mix(tf_target(),bt_session.status);key=tf_mix(key,bt_session.countdown);key=tf_mix(key,tf_go_left!=0);key=tf_mix(key,bt_session.last_wrong);
-    if(full||key!=tf_hintkey){if(full&&tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_y+2,tf_w-i-70,8,7,0);}tf_hintpending=!full;tf_hintkey=key;}
+    if(full||key!=tf_hintkey){if(full&&tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_y+2,tf_w-i-70,8,7,0);}tf_hintpending=!full;tf_hintrow=0;tf_hintkey=key;}
     if(textchange){
         for(i=0;i<2;i++){tf_dirtyfirst[i]=-1;tf_dirtylast[i]=-1;}if(full){tf_dirtyfirst[2]=-1;tf_dirtylast[2]=-1;}
         if(full||oldview!=tf_view||oldinput!=tf_inputview||tf_savedlen!=bt_session.length||tf_savedcomplete!=bt_session.completed||tf_savedpos+1<bt_session.pos||bt_session.pos+1<tf_savedpos){
@@ -934,7 +934,10 @@ void bt_face_paint(void *win,int full)
         if(tf_cosneeded&&(tf_idleturn||(!tf_aseq&&tf_aframe>0&&tf_aframe<4)))ovl_tf_cosmetics();
         else if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,tf_cw,h,8,i);tf_dirtyfirst[2]++;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
         else if(tf_footpending){h=tf_h-(tf_bottom-tf_y)-tf_footrow;if(h>4)h=4;tf_render(tf_x,tf_bottom+tf_footrow,tf_w,h,2,0);tf_footrow+=h;if(tf_footrow>=tf_h-(tf_bottom-tf_y))tf_footpending=0;}
-        else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_hinty,tf_w-i-70,tf_hinth,7,0);}else tf_render(tf_promptx,tf_hinty,tf_cols*tf_cw<344?tf_cols*tf_cw:344,tf_hinth,7,0);tf_hintpending=0;}
+        else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){h=tf_hinth-tf_hintrow;if(h>4)h=4;
+            if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_hinty+tf_hintrow,tf_w-i-70,h,7,0);}
+            else tf_render(tf_promptx,tf_hinty+tf_hintrow,tf_cols*tf_cw<344?tf_cols*tf_cw:344,h,7,0);
+            tf_hintrow+=h;if(tf_hintrow>=tf_hinth)tf_hintpending=0;}
         else if(tf_statpend){for(c=0;c<7;c++){i=tf_statnext;tf_statnext++;if(tf_statnext>=7)tf_statnext=0;if(tf_statpend&(1<<i)){
             if(i<5){s=tf_stath>=30?16:tf_compact?8:10;h=s-tf_statrow[i];if(h>4)h=4;
                 tf_render(tf_statsx+i*(tf_statsw/5)+4,tf_statsy+(tf_stath>=30?12:tf_compact?1:4)+tf_statrow[i],tf_statsw/5-8,h,9,i);
