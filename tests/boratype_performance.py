@@ -34,7 +34,7 @@ import os88ui
 from os88fat import Fat12
 
 HZ = M.GUEST_HZ
-OUTPUTS = ("_bx_out", "_os88_font_run", "_os88_gfx_frame", "_os88_gfx_hline")
+OUTPUTS = ("_bx_out", "_os88_gfx_fill", "_os88_gfx_frame", "_os88_gfx_hline")
 SOURCES = tuple(sorted((SRC / "apps/boratype").rglob("*"))) + tuple(
     SRC / p for p in ("apps/breadxt/draw.inc", "apps/cc/gk.inc", "apps/cc/gkmus.inc",
                      "apps/cc/crt0.asm", "apps/cc/os88thunk.asm", "apps/os88api.inc"))
@@ -188,7 +188,7 @@ class Probe:
         first, first_kind = None, None
         expected = "mistake badge" if not correct or negative else "prompt band"
         for _ in range(80):
-            self.arm(self.S["_bx_out"], self.S["_os88_font_run"], returned)
+            self.arm(self.S["_bx_out"], self.S["_os88_gfx_fill"], returned)
             self.m.run()
             regs = self.stop("output or face return")
             if regs["ip"] == returned:
@@ -196,9 +196,12 @@ class Probe:
             is_band = regs["ip"] == self.S["_bx_out"]
             matches = is_band and expected == "prompt band"
             if not is_band:
-                stack = bytes(self.m.read(regs["ss"] * 16 + regs["sp"], 12))
-                pointer = struct.unpack_from("<H", stack, 6)[0]  # cdecl x,y,s,ink,paper
-                matches = expected == "mistake badge" and self.app.p.read(pointer, 1) == b"!"
+                # The first stroke is a four-pixel stem. The final, separate
+                # dot commits the complete exclamation mark on the wrong key.
+                rect = struct.unpack("<4H", self.m.read(regs["ss"]*16+regs["sp"]+2,8))
+                dot_x = self.app.global_word("tf_kx") + self.app.global_word("tf_kww") - 7
+                dot_y = self.app.global_word("tf_ky0") + 10
+                matches = expected == "mistake badge" and rect == (dot_x,dot_y,dot_x,dot_y)
             ret = self.return_offset(regs)
             self.arm(ret)
             self.m.run()
@@ -480,7 +483,7 @@ def main():
               "limits_ms": {"first_feedback": args.feedback_ms, "periodic": args.periodic_ms},
               "guest_state_writes": False, "pcm_clips": "absent",
               "probe_sha256": digest(Path(__file__)), "target_helper_sha256": digest(Path(T.__file__)),
-              "feedback_definition": "queued hardware key -> completed first prompt blit or wrong-key font_run",
+              "feedback_definition": "queued hardware key -> completed first prompt blit or final wrong-key badge stroke",
               "crt_scanout": "not included; output completion is framebuffer completion"}
     started = time.monotonic()
     guard = None
