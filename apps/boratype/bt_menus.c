@@ -36,14 +36,48 @@ static void ovl_tm_profile(int x,int y,int w,BTProfile *p)
     if(bt_readonly)tf_append(n,"  (read only)");
     tf_text(x,y,w,tf_buf,TF_YELLOW,tf_font);
 }
+/* Bank 5's four sprite offsets are at bytes 16..23. All text/labels use
+ * bank 1 again immediately after the drawing call. part_seg never reads disk. */
+unsigned os88_part_seg(int i);
+static void ovl_tm_illustration(int x,int y,int w,int h)
+{
+    unsigned seg;
+    int card;
+    if(!ovl_tm_visible(x,y,w,h))return;
+    if(!tf_mono && w>=144 && h>=96){
+        seg=os88_part_seg(5);
+        if(seg){
+            card=bt_screen==BT_S_SETTINGS?3:bt_screen==BT_S_RECORDS?1:0;
+            if(bt_screen==BT_S_RESULTS && bt_session.attempts)
+                card=bt_session.accuracy>=95?1:2;
+            bx_setart2(seg);
+            bx_spr(x+(w-144)/2,y+(h-96)/2,262+card);
+            bx_setart2(os88_part_seg(1));
+            return;
+        }
+    }
+    ovl_bt_portrait_scene(x,y,w,h);
+}
 static void ovl_tm_mascot(int x,int y,int w,int h)
 {
-    int sh;
+    int sh,cy,rows,bottom,tip;
     if(!ovl_tm_visible(x,y,w,h))return;
-    ovl_tm_panel(x,y,w,h,"");sh=h>=168?120:48;
-    ovl_bt_portrait_scene(x+4,y+5,w-8,sh);
-    tf_append(tf_append(0,"Borat: "),bt_caption());
-    ovl_tf_lines(x+8,y+sh+12,w-16,(h-sh-18)/(tf_th+2),tf_buf);
+    ovl_tm_panel(x,y,w,h,"");
+    sh=h>=132?96:48;
+    ovl_tm_illustration(x+4,y+4,w-8,sh);
+    cy=y+sh+6;
+    rows=(h-sh-18)/(tf_th+2);if(rows>4)rows=4;
+    if(rows<1)return;
+    bottom=cy+rows*(tf_th+2)+5;tip=x+w/3;
+    if(!ovl_tm_visible(x+5,cy-4,w-10,bottom-cy+5))return;
+    bx_fill(x+7,cy,x+w-8,bottom,0);
+    bx_fill(x+5,cy+2,x+w-6,bottom-2,0);
+    bx_fill(x+8,cy+1,x+w-9,bottom-1,15);
+    bx_fill(x+6,cy+3,x+w-7,bottom-3,15);
+    bx_fill(tip,cy-4,tip+1,cy,0);
+    bx_fill(tip-2,cy-2,tip+3,cy,0);
+    bx_fill(tip,cy-1,tip+2,cy+2,15);
+    ovl_tf_lines_ink(x+10,cy+3,w-20,rows,bt_caption(),0);
 }
 static int ovl_tm_has(const char *s,int c)
 {while(*s){if(*s==c)return 1;s++;}return 0;}
@@ -123,7 +157,7 @@ static void ovl_tm_lessons(int x,int y,int w,int h,BTProfile *p,int rich)
     tf_text(x+66,n+4,c-132,tf_buf,TF_YELLOW,BT_F_SMALL);
     tf_button(x+c-60,n,54,17,"Next",BT_A_LESSON_BASE+(first+rows<24?first+rows:23),0);
     i=bt_selection;if(i<0||i>=24)i=0;n=x+right;
-    ovl_tm_panel(n,y,w-right,140,"");ovl_bt_portrait_scene(n+4,y+5,w-right-8,130);
+    ovl_tm_panel(n,y,w-right,140,"");ovl_tm_illustration(n+4,y+5,w-right-8,130);
     ovl_tm_panel(n,y+146,w-right,ph-146,bt_lessons[i].name);
     if(ph>=244){
         tf_text(n+8,y+175,w-right-16,bt_lessons[i].allowed,TF_YELLOW,tf_font);
@@ -236,7 +270,7 @@ static void ovl_tm_settings(int x,int y,int w,int h,int rich)
         tf_button(c,y+31,w-left-24,bh,tf_buf,BT_A_DISPLAY,0);
         tf_button(c,y+75,w-left-24,bh,bt_full?"F6 Leave full":"F6 Fullscreen",BT_A_FULL,bt_full);
         tf_button(c,y+119,w-left-24,bh,"T Test music",BT_A_TEST_MUSIC,0);
-        if(h>=270)ovl_bt_portrait_scene(c,y+160,w-left-24,h-205);
+        if(h>=270)ovl_tm_illustration(c,y+160,w-left-24,h-205);
         yy=y+h-29;c=(w-6)/2;tf_button(x,yy,c,26,"Save settings",BT_A_SAVE,1);tf_button(x+c+6,yy,c,26,"Back",BT_A_BACK,0);
         y+=h-58;x+=4;w=left-8;
     }

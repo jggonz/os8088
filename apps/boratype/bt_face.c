@@ -204,7 +204,7 @@ static void tf_text(int x,int y,int w,const char *s,int c,int font)
 static void tf_line(int x,int y,int w,const char *s)
 {tf_text(x,y,w,s,TF_WHITE,tf_font);}
 /* Word wrap bounded to80 characters per line. Caption reads real director text. */
-static void ovl_tf_lines(int x,int y,int w,int rows,const char *s)
+static void ovl_tf_lines_ink(int x,int y,int w,int rows,const char *s,int ink)
 {
     int i,n,last,advance;
     if(y>=tf_sy+tf_sh||y+rows*(tf_th+2)<=tf_sy)return;
@@ -215,9 +215,10 @@ static void ovl_tf_lines(int x,int y,int w,int rows,const char *s)
             if(s[n]==' ')last=n;n++;}
         if(s[n]&&last>0)n=last;if(n==0)n=1;
         for(i=0;i<n;i++)tf_wrap[i]=s[i];tf_wrap[n]=0;
-        tf_line(x,y,w,tf_wrap);s+=n;while(*s==' ')s++;y+=tf_th+2;
+        tf_text(x,y,w,tf_wrap,ink,tf_font);s+=n;while(*s==' ')s++;y+=tf_th+2;
     }
 }
+#define ovl_tf_lines(x,y,w,n,s) ovl_tf_lines_ink(x,y,w,n,s,TF_WHITE)
 static void ovl_tf_button(int x,int y,int w,int h,const char *s,int a,int selected)
 {
     if(tf_nhit<TF_HITS){tf_hit[tf_nhit][0]=x;tf_hit[tf_nhit][1]=y;tf_hit[tf_nhit][2]=w;tf_hit[tf_nhit][3]=h;tf_hit[tf_nhit++][4]=a;}

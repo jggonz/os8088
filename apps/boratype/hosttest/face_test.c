@@ -23,6 +23,7 @@ const BTLesson bt_lessons[BT_LESSONS]={
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON};
+unsigned os88_part_seg(int i){(void)i;return 0;}
 int bt_music_phase;
 int bt_screen,bt_selection,bt_ch_duration,bt_ch_diff,bt_master_sound=1;
 int bt_full,bt_readonly,bt_profile_edit,bt_modifiers,bt_practice_weak,bt_blink_frame;
