@@ -56,7 +56,12 @@ static void ovl_tm_illustration(int x,int y,int w,int h)
     int card,sw,sh,left,top,right,bottom,xx,yy;
     if(!ovl_tm_visible(x,y,w,h))return;
     card=bt_screen==BT_S_SETTINGS?3:bt_screen==BT_S_RECORDS?1:bt_screen==BT_S_RESULTS?2:0;
-    if(bt_screen==BT_S_RESULTS && (!bt_session.attempts || bt_session.accuracy>=95))card=0;
+    if(bt_screen==BT_S_RESULTS && bt_session.attempts && bt_session.accuracy>=95)card=1;
+    if((bt_screen!=BT_S_LESSONS && bt_screen!=BT_S_SETTINGS &&
+        bt_screen!=BT_S_RECORDS && bt_screen!=BT_S_RESULTS) ||
+        (bt_screen==BT_S_RESULTS && !bt_session.attempts)){
+        ovl_bt_portrait_scene(x,y,w,h);return;
+    }
     sw=widths[card];sh=heights[card];
     if(!tf_mono && w>=sw && h>=sh){
         seg=os88_part_seg(5);
