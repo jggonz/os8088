@@ -1475,9 +1475,7 @@ bx_tring: resb BX_TSLOT * BX_TSLOTS
 %endif
 bx_band: resw 1
 bx_bs: resw 1
-%ifdef BX_SPRITE_MAX_WIDTH
-bx_srow: resb (BX_SPRITE_MAX_WIDTH+1)/2+4
-%elifdef BX_ART2
+%ifdef BX_ART2
 bx_srow: resb 64                    ; a row of up to 120 pixels (BPART2's LINKED), packed, plus 4 pad
 %else
 bx_srow: resb 36

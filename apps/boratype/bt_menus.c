@@ -46,14 +46,14 @@ static void ovl_tm_profile(int x,int y,int w,BTProfile *p)
     if(bt_readonly)tf_append(n,"  (read only)");
     tf_text(x,y,w,tf_buf,TF_YELLOW,tf_font);
 }
-/* Bank 5's four sprite offsets are at bytes 16..23. All text/labels use
- * bank 1 again immediately after the drawing call. part_seg never reads disk. */
+/* Precomputed opaque planes go directly into the visible part of this band. */
+void bt_scene_copy(unsigned seg,int card,int src,int dst,int stride,int plane,int width,int rows);
 unsigned os88_part_seg(int i);
 static void ovl_tm_illustration(int x,int y,int w,int h)
 {
     static const unsigned char widths[]={208,208,176,240},heights[]={120,104,120,88};
     unsigned seg;
-    int card,sw,sh;
+    int card,sw,sh,left,top,right,bottom,xx,yy;
     if(!ovl_tm_visible(x,y,w,h))return;
     card=bt_screen==BT_S_SETTINGS?3:bt_screen==BT_S_RECORDS?1:bt_screen==BT_S_RESULTS?2:0;
     if(bt_screen==BT_S_RESULTS && (!bt_session.attempts || bt_session.accuracy>=95))card=0;
@@ -61,9 +61,15 @@ static void ovl_tm_illustration(int x,int y,int w,int h)
     if(!tf_mono && w>=sw && h>=sh){
         seg=os88_part_seg(5);
         if(seg){
-            bx_setart2(seg);
-            bx_spr(x+(w-sw)/2,y+(h-sh)/2,262+card);
-            bx_setart2(os88_part_seg(1));
+            xx=(x+(w-sw)/2+7)&~7;yy=y+(h-sh)/2;
+            left=xx>tf_sx?xx:tf_sx;top=yy>tf_sy?yy:tf_sy;
+            right=xx+sw;if(right>x+w)right=x+w;
+            if(right>tf_sx+tf_sw)right=tf_sx+tf_sw;
+            bottom=yy+sh;if(bottom>tf_sy+tf_sh)bottom=tf_sy+tf_sh;
+            if(right-left>=8 && bottom>top)
+                bt_scene_copy(seg,card,(top-yy)*(sw/8)+(left-xx)/8,
+                    (top-tf_sy)*(tf_sw/8)+(left-tf_sx)/8,sw/8,(sw/8)*sh,
+                    (right-left)/8,bottom-top);
             return;
         }
     }

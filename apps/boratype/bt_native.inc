@@ -520,3 +520,59 @@ _bt_anim_unpack:
     pop bp
     ret
 section .text
+
+; Copy the clipped portion of one opaque scenic card to the composer's band.
+; C arguments: segment, card index, source/dest byte offsets, source stride,
+; source plane size, visible bytes per row, and visible row count.
+_bt_scene_copy:
+    push bp
+    mov bp,sp
+    push ds
+    push es
+    push si
+    push di
+    mov es,[bp+4]
+    mov bx,[bp+6]
+    shl bx,1
+    mov si,[es:bx+16]
+    add si,2
+    add si,[bp+8]
+    mov di,[bx_band]
+    add di,[bp+10]
+    mov bx,[bp+12]
+    mov dx,[bx_pw]
+    sub bx,[bp+16]
+    sub dx,[bp+16]
+    mov es,[bx_bs]
+    mov ds,[bp+4]
+    cld
+    mov ax,4
+.plane:
+    push ax
+    push si
+    push di
+    mov ax,[bp+18]
+.row:
+    mov cx,[bp+16]
+    shr cx,1
+    rep movsw
+    adc cx,cx
+    rep movsb
+    add si,bx
+    add di,dx
+    dec ax
+    jnz .row
+    pop di
+    pop si
+    add di,[cs:bx_psz]
+    add si,[bp+14]
+    pop ax
+    dec ax
+    jnz .plane
+    pop di
+    pop si
+    pop es
+    pop ds
+    pop bp
+    ret
+section .text

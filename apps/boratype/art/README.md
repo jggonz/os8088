@@ -29,9 +29,10 @@ selected VGA keyboard legends in `key-legend.mask`. Lowercase, punctuation
 and the other two strikes retain their Liberation sources.
 
 The lesson, trophy, result and listening illustrations are four opaque
-indexed sprites sized to the corresponding panels selected from the corresponding supplied screens.
+four-plane images sized for their panels. Lesson selection and Settings keep
+the reference speech balloons inside the image.
 The file names, crop coordinates and sampling rule live in
 `tools/os88btscenes.py`. Re-select with `--select <reference-directory>`.
 The final animation bank carries their four 16-bit record offsets immediately
-after its 16-byte header. This lets the same drawing buffer compose these
-illustrations into ordinary window paint bands.
+after its 16-byte header. The renderer copies the visible bytes of each plane into the window paint
+band. The normal window compositor handles occlusion and display output.

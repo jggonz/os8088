@@ -117,10 +117,11 @@ keycap and prompt type reuse the shipped Liberation Serif bold strikes. Five
 The footer music-note meter follows the active soundtrack on the guest clock.
 Four panel-sized scene cards show the lesson tutor, trophy, pointing reaction
 and listening pose on their respective screens. Their offsets immediately
-follow the last animation bank's 16-byte header. The window renderer
-addresses them as secondary sprite records 6 through 9 for one band draw
-and restores the sound/font bank before returning. The widest scene is 240 pixels,
-so the package reserves 120 packed row bytes plus four padding bytes. The mono and low-memory
+follow the last animation bank's 16-byte header. Each opaque image stores width and height followed by four consecutive
+bitplanes, most significant bit first. The package centers the card at a
+byte boundary, intersects it with the active paint band, then copies only
+those row spans into the compositor. Window damage and the final display
+transfer still go through the shared drawing API. The mono and low-memory
 paths use the static portrait. The four-color exclusive mode retains its
 character-cell update path.
 

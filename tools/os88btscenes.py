@@ -12,15 +12,15 @@ import os88bbart as bb
 
 ART = Path(__file__).resolve().parents[1] / "apps/boratype/art/scene-cards.txt"
 SCENES = (
-    ("lesson", "Borat’s Retro VGA Typing Lesson.png", (10, 124, 368, 402), (208, 120)),
+    ("lesson", "Borat's home row lesson selection-2.png", (950, 126, 1436, 450), (208, 120)),
     ("record", "Borat’s Typing Records and Achievements-6.png", (915, 203, 1427, 602), (208, 104)),
     ("result", "Borat's typing challenge results-4.png", (13, 201, 548, 659), (176, 120)),
-    ("settings", "Borat Teaches Typing_ Sound and Display-5.png", (807, 595, 1090, 880), (240, 88)),
+    ("settings", "Borat Teaches Typing_ Sound and Display-5.png", (807, 595, 1436, 880), (240, 88)),
 )
 
 
 def select(directory):
-    from PIL import Image, ImageOps
+    from PIL import Image
     palette = Image.new("P", (1, 1))
     palette.putpalette([v for i in range(256) for v in bb.EGA[i if i < 16 and i != bb.KEY else 0]])
     out = []
@@ -28,8 +28,7 @@ def select(directory):
         with Image.open(directory / filename) as source:
             if source.size != (1448, 1086):
                 raise ValueError(f"Unexpected dimensions for {filename}")
-            panel = ImageOps.fit(source.convert("RGB").crop(crop), (width,height),
-                                 method=Image.Resampling.LANCZOS, centering=(0.5, 0.25))
+            panel = source.convert("RGB").crop(crop).resize((width, height), Image.Resampling.LANCZOS)
             image = panel.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG)
             out.append(name)
             for y in range(height):
@@ -51,7 +50,14 @@ def build_scene_bank():
         if len(rows)!=height or lines[at]!=name or any(len(row)!=width or set(row)-set(bb.CHARS) for row in rows):
             raise ValueError(f"Malformed scene card {name}")
         struct.pack_into("<H", data, 2*i, 16+len(data))
-        data += bb.pack_sprite(width, height, [[bb.CHARS.index(c) for c in row] for row in rows])
+        if width % 8 or any("." in row for row in rows):
+            raise ValueError(f"Opaque byte-aligned pixels required for {name}")
+        pixels = [bb.CHARS.index(c) for row in rows for c in row]
+        data.extend((width, height))
+        for plane in range(4):
+            for at_pixel in range(0, len(pixels), 8):
+                data.append(sum(((pixel >> plane) & 1) << (7 - bit)
+                                for bit, pixel in enumerate(pixels[at_pixel:at_pixel+8])))
         at += height+1
     if at != len(lines):
         raise ValueError("Unexpected data after the last scene")
