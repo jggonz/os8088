@@ -253,6 +253,7 @@ class Probe:
 
     def periodic(self, count, limit_ms):
         records = []
+        self.app.evidence["periodic_observations"] = records
         directory = (Path(self.app.evidence["app_build"]) / "BTAN0.BIN").read_bytes()
         complete = {}
         for frame in range(30):

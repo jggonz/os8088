@@ -107,6 +107,7 @@ static void play_geometry(void)
  assert(tf_inputcols>0&&tf_inputcols<=tf_cols);
  assert(tf_inputx+tf_inputcols*tf_cw<=tf_x+tf_w-8);
  if(!tf_compact){
+  assert(tf_inputx-tf_promptx-6>=bx_twidth("YOU TYPE",BT_F_SMALL));
   assert(tf_kw*15>=tf_w-47&&tf_kw*15<=tf_w-32);
   assert(tf_pw>=136&&tf_pw<=196&&tf_promptx>=tf_px+tf_pw+8);
   assert(tf_prompty+2*tf_ch<=tf_inputy-1);
@@ -127,6 +128,27 @@ static void play_geometry(void)
   assert(ovl_tf_progress_width()==tf_cols*tf_cw-4);bt_session.remaining=0;assert(!ovl_tf_progress_width());
  }
  memcpy(&bt_session,&saved,sizeof(saved));
+}
+static void mirror_and_stat_damage(void)
+{
+ static BTSession before;int old,steps=0;
+ memcpy(&before,&bt_session,sizeof(before));bt_face_paint(0,1);
+ if(!(tf_compact&&tf_h<140)){
+  tf_dirtyfirst[2]=-1;tf_dirtylast[2]=2*tf_cols+tf_inputcols-1;
+  tf_cache_cell(2*tf_cols,1);
+  assert(tf_dirtyfirst[2]==2*tf_cols&&tf_dirtylast[2]==2*tf_cols);
+  tf_dirtylast[2]=2*tf_cols+tf_inputcols-1;
+  while(tf_dirtyfirst[2]>=0){
+   old=tf_dirtyfirst[2];tf_caret_on=!tf_caret_on;
+   bt_face_paint(0,0);
+   assert(tf_dirtyfirst[2]<0||tf_dirtyfirst[2]>=old);
+   assert(++steps<=2*tf_inputcols+20);
+  }
+ }
+ bt_face_paint(0,1);tf_statpend=1;area=flushes=0;bt_face_paint(0,0);
+ assert(!tf_statpend&&flushes==1);
+ assert(area<=(unsigned)((tf_statsw/5+8)*16));
+ assert(!memcmp(&before,&bt_session,sizeof(before)));bt_face_paint(0,1);
 }
 static unsigned char animbank[3][65000];static unsigned animlen[3],unpacks;
 int os88_part_fetch(int i){char path[1024];FILE *f;assert(i>=3&&i<6);snprintf(path,sizeof(path),"%s/BTAN%d.BIN",getenv("BT_ANIM_DIR")?getenv("BT_ANIM_DIR"):"build",i-3);f=fopen(path,"rb");assert(f);animlen[i-3]=(unsigned)fread(animbank[i-3],1,65000,f);fclose(f);return 0;}
@@ -204,7 +226,7 @@ int main(void)
  strcpy(bt_store.profile[0].name,"Learner");strcpy(bt_session.passage,"fj jf FJ!? My name is Borat.");bt_session.length=strlen(bt_session.passage);bt_session.status=BT_ACTIVE;
  for(int m=0;m<2;m++)for(unsigned d=0;d<sizeof(dims)/sizeof(dims[0]);d++){
   hw=dims[d][0];hh=dims[d][1];hbpp=m?1:4;bt_face_init(1,2,8192,hbpp);bt_screen=BT_S_PLAY;bt_session.pos=0;bt_session.last_wrong=0;bt_session.attempts=0;bt_session.correct=0;bt_session.streak=0;
-  bt_face_paint(0,1);keyboard();play_geometry();screens();bt_screen=BT_S_PLAY;bt_face_paint(0,1);
+  bt_face_paint(0,1);keyboard();play_geometry();screens();bt_screen=BT_S_PLAY;mirror_and_stat_damage();bt_face_paint(0,1);
   area=flushes=0;bt_face_paint(0,0);assert(area==0&&flushes==0);
   fullarea=hw*hh;bt_session.pos=1;bt_session.streak=1;bt_session.correct=1;bt_session.attempts=1;bt_face_paint(0,0);
   if(area>fullarea/6){fprintf(stderr,"too much repaint %dx%d %u/%u\n",hw,hh,area,fullarea);abort();}

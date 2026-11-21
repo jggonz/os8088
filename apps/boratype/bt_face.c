@@ -387,9 +387,10 @@ static int ovl_tf_arrange(void)
     tf_cw=tf_compact?8:(tf_h>=400?16:12);tf_ch=tf_compact?8:tf_h>=400?28:tf_h<300?14:16;
     tf_cols=space/tf_cw;if(tf_cols>40)tf_cols=40;if(tf_cols<12)tf_cols=12;
     tf_inputy=tf_prompty+2*tf_ch+(tf_compact?2:tf_h>=400?7:1);
-    tf_inputx=tf_promptx+(tf_compact?0:4*tf_cw);tf_inputcols=tf_cols-(tf_compact?0:4);
     tf_hinty=tf_compact?tf_y+2:tf_statsy-(tf_h>=400?29:21);tf_hinth=tf_compact?8:tf_h>=400?16:10;
     bx_setup(tf_band,0,tf_cap,tf_art,tf_mono?1:4);gk_init(tf_mono?1:4);gk_theme(tf_mono?tf_monoroles:tf_roles);
+    space=tf_compact?0:(bx_twidth("YOU TYPE",BT_F_SMALL)+10+tf_cw-1)/tf_cw;
+    tf_inputx=tf_promptx+space*tf_cw;tf_inputcols=tf_cols-space;
     for(i=0;i<95;i++){tf_char[0]=i+32;tf_char[1]=0;tf_glyphw[i]=bx_twidth(tf_char,tf_font);}
     for(i=0;i<TF_KEYS;i++){tf_keyx[i]=tf_x+(tf_compact?8:16)+tf_keys[i][3]*tf_kw/4;tf_keyw[i]=tf_keys[i][4]*tf_kw/4-2;}
     for(i=0;i<5;i++)tf_rowy[i]=tf_ky+i*tf_kh;
@@ -573,8 +574,9 @@ static void tf_cache_cell(int i,int force)
     int c,s,row;c=tf_cellc(i);s=tf_cellstate(i);
     if(force||c!=tf_cellchar[i]||s!=tf_cellstyle[i]){
         tf_cellchar[i]=c;tf_cellstyle[i]=s;row=i/tf_cols;
-        if(tf_dirtyfirst[row]<0||i<tf_dirtyfirst[row])tf_dirtyfirst[row]=i;
-        if(i>tf_dirtylast[row])tf_dirtylast[row]=i;
+        if(tf_dirtyfirst[row]<0)tf_dirtyfirst[row]=tf_dirtylast[row]=i;
+        else{if(i<tf_dirtyfirst[row])tf_dirtyfirst[row]=i;
+            if(i>tf_dirtylast[row])tf_dirtylast[row]=i;}
     }
 }
 static void tf_cellrect(int j)
@@ -635,7 +637,7 @@ static void ovl_tf_drawprompt(void)
         tf_text(x+7,y+1,w-(bt_session.mode==BT_CHALLENGE?100:14),tf_buf,TF_YELLOW,BT_F_TITLE);
         ovl_tf_drawclock();
         gk_box(tf_promptx-2,tf_inputy-1,tf_cols*tf_cw+4,tf_ch+2,GK_SUNKEN,tf_ground());
-        tf_text(tf_promptx+3,tf_inputy+(tf_ch-8)/2,4*tf_cw-6,"YOU TYPE",TF_WHITE,BT_F_SMALL);
+        tf_text(tf_promptx+3,tf_inputy+(tf_ch-8)/2,tf_inputx-tf_promptx-6,"YOU TYPE",TF_WHITE,BT_F_SMALL);
         ovl_tf_drawprogress();
     }
     ovl_tf_drawhint();
@@ -657,7 +659,7 @@ static void ovl_tf_drawstat(int i)
     if(i==3){n=tf_number(n,bt_session.mode==BT_CHALLENGE?bt_session.remaining:bt_session.seconds);tf_append(n,"s");}
     if(i==4)tf_number(n,bt_session.errors);
     font=tf_font;y=tf_statsy+(tf_compact?1:4);
-    if(tf_stath>=30){tf_text(x+4,tf_statsy+2,w-8,labels[i],TF_WHITE,BT_F_SMALL);font=bx_twidth(tf_buf,BT_F_TITLE)<=w-8?BT_F_TITLE:tf_font;y=tf_statsy+12;}
+    if(tf_stath>=30){if(tf_statsy+2<tf_sy+tf_sh&&tf_statsy+10>tf_sy)tf_text(x+4,tf_statsy+2,w-8,labels[i],TF_WHITE,BT_F_SMALL);font=bx_twidth(tf_buf,BT_F_TITLE)<=w-8?BT_F_TITLE:tf_font;y=tf_statsy+12;}
     tf_text(x+4,y,w-8,tf_buf,TF_YELLOW,font);
 }
 static void ovl_tf_playbase(void)
@@ -872,7 +874,7 @@ void bt_face_paint(void *win,int full)
             else tf_render(x,y,w,h,8,tf_dirtyfirst[i]);
         }
     }
-    if(tf_savedcaret!=tf_caret_on){i=2*tf_cols+bt_session.pos-tf_inputview;if(i>=2*tf_cols&&i<ncells)tf_cache_cell(i,full);tf_savedcaret=tf_caret_on;}
+    if(tf_savedcaret!=tf_caret_on&&(full||tf_dirtyfirst[2]<0)){i=2*tf_cols+bt_session.pos-tf_inputview;if(i>=2*tf_cols&&i<ncells)tf_cache_cell(i,1);tf_savedcaret=tf_caret_on;}
     for(i=0;i<7;i++){
         if(i==0)key=bt_session.seconds?bt_session.wpm:65535u;
         else if(i==1)key=bt_session.attempts?bt_session.accuracy:65535u;
@@ -903,7 +905,7 @@ void bt_face_paint(void *win,int full)
         else if(tf_footpending){h=tf_h-(tf_bottom-tf_y)-tf_footrow;if(h>4)h=4;tf_render(tf_x,tf_bottom+tf_footrow,tf_w,h,2,0);tf_footrow+=h;if(tf_footrow>=tf_h-(tf_bottom-tf_y))tf_footpending=0;}
         else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_hinty,tf_w-i-70,tf_hinth,7,0);}else tf_render(tf_promptx,tf_hinty,tf_cols*tf_cw<344?tf_cols*tf_cw:344,tf_hinth,7,0);tf_hintpending=0;}
         else if(tf_statpend){for(c=0;c<7;c++){i=tf_statnext;tf_statnext++;if(tf_statnext>=7)tf_statnext=0;if(tf_statpend&(1<<i)){
-            if(i<5)tf_render(tf_statsx+i*(tf_statsw/5),tf_statsy,tf_statsw/5,tf_stath,9,i);
+            if(i<5)tf_render(tf_statsx+i*(tf_statsw/5)+4,tf_statsy+(tf_stath>=30?12:tf_compact?1:4),tf_statsw/5-8,tf_stath>=30?16:tf_compact?8:10,9,i);
             else if(!tf_compact&&i==5){s=ovl_tf_progress_width();x=tf_progressfill<s?tf_progressfill:s;w=tf_progressfill<s?s-tf_progressfill:tf_progressfill-s;tf_progressfill=s;if(w)tf_render(tf_promptx+1+x,tf_statsy-8,w,2,12,0);}
             else if(!tf_compact&&bt_session.mode==BT_CHALLENGE)tf_render(tf_x+tf_w-88,tf_py+1,72,16,13,0);
             tf_statpend&=~(1<<i);break;}}}

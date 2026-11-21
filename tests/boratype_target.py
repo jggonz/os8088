@@ -300,15 +300,21 @@ class App:
                       budget=15, what="CGA painted VRAM stable")
         elif settled:
             if self.global_word("bt_screen") == self.L["BT_S_PLAY"]:
-                # Idle callbacks drain the deliberately sliced hint, stats
-                # and accepted-input rows after urgent prompt feedback.
-                # ui_done alone may be true between those callbacks.
+                # Drain actual content/fields; a live blinking caret need
+                # not be frozen. A sole dirty cursor cell changes only its
+                # phase, while any accepted text still pending must finish.
                 def primary_pending():
                     return (self.global_word("tf_hintpending"), self.global_word("tf_statpend"),
                             self.global_word("tf_footpending"),
-                            self.p.word(self.sym["_tf_dirtyfirst"] + 4), self.global_word("tf_capneeded"))
-                self.ui._wait(lambda: primary_pending() == (0, 0, 0, 65535, 0),
-                              "native primary field paint queue drained", 30, snapshot=primary_pending)
+                            self.p.word(self.sym["_tf_dirtyfirst"] + 4), self.global_word("tf_capneeded"),
+                            self.p.word(self.sym["_tf_dirtylast"] + 4),
+                            2 * self.global_word("tf_cols") + self.state()["pos"] - self.global_word("tf_inputview"))
+                def primary_settled():
+                    hint, stats, footer, first, caption, last, cursor = primary_pending()
+                    return not (hint or stats or footer or caption) and (first == 65535 or first == last == cursor)
+                self.ui._wait(primary_settled, "native content and fields painted (caret may blink)",
+                              30, snapshot=primary_pending)
+                self.evidence.setdefault("capture_settlement", {})[name] = primary_pending()
             self.ui.still()
         w, h, rgb = self.ui.m.fbuf()
         path = directory / (name + ".png")

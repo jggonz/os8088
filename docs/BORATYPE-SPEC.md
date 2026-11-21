@@ -219,6 +219,10 @@ Large key labels remain centered within their label region, clear of badges.
 The accepted-input caret changes phase every nine guest UI ticks. READY uses
 a prominent countdown hint and GO remains visible for nine UI ticks after
 READY becomes ACTIVE. These visual clocks are independent of scored ticks.
+The accepted-input label reserves its measured font width. Caret changes
+wait for queued accepted text to finish, and a new dirty range starts with
+only its changed cells. Periodic statistics repaint their value bands;
+their frames and static labels belong to full damage.
 
 Urgent target cells and physical-key feedback precede statistics, hints,
 progress and portrait cosmetics. Progress damages only the changed fill
