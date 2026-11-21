@@ -39,6 +39,20 @@ static unsigned tf_art,tf_band,tf_cap;
 static int tf_x,tf_y,tf_w,tf_h,tf_mono,tf_compact,tf_font,tf_title,tf_th;
 static int tf_top,tf_bottom,tf_px,tf_py,tf_pw,tf_ph,tf_ky,tf_kh,tf_kw;
 static int tf_cols,tf_cw,tf_ch,tf_promptx,tf_prompty,tf_inputy,tf_statsy;
+static int tf_inputx,tf_inputcols,tf_hinty,tf_hinth,tf_stath,tf_progressfill;
+static int tf_caret_on=1,tf_savedcaret=-1,tf_go_left,tf_clockready;
+static unsigned tf_clocklast;
+#define BT_PLAY_CLOCK 1
+static void tf_play_clock(unsigned now)
+{
+    unsigned delta;
+    delta=(unsigned short)(now-tf_clocklast);tf_clocklast=now;
+    tf_caret_on=(now/9)&1;
+    if(tf_clockready&&bt_session.status==BT_ACTIVE)tf_go_left=9;
+    else if(delta>=(unsigned)tf_go_left)tf_go_left=0;
+    else tf_go_left-=delta;
+    tf_clockready=bt_session.status==BT_READY;
+}
 static int tf_lx,tf_ly,tf_lw,tf_lh,tf_lastscreen,tf_view,tf_inputview;
 static int tf_sx,tf_sy,tf_sw,tf_sh;
 static unsigned char tf_glyphw[95];
@@ -56,7 +70,7 @@ extern int bt_music_phase;
 static int tf_meterlast;
 static int tf_nhit,tf_hit[TF_HITS][5];
 static unsigned tf_header,tf_bodykey,tf_footer,tf_portrait,tf_captionkey,tf_hintkey;
-static unsigned tf_statkey[5];
+static unsigned tf_statkey[7];
 static unsigned char tf_keycache[TF_KEYS],tf_cellchar[TF_CELLS],tf_cellstyle[TF_CELLS];
 static char tf_buf[96],tf_num[8],tf_char[3],tf_wrap[80];
 /* x and width are quarter key units. Five rows total15 key units each. */
@@ -186,7 +200,7 @@ static const unsigned char tf_neighbor[TF_KEYS][2]={
 };
 
 static const char *tf_fingers[]={"Thumb","Left little","Left ring","Left middle","Left index","Right index","Right middle","Right ring","Right little"};
-static const unsigned char tf_zones[]={7,12,6,14,10,11,9,5,12};
+static const unsigned char tf_zones[]={7,12,6,14,10,11,9,5,13};
 static const char *tf_group[]={"Home row","All letters","Digits","Mixed punctuation"};
 static const char *tf_screenname[]={"WELCOME","LESSONS","TYPE WITH BORAT","RESULTS","PRACTICE","TIMED CHALLENGE","RECORDS","SOUND & DISPLAY","HELP","PAUSED","PROFILES"};
 static const unsigned char tf_roles[]={0,7,15,8,1,0,1,9,14,11,0,14,0,8,0,7};
@@ -290,37 +304,55 @@ static int tf_keystate(int i)
 }
 static const char *tf_keylabel(int i)
 {
+    static const char *modlabels[]={"Back","Tab","Caps","Enter","Shift","Shift","SPACE","Ctrl","Alt","Alt","Ctrl","",""};
     if(i<47){tf_char[0]=tf_keys[i][0];if(tf_char[0]>='a'&&tf_char[0]<='z')tf_char[0]-=32;tf_char[1]=0;return tf_char;}
-    if(i==47)return "Back";if(i==48)return "Tab";if(i==49)return "Caps";
-    if(i==50)return "Enter";if(i==51||i==52)return "Shift";
-    if(i==53)return "SPACE";if(i==54||i==57)return "Ctrl";
-    if(i==55||i==56)return "Alt";return "";
+    return modlabels[i-47];
+}
+static int tf_keycolor(int i)
+{return tf_mono?15:i>=47?(i==53?14:7):tf_zones[tf_keys[i][5]];}
+/* Static cap depth belongs to the cold full/compact renderer. Hot state
+ * changes touch only the reserved frame, badge and held-modifier line. */
+static void ovl_tf_keycap(int i,int state)
+{
+    int x,y,w,h,c,dark,e,b;
+    x=tf_kx;y=tf_ky0;w=tf_kww;h=tf_khh;c=tf_keycolor(i);
+    if(h<20)gk_box(x,y,w,h,GK_RAISED2,c);
+    else{
+        dark=tf_mono?0:8;
+        bx_fill(x+3,y,x+w-4,y+h-1,0);bx_fill(x,y+3,x+w-1,y+h-4,0);
+        bx_fill(x+3,y+1,x+w-5,y+h-5,c);bx_fill(x+1,y+3,x+w-5,y+h-5,c);
+        bx_fill(x+4,y+1,x+w-5,y+2,15);bx_fill(x+1,y+4,x+2,y+h-6,15);
+        bx_fill(x+4,y+h-4,x+w-4,y+h-3,dark);bx_fill(x+w-4,y+4,x+w-3,y+h-4,dark);
+    }
+    if(state&3){c=tf_mono?0:TF_YELLOW;e=h<20?3:4;b=h<20?4:6;
+        bx_fill(x+e,y+e,x+w-b,y+e,c);bx_fill(x+e,y+h-b,x+w-b,y+h-b,c);
+        bx_fill(x+e,y+e+1,x+e,y+h-b-1,c);bx_fill(x+w-b,y+e+1,x+w-b,y+h-b-1,c);
+    }
+    if(h<12){
+        if(state&4){c=tf_mono?0:TF_RED;bx_fill(x+w-7,y+1,x+w-7,y+2,c);bx_fill(x+w-7,y+4,x+w-7,y+4,c);}
+        else if((state&16)&&!(state&1)){c=tf_mono?0:TF_GREEN;bx_fill(x+w-8,y+3,x+w-6,y+3,c);bx_fill(x+w-7,y+2,x+w-7,y+4,c);}
+    }else{
+        e=h>=20?4:3;
+        if(state&4){c=tf_mono?0:TF_RED;bx_fill(x+w-7,y+e,x+w-7,y+e+3,c);bx_fill(x+w-7,y+e+6,x+w-7,y+e+6,c);}
+        else if((state&16)&&!(state&1)){c=tf_mono?0:TF_GREEN;bx_fill(x+w-9,y+e+3,x+w-5,y+e+3,c);bx_fill(x+w-7,y+e+1,x+w-7,y+e+5,c);}
+    }
+    if(state&8)bx_fill(x+5,y+h-(h>=20?7:5),x+w-7,y+h-(h>=20?7:5),tf_mono?0:15);
+    if(i==29||i==32)bx_fill(x+w/2-3,y+h-(h>=20?5:6),x+w/2+2,y+h-(h>=20?5:6),0);
 }
 static void tf_drawkey(int i,int selective)
 {
-    int state,c,f,fh,lx,ly,lw;const char *s;
+    int state,f,fh,lx,ly,lw;const char *s;
     tf_keyrect(i);if(tf_kww<=0||tf_kx+tf_kww<=tf_sx||tf_kx>=tf_sx+tf_sw||tf_ky0+tf_khh<=tf_sy||tf_ky0>=tf_sy+tf_sh)return;
-    state=tf_keystate(i);c=tf_mono?15:tf_zones[tf_keys[i][5]];
-    gk_box(tf_kx,tf_ky0,tf_kww,tf_khh,GK_RAISED2,c);
-    if(state&3){c=tf_mono?0:TF_YELLOW;
-        bx_fill(tf_kx+3,tf_ky0+3,tf_kx+tf_kww-4,tf_ky0+3,c);
-        bx_fill(tf_kx+3,tf_ky0+tf_khh-4,tf_kx+tf_kww-4,tf_ky0+tf_khh-4,c);
-        bx_fill(tf_kx+3,tf_ky0+4,tf_kx+3,tf_ky0+tf_khh-5,c);
-        bx_fill(tf_kx+tf_kww-4,tf_ky0+4,tf_kx+tf_kww-4,tf_ky0+tf_khh-5,c);}
+    state=tf_keystate(i);ovl_tf_keycap(i,state);
     s=tf_keylabel(i);f=tf_compact?BT_F_SMALL:(tf_kww<34?-1:tf_khh>=26?BT_F_TITLE:tf_font);fh=f==BT_F_TITLE?16:f<0||tf_compact?8:10;
     ly=tf_ky0+1+(tf_khh-3-fh)/2;
     if(!selective||(ly<tf_sy+tf_sh&&ly+fh>tf_sy)){
-        lw=bx_twidth(s,f);lx=tf_kx+2+(tf_kww-12-lw)/2;
-        if(!selective||(lx<tf_sx+tf_sw&&lx+lw>tf_sx))gk_textbox(tf_kx+2,tf_ky0+1,tf_kww-12,tf_khh-3,s,0,f,GK_CENTRE|GK_FIT);
+        lw=bx_twidth(s,f);lx=tf_kx+4+(tf_kww-8-lw)/2;
+        if(!selective||(lx<tf_sx+tf_sw&&lx+lw>tf_sx))gk_textbox(tf_kx+4,tf_ky0+1,tf_kww-8,tf_khh-3,s,0,f,GK_CENTRE|GK_FIT);
     }
-    if(i<47&&tf_khh>=26&&tf_keys[i][1]!=tf_keys[i][0]&&tf_keys[i][0]<'a'&&tf_kx+6<tf_sx+tf_sw&&tf_kx+14>tf_sx&&tf_ky0+5<tf_sy+tf_sh&&tf_ky0+13>tf_sy){
-        tf_char[0]=tf_keys[i][1];tf_char[1]=0;bx_text(tf_kx+6,tf_ky0+5,tf_char,0,BT_F_SMALL);}
-    if(tf_kx+tf_kww-12<tf_sx+tf_sw&&tf_kx+tf_kww-4>tf_sx&&tf_ky0+4<tf_sy+tf_sh&&tf_ky0+12>tf_sy){
-        if((state&16)&&!(state&5))bx_text(tf_kx+tf_kww-12,tf_ky0+4,"+",tf_mono?0:TF_GREEN,-1);
-        if(state&4)bx_text(tf_kx+tf_kww-12,tf_ky0+4,"!",tf_mono?0:TF_RED,-1);
-    }
-    if(state&8)bx_fill(tf_kx+4,tf_ky0+tf_khh-5,tf_kx+tf_kww-5,tf_ky0+tf_khh-5,tf_mono?0:15);
-    if(i==29||i==32)bx_fill(tf_kx+tf_kww/2-3,tf_ky0+tf_khh-6,tf_kx+tf_kww/2+2,tf_ky0+tf_khh-6,0);
+    if(i<47&&tf_khh>=26&&tf_keys[i][1]!=tf_keys[i][0]&&tf_keys[i][0]<'a'&&tf_kx+5<tf_sx+tf_sw&&tf_kx+13>tf_sx&&tf_ky0+5<tf_sy+tf_sh&&tf_ky0+13>tf_sy){
+        tf_char[0]=tf_keys[i][1];tf_char[1]=0;bx_text(tf_kx+5,tf_ky0+5,tf_char,0,BT_F_SMALL);}
+
 }
 static int ovl_tf_arrange(void)
 {
@@ -331,17 +363,25 @@ static int ovl_tf_arrange(void)
     tf_mono=tf_vid.bpp<4;tf_compact=tf_h<280;
     tf_font=tf_compact?BT_F_SMALL:BT_F_TEXT;tf_title=tf_compact?BT_F_TEXT:(tf_h>=400?BT_F_LARGE:BT_F_TITLE);tf_th=tf_compact?8:10;
     tf_top=tf_y+(tf_compact?24:(tf_h>=400?58:46));tf_bottom=tf_y+tf_h-(tf_compact?10:17);
-    tf_kw=(tf_w-16)/15;tf_kh=tf_compact?(tf_h<154?10:12):(tf_h>=400?28:22);
-    tf_ky=tf_bottom-5*tf_kh-2;tf_statsy=tf_ky-(tf_compact?11:24);
-    tf_px=tf_x+8;tf_py=tf_top+4;tf_pw=tf_compact?0:(tf_w>=760?180:136);tf_ph=tf_ky-tf_py-5;
-    tf_promptx=tf_x+(tf_compact?8:tf_pw+24);tf_prompty=tf_top+(tf_compact?2:30);
+    tf_kw=(tf_w-(tf_compact?16:32))/15;
+    tf_kh=tf_compact?(tf_h<154?10:12):(tf_bottom-tf_top)*45/500;
+    if(!tf_compact){if(tf_kh<18)tf_kh=18;if(tf_kh>52)tf_kh=52;}
+    if(tf_h>=400&&tf_kh>(tf_bottom-tf_top-190)/5)tf_kh=(tf_bottom-tf_top-190)/5;
+    tf_ky=tf_bottom-5*tf_kh-(tf_compact?2:6);
+    tf_stath=tf_compact?11:tf_h>=380?30:20;tf_statsy=tf_ky-tf_stath-(tf_compact?0:4);
+    tf_px=tf_x+8;tf_py=tf_top+4;tf_pw=tf_compact?0:(tf_w/4)&~7;
+    if(!tf_compact){if(tf_pw<136)tf_pw=136;if(tf_pw>196)tf_pw=196;}
+    tf_ph=tf_ky-tf_py-6;
+    tf_promptx=tf_x+(tf_compact?8:tf_pw+24);tf_prompty=tf_compact?tf_top+2:tf_py+(tf_h>=400?24:18);
     space=tf_x+tf_w-12-tf_promptx;
-    tf_cw=tf_compact?8:(tf_h>=400?16:12);tf_ch=tf_compact?8:(tf_h>=400?28:16);
+    tf_cw=tf_compact?8:(tf_h>=400?16:12);tf_ch=tf_compact?8:tf_h>=400?28:tf_h<300?14:16;
     tf_cols=space/tf_cw;if(tf_cols>40)tf_cols=40;if(tf_cols<12)tf_cols=12;
-    tf_inputy=tf_prompty+2*tf_ch+(tf_compact?2:12);
+    tf_inputy=tf_prompty+2*tf_ch+(tf_compact?2:tf_h>=400?7:1);
+    tf_inputx=tf_promptx+(tf_compact?0:4*tf_cw);tf_inputcols=tf_cols-(tf_compact?0:4);
+    tf_hinty=tf_compact?tf_y+2:tf_statsy-(tf_h>=400?29:21);tf_hinth=tf_compact?8:tf_h>=400?16:10;
     bx_setup(tf_band,0,tf_cap,tf_art,tf_mono?1:4);gk_init(tf_mono?1:4);gk_theme(tf_mono?tf_monoroles:tf_roles);
     for(i=0;i<95;i++){tf_char[0]=i+32;tf_char[1]=0;tf_glyphw[i]=bx_twidth(tf_char,tf_font);}
-    for(i=0;i<TF_KEYS;i++){tf_keyx[i]=tf_x+8+tf_keys[i][3]*tf_kw/4;tf_keyw[i]=tf_keys[i][4]*tf_kw/4-2;}
+    for(i=0;i<TF_KEYS;i++){tf_keyx[i]=tf_x+(tf_compact?8:16)+tf_keys[i][3]*tf_kw/4;tf_keyw[i]=tf_keys[i][4]*tf_kw/4-2;}
     for(i=0;i<5;i++)tf_rowy[i]=tf_ky+i*tf_kh;
     tf_statsx=tf_compact?tf_x:tf_promptx-4;tf_statsw=tf_compact?tf_w:tf_x+tf_w-8-tf_statsx;
     tf_cosrows=1;while((tf_ph+tf_cosrows-1)/tf_cosrows>TF_COS_MAX)tf_cosrows++;
@@ -484,17 +524,19 @@ static void ovl_tf_drawcaption(void)
 }
 static void ovl_tf_drawhint(void)
 {
-    int c,i,n;
-    if(tf_compact){if(tf_y+2>=tf_sy+tf_sh||tf_y+12<=tf_sy)return;}
-    else if(tf_top+6>=tf_sy+tf_sh||tf_top+24<=tf_sy)return;
-    c=tf_target();i=tf_keyid(c);n=0;
-    if(bt_session.status==BT_READY){n=tf_append(n,"READY - starts in ");tf_number(n,bt_session.countdown);}
-    else if(i>=0){n=tf_append(n,"NEXT ");tf_char[0]=c;tf_char[1]=0;n=tf_append(n,c==32?"SPACE":tf_char);
+    int c,i,n,font,x,w;
+    if(tf_compact){x=tf_x+(tf_w>=600?280:220);w=tf_x+tf_w-70-x;}
+    else{x=tf_promptx;w=tf_cols*tf_cw;if(w>344)w=344;}
+    if(tf_hinty>=tf_sy+tf_sh||tf_hinty+tf_hinth<=tf_sy)return;
+    c=tf_target();i=tf_keyid(c);n=0;font=BT_F_SMALL;
+    if(bt_session.status==BT_READY){n=tf_append(0,"GET READY  ");tf_number(n,bt_session.countdown);font=tf_compact?BT_F_SMALL:tf_h>=400?BT_F_TITLE:BT_F_TEXT;}
+    else if(tf_go_left&&bt_session.mode==BT_CHALLENGE){tf_append(0,"GO!  GREAT SUCCESS AWAITS.");font=tf_compact?BT_F_SMALL:tf_h>=400?BT_F_TITLE:BT_F_TEXT;}
+    else if(i>=0){n=tf_append(0,"NEXT: ");tf_char[0]=c;tf_char[1]=0;n=tf_append(n,c==32?"SPACE":tf_char);
         n=tf_append(n,"  ");n=tf_append(n,tf_fingers[tf_keys[i][5]]);
-        if(tf_shift(c)>=0)tf_append(n,tf_shift(c)==51?" + left Shift":" + right Shift");}
+        if(tf_shift(c)>=0)n=tf_append(n,tf_shift(c)==51?" + left Shift":" + right Shift");
+        if(bt_session.last_wrong){n=tf_append(n,"  WRONG: ");tf_char[0]=bt_session.last_wrong;tf_char[1]=0;tf_append(n,tf_char);}}
     else tf_append(0,"F4 Resume / Pause");
-    if(tf_compact){i=tf_w>=600?280:220;tf_text(tf_x+i,tf_y+2,tf_w-i-70,tf_buf,TF_YELLOW,BT_F_SMALL);}
-    else tf_text(tf_promptx,tf_top+6,tf_w-(tf_promptx-tf_x)-12,tf_buf,TF_YELLOW,tf_font);
+    gk_textbox(x,tf_hinty,w,tf_hinth,tf_buf,tf_ink(TF_YELLOW),font,GK_LEFT|GK_FIT);
 }
 static int tf_cellc(int j)
 {
@@ -506,7 +548,7 @@ static int tf_cellc(int j)
 static int tf_cellstate(int j)
 {
     int p;p=(j<2*tf_cols?tf_view:tf_inputview)+(j<2*tf_cols?j:j-2*tf_cols);
-    if(p==bt_session.pos)return 2;
+    if(p==bt_session.pos)return j<2*tf_cols||tf_caret_on?2:0;
     return p<bt_session.pos?1:0;
 }
 static void tf_cache_cell(int i,int force)
@@ -520,15 +562,15 @@ static void tf_cache_cell(int i,int force)
 }
 static void tf_cellrect(int j)
 {
-    tf_sx=tf_promptx+(j%tf_cols)*tf_cw;
+    tf_sx=(j<2*tf_cols?tf_promptx:tf_inputx)+(j%tf_cols)*tf_cw;
     tf_sy=j<2*tf_cols?tf_prompty+(j/tf_cols)*tf_ch:tf_inputy;
     tf_sw=tf_cw;tf_sh=tf_ch;
 }
 static void tf_drawcell(int j)
 {
     int c,s,x,y,col,font;
-    if(tf_compact&&tf_h<140&&j>=2*tf_cols)return;
-    c=tf_cellc(j);s=tf_cellstate(j);x=tf_promptx+(j%tf_cols)*tf_cw;
+    if((tf_compact&&tf_h<140&&j>=2*tf_cols)||j>=2*tf_cols+tf_inputcols)return;
+    c=tf_cellc(j);s=tf_cellstate(j);x=(j<2*tf_cols?tf_promptx:tf_inputx)+(j%tf_cols)*tf_cw;
     y=j<2*tf_cols?tf_prompty+(j/tf_cols)*tf_ch:tf_inputy;
     if(x+tf_cw<=tf_sx||x>=tf_sx+tf_sw||y+tf_ch<=tf_sy||y>=tf_sy+tf_sh)return;
     col=s==1?TF_GREEN:TF_WHITE;font=tf_compact?-1:(tf_h>=400?BT_F_LARGE:BT_F_TEXT);
@@ -538,37 +580,73 @@ static void tf_drawcell(int j)
     if(s==1&&tf_mono)bx_fill(x,y+tf_ch-1,x+tf_cw-2,y+tf_ch-1,0);
     if(s==2)bx_fill(x+1,y+tf_ch-2,x+tf_cw-2,y+tf_ch-2,tf_mono?15:0);
 }
+static int ovl_tf_progress_width(void)
+{
+    unsigned total,value;
+    total=bt_session.length;value=bt_session.pos;
+    if(bt_session.mode==BT_CHALLENGE){total=bt_session.duration==0?60:bt_session.duration==1?180:300;value=bt_session.remaining;}
+    return total?bt_muldiv(value,tf_cols*tf_cw-4,total):0;
+}
+static void ovl_tf_drawprogress(void)
+{
+    int x,y,w;
+    if(tf_compact)return;
+    x=tf_promptx-1;y=tf_statsy-10;w=tf_cols*tf_cw+2;
+    gk_box(x,y,w,6,GK_SUNKEN,tf_mono?15:5);
+    if(tf_progressfill)bx_fill(x+2,y+2,x+1+tf_progressfill,y+3,tf_mono?0:TF_GREEN);
+}
+static void ovl_tf_drawclock(void)
+{
+    unsigned sec;
+    if(tf_compact||bt_session.mode!=BT_CHALLENGE)return;
+    sec=bt_session.remaining;
+    tf_buf[0]='0';tf_buf[1]='0'+sec/60;tf_buf[2]=':';
+    tf_buf[3]='0'+(sec%60)/10;tf_buf[4]='0'+sec%10;tf_buf[5]=0;
+    gk_textbox(tf_x+tf_w-88,tf_py+1,72,16,tf_buf,tf_ink(TF_YELLOW),BT_F_TITLE,GK_RIGHT|GK_FIT);
+}
 static void ovl_tf_drawprompt(void)
 {
-    int i,x,w;
-    ovl_tf_drawhint();
-    if(!tf_compact){x=tf_promptx-4;w=tf_w-(x-tf_x)-8;
-        gk_box(x,tf_prompty-5,w,2*tf_ch+10,GK_SUNKEN2,tf_ground());
-        if(tf_inputy+tf_ch+13<tf_statsy)tf_text(x,tf_inputy+tf_ch+5,w,"ACCEPTED INPUT  |  Wrong keys stay on the same target",TF_WHITE,BT_F_SMALL);
-        gk_box(x,tf_inputy-3,w,tf_ch+6,GK_SUNKEN,tf_ground());
-        if(bt_session.mode==BT_LESSON&&tf_inputy+tf_ch+20+2*(tf_th+2)<tf_statsy)ovl_tf_lines(x,tf_inputy+tf_ch+20,w,2,bt_lessons[bt_session.lesson].instruction);
+    int i,x,w,y,h,n;
+    if(!tf_compact){
+        x=tf_promptx-8;w=tf_x+tf_w-8-x;y=tf_py;h=tf_statsy-y-4;
+        gk_box(x,y,w,h,GK_SUNKEN2,tf_ground());
+        bx_fill(x+3,y+17,x+w-4,y+18,tf_ink(TF_CYAN));
+        n=0;
+        if(bt_session.mode==BT_CHALLENGE){n=tf_number(0,bt_session.duration==0?1:bt_session.duration==1?3:5);tf_append(n," MINUTE CHALLENGE");}
+        else if(bt_session.mode==BT_LESSON)tf_append(0,bt_lessons[bt_session.lesson].name);
+        else{n=tf_append(0,tf_group[bt_session.difficulty]);tf_append(n," PRACTICE");}
+        tf_text(x+7,y+1,w-(bt_session.mode==BT_CHALLENGE?100:14),tf_buf,TF_YELLOW,BT_F_TITLE);
+        ovl_tf_drawclock();
+        gk_box(tf_promptx-2,tf_inputy-1,tf_cols*tf_cw+4,tf_ch+2,GK_SUNKEN,tf_ground());
+        tf_text(tf_promptx+3,tf_inputy+(tf_ch-8)/2,4*tf_cw-6,"YOU TYPE",TF_WHITE,BT_F_SMALL);
+        ovl_tf_drawprogress();
     }
+    ovl_tf_drawhint();
     if(tf_prompty<tf_sy+tf_sh&&tf_prompty+tf_ch>tf_sy)for(i=0;i<tf_cols;i++)tf_drawcell(i);
     if(tf_prompty+tf_ch<tf_sy+tf_sh&&tf_prompty+2*tf_ch>tf_sy)for(i=tf_cols;i<2*tf_cols;i++)tf_drawcell(i);
-    if(tf_inputy<tf_sy+tf_sh&&tf_inputy+tf_ch>tf_sy)for(i=2*tf_cols;i<3*tf_cols;i++)tf_drawcell(i);
+    if(tf_inputy<tf_sy+tf_sh&&tf_inputy+tf_ch>tf_sy)for(i=2*tf_cols;i<2*tf_cols+tf_inputcols;i++)tf_drawcell(i);
 }
 static void ovl_tf_drawstat(int i)
 {
-    int x,w,n;static const char *labels[]={"WPM ","ACC ","STREAK ","TIME ","ERR "};
+    int x,w,n,font,y;static const char *labels[]={"SPEED","ACCURACY","STREAK","TIME","ERRORS"};
+    static const char *shortlabels[]={"WPM ","ACC ","STREAK ","TIME ","ERR "};
     w=tf_statsw/5;x=tf_statsx+i*w;
-    if(x+w<=tf_sx||x>=tf_sx+tf_sw||tf_statsy+24<=tf_sy||tf_statsy>=tf_sy+tf_sh)return;
-    n=tf_append(0,labels[i]);
-    if(i==0){if(bt_session.seconds)tf_number(n,bt_session.wpm);else tf_append(n,"-");}
+    if(x+w<=tf_sx||x>=tf_sx+tf_sw||tf_statsy+tf_stath<=tf_sy||tf_statsy>=tf_sy+tf_sh)return;
+    if(!tf_compact)gk_box(x,tf_statsy,w,tf_stath,GK_SUNKEN,tf_ground());
+    n=tf_append(0,tf_stath>=30?"":shortlabels[i]);
+    if(i==0){n=bt_session.seconds?tf_number(n,bt_session.wpm):tf_append(n,"-");if(tf_stath>=30)tf_append(n," WPM");}
     if(i==1){if(bt_session.attempts){n=tf_number(n,bt_session.accuracy);tf_append(n,"%");}else tf_append(n,"-");}
     if(i==2)tf_number(n,bt_session.streak);
     if(i==3){n=tf_number(n,bt_session.mode==BT_CHALLENGE?bt_session.remaining:bt_session.seconds);tf_append(n,"s");}
     if(i==4)tf_number(n,bt_session.errors);
-    if(x+w<=tf_sx||x>=tf_sx+tf_sw||tf_statsy+24<=tf_sy||tf_statsy>=tf_sy+tf_sh)return;
-    tf_text(x+4,tf_statsy+(tf_compact?1:5),w-8,tf_buf,TF_YELLOW,tf_font);
+    font=tf_font;y=tf_statsy+(tf_compact?1:4);
+    if(tf_stath>=30){tf_text(x+4,tf_statsy+2,w-8,labels[i],TF_WHITE,BT_F_SMALL);font=bx_twidth(tf_buf,BT_F_TITLE)<=w-8?BT_F_TITLE:tf_font;y=tf_statsy+12;}
+    tf_text(x+4,y,w-8,tf_buf,TF_YELLOW,font);
 }
-static void tf_playbase(void)
+static void ovl_tf_playbase(void)
 {
     int i;
+    if(!tf_compact)gk_box(tf_x+8,tf_ky-4,tf_w-16,5*tf_kh+8,GK_SUNKEN2,tf_mono?15:TF_BLUE);
     ovl_tf_drawportrait();ovl_tf_drawcaption();ovl_tf_drawprompt();
     for(i=0;i<5;i++)ovl_tf_drawstat(i);
     for(i=0;i<TF_KEYS;i++)tf_drawkey(i,0);
@@ -592,16 +670,18 @@ static void tf_render(int x,int y,int w,int h,int kind,int item)
         if(kind==1)ovl_tf_drawheader();
         else if(kind==2)ovl_tf_drawfooter();
         else if(kind==3)ovl_tf_drawbody();
-        else if(kind==4)tf_playbase();
+        else if(kind==4)ovl_tf_playbase();
         else if(kind==5){ovl_tf_drawportrait();ovl_tf_drawcaption();}
         else if(kind==6){if(!tf_compact)ovl_tf_drawportrait();ovl_tf_drawcaption();}
         else if(kind==7)ovl_tf_drawhint();
         else if(kind==8){lo=(item/tf_cols)*tf_cols;hi=lo+tf_cols;
             i=item-1;if(i<lo)i=lo;
-            while(i<hi&&tf_promptx+(i%tf_cols)*tf_cw<x+w){tf_drawcell(i);i++;}}
+            while(i<hi&&(i<2*tf_cols?tf_promptx:tf_inputx)+(i%tf_cols)*tf_cw<x+w){tf_drawcell(i);i++;}}
         else if(kind==9){lo=item?item-1:0;hi=item<4?item+1:4;for(i=lo;i<=hi;i++)ovl_tf_drawstat(i);}
         else if(kind==10){tf_drawkey(item,1);i=tf_neighbor[item][0];if(i!=255)tf_drawkey(i,1);i=tf_neighbor[item][1];if(i!=255)tf_drawkey(i,1);}
         else if(kind==11)tf_text(tf_vsx,tf_vsy,tf_w-24,tf_soundstatus(),TF_YELLOW,tf_font);
+        else if(kind==12)ovl_tf_drawprogress();
+        else if(kind==13)ovl_tf_drawclock();
         bx_out();y+=n;
     }
 }
@@ -700,16 +780,17 @@ void bt_face_paint(void *win,int full)
     urgent=urgent||keychange;
     if(keychange)tf_keyrefresh(full);
     if(textchange){tf_view=(bt_session.pos/(2*tf_cols))*(2*tf_cols);
-    tf_inputview=(bt_session.pos/tf_cols)*tf_cols;
+    tf_inputview=(bt_session.pos/tf_inputcols)*tf_inputcols;
     }
-    ncells=tf_compact&&tf_h<140?2*tf_cols:3*tf_cols;
+    ncells=tf_compact&&tf_h<140?2*tf_cols:2*tf_cols+tf_inputcols;
+    if(full)tf_progressfill=ovl_tf_progress_width();
     if(full){tf_render(tf_x,tf_top,tf_w,tf_bottom-tf_top,4,0);}
     key=bt_expression();if(key==1&&bt_blink_frame)key|=8;
     if(full||tf_portrait!=key){tf_portrait=key;if(!tf_compact)tf_cosneeded=1;tf_cosearch=0;tf_cospos=(tf_ph>=150?38:14)/tf_cosrows;if(tf_cospos>=tf_cosn)tf_cospos=0;}
     key=tf_string(5381,bt_caption());
     if(full||key!=tf_captionkey){tf_captionkey=key;tf_cosneeded=1;tf_cosearch=0;tf_capneeded=1;tf_capline=0;
         tf_capepoch++;if(tf_capepoch>=16){tf_capepoch=0;for(i=0;i<tf_cosn;i++)tf_coskey[i]=255;}}
-    key=tf_mix(tf_target(),bt_session.status);key=tf_mix(key,bt_session.countdown);
+    key=tf_mix(tf_target(),bt_session.status);key=tf_mix(key,bt_session.countdown);key=tf_mix(key,tf_go_left!=0);key=tf_mix(key,bt_session.last_wrong);
     if(full||key!=tf_hintkey){if(full&&tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_y+2,tf_w-i-70,8,7,0);}tf_hintpending=!full;tf_hintkey=key;}
     if(textchange){
         for(i=0;i<2;i++){tf_dirtyfirst[i]=-1;tf_dirtylast[i]=-1;}if(full){tf_dirtyfirst[2]=-1;tf_dirtylast[2]=-1;}
@@ -727,20 +808,26 @@ void bt_face_paint(void *win,int full)
             else tf_render(x,y,w,h,8,tf_dirtyfirst[i]);
         }
     }
-    for(i=0;i<5;i++){
+    if(tf_savedcaret!=tf_caret_on){i=2*tf_cols+bt_session.pos-tf_inputview;if(i>=2*tf_cols&&i<ncells)tf_cache_cell(i,full);tf_savedcaret=tf_caret_on;}
+    for(i=0;i<7;i++){
         if(i==0)key=bt_session.seconds?bt_session.wpm:65535u;
         else if(i==1)key=bt_session.attempts?bt_session.accuracy:65535u;
         else if(i==2)key=bt_session.streak;
         else if(i==3)key=bt_session.mode==BT_CHALLENGE?bt_session.remaining:bt_session.seconds;
-        else key=bt_session.errors;
+        else if(i==4)key=bt_session.errors;
+        else if(i==5)key=bt_session.mode==BT_CHALLENGE?bt_session.remaining:bt_session.pos;
+        else key=bt_session.mode==BT_CHALLENGE?bt_session.remaining:0;
         if(full||key!=tf_statkey[i]){if(!full)tf_statpend|=1<<i;tf_statkey[i]=key;}
     }
     if(keychange)for(i=0;i<TF_KEYS;i++){s=tf_keystate(i);if(full||s!=tf_keycache[i]){
         if(!full){c=s^tf_keycache[i];tf_keyrect(i);x=tf_kx;y=tf_ky0;w=tf_kww;h=tf_khh;
             if(h>=20){
-                if(c&3){os88_set_color(s&3?(tf_mono?0:TF_YELLOW):(tf_mono?15:tf_zones[tf_keys[i][5]]));os88_gfx_frame(x+3,y+3,x+w-4,y+h-4);}
-                if(c&20)os88_font_run(x+w-12,y+4,s&4?"!":(s&16)&&!(s&5)?"+":" ",tf_mono?0:s&4?TF_RED:TF_GREEN,tf_mono?15:tf_zones[tf_keys[i][5]]);
-                if(c&8){os88_set_color(s&8?(tf_mono?0:15):(tf_mono?15:tf_zones[tf_keys[i][5]]));os88_gfx_hline(x+4,x+w-5,y+h-5);}
+                if(c&3){os88_set_color(s&3?(tf_mono?0:TF_YELLOW):tf_keycolor(i));os88_gfx_frame(x+4,y+4,x+w-6,y+h-6);}
+                if(c&20){os88_set_color(tf_keycolor(i));os88_gfx_fill(x+w-9,y+4,x+w-5,y+11);
+                    if(s&3){os88_set_color(tf_mono?0:TF_YELLOW);os88_gfx_hline(x+w-9,x+w-6,y+4);os88_gfx_fill(x+w-6,y+5,x+w-6,y+11);}
+                    if(s&4){os88_set_color(tf_mono?0:TF_RED);os88_gfx_fill(x+w-7,y+4,x+w-7,y+7);os88_gfx_fill(x+w-7,y+10,x+w-7,y+10);}
+                    else if((s&16)&&!(s&1)){os88_set_color(tf_mono?0:TF_GREEN);os88_gfx_hline(x+w-9,x+w-5,y+7);os88_gfx_fill(x+w-7,y+5,x+w-7,y+9);}}
+                if(c&8){os88_set_color(s&8?(tf_mono?0:15):tf_keycolor(i));os88_gfx_hline(x+5,x+w-7,y+h-7);}
             }else tf_render(x,y,w,h,10,i);
         }tf_keycache[i]=s;}}
     tf_savedpos=bt_session.pos;tf_savedlen=bt_session.length;tf_savedcomplete=bt_session.completed;
@@ -750,8 +837,12 @@ void bt_face_paint(void *win,int full)
     else if(!urgent){
         if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];c=tf_dirtylast[2]-i+1;if(c>2)c=2;tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,c*tf_cw,h,8,i);tf_dirtyfirst[2]+=c;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
         else if(tf_footpending){h=tf_h-(tf_bottom-tf_y)-tf_footrow;if(h>4)h=4;tf_render(tf_x,tf_bottom+tf_footrow,tf_w,h,2,0);tf_footrow+=h;if(tf_footrow>=tf_h-(tf_bottom-tf_y))tf_footpending=0;}
-        else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_y+2,tf_w-i-70,8,7,0);}else tf_render(tf_promptx,tf_top+6,224,tf_th,7,0);tf_hintpending=0;}
-        else if(tf_statpend){for(c=0;c<5;c++){i=tf_statnext;tf_statnext++;if(tf_statnext>=5)tf_statnext=0;if(tf_statpend&(1<<i)){tf_render(tf_statsx+i*(tf_statsw/5),tf_statsy+(tf_compact?1:5),tf_statsw/5,tf_th,9,i);tf_statpend&=~(1<<i);break;}}}
+        else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_hinty,tf_w-i-70,tf_hinth,7,0);}else tf_render(tf_promptx,tf_hinty,tf_cols*tf_cw<344?tf_cols*tf_cw:344,tf_hinth,7,0);tf_hintpending=0;}
+        else if(tf_statpend){for(c=0;c<7;c++){i=tf_statnext;tf_statnext++;if(tf_statnext>=7)tf_statnext=0;if(tf_statpend&(1<<i)){
+            if(i<5)tf_render(tf_statsx+i*(tf_statsw/5),tf_statsy,tf_statsw/5,tf_stath,9,i);
+            else if(!tf_compact&&i==5){s=ovl_tf_progress_width();x=tf_progressfill<s?tf_progressfill:s;w=tf_progressfill<s?s-tf_progressfill:tf_progressfill-s;tf_progressfill=s;if(w)tf_render(tf_promptx+1+x,tf_statsy-8,w,2,12,0);}
+            else if(!tf_compact&&bt_session.mode==BT_CHALLENGE)tf_render(tf_x+tf_w-88,tf_py+1,72,16,13,0);
+            tf_statpend&=~(1<<i);break;}}}
         else if(tf_cosneeded)ovl_tf_cosmetics();
         else if(!tf_compact&&tf_meterlast!=bt_music_phase)ovl_tf_meter();
     }

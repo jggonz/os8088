@@ -43,6 +43,7 @@ static const char *caption="Your fingers have returned from holiday.";
 const char *bt_caption(void){return caption;}int bt_expression(void){return expression;}
 const char *bt_reaction_history(int back){return back<4?"Your fingers have returned from holiday.":"";}
 int bt_weak(int rank){return rank==0?'f':0;}
+unsigned bt_muldiv(BTWord a,BTWord b,BTWord d){return d?(BTWord)((uint32_t)a*b/d):65535;}
 void os88_wm_content(void *w,struct os88_pt *p){(void)w;p->x=8;p->y=24;}
 int os88_wm_geom(void *w,struct os88_size *s){(void)w;s->w=hw;s->h=hh;return 0;}
 void os88_wm_display(void *w,struct os88_video *v){(void)w;v->bpp=hbpp;}
@@ -60,7 +61,13 @@ void bx_setup(unsigned a,void *b,unsigned c,unsigned d,int e){(void)b;(void)c;(v
 void bx_setart2(unsigned a){(void)a;}
 void gk_init(int a){(void)a;}void gk_theme(const unsigned char *a){(void)a;}
 int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){if(!strcmp(s,tf_soundstatus()))status_seen++;if(!strncmp(s,"Borat: ",7))reaction_seen++;if(!strcmp(s,"ACCURACY"))accuracy_y=y;if((!strcmp(s,"-")&&y==accuracy_y)||strstr(s,"Accuracy -"))accuracy_dash++;for(int a=0;a<7;a++)if(strstr(s,tf_achnames[a]))achievement_seen|=1u<<a;(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
-int gk_textbox(int x,int y,int w,int h,const char *s,int c,int f,int fl){(void)h;return gk_text(x,y,w,s,c,f,fl);}
+int gk_textbox(int x,int y,int w,int h,const char *s,int c,int f,int fl){
+ if(bt_screen==BT_S_PLAY&&(!strcmp(s,"F")||!strcmp(s,"J"))){
+  tf_keyrect(!strcmp(s,"F")?29:32);assert(x*2+w==tf_kx*2+tf_kww);assert(fl&GK_CENTRE);
+  if(!tf_compact&&tf_khh>=26&&tf_kww>=34)assert(f==BT_F_TITLE);
+ }
+ (void)h;return gk_text(x,y,w,s,c,f,fl);
+}
 void gk_box(int x,int y,int w,int h,int s,int f){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;}
 void gk_button(int x,int y,int w,int h,const char *s,int f,int st){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;(void)st;}
 static void keyboard(void)
@@ -72,7 +79,7 @@ static void keyboard(void)
   act=bt_face_click(tf_kx+tf_kww/2,tf_ky0+tf_khh/2);
   assert(act==BT_A_HINT_BASE+tf_keys[i][0]);
   for(j=i+1;j<58;j++)if(tf_keys[j][2]==tf_keys[i][2]){
-   int left=tf_x+8+tf_keys[j][3]*tf_kw/4;
+   int left=tf_x+(tf_compact?8:16)+tf_keys[j][3]*tf_kw/4;
    int width=tf_keys[j][4]*tf_kw/4-2;
    assert(tf_kx+tf_kww<=left||left+width<=tf_kx);
   }
@@ -84,6 +91,33 @@ static void keyboard(void)
  assert(tf_keys[tf_keyid('i')][5]==6);assert(tf_keys[tf_keyid('j')][5]==5);
  assert(tf_shift('A')==52&&tf_shift('J')==51&&tf_shift('?')==51&&tf_shift('!')==52);
  for(i=32;i<127;i++)assert(tf_keyid(i)>=0);
+}
+static void play_geometry(void)
+{
+ static BTSession saved;int i;
+ assert(tf_inputcols>0&&tf_inputcols<=tf_cols);
+ assert(tf_inputx+tf_inputcols*tf_cw<=tf_x+tf_w-8);
+ if(!tf_compact){
+  assert(tf_kw*15>=tf_w-47&&tf_kw*15<=tf_w-32);
+  assert(tf_pw>=136&&tf_pw<=196&&tf_promptx>=tf_px+tf_pw+8);
+  assert(tf_prompty+2*tf_ch<=tf_inputy-1);
+  assert(tf_inputy+tf_ch+1<=tf_hinty);
+  assert(tf_hinty+tf_hinth<=tf_statsy-10);
+  assert(tf_statsy+tf_stath+4==tf_ky);
+  assert(tf_rowy[4]+tf_kh<=tf_bottom);
+  if(tf_h==420&&tf_w==624){assert(tf_pw==152&&tf_ph==174&&tf_kh==31);}
+ }
+ memcpy(&saved,&bt_session,sizeof(saved));
+ bt_session.status=BT_READY;tf_play_clock(100);assert(tf_clockready);
+ bt_session.status=BT_ACTIVE;tf_play_clock(101);assert(tf_go_left==9);
+ tf_play_clock(109);assert(tf_go_left==1);tf_play_clock(110);assert(!tf_go_left);
+ tf_play_clock(117);assert(tf_caret_on==1);tf_play_clock(126);assert(tf_caret_on==0);
+ memcpy(&bt_session,&saved,sizeof(saved));tf_caret_on=1;
+ for(i=0;i<3;i++){
+  bt_session.mode=BT_CHALLENGE;bt_session.duration=i;bt_session.remaining=i==0?60:i==1?180:300;
+  assert(ovl_tf_progress_width()==tf_cols*tf_cw-4);bt_session.remaining=0;assert(!ovl_tf_progress_width());
+ }
+ memcpy(&bt_session,&saved,sizeof(saved));
 }
 static void blink(void)
 {
@@ -138,12 +172,12 @@ static void screens(void)
 }
 int main(void)
 {
- int dims[][2]={{624,128},{624,160},{624,240},{624,280},{624,300},{624,420},{616,410},{640,480},{784,540},{1008,708},{480,128},{480,150}};
+ int dims[][2]={{624,128},{624,160},{624,240},{624,280},{624,300},{624,380},{624,399},{624,400},{624,420},{616,410},{640,480},{784,540},{1008,708},{480,128},{480,150},{480,280},{480,300},{480,400}};
  unsigned fullarea;
  strcpy(bt_store.profile[0].name,"Learner");strcpy(bt_session.passage,"fj jf FJ!? My name is Borat.");bt_session.length=strlen(bt_session.passage);bt_session.status=BT_ACTIVE;
  for(int m=0;m<2;m++)for(unsigned d=0;d<sizeof(dims)/sizeof(dims[0]);d++){
   hw=dims[d][0];hh=dims[d][1];hbpp=m?1:4;bt_face_init(1,2,8192,hbpp);bt_screen=BT_S_PLAY;bt_session.pos=0;bt_session.last_wrong=0;bt_session.attempts=0;bt_session.correct=0;bt_session.streak=0;
-  bt_face_paint(0,1);keyboard();screens();bt_screen=BT_S_PLAY;bt_face_paint(0,1);
+  bt_face_paint(0,1);keyboard();play_geometry();screens();bt_screen=BT_S_PLAY;bt_face_paint(0,1);
   area=flushes=0;bt_face_paint(0,0);assert(area==0&&flushes==0);
   fullarea=hw*hh;bt_session.pos=1;bt_session.streak=1;bt_session.correct=1;bt_session.attempts=1;bt_face_paint(0,0);
   if(area>fullarea/6){fprintf(stderr,"too much repaint %dx%d %u/%u\n",hw,hh,area,fullarea);abort();}

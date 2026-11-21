@@ -173,6 +173,42 @@ work to PLAY. New literals must fit the current resident cap; fonts, common
 buttons/header/footer and portrait scene assets remain shared helpers.
 
 
+### 3.1 Native PLAY proportions and bounded updates
+
+The native lesson/practice/challenge face follows reference designs6,8,9:
+one quarter-width portrait panel at the upper left, a framed typing panel
+and separate framed statistics at the upper right, and a deep five-row
+physical keyboard across the lower body. The shared header/footer retain
+their existing live-content bounds. At624×420 content the keyboard row
+pitch is31pixels and the left panel is152×174pixels: a96×120scene fits above
+three caption lines. Shorter displays use the existing40×48portrait fallback;
+content below280pixels high retains the complete compact keyboard/prompt
+layout down to480×128. No required punctuation, modifier or physical key
+is removed to copy the simplified keyboard in a reference image.
+
+The typing panel has its own lesson/challenge title, two prominent target
+rows, an inset accepted-input row, next-key/finger/Shift or ready-count hint,
+and a progress meter. A challenge meter represents remaining active time;
+its panel header also shows a prominent minutes:seconds countdown.
+other runs represent accepted passage progress. Speed, accuracy, streak,
+active/remaining time and error totals keep separate cached statistic cells.
+Beveled/chamfered keycaps, strong black legends and finger-zone colors are
+composed on full damage; the target frame, mistake/correction badge and
+held-modifier line update only their reserved flat indicator pixels. The
+five-pixel correction/mistake badge uses clipped native fill/hline spans in
+its5×8reserved patch, so even a16pixel-wide bold legend cannot overlap it.
+Large key labels remain centered within their label region, clear of badges.
+The accepted-input caret changes phase every nine guest UI ticks. READY uses
+a prominent countdown hint and GO remains visible for nine UI ticks after
+READY becomes ACTIVE. These visual clocks are independent of scored ticks.
+
+Urgent target cells and physical-key feedback precede statistics, hints,
+progress and portrait cosmetics. Progress damages only the changed fill
+span. An unchanged timer pass does not rebuild the keyboard or prompt.
+The100ms feedback target remains a native-guest measurement gate; host
+geometry/dirty-area checks do not claim XT timing. Painting changes no
+session, scoring, PRNG, persisted profile or audio state.
+
 ## 4. Resources and budgets
 
 BORATYPE is eight characters, a legal 8.3 stem. All runtime assets are package
