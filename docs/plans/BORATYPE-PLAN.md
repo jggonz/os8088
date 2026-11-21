@@ -71,3 +71,16 @@ passed. Six initially failed repository rows passed on repair; exact budgets
 passed for all four kernels. Full native paints can interrupt speaker music
 for about 7.3 seconds; Exact reproduction of the mockups and continuous music across
 those paints are not claimed.
+
+## Visual revision from the player's first session
+
+- Compare the shared masthead, navigation, button faces and readable type
+  against the supplied 640 × 480 composition in both desktop modes.
+- Rebuild the play and challenge panels, keycaps, feedback and statistics at
+  the real client size. Retain a readable small-screen arrangement.
+- Recompose lesson selection, records, results, settings and the supporting
+  pages around their real actions and data.
+- Compare a complete portrait change and blink against the old scanline
+  schedule on the XT. Verify input latency while reactions are enabled.
+- Inspect the integrated guest, correct visible defects and open the revised
+  software in its own writable 86Box machine for the player.

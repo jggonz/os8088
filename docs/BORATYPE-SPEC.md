@@ -104,6 +104,17 @@ service cannot turn a covered/dragged challenge into a ranked deadline finish.
 Help, Settings and Records opened from a live or paused lesson return to its
 Pause screen. Returning from these views never silently starts a fresh run.
 
+### Shared VGA presentation
+
+The full-size native face uses the gold masthead in the supplied VGA sheet,
+a cyan rule, a selected navigation tab, dimensional button faces, and a
+separate shortcut strip. At 480 × 128 the established compact geometry and
+keyboard controls remain available. Text, controls, counters, and keycaps
+are live drawables. A monochrome masthead mask is stored in secondary art
+record 7, using the shared font renderer's 16-pixel glyph strips. Body,
+keycap and prompt type reuse the shipped Liberation Serif bold strikes.
+The four-color exclusive mode retains its character-cell update path.
+
 ## 4. Resources and budgets
 
 BORATYPE is eight characters, a legal 8.3 stem. All runtime assets are package
