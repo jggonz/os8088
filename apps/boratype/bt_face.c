@@ -60,8 +60,18 @@ static int tf_keyx[TF_KEYS],tf_keyw[TF_KEYS],tf_rowy[5];
 static unsigned tf_savedpos,tf_savedlen,tf_savedcomplete;
 static int tf_savedwrong,tf_savedmods;
 static unsigned tf_savedattempt,tf_savedback;
-static unsigned char tf_coskey[TF_COS_MAX];
-static int tf_cosrows,tf_cosn,tf_cospos,tf_cosneeded,tf_cosearch,tf_capepoch,tf_capline,tf_capneeded;
+/* The directory remains in movable parts; only one record and five strip
+ * signatures are resident. No frame buffer is retained. */
+static BTWord tf_arec[4],tf_ahead[4];
+static unsigned tf_asig[5],tf_astart;
+static int tf_aready,tf_aframe,tf_aseq,tf_aexpr=-1,tf_apos,tf_abase=-1;
+static int tf_ax,tf_ay,tf_aw,tf_ah,tf_avariant,tf_avisible;
+static const char *tf_acaption;
+int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw);
+int os88_part_fetch(int i);int os88_part_movable(int i);void os88_part_drop(int i);
+unsigned os88_part_seg(int i);
+void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n);
+static int tf_cosrows,tf_cosn,tf_cosneeded,tf_capline,tf_capneeded;
 static int tf_statsx,tf_statsw,tf_hintpending,tf_statpend,tf_statnext,tf_footpending,tf_footrow;
 static int tf_dirtyfirst[3],tf_dirtylast[3];
 static int tf_vsx,tf_vsy; /* independent sound-settings status line */
@@ -467,7 +477,14 @@ void ovl_bt_portrait_scene(int x,int y,int w,int h)
     pw=(!tf_mono&&w>=96&&h>=120)?96:40;ph=pw==96?120:48;
     if(w<pw||h<ph)return;
     id=tf_mono?BT_ART_MONO+e:(pw==96?BT_ART_BIG+e:BT_ART_SMALL+e);
-    bx_spr(x+(w-pw)/2,y+(h-ph)/2,id);
+    x+=(w-pw)/2;y+=(h-ph)/2;x&=~7;
+    if(x>=tf_sx+tf_sw||x+pw<=tf_sx||y>=tf_sy+tf_sh||y+ph<=tf_sy)return;
+    if(tf_ax!=x||tf_ay!=y||tf_aw!=pw||tf_ah!=ph){tf_abase=-1;tf_apos=1;}
+    tf_ax=x;tf_ay=y;tf_aw=pw;tf_ah=ph;tf_avisible=1;
+    tf_avariant=tf_mono?2:pw==96?0:1;
+    /* Full-band static poses correspond to these authoritative source cells. */
+    tf_abase=e==2?17:e==3?18:e==4?29:e==5?21:e==6?24:0;
+    bx_spr(x,y,id);
 }
 static void ovl_tf_drawportrait(void)
 {
@@ -687,37 +704,83 @@ static void tf_render(int x,int y,int w,int h,int kind,int item)
 }
 static unsigned tf_settings_mask(void)
 {return bt_store.music+2*bt_store.effects+8*bt_store.keyclick+16*bt_store.roast+64*bt_store.display+128*bt_full;}
-/* A cosmetic update is one bounded band per idle paint. Per-band glass
- * signatures coalesce new expressions immediately; no animation queue exists.
- * Eye rows go first, so a short idle blink is visible without a full bust. */
-static unsigned tf_cos_signature(int band)
+/* Clock service selects state only. No paint, disk, random or score writes. */
+static void ovl_tf_anim_clock(unsigned now)
 {
-    unsigned key;int y;
-    key=tf_portrait;y=tf_py+band*tf_cosrows;
-    if(y+tf_cosrows>tf_py+(tf_ph>=150?132:60))key|=tf_capepoch<<4;
-    return key;
+    int e,frame,phase;unsigned elapsed;const char *caption;
+    e=bt_expression();caption=bt_caption();
+    if(e!=tf_aexpr||caption!=tf_acaption){
+        tf_aexpr=e;tf_acaption=caption;tf_astart=now;
+        tf_aseq=e==2?2:(e==3||e==5)?3:(e==4||e==6)?4:1;
+    }
+    elapsed=(BTWord)(now-tf_astart);
+    if(tf_aseq>=2&&elapsed<30)frame=tf_aseq*6+elapsed/5;
+    else if(tf_aseq==1&&elapsed<36)frame=6+(elapsed/3)%6;
+    else {phase=now%91;frame=phase<81||phase>=87?0:1+(phase-81)/2;}
+    if(frame!=tf_aframe){tf_aframe=frame;tf_apos=frame>0&&frame<6?1:0;if(tf_avisible)tf_cosneeded=1;}
+}
+void bt_face_clock(unsigned now)
+{
+#ifdef BT_PLAY_CLOCK
+    tf_play_clock(now);
+#endif
+    ovl_tf_anim_clock(now);
+}
+static void ovl_tf_anim_load(void)
+{
+    int i;
+    tf_aready=0;if(bt_readonly)return;
+    for(i=3;i<6;i++)if(os88_part_fetch(i)!=0||os88_part_movable(i)!=0)break;
+    if(i<6){for(i=3;i<6;i++)os88_part_drop(i);return;}
+    tf_aready=1;
+}
+static int ovl_tf_anim_record(int frame,int strip)
+{
+    unsigned seg,at;
+    at=frame*8;at+=frame;at+=(tf_avariant==0?0:tf_avariant==1?5:7)+strip;at=16+at*8;
+    seg=os88_part_seg(3);if(!seg)return 0;
+    os88_seg_get(tf_arec,seg,at,8);
+    if(tf_arec[0]<3||tf_arec[0]>5||!tf_arec[2]||tf_arec[2]>1154||!tf_arec[3])return 0;
+    seg=os88_part_seg(tf_arec[0]);if(!seg)return 0;
+    os88_seg_get(tf_ahead,seg,0,8);
+    if(tf_ahead[0]!=0x5442||tf_ahead[1]!=0x4e41||tf_ahead[2]!=1||tf_ahead[3]>65000u)return 0;
+    if(tf_arec[2]>tf_ahead[3]||tf_arec[1]<16||tf_arec[1]>tf_ahead[3]-tf_arec[2])return 0;
+    return 1;
+}
+static int ovl_tf_anim_step(void)
+{
+    int i,j,n,raw,y;unsigned seg;
+    if(!tf_aready||!tf_avisible){tf_cosneeded=tf_capneeded;return 0;}
+    n=tf_avariant==0?5:2;
+    if(tf_abase>=0){
+        for(i=0;i<n;i++){if(!ovl_tf_anim_record(tf_abase,i)){tf_aready=0;return 0;}tf_asig[i]=tf_arec[3];}
+        tf_abase=-1;
+    }
+    for(i=0;i<n;i++){
+        j=tf_apos;tf_apos++;if(tf_apos>=n)tf_apos=0;
+        if(!ovl_tf_anim_record(tf_aframe,j)){tf_aready=0;return 0;}
+        if(tf_asig[j]==tf_arec[3])continue;
+        /* bx_rows arms the existing clipped/packed fallback. All planes
+         * arrive precomputed; the bounded system decoder writes at offset0. */
+        y=j*16;y+=j*8;y+=tf_ay;
+        if(bx_rows(tf_ax,y,tf_aw,24)<24)return 0;
+        bx_new(tf_ax,y,tf_aw,24,tf_ground());
+        raw=tf_aw*2;raw+=tf_aw;if(!tf_mono)raw*=4;seg=os88_part_seg(tf_arec[0]);
+        if(bt_anim_unpack(seg,tf_arec[1],tf_arec[2],raw)!=0){tf_aready=0;return 0;}
+        bx_out();tf_asig[j]=tf_arec[3];return 1;
+    }
+    tf_cosneeded=tf_capneeded;return 0;
 }
 static int ovl_tf_cosmetics(void)
 {
-    int i,j,y,h,end;unsigned key;
+    int y,h;
     if(tf_compact){tf_render(tf_x+8,tf_statsy-10,tf_w-16,10,6,0);tf_cosneeded=0;tf_capneeded=0;return 1;}
     if(tf_capneeded){
-        /* tf_capline is a physical scanline offset. A complete text line
-         * can monopolize an XT timer; coalesce it in four-row strips. */
         y=tf_py+(tf_ph>=150?132:60)+tf_capline;h=tf_py+tf_ph-4-y;if(h>4)h=4;
-        if(h>0){tf_render(tf_px,y,tf_pw,h,5,0);
-            end=(y+h-tf_py+tf_cosrows-1)/tf_cosrows;
-            for(j=(y-tf_py)/tf_cosrows;j<end;j++)tf_coskey[j]=tf_cos_signature(j);
-            tf_capline+=h;return 1;}
+        if(h>0){tf_render(tf_px,y,tf_pw,h,5,0);tf_capline+=h;return 1;}
         tf_capneeded=0;
     }
-    for(i=0;i<32&&tf_cosearch<tf_cosn;i++){
-        j=tf_cospos;tf_cospos++;if(tf_cospos>=tf_cosn)tf_cospos=0;tf_cosearch++;
-        key=tf_cos_signature(j);
-        if(tf_coskey[j]!=key){y=tf_py+j*tf_cosrows;h=tf_py+tf_ph-y;if(h>tf_cosrows)h=tf_cosrows;
-            tf_render(tf_px,y,tf_pw,h,5,0);tf_coskey[j]=key;tf_cosearch=0;return 1;}
-    }
-    if(tf_cosearch>=tf_cosn)tf_cosneeded=0;return 1;
+    return ovl_tf_anim_step();
 }
 static unsigned tf_menukey(void)
 {
@@ -734,7 +797,8 @@ static unsigned tf_menukey(void)
 void bt_face_init(unsigned art,unsigned band,unsigned cap,int bpp)
 {
     int i;
-    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;
+    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;
+    ovl_tf_anim_load();
     for(i=0;i<TF_KEYS;i++)tf_keycache[i]=255;
     for(i=0;i<TF_CELLS;i++){tf_cellchar[i]=255;tf_cellstyle[i]=255;}
     bx_setup(band,0,cap,art,bpp);gk_init(bpp);
@@ -754,7 +818,7 @@ void bt_face_paint(void *win,int full)
     unsigned key;
     layout=tf_layout(win);if(!layout){tf_nhit=0;return;}
     if(layout==2||tf_lastscreen!=bt_screen)full=1;
-    tf_lastscreen=bt_screen;
+    tf_lastscreen=bt_screen;if(full)tf_avisible=0;
     urgent=bt_screen==BT_S_PLAY&&(tf_savedattempt!=bt_session.attempts||tf_savedback!=bt_session.backspaces||tf_savedpos!=bt_session.pos||tf_savedmods!=bt_modifiers);
     if(full&&(tf_x!=tf_org.x||tf_x+tf_w!=tf_org.x+tf_sz.w)){
         os88_set_color(tf_ground());
@@ -771,6 +835,7 @@ void bt_face_paint(void *win,int full)
             else tf_render(tf_x,tf_top,tf_w,tf_bottom-tf_top,3,0);tf_bodykey=key;}
         if(bt_screen==BT_S_SETTINGS){tf_settings=tf_settings_mask();key=tf_string(5381,tf_soundstatus());
             if(!full&&key!=tf_vstatus)tf_render(tf_vsx,tf_vsy,256,tf_th,11,0);tf_vstatus=key;}
+        if(!full&&tf_cosneeded)ovl_tf_anim_step();
         if(!tf_compact&&tf_meterlast!=bt_music_phase)ovl_tf_meter();
         return;
     }
@@ -785,11 +850,10 @@ void bt_face_paint(void *win,int full)
     ncells=tf_compact&&tf_h<140?2*tf_cols:2*tf_cols+tf_inputcols;
     if(full)tf_progressfill=ovl_tf_progress_width();
     if(full){tf_render(tf_x,tf_top,tf_w,tf_bottom-tf_top,4,0);}
-    key=bt_expression();if(key==1&&bt_blink_frame)key|=8;
-    if(full||tf_portrait!=key){tf_portrait=key;if(!tf_compact)tf_cosneeded=1;tf_cosearch=0;tf_cospos=(tf_ph>=150?38:14)/tf_cosrows;if(tf_cospos>=tf_cosn)tf_cospos=0;}
+    key=bt_expression();
+    if(full||tf_portrait!=key){tf_portrait=key;if(!tf_compact)tf_cosneeded=1;}
     key=tf_string(5381,bt_caption());
-    if(full||key!=tf_captionkey){tf_captionkey=key;tf_cosneeded=1;tf_cosearch=0;tf_capneeded=1;tf_capline=0;
-        tf_capepoch++;if(tf_capepoch>=16){tf_capepoch=0;for(i=0;i<tf_cosn;i++)tf_coskey[i]=255;}}
+    if(full||key!=tf_captionkey){tf_captionkey=key;tf_cosneeded=1;tf_capneeded=1;tf_capline=0;}
     key=tf_mix(tf_target(),bt_session.status);key=tf_mix(key,bt_session.countdown);key=tf_mix(key,tf_go_left!=0);key=tf_mix(key,bt_session.last_wrong);
     if(full||key!=tf_hintkey){if(full&&tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_y+2,tf_w-i-70,8,7,0);}tf_hintpending=!full;tf_hintkey=key;}
     if(textchange){
@@ -833,7 +897,7 @@ void bt_face_paint(void *win,int full)
     tf_savedpos=bt_session.pos;tf_savedlen=bt_session.length;tf_savedcomplete=bt_session.completed;
     tf_savedwrong=bt_session.last_wrong;tf_savedmods=bt_modifiers;
     tf_savedattempt=bt_session.attempts;tf_savedback=bt_session.backspaces;
-    if(full){for(i=0;i<tf_cosn;i++)tf_coskey[i]=tf_cos_signature(i);tf_cosneeded=0;tf_capneeded=0;tf_statpend=0;tf_hintpending=0;tf_dirtyfirst[2]=-1;}
+    if(full){tf_cosneeded=tf_aready&&tf_avisible;tf_capneeded=0;tf_statpend=0;tf_hintpending=0;tf_dirtyfirst[2]=-1;}
     else if(!urgent){
         if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];c=tf_dirtylast[2]-i+1;if(c>2)c=2;tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,c*tf_cw,h,8,i);tf_dirtyfirst[2]+=c;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
         else if(tf_footpending){h=tf_h-(tf_bottom-tf_y)-tf_footrow;if(h>4)h=4;tf_render(tf_x,tf_bottom+tf_footrow,tf_w,h,2,0);tf_footrow+=h;if(tf_footrow>=tf_h-(tf_bottom-tf_y))tf_footpending=0;}

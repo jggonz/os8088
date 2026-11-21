@@ -496,3 +496,27 @@ bt_cga_xpixel:                 ; CX=x,BX=y, ES=foreignVRAM; preservesinputs
 
 %include "os88data.inc"
 section .text
+
+; Decode one precomputed portrait strip into the existing drawing band.
+; int bt_anim_unpack(seg,off,packed,raw), cdecl; raw <=1152, checked in C.
+; OSAPI_DECOMP supplies bounded LZ4; shared bx_out supplies clipped output.
+_bt_anim_unpack:
+    push bp
+    mov bp,sp
+    push ds
+    push es
+    mov es,[_bx_bseg]
+    mov si,[bp+6]
+    mov cx,[bp+8]
+    mov dx,[bp+10]
+    xor bx,bx
+    xor di,di
+    xor ax,ax
+    mov ds,[bp+4]
+    call OSAPI_DECOMP
+    pop es
+    pop ds
+    sbb ax,ax
+    pop bp
+    ret
+section .text

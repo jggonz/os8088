@@ -34,6 +34,8 @@ extern int bt_blink_frame;
 
 /* Compose only, into the caller's current Breadboard band. */
 void ovl_bt_portrait_scene(int x,int y,int w,int h);
+/* UI pulse, after reaction service and before optional drawing. */
+void bt_face_clock(unsigned now);
 int bt_key_base(int c);
 const char *bt_key_finger(int c);
 int bt_key_shift(int c);

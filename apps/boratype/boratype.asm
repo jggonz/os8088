@@ -17,12 +17,16 @@
 %define CC_HAS_PARTS
 %define CC_ONMOVE_PARTS
 %define CC_HAS_OVL
+%define CC_PARTS_AFTER_OVL 3
 %define CC_OVL_PART
 %include "cc/crt0.asm"
-    CC_PARTS_BEGIN 3
+    CC_PARTS_BEGIN 6
       OS88_PART OP_ASSET, OP_COMP
       OS88_PART OP_ASSET, OP_COMP
       CC_OVL_ROW
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP
     CC_PARTS_END
 %include "boratype.gen.asm"
 %include "os88ui.inc"

@@ -1,0 +1,42 @@
+{
+  "grid_sha256": "1fed8d579969da8ea620aeb62210b72b6e584d20f2609718206a93499b3b1417",
+  "scene_sha256": "9e632ccf8947bd08deac62ae528e5955c849c355f2cbef7fa187415348fbaaad",
+  "x_boundaries": [
+    158,
+    343,
+    525,
+    705,
+    886,
+    1067,
+    1251
+  ],
+  "y_boundaries": [
+    158,
+    360,
+    562,
+    759,
+    959,
+    1164
+  ],
+  "cell_inset": 3,
+  "scenic_crop": [
+    302,
+    126,
+    365,
+    304
+  ],
+  "small_motion_composite": "neutral body/camera; idle source eye patch[28,34,78,53],talk mouth patch[28,53,80,82],scaledwithvariant; full reaction cells unchanged",
+  "resize": "nearest-neighbour; full source-cell extent, preserving hand gestures",
+  "navy_key": "B>R+25,B>G+20,R<55,G<55",
+  "palette": "fixedEGA; index13reserved; mono explicit2x2threshold",
+  "static_frames": [
+    0,
+    0,
+    17,
+    18,
+    29,
+    21,
+    24
+  ],
+  "provenance": "User supplied original assets; no generated replacement, movie frame, downloaded media or build service."
+}

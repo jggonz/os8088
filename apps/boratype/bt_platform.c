@@ -355,6 +355,7 @@ static void bt_pulse(void)
     if (bt_guard_scan && !os88_key_down(bt_guard_scan)) bt_guard_scan = 0;
     if (!bt_ready_paint) bt_events(bt_tick(now));
     bt_audio_tick(now, focus);
+    bt_face_clock(now);
     if (focus && !bt_key_pending() && !os88_evq_pending()) bt_redraw(0);
 }
 

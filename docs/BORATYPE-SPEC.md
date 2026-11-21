@@ -131,10 +131,11 @@ metadata are retained. Static band composition uses the selected original-grid
 pose over a scenic crop from the supplied lesson artwork; a helper at explicit
 coordinates is safe inside a full menu/body band. Caller owns frame/caption.
 
-Clock service is independent of scoring and rendering: `bt_face_clock(now)`
+Clock service is independent of scoring and rendering (cosmetic selection
+is an eager-overlay helper behind a small resident clock entry): `bt_face_clock(now)`
 selects idle/blink, a short talk loop on a neutral caption, or one-shot praise,
-roast/facepalm from the actual reaction expression/caption change. Frames have
-five-OS-tick dwell (about3.6frames/s); reaction sequences play once then settle
+roast/facepalm from the actual reaction expression/caption change. Reaction frames have
+five-OS-tick dwell (about3.6frames/s), talk three ticks and blink two ticks; reaction sequences play once then settle
 to idle. A delayed paint coalesces to the newest target, not a frame queue.
 
 Committed exact-size planar sources are deterministically packed as independently
@@ -146,11 +147,11 @@ the eyes priority. A full W_PAINT still composes a complete scene immediately.
 No direct framebuffer access, private decompressor, extra framebuffer or kernel
 change is introduced.
 
-Optional lazy package parts3/4 hold at most64KB each, preloaded only at init and
+Optional lazy package parts3/4/5 hold at most64KB each, preloaded only at init and
 marked movable. No animation paint, key or clock call fetches a file. Every
 strip re-reads its part segment, so relocated directory/source holders stay
 valid. Allocation failure retains the static scenic original-grid portrait;
-second/read-only sessions remain usable. Existing art0, sound1 and overlay2
+second/read-only sessions retain static artwork so they remain usable. Existing art0, sound1 and overlay2
 indices stay stable. This optional heap cost is the approved larger-package
 tradeoff; it does not raise resident, kernel or band budgets.
 
@@ -173,7 +174,7 @@ work to PLAY. New literals must fit the current resident cap; fonts, common
 buttons/header/footer and portrait scene assets remain shared helpers.
 
 
-### 3.1 Native PLAY proportions and bounded updates
+### 3.3 Native PLAY proportions and bounded updates
 
 The native lesson/practice/challenge face follows reference designs6,8,9:
 one quarter-width portrait panel at the upper left, a framed typing panel

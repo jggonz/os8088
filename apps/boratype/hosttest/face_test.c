@@ -23,7 +23,6 @@ const BTLesson bt_lessons[BT_LESSONS]={
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,
  TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON,TESTLESSON};
-unsigned os88_part_seg(int i){(void)i;return 0;}
 int bt_music_phase;
 int bt_screen,bt_selection,bt_ch_duration,bt_ch_diff,bt_master_sound=1;
 int bt_full,bt_readonly,bt_profile_edit,bt_modifiers,bt_practice_weak,bt_blink_frame;
@@ -119,25 +118,41 @@ static void play_geometry(void)
  }
  memcpy(&bt_session,&saved,sizeof(saved));
 }
+static unsigned char animbank[3][65000];static unsigned animlen[3],unpacks;
+int os88_part_fetch(int i){char path[1024];FILE *f;assert(i>=3&&i<6);snprintf(path,sizeof(path),"%s/BTAN%d.BIN",getenv("BT_ANIM_DIR")?getenv("BT_ANIM_DIR"):"build",i-3);f=fopen(path,"rb");assert(f);animlen[i-3]=(unsigned)fread(animbank[i-3],1,65000,f);fclose(f);return 0;}
+int os88_part_movable(int i){assert(i>=3&&i<6);return 0;}
+void os88_part_drop(int i){assert(i>=3&&i<6);animlen[i-3]=0;}
+unsigned os88_part_seg(int i){if(i==1)return 1;assert(i>=3&&i<6);return animlen[i-3]?100+i:0;}
+void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n){assert(seg>=103&&seg<=105&&off+n<=animlen[seg-103]);memcpy(dst,animbank[seg-103]+off,n);}
+int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw){assert(seg>=103&&seg<=105&&off+packed<=animlen[seg-103]);assert(raw>0&&raw<=1152);unpacks++;return 0;}
+static void settle_anim(void)
+{
+ for(int i=0;i<8&&tf_cosneeded;i++){
+  area=flushes=0;bt_face_paint(0,0);
+  assert(flushes<=1);if(!tf_compact)assert(area<=(unsigned)(tf_aw*24));
+ }
+ assert(!tf_cosneeded);assert(tf_aready);
+}
 static void blink(void)
 {
- static BTSession before;
- int expected;
- memcpy(&before,&bt_session,sizeof(before));
- bt_blink_frame=0;expression=1;bt_face_paint(0,1);
- area=flushes=0;last_sprite=-1;bt_blink_frame=1;bt_face_paint(0,0);
- if(!tf_compact){
-  expected=tf_mono?BT_ART_BLINK_MONO:(tf_ph>=150?BT_ART_BLINK_BIG:BT_ART_BLINK_SMALL);
-  assert(last_sprite==expected);assert(flushes>0&&area<=(unsigned)(((tf_pw+7)&~7)*tf_ph));
- }else assert(!area&&!flushes);
- for(int n=0;tf_cosneeded&&n<TF_COS_MAX+1;n++){area=flushes=0;bt_face_paint(0,0);assert(area<=(unsigned)(((tf_pw+7)&~7)*tf_cosrows));}
+ static BTSession before;unsigned prior;
+ memcpy(&before,&bt_session,sizeof(before));expression=1;
+ bt_face_clock(0);bt_face_paint(0,1);bt_face_clock(80);settle_anim();
+ prior=unpacks;bt_face_clock(81);assert(tf_aframe==1);settle_anim();
+ if(!tf_compact&&tf_avisible)assert(unpacks>prior&&unpacks-prior<=2);
+ bt_face_clock(83);assert(tf_aframe==2);settle_anim();
+ bt_face_clock(85);assert(tf_aframe==3);settle_anim();
+ bt_face_clock(87);assert(tf_aframe==0);settle_anim();
  area=flushes=0;bt_face_paint(0,0);assert(!area&&!flushes);
- bt_blink_frame=0;last_sprite=-1;bt_face_paint(0,0);
- if(!tf_compact)assert(last_sprite==(tf_mono?BT_ART_MONO+1:(tf_ph>=150?BT_ART_BIG+1:BT_ART_SMALL+1)));
- while(tf_cosneeded)bt_face_paint(0,0);
- expression=2;bt_blink_frame=1;bt_face_paint(0,1);area=flushes=0;
- bt_blink_frame=0;bt_face_paint(0,0);assert(!area&&!flushes);
- assert(!memcmp(&before,&bt_session,sizeof(before)));expression=1;
+ for(int seq=2;seq<=4;seq++){
+  prior=unpacks;expression=seq==2?2:seq==3?3:4;bt_face_clock(100);
+  assert(tf_aframe==seq*6);
+  for(unsigned now=100;now<130;now++){bt_face_clock(now);settle_anim();assert(tf_aframe>=seq*6&&tf_aframe<seq*6+6);}
+  if(!tf_compact&&tf_avisible)assert(unpacks>prior);
+  bt_face_clock(130);assert(tf_aframe==0);settle_anim();
+ }
+ expression=3;bt_face_clock(65530);assert(tf_aframe==18);bt_face_clock(65535);assert(tf_aframe==19);bt_face_clock(4);assert(tf_aframe==20);
+ assert(!memcmp(&before,&bt_session,sizeof(before)));expression=1;bt_face_clock(140);
 }
 static void caption_change(void)
 {
@@ -145,8 +160,8 @@ static void caption_change(void)
  memcpy(&before,&bt_session,sizeof(before));bt_face_paint(0,1);
  caption="Your fingers called a meeting. The keyboard was not invited.";
  for(int n=0;n<TF_COS_MAX+2;n++){
-  area=flushes=0;bt_face_paint(0,0);
-  if(!tf_compact)assert(area<=(unsigned)(((tf_pw+7)&~7)*4));
+  unsigned prior=unpacks;area=flushes=0;bt_face_paint(0,0);assert(flushes<=1);
+  if(!tf_compact)assert(area<=(unsigned)(unpacks==prior?((tf_pw+7)&~7)*4:tf_aw*24));
   if(!tf_cosneeded&&!tf_capneeded)break;
   assert(n<TF_COS_MAX);
  }
@@ -185,6 +200,6 @@ int main(void)
   blink();caption_change();
  }
  hw=304;hh=130;bt_face_init(1,2,8192,4);area=flushes=0;bt_face_paint(0,1);assert(!area&&!flushes&&!tf_nhit);
- puts("face: attentive blink selection/cache/restoration and session immutability pass");
+ puts("face: original-grid blink/talk/one-shot sequences, bounded strips and session immutability pass");
  puts("face: all printable keys, opposite Shift, I/J finger map, bounded caches pass");return 0;
 }
