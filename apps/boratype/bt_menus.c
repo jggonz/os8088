@@ -41,17 +41,18 @@ static void ovl_tm_profile(int x,int y,int w,BTProfile *p)
 unsigned os88_part_seg(int i);
 static void ovl_tm_illustration(int x,int y,int w,int h)
 {
+    static const unsigned char widths[]={208,208,176,240},heights[]={120,104,120,88};
     unsigned seg;
-    int card;
+    int card,sw,sh;
     if(!ovl_tm_visible(x,y,w,h))return;
-    if(!tf_mono && w>=144 && h>=96){
+    card=bt_screen==BT_S_SETTINGS?3:bt_screen==BT_S_RECORDS?1:bt_screen==BT_S_RESULTS?2:0;
+    if(bt_screen==BT_S_RESULTS && (!bt_session.attempts || bt_session.accuracy>=95))card=0;
+    sw=widths[card];sh=heights[card];
+    if(!tf_mono && w>=sw && h>=sh){
         seg=os88_part_seg(5);
         if(seg){
-            card=bt_screen==BT_S_SETTINGS?3:bt_screen==BT_S_RECORDS?1:0;
-            if(bt_screen==BT_S_RESULTS && bt_session.attempts)
-                card=bt_session.accuracy>=95?1:2;
             bx_setart2(seg);
-            bx_spr(x+(w-144)/2,y+(h-96)/2,262+card);
+            bx_spr(x+(w-sw)/2,y+(h-sh)/2,262+card);
             bx_setart2(os88_part_seg(1));
             return;
         }
@@ -63,7 +64,7 @@ static void ovl_tm_mascot(int x,int y,int w,int h)
     int sh,cy,rows,bottom,tip;
     if(!ovl_tm_visible(x,y,w,h))return;
     ovl_tm_panel(x,y,w,h,"");
-    sh=h>=132?96:48;
+    sh=h>=156?120:h>=136?104:48;
     ovl_tm_illustration(x+4,y+4,w-8,sh);
     cy=y+sh+6;
     rows=(h-sh-18)/(tf_th+2);if(rows>4)rows=4;

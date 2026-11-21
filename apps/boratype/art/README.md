@@ -29,7 +29,7 @@ selected VGA keyboard legends in `key-legend.mask`. Lowercase, punctuation
 and the other two strikes retain their Liberation sources.
 
 The lesson, trophy, result and listening illustrations are four opaque
-144 × 96 indexed sprites selected from the corresponding supplied screens.
+indexed sprites sized to the corresponding panels selected from the corresponding supplied screens.
 The file names, crop coordinates and sampling rule live in
 `tools/os88btscenes.py`. Re-select with `--select <reference-directory>`.
 The final animation bank carries their four 16-bit record offsets immediately
