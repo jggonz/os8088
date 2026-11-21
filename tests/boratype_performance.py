@@ -250,6 +250,12 @@ class Probe:
 
     def periodic(self, count, limit_ms):
         records = []
+        directory = (Path(self.app.evidence["app_build"]) / "BTAN0.BIN").read_bytes()
+        complete = {}
+        for frame in range(30):
+            signatures = tuple(struct.unpack_from("<4H", directory, 16+8*(frame*9+i))[3] for i in range(5))
+            complete.setdefault(signatures, []).append(frame)
+        displayed = set()
         self.m.pause()
         self.arm(self.S["_bt_pulse"])
         self.m.run()
@@ -271,8 +277,11 @@ class Probe:
             else:
                 raise AssertionError("periodic callback did not finish")
             cycles = self.m.status()["cycles"] - start
+            assert self.app.global_word("tf_aready"), "XT animation banks refused or failed during painting"
+            sig = struct.unpack("<5H", self.app.p.read(self.S["_tf_asig"], 10))
+            displayed.update(complete.get(sig, ()))
             records.append({"index": i, "cycles": cycles, "ms": ms(cycles), "output_entries": paints,
-                            "pending_at_entry": pending})
+                            "complete_portrait_frames": complete.get(sig, []), "pending_at_entry": pending})
             assert cycles <= int(HZ * limit_ms / 1000), records[-1]
             if i + 1 < count:
                 self.arm(self.S["_bt_pulse"])
@@ -284,7 +293,8 @@ class Probe:
         quiet = [r["cycles"] for r in records if not r["output_entries"]]
         assert quiet and any(r["output_entries"] for r in records), "must see quiet AND actual periodic drawing"
         assert max(quiet) < 65536 * 4, "quiet work still consumes an entire OS tick"
-        return {"scope": "bt_pulse entry -> caller return; timer rearm excluded",
+        assert any(frame in displayed for frame in (1,2,3)), ("an actual closed/closing eye frame must reach the display", displayed)
+        return {"displayed_frames": sorted(displayed), "scope": "bt_pulse entry -> caller return; timer rearm excluded",
                 "count": len(records), "quiet_min_cycles": min(quiet), "quiet_max_cycles": max(quiet),
                 "quiet_max_ms": ms(max(quiet)), "max_cycles": max(r["cycles"] for r in records),
                 "max_ms": max(r["ms"] for r in records), "records": records}

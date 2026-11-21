@@ -1816,6 +1816,9 @@ FAST = [
         "SPEC.md 134:24 color/mono geometries, full ASCII opposite Shift/finger map, "
         "bounded dirty rendering, all actions and honest empty results; reversed Shift goes red",
         needs=("cc",)),
+    Row("boratypemenus", "soak", py("tests/boratype_menus.py"), 2.4,
+        "SPEC.md 134: paging, actions, records and settings on native color/mono layouts; "
+        "the selected lesson stays visible and the menu paint leaves engine state intact", needs=("cc",)),
     Row("boratypeaudiohost", "soak", py("tests/boratype_audio_host.py"), 1.3,
         "SPEC.md 134: original music/effects and visual-reaction policy, cooldown, "
         "recent-four exclusion, neutral empty results and unchanged scoring under sanitizers",
