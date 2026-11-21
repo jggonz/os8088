@@ -1804,6 +1804,107 @@ FAST = [
     Row("ccmake", "soak", py("tests/unit/t_ccmake.py"), 2.1,
         "automatic compiler setup: missing/partial install, parallel dependents, "
         "warm reuse, setup failure propagation and fresh live-media dependencies", cpus=4),
+    Row("boratypehost", "soak", py("tests/boratype_host.py"), 3.4,
+        "SPEC.md 134: production uint16 scoring, PIT wrap/deadlines,24 lessons, "
+        "profiles/codec and independent arithmetic; four production mutations must fail",
+        needs=("cc",)),
+    Row("boratypefiles", "soak", py("tests/boratype_files.py"), 0.6,
+        "SPEC.md 134: production alternating-generation transport under35 "
+        "read/write/truncate/readback faults preserves last valid progress",
+        needs=("cc",)),
+    Row("boratypeface", "soak", py("tests/boratype_face.py"), 1.9,
+        "SPEC.md 134:24 color/mono geometries, full ASCII opposite Shift/finger map, "
+        "bounded dirty rendering, all actions and honest empty results; reversed Shift goes red",
+        needs=("cc",)),
+    Row("boratypeaudiohost", "soak", py("tests/boratype_audio_host.py"), 1.3,
+        "SPEC.md 134: original music/effects and visual-reaction policy, cooldown, "
+        "recent-four exclusion, neutral empty results and unchanged scoring under sanitizers",
+        needs=("cc",)),
+    Row("boratypetarget", "soak", py("tests/boratype_target.py", "--scenario", "smoke",
+        "--evidence", "build/boratype-final/vga"), 144.6,
+        "SPEC.md 134: installed VGA strict/mixed lessons and independent counters, "
+        "four profile names, native windows/fullscreen/Help, single writer and all profiles after cold reboot",
+        needs=("marty", "nasm", "cc"), timeout=700,
+        wants=("build/boratype360.img",)),
+    Row("boratypedeadlines", "soak", py("tests/boratype_target.py", "--scenario", "challenges",
+        "--evidence", "build/boratype-final/deadlines"), 160.6,
+        "SPEC.md 134: real1/3/5minute no-input deadlines1093/3278/5462ticks, "
+        "neutral captions, no false record and ranked versus deliberately paused1minute tests",
+        needs=("marty", "nasm", "cc"), timeout=500,
+        wants=("build/boratype360.img",)),
+    Row("boratypestorage", "soak", py("tests/boratype_storage_target.py",
+        "--evidence", "build/boratype-final/storage"), 72.7,
+        "SPEC.md 134: real missing/corrupt/version-invalid/readonly/full FAT12 "
+        "volumes, actionable notices, live profile preservation and exported last valid save",
+        needs=("marty", "nasm", "cc"), timeout=360,
+        wants=("build/boratype.o88",)),
+    Row("boratypeperformance", "soak", py("tests/boratype_performance.py",
+        "--evidence", "build/boratype-final/performance"), 64.8,
+        "SPEC.md 134: real4.77MHz input through30 hardware keys, completed "
+        "feedback within100ms,220 periodic callbacks, sound enabled and sampled shipping stack guard",
+        needs=("marty", "nasm", "cc"), timeout=300, alone=True,
+        wants=("build/boratype360.img", "build/boratype.bin")),
+    Row("boratyperelocation", "soak", py("tests/boratype_performance.py", "--relocation-only",
+        "--evidence", "build/boratype-final/relocation"), 31.8,
+        "SPEC.md 134: public HEAPFRAG compaction moves the app region, eager "
+        "art/music/overlay carve and band; immutable bytes, score and postmove native input survive",
+        needs=("marty", "nasm", "cc"), timeout=300,
+        wants=("build/boratype360.img", "build/boratype.bin", "build/chello.o88", "build/heapfrag.o88")),
+    Row("boratypefm", "soak", py("tests/boratype_audio_target.py", "--route-probe",
+        "--evidence", "build/boratype-final/fm"), 36.6,
+        "SPEC.md 134: captured actual XT FM music/effects, master mute, phase "
+        "resume, real OS speaker route, SOUND detach/reattach and close cleanup; technical waveform evidence",
+        needs=("marty", "nasm", "cc", "numpy"), timeout=300,
+        wants=("build/boratype.o88", "build/mixer360.img")),
+    Row("boratypespeaker", "soak", py("tests/boratype_audio_target.py", "--backend", "speaker",
+        "--evidence", "build/boratype-final/speaker"), 19.5,
+        "SPEC.md 134: captured title/lesson/error/result speaker output without "
+        "SOUND.DRV, master mute and released tone/heap claims; technical evidence, not subjective audition",
+        needs=("marty", "nasm", "cc", "numpy"), timeout=240,
+        wants=("build/boratype.o88",)),
+    Row("boratypecgamono", "soak", py("tests/boratype_target.py", "--scenario", "smoke", "--adapter", "cga",
+        "--evidence", "build/boratype-final/cgamono"), 74.6,
+        "SPEC.md 134: complete native CGA640x200 mono strict/mixed lessons, "
+        "four profiles, minimum128px content, fullscreen, readonly writer and cold-reboot progress",
+        needs=("marty", "nasm", "cc"), timeout=700,
+        wants=("build/boratype360.img",)),
+    Row("boratypecgacolor", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "cga",
+        "--evidence", "build/boratype-final/cgacolor"), 21.1,
+        "SPEC.md 134: actual CGA640mono to320four-color FSX, strict full lesson, "
+        "first completed prompt cell/flush under100ms and restored native desktop",
+        needs=("marty", "nasm", "cc"), timeout=300,
+        wants=("build/boratype360.img",)),
+    Row("boratypeega", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "ega",
+        "--backend", "86box", "--evidence", "build/boratype-final/ega"), 26.6,
+        "SPEC.md 134: real EGA640x350 native installed wrong/correct typing "
+        "and fullscreen/restoration, asserting actual mode rather than a VGA screenshot label",
+        needs=("86box", "nasm", "cc"), timeout=300, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypeegareboot", "soak", py("tests/boratype_target.py", "--scenario", "reboot", "--adapter", "ega",
+        "--backend", "86box", "--evidence", "build/boratype-final/ega-reboot"), 80.3,
+        "SPEC.md 134: full beginner lesson/results on real EGA, actual save, "
+        "second-instance writer refusal, fullscreen-close cleanup and exported-disk cold reboot",
+        needs=("86box", "nasm", "cc"), timeout=500, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypevesa800", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "vesa800",
+        "--evidence", "build/boratype-final/vesa800"), 12.3,
+        "SPEC.md 134: actual installed VESA.DRV800x600x8, native typing, "
+        "expanded layout and fullscreen/restoration through the OS, no private VBE path",
+        needs=("qemu", "nasm", "cc"), timeout=240, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypevesa1024", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "vesa1024",
+        "--evidence", "build/boratype-final/vesa1024"), 14.9,
+        "SPEC.md 134: actual installed banked VESA.DRV1024x768x16, native "
+        "typing and fullscreen/restoration using live geometry",
+        needs=("qemu", "nasm", "cc"), timeout=240, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypemega286", "soak", ["env", "OS88_MEGA=1", "OS88_MEGA_EMU=86box"] +
+        py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "vga", "--backend", "86box",
+        "--app-build", "build", "--evidence", "build/boratype-final/mega286"), 24.6,
+        "SPEC.md 134: ordinary shipped package on actual protected-mode286 "
+        "Mega; strict input, native fullscreen and restored window, no mega-only replacement package",
+        needs=("86box", "nasm", "cc"), timeout=300, serial=True,
+        wants=("build/boratype360.img", "build/mega.img")),
     Row("breadxtcore", "soak", py("tests/breadxt_core.py"), 12.1,
         "SPEC.md 130: shipping topology, editor history, staged BBX codec, "
         "DC/HC/RC/555 and scope against independent fixtures and randomized "

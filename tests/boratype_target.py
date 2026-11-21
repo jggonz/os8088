@@ -821,7 +821,15 @@ def persistence_and_readonly(ui, app, args, symbols, layout, evidence):
     second.shot(args.evidence, "10-readonly-instance")
     second.press("F6")
     ui._wait(lambda: second.global_word("bt_full") == 1, "readonly instance fullscreen", 30)
-    ui.close(second.win, limit=90)
+    # Native fullscreen intentionally hides the title/close box. Use the
+    # application's advertised Ctrl+Q, then witness actual record teardown.
+    ui.m.key("ControlLeft", down=True, up=False)
+    try:
+        ui.press("KeyQ", limit=90)
+    finally:
+        ui.m.key("ControlLeft", down=False, up=True)
+    ui._wait(lambda: all(w.i != second.win.i for w in ui.windows()),
+             "fullscreen Ctrl+Q closes the readonly instance", 90)
     assert not ui._word("wm_fs"), "closing fullscreen instance retained the desktop latch"
     ui.raise_window(reopened.win)
     assert reopened.generation() == generation and reopened.profile() == expected
