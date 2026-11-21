@@ -147,8 +147,8 @@ static void ovl_tm_achievements(int x,int y,int w,int h,unsigned bits)
         xx=x+(i%4)*(c+6);yy=y+(i/4)*rh;
         if(!ovl_tm_visible(xx,yy,c,rh-4))continue;
         gk_box(xx,yy,c,rh-4,(bits&(1<<i))?GK_RAISED2:GK_SUNKEN,tf_ground());
-        n=(rh-20)/2;if(n<1)n=1;
-        if(rh>=22)ovl_tm_badge(xx+4,yy+n,i==0?0:i==2?1:i==3?2:i==6?4:3,(bits&(1<<i))!=0);
+        n=(rh-20)/2;if(n<0)n=0;
+        if(rh>=20)ovl_tm_badge(xx+4,yy+n,i==0?0:i==2?1:i==3?2:i==6?4:3,(bits&(1<<i))!=0);
         else tf_text(xx+6,yy+3,18,(bits&(1<<i))?"*":"-",(bits&(1<<i))?TF_YELLOW:7,BT_F_TITLE);
         tf_text(xx+26,yy+5,c-30,tf_achnames[i],(bits&(1<<i))?TF_WHITE:7,BT_F_SMALL);
     }
