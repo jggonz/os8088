@@ -86,6 +86,8 @@ static void ovl_tm_mascot(int x,int y,int w,int h)
     if(!ovl_tm_visible(x,y,w,h))return;
     ovl_tm_panel(x,y,w,h,"");
     sh=h>=156?120:h>=136?104:48;
+    if(sh>=104 && (bt_screen==BT_S_RECORDS ||
+        (bt_screen==BT_S_RESULTS && bt_session.attempts && bt_session.accuracy>=95)))sh=104;
     ovl_tm_illustration(x+4,y+4,w-8,sh);
     cy=y+sh+6;
     rows=(h-sh-18)/(tf_th+2);if(rows>4)rows=4;
@@ -231,7 +233,7 @@ static void ovl_tm_records(int x,int y,int w,int h,BTProfile *p,int rich)
         tf_text(x+3*table/4,n+3,table/4-16,tf_buf,bt_ch_diff==i?(tf_mono?15:0):TF_YELLOW,BT_F_TITLE);
     }
     ovl_tm_mascot(x+table,y,w-table,160);
-    yy=y+158;mastered=ovl_tm_mastered(p);earned=0;for(i=0;i<7;i++)if(p->achievements&(1<<i))earned++;
+    yy=y+162;mastered=ovl_tm_mastered(p);earned=0;for(i=0;i<7;i++)if(p->achievements&(1<<i))earned++;
     rh=13;
     for(i=0;i<3;i++){
         n=tf_append(0,i==0?"Lessons mastered":i==1?"Best streak":"Achievements");
@@ -240,7 +242,7 @@ static void ovl_tm_records(int x,int y,int w,int h,BTProfile *p,int rich)
         n=tf_number(0,i==0?mastered:i==1?p->best_streak:earned);n=tf_append(n," / ");tf_number(n,i==0?24:i==1?50:7);
         tf_text(x+2*w/3+10,yy+i*rh,w/3-10,tf_buf,TF_YELLOW,tf_font);
     }
-    yy+=41;if(h>=294){tf_text(x,yy,w,"ACHIEVEMENTS",TF_YELLOW,BT_F_TITLE);yy+=20;}
+    yy+=39;if(h>=294){tf_text(x,yy,w,"ACHIEVEMENTS",TF_YELLOW,BT_F_TITLE);yy+=18;}
     ovl_tm_achievements(x,yy,w,h-(yy-y)-34,p->achievements);
     c=(w-12)/3;yy=y+h-29;
     tf_button(x,yy,c,27,"Practice",BT_A_PRACTICE,0);tf_button(x+c+6,yy,c,27,"Continue",BT_A_START,1);tf_button(x+2*(c+6),yy,c,27,"Back",BT_A_BACK,0);
@@ -248,7 +250,7 @@ static void ovl_tm_records(int x,int y,int w,int h,BTProfile *p,int rich)
 static void ovl_tf_resultcard(int x,int y,int w,BTProfile *p)
 {
     int left,sx,sw,sy,rh,i,n,k,h,c;
-    h=tf_bottom-y-36;left=w/3;sx=x+left+10;sw=w-left-10;
+    h=tf_bottom-y-36;left=w*3/8;sx=x+left+10;sw=w-left-10;
     ovl_tm_mascot(x,y,left,h);
     if(h>=246&&bt_session.achievement_new){
         /* Four caption rows can extend to y+179; awards start below them. */
