@@ -2,6 +2,7 @@
 %define OS88UI_ABOUT
 %define CC_PKG_NAME 'BORATYPE'
 %define CC_ICON "boratype/icon.inc"
+%define CC_STACK_CLASS OS88_HIGH | OS88_HIGHMEM
 %define CC_HAS_ONKEY
 %define CC_HAS_ONCLICK
 %define CC_HAS_ONRESIZE

@@ -1015,6 +1015,13 @@ def main():
                 verify_adapter(ui, args.adapter, evidence)
                 ui.open_drive("B")
                 app = App(ui, open_package(ui, args.path), symbols, layout, evidence)
+                if mega:
+                    region, band = app.p.seg, app.global_word("bt_band")
+                    evidence["high_memory"] = {"region_selector": region, "region_base": ui.m.lin(region),
+                                               "band_selector": band, "band_base": ui.m.lin(band)}
+                    assert app.p.byte(15) & 0xC0 == 0xC0, "package did not declare both high-memory capabilities"
+                    assert ui.m.lin(region) >= 0x100000 and ui.m.lin(band) >= 0x100000, \
+                        "Mega acceptance must exercise actual high region and data band"
                 evidence["start_cycles"] = ui.m.status()["cycles"]
                 evidence["resources_launch"] = app.resource_snapshot()
                 if args.scenario == "smoke":
