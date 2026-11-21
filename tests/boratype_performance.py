@@ -351,10 +351,19 @@ def claims(app):
                  "sound": app.global_word("bt_soundpart"), "band": app.global_word("bt_band"),
                  "overlay": app.p.word(app.sym["cc_ovcs"])}
         lengths = {}
-        table = app.p.read(app.sym["op_table"], 10 + 3 * 8)
-        assert table[:8] == b"O88PARTP" and table[8] == 3, table
-        for i, name in enumerate(("art", "sound", "overlay")):
-            lengths[name] = struct.unpack_from("<H", table, 10 + i * 8 + 4)[0]
+        header = app.p.read(app.sym["op_table"], 10)
+        assert header[:8] == b"O88PARTP" and header[8] == 6, header
+        table = app.p.read(app.sym["op_table"] + 10, header[8] * 8)
+        for i, name in enumerate(("art", "sound", "overlay", "animation0", "animation1", "animation2")):
+            _, flags, _, length, fetched_segment = struct.unpack_from("<BBHHH", table, 8*i)
+            if i >= 3:
+                assert flags & 8, ("animation bank should use the package's lazy loading ABI", name)
+                if not flags & 32:
+                    continue
+                roles[name] = fetched_segment
+            lengths[name] = length
+        fetched = [name for name in roles if name.startswith("animation")]
+        assert len(fetched) in (0,3), ("partially loaded animation set", fetched)
         result = {}
         for name, seg in roles.items():
             held = [v for base, v in found.items() if base <= seg < base + v["bytes"] // 16]
@@ -365,7 +374,7 @@ def claims(app):
             if name in lengths:
                 result[name]["part_bytes"] = lengths[name]
                 assert (seg - claim["segment"]) * 16 + lengths[name] <= claim["bytes"]
-            if name in ("art", "sound"):
+            if name in ("art", "sound") or name.startswith("animation"):
                 result[name]["sha256"] = hashlib.sha256(m.read(seg * 16, lengths[name])).hexdigest()
         assert app.global_word("tf_art") == roles["art"], "face art holder stale"
         assert app.global_word("tf_band") == roles["band"], "face band holder stale"
@@ -416,7 +425,8 @@ def relocation(args, build, symbols, layout, evidence):
                  if before[name]["segment"] != after[name]["segment"]]
         assert "region" in moved and "band" in moved and any(n in moved for n in ("art", "sound", "overlay")), \
             ("relocation did not exercise all ownership families", moved, before, after)
-        for name in ("art", "sound"):
+        assert before.keys() == after.keys(), "claim set changed during compaction"
+        for name in (n for n in before if "sha256" in before[n]):
             assert before[name]["sha256"] == after[name]["sha256"], "immutable part corrupted: " + name
         assert before["code"] == after["code"], "resident engine code corrupted by move"
         for field in ("attempts", "correct", "errors", "pos", "net"):

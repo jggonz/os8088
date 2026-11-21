@@ -221,6 +221,10 @@ class App:
         """Application hit rects come directly from the production face cache."""
         found = {}
 
+        first_lesson = self.L["BT_A_LESSON_BASE"]
+        lesson = (first_lesson <= action < first_lesson + 24
+                  and self.global_word("bt_screen") == self.L["BT_S_LESSONS"])
+
         def locate():
             n = self.global_word("tf_nhit")
             assert 0 <= n <= 32, n
@@ -230,14 +234,28 @@ class App:
             hits = [struct.unpack_from("<5h", raw, i * 10) for i in range(n)]
             found["hits"] = hits
             found["hit"] = next((h for h in hits if h[4] == action), None)
+            # The rich table shows one page. Prev and Next are the outermost
+            # lesson IDs on that page. Wait for its Start action, registered
+            # after the rows, before using the completed hit map.
+            if found["hit"] is None and lesson and any(h[4] == self.L["BT_A_START"] for h in hits):
+                choices = [h for h in hits if first_lesson <= h[4] < first_lesson+24]
+                if choices:
+                    edge = min if action < min(h[4] for h in choices) else max
+                    found["hit"] = edge(choices, key=lambda h: h[4])
             return found["hit"] is not None
 
-        self.ui._wait(locate, "visible Boratype action " + str(action), 45, snapshot=lambda: found)
-        x, y, w, h, _ = found["hit"]
-        assert w > 0 and h > 0
-        self.ui.mo.click(x + w // 2, y + h // 2, settle=0)
-        M.ui_done(self.ui.m, "Boratype application button", limit=90)
-        return self
+        visited = set()
+        while True:
+            self.ui._wait(locate, "visible Boratype action " + str(action), 45, snapshot=lambda: found)
+            x, y, w, h, chosen = found["hit"]
+            assert w > 0 and h > 0 and chosen not in visited, found
+            visited.add(chosen)
+            self.ui.mo.click(x + w // 2, y + h // 2, settle=0)
+            M.ui_done(self.ui.m, "Boratype application button", limit=90)
+            if chosen == action:
+                return self
+            self.ui._wait(lambda: self.global_word("bt_selection") == chosen-first_lesson,
+                          "lesson page selection", 30)
 
     def key(self, character, expected_correct, foreign=False):
         before = self.state()
