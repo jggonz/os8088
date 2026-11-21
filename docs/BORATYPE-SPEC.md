@@ -8,6 +8,11 @@ the product scope. No external publication is authorized by this task.
 ## 1. Platform and ownership
 
 Native C, one translation unit, SmallerC → cc8086 → NASM → CC_PACKAGE.
+The package declares `OS88_HIGH | OS88_HIGHMEM` on kern_mega: its region
+and small data claims may use opaque selectors above1MB. The eager part
+carve remains conventional; the renderer never performs paragraph arithmetic
+on its own segment or band, and no BIOS/DMA receives an application claim.
+Default FSX entry remains protected when required by these claims.
 No kernel resident bytes or new API slots. The C restrictions in SPEC.md §73
 apply. A package instance owns one window and its session. Four local profiles
 share a bounded versioned store on the package volume's SYSTEM/APPDATA.
