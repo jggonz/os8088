@@ -58,6 +58,8 @@ const BTLesson bt_lessons[BT_LESSONS] = {
   "Great success! At 8:08, I typed \"Hello, world!\" with calm hands. Score 100%, keep F/J anchors, and try a 3-minute challenge."}
 };
 
+/* Authored records are validated by the build-host engine check. */
+#ifdef BT_HOST
 static int bt_contains(const char *s, int c)
 {
     while (*s) { if ((BTByte)*s == c) return 1; s++; }
@@ -87,3 +89,4 @@ int bt_validate_lessons(void)
     }
     return 1;
 }
+#endif

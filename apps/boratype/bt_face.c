@@ -31,7 +31,6 @@ const char *bt_reaction_history(int back);
 #define TF_KEYS 60
 #define TF_CELLS 144
 #define TF_HITS 32
-#define TF_COS_MAX 640
 static struct os88_pt tf_org;
 static struct os88_size tf_sz;
 static struct os88_video tf_vid;
@@ -72,7 +71,7 @@ int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw);
 int os88_part_fetch(int i);int os88_part_movable(int i);void os88_part_drop(int i);
 unsigned os88_part_seg(int i);
 void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n);
-static int tf_cosrows,tf_cosn,tf_cosneeded,tf_capline,tf_capneeded;
+static int tf_cosneeded,tf_capline,tf_capneeded;
 static int tf_statsx,tf_statsw,tf_hintpending,tf_statpend,tf_statnext,tf_footpending,tf_footrow;
 static unsigned char tf_statrow[5];
 static int tf_dirtyfirst[3],tf_dirtylast[3];
@@ -397,8 +396,6 @@ static int ovl_tf_arrange(void)
     for(i=0;i<TF_KEYS;i++){tf_keyx[i]=tf_x+(tf_compact?8:16)+tf_keys[i][3]*tf_kw/4;tf_keyw[i]=tf_keys[i][4]*tf_kw/4-2;}
     for(i=0;i<5;i++)tf_rowy[i]=tf_ky+i*tf_kh;
     tf_statsx=tf_compact?tf_x:tf_promptx-4;tf_statsw=tf_compact?tf_w:tf_x+tf_w-8-tf_statsx;
-    tf_cosrows=1;while((tf_ph+tf_cosrows-1)/tf_cosrows>TF_COS_MAX)tf_cosrows++;
-    tf_cosn=(tf_ph+tf_cosrows-1)/tf_cosrows;if(tf_cosn<1)tf_cosn=1;
     return 2;
 }
 static int tf_layout(void *win)

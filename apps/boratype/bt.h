@@ -87,7 +87,9 @@ int bt_weak(int rank); /* ASCII or zero, >=20 attempts, highest error ratio firs
 int bt_recommend(void);
 unsigned bt_encode(BTByte *buf, unsigned cap);
 int bt_decode(const BTByte *buf, unsigned len); /* validate before live replacement */
+#ifdef BT_HOST
 int bt_validate_lessons(void);
+#endif
 
 /* UI state belongs to platform; face reads it and never advances session. */
 #define BT_S_HOME 0
