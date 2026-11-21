@@ -554,6 +554,12 @@ def adapter_probe(app, directory, requested):
     app.press("F6").wait_screen("HOME" if cga else "PAUSE")
     assert app.global_word("bt_full") and ui._word("wm_fs")
     app.shot(directory, "adapter-native-fullscreen")
+    if not cga:
+        paused = app.state()
+        app.press("F4").wait_screen("PLAY")
+        assert app.state()["pos"] == paused["pos"] and app.state()["seed"] == paused["seed"]
+        app.shot(directory, "adapter-native-fullscreen-play")
+        app.press("F4").wait_screen("PAUSE")
     app.press("F6")
     ui._wait(lambda: not app.global_word("bt_full") and not ui._word("wm_fs"), "native mode restored", 45)
     if not cga:
@@ -968,6 +974,8 @@ def main():
                 "kernel": "mega" if mega else "real-mode",
                 "visual_inspection": "required; screenshots alone do not pass appearance claims"}
     started = time.monotonic()
+    # A killed emulator must leave RUNNING, never a previous run's PASS.
+    (args.evidence / "report.json").write_text(json.dumps(evidence, indent=2) + "\n")
     ui = app = saved = None
     try:
         args.image = Path(prepare_driver_disk(args, build)).resolve()

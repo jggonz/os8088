@@ -1838,6 +1838,12 @@ FAST = [
         "volumes, actionable notices, live profile preservation and exported last valid save",
         needs=("marty", "nasm", "cc"), timeout=360,
         wants=("build/boratype.o88",)),
+    Row("boratypepractice", "soak", py("tests/boratype_practice_target.py",
+        "--evidence", "build/boratype-final/practice"), 55.9,
+        "SPEC.md 134: actual three-error/low-accuracy/comeback/poor-result "
+        "reactions, sampled F weakness, recommended drill and independently selected digits practice",
+        needs=("marty", "nasm", "cc"), timeout=360,
+        wants=("build/boratype360.img",)),
     Row("boratypeperformance", "soak", py("tests/boratype_performance.py",
         "--evidence", "build/boratype-final/performance"), 64.8,
         "SPEC.md 134: real4.77MHz input through30 hardware keys, completed "

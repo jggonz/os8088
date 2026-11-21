@@ -185,7 +185,7 @@ static const unsigned char tf_neighbor[TF_KEYS][2]={
 
 static const char *tf_fingers[]={"Thumb","Left little","Left ring","Left middle","Left index","Right index","Right middle","Right ring","Right little"};
 static const unsigned char tf_zones[]={7,12,6,14,10,11,9,5,12};
-static const char *tf_group[]={"Home row","All letters","Letters + digits","Mixed punctuation"};
+static const char *tf_group[]={"Home row","All letters","Digits","Mixed punctuation"};
 static const char *tf_screenname[]={"WELCOME","LESSONS","TYPE WITH BORAT","RESULTS","PRACTICE","TIMED CHALLENGE","RECORDS","SOUND & DISPLAY","HELP","PAUSED","PROFILES"};
 static const unsigned char tf_roles[]={0,1,11,3,1,15,1,9,14,9,15,14,0,7,0,7};
 static const unsigned char tf_monoroles[]={0,15,15,0,15,0,0,0,15,0,15,15,0,0,0,15};
