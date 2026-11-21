@@ -30,7 +30,8 @@ def main():
         work = Path(tmp)
         subprocess.run([os.environ.get("PYTHON", "python3"), str(ROOT / "tools/os88btanim.py"), "build",
                         "--out0", str(work / "BTAN0.BIN"), "--out1", str(work / "BTAN1.BIN"),
-                        "--out2", str(work / "BTAN2.BIN")], check=True)
+                        "--out2", str(work / "BTAN2.BIN"), "--out3", str(work / "BTAN3.BIN"),
+                        "--out4", str(work / "BTAN4.BIN")], check=True)
         positive = run(SOURCE, work / "face", work)
         assert positive.returncode == 0, positive.stdout + positive.stderr
         print(positive.stdout, end="")

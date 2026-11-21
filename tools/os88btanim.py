@@ -2,8 +2,11 @@
 """Original supplied Borat grid -> exact pixel sources -> bounded LZ4 bands.
 
 Only `draft` imports Pillow. Build uses the existing standard-library LZ4
-codec and independently round-trips every strip. Parts3/4/5 are read-only banks;
-record directory entries are part,offset,packed_length,content_signature.
+codec and independently round-trips every strip. Optional parts3..7 are
+read-only banks. Part3 holds the strip directory and compressed small/mono;
+part5 holds scenes/badges; parts4/6/7 hold ten raw full-size frames each.
+Directory records remain part,offset,codec_length,content_signature; a zero
+codec length marks raw four-plane data, with a1440-byte plane stride.
 """
 import argparse
 import hashlib
@@ -23,6 +26,9 @@ HEADER=16
 COUNT=30*9
 DIRECTORY=HEADER+COUNT*8
 LIMIT=65000
+RAW_PARTS=(4,6,7)
+FRAME_BYTES=96*120//2
+PLANE_BYTES=12*120
 
 def read(path=None):
     lines=iter(Path(path or ART/'animation.txt').read_text().splitlines());out=[]
@@ -44,32 +50,42 @@ def planar(pix,w,h,planes):
                  for plane in range(planes) for y in range(h) for x in range(w//8))
 
 def banks(frames):
-    data=[bytearray(b'BTAN'+struct.pack('<6H',1,30,ROWS,COUNT,0,0)+bytes(COUNT*8)),bytearray(b'BTAN'+struct.pack('<6H',1,0,24,0,0,0)),bytearray(b'BTAN'+struct.pack('<6H',1,0,24,0,0,0))]
+    data=[bytearray(b'BTAN'+struct.pack('<6H',1,30,ROWS,COUNT,0,0)+bytes(COUNT*8))]
+    data += [bytearray(b'BTAN'+struct.pack('<6H',1,0,ROWS,0,0,0)) for _ in range(4)]
     data[2]+=build_scene_bank()
-    unique={};records=[];signatures=[]
+    unique={};fallback={};records=[]
     for frame in range(30):
+        full=planar(frames[frame*3][3],96,120,4)
+        rawbank=data[RAW_PARTS[frame//10]-3]
+        full_off=len(rawbank);rawbank+=full
+        assert full_off==HEADER+(frame%10)*FRAME_BYTES
         for variant,(_,w,h,planes) in enumerate(VARIANTS):
             _,_,_,pix=frames[frame*3+variant]
             for y in range(0,h,ROWS):
                 raw=planar(pix[y*w:(y+ROWS)*w],w,ROWS,planes)
                 key=(w,planes,raw)
                 if key not in unique:
+                    unique[key]=len(unique)+1
+                sig=unique[key]
+                if variant==0:
+                    rec=(RAW_PARTS[frame//10],full_off+(y//ROWS)*288,0,sig)
+                elif key not in fallback:
                     packed=lz.lz4_compress(raw,depth=64,parse='fast')
                     assert lz.lz4_decompress(packed,len(raw))==raw
-                    bank=next((i for i,b in enumerate(data) if len(b)+len(packed)+1<=LIMIT),None)
-                    if bank is None:raise ValueError('animation exceeds three bounded banks')
-                    if len(data[bank])&1:data[bank].append(0)
-                    off=len(data[bank]);data[bank]+=packed
-                    sig=len(unique)+1;unique[key]=(3+bank,off,len(packed),sig)
-                records.append(unique[key]);signatures.append(unique[key][3])
+                    if len(data[0])+len(packed)+1>LIMIT:raise ValueError('small/mono animation exceeds directory bank')
+                    if len(data[0])&1:data[0].append(0)
+                    off=len(data[0]);data[0]+=packed
+                    rec=(3,off,len(packed),sig);fallback[key]=rec
+                else:rec=fallback[key]
+                records.append(rec)
     assert len(records)==COUNT
     for body in data:struct.pack_into('<H',body,6,len(body))
     for i,rec in enumerate(records):struct.pack_into('<4H',data[0],HEADER+i*8,*rec)
     return data,records
 
-def build(out0,out1,out2):
+def build(out0=None,out1=None,out2=None,out3=None,out4=None):
     readframes=read();data,records=banks(readframes)
-    for path,body in zip((out0,out1,out2),data):
+    for path,body in zip((out0,out1,out2,out3,out4),data):
         if path is None:continue
         Path(path).parent.mkdir(parents=True,exist_ok=True);Path(path).write_bytes(body)
     # Check directory coverage, per-strip bounds and content-equivalent cache IDs.
@@ -81,9 +97,19 @@ def build(out0,out1,out2):
         strip=slot if variant==0 else slot-(5 if variant==1 else 7)
         _,w,h,planes=VARIANTS[variant];pix=readframes[frame*3+variant][3]
         expected=planar(pix[strip*ROWS*w:(strip+1)*ROWS*w],w,ROWS,planes)
-        assert off>=HEADER and off+n<=len(data[part-3]) and 0<n<=1154 and sig
-        assert lz.lz4_decompress(data[part-3][off:off+n],len(expected))==expected
-    print('os88btanim: banks '+str([len(b) for b in data])+', '+str(len(set(records)))+' unique strips, max raw1152B')
+        assert off>=HEADER and sig
+        if variant==0:
+            assert part==RAW_PARTS[frame//10] and n==0
+            assert off==HEADER+(frame%10)*FRAME_BYTES+strip*288
+            assert off+3*PLANE_BYTES+288<=len(data[part-3])
+            got=b''.join(data[part-3][off+p*PLANE_BYTES:off+p*PLANE_BYTES+288] for p in range(4))
+            assert got==expected
+        else:
+            assert part==3 and off+n<=len(data[0]) and 0<n<=1154
+            assert lz.lz4_decompress(data[0][off:off+n],len(expected))==expected
+    assert all(len(data[p-3])==HEADER+10*FRAME_BYTES for p in RAW_PARTS)
+    assert len(data[0])>DIRECTORY and len(data[2])>HEADER
+    print('os88btanim: banks '+str([len(b) for b in data])+', '+str(len({r[3] for r in records}))+' strip signatures;30raw96x120 frames')
 
 def draft(grid,scene):
     from PIL import Image
@@ -154,13 +180,13 @@ def draft(grid,scene):
 if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__);sp=ap.add_subparsers(dest='cmd',required=True)
     p=sp.add_parser('draft');p.add_argument('grid');p.add_argument('scene')
-    p=sp.add_parser('build');p.add_argument('--out0');p.add_argument('--out1');p.add_argument('--out2');p.add_argument('--bank',type=int,choices=(0,1,2));p.add_argument('--output')
+    p=sp.add_parser('build');p.add_argument('--out0');p.add_argument('--out1');p.add_argument('--out2');p.add_argument('--out3');p.add_argument('--out4');p.add_argument('--bank',type=int,choices=range(5));p.add_argument('--output')
     a=ap.parse_args()
     if a.cmd=='draft':draft(a.grid,a.scene)
     else:
-        outputs=[a.out0,a.out1,a.out2]
+        outputs=[a.out0,a.out1,a.out2,a.out3,a.out4]
         if a.bank is not None:
             if not a.output:ap.error('--bank requires --output')
-            outputs=[a.output if i==a.bank else None for i in range(3)]
+            outputs=[a.output if i==a.bank else None for i in range(5)]
         if not any(outputs):ap.error('an output is required')
         build(*outputs)

@@ -159,13 +159,13 @@ static void mirror_and_stat_damage(void)
   assert(area<=(unsigned)(tf_w*4));assert(++steps<=4);}
  assert(!memcmp(&before,&bt_session,sizeof(before)));bt_face_paint(0,1);
 }
-static unsigned char animbank[3][65000];static unsigned animlen[3],unpacks;
-int os88_part_fetch(int i){char path[1024];FILE *f;assert(i>=3&&i<6);snprintf(path,sizeof(path),"%s/BTAN%d.BIN",getenv("BT_ANIM_DIR")?getenv("BT_ANIM_DIR"):"build",i-3);f=fopen(path,"rb");assert(f);animlen[i-3]=(unsigned)fread(animbank[i-3],1,65000,f);fclose(f);return 0;}
-int os88_part_movable(int i){assert(i>=3&&i<6);return 0;}
-void os88_part_drop(int i){assert(i>=3&&i<6);animlen[i-3]=0;}
-unsigned os88_part_seg(int i){if(i==1)return 1;assert(i>=3&&i<6);return animlen[i-3]?100+i:0;}
-void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n){assert(seg>=103&&seg<=105&&off+n<=animlen[seg-103]);memcpy(dst,animbank[seg-103]+off,n);}
-int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw){assert(seg>=103&&seg<=105&&off+packed<=animlen[seg-103]);assert(raw>0&&raw<=1152);unpacks++;return 0;}
+static unsigned char animbank[5][65000];static unsigned animlen[5],unpacks;
+int os88_part_fetch(int i){char path[1024];FILE *f;assert(i>=3&&i<8);snprintf(path,sizeof(path),"%s/BTAN%d.BIN",getenv("BT_ANIM_DIR")?getenv("BT_ANIM_DIR"):"build",i-3);f=fopen(path,"rb");assert(f);animlen[i-3]=(unsigned)fread(animbank[i-3],1,65000,f);fclose(f);return 0;}
+int os88_part_movable(int i){assert(i>=3&&i<8);return 0;}
+void os88_part_drop(int i){assert(i>=3&&i<8);animlen[i-3]=0;}
+unsigned os88_part_seg(int i){if(i==1)return 1;assert(i>=3&&i<8);return animlen[i-3]?100+i:0;}
+void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n){assert(seg>=103&&seg<=107&&off+n<=animlen[seg-103]);memcpy(dst,animbank[seg-103]+off,n);}
+int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw){assert(seg>=103&&seg<=107&&off+packed<=animlen[seg-103]);assert(raw>0&&raw<=1152);unpacks++;return 0;}
 /* Exercise direct planes at full VGA size and the packed fallback at smaller sizes. */
 static unsigned direct_height;
 int bt_anim_planar(unsigned seg,unsigned off,int x,int y,int height){

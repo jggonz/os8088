@@ -388,18 +388,21 @@ def claims(app):
                  "overlay": app.p.word(app.sym["cc_ovcs"])}
         lengths = {}
         header = app.p.read(app.sym["op_table"], 10)
-        assert header[:8] == b"O88PARTP" and header[8] == 6, header
+        assert header[:8] == b"O88PARTP" and header[8] == 8, header
         table = app.p.read(app.sym["op_table"] + 10, header[8] * 8)
-        for i, name in enumerate(("art", "sound", "overlay", "animation0", "animation1", "animation2")):
+        for i, name in enumerate(("art", "sound", "overlay", "animation0", "animation1", "animation2", "animation3", "animation4")):
             _, flags, _, length, fetched_segment = struct.unpack_from("<BBHHH", table, 8*i)
             if i >= 3:
                 assert flags & 8, ("animation bank should use the package's lazy loading ABI", name)
+                assert 16 < length <= 65000, ("invalid optional animation bank length", name, length)
+                if i in (4, 6, 7):
+                    assert length == 57616, ("raw bank must hold ten whole planar frames", name, length)
                 if not flags & 32:
                     continue
                 roles[name] = fetched_segment
             lengths[name] = length
         fetched = [name for name in roles if name.startswith("animation")]
-        assert len(fetched) in (0,3), ("partially loaded animation set", fetched)
+        assert len(fetched) in (0,5), ("partially loaded animation set", fetched)
         result = {}
         for name, seg in roles.items():
             held = [v for base, v in found.items() if base <= seg < base + v["bytes"] // 16]

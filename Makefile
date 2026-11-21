@@ -23037,7 +23037,7 @@ $(BUILD)/kbdlayoutlegacy.img: $(BUILD)/win16.o88 tools/os88disk.py
 kbdlayoutlegacytest: $(BUILD)/kbdlayoutlegacy.img
 
 # Native Borat typing tutor, SPEC.md 134 / docs/BORATYPE-SPEC.md.
-$(eval $(call CC_PACKAGE,boratype,boratype,BORATYPE.OVL,$(BUILD)/BTART.BIN $(BUILD)/BTSOUND.BIN,part,$(BUILD)/BTAN0.BIN $(BUILD)/BTAN1.BIN $(BUILD)/BTAN2.BIN))
+$(eval $(call CC_PACKAGE,boratype,boratype,BORATYPE.OVL,$(BUILD)/BTART.BIN $(BUILD)/BTSOUND.BIN,part,$(BUILD)/BTAN0.BIN $(BUILD)/BTAN1.BIN $(BUILD)/BTAN2.BIN $(BUILD)/BTAN3.BIN $(BUILD)/BTAN4.BIN))
 BORATYPESRC := $(wildcard apps/boratype/*.c apps/boratype/*.h)
 $(BUILD)/boratype.raw.asm: $(BORATYPESRC) apps/cc/gk.h
 $(BUILD)/boratype.bin: $(wildcard apps/boratype/*.inc) apps/breadxt/draw.inc apps/cc/gk.inc apps/cc/gkmus.inc apps/os88data.inc apps/os88ui.inc
