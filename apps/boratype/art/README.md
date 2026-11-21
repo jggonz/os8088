@@ -27,3 +27,11 @@ Select them again with `tools/os88btletters.py --records <records.png>`.
 The uppercase letters, numbers and semicolon in the 16-pixel strike use the
 selected VGA keyboard legends in `key-legend.mask`. Lowercase, punctuation
 and the other two strikes retain their Liberation sources.
+
+The lesson, trophy, result and listening illustrations are four opaque
+144 × 96 indexed sprites selected from the corresponding supplied screens.
+The file names, crop coordinates and sampling rule live in
+`tools/os88btscenes.py`. Re-select with `--select <reference-directory>`.
+The final animation bank carries their four 16-bit record offsets immediately
+after its 16-byte header. This lets the same drawing buffer compose these
+illustrations into ordinary window paint bands.
