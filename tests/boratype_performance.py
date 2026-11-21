@@ -111,6 +111,7 @@ class Probe:
         self.app, self.ui, self.m, self.S, self.guard = app, app.ui, app.ui.m, app.sym, guard
         self.cs = app.p.seg
         self.observations = []
+        self.periodic_outputs = OUTPUTS + tuple(n for n in ("_bt_anim_planar",) if n in self.S)
 
     def arm(self, *offsets):
         self.m.bp_exec(*(self.cs * 16 + o for o in offsets))
@@ -284,14 +285,19 @@ class Probe:
             paints = 0
             rectangles = []
             for _ in range(50):
-                self.arm(ret, *(self.S[name] for name in OUTPUTS))
+                self.arm(ret, *(self.S[name] for name in self.periodic_outputs))
                 self.m.run()
                 regs = self.stop("periodic output/return")
                 if regs["ip"] == ret:
                     break
                 paints += 1
-                rectangles.append({name: self.app.p.word(self.S[name]) for name in
-                                   ("bx_x0", "bx_y0", "bx_w", "bx_h")})
+                if regs["ip"] == self.S.get("_bt_anim_planar"):
+                    seg, off, x, y, height = struct.unpack("<5H", self.m.read(regs["ss"]*16+regs["sp"]+2, 10))
+                    rectangles.append({"output": "native planar pose", "segment": seg, "offset": off,
+                                       "bx_x0": x, "bx_y0": y, "bx_w": 96, "bx_h": height})
+                else:
+                    rectangles.append({name: self.app.p.word(self.S[name]) for name in
+                                       ("bx_x0", "bx_y0", "bx_w", "bx_h")})
             else:
                 raise AssertionError("periodic callback did not finish")
             cycles = self.m.status()["cycles"] - start
