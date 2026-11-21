@@ -218,7 +218,9 @@ void bt_action(int a)
         n = bt_screen == BT_S_HELP || bt_screen == BT_S_SETTINGS || bt_screen == BT_S_RECORDS ? bt_return_screen : BT_S_HOME;
         bt_schedule_save(); bt_setscreen(n); return;
     } else if (a == BT_A_PAUSE) { bt_pause_ui(); return;
-    } else if (a == BT_A_FULL) { if (!bt_in_cga) bt_fullscreen_toggle(); return;
+    } else if (a == BT_A_FULL || a == BT_A_WINDOWED || a == BT_A_FULLSCREEN) {
+        if (!bt_in_cga && (a == BT_A_FULL || bt_full != (a == BT_A_FULLSCREEN))) bt_fullscreen_toggle();
+        return;
     } else if (a == BT_A_SAVE) { bt_schedule_save();
     } else if (a == BT_A_TEST_MUSIC) {
         if (!bt_store.music) bt_message("Enable Music to audition the soundtrack.");
@@ -228,6 +230,7 @@ void bt_action(int a)
         else if (a == BT_A_EFFECTS) bt_store.effects ^= 1;
         else if (a == BT_A_KEYCLICK) bt_store.keyclick ^= 1;
         else if (a == BT_A_ROAST) bt_store.roast = (bt_store.roast + 1) % 3;
+        else if (a >= BT_A_ROAST_BASE && a < BT_A_ROAST_BASE + 3) bt_store.roast = a - BT_A_ROAST_BASE;
         else if (a == BT_A_DISPLAY) {
             if (!bt_in_cga) os88_wm_display(bt_win, &bt_video);
             if (bt_video.kind == OS88_VID_CGA) bt_store.display ^= 1;

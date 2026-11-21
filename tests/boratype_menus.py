@@ -29,5 +29,7 @@ def main():
         p.write_text(s.replace(needle,'first=0;'))
         broken=run(tree,work/'broken-menus')
         assert broken.returncode!=0,'selected lesson vanished off-page without rejection'
+    from boratype_settings import main as settings_check
+    settings_check()
     print(f'boratype_menus: PASS; fixed-first-page mutation rejected ({time.monotonic()-started:.2f}s)')
 if __name__=='__main__':main()

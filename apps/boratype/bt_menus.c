@@ -257,7 +257,7 @@ static void ovl_tf_resultcard(int x,int y,int w,BTProfile *p)
 }
 static void ovl_tm_settings(int x,int y,int w,int h,int rich)
 {
-    int c,row,bh,n,left,i,yy,a,on;const char *s;
+    int c,row,bh,n,left,i,j,yy,a,on,sw,bx;const char *s;
     if(!rich){
         c=(w-8)/3;bh=tf_compact?(tf_h<140?13:15):25;row=bh+2;
         n=tf_append(0,"M Music: ");tf_append(n,bt_store.music?"ON":"OFF");tf_button(x,y,c,bh,tf_buf,BT_A_MUSIC,bt_store.music);
@@ -268,22 +268,35 @@ static void ovl_tm_settings(int x,int y,int w,int h,int rich)
         tf_button(x,y,c,bh,bt_full?"F6 Leave full":"F6 Fullscreen",BT_A_FULL,0);tf_button(x+c+4,y,c,bh,"Save settings",BT_A_SAVE,0);tf_button(x+2*(c+4),y,c,bh,"Back",BT_A_BACK,0);y+=row;
     }else{
         left=w/2-4;ovl_tm_panel(x,y,left,h-37,"SOUND");ovl_tm_panel(x+left+8,y,w-left-8,h-37,"DISPLAY");
-        bh=32;
+        bh=25;sw=48;bx=x+left/2+50;
         for(i=0;i<3;i++){
             a=i==0?BT_A_MUSIC:i==1?BT_A_EFFECTS:BT_A_KEYCLICK;on=i==0?bt_store.music:i==1?bt_store.effects:bt_store.keyclick;
-            s=i==0?"M Music: ":i==1?"E Effects: ":"K Key ticks: ";yy=y+31+i*40;
-            n=tf_append(0,s);tf_append(n,on?"ON":"OFF");tf_button(x+8,yy,left-16,bh,tf_buf,a,on);
+            s=i==0?"M Music":i==1?"E Effects":"K Key ticks";yy=y+35+i*38;
+            tf_text(x+10,yy+4,left/2-16,s,TF_WHITE,BT_F_TITLE);
+            tf_button(x+left/2-5,yy,sw,bh,on?"ON":"OFF",a,on);
+            c=(left/2-58)/8;
+            for(j=0;j<8;j++)gk_box(bx+j*c,yy+4,c-2,17,GK_SUNKEN,on?tf_ink(TF_GREEN):tf_mono?15:8);
         }
-        yy=y+155;n=tf_append(0,"R Roast: ");tf_append(n,bt_store.roast==0?"Gentle":bt_store.roast==1?"Classic":"Extra");
-        tf_button(x+8,yy,left-16,bh,tf_buf,BT_A_ROAST,1);
-        if(h>=300){c=(left-28)/3;for(i=0;i<3;i++){
-            gk_box(x+8+i*(c+6),yy+40,c,22,bt_store.roast==i?GK_RAISED2:GK_SUNKEN,tf_ground());
-            gk_textbox(x+8+i*(c+6),yy+40,c,22,i==0?"Gentle":i==1?"Classic":"Extra",tf_ink(bt_store.roast==i?TF_YELLOW:TF_WHITE),BT_F_SMALL,GK_CENTRE|GK_FIT);}}
-        c=x+left+16;n=tf_append(0,"D Display: ");tf_append(n,bt_store.display?"CGA color":"Native");
-        tf_button(c,y+31,w-left-24,bh,tf_buf,BT_A_DISPLAY,0);
-        tf_button(c,y+75,w-left-24,bh,bt_full?"F6 Leave full":"F6 Fullscreen",BT_A_FULL,bt_full);
-        tf_button(c,y+119,w-left-24,bh,"T Test music",BT_A_TEST_MUSIC,0);
-        if(h>=270)ovl_tm_illustration(c,y+160,w-left-24,h-205);
+        tf_text(x+10,y+157,left-20,"R Roast",TF_YELLOW,BT_F_TITLE);
+        c=(left-28)/3;yy=y+184;
+        for(i=0;i<3;i++){
+            n=x+8+i*(c+6);tf_button(n,yy,c,28,"",BT_A_ROAST_BASE+i,bt_store.roast==i);
+            gk_radio(n+4,yy+8,12,bt_store.roast==i);
+            tf_text(n+21,yy+9,c-24,i==0?"Gentle":i==1?"Classic":"Extra",0,BT_F_SMALL);
+        }
+        c=x+left+16;
+        s=tf_vid.kind==OS88_VID_HERC?"Hercules":tf_vid.kind==OS88_VID_CGA?"CGA":tf_vid.kind==OS88_VID_EGA?"EGA":tf_vid.bpp>=8||tf_vid.w>640||tf_vid.h>480?"VESA":"VGA";
+        n=tf_append(0,s);n=tf_append(n," ");n=tf_number(n,tf_vid.w);n=tf_append(n,"x");tf_number(n,tf_vid.h);
+        tf_text(c,y+32,w-left-24,tf_buf,TF_YELLOW,BT_F_TITLE);
+        n=tf_append(0,"D Display: ");tf_append(n,bt_store.display?"CGA color":"Native");
+        tf_button(c,y+58,w-left-24,bh,tf_buf,BT_A_DISPLAY,0);
+        sw=(w-left-28)/2;
+        tf_button(c,y+93,sw,27,"",BT_A_WINDOWED,!bt_full);gk_radio(c+5,y+101,12,!bt_full);
+        tf_text(c+22,y+101,sw-26,"Windowed",0,tf_font);
+        tf_button(c+sw+4,y+93,sw,27,"",BT_A_FULLSCREEN,bt_full);gk_radio(c+sw+9,y+101,12,bt_full);
+        tf_text(c+sw+26,y+101,sw-26,"Full screen",0,tf_font);
+        tf_button(c,y+127,w-left-24,bh,"T Test music",BT_A_TEST_MUSIC,0);
+        if(h>=270)ovl_tm_illustration(c,y+160,w-left-24,h-200);
         yy=y+h-29;c=(w-6)/2;tf_button(x,yy,c,26,"Save settings",BT_A_SAVE,1);tf_button(x+c+6,yy,c,26,"Back",BT_A_BACK,0);
         y+=h-58;x+=4;w=left-8;
     }
@@ -392,10 +405,15 @@ static void ovl_tf_drawbody(void)
 }
 static int ovl_tf_settings_delta(unsigned diff)
 {
-    int i,a,bit;
+    int i,a,bit,left,rich;
+    rich=tf_w>=600&&tf_h>=360;left=(tf_w-24)/2-4;
     for(i=0;i<tf_nhit;i++){a=tf_hit[i][4];bit=0;
         if(a==BT_A_MUSIC)bit=1;else if(a==BT_A_EFFECTS)bit=2;
         else if(a==BT_A_KEYCLICK)bit=8;else if(a==BT_A_ROAST)bit=48;else if(a==BT_A_DISPLAY)bit=64;else if(a==BT_A_FULL)bit=128;
-        if(diff&bit)tf_render(tf_hit[i][0],tf_hit[i][1],tf_hit[i][2],a==BT_A_ROAST&&tf_w>=600&&tf_h>=360?78:tf_hit[i][3],3,0);
+        else if(a==BT_A_ROAST_BASE)bit=48;else if(a==BT_A_WINDOWED||a==BT_A_FULLSCREEN)bit=128;
+        if(diff&bit){
+            if(rich&&(a==BT_A_MUSIC||a==BT_A_EFFECTS||a==BT_A_KEYCLICK||a==BT_A_ROAST_BASE))tf_render(tf_x+16,tf_hit[i][1]-2,left-8,31,3,0);
+            else tf_render(tf_hit[i][0],tf_hit[i][1],tf_hit[i][2],tf_hit[i][3],3,0);
+        }
     }return 1;
 }

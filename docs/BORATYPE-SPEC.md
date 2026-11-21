@@ -173,6 +173,13 @@ and every existing action. Menu composition helpers are cold overlay code,
 use the existing opaque band renderer, allocate no claims and add no timer
 work to PLAY. New literals must fit the current resident cap; fonts, common
 buttons/header/footer and portrait scene assets remain shared helpers.
+Roomy Settings renders Music/Effects/Key ticks as labels, small boolean
+switches and segmented enabled-state indicators (never adjustable volume).
+Roast choices are direct actions104..106 for Gentle/Classic/Extra; the existing
+R shortcut still cycles. Actions107/108 request Windowed/Full screen and call
+the existing toggle only when the current latch differs. Current adapter and
+screen dimensions come from OSAPI_WM_DISPLAY. Compact Settings retains its
+existing controls. Artwork composition remains unchanged by these controls.
 
 
 ### 3.3 Native PLAY proportions and bounded updates

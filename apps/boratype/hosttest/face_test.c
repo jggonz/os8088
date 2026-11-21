@@ -8,6 +8,9 @@
 #include <assert.h>
 struct os88_pt {int x,y;};struct os88_size {int w,h;};
 struct os88_video {int w,h,dock_top,kind,bpp;};
+#define OS88_VID_HERC 1
+#define OS88_VID_CGA 2
+#define OS88_VID_EGA 3
 void os88_wm_content(void *,struct os88_pt *);
 int os88_wm_geom(void *,struct os88_size *);
 void os88_wm_display(void *,struct os88_video *);
@@ -45,7 +48,7 @@ int bt_weak(int rank){return rank==0?'f':0;}
 unsigned bt_muldiv(BTWord a,BTWord b,BTWord d){return d?(BTWord)((uint32_t)a*b/d):65535;}
 void os88_wm_content(void *w,struct os88_pt *p){(void)w;p->x=8;p->y=24;}
 int os88_wm_geom(void *w,struct os88_size *s){(void)w;s->w=hw;s->h=hh;return 0;}
-void os88_wm_display(void *w,struct os88_video *v){(void)w;v->bpp=hbpp;}
+void os88_wm_display(void *w,struct os88_video *v){(void)w;v->bpp=hbpp;v->w=hw;v->h=hh;v->kind=hbpp==1?OS88_VID_HERC:0;}
 char *os88_utoa(unsigned v,char *s){snprintf(s,8,"%u",v);return s;}
 #include "../bt_face.c"
 int bx_rows(int x,int y,int w,int h){(void)x;(void)y;(void)h;return 8192/(hbpp==1?w/8:w/2);}
@@ -69,6 +72,7 @@ int gk_textbox(int x,int y,int w,int h,const char *s,int c,int f,int fl){
 }
 void gk_box(int x,int y,int w,int h,int s,int f){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;}
 void gk_button(int x,int y,int w,int h,const char *s,int f,int st){(void)x;(void)y;(void)w;(void)h;(void)s;(void)f;(void)st;}
+void gk_radio(int x,int y,int size,int on){(void)x;(void)y;(void)size;(void)on;}
 static void keyboard(void)
 {
  int i,j,act;
@@ -177,7 +181,9 @@ static void screens(void)
   if(s==BT_S_RESULTS){assert(reaction_seen);if(!bt_session.attempts)assert(accuracy_dash);}
   if(s==BT_S_RECORDS)assert(achievement_seen==127);
   if(s==BT_S_SETTINGS){int required[]={BT_A_MUSIC,BT_A_EFFECTS,BT_A_KEYCLICK,BT_A_ROAST,BT_A_DISPLAY,BT_A_TEST_MUSIC,BT_A_FULL,BT_A_SAVE,BT_A_BACK};
-   assert(tf_nhit==9);for(unsigned a=0;a<sizeof(required)/sizeof(required[0]);a++){int found=0;for(i=0;i<tf_nhit;i++)if(tf_hit[i][4]==required[a])found=1;assert(found);}}
+   int rich=tf_w>=600&&tf_h>=360;
+   assert(tf_nhit==(rich?12:9));for(unsigned a=0;a<sizeof(required)/sizeof(required[0]);a++){int found=0;if(rich&&(required[a]==BT_A_ROAST||required[a]==BT_A_FULL))continue;for(i=0;i<tf_nhit;i++)if(tf_hit[i][4]==required[a])found=1;assert(found);}
+   if(rich){int direct[]={BT_A_ROAST_BASE,BT_A_ROAST_BASE+1,BT_A_ROAST_BASE+2,BT_A_WINDOWED,BT_A_FULLSCREEN};for(unsigned a=0;a<5;a++){int found=0;for(i=0;i<tf_nhit;i++)if(tf_hit[i][4]==direct[a])found=1;assert(found);}}}
   for(i=0;i<tf_nhit;i++){
    assert(tf_hit[i][0]>=tf_x&&tf_hit[i][0]+tf_hit[i][2]<=tf_x+tf_w);
    if(tf_hit[i][1]<tf_top||tf_hit[i][1]+tf_hit[i][3]>tf_bottom){fprintf(stderr,"outside screen%d %dx%d hit%d y%d h%d top%d bottom%d\n",s,hw,hh,i,tf_hit[i][1],tf_hit[i][3],tf_top,tf_bottom);abort();}

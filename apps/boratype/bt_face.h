@@ -31,6 +31,9 @@ extern int bt_modifiers, bt_practice_weak;
 /* Root advances this from OS ticks independently of scoring. */
 extern int bt_blink_frame;
 #define BT_A_PRACTICE_BASE 100
+#define BT_A_ROAST_BASE 104
+#define BT_A_WINDOWED 107
+#define BT_A_FULLSCREEN 108
 
 /* Compose only, into the caller's current Breadboard band. */
 void ovl_bt_portrait_scene(int x,int y,int w,int h);
