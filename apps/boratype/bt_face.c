@@ -356,6 +356,13 @@ static int tf_layout(void *win)
     if(!changed)return tf_w<480||tf_h<128?0:1;
     return ovl_tf_arrange();
 }
+static int ovl_tf_tabx(int i)
+{
+    static const unsigned char stops[]={0,10,21,34,45,57,64};
+    int span,unit;
+    span=tf_w-16;unit=stops[i];
+    return tf_x+8+(span/64)*unit+((span%64)*unit)/64;
+}
 static void ovl_tf_drawheader(void)
 {
     static const char *tabs[] = {"LESSONS","PRACTICE","CHALLENGE","RECORDS","SETTINGS","HELP"};
@@ -372,10 +379,9 @@ static void ovl_tf_drawheader(void)
     }
     bx_fill(tf_x,tab_y,tf_x+tf_w-1,tab_y,tf_ink(TF_CYAN));
     bx_fill(tf_x,tf_top-2,tf_x+tf_w-1,tf_top-1,tf_ink(TF_CYAN));
-    w=(tf_w-16)/6;
     for(i=0;i<6;i++){
+        x=ovl_tf_tabx(i);w=ovl_tf_tabx(i+1)-x;
         font=tf_compact?BT_F_SMALL:(bx_twidth(tabs[i],BT_F_TITLE)<=w-3?BT_F_TITLE:BT_F_TEXT);
-        x=tf_x+8+i*w;
         active=bt_screen==pages[i];
         if(bt_screen==BT_S_PLAY||bt_screen==BT_S_PAUSE||bt_screen==BT_S_RESULTS)
             active=i==(bt_session.mode==BT_CHALLENGE?2:bt_session.mode==BT_PRACTICE?1:0);
@@ -881,10 +887,9 @@ void bt_face_paint(void *win,int full)
 }
 static int ovl_tf_click(int x,int y)
 {
-    int i,w;
-    if(y>=tf_y&&y<tf_top&&y>=tf_top-(tf_compact?12:22)){
-        w=(tf_w-16)/6;i=(x-tf_x-8)/w;
-        if(x>=tf_x+8&&i>=0&&i<6)return i==0?BT_A_LESSONS:i==1?BT_A_PRACTICE:i==2?BT_A_CHALLENGE:i==3?BT_A_RECORDS:i==4?BT_A_SETTINGS:BT_A_HELP;
+    int i;
+    if(y>=tf_top-(tf_compact?12:22)&&y<tf_top&&x>=tf_x+8){
+        for(i=0;i<6;i++)if(x<ovl_tf_tabx(i+1))return BT_A_LESSONS+i;
     }
     if(bt_screen==BT_S_PLAY){for(i=0;i<TF_KEYS;i++){tf_keyrect(i);if(tf_kww>0&&x>=tf_kx&&x<tf_kx+tf_kww&&y>=tf_ky0&&y<tf_ky0+tf_khh)return BT_A_HINT_BASE+tf_keys[i][0];}return 0;}
     for(i=0;i<tf_nhit;i++)if(x>=tf_hit[i][0]&&x<tf_hit[i][0]+tf_hit[i][2]&&y>=tf_hit[i][1]&&y<tf_hit[i][1]+tf_hit[i][3])return tf_hit[i][4];
