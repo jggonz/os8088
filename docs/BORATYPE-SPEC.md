@@ -37,6 +37,10 @@ and punctuation included; no attempts/time displays a dash. Intermediate
 products use checked two-word arithmetic. A product proven to fit one word
 uses native word multiply/divide with exactly the same floor and saturation;
 larger products retain the two-word path. Pauses exclude elapsed ticks.
+Tick conversion may use the upper estimate `floor(ticks*3600/65536)` and
+one exact PIT-threshold correction: the estimate exceeds the true quotient
+by at most one over the entire word range. Byte products keep every
+intermediate within one word; the final result remains the exact PIT ratio.
 Finished statistics freeze exactly once. Challenges have a three-second ready
 countdown, then 60/180/300 active seconds and expire without keyboard input.
 The native adapter reports its initial scene visible exactly once before

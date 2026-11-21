@@ -41,24 +41,19 @@ unsigned bt_muldiv(BTWord a, BTWord b, BTWord divisor)
     return q;
 }
 
-/* floor(ticks*65536/1193182), the exact SPEC 37 PIT ratio. The two-word
- * remainder divides by 0x0012:34DE. Tick wrap is handled before conversion. */
+/* Exact floor(ticks*65536/1193182). The high word of ticks*3600 is an
+ * upper estimate, less than one above the true quotient. Both high-word
+ * products use byte factors, so their partial sums fit a target word.
+ * For 0<q<=3599, q*13534 has a nonzero low word (gcd(13534,65536)=2).
+ * Hence q*18 + high(q*13534) + 1 is the exact first tick of second q. */
 unsigned bt_seconds(BTWord ticks)
 {
-    BTWord nh, nl, rh, rl, q, borrow;
-    int i;
-    nh = ticks; nl = rh = rl = q = 0;
-    for (i = 0; i < 32; i++) {
-        rh = (BTWord)((rh << 1) | (rl >> 15));
-        rl = (BTWord)((rl << 1) | (nh >> 15));
-        nh = (BTWord)((nh << 1) | (nl >> 15));
-        nl = (BTWord)(nl << 1); q = (BTWord)(q << 1);
-        if (rh > 18 || (rh == 18 && rl >= 13534)) {
-            borrow = rl < 13534;
-            rl = (BTWord)(rl - 13534); rh = (BTWord)(rh - 18 - borrow);
-            q |= 1;
-        }
-    }
+    BTWord a, b, q, high;
+    a = ticks >> 8; b = ticks & 255;
+    q = a * 14 + ((a * 16 + b * 14 + (b >> 4)) >> 8);
+    a = q >> 8; b = q & 255;
+    high = a * 52 + ((a * 222 + b * 52 + ((b * 222) >> 8)) >> 8);
+    if (q && ticks < q * 18 + high + 1) q--;
     return q;
 }
 
