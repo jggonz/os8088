@@ -41,7 +41,8 @@ void os88_gfx_frame(int a,int b,int c,int d){assert(a>=8&&c<8+hw&&b>=24&&d<24+hh
 void os88_gfx_hline(int a,int b,int c){assert(a>=8&&b<8+hw&&c>=24&&c<24+hh);}
 void os88_font_run(int x,int y,const char *s,int ink,int paper){(void)s;(void)ink;(void)paper;assert(x>=8&&x+8<=8+hw&&y>=24&&y+8<=24+hh);}
 static unsigned flushes,area;
-static int bandx,bandy,bandw,bandh;
+static int bandx,bandy,bandw,bandh,bandpaper;
+static unsigned bubble_white,caption_black;
 unsigned bx_bseg;
 static unsigned last_art2;
 static int expression=1,last_sprite=-1,status_seen,reaction_seen,accuracy_y,accuracy_dash;
@@ -57,12 +58,12 @@ void os88_wm_display(void *w,struct os88_video *v){(void)w;v->bpp=hbpp;v->w=hw;v
 char *os88_utoa(unsigned v,char *s){snprintf(s,8,"%u",v);return s;}
 #include "../bt_face.c"
 int bx_rows(int x,int y,int w,int h){(void)x;(void)y;(void)h;return 8192/(hbpp==1?w/8:w/2);}
-void bx_new(int x,int y,int w,int h,int c){(void)c;assert(!(x&7)&&!(w&7));assert(x>=8&&x+w<=8+hw);assert(y>=24&&y+h<=24+hh);bandx=x;bandy=y;bandw=w;bandh=h;}
-void bx_fill(int a,int b,int c,int d,int col){(void)a;(void)b;(void)c;(void)d;(void)col;}
+void bx_new(int x,int y,int w,int h,int c){bandpaper=c;assert(!(x&7)&&!(w&7));assert(x>=8&&x+w<=8+hw);assert(y>=24&&y+h<=24+hh);bandx=x;bandy=y;bandw=w;bandh=h;}
+void bx_fill(int a,int b,int c,int d,int col){if(!tf_compact&&col==15&&a<=tf_px+16&&c>=tf_px+16&&b<=tf_py+(tf_ph>=150?132:60)+3&&d>=tf_py+(tf_ph>=150?132:60)+3)bubble_white++;}
 int bx_spr(int x,int y,int id){(void)x;(void)y;last_sprite=id;return 40;}
 int bx_twidth(const char *s,int f){return (int)strlen(s)*(f==BT_F_LARGE?16:f==BT_F_TITLE?9:f==BT_F_TEXT?6:5);}
 int bx_fonth(int f){return f==BT_F_LARGE?24:f==BT_F_TITLE?16:f==BT_F_TEXT?10:8;}
-int bx_text(int x,int y,const char *s,int c,int f){(void)x;(void)y;(void)c;return bx_twidth(s,f);}
+int bx_text(int x,int y,const char *s,int c,int f){if(!tf_compact&&s==tf_wrap&&x==tf_px+8&&y>=tf_py+(tf_ph>=150?132:60)+2){assert(c==0);caption_black++;}return bx_twidth(s,f);}
 int bx_out(void){flushes++;area+=bandw*bandh;return 0;}
 void bx_setup(unsigned a,void *b,unsigned c,unsigned d,int e){(void)b;(void)c;(void)d;(void)e;bx_bseg=a;}
 void bt_scene_copy(unsigned seg,int card,int src,int dst,int stride,int plane,int width,int rows){
@@ -227,10 +228,12 @@ static void blink(void)
 static void caption_change(void)
 {
  static BTSession before;const char *old=caption;
- memcpy(&before,&bt_session,sizeof(before));bt_face_paint(0,1);
+ memcpy(&before,&bt_session,sizeof(before));bubble_white=caption_black=0;bt_face_paint(0,1);
+ if(!tf_compact){assert(bubble_white&&caption_black);}
  caption="Your fingers called a meeting. The keyboard was not invited.";
  for(int n=0;n<2*((tf_ph+3)/4+24);n++){
-  unsigned prior=unpacks;area=flushes=0;bt_face_paint(0,0);assert(flushes<=1);
+  unsigned prior=unpacks;area=flushes=0;last_sprite=-1;bt_face_paint(0,0);assert(flushes<=1);
+  if(!tf_compact&&flushes&&bandx<tf_px+tf_pw&&bandy>=tf_py+(tf_ph>=150?132:60)+2&&bandy<tf_py+tf_ph-6){assert(bandpaper==15&&last_sprite==-1);assert(bandx==tf_px+8&&bandw==((tf_pw-16)&~7));assert(bandy+bandh<=tf_py+tf_ph-6);}
   if(!tf_compact)assert(area<=(unsigned)(unpacks==prior?((tf_pw+7)&~7)*4:tf_aw*(direct_height?direct_height:24)));
   if(!tf_cosneeded&&!tf_capneeded)break;
   assert(n<2*((tf_ph+3)/4+24)-1);

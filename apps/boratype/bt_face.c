@@ -515,20 +515,38 @@ static void ovl_tf_caption_prepare(const char *text,int width)
         pos+=n;while(text[pos]==' ')pos++;
     }
 }
+static void ovl_tf_caption_bubble(void)
+{
+    int x,y,w,bottom,i;
+    if(tf_compact)return;
+    x=tf_px+4;y=tf_py+(tf_ph>=150?132:60);w=tf_pw-8;bottom=tf_py+tf_ph-5;
+    if(w<16||bottom<=y)return;
+    /* Small outlined tail in the gap below the picture. The full scene owns
+     * these pixels; incremental text bands never touch them. */
+    for(i=0;i<5;i++){
+        bx_fill(x+20-i,y-5+i,x+20+i,y-5+i,0);
+        if(i)bx_fill(x+21-i,y-5+i,x+19+i,y-5+i,15);
+    }
+    bx_fill(x+2,y,x+w-3,bottom,0);
+    bx_fill(x,y+2,x+w-1,bottom-2,0);
+    bx_fill(x+3,y+1,x+w-4,bottom-1,15);
+    bx_fill(x+1,y+3,x+w-2,bottom-3,15);
+    bx_fill(x+17,y,x+23,y+1,15);
+}
 static void ovl_tf_drawcaption(void)
 {
-    int x,y,w,rows,i,k,line;
-    if(tf_compact){x=tf_x+8;y=tf_statsy-10;w=tf_w-16;rows=1;}
-    else{x=tf_px+6;y=tf_py+(tf_ph>=150?132:60);w=tf_pw-12;rows=(tf_py+tf_ph-y-5)/(tf_th+2);}
+    int x,y,w,rows,i,k,line,ink,bottom;
+    if(tf_compact){x=tf_x+8;y=tf_statsy-10;w=tf_w-16;rows=1;ink=tf_ink(TF_WHITE);}
+    else{x=tf_px+8;y=tf_py+(tf_ph>=150?132:60)+2;w=(tf_pw-16)&~7;
+        bottom=tf_py+tf_ph-5;rows=(bottom-y+2)/(tf_th+2);ink=0;}
+    if(w<1||rows<1)return;
     ovl_tf_caption_prepare(bt_caption(),w);
     if(rows>tf_capcount)rows=tf_capcount;
     for(i=0;i<rows;i++){
         line=y+i*(tf_th+2);
         if(line>=tf_sy+tf_sh||line+tf_th<=tf_sy)continue;
         for(k=0;k<tf_caplen[i];k++)tf_wrap[k]=tf_capmsg[tf_capstart[i]+k];tf_wrap[k]=0;
-        /* The cached line already fits. Avoid a second full metric/fit pass;
-         * bx_text composes into the same opaque clipped drawing band. */
-        bx_text(x,line,tf_wrap,tf_ink(TF_WHITE),tf_font);
+        bx_text(x,line,tf_wrap,ink,tf_font);
     }
 }
 static void ovl_tf_drawhint(void)
@@ -657,7 +675,7 @@ static void ovl_tf_playbase(void)
 {
     int i;
     if(!tf_compact)gk_box(tf_x+8,tf_ky-4,tf_w-16,5*tf_kh+8,GK_SUNKEN2,tf_mono?15:TF_BLUE);
-    ovl_tf_drawportrait();ovl_tf_drawcaption();ovl_tf_drawprompt();
+    ovl_tf_drawportrait();ovl_tf_caption_bubble();ovl_tf_drawcaption();ovl_tf_drawprompt();
     for(i=0;i<5;i++)ovl_tf_drawstat(i);
     for(i=0;i<TF_KEYS;i++)tf_drawkey(i,0);
 }
@@ -676,13 +694,13 @@ static void tf_render(int x,int y,int w,int h,int kind,int item)
     rows=bx_rows(x,y,w,bottom-y);if(rows<=0)return;
     while(y<bottom){n=bottom-y;if(n>rows)n=rows;
         tf_sx=x;tf_sy=y;tf_sw=w;tf_sh=n;
-        bx_new(x,y,w,n,tf_ground());
+        bx_new(x,y,w,n,kind==5&&!tf_compact?15:tf_ground());
         if(kind==1)ovl_tf_drawheader();
         else if(kind==2)ovl_tf_drawfooter();
         else if(kind==3)ovl_tf_drawbody();
         else if(kind==4)ovl_tf_playbase();
-        else if(kind==5){ovl_tf_drawportrait();ovl_tf_drawcaption();}
-        else if(kind==6){if(!tf_compact)ovl_tf_drawportrait();ovl_tf_drawcaption();}
+        else if(kind==5)ovl_tf_drawcaption();
+        else if(kind==6){if(!tf_compact){ovl_tf_drawportrait();ovl_tf_caption_bubble();}ovl_tf_drawcaption();}
         else if(kind==7)ovl_tf_drawhint();
         else if(kind==8){lo=(item/tf_cols)*tf_cols;hi=lo+tf_cols;
             i=item-1;if(i<lo)i=lo;
@@ -861,8 +879,8 @@ static int ovl_tf_cosmetics(void)
         tf_acapturn++;if(ovl_tf_anim_step())return 1;
     }
     if(tf_capneeded){
-        y=tf_py+(tf_ph>=150?132:60)+tf_capline;h=tf_py+tf_ph-4-y;if(h>4)h=4;
-        if(h>0){tf_render(tf_px,y,tf_pw,h,5,0);tf_capline+=h;tf_acapturn=0;return 1;}
+        y=tf_py+(tf_ph>=150?132:60)+2+tf_capline;h=tf_py+tf_ph-6-y;if(h>4)h=4;
+        if(h>0){tf_render(tf_px+8,y,(tf_pw-16)&~7,h,5,0);tf_capline+=h;tf_acapturn=0;return 1;}
         tf_capneeded=0;
     }
     return ovl_tf_anim_step();

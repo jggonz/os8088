@@ -150,6 +150,11 @@ one-shot only after completion and its minimum dwell; delayed painting does
 not skip its remaining poses. Neutral idle is a completed stable frame between
 blinks. Cosmetic jobs receive alternate idle opportunities before deferred mirror,
 footer, counter and hint work; urgent typing feedback keeps priority.
+Roomy PLAY paints a white speech bubble with a black outline and small tail.
+Its black cached caption text uses a byte-aligned interior. Incremental caption
+jobs clear only that white interior and compose text there; border, tail and
+portrait remain static until full damage. Compact captions keep adapter-readable
+ink/paper and the existing bounded work policy.
 Caption line breaks are cached per caption/font/width using the existing glyph
 advance table. Only intersecting fitted lines compose glyphs; four-row updates
 do not repeat whole-message wrapping or text-fit work.
