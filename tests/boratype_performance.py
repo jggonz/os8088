@@ -256,6 +256,9 @@ class Probe:
         for i in range(count):
             regs = self.stop("periodic entry")
             start = self.m.status()["cycles"]
+            pending = {name: self.app.global_word(name) for name in
+                       ("tf_statpend", "tf_hintpending", "tf_footpending", "tf_cosneeded", "tf_capneeded", "tf_capline")}
+            pending["mirror_cell"] = self.app.p.word(self.S["_tf_dirtyfirst"] + 4)
             ret = self.return_offset(regs)
             paints = 0
             for _ in range(50):
@@ -268,7 +271,8 @@ class Probe:
             else:
                 raise AssertionError("periodic callback did not finish")
             cycles = self.m.status()["cycles"] - start
-            records.append({"index": i, "cycles": cycles, "ms": ms(cycles), "output_entries": paints})
+            records.append({"index": i, "cycles": cycles, "ms": ms(cycles), "output_entries": paints,
+                            "pending_at_entry": pending})
             assert cycles <= int(HZ * limit_ms / 1000), records[-1]
             self.arm(self.S["_bt_pulse"])
             self.m.run()

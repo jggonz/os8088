@@ -65,6 +65,7 @@ def scenario(app, folder, ev):
     app.press('KeyP').wait_screen('PRACTICE')
     app.click_action(L['BT_A_PRACTICE_BASE'] + 2)
     assert app.global_word('bt_ch_diff') == 2 and not app.global_word('bt_practice_weak')
+    app.shot(folder, '07-selected-digits')
     app.press('Enter').wait_screen('PLAY'); mixed = app.state()['passage']
     assert any(c.isdigit() for c in mixed) and set(mixed) <= set('0123456789 ')
     for _ in range(8):

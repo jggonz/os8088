@@ -116,7 +116,18 @@ def drive_root(ui, letter):
     not navigation; os88ui's dock/title raise is the valid route to its Disk.
     """
     drive = ord(letter.upper()) - ord("A")
-    candidates = [w for w in ui.windows() if (lambda fs: fs is not None and fs[0] == drive)(ui.fs_of(w))]
+    # I_SPTR means a near FS state block only for KIND_FILES. A high package
+    # has a selector there, which can accidentally resemble drive B: bytes
+    # when interpreted as a kernel offset. Check the published kind first.
+    filekind = os88sym.equates()["KIND_FILES"]
+    candidates = []
+    for w in ui.windows():
+        owner = ui.m.read(ui._S("wm_owner") + w.i, 1)[0]
+        if owner == 255:
+            continue
+        kind = ui.m.read(ui._S("inst_tab") + owner * geom.I_RECSZ + geom.I_KIND, 1)[0]
+        if kind == filekind and (lambda fs: fs is not None and fs[0] == drive)(ui.fs_of(w)):
+            candidates.append(w)
     if not candidates:
         return ui.open_drive(letter)
     win = ui.raise_window(candidates[-1])
@@ -277,8 +288,8 @@ class App:
                 def primary_pending():
                     return (self.global_word("tf_hintpending"), self.global_word("tf_statpend"),
                             self.global_word("tf_footpending"),
-                            self.p.word(self.sym["_tf_dirtyfirst"] + 4))
-                self.ui._wait(lambda: primary_pending() == (0, 0, 0, 65535),
+                            self.p.word(self.sym["_tf_dirtyfirst"] + 4), self.global_word("tf_capneeded"))
+                self.ui._wait(lambda: primary_pending() == (0, 0, 0, 65535, 0),
                               "native primary field paint queue drained", 30, snapshot=primary_pending)
             self.ui.still()
         w, h, rgb = self.ui.m.fbuf()

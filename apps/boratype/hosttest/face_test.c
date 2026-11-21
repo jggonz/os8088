@@ -103,6 +103,20 @@ static void blink(void)
  bt_blink_frame=0;bt_face_paint(0,0);assert(!area&&!flushes);
  assert(!memcmp(&before,&bt_session,sizeof(before)));expression=1;
 }
+static void caption_change(void)
+{
+ static BTSession before;const char *old=caption;
+ memcpy(&before,&bt_session,sizeof(before));bt_face_paint(0,1);
+ caption="Your fingers called a meeting. The keyboard was not invited.";
+ for(int n=0;n<TF_COS_MAX+2;n++){
+  area=flushes=0;bt_face_paint(0,0);
+  if(!tf_compact)assert(area<=(unsigned)(((tf_pw+7)&~7)*4));
+  if(!tf_cosneeded&&!tf_capneeded)break;
+  assert(n<TF_COS_MAX);
+ }
+ area=flushes=0;bt_face_paint(0,0);assert(!area&&!flushes);
+ assert(!memcmp(&before,&bt_session,sizeof(before)));caption=old;bt_face_paint(0,1);
+}
 static void screens(void)
 {
  int s,i;
@@ -132,7 +146,7 @@ int main(void)
   fullarea=hw*hh;bt_session.pos=1;bt_session.streak=1;bt_session.correct=1;bt_session.attempts=1;bt_face_paint(0,0);
   if(area>fullarea/6){fprintf(stderr,"too much repaint %dx%d %u/%u\n",hw,hh,area,fullarea);abort();}
   printf("face %dx%d %dbpp: geometry/screens/clicks pass, key %u pixels, %u bands\n",hw,hh,hbpp,area,flushes);
-  blink();
+  blink();caption_change();
  }
  hw=304;hh=130;bt_face_init(1,2,8192,4);area=flushes=0;bt_face_paint(0,1);assert(!area&&!flushes&&!tf_nhit);
  puts("face: attentive blink selection/cache/restoration and session immutability pass");

@@ -683,11 +683,13 @@ static int ovl_tf_cosmetics(void)
     int i,j,y,h,end;unsigned key;
     if(tf_compact){tf_render(tf_x+8,tf_statsy-10,tf_w-16,10,6,0);tf_cosneeded=0;tf_capneeded=0;return 1;}
     if(tf_capneeded){
-        y=tf_py+(tf_ph>=150?132:60)+tf_capline*(tf_th+2);h=tf_th+2;
-        if(y+h<tf_py+tf_ph-4){tf_render(tf_px,y,tf_pw,h,5,0);
+        /* tf_capline is a physical scanline offset. A complete text line
+         * can monopolize an XT timer; coalesce it in four-row strips. */
+        y=tf_py+(tf_ph>=150?132:60)+tf_capline;h=tf_py+tf_ph-4-y;if(h>4)h=4;
+        if(h>0){tf_render(tf_px,y,tf_pw,h,5,0);
             end=(y+h-tf_py+tf_cosrows-1)/tf_cosrows;
             for(j=(y-tf_py)/tf_cosrows;j<end;j++)tf_coskey[j]=tf_cos_signature(j);
-            tf_capline++;return 1;}
+            tf_capline+=h;return 1;}
         tf_capneeded=0;
     }
     for(i=0;i<32&&tf_cosearch<tf_cosn;i++){

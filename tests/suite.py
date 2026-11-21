@@ -1905,11 +1905,11 @@ FAST = [
         needs=("qemu", "nasm", "cc"), timeout=240, serial=True,
         wants=("build/boratype360.img",)),
     Row("boratypemega286", "soak", ["env", "OS88_MEGA=1", "OS88_MEGA_EMU=86box"] +
-        py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "vga", "--backend", "86box",
-        "--app-build", "build", "--evidence", "build/boratype-final/mega286"), 24.6,
+        py("tests/boratype_target.py", "--scenario", "smoke", "--adapter", "vga", "--backend", "86box",
+        "--app-build", "build", "--evidence", "build/boratype-final/mega286"), 140.4,
         "SPEC.md 134: ordinary shipped package on actual protected-mode286 "
-        "Mega; strict input, native fullscreen and restored window, no mega-only replacement package",
-        needs=("86box", "nasm", "cc"), timeout=300, serial=True,
+        "Mega with actual high region/band; full lessons, profiles, fullscreen-close and cold reboot",
+        needs=("86box", "nasm", "cc"), timeout=700, serial=True,
         wants=("build/boratype360.img", "build/mega.img")),
     Row("breadxtcore", "soak", py("tests/breadxt_core.py"), 12.1,
         "SPEC.md 130: shipping topology, editor history, staged BBX codec, "

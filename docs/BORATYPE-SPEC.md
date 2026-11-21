@@ -69,7 +69,9 @@ a non-consuming BIOS keyboard peek may defer that drawing so the OS can
 dispatch a waiting key. It never reads a key or changes scoring; all scored
 characters still come through the normal OS callback.
 Input feedback precedes cosmetic portrait/caption work; cosmetic
-updates coalesce to the newest expression and are bounded so they cannot hold
+updates coalesce to the newest expression. Caption changes paint at most four
+physical scanlines per idle pass; portrait changes retain their one-row
+bounds. They are bounded so they cannot hold
 the UI through a long animation. Full native damage paints remain complete. Layout derives from live content and display geometry.
 Color roles are navy/cobalt, cyan rules, yellow title/target, white text,
 green accepted, red mistake, and finger zones. Mono uses symbols/outlines.
