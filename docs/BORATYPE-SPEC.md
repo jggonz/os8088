@@ -148,6 +148,25 @@ second/read-only sessions remain usable. Existing art0, sound1 and overlay2
 indices stay stable. This optional heap cost is the approved larger-package
 tradeoff; it does not raise resident, kernel or band budgets.
 
+### 3.2. Cold menu compositions
+
+Roomy native content (at least600x360) uses the supplied lesson, settings,
+records and result compositions: a selectable lesson table with real best
+accuracy/status and the selected drill/key preview; grouped sound/display
+controls with visible current states; duration-specific record tables,
+measured mastery/streak/achievement gauges and seven achievement cards;
+and result statistics beside a portrait/caption and actual weak-key caps.
+Home, profile, help, pause and test setup reuse the same framed-card language.
+All drawn controls retain the existing BT_A actions. Selection, paging and
+preview derive from existing UI/profile/session fields; painting never changes
+them. Display/output labels describe existing OS choices and do not fabricate
+volume, device or voice controls. Compact geometry retains its dense layout
+and every existing action. Menu composition helpers are cold overlay code,
+use the existing opaque band renderer, allocate no claims and add no timer
+work to PLAY. New literals must fit the current resident cap; fonts, common
+buttons/header/footer and portrait scene assets remain shared helpers.
+
+
 ## 4. Resources and budgets
 
 BORATYPE is eight characters, a legal 8.3 stem. All runtime assets are package

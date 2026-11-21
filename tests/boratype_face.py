@@ -32,7 +32,7 @@ def main():
         print(positive.stdout, end="")
         tree = work / "broken"
         (tree / "hosttest").mkdir(parents=True)
-        for name in ("bt_face.c", "bt_face.h", "bt.h", "art.h"):
+        for name in ("bt_face.c", "bt_menus.c", "bt_face.h", "bt.h", "art.h"):
             shutil.copyfile(SOURCE / name, tree / name)
         shutil.copyfile(SOURCE / "hosttest/face_test.c", tree / "hosttest/face_test.c")
         source = tree / "bt_face.c"
