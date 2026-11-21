@@ -68,6 +68,8 @@ static int tf_adone,tf_aload=-1,tf_aphase,tf_ashown=-1,tf_amask,tf_acapturn,tf_i
 static int tf_ax,tf_ay,tf_aw,tf_ah,tf_avariant,tf_avisible;
 static const char *tf_acaption;
 int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw);
+int bt_anim_planar(unsigned seg,unsigned off,int x,int y,int height);
+void bt_anim_rawstrip(unsigned seg,unsigned off);
 int os88_part_fetch(int i);int os88_part_movable(int i);void os88_part_drop(int i);
 unsigned os88_part_seg(int i);
 void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n);
@@ -747,8 +749,8 @@ static void ovl_tf_anim_load(void)
 {
     int i;
     tf_aready=0;if(bt_readonly)return;
-    for(i=3;i<6;i++)if(os88_part_fetch(i)!=0||os88_part_movable(i)!=0)break;
-    if(i<6){for(i=3;i<6;i++)os88_part_drop(i);return;}
+    for(i=3;i<8;i++)if(os88_part_fetch(i)!=0||os88_part_movable(i)!=0)break;
+    if(i<8){for(i=3;i<8;i++)os88_part_drop(i);return;}
     tf_aready=1;
 }
 static int ovl_tf_anim_record(int frame,int strip)
@@ -764,11 +766,57 @@ static int ovl_tf_anim_record(int frame,int strip)
     if(tf_arec[2]>tf_ahead[3]||tf_arec[1]<16||tf_arec[1]>tf_ahead[3]-tf_arec[2])return 0;
     return 1;
 }
+/* The large native faces are already in video-plane order. The complete
+ * five-entry directory for one pose fits a single cross-segment read. */
+static int ovl_tf_bigstep(void)
+{
+    int i,first,last,y,rows;
+    unsigned dir,seg,off;
+    dir=os88_part_seg(3);
+    if(!dir){tf_aready=0;return 0;}
+    if(tf_abase>=0){
+        os88_seg_get(tf_atarget,dir,16+72*tf_abase,40);
+        for(i=0;i<5;i++)tf_asig[i]=tf_atarget[i][3];
+        tf_abase=-1;tf_aload=-1;
+    }
+    if(tf_aload!=tf_aframe){
+        os88_seg_get(tf_atarget,dir,16+72*tf_aframe,40);
+        i=tf_atarget[0][0];
+        if(i!=4&&i!=6&&i!=7){tf_aready=0;return 0;}
+        seg=os88_part_seg(i);if(!seg){tf_aready=0;return 0;}
+        os88_seg_get(tf_ahead,seg,0,8);off=tf_atarget[0][1];
+        if(tf_ahead[0]!=0x5442||tf_ahead[1]!=0x4e41||tf_ahead[3]<5776u||
+           off<16||off>tf_ahead[3]-5760u){tf_aready=0;return 0;}
+        tf_amask=0;
+        for(i=0;i<5;i++){
+            if(tf_atarget[i][0]!=tf_atarget[0][0]||tf_atarget[i][1]!=off||
+               tf_atarget[i][2]||!tf_atarget[i][3]){tf_aready=0;return 0;}
+            if(tf_asig[i]!=tf_atarget[i][3])tf_amask|=1<<i;
+            off+=288;
+        }
+        tf_aload=tf_aframe;
+    }
+    if(tf_amask){
+        for(first=0;!(tf_amask&(1<<first));first++){}
+        for(last=4;!(tf_amask&(1<<last));last--){}
+        y=tf_ay+24*first;rows=24*(last-first+1);
+        seg=os88_part_seg(tf_atarget[0][0]);if(!seg){tf_aready=0;return 0;}
+        off=tf_atarget[first][1];
+        if(bt_anim_planar(seg,off,tf_ax,y,rows)!=0){
+            if(bx_rows(tf_ax,y,96,24)<24)return 0;
+            bx_new(tf_ax,y,96,24,-1);bt_anim_rawstrip(seg,off);bx_out();last=first;
+        }
+        for(i=first;i<=last;i++){tf_asig[i]=tf_atarget[i][3];tf_amask&=~(1<<i);}
+    }
+    if(!tf_amask){tf_adone=1;tf_ashown=tf_aframe;tf_cosneeded=tf_capneeded;}
+    return 1;
+}
 static int ovl_tf_anim_step(void)
 {
     int i,j,k,n,raw,y;unsigned seg;
     if(!tf_aready||!tf_avisible){tf_adone=1;tf_cosneeded=tf_capneeded;return 0;}
-    n=tf_avariant==0?5:2;
+    if(!tf_avariant)return ovl_tf_bigstep();
+    n=2;
     if(tf_abase>=0){
         for(i=0;i<n;i++){if(!ovl_tf_anim_record(tf_abase,i)){tf_aready=0;return 0;}tf_asig[i]=tf_arec[3];}
         tf_abase=-1;tf_aload=-1;

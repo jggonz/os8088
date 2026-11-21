@@ -158,13 +158,16 @@ the eyes priority. A full W_PAINT still composes a complete scene immediately.
 No direct framebuffer access, private decompressor, extra framebuffer or kernel
 change is introduced.
 
-Optional lazy package parts3/4/5 hold at most64KB each, preloaded only at init and
-marked movable. No animation paint, key or clock call fetches a file. Every
-strip re-reads its part segment, so relocated directory/source holders stay
-valid. Allocation failure retains the static scenic original-grid portrait;
-second/read-only sessions retain static artwork so they remain usable. Existing art0, sound1 and overlay2
-indices stay stable. This optional heap cost is the approved larger-package
-tradeoff; it does not raise resident, kernel or band budgets.
+The five optional movable parts 3–7 separate shape/strip signatures (3),
+menu and badge art (5), and native 96 × 120 four-plane poses (4, 6, 7).
+Each raw bank holds ten complete VGA poses. Source rows are 12 bytes and
+planes are 1,440 bytes apart. Native color uses the normal clipped planar
+transfer for the changed vertical extent, directly from the resident asset
+bank. If the display refuses planar transfer, compose a 24-row strip through
+the usual color fallback. Small and monochrome poses use the directory's
+bounded compressed strips. Only package initialization fetches these parts.
+Every painter resolves the current segment before reading a movable bank.
+Static portraits cover allocation failure and read-only secondary instances.
 
 ### 3.2. Cold menu compositions
 

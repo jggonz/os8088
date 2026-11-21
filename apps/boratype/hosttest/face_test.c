@@ -160,12 +160,24 @@ void os88_part_drop(int i){assert(i>=3&&i<6);animlen[i-3]=0;}
 unsigned os88_part_seg(int i){if(i==1)return 1;assert(i>=3&&i<6);return animlen[i-3]?100+i:0;}
 void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n){assert(seg>=103&&seg<=105&&off+n<=animlen[seg-103]);memcpy(dst,animbank[seg-103]+off,n);}
 int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw){assert(seg>=103&&seg<=105&&off+packed<=animlen[seg-103]);assert(raw>0&&raw<=1152);unpacks++;return 0;}
+/* Exercise direct planes at full VGA size and the packed fallback at smaller sizes. */
+static unsigned direct_height;
+int bt_anim_planar(unsigned seg,unsigned off,int x,int y,int height){
+ assert((seg==104||seg==106||seg==107)&&off>=16&&off+4320+height*12<=animlen[seg-103]);
+ assert(x==tf_ax&&y>=tf_ay&&y+height<=tf_ay+120&&height%24==0);
+ direct_height=0;if(hw<600||hh<400)return -1;
+ direct_height=height;area+=96*height;flushes++;unpacks++;return 0;
+}
+void bt_anim_rawstrip(unsigned seg,unsigned off){
+ assert((seg==104||seg==106||seg==107)&&off+4320+288<=animlen[seg-103]);
+ assert(bandw==96&&bandh==24);direct_height=0;unpacks++;
+}
 static void settle_anim(void)
 {
  int budget=2*((tf_ph+3)/4+TF_CELLS/2+16);
  for(int i=0;i<budget&&(tf_cosneeded||tf_capneeded||tf_statpend||tf_hintpending||tf_footpending||tf_dirtyfirst[2]>=0||(!tf_compact&&tf_meterlast!=bt_music_phase));i++){
   unsigned prior=unpacks;area=flushes=0;bt_face_paint(0,0);assert(flushes<=1);
-  if(unpacks!=prior){assert(unpacks==prior+1);assert(area<=(unsigned)(tf_aw*24));}
+  if(unpacks!=prior){assert(unpacks==prior+1);assert(area<=(unsigned)(tf_aw*(direct_height?direct_height:24)));}
  }
  assert(!tf_cosneeded&&!tf_capneeded&&!tf_statpend&&!tf_hintpending&&!tf_footpending&&tf_dirtyfirst[2]<0);assert(tf_aready);
  if(!tf_compact&&tf_avisible){
@@ -213,7 +225,7 @@ static void caption_change(void)
  caption="Your fingers called a meeting. The keyboard was not invited.";
  for(int n=0;n<2*((tf_ph+3)/4+24);n++){
   unsigned prior=unpacks;area=flushes=0;bt_face_paint(0,0);assert(flushes<=1);
-  if(!tf_compact)assert(area<=(unsigned)(unpacks==prior?((tf_pw+7)&~7)*4:tf_aw*24));
+  if(!tf_compact)assert(area<=(unsigned)(unpacks==prior?((tf_pw+7)&~7)*4:tf_aw*(direct_height?direct_height:24)));
   if(!tf_cosneeded&&!tf_capneeded)break;
   assert(n<2*((tf_ph+3)/4+24)-1);
  }

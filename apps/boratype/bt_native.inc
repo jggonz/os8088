@@ -578,3 +578,56 @@ _bt_scene_copy:
     pop bp
     ret
 section .text
+
+; The window manager has armed its clip. DI bit 14 requests region walking.
+; The original 1440-byte plane pitch also applies to an eye-only rectangle.
+_bt_anim_planar:
+    push bp
+    mov bp,sp
+    push es
+    push si
+    push di
+    mov es,[bp+4]
+    mov si,[bp+6]
+    mov ax,[bp+8]
+    mov bx,[bp+10]
+    mov dx,[bp+12]
+    mov cx,96
+    mov di,4000h+1440
+    mov bp,12
+    call OSAPI_GFX_BLITP
+    sbb ax,ax
+    pop di
+    pop si
+    pop es
+    pop bp
+    ret
+
+; Color displays which decline planar data use the same backing art.
+; Copy 24 complete rows of each plane into the ordinary bx_out band.
+_bt_anim_rawstrip:
+    push bp
+    mov bp,sp
+    push ds
+    push es
+    push si
+    push di
+    mov es,[bx_bs]
+    mov di,[bx_band]
+    mov ds,[bp+4]
+    mov si,[bp+6]
+    mov dx,4
+    cld
+.plane:
+    mov cx,144
+    rep movsw
+    add si,1440-288
+    dec dx
+    jnz .plane
+    pop di
+    pop si
+    pop es
+    pop ds
+    pop bp
+    ret
+section .text
