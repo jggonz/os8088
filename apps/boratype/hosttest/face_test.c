@@ -271,12 +271,18 @@ int main(void)
  strcpy(bt_store.profile[0].name,"Learner");strcpy(bt_session.passage,"fj jf FJ!? My name is Borat.");bt_session.length=strlen(bt_session.passage);bt_session.status=BT_ACTIVE;
  for(int m=0;m<2;m++)for(unsigned d=0;d<sizeof(dims)/sizeof(dims[0]);d++){
   hw=dims[d][0];hh=dims[d][1];hbpp=m?1:4;bt_face_init(1,2,8192,hbpp);bt_screen=BT_S_PLAY;bt_session.pos=0;bt_session.last_wrong=0;bt_session.attempts=0;bt_session.correct=0;bt_session.streak=0;
-  bt_face_paint(0,1);keyboard();play_geometry();screens();bt_screen=BT_S_PLAY;mirror_and_stat_damage();bt_face_paint(0,1);
+  bt_face_paint(0,1);assert(!tf_bigready);ovl_bt_face_prepare();assert(tf_bigready==!m);bt_face_paint(0,1);
+  keyboard();play_geometry();screens();bt_screen=BT_S_PLAY;mirror_and_stat_damage();bt_face_paint(0,1);
   area=flushes=0;bt_face_paint(0,0);assert(area==0&&flushes==0);
   fullarea=hw*hh;bt_session.pos=1;bt_session.streak=1;bt_session.correct=1;bt_session.attempts=1;bt_face_paint(0,0);
   if(area>fullarea/6){fprintf(stderr,"too much repaint %dx%d %u/%u\n",hw,hh,area,fullarea);abort();}
   printf("face %dx%d %dbpp: geometry/screens/clicks pass, key %u pixels, %u bands\n",hw,hh,hbpp,area,flushes);
   blink();caption_change();
+  {static BTSession before;memcpy(&before,&bt_session,sizeof(before));
+   bt_face_release();assert(!tf_bigready&&!os88_part_seg(4)&&!os88_part_seg(6)&&!os88_part_seg(7));
+   assert(os88_part_seg(3));if(!m)assert(os88_part_seg(5));
+   ovl_bt_face_prepare();assert(tf_bigready==!m);assert(!memcmp(&before,&bt_session,sizeof(before)));
+   bt_face_release();}
  }
  hw=304;hh=130;bt_face_init(1,2,8192,4);area=flushes=0;bt_face_paint(0,1);assert(!area&&!flushes&&!tf_nhit);
  puts("face: original-grid blink/talk/one-shot sequences, bounded strips and session immutability pass");

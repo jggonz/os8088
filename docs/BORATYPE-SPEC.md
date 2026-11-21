@@ -163,7 +163,15 @@ planes are 1,440 bytes apart. Native color uses the normal clipped planar
 transfer for the changed vertical extent, directly from the resident asset
 bank. If the display refuses planar transfer, compose a 24-row strip through
 the usual color fallback. Small and monochrome poses use the directory's
-bounded compressed strips. Only package initialization fetches these parts.
+bounded compressed strips. Initialization fetches only the directory/small
+motion part3 and, on color displays, scene part5. Private UI entry
+`ovl_bt_face_prepare()` fetches the three raw banks only at explicit Start
+or Resume, before sampling the scored clock. They remain held through
+PLAY/PAUSE, including focus loss; `bt_face_release()` drops them at the next
+cold-screen service boundary (HOME, RESULTS, HELP, SETTINGS or RECORDS).
+Returning from a cold screen to PAUSE does not reload them; explicit Resume
+re-arms the large tutor. No timer, idle painter or damage callback fetches
+a raw bank. Small motion and scene sources stay available on those screens.
 Every painter resolves the current segment before reading a movable bank.
 Mono loads only part 3. A color guest with less memory can keep the small
 animated tutor and scene cards independently of the large raw pose banks.

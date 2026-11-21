@@ -745,10 +745,20 @@ static void ovl_tf_anim_load(int bpp)
     tf_aready=ovl_tf_claimart(3);
     if(bpp<4)return;
     ovl_tf_claimart(5);
-    if(!tf_aready)return;
-    tf_bigready=ovl_tf_claimart(4)&&ovl_tf_claimart(6)&&ovl_tf_claimart(7);
-    if(!tf_bigready){os88_part_drop(4);os88_part_drop(6);os88_part_drop(7);}
 }
+static void ovl_tf_dropraw(void)
+{
+    tf_bigready=0;tf_avisible=0;tf_adone=1;tf_amask=0;
+    tf_aload=tf_abase=-1;tf_lastscreen=-1;
+    os88_part_drop(4);os88_part_drop(6);os88_part_drop(7);
+}
+void ovl_bt_face_prepare(void)
+{
+    if(bt_readonly||tf_mono||!tf_aready||tf_bigready)return;
+    tf_bigready=ovl_tf_claimart(4)&&ovl_tf_claimart(6)&&ovl_tf_claimart(7);
+    if(!tf_bigready)ovl_tf_dropraw();
+}
+void bt_face_release(void){if(tf_bigready)ovl_tf_dropraw();}
 static int ovl_tf_anim_record(int frame,int strip)
 {
     unsigned seg,at;

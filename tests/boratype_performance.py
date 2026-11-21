@@ -402,7 +402,10 @@ def claims(app):
                 roles[name] = fetched_segment
             lengths[name] = length
         fetched = [name for name in roles if name.startswith("animation")]
-        assert len(fetched) in (0,5), ("partially loaded animation set", fetched)
+        raw = {"animation1", "animation3", "animation4"}
+        held_raw = set(fetched) & raw
+        assert held_raw in (set(), raw), ("partially loaded raw pose set", fetched)
+        assert not held_raw or "animation0" in fetched, ("raw poses without directory", fetched)
         result = {}
         for name, seg in roles.items():
             held = [v for base, v in found.items() if base <= seg < base + v["bytes"] // 16]
@@ -441,11 +444,14 @@ def relocation(args, build, symbols, layout, evidence):
         holder = ui.open("CHELLO.O88", win=disk, limit=90)
         app = T.App(ui, ui.open("BORATYPE.O88", win=disk, limit=90), symbols, layout, evidence)
         app.press("Enter").wait_screen("PLAY")
+        started_claims = claims(app)
+        assert all("animation%d" % i in started_claims for i in range(5)), "real Start did not fetch all five optional parts"
         app.key(app.state()["passage"][0], True)
         app.press("F4").wait_screen("PAUSE")
         helper = ui.open("HEAPFRAG.O88", win=disk, limit=90)
         ui._wait(lambda: cmemmove.heapfrag_ran(ui.m, ui._S), "initial HEAPFRAG public suite", 120)
         before = claims(app)
+        assert all("animation%d" % i in before for i in range(5)), "paused lesson lost relocation coverage for its raw banks"
         score = app.state()
         ui.close(holder, limit=90)  # opens a hole above the regions AND below the bottom-up claims
         ui.raise_window(helper)

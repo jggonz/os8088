@@ -78,6 +78,7 @@ static void bt_scene_drawn(void)
 }
 static void bt_redraw(int all)
 {
+    if(bt_screen!=BT_S_PLAY&&bt_screen!=BT_S_PAUSE)bt_face_release();
     if (!bt_win || bt_in_cga) return;
     if (os88_wm_clip_set(bt_win) == 0) {
         bt_face_paint(bt_win, all);
@@ -125,6 +126,7 @@ static void bt_setscreen(int screen)
 
 static void bt_begin(int mode)
 {
+    ovl_bt_face_prepare();
     bt_start(mode, mode == BT_PRACTICE && bt_practice_weak ? -1 : bt_selection,
         bt_ch_duration, bt_ch_diff, os88_ticks());
     bt_screen = BT_S_PLAY;
@@ -141,6 +143,7 @@ static void bt_begin(int mode)
 static void bt_pause_ui(void)
 {
     if (bt_screen == BT_S_PAUSE && bt_session.status == BT_PAUSED) {
+        ovl_bt_face_prepare();
         bt_resume(os88_ticks()); bt_screen = BT_S_PLAY;
         if (bt_session.status == BT_READY) bt_ready_paint = 1;
     } else if (bt_screen == BT_S_PLAY) {
@@ -357,6 +360,7 @@ static void bt_pulse(void)
     bt_geometry_changed();
     if (bt_guard_scan && !os88_key_down(bt_guard_scan)) bt_guard_scan = 0;
     if (!bt_ready_paint) bt_events(bt_tick(now));
+    if(bt_screen!=BT_S_PLAY&&bt_screen!=BT_S_PAUSE)bt_face_release();
     bt_audio_tick(now, focus);
     bt_face_clock(now);
     if (focus && !bt_key_pending() && !os88_evq_pending()) bt_redraw(0);

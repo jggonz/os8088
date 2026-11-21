@@ -39,6 +39,9 @@ extern int bt_blink_frame;
 void ovl_bt_portrait_scene(int x,int y,int w,int h);
 /* UI pulse, after reaction service and before optional drawing. */
 void bt_face_clock(unsigned now);
+/* Cold UI Start/Resume only; release retains small motion and scene art. */
+void ovl_bt_face_prepare(void);
+void bt_face_release(void);
 int bt_key_base(int c);
 const char *bt_key_finger(int c);
 int bt_key_shift(int c);
