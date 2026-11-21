@@ -200,3 +200,81 @@ The scenario must observe actual movement and repaired holders, preserve part
 hashes and score, then draw and type after movement. Relocation is separate
 from the default timing run. Parent integration owns suite registration and
 final adapter/resource acceptance; this lane changes no shared kit or kernel.
+
+### Pending-input repair acceptance
+
+The repaired product at f931dc93e passed the strict default row in **64.792
+host seconds**. The recorded source revision is 906751645, which adds test-only
+changes to that product; the native map and complete source/artifact manifest
+were verified against the frozen build. Artifacts:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Package | `c25070dbda8eff4840b481b2e15113cb1307197ff6f4fc6c3c437c3100a154bf` |
+| Native BIN | `ea90efeef9c1c50f16e461850cb71e3ba0085108aee6bacd524867b12af2753d` |
+| Kernel BIN | `99151eeaf586c823f803cd9746e33ba5ffdcdae4679f8657e9c29ac6e09d69b9` |
+| System disk | `2e05975e9ad6e7a34587f1546faf03dc04880fdb2fa33ef56c8c2d8d7ee822fb` |
+| Software disk | `ec09f504c9d33c366252b27f13a277727014bbbd788838d5a103756ad737e28b` |
+| Probe source | `d74f9502f02aedfd2ebbdd383d932049bd678ded8ad0375f07fb84f54ee7e867` |
+
+The platform keeps scoring and music/effect service in each pulse, and skips
+its redraw when a BIOS key or OS input event awaits dispatch. In the production
+trace, 21 pulses with a key already pending cost **16.469–18.038 ms**, compared
+with 55–72 ms before that fence.
+
+| Physical input | First completed feedback | Complete public callback |
+| --- | ---: | ---: |
+| F, accepted | 70.258 ms | 104.256 ms |
+| Z, wrong | 52.868 ms | 55.755 ms |
+| X, wrong | 56.746 ms | 56.849 ms |
+| C, third wrong | 61.391 ms | 58.630 ms |
+| Space, accepted | 51.668 ms | 115.193 ms |
+| J, accepted | 69.496 ms | 111.369 ms |
+
+The 24 continuous keys ranged **44.207–97.540 ms** to first completed output;
+all 30 isolated/continuous results passed the 100 ms bound. Complete callbacks
+ranged **55.755–134.246 ms**. Eight-key consumption took **940.165–956.552 ms**;
+eventual UI quiescence took **3.790–26.135 seconds** and remains a separate
+reported limit. The 220 periodic samples peaked at **73.371 ms**; quiet work
+peaked at **47.514 ms**. The master, music and effects were enabled before and
+afterward, with the real sound route active; this cycle row does not claim an
+auditioned recording. No PCM entry point was present.
+
+The UI canary remained intact over **837 samples**, with the same maximum
+observed **156/512 bytes**. Global stack high-water is still unmeasured. The
+same-build negative arm failed after **11.936 host seconds** because accepted F
+emitted no mistake badge, proving that an unrelated output cannot satisfy the
+feedback observer. These are scoped target runs, not a soak or full-suite run.
+
+### Public relocation evidence
+
+The existing-fixture scenario passed in **31.819 host seconds** on the immutable
+743 baseline. A CHELLO instance first held a ceiling region and a bottom claim.
+After Boratype was initialized and paused, HEAPFRAG ran its existing suite.
+Closing CHELLO opened holes on both sides; a real key in HEAPFRAG posted the
+public `MEM_COMPACT` request. All four fixture region checks passed.
+
+| Boratype role | Before segment | After segment | Actual heap claim |
+| --- | --- | --- | --- |
+| Resident region | `8FE0` | `9080` | 63,488 bytes |
+| Art view | `798D` | `7A2D` | Common eager-parts carve |
+| Sound/font view | `8919` | `89B9` | Common eager-parts carve |
+| Overlay view | `8C3B` | `8CDB` | Common eager-parts carve |
+| Band | `19E0` | `17E0` | 8,192 bytes |
+
+The common carve moved `7980`→`7A20` and occupies 91,648 bytes; its three part
+views are not three independent claims. Each actual claim had a nonzero
+relocation procedure. Both immutable art-bank hashes and resident engine
+instruction samples survived; the face, shared band and second-art holders
+matched the live segments. Attempts, correct/error counts and passage position
+were unchanged. Raising Boratype, opening cold Settings, returning to Pause,
+resuming and typing the next correct Space succeeded after the move.
+
+The timing row needs `marty`, `nasm`, `cc` and the built native
+`boratype.bin`/`boratype.o88` plus `boratype360.img` and `os8088-360.img` with their
+generated map inputs. The relocation row additionally wants the existing
+`build/chello.o88` and `build/heapfrag.o88`; it constructs a private 360 KB
+software disk through `os88disk.py`. Both use real UI input and read-only
+inspection. Neither builds a new kernel or writes guest state. Parent integration
+registers `boratypeperformance` and its relocation variant and reruns them once
+against the final package after the remaining cold profile fix.
