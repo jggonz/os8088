@@ -123,7 +123,7 @@ keycap and prompt type reuse the shipped Liberation Serif bold strikes. Five
 The footer music-note meter follows the active soundtrack on the guest clock.
 Four panel-sized scene cards show the lesson tutor, trophy, pointing reaction
 and listening pose on their respective screens. Their offsets immediately
-follow the last animation bank's 16-byte header. Each opaque image stores width and height followed by four consecutive
+follow part 5's 16-byte header. Each opaque image stores width and height followed by four consecutive
 bitplanes, most significant bit first. The package centers the card at a
 byte boundary, intersects it with the active paint band, then copies only
 those row spans into the compositor. Window damage and the final display
@@ -152,15 +152,6 @@ blinks. Cosmetic jobs receive alternate idle opportunities before deferred mirro
 footer, counter and hint work; urgent typing feedback keeps priority.
 Caption strips and portrait strips share those opportunities fairly; blink
 gets its small eye update first. There is no unbounded frame queue.
-
-Committed exact-size planar sources are deterministically packed as independently
-bounded LZ4 strips using tools/os88lz.py. The existing OSAPI_DECOMP expands at
-most1152bytes into the existing8KBband; shared bx_out performs all normal clipped
-output and its packed fallback. One at-most24-scanline strip is serviced per
-idle paint, after typing feedback. Unchanged strips are skipped; blink gives
-the eyes priority. A full W_PAINT still composes a complete scene immediately.
-No direct framebuffer access, private decompressor, extra framebuffer or kernel
-change is introduced.
 
 The five optional movable parts 3–7 separate shape/strip signatures (3),
 menu and badge art (5), and native 96 × 120 four-plane poses (4, 6, 7).
@@ -201,7 +192,7 @@ screen dimensions come from OSAPI_WM_DISPLAY. Compact Settings retains its
 existing controls. Artwork composition remains unchanged by these controls.
 
 
-The last optional bank's sprite directory at bytes16..43 contains four scene
+Part 5's image directory at bytes16..43 contains four scene
 offsets followed by five color and five grayscale16x16 badge offsets. IDs
 266..270/271..275 select these badges while bank5 is armed; every draw restores
 bank1 before fonts/sound use. Badges derive from committed24px source masks,
