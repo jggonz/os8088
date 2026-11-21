@@ -166,3 +166,25 @@ portrait work. Four physical scanlines per idle pass reduced the final
 The first repaired run passed those assertions but raced a leftover probe
 breakpoint before capture. The test now leaves its last callback stopped,
 clears the probe and confirms resume. Its repeat passed end to end.
+
+## A second pass with the player's design sheets
+
+The first playable build made the slowdown easy to reproduce. On the
+4.77 MHz VGA XT, three wrong keys triggered a new expression. Read-only
+samples taken every twelfth of a guest second showed that only 50 of 120
+portrait rows had reached the new pose before the eight-second reaction
+expired. The timing gate had bounded the cost of an individual update,
+but had not measured how long a player waited for a complete expression.
+
+The supplied sheets became package assets. The title is the original
+432 × 24 gold silhouette. The keyboard supplies bitmap capitals and digits,
+and the records page supplies the earned achievement icons. Lessons,
+records, results and sound settings each have their own scenic illustration.
+A normal build packs committed native-size masks without opening any PNG.
+Scoring, selections, captions and hit rectangles are still live UI.
+
+The animation banks contain preconverted VGA and monochrome strips. Matching
+strip signatures let static hair, shoulders and scenery stay on screen while
+the eyes or mouth move. The revisions to the timing probe examine signatures
+only after a completed display write. A guest can now fail the animation
+check even when its logical frame counter continues to advance.
