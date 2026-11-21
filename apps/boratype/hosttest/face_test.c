@@ -159,31 +159,48 @@ void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n){assert(seg>=10
 int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw){assert(seg>=103&&seg<=105&&off+packed<=animlen[seg-103]);assert(raw>0&&raw<=1152);unpacks++;return 0;}
 static void settle_anim(void)
 {
- for(int i=0;i<16&&(tf_cosneeded||tf_savedcaret!=tf_caret_on||tf_dirtyfirst[2]>=0);i++){
-  area=flushes=0;bt_face_paint(0,0);
-  assert(flushes<=1);if(!tf_compact)assert(area<=(unsigned)(tf_aw*24));
+ int budget=2*((tf_ph+3)/4+TF_CELLS/2+16);
+ for(int i=0;i<budget&&(tf_cosneeded||tf_capneeded||tf_statpend||tf_hintpending||tf_footpending||tf_dirtyfirst[2]>=0||(!tf_compact&&tf_meterlast!=bt_music_phase));i++){
+  unsigned prior=unpacks;area=flushes=0;bt_face_paint(0,0);assert(flushes<=1);
+  if(unpacks!=prior){assert(unpacks==prior+1);assert(area<=(unsigned)(tf_aw*24));}
  }
- assert(!tf_cosneeded);assert(tf_aready);
+ assert(!tf_cosneeded&&!tf_capneeded&&!tf_statpend&&!tf_hintpending&&!tf_footpending&&tf_dirtyfirst[2]<0);assert(tf_aready);
+ if(!tf_compact&&tf_avisible){
+  assert(tf_adone&&tf_ashown==tf_aframe);
+  for(int i=0;i<(tf_avariant==0?5:2);i++){
+   unsigned off=16+(tf_aframe*9+(tf_avariant==0?0:tf_avariant==1?5:7)+i)*8+6;
+   unsigned expected=animbank[0][off]|(animbank[0][off+1]<<8);
+   assert(tf_asig[i]==expected);
+  }
+ }
 }
 static void blink(void)
 {
  static BTSession before;unsigned prior;
  memcpy(&before,&bt_session,sizeof(before));expression=1;
- bt_face_clock(0);bt_face_paint(0,1);bt_face_clock(80);settle_anim();
- prior=unpacks;bt_face_clock(81);assert(tf_aframe==1);settle_anim();
+ bt_face_clock(0);bt_face_paint(0,1);settle_anim();
+ for(unsigned now=1;now<=80;now++){bt_face_clock(now);settle_anim();}
+ prior=unpacks;bt_face_clock(127);assert(tf_aframe==1);settle_anim();
  if(!tf_compact&&tf_avisible)assert(unpacks>prior&&unpacks-prior<=2);
- bt_face_clock(83);assert(tf_aframe==2);settle_anim();
- bt_face_clock(85);assert(tf_aframe==3);settle_anim();
- bt_face_clock(87);assert(tf_aframe==0);settle_anim();
+ bt_face_clock(129);assert(tf_aframe==2);settle_anim();
+ bt_face_clock(131);assert(tf_aframe==3);settle_anim();
+ bt_face_clock(133);assert(tf_aframe==0);settle_anim();
  area=flushes=0;bt_face_paint(0,0);assert(!area&&!flushes);
+ /* A delayed painter must never advance a not-yet-completed frame. */
+ expression=3;bt_face_clock(200);assert(tf_aframe==18);
+ if(!tf_compact&&tf_avisible){for(unsigned now=201;now<=220;now++){bt_face_clock(now);assert(tf_aframe==18);}settle_anim();}
  for(int seq=2;seq<=4;seq++){
-  prior=unpacks;expression=seq==2?2:seq==3?3:4;bt_face_clock(100);
-  assert(tf_aframe==seq*6);
-  for(unsigned now=100;now<130;now++){bt_face_clock(now);settle_anim();assert(tf_aframe>=seq*6&&tf_aframe<seq*6+6);}
+  unsigned now=400;prior=unpacks;expression=seq==2?2:seq==3?3:4;bt_face_clock(now);
+  for(int phase=0;phase<6;phase++){
+   assert(tf_aframe==seq*6+phase);settle_anim();now+=5;bt_face_clock(now);
+  }
   if(!tf_compact&&tf_avisible)assert(unpacks>prior);
-  bt_face_clock(130);assert(tf_aframe==0);settle_anim();
+  assert(tf_aframe==0);settle_anim();prior=unpacks;
+  for(int t=1;t<30;t++){bt_face_clock(now+t);assert(tf_aframe==0);settle_anim();}
+  assert(unpacks==prior);
  }
- expression=3;bt_face_clock(65530);assert(tf_aframe==18);bt_face_clock(65535);assert(tf_aframe==19);bt_face_clock(4);assert(tf_aframe==20);
+ expression=3;bt_face_clock(65530);assert(tf_aframe==18);settle_anim();
+ bt_face_clock(65535);assert(tf_aframe==19);settle_anim();bt_face_clock(4);assert(tf_aframe==20);settle_anim();
  assert(!memcmp(&before,&bt_session,sizeof(before)));expression=1;bt_face_clock(140);
 }
 static void caption_change(void)
@@ -191,11 +208,11 @@ static void caption_change(void)
  static BTSession before;const char *old=caption;
  memcpy(&before,&bt_session,sizeof(before));bt_face_paint(0,1);
  caption="Your fingers called a meeting. The keyboard was not invited.";
- for(int n=0;n<TF_COS_MAX+2;n++){
+ for(int n=0;n<2*((tf_ph+3)/4+24);n++){
   unsigned prior=unpacks;area=flushes=0;bt_face_paint(0,0);assert(flushes<=1);
   if(!tf_compact)assert(area<=(unsigned)(unpacks==prior?((tf_pw+7)&~7)*4:tf_aw*24));
   if(!tf_cosneeded&&!tf_capneeded)break;
-  assert(n<TF_COS_MAX);
+  assert(n<2*((tf_ph+3)/4+24)-1);
  }
  area=flushes=0;bt_face_paint(0,0);assert(!area&&!flushes);
  assert(!memcmp(&before,&bt_session,sizeof(before)));caption=old;bt_face_paint(0,1);

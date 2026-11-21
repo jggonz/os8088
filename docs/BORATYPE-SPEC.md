@@ -140,7 +140,14 @@ is an eager-overlay helper behind a small resident clock entry): `bt_face_clock(
 selects idle/blink, a short talk loop on a neutral caption, or one-shot praise,
 roast/facepalm from the actual reaction expression/caption change. Reaction frames have
 five-OS-tick dwell (about3.6frames/s), talk three ticks and blink two ticks; reaction sequences play once then settle
-to idle. A delayed paint coalesces to the newest target, not a frame queue.
+to idle. A new reaction may supersede an old one, but a selected frame stays latched
+until all its changed strips have actually committed. The clock advances a
+one-shot only after completion and its minimum dwell; delayed painting does
+not skip its remaining poses. Neutral idle is a completed stable frame between
+blinks. Cosmetic jobs receive alternate idle opportunities before deferred mirror,
+footer, counter and hint work; urgent typing feedback keeps priority.
+Caption strips and portrait strips share those opportunities fairly; blink
+gets its small eye update first. There is no unbounded frame queue.
 
 Committed exact-size planar sources are deterministically packed as independently
 bounded LZ4 strips using tools/os88lz.py. The existing OSAPI_DECOMP expands at

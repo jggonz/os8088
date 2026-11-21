@@ -62,9 +62,10 @@ static int tf_savedwrong,tf_savedmods;
 static unsigned tf_savedattempt,tf_savedback;
 /* The directory remains in movable parts; only one record and five strip
  * signatures are resident. No frame buffer is retained. */
-static BTWord tf_arec[4],tf_ahead[4];
-static unsigned tf_asig[5],tf_astart;
+static BTWord tf_arec[4],tf_ahead[4],tf_atarget[5][4];
+static unsigned tf_asig[5],tf_astart,tf_aframe_at,tf_ablink_at;
 static int tf_aready,tf_aframe,tf_aseq,tf_aexpr=-1,tf_apos,tf_abase=-1;
+static int tf_adone,tf_aload=-1,tf_aphase,tf_ashown=-1,tf_amask,tf_acapturn,tf_idleturn;
 static int tf_ax,tf_ay,tf_aw,tf_ah,tf_avariant,tf_avisible;
 static const char *tf_acaption;
 int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw);
@@ -485,6 +486,7 @@ void ovl_bt_portrait_scene(int x,int y,int w,int h)
     tf_avariant=tf_mono?2:pw==96?0:1;
     /* Full-band static poses correspond to these authoritative source cells. */
     tf_abase=e==2?17:e==3?18:e==4?29:e==5?21:e==6?24:0;
+    tf_adone=0;tf_aload=-1;
     bx_spr(x,y,id);
 }
 static void ovl_tf_drawportrait(void)
@@ -707,19 +709,34 @@ static void tf_render(int x,int y,int w,int h,int kind,int item)
 static unsigned tf_settings_mask(void)
 {return bt_store.music+2*bt_store.effects+8*bt_store.keyclick+16*bt_store.roast+64*bt_store.display+128*bt_full;}
 /* Clock service selects state only. No paint, disk, random or score writes. */
+static void ovl_tf_anim_target(int frame,unsigned now)
+{
+    tf_aframe=frame;tf_aframe_at=now;tf_adone=0;tf_aload=-1;
+    tf_apos=frame>0&&frame<4?1:0;if(tf_avisible)tf_cosneeded=1;
+}
 static void ovl_tf_anim_clock(unsigned now)
 {
-    int e,frame,phase;unsigned elapsed;const char *caption;
+    int e;unsigned dwell,elapsed;const char *caption;
     e=bt_expression();caption=bt_caption();
     if(e!=tf_aexpr||caption!=tf_acaption){
-        tf_aexpr=e;tf_acaption=caption;tf_astart=now;
+        tf_aexpr=e;tf_acaption=caption;tf_astart=now;tf_aphase=0;
         tf_aseq=e==2?2:(e==3||e==5)?3:(e==4||e==6)?4:1;
+        ovl_tf_anim_target(tf_aseq*6,now);return;
     }
-    elapsed=(BTWord)(now-tf_astart);
-    if(tf_aseq>=2&&elapsed<30)frame=tf_aseq*6+elapsed/5;
-    else if(tf_aseq==1&&elapsed<36)frame=6+(elapsed/3)%6;
-    else {phase=now%91;frame=phase<81||phase>=87?0:1+(phase-81)/2;}
-    if(frame!=tf_aframe){tf_aframe=frame;tf_apos=frame>0&&frame<6?1:0;if(tf_avisible)tf_cosneeded=1;}
+    if(!tf_aready||!tf_avisible)tf_adone=1;
+    if(!tf_adone)return;
+    elapsed=(BTWord)(now-tf_aframe_at);dwell=tf_aseq==1?3:tf_aseq?5:2;
+    if(tf_aseq){
+        if(elapsed<dwell)return;
+        tf_aphase++;
+        if(tf_aphase<(tf_aseq==1?12:6)){ovl_tf_anim_target(tf_aseq*6+tf_aphase%6,now);return;}
+        tf_aseq=0;tf_ablink_at=now;ovl_tf_anim_target(0,now);return;
+    }
+    if(tf_aframe){
+        if(elapsed<2)return;
+        if(tf_aframe<3)ovl_tf_anim_target(tf_aframe+1,now);
+        else {tf_ablink_at=now;ovl_tf_anim_target(0,now);}
+    }else if((BTWord)(now-tf_ablink_at)>=91)ovl_tf_anim_target(1,now);
 }
 void bt_face_clock(unsigned now)
 {
@@ -751,35 +768,49 @@ static int ovl_tf_anim_record(int frame,int strip)
 }
 static int ovl_tf_anim_step(void)
 {
-    int i,j,n,raw,y;unsigned seg;
-    if(!tf_aready||!tf_avisible){tf_cosneeded=tf_capneeded;return 0;}
+    int i,j,k,n,raw,y;unsigned seg;
+    if(!tf_aready||!tf_avisible){tf_adone=1;tf_cosneeded=tf_capneeded;return 0;}
     n=tf_avariant==0?5:2;
     if(tf_abase>=0){
         for(i=0;i<n;i++){if(!ovl_tf_anim_record(tf_abase,i)){tf_aready=0;return 0;}tf_asig[i]=tf_arec[3];}
-        tf_abase=-1;
+        tf_abase=-1;tf_aload=-1;
     }
-    for(i=0;i<n;i++){
+    if(tf_aload!=tf_aframe){
+        tf_amask=0;
+        for(i=0;i<n;i++){
+            if(!ovl_tf_anim_record(tf_aframe,i)){tf_aready=0;return 0;}
+            for(k=0;k<4;k++)tf_atarget[i][k]=tf_arec[k];
+            if(tf_asig[i]!=tf_arec[3])tf_amask|=1<<i;
+        }
+        tf_aload=tf_aframe;
+    }
+    for(i=0;i<n&&tf_amask;i++){
         j=tf_apos;tf_apos++;if(tf_apos>=n)tf_apos=0;
-        if(!ovl_tf_anim_record(tf_aframe,j)){tf_aready=0;return 0;}
-        if(tf_asig[j]==tf_arec[3])continue;
-        /* bx_rows arms the existing clipped/packed fallback. All planes
-         * arrive precomputed; the bounded system decoder writes at offset0. */
+        if(!(tf_amask&(1<<j)))continue;
         y=j*16;y+=j*8;y+=tf_ay;
         if(bx_rows(tf_ax,y,tf_aw,24)<24)return 0;
-        bx_new(tf_ax,y,tf_aw,24,tf_ground());
-        raw=tf_aw*2;raw+=tf_aw;if(!tf_mono)raw*=4;seg=os88_part_seg(tf_arec[0]);
-        if(bt_anim_unpack(seg,tf_arec[1],tf_arec[2],raw)!=0){tf_aready=0;return 0;}
-        bx_out();tf_asig[j]=tf_arec[3];return 1;
+        /* Existing no-fill band form: the bounded decoder covers every bit. */
+        bx_new(tf_ax,y,tf_aw,24,-1);
+        raw=tf_aw*2;raw+=tf_aw;if(!tf_mono)raw*=4;seg=os88_part_seg(tf_atarget[j][0]);
+        if(!seg||bt_anim_unpack(seg,tf_atarget[j][1],tf_atarget[j][2],raw)!=0){tf_aready=0;return 0;}
+        bx_out();tf_asig[j]=tf_atarget[j][3];tf_amask&=~(1<<j);
+        if(!tf_amask){tf_adone=1;tf_ashown=tf_aframe;tf_cosneeded=tf_capneeded;}
+        return 1;
     }
-    tf_cosneeded=tf_capneeded;return 0;
+    tf_adone=1;tf_ashown=tf_aframe;tf_cosneeded=tf_capneeded;return 0;
 }
 static int ovl_tf_cosmetics(void)
 {
     int y,h;
     if(tf_compact){tf_render(tf_x+8,tf_statsy-10,tf_w-16,10,6,0);tf_cosneeded=0;tf_capneeded=0;return 1;}
+    /* Two portrait jobs then one caption job; active blink gets its eye
+     * patches first. Neither changed captions nor counters starve a pose. */
+    if(tf_aready&&tf_avisible&&!tf_adone&&(tf_acapturn<2||!tf_capneeded||(!tf_aseq&&tf_aframe))){
+        tf_acapturn++;if(ovl_tf_anim_step())return 1;
+    }
     if(tf_capneeded){
         y=tf_py+(tf_ph>=150?132:60)+tf_capline;h=tf_py+tf_ph-4-y;if(h>4)h=4;
-        if(h>0){tf_render(tf_px,y,tf_pw,h,5,0);tf_capline+=h;return 1;}
+        if(h>0){tf_render(tf_px,y,tf_pw,h,5,0);tf_capline+=h;tf_acapturn=0;return 1;}
         tf_capneeded=0;
     }
     return ovl_tf_anim_step();
@@ -799,7 +830,7 @@ static unsigned tf_menukey(void)
 void bt_face_init(unsigned art,unsigned band,unsigned cap,int bpp)
 {
     int i;
-    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;
+    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;tf_adone=0;tf_aload=-1;tf_ashown=-1;tf_acapturn=0;tf_idleturn=0;
     ovl_tf_anim_load();
     for(i=0;i<TF_KEYS;i++)tf_keycache[i]=255;
     for(i=0;i<TF_CELLS;i++){tf_cellchar[i]=255;tf_cellstyle[i]=255;}
@@ -901,7 +932,9 @@ void bt_face_paint(void *win,int full)
     tf_savedattempt=bt_session.attempts;tf_savedback=bt_session.backspaces;
     if(full){tf_cosneeded=tf_aready&&tf_avisible;tf_capneeded=0;tf_statpend=0;tf_hintpending=0;tf_dirtyfirst[2]=-1;}
     else if(!urgent){
-        if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];c=tf_dirtylast[2]-i+1;if(c>2)c=2;tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,c*tf_cw,h,8,i);tf_dirtyfirst[2]+=c;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
+        tf_idleturn^=1;
+        if(tf_cosneeded&&(tf_idleturn||(!tf_aseq&&tf_aframe>0&&tf_aframe<4)))ovl_tf_cosmetics();
+        else if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];c=tf_dirtylast[2]-i+1;if(c>2)c=2;tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,c*tf_cw,h,8,i);tf_dirtyfirst[2]+=c;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
         else if(tf_footpending){h=tf_h-(tf_bottom-tf_y)-tf_footrow;if(h>4)h=4;tf_render(tf_x,tf_bottom+tf_footrow,tf_w,h,2,0);tf_footrow+=h;if(tf_footrow>=tf_h-(tf_bottom-tf_y))tf_footpending=0;}
         else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_hinty,tf_w-i-70,tf_hinth,7,0);}else tf_render(tf_promptx,tf_hinty,tf_cols*tf_cw<344?tf_cols*tf_cw:344,tf_hinth,7,0);tf_hintpending=0;}
         else if(tf_statpend){for(c=0;c<7;c++){i=tf_statnext;tf_statnext++;if(tf_statnext>=7)tf_statnext=0;if(tf_statpend&(1<<i)){
