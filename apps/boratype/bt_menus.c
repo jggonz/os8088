@@ -128,6 +128,17 @@ static void ovl_tm_weak(int x,int y,int w,int h,BTProfile *p)
     }
     if(!i)ovl_tf_lines(x+8,y+29,w-16,2,"20 samples per key needed");
 }
+static void ovl_tm_badge(int x,int y,int icon,int earned)
+{
+    unsigned seg;
+    if(!ovl_tm_visible(x,y,16,16))return;
+    if(!tf_mono){
+        seg=os88_part_seg(5);
+        if(seg){bx_setart2(seg);bx_spr(x,y,266+icon+(earned?0:5));bx_setart2(os88_part_seg(1));return;}
+    }
+    gk_box(x,y,16,16,GK_SUNKEN,tf_ground());
+    tf_text(x+3,y,12,earned?"*":"-",earned?TF_YELLOW:7,BT_F_TITLE);
+}
 static void ovl_tm_achievements(int x,int y,int w,int h,unsigned bits)
 {
     int i,c,rh,xx,yy,n;
@@ -136,10 +147,10 @@ static void ovl_tm_achievements(int x,int y,int w,int h,unsigned bits)
         xx=x+(i%4)*(c+6);yy=y+(i/4)*rh;
         if(!ovl_tm_visible(xx,yy,c,rh-4))continue;
         gk_box(xx,yy,c,rh-4,(bits&(1<<i))?GK_RAISED2:GK_SUNKEN,tf_ground());
-        n=(bits&(1<<i))?TF_YELLOW:7;
-        if((bits&(1<<i))&&!tf_mono&&rh>=30)bx_spr(xx+4,yy+2,BT_ART_BADGES+(i==0?0:i==2?1:i==3?2:i==6?4:3));
-        else tf_text(xx+6,yy+3,18,(bits&(1<<i))?"*":"-",n,BT_F_TITLE);
-        tf_text(xx+30,yy+5,c-34,tf_achnames[i],(bits&(1<<i))?TF_WHITE:7,BT_F_SMALL);
+        n=(rh-20)/2;if(n<1)n=1;
+        if(rh>=22)ovl_tm_badge(xx+4,yy+n,i==0?0:i==2?1:i==3?2:i==6?4:3,(bits&(1<<i))!=0);
+        else tf_text(xx+6,yy+3,18,(bits&(1<<i))?"*":"-",(bits&(1<<i))?TF_YELLOW:7,BT_F_TITLE);
+        tf_text(xx+26,yy+5,c-30,tf_achnames[i],(bits&(1<<i))?TF_WHITE:7,BT_F_SMALL);
     }
 }
 static void ovl_tm_lessons(int x,int y,int w,int h,BTProfile *p,int rich)
@@ -215,8 +226,8 @@ static void ovl_tm_records(int x,int y,int w,int h,BTProfile *p,int rich)
         tf_text(x+3*table/4,n+3,table/4-16,tf_buf,bt_ch_diff==i?(tf_mono?15:0):TF_YELLOW,BT_F_TITLE);
     }
     ovl_tm_mascot(x+table,y,w-table,160);
-    yy=y+162;mastered=ovl_tm_mastered(p);earned=0;for(i=0;i<7;i++)if(p->achievements&(1<<i))earned++;
-    rh=15;
+    yy=y+158;mastered=ovl_tm_mastered(p);earned=0;for(i=0;i<7;i++)if(p->achievements&(1<<i))earned++;
+    rh=13;
     for(i=0;i<3;i++){
         n=tf_append(0,i==0?"Lessons mastered":i==1?"Best streak":"Achievements");
         tf_text(x,yy+i*rh,w/3,tf_buf,TF_WHITE,BT_F_SMALL);
@@ -224,7 +235,8 @@ static void ovl_tm_records(int x,int y,int w,int h,BTProfile *p,int rich)
         n=tf_number(0,i==0?mastered:i==1?p->best_streak:earned);n=tf_append(n," / ");tf_number(n,i==0?24:i==1?50:7);
         tf_text(x+2*w/3+10,yy+i*rh,w/3-10,tf_buf,TF_YELLOW,tf_font);
     }
-    yy+=48;ovl_tm_achievements(x,yy,w,h-(yy-y)-34,p->achievements);
+    yy+=41;if(h>=300){tf_text(x,yy,w,"ACHIEVEMENTS",TF_YELLOW,BT_F_TITLE);yy+=20;}
+    ovl_tm_achievements(x,yy,w,h-(yy-y)-34,p->achievements);
     c=(w-12)/3;yy=y+h-29;
     tf_button(x,yy,c,27,"Practice",BT_A_PRACTICE,0);tf_button(x+c+6,yy,c,27,"Continue",BT_A_START,1);tf_button(x+2*(c+6),yy,c,27,"Back",BT_A_BACK,0);
 }
@@ -233,8 +245,9 @@ static void ovl_tf_resultcard(int x,int y,int w,BTProfile *p)
     int left,sx,sw,sy,rh,i,n,k,h,c;
     h=tf_bottom-y-36;left=w/3;sx=x+left+10;sw=w-left-10;
     ovl_tm_mascot(x,y,left,h);
-    if(h>=230){
-        sy=y+174;tf_text(x+8,sy,left-16,"New achievements:",TF_YELLOW,BT_F_SMALL);sy+=14;
+    if(h>=246&&bt_session.achievement_new){
+        /* Four caption rows can extend to y+179; awards start below them. */
+        sy=y+190;tf_text(x+8,sy,left-16,"New achievements:",TF_YELLOW,BT_F_SMALL);sy+=14;
         for(i=0;i<7&&sy+tf_th<y+h-5;i++)if(bt_session.achievement_new&(1<<i)){
             n=tf_append(0,"* ");tf_append(n,tf_achnames[i]);tf_line(x+8,sy,left-16,tf_buf);sy+=tf_th+2;
         }

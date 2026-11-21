@@ -41,9 +41,9 @@ def select(directory):
 
 
 def build_scene_bank():
-    """The last BTAN bank reserves bytes 16..23 for these four sprite offsets."""
+    """BTAN bytes16..43: four scenes, five color/five gray16px badges."""
     lines = ART.read_text().splitlines()
-    data = bytearray(2*len(SCENES))
+    data = bytearray(2*(len(SCENES)+10))
     at = 0
     for i, (name, _, _, (width,height)) in enumerate(SCENES):
         rows = lines[at+1:at+1+height]
@@ -61,6 +61,16 @@ def build_scene_bank():
         at += height+1
     if at != len(lines):
         raise ValueError("Unexpected data after the last scene")
+    badges = (ART.parent / 'badges.mask').read_text().splitlines()
+    if len(badges)!=120 or any(len(row)!=24 or set(row)-set(bb.CHARS) for row in badges):
+        raise ValueError('badges must be five24x24 palette masks')
+    for gray in range(2):
+        for i in range(5):
+            pixels = [[bb.CHARS.index(badges[i*24+y*24//16][x*24//16]) for x in range(16)] for y in range(16)]
+            if gray:
+                pixels = [[c if c==bb.KEY else 8 if sum(bb.EGA[c])<255 else 7 if sum(bb.EGA[c])<570 else 15 for c in row] for row in pixels]
+            struct.pack_into('<H', data, 2*(len(SCENES)+gray*5+i), 16+len(data))
+            data += bb.pack_sprite(16,16,pixels)
     return bytes(data)
 
 

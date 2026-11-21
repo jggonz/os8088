@@ -183,6 +183,12 @@ screen dimensions come from OSAPI_WM_DISPLAY. Compact Settings retains its
 existing controls. Artwork composition remains unchanged by these controls.
 
 
+The last optional bank's sprite directory at bytes16..43 contains four scene
+offsets followed by five color and five grayscale16x16 badge offsets. IDs
+266..270/271..275 select these badges while bank5 is armed; every draw restores
+bank1 before fonts/sound use. Badges derive from committed24px source masks,
+retain transparent palette index13, and remain visible in short native plaques.
+
 ### 3.3 Native PLAY proportions and bounded updates
 
 The native lesson/practice/challenge face follows reference designs6,8,9:

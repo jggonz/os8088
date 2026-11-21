@@ -38,6 +38,13 @@ int main(void)
   assert(!memcmp(&menu_store_before,&bt_store,sizeof(bt_store)));
   assert(!memcmp(&menu_session_before,&bt_session,sizeof(bt_session)));
  }
- puts("menus: compact/roomy color+mono actions, selected-page preview, settings delta and whole-state immutability pass");
+ /* Badge drawing must survive a one-row clip and restore font/sound bank1. */
+ tf_mono=0;tf_sx=0;tf_sy=108;tf_sw=640;tf_sh=1;animlen[2]=1;
+ for(int earned=0;earned<2;earned++)for(int icon=0;icon<5;icon++){
+  last_sprite=-1;ovl_tm_badge(100,100,icon,earned);
+  assert(last_sprite==266+icon+(earned?0:5)&&last_art2==1);
+ }
+ tf_sy=116;last_sprite=-1;ovl_tm_badge(100,100,0,0);assert(last_sprite==-1);
+ puts("menus: geometry/state, one-row clipped badges and restored art bank pass");
  return 0;
 }

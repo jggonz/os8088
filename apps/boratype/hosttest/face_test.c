@@ -39,6 +39,7 @@ void os88_font_run(int x,int y,const char *s,int ink,int paper){(void)s;(void)in
 static unsigned flushes,area;
 static int bandx,bandy,bandw,bandh;
 unsigned bx_bseg;
+static unsigned last_art2;
 static int expression=1,last_sprite=-1,status_seen,reaction_seen,accuracy_y,accuracy_dash;
 static unsigned achievement_seen;
 static const char *caption="Your fingers have returned from holiday.";
@@ -65,7 +66,7 @@ void bt_scene_copy(unsigned seg,int card,int src,int dst,int stride,int plane,in
  assert(src>=0&&src+(rows-1)*stride+width<=plane);
  assert(dst>=0&&dst+(rows-1)*(tf_sw/8)+width<=(tf_sw/8)*tf_sh);
 }
-void bx_setart2(unsigned a){(void)a;}
+void bx_setart2(unsigned a){last_art2=a;}
 void gk_init(int a){(void)a;}void gk_theme(const unsigned char *a){(void)a;}
 int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){if(!strcmp(s,tf_soundstatus()))status_seen++;if(strstr(s,"Your fingers"))reaction_seen++;if(!strcmp(s,"ACCURACY"))accuracy_y=y;if((!strcmp(s,"-")&&y==accuracy_y)||strstr(s,"Accuracy -"))accuracy_dash++;for(int a=0;a<7;a++)if(strstr(s,tf_achnames[a]))achievement_seen|=1u<<a;(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
 int gk_textbox(int x,int y,int w,int h,const char *s,int c,int f,int fl){

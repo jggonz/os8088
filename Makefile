@@ -23045,7 +23045,7 @@ $(BUILD)/BTART.BIN: tools/os88btart.py tools/os88bbart.py apps/boratype/art.h $(
 	python3 tools/os88btart.py build -o $@
 $(BUILD)/BTSOUND.BIN: tools/os88gkmus.py tools/os88btart.py tools/os88bbart.py apps/boratype/art.h apps/boratype/art/blink.txt apps/boratype/art/masthead.mask apps/boratype/art/badges.mask apps/boratype/art/large.txt apps/boratype/art/music.txt apps/boratype/art/sfx.txt | $(BUILD)
 	python3 tools/os88btart.py build-sound -o $@
-$(BUILD)/BTAN%.BIN: tools/os88btanim.py tools/os88lz.py tools/os88btscenes.py apps/boratype/art/scene-cards.txt apps/boratype/art/animation.txt | $(BUILD)
+$(BUILD)/BTAN%.BIN: tools/os88btanim.py tools/os88lz.py tools/os88btscenes.py apps/boratype/art/scene-cards.txt apps/boratype/art/badges.mask apps/boratype/art/animation.txt | $(BUILD)
 	python3 tools/os88btanim.py build --bank $* --output $@
 #> [Applications] boratype :: Borat Teaches Typing native C lessons, practice and challenges (SPEC.md 134)
 boratype: $(BUILD)/boratype.o88
