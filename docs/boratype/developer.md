@@ -10,7 +10,7 @@ make boratypedisk boratypebundle
 make run RUNAPPS=build/boratype.img
 ```
 
-Open BORATYPE.O88 from the software disk. The360KB image is
+Open BORATYPE.O88 from the software disk. The360 KB image is
 `build/boratype360.img`;720KB,1.2MB and1.44MB counterparts are built together.
 `build/BORATYPE.WPK` is produced by the existing os88wire archive tool. The
 base distribution includes every lesson, original caption, score, effect,
@@ -66,23 +66,33 @@ packers and score compiler on committed pixel/text sources. `draft` and
 The24px face is selected exact-pixel source derived from the committed
 Wine dialog font, retaining its LGPL provenance.
 
-## Measurement boundary
+## Measurements and acceptance
 
-The pre-repair installed package's resident image was53,220bytes plus
-10,071BSS (63,291total), with a9,241-byte eager overlay. Its art banks were
-63,677 and12,823bytes; compressed package83,118bytes. These are intermediate
-measurements, not the final ledger. The kernel resident footprint did not
-change. Final package/claim costs and per-adapter results belong in the
-evidence report after the repair and acceptance runs.
+The [acceptance report](EVIDENCE.md) is the final ledger: package and claim
+sizes, cycle measurements, installed-app scenarios, adapter evidence and
+specific limits. It links the captured guest gallery and its hash manifest.
+The binding contract remains [BORATYPE-SPEC](../BORATYPE-SPEC.md).
 
-MartyPC at4.77MHz measured an unchanged pre-repair UI pulse at408,505–415,879
-cycles (85.6–87.2ms), and a portrait blink at about1.66seconds. The failure
-was recorded before changing the face. Initial cache fixes reduced face-only
-work from338,162cycles/70.85ms to29,008/6.08ms. Cosmetic slicing and actual
-key-to-glass latency still require final measurements; QEMU cannot prove them.
+The normal build uses a 53,264-byte resident image and 11,264 bytes of BSS,
+leaving 496 bytes below the package ceiling. Original art and sound/fonts are
+embedded parts; cold file/menu/codec work is an eager C overlay. The only
+later drawing claim is an 8KB movable band. The accepted XT volume uses
+163.5 KiB of app-owned memory; the source-audited startup peak matches that
+steady snapshot. Mega grants the region and band high memory and rounds the
+region differently, giving 164 KiB. Whole-machine loader high-water is not
+measured. No OS budget was raised.
 
-Technical guest captures established FM and speaker activity, muting, route
-changes and cleanup. They do not establish subjective musical quality. The
-audio forwarding tool explicitly refused audio input in this session, so
-listening remains unverified. Voice clips and their importer were removed
-from the product when the owner chose sound effects and visual messages.
+Initial measurements exposed busy unchanged scans and oversized cosmetic
+updates. Geometry/signature caches, bounded prompt cells, deferred secondary
+fields, one-row portrait work and four-row caption strips repair those paths.
+The performance probe uses 30 actual hardware-enqueued keys and 220 periodic
+callbacks on a 4.77 MHz MartyPC XT, with sound enabled and the shipping UI
+stack guard. Its 100ms assertions remain enabled. Framebuffer completion,
+complete callbacks and CRT scanout are distinct costs; see the report for
+final figures and the full-paint exception.
+
+Technical guest WAV captures established FM and speaker activity, muting,
+route changes and cleanup. They do not establish subjective musical quality.
+The audio forwarding tool explicitly refused audio input, so listening remains
+unverified. Voice clips and their importer were removed when the owner chose
+sound effects and visual messages.

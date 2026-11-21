@@ -1,5 +1,10 @@
 # How Borat Teaches Typing was built
 
+The current delivered scope is original music/effects and visual jokes, with
+recorded clips removed by the owner. The chronological notes below retain
+early experiments; [final acceptance](boratype/EVIDENCE.md) is the current
+behavior, evidence and limitation record.
+
 ## Starting point
 
 The owner supplied a complete product brief and nine VGA concepts, including
@@ -40,7 +45,7 @@ lessons and four intentionally broken production variants. Its standalone
 native fixture passed the compiler/frame gate. These are host/compile
 observations, not a guest acceptance pass.
 
-The face lane checked24 color/mono geometries, with minimum480x128 content,
+The face lane checked24 color/mono geometries, with minimum 480x128 content,
 normal616x410 and640x480, EGA-height and VESA-sized layouts. It checks all95
 printable characters, shifted physical keys, opposite-hand Shift, I versus J,
 and zero output for unchanged state. A first VGA character emitted9 opaque
@@ -63,7 +68,7 @@ resident bytes plus12,031 BSS exceeded0xFE00 by1,149. Startup and native menu/
 About bodies moved to the existing embedded C overlay; the typing and CGA
 foreign-mode paths stayed resident. No OS budget was raised. The exact-size2,136-byte file buffer replaced a4KB buffer and still holds
 CGA's2,000-byte cell workspace. The resulting package is53,908 resident +
-10,071 BSS =63,979 bytes,1,045 below0xFE00; overlay8,313, total compressed
+10,071 BSS =63,979 bytes,1,045 below 0xFE00; overlay8,313, total compressed
 package80,925. All four software disks and an85KB WPK build and validate.
 The disks explicitly pre-create SYSTEM/APPDATA so a direct B: launch can save.
 
@@ -77,7 +82,7 @@ passed as voice playback. No external publishing occurred.
 
 ## The first real lesson exposed the cost the host could not see
 
-The installed 360KB software disk launched successfully on MartyPC's VGA XT.
+The installed 360 KB software disk launched successfully on MartyPC's VGA XT.
 The first Enter then failed the native UI-idle check after270 guest seconds.
 This was a real failure, not a reason to lengthen a wait. Paused CPU samples
 and captured strips showed the full lesson paint making progress and returning;
@@ -108,3 +113,56 @@ error reaction. Complete callbacks97–147ms and first visible feedback are
 different measurements; secondary mirror/hint/counter work is coalesced.
 The final acceptance run must repeat the key measurements on the integrated
 no-clip head and inspect every adapter.
+
+## The final guest checks changed the implementation
+
+The combined native tour completed beginner and shifted mixed lessons,
+compared exact counters, named all four profiles and exported the actual
+guest-written floppy before cold reboot. It covered the window, shrank it
+to480x128 content, resumed deliberately and restored geometry. It found an
+OWNBG shrink does not necessarily owe a resize callback: service-boundary
+geometry comparisons now pause at the last observed active tick. Focus loss
+uses that same conservative boundary, so delayed modal work cannot become a
+ranked challenge expiry. Help/Settings/Records return to Pause.
+
+Continuous hardware input exposed124–145ms feedback despite isolated keys
+passing. Read-only IRQ/BIOS/pulse attribution caught a timer draw running
+before a key already waiting in the BIOS. A non-consuming peek now defers
+only idle drawing; the normal OS event remains the only scoring input.
+Thirty keys then completed feedback within98ms, including uninterrupted
+eight-key runs. Complete callbacks and CRT scanout remain separate costs.
+
+Real empty challenges reached1093/3278/5462ticks but initially praised
+no typing. They now show accuracy as a dash and neutral guidance. Five
+neutral captions guarantee a choice outside the recent-four history.
+A four-profile mouse tour caught stale name-edit state, and a real weak-key
+practice tour caught the mislabeled digits-only group. Both were repaired.
+Nineteen actual errors produced error/low/poor roasts, a ten-key comeback,
+a sampled F recommendation and a working focused drill.
+
+All18 initial final rows passed. Added fullscreen-playing captures verified
+the expanded EGA/VESA/Mega keyboard, with two early emulator hangs passing
+on isolated retry. The full repository gate caught missing HIGH/HIGHMEM
+declarations. The audited one-byte class change now permits high code and
+band; a full actual 286 lesson/profile/fullscreen/cold-reboot tour passed
+with both above 1 MB. The test helper also learned to check KIND_FILES before
+interpreting I_SPTR, rather than mistaking a high selector for file state.
+The copied emulator runtime was rebuilt from the current pinned sources.
+
+The source-derived app-owned peak is163.5 KiB on the observed XT volume,
+164 KiB with the Mega high-region rounding. Region, parts and band all moved
+through the public compaction fixture in real mode. Sound-route captures
+proved transport and cleanup; the tool could not listen, so audition remains
+unverified. Full PLAY/Resume paints can interrupt speaker sequencing for
+about7.3seconds. The committed gallery and comparison notes show the native
+result and its differences from the supplied visual target.
+
+The rebuilt canonical MartyPC exposed a final timing defect: one complete
+caption line cost about121ms while every measured key remained under100ms.
+Read-only pending-state attribution isolated it from counters, mirror and
+portrait work. Four physical scanlines per idle pass reduced the final
+220-call maximum to99.062ms. Thirty hardware-enqueued keys peaked at97.978ms;
+1,030 sampled UI-stack stops used at most 156 of 512 bytes with the guard intact.
+The first repaired run passed those assertions but raced a leftover probe
+breakpoint before capture. The test now leaves its last callback stopped,
+clears the probe and confirms resume. Its repeat passed end to end.

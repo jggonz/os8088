@@ -1812,7 +1812,7 @@ FAST = [
         "SPEC.md 134: production alternating-generation transport under35 "
         "read/write/truncate/readback faults preserves last valid progress",
         needs=("cc",)),
-    Row("boratypeface", "soak", py("tests/boratype_face.py"), 1.9,
+    Row("boratypeface", "soak", py("tests/boratype_face.py"), 2.4,
         "SPEC.md 134:24 color/mono geometries, full ASCII opposite Shift/finger map, "
         "bounded dirty rendering, all actions and honest empty results; reversed Shift goes red",
         needs=("cc",)),
@@ -1839,13 +1839,13 @@ FAST = [
         needs=("marty", "nasm", "cc"), timeout=360,
         wants=("build/boratype.o88",)),
     Row("boratypepractice", "soak", py("tests/boratype_practice_target.py",
-        "--evidence", "build/boratype-final/practice"), 55.9,
+        "--evidence", "build/boratype-final/practice"), 36.9,
         "SPEC.md 134: actual three-error/low-accuracy/comeback/poor-result "
         "reactions, sampled F weakness, recommended drill and independently selected digits practice",
         needs=("marty", "nasm", "cc"), timeout=360,
         wants=("build/boratype360.img",)),
     Row("boratypeperformance", "soak", py("tests/boratype_performance.py",
-        "--evidence", "build/boratype-final/performance"), 64.8,
+        "--evidence", "build/boratype-final/performance"), 19.3,
         "SPEC.md 134: real4.77MHz input through30 hardware keys, completed "
         "feedback within100ms,220 periodic callbacks, sound enabled and sampled shipping stack guard",
         needs=("marty", "nasm", "cc"), timeout=300, alone=True,
@@ -1906,7 +1906,7 @@ FAST = [
         wants=("build/boratype360.img",)),
     Row("boratypemega286", "soak", ["env", "OS88_MEGA=1", "OS88_MEGA_EMU=86box"] +
         py("tests/boratype_target.py", "--scenario", "smoke", "--adapter", "vga", "--backend", "86box",
-        "--app-build", "build", "--evidence", "build/boratype-final/mega286"), 140.4,
+        "--app-build", "build", "--evidence", "build/boratype-final/mega286"), 98.5,
         "SPEC.md 134: ordinary shipped package on actual protected-mode286 "
         "Mega with actual high region/band; full lessons, profiles, fullscreen-close and cold reboot",
         needs=("86box", "nasm", "cc"), timeout=700, serial=True,

@@ -274,11 +274,13 @@ class Probe:
             records.append({"index": i, "cycles": cycles, "ms": ms(cycles), "output_entries": paints,
                             "pending_at_entry": pending})
             assert cycles <= int(HZ * limit_ms / 1000), records[-1]
-            self.arm(self.S["_bt_pulse"])
-            self.m.run()
-        self.m.pause()
+            if i + 1 < count:
+                self.arm(self.S["_bt_pulse"])
+                self.m.run()
+        # The last sample is already stopped at its caller return. Do not
+        # resume into another armed pulse and race pause against that stop.
         self.arm()
-        self.m.run()
+        self.m.go()
         quiet = [r["cycles"] for r in records if not r["output_entries"]]
         assert quiet and any(r["output_entries"] for r in records), "must see quiet AND actual periodic drawing"
         assert max(quiet) < 65536 * 4, "quiet work still consumes an entire OS tick"

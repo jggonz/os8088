@@ -1,5 +1,11 @@
 # Boratype native target driver
 
+Final integrated evidence is in [EVIDENCE.md](EVIDENCE.md). The adapter ledger
+below preserves earlier intermediate runs; its hashes and measurements are
+not the final package identity. The final suite additionally covers running
+fullscreen faces, all-profile reboot, high-memory286 operation, actual weak
+practice and bounded caption work.
+
 `tests/boratype_target.py` is an installed-package native driver. It opens
 the software disk through `os88ui.open_drive`, `path` and `open`, delivers real
 keyboard/mouse events, and reads the production session/profile. It does not

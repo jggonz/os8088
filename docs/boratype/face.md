@@ -50,7 +50,8 @@ Typing paints the prompt and key feedback before deferred work. Idle paints
 do one pending job: a small input-mirror span, footer strip, hint, counter, or
 portrait/caption strip. The counter cursor prevents one changing value from
 starving the other counters. Portrait changes coalesce to the latest expression;
-there is no frame queue. A full W_PAINT still composes the complete scene.
+there is no frame queue. Portrait jobs paint one physical row; caption jobs
+paint at most four physical rows. A full W_PAINT still composes the complete scene.
 Content-edge slivers outside the byte-aligned band are filled through the
 native clipped fill API.
 
@@ -278,3 +279,13 @@ software disk through `os88disk.py`. Both use real UI input and read-only
 inspection. Neither builds a new kernel or writes guest state. Parent integration
 registers `boratypeperformance` and its relocation variant and reruns them once
 against the final package after the remaining cold profile fix.
+
+## Final integrated caption bound
+
+The final current-Marty timing run isolated a whole-caption-line idle update
+at about121ms. The face now paints at most four caption scanlines per idle
+job. The host face check drains a long caption at every color/mono geometry,
+bounds each job and proves session state unchanged. The strict integrated
+probe then passed 30 hardware keys (97.978ms worst completed feedback) and
+220 periodic calls (99.062ms worst), with both 100ms limits unchanged. See
+[EVIDENCE.md](EVIDENCE.md) for artifact hashes and the full-paint limitation.

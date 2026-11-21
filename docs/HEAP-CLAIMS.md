@@ -390,3 +390,11 @@ the very next run with nothing else changed (§66.5.6).
 | native package region | measured by package build; instance lifetime | MOVABLE | C runtime region relocation; fallback worker is restartable and posts wakes only |
 | eager art/audio/overlay carve | art63,677B plus audio/overlay; instance lifetime | MOVABLE | `CC_ONMOVE_PARTS`; callback rereads `os88_part_seg(0/1)` and fixes face and second-bank holders |
 | drawing band | 8KB; instance lifetime, reused as CGA cell shadow | MOVABLE | `bt_band`, face holder and `bx_bseg` updated by callback |
+
+Borat's observed XT region/parts/band total is 167,424 bytes on the accepted
+volume. Source audit bounds app-owned startup at that same total; retained
+carve slack depends on volume cluster alignment. HIGH/HIGHMEM grants a
+65,536-byte high region and 8KB high band on Mega, totaling 167,936 bytes with
+the same conventional part carve. High selectors stay opaque/stable; they
+are not real-mode paragraph segments. The actual286 high-memory tour and
+real-mode public compaction evidence are in [the ledger](boratype/EVIDENCE.md).
