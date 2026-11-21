@@ -40,7 +40,9 @@ Focus loss, manual pause or display transition makes a challenge unranked.
 
 24 authored lessons declare keys, introduced characters, instructions and
 drills. A complete run at ≥95% masters it; any lesson stays selectable.
-Practice uses its own reproducible PRNG and valid groups. Weak keys require
+Practice uses its own reproducible PRNG and four valid groups: home row,
+all letters, digits, and mixed letters/digits/punctuation. Native and compact
+faces label these same categories; the digits group contains digits only. Weak keys require
 20 samples, are ranked by error ratio, and report their samples. Records are
 separate for each duration and difficulty. Achievements are persistent bits,
 awarded from completed runs or measured streak events, never from repaint.
