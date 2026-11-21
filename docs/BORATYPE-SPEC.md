@@ -34,7 +34,9 @@ A = K + E. Stop a run before any counter overflows. Subtraction of successive
 1,193,182 / 65,536 Hz (SPEC.md §37), not an assumed 18 Hz integer clock.
 Accuracy is nearest integer 100*K/A. WPM is floor(12*N/active_seconds), spaces
 and punctuation included; no attempts/time displays a dash. Intermediate
-products use checked two-word arithmetic. Pauses exclude elapsed ticks.
+products use checked two-word arithmetic. A product proven to fit one word
+uses native word multiply/divide with exactly the same floor and saturation;
+larger products retain the two-word path. Pauses exclude elapsed ticks.
 Finished statistics freeze exactly once. Challenges have a three-second ready
 countdown, then 60/180/300 active seconds and expire without keyboard input.
 The native adapter reports its initial scene visible exactly once before

@@ -46,6 +46,15 @@ static void check_arithmetic(void)
     assert(bt_muldiv(65535, 65535, 65535) == 65535);
     assert(bt_muldiv(65535, 65535, 1) == 65535);
     assert(bt_muldiv(0, 0, 0) == 65535);
+    assert(bt_muldiv(65535, 0, 1) == 0);
+    for (b = 1; b <= 65535; b++) {
+        a = 65535 / b; d = 1 + b % 65535;
+        assert(bt_muldiv((BTWord)a, (BTWord)b, (BTWord)d) == a * b / d);
+        if (a < 65535) {
+            a++; want = a * b / d; if (want > 65535) want = 65535;
+            assert(bt_muldiv((BTWord)a, (BTWord)b, (BTWord)d) == want);
+        }
+    }
     for (i = 0; i < 200000; i++) {
         a = oracle_random() & 65535; b = oracle_random() & 65535; d = oracle_random() & 65535;
         want = d ? a * b / d : 65535;

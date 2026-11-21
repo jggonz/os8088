@@ -19,6 +19,8 @@ unsigned bt_muldiv(BTWord a, BTWord b, BTWord divisor)
     BTWord hi, lo, mh, ml, old, rem, q, carry;
     int i;
     if (!divisor) return 65535u;
+    if (!b) return 0;
+    if (a <= 65535u / b) return (a * b) / divisor;
     hi = lo = mh = 0; ml = a;
     for (i = 0; i < 16; i++) {
         if (b & 1) {
