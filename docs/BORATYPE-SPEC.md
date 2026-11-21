@@ -171,7 +171,9 @@ bank. If the display refuses planar transfer, compose a 24-row strip through
 the usual color fallback. Small and monochrome poses use the directory's
 bounded compressed strips. Only package initialization fetches these parts.
 Every painter resolves the current segment before reading a movable bank.
-Static portraits cover allocation failure and read-only secondary instances.
+Mono loads only part 3. A color guest with less memory can keep the small
+animated tutor and scene cards independently of the large raw pose banks.
+Static portraits cover missing motion data and read-only secondary instances.
 
 ### 3.2. Cold menu compositions
 

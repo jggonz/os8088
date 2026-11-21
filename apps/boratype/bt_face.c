@@ -63,7 +63,7 @@ static unsigned tf_savedattempt,tf_savedback;
  * signatures are resident. No frame buffer is retained. */
 static BTWord tf_arec[4],tf_ahead[4],tf_atarget[5][4];
 static unsigned tf_asig[5],tf_astart,tf_aframe_at,tf_ablink_at;
-static int tf_aready,tf_aframe,tf_aseq,tf_aexpr=-1,tf_apos,tf_abase=-1;
+static int tf_aready,tf_bigready,tf_aframe,tf_aseq,tf_aexpr=-1,tf_apos,tf_abase=-1;
 static int tf_adone,tf_aload=-1,tf_aphase,tf_ashown=-1,tf_amask,tf_acapturn,tf_idleturn;
 static int tf_ax,tf_ay,tf_aw,tf_ah,tf_avariant,tf_avisible;
 static const char *tf_acaption;
@@ -476,7 +476,7 @@ void ovl_bt_portrait_scene(int x,int y,int w,int h)
 {
     int id,pw,ph,e;
     e=bt_expression();if(e<0||e>6)e=0;
-    pw=(!tf_mono&&w>=96&&h>=120)?96:40;ph=pw==96?120:48;
+    pw=(!tf_mono&&w>=96&&h>=120&&(tf_bigready||!tf_aready))?96:40;ph=pw==96?120:48;
     if(w<pw||h<ph)return;
     id=tf_mono?BT_ART_MONO+e:(pw==96?BT_ART_BIG+e:BT_ART_SMALL+e);
     x+=(w-pw)/2;y+=(h-ph)/2;x&=~7;
@@ -745,13 +745,20 @@ void bt_face_clock(unsigned now)
 #endif
     ovl_tf_anim_clock(now);
 }
-static void ovl_tf_anim_load(void)
+static int ovl_tf_claimart(int i)
 {
-    int i;
-    tf_aready=0;if(bt_readonly)return;
-    for(i=3;i<8;i++)if(os88_part_fetch(i)!=0||os88_part_movable(i)!=0)break;
-    if(i<8){for(i=3;i<8;i++)os88_part_drop(i);return;}
-    tf_aready=1;
+    if(os88_part_fetch(i)==0 && os88_part_movable(i)==0)return 1;
+    os88_part_drop(i);return 0;
+}
+static void ovl_tf_anim_load(int bpp)
+{
+    tf_aready=0;tf_bigready=0;if(bt_readonly)return;
+    tf_aready=ovl_tf_claimart(3);
+    if(bpp<4)return;
+    ovl_tf_claimart(5);
+    if(!tf_aready)return;
+    tf_bigready=ovl_tf_claimart(4)&&ovl_tf_claimart(6)&&ovl_tf_claimart(7);
+    if(!tf_bigready){os88_part_drop(4);os88_part_drop(6);os88_part_drop(7);}
 }
 static int ovl_tf_anim_record(int frame,int strip)
 {
@@ -877,7 +884,7 @@ void bt_face_init(unsigned art,unsigned band,unsigned cap,int bpp)
 {
     int i;
     tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;tf_adone=0;tf_aload=-1;tf_ashown=-1;tf_acapturn=0;tf_idleturn=0;
-    ovl_tf_anim_load();
+    ovl_tf_anim_load(bpp);
     for(i=0;i<TF_KEYS;i++)tf_keycache[i]=255;
     for(i=0;i<TF_CELLS;i++){tf_cellchar[i]=255;tf_cellstyle[i]=255;}
     bx_setup(band,0,cap,art,bpp);gk_init(bpp);
