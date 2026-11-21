@@ -235,7 +235,7 @@ static void ovl_tm_records(int x,int y,int w,int h,BTProfile *p,int rich)
         n=tf_number(0,i==0?mastered:i==1?p->best_streak:earned);n=tf_append(n," / ");tf_number(n,i==0?24:i==1?50:7);
         tf_text(x+2*w/3+10,yy+i*rh,w/3-10,tf_buf,TF_YELLOW,tf_font);
     }
-    yy+=41;if(h>=300){tf_text(x,yy,w,"ACHIEVEMENTS",TF_YELLOW,BT_F_TITLE);yy+=20;}
+    yy+=41;if(h>=294){tf_text(x,yy,w,"ACHIEVEMENTS",TF_YELLOW,BT_F_TITLE);yy+=20;}
     ovl_tm_achievements(x,yy,w,h-(yy-y)-34,p->achievements);
     c=(w-12)/3;yy=y+h-29;
     tf_button(x,yy,c,27,"Practice",BT_A_PRACTICE,0);tf_button(x+c+6,yy,c,27,"Continue",BT_A_START,1);tf_button(x+2*(c+6),yy,c,27,"Back",BT_A_BACK,0);
