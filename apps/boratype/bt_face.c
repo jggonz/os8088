@@ -435,12 +435,52 @@ static void ovl_tf_drawportrait(void)
     gk_box(tf_px,tf_py,tf_pw,tf_ph,GK_RAISED,tf_ground());
     ovl_bt_portrait_scene(tf_px,tf_py+6,tf_pw,tf_ph>=150?120:48);
 }
+/* A four-row repaint can intersect the same 10px speech line three times.
+ * Cache word boundaries by immutable director string/width/font. Only copy
+ * and stamp glyphs for lines inside the current band. */
+static const char *tf_cap_source;
+static unsigned char tf_cap_start[6],tf_cap_length[6],tf_cap_count;
+static int tf_cap_width,tf_cap_font;
+static void ovl_tf_wrapcaption(const char *s,int width)
+{
+    int start,n,space,used,c;
+    tf_cap_source=s;tf_cap_width=width;tf_cap_font=tf_font;tf_cap_count=0;
+    start=0;
+    while(s[start] && tf_cap_count<6){
+        n=0;space=0;used=0;
+        while(s[start+n] && n<78){
+            c=(unsigned char)s[start+n];if(c<32 || c>126)c=32;
+            used+=tf_glyphw[c-32];if(used>width)break;
+            if(c==32)space=n;n++;
+        }
+        if(s[start+n] && space)n=space;
+        if(!n)n=1;
+        tf_cap_start[tf_cap_count]=start;tf_cap_length[tf_cap_count++]=n;
+        start+=n;while(s[start]==' ')start++;
+    }
+}
 static void ovl_tf_drawcaption(void)
 {
-    int x,y,w,rows;
-    if(tf_compact){x=tf_x+8;y=tf_statsy-10;w=tf_w-16;rows=1;}
-    else{x=tf_px+6;y=tf_py+(tf_ph>=150?132:60);w=tf_pw-12;rows=(tf_py+tf_ph-y-5)/(tf_th+2);}
-    if(rows>0)ovl_tf_lines(x,y,w,rows,bt_caption());
+    int x,y,w,rows,i,n,line,ink,bottom;
+    const char *s;
+    if(tf_compact){x=tf_x+8;y=tf_statsy-10;w=tf_w-16;rows=1;ink=tf_ink(TF_WHITE);}
+    else{
+        x=tf_px+5;y=tf_py+(tf_ph>=150?132:60);w=tf_pw-10;
+        bottom=tf_py+tf_ph-5;
+        if(w<=12 || bottom<=y || y>tf_sy+tf_sh || bottom<tf_sy)return;
+        bx_fill(x,y,x+w-1,bottom,0);
+        bx_fill(x+2,y+1,x+w-3,bottom-1,15);
+        x+=5;w-=10;y+=2;rows=(bottom-y)/(tf_th+2);ink=0;
+    }
+    if(rows<1)return;
+    s=bt_caption();
+    if(tf_cap_source!=s || tf_cap_width!=w || tf_cap_font!=tf_font)ovl_tf_wrapcaption(s,w);
+    for(line=0;line<rows && line<tf_cap_count;line++,y+=tf_th+2){
+        if(y>=tf_sy+tf_sh || y+tf_th<=tf_sy)continue;
+        n=tf_cap_length[line];
+        for(i=0;i<n;i++)tf_wrap[i]=s[tf_cap_start[line]+i];
+        tf_wrap[n]=0;bx_text(x,y,tf_wrap,ink,tf_font);
+    }
 }
 static void ovl_tf_drawhint(void)
 {

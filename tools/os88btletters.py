@@ -122,6 +122,15 @@ if __name__ == "__main__":
     glyphs = {legend[i]: legend[i+1:i+17] for i in range(0,len(legend),17)}
     strike(12,10,8,"label")
     strike(16,16,13,"keytype", glyphs)
-    strike(24,24,19,"large")
+    # Enlarge the selected reference capitals for headings without crossing
+    # the shared renderer's two-byte row stride.
+    large = {}
+    for key, rows in glyphs.items():
+        width=min(15, round(len(rows[0])*1.4))
+        large[key]=["."*width]*2
+        large[key].extend("".join(rows[1+y*13//18][x*len(rows[0])//width] for x in range(width))
+                          for y in range(18))
+        large[key].extend(["."*width]*4)
+    strike(24,24,19,"large",large)
     if args.records:
         badges(args.records)
