@@ -11,6 +11,8 @@ Native C, one translation unit, SmallerC → cc8086 → NASM → CC_PACKAGE.
 No kernel resident bytes or new API slots. The C restrictions in SPEC.md §73
 apply. A package instance owns one window and its session. Four local profiles
 share a bounded versioned store on the package volume's SYSTEM/APPDATA.
+Mouse and keyboard profile selection both reset the name-edit state: the
+first printable character replaces that selected profile's prior name.
 Only one writer may own the store at a time; another instance must display
 its read-only state. UI callbacks own all state; face rendering is read-only (the outer paint
 callback may detect geometry change and pause before drawing), and no
