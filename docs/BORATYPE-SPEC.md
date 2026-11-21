@@ -70,8 +70,8 @@ dispatch a waiting key. It never reads a key or changes scoring; all scored
 characters still come through the normal OS callback.
 Input feedback precedes cosmetic portrait/caption work; cosmetic
 updates coalesce to the newest expression. Caption changes paint at most four
-physical scanlines per idle pass; portrait changes retain their one-row
-bounds. They are bounded so they cannot hold
+physical scanlines per idle pass; portrait animation follows3.1’s precomputed
+bounded strips. They are bounded so they cannot hold
 the UI through a long animation. Full native damage paints remain complete. Layout derives from live content and display geometry.
 Color roles are navy/cobalt, cyan rules, yellow title/target, white text,
 green accepted, red mistake, and finger zones. Mono uses symbols/outlines.
@@ -116,6 +116,37 @@ keycap and prompt type reuse the shipped Liberation Serif bold strikes. Five
 24 × 24 transparent achievement badges use records 8–12 of the same bank.
 The footer music-note meter follows the active soundtrack on the guest clock.
 The four-color exclusive mode retains its character-cell update path.
+
+### 3.1 Original-grid portrait animation
+
+The supplied six-column/five-row portrait sheet is authoritative: idle/blink,
+talk, praise, roast and facepalm. The original PNG and exact crop/palette source
+metadata are retained. Static band composition uses the selected original-grid
+pose over a scenic crop from the supplied lesson artwork; a helper at explicit
+coordinates is safe inside a full menu/body band. Caller owns frame/caption.
+
+Clock service is independent of scoring and rendering: `bt_face_clock(now)`
+selects idle/blink, a short talk loop on a neutral caption, or one-shot praise,
+roast/facepalm from the actual reaction expression/caption change. Frames have
+five-OS-tick dwell (about3.6frames/s); reaction sequences play once then settle
+to idle. A delayed paint coalesces to the newest target, not a frame queue.
+
+Committed exact-size planar sources are deterministically packed as independently
+bounded LZ4 strips using tools/os88lz.py. The existing OSAPI_DECOMP expands at
+most1152bytes into the existing8KBband; shared bx_out performs all normal clipped
+output and its packed fallback. One at-most24-scanline strip is serviced per
+idle paint, after typing feedback. Unchanged strips are skipped; blink gives
+the eyes priority. A full W_PAINT still composes a complete scene immediately.
+No direct framebuffer access, private decompressor, extra framebuffer or kernel
+change is introduced.
+
+Optional lazy package parts3/4 hold at most64KB each, preloaded only at init and
+marked movable. No animation paint, key or clock call fetches a file. Every
+strip re-reads its part segment, so relocated directory/source holders stay
+valid. Allocation failure retains the static scenic original-grid portrait;
+second/read-only sessions remain usable. Existing art0, sound1 and overlay2
+indices stay stable. This optional heap cost is the approved larger-package
+tradeoff; it does not raise resident, kernel or band budgets.
 
 ## 4. Resources and budgets
 

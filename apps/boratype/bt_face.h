@@ -32,6 +32,8 @@ extern int bt_modifiers, bt_practice_weak;
 extern int bt_blink_frame;
 #define BT_A_PRACTICE_BASE 100
 
+/* Compose only, into the caller's current Breadboard band. */
+void ovl_bt_portrait_scene(int x,int y,int w,int h);
 int bt_key_base(int c);
 const char *bt_key_finger(int c);
 int bt_key_shift(int c);

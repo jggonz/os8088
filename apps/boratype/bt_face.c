@@ -418,17 +418,21 @@ static void ovl_tf_meter(void)
     bx_out();
     tf_meterlast=bt_music_phase;
 }
+/* Band composition only: callers own the panel frame and caption. */
+void ovl_bt_portrait_scene(int x,int y,int w,int h)
+{
+    int id,pw,ph,e;
+    e=bt_expression();if(e<0||e>6)e=0;
+    pw=(!tf_mono&&w>=96&&h>=120)?96:40;ph=pw==96?120:48;
+    if(w<pw||h<ph)return;
+    id=tf_mono?BT_ART_MONO+e:(pw==96?BT_ART_BIG+e:BT_ART_SMALL+e);
+    bx_spr(x+(w-pw)/2,y+(h-ph)/2,id);
+}
 static void ovl_tf_drawportrait(void)
 {
-    int id,w,h,e;
     if(tf_compact||tf_px>=tf_sx+tf_sw||tf_px+tf_pw<=tf_sx||tf_py>=tf_sy+tf_sh||tf_py+tf_ph<=tf_sy)return;
-    e=bt_expression();if(e<0||e>6)e=0;
-    id=tf_mono?BT_ART_MONO+e:(tf_ph>=150?BT_ART_BIG+e:BT_ART_SMALL+e);
-    w=(!tf_mono&&tf_ph>=150)?96:40;h=(!tf_mono&&tf_ph>=150)?120:48;
-    if(e==1&&bt_blink_frame)id=tf_mono?BT_ART_BLINK_MONO:(tf_ph>=150?BT_ART_BLINK_BIG:BT_ART_BLINK_SMALL);
     gk_box(tf_px,tf_py,tf_pw,tf_ph,GK_RAISED,tf_ground());
-    if(tf_py+6<tf_sy+tf_sh&&tf_py+6+h>tf_sy)bx_spr(tf_px+(tf_pw-w)/2,tf_py+6,id);
-
+    ovl_bt_portrait_scene(tf_px,tf_py+6,tf_pw,tf_ph>=150?120:48);
 }
 static void ovl_tf_drawcaption(void)
 {
