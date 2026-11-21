@@ -145,9 +145,9 @@ static void mirror_and_stat_damage(void)
    assert(++steps<=2*tf_inputcols+20);
   }
  }
- bt_face_paint(0,1);tf_statpend=1;area=flushes=0;bt_face_paint(0,0);
- assert(!tf_statpend&&flushes==1);
- assert(area<=(unsigned)((tf_statsw/5+8)*16));
+ bt_face_paint(0,1);tf_cosneeded=tf_capneeded=0;tf_statpend=1;tf_statrow[0]=0;steps=0;
+ while(tf_statpend){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
+  assert(area<=(unsigned)((tf_statsw/5+8)*4));assert(++steps<=4);}
  assert(!memcmp(&before,&bt_session,sizeof(before)));bt_face_paint(0,1);
 }
 static unsigned char animbank[3][65000];static unsigned animlen[3],unpacks;

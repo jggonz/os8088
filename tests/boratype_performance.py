@@ -139,7 +139,16 @@ class Probe:
         return {"enabled_bits": on, "route": route, "song_plus_one": song,
                 "audible_capture": "not claimed by this cycle probe"}
 
-    def observe_callback(self, character, correct, origin, limit_ms, negative=False):
+    def queued_context(self):
+        return {"registers": self.m.regs(),
+                "fields": {name: self.app.global_word(name) for name in
+                           ("tf_statpend", "tf_hintpending", "tf_footpending", "tf_cosneeded", "tf_capneeded",
+                            "tf_sx", "tf_sy", "tf_sw", "tf_sh")},
+                "band": {name: self.app.p.word(self.S[name]) for name in
+                         ("bx_x0", "bx_y0", "bx_w", "bx_h")},
+                "mirror": struct.unpack("<3h", self.app.p.read(self.S["_tf_dirtyfirst"], 6))}
+
+    def observe_callback(self, character, correct, origin, limit_ms, negative=False, context=None):
         queued_work = []
         pulse_start, pulse_ret = None, None
         for _ in range(32):
@@ -232,6 +241,7 @@ class Probe:
                   "engine_to_face_return_cycles": face_done - entered, "face_cycles": face_done - face,
                   "callback_entry_cycle": callback, "first_output_cycle": first, "callback_return_cycle": end,
                   "dispatch_before_input": queued_work,
+                  "queued_context": context,
                   "state": after}
         self.observations.append(result)
         print("feedback " + json.dumps({k: v for k, v in result.items() if k != "state"}), flush=True)
@@ -241,11 +251,12 @@ class Probe:
     def key(self, character, correct, limit_ms, negative=False):
         self.m.pause()
         self.sound()
+        context = self.queued_context()
         self.arm_queue()
         start = self.m.status()["cycles"]
         self.m.type_text(character)
         self.m.run()
-        result = self.observe_callback(character, correct, start, limit_ms, negative=negative)
+        result = self.observe_callback(character, correct, start, limit_ms, negative=negative, context=context)
         self.arm()
         self.m.run()
         M.ui_done(self.m, "measured Boratype key complete", limit=60)
@@ -332,10 +343,11 @@ def burst(probe, count, limit_ms, sink):
               "input_policy": "next real key at preceding callback return; no per-key UI drain"}
     sink.append(record)
     for character, correct in zip(text, corrects):
+        context = probe.queued_context()
         probe.arm_queue()
         queued = m.status()["cycles"]
         m.type_text(character); m.run()
-        callbacks.append(probe.observe_callback(character, correct, queued, limit_ms))
+        callbacks.append(probe.observe_callback(character, correct, queued, limit_ms, context=context))
     consumed = m.status()["cycles"]
     after = app.state()
     assert after["attempts"] == before["attempts"] + count, (text, before, after)
