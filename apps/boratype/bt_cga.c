@@ -69,7 +69,7 @@ static void ovl_bt_cga_keys_init(void)
             at = (16 + r) * 40 + x;
             bt_cga_keycell[(BTByte)s[c] - 32] = at;
             bt_cga_grid[at] = '[' | 0x0100;
-            bt_cga_grid[at + 1] = (BTByte)s[c] | 0x0100;
+            bt_cga_grid[at + 1] = (s[c] >= 'a' && s[c] <= 'z' ? (BTByte)s[c] - 32 : (BTByte)s[c]) | 0x1000;
             bt_cga_grid[at + 2] = ']' | 0x0100;
             x += 3;
         }
@@ -92,7 +92,8 @@ static void bt_cga_keypaint(int at)
         bt_cga_grid[817] = (bt_cga_wrong_cell == at ? '!' : ']') | 0x0100;
         return;
     }
-    ink = at == bt_cga_target_cell ? 3 : at == bt_cga_wrong_cell ? 2 : 1;
+    /* A reversed key face and an edge glyph both identify the active key. */
+    ink = at == bt_cga_target_cell ? 0x30 : at == bt_cga_wrong_cell ? 0x20 : 0x10;
     bt_cga_grid[at] = (at == bt_cga_target_cell ? '>' : '[') | 0x0100;
     bt_cga_grid[at + 1] = (bt_cga_grid[at + 1] & 255) | (ink << 8);
     bt_cga_grid[at + 2] = (at == bt_cga_wrong_cell ? '!' : ']') | 0x0100;

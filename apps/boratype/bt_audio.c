@@ -78,6 +78,7 @@ static const BTReaction bt_jokes[BT_MSGS] = {
  {"Try the marked key to begin.",11,0,1},
  {"Take one letter at a time.",11,0,1}
 };
+int bt_music_phase; /* Zero when transport is silent, otherwise a four-frame music indicator. */
 static BTWord bta_now, bta_spoke, bta_lastkey, bta_idle, bta_caption_at;
 static BTWord bta_errorfx, bta_backmark, bta_samplemark;
 static BTByte bta_recent[4], bta_recentpos, bta_pick, bta_have, bta_haderror;
@@ -208,6 +209,7 @@ void bt_audio_tick(BTWord now, int focused)
        bta_delta(now,bta_lastkey)>=547 && bta_delta(now,bta_idle)>=BT_IDLE_GAP) {
         bta_react(BT_R_IDLE,0); bta_idle=now;
     }
+    bt_music_phase=on && !held && bt_store.music ? 1+((now>>2)&3) : 0;
     if(!on) return;
     gkm_volume(bt_store.music,bt_store.effects);
     if(!bt_store.music) { bt_mhold(0); bta_hold=0; bta_song=-1; }

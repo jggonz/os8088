@@ -12,3 +12,18 @@ Color13 is reserved by the shared renderer as transparency and never occurs
 in these opaque portrait sources. No PNG decoder or image API runs at build
 or in the guest. Sound score sources in this directory belong to the audio
 lane and are independent of these records.
+
+The gold masthead is a 432 × 24 binary mask cropped from the owner's VGA
+lesson reference. Normal builds pack it into art bank 1 as consecutive
+16-pixel font strips. The lesson, key and label strikes are adapted from
+the repository's PageDesk Liberation Serif Bold bitmaps. Recreate them with
+`python3 tools/os88btletters.py`. To reselect the title, pass
+`--reference` and the original 1448 × 1086 lesson PNG.
+See [Liberation's license](../../pagedesk/fonts/OFL-Liberation.txt).
+
+The five 24 × 24 achievement badges come from the provided Records screen.
+Select them again with `tools/os88btletters.py --records <records.png>`.
+
+The uppercase letters, numbers and semicolon in the 16-pixel strike use the
+selected VGA keyboard legends in `key-legend.mask`. Lowercase, punctuation
+and the other two strikes retain their Liberation sources.

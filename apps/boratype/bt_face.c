@@ -52,6 +52,8 @@ static int tf_statsx,tf_statsw,tf_hintpending,tf_statpend,tf_statnext,tf_footpen
 static int tf_dirtyfirst[3],tf_dirtylast[3];
 static int tf_vsx,tf_vsy; /* independent sound-settings status line */
 static unsigned tf_vstatus,tf_settings;
+extern int bt_music_phase;
+static int tf_meterlast;
 static int tf_nhit,tf_hit[TF_HITS][5];
 static unsigned tf_header,tf_bodykey,tf_footer,tf_portrait,tf_captionkey,tf_hintkey;
 static unsigned tf_statkey[5];
@@ -187,7 +189,7 @@ static const char *tf_fingers[]={"Thumb","Left little","Left ring","Left middle"
 static const unsigned char tf_zones[]={7,12,6,14,10,11,9,5,12};
 static const char *tf_group[]={"Home row","All letters","Digits","Mixed punctuation"};
 static const char *tf_screenname[]={"WELCOME","LESSONS","TYPE WITH BORAT","RESULTS","PRACTICE","TIMED CHALLENGE","RECORDS","SOUND & DISPLAY","HELP","PAUSED","PROFILES"};
-static const unsigned char tf_roles[]={0,1,11,3,1,15,1,9,14,9,15,14,0,7,0,7};
+static const unsigned char tf_roles[]={0,7,15,8,1,0,1,9,14,11,0,14,0,8,0,7};
 static const unsigned char tf_monoroles[]={0,15,15,0,15,0,0,0,15,0,15,15,0,0,0,15};
 static const char *tf_soundstatus(void)
 {return bt_readonly?"Other instance owns sound":bt_master_sound?"Master sound: ON (F3 toggles)":"Master sound: MUTED (F3 toggles)";}
@@ -216,12 +218,32 @@ static void ovl_tf_lines(int x,int y,int w,int rows,const char *s)
         tf_line(x,y,w,tf_wrap);s+=n;while(*s==' ')s++;y+=tf_th+2;
     }
 }
-static void tf_button(int x,int y,int w,int h,const char *s,int a,int selected)
+static void ovl_tf_button(int x,int y,int w,int h,const char *s,int a,int selected)
 {
     if(tf_nhit<TF_HITS){tf_hit[tf_nhit][0]=x;tf_hit[tf_nhit][1]=y;tf_hit[tf_nhit][2]=w;tf_hit[tf_nhit][3]=h;tf_hit[tf_nhit++][4]=a;}
     if(x+w<=tf_sx||x>=tf_sx+tf_sw||y+h<=tf_sy||y>=tf_sy+tf_sh)return;
-    gk_button(x,y,w,h,s,tf_font,(selected?(tf_mono?GK_B_FOCUS:GK_B_HILITE):GK_B_NORMAL)|GK_B_FLAT);
+    if(!tf_mono && h>=22 && w>=45){
+        int face, shade, font;
+        face=selected?TF_YELLOW:(a==BT_A_WEAK||a==BT_A_PRACTICE?TF_CYAN:7);
+        shade=face==TF_YELLOW?6:face==TF_CYAN?3:8;
+        /* Stepped shoulders, lit lip and lower bevel inside the hit box. */
+        bx_fill(x+3,y,x+w-4,y+h-1,0);
+        bx_fill(x+1,y+2,x+w-2,y+h-3,0);
+        bx_fill(x,y+4,x+w-1,y+h-5,0);
+        bx_fill(x+3,y+2,x+w-4,y+h-4,15);
+        bx_fill(x+2,y+4,x+w-3,y+h-5,15);
+        bx_fill(x+4,y+3,x+w-4,y+h-4,face);
+        bx_fill(x+3,y+5,x+w-3,y+h-6,face);
+        bx_fill(x+4,y+h-5,x+w-5,y+h-3,shade);
+        bx_fill(x+w-4,y+5,x+w-3,y+h-5,shade);
+        font=bx_twidth(s,BT_F_TITLE)<=w-8?BT_F_TITLE:tf_font;
+        gk_textbox(x+3,y+1,w-6,h-3,s,0,font,GK_CENTRE|GK_FIT);
+    }else{
+        gk_button(x,y,w,h,s,tf_font,
+            (selected?(tf_mono?GK_B_FOCUS:GK_B_HILITE):GK_B_NORMAL)|GK_B_FLAT);
+    }
 }
+#define tf_button ovl_tf_button
 static int tf_kx,tf_ky0,tf_kww,tf_khh;
 static int tf_ktarget,tf_kshift,tf_kwrong,tf_kcorrect;
 static void tf_keyrect(int i)
@@ -336,19 +358,59 @@ static int tf_layout(void *win)
 }
 static void ovl_tf_drawheader(void)
 {
-    int w,x,i;static const char *tabs[]={"Lessons","Practice","Challenge","Records"};
-    tf_text(tf_x+8,tf_y+2,tf_w-70,"BORAT TEACHES TYPING",TF_YELLOW,tf_title);
-    tf_text(tf_x+tf_w-64,tf_y+3,60,"os8088",TF_WHITE,tf_font);
+    static const char *tabs[] = {"LESSONS","PRACTICE","CHALLENGE","RECORDS","SETTINGS","HELP"};
+    static const unsigned char pages[] = {BT_S_LESSONS,BT_S_PRACTICE,BT_S_CHALLENGE,BT_S_RECORDS,BT_S_SETTINGS,BT_S_HELP};
+    int tab_y, tab_h, w, x, i, active, font;
+    tab_h = tf_compact ? 12 : 22;
+    tab_y = tf_top - tab_h;
+    if (tf_compact)
+        tf_text(tf_x+8,tf_y,212,"BORAT TEACHES TYPING",TF_YELLOW,tf_title);
+    else {
+        bx_text(tf_x+(tf_w-432)/2,tf_y+(tab_y-tf_y-24)/2,
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ[",tf_ink(TF_YELLOW),BT_F_MASTHEAD);
+        if (tf_w>=560) tf_text(tf_x+tf_w-55,tf_y+5,53,"os8088",TF_WHITE,tf_font);
+    }
+    bx_fill(tf_x,tab_y,tf_x+tf_w-1,tab_y,tf_ink(TF_CYAN));
     bx_fill(tf_x,tf_top-2,tf_x+tf_w-1,tf_top-1,tf_ink(TF_CYAN));
-    w=(tf_w-16)/6;x=tf_x+8;
-    for(i=0;i<4;i++)gk_textbox(x+i*w,tf_top-(tf_compact?12:22),w,tf_compact?10:18,tabs[i],tf_ink(TF_WHITE),tf_font,GK_CENTRE|GK_FIT);
-    gk_textbox(x+4*w,tf_top-(tf_compact?12:22),w,tf_compact?10:18,"Settings",tf_ink(TF_WHITE),tf_font,GK_CENTRE);
-    gk_textbox(x+5*w,tf_top-(tf_compact?12:22),w,tf_compact?10:18,"Help",tf_ink(TF_WHITE),tf_font,GK_CENTRE);
+    w=(tf_w-16)/6;
+    for(i=0;i<6;i++){
+        font=tf_compact?BT_F_SMALL:(bx_twidth(tabs[i],BT_F_TITLE)<=w-3?BT_F_TITLE:BT_F_TEXT);
+        x=tf_x+8+i*w;
+        active=bt_screen==pages[i];
+        if(bt_screen==BT_S_PLAY||bt_screen==BT_S_PAUSE||bt_screen==BT_S_RESULTS)
+            active=i==(bt_session.mode==BT_CHALLENGE?2:bt_session.mode==BT_PRACTICE?1:0);
+        if(active) bx_fill(x+1,tab_y+1,x+w-2,tf_top-3,tf_mono?0:TF_YELLOW);
+        gk_textbox(x,tab_y+1,w,tab_h-3,tabs[i],active?(tf_mono?15:0):tf_ink(TF_WHITE),font,GK_CENTRE|GK_FIT);
+    }
 }
 static void ovl_tf_drawfooter(void)
 {
-    if(bt_notice[0]){tf_line(tf_x+6,tf_bottom+1,tf_w-12,bt_notice);return;}
-    tf_line(tf_x+6,tf_bottom+1,tf_w-12,bt_readonly?"READ ONLY  F1 Help  F2 Lessons  F3 Sound  F4 Pause  F6 Full  Esc Menu":"F1 Help   F2 Lessons   F3 Sound   F4 Pause   F6 Full   Esc Menu");
+    int y, paper;
+    y=tf_bottom;paper=tf_mono?0:5;
+    bx_fill(tf_x,y,tf_x+tf_w-1,tf_y+tf_h-1,paper);
+    if(!tf_compact)bx_fill(tf_x,y,tf_x+tf_w-1,y,tf_mono?0:TF_CYAN);
+    if(!tf_compact){
+        bx_spr(tf_x+8,y+3,BT_ART_METER+bt_music_phase);
+        tf_meterlast=bt_music_phase;
+    }
+    if(bt_notice[0]){
+        bx_text(tf_x+(tf_compact?8:32),y+2,bt_notice,15,tf_font);
+        return;
+    }
+    gk_textbox(tf_x+(tf_compact?4:32),y+1,tf_w-(tf_compact?8:40),tf_y+tf_h-y-1,
+        bt_readonly?"READ ONLY    F1 Help    F2 Lessons    F4 Pause    F6 Full    Esc Menu":
+        bt_master_sound?"F1 Help    F2 Lessons    F3 Sound ON    F4 Pause    F6 Full    Esc Menu":
+        "F1 Help    F2 Lessons    F3 Sound OFF    F4 Pause    F6 Full    Esc Menu",
+        15,tf_compact?BT_F_SMALL:BT_F_TEXT,GK_CENTRE|GK_FIT);
+}
+/* bx_out respects the current window clip. An idle pulse redraws exactly
+ * the music icon, so animating it never re-measures the footer text. */
+static void ovl_tf_meter(void)
+{
+    bx_new(tf_x+8,tf_bottom+3,16,10,tf_mono?0:5);
+    bx_spr(tf_x+8,tf_bottom+3,BT_ART_METER+bt_music_phase);
+    bx_out();
+    tf_meterlast=bt_music_phase;
 }
 static void ovl_tf_drawportrait(void)
 {
@@ -752,6 +814,7 @@ void bt_face_paint(void *win,int full)
             else tf_render(tf_x,tf_top,tf_w,tf_bottom-tf_top,3,0);tf_bodykey=key;}
         if(bt_screen==BT_S_SETTINGS){tf_settings=tf_settings_mask();key=tf_string(5381,tf_soundstatus());
             if(!full&&key!=tf_vstatus)tf_render(tf_vsx,tf_vsy,256,tf_th,11,0);tf_vstatus=key;}
+        if(!tf_compact&&tf_meterlast!=bt_music_phase)ovl_tf_meter();
         return;
     }
     tf_nhit=0;oldview=tf_view;oldinput=tf_inputview;
@@ -813,6 +876,7 @@ void bt_face_paint(void *win,int full)
         else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_y+2,tf_w-i-70,8,7,0);}else tf_render(tf_promptx,tf_top+6,224,tf_th,7,0);tf_hintpending=0;}
         else if(tf_statpend){for(c=0;c<5;c++){i=tf_statnext;tf_statnext++;if(tf_statnext>=5)tf_statnext=0;if(tf_statpend&(1<<i)){tf_render(tf_statsx+i*(tf_statsw/5),tf_statsy+(tf_compact?1:5),tf_statsw/5,tf_th,9,i);tf_statpend&=~(1<<i);break;}}}
         else if(tf_cosneeded)ovl_tf_cosmetics();
+        else if(!tf_compact&&tf_meterlast!=bt_music_phase)ovl_tf_meter();
     }
 }
 static int ovl_tf_click(int x,int y)

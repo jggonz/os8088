@@ -17,7 +17,7 @@ import os88bbart as bb
 ROOT = Path(__file__).resolve().parents[1]
 ART = ROOT / 'apps/boratype/art'
 SIZES = [('big', 96, 120), ('small', 40, 48), ('mono', 40, 48), ('cga', 32, 40)]
-FONTS = ['dlg10', 'dlg08', 'sys16']
+FONTS = [str(ART / 'label'), 'dlg08', str(ART / 'keytype')]
 # CGA palette 1, intensity on: black, cyan, magenta, white.
 CGA = [0, 11, 5, 15]
 
@@ -69,7 +69,7 @@ def build(path):
             raise ValueError('directory validation failed')
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_bytes(out)
-    print(f'os88btart: {len(out)} bytes, 28 sprites, 3 shared WIN16 fonts -> {path}')
+    print(f'os88btart: {len(out)} bytes, 28 sprites, 3 bitmap fonts -> {path}')
 
 
 def draft(master, path, blink_path):
@@ -115,6 +115,22 @@ def draft(master, path, blink_path):
 
 
 
+def title_record():
+    """A 432x24 1-bit logo as 27 adjacent 16-pixel shared-font glyphs."""
+    rows = (ART / 'masthead.mask').read_text().splitlines()
+    if len(rows) != 24 or any(len(row) != 432 or set(row) - {'.', '#'} for row in rows):
+        raise ValueError('masthead must be a 432x24 binary mask')
+    count = 27
+    data = bytearray([24, 24, 65, count] + [16] * count + [0] * (2 * count))
+    for i in range(count):
+        struct.pack_into('<H', data, 4 + count + 2 * i, len(data))
+        data.extend([0, 24])
+        for row in rows:
+            bits = row[16*i:16*i+16].replace('.', '0').replace('#', '1')
+            data.extend(int(bits, 2).to_bytes(2, 'big'))
+    return data
+
+
 def build_sound(path, music, sfx):
     # Standard-library-only shared score compiler; no audio or image renderer.
     import os88gkmus as mus
@@ -130,6 +146,26 @@ def build_sound(path, music, sfx):
     # The same committed font source syntax and packer as every other face.
     # An absolute source stem is accepted by read_font's path join.
     records[6] = bb.pack_font(str(ART / 'large'))
+    records[7] = title_record()
+    badges = (ART / 'badges.mask').read_text().splitlines()
+    if len(badges) != 120 or any(len(row) != 24 or set(row) - set(bb.CHARS) for row in badges):
+        raise ValueError('badges must be five 24x24 palette sprites')
+    for i in range(5):
+        pixels = [[bb.CHARS.index(c) for c in row] for row in badges[i*24:(i+1)*24]]
+        records[8+i] = bb.pack_sprite(24, 24, pixels)
+    # One small opaque meter update occupies a byte-aligned 16x10 rectangle.
+    # Invisible pixels expose the purple footer through the shared sprite key.
+    for phase, bars in enumerate(((0,0,0), (2,4,7), (5,7,4), (7,4,2), (3,2,5))):
+        pixels = [[bb.KEY] * 16 for _ in range(10)]
+        for y, row in enumerate(("..####","..####","..#..#","..#..#","..#..#","###.##","###.##","##....")):
+            for x, pixel in enumerate(row):
+                if pixel == '#':
+                    pixels[y+1][x] = 14 if phase else 7
+        for bar, height in enumerate(bars):
+            for y in range(10-height, 10):
+                x = 8+3*bar
+                pixels[y][x:x+2] = [10,10]
+        records[13+phase] = bb.pack_sprite(16,10,pixels)
     data = mus.art_part(records)
     if len(data) > 16384:
         raise ValueError(f'sound/blink/font bank {len(data)} exceeds16KB budget')
@@ -139,32 +175,7 @@ def build_sound(path, music, sfx):
             raise ValueError('sound/blink directory validation failed')
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_bytes(data)
-    print(f'os88btart: {len(data)} bytes, music/SFX +4blink sprites +24px font -> {path}')
-
-
-def draft_font(path):
-    # A development operation only. The selected exact rows are committed;
-    # make reads them through the existing shared font packer.
-    height, ascent, glyphs = bb.read_font('dlg10')
-    target_h = 24
-    lines = ['# Boratype large face, derived from WIN16 dlg10.txt.',
-             '# Wine MS Sans Serif bold bitmap art; source/provenance/license',
-             '# remain apps/win16/fonts/dlg10.txt (LGPL-2.1-or-later).',
-             '# Generated once by tools/os88btart.py draft-font; exact rows',
-             '# below are the selected source. Nearest-neighbour scaling:',
-             '# height24, width min(16, ceil(original advance * 3 / 2)).',
-             f'face {target_h} {ascent * target_h // height}', '']
-    for code, (width, rows) in sorted(glyphs.items()):
-        target_w = min(16, (width * 3 + 1) // 2)
-        lines.append(f'char {code} {chr(code)!r} {target_w}')
-        for y in range(target_h):
-            row = rows[y * height // target_h]
-            lines.append(''.join('#' if row[x * width // target_w] else '.'
-                                 for x in range(target_w)))
-        lines.append('')
-    Path(path).write_text('\n'.join(lines) + '\n')
-    bb.pack_font(str(Path(path).resolve().with_suffix('')))
-    print(f'os88btart: wrote selected24px font source {path}')
+    print(f'os88btart: {len(data)} bytes, music, effects, blink, display type, masthead and badges -> {path}')
 
 
 def preview(path):
@@ -189,7 +200,6 @@ def main():
     q = sp.add_parser('draft'); q.add_argument('master'); q.add_argument('-o', default=str(ART / 'sprites.txt')); q.add_argument('--blink-output', default=str(ART / 'blink.txt'))
     q = sp.add_parser('build-sound'); q.add_argument('-o', required=True); q.add_argument('--music', default=str(ART / 'music.txt')); q.add_argument('--sfx', default=str(ART / 'sfx.txt'))
     q = sp.add_parser('preview'); q.add_argument('-o', required=True)
-    q = sp.add_parser('draft-font'); q.add_argument('-o', default=str(ART / 'large.txt'))
     sp.add_parser('check')
     a = p.parse_args()
     try:
@@ -197,7 +207,6 @@ def main():
         elif a.cmd == 'draft': draft(a.master, a.o, a.blink_output)
         elif a.cmd == 'build-sound': build_sound(a.o, a.music, a.sfx)
         elif a.cmd == 'preview': preview(a.o)
-        elif a.cmd == 'draft-font': draft_font(a.o)
         else:
             ss = sources() + sources(blink=True)
             for n, w, h, rows in ss:

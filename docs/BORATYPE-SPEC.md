@@ -112,7 +112,9 @@ separate shortcut strip. At 480 × 128 the established compact geometry and
 keyboard controls remain available. Text, controls, counters, and keycaps
 are live drawables. A monochrome masthead mask is stored in secondary art
 record 7, using the shared font renderer's 16-pixel glyph strips. Body,
-keycap and prompt type reuse the shipped Liberation Serif bold strikes.
+keycap and prompt type reuse the shipped Liberation Serif bold strikes. Five
+24 × 24 transparent achievement badges use records 8–12 of the same bank.
+The footer music-note meter follows the active soundtrack on the guest clock.
 The four-color exclusive mode retains its character-cell update path.
 
 ## 4. Resources and budgets

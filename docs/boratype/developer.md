@@ -61,10 +61,12 @@ and cannot enable a clip path. [Face notes](face.md) cover native
 geometry and asset IDs.
 
 `tools/os88btart.py build` and `build-sound` use the existing sprite/font
-packers and score compiler on committed pixel/text sources. `draft` and
-`draft-font` are optional development operations. They never run in make.
-The24px face is selected exact-pixel source derived from the committed
-Wine dialog font, retaining its LGPL provenance.
+packers and score compiler on committed pixel/text sources. The compact
+strike comes from the WIN16 dialog font. The 10-, 16- and 24-pixel
+strikes come from the shipped Liberation Serif Bold bitmaps. The masthead
+and achievement badges come from the supplied VGA screens. The optional
+selection tool is `tools/os88btletters.py`. Normal builds read the
+selected masks directly and do not require the reference PNGs.
 
 ## Measurements and acceptance
 
