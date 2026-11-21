@@ -59,7 +59,7 @@ int bx_out(void){flushes++;area+=bandw*bandh;return 0;}
 void bx_setup(unsigned a,void *b,unsigned c,unsigned d,int e){(void)b;(void)c;(void)d;(void)e;bx_bseg=a;}
 void bx_setart2(unsigned a){(void)a;}
 void gk_init(int a){(void)a;}void gk_theme(const unsigned char *a){(void)a;}
-int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){if(!strcmp(s,tf_soundstatus()))status_seen++;if(!strncmp(s,"Borat: ",7))reaction_seen++;if(!strcmp(s,"ACCURACY"))accuracy_y=y;if((!strcmp(s,"-")&&y==accuracy_y)||strstr(s,"Accuracy -"))accuracy_dash++;for(int a=0;a<7;a++)if(strstr(s,tf_achnames[a]))achievement_seen|=1u<<a;(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
+int gk_text(int x,int y,int w,const char *s,int c,int f,int fl){if(!strcmp(s,tf_soundstatus()))status_seen++;if(strstr(s,"Your fingers"))reaction_seen++;if(!strcmp(s,"ACCURACY"))accuracy_y=y;if((!strcmp(s,"-")&&y==accuracy_y)||strstr(s,"Accuracy -"))accuracy_dash++;for(int a=0;a<7;a++)if(strstr(s,tf_achnames[a]))achievement_seen|=1u<<a;(void)x;(void)y;(void)w;(void)c;(void)fl;return bx_twidth(s,f);}
 int gk_textbox(int x,int y,int w,int h,const char *s,int c,int f,int fl){
  if(bt_screen==BT_S_PLAY&&(!strcmp(s,"F")||!strcmp(s,"J"))){
   tf_keyrect(!strcmp(s,"F")?29:32);assert(x*2+w==tf_kx*2+tf_kww);assert(fl&GK_CENTRE);
@@ -127,7 +127,7 @@ void os88_seg_get(void *dst,unsigned seg,unsigned off,unsigned n){assert(seg>=10
 int bt_anim_unpack(unsigned seg,unsigned off,unsigned packed,unsigned raw){assert(seg>=103&&seg<=105&&off+packed<=animlen[seg-103]);assert(raw>0&&raw<=1152);unpacks++;return 0;}
 static void settle_anim(void)
 {
- for(int i=0;i<8&&tf_cosneeded;i++){
+ for(int i=0;i<16&&(tf_cosneeded||tf_savedcaret!=tf_caret_on||tf_dirtyfirst[2]>=0);i++){
   area=flushes=0;bt_face_paint(0,0);
   assert(flushes<=1);if(!tf_compact)assert(area<=(unsigned)(tf_aw*24));
  }

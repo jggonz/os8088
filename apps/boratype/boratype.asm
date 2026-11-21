@@ -31,6 +31,7 @@
 %include "boratype.gen.asm"
 %include "os88ui.inc"
 %define BX_CORE_ONLY
+%define BX_SPRITE_MAX_WIDTH 240       ; widest packed menu illustration
 %define BX_ART2
 %define BX_TXID 500
 %include "breadxt/draw.inc"
