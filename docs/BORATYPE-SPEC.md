@@ -243,6 +243,9 @@ only its changed cells. Periodic statistics repaint their value bands;
 their frames and static labels belong to full damage.
 Each idle pass advances at most one accepted-input cell or four scanlines
 of one hint/statistic value, so queued typing can run between those chunks.
+After cache/layout preparation, native PLAY rechecks BIOS keyboard and OS
+event queues before beginning deferred work; urgent feedback and full damage
+remain complete.
 
 Urgent target cells and physical-key feedback precede statistics, hints,
 progress and portrait cosmetics. Progress damages only the changed fill

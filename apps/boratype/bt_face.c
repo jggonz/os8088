@@ -13,6 +13,7 @@ void bx_fill(int x1,int y1,int x2,int y2,int colour);
 int bx_spr(int x,int y,int id);
 int bx_text(int x,int y,const char *s,int colour,int font);
 int bx_twidth(const char *s,int font);
+int bt_key_pending(void);
 int bx_fonth(int font);
 int bx_out(void);
 void bx_setup(unsigned seg,void *band,unsigned cap,unsigned artseg,int bpp);
@@ -984,7 +985,7 @@ void bt_face_paint(void *win,int full)
     tf_savedwrong=bt_session.last_wrong;tf_savedmods=bt_modifiers;
     tf_savedattempt=bt_session.attempts;tf_savedback=bt_session.backspaces;
     if(full){tf_cosneeded=tf_aready&&tf_avisible;tf_capneeded=0;tf_statpend=0;tf_hintpending=0;tf_dirtyfirst[2]=-1;}
-    else if(!urgent){
+    else if(!urgent&&!bt_key_pending()&&!os88_evq_pending()){
         tf_idleturn^=1;
         if(tf_cosneeded&&(tf_idleturn||(!tf_aseq&&tf_aframe>0&&tf_aframe<4)))ovl_tf_cosmetics();
         else if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,tf_cw,h,8,i);tf_dirtyfirst[2]++;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}

@@ -18,6 +18,7 @@ char *os88_utoa(unsigned,char *);
 void os88_set_color(int);void os88_gfx_fill(int,int,int,int);
 void os88_gfx_frame(int,int,int,int);void os88_gfx_hline(int,int,int);
 void os88_font_run(int,int,const char *,int,int);
+int os88_evq_pending(void);
 #include "../bt.h"
 BTStore bt_store;BTSession bt_session;
 #define TESTLESSON {"F and J","fj ","fj","Rest index fingers on F and J.","fj jf"}
@@ -31,6 +32,9 @@ int bt_screen,bt_selection,bt_ch_duration,bt_ch_diff,bt_master_sound=1;
 int bt_full,bt_readonly,bt_profile_edit,bt_modifiers,bt_practice_weak,bt_blink_frame;
 char bt_notice[64];
 static int hw=640,hh=440,hbpp=4;
+static int pending_key,pending_event;
+int bt_key_pending(void){return pending_key;}
+int os88_evq_pending(void){return pending_event;}
 void os88_set_color(int c){(void)c;}
 void os88_gfx_fill(int a,int b,int c,int d){(void)a;(void)b;(void)c;(void)d;}
 void os88_gfx_frame(int a,int b,int c,int d){assert(a>=8&&c<8+hw&&b>=24&&d<24+hh);}
@@ -149,6 +153,8 @@ static void mirror_and_stat_damage(void)
  while(tf_statpend){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
   assert(area<=(unsigned)((tf_statsw/5+8)*4));assert(++steps<=4);}
  tf_hintpending=1;tf_hintrow=0;steps=0;
+ pending_key=1;area=flushes=0;bt_face_paint(0,0);assert(!flushes&&tf_hintpending&&tf_hintrow==0);pending_key=0;
+ pending_event=1;area=flushes=0;bt_face_paint(0,0);assert(!flushes&&tf_hintpending&&tf_hintrow==0);pending_event=0;
  while(tf_hintpending){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
   assert(area<=(unsigned)(tf_w*4));assert(++steps<=4);}
  assert(!memcmp(&before,&bt_session,sizeof(before)));bt_face_paint(0,1);
