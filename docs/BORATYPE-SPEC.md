@@ -202,7 +202,9 @@ and a progress meter. A challenge meter represents remaining active time;
 its panel header also shows a prominent minutes:seconds countdown.
 other runs represent accepted passage progress. Speed, accuracy, streak,
 active/remaining time and error totals keep separate cached statistic cells.
-Beveled/chamfered keycaps, strong black legends and finger-zone colors are
+The white spacebar spans 42 of the 60 keyboard layout units with four
+modifier keys at the edges. Printable keys use the packaged 16-pixel
+legends when their caps have room. Beveled/chamfered keycaps, strong black legends and finger-zone colors are
 composed on full damage; the target frame, mistake/correction badge and
 held-modifier line update only their reserved flat indicator pixels. The
 five-pixel correction/mistake badge uses clipped native fill/hline spans in

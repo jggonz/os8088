@@ -138,11 +138,11 @@ static const unsigned char tf_keys[TF_KEYS][6] = {
     {13,0,2,51,9,8},
     {16,0,3,0,9,1},
     {17,0,3,49,11,8},
-    {32,32,4,14,28,0},
-    {18,0,4,0,7,1},
-    {19,0,4,7,7,1},
-    {21,0,4,42,7,8},
-    {22,0,4,49,11,8},
+    {32,32,4,9,42,0},
+    {18,0,4,0,5,1},
+    {19,0,4,5,4,1},
+    {21,0,4,51,4,8},
+    {22,0,4,55,5,8},
     {23,0,4,60,0,0},
     {24,0,4,60,0,0},
 };
@@ -319,7 +319,7 @@ static const char *tf_keylabel(int i)
     return modlabels[i-47];
 }
 static int tf_keycolor(int i)
-{return tf_mono?15:i>=47?(i==53?14:7):tf_zones[tf_keys[i][5]];}
+{return tf_mono?15:i>=47?(i==53?15:7):tf_zones[tf_keys[i][5]];}
 /* Static cap depth belongs to the cold full/compact renderer. Hot state
  * changes touch only the reserved frame, badge and held-modifier line. */
 static void ovl_tf_keycap(int i,int state)
@@ -354,7 +354,7 @@ static void tf_drawkey(int i,int selective)
     int state,f,fh,lx,ly,lw;const char *s;
     tf_keyrect(i);if(tf_kww<=0||tf_kx+tf_kww<=tf_sx||tf_kx>=tf_sx+tf_sw||tf_ky0+tf_khh<=tf_sy||tf_ky0>=tf_sy+tf_sh)return;
     state=tf_keystate(i);ovl_tf_keycap(i,state);
-    s=tf_keylabel(i);f=tf_compact?BT_F_SMALL:(tf_kww<34?-1:tf_khh>=26?BT_F_TITLE:tf_font);fh=f==BT_F_TITLE?16:f<0||tf_compact?8:10;
+    s=tf_keylabel(i);f=tf_compact?BT_F_SMALL:(i<47&&tf_kww>=24&&tf_khh>=22?BT_F_TITLE:tf_kww<34?-1:tf_khh>=26?BT_F_TITLE:tf_font);fh=f==BT_F_TITLE?16:f<0||tf_compact?8:10;
     ly=tf_ky0+1+(tf_khh-3-fh)/2;
     if(!selective||(ly<tf_sy+tf_sh&&ly+fh>tf_sy)){
         lw=bx_twidth(s,f);lx=tf_kx+4+(tf_kww-8-lw)/2;
