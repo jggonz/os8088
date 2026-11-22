@@ -259542,6 +259542,23 @@ Heap while the wide panel is open, beyond the compact panel's: `CPWIDE.DRV`
 at the close. The open reads one file more than the compact face (the
 module) and one data file; the XT open time is the QA pass's to measure.
 
+**Wave 2, S8 (the Display page), 2026-11-21**, against `feature/cpwide`
+94a7d9784 (fresh builds of each; `make budget-check` holds all four kernels):
+
+| | kern_big | kern_emu | kern_mega | kern_small |
+|---|---|---|---|---|
+| resident | +3 (`cp_tickp` +1 `.text`, `xor al, [mem]` +2 `.cold`) | +3 | +3 | byte-identical |
+| rungs | kernel 265 → 262 left | kernel 19 → 16 left | image 211 → 210, cold 56 → 54 left | unchanged |
+| `CTRL.DRV` | 16,663 → 16,695 (+32) | 16,681 → 16,713 (+32) | 16,902 → 16,934 (+32) | unchanged |
+| `CPWIDE.DRV` image+bss (`MODV_SIZE`) | 5,153 → 9,860 (+4,707) | 5,153 → 9,860 | → 9,890 | - |
+| `CPWIDE.DRV` on the disk (lz4) | 4,471 → 8,474 | 4,471 → 8,474 | 4,485 → 8,488 | - |
+| `VESA.DRV` | 3,677 → 3,698 (+21, `vx_find`) | same | same | same |
+
+The page is 4,707 bytes of `CPWIDE.DRV` against a 3,300 budget - over by
+1,407, which is the lead's to settle (the module's cap, `MOD_MAX_KB` 17,408,
+still holds with the other two pages on their budgets). The heap while the
+wide panel is open grows by the module's claim, 5,120 → 10,240 bytes.
+
 ### 134.13 Testing
 
 The rows the plan names, and the QA pass of the plan's final section. The
