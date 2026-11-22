@@ -258961,7 +258961,7 @@ Built by `tools/cpwdat.py` from `kernel/cpwart/*.png` and
 +8   dw off32         offset of the 32x32 block
 +10  dw offcat        offset of the catalog
 +12  dw size          the file's length
-+14  dw 0             reserved
++14  dw offstr        offset of the description string block (§134.7)
 16x16 icon, 160 bytes: 128 bytes 4bpp (stride 8, high nibble leftmost,
          §5.4) + 16 mask words (bit 15 = leftmost pixel, 1 = opaque)
 32x32 icon, 640 bytes: 512 bytes 4bpp (stride 16) + 32 mask dwords
@@ -258977,9 +258977,10 @@ and status marks (Display, Sound, Storage, CD-ROM, RAM disk, Network card,
 Input, Memory, System, Screen saver, USB, Virtual machine, Unknown, OK,
 Error, Warning); 32×32 indices 0-11 are the header icons (Scheduler,
 Date/Time, Keyboard, Floppy, Drivers, Display, Sound, Theme, Dock, Hard
-disk, Network, generic driver). `kernel/cpwdat.inc` (generated, never
-hand-edited) carries the index and offset `equ`s the module assembles with,
-and the build fails if it and the file disagree.
+disk, Network, generic driver). `kernel/cpwfmt.inc` carries the offsets,
+sizes and index `equ`s (`CWD_*`, `CWI16_*`, `CWI32_*`, `CWC_*`) that the
+module assembles with; `tools/cpwdat.py` refuses to write a file that
+disagrees with it.
 
 ### 134.7 The driver catalog - what a driver IS, outside the kernel
 
@@ -258996,11 +258997,15 @@ fixed records -
                       4 network, 5 input, 6 memory, 7 system
 +13  db icon          16x16 icon index
 +14  db long[26]      long name, NUL-terminated (<= 25 chars)
-+40  db pad[24]       reserved (0)
++40  dw d1            offset (from the file's start) of description line 1
++42  dw d2            ...of line 2, or 0
++44  db pad[20]       reserved (0)
 ```
 
-and the two-line descriptions (≤ 46 characters a line) in a string block
-the story S5 pins here, with the record's offset to it. A `drv_tab` row with
+and the description lines themselves - NUL-terminated, at most 46
+characters each - in the string block at `offstr`. The constants are
+`kernel/cpwfmt.inc`, which the module assembles with and `tools/cpwdat.py`
+checks against. A `drv_tab` row with
 no catalog entry is shown with the Unknown icon, its `drv_tab` title and no
 description - a new driver works before anyone writes its entry.
 `tests/unit/t_cpwdat.py` (fast tier) fails the build for any shipped

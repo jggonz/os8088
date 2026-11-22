@@ -59,7 +59,8 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
   documented for S7-S9.
 - [ ] **S5** (`art`) `tools/cpwdat.py`, `drivers/catalog.toml` with every
   shipped driver, `CPWIDE.DAT` on every system disk of big/emu/mega in all
-  four geometries plus the live media, `kernel/cpwdat.inc`, the
+  four geometries plus the live media, checked against
+  `kernel/cpwfmt.inc` (lead, wave 0), the
   `t_cpwdat` fast-tier gate (134.6, 134.7).
 - [ ] **S6** (`vxinfo`) `VXV_INFO` in `VESA.DRV` (120.10): card facts and
   the offered-mode table by index; `VX_ABI_VER` step and abilock.
