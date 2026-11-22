@@ -76,7 +76,7 @@ sizes, cycle measurements, installed-app scenarios, adapter evidence and
 specific limits. It links the captured guest gallery and its hash manifest.
 The binding contract remains [BORATYPE-SPEC](../BORATYPE-SPEC.md).
 
-The sampled-audio build has a 52,672-byte resident image and 11,160 bytes of BSS. Original art and sound/fonts are
+The sampled-audio build has a 52,700-byte resident image and 11,160 bytes of BSS. Original art and sound/fonts are
 embedded parts; cold file/menu/codec work is an eager C overlay. Drawing uses an 8KB movable band and lazily loaded animation and menu parts.
 The original acceptance build used
 163.5 KiB of app-owned memory; the source-audited startup peak matches that
