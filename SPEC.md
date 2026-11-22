@@ -240360,6 +240360,15 @@ and `tests/vesa.py`'s `px` re-expands a 565 pixel QEMU's way because Bochs's
 display fills the low bits with ones. `vesablitd` is not ported: its
 picture disk carries the shipped PiXEL, and kern_mega runs PiXEL's arm.
 
+### 120.10 Mode information for a mode changer - `VXV_INFO`
+
+**Pinned only** (docs/plans/CPWIDE-PLAN.md, story S6). The wide Control
+Panel's mode table (§134.9) needs every offered mode's geometry, depth and
+memory, and the card's VBE version and video memory - which `VXV_NEXT`
+(§120.2.3) answers only one class at a time and the card facts not at all.
+S6 pins the verb here: its number, registers, the record it fills, and the
+`VX_ABI_VER` step.
+
 ## 121. XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`)
 
 **XTMP3 plays MP3 files at the best quality the machine and its audio device
@@ -258820,3 +258829,240 @@ routines that follow it:
 
 Byteopoly's banks: song bank 1,129 bytes (4 songs, 37 pitches, 7 patches,
 20 patterns), effects bank 357 (20 effects), of a 5 KB allowance.
+
+## 134. The wide Control Panel - a second face for VGA and VESA (`kernel/cpw*.inc`, `CPWIDE.DRV`, `CPWIDE.DAT`)
+
+**Status: the plan is `docs/plans/CPWIDE-PLAN.md`; each story there says
+whether a subsection below is pinned only or shipped.** Until a story is
+ticked, what its subsection describes is a design, not a fact about the
+kernel.
+
+**Premise.** The Control Panel of §31 is 320×151 because CGA is 200 rows:
+§31.1 pins 151 as the minimum that holds nine list rows under `wm_fit`'s CGA
+ceiling, and every page lives in a 221×132 pane. On a 640×480 VGA or an
+800×600 / 1024×768 VESA desktop that pane is a postage stamp: the Drivers
+page shows four drivers at a time with no room to say what any of them is,
+the Display page cannot list the modes a VBE card offers (§120.6 cycles them
+through one radio row), and the Theme page names four themes it cannot show.
+The owner's brief (2026-11-21):
+
+> redesign the control panel for vga and vesa video modes where there is
+> more room to show information and provide a more powerful control panel
+> layout. Use a modular approach to determine what control panel UI to load
+> without bloat. Color, assets, icons and other UI elements to enable better
+> usability are allowed. The drivers view is especially in need of a
+> redesign since we plan to grow the library of drivers. I also want to have
+> a more powerful video mode changer and theme changer since I am going to
+> build out more VESA video modes and special video drivers in the future.
+
+The design reference is three mockups and two icon sheets made with Codex's
+image generation, kept with their prompts as source (`docs/cpwide/`,
+`kernel/cpwart/`).
+
+### 134.1 What it is, in one table
+
+| | |
+|---|---|
+| what | a second FACE of the same Control Panel: the same `KIND_CTRL` window, the same settings, the same `SYSTEM.CFG` bytes, the same close-time flush (§31.8) - drawn as a large two-pane window with icons, grouped page list, a header strip and a status line |
+| where | **`kern_big`, `kern_emu` and `kern_mega` only.** `kern_small` has no VGA renderer (§39.27) and no driver layer (§51.0); it never assembles a byte of this section and its `CTRL.DRV` is byte for byte unchanged |
+| when | at OPEN, when the primary display is a colour display of at least 640×480: `[vid_kind]` is `VID_VGA` or `VID_VESA` and `[vid_pw]` ≥ 640 and `[vid_ph]` ≥ 480 (so EGA's 640×350, VESA's 640×400, Hercules and CGA keep the compact face). The decision is taken once per open; a `vid_switch` while the panel is open does not change face until it is closed and opened again (§134.2) |
+| how it loads | `CTRL.DRV` is loaded exactly as today, and then `CPWIDE.DRV` - a second on-demand module (§2.8), `MOD_CPW` - beside it. `CTRL.DRV` keeps ALL the panel's logic and every compact page; `CPWIDE.DRV` carries only the wide chrome, the shared widget kit of §134.5 and the three pages drawn natively wide (Drivers §134.8, Display §134.9, Theme §134.11). The two call each other through slot blocks (§134.4). Nothing is assembled twice |
+| assets | `CPWIDE.DAT`, a data file beside `CTRL.DRV` on every system disk of the three kernels: the icon sheets as 4bpp + mask and the driver catalog (§134.6, §134.7). Read once at open into a heap claim, freed at close |
+| refusal | **a refusal is a normal path, and it is the compact face.** `CPWIDE.DRV` or `CPWIDE.DAT` missing, refused by `mod_check`, or a heap that cannot fund them: the panel opens compact, exactly as before this section existed, with no message. The wide face is an improvement, never a requirement |
+| resident cost | the `MOD_CPW` row, its name, its `mod_fpt` word and slot block, the open-time predicate, and one slot more in `CTRL.DRV`'s block for the gate - **no rung crossed on any kernel** (CLAUDE.md, and the owner's standing zero-resident rule). Measured per wave in the plan |
+
+### 134.2 Choosing the face, loading it, and falling back
+
+Pinned by story S1 (the `shell` agent), with the measured byte costs.
+Binding already:
+
+- The predicate is read at open and stored as one byte, `[cp_wide]`, in
+  `CTRL.DRV`'s image (not resident): 0 compact, 1 wide.
+- `CTRL.DRV`'s far entries (`CPE_PAINT`, `CPE_ONCLICK`, `CPE_ONUP`,
+  `CPE_ONDRAG`, `CPE_ONKEY`, `CPE_TICK`, `CPE_FLUSH`) forward to `CPWIDE.DRV`
+  when `[cp_wide]` is 1. The resident `cpf_*` thunks do not change: the
+  forwarding costs `CTRL.DRV` bytes, not kernel bytes.
+- The window's size is chosen before `app_launch`: wide is **616×408** on a
+  640×480 desktop and **760×520** on any desktop at least 800×600 (§134.3
+  gives the layout for both; every inner dimension derives from the content
+  box, so a third size is a table row).
+- `mod_drop MOD_CPW` happens on the panel's close path beside `CTRL.DRV`'s,
+  and `CPWIDE.DAT`'s claim is freed there too. A face that fails to load
+  half-way (module in, data refused) drops what it took and opens compact.
+- `MOD_CPW` is an ordinary image (`MOD_CACHE` may keep it as purgeable on
+  `kern_big`/`kern_emu`, §2.8.3; kept above 1MB on `kern_mega`, §2.8.3.3).
+
+### 134.3 The window, its panes, and the hosted pages
+
+Pinned by S2. The layout is the mockups' (`docs/cpwide/cp-*.png`):
+
+- a **page list** down the left, 120 px wide, grouped under grey headings -
+  SYSTEM (Scheduler, Date/Time, Keyboard, Floppy), HARDWARE (Drivers,
+  Display, Sound, then one row per driver-owned page, §31.9), APPEARANCE
+  (Theme, Dock) - each row a 16×16 icon and the page's name; the selected
+  row a blue bar with white text. A row hidden on the compact face (§31.10.1)
+  is hidden here too;
+- a **header strip** across the page area: the page's 32×32 icon, its title
+  and a one-line description, with a 1 px rule under it;
+- the **page area** under it;
+- a **status line** along the bottom of the window: free memory
+  (`OSAPI_MEM_AVAIL`'s figure), how many drivers are loaded of how many
+  there are, and "settings saved when the panel closes" - redrawn only when
+  one of its numbers changes.
+
+**A page without a wide version is HOSTED.** Scheduler, Date/Time, Keyboard,
+Floppy, Sound, Dock and every driver-owned page (§31.9) are the compact
+pages, drawn by `CTRL.DRV`'s own paint and click procs at an origin inside
+the wide page area - the page contract of §31.1 already takes the pane
+origin in DI/BP (DI/DX for a driver page), so hosting is an origin, not a
+port. The probe/arm/release machinery (§31.1.3) keeps working because the
+origin it recomputes comes from one place that knows the face. A hosted page
+is a legitimate end state, not a placeholder; a later story may give any of
+them a wide version without touching the others.
+
+### 134.4 The gate - how the two images call each other
+
+Pinned by S3. `CPWIDE.DRV` reaches the panel's logic through ONE new
+`CTRL.DRV` entry, `CPE_GATE`, dispatched on AH (`CPG_*`): at least - host
+paint / click / release / drag / key of compact page *n* at an origin; load
+and unload `drv_tab` row *n* (the Drivers page's existing bodies, with the
+VESA switch-back of §120.4); a row's status sentence staged (`drv_status_x`);
+`vid_switch`; the "settings owed" mark (`cp_wdset`) and the repaint post
+(`cp_repost`). The opcode table is in §134.4 when S3 lands and is the ONLY
+way a wide page changes state that `CTRL.DRV` owns. A wide page may read
+kernel data directly (DS = `KERNEL_SEG`) and may call kernel `.cold` /
+`.text` routines through the `cw_*` shims as any module does.
+
+### 134.5 The widget kit
+
+Pinned by S4 - the procs every wide page draws with, in `kernel/cpwkit.inc`:
+a framed group box with a title band; a push button (through
+`os88ui_kbtn`); a tab / filter strip; a scrolling TABLE with a header row,
+column descriptors, a selection bar and the kernel scroll bar
+(`os88ui_sbar`, §20.5); a status badge (coloured ground, 8×8 text); a 16×16
+and a 32×32 icon from `CPWIDE.DAT` over any ground colour; and text longer
+than `cp_sbuf`'s 27 characters drawn in staged chunks. Every text draw is
+`font_run` (§6.1, §6.6); every redraw on a click is the control that
+changed (§31.1.3, §31.6.1, PERFORMANCE.md rule 1).
+
+### 134.6 `CPWIDE.DAT` - the asset file
+
+Built by `tools/cpwdat.py` from `kernel/cpwart/*.png` and
+`drivers/catalog.toml`; deterministic, no generation service in `make`
+(CLAUDE.md, *Treat artwork as source*). Little-endian:
+
+```
++0   db 'CW'          magic
++2   db 1             version
++3   db n16           16x16 icons
++4   db n32           32x32 icons
++5   db ncat          catalog entries (§134.7)
++6   dw off16         offset of the 16x16 block
++8   dw off32         offset of the 32x32 block
++10  dw offcat        offset of the catalog
++12  dw size          the file's length
++14  dw 0             reserved
+16x16 icon, 160 bytes: 128 bytes 4bpp (stride 8, high nibble leftmost,
+         §5.4) + 16 mask words (bit 15 = leftmost pixel, 1 = opaque)
+32x32 icon, 640 bytes: 512 bytes 4bpp (stride 16) + 32 mask dwords
+         (two words a row, left word first, same bit order)
+```
+
+A transparent pixel's colour nibble is 0 and means nothing; the drawer
+substitutes the ground. Icon indices are the sheets' cells, row-major:
+16×16 indices 0-15 are page icons (Scheduler, Date/Time, Keyboard, Floppy,
+Drivers, Display, Sound, Theme, Dock, Hard disk, Network, Debug monitor,
+generic driver page, Mouse, Memory, Ports) and 16-31 the driver categories
+and status marks (Display, Sound, Storage, CD-ROM, RAM disk, Network card,
+Input, Memory, System, Screen saver, USB, Virtual machine, Unknown, OK,
+Error, Warning); 32×32 indices 0-11 are the header icons (Scheduler,
+Date/Time, Keyboard, Floppy, Drivers, Display, Sound, Theme, Dock, Hard
+disk, Network, generic driver). `kernel/cpwdat.inc` (generated, never
+hand-edited) carries the index and offset `equ`s the module assembles with,
+and the build fails if it and the file disagree.
+
+### 134.7 The driver catalog - what a driver IS, outside the kernel
+
+`drv_tab` (§51) knows a driver's file, title, class and memory figure and
+nothing a user would call a description. A library that grows by dozens
+cannot put that in resident tables, so it lives in `drivers/catalog.toml`,
+one table per driver FILE, compiled into `CPWIDE.DAT`'s catalog: 64-byte
+fixed records -
+
+```
++0   db file[12]      8.3 name, NUL-padded - the key, matched against
+                      the drv_tab row's DRVR_FILE name
++12  db cat           CWC_*: 0 unknown, 1 display, 2 sound, 3 storage,
+                      4 network, 5 input, 6 memory, 7 system
++13  db icon          16x16 icon index
++14  db long[26]      long name, NUL-terminated (<= 25 chars)
++40  db pad[24]       reserved (0)
+```
+
+and the two-line descriptions (≤ 46 characters a line) in a string block
+the story S5 pins here, with the record's offset to it. A `drv_tab` row with
+no catalog entry is shown with the Unknown icon, its `drv_tab` title and no
+description - a new driver works before anyone writes its entry.
+`tests/unit/t_cpwdat.py` (fast tier) fails the build for any shipped
+`drv_tab` row of any kernel without an entry, an entry whose file is no
+row's, a line over its limit, or an icon outside the palette.
+
+### 134.8 The Drivers page
+
+Pinned by S7, to the mockup `docs/cpwide/cp-drivers-vga-640x480.png`:
+category filter tabs (All, then the `CWC_*` categories that have a row on
+this kernel); a scrolling table - category icon, name, status badge (green
+Loaded, grey Off, red No hardware, yellow any other refusal sentence),
+memory (§31.6.2's figure, same rules), and a **Start at boot** check box
+that toggles the row's want bit alone; a DETAILS group for the selected
+row - 32×32 icon, long name, file name, description, `drv_status`'s
+sentence, memory - and buttons **Load**, **Unload** and **Settings...**
+(live when the driver publishes a page, §31.9: selects that page) and
+**Ports...** (hosts the compact Ports view, §31.15). Load and Unload are
+the compact page's semantics exactly (§31.6), reached through the gate.
+
+### 134.9 The Display page - the mode changer
+
+Pinned by S8, to `docs/cpwide/cp-display-vesa-1024x768.png`: an adapter
+list (the compact page's rows, §31.10); for the VESA adapter a MODE TABLE
+of every mode the card offers (resolution, colours, memory it uses,
+current / recommended / at-startup marks) read through §120.10's verb, with
+colour-depth filters; a monitor picture drawn to the selected mode's aspect;
+**Apply** (switch now and keep - Set Primary's meaning), **Test...** (switch
+now for 15 seconds under a "Keep this mode?" box with **Keep** and
+**Revert** and a countdown driven by the panel's tick, `CPE_TICK`; on no
+answer, revert - a mode the monitor cannot show must undo itself), **Use
+this mode at startup** (the `VE` class byte, §120.2.3), **Force Color**
+(§31.10.4), and an information box: VBE version, video memory, the running
+mode. Everything a future video driver offers is reached the same way, which
+is why the table reads modes through a verb and not out of a fixed list.
+
+### 134.10 Reserved (VESA mode information - see §120.10)
+
+The verb the mode table reads is the VESA driver's, so its contract is in
+§120.10 beside the others; this number is kept so §134's numbering does not
+move.
+
+### 134.11 The Theme page - the theme changer
+
+Pinned by S9, to `docs/cpwide/cp-theme-vga-640x480.png`: four preview
+cards (Bright, Dark, Color, Windows), each a miniature window and menu bar
+drawn in that theme's own pens, the selected one framed; the eight Color
+presets (§76.14.14) as swatches applied with one click, and **Customize...**
+(THMPAL.DRV, as the compact page); an Effects group (window animations,
+§76.4); and a Screen Saver group with **Settings...** (§79.7). A theme a
+display cannot show (Color on 1bpp, §76.12.1) is never offered here because
+this face exists only on colour displays, and the refusal stays `thm_set`'s.
+
+### 134.12 Cost, measured
+
+Filled per wave from `tools/kernsize.py` (all three kernels), the images'
+sizes, the heap held while the panel is open, and the open time on the XT
+with VGA (MartyPC `os8088_xt_vga`) against the compact face.
+
+### 134.13 Testing
+
+The rows the plan names, and the QA pass of the plan's final section. The
+compact face's rows (`dispcp`, `cpnames`, `cplistrow`, `cpup`, `cppromise`,
+`btnall`, `cfgtrip`, ...) must stay green on CGA, Hercules and EGA, where it
+is still the only face.
