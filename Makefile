@@ -4330,7 +4330,13 @@ COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
 # it would take two thirds of what the disk has left.
 # System Check's manifest marks them OPTIONAL (118.2.3), so a hard disk
 # installed from this disk is not reported as missing them.
-SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv
+# The WIDE CONTROL PANEL's two files (SPEC.md 134.2) are the FIFTH and
+# SIXTH, an interim decision of 2026-11-21 pending the owner's: the wave-2
+# pages took CPWIDE.DRV past what the disk had left (708 clusters of 706).
+# Without them the panel opens compact, silently - 134.2's refusal path - so
+# a 360KB boot is the compact face, as it was before 134 existed.
+SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv \
+                $(KMODDIR)/cpwide.drv $(BUILD)/cpwide.dat
 DRIVERS360 = $(if $(filter $(BUILD)/cdrom.drv,$(DRIVERS)),,$(error \
     DRIVERS360 filters $(BUILD)/cdrom.drv out of DRIVERS and it is not \
     there - SPEC.md 119.6.7's omission now matches nothing))$(filter-out \
