@@ -9320,8 +9320,8 @@ MODV_SIZE equ modv_end - $$
 %if MODV_SIZE > MOD_MAX_KB*1024
 %error "CPWIDE.DRV is over MOD_MAX_KB - mod_need would refuse it at run time"
 %endif
-%if CPW_D_ROWS + DRV_MAX > CPW_W_PAGE + CPW_W_PAGEN
-  %error "cpwide: the catalog's rows outgrew the page's working bytes"
+%if CPD_ROWS + DRV_MAX > CPW_W_PAGE + CPW_W_PAGEN
+  %error "cpwide: the Drivers page's rows outgrew the page's working bytes"
 %endif
 %endif
 
