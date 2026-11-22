@@ -75,4 +75,9 @@ CPG_THMCUST equ 18              ; Customize... (THMPAL.DRV, SPEC.md 76.14.14)
 CPG_SAVER   equ 19              ; the screen saver's settings (SPEC.md 79.7)
 CPG_WDSET   equ 20              ; SYSTEM.CFG owed at the close (SPEC.md 31.8)
 CPG_REPOST  equ 21              ; ...and every window repainted (cp_repost)
-CPG_N       equ 22
+                                ; 22-24 are S7's (SPEC.md 134.8): refusals here
+CPG_VIDARR  equ 25              ; AL = 0 Single / 1 Right / 2 Below: the
+                                ; desktop arrangement, now (SPEC.md 134.9.5)
+CPG_GLYPH   equ 26              ; os88ui_glyph: CX/DX screen, AL = OS88UI_G*,
+                                ; BL = 1 greyed - CTRL.DRV's own (134.9.5)
+CPG_N       equ 27              ; (27, 28 reserved for S8, unused)

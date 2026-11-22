@@ -898,6 +898,11 @@ cp_tfull: db 0
 ; it whenever it names something this machine cannot do, which is what makes
 ; the byte safe to keep across a switch.
 cp_vsel:  db 0xFF
+%ifdef KERN_BIG
+; The page the resident tick gate passes (cp_tick_due_x): Date/Time's, and the
+; wide Display page's while its Test... counts down (SPEC.md 134.9.4)
+cp_tickp: db CP_ITIME
+%endif
 
 ; Sound page geometry, PANE-relative. Three control rows at a tighter
 ; 16px pitch than the two-row pages (the page holds more), the Test
@@ -1061,10 +1066,11 @@ section .modu                   ; ...and the PANEL from here on: the stubs below
 ; the desktop, once a minute. Nothing errored and nothing hung.
 %include "shutdown.inc"
 
-modc_e_flush:   call cp_flush_close_x   ; ...a stub still, because shutdown
-%ifdef KERN_BIG                         ; calls the body NEAR as well - and the
-            call cp_wclose              ; wide face goes with the panel (SPEC.md
-%endif                                  ; 134.2): its claim and its image
+modc_e_flush:                           ; a stub still, because shutdown calls
+%ifdef KERN_BIG                         ; the body NEAR as well. The wide face
+            call cp_wclose              ; goes with the panel (SPEC.md 134.2) -
+%endif                                  ; FIRST, so a Test... running reverts
+            call cp_flush_close_x       ; before SYSTEM.CFG is written (134.9.3)
             retf
 ;
 ; THE OTHER FIVE ARE THE BODIES, entered far and leaving by kretf_bp - the
@@ -1318,6 +1324,9 @@ cpg_tab:
     dw cp_thm_saver             ; CPG_SAVER    nothing
     dw cp_wdset                 ; CPG_WDSET    nothing
     dw cp_repost                ; CPG_REPOST   nothing
+    dw cpg_no, cpg_no, cpg_no   ; 22-24: S7's (SPEC.md 134.8) - refused here
+    dw cpg_vidarr               ; CPG_VIDARR   AL = 0/1/2 (SPEC.md 134.9.5)
+    dw cpg_glyph                ; CPG_GLYPH    CX/DX screen, AL, BL = greyed
 %if ($ - cpg_tab) / 2 != CPG_N
   %error "ctrl: cpg_tab and the CPG_* opcodes (cpwlay.inc) disagree"
 %endif
@@ -1325,6 +1334,24 @@ cpg_tab:
 cpg_hkey:
     mov ax, bx                  ; W_ONKEY's AX: AH carried the opcode
     jmp cp_onkey_x
+
+; cpg_vidarr - CPG_VIDARR: the desktop line's body (cp_vid_arr) for the wide
+; Display page, every register kept and CF its answer (SPEC.md 134.9.5)
+cpg_vidarr:
+    call kentm_si
+    call cp_vid_arr
+    jmp kretm_si
+; cpg_glyph - CPG_GLYPH: os88ui_glyph, the greyed flag in BL because AH is
+; the opcode (SPEC.md 134.9.5). Keeps every register
+cpg_glyph:
+    push ax
+    mov ah, bl
+    CPXN os88ui_glyph           ; IN THIS IMAGE (OS88UI_KGLYPH, fdlg.inc)
+    pop ax
+    ret
+cpg_no:                         ; an opcode another wave's branch owns
+    stc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cpg_open - CPG_OPEN: choose the face, and open the panel (cp_open_x)
@@ -1552,7 +1579,11 @@ cp_tick_due_x:
     push bx
     push di
     mov al, [cp_sel]
+%ifdef KERN_BIG
+    xor al, [cp_tickp]          ; Date/Time, or Display in a test (134.9.4)
+%else
     xor al, CP_ITIME            ; ...and `xor` leaves CF = 0, so every "no"
+%endif
     jnz .out                    ; below can go straight to .out
     CP_LIVE                     ; CF = 1: no live Control Panel
     cmc
@@ -5181,19 +5212,32 @@ cp_vid_click:
     call cp_vid_msel
     cmp al, ah
     je .done                    ; draw nothing, exactly like the rows above
+    mov al, ah
+    call cp_vid_arr             ; NOTHING IS REDRAWN after it (below)
+%endif
+    jmp .done                   ; (near on kern_big: .fc's 0/1 store, 39.28)
 
-    mov al, ah                  ; SPEC.md 39.19's two bytes, from the three
-    or al, al                   ; arrangements: Single has no layout
-    jz .msing                   ; (AL = 0 is Single's mode byte too)
-    dec ax                      ; AL >= 1, so no borrow reaches AH
-    mov [vid_dlay], al
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_vid_arr - put the desktop in arrangement AL (0 Single, 1 Right, 2 Below):
+;              the desktop line's click body, and the wide Display page's
+;              CPG_VIDARR (SPEC.md 31.10.2, 134.9.5)
+; out: CF = 1 EXTD.DRV refused (the panel's load line toasted); clobbers
+;      AX and whatever vid_disp_init / wm_refit spend - every caller is
+;      inside a KENT frame
+; -----------------------------------------------------------------------------
+cp_vid_arr:
+    or al, al                   ; SPEC.md 39.19's two bytes, from the three
+    jz .msing                   ; arrangements: Single has no layout (AL = 0
+    dec ax                      ; is Single's mode byte too). AL >= 1, so no
+    mov [vid_dlay], al          ; borrow reaches AH
     mov al, 1
 .msing:
     mov [vid_dmode], al
     ; ...and it takes effect NOW, with only the record of it waiting for the
     ; close (SPEC.md 31.8). NOTHING IS REDRAWN, for the Activate button's
-    ; reason one screen up: vid_disp_init moves the desktop and re-fits every
-    ; window, so DI/BP describe a rectangle that may no longer exist.
+    ; reason: vid_disp_init moves the desktop and re-fits every window, so
+    ; the caller's origin may describe a rectangle that no longer exists.
     call cxf_sync               ; Extend: EXTD.DRV FIRST (SPEC.md 39.19.6)
     jc .mref                    ; refused, and [vid_dmode] is Single again
     call vid_disp_init           ; (vid_disp_relayout's three, written out:
@@ -5202,10 +5246,8 @@ cp_vid_click:
                                  ; first and last are this image's own now)
     call cxf_sync               ; Single: the image goes AFTER the collapse
     call cp_repost              ; ...and SAY SO once (SPEC.md 13.13)
-%endif
-    jmp .done                   ; (near on kern_big: .fc's 0/1 store, 39.28)
-
-%ifdef KERN_BIG
+    clc
+    ret
 .mref:                          ; EXTD.DRV refused (SPEC.md 39.19.6): the
                                 ; panel's own load string - put the system
     push si                     ; disk in. The radio still reads Single,
@@ -5221,7 +5263,8 @@ cp_vid_click:
                                 ; what saw it
     call cp_toast
     pop si
-    jmp .done
+    stc
+    ret
 %endif
 
 
