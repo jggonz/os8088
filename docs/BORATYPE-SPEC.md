@@ -273,12 +273,24 @@ Geometry arrangement and non-typing menu-key handling are cold overlay work;
 the unchanged-layout check and active lesson-key route remain resident.
 Initial allowances: engine and lesson data 18KB, UI and platform 26KB,
 sound/reaction code and data 8KB, BSS 10KB. Art part ≤64KB, audio part ≤16KB,
-drawing band 8KB (512 paragraphs). Music and effects require no application
-audio heap claims. Every claim
-is movable with a relocation callback, or explicitly pinned during transfer.
+drawing band 8KB (512 paragraphs). The synthesized score and effects require no application audio heap claims.
+The optional sampled soundtrack holds two pinned banks during the instance lifetime
+so the worker can decode through stable segment addresses.
 The final evidence records actual costs; these are planning allowances.
 
 ## 5. Audio and reactions
+
+An optional installed PCM pack supplies one looping music track at 25% linear
+gain and thirteen named event sounds. The host importer converts local files
+to 8 kHz mono and builds two independently bounded banks. Each byte indexes
+four PCM samples in the bank's 256-vector dictionary. The music gain is fixed; Music and Effects can each be toggled. A worker mixes into the SOUND.DRV ring,
+while file loading, stream open and close belong to the UI task. No disk read
+occurs on a scoring event. On a sampled-sound installation the full-color
+lesson can park its menu artwork to make room for native portrait frames.
+The next menu restores that artwork after releasing lesson frames. Missing media or PCM hardware retains the original
+score and synthesized effects; captions remain active. See the local import
+and trigger table in docs/boratype/audio.md.
+
 
 Original menu, lesson and challenge loops (30–90 seconds), plus three
 stingers and nine or more effects, compiled with tools/os88gkmus.py.
@@ -299,9 +311,9 @@ Caption and portrait animation clocks are independent from scoring.
 A no-input completion receives neutral guidance, never success praise; it
 does not create a record or an achievement.
 
-The user-selected scope is original music, sound effects and visual messages.
-There are no sound clips, voice packs, speech controls, PCM transport or audio
-importer. Reactions never depend on sound being enabled: muted and readonly
+The regular disk carries the original score and synthesized effects. The
+personalized disk also includes the user-imported PCM banks. Reactions never
+depend on sound being enabled: muted and readonly
 instances retain their captions, expressions, cooldowns and focused idle jokes.
 The BTT1 voice byte remains an unused legacy field for format compatibility;
 it cannot enable an audio feature.

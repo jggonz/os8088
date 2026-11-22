@@ -64,6 +64,7 @@ static unsigned tf_savedattempt,tf_savedback;
  * signatures are resident. No frame buffer is retained. */
 static BTWord tf_arec[4],tf_ahead[4],tf_atarget[5][4];
 static unsigned tf_asig[5],tf_astart,tf_aframe_at,tf_ablink_at;
+static int tf_sceneparked;
 static int tf_aready,tf_bigready,tf_aframe,tf_aseq,tf_aexpr=-1,tf_apos,tf_abase=-1;
 static int tf_adone,tf_aload=-1,tf_aphase,tf_ashown=-1,tf_amask,tf_acapturn,tf_idleturn;
 static int tf_ax,tf_ay,tf_aw,tf_ah,tf_avariant,tf_avisible;
@@ -773,10 +774,21 @@ static void ovl_tf_dropraw(void)
 void ovl_bt_face_prepare(void)
 {
     if(bt_readonly||tf_mono||!tf_aready||tf_bigready)return;
+    if(bt_pcm_music && os88_part_seg(5)){
+        os88_part_drop(5);
+        tf_sceneparked=1;
+    }
     tf_bigready=ovl_tf_claimart(4)&&ovl_tf_claimart(6)&&ovl_tf_claimart(7);
     if(!tf_bigready)ovl_tf_dropraw();
 }
-void bt_face_release(void){if(tf_bigready)ovl_tf_dropraw();}
+void bt_face_release(void)
+{
+    if(tf_bigready)ovl_tf_dropraw();
+    if(tf_sceneparked){
+        tf_sceneparked=0;
+        ovl_tf_claimart(5);
+    }
+}
 static int ovl_tf_anim_record(int frame,int strip)
 {
     unsigned seg,at;

@@ -343,6 +343,9 @@ void bt_cga_entry(void)
             bt_cga_last = now;
             bt_cga_paint();
         }
+        /* FSX parks our worker. Sound slots remain legal in the bracket,
+         * so its foreground services the same ring until desktop resume. */
+        if (bt_pcm_live) bt_pcm_feed();
         os88_fsx_wait(OS88_FSXW_VSYNC);
     }
     if (bt_session.status == BT_ACTIVE || bt_session.status == BT_READY) {

@@ -14,7 +14,7 @@ Open BORATYPE.O88 from the software disk. The360 KB image is
 `build/boratype360.img`;720KB,1.2MB and1.44MB counterparts are built together.
 `build/BORATYPE.WPK` is produced by the existing os88wire archive tool. The
 base distribution includes every lesson, original caption, score, effect,
-font and portrait. Recorded voice clips were removed from scope by the owner.
+font and portrait. The optional personal disk adds locally imported recordings.
 The disk pre-creates SYSTEM/APPDATA for installed-volume progress.
 
 ## Architecture and real reference paths
@@ -36,10 +36,11 @@ existing FSX bracket, whose returned geometry/bank/segment it checks.
 
 The runtime owns the movable resident region and eager art/overlay parts.
 The UI allocates an8KB movable opaque drawing band. Music and sound effects
-use the existing OS tone/FM leases; there are no PCM buffers, audio file
-imports or stream grants. Files are
+use the existing OS tone/FM leases on the standard disk. The optional
+[local Sound Blaster pack](audio.md#personal-sound-blaster-disk) uses two
+validated banks and a 4 KB stream grant. Files are
 read or saved only on the UI task outside paint/input/audio callbacks.
-The timer fallback worker only posts wakes and is restartable. Close cancels
+The restartable worker posts fallback timer wakes and feeds an active PCM ring. Close cancels
 timers, stops/releases audio, saves validated progress and returns through
 the OS fullscreen mechanism. Another instance has read-only progress and
 does not acquire sound.
@@ -57,7 +58,7 @@ write has been read back and verified. [Engine notes](engine.md) describe
 strict input, arithmetic, sample thresholds, timing and profile attribution.
 [Audio notes](audio.md) document the composed scores, effects and OS routing.
 The BTT v1 voice byte is retained as an unused legacy field; it defaults off
-and cannot enable a clip path. [Face notes](face.md) cover native
+and is ignored by the sampled soundtrack, which follows Music and Effects. [Face notes](face.md) cover native
 geometry and asset IDs.
 
 `tools/os88btart.py build` and `build-sound` use the existing sprite/font
@@ -75,10 +76,9 @@ sizes, cycle measurements, installed-app scenarios, adapter evidence and
 specific limits. It links the captured guest gallery and its hash manifest.
 The binding contract remains [BORATYPE-SPEC](../BORATYPE-SPEC.md).
 
-The normal build uses a 53,264-byte resident image and 11,264 bytes of BSS,
-leaving 496 bytes below the package ceiling. Original art and sound/fonts are
-embedded parts; cold file/menu/codec work is an eager C overlay. The only
-later drawing claim is an 8KB movable band. The accepted XT volume uses
+The sampled-audio build has a 52,672-byte resident image and 11,160 bytes of BSS. Original art and sound/fonts are
+embedded parts; cold file/menu/codec work is an eager C overlay. Drawing uses an 8KB movable band and lazily loaded animation and menu parts.
+The original acceptance build used
 163.5 KiB of app-owned memory; the source-audited startup peak matches that
 steady snapshot. Mega grants the region and band high memory and rounds the
 region differently, giving 164 KiB. Whole-machine loader high-water is not

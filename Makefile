@@ -23070,4 +23070,10 @@ $(BUILD)/BORATYPE.WPK: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88wi
 	@cp $(BUILD)/boratype.o88 $(BUILD)/boratype-stage/BORATYPE.O88
 	@cp apps/boratype/HELP.TXT $(BUILD)/boratype-stage/HELP.TXT
 	python3 tools/os88wire.py --archive $@ --srcdir $(BUILD)/boratype-stage --home BORATYPE --program BORATYPE.O88
-.PHONY: boratype boratypedisk boratypebundle
+#> [Applications] boratypepcmdisk :: build a local Sound Blaster disk from the 14 named MP3s in BT_AUDIO_SRC
+boratypepcmdisk: boratype
+	@test -n "$(BT_AUDIO_SRC)" || { echo "Set BT_AUDIO_SRC to the folder containing the 14 source MP3s"; exit 1; }
+	python3 tools/os88btpcm.py "$(BT_AUDIO_SRC)" "$(BUILD)/boratype-local-audio"
+	python3 tools/os88disk.py -o $(BUILD)/boratype-sb.img --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT $(BUILD)/boratype-local-audio/BTAUDIO.IDX $(BUILD)/boratype-local-audio/BTMUSIC.BTA $(BUILD)/boratype-local-audio/BTCLIPS.BTA --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $(BUILD)/boratype-sb.img
+.PHONY: boratype boratypedisk boratypebundle boratypepcmdisk

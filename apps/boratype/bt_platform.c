@@ -1,6 +1,6 @@
 /* Native lifecycle and command routing. SPEC.md 134 / BORATYPE-SPEC 1-3,6.
- * All state changes run on the UI task. The timer fallback worker only
- * posts a wake; it never scores, draws, plays audio or touches a file. */
+ * The UI task owns scores, rendering and files. The worker feeds the PCM
+ * ring and posts timer wakes when the window timer is unavailable. */
 int bt_screen, bt_selection, bt_ch_duration, bt_ch_diff, bt_master_sound = 1;
 int bt_full, bt_readonly, bt_profile_edit, bt_modifiers, bt_practice_weak, bt_blink_frame;
 char bt_notice[64];
@@ -166,6 +166,7 @@ static void bt_fullscreen_toggle(void)
     if (!bt_full && bt_video.kind == OS88_VID_CGA && bt_store.display == 1) {
         caps = os88_fsx_caps(bt_win, &kind);
         if (!(caps & (1 << OS88_FSXM_CGA320))) { bt_message("CGA color mode unavailable."); bt_redraw(0); return; }
+        if (bt_pcm_music) bt_pcm_close();
         bt_in_cga = 1;
         if (os88_fsx_run(bt_cga_entry, bt_win, 0) != 0) bt_message("Full screen is busy or unavailable.");
         bt_in_cga = 0;
@@ -371,9 +372,13 @@ void os88_paint(void *win)
     bt_geometry_changed();
     if (bt_about_up) os88_about_card_d(win, bt_about_lines);
     else { bt_face_paint(win, 1); os88_wm_grow(win); bt_scene_drawn(); }
-    if (!bt_timer_ok && !bt_worker_live) {
-        if (os88_task_spawn(win) == 0) bt_worker_live = 1;
-        else bt_message("Timer busy. Close another app and reopen.");
+    if ((!bt_timer_ok || bt_pcm_music) && !bt_worker_live) {
+        if (os88_task_spawn(win) == 0) {
+            bt_worker_live=1; bt_pcm_worker=1;
+        } else {
+            if (bt_pcm_music) ovl_bt_pcm_unload();
+            if (!bt_timer_ok) bt_message("Timer busy. Close another app and reopen.");
+        }
     }
 }
 void os88_onkey(int ascii, int scan, void *win) { (void)win; bt_key_route(ascii, scan); }
@@ -405,7 +410,12 @@ void os88_onwake(void *win)
 }
 void os88_worker(void *win)
 {
-    for (;;) { os88_task_alive(win); os88_wm_wake(win); os88_task_sleep(1); }
+    for (;;) {
+        os88_task_alive(win);
+        if (bt_pcm_live) bt_pcm_feed();
+        if (!bt_timer_ok) os88_wm_wake(win);
+        os88_task_sleep(1);
+    }
 }
 static void ovl_bt_about(void *win)
 {
@@ -436,6 +446,7 @@ int os88_onclose(void *win)
     bt_closing = 1;
     bt_save_pending = 0;
     os88_wm_timer(win, 0);
+    if (bt_pcm_music) ovl_bt_pcm_unload();
     bt_audio_done();
     ovl_bt_save();
     if (bt_full) { bt_full = 0; os88_fullscreen(win, 0); }
@@ -466,19 +477,20 @@ static void *ovl_bt_main(void)
     bt_screen = BT_S_HOME;
     os88_video(&bt_video);
     os88_key_down(OS88_SCAN_ALT); /* arms the OS Alt+Enter synthesizer */
-    os88_task_restartable(1); /* fallback worker only posts idempotent wakes */
+    os88_task_restartable(1); /* worker parks between PCM feeds or timer wakes */
     bt_copy_font();
     bt_art = os88_part_seg(0);
     bt_soundpart = os88_part_seg(1);
     bt_band = os88_mem_claim_p(512);
     if (!bt_band || !bt_art || !bt_soundpart) return 0;
     os88_mem_movable(bt_band, 1);
+    ovl_bt_pcm_load();
     bt_face_init(bt_art, bt_band, 8192, bt_video.bpp);
     bx_setart2(bt_soundpart);
     bt_audio_init();
     bt_win = os88_wm_create(8, OS88_MBAR_H + 2, bt_video.w - 16,
         bt_video.dock_top - OS88_MBAR_H - 4, "Borat Teaches Typing", &bt_class);
-    if (!bt_win) { bt_audio_done(); return 0; }
+    if (!bt_win) { ovl_bt_pcm_unload(); bt_audio_done(); return 0; }
     os88_wm_minsize(bt_win, 488, 150); /* content480x128, measured font/hitbox minimum */
     os88_menu_set(bt_win, &bt_menus);
     bt_geometry_changed();

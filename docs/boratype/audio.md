@@ -1,9 +1,43 @@
 # Boratype visual reactions, music and effects
 
-The current user-selected scope is original music, sound effects and visual
-messages. There are no sound clips, voice-pack import tools, speech controls,
-PCM playback paths or application audio heap claims. The BTT1 save format keeps
-its old voice byte as an unused compatibility field; it cannot enable sound.
+## Personal Sound Blaster disk
+
+Build the shared game with a personalized software disk using the directory
+containing the fourteen named MP3s. The importer uses FFmpeg and NumPy.
+
+```sh
+make boratypepcmdisk BT_AUDIO_SRC="$HOME/Downloads"
+```
+
+Mount `build/boratype-sb.img` in B and open BORATYPE.O88 with SOUND.DRV
+attached and card output selected. Its two banks and index live beside
+the executable. The regular software disk retains its original soundtrack.
+The importer also saves playable 8 kHz mono WAVs in
+`build/boratype-local-audio/`.
+
+| Event | Recording (MP3 stem) |
+| --- | --- |
+| Music enabled | `borat-sounds-sound`, full track repeated at 25% linear gain |
+| Welcome | `hello-nice-to-meet-you` |
+| Mistake or poor finish | `what`, `naughty-naughty`, `how-many-fingers-do-you-have` in rotation |
+| First correct key or ten-key intervals | `nice`, `is-nice`, `ohhh-la-la`, `i-like-you-do-you-like-me` |
+| Streak milestone | `high-five` |
+| Idle reminder | `can-i-touch-it-please` |
+| Successful completion | `i-go-to-america`, `hahahaha`, `high-five` in rotation |
+| Achievement on a successful finish | Three-second sting from `bing-bong-song-loop` |
+
+Ordinary cues share a two-second cooldown. The two banks store four PCM
+samples per dictionary index. Each music entry includes its quarter gain,
+and each effect leaves room for the backing track. The application mixes both
+into one 8 kHz unsigned mono Sound Blaster stream. Master mute, pause and
+focus loss stop the stream. Music and Effects work independently. Local
+MP3s, converted WAVs and sample banks belong in the player's build directory.
+On a 640 KB VGA XT, the game exchanges its menu artwork for full-size
+96×120 portrait frames at lesson start and restores the menu artwork on return.
+The `boratypepcm` suite row compares the emulated Sound Blaster output with
+the backing track, greeting, mistake and praise after keyboard input.
+
+## Synthesized soundtrack and captions
 
 `bt_audio.c` consumes engine events and never changes scoring, lesson
 randomness, focus or prompts. Its 65 original messages include 40 roasts, tagged
@@ -33,7 +67,7 @@ declares reaction tags, history and the music-pause bridge. Shim order is
 `breadxt/draw.inc` with `BX_ART2`, `cc/gkmus.inc`, then
 `boratype/bt_music.inc`. The small final include preserves the kit's sequence
 positions across pause/focus loss while releasing and reacquiring FM channels.
-It contains no PCM, file or private-driver code.
+The separate local PCM transport lives in `bt_pcm.c` and `bt_pcm.inc`.
 
 The normal art converter combines music/effect banks with the font/blink art
 in the second part. Music ID 256 and effects ID 257 contain 1,205 bytes before
@@ -75,9 +109,7 @@ effects on the kit's separate route. Pause/focus loss snapshots sequence
 positions/durations and releases FM channels. Resume asks the current OS
 route again, reacquires patches, restores positions and retains the new
 channel IDs. Ordinary same-route resume therefore keeps phase, while an OS
-speaker selection or SOUND detach can resume through the speaker. Closing
-releases every app-owned audio resource; there is no sound-file I/O or PCM
-staging in any callback.
+speaker selection or SOUND detach can resume through the speaker. Closing releases the music, stream and sample banks.
 
 ## Verification
 

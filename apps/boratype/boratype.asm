@@ -39,5 +39,6 @@
 %include "cc/gk.inc"
 %include "cc/gkmus.inc"
 %include "boratype/bt_music.inc"
+%include "boratype/bt_pcm.inc"
 %include "boratype/bt_native.inc"
 CC_IMAGE_END

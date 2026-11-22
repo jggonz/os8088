@@ -71,7 +71,8 @@ output route. Music does not require a digital voice pack.
 Gentle, Classic (default) and Extra Roast choose reaction intensity. Jokes
 respond to typing events and do not change the score or consume your input.
 Captions are original jokes. Reactions use visual expressions and short
-speaker/FM effects. The application uses no recorded voice clips.
+speaker/FM effects. A local Sound Blaster pack adds recorded reactions
+and looping music at quarter volume. Music and Effects switch separately.
 
 SAVING
 Progress and settings save at session, profile and settings boundaries in

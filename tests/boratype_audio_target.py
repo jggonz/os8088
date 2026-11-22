@@ -83,7 +83,8 @@ class Probe:
             D=os88drvsym.symbols('sound.bin');E=os88sym.equates()
             origin=E['DRV_HMA_ORG'] if seg>=0xf000 else 0
             self.driver=Driver(self.m,lambda:(ui._word('drv_fseg')<<4)+origin,D)
-            assert self.driver.byte('sbl_up')==1 and self.driver.byte('sbl_str_act')==0
+            assert self.driver.byte('sbl_up')==1
+            if backend=='sb':assert self.driver.byte('sbl_str_act')==0
     def v(self,name,n=2):
         at=self.app.sym[name if name in self.app.sym else '_'+name]
         return int.from_bytes(self.app.p.read(at,n),'little')
@@ -251,7 +252,7 @@ def main():
         'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
         'package_sha256':sha(build/'boratype.o88'),'kernel_sha256':sha(build/'kernel.sys'),
         'boot_sha256':sha(boot),'scratch_sha256':sha(disk),
-        'scope':'Original music, effects and visual messages; no sound clips or imports',
+        'scope':'Original music, effects and visual messages; local PCM banks omitted on this fixture',
         'subjective_listening':'UNVERIFIED: audio helper confirmed audio input is unsupported; waveform assertions are technical only'}
     cap=args.evidence/'audio';os.environ['MARTYPC_WAV']=str(cap);started=time.monotonic()
     try:

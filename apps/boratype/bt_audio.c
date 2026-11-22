@@ -124,6 +124,10 @@ static void bta_react(int tag, int force)
         bta_recentpos=(bta_recentpos+1)&3;
         bta_spoke=bta_now; bta_have=1; bta_caption_at=bta_now;
         bta_lasttag=tag;
+#ifndef BT_HOST
+        if (bt_pcm_music && (tag==BT_R_WELCOME || tag==BT_R_IDLE))
+            ovl_bt_pcm_cue(tag==BT_R_WELCOME?1:11,bta_now);
+#endif
         if(tag>=BT_R_ERROR && tag<=BT_R_IDLE && bta_on && bta_focus && bt_store.effects)
             gkm_sfx(10);
         return;
@@ -141,6 +145,20 @@ void bt_audio_init(void)
     gkm_init(256,257);
 }
 static void bta_fx(int n) { if(bta_on && bta_focus && bt_store.effects) gkm_sfx(n); }
+#ifndef BT_HOST
+static void ovl_bt_sample_event(unsigned ev, unsigned now)
+{
+    if (!bta_focus || !bta_on) return;
+    if (ev & BT_EV_FINISH) {
+        if (bt_session.attempts && bt_session.accuracy>=85)
+            ovl_bt_pcm_cue(bt_session.achievement_new ? 13 : 12,now);
+        else if (bt_session.attempts) ovl_bt_pcm_cue(2,now);
+    } else if (ev & BT_EV_WRONG) ovl_bt_pcm_cue(2,now);
+    else if (ev & BT_EV_STREAK) ovl_bt_pcm_cue(7,now);
+    else if ((ev & BT_EV_CORRECT) && (bt_session.correct==1 ||
+             (bt_session.streak && !(bt_session.streak % 10)))) ovl_bt_pcm_cue(5,now);
+}
+#endif
 void bt_audio_state(int screen)
 {
     if(screen==bta_screen) return;
@@ -152,6 +170,9 @@ void bt_audio_state(int screen)
 void bt_audio_event(unsigned ev, BTWord now)
 {
     bta_now=now;
+#ifndef BT_HOST
+    if (bt_pcm_music) ovl_bt_sample_event(ev,now);
+#endif
     if(ev&BT_EV_START) {
         bta_haderror=0; bta_low=0; bta_finished=0;
         bta_lastkey=now; bta_idle=now; bta_backmark=0; bta_samplemark=0;
@@ -210,6 +231,13 @@ void bt_audio_tick(BTWord now, int focused)
         bta_react(BT_R_IDLE,0); bta_idle=now;
     }
     bt_music_phase=on && !held && bt_store.music ? 1+((now>>2)&3) : 0;
+#ifndef BT_HOST
+    if (bt_pcm_music && ovl_bt_pcm_sync(on,held,now)) {
+        gkm_volume(0,0);
+        bta_song=-1;
+        return;
+    }
+#endif
     if(!on) return;
     gkm_volume(bt_store.music,bt_store.effects);
     if(!bt_store.music) { bt_mhold(0); bta_hold=0; bta_song=-1; }
@@ -227,6 +255,9 @@ void bt_audio_tick(BTWord now, int focused)
 }
 void bt_audio_test(void)
 {
+#ifndef BT_HOST
+    if (bt_pcm_live) return;
+#endif
     if(bta_on && bta_focus && bt_store.music) {
         bta_stinger=-1; bta_song=0; gkm_play(0,1);
     }

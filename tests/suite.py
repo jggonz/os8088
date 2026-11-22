@@ -1867,6 +1867,11 @@ FAST = [
         "art/music/overlay carve and band; immutable bytes, score and postmove native input survive",
         needs=("marty", "nasm", "cc"), timeout=300,
         wants=("build/boratype360.img", "build/boratype.bin", "build/chello.o88", "build/heapfrag.o88")),
+    Row("boratypepcm", "soak", py("tests/boratype_pcm.py"), 113.4,
+        "SPEC.md 134: captures two copies of the sampled music loop and matches "
+        "greeting, error and praise after real XT input; checks pause, mute and released grants",
+        needs=("marty", "nasm", "cc", "ffmpeg"), timeout=300,
+        wants=("build/boratype.o88", "build/mixer360.img")),
     Row("boratypefm", "soak", py("tests/boratype_audio_target.py", "--route-probe",
         "--evidence", "build/boratype-final/fm"), 36.6,
         "SPEC.md 134: captured actual XT FM music/effects, master mute, phase "

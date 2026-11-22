@@ -66,8 +66,6 @@ def preflight(build, image, apps):
     assert hashes == {name: digest(path) for name, path in files.items()}, "artifacts changed during preflight"
     for name in ("_bt_key", "_bt_face_paint", "_bt_pulse", "_os88_onkey") + OUTPUTS:
         assert name in symbols, "missing measured production entry " + name
-    for name in ("_bt_vplay", "_bt_vtick", "_bt_audio_reload"):
-        assert name not in symbols, "removed PCM clip path is present: " + name
     return symbols, files, hashes
 
 
@@ -513,7 +511,7 @@ def main():
               "source_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=SRC, text=True).strip(),
               "build": str(build), "app_build": str(build), "source_sha256": manifest,
               "limits_ms": {"first_feedback": args.feedback_ms, "periodic": args.periodic_ms},
-              "guest_state_writes": False, "pcm_clips": "absent",
+              "guest_state_writes": False, "pcm_pack": "not installed on the baseline timing disk",
               "probe_sha256": digest(Path(__file__)), "target_helper_sha256": digest(Path(T.__file__)),
               "feedback_definition": "queued hardware key -> completed first prompt blit or final wrong-key badge stroke",
               "crt_scanout": "not included; output completion is framebuffer completion"}

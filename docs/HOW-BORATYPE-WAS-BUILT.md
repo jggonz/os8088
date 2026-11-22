@@ -223,3 +223,17 @@ While typing, four-row updates write only its white text interior.
 
 The [guest gallery](boratype/EVIDENCE.md#vga-redesign) shows the selector,
 typing feedback, a running challenge, results, achievements and settings.
+
+## Adding a personal Sound Blaster soundtrack
+
+The full background recording lasts 21.095 seconds. The Sound Blaster takes
+8,000 unsigned mono samples each second. A dictionary of four-sample vectors
+lets the XT keep the music in 43,278 bytes and all thirteen reactions in
+44,533 bytes. The mixer reads both banks from memory while typing and adds
+the reaction over the quarter-volume backing track. The disk importer also
+writes ordinary WAVs for listening outside the game.
+
+On the emulated XT the captured output contained the same passage twice,
+21.095 seconds apart. Keyboard input produced “What?” for a mistake and
+“Nice” for a correct answer. The automated test repeats that experiment with
+synthetic samples so it can run on a fresh checkout.
