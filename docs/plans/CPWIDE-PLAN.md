@@ -70,7 +70,7 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 - [ ] **S7** (`drv`) The Drivers page (134.8).
 - [ ] **S8** (`vid`) The Display page / mode changer, with Test-and-revert
   (134.9).
-- [ ] **S9** (`thm`) The Theme page / theme changer (134.11).
+- [I] **S9** (`thm`) The Theme page / theme changer (134.11).
 
 ## Wave 3 - QA, fixes, final pass (lead)
 

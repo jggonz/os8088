@@ -1318,9 +1318,16 @@ cpg_tab:
     dw cp_thm_saver             ; CPG_SAVER    nothing
     dw cp_wdset                 ; CPG_WDSET    nothing
     dw cp_repost                ; CPG_REPOST   nothing
+    times 7 dw cpg_none         ; 22-28: not this branch's
+    dw cp_thm_pre               ; CPG_THMPRE   nothing
 %if ($ - cpg_tab) / 2 != CPG_N
   %error "ctrl: cpg_tab and the CPG_* opcodes (cpwlay.inc) disagree"
 %endif
+
+;cpg_none: an opcode this build has no body for
+cpg_none:
+    stc
+    ret
 
 cpg_hkey:
     mov ax, bx                  ; W_ONKEY's AX: AH carried the opcode
@@ -3420,6 +3427,14 @@ cp_thm_apply:
     clc
 .r:
     ret
+
+; cp_thm_pre - CPG_THMPRE (SPEC.md 134.11): CPWIDE.DRV has just put a preset's
+; row over the Color row and its number into 'TP'; apply Color, which
+; thm_set promotes to Windows when [thm_cstrp]'s bit 2 says so. cp_thm_apply
+; without its "already live" answer - a second preset is a change
+cp_thm_pre:
+    mov al, THM_COLOR
+    jmp short cp_thm_apply.tstyle
 
 ; -----------------------------------------------------------------------------
 ; cp_thm_saver / cp_thm_cust - open the screen saver's settings (SPEC.md 79.7)

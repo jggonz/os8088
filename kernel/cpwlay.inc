@@ -75,4 +75,7 @@ CPG_THMCUST equ 18              ; Customize... (THMPAL.DRV, SPEC.md 76.14.14)
 CPG_SAVER   equ 19              ; the screen saver's settings (SPEC.md 79.7)
 CPG_WDSET   equ 20              ; SYSTEM.CFG owed at the close (SPEC.md 31.8)
 CPG_REPOST  equ 21              ; ...and every window repainted (cp_repost)
-CPG_N       equ 22
+CPG_THMPRE  equ 29              ; a preset row was installed: apply Color (SPEC.md
+                                ; 134.11); 22-28 are the Drivers and Display
+                                ; pages' (cpg_none pads them on this branch)
+CPG_N       equ 30
