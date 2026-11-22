@@ -116,7 +116,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODS = {False: ('.modc', '.modf', '.modl', '.modh', '.modk', '.modx',
                 '.modw',          # ...and WIN95.DRV (SPEC.md 76.14)
                 '.modj',          # ...and DESK.DRV (SPEC.md 11.103.10)
-                '.modn'),         # ...and STIKMENU.DRV (SPEC.md 110.12)
+                '.modn',          # ...and STIKMENU.DRV (SPEC.md 110.12)
+                '.modv'),         # ...and CPWIDE.DRV (SPEC.md 134.2)
         True:  ('.modc', '.modf', '.modl', '.modp', '.modd')}
 OVLS = ('.blob', '.ovl',   # `.blob` = the overlay's `.boot2` blocks (SPEC.md 2.9.14)
         '.boot3')          # ...and the third boot-only home (SPEC.md 2.9.15)
