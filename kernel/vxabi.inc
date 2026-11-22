@@ -61,6 +61,18 @@ VXV_PM      equ 0x43            ; kern_mega's alone (KERN-MEGA-PLAN 14.115):
                                 ; ADDITIVE, so VX_ABI_VER stays: an image
                                 ; that predates it refuses the question and
                                 ; kern_mega keeps its VGA desktop
+VXV_INFO    equ 0x44            ; the wide Display page's read (SPEC.md
+                                ; 120.10): CL = 0FFh asks the CARD - out AX =
+                                ; the VBE version word, DX = video memory in
+                                ; 64KB units, CL = the offered count, CH = the
+                                ; running record's index, SI = the index Auto
+                                ; would pick; CL = i < count asks RECORD i -
+                                ; out AX = X, DX = Y, CL = its class byte (VXC_,
+                                ; the VE byte exactly), CH = its depth (8, 15
+                                ; or 16), SI = the KB its framebuffer needs,
+                                ; DI = the VBE mode number; CL >= count and not
+                                ; 0FFh: CF = 1. SI and DI are CLOBBERED.
+                                ; ADDITIVE like VXV_PM, so VX_ABI_VER stays
 
 ; --- a mode CLASS: the user's name for a mode, a card's number being the
 ; card's (SPEC.md 120.2.3). ONE BYTE, because SYSTEM.CFG's buffer was boot

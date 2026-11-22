@@ -240362,12 +240362,53 @@ picture disk carries the shipped PiXEL, and kern_mega runs PiXEL's arm.
 
 ### 120.10 Mode information for a mode changer - `VXV_INFO`
 
-**Pinned only** (docs/plans/CPWIDE-PLAN.md, story S6). The wide Control
-Panel's mode table (§134.9) needs every offered mode's geometry, depth and
-memory, and the card's VBE version and video memory - which `VXV_NEXT`
-(§120.2.3) answers only one class at a time and the card facts not at all.
-S6 pins the verb here: its number, registers, the record it fills, and the
-`VX_ABI_VER` step.
+The wide Control Panel's mode table (§134.9) needs every offered mode's
+geometry, depth and memory, and the card's VBE version and video memory -
+which `VXV_NEXT` (§120.2.3) answers only one class at a time and the card
+facts not at all. `VXV_INFO` (`0x44`, `kernel/vxabi.inc`) answers both in
+registers, one call a record, so the table is `count` calls and no walk.
+
+**Why registers.** The caller reaches the driver through `drv_call`, which
+spends BX on the driver row and enters the image with ES = the kernel's
+segment: there is no buffer a caller can name for the driver to fill that is
+in the driver's own segment, and the kernel's segment is not the caller's
+when the caller is a module. Three verbs' worth of precedent (`VXV_NEXT`)
+already returns in CL/CH/DL/DH.
+
+| in | out |
+|---|---|
+| `AL` = `VXV_INFO`, `CL` = `0FFh` (the CARD) | CF = 0. `AX` = the VBE version word (QEMU answers `0300h`), `DX` = total video memory in 64KB units (4F00h +18), `CL` = the offered count, `CH` = the index of the RUNNING record, `SI` = the index Auto would pick (the "recommended" mode, §120.2.3) |
+| `AL` = `VXV_INFO`, `CL` = i < count (RECORD i, the table's order, which is the card's) | CF = 0. `AX` = X, `DX` = Y, `CL` = its class byte (`VXC_*`, exactly the `VE` byte `VXV_NEXT`/`VXV_PICK` use), `CH` = its depth (8, 15 or 16 - a 15bpp mode says 15 here although its class says 16), `SI` = the framebuffer KB it needs (BytesPerScanLine x Y, rounded up to a KB), `DI` = the VBE mode number |
+| `CL` >= count and not `0FFh`, or the image never initialised | CF = 1, nothing else defined |
+
+**Registers.** BX is kept (it is the caller's driver row); AX, CX, DX, SI and
+DI are outputs, so the verb **clobbers SI and DI**, unlike `VXV_NEXT`, whose
+caller paints a pane through them. The card's version and memory are read
+once at attach and copied into four bytes of the driver's state, because the
+4F00h buffer is the attach-only region that is zeroed once the mode is
+chosen (§120.2.1, `vx_attok`). Memory is in KB, not banks, so the page's
+column is one divide away from a figure a user knows; a mode that fits in
+the card is not tested here - the card's memory is in the same answer and
+the table greys the rows that exceed it.
+
+**The index is the record's position** in the driver's table (at most 16,
+`VX_NMODES`), stable for the life of the image. `VXV_PICK`/`VXV_NEXT` still
+speak classes; the index is only for the information verb.
+
+**ABI decision: `VX_ABI_VER` stays 6.** This verb is ADDITIVE in
+`VXV_PM`'s exact sense: a kernel that predates it never sends it, and an
+image that predates it refuses an unknown verb with CF = 1 (`vx_entry`'s
+`.no`), which the panel reads as "no information: fall back to the
+`VXV_NEXT` walk". Stepping the number would refuse a stale `VESA.DRV` beside
+the new kernel for nothing. A change to the record's meaning (a register
+moving) is the case that WOULD step it. `tools/abi.lock.json` covers
+`apps/os88api.inc` and `drivers/os88drv.inc` for `PKG_FMT` and `DRV_VER`
+and `kernel/vxabi.inc` for `VX_ABI_VER`: the fingerprint of the latter moves
+with this change, which is a clarification of the contract and not a bump
+(`tools/abilock.py --update`).
+
+**Cost.** `VESA.DRV` image (bss included) 7,421 -> 7,542 bytes (+121); no
+resident kernel byte.
 
 ## 121. XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`)
 
