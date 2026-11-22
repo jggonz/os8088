@@ -39,7 +39,10 @@ static unsigned ovl_bt_bank(const char *name, unsigned size, int music)
                 if (!len || ovl_bt_le16(bt_pcm_header+12+4*i)!=pos || len>size-pos) break;
                 pos += len;
             }
-            if (i==count && pos==size) return seg;
+            if (i==count && pos==size) {
+                os88_mem_movable(seg, 1);
+                return seg;
+            }
         }
     }
     os88_mem_free(seg);

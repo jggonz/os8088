@@ -456,6 +456,8 @@ void os88_onmove(unsigned was, unsigned now)
 {
     unsigned artnow;
     if (bt_band == was) bt_band = now;
+    if (bt_pcm_music == was) bt_pcm_music = now;
+    if (bt_pcm_fx == was) bt_pcm_fx = now;
     bt_face_move(was, now);
     /* The eager parts move as one carve. Its base is not necessarily the
      * segment of either record: reread the runtime's already-relocated rows. */

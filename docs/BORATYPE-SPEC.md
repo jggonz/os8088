@@ -274,8 +274,9 @@ the unchanged-layout check and active lesson-key route remain resident.
 Initial allowances: engine and lesson data 18KB, UI and platform 26KB,
 sound/reaction code and data 8KB, BSS 10KB. Art part ≤64KB, audio part ≤16KB,
 drawing band 8KB (512 paragraphs). The synthesized score and effects require no application audio heap claims.
-The optional sampled soundtrack holds two pinned banks during the instance lifetime
-so the worker can decode through stable segment addresses.
+The optional sampled soundtrack holds two movable banks during the instance lifetime.
+The package relocation callback updates both references. The worker completes each
+decode pass before parking and holds no foreign segment register across a yield.
 The final evidence records actual costs; these are planning allowances.
 
 ## 5. Audio and reactions
