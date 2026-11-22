@@ -2443,6 +2443,11 @@ section .modn    start=MODN_START vstart=0  ; STIKMENU.DRV (SPEC.md 110.12)
 section .mods    start=MODSER_START vstart=0 ; SERIAL.DRV (SPEC.md 115)
 section .modq    start=MODQ_START vstart=0   ; KEYBOARD.DRV (SPEC.md 9.16)
 section .modqb   nobits vstart=MODQ_IMG
+%ifdef KERN_BIG
+section .modv    start=MODV_START vstart=0   ; CPWIDE.DRV (SPEC.md 134.2)
+section .modvb   nobits vstart=MODV_IMG ; ...its scratch: the asset claim's
+                                ; one name (cpwide.inc)
+%endif
 %ifdef OS88_FSCKIMG
 section .modfs   start=MODFS_START vstart=0 ; FSCHECK.DRV (SPEC.md 118.14)
 %endif
@@ -2973,6 +2978,8 @@ api_gfx_blit4:                    ; (named: SPEC.md 5.4.1.5's walk far-calls it)
                                   ;          SI = signed dy. The vacated rows
                                   ;          are the caller's to repaint
 ; --- and from here on, the slots added since ----------------------------------
+apic_font_run:                    ; (named: CPWIDE.DRV draws its own strings
+                                  ; through it, SPEC.md 134.5)
     OSAPI_XCELL font_run_x      ; 0x012D - one OPAQUE text run (SPEC.md 6.1):
                                   ;          CX = x, DX = y, SI = ASCIIZ,
                                   ;          AL = ink, AH = background. Draws
@@ -6502,6 +6509,9 @@ EXT_DEAD    equ 14              ; ui_drag_dead, UNGATED: registers kept (12 and
 %include "hiber.inc"            ; hibernate and resume (SPEC.md 87): the
                                 ; resident thunks, the probe, and HIBER.DRV.
                                 ; After mod.inc for MOD_*, a size here
+%include "cpwide.inc"           ; CPWIDE.DRV, the wide Control Panel's face
+                                ; (SPEC.md 134) - after ctrl.inc, whose
+                                ; numbers it reads; kern_big only
 
 ; --- the modules' far-pointer slots (SPEC.md 2.8.1): ONE BLOCK PER MODULE,
 ; --- EXACTLY AS LONG AS THAT MODULE'S OWN X_NENT. Here, below every module's
@@ -6550,6 +6560,9 @@ mod_fpt:
 %endif
     MODFP SERFP, MOD_SER, SER_NENT
     MODFP KLFP, MOD_KEYBOARD, KL_NENT
+%ifdef KERN_BIG
+    MODFP CPWFP, MOD_CPW, CPW_NENT ; the wide panel's one entry (SPEC.md 134.4)
+%endif
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
 %endif
@@ -9125,11 +9138,17 @@ MODN_START   equ MODJ_START + MODJ_SIZE   ; STIKMENU.DRV (SPEC.md 110.12) are
 MODSER_START equ MODN_START + MODN_SIZE   ; serial follows the big desktop modules
 %endif
 MODQ_START   equ MODSER_START + SER_IMAGE_SIZE
+%ifdef KERN_BIG
+MODV_START   equ MODQ_START + MODQ_SIZE ; CPWIDE.DRV (SPEC.md 134.2), MOD_CPW
+MODQ_NEXT    equ MODV_START + MODV_SIZE ; ...and what follows it
+%else
+MODQ_NEXT    equ MODQ_START + MODQ_SIZE
+%endif
 %ifdef OS88_FSCKIMG
-MODFS_START  equ MODQ_START + MODQ_SIZE ; FSCHECK.DRV: an image and NO
+MODFS_START  equ MODQ_NEXT              ; FSCHECK.DRV: an image and NO
 MODMAP_START equ MODFS_START + MODFS_SIZE      ; mod_tab row (SPEC.md 118.14.1)
 %else
-MODMAP_START equ MODQ_START + MODQ_SIZE
+MODMAP_START equ MODQ_NEXT
 %endif
 
 ; MODB_TAIL img, bss - A MODULE'S BSS IS ZEROS IN ITS OWN FILE
@@ -9290,6 +9309,21 @@ MODQ_SIZE equ modq_end - $$
 %if MODQ_SIZE > MOD_MAX_KB*1024
 %error "the keyboard module is over MOD_MAX_KB"
 %endif
+%ifdef KERN_BIG
+section .modvb
+modvb_end:
+MODV_BSS equ modvb_end - $$
+section .modv
+    MODB_TAIL MODV_IMG, MODV_BSS
+modv_end:
+MODV_SIZE equ modv_end - $$
+%if MODV_SIZE > MOD_MAX_KB*1024
+%error "CPWIDE.DRV is over MOD_MAX_KB - mod_need would refuse it at run time"
+%endif
+%if CPW_D_ROWS + DRV_MAX > CPW_W_PAGE + CPW_W_PAGEN
+  %error "cpwide: the catalog's rows outgrew the page's working bytes"
+%endif
+%endif
 
 ; ...and each of them has to fit the claim mod_need makes for it. MOD_MAX_KB
 ; (mod.inc) is a RUN-TIME test - a module over it is refused cleanly, the
@@ -9375,6 +9409,10 @@ mod_map:
     dw SER_NENT
     dd MODQ_START, MODQ_SIZE
     dw KL_NENT
+%ifdef KERN_BIG
+    dd MODV_START, MODV_SIZE    ; the wide Control Panel (SPEC.md 134.2)
+    dw CPW_NENT
+%endif
 %ifdef OS88_FSCKIMG
     dd MODFS_START, MODFS_SIZE  ; FSCHECK.DRV, LAST: the package loads it, so
     dw FSK_NENT                 ; its id is past every mod_tab row's (118.14.1)

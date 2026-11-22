@@ -45,17 +45,17 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 
 ## Wave 1 - foundation (parallel)
 
-- [ ] **S1** (`shell`) Choose the face at open; load `CPWIDE.DRV` and
+- [I] **S1** (`shell`) Choose the face at open; load `CPWIDE.DRV` and
   `CPWIDE.DAT`; fall back to compact on any refusal; drop both at close.
   Done when: VGA and VESA open wide, EGA/CGA/Hercules open compact, deleting
   `CPWIDE.DRV` from the disk opens compact; `kernsize` on all three kernels
   shows no rung crossed; SPEC 134.2 has the measured bytes.
-- [ ] **S2** (`shell`) The wide window: grouped page list with 16x16 icons,
+- [I] **S2** (`shell`) The wide window: grouped page list with 16x16 icons,
   header strip with the 32x32 icon and description, status line; both
   sizes (616x408, 760x520). Every compact page and every driver page HOSTED
   in the page area and fully usable (click, release, drag, key, tick).
-- [ ] **S3** (`shell`) `CPE_GATE` and its `CPG_*` opcode table (134.4).
-- [ ] **S4** (`shell`) The widget kit (134.5) with one worked example page,
+- [I] **S3** (`shell`) `CPE_GATE` and its `CPG_*` opcode table (134.4).
+- [I] **S4** (`shell`) The widget kit (134.5) with one worked example page,
   documented for S7-S9.
 - [I] **S5** (`art`) `tools/cpwdat.py`, `drivers/catalog.toml` with every
   shipped driver, `CPWIDE.DAT` on every system disk of big/emu/mega in all

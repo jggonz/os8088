@@ -78,6 +78,9 @@ CP_IBH    equ 12                ; selection bar height inside the row
 CP_ITDY   equ 2                 ; label baseline offset (8px font in 12px bar)
 CP_IBX1   equ 2                 ; selection bar left edge
 CP_IBX2   equ CP_DIVX - 3       ; 85: selection bar right edge
+%ifdef KERN_BIG
+%include "cpwlay.inc"           ; the wide face's numbers (SPEC.md 134.3, 134.4)
+%endif
 
 %ifdef DOCK_OPT
 ; --- THE LIST SCROLLS (SPEC.md 31.1.5) ----------------------------------------
@@ -266,6 +269,13 @@ CP_B1Y2   equ CP_PR0Y + CP_PROWH + CP_GW + 3  ; 61: row 1 (Cooperative) bottom
     call cp_cgo
     dw %1
 %endmacro
+; ...and CPWF, the wide face's forward (SPEC.md 134.4): at the head of each far
+; entry the wide face takes, `call cp_wfwd / db CWV_*` - three bytes, and the
+; compact face's cost is cp_wfwd's one compare (kern_big's alone)
+%macro CPWF 1
+    call cp_wfwd
+    db %1
+%endmacro
 ; ...and CPXN, a plain near call to a routine os88ui.inc assembles INTO this
 ; image (OS88UI_KGLYPH): tools/os88ovlchk.py files that file as `.cold` on
 ; both kernels, so the call is written through %1, which that scan does not
@@ -288,7 +298,11 @@ section .text
 ; (SPEC.md 31.16) made it non-zero on both kernels.
 ; The callbacks are the RESIDENT `.cold` entries below, NEAR procs there:
 ; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_cls
+CP_TX     equ 160               ; the template's frame: SPEC.md 31.1's window.
+CP_TY     equ 130               ; Named, because the wide face (SPEC.md
+CP_TW     equ 320               ; 134.2) writes its own size here at an open
+CP_TH     equ 151               ; and puts these back at its close
+cp_tpl:     dw CP_TX, CP_TY, CP_TW, CP_TH, cp_ttl, cp_cls
 cp_cls:     dw cp_cls_end - cp_cls, 0   ; its CLASS (SPEC.md 11.104)
             dw cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
             dw 0, 0, 0              ; About, wake, close
@@ -324,17 +338,15 @@ cp_cls_end:
 ; unlike the file dialog this window is an INSTANCE that can be closed from
 ; the dock, the bar and its own close box.
 ; -----------------------------------------------------------------------------
-%ifdef KERN_BIG
-cp_kinit:
-    push ax
-    xor ax, ax
-    mov [cp_down], al
-    call COLD_SEG:os88ui_arm_f
-    pop ax
-    ret                         ; (the release and the drag are cp_cls's
-%else                           ; slots now, SPEC.md 11.104 - and kern_small,
-cp_kinit    equ 0               ; with nothing else to do, has no KD_INIT)
-%endif
+; **IT IS GONE, and the clearing is CTRL.DRV's own** (SPEC.md 134.2): every
+; launch of KIND_CTRL is cp_open_x's, which calls the image's CPG_OPEN before
+; app_launch to choose the face, and that op clears [cp_down] and the arm
+; first - nothing between it and the window being shown can arm anything.
+; That moved thirteen resident bytes into the image, which is what pays for
+; the wide face's row (kern_emu had 28 left in its rung).
+cp_kinit    equ 0               ; (the release and the drag are cp_cls's
+                                ; slots, SPEC.md 11.104 - and kern_small, with
+                                ; nothing else to do, never had a KD_INIT)
 cp_ttl:     db 'Control Panel', 0
 cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
                                 ; NAME column, which is the tighter of the two
@@ -968,12 +980,13 @@ CPE_ONKEY   equ CPE_B + 6       ; (SPEC.md 31.9.2) are kern_big's alone, so
 CPE_DOCK_GEOM equ CPE_B + 7     ; safe because MOD_H_NENT is IN the header and
 CPE_DRVUP   equ CPE_B + 8       ; mod_check compares it against the file it
 CPE_DLG     equ CPE_B + 9       ; just read, so a CTRL.DRV with the wrong count
-CP_NENT     equ CPE_B + 11      ; is refused rather than dispatched into - and
-%else                           ; MOD_H_STAMP rejects one from another build.
-CPE_DRVUP   equ CPE_B + 7       ; CPE_DRVUP is OSAPI_DRV_USE's (SPEC.md 117.3)
-CPE_DLG     equ CPE_B + 8       ; and CPE_DLG OSAPI_DRV_DLG's (51.10), both
-CP_NENT     equ CPE_B + 10      ; kern_big's alone: kern_small has no drivers
-%endif
+CPE_GATE    equ CPE_B + 10      ; is refused rather than dispatched into - and
+CP_NENT     equ CPE_B + 12      ; MOD_H_STAMP rejects one from another build.
+%else                           ; CPE_DRVUP is OSAPI_DRV_USE's (SPEC.md 117.3)
+CPE_DRVUP   equ CPE_B + 7       ; and CPE_DLG OSAPI_DRV_DLG's (51.10), both
+CPE_DLG     equ CPE_B + 8       ; kern_big's alone: kern_small has no drivers -
+CP_NENT     equ CPE_B + 10      ; and CPE_GATE is the wide face's (SPEC.md
+%endif                          ; 134.4), which kern_small has none of
 %else
 CPE_ONKEY   equ CPE_B + 5       ; Keyboard's sample is offered on small too
 %ifdef DOCK_OPT
@@ -1026,6 +1039,7 @@ modc_hdr:
 %ifdef KERN_BIG
     dw modc_e_drvup             ; CPE_DRVUP: OSAPI_DRV_USE's load (117.3)
     dw modc_e_dlg               ; CPE_DLG: OSAPI_DRV_DLG's body (51.10)
+    dw modc_e_gate              ; CPE_GATE: the wide face's (SPEC.md 134.4)
 %endif
     dw modc_e_shutdown          ; CPE_SHUTDOWN: confirmation and terminal splash
 section .modu                   ; ...and the PANEL from here on: the stubs below
@@ -1048,7 +1062,10 @@ section .modu                   ; ...and the PANEL from here on: the stubs below
 %include "shutdown.inc"
 
 modc_e_flush:   call cp_flush_close_x   ; ...a stub still, because shutdown
-            retf                        ; calls the body NEAR as well
+%ifdef KERN_BIG                         ; calls the body NEAR as well - and the
+            call cp_wclose              ; wide face goes with the panel (SPEC.md
+%endif                                  ; 134.2): its claim and its image
+            retf
 ;
 ; THE OTHER FIVE ARE THE BODIES, entered far and leaving by kretf_bp - the
 ; KENT frame's own ladder with the `retf` this needs (SPEC.md 2.6.1: the body
@@ -1172,6 +1189,277 @@ modc_e_dlg:
     stc
     jmp short .out
 
+; =============================================================================
+; THE WIDE FACE (SPEC.md 134): CPWIDE.DRV beside this image
+;
+; This image keeps every setting, every state change and every compact page;
+; CPWIDE.DRV draws the wide chrome and hosts these pages in its page area.
+; [cp_wide] says which face is up, and only cpg_open (at the open) and
+; cp_wclose (at the close) write it.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_wfwd - CPWF's body: the far entry's forward to the wide face
+; in:  the entry's registers; [sp] = the address of CPWF's code byte
+; out: compact: back to the entry's own body, past the code byte, every
+;      register as it came. Wide: CPWIDE.DRV's cpw_ev with BP = the code, and
+;      this returns FAR for the entry - CPWIDE.DRV preserves every register,
+;      BP is put back here
+; -----------------------------------------------------------------------------
+cp_wfwd:
+    cmp byte [cs:cp_wide], 0
+    jne .wide
+    push bp
+    mov bp, sp
+    inc word [bp+2]             ; past the code byte: the compact body
+    pop bp
+    ret
+.wide:
+    push bp
+    push si
+    mov bp, sp
+    mov si, [bp+4]              ; SI -> the code byte
+    mov si, [cs:si]
+    and si, 0x00FF
+    mov bp, si                  ; BP = the event (CWV_*)
+    pop si
+    call far [CPWFP]
+    pop bp
+    inc sp                      ; the near frame CPWF pushed (inc keeps CF)
+    inc sp
+    retf
+
+; -----------------------------------------------------------------------------
+; cp_wclose - the wide face goes, if it is up: CWV_CLOSE (its asset claim
+; freed and the compact template put back), then MOD_CPW dropped. Called at
+; the panel's close (modc_e_flush) and by cpg_open before it chooses again.
+; in:  nothing. out: nothing; every register kept
+; -----------------------------------------------------------------------------
+cp_wclose:
+    cmp byte [cs:cp_wide], 0
+    je .r
+    push ax
+    push bp
+    mov bp, CWV_CLOSE
+    call far [CPWFP]
+    mov al, MOD_CPW
+    CPXC mod_drop
+    CSDO mov byte [CSEG cp_wide], 0
+    pop bp
+    pop ax
+.r:
+    ret
+
+; cp_wlist - cp_list on the wide face: CPWIDE.DRV redraws its own page list
+; (and its status line's driver count). Every register kept
+cp_wlist:
+    push bp
+    mov bp, CWV_LIST
+    call far [CPWFP]
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; modc_e_gate - CPE_GATE (SPEC.md 134.4), entered FAR: every call CPWIDE.DRV
+;               makes into this image, and the open's face choice
+; in:  AH = a CPG_* opcode (cpwlay.inc); the op's own registers
+; out: the op's; CF = 1 for an opcode past CPG_N
+;
+; The first CPG_NFAR ops ARE the compact face's far entries, entered past
+; their forward (CPWF) with the edge's registers: a hosted page's press,
+; release, drag, tick and key run the compact bodies unchanged, and those end
+; in their own `retf`. Every other op is a near proc here, returning through
+; this entry's `retf`. Dispatch is a `ret` into the table's word, so no
+; register carries the target.
+; -----------------------------------------------------------------------------
+modc_e_gate:
+    cmp ah, CPG_N
+    jae .bad
+    cmp ah, CPG_NFAR
+    jb cpg_jmp                  ; a far body: it owns the far return
+    call cpg_jmp                ; a near op: it returns here
+    retf
+.bad:
+    stc
+    retf
+cpg_jmp:
+    ; STKBALANCE-OK: the `ret` below IS the dispatch - it pops the target this writes into the slot it pushed
+    push bx                     ; [sp+2] = the slot the target goes in
+    push bp
+    mov bp, sp
+    mov bl, ah
+    xor bh, bh
+    shl bx, 1
+    mov bx, [cs:bx + cpg_tab]
+    xchg bx, [bp+2]             ; the slot = the target, BX = the caller's
+    pop bp
+    ret
+
+cpg_tab:
+    dw cp_onclick_x             ; CPG_HCLICK   CX/DX screen, SI = the window
+    dw cp_onup_x                ; CPG_HUP      ...the same
+    dw cp_ondrag_x              ; CPG_HDRAG    ...the same
+    dw cp_tick_x                ; CPG_HTICK    nothing
+    dw cpg_hkey                 ; CPG_HKEY     BX = the key, SI = the window
+    dw cpg_open                 ; CPG_OPEN     nothing (cp_open_x's)
+    dw cpg_hpaint               ; CPG_HPAINT   BX = the window
+    dw cp_item_name             ; CPG_NAME     AL = a record -> SI
+    dw cpg_drvon                ; CPG_DRVON    AL = a drv_tab row
+    dw cpg_drvoff               ; CPG_DRVOFF   AL = a row
+    dw cpg_drvwant              ; CPG_DRVWANT  AL = a row, CL = 0/1
+    dw cpg_drvttl               ; CPG_DRVTTL   AL = a row -> SI
+    dw cpg_drvstat              ; CPG_DRVSTAT  AL = a row -> SI
+    dw cpg_drvmem               ; CPG_DRVMEM   AL = a row -> AX
+    dw cp_vid_set               ; CPG_VIDSET   AL = a VID_*, CL = a class
+    dw cpg_vxcall               ; CPG_VXCALL   AL = a VXV_*, CL = a class
+    dw cp_vgc_tog               ; CPG_VGC      nothing
+    dw cp_thm_apply             ; CPG_THMSET   AL = a THM_*
+    dw cp_thm_cust              ; CPG_THMCUST  nothing
+    dw cp_thm_saver             ; CPG_SAVER    nothing
+    dw cp_wdset                 ; CPG_WDSET    nothing
+    dw cp_repost                ; CPG_REPOST   nothing
+%if ($ - cpg_tab) / 2 != CPG_N
+  %error "ctrl: cpg_tab and the CPG_* opcodes (cpwlay.inc) disagree"
+%endif
+
+cpg_hkey:
+    mov ax, bx                  ; W_ONKEY's AX: AH carried the opcode
+    jmp cp_onkey_x
+
+; -----------------------------------------------------------------------------
+; cpg_open - CPG_OPEN: choose the face, and open the panel (cp_open_x)
+; in:  nothing. out: CF = 0 the panel is up (or was, and is fronted); CF = 1
+;      app_launch refused - no instance slot, no window - and the beep has
+;      sounded (SPEC.md 34.3). Every register kept. A refusal of the FACE at
+;      any step is the compact face, silently, with whatever was taken given
+;      back
+;
+; A panel already up keeps its face: app_launch only fronts it. Otherwise
+; this is the work KD_INIT did (the press state and the arm cleared - nothing
+; between here and the window being shown can arm anything), then SPEC.md
+; 134.2's predicate - a VGA or VESA primary of at least 640x480 - then
+; MOD_CPW, then CPWIDE.DRV's own open: CPWIDE.DAT read and the window's size
+; written into cp_tpl.
+; -----------------------------------------------------------------------------
+cpg_open:
+    push ax
+    push di
+    CPXC cp_live
+    jnc .out                    ; up already: its face stays
+    call cp_wclose              ; a face an open never showed (app_launch
+    xor ax, ax                  ; refused it)
+    mov [cp_down], al
+    call COLD_SEG:os88ui_arm_f
+    mov al, [vid_kind]
+    cmp al, VID_VGA
+    je .kind
+%ifdef VID_EXT
+    cmp al, VID_VESA
+    jne .out
+%else
+    jmp short .out              ; (kern_mega: no VESA renderer)
+%endif
+.kind:
+    cmp word [vid_pw], 640
+    jb .out
+    cmp word [vid_ph], 480
+    jb .out
+    mov al, MOD_CPW
+    CPXC mod_need
+    jc .out                     ; no CPWIDE.DRV: compact
+    push bp
+    mov bp, CWV_OPEN
+    call far [CPWFP]            ; CF = 1: no CPWIDE.DAT, or no room for it
+    pop bp
+    jnc .wide
+    mov al, MOD_CPW
+    CPXC mod_drop
+    jmp short .out
+.wide:
+    CSDO mov byte [CSEG cp_wide], 1
+.out:
+    mov al, KIND_CTRL           ; ...and the launch, cp_open_x's own lines
+    KDOOR app_launch            ; until the face moved here: CF = 1 is the
+    jnc .up                     ; panel refused (no instance slot, no window)
+    call cp_wclose              ; - not about the disk, so the beep it always
+    KDOOR snd_beep              ; was - and a face it chose goes with it
+    stc
+.up:
+    pop di
+    pop ax
+    ret
+
+; cpg_hpaint - CPG_HPAINT: the selected page at the hosted origin, its own
+; erase and all (cp_page). BX = the window; every register kept
+cpg_hpaint:
+    call kentm_bp
+    call cp_origin
+    call cp_page
+    jmp kretm_bp
+
+; --- the Drivers page's ops (SPEC.md 134.4, 134.8): AL = a drv_tab row ------
+cpg_drvon:                      ; load it, if it is down
+    push bx
+    call cp_drvrow
+    cmp word [bx+DRVR_FILE], 0
+    je .r
+    cmp word [bx+DRVR_SEG], 0
+    jne .r
+    call cp_drv_on
+.r:
+    pop bx
+    ret
+cpg_drvoff:                     ; unload it (VESA.DRV: the VGA first), and
+    push bx                     ; not wanted
+    call cp_drvrow
+    cmp word [bx+DRVR_FILE], 0
+    je .r
+    call cp_drv_off
+.r:
+    pop bx
+    ret
+cpg_drvwant:                    ; CL = the want bit alone, answered and owed
+    push bx
+    call cp_drvrow
+    mov [bx+DRVR_WANT], cl
+    call cp_drv_ans
+    pop bx
+    ret
+cpg_drvttl:                     ; SI = its title, staged ('' for no row)
+    push bx
+    call cp_drvrow
+    mov si, cp_sbuf
+    mov byte [si], 0
+    cmp word [bx+DRVR_FILE], 0
+    je .r
+    mov si, [bx+DRVR_TITLE]
+    add si, drvt_base           ; (DRV_TITLES, this image's: `cs:`)
+    call cp_stage
+.r:
+    pop bx
+    ret
+cpg_drvstat:                    ; SI = what it is doing now, staged
+    push bx
+    call cp_drvrow
+    call drv_status_x
+    pop bx
+    ret
+cpg_drvmem:                     ; AX = its drv_memk word (DRVM_PLUS in bit 15)
+    push bx
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov ax, [cs:drv_memk + bx]
+    pop bx
+    ret
+cpg_vxcall:                     ; a verb to VESA.DRV (cp_vid_vxcall)
+%ifdef VID_EXT
+    jmp cp_vid_vxcall
+%else
+    stc                         ; kern_mega: no VESA.DRV to ask
+    ret
+%endif
+
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -1200,6 +1488,10 @@ modc_e_dlg:
 ; otherwise be an error the user did not make.
 ; -----------------------------------------------------------------------------
 modc_e_onkey:
+%ifdef KERN_BIG
+    CPWF CWV_KEY                ; the wide face's, while it is up (134.4)
+%endif
+cp_onkey_x:                     ; (CPG_HKEY enters here, past the forward)
     call kentm_bp                ; KENT: push ax..bp
     cmp byte [cp_sel], CP_IKEY
     jne .driver
@@ -1325,6 +1617,9 @@ section .modu                   ; ...and back to the panel's image
 ; helper below takes it in the same pair.
 ; -----------------------------------------------------------------------------
 modc_e_paint:                   ; CPE_PAINT, entered FAR (see kretf_bp)
+%ifdef KERN_BIG
+    CPWF CWV_PAINT              ; the wide face paints its own (SPEC.md 134.3)
+%endif
 cp_paint_x:
     call kentm_bp                ; KENT: push ax..bp
 
@@ -1357,6 +1652,9 @@ cp_paint_x:
 ; other windows repainted posts a deferred flag instead (SPEC.md 31.2).
 ; -----------------------------------------------------------------------------
 modc_e_onclick:                 ; CPE_ONCLICK, entered FAR (see kretf_bp)
+%ifdef KERN_BIG
+    CPWF CWV_CLICK              ; ...and every edge after it: CPWIDE.DRV
+%endif                          ; hands a hosted page's back (CPG_HCLICK..)
 cp_onclick_x:
     call kentm_bp                ; KENT: push ax..bp
 
@@ -1456,6 +1754,9 @@ cp_onclick_x:
 ; look - that half is the drag's company inside the guard below.
 ; -----------------------------------------------------------------------------
 modc_e_onup:                    ; CPE_ONUP, entered FAR (see kretf_bp)
+%ifdef KERN_BIG
+    CPWF CWV_UP
+%endif
 cp_onup_x:
     call kentm_bp                ; KENT: push ax..bp
     call cp_pt                  ; DI/BP = pane origin, CX/DX = pane-relative
@@ -1494,6 +1795,7 @@ cp_onup_x:
 ; affordable at all.
 ; -----------------------------------------------------------------------------
 modc_e_ondrag:                  ; CPE_ONDRAG, entered FAR (see kretf_bp)
+    CPWF CWV_DRAG
 cp_ondrag_x:
     call kentm_bp                ; KENT: push ax..bp
     call cp_pt
@@ -1550,6 +1852,13 @@ cp_origin:
     call KERNEL_SEG:cw_wm_content
     mov di, ax
     mov bp, dx
+%ifdef KERN_BIG
+    cmp byte [cs:cp_wide], 0    ; THE ONE PLACE THAT KNOWS THE FACE (SPEC.md
+    je .c                       ; 134.3): on the wide one the "content" every
+    add di, CPW_HX              ; compact page and edge computes from is the
+    add bp, CPW_HY              ; HOSTED origin, so `add di, CP_RX` lands on
+.c:                             ; the hosted pane and the probe, the arm, the
+%endif                          ; tick and the key all follow it unchanged
     ret
 
 %ifdef KERN_BIG
@@ -2028,11 +2337,21 @@ cp_item_paint:
     ; THE HEADING IS THE LIST NAME (SPEC.md 31.9), so it is drawn HERE, once,
     ; for every static page, rather than by eight page bodies each naming its
     ; own string. A page is entered with the heading drawn and the pen black.
+%ifdef KERN_BIG
+    cmp byte [cs:cp_wide], 0    ; ...and HOSTED it has none: the wide face's
+    je .head                    ; header strip names the page (SPEC.md 134.3)
+    call cp_black
+    jmp short .headed
+.head:
+%endif
     CPSTAGEX cp_items + CP_I_NAME
     call cp_black
     mov cx, CP_PMX
     mov dx, CP_PHY
     call cp_runp
+%ifdef KERN_BIG
+.headed:
+%endif
     pop si
     call [cs:si + cp_items + CP_I_PAINT]
 .done:
@@ -2560,6 +2879,8 @@ cp_listrow:
 ; -----------------------------------------------------------------------------
 %ifdef DOCK_OPT
 cp_list:
+    cmp byte [cs:cp_wide], 0    ; the wide face draws its own (SPEC.md 134.3)
+    jne cp_wlist
     call kentm_bp
 
                                 ; the pane's ground, laid once
@@ -3070,6 +3391,77 @@ cp_thm_cust_btn:
 ; close runs (drv_cp_closed_x's tail). The window is handed the three addresses it edits -
 ; the Color row, the struct's 'TP' record and [thm_cstrp] - so it needs no
 ; symbol and the kernel needs no preset table and no call to set one.
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_thm_apply - the Theme page's radio (SPEC.md 76.4), and CPG_THMSET's
+; in:  AL = a THM_* kind - greying already asked (cp_thm_colgrey)
+; out: CF = 1 it was already live and nothing changed; CF = 0 applied, every
+;      window owed its repaint and SYSTEM.CFG owed at the close. Keeps AX
+; -----------------------------------------------------------------------------
+cp_thm_apply:
+    cmp al, [thm_kind]
+    stc
+    je .r                       ; already live: change nothing
+    cmp al, THM_COLOR           ; Color and Windows are ONE row and a title
+    jb .tstyle                  ; style (SPEC.md 76.14.13): bit 2 of
+    and byte [thm_cstrp], 0FBh  ; [thm_cstrp] is what thm_set promotes Color
+    cmp al, THM_WIN             ; to Windows on, so the radio that names
+    jne .tstyle                 ; plain Color clears it and the Windows radio
+    or byte [thm_cstrp], 4      ; sets it - the page and Customize's style
+.tstyle:                        ; group then cannot disagree
+    call COLD_SEG:thm_set
+    jnc .tok                    ; WIN95.DRV could not be mounted (SPEC.md
+    push si                     ; 76.14.1): thm_set has adopted the nearest
+    mov si, cp_s_tnowin         ; theme that needs no module and [thm_kind]
+    call sc_m_say               ; says which - the radios read it back, and
+    pop si                      ; the toast says why they did not move. The
+.tok:                           ; line is in THIS image, so sc_m_say (ES = CS)
+    call cp_repost              ; ...remembered on close (SPEC.md 31.8)
+    clc
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_thm_saver / cp_thm_cust - open the screen saver's settings (SPEC.md 79.7)
+; or Customize... (THMPAL.DRV, SPEC.md 76.14.14): the overlay, then its
+; window, and when there is none the reason said out loud - the LOADER's own
+; words (drv_errstg) for a load that failed, the beep for a window table that
+; was full (DRVE_OK: not about the disk, so it does not say the disk). The
+; page's two buttons and CPG_SAVER / CPG_THMCUST (SPEC.md 134.4) alike
+; in:  nothing. out: nothing; every register kept
+; -----------------------------------------------------------------------------
+cp_thm_saver:
+    push ax
+    push bx
+    mov al, SSV_CFG
+    CPXC ss_open                ; ssf_cfg's two instructions, from here
+    mov bx, ss_row
+    jmp short cp_thm_said
+cp_thm_cust:
+    push ax
+    push bx
+    call cp_thmv_open
+    mov bx, thmv_row
+cp_thm_said:                    ; CF = the open's refusal, BX = its row
+    jnc .ok
+    mov al, [bx+DRVR_ERR]
+    or al, al
+    jz .beep
+    cmp al, DRVE_NERR
+    jae .beep                   ; out of range: the beep, never silence
+    push si
+    call drv_errstg
+    call cp_toast
+    pop si
+    jmp short .ok
+.beep:
+    KDOOR snd_beep
+.ok:
+    pop bx
+    pop ax
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 cp_thmv_open:
     call kentm_bp               ; KENT: push ax..bp (AX too: the caller reads
@@ -3185,31 +3577,8 @@ cp_thm_click:
     jc .donej                   ; 13.8.3): opening a window is not a safe
                                 ; prefix action, so a mis-aimed press has to
                                 ; be cancellable by sliding off
-    mov al, SSV_CFG             ; the overlay, and then its window (79.7):
-    CPXC ss_open                 ; ssf_cfg's two instructions, from here
-    jnc .donej
-    mov al, [ss_row+DRVR_ERR]   ; ...and the ONE refusal on this page that the
-    or al, al                   ; user is standing in front of, so it is said
-    jz .nowinj                  ; out loud rather than swallowed the way every
-    cmp al, DRVE_NERR           ; other one in SPEC.md 79 is (SPEC.md 2.8.4,
-    jae .nowinj                 ; 47 rule 3) - AND IT SAYS WHY, out of the
-    push si                     ; LOADER's own words (drv_errstg), which
-                                ; cp_snd_note already borrows for these same
-                                ; causes. drv_load_at wrote the code into the
-    call drv_errstg             ; row before ssf_cfg ever answered, so naming
-                                ; it is one byte read and no string of our own.
-                                ; An out-of-range code takes the beep rather
-                                ; than silence: a bounds miss here would be a
-    call cp_toast               ; press that did nothing
-    pop si
-    jmp short .donej
-.nowinj:
-    KDOOR snd_beep              ; DRVE_OK = the image loaded and SSV_CFG itself
-                                ; refused, which today is wm_create finding the
-                                ; table full - no window, and NOT ABOUT THE
-                                ; DISK, so it does not say the disk. cp_open_x's
-                                ; own rule and cp_open_x's own answer (34.3),
-                                ; and it costs no resident string
+    call cp_thm_saver           ; the overlay, its window, and the reason
+                                ; when there is none (below)
 .donej:                         ; ...and the five refusals above
     jmp .done
 
@@ -3233,21 +3602,8 @@ cp_thm_click:
     call cp_ctl                  ; ...and it FIRES ON THE RELEASE (13.8.3),
     jc .donej                    ; ssf_cfg's own reason: opening a window is
                                   ; not a safe prefix action
-    call cp_thmv_open            ; the overlay, and then its window (76.14.14)
-    jnc .donej
-    mov al, [thmv_row+DRVR_ERR]  ; the one refusal on THIS row the user is
-    or al, al                    ; standing in front of, said out loud rather
-    jz .cnowin                   ; than swallowed - ssf_cfg's exact shape
-    cmp al, DRVE_NERR
-    jae .cnowin
-    push si
-    call drv_errstg
-    call cp_toast
-    pop si
+    call cp_thm_cust             ; the overlay, its window, or why not
     jmp short .donej
-.cnowin:
-    KDOOR snd_beep               ; DRVE_OK = the image loaded and THMV_OPEN
-    jmp short .donej             ; itself refused (wm_create's table full)
 .groups:
 %endif
     cmp dx, CPH_B0Y1
@@ -3280,31 +3636,15 @@ cp_thm_click:
     call cp_ctli                ; ...and it IS the control: id 1 to 4
     jc .done                    ; (SPEC.md 13.8.3)
 %endif
+%ifdef KERN_BIG
+    call cp_thm_apply           ; (below: CF = 1 already live)
+    jc .done
+%else
     cmp al, [thm_kind]
     je .done                    ; already live: change nothing
-%ifdef KERN_BIG
-    cmp al, THM_COLOR           ; Color and Windows are ONE row and a title
-    jb .tstyle                  ; style (SPEC.md 76.14.13): bit 2 of
-    and byte [thm_cstrp], 0FBh  ; [thm_cstrp] is what thm_set promotes Color
-    cmp al, THM_WIN             ; to Windows on, so the radio that names
-    jne .tstyle                 ; plain Color clears it and the Windows radio
-    or byte [thm_cstrp], 4      ; sets it - the page and Customize's style
-.tstyle:                        ; group then cannot disagree
-%endif
     call COLD_SEG:thm_set
-%ifdef KERN_BIG
-    jnc .tok                    ; WIN95.DRV could not be mounted (SPEC.md
-    push si                     ; 76.14.1): thm_set has adopted the nearest
-    mov si, cp_s_tnowin         ; theme that needs no module and [thm_kind]
-    call sc_m_say               ; says which - the radios below read it back,
-    pop si                      ; and the toast says why they did not move.
-.tok:                           ; The line is in THIS image, so sc_m_say
-                                ; (ES = CS) and not cp_toast, which is for
-                                ; the kernel's strings
-%endif
     call cp_repost              ; remembered on close (SPEC.md 31.8)
-                                ; ui_task repaints the world (SPEC.md 13)
-                                ; ...and SAY SO once (SPEC.md 13.13)
+%endif
     call cp_thm_radios
     jmp short .done
 
@@ -3557,6 +3897,12 @@ CPQ_CELLS equ 24
 
 section .modcb
 cp_key_state: resb CPQ_CELLS + 2  ; independent of desktop/settings saves
+%ifdef KERN_BIG
+cp_wide:    resb 1              ; 1 = the wide face is up (SPEC.md 134.2):
+                                ; written by cpg_open and cp_wclose alone,
+                                ; zero in the file tail, so a re-adopted
+                                ; image starts compact
+%endif
 section .modu
 cp_key_len equ cp_key_state
 cp_key_pending equ cp_key_state + 1
@@ -4643,6 +4989,53 @@ cp_vid_paint:
     jmp kretm_si
 
 ; -----------------------------------------------------------------------------
+; cp_vid_set - SPEC.md 31.10's Activate: put the desktop on adapter AL
+; in:  AL = a VID_* kind; CL = the VESA class (VID_EXT, AL = VID_VESA only)
+; out: CF = 1 refused (the adapter went away); CF = 0 switched and every
+;      window owed its repaint (cp_repost). Clobbers AX
+;
+; The Display page's Activate button and the wide face's CPG_VIDSET
+; (SPEC.md 134.4) are this one body: the VESA row has the driver choose the
+; class asked for first (SPEC.md 120.6), and a display already on the VBE
+; leaves and comes back, because vid_switch onto the kind it is on is a no-op.
+; kern_big's: kern_small's button keeps the three lines inline
+; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+cp_vid_set:
+%ifdef VID_EXT
+    cmp al, VID_VESA
+    jne .sw
+    push ax
+    mov al, VXV_PICK
+    call cp_vid_vxcall
+    cmp byte [vid_kind], VID_VESA
+    jne .swp
+    mov al, VID_VGA
+    CPXF vid_switch
+.swp:
+    pop ax
+.sw:
+%endif
+    CPXF vid_switch             ; IN THIS IMAGE (KSW_SECT, kernel.asm)
+    jc .r                       ; refused: the adapter went away under us
+    call cp_repost
+.r:
+    ret
+
+; cp_vgc_tog - Force Color's tick toggled (SPEC.md 31.10.4, 39.28) and owed to
+; SYSTEM.CFG: a tick applies now, an un-tick at the next start. The page's box
+; and CPG_VGC (SPEC.md 134.4) alike. Clobbers the flags
+cp_vgc_tog:
+    xor byte [drv_cfg+CFG_VGC], CFG_VGCB ; (a bit of 'VM's mode byte, F1)
+    test byte [drv_cfg+CFG_VGC], CFG_VGCB
+    call cp_wdset               ; remembered on close (SPEC.md 31.8) - the
+    jz .r                       ; door writes no flags, so ZF is the test's: an
+    call cp_vgc_force           ; UN-tick waits for the next start (39.28)
+.r:
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
 ; cp_vid_click - a click inside the Display page
 ;
 ; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-relative
@@ -4687,26 +5080,18 @@ cp_vid_click:
     jc .done
 %endif
     mov al, [cp_vsel]
+%ifdef KERN_BIG
 %ifdef VID_EXT
-    cmp al, VID_VESA
-    jne .sw                     ; the VESA row (SPEC.md 120.6): the driver
-    push ax                     ; chooses the class asked for first...
-    mov cl, [drv_cfg+CFG_VE]
-    mov al, VXV_PICK
-    call cp_vid_vxcall
-    cmp byte [vid_kind], VID_VESA   ; ...and a display already on the VBE
-    jne .swp                    ; leaves and comes back, because vid_switch
-    mov al, VID_VGA             ; onto the kind it is on is a no-op
-    CPXF vid_switch
-.swp:
-    pop ax
-.sw:
+    mov cl, [drv_cfg+CFG_VE]    ; the VESA row's class (SPEC.md 120.6)
 %endif
+    call cp_vid_set             ; ...and remembered on close (SPEC.md 31.8):
+                                ; the whole screen is a new shape, and the
+                                ; wide face's CPG_VIDSET is this same body
+%else
     CPXF vid_switch             ; IN THIS IMAGE (KSW_SECT, kernel.asm)
     jc .done                    ; refused: the adapter went away under us
     call cp_repost              ; ...remembered on close (SPEC.md 31.8)
-                                ; ...and the whole screen is a new shape
-                                ; ...and SAY SO once (SPEC.md 13.13)
+%endif
     jmp short .done             ; (the radio rows sit between: .done is
                                 ; theirs, and in SHORT reach of every
                                 ; refusal above and of the desktop row below
@@ -4767,12 +5152,7 @@ cp_vid_click:
     mov al, 5
     call cp_ctl                 ; ...and it fires on the RELEASE (13.8.3)
     jc .done
-    xor byte [drv_cfg+CFG_VGC], CFG_VGCB ; (a bit of 'VM's mode byte, F1)
-    test byte [drv_cfg+CFG_VGC], CFG_VGCB
-    call cp_wdset               ; remembered on close (SPEC.md 31.8) - the
-    jz .fcdraw                  ; door writes no flags, so ZF is the test's: an
-    call cp_vgc_force           ; UN-tick waits for the next start (39.28)
-.fcdraw:
+    call cp_vgc_tog             ; the bit, owed, and applied (below)
     call cp_vid_fc
     jmp short .done
 %endif
@@ -5069,6 +5449,9 @@ cp_time_click:
 ; live window rect and the two rows redrawn in place.
 ; -----------------------------------------------------------------------------
 modc_e_tick:                    ; CPE_TICK, entered FAR (see kretf_bp)
+%ifdef KERN_BIG
+    CPWF CWV_TICK
+%endif
 cp_tick_x:
     call kentm_bp                ; KENT: push ax..bp
 
@@ -7402,40 +7785,7 @@ cp_drv_click:
     jc .done
 %endif
 
-    cmp word [bx+DRVR_SEG], 0
-    je .load
-%ifdef VID_EXT
-    cmp bx, vesa_row            ; VESA.DRV IS THE RENDERER (SPEC.md 120.4): the
-    jne .novx                   ; desktop goes back onto the VGA BEFORE the
-    push ax                     ; image that was drawing it is freed, and this
-    mov al, VID_VGA             ; page is the one caller that can detach it
-    CPXF vid_switch             ; (IN THIS IMAGE, KSW_SECT) - a no-op when the
-    pop ax                      ; display was already the VGA's
-    call cp_repost              ; ...and the whole screen is a new shape
-.novx:
-%endif
-    CPXC drv_unload_x             ; it is up: take it down...
-    jmp short .off              ; ...and nothing failed - it was turned off
-.load:
-    cmp byte [bx+DRVR_WANT], 0  ; unloaded but WANTED: the boot tried and
-    je .try                     ; failed (no card, no disk), and on a machine
-.off:                           ; where that is permanent this click is the
-    mov byte [bx+DRVR_WANT], 0  ; only gesture there is for "stop asking"
-    mov byte [bx+DRVR_ERR], DRVE_OK ; - without it the boot notice could not be
-    jmp short .save             ; silenced at all, because retrying re-set
-                                ; the want on every click. Clicking AGAIN
-                                ; from here retries the load, so nothing
-                                ; was lost, only unnagged
-.try:
-    mov byte [bx+DRVR_WANT], 1  ; wanted first, so a failed load still
-                                ; persists the intent: put the disk in and
-    call cdl_load               ; the next boot picks it up
-.save:
-    mov byte [bx+DRVR_ANS], 1   ; a click is an ANSWER, on or off: from here
-                                ; the file keeps this row's want and no sniff
-                                ; second-guesses it (SPEC.md 51.5.4)
-    call cp_wdset               ; ...and the settings file is OWED, not
-                                ; written: the close pays it (SPEC.md 31.8)
+    call cp_drv_tog             ; the row's state change (below)
     push di                     ; a driver that came up or went down may own
     push bp                     ; a PAGE, so the item list changed too and
     sub di, CP_RX               ; not just this pane (SPEC.md 31.9). cp_list
@@ -7455,6 +7805,55 @@ cp_drv_click:
     call cp_drv_line1
 .done:
     jmp kretm_si
+
+; -----------------------------------------------------------------------------
+; cp_drv_tog / cp_drv_off / cp_drv_on - one drv_tab row's state change, with
+; nothing drawn but the whole screen when VESA.DRV goes (SPEC.md 31.6, 134.4)
+; in:  BX = the row (cp_drvrow); gfx lock held
+; out: nothing; AX and BX preserved (cdl_load, drv_unload and cp_wdset keep
+;      them, and cp_drv_click redraws the row from AL afterwards)
+;
+; cp_drv_tog is the page's click: up -> down; down and wanted -> not wanted
+; (the boot tried and failed - no card, no disk - and on a machine where that
+; is permanent this is the only gesture there is for "stop asking"); down and
+; not wanted -> wanted, and loaded. cp_drv_off and cp_drv_on are its halves,
+; which the wide face asks for by name (CPG_DRVOFF, CPG_DRVON). Every path is
+; an ANSWER (DRVR_ANS, SPEC.md 51.5.4) and owes SYSTEM.CFG at the close.
+; -----------------------------------------------------------------------------
+cp_drv_tog:
+    cmp word [bx+DRVR_SEG], 0
+    jne cp_drv_off
+    cmp byte [bx+DRVR_WANT], 0
+    je cp_drv_on
+cp_drv_off:
+    cmp word [bx+DRVR_SEG], 0
+    je .off
+%ifdef VID_EXT
+    cmp bx, vesa_row            ; VESA.DRV IS THE RENDERER (SPEC.md 120.4): the
+    jne .novx                   ; desktop goes back onto the VGA BEFORE the
+    push ax                     ; image that was drawing it is freed, and this
+    mov al, VID_VGA             ; page is the one caller that can detach it
+    CPXF vid_switch             ; (IN THIS IMAGE, KSW_SECT) - a no-op when the
+    pop ax                      ; display was already the VGA's
+    call cp_repost              ; ...and the whole screen is a new shape
+.novx:
+%endif
+    CPXC drv_unload_x           ; it is up: take it down...
+.off:                           ; ...and nothing failed - it was turned off.
+    mov byte [bx+DRVR_WANT], 0  ; Without this the boot notice could not be
+    mov byte [bx+DRVR_ERR], DRVE_OK ; silenced at all, because retrying re-set
+    jmp short cp_drv_ans        ; the want on every click; clicking AGAIN
+                                ; retries the load, so nothing is lost
+cp_drv_on:
+    mov byte [bx+DRVR_WANT], 1  ; wanted first, so a failed load still
+                                ; persists the intent: put the disk in and
+    call cdl_load               ; the next boot picks it up
+cp_drv_ans:
+    mov byte [bx+DRVR_ANS], 1   ; a click is an ANSWER, on or off: from here
+                                ; the file keeps this row's want and no sniff
+                                ; second-guesses it (SPEC.md 51.5.4)
+    jmp cp_wdset                ; ...and SYSTEM.CFG is OWED, not written: the
+                                ; close pays it (SPEC.md 31.8)
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_line1 - redraw the reason under one driver row
@@ -8110,6 +8509,13 @@ cp_open_x:
     push ax                     ; the bank is the BODY's, not the load's:
     call cp_open_need           ; cpf_need banks AX itself, but `mov al,
     jc .failed                  ; KIND_CTRL` below and `mov al, 1` at .no do not
+%ifdef KERN_BIG
+    mov ah, CPG_OPEN            ; THE IMAGE OPENS IT (SPEC.md 134.2): the face
+    call far [CPFP + CPE_GATE*4] ; chosen, cp_tpl's size, KD_INIT's work, and
+    jmp short .out              ; then the app_launch and its beep below, as
+                                ; cpg_open - which is what keeps this ten
+                                ; bytes of .cold, as it was (kern_emu's rung)
+%else
     mov al, KIND_CTRL
     KDOOR app_launch
     jnc .out                    ; the panel itself refused - no instance slot,
@@ -8120,6 +8526,7 @@ cp_open_x:
                                 ; what every one of these call sites did with
                                 ; a CF=1 from app_launch before cp_open owned
                                 ; the decision
+%endif
 .failed:
     stc
 .out:
