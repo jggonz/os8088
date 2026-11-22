@@ -3667,6 +3667,12 @@ DRIVERS += $(BUILD)/vesa.drv
 # ($(SYS360OMITDRV)): no XT has a PCI bus. kern_small filters it back out
 # ($(SMALLDRIVERS) is a restatement that never held it)
 DRIVERS += $(BUILD)/pciether.drv
+# CPWIDE.DAT - the wide Control Panel's icons and driver catalog (SPEC.md
+# 134.6, 134.7): a DATA file beside CTRL.DRV, built by tools/cpwdat.py. It is
+# kern_big / kern_emu / kern_mega's alone - kern_small has no wide panel - and
+# $(SMALLDRIVERS) is a restatement that never held it. On a
+# boot disk: an ordinary file (SPEC.md 19.6), so it takes one root listing slot.
+DRIVERS += $(BUILD)/cpwide.dat
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -4123,6 +4129,16 @@ $(BUILD)/%.f88: faces/%.t88 tools/os88face.py | $(BUILD)
 
 $(BUILD)/faces:
 	mkdir -p $@
+
+# CPWIDE.DAT (SPEC.md 134.6) packs like a driver: a 'CZ' file the kernel's
+# transparent read expands into the claim the directory hint sizes. Every input
+# is a prerequisite - the two sheets, the catalog, the layout it is checked
+# against and the compressor - and PKGZSTAMP carries the PKGZ knob, so a
+# BUILD= tree (kern_emu's, kern_mega's, a knob's) rebuilds it for its own PKGZ.
+$(BUILD)/cpwide.dat: tools/cpwdat.py kernel/cpwfmt.inc drivers/catalog.toml \
+                     kernel/cpwart/cp-icons-16.png kernel/cpwart/cp-icons-32.png \
+                     tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	python3 tools/cpwdat.py -o $@ $(if $(PKGZ),--fmt $(PKGZ))
 
 $(BUILD)/faces/%.f88: $(BUILD)/%.f88 tools/os88lz.py $(PKGZSTAMP) | $(BUILD)/faces
 ifeq ($(PKGZ),)

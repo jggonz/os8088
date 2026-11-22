@@ -57,7 +57,7 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 - [ ] **S3** (`shell`) `CPE_GATE` and its `CPG_*` opcode table (134.4).
 - [ ] **S4** (`shell`) The widget kit (134.5) with one worked example page,
   documented for S7-S9.
-- [ ] **S5** (`art`) `tools/cpwdat.py`, `drivers/catalog.toml` with every
+- [I] **S5** (`art`) `tools/cpwdat.py`, `drivers/catalog.toml` with every
   shipped driver, `CPWIDE.DAT` on every system disk of big/emu/mega in all
   four geometries plus the live media, checked against
   `kernel/cpwfmt.inc` (lead, wave 0), the

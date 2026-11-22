@@ -258968,6 +258968,47 @@ Built by `tools/cpwdat.py` from `kernel/cpwart/*.png` and
          (two words a row, left word first, same bit order)
 ```
 
+**Exact layout.** The header is 16 bytes (`CWD_HDR`); then, back to back, the
+32 16×16 icons at `off16` (= 16; 5,120 bytes), the 12 32×32 icons at `off32`
+(= 5,136; 7,680 bytes), the catalog at `offcat` (= 12,816; `ncat` × 64 bytes)
+and the description strings at `offstr` (NUL-terminated, in catalog order, line
+1 before line 2). Every offset in the file is from the file's start. A 16×16
+icon's mask is 16 words, one a row, bit 15 the leftmost pixel; a 32×32's is 32
+rows of two words, the left 16 pixels first. A pixel is opaque (mask bit 1) or
+transparent (mask bit 0, nibble 0); colour nibbles are indices into the sixteen
+EGA/VGA colours in their usual order - black, blue, green, cyan, red, magenta,
+brown, light grey, dark grey, light blue, light green, light cyan, light red,
+light magenta, yellow, white - which are the sheets' RGB values `#000000`,
+`#0000AA`, `#00AA00`, `#00AAAA`, `#AA0000`, `#AA00AA`, `#AA5500`, `#AAAAAA`,
+`#555555`, `#5555FF`, `#55FF55`, `#55FFFF`, `#FF5555`, `#FF55FF`, `#FFFF55`,
+`#FFFFFF`; the key `#FF00FF` is the transparent pixel and anything else is a
+build error (`tools/cpwdat.py` names the file, cell and pixel).
+
+**Measured (2026-11-21, 13 catalog entries): 14,642 bytes unpacked** - header
+16, icons 12,800, catalog 832, strings 994 - **5,290 bytes packed** (LZ4, `PKGZ`'s
+default; `make PKGZ=` ships it plain). The ceiling is 16,384 unpacked
+(`CPWIDE.DAT` is read into one heap claim); each new driver adds 64 bytes and its
+description strings, so the file has room for about a dozen more entries.
+
+**It is on the disk like a driver.** `CPWIDE.DAT` rides `$(DRIVERS)`, so it is
+on every kern_big, kern_emu and kern_mega system disk - all four floppy
+geometries, the emu disk, the hard-disk and live-media images, the mega images
+- and on no kern_small disk (`$(SMALLDRIVERS)` never held it). `os88disk.py`
+leaves it an ordinary file (archive only: SPEC.md 19.6 locks only what would
+unboot the disk, and a read-only file is one a keep-install cannot replace), so
+it is visible in the root listing and takes one slot of it. It is packed as a `CZ` file by
+`tools/os88lz.py --wrap` in the same pass as a driver: the directory entry
+carries the §20.13.5 hint, so a kernel read that names the file expands it
+transparently into a claim of the unpacked size - the wide panel sees the 14,642
+bytes above and never the stream. The rule is `$(BUILD)/cpwide.dat` in the
+Makefile; its prerequisites are the tool, `kernel/cpwfmt.inc`, the catalog,
+both sheets, the compressor and the `PKGZ` stamp, and it is built per `BUILD=`
+tree, so kern_emu's and kern_mega's directories and a knob tree each carry
+their own copy of the same bytes.
+
+On the 360KB system disk it costs 11 of the 706 512-byte clusters (678 → 689
+in use, 17 free; `os88disk.py --verify` OK) and one root directory slot.
+
 A transparent pixel's colour nibble is 0 and means nothing; the drawer
 substitutes the ground. Icon indices are the sheets' cells, row-major:
 16×16 indices 0-15 are page icons (Scheduler, Date/Time, Keyboard, Floppy,
@@ -259011,6 +259052,22 @@ description - a new driver works before anyone writes its entry.
 `tests/unit/t_cpwdat.py` (fast tier) fails the build for any shipped
 `drv_tab` row of any kernel without an entry, an entry whose file is no
 row's, a line over its limit, or an icon outside the palette.
+
+**The 13 entries (2026-11-21)** are every file `drv_tab` names on any kernel:
+SOUND.DRV, HDD.DRV, ETHER.DRV, RAMDISK.DRV, NET.DRV, VMMOUSE.DRV (kern_emu),
+USBMOUSE.DRV, EMS.DRV, CDROM.DRV, HTTPFS.DRV, VESA.DRV, PCIETHER.DRV and
+PC1MOUSE.DRV. A file that is not a `drv_tab` row - THMPAL.DRV, HDDTOOL.DRV,
+the on-demand modules - has no entry and needs none. Each entry says what the
+driver does and what hardware it needs in plain words; the page shows the
+description in its details box. The file's header comment is the recipe for a
+new driver, and `python3 tools/cpwdat.py --check` lists the rows that lack one.
+
+**What `t_cpwdat.py` reads.** The `drv_tab` side is `kernel/driver.inc`'s table,
+scraped as the union of every kernel's rows (one source, ifdefs per kernel),
+and the file side is `build/cpwide.dat`, read back by a second reader written
+in the test from `kernel/cpwfmt.inc`'s numbers and compared pixel by pixel with
+the sheets and record by record with the catalog. `build/cpwide.dat` differing
+from what `cpwdat.py` writes now fails it, so a stale asset file cannot ship.
 
 ### 134.8 The Drivers page
 

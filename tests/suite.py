@@ -1783,6 +1783,22 @@ FAST = [
         "by different people - the system-side size pass shrank RAMDISK.DRV "
         "and NET.DRV across a KB with no kernel edit, and every make stayed "
         "green with the page quoting 9K and 7K for drivers that claim 8 and 5"),
+    Row("cpwdat", "fast", py("tests/unit/t_cpwdat.py"), 0.3,
+        "SPEC.md 134.6/134.7: every drv_tab row of every kernel has an entry "
+        "in drivers/catalog.toml and every entry names a row; names <= 25 and "
+        "description lines <= 46 characters; icon indices inside the sheet; "
+        "every sheet pixel a palette colour or the #FF00FF key; and "
+        "build/cpwide.dat is what tools/cpwdat.py writes NOW, read back by a "
+        "second reader against the sheets and the catalog. FAST as THE "
+        "BOUNDARY, drvmem's reason: a driver is added in kernel/driver.inc by "
+        "one person and its words live in a TOML file nobody opens, so the "
+        "wide Drivers page would show it as Unknown with no description and "
+        "every other check stays green",
+        needs=(), inputs=("tools/cpwdat.py", "drivers/catalog.toml",
+                          "kernel/cpwfmt.inc", "kernel/driver.inc",
+                          "kernel/cpwart/cp-icons-16.png",
+                          "kernel/cpwart/cp-icons-32.png",
+                          "tests/unit/t_cpwdat.py", "tests/unit/harness.py")),
     Row("installabi", "fast", py("tests/unit/t_install.py"), 0.2,
         "SPEC.md 117: INSTALL.O88 in the ROOT of every kern_big system disk "
         "and on no kern_small one; HD_ABI_VER the same in hddabi.inc and the "

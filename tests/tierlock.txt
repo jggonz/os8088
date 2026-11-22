@@ -26,6 +26,7 @@ fast  catdisk                # as reviewed 2026-11-12
 fast  cellgate               # as reviewed 2026-11-12
 fast  checkdocs              # as reviewed 2026-11-12
 fast  checkreadme            # as reviewed 2026-11-12
+fast  cpwdat                # PENDING OWNER PERMISSION (WRITING-TESTS 2.0): requested by the cpwide fan-out lead 2026-11-21; valid reasons: host-only, wide (any driver added), commonly forgotten. Delete this line to move the row to soak
 fast  deps                   # owner 2026-11-12: sessions keep breaking what it guards, and only a guard stops that
 fast  diskverify             # as reviewed 2026-11-12
 fast  docindex               # as reviewed 2026-11-12
