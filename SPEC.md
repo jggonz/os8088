@@ -240362,12 +240362,53 @@ picture disk carries the shipped PiXEL, and kern_mega runs PiXEL's arm.
 
 ### 120.10 Mode information for a mode changer - `VXV_INFO`
 
-**Pinned only** (docs/plans/CPWIDE-PLAN.md, story S6). The wide Control
-Panel's mode table (§134.9) needs every offered mode's geometry, depth and
-memory, and the card's VBE version and video memory - which `VXV_NEXT`
-(§120.2.3) answers only one class at a time and the card facts not at all.
-S6 pins the verb here: its number, registers, the record it fills, and the
-`VX_ABI_VER` step.
+The wide Control Panel's mode table (§134.9) needs every offered mode's
+geometry, depth and memory, and the card's VBE version and video memory -
+which `VXV_NEXT` (§120.2.3) answers only one class at a time and the card
+facts not at all. `VXV_INFO` (`0x44`, `kernel/vxabi.inc`) answers both in
+registers, one call a record, so the table is `count` calls and no walk.
+
+**Why registers.** The caller reaches the driver through `drv_call`, which
+spends BX on the driver row and enters the image with ES = the kernel's
+segment: there is no buffer a caller can name for the driver to fill that is
+in the driver's own segment, and the kernel's segment is not the caller's
+when the caller is a module. Three verbs' worth of precedent (`VXV_NEXT`)
+already returns in CL/CH/DL/DH.
+
+| in | out |
+|---|---|
+| `AL` = `VXV_INFO`, `CL` = `0FFh` (the CARD) | CF = 0. `AX` = the VBE version word (QEMU answers `0300h`), `DX` = total video memory in 64KB units (4F00h +18), `CL` = the offered count, `CH` = the index of the RUNNING record, `SI` = the index Auto would pick (the "recommended" mode, §120.2.3) |
+| `AL` = `VXV_INFO`, `CL` = i < count (RECORD i, the table's order, which is the card's) | CF = 0. `AX` = X, `DX` = Y, `CL` = its class byte (`VXC_*`, exactly the `VE` byte `VXV_NEXT`/`VXV_PICK` use), `CH` = its depth (8, 15 or 16 - a 15bpp mode says 15 here although its class says 16), `SI` = the framebuffer KB it needs (BytesPerScanLine x Y, rounded up to a KB), `DI` = the VBE mode number |
+| `CL` >= count and not `0FFh`, or the image never initialised | CF = 1, nothing else defined |
+
+**Registers.** BX is kept (it is the caller's driver row); AX, CX, DX, SI and
+DI are outputs, so the verb **clobbers SI and DI**, unlike `VXV_NEXT`, whose
+caller paints a pane through them. The card's version and memory are read
+once at attach and copied into four bytes of the driver's state, because the
+4F00h buffer is the attach-only region that is zeroed once the mode is
+chosen (§120.2.1, `vx_attok`). Memory is in KB, not banks, so the page's
+column is one divide away from a figure a user knows; a mode that fits in
+the card is not tested here - the card's memory is in the same answer and
+the table greys the rows that exceed it.
+
+**The index is the record's position** in the driver's table (at most 16,
+`VX_NMODES`), stable for the life of the image. `VXV_PICK`/`VXV_NEXT` still
+speak classes; the index is only for the information verb.
+
+**ABI decision: `VX_ABI_VER` stays 6.** This verb is ADDITIVE in
+`VXV_PM`'s exact sense: a kernel that predates it never sends it, and an
+image that predates it refuses an unknown verb with CF = 1 (`vx_entry`'s
+`.no`), which the panel reads as "no information: fall back to the
+`VXV_NEXT` walk". Stepping the number would refuse a stale `VESA.DRV` beside
+the new kernel for nothing. A change to the record's meaning (a register
+moving) is the case that WOULD step it. `tools/abi.lock.json` covers
+`apps/os88api.inc` and `drivers/os88drv.inc` for `PKG_FMT` and `DRV_VER`
+and `kernel/vxabi.inc` for `VX_ABI_VER`: the fingerprint of the latter moves
+with this change, which is a clarification of the contract and not a bump
+(`tools/abilock.py --update`).
+
+**Cost.** `VESA.DRV` image (bss included) 7,421 -> 7,542 bytes (+121); no
+resident kernel byte.
 
 ## 121. XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`)
 
@@ -258968,6 +259009,47 @@ Built by `tools/cpwdat.py` from `kernel/cpwart/*.png` and
          (two words a row, left word first, same bit order)
 ```
 
+**Exact layout.** The header is 16 bytes (`CWD_HDR`); then, back to back, the
+32 16×16 icons at `off16` (= 16; 5,120 bytes), the 12 32×32 icons at `off32`
+(= 5,136; 7,680 bytes), the catalog at `offcat` (= 12,816; `ncat` × 64 bytes)
+and the description strings at `offstr` (NUL-terminated, in catalog order, line
+1 before line 2). Every offset in the file is from the file's start. A 16×16
+icon's mask is 16 words, one a row, bit 15 the leftmost pixel; a 32×32's is 32
+rows of two words, the left 16 pixels first. A pixel is opaque (mask bit 1) or
+transparent (mask bit 0, nibble 0); colour nibbles are indices into the sixteen
+EGA/VGA colours in their usual order - black, blue, green, cyan, red, magenta,
+brown, light grey, dark grey, light blue, light green, light cyan, light red,
+light magenta, yellow, white - which are the sheets' RGB values `#000000`,
+`#0000AA`, `#00AA00`, `#00AAAA`, `#AA0000`, `#AA00AA`, `#AA5500`, `#AAAAAA`,
+`#555555`, `#5555FF`, `#55FF55`, `#55FFFF`, `#FF5555`, `#FF55FF`, `#FFFF55`,
+`#FFFFFF`; the key `#FF00FF` is the transparent pixel and anything else is a
+build error (`tools/cpwdat.py` names the file, cell and pixel).
+
+**Measured (2026-11-21, 13 catalog entries): 14,642 bytes unpacked** - header
+16, icons 12,800, catalog 832, strings 994 - **5,290 bytes packed** (LZ4, `PKGZ`'s
+default; `make PKGZ=` ships it plain). The ceiling is 16,384 unpacked
+(`CPWIDE.DAT` is read into one heap claim); each new driver adds 64 bytes and its
+description strings, so the file has room for about a dozen more entries.
+
+**It is on the disk like a driver.** `CPWIDE.DAT` rides `$(DRIVERS)`, so it is
+on every kern_big, kern_emu and kern_mega system disk - all four floppy
+geometries, the emu disk, the hard-disk and live-media images, the mega images
+- and on no kern_small disk (`$(SMALLDRIVERS)` never held it). `os88disk.py`
+leaves it an ordinary file (archive only: SPEC.md 19.6 locks only what would
+unboot the disk, and a read-only file is one a keep-install cannot replace), so
+it is visible in the root listing and takes one slot of it. It is packed as a `CZ` file by
+`tools/os88lz.py --wrap` in the same pass as a driver: the directory entry
+carries the §20.13.5 hint, so a kernel read that names the file expands it
+transparently into a claim of the unpacked size - the wide panel sees the 14,642
+bytes above and never the stream. The rule is `$(BUILD)/cpwide.dat` in the
+Makefile; its prerequisites are the tool, `kernel/cpwfmt.inc`, the catalog,
+both sheets, the compressor and the `PKGZ` stamp, and it is built per `BUILD=`
+tree, so kern_emu's and kern_mega's directories and a knob tree each carry
+their own copy of the same bytes.
+
+On the 360KB system disk it costs 11 of the 706 512-byte clusters (678 → 689
+in use, 17 free; `os88disk.py --verify` OK) and one root directory slot.
+
 A transparent pixel's colour nibble is 0 and means nothing; the drawer
 substitutes the ground. Icon indices are the sheets' cells, row-major:
 16×16 indices 0-15 are page icons (Scheduler, Date/Time, Keyboard, Floppy,
@@ -259011,6 +259093,22 @@ description - a new driver works before anyone writes its entry.
 `tests/unit/t_cpwdat.py` (fast tier) fails the build for any shipped
 `drv_tab` row of any kernel without an entry, an entry whose file is no
 row's, a line over its limit, or an icon outside the palette.
+
+**The 13 entries (2026-11-21)** are every file `drv_tab` names on any kernel:
+SOUND.DRV, HDD.DRV, ETHER.DRV, RAMDISK.DRV, NET.DRV, VMMOUSE.DRV (kern_emu),
+USBMOUSE.DRV, EMS.DRV, CDROM.DRV, HTTPFS.DRV, VESA.DRV, PCIETHER.DRV and
+PC1MOUSE.DRV. A file that is not a `drv_tab` row - THMPAL.DRV, HDDTOOL.DRV,
+the on-demand modules - has no entry and needs none. Each entry says what the
+driver does and what hardware it needs in plain words; the page shows the
+description in its details box. The file's header comment is the recipe for a
+new driver, and `python3 tools/cpwdat.py --check` lists the rows that lack one.
+
+**What `t_cpwdat.py` reads.** The `drv_tab` side is `kernel/driver.inc`'s table,
+scraped as the union of every kernel's rows (one source, ifdefs per kernel),
+and the file side is `build/cpwide.dat`, read back by a second reader written
+in the test from `kernel/cpwfmt.inc`'s numbers and compared pixel by pixel with
+the sheets and record by record with the catalog. `build/cpwide.dat` differing
+from what `cpwdat.py` writes now fails it, so a stale asset file cannot ship.
 
 ### 134.8 The Drivers page
 
