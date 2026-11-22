@@ -44,6 +44,8 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "boratype_badges.py": "run by boratypemenus, which imports its packaged badge checks",
+    "boratype_settings.py": "run by boratypemenus, which imports its settings mutation test",
     "modkeep.py": "run by the `modcache` row (tests/modcache.py imports and "
                   "runs it): every on-demand module kept in RAM after its "
                   "drop, its tail zero in the file, its re-adoption free",

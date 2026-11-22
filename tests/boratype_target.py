@@ -172,12 +172,16 @@ class App:
     def text(self, name, cap=64):
         return self.p.read(self.sym["_" + name], cap).split(b"\0")[0].decode("ascii", "replace")
 
-    def state(self):
+    def read_session(self):
         raw = self.p.read(self.sym["_bt_session"], self.L["BTSession.size"])
         out = {name: raw[self.L["BTSession." + name]] for name in SESSION_BYTES}
         out.update({name: struct.unpack_from("<H", raw, self.L["BTSession." + name])[0]
                     for name in SESSION_WORDS})
         out["passage"] = raw[self.L["BTSession.passage"]:].split(b"\0")[0].decode("ascii")
+        return out
+
+    def state(self):
+        out = self.read_session()
         assert out["attempts"] == out["correct"] + out["errors"], out
         assert out["net"] == out["completed"] + out["pos"], out
         assert 0 <= out["pos"] <= out["length"] <= self.L["BT_PASSAGE"], out
@@ -264,8 +268,15 @@ class App:
         # not generic UI idle or a BIOS-ring fallback. Keep just one real
         # printable key unacknowledged, then witness production counters.
         self.ui.m.type_text(character)
-        self.ui._wait(lambda: self.state()["attempts"] == before["attempts"] + 1,
-                      "one printable attempt", 30, snapshot=self.state)
+        # The CPU increments attempts before it updates correct/errors,
+        # position and net. A memory read can land between those instructions.
+        def scored():
+            current = self.read_session()
+            return (current["attempts"] == before["attempts"] + 1
+                    and current["correct"] + current["errors"] == current["attempts"]
+                    and current["net"] == before["net"] + int(expected_correct)
+                    and current["net"] == current["pos"] + current["completed"])
+        self.ui._wait(scored, "one completed printable attempt", 30, snapshot=self.read_session)
         after = self.state()
         assert after["correct"] == before["correct"] + int(expected_correct), after
         assert after["errors"] == before["errors"] + int(not expected_correct), after

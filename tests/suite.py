@@ -1812,6 +1812,9 @@ FAST = [
         "SPEC.md 134: production alternating-generation transport under35 "
         "read/write/truncate/readback faults preserves last valid progress",
         needs=("cc",)),
+    Row("boratypeanimpack", "soak", py("tests/boratype_animpack.py"), 1.9,
+        "SPEC.md 134: decode all 30 poses, compare each strip and its bank signature, "
+        "and reject malformed lengths and frame addresses"),
     Row("boratypeface", "soak", py("tests/boratype_face.py"), 2.4,
         "SPEC.md 134:24 color/mono geometries, full ASCII opposite Shift/finger map, "
         "bounded dirty rendering, all actions and honest empty results; reversed Shift goes red",
