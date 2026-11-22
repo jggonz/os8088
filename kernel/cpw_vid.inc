@@ -1233,8 +1233,8 @@ cpv_arows:
 
 ; -----------------------------------------------------------------------------
 ; cpv_prev - the Mode preview group: a monitor drawn to the chosen mode's
-; aspect - a bezel, the screen, a foot, and the ground in six spans round
-; them - and three lines beside it (SPEC.md 134.9.1)
+; aspect - a bezel and the screen, and the ground in four spans round them -
+; and two lines beside it (SPEC.md 134.9.1)
 ; -----------------------------------------------------------------------------
 CPV_ZL      equ CPV_PX + 1      ; the picture zone: x ZL..ZL+79, y ZT..AB-1
 CPV_ZT      equ CPV_AY + CPK_BANDH
@@ -1278,34 +1278,9 @@ cpv_prev:
     call cpw_strcat
     mov dx, CPV_ZT + CPV_RH
     call .line
-    call cpv_new                ; ' Aspect X:Y', reduced by Euclid
-    mov si, cpv_s_aspect
-    call cpw_strcat
-    mov ax, [es:CPV_GX]
-    mov bx, [es:CPV_GY]
-.gcd:
-    xor dx, dx
-    div bx
-    mov ax, bx
-    mov bx, dx
-    or bx, bx
-    jnz .gcd
-    mov bx, ax                  ; BX = the gcd (X, Y >= 1: so is it)
-    mov ax, [es:CPV_GX]
-    xor dx, dx
-    div bx
-    call cpw_utoa
-    mov byte [es:di], ':'
-    inc di
-    mov ax, [es:CPV_GY]
-    xor dx, dx
-    div bx
-    call cpw_utoa
-    mov dx, CPV_ZT + 2 * CPV_RH
-    call .line
     call cpv_wh                 ; the rows under the lines
     mov ax, CPV_ZR + 1
-    mov bx, CPV_ZT + 3 * CPV_RH
+    mov bx, CPV_ZT + 2 * CPV_RH
     call cpv_r
     dec cx
     mov dx, CPV_AB - 1
@@ -2069,6 +2044,8 @@ cpv_rbox:
     mov si, cpv_s_kb
 .mem:
     call cpw_utoa
+    call cpw_strcat
+    mov si, cpv_s_vm
 .c:
     call cpw_strcat
     call .line
@@ -2204,12 +2181,11 @@ cpv_s_rgt:      db ' Right', 0
 cpv_s_blw:      db ' Below', 0
 cpv_s_comma:    db ', ', 0
 cpv_s_colours:  db ' colours', 0
-cpv_s_aspect:   db 'Aspect ', 0
 cpv_s_c2:       db '2', 0
 cpv_s_c16:      db '16', 0
-cpv_s_c256:     db '256', 0
-cpv_s_c32k:     db '32,768', 0
-cpv_s_c64k:     db '65,536', 0
+cpv_s_c256      equ cpv_s_t8        ; (the filter's labels are the colours)
+cpv_s_c32k      equ cpv_s_t8 + 4
+cpv_s_c64k      equ cpv_s_t8 + 11
 cpv_s_one:      db 'One mode: ', 0
 cpv_s_load:     db ' Load VESA Display on the Drivers page for more.', 0
 cpv_s_head:     db ' Resolution Colours Memory  Status', 0
@@ -2229,8 +2205,9 @@ cpv_s_revert:   db 'Revert', 0
 cpv_s_novx:     db 'VESA Display is not loaded', 0
 cpv_s_nolist:   db 'No mode list from the driver', 0
 cpv_s_vbe:      db 'VBE ', 0
-cpv_s_mb:       db ' MB video memory', 0
-cpv_s_kb:       db 'K video memory', 0
+cpv_s_mb:       db ' MB', 0
+cpv_s_vm:       db ' video memory', 0
+cpv_s_kb:       db 'K', 0
 cpv_s_rev1:     db 'Reverting in ', 0
 cpv_s_rev2:     db ' seconds.', 0
 

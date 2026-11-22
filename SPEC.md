@@ -259321,13 +259321,13 @@ driver that answers that verb gets this page for nothing.
 |---|---|
 | **Adapter** group | one row per adapter the machine HAS (§31.10's rule: an absent adapter is no row, not a greyed one), in the order VGA, VESA, EGA, Hercules, CGA; VESA only while `VID_A_VESA` is lit (the driver loaded). A row reads `VGA 640x480`, `VESA 1024x768` (the live mode while it runs) and `, running` on the running adapter. The selection is a blue bar - a PENDING choice, as `[cp_vsel]` is on the compact page (§31.10: selecting and switching are two actions); the page keeps its own copy and does not write `[cp_vsel]` |
 | the desktop line | `Desktop` and three radios, Single / Right / Below (§31.10.2), on the group's last line - drawn only where `vid_dual_ok` allows a pairing, exactly as the compact page, and applied on the spot through `CPG_VIDARR` |
-| **Mode preview** group | a monitor drawn to the SELECTED mode's aspect - a bezel, the screen in cyan, a neck and a base, seven fills and the ground in eight spans round them - and four lines: `Preview`, the resolution, the colours and the aspect reduced by Euclid (`4:3`, `8:5`, `60:29` for a Hercules) |
+| **Mode preview** group | a monitor drawn to the SELECTED mode's aspect - the screen in cyan inside a dark grey bezel, fitted to a 64×40 box (five fills, and the ground in four spans round it) - and two lines beside it: the resolution and the colours |
 | **Modes** group | for the VESA adapter: a filter strip (`All`, then one tab per colour depth the card offers - `256`, `32,768`, `65,536` - built from the records, never fixed), a header line, and a scrolling table (`cpk_table`) with the columns Resolution, Colours, Memory (the record's framebuffer KB) and Status. Status carries `current` (the running record, §120.10's `CH`), `recommended` (Auto's pick, `SI`) and `startup` (the record whose class is the `VE` byte; the Auto row when it is 0). The table's first row is **Auto** - "the recommended mode", the class byte 0. For any other adapter the group says what that adapter is in one line (it has one mode, §31.10); with the VESA adapter selected and no answer from the verb (an older `VESA.DRV`, CF = 1) the table is the Auto row alone and a line says so |
 | **Use this mode at startup** | a check box: ticked when the `VE` byte (`CFG_VE`, §120.2.3) is the selected row's class (Auto: 0). Ticking writes that class, un-ticking writes 0 (Auto), owed through `CPG_WDSET` - **the byte alone**; nothing switches. Greyed off the VESA adapter, and on the Auto row while it is ticked (there is nothing to un-tick to) |
 | **Force Color** | §31.10.4's box through `CPG_VGC`, greyed without a VGA |
 | **Apply** | switch now and keep: Set Primary's meaning (§31.10, §120.6) through `CPG_VIDSET` - AL = the selected adapter, CL = the selected row's class (Auto 0); the VESA kind has the driver pick first and leaves and comes back when it is already on the VBE. Greyed when the selection is what is running: the adapter is the running one and, for VESA, the row's record is the running record (Auto's is the recommended one) |
 | **Test...** | Apply for 15 seconds (§134.9.3). Greyed with Apply |
-| **Running mode** group | three lines: the running adapter and mode (`VESA 1024x768, 65,536 colours`), the card (`VBE 3.0, 16 MB video memory` - the version word as major.minor, memory in MB from 1MB up, else KB), and `At startup:` the `VE` class as `WxHxB` or `Auto`. During a test this group's place is the **Keep this mode?** group |
+| **Running mode** group | two lines: the running adapter and mode (`VESA 1024x768, 65,536 colours`), and the card (`VBE 3.0, 16 MB video memory` - the version word as major.minor, memory in MB from 1MB up, else KB; `VESA Display is not loaded` without the driver). The startup mode is the table's `startup` mark, not a line here. During a test this group's place is the **Keep this mode?** group |
 
 Colours are named from the depth (8 → 256, 15 → 32,768, 16 → 65,536) and,
 for the planar adapters, from the kind (VGA and EGA 16, Hercules and CGA 2).
@@ -259358,7 +259358,7 @@ four primitives, and nothing written twice.
 |---|---|---|
 | ground | 44..47, and the 3 rows above the status rule | the page area |
 | Adapter | 48..122: band, four row slots (60, 72, 84, 96), the desktop line (108), 2 rows of paper | `L`..`L`+255 |
-| Mode preview | 48..122: the picture in an 80×62 zone, its four lines beside it | `L`+260..`R` |
+| Mode preview | 48..122: the picture in an 80×62 zone, its two lines beside it | `L`+260..`R` |
 | Modes | 127..`C0`-5: band; the filter strip at +14 (14 rows, its row's paper round it); the header line at +30; the table from +42, `NV` = whole 12-row rows to 2 above the frame | `L`..`R` |
 | controls | `C0` = the status top - 54, 50 rows: the two check boxes (12-row glyph + row, 2 rows apart), then Apply and Test... (64×18, 4 apart) at `C0`+32 | `L`..`L`+211 |
 | Running mode / Keep this mode? | `C0`..`C0`+49 | `L`+216..`R` |
@@ -259475,11 +259475,16 @@ between (§13.8.3).
 #### 134.9.6 What differs from the mockup
 
 The info box shares the bottom band with the controls instead of running the
-page's width (the table keeps the rows at 616×408); the Keep group has the
-kit's grey band, not a blue one; the filter has no `16` (16 colours is the
+page's width (the table keeps the rows at 616×408); the Keep group's band
+is blue with white words, as the mockup's, but drawn by the page rather than
+by `cpk_group` - in the small state after a test of a Hercules or a CGA the
+desktop is 1bpp, where the kit's grey band sets black words on black and blue
+rounds to black under white ones; the filter has no `16` (16 colours is the
 VGA adapter, which is a row of the Adapter group, not a VBE mode); the
 adapter rows say `VGA 640x480` rather than `VGA 640x480 16 colours` (the
-colours are in the preview); the preview's "4:3" is computed.
+colours are in the preview); the preview has no aspect line - the picture
+is drawn to the aspect, and the line cost ~110 bytes of a page over its
+budget.
 
 ### 134.10 Reserved (VESA mode information - see §120.10)
 
