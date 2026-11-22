@@ -31,11 +31,10 @@ illegal after switching into a foreign mode.
 
 ## Source and authorization
 
-The task requests local implementation and reviewable artifacts. No external
-posting, PR, push, release or website publication is performed. Redistribution
-rights for existing movie/character sound clips must be recorded separately
-from technical playback. Optional local imports cannot be described as shipped
-licensed audio.
+The first playable package and its test artifacts were built locally. After
+trying it in 86Box, the owner requested the VGA redesign and a pull request.
+The shipping audio consists of original music and sound effects. Borat's
+reactions appear as text and animated poses.
 
 ## Measurements and observations
 
@@ -205,3 +204,22 @@ speech balloon. The small Records plaques now have separate 16-pixel
 locked and earned badges, and the white spacebar spans most of the home
 keyboard. The full QWERTY symbol set and all seven achievement states
 remain selectable or visible on the appropriate screens.
+
+In the final build, the first complete pointing pose appeared 301 ms after
+the third mistake. All six appeared within 1,573 ms. The motion probe
+compared each 96 × 120 display capture with its source pose. Thirty hardware
+keystrokes took at most 59.7 ms to reach the first completed prompt update.
+The longest of 220 periodic callbacks took 71.2 ms, and stack sampling
+reached 170 of 512 bytes with the guard intact. These are emulated XT
+measurements.
+
+Keeping every pose resident at Home prevented a second instance from opening
+on a 640 KB machine. The menu now retains the small directory and menu art.
+Start fetches the three large pose banks before starting the scored clock.
+Returning to the menu frees 173,568 bytes. A second instance opened read-only
+beside the first, and an explicit resume after visiting Help restored the
+large frames. The original outlined speech balloon is drawn with the scene.
+While typing, four-row updates write only its white text interior.
+
+The [guest gallery](boratype/EVIDENCE.md#vga-redesign) shows the selector,
+typing feedback, a running challenge, results, achievements and settings.

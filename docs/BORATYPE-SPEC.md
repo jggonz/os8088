@@ -3,7 +3,7 @@
 Binding package contract for BORATYPE.O88, SPEC.md §134. This describes the
 intended implementation; the checked plan and evidence distinguish what has
 been built and observed. The supplied build prompt and nine images define
-the product scope. No external publication is authorized by this task.
+the product scope.
 
 ## 1. Platform and ownership
 

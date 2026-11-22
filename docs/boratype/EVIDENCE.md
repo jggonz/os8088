@@ -1,8 +1,52 @@
 # Boratype acceptance evidence
 
-Local feature branch `codex/borat-teaches-typing`, based on
-`528648017d103f335fa6fdbfbb0404ab92fb786f`. The original checkout was left
-unchanged. No push, PR, merge, release or website publication was requested.
+Feature branch `codex/borat-teaches-typing` is based on
+`528648017d103f335fa6fdbfbb0404ab92fb786f`.
+
+## VGA redesign
+
+These 640 × 480 captures come from the installed game on a 4.77 MHz VGA XT in
+MartyPC. The tour used ordinary clicks and keystrokes, including an incorrect
+key, a pause and resume, and a completed first lesson.
+
+| Lesson selector | Live typing | Timed challenge |
+| --- | --- | --- |
+| ![Lesson rows and selected keys](evidence/redesign/lessons-first.png) | ![Typed keys and error feedback](evidence/redesign/typing-feedback.png) | ![Countdown and live statistics](evidence/redesign/challenge-in-progress.png) |
+| **Results** | **Records** | **Sound and display** |
+| ![Completed first lesson](evidence/redesign/results.png) | ![Earned achievements](evidence/redesign/earned-records.png) | ![Sound, captions and display controls](evidence/redesign/settings.png) |
+
+[Six visible poses of the pointing reaction](evidence/redesign/reaction.gif).
+Each image in the loop is a capture of the guest display. In the game the
+reaction plays once. The motion test checks every pixel in the 96 × 120
+portrait against the independent reference for each frame.
+
+The local test disk for this revision contains a 230,782-byte package
+(SHA-256 `f148c9744a0c61306858bab1bdd171791d2ea23c515b1494f214e44187725abe`).
+Three mistakes on the first lesson produced complete on-screen poses at
+301, 468, 836, 1,003, 1,338 and 1,573 ms. Before the redesign, the first
+pose reached only 50 of 120 rows before the eight-second reaction expired.
+Across 30 queued hardware keystrokes, the longest time to the first completed
+prompt write was 59.7 ms. The longest of 220 periodic callbacks was 71.2 ms.
+These times use the guest clock. CRT scanout and physical hardware were
+outside the measurement.
+
+### Other display configurations
+
+The same program ran with [CGA monochrome](evidence/redesign/cgamono.png),
+[CGA four-color](evidence/redesign/cgacolor.png) and
+[Hercules](evidence/redesign/herc.png) on MartyPC,
+[EGA](evidence/redesign/ega.png) on 86Box and
+[VESA](evidence/redesign/vesa.png) on QEMU. The EGA and protected-mode
+286 runs saved, closed and reopened the program and restored the profiles
+on a cold boot. Both VESA resolutions passed live input and desktop restoration.
+
+The repository-wide full tier passed all 81 checks. Exact kernel budgets
+passed for big, small, emu and mega. During the scoped game run, the practice
+observer sampled an 8086 instruction boundary between the attempts and
+correct-character increments. It now waits for the entire scored key before
+asserting on the captured state. The recommended weak-key exercise and the
+separately selected digit exercise subsequently passed. The package bytes
+were identical throughout that verification repair.
 
 ## Installed application
 

@@ -26,6 +26,12 @@ two for 40 × 48 color, and two for 40 × 48 monochrome.
 | 5 | Four window illustrations and ten compact achievement badges |
 | 6, 7 | Native four-plane frames 10–19 and 20–29 |
 
+A color window opens with the small shapes and menu illustrations. Starting a
+lesson loads the three large pose banks before the scoring clock starts.
+Pause keeps the poses. Returning to a menu frees them, and resuming from
+that menu can load them again. If the raw poses will not fit, the smaller
+animation continues from part 3. A monochrome window needs only part 3.
+
 Each motion bank starts with a 16-byte BTAN header containing its exact length.
 Part 3 contains 270 eight-byte directory records. A record holds the part
 number, source offset, compressed byte count (zero for a raw strip) and

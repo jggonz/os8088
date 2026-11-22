@@ -7,7 +7,8 @@ Final evidence and limits: [acceptance report](../boratype/EVIDENCE.md).
 
 S means observed in the installed native guest; B is a specific verification
 blocker; R is removed by the owner. Host checks supplement guest evidence.
-The user requested local work. No PR, push, merge, publication or release.
+The original implementation was local. The owner requested a pull request
+after the VGA redesign and the interactive 86Box run.
 
 | Story | Delivered outcome | Status | Evidence |
 | --- | --- | --- | --- |
@@ -74,13 +75,16 @@ those paints are not claimed.
 
 ## Visual revision from the player's first session
 
-- Compare the shared masthead, navigation, button faces and readable type
-  against the supplied 640 × 480 composition in both desktop modes.
-- Rebuild the play and challenge panels, keycaps, feedback and statistics at
-  the real client size. Retain a readable small-screen arrangement.
-- Recompose lesson selection, records, results, settings and the supporting
-  pages around their real actions and data.
-- Compare a complete portrait change and blink against the old scanline
-  schedule on the XT. Verify input latency while reactions are enabled.
-- Inspect the integrated guest, correct visible defects and open the revised
-  software in its own writable 86Box machine for the player.
+- [x] Rebuild the masthead, navigation, bevels and package lettering from the
+  supplied VGA references. Keep controls live in windowed and fullscreen play.
+- [x] Recompose the lesson and timed challenge around the prompt, typed line,
+  statistics, scenic tutor, speech bubble and colored keyboard.
+- [x] Give lesson selection, records, achievements, results and settings their
+  own illustrations and controls. Drive them with actual selections and scores.
+- [x] Measure complete portrait changes on the XT and check hardware-key
+  latency during drawing. Stage the large native poses around the lesson
+  lifetime so two copies can open on a 640 KB machine.
+- [x] Inspect the guest screens, correct defects and launch the writable
+  386 VGA/Sound Blaster machine for interactive use.
+
+See the [native VGA captures and animation](../boratype/EVIDENCE.md#vga-redesign).

@@ -1,5 +1,7 @@
 # Borat native face and assets
 
+The [VGA redesign gallery](EVIDENCE.md#vga-redesign) shows the shipping lesson selector, keyboard, challenge, results, records and settings. The current portrait and scene formats are specified in [BORATYPE-SPEC](../BORATYPE-SPEC.md).
+
 `apps/boratype/bt_face.c` reads the shared engine state and returns the action
 IDs in `bt_face.h`. Painting does not advance a passage, change settings,
 commit results, choose a reaction or advance the animation clock. The platform
