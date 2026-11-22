@@ -41,13 +41,18 @@ def decoded(raw, index, music):
     return table[np.frombuffer(raw[pos:pos+n], dtype='uint8')].reshape(-1).astype(float) - (128 if music else 0)
 
 
-def matches(capture, reference):
+def matches(capture, reference, period=None):
     reference = reference - reference.mean()
     n = len(reference)
     size = 1 << (len(capture)+n-1).bit_length()
     corr = np.fft.irfft(np.fft.rfft(capture,size)*np.fft.rfft(reference[::-1],size),size)
     energy = np.r_[0, np.cumsum(capture*capture)]
     scores = corr[n-1:len(capture)] / np.sqrt(np.maximum(1,energy[n:]-energy[:-n]) * (reference @ reference))
+    if period is not None:
+        # Pausing or reopening a stream can produce another match. Require
+        # the same excerpt to recur exactly one encoded track length later.
+        first = int(np.minimum(scores[:-period], scores[period:]).argmax())
+        return [(i / codec.RATE, float(scores[i])) for i in (first, first + period)]
     peaks = []
     for _ in range(2):
         i = int(scores.argmax())
@@ -116,7 +121,7 @@ def exercise(build, pack, out):
     assert max(abs(background)) <= 32, 'quarter gain exceeded'
     for name,track,start in [('music',background,16500),('welcome',decoded(fx,0,False),1600),
                              ('mistake',decoded(fx,1,False),1500),('praise',decoded(fx,4,False),500)]:
-        peaks = matches(capture,track[start:start+2000])
+        peaks = matches(capture,track[start:start+2000],len(track) if name=="music" else None)
         evidence[name] = peaks
         assert peaks[0][1] > .8,(name,peaks)
         if name=='music':
