@@ -45,10 +45,13 @@ CPKT_NV     equ 8               ; dw rows that fit
 CPKT_N      equ 10              ; dw rows there are
 CPKT_TOP    equ 12              ; dw the first row shown
 CPKT_ROW    equ 14              ; dw the page's row painter, a near proc in
-                                ;    this image: in AX = the row, CX/DX = its
-                                ;    left/top, DI = its width (no bar);
-                                ;    paints the whole row opaque, keeps all
-CPKT_SIZE   equ 16
+                                ;    this image: in AX = the row, BL = its
+                                ;    ground (CWHITE, or CBLUE for the
+                                ;    selection), CX/DX = its left/top, DI =
+                                ;    its width (no bar); paints the whole
+                                ;    row opaque, keeps every register
+CPKT_SEL    equ 16              ; dw the selected row, 0FFFFh none
+CPKT_SIZE   equ 18
 
 ; the kit's scratch in the working area (CPW_W_KIT, 12 bytes)
 CPK_S_X     equ CPW_W_KIT + 0
@@ -306,8 +309,9 @@ cpk_group:
     xor bl, bl
     call cpw_run                ; CX = past it
     pop bx
-    mov ax, cx                  ; ...and the rest of its row
-    mov cx, [es:CPK_S_R]
+    mov byte [gfx_color], CLGRAY    ; (a renderer may leave the pen at the
+    mov ax, cx                  ; ink: VESA.DRV's does) ...and the rest of
+    mov cx, [es:CPK_S_R]        ; its row
     add dx, 7
     cmp ax, cx
     jg .fr
@@ -558,7 +562,17 @@ cpk_tbrows:
     jz .out
     cmp ax, [es:bx+CPKT_N]
     jae .blank
-    call word [es:bx+CPKT_ROW]  ; the page's row, whole and opaque
+    push si
+    push bx
+    mov si, [es:bx+CPKT_ROW]
+    cmp ax, [es:bx+CPKT_SEL]
+    mov bl, CWHITE
+    jne .g
+    mov bl, CBLUE               ; the selection bar is the row's ground
+.g:
+    call si                     ; the page's row, whole and opaque
+    pop bx
+    pop si
     jmp short .next
 .blank:
     push ax                     ; past the last row: the ground

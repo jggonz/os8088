@@ -1226,9 +1226,10 @@ cpw_listev:
 ; hosted Drivers list until SPEC.md 134.8's page takes the record
 ; =============================================================================
 CPW_D_TB    equ CPW_W_PAGE      ; the table's block (cpk_table, CPKT_SIZE)
-CPW_D_FLT   equ CPW_W_PAGE + 16 ; db the filter: 0 all, 1 loaded, 2 not
-CPW_D_ON    equ CPW_W_PAGE + 17 ; db 1 = the catalog is on the screen
-CPW_D_ROWS  equ CPW_W_PAGE + 18 ; db x DRV_MAX: the drv_tab rows it lists
+CPW_D_FLT   equ CPW_W_PAGE + CPKT_SIZE  ; db the filter: 0 all, 1 loaded,
+                                ;    2 not loaded
+CPW_D_ON    equ CPW_D_FLT + 1   ; db 1 = the catalog is on the screen
+CPW_D_ROWS  equ CPW_D_FLT + 2   ; db x DRV_MAX: the drv_tab rows it lists
 CPW_D_GX    equ CPW_PX + 2      ; the group box's left and top
 CPW_D_GY    equ CPW_HB + 4
 CPW_D_TX    equ CPW_D_GX + 6    ; the tabs' and the table's left
@@ -1238,8 +1239,8 @@ CPW_D_RH    equ 18              ; a row's pitch
 CPW_D_NX    equ 18              ; a row's name run: x (a space, 24, a space)
 CPW_D_NW    equ 26
 CPW_D_BX    equ CPW_D_NX + CPW_D_NW * 8 ; its badge
-CPW_D_MX    equ CPW_D_BX + 16   ; its memory run (a space, 5)
-CPW_D_MW    equ 6
+CPW_D_MX    equ CPW_D_BX + 16   ; its memory run: ' ~26.5K+', padded
+CPW_D_MW    equ 9
 
 ; cpw_dwant - CF = 0 the catalog belongs on the screen: the Drivers page
 ; showing its list. Keeps all
@@ -1339,6 +1340,7 @@ cpw_dpaint:
     pop dx
     mov [es:CPW_D_TB + CPKT_NV], ax
     mov word [es:CPW_D_TB + CPKT_ROW], cpw_drow
+    mov word [es:CPW_D_TB + CPKT_SEL], 0FFFFh   ; read-only: no selection
     call cpw_dbuild
     push cx                     ; --- the ground round the box
     push dx
@@ -1578,7 +1580,17 @@ cpw_drow:
     mov bx, ax
     and ax, 0x7FFF
     jz .mz
+    mov byte [es:di], '~'       ; SPEC.md 31.6.2: the shape of the cost,
+    inc di                      ; counted in half-KB (cp_drv_memstr's form)
+    shr ax, 1
+    sbb si, si                  ; SI = -1 for a half
     call cpw_utoa
+    or si, si
+    jz .mk
+    mov word [es:di], '.5'
+    inc di
+    inc di
+.mk:
     mov byte [es:di], 'K'
     inc di
     test bh, 0x80               ; DRVM_PLUS: and the store it sizes

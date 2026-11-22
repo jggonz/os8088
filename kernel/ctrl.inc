@@ -1327,9 +1327,12 @@ cpg_hkey:
     jmp cp_onkey_x
 
 ; -----------------------------------------------------------------------------
-; cpg_open - CPG_OPEN: choose the face, before app_launch (cp_open_x)
-; in:  nothing. out: nothing; every register kept, CF = 0 - a refusal at any
-;      step is the compact face, silently, with whatever was taken given back
+; cpg_open - CPG_OPEN: choose the face, and open the panel (cp_open_x)
+; in:  nothing. out: CF = 0 the panel is up (or was, and is fronted); CF = 1
+;      app_launch refused - no instance slot, no window - and the beep has
+;      sounded (SPEC.md 34.3). Every register kept. A refusal of the FACE at
+;      any step is the compact face, silently, with whatever was taken given
+;      back
 ;
 ; A panel already up keeps its face: app_launch only fronts it. Otherwise
 ; this is the work KD_INIT did (the press state and the arm cleared - nothing
@@ -1375,7 +1378,13 @@ cpg_open:
 .wide:
     CSDO mov byte [CSEG cp_wide], 1
 .out:
-    clc
+    mov al, KIND_CTRL           ; ...and the launch, cp_open_x's own lines
+    KDOOR app_launch            ; until the face moved here: CF = 1 is the
+    jnc .up                     ; panel refused (no instance slot, no window)
+    call cp_wclose              ; - not about the disk, so the beep it always
+    KDOOR snd_beep              ; was - and a face it chose goes with it
+    stc
+.up:
     pop di
     pop ax
     ret
@@ -8501,9 +8510,12 @@ cp_open_x:
     call cp_open_need           ; cpf_need banks AX itself, but `mov al,
     jc .failed                  ; KIND_CTRL` below and `mov al, 1` at .no do not
 %ifdef KERN_BIG
-    mov ah, CPG_OPEN            ; the FACE, chosen in the image (SPEC.md
-    call far [CPFP + CPE_GATE*4] ; 134.2): cp_tpl's size, and KD_INIT's work
-%endif
+    mov ah, CPG_OPEN            ; THE IMAGE OPENS IT (SPEC.md 134.2): the face
+    call far [CPFP + CPE_GATE*4] ; chosen, cp_tpl's size, KD_INIT's work, and
+    jmp short .out              ; then the app_launch and its beep below, as
+                                ; cpg_open - which is what keeps this ten
+                                ; bytes of .cold, as it was (kern_emu's rung)
+%else
     mov al, KIND_CTRL
     KDOOR app_launch
     jnc .out                    ; the panel itself refused - no instance slot,
@@ -8514,6 +8526,7 @@ cp_open_x:
                                 ; what every one of these call sites did with
                                 ; a CF=1 from app_launch before cp_open owned
                                 ; the decision
+%endif
 .failed:
     stc
 .out:
