@@ -1159,6 +1159,18 @@ kind = "document"
 summary = "How to add your ROM sets, the keys for each game, settings and sound. Double-click to read it in Note Pad."
 short = "Notes on ARCADE"
 
+["BORATYPE.O88"]
+title = "Borat Teaches Typing"
+kind = "program"
+summary = "A touch-typing course with Borat as the coach: 24 lessons, practice for your weakest keys, one-, three- and five-minute timed challenges, four profiles, records and achievements."
+short = "Typing tutor"
+
+["BORATYPE/"]
+title = "Borat Teaches Typing"
+kind = "folder"
+summary = "The Borat Teaches Typing program. Double-click BORATYPE.O88 to start it."
+short = "Borat Teaches Typing"
+
 ["CWORD.O88"]
 title = "Word, C edition"
 kind = "program"
