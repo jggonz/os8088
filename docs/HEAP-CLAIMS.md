@@ -382,3 +382,20 @@ And behind both: **every undeclared row above.** A pinned block is a barrier
 whatever its size — the measured case was a 3KB cache holding 40KB out of
 reach, and unpinning it moved a 114KB module and the sound driver's pool on
 the very next run with nothing else changed (§66.5.6).
+
+## Borat Teaches Typing (SPEC.md 134)
+
+| claim | size/lifetime | verdict | holder and relocation |
+|---|---|---|---|
+| native package region | measured by package build; instance lifetime | MOVABLE | C runtime region relocation; restartable worker feeds the PCM ring and posts timer wakes |
+| eager art/audio/overlay carve | art63,677B plus audio/overlay; instance lifetime | MOVABLE | `CC_ONMOVE_PARTS`; callback rereads `os88_part_seg(0/1)` and fixes face and second-bank holders |
+| optional sampled soundtrack and reactions | two file-sized claims, each below 64KB, when a valid local pack is installed | MOVABLE | `os88_onmove` updates the music and effects segments. Cursors are relative offsets. Both segment registers are restored before the worker yields. Close or failed setup frees the banks |
+| drawing band | 8KB; instance lifetime, reused as CGA cell shadow | MOVABLE | `bt_band`, face holder and `bx_bseg` updated by callback |
+
+Borat's observed XT region/parts/band total is 167,424 bytes on the accepted
+volume. Source audit bounds app-owned startup at that same total; retained
+carve slack depends on volume cluster alignment. HIGH/HIGHMEM grants a
+65,536-byte high region and 8KB high band on Mega, totaling 167,936 bytes with
+the same conventional part carve. High selectors stay opaque/stable; they
+are not real-mode paragraph segments. The actual286 high-memory tour and
+real-mode public compaction evidence are in [the ledger](boratype/EVIDENCE.md).

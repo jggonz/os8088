@@ -1,0 +1,2203 @@
+{
+  "application_source_commit": "1b5e7cc21bdfb3702eef21c296719558162c9789",
+  "application_source_tree": "675e688ba35041a833ebf993a5ff503916018297",
+  "scope": "No recorded sound clips. Original music, effects and visual messages.",
+  "runs": {
+    "cgacolor": {
+      "status": "PASS",
+      "scenario": "adapters",
+      "backend": "marty",
+      "machine": "os8088_5150_cga_gla",
+      "adapter": "cga",
+      "kernel": "real-mode",
+      "host_seconds": 16.207,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 2,
+        "w": 640,
+        "h": 200,
+        "bpp": 1
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "8d8170e2adbb675ed4c13b7e2de8369fd908465569a97fd5c0ec806d701ac25a",
+      "cga_key_commit": {
+        "route_to_flush_return_cycles": 435560,
+        "route_to_flush_return_ms": 91.26,
+        "flush_cycles": 165416,
+        "route_to_first_prompt_cell_return_cycles": 326810,
+        "route_to_first_prompt_cell_return_ms": 68.474,
+        "first_prompt_cell": {
+          "row": 5,
+          "col": 6,
+          "character": "f",
+          "attribute": 1
+        },
+        "commit_within_100ms": true,
+        "scope": "production key-route entry to VRAM; hardware input polling and monitor scanout are separate",
+        "scanout": "VRAM committed; raster presentation may add up to one refresh"
+      },
+      "cga320_result": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 0,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 50,
+        "correct": 49,
+        "errors": 1,
+        "net": 49,
+        "pos": 49,
+        "length": 49,
+        "completed": 0,
+        "streak": 49,
+        "best_streak": 49,
+        "backspaces": 0,
+        "elapsed": 823,
+        "last_tick": 1604,
+        "ready_ticks": 0,
+        "wpm": 13,
+        "accuracy": 98,
+        "seconds": 45,
+        "remaining": 0,
+        "seed": 45906,
+        "events": 0,
+        "achievement_new": 71,
+        "passage": "f j f j ff jj fj jf fjj jff fj fj jf jf f j fj jf",
+        "screen": 3
+      },
+      "report": "build/boratype-final/cgacolor/report.json",
+      "report_sha256": "6e3cff1a41f89e1cdc54fcb3bd2620d3d3f8e5dd06ddf211e4f2ca1550886f1d",
+      "resources_launch": {
+        "package_segment": 36896,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36896,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 31008,
+            "owner": 36896,
+            "bytes": 94208
+          },
+          {
+            "segment": 8608,
+            "owner": 36896,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/cgacolor/adapter-native-home.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgacolor/adapter-native-fullscreen.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgacolor/adapter-cga320-home.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgacolor/adapter-cga320-error.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgacolor/adapter-cga320-result.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgacolor/adapter-cga640-restored.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "cgamono": {
+      "status": "PASS",
+      "scenario": "smoke",
+      "backend": "marty",
+      "machine": "os8088_5150_cga_gla",
+      "adapter": "cga",
+      "kernel": "real-mode",
+      "host_seconds": 73.608,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 2,
+        "w": 640,
+        "h": 200,
+        "bpp": 1
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "8d8170e2adbb675ed4c13b7e2de8369fd908465569a97fd5c0ec806d701ac25a",
+      "first_lesson_oracle": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 0,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 51,
+        "correct": 50,
+        "errors": 1,
+        "net": 49,
+        "pos": 49,
+        "length": 49,
+        "completed": 0,
+        "streak": 49,
+        "best_streak": 49,
+        "backspaces": 1,
+        "elapsed": 674,
+        "last_tick": 1934,
+        "ready_ticks": 0,
+        "wpm": 15,
+        "accuracy": 98,
+        "seconds": 37,
+        "remaining": 0,
+        "seed": 46361,
+        "events": 25,
+        "achievement_new": 71,
+        "passage": "f j f j ff jj fj jf fjj jff fj fj jf jf f j fj jf",
+        "screen": 3
+      },
+      "mixed_lesson_oracle": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 22,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 109,
+        "correct": 109,
+        "errors": 0,
+        "net": 109,
+        "pos": 109,
+        "length": 109,
+        "completed": 0,
+        "streak": 109,
+        "best_streak": 109,
+        "backspaces": 0,
+        "elapsed": 1510,
+        "last_tick": 3763,
+        "ready_ticks": 0,
+        "wpm": 15,
+        "accuracy": 100,
+        "seconds": 82,
+        "remaining": 0,
+        "seed": 45020,
+        "events": 25,
+        "achievement_new": 40,
+        "passage": "My name is Borat. This keyboard has 101 keys, but today I need only a few. Accuracy first; speed will follow!",
+        "screen": 3
+      },
+      "window_checks": {
+        "minimum_frame": [
+          488,
+          150
+        ],
+        "actual_minimum": [
+          490,
+          150
+        ],
+        "restored": [
+          7,
+          22,
+          626,
+          152
+        ],
+        "focus_requires_resume": true
+      },
+      "persistence": {
+        "close_reopen": "PASS",
+        "single_writer": "PASS",
+        "exported_save_copies": [
+          {
+            "path": "SYSTEM/APPDATA/BORATA.BTT",
+            "generation": 18,
+            "sha256": "33a25ee551e40ff4c47e9d9a6a024e2ab41cc174f3bc3b16f2ef17989998c1f0"
+          },
+          {
+            "path": "SYSTEM/APPDATA/BORATB.BTT",
+            "generation": 17,
+            "sha256": "c9c57345e9c0ed41be00286bc6ae5b3a2f647244c746ff58f3021c950563b940"
+          }
+        ],
+        "reboot": "PASS"
+      },
+      "report": "build/boratype-final/cgamono/report.json",
+      "report_sha256": "6f7dc27a57b9e2201dfc9f344c0fc617a51f8f1be4e083346054827f704b531b",
+      "resources_launch": {
+        "package_segment": 36896,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36896,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 31008,
+            "owner": 36896,
+            "bytes": 94208
+          },
+          {
+            "segment": 8608,
+            "owner": 36896,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/cgamono/01-home.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/01b-four-profiles.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/02-wrong-key.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/03-results.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/03c-mixed-native-input.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/03d-mixed-fullscreen-input.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/03b-mixed-shift-punctuation.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/04-pause.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/05-native-fullscreen.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/window-live-lesson-help.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/window-covered-focus-lost.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/window-uncovered-still-paused.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/window-minimum.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/window-size-restored.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/06-help.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/07-settings.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/08-records.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/09-reopened.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/10-readonly-instance.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/cgamono/11-reboot-restored.png",
+          "w": 640,
+          "h": 200,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "deadlines": {
+      "status": "PASS",
+      "scenario": "challenges",
+      "backend": "marty",
+      "machine": "os8088_xt_vga",
+      "adapter": "auto",
+      "kernel": "real-mode",
+      "host_seconds": 207.753,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 0,
+        "w": 640,
+        "h": 480,
+        "bpp": 4
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "8d8170e2adbb675ed4c13b7e2de8369fd908465569a97fd5c0ec806d701ac25a",
+      "report": "build/boratype-final/deadlines/report.json",
+      "report_sha256": "4f0909210d62f99464b4c5b983a22f2c749fef497e87df98ec22e6019421fb6a",
+      "resources_launch": {
+        "package_segment": 36896,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36896,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 31008,
+            "owner": 36896,
+            "bytes": 94208
+          },
+          {
+            "segment": 8768,
+            "owner": 36896,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/deadlines/challenge-60-active.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/deadlines/challenge-60-result.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/deadlines/challenge-180-active.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/deadlines/challenge-180-result.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/deadlines/challenge-300-active.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/deadlines/challenge-300-result.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/deadlines/challenge-ranked.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/deadlines/challenge-unranked.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "ega": {
+      "status": "PASS",
+      "scenario": "adapters",
+      "backend": "86box",
+      "machine": "os8088_xt_ega_640k",
+      "adapter": "ega",
+      "kernel": "real-mode",
+      "host_seconds": 44.855,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 3,
+        "w": 640,
+        "h": 350,
+        "bpp": 4
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "8d8170e2adbb675ed4c13b7e2de8369fd908465569a97fd5c0ec806d701ac25a",
+      "report": "build/boratype-final/ega/report.json",
+      "report_sha256": "cdc1a72860b276c7704e9724ef99d9646a405d311bbdd0d6e4d845696dfdf04a",
+      "resources_launch": {
+        "package_segment": 36896,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36896,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 31008,
+            "owner": 36896,
+            "bytes": 94208
+          },
+          {
+            "segment": 8736,
+            "owner": 36896,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/ega/adapter-native-home.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/ega/adapter-native-input.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/ega/adapter-native-fullscreen.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/ega/adapter-native-fullscreen-play.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "ega-reboot": {
+      "status": "PASS",
+      "scenario": "reboot",
+      "backend": "86box",
+      "machine": "os8088_xt_ega_640k",
+      "adapter": "ega",
+      "kernel": "real-mode",
+      "host_seconds": 99.573,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 3,
+        "w": 640,
+        "h": 350,
+        "bpp": 4
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "8d8170e2adbb675ed4c13b7e2de8369fd908465569a97fd5c0ec806d701ac25a",
+      "persistence": {
+        "close_reopen": "PASS",
+        "single_writer": "PASS",
+        "exported_save_copies": [
+          {
+            "path": "SYSTEM/APPDATA/BORATA.BTT",
+            "generation": 6,
+            "sha256": "c5c3f6661f1598751d18ad60447b106eb2b6f2a3f1824209e950845599d57966"
+          },
+          {
+            "path": "SYSTEM/APPDATA/BORATB.BTT",
+            "generation": 5,
+            "sha256": "2fa85b8a731c1c31bf2714bf558d3b1ebfc41c64ea9f805a33c0997fe5416f02"
+          }
+        ],
+        "reboot": "PASS"
+      },
+      "report": "build/boratype-final/ega-reboot/report.json",
+      "report_sha256": "64c9f8853ce11e1350e5cba88284d24fbdfcb5ec9219eb0b104ffe82d459cc5c",
+      "resources_launch": {
+        "package_segment": 36896,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36896,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 31008,
+            "owner": 36896,
+            "bytes": 94208
+          },
+          {
+            "segment": 8736,
+            "owner": 36896,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/ega-reboot/reboot-lesson-complete.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/ega-reboot/09-reopened.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/ega-reboot/10-readonly-instance.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/ega-reboot/11-reboot-restored.png",
+          "w": 640,
+          "h": 350,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "fm": {
+      "status": "PASS_TECHNICAL",
+      "backend": "sb",
+      "machine": "os8088_xt_vga_sb",
+      "host_seconds": 55.958,
+      "source_commit": "e4aaf8182f93e52bf7d8b9bb67aad773e3d31f90",
+      "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_sha256": "99a1753142855715aa4eba044b072259dbadf399a628c08091d4bbadb961f130",
+      "subjective_listening": "UNVERIFIED: audio helper confirmed audio input is unsupported; waveform assertions are technical only",
+      "service_wait_ticks": {
+        "lesson": 132,
+        "route-speaker": 133,
+        "detached-speaker": 134,
+        "route-fm": 135
+      },
+      "close_cleanup": "PASS app heap claims freed and music/effects resources released",
+      "os_route_change": "PASS Pause/OS speaker route/Resume, real SOUND detach/Resume fallback, reattach/Resume FM; no Test Music or hardware-loss simulation",
+      "result_stinger": 5,
+      "report": "build/boratype-final/fm/report.json",
+      "report_sha256": "b74c74a0e93ad80b8f95bfc7e2d31dd21312653227669c01585762e8f93a0280",
+      "signals": [
+        {
+          "stage": "title",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 130469,
+          "rate": 47727,
+          "seconds": 2.733651811343684,
+          "peak": 0.0,
+          "rms": 0.0,
+          "nonzero": 0
+        },
+        {
+          "stage": "title",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "title",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 120553,
+          "rate": 44100,
+          "seconds": 2.733628117913832,
+          "peak": 0.0404510498046875,
+          "rms": 0.010339460274177816,
+          "nonzero": 120476
+        },
+        {
+          "stage": "lesson",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 120123,
+          "rate": 47727,
+          "seconds": 2.5168772392985104,
+          "peak": 0.0,
+          "rms": 0.0,
+          "nonzero": 0
+        },
+        {
+          "stage": "lesson",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "lesson",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 110994,
+          "rate": 44100,
+          "seconds": 2.51687074829932,
+          "peak": 0.03997802734375,
+          "rms": 0.005807512183869519,
+          "nonzero": 107966
+        },
+        {
+          "stage": "error",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 97162,
+          "rate": 47727,
+          "seconds": 2.035786871163073,
+          "peak": 0.0,
+          "rms": 0.0,
+          "nonzero": 0
+        },
+        {
+          "stage": "error",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "error",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 89777,
+          "rate": 44100,
+          "seconds": 2.0357596371882085,
+          "peak": 0.1525421142578125,
+          "rms": 0.020609510131292072,
+          "nonzero": 89487
+        },
+        {
+          "stage": "mute",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 112968,
+          "rate": 47727,
+          "seconds": 2.3669620969262684,
+          "peak": 0.0,
+          "rms": 0.0,
+          "nonzero": 0
+        },
+        {
+          "stage": "mute",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "mute",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 104382,
+          "rate": 44100,
+          "seconds": 2.3669387755102043,
+          "peak": 9.1552734375e-05,
+          "rms": 4.852541915677031e-05,
+          "nonzero": 52183
+        },
+        {
+          "stage": "success",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 128086,
+          "rate": 47727,
+          "seconds": 2.683722002220965,
+          "peak": 0.0,
+          "rms": 0.0,
+          "nonzero": 0
+        },
+        {
+          "stage": "success",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "success",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 118352,
+          "rate": 44100,
+          "seconds": 2.683718820861678,
+          "peak": 0.0464019775390625,
+          "rms": 0.010544873740630456,
+          "nonzero": 118283
+        },
+        {
+          "stage": "route-speaker",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 110580,
+          "rate": 47727,
+          "seconds": 2.3169275253001445,
+          "peak": 0.999969482421875,
+          "rms": 0.6599983759435848,
+          "nonzero": 49590
+        },
+        {
+          "stage": "route-speaker",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "route-speaker",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 102177,
+          "rate": 44100,
+          "seconds": 2.316938775510204,
+          "peak": 9.1552734375e-05,
+          "rms": 4.843974011731773e-05,
+          "nonzero": 51073
+        },
+        {
+          "stage": "detached-speaker",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 111379,
+          "rate": 47727,
+          "seconds": 2.333668573344229,
+          "peak": 0.999969482421875,
+          "rms": 0.39433066532157013,
+          "nonzero": 17869
+        },
+        {
+          "stage": "detached-speaker",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "detached-speaker",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 102914,
+          "rate": 44100,
+          "seconds": 2.3336507936507935,
+          "peak": 9.1552734375e-05,
+          "rms": 4.84418581484206e-05,
+          "nonzero": 51419
+        },
+        {
+          "stage": "route-fm",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 112970,
+          "rate": 47727,
+          "seconds": 2.36700400192763,
+          "peak": 0.0,
+          "rms": 0.0,
+          "nonzero": 0
+        },
+        {
+          "stage": "route-fm",
+          "sink": "audio.sound_blaster.wav",
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        {
+          "stage": "route-fm",
+          "sink": "audio.adlib_music_synthesizer.wav",
+          "samples": 104384,
+          "rate": 44100,
+          "seconds": 2.366984126984127,
+          "peak": 0.0356597900390625,
+          "rms": 0.005947271463074181,
+          "nonzero": 101091
+        }
+      ],
+      "captures": {
+        "audio.pc_speaker.wav": {
+          "samples": 8064208,
+          "rate": 47727,
+          "seconds": 168.965323611373,
+          "peak": 0.999969482421875,
+          "rms": 0.09930564059597419,
+          "nonzero": 82116
+        },
+        "audio.sound_blaster.wav": {
+          "samples": 0,
+          "rate": 44100,
+          "seconds": 0.0,
+          "peak": 0,
+          "rms": 0,
+          "nonzero": 0
+        },
+        "audio.adlib_music_synthesizer.wav": {
+          "samples": 7451328,
+          "rate": 44100,
+          "seconds": 168.9643537414966,
+          "peak": 0.1559906005859375,
+          "rms": 0.005398358205801309,
+          "nonzero": 3955995
+        }
+      }
+    },
+    "high-caption": {
+      "status": "PASS",
+      "scenario": "audio",
+      "backend": "86box",
+      "machine": "os8088_xt_vga",
+      "adapter": "vga",
+      "kernel": "mega",
+      "host_seconds": 40.858,
+      "app_source_tree": "675e688ba35041a833ebf993a5ff503916018297",
+      "actual_display": {
+        "kind": 0,
+        "w": 640,
+        "h": 480,
+        "bpp": 4
+      },
+      "protected_mode": true,
+      "high_memory": {
+        "region_selector": 4284,
+        "region_base": 3991552,
+        "band_selector": 4348,
+        "band_base": 3983360
+      },
+      "app_bin_sha256": "46fac8bcda77b02eb490a427d5c850d5e71767858a15c7d542f113b7b57c75b4",
+      "app_package_sha256": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3",
+      "kernel_bin_sha256": "f6438371f1ce8f3c79b3e6fa5da9ec02b3198ae5ea89711280368651a1620dac",
+      "apps_sha256": "cff202ed18f4c4c1a952308ec36255645fa61cb5d7482f5102a2bf368194f18a",
+      "image_sha256": "ea6b5bc4ce3271b7df7ac10ef5a69efb5d6f8d5e8d89b76a04fc332e7338754c",
+      "report": "build/boratype-final/high-caption/report.json",
+      "report_sha256": "07f613b501f9acfcc6c0284a5b60560c62692b17c7e445d8056519b82984dc31",
+      "resources_launch": {
+        "package_segment": 4284,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 35072,
+            "owner": 4284,
+            "bytes": 94208
+          }
+        ],
+        "total_claim_bytes": 94208
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/high-caption/audio-three-errors.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/high-caption/audio-muted.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "mega286": {
+      "status": "PASS",
+      "scenario": "smoke",
+      "backend": "86box",
+      "machine": "os8088_xt_vga",
+      "adapter": "vga",
+      "kernel": "mega",
+      "host_seconds": 98.525,
+      "app_source_tree": "17108b98aa3b0e2cc5aebd7ab528cb812d69b888",
+      "actual_display": {
+        "kind": 0,
+        "w": 640,
+        "h": 480,
+        "bpp": 4
+      },
+      "protected_mode": true,
+      "high_memory": {
+        "region_selector": 4284,
+        "region_base": 3991552,
+        "band_selector": 4348,
+        "band_base": 3983360
+      },
+      "app_bin_sha256": "42e128b5b2c671ef28b8a836da7f9ba4636be9d962dfb9467f4ee22af715bf2d",
+      "app_package_sha256": "67cfc7a2ff08f1cdc513b1509e751c3e26c0b06cce1c74d08bbecef0d21747cd",
+      "kernel_bin_sha256": "df835c1900e3b8bba6523889ccec12f88c0b56172f3fd49683d1f34db8955a1c",
+      "apps_sha256": "29abf446afdb30e08148733fbf78aceebf09037caddf3f286a8fc9b4944bfc86",
+      "image_sha256": "536ee0c08f9a7a1c79402f6c39d2fd2f9d57af568aadbd8c00b899e782adeb56",
+      "first_lesson_oracle": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 0,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 51,
+        "correct": 50,
+        "errors": 1,
+        "net": 49,
+        "pos": 49,
+        "length": 49,
+        "completed": 0,
+        "streak": 49,
+        "best_streak": 49,
+        "backspaces": 1,
+        "elapsed": 127,
+        "last_tick": 1034,
+        "ready_ticks": 0,
+        "wpm": 98,
+        "accuracy": 98,
+        "seconds": 6,
+        "remaining": 0,
+        "seed": 45780,
+        "events": 25,
+        "achievement_new": 71,
+        "passage": "f j f j ff jj fj jf fjj jff fj fj jf jf f j fj jf",
+        "screen": 3
+      },
+      "mixed_lesson_oracle": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 22,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 109,
+        "correct": 109,
+        "errors": 0,
+        "net": 109,
+        "pos": 109,
+        "length": 109,
+        "completed": 0,
+        "streak": 109,
+        "best_streak": 109,
+        "backspaces": 0,
+        "elapsed": 318,
+        "last_tick": 1530,
+        "ready_ticks": 0,
+        "wpm": 76,
+        "accuracy": 100,
+        "seconds": 17,
+        "remaining": 0,
+        "seed": 41791,
+        "events": 25,
+        "achievement_new": 40,
+        "passage": "My name is Borat. This keyboard has 101 keys, but today I need only a few. Accuracy first; speed will follow!",
+        "screen": 3
+      },
+      "window_checks": {
+        "minimum_frame": [
+          488,
+          150
+        ],
+        "actual_minimum": [
+          490,
+          150
+        ],
+        "restored": [
+          7,
+          22,
+          626,
+          432
+        ],
+        "focus_requires_resume": true
+      },
+      "persistence": {
+        "close_reopen": "PASS",
+        "single_writer": "PASS",
+        "exported_save_copies": [
+          {
+            "path": "SYSTEM/APPDATA/BORATA.BTT",
+            "generation": 18,
+            "sha256": "2882b5359663842490f82acf5377c36fb003fa23ae657a22a71c031cd5e889b6"
+          },
+          {
+            "path": "SYSTEM/APPDATA/BORATB.BTT",
+            "generation": 17,
+            "sha256": "5e9e49a1c620b62bf325060e2c9aa7213b109af41408219fcacbbaed30f55c10"
+          }
+        ],
+        "reboot": "PASS"
+      },
+      "report": "build/boratype-final/mega286/report.json",
+      "report_sha256": "55fce7772d2ebabac8c4eed147efca184489ad180ad81ada33042364ee8e4f3c",
+      "resources_launch": {
+        "package_segment": 4284,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 35072,
+            "owner": 4284,
+            "bytes": 94208
+          }
+        ],
+        "total_claim_bytes": 94208
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/mega286/01-home.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/01b-four-profiles.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/02-wrong-key.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/03-results.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/03c-mixed-native-input.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/03d-mixed-fullscreen-input.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/03b-mixed-shift-punctuation.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/04-pause.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/05-native-fullscreen.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/window-live-lesson-help.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/window-covered-focus-lost.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/window-uncovered-still-paused.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/window-minimum.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/window-size-restored.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/06-help.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/07-settings.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/08-records.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/09-reopened.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/10-readonly-instance.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/mega286/11-reboot-restored.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "performance": {
+      "status": "PASS",
+      "machine": "os8088_xt_vga",
+      "host_seconds": 18.861,
+      "source_revision": "1b5e7cc21bdfb3702eef21c296719558162c9789",
+      "artifact_sha256": {
+        "kernel_bin": "c764eaccfa8698751782c10c6a9f386b5b2ddfcfc7c30c7866eacd79c23bac6e",
+        "kernel_sys": "30f49a4b9ed7835e21e5a156321ce55dadfebfbb9fcff499f1f19442291d4bbc",
+        "native_bin": "46fac8bcda77b02eb490a427d5c850d5e71767858a15c7d542f113b7b57c75b4",
+        "package": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3",
+        "system_image": "ce4a99faa1a1849253b7f88badc23887f721f9e6e86fdc953504ff3e10d2998f",
+        "software_image": "cff202ed18f4c4c1a952308ec36255645fa61cb5d7482f5102a2bf368194f18a",
+        "generated_app_assembly": "40b4dd2dee0eca8cf39906577642dd455ea4a3b8226f390a45dd085be4e980b8",
+        "kernel_pack_metadata": "714f49361089c33d8e00e2992839bfb41c381472cef5432092724f1e5b69921f"
+      },
+      "report": "build/boratype-final/performance/report.json",
+      "report_sha256": "d4e4783cbf57e11de14c3729bc472dfc345e3b7b12775cf550539be1330bc9eb",
+      "feedback": {
+        "keys": 30,
+        "maximum_ms": 97.978,
+        "maximum_callback_ms": 129.035,
+        "limits_ms": {
+          "first_feedback": 100,
+          "periodic": 100
+        },
+        "definition": "queued hardware key -> completed first prompt blit or wrong-key font_run",
+        "crt_scanout": "not included; output completion is framebuffer completion"
+      },
+      "periodic": {
+        "scope": "bt_pulse entry -> caller return; timer rearm excluded",
+        "count": 220,
+        "quiet_min_cycles": 223386,
+        "quiet_max_cycles": 226842,
+        "quiet_max_ms": 47.529,
+        "max_cycles": 472794,
+        "max_ms": 99.062
+      },
+      "stack": {
+        "guard": "0x5a57",
+        "guard_intact": true,
+        "stack_bytes": 512,
+        "sample_count": 1030,
+        "maximum_observed_bytes": 156,
+        "minimum_observed_sp": 5714,
+        "global_high_water": "NOT MEASURED: task0 is not sentinel-filled; no guest writes"
+      },
+      "probe_sha256": "85612b70f7912fbc1a1a2376eab0ea1c52410f838cd99568a148391394ce2dfe",
+      "target_helper_sha256": "796c53d5a08cd7b6cb46cfb0f14e07e04fdad8b4321b56b25a0c9f2c50148cb6"
+    },
+    "practice": {
+      "status": "PASS",
+      "host_seconds": 36.939,
+      "package_sha256": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3",
+      "kernel_sha256": "c764eaccfa8698751782c10c6a9f386b5b2ddfcfc7c30c7866eacd79c23bac6e",
+      "reaction_tags": [
+        2,
+        3,
+        7,
+        4
+      ],
+      "baseline": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 0,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 49,
+        "correct": 49,
+        "errors": 0,
+        "net": 49,
+        "pos": 49,
+        "length": 49,
+        "completed": 0,
+        "streak": 49,
+        "best_streak": 49,
+        "backspaces": 0,
+        "elapsed": 312,
+        "last_tick": 859,
+        "ready_ticks": 0,
+        "wpm": 34,
+        "accuracy": 100,
+        "seconds": 17,
+        "remaining": 0,
+        "seed": 45104,
+        "events": 25,
+        "achievement_new": 103,
+        "passage": "f j f j ff jj fj jf fjj jff fj fj jf jf f j fj jf",
+        "screen": 3
+      },
+      "poor_result": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 0,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 68,
+        "correct": 49,
+        "errors": 19,
+        "net": 49,
+        "pos": 49,
+        "length": 49,
+        "completed": 0,
+        "streak": 49,
+        "best_streak": 49,
+        "backspaces": 0,
+        "elapsed": 1042,
+        "last_tick": 2289,
+        "ready_ticks": 0,
+        "wpm": 10,
+        "accuracy": 72,
+        "seconds": 57,
+        "remaining": 0,
+        "seed": 46569,
+        "events": 153,
+        "achievement_new": 0,
+        "passage": "f j f j ff jj fj jf fjj jff fj fj jf jf f j fj jf",
+        "screen": 3
+      },
+      "weak_passage": "fff ffffff ff fffffff fff ff ffffff ffffff fff ffff ff fffffff fff ffff ffffff ffffff ffffff fff fffffff fffffff ff fff ffff fffffff fff fffff fff fffff fff ff",
+      "group_passage": "7048211 7761555 0895532 3470 65 46 1622376 1445115 9209 7210162 035 8898 6889 17 74 37 5005779 5885 3975 0599578 52 98513 70 7924080 9988640 403 786 94 0473 31",
+      "report": "build/boratype-final/practice/report.json",
+      "report_sha256": "8efc2a11e66954429c6ddaa462b90c0b7a5c792a02868a879aa1de26a841952e",
+      "captures": [
+        {
+          "path": "build/boratype-final/practice/01-three-errors.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/practice/02-low-accuracy.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/practice/03-comeback.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/practice/04-poor-result.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/practice/05-sampled-weak-key.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/practice/06-weak-practice-input.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/practice/07-selected-digits.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/practice/07-digits-practice.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "relocation": {
+      "status": "PASS",
+      "machine": "os8088_xt_vga",
+      "host_seconds": 33.69,
+      "source_revision": "e4aaf8182f93e52bf7d8b9bb67aad773e3d31f90",
+      "artifact_sha256": {
+        "kernel_bin": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+        "kernel_sys": "99a1753142855715aa4eba044b072259dbadf399a628c08091d4bbadb961f130",
+        "native_bin": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+        "package": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+        "system_image": "8d8170e2adbb675ed4c13b7e2de8369fd908465569a97fd5c0ec806d701ac25a",
+        "software_image": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+        "generated_app_assembly": "4e5604e0e5465b43a290fcbec78a90d698f8eca06c982ae75c30fe850fe53a30",
+        "kernel_pack_metadata": "714f49361089c33d8e00e2992839bfb41c381472cef5432092724f1e5b69921f"
+      },
+      "report": "build/boratype-final/relocation/report.json",
+      "report_sha256": "ef9ce465b1333322c4643cfc1a6ea4b5a573e10a5ce2add7616a5160513b639f",
+      "relocation": {
+        "status": "PASS",
+        "moved_roles": [
+          "region",
+          "art",
+          "sound",
+          "band",
+          "overlay"
+        ]
+      }
+    },
+    "speaker": {
+      "status": "PASS_TECHNICAL",
+      "backend": "speaker",
+      "machine": "os8088_xt_vga",
+      "host_seconds": 29.063,
+      "source_commit": "e4aaf8182f93e52bf7d8b9bb67aad773e3d31f90",
+      "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_sha256": "99a1753142855715aa4eba044b072259dbadf399a628c08091d4bbadb961f130",
+      "subjective_listening": "UNVERIFIED: audio helper confirmed audio input is unsupported; waveform assertions are technical only",
+      "service_wait_ticks": {
+        "lesson": 131
+      },
+      "close_cleanup": "PASS app heap claims freed and music/effects resources released",
+      "result_stinger": 5,
+      "report": "build/boratype-final/speaker/report.json",
+      "report_sha256": "ea5b671d0552cca82d2b2c12a1ae0cf01cf23be99ffb6fd1abc087701f95e925",
+      "signals": [
+        {
+          "stage": "title",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 136037,
+          "rate": 47727,
+          "seconds": 2.8503153351352486,
+          "peak": 0.999969482421875,
+          "rms": 0.6463735412163989,
+          "nonzero": 58877
+        },
+        {
+          "stage": "lesson",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 116942,
+          "rate": 47727,
+          "seconds": 2.4502273346323884,
+          "peak": 0.999969482421875,
+          "rms": 0.6876548829038603,
+          "nonzero": 56756
+        },
+        {
+          "stage": "error",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 96980,
+          "rate": 47727,
+          "seconds": 2.0319735160391392,
+          "peak": 0.999969482421875,
+          "rms": 0.5786259558015908,
+          "nonzero": 33548
+        },
+        {
+          "stage": "mute",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 113761,
+          "rate": 47727,
+          "seconds": 2.3835774299662664,
+          "peak": 0.0,
+          "rms": 0.0,
+          "nonzero": 0
+        },
+        {
+          "stage": "success",
+          "sink": "audio.pc_speaker.wav",
+          "samples": 119334,
+          "rate": 47727,
+          "seconds": 2.500345716261236,
+          "peak": 0.999969482421875,
+          "rms": 0.6046876355126679,
+          "nonzero": 46803
+        }
+      ],
+      "captures": {
+        "audio.pc_speaker.wav": {
+          "samples": 4900534,
+          "rate": 47727,
+          "seconds": 102.67844197204937,
+          "peak": 0.999969482421875,
+          "rms": 0.34137339596933314,
+          "nonzero": 590851
+        }
+      }
+    },
+    "storage": {
+      "status": "PASS",
+      "host_seconds": 99.739,
+      "report": "build/boratype-final/storage/report.json",
+      "report_sha256": "a73d5bde68c7c07872b871aefd6fd354cfaddf222c32d0b85dacbc41300ffb01"
+    },
+    "vesa1024": {
+      "status": "PASS",
+      "scenario": "adapters",
+      "backend": "qemu",
+      "machine": "os8088_xt_vga",
+      "adapter": "vesa1024",
+      "kernel": "real-mode",
+      "host_seconds": 18.721,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 4,
+        "w": 1024,
+        "h": 768,
+        "bpp": 16
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "eeb58c20b97754116c11b3e282f7b6ba916f55dd0ea85b51be332e8950f0f849",
+      "report": "build/boratype-final/vesa1024/report.json",
+      "report_sha256": "c8ba666b83ed947fbf0b17c24597a1c4e592f609ff490542879a95c86035fb73",
+      "resources_launch": {
+        "package_segment": 36224,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36224,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 30336,
+            "owner": 36224,
+            "bytes": 94208
+          },
+          {
+            "segment": 6432,
+            "owner": 36224,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/vesa1024/adapter-native-home.png",
+          "w": 1024,
+          "h": 768,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vesa1024/adapter-native-input.png",
+          "w": 1024,
+          "h": 768,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vesa1024/adapter-native-fullscreen.png",
+          "w": 1024,
+          "h": 768,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vesa1024/adapter-native-fullscreen-play.png",
+          "w": 1024,
+          "h": 768,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "vesa800": {
+      "status": "PASS",
+      "scenario": "adapters",
+      "backend": "qemu",
+      "machine": "os8088_xt_vga",
+      "adapter": "vesa800",
+      "kernel": "real-mode",
+      "host_seconds": 12.163,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 4,
+        "w": 800,
+        "h": 600,
+        "bpp": 8
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "1af1eab73f93c7fb44e791dcb75f72ae506474d4290f60885e359a8d52b5b76d",
+      "report": "build/boratype-final/vesa800/report.json",
+      "report_sha256": "e0337189491402671420aaf9012e65f20973d3f44bcef8b90b764c1f5779a9dd",
+      "resources_launch": {
+        "package_segment": 36160,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36160,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 30272,
+            "owner": 36160,
+            "bytes": 94208
+          },
+          {
+            "segment": 6432,
+            "owner": 36160,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/vesa800/adapter-native-home.png",
+          "w": 800,
+          "h": 600,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vesa800/adapter-native-input.png",
+          "w": 800,
+          "h": 600,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vesa800/adapter-native-fullscreen.png",
+          "w": 800,
+          "h": 600,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vesa800/adapter-native-fullscreen-play.png",
+          "w": 800,
+          "h": 600,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    },
+    "vga": {
+      "status": "PASS",
+      "scenario": "smoke",
+      "backend": "marty",
+      "machine": "os8088_xt_vga",
+      "adapter": "auto",
+      "kernel": "real-mode",
+      "host_seconds": 140.424,
+      "app_source_tree": "aee7c8b7d6d44acec057fd17c89831d4bd0561fb",
+      "actual_display": {
+        "kind": 0,
+        "w": 640,
+        "h": 480,
+        "bpp": 4
+      },
+      "app_bin_sha256": "58f1a54ff4aa26d0e7b67dc72f45f6abcae87293e64d9270c4a1dd336cff8cd2",
+      "app_package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+      "kernel_bin_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb",
+      "apps_sha256": "069aea7d7847cb131ff9bede71e8f76700f62df1bc17227cd9d18390f5d9d401",
+      "image_sha256": "8d8170e2adbb675ed4c13b7e2de8369fd908465569a97fd5c0ec806d701ac25a",
+      "first_lesson_oracle": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 0,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 51,
+        "correct": 50,
+        "errors": 1,
+        "net": 49,
+        "pos": 49,
+        "length": 49,
+        "completed": 0,
+        "streak": 49,
+        "best_streak": 49,
+        "backspaces": 1,
+        "elapsed": 788,
+        "last_tick": 2648,
+        "ready_ticks": 0,
+        "wpm": 13,
+        "accuracy": 98,
+        "seconds": 43,
+        "remaining": 0,
+        "seed": 46870,
+        "events": 153,
+        "achievement_new": 71,
+        "passage": "f j f j ff jj fj jf fjj jff fj fj jf jf f j fj jf",
+        "screen": 3
+      },
+      "mixed_lesson_oracle": {
+        "mode": 0,
+        "status": 4,
+        "lesson": 22,
+        "difficulty": 0,
+        "duration": 0,
+        "ranked": 1,
+        "started": 1,
+        "committed": 1,
+        "last_wrong": 0,
+        "error_run": 0,
+        "countdown": 0,
+        "new_record": 0,
+        "profile": 0,
+        "paused_ready": 0,
+        "attempts": 109,
+        "correct": 109,
+        "errors": 0,
+        "net": 109,
+        "pos": 109,
+        "length": 109,
+        "completed": 0,
+        "streak": 109,
+        "best_streak": 109,
+        "backspaces": 0,
+        "elapsed": 1877,
+        "last_tick": 5225,
+        "ready_ticks": 0,
+        "wpm": 12,
+        "accuracy": 100,
+        "seconds": 103,
+        "remaining": 0,
+        "seed": 43946,
+        "events": 153,
+        "achievement_new": 40,
+        "passage": "My name is Borat. This keyboard has 101 keys, but today I need only a few. Accuracy first; speed will follow!",
+        "screen": 3
+      },
+      "window_checks": {
+        "minimum_frame": [
+          488,
+          150
+        ],
+        "actual_minimum": [
+          490,
+          150
+        ],
+        "restored": [
+          7,
+          22,
+          626,
+          432
+        ],
+        "focus_requires_resume": true
+      },
+      "persistence": {
+        "close_reopen": "PASS",
+        "single_writer": "PASS",
+        "exported_save_copies": [
+          {
+            "path": "SYSTEM/APPDATA/BORATA.BTT",
+            "generation": 18,
+            "sha256": "3b8ccdc16135c98655bf4b614177f180252ad20ac4ef31c6c33423baeebd6017"
+          },
+          {
+            "path": "SYSTEM/APPDATA/BORATB.BTT",
+            "generation": 17,
+            "sha256": "dfb16fdac15a32c600b29249c9b83c2e30aa18add9054d8dfcc80fb76e5d496f"
+          }
+        ],
+        "reboot": "PASS"
+      },
+      "report": "build/boratype-final/vga/report.json",
+      "report_sha256": "ce1e4f7a84c430cc16afeb64fccf9ce551e63f9d57d15ab52c5defc55ac4f9bc",
+      "resources_launch": {
+        "package_segment": 36896,
+        "instance": 1,
+        "claims": [
+          {
+            "segment": 36896,
+            "owner": 1,
+            "bytes": 65024
+          },
+          {
+            "segment": 31008,
+            "owner": 36896,
+            "bytes": 94208
+          },
+          {
+            "segment": 8768,
+            "owner": 36896,
+            "bytes": 8192
+          }
+        ],
+        "total_claim_bytes": 167424
+      },
+      "captures": [
+        {
+          "path": "build/boratype-final/vga/01-home.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/01b-four-profiles.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/02-wrong-key.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/03-results.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/03c-mixed-native-input.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/03d-mixed-fullscreen-input.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/03b-mixed-shift-punctuation.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/04-pause.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/05-native-fullscreen.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/window-live-lesson-help.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/window-covered-focus-lost.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/window-uncovered-still-paused.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/window-minimum.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/window-size-restored.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/06-help.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/07-settings.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/08-records.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/09-reopened.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/10-readonly-instance.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        },
+        {
+          "path": "build/boratype-final/vga/11-reboot-restored.png",
+          "w": 640,
+          "h": 480,
+          "inspection": "required",
+          "settled": true
+        }
+      ]
+    }
+  },
+  "artifacts": {
+    "build/boratype.o88": {
+      "bytes": 86632,
+      "sha256": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3"
+    },
+    "build/boratype360.img": {
+      "bytes": 368640,
+      "sha256": "cff202ed18f4c4c1a952308ec36255645fa61cb5d7482f5102a2bf368194f18a"
+    },
+    "build/boratype.img": {
+      "bytes": 1474560,
+      "sha256": "3a5aa9564f39c6a655cdb548b4ffa987f455f05a8bbc3cbd851bd5edde973b79"
+    },
+    "build/boratype720.img": {
+      "bytes": 737280,
+      "sha256": "3ce381efbb6051534106b4c35efb3d3cda88cec7ec6d86d2b3f0252def858557"
+    },
+    "build/boratype120.img": {
+      "bytes": 1228800,
+      "sha256": "0914854965ab8fd663f3d755ffbd4fcf184b32cbc504a928789c713abc731bbd"
+    },
+    "build/BORATYPE.WPK": {
+      "bytes": 89598,
+      "sha256": "505bd6d28e9505874f1f5ff1e37498fcf597fb8205a961e194d5b212009136ca"
+    },
+    "build/boratype.bin": {
+      "bytes": 70247,
+      "sha256": "46fac8bcda77b02eb490a427d5c850d5e71767858a15c7d542f113b7b57c75b4"
+    },
+    "build/BORATYPE.OVL": {
+      "bytes": 16983,
+      "sha256": "9ba89afa2ae9e87b682b6d441160ef331a3d40d50aa8b8c2ad7c85aa7e021568"
+    },
+    "build/BTART.BIN": {
+      "bytes": 63677,
+      "sha256": "ed9a97ffcdc0a5d021224ab01ed9988af180d081853589285d55ba04eb24437b"
+    },
+    "build/BTSOUND.BIN": {
+      "bytes": 12823,
+      "sha256": "b93f01e09959a9ff325d0815398889a3bc358e2d9780fde3ff0b54ebb2ea682c"
+    }
+  },
+  "instruments": {
+    "marty": {
+      "upstream_pin": "e15cb04f7b3747676b7a230e8586d15742a1e479",
+      "binary_sha256": "c114d6a43561665be0e5d846d5a1410ffbbde1071a7eb24fbf04dce71911778f",
+      "binary_bytes": 8550400,
+      "patches": {
+        "01-headless-debug-server.patch": "656413cffbac4bacd9e6d34d00cc53b70303f2d334b480681b72a8c662da11f2",
+        "02-hercules-page1-decode.patch": "f4cdeb9c8861779483a7b3d8f61029eca73da2953e45ff4580f24e6bf2d81c60",
+        "03-video-dip-config.patch": "65425da9f04e6dd23db3bd16fdc2d5827ec437bed0533ccf2d8f86d1af249747",
+        "04-floppy-disk-timing.patch": "d3f20653de7ecac3fdbfb69f53264e9896fb795aa2193b32d064075ac6015ace",
+        "05-fdc-recal-one-interrupt.patch": "2ad2727102b374780b8a8964d3337f36a230e8795b714cde8755b0d5e22ba6d9",
+        "06-sblaster-adpcm4.patch": "5613861496692f52ef166a80a505a409336a764a2a19dcf249b7cfe622e4382a",
+        "07-v20-mode-flag-protect.patch": "3b724588610704678aaf25dfc5efe499f33e746e636b0e4ea18df881614016a0",
+        "08-hlt-override-lost.patch": "903380f459bbaa40b3db6b4ad6bc7538d767cac3a5c65bd1cd97c14c20fb785f",
+        "09-mpu401-uart.patch": "56f37980faf88da7efba0d7dc670caef6a05c4c7760ce4e207fe8a9e148abd64",
+        "10-covox-lpt-dac.patch": "552b4f521cf95f148e1a6b4709c5e045c53209686640944ce3b3377a1d67a321",
+        "11-keyboard-hold-scancode.patch": "0b9deb952295c5dc00b31486c09dbbacd876d13794f922bf8f1db8c584602590",
+        "12-vga-write-mode-3.patch": "5e60727a4df5012e5a218afdfabd50d935e3ca381c82a5c8742950ac70d30bf6",
+        "13-hercules-page1-lone-card.patch": "e3c524bcde9575f082f8c90b77d40d7c0ac41f37926bf705d934ff5e106cbdf3",
+        "14-keyboard-byte-pacing.patch": "b33cdc782567980d566f4b6810d6e789710a029fa13f875cda2df0d294aae23b",
+        "15-serial-mouse-wheel.patch": "6f1845a025bfd3298d50ba12475b4242592a5d60d7833efda13e9f36582e0112",
+        "16-pit-mode3-parity.patch": "b03fb0d09dac9153ae52b487dc16aad1507c4cba69e8bf827b0c85983ab57567",
+        "17-picomem.patch": "9c3f336692ad357fcd4b41c9b505340040e5343dcf15e4d6bfefdef568a27c79"
+      }
+    },
+    "86box": {
+      "binary_sha256": "2923272ce9f3b534395579c473b6774e9ce48b296d18868004bb9fdefce4741f",
+      "patches_marker": "a11097727c30e7e9d634270f352be574643151e5050bdfedf25c005ca6e0cbdc"
+    }
+  },
+  "repository_gates": {
+    "full_first": {
+      "passed": 74,
+      "failed": 6,
+      "skipped": 1
+    },
+    "failed_recheck": {
+      "passed": 6,
+      "failed": 0
+    },
+    "unrelated_skip": "pd360",
+    "budget_check": "PASS big/small/emu/mega",
+    "default_make": "PASS after caption repair:56 passed (6 cached),0 failed,1 skipped"
+  }
+}
