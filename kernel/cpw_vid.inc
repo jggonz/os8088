@@ -2223,7 +2223,7 @@ cpv_s_test:     db 'Test...', 0
 cpv_s_keep:     db 'Keep', 0
 cpv_s_revert:   db 'Revert', 0
 cpv_s_novx:     db 'VESA Display is not loaded', 0
-cpv_s_novl:     db 'VESA Display loaded: restart to use it', 0
+cpv_s_novl:     db 'Restart to use VESA Display', 0
 cpv_s_rst:      db ' Restart to use the VESA Display modes.', 0
 cpv_s_nolist:   db 'No mode list from the driver', 0
 cpv_s_vbe:      db 'VBE ', 0
