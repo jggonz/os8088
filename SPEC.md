@@ -259092,6 +259092,7 @@ Shipped by S3. Two entries, one each way:
 | 19 `CPG_SAVER` | the screen saver's settings (§79.7), its refusal said | - | - |
 | 20 `CPG_WDSET` | `SYSTEM.CFG` owed at the close (`cp_wdset`) | - | - |
 | 21 `CPG_REPOST` | every window repainted, owed (`cp_repost`) | - | - |
+| 29 `CPG_THMPRE` | Color applied after a preset was installed (`cp_thm_pre`, §134.11) | - | CF = 0 |
 
 Ops 8-21 are the compact pages' own bodies, factored out of their click
 paths so both faces run ONE body (`cp_drv_tog`/`cp_drv_off`/`cp_drv_on`,
@@ -259326,14 +259327,78 @@ move.
 
 ### 134.11 The Theme page - the theme changer
 
-Pinned by S9, to `docs/cpwide/cp-theme-vga-640x480.png`: four preview
-cards (Bright, Dark, Color, Windows), each a miniature window and menu bar
-drawn in that theme's own pens, the selected one framed; the eight Color
-presets (§76.14.14) as swatches applied with one click, and **Customize...**
-(THMPAL.DRV, as the compact page); an Effects group (window animations,
-§76.4); and a Screen Saver group with **Settings...** (§79.7). A theme a
-display cannot show (Color on 1bpp, §76.12.1) is never offered here because
-this face exists only on colour displays, and the refusal stays `thm_set`'s.
+Pinned by S9, to `docs/cpwide/cp-theme-vga-640x480.png`; the code is
+`kernel/cpw_thm.inc` (prefix `cpt_`), assembled into CPWIDE.DRV after the
+chrome. `cpw_page` hands the page to `cpw_thm_paint` while `[cp_sel]` is
+`CP_ITHM`, `cpw_click` hands the press to `cpw_thm_click`, and `cpw_edge`'s
+release of a wide control to `cpw_thm_up`; the compact Theme page
+(`cp_thm_paint`) is no longer hosted on the wide face. A display that cannot
+show Color (1bpp, §76.12.1) never reaches this face, so no control here is
+greyed; `thm_set` keeps the refusal.
+
+**Contents** (page-relative to the content box; L = `CPW_PX` + 8 = 129,
+R = content width - 9; "extra" = content height - 389, so 0 at 616x408 and
+112 at 760x520):
+
+| element | where | what |
+|---|---|---|
+| four cards | y 52 (`CPT_TOP`), x = L + i x (w + 8), i = 0..3 = `THM_BRIGHT`, `THM_DARK`, `THM_COLOR`, `THM_WIN`; w = (content width - 161) / 4 (113 / 149); h = 84 + extra / 2 (84 / 140) | a miniature desktop, menu bar, window and title bar, drawn from a table of rects (`cpt_tab`) in the THEME'S OWN pens: the row is `thm_tab`'s Bright / Dark row, and for Color and Windows the live Color row `THM_CROW` (a Windows card wears the Color row, §76.14.13, with a bevelled grey window), so a changed preset previews truthfully; a dithered desktop (`THM_DITHER`) is `gfx_fill_gray`. Under it its name, centred. The LIVE theme (`[thm_kind]`) has a 2 px blue ring and its name on a blue bar; the rest a 1 px black ring |
+| COLOR PRESETS | group at y = 52 + h + 8, 60 tall, x L..R | the eight rows of `drivers/thmpal/thmrows.inc` (the same macro `THM_PRESET_ROWS`, so THMPAL.DRV and this page cannot disagree about a colour) as 28x32 swatches at x = L + 14 + 38 i: the title colour (row byte 3) over the desktop colour (byte 5) in a black outline; the live preset (the 'TP' byte, `[drv_cfg + CFG_THMP]`), while the theme is Color or Windows, has a 3 px blue ring. **Customize...** right-aligned in the group |
+| Effects | group at y = presets + 68, 56 tall, x L, half the width | "Window animations" and an On / Off tab strip (`cpk_tabs`) over `[wm_animon]`. §11.99's zoom IS this setting (the compact page's second group, `CFG_ANIM`), so the mockup's separate "Desktop zoom" box is not drawn: it would be a second control for the same byte |
+| Screen Saver | group beside it, x L + half + 8 .. R | a 96x34 black picture with ten stars (primitives, no bitmap) and **Settings...** |
+
+**Acting.** A card or a swatch acts on the PRESS, as the compact radio does
+(§13.8.3): a card is `CPG_THMSET` with its `THM_*` (CF = 1: already live,
+nothing drawn). **A click draws no card and no swatch itself**: `cp_thm_apply`
+asks `cp_repost`, `ui_task` repaints every window - this one included, through
+`CWV_PAINT` - so the frame moves with the world, once, and nothing is drawn
+twice. The animation strip acts on the press, writes `[wm_animon]`, owes
+`SYSTEM.CFG` (`CPG_WDSET`) and redraws the one strip (nothing else is on
+screen to repaint). **Customize...** (`CPG_THMCUST`) and **Settings...**
+(`CPG_SAVER`) are armed (`CPW_ID0` + 1 and + 2, the pressed look drawn at
+once) and fire on the release, only if it lands inside the same rect - the
+compact page's rule (§13.7).
+
+**Presets: the decision.** A preset is applied with ONE click and no driver
+ABI change (`THMV_ABI_VER` and THMPAL.DRV are untouched; the dialog stays
+Customize...'s). CPWIDE.DRV carries the eight rows itself (80 bytes, the one
+macro) and does what `tv_install` does: the preset's row over the Color row
+`THM_CROW`, its number into 'TP'. `[thm_cstrp]`, the title style, is NOT
+touched, so a preset recolours a Windows theme and keeps it Windows. Then
+**`CPG_THMPRE` (29)**: `thm_set` with `THM_COLOR` unconditionally (it promotes
+to Windows by itself when bit 2 of `[thm_cstrp]` says so), a refusal
+toasted, `cp_repost`. **A swatch switches the theme to Color** when Bright or
+Dark was live, as Customize... does (§76.14.14): the swatches are never
+inert. `CPG_THMSET` could not serve: it answers "already live" for Color and
+changes nothing, which is exactly a second preset.
+
+| `CPG_*` | | in | out |
+|---|---|---|---|
+| 29 `CPG_THMPRE` | the Color row and 'TP' were just installed: apply Color (`cp_thm_pre`, `CTRL.DRV`'s 6 bytes beside `cp_thm_apply`) | - | CF = 0 |
+
+Numbers 30 and 31 are reserved and unused; `CPG_N` is 30 on this branch, and
+the table pads 22-28 (`cpg_none`: CF = 1) for the agents who own them - the
+merge drops the pads.
+
+**Cost on the XT.** A full paint is: the page ground (1 fill), each card
+about 21 `gfx_fill`s and one text run (Windows card 26) = 90 calls, the preset
+group's band and frame (about 9) and 8 swatches of 3 fills (+ 4 for the live
+ring) and a button, the Effects group (about 9) and the Screen Saver group
+(about 25: ten stars). About 170 drawing calls and 3 buttons, which is
+170 x 756 us = about 130 ms of fixed cost plus the pixels, once per theme
+change - beside the world's own repaint it is not the bill. No call is made
+while the page merely sits, and a press that changes nothing draws nothing.
+
+**Measured (S9, 2026-11-21).** `CPWIDE.DRV` +1,551 bytes (4,471 -> 6,022 on
+kern_big, 6,022 on kern_emu, 4,485 -> 6,034 on kern_mega) with the whole
+page, the eight rows and all the strings; `CTRL.DRV` +22 on each kernel
+(`cpg_none` and its seven pad words, `cp_thm_pre`, the table word); no
+resident byte on any kernel (`kernsize`: kern_big 265 left, unchanged).
+
+**Where it differs from the mockup.** No "Desktop zoom" box (above); the
+animation choice is a tab strip, not two radio buttons, because the kit has
+no radio and `os88ui_glyph` lives in CTRL.DRV's image where CPWIDE.DRV cannot
+call it; the swatches' selection is a 3 px blue ring around the whole swatch.
 
 ### 134.12 Cost, measured
 

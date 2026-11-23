@@ -814,6 +814,8 @@ cpw_hdr:
 ; (SPEC.md 134.8, 134.9, 134.11).
 ; -----------------------------------------------------------------------------
 cpw_page:
+    cmp byte [cp_sel], CP_ITHM
+    je cpw_thm_paint            ; the Theme page is drawn natively (134.11)
     mov byte [gfx_color], CWHITE
     mov ax, CPW_PX + CPW_HW     ; right of the hosted rect
     mov bx, CPW_BY
@@ -1060,6 +1062,10 @@ cpw_click:
     cmp bx, ax
     pop ax
     jge .none                   ; the status line
+    cmp byte [cp_sel], CP_ITHM
+    jne .nthm
+    jmp cpw_thm_click           ; the Theme page's own press (134.11)
+.nthm:
     cmp bx, CPW_HB              ; under the hosted rect: the catalog's
     jl .host
     cmp byte [es:CPW_D_ON], 0
@@ -1167,7 +1173,9 @@ cpw_edge:
     cmp ah, CPG_HUP
     jne .r
     CPWC os88ui_fire            ; a wide control's release: disarmed - the
-.r:                             ; S2 chrome has none that acts on it
+    cmp byte [cp_sel], CP_ITHM  ; S2 chrome has none that acts on it; the
+    je cpw_thm_up               ; Theme page's buttons do (134.11)
+.r:
     ret
 
 ; cpw_key - CWV_KEY: AX = the key, SI = the window. The hosted page's.
@@ -1760,6 +1768,8 @@ cpw_s_small: db 'Close and reopen the Control Panel.', 0
 cpw_s_st1:  db 'K free - ', 0
 cpw_s_st2:  db ' of ', 0
 cpw_s_st3:  db ' drivers loaded - settings saved when the panel closes', 0
+
+%include "cpw_thm.inc"          ; the Theme page (SPEC.md 134.11), same image
 
 ; KGO_PAIR's hop for this image (kernel.asm): cpw_kgo / cpw_cgo
 KGO_PAIR cpw
