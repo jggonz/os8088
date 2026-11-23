@@ -10,11 +10,13 @@ for the rows whose subject is a page's LOGIC (a driver's page, the Display
 page's VESA row, the Keyboard page's text), which both faces run - the wide
 face hosts the very same page code (135.3).
 
-How: one byte of the module's file name, `mod_f_cpw` ('CPWIDE.DRV'), is
-written to '~' before the first open. `mod_need MOD_CPW` then finds no file
-and the open takes 135.2's refusal path - the compact face, silently, exactly
-as on a system disk without CPWIDE.DRV (the QA pass's `nodrv` case). Nothing
-in the image changes and no kernel byte is spent.
+How: the first byte of the module's resident file name, `mod_f_cpw`
+('CPWIDE.DRV'), is written to 0 before the first open - which is the
+kernel's OWN mark for "CPWIDE.DRV was refused" (135.2): the open tests it
+and takes the compact face without a lookup, exactly as a machine whose
+system disk has no CPWIDE.DRV does after its first open. Nothing in the
+image changes, no kernel byte is spent, and the row's disk reads are the
+ones it had before 135.
 
 A kernel with no wide face (kern_small) has no `mod_f_cpw`: nothing to do.
 """
@@ -42,7 +44,7 @@ def compact(m, sym):
         return False
     if hasattr(m, "hmp"):
         import os88qemu
-        os88qemu.poke(m.hmp, lin, b"~")
+        os88qemu.poke(m.hmp, lin, b"\0")
     else:
-        m.write(lin, b"~")
+        m.write(lin, b"\0")
     return True

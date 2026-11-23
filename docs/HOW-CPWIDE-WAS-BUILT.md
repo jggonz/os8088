@@ -148,9 +148,10 @@ and 7 were a stale MartyPC machine list in this worktree (`make marty`).
 The rest were rows that click the compact panel's coordinates on a desktop
 that now opens wide. Each row could have read the wide geometry or been pinned
 to the compact face. Most of them test a page's LOGIC, which the wide face hosts
-unchanged, so `tests/cpface.py` pins them: it writes `~` over the first byte of
-the module's file name, and the open takes the same silent fallback as a disk
-without `CPWIDE.DRV`. No image changes and no kernel byte is spent.
+unchanged, so `tests/cpface.py` pins them: it writes 0 over the first byte of
+the module's file name, which is the kernel's own mark that `CPWIDE.DRV` was
+refused, and the open takes the compact face. No image changes and no kernel
+byte is spent.
 
 **And a row for the wide face itself.** Before this pass no emulator row
 opened the wide face. `tests/cpwide.py` drives it on QEMU: the open size,
@@ -161,3 +162,17 @@ commit and failed on both QA-1 and QA-3, then passed four runs in four on
 the fixed head. Its first version opened the panel with a raw
 press-drag-release on the menu and missed about one boot in two. It now
 uses the menu driver that confirms each step against the guest's state.
+
+**The pinned rows found a regression in the product.** On kern_mega,
+`megamodcache` counts the disk reads a Control Panel open makes, and a
+re-adopted panel had to make none (SPEC.md 2.8.3, the owner's "0 reads"). The
+wide branch made one on a VGA machine whose system disk has no `CPWIDE.DRV`,
+such as an XT booted off the 360KB disk. An A/B on MartyPC's XT with VGA
+showed it: main made 0 `int 13h` on the second and third opens, this branch
+1 each. A trace showed `mod_need MOD_CPW` asking for the missing file every
+time; the read was the media check of a drive with no change line. The first
+fix remembered the refusal in a byte of `CTRL.DRV`'s own bss. The trace
+showed it doing nothing, because a re-adoption zeroes that bss by design. The
+fix that holds writes 0 over the first byte of the module's resident file name
+when it is refused, and tests that byte before the lookup. That costs no byte,
+and the test pin uses the same mark.

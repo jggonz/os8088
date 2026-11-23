@@ -115,9 +115,9 @@ def main():
         if not boot[0]:
             raise Fail("HDD.DRV found no device at boot - is C: there?")
         # the COMPACT panel: CP_DRIVERS is its page list (SPEC.md 135.13,
-        # tests/cpface.py - one byte of CPWIDE.DRV's name spoiled, so the
-        # open takes 135.2's silent fallback)
-        box.dbg(["setpmem 0x%x 1 0x7e" % box.sym("mod_f_cpw")])
+        # tests/cpface.py): a 0 on CPWIDE.DRV's name is the kernel's own
+        # mark that the module was refused (135.2)
+        box.dbg(["setpmem 0x%x 1 0" % box.sym("mod_f_cpw")])
         menu(box, 35)                   # Control Panel
         box.ui_done("the Control Panel", secs=120)
         box.click(*CP_DRIVERS, what="the Drivers page")

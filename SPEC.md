@@ -258983,16 +258983,18 @@ refuses), no `CPWIDE.DAT`, a file that fails a check, or a heap that cannot
 fund the claim - the claim (if taken) is freed, `mod_drop MOD_CPW` runs, and
 the panel opens at 320×151 exactly as before §135. No toast, no beep.
 
-**A refused `CPWIDE.DRV` is not asked for again** by the same `CTRL.DRV`
-image: `cpg_open` sets `cp_nowide` (`.modcb`) when `mod_need MOD_CPW`
-refuses, and tests it before the lookup. Without it a VGA machine with no
-`CPWIDE.DRV` (one booted off the 360KB system disk, which omits it) searched
-the disk at EVERY open, and a re-adopted panel's press was no longer free of
-`int 13h` (2.8.3; `tests/megamodcache.py` counted the one read). A kept
-image keeps the byte; an image read from the disk again starts at zero and
-asks once more. `mod_need` gives no reason, so a refusal for want of heap is
-remembered too, until the panel next comes off the disk - a price taken for
-the common case. A `CPWIDE.DAT` refusal is NOT remembered: it may be heap.
+**A refused `CPWIDE.DRV` is not asked for again** until the next boot:
+when `mod_need MOD_CPW` refuses, `cpg_open` writes 0 over the first byte of
+the module's resident file name (`mod_f_cpw`, `kernel/mod.inc`) and tests
+that byte before any later lookup. Without it a VGA machine with no
+`CPWIDE.DRV` (one booted off the 360KB system disk, which omits it) read the
+disk at EVERY open - one `int 13h` a press, a media check on a drive with no
+change line, where main made none on a re-adopted panel (2.8.3; measured on
+MartyPC's XT with VGA). A flag in `CTRL.DRV`'s own bss would not do: a
+re-adoption zeroes it. The name costs no byte. `mod_need` gives no reason,
+so a refusal for want of heap is remembered too, until the next boot - a
+price taken for the common case. A `CPWIDE.DAT` refusal is NOT remembered:
+it may be heap.
 
 **The close**: `CPE_FLUSH`'s stub (`modc_e_flush`) runs the compact close
 (`cp_flush_close_x`, §31.8 - `SYSTEM.CFG` is written exactly as before),
@@ -259789,10 +259791,11 @@ wave changed: `btnrules` (`tests/btnsites.txt`: `cpwkit.inc`'s button),
 
 **What the final pass decided, per row** (2026-11-23). A row that drives a
 compact page's LOGIC on a VGA or VESA desktop is PINNED to the compact face
-by `tests/cpface.py`: before the first open it writes `'~'` over the first
-byte of `mod_f_cpw`, so `mod_need MOD_CPW` finds no file and the open takes
-135.2's silent refusal - the same path as a system disk without
-`CPWIDE.DRV`, with no image changed and no kernel byte spent. The wide face
+by `tests/cpface.py`: before the first open it writes 0 over the first byte
+of `mod_f_cpw` - the kernel's own mark that `CPWIDE.DRV` was refused (135.2)
+- so the open takes the compact face without a lookup, as a machine whose
+system disk has no `CPWIDE.DRV` does after its first open; no image changed
+and no kernel byte spent. The wide face
 hosts the very same page code (135.3), so a pinned row still tests the page
 it was written for. Pinned: `hmadrv`, `heaphi`, `rdxms`, `ethcfg`,
 `vesakbd`, `vesacp`, and `colorpresets` (whose desktop sample sits under a
