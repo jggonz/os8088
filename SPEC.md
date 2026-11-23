@@ -258982,11 +258982,13 @@ past the byte into the entry's own body (one compare); wide, it calls
 The resident `cpf_*` thunks are unchanged. `cp_list` (the list's membership
 changed - a driver came up or went) sends `CWV_LIST` instead of drawing.
 
-**Not on the 360KB system disk (interim, 2026-11-21, pending the owner).**
+**Not on the 360KB system disk (the owner's decision, 2026-11-22).**
 `CPWIDE.DRV` and `CPWIDE.DAT` are in `$(SYS360OMITDRV)` beside CDROM.DRV and
 PCIETHER.DRV: with the three wide pages the disk needed 708 clusters of 706.
 A machine booted from the 360KB system disk therefore opens the compact
-face, by this section's own refusal path; the 720KB, 1.2MB and 1.44MB
+face, by this section's own refusal path - an XT, where the wide face's
+drawing and its ~20KB of heap fit worse than on a 286 or better; the
+720KB, 1.2MB and 1.44MB
 system disks, the emu disk and the live media carry both files.
 
 ### 134.3 The window, its panes, and the hosted pages
