@@ -76,7 +76,7 @@ CPG_SAVER   equ 19              ; the screen saver's settings (SPEC.md 79.7)
 CPG_WDSET   equ 20              ; SYSTEM.CFG owed at the close (SPEC.md 31.8)
 CPG_REPOST  equ 21              ; ...and every window repainted (cp_repost)
                                 ; 22-24 were reserved for S7 (SPEC.md 134.8),
-                                ; which needed none: refused (cpg_no)
+                                ; which needed none: refused (cpg_none)
 CPG_VIDARR  equ 25              ; AL = 0 Single / 1 Right / 2 Below: the
                                 ; desktop arrangement, now (SPEC.md 134.9.5)
 CPG_GLYPH   equ 26              ; os88ui_glyph: CX/DX screen, AL = OS88UI_G*,
