@@ -1368,7 +1368,8 @@ cpg_glyph:
 ; A panel already up keeps its face: app_launch only fronts it. Otherwise
 ; this is the work KD_INIT did (the press state and the arm cleared - nothing
 ; between here and the window being shown can arm anything), then SPEC.md
-; 134.2's predicate - a VGA or VESA primary of at least 640x480 - then
+; 134.2's predicate - a VGA or VESA primary whose WORK AREA (the band wm_fit
+; places windows in) holds the 616x408 face - then
 ; MOD_CPW, then CPWIDE.DRV's own open: CPWIDE.DAT read and the window's size
 ; written into cp_tpl.
 ; -----------------------------------------------------------------------------
@@ -1391,10 +1392,14 @@ cpg_open:
     jmp short .out              ; (kern_mega: no VESA renderer)
 %endif
 .kind:
-    cmp word [vid_pw], 640
-    jb .out
-    cmp word [vid_ph], 480
-    jb .out
+    mov ax, [vid_band_xe]       ; THE WORK AREA, not the screen (SPEC.md 134.2
+    sub ax, [vid_band_x0]       ; step 4): the band wm_fit clamps every window
+    cmp ax, CPW_W1 + CPW_FITX   ; to, less a side Dock's columns - so a Dock on
+    jb .out                     ; the left or right of a 640 screen is the
+    mov ax, [vid_dock_y0]       ; compact face, and the Dock page stays in
+    sub ax, MBAR_H + 1          ; reach to move it back. ...and its rows, as
+    cmp ax, CPW_H1              ; wm_fit's height clamp counts them (one
+    jb .out                     ; short of the dock's top)
     mov al, MOD_CPW
     CPXC mod_need
     jc .out                     ; no CPWIDE.DRV: compact

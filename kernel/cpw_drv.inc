@@ -12,9 +12,12 @@
 ; - category icon, name, status badge, memory, Start at boot - and a DETAILS
 ; box for the selected row with Load, Unload, Settings... and Ports....
 ;
-; ITS STATE is in the working area's page block (CPW_W_PAGE, 80 bytes) and
-; NOTHING is kept between visits except the filter and the selection, which
-; are bytes there. Everything is content-relative; ES = the asset claim.
+; ITS STATE is in the working area's page block (CPW_W_PAGE, 80 bytes), which
+; the page showing owns whole (SPEC.md 134.5.1), and NOTHING is kept between
+; visits except the filter and the selection, which are the working area's
+; KEPT bytes (CPW_W_DFLT, CPW_W_DSEL) - outside the block, because the Theme
+; and Display pages lay their own maps over all of it. Everything is
+; content-relative; ES = the asset claim.
 ;
 ; REDRAW ONLY WHAT CHANGED (CLAUDE.md, Performance): a row is painted opaque,
 ; in the spans AROUND its text, so a selection change is two rows and the
@@ -25,17 +28,22 @@
 section .modv                   ; CPWIDE.DRV's image, like the file that includes
                                 ; this one (os88ovlchk reads each file's own sections)
 
-; --- the state, in the working area's page block (80 bytes, SPEC.md 134.5) ----
+; --- the state (SPEC.md 134.5.1) ----------------------------------------------
+; What outlives a visit - the filter, the selection, and whether the page block
+; is still this page's - is in the working area's KEPT bytes, which no other
+; page writes. Everything in the page block is rebuilt by cpd_paint, and on a
+; FRESH entry (CPD_ON = 0: another page has had the block) the table's first
+; row too, so nothing a Theme or Display visit left there is ever read.
+CPD_FLT     equ CPW_W_DFLT              ; db the filter: 0 All, else a CWC_*
+CPD_SELR    equ CPW_W_DSEL              ; db the selected drv_tab row, 0FFh none
+CPD_ON      equ CPW_W_DON               ; db 1 = the page block is this page's
 CPD_TB      equ CPW_W_PAGE              ; the table's block (CPKT_SIZE = 18)
-CPD_FLT     equ CPD_TB + CPKT_SIZE      ; db the filter: 0 All, else a CWC_*
-CPD_ON      equ CPD_FLT + 1             ; db 1 = this page is on the screen
-CPD_SELR    equ CPD_FLT + 2             ; db the selected drv_tab row, 0FFh none
-CPD_MASK    equ CPD_FLT + 3             ; db one bit per CWC_* that has a row
-CPD_GT      equ CPD_FLT + 4             ; dw the DETAILS box's top
-CPD_C1      equ CPD_FLT + 6             ; dw the badge column's x, row-relative
-CPD_C2      equ CPD_FLT + 8             ; dw the memory column's
-CPD_C3      equ CPD_FLT + 10            ; dw the Start-at-boot column's
-CPD_ROWS    equ CPD_FLT + 12            ; db x DRV_MAX: the drv_tab rows listed
+CPD_MASK    equ CPD_TB + CPKT_SIZE + 3  ; db one bit per CWC_* that has a row
+CPD_GT      equ CPD_TB + CPKT_SIZE + 4  ; dw the DETAILS box's top
+CPD_C1      equ CPD_TB + CPKT_SIZE + 6  ; dw the badge column's x, row-relative
+CPD_C2      equ CPD_TB + CPKT_SIZE + 8  ; dw the memory column's
+CPD_C3      equ CPD_TB + CPKT_SIZE + 10 ; dw the Start-at-boot column's
+CPD_ROWS    equ CPD_TB + CPKT_SIZE + 12 ; db x DRV_MAX: the drv_tab rows listed
 ; (kernel.asm, after driver.inc, checks CPD_ROWS + DRV_MAX against the block)
 CPW_D_ON    equ CPD_ON                  ; (cpwide.inc's name for it)
 
@@ -225,9 +233,21 @@ cpd_build:
 ; one of them never needs the ground again.
 ; -----------------------------------------------------------------------------
 cpd_paint:
-    mov byte [es:CPD_ON], 1
     call cpd_geo
+    cmp byte [es:CPD_ON], 0
+    jne .live
+    mov byte [es:CPD_ON], 1     ; a FRESH entry: the block was another page's,
+    mov word [es:CPD_TB + CPKT_TOP], 0  ; so its first row is not to be
+    call cpd_build              ; trusted - from the top, and then down only
+    mov ax, [es:CPD_TB + CPKT_SEL]  ; as far as the kept selection needs to
+    sub ax, [es:CPD_TB + CPKT_NV]   ; be in view (SEL 0FFFFh: none, the top)
+    jl .go
+    inc ax
+    mov [es:CPD_TB + CPKT_TOP], ax
+    jmp short .go
+.live:
     call cpd_build
+.go:
     call cpw_sty
     mov dx, ax
     dec dx

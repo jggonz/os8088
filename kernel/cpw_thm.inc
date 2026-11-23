@@ -24,7 +24,8 @@ section .modv
 CPT_TOP     equ 52              ; the cards' top
 CPT_L       equ CPW_PX + 8      ; the groups' and the first card's left
 
-; --- the page's working bytes (CPW_W_PAGE, 80) --------------------------------
+; --- the page's working bytes: the page block (CPW_W_PAGE, 80), this page's
+; --- whole while it shows (SPEC.md 134.5.1); rebuilt on every paint ---------
 CPT_W       equ CPW_W_PAGE + 0  ; dw card width
 CPT_H       equ CPW_W_PAGE + 2  ; dw card height
 CPT_TG      equ CPW_W_PAGE + 4  ; dw the presets group's top
@@ -80,8 +81,8 @@ cpt_geo:
 ; -----------------------------------------------------------------------------
 ; cpw_thm_paint - the whole page (cpw_page's, while [cp_sel] is CP_ITHM)
 ; -----------------------------------------------------------------------------
-cpw_thm_paint:
-    mov byte [es:CPW_D_ON], 0
+cpw_thm_paint:                  ; (cpw_page has cleared CPW_D_ON: the page
+                                ; block is this page's now, SPEC.md 134.5.1)
     call cpw_sty                ; the ground, the page area to the status rule
     mov dx, ax
     dec dx

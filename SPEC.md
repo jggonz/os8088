@@ -258909,7 +258909,7 @@ image generation, kept with their prompts as source (`docs/cpwide/`,
 |---|---|
 | what | a second FACE of the same Control Panel: the same `KIND_CTRL` window, the same settings, the same `SYSTEM.CFG` bytes, the same close-time flush (§31.8) - drawn as a large two-pane window with icons, grouped page list, a header strip and a status line |
 | where | **`kern_big`, `kern_emu` and `kern_mega` only.** `kern_small` has no VGA renderer (§39.27) and no driver layer (§51.0); it never assembles a byte of this section and its `CTRL.DRV` is byte for byte unchanged |
-| when | at OPEN, when the primary display is a colour display of at least 640×480: `[vid_kind]` is `VID_VGA` or `VID_VESA` and `[vid_pw]` ≥ 640 and `[vid_ph]` ≥ 480 (so EGA's 640×350, VESA's 640×400, Hercules and CGA keep the compact face). The decision is taken once per open; a `vid_switch` while the panel is open does not change face until it is closed and opened again (§134.2) |
+| when | at OPEN, when the primary display is a colour display whose WORK AREA holds the 616×408 face: `[vid_kind]` is `VID_VGA` or `VID_VESA`, and the band `wm_fit` places windows in is at least 632 wide and 408 high (§134.2 step 4) - so EGA's 640×350, VESA's 640×400, Hercules, CGA, and a 640×480 VGA with the Dock on its left or right edge keep the compact face. The decision is taken once per open; a `vid_switch` while the panel is open does not change face until it is closed and opened again (§134.2) |
 | how it loads | `CTRL.DRV` is loaded exactly as today, and then `CPWIDE.DRV` - a second on-demand module (§2.8), `MOD_CPW` - beside it. `CTRL.DRV` keeps ALL the panel's logic and every compact page; `CPWIDE.DRV` carries only the wide chrome, the shared widget kit of §134.5 and the three pages drawn natively wide (Drivers §134.8, Display §134.9, Theme §134.11). The two call each other through slot blocks (§134.4). Nothing is assembled twice |
 | assets | `CPWIDE.DAT`, a data file beside `CTRL.DRV` on every system disk of the three kernels: the icon sheets as 4bpp + mask and the driver catalog (§134.6, §134.7). Read once at open into a heap claim, freed at close |
 | refusal | **a refusal is a normal path, and it is the compact face.** `CPWIDE.DRV` or `CPWIDE.DAT` missing, refused by `mod_check`, or a heap that cannot fund them: the panel opens compact, exactly as before this section existed, with no message. The wide face is an improvement, never a requirement |
@@ -258938,8 +258938,19 @@ Shipped by story S1. The pieces, and who owns each:
    (§13.8.3) - is done here, in the image: every launch of `KIND_CTRL` is
    `cp_open_x`'s, and the 13 resident bytes of `cp_kinit` paid for the row.
 4. The predicate: `[vid_kind]` is `VID_VGA` or (kernels with `VID_EXT`)
-   `VID_VESA`, `[vid_pw]` ≥ 640 and `[vid_ph]` ≥ 480. kern_mega has no
-   VESA renderer and asks VGA alone.
+   `VID_VESA`, and **the work area, not the screen, holds the face**: the
+   band `wm_fit` clamps every window to (§11, §30.5) is at least
+   `CPW_W1` + `CPW_FITX` = 632 wide (`[vid_band_xe]` - `[vid_band_x0]`) and
+   at least `CPW_H1` = 408 high (`[vid_dock_y0]` - `MBAR_H` - 1, the height
+   clamp's own count). The 16 px over the frame are `wm_fit`'s snap (§11.94):
+   it may move the frame up to 7 px left and widen it by 2, and a frame it
+   had to snap DOWN would be under the face. So a Dock standing Left or Right
+   on a 640 screen (a 608-wide band) opens compact, where the Dock page is in
+   reach to move it back; an auto-hiding Dock reserves one column and keeps
+   the wide face; an 800×600 screen with a side Dock still holds it. The
+   band includes every reservation `dock_geom` makes, so a future edge
+   strip is answered by the same two numbers. (A screen narrower than 640 or
+   shorter than 480 fails this test too, so no separate size test is kept.)
 5. `mod_need MOD_CPW`; then `CWV_OPEN`: under the boot volume bracket
    (`drv_vol_bank`/`drv_vol_back`), `drv_find` sizes `CPWIDE.DAT` (its
    UNPACKED size - `PKGZ` packs it, §20.13.5), refused under the 16-byte
@@ -258971,11 +258982,19 @@ then `cp_wclose`: `CWV_CLOSE` frees the claim and restores `cp_tpl`,
 `CTRL.DRV` as it always did. `MOD_CACHE` keeps both images as purgeable
 caches (§2.8.3).
 
-**A `vid_switch` while the panel is open does not change face.** The window
-manager clamps the window to the new desktop; the wide face lays itself out
-from the content box it is given, and if that box is smaller than 616×408's
-it draws one line - "Close and reopen the Control Panel." - and nothing that
-could run past its edge (`cpw_small`). Closing and opening chooses again.
+**A `vid_switch` while the panel is open does not change face**, and nor
+does a Dock moved to a side edge from the Dock page. The window manager
+clamps the window to the new work area; the wide face lays itself out from
+the content box it is given, and if that box is smaller than 616×408's
+(`cpw_big`, the one test) it is in the SMALL state: it draws one line -
+"Close and reopen the Control Panel." - and nothing that could run past its
+edge (`cpw_small`), and **nothing in it is pressed or acts**: `cpw_click`,
+`cpw_up`/`cpw_drag`, `cpw_key`, the Date/Time clock's `cpw_tick` and
+`cpw_listev` each ask `cpw_big` first and return. The one exception is the
+Display page during a Test... (§134.9.3), whose Keep group is drawn and
+pressed in the small state; that page guards its own edges (`cpv_big`).
+Closing and opening chooses again, by step 4's test - so the reopened panel
+is compact when the new work area cannot hold the face.
 
 **Forwarding.** `CTRL.DRV`'s far entries `CPE_PAINT`, `CPE_ONCLICK`,
 `CPE_ONUP`, `CPE_ONDRAG`, `CPE_ONKEY` and `CPE_TICK` open with `CPWF CWV_*`
@@ -259152,12 +259171,46 @@ columns, their headings and the selection bar's ink are therefore the
 PAGE's: a column layout is the row painter's arithmetic, and a header row is
 a `cpw_run` over it.
 
-**The working area** (`CPW_WSZ` = 832 bytes at the asset claim's start,
+**The working area** (`CPW_WSZ` = 848 bytes at the asset claim's start,
 `cpwide.inc`): the content origin and size, the window, the caller's ES,
 the status line's cache, the list's 28 entries, a 96-byte composed line
-(`CPW_W_STR`), 80 bytes for the page showing (`CPW_W_PAGE` - the catalog's
-table block, filter and rows), the kit's 12-byte scratch, and the 512-byte
-icon staging buffer. `CPWIDE.DAT` follows it.
+(`CPW_W_STR`), the 80-byte PAGE BLOCK (`CPW_W_PAGE`), 16 KEPT bytes
+(`CPW_W_KEEP`), the kit's 12-byte scratch, and the 512-byte icon staging
+buffer. `CPWIDE.DAT` follows it, **on a paragraph**: a packed read (§20.13.5)
+expands at one, so an offset off the grid is a refused open, and `cpwide.inc`
+refuses to assemble one. The working area is zeroed at every open.
+
+#### 134.5.1 The working area's map - who owns which byte
+
+**The page block belongs WHOLE to the page showing.** Each wide page lays
+its own map over all 80 bytes, so leaving a page loses its block: a page
+must rebuild everything it reads there on a FRESH entry, and anything that
+has to outlive a visit is a KEPT byte, outside the block, that no other page
+writes. Before this rule the Drivers page kept its filter and selection at
+page + 18 and + 20, which the Theme page's `CPT_B` and the Display page's
+`CPV_FLT`/`CPV_ASEL` also wrote, and coming back to Drivers showed an empty
+table or another page's filter. A new page adds its row here, its kept
+bytes in `CPW_W_KEEP` (13 of its 16 are spare; it grows by whole paragraphs), and a
+fresh-entry flag of its own if it keeps anything in the block across
+repaints.
+
+| bytes | name | owner | lifetime |
+|---|---|---|---|
+| 0-17 | `CPW_W_OX` .. `CPW_W_LSEL` | the chrome (`cpwide.inc`) | the open |
+| 18 | `CPW_W_FULL` | the list paint | one paint |
+| 19 | `CPV_LIVE` | the Display page's fresh-entry flag: 1 while the block is its own; `cpw_page` clears it for any other page (§134.9.2) | the open |
+| 20-31 | `CPW_W_KIT` | the kit's scratch (§134.5) | one call |
+| 32-143 | `CPW_W_LIST` | the page list's 28 entries | rebuilt by every list paint |
+| 144-239 | `CPW_W_STR` | a composed line | one call |
+| 240-319 | `CPW_W_PAGE` | **the page showing, whole**: Drivers `CPD_*` (the table block, the categories, the box's top, the columns, the listed rows - checked against the block in `kernel.asm`), Display `CPV_*` (checked in `cpw_vid.inc`), Theme `CPT_*` (checked in `cpw_thm.inc`) | one visit |
+| 320 | `CPW_W_DFLT` | the Drivers page's filter (0 All, else a `CWC_*`) | the open |
+| 321 | `CPW_W_DSEL` | the Drivers page's selected `drv_tab` row (0 at the open: row 0 if it is listed, else the first row) | the open |
+| 322 | `CPW_W_DON` (`CPW_D_ON`) | 1 while the page block is the Drivers page's; `cpw_page` clears it before drawing any other page (§134.8) | the open |
+| 323-335 | - | spare kept bytes (the file stays on a paragraph) | - |
+| 336-847 | `CPW_W_ICON` | the icon staging buffer | one blit |
+
+`cpwide.inc` refuses to assemble if the kept bytes leave the gap between the
+block and the icons, and each page refuses one that outgrows the block.
 
 **The worked example** is the Drivers page (§134.8): tabs over a subset (one
 `cpk_tabs` call a tab), a table with a row painter of its own, a group box, text
@@ -259361,11 +259414,15 @@ A failed load shows its reason in the row's badge and in DETAILS. Nothing else.
 **Gate ops.** None added: the page uses `CPG_DRVON`/`OFF`/`WANT`/`TTL`/`STAT`/
 `MEM` (§134.4); `CPG_N` stays 22 and opcodes 22-24 are unused.
 
-**State** is the working area's 80-byte page block: the kit's table block,
-the filter (0 All, else a `CWC_*`), the selected `drv_tab` row, the categories
-present, the box's top, three column x's and one byte for each of at most
-`DRV_MAX` listed rows. The filter and the selection are kept while the panel is
-open.
+**State** is the working area's 80-byte page block (§134.5.1): the kit's
+table block, the categories present, the box's top, three column x's and one
+byte for each of at most `DRV_MAX` listed rows - all rebuilt by every paint -
+and two KEPT bytes outside it, the filter (0 All, else a `CWC_*`) and the
+selected `drv_tab` row. **The filter and the selection are kept while the
+panel is open**, whatever page was visited between. A FRESH entry (`CPW_D_ON`
+= 0: another page has had the block, or the Ports view was showing) also
+resets the table's first row, to the top or as far down as brings the kept
+selection into view; a repaint while the page shows keeps the scroll.
 
 ### 134.9 The Display page - the mode changer
 
@@ -259448,8 +259505,9 @@ Working-area byte 19 (`CPV_LIVE`, the pad between `CPW_W_FULL` and the kit's
 scratch) is 1 while that state belongs to this page: `cpw_page` clears it
 when any other page is drawn, so coming back to Display builds the page again
 from the running mode, while a repaint of Display - every `vid_switch`'s -
-keeps the selection, the filter and a running test. `CPW_D_ON`'s byte
-(page + 19) is kept 0 for `cpw_listev`.
+keeps the selection, the filter and a running test. (`CPW_D_ON` is a kept
+byte outside the block since §134.5.1, and `cpw_page` clears it before
+drawing this page.)
 
 #### 134.9.3 Test... - the state machine
 
@@ -259662,9 +259720,9 @@ kern_emu now has 19 bytes left; nothing in this section may add a resident
 byte to kern_emu without finding one first.
 
 Heap while the wide panel is open, beyond the compact panel's: `CPWIDE.DRV`
-(4,471 bytes, one 4,608-byte claim) and the asset claim, `CPW_WSZ` (832) +
-`CPWIDE.DAT` (14,642 unpacked; 5,290 on the disk) = 15,474 bytes, a
-15,872-byte claim - 20,480 bytes in all, both `MEM_K_MOD` and both given back
+(4,471 bytes, one 4,608-byte claim) and the asset claim, `CPW_WSZ` (832; 848 since §134.5.1) +
+`CPWIDE.DAT` (14,642 unpacked; 5,290 on the disk) = 15,474 bytes (15,490
+since §134.5.1's kept bytes), a 15,872-byte claim - 20,480 bytes in all, both `MEM_K_MOD` and both given back
 at the close. The open reads one file more than the compact face (the
 module) and one data file; the XT open time is the QA pass's to measure.
 

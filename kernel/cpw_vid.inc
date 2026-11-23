@@ -29,7 +29,7 @@ CPV_LIVE    equ CPW_W_FULL + 1  ; db 1 = the page area is this page's (the
 %endif
 CPV_TB      equ CPW_W_PAGE + 0  ; the table's block (cpk_table, CPKT_SIZE)
 CPV_FLT     equ CPW_W_PAGE + 18 ; db the filter tab
-CPV_RSV     equ CPW_W_PAGE + 19 ; db kept 0: it is CPW_D_ON's byte, which
+CPV_RSV     equ CPW_D_ON        ; DEAD: CPW_D_ON is a KEPT byte (134.5.1) now -
 %if CPV_RSV != CPW_D_ON         ;    cpw_listev reads on any page
   %error "cpw_vid: CPV_RSV must be CPW_D_ON's byte"
 %endif

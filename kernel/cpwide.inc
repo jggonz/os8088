@@ -55,10 +55,28 @@ CPW_W_LIST  equ 32              ; the list's entries, CPW_LMAX x 4 bytes:
 CPW_LMAX    equ 28              ;   +0 db 80h|heading or 0, +1 db the record,
                                 ;   +2 dw the entry's top, content-relative
 CPW_W_STR   equ CPW_W_LIST + CPW_LMAX * 4   ; 144: a composed line, 96 bytes
-CPW_W_PAGE  equ CPW_W_STR + 96  ; 240: 80 bytes the page showing may keep -
-CPW_W_PAGEN equ 80              ;   a kit table's block, its filter, its rows
-CPW_W_ICON  equ CPW_W_PAGE + CPW_W_PAGEN    ; 320: the icon staging buffer,
-CPW_WSZ     equ CPW_W_ICON + CWD_I32_PIX    ; one 32x32; CPWIDE.DAT at 832
+CPW_W_PAGE  equ CPW_W_STR + 96  ; 240: THE PAGE BLOCK, 80 bytes, the page
+CPW_W_PAGEN equ 80              ;   SHOWING owns whole: each wide page lays its
+                                ;   own map over all of it (SPEC.md 134.5.1),
+                                ;   so leaving a page is losing its block - a
+                                ;   page rebuilds it on a fresh entry, and what
+                                ;   must outlive a visit lives in KEEP below
+CPW_W_KEEP  equ CPW_W_PAGE + CPW_W_PAGEN    ; 320: bytes kept across visits,
+CPW_W_DFLT  equ CPW_W_KEEP + 0  ; db  the Drivers page's filter (0 All, CWC_*)
+CPW_W_DSEL  equ CPW_W_KEEP + 1  ; db  ...its selected drv_tab row, 0FFh none
+CPW_W_DON   equ CPW_W_KEEP + 2  ; db  1 = the page block is the Drivers page's
+                                ;     (cpw_page clears it for any other page)
+CPW_W_KEEPN equ 16              ; (13 spare: a paragraph, so the file stays on
+                                ;  one - below)
+CPW_W_ICON  equ CPW_W_KEEP + CPW_W_KEEPN    ; 336: the icon staging buffer,
+CPW_WSZ     equ CPW_W_ICON + CWD_I32_PIX    ; one 32x32; CPWIDE.DAT at 848
+%if CPW_W_DON >= CPW_W_ICON || CPW_W_DFLT < CPW_W_PAGE + CPW_W_PAGEN
+  %error "cpwide: the kept bytes must lie between the page block and the icons"
+%endif
+%if CPW_WSZ & 15                ; a PACKED read (PKGZ, SPEC.md 20.13.5) expands
+  %error "cpwide: CPWIDE.DAT must start on a paragraph of the claim"
+%endif                          ; at a paragraph (lz wants DI = 0, diskw.inc):
+                                ; at 836 the open was refused, silently compact
 CPW_DATMAX  equ 16384           ; the file's bound (SPEC.md 134.6)
 
 ; --- the page list (SPEC.md 134.3), content-relative --------------------------
@@ -368,9 +386,7 @@ cpw_sty:
 ; -----------------------------------------------------------------------------
 cpw_paint:
     call cpw_org
-    cmp word [es:CPW_W_CW], CPW_W1 - 2
-    jb cpw_small
-    cmp word [es:CPW_W_CH], CPW_H1 - TITLE_H - 1
+    call cpw_big
     jb cpw_small
     call cpw_lbuild
     call cpw_list
@@ -388,6 +404,17 @@ cpw_paint:
     call cpw_page
     mov al, 1
     jmp cpw_status
+
+; cpw_big - CF = 0 the window holds the face; CF = 1 it is in the SMALL state
+; (cpw_small), where nothing but its line - and the Display page's Keep group
+; during a Test, which that page guards itself (cpv_big) - is drawn or
+; pressed (SPEC.md 134.2). Reads the content box cpw_org last wrote; keeps all
+cpw_big:
+    cmp word [es:CPW_W_CW], CPW_W1 - 2
+    jb .r
+    cmp word [es:CPW_W_CH], CPW_H1 - TITLE_H - 1
+.r:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cpw_small - the window is smaller than the face (a vid_switch while it was
@@ -823,13 +850,13 @@ cpw_hdr:
 ; -----------------------------------------------------------------------------
 cpw_page:
     cmp byte [cp_sel], CP_IVID  ; the Display page draws itself (134.9)...
-    je cpv_page
+    je .vid
     mov byte [es:CPV_LIVE], 0   ; ...and builds itself afresh after another
+    call cpw_dwant              ; CF = 0: the Drivers list - its own page,
+    jnc cpd_paint               ; which asks CPW_D_ON whether this is a fresh
+    mov byte [es:CPW_D_ON], 0   ; entry (134.5.1): any other page clears it
     cmp byte [cp_sel], CP_ITHM
     je cpw_thm_paint            ; the Theme page is drawn natively (134.11)
-    mov byte [es:CPW_D_ON], 0
-    call cpw_dwant              ; CF = 0: the Drivers list - its own page
-    jnc cpd_paint
     mov byte [gfx_color], CWHITE
     mov ax, CPW_PX + CPW_HW     ; right of the hosted rect
     mov bx, CPW_BY
@@ -841,6 +868,9 @@ cpw_page:
     mov bx, [es:CPW_W_WIN]
     mov ah, CPG_HPAINT
     jmp cpw_gate
+.vid:
+    mov byte [es:CPW_D_ON], 0
+    jmp cpv_page
 
 ; cpw_under - the ground under the hosted rect, to the status line's rule
 cpw_under:
@@ -1043,6 +1073,8 @@ cpw_click:
     sub bx, [es:CPW_W_OY]
     cmp byte [cp_sel], CP_IVID  ; the Display page takes the whole window's
     je cpv_click                ; press: its test holds the list (134.9.3)
+    call cpw_big                ; the small state: nothing to press (134.2)
+    jb .none
     cmp ax, CPW_LW
     jl .list
     cmp bx, CPW_BY
@@ -1151,6 +1183,11 @@ cpw_drag:
     mov ah, CPG_HDRAG
 cpw_edge:
     call cpw_org
+    cmp byte [cp_sel], CP_IVID  ; (the Display page guards its own, cpv_up)
+    je .ok
+    call cpw_big                ; the small state: no edge acts or draws
+    jb .r
+.ok:
     push ax
     CPWC os88ui_armed           ; AX = the armed control, 0 = none
     cmp ax, CPW_ID0
@@ -1175,6 +1212,9 @@ cpw_edge:
 cpw_key:
     cmp byte [cp_sel], CP_IVID  ; the Display page's: Esc reverts a test
     je cpv_key
+    call cpw_org
+    call cpw_big                ; the small state: no key acts or draws
+    jb cpw_tick.r
     cmp byte [es:CPW_D_ON], 0
     jne cpd_key                 ; the Drivers page: Up and Down
     mov bx, ax
@@ -1187,6 +1227,9 @@ cpw_tick:
     je cpv_tick
     cmp byte [cp_sel], CP_ITIME
     jne .r
+    call cpw_org                ; (the last window event's window)
+    call cpw_big                ; the small state: no clock drawn over it
+    jb .r
     mov ah, CPG_HTICK
     jmp cpw_gate
 .r:
@@ -1207,6 +1250,8 @@ cpw_listev:
     jc .r
     mov [es:CPW_W_WIN], bx
     call cpw_org
+    call cpw_big                ; the small state: nothing drawn (134.2); the
+    jb .r                       ; next full paint builds the list anyway
     call cpw_lbuild
     call cpw_list
     xor al, al

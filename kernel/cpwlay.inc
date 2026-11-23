@@ -32,6 +32,11 @@ CPW_W1    equ 616               ; on a 640x480 primary
 CPW_H1    equ 408
 CPW_W2    equ 760               ; on one of at least 800x600
 CPW_H2    equ 520
+CPW_FITX  equ 16                ; the open's predicate (SPEC.md 134.2): the work
+                                ; area must be CPW_W1 + this wide, because
+                                ; wm_fit's snap (SPEC.md 11.94) may move the
+                                ; frame up to 7 px and widen it by 2, and a
+                                ; frame snapped DOWN instead is under the face
 
 ; --- the events CTRL.DRV forwards (SPEC.md 134.4): BP = one of these at
 ; --- CPWIDE.DRV's one entry. The first five carry SI = the window
