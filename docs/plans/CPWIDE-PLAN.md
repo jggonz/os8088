@@ -45,30 +45,30 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 
 ## Wave 1 - foundation (parallel)
 
-- [I] **S1** (`shell`) Choose the face at open; load `CPWIDE.DRV` and
+- [S] **S1** (`shell`) Choose the face at open; load `CPWIDE.DRV` and
   `CPWIDE.DAT`; fall back to compact on any refusal; drop both at close.
   Done when: VGA and VESA open wide, EGA/CGA/Hercules open compact, deleting
   `CPWIDE.DRV` from the disk opens compact; `kernsize` on all three kernels
   shows no rung crossed; SPEC 135.2 has the measured bytes.
-- [I] **S2** (`shell`) The wide window: grouped page list with 16x16 icons,
+- [S] **S2** (`shell`) The wide window: grouped page list with 16x16 icons,
   header strip with the 32x32 icon and description, status line; both
   sizes (616x408, 760x520). Every compact page and every driver page HOSTED
   in the page area and fully usable (click, release, drag, key, tick).
-- [I] **S3** (`shell`) `CPE_GATE` and its `CPG_*` opcode table (135.4).
-- [I] **S4** (`shell`) The widget kit (135.5) with one worked example page,
+- [S] **S3** (`shell`) `CPE_GATE` and its `CPG_*` opcode table (135.4).
+- [S] **S4** (`shell`) The widget kit (135.5) with one worked example page,
   documented for S7-S9.
-- [I] **S5** (`art`) `tools/cpwdat.py`, `drivers/catalog.toml` with every
+- [S] **S5** (`art`) `tools/cpwdat.py`, `drivers/catalog.toml` with every
   shipped driver, `CPWIDE.DAT` on every system disk of big/emu/mega in all
   four geometries plus the live media, checked against
   `kernel/cpwfmt.inc` (lead, wave 0), the
   `t_cpwdat` fast-tier gate (135.6, 135.7).
-- [I] **S6** (`vxinfo`) `VXV_INFO` in `VESA.DRV` (120.10): card facts and
+- [S] **S6** (`vxinfo`) `VXV_INFO` in `VESA.DRV` (120.10): card facts and
   the offered-mode table by index; `VX_ABI_VER` step and abilock.
 
 ## Wave 2 - the three wide pages (parallel, after S1-S4 are integrated)
 
-- [I] **S7** (`drv`) The Drivers page (135.8).
-- [I] **S8** (`vid`) The Display page / mode changer, with Test-and-revert
+- [S] **S7** (`drv`) The Drivers page (135.8).
+- [S] **S8** (`vid`) The Display page / mode changer, with Test-and-revert
   (135.9): `kernel/cpw_vid.inc` - adapters from `[vid_avail]`, the VESA
   table from `VXV_INFO` with depth filters and Auto, the monitor preview,
   Apply, Test... (15 s, Keep/Revert/Esc/close revert exactly), the startup
@@ -77,7 +77,7 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
   answers the deepest record of a class. Looked at in QEMU on VGA without
   VESA.DRV and on VESA 800x600 / 1024x768; the desktop arrangement radios
   were not (QEMU has one adapter).
-- [I] **S9** (`thm`) The Theme page / theme changer (135.11).
+- [S] **S9** (`thm`) The Theme page / theme changer (135.11).
 
 ## Wave 3 - QA, fixes, final pass (lead)
 
@@ -85,8 +85,10 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
   and 1024x768, EGA/CGA/Hercules (compact still), `kern_mega`; MartyPC XT
   with VGA for the open time and heap.
 - [x] Q2 Fix round; re-run failing QA cases.
-- [ ] Q3 Soak union of the named rows, then `test-full` once, `budget-check`.
-- [ ] Q4 PR description with screenshots on every adapter.
+- [x] Q3 Soak union of the named rows (199 host + 15 Bochs + 3 86Box), the
+  failures fixed or A/B'd against main, then `test-full` once, `budget-check`.
+  See *Final pass* below.
+- [x] Q4 PR description with screenshots on every adapter (`docs/cpwide/shots/`).
 
 ## QA list
 
@@ -118,3 +120,21 @@ normally boots, opens compact by the owner's decision.)
 ## Rows
 
 (each story names its covering rows here)
+
+## Final pass (2026-11-23)
+
+[S] means the QA pass or the final pass saw the story working on the glass.
+
+The soak union: 199 host rows (MartyPC and QEMU), 15 kern_mega rows on Bochs
+(Docker) and 3 on 86Box, plus the new `cpwide` row. What failed, and why:
+
+| rows | cause | resolution |
+|---|---|---|
+| hmadrv, heaphi*, rdxms*, ethcfg*, vesacp, vesakbd, colorpresets, dispnp, cpup (mega), megahddtick, megamodcache, megacz (86Box) | drive the compact panel on a VGA/VESA desktop, which now opens wide | pinned to the compact face (`tests/cpface.py`, SPEC 135.13) |
+| syscheck | closes the panel at the compact frame's close box | reads the close box off the panel it found |
+| megamodcache | a VGA machine with no `CPWIDE.DRV` read the disk at every open | **product fix**: the refusal is remembered in `mod_f_cpw` (SPEC 135.2); XT+VGA 360KB: main 0, branch 1, fixed 0 `int 13h` |
+| brems, covox*, vidspkcovox*, smallfrag | this worktree's MartyPC machine list was stale | `make marty` |
+| heaphi, rdxms, ethcfg, mega-cpnames | **pre-existing**: fail identically on clean main (A/B) | not this branch's |
+| hmacold, doscable, thm95, brrace, kbdsettings, romsmall, romnodisk, brfetch, b3poison, dospkt, disptitle, rdboot, rdicon, fat32 | host-starved (load 18-42 on 8 cores, other sessions) | re-run narrow or alone: all pass (rdicon 306 s alone, over its 190 s wall limit: its RAMSEED knob build) |
+
+\* these three are pinned AND fail on main for their own reasons.
