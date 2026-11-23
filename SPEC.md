@@ -259776,6 +259776,24 @@ wave changed: `btnrules` (`tests/btnsites.txt`: `cpwkit.inc`'s button),
 `stkbalance`, `ovlchk`, `pins` (`tests/pins.txt`: the asset claim),
 `moddrop` (MOD_CPW's drop is `cp_wclose`'s).
 
+**What the final pass decided, per row** (2026-11-23). A row that drives a
+compact page's LOGIC on a VGA or VESA desktop is PINNED to the compact face
+by `tests/cpface.py`: before the first open it writes `'~'` over the first
+byte of `mod_f_cpw`, so `mod_need MOD_CPW` finds no file and the open takes
+135.2's silent refusal - the same path as a system disk without
+`CPWIDE.DRV`, with no image changed and no kernel byte spent. The wide face
+hosts the very same page code (135.3), so a pinned row still tests the page
+it was written for. Pinned: `hmadrv`, `heaphi`, `rdxms`, `ethcfg`,
+`vesakbd`, `vesacp`, and `colorpresets` (whose desktop sample sits under a
+wide frame moved aside). **`cpwide`** (`tests/cpwide.py`, soak, QEMU) is the
+row that drives the WIDE face: it opens at 618x408 on 640x480, the page list
+selects Drivers, Theme, Display and Dock (each click answered by `cp_sel`,
+which is also the row's check that its mirror of `cpw_lay` still matches the
+build), the Drivers page redrawn after Theme and after Display is pixel for
+pixel the one drawn first (QA-3, 135.5.1), and the hosted Dock page's Left
+makes the next open compact while the compact Dock page's Bottom makes the
+one after it wide again (QA-1, step 4 above).
+
 Looked at on the glass, QEMU (wave 1): VGA 640×480 opens wide at 616×408
 (every hosted page drawn; the list, header and status line; the Keyboard
 page's radio and typed text through the gate; Theme → Color repainting the

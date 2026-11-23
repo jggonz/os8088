@@ -7154,6 +7154,17 @@ SOAK = [
         "window double-clicked open. QEMU by name, vesa's reason",
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/vesa8.img")),
+    Row("cpwide", "soak", py("tests/cpwide.py"), 10.0,
+        "The wide Control Panel on a VGA desktop (SPEC.md 135): the panel "
+        "opens 618x408 on 640x480; the page list selects Drivers, Theme, "
+        "Display and Dock (each answered by cp_sel); the Drivers page drawn "
+        "after Theme and after Display is pixel for pixel the one drawn "
+        "first (QA-3, 135.5.1); the hosted Dock page puts the Dock on the "
+        "left and the next open is COMPACT, whose Dock page puts it back and "
+        "the next open is wide again (QA-1, 135.2 step 4). The one row that "
+        "drives the wide face - the compact rows are pinned (tests/cpface.py)",
+        needs=("qemu", "nasm"), timeout=180,
+        wants=("build/os8088.img", "build/apps.img")),
     Row("vesacp", "soak", py("tests/vesacp.py"), 60.0,
         "Choosing a VESA mode on the Display page (SPEC.md 120.6): on the "
         "1024x768x16 desktop, the Control Panel's Display page lists the "

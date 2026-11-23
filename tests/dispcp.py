@@ -169,6 +169,11 @@ def open_panel(m, mo, S, settle, card=None, page=CP_IVID):
     HIDDEN DISPLAY page, which is true and is not what the caller asked for.
     """
     if _cp_win(m, S) is None:
+        # every coordinate in this file is the COMPACT panel's: pin the open
+        # to it, as a VGA or VESA desktop would open the wide face (SPEC.md
+        # 135.13, tests/cpface.py)
+        import cpface
+        cpface.compact(m, S)
         mo.menu(SYS_X, SYS_Y, SYS_X, MBAR_H + 1 + MENU_ITEM_H + 8, settle=0)
         try:
             _cpwait(m, lambda: _cp_win(m, S) is not None,

@@ -97,6 +97,8 @@ def main():
     os88qemu.pace(q, 3.0)
 
     # --- the Control Panel, off the Builtins menu, then its Display page ----
+    import cpface
+    cpface.compact(q, S)  # the compact face's geometry (SPEC.md 135.13, tests/cpface.py)
     run("to", "12", "8")
     run("down")
     os88qemu.pace(q, 0.8)
