@@ -258983,6 +258983,17 @@ refuses), no `CPWIDE.DAT`, a file that fails a check, or a heap that cannot
 fund the claim - the claim (if taken) is freed, `mod_drop MOD_CPW` runs, and
 the panel opens at 320×151 exactly as before §135. No toast, no beep.
 
+**A refused `CPWIDE.DRV` is not asked for again** by the same `CTRL.DRV`
+image: `cpg_open` sets `cp_nowide` (`.modcb`) when `mod_need MOD_CPW`
+refuses, and tests it before the lookup. Without it a VGA machine with no
+`CPWIDE.DRV` (one booted off the 360KB system disk, which omits it) searched
+the disk at EVERY open, and a re-adopted panel's press was no longer free of
+`int 13h` (2.8.3; `tests/megamodcache.py` counted the one read). A kept
+image keeps the byte; an image read from the disk again starts at zero and
+asks once more. `mod_need` gives no reason, so a refusal for want of heap is
+remembered too, until the panel next comes off the disk - a price taken for
+the common case. A `CPWIDE.DAT` refusal is NOT remembered: it may be heap.
+
 **The close**: `CPE_FLUSH`'s stub (`modc_e_flush`) runs the compact close
 (`cp_flush_close_x`, §31.8 - `SYSTEM.CFG` is written exactly as before),
 then `cp_wclose`: `CWV_CLOSE` frees the claim and restores `cp_tpl`,

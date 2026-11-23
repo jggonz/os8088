@@ -1400,9 +1400,14 @@ cpg_open:
     sub ax, MBAR_H + 1          ; reach to move it back. ...and its rows, as
     cmp ax, CPW_H1              ; wm_fit's height clamp counts them (one
     jb .out                     ; short of the dock's top)
+    cmp byte [cs:cp_nowide], 0  ; refused before, by this image: no lookup
+    jne .out                    ; (a VGA booted off the 360KB disk, 135.2)
     mov al, MOD_CPW
     CPXC mod_need
-    jc .out                     ; no CPWIDE.DRV: compact
+    jnc .have
+    CSDO mov byte [CSEG cp_nowide], 1   ; no CPWIDE.DRV: compact, and the
+    jmp .out                    ; next open does not search the disk again
+.have:
     push bp
     mov bp, CWV_OPEN
     call far [CPWFP]            ; CF = 1: no CPWIDE.DAT, or no room for it
@@ -3950,6 +3955,11 @@ cp_wide:    resb 1              ; 1 = the wide face is up (SPEC.md 135.2):
                                 ; written by cpg_open and cp_wclose alone,
                                 ; zero in the file tail, so a re-adopted
                                 ; image starts compact
+cp_nowide:  resb 1              ; 1 = CPWIDE.DRV was refused (SPEC.md 135.2
+                                ; step 5): cpg_open asks no more. A KEPT image
+                                ; keeps it, so a re-adopted panel's press stays
+                                ; at no int 13h (2.8.3); a load from the disk
+                                ; zeroes it, and that open asks again
 %endif
 section .modu
 cp_key_len equ cp_key_state
