@@ -56,6 +56,7 @@ void os88_wm_content(void *w,struct os88_pt *p){(void)w;p->x=8;p->y=24;}
 int os88_wm_geom(void *w,struct os88_size *s){(void)w;s->w=hw;s->h=hh;return 0;}
 void os88_wm_display(void *w,struct os88_video *v){(void)w;v->bpp=hbpp;v->w=hw;v->h=hh;v->kind=hbpp==1?OS88_VID_HERC:0;}
 char *os88_utoa(unsigned v,char *s){snprintf(s,8,"%u",v);return s;}
+static unsigned bt_pcm_music;  /* bt_pcm.c owns it in the package; no sampled music here */
 #include "../bt_face.c"
 int bx_rows(int x,int y,int w,int h){(void)x;(void)y;(void)h;return 8192/(hbpp==1?w/8:w/2);}
 void bx_new(int x,int y,int w,int h,int c){bandpaper=c;assert(!(x&7)&&!(w&7));assert(x>=8&&x+w<=8+hw);assert(y>=24&&y+h<=24+hh);bandx=x;bandy=y;bandw=w;bandh=h;}
@@ -152,12 +153,12 @@ static void mirror_and_stat_damage(void)
  }
  bt_face_paint(0,1);tf_cosneeded=tf_capneeded=0;tf_statpend=1;tf_statrow[0]=0;steps=0;
  while(tf_statpend){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
-  assert(area<=(unsigned)((tf_statsw/5+8)*4));assert(++steps<=4);}
+  assert(area<=(unsigned)((tf_statsw/5+8)*16));assert(++steps<=1);}
  tf_hintpending=1;tf_hintrow=0;steps=0;
  pending_key=1;area=flushes=0;bt_face_paint(0,0);assert(!flushes&&tf_hintpending&&tf_hintrow==0);pending_key=0;
  pending_event=1;area=flushes=0;bt_face_paint(0,0);assert(!flushes&&tf_hintpending&&tf_hintrow==0);pending_event=0;
  while(tf_hintpending){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
-  assert(area<=(unsigned)(tf_w*4));assert(++steps<=4);}
+  assert(area<=(unsigned)(tf_w*16));assert(++steps<=1);}
  assert(!memcmp(&before,&bt_session,sizeof(before)));bt_face_paint(0,1);
 }
 static unsigned char animbank[5][65000];static unsigned animlen[5],unpacks;

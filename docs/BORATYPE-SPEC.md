@@ -248,8 +248,11 @@ The accepted-input label reserves its measured font width. Caret changes
 wait for queued accepted text to finish, and a new dirty range starts with
 only its changed cells. Periodic statistics repaint their value bands;
 their frames and static labels belong to full damage.
-Each idle pass advances at most one accepted-input cell or four scanlines
-of one hint/statistic value, so queued typing can run between those chunks.
+Each idle pass advances at most one accepted-input cell, or repaints one
+whole hint line or statistic value (at most 16 scanlines), so queued typing
+can run between those chunks. A value is never painted in slices: a keystroke
+changes four values at once, and slices restarted on every change never
+finished at typing speed, leaving old and new digits mixed on the screen.
 After cache/layout preparation, native PLAY rechecks BIOS keyboard and OS
 event queues before beginning deferred work; urgent feedback and full damage
 remain complete.
