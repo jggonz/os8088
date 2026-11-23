@@ -111,3 +111,53 @@ opcode numbers per agent in the brief meant no two agents took the same one.
 | `CTRL.DRV` big / mega | 16,200 / 16,431 | 16,705 / 16,944 |
 | `CPWIDE.DRV` (image + bss) | - | 13,573 (cap 17,408) |
 | `CPWIDE.DAT` | - | 14,642 (5,290 on disk) |
+
+## QA, the fix round and the final pass (2026-11-22/23)
+
+**One QA pass, in emulation, after everything was in.** A single Opus agent
+drove the merged head on QEMU: VGA, VESA 800x600 and 1024x768, EGA, CGA,
+Hercules, kern_mega, a 360KB disk, and three broken disks (no `CPWIDE.DRV`,
+no `CPWIDE.DAT`, a corrupt `CPWIDE.DAT`). The broken disks all opened the
+compact face with no message, as designed. It found ten defects. The three
+that mattered:
+
+- **QA-1:** a Dock on the left or right of a 640x480 screen left a band 608
+  wide. The window was clamped to 602, the face showed only "Close and
+  reopen", and reopening chose wide again. The Dock page, the only way out,
+  could not be reached. The open now tests the work area, the band windows
+  are placed in, rather than the screen.
+- **QA-2:** in that clamped state presses still reached the controls.
+- **QA-3:** the wide pages shared one 80-byte page block, and Theme's state
+  landed on the Drivers page's filter and selection. The block now belongs
+  to whichever page is showing; the Drivers page keeps its two bytes apart.
+
+Two agents fixed them in file-disjoint groups. One of them went quiet twice
+with its builds green and its edits uncommitted. After the second stall the
+owner chose to let the lead finish it: the lead read the diff, committed it,
+and checked QA-1, 2 and 3 on QEMU by hand. The other fixed Force Color on a
+VESA desktop (it loaded the EGA palette into an 8bpp desktop's DAC), the
+run-time VESA notice, a label that touched a frame, and the tick glyph.
+
+**Main moved underneath.** Borat Teaches Typing merged while the soak ran
+and took SPEC section 134, so this one became 135; 239 references in lines
+this branch added were renumbered, and no other lines were touched.
+
+**The soak union found the rows 135.13 predicted.** 199 rows ran: 168 passed.
+Of the 30 failures, 13 were host-starved timeouts (load above 30 on 8 cores)
+and 7 were a stale MartyPC machine list in this worktree (`make marty`).
+The rest were rows that click the compact panel's coordinates on a desktop
+that now opens wide. Each row could have read the wide geometry or been pinned
+to the compact face. Most of them test a page's LOGIC, which the wide face hosts
+unchanged, so `tests/cpface.py` pins them: it writes `~` over the first byte of
+the module's file name, and the open takes the same silent fallback as a disk
+without `CPWIDE.DRV`. No image changes and no kernel byte is spent.
+
+**And a row for the wide face itself.** Before this pass no emulator row
+opened the wide face. `tests/cpwide.py` drives it on QEMU: the open size,
+the page list, QA-3 as a pixel compare (Drivers redrawn after Theme and after
+Display against Drivers drawn first) and QA-1 as a round trip (Dock left,
+then compact; Dock bottom, then wide). It was run against the pre-fix
+commit and failed on both QA-1 and QA-3, then passed four runs in four on
+the fixed head. Its first version opened the panel with a raw
+press-drag-release on the menu and missed about one boot in two. It now
+uses the menu driver that confirms each step against the guest's state.
