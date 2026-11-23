@@ -130,6 +130,14 @@
   "strings": "075d3ddf5a3a826e",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "BORATYPE_O88": {
+  "sources": [
+   "apps/boratype"
+  ],
+  "stamped": "242d42709",
+  "strings": "a1a14df9480fe648",
+  "why": "first page: written from apps/boratype (menus, key routing, HELP.TXT, lessons, achievements, save files) and docs/BORATYPE-SPEC.md"
+ },
  "BOUNCE_GIF": {
   "sources": [],
   "stamped": "e4576a70",
@@ -267,6 +275,23 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CPWIDE_DAT": {
+  "sources": [],
+  "stamped": "242d42709",
+  "strings": null,
+  "why": "first page: written from SPEC.md 135.6-135.7 and drivers/catalog.toml"
+ },
+ "CPWIDE_DRV": {
+  "sources": [
+   "kernel/cpwide.inc",
+   "kernel/cpw_drv.inc",
+   "kernel/cpw_vid.inc",
+   "kernel/cpw_thm.inc"
+  ],
+  "stamped": "242d42709",
+  "strings": "f88cbb8a26ef502d",
+  "why": "first page: written from SPEC.md 135 and the cpw* sources' strings (page list, Drivers, Display with Test..., Theme)"
  },
  "CTRL_DRV": {
   "sources": [
