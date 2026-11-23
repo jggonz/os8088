@@ -285,29 +285,44 @@ vx_encode:
 ;           the 16 bit - which vx_encode's D16 already says, so a record
 ;           matches when its encoding is CL's set bits (bits 5 and 6 are no
 ;           field and vx_decode never read them). A record the byte cannot
-;           name matches no class
+;           name matches no class. WHEN TWO MATCH - a card offering 15 and 16
+;           bits at one geometry, as QEMU's does - THE DEEPER ANSWERS, ties to
+;           the first (SPEC.md 120.2.3, 134.9.1): the first answered before,
+;           so no class reached the 16bpp record and VXV_NEXT walked the
+;           pair as each other's successor for ever
 ; clobbers: ax, bx, cx, dx, si, di, flags
 vx_find:
     test cl, VXC_SET
     jz .none
     mov dl, cl
     and dl, VXC_SET | VXC_D16 | VXC_YMASK | VXC_XMASK
+    xor dh, dh                  ; DH = the deepest match's bpp (0 = none)
+    push bp
+    xor bp, bp                  ; BP = that record
     mov si, vx_modes
     mov di, [vx_nmodes_w]       ; (the count as a word: the byte and a 0)
 .n:
     or di, di
-    jz .none
+    jz .end
     call vx_encode              ; CL = the record's class
     jc .next
     cmp cl, dl
-    je .out                     ; (CF = 0 off the equal compare)
+    jne .next
+    cmp [si+VM_BPP], dh
+    jbe .next                   ; not deeper than the one held
+    mov dh, [si+VM_BPP]
+    mov bp, si
 .next:
     add si, VM_SIZE
     dec di
     jmp short .n
+.end:
+    mov si, bp
+    pop bp
+    cmp si, 1                   ; CF = 1 exactly when none matched (SI = 0)
+    ret
 .none:
     stc
-.out:
     ret
 
 ; vx_publish - [vx_cur] into vx_tab and the geometry this image draws by

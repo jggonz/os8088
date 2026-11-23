@@ -321,7 +321,8 @@ THEMES = (
     ("the kernel proper: API table, heap, scheduler, events",
      (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc",
       "bootprof.inc", "stkdiag.inc", "boot3.inc")),
-    ("the Control Panel", ("ctrl.inc", "cpwlay.inc", "cpwide.inc", "cpwkit.inc", "cpw_drv.inc")),
+    ("the Control Panel", ("ctrl.inc", "cpwlay.inc", "cpwide.inc", "cpwkit.inc",
+                           "cpw_drv.inc", "cpw_vid.inc", "cpw_thm.inc")),
     # mega.inc is 0 in every variant but kern_mega's, where it is the whole of
     # what that kernel adds (megados.inc, the DOS park, is %include'd from it
     # and lands on its row). Listed so `--modules -DKERN_MEGA` places it

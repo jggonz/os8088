@@ -239896,7 +239896,10 @@ fourth byte of the `VM` record** (ver 3, 4 bytes: kind, `[vid_dmode]`,
 (`kernel/vxabi.inc`'s `VXC_*`): 0 is Auto; else bit 7 set, bits 0-1 the
 width (640, 720, 800, 1024), bits 2-3 the height (400, 480, 600, 768), bit 4
 the depth (clear 8, set 16; a 15bpp mode answers for 16). The attach takes
-it in CL and picks the offered mode matching all three, falling back to Auto
+it in CL and picks the offered mode matching all three - the DEEPEST of them
+when a 15bpp and a 16bpp record share the class, ties to the first (`vx_find`,
+since §134.9.1: before it the first answered, so no class reached QEMU's 0111h
+and `VXV_NEXT` cycled 0110h/0111h for ever) - falling back to Auto
 when none does — a settings disk carried to a card without that mode gets the
 best that card has, never a refusal (the §39.11.3 safety story, one byte
 along). `VXV_PICK` (CL = a class) chooses again at run time, and `VXV_NEXT`
@@ -259366,19 +259369,184 @@ open.
 
 ### 134.9 The Display page - the mode changer
 
-Pinned by S8, to `docs/cpwide/cp-display-vesa-1024x768.png`: an adapter
-list (the compact page's rows, §31.10); for the VESA adapter a MODE TABLE
-of every mode the card offers (resolution, colours, memory it uses,
-current / recommended / at-startup marks) read through §120.10's verb, with
-colour-depth filters; a monitor picture drawn to the selected mode's aspect;
-**Apply** (switch now and keep - Set Primary's meaning), **Test...** (switch
-now for 15 seconds under a "Keep this mode?" box with **Keep** and
-**Revert** and a countdown driven by the panel's tick, `CPE_TICK`; on no
-answer, revert - a mode the monitor cannot show must undo itself), **Use
-this mode at startup** (the `VE` class byte, §120.2.3), **Force Color**
-(§31.10.4), and an information box: VBE version, video memory, the running
-mode. Everything a future video driver offers is reached the same way, which
-is why the table reads modes through a verb and not out of a fixed list.
+Shipped by S8 (`kernel/cpw_vid.inc`, prefix `cpv_`), to
+`docs/cpwide/cp-display-vesa-1024x768.png`. The owner's brief asks for "a
+more powerful video mode changer ... since I am going to build out more VESA
+video modes and special video drivers", so **the page reads what the
+hardware offers and encodes no list**: the adapters are `[vid_avail]`'s bits,
+and the modes are §120.10's `VXV_INFO` records, one call a record. A future
+driver that answers that verb gets this page for nothing.
+
+#### 134.9.1 What is on it
+
+| element | what it is |
+|---|---|
+| **Adapter** group | one row per adapter the machine HAS (§31.10's rule: an absent adapter is no row, not a greyed one), in the order VGA, VESA, EGA, Hercules, CGA; VESA only while `VID_A_VESA` is lit (the driver loaded). A row reads `VGA 640x480`, `VESA 1024x768` (the live mode while it runs) and `, running` on the running adapter. The selection is a blue bar - a PENDING choice, as `[cp_vsel]` is on the compact page (§31.10: selecting and switching are two actions); the page keeps its own copy and does not write `[cp_vsel]` |
+| the desktop line | `Desktop` and three radios, Single / Right / Below (§31.10.2), on the group's last line - drawn only where `vid_dual_ok` allows a pairing, exactly as the compact page, and applied on the spot through `CPG_VIDARR` |
+| **Mode preview** group | a monitor drawn to the SELECTED mode's aspect - the screen in cyan inside a dark grey bezel, fitted to a 64×40 box (five fills, and the ground in four spans round it) - and two lines beside it: the resolution and the colours |
+| **Modes** group | for the VESA adapter: a filter strip (`All`, then one tab per colour depth the card offers - `256`, `32,768`, `65,536` - built from the records, never fixed), a header line, and a scrolling table (`cpk_table`) with the columns Resolution, Colours, Memory (the record's framebuffer KB) and Status. Status carries `current` (the running record, §120.10's `CH`), `recommended` (Auto's pick, `SI`) and `startup` (the record whose class is the `VE` byte; the Auto row when it is 0). The table's first row is **Auto** - "the recommended mode", the class byte 0. For any other adapter the group says what that adapter is in one line (it has one mode, §31.10); with the VESA adapter selected and no answer from the verb (an older `VESA.DRV`, CF = 1) the table is the Auto row alone and a line says so |
+| **Use this mode at startup** | a check box: ticked when the `VE` byte (`CFG_VE`, §120.2.3) is the selected row's class (Auto: 0). Ticking writes that class, un-ticking writes 0 (Auto), owed through `CPG_WDSET` - **the byte alone**; nothing switches. Greyed off the VESA adapter, and on the Auto row while it is ticked (there is nothing to un-tick to) |
+| **Force Color** | §31.10.4's box through `CPG_VGC`, greyed without a VGA |
+| **Apply** | switch now and keep: Set Primary's meaning (§31.10, §120.6) through `CPG_VIDSET` - AL = the selected adapter, CL = the selected row's class (Auto 0); the VESA kind has the driver pick first and leaves and comes back when it is already on the VBE. Greyed when the selection is what is running: the adapter is the running one and, for VESA, the row's record is the running record (Auto's is the recommended one) |
+| **Test...** | Apply for 15 seconds (§134.9.3). Greyed with Apply |
+| **Running mode** group | two lines: the running adapter and mode (`VESA 1024x768, 65,536 colours`), and the card (`VBE 3.0, 16 MB video memory` - the version word as major.minor, memory in MB from 1MB up, else KB; `VESA Display is not loaded` without the driver). The startup mode is the table's `startup` mark, not a line here. During a test this group's place is the **Keep this mode?** group |
+
+Colours are named from the depth (8 → 256, 15 → 32,768, 16 → 65,536) and,
+for the planar adapters, from the kind (VGA and EGA 16, Hercules and CGA 2).
+
+**One row per CLASS, and the row is the record the class reaches.** The
+class byte (§120.2.3) does not tell a 15bpp record from a 16bpp one, so a
+card that offers both at one geometry (QEMU offers ten records: 0110h/0111h,
+0113h/0114h, 0116h/0117h are such pairs) has records no class can select.
+S8 made `vx_find` answer the DEEPEST record of a class (ties: the first), so
+that the class means "this geometry at the best depth the card has for it",
+`VXV_PICK` lands on it and `VXV_NEXT` walks each class once (before S8 it
+answered the first, and the compact page's cycle stuck on 640x480x16 for
+ever, 0110h and 0111h each naming the other's class); and this table lists
+only the records `vx_find` would answer. On QEMU that is seven rows and Auto:
+640x400, 640x480, 800x600 and 1024x768 at 256 colours, the three larger at
+65,536. Rows keep the card's order (§120.10).
+
+#### 134.9.2 Geometry - one layout, two window sizes
+
+CONTENT-relative, from the content box, so the 616×408 and the 760×520
+window (§134.2) are the same arithmetic; `L` = `CPW_PX` + 4 = 125 and `R` =
+the content width - 5. Every text line is a 12-row ROW (`cpv_row`): two rows
+of paper, one opaque run padded with spaces to the row's width in cells, two
+rows of paper, and the paper in the last few columns the cells do not reach -
+four primitives, and nothing written twice.
+
+| block | rows | x |
+|---|---|---|
+| ground | 44..47, and the 3 rows above the status rule | the page area |
+| Adapter | 48..122: band, four row slots (60, 72, 84, 96), the desktop line (108), 2 rows of paper | `L`..`L`+255 |
+| Mode preview | 48..122: the picture in an 80×62 zone, its two lines beside it | `L`+260..`R` |
+| Modes | 127..`C0`-5: band; the filter strip at +14 (14 rows, its row's paper round it); the header line at +30; the table from +42, `NV` = whole 12-row rows to 2 above the frame | `L`..`R` |
+| controls | `C0` = the status top - 54, 50 rows: the two check boxes (12-row glyph + row, 2 rows apart), then Apply and Test... (64×18, 4 apart) at `C0`+32 | `L`..`L`+211 |
+| Running mode / Keep this mode? | `C0`..`C0`+49 | `L`+216..`R` |
+
+At 616×408 the table holds 12 rows, at 760×520 21. The list's ground, rules,
+header strip and status line are the chrome's (§134.3) and never redrawn by
+the page.
+
+**Redraw only what changed** (CLAUDE.md, Performance rule 1): a press on an
+adapter row redraws the two rows that changed, the preview and the Modes
+group (its content depends on the adapter), the controls (their greying) and
+nothing else; a filter tab, the strip and the table; a table row, the two
+rows, the preview and the controls; a check box, its glyph; Keep, the right
+group. **Nothing is drawn after `CPG_VIDSET` or `CPG_VIDARR` returns** -
+§31.10's rule: the switch re-fits every window, so the origin the press was
+handed may describe a rectangle that no longer exists, and `cp_repost` has
+already handed the whole screen to `ui_task`, whose repaint comes back here
+as `CWV_PAINT` with the new origin.
+
+**The page's state** is the page area of the working area (`CPW_W_PAGE`,
+§134.5): the table block, the filter, the adapter and row chosen, the
+record count, running and recommended indices, a class byte per record (bit
+5 marks a 15bpp one), the rows, the filter's depths, and the test's state.
+Working-area byte 19 (`CPV_LIVE`, the pad between `CPW_W_FULL` and the kit's
+scratch) is 1 while that state belongs to this page: `cpw_page` clears it
+when any other page is drawn, so coming back to Display builds the page again
+from the running mode, while a repaint of Display - every `vid_switch`'s -
+keeps the selection, the filter and a running test. `CPW_D_ON`'s byte
+(page + 19) is kept 0 for `cpw_listev`.
+
+#### 134.9.3 Test... - the state machine
+
+```
+IDLE --Test...--> save kind, class, arrangement; left = 15; [cp_tickp] = CP_IVID;
+                  CPG_VIDSET(target)   (CF = 1: back to IDLE, CPG_REPOST)
+TESTING --tick--> left - 1; 0 -> REVERT, else the countdown line redrawn
+TESTING --Keep--> IDLE, [cp_tickp] = CP_ITIME; the right group is Running mode again
+TESTING --Revert, Esc, the countdown, the panel closing--> REVERT
+REVERT:  IDLE, [cp_tickp] = CP_ITIME;
+         CPG_VIDSET(saved kind, saved class) - CF = 1: CPG_VIDSET(VID_VGA);
+         the arrangement saved != the live one: CPG_VIDARR(saved)
+```
+
+- **What is saved** is what was RUNNING: `[vid_kind]`, `[vx_class]` (the
+  live record's class, which `vx_find` maps back to that same record - the
+  deepest of its class, and Auto's pick is the deepest of the largest), and
+  the arrangement as the radio it reads (`[vid_dmode]` ? `[vid_dlay]` + 1 :
+  0). Nothing about the TEST mode's picture is needed to go back, so an
+  unreadable picture reverts exactly.
+- **A revert that fails leaves a working display**: the VGA, which every
+  machine this face opens on has (VESA is a mode of the VGA card).
+- **Keep commits like Apply**: the switch already happened and `cp_repost`
+  already owed `SYSTEM.CFG`; Keep only ends the test.
+- **The page is modal while the test runs**: a press anywhere but Keep and
+  Revert - the page list included - does nothing, so the countdown cannot be
+  left on a page that does not tick. `cpw_click` hands the Display page the
+  whole window's press (one dispatch line) for that reason.
+- **The countdown** is the panel's 1 Hz `CPE_TICK`, which the resident gate
+  delivers only for the page named by `[cp_tickp]` (below). It counts on
+  every tick that arrives; it DRAWS only while the window is visible and
+  nothing covers it (`wm_obscured`, the §14 background-drawing contract). A
+  tick does not arrive while a fullscreen program or a screen-saver session
+  covers the desktop, or while the panel is hidden (its W_FLAGS visible bit,
+  the gate's own test) - the countdown waits then, and those are states the
+  user had to see the picture to enter.
+- **The panel closing during a test reverts first.** `modc_e_flush` calls
+  `cp_wclose` BEFORE `cp_flush_close_x` on kern_big (the order was the other
+  way), so `CWV_CLOSE` reverts (`cpv_quit`) while the claim is still held and
+  `SYSTEM.CFG` is written with the mode the user had before the test. The
+  revert takes the gfx lock unless the running task already holds it
+  (`[gfx_lock_own]` = `[sch_cur]`). The reboot path reaches the same body.
+- **A test into a smaller desktop**: after any switch `wm_refit` clamps the
+  window, and a content box under the face's 616×408 is §134.2's small
+  state. On the Display page during a test that state is the **Keep this
+  mode?** group alone, at content (4, 4), 264×50 - so a test of 640x400, of
+  a Hercules (720×348) or of a CGA (640×200) can still be kept or reverted
+  with the mouse, and Esc and the countdown need nothing visible. Kept, the
+  panel shows §134.2's line until it is closed and opened again; reverted,
+  the window manager's natural bank (§39.11.2.1) gives the window its size
+  back and the wide page returns.
+
+#### 134.9.4 The resident tick gate - 3 bytes
+
+`cp_tick_due_x` asked `[cp_sel] == CP_ITIME` with an immediate. On kern_big,
+kern_emu and kern_mega it asks `[cp_sel] == [cp_tickp]` instead (`xor al,
+imm8` → `xor al, [mem]`, +2 bytes of `.cold`), and `cp_tickp` is one byte of
+`ctrl.inc`'s resident data, `CP_ITIME` at assembly (+1 byte of `.text`). The
+Display page writes `CP_IVID` there for the length of a test and puts
+`CP_ITIME` back at every way out of one. The alternative that cost nothing
+resident - a test of two records (`and al, ~(CP_ITIME ^ CP_IVID)`, 2 bytes) -
+was refused: it would take the gfx lock once a second whenever EITHER face's
+Display page is up, and the lock's cursor promise is the very flicker the
+"seconds in menu bar" setting exists to avoid (ui.inc's step 4).
+kern_small is unchanged (`KERN_BIG` only).
+
+#### 134.9.5 Its gate ops and its doors
+
+| `CPG_*` | | in | out |
+|---|---|---|---|
+| 25 `CPG_VIDARR` | the desktop arrangement applied now (§31.10.2's click body, factored out as `cp_vid_arr`: the two bytes, EXTD.DRV's sync, `vid_disp_init`, `wm_rowcalc`, `wm_refit`, `cp_repost`; EXTD.DRV refusing toasts the panel's load line) | AL = 0 Single, 1 Right, 2 Below | CF = 1 refused; every register kept |
+| 26 `CPG_GLYPH` | `os88ui_glyph` - a check box or radio, which lives in `CTRL.DRV`'s image (`OS88UI_KGLYPH`) and nowhere a wide page can reach - for any wide page | CX/DX = SCREEN x/y, AL = `OS88UI_G*` (with `GON`/`GDOWN`), BL = 1 greyed | every register kept |
+| 27, 28 | reserved for S8, unused | | |
+
+`CPG_N` is 27 on the S8 branch; 22-24 are S7's and are refusals there. The
+rest is existing ops - `CPG_VIDSET`, `CPG_VXCALL` (`VXV_INFO`), `CPG_VGC`,
+`CPG_WDSET`, `CPG_REPOST` - and kernel data read directly (`[vid_kind]`,
+`[vid_avail]`, `[vx_class]`, `[vid_dmode]`, `[vid_dlay]`, `[drv_cfg+CFG_VE]`,
+written with `CPG_WDSET` beside it as the compact page writes it),
+`vid_dual_ok` through the image's KGO hop. Controls arm `CPW_ID0` + n
+(`cpw_edge` hands the release of a wide control to the Display page while it
+is the page) and fire on the release inside the same control, drawn pressed
+between (§13.8.3).
+
+#### 134.9.6 What differs from the mockup
+
+The info box shares the bottom band with the controls instead of running the
+page's width (the table keeps the rows at 616×408); the Keep group's band
+is blue with white words, as the mockup's, but drawn by the page rather than
+by `cpk_group` - in the small state after a test of a Hercules or a CGA the
+desktop is 1bpp, where the kit's grey band sets black words on black and blue
+rounds to black under white ones; the filter has no `16` (16 colours is the
+VGA adapter, which is a row of the Adapter group, not a VBE mode); the
+adapter rows say `VGA 640x480` rather than `VGA 640x480 16 colours` (the
+colours are in the preview); the preview has no aspect line - the picture
+is drawn to the aspect, and the line cost ~110 bytes of a page over its
+budget.
 
 ### 134.10 Reserved (VESA mode information - see §120.10)
 
@@ -259501,6 +259669,23 @@ at the close. The open reads one file more than the compact face (the
 module) and one data file; the XT open time is the QA pass's to measure.
 
 **S7 (the Drivers page), 2026-11-21:** CPWIDE.DRV 4,471 -> 6,092 (big), 6,092 (emu), 4,485 -> 6,102 (mega): +1,621 / +1,621 / +1,617. CTRL.DRV unchanged (16,663 / 16,681 / 16,902), no resident byte, no rung moved, no gate op added.
+
+**Wave 2, S8 (the Display page), 2026-11-21**, against `feature/cpwide`
+94a7d9784 (fresh builds of each; `make budget-check` holds all four kernels):
+
+| | kern_big | kern_emu | kern_mega | kern_small |
+|---|---|---|---|---|
+| resident | +3 (`cp_tickp` +1 `.text`, `xor al, [mem]` +2 `.cold`) | +3 | +3 | byte-identical |
+| rungs | kernel 265 → 262 left | kernel 19 → 16 left | image 211 → 210, cold 56 → 54 left | unchanged |
+| `CTRL.DRV` | 16,663 → 16,695 (+32) | 16,681 → 16,713 (+32) | 16,902 → 16,934 (+32) | unchanged |
+| `CPWIDE.DRV` image+bss (`MODV_SIZE`) | 5,153 → 9,860 (+4,707) | 5,153 → 9,860 | → 9,890 | - |
+| `CPWIDE.DRV` on the disk (lz4) | 4,471 → 8,474 | 4,471 → 8,474 | 4,485 → 8,488 | - |
+| `VESA.DRV` | 3,677 → 3,698 (+21, `vx_find`) | same | same | same |
+
+The page is 4,707 bytes of `CPWIDE.DRV` against the fan-out's 3,300
+allocation; the lead accepted it (the Drivers and Theme pages came in near
+1,600 each, and the module's cap, `MOD_MAX_KB` 17,408, holds with room). The heap while the
+wide panel is open grows by the module's claim, 5,120 → 10,240 bytes.
 
 ### 134.13 Testing
 

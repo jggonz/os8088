@@ -292,6 +292,7 @@ cpw_open:
 ; in:  ES = the claim. out: nothing
 ; -----------------------------------------------------------------------------
 cpw_close:
+    call cpv_quit               ; a Test... running reverts first (134.9.3)
     mov dx, es
     mov bx, MEM_K_MOD
     CPWC mem_free_x
@@ -394,6 +395,11 @@ cpw_paint:
 ; its edge. Closing and opening the panel again chooses the face again.
 ; -----------------------------------------------------------------------------
 cpw_small:
+    cmp byte [cp_sel], CP_IVID  ; the Display page in a test: its Keep group
+    jne .line                   ; (SPEC.md 134.9.3)
+    call cpv_small
+    jnc .r
+.line:
     mov byte [gfx_color], CWHITE
     xor ax, ax
     xor bx, bx
@@ -408,6 +414,8 @@ cpw_small:
     mov ax, (CWHITE << 8) | CBLACK
     xor bl, bl
     jmp cpw_run
+.r:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cpw_lbuild - lay the page list out: its entries into [es:CPW_W_LIST]
@@ -814,6 +822,9 @@ cpw_hdr:
 ; (SPEC.md 134.9, 134.11).
 ; -----------------------------------------------------------------------------
 cpw_page:
+    cmp byte [cp_sel], CP_IVID  ; the Display page draws itself (134.9)...
+    je cpv_page
+    mov byte [es:CPV_LIVE], 0   ; ...and builds itself afresh after another
     cmp byte [cp_sel], CP_ITHM
     je cpw_thm_paint            ; the Theme page is drawn natively (134.11)
     mov byte [es:CPW_D_ON], 0
@@ -1030,6 +1041,8 @@ cpw_click:
     sub ax, [es:CPW_W_OX]
     mov bx, dx
     sub bx, [es:CPW_W_OY]
+    cmp byte [cp_sel], CP_IVID  ; the Display page takes the whole window's
+    je cpv_click                ; press: its test holds the list (134.9.3)
     cmp ax, CPW_LW
     jl .list
     cmp bx, CPW_BY
@@ -1148,6 +1161,8 @@ cpw_edge:
 .wide:
     cmp ah, CPG_HUP
     jne .r
+    cmp byte [cp_sel], CP_IVID  ; the Display page's controls (134.9.5)
+    je cpv_up
     CPWC os88ui_fire            ; a wide control's release: disarmed, and the
     cmp byte [cp_sel], CP_ITHM  ; page's to act on - the Theme page's buttons
     je cpw_thm_up               ; (134.11), else the Drivers page's (134.8)
@@ -1158,6 +1173,8 @@ cpw_edge:
 ; cpw_key - CWV_KEY: AX = the key, SI = the window. The Drivers page's, or the
 ; hosted page's.
 cpw_key:
+    cmp byte [cp_sel], CP_IVID  ; the Display page's: Esc reverts a test
+    je cpv_key
     cmp byte [es:CPW_D_ON], 0
     jne cpd_key                 ; the Drivers page: Up and Down
     mov bx, ax
@@ -1166,6 +1183,8 @@ cpw_key:
 
 ; cpw_tick - CWV_TICK: the hosted Date/Time page's clock, when it is showing
 cpw_tick:
+    cmp byte [cp_sel], CP_IVID  ; a Test... counting down (SPEC.md 134.9.4)
+    je cpv_tick
     cmp byte [cp_sel], CP_ITIME
     jne .r
     mov ah, CPG_HTICK
@@ -1298,6 +1317,7 @@ cpw_s_st3:  db ' drivers loaded - settings saved when the panel closes', 0
 KGO_PAIR cpw
 
 %include "cpwkit.inc"           ; the widget kit (SPEC.md 134.5), same image
+%include "cpw_vid.inc"          ; the Display page (SPEC.md 134.9), same image
 
 section .modvb                  ; ...and its bss: the claim's one name
 cpw_bss:

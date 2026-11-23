@@ -68,8 +68,15 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 ## Wave 2 - the three wide pages (parallel, after S1-S4 are integrated)
 
 - [I] **S7** (`drv`) The Drivers page (134.8).
-- [ ] **S8** (`vid`) The Display page / mode changer, with Test-and-revert
-  (134.9).
+- [I] **S8** (`vid`) The Display page / mode changer, with Test-and-revert
+  (134.9): `kernel/cpw_vid.inc` - adapters from `[vid_avail]`, the VESA
+  table from `VXV_INFO` with depth filters and Auto, the monitor preview,
+  Apply, Test... (15 s, Keep/Revert/Esc/close revert exactly), the startup
+  box (`CFG_VE` alone), Force Color, the card's facts; `CPG_VIDARR` and
+  `CPG_GLYPH` in `CTRL.DRV`; `cp_tickp`, 3 resident bytes; `vx_find`
+  answers the deepest record of a class. Looked at in QEMU on VGA without
+  VESA.DRV and on VESA 800x600 / 1024x768; the desktop arrangement radios
+  were not (QEMU has one adapter).
 - [I] **S9** (`thm`) The Theme page / theme changer (134.11).
 
 ## Wave 3 - QA, fixes, final pass (lead)
