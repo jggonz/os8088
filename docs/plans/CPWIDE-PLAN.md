@@ -81,10 +81,10 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 
 ## Wave 3 - QA, fixes, final pass (lead)
 
-- [ ] Q1 One QA pass in emulation on the merged head: QEMU VGA, VESA 800x600
+- [x] Q1 One QA pass in emulation on the merged head: QEMU VGA, VESA 800x600
   and 1024x768, EGA/CGA/Hercules (compact still), `kern_mega`; MartyPC XT
   with VGA for the open time and heap.
-- [ ] Q2 Fix round; re-run failing QA cases.
+- [x] Q2 Fix round; re-run failing QA cases.
 - [ ] Q3 Soak union of the named rows, then `test-full` once, `budget-check`.
 - [ ] Q4 PR description with screenshots on every adapter.
 
@@ -99,14 +99,14 @@ DRV, corrupt DAT), the installer copies both files (by reading `inst.inc`).
 
 | id | sev | defect | owner | state |
 |---|---|---|---|---|
-| QA-1 | high | Dock Left/Right on 640x480: the window is clamped, the face shows only "Close and reopen", and reopening picks wide again | fixa | open |
-| QA-2 | med | the small state still takes presses and draws the wide layout | fixa | open |
-| QA-3 | high | Theme and Display write the Drivers page's filter/selection bytes in the shared page block | fixa | open |
-| QA-4 | med | Force Color on a VESA 8bpp desktop loads the EGA palette into DAC 0..63 | fixb | open |
-| QA-5 | low | after that toggle, Apply/Test go live on the running row | fixb | open |
-| QA-6 | med-low | VESA loaded at run time: the Display page says to load it (it attaches at the next boot) | fixb | open |
-| QA-7 | cosm | "Use this mode at startup" touches a frame at 616x408 | fixb | open |
-| QA-8 | cosm | Display check boxes are a filled square, Drivers' a tick | fixb | open |
+| QA-1 | high | Dock Left/Right on 640x480: the window is clamped, the face shows only "Close and reopen", and reopening picks wide again | fixa | fixed: the predicate reads the work area; seen by the lead (Dock Left -> reopen compact -> Bottom -> reopen wide) |
+| QA-2 | med | the small state still takes presses and draws the wide layout | fixa | fixed: every event is inert in the small state; seen by the lead |
+| QA-3 | high | Theme and Display write the Drivers page's filter/selection bytes in the shared page block | fixa | fixed: the block is the showing page's, Drivers' state is kept apart (134.5.1); seen by the lead (Theme -> Drivers) |
+| QA-4 | med | Force Color on a VESA 8bpp desktop loads the EGA palette into DAC 0..63 | fixb | fixed: greyed on a VESA primary, both faces (134.9.1); seen by fixb |
+| QA-5 | low | after that toggle, Apply/Test go live on the running row | fixb | gone with QA-4 (its only path); checked on VGA by fixb |
+| QA-6 | med-low | VESA loaded at run time: the Display page says to load it (it attaches at the next boot) | fixb | fixed: "Restart to use the VESA Display modes"; seen by fixb |
+| QA-7 | cosm | "Use this mode at startup" touches a frame at 616x408 | fixb | fixed: "Use mode at startup" |
+| QA-8 | cosm | Display check boxes are a filled square, Drivers' a tick | fixb | fixed: the Drivers page's tick |
 | QA-9 | cosm | "Ram Disk" vs "RAM Disk", "VESA Display" vs "VESA High-Res Display" | lead | fixed: the catalog uses the system's names |
 | QA-10 | doc | SPEC 134 said kern_mega has no VESA; it does | lead | fixed (134.4; 134.2 with QA-1) |
 
