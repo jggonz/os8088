@@ -137,3 +137,10 @@
 0 3 apps/win16/w16user.inc  # ES = KERNEL_SEG for a callback's or os88ui's READ of a window record; nothing stored through it
 0 3 apps/win16/w16wnd.inc  # ES (and CX) = KERNEL_SEG for READS of the window records; nothing stored through it
 0 1 apps/win16/win16.asm  # the dialog part's ES = KERNEL_SEG for os88ui's READ of a window record
+
+# --- kernel/cpw*.inc: CPWIDE.DRV, the wide Control Panel (SPEC.md 135, .modv) --
+# Zero writes through CS. What is left is DS = CS to READ the image's own
+# tables and strings; nothing is stored through it (kern_mega's QA pass drove
+# both pages in protected mode, 2026-11-22)
+0 2 kernel/cpw_thm.inc  # Theme: DS = CS as the SOURCE of two rep movsb copying a preset row (cpt_pre) out of the image into the scratch / thm_tab's Color row, ES the destination; DS restored before any store
+0 2 kernel/cpwkit.inc  # cpw_run and cpk_ds: DS = CS when BL = 0 names this image as the segment a label's text or a table is READ from; the kit's writes go through ES (the claim) or the gfx calls
