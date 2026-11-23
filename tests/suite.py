@@ -1784,7 +1784,7 @@ FAST = [
         "and NET.DRV across a KB with no kernel edit, and every make stayed "
         "green with the page quoting 9K and 7K for drivers that claim 8 and 5"),
     Row("cpwdat", "fast", py("tests/unit/t_cpwdat.py"), 0.3,
-        "SPEC.md 134.6/134.7: every drv_tab row of every kernel has an entry "
+        "SPEC.md 135.6/135.7: every drv_tab row of every kernel has an entry "
         "in drivers/catalog.toml and every entry names a row; names <= 25 and "
         "description lines <= 46 characters; icon indices inside the sheet; "
         "every sheet pixel a palette colour or the #FF00FF key; and "

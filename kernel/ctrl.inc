@@ -79,7 +79,7 @@ CP_ITDY   equ 2                 ; label baseline offset (8px font in 12px bar)
 CP_IBX1   equ 2                 ; selection bar left edge
 CP_IBX2   equ CP_DIVX - 3       ; 85: selection bar right edge
 %ifdef KERN_BIG
-%include "cpwlay.inc"           ; the wide face's numbers (SPEC.md 134.3, 134.4)
+%include "cpwlay.inc"           ; the wide face's numbers (SPEC.md 135.3, 135.4)
 %endif
 
 %ifdef DOCK_OPT
@@ -269,7 +269,7 @@ CP_B1Y2   equ CP_PR0Y + CP_PROWH + CP_GW + 3  ; 61: row 1 (Cooperative) bottom
     call cp_cgo
     dw %1
 %endmacro
-; ...and CPWF, the wide face's forward (SPEC.md 134.4): at the head of each far
+; ...and CPWF, the wide face's forward (SPEC.md 135.4): at the head of each far
 ; entry the wide face takes, `call cp_wfwd / db CWV_*` - three bytes, and the
 ; compact face's cost is cp_wfwd's one compare (kern_big's alone)
 %macro CPWF 1
@@ -300,7 +300,7 @@ section .text
 ; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
 CP_TX     equ 160               ; the template's frame: SPEC.md 31.1's window.
 CP_TY     equ 130               ; Named, because the wide face (SPEC.md
-CP_TW     equ 320               ; 134.2) writes its own size here at an open
+CP_TW     equ 320               ; 135.2) writes its own size here at an open
 CP_TH     equ 151               ; and puts these back at its close
 cp_tpl:     dw CP_TX, CP_TY, CP_TW, CP_TH, cp_ttl, cp_cls
 cp_cls:     dw cp_cls_end - cp_cls, 0   ; its CLASS (SPEC.md 11.104)
@@ -338,7 +338,7 @@ cp_cls_end:
 ; unlike the file dialog this window is an INSTANCE that can be closed from
 ; the dock, the bar and its own close box.
 ; -----------------------------------------------------------------------------
-; **IT IS GONE, and the clearing is CTRL.DRV's own** (SPEC.md 134.2): every
+; **IT IS GONE, and the clearing is CTRL.DRV's own** (SPEC.md 135.2): every
 ; launch of KIND_CTRL is cp_open_x's, which calls the image's CPG_OPEN before
 ; app_launch to choose the face, and that op clears [cp_down] and the arm
 ; first - nothing between it and the window being shown can arm anything.
@@ -900,7 +900,7 @@ cp_tfull: db 0
 cp_vsel:  db 0xFF
 %ifdef KERN_BIG
 ; The page the resident tick gate passes (cp_tick_due_x): Date/Time's, and the
-; wide Display page's while its Test... counts down (SPEC.md 134.9.4)
+; wide Display page's while its Test... counts down (SPEC.md 135.9.4)
 cp_tickp: db CP_ITIME
 %endif
 
@@ -991,7 +991,7 @@ CP_NENT     equ CPE_B + 12      ; MOD_H_STAMP rejects one from another build.
 CPE_DRVUP   equ CPE_B + 7       ; and CPE_DLG OSAPI_DRV_DLG's (51.10), both
 CPE_DLG     equ CPE_B + 8       ; kern_big's alone: kern_small has no drivers -
 CP_NENT     equ CPE_B + 10      ; and CPE_GATE is the wide face's (SPEC.md
-%endif                          ; 134.4), which kern_small has none of
+%endif                          ; 135.4), which kern_small has none of
 %else
 CPE_ONKEY   equ CPE_B + 5       ; Keyboard's sample is offered on small too
 %ifdef DOCK_OPT
@@ -1044,7 +1044,7 @@ modc_hdr:
 %ifdef KERN_BIG
     dw modc_e_drvup             ; CPE_DRVUP: OSAPI_DRV_USE's load (117.3)
     dw modc_e_dlg               ; CPE_DLG: OSAPI_DRV_DLG's body (51.10)
-    dw modc_e_gate              ; CPE_GATE: the wide face's (SPEC.md 134.4)
+    dw modc_e_gate              ; CPE_GATE: the wide face's (SPEC.md 135.4)
 %endif
     dw modc_e_shutdown          ; CPE_SHUTDOWN: confirmation and terminal splash
 section .modu                   ; ...and the PANEL from here on: the stubs below
@@ -1068,9 +1068,9 @@ section .modu                   ; ...and the PANEL from here on: the stubs below
 
 modc_e_flush:                           ; a stub still, because shutdown calls
 %ifdef KERN_BIG                         ; the body NEAR as well. The wide face
-            call cp_wclose              ; goes with the panel (SPEC.md 134.2) -
+            call cp_wclose              ; goes with the panel (SPEC.md 135.2) -
 %endif                                  ; FIRST, so a Test... running reverts
-            call cp_flush_close_x       ; before SYSTEM.CFG is written (134.9.3)
+            call cp_flush_close_x       ; before SYSTEM.CFG is written (135.9.3)
             retf
 ;
 ; THE OTHER FIVE ARE THE BODIES, entered far and leaving by kretf_bp - the
@@ -1196,7 +1196,7 @@ modc_e_dlg:
     jmp short .out
 
 ; =============================================================================
-; THE WIDE FACE (SPEC.md 134): CPWIDE.DRV beside this image
+; THE WIDE FACE (SPEC.md 135): CPWIDE.DRV beside this image
 ;
 ; This image keeps every setting, every state change and every compact page;
 ; CPWIDE.DRV draws the wide chrome and hosts these pages in its page area.
@@ -1266,7 +1266,7 @@ cp_wlist:
     ret
 
 ; -----------------------------------------------------------------------------
-; modc_e_gate - CPE_GATE (SPEC.md 134.4), entered FAR: every call CPWIDE.DRV
+; modc_e_gate - CPE_GATE (SPEC.md 135.4), entered FAR: every call CPWIDE.DRV
 ;               makes into this image, and the open's face choice
 ; in:  AH = a CPG_* opcode (cpwlay.inc); the op's own registers
 ; out: the op's; CF = 1 for an opcode past CPG_N
@@ -1325,7 +1325,7 @@ cpg_tab:
     dw cp_wdset                 ; CPG_WDSET    nothing
     dw cp_repost                ; CPG_REPOST   nothing
     dw cpg_none, cpg_none, cpg_none ; 22-24: reserved for S7, unused - refused
-    dw cpg_vidarr               ; CPG_VIDARR   AL = 0/1/2 (SPEC.md 134.9.5)
+    dw cpg_vidarr               ; CPG_VIDARR   AL = 0/1/2 (SPEC.md 135.9.5)
     dw cpg_glyph                ; CPG_GLYPH    CX/DX screen, AL, BL = greyed
     dw cpg_none, cpg_none       ; 27-28: reserved for S8, unused - refused
     dw cp_thm_pre               ; CPG_THMPRE   nothing
@@ -1343,13 +1343,13 @@ cpg_hkey:
     jmp cp_onkey_x
 
 ; cpg_vidarr - CPG_VIDARR: the desktop line's body (cp_vid_arr) for the wide
-; Display page, every register kept and CF its answer (SPEC.md 134.9.5)
+; Display page, every register kept and CF its answer (SPEC.md 135.9.5)
 cpg_vidarr:
     call kentm_si
     call cp_vid_arr
     jmp kretm_si
 ; cpg_glyph - CPG_GLYPH: os88ui_glyph, the greyed flag in BL because AH is
-; the opcode (SPEC.md 134.9.5). Keeps every register
+; the opcode (SPEC.md 135.9.5). Keeps every register
 cpg_glyph:
     push ax
     mov ah, bl
@@ -1368,7 +1368,7 @@ cpg_glyph:
 ; A panel already up keeps its face: app_launch only fronts it. Otherwise
 ; this is the work KD_INIT did (the press state and the arm cleared - nothing
 ; between here and the window being shown can arm anything), then SPEC.md
-; 134.2's predicate - a VGA or VESA primary whose WORK AREA (the band wm_fit
+; 135.2's predicate - a VGA or VESA primary whose WORK AREA (the band wm_fit
 ; places windows in) holds the 616x408 face - then
 ; MOD_CPW, then CPWIDE.DRV's own open: CPWIDE.DAT read and the window's size
 ; written into cp_tpl.
@@ -1392,7 +1392,7 @@ cpg_open:
     jmp short .out              ; (kern_mega: no VESA renderer)
 %endif
 .kind:
-    mov ax, [vid_band_xe]       ; THE WORK AREA, not the screen (SPEC.md 134.2
+    mov ax, [vid_band_xe]       ; THE WORK AREA, not the screen (SPEC.md 135.2
     sub ax, [vid_band_x0]       ; step 4): the band wm_fit clamps every window
     cmp ax, CPW_W1 + CPW_FITX   ; to, less a side Dock's columns - so a Dock on
     jb .out                     ; the left or right of a 640 screen is the
@@ -1433,7 +1433,7 @@ cpg_hpaint:
     call cp_page
     jmp kretm_bp
 
-; --- the Drivers page's ops (SPEC.md 134.4, 134.8): AL = a drv_tab row ------
+; --- the Drivers page's ops (SPEC.md 135.4, 135.8): AL = a drv_tab row ------
 cpg_drvon:                      ; load it, if it is down
     push bx
     call cp_drvrow
@@ -1525,7 +1525,7 @@ cpg_vxcall:                     ; a verb to VESA.DRV (cp_vid_vxcall)
 ; -----------------------------------------------------------------------------
 modc_e_onkey:
 %ifdef KERN_BIG
-    CPWF CWV_KEY                ; the wide face's, while it is up (134.4)
+    CPWF CWV_KEY                ; the wide face's, while it is up (135.4)
 %endif
 cp_onkey_x:                     ; (CPG_HKEY enters here, past the forward)
     call kentm_bp                ; KENT: push ax..bp
@@ -1589,7 +1589,7 @@ cp_tick_due_x:
     push di
     mov al, [cp_sel]
 %ifdef KERN_BIG
-    xor al, [cp_tickp]          ; Date/Time, or Display in a test (134.9.4)
+    xor al, [cp_tickp]          ; Date/Time, or Display in a test (135.9.4)
 %else
     xor al, CP_ITIME            ; ...and `xor` leaves CF = 0, so every "no"
 %endif
@@ -1658,7 +1658,7 @@ section .modu                   ; ...and back to the panel's image
 ; -----------------------------------------------------------------------------
 modc_e_paint:                   ; CPE_PAINT, entered FAR (see kretf_bp)
 %ifdef KERN_BIG
-    CPWF CWV_PAINT              ; the wide face paints its own (SPEC.md 134.3)
+    CPWF CWV_PAINT              ; the wide face paints its own (SPEC.md 135.3)
 %endif
 cp_paint_x:
     call kentm_bp                ; KENT: push ax..bp
@@ -1894,7 +1894,7 @@ cp_origin:
     mov bp, dx
 %ifdef KERN_BIG
     cmp byte [cs:cp_wide], 0    ; THE ONE PLACE THAT KNOWS THE FACE (SPEC.md
-    je .c                       ; 134.3): on the wide one the "content" every
+    je .c                       ; 135.3): on the wide one the "content" every
     add di, CPW_HX              ; compact page and edge computes from is the
     add bp, CPW_HY              ; HOSTED origin, so `add di, CP_RX` lands on
 .c:                             ; the hosted pane and the probe, the arm, the
@@ -2379,7 +2379,7 @@ cp_item_paint:
     ; own string. A page is entered with the heading drawn and the pen black.
 %ifdef KERN_BIG
     cmp byte [cs:cp_wide], 0    ; ...and HOSTED it has none: the wide face's
-    je .head                    ; header strip names the page (SPEC.md 134.3)
+    je .head                    ; header strip names the page (SPEC.md 135.3)
     call cp_black
     jmp short .headed
 .head:
@@ -2919,7 +2919,7 @@ cp_listrow:
 ; -----------------------------------------------------------------------------
 %ifdef DOCK_OPT
 cp_list:
-    cmp byte [cs:cp_wide], 0    ; the wide face draws its own (SPEC.md 134.3)
+    cmp byte [cs:cp_wide], 0    ; the wide face draws its own (SPEC.md 135.3)
     jne cp_wlist
     call kentm_bp
 
@@ -3461,7 +3461,7 @@ cp_thm_apply:
 .r:
     ret
 
-; cp_thm_pre - CPG_THMPRE (SPEC.md 134.11): CPWIDE.DRV has just put a preset's
+; cp_thm_pre - CPG_THMPRE (SPEC.md 135.11): CPWIDE.DRV has just put a preset's
 ; row over the Color row and its number into 'TP'; apply Color, which
 ; thm_set promotes to Windows when [thm_cstrp]'s bit 2 says so. cp_thm_apply
 ; without its "already live" answer - a second preset is a change
@@ -3475,7 +3475,7 @@ cp_thm_pre:
 ; window, and when there is none the reason said out loud - the LOADER's own
 ; words (drv_errstg) for a load that failed, the beep for a window table that
 ; was full (DRVE_OK: not about the disk, so it does not say the disk). The
-; page's two buttons and CPG_SAVER / CPG_THMCUST (SPEC.md 134.4) alike
+; page's two buttons and CPG_SAVER / CPG_THMCUST (SPEC.md 135.4) alike
 ; in:  nothing. out: nothing; every register kept
 ; -----------------------------------------------------------------------------
 cp_thm_saver:
@@ -3946,7 +3946,7 @@ CPQ_CELLS equ 24
 section .modcb
 cp_key_state: resb CPQ_CELLS + 2  ; independent of desktop/settings saves
 %ifdef KERN_BIG
-cp_wide:    resb 1              ; 1 = the wide face is up (SPEC.md 134.2):
+cp_wide:    resb 1              ; 1 = the wide face is up (SPEC.md 135.2):
                                 ; written by cpg_open and cp_wclose alone,
                                 ; zero in the file tail, so a re-adopted
                                 ; image starts compact
@@ -4981,7 +4981,7 @@ cp_vid_fcok:
     test byte [vid_avail], VID_A_VGA
     jz .no
     cmp byte [vid_kind], VID_VESA       ; a VESA desktop's DAC 0..63 is its
-    jne .ok                             ; own palette (SPEC.md 134.9.1)
+    jne .ok                             ; own palette (SPEC.md 135.9.1)
 .no:
     stc
     ret
@@ -5049,7 +5049,7 @@ cp_vid_paint:
 ;      window owed its repaint (cp_repost). Clobbers AX
 ;
 ; The Display page's Activate button and the wide face's CPG_VIDSET
-; (SPEC.md 134.4) are this one body: the VESA row has the driver choose the
+; (SPEC.md 135.4) are this one body: the VESA row has the driver choose the
 ; class asked for first (SPEC.md 120.6), and a display already on the VBE
 ; leaves and comes back, because vid_switch onto the kind it is on is a no-op.
 ; kern_big's: kern_small's button keeps the three lines inline
@@ -5078,7 +5078,7 @@ cp_vid_set:
 
 ; cp_vgc_tog - Force Color's tick toggled (SPEC.md 31.10.4, 39.28) and owed to
 ; SYSTEM.CFG: a tick applies now, an un-tick at the next start. The page's box
-; and CPG_VGC (SPEC.md 134.4) alike. Clobbers the flags
+; and CPG_VGC (SPEC.md 135.4) alike. Clobbers the flags
 cp_vgc_tog:
     xor byte [drv_cfg+CFG_VGC], CFG_VGCB ; (a bit of 'VM's mode byte, F1)
     test byte [drv_cfg+CFG_VGC], CFG_VGCB
@@ -5244,7 +5244,7 @@ cp_vid_click:
 ; -----------------------------------------------------------------------------
 ; cp_vid_arr - put the desktop in arrangement AL (0 Single, 1 Right, 2 Below):
 ;              the desktop line's click body, and the wide Display page's
-;              CPG_VIDARR (SPEC.md 31.10.2, 134.9.5)
+;              CPG_VIDARR (SPEC.md 31.10.2, 135.9.5)
 ; out: CF = 1 EXTD.DRV refused (the panel's load line toasted); clobbers
 ;      AX and whatever vid_disp_init / wm_refit spend - every caller is
 ;      inside a KENT frame
@@ -7874,7 +7874,7 @@ cp_drv_click:
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_tog / cp_drv_off / cp_drv_on - one drv_tab row's state change, with
-; nothing drawn but the whole screen when VESA.DRV goes (SPEC.md 31.6, 134.4)
+; nothing drawn but the whole screen when VESA.DRV goes (SPEC.md 31.6, 135.4)
 ; in:  BX = the row (cp_drvrow); gfx lock held
 ; out: nothing; AX and BX preserved (cdl_load, drv_unload and cp_wdset keep
 ;      them, and cp_drv_click redraws the row from AL afterwards)
@@ -8576,7 +8576,7 @@ cp_open_x:
     call cp_open_need           ; cpf_need banks AX itself, but `mov al,
     jc .failed                  ; KIND_CTRL` below and `mov al, 1` at .no do not
 %ifdef KERN_BIG
-    mov ah, CPG_OPEN            ; THE IMAGE OPENS IT (SPEC.md 134.2): the face
+    mov ah, CPG_OPEN            ; THE IMAGE OPENS IT (SPEC.md 135.2): the face
     call far [CPFP + CPE_GATE*4] ; chosen, cp_tpl's size, KD_INIT's work, and
     jmp short .out              ; then the app_launch and its beep below, as
                                 ; cpg_open - which is what keeps this ten

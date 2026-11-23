@@ -1,17 +1,17 @@
 ; =============================================================================
 ; os8088 - cpwide.inc
 ;
-; CPWIDE.DRV (SPEC.md 134): the wide Control Panel's second FACE, an on-demand
+; CPWIDE.DRV (SPEC.md 135): the wide Control Panel's second FACE, an on-demand
 ; module (SPEC.md 2.8, MOD_CPW) loaded BESIDE CTRL.DRV when the panel opens on
 ; a colour primary of at least 640x480. Prefix `cpw_`. kern_big, kern_emu and
-; kern_mega only: kern_small never assembles a byte of SPEC.md 134.
+; kern_mega only: kern_small never assembles a byte of SPEC.md 135.
 ;
-; WHAT IS HERE AND WHAT IS NOT (SPEC.md 134.1, decision D2). CTRL.DRV keeps
+; WHAT IS HERE AND WHAT IS NOT (SPEC.md 135.1, decision D2). CTRL.DRV keeps
 ; every setting, every state change and every compact page; this image draws
 ; the wide chrome - the grouped page list, the header strip, the status line -
 ; and HOSTS the compact pages in its page area by asking CTRL.DRV to paint and
-; click them at an origin (CPE_GATE, SPEC.md 134.4). The shared widget kit of
-; SPEC.md 134.5 is cpwkit.inc, %included at the foot of this file into the
+; click them at an origin (CPE_GATE, SPEC.md 135.4). The shared widget kit of
+; SPEC.md 135.5 is cpwkit.inc, %included at the foot of this file into the
 ; same image, so the wave-2 pages that join it draw with the same procs.
 ;
 ; HOW IT IS ENTERED. One far entry, cpw_ev, with the event in BP (CWV_*,
@@ -22,7 +22,7 @@
 ; apic_*) or this image's own KGO hop (CPWC/CPWK, below).
 ;
 ; ITS STATE IS NOT IN ITS IMAGE. CPWIDE.DAT is read into ONE heap claim at
-; open (SPEC.md 134.2), and that claim's first CPW_WSZ bytes are this image's
+; open (SPEC.md 135.2), and that claim's first CPW_WSZ bytes are this image's
 ; working memory - the origin, the list's entries, the status line's cache,
 ; the icon staging buffer - with the file after them. So every handler runs
 ; with ES = that claim, its state is `[es:CPW_W_*]` and needs no CSDO on
@@ -34,7 +34,7 @@
 %include "cpwfmt.inc"
 
 CPW_NENT    equ 1               ; CPWIDE.DRV's mod_fp entries, in CPWFP: one,
-                                ; cpw_ev, the event in BP (SPEC.md 134.4)
+                                ; cpw_ev, the event in BP (SPEC.md 135.4)
 
 ; --- the working area: the asset claim's first CPW_WSZ bytes ------------------
 CPW_W_OX    equ 0               ; dw  the content box's left, SCREEN x
@@ -57,7 +57,7 @@ CPW_LMAX    equ 28              ;   +0 db 80h|heading or 0, +1 db the record,
 CPW_W_STR   equ CPW_W_LIST + CPW_LMAX * 4   ; 144: a composed line, 96 bytes
 CPW_W_PAGE  equ CPW_W_STR + 96  ; 240: THE PAGE BLOCK, 80 bytes, the page
 CPW_W_PAGEN equ 80              ;   SHOWING owns whole: each wide page lays its
-                                ;   own map over all of it (SPEC.md 134.5.1),
+                                ;   own map over all of it (SPEC.md 135.5.1),
                                 ;   so leaving a page is losing its block - a
                                 ;   page rebuilds it on a fresh entry, and what
                                 ;   must outlive a visit lives in KEEP below
@@ -77,9 +77,9 @@ CPW_WSZ     equ CPW_W_ICON + CWD_I32_PIX    ; one 32x32; CPWIDE.DAT at 848
   %error "cpwide: CPWIDE.DAT must start on a paragraph of the claim"
 %endif                          ; at a paragraph (lz wants DI = 0, diskw.inc):
                                 ; at 836 the open was refused, silently compact
-CPW_DATMAX  equ 16384           ; the file's bound (SPEC.md 134.6)
+CPW_DATMAX  equ 16384           ; the file's bound (SPEC.md 135.6)
 
-; --- the page list (SPEC.md 134.3), content-relative --------------------------
+; --- the page list (SPEC.md 135.3), content-relative --------------------------
 CPW_LT0     equ 4               ; the first heading's top
 CPW_HH      equ 13              ; a heading's height: 3 rows, its words, 2
 CPW_HCH     equ 14              ; ...its words padded to this many characters
@@ -89,7 +89,7 @@ CPW_GG      equ 6               ; the air between one group and the next
 CPW_LIX     equ 6               ; a row's 16x16 icon x (its y is the top + 2)
 CPW_LTX     equ 26              ; ...and its name's x (the top + 6)
 
-; --- the header strip (SPEC.md 134.3), x from CPW_PX --------------------------
+; --- the header strip (SPEC.md 135.3), x from CPW_PX --------------------------
 CPW_HIX     equ 8               ; the 32x32 icon, PX + 8
 CPW_HIY     equ 5
 CPW_HTX     equ 48              ; the title and the description, PX + 48
@@ -126,7 +126,7 @@ modv_hdr:
     dw cpw_ev
 
 ; -----------------------------------------------------------------------------
-; cpw_ev - CPWIDE.DRV's one entry (SPEC.md 134.4), entered FAR
+; cpw_ev - CPWIDE.DRV's one entry (SPEC.md 135.4), entered FAR
 ; in:  BP = CWV_*; the event's own registers (cpwlay.inc); DS = KERNEL_SEG
 ; out: CF (CWV_OPEN's answer; nothing for the rest); every register but BP
 ;      preserved - the forwarder in CTRL.DRV (cp_wfwd) owns BP
@@ -175,7 +175,7 @@ cpw_evt:
 %endif
 
 ; -----------------------------------------------------------------------------
-; cpw_gate - call CTRL.DRV's CPE_GATE (SPEC.md 134.4) with the caller's ES
+; cpw_gate - call CTRL.DRV's CPE_GATE (SPEC.md 135.4) with the caller's ES
 ; in:  AH = CPG_*, the op's registers; ES = the claim
 ; out: the op's; ES = the claim again
 ; -----------------------------------------------------------------------------
@@ -187,7 +187,7 @@ cpw_gate:
     ret
 
 ; =============================================================================
-; CWV_OPEN / CWV_CLOSE - the asset claim (SPEC.md 134.2)
+; CWV_OPEN / CWV_CLOSE - the asset claim (SPEC.md 135.2)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -260,7 +260,7 @@ cpw_open:
     cld
     rep stosw
     CSDO mov [CSEG cpw_dseg], es
-    mov ax, CPW_W1              ; the size (SPEC.md 134.2): 616x408 on a
+    mov ax, CPW_W1              ; the size (SPEC.md 135.2): 616x408 on a
     mov dx, CPW_H1              ; 640x480 primary, 760x520 from 800x600 up
     cmp word [vid_pw], 800
     jb .sz
@@ -310,7 +310,7 @@ cpw_open:
 ; in:  ES = the claim. out: nothing
 ; -----------------------------------------------------------------------------
 cpw_close:
-    call cpv_quit               ; a Test... running reverts first (134.9.3)
+    call cpv_quit               ; a Test... running reverts first (135.9.3)
     mov dx, es
     mov bx, MEM_K_MOD
     CPWC mem_free_x
@@ -347,7 +347,7 @@ cpw_stage:
     ret
 
 ; =============================================================================
-; CWV_PAINT and the chrome (SPEC.md 134.3)
+; CWV_PAINT and the chrome (SPEC.md 135.3)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -408,7 +408,7 @@ cpw_paint:
 ; cpw_big - CF = 0 the window holds the face; CF = 1 it is in the SMALL state
 ; (cpw_small), where nothing but its line - and the Display page's Keep group
 ; during a Test, which that page guards itself (cpv_big) - is drawn or
-; pressed (SPEC.md 134.2). Reads the content box cpw_org last wrote; keeps all
+; pressed (SPEC.md 135.2). Reads the content box cpw_org last wrote; keeps all
 cpw_big:
     cmp word [es:CPW_W_CW], CPW_W1 - 2
     jb .r
@@ -418,12 +418,12 @@ cpw_big:
 
 ; -----------------------------------------------------------------------------
 ; cpw_small - the window is smaller than the face (a vid_switch while it was
-; open, SPEC.md 134.2): ground and one line, and nothing that would draw past
+; open, SPEC.md 135.2): ground and one line, and nothing that would draw past
 ; its edge. Closing and opening the panel again chooses the face again.
 ; -----------------------------------------------------------------------------
 cpw_small:
     cmp byte [cp_sel], CP_IVID  ; the Display page in a test: its Keep group
-    jne .line                   ; (SPEC.md 134.9.3)
+    jne .line                   ; (SPEC.md 135.9.3)
     call cpv_small
     jnc .r
 .line:
@@ -451,7 +451,7 @@ cpw_small:
 ; The groups are cpw_lay's, in the image; a record the compact face hides
 ; (SPEC.md 31.10.1 - [cp_hide]) is hidden here too, and the driver-owned pages
 ; (SPEC.md 31.9) go where cpw_lay says, under HARDWARE. A row that would run
-; into the status line is not laid out (SPEC.md 134.3: the list does not
+; into the status line is not laid out (SPEC.md 135.3: the list does not
 ; scroll; it holds 13 static rows and six driver pages at 640x480).
 ; -----------------------------------------------------------------------------
 cpw_lbuild:
@@ -543,7 +543,7 @@ cpw_lbuild:
     ret
 
 ; the static layout: 80h|n is heading n, a byte below 80h a record, FEh the
-; driver pages and FFh the end (SPEC.md 134.3)
+; driver pages and FFh the end (SPEC.md 135.3)
 cpw_lay:
     db 0x80, 0, CP_ITIME, CP_IKEY, CP_IFDD
     db 0x81, CP_IDRV, CP_IVID, CP_ISND, 0xFE
@@ -842,21 +842,21 @@ cpw_hdr:
 ; cpw_page - the page area: a wide page's own paint, or the HOSTED compact one
 ; in:  nothing. out: nothing
 ;
-; The Drivers list is cpd_paint's (SPEC.md 134.8). Hosted (SPEC.md 134.3): cp_page's own erase covers the compact pane's rect,
+; The Drivers list is cpd_paint's (SPEC.md 135.8). Hosted (SPEC.md 135.3): cp_page's own erase covers the compact pane's rect,
 ; CPW_HW x CP_CH from the page area's top left, so this lays the ground only
 ; to its right and below it, and CTRL.DRV paints the page at the hosted origin
 ; through the gate. Every page is hosted until a wave-2 page takes its record
-; (SPEC.md 134.9, 134.11).
+; (SPEC.md 135.9, 135.11).
 ; -----------------------------------------------------------------------------
 cpw_page:
-    cmp byte [cp_sel], CP_IVID  ; the Display page draws itself (134.9)...
+    cmp byte [cp_sel], CP_IVID  ; the Display page draws itself (135.9)...
     je .vid
     mov byte [es:CPV_LIVE], 0   ; ...and builds itself afresh after another
     call cpw_dwant              ; CF = 0: the Drivers list - its own page,
     jnc cpd_paint               ; which asks CPW_D_ON whether this is a fresh
-    mov byte [es:CPW_D_ON], 0   ; entry (134.5.1): any other page clears it
+    mov byte [es:CPW_D_ON], 0   ; entry (135.5.1): any other page clears it
     cmp byte [cp_sel], CP_ITHM
-    je cpw_thm_paint            ; the Theme page is drawn natively (134.11)
+    je cpw_thm_paint            ; the Theme page is drawn natively (135.11)
     mov byte [gfx_color], CWHITE
     mov ax, CPW_PX + CPW_HW     ; right of the hosted rect
     mov bx, CPW_BY
@@ -900,7 +900,7 @@ cpw_dsync:
     ret
 
 ; -----------------------------------------------------------------------------
-; cpw_status - the status line (SPEC.md 134.3): free memory, drivers loaded of
+; cpw_status - the status line (SPEC.md 135.3): free memory, drivers loaded of
 ; how many, and that the settings are saved at the close
 ; in:  AL = 1 a full paint (always drawn, its rule and margins too), 0 only if
 ;      a number changed. out: nothing
@@ -1058,7 +1058,7 @@ cpw_pad:
     ret
 
 ; =============================================================================
-; The edges (SPEC.md 134.3): the list's are this image's, the page area's go
+; The edges (SPEC.md 135.3): the list's are this image's, the page area's go
 ; to the hosted page through the gate
 ; =============================================================================
 
@@ -1072,8 +1072,8 @@ cpw_click:
     mov bx, dx
     sub bx, [es:CPW_W_OY]
     cmp byte [cp_sel], CP_IVID  ; the Display page takes the whole window's
-    je cpv_click                ; press: its test holds the list (134.9.3)
-    call cpw_big                ; the small state: nothing to press (134.2)
+    je cpv_click                ; press: its test holds the list (135.9.3)
+    call cpw_big                ; the small state: nothing to press (135.2)
     jb .none
     cmp ax, CPW_LW
     jl .list
@@ -1087,9 +1087,9 @@ cpw_click:
     jge .none                   ; the status line
     cmp byte [cp_sel], CP_ITHM
     jne .nthm
-    jmp cpw_thm_click           ; the Theme page's own press (134.11)
+    jmp cpw_thm_click           ; the Theme page's own press (135.11)
 .nthm:
-    cmp byte [es:CPW_D_ON], 0   ; the Drivers page's own press (134.8)
+    cmp byte [es:CPW_D_ON], 0   ; the Drivers page's own press (135.8)
     je .host
     jmp cpd_click
 .host:
@@ -1125,7 +1125,7 @@ cpw_click:
 
 ; -----------------------------------------------------------------------------
 ; cpw_select - make record AL the page, redrawing what changed (SPEC.md
-;              134.3): the row losing the bar, the row gaining it, the header
+;              135.3): the row losing the bar, the row gaining it, the header
 ;              strip and the page area - never the chrome around them
 ; in:  AL = a record; the entries built. out: nothing
 ; -----------------------------------------------------------------------------
@@ -1198,11 +1198,11 @@ cpw_edge:
 .wide:
     cmp ah, CPG_HUP
     jne .r
-    cmp byte [cp_sel], CP_IVID  ; the Display page's controls (134.9.5)
+    cmp byte [cp_sel], CP_IVID  ; the Display page's controls (135.9.5)
     je cpv_up
     CPWC os88ui_fire            ; a wide control's release: disarmed, and the
     cmp byte [cp_sel], CP_ITHM  ; page's to act on - the Theme page's buttons
-    je cpw_thm_up               ; (134.11), else the Drivers page's (134.8)
+    je cpw_thm_up               ; (135.11), else the Drivers page's (135.8)
     jmp cpd_rel
 .r:
     ret
@@ -1223,7 +1223,7 @@ cpw_key:
 
 ; cpw_tick - CWV_TICK: the hosted Date/Time page's clock, when it is showing
 cpw_tick:
-    cmp byte [cp_sel], CP_IVID  ; a Test... counting down (SPEC.md 134.9.4)
+    cmp byte [cp_sel], CP_IVID  ; a Test... counting down (SPEC.md 135.9.4)
     je cpv_tick
     cmp byte [cp_sel], CP_ITIME
     jne .r
@@ -1250,7 +1250,7 @@ cpw_listev:
     jc .r
     mov [es:CPW_W_WIN], bx
     call cpw_org
-    call cpw_big                ; the small state: nothing drawn (134.2); the
+    call cpw_big                ; the small state: nothing drawn (135.2); the
     jb .r                       ; next full paint builds the list anyway
     call cpw_lbuild
     call cpw_list
@@ -1273,7 +1273,7 @@ cpw_listev:
     ret
 
 ; =============================================================================
-; The Drivers page (SPEC.md 134.8) is cpw_drv.inc, below
+; The Drivers page (SPEC.md 135.8) is cpw_drv.inc, below
 ; =============================================================================
 ; cpw_dwant - CF = 0 the catalog belongs on the screen: the Drivers page
 ; showing its list. Keeps all
@@ -1356,13 +1356,13 @@ cpw_s_st1:  db 'K free - ', 0
 cpw_s_st2:  db ' of ', 0
 cpw_s_st3:  db ' drivers loaded - settings saved when the panel closes', 0
 
-%include "cpw_thm.inc"          ; the Theme page (SPEC.md 134.11), same image
+%include "cpw_thm.inc"          ; the Theme page (SPEC.md 135.11), same image
 
 ; KGO_PAIR's hop for this image (kernel.asm): cpw_kgo / cpw_cgo
 KGO_PAIR cpw
 
-%include "cpwkit.inc"           ; the widget kit (SPEC.md 134.5), same image
-%include "cpw_vid.inc"          ; the Display page (SPEC.md 134.9), same image
+%include "cpwkit.inc"           ; the widget kit (SPEC.md 135.5), same image
+%include "cpw_vid.inc"          ; the Display page (SPEC.md 135.9), same image
 
 section .modvb                  ; ...and its bss: the claim's one name
 cpw_bss:

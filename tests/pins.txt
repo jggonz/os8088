@@ -62,7 +62,7 @@ D kernel/diskops.inc MEM_K_CLONE         # the disk cloner's buffer: the int 13h
                                          # target for the whole of one clone,
                                          # freed at its end
 M kernel/cpwide.inc MEM_K_MOD            # CPWIDE.DAT and the wide face's working
-                                         # area (SPEC.md 134.2): claimed top-down
+                                         # area (SPEC.md 135.2): claimed top-down
                                          # beside MOD_CPW's image at the panel's
                                          # open, freed at its close with the image's
                                          # drop; every event runs with ES = it

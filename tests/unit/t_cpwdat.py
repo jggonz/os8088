@@ -3,7 +3,7 @@
 
     python3 tests/unit/t_cpwdat.py
 
-SPEC.md 134.6 / 134.7. Four things go wrong here without any compiler noticing:
+SPEC.md 135.6 / 135.7. Four things go wrong here without any compiler noticing:
 
   * A DRIVER IS ADDED and nobody writes its catalog entry: the wide Drivers
     page then shows it with the Unknown icon and no description (it still
@@ -72,7 +72,7 @@ def main():
           "kernel/driver.inc's table layout changed under the scraper")
     for r in rows:
         check(r in cat, "drv_tab row %s has an entry in drivers/catalog.toml" % r,
-              "SPEC.md 134.7: without one the wide Drivers page shows it with "
+              "SPEC.md 135.7: without one the wide Drivers page shows it with "
               "the Unknown icon and no description. Add a table named %s; the "
               "recipe is the comment at the top of the file" % r)
     for k in cat:
@@ -127,7 +127,7 @@ def main():
         check(False, "cpwdat.build() succeeds: %s" % e, why_fmt)
         done("t_cpwdat")
     check(len(fresh) <= 16384, "CPWIDE.DAT is %d bytes (<= 16,384 unpacked)"
-          % len(fresh), "the wide panel reads it into one heap claim (134.6)")
+          % len(fresh), "the wide panel reads it into one heap claim (135.6)")
 
     have = os.path.join(BUILD, "cpwide.dat")
     if not check(os.path.exists(have), "%s exists" % have,

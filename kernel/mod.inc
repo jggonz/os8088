@@ -52,7 +52,7 @@ MOD_STIKM   equ 8               ; ...and the Sticky Apps menu (SPEC.md 110.12)
 MOD_SER     equ 9
 MOD_KEYBOARD equ 10
 MOD_CPW     equ 11              ; ...and the wide Control Panel's face (SPEC.md
-                                ; 134.2), after every id that was already
+                                ; 135.2), after every id that was already
                                 ; numbered, so none of them moved
 MOD_NIMG    equ 12              ; BIG: hibernate, resident file operations,
                                 ; the optional Dock, EXTD.DRV, WIN95.DRV,
@@ -222,7 +222,7 @@ mod_f_ext:  db 'EXTD.DRV', 0
 mod_f_win:  db 'WIN95.DRV', 0
 mod_f_desk: db 'DESK.DRV', 0    ; SPEC.md 11.103.10: QUERY loads it
 mod_f_stikm: db 'STIKMENU.DRV', 0 ; SPEC.md 110.12: the Sticky Apps drop loads it
-mod_f_cpw:  db 'CPWIDE.DRV', 0  ; SPEC.md 134.2: CTRL.DRV's open loads it
+mod_f_cpw:  db 'CPWIDE.DRV', 0  ; SPEC.md 135.2: CTRL.DRV's open loads it
 %endif
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
@@ -299,7 +299,7 @@ mod_r_dock:
 mod_r_keyboard:
     dw 0, mod_f_keyboard        ; MOD_KEYBOARD, SPEC.md 9.16
 %ifdef KERN_BIG
-    dw 0, mod_f_cpw             ; MOD_CPW, kern_big's alone (SPEC.md 134.2)
+    dw 0, mod_f_cpw             ; MOD_CPW, kern_big's alone (SPEC.md 135.2)
 %endif
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)

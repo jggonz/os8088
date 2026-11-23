@@ -2834,7 +2834,7 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODD
 # OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all. And so is
 # STIKMENU.DRV (SPEC.md 110.12), Locator's Sticky Apps menu, which its drop
 # loads and its pick drops: kern_small has no Sticky Apps menu. And so is
-# CPWIDE.DRV (SPEC.md 134.2), the wide Control Panel's face, which the panel's
+# CPWIDE.DRV (SPEC.md 135.2), the wide Control Panel's face, which the panel's
 # open loads beside CTRL.DRV on a colour primary of at least 640x480 and its
 # close drops: kern_small has no VGA renderer and no wide face.
 ifneq ($(KERN_SMALL),)
@@ -3674,7 +3674,7 @@ DRIVERS += $(BUILD)/vesa.drv
 # ($(SMALLDRIVERS) is a restatement that never held it)
 DRIVERS += $(BUILD)/pciether.drv
 # CPWIDE.DAT - the wide Control Panel's icons and driver catalog (SPEC.md
-# 134.6, 134.7): a DATA file beside CTRL.DRV, built by tools/cpwdat.py. It is
+# 135.6, 135.7): a DATA file beside CTRL.DRV, built by tools/cpwdat.py. It is
 # kern_big / kern_emu / kern_mega's alone - kern_small has no wide panel - and
 # $(SMALLDRIVERS) is a restatement that never held it. On a
 # boot disk: an ordinary file (SPEC.md 19.6), so it takes one root listing slot.
@@ -4136,7 +4136,7 @@ $(BUILD)/%.f88: faces/%.t88 tools/os88face.py | $(BUILD)
 $(BUILD)/faces:
 	mkdir -p $@
 
-# CPWIDE.DAT (SPEC.md 134.6) packs like a driver: a 'CZ' file the kernel's
+# CPWIDE.DAT (SPEC.md 135.6) packs like a driver: a 'CZ' file the kernel's
 # transparent read expands into the claim the directory hint sizes. Every input
 # is a prerequisite - the two sheets, the catalog, the layout it is checked
 # against and the compressor - and PKGZSTAMP carries the PKGZ knob, so a
@@ -4330,11 +4330,11 @@ COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
 # it would take two thirds of what the disk has left.
 # System Check's manifest marks them OPTIONAL (118.2.3), so a hard disk
 # installed from this disk is not reported as missing them.
-# The WIDE CONTROL PANEL's two files (SPEC.md 134.2) are the FIFTH and
+# The WIDE CONTROL PANEL's two files (SPEC.md 135.2) are the FIFTH and
 # SIXTH, the owner's decision of 2026-11-22: the wave-2 pages took the disk
 # past what it had left (708 clusters of 706), and a 360KB machine is an XT,
 # where the wide face's drawing and ~20KB of heap fit worse than on a 286+.
-# Without them the panel opens compact, silently - 134.2's refusal path - so
+# Without them the panel opens compact, silently - 135.2's refusal path - so
 # a 360KB boot is the compact face, as it was before 134 existed.
 SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv \
                 $(KMODDIR)/cpwide.drv $(BUILD)/cpwide.dat

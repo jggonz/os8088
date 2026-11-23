@@ -5,7 +5,7 @@
 
 Reads kernel/cpwart/cp-icons-16.png (256x32: thirty-two 16x16 cells, row-major,
 16 across and 2 down) and cp-icons-32.png (384x32: twelve 32x32 cells), drivers/catalog.toml, and writes
-the file SPEC.md 134.6 / 134.7 describe. Deterministic: same inputs, same
+the file SPEC.md 135.6 / 135.7 describe. Deterministic: same inputs, same
 bytes. Every number it uses - offsets, sizes, counts, record layout, category
 and icon indices - is PARSED out of kernel/cpwfmt.inc, the file the wide
 panel's code assembles with, and the build refuses to write a file that

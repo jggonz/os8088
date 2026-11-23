@@ -287,7 +287,7 @@ vx_encode:
 ;           field and vx_decode never read them). A record the byte cannot
 ;           name matches no class. WHEN TWO MATCH - a card offering 15 and 16
 ;           bits at one geometry, as QEMU's does - THE DEEPER ANSWERS, ties to
-;           the first (SPEC.md 120.2.3, 134.9.1): the first answered before,
+;           the first (SPEC.md 120.2.3, 135.9.1): the first answered before,
 ;           so no class reached the 16bpp record and VXV_NEXT walked the
 ;           pair as each other's successor for ever
 ; clobbers: ax, bx, cx, dx, si, di, flags

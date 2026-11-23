@@ -1,21 +1,21 @@
 ; =============================================================================
 ; os8088 - cpw_vid.inc
 ;
-; The wide Control Panel's Display page - the mode changer (SPEC.md 134.9).
+; The wide Control Panel's Display page - the mode changer (SPEC.md 135.9).
 ; %included by cpwide.inc after the widget kit, into CPWIDE.DRV's image.
 ; Prefix `cpv_`. kern_big, kern_emu and kern_mega only (cpwide.inc's %ifdef).
 ;
-; IT READS WHAT THE HARDWARE OFFERS AND ENCODES NO LIST (SPEC.md 134.9): the
+; IT READS WHAT THE HARDWARE OFFERS AND ENCODES NO LIST (SPEC.md 135.9): the
 ; adapters are [vid_avail]'s bits, the modes VESA.DRV's VXV_INFO records
 ; (SPEC.md 120.10), one call a record, through CPG_VXCALL.
 ;
-; ITS STATE is the working area's page area (CPW_W_PAGE, SPEC.md 134.5) plus
+; ITS STATE is the working area's page area (CPW_W_PAGE, SPEC.md 135.5) plus
 ; one byte, CPV_LIVE: 1 while that area is this page's. cpwide.inc's cpw_page
 ; clears it whenever another page is drawn, so coming back to Display builds
 ; the page again from the running mode, and a repaint of Display - every
 ; vid_switch's, through cp_repost - keeps the selection and a running test.
 ;
-; NOTHING IS DRAWN AFTER CPG_VIDSET OR CPG_VIDARR (SPEC.md 31.10, 134.9.2):
+; NOTHING IS DRAWN AFTER CPG_VIDSET OR CPG_VIDARR (SPEC.md 31.10, 135.9.2):
 ; the switch re-fits every window and cp_repost hands the screen to ui_task,
 ; whose repaint comes back here as CWV_PAINT with the new origin.
 ; =============================================================================
@@ -24,12 +24,12 @@ section .modv
 
 ; --- the state ---------------------------------------------------------------
 CPV_LIVE    equ CPW_W_FULL + 1  ; db 1 = the page area is this page's (the
-%if CPV_LIVE >= CPW_W_KIT       ;    working area's pad byte, SPEC.md 134.9.2)
+%if CPV_LIVE >= CPW_W_KIT       ;    working area's pad byte, SPEC.md 135.9.2)
   %error "cpw_vid: CPV_LIVE needs the pad byte between CPW_W_FULL and the kit"
 %endif
 CPV_TB      equ CPW_W_PAGE + 0  ; the table's block (cpk_table, CPKT_SIZE)
 CPV_FLT     equ CPW_W_PAGE + 18 ; db the filter tab
-CPV_RSV     equ CPW_D_ON        ; DEAD: CPW_D_ON is a KEPT byte (134.5.1) now -
+CPV_RSV     equ CPW_D_ON        ; DEAD: CPW_D_ON is a KEPT byte (135.5.1) now -
 %if CPV_RSV != CPW_D_ON         ;    cpw_listev reads on any page
   %error "cpw_vid: CPV_RSV must be CPW_D_ON's byte"
 %endif
@@ -54,7 +54,7 @@ CPV_GD      equ CPW_W_PAGE + 70 ; db ...its depth
 CPV_MSEL    equ CPV_TB + CPKT_SEL   ; the table's selected row IS the block's
 CPV_NMAX    equ 16              ; records kept (VESA.DRV's VX_NMODES)
 
-; --- the geometry, content-relative (SPEC.md 134.9.2) -------------------------
+; --- the geometry, content-relative (SPEC.md 135.9.2) -------------------------
 CPV_L       equ CPW_PX + 4      ; the page's left
 CPV_AY      equ 48              ; the Adapter and Mode preview groups' top...
 CPV_AB      equ 122             ; ...and bottom
@@ -361,14 +361,14 @@ cpv_key:
 
 ; -----------------------------------------------------------------------------
 ; cpv_tick - the 1 Hz tick (cpw_tick's dispatch; [cp_tickp] = CP_IVID during
-; a test, SPEC.md 134.9.4): count, revert at 0, and draw the countdown when
+; a test, SPEC.md 135.9.4): count, revert at 0, and draw the countdown when
 ; the window can be drawn on (SPEC.md 14's background contract)
 ; -----------------------------------------------------------------------------
 cpv_tick:
     call cpv_testing
     jc .r
     dec byte [es:CPV_LEFT]
-    jz cpv_revert               ; no answer: back to what ran (134.9.3)
+    jz cpv_revert               ; no answer: back to what ran (135.9.3)
     mov al, KIND_CTRL
     KDOOR inst_find_kind        ; DI = the panel's record
     jc .r
@@ -385,7 +385,7 @@ cpv_tick:
 ; -----------------------------------------------------------------------------
 ; cpv_quit - the panel is closing (cpw_close's first act): a test running is
 ; reverted while the claim is still held, so SYSTEM.CFG is written with what
-; ran before it (SPEC.md 134.9.3). The gfx lock is taken unless the running
+; ran before it (SPEC.md 135.9.3). The gfx lock is taken unless the running
 ; task holds it already
 ; -----------------------------------------------------------------------------
 cpv_quit:
@@ -401,7 +401,7 @@ cpv_quit:
     ret
 
 ; =============================================================================
-; Test... (SPEC.md 134.9.3)
+; Test... (SPEC.md 135.9.3)
 ; =============================================================================
 
 ; cpv_test - save what runs, start the countdown, switch. Draws nothing
@@ -506,7 +506,7 @@ cpv_sclass:
     ret
 
 ; =============================================================================
-; The model: the records, the filter's tabs and the rows (SPEC.md 134.9.1)
+; The model: the records, the filter's tabs and the rows (SPEC.md 135.9.1)
 ; =============================================================================
 
 ; cpv_info - VXV_INFO through the gate (SPEC.md 120.10): CL = 0FFh the card,
@@ -703,7 +703,7 @@ cpv_dbit:
 
 ; -----------------------------------------------------------------------------
 ; cpv_reach - is record BL the one its class reaches (VESA.DRV's vx_find: the
-;             deepest of the class, ties to the first - SPEC.md 134.9.1)?
+;             deepest of the class, ties to the first - SPEC.md 135.9.1)?
 ; out: CF = 0 yes, CF = 1 no (or no class). Keeps every register
 ; -----------------------------------------------------------------------------
 cpv_reach:
@@ -801,7 +801,7 @@ cpv_slot:
 cpv_aord:   db VID_VGA, VID_VESA, VID_EGA, VID_HERC, VID_CGA
 
 ; =============================================================================
-; Text: the 12-row ROW every line on the page is (SPEC.md 134.9.2)
+; Text: the 12-row ROW every line on the page is (SPEC.md 135.9.2)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -1036,7 +1036,7 @@ cpv_sty2:
     dec ax
     ret
 
-; cpv_c0 - AX = the controls' top (SPEC.md 134.9.2: the status top - 54)
+; cpv_c0 - AX = the controls' top (SPEC.md 135.9.2: the status top - 54)
 cpv_c0:
     call cpw_sty
     sub ax, 54
@@ -1050,7 +1050,7 @@ cpv_r:
 
 ; -----------------------------------------------------------------------------
 ; cpv_ground - the page's ground: the margins and the gaps between the groups,
-; eight spans that touch no group (SPEC.md 134.9.2)
+; eight spans that touch no group (SPEC.md 135.9.2)
 ; -----------------------------------------------------------------------------
 cpv_ground:
     call cpv_wh
@@ -1234,7 +1234,7 @@ cpv_arows:
 ; -----------------------------------------------------------------------------
 ; cpv_prev - the Mode preview group: a monitor drawn to the chosen mode's
 ; aspect - a bezel and the screen, and the ground in four spans round them -
-; and two lines beside it (SPEC.md 134.9.1)
+; and two lines beside it (SPEC.md 135.9.1)
 ; -----------------------------------------------------------------------------
 CPV_ZL      equ CPV_PX + 1      ; the picture zone: x ZL..ZL+79, y ZT..AB-1
 CPV_ZT      equ CPV_AY + CPK_BANDH
@@ -1372,7 +1372,7 @@ cpv_prev:
 
 ; -----------------------------------------------------------------------------
 ; cpv_modes - the Modes group: the VESA adapter's filter, header and table, or
-; for any other adapter what it is in a line (SPEC.md 134.9.1)
+; for any other adapter what it is in a line (SPEC.md 135.9.1)
 ; -----------------------------------------------------------------------------
 cpv_modes:
     call cpv_c0
@@ -1401,7 +1401,7 @@ cpv_modes:
     jnz .l2
     mov si, cpv_s_load          ; ...and where more come from, or that the
     cmp word [vesa_row + DRVR_SEG], 0   ; driver IS loaded and attaches at
-    je .ld                      ; the next start (SPEC.md 120.4, 134.9.1)
+    je .ld                      ; the next start (SPEC.md 120.4, 135.9.1)
     mov si, cpv_s_rst
 .ld:
     call cpw_strcat
@@ -1495,7 +1495,7 @@ cpv_tabs:
     ret
 
 ; -----------------------------------------------------------------------------
-; cpv_trow - the table's row painter (CPKT_ROW, SPEC.md 134.5): a row as
+; cpv_trow - the table's row painter (CPKT_ROW, SPEC.md 135.5): a row as
 ; Resolution, Colours, Memory and Status, one ROW
 ; in:  AX = the row, BL = its ground, CX/DX = left/top, DI = width. Keeps all
 ; -----------------------------------------------------------------------------
@@ -1652,7 +1652,7 @@ cpv_rtext:
     ret
 
 ; =============================================================================
-; The controls (SPEC.md 134.9.1): two check boxes and two buttons under the
+; The controls (SPEC.md 135.9.1): two check boxes and two buttons under the
 ; table, Keep and Revert in their group, the desktop line's three radios
 ; =============================================================================
 
@@ -1846,7 +1846,7 @@ cpv_ctlok:
     test byte [vid_avail], VID_A_VGA
     jz .no
     cmp byte [vid_kind], VID_VESA
-    je .no                      ; a VESA desktop: its DAC is its own (134.9.1)
+    je .no                      ; a VESA desktop: its DAC is its own (135.9.1)
     jmp short .yes
 .switch:                        ; Apply / Test...: not what is running
     mov al, [es:CPV_ASEL]
@@ -1987,7 +1987,7 @@ cpv_hit:
     ret
 
 ; cpv_kpos - the Keep group's place: AX/BX = left/top, CX = right. Under the
-; table in the face; at (4, 4) in the small state (SPEC.md 134.9.3). Keeps DX
+; table in the face; at (4, 4) in the small state (SPEC.md 135.9.3). Keeps DX
 cpv_kpos:
     call cpv_big
     jb .small

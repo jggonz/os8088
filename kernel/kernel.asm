@@ -2444,7 +2444,7 @@ section .mods    start=MODSER_START vstart=0 ; SERIAL.DRV (SPEC.md 115)
 section .modq    start=MODQ_START vstart=0   ; KEYBOARD.DRV (SPEC.md 9.16)
 section .modqb   nobits vstart=MODQ_IMG
 %ifdef KERN_BIG
-section .modv    start=MODV_START vstart=0   ; CPWIDE.DRV (SPEC.md 134.2)
+section .modv    start=MODV_START vstart=0   ; CPWIDE.DRV (SPEC.md 135.2)
 section .modvb   nobits vstart=MODV_IMG ; ...its scratch: the asset claim's
                                 ; one name (cpwide.inc)
 %endif
@@ -2979,7 +2979,7 @@ api_gfx_blit4:                    ; (named: SPEC.md 5.4.1.5's walk far-calls it)
                                   ;          are the caller's to repaint
 ; --- and from here on, the slots added since ----------------------------------
 apic_font_run:                    ; (named: CPWIDE.DRV draws its own strings
-                                  ; through it, SPEC.md 134.5)
+                                  ; through it, SPEC.md 135.5)
     OSAPI_XCELL font_run_x      ; 0x012D - one OPAQUE text run (SPEC.md 6.1):
                                   ;          CX = x, DX = y, SI = ASCIIZ,
                                   ;          AL = ink, AH = background. Draws
@@ -6510,7 +6510,7 @@ EXT_DEAD    equ 14              ; ui_drag_dead, UNGATED: registers kept (12 and
                                 ; resident thunks, the probe, and HIBER.DRV.
                                 ; After mod.inc for MOD_*, a size here
 %include "cpwide.inc"           ; CPWIDE.DRV, the wide Control Panel's face
-                                ; (SPEC.md 134) - after ctrl.inc, whose
+                                ; (SPEC.md 135) - after ctrl.inc, whose
                                 ; numbers it reads; kern_big only
 
 ; --- the modules' far-pointer slots (SPEC.md 2.8.1): ONE BLOCK PER MODULE,
@@ -6561,7 +6561,7 @@ mod_fpt:
     MODFP SERFP, MOD_SER, SER_NENT
     MODFP KLFP, MOD_KEYBOARD, KL_NENT
 %ifdef KERN_BIG
-    MODFP CPWFP, MOD_CPW, CPW_NENT ; the wide panel's one entry (SPEC.md 134.4)
+    MODFP CPWFP, MOD_CPW, CPW_NENT ; the wide panel's one entry (SPEC.md 135.4)
 %endif
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
@@ -9139,7 +9139,7 @@ MODSER_START equ MODN_START + MODN_SIZE   ; serial follows the big desktop modul
 %endif
 MODQ_START   equ MODSER_START + SER_IMAGE_SIZE
 %ifdef KERN_BIG
-MODV_START   equ MODQ_START + MODQ_SIZE ; CPWIDE.DRV (SPEC.md 134.2), MOD_CPW
+MODV_START   equ MODQ_START + MODQ_SIZE ; CPWIDE.DRV (SPEC.md 135.2), MOD_CPW
 MODQ_NEXT    equ MODV_START + MODV_SIZE ; ...and what follows it
 %else
 MODQ_NEXT    equ MODQ_START + MODQ_SIZE
@@ -9410,7 +9410,7 @@ mod_map:
     dd MODQ_START, MODQ_SIZE
     dw KL_NENT
 %ifdef KERN_BIG
-    dd MODV_START, MODV_SIZE    ; the wide Control Panel (SPEC.md 134.2)
+    dd MODV_START, MODV_SIZE    ; the wide Control Panel (SPEC.md 135.2)
     dw CPW_NENT
 %endif
 %ifdef OS88_FSCKIMG

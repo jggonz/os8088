@@ -1,10 +1,10 @@
 # drivers/catalog.toml - what each loadable driver IS, in plain words.
 #
-# The wide Control Panel's Drivers page (SPEC.md 134.8) shows a category icon,
+# The wide Control Panel's Drivers page (SPEC.md 135.8) shows a category icon,
 # a long name and a one- or two-line description for every driver. The kernel
 # knows only a driver's file, title and class (drv_tab, SPEC.md 51), so the
 # words live here, outside the kernel, and tools/cpwdat.py compiles them into
-# CPWIDE.DAT (SPEC.md 134.7). Nothing here costs a resident byte.
+# CPWIDE.DAT (SPEC.md 135.7). Nothing here costs a resident byte.
 #
 # HOW TO ADD A DRIVER
 #   1. Add its row to drv_tab (kernel/driver.inc) as usual.

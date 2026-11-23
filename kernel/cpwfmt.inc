@@ -1,4 +1,4 @@
-; kernel/cpwfmt.inc - CPWIDE.DAT's layout (SPEC.md 134.6, 134.7).
+; kernel/cpwfmt.inc - CPWIDE.DAT's layout (SPEC.md 135.6, 135.7).
 ;
 ; Shared by the wide Control Panel (kernel/cpw*.inc, assembled into
 ; CPWIDE.DRV) and checked by tools/cpwdat.py, which builds the file from
@@ -81,7 +81,7 @@ CWI32_NET    equ 10
 CWI32_GEAR   equ 11
 CWI32_N      equ 12
 
-; ---- the driver catalog (SPEC.md 134.7) -------------------------------------
+; ---- the driver catalog (SPEC.md 135.7) -------------------------------------
 CWD_CAT_SZ   equ 64            ; one fixed record per driver FILE
 CWD_C_FILE   equ 0             ; db [12]  8.3 name, NUL-padded: the key
 CWD_C_CAT    equ 12            ; db       CWC_*

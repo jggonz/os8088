@@ -1,13 +1,13 @@
 ; =============================================================================
 ; os8088 - cpwkit.inc
 ;
-; The wide Control Panel's widget kit (SPEC.md 134.5): the drawing procs every
+; The wide Control Panel's widget kit (SPEC.md 135.5): the drawing procs every
 ; wide page draws with, %included by cpwide.inc into CPWIDE.DRV's image, so
-; the wave-2 pages that join that image (SPEC.md 134.8, 134.9, 134.11) draw
+; the wave-2 pages that join that image (SPEC.md 135.8, 135.9, 135.11) draw
 ; with these and not with copies. Prefix `cpk_` for a widget, `cpw_` for the
 ; four primitives the chrome shares with them.
 ;
-; THE COMMON CONTRACT, which SPEC.md 134.5 pins per proc:
+; THE COMMON CONTRACT, which SPEC.md 135.5 pins per proc:
 ; - every coordinate is CONTENT-relative (the window's content box: the
 ;   working area's CPW_W_OX/OY), so a page never adds an origin;
 ; - ES = the asset claim (cpw_ev's), DS = KERNEL_SEG, the gfx lock held;
@@ -172,7 +172,7 @@ cpw_runp:
 ;      32x32; BL = the ground colour; CX/DX = x/y, content-relative
 ; out: nothing; every register kept
 ;
-; The file holds each icon's pixels and its mask (SPEC.md 134.6: one bit a
+; The file holds each icon's pixels and its mask (SPEC.md 135.6: one bit a
 ; pixel, 1 = opaque, a transparent pixel's nibble 0). The pixels are copied
 ; into the working area's staging buffer with every transparent nibble made
 ; the ground, and the buffer goes down in ONE OSAPI_GFX_BLIT4 - so an icon on
@@ -262,7 +262,7 @@ cpw_icon:
     ret
 
 ; =============================================================================
-; The widgets (SPEC.md 134.5)
+; The widgets (SPEC.md 135.5)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -400,7 +400,7 @@ cpk_inrect:
 ; out: CX = the x just past the last tab; every other register kept
 ;
 ; A tab is its label with 4px of its ground either side and CPK_TABH rows:
-; the chosen one white on blue (the list's selection, SPEC.md 134.3), the
+; the chosen one white on blue (the list's selection, SPEC.md 135.3), the
 ; rest black on light grey, a 1px white gap between them. Each tab is the run
 ; and its four spans, so a tab that changes state is redrawn with nothing
 ; under it: cpk_tabs again, whole - six to fifteen primitives.

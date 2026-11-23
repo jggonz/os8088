@@ -1,19 +1,19 @@
 ; =============================================================================
 ; os8088 - cpw_drv.inc
 ;
-; The wide Drivers page (SPEC.md 134.8): %included by cpwide.inc into
+; The wide Drivers page (SPEC.md 135.8): %included by cpwide.inc into
 ; CPWIDE.DRV's image, in `.modv`. Prefix `cpd_`. It draws NATIVELY with the
 ; widget kit (cpwkit.inc) and changes state only through CPE_GATE's driver ops
-; (CPG_DRVON / OFF / WANT / TTL / STAT / MEM, SPEC.md 134.4), so the compact
+; (CPG_DRVON / OFF / WANT / TTL / STAT / MEM, SPEC.md 135.4), so the compact
 ; page and this one run ONE body for a load, an unload and a want bit.
 ;
-; WHAT IT SHOWS (SPEC.md 134.8): category filter tabs (All, then the
+; WHAT IT SHOWS (SPEC.md 135.8): category filter tabs (All, then the
 ; categories with a row on this kernel), a scrolling table of every drv_tab row
 ; - category icon, name, status badge, memory, Start at boot - and a DETAILS
 ; box for the selected row with Load, Unload, Settings... and Ports....
 ;
 ; ITS STATE is in the working area's page block (CPW_W_PAGE, 80 bytes), which
-; the page showing owns whole (SPEC.md 134.5.1), and NOTHING is kept between
+; the page showing owns whole (SPEC.md 135.5.1), and NOTHING is kept between
 ; visits except the filter and the selection, which are the working area's
 ; KEPT bytes (CPW_W_DFLT, CPW_W_DSEL) - outside the block, because the Theme
 ; and Display pages lay their own maps over all of it. Everything is
@@ -28,7 +28,7 @@
 section .modv                   ; CPWIDE.DRV's image, like the file that includes
                                 ; this one (os88ovlchk reads each file's own sections)
 
-; --- the state (SPEC.md 134.5.1) ----------------------------------------------
+; --- the state (SPEC.md 135.5.1) ----------------------------------------------
 ; What outlives a visit - the filter, the selection, and whether the page block
 ; is still this page's - is in the working area's KEPT bytes, which no other
 ; page writes. Everything in the page block is rebuilt by cpd_paint, and on a
@@ -47,7 +47,7 @@ CPD_ROWS    equ CPD_TB + CPKT_SIZE + 12 ; db x DRV_MAX: the drv_tab rows listed
 ; (kernel.asm, after driver.inc, checks CPD_ROWS + DRV_MAX against the block)
 CPW_D_ON    equ CPD_ON                  ; (cpwide.inc's name for it)
 
-; --- the geometry, content-relative (SPEC.md 134.8) ---------------------------
+; --- the geometry, content-relative (SPEC.md 135.8) ---------------------------
 CPD_XL      equ CPW_PX + 8              ; the table's, the tabs' and the box's left
 CPD_TABY    equ CPW_BY + 4              ; the tab strip's top
 CPD_HDRY    equ CPD_TABY + CPK_TABH + 2 ; the column heads' top
@@ -677,7 +677,7 @@ cpd_blit12:
     ret
 
 ; -----------------------------------------------------------------------------
-; cpd_row - the table's row painter (CPKT_ROW, SPEC.md 134.5)
+; cpd_row - the table's row painter (CPKT_ROW, SPEC.md 135.5)
 ; in:  AX = the list's row, BL = its ground (CWHITE, CBLUE selected), CX/DX =
 ;      left/top, DI = the width without the bar. out: nothing; every register
 ;      kept
@@ -1101,7 +1101,7 @@ cpd_wc:
     ret
 
 ; -----------------------------------------------------------------------------
-; The buttons: Load, Unload, Settings..., Ports... (SPEC.md 134.8). Each is
+; The buttons: Load, Unload, Settings..., Ports... (SPEC.md 135.8). Each is
 ; (x from the box's left, width, label); a press arms CPW_ID0 + its number and
 ; acts on the release, over it (SPEC.md 13.8.3)
 ; -----------------------------------------------------------------------------

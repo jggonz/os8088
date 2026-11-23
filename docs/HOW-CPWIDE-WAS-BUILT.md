@@ -1,7 +1,7 @@
 # How the wide Control Panel was built
 
 A diary, kept as the work happened, for later reuse. Observations are
-marked as such; intentions are marked as plans. The contract is SPEC.md 134
+marked as such; intentions are marked as plans. The contract is SPEC.md 135
 and the story list is [docs/plans/CPWIDE-PLAN.md](plans/CPWIDE-PLAN.md).
 
 ## 2026-11-21 - the brief, and why a second face
@@ -23,7 +23,7 @@ What we found first (observed, at main 528648017):
   control under the pointer. Rewriting that logic for a second face would
   have been the bloat the owner ruled out.
 
-So the design (SPEC.md 134) is a SECOND module loaded beside the first only
+So the design (SPEC.md 135) is a SECOND module loaded beside the first only
 on a colour display of 640x480 or more: `CTRL.DRV` keeps every state change
 and every compact page; `CPWIDE.DRV` draws the wide chrome and three pages
 natively, hosts the rest at an origin inside its larger page area (the

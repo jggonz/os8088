@@ -1,15 +1,15 @@
 ; =============================================================================
 ; os8088 - cpwlay.inc
 ;
-; The wide Control Panel's shared numbers (SPEC.md 134.3, 134.4): the layout
+; The wide Control Panel's shared numbers (SPEC.md 135.3, 135.4): the layout
 ; both images agree on, the events CTRL.DRV forwards to CPWIDE.DRV, and the
 ; gate's opcodes CPWIDE.DRV calls CTRL.DRV with. Constants only - no code, no
 ; data, no section - %included ONCE, by ctrl.inc (kern_big, kern_emu and
-; kern_mega; kern_small never assembles a byte of SPEC.md 134), after CP_DIVX
+; kern_mega; kern_small never assembles a byte of SPEC.md 135), after CP_DIVX
 ; and before cpwide.inc, which reads them too.
 ; =============================================================================
 
-; --- the layout, CONTENT-relative (SPEC.md 134.3) -----------------------------
+; --- the layout, CONTENT-relative (SPEC.md 135.3) -----------------------------
 ; Every inner dimension derives from the content box, so a third window size is
 ; a row in cpw_open's table and not a second layout.
 CPW_LW    equ 120               ; the page list's width: x 0..CPW_LW-1
@@ -19,7 +19,7 @@ CPW_BY    equ CPW_HDRH          ; ...and the page BODY starts under it
 CPW_STH   equ 14                ; the status line: the content's last 14 rows,
                                 ; with a 1px rule above them
 
-; A HOSTED compact page (SPEC.md 134.3) is drawn by CTRL.DRV's own procs at an
+; A HOSTED compact page (SPEC.md 135.3) is drawn by CTRL.DRV's own procs at an
 ; ORIGIN: cp_origin answers the content origin shifted by these two, so every
 ; `add di, CP_RX` in the compact code lands the pane where the wide face wants
 ; it - and cp_page's own erase, from DI + CP_DIVX + 1, starts exactly at the
@@ -27,18 +27,18 @@ CPW_STH   equ 14                ; the status line: the content's last 14 rows,
 CPW_HX    equ CPW_PX - CP_DIVX - 1
 CPW_HY    equ CPW_BY
 
-; the two window sizes (SPEC.md 134.2): FRAME width and height
+; the two window sizes (SPEC.md 135.2): FRAME width and height
 CPW_W1    equ 616               ; on a 640x480 primary
 CPW_H1    equ 408
 CPW_W2    equ 760               ; on one of at least 800x600
 CPW_H2    equ 520
-CPW_FITX  equ 16                ; the open's predicate (SPEC.md 134.2): the work
+CPW_FITX  equ 16                ; the open's predicate (SPEC.md 135.2): the work
                                 ; area must be CPW_W1 + this wide, because
                                 ; wm_fit's snap (SPEC.md 11.94) may move the
                                 ; frame up to 7 px and widen it by 2, and a
                                 ; frame snapped DOWN instead is under the face
 
-; --- the events CTRL.DRV forwards (SPEC.md 134.4): BP = one of these at
+; --- the events CTRL.DRV forwards (SPEC.md 135.4): BP = one of these at
 ; --- CPWIDE.DRV's one entry. The first five carry SI = the window
 CWV_PAINT equ 0                 ; W_PAINT
 CWV_CLICK equ 1                 ; W_ONCLICK   CX/DX = the SCREEN point
@@ -52,7 +52,7 @@ CWV_CLOSE equ 7                 ; the panel is closing: free the asset claim
 CWV_OPEN  equ 8                 ; the panel is opening: read CPWIDE.DAT, size
 CWV_N     equ 9                 ; the window. out CF = 1 refused (compact)
 
-; --- CPE_GATE's opcodes (SPEC.md 134.4): AH = one of these -------------------
+; --- CPE_GATE's opcodes (SPEC.md 135.4): AH = one of these -------------------
 ; The first CPG_NFAR are the compact face's own FAR bodies, entered past their
 ; forward with the edge's registers; the rest are near procs and return
 ; through the gate's `retf`.
@@ -80,13 +80,13 @@ CPG_THMCUST equ 18              ; Customize... (THMPAL.DRV, SPEC.md 76.14.14)
 CPG_SAVER   equ 19              ; the screen saver's settings (SPEC.md 79.7)
 CPG_WDSET   equ 20              ; SYSTEM.CFG owed at the close (SPEC.md 31.8)
 CPG_REPOST  equ 21              ; ...and every window repainted (cp_repost)
-                                ; 22-24 were reserved for S7 (SPEC.md 134.8),
+                                ; 22-24 were reserved for S7 (SPEC.md 135.8),
                                 ; which needed none: refused (cpg_none)
 CPG_VIDARR  equ 25              ; AL = 0 Single / 1 Right / 2 Below: the
-                                ; desktop arrangement, now (SPEC.md 134.9.5)
+                                ; desktop arrangement, now (SPEC.md 135.9.5)
 CPG_GLYPH   equ 26              ; os88ui_glyph: CX/DX screen, AL = OS88UI_G*,
-                                ; BL = 1 greyed - CTRL.DRV's own (134.9.5)
+                                ; BL = 1 greyed - CTRL.DRV's own (135.9.5)
                                 ; 27, 28 reserved for S8, unused: refused
 CPG_THMPRE  equ 29              ; a preset row was installed: apply Color
-                                ; (SPEC.md 134.11)
+                                ; (SPEC.md 135.11)
 CPG_N       equ 30

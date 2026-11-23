@@ -1,4 +1,4 @@
-# Wide Control Panel artwork (SPEC.md 134.6)
+# Wide Control Panel artwork (SPEC.md 135.6)
 
 `cp-icons-16.png` (256x32, 16x16 cells, 16 x 2) and `cp-icons-32.png`
 (384x32, twelve 32x32 cells) are the SOURCE of every icon in `CPWIDE.DAT`.

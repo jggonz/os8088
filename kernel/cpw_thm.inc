@@ -1,10 +1,10 @@
 ; =============================================================================
 ; os8088 - cpw_thm.inc
 ;
-; The wide Theme page (SPEC.md 134.11), assembled into CPWIDE.DRV after the
+; The wide Theme page (SPEC.md 135.11), assembled into CPWIDE.DRV after the
 ; chrome (cpwide.inc %includes it). Prefix `cpt_`. ES = the asset claim, DS =
 ; KERNEL_SEG, the gfx lock held, every coordinate CONTENT-relative (the kit's
-; contract, SPEC.md 134.5). Internal procs clobber what they like but ES, DS.
+; contract, SPEC.md 135.5). Internal procs clobber what they like but ES, DS.
 ;
 ; WHAT IS DRAWN. Four preview cards, the eight Color presets, an Effects group
 ; (window animations, SPEC.md 11.99) and a Screen Saver group. Cards, swatches
@@ -25,7 +25,7 @@ CPT_TOP     equ 52              ; the cards' top
 CPT_L       equ CPW_PX + 8      ; the groups' and the first card's left
 
 ; --- the page's working bytes: the page block (CPW_W_PAGE, 80), this page's
-; --- whole while it shows (SPEC.md 134.5.1); rebuilt on every paint ---------
+; --- whole while it shows (SPEC.md 135.5.1); rebuilt on every paint ---------
 CPT_W       equ CPW_W_PAGE + 0  ; dw card width
 CPT_H       equ CPW_W_PAGE + 2  ; dw card height
 CPT_TG      equ CPW_W_PAGE + 4  ; dw the presets group's top
@@ -53,7 +53,7 @@ CPT_ID_SAVE equ CPW_ID0 + 2
 R_          equ 80h             ; "from the far edge", in a table's coordinate
 
 ; -----------------------------------------------------------------------------
-; cpt_geo - the page's geometry from the content box (SPEC.md 134.11)
+; cpt_geo - the page's geometry from the content box (SPEC.md 135.11)
 ; -----------------------------------------------------------------------------
 cpt_geo:
     mov ax, [es:CPW_W_CW]
@@ -82,7 +82,7 @@ cpt_geo:
 ; cpw_thm_paint - the whole page (cpw_page's, while [cp_sel] is CP_ITHM)
 ; -----------------------------------------------------------------------------
 cpw_thm_paint:                  ; (cpw_page has cleared CPW_D_ON: the page
-                                ; block is this page's now, SPEC.md 134.5.1)
+                                ; block is this page's now, SPEC.md 135.5.1)
     call cpw_sty                ; the ground, the page area to the status rule
     mov dx, ax
     dec dx
@@ -551,7 +551,7 @@ cpw_thm_click:
     je .r                       ; the live preset: nothing to change
 .inst:
     mov al, THM_PRESET_ROWB     ; the row over the Color row, its number into
-    mul bl                      ; 'TP' - what tv_install does (SPEC.md 134.11)
+    mul bl                      ; 'TP' - what tv_install does (SPEC.md 135.11)
     add ax, cpt_pre
     mov si, ax
     push ds
