@@ -4965,17 +4965,23 @@ cp_vid_btn:
 ; -----------------------------------------------------------------------------
 ; cp_vid_fcok - is Force Color available here? (SPEC.md 31.10.4, module
 ;               internal)
-; out: CF = 0 yes, CF = 1 greyed - there is no VGA in this machine
+; out: CF = 0 yes, CF = 1 greyed - there is no VGA in this machine, or the
+;      desktop is the VESA renderer's (its DAC is not the BIOS's)
 ; clobbers: nothing (flags)
 ;
 ; SPEC.md 47 rule 1's one predicate: the label's pen, the glyph's DIS and the
 ; click's refusal all read it. [vid_avail] is a fact fixed at boot (39.11.1).
 ; -----------------------------------------------------------------------------
 cp_vid_fcok:
-    test byte [vid_avail], VID_A_VGA    ; `test` clears CF
-    jnz .ok
+    test byte [vid_avail], VID_A_VGA
+    jz .no
+    cmp byte [vid_kind], VID_VESA       ; a VESA desktop's DAC 0..63 is its
+    jne .ok                             ; own palette (SPEC.md 134.9.1)
+.no:
     stc
+    ret
 .ok:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
