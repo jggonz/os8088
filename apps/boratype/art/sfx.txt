@@ -1,0 +1,34 @@
+# Original Boratype effects; order is bt_audio.c's cues, tick=18.2065Hz.
+sfx menu
+ D6:1 A6:1
+end
+sfx start
+ D5:1 F#5:1 A5:2
+end
+sfx correct
+ 1800:1
+end
+sfx wrong
+ 180:1 120:1
+end
+sfx streak
+ G5:1 B5:1 D6:2
+end
+sfx pause
+ A5:1 D5:2
+end
+sfx resume
+ D5:1 A5:2
+end
+sfx complete duck
+ D5:1 A5:1 D6:3
+end
+sfx failure duck
+ E4:2 D4:2 B3:3
+end
+sfx record duck
+ E5:1 G5:1 B5:1 E6:1 B6:3
+end
+sfx reaction duck
+ 600:1 450:1 700:1
+end

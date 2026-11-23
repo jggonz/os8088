@@ -1,0 +1,104 @@
+{
+  "vga-play.png": {
+    "sha256": "e8cd3d9938b41c445bb241b2a5947e799590ed4a86df4a57d5b45b6058bab043",
+    "capture": "build/boratype-final/vga/03d-mixed-fullscreen-input.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "vga-window.png": {
+    "sha256": "b7545816354406c6e3dc065e5fbc3ce47a3c80d32165295faa3ed9336bdd7f0e",
+    "capture": "build/boratype-final/vga/03c-mixed-native-input.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "vga-result.png": {
+    "sha256": "0ca63f88fe05f72f7644bdc43fcaecf9522bb8b2cf30e9040f828aafcf225e7d",
+    "capture": "build/boratype-final/vga/03-results.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "profiles.png": {
+    "sha256": "3f90530c9de09ba2db0b2ace28ff39cb279bd551be521249a3f8a109de3ccb78",
+    "capture": "build/boratype-final/vga/01b-four-profiles.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "settings.png": {
+    "sha256": "f46ed23f6901ff527e7ccc5f97ee0d7c4d649270baed12adc18ee9bdd7fb4c4e",
+    "capture": "build/boratype-final/vga/07-settings.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "no-input.png": {
+    "sha256": "1ecd22e4a3b1f611b610a63ba0fe4157efed4169594ccbcda09a99f2cebf6dca",
+    "capture": "build/boratype-final/deadlines/challenge-60-result.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "cga-mono.png": {
+    "sha256": "d324c512390a5bfd7eef234db565e058ea171e58df1eedad8576874676c2b6c0",
+    "capture": "build/boratype-final/cgamono/03d-mixed-fullscreen-input.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "cga-color.png": {
+    "sha256": "e15c4ee4ee20ea94fa79201a0fafbb084692622c3687f7c2f3bfcf016116d1b0",
+    "capture": "build/boratype-final/cgacolor/adapter-cga320-error.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "ega.png": {
+    "sha256": "ab9fdee960415ae9adf18d83e4cc92fc32c6fa5d256312f84d294b388aba2e69",
+    "capture": "build/boratype-final/ega/adapter-native-fullscreen-play.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "vesa800.png": {
+    "sha256": "96b8fe8a4ba7edc9a64afe75e8bfb6a397b70c3451e299281ea9e56e8ea2181c",
+    "capture": "build/boratype-final/vesa800/adapter-native-fullscreen-play.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "vesa1024.png": {
+    "sha256": "fc8ae9113ea7d8a40be509d7ab9b659558dca9f9a0cb39cdc39749970219fc0d",
+    "capture": "build/boratype-final/vesa1024/adapter-native-fullscreen-play.png",
+    "package_sha256": "27e053bc6696dc9ef5310ffbf7879d8208167253238ac2c83f5c3aea2b9809cf",
+    "kernel_sha256": "7cbb2951c624587a8d66a5b74660145976ddb50a3f4513433d6240cfff3d24fb"
+  },
+  "mega286.png": {
+    "sha256": "ba46b6404075c023150fd71059a8bae98caeb2dc589cc52ed8eeaf30f57f6d44",
+    "capture": "build/boratype-final/mega286/03d-mixed-fullscreen-input.png",
+    "package_sha256": "67cfc7a2ff08f1cdc513b1509e751c3e26c0b06cce1c74d08bbecef0d21747cd",
+    "kernel_sha256": "df835c1900e3b8bba6523889ccec12f88c0b56172f3fd49683d1f34db8955a1c",
+    "high_memory": {
+      "region_selector": 4284,
+      "region_base": 3991552,
+      "band_selector": 4348,
+      "band_base": 3983360
+    }
+  },
+  "weak-practice.png": {
+    "sha256": "da4f79dd6237ca082a684960b3b959c6c473476570d0f333eeeee5c60e378fcf",
+    "capture": "build/boratype-final/practice/05-sampled-weak-key.png",
+    "package_sha256": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3",
+    "kernel_sha256": "c764eaccfa8698751782c10c6a9f386b5b2ddfcfc7c30c7866eacd79c23bac6e"
+  },
+  "digits-practice.png": {
+    "sha256": "2e4b8707cdcfcff7ba9c7ae5477831af70295da2793eb2ab71df8433ccf87765",
+    "capture": "build/boratype-final/practice/07-selected-digits.png",
+    "package_sha256": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3",
+    "kernel_sha256": "c764eaccfa8698751782c10c6a9f386b5b2ddfcfc7c30c7866eacd79c23bac6e"
+  },
+  "comeback.png": {
+    "sha256": "979d4f7627f743e10b61e685b60007b37f1329c82a1be231906418cc3cdb1336",
+    "capture": "build/boratype-final/practice/03-comeback.png",
+    "package_sha256": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3",
+    "kernel_sha256": "c764eaccfa8698751782c10c6a9f386b5b2ddfcfc7c30c7866eacd79c23bac6e"
+  },
+  "high-caption.png": {
+    "sha256": "4ea7289f963323f40f2913a7df38362136e1333adb87df7d76ae4879733433ae",
+    "capture": "build/boratype-final/high-caption/audio-three-errors.png",
+    "package_sha256": "948364ac1bf561b3416228ff138e1e9db9841054aa8a337c1b225f16905d59d3",
+    "kernel_sha256": "f6438371f1ce8f3c79b3e6fa5da9ec02b3198ae5ea89711280368651a1620dac"
+  }
+}

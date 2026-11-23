@@ -258874,6 +258874,14 @@ routines that follow it:
 Byteopoly's banks: song bank 1,129 bytes (4 songs, 37 pitches, 7 patches,
 20 patterns), effects bank 357 (20 effects), of a 5 KB allowance.
 
+## 134. Borat Teaches Typing (`apps/boratype/`)
+
+Native C typing tutor. Its binding contract is docs/BORATYPE-SPEC.md;
+its story list is docs/plans/BORATYPE-PLAN.md. It reuses the C package
+runtime (§73), band core (§130.6), game kit (§133), native fullscreen
+latch (§11.2), and the exclusive bracket (§53) for CGA color gameplay.
+No new resident kernel memory or API slot is allocated.
+
 ## 135. The wide Control Panel - a second face for VGA and VESA (`kernel/cpw*.inc`, `CPWIDE.DRV`, `CPWIDE.DAT`)
 
 **Status: the plan is `docs/plans/CPWIDE-PLAN.md`; each story there says

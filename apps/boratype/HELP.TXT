@@ -1,0 +1,83 @@
+BORAT TEACHES TYPING
+
+Choose one of four profiles (File > Profile, or N at the menu). Type a name
+up to twelve characters, then Enter. Continue recommends your first lesson
+that has not reached mastery. All twenty-four lessons remain selectable.
+
+REST YOUR FINGERS
+Put your left index on F and right index on J; find their physical ridges.
+Left hand: A S D F, right hand: J K L ;. Relax, look at the screen, and use
+the opposite hand's Shift for a capital or shifted punctuation mark.
+
+TYPING RULES
+Type the highlighted character exactly, including case, spaces and marks.
+A correct printable character advances. A wrong printable character adds
+an error and leaves the target in place. Backspace retracts accepted text
+in the current passage, resets your streak, and keeps historical attempts.
+Modifier-only, function and navigation keys do not count as mistakes.
+
+ACCURACY AND SPEED
+Accuracy is correct printable attempts divided by all printable attempts,
+rounded to the nearest percent. Master a whole lesson at 95% or better;
+speed never blocks learning. WPM counts net accepted characters, including
+spaces and punctuation, at five characters per word. Retyping a retracted
+character earns no extra net speed credit. A dash means no timed sample.
+Lesson timing begins on the first printable attempt, including a wrong one.
+
+CHALLENGES
+Choose one, three or five minutes and home row, letters, digits or mixed.
+The ready countdown is outside scored time. A test ends on its deadline
+even if you stop typing. Pause, focus loss and display transitions make a
+challenge practice/unranked; it can continue but cannot replace a record.
+Records compare the same duration and key group.
+
+PRACTICE
+Practice groups repeat valid drills. Recommended weak keys need at least
+twenty samples; a result is not called weak from one unfortunate press.
+Practice These Keys on results selects the weak-key drill.
+
+KEYBOARD HINTS
+Finger zones show the recommended hand/finger. An outline marks the target,
+an error symbol marks the attempted wrong key, and shifted symbols also
+mark Shift. The letter I remains on the top row; J is the home anchor.
+Clicking a pictured key gives a hint and never adds scored input.
+
+CONTROLS
+F1 Help   F2 Lessons   F3 Master sound   F4 Pause/Resume   F6 Full screen
+Ctrl+Q closes the application, including either fullscreen path.
+Escape opens/resumes Pause while typing. Help, Settings and Records return
+to the paused lesson when opened during a run; elsewhere it returns to Menu.
+Menu letters: L Lessons, P Practice, C Challenge, R Records, S Settings,
+N Profile. Ordinary letters and Space are typing input during a lesson.
+Up/Down chooses a lesson or challenge key group; Enter starts or continues.
+Practice: 1-4 chooses a group, W chooses weak keys. Settings: M Music,
+E Effects, K key ticks, R roast, D display, T test music.
+Native menu actions provide equivalents for the function keys.
+
+WINDOW AND DISPLAY
+The layout follows the real window size and adapter. The normal native
+full-screen view uses the OS fullscreen latch. On CGA, Settings can select
+the separate 320x200 four-color fullscreen path; F6 always returns from it.
+The 640x200 monochrome native window/fullscreen path remains available.
+Set EGA/VGA/VESA desktop modes in the OS Control Panel; only the installed
+driver can offer 800x600 or 1024x768. Unsupported choices are not simulated.
+Focus loss pauses the session; return and intentionally Resume.
+
+SOUND AND BORAT
+Music, effects and optional key ticks have separate settings.
+The PC speaker plays the melody and short effects. Supported FM hardware
+adds three arranged voices through the OS sound driver. The OS chooses the
+output route. Music does not require a digital voice pack.
+Gentle, Classic (default) and Extra Roast choose reaction intensity. Jokes
+respond to typing events and do not change the score or consume your input.
+Captions are original jokes. Reactions use visual expressions and short
+speaker/FM effects. A local Sound Blaster pack adds recorded reactions
+and looping music at quarter volume. Music and Effects switch separately.
+
+SAVING
+Progress and settings save at session, profile and settings boundaries in
+SYSTEM/APPDATA on the application's own disk. BORATA.BTT and BORATB.BTT
+alternate validated generations. Keep the disk writable and leave space.
+If a write fails, play continues and the previous valid copy is retained.
+A second instance is read-only for shared progress; close it and reopen
+after the writer exits to become a writer. It cannot overwrite stale data.

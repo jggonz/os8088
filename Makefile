@@ -19096,7 +19096,7 @@ N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PO
 # rides GAMES\ in the set below rather than a folder of its own.
 N1942PARTS = $(addprefix $(BUILD)/,1942V.GFX 1942VX.GFX 1942L.GFX 1942C.GFX 1942CX.GFX 1942.SFX $(N1942SCENES))
 N1942LIVE := $(BUILD)/1942.o88
-ALLAPPSFILES := $(BUILD)/breadxt.o88 $(BREADXTFILES) $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
+ALLAPPSFILES := $(BUILD)/boratype.o88 $(BUILD)/breadxt.o88 $(BREADXTFILES) $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/MIDIRACK.BNK \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(CWORDDISK) \
@@ -19119,7 +19119,8 @@ ALLAPPS := $(ALLAPPSFILES) $(PX_SAMPLES_360) $(BUILD)/runcpm-src.stamp tools/get
 # volume's ASSOC.DAT (54.7.1). The LOOM=32 directory slots below are priced
 # by os88allapps.py like every other entry.
 
-ALLAPPSARGS := $(addprefix BREADXT:,$(BUILD)/breadxt.o88 $(BREADXTFILES)) \
+ALLAPPSARGS := BORATYPE:$(BUILD)/boratype.o88 \
+               $(addprefix BREADXT:,$(BUILD)/breadxt.o88 $(BREADXTFILES)) \
                $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88 \
                                  $(BUILD)/MIDIRACK.BNK) \
@@ -23063,3 +23064,45 @@ $(BUILD)/kbdlayoutlegacy.img: $(BUILD)/win16.o88 tools/os88disk.py
 #> [Gate disks] kbdlayoutlegacytest :: DOS and WIN16 keyboard ownership fixture
 .PHONY: kbdlayoutlegacytest
 kbdlayoutlegacytest: $(BUILD)/kbdlayoutlegacy.img
+
+# Native Borat typing tutor, SPEC.md 134 / docs/BORATYPE-SPEC.md.
+$(eval $(call CC_PACKAGE,boratype,boratype,BORATYPE.OVL,$(BUILD)/BTART.BIN $(BUILD)/BTSOUND.BIN,part,$(BUILD)/BTAN0.BIN $(BUILD)/BTAN1.BIN $(BUILD)/BTAN2.BIN $(BUILD)/BTAN3.BIN $(BUILD)/BTAN4.BIN))
+BORATYPESRC := $(wildcard apps/boratype/*.c apps/boratype/*.h)
+$(BUILD)/boratype.raw.asm: $(BORATYPESRC) apps/cc/gk.h
+$(BUILD)/boratype.bin: $(wildcard apps/boratype/*.inc) apps/breadxt/draw.inc apps/cc/gk.inc apps/cc/gkmus.inc apps/os88data.inc apps/os88ui.inc
+$(BUILD)/BTART.BIN: tools/os88btart.py tools/os88bbart.py apps/boratype/art.h $(wildcard apps/boratype/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88btart.py build -o $@
+$(BUILD)/BTSOUND.BIN: tools/os88gkmus.py tools/os88btart.py tools/os88bbart.py apps/boratype/art.h apps/boratype/art/blink.txt apps/boratype/art/masthead.mask apps/boratype/art/badges.mask apps/boratype/art/large.txt apps/boratype/art/music.txt apps/boratype/art/sfx.txt | $(BUILD)
+	python3 tools/os88btart.py build-sound -o $@
+$(BUILD)/BTAN%.BIN: tools/os88btanim.py tools/os88lz.py tools/os88btscenes.py apps/boratype/art/scene-cards.txt apps/boratype/art/badges.mask apps/boratype/art/animation.txt | $(BUILD)
+	python3 tools/os88btanim.py build --bank $* --output $@
+#> [Applications] boratype :: Borat Teaches Typing native C lessons, practice and challenges (SPEC.md 134)
+boratype: $(BUILD)/boratype.o88
+#> [Applications] boratypedisk :: Borat Teaches Typing software disk in all four floppy geometries
+boratypedisk: $(BUILD)/boratype.img $(BUILD)/boratype720.img $(BUILD)/boratype120.img $(BUILD)/boratype360.img
+$(BUILD)/boratype.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype720.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype120.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype360.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+#> [Applications] boratypebundle :: build and validate a local Borat Teaches Typing WPK installer
+boratypebundle: $(BUILD)/BORATYPE.WPK
+$(BUILD)/BORATYPE.WPK: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88wire.py Makefile
+	@mkdir -p $(BUILD)/boratype-stage
+	@cp $(BUILD)/boratype.o88 $(BUILD)/boratype-stage/BORATYPE.O88
+	@cp apps/boratype/HELP.TXT $(BUILD)/boratype-stage/HELP.TXT
+	python3 tools/os88wire.py --archive $@ --srcdir $(BUILD)/boratype-stage --home BORATYPE --program BORATYPE.O88
+#> [Applications] boratypepcmdisk :: build a local Sound Blaster disk from the 14 named MP3s in BT_AUDIO_SRC
+boratypepcmdisk: boratype
+	@test -n "$(BT_AUDIO_SRC)" || { echo "Set BT_AUDIO_SRC to the folder containing the 14 source MP3s"; exit 1; }
+	python3 tools/os88btpcm.py "$(BT_AUDIO_SRC)" "$(BUILD)/boratype-local-audio"
+	python3 tools/os88disk.py -o $(BUILD)/boratype-sb.img --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT $(BUILD)/boratype-local-audio/BTAUDIO.IDX $(BUILD)/boratype-local-audio/BTMUSIC.BTA $(BUILD)/boratype-local-audio/BTCLIPS.BTA --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $(BUILD)/boratype-sb.img
+.PHONY: boratype boratypedisk boratypebundle boratypepcmdisk
