@@ -1,0 +1,148 @@
+# drivers/catalog.toml - what each loadable driver IS, in plain words.
+#
+# The wide Control Panel's Drivers page (SPEC.md 135.8) shows a category icon,
+# a long name and a one- or two-line description for every driver. The kernel
+# knows only a driver's file, title and class (drv_tab, SPEC.md 51), so the
+# words live here, outside the kernel, and tools/cpwdat.py compiles them into
+# CPWIDE.DAT (SPEC.md 135.7). Nothing here costs a resident byte.
+#
+# HOW TO ADD A DRIVER
+#   1. Add its row to drv_tab (kernel/driver.inc) as usual.
+#   2. Add ONE table below, named by the driver's 8.3 FILE, upper case, as the
+#      drv_f_* label in kernel/driver.inc spells it:
+#
+#          ["NEWCARD.DRV"]
+#          category    = "NET"        # DISP SOUND STOR NET INPUT MEM SYS UNK
+#                                     # (a CWC_* of kernel/cpwfmt.inc)
+#          icon        = "C_NET"      # a CWI16_* name of kernel/cpwfmt.inc, or
+#                                     # the 0..31 index of a cell in
+#                                     # kernel/cpwart/cp-icons-16.png
+#          name        = "Acme Network Card"           # <= 25 characters
+#          description = [                             # one or two lines,
+#            "What it does, in a sentence.",           # each <= 46 characters
+#            "What hardware it needs, if any.",
+#          ]
+#
+#   3. `make` rebuilds build/cpwide.dat; tests/unit/t_cpwdat.py (fast tier)
+#      fails the build for a drv_tab row with no entry here, an entry naming no
+#      row, a line over its limit, or an icon outside the sheet.
+#   Say what the driver does and what it needs, not how it works. A driver
+#   with no entry still works: the page shows it with the Unknown icon, its
+#   drv_tab title and no description.
+
+["SOUND.DRV"]
+category = "SOUND"
+icon = "C_SND"
+name = "Sound Cards"
+description = [
+  "Sound Blaster, AdLib and compatible cards:",
+  "digital audio and FM music.",
+]
+
+["HDD.DRV"]
+category = "STOR"
+icon = "C_STOR"
+name = "Hard Disk"
+description = [
+  "XT and IDE hard disks, with partitioning",
+  "and formatting. Needs a hard disk.",
+]
+
+["ETHER.DRV"]
+category = "NET"
+icon = "C_NET"
+name = "Ethernet (NE2000)"
+description = [
+  "NE1000 and NE2000 network cards with a",
+  "TCP/IP stack. Needs an ISA network card.",
+]
+
+["RAMDISK.DRV"]
+category = "STOR"
+icon = "C_RAMD"
+name = "Ram Disk"
+description = [
+  "A drive kept in memory: fast, empty after",
+  "a restart. Needs no hardware.",
+]
+
+["NET.DRV"]
+category = "NET"
+icon = "C_NET"
+name = "Parallel Link"
+description = [
+  "Share files with a DOS PC over a LapLink",
+  "cable. Needs a parallel port and the cable.",
+]
+
+["VMMOUSE.DRV"]
+category = "INPUT"
+icon = "C_VM"
+name = "VMware Mouse"
+description = [
+  "Pointer without grabbing, in a virtual",
+  "machine. Needs VMware, v86 or QEMU.",
+]
+
+["USBMOUSE.DRV"]
+category = "INPUT"
+icon = "C_USB"
+name = "USB Mouse (CH375)"
+description = [
+  "USB mouse through the CH375 controller of",
+  "the Book8088 laptop or a compatible card.",
+]
+
+["PC1MOUSE.DRV"]
+category = "INPUT"
+icon = "C_INP"
+name = "Olivetti PC1 Mouse"
+description = [
+  "The built-in mouse of the Olivetti Prodest",
+  "PC1. Needs that machine.",
+]
+
+["EMS.DRV"]
+category = "MEM"
+icon = "C_MEM"
+name = "Expanded Memory (EMS)"
+description = [
+  "Megabytes of paged memory for programs.",
+  "Needs a LIM EMS memory board.",
+]
+
+["CDROM.DRV"]
+category = "STOR"
+icon = "C_CD"
+name = "CD-ROM"
+description = [
+  "Read data discs and play audio CDs.",
+  "Needs an ATAPI CD-ROM drive and a 286.",
+]
+
+["HTTPFS.DRV"]
+category = "NET"
+icon = "C_NET"
+name = "Web Drive (HTTP)"
+description = [
+  "Browse a web server as a read-only drive.",
+  "Needs a network card or the cable link.",
+]
+
+["VESA.DRV"]
+category = "DISP"
+icon = "C_DISP"
+name = "VESA Display"
+description = [
+  "800x600 and 1024x768 desktops in many",
+  "colours. Needs a VBE graphics card.",
+]
+
+["PCIETHER.DRV"]
+category = "NET"
+icon = "C_NET"
+name = "PCI Ethernet (RTL8139)"
+description = [
+  "Realtek RTL8139 PCI network cards with a",
+  "TCP/IP stack. Needs a PCI bus and a 386.",
+]

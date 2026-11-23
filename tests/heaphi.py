@@ -133,6 +133,8 @@ def main():
         M.no_saver(m)                   # act is the chip menu
         q, mo = Q(m), Mouse(marty=m)
 
+        import cpface
+        cpface.compact(m, m.sym)  # the compact face's geometry (SPEC.md 135.13, tests/cpface.py)
         mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel
         quiet(m)
         cp = [w for w in wins(m) if w[3] >= 280 and w[4] >= 100]

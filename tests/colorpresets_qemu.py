@@ -363,6 +363,10 @@ def main():
         assert g.read(lin('vid_kind'),1)[0] == (3 if args.ega else 0)
         set_preset(0, 0)  # isolate solid-preset checks from saved preferences
         g.call('fmf_files_open')
+        # the compact panel, whose frame the move below assumes (SPEC.md
+        # 135.13, tests/cpface.py): a 0 on CPWIDE.DRV's name is the kernel's
+        # own mark that the module was refused (135.2)
+        g.write(lin('mod_f_cpw'), b'\0')
         g.call('cpf_cp_open')
         # Inspect the real window table, not theme table values alone.
         windows = []

@@ -61,6 +61,7 @@ CCELL = re.compile(r'^\s*(?:OSAPI_(?:NCELL|FCELL)\s+'
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
         '.modk', '.modx', '.modw', '.modj', '.modn', '.mods', '.modq',
+        '.modv',    # CPWIDE.DRV, the wide Control Panel (SPEC.md 135)
         '.boot3m')  # module images (2.8).
 # `.boot3m` is the keyboard mouse's pointer half (SPEC.md 2.8.8, 9.6.7), a
 # module image with no FILE: it rides KERNEL.SYS's `.boot3` tail and is

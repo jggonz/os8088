@@ -313,6 +313,8 @@ def open_hd_page(q, hd):
     panel's content origin and HDDTOOL.DRV's segment, 0 when it never came."""
     org_res = lambda name, n=1: q.read(hd["base"] + hd["syms"][name] - ORG, n)
     ui = hmacold.QUI(q, mouse=hmacold.QMouse(q), sym=S, verbose=False)
+    import cpface
+    cpface.compact(q, S)  # the compact face's geometry (SPEC.md 135.13, tests/cpface.py)
     ui.menu_pick("Apple", "Control Panel")
     w = ui.wait_window("Control Panel")
     x0, y0 = w.x + 1, w.y + TITLE_H

@@ -206,6 +206,10 @@ def cylinder(b, ui):
     if rb(b, S("boot_cylrun")):
         return "this boot crossed a head, so the save asks nothing"
     have = set(MC.win_recs(b))
+    # the COMPACT panel, whose page list and Floppy page the clicks below
+    # mirror: a 0 on CPWIDE.DRV's name is the kernel's own mark that the
+    # module was refused (SPEC.md 135.2, 135.13, tests/cpface.py)
+    b.cmd("memw 0x%X 00" % S("mod_f_cpw"))
     ui.menu_pick(0, "Control Panel")
     b.until(lambda: set(MC.win_recs(b)) - have, "the Control Panel", 15000, 100)
     b.ui_done(cap_ms=5000)

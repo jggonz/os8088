@@ -104,6 +104,18 @@ kind = "system"
 summary = "The Control Panel, loaded when you open it: display, theme, sound, clock, drivers and other settings."
 short = "Display, sound and settings"
 
+["CPWIDE.DRV"]
+title = "Wide Control Panel"
+kind = "system"
+summary = "The Control Panel's large layout for VGA and VESA screens, loaded beside it when there is room: grouped pages with icons, a driver library with categories, a display mode changer with Test, and a theme gallery. Without it the Control Panel opens in its compact layout."
+short = "Large Control Panel layout"
+
+["CPWIDE.DAT"]
+title = "Wide Control Panel data"
+kind = "system"
+summary = "The icons and the driver catalog the wide Control Panel shows: each driver's category, icon and description. Without it the Control Panel opens in its compact layout."
+short = "Icons and driver catalog"
+
 ["DESK.DRV"]
 title = "Desktop widgets"
 kind = "system"

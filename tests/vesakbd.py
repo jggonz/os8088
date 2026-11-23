@@ -91,6 +91,8 @@ def main():
 
     # --- the Control Panel off the Builtins menu, then its Keyboard page ---
     from os88geom import MBAR_H, MENU_ITEM_H
+    import cpface
+    cpface.compact(q, S)  # the compact face's geometry (SPEC.md 135.13, tests/cpface.py)
     mo.run("to", 12, 8)
     mo.run("down")
     os88qemu.ui_done(q, S, cap=0.8)

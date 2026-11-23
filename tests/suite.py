@@ -1783,6 +1783,22 @@ FAST = [
         "by different people - the system-side size pass shrank RAMDISK.DRV "
         "and NET.DRV across a KB with no kernel edit, and every make stayed "
         "green with the page quoting 9K and 7K for drivers that claim 8 and 5"),
+    Row("cpwdat", "fast", py("tests/unit/t_cpwdat.py"), 0.3,
+        "SPEC.md 135.6/135.7: every drv_tab row of every kernel has an entry "
+        "in drivers/catalog.toml and every entry names a row; names <= 25 and "
+        "description lines <= 46 characters; icon indices inside the sheet; "
+        "every sheet pixel a palette colour or the #FF00FF key; and "
+        "build/cpwide.dat is what tools/cpwdat.py writes NOW, read back by a "
+        "second reader against the sheets and the catalog. FAST as THE "
+        "BOUNDARY, drvmem's reason: a driver is added in kernel/driver.inc by "
+        "one person and its words live in a TOML file nobody opens, so the "
+        "wide Drivers page would show it as Unknown with no description and "
+        "every other check stays green",
+        needs=(), inputs=("tools/cpwdat.py", "drivers/catalog.toml",
+                          "kernel/cpwfmt.inc", "kernel/driver.inc",
+                          "kernel/cpwart/cp-icons-16.png",
+                          "kernel/cpwart/cp-icons-32.png",
+                          "tests/unit/t_cpwdat.py", "tests/unit/harness.py")),
     Row("installabi", "fast", py("tests/unit/t_install.py"), 0.2,
         "SPEC.md 117: INSTALL.O88 in the ROOT of every kern_big system disk "
         "and on no kern_small one; HD_ABI_VER the same in hddabi.inc and the "
@@ -7138,6 +7154,17 @@ SOAK = [
         "window double-clicked open. QEMU by name, vesa's reason",
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/vesa8.img")),
+    Row("cpwide", "soak", py("tests/cpwide.py"), 10.0,
+        "The wide Control Panel on a VGA desktop (SPEC.md 135): the panel "
+        "opens 618x408 on 640x480; the page list selects Drivers, Theme, "
+        "Display and Dock (each answered by cp_sel); the Drivers page drawn "
+        "after Theme and after Display is pixel for pixel the one drawn "
+        "first (QA-3, 135.5.1); the hosted Dock page puts the Dock on the "
+        "left and the next open is COMPACT, whose Dock page puts it back and "
+        "the next open is wide again (QA-1, 135.2 step 4). The one row that "
+        "drives the wide face - the compact rows are pinned (tests/cpface.py)",
+        needs=("qemu", "nasm"), timeout=180,
+        wants=("build/os8088.img", "build/apps.img")),
     Row("vesacp", "soak", py("tests/vesacp.py"), 60.0,
         "Choosing a VESA mode on the Display page (SPEC.md 120.6): on the "
         "1024x768x16 desktop, the Control Panel's Display page lists the "

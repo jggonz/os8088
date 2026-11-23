@@ -150,6 +150,7 @@
 # live count out of a rectangle's coordinates and Date/Time went white.
 2 kernel/ctrl.inc                  # every Control Panel page's buttons - ONE per kernel: the far entry on kern_big, CTRL.DRV's own os88ui_kbtn on kern_small (kernel size pass 14)
 1 kernel/hiber.inc                 # the hibernate prompt's
+1 kernel/cpwkit.inc                # the wide Control Panel's push button (SPEC.md 135.5): CPWIDE.DRV's own far hop into os88ui_kbtn, as ctrl.inc's; a wide page arms it from CPW_ID0 and acts on the release
 2 apps/redline/ui.inc              # the three tabs' foot, the tabs themselves and Inspect's sub-page strip (ru_btn1 redraws the two strip buttons a page change moves); SDK arm/track/release
 1 apps/pixel/pxui.inc              # every PiXEL control, through px_btn; SDK arm/track/release
 2 kernel/shutdown.inc              # modal confirmation; release inside the armed control - ONE per kernel, as ctrl.inc's

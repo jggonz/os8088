@@ -357,7 +357,13 @@ def drive(img, keep, work):
         sys.exit("syscheck: the boot never showed the Control Panel and "
                  "System Check")
     done(20.0)
-    click(*CP_CLOSE)
+    # the close box of the panel AS IT OPENED: compact at (159,130) puts it at
+    # CP_CLOSE, but a VGA desktop opens the WIDE face (SPEC.md 135.2) with
+    # its frame elsewhere - the box is the frame's +12,+8 on either
+    cpw = next((w for w in ui.windows()
+                if w.visible and "Control Panel" in w.title), None)
+    click(*((cpw.x + CP_CLOSE[0] - 159, cpw.y + CP_CLOSE[1] - 130)
+            if cpw else CP_CLOSE))
     os88qemu.acted(M, lambda: not up("Control Panel"), secs=1.5,
                    what="the Control Panel to close")
     done(1.5)

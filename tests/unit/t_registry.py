@@ -46,6 +46,9 @@ BUILDS_WITHOUT_MAKE = {
 UNREGISTERED = {
     "boratype_badges.py": "run by boratypemenus, which imports its packaged badge checks",
     "boratype_settings.py": "run by boratypemenus, which imports its settings mutation test",
+    "cpface.py": "not a test: the shared pin that puts a row's Control "
+                 "Panel on its compact face (SPEC.md 135.13) - imported by "
+                 "dispcp and the rows that click compact coordinates",
     "modkeep.py": "run by the `modcache` row (tests/modcache.py imports and "
                   "runs it): every on-demand module kept in RAM after its "
                   "drop, its tail zero in the file, its re-adoption free",

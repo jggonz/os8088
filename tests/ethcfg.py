@@ -152,6 +152,8 @@ def setup_wins(m):
 
 def open_cp(m):
     """Chip menu -> Control Panel, and wait for its window."""
+    import cpface
+    cpface.compact(m, S)  # the compact face's geometry (SPEC.md 135.13, tests/cpface.py)
     # CLOSED LOOP (ethernet.Mouse.run), each pause a ui_done capped at the
     # old pace (docs/plans/soak-speed-2/qemubox.md)
     Mouse().run("down", 8, 8)

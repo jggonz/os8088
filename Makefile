@@ -2420,6 +2420,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/dock.drv $(BUILD)/extd.drv \
                                       $(BUILD)/win95.drv $(BUILD)/desk.drv \
                                       $(BUILD)/stikmenu.drv $(BUILD)/serial.drv \
+                                      $(BUILD)/cpwide.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2832,12 +2833,16 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODD
 # so is DESK.DRV (SPEC.md 11.103.10), the desk layer's code, which a Sticky App's
 # OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all. And so is
 # STIKMENU.DRV (SPEC.md 110.12), Locator's Sticky Apps menu, which its drop
-# loads and its pick drops: kern_small has no Sticky Apps menu.
+# loads and its pick drops: kern_small has no Sticky Apps menu. And so is
+# CPWIDE.DRV (SPEC.md 135.2), the wide Control Panel's face, which the panel's
+# open loads beside CTRL.DRV on a colour primary of at least 640x480 and its
+# close drops: kern_small has no VGA renderer and no wide face.
 ifneq ($(KERN_SMALL),)
 BIGMODS =
 else
 BIGMODS = $(KMODDIR)/hiber.drv $(KMODDIR)/dock.drv $(KMODDIR)/extd.drv \
-          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv $(KMODDIR)/stikmenu.drv
+          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv $(KMODDIR)/stikmenu.drv \
+          $(KMODDIR)/cpwide.drv
 endif
 # FSCHECK.DRV (SPEC.md 118.14.1) is cut beside them and is NOT in $(DRIVERS):
 # it is no mod_tab row and the kernel never loads it - System Check does, from
@@ -2875,7 +2880,8 @@ else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
             -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
             -m 8=$(BUILD)/stikmenu.drv -m 9=$(BUILD)/serial.drv \
-            -m 10=$(BUILD)/keyboard.drv -m 11=$(BUILD)/fscheck.drv
+            -m 10=$(BUILD)/keyboard.drv -m 11=$(BUILD)/cpwide.drv \
+            -m 12=$(BUILD)/fscheck.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -3667,6 +3673,12 @@ DRIVERS += $(BUILD)/vesa.drv
 # ($(SYS360OMITDRV)): no XT has a PCI bus. kern_small filters it back out
 # ($(SMALLDRIVERS) is a restatement that never held it)
 DRIVERS += $(BUILD)/pciether.drv
+# CPWIDE.DAT - the wide Control Panel's icons and driver catalog (SPEC.md
+# 135.6, 135.7): a DATA file beside CTRL.DRV, built by tools/cpwdat.py. It is
+# kern_big / kern_emu / kern_mega's alone - kern_small has no wide panel - and
+# $(SMALLDRIVERS) is a restatement that never held it. On a
+# boot disk: an ordinary file (SPEC.md 19.6), so it takes one root listing slot.
+DRIVERS += $(BUILD)/cpwide.dat
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -4124,6 +4136,16 @@ $(BUILD)/%.f88: faces/%.t88 tools/os88face.py | $(BUILD)
 $(BUILD)/faces:
 	mkdir -p $@
 
+# CPWIDE.DAT (SPEC.md 135.6) packs like a driver: a 'CZ' file the kernel's
+# transparent read expands into the claim the directory hint sizes. Every input
+# is a prerequisite - the two sheets, the catalog, the layout it is checked
+# against and the compressor - and PKGZSTAMP carries the PKGZ knob, so a
+# BUILD= tree (kern_emu's, kern_mega's, a knob's) rebuilds it for its own PKGZ.
+$(BUILD)/cpwide.dat: tools/cpwdat.py kernel/cpwfmt.inc drivers/catalog.toml \
+                     kernel/cpwart/cp-icons-16.png kernel/cpwart/cp-icons-32.png \
+                     tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	python3 tools/cpwdat.py -o $@ $(if $(PKGZ),--fmt $(PKGZ))
+
 $(BUILD)/faces/%.f88: $(BUILD)/%.f88 tools/os88lz.py $(PKGZSTAMP) | $(BUILD)/faces
 ifeq ($(PKGZ),)
 	cp $< $@
@@ -4308,7 +4330,14 @@ COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
 # it would take two thirds of what the disk has left.
 # System Check's manifest marks them OPTIONAL (118.2.3), so a hard disk
 # installed from this disk is not reported as missing them.
-SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv
+# The WIDE CONTROL PANEL's two files (SPEC.md 135.2) are the FIFTH and
+# SIXTH, the owner's decision of 2026-11-22: the wave-2 pages took the disk
+# past what it had left (708 clusters of 706), and a 360KB machine is an XT,
+# where the wide face's drawing and ~20KB of heap fit worse than on a 286+.
+# Without them the panel opens compact, silently - 135.2's refusal path - so
+# a 360KB boot is the compact face, as it was before 134 existed.
+SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv \
+                $(KMODDIR)/cpwide.drv $(BUILD)/cpwide.dat
 DRIVERS360 = $(if $(filter $(BUILD)/cdrom.drv,$(DRIVERS)),,$(error \
     DRIVERS360 filters $(BUILD)/cdrom.drv out of DRIVERS and it is not \
     there - SPEC.md 119.6.7's omission now matches nothing))$(filter-out \

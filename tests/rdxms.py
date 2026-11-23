@@ -375,6 +375,8 @@ def session(q, a, R, P, data, bimg):
                "window %r to close" % w.title, 15)
 
     def open_page(first):
+        import cpface
+        cpface.compact(q, S)  # the compact face's geometry (SPEC.md 135.13, tests/cpface.py)
         menu_pick(q, ui, "Apple", "Control")
         box = {}
 
