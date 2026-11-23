@@ -259039,8 +259039,7 @@ go to `CPG_HCLICK`, `CPG_HUP`, `CPG_HDRAG`, `CPG_HKEY`, `CPG_HTICK` - the
 compact face's own far bodies, unchanged. A release or drag whose arm is a
 wide control's (`CPW_ID0` and up, §134.5) is the wide face's own.
 
-Until S7 lands, the Drivers page's hosted list has the kit's worked example
-under it: a **Driver catalog** group (§134.5).
+The Drivers list itself is the wide face's own page (§134.8).
 
 ### 134.4 The gate - how the two images call each other
 
@@ -259157,15 +259156,9 @@ the status line's cache, the list's 28 entries, a 96-byte composed line
 table block, filter and rows), the kit's 12-byte scratch, and the 512-byte
 icon staging buffer. `CPWIDE.DAT` follows it.
 
-**The worked example**: the Drivers page's hosted list has a **Driver
-catalog** group under it - an All / Loaded / Not loaded tab strip and a table
-of every `drv_tab` row the filter keeps: its catalog icon and long name out
-of `CPWIDE.DAT`'s catalog (§134.7; the gear and `DRV_TITLES`' name for a
-file the catalog does not know, through `CPG_DRVTTL`), a badge (green
-Loaded; red for a row wanted and refused), and `~K` through `CPG_DRVMEM`.
-Its tabs filter, its bar scrolls, a driver loaded or unloaded on the hosted
-list redraws its rows (`CWV_LIST`). It is read-only, and it is S7's to
-replace.
+**The worked example** is the Drivers page (§134.8): tabs over a subset (one
+`cpk_tabs` call a tab), a table with a row painter of its own, a group box, text
+lines, buttons and icons - all of this kit and nothing else.
 
 ### 134.6 `CPWIDE.DAT` - the asset file
 
@@ -259293,17 +259286,83 @@ from what `cpwdat.py` writes now fails it, so a stale asset file cannot ship.
 
 ### 134.8 The Drivers page
 
-Pinned by S7, to the mockup `docs/cpwide/cp-drivers-vga-640x480.png`:
-category filter tabs (All, then the `CWC_*` categories that have a row on
-this kernel); a scrolling table - category icon, name, status badge (green
-Loaded, grey Off, red No hardware, yellow any other refusal sentence),
-memory (§31.6.2's figure, same rules), and a **Start at boot** check box
-that toggles the row's want bit alone; a DETAILS group for the selected
-row - 32×32 icon, long name, file name, description, `drv_status`'s
-sentence, memory - and buttons **Load**, **Unload** and **Settings...**
-(live when the driver publishes a page, §31.9: selects that page) and
-**Ports...** (hosts the compact Ports view, §31.15). Load and Unload are
-the compact page's semantics exactly (§31.6), reached through the gate.
+Shipped by S7: `kernel/cpw_drv.inc`, %included into `CPWIDE.DRV` beside the
+kit, to the mockup `docs/cpwide/cp-drivers-vga-640x480.png`. It is the wide
+face's OWN page - drawn natively, not hosted - for the Drivers record while
+`[cp_dview]` is 0; its Ports view (below) is the compact page, hosted. It
+replaced the kit's worked example (the read-only catalog group under the hosted
+list). Everything is built to scale to dozens of drivers: the table scrolls,
+the tabs are the categories a kernel really has, and a driver is described by
+its `CPWIDE.DAT` catalog entry (§134.7), never by a table in this file.
+
+**Layout** (content-relative; `XL` = `CPW_PX` + 8 = 129; `TW` = content width
+- `XL` - 8: 477 at 616x408, 621 at 760x520; the box and table share it):
+
+| element | where | drawn as |
+|---|---|---|
+| page ground | page area, to the status rule | one fill, then every widget opaque |
+| filter tabs | (`XL`, 48), 14 rows | `All`, then each `CWC_*` (§134.7) that has a `drv_tab` row on this kernel, in category order: Display, Sound, Storage, Network, Input, Memory, System. One `cpk_tabs` call per tab (the kit's strip over a subset). A row with no catalog entry is Unknown: no tab, shown under All |
+| column heads | (`XL`, 64), 12 rows | one opaque run on light grey: Name, Status, Memory, Start at boot |
+| table | (`XL`, 76), 18 px pitch, `TW` wide, the 12 px bar included | `cpk_table` over `cpd_row`: **10 rows at 616x408, 16 at 760x520** - the rows are what the box leaves |
+| DETAILS box | (`XL`, status rule - 116), 112 rows, `TW` wide | `cpk_group` titled `DETAILS`; its body: the 32x32 icon at (+8, +16), the text column at +52 |
+| status line | the shell's | redrawn when the driver count moved |
+
+A row, row-relative, in the spans round its runs (nothing written twice): the
+16x16 category icon at x 2 (the catalog's icon, the gear for a file the
+catalog does not know); the name at 20, 22 cells (the catalog's long name, else
+the `drv_tab` title through `CPG_DRVTTL`; cut at 22); the badge at 196, 12
+cells; the memory at 292, 8 cells; the Start at boot box at 356 + 46, 12x12.
+The window's width above 616 is shared out in whole cells to the badge, memory
+and boot columns, a third each (`cpd_geo`): at 760 they sit at 244, 388 and
+500.
+
+**The badge** is `drv_status`'s own reading of the row's live state - a
+reported reason (`DRVR_ERR` 1..`DRVE_NERR`-1) outranks Loaded, else a loaded
+row is Loaded and anything else Not loaded - mapped to four colours and never
+to a second opinion: green **Loaded**; grey **Off** (Not loaded); red **No
+hardware** (`DRVE_HW`); yellow **Error** (every other refusal). The DETAILS
+box says the full sentence. The **memory** is `drv_memk`'s figure through
+`CPG_DRVMEM` with §31.6.2's rules (`~`, the half KB, `+`). The **check box**
+shows the row's WANT bit (`DRVR_WANT`): a press on the boot column toggles it
+through `CPG_DRVWANT` - the want bit alone, answered and owed (§31.8), nothing
+loaded or unloaded - and repaints that one row.
+
+**DETAILS** is the selected row's: the category's header icon (Display,
+Sound, Storage and Network have theirs; any other the gear), the long name, the
+file name (dark grey), the catalog's two description lines, the status sentence
+(`CPG_DRVSTAT`) and `Memory: ~N K`. Each line is ONE opaque run padded to the
+text width (`cpk_text`), so a shorter one replaces a longer in the same pass.
+Four buttons (x 52, 116, 188, 300 from the box's left, 18 rows, the box's last
+22 rows):
+
+| button | live when | does |
+|---|---|---|
+| **Load** (id `CPW_ID0`) | the row is down | `CPG_DRVON`: want = 1 and `cdl_load` |
+| **Unload** (+1) | the row is up, or down and wanted | `CPG_DRVOFF`: unload, want cleared, error cleared - "unloaded but wanted clears the want" (§31.6): the only gesture for *stop asking* |
+| **Settings...** (+2) | the driver is loaded and publishes a page (§31.9: its class is among `drv_cp_class`'s) | selects that page in the list (`cpw_select`) |
+| **Ports...** (+3) | always | hosts the compact page's Ports view (§31.15): `[cp_dview]` = 1 and the hosted paint; its own Back (a hosted release) brings this page back whole (`cpw_dsync`) |
+
+A button arms `CPW_ID0` + its number on the press and is drawn down; the
+release draws it up and acts only if the pointer is still over it (§13.8.3).
+A greyed button arms nothing.
+
+**What each action redraws** (CLAUDE.md, Performance rules 1-2): a **tab** the
+strip, the table (top 0) and DETAILS; a **row** the row losing the bar, the one
+gaining it and DETAILS (the whole table when the selection scrolls into view);
+the **bar** the rows and `os88ui_sbmove`; the **check box** one row; **Load /
+Unload** that row, DETAILS, the status line's driver count and - only when its
+length moved - the page list (a driver page may have appeared or gone, §31.9).
+A failed load shows its reason in the row's badge and in DETAILS. Nothing else.
+**Up** and **Down** move the selection a row (the panel's own key edge).
+
+**Gate ops.** None added: the page uses `CPG_DRVON`/`OFF`/`WANT`/`TTL`/`STAT`/
+`MEM` (§134.4); `CPG_N` stays 22 and opcodes 22-24 are unused.
+
+**State** is the working area's 80-byte page block: the kit's table block,
+the filter (0 All, else a `CWC_*`), the selected `drv_tab` row, the categories
+present, the box's top, three column x's and one byte for each of at most
+`DRV_MAX` listed rows. The filter and the selection are kept while the panel is
+open.
 
 ### 134.9 The Display page - the mode changer
 
@@ -259440,6 +259499,8 @@ Heap while the wide panel is open, beyond the compact panel's: `CPWIDE.DRV`
 15,872-byte claim - 20,480 bytes in all, both `MEM_K_MOD` and both given back
 at the close. The open reads one file more than the compact face (the
 module) and one data file; the XT open time is the QA pass's to measure.
+
+**S7 (the Drivers page), 2026-11-21:** CPWIDE.DRV 4,471 -> 6,092 (big), 6,092 (emu), 4,485 -> 6,102 (mega): +1,621 / +1,621 / +1,617. CTRL.DRV unchanged (16,663 / 16,681 / 16,902), no resident byte, no rung moved, no gate op added.
 
 ### 134.13 Testing
 

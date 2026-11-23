@@ -67,7 +67,7 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 
 ## Wave 2 - the three wide pages (parallel, after S1-S4 are integrated)
 
-- [ ] **S7** (`drv`) The Drivers page (134.8).
+- [I] **S7** (`drv`) The Drivers page (134.8).
 - [ ] **S8** (`vid`) The Display page / mode changer, with Test-and-revert
   (134.9).
 - [I] **S9** (`thm`) The Theme page / theme changer (134.11).

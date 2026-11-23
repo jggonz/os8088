@@ -807,15 +807,18 @@ cpw_hdr:
 ; cpw_page - the page area: a wide page's own paint, or the HOSTED compact one
 ; in:  nothing. out: nothing
 ;
-; Hosted (SPEC.md 134.3): cp_page's own erase covers the compact pane's rect,
+; The Drivers list is cpd_paint's (SPEC.md 134.8). Hosted (SPEC.md 134.3): cp_page's own erase covers the compact pane's rect,
 ; CPW_HW x CP_CH from the page area's top left, so this lays the ground only
 ; to its right and below it, and CTRL.DRV paints the page at the hosted origin
 ; through the gate. Every page is hosted until a wave-2 page takes its record
-; (SPEC.md 134.8, 134.9, 134.11).
+; (SPEC.md 134.9, 134.11).
 ; -----------------------------------------------------------------------------
 cpw_page:
     cmp byte [cp_sel], CP_ITHM
     je cpw_thm_paint            ; the Theme page is drawn natively (134.11)
+    mov byte [es:CPW_D_ON], 0
+    call cpw_dwant              ; CF = 0: the Drivers list - its own page
+    jnc cpd_paint
     mov byte [gfx_color], CWHITE
     mov ax, CPW_PX + CPW_HW     ; right of the hosted rect
     mov bx, CPW_BY
@@ -823,14 +826,7 @@ cpw_page:
     dec cx
     mov dx, CPW_HB - 1
     call cpw_fill
-    mov byte [es:CPW_D_ON], 0
-    call cpw_dwant
-    jnc .demo                   ; the Drivers list: the catalog under it
-    call cpw_under              ; ...or the ground under the hosted rect
-    jmp short .host
-.demo:
-    call cpw_dpaint
-.host:
+    call cpw_under              ; ...and the ground under it
     mov bx, [es:CPW_W_WIN]
     mov ah, CPG_HPAINT
     jmp cpw_gate
@@ -849,35 +845,17 @@ cpw_under:
     jmp cpw_fill
 
 ; -----------------------------------------------------------------------------
-; cpw_dsync - after a hosted page acted: the catalog shown exactly when the
-; Drivers page is showing its list (a press can open a driver's own view,
-; [cp_dview], SPEC.md 31.15), the area under it put back when it is not.
-; in:  nothing. out: nothing; every register kept
+; cpw_dsync - after a hosted page acted: the Drivers page comes back when its
+; Ports view went Back (SPEC.md 31.15) - the hosted pane is replaced whole
+; in:  nothing. out: nothing
 ; -----------------------------------------------------------------------------
 cpw_dsync:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ah, [es:CPW_D_ON]
+    cmp byte [es:CPW_D_ON], 0
+    jne .r
     call cpw_dwant              ; CF = 0 wanted
-    cmc
-    sbb al, al                  ; AL = FFh wanted, 0 not
-    and al, 1
-    cmp al, ah
-    je .out
-    or al, al
-    jz .off
-    call cpw_dpaint
-    jmp short .out
-.off:
-    mov byte [es:CPW_D_ON], 0
-    call cpw_under
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jc .r
+    jmp cpd_paint
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1066,11 +1044,9 @@ cpw_click:
     jne .nthm
     jmp cpw_thm_click           ; the Theme page's own press (134.11)
 .nthm:
-    cmp bx, CPW_HB              ; under the hosted rect: the catalog's
-    jl .host
-    cmp byte [es:CPW_D_ON], 0
+    cmp byte [es:CPW_D_ON], 0   ; the Drivers page's own press (134.8)
     je .host
-    jmp cpw_dclick
+    jmp cpd_click
 .host:
     mov ah, CPG_HCLICK          ; the page: the hosted page's own press
     call cpw_gate
@@ -1161,25 +1137,29 @@ cpw_up:
 cpw_drag:
     mov ah, CPG_HDRAG
 cpw_edge:
+    call cpw_org
     push ax
     CPWC os88ui_armed           ; AX = the armed control, 0 = none
     cmp ax, CPW_ID0
     pop ax
     jae .wide
-    call cpw_org
     call cpw_gate
     jmp cpw_dsync
 .wide:
     cmp ah, CPG_HUP
     jne .r
-    CPWC os88ui_fire            ; a wide control's release: disarmed - the
-    cmp byte [cp_sel], CP_ITHM  ; S2 chrome has none that acts on it; the
-    je cpw_thm_up               ; Theme page's buttons do (134.11)
+    CPWC os88ui_fire            ; a wide control's release: disarmed, and the
+    cmp byte [cp_sel], CP_ITHM  ; page's to act on - the Theme page's buttons
+    je cpw_thm_up               ; (134.11), else the Drivers page's (134.8)
+    jmp cpd_rel
 .r:
     ret
 
-; cpw_key - CWV_KEY: AX = the key, SI = the window. The hosted page's.
+; cpw_key - CWV_KEY: AX = the key, SI = the window. The Drivers page's, or the
+; hosted page's.
 cpw_key:
+    cmp byte [es:CPW_D_ON], 0
+    jne cpd_key                 ; the Drivers page: Up and Down
     mov bx, ax
     mov ah, CPG_HKEY
     jmp cpw_gate
@@ -1219,37 +1199,18 @@ cpw_listev:
     call cpw_hdr
     jmp cpw_page
 .same:
-    cmp byte [es:CPW_D_ON], 0   ; a driver came up or went: the catalog's
-    je .r                       ; badges and its filter's rows
-    call cpw_dbuild
-    mov bx, CPW_D_TB
+    cmp byte [es:CPW_D_ON], 0   ; a driver came up or went by itself: the
+    je .r                       ; Drivers page's rows and its DETAILS
+    call cpd_build
+    mov bx, CPD_TB
     call cpk_table
+    jmp cpd_det
 .r:
     ret
 
-;
 ; =============================================================================
-; The driver catalog (SPEC.md 134.5's proof): the kit's group box, tab strip,
-; table, scroll bar, icons and badges, on CPWIDE.DAT's catalog, under the
-; hosted Drivers list until SPEC.md 134.8's page takes the record
+; The Drivers page (SPEC.md 134.8) is cpw_drv.inc, below
 ; =============================================================================
-CPW_D_TB    equ CPW_W_PAGE      ; the table's block (cpk_table, CPKT_SIZE)
-CPW_D_FLT   equ CPW_W_PAGE + CPKT_SIZE  ; db the filter: 0 all, 1 loaded,
-                                ;    2 not loaded
-CPW_D_ON    equ CPW_D_FLT + 1   ; db 1 = the catalog is on the screen
-CPW_D_ROWS  equ CPW_D_FLT + 2   ; db x DRV_MAX: the drv_tab rows it lists
-CPW_D_GX    equ CPW_PX + 2      ; the group box's left and top
-CPW_D_GY    equ CPW_HB + 4
-CPW_D_TX    equ CPW_D_GX + 6    ; the tabs' and the table's left
-CPW_D_TY    equ CPW_D_GY + CPK_BANDH + 4
-CPW_D_BY    equ CPW_D_TY + CPK_TABH + 4
-CPW_D_RH    equ 18              ; a row's pitch
-CPW_D_NX    equ 18              ; a row's name run: x (a space, 24, a space)
-CPW_D_NW    equ 26
-CPW_D_BX    equ CPW_D_NX + CPW_D_NW * 8 ; its badge
-CPW_D_MX    equ CPW_D_BX + 16   ; its memory run: ' ~26.5K+', padded
-CPW_D_MW    equ 9
-
 ; cpw_dwant - CF = 0 the catalog belongs on the screen: the Drivers page
 ; showing its list. Keeps all
 cpw_dwant:
@@ -1261,412 +1222,6 @@ cpw_dwant:
     ret
 .no:
     stc
-    ret
-
-; cpw_dgeo - the group box's right and bottom: CX, DX. Keeps the rest
-cpw_dgeo:
-    push ax
-    mov cx, [es:CPW_W_CW]
-    sub cx, 3
-    call cpw_sty
-    sub ax, 5
-    mov dx, ax
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cpw_dbuild - the catalog's rows: drv_tab's named rows the filter keeps
-; in:  [es:CPW_D_FLT]. out: the block's N, its TOP clamped; every register kept
-; -----------------------------------------------------------------------------
-cpw_dbuild:
-    push ax
-    push bx
-    push cx
-    push di
-    mov di, CPW_D_ROWS
-    mov bx, drv_tab
-    xor cx, cx                  ; CL = the row, CH = rows listed
-.r:
-    cmp word [bx+DRVR_FILE], 0
-    je .n
-    mov al, [es:CPW_D_FLT]
-    or al, al
-    jz .take
-    cmp word [bx+DRVR_SEG], 0
-    je .down
-    cmp al, 1
-    je .take
-    jmp short .n
-.down:
-    cmp al, 2
-    jne .n
-.take:
-    mov [es:di], cl
-    inc di
-    inc ch
-.n:
-    add bx, DRVR_SIZE
-    inc cl
-    cmp cl, DRV_MAX
-    jb .r
-    mov al, ch
-    xor ah, ah
-    mov [es:CPW_D_TB + CPKT_N], ax
-    sub ax, [es:CPW_D_TB + CPKT_NV] ; the last top there is
-    jge .t
-    xor ax, ax
-.t:
-    cmp [es:CPW_D_TB + CPKT_TOP], ax
-    jle .out
-    mov [es:CPW_D_TB + CPKT_TOP], ax
-.out:
-    pop di
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cpw_dpaint - the whole catalog, its ground laid in the spans round it
-; in:  nothing. out: nothing
-; -----------------------------------------------------------------------------
-cpw_dpaint:
-    mov byte [es:CPW_D_ON], 1
-    call cpw_dgeo               ; CX/DX = the box's right / bottom
-    mov [es:CPW_D_TB + CPKT_X], word CPW_D_TX   ; the table's block
-    mov [es:CPW_D_TB + CPKT_Y], word CPW_D_BY
-    mov ax, cx
-    sub ax, CPW_D_TX + 5
-    mov [es:CPW_D_TB + CPKT_W], ax
-    mov word [es:CPW_D_TB + CPKT_RH], CPW_D_RH
-    push dx
-    mov ax, dx
-    sub ax, CPW_D_BY + 3
-    xor dx, dx
-    mov bx, CPW_D_RH
-    div bx
-    pop dx
-    mov [es:CPW_D_TB + CPKT_NV], ax
-    mov word [es:CPW_D_TB + CPKT_ROW], cpw_drow
-    mov word [es:CPW_D_TB + CPKT_SEL], 0FFFFh   ; read-only: no selection
-    call cpw_dbuild
-    push cx                     ; --- the ground round the box
-    push dx
-    mov byte [gfx_color], CWHITE
-    mov ax, CPW_PX
-    mov bx, CPW_HB
-    mov cx, [es:CPW_W_CW]
-    dec cx
-    mov dx, CPW_D_GY - 1
-    call cpw_fill               ; above it
-    pop dx
-    push dx
-    mov bx, dx
-    inc bx
-    call cpw_sty
-    xchg ax, dx
-    dec dx
-    dec dx
-    mov ax, CPW_PX
-    call cpw_fill               ; below it
-    pop dx
-    pop cx
-    push cx
-    push dx
-    mov ax, CPW_PX
-    mov bx, CPW_D_GY
-    mov cx, CPW_D_GX - 1
-    call cpw_fill               ; left of it
-    pop dx
-    pop cx
-    push cx
-    push dx
-    mov ax, cx
-    inc ax
-    mov cx, [es:CPW_W_CW]
-    dec cx
-    call cpw_fill               ; right of it
-    pop dx
-    pop cx
-    mov ax, CPW_D_GX            ; --- the box
-    mov bx, CPW_D_GY
-    mov si, cpw_s_dcat
-    call cpk_group
-    mov byte [gfx_color], CWHITE    ; --- its body, round the tabs and table
-    mov [es:CPK_S_R], cx        ; (cpk_group's scratch is spent: reuse it)
-    mov [es:CPK_S_B], dx
-    mov ax, CPW_D_GX + 1
-    mov bx, CPW_D_GY + CPK_BANDH
-    dec cx
-    mov dx, CPW_D_TY - 1
-    call cpw_fill               ; above the tabs
-    mov bx, CPW_D_TY + CPK_TABH
-    mov dx, CPW_D_BY - 1
-    call cpw_fill               ; between the tabs and the table
-    mov ax, [es:CPW_D_TB + CPKT_RH]
-    mul word [es:CPW_D_TB + CPKT_NV]
-    add ax, CPW_D_BY
-    mov bx, ax                  ; BX = the first row under the table
-    mov ax, CPW_D_GX + 1
-    mov dx, [es:CPK_S_B]
-    dec dx
-    call cpw_fill               ; under the table
-    mov dx, bx
-    dec dx
-    mov bx, CPW_D_TY
-    mov cx, CPW_D_TX - 1
-    call cpw_fill               ; left of the tabs and the table
-    mov ax, [es:CPW_D_TB + CPKT_X]
-    add ax, [es:CPW_D_TB + CPKT_W]
-    mov cx, [es:CPK_S_R]
-    dec cx
-    mov bx, CPW_D_BY
-    call cpw_fill               ; right of the table
-    mov cx, CPW_D_TX            ; --- the tabs...
-    mov dx, CPW_D_TY
-    mov si, cpw_s_tabs
-    mov al, [es:CPW_D_FLT]
-    call cpk_tabs               ; CX = past them
-    mov ax, cx                  ; ...the rest of their row
-    mov cx, [es:CPK_S_R]
-    dec cx
-    mov bx, dx
-    add dx, CPK_TABH - 1
-    mov byte [gfx_color], CWHITE
-    cmp ax, cx
-    jg .tb
-    call cpw_fill
-.tb:
-    mov bx, CPW_D_TB            ; --- and the table
-    jmp cpk_table
-
-; -----------------------------------------------------------------------------
-; cpw_drow - the catalog's row painter (CPKT_ROW): one drv_tab row as the
-; catalog names it - its 16x16 icon and long name out of CPWIDE.DAT, or the
-; gear and its drv_tab title when the catalog has no record of the file -
-; its badge (loaded / wanted and refused / nothing) and its memory figure
-; in:  AX = the list's row, CX/DX = left/top, DI = the width. out: nothing;
-;      every register kept
-; -----------------------------------------------------------------------------
-cpw_drow:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [es:CPK_S_X], cx
-    mov [es:CPK_S_Y], dx
-    add di, cx
-    dec di
-    mov [es:CPK_S_R], di        ; the row's last column
-    mov si, ax
-    mov al, [es:si + CPW_D_ROWS]
-    mov [es:CPK_S_I], al        ; the drv_tab row
-    mov byte [gfx_color], CWHITE    ; --- the ground: the top and bottom rows,
-    mov ax, cx                      ; the left margin
-    mov bx, dx
-    mov cx, di
-    call cpw_fill
-    add bx, CPW_D_RH - 1
-    mov dx, bx
-    call cpw_fill
-    mov bx, [es:CPK_S_Y]
-    inc bx
-    mov dx, bx
-    add dx, CPW_D_RH - 3
-    mov cx, ax
-    inc cx
-    call cpw_fill
-    mov al, [es:CPK_S_I]        ; --- the catalog's record
-    call cpw_cat                ; ES:DI = it, or CF = 1
-    mov bp, di                  ; BP = the record, 0 = none
-    mov al, CWI16_GEAR
-    jnc .rec
-    xor bp, bp
-    jmp short .ic
-.rec:
-    mov al, [es:di + CWD_C_ICON]
-    cmp al, CWI16_N
-    jb .ic
-    mov al, CWI16_GEAR
-.ic:
-    mov cx, [es:CPK_S_X]
-    add cx, 2
-    mov dx, [es:CPK_S_Y]
-    inc dx
-    xor ah, ah
-    mov bl, CWHITE
-    call cpw_icon
-    mov di, CPW_W_STR           ; --- its name: ' ', 24 padded, ' '
-    mov byte [es:di], ' '
-    inc di
-    or bp, bp
-    jz .ttl
-    lea si, [bp + CWD_C_LONG]   ; the catalog's long name (ES)
-    mov cx, 24
-.cn:
-    mov al, [es:si]
-    or al, al
-    jz .pad
-    mov [es:di], al
-    inc si
-    inc di
-    loop .cn
-    jmp short .pad
-.ttl:
-    mov al, [es:CPK_S_I]        ; drv_tab's title, staged by CTRL.DRV
-    mov ah, CPG_DRVTTL
-    call cpw_gate               ; SI = cp_sbuf
-    mov cx, 24
-.ct:
-    mov al, [si]
-    or al, al
-    jz .pad
-    mov [es:di], al
-    inc si
-    inc di
-    loop .ct
-.pad:
-    mov ax, CPW_W_STR + CPW_D_NW
-.p:
-    cmp di, ax
-    jae .pz
-    mov byte [es:di], ' '
-    inc di
-    jmp short .p
-.pz:
-    mov byte [es:di], 0
-    mov ax, CPW_D_NX            ; the band above and below it
-    mov cx, CPW_D_NX + CPW_D_NW * 8 - 1
-    call cpw_band
-    mov cx, [es:CPK_S_X]
-    add cx, CPW_D_NX
-    mov dx, [es:CPK_S_Y]
-    add dx, 5
-    mov si, CPW_W_STR
-    mov ax, (CWHITE << 8) | CBLACK
-    mov bl, 2
-    call cpw_run
-    mov al, [es:CPK_S_I]        ; --- the badge
-    xor ah, ah
-    mov bx, ax
-    mov cl, 4
-    shl bx, cl
-    add bx, drv_tab
-    mov cx, [es:CPK_S_X]
-    add cx, CPW_D_BX
-    mov dx, [es:CPK_S_Y]
-    inc dx
-    mov ax, (CWHITE << 8) | CPK_OK
-    cmp word [bx + DRVR_SEG], 0
-    jne .bdg
-    mov al, CPK_ERR
-    cmp byte [bx + DRVR_WANT], 0
-    je .nob
-    cmp byte [bx + DRVR_ERR], DRVE_OK
-    jne .bdg
-.nob:
-    mov byte [gfx_color], CWHITE    ; not loaded, not asked for: nothing
-    mov ax, cx
-    mov bx, dx
-    add cx, 15
-    add dx, 15
-    call cpw_fill
-    jmp short .mem
-.bdg:
-    xor si, si
-    call cpk_badge
-.mem:
-    mov al, [es:CPK_S_I]        ; --- its memory: ' ', the figure, 'K'
-    mov ah, CPG_DRVMEM
-    call cpw_gate               ; AX = the drv_memk word
-    mov di, CPW_W_STR
-    mov byte [es:di], ' '
-    inc di
-    mov bx, ax
-    and ax, 0x7FFF
-    jz .mz
-    mov byte [es:di], '~'       ; SPEC.md 31.6.2: the shape of the cost,
-    inc di                      ; counted in half-KB (cp_drv_memstr's form)
-    shr ax, 1
-    sbb si, si                  ; SI = -1 for a half
-    call cpw_utoa
-    or si, si
-    jz .mk
-    mov word [es:di], '.5'
-    inc di
-    inc di
-.mk:
-    mov byte [es:di], 'K'
-    inc di
-    test bh, 0x80               ; DRVM_PLUS: and the store it sizes
-    jz .mz
-    mov byte [es:di], '+'
-    inc di
-.mz:
-    mov ax, CPW_W_STR + CPW_D_MW
-.mp:
-    cmp di, ax
-    jae .mq
-    mov byte [es:di], ' '
-    inc di
-    jmp short .mp
-.mq:
-    mov byte [es:di], 0
-    mov ax, CPW_D_MX
-    mov cx, [es:CPK_S_R]
-    sub cx, [es:CPK_S_X]        ; (to the row's last column: the right rest)
-    call cpw_band
-    mov cx, [es:CPK_S_X]
-    add cx, CPW_D_MX
-    mov dx, [es:CPK_S_Y]
-    add dx, 5
-    mov si, CPW_W_STR
-    mov ax, (CWHITE << 8) | CBLACK
-    mov bl, 2
-    call cpw_run                ; CX = past it
-    mov ax, cx                  ; ...and the row's rest, on the text's rows
-    mov cx, [es:CPK_S_R]
-    mov bx, dx
-    add dx, 7
-    mov byte [gfx_color], CWHITE
-    cmp ax, cx
-    jg .out
-    call cpw_fill
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; cpw_band - a row's ground above and below its text: columns AX..CX from the
-; row's left (CPK_S_X), rows 1-4 and 13-16 of it. Keeps all
-cpw_band:
-    push ax
-    push bx
-    push cx
-    push dx
-    add ax, [es:CPK_S_X]
-    add cx, [es:CPK_S_X]
-    mov bx, [es:CPK_S_Y]
-    inc bx
-    mov dx, bx
-    add dx, 3
-    mov byte [gfx_color], CWHITE
-    call cpw_fill
-    add bx, 12
-    add dx, 12
-    call cpw_fill
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1715,41 +1270,9 @@ cpw_cat:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; cpw_dclick - a press on the catalog: a tab filters, the bar scrolls, a row
-; is read-only
-; in:  AX/BX = the point, content-relative. out: nothing
-; -----------------------------------------------------------------------------
-cpw_dclick:
-    mov cx, ax
-    mov dx, bx
-    cmp dx, CPW_D_TY
-    jl .r
-    cmp dx, CPW_D_TY + CPK_TABH - 1
-    jg .tbl
-    sub cx, CPW_D_TX
-    mov si, cpw_s_tabs
-    call cpk_tabhit             ; AL = the tab
-    jc .r
-    cmp al, [es:CPW_D_FLT]
-    je .r
-    mov [es:CPW_D_FLT], al
-    mov word [es:CPW_D_TB + CPKT_TOP], 0
-    call cpw_dbuild
-    mov cx, CPW_D_TX            ; the strip (its width does not change) and
-    mov dx, CPW_D_TY            ; the table
-    call cpk_tabs
-    mov bx, CPW_D_TB
-    jmp cpk_table
-.tbl:
-    mov bx, CPW_D_TB
-    call cpk_tbclick
-.r:
-    ret
+%include "cpw_drv.inc"
 
 ; --- the image's strings ------------------------------------------------------
-cpw_s_dcat: db 'Driver catalog', 0
-cpw_s_tabs: db 'All', 0, 'Loaded', 0, 'Not loaded', 0, 0
 cpw_datname: db 'CPWIDE.DAT', 0
 cpw_s_h0:   db 'SYSTEM', 0
 cpw_s_h1:   db 'HARDWARE', 0
