@@ -1399,7 +1399,11 @@ cpv_modes:
     mov byte [es:di], 0
     test byte [vid_avail], VID_A_VESA
     jnz .l2
-    mov si, cpv_s_load          ; ...and where more come from
+    mov si, cpv_s_load          ; ...and where more come from, or that the
+    cmp word [vesa_row + DRVR_SEG], 0   ; driver IS loaded and attaches at
+    je .ld                      ; the next start (SPEC.md 120.4, 134.9.1)
+    mov si, cpv_s_rst
+.ld:
     call cpw_strcat
 .l2:
     add dx, CPV_RH
@@ -1769,9 +1773,18 @@ cpv_ctl1:
     test byte [drv_cfg + CFG_VGC], CFG_VGCB
     mov al, OS88UI_GCHECK
 .nz:
-    jz .g
+    mov si, cpd_ck0             ; the Drivers page's tick box (QA-8), up and
+    jz .z0                      ; live; greyed or pressed is the gate's glyph
+    mov si, cpd_ck1
     or al, OS88UI_GON
-    jmp short .g
+.z0:
+    test di, di
+    jnz .g
+    test bp, 0FF00h
+    jnz .g
+    pop ax                      ; its left (content); BX is still its top
+    call cpd_blit12
+    jmp short .out
 .on:
     jne .g
     or al, OS88UI_GON
@@ -1832,6 +1845,8 @@ cpv_ctlok:
 .fc:
     test byte [vid_avail], VID_A_VGA
     jz .no
+    cmp byte [vid_kind], VID_VESA
+    je .no                      ; a VESA desktop: its DAC is its own (134.9.1)
     jmp short .yes
 .switch:                        ; Apply / Test...: not what is running
     mov al, [es:CPV_ASEL]
@@ -2009,7 +2024,12 @@ cpv_rbox:
     call cpv_new                ; the card
     mov si, cpv_s_novx
     test byte [vid_avail], VID_A_VESA
-    jz .c
+    jnz .vx
+    cmp word [vesa_row + DRVR_SEG], 0
+    je .c
+    mov si, cpv_s_novl          ; loaded at run time: it attaches at boot
+    jmp short .c
+.vx:
     mov si, cpv_s_nolist
     cmp byte [es:CPV_NREC], 0
     je .c
@@ -2196,13 +2216,15 @@ cpv_s_mrec:     db 'recommended', 0
 cpv_s_mstart:   db 'startup', 0
 cpv_s_tall:     db 'All', 0
 cpv_s_t8:       db '256', 0, '32,768', 0, '65,536', 0
-cpv_s_start:    db ' Use this mode at startup', 0
+cpv_s_start:    db ' Use mode at startup', 0
 cpv_s_fc:       db ' Force Color', 0
 cpv_s_apply:    db 'Apply', 0
 cpv_s_test:     db 'Test...', 0
 cpv_s_keep:     db 'Keep', 0
 cpv_s_revert:   db 'Revert', 0
 cpv_s_novx:     db 'VESA Display is not loaded', 0
+cpv_s_novl:     db 'Restart to use VESA Display', 0
+cpv_s_rst:      db ' Restart to use the VESA Display modes.', 0
 cpv_s_nolist:   db 'No mode list from the driver', 0
 cpv_s_vbe:      db 'VBE ', 0
 cpv_s_mb:       db ' MB', 0
