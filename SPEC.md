@@ -259089,7 +259089,7 @@ Shipped by S3. Two entries, one each way:
 | 12 `CPG_DRVSTAT` | its status sentence, staged (`drv_status_x`) | AL = a row | SI = `cp_sbuf` |
 | 13 `CPG_DRVMEM` | its `drv_memk` word (half-KB; `DRVM_PLUS` in bit 15, §31.6.2) | AL = a row | AX |
 | 14 `CPG_VIDSET` | Set Primary (`cp_vid_set`): the VESA row has the driver pick the class first, a display on the VBE leaves and comes back; `vid_switch`; every window repainted | AL = a `VID_*`, CL = a class | CF = 1 refused; AX spent |
-| 15 `CPG_VXCALL` | a verb to VESA.DRV (`cp_vid_vxcall`; kern_mega: CF = 1) | AL = a `VXV_*`, CL = a class | the verb's |
+| 15 `CPG_VXCALL` | a verb to VESA.DRV (`cp_vid_vxcall`; CF = 1 while `vesa_row` is not loaded - on every kernel with `VID_EXT`, kern_mega included) | AL = a `VXV_*`, CL = a class | the verb's |
 | 16 `CPG_VGC` | Force Color toggled, owed, applied on a tick (`cp_vgc_tog`) | - | - |
 | 17 `CPG_THMSET` | a theme applied (`cp_thm_apply`), greying already asked | AL = a `THM_*` | CF = 1 it was live |
 | 18 `CPG_THMCUST` | Customize... (THMPAL.DRV, §76.14.14), its refusal said | - | - |

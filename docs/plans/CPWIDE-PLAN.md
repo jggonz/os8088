@@ -90,7 +90,30 @@ green, not yet seen in the QA pass), `[S]` seen working in the QA pass.
 
 ## QA list
 
-(filled by Q1)
+Q1 ran on 2026-11-22 at 878541a13 (QEMU VGA, VESA 800x600/1024x768, EGA,
+CGA, Hercules via QEMU's forced renderer, kern_mega; MartyPC XT+VGA for
+timing). Full report with steps and screenshots: the fan-out's
+`qa-report.md`. Passed: hosted pages, Drivers, Theme, Display (but QA-4/5/6),
+kern_mega, compact on EGA/CGA/Hercules/360KB, every refusal path (no DAT, no
+DRV, corrupt DAT), the installer copies both files (by reading `inst.inc`).
+
+| id | sev | defect | owner | state |
+|---|---|---|---|---|
+| QA-1 | high | Dock Left/Right on 640x480: the window is clamped, the face shows only "Close and reopen", and reopening picks wide again | fixa | open |
+| QA-2 | med | the small state still takes presses and draws the wide layout | fixa | open |
+| QA-3 | high | Theme and Display write the Drivers page's filter/selection bytes in the shared page block | fixa | open |
+| QA-4 | med | Force Color on a VESA 8bpp desktop loads the EGA palette into DAC 0..63 | fixb | open |
+| QA-5 | low | after that toggle, Apply/Test go live on the running row | fixb | open |
+| QA-6 | med-low | VESA loaded at run time: the Display page says to load it (it attaches at the next boot) | fixb | open |
+| QA-7 | cosm | "Use this mode at startup" touches a frame at 616x408 | fixb | open |
+| QA-8 | cosm | Display check boxes are a filled square, Drivers' a tick | fixb | open |
+| QA-9 | cosm | "Ram Disk" vs "RAM Disk", "VESA Display" vs "VESA High-Res Display" | lead | fixed: the catalog uses the system's names |
+| QA-10 | doc | SPEC 134 said kern_mega has no VESA; it does | lead | fixed (134.4; 134.2 with QA-1) |
+
+MartyPC, XT 4.77 MHz + VGA, 1.44MB disk, guest seconds from the menu
+release to idle: first open wide 4.30 / compact 1.92; second open 1.90 /
+1.08; switch to Drivers 2.15 / 1.14. (The 360KB system disk, the one an XT
+normally boots, opens compact by the owner's decision.)
 
 ## Rows
 

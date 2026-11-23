@@ -60,7 +60,7 @@ description = [
 ["RAMDISK.DRV"]
 category = "STOR"
 icon = "C_RAMD"
-name = "RAM Disk"
+name = "Ram Disk"
 description = [
   "A drive kept in memory: fast, empty after",
   "a restart. Needs no hardware.",
@@ -132,7 +132,7 @@ description = [
 ["VESA.DRV"]
 category = "DISP"
 icon = "C_DISP"
-name = "VESA High-Res Display"
+name = "VESA Display"
 description = [
   "800x600 and 1024x768 desktops in many",
   "colours. Needs a VBE graphics card.",
