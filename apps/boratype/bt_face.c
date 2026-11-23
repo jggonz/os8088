@@ -1018,12 +1018,12 @@ void bt_face_paint(void *win,int full)
         if(tf_cosneeded&&(tf_idleturn||(!tf_aseq&&tf_aframe>0&&tf_aframe<4)))ovl_tf_cosmetics();
         else if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,tf_cw,h,8,i);tf_dirtyfirst[2]++;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
         else if(tf_footpending){h=tf_h-(tf_bottom-tf_y)-tf_footrow;if(h>4)h=4;tf_render(tf_x,tf_bottom+tf_footrow,tf_w,h,2,0);tf_footrow+=h;if(tf_footrow>=tf_h-(tf_bottom-tf_y))tf_footpending=0;}
-        else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){h=tf_hinth-tf_hintrow;if(h>4)h=4;
+        else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){h=tf_hinth-tf_hintrow;
             if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_hinty+tf_hintrow,tf_w-i-70,h,7,0);}
             else tf_render(tf_promptx,tf_hinty+tf_hintrow,tf_cols*tf_cw<344?tf_cols*tf_cw:344,h,7,0);
             tf_hintrow+=h;if(tf_hintrow>=tf_hinth)tf_hintpending=0;}
         else if(tf_statpend){for(c=0;c<7;c++){i=tf_statnext;tf_statnext++;if(tf_statnext>=7)tf_statnext=0;if(tf_statpend&(1<<i)){
-            if(i<5){s=tf_stath>=30?16:tf_compact?8:10;h=s-tf_statrow[i];if(h>4)h=4;
+            if(i<5){s=tf_stath>=30?16:tf_compact?8:10;h=s-tf_statrow[i];
                 tf_render(tf_statsx+i*(tf_statsw/5)+4,tf_statsy+(tf_stath>=30?12:tf_compact?1:4)+tf_statrow[i],tf_statsw/5-8,h,9,i);
                 tf_statrow[i]+=h;if(tf_statrow[i]<s)break;}
             else if(!tf_compact&&i==5){s=ovl_tf_progress_width();x=tf_progressfill<s?tf_progressfill:s;w=tf_progressfill<s?s-tf_progressfill:tf_progressfill-s;tf_progressfill=s;if(w)tf_render(tf_promptx+1+x,tf_statsy-8,w,2,12,0);}
