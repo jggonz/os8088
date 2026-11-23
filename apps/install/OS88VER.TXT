@@ -1,5 +1,5 @@
-20261120
-* FAT32 hard disks on the 286+ kernel
-* Extended partitions, disks past 504MB
-* Spanish and French keyboard layouts
-* VESA: icons anywhere, accented text
+20261123
+* Borat Teaches Typing, a typing tutor
+* Wide Control Panel on VGA and VESA
+* Display page lists every VESA mode
+* Drivers page with categories, details

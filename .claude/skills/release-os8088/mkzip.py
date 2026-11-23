@@ -517,6 +517,15 @@ ITEMS = [
      "five examples, the tests and HELP.TXT. It is on the live media too.",
      [("2basic.img", "1.44MB", ""), ("2basic120.img", "1.2MB", ""),
       ("2basic720.img", "720KB", ""), ("2basic360.img", "360KB", "")]),
+    ("progs", "Borat Teaches Typing", False,
+     "A typing tutor: twenty-four lessons from the home row to symbols, "
+     "practice on the keys you miss most, one-, three- and five-minute "
+     "challenges, four saved profiles and records. It draws its own "
+     "lettering and pictures, and plays its own music and effects. Each "
+     "disk carries the program and HELP.TXT; it is on the everything sets "
+     "too.",
+     [("boratype.img", "1.44MB", ""), ("boratype120.img", "1.2MB", ""),
+      ("boratype720.img", "720KB", ""), ("boratype360.img", "360KB", "")]),
     ("progs", "Windows 3.x programs", True,
      "WIN16, which runs Windows 3.0 and 3.1 programs in an os8088 window. "
      "The disk carries WIN16 and is otherwise empty: copy your Windows "
@@ -637,6 +646,7 @@ PROGRAMS = {
     "Breadboard XT": ("BREADXT", "BREAD"),
     "Byteopoly": ("BYTEOPLY", "BYTE"),
     "2BASIC": ("2BASIC", "2BAS"),
+    "Borat Teaches Typing": ("BORATYPE", "BORAT"),
     "Weave": ("WEAVE", "WEAVE"),
     "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),

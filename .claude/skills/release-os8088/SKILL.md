@@ -355,6 +355,9 @@ make pixeldisk                        # pixel.img -- PiXEL with its whole
 make xtmp3disk                        # xtmp3*.img -- XTMP3 and its three songs
 make pagedeskdisk                     # pagedesk*.img -- PageDesk and its eight
                                       # sample PDFs, PROGRAMS/PAGEDESK
+make breadxtdisk byteopolydisk        # breadxt*.img, byteopoly*.img
+make 2basicdisk boratypedisk          # 2basic*.img, boratype*.img -- 2BASIC
+                                      # and Borat Teaches Typing
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
