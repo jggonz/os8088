@@ -338,8 +338,16 @@ DSV_CPNAME   equ 18             ; -> a NUL Control Panel page name, in YOUR
                                 ; segment; 0 = no page. The kernel STAGES it,
                                 ; because cp_list draws it with font_str and
                                 ; font_str reads through DS
-DSV_CPPAINT  equ 20             ; near proc: that page's paint
-DSV_CPCLICK  equ 22             ; near proc: that page's click
+DSV_CPPAINT  equ 20             ; near proc: that page's paint - DI/DX = the
+                                ; pane's left/top, CX/BX = its width/height
+                                ; (SPEC.md 31.9.4: 222x132 on the compact face,
+                                ; the whole page area for OS88_DRV_CPWIDE on the
+                                ; wide one), SI = the panel's window
+DSV_CPCLICK  equ 22             ; near proc: that page's click - DI/DX as for
+                                ; the paint, CX/BX = the pane-relative point
+                                ; (remember the size from the paint), SI = the
+                                ; window. Release, drag and key carry DI/DX/SI
+                                ; the same way
 DSV_CPCLOSE  equ 24             ; near proc: "the Control Panel has been
                                 ; closed" (SPEC.md 31.9.1). No arguments, no
                                 ; answer, gfx lock HELD - so you may draw, and
@@ -459,6 +467,32 @@ DSV_SIZE     equ 36
 ; A cell appended past the floor is a cell the kernel must length-test
 ; against +15 - or a DRV_VER bump that raises this.
 DSV_FLOOR    equ 36
+; ...AND THE ONE CELL PAST IT, length-tested exactly so (SPEC.md 31.9.4):
+DSV_CPTICK   equ 36             ; near proc: "your page is SHOWING". While
+                                ; your page is the selected page of a live,
+                                ; visible Control Panel that no fullscreen
+                                ; program or saver covers, it is called on the
+                                ; UI task about NINE times a second, with the
+                                ; gfx lock HELD and the panel's clip ARMED,
+                                ; and the paint's registers: DI/DX = the pane's
+                                ; left/top, CX/BX = its width/height, SI = the
+                                ; panel's window. Draw only what changed since
+                                ; your last paint or tick (PERFORMANCE.md rule
+                                ; 1); no answer. Never called inside a click,
+                                ; release, drag or key, so those may assume the
+                                ; page is still.
+                                ;
+                                ; PUBLISH IT BY DECLARING THE LONGER TABLE:
+                                ; `OS88_DRIVER 'Name', class, entry, DSV_MAX`,
+                                ; and a table DSV_MAX bytes long. A table that
+                                ; is DSV_FLOOR long has no tick and is never
+                                ; asked - the kernel reads +15 first. The SOUND
+                                ; class's table is copied DSV_FLOOR long, so a
+                                ; sound driver's page (none has one) cannot tick
+DSV_MAX      equ 38             ; the longest table any kernel reads
+%if DSV_MAX > 0x3F
+  %error "os88drv: DSV_MAX must fit +15's 6-bit length"
+%endif
 
 ; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
 ; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -
@@ -817,6 +851,20 @@ OS88_DRV_WAKEBIT equ 0x8000
 %else
 OS88_DRV_WAKEBIT equ 0
 %endif
+; OS88_DRV_CPWIDE - %define it BEFORE OS88_DRIVER to say that your Control
+; Panel page lays itself out from the CX (width) and BX (height) it is painted
+; and ticked with (SPEC.md 31.9.4). The WIDE face (SPEC.md 135.3.1) then hosts
+; it over its whole page area - from the header strip to the status line's
+; rule, from the page list's rule to the right edge, about 493x330 at 640x480
+; - and lays NO ground there: your paint lays every pixel of it. The compact
+; face is unchanged (a 222x132 pane). Undefined, the wide face hosts the page
+; at 222x132 as before. Bit 14 of +10, read by CTRL.DRV alone; undefined, the
+; header is byte for byte what it was
+%ifdef OS88_DRV_CPWIDE
+OS88_DRV_CPWBIT equ 0x4000
+%else
+OS88_DRV_CPWBIT equ 0
+%endif
 
 %macro OS88_DRIVER 3-4 DSV_SIZE
     %xdefine OS88_DSV_LEN (%4)
@@ -833,10 +881,11 @@ OS88_DRV_WAKEBIT equ 0
                             ;     or, in a copy the HMA runs, where it runs
     dw (%3) - $$            ; +6  entry offset
     dw OS88_DRV_SIZE        ; +8  image size = the whole file, data included
-    dw FSV_SIZE | OS88_DRV_WAKEBIT ; +10 THE FSV_* TABLE LENGTH THIS DRIVER WAS
-                            ;     BUILT WITH (SPEC.md 62.9.1.1) - and bit 15,
-                            ;     OS88_DRV_WAKES (51.2.5), the one bit of it
-                            ;     anything reads. The length is written and NOT READ
+    dw FSV_SIZE | OS88_DRV_WAKEBIT | OS88_DRV_CPWBIT ; +10 THE FSV_* TABLE
+                            ;     LENGTH THIS DRIVER WAS BUILT WITH (SPEC.md
+                            ;     62.9.1.1) - and bit 15, OS88_DRV_WAKES
+                            ;     (51.2.5), and bit 14, OS88_DRV_CPWIDE
+                            ;     (31.9.4), the two bits of it anything reads. The length is written and NOT READ
                             ;     since kernel size pass 19: every file table
                             ;     is FSV_FLOOR long, so no verb is length-
                             ;     tested (D4). Kept because the header is 32
@@ -915,12 +964,13 @@ OS88_DRV_SIZE equ os88_drv_end - $$
     %endif
     %ifdef OS88_DSV_LEN
         ; OS88_DRIVER's fourth argument, checked here because it may be a
-        ; forward reference: the FLOOR, exactly (D4) - not shorter, because
-        ; the kernel reads below the floor in place with no length test, and
-        ; not longer, because a cell past DSV_SIZE is one no kernel knows.
+        ; forward reference: the FLOOR (D4) or DSV_MAX - not shorter,
+        ; because the kernel reads below the floor in place with no length
+        ; test, and not longer, because a cell past DSV_MAX is one no kernel
+        ; knows. DSV_MAX is a table that carries DSV_CPTICK (31.9.4).
         ; A `times` of -1 is NASM's "TIMES value -1 is negative", which is
         ; the error (the message names this line); 0 emits nothing.
-        times -((OS88_DSV_LEN) != DSV_FLOOR) db 0
+        times -((OS88_DSV_LEN) != DSV_FLOOR && (OS88_DSV_LEN) != DSV_MAX) db 0
     %endif
     %ifdef OS88_STATE_OPEN
 OS88_STATE_LEN equ os88_drv_end - os88_state

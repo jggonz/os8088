@@ -575,6 +575,16 @@ DSV_FLOOR   equ 36              ; ...and THE FLOOR every driver DRV_VER 14
 %if DSV_SIZE != DSV_FLOOR
   %error "driver: a DSV cell past the floor - drv_publish's copy and every in-place read below need DRV_H_DSV's length test back for it, or a DRV_VER bump raises DSV_FLOOR"
 %endif
+; ...and THE ONE CELL PAST IT, which is exactly that: DSV_CPTICK, a driver
+; page's live tick (SPEC.md 31.9.4). NOT in DSV_SIZE - class 1's copy stays
+; DSV_FLOOR long and the sound class's page (it has none) cannot tick - and
+; read ONLY by CTRL.DRV's cp_dtick, after the header's +15 length says the
+; table holds it. A driver built before it has a 36-byte table and is never
+; asked. Mirrored in drivers/os88drv.inc
+DSV_CPTICK  equ 36
+DRV_CPW_BIT equ 0x40            ; OS88_DRV_CPWIDE: bit 6 of DRV_H_WAKES, +10's
+                                ; bit 14 - "my page lays itself out from the
+                                ; CX/BX it is painted with" (31.9.4, 135.3.1)
 
 ; --- the FSV_* verbs behind DSV_FS (SPEC.md 62.9.1) --------------------------
 ; A DRVC_FILE volume has NO SECTORS - dsk_xfer refuses one outright - so what

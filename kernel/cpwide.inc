@@ -857,6 +857,10 @@ cpw_page:
     mov byte [es:CPW_D_ON], 0   ; entry (135.5.1): any other page clears it
     cmp byte [cp_sel], CP_ITHM
     je cpw_thm_paint            ; the Theme page is drawn natively (135.11)
+    mov bx, [es:CPW_W_WIN]
+    mov ah, CPG_HPAINT          ; the page FIRST: CF = 1 says it was a WIDE
+    call cpw_gate               ; driver page, which lays its own ground over
+    jc .r                       ; the whole page area (SPEC.md 135.3.1)
     mov byte [gfx_color], CWHITE
     mov ax, CPW_PX + CPW_HW     ; right of the hosted rect
     mov bx, CPW_BY
@@ -864,13 +868,12 @@ cpw_page:
     dec cx
     mov dx, CPW_HB - 1
     call cpw_fill
-    call cpw_under              ; ...and the ground under it
-    mov bx, [es:CPW_W_WIN]
-    mov ah, CPG_HPAINT
-    jmp cpw_gate
+    jmp cpw_under               ; ...and the ground under it
 .vid:
     mov byte [es:CPW_D_ON], 0
     jmp cpv_page
+.r:
+    ret
 
 ; cpw_under - the ground under the hosted rect, to the status line's rule
 cpw_under:
@@ -1221,12 +1224,17 @@ cpw_key:
     mov ah, CPG_HKEY
     jmp cpw_gate
 
-; cpw_tick - CWV_TICK: the hosted Date/Time page's clock, when it is showing
+; cpw_tick - CWV_TICK: the hosted Date/Time page's clock, when it is showing,
+; or a driver page's DSV_CPTICK (SPEC.md 31.9.4) - CTRL.DRV's cp_tick_x asks
+; that page again, hosted or wide alike
 cpw_tick:
     cmp byte [cp_sel], CP_IVID  ; a Test... counting down (SPEC.md 135.9.4)
     je cpv_tick
     cmp byte [cp_sel], CP_ITIME
-    jne .r
+    je .host
+    cmp byte [cp_sel], CP_ITEMS ; a driver's page (31.9.4)
+    jb .r
+.host:
     call cpw_org                ; (the last window event's window)
     call cpw_big                ; the small state: no clock drawn over it
     jb .r

@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "a8f72a915b39c66209a9e4ebd7f3ff2809b98c8e3943c31058e8970f4af37b99",
+  "fingerprint": "7a231d0ef51377ce78d8dad29b7f14d6cd0d0d77fe190f51ba9a9b70fc50eb0f",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -2491,6 +2491,13 @@
    "guard": "VX_ABI_VER",
    "reason": "VXV_INFO (0x44): additive verb for the wide Display page, like VXV_PM; an image or kernel from before it cannot be broken by it, so VX_ABI_VER stays 6",
    "to": 6
+  },
+  {
+   "fingerprint": "7a231d0ef51377ce78d8dad29b7f14d6cd0d0d77fe190f51ba9a9b70fc50eb0f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "J2 (SPEC 31.9.4): DSV_CPTICK appended past DSV_FLOOR, length-tested against +15 (DSV_MAX 38 accepted by OS88_DRV_END), and OS88_DRV_CPWIDE = bit 14 of +10, reserved until now; every driver built before runs unchanged, so no DRV_VER bump",
+   "to": 14
   }
  ]
 }

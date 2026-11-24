@@ -74415,9 +74415,11 @@ Three things hold it up:
 - **The Drivers page redraws the item LIST, not just its own pane**, after a
   load or an unload: the row it just added or removed is in the other pane.
 
-The pane is 221 × 121 px — 27 characters by 13 rows — and the panel is not
+The pane is 222 × 132 px from DI — 27 characters by 16 rows — and the panel is not
 resizable, so a driver whose interface needs more room opens a window of its
-own (§38.1's unowned-window species, and §52.2/§52.3 are the worked examples).
+own (§38.1's unowned-window species, and §52.2/§52.3 are the worked examples),
+or, on the wide face, says `OS88_DRV_CPWIDE` (§31.9.4, §135.3.1). Since
+§31.9.4 every page call also carries the pane's size and the panel's window.
 
 **The list holds eight rows and no more.** Row *i*'s bar runs
 `CP_I0Y + i*CP_IROWH` to `+ CP_IBH - 1`, so row 7 ends at 116 inside a
@@ -74535,46 +74537,106 @@ byte at all.
 
 #### 31.9.4 A driver page that is live, and one that is wide
 
-**Pinned by `docs/plans/JOYSTICK-PLAN.md` story J2; shipped when it is
-ticked.** Two things a driver page could not do before §136's Joystick page
-needed both: redraw itself while nobody clicks (a live test view), and use
-the wide face's whole page area (§135.3 hosts every driver page at 229×132).
+**Shipped by `docs/plans/JOYSTICK-PLAN.md` story J2.** Two things a driver
+page could not do before §137's Joystick page needed both: redraw itself
+while nobody clicks (a live test view), and use the wide face's whole page
+area (§135.3 hosts every driver page in the compact pane's 222×132).
 
-**The pane's size travels with every page call.** Paint, click, release,
-drag, key and the tick below carry, besides DI = pane left and DX = pane top,
-**CX = the pane's width and BX = its height on PAINT and TICK** (a click's CX
-and BX stay the relative point, §31.9 - a page remembers its size from the
-paint), and **SI = the Control Panel's window**. The compact face passes its
-own pane; the wide face passes the hosted rect, or the whole page area for a
-wide page. A page built before this ignores CX, BX and SI on paint, so
-nothing it does changes.
+**The pane travels with every page call** (kern_big, kern_emu, kern_mega;
+kern_small has no driver layer and is unchanged):
 
-**`DSV_CPTICK` (36) - "your page is showing".** A service cell appended past
-`DSV_FLOOR`, so it is length-tested against the header's +15 length (§51.2):
-a driver built before it never has it called. While that driver's page is the
-SELECTED page of a live, visible panel that is not covered by a fullscreen
-program (`wm_fs_vis`) or a saver session, it is called on the UI task about
-nine times a second (every second system tick), with the gfx lock HELD and
-the panel's clip region armed, and DI/DX/CX/BX/SI as for paint. It draws only
-what changed since its last paint or tick - the page's own rule 1 - and
-answers nothing. It is never called during a click, release, drag or key, so
-those may assume the page is still.
+```
+paint, tick           DI = pane left, DX = pane top, CX = width, BX = height, SI = window
+click, release, drag  DI = pane left, DX = pane top, CX = rel x, BX = rel y, SI = window
+key                   DI = pane left, DX = pane top, BL = ASCII, BH = scan,  SI = window
+```
+
+SI is the Control Panel's window (`cp_drv_win`: the panel's instance record's
+`I_WIN`), on both faces. The size is the compact pane's on the compact face
+and for a hosted page on the wide one - **222 × 132** (`CP_CW - CP_RX` ×
+`CP_CH`: from DI to the content's right edge, the whole content height) -
+and the wide page area for a wide page (below). A click's CX and BX stay the
+relative point (§31.9), so a page remembers its size from the paint. The key
+gained DI/DX here: `cp_onkey_x` computes the origin before it forwards. AX
+still carries the CLASS into `drv_cp_call` (§31.9.2's trap), and every
+argument above avoids it. A page built before this ignores CX, BX and SI on
+paint and DI/DX on a key, so nothing it does changes - the RAM disk, hard
+disk, network, HTTP and CD-ROM pages run unmodified.
+
+**`DSV_CPTICK` (36) - "your page is showing".** The one service cell past
+`DSV_FLOOR`, so it is **length-tested**: a driver publishes it by declaring a
+`DSV_MAX` (38) table - `OS88_DRIVER 'Name', class, entry, DSV_MAX`, which
+`OS88_DRV_END` accepts beside `DSV_FLOOR` - and `CTRL.DRV`'s `cp_dtick` reads
+the header's +15 length (through the class's dispatch pointer less
+`PKG_DISP`, so an HMA image is found too) before it reads the cell. A driver
+built before it has a 36-byte table and is never asked. `DSV_SIZE` stays 36:
+the kernel's one copy, the sound class's, is not grown, so a sound driver's
+page (none has one) cannot tick (`cp_dtick` refuses `DRVC_SOUND`).
+
+While that driver's page is the SELECTED page of a live, visible panel that is
+not covered by a fullscreen program (`wm_fs_vis`) or a saver session, it is
+called on the UI task on every second system tick - **about 9.1 Hz** - with
+the gfx lock HELD and **the panel's clip region armed** (`wm_clip_set`, which
+also refuses a hidden window and a saver), and the paint's registers. It
+draws only what changed since its last paint or tick - the page's own rule 1
+- and answers nothing. A page that overlaps another window keeps moving under
+it, clipped; that is the difference from the Date/Time clock, which refuses
+when obscured (§31.5). It is never called during a click, release, drag or
+key - the tick is a step of `ui_task`'s clock pass, after every event of that
+pass has been dispatched - so those may assume the page is still.
+
+How it is delivered, and what each piece costs:
+
+- **`[cp_tickp]`** (§135.9.4's byte) names the page the resident gate ticks.
+  `cp_item_paint` sets it (`cp_tickset`) on every page paint, compact or
+  hosted: a driver page with a tick writes its own record there; any other
+  page puts `CP_ITIME` back unless a Display Test holds `CP_IVID`. The wide
+  face's own pages (Drivers, Display, Theme) do not paint through
+  `cp_item_paint`, and a stale driver record there is harmless: it is a
+  record nothing else is, so `cp_tick_due_x` matches no page and the next
+  Date/Time paint resets it. `modc_e_flush` resets it at the close.
+- **The resident gate is 7 bytes of `ui_task`** (+8 `.text`, alignment, on
+  kern_big, kern_emu and kern_mega; kern_small byte-identical). Where a clock
+  pass with no second and no bar change went straight to idle, it now goes
+  on while `[cp_tickp]` is at least `CP_ITEMS` - a driver record - into the
+  existing path: `wm_fs_vis`, the saver test, `cpf_cp_tick_due` (the
+  unchanged `[cp_sel] == [cp_tickp]`, live and visible test), the lock,
+  `cpf_cp_tick`. On every desktop without such a page that is one compare a
+  tick and the lock is never taken. The 9 Hz halving is NOT resident: a
+  14-byte gate with the parity test crossed kern_emu's rung (it had 16 bytes
+  left), so the gate passes all 18.2 ticks and **`CTRL.DRV`'s `cp_tick_x`
+  drops the odd ones** (`[ui_lastt]` bit 0) before it looks at the driver -
+  an odd tick costs the lock, a far call and a compare, and draws nothing.
+- **`cp_tick_x`** (compact, and the wide face's `CPG_HTICK`): a driver page
+  (`[cp_sel]` ≥ `CP_ITEMS`) on an even tick asks `cp_dtick` again under the
+  lock - the page may have changed, the driver may have gone - then
+  `cp_live`, `wm_clip_set` on the panel's window, the origin, and
+  `cp_drv_ev` with `DSV_CPTICK`. `cpw_tick` forwards a driver page's tick
+  through `CPG_HTICK` exactly as it forwards Date/Time's, after `cpw_big`.
+- **A driver detaching** while its page is up: `cp_drv_gone_x` clamps
+  `[cp_sel]` to the Scheduler, so the next gate pass matches nothing; and
+  `cp_dtick` finds no table if a tick was already due. **The panel closing**:
+  `cp_tick_due_x`'s live test refuses, and the close resets `[cp_tickp]`.
+  **The page changing**: the new page's paint rewrites `[cp_tickp]`.
 
 **`OS88_DRV_CPWIDE` - bit 14 of header word +10** (§51.1: written, and until
 now only bit 15 read). Set, it says: my page lays itself out from the CX and
 BX it is painted with. The wide face then hosts it over the whole page area
-(origin `CPW_PX`, `CPW_BY`, to the status rule and the right edge) instead of
-the 229×132 rect, and lays no ground of its own there; the compact face is
-unchanged. Clear, the page is hosted at 229×132 as before. A driver sets it
-with `OS88_DRV_CPWIDE` before `OS88_DRIVER`, as it does `OS88_DRV_WAKES`.
+instead of the 222×132 pane, and lays no ground of its own there (§135.3.1);
+the compact face is unchanged. Clear, the page is hosted as before. A driver
+says it with `%define OS88_DRV_CPWIDE` before `OS88_DRIVER`, as it does
+`OS88_DRV_WAKES`; undefined, the header is byte for byte what it was.
+`CTRL.DRV` reads it (`cp_dwide`, through `cp_dhdr`) and nothing else does.
 
-**Cost.** Everything but the tick's gate is in `CTRL.DRV` and `CPWIDE.DRV`,
-which are on-demand modules. The gate - a resident test on the UI task's path
-that is faster than the once-a-second `cp_tick_due_x` - is the one resident
-cost, held to the smallest that works and measured in the plan; no rung
-crossed on any kernel. No `DRV_VER` bump: an appended, length-tested cell and
-a reserved header bit run every driver built before them unchanged
-(§20.2.0.1), so `tools/abilock.py --update` without a bump.
+**Cost, measured** (2026-11-24, against the J2 base). Resident: +8 `.text`
+on kern_big (262 → 254 left in its rung), kern_emu (16 → 8 left) and
+kern_mega (image rung 210 → 202 left); no rung crossed; kern_small
+byte-identical. `CTRL.DRV` +266 bytes (16,735 → 17,001; kern_emu 16,753 →
+17,019; kern_mega 16,974 → 17,240, 168 under `MOD_MAX_KB`). `CPWIDE.DRV`
++9 (13,763 → 13,772 unpacked; kern_mega 13,793 → 13,802). No `DRV_VER` bump:
+an appended, length-tested cell and a reserved header bit run every driver
+built before them unchanged (§20.2.0.1) - `tools/abilock.py --update`
+without a bump.
 
 ### 31.10 Display page — which adapter the machine is driven as
 
@@ -259159,6 +259221,35 @@ wide control's (`CPW_ID0` and up, §135.5) is the wide face's own.
 
 The Drivers list itself is the wide face's own page (§135.8).
 
+#### 135.3.1 A WIDE driver page - the whole page area (§31.9.4)
+
+A driver whose header says `OS88_DRV_CPWIDE` (bit 14 of +10) is hosted over
+**the whole page area** instead of the compact pane: from `CPW_PX` to the
+content's right edge, and from `CPW_BY` to the row above the status line's
+rule - `W_W - 2 - CPW_PX` by `W_H - TITLE_H - 1 - CPW_STH - 1 - CPW_BY`
+(`cp_drv_sz`), which is 493×330 in the 616×408 window and 637×442 in the
+760×520 one. One routine decides it, `cp_dwide` in `CTRL.DRV`: the wide face
+is up, `[cp_sel]` is a driver's record, and that driver's header has the bit.
+Everything else follows the origin, as the hosted pages already do:
+
+- **`cp_origin`** answers the content origin plus (`CPW_PX` − `CP_RX`,
+  `CPW_BY`) for such a page, so every compact path's `add di, CP_RX` lands on
+  `CPW_PX` - the paint, the press (`CPG_HCLICK`), the release and drag
+  (`CPG_HUP`/`CPG_HDRAG`), the key (`CPG_HKEY`) and the tick (`CPG_HTICK`)
+  all deliver page-area-relative points with no code of their own.
+  `cpw_click` already hands the whole page area to the hosted page.
+- **No ground**: `cp_page` skips its pane erase for a wide page (its rect
+  would reach back into the list), and `cpg_hpaint` answers **CF = 1** for
+  one. `cpw_page` now calls `CPG_HPAINT` FIRST and lays the white ground
+  right of and under the hosted rect only on CF = 0 - for a hosted page the
+  two regions are disjoint, so the order costs nothing. The wide page's
+  paint lays every pixel of its area itself.
+- **The small state** (§135.2) is unchanged: `cpw_big` stops the paint,
+  edges and tick before they reach `CTRL.DRV`.
+- The compact face never asks the bit: there the page is the 222×132 pane
+  whatever its header says, so a wide page lays itself out from CX/BX on
+  both faces.
+
 ### 135.4 The gate - how the two images call each other
 
 Shipped by S3. Two entries, one each way:
@@ -259182,7 +259273,7 @@ Shipped by S3. Two entries, one each way:
 | 2 `CWV_UP` | W_ONMOUSEUP | the same |
 | 3 `CWV_DRAG` | W_ONDRAG | the same |
 | 4 `CWV_KEY` | W_ONKEY | AX = the key word, SI = the window |
-| 5 `CWV_TICK` | CPE_TICK | nothing (the resident tick gate still asks `[cp_sel]` = Date/Time) |
+| 5 `CWV_TICK` | CPE_TICK | nothing (the resident tick gate asks `[cp_sel]` = `[cp_tickp]`: Date/Time, a Display Test, or a driver page with a tick, §31.9.4) |
 | 6 `CWV_LIST` | `cp_list` | nothing: the list's membership changed |
 | 7 `CWV_CLOSE` | the close | nothing |
 | 8 `CWV_OPEN` | the open | nothing; out CF = 1 refused |
@@ -259192,10 +259283,10 @@ Shipped by S3. Two entries, one each way:
 | 0 `CPG_HCLICK` | the hosted page's press (`cp_onclick_x`) | CX/DX screen, SI = the window | - |
 | 1 `CPG_HUP` | ...its release (`cp_onup_x`) | the same | - |
 | 2 `CPG_HDRAG` | ...its drag (`cp_ondrag_x`) | the same | - |
-| 3 `CPG_HTICK` | ...the Date/Time clock (`cp_tick_x`) | - | - |
+| 3 `CPG_HTICK` | ...the Date/Time clock, or a driver page's `DSV_CPTICK` (`cp_tick_x`, §31.9.4) | - | - |
 | 4 `CPG_HKEY` | ...a key (`cp_onkey_x`) | BX = the key word, SI = the window | - |
 | 5 `CPG_OPEN` | choose the face and launch the panel (§135.2) - the resident `cp_open_x`'s | - | CF = 1 app_launch refused (beeped); every register kept |
-| 6 `CPG_HPAINT` | the selected page at the hosted origin, its erase and all (`cp_page`) | BX = the window | - |
+| 6 `CPG_HPAINT` | the selected page at the hosted origin, its erase and all (`cp_page`) | BX = the window | CF = 1 a wide driver page (§135.3.1): it laid its own ground |
 | 7 `CPG_NAME` | a record's list name, staged (`cp_item_name`) | AL = a record | SI = `cp_sbuf` |
 | 8 `CPG_DRVON` | load `drv_tab` row AL if it is down: want = 1, `cdl_load`, answered, owed (`cp_drv_on`) | AL = a row | - |
 | 9 `CPG_DRVOFF` | unload it - VESA.DRV puts the desktop on the VGA first (§120.4) - not wanted, error cleared, answered, owed (`cp_drv_off`) | AL = a row | - |
@@ -259673,6 +259764,12 @@ was refused: it would take the gfx lock once a second whenever EITHER face's
 Display page is up, and the lock's cursor promise is the very flicker the
 "seconds in menu bar" setting exists to avoid (ui.inc's step 4).
 kern_small is unchanged (`KERN_BIG` only).
+
+Since §31.9.4 the byte names a third kind of page: a driver's record, while
+that driver's page publishes `DSV_CPTICK`; `cp_tickset` writes it on every
+page paint and leaves a Display Test's `CP_IVID` alone (the test is modal, so
+no other page is painted while it runs). A driver record is also what
+`ui_task`'s 7-byte gate reads as "every tick, not only on the second".
 
 #### 135.9.5 Its gate ops and its doors
 
