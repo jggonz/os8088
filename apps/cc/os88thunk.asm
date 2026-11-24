@@ -2794,6 +2794,63 @@ _os88_ferr_text:
 %endif
 
 ; =============================================================================
+; THE JOYSTICK (SPEC.md 137.4) - JOYSTICK.DRV's door, OSAPI_DRV_CALL with
+; BH = DRVC_JOY. The C half of apps/os88joy.inc. The records are the C's own
+; statics: OSAPI_DRV_CALL is an X stub and hands the driver OUR segment in
+; ES, so a DS-relative offset is exactly what the driver writes through
+; =============================================================================
+
+; int os88_joy_find(void) - JOYV_INFO, no sample. -1 = no joystick driver;
+; else AH = the type (JOYT_*), AL = the axes answering (JOYA_*)
+CC_GATE _os88_joy_find
+%ifdef CC_U__os88_joy_find
+_os88_joy_find:
+    mov bx, (DRVC_JOY << 8) | JOYV_INFO
+    call OSAPI_DRV_CALL
+    jnc .k
+    mov ax, -1
+.k:
+    ret
+%endif
+
+; int os88_joy_read(int stick, struct os88_joyrd *rec) - JOYV_READ: one
+; sample. 0 and rec filled; -1 = that stick is not answering, rec untouched
+CC_GATE _os88_joy_read
+%ifdef CC_U__os88_joy_read
+_os88_joy_read:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]                  ; AL = the stick
+    mov bx, (DRVC_JOY << 8) | JOYV_READ
+    call OSAPI_DRV_CALL
+    jc .no
+    mov di, [bp+6]
+    mov [di], ax                    ; x, y
+    mov [di+2], bx                  ; btn, press
+    mov [di+4], cl                  ; dir
+    xor ax, ax
+    pop bp
+    ret
+.no:
+    mov ax, -1
+    pop bp
+    ret
+%endif
+
+; int os88_joy_state(struct os88_joystate *rec) - JOYV_STATE: one sample of
+; the whole port into rec (JOYS_SIZE bytes). 0, or -1 with no driver
+CC_GATE _os88_joy_state
+%ifdef CC_U__os88_joy_state
+_os88_joy_state:
+    mov bx, sp
+    mov di, [ss:bx+2]               ; ES:DI = rec: the stub supplies ES
+    mov bx, (DRVC_JOY << 8) | JOYV_STATE
+    call OSAPI_DRV_CALL
+    sbb ax, ax                      ; CF -> 0 / -1
+    ret
+%endif
+
+; =============================================================================
 ; THE RUNTIME'S OWN HELPERS
 ;
 ; There is no C library on this floppy (SPEC.md 73.9: no printf family - it is
