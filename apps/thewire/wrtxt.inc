@@ -115,6 +115,7 @@ wr_r_rdneed: db 'Needs ', 0             ; + 'NNNK free for a RAM disk'
 wr_r_rdfree: db ' free for a RAM disk', 0
 wr_r_rdmore: db 'RAM disk needs ', 0    ; + 'NNNK more room'
 wr_r_rdroom: db ' more room', 0
+wr_r_rdxms:  db 'Needs an XMS RAM disk - use Add to Disk', 0
 
 ; --- what the network can say ------------------------------------------------
 wr_s_lost:   db 'The Wire stopped answering', 0

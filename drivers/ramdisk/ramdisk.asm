@@ -407,6 +407,8 @@ rd_pkg:
     je .state
     cmp bl, RDPV_MOUNT
     je .mount
+    cmp bl, RDPV_MOUNTC
+    je .mountc
     or bl, bl
     jnz .upcase
 
@@ -485,7 +487,9 @@ rd_pkg:
 ; rd_store_get read, so it is written; rd_cfg_mark is NOT called, so the size
 ; the user chose on the page is what the next boot restores. A package
 ; borrowing the RAM disk does not get to edit the machine's settings.
-.mount:
+.mountc:                        ; RDPV_MOUNTC: the same, the KB in CX - the
+    mov ax, cx                  ; register OSAPI_DRV_USE's DRVU_CALL passes
+.mount:                         ; through, so the store is the MACHINE'S
     cmp byte [rd_vol], 0xFF
     jne .mounted                ; already up: its own index, whatever AX said,
                                 ; and nothing resized. The caller has

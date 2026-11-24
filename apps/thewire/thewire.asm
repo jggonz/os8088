@@ -1838,10 +1838,10 @@ wr_may:
     jnz .yes                            ; Add to Disk unpacks wherever the
                                         ; dialog points, so an archive is
                                         ; always addable (92.8)
-    test al, WF_DISK                    ; ...and a version 2 archive cannot go
-    jnz .disk                           ; to a RAM disk at all (92.13.1), which
-                                        ; is said before the RAM decision is
-                                        ; asked rather than instead of it
+                                        ; WF_DISK on an archive is a version 2
+                                        ; tree (92.13.1): it goes to a RAM disk
+                                        ; in EXTENDED memory only, which
+                                        ; wr_ramck decides with the rest
     xor al, al                          ; Load Program: the RAM disk decision,
     call wr_ramck                       ; ASKED and not acted on - this runs
     jc .no                              ; from the painter (92.14 steps 1..3,
@@ -3701,6 +3701,9 @@ wr_lbits    equ os88_image_end + WR_B7 + 8          ; byte: ...items left in it
 wr_lb0      equ os88_image_end + WR_B7 + 9          ; byte: a pair's first byte
 wr_bdrv     equ os88_image_end + WR_B7 + 10         ; byte: the base folder's
                                                     ; drive
+wr_rdbig    equ os88_image_end + WR_B7 + 11         ; byte: the record is an
+                                                    ; archive with WF_DISK, so
+                                                    ; its RAM disk must be XMS
 wr_acnt     equ os88_image_end + WR_B7 + 12         ; word: header bytes so far
 wr_an       equ os88_image_end + WR_B7 + 14         ; word: the entry count
 wr_adone    equ os88_image_end + WR_B7 + 16         ; word: entries complete

@@ -1246,9 +1246,9 @@
   "sources": [
    "apps/thewire"
   ],
-  "stamped": "e4576a70",
-  "strings": "87b20c30500765e6",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "324a520b1",
+  "strings": "d6b3ce6bd54c8bd6",
+  "why": "Load Program runs a version 2 bundle from an XMS RAM disk; new reason Needs an XMS RAM disk - use Add to Disk"
  },
  "THMPAL_DRV": {
   "sources": [

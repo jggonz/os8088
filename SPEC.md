@@ -120456,7 +120456,8 @@ RD_MAXKB    16384       the ARITHMETIC ceiling - never what is offered
 RD_MINKB    8
 RD_DEFKB    64          what a machine with no saved settings gets
 RD_STEPKB   8           the step of - and +, and the granule of every size
-RD_FILEMAX  65024       the largest single file (see below)
+RD_FILEMAX  65024       RETIRED: the largest single file before the 32-bit
+                        walk (see below); a file is bounded by its store
 RD_MAXENT   96          directory rows, over the whole volume - in the
                         table's claim, ahead of the chain (62.9.13.1)
 ```
@@ -120484,13 +120485,16 @@ that half succeeds must fail as a whole, and taking the small one first is
 what makes the failure cheap. The directory rides in the same claim, ahead of
 the chain (§62.9.13.1).
 
-**A file is capped at `RD_FILEMAX` and the reason is arithmetic, not policy.**
-Every offset inside a file here is a word — `FSV_READAT` takes one — and
-65,024 is the largest multiple of 1,024 under 64KB. A larger file is refused
-with `FERR_BIG` before a byte moves, which is the refusal the one-extent store
-already made and in the same words. The *transfer* arithmetic is 32-bit
-throughout (`rd_read`, `rd_write`, `rd_append` all take `DX:CX`), because the
-file API's counts are and a store this size can hold one.
+**A file is bounded by its store, and no longer by `RD_FILEMAX`.** The cap
+was arithmetic, not policy: while every offset inside a file was a word,
+65,024 - the largest multiple of 1,024 under 64KB - was the largest file. The
+walk is 32-bit now: `FSV_READAT` takes its offset in DI:SI, `rd_io` walks the
+extents from a 32-bit `[rd_off]` and folds the caller's buffer after every
+piece, and `rd_fits` (`drivers/ramdisk/rdfsv.inc`) refuses with `FERR_BIG`
+only a file larger than the whole volume, before a byte moves. The *transfer*
+arithmetic was always 32-bit (`rd_read`, `rd_write`, `rd_append` all take
+`DX:CX`). So a store in XMS holds a file of megabytes, up to `RD_MAXKB`, and a
+package larger than 64KB runs from it with its parts read at their offsets.
 
 **The store may live above 1MB.** `RDC_LOC` selects the conventional claim heap
 (§50) or the extended store (§41), and the toggle is **greyed on a machine
@@ -121288,7 +121292,24 @@ RDPV_MOUNT  = 3   in   AX = KB wanted; rounded UP to RD_STEPKB
                        has RDPV_STATE for its size); nothing is resized
                        CF = 1, AL = RDERR_MEM: rd_kb_max is under the size,
                        and nothing was claimed; or rd_mount's own RDERR_*
+RDPV_MOUNTC = 4   in   CX = KB wanted; otherwise exactly RDPV_MOUNT
 ```
+
+**Mount AS THE MACHINE: `RDPV_MOUNTC` through `OSAPI_DRV_USE`'s `DRVU_CALL`.**
+The package door (`OSAPI_DRV_CALL`) keeps the caller's dispatch stamp on
+purpose - a sockets or sound verb answers FOR the caller - so an extended
+store mounted through it was claimed with `OSAPI_XMEM_ALLOC` stamped as the
+CALLING INSTANCE, not the kernel's `0xFF` `rd_mount` assumes. Two faults
+followed, invisible until a Wire Load reached an XMS store (92.13.1): every
+file verb's stage copy, which `drv_fs_call` asks as the kernel, was fenced
+against the block (`xm_chk`) and refused - `FERR_IO`, `Could not write` on
+the first big entry - and the caller's teardown would have force-freed the
+block under the still-mounted volume. `DRVU_CALL` clears the stamp the
+calling task set, which is the Control Panel's own `drv_cp_call` bracket, but
+it keeps AX for itself and passes CX, DX, SI and DI through; `RDPV_MOUNTC` is
+`RDPV_MOUNT` with the size in CX, so the Wire mounts through it and the store
+is the machine's. `RDPV_MAX` is 4; a driver from before answers verb 4 CF = 1
+and AX = 0, which the Wire reads as the store refused.
 
 **UI-task context only, both of them**: `RDPV_STATE` asks `OSAPI_MEM_AVAIL`
 and `RDPV_MOUNT` registers a volume and paints a desktop zone, neither of
@@ -181086,6 +181107,7 @@ File menu's items carry a `MENU_DIS` prefix from it.
 | `Made for an older os8088` | both: `WC_PKGFMT` is below it |
 | `Needs a newer Wire - update the system disk` | both: `WC_NEEDW` is above `WIRE_LEVEL` |
 | `Needs RAMDISK.DRV - use Add to Disk` | `WF_ARC`, Load only: no driver of the class answers `RDPV_IDENT` with `RD_SIG`, or it refuses `RDPV_STATE` (an older driver) |
+| `Needs an XMS RAM disk - use Add to Disk` | `WF_ARC` with `WF_DISK` (a version 2 tree, 92.13.1), Load only: `RDPV_STATE`'s location is not `RDL_XMS` |
 | `Needs NNNK free for a RAM disk` | `WF_ARC`, Load only: no store is mounted and `RDPV_STATE`'s largest possible store is under `WC_NEEDKB` rounded up to `RD_STEPKB` (92.14) |
 | `RAM disk needs NNNK more room` | `WF_ARC`, Load only: a store is mounted and its free KB is under `WC_NEEDKB` |
 
@@ -181424,13 +181446,23 @@ the cap for one kind of entry and changes nothing else.**
   archive that needs no big entry stays version 1 and every Wire in the
   field keeps reading it.
 - **The record carries `WF_DISK`** with `WF_ARC` and `WF_FLOPPY` (92.2), and
-  the writer derives it: a version 2 archive cannot go to a RAM disk, whose
-  largest file is `RD_FILEMAX` = 65,024 bytes (62.9), so Load Program greys
-  with `Needs its files on a disk - use Add to Disk` and Add to Disk is the
-  path. The predicate tests `WF_DISK` on an archive BEFORE the RAM disk
-  decision (92.7). A reader from before this section does not, and its Load
-  Program fetches the archive and refuses it at the header - the same
-  outcome, said later.
+  the writer derives it. It once meant "no RAM disk at all": a RAM disk file
+  stopped at `RD_FILEMAX` = 65,024 bytes. 62.9.10's 32-bit walk took that cap
+  away, so it now means **a RAM disk in extended memory only**. A store big
+  enough for a version 2 tree in conventional memory is heap its own program
+  then cannot start in - Borat Teaches Typing's 227KB, mounted on a 640KB
+  machine, would leave too little to run it - so `wr_ramck`, which the
+  predicate and the click both ask, requires `RDPV_STATE`'s location (AH) to
+  be `RDL_XMS` for a `WF_DISK` archive and otherwise greys Load Program with
+  `Needs an XMS RAM disk - use Add to Disk`. In XMS the store is bounded by
+  `RD_MAXKB` (16MB) and the machine's extended memory, and the usual room
+  reasons follow. The pieces land with `OSAPI_FILE_APPEND` on the RAM disk
+  exactly as on a floppy. **A Wire from before this rule greys Load Program
+  on every `WF_DISK` archive** (`Needs its files on a disk - use Add to
+  Disk`), which is the safe half of it, so the catalog needs no new level;
+  one from before this section refuses the archive at the header.
+  `tests/thewire.py` asserts the grey on its 360KB machine, and `--xms` (the
+  `thewirexms` row) runs a version 2 tree from an XMS store.
 
 **On the machine it is a third pause.** The worker stores a big entry's bytes
 into the claim exactly as it stores a small one's; when the claim is full and
@@ -181521,7 +181553,7 @@ second time by name from the RAM disk's Disk window with the Wire still open,
 it comes up again. Loading `CPMTOOLS` after it wants a store the core's mount
 did not size for, and says so with the figure (`RAM disk needs NNNK more
 room`) — the RAM disk's page sets a larger one first, or Add to Disk takes it
-to a floppy. `RD_MAXENT` is 96 rows and `RD_FILEMAX` 63KB; the core is 39
+to a floppy. `RD_MAXENT` is 96 rows; the core is 39
 entries in 42 rows with its three folders, and its largest file is the
 package. On a 286 with XMS the store is
 above 1MB and none of this is tight.
@@ -235236,7 +235268,7 @@ discovering them at publication:
 
 | limit | value | what the converter does |
 |---|---:|---|
-| the largest single file, `WIRE_FILEMAX` (§92.13) — and `RD_FILEMAX` = 65,024 one device along (§62.9.10), because every offset inside a RAM-disk file is a word | **64,512** | **refuses to write a band over it.** A bank that would exceed it — a 4bpp VGASPEC picture at 76,800 bytes, or any future style — is written as **numbered parts**, and the package reads them in sequence into ONE claim with one `os88_file_read_seg` per part at successive 512-aligned offsets. Each part is 512-padded, so the next part's base is aligned by construction |
+| the largest single file, `WIRE_FILEMAX` (§92.13) — which was also `RD_FILEMAX` = 65,024 one device along (§62.9.10) until the RAM disk's walk went 32-bit | **64,512** | **refuses to write a band over it.** A bank that would exceed it — a 4bpp VGASPEC picture at 76,800 bytes, or any future style — is written as **numbered parts**, and the package reads them in sequence into ONE claim with one `os88_file_read_seg` per part at successive 512-aligned offsets. Each part is 512-padded, so the next part's base is aligned by construction |
 | directory rows over the whole RAM-disk volume, `RD_MAXENT` (§62.9.10) | 96 | keeps the folder **under about 90 files**. The 80 level records are grouped **eight to a file**, the way the DOS `LEVELxxx.DAT` files already do, and there is one band per style bank — so the folder is about 30 to 40 files with the package, the overlay and the manifests in it |
 | the whole archive, `WIRE_ARCMAX` (§92.13) — the first size refused | 1,048,575 | the full set is ~836KB of converted data plus the package and the overlay, which fits with room. The converter prints the archive total beside its per-geometry cluster manifests |
 | every name | uppercase 8.3, `[A-Z0-9_-]` | the band, part and manifest names are generated in that alphabet, not derived from the level titles |

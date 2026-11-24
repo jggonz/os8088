@@ -98,6 +98,12 @@ Some programs cannot be run this way:
   and starts the program from there. Without the driver it says **Needs
   RAMDISK.DRV - use Add to Disk**. When memory or the RAM disk is too small it
   says how much more is needed.
+- A bundle with one very large file in it - a big program such as Borat
+  Teaches Typing, PiXEL or 1942 - runs from a RAM disk in **extended memory**
+  only, because in the first 640KB its RAM disk would leave no room to start
+  it. On a 286 or better with extended memory, set the RAM disk's Store to
+  **Xms** in the Control Panel and Load Program works as for any bundle.
+  Otherwise it says **Needs an XMS RAM disk - use Add to Disk**.
 
 ## Keeping a program: Add to Disk...
 
