@@ -260073,7 +260073,9 @@ is 2,048 sectors: a Zip 100 says 96, a Zip 250 239. Every label is one
 tail (§31.9.3), so a repaint after Eject writes each pixel once. Eject is
 `os88ui_btn` through the panel's press / drag / release cells (§13.8.4): the
 press arms, the release fires, sliding off cancels, and a press on the
-greyed button is no press. The value column is at x = 40, so the longest
+greyed button is no press. **Eject's rect is pane-relative (2, 74)-(65, 89)**,
+64 x 16, its middle (34, 82) - `ZC_BX`/`ZC_BY`/`ZC_BW`/`ZC_BH`, the one
+definition the draw and the hit test both read. The value column is at x = 40, so the longest
 line, 'Write-protected', ends at 160 of the pane's 221. Looked at on a 1bpp
 adapter before it is called done (§39.4); the wide face hosts it unchanged
 (§135.3).
