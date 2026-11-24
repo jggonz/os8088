@@ -50,4 +50,85 @@ port and go. That makes it a natural fit for an XT.
 
 ## Waves
 
-*(Each agent's outcome, as integrated.)*
+Five agents started at once from the foundation commit (the contract in
+SPEC.md 138, the transport contract in `drivers/zip/ziptrans.inc`, the story
+list), each in its own worktree. Every one of them built against a CONTRACT,
+not against the others' code: the two protocol agents never saw a drive, the
+instrument agent never saw the driver, and the driver core never saw either
+protocol until the merge.
+
+**The instrument came first, and it is the reason the rest could be tested.**
+No emulator models a Zip drive, so MartyPC patch 18 adds one: a VPI0 and a
+VPI2 target on the LPT card over a host disk image, an optional bidirectional
+port, and debug-server verbs to eject, insert and write-protect a disk from a
+test. The model was checked against itself before anything ran on it: nine
+Rust tests replay Linux's host sequence (probe, TEST UNIT READY, READ(10),
+WRITE(10)) for both protocols in both port modes, and swapping the nibble
+order turned two of them red. `tools/os88zip.py` writes the disks the rows use
+(IBM's layout puts the one partition in entry 4, which a real Zip disk does)
+and is the host's second reader for every byte the guest writes; macOS's own
+`fsck_msdos` and a real mount agreed with it.
+
+**The protocols were read, never translated.** `zipppa.inc` (VPI0, 904 bytes)
+and `zipimm.inc` (VPI2, 1,203 bytes) were written from Linux's `ppa.c` and
+`imm.c` for the WIRE behaviour - the pulse sequences, the phases, which
+status bits mean what - and each agent listed its deliberate departures:
+waits in BIOS ticks rather than microsecond spins (a probe of three empty
+ports must not cost three seconds on an XT), a PS/2 check that reads
+`IOMEGA` out of an INQUIRY rather than trying EPP, and a bounded wait where
+Linux reschedules forever. Both listed the protocol points they were unsure
+of, for the QA run to check first. Neither needed a change when it met the
+drive.
+
+**The kernel side cost 65 resident bytes and one decision.** A new driver
+class (`DRVC_ZIP` = 12) is a publication slot, a row in the driver table, a
+media-change gate and a removable test. kern_emu had 16 bytes left before its
+rung; the owner decided kern_emu gets no Zip drive (no emulator it targets has
+a parallel-port Zip), so everything is behind `OS88_ZIP` and kern_emu is byte
+for byte what it was. Two size folds the class agent found to make room on
+kern_emu were withdrawn with it.
+
+**The driver core** (`zip.asm` and four includes) is the SCSI layer, the
+volume, the Control Panel page and the package door. Its one rule that
+mattered later is the lazy medium: the driver learns what disk is in the drive
+from the first transfer after a change, and a media change on a known disk
+answers int 13h's 06h, which shuts the kernel's mount gate rather than
+reading a new disk through an old FAT.
+
+**Integration** found one cross-branch break: two test scripts each carried
+their own copy of a kernel constant, which `t_mirror` refuses; it moved into
+`tools/os88geom.py`. The image's real size set `DRVM_IMG_ZIP` (10 blocks
+where 13 had been budgeted).
+
+## The QA run (2026-11-24)
+
+One pass in emulation after the last merge, through the real UI, on MartyPC
+XTs with the emulated drive: every protocol (VPI0, VPI2, Zip 250), both port
+modes (nibble on the XT's output-only card, PS/2 on a bidirectional one), a
+superfloppy, a write-protected disk, a pulled disk, and no drive at all on CGA
+and on Hercules with a Covox on the same lines. Every byte copied was
+compared with what `os88zip.py` read out of the host image afterwards.
+
+The driver itself had no defect. The run found **one real bug, and it was the
+kernel's, not the driver's, and older than the Zip**: a Disk window showing a
+volume that a driver drops stays open with the old listing, and opening the
+letter again after a new disk goes in shows the OLD disk's files. The RAM
+disk's unmount and the CD-ROM's detach had the same path all along; Eject
+made it easy to see. `dsk_vol_del` now posts a close for every Disk window on
+the dropped volume, through the deferred close the window manager already
+had, so it is safe from a page click and from a driver's detach (SPEC.md
+22.29). It is 26 bytes on kern_big and kern_mega, written inline because the
+first version, a called routine, moved a hot routine in the next file by an
+odd number of bytes, and `t_hotpar` caught it.
+
+The other four defects were in the tests: a page selected by its list ordinal
+where the kernel answers a record number (they differ by one on CGA, where
+the Display page is hidden), text drawn in separate runs looked for as one
+string, an editor's text looked for before it had been read, and a list that
+scrolls on VGA never scrolled.
+
+**Seen**: Zip 100 and Zip 250 sizes, the page on CGA, Hercules and VGA,
+copies both ways byte-exact, eject and re-insert, write protection, `No
+hardware found` with the port left as a printer wants it. **Not seen**: a
+real drive, a real port, EGA (MartyPC has none), the page in the wide
+Control Panel face.
