@@ -2794,7 +2794,7 @@ _os88_ferr_text:
 %endif
 
 ; =============================================================================
-; THE JOYSTICK (SPEC.md 136.4) - JOYSTICK.DRV's door, OSAPI_DRV_CALL with
+; THE JOYSTICK (SPEC.md 137.4) - JOYSTICK.DRV's door, OSAPI_DRV_CALL with
 ; BH = DRVC_JOY. The C half of apps/os88joy.inc. The records are the C's own
 ; statics: OSAPI_DRV_CALL is an X stub and hands the driver OUR segment in
 ; ES, so a DS-relative offset is exactly what the driver writes through

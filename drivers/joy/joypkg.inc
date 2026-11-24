@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - drivers/joy/joypkg.inc - JOYSTICK.DRV's own header (SPEC.md 136)
+; os8088 - drivers/joy/joypkg.inc - JOYSTICK.DRV's own header (SPEC.md 137)
 ;
 ; WHAT A PACKAGE NAMES IS NOT HERE. The class, the five verbs, the state
 ; record, the types and the directions (DRVC_JOY, JOYV_*, JOYS_*, JOYT_*,
@@ -9,7 +9,7 @@
 ; one place they are written, so a mirror cannot drift.
 ;
 ; WHAT IS HERE is what the driver and its Control Panel page share (SPEC.md
-; 136.5, 136.6): the settings blob's layout, the timing constants, and the
+; 137.5, 137.6): the settings blob's layout, the timing constants, and the
 ; documented names of the driver's state and routines that the page
 ; (drivers/joy/joyui.inc, J5) reads and calls from inside the same image.
 ; =============================================================================
@@ -19,21 +19,21 @@ JOY_PORT     equ 0x201          ; the IBM Game Control Adapter
 JOY_TMO      equ 2700           ; a sample's timeout in PIT counts (838 ns):
                                 ; ~2.26 ms, past a 100 kOhm stick's ~1.1 ms,
                                 ; under the 4.17 ms an 8250 byte takes at
-                                ; 2400 baud (SPEC.md 136.3)
+                                ; 2400 baud (SPEC.md 137.3)
 JOY_TBLK     equ 48             ; PIT counts one sample block is assumed to
                                 ; take when the counter reloaded inside it
                                 ; and its own length cannot be known (a fast
                                 ; channel-0 divisor: an FSX rate bracket, the
-                                ; speaker's PCM - SPEC.md 136.10)
+                                ; speaker's PCM - SPEC.md 137.10)
 JOY_TSTEP    equ 512            ; ...and the longest one block can take on
                                 ; any machine: a difference past it is a
                                 ; reload, never time
 JOY_HALF     equ 64             ; a direction is |position| >= this: half of
-                                ; full travel (SPEC.md 136.3)
+                                ; full travel (SPEC.md 137.3)
 JOY_PROBEGAP equ 18             ; ticks between automatic re-probes while no
-                                ; expected axis answers (~1 s, SPEC.md 136.10)
+                                ; expected axis answers (~1 s, SPEC.md 137.10)
 
-; --- THE SETTINGS BLOB (SPEC.md 136.5): SYSTEM.CFG key 'JS', JOYB_SZ bytes,
+; --- THE SETTINGS BLOB (SPEC.md 137.5): SYSTEM.CFG key 'JS', JOYB_SZ bytes,
 ; resident in drv_cfg on every driver kernel (kernel/driver.inc's CFG_JBLOB).
 ; Read at attach and written only through OSAPI_DRV_CFG; the kernel moves the
 ; bytes and never reads them. A blob never written reads as zeros, so
@@ -61,7 +61,7 @@ JOY_DZMAX    equ 30             ; ...and the page's ceiling
 JCAL_MIN     equ 0              ; dw: raw at full left / up
 JCAL_CEN     equ 2              ; dw: raw at rest; 0 = none yet - the next
                                 ; sample that answers becomes it, with MIN 0
-                                ; and MAX twice it (SPEC.md 136.3)
+                                ; and MAX twice it (SPEC.md 137.3)
 JCAL_MAX     equ 4              ; dw: raw at full right / down
 JCAL_DZL     equ 6              ; dw: the dead zone below the centre, counts
 JCAL_DZH     equ 8              ; dw: ...and above it (joy_prep derives both)

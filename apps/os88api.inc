@@ -3780,7 +3780,7 @@ EMSE_BAD     equ 3              ; ...not yours, or out of range
 EMSE_BUSY    equ 4              ; ...a quarter is another instance's
 EMS_NHND     equ 8              ; handles on the whole machine
 EMS_PAGE     equ 16384          ; bytes a page, and a quarter of the frame
-DRVC_JOY     equ 11             ; THE GAME PORT - JOYSTICK.DRV (SPEC.md 136):
+DRVC_JOY     equ 11             ; THE GAME PORT - JOYSTICK.DRV (SPEC.md 137):
                                 ; the IBM Game Control Adapter at 201h and its
                                 ; clones, set up ONCE on its Control Panel page.
                                 ; APPENDED after DRVC_HTTP: a class number is
@@ -3788,7 +3788,7 @@ DRVC_JOY     equ 11             ; THE GAME PORT - JOYSTICK.DRV (SPEC.md 136):
                                 ; joy_read, joy_state, joy_dirkeys); the verbs,
                                 ; by OSAPI_DRV_CALL with BH = DRVC_JOY - every
                                 ; one worker-safe, and each takes at most ONE
-                                ; sample of the port (SPEC.md 136.3, 136.4):
+                                ; sample of the port (SPEC.md 137.3, 137.4):
 JOYV_INFO    equ 0              ; no sample. out CF=0, AL = the axes answering
                                 ; (JOYA_* bits), AH = the controller type
                                 ; (JOYT_*), CL = buttons the type has, CH =
@@ -3815,7 +3815,7 @@ JOYA_X1      equ 1              ; the axis bits: INFO's AL, JOYS_AXES
 JOYA_Y1      equ 2
 JOYA_X2      equ 4
 JOYA_Y2      equ 8
-JOYT_2B      equ 0              ; THE CONTROLLER TYPES (SPEC.md 136.4): one
+JOYT_2B      equ 0              ; THE CONTROLLER TYPES (SPEC.md 137.4): one
                                 ; stick, two buttons - the default
 JOYT_2X2B    equ 1              ; two sticks, two buttons each (B on X2/Y2,
                                 ; buttons 3-4)

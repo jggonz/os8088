@@ -1610,17 +1610,17 @@ int os88_file_write_seq(const char *name, unsigned seg, unsigned off,
 int os88_vol_kind(int vol);
 void os88_ferr_text(int ferr, char *dst, unsigned cap);
 
-/* --- the joystick (SPEC.md 136.4) ----------------------------------------
+/* --- the joystick (SPEC.md 137.4) ----------------------------------------
  * JOYSTICK.DRV's door through OSAPI_DRV_CALL, BH = DRVC_JOY (11): the C half
  * of apps/os88joy.inc. A joystick ADDS a control and never replaces one
- * (SPEC.md 136.8): ask os88_joy_find() once at start, and keep the keys.
+ * (SPEC.md 137.8): ask os88_joy_find() once at start, and keep the keys.
  *
  * os88_joy_find() answers -1 when no joystick driver is attached - kern_small,
  * an unticked row - and otherwise (type << 8) | axes: OS88_JOYT_* in the high
  * byte, the OS88_JOYA_* bits answering in the low. No sample is taken.
  *
  * os88_joy_read() takes ONE sample (at most ~2.3 ms with interrupts off,
- * SPEC.md 136.3) and fills the record for stick 0 (A) or 1 (B); -1 = that
+ * SPEC.md 137.3) and fills the record for stick 0 (A) or 1 (B); -1 = that
  * stick is not answering, and the record is left alone. x and y are signed,
  * -127..127, + = right / down, after calibration, dead zone, Invert and
  * Swap; press holds the presses since that stick's last read, and the read

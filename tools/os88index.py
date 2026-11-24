@@ -258,7 +258,7 @@ INCLUDES = [
      "OS88SOCK_STATE` makes it ask NETV_STATE as well (ZF=1 = no NSTF_SOCK), "
      "for a package whose every `net_find` wants that. The verbs "
      "themselves are `drivers/net/netpkg.inc`'s."),
-    ("os88joy.inc", "136.4",
+    ("os88joy.inc", "137.4",
      "The joystick: `joy_find` answers CF=1 when no JOYSTICK.DRV is attached "
      "(every kern_small, an unticked row) and INFO's axes and type otherwise; "
      "`joy_read` is one calibrated sample of stick A or B (position, "

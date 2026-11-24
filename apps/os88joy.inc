@@ -1,10 +1,10 @@
 ; =============================================================================
-; os88joy.inc - the joystick, for a package (SPEC.md 136.4)
+; os88joy.inc - the joystick, for a package (SPEC.md 137.4)
 ;
 ; **A PACKAGE REACHES THE GAME PORT THROUGH A DRIVER, NOT THROUGH PORT 201h.**
 ; JOYSTICK.DRV owns the port, the calibration the user made once on its
 ; Control Panel page, the dead zone, Invert and Swap, and the button presses
-; that fell between two of your reads (SPEC.md 136.3). This file is its door,
+; that fell between two of your reads (SPEC.md 137.3). This file is its door,
 ; the os88sock.inc of DRVC_JOY: the verbs, the record and the constants are
 ; in apps/os88api.inc beside the class, so a package needs no driver header
 ; and no extra -I to use it.
@@ -20,7 +20,7 @@
 ;       ...                          ; AL = X, AH = Y, BL held, BH presses,
 ;                                    ; CL = JOYD_*
 ;
-; **A JOYSTICK ADDS A CONTROL AND NEVER REPLACES ONE** (SPEC.md 136.8). Keep
+; **A JOYSTICK ADDS A CONTROL AND NEVER REPLACES ONE** (SPEC.md 137.8). Keep
 ; your keys working whatever joy_find says; joy_dirkeys below ORs the arrows
 ; into a JOYD_* byte, so "stick or arrows" is one question.
 ;
@@ -28,7 +28,7 @@
 ; cheap enough to ask at start and forget. joy_read and joy_state each take
 ; ONE sample: the port's one-shots timed by the PIT with interrupts off for
 ; as long as the expected axes take to fall, bounded by JOY_TMO (~2.3 ms,
-; SPEC.md 136.3). Once a frame is the intended rate; a sample is never taken
+; SPEC.md 137.3). Once a frame is the intended rate; a sample is never taken
 ; behind your back, so an idle machine with the driver ticked pays nothing.
 ;
 ; A worker may call every verb here: none touches a file or takes a lock.
