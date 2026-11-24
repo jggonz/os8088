@@ -90,3 +90,21 @@ bytes unpacked (+800 = 160 + 640), 5,290 -> 5,544 packed. The wide face maps
 `DRVC_JOY` (11, a literal until core's `os88api.inc` lands) to them in
 `cpw_recicon`. Looked at: both icons decoded back from `build/cpwide.dat` and
 zoomed; not yet seen in the running panel (no driver row exists on this branch).
+
+## 2026-11-24 - J8, the digital stick in ARCADE and 1942 (agent `gamesb`)
+
+Both games already read their controls in one place, so the stick is one
+`joy_read` at the head of that place, ORed in. ARCADE's Pac-Man (`pm_keys`,
+IN0 active low) and Q*bert (`qb_keys`, IN4 active high) each gained a small
+table from `JOYD_*` to the cabinet's bits; 1942's `game.inc` tests the stick
+beside each arrow and gives button 1 the fire and button 2 the roll. The one
+design question was Q*bert's 45-degree stick: a single direction maps as its
+arrow does, but a stick diagonal is ONE bit, the keypad corner it points at -
+two bits at once would be two moves the cabinet cannot make - so that is a
+16-entry table rather than an OR. Pac-Man's diagonal clears both bits, as two
+held arrows do, and leaves the choice to the board. No coin or start is put on
+a button (a stray press would spend a credit) and Q*bert and Pac-Man have no
+action button to give. Measured: `arcade.bin` +189 bytes, `1942.bin` +180
+(`make arcade 1942` against a pristine build). A read costs ~1.2 ms on the XT
+by SPEC 137.3 (a number from the spec, not yet measured here: no driver on this
+base). Tested so far: both assemble; looked at in QEMU with keys (no stick).

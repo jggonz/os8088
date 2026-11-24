@@ -219944,6 +219944,19 @@ has no reason to. The 1.44MB disk carried the banks raw, so there the
 compression is most of the 250. On the everything set the game
 leaves its own `1942\` folder for `GAMES\`: one file needs no folder.
 
+### 101.7 The stick (§137.8)
+
+A joystick ADDS a control to the keys. `n_joyfind` asks `joy_find` once as
+the flight starts (no driver: CF = 1, `n_jok` 0, and every read below is 0 -
+the keys alone, as before). `n_joyread` takes ONE `joy_read` of stick A per
+frame, at the head of the player's input in `game.inc` (about 1.2 ms on the XT
+with interrupts off, §137.3. Stick A's direction
+(`JOYD_*`, 8-way as four bits) moves the plane exactly as the arrow keys do,
+including the banking art; **button 1 fires** (as Space/Z, with the same
+5-frame repeat) and **button 2 rolls** (as X, edge triggered through the same
+`n_xheld`). Measured: `1942.bin` 37,634 -> 37,814 bytes (+180). The front's
+menus keep their keys.
+
 ## 102. Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`)
 
 A standalone native game in the shape of DrMarco (§100) and 1942 (§101): a

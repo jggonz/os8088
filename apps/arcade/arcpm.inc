@@ -114,6 +114,8 @@ pm_frame:
 
 ; pm_keys - IN0 (the joystick, the coin) and IN1 (the starts), active low
 pm_keys:
+    call ar_joyd                    ; the stick's JOYD_* (ARCADE-SPEC 15)
+    mov dl, al
     mov bl, 0xFF
     mov bh, 0xFF
     mov al, [ar_pbits]
@@ -140,10 +142,28 @@ pm_keys:
     and bl, ah
     jmp .k
 .done:
+    mov si, pm_joymap               ; the stick: its four directions into the
+.j:                                 ;   same IN0 bits the arrows clear. A
+    lodsw                           ;   diagonal clears both, as two held
+    or al, al                       ;   arrows do - the board picks
+    jz .jdone
+    test dl, al
+    jz .j
+    not ah
+    and bl, ah
+    jmp .j
+.jdone:
     mov es, [ar_vseg]
     mov [es:PM_IN0], bl
     mov [es:PM_IN1], bh
     ret
+
+pm_joymap:                          ; JOYD_* bit, IN0 bit
+    db JOYD_UP, 0x01
+    db JOYD_LEFT, 0x02
+    db JOYD_RIGHT, 0x04
+    db JOYD_DOWN, 0x08
+    db 0, 0
 
 pm_keymap:                          ; scancode, IN0 bit
     db KSC_UP, 0x01
