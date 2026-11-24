@@ -577,6 +577,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 133 | The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`) |
 | 134 | Borat Teaches Typing (`apps/boratype/`) |
 | 135 | The wide Control Panel - a second face for VGA and VESA (`kernel/cpw*.inc`, `CPWIDE.DRV`, `CPWIDE.DAT`) |
+| 136 | JOYSTICK.DRV - the game port, one driver for every game (`drivers/joy/`, `apps/os88joy.inc`) |
 
 ## docs/
 
