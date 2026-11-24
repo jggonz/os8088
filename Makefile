@@ -5003,7 +5003,7 @@ $(BUILD)/pc1slow/pc1mouse.drv: $(BUILD)/pc1slow/pc1mouse.bin tools/os88drv.py $(
 # JOYSTICK.DRV - the game port (SPEC.md 137). `-I drivers/joy/` for joypkg.inc
 # and the page's joyui.inc (J5), which is a dependency once it exists
 JOYUIINC := $(wildcard drivers/joy/joyui.inc)
-$(BUILD)/joystick.bin: drivers/joy/joy.asm drivers/joy/joypkg.inc $(JOYUIINC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+$(BUILD)/joystick.bin: drivers/joy/joy.asm drivers/joy/joypkg.inc $(JOYUIINC) drivers/os88drv.inc apps/os88api.inc apps/os88ui.inc apps/os88dec.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I drivers/ -I drivers/joy/ -I apps/ -o $@ $<
 	@echo "joystick: $(call FILESIZE,$@) bytes"
 

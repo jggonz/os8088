@@ -33,6 +33,12 @@
 ; divisor, within one block (~40 us on the XT) at any other.
 ; =============================================================================
 
+;   the page (SPEC.md 137.6) is on, and it lays itself out from the size it
+;   is painted with - os88drv.inc reads OS88_DRV_CPWIDE as it is included
+%define JOY_UI
+%ifdef JOY_UI
+  %define OS88_DRV_CPWIDE
+%endif
 %define OS88_DRV_HIGHOK         ; kern_mega may run this image above 1MB: no
                                 ; paragraph arithmetic on its own segment, no
                                 ; BIOS call or DMA engine handed it, port I/O
@@ -40,11 +46,13 @@
 %include "os88drv.inc"
 %include "joypkg.inc"
 
-; THE PAGE (SPEC.md 137.6, the plan's J5) goes in drivers/joy/joyui.inc and is
-; switched on here: `%define JOY_UI` and the service table below publishes
-; the cells joyui.inc defines (joyui_name, _paint, _click, _close, _key, _up,
-; _drag - an `equ 0` for a cell it does not want). Everything the page may
-; read or call is listed in joypkg.inc's second half.
+; THE PAGE (SPEC.md 137.6, the plan's J5) is drivers/joy/joyui.inc, switched
+; on here: the service table below publishes its cells (joyui_name, _paint,
+; _click, _close, _key, _up, _drag and the live tick, DSV_CPTICK - so the
+; table is DSV_MAX long, SPEC.md 31.9.4), and OS88_DRV_CPWIDE says the page
+; lays itself out from the size it is painted with, so the wide face hosts it
+; over its whole page area (SPEC.md 135.3.1). Everything the page may read or
+; call is listed in joypkg.inc's second half.
 
     OS88_DRIVER 'Joystick', DRVC_JOY, joy_entry, joy_svc_end - joy_svc
 
@@ -933,8 +941,15 @@ joy_svc:
     times DSV_PKGCALL - DSV_CPNAME db 0 ; no page yet (J5)
 %endif
     dw joy_pkg                  ; DSV_PKGCALL: the door
+%ifdef JOY_UI
+    dw joyui_tick               ; DSV_CPTICK: the live view (SPEC.md 31.9.4)
+%endif
 joy_svc_end:
-%if joy_svc_end - joy_svc != DSV_FLOOR
+%ifdef JOY_UI
+ %if joy_svc_end - joy_svc != DSV_MAX
+    %error "joy_svc must be DSV_MAX long: it carries the page's tick"
+ %endif
+%elif joy_svc_end - joy_svc != DSV_FLOOR
     %error "joy_svc must be exactly the floor"
 %endif
 
@@ -960,5 +975,8 @@ joy_press:  db 0                ; presses not yet read, logical bits 0-3
 joy_tprev:  dw 0                ; the last PIT latch (joy_tick)
 joy_tlast:  dw 0                ; ...and the last block's length
 joy_ptick:  dw 0                ; the tick of the last probe
+%ifdef JOY_UI
+    JOYUI_STATE                 ; the page's own (joyui.inc)
+%endif
 
     OS88_DRV_END
