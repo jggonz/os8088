@@ -141,6 +141,10 @@ _MIRROR = {
     # agree with itself while every kern_small script decoded garbage.
     "WIN_SIZE": ("kernel/wm.inc", {"big": 50, "small": 47}),
     "MAX_WIN": ("kernel/wm.inc", {"big": 12, "small": 6}),
+    # kernel/driver.inc - "No hardware found", the refusal a driver row shows
+    # when its attach finds no device: tests/netcoexist.py and tests/zipnone.py
+    # both read it off the row (SPEC.md 51.3, 138.5).
+    "DRVE_HW": ("kernel/driver.inc", 5),
     # kernel/driver.inc - a driver row (SPEC.md 51.2). DRVR_SEG is "is it
     # loaded", which is the only way a host-side script can SEE a driver
     # come and go - tests/xmcheck.py watches XMEM.DRV arrive and

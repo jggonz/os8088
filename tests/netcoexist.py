@@ -94,7 +94,7 @@ CP_IX, CP_I0Y, CP_IROWH = 6, 6, 14  # ...the item list (tests/dispcp.py)
 CPD_PBX1, CPD_PBY1 = 148, 2     # ...its heading row's Ports button
 CPP_R0Y, CPP_BH = 24, 14        # ...and the Ports view: row 0's box
 CPP_AX2 = 112 + 43 + 4 + 14 + 2     # CPP_BX1 + 43 + 4 + CP_DSW + 2: its down
-DRVE_HW = 5                     # driver.inc: "No hardware found"
+DRVE_HW = geom.DRVE_HW          # driver.inc: "No hardware found"
 DRVR_ERR = 14
 
 fails = []

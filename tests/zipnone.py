@@ -44,10 +44,11 @@ os.chdir(ROOT)
 import os88marty as M                                      # noqa: E402
 import os88ui                                              # noqa: E402
 import zipq                                                # noqa: E402
+import os88geom                                            # noqa: E402
 
 BOOT = "build/os8088-360.img"
 ARMS = {"cga": "os8088_5150_cga_lpt", "herc": "os8088_5150_herc_covox_720_gla"}
-DRVE_HW = 5
+DRVE_HW = os88geom.DRVE_HW
 LPT_CTRL = 0x37A
 bad = []
 
