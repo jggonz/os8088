@@ -3750,6 +3750,27 @@ DRVC_CD      equ 9              ; the THIRD file class: CDROM.DRV, an ATAPI
 DRVC_HTTP    equ 10             ; the FOURTH file class: HTTPFS.DRV, a
                                 ; read-only drive over HTTP (SPEC.md 122). Its
                                 ; package door is drivers/httpfs/hfpkg.inc
+DRVC_ZIP     equ 12             ; a SECOND BLOCK class: ZIP.DRV, an Iomega
+                                ; Zip drive on the parallel port (SPEC.md
+                                ; 138). Its volume is DVK_DRV like the hard
+                                ; disk's, but REMOVABLE. 11 is DRVC_JOY's,
+                                ; reserved for JOYSTICK.DRV (the joystick PR
+                                ; #410) - a class number is ABI, so neither
+                                ; branch takes the other's. Its package door
+                                ; is drivers/zip/zippkg.inc:
+ZIPV_INFO    equ 0              ; out AL = ZIPS_* state, AH = ZIPP_* protocol
+                                ; | ZIPM_* mode << 4, CX:BX = the medium's
+                                ; sectors (0 = none), DX = the port
+ZIPV_EJECT   equ 1              ; write back, unmount, eject. out CF=1 AL =
+                                ; an int 13h status when the drive refused
+ZIPS_NODRIVE equ 0              ; ...ZIPV_INFO's states
+ZIPS_NODISK  equ 1
+ZIPS_READY   equ 2
+ZIPS_WP      equ 3              ; ready, and write-protected
+ZIPP_VPI0    equ 1              ; ...the protocol: the Zip 100's PPA3 (Linux
+ZIPP_VPI2    equ 2              ; ppa.c) or the Zip Plus/250's (Linux imm.c)
+ZIPM_NIBBLE  equ 1              ; ...and the port mode: 4-bit reads on any
+ZIPM_PS2     equ 2              ; port, or 8-bit on a bidirectional one
 DRVC_EMS     equ 7              ; EXPANDED MEMORY - a LIM EMS board's page
                                 ; registers, EMS.DRV (SPEC.md 107). Pages are
                                 ; MAPPED into a 64 KB frame below 1 MB, never

@@ -259854,3 +259854,180 @@ CGA opens compact and a hosted-code refactor (the Drivers page's toggle)
 behaves as before; a VGA system disk without `CPWIDE.DRV` opens compact
 silently. Not looked at: Hercules and EGA (compact by the predicate), the
 two VESA sizes between, and any real-hardware or MartyPC timing.
+
+## 138. ZIP.DRV — an Iomega Zip drive on the parallel port (`drivers/zip/`)
+
+The owner's brief (2026-11-23): *"Add Iomega Zip drive Parallel port driver so
+that we can read and write iomega zip disks through parallel ports. Use
+existing drivers for Linux or other operating systems to see how it is
+built."* The plan is `docs/plans/ZIP-PLAN.md`; the build diary is
+`docs/HOW-ZIP-WAS-BUILT.md`.
+
+| | |
+|---|---|
+| what | `ZIP.DRV`, a driver of a NEW block class `DRVC_ZIP` = 12 (11 is `DRVC_JOY`'s, the joystick driver's, reserved by PR #410). The Zip disk is a **removable** FAT12/FAT16 volume on the next free letter from D: (§18.7.4), read and written through the kernel's own FAT driver - the driver serves sectors (`DSV_BLK`, §51.8), never files |
+| drives | the parallel **Zip 100** (Iomega's PPA3, "VPI0" - Linux `drivers/scsi/ppa.c`) and the parallel **Zip Plus** and **Zip 250** (the MatchMaker, "VPI2" - Linux `drivers/scsi/imm.c`). One drive, on LPT1, LPT2 or LPT3 |
+| port modes | **nibble** (4-bit reads through the status lines: every port, the XT's included) and **PS/2 byte** (8-bit reads on a bidirectional port). EPP and ECP are not done (§138.11) |
+| where | `kern_big`, `kern_emu` and `kern_mega` - the kernels with a driver layer (§51.0). `kern_small` has none, and so no Zip drive |
+| reference | Linux's `ppa.c` and `imm.c` (GPL-2.0, Grant Guenther, David Campbell, Tim Waugh), read for the PROTOCOL: the register sequences and status semantics below are facts about Iomega's hardware, cited from them. No line of either is translated; the driver is written from §138.2's description |
+| cost | resident: the class, the row, its title (§138.1, measured, **no rung crossed**). The image is a heap claim only while the row is ticked (§138.9) |
+| instrument | MartyPC with an emulated Zip drive on its LPT card (§138.8) - the SHIPPED driver, unmodified, on a 4.77 MHz XT. No emulator in this tree modelled one before |
+
+### 138.1 What the kernel carries
+
+*(Owner: kclass. Fill in as built, with the measured bytes.)*
+
+- **A class, `DRVC_ZIP` = 12** (`apps/os88api.inc`), appended. It is a
+  **block class**: its volume is `DVK_DRV`, dispatched through `DSV_BLK` like
+  `DRVC_DISK`'s, and `dsk_vol_add` must not take it for a file class (it
+  derives `DVK_FILE` for every class from `DRVC_FILE2` up today, §119.1).
+  `DRVC_MAX` 10 → 12 on the driver kernels, with class 11's slot present and
+  never published until JOYSTICK.DRV lands.
+- **Removable**: `dsk_vol_fixed` answers 0 for a `DRVC_ZIP` volume, so
+  `OSAPI_VOL_KIND` says `VK_REMOVABLE` and the desktop draws the removable
+  icon.
+- **Media changed, honoured on the driver arm**: a `DSV_BLK` answering CF = 1
+  with AL = 06h shuts the mount gate exactly as the BIOS arm does (BR-16,
+  §18.9.1) - the transfer fails unretried and the next operation remounts.
+  Write the arm if `dsk_xfer`'s driver path does not reach that code today.
+- **`OSAPI_VOL_DEL` writes back first**: whatever the kernel holds dirty for
+  the volume (FAT window, directory, write-behind) goes to the disk before the
+  row is dropped, so ZIPV_EJECT (§138.7) can never strand a half-written FAT.
+  If it already does, say where.
+- **A row, `ZIP.DRV`, "Zip Drive"**, after `PC1MOUSE.DRV` (and after
+  JOYSTICK.DRV's once both are in), SYSTEM.CFG **bit 14**, a blob with key
+  `ZP` holding a one-byte port pin (§51.9.2), **not wanted by default**:
+  attach writes the connect sequence to a printer port, and a printer on that
+  port may print a few characters of it. `DRVM_IMG_ZIP` sized from §138.9.
+- **DOS**: the Zip volume is a volume a DOS program may be reading, and the
+  driver holds no IRQ or DMA channel - keep it across a DOS trip as the
+  CD-ROM is kept (`hbm_sweep`'s skip list, `HB_KEEPSET`), unless measuring
+  says otherwise.
+- **The catalog** (`drivers/catalog.toml`): category STOR, icon `C_STOR`.
+
+### 138.2 The wire: two protocols, one transport contract
+
+`drivers/zip/ziptrans.inc` is the contract, and this section is its
+rationale. The core (`zip.asm`) knows SCSI; a transport knows how to move a
+CDB, data and a status byte across the parallel port and nothing else. Both
+transports export `_probe`, `_cmd` and `_reset` with identical registers, and
+attach copies the one that probed into `zt_vec`. Attach tries VPI0 first,
+then VPI2, on each candidate port.
+
+**Bidirectional is the core's question, asked once**: set the control
+register's DIRECTION bit (20h), write 55h and then AAh to the data latch and
+read each back. A port that returns what was written is NOT tri-stating
+(output-only, every XT card), and gets `ZIPM_NIBBLE`; a port that returns
+something else gets `ZIPM_PS2`. The bit is cleared again before any
+transport runs.
+
+**Timeouts are time** (ziptrans.inc): a wait past a millisecond reads the
+BIOS tick; a count alone is sized wrong on every machine but one.
+
+**Speed on the XT**: a nibble read is two `out`s and two `in`s a byte, and
+is the whole cost of a read on the target machine. The transports' inner
+loops are unrolled for it and their cycle cost is written in §138.2.1/2 and
+measured in §138.9.
+
+#### 138.2.1 VPI0 — the Zip 100 (`drivers/zip/zipppa.inc`)
+
+*(Owner: ppa. The protocol facts, from Linux ppa.c, and the cycle estimate
+of the inner loops.)*
+
+#### 138.2.2 VPI2 — the Zip Plus and Zip 250 (`drivers/zip/zipimm.inc`)
+
+*(Owner: imm. The protocol facts, from Linux imm.c, and the cycle estimate.)*
+
+### 138.3 The SCSI layer
+
+*(Owner: core.)* Seven commands: TEST UNIT READY (00h), REQUEST SENSE (03h),
+INQUIRY (12h - the vendor must read `IOMEGA`), MODE SENSE(6) (1Ah - the
+device-specific byte's bit 7 is write protect), START STOP UNIT (1Bh, LoEj -
+eject), READ CAPACITY (25h), READ(10) (28h) and WRITE(10) (2Ah). A CHECK
+CONDITION is followed by REQUEST SENSE, and the sense key becomes the int 13h
+status `DSV_BLK` answers in AL:
+
+| sense key | AL | means |
+|---|---|---|
+| 2 NOT READY | AAh | no disk, or spinning up |
+| 3 MEDIUM ERROR | 10h | unreadable sector |
+| 5 ILLEGAL REQUEST | 01h | a driver bug - an LBA past the end, a bad CDB |
+| 6 UNIT ATTENTION | 06h | the disk was changed (or the drive reset) |
+| 7 DATA PROTECT | 03h | write-protected |
+| other / transport | 80h / 20h | timeout / the drive stopped answering |
+
+One `DSV_BLK` call is split into commands of at most 32 sectors (16 KB), the
+buffer normalised so no command's data crosses a segment. `DSV_CAPS` sets
+`BLKCAP_SEL` (§51.8.1): the transports load DX into ES and walk only DI.
+
+### 138.4 The volume
+
+*(Owner: core.)* Attach registers ONE volume, whether or not a disk is in the
+drive - an empty drive is a drive zone with nothing to mount, as an empty A:
+is - with `OSAPI_VOL_ADD` CX = 0 (unknown length, §18.7.5) and the label
+`Zip`. The medium is learned lazily, on the first transfer after attach or
+after a UNIT ATTENTION: READ CAPACITY, then sector 0 -
+
+1. a FAT boot sector (a jump, then 512 bytes per sector) is a
+   **superfloppy**: base 0, length = the capacity;
+2. else an MBR (55AAh): the FIRST entry, in order 1..4, of type 01h, 04h,
+   06h or 0Eh. An IBM-formatted Zip disk has its FAT16 partition in
+   **entry 4**, which is why the scan cannot stop at entry 1;
+3. else the transfer answers AAh: not a disk os8088 can read.
+
+The partition's 32-bit length fences every transfer, with status 04h, as
+`HDD.DRV`'s `HDV_LEN` does (§18.7.5). A WRITE that arrives while the medium is
+unknown answers 06h, so the kernel remounts (a read) before it writes.
+
+### 138.5 Which port
+
+*(Owner: core.)* The `ZP` pin (§51.9.2): Auto searches the BIOS's own LPT
+table (0040:0008h, three words, a zero ends it), Off looks nowhere, anything
+else is that port alone. Attach refuses with `DRVE_HW` when no port has a
+drive, leaving every port disconnected.
+
+### 138.6 The page
+
+*(Owner: core.)* A Control Panel page (`DSV_CPNAME` "Zip Drive"): the port,
+the protocol and mode (`VPI0 nibble`, `VPI2 PS/2`, ...), the drive's state
+(`No drive` / `No disk` / `96 MB` / `96 MB, write-protected`), and an
+**Eject** button greyed with no disk (§47). Every label is one `font_run`
+(§6.1); looked at on a 1bpp adapter before it is called done (§39.4). The
+wide face hosts it unchanged (§135.3).
+
+### 138.7 The package door
+
+*(Owner: core.)* `OSAPI_DRV_CALL` with BH = `DRVC_ZIP`: `ZIPV_INFO` and
+`ZIPV_EJECT` (`apps/os88api.inc`). Eject is: `OSAPI_VOL_DEL` (which writes
+back, §138.1), START STOP UNIT with LoEj, `OSAPI_VOL_ADD` again - the empty
+drive's zone comes back. `drivers/zip/zippkg.inc` is the door.
+
+### 138.8 The instrument — a Zip drive in MartyPC
+
+*(Owner: marty.)* `tools/martypc/patches/18-zip-lpt.patch` puts a Zip drive on
+MartyPC's LPT card: a VPI0 or VPI2 device model and a SCSI direct-access
+target over a HOST image file, written from the drive's side of the same
+Linux sources, by a different agent than wrote either transport - so the two
+halves are two readings of one protocol, not one reading checked against
+itself. Configuration, debug-server verbs (eject, insert, write protect,
+counters), `tools/os88marty.py` helpers, a bidirectional option on the LPT
+card so `ZIPM_PS2` is reachable, and `tools/os88zip.py`, which builds Zip
+images (IBM partition-4 FAT16 at 196,608 sectors, a superfloppy, a Zip 250)
+and reads files back out of one on the host.
+
+### 138.9 What it costs
+
+*(Filled from measurements: resident bytes per kernel, the image and each
+transport's share, the heap claim, and a sector's read and write time on the
+emulated XT in nibble mode.)*
+
+### 138.10 The rows
+
+*(The `tests/suite.py` rows and what each asserts.)*
+
+### 138.11 Not done
+
+- **EPP and ECP**: faster on a 386's port, and no emulator here models an EPP
+  port with a Zip behind it, so none of it could be seen working.
+- **More than one drive**, or a drive and a second device daisy-chained.
+- **Booting from a Zip disk**, **formatting** one, and the Jaz.

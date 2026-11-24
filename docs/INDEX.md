@@ -577,6 +577,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 133 | The C game kit - 3D widgets, scenes and music for C packages (`apps/cc/gk.h`) |
 | 134 | Borat Teaches Typing (`apps/boratype/`) |
 | 135 | The wide Control Panel - a second face for VGA and VESA (`kernel/cpw*.inc`, `CPWIDE.DRV`, `CPWIDE.DAT`) |
+| 138 | ZIP.DRV — an Iomega Zip drive on the parallel port (`drivers/zip/`) |
 
 ## docs/
 
