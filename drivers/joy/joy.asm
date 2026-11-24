@@ -33,8 +33,12 @@
 ; divisor, within one block (~40 us on the XT) at any other.
 ; =============================================================================
 
-;   the page (SPEC.md 137.6) is on, and it lays itself out from the size it
-;   is painted with - os88drv.inc reads OS88_DRV_CPWIDE as it is included
+; THE PAGE (SPEC.md 137.6, drivers/joy/joyui.inc). It lays itself out from
+; the size it is painted with, so it declares the wide page area too - and
+; OS88_DRV_CPWIDE has to be defined BEFORE os88drv.inc below, which reads it
+; as it is included (defined after, the header says compact and the wide
+; panel hosts the page in a 222x132 pane). Undefine JOY_UI for the driver
+; without a page: the sample and the verbs do not depend on it.
 %define JOY_UI
 %ifdef JOY_UI
   %define OS88_DRV_CPWIDE

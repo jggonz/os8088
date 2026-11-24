@@ -260315,8 +260315,8 @@ one of sixteen numbers derived once per paint from the pane's size (CX/BX,
 §31.9.4) - its width and height, their half, the stick box's side, the lower
 groups' top, the three-fifths split - and the low twelve a signed offset from
 it. Anchor 0 is zero, so a plain small number is itself. Nothing assumes 640
-pixels: the 493×330 page area at 640×480 and the 637×442 one at 800×600 come
-out of the same table, and the compact face is the 222×132 pane on every
+pixels: the 493×330 page area at 640×480 and the larger one of the VESA
+panel (looked at in 1024×768) come out of the same table, and the compact face is the 222×132 pane on every
 adapter. `jui_layout` picks the table from the width (300 px or more is the
 wide face) and the calibration step.
 
@@ -260482,7 +260482,22 @@ EGA, CGA and Hercules get the compact face and VGA/VESA the wide one.
 
 #### 137.6.9 Cost, measured (J5)
 
-COSTMARK
+Measured on this build (J5), not estimated:
+
+| what | cost |
+|---|---|
+| `JOYSTICK.DRV` on the floppy (lz4, §20.13.5) | 8,256 bytes (J1's driver without the page: under 2KB) |
+| the image, so the heap claim while the driver is up | 10,760 bytes = 22 sectors (`DRVM_IMG_JOY` 22, was 4); the Drivers page says ~11K. Nothing resident: the kernel's only change is that constant |
+| the page's state (the widget list, 48 widgets of 12 bytes; the calibration's ranges; the dot's erase record) | ~800 bytes, zero-filled inside the image (a driver ships its bss, §51) |
+| one live read (the page's `joy_take`, PIT-timed) | 1.1-2.3 ms on MartyPC's 4.77 MHz XT, a 2-button stick centred to full travel (`jui_sample`'s own measurement, shown on the page) |
+| a tick that moved the dot | 2 calls (one masked record, one fill) plus ~0.9 ms per changed digit cell |
+| a tick that changed nothing | no drawing call |
+
+**The 9KB budget** of the plan (J5) is met by the FILE and not by the image.
+If the image is what binds, the calibration layout and its strings (about
+3KB) are the part to move to an overlay the way HDDTOOL does (§2.8's test:
+the page is only ever opened from the panel, off the system disk) - not done,
+because the claim is only paid while the joystick driver is ticked.
 
 ### 137.7 Testing it without a joystick
 

@@ -940,13 +940,12 @@ jui_rows:
     push cx
     push dx
     push si
-    mov di, [jui_nw]
-    push cx
+    push word [jui_nw]          ; the first of the four about to be made
     mov cx, 4
-    call jui_emit
-    pop cx
-    mov ax, JW_SZ               ; DI = the first of the four just made
-    mul di
+    call jui_emit               ; (it spends SI, DI and CX)
+    pop ax
+    mov cx, JW_SZ               ; DI = that widget
+    mul cx
     xchg di, ax
     add di, jui_wl
     pop si
@@ -1262,8 +1261,12 @@ jui_lampst:                     ; (the hat's cells: CL = a button)
 .r:
     ret
 
-jui_s_hat:
+jui_s_hat:                      ; the hat's JOYD_*, 0FFh when no axis
+    mov al, 0xFF                ; answers at all (the grid stays dark rather
+    cmp byte [joy_llive], 0     ; than lighting "centred")
+    je .out
     mov al, [joy_st+JOYS_HAT]
+.out:
     mov ah, 0
     ret
 
@@ -1520,8 +1523,13 @@ jui_s_dtxt:
     ret
 
 ; jui_hatcell - AL = a JOYD_* -> AL = its cell in the 3 x 3 grid, row-major
-; (4 = centred). Nothing else
+; (4 = centred; 0FFh, no axis answering, is 9). Nothing else
 jui_hatcell:
+    cmp al, 0xFF                ; none (jui_s_hat): cell 9, off the grid
+    jne .any
+    mov al, 9
+    ret
+.any:
     push cx
     mov ah, al
     mov cl, 1                   ; the column
@@ -2280,6 +2288,8 @@ jui_d_hat:
     jb .l
     ret
 .cell:                          ; AL = a cell, BL = its lamp's state
+    cmp al, 9                   ; cell 9 is "none": nothing to draw
+    jae .ret
     push si
     xor ah, ah
     mov cl, 3
@@ -2296,6 +2306,7 @@ jui_d_hat:
     mov al, bl
     call jui_lampat
     pop si
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
