@@ -72,13 +72,18 @@ committed first, so the five wave-2 agents could start from them.
 (`.text` +33, `.bss` +24, `.cold` +10), 262 -> 195 left in the rung, no
 rung crossed; kern_mega no rung crossed (image 210 -> 153 left, `.cold`
 54 -> 44), footprint unchanged at 61,952; kern_small byte-identical apart
-from the build number. **kern_emu crossed its rung**: its base had only 16
-bytes left, so the same 67 bytes took it from 95,232 to 95,744 (still 5,120
-under its budget). That went to the lead as an owner decision. The 360KB
+from the build number. **kern_emu crossed its rung** at first: its base had
+only 16 bytes left, so the same 67 bytes took it from 95,232 to 95,744. That
+went to the owner, who chose **no joystick on kern_emu** - it is the
+virtual-machine kernel and no VM emulates a game port. The row, class slot,
+blob and sniff are now `%ifdef DRV_JOY` (not `KERN_EMU`), `DQ_MAXREC` went
+back to 13, `drivers/os88drv.inc` is byte-identical to before J1, and
+kern_emu's sections came back to the base's to the byte (16 left). The 360KB
 system disk went from 680 to 683 of 706 clusters.
 
 **Tested.** `make` (fast tier), `make budget-check` (which builds
-kern_small, kern_emu and kern_mega and holds all four budgets exactly). One
+kern_small, kern_emu and kern_mega and holds all four budgets exactly),
+before and after the kern_emu decision. One
 QEMU boot (`make test`, kern_big, VGA): the Drivers page's Input filter lists
 `Joystick` (`JOYSTICK.DRV`, ~2K, unticked - the sniff correctly left it off,
 QEMU having no game port); Load brought it up (`Loaded`, 2 of 13 drivers),

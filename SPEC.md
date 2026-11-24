@@ -259931,7 +259931,7 @@ them:
 | | |
 |---|---|
 | what | `JOYSTICK.DRV`, a driver of a NEW class `DRVC_JOY` = 11, appended (a class number is ABI, §51.2) - `DRVC_MAX` 10 → 11 on the driver kernels. A `drv_tab` row appended after `PC1MOUSE.DRV`, `SYSTEM.CFG` bit 13, title `Joystick`, catalog category Input (§135.7) |
-| where | **`kern_big`, `kern_emu` and `kern_mega`** - the kernels with a driver layer (§51.0). `kern_small` has none: `OSAPI_DRV_CALL` refuses `DRVC_JOY` by range there, `joy_find` answers CF = 1, and every adopter falls back to its keys. kern_mega runs the same driver (port I/O and PIT channel 0 are the same there); a refusal there would be a gap to close, not a design |
+| where | **`kern_big` and `kern_mega`**. kern_mega runs the same driver (port I/O and PIT channel 0 are the same there). `kern_small` has no driver layer (§51.0), and **`kern_emu` has no joystick, deliberately** - the owner's decision (2026-11-24): it is the virtual-machine kernel (QEMU, VMware, VirtualBox, the web demo), none of which emulates a game port, and its rung had 16 bytes left, so the row, the class slot (`DRVC_MAX` stays 10 there), the blob and the sniff are `%ifdef DRV_JOY` (= not `KERN_EMU`) and `JOYSTICK.DRV` is not on its disks. On both, `DRVC_JOY` is still a number a package may pass: `OSAPI_DRV_CALL` refuses it by range, `joy_find` answers CF = 1, and every adopter falls back to its keys. kern_emu drops a `SYSTEM.CFG`'s `'JS'` record as an unknown key (§51.5 rule 1), so a big machine's stick settings do not survive a save made there; its bit 13 stays reserved for the game port |
 | the hardware | the IBM Game Control Adapter at port 201h and every clone of it: four one-shots (X1, Y1, X2, Y2 - bits 0-3, 1 while timing) fired by any write, four buttons (bits 4-7, 0 = pressed) |
 | what a package gets | `OSAPI_DRV_CALL` verbs (§137.4), found through `apps/os88joy.inc` (`joy_find`), and the C binding in `apps/cc/os88.h` - **no kernel slot**: a package reaches the joystick through a DRIVER, exactly as it reaches the network (§72) |
 | set up | ONCE, on the driver's own Control Panel page (§31.9), compact and wide (§137.6): controller type, calibration, dead zone, invert, swap, and a live test view. Kept in `SYSTEM.CFG` as the driver's settings blob (§51.9, §137.5) |
@@ -259948,7 +259948,7 @@ which axes answered in `joy_live`; the page says `No joystick connected` and
 offers to look again, because a stick is plugged in while the machine runs
 far more often than a card is - and a reader finds one by itself within a
 second (§137.10). The attach refuses (`DRVE_HW`) only where port I/O to 201h
-is not the game port's to make - none on the three kernels today, so
+is not the game port's to make - none on the two kernels that carry it, so
 `JOYSTICK.DRV` never refuses at all. Nothing is hooked: no vector, no worker,
 no tick and no claim, so `DRVV_DETACH` has nothing to undo and `DRVV_READY`
 answers CF = 0 even with nothing plugged in (a READY refusal is banked as the
@@ -260079,8 +260079,8 @@ untouched) and `os88_joy_state(rec)`, with `rec` a `static struct os88_joyrd`
 
 The driver's own settings blob (§51.9), a THIRD blob and a key of its own,
 `'JS'` (§51.9.1: a second claimant is a second key, not a bigger blob):
-`CFG_JBLOB`, `DRV_JBLOB_SZ` = **20 bytes** of `drv_cfg` on every driver
-kernel, routed to the game port's row by `drv_blob_of` - which names the row
+`CFG_JBLOB`, `DRV_JBLOB_SZ` = **20 bytes** of `drv_cfg` on kern_big and
+kern_mega (not kern_emu, §137.1), routed to the game port's row by `drv_blob_of` - which names the row
 (`joy_row`) rather than indexing `drv_blob_map`, the row being the table's
 last and the map covering the first four (10 bytes of `.text` against 27 for
 a map grown to reach it). Versioned by its first byte, so a blob never
@@ -260206,7 +260206,7 @@ Measured on J1's branch against its base:
 |---|---|
 | `JOYSTICK.DRV` | 1,571-byte image, 1,408 bytes on disk (lz4); a 2 KB claim while ticked, nothing else claimed. The 360KB system disk 680 → 683 of 706 clusters |
 | kern_big | **+67 resident** (`.text` +33, `.bss` +24, `.cold` +10), plus `.ovl` +28 (the sniff) and `.boot2` +9 (the title); the rung 262 → 195 left - **no rung crossed** |
-| kern_emu | the same +67 - and its base had **16** bytes left in its rung, so it crosses: 95,232 → 95,744, still 5,120 under `KERN_BUDGET`. An owner decision (the plan's J1 row) |
+| kern_emu | **0** - no joystick there (§137.1, the owner's decision): its resident image is unchanged by J1: `.text` 39,756, `.bss` 4,972, `.cold` 37,456, `.boot2` 3,231, `.ovl` 2,050 - the base's to the byte, 16 left in the rung; `emu.img` carries no `JOYSTICK.DRV` |
 | kern_mega | `.text` +33, `.bss` +24, `.cold` +10 (above 1MB): image rung 210 → 153 left, `.cold` 54 → 44 - **no rung crossed**, resident footprint unchanged at 61,952 |
 | kern_small | unchanged - byte-identical but the build number: no driver layer, no row, no blob |
 

@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "76250ecffafd7a22e76f5def499f996578c0752a6f1748ea928f5bd52bc62668",
+  "fingerprint": "3dcf874468ef1209c0e6d83a98be6c89350a4cb6a178fad569d18dbc3e380969",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "e5e8ed93b7ecd9aa73db8fb11dd1fefae1fddd4edf333197911f02771350e81f",
+  "fingerprint": "02882ed769196da576f02a16d7d3a1f79b998df6c3e136ef78508a6de7f8957e",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2504,6 +2504,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "JOYSTICK (SPEC 136.4): DRVC_JOY = 11 appended with its JOYV/JOYA/JOYT/JOYD/JOYS constants and the os88_joy_* C binding; DQ_MAXREC 13 -> 14 in the kernel and both SDKs for kern_emu's fourteenth drv_tab row. All additions - no cell moved, no record grew, everything built before still runs; and no shipped build can have 14 rows loaded at once (USB/PC1 mice and ETHER/PCIETHER are one class each), so an older 13-record buffer is never overrun - no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "02882ed769196da576f02a16d7d3a1f79b998df6c3e136ef78508a6de7f8957e",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "JOYSTICK, owner decision D3: no joystick on kern_emu, so its DRV_MAX stays 13 and DQ_MAXREC goes back to 13 in the kernel and both SDKs (drivers/os88drv.inc is byte-identical to before J1). No cell moved; no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "3dcf874468ef1209c0e6d83a98be6c89350a4cb6a178fad569d18dbc3e380969",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "JOYSTICK, owner decision D3: no joystick on kern_emu, so its DRV_MAX stays 13 and DQ_MAXREC goes back to 13 in the kernel and both SDKs (drivers/os88drv.inc is byte-identical to before J1). No cell moved; no bump",
    "to": 14
   }
  ]

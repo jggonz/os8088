@@ -1616,8 +1616,9 @@ void os88_ferr_text(int ferr, char *dst, unsigned cap);
  * (SPEC.md 137.8): ask os88_joy_find() once at start, and keep the keys.
  *
  * os88_joy_find() answers -1 when no joystick driver is attached - kern_small,
- * an unticked row - and otherwise (type << 8) | axes: OS88_JOYT_* in the high
- * byte, the OS88_JOYA_* bits answering in the low. No sample is taken.
+ * kern_emu (SPEC.md 137.1), an unticked row - and otherwise (type << 8) |
+ * axes: OS88_JOYT_* in the high byte, the OS88_JOYA_* bits answering in the
+ * low. No sample is taken.
  *
  * os88_joy_read() takes ONE sample (at most ~2.3 ms with interrupts off,
  * SPEC.md 137.3) and fills the record for stick 0 (A) or 1 (B); -1 = that

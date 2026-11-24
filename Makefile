@@ -3644,9 +3644,10 @@ DRIVERS += $(BUILD)/usbmouse.drv
 DRIVERS += $(BUILD)/pc1mouse.drv
 # ...and SPEC.md 137's JOYSTICK.DRV, the game port: a drv_tab row with
 # SYSTEM.CFG bit 13, not wanted by default (the boot's sniff ticks it as the
-# machine's default when a stick answers, SPEC.md 137.2). Every big build -
-# kern_big, kern_emu and kern_mega take $(DRIVERS) - and kern_small's
-# $(SMALLDRIVERS) is a restatement that never held it: no driver layer there
+# machine's default when a stick answers, SPEC.md 137.2). kern_big and
+# kern_mega take $(DRIVERS); $(EMUDRIVERS) filters it back out (kern_emu has
+# no joystick, SPEC.md 137.1) and kern_small's $(SMALLDRIVERS) is a
+# restatement that never held it: no driver layer there
 DRIVERS += $(BUILD)/joystick.drv
 # ...and SPEC.md 107's EMS.DRV, a LIM EMS board's page registers: a drv_tab
 # row with SYSTEM.CFG bit 7, not wanted by default (its probe writes ports),
@@ -3751,7 +3752,9 @@ endif
 # RECURSIVE for $(DRIVERS)' own reason: $(KMODS) inside it reads $(KMODDIR),
 # which the emu image rule overrides per target so the on-demand kernel
 # modules come out of the emu kernel and not the shipped one.
-EMUDRIVERS = $(DRIVERS) $(BUILD)/vmmouse.drv
+# ...LESS JOYSTICK.DRV (SPEC.md 137.1): kern_emu has no row for it - the
+# owner's decision, the virtual-machine kernel and no VM emulates a game port
+EMUDRIVERS = $(filter-out $(BUILD)/joystick.drv,$(DRIVERS)) $(BUILD)/vmmouse.drv
 
 # ...and where that build goes. UP HERE WITH $(EMUDRIVERS) rather than down
 # with `make emu`, where $(SMALLDIR) sits beside `make small`, because the
