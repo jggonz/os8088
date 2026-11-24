@@ -38,7 +38,7 @@ Status: ` ` not started, `B` built on its branch, `I` integrated into
 | [ ] | **J6 - the emulators**: C64 control ports, Apple II paddles and buttons | builds, keys still work, a stick drives them on MartyPC |
 | [I] | **J7 - analog paddles**: WireBall and Arkanoid | builds, keys still work, the paddle follows the stick |
 | [I] | **J8 - digital sticks**: ARCADE and 1942 | builds, keys still work |
-| [B] | **J9 - the rows**: a gate package and `tests/suite.py` rows driving J4's instrument through J1's verbs | the rows registered; run once in the final pass |
+| [I] | **J9 - the rows**: a gate package and `tests/suite.py` rows driving J4's instrument through J1's verbs | the rows registered; run once in the final pass |
 
 ## Deferred, and why
 
