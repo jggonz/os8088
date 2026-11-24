@@ -154,6 +154,17 @@ static void mirror_and_stat_damage(void)
  bt_face_paint(0,1);tf_cosneeded=tf_capneeded=0;tf_statpend=1;tf_statrow[0]=0;steps=0;
  while(tf_statpend){area=flushes=0;bt_face_paint(0,0);assert(flushes==1);
   assert(area<=(unsigned)((tf_statsw/5+8)*16));assert(++steps<=1);}
+ /* A scroll queues the whole typed line while a key has changed the
+  * statistics: neither may wait for the other to drain (the strip used to
+  * lag ~6 s behind continuous typing after each scroll). */
+ if(!(tf_compact&&tf_h<140)){
+  bt_face_paint(0,1);tf_cosneeded=tf_capneeded=0;
+  tf_dirtyfirst[2]=2*tf_cols;tf_dirtylast[2]=2*tf_cols+tf_inputcols-1;
+  tf_statpend=31;for(old=0;old<5;old++)tf_statrow[old]=0;steps=0;
+  while(tf_statpend){old=tf_dirtyfirst[2];bt_face_paint(0,0);assert(++steps<=2*5+2);}
+  assert(tf_dirtyfirst[2]<0||tf_dirtyfirst[2]>2*tf_cols);
+  steps=0;while(tf_dirtyfirst[2]>=0){bt_face_paint(0,0);assert(++steps<=2*tf_inputcols+20);}
+ }
  tf_hintpending=1;tf_hintrow=0;steps=0;
  pending_key=1;area=flushes=0;bt_face_paint(0,0);assert(!flushes&&tf_hintpending&&tf_hintrow==0);pending_key=0;
  pending_event=1;area=flushes=0;bt_face_paint(0,0);assert(!flushes&&tf_hintpending&&tf_hintrow==0);pending_event=0;

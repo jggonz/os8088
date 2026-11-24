@@ -258919,7 +258919,7 @@ image generation, kept with their prompts as source (`docs/cpwide/`,
 | where | **`kern_big`, `kern_emu` and `kern_mega` only.** `kern_small` has no VGA renderer (§39.27) and no driver layer (§51.0); it never assembles a byte of this section and its `CTRL.DRV` is byte for byte unchanged |
 | when | at OPEN, when the primary display is a colour display whose WORK AREA holds the 616×408 face: `[vid_kind]` is `VID_VGA` or `VID_VESA`, and the band `wm_fit` places windows in is at least 632 wide and 408 high (§135.2 step 4) - so EGA's 640×350, VESA's 640×400, Hercules, CGA, and a 640×480 VGA with the Dock on its left or right edge keep the compact face. The decision is taken once per open; a `vid_switch` while the panel is open does not change face until it is closed and opened again (§135.2) |
 | how it loads | `CTRL.DRV` is loaded exactly as today, and then `CPWIDE.DRV` - a second on-demand module (§2.8), `MOD_CPW` - beside it. `CTRL.DRV` keeps ALL the panel's logic and every compact page; `CPWIDE.DRV` carries only the wide chrome, the shared widget kit of §135.5 and the three pages drawn natively wide (Drivers §135.8, Display §135.9, Theme §135.11). The two call each other through slot blocks (§135.4). Nothing is assembled twice |
-| assets | `CPWIDE.DAT`, a data file beside `CTRL.DRV` on every system disk of the three kernels: the icon sheets as 4bpp + mask and the driver catalog (§135.6, §135.7). Read once at open into a heap claim, freed at close |
+| assets | `CPWIDE.DAT`, a data file beside `CTRL.DRV` on every system disk of the three kernels but the 360KB one (§135.2): the icon sheets as 4bpp + mask and the driver catalog (§135.6, §135.7). Read once at open into a heap claim, freed at close |
 | refusal | **a refusal is a normal path, and it is the compact face.** `CPWIDE.DRV` or `CPWIDE.DAT` missing, refused by `mod_check`, or a heap that cannot fund them: the panel opens compact, exactly as before this section existed, with no message. The wide face is an improvement, never a requirement |
 | resident cost | the `MOD_CPW` row, its name, its `mod_fpt` word and slot block, the open-time predicate, and one slot more in `CTRL.DRV`'s block for the gate - **no rung crossed on any kernel** (CLAUDE.md, and the owner's standing zero-resident rule). Measured per wave in the plan |
 
@@ -259283,9 +259283,12 @@ default; `make PKGZ=` ships it plain). The ceiling is 16,384 unpacked
 description strings, so the file has room for about a dozen more entries.
 
 **It is on the disk like a driver.** `CPWIDE.DAT` rides `$(DRIVERS)`, so it is
-on every kern_big, kern_emu and kern_mega system disk - all four floppy
-geometries, the emu disk, the hard-disk and live-media images, the mega images
-- and on no kern_small disk (`$(SMALLDRIVERS)` never held it). `os88disk.py`
+on every kern_big, kern_emu and kern_mega system disk - the 1.44MB, 720KB and
+1.2MB floppies, the emu disk, the hard-disk and live-media images, the mega
+images - and on no kern_small disk (`$(SMALLDRIVERS)` never held it). It is
+**not** on the 360KB system disk: it and `CPWIDE.DRV` are in
+`$(SYS360OMITDRV)`, the owner's decision of 2026-11-22 (§135.2), so a 360KB
+boot opens the compact panel. `os88disk.py`
 leaves it an ordinary file (archive only: SPEC.md 19.6 locks only what would
 unboot the disk, and a read-only file is one a keep-install cannot replace), so
 it is visible in the root listing and takes one slot of it. It is packed as a `CZ` file by
@@ -259298,8 +259301,9 @@ both sheets, the compressor and the `PKGZ` stamp, and it is built per `BUILD=`
 tree, so kern_emu's and kern_mega's directories and a knob tree each carry
 their own copy of the same bytes.
 
-On the 360KB system disk it costs 11 of the 706 512-byte clusters (678 → 689
-in use, 17 free; `os88disk.py --verify` OK) and one root directory slot.
+Measured before the 360KB omission (2026-11-21), it cost 11 of that disk's
+706 512-byte clusters (678 → 689 in use, 17 free) and one root directory slot;
+the wave-2 pages later took the disk past what it had, which is why it is off.
 
 A transparent pixel's colour nibble is 0 and means nothing; the drawer
 substitutes the ground. Icon indices are the sheets' cells, row-major:

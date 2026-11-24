@@ -38,7 +38,7 @@ static struct os88_video tf_vid;
 static unsigned tf_art,tf_band,tf_cap;
 static int tf_x,tf_y,tf_w,tf_h,tf_mono,tf_compact,tf_font,tf_title,tf_th;
 static int tf_top,tf_bottom,tf_px,tf_py,tf_pw,tf_ph,tf_ky,tf_kh,tf_kw;
-static int tf_cols,tf_cw,tf_ch,tf_promptx,tf_prompty,tf_inputy,tf_statsy;
+static int tf_cols,tf_cw,tf_ch,tf_cellfont,tf_celly,tf_promptx,tf_prompty,tf_inputy,tf_statsy;
 static int tf_inputx,tf_inputcols,tf_hinty,tf_hinth,tf_stath,tf_progressfill;
 static int tf_caret_on=1,tf_savedcaret=-1,tf_go_left,tf_clockready;
 static unsigned tf_clocklast;
@@ -66,7 +66,7 @@ static BTWord tf_arec[4],tf_ahead[4],tf_atarget[5][4];
 static unsigned tf_asig[5],tf_astart,tf_aframe_at,tf_ablink_at;
 static int tf_sceneparked;
 static int tf_aready,tf_bigready,tf_aframe,tf_aseq,tf_aexpr=-1,tf_apos,tf_abase=-1;
-static int tf_adone,tf_aload=-1,tf_aphase,tf_ashown=-1,tf_amask,tf_acapturn,tf_idleturn;
+static int tf_adone,tf_aload=-1,tf_aphase,tf_ashown=-1,tf_amask,tf_acapturn,tf_idleturn,tf_rowturn;
 static int tf_ax,tf_ay,tf_aw,tf_ah,tf_avariant,tf_avisible;
 static const char *tf_acaption,*tf_capmsg;
 static unsigned char tf_capstart[16],tf_caplen[16];
@@ -391,7 +391,13 @@ static int ovl_tf_arrange(void)
     tf_ph=tf_ky-tf_py-6;
     tf_promptx=tf_x+(tf_compact?8:tf_pw+24);tf_prompty=tf_compact?tf_top+2:tf_py+(tf_h>=400?24:18);
     space=tf_x+tf_w-12-tf_promptx;
-    tf_cw=tf_compact?8:(tf_h>=400?16:12);tf_ch=tf_compact?8:tf_h>=400?28:tf_h<300?14:16;
+    /* The prompt's face: from 304 rows (EGA 350, Hercules fullscreen) the
+     * 16-row keycap face in 20-row cells; below that (a Hercules window) the
+     * kernel's bold 8x8, centred. Never the 10-row label face, whose 2-pixel
+     * f, i, j and l read as slivers in a typing prompt. */
+    tf_cw=tf_compact?8:tf_h>=400?16:tf_h>=304?14:12;tf_ch=tf_compact?8:tf_h>=400?28:tf_h>=304?20:tf_h<300?14:16;
+    tf_cellfont=tf_compact?-1:tf_h>=400?BT_F_LARGE:tf_h>=304?BT_F_TITLE:-1;
+    tf_celly=tf_compact?0:tf_cellfont<0?(tf_ch-8)/2:2;
     tf_cols=space/tf_cw;if(tf_cols>40)tf_cols=40;if(tf_cols<12)tf_cols=12;
     tf_inputy=tf_prompty+2*tf_ch+(tf_compact?2:tf_h>=400?7:1);
     tf_hinty=tf_compact?tf_y+2:tf_statsy-(tf_h>=400?29:21);tf_hinth=tf_compact?8:tf_h>=400?16:10;
@@ -602,10 +608,10 @@ static void tf_drawcell(int j)
     c=tf_cellc(j);s=tf_cellstate(j);x=(j<2*tf_cols?tf_promptx:tf_inputx)+(j%tf_cols)*tf_cw;
     y=j<2*tf_cols?tf_prompty+(j/tf_cols)*tf_ch:tf_inputy;
     if(x+tf_cw<=tf_sx||x>=tf_sx+tf_sw||y+tf_ch<=tf_sy||y>=tf_sy+tf_sh)return;
-    col=s==1?TF_GREEN:TF_WHITE;font=tf_compact?-1:(tf_h>=400?BT_F_LARGE:BT_F_TEXT);
+    col=s==1?TF_GREEN:TF_WHITE;font=tf_cellfont;
     if(s==2){bx_fill(x,y,x+tf_cw-1,y+tf_ch-1,tf_mono?0:TF_YELLOW);col=0;}
     tf_char[0]=c;tf_char[1]=0;
-    bx_text(x+(tf_cw-bx_twidth(tf_char,font))/2,y+(tf_compact?0:2),tf_char,tf_mono?(s==2?15:0):col,font);
+    bx_text(x+(tf_cw-bx_twidth(tf_char,font))/2,y+tf_celly,tf_char,tf_mono?(s==2?15:0):col,font);
     if(s==1&&tf_mono)bx_fill(x,y+tf_ch-1,x+tf_cw-2,y+tf_ch-1,0);
     if(s==2)bx_fill(x+1,y+tf_ch-2,x+tf_cw-2,y+tf_ch-2,tf_mono?15:0);
 }
@@ -912,7 +918,7 @@ static unsigned tf_menukey(void)
 void bt_face_init(unsigned art,unsigned band,unsigned cap,int bpp)
 {
     int i;
-    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;tf_adone=0;tf_aload=-1;tf_ashown=-1;tf_acapturn=0;tf_idleturn=0;tf_capmsg=0;
+    tf_art=art;tf_band=band;tf_cap=cap;tf_lastscreen=-1;tf_lw=-1;tf_lh=-1;tf_aexpr=-1;tf_acaption=0;tf_avisible=0;tf_aframe=0;tf_adone=0;tf_aload=-1;tf_ashown=-1;tf_acapturn=0;tf_idleturn=0;tf_rowturn=0;tf_capmsg=0;
     ovl_tf_anim_load(bpp);
     for(i=0;i<TF_KEYS;i++)tf_keycache[i]=255;
     for(i=0;i<TF_CELLS;i++){tf_cellchar[i]=255;tf_cellstyle[i]=255;}
@@ -1016,7 +1022,9 @@ void bt_face_paint(void *win,int full)
     else if(!urgent&&!bt_key_pending()&&!os88_evq_pending()){
         tf_idleturn^=1;
         if(tf_cosneeded&&(tf_idleturn||(!tf_aseq&&tf_aframe>0&&tf_aframe<4)))ovl_tf_cosmetics();
-        else if(tf_dirtyfirst[2]>=0){i=tf_dirtyfirst[2];tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,tf_cw,h,8,i);tf_dirtyfirst[2]++;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
+        /* A scroll queues the whole typed line; with the statistics waiting
+         * too, alternate so neither waits for the other to drain. */
+        else if(tf_dirtyfirst[2]>=0&&(!(tf_statpend|tf_hintpending)||(tf_rowturn^=1))){i=tf_dirtyfirst[2];tf_cellrect(i);x=tf_sx;y=tf_sy;h=tf_sh;tf_render(x,y,tf_cw,h,8,i);tf_dirtyfirst[2]++;if(tf_dirtyfirst[2]>tf_dirtylast[2])tf_dirtyfirst[2]=-1;}
         else if(tf_footpending){h=tf_h-(tf_bottom-tf_y)-tf_footrow;if(h>4)h=4;tf_render(tf_x,tf_bottom+tf_footrow,tf_w,h,2,0);tf_footrow+=h;if(tf_footrow>=tf_h-(tf_bottom-tf_y))tf_footpending=0;}
         else if(tf_hintpending&&(!tf_statpend||(bt_session.last_tick&1))){h=tf_hinth-tf_hintrow;
             if(tf_compact){i=tf_w>=600?280:220;tf_render(tf_x+i,tf_hinty+tf_hintrow,tf_w-i-70,h,7,0);}

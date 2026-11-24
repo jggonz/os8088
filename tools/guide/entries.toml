@@ -1171,6 +1171,12 @@ kind = "folder"
 summary = "The Borat Teaches Typing program. Double-click BORATYPE.O88 to start it."
 short = "Borat Teaches Typing"
 
+["HELP.TXT"]
+title = "Borat Teaches Typing help"
+kind = "document"
+summary = "Borat Teaches Typing's help: lessons, practice, challenges, the keys, sound, display modes and saving. Double-click to read it in Note Pad."
+short = "Help for the typing tutor"
+
 ["CWORD.O88"]
 title = "Word, C edition"
 kind = "program"

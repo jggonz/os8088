@@ -21,7 +21,7 @@ after the VGA redesign and the interactive 86Box run.
 | US07 | 1/3/5 minute challenges, ready countdown and unranked pauses | S | 1093/3278/5462 ticks; ranked/unranked tests |
 | US08 | results/recommendations, next/retry/weak actions, seven achievements | S | full sessions + actual empty/poor result cards |
 | US09 | 65 original captions/40 roasts, intensity/cooldown/anti-repeat, comeback | S | actual three-error/low/poor/comeback; host policy |
-| US10 | recorded voice clips | R | owner: effects and visual messages only |
+| US10 | recorded voice clips: none on a shipped disk; an optional personal Sound Blaster disk (`make boratypepcmdisk`) built from the player's own recordings | R / S | owner removed clips from the shipped disks ("effects and visual messages only"), then added the personal disk ([audio](../boratype/audio.md)); `boratypepcm` row |
 | US11 | three composed loops and stingers | S/B | actual speaker/FM waveform/routes; subjective listening unavailable |
 | US12 | responsive effects, priorities, mute, cleanup | S/B | actual sound captures/leases/cleanup; subjective listening unavailable |
 | US13 | clipping/focus/minimum resize/instances and writer exclusion | S | native window tour and actual second instance |
