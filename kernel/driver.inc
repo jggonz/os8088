@@ -1781,9 +1781,9 @@ DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 512)
 DRVM_IMG_USBM equ 3             ; ceil(build/usbmouse.drv / 512)
 DRVM_IMG_PC1 equ 1              ; ceil(build/pc1mouse.drv / 512)
-DRVM_IMG_ZIP equ 13             ; ceil(build/zip.drv / 512): SPEC.md 138.9's
-                                ; 6,656-byte ceiling, bss included - set to
-                                ; the built image once ZIP.DRV is in the tree
+DRVM_IMG_ZIP equ 10             ; ceil(build/zip.drv / 512), bss included:
+                                ; 4,628 bytes with both transports (SPEC.md
+                                ; 138.9; the budget's ceiling is 13)
 DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 17              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)

@@ -474,7 +474,8 @@ def zip_page(ui):
 # content origin (cx + CP_RX, cy) - and until then the page-eject step FAILS
 # rather than skips: a skip that reports as a pass is docs/WRITING-TESTS.md
 # incident 38.
-PAGE_EJECT = None
+PAGE_EJECT = (34, 82)            # the middle of SPEC.md 138.6's pane-relative
+                                 # rect (2, 74)-(65, 89) - drivers/zip/zipcp.inc
 
 
 def page_eject(ui):

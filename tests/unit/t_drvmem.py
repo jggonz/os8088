@@ -104,6 +104,8 @@ ROWS = [
     ("PCI Ethernet", "DRVM_PCIETH", "DRVM_IMG_PCIETH", "pciether.drv"),
     # SPEC.md 9.15's PC1 mouse: another DRVC_POINT row after all optional rows
     ("PC1 Mouse", "DRVM_PC1", "DRVM_IMG_PC1", "pc1mouse.drv"),
+    # SPEC.md 138's ZIP.DRV: DRVC_ZIP, the last row on every big build
+    ("Zip Drive", "DRVM_ZIP", "DRVM_IMG_ZIP", "zip.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
@@ -299,6 +301,9 @@ def main():
         # ...nor does VESA.DRV (SPEC.md 120): its probe buffers, mode table
         # and the arrow's save-under are bss, inside the image
         "DRVM_VESA": s["DRVM_IMG_VESA"],
+        # ZIP.DRV claims nothing: its transfers go into the caller's buffer
+        # and its state is bss (SPEC.md 138.3, 138.9)
+        "DRVM_ZIP": s["DRVM_IMG_ZIP"],
     }
     # PCIETHER.DRV (SPEC.md 125.4, 125.5) shares ETHER.DRV's stack as source,
     # and claims TWO things: rt_claim's ring + transmit buffer, from attach to

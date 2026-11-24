@@ -3751,7 +3751,9 @@ endif
 # RECURSIVE for $(DRIVERS)' own reason: $(KMODS) inside it reads $(KMODDIR),
 # which the emu image rule overrides per target so the on-demand kernel
 # modules come out of the emu kernel and not the shipped one.
-EMUDRIVERS = $(DRIVERS) $(BUILD)/vmmouse.drv
+# ZIP.DRV is filtered out: kern_emu has no Zip row (SPEC.md 138, the owner's
+# decision - no emulator kern_emu targets has a parallel-port Zip)
+EMUDRIVERS = $(filter-out $(BUILD)/zip.drv,$(DRIVERS)) $(BUILD)/vmmouse.drv
 
 # ...and where that build goes. UP HERE WITH $(EMUDRIVERS) rather than down
 # with `make emu`, where $(SMALLDIR) sits beside `make small`, because the
