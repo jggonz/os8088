@@ -321,6 +321,7 @@ class ZipHost(object):
 
 DRVR_SIZE, DRVR_SEG, DRVR_FILE, DRVR_ERR = 16, 2, 4, 14      # kernel/driver.inc
 CP_I0Y, CP_IROWH, CP_RX = 6, 14, 96                          # kernel/ctrl.inc
+CP_LALL, CP_LVIS, CP_LAY, CP_LAH, CP_LAX1 = 9, 8, 118, 12, 52   # ...the list's scroll
 CP_DBY1, CP_DROWH, CP_DVIS = 20, 26, 4
 CP_DSX1, CP_DSW, CP_DSAH = 200, 14, 14
 CP_IDRV = 2
@@ -418,8 +419,19 @@ def cp_item(ui, w, cx, cy, want):
     """Click list items until `cp_sel` is `want` (the page list scrolls, and
     a driver's page is appended after the static ones, SPEC.md 31.9)."""
     m = ui.m
-    for ordinal in range(10):
+    # Nine rows show while the list fits (CP_LALL); past that it scrolls, eight
+    # show (CP_LVIS) and two arrows sit under them (kernel/ctrl.inc, SPEC.md
+    # 31.1.5). A VGA machine has Display as well as the CGA statics, so the Zip
+    # page is the TENTH row there and needs the down arrow (QA, the VGA look).
+    for ordinal in range(CP_LALL):
         ui.mo.click(cx + 40, cy + CP_I0Y + ordinal * CP_IROWH + 7, settle=0)
+        M.ui_done(m, "a Control Panel list click")
+        if m.read(m.sym("cp_sel"), 1)[0] == want:
+            return
+    for _ in range(4):
+        ui.mo.click(cx + CP_LAX1 + 6, cy + CP_LAY + CP_LAH // 2, settle=0)
+        M.ui_done(m, "the Control Panel list's down arrow")
+        ui.mo.click(cx + 40, cy + CP_I0Y + (CP_LVIS - 1) * CP_IROWH + 7, settle=0)
         M.ui_done(m, "a Control Panel list click")
         if m.read(m.sym("cp_sel"), 1)[0] == want:
             return

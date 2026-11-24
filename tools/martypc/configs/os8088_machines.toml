@@ -2762,6 +2762,41 @@ overlays = [
 # GLaBIOS, 360KB drives, CGA, the serial mouse - the cable machine's shape
 # (os8088_5150_cga_lpt), so the same disks boot it.
 
+# os8088_xt_vga_zip0 - SPEC.md 138's Zip drive (VPI0) on the VGA XT: the
+# colour face of the Zip page and the desktop zone (MartyPC models no EGA),
+# for the QA run's looks and the PR's pictures. Patch 18's drive, as on the
+# CGA _zip machines; OS88_ZIPIMG / launch(zip=) names the image.
+[[machine]]
+name = "os8088_xt_vga_zip0"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = false
+
+    [machine.zip]
+    protocol = "vpi0"
+
 [[machine]]
 name = "os8088_5150_cga_zip0"
 type = "Ibm5150v256K"

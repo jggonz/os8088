@@ -181,8 +181,15 @@ def run(arm):
                "2: ...and DOCS does", listing_of(ui, w))
             ui.open("..")
         ed = ui.open("README.TXT")
-        ok(zipq.find_text(m, "If you can read this in os8088, the Zip drive works."),
-           "2: README.TXT opens and its sentence is in the guest's memory")
+        # Note Pad's window is up BEFORE its file is read (QA-4): wait for the
+        # sentence on the guest's clock rather than look once
+        sentence = "If you can read this in os8088, the Zip drive works."
+        try:
+            M.until(m, lambda _: zipq.find_text(m, sentence), "README.TXT's text", guest=10.0)
+            seen = True
+        except M.MartyError:
+            seen = False
+        ok(seen, "2: README.TXT opens and its sentence is in the guest's memory")
         ui.close(ed)
 
         # ---- 3: off the Zip, onto it -----------------------------------------------

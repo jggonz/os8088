@@ -81,7 +81,24 @@ protected`, host bytes unchanged; the drive saw 0 protocol violations and
 | QA-1 | **A Disk window on an ejected volume stays open and stale**, and opening D: after another disk is inserted shows the FIRST disk's files | after Eject, the D: window behind the panel still lists DOCS, BIG200.BIN, FROMB.BIN...; `open_drive("D")` after `zip_insert(zip100b.img)` lists the first disk | the window closes (or re-lists) when its volume goes; the next disk shows its own files | kernel `dsk_vol_del`: no window on the dropped volume is closed or re-listed. PRE-EXISTING: the RAM disk's unmount and the CD-ROM's detach take the same path | open |
 | QA-2 | `tests/zipq.py` `zip_page` opened the Keyboard page | the click stopped on Keyboard | the Zip Drive page | test: it compared `cp_sel` (a RECORD) with `cp_nst` (a list ORDINAL); on CGA Display is hidden, so they differ by one | fixed (`CP_ITEMS`, the driver page's record) |
 | QA-3 | the row's page check missed `VPI0 nibble` | the page shows it (screenshot) | - | test: the page draws the words as separate runs | fixed (each word looked for) |
-| QA-4 | README.TXT's sentence not found in memory in stage 2 (found in stage 1) | - | - | test timing, under investigation | open |
+| QA-4 | README.TXT's sentence not found in memory in stage 2 (found in stage 1) | Note Pad's window is up, its text not yet | - | test: the row looked once; the text is there 2 s of guest time later | fixed (waits on the guest clock) |
+| QA-5 | `zipq.cp_item` cannot reach the Zip page on VGA | the list scrolls there (Display is shown: ten rows, eight visible) | the Zip Drive page | test: it never pressed the list's down arrow | fixed (CP_LALL rows, then the arrow) |
+
+**Every arm, the same picture.** `vpi2` (VPI2 nibble), `ps2-0` (VPI0 PS/2,
+799,424 bytes through the data lines), `ps2-2` (VPI2 PS/2, 200 KB copies,
+1,001,162 bytes), `z250` (a Zip 250: `239 MB`) and `super` (a superfloppy, no
+partition table) all load, list, copy both ways, eject, see a pulled disk and
+refuse a protected one, with 0 violations - and all fail only QA-1's two
+checks (and QA-4's before its fix). **Claim 6** (no drive): on the CGA cable
+machine and on Hercules with a Covox on the card the row refuses `No hardware
+found` (DRVE_HW), no zone appears, nothing hangs, and the control register is
+left at 0Ch. **VGA** (`os8088_xt_vga_zip0`, added for this look): the page
+and the zone are as on CGA.
+
+**Not looked at**: EGA (MartyPC models none; QEMU has no Zip, so it could only
+show the refusal); the Zip page inside the WIDE Control Panel face (the 360 KB
+system disk these XT machines boot carries no `CPWIDE.DRV` - kclass saw the
+wide Drivers page list the row); any real drive or real parallel port.
 
 ## Deferred, and why
 
