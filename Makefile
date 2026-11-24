@@ -9863,7 +9863,7 @@ pxsgen:
 	rm -f $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
 	$(MAKE) $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
 
-$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc apps/os88ui.inc apps/os88joy.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -o $@ apps/arkanoid/arkanoid.asm
 	@echo "arkanoid: $(call FILESIZE,$@) bytes"
 
@@ -12650,7 +12650,7 @@ $(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcsfx.py $@
 
-ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
+ARCADE_SRC := apps/arcade/arcade.asm apps/os88joy.inc apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
               apps/arcade/arcimp.inc apps/os88inflate.inc apps/os88data.inc \
               apps/arcade/arcface.inc apps/arcade/arcopt.inc \
               apps/arcade/arc6502.inc apps/arcade/arcqbs.inc \
@@ -21638,7 +21638,7 @@ $(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
 	@test -f $@ || python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
 $(BUILD)/1942front.inc: tools/1942front.py tools/os88lz.py apps/1942/art/splash.json apps/1942/art/sprites.json | $(BUILD)
 	python3 tools/1942front.py -o $(BUILD)
-$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/motion.inc apps/1942/audio.inc apps/1942/pcm.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/motion.inc apps/1942/audio.inc apps/1942/pcm.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/os88joy.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 # EVERY PART IS OP_COMP | OP_LAZY, packed lz4 by os88pkg.py (SPEC.md 101.2),
 # so one file serves every geometry - and the 360KB disk no longer leaves the
@@ -22342,7 +22342,7 @@ $(BUILD)/wirerena360.img: $(BUILD)/wirerena.o88 tools/os88disk.py
 wireball-pair:
 	python3 tools/wireball-pair.py
 wireball: $(BUILD)/wireball.o88
-$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbvideo.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbvideo.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc apps/os88joy.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireball.lst -o $@ $<
 $(BUILD)/wireball.o88: $(BUILD)/wireball.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $< -o $@
