@@ -259936,7 +259936,90 @@ of the inner loops.)*
 
 #### 138.2.2 VPI2 — the Zip Plus and Zip 250 (`drivers/zip/zipimm.inc`)
 
-*(Owner: imm. The protocol facts, from Linux imm.c, and the cycle estimate.)*
+The MatchMaker is the Zip Plus's (and 250's) embedded SCSI host adapter. Every
+register fact below is read from Linux `imm.c`/`imm.h` (function in
+parentheses) and is Iomega's wire, not code of ours. `ctrl`, `stat`, `data` are
+`[zt_base]`+2, +1, +0; the status register is read RAW (no bit inverted - unlike
+`ppa.c`), and a "phase" is `stat & B8h`.
+
+**Connect** (`imm_cpp`, `imm_connect`). The Command Packet Protocol: ctrl 0Ch;
+data AAh, 55h, 00h, FFh, 87h, 78h, each held >= 7 us; `s1` = stat&B8h after FFh,
+`s2` = stat&B8h after 87h, `s3` = stat&38h after 78h; then the command byte on
+data, ctrl 0Ch, 0Dh, 0Ch (strobe), data FFh. The signature is connected when
+(s1,s2,s3) = (B8h,18h,30h), disconnected when (B8h,18h,38h), else no drive.
+Command bytes: 30h deselect all, E0h select device 0 in compatible mode. A
+connect is E0h, 30h, E0h and must answer "connected" (`imm_connect`);
+`ZTE_NOCONN` otherwise. Every exit sends 30h.
+
+**Select** (`imm_select`). ctrl 0Ch and wait for stat bit 3 clear (bus free;
+500 reads), ctrl 04h, data = 80h | 1<<id, ctrl 0Ch then 0Dh, wait for stat bit 3
+SET (the drive latched the bus; 500 reads), ctrl 0Ch. No latch is
+`ZTE_NOSEL`. The two 500-read spins are the only counts: sub-millisecond on a
+486's port, ~4 ms on the XT, and the drive answers in microseconds.
+
+**Phase wait** (`imm_wait`). ctrl 0Ch, poll stat bit 7 (REQ), ctrl 04h, return
+stat&B8h. Meanings: **88h** drive wants data, **98h** drive sends data, **A8h**
+wants command bytes, **B8h** status/message follows; bit 4 is I/O (set = drive
+to host), bit 5 is /C-D (set = not data), bit 3 is /BSY (must be set). The wait
+is ticks (`ZT_TMO_TICKS`), not a count; `ZTE_TIMEOUT` on expiry.
+
+**One command** (`imm_cmd`, after `imm_engine`/`imm_completion`): connect;
+select `[zt_id]`; the CDB two bytes per wait, each wait required to read
+(r&18h) = 08h (listening); wait; if bit 5 is clear there is a data phase, and a
+read is negotiated once (below); the data in bursts of 512 bytes (else 1 byte in,
+2 out, which is `imm_completion`'s `bulk`/`IMM_BURST_SIZE` rule for the seven
+commands: only READ/WRITE exceed 512), each burst preceded by a wait whose phase
+must be 98h (in) or 88h (out) - anything else, or a drive wanting more than
+CX, is `ZTE_PHASE`; on B8h: after an IN data phase the **end sequence** ctrl
+04h, 0Ch, 0Eh, 04h; wait B8h; negotiate; read the status byte; wait (two ticks)
+for an optional message byte and read it; the end sequence again; deselect.
+The drive ending the data phase early is a status byte and a short CX, not an
+error.
+
+**Negotiation** (`imm_negotiate`, IEEE 1284). ctrl 04h; data 00h (nibble) or
+01h (PS/2 byte), held >= 100 us; ctrl 06h; stat bit 5 SET means data is
+available; ctrl 07h, 06h. Bit 5 clear fails the command (`ZTE_PHASE`). It is
+done before every read data phase and before the status byte.
+
+**Moving bytes.** *Out* (`imm_byte_out`): ctrl 04h; per pair, data b0, ctrl 05h,
+data b1, ctrl 00h; ctrl 04h. *Nibble in* (`imm_nibble_in`): ctrl 04h; per byte
+ctrl 06h, read stat bits 7-4 = the LOW nibble, ctrl 05h, read stat bits 7-4 =
+the HIGH nibble, ctrl 04h; ctrl 0Ch at the end. *PS/2 in* (`imm_byte_in`):
+ctrl 04h; per byte ctrl 26h, read data, ctrl 25h; ctrl 0Ch at the end.
+
+**Probe** (`imm_init`, `device_check`). Connect (silence on the wire ends the
+probe: no drive of this protocol); the bus reset pulse (`imm_reset_pulse`: ctrl
+04h, data 40h, ctrl 0Ch, 0Dh, >= 50 us, ctrl 0Ch, 04h) with a settle of at
+least one tick before and after the deselect; then TEST UNIT READY on IDs 0..7
+until one is selected (any status byte, CHECK CONDITION included, counts as
+found). On PS/2 mode a 16-byte INQUIRY must read "IOMEGA" at offset 8; if it
+fails the bus is reset and `[zt_mode]` is lowered to nibble. The reset pulse
+also leaves the drive in UNIT ATTENTION (`imm_reset` is the same sequence).
+
+**Delays.** `imm_cpp`'s `udelay()`s are protocol MINIMUMS ("1 us - infinite",
+"7 us - infinite"), so each is met by reading the status port that many times:
+an ISA port read is >= ~1 us on every machine and ~5 us in the loop on a
+4.77 MHz XT (a 10 us delay is ~50 us there, costing ~2 ms a command in all).
+The 100 us of negotiation and the 50 us of the reset pulse likewise. The settle
+delays of a millisecond are two tick edges (>= 55 ms), taken only by probe and
+reset.
+
+**Inner-loop cost** (8088 cycles, the 4-cycle/byte fetch floor in brackets; the
+`in`/`out` DX forms count 8 each, I/O wait states not included):
+
+| loop | per | instructions | cycles | fetch floor | speed at 4.77 MHz |
+|---|---|---|---|---|---|
+| nibble in | byte | 17, 25 bytes | 104 (+9 loop, unrolled x2) | 100 | ~42 KB/s |
+| PS/2 in | byte | 8, 12 bytes | 51 (+9) | 48 | ~79 KB/s |
+| out | pair | 14, 23 bytes | 101 (incl. loop) | 92 | ~85 KB/s |
+
+The nibble loop is dominated by `shr al,cl` (24 cycles) for the low nibble; a
+256-byte table would save 17 cycles and cost the driver a fifth of its budget.
+Port I/O adds about one wait state per `in`/`out` on a real card.
+
+**Not done / uncertain.** EPP (the mode byte, `epp_reset`, the `outsb`/`insb`
+forms) is not written (§138.11). The status byte is returned raw (Linux masks it
+with `STATUS_MASK`, defined outside the two files read).
 
 ### 138.3 The SCSI layer
 
