@@ -59881,6 +59881,67 @@ the cell's three words (`AM_COUNT` is a word either way, and the title's
 string stays for `menu_loc_set`); kern_small unchanged, the cell having been
 `KERN_BIG`'s alone.
 
+### 22.29 A Disk window whose volume is dropped closes
+
+**The rule: when `dsk_vol_del` (§18.7) frees a volume's row, every Disk
+window showing that volume is closed, on the next UI pass.** Before it, the
+window stayed up with its cache (§22.1's binding rule: paints read the
+window's own cache) and kept its `FS_DRV`, so it went on listing a disk that
+was no longer there - and when a driver added a volume again at the SAME
+index, as `ZIP.DRV`'s Eject does (`OSAPI_VOL_DEL`, START STOP UNIT,
+`OSAPI_VOL_ADD`, §138.7), `fm_choose` found that window "already showing"
+the letter and fronted it: opening D: after the next disk went in showed the
+FIRST disk's files (docs/plans/ZIP-PLAN.md, QA-1). The RAM disk's unmount,
+the CD-ROM's detach, a hard-disk partition unmounted from its page, a driver
+unticked and a desktop zone's Unmount Image all took the same path.
+
+**Close, not re-list.** §22.8's `FS_DIRTY` debt would re-list the window
+when it is next looked at, but a re-list needs a volume: after a RAM disk's
+unmount the row is FREE and the window would sit on a drive that does not
+exist, and after a Zip eject the row is the next disk's - which is a new
+window's business, opened by the user who put it in. A window goes when its
+volume goes, the way a driver's windows go with the driver (§51.8).
+
+**Deferred, through §75.2's close request.** `dsk_vol_del` is reached from a
+driver's page click with the gfx lock held (§51.8: `osapi_vol_add`/`del` post
+rather than repaint), from `drv_release` inside `app_close_win`'s panel
+branch, from DISKOPS.DRV's unmount and from the hibernate's sweep -
+contexts in which `app_close_win` (lock, UI task, a repaint) cannot run.
+`wm_close_req` is the deferral the kernel already has: one bit a window slot
+in `[wm_clreq]`, spent by `ui_task`'s `.chk_close` step with nothing on the
+stack, and `wm_destroy` clears a slot's bit, so a window that died first
+cannot have its slot's next tenant closed. `dsk_vol_del` (`.cold`) walks the
+Disk windows with files.inc's `fmv_ifirst`/`fmv_inext` and posts one request
+for each whose `FS_DRV` is the volume, reaching `.text`'s `wm_close_req`
+through the rare door (`KDOOR`, §20.3.4) on the index it already has as
+`OSAPI_WM_CLOSE`, so `rd_tab` gains no word. The walk is written INTO
+`dsk_vol_del`, its one caller, rather than called: 26 bytes is an even
+shift for `dsk_next_clus_x` after it, where a routine in files.inc and a
+three-byte call moved that hot routine by an odd one (`t_hotpar`). It is in
+the `.free` arm only - the give-back arm hands a taken boot row back to the
+BIOS (§52.1.1) and the volume stays.
+
+- **The Standard File chooser is a `KIND_FILES` instance (§38.1) and is
+  closed like any other.** §38.1.1's gate is self-validating: a chooser taken
+  down by anything else is ended by `fdlg_reap` as a Cancel in the next pass.
+- **Disk > Unmount Image keeps its window** (§18.101.5): it sends the acting
+  window to the root of the HOST, so `clo_unmntw` (DISKOPS.DRV) parks that
+  window's `FS_DRV` at `0xFF` as it reads the volume out of it - no volume is
+  `0xFF`, so the walk passes it by, and `fm_mount`'s `fmv_load` writes the
+  host's index back on every path that reaches the verb. The desktop zone's
+  Unmount Image has no acting window, and every window on the image closes.
+- **A volume dropped and added back is still dropped.** The hibernate's sweep
+  (§87.4) detaches the classes it does not keep - `DRVC_DISK` and `DRVC_FILE`
+  are kept - so a Zip, CD-ROM or Web drive window is closed across a
+  hibernate, and the disk in that drive may well have changed while the
+  machine was off. A failed DOS hand-off's unwind reloads drivers that
+  `drv_shutdown_x` had dropped, and their windows are closed the same way.
+- **kern_small** has no driver-backed volume (`OS88_DRIVERS` is kern_big's)
+  and no `OS88_IMG`, so it assembles none of this and is byte-identical.
+  **kern_emu** is held byte-identical too (`%ifndef KERN_EMU`): its rung had
+  16 bytes and this is 26, so its RAM disk, CD-ROM and images keep the stale
+  window until the owner decides to spend them there.
+
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
 Not kernel code: a .o88 package built with os88api.inc, org 0 (§20.1), all
