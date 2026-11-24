@@ -53,7 +53,9 @@ were identical throughout that verification repair.
 24 authored lessons, strict guided input, sampled weak-key practice, four
 profiles, 1/3/5-minute challenges, seven achievements, records, settings,
 original music/effects and 65 original visual captions (40 roasts) are
-implemented. The owner explicitly removed recorded clips and voice packs.
+implemented. The owner explicitly removed recorded clips from the shipped
+disks. A personal Sound Blaster disk, built by `make boratypepcmdisk` from
+the player's own recordings, was added later ([audio](audio.md)).
 The normal C package, shared renderer/music kit, native fullscreen latch and
 CGA FSX bracket are used. There is no new kernel API or budget.
 
