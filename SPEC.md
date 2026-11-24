@@ -260072,7 +260072,9 @@ unknown key is dropped (§51.5 rule 1). `kern_small` has no driver layer
   retries nothing. So a driver answers 06h only for a medium it HAD.
   ZIP.DRV does exactly that (§138.4). A UNIT ATTENTION while its medium is
   unknown (after attach, after an eject) is ridden out by learning the
-  medium, and the first mount after a disk goes in sees no 06h.
+  medium, and the first mount after a disk goes in sees no 06h. A 06h that
+  arrives INSIDE a mount (a disk swapped by hand, the head banked) restarts
+  that mount so it reads sector 0 (§18.9.2.1).
 - **`OSAPI_VOL_DEL` already writes back, and nothing was added.** Between
   operations, the only dirty state the kernel can hold for a volume is a
   held `WRITE_SEQ` stream: its banked FAT edits, its link and its directory
