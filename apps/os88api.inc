@@ -3471,10 +3471,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 13                ; the most records one call can write, so
+DQ_MAXREC  equ 14                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 13, 12, 11 or 4 depending on the
+                                 ; which is 14, 13 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   OS88_DOOR           ; AL = 1 suspend / 0 resume /
@@ -3780,6 +3780,76 @@ EMSE_BAD     equ 3              ; ...not yours, or out of range
 EMSE_BUSY    equ 4              ; ...a quarter is another instance's
 EMS_NHND     equ 8              ; handles on the whole machine
 EMS_PAGE     equ 16384          ; bytes a page, and a quarter of the frame
+DRVC_JOY     equ 11             ; THE GAME PORT - JOYSTICK.DRV (SPEC.md 137):
+                                ; the IBM Game Control Adapter at 201h and its
+                                ; clones, set up ONCE on its Control Panel page.
+                                ; APPENDED after DRVC_HTTP: a class number is
+                                ; ABI. apps/os88joy.inc is the door (joy_find,
+                                ; joy_read, joy_state, joy_dirkeys); the verbs,
+                                ; by OSAPI_DRV_CALL with BH = DRVC_JOY - every
+                                ; one worker-safe, and each takes at most ONE
+                                ; sample of the port (SPEC.md 137.3, 137.4):
+JOYV_INFO    equ 0              ; no sample. out CF=0, AL = the axes answering
+                                ; (JOYA_* bits), AH = the controller type
+                                ; (JOYT_*), CL = buttons the type has, CH =
+                                ; sticks the type has, DX = the driver's
+                                ; version (JOY_VER, drivers/joy/joypkg.inc)
+JOYV_READ    equ 1              ; AL = stick (0 A, 1 B). One sample. CF=1 that
+                                ; stick is not answering. CF=0: AL = X, AH = Y
+                                ; (signed -127..+127, calibrated, + = right /
+                                ; down), BL = its buttons held (bit 0 = its
+                                ; first), BH = its presses since its last read
+                                ; (bits, cleared by this read), CL = JOYD_*
+JOYV_STATE   equ 2              ; ES:DI = a JOYS_SIZE record (in YOUR image:
+                                ; the X stub hands the driver your segment).
+                                ; One sample, the whole port, below. CF=0
+JOYV_RAW     equ 3              ; one UNCALIBRATED sample: AX, BX, CX, DX =
+                                ; X1, Y1, X2, Y2 in PIT counts (838 ns), or
+                                ; JOY_NONE; SI = buttons held (bits 0-3, the
+                                ; port's own, undecoded). CF=0
+JOYV_PROBE   equ 4              ; sample ALL FOUR axes with the full timeout
+                                ; and rebuild the expected mask: a stick
+                                ; plugged in since. out CF=0, AL = as INFO's
+JOY_NONE     equ 0FFFFh         ; a raw count for an axis that did not fall
+JOYA_X1      equ 1              ; the axis bits: INFO's AL, JOYS_AXES
+JOYA_Y1      equ 2
+JOYA_X2      equ 4
+JOYA_Y2      equ 8
+JOYT_2B      equ 0              ; THE CONTROLLER TYPES (SPEC.md 137.4): one
+                                ; stick, two buttons - the default
+JOYT_2X2B    equ 1              ; two sticks, two buttons each (B on X2/Y2,
+                                ; buttons 3-4)
+JOYT_4B      equ 2              ; one stick, four buttons
+JOYT_FLIGHT  equ 3              ; one stick, four buttons, throttle on Y2 and
+                                ; rudder on X2
+JOYT_CHFS    equ 4              ; CH FlightStick Pro: JOYT_FLIGHT, and its hat
+                                ; decoded from the button combinations
+JOYT_TMFCS   equ 5              ; ThrustMaster FCS: one stick, four buttons,
+                                ; its hat the level of Y2
+JOYT_MAX     equ 5
+JOYD_LEFT    equ 1              ; DIRECTIONS - CL of a READ, JOYS_DIRA/DIRB,
+JOYD_RIGHT   equ 2              ; JOYS_HAT: the calibrated position past half
+JOYD_UP      equ 4              ; of full travel, 8-way as four bits
+JOYD_DOWN    equ 8
+JOYS_X1      equ 0              ; THE STATE RECORD (JOYV_STATE). db, signed:
+JOYS_Y1      equ 1              ; stick A's X and Y, calibrated, after Invert
+JOYS_X2      equ 2              ; and Swap; ...stick B's (or, on the flight
+JOYS_Y2      equ 3              ; types, the rudder and throttle as -127..127).
+                                ; 0 for an axis not answering
+JOYS_RAW     equ 4              ; 4 dw: X1, Y1, X2, Y2 raw, PORT order (never
+                                ; swapped), JOY_NONE for one that timed out
+JOYS_BTN     equ 12             ; db: buttons held, bits 0-3 - stick A's
+                                ; first, after Swap and the CH decode
+JOYS_PRESS   equ 13             ; db: presses since the last read, same bits;
+                                ; this read clears them
+JOYS_DIRA    equ 14             ; db: stick A's JOYD_*
+JOYS_DIRB    equ 15             ; db: stick B's (0 on a one-stick type)
+JOYS_HAT     equ 16             ; db: the hat as JOYD_*, 0 centred or none
+                                ; (JOYT_CHFS, JOYT_TMFCS)
+JOYS_THR     equ 17             ; db: throttle 0..255 (flight types, else 0)
+JOYS_RUD     equ 18             ; db: rudder 0..255 (flight types, else 0)
+JOYS_AXES    equ 19             ; db: the axes answering, JOYA_* bits
+JOYS_SIZE    equ 20
 %define OSAPI_FILE_HERE     OS88_DOOR           ; out DX = YOUR instance's
                                  ; current directory (0 = the root), BL = its
                                  ; drive. No disk I/O.
