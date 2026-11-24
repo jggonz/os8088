@@ -1,0 +1,29 @@
+diff --git a/crates/marty_core/src/devices/game_port.rs b/crates/marty_core/src/devices/game_port.rs
+index 04c4fded..0a41732d 100644
+--- a/crates/marty_core/src/devices/game_port.rs
++++ b/crates/marty_core/src/devices/game_port.rs
+@@ -161,6 +161,24 @@ impl GamePort {
+         }
+     }
+ 
++    /// os8088 (patch 18): set one axis's INTERNAL position with no regard to
++    /// the controller layout. `pos` is the value `pos_to_ohms` maps to a
++    /// resistance (-1.0 = 0 ohm = the fastest one-shot, +1.0 = 100K). The
++    /// layout only decides which controls the GUI offers; on a real card all
++    /// four pots and four switches are wired whatever is plugged in, and a
++    /// driver under test must cope with that.
++    pub fn set_axis_raw(&mut self, stick: usize, y_axis: bool, pos: f64) {
++        if stick < 2 {
++            let axis = if y_axis { &mut self.sticks[stick].y } else { &mut self.sticks[stick].x };
++            axis.pos = pos.clamp(-1.0, 1.0);
++        }
++    }
++
++    /// os8088 (patch 18): the four switches, whatever the layout.
++    pub fn set_buttons_raw(&mut self, buttons: [bool; 4]) {
++        self.buttons = buttons;
++    }
++
+     pub fn get_controller_count(&self) -> usize {
+         match self.layout {
+             ControllerLayout::TwoJoysticksTwoButtons => 2,

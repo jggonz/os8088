@@ -1194,6 +1194,8 @@ class Marty:
                 self.cmd(cmd="key", **e["args"])
             elif e["kind"] == "mouse":
                 self.cmd(cmd="mouse", **e["args"])
+            elif e["kind"] == "joy":
+                self.cmd(cmd="joy", **e["args"])
         if settle:
             self.advance(frames=settle)
         return self.status()
@@ -1390,6 +1392,56 @@ class Marty:
                               "args": {"wz": n, "l": l, "r": r}})
             left -= n
             pace(self, gap)
+
+    def joy(self, a=None, b=None, ohms_a=None, ohms_b=None, buttons=None):
+        """Set the IBM GAME PORT (201h) and return its state. THE INSTRUMENT
+        for SPEC.md 137's joystick driver: QEMU has no game port at all.
+
+        Needs a machine with one - `os8088_5150_cga_gla_joy` or
+        `os8088_xt_vga_joy` (`machine(...)`); on any other the debug server
+        answers an error naming that. Every argument is optional and takes
+        effect AT ONCE, in guest time, so `m.joy()` alone is the read-back.
+
+          a, b       (x, y) of stick A / stick B, each -1.0 .. 1.0. x: -1
+                     left, +1 right; y: -1 down, +1 up. LEFT and UP are the
+                     LOW resistances, the FAST one-shots - their axis bit,
+                     1 from the `out 201h`, FALLS to 0 soonest. None leaves
+                     an axis alone: a=(0.5, None) moves only X.
+          ohms_a/_b  (x, y) as a RAW resistance in ohms, 0 .. 100000, for a
+                     calibration test that wants an exact time; wins over
+                     a/b for the axis it names. 0 ohm = the fastest axis.
+          buttons    4-bit mask, bit 0 = button 1 (stick A) ... bit 3 =
+                     button 4 (stick B's second). A pressed button reads 0 on
+                     201h bits 4-7, as on the card. (The machine config's
+                     controller layout picks MartyPC's own GUI and gates
+                     none of this: "one stick, four buttons" is stick A and
+                     mask 0xF.)
+
+        Returns a dict: a, b (the same units), ohms_a/ohms_b,
+        charge_us_a/charge_us_b ([x, y] - the time from `out 201h` to that
+        axis bit FALLING to 0: MartyPC's 25.2us + 0.011us/ohm, so 25.2us at 0
+        ohm and 1,125us at 100K), buttons (mask), port (what `in al,201h`
+        would give right now, with no side effect) and layout.
+
+            m.joy(a=(-1, 0), buttons=0b0001)     # hard left, fire
+            m.outb(0x201, 0)                     # start the one-shots
+            m.joy()["charge_us_a"]               # when X should fall
+
+        Reading 201h with `m.inb(0x201)` does NOT retrigger the one-shots, and
+        the paused machine's clock does not run: to time an axis, `outb`, then
+        `advance(cycles=N)` and `inb`; or let the guest's own code do it.
+        """
+        kw = {"cmd": "joy"}
+        for k, v in (("a", a), ("b", b), ("ohms_a", ohms_a), ("ohms_b", ohms_b)):
+            if v is not None:
+                kw[k] = list(v)
+        if buttons is not None:
+            kw["buttons"] = int(buttons)
+        rr = self.cmd(**kw)
+        if len(kw) > 1:
+            self._log.append({"cycles": self.status()["cycles"], "kind": "joy",
+                              "args": {k: v for k, v in kw.items() if k != "cmd"}})
+        return rr
 
     def history(self):
         return self.cmd(cmd="history")["history"]

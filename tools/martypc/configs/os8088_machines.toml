@@ -2742,3 +2742,61 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
+
+# --- THE GAME PORT MACHINES (SPEC.md 136.7, docs/MARTYPC-DEBUG.md `joy`) ------
+# A game port is a real IBM option card, so it is NOT in the standard machines:
+# the BIOS's equipment word (bit 12) and REDLINE's inspector both report it, and
+# no existing row was written against a machine that has one. These are two
+# machines with exactly ONE overlay added and nothing else changed - the CGA XT
+# every os8088_5150_cga_gla row runs on, and the VGA XT. `joy` on the debug
+# server sets the sticks and switches; `inb(0x201)` sees them.
+#
+# The overlay's default layout is two sticks with two buttons each, which is
+# what a driver is written for (SPEC.md 136.1). The layout only chooses what
+# MartyPC's own GUI offers: `joy` sets all four pots and all four switches
+# whatever it says, so a row that wants "one stick, four buttons" simply uses
+# stick A and buttons 1-4 (mask 0xF). The one-joystick-four-buttons layout is a
+# GUI choice and no row can depend on it.
+[[machine]]
+name = "os8088_5150_cga_gla_joy"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "game_port",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+[[machine]]
+name = "os8088_xt_vga_joy"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "game_port",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"

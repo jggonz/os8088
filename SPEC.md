@@ -260060,12 +260060,34 @@ plan.
 
 **QEMU has no game port**; port 201h reads FFh there, which is exactly the
 "nothing plugged in" case of §137.2 - enough to look at the page on every
-adapter QEMU drives. **MartyPC has one** (`devices/game_port.rs`): a game
-port in the os8088 machine configurations and a debug-server verb that sets
-both sticks' positions and the four buttons are the instrument
-(`tools/martypc/patches/`), so a row can move a stick and read back what a
-package sees. 86Box emulates the period sticks too but cannot be driven
-headless (docs/86BOX.md).
+adapter QEMU drives. **MartyPC has one** (`devices/game_port.rs`), and
+`tools/martypc/patches/18-game-port-debug.patch` makes it the instrument:
+
+* **Machines.** `os8088_5150_cga_gla_joy` and `os8088_xt_vga_joy` are the CGA
+  5150 twin and the VGA XT with the `game_port` overlay and nothing else
+  changed. The standard machines keep NO game port: it is an option card,
+  the BIOS equipment word (bit 12) and REDLINE's inspector report it, and no
+  older row was written against one.
+* **The verb.** The debug server's `joy` (`Marty.joy(a=, b=, ohms_a=,
+  ohms_b=, buttons=)`) sets stick A and B as `(x, y)` in -1..1 (left and up
+  are the low resistances, the fast one-shots) or as a raw resistance, and
+  the four buttons as a 4-bit mask, effective at once; with no argument it
+  is the read-back (positions, ohms, the model's charge time, the buttons
+  and what `in al,201h` returns). A pressed button reads 0 on bits 4-7; the
+  axis bit is 1 from the `out 201h` and FALLS after `25.2us + 0.011us * R`.
+* **The layout is not a constraint.** The machine's controller layout
+  (two sticks x two buttons, the default, or one stick x four) only chooses
+  what MartyPC's own GUI draws; the verb drives all four pots and switches,
+  as the real card has them wired. A row wanting "one stick, four buttons"
+  uses stick A and mask 0xF.
+* **Resolution.** Timing an axis needs guest code (a clock that runs only
+  while the guest executes); one polling loop is 41 cycles (8.6us), the
+  instrument's resolution. Measured: 0, 25K, 50K, 75K, 100K ohm on A.x fell
+  after 242, 1,554, 2,866, 4,178 and 5,490 cycles, and the 0-to-100K span
+  was 1,099.6us against the model's 1,100us.
+
+86Box emulates the period sticks too but cannot be driven headless
+(docs/86BOX.md). docs/MARTYPC-DEBUG.md has the recipe.
 
 ### 137.8 Who reads it
 
