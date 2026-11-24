@@ -432,6 +432,11 @@ ARK_BALLCOL equ CWHITE
 ark_entry:
     push si
     push di
+    call joy_find                   ; ONCE (SPEC.md 44.13): a driver, so a stick
+    mov byte [ark_joy], 0           ; may be plugged in; the keys all still work
+    jc .nojoy                       ; and joy_read refuses if nothing answers
+    mov byte [ark_joy], 1
+.nojoy:
     mov al, KSC_LEFT                ; ARM the key-state map, here and not at
     call OSAPI_KEY_DOWN             ; the first steer: asking is what starts
                                     ; the kernel tracking scancodes (SPEC.md
@@ -1336,6 +1341,11 @@ ark_focuschk:
 ark_do_paddle:
     mov word [ark_pvel], 0          ; how far the paddle moves THIS frame,
                                     ; signed - the ball reads it on contact
+    cmp byte [ark_joy], 0           ; a stick (SPEC.md 44.13)? ONE read a frame;
+    je .nostick                     ; if it MOVED it owns the paddle this frame
+    call ark_stick                  ; (CF = 1: it did, the keys sit this one out)
+    jc .stickret
+.nostick:
     ; IS THE ARROW THE PADDLE IS FOLLOWING STILL DOWN? Then it is a HOLD,
     ; whatever int 16h has or has not delivered (SPEC.md 9.7). [ark_pdir] is
     ; the direction, so the scancode falls out of its sign; a paddle with no
@@ -1408,6 +1418,59 @@ ark_do_paddle:
     mov [ark_px], ax
     mov byte [ark_padwipe], 1
 .out:
+.stickret:
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_stick - the analog paddle (SPEC.md 44.13)
+; out: CF = 1 the stick moved and set the paddle; CF = 0 keys decide
+; Stick A's X is an ABSOLUTE position over the paddle's travel. Button 1 serves
+; and fires as Space does. Last one moved wins: only a change of X >= 2 counts
+; as the stick moving, so a resting stick never fights the arrows.
+; -----------------------------------------------------------------------------
+ark_stick:
+    xor al, al
+    call joy_read                   ; AL = X, BL held, BH presses
+    jc .no
+    test bh, 1                      ; a press since the last frame = Space
+    jz .nb
+    mov byte [ark_launch], 1
+.nb:
+    cbw
+    mov dx, ax                      ; DX = X, signed
+    sub ax, [ark_jx]                ; moved?
+    mov [ark_jx], dx
+    jns .abs
+    neg ax
+.abs:
+    cmp ax, 2
+    jb .no
+    mov ax, dx
+    add ax, 127                     ; 0..254
+    mov bx, [ark_cwid]
+    sub bx, [ark_rail]
+    sub bx, [ark_rail]
+    sub bx, [ark_pw]                ; the travel
+    mul bx
+    mov bx, 254
+    div bx
+    add ax, [ark_rail]
+    mov bx, ax
+    sub bx, [ark_px]
+    mov [ark_pvel], bx
+    xor dx, dx
+    mov [ark_pspd], dx              ; the keys' state machine stands down
+    mov [ark_pkeep], dx
+    mov [ark_pdn], dx
+    or bx, bx
+    jz .set
+    mov [ark_px], ax
+    mov byte [ark_padwipe], 1
+.set:
+    stc
+    ret
+.no:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4000,6 +4063,7 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
 %define OS88UI_NOBTN            ; brick-breaker draws no standard button
 %define OS88UI_ABDONLY          ; painter only: ark_clipdraw calls os88ui_about_d
 %include "os88ui.inc"
+%include "os88joy.inc"
 
 ; =============================================================================
 ; .bss (SPEC.md 20.5: the loader zeroes ARK_BSS bytes after the image, and
@@ -4104,6 +4168,8 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     ABYTE ark_stuck                 ; the ball is parked on the paddle - and
     ABYTE ark_catch                 ; ark_rearm sets these two as ONE word
     ABYTE ark_laser
+    ABYTE ark_joy                   ; a stick answers X (SPEC.md 44.13)
+    AWORD ark_jx                    ; its last X, sign-extended
     ABYTE ark_launch                ; Space, set by the UI task
     ABYTE ark_hired                 ; the worker exists
     ABYTE ark_full                  ; the next frame must repaint everything

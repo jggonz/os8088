@@ -79,6 +79,43 @@ wb_keys:
 .out:
     ret
 
+; wb_joy - ONE stick read per presented frame (SPEC.md 109.7), in the loop and
+; never in the rate hook. Stick A's Y is an absolute paddle position; it only
+; takes the paddle when it MOVED (>= 2 of 127), so a resting stick never fights
+; the keys. clobbers AX, BX, CL, DX
+wb_joy:
+    cmp byte [wb_joyon], 0
+    je .out
+    cmp byte [wv_fast], 0        ; the text fallback has no presented frame:
+    jne .read                    ; read on its tick instead
+    cmp byte [wv_legacytick], 0
+    je .out
+.read:
+    xor al, al
+    call joy_read
+    jc .out
+    mov al, ah
+    cbw
+    mov dx, ax                   ; DX = Y, + = down
+    sub ax, [wb_jy]
+    mov [wb_jy], dx
+    jns .abs
+    neg ax
+.abs:
+    cmp ax, 2
+    jb .out
+    mov ax, dx
+    add ax, 127                  ; 0..254
+    mov bl, WB_PMAX
+    xor bh, bh
+    mul bx
+    mov bx, 254
+    div bx
+    mov [wb_jtgt], al
+    mov byte [wb_jact], 1
+.out:
+    ret
+
 wb_tick:
     mov byte [wv_legacytick], 1
     call wb_sound_tick
@@ -166,6 +203,7 @@ wb_controls:
     call OSAPI_KEY_DOWN
     jnc .downkey
 .up:
+    mov byte [wb_jact], 0        ; a key was the last control moved: it wins
     cmp byte [bx], 0
     je .downkey
     dec byte [bx]
@@ -177,12 +215,43 @@ wb_controls:
     call OSAPI_KEY_DOWN
     jnc .ball
 .down:
+    mov byte [wb_jact], 0
     cmp byte [bx], WB_PMAX
     jae .ball
     inc byte [bx]
 .ball:
+    cmp byte [wb_jact], 0        ; the stick (SPEC.md 109.7): slew the paddle
+    je .spin                     ; toward wb_jtgt, at most WB_JSLEW quarter
+    mov ah, [wb_jtgt]            ; rows per physics step - the SAME paddle
+    mov al, [bx]                 ; state the keys step, so extents, collisions
+    cmp al, ah                   ; and the link see nothing new
+    je .spin
+    jb .jdn
+    sub al, ah
+    cmp al, WB_JSLEW
+    jbe .jup
+    mov al, WB_JSLEW
+.jup:
+    sub [bx], al
+    jmp short .spin
+.jdn:
+    sub ah, al
+    cmp ah, WB_JSLEW
+    jbe .jgo
+    mov ah, WB_JSLEW
+.jgo:
+    add [bx], ah
+.spin:
     mov al, [bx]
     sub al, [wb_padold]
+    cmp al, 2                    ; english like a key's, at most doubled
+    jle .slo
+    mov al, 2
+.slo:
+    cmp al, -2
+    jge .shi
+    mov al, -2
+.shi:
     cmp byte [wb_side], 0
     jne .rightspin
     mov [wb_lspin], al

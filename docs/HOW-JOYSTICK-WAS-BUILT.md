@@ -151,3 +151,18 @@ and a QMP read of the driver's own memory showed the default blob (version
 `joy_live` 0 - exactly what `JOYV_INFO` answers as "No joystick connected".
 Not tested: a real stick (MartyPC's game port was J4's, landing in
 parallel), and no row was run (the final pass does that).
+
+**J7, the analog paddle (2026-11-24).** WireBall and Arkanoid read stick A as an
+ABSOLUTE position, not as key repeats. Arkanoid maps X over the paddle's travel
+in `ark_do_paddle`'s worker (one `joy_read` a frame, ~1.2 ms of a ~55 ms frame);
+WireBall maps Y to a target in `wb_joy`, once per presented frame in the
+foreground loop (never in the rate hook, §53.2.2), and the existing physics step
+slews the paddle byte toward it by at most 4 quarter rows, so the collision
+extents, fractional ball and serial link see no new state. `joy_find` is asked
+once, WireBall's before `OSAPI_FSX_RUN`. Rule written down: last control moved
+wins (a stick change of 2+ takes the paddle; a key clears it). Sizes: Arkanoid
+5,659 -> 5,870 bytes, WireBall 37,417 -> 37,657. Arithmetic cost in WireBall:
+1.2 ms of a 17-22 ms frame (46-59 fps) is 6-7%, and the read can swallow up to
+one 1.7 ms rate-hook period, so motion may run a few percent slow with a stick
+answering. Tested: build only on the host; the game-port instrument needs
+JOYSTICK.DRV, which is not on this base, so the stick path has not run.
