@@ -20,7 +20,18 @@ JOY_TMO      equ 2700           ; a sample's timeout in PIT counts (838 ns):
                                 ; ~2.26 ms, past a 100 kOhm stick's ~1.1 ms,
                                 ; under the 4.17 ms an 8250 byte takes at
                                 ; 2400 baud (SPEC.md 137.3)
-JOY_TBLK     equ 48             ; PIT counts one sample block is assumed to
+JOY_NRD      equ 12             ; reads in a block (SPEC.md 137.3)
+JOY_GAPHALF  equ 23             ; counts: half the time the clock takes between
+                                ; two blocks, taken off a fall first seen
+                                ; after it (SPEC.md 137.3)
+JOY_TICKHALF equ 16             ; counts: half the clock's time, added to a
+                                ; fall that happened while it was read
+JOY_RAW0     equ 64             ; the raw count of a 0 ohm stick, in PIT counts:
+                                ; the 558's own ~25 us (30) and what the read
+                                ; loop adds (34, measured on MartyPC's 5150,
+                                ; SPEC.md 137.3) - the minimum an uncalibrated
+                                ; axis assumes
+JOY_TBLK     equ 120             ; PIT counts one sample block is assumed to
                                 ; take when the counter reloaded inside it
                                 ; and its own length cannot be known (a fast
                                 ; channel-0 divisor: an FSX rate bracket, the

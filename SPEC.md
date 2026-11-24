@@ -260167,15 +260167,34 @@ A SAMPLE is one firing of the one-shots and the timing of their fall
    it is never waited on, so a missing stick B costs nothing. A type's axes
    are the port's, Swap applied (§137.4).
 2. With interrupts OFF (`pushf`/`cli` ... `popf`), PIT channel 0 is latched
-   (838 ns units), 201h is written, and 201h is read in BLOCKS of four
-   unrolled reads (`in`/`and`/`cmp`/`jne`, 7 bytes, ~6 µs each on the XT);
-   the channel is latched again after every block and the moment a fall is
-   seen, and the running difference is that axis's RAW count. The loop ends
-   when every expected bit has fallen or at `JOY_TMO` = 2,700 PIT units
-   (~2.26 ms; a 100 kΩ stick is ~1.1 ms). An axis that did not fall reads
-   `JOY_NONE` (0FFFFh) and is dropped from `joy_live` until the next probe.
-   The raw count's resolution is one read, ~6 µs on the XT (~1.3% of a
-   100 kΩ span), and about one bus cycle on anything faster.
+   (838 ns units) and 201h is written on the next instruction, so the clock's
+   zero is the fire, and 201h is read in BLOCKS of `JOY_NRD` (12) unrolled
+   reads (`in`/`and`/`cmp`/`jne`, 7 bytes, ~6 µs each on the XT). The channel
+   is latched again after every block and the moment a fall is seen, and the
+   running difference is the raw count. The loop ends when every expected bit
+   has fallen or at `JOY_TMO` = 2,700 PIT units (~2.26 ms; a 100 kΩ stick is
+   ~1.1 ms). An axis that did not fall reads `JOY_NONE` (0FFFFh) and is
+   dropped from `joy_live` until the next probe.
+
+   **Time the port is not looked at is blind, and a fall inside it is seen
+   late - so it is kept to the clock and nothing else.** A block's latch is
+   ~40 µs on the XT (three port accesses and the sum, fetch-bound), a
+   resolution of one read (~6 µs) the rest of the time. A fall is therefore
+   only RECORDED in the loop (the count, and which axes are still timing);
+   sorting the counts to their axes is done after the window closes
+   (`.done`), because work between two looks is time ANOTHER axis may fall in
+   and be seen late - the cause of the corner-reading defect (JOYSTICK-PLAN
+   QA Q5: X's count depended on when Y fell, by up to 90 counts, when the
+   handler sorted the fall at once). Two corrections follow from the same
+   fact: a fall first seen at the first read after the clock was read
+   (`.fell0`) is placed in the middle of that time (`JOY_GAPHALF` = 23 counts
+   less), and an axis found fallen by the second look taken at once after a
+   latch is placed half the clock's time after it (`JOY_TICKHALF` = 16).
+   Measured on MartyPC's 5150, a count is the model's time plus a fixed ~34
+   counts (the read loop and the latch), with a spread of ±12 (σ 12, over 101
+   resistances, both axes moving independently; §137.7), against a travel of
+   ~1,340: 1% of the span, whichever way the other axis stands. The
+   pre-correction figures were σ 21 with a tail to +141.
 3. The buttons are the inverted top nibble of the last read.
 
 The window is bounded by `JOY_TMO`, below the 4.17 ms a byte takes at
@@ -260200,8 +260219,15 @@ position -127..+127, piecewise linear on each side of the centre, with a
 dead zone of `dz` percent of each half (default 8, at most 30) answering 0,
 clamped at the ends (`joy_calpos`; the dead zone in counts is derived once
 per axis, `joy_prep`). Before any calibration the driver uses the first
-sample that answers as the centre and ±(centre) as the span (MIN 0, MAX
-twice it), so an uncalibrated stick is usable. Swap and Invert are applied
+sample that answers as the centre, and assumes the stick is the 100 kΩ pot
+every game port expects, so its span is SYMMETRIC about that centre and starts
+at the count a 0 Ω stick gives, `JOY_RAW0` = 64 (the 558's own ~25 µs, 30
+counts, plus the ~34 the read loop adds - §137.7): MIN = `JOY_RAW0`, MAX =
+2 × centre - `JOY_RAW0` (a centre at or below `JOY_RAW0` is not a stick: the
+span is then 0 to twice it). So an uncalibrated stick reaches ±127 (±120 and
+better, and the dead zone's share, at the stops) instead of the -108..+92 it
+did when the minimum was taken as 0 and the maximum as twice the centre -
+both ends sat `JOY_RAW0` too far out. Swap and Invert are applied
 AFTER the calibration, to the logical sticks: the calibration belongs to the
 port.
 
@@ -260547,6 +260573,17 @@ adapter QEMU drives. **MartyPC has one** (`devices/game_port.rs`), and
   instrument's resolution. Measured: 0, 25K, 50K, 75K, 100K ohm on A.x fell
   after 242, 1,554, 2,866, 4,178 and 5,490 cycles, and the 0-to-100K span
   was 1,099.6us against the model's 1,100us.
+* **The model is exact; a count's spread is the driver's blind time.**
+  `game_port.rs` advances every one-shot by the time each instruction took
+  (`Bus::run_devices` runs the game port per instruction, a fall is the
+  first look after `25.2us + 0.011us * R`), so one axis's count cannot depend
+  on another's in the model (QA Q5 looked like crosstalk and was not). It
+  depended on WHEN the driver looked: see §137.3 for the blind time and its
+  fix. The recipe that showed it, and the figures to hold a change to:
+  hold X at 100K and 60K ohms and step Y over 0..100K ohms, read `JOYV_RAW`
+  at each. Before the fix X read 1,429-1,475 (60K: 905-996); after it
+  1,349-1,397 (60K: 830-869) and, with Y at each of 12 resistances, mostly
+  within ±5 of one value. A count at 0 ohm is 62-64 (`JOY_RAW0`).
 
 86Box emulates the period sticks too but cannot be driven headless
 (docs/86BOX.md). docs/MARTYPC-DEBUG.md has the recipe.
@@ -260576,12 +260613,12 @@ the scheduler's 65536.** A package inside an `FSXF_RATE` bracket (§53.2.2 -
 WireBall's 2048) or `FSXF_FASTTICK`, and the speaker's PCM tier (§34.11), run
 the channel at a divisor of their own, so the count can RELOAD inside a
 sample's window and a plain difference would be garbage. `joy_tick` therefore
-treats any one difference past `JOY_TSTEP` (512 counts - no block of four
-reads can take that long on any machine) as a reload and counts the
-previous block's length (`joy_tlast`, seeded with `JOY_TBLK` = 48) in its
+treats any one difference past `JOY_TSTEP` (512 counts - no block of
+`JOY_NRD` reads can take that long on any machine) as a reload and counts the
+previous block's length (`joy_tlast`, seeded with `JOY_TBLK` = 120) in its
 place. At the scheduler's divisor the 16-bit difference is exact across its
 own reload and the substitution never fires; at any other divisor a sample
-that straddles a reload is off by at most one block, ~40 µs on the XT - the
+that straddles a reload is off by at most one block, ~110 µs on the XT - the
 reason a game should read the stick from its frame loop rather than its rate
 hook, which may make no kernel call at all anyway (§53.2.2).
 
