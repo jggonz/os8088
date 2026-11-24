@@ -49,6 +49,10 @@ UNREGISTERED = {
     "cpface.py": "not a test: the shared pin that puts a row's Control "
                  "Panel on its compact face (SPEC.md 135.13) - imported by "
                  "dispcp and the rows that click compact coordinates",
+    "zipq.py": "not a test: the shared Zip drive helpers (SPEC.md 138.8) - a "
+               "Python ppa/imm host over the debug server's inb/outb, the "
+               "Drivers-page tick, the guest readers - imported by zipmodel, "
+               "zipdrive, zipnone and zipspeed",
     "modkeep.py": "run by the `modcache` row (tests/modcache.py imports and "
                   "runs it): every on-demand module kept in RAM after its "
                   "drop, its tail zero in the file, its re-adoption free",

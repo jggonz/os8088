@@ -538,6 +538,39 @@ class Marty:
         """
         return self.cmd(cmd="disk", reset=bool(reset))
 
+    # --- the Zip drive (SPEC.md 138.8, patches/18-zip-lpt.patch) ------------
+
+    def zip_stats(self, reset=False):
+        """What the Zip drive on the LPT card has been asked to do, from OUTSIDE.
+
+        `commands`, `by_opcode` ({'28': READ(10) count, ...}), `sectors_read`,
+        `sectors_written`, `bytes_to_host`/`bytes_from_host`, the protocol
+        events (`connects`, `selects`, `resets`), `nibble_bytes` (clocked in
+        through the status lines) against `ps2_bytes` (read off the data
+        lines) - which is how a row proves WHICH port mode ran - and
+        `violations`, the host doing something the hardware has no answer for
+        (must be 0). `cdbs` is the last sixteen commands in hex. `medium`,
+        `path`, `sectors` and `wp` are the drive's own state. `reset=True`
+        zeroes the counters so a region of a session can be bracketed.
+        """
+        return self.cmd(cmd="zip_stats", reset=bool(reset))
+
+    def zip_eject(self):
+        """Take the disk out: the guest's next command is NOT READY, medium not
+        present. The host file is left exactly as the guest wrote it."""
+        return self.cmd(cmd="zip_eject")
+
+    def zip_insert(self, path):
+        """Put the host image `path` in the drive. The guest's next command is
+        a UNIT ATTENTION - the medium may have changed - and then it reads THIS
+        disk. Returns `sectors`."""
+        return self.cmd(cmd="zip_insert", path=os.path.abspath(path))
+
+    def zip_wp(self, on=True):
+        """The write-protect switch. A protected disk reads, and a write
+        answers DATA PROTECT."""
+        return self.cmd(cmd="zip_wp", on=bool(on))
+
     def regs(self):
         return self.cmd(cmd="regs")
 
@@ -5296,7 +5329,8 @@ def emulator():
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
-           card=None, label=None, detach=False, rom=None, saver=False):
+           card=None, label=None, detach=False, rom=None, saver=False,
+           zip=None, zip_wp=False):
     """Start a FRESH martypc_headless on `image` and return a booted Marty.
 
     **THE SCREEN SAVER IS TURNED OFF** unless `saver=True` - the rows whose
@@ -5368,7 +5402,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         why = os88bootcache.eligible(machine, dict(
             label=label, timeout=timeout, **{k: v for k, v in (
                 ("addr", addr), ("run_dir", run_dir), ("rom", rom),
-                ("detach", detach or None), ("extra", list(extra) or None))
+                ("detach", detach or None), ("extra", list(extra) or None),
+                ("zip", zip), ("zip_wp", zip_wp or None))
                 if v is not None}))
         if why is None:
             m = os88bootcache.launch(image, apps=apps, machine=machine,
@@ -5377,7 +5412,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
             m = launch(image, apps=apps, machine=machine, addr=addr,
                        run_dir=run_dir, boot=False, timeout=timeout,
                        extra=extra, card=card, label=label, detach=detach,
-                       rom=rom, saver=saver)
+                       rom=rom, saver=saver, zip=zip, zip_wp=zip_wp)
             try:
                 m.run()
             except BaseException:
@@ -5391,7 +5426,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         return m
     m = _launch(image, apps=apps, machine=machine, addr=addr,
                 run_dir=run_dir, boot=boot, timeout=timeout, extra=extra,
-                card=card, label=label, detach=detach, rom=rom)
+                card=card, label=label, detach=detach, rom=rom,
+                zip=zip, zip_wp=zip_wp)
     _saver_arm(m, not saver)
     if boot is True:                    # up and settled: no wait need come
         _saver_guard(m, force=True)     # first
@@ -5400,7 +5436,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
 
 def _launch(image, apps=None, machine="os8088_5150_cga", addr=None,
             run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
-            card=None, label=None, detach=False, rom=None):
+            card=None, label=None, detach=False, rom=None, zip=None,
+            zip_wp=False):
     """`launch` less the saver: the backend chosen, the machine started."""
     import subprocess
     import time
@@ -5579,6 +5616,16 @@ def _launch(image, apps=None, machine="os8088_5150_cga", addr=None,
             ROOT, "build", "picomem", "sd.img")
         env["OS88_PMSD"] = os.path.join(run_dir, "picomem-sd.img")
         shutil.copyfile(sd, env["OS88_PMSD"])
+    # A ZIP DRIVE (`_zip*`, tools/martypc/patches/18-zip-lpt.patch): `zip` is
+    # the HOST image it reads and writes IN PLACE - it is not copied, because
+    # a Zip image is 100 MB of mostly nothing and the row wants to read what
+    # the guest wrote straight back off the file (tools/os88zip.py). So the
+    # row owns the path and builds it fresh. None leaves the drive empty (NOT
+    # READY) until `m.zip_insert(path)`. `zip_wp=True` starts it protected.
+    if zip is not None:
+        env["OS88_ZIPIMG"] = os.path.abspath(zip)
+    if zip_wp:
+        env["OS88_ZIPWP"] = "1"
     log = open(logpath, "wb")
     proc = subprocess.Popen(cmd, cwd=run_dir, env=env, stdout=log, stderr=log)
 
@@ -6135,6 +6182,13 @@ def main():
     p = sub.add_parser("write"); p.add_argument("where"); p.add_argument("hex")
     p = sub.add_parser("step"); p.add_argument("n", nargs="?", type=int, default=1)
     p = sub.add_parser("verify"); p.add_argument("--image", default="build/kernel.bin")
+    p = sub.add_parser("zip-stats", help="the Zip drive's counters (SPEC.md 138.8)")
+    p.add_argument("--reset", action="store_true")
+    sub.add_parser("zip-eject", help="take the Zip disk out")
+    p = sub.add_parser("zip-insert", help="put a host image in the Zip drive")
+    p.add_argument("path")
+    p = sub.add_parser("zip-wp", help="the Zip disk's write-protect switch")
+    p.add_argument("on", choices=("0", "1"))
 
     a = ap.parse_args()
 
@@ -6177,6 +6231,14 @@ def main():
                 print(m.write(parse_addr(a.where), bytes.fromhex(a.hex)), "bytes written")
             elif a.op == "step":
                 print(json.dumps(m.step(a.n)))
+            elif a.op == "zip-stats":
+                print(json.dumps(m.zip_stats(reset=a.reset), indent=1))
+            elif a.op == "zip-eject":
+                print(json.dumps(m.zip_eject()))
+            elif a.op == "zip-insert":
+                print(json.dumps(m.zip_insert(a.path)))
+            elif a.op == "zip-wp":
+                print(json.dumps(m.zip_wp(a.on == "1")))
             elif a.op == "key":
                 m.key(a.name); print("ok")
             elif a.op == "type":

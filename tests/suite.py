@@ -24247,6 +24247,183 @@ SOAK = [
         needs=("marty", "nasm", "cc"), serial=True, timeout=3600, cpus=3,
         wants=("build/os8088-360.img", "build/os8088-720.img",
                "build/pagedesk720.img", "build/pagedesk.bin")),
+    Row("zipimg", "soak", py("tests/unit/t_zipimg.py"), 5.0,
+        "SPEC.md 138.8: tools/os88zip.py, the Zip disk image builder and "
+        "reader the QA reads guest writes back through. Every kind (IBM "
+        "format with its ONE partition in ENTRY 4 at sector 32, superfloppy, "
+        "Zip 250, 250 superfloppy) has the right sector count, signature, "
+        "BPB (hidden sectors = the partition start) and a FAT16 cluster "
+        "count, and is SPARSE; files of every awkward size (0, 1, 511, 512, "
+        "513, a cluster +-1, 200,000, 1,000,003) and nested folders read back "
+        "byte for byte through the tool AND through a second reader written "
+        "in the test from the FAT spec; a 150-file folder grows its chain; "
+        "overwriting frees clusters; open_image takes the first FAT entry in "
+        "order and refuses type 07h; the fsck FINDS each injected defect (a "
+        "second FAT that differs, a cross-link, a lost cluster, a size past "
+        "its chain); the QA set is the same bytes every build. Soak, not "
+        "fast: tests/tierlock.txt closes fast to rows the owner approved "
+        "(DECISIONS D2). Measured 3.3s CPU",
+        needs=()),
+    Row("zipmodel", "soak", py("tests/zipmodel.py"), 60.0,
+        "SPEC.md 138.8 / 138.10: MartyPC's Zip drive (patch 18) with NO "
+        "guest - five paused machines (VPI0 and VPI2 on an output-only card, "
+        "a Zip 250, and VPI0 and VPI2 on a bidirectional card), a Python host "
+        "speaking Linux's ppa.c and imm.c register sequences through the "
+        "debug server's inb/outb: the config keys, the host image read and "
+        "WRITTEN in place, INQUIRY/READ CAPACITY/READ(10)/WRITE(10)/MODE "
+        "SENSE, UNIT ATTENTION after power-on and an insert, NOT READY when "
+        "empty, DATA PROTECT under zip_wp, the eject/insert verbs, which port "
+        "mode ran (nibble_bytes vs ps2_bytes), the guest clock the stats "
+        "keep, and the card's own bidirectional behaviour. THE INSTRUMENT'S "
+        "GATE: when it is red every other zip row is meaningless. Break the "
+        "nibble order in ppa_status() and every VPI0 nibble read goes red",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipdrive-vpi0", "soak", py("tests/zipdrive.py", "--arm", "vpi0"), 400.0,
+        "SPEC.md 138 / ZIP-PLAN claims 1-5 (and claim 9's path): ZIP.DRV end to end on "
+        "MartyPC - VPI0 nibble on an XT's output-only card, 200 KB off the Zip and 120 KB onto it. Ticked on the Drivers page (one new zone, the page "
+        "says the mode and the size), the root and a folder listed as "
+        "os88zip says the host wrote them, a file opened, files copied off "
+        "the Zip onto B: and onto the Zip from B: and compared on the host, "
+        "Eject from the page (START STOP UNIT, the zone stays, nothing left "
+        "open, the next disk mounts with ITS files), a disk pulled and put "
+        "back, a write-protected disk that still lists and refuses a write "
+        "with a toast naming protection, zip_stats violations 0 and the port "
+        "mode that ran. NOT YET PINNED: the Eject button's geometry "
+        "(tests/zipq.py PAGE_EJECT). UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipdrive-vpi2", "soak", py("tests/zipdrive.py", "--arm", "vpi2"), 240.0,
+        "SPEC.md 138 / ZIP-PLAN claims 1-5 (and claim 7): ZIP.DRV end to end on "
+        "MartyPC - VPI2 (Zip Plus) nibble. Ticked on the Drivers page (one new zone, the page "
+        "says the mode and the size), the root and a folder listed as "
+        "os88zip says the host wrote them, a file opened, files copied off "
+        "the Zip onto B: and onto the Zip from B: and compared on the host, "
+        "Eject from the page (START STOP UNIT, the zone stays, nothing left "
+        "open, the next disk mounts with ITS files), a disk pulled and put "
+        "back, a write-protected disk that still lists and refuses a write "
+        "with a toast naming protection, zip_stats violations 0 and the port "
+        "mode that ran. NOT YET PINNED: the Eject button's geometry "
+        "(tests/zipq.py PAGE_EJECT). UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipdrive-z250", "soak", py("tests/zipdrive.py", "--arm", "z250"), 240.0,
+        "SPEC.md 138 / ZIP-PLAN claims 1-5 (and claim 8): ZIP.DRV end to end on "
+        "MartyPC - a Zip 250 (489,532 sectors) on VPI2. Ticked on the Drivers page (one new zone, the page "
+        "says the mode and the size), the root and a folder listed as "
+        "os88zip says the host wrote them, a file opened, files copied off "
+        "the Zip onto B: and onto the Zip from B: and compared on the host, "
+        "Eject from the page (START STOP UNIT, the zone stays, nothing left "
+        "open, the next disk mounts with ITS files), a disk pulled and put "
+        "back, a write-protected disk that still lists and refuses a write "
+        "with a toast naming protection, zip_stats violations 0 and the port "
+        "mode that ran. NOT YET PINNED: the Eject button's geometry "
+        "(tests/zipq.py PAGE_EJECT). UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipdrive-ps2-0", "soak", py("tests/zipdrive.py", "--arm", "ps2-0"), 240.0,
+        "SPEC.md 138 / ZIP-PLAN claims 1-5 (and claim 7): ZIP.DRV end to end on "
+        "MartyPC - VPI0 on a BIDIRECTIONAL card, PS/2 byte reads. Ticked on the Drivers page (one new zone, the page "
+        "says the mode and the size), the root and a folder listed as "
+        "os88zip says the host wrote them, a file opened, files copied off "
+        "the Zip onto B: and onto the Zip from B: and compared on the host, "
+        "Eject from the page (START STOP UNIT, the zone stays, nothing left "
+        "open, the next disk mounts with ITS files), a disk pulled and put "
+        "back, a write-protected disk that still lists and refuses a write "
+        "with a toast naming protection, zip_stats violations 0 and the port "
+        "mode that ran. NOT YET PINNED: the Eject button's geometry "
+        "(tests/zipq.py PAGE_EJECT). UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipdrive-ps2-2", "soak", py("tests/zipdrive.py", "--arm", "ps2-2"), 400.0,
+        "SPEC.md 138 / ZIP-PLAN claims 1-5 (and claim 7): ZIP.DRV end to end on "
+        "MartyPC - VPI2 on a bidirectional card, PS/2 byte reads, 200 KB off the Zip. Ticked on the Drivers page (one new zone, the page "
+        "says the mode and the size), the root and a folder listed as "
+        "os88zip says the host wrote them, a file opened, files copied off "
+        "the Zip onto B: and onto the Zip from B: and compared on the host, "
+        "Eject from the page (START STOP UNIT, the zone stays, nothing left "
+        "open, the next disk mounts with ITS files), a disk pulled and put "
+        "back, a write-protected disk that still lists and refuses a write "
+        "with a toast naming protection, zip_stats violations 0 and the port "
+        "mode that ran. NOT YET PINNED: the Eject button's geometry "
+        "(tests/zipq.py PAGE_EJECT). UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipdrive-super", "soak", py("tests/zipdrive.py", "--arm", "super"), 240.0,
+        "SPEC.md 138 / ZIP-PLAN claims 1-5 (and claim 8): ZIP.DRV end to end on "
+        "MartyPC - a SUPERFLOPPY (BPB at sector 0, no partition table). Ticked on the Drivers page (one new zone, the page "
+        "says the mode and the size), the root and a folder listed as "
+        "os88zip says the host wrote them, a file opened, files copied off "
+        "the Zip onto B: and onto the Zip from B: and compared on the host, "
+        "Eject from the page (START STOP UNIT, the zone stays, nothing left "
+        "open, the next disk mounts with ITS files), a disk pulled and put "
+        "back, a write-protected disk that still lists and refuses a write "
+        "with a toast naming protection, zip_stats violations 0 and the port "
+        "mode that ran. NOT YET PINNED: the Eject button's geometry "
+        "(tests/zipq.py PAGE_EJECT). UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipnone-cga", "soak", py("tests/zipnone.py", "--arm", "cga"), 90.0,
+        "ZIP-PLAN claim 6 on the cable machine, CGA: the row ticked with NO drive on the port "
+        "refuses (segment 0, DRVE_HW, `No drive`), no zone appears, nothing "
+        "hangs (the guest clock runs, the Control Panel answers) and the LPT "
+        "control register is left at x0Ch - idle, so a printer still prints. "
+        "The VGA and EGA legs are QEMU's, by hand in Z6. UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True),
+    Row("zipnone-herc", "soak", py("tests/zipnone.py", "--arm", "herc"), 90.0,
+        "ZIP-PLAN claim 6 on Hercules with a Covox on the data lines: the row ticked with NO drive on the port "
+        "refuses (segment 0, DRVE_HW, `No drive`), no zone appears, nothing "
+        "hangs (the guest clock runs, the Control Panel answers) and the LPT "
+        "control register is left at x0Ch - idle, so a printer still prints. "
+        "The VGA and EGA legs are QEMU's, by hand in Z6. UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True),
+    Row("zipspeed-vpi0", "soak", py("tests/zipspeed.py", "--arm", "vpi0"), 300.0,
+        "SPEC.md 138.9 / ZIP-PLAN claim 9: what a sector costs on the "
+        "emulated 4.77 MHz XT (VPI0 nibble) - a 200,000-byte file copied off the Zip "
+        "and a 120,001-byte one onto it through the real copy path, the "
+        "drive's own guest clock summed per READ and WRITE command "
+        "(connect to message byte). It gates only 'not a hang' (> 1 KB/s) and "
+        "writes build/zipspeed-vpi0.txt for the final pass to copy into 138.9. UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipspeed-vpi2", "soak", py("tests/zipspeed.py", "--arm", "vpi2"), 300.0,
+        "SPEC.md 138.9 / ZIP-PLAN claim 9: what a sector costs on the "
+        "emulated 4.77 MHz XT (VPI2 nibble) - a 200,000-byte file copied off the Zip "
+        "and a 120,001-byte one onto it through the real copy path, the "
+        "drive's own guest clock summed per READ and WRITE command "
+        "(connect to message byte). It gates only 'not a hang' (> 1 KB/s) and "
+        "writes build/zipspeed-vpi2.txt for the final pass to copy into 138.9. UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipspeed-ps2-0", "soak", py("tests/zipspeed.py", "--arm", "ps2-0"), 300.0,
+        "SPEC.md 138.9 / ZIP-PLAN claim 9: what a sector costs on the "
+        "emulated 4.77 MHz XT (PS/2 byte) - a 200,000-byte file copied off the Zip "
+        "and a 120,001-byte one onto it through the real copy path, the "
+        "drive's own guest clock summed per READ and WRITE command "
+        "(connect to message byte). It gates only 'not a hang' (> 1 KB/s) and "
+        "writes build/zipspeed-ps2-0.txt for the final pass to copy into 138.9. UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
+    Row("zipspeed-ps2-2", "soak", py("tests/zipspeed.py", "--arm", "ps2-2"), 300.0,
+        "SPEC.md 138.9 / ZIP-PLAN claim 9: what a sector costs on the "
+        "emulated 4.77 MHz XT (PS/2 byte) - a 200,000-byte file copied off the Zip "
+        "and a 120,001-byte one onto it through the real copy path, the "
+        "drive's own guest clock summed per READ and WRITE command "
+        "(connect to message byte). It gates only 'not a hang' (> 1 KB/s) and "
+        "writes build/zipspeed-ps2-2.txt for the final pass to copy into 138.9. UNMEASURED: written before ZIP.DRV existed, so the QA run (docs/plans/ZIP-PLAN.md Z6) is its first and the final pass measures `secs`",
+        needs=("marty",), serial=True,
+        wants=("build/zip/zip100.img", "build/zip/zip100b.img", "build/zip/zip250.img",
+               "build/zip/zip100super.img")),
 ]
 
 

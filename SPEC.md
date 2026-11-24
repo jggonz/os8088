@@ -260005,15 +260005,84 @@ drive's zone comes back. `drivers/zip/zippkg.inc` is the door.
 ### 138.8 The instrument — a Zip drive in MartyPC
 
 *(Owner: marty.)* `tools/martypc/patches/18-zip-lpt.patch` puts a Zip drive on
-MartyPC's LPT card: a VPI0 or VPI2 device model and a SCSI direct-access
-target over a HOST image file, written from the drive's side of the same
-Linux sources, by a different agent than wrote either transport - so the two
-halves are two readings of one protocol, not one reading checked against
-itself. Configuration, debug-server verbs (eject, insert, write protect,
-counters), `tools/os88marty.py` helpers, a bidirectional option on the LPT
-card so `ZIPM_PS2` is reachable, and `tools/os88zip.py`, which builds Zip
-images (IBM partition-4 FAT16 at 196,608 sectors, a superfloppy, a Zip 250)
-and reads files back out of one on the host.
+MartyPC's LPT card: `devices/zip.rs`, a VPI0 or VPI2 device model and a SCSI
+direct-access target over a HOST image file, written from the drive's side of
+the same Linux sources (`ppa.c`, `imm.c`), by a different agent than wrote
+either transport - so the two halves are two readings of one protocol, not
+one reading checked against itself.
+
+**It is synchronous.** The guest's `in`/`out` to the LPT registers call the
+model in the same I/O cycle - no thread, no poll, no queue - so the drive can
+never be "late", and a guest that violates the protocol is COUNTED
+(`violations`) and answered with what the drive would do (nothing) instead of
+being corrected.
+
+*The model.*
+
+| | VPI0 (PPA3) | VPI2 (MatchMaker) |
+|---|---|---|
+| attach | AUTOFEED rising with SELECT IN low, data 00,3C,20,8F/CF | the CPP magic AA 55 00 FF 87 78 on the data lines with ctrl 0Ch, then a command byte on a strobe (E0/28 selects device 0, 30 deselects) |
+| detach | AUTOFEED rising with SELECT IN high, data 00,3C,20,0F | CPP 30, or the disconnect sequence |
+| select | a pulse of `1<<id`, then data 80 with ctrl 08h; **reset** is data 40 with ctrl 08h | data `80\|(1<<id)`, strobe, status bit 3 |
+| phases (status) | E0 command, C0 data-out, D0 data-in, F0 status/message | A8, 88, 98, B8; idle connected 70, disconnected 78 |
+| nibble in | ctrl 04h = high, 06h = low; the byte is consumed leaving 06h | ctrl 06h = low, 05h = high; consumed 05h to 04h |
+| PS/2 in | ctrl 25h, read, 27h/25h; consumed on AUTOFEED rising | ctrl 26h reads, 25h consumes |
+| byte out | data, ctrl 0Eh, 0Ch | pairs: ctrl 05h latches the first byte, 00h the second |
+
+The SCSI target answers TEST UNIT READY, REQUEST SENSE, INQUIRY (`IOMEGA`,
+`ZIP 100` / `ZIP 250`), MODE SENSE(6) (write-protect in the header),
+START STOP UNIT (LoEj ejects), READ CAPACITY, READ(6/10) and WRITE(6/10).
+UNIT ATTENTION 29h follows power-on and a bus reset, 28h a new medium; no
+medium is NOT READY 3Ah, a protected disk is DATA PROTECT 27h on a write, an
+LBA past the end is ILLEGAL REQUEST 21h. Two ports are modelled: an
+**output-only** XT card reads its data latch back even with the direction
+bit set, a **bidirectional** card (`bidir = true`) lets the drive drive the
+lines in PS/2 mode and reads 0FFh when nothing does - which is what makes
+`ZIPM_PS2` reachable and what makes `ps2-0`/`ps2-2` rows different from the
+nibble ones. The Zip's image is opened read/write and every WRITE reaches
+the host file before the command's status does, so the host can read it back
+after a flush (`tests/zipdrive.py` does, paused).
+
+One inference is labelled as one: `imm.c`'s status-3 quirk (the IMM answers a
+status read taken between two strobes with the previous command's value) is
+modelled as `cpp_prev` from the Linux comments, with no hardware to confirm
+it.
+
+*Configuration.* A machine says `[machine.zip]` with `protocol` (`vpi0` or
+`vpi2`), optional `id` and `model` (`zip100`, `zip250`), and its LPT entry
+`bidir = true` for a PS/2-capable port. Five machines ship in
+`tools/martypc/configs/os8088_machines.toml`: `os8088_5150_cga_zip0`,
+`_zip2`, `_zip250`, `_zip0_bidir`, `_zip2_bidir`. A host image comes from
+`OS88_ZIPIMG` (`os88marty.launch(..., zip=PATH)`: the file itself, **not a
+copy** - the row hands it a scratch copy), `OS88_ZIPWP=1` starts protected.
+
+*Debug-server verbs and their `Marty` helpers.*
+
+| verb | helper | does |
+|---|---|---|
+| `zip_stats` (`reset`) | `m.zip_stats(reset=False)` | `commands`, `by_opcode` (hex-keyed), `sectors_read/written`, `nibble_bytes`, `ps2_bytes`, `connects`, `disconnects`, `resets`, `ejects`, `inserts`, `violations`, `read_us`/`write_us` with `read_cmds`/`write_cmds` (GUEST microseconds from connect to message byte), `medium`, `path`, `sectors`, `wp` |
+| `zip_eject` | `m.zip_eject()` | the user's hand: the disk is gone, the next command is NOT READY |
+| `zip_insert` (`path`) | `m.zip_insert(path)` | a disk in: UNIT ATTENTION 28h |
+| `zip_wp` (`on`) | `m.zip_wp(True)` | the write-protect tab |
+
+and `python3 tools/os88marty.py zip-stats|zip-eject|zip-insert PATH|zip-wp 0|1`.
+
+*Disk images* are `tools/os88zip.py` (`mk`, `ls`, `get`, `put`, `mkdir`,
+`check`, `info`, `clone`, `qa`): the IBM layout (196,608 sectors, an MBR whose
+ONLY partition is **entry 4**, type 06, active, start 32, FAT16, hidden = 32),
+a **superfloppy** (BPB at sector 0), and a **Zip 250** (489,532 sectors).
+Images are sparse and deterministic; `make zipimg` writes the QA set to
+`build/zip/` (`zip100.img`, `zip100b.img`, `zip100blank.img`,
+`zip100super.img`, `zip250.img`). `open_image` reads either kind and takes the
+first FAT partition entry 1..4, so the driver is tested on a disk whose
+partition is NOT where a lazy reader looks. Its fsck was checked against
+macOS's `fsck_msdos` and a real mount.
+
+*What the instrument cannot say.* It models the protocol and a drive's
+answers, not Iomega's timing: a MartyPC sector time is the **transport's**
+cost on a 4.77 MHz XT and a lower bound on a real drive (spin-up, seek and the
+drive's own firmware are not in it). No EPP, ECP, daisy chain or second drive
+(138.11). 86Box and QEMU have no Zip on a parallel port at all.
 
 ### 138.9 What it costs
 
@@ -260023,7 +260092,24 @@ emulated XT in nibble mode.)*
 
 ### 138.10 The rows
 
-*(The `tests/suite.py` rows and what each asserts.)*
+*(Owner: marty, for the instrument's rows; the driver's own host rows are the
+core's.)* All are **soak**: `tests/tierlock.txt` closes fast and full to rows
+the owner approved. Written before `ZIP.DRV` existed, so the instrument rows
+are measured and the guest rows are **not yet run** (their `why` says so);
+the final pass measures `secs`.
+
+| row | proves | needs |
+|---|---|---|
+| `zipimg` | `tools/os88zip.py` and its fsck, with a second independent reader (`tests/unit/t_zipimg.py`) | nothing |
+| `zipmodel` | the drive with NO guest: five paused machines, a Python `ppa.c`/`imm.c` host over `inb`/`outb`, both port modes, every SCSI command above, eject/insert/protect, the stats | MartyPC |
+| `zipdrive-vpi0` `-vpi2` `-z250` `-ps2-0` `-ps2-2` `-super` | ZIP-PLAN claims 1-5, 7, 8: tick on the Drivers page (one zone, the page's mode and size), root and folder listing against `os88zip`, a file opened, copies both ways compared on the host (200 KB on `vpi0` and `ps2-2`), Eject from the page and the next disk mounting with ITS files, a pulled-and-replaced disk, a protected disk (lists, refuses a write with a toast naming protection, host bytes unchanged), `violations` 0, and the port mode that ran | MartyPC, `ZIP.DRV`, `make zipimg` |
+| `zipnone-cga` `-herc` | claim 6: no drive on the port refuses (`DRVE_HW`, `No drive`), no zone, nothing hangs, the LPT control register left at x0Ch | MartyPC, `ZIP.DRV` |
+| `zipspeed-vpi0` `-vpi2` `-ps2-0` `-ps2-2` | claim 9: the guest cost of a sector read and write, off the model's clock, to `build/zipspeed-<arm>.txt` | MartyPC, `ZIP.DRV` |
+
+Two things are not pinned and the rows FAIL on them rather than skip:
+`tests/zipq.py` `PAGE_EJECT` (the Eject button's position, from
+`drivers/zip/zipcp.inc`) and the exact toast on a protected write (matched on
+the word `protect`). VGA and EGA legs of claim 6 are QEMU's, by hand in Z6.
 
 ### 138.11 Not done
 
