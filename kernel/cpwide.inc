@@ -750,11 +750,16 @@ cpw_recicon:
     mov si, cpw_s_ddrv
     mov bx, (CWI32_GEAR << 8) | CWI16_GEAR
     jc .have
+%ifdef OS88_ZIP
     cmp al, DRVC_DISK
     je .hdd
     cmp al, DRVC_ZIP            ; the Zip drive's page (SPEC.md 138.6) is a
     jne .nd                     ; disk's too: the same art, none new
 .hdd:
+%else
+    cmp al, DRVC_DISK
+    jne .nd
+%endif
     mov bx, (CWI32_HDD << 8) | CWI16_HDD
 .nd:
     cmp al, DRVC_NET

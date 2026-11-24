@@ -396,7 +396,7 @@ IMG_M_DIR    equ IMG_KB*1024 - 4   ; dw: the folder that holds it (0 = root)
 IMG_M_CLUS   equ IMG_KB*1024 - 2   ; dw: the file's first cluster on its host
 %endif
 %if DVK_DRV != 1 || DVK_FILE != 2 || DVK_BIOS != 0
-  %error "dsk_vol_del tests the two DRIVER kinds as one range, DVK_DRV..DVK_FILE = 1..2, below which BIOS (0) wraps"
+  %error "dsk_vol_del and dsk_vol_drop_drv_x test the two DRIVER kinds as one range, DVK_DRV..DVK_FILE = 1..2, below which BIOS (0) wraps"
 %endif
 
 ; How much of a package a HEADER PEEK has to bring back (SPEC.md 62.9.2.2).
@@ -1732,6 +1732,7 @@ dsk_xfer:
     jnc .success
 %endif
     mov [dsk_ioerr], al         ; the driver reports int 13h's status byte,
+%ifdef OS88_ZIP
     cmp al, 0x06                ; ...and MEDIA CHANGED shuts the mount gate
     jne .jfail                  ; exactly as BR-16 does on the BIOS arm
     shr byte [dsk_mntok], 1     ; (SPEC.md 18.9.1, 138.1): ZIP.DRV answers it
@@ -1742,6 +1743,7 @@ dsk_xfer:
                                 ; failure: the next operation remounts. Eight
                                 ; bytes, EVEN, so the routines behind keep
                                 ; their measured parity (t_hotpar)
+%endif
 %endif                          ; (.jbadvol falls into .jfail on kern_small)
 .jfail:                         ; ...AND the two range refusals in .sector, at
     jmp .fail                   ; two bytes each rather than the five NASM
@@ -3373,6 +3375,7 @@ dsk_vol_fixed_x:
                                 ; BUILD instead of the published ABI
     mov al, 1                   ; a driver volume is fixed by construction
 %ifdef OS88_IMG
+%ifdef OS88_ZIP
     cmp byte [bx+DV_CLASS], DRVC_ZIP    ; ...BUT A ZIP DISK COMES OUT (SPEC.md
     stc                         ; 138.1): CF = 1 is dsk_vol_rmv's "removable",
     je .rmv                     ; asked of the row's CLASS and not of
@@ -3384,6 +3387,7 @@ dsk_vol_fixed_x:
                                 ; whole of the Zip's media test. A live row
                                 ; carries DRVC_ZIP only if dsk_vol_add stamped
                                 ; it, and a row given back to the BIOS has 0
+%endif
     call dsk_vol_rmv            ; ...AND A MOUNTED IMAGE IS ITS HOST'S MEDIUM
 .rmv:
     sbb al, 0                   ; (SPEC.md 18.101.7), so one on a floppy is
@@ -3422,6 +3426,11 @@ dsk_vol_fixed_x:
     stc
     pop bx
     ret
+%ifdef OS88_ZIP
+    nop                         ; PARITY, never executed: the Zip test above is
+%endif                          ; 7 bytes, and dsk_vol_rmv, dsk_next_clus_x
+                                ; and the rest behind keep their measured
+                                ; parity (t_hotpar, SPEC.md 138.1)
 
 %ifdef OS88_IMG
 ; -----------------------------------------------------------------------------
@@ -3830,22 +3839,15 @@ dsk_vol_drop_drv_x:
     mov al, 2
 .next:
     mov bl, al
-    call dsk_vol_slot_x           ; BX = the row; AX is untouched by it. Never
-                                ; CF = 1: AL stays below DVOL_MAX (-2)
-    cmp [bx+DV_CLASS], cl       ; ...is it THIS driver's? Either kind of
-    jne .skip                   ; driver row is: a DRVC_FILE driver detaching
-                                ; has to take its REDIRECTED volume with it,
-                                ; or the desktop keeps a zone whose transport
-                                ; has been freed. NO KIND TEST HERE, and that
-                                ; is dsk_vol_del's own: it refuses a BIOS row
-                                ; and a FREE one - which keeps its old class
-                                ; and so can match - by the same range test
-                                ; this loop repeated (SPEC.md 138.1's bytes,
-                                ; -9: odd, and the Zip test in
-                                ; dsk_vol_fixed_x is the +7 that keeps the
-                                ; hot routines behind both at their measured
-                                ; parity). A BIOS row's class is 0, no
-                                ; driver's
+    call dsk_vol_slot_x           ; BX = the row; AX is untouched by it
+    jc .skip
+    mov ah, [bx+DV_KIND]        ; either kind of driver row (dsk_vol_del's
+    dec ah                      ; reasoning, and the same range test): a
+    cmp ah, DVK_FILE - DVK_DRV  ; DRVC_FILE driver detaching has to take its
+    ja .skip                    ; REDIRECTED volume with it, or the desktop
+                                ; keeps a zone whose transport has been freed
+    cmp [bx+DV_CLASS], cl       ; ...and is it THIS driver's?
+    jne .skip
     call dsk_vol_del            ; takes AL, which is still the index
 .skip:
     inc al
@@ -3913,20 +3915,20 @@ osapi_vol_fence:
 .data:                          ; (KERN-MEGA-PLAN 10.3 item 26). Every image
 %endif                          ; is a pair (KERN-MEGA-MEMORY-PLAN MC7.4): its
                                 ; code half's data is + 8, mega_cs2ds's rule
-    call drv_pub_seg            ; WALK the classes rather than naming one. It
-    jc .out                     ; tested [drv_fseg2] alone - the DISK class -
-                                ; which is a fence that only one kind of
-                                ; driver can ever pass, and a second
-                                ; block-serving class (docs/plans/completed/
-                                ; NET-PLAN.md 2.1) would have been refused its
-                                ; own volumes. The walk is drv_pub_seg's, the
-                                ; spawn fence's, which answers the class: it
-                                ; was written out here a second time until
-                                ; SPEC.md 138.1 needed the bytes
-    mov [dsk_vcls], al          ; CF = 0, and a `mov` writes none: dsk_vol_add
-    SKIPBL1                     ; stamps the row with it. `mov bl` over the
-.no:                            ; stc: BL is popped
+    mov al, 1                   ; WALK the classes rather than naming one. It
+.cls:                           ; tested [drv_fseg2] alone - the DISK class -
+    call drv_cls_fp_x             ; which is a fence that only one kind of
+    jc .no                      ; driver can ever pass, and a second
+    cmp bx, [di+2]              ; block-serving class (docs/plans/completed/NET-PLAN.md 2.1)
+    je .yes                     ; would have been refused its own volumes
+    inc al
+    cmp al, DRVC_MAX
+    jbe .cls
+.no:
     stc
+    jmp short .out
+.yes:                           ; CF = 0 from the equal compare, and a `mov`
+    mov [dsk_vcls], al          ; writes none: dsk_vol_add stamps the row with it
 .out:
     jmp kretc_di
 
