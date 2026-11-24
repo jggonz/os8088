@@ -39268,6 +39268,85 @@ Four things hold it up:
   *top* of both mutators, where `AL` is an argument.
 
 
+### 18.9.2.1 …and a mount that hears a driver's 06h starts again (`OS88_ZIP`)
+
+A Zip disk (§138) is a **removable** medium on a `DVK_DRV` row, and the
+row's `[dsk_vflop]` is 0, so its head is banked as a fixed disk's is. That
+is deliberate (§138.1): the drive *says* when its disk changed, with 06h on
+the driver arm, and that answer is the whole of its media test. But the
+bank means a mount after a swap **reads no LBA 0**. Its first transfer is
+the FAT window's load (step 2), and that is the transfer the drive answers
+06h. Before this rule, `dsk_fat_window` then did what it does for any FAT1
+failure. It read FAT2 at the banked head's LBA, the driver learned the new
+disk on that read (§138.4), and the read succeeded. The 06h had been
+swallowed, and the mount finished on the OLD head over the NEW disk. Field
+case QA-6: a 250 MB disk swapped by hand for a 96 MB one listed `0 files`
+and 238.74 MB free. That was the 250's geometry reading the 96's FAT as
+empty. Putting the 250 back then failed at LBA 0, because the 06h zapped
+the bank and the mount after it had no bank to use.
+
+The same swallow is in `.cwd_lost` (step 2a). It reads a FAT sector outside
+a reused window and takes any failure as "the directory is gone". That
+case is worse, because the mount then opens the write gate on the old FAT.
+
+**The rule: a driver's 06h inside a mount restarts that mount from the
+top of its state, once per 06h.** Three pieces, all behind `OS88_ZIP`:
+
+1. **The driver arm tags it** (`dsk_xfer`, `.drverr`). A 06h that finds the
+   gate ALREADY shut (`shr` → CF = 0) is not a mounted volume's: the
+   transfer is inside a mount, or on a volume nobody has validated. So
+   `[dsk_ioerr]` gets **0C6h** instead of 06h. No int 13h status is 0C6h,
+   and the BIOS arm never writes it. That matters, because the BIOS arm
+   RETRIES a 06h inside a mount and leaves 06h in `[dsk_ioerr]` when the
+   retry succeeds (BR-16). A floppy's first read after every swap does
+   exactly that, and it must not cost the floppy a second mount. A 06h
+   that shuts an open gate keeps 06h, as before.
+2. **Every mount clears `[dsk_ioerr]`** with its other first stores, so a
+   tag left by an earlier transfer cannot restart this mount.
+3. **`.cwd_ok` restarts it**: the end of step 2 (FAT window and current
+   directory), which catches both swallows, jumps to the first store of the
+   mount, which empties the FAT window (`dskw_refat`) and re-runs step 1.
+   The 06h went through `dsk_xfer`'s `.fail`, which forgets every bank
+   (§18.9.2), so step 1 **reads LBA 0**, and the driver, which learned the
+   new disk on the swallowing read, hands back the new disk's head.
+
+**It terminates because 06h is an event, not a state.** §138.1 binds a
+driver to answer 06h only for a medium it HAD, and ZIP.DRV answers it
+once per change (§138.4). Each restart therefore needs a disk changed by
+hand while a mount runs. No counter is kept. A driver that answered 06h
+forever would loop a mount, and that is a defect of the driver against
+§138.1.
+
+What it does not do:
+
+- **A quiet mount that reuses a banked FAT window does no I/O at all**
+  (§18.8.1), so it cannot hear the 06h. The next file operation hears it.
+  On a mounted volume that 06h shuts the gate (§138.1) and fails the
+  operation. The operation after it remounts and finds no bank. That was
+  already the design, and nothing here changes it.
+- **A 06h on the LBA 0 read itself is not restarted.** That needs a disk
+  swapped by hand while the bank is already forgotten (an unrelated I/O
+  error forgot it); the mount fails through `.jfail` and the next open
+  mounts the new disk. A restart there as well did not fit kern_mega's
+  `.cold` (7 bytes left).
+- **A 06h heard after `.cwd_ok`** fails the mount through `.jfail`, and the
+  next open mounts the new disk, *unless* a listing step swallows it (the icon harvest's
+  peeks do). That needs a disk swapped by hand during the listing. The
+  floppy has had the same race since BR-16.
+- **The folder is kept** (`[dsk_keepcwd]`) and is re-validated on the new
+  disk by step 2a, as a floppy swap's is (§19.2). A folder cluster that is
+  live on the new disk is listed. That is the floppy's behaviour too.
+
+**What it cost** (kernsize, against §22.29's head): **kern_big +8**
+(163 bytes left before its rung, was 171), **kern_mega `.cold` +6** (1 byte
+left, was 7: that rung is now full), paid partly by `dsk_vol_drop_drv_x`
+dropping a kind test `dsk_vol_del` makes itself (-11, under `OS88_ZIP`).
+**kern_emu and kern_small: 0**, byte for byte - every line is behind
+`OS88_ZIP`. Hot routines keep their measured parity (`t_hotpar`).
+Seen: the `zipdrive-z250` arm's hand swap both ways on MartyPC, each disk
+listing its own files and its own free space.
+
+
 ### 18.9.3 …and a floppy needs the CALLER to say so — the batch bracket
 
 §18.9.2 lets a **fixed** disk skip re-reading its boot sector, on a fact about
