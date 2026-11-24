@@ -2797,6 +2797,41 @@ overlays = [
     [machine.zip]
     protocol = "vpi0"
 
+# os8088_5150_herc_zip0 - the same Zip drive (VPI0) on a Hercules 5150: the
+# 1bpp face of the Zip page and the zone at 720x348, for the QA run's looks
+# and the PR's pictures (os8088_5150_herc_covox_720_gla is the no-drive leg).
+[[machine]]
+name = "os8088_5150_herc_zip0"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = false
+
+    [machine.zip]
+    protocol = "vpi0"
+
 [[machine]]
 name = "os8088_5150_cga_zip0"
 type = "Ibm5150v256K"

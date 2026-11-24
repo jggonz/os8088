@@ -23,19 +23,19 @@ Status: ` ` not started, `B` built on its branch, `I` integrated into
 
 | | story | done means | owner |
 |---|---|---|---|
-| [I] | **Z1 - the class** (SPEC 138.1). `DRVC_ZIP` = 12, `DRVC_MAX` 12 with 11 held for `DRVC_JOY`; a block class in `dsk_vol_add`; removable in `dsk_vol_fixed`; 06h on the driver arm shuts the mount gate; `OSAPI_VOL_DEL` writes back first; the `drv_tab` row (bit 14, "Zip Drive", `ZP` pin blob, `DRVM_IMG_ZIP`), the DOS skip list, the catalog entry; kern_big, kern_emu and kern_mega | `make`, `make emu`, `make mega`, `make KERN_SMALL=1` byte-identical, kernsize on all, `make budget-check`, no rung crossed; a QEMU boot whose Drivers page lists "Zip Drive" (missing file is fine until Z2 lands) | kclass |
-| [I] | **Z2 - the driver core** (SPEC 138.3-138.7). `drivers/zip/zip.asm` and its includes: attach (port list, bidirectional test, VPI0 then VPI2 probe, INQUIRY), detach, the SCSI layer, `DSV_BLK` with chunking and the length fence, the lazy medium, media change and write protect, the page, `ZIPV_INFO`/`ZIPV_EJECT`; `ZIP.DRV` built and on every driver kernel's system disks | `make`, `make mega`; the image under its budget; a QEMU boot with the row ticked refuses cleanly with `No drive` (QEMU has no Zip) and leaves the printer port idle | core |
-| [I] | **Z3 - VPI0** (SPEC 138.2.1). `drivers/zip/zipppa.inc`: probe, command, reset; nibble and PS/2 | assembles into the core (or a scratch harness before Z2 lands); under 1,024 bytes; cycle estimate of the nibble read loop in 138.2.1 | ppa |
-| [I] | **Z4 - VPI2** (SPEC 138.2.2). `drivers/zip/zipimm.inc`: the same three procs for the MatchMaker | assembles; under 1,280 bytes; cycle estimate in 138.2.2 | imm |
-| [I] | **Z5 - the instrument** (SPEC 138.8). MartyPC patch 18: a VPI0 and VPI2 Zip drive on the LPT card over a host image, a bidirectional LPT option, debug-server verbs, `tools/os88marty.py` helpers, Zip machine configs; `tools/os88zip.py` and its unit test; the soak rows written and registered | `make marty` builds; the model's own Rust tests replay Linux's host sequence (probe, TEST UNIT READY, READ(10), WRITE(10)) against it for both protocols in both modes; `t_zipimg` green in the fast tier | marty |
+| [S] | **Z1 - the class** (SPEC 138.1). `DRVC_ZIP` = 12, `DRVC_MAX` 12 with 11 held for `DRVC_JOY`; a block class in `dsk_vol_add`; removable in `dsk_vol_fixed`; 06h on the driver arm shuts the mount gate; `OSAPI_VOL_DEL` writes back first; the `drv_tab` row (bit 14, "Zip Drive", `ZP` pin blob, `DRVM_IMG_ZIP`), the DOS skip list, the catalog entry; kern_big, kern_emu and kern_mega | `make`, `make emu`, `make mega`, `make KERN_SMALL=1` byte-identical, kernsize on all, `make budget-check`, no rung crossed; a QEMU boot whose Drivers page lists "Zip Drive" (missing file is fine until Z2 lands) | kclass |
+| [S] | **Z2 - the driver core** (SPEC 138.3-138.7). `drivers/zip/zip.asm` and its includes: attach (port list, bidirectional test, VPI0 then VPI2 probe, INQUIRY), detach, the SCSI layer, `DSV_BLK` with chunking and the length fence, the lazy medium, media change and write protect, the page, `ZIPV_INFO`/`ZIPV_EJECT`; `ZIP.DRV` built and on every driver kernel's system disks | `make`, `make mega`; the image under its budget; a QEMU boot with the row ticked refuses cleanly with `No drive` (QEMU has no Zip) and leaves the printer port idle | core |
+| [S] | **Z3 - VPI0** (SPEC 138.2.1). `drivers/zip/zipppa.inc`: probe, command, reset; nibble and PS/2 | assembles into the core (or a scratch harness before Z2 lands); under 1,024 bytes; cycle estimate of the nibble read loop in 138.2.1 | ppa |
+| [S] | **Z4 - VPI2** (SPEC 138.2.2). `drivers/zip/zipimm.inc`: the same three procs for the MatchMaker | assembles; under 1,280 bytes; cycle estimate in 138.2.2 | imm |
+| [S] | **Z5 - the instrument** (SPEC 138.8). MartyPC patch 18: a VPI0 and VPI2 Zip drive on the LPT card over a host image, a bidirectional LPT option, debug-server verbs, `tools/os88marty.py` helpers, Zip machine configs; `tools/os88zip.py` and its unit test; the soak rows written and registered | `make marty` builds; the model's own Rust tests replay Linux's host sequence (probe, TEST UNIT READY, READ(10), WRITE(10)) against it for both protocols in both modes; `t_zipimg` green in the fast tier | marty |
 
 ## After the last merge
 
 | | story | done means |
 |---|---|---|
-| [ ] | **Z6 - QA in emulation**: MartyPC XT with a VPI0 drive (nibble), a 5160-class with VPI2 (nibble), a bidirectional-port machine (PS/2); QEMU for `No drive` on VGA, EGA, CGA and Hercules | every claim below seen, screenshots cropped and zoomed, defects listed in *QA* |
-| [ ] | **Z7 - the fix round, the rows once, `test-full` once** | rows green, `test-full` green, `budget-check` exact |
-| [I] | **Z8 - the guide**: a user's page on the Zip drive (`apps/guide` manual) and the README's hardware list | written to what was seen, not what was planned |
+| [S] | **Z6 - QA in emulation**: MartyPC XT with a VPI0 drive (nibble), a 5160-class with VPI2 (nibble), a bidirectional-port machine (PS/2); QEMU for `No drive` on VGA, EGA, CGA and Hercules | every claim below seen, screenshots cropped and zoomed, defects listed in *QA* |
+| [S] | **Z7 - the fix round, the rows once, `test-full` once** | rows green, `test-full` green, `budget-check` exact |
+| [S] | **Z8 - the guide**: a user's page on the Zip drive (`apps/guide` manual) and the README's hardware list | written to what was seen, not what was planned |
 
 The claims Z6 checks, end to end through the real UI:
 
@@ -100,6 +100,28 @@ and the zone are as on CGA.
 show the refusal); the Zip page inside the WIDE Control Panel face (the 360 KB
 system disk these XT machines boot carries no `CPWIDE.DRV` - kclass saw the
 wide Drivers page list the row); any real drive or real parallel port.
+
+## The final pass (2026-11-24, merged head)
+
+- **The soak union, once**: 51 rows, every row the agents named
+  (`zipimg`, `zipmodel`, `zipdrive-*`, `zipnone-*`, `zipspeed-*`, the
+  volume, driver, hibernate, RAM disk, CD-ROM, image and file-chooser
+  rows). 47 passed. `megahiber` passed under Bochs (the `os8088-bochs`
+  container) and `megacdrom` on the native 86Box. **Failed**:
+  `zipdrive-z250` (QA-6, a real defect: fixed, see above) and `rdxms`
+  (main's own failure, the scrolling page list; its test fix is PR #409, not
+  this branch's). **Skipped**: `httpmountname` (needs Linux `unshare`; the
+  Bochs container has it but no QEMU).
+- **The re-run after QA-6's fix**: the six `zipdrive-*` arms and every row
+  covering the code the fix touched (driver detach, mounts, hibernate,
+  images, RAM disk, CD-ROM): 18 of 18.
+- **`make test-full`, alone**: 81 of 82. `guidelock-full` fails on 77
+  items, none of them this branch's: 2BASIC's and Byteopoly's disk files
+  with no Guide line, and Lemmings entries for a fetched package not on any
+  disk here. The Zip's own page and line are stamped.
+- **`make budget-check`**: exact on all four kernels.
+- **Pictures**, `docs/zip/`: the page, the zone and the eject on CGA, VGA and
+  Hercules, the no-drive refusal on CGA and Hercules, the hand swap both ways.
 
 ## Deferred, and why
 
