@@ -102,6 +102,15 @@ description = [
   "PC1. Needs that machine.",
 ]
 
+["JOYSTICK.DRV"]
+category = "INPUT"
+icon = "C_INP"
+name = "Joystick"
+description = [
+  "Game port joysticks and paddles, set up once",
+  "here and shared by every game.",
+]
+
 ["EMS.DRV"]
 category = "MEM"
 icon = "C_MEM"

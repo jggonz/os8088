@@ -259941,43 +259941,63 @@ them:
 | | |
 |---|---|
 | what | `JOYSTICK.DRV`, a driver of a NEW class `DRVC_JOY` = 11, appended (a class number is ABI, §51.2) - `DRVC_MAX` 10 → 11 on the driver kernels. A `drv_tab` row appended after `PC1MOUSE.DRV`, `SYSTEM.CFG` bit 13, title `Joystick`, catalog category Input (§135.7) |
-| where | **`kern_big`, `kern_emu` and `kern_mega`** - the kernels with a driver layer (§51.0). `kern_small` has none: `OSAPI_DRV_CALL` refuses `DRVC_JOY` by range there, `joy_find` answers CF = 1, and every adopter falls back to its keys. kern_mega runs the same driver (port I/O and PIT channel 0 are the same there); a refusal there would be a gap to close, not a design |
+| where | **`kern_big` and `kern_mega`**. kern_mega runs the same driver (port I/O and PIT channel 0 are the same there). `kern_small` has no driver layer (§51.0), and **`kern_emu` has no joystick, deliberately** - the owner's decision (2026-11-24): it is the virtual-machine kernel (QEMU, VMware, VirtualBox, the web demo), none of which emulates a game port, and its rung had 16 bytes left, so the row, the class slot (`DRVC_MAX` stays 10 there), the blob and the sniff are `%ifdef DRV_JOY` (= not `KERN_EMU`) and `JOYSTICK.DRV` is not on its disks. On both, `DRVC_JOY` is still a number a package may pass: `OSAPI_DRV_CALL` refuses it by range, `joy_find` answers CF = 1, and every adopter falls back to its keys. kern_emu drops a `SYSTEM.CFG`'s `'JS'` record as an unknown key (§51.5 rule 1), so a big machine's stick settings do not survive a save made there; its bit 13 stays reserved for the game port |
 | the hardware | the IBM Game Control Adapter at port 201h and every clone of it: four one-shots (X1, Y1, X2, Y2 - bits 0-3, 1 while timing) fired by any write, four buttons (bits 4-7, 0 = pressed) |
 | what a package gets | `OSAPI_DRV_CALL` verbs (§137.4), found through `apps/os88joy.inc` (`joy_find`), and the C binding in `apps/cc/os88.h` - **no kernel slot**: a package reaches the joystick through a DRIVER, exactly as it reaches the network (§72) |
 | set up | ONCE, on the driver's own Control Panel page (§31.9), compact and wide (§137.6): controller type, calibration, dead zone, invert, swap, and a live test view. Kept in `SYSTEM.CFG` as the driver's settings blob (§51.9, §137.5) |
-| cost | resident: the class, the row, its name and the settings blob - **no rung crossed on any kernel** (measured per wave in the plan, §137.9). The driver image is a heap claim only while it is ticked |
+| cost | resident: the class's slot, the row, its file name, the 20-byte settings blob and one row test - **no rung crossed on any kernel** (§137.12; per wave in the plan, §137.9). The driver image is a heap claim only while it is ticked, and claims nothing else |
 
 ### 137.2 Loading, and what "no hardware" means here
 
 **A missing game port and a game port with nothing plugged in read the same**:
 port 201h floats to FFh on a machine with no adapter, and an adapter with no
 stick answers 1 on every axis bit forever (an open potentiometer never
-charges). So the attach does NOT refuse for want of a stick. It probes once
-(one sample, §137.3) and records which axes answered; the page says
-`No joystick connected` and offers to look again, because a stick is plugged
-in while the machine runs far more often than a card is. The attach refuses
-(`DRVE_HW`) only where port I/O to 201h is not the game port's to make - none
-on the three kernels today.
+charges). So the attach does NOT refuse for want of a stick. It reads its
+blob (§137.5), probes once (one sample of all four axes, §137.3) and records
+which axes answered in `joy_live`; the page says `No joystick connected` and
+offers to look again, because a stick is plugged in while the machine runs
+far more often than a card is - and a reader finds one by itself within a
+second (§137.10). The attach refuses (`DRVE_HW`) only where port I/O to 201h
+is not the game port's to make - none on the two kernels that carry it, so
+`JOYSTICK.DRV` never refuses at all. Nothing is hooked: no vector, no worker,
+no tick and no claim, so `DRVV_DETACH` has nothing to undo and `DRVV_READY`
+answers CF = 0 even with nothing plugged in (a READY refusal is banked as the
+row's reason, and "no stick yet" is not one). `DRVV_TIER`, `DRVV_HWINFO`,
+`DRVV_SLEEP` and `DRVV_WAKE` are refused (§51.2.2), so a hibernate or a DOS
+trip unloads it and the next boot - or wake - reads it again.
 
-**Wanted by default: no.** The row follows §51.3.1/§51.3.2: the first boot may
-ask the hardware once and tick the row when a stick answers; otherwise the
-user ticks it on the Drivers page, and a default never nags.
+**Wanted by default: no - unless a stick answers at boot.** The row follows
+§51.3.1/§51.3.2: `drv_sniff` (the boot overlay, zero resident) asks the
+hardware once and ticks the row as the MACHINE's default (`DRVR_ANS` stays 0,
+so the user's answer in `SYSTEM.CFG` wins either way). The BIOS is asked
+first: the IBM POST sets the equipment word's bit 12 when 201h's one-shots
+read idle (0) before any fire, and a floating bus reads FFh, so a machine with
+no game port - QEMU's among them - pays one `int 11h` and nothing else. With
+the bit set the port is fired and stick A's X or Y must FALL within 4,000
+reads (~1.1 ms for a 100 kΩ stick; at least 2 ms on any ISA bus; ~32 ms on
+the XT with nothing plugged in). A BIOS that does not set bit 12 never
+auto-ticks, and the user ticks the row on the Drivers page; a default never
+nags.
 
 ### 137.3 One sample
 
-A SAMPLE is one firing of the one-shots and the timing of their fall:
+A SAMPLE is one firing of the one-shots and the timing of their fall
+(`joy_sample`):
 
-1. Only the axes the controller type uses AND that answered at the last
-   probe or calibration are waited for (the "expected" mask, Linux's
-   `analog` mask). An axis outside it is never waited on, so a missing stick
-   B costs nothing.
-2. With interrupts OFF (`pushf`/`cli` ... `popf`), PIT channel 0 is latched,
-   201h is written, and 201h is read in a loop; when an expected bit falls,
-   channel 0 is latched again and the difference is that axis's RAW count, in
-   PIT units (838 ns). The loop ends when every expected bit has fallen or at
-   `JOY_TMO` = 2,700 PIT units (about 2.3 ms; a 100 kΩ stick is about
-   1.1 ms). An axis that did not fall reads `JOY_NONE` (0FFFFh) and is dropped
-   from the expected mask until the next probe.
+1. Only the axes the controller type uses AND that answer (`joy_live`) are
+   waited for - the "expected" mask, Linux `analog`'s mask. An axis outside
+   it is never waited on, so a missing stick B costs nothing. A type's axes
+   are the port's, Swap applied (§137.4).
+2. With interrupts OFF (`pushf`/`cli` ... `popf`), PIT channel 0 is latched
+   (838 ns units), 201h is written, and 201h is read in BLOCKS of four
+   unrolled reads (`in`/`and`/`cmp`/`jne`, 7 bytes, ~6 µs each on the XT);
+   the channel is latched again after every block and the moment a fall is
+   seen, and the running difference is that axis's RAW count. The loop ends
+   when every expected bit has fallen or at `JOY_TMO` = 2,700 PIT units
+   (~2.26 ms; a 100 kΩ stick is ~1.1 ms). An axis that did not fall reads
+   `JOY_NONE` (0FFFFh) and is dropped from `joy_live` until the next probe.
+   The raw count's resolution is one read, ~6 µs on the XT (~1.3% of a
+   100 kΩ span), and about one bus cycle on anything faster.
 3. The buttons are the inverted top nibble of the last read.
 
 The window is bounded by `JOY_TMO`, below the 4.17 ms a byte takes at
@@ -259986,65 +260006,112 @@ service*), and the reading is CPU-speed independent because it is timed by
 the PIT and not by a loop count - a turbo switch does not move a
 calibration. **A sample is taken when a reader asks for one, and never
 otherwise**: there is no worker and no tick hook, so a machine with the
-driver ticked and no game running pays nothing but the image.
+driver ticked and no game running pays nothing but the image. Every verb's
+sample AND the cooking that follows it run with interrupts off (EMS's
+discipline, §107.1), so a package's worker and its UI task asking at once
+cannot tear the state record; cooking is ~0.4 ms on the XT (four `mul`/`div`
+pairs), so the longest window is ~2.7 ms, at a timeout.
 
-**Calibration** maps each axis's raw count through three points - minimum,
-centre, maximum, captured on the page (§137.6) - to a signed position
--127..+127, piecewise linear on each side of the centre, with a dead zone of
-`dz` percent of each half (default 8) answering 0, clamped at the ends.
-Before any calibration the driver uses the first sample's raw count as the
-centre and ±(centre) as the span, so an uncalibrated stick is usable.
+**Calibration** maps each PORT axis's raw count through three points -
+minimum, centre, maximum, captured on the page (§137.6) - to a signed
+position -127..+127, piecewise linear on each side of the centre, with a
+dead zone of `dz` percent of each half (default 8, at most 30) answering 0,
+clamped at the ends (`joy_calpos`; the dead zone in counts is derived once
+per axis, `joy_prep`). Before any calibration the driver uses the first
+sample that answers as the centre and ±(centre) as the span (MIN 0, MAX
+twice it), so an uncalibrated stick is usable. Swap and Invert are applied
+AFTER the calibration, to the logical sticks: the calibration belongs to the
+port.
 
-**Directions** are the calibrated position against half of full travel: 8-way
-as four bits (`JOYD_LEFT` 1, `JOYD_RIGHT` 2, `JOYD_UP` 4, `JOYD_DOWN` 8).
+**Directions** are the calibrated position against half of full travel
+(|position| ≥ 64): 8-way as four bits (`JOYD_LEFT` 1, `JOYD_RIGHT` 2,
+`JOYD_UP` 4, `JOYD_DOWN` 8). + is right and down: a smaller resistance is a
+shorter count and a stick pushed left or forward.
 
 **Presses** are kept per button: a button whose level went 0 → 1 between two
-samples counts one press; a READ (§137.4) answers the presses since the
-previous read and clears them. One count is shared by every reader - the
-GAMEDD shape, and enough for the one game in front.
+samples counts one press; a READ (§137.4) answers that stick's presses since
+the previous read and clears them, a STATE answers and clears all four. One
+count is shared by every reader - the GAMEDD shape, and enough for the one
+game in front. A button held when the driver attaches is not a press.
 
-### 137.4 The package ABI (`drivers/joy/joypkg.inc`, `apps/os88joy.inc`)
+### 137.4 The package ABI (`apps/os88api.inc`, `apps/os88joy.inc`)
 
 `OSAPI_DRV_CALL` with BH = `DRVC_JOY`, BL = a verb. ES is the CALLER'S
 segment (§20.11), so a buffer is in the package's own image (§77.10). Every
 verb is callable from a worker (no file, no lock); each takes at most one
-sample.
+sample. **The class, the verbs, the record and every constant a package
+names live in `apps/os88api.inc` beside the class number** - EMS's precedent
+(§107.1) - so an adopter includes `os88joy.inc` and needs no driver header
+and no extra `-I` on its three Makefile rules; `drivers/joy/joypkg.inc` is
+the driver's own header: the blob layout, the timing constants and the state
+its page shares (§137.11). A verb this driver does not have answers CF = 1,
+AX = 0. DI is never written; every register a verb does not answer in is
+kept.
 
 | verb | in | out |
 |---|---|---|
-| `JOYV_INFO` 0 | - | CF = 0; AL = the axes answering (bit 0 X1, 1 Y1, 2 X2, 3 Y2), AH = the controller type (`JOYT_*`), CL = buttons the type has, CH = sticks the type has, DX = the driver's version. No sample |
-| `JOYV_READ` 1 | AL = stick (0 A, 1 B) | one sample. CF = 1 that stick is not answering. CF = 0: AL = X, AH = Y (signed, calibrated), BL = buttons held (bit 0 = the stick's first button), BH = presses since the last read (bits), CL = `JOYD_*` direction |
-| `JOYV_STATE` 2 | ES:DI = a `JOYS_SIZE` record | one sample, the whole port: `JOYS_X1`/`Y1`/`X2`/`Y2` (signed bytes, calibrated; 0 for an axis not answering), `JOYS_RAW` (four words, `JOY_NONE` for one that timed out), `JOYS_BTN` (held, bits 0-3), `JOYS_PRESS` (presses since the last read, cleared), `JOYS_DIRA`/`JOYS_DIRB`, `JOYS_HAT` (`JOYD_*`, or 0 - CH/ThrustMaster types), `JOYS_THR`/`JOYS_RUD` (throttle and rudder, unsigned 0..255, flight-stick types), `JOYS_AXES` (the answering mask) |
-| `JOYV_RAW` 3 | - | one UNcalibrated sample: AX, BX, CX, DX = X1, Y1, X2, Y2 raw (`JOY_NONE` for none), SI low = buttons held |
-| `JOYV_PROBE` 4 | - | sample ALL four axes with the full timeout and rebuild the expected mask; out AL = it (as `JOYV_INFO`) |
+| `JOYV_INFO` 0 | - | CF = 0; AL = the axes answering (`JOYA_*`: bit 0 X1, 1 Y1, 2 X2, 3 Y2, port order), AH = the controller type (`JOYT_*`), CL = buttons the type has, CH = sticks the type has, DX = the driver's version (`JOY_VER`, 0100h). No sample |
+| `JOYV_READ` 1 | AL = stick (0 A, 1 B) | one sample. CF = 1 that stick is not answering: not one the type has (B on a one-stick type), or NEITHER of its axes answers. CF = 0 when either does (a paddle is one): AL = X, AH = Y (signed, calibrated; 0 for an axis not answering), BL = buttons held (bit 0 = the stick's first), BH = presses since the last read (bits, cleared), CL = `JOYD_*` direction. CH, DX, SI kept |
+| `JOYV_STATE` 2 | ES:DI = a `JOYS_SIZE` (20) record | one sample, the whole port: `JOYS_X1`/`Y1`/`X2`/`Y2` (+0..+3, signed bytes, calibrated, AFTER Swap and Invert - stick A, then stick B or the rudder and throttle; 0 for an axis not answering), `JOYS_RAW` (+4, four words, PORT order, `JOY_NONE` for one that timed out or was not waited for), `JOYS_BTN` (+12, held, bits 0-3, after Swap and the CH decode), `JOYS_PRESS` (+13, presses since the last read, cleared), `JOYS_DIRA`/`JOYS_DIRB` (+14/+15), `JOYS_HAT` (+16, `JOYD_*`, or 0 - CH/ThrustMaster types), `JOYS_THR`/`JOYS_RUD` (+17/+18, throttle and rudder, unsigned 1..255, 0 not answering - `JOYT_FLIGHT` and `JOYT_CHFS`), `JOYS_AXES` (+19, the answering mask, port order). Every register kept |
+| `JOYV_RAW` 3 | - | one UNcalibrated sample: AX, BX, CX, DX = X1, Y1, X2, Y2 raw (`JOY_NONE` for none), SI = buttons held (bits 0-3, the port's own). It is cooked internally all the same, so a press between two RAW reads still counts |
+| `JOYV_PROBE` 4 | - | sample ALL four axes with the full timeout and rebuild the expected mask; out AL = the axes answering (as `JOYV_INFO`) |
 
 **Controller types** (`JOYT_*`, the page's radio group; Linux `analog`'s and
-86Box's set): 0 `JOYT_2B` one stick, two buttons; 1 `JOYT_2X2B` two sticks,
-two buttons each (stick B on X2/Y2, buttons 3-4); 2 `JOYT_4B` one stick, four
-buttons; 3 `JOYT_FLIGHT` one stick, four buttons, throttle on Y2 and rudder
-on X2; 4 `JOYT_CHFS` CH FlightStick Pro - as `JOYT_FLIGHT`, the hat decoded
-from the button combinations CH uses; 5 `JOYT_TMFCS` ThrustMaster FCS - one
-stick, four buttons, the hat as the level of Y2.
+86Box's set), with the port axes each waits for: 0 `JOYT_2B` one stick, two
+buttons (X1 Y1); 1 `JOYT_2X2B` two sticks, two buttons each (stick B on
+X2/Y2, buttons 3-4; all four); 2 `JOYT_4B` one stick, four buttons (X1 Y1);
+3 `JOYT_FLIGHT` one stick, four buttons, throttle on Y2 and rudder on X2 (all
+four); 4 `JOYT_CHFS` CH FlightStick Pro - as `JOYT_FLIGHT`, the hat decoded
+from the button combinations CH uses (buttons 1 and 2 together are the hat,
+3 and 4 then say which way: 0011 left, 0111 down, 1011 right, 1111 up, and no
+button is reported); 5 `JOYT_TMFCS` ThrustMaster FCS - one stick, four
+buttons, the hat as the level of Y2 (X1 Y1 Y2: up lowest, then right, down,
+left, centred at the top, quantised against Y2's centre as
+`(4·raw + c/2) / c`). **Swap** trades X1/Y1 and buttons 1-2 with X2/Y2 and
+buttons 3-4 for every type - it is for two sticks and for paddles; Invert
+negates stick A's Y, and stick B's on `JOYT_2X2B`.
 
-**`apps/os88joy.inc`** (the `os88sock.inc` of this class): `joy_find` (CF = 1
-when no `DRVC_JOY` driver is attached - every caller's fallback test, cheap
-enough for a game to ask once at start), `joy_read` (`JOYV_READ` for stick
-AL), `joy_state` (`JOYV_STATE` into a record you name), and `joy_dirkeys`,
-which ORs the arrow keys' `OSAPI_KEY_DOWN` state into a `JOYD_*` byte so a
-game that wants "stick or arrows" asks one thing. **`apps/cc/os88.h`**:
-`os88_joy_find()`, `os88_joy_read(stick, rec)` and `os88_joy_state(rec)`
-with `rec` a `static` record (§73: never the address of an automatic).
+**`apps/os88joy.inc`** (the `os88sock.inc` of this class, code only, no
+state): `joy_find` (CF = 1 when no `DRVC_JOY` driver is attached - every
+caller's fallback test; CF = 0 answers `JOYV_INFO`, so AL = 0 is "a driver,
+nothing plugged in yet - read anyway"; clobbers AX CX DX), `joy_read`
+(`JOYV_READ` for stick AL; clobbers AX BX CL), `joy_state` (`JOYV_STATE` into
+the record at DI in your image), and `joy_dirkeys`, which ORs the arrow keys'
+`OSAPI_KEY_DOWN` state into the `JOYD_*` byte in AL so a game that wants
+"stick or arrows" asks one thing (the first ask arms the key map and reports
+every arrow up, §9.7). **`apps/cc/os88.h`**: `os88_joy_find()` (-1, or
+`type << 8 | axes`), `os88_joy_read(stick, rec)` (0, or -1 with `rec`
+untouched) and `os88_joy_state(rec)`, with `rec` a `static struct os88_joyrd`
+/ `struct os88_joystate` (§73: never the address of an automatic); the
+`OS88_JOY*` constants are held to the assembly ones by `t_mirror`.
 
 ### 137.5 The settings (`SYSTEM.CFG`, the driver's blob)
 
-The driver's own settings blob (§51.9; a second claimant is a second key, not
-a bigger blob - §51.9.1), versioned by its first byte: the version, the
-controller type, the flags (`JOYF_INVY` invert Y, `JOYF_SWAP` swap sticks),
-the dead zone percent, and the calibration (minimum, centre, maximum for each
-of four axes). Its size is resident `.bss` on every driver kernel (§51.9), so
-it is held to 24 bytes or less - the calibration may be stored at reduced
-precision. Written only through `OSAPI_DRV_CFG`, so it reaches the disk at
-the Control Panel's close like every setting (§31.8).
+The driver's own settings blob (§51.9), a THIRD blob and a key of its own,
+`'JS'` (§51.9.1: a second claimant is a second key, not a bigger blob):
+`CFG_JBLOB`, `DRV_JBLOB_SZ` = **20 bytes** of `drv_cfg` on kern_big and
+kern_mega (not kern_emu, §137.1), routed to the game port's row by `drv_blob_of` - which names the row
+(`joy_row`) rather than indexing `drv_blob_map`, the row being the table's
+last and the map covering the first four (10 bytes of `.text` against 27 for
+a map grown to reach it). Versioned by its first byte, so a blob never
+written (zeros) is the defaults:
+
+| offset | | |
+|---|---|---|
+| 0 `JOYB_VER` | db | `JOYB_V` = 1; anything else, or a short read, and the defaults stand |
+| 1 `JOYB_TYPE` | db | `JOYT_*` (default 0) |
+| 2 `JOYB_FLAGS` | db | `JOYF_INVY` 1 invert Y, `JOYF_SWAP` 2 swap the sticks |
+| 3 `JOYB_DZ` | db | the dead zone, percent (default 8, at most 30) |
+| 4 `JOYB_CAL` | 4 × 4 | per port axis X1 Y1 X2 Y2: `JOYC_MIN` db = minimum / 16 (rounded down), `JOYC_MAX` db = maximum / 16 (rounded up), `JOYC_CEN` dw = the centre whole, 0 = not calibrated |
+
+**The reduced precision is the ends only**: they scale the span, and 16
+counts is 13 µs of a ~1,300-count travel, so the stored span is at most ~1%
+wide and the ends clamp at ±127; the centre - which the dead zone sits on -
+is kept whole. A blob that fails validation (version, type ≤ 5, dz ≤ 30, no
+unknown flag) is replaced by the defaults in RAM and nothing is written.
+Written only through `OSAPI_DRV_CFG` (`joy_save`), so it reaches the disk at
+the Control Panel's close like every setting (§31.8); the kernel carries it
+untouched on a machine whose row is unticked.
 
 ### 137.6 The Joystick page (compact and wide)
 
@@ -260116,3 +260183,68 @@ and keeps its keys working - a joystick ADDS a control, it never replaces one:
 
 Measured per wave and written into the plan; the table here is filled when
 the last wave lands.
+
+### 137.10 When channel 0 is not the scheduler's, and when nothing answers
+
+**A raw count is a difference of two PIT latches, and channel 0 is not always
+the scheduler's 65536.** A package inside an `FSXF_RATE` bracket (§53.2.2 -
+WireBall's 2048) or `FSXF_FASTTICK`, and the speaker's PCM tier (§34.11), run
+the channel at a divisor of their own, so the count can RELOAD inside a
+sample's window and a plain difference would be garbage. `joy_tick` therefore
+treats any one difference past `JOY_TSTEP` (512 counts - no block of four
+reads can take that long on any machine) as a reload and counts the
+previous block's length (`joy_tlast`, seeded with `JOY_TBLK` = 48) in its
+place. At the scheduler's divisor the 16-bit difference is exact across its
+own reload and the substitution never fires; at any other divisor a sample
+that straddles a reload is off by at most one block, ~40 µs on the XT - the
+reason a game should read the stick from its frame loop rather than its rate
+hook, which may make no kernel call at all anyway (§53.2.2).
+
+**While none of the type's axes answers, a reader finds a stick by itself.**
+Every sample is of the expected axes, so an unplugged stick costs a read
+nothing - but `joy_live` would then stay empty until somebody probed. So
+`joy_take` (the sample every verb takes) probes all four axes, at most once
+per `JOY_PROBEGAP` = 18 ticks (~1 s, `OSAPI_GET_TICKS`), whenever the
+expected mask is empty, and between probes fires the port for the buttons
+alone (no axis waited for). A game started with nothing plugged in therefore
+pays one ~2.3 ms probe a second, and picks the stick up within a second of
+its being plugged in; once any of the type's axes answers, no probe is ever
+taken behind the reader's back. An axis that answers and then times out
+(unplugged mid-game) is dropped, and the probes begin again only when the
+whole expected mask is empty.
+
+### 137.11 What the page shares with the driver (`drivers/joy/joypkg.inc`)
+
+The Control Panel page (§137.6, `drivers/joy/joyui.inc`) is assembled INTO
+the driver's image - `%define JOY_UI` in `joy.asm` publishes its seven
+cells (`joyui_name`, `_paint`, `_click`, `_close`, `_key`, `_up`, `_drag`;
+an `equ 0` for a cell it does not want) - so it reads the driver's state as
+near data and calls its routines as near procs. The names are the contract,
+listed in `joypkg.inc`'s second half: `joy_blob` (the settings; edit
+`JOYB_TYPE`/`FLAGS`/`DZ` in place, then `joy_apply`), `joy_cal` (per port
+axis `JCAL_MIN`/`CEN`/`MAX` and the derived `JCAL_DZL`/`DZH`), `joy_raw`,
+`joy_btn`, `joy_live`, `joy_st` (the last cooked record), `joy_press`; and
+`joy_take`, `joy_probe`, `joy_sample`, `joy_apply`, `joy_prep` (after writing
+an axis's three points), `joy_save` (calibration into the blob, then
+`OSAPI_DRV_CFG`) and `joy_reset` (every centre forgotten; the next sample
+re-centres). A calibration step is: `joy_sample` with the type's axes, the
+raw counts into `JCAL_MIN`/`MAX`/`CEN`, `joy_prep` per axis, `joy_save`.
+
+### 137.12 Cost, measured (J1)
+
+Measured on J1's branch against its base:
+
+| | |
+|---|---|
+| `JOYSTICK.DRV` | 1,571-byte image, 1,408 bytes on disk (lz4); a 2 KB claim while ticked, nothing else claimed. The 360KB system disk 680 → 683 of 706 clusters |
+| kern_big | **+67 resident** (`.text` +33, `.bss` +24, `.cold` +10), plus `.ovl` +28 (the sniff) and `.boot2` +9 (the title); the rung 262 → 195 left - **no rung crossed** |
+| kern_emu | **0** - no joystick there (§137.1, the owner's decision): its resident image is unchanged by J1: `.text` 39,756, `.bss` 4,972, `.cold` 37,456, `.boot2` 3,231, `.ovl` 2,050 - the base's to the byte, 16 left in the rung; `emu.img` carries no `JOYSTICK.DRV` |
+| kern_mega | `.text` +33, `.bss` +24, `.cold` +10 (above 1MB): image rung 210 → 153 left, `.cold` 54 → 44 - **no rung crossed**, resident footprint unchanged at 61,952 |
+| kern_small | unchanged - byte-identical but the build number: no driver layer, no row, no blob |
+
+The resident bytes are the class's publication slot (`drv_fptr11`/`drv_fseg11`,
+4 of `.text`; `drv_owner` and `drv_svct`, 4 of `.bss`), the row (16), the
+file name (13), the blob (20 of `.bss`) and `drv_blob_of`'s row test (10).
+The title, the `SYSTEM.CFG` bit, the key-table entry and the `drv_memk` word
+ride the boot overlay and `CTRL.DRV`, not the resident kernel (§51.3.3,
+§51.5.3); the sniff is the window half of the boot overlay (§51.3.1).

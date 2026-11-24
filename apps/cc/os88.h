@@ -1610,6 +1610,61 @@ int os88_file_write_seq(const char *name, unsigned seg, unsigned off,
 int os88_vol_kind(int vol);
 void os88_ferr_text(int ferr, char *dst, unsigned cap);
 
+/* --- the joystick (SPEC.md 137.4) ----------------------------------------
+ * JOYSTICK.DRV's door through OSAPI_DRV_CALL, BH = DRVC_JOY (11): the C half
+ * of apps/os88joy.inc. A joystick ADDS a control and never replaces one
+ * (SPEC.md 137.8): ask os88_joy_find() once at start, and keep the keys.
+ *
+ * os88_joy_find() answers -1 when no joystick driver is attached - kern_small,
+ * kern_emu (SPEC.md 137.1), an unticked row - and otherwise (type << 8) |
+ * axes: OS88_JOYT_* in the high byte, the OS88_JOYA_* bits answering in the
+ * low. No sample is taken.
+ *
+ * os88_joy_read() takes ONE sample (at most ~2.3 ms with interrupts off,
+ * SPEC.md 137.3) and fills the record for stick 0 (A) or 1 (B); -1 = that
+ * stick is not answering, and the record is left alone. x and y are signed,
+ * -127..127, + = right / down, after calibration, dead zone, Invert and
+ * Swap; press holds the presses since that stick's last read, and the read
+ * clears them. os88_joy_state() fills the whole-port record, JOYS_* in
+ * apps/os88api.inc byte for byte; 0, or -1 with no driver.
+ *
+ * BOTH RECORDS ARE OUT-PARAMETERS, so each is a `static` and never `&local`
+ * (rule 1 above): the driver writes through YOUR segment at the offset you
+ * pass, and a stack offset is somewhere else entirely. `char` is signed
+ * here, which is what x and y need. */
+struct os88_joyrd {                              /* os88_joy_read's */
+    char x, y;                                   /* -127..127 */
+    unsigned char btn;                           /* held, bit 0 = its first */
+    unsigned char press;                         /* since its last read */
+    unsigned char dir;                           /* OS88_JOYD_* */
+    unsigned char pad;
+};
+struct os88_joystate {                           /* JOYS_*, JOYS_SIZE = 20 */
+    char x1, y1, x2, y2;                         /* stick A, stick B (or the
+                                                  * rudder and throttle) */
+    unsigned raw[4];                             /* port order, PIT counts;
+                                                  * 0xFFFF = not answering */
+    unsigned char btn, press, dira, dirb, hat, thr, rud, axes;
+};
+int os88_joy_find(void);
+int os88_joy_read(int stick, struct os88_joyrd *rec);
+int os88_joy_state(struct os88_joystate *rec);
+#define OS88_JOYA_X1   1                         /* axis bits */
+#define OS88_JOYA_Y1   2
+#define OS88_JOYA_X2   4
+#define OS88_JOYA_Y2   8
+#define OS88_JOYD_LEFT  1                        /* directions */
+#define OS88_JOYD_RIGHT 2
+#define OS88_JOYD_UP    4
+#define OS88_JOYD_DOWN  8
+#define OS88_JOYT_2B     0                       /* controller types */
+#define OS88_JOYT_2X2B   1
+#define OS88_JOYT_4B     2
+#define OS88_JOYT_FLIGHT 3
+#define OS88_JOYT_CHFS   4
+#define OS88_JOYT_TMFCS  5
+#define OS88_JOY_NONE  0xFFFF
+
 /* --- the runtime's own helpers -------------------------------------------
  * There is no C library here (SPEC.md 73.9: no printf family - it is
  * thousands of bytes for the one conversion a program wanted). These six are

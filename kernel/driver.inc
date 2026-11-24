@@ -76,9 +76,10 @@ DRV_MAX     equ 11 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72'
                                 ; and the NINTH its eighth, CDROM.DRV (SPEC.md
                                 ; 119), the TENTH its ninth, HTTPFS.DRV
                                 ; (SPEC.md 122), and PC1MOUSE.DRV is appended
-                                ; after the optional VESA/PCI rows
+                                ; after the optional VESA/PCI rows. NO
+                                ; JOYSTICK.DRV here (SPEC.md 137.1, DRV_JOY)
 %elifdef KERN_BIG
-DRV_MAX     equ 10 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.md
+DRV_MAX     equ 11 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.md
                                 ; 121), after CDROM.DRV (SPEC.md 119), after
                                 ; EMS.DRV (SPEC.md 107), after the
                                 ; CH375 USB mouse (SPEC.md
@@ -203,6 +204,13 @@ DRVC_HTTP   equ 10              ; the FOURTH file-redirector class (SPEC.md
                                 ; is one of the two transports it runs over,
                                 ; and a class is one publication slot. KEEPS
                                 ; A COPY of its table, like classes 8 and 9
+DRVC_JOY    equ 11              ; THE GAME PORT (SPEC.md 137.1): JOYSTICK.DRV's.
+                                ; A class of its own because a PACKAGE finds
+                                ; it by class (apps/os88joy.inc's joy_find),
+                                ; appended because a class number is ABI. Its
+                                ; table is read in place like every class's
+                                ; but SOUND's; its one live cell is
+                                ; DSV_PKGCALL (and the page's, J5)
 EMSV_GONE   equ 8               ; ...and the one EMS verb the kernel sends:
                                 ; an instance is torn down (SPEC.md 107.1,
                                 ; xm_release_rec). Mirrored from os88api.inc
@@ -213,7 +221,20 @@ NETV_GONE   equ 0x42            ; ...and the one NET verb it sends, for the
                                 ; door's own verbs, WZV_PAINT and DRV_ICONV.
                                 ; Mirrored from drivers/net/netpkg.inc
 %ifdef OS88_DRIVERS
-DRVC_MAX    equ 10              ; classes, and so publication slots
+%ifndef KERN_EMU
+%define DRV_JOY                 ; JOYSTICK.DRV's row, class slot and blob:
+%endif                          ; kern_big and kern_mega, NOT kern_emu - the
+                                ; owner's decision (SPEC.md 137.1): it is the
+                                ; virtual-machine kernel, no VM emulates a
+                                ; game port, and its rung had 16 bytes left
+%endif
+%ifdef OS88_DRIVERS
+%ifdef DRV_JOY
+DRVC_MAX    equ 11              ; classes, and so publication slots
+%else
+DRVC_MAX    equ 10              ; ...and kern_emu stops at DRVC_HTTP: DRVC_JOY
+%endif                          ; is a number a package may still pass, and
+                                ; drv_cls_idx refuses it by range there
 %else
 DRVC_MAX    equ 5               ; ...and FIVE where there is no driver layer at
                                 ; all (SPEC.md 51.0), because the only thing
@@ -741,6 +762,11 @@ CFR_KEY     equ 0               ; one record
 CFR_VER     equ 2
 CFR_LEN     equ 3
 CFR_DAT     equ 4
+DRV_JBLOB_SZ equ 20             ; ...and the GAME PORT's (SPEC.md 137.5): a
+                                ; third opaque blob, its own key ('JS') and
+                                ; its own bytes for DRV_RBLOB_SZ's reason.
+                                ; drivers/joy/joypkg.inc's JOYB_SZ, and
+                                ; tests/unit/t_mirror.py holds the two equal
 DRV_PBLOB_SZ equ 1              ; ...and the PORT PIN, the sound row's and the
                                 ; Ethernet row's (SPEC.md 51.9.2): one byte,
                                 ; (port - 200h) / 2, 0 = find it yourself and
@@ -879,7 +905,15 @@ CFG_THMC    equ CFG_THMS + 1    ; 5 bytes: the Color row's colours a preset
                                 ; restores a preset with the loop that restores
                                 ; everything else and no table of presets
 CFG_KL      equ CFG_THMC + 5    ; staged keyboard ID, not a live-state copy
-CFG_NB      equ CFG_KL + 1      ; one new record byte (SPEC.md 31.16, 9.16.4)
+%ifdef DRV_JOY
+CFG_JBLOB   equ CFG_KL + 1      ; DRV_JBLOB_SZ bytes: JOYSTICK.DRV's blob -
+                                ; its type, flags, dead zone and calibration
+                                ; (SPEC.md 137.5). CFG_RBLOB's shape word for
+                                ; word: known, carried, never read here
+CFG_NB      equ CFG_JBLOB + DRV_JBLOB_SZ
+%else
+CFG_NB      equ CFG_KL + 1      ; one new record byte (SPEC.md 31.16, 9.16.4);
+%endif                          ; kern_emu has no game port blob (137.1)
 %if DRV_PBLOB_SZ != 1
   %error "driver: ctrl.inc's cp_ppin finds the sound row's pin ONE byte under the Ethernet row's"
 %endif
@@ -1040,7 +1074,13 @@ DRV_CFG_MAPN equ 8
                                 ; 'DK' precedent, word for word)
     dw 'KL'                     ; Keyboard Layout: explicit map or BIOS default
     db 1, 1, CFG_KL
-CFG_NKEY    equ 16              ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
+%ifdef DRV_JOY
+    dw 'JS'                     ; JoyStick - JOYSTICK.DRV's blob (SPEC.md
+    db 1, DRV_JBLOB_SZ, CFG_JBLOB   ; 137.5), a key of its own (51.9.1).
+CFG_NKEY    equ 17              ; Not kern_emu's, which DROPS the key as
+%else                           ; unknown (51.5 rule 1): a big disk's stick
+CFG_NKEY    equ 16              ; settings do not survive a save there.
+%endif                          ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
                                 ; went into 'VM' (CFG_VGCB)
 %else
     dw 'TP'                     ; same key, same reason, on kern_small too -
@@ -1117,6 +1157,9 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
     db 12                       ; PC1MOUSE.DRV (SPEC.md 9.15), after the fixed
                                  ; PCIETHER setting; bit 12 stays stable when
                                  ; optional VESA/PCI rows are absent
+%ifdef DRV_JOY
+    db 13                       ; JOYSTICK.DRV (SPEC.md 137.1), the same way;
+%endif                          ; bit 13 stays the game port's on kern_emu too
 %if ($ - %1 %+ _bit) != DRV_MAX
   %error "drv_cfgbit has drifted from drv_tab: one byte per row, same order"
 %endif
@@ -1229,6 +1272,9 @@ drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
                                 ; is OS88_DRIVERS already, and a 128KB machine
                                 ; with a CH375 has no disk that carries the file
 drv_f_pc1:   db 'PC1MOUSE.DRV', 0 ; SPEC.md 9.15's Olivetti Prodest PC1 mouse
+%ifdef DRV_JOY
+drv_f_joy:   db 'JOYSTICK.DRV', 0 ; SPEC.md 137's game port (not kern_emu's)
+%endif
 %endif
 %ifdef DRV_PCIETH
 drv_f_pcieth: db 'PCI'          ; SPEC.md 125's PCI NICs: the big builds'.
@@ -1264,6 +1310,9 @@ drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
 %1_http:    db 'HTTP Drive', 0
 %1_usbm:    db 'USB Mouse', 0
 %1_pc1:     db 'PC1 Mouse', 0
+%ifdef DRV_JOY
+%1_joy:     db 'Joystick', 0
+%endif
 %ifdef DRV_PCIETH
 %1_pcieth:  db 'PCI '           ; 'PCI Ethernet': its tail IS the next title,
 %endif                          ; nine bytes of both copies (SPEC.md 125.5)
@@ -1284,6 +1333,9 @@ DRVT_CD     equ drvt_cd - drvt_base
 DRVT_HTTP   equ drvt_http - drvt_base
 DRVT_USBM   equ drvt_usbm - drvt_base
 DRVT_PC1    equ drvt_pc1 - drvt_base
+%ifdef DRV_JOY
+DRVT_JOY    equ drvt_joy - drvt_base
+%endif
 DRVT_ETH    equ drvt_eth - drvt_base
 %ifdef DRV_PCIETH
 DRVT_PCIETH equ drvt_pcieth - drvt_base
@@ -1341,6 +1393,10 @@ drv_fptr9:   dw PKG_DISP        ; class 9 (DRVC_CD, SPEC.md 119.1)
 drv_fseg9:   dw 0
 drv_fptr10:  dw PKG_DISP        ; class 10 (DRVC_HTTP, SPEC.md 122.1)
 drv_fseg10:  dw 0
+%ifdef DRV_JOY
+drv_fptr11:  dw PKG_DISP        ; class 11 (DRVC_JOY, SPEC.md 137.1) - not
+drv_fseg11:  dw 0               ; on kern_emu (DRV_JOY)
+%endif
 
 %endif
 
@@ -1616,6 +1672,19 @@ pc1_row:                         ; PC1MOUSE.DRV is a pointing-device alternative
     db 0                        ; wanted only when selected by the user
     db DRVE_OK
     db 0
+%ifdef DRV_JOY
+joy_row:                        ; ...a label for drv_sniff and drv_blob_of
+    dw PKG_DISP, 0              ; LAST: JOYSTICK.DRV, the game port (SPEC.md
+    dw drv_f_joy, DRVT_JOY      ; 137), SYSTEM.CFG bit 13, kern_big and mega
+    dw 0, 0
+    db DRVC_JOY
+    db 0                        ; NOT wanted by default (SPEC.md 137.2): the
+                                ; boot's sniff ticks it as the MACHINE's
+                                ; default when a stick answers, and the user
+                                ; otherwise
+    db DRVE_OK
+    db 0
+%endif
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1690,6 +1759,7 @@ DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 512)
 DRVM_IMG_USBM equ 3             ; ceil(build/usbmouse.drv / 512)
 DRVM_IMG_PC1 equ 1              ; ceil(build/pc1mouse.drv / 512)
+DRVM_IMG_JOY equ 4              ; ceil(build/joystick.drv / 512)
 DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 17              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
@@ -1770,6 +1840,9 @@ DRVM_USBM    equ DRVM_IMG_USBM  ; the USB mouse claims nothing: its one
                                 ; buffer is the 64-byte descriptor, in the
                                 ; image. Its worker's stack is SCH_DRV_STK of
                                 ; the kernel's, not a claim
+DRVM_JOY     equ DRVM_IMG_JOY   ; the game port claims nothing: its state
+                                ; and calibration are in its image, and it
+                                ; has no worker (SPEC.md 137.1)
 DRVM_PC1     equ DRVM_IMG_PC1   ; PC1 counters and buttons are in its image;
                                  ; its worker uses SCH_DRV_STK
 DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
@@ -1802,6 +1875,9 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_PCIETH              ; ...and PCIETHER.DRV (SPEC.md 125)
 %endif
     dw DRVM_PC1                 ; PC1MOUSE.DRV follows the optional rows
+%ifdef DRV_JOY
+    dw DRVM_JOY                 ; ...and JOYSTICK.DRV, last (SPEC.md 137)
+%endif
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -3230,6 +3306,12 @@ drv_blob_of:
     push ax
     call drv_row_ix_of          ; AL = the row
     jc .out
+%ifdef DRV_JOY
+    mov di, drv_cfg + CFG_JBLOB ; ...THE LAST ROW, the game port's (SPEC.md
+    mov dx, DRV_JBLOB_SZ        ; 137.5): far past the map below, so named
+    cmp al, (joy_row - drv_tab) / DRVR_SIZE ; rather than indexed. `mov`
+    je .out                     ; writes no flag: CF = 0 off the equal compare
+%endif
     cmp al, DRV_NBLOB           ; ...one of the rows that own a blob, which
     cmc                         ; are the first DRV_NBLOB (drv_blob_map):
     jc .out                     ; CF = 1 AT or past the count
@@ -5596,6 +5678,32 @@ drv_sniff:
     pop si
 %endif
 .out:
+    ; --- ...AND IS A STICK PLUGGED IN? (SPEC.md 137.2) ------------------------
+    ; 51.3.1's trade for the game port: ask the hardware once, and on a
+    ; machine with a stick in it the row starts ticked as the MACHINE's
+    ; default (DRVR_ANS stays 0, so the user's answer in SYSTEM.CFG wins).
+    ; The BIOS asks first: POST sets the equipment word's bit 12 when 201h's
+    ; one-shots read idle (0) - a floating bus reads FFh - so a machine with
+    ; no game port, QEMU's among them, pays one int 11h and nothing else.
+    ; Then the port is fired and stick A's X or Y must FALL within the count:
+    ; ~1.1 ms for a 100 kOhm stick against 4000 reads (>= 2 ms on any ISA
+    ; bus, ~32 ms on the XT with nothing plugged in)
+%ifdef DRV_JOY
+    int 0x11
+    test ah, 0x10
+    jz .nojoy
+    mov dx, 0x201
+    out dx, al                  ; fire
+    mov cx, 4000
+.jw:
+    in al, dx
+    and al, 3
+    cmp al, 3
+    loope .jw                   ; while both of stick A's still time
+    je .nojoy                   ; ...to the end: nothing answered
+    mov byte [joy_row+DRVR_WANT], 1   ; through DS, KERNEL_SEG here
+.nojoy:
+%endif
     ; --- ...AND IS THERE A HARD DISK? (SPEC.md 51.3.2) ------------------------
     ; HDD.DRV's own rung 0 test, word for word (hd_at_bios): int 13h AH=08h on
     ; 80h answers CF clear, a non-zero COUNT of fixed disks in DL, a non-zero
