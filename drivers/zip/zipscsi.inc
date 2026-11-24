@@ -246,7 +246,6 @@ zs_go:
 zs_ident:
     push bx
     push cx
-    push si
     mov ax, SC_INQUIRY | (ZS_BUFSZ << 8)
     mov cx, ZS_BUFSZ
     call zs_simple
@@ -261,7 +260,6 @@ zs_ident:
     cmp bx, 6
     jb .cmp                     ; the sixth matched: CF = 0 off the compare
 .out:
-    pop si
     pop cx
     pop bx
     ret
@@ -300,8 +298,8 @@ zs_query:
     jnz .tur
     jmp short .none
 .cap:
-    mov al, SC_CAPACITY
-    call zs_cdb6
+    mov ax, SC_CAPACITY         ; AH = 0: zs_cdb6 puts it at +4, which is
+    call zs_cdb6                ; an LBA byte of this command
     mov bl, 10                  ; READ CAPACITY(10): ten bytes, all zero
     mov cx, 8
     call zs_go

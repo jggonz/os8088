@@ -260118,14 +260118,14 @@ emulated XT in nibble mode.)*
 
 **The image** (core's half, measured on `zip/core` with the two transports
 still stubs - 14 bytes between them - so the transports' own shares are
-§138.2.1's and §138.2.2's to add). `build/zip.bin` is **2,540 bytes, bss
-included**, 2,309 on the disk (LZ4, 112 trailing zero bytes off the file):
+§138.2.1's and §138.2.2's to add). `build/zip.bin` is **2,539 bytes, bss
+included**, 2,310 on the disk (LZ4, 112 trailing zero bytes off the file):
 
 | part | bytes |
 |---|---:|
 | header, service table, label | 72 |
 | entry, attach (pin, LPT table, bidirectional test, probe order), ready, detach, `os88_pin` | 327 |
-| `zipscsi.inc` - `zs_cmd`, sense, waits, INQUIRY, `zs_query` | 464 |
+| `zipscsi.inc` - `zs_cmd`, sense, waits, INQUIRY, `zs_query` | 463 |
 | `zipvol.inc` - `DSV_BLK`, the fence, chunks, `zv_bnorm`, `zv_learn` | 516 |
 | `zipcp.inc` - the page | 620 |
 | `zippkg.inc` - `ZIPV_INFO`, `ZIPV_EJECT` | 100 |
@@ -260134,7 +260134,7 @@ included**, 2,309 on the disk (LZ4, 112 trailing zero bytes off the file):
 | the stub transports | 14 |
 
 Against the fan-out's budget - 6,656 all in, of which core, page and door
-4,352 - the core's half is **2,526**; `zip.asm` fails the assembly past
+4,352 - the core's half is **2,525**; `zip.asm` fails the assembly past
 `ZIP_IMG_MAX` = 6,656. No 512-byte sector buffer: sector 0 is read into the
 caller's own buffer (§138.4). The claim is the image's 512-byte granules
 (§51.1.2), and nothing else is claimed - no DMA, no IRQ, no vector.
