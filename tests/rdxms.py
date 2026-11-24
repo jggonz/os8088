@@ -104,6 +104,9 @@ RDL_XMS = 1                     # rdabi.inc; page.inc refuses to assemble if
 # page.inc's Xms radio, pane-relative and GLYPH AND LABEL (47 rule 2):
 # RP_RX1 = 130, RP_RW1 = 40, on the Store row at RP_LY = 34
 R_XMS = (130, 31, 170, 43)
+# ctrl.inc's page list (SPEC.md 31.1.5): longer than nine rows it SCROLLS,
+# showing eight from [cp_ltop] and its two arrows in the ninth row's place
+CP_LVIS, CP_LAY, CP_LAH, CP_LAX0, CP_LAX1 = 8, 118, 12, 22, 52
 XM_OWN_KERN = xmcheck.XM_OWN_KERN   # a RAM disk's block is the kernel's:
                                     # the driver claims it outside any
                                     # instance's stamp (rdstore.inc)
@@ -390,15 +393,30 @@ def session(q, a, R, P, data, bimg):
         q.done(4.0)
         cp = box["w"]
         x0, y0 = cp.x + 1, cp.y + rp.TITLE_H
+        def ltop():
+            return q.read(S("cp_ltop"), 1)[0]
+
+        def page(n, cap=2.0):
+            """Click list row N, scrolling it into view first: the Ram Disk
+            page is the first driver page, row [cp_nst] = 8, one past the
+            eight a scrolling list shows (tests/fsclass.py, heaphi.py)"""
+            for _ in range(4):
+                if ltop() <= n < ltop() + CP_LVIS:
+                    break
+                ax = CP_LAX0 if n < ltop() else CP_LAX1
+                q.click(x0 + ax + 8, y0 + CP_LAY + CP_LAH // 2)
+            q.click(x0 + 40, y0 + rp.CP_I0Y + (n - ltop()) * rp.CP_IROWH + 7,
+                    cap=cap)
+
         if first:                   # the Drivers page, and tick the RAM row
-            q.click(x0 + 40, y0 + rp.CP_I0Y + rp.CP_IDRV * rp.CP_IROWH + 7)
+            page(rp.CP_IDRV)
             q.click(x0 + rp.CP_RX + 40,
                     y0 + rp.CP_DBY1 + rp.RD_ROW * rp.CP_DROWH
                     + rp.CP_DROWH // 2)
             q.need(rd_seg, "the RAM disk driver to load", 30)
             q.done(4.0)
         nst = q.read(S("cp_nst"), 1)[0]     # the Ram Disk page's row
-        q.click(x0 + 40, y0 + rp.CP_I0Y + nst * rp.CP_IROWH + 7, cap=6.0)
+        page(nst, cap=6.0)
         return cp, x0 + rp.CP_RX, y0        # the first paint LOADS RAMPAGE
 
     def press(px, py, r, cap=2.0):
