@@ -55,4 +55,11 @@ size, a sample's cost on MartyPC's XT.
 
 ## QA
 
-The one QA run's defect list goes here.
+The one QA run's defect list goes here. Found before it, by J9's rows
+(`rows-report.md`), and carried into the fix round:
+
+| # | seen | expected | where | status |
+|---|---|---|---|---|
+| Q1 | an UNCALIBRATED stick reaches about -108..+92 of +-127: MartyPC's 0-ohm count carries a fixed ~95 us latch overhead, and auto-centre assumes a minimum of 0 | full travel near +-127 before the user calibrates, or the page telling them to calibrate | driver, SPEC 137.3 | open |
+| Q2 | a verb costs 1.45-2.9 ms (door, cooking and two `pit_now`s on top of the sample), against "~1.2 ms a read" in SPEC 137.3/137.12 and the J7/J8 frame-budget notes | the figures in SPEC and the adopters' notes are the measured ones | SPEC 137.3, 137.12, 109.7, 44.13, 101.7, ARCADE-SPEC 15 | open |
+| Q3 | WireBall's ~1.2 ms (really 1.5-2.9 ms) read may swallow a rate-hook period, so its motion clock runs a few percent slow while a stick answers (gamesa-report.md) | motion steps unaffected, or the read halved to every second frame | apps/wireball, SPEC 109.7 | open |
