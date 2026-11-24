@@ -259875,35 +259875,103 @@ built."* The plan is `docs/plans/ZIP-PLAN.md`; the build diary is
 
 ### 138.1 What the kernel carries
 
-*(Owner: kclass. Fill in as built, with the measured bytes.)*
+Built on `kern_big`, `kern_emu` and `kern_mega`. `kern_small` has no driver
+layer (§51.0), and its image is byte for byte what it was.
 
-- **A class, `DRVC_ZIP` = 12** (`apps/os88api.inc`), appended. It is a
-  **block class**: its volume is `DVK_DRV`, dispatched through `DSV_BLK` like
-  `DRVC_DISK`'s, and `dsk_vol_add` must not take it for a file class (it
-  derives `DVK_FILE` for every class from `DRVC_FILE2` up today, §119.1).
-  `DRVC_MAX` 10 → 12 on the driver kernels, with class 11's slot present and
-  never published until JOYSTICK.DRV lands.
-- **Removable**: `dsk_vol_fixed` answers 0 for a `DRVC_ZIP` volume, so
-  `OSAPI_VOL_KIND` says `VK_REMOVABLE` and the desktop draws the removable
-  icon.
-- **Media changed, honoured on the driver arm**: a `DSV_BLK` answering CF = 1
-  with AL = 06h shuts the mount gate exactly as the BIOS arm does (BR-16,
-  §18.9.1) - the transfer fails unretried and the next operation remounts.
-  Write the arm if `dsk_xfer`'s driver path does not reach that code today.
-- **`OSAPI_VOL_DEL` writes back first**: whatever the kernel holds dirty for
-  the volume (FAT window, directory, write-behind) goes to the disk before the
-  row is dropped, so ZIPV_EJECT (§138.7) can never strand a half-written FAT.
-  If it already does, say where.
-- **A row, `ZIP.DRV`, "Zip Drive"**, after `PC1MOUSE.DRV` (and after
-  JOYSTICK.DRV's once both are in), SYSTEM.CFG **bit 14**, a blob with key
-  `ZP` holding a one-byte port pin (§51.9.2), **not wanted by default**:
-  attach writes the connect sequence to a printer port, and a printer on that
-  port may print a few characters of it. `DRVM_IMG_ZIP` sized from §138.9.
-- **DOS**: the Zip volume is a volume a DOS program may be reading, and the
-  driver holds no IRQ or DMA channel - keep it across a DOS trip as the
-  CD-ROM is kept (`hbm_sweep`'s skip list, `HB_KEEPSET`), unless measuring
-  says otherwise.
-- **The catalog** (`drivers/catalog.toml`): category STOR, icon `C_STOR`.
+- **A class, `DRVC_ZIP` = 12** (`apps/os88api.inc`, mirrored in
+  `kernel/driver.inc`), appended. `DRVC_MAX` goes 10 → 12 on the driver
+  kernels. Class 11 is `DRVC_JOY`'s, held for the joystick PR #410. Its slot
+  (`drv_fptr11`/`drv_fseg11`, a `drv_owner` word and a `drv_svct` word)
+  exists because `drv_cls_fp` indexes the run contiguously. Nothing publishes
+  it, so every class walk passes over it the way it passes over
+  `DRVC_RETIRED3`. **No copy of the service table**: since kernel size pass
+  19 every class but sound is read in place through its segment, and
+  `dsk_xfer` reads `DSV_BLK` that way through `[drv_blkcls]` (§51.2.1). A
+  block class needs nothing more than a file class does.
+- **A block class, which `dsk_vol_add` already understood.** Its kind
+  derivation closes the file-class range at `DRVC_HTTP` (`ja .kindpub`), so
+  class 12 gets `DVK_DRV`. Its letter search starts at index 3 for every
+  class but `DRVC_DISK`, so the Zip disk is D: or later and C: stays the
+  hard disk's (§18.7.4). Neither needed code. The sentence this section
+  first carried, "it derives `DVK_FILE` for every class from `DRVC_FILE2`
+  up", was wrong about the tree: the range has been closed since §18.101.
+- **Removable**: `dsk_vol_fixed_x` answers AL = 0 for a row whose
+  `DV_CLASS` is `DRVC_ZIP`. So `OSAPI_VOL_KIND` says `VK_REMOVABLE` /
+  `VT_DRIVER`, the desktop draws the removable icon, DOS's IOCTL 08h says
+  removable (§96.22.2), a `WSQF_KEEP` hold on it ends with its callback, and
+  hibernation never picks it. The test is on the CLASS and **not in
+  `dsk_vol_rmv`**. That routine's other two callers (`disk_mount_x`'s
+  floppy banking and `dsk_media_ok`) would then re-validate the medium at
+  every mount and every quiet hop, which is an extra sector read over a
+  nibble port each time. The Zip drive *says* when its disk changed, so that
+  is its whole media test (next item). One consequence: a mounted image
+  (§18.101) whose host is a Zip volume answers `fixed`, because
+  `dsk_vol_rmv` judges the host by its kind. Its transfers still go through
+  the host's `DSV_BLK`, so a swap under it still fails at the 06h gate below.
+- **Media changed, on the driver arm** (`dsk_xfer`, `.drverr`). A `DSV_BLK`
+  that answers CF = 1 with AL = 06h now does `shr byte [dsk_mntok], 1`,
+  which is BR-16's gate (§18.9.1). If the volume was mounted, the gate shuts
+  and the next operation remounts. The transfer fails unretried, as every
+  driver failure always has. Before this change, the driver arm stored the
+  status and failed, but left the gate open. The next operation then trusted
+  the old disk's FAT window on the new disk. **One difference from the BIOS
+  arm**: the BIOS arm RETRIES a 06h inside a mount (the gate is already 0),
+  and the driver arm does not retry anything. So a driver must not answer
+  06h to the first transfer after a medium it never served. ZIP.DRV answers
+  06h only when it HAD a medium and the drive reports UNIT ATTENTION. A UNIT
+  ATTENTION while its medium is still unknown (after attach, after an eject)
+  is consumed by re-learning the medium, and the transfer goes on (§138.4).
+  Without that rule, the first mount after a disk is inserted would fail
+  once.
+- **`OSAPI_VOL_DEL` already writes back, and nothing was added.** Between
+  operations, the only dirty state the kernel can hold for a volume is a
+  held `WRITE_SEQ` stream: its banked FAT edits, its link and its directory
+  entry (§18.4.9, §18.8.5). `dsk_vol_del` commits that first (`dws_commit`,
+  at its head under `DSK_STREAM`) while the driver still serves the volume.
+  Every other FAT and directory edit is flushed by the operation that made
+  it (`dskw_flush_x`, FAT then entry, §18.4). The window of a volume the
+  mount has left is flushed by `dsk_fatw_park` on the way out. So
+  `ZIPV_EJECT`'s `OSAPI_VOL_DEL` (§138.7) runs with nothing dirty, apart
+  from the hold it commits itself. File operations are UI-task only (§20.6),
+  so a package's eject cannot land inside one.
+- **A row, `ZIP.DRV`, "Zip Drive"** (`zip_row`), LAST on every big build,
+  after `PC1MOUSE.DRV`. SYSTEM.CFG bit **14** (`drv_cfgbit`; 13 is held for
+  JOYSTICK.DRV). Not wanted by default: attach writes the connect sequence to
+  a printer port. `DRVM_IMG_ZIP` = 13 half-KB, which is §138.9's 6,656-byte
+  budget and must be re-set to the built image at integration
+  (`t_drvmem`). `DRVM_ZIP` is the image alone: ZIP.DRV claims nothing.
+  `DQ_MAXREC` goes 13 → 14 (kern_emu has 14 rows now), as 9 → 10 did; no
+  ABI number moves.
+- **A port pin, key `ZP`** (`CFG_ZPIN`, appended after `CFG_KL`;
+  `DRV_PBLOB_SZ`, §51.9.2's encoding). Its blob-map entry is the one AFTER
+  the four leading rows' entries, not in row order. `drv_blob_of` renumbers
+  row `DRV_MAX - 1` onto it, and an assertion holds the Zip row last. Filler
+  entries for the rows between would have cost three bytes each.
+- **DOS and hibernate keep it** (`hbm_sweep`'s skip list and `HB_KEEPSET`,
+  still the same set): a DOS program may be reading and writing the Zip
+  disk, and the driver holds no IRQ and no DMA channel. `1 << 12` is 0 in
+  the CH a caller names classes with, so no `OSAPI_DRV_SUSPEND` caller can
+  name it, which matches the CD-ROM and the RAM disk.
+- **The catalog** (`drivers/catalog.toml`): `STOR`, `C_STOR`, "Iomega Zip
+  Drive". The wide Control Panel's header for the Zip drive's own page uses
+  the hard-disk art (`cpw_recicon`), with no new art.
+
+**What it cost, measured** (`tools/kernsize.py`, against the tree before it):
+the class itself is **+64 resident** on each driver kernel. That is `.text`
++35 (two class slots 8, the row 16, `'ZIP.DRV'` 8, the blob-map entry 3),
+`.bss` +9 (the class arrays 8, the pin 1) and `.cold` +20 (the 06h gate 8,
+the removable test 7, `drv_blob_of` +5). Two folds pay for
+half of it. `osapi_vol_fence`'s class walk was `drv_pub_seg`'s written out a
+second time, and is now a call to it, with `drv_pub_seg` answering the class
+(−22 net). `dsk_vol_drop_drv_x` repeated `dsk_vol_del`'s kind test and
+tested a carry `dsk_vol_slot_x` can never set (−11, odd, which pairs with
+the removable test's +7 so that the hot routines behind both keep their
+parity). Net **+31**: `.text` +35, `.bss` +9, `.cold` −13. kern_big's rung
+goes from 262 left to 228, and kern_mega's image from 210 left to 166, so
+neither crosses. **kern_emu had 16 bytes left in its rung and crosses it**
+(BLOCKED, the lead's decision, ~/Repos/zip-logs). The boot blob and
+CTRL.DRV carry the title, the `ZP` key and the bit: `.boot2` +10 on
+kern_big, +20 on kern_emu and kern_mega. None of that is resident.
 
 ### 138.2 The wire: two protocols, one transport contract
 

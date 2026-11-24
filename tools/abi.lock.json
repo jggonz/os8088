@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "47b3c232a10a75acb01e2fdb830a508ce99ddfdc26e48165df827fdef2a93ece",
+  "fingerprint": "d6df35aa4927a18e98cd71856f52f09c78e527f8f63a98b56c03c432aeb049f5",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "d67e7b132e81ee18f8ab7015ec30dc4d2dc64944195d8cc63795f17e9d6aded6",
+  "fingerprint": "0e0b9e8d139ee9bd5d6c5465b88de748fe54fd8198075adc47ae6961baae33d5",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2504,6 +2504,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "DRVC_ZIP = 12 and the ZIPV_/ZIPS_/ZIPP_/ZIPM_ constants appended (SPEC.md 138): nothing built before stops running, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "0e0b9e8d139ee9bd5d6c5465b88de748fe54fd8198075adc47ae6961baae33d5",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "DQ_MAXREC 13 -> 14 for kern_emu's fourteenth drv_tab row, ZIP.DRV (SPEC.md 138.1): an addition, as 9 -> 10 was - the Zip class is on the sweep's skip list and no caller can name it in CH, so no older caller's buffer is written past; no cell moved, no number moves",
+   "to": 13
+  },
+  {
+   "fingerprint": "d6df35aa4927a18e98cd71856f52f09c78e527f8f63a98b56c03c432aeb049f5",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "DQ_MAXREC 13 -> 14 for kern_emu's fourteenth drv_tab row, ZIP.DRV (SPEC.md 138.1): an addition, as 9 -> 10 was - the Zip class is on the sweep's skip list and no caller can name it in CH, so no older caller's buffer is written past; no cell moved, no number moves",
    "to": 14
   }
  ]

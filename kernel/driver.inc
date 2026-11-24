@@ -60,7 +60,7 @@ DRV_PX      equ 1               ; ...plus PCIETHER.DRV's row (SPEC.md 125.5),
 DRV_PX      equ 0               ; until 125.1 widened it); kern_small
 %endif                          ; assembles without it
 %ifdef KERN_EMU
-DRV_MAX     equ 11 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 12 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -76,9 +76,11 @@ DRV_MAX     equ 11 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72'
                                 ; and the NINTH its eighth, CDROM.DRV (SPEC.md
                                 ; 119), the TENTH its ninth, HTTPFS.DRV
                                 ; (SPEC.md 122), and PC1MOUSE.DRV is appended
-                                ; after the optional VESA/PCI rows
+                                ; after the optional VESA/PCI rows, and
+                                ; ZIP.DRV after it (SPEC.md 138.1)
 %elifdef KERN_BIG
-DRV_MAX     equ 10 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.md
+DRV_MAX     equ 11 + DRV_VX + DRV_PX ; ...and kern_big stops at ZIP.DRV (SPEC.md
+                                ; 138.1), after PC1MOUSE.DRV, HTTPFS.DRV (SPEC.md
                                 ; 121), after CDROM.DRV (SPEC.md 119), after
                                 ; EMS.DRV (SPEC.md 107), after the
                                 ; CH375 USB mouse (SPEC.md
@@ -203,6 +205,20 @@ DRVC_HTTP   equ 10              ; the FOURTH file-redirector class (SPEC.md
                                 ; is one of the two transports it runs over,
                                 ; and a class is one publication slot. KEEPS
                                 ; A COPY of its table, like classes 8 and 9
+                                ; (11 is DRVC_JOY's, JOYSTICK.DRV's - the
+                                ; joystick PR #410 - and held: its slot below
+                                ; exists and nothing publishes it yet)
+DRVC_ZIP    equ 12              ; the SECOND BLOCK class (SPEC.md 138.1):
+                                ; ZIP.DRV, an Iomega Zip drive on the parallel
+                                ; port. Its volume is DVK_DRV and dispatched
+                                ; through DSV_BLK like DRVC_DISK's - and
+                                ; dsk_vol_add's kind derivation already says
+                                ; so, its file range being CLOSED at
+                                ; DRVC_HTTP - but REMOVABLE (dsk_vol_fixed_x),
+                                ; and lettered from D: (18.7.4). No copy of
+                                ; its table: dsk_xfer reads DSV_BLK in place,
+                                ; through [drv_blkcls], as for every class
+                                ; since kernel size pass 19
 EMSV_GONE   equ 8               ; ...and the one EMS verb the kernel sends:
                                 ; an instance is torn down (SPEC.md 107.1,
                                 ; xm_release_rec). Mirrored from os88api.inc
@@ -213,7 +229,9 @@ NETV_GONE   equ 0x42            ; ...and the one NET verb it sends, for the
                                 ; door's own verbs, WZV_PAINT and DRV_ICONV.
                                 ; Mirrored from drivers/net/netpkg.inc
 %ifdef OS88_DRIVERS
-DRVC_MAX    equ 10              ; classes, and so publication slots
+DRVC_MAX    equ 12              ; classes, and so publication slots - 11
+                                ; (DRVC_JOY's, held) and 12 (DRVC_ZIP's)
+                                ; appended for SPEC.md 138.1
 %else
 DRVC_MAX    equ 5               ; ...and FIVE where there is no driver layer at
                                 ; all (SPEC.md 51.0), because the only thing
@@ -232,11 +250,12 @@ DRVC_MAX    equ 5               ; ...and FIVE where there is no driver layer at
 %endif
 
 ; HB_KEEPSET - the classes a hibernate KEEPS across the picture (SPEC.md 87.4
-; step 1: hbm_sweep's skip list, the same five) and so the only drivers a
+; step 1: hbm_sweep's skip list, the same six - the Zip
+; drive joined both, SPEC.md 138.1) and so the only drivers a
 ; resume can need to reach its image: drv_boot_x's PASS 1 on kern_big and
 ; kern_emu, before the hibernation probe; everything else is pass 2
 ; (drv_boot2_x, SPEC.md 51.3.4). A row's class as a bit.
-HB_KEEPSET  equ (1 << DRVC_DISK) | (1 << DRVC_FILE) | (1 << DRVC_FILE2) | (1 << DRVC_CD) | (1 << DRVC_EMS)
+HB_KEEPSET  equ (1 << DRVC_DISK) | (1 << DRVC_FILE) | (1 << DRVC_FILE2) | (1 << DRVC_CD) | (1 << DRVC_EMS) | (1 << DRVC_ZIP)
 
 DRVC_OVL    equ 0x40            ; NOT A CLASS, and mirrored from
                                 ; drivers/os88drv.inc: a driver-shaped image
@@ -435,7 +454,7 @@ DQ_A        equ 2               ; dw: the CLASS's own three words - for
 DQ_B        equ 4               ; dw: DRVC_SOUND, the DSP base port, then
 DQ_C        equ 6               ; dw: (IRQ | DMA<<8), then the DSP version
 DQ_SIZE     equ 8
-DQ_MAXREC   equ 13              ; the most records one call can write. It is
+DQ_MAXREC   equ 14              ; the most records one call can write. It is
 %if DRV_MAX > DQ_MAXREC         ; MIRRORED in apps/os88api.inc, so a caller can
 %error "DRV_MAX exceeds DQ_MAXREC - widen it here AND in apps/os88api.inc"
 %endif                          ; size a buffer without mirroring DRV_MAX - and
@@ -879,7 +898,12 @@ CFG_THMC    equ CFG_THMS + 1    ; 5 bytes: the Color row's colours a preset
                                 ; restores a preset with the loop that restores
                                 ; everything else and no table of presets
 CFG_KL      equ CFG_THMC + 5    ; staged keyboard ID, not a live-state copy
-CFG_NB      equ CFG_KL + 1      ; one new record byte (SPEC.md 31.16, 9.16.4)
+CFG_ZPIN    equ CFG_KL + 1      ; DRV_PBLOB_SZ: the Zip drive row's blob -
+                                ; WHICH PRINTER PORT (SPEC.md 138.5): the
+                                ; 51.9.2 pin, (port - 200h) / 2, so 378h, 278h
+                                ; and 3BCh are each a value and 0 is Auto. Read
+                                ; by ZIP.DRV at attach, written by its page
+CFG_NB      equ CFG_ZPIN + DRV_PBLOB_SZ ; (SPEC.md 31.16, 9.16.4, 138.1)
 %if DRV_PBLOB_SZ != 1
   %error "driver: ctrl.inc's cp_ppin finds the sound row's pin ONE byte under the Ethernet row's"
 %endif
@@ -1040,7 +1064,9 @@ DRV_CFG_MAPN equ 8
                                 ; 'DK' precedent, word for word)
     dw 'KL'                     ; Keyboard Layout: explicit map or BIOS default
     db 1, 1, CFG_KL
-CFG_NKEY    equ 16              ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
+    dw 'ZP'                     ; Zip Port - the Zip drive's port pin (SPEC.md
+    db 1, DRV_PBLOB_SZ, CFG_ZPIN    ; 138.5), 'SP'/'EP''s shape (51.9.2)
+CFG_NKEY    equ 17              ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
                                 ; went into 'VM' (CFG_VGCB)
 %else
     dw 'TP'                     ; same key, same reason, on kern_small too -
@@ -1117,6 +1143,9 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
     db 12                       ; PC1MOUSE.DRV (SPEC.md 9.15), after the fixed
                                  ; PCIETHER setting; bit 12 stays stable when
                                  ; optional VESA/PCI rows are absent
+    db 14                       ; ZIP.DRV (SPEC.md 138.1): bit 13 is held for
+                                ; JOYSTICK.DRV (PR #410), so the Zip drive is
+                                ; 14 whichever of the two lands first
 %if ($ - %1 %+ _bit) != DRV_MAX
   %error "drv_cfgbit has drifted from drv_tab: one byte per row, same order"
 %endif
@@ -1171,6 +1200,12 @@ drv_blob_map:
     dw drv_cfg + CFG_RBLOB      ; row 3: the RAM disk
 DRV_BLOBE   equ 3               ; bytes per row above: size, then offset
 DRV_NBLOB   equ ($ - drv_blob_map) / DRV_BLOBE
+    db DRV_PBLOB_SZ             ; ...and ONE MORE, NOT IN ROW ORDER: the LAST
+    dw drv_cfg + CFG_ZPIN       ; row's, ZIP.DRV's port (SPEC.md 138.5).
+                                ; drv_blob_of renumbers that row to
+                                ; DRV_NBLOB, this entry's index - two
+                                ; instructions, where filler entries for the
+                                ; rows between would be three bytes a row
 %ifndef KERN_BIG
   %error "driver: drv_blob_map's four rows are kern_big's table"
 %endif
@@ -1229,6 +1264,7 @@ drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
                                 ; is OS88_DRIVERS already, and a 128KB machine
                                 ; with a CH375 has no disk that carries the file
 drv_f_pc1:   db 'PC1MOUSE.DRV', 0 ; SPEC.md 9.15's Olivetti Prodest PC1 mouse
+drv_f_zip:   db 'ZIP.DRV', 0     ; SPEC.md 138's parallel-port Zip drive
 %endif
 %ifdef DRV_PCIETH
 drv_f_pcieth: db 'PCI'          ; SPEC.md 125's PCI NICs: the big builds'.
@@ -1264,6 +1300,7 @@ drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
 %1_http:    db 'HTTP Drive', 0
 %1_usbm:    db 'USB Mouse', 0
 %1_pc1:     db 'PC1 Mouse', 0
+%1_zip:     db 'Zip Drive', 0
 %ifdef DRV_PCIETH
 %1_pcieth:  db 'PCI '           ; 'PCI Ethernet': its tail IS the next title,
 %endif                          ; nine bytes of both copies (SPEC.md 125.5)
@@ -1284,6 +1321,7 @@ DRVT_CD     equ drvt_cd - drvt_base
 DRVT_HTTP   equ drvt_http - drvt_base
 DRVT_USBM   equ drvt_usbm - drvt_base
 DRVT_PC1    equ drvt_pc1 - drvt_base
+DRVT_ZIP    equ drvt_zip - drvt_base
 DRVT_ETH    equ drvt_eth - drvt_base
 %ifdef DRV_PCIETH
 DRVT_PCIETH equ drvt_pcieth - drvt_base
@@ -1341,6 +1379,10 @@ drv_fptr9:   dw PKG_DISP        ; class 9 (DRVC_CD, SPEC.md 119.1)
 drv_fseg9:   dw 0
 drv_fptr10:  dw PKG_DISP        ; class 10 (DRVC_HTTP, SPEC.md 122.1)
 drv_fseg10:  dw 0
+drv_fptr11:  dw PKG_DISP        ; class 11 (DRVC_JOY's, held for the joystick
+drv_fseg11:  dw 0               ; PR #410): never published until it lands
+drv_fptr12:  dw PKG_DISP        ; class 12 (DRVC_ZIP, SPEC.md 138.1)
+drv_fseg12:  dw 0
 
 %endif
 
@@ -1609,13 +1651,27 @@ vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
     db 0
 %endif
 pc1_row:                         ; PC1MOUSE.DRV is a pointing-device alternative
-    dw PKG_DISP, 0              ; final row: Olivetti PC1 mouse (SPEC.md 9.15)
+    dw PKG_DISP, 0              ; Olivetti PC1 mouse (SPEC.md 9.15), last until 138
     dw drv_f_pc1, DRVT_PC1
     dw 0, 0
     db DRVC_POINT               ; alternative to USBMOUSE.DRV; one publisher
     db 0                        ; wanted only when selected by the user
     db DRVE_OK
     db 0
+zip_row:                        ; ...and after it, LAST on every big build:
+    dw PKG_DISP, 0              ; ZIP.DRV, an Iomega Zip drive on a printer
+    dw drv_f_zip, DRVT_ZIP      ; port (SPEC.md 138.1), SYSTEM.CFG bit 14.
+    dw 0, 0                     ; LAST IS LOAD-BEARING: drv_blob_of finds its
+    db DRVC_ZIP                 ; 'ZP' pin as row DRV_MAX - 1
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): attach
+                                ; writes the connect sequence to a printer
+                                ; port, and a printer on that port may print
+                                ; a few characters of it
+    db DRVE_OK
+    db 0
+%if zip_row - drv_tab != (DRV_MAX - 1) * DRVR_SIZE || DRV_MAX - 1 <= DRV_NBLOB
+  %error "driver: ZIP.DRV's row must be drv_tab's last (drv_blob_of's ZP pin)"
+%endif
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1690,6 +1746,8 @@ DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 512)
 DRVM_IMG_USBM equ 3             ; ceil(build/usbmouse.drv / 512)
 DRVM_IMG_PC1 equ 1              ; ceil(build/pc1mouse.drv / 512)
+DRVM_IMG_ZIP equ 13             ; ceil(build/zip.drv / 512): SPEC.md 138.9's
+                                ; 6,656-byte budget, bss included
 DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 17              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
@@ -1772,6 +1830,10 @@ DRVM_USBM    equ DRVM_IMG_USBM  ; the USB mouse claims nothing: its one
                                 ; the kernel's, not a claim
 DRVM_PC1     equ DRVM_IMG_PC1   ; PC1 counters and buttons are in its image;
                                  ; its worker uses SCH_DRV_STK
+DRVM_ZIP     equ DRVM_IMG_ZIP   ; ZIP.DRV claims nothing: a transfer goes
+                                ; straight into the caller's buffer (DX:BX,
+                                ; BLKCAP_SEL) and its CDB, sense and medium
+                                ; state are bss (SPEC.md 138.3, 138.9)
 DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
                                 ; buffers are bss, and a driver's bss ships
                                 ; INSIDE its image (DRV_H_IMG)
@@ -1802,6 +1864,7 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_PCIETH              ; ...and PCIETHER.DRV (SPEC.md 125)
 %endif
     dw DRVM_PC1                 ; PC1MOUSE.DRV follows the optional rows
+    dw DRVM_ZIP                 ; ...and ZIP.DRV, last (SPEC.md 138.1)
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -2006,30 +2069,33 @@ drv_cls_idx:
 ; row is not loaded, and the test skips those rows.
 ; -----------------------------------------------------------------------------
 ; drv_pub_seg - is BX the segment of a driver whose services are PUBLISHED?
-; in:  BX = a segment
-; out: CF = 0 yes (some class's publication slot names it), CF = 1 no
-; clobbers: nothing else (flags)
+; in:  BX = a segment, NOT 0 (every caller has refused 0 already)
+; out: CF = 0 yes, AL = the class whose publication slot names it; CF = 1 no
+; clobbers: AL (the output), flags
 ;
 ; drv_owns_seg's stricter sibling, and the spawn fence (SPEC.md 51.7): loaded
 ; is not enough, because drv_publish arms a slot only after DRVV_ATTACH
 ; returns and a worker spawned from inside attach would outlive a refusal.
+;
+; AND osapi_vol_fence's walk, which was this one written out again with the
+; class kept (SPEC.md 18.7.3): ONE walk now, answering the class, for SPEC.md
+; 138.1's bytes. No `jc` after drv_cls_fp_x - AL never leaves 1..DRVC_MAX -
+; and no zero test on the slot, because BX is never 0 and an unpublished
+; slot's segment is
 drv_pub_seg:
-    call kentc_di
+    push di
     mov al, 1
 .scan:
-    call drv_cls_fp_x           ; (AX survives it)
-    jc .next
-    mov cx, [di+2]
-    jcxz .next                  ; (kernel size pass 17, -2: `or cx, cx / jz`)
-    cmp cx, bx
+    call drv_cls_fp_x           ; CLSCF: AL is 1..DRVC_MAX, every class has an fptr
+    cmp bx, [di+2]              ; (AX survives the call)
     je .out                     ; ...equal, so CF = 0 already: the answer
-.next:
-    inc al
+    inc ax                      ; (AL <= DRVC_MAX: no carry reaches AH)
     cmp al, DRVC_MAX
     jbe .scan
     stc
 .out:
-    jmp kretc_di
+    pop di
+    ret
 
 drv_owns_seg_x:
     push ax
@@ -3231,9 +3297,14 @@ drv_blob_of:
     call drv_row_ix_of          ; AL = the row
     jc .out
     cmp al, DRV_NBLOB           ; ...one of the rows that own a blob, which
-    cmc                         ; are the first DRV_NBLOB (drv_blob_map):
-    jc .out                     ; CF = 1 AT or past the count
-    cbw                         ; (AL < DRV_NBLOB, so AH = 0)
+    jb .idx                     ; are the first DRV_NBLOB (drv_blob_map)...
+    cmp al, DRV_MAX - 1         ; ...or THE ZIP DRIVE'S, the last row on every
+    jne .out                    ; build (SPEC.md 138.1), whose entry follows
+    mov al, DRV_NBLOB           ; theirs. Any other row is below DRV_MAX - 1,
+.idx:                           ; so the `jne` leaves with that compare's
+                                ; borrow, CF = 1: no blob. (CF on the way to
+                                ; .idx is not the answer: `xor dh, dh` is)
+    cbw                         ; (AL <= DRV_NBLOB, so AH = 0)
     mov di, ax
     add di, di
     add di, ax                  ; DI = the row * DRV_BLOBE
@@ -4544,7 +4615,9 @@ drv_task_x:
     jz .fail
     or ax, ax
     jz .exit
+    push ax                     ; (the entry: drv_pub_seg answers in AL)
     call drv_pub_seg            ; spawn: only a PUBLISHED driver, and only its
+    pop ax                      ; (pop writes no flag)
     jc .fail                    ; own segment, may ask - published and not
                                 ; merely loaded, because drv_publish arms the
                                 ; fence after attach returns and a worker
