@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "3dcf874468ef1209c0e6d83a98be6c89350a4cb6a178fad569d18dbc3e380969",
+  "fingerprint": "2cb1cbd348d3b371d6aad2ea6dea4aa0e62b2d170f3b56e9efc2813f6d16ca7a",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -2518,6 +2518,13 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "JOYSTICK, owner decision D3: no joystick on kern_emu, so its DRV_MAX stays 13 and DQ_MAXREC goes back to 13 in the kernel and both SDKs (drivers/os88drv.inc is byte-identical to before J1). No cell moved; no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "2cb1cbd348d3b371d6aad2ea6dea4aa0e62b2d170f3b56e9efc2813f6d16ca7a",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "J2 merged onto J1 (SPEC 31.9.4): DSV_CPTICK appended past DSV_FLOOR, length-tested against +15 (DSV_MAX 38 accepted by OS88_DRV_END), and OS88_DRV_CPWIDE = bit 14 of +10, reserved until now; every driver and package built before runs unchanged, so no bump",
    "to": 14
   }
  ]

@@ -216,3 +216,50 @@ the door adds a ~700 us task switch to one read in a few, so the row takes
 the least of three. The `joycal` and `joystick` rows were broken on purpose
 (the `neg al` of the left/up half of `joy_calpos` poked to nops, the
 `--break` flag of each): 456 of 1,190 points and nine assertions went red.
+
+## 2026-11-24 - J2: live and wide driver pages (SPEC.md 31.9.4, 135.3.1)
+
+Built: every driver page call now carries the pane - paint and tick get
+CX/BX = its width and height, every call SI = the panel's window, and a key
+gets DI/DX too. `DSV_CPTICK` is the first service cell past `DSV_FLOOR`,
+length-tested against the header's +15 (a driver declares a `DSV_MAX` = 38
+table), and `OS88_DRV_CPWIDE` (bit 14 of +10) has the wide face host the page
+over its whole page area. Everything but the gate is in `CTRL.DRV` and
+`CPWIDE.DRV`; kern_small is byte-identical.
+
+Discoveries:
+
+- **kern_emu's kernel rung had 16 bytes left**, where kern_big's had 262. The
+  first gate - every second tick, while `[cp_tickp]` names a driver record -
+  was 14 bytes and crossed kern_emu's rung. So the resident part is only "go
+  on while `[cp_tickp]` is a driver record" (7 bytes, +8 `.text` after
+  alignment), and `CTRL.DRV`'s `cp_tick_x` drops the odd ticks itself. The
+  price is an odd tick that takes the lock and draws nothing. Told the lead,
+  whose answer (D3) was to keep JOYSTICK.DRV off kern_emu.
+- **The wide face did not need to learn where a wide page is.** `cp_origin`
+  is already the one place that knows the face; answering the page area's
+  origin there for a wide page made the paint, press, release, drag, key and
+  tick all land right with no code of their own. The ground was the only
+  real change: `cpw_page` now paints the page first and lays the hosted
+  ground only when `CPG_HPAINT` says the page was not wide.
+- **The live view is clipped, not refused.** The Date/Time clock refuses to
+  draw when anything overlaps the panel (`wm_obscured`); a live test view
+  should keep moving, so the tick arms the panel's clip (`wm_clip_set`)
+  instead.
+
+Measured: kern_big text +8 (rung 262 -> 254 left), kern_emu +8 (16 -> 8),
+kern_mega +8 (image rung 210 -> 202); `CTRL.DRV` 16,735 -> 17,002 (kern_mega
+16,974 -> 17,241, 167 under `MOD_MAX_KB`); `CPWIDE.DRV` +9.
+
+Tested (QEMU, VGA, wide face), with a throwaway driver that was never
+committed - it took `CDROM.DRV`'s place on a scratch copy of the system disk,
+said `OS88_DRV_CPWIDE`, and drew its size and a tick counter: the page was
+painted with 495x330 at the page area's corner and its frame touched the
+list rule, the header and the status rule exactly; the counter advanced about
+9 times a second; with Task Manager dragged over it the counter was clipped
+and the other window untouched. The RAM disk page (hosted) looked as before,
+its `+` acted, a typed size reached the field, and the Date/Time clock still
+ticked once a second after leaving the live page.
+On the compact face (`VIDEO=cga`, 1bpp) the same driver - its wide bit
+ignored there - was painted with 222x132 and ticked about 9 times a second,
+and the RAM disk page looked as before.
