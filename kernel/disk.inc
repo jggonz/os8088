@@ -3760,6 +3760,38 @@ dsk_vol_del:
     mov [bx+DV_LBL], ah
     call desk_reflow              ; ...and its cell goes back: the zones after
                                   ; it pack up into it (SPEC.md 26.9)
+%ifndef KERN_EMU                ; (held byte-identical, SPEC.md 22.29)
+    ; ...AND SO DOES EVERY DISK WINDOW ON IT, on the next UI pass (SPEC.md
+    ; 22.29). Left up, it went on painting the dropped disk's cache, and a
+    ; volume added back at this index (ZIP.DRV's Eject) was fronted by
+    ; fm_choose as "already showing" the letter - the FIRST disk's files.
+    ; Only a POST: wm_close_req (.text, through the rare door on the index
+    ; it already has as OSAPI_WM_CLOSE) sets the window's bit in [wm_clreq]
+    ; and ui_task's .chk_close spends it on its own stack - so a page
+    ; click's held lock, or a drv_release inside app_close_win, is no
+    ; matter. The chooser is a KIND_FILES instance too, and fdlg_reap ends
+    ; it as a Cancel (SPEC.md 38.1.1); Unmount Image's own window was
+    ; parked at FS_DRV = 0xFF by clo_unmntw, which no volume is. The
+    ; give-back arm above keeps its volume and its windows. WRITTEN HERE,
+    ; its one caller's, and not called: 26 bytes is an EVEN shift for
+    ; dsk_next_clus_x below (tests/unit/t_hotpar.py), where a routine in
+    ; files.inc and a 3-byte call to it moved it by an odd one. BX is
+    ; banked above and nothing below reads it before its own store
+    push si
+    call fmv_ifirst
+    jc .wdone
+.wscan:
+    mov bx, [si+I_SPTR]
+    cmp al, [bx+FS_DRV]
+    jne .wnext
+    mov bx, [si+I_WIN]
+    KDOOR wm_close_req          ; keeps every register
+.wnext:
+    call fmv_inext
+    jnc .wscan
+.wdone:
+    pop si
+%endif
     call dsk_fatw_drop          ; AL is still the index; it also puts the
                                 ; live window back if this volume owned it
 %ifdef OS88_IMG
