@@ -69,7 +69,13 @@ NINETEEN ASSERTIONS.
    nothing on the host can make it: the decoder that matters is the 8086's.
 
 10. AN ARCHIVE, RUN FROM RAM (SPEC.md 92.14). Load Program on the same
-   record. `RDPV_MOUNT` puts a store up, the instance stands on its root, the
+   record - or, with `--xms` (the `thewirexms` row), on BIGTREE, assertion
+   13's version 2 record, whose 150,000-byte `DATA/HUGE.BIN` is past the
+   65,024 a RAM disk file once stopped at (62.9.10). That machine boots
+   `thewirexms.img`, whose SYSTEM.CFG puts the RAM disk in XMS, the one place
+   a version 2 tree may go (92.13.1); the big entry lands on the store as a
+   write and appends, and a refused append ends the chain in `WS_FAIL`.
+   `RDPV_MOUNT` puts a store up, the instance stands on its root, the
    tree lands there and the last entry - the file this chain has just written
    - is handed to `OSAPI_PKG_START` BY NAME (92.14.2). Asserted: a THIRD live
    volume appears in `dsk_vtab` and it is `DVK_FILE` - RAMDISK.DRV serves
@@ -106,10 +112,12 @@ NINETEEN ASSERTIONS.
 13. A VERSION 2 ARCHIVE, ADDED TO DISK (SPEC.md 92.13.1). The fifth record
    is a `.WPK` whose `DATA/HUGE.BIN` is 150,000 bytes - past `WIRE_FILEMAX`,
    so the writer stores it and makes the archive version 2, and the record
-   carries `WF_DISK`. Load Program is greyed and Add to Disk is not; the
-   chain writes the big file as a piece through the claim and two pieces
-   appended onto it, then goes on to `ZZ/AFTER.TXT`; and after `quit` all
-   three files under `BIG/` are compared byte for byte on the host.
+   carries `WF_DISK`. On this 360KB machine, with no XMS, Load Program is
+   greyed and clicking it says `Needs an XMS RAM disk - use Add to Disk`
+   (`--xms` ran it from RAM at assertion 10 instead); Add to Disk is not
+   greyed, and the chain writes the big file as a piece through the claim and two pieces
+   appended onto it, then goes on to `ZZ/AFTER.TXT` and `MSEG.O88`; and after
+   `quit` all four files under `BIG/` are compared byte for byte on the host.
    B: has 2KB clusters, a hard disk's and not a floppy's (Makefile,
    `thewiredata.img`), so the pieces are 63,488 bytes - the claim rounded
    down to a cluster - and not the claim's 64,512: an append is refused
@@ -186,6 +194,7 @@ S = os88sym.linear
 SOCK = os88qemu.SOCK
 PORT = 8092
 SYSIMG = "build/thewire360.img"
+XMS = False                             # --xms: thewirexms.img, RAM disk in XMS
 # ...and the scratch B: is THIS RUN'S COPY of the built blank disk, booted in
 # place and read back on the host after (docs/plans/SOAK-PARALLEL.md 17)
 DATIMG = os.path.join(os88qemu.RUNDIR, "thewiredata.img")
@@ -270,6 +279,7 @@ ARC_PROG = "MSEG.O88"                   # ...and the entry that carries
 BIG_STEM = "BIGTREE"                    # the version 2 archive (92.13.1)
 BIG_HOME = "BIG"
 BIG_ROW = 4
+RUN_ROW, RUN_STEM = ARC_ROW, ARC_STEM    # what assertion 10 runs from RAM
 BIG_SIZE = 150000                       # three pieces through a 63KB claim:
                                         # a write and two appends
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
@@ -394,6 +404,8 @@ def fixture_big(root):
                      proof that the stream picks up at the next entry header
                      once the pieces are done, and that the folder walk still
                      works after a write that never moved
+      MSEG.O88       the program, last (WAH_PROGRAM): step 10 runs it from
+                     the RAM disk this tree lands on
     """
     want = {}
 
@@ -412,6 +424,11 @@ def fixture_big(root):
         buf.append((x >> 16) & 0xFF)
     put("DATA/HUGE.BIN", bytes(buf))
     put("ZZ/AFTER.TXT", b"after the pieces\r\n" * 50)
+    # ...and a PROGRAM last, so Load Program has something to run from RAM:
+    # with --xms step 10 loads THIS archive, whose HUGE.BIN is past the old
+    # RD_FILEMAX - the proof that a version 2 tree goes to an XMS RAM disk
+    # (SPEC.md 92.13.1, 62.9.10)
+    put(ARC_PROG, open(os88build.at("build/mseg.o88"), "rb").read())
     return want
 
 
@@ -914,7 +931,15 @@ def main():
                     help="leave QEMU running for a look afterwards")
     ap.add_argument("--shots", metavar="DIR", default=None,
                     help="write a screenshot per step into DIR")
+    ap.add_argument("--xms", action="store_true",
+                    help="boot build/thewirexms.img, whose RAM disk is in "
+                         "XMS, and run the version 2 archive from it at "
+                         "assertion 10 (SPEC.md 92.13.1)")
     a = ap.parse_args()
+    global SYSIMG, XMS, RUN_ROW, RUN_STEM
+    if a.xms:
+        SYSIMG, XMS = "build/thewirexms.img", True
+        RUN_ROW, RUN_STEM = BIG_ROW, BIG_STEM
     fails = []
 
     def no(msg):
@@ -968,7 +993,7 @@ def main():
     os.makedirs(bsrc, exist_ok=True)
     bigtree = fixture_big(bsrc)
     try:
-        bwpk = os88wire.archive(bsrc, home=BIG_HOME)
+        bwpk = os88wire.archive(bsrc, home=BIG_HOME, program=ARC_PROG)
     except os88wire.Refused as e:
         sys.exit("thewire: the version 2 fixture will not pack: %s" % e)
     if bwpk[os88wire.WA_VER] != os88wire.WARC_VER2:
@@ -1569,20 +1594,34 @@ def main():
                % w("wr_msg"))
 
         # --- 13: A VERSION 2 ARCHIVE, ADDED TO DISK (SPEC.md 92.13.1) -------
-        # Load Program greyed (WF_DISK: no RAM disk store holds a file past
-        # RD_FILEMAX) and Add to Disk not; then the chain, whose big entry is
-        # three pieces - an OSAPI_FILE_WRITE and two OSAPI_FILE_APPENDs. The
-        # bytes are compared at the bottom of this file.
+        # Without --xms: Load Program greyed (WF_DISK, and this machine's RAM
+        # disk is not in XMS), and clicking it says so. With --xms step 10 ran
+        # this archive from RAM and its store is full of it, so Load is not
+        # asked about. Add to Disk not greyed either way; then the chain,
+        # whose big entry is three pieces - an OSAPI_FILE_WRITE and two
+        # OSAPI_FILE_APPENDs. The bytes are compared at the bottom of this
+        # file.
         pick(BIG_ROW)
         grey = b("wr_grey")[0]
         say("version 2 row: wr_sel = %d, wr_grey = %d" % (w("wr_sel"), grey))
         if w("wr_sel") != BIG_ROW:
             no("wr_sel is %d after clicking the version 2 archive's row"
                % w("wr_sel"))
-        if not grey & 1:
-            no("Load Program is NOT greyed on a version 2 archive: the record "
-               "carries WF_DISK and the predicate must test it before the RAM "
-               "disk decision (SPEC.md 92.7, 92.13.1) - wr_grey = %d" % grey)
+        if not XMS:
+            if not grey & 1:
+                no("Load Program is NOT greyed on a version 2 archive on a "
+                   "machine with no XMS RAM disk: the record carries WF_DISK "
+                   "and wr_ramck must require RDL_XMS for it (SPEC.md "
+                   "92.13.1) - wr_grey = %d" % grey)
+            press("wr_ra")                        # the greyed Load Program:
+            os88qemu.ui_done(m, S, cap=1.0)       # its reason, in the cell
+            shot("13-xmsreason")
+            why = m.readseg(wseg(), w("wr_msg"), 40).split(b"\0")[0]
+            say("Load Program on the version 2 archive says %r" % why)
+            if why != b"Needs an XMS RAM disk - use Add to Disk":
+                no("Load Program on the version 2 archive says %r, and with "
+                   "no XMS RAM disk it must name that (wrtxt.inc's "
+                   "wr_r_rdxms, SPEC.md 92.13.1)" % why)
         if grey & 2:
             no("Add to Disk is greyed on the version 2 archive, and Add to "
                "Disk is its only path (wr_grey = %d)" % grey)
@@ -1646,7 +1685,12 @@ def main():
         # --- 10: AN ARCHIVE, RUN FROM RAM (SPEC.md 92.14) -------------------
         vols0 = live_vols(m)
         say("live volumes before Load Program: %r" % (vols0,))
-        pick(ARC_ROW)
+        # --xms: THE VERSION 2 ARCHIVE (SPEC.md 92.13.1). Its 150,000-byte
+        # HUGE.BIN is past the RD_FILEMAX a RAM disk file once stopped at, and
+        # this machine's RAM disk is in XMS, so Load Program is open, the big
+        # entry lands on the store as a write and appends, and MSEG runs from
+        # there. Without --xms it is TREEONE, version 1
+        pick(RUN_ROW)
         if b("wr_grey")[0] & 1:
             no("Load Program is greyed on the archive: the predicate refused "
                "the RAM disk (SPEC.md 92.7's three reasons), so either "
@@ -1803,13 +1847,13 @@ def main():
                "no archive transfer started. (The Add chain's own fetch of "
                "/wire/pkg/%s.WPK is why a plain `is it in srv.asked` check "
                "passes here no matter what happens.)"
-               % (nasked0, len(srv.asked) - nasked0, ARC_STEM))
-        elif ("/wire/pkg/%s.WPK" % ARC_STEM
+               % (nasked0, len(srv.asked) - nasked0, RUN_STEM))
+        elif ("/wire/pkg/%s.WPK" % RUN_STEM
               not in b"".join(srv.asked[nasked0:]).decode("latin1",
                                                           "replace")):
             no("the host was asked %d time(s) during Load Program and none "
                "of them was for /wire/pkg/%s.WPK"
-               % (len(srv.asked) - nasked0, ARC_STEM))
+               % (len(srv.asked) - nasked0, RUN_STEM))
         new_vols = [v for v in vols1 if v not in vols0]
         if not new_vols:
             no("no new volume appeared: RDPV_MOUNT never put a store up, so "

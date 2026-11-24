@@ -76,7 +76,16 @@ RDPV_MOUNT   equ 3              ; in  AX = KB wanted, rounded UP to RD_STEPKB
                                 ;     rd_mount's RDERR_*. UI TASK ONLY. Sets
                                 ;     the LIVE size and not the page's setting
                                 ;     (no rd_cfg_mark)
-RDPV_MAX     equ 3              ; ...and anything above this is refused. A
+RDPV_MOUNTC  equ 4              ; in  CX = KB wanted; otherwise RDPV_MOUNT.
+                                ;     For OSAPI_DRV_USE's DRVU_CALL, which
+                                ;     asks AS THE MACHINE and keeps AX for
+                                ;     itself: an XMS store mounted through
+                                ;     the package door was stamped with the
+                                ;     CALLER's instance, so every file verb's
+                                ;     copy (asked as the kernel) was refused
+                                ;     and the caller's close would free it
+                                ;     under the volume (SPEC.md 62.9.16)
+RDPV_MAX     equ 4              ; ...and anything above this is refused. A
                                 ; verb table indexed by an unchecked verb is
                                 ; a wild near call, which is the same hazard
                                 ; FSV_SIZE guards on the other table. It was 1

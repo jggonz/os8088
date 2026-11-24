@@ -5882,6 +5882,19 @@ $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 	@mkdir -p $(BUILD)/wirecfg
 	printf '10.0.2.2:8092/wire/\n' > $@
 
+# THE XMS WIRE MACHINE (SPEC.md 92.13.1): the same two ticks plus an 'RD'
+# record (51.9.1) whose RDC_LOC is RDL_XMS, so the RAM disk the Wire mounts
+# lives above 1MB - the one place a version 2 tree may go. Its own directory
+# for build/vmmcfg's reason above. RDC_VER 1, 64KB (RDPV_MOUNT resizes it),
+# RDL_XMS = 1, no image to restore.
+$(BUILD)/wirexmscfg/SYSTEM.CFG: | $(BUILD)
+	@mkdir -p $(BUILD)/wirexmscfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  ((1 << 4) | (1 << 2)).to_bytes(2,'little') + b'RD' + bytes([1,24]) + \
+	  bytes([1]) + (64).to_bytes(2,'little') + bytes([1]) + bytes(20) + \
+	  b'\0\0')" > $@
+
 # **$(KERNFILE) AND NOT $(BUILD)/kernel.bin.** This branch PACKS the kernel
 # (SPEC.md 2.9.13) and the boot sector expects the packed file; the two
 # names are the IMAGE and the FILE and every rule that puts a kernel on a
@@ -5893,6 +5906,16 @@ $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) 
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
 		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
+
+# ...and its 1.44MB system disk: XMEM.DRV rides $(DRIVERS) here, where the
+# 360KB disk omits it ($(SYS360OMITDRV)), and the kernel loads it on any 286
+# or better - QEMU's default CPU. `thewirexms` (tests/thewire.py --xms) boots
+# it to run a version 2 archive from an XMS RAM disk.
+$(BUILD)/thewirexms.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/wirexmscfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/wirexmscfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
 # THEWIRE.O88 and a second WIRE.CFG, because before the desktop zone existed
@@ -5919,7 +5942,7 @@ $(BUILD)/thewiredata.img: tools/os88disk.py Makefile | $(BUILD)
 # entry, because a package with PARTS is the one thing the image form of
 # OSAPI_PKG_START refuses (SPEC.md 92.14.2, 21.5.1). It goes on no floppy.
 #> [Gate disks] thewiretest :: The Wire's gate disks, pointed at a fixture catalog
-thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewiredata.img $(BUILD)/mseg.o88
+thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewirexms.img $(BUILD)/thewiredata.img $(BUILD)/mseg.o88
 	@echo "thewiretest: build/thewire360.img - ETHER.DRV already wanted, and"
 	@echo "             SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092/wire/."
 	@echo "             build/thewiredata.img is the scratch B: it writes to."

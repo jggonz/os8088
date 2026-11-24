@@ -3328,6 +3328,18 @@ FULL = [
         "files already there",
         needs=("qemu",), serial=True, wants=("build/hello.o88", "build/mines.o88", "build/mseg.o88", "build/thewire360.img", "build/thewiredata.img"),
         locks=("port:8092",)),
+    Row("thewirexms", "soak", py("tests/thewire.py", "--xms"), 60.0,
+        "THE WIRE's version 2 archive RUN FROM AN XMS RAM DISK (SPEC.md "
+        "92.13.1): the thewire row on build/thewirexms.img, a 1.44MB system "
+        "disk carrying XMEM.DRV whose SYSTEM.CFG puts the RAM disk in XMS. "
+        "Assertion 10 loads BIGTREE - a 150,000-byte entry, past the 65,024 a "
+        "RAM disk file once stopped at (62.9.10) - so the store mounts above "
+        "1MB, the big entry lands as a write and two appends, and MSEG runs "
+        "from it by name and reads its seven parts back. The thewire row on "
+        "the 360KB disk, with no XMS, asserts the other arm: Load Program "
+        "greyed with `Needs an XMS RAM disk - use Add to Disk`",
+        needs=("qemu",), serial=True, wants=("build/hello.o88", "build/mines.o88", "build/mseg.o88", "build/thewirexms.img", "build/thewiredata.img"),
+        locks=("port:8092",)),
     Row("stk0water", "soak", py("tests/stk0water.py"), 20.0,
         "how deep TASK 0's stack has actually been (SPEC.md 15.1). That "
         "section says `redo the fill probe before lowering either` and the "

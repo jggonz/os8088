@@ -861,6 +861,9 @@ wr_ramck:
     call wr_selrec
     mov ax, [es:si+WC_NEEDKB]
     mov [wr_needkb], ax
+    mov al, [es:si+WC_FLAGS]        ; WF_DISK on an ARCHIVE (the only records
+    and al, WF_DISK                 ; asked about here) is a version 2 tree,
+    mov [wr_rdbig], al              ; whose big file wants XMS (92.13.1)
     mov bx, (RD_CLASS << 8) | RDPV_IDENT
     call OSAPI_DRV_CALL
     jc .nodrv
@@ -869,6 +872,13 @@ wr_ramck:
     mov bx, (RD_CLASS << 8) | RDPV_STATE
     call OSAPI_DRV_CALL
     jc .nodrv                       ; an OLDER driver, whose RDPV_MAX is 1
+    cmp byte [wr_rdbig], 0          ; --- A VERSION 2 TREE NEEDS AN XMS STORE
+    je .loc                         ; (92.13.1): its big file in a store in
+    cmp ah, RDL_XMS                 ; conventional memory is heap its own
+    je .loc                         ; program then cannot start in. AH is the
+    mov si, wr_r_rdxms              ; location setting - the mounted store's
+    jmp short .no                   ; when there is one
+.loc:
     cmp al, 0xFF
     je .none
     mov bl, al                      ; --- A STORE IS MOUNTED and is REUSED:
@@ -901,12 +911,20 @@ wr_ramck:
     mov bl, 0xFF                    ; the PREDICATE only asked, and mounting
     jmp short .yes                  ; from a painter would put a volume on the
 .doit:                              ; desktop every time the window redrew
-    mov bx, (RD_CLASS << 8) | RDPV_MOUNT
-    call OSAPI_DRV_CALL             ; AX = the KB, rounded already
-    jc .short                       ; it refused after answering that it could:
-                                    ; say the size, which is still the thing a
-                                    ; person can act on
-    mov bl, al
+    mov cx, ax                      ; CX = the KB, rounded already, and
+    mov bx, (RD_CLASS << 8) | RDPV_MOUNTC   ; ASKED AS THE MACHINE: through
+    mov ah, DRVU_CALL               ; the package door the store's XMS block
+    call OSAPI_DRV_USE              ; was stamped with OUR instance, so every
+                                    ; file verb's copy (the kernel's) was
+                                    ; refused - `Could not write` on the
+                                    ; first big entry - and our close would
+                                    ; have freed it under the volume
+                                    ; (SPEC.md 62.9.16). AL = the index
+    xchg ax, cx                     ; AX = the KB again for the figure, CX =
+    jc .short                       ; the answer (xchg leaves CF): it refused
+                                    ; after answering that it could - say the
+                                    ; size, the thing a person can act on
+    mov bl, cl
 .yes:
     clc
     jmp short .out
