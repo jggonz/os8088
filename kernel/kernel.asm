@@ -1050,6 +1050,18 @@ ksg_%1_%2:
   %define OS88_IMG 1
 %endif
 
+; ...and SPEC.md 138's ZIP DRIVE - the class DRVC_ZIP, its drv_tab row, its
+; port pin and the two disk-layer arms (06h shuts the mount gate on the driver
+; arm; a Zip volume is removable). kern_big and kern_mega. NOT kern_emu, by
+; the owner's decision (SPEC.md 138.1): no emulator it targets has a
+; parallel-port Zip, and its rung had 16 bytes left - so kern_emu assembles
+; byte for byte as it did before. kern_small has no driver layer at all.
+%ifdef KERN_BIG
+  %ifndef KERN_EMU
+    %define OS88_ZIP 1
+  %endif
+%endif
+
 ; ...and SPEC.md 37.90's RTC LADDER, for a reason that is about the HARDWARE
 ; and not about the bytes (SPEC.md 37.0.1). All four rungs are chips a 128KB
 ; machine cannot have:

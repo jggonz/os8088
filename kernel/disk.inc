@@ -1732,6 +1732,18 @@ dsk_xfer:
     jnc .success
 %endif
     mov [dsk_ioerr], al         ; the driver reports int 13h's status byte,
+%ifdef OS88_ZIP
+    cmp al, 0x06                ; ...and MEDIA CHANGED shuts the mount gate
+    jne .jfail                  ; exactly as BR-16 does on the BIOS arm
+    shr byte [dsk_mntok], 1     ; (SPEC.md 18.9.1, 138.1): ZIP.DRV answers it
+                                ; for a SCSI UNIT ATTENTION - a Zip disk was
+                                ; swapped - and without this the next
+                                ; operation wrote the new disk with the old
+                                ; one's FAT. Unretried, like every driver
+                                ; failure: the next operation remounts. Eight
+                                ; bytes, EVEN, so the routines behind keep
+                                ; their measured parity (t_hotpar)
+%endif
 %endif                          ; (.jbadvol falls into .jfail on kern_small)
 .jfail:                         ; ...AND the two range refusals in .sector, at
     jmp .fail                   ; two bytes each rather than the five NASM
@@ -3363,7 +3375,21 @@ dsk_vol_fixed_x:
                                 ; BUILD instead of the published ABI
     mov al, 1                   ; a driver volume is fixed by construction
 %ifdef OS88_IMG
-    call dsk_vol_rmv            ; ...BUT A MOUNTED IMAGE IS ITS HOST'S MEDIUM
+%ifdef OS88_ZIP
+    cmp byte [bx+DV_CLASS], DRVC_ZIP    ; ...BUT A ZIP DISK COMES OUT (SPEC.md
+    stc                         ; 138.1): CF = 1 is dsk_vol_rmv's "removable",
+    je .rmv                     ; asked of the row's CLASS and not of
+                                ; dsk_vol_rmv, whose other two callers would
+                                ; then re-validate the medium at every
+                                ; mount and every quiet hop. The drive says
+                                ; when its disk changed - UNIT ATTENTION, 06h
+                                ; on dsk_xfer's driver arm - and that is the
+                                ; whole of the Zip's media test. A live row
+                                ; carries DRVC_ZIP only if dsk_vol_add stamped
+                                ; it, and a row given back to the BIOS has 0
+%endif
+    call dsk_vol_rmv            ; ...AND A MOUNTED IMAGE IS ITS HOST'S MEDIUM
+.rmv:
     sbb al, 0                   ; (SPEC.md 18.101.7), so one on a floppy is
                                 ; removable and a WSEQF_KEEP hold on it ends
                                 ; with its callback. The %else arm's test,
@@ -3400,6 +3426,11 @@ dsk_vol_fixed_x:
     stc
     pop bx
     ret
+%ifdef OS88_ZIP
+    nop                         ; PARITY, never executed: the Zip test above is
+%endif                          ; 7 bytes, and dsk_vol_rmv, dsk_next_clus_x
+                                ; and the rest behind keep their measured
+                                ; parity (t_hotpar, SPEC.md 138.1)
 
 %ifdef OS88_IMG
 ; -----------------------------------------------------------------------------
@@ -3634,7 +3665,9 @@ dsk_vol_add:
     ja .kindpub                 ; mounted image has SECTORS, and an open
                                 ; `jae` made every one a sectorless DVK_FILE
                                 ; row whose proof-mount said 'Not a disk
-                                ; image' - SPEC.md 18.101)
+                                ; image' - SPEC.md 18.101. So is DRVC_ZIP,
+                                ; 12, the second BLOCK class: its volume is
+                                ; DVK_DRV like DRVC_DISK's, SPEC.md 138.1)
     cmp al, DRVC_FILE2          ; (every file class - SPEC.md 62.9.19, and
     jae .kindfile               ; DRVC_CD and DRVC_HTTP past it, 119.1, 122.1)
     cmp al, DRVC_FILE           ; DRVC_FILE driver answers questions about
