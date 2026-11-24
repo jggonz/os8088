@@ -466,7 +466,7 @@ static int a2_btn2_want;
  * THE SCALE IS 2816/255 = ~11.04 EMULATED CYCLES PER UNIT (Joystick.cpp:677,
  * :703-705), not exactly 11: MII's `value * 11` (mii_analog.c:69-77) is an
  * approximation and is named as one here rather than copied as a fact. This
- * port's paddles answer CENTRE (section 10.3), so the deadline is a constant:
+ * port's paddles answer CENTRE unless a stick says otherwise (section 6.7):
  * 127 * 2816 / 255 = 1,402 cycles, computed once here rather than every arm.
  *
  * THE CLOCK IS a2_now(), WHICH IS EXACT INSIDE A RUN, and that is the whole
@@ -475,6 +475,12 @@ static int a2_btn2_want;
  * a2cpu.inc computes it as A2_SCR_CLKB - A2_SCR_DEAD. */
 #define A2_PDL_CENTRE  127
 #define A2_PDL_CYCLES  1402                 /* 127 * 2816 / 255 */
+/* THE VALUE IS THE STICK'S NOW (6.7): a2_pdl_val[n] is paddle n's position
+ * 0..255, written once a wake by a2_kbd_poll from JOYSTICK.DRV and CENTRE
+ * until a stick answers - so with no driver the deadline is 1,402 cycles
+ * exactly as before. The deadline is `value * 2816 / 255`, done as
+ * value*11 + value/23 (11.043 a unit) because 255 * 2816 overflows an int. */
+static unsigned char a2_pdl_val[4] = { 127, 127, 127, 127 };
 static int a2_pdl_on[4];
 static int a2_pdl_end[4];
 
@@ -488,7 +494,7 @@ static void a2_pdl_trigger(void)
             continue;                       /* still running: the strobe has
                                              * NO EFFECT (GH#985) */
         a2_pdl_on[i] = 1;
-        a2_pdl_end[i] = now + A2_PDL_CYCLES;
+        a2_pdl_end[i] = now + (int)a2_pdl_val[i] * 11 + (int)a2_pdl_val[i] / 23;
     }
 }
 

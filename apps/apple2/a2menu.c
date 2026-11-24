@@ -278,7 +278,14 @@ static const char *a2_mach_items[] = {
                                              * shortening has stopped being
                                              * true. Disk II is still a
                                              * follow-up PR */
-    D "Joystick...",                        /* m_machine_menu, and it is
+    D "Joystick...",                        /* STILL GREYED (APPLE2-SPEC 10.3,
+                                             * 6.7): the setup is JOYSTICK.DRV's
+                                             * Control Panel page, so there is
+                                             * no dialog here. THE SENTENCE
+                                             * BELOW IS RETIRED - the paddles
+                                             * no longer answer centre when a
+                                             * stick is attached - and is kept
+                                             * only as history. m_machine_menu, and it is
                                              * `.disabled = 1` in MII's OWN
                                              * table - the authentic grey.
                                              * THE FACT, WHOLE AGAIN NOW THAT

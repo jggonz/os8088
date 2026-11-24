@@ -178,6 +178,15 @@ unsigned os88_ticks(void);
  * os88_main). Advice, not an oracle. The harness models both. */
 int  os88_key_down(int scan);
 
+/* the joystick (SPEC.md 137.4), mirrored from apps/cc/os88.h */
+struct os88_joystate {
+    char x1, y1, x2, y2;
+    unsigned raw[4];
+    unsigned char btn, press, dira, dirb, hat, thr, rud, axes;
+};
+int os88_joy_find(void);
+int os88_joy_state(struct os88_joystate *rec);
+
 /* SPEC.md 11.2.1.1's full-screen chord, mirrored from apps/cc/os88.h */
 #define OS88_SCAN_ENTER 0x1C
 #define OS88_SCAN_ALT   0x38
