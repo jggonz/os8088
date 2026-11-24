@@ -1307,6 +1307,7 @@ this tree), `glabios_pc`/`glabios_xt` are bundled with MartyPC.
 | `os8088_5150_sb` / `_sb_gla` | an AdLib **and** a Sound Blaster (DSP 2.01, 0x220, IRQ 7). `_sb_gla` is the one a container can run; not a disk instrument |
 | `os8088_5150_sbonly` | a DSP at 0x220 and **nothing at 0x388** — SPEC.md §51.3.1's jumpered-off-FM case; `_sb`/`_sbonly` are one pair with `make SNDSNIFF=sb` between them |
 | `os8088_5150_herc_mpu_720_gla` | a Hercules 5150 whose ONLY card is an **MPU-401** at 330h — patch 09's recording one, which keeps every byte it is sent for the debug server's `midi` command (`{"cmd": "midi", "reset": true}` answers `bytes` in hex, `us` per byte and `uart`). SOUND.DRV attaches on it alone (SPEC.md §34.13); boot `make miditest`'s disk, whose SYSTEM.CFG asks for the driver the kernel's boot sniff cannot see a reason to load |
+| `os8088_5150_cga_gla_joy` / `os8088_xt_vga_joy` | the CGA 5150 twin and the VGA XT with a **game port** at 201h (the `game_port` overlay, and nothing else changed). Not in the standard machines on purpose: a game port is an option card, the BIOS's equipment word and REDLINE's inspector both report it, and no older row was written against a machine that has one. *The game port*, below |
 | `os8088_5150_sb_128k` / `_sb_256k` | `_sb` at 128 KB and 256 KB: SPEC.md §34.6's two claims are sized against the small one; Tracker cannot run at 128 KB at all, so the 256 KB one decides whether a MOD player's grants fit. IBM ROM, so neither boots in a container |
 | `os8088_5150_cga_128k` | **the 128 KB floor machine** — `kern_small`'s own (`make small && python3 tests/small128.py`). GLaBIOS |
 | `os8088_5150_cga_gla_256k` | 256 KB on GLaBIOS: the Weave family's floor (WEAVE-SPEC §1.4, `tests/weaveone.py`) |
@@ -1437,6 +1438,7 @@ is the client — a CLI, a REPL (address and no verb) and an importable
 | `pace` | per-frame changed counts over a long run; `ignore` excludes a rect |
 | `advance` | run a bounded amount of GUEST time — `frames=` or `cycles=` |
 | `disk` | the FDC's counters (`m.disk()`), with `reset` |
+| `joy` | the IBM game port at 201h: set both sticks and the four buttons, and read the state back (`m.joy()`) - *The game port*, below. Needs a `_joy` machine |
 | `disks` / `flush` | what is in each drive and where it was mounted from / write a drive's live image to a host file |
 | `snapshot` / `restore` | fork a holder process; wake it on a port, any number of times |
 | `key` | a keypress by MartyKey name — `KeyA`, `Enter`, `ArrowRight` |
@@ -1632,6 +1634,59 @@ reaches the guest as 15 and a script that counts from the kernel's edge
 clamp lands **a quarter of the way** to everything it aims at, with every
 click missing silently. There is no TOML key for it (`SerialMouseConfig`
 carries only `type` and `port`), so the fix is at the command.
+
+### The game port: `m.joy()` (SPEC.md 136.7)
+
+QEMU has no game port, so a joystick driver is untestable there. MartyPC
+emulates the IBM adapter (`devices/game_port.rs`: four one-shot axes, four
+switches, IBM's `24.2us + 0.011us/ohm` charge time) and
+`patches/18-game-port-debug.patch` plus the debug server's `joy` verb make it
+settable from outside. Launch a `_joy` machine:
+
+```python
+m = os88marty.launch(img, machine="os8088_xt_vga_joy", boot="up")
+m.pause()
+m.joy(a=(-1, 0), buttons=0b0001)     # stick A hard left, button 1 down
+m.joy()                               # the read-back, no change
+m.joy(ohms_a=(25000, None))           # A.x at exactly 25K ohm
+```
+
+* `a`, `b` - `(x, y)`, each -1.0..1.0, x: -1 left, y: +1 up. **Left and up are
+  the LOW resistances, so they are the FAST one-shots**: an `out 201h` sets
+  the axis bit and it FALLS after `25.2us + 0.011us * R` - 25us hard left,
+  575us centred, 1,125us hard right. A driver measures that fall.
+* `ohms_a`, `ohms_b` - the same, as a raw resistance (0..100000) for a test
+  that wants an exact time. `None` leaves that axis alone.
+* `buttons` - a 4-bit mask: bit 0 button 1 (stick A) .. bit 3 button 4 (stick
+  B's second). A pressed switch reads **0** on 201h bits 4-7.
+* The answer is the state: `a`/`b`, `ohms_*`, `charge_us_*` (what the model
+  says each axis should take), `buttons`, `port` (what `in al,201h` returns
+  this instant, side-effect free) and `layout`.
+
+**All four pots and all four switches are always settable.** The machine's
+`controller_layout` (two sticks x two buttons by default, or one stick x four)
+only picks which controls MartyPC's own GUI draws - on the real card every pin
+is wired whichever stick is plugged in, and a driver under test must cope with
+that. "One stick with four buttons" is therefore stick A and `buttons=0xF`;
+no second machine is needed.
+
+**Timing an axis from outside**: `m.outb(0x201, 0)` starts the one-shots and
+the machine's clock runs only when it executes, so the timing must be done by
+code. `advance(cycles=)` rounds to a 1,192-cycle batch (250us), too coarse for
+a 25us axis; run a small loop in the guest instead - park at it, set a
+breakpoint at its end, and difference the cycle counter:
+
+```
+cli / mov dx,201h / xor cx,cx / out dx,al / L: in al,dx / inc cx / test al,1 / jnz L / nop(bp)
+```
+
+The instrument's own check, on `os8088_5150_cga_gla_joy` (a throwaway
+script, not a row): stick A's X at 0, 25K, 50K, 75K, 100K ohm gave 242, 1,554,
+2,866, 4,178, 5,490 cycles to the bit falling - 1,312 cycles (275us) per 25K,
+and the 0-to-100K span 5,248 cycles = 1,099.6us against the model's 1,100us.
+`a=(-1, 0)` and `a=(0, 1)` are the fast ends and `a=(+1, 0)` and `a=(0, -1)`
+the slow ones, as the table above says. The one-shot fires within one loop
+iteration (41 cycles, 8.6us) of the model: that is the instrument's resolution.
 
 ### Audio capture
 

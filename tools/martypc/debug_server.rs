@@ -773,6 +773,7 @@ impl DebugServer {
             "status" => status(machine, exec),
             "disk" => disk_stats(machine, &req),
             "midi" => midi_log(machine, &req),
+            "joy" => joy_cmd(machine, &req),
             "regs" => regs(machine),
             "setreg" => setreg(machine, &req),
             "read" => read_mem(machine, &req),
@@ -1058,6 +1059,69 @@ fn state_name(s: ExecutionState) -> &'static str {
         ExecutionState::Running => "running",
         ExecutionState::Halted => "halted",
     }
+}
+
+/// `joy`: the IBM game port (devices/game_port.rs, patch 18) - set it, read it
+/// back. Every field is optional, so a bare `{"cmd":"joy"}` is the read-back.
+///
+///   a, b        [x, y] of stick A / B, each -1.0..1.0, effective at once.
+///               x: -1 left, +1 right; y: -1 down, +1 up (the GUI's
+///               convention). Left and up are the LOW resistances, so they
+///               are the FAST one-shots: they fall first.
+///   ohms_a/_b   [x, y] as a raw resistance in ohms (0..100000), for
+///               calibration tests that want an exact time. Wins over a/b
+///               for the axis it names.
+///   buttons     a 4-bit mask: bit 0 = button 1 (stick A), bit 1 = button 2
+///               (stick A), bit 2 = button 3 (stick B), bit 3 = button 4.
+///   Neither the controller layout nor the stick count gates any of it: all
+///   four pots and four switches are wired on the card.
+///
+/// The answer is the whole state: `a`/`b` in the same units, `ohms_*`,
+/// `charge_us_*` (IBM's 24.2 us + 0.011 us/ohm, plus MartyPC's 1 us base: the
+/// time from an `out 201h` to that axis bit falling to 0), `buttons` (the mask),
+/// `port` (what an `in al,201h` would return right now, and which has no side
+/// effect), and `layout`.
+fn joy_cmd(machine: &mut Machine, req: &Value) -> Value {
+    use marty_core::devices::game_port::{pos_to_ohms, BASE_CHARGE_TIME_US, CHARGE_FACTOR};
+    let gp = match machine.bus_mut().game_port_mut().as_mut() {
+        Some(g) => g,
+        None => return err("no game port in this machine (use a *_joy machine)"),
+    };
+    let pair = |k: &str| -> Option<(Option<f64>, Option<f64>)> {
+        req.get(k).and_then(Value::as_array).map(|a| {
+            (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64))
+        })
+    };
+    for (stick, k, ko) in [(0usize, "a", "ohms_a"), (1usize, "b", "ohms_b")] {
+        if let Some((x, y)) = pair(k) {
+            if let Some(x) = x { gp.set_axis_raw(stick, false, x); }
+            // the internal Y is inverted: up = low resistance
+            if let Some(y) = y { gp.set_axis_raw(stick, true, -y); }
+        }
+        if let Some((x, y)) = pair(ko) {
+            if let Some(x) = x { gp.set_axis_raw(stick, false, x / 50000.0 - 1.0); }
+            if let Some(y) = y { gp.set_axis_raw(stick, true, y / 50000.0 - 1.0); }
+        }
+    }
+    if let Some(m) = req.get("buttons").and_then(Value::as_u64) {
+        gp.set_buttons_raw([m & 1 != 0, m & 2 != 0, m & 4 != 0, m & 8 != 0]);
+    }
+    let st = gp.get_state();
+    let mask = st.buttons.iter().enumerate().fold(0u64, |m, (i, &b)| m | ((b as u64) << i));
+    let us = |pos: f64| BASE_CHARGE_TIME_US + CHARGE_FACTOR * pos_to_ohms(pos);
+    let (a, b) = (st.sticks[0], st.sticks[1]);
+    json!({
+        "ok": true,
+        "a": [a.0, 0.0 - a.1],
+        "b": [b.0, 0.0 - b.1],
+        "ohms_a": [pos_to_ohms(a.0), pos_to_ohms(a.1)],
+        "ohms_b": [pos_to_ohms(b.0), pos_to_ohms(b.1)],
+        "charge_us_a": [us(a.0), us(a.1)],
+        "charge_us_b": [us(b.0), us(b.1)],
+        "buttons": mask,
+        "port": gp.port_read(),
+        "layout": format!("{:?}", gp.controller_layout()),
+    })
 }
 
 /// `midi`: what the recording MPU-401 (devices/mpu401.rs) was sent - every
