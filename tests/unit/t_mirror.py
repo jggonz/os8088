@@ -278,6 +278,11 @@ DIVERGENT = {
 # differently is invisible to it. ALIAS is that case written down: each entry
 # is (file, name, file, name), and both must resolve to the same number.
 ALIAS = [
+    # SPEC.md 137.5. The kernel reserves the game port's settings blob and
+    # cannot include the driver's header, so its size is written twice; a
+    # drift hands JOYSTICK.DRV a short read, and it falls back to defaults
+    # on every boot with nothing to say why.
+    ("kernel/driver.inc", "DRV_JBLOB_SZ", "drivers/joy/joypkg.inc", "JOYB_SZ"),
     # SPEC.md 13.14.5. Word allocates its three combos with a LITERAL because
     # WDVAR cannot evaluate an include's equ, and the drop-down records are
     # packed back to back - so a size that drifts is not a build error, it is

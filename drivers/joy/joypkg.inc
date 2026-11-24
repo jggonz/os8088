@@ -49,7 +49,12 @@ JOYC_MAX     equ 1              ;   db: the maximum / 16  the ends only scale)
 JOYC_CEN     equ 2              ;   dw: the centre, full precision; 0 = this
                                 ;   axis is NOT calibrated
 JOYC_SZ      equ 4
-JOYB_SZ      equ JOYB_CAL + 4 * JOYC_SZ ; 20
+JOYB_SZ      equ 20             ; JOYB_CAL + 4 * JOYC_SZ, a LITERAL so that
+                                ; tests/unit/t_mirror.py can hold it to the
+                                ; kernel's DRV_JBLOB_SZ, which reserves it
+%if JOYB_SZ != JOYB_CAL + 4 * JOYC_SZ
+  %error "joypkg: JOYB_SZ is the blob's real length"
+%endif
 JOYB_V       equ 1
 JOYF_INVY    equ 1              ; Invert Y (both sticks' Y)
 JOYF_SWAP    equ 2              ; Swap A and B: X1/Y1 and buttons 1-2 trade

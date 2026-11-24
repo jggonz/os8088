@@ -3642,6 +3642,12 @@ DRIVERS += $(BUILD)/usbmouse.drv
 # It shares DRVC_POINT with USBMOUSE.DRV, so the two rows are alternatives;
 # attach's class fence refuses a second publisher. It is optional and unticked.
 DRIVERS += $(BUILD)/pc1mouse.drv
+# ...and SPEC.md 137's JOYSTICK.DRV, the game port: a drv_tab row with
+# SYSTEM.CFG bit 13, not wanted by default (the boot's sniff ticks it as the
+# machine's default when a stick answers, SPEC.md 137.2). Every big build -
+# kern_big, kern_emu and kern_mega take $(DRIVERS) - and kern_small's
+# $(SMALLDRIVERS) is a restatement that never held it: no driver layer there
+DRIVERS += $(BUILD)/joystick.drv
 # ...and SPEC.md 107's EMS.DRV, a LIM EMS board's page registers: a drv_tab
 # row with SYSTEM.CFG bit 7, not wanted by default (its probe writes ports),
 # so a disk that carries it costs a machine with no board one directory slot
@@ -4990,6 +4996,16 @@ $(BUILD)/pc1slow/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc
 
 $(BUILD)/pc1slow/pc1mouse.drv: $(BUILD)/pc1slow/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/pc1slow/pc1mouse.bin -o $@
+
+# JOYSTICK.DRV - the game port (SPEC.md 137). `-I drivers/joy/` for joypkg.inc
+# and the page's joyui.inc (J5), which is a dependency once it exists
+JOYUIINC := $(wildcard drivers/joy/joyui.inc)
+$(BUILD)/joystick.bin: drivers/joy/joy.asm drivers/joy/joypkg.inc $(JOYUIINC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/joy/ -I apps/ -o $@ $<
+	@echo "joystick: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/joystick.drv: $(BUILD)/joystick.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/joystick.bin -o $@
 
 # EMS.DRV - expanded memory on a LIM EMS board (SPEC.md 107)
 $(BUILD)/ems.bin: drivers/ems/ems.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
