@@ -6910,6 +6910,29 @@ $(BUILD)/drvcall.img: $(BUILD)/drvcall.o88 tools/os88disk.py
 $(BUILD)/drvcall360.img: $(BUILD)/drvcall.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/drvcall.o88
 
+# JOYGATE: the gate for JOYSTICK.DRV's package door (SPEC.md 137.4, J9). One click
+# runs joy_find/joy_read/joy_state/JOYV_RAW through apps/os88joy.inc and leaves
+# every answer in the package's own image; tests/joystick.py sets the sticks
+# with Marty.joy() on a *_joy machine and reads them back. 360KB as well as
+# 1.44MB: the machine is a 5150.
+#   make joygatetest && python3 tests/joystick.py
+.PHONY: joygatetest
+joygatetest: $(BUILD)/joygate.img $(BUILD)/joygate360.img
+
+$(BUILD)/joygate.bin: tests/joygate/joygate.asm apps/os88api.inc apps/os88joy.inc \
+                      apps/os88pit.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/joygate/joygate.asm
+	@echo "joygate: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/joygate.o88: $(BUILD)/joygate.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/joygate.bin -o $@
+
+$(BUILD)/joygate.img: $(BUILD)/joygate.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/joygate.o88
+
+$(BUILD)/joygate360.img: $(BUILD)/joygate.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/joygate.o88
+
 # SOCKTEST: the gate for the SOCKET verbs (SPEC.md 62.11). It fetches a page over the parallel cable
 # through NET.DRV's package door and reports what came back. Its far end is
 # tests/lptlink/partner.py's SocketBox - REAL host sockets - so it needs no
