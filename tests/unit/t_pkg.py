@@ -59,7 +59,7 @@ DRV_MAX = 40 * 1024                  # DRV_MAX_KB in kernel/driver.inc
 # the dispatcher and the one-claim load discipline are identical.
 DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point", 7: "ems",
                8: "file2", 9: "cd", 10: "http",
-               0x40: "overlay"}
+               12: "zip", 0x40: "overlay"}   # 11 is DRVC_JOY's (PR #410)
 MAP_MAGIC = b"O8MM"
 MOD_H_IMG, MOD_H_NENT = 8, 10
 

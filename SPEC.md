@@ -259918,8 +259918,11 @@ then VPI2, on each candidate port.
 register's DIRECTION bit (20h), write 55h and then AAh to the data latch and
 read each back. A port that returns what was written is NOT tri-stating
 (output-only, every XT card), and gets `ZIPM_NIBBLE`; a port that returns
-something else gets `ZIPM_PS2`. The bit is cleared again before any
-transport runs.
+something else gets `ZIPM_PS2`. The latch and the control register are put
+back as they were found, DIRECTION clear, before any transport runs - so a
+port with a printer on it and no drive is left exactly as it was. The core
+declares the shared state (`zt_base`, `zt_mode`, `zt_id`, `zt_vec`) in its
+zero-at-load block and the transports only read and write it.
 
 **Timeouts are time** (ziptrans.inc): a wait past a millisecond reads the
 BIOS tick; a count alone is sized wrong on every machine but one.
@@ -259940,67 +259943,159 @@ of the inner loops.)*
 
 ### 138.3 The SCSI layer
 
-*(Owner: core.)* Seven commands: TEST UNIT READY (00h), REQUEST SENSE (03h),
-INQUIRY (12h - the vendor must read `IOMEGA`), MODE SENSE(6) (1Ah - the
-device-specific byte's bit 7 is write protect), START STOP UNIT (1Bh, LoEj -
-eject), READ CAPACITY (25h), READ(10) (28h) and WRITE(10) (2Ah). A CHECK
-CONDITION is followed by REQUEST SENSE, and the sense key becomes the int 13h
-status `DSV_BLK` answers in AL:
+*(Owner: core. `drivers/zip/zipscsi.inc`.)* Seven commands: TEST UNIT READY
+(00h), REQUEST SENSE (03h), INQUIRY (12h - the vendor field, bytes 8..13,
+must read `IOMEGA`), MODE SENSE(6) (1Ah, page 3Fh, 12 bytes - the header's
+device-specific byte, bit 7, is write protect), START STOP UNIT (1Bh, byte 4
+= 02h: LoEj, eject), READ CAPACITY(10) (25h) and READ(10)/WRITE(10)
+(28h/2Ah). `zs_cmd` runs one through `zt_vec` and answers in the int 13h
+status bytes `DSV_BLK` speaks (§51.8). A CHECK CONDITION is followed by
+REQUEST SENSE - from a CDB and into a buffer of its own, so the caller's
+command can be sent again - and the sense key becomes the status in AL:
 
 | sense key | AL | means |
 |---|---|---|
-| 2 NOT READY | AAh | no disk, or spinning up |
+| 1 RECOVERED ERROR | - | done: CF = 0 |
+| 2 NOT READY | AAh | no disk; ASC 04h ("becoming ready") is waited out first |
 | 3 MEDIUM ERROR | 10h | unreadable sector |
 | 5 ILLEGAL REQUEST | 01h | a driver bug - an LBA past the end, a bad CDB |
 | 6 UNIT ATTENTION | 06h | the disk was changed (or the drive reset) |
 | 7 DATA PROTECT | 03h | write-protected |
-| other / transport | 80h / 20h | timeout / the drive stopped answering |
+| 0, 4, 8..15, any other status | 20h | |
+| transport: `ZTE_TIMEOUT`, or BUSY / spin-up past the wait | 80h | the drive stopped answering |
+| transport: `ZTE_NOCONN`, `ZTE_NOSEL`, `ZTE_PHASE` | 20h | |
 
-One `DSV_BLK` call is split into commands of at most 32 sectors (16 KB), the
-buffer normalised so no command's data crosses a segment. `DSV_CAPS` sets
-`BLKCAP_SEL` (§51.8.1): the transports load DX into ES and walk only DI.
+**The waits are time.** BUSY (status 08h) and NOT READY with ASC 04h are
+waited out a system tick at a time (`OSAPI_GET_TICKS`, `atapi.inc`'s reason:
+no segment register is pointed anywhere) up to `ZS_WAIT` = 182 ticks, ~10 s -
+a Zip spins up in about three - with a poll count under each tick for a
+machine whose tick is not running. A transport error sets the drive's state
+to `ZIPS_NODRIVE`, and `ZTE_TIMEOUT` or `ZTE_PHASE` is followed by the
+transport's `_reset`, as `ppa.c` and `imm.c` reset on the same two.
+
+**What the answers say about the disk is recorded where they are seen**, in
+`zs_cmd`, not by whoever asked: a UNIT ATTENTION, or NOT READY that is not
+spin-up, while the volume knows the medium (§138.4's `ZM_KNOWN`) moves it to
+`ZM_CHANGED` - so a disk swap that the PAGE or the DOOR happened to see first
+still reaches the kernel as 06h on its next transfer.
+
+**`zs_query`** is the drive's state, asked by the volume, the page and
+`ZIPV_INFO` alike: TEST UNIT READY riding out up to four UNIT ATTENTIONs (a
+drive just powered on reports its reset and then the disk, one per command),
+READ CAPACITY - a block length other than 512 reads as no disk - and MODE
+SENSE, whose refusal is taken as writable (the write is then the test). Out:
+`zp_cap` (sectors) and `zp_st` (`ZIPS_*`).
+
+One `DSV_BLK` call is split into commands of at most `ZV_RUN` = 32 sectors
+(16KB), each through a buffer **normalised** first (`zv_bnorm`, `cd_bnorm`'s
+rule: the offset folded under 128 in whole 8-paragraph granules, so 16KB
+never wraps the offset; under kern_mega's protected mode an LDT selector is
+left unfolded and its offset walks, the kernel handing one over with the
+whole transfer inside its 64KB). `DSV_CAPS` sets `BLKCAP_SEL` (§51.8.1): the
+transports load the segment into ES and walk only DI. A command that moved
+less than it was asked for with GOOD status is 20h.
 
 ### 138.4 The volume
 
-*(Owner: core.)* Attach registers ONE volume, whether or not a disk is in the
-drive - an empty drive is a drive zone with nothing to mount, as an empty A:
-is - with `OSAPI_VOL_ADD` CX = 0 (unknown length, §18.7.5) and the label
-`Zip`. The medium is learned lazily, on the first transfer after attach or
-after a UNIT ATTENTION: READ CAPACITY, then sector 0 -
+*(Owner: core. `drivers/zip/zipvol.inc`.)* **`DRVV_READY` registers ONE
+volume**, whether or not a disk is in the drive - an empty drive is a zone
+with nothing to mount, as an empty A: is - with `OSAPI_VOL_ADD` CX = 0
+(unknown length, §18.7.5: a Zip 100 is 196,608 sectors) and the label `Zip`.
+It is READY and not ATTACH because the volume slots' fence is closed until
+attach has returned and the class is published (§51.2.2) - `CDROM.DRV`'s
+shape. A refusal is quiet: the page and the door still answer.
 
-1. a FAT boot sector (a jump, then 512 bytes per sector) is a
-   **superfloppy**: base 0, length = the capacity;
+The medium is learned **lazily**, on the first READ after attach or after
+the disk changed: `zs_query`, then sector 0 **read into the caller's own
+buffer**, which the read is about to overwrite anyway - so the image carries
+no 512-byte sector buffer. Sector 0 is then:
+
+1. a FAT boot sector - a jump (EBh or E9h), 512 bytes per sector at +0Bh and
+   one or two FATs at +10h - is a **superfloppy**: base 0, length = the
+   capacity. The FAT count is the one test added to "a jump and 512": an MBR
+   whose code opens with a jump has random bytes where a BPB would be;
 2. else an MBR (55AAh): the FIRST entry, in order 1..4, of type 01h, 04h,
-   06h or 0Eh. An IBM-formatted Zip disk has its FAT16 partition in
-   **entry 4**, which is why the scan cannot stop at entry 1;
+   06h or 0Eh with a non-zero length. An IBM-formatted Zip disk has its FAT16
+   partition in **entry 4**, which is why the scan cannot stop at entry 1;
 3. else the transfer answers AAh: not a disk os8088 can read.
 
 The partition's 32-bit length fences every transfer, with status 04h, as
-`HDD.DRV`'s `HDV_LEN` does (§18.7.5). A WRITE that arrives while the medium is
-unknown answers 06h, so the kernel remounts (a read) before it writes.
+`HDD.DRV`'s `HDV_LEN` does (§18.7.5); a handle other than 0 is 04h too.
+
+**Three states, `zp_med`**, and a WRITE never learns:
+
+| state | a READ | a WRITE |
+|---|---|---|
+| `ZM_UNKNOWN` (attach, eject, after reporting a change) | learns, then reads | 06h: the kernel remounts - a read - first |
+| `ZM_KNOWN` | reads | 03h at once if `zp_st` is `ZIPS_WP`; else writes |
+| `ZM_CHANGED` (§138.3: a change seen while known) | 06h, and `ZM_UNKNOWN` | the same |
+
+A UNIT ATTENTION in the middle of a transfer is reported as 06h then and
+there, and leaves `ZM_UNKNOWN`. A NOT READY in one (the disk pulled out) is
+AAh and leaves `ZM_CHANGED`, so the disk put back - or another - is answered
+06h before a sector of it is served under the old FAT. `DSV_GEOM` (AL = 2)
+is CF = 1: no ROM reaches this disk, so the resume stub has nothing to be
+told (§51.8, §87.5).
 
 ### 138.5 Which port
 
-*(Owner: core.)* The `ZP` pin (§51.9.2): Auto searches the BIOS's own LPT
-table (0040:0008h, three words, a zero ends it), Off looks nowhere, anything
-else is that port alone. Attach refuses with `DRVE_HW` when no port has a
-drive, leaving every port disconnected.
+*(Owner: core.)* The `ZP` pin (§51.9.2, `OS88_PIN`): Auto searches the BIOS's
+own LPT table (0040:0008h, three words, a zero ending it - 0040h being an
+identity selector under kern_mega, the read is the same on every kernel), Off
+looks nowhere, anything else is that port alone (378h is pin BCh, 278h 3Ch,
+3BCh DEh). On each candidate `zip_try` asks the bidirectional question once
+(§138.2), probes VPI0 then VPI2, copies the transport that answered into
+`zt_vec` and requires INQUIRY's `IOMEGA`. Attach refuses with `DRVE_HW` when
+no port has a drive, leaving every port disconnected (the transports'
+contract for a failed probe, and the bidirectional test's own restore of the
+latch and the control register); `DRVE_TWICE` when it is already attached.
 
 ### 138.6 The page
 
-*(Owner: core.)* A Control Panel page (`DSV_CPNAME` "Zip Drive"): the port,
-the protocol and mode (`VPI0 nibble`, `VPI2 PS/2`, ...), the drive's state
-(`No drive` / `No disk` / `96 MB` / `96 MB, write-protected`), and an
-**Eject** button greyed with no disk (§47). Every label is one `font_run`
-(§6.1); looked at on a 1bpp adapter before it is called done (§39.4). The
-wide face hosts it unchanged (§135.3).
+*(Owner: core. `drivers/zip/zipcp.inc`, `drivers/net/netui.inc`'s shape.)* A
+Control Panel page, `DSV_CPNAME` "Zip Drive" - the header's own name field,
+as `HDD.DRV`'s page title is:
+
+```
+Zip Drive
+Port  0378
+Mode  VPI0 nibble          VPI2 PS/2 ...
+Disk  96 MB                No drive / No disk / 239 MB
+      Write-protected      (only when it is)
+[ Eject ]                  greyed with no disk (§47)
+```
+
+The drive is **asked at every paint** (`zs_query`, three short commands), so
+the page says what is in the drive now and not what the volume last learned -
+and a change it sees on the way is handed to the volume (§138.3). A megabyte
+is 2,048 sectors: a Zip 100 says 96, a Zip 250 239. Every label is one
+`font_run` (§6.1); the two lines that change with the disk clear only their
+tail (§31.9.3), so a repaint after Eject writes each pixel once. Eject is
+`os88ui_btn` through the panel's press / drag / release cells (§13.8.4): the
+press arms, the release fires, sliding off cancels, and a press on the
+greyed button is no press. The value column is at x = 40, so the longest
+line, 'Write-protected', ends at 160 of the pane's 221. Looked at on a 1bpp
+adapter before it is called done (§39.4); the wide face hosts it unchanged
+(§135.3).
 
 ### 138.7 The package door
 
-*(Owner: core.)* `OSAPI_DRV_CALL` with BH = `DRVC_ZIP`: `ZIPV_INFO` and
-`ZIPV_EJECT` (`apps/os88api.inc`). Eject is: `OSAPI_VOL_DEL` (which writes
-back, §138.1), START STOP UNIT with LoEj, `OSAPI_VOL_ADD` again - the empty
-drive's zone comes back. `drivers/zip/zippkg.inc` is the door.
+*(Owner: core. `drivers/zip/zippkg.inc`.)* `OSAPI_DRV_CALL` with BH =
+`DRVC_ZIP` and BL = a verb (`apps/os88api.inc`); UI task only, both - each
+talks to the drive and may wait out a spin-up:
+
+```
+ZIPV_INFO   out CF = 0, AL = ZIPS_* (asked now: zs_query), AH = ZIPP_* |
+            ZIPM_* << 4, CX:BX = the medium's sectors (0 = none), DX = the port
+ZIPV_EJECT  out CF = 0 ejected; CF = 1 and AL = an int 13h status
+any other   CF = 1, nothing done
+```
+
+Eject is `OSAPI_VOL_DEL` first (which writes back, §138.1), then START STOP
+UNIT with LoEj riding out one UNIT ATTENTION, then `OSAPI_VOL_ADD` again
+whatever the drive said - the empty drive's zone comes back, and the next
+disk is learned by the next read (`ZM_UNKNOWN`). The page's button is the
+same routine.
 
 ### 138.8 The instrument — a Zip drive in MartyPC
 
@@ -260020,6 +260115,29 @@ and reads files back out of one on the host.
 *(Filled from measurements: resident bytes per kernel, the image and each
 transport's share, the heap claim, and a sector's read and write time on the
 emulated XT in nibble mode.)*
+
+**The image** (core's half, measured on `zip/core` with the two transports
+still stubs - 14 bytes between them - so the transports' own shares are
+§138.2.1's and §138.2.2's to add). `build/zip.bin` is **2,540 bytes, bss
+included**, 2,309 on the disk (LZ4, 112 trailing zero bytes off the file):
+
+| part | bytes |
+|---|---:|
+| header, service table, label | 72 |
+| entry, attach (pin, LPT table, bidirectional test, probe order), ready, detach, `os88_pin` | 327 |
+| `zipscsi.inc` - `zs_cmd`, sense, waits, INQUIRY, `zs_query` | 464 |
+| `zipvol.inc` - `DSV_BLK`, the fence, chunks, `zv_bnorm`, `zv_learn` | 516 |
+| `zipcp.inc` - the page | 620 |
+| `zippkg.inc` - `ZIPV_INFO`, `ZIPV_EJECT` | 100 |
+| `os88ui.inc` - the standard button, its hit test and the arm (NET.DRV's defines) | 299 |
+| state (one initialised byte, then `OS88_STATE`'s zeros) | 128 |
+| the stub transports | 14 |
+
+Against the fan-out's budget - 6,656 all in, of which core, page and door
+4,352 - the core's half is **2,526**; `zip.asm` fails the assembly past
+`ZIP_IMG_MAX` = 6,656. No 512-byte sector buffer: sector 0 is read into the
+caller's own buffer (§138.4). The claim is the image's 512-byte granules
+(§51.1.2), and nothing else is claimed - no DMA, no IRQ, no vector.
 
 ### 138.10 The rows
 
