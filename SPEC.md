@@ -260500,11 +260500,41 @@ drive's own firmware are not in it). No EPP, ECP, daisy chain or second drive
 
 ### 138.9 What it costs
 
-*(Filled from measurements: resident bytes per kernel, the image and each
-transport's share, the heap claim, and a sector's read and write time on the
-emulated XT in nibble mode.)*
+**Resident** (kernsize, against the branch's base): **kern_big +65** and
+**kern_mega +65** for the class (§138.1: two publication slots, the
+`drv_tab` row, the `ZP` pin, the 06h gate and the removable test), plus
+**+26** on both for §22.29's window close (a kernel fix the Zip's Eject
+exposed, not Zip code). No rung crossed: kern_big has 171 bytes left before
+its next, kern_mega's `.cold` 7. **kern_emu and kern_small: 0**, byte for
+byte (§138's where line).
 
-**The image** (core's half, measured on `zip/core` with the two transports
+**The image, final**: `build/zip.bin` is **4,628 bytes, bss included**, 3,939
+on the disk (LZ4). The claim is its 512-byte granules, **10** of them, 5,120
+bytes (`DRVM_IMG_ZIP`), only while the row is ticked; nothing else is claimed.
+The transports' shares are §138.2.1's (`zipppa.inc`, 904) and §138.2.2's
+(`zipimm.inc`, 1,203); the core's breakdown follows.
+
+**A sector, measured** (the `zipspeed-*` rows, 2026-11-24): MartyPC's 4.77 MHz
+5150 and patch 18's drive, the shipped driver doing a user's Edit > Copy of a
+200,000-byte file off the Zip and a 120,001-byte one onto it. The time is the
+guest's, CONNECT to the last message byte of each READ(10)/WRITE(10): what the
+PORT costs, from below - the model has no seek, rotation or drive buffer, so a
+real drive can only add to it.
+
+| arm | read, ms a sector | read 64 KB | write, ms a sector | write 64 KB |
+|---|---:|---:|---:|---:|
+| VPI0 nibble (XT output-only card) | 16.85 | 2.16 s, 29.7 KB/s | 10.35 | 1.32 s, 48.3 KB/s |
+| VPI2 nibble | 18.73 | 2.40 s, 26.7 KB/s | 8.20 | 1.05 s, 61.0 KB/s |
+| VPI0 PS/2 (bidirectional) | 10.23 | 1.31 s, 48.9 KB/s | 10.35 | 1.32 s, 48.3 KB/s |
+| VPI2 PS/2 | 10.45 | 1.34 s, 47.8 KB/s | 8.19 | 1.05 s, 61.0 KB/s |
+
+Nibble reads are the XT's case and cost most: two status reads and a shift a
+byte. Writes go out a byte at a time in every mode, so the mode does not move
+them; VPI2's are faster than VPI0's because the MatchMaker takes a burst with
+one handshake a pair (§138.2.2). The §138.2.1/§138.2.2 cycle estimates were
+written before any of this ran; these replace them as the figures to quote.
+
+**The image at Z2** (core's half, measured on `zip/core` with the two transports
 still stubs - 14 bytes between them - so the transports' own shares are
 §138.2.1's and §138.2.2's to add). `build/zip.bin` is **2,539 bytes, bss
 included**, 2,310 on the disk (LZ4, 112 trailing zero bytes off the file):

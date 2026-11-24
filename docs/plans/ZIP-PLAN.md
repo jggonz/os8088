@@ -35,7 +35,7 @@ Status: ` ` not started, `B` built on its branch, `I` integrated into
 |---|---|---|
 | [ ] | **Z6 - QA in emulation**: MartyPC XT with a VPI0 drive (nibble), a 5160-class with VPI2 (nibble), a bidirectional-port machine (PS/2); QEMU for `No drive` on VGA, EGA, CGA and Hercules | every claim below seen, screenshots cropped and zoomed, defects listed in *QA* |
 | [ ] | **Z7 - the fix round, the rows once, `test-full` once** | rows green, `test-full` green, `budget-check` exact |
-| [ ] | **Z8 - the guide**: a user's page on the Zip drive (`apps/guide` manual) and the README's hardware list | written to what was seen, not what was planned |
+| [I] | **Z8 - the guide**: a user's page on the Zip drive (`apps/guide` manual) and the README's hardware list | written to what was seen, not what was planned |
 
 The claims Z6 checks, end to end through the real UI:
 
@@ -82,6 +82,7 @@ protected`, host bytes unchanged; the drive saw 0 protocol violations and
 | QA-2 | `tests/zipq.py` `zip_page` opened the Keyboard page | the click stopped on Keyboard | the Zip Drive page | test: it compared `cp_sel` (a RECORD) with `cp_nst` (a list ORDINAL); on CGA Display is hidden, so they differ by one | fixed (`CP_ITEMS`, the driver page's record) |
 | QA-3 | the row's page check missed `VPI0 nibble` | the page shows it (screenshot) | - | test: the page draws the words as separate runs | fixed (each word looked for) |
 | QA-4 | README.TXT's sentence not found in memory in stage 2 (found in stage 1) | Note Pad's window is up, its text not yet | - | test: the row looked once; the text is there 2 s of guest time later | fixed (waits on the guest clock) |
+| QA-6 | **A disk of a different size changed BY HAND does not remount** | Zip 250 drive: the 250 MB disk swapped by hand for a 96 MB one lists `0 files`, `Free 238.74M` (the old disk's); the 250 put back never opens. Found by the final pass's `zipdrive-z250`, once QA-1's fix let the row really read the second disk | the new disk lists with its own free space | the KERNEL keeps the old geometry across the 06h remount: the driver relearned the new disk (cap 196,608, base 32, len 196,576). Same-size hand swaps and any swap through Eject work | open (`zip/fixswap`) |
 | QA-5 | `zipq.cp_item` cannot reach the Zip page on VGA | the list scrolls there (Display is shown: ten rows, eight visible) | the Zip Drive page | test: it never pressed the list's down arrow | fixed (CP_LALL rows, then the arrow) |
 
 **Every arm, the same picture.** `vpi2` (VPI2 nibble), `ps2-0` (VPI0 PS/2,
