@@ -840,7 +840,7 @@ static void c64_kbd_poll(void)
 
     /* --- the hardware sticks (8.1), ORed with the keyset. `j` stays the
      * KEYSET alone, so 7.6's ScrollLock hint below never fires for a stick.
-     * ONE sample per stick per wake (about 1.2 ms on the XT, 137.3). */
+     * ONE sample per stick per wake (1.5-2.9 ms on the XT, SPEC.md 137.12). */
     if (c64_jhw) {
         c64_joy2 |= c64_stick(0);
         c64_joy1 |= c64_stick(1);

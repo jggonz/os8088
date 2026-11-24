@@ -2428,7 +2428,7 @@ TOASTSTR ar_s_miss, 'Arcade: no code at ????'
 ; stick to the arrow keys and never replaces them.
 ; ar_joyinit - ask once at the entry whether a DRVC_JOY driver is attached
 ; ar_joyd    - out AL = stick A's JOYD_* (0: no driver, not answering, centred)
-;              ONE sample per call (about 1.2 ms on the XT); the board's key
+;              ONE sample per call (1.5-2.9 ms on the XT, SPEC.md 137.12); the board's key
 ;              routine calls it once a frame. Preserves every other register
 ; -----------------------------------------------------------------------------
 ar_joyinit:

@@ -1886,8 +1886,9 @@ ports, and the keyset stays exactly what it was:
   `os88_main`, beside arming the key map (§7.2 rule 1); `os88_joy_read` runs in
   the §7.2 once-per-wake rebuild, once for stick A and once for stick B. A
   stick the driver says is not answering costs no sample (it refuses at once),
-  so a one-stick machine pays for one read, about 1.2 ms on the XT with
-  interrupts off (SPEC.md 137.3), and a two-stick one about 2.4 ms a wake -
+  so a one-stick machine pays for one read, 1.5-2.9 ms on the XT with
+  interrupts off (SPEC.md 137.12, the `joystick` row), and a two-stick one
+  3-5.8 ms a wake -
   none of it per emulated instruction. A stick plugged in later is picked up
   by the driver's own re-probe and read from then on.
 - **The status row** shows the stick's bits too: its two indicators are drawn
