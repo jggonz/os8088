@@ -165,7 +165,10 @@ def run(arm):
             return
         L = new[0]
         zipq.zip_page(ui)
-        ok(zipq.find_text(m, mode), "1: the page says %r" % mode)
+        # the page draws "Mode", the protocol and the port mode as separate
+        # runs (drivers/zip/zipcp.inc), so each word is looked for on its own;
+        # which mode RAN is the stats check at the end, off the drive itself
+        ok(all(zipq.find_text(m, t) for t in mode.split()), "1: the page says %r" % mode)
         ok(zipq.find_text(m, size), "1: ...and %r" % size)
 
         # ---- 2: the root, a folder, a file ----------------------------------

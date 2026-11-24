@@ -57,7 +57,31 @@ The claims Z6 checks, end to end through the real UI:
 
 ## QA
 
-*(Filled by the QA run.)*
+The QA run (lead, 2026-11-24) on `feat/zip` after all five merges, MartyPC
+5150 CGA with patch 18's drive, the shipped `ZIP.DRV`. Screenshots are kept
+outside the repository (`~/Repos/zip-logs/qa/`); the PR carries the chosen ones.
+
+**Seen working (VPI0, nibble, output-only XT card, `zip100.img`):** the tick
+loads the driver (no error) and ONE zone, `Zip`, appears as D:; the page reads
+`Port 0378 / Mode VPI0 nibble / Disk 96 MB` with an Eject button; D: lists
+`DOCS BIG200.BIN HELLO.TXT README.TXT` exactly as the host wrote them, 95.58 MB
+free, and DOCS lists NOTE.TXT; README.TXT opens in the editor; BIG200.BIN
+(200,000 bytes) copied OFF the Zip onto B: is the host's bytes; a 120,001-byte
+file copied ONTO the Zip is in the host image byte for byte after the eject,
+and the volume passes `os88zip` fsck with the old file intact; Eject sends
+START STOP UNIT, the page then reads `Disk No disk` and greys Eject (stippled
+on the 1bpp CGA); a disk pulled by hand and put back mounts with its own
+files; a write-protected disk lists and a save is refused with `Write
+protected`, host bytes unchanged; the drive saw 0 protocol violations and
+1,001,166 bytes came through the status lines (nibble). Reads ran at about
+29 KB/s on the 4.77 MHz XT (229 sectors in 3.93 s of guest time).
+
+| # | defect | seen | expected | where | status |
+|---|---|---|---|---|---|
+| QA-1 | **A Disk window on an ejected volume stays open and stale**, and opening D: after another disk is inserted shows the FIRST disk's files | after Eject, the D: window behind the panel still lists DOCS, BIG200.BIN, FROMB.BIN...; `open_drive("D")` after `zip_insert(zip100b.img)` lists the first disk | the window closes (or re-lists) when its volume goes; the next disk shows its own files | kernel `dsk_vol_del`: no window on the dropped volume is closed or re-listed. PRE-EXISTING: the RAM disk's unmount and the CD-ROM's detach take the same path | open |
+| QA-2 | `tests/zipq.py` `zip_page` opened the Keyboard page | the click stopped on Keyboard | the Zip Drive page | test: it compared `cp_sel` (a RECORD) with `cp_nst` (a list ORDINAL); on CGA Display is hidden, so they differ by one | fixed (`CP_ITEMS`, the driver page's record) |
+| QA-3 | the row's page check missed `VPI0 nibble` | the page shows it (screenshot) | - | test: the page draws the words as separate runs | fixed (each word looked for) |
+| QA-4 | README.TXT's sentence not found in memory in stage 2 (found in stage 1) | - | - | test timing, under investigation | open |
 
 ## Deferred, and why
 

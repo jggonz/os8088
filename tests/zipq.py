@@ -462,9 +462,23 @@ def zip_page(ui):
     after the static ones). Returns (window, cx, cy)."""
     m = ui.m
     w, cx, cy = control_panel(ui)
-    cp_item(ui, w, cx, cy, m.read(m.sym("cp_nst"), 1)[0])
+    # [cp_sel] is a RECORD, not a list ordinal (kernel/ctrl.inc cp_v2r): the
+    # statics are records 0..CP_ITEMS-1, some hidden on this adapter, and a
+    # driver's page is CP_ITEMS + its ordinal among the driver pages. The Zip
+    # page is the only driver page these machines have, so it is CP_ITEMS.
+    # ([cp_nst], the count of statics SHOWN, is its list ordinal - and on a
+    # CGA machine, where Display is hidden, it is Keyboard's record number.)
+    cp_item(ui, w, cx, cy, cp_items(m))
     ui.still()
     return w, cx, cy
+
+
+def cp_items(m):
+    """CP_ITEMS, the kernel's own equate (kernel/ctrl.inc). Read off the map
+    rather than off cp_items' labels, which live in CTRL.DRV's .modu and have
+    no fixed segment."""
+    import os88sym
+    return os88sym.equates()["CP_ITEMS"]
 
 
 # THE EJECT BUTTON'S GEOMETRY IS SPEC.md 138.6's AND IS NOT PINNED YET: the page
