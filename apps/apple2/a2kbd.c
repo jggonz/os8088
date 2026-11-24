@@ -231,6 +231,18 @@ static void a2_key(int ascii, int scan, void *win)
  * down-map. It runs at the top of the wake with no lock held, AFTER the reset
  * latches are spent - so Ctrl+F3's `PB0 held across the reset` survives this
  * poll rather than being overwritten by it (a2_reset_service). */
+static struct os88_joystate a2_jst;         /* static: the driver writes
+                                             * through our segment */
+
+static unsigned char a2_joy_pdl(int v)      /* -127..+127 -> 0..255, 0 -> 127 */
+{
+    if (v >= 126)
+        return 255;
+    if (v < -127)
+        v = -127;
+    return (unsigned char)(v + 127);
+}
+
 static void a2_kbd_poll(void)
 {
     int held;
@@ -238,6 +250,22 @@ static void a2_kbd_poll(void)
     /* THE GAME BUTTONS, AS LEVELS. F1 and F2 are PB0 and PB1 (section 6.3). */
     a2_btn[0] = os88_key_down(KSC_F1) ? 1 : 0;
     a2_btn[1] = os88_key_down(KSC_F2) ? 1 : 0;
+
+    /* ...AND THE HARDWARE STICK (6.7), ORed in: ONE os88_joy_state sample a
+     * wake (about 1.2 ms on the XT, SPEC.md 137.3), only when a driver was
+     * found at start (a2_jhw). Stick A's X/Y are PDL0/PDL1, stick B's are
+     * PDL2/PDL3, each -127..+127 mapped to 0..255 with 0 = CENTRE (127); an
+     * axis that is not answering reads 0 in the record, which is centre. */
+    if (a2_jhw && os88_joy_state(&a2_jst) == 0) {
+        a2_pdl_val[0] = a2_joy_pdl(a2_jst.x1);
+        a2_pdl_val[1] = a2_joy_pdl(a2_jst.y1);
+        a2_pdl_val[2] = a2_joy_pdl(a2_jst.x2);
+        a2_pdl_val[3] = a2_joy_pdl(a2_jst.y2);
+        if (a2_jst.btn & 1)
+            a2_btn[0] = 1;
+        if (a2_jst.btn & 2)
+            a2_btn[1] = 1;
+    }
 
     /* ...AND PB2 IS THE SHIFT-KEY MOD, ACTIVE WHEN SHIFT IS UP (AppleWin
      * Joystick.cpp:640-651, citing Sather UTAII p7-36; a2io.c has the whole

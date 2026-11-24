@@ -319,3 +319,23 @@ wide (a stick moved, button lamp, a calibration walked through to +-127, the
 flight type's throttle and rudder bars). `JOYSTICK.DRV` is 8,256 bytes on the
 disk and a 10,760-byte claim while it is ticked.
 
+### 2026-11-24 - J6, the two emulators
+
+The C64 and the Apple II both read the stick once per wake, only when
+`os88_joy_find()` answered at start. C64: stick A is port 2 and stick B port 1
+(Alt+J still swaps the ports), past-half-travel directions and button 1 are
+ORed with the keyset, and the ScrollLock hint still looks at the keys alone.
+Apple II: stick A's X/Y are PDL0/PDL1 and stick B's PDL2/PDL3, mapped
+-127..127 to 0..255; buttons 1-2 are ORed with F1/F2; the one-shot timer keeps
+its model and only its value changes. Machine > Joystick... stays greyed, with
+the reason that the setup is JOYSTICK.DRV's Control Panel page.
+The first agent's code never called `c64_joy_find` in the shipping image (only
+the host harness's reset did), so the C64 ignored a stick entirely; found in
+review of the diff, one line in `c64.c`'s `os88_main`. Package growth against
+the commit before J6: C64.O88 +144 bytes (C64.OVL +4), APPLE2.O88 +209
+(APPLE2.OVL +0). Tested: MartyPC `os8088_5150_cga_gla_joy`, both packages
+open from their 360KB disks and run (C64 at BASIC READY with its status bar's
+joystick indicators drawn after stick A was held right with button 1; Apple II
+at its prompt, taking typed keys slowly at 61% cpu). The paddle VALUE was not
+read back in the guest; the host harnesses a2uitest/c64uitest cover the maps.
+The earlier "window did not open" was host load, not a regression.

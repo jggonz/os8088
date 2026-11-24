@@ -1840,6 +1840,22 @@ static int h_key_asks;
 static int h_key_first_in_main;
 static int h_in_main;
 
+/* the joystick model: -1 = no driver (the default, so every older check runs
+ * exactly as before), else (type << 8) | axes; per stick a direction and a
+ * button mask, h_joy_ok[n] = 0 is "not answering" */
+static int h_joy_find = -1;
+static int h_joy_ok[2];
+static unsigned char h_joy_dir[2], h_joy_btn[2];
+int os88_joy_find(void) { return h_joy_find; }
+int os88_joy_read(int stick, struct os88_joyrd *rec)
+{
+    if (h_joy_find < 0 || !h_joy_ok[stick])
+        return -1;
+    rec->dir = h_joy_dir[stick];
+    rec->btn = h_joy_btn[stick];
+    return 0;
+}
+
 int os88_key_down(int scan)
 {
     h_key_asks++;
@@ -5455,6 +5471,41 @@ int main(int argc, char **argv)
             || (c64_matrix[7] & (1 << 3)) == 0)
             fail("the keyset consumed CTRL - it is both fire and the CTRL "
                  "key, which is the one departure §8 states");
+        ovl_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+
+        /* THE HARDWARE STICK (8.1): stick A is port 2 and stick B port 1,
+         * fire is button 1, all ORed with the keyset, and the ScrollLock
+         * hint never fires for it. With no driver (the model's default)
+         * everything above ran exactly as before. */
+        h_joy_find = (OS88_JOYT_2X2B << 8) | 0x0F;
+        h_joy_ok[0] = h_joy_ok[1] = 1;
+        h_joy_dir[0] = OS88_JOYD_LEFT | OS88_JOYD_UP;
+        h_joy_btn[0] = 1;
+        h_joy_dir[1] = OS88_JOYD_DOWN;
+        h_joy_btn[1] = 2;                   /* button 2 is NOT fire */
+        ovl_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_RIGHT] = 1;           /* the keyset adds RIGHT */
+        os88_onkey(0, KSC_RIGHT, win);
+        c64_kbd_poll();
+        if (c64_joy2 != (1 | 4 | 8 | 16))
+            fail("stick A + the keyset did not OR into port 2 (8.1)");
+        if (c64_joy1 != 2)
+            fail("stick B did not drive port 1 DOWN with no fire (8.1)");
+        h_joy_ok[0] = 0;                    /* unplugged: not answering */
+        memset(h_keydown, 0, sizeof(h_keydown));
+        c64_kbd_poll();
+        if (c64_joy2 != 0)
+            fail("a stick that stopped answering still drove port 2");
+        h_joy_ok[0] = 1;
+        for (i = 0; i < 8; i++) {           /* held stick, no keys at all */
+            c64_kbd_poll();
+        }
+        if (c64_slock_said)
+            fail("the ScrollLock hint fired for a HARDWARE stick (8.1)");
+        h_joy_find = -1;
+        h_joy_ok[0] = h_joy_ok[1] = 0;
         ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
 

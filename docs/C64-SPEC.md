@@ -1865,6 +1865,36 @@ stub casts through `short` so the host's 32-bit `int` cannot hide it.
   fires port 2. Stated, not fixed: §7.3's CTRL+digit and CTRL+letter paths
   need it in the matrix.
 
+### 8.1 A hardware joystick (SPEC.md 137, `JOYSTICK.DRV`)
+
+With the joystick driver attached, a game-port stick drives the control
+ports, and the keyset stays exactly what it was:
+
+- **Stick A is port 2, stick B is port 1.** **Alt+J, Swap joysticks, still
+  swaps the PORTS**, so with the swap on stick A is port 1: the swap acts at
+  `$DC00`/`$DC01` and at the status row, never on which stick is read. (The
+  driver's own *Swap A/B* setting, SPEC.md 137.5, is a different, earlier swap
+  of the sticks themselves.)
+- **A direction is the driver's `JOYD_*`**: calibrated position past half of
+  full travel (SPEC.md 137.3), after the user's dead zone and Invert Y. **Fire
+  is the stick's first button**; button 2 is not fire.
+- **ORed with the keyset**, never replacing it: port 2's bits are the keyset's
+  OR stick A's. With no driver (`os88_joy_find()` = -1: kern_small, an
+  unticked row) nothing is read and §8 above is the whole story. A stick that
+  is not answering (`os88_joy_read` = -1) contributes nothing that wake.
+- **Asked once, read once per wake.** `os88_joy_find()` runs once from
+  `os88_main`, beside arming the key map (§7.2 rule 1); `os88_joy_read` runs in
+  the §7.2 once-per-wake rebuild, once for stick A and once for stick B. A
+  stick the driver says is not answering costs no sample (it refuses at once),
+  so a one-stick machine pays for one read, about 1.2 ms on the XT with
+  interrupts off (SPEC.md 137.3), and a two-stick one about 2.4 ms a wake -
+  none of it per emulated instruction. A stick plugged in later is picked up
+  by the driver's own re-probe and read from then on.
+- **The status row** shows the stick's bits too: its two indicators are drawn
+  from the same port masks (§10.1).
+- **§7.6's ScrollLock hint is about the keyset only.** It is computed from the
+  keys, so a hardware stick never raises `ScrollLock for joystick`.
+
 ---
 
 ## 9. The screen

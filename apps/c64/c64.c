@@ -2216,6 +2216,7 @@ static void *ovl_main(void)
      * had already seen - the first key of the session, silently lost. The
      * answer is ignored on purpose. */
     os88_key_down(KSC_SPACE);
+    c64_joy_find();                         /* the joystick driver, ONCE (8.1) */
     c64_frame_regs();                       /* ...which writes the core's WATCH
                                              * RANGE, so the write window is
                                              * taken over the matrix from the

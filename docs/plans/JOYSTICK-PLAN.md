@@ -35,7 +35,7 @@ Status: ` ` not started, `B` built on its branch, `I` integrated into
 | | story | owner | done means |
 |---|---|---|---|
 | [I] | **J5 - the Joystick page** (SPEC 137.6), compact and wide, to the mockups: live view, type, three-step calibration, dead zone, invert, swap, reset, status | a look on QEMU VGA (wide), EGA and CGA (compact), and on MartyPC with a stick moved |
-| [ ] | **J6 - the emulators**: C64 control ports, Apple II paddles and buttons | builds, keys still work, a stick drives them on MartyPC |
+| [I] | **J6 - the emulators**: C64 control ports, Apple II paddles and buttons | builds, keys still work, a stick drives them on MartyPC |
 | [I] | **J7 - analog paddles**: WireBall and Arkanoid | builds, keys still work, the paddle follows the stick |
 | [I] | **J8 - digital sticks**: ARCADE and 1942 | builds, keys still work |
 | [I] | **J9 - the rows**: a gate package and `tests/suite.py` rows driving J4's instrument through J1's verbs | the rows registered; run once in the final pass |

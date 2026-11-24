@@ -1013,8 +1013,8 @@ strobes the trigger inside its own count loop, which is what every
 the scale is **`2816/255` ~= 11.04 emulated cycles per unit**
 (`Joystick.cpp:677`, `:703-705`), not exactly 11; MII's `value * 11`
 (`mii_emu/src/mii_analog.c:69-77`) is an approximation and is named as one
-here rather than copied as a fact. This port's paddles answer centre (section
-10.3), so the deadline is a CONSTANT and **wave 2 writes it: 127 x 2816 / 255
+here rather than copied as a fact. This port's paddles answer centre until a stick
+says otherwise (section 6.7), so with no driver the deadline is a CONSTANT and **wave 2 wrote it: 127 x 2816 / 255
 = 1,402 emulated cycles**, computed once rather than on every arm. The clock it
 is measured against is `a2_now()` (section 3.4), and that routine exists for
 this and for nothing else: the arm at `$C070` and the read at `$C064` are both
@@ -1333,6 +1333,35 @@ ScrollLock: arrows, Space.
 (section 9) is for.
 
 ---
+
+### 6.7 A hardware joystick (SPEC.md 137, `JOYSTICK.DRV`)
+
+With the joystick driver attached, the game connector is live and the keys
+stay exactly what they were:
+
+- **Paddles.** Stick A's X and Y are **PDL0** and **PDL1**, stick B's are
+  **PDL2** and **PDL3**. The driver's calibrated -127..+127 (after the user's
+  calibration, dead zone, Invert Y and Swap) maps to **0..255** with 0 -> 127
+  (centre, `A2_PDL_CENTRE`) and +126 or more -> 255, so a stick at rest is the
+  centre the port answered before. An axis the driver says is not answering
+  reads 0, which is centre.
+- **Buttons.** **PB0** and **PB1** are the stick's buttons 1 and 2, **ORed
+  with F1 and F2** (6.3); neither replaces the other. Buttons 3-4 and **PB2**
+  (the Shift mod, below) are untouched.
+- **The timing model is unchanged; only the value is the stick's.** `$C070`
+  arms all four one-shots and `$C064-$C067` answer bit 7 until
+  `value * 2816 / 255` emulated cycles have passed (section 5.2's ~11.04 a
+  unit), computed as `value*11 + value/23` because 255 x 2816 overflows an
+  int. A value of 127 is the 1,402 cycles of before; 0 expires at once and 255
+  lasts 2,816.
+- **Asked once, read once a wake.** `os88_joy_find()` runs in `os88_main`
+  beside arming the key map (6.4); with no driver (-1: kern_small, an unticked
+  row) nothing is read and `a2_pdl_val` stays at centre. `os88_joy_state()`
+  - ONE sample of the whole port, about 1.2 ms on the XT with interrupts off
+  (SPEC.md 137.3) - runs in `a2_kbd_poll`, the §6.3 once-a-wake level pass,
+  never per emulated instruction or per `$C064` read. The paddles therefore
+  hold the value of the wake's sample for the whole slice, which is finer than
+  a game reads them.
 
 ## 7. The screen
 
@@ -2781,7 +2810,7 @@ is not; a stopped machine answers 0 to `a2_wants_wake` and parks.
 |---|---|
 | **Machine > Configure Slots...** , in this PR | `No Disk II in this build. Load Program reads an Applesoft program, and Paste types a listing in.` **WAVE 4 RESTORED THE SECOND SENTENCE**, because it is the wave that wrote both routes. Wave 1 shortened the fact to its first half rather than point the reader at two routes they could not take, which is exactly the guess SPEC.md 47's rule 5 forbids; a greying may not outlive its reason either |
 | Machine > Configure Slots... , once the Disk II follow-up lands: every slot but 6 | `Slot 6 holds a Disk II. There are no other cards in this port.` |
-| Machine > Joystick... (already `.disabled = 1` in MII's own menu table, which is the authentic grey) | `The paddles answer centre. The game buttons PB0 and PB1 are F1 and F2 - a departure from AppleWin's Left-Alt / Right-Alt.` **WAVE 3 RESTORED THE SECOND SENTENCE**, because it is the wave that reads them: wave 1 shortened the fact to its first half rather than name a control the build did not have, which is rule 5's guess. They are host conveniences and GAME BUTTONS, not //e Apple keys - section 6.3 |
+| Machine > Joystick... (already `.disabled = 1` in MII's own menu table, which is the authentic grey) | **Stays greyed, and the reason is that this port has no dialog of its own for it - not that there is no joystick.** The setup is JOYSTICK.DRV's: calibration, dead zone and controller type live on the Control Panel's Joystick page (SPEC.md 137.6), where one setting serves every program, and the paddles follow that stick (section 6.7). The row would only repeat a page that already exists. **The earlier fact, `The paddles answer centre. The game buttons PB0 and PB1 are F1 and F2`, is NO LONGER TRUE of a machine with a stick and is retired** (SPEC.md 47 rule 5): a greying may not outlive its reason. The greyed row shows no sentence at run time in this build, so there is no string to keep true; if one is ever added it must say the Control Panel and not claim centre paddles. F1 and F2 remain PB0/PB1 beside the stick's buttons (section 6.7) |
 | Machine > `Color NTSC`, **on CGA and Hercules only, from wave 5** | `The window is monochrome, and the foreign modes this screen has measured SLOWER than it - 695 ms a frame against 632.` **BOTH HALVES ARE FACTS NOW AND NEITHER WAS BEFORE.** Wave 1 shortened this to the first clause because the second named a mode the build did not have; wave 5 wrote the mode AND measured `FSXM_CGA640` and `FSXM_HERC` out of it (section 13.4), so the row is **LIVE on a VGA** - it enters `FSXM_VGA13`, which is where this port is in colour - and greys on the other two adapters with the number that cut them. **The predicate is `os88_fsx_caps` itself**, asked where the answer is used and never banked: it is a question about a DISPLAY and a window moves between them on a two-display desktop (SPEC.md 39.18.2), and it is the same bit `os88_fsx_mode` would refuse on, so the greying and the refusal are one fact. **It is not a check item**, where MII ticks its five tint rows: MII's are a persistent MODE and this is a bracket that RETURNS, so a tick would describe a screen that is not on the glass |
 | Machine > `Mute`, until the speaker lands | `There is no speaker in this build.` - and it is `a2_have_snd` that greys it, never a `D` baked into the literal, so **wave 5 revived the row with nothing else moving**, exactly as this line said it would. It is a CHECK item on a CAPABILITY, which is two questions about one row and not one: `a2_have_snd` says the machine has a square voice and `a2_mute` says the user switched it off, and greying the row that is ON would report the feature as unavailable AND make it impossible to un-mute |
 | Machine > `Louder`, folding MII's `Quieter` | `The tone sink has no volume. This machine plays a bare square wave.` - PERMANENT, and the one audio row that stays greyed after wave 5. **THE FACT IS THE OS's AND NOT THE APPLE's, AND IT WAS THE OTHER WAY ROUND FOR A WAVE.** It read `The Apple's speaker is a one-bit toggle. There is no volume on it.`, which is a true sentence about the wrong machine and one that implies MII's own row is meaningless - **in MII this row is LIVE**: `ui_gl/mii_mui_menus.c:294-302` calls `mii_audio_volume(&mii->speaker.source, volume ± 1)`, a 0..10 sample multiplier (`src/mii_audio.c:80-89`), greyed only at the ends of that range (`menus.c:157-161`). Host playback volume has nothing to do with the speaker being one bit. **The departure is recorded rather than hidden** (section 10.2's idiom): MII's `Louder`/`Quieter` drive a host mixer, and what this OS gives a package is `os88_snd_tone(hz, ticks, prio)` - no amplitude argument, so the sink is a bare PC-speaker square-wave gate with nothing to turn up. That is a fact about wave 5's own sink, and it is the reason the row is permanent |

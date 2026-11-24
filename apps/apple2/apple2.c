@@ -908,6 +908,7 @@ static int  a2_mode_of(void);
 static int  a2_row_mode(int r);
 static unsigned a2_row_base(int r);
 static void a2_kbd_poll(void);
+static int a2_jhw;                          /* a joystick driver is attached (6.7) */
 static void a2_fullscreen_toggle(void *win);
 static void a2_flash_force(void);
 static void a2_line_force(int line);
@@ -2706,6 +2707,9 @@ void *os88_main(void)
      * had already seen - the first key of the session, silently lost. The
      * answer is ignored on purpose. */
     os88_key_down(KSC_SPACE);
+    a2_jhw = (os88_joy_find() >= 0);        /* the joystick driver, ONCE (6.7):
+                                             * -1 = none, and the paddles
+                                             * stay at centre */
     a2_watch_page();                        /* ...which writes the core's WATCH
                                              * RANGE, so the write window is
                                              * taken over the display page

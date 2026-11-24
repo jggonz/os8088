@@ -536,6 +536,19 @@ int os88_key_down(int scan)
     return h_down[scan & 0xFF] ? 1 : 0;
 }
 
+/* THE JOYSTICK MODEL (6.7): h_joy_find = -1 is "no driver" and the default, so
+ * every older check runs as before; h_joy_rec is what a sample answers. */
+static int h_joy_find = -1;
+static struct os88_joystate h_joy_rec;
+int os88_joy_find(void) { return h_joy_find; }
+int os88_joy_state(struct os88_joystate *rec)
+{
+    if (h_joy_find < 0)
+        return -1;
+    *rec = h_joy_rec;
+    return 0;
+}
+
 /* THE SPEAKER (APPLE2-SPEC section 8). The stub RECORDS rather than
  * discarding, because what is being tested is arithmetic that no screendump
  * can show: the estimator turns toggle intervals into a hertz through ONE
@@ -4107,6 +4120,51 @@ int main(void)
     if (a2_btn[0])
         fail("PB0 stayed down after the reset's own wake - the poll is what "
              "takes it back up");
+
+    /* --- THE HARDWARE STICK (section 6.7) ------------------------------
+     * Paddle n's one-shot lasts value*2816/255 cycles, the value from the
+     * stick: full left is 0 (expires at once), centre 127 (1,402), full right
+     * 255 (2,816). PB0/PB1 are the buttons ORed with F1/F2. */
+    {
+        int i, base;
+        static const int want[4] = { 0, 1402, 2816, 1402 };
+
+        if (a2_jhw)
+            fail("a2_jhw set with no joystick driver (the model's default)");
+        h_joy_find = 0;
+        a2_jhw = 1;
+        h_joy_rec.x1 = -127;                /* PDL0 full left */
+        h_joy_rec.y1 = 0;                   /* PDL1 centre */
+        h_joy_rec.x2 = 127;                 /* PDL2 full right */
+        h_joy_rec.y2 = 0;                   /* PDL3: not answering reads 0 */
+        h_joy_rec.btn = 2;                  /* button 2 -> PB1 */
+        do_wake();
+        if ((a2_io_rd(0xC061) & 0x80) != 0 || (a2_io_rd(0xC062) & 0x80) == 0)
+            fail("stick button 2 is not PB1 alone (6.7)");
+        h_down[KSC_F1] = 1;
+        do_wake();
+        if ((a2_io_rd(0xC061) & 0x80) == 0 || (a2_io_rd(0xC062) & 0x80) == 0)
+            fail("F1 and the stick's button did not OR (6.7)");
+        h_down[KSC_F1] = 0;
+        h_clkb = 100;
+        a2_pdl_on[0] = a2_pdl_on[1] = a2_pdl_on[2] = a2_pdl_on[3] = 0;
+        a2_io_rd(0xC070);                   /* arm all four */
+        for (i = 0; i < 4; i++) {
+            base = 100 + want[i];
+            h_clkb = base - 1;
+            if (want[i] > 0 && (a2_io_rd(0xC064 + i) & 0x80) == 0)
+                fail("a paddle one-shot ended EARLY for the stick's value");
+            h_clkb = base + 1;
+            if ((a2_io_rd(0xC064 + i) & 0x80) != 0)
+                fail("a paddle one-shot ran PAST value*2816/255 (6.7)");
+            h_clkb = 100;
+        }
+        h_joy_find = -1;
+        a2_jhw = 0;
+        h_joy_rec.btn = 0;
+        a2_pdl_val[0] = a2_pdl_val[1] = a2_pdl_val[2] = a2_pdl_val[3] = 127;
+        do_wake();
+    }
 
     /* --- THE KEYBOARD-MOUSE RULE (section 6.6) --------------------------
      * On a machine with no mouse the kernel eats the arrows, Space and Del as

@@ -345,6 +345,12 @@ static int c64_joyswap;                     /* Alt+J, Swap joysticks (8) */
  * indicators are these, and they are what c64_st_joy1/c64_st_joy2 delta
  * against. Port 1 is empty on this machine (C64-SPEC §8). */
 static int c64_joy1, c64_joy2;
+/* THE HARDWARE STICKS (JOYSTICK.DRV, SPEC.md 137.8, C64-SPEC 8.1). c64_jhw is
+ * os88_joy_find() taken ONCE at start: 0 = no driver (keys only, exactly as
+ * before). The record is a static
+ * because the driver writes through the package segment (C-TOOLCHAIN rule 1). */
+static int c64_jhw;
+static struct os88_joyrd c64_jrd;
 static int c64_shift_down;                  /* the HOST's shift keys, polled */
 static int c64_ctrl_down;                   /* ...and its Ctrl */
 
@@ -396,6 +402,7 @@ static int c64_ring_h, c64_ring_t;
  * loader zeroes once per launch (SPEC.md 20.1), and os88_main used to call
  * this before anything had touched one of them - 113 bytes of code that
  * stored zero over zero (apps size pass 1). */
+static void c64_joy_find(void);
 #ifdef C64_HOST
 static void ovl_kbd_init(void)
 {
@@ -412,6 +419,8 @@ static void ovl_kbd_init(void)
     c64_joyswap = 0;
     c64_joy1 = 0;
     c64_joy2 = 0;
+    c64_joy_find();                         /* (the harness reset; os88_main
+                                             * calls it for the shipping image) */
     c64_shift_down = 0;
     c64_ctrl_down = 0;
     c64_arrow_typed = 0;
@@ -728,6 +737,26 @@ static int c64_kbd_busy(int scan)
         (unsigned)(c64_cyc_lo - c64_klcyc) < (unsigned)C64K_FRESH_CYC;
 }
 
+/* c64_joy_find - ask the driver ONCE (137.4); -1 = none and keys only. */
+static void c64_joy_find(void)
+{
+    c64_jhw = os88_joy_find() >= 0;
+}
+
+/* c64_stick - stick `n` as a port mask in joystick.c's bit order (0 up, 1 down,
+ * 2 left, 3 right, 4 fire): the driver's JOYD_* (L1 R2 U4 D8, past half
+ * travel) with its pairs swapped, and button 1 as fire. A stick that is not
+ * answering is 0, so ORing it in is always safe (a second stick need not be
+ * asked about: the driver refuses it without a sample). */
+static int c64_stick(int n)
+{
+    int d;
+    if (os88_joy_read(n, &c64_jrd))
+        return 0;
+    d = c64_jrd.dir;
+    return (((d >> 2) | (d << 2)) & 15) | ((c64_jrd.btn & 1) << 4);
+}
+
 static void c64_kbd_poll(void)
 {
     int i, j, n, e;
@@ -808,6 +837,14 @@ static void c64_kbd_poll(void)
     }
     c64_joy2 = j;
     c64_joy1 = 0;                           /* port 1 is empty (8) */
+
+    /* --- the hardware sticks (8.1), ORed with the keyset. `j` stays the
+     * KEYSET alone, so 7.6's ScrollLock hint below never fires for a stick.
+     * ONE sample per stick per wake (about 1.2 ms on the XT, 137.3). */
+    if (c64_jhw) {
+        c64_joy2 |= c64_stick(0);
+        c64_joy1 |= c64_stick(1);
+    }
 
     /* ...and 7.6's message, at the one moment it is worth saying: the stick
      * is deflected and the four keys doing it have never once arrived as a
