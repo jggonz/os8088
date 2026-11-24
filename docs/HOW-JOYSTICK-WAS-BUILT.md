@@ -166,3 +166,21 @@ wins (a stick change of 2+ takes the paddle; a key clears it). Sizes: Arkanoid
 one 1.7 ms rate-hook period, so motion may run a few percent slow with a stick
 answering. Tested: build only on the host; the game-port instrument needs
 JOYSTICK.DRV, which is not on this base, so the stick path has not run.
+
+## 2026-11-24 - J8, the digital stick in ARCADE and 1942 (agent `gamesb`)
+
+Both games already read their controls in one place, so the stick is one
+`joy_read` at the head of that place, ORed in. ARCADE's Pac-Man (`pm_keys`,
+IN0 active low) and Q*bert (`qb_keys`, IN4 active high) each gained a small
+table from `JOYD_*` to the cabinet's bits; 1942's `game.inc` tests the stick
+beside each arrow and gives button 1 the fire and button 2 the roll. The one
+design question was Q*bert's 45-degree stick: a single direction maps as its
+arrow does, but a stick diagonal is ONE bit, the keypad corner it points at -
+two bits at once would be two moves the cabinet cannot make - so that is a
+16-entry table rather than an OR. Pac-Man's diagonal clears both bits, as two
+held arrows do, and leaves the choice to the board. No coin or start is put on
+a button (a stray press would spend a credit) and Q*bert and Pac-Man have no
+action button to give. Measured: `arcade.bin` +189 bytes, `1942.bin` +180
+(`make arcade 1942` against a pristine build). A read costs ~1.2 ms on the XT
+by SPEC 137.3 (a number from the spec, not yet measured here: no driver on this
+base). Tested so far: both assemble; looked at in QEMU with keys (no stick).
