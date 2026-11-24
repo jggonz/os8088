@@ -3673,6 +3673,12 @@ DRIVERS += $(BUILD)/vesa.drv
 # ($(SYS360OMITDRV)): no XT has a PCI bus. kern_small filters it back out
 # ($(SMALLDRIVERS) is a restatement that never held it)
 DRIVERS += $(BUILD)/pciether.drv
+# ZIP.DRV - SPEC.md 138's Iomega Zip drive on a parallel port. A drv_tab row
+# with SYSTEM.CFG bit 14, not wanted by default (attach writes the connect
+# sequence to a printer port). On every driver kernel's system disks, the
+# 360KB one included: the XT, nibble mode on its output-only port, is the
+# machine the drive was made for. kern_small's $(SMALLDRIVERS) never held it.
+DRIVERS += $(BUILD)/zip.drv
 # CPWIDE.DAT - the wide Control Panel's icons and driver catalog (SPEC.md
 # 135.6, 135.7): a DATA file beside CTRL.DRV, built by tools/cpwdat.py. It is
 # kern_big / kern_emu / kern_mega's alone - kern_small has no wide panel - and
@@ -5011,6 +5017,26 @@ $(BUILD)/cdrom.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 
 $(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/cdrom.bin -o $@
+
+# ZIP.DRV - SPEC.md 138: an Iomega Zip drive on the parallel port, the
+# Zip 100 (VPI0, zipppa.inc) and the Zip Plus / Zip 250 (VPI2, zipimm.inc),
+# behind one transport contract (ziptrans.inc). A block class: the kernel's
+# FAT driver reads the disk and this serves sectors. zip.asm holds the image
+# to its budget (ZIP_IMG_MAX, bss included) and fails the assembly past it.
+ZIP_SRC := drivers/zip/zip.asm drivers/zip/ziptrans.inc \
+           drivers/zip/zipppa.inc drivers/zip/zipimm.inc \
+           drivers/zip/zipscsi.inc drivers/zip/zipvol.inc \
+           drivers/zip/zipcp.inc drivers/zip/zippkg.inc
+$(BUILD)/zip.bin: $(ZIP_SRC) drivers/os88drv.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/zip/ -I drivers/ -I apps/ -o $@ $<
+	@echo "zip: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/zip.drv: $(BUILD)/zip.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/zip.bin -o $@
+
+#> [Build] zipdrv :: ZIP.DRV alone (SPEC.md 138), the Iomega Zip drive on a parallel port
+.PHONY: zipdrv
+zipdrv: $(BUILD)/zip.drv
 
 # HTTPFS.DRV - SPEC.md 122: a read-only volume served over HTTP, through the
 # socket verbs ETHER.DRV and the cable answer (drivers/net/netpkg.inc).
