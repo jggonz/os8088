@@ -1,0 +1,1981 @@
+diff --git a/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs b/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
+index d129651..5f0431f 100644
+--- a/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
++++ b/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
+@@ -85,6 +85,7 @@ pub struct MachineConfigFileEntry {
+     memory: MemoryConfig,
+     ems: Option<EmsMemoryConfig>,
+     picomem: Option<marty_core::machine_config::PicoMemConfig>,
++    zip: Option<marty_core::machine_config::ZipConfig>,
+     #[serde(default)]
+     speaker: bool,
+     ppi_turbo: Option<bool>, // This bool is an option so that it is tri-state - missing means no turbo feature, true means ppi high = turbo, false means ppi low = turbo.
+@@ -473,6 +474,7 @@ impl MachineConfigFileEntry {
+             memory: self.memory.clone(),
+             ems: self.ems.clone(),
+             picomem: self.picomem.clone(),
++            zip: self.zip.clone(),
+             fdc: self.fdc.clone(),
+             hdc: self.hdc.clone(),
+             serial: self.serial.clone().unwrap_or_default(),
+diff --git a/crates/marty_core/src/bus/mod.rs b/crates/marty_core/src/bus/mod.rs
+index 3e9135e..1cba5b5 100644
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -1168,7 +1168,8 @@ impl BusInterface {
+                 log::debug!("Creating parallel port...");
+ 
+                 if let Some(port) = controller.port.first() {
+-                    let parallel = ParallelController::new(Some(port.io_base as u16));
++                    let mut parallel = ParallelController::new(Some(port.io_base as u16));
++                    parallel.lpt_mut().set_bidir(port.bidir);
+ 
+                     // Add Parallel Port ports to io_map
+                     add_io_device!(self, parallel, IoDeviceType::Parallel);
+@@ -1180,6 +1181,32 @@ impl BusInterface {
+             }
+         }
+ 
++        // os8088 patch 18: an Iomega Zip drive on the parallel port
++        if let (Some(parallel), Some(zc)) = (self.parallel.as_mut(), machine_config.zip.as_ref()) {
++            match crate::devices::zip::ZipProto::parse(&zc.protocol) {
++                Some(proto) => {
++                    let mut zip = crate::devices::zip::ZipDrive::new(
++                        proto,
++                        zc.id.unwrap_or(crate::devices::zip::ZIP_DEFAULT_ID),
++                        zc.model.as_deref().unwrap_or("zip100"),
++                    );
++                    if let Ok(path) = std::env::var("OS88_ZIPIMG") {
++                        if !path.is_empty() {
++                            if let Err(e) = zip.insert(&path) {
++                                eprintln!("zip: cannot insert {}", e);
++                            }
++                            zip.scsi.power_on();
++                        }
++                    }
++                    if std::env::var("OS88_ZIPWP").map(|v| v == "1").unwrap_or(false) {
++                        zip.set_wp(true);
++                    }
++                    parallel.lpt_mut().attach_zip(zip);
++                }
++                None => eprintln!("zip: unknown protocol {:?} (vpi0 or vpi2)", zc.protocol),
++            }
++        }
++
+         // If we installed a parallel card, attach any specified parallel port DAC
+         if let Some(_parallel) = &self.parallel {
+             // Add parallel port to installed devices
+@@ -1956,6 +1983,11 @@ impl BusInterface {
+         &mut self.fdc
+     }
+ 
++    /// os8088 patch 18: the Zip drive on the parallel port, if there is one
++    pub fn zip_mut(&mut self) -> Option<&mut crate::devices::zip::ZipDrive> {
++        self.parallel.as_mut().and_then(|p| p.lpt_mut().zip_mut())
++    }
++
+     pub fn mpu401_mut(&mut self) -> &mut Option<Mpu401> {
+         &mut self.mpu401
+     }
+diff --git a/crates/marty_core/src/devices/lpt_card.rs b/crates/marty_core/src/devices/lpt_card.rs
+index fe3b5b8..1382029 100644
+--- a/crates/marty_core/src/devices/lpt_card.rs
++++ b/crates/marty_core/src/devices/lpt_card.rs
+@@ -74,6 +74,11 @@ impl ParallelController {
+         self.lpt.device_channel()
+     }
+ 
++    /// os8088 patch 18: the port itself (bidirectional option, a Zip drive)
++    pub fn lpt_mut(&mut self) -> &mut ParallelPort {
++        &mut self.lpt
++    }
++
+     pub fn run(&mut self, pic: &mut Pic, usec: f64) {
+         let intr = self.lpt.run(usec);
+ 
+diff --git a/crates/marty_core/src/devices/lpt_port.rs b/crates/marty_core/src/devices/lpt_port.rs
+index ada8b1b..90deb31 100644
+--- a/crates/marty_core/src/devices/lpt_port.rs
++++ b/crates/marty_core/src/devices/lpt_port.rs
+@@ -32,7 +32,11 @@
+ 
+ */
+ 
+-use crate::{channel::BidirectionalChannel, devices::lpt_card::LPT_DEFAULT_IRQ, tracelogger::TraceLogger};
++use crate::{
++    channel::BidirectionalChannel,
++    devices::{lpt_card::LPT_DEFAULT_IRQ, zip::ZipDrive},
++    tracelogger::TraceLogger,
++};
+ use modular_bitfield::{bitfield, prelude::*};
+ 
+ #[derive(Clone)]
+@@ -79,6 +83,13 @@ pub struct ParallelPort {
+     device_channel: BidirectionalChannel<ParallelMessage>,
+     port_channel: BidirectionalChannel<ParallelMessage>,
+     trace_logger: TraceLogger,
++    /// os8088 patch 18: a bidirectional card (control bit 5 tri-states the
++    /// data latch's outputs); an XT card is output-only and reads the latch
++    bidir: bool,
++    /// the control register as the host wrote it, all eight bits
++    ctrl_raw: u8,
++    /// os8088 patch 18: an Iomega Zip drive on the port (devices/zip.rs)
++    zip: Option<ZipDrive>,
+ }
+ 
+ impl Default for ParallelPort {
+@@ -95,6 +106,9 @@ impl Default for ParallelPort {
+             device_channel,
+             port_channel,
+             trace_logger: TraceLogger::None,
++            bidir: false,
++            ctrl_raw: 0,
++            zip: None,
+         }
+     }
+ }
+@@ -108,6 +122,18 @@ impl ParallelPort {
+         }
+     }
+ 
++    pub fn set_bidir(&mut self, bidir: bool) {
++        self.bidir = bidir;
++    }
++
++    pub fn attach_zip(&mut self, zip: ZipDrive) {
++        self.zip = Some(zip);
++    }
++
++    pub fn zip_mut(&mut self) -> Option<&mut ZipDrive> {
++        self.zip.as_mut()
++    }
++
+     pub fn intr_enabled(&self) -> bool {
+         self.control.enable_irq()
+     }
+@@ -149,6 +175,15 @@ impl ParallelPort {
+     pub fn data_register_read(&mut self) -> u8 {
+         self.trace_logger
+             .print(format!("LPT: Data register read: {:#02X}", self.data));
++        // a bidirectional card with its direction bit up lets the DEVICE drive
++        // the lines; with nothing driving them they float high
++        if self.bidir && self.ctrl_raw & 0x20 != 0 {
++            let ctrl = self.ctrl_raw;
++            return match self.zip.as_mut().and_then(|z| z.data_read(ctrl)) {
++                Some(b) => b,
++                None => 0xFF,
++            };
++        }
+         self.data
+     }
+ 
+@@ -156,11 +191,18 @@ impl ParallelPort {
+         self.data = data;
+         self.trace_logger
+             .print(format!("LPT: Data register write: {:#02X}", data));
++        if let Some(z) = self.zip.as_mut() {
++            let driving = !(self.bidir && self.ctrl_raw & 0x20 != 0);
++            z.data_write(data, self.ctrl_raw, driving);
++        }
+ 
+         let _ = self.port_channel.send(ParallelMessage::Data(data));
+     }
+ 
+     pub fn status_register_read(&mut self) -> u8 {
++        if let Some(z) = self.zip.as_mut() {
++            return z.status(self.ctrl_raw);
++        }
+         let byte = self.status.into_bytes()[0];
+         log::trace!("LPT: Status register read: {:02X}", byte);
+         self.trace_logger
+@@ -177,7 +219,12 @@ impl ParallelPort {
+     }
+ 
+     pub fn control_register_read(&mut self) -> u8 {
+-        let byte = self.control.into_bytes()[0];
++        let byte = if self.bidir || self.zip.is_some() {
++            self.ctrl_raw
++        }
++        else {
++            self.control.into_bytes()[0]
++        };
+         self.trace_logger
+             .print(format!("LPT: Control register read: {:#02X}", byte));
+         byte
+@@ -185,6 +232,10 @@ impl ParallelPort {
+ 
+     pub fn control_register_write(&mut self, data: u8) {
+         self.control = ParallelControl::from_bytes([data]);
++        self.ctrl_raw = data;
++        if let Some(z) = self.zip.as_mut() {
++            z.ctrl_write(data, self.data);
++        }
+ 
+         log::trace!(
+             "LPT: Control register write: {:02X} interrupts enabled: {}",
+@@ -202,6 +253,9 @@ impl ParallelPort {
+     }
+ 
+     pub fn run(&mut self, usec: f64) -> bool {
++        if let Some(z) = self.zip.as_mut() {
++            z.tick(usec);
++        }
+         self.update_accum += usec;
+ 
+         if self.update_accum >= POLL_TIME {
+diff --git a/crates/marty_core/src/devices/mod.rs b/crates/marty_core/src/devices/mod.rs
+index 9590381..ab65ec0 100644
+--- a/crates/marty_core/src/devices/mod.rs
++++ b/crates/marty_core/src/devices/mod.rs
+@@ -66,6 +66,7 @@ pub mod serial;
+ pub mod sn76489;
+ pub mod sound_source;
+ pub mod covox;
++pub mod zip;
+ pub mod tga;
+ #[cfg(feature = "vga")]
+ pub mod vga;
+diff --git a/crates/marty_core/src/devices/zip.rs b/crates/marty_core/src/devices/zip.rs
+new file mode 100644
+index 0000000..0a8f9a4
+--- /dev/null
++++ b/crates/marty_core/src/devices/zip.rs
+@@ -0,0 +1,1702 @@
++/*
++    MartyPC
++    https://github.com/dbalsom/martypc
++
++    Copyright 2022-2026 Daniel Balsom
++
++    Permission is hereby granted, free of charge, to any person obtaining a
++    copy of this software and associated documentation files (the “Software”),
++    to deal in the Software without restriction, including without limitation
++    the rights to use, copy, modify, merge, publish, distribute, sublicense,
++    and/or sell copies of the Software, and to permit persons to whom the
++    Software is furnished to do so, subject to the following conditions:
++
++    The above copyright notice and this permission notice shall be included in
++    all copies or substantial portions of the Software.
++
++    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++
++    --------------------------------------------------------------------------
++*/
++
++//! An Iomega Zip drive on the parallel port (os8088 patch 18, SPEC.md 138.8).
++//!
++//! This is the DRIVE's side of the two protocols Linux's `ppa.c` (VPI0, the
++//! Zip 100's PPA3) and `imm.c` (VPI2, the Zip Plus / Zip 250's MatchMaker)
++//! speak as the HOST. Every register sequence the host writes is answered the
++//! way the hardware answers it, in the same I/O cycle: there is no poll and
++//! no clock here, because a host reads the status register straight after it
++//! writes the control register and a model that answered 50 us later would
++//! answer a different question.
++//!
++//! It is written from the host's behaviour (what it writes, what it expects
++//! to read back) and NOT from os8088's own transports: the two halves are two
++//! readings of one protocol, so a mistake in one is not silently accepted by
++//! the other.
++//!
++//! The registers this module sees are the RAW ones, as the host writes and
++//! reads them: control bit 0 /STROBE, bit 1 /AUTOFEED, bit 2 INIT, bit 3
++//! /SELECT IN (bits 0, 1 and 3 inverted on the wire), bit 5 the bidirectional
++//! card's DIRECTION bit; status bit 7 /BUSY (inverted at the register),
++//! 6 ACK, 5 PAPER OUT, 4 SELECT, 3 /ERROR. Nibble data comes back through
++//! status bits 7..4 exactly as the register shows them: the host does not
++//! undo the BUSY inversion, so the device drives the pin to make the
++//! REGISTER say the data bit.
++//!
++//! Behind either protocol sits one SCSI direct-access target over a host
++//! image file (read and written in place): TEST UNIT READY, REQUEST SENSE,
++//! INQUIRY, MODE SENSE(6), START STOP UNIT, READ CAPACITY, READ(6/10),
++//! WRITE(6/10), with UNIT ATTENTION after an insert or a reset, NOT READY
++//! with no medium and DATA PROTECT when the medium is write-protected.
++
++use std::{
++    collections::BTreeMap,
++    fs::{File, OpenOptions},
++    io::{Read, Seek, SeekFrom, Write},
++};
++
++pub const SECTOR: usize = 512;
++/// A Zip 100's capacity in 512-byte sectors (the IBM-format disk's total).
++pub const ZIP100_SECTORS: u32 = 196_608;
++/// A Zip 250's.
++pub const ZIP250_SECTORS: u32 = 489_532;
++/// The SCSI target ID Iomega's drives answer to.
++pub const ZIP_DEFAULT_ID: u8 = 6;
++/// One command moves at most this many sectors (a model's own sanity bound).
++const MAX_BLOCKS: u32 = 4096;
++
++#[derive(Copy, Clone, Debug, PartialEq, Eq)]
++pub enum ZipProto {
++    /// VPI0: the Zip 100's PPA3 interface (Linux ppa.c)
++    Vpi0,
++    /// VPI2: the Zip Plus and Zip 250's MatchMaker (Linux imm.c)
++    Vpi2,
++}
++
++impl ZipProto {
++    pub fn parse(s: &str) -> Option<ZipProto> {
++        match s.to_ascii_lowercase().as_str() {
++            "vpi0" | "ppa" | "ppa3" => Some(ZipProto::Vpi0),
++            "vpi2" | "imm" | "matchmaker" => Some(ZipProto::Vpi2),
++            _ => None,
++        }
++    }
++}
++
++// --- SCSI -------------------------------------------------------------------
++
++const ST_GOOD: u8 = 0x00;
++const ST_CHECK: u8 = 0x02;
++
++const SK_NOT_READY: u8 = 2;
++const SK_MEDIUM: u8 = 3;
++const SK_ILLEGAL: u8 = 5;
++const SK_UNIT_ATTN: u8 = 6;
++const SK_DATA_PROT: u8 = 7;
++
++#[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
++struct Sense {
++    key:  u8,
++    asc:  u8,
++    ascq: u8,
++}
++
++/// What a command asks of the data phase.
++enum Outcome {
++    /// no data: straight to status
++    Status(u8),
++    /// data TO the host, then status
++    DataIn(Vec<u8>),
++    /// data FROM the host (a WRITE): this many bytes, then the work, then status
++    DataOut(usize),
++}
++
++/// A SCSI direct-access target over a host image.
++pub struct ZipScsi {
++    file:     Option<File>,
++    path:     String,
++    sectors:  u32,
++    /// the medium is write-protected (the `zip_wp` verb)
++    pub wp:   bool,
++    /// UNIT ATTENTION pending: the ASC to report (28h changed, 29h reset)
++    ua:       Option<u8>,
++    sense:    Sense,
++    vendor:   [u8; 8],
++    product:  [u8; 16],
++    rev:      [u8; 4],
++    // a WRITE in progress
++    wr_lba:   u32,
++}
++
++fn pad<const N: usize>(s: &str) -> [u8; N] {
++    let mut a = [b' '; N];
++    for (i, b) in s.bytes().take(N).enumerate() {
++        a[i] = b;
++    }
++    a
++}
++
++impl ZipScsi {
++    pub fn new(model: &str) -> ZipScsi {
++        let (product, rev) = match model.to_ascii_lowercase().as_str() {
++            "zip250" | "250" => ("ZIP 250", "42.S"),
++            "zip100plus" | "plus" => ("ZIP 100 PLUS", "D.13"),
++            _ => ("ZIP 100", "D.13"),
++        };
++        ZipScsi {
++            file: None,
++            path: String::new(),
++            sectors: 0,
++            wp: false,
++            // power-on: "reset occurred" (29h), reported once
++            ua: Some(0x29),
++            sense: Sense::default(),
++            vendor: pad("IOMEGA"),
++            product: pad(product),
++            rev: pad(rev),
++            wr_lba: 0,
++        }
++    }
++
++    pub fn has_medium(&self) -> bool {
++        self.file.is_some()
++    }
++
++    pub fn sectors(&self) -> u32 {
++        self.sectors
++    }
++
++    pub fn path(&self) -> &str {
++        &self.path
++    }
++
++    /// Put a disk in the drive: open the host image read/write in place
++    /// (read-only if the host will not let it be written, which makes the
++    /// medium write-protected). A new disk is a UNIT ATTENTION.
++    pub fn insert(&mut self, path: &str) -> Result<(), String> {
++        let (file, ro) = match OpenOptions::new().read(true).write(true).open(path) {
++            Ok(f) => (f, false),
++            Err(_) => match OpenOptions::new().read(true).open(path) {
++                Ok(f) => (f, true),
++                Err(e) => return Err(format!("{}: {}", path, e)),
++            },
++        };
++        let len = file.metadata().map_err(|e| e.to_string())?.len();
++        self.sectors = (len / SECTOR as u64).min(u32::MAX as u64) as u32;
++        if self.sectors == 0 {
++            return Err(format!("{}: empty image", path));
++        }
++        self.file = Some(file);
++        self.path = path.to_string();
++        if ro {
++            self.wp = true;
++        }
++        self.ua = Some(0x28);
++        Ok(())
++    }
++
++    /// Power-on state: the disk that was in the drive when it was switched on
++    /// is not "a new disk", it is the reset (29h) every drive owes at power-on.
++    pub fn power_on(&mut self) {
++        self.ua = Some(0x29);
++    }
++
++    /// Take the disk out (the host's file is left exactly as it is).
++    pub fn eject(&mut self) {
++        if let Some(f) = self.file.take() {
++            let _ = f.sync_all();
++        }
++        self.sectors = 0;
++        self.path.clear();
++    }
++
++    /// The bus reset pulse: the drive forgets any command and reports a reset.
++    pub fn reset(&mut self) {
++        self.ua = Some(0x29);
++        self.sense = Sense::default();
++    }
++
++    fn check(&mut self, key: u8, asc: u8, ascq: u8) -> Outcome {
++        self.sense = Sense { key, asc, ascq };
++        Outcome::Status(ST_CHECK)
++    }
++
++    fn read_blocks(&mut self, lba: u32, blocks: u32) -> Option<Vec<u8>> {
++        let f = self.file.as_mut()?;
++        let mut buf = vec![0u8; blocks as usize * SECTOR];
++        f.seek(SeekFrom::Start(lba as u64 * SECTOR as u64)).ok()?;
++        // a sparse or short image reads as zeros past what it holds
++        let mut got = 0;
++        while got < buf.len() {
++            match f.read(&mut buf[got..]) {
++                Ok(0) => break,
++                Ok(n) => got += n,
++                Err(_) => return None,
++            }
++        }
++        Some(buf)
++    }
++
++    fn write_blocks(&mut self, lba: u32, data: &[u8]) -> bool {
++        match self.file.as_mut() {
++            Some(f) => {
++                f.seek(SeekFrom::Start(lba as u64 * SECTOR as u64)).is_ok() && f.write_all(data).is_ok()
++            }
++            None => false,
++        }
++    }
++
++    /// The CDB's length from its opcode group.
++    pub fn cdb_len(op: u8) -> usize {
++        match op >> 5 {
++            0 => 6,
++            1 | 2 => 10,
++            5 => 12,
++            4 => 16,
++            _ => 6,
++        }
++    }
++
++    /// Start a command. A WRITE answers `DataOut` and is finished by
++    /// `finish_write`.
++    fn execute(&mut self, cdb: &[u8]) -> Outcome {
++        let op = cdb[0];
++        match op {
++            // INQUIRY and REQUEST SENSE work whatever the medium and ignore
++            // a pending UNIT ATTENTION.
++            0x12 => {
++                if cdb[1] & 1 != 0 || cdb[2] != 0 {
++                    return self.check(SK_ILLEGAL, 0x24, 0);
++                }
++                let mut d = vec![0u8; 36];
++                d[0] = 0x00; // direct access
++                d[1] = 0x80; // removable
++                d[2] = 0x02;
++                d[3] = 0x02;
++                d[4] = 31;
++                d[8..16].copy_from_slice(&self.vendor);
++                d[16..32].copy_from_slice(&self.product);
++                d[32..36].copy_from_slice(&self.rev);
++                d.truncate((cdb[4] as usize).min(36));
++                return Outcome::DataIn(d);
++            }
++            0x03 => {
++                let mut d = vec![0u8; 18];
++                d[0] = 0x70;
++                d[2] = self.sense.key;
++                d[7] = 10;
++                d[12] = self.sense.asc;
++                d[13] = self.sense.ascq;
++                self.sense = Sense::default();
++                let alloc = if cdb[4] == 0 { 4 } else { cdb[4] as usize };
++                d.truncate(alloc.min(18));
++                return Outcome::DataIn(d);
++            }
++            _ => {}
++        }
++
++        // a new command clears the old sense; a pending UNIT ATTENTION is
++        // reported once, as a CHECK CONDITION, by the first command that
++        // is not one of the two above
++        self.sense = Sense::default();
++        if let Some(asc) = self.ua.take() {
++            return self.check(SK_UNIT_ATTN, asc, 0);
++        }
++
++        match op {
++            // TEST UNIT READY
++            0x00 => {
++                if self.has_medium() {
++                    Outcome::Status(ST_GOOD)
++                }
++                else {
++                    self.check(SK_NOT_READY, 0x3A, 0)
++                }
++            }
++            // START STOP UNIT: LoEj (bit 1) with Start (bit 0) clear ejects
++            0x1B => {
++                if cdb[4] & 2 != 0 && cdb[4] & 1 == 0 {
++                    self.eject();
++                }
++                Outcome::Status(ST_GOOD)
++            }
++            // MODE SENSE(6)
++            0x1A => {
++                if !self.has_medium() {
++                    return self.check(SK_NOT_READY, 0x3A, 0);
++                }
++                let dbd = cdb[1] & 8 != 0;
++                let mut d = vec![0u8; if dbd { 4 } else { 12 }];
++                d[0] = (d.len() - 1) as u8;
++                d[2] = if self.wp { 0x80 } else { 0 };
++                if !dbd {
++                    d[3] = 8;
++                    d[4..8].copy_from_slice(&self.sectors.to_be_bytes());
++                    d[9..12].copy_from_slice(&(SECTOR as u32).to_be_bytes()[1..]);
++                }
++                d.truncate(cdb[4] as usize);
++                Outcome::DataIn(d)
++            }
++            // READ CAPACITY(10)
++            0x25 => {
++                if !self.has_medium() {
++                    return self.check(SK_NOT_READY, 0x3A, 0);
++                }
++                let mut d = Vec::with_capacity(8);
++                d.extend_from_slice(&(self.sectors - 1).to_be_bytes());
++                d.extend_from_slice(&(SECTOR as u32).to_be_bytes());
++                Outcome::DataIn(d)
++            }
++            // READ(6), READ(10)
++            0x08 | 0x28 => {
++                if !self.has_medium() {
++                    return self.check(SK_NOT_READY, 0x3A, 0);
++                }
++                let (lba, blocks) = Self::lba_blocks(cdb);
++                if blocks > MAX_BLOCKS || lba as u64 + blocks as u64 > self.sectors as u64 {
++                    return self.check(SK_ILLEGAL, 0x21, 0);
++                }
++                if blocks == 0 {
++                    return Outcome::Status(ST_GOOD);
++                }
++                match self.read_blocks(lba, blocks) {
++                    Some(d) => Outcome::DataIn(d),
++                    None => self.check(SK_MEDIUM, 0x11, 0),
++                }
++            }
++            // WRITE(6), WRITE(10)
++            0x0A | 0x2A => {
++                if !self.has_medium() {
++                    return self.check(SK_NOT_READY, 0x3A, 0);
++                }
++                if self.wp {
++                    return self.check(SK_DATA_PROT, 0x27, 0);
++                }
++                let (lba, blocks) = Self::lba_blocks(cdb);
++                if blocks > MAX_BLOCKS || lba as u64 + blocks as u64 > self.sectors as u64 {
++                    return self.check(SK_ILLEGAL, 0x21, 0);
++                }
++                if blocks == 0 {
++                    return Outcome::Status(ST_GOOD);
++                }
++                self.wr_lba = lba;
++                Outcome::DataOut(blocks as usize * SECTOR)
++            }
++            _ => self.check(SK_ILLEGAL, 0x20, 0),
++        }
++    }
++
++    fn lba_blocks(cdb: &[u8]) -> (u32, u32) {
++        if cdb[0] == 0x08 || cdb[0] == 0x0A {
++            let lba = ((cdb[1] as u32 & 0x1F) << 16) | ((cdb[2] as u32) << 8) | cdb[3] as u32;
++            let blocks = if cdb[4] == 0 { 256 } else { cdb[4] as u32 };
++            (lba, blocks)
++        }
++        else {
++            let lba = u32::from_be_bytes([cdb[2], cdb[3], cdb[4], cdb[5]]);
++            let blocks = ((cdb[7] as u32) << 8) | cdb[8] as u32;
++            (lba, blocks)
++        }
++    }
++
++    fn finish_write(&mut self, data: &[u8]) -> u8 {
++        if self.write_blocks(self.wr_lba, data) {
++            ST_GOOD
++        }
++        else {
++            self.sense = Sense { key: SK_MEDIUM, asc: 0x03, ascq: 0 };
++            ST_CHECK
++        }
++    }
++}
++
++// --- the bus phase machine both protocols drive ------------------------------
++
++#[derive(Copy, Clone, Debug, PartialEq, Eq)]
++enum Phase {
++    /// not selected: bus free
++    Free,
++    /// the target wants the CDB
++    Command,
++    /// the target wants data (a WRITE's)
++    DataOut,
++    /// the target has data for the host (a read's, or the status byte...)
++    DataIn,
++    Status,
++    Message,
++}
++
++#[derive(Default, Clone, Debug)]
++pub struct ZipStats {
++    pub connects:     u32,
++    pub disconnects:  u32,
++    pub selects:      u32,
++    pub resets:       u32,
++    pub commands:     u32,
++    pub check_conds:  u32,
++    pub sectors_read: u32,
++    pub sectors_written: u32,
++    pub bytes_to_host: u64,
++    pub bytes_from_host: u64,
++    /// bytes the host clocked in through the status lines (nibble mode)
++    pub nibble_bytes: u64,
++    /// bytes the host read off the data lines (PS/2 mode)
++    pub ps2_bytes:    u64,
++    /// the host did something the hardware has no answer for
++    pub violations:   u32,
++    pub ejects:       u32,
++    pub inserts:      u32,
++    /// GUEST microseconds spent in READ commands and in WRITE commands, each
++    /// counted from the connect to the message byte (selection, CDB, data,
++    /// status - the transport's whole cost, the driver's own work between
++    /// commands left out), and how many of each: os8088 SPEC.md 138.9's
++    /// "a sector's read and write time" off the emulated clock
++    pub read_us:      f64,
++    pub write_us:     f64,
++    pub read_cmds:    u32,
++    pub write_cmds:   u32,
++    pub by_opcode:    BTreeMap<u8, u32>,
++    /// the last CDBs, oldest first (16)
++    pub cdbs:         Vec<String>,
++}
++
++struct Link {
++    phase:     Phase,
++    cdb:       Vec<u8>,
++    cdb_need:  usize,
++    din:       Vec<u8>,
++    dpos:      usize,
++    dout:      Vec<u8>,
++    dout_need: usize,
++    status:    u8,
++}
++
++impl Link {
++    fn new() -> Link {
++        Link {
++            phase: Phase::Free,
++            cdb: Vec::new(),
++            cdb_need: 0,
++            din: Vec::new(),
++            dpos: 0,
++            dout: Vec::new(),
++            dout_need: 0,
++            status: 0,
++        }
++    }
++
++    fn free(&mut self) {
++        self.phase = Phase::Free;
++        self.cdb.clear();
++        self.din.clear();
++        self.dout.clear();
++        self.dpos = 0;
++    }
++
++    fn select(&mut self) {
++        self.free();
++        self.phase = Phase::Command;
++        self.cdb_need = 0;
++    }
++
++    /// Is a byte on offer to the host?
++    fn readable(&self) -> bool {
++        matches!(self.phase, Phase::DataIn | Phase::Status | Phase::Message)
++    }
++
++    fn writable(&self) -> bool {
++        matches!(self.phase, Phase::Command | Phase::DataOut)
++    }
++
++    fn cur_byte(&self) -> u8 {
++        match self.phase {
++            Phase::DataIn => self.din.get(self.dpos).copied().unwrap_or(0),
++            Phase::Status => self.status,
++            Phase::Message => 0,
++            _ => 0xFF,
++        }
++    }
++}
++
++// --- the drive: the two protocols over one target ----------------------------
++
++pub struct ZipDrive {
++    pub proto: ZipProto,
++    pub id:    u8,
++    pub scsi:  ZipScsi,
++    pub stats: ZipStats,
++    link:      Link,
++    // --- VPI0 (PPA3) ---
++    connected: bool,
++    cseq:      u8,
++    dseq:      u8,
++    sel_pending: bool,
++    last_pulse: Option<u8>,
++    /// a byte strobed at an AUTOFEED pulse, held until the next register
++    /// access says it was a byte and not the first half of a disconnect pulse
++    pend:      Option<u8>,
++    /// the guest's clock as this device sees it (the port's `run`), and when
++    /// the current connection began and which command it carried
++    now_us:    f64,
++    t_conn:    f64,
++    cur_op:    Option<u8>,
++    // --- VPI2 (MatchMaker) ---
++    /// the CPP layer: is device 0 selected in the chain
++    cpp_conn:  bool,
++    /// ... and what it was before the last CPP command: imm_cpp's s3 answer
++    /// is read BEFORE its own command is latched, and imm_connect's own
++    /// return convention (the third CPP, after a deselect-all, must say
++    /// "connected") needs the state the PREVIOUS command left
++    cpp_prev:  bool,
++    hist:      Vec<u8>,
++    selected:  bool,
++    negotiated: bool,
++    /// the byte of an IMM byte-pair already latched at the strobe's rising edge
++    prev_ctrl: u8,
++}
++
++const PPA_CSEQ: [u8; 4] = [0x00, 0x3C, 0x20, 0x8F];
++const PPA_CSEQ_EPP: u8 = 0xCF;
++const PPA_DSEQ: [u8; 4] = [0x00, 0x3C, 0x20, 0x0F];
++const IMM_MAGIC: [u8; 6] = [0xAA, 0x55, 0x00, 0xFF, 0x87, 0x78];
++
++impl ZipDrive {
++    pub fn new(proto: ZipProto, id: u8, model: &str) -> ZipDrive {
++        ZipDrive {
++            proto,
++            id: id & 7,
++            scsi: ZipScsi::new(model),
++            stats: ZipStats::default(),
++            link: Link::new(),
++            connected: false,
++            cseq: 0,
++            dseq: 0,
++            sel_pending: false,
++            last_pulse: None,
++            pend: None,
++            now_us: 0.0,
++            t_conn: 0.0,
++            cur_op: None,
++            cpp_conn: false,
++            cpp_prev: false,
++            hist: Vec::new(),
++            selected: false,
++            negotiated: false,
++            prev_ctrl: 0,
++        }
++    }
++
++    // ---- verbs ----
++
++    pub fn insert(&mut self, path: &str) -> Result<(), String> {
++        self.scsi.insert(path)?;
++        self.stats.inserts += 1;
++        Ok(())
++    }
++
++    pub fn eject(&mut self) {
++        self.scsi.eject();
++        self.stats.ejects += 1;
++    }
++
++    pub fn set_wp(&mut self, wp: bool) {
++        self.scsi.wp = wp;
++    }
++
++    // ---- the SCSI side of a selected link ----
++
++    /// Advance the device's clock by `us` guest microseconds.
++    pub fn tick(&mut self, us: f64) {
++        self.now_us += us;
++    }
++
++    /// `done`: the command ran to its message byte (not a reset or a
++    /// disconnect that abandoned it).
++    fn bus_free(&mut self, done: bool) {
++        if let (true, Some(op)) = (done, self.cur_op) {
++            let dt = self.now_us - self.t_conn;
++            match op {
++                0x08 | 0x28 => {
++                    self.stats.read_us += dt;
++                    self.stats.read_cmds += 1;
++                }
++                0x0A | 0x2A => {
++                    self.stats.write_us += dt;
++                    self.stats.write_cmds += 1;
++                }
++                _ => {}
++            }
++        }
++        self.cur_op = None;
++        self.link.free();
++        self.selected = false;
++        self.negotiated = false;
++    }
++
++    fn put_byte(&mut self, b: u8) {
++        self.stats.bytes_from_host += 1;
++        match self.link.phase {
++            Phase::Command => {
++                if self.link.cdb.is_empty() {
++                    self.link.cdb_need = ZipScsi::cdb_len(b);
++                }
++                self.link.cdb.push(b);
++                if self.link.cdb.len() == self.link.cdb_need {
++                    let cdb = self.link.cdb.clone();
++                    self.run_command(&cdb);
++                }
++            }
++            Phase::DataOut => {
++                self.link.dout.push(b);
++                if self.link.dout.len() == self.link.dout_need {
++                    let data = std::mem::take(&mut self.link.dout);
++                    let st = self.scsi.finish_write(&data);
++                    self.stats.sectors_written += (data.len() / SECTOR) as u32;
++                    self.finish_with(st);
++                }
++            }
++            _ => self.stats.violations += 1,
++        }
++    }
++
++    fn finish_with(&mut self, st: u8) {
++        if st == ST_CHECK {
++            self.stats.check_conds += 1;
++        }
++        self.link.status = st;
++        self.link.phase = Phase::Status;
++    }
++
++    fn run_command(&mut self, cdb: &[u8]) {
++        self.stats.commands += 1;
++        self.cur_op = Some(cdb[0]);
++        *self.stats.by_opcode.entry(cdb[0]).or_insert(0) += 1;
++        if self.stats.cdbs.len() >= 16 {
++            self.stats.cdbs.remove(0);
++        }
++        self.stats.cdbs.push(cdb.iter().map(|b| format!("{:02x}", b)).collect());
++        let was_medium = self.scsi.has_medium();
++        match self.scsi.execute(cdb) {
++            Outcome::Status(st) => {
++                if cdb[0] == 0x1B && was_medium && !self.scsi.has_medium() {
++                    self.stats.ejects += 1;
++                }
++                self.finish_with(st)
++            }
++            Outcome::DataIn(d) => {
++                if d.is_empty() {
++                    self.finish_with(ST_GOOD);
++                }
++                else {
++                    if cdb[0] == 0x08 || cdb[0] == 0x28 {
++                        self.stats.sectors_read += (d.len() / SECTOR) as u32;
++                    }
++                    self.link.din = d;
++                    self.link.dpos = 0;
++                    self.link.status = ST_GOOD;
++                    self.link.phase = Phase::DataIn;
++                }
++            }
++            Outcome::DataOut(n) => {
++                self.link.dout.clear();
++                self.link.dout_need = n;
++                self.link.phase = Phase::DataOut;
++            }
++        }
++    }
++
++    /// The host has taken the byte on offer.
++    fn consume(&mut self) {
++        match self.link.phase {
++            Phase::DataIn => {
++                self.stats.bytes_to_host += 1;
++                self.link.dpos += 1;
++                if self.link.dpos >= self.link.din.len() {
++                    self.link.phase = Phase::Status;
++                }
++            }
++            Phase::Status => {
++                self.stats.bytes_to_host += 1;
++                self.link.phase = Phase::Message;
++            }
++            Phase::Message => {
++                self.stats.bytes_to_host += 1;
++                // command complete: the target lets go of the bus
++                self.bus_free(true);
++            }
++            _ => self.stats.violations += 1,
++        }
++    }
++
++    fn reset_pulse(&mut self) {
++        self.stats.resets += 1;
++        self.scsi.reset();
++        self.bus_free(false);
++    }
++
++    // ---- the port's face ----
++
++    /// A write to the data register. `ctrl` is the control register as it
++    /// stands, `driving` whether the host's data lines are driven (a
++    /// bidirectional card in input mode tri-states them).
++    fn commit_pending(&mut self) {
++        if let Some(b) = self.pend.take() {
++            self.put_byte(b);
++        }
++    }
++
++    pub fn data_write(&mut self, v: u8, ctrl: u8, driving: bool) {
++        self.commit_pending();
++        if !driving {
++            return;
++        }
++        if self.proto == ZipProto::Vpi2 && ctrl & 0x0F == 0x0C {
++            // the CPP magic is a run of data values written while SELECT IN
++            // is asserted and STROBE is not
++            self.hist.push(v);
++            if self.hist.len() > 8 {
++                self.hist.remove(0);
++            }
++        }
++    }
++
++    /// A read of the data register that the DRIVE answers (a bidirectional
++    /// card, direction bit set): `None` when nothing drives the lines, which
++    /// the card turns into a floating bus.
++    pub fn data_read(&mut self, ctrl: u8) -> Option<u8> {
++        self.commit_pending();
++        if !self.selected || !self.link.readable() {
++            return None;
++        }
++        // PS/2 reads: both protocols hold the direction bit and a fixed
++        // pattern in the rest of the register
++        let ps2 = match self.proto {
++            ZipProto::Vpi0 => ctrl & 0x27 == 0x25 || ctrl & 0x27 == 0x27,
++            ZipProto::Vpi2 => ctrl & 0x27 == 0x25 || ctrl & 0x27 == 0x26,
++        };
++        if !ps2 {
++            return None;
++        }
++        self.stats.ps2_bytes += 1;
++        Some(self.link.cur_byte())
++    }
++
++    /// A read of the status register, with the control register as it stands.
++    pub fn status(&mut self, ctrl: u8) -> u8 {
++        self.commit_pending();
++        self.last_pulse = None;
++        match self.proto {
++            ZipProto::Vpi0 => self.ppa_status(ctrl),
++            ZipProto::Vpi2 => self.imm_status(ctrl),
++        }
++    }
++
++    /// A write to the control register. `data` is the data latch.
++    pub fn ctrl_write(&mut self, new: u8, data: u8) {
++        let prev = self.prev_ctrl;
++        self.prev_ctrl = new;
++        match self.proto {
++            ZipProto::Vpi0 => self.ppa_ctrl(prev, new, data),
++            ZipProto::Vpi2 => self.imm_ctrl(prev, new, data),
++        }
++    }
++
++    // ---- VPI0 ----
++
++    fn ppa_phase_code(&self) -> u8 {
++        match self.link.phase {
++            Phase::Command => 0xE0,
++            Phase::DataOut => 0xC0,
++            Phase::DataIn => 0xD0,
++            Phase::Status | Phase::Message => 0xF0,
++            Phase::Free => 0x00,
++        }
++    }
++
++    fn ppa_status(&mut self, ctrl: u8) -> u8 {
++        // bit 3 follows AUTOFEED while connected: the "is the cable there"
++        // loop-back the host tests
++        let lo = if ctrl & 2 != 0 { 0x08 } else { 0x00 };
++        if !self.connected {
++            // nothing driving: the lines float to their pulled-up levels
++            // (BUSY high reads 0 at the register)
++            return 0x78;
++        }
++        if !self.selected {
++            return lo;
++        }
++        // nibble reads: ctrl 04h shows the high nibble, 06h the low one
++        if self.link.readable() && ctrl & 0x2F == 0x04 {
++            return self.link.cur_byte() & 0xF0;
++        }
++        if self.link.readable() && ctrl & 0x2F == 0x06 {
++            return (self.link.cur_byte() << 4) & 0xF0;
++        }
++        self.ppa_phase_code() | lo
++    }
++
++    fn ppa_ctrl(&mut self, prev: u8, new: u8, data: u8) {
++        let rise1 = prev & 2 == 0 && new & 2 != 0;
++        // a byte held from the last AUTOFEED pulse: the 0Ch that follows it
++        // is common to a byte and to a disconnect pulse, and the 04h after
++        // THAT makes it a disconnect pulse; anything else makes it a byte
++        if self.pend.is_some() {
++            if new == 0x04 && prev == 0x0C {
++                self.pend = None;
++            }
++            else if !(new == 0x0C && prev == 0x0E) {
++                self.commit_pending();
++            }
++        }
++        // --- a byte consumed by the host ---
++        if self.connected && self.selected && self.link.readable() {
++            // nibble: leaving 06h (low nibble was read) is the byte's end
++            if prev & 0x2F == 0x06 && new & 0x2F != 0x06 {
++                self.stats.nibble_bytes += 1;
++                self.consume();
++            }
++            // PS/2: the AUTOFEED pulse with the direction bit up is the ack
++            else if rise1 && new & 0x25 == 0x25 {
++                self.consume();
++            }
++        }
++
++        if !self.connected {
++            // a connect pulse: AUTOFEED rising with SELECT IN deasserted
++            if rise1 && new & 8 == 0 {
++                let want = PPA_CSEQ.get(self.cseq as usize).copied();
++                let ok = want == Some(data) || (self.cseq == 3 && data == PPA_CSEQ_EPP);
++                if ok {
++                    self.cseq += 1;
++                    if self.cseq == 4 {
++                        self.cseq = 0;
++                        self.connected = true;
++                        self.t_conn = self.now_us;
++                        self.dseq = 0;
++                        self.stats.connects += 1;
++                    }
++                }
++                else {
++                    self.cseq = if data == PPA_CSEQ[0] { 1 } else { 0 };
++                }
++            }
++            return;
++        }
++
++        // connected from here
++        if rise1 && new & 8 != 0 {
++            if self.selected {
++                // a data/command byte, strobed by the same line
++                if self.link.writable() {
++                    self.pend = Some(data);
++                }
++            }
++            else if data == 1u8 << self.id {
++                self.sel_pending = true;
++            }
++            self.last_pulse = Some(data);
++        }
++
++        // the disconnect sequence: each pulse is completed by ctrl 04h
++        // arriving after 0Ch
++        if new == 0x04 && prev == 0x0C {
++            if let Some(d) = self.last_pulse.take() {
++                if PPA_DSEQ.get(self.dseq as usize) == Some(&d) {
++                    self.dseq += 1;
++                    if self.dseq == 4 {
++                        self.dseq = 0;
++                        self.connected = false;
++                        self.sel_pending = false;
++                        self.stats.disconnects += 1;
++                        self.bus_free(false);
++                    }
++                }
++                else {
++                    self.dseq = if d == PPA_DSEQ[0] { 1 } else { 0 };
++                }
++                // that pulse was no select request
++                self.sel_pending = false;
++            }
++        }
++
++        // 08h: INIT low with SELECT IN asserted: the select or the reset
++        if new == 0x08 && prev != 0x08 && !self.selected {
++            if self.sel_pending && data == 0x80 {
++                self.sel_pending = false;
++                self.selected = true;
++                self.stats.selects += 1;
++                self.link.select();
++            }
++            else if data == 0x40 {
++                self.reset_pulse();
++            }
++        }
++    }
++
++    // ---- VPI2 ----
++
++    fn imm_phase_code(&self) -> u8 {
++        match self.link.phase {
++            Phase::Command => 0xA8,
++            Phase::DataOut => 0x88,
++            Phase::DataIn => 0x98,
++            Phase::Status | Phase::Message => 0xB8,
++            Phase::Free => 0x70,
++        }
++    }
++
++    fn imm_status(&mut self, ctrl: u8) -> u8 {
++        // the CPP probe: a run of writes (AA 55 00 FF, then 87, then 78) is
++        // answered with a fixed pattern by a drive that is on the line
++        let n = self.hist.len();
++        let h = &self.hist;
++        if ctrl & 0x0F == 0x0C || ctrl & 0x0F == 0x0D {
++            if n >= 6 && h[n - 6..] == IMM_MAGIC {
++                return if self.cpp_prev { 0x70 } else { 0x78 };
++            }
++            if n >= 5 && h[n - 5..] == IMM_MAGIC[..5] {
++                return 0x58;
++            }
++            if n >= 4 && h[n - 4..] == IMM_MAGIC[..4] {
++                return 0xF8;
++            }
++        }
++        if !self.cpp_conn {
++            // pass-through: nothing driving, the lines float high
++            return 0x78;
++        }
++        if !self.selected {
++            return 0x70;
++        }
++        if self.link.readable() {
++            // nibble: 06h shows the LOW nibble, 05h the HIGH one - but only
++            // once the 1284 negotiation has said "data available"
++            if ctrl & 0x2F == 0x06 {
++                if !self.negotiated {
++                    // the negotiation's answer: PAPER OUT high = data there
++                    return self.imm_phase_code() | 0x20;
++                }
++                return (self.link.cur_byte() << 4) & 0xF0;
++            }
++            if ctrl & 0x2F == 0x05 && self.negotiated {
++                return self.link.cur_byte() & 0xF0;
++            }
++        }
++        self.imm_phase_code()
++    }
++
++    fn imm_ctrl(&mut self, prev: u8, new: u8, data: u8) {
++        let rise0 = prev & 1 == 0 && new & 1 != 0;
++        let fall0 = prev & 1 != 0 && new & 1 == 0;
++
++        // --- a byte consumed by the host ---
++        if self.cpp_conn && self.selected && self.link.readable() {
++            // nibble: 05h -> 04h ends the byte
++            if prev & 0x2F == 0x05 && new & 0x2F == 0x04 {
++                self.stats.nibble_bytes += 1;
++                self.consume();
++            }
++            // PS/2: 26h -> 25h
++            else if prev & 0x27 == 0x26 && new & 0x27 == 0x25 {
++                self.consume();
++            }
++        }
++
++        // the 1284 negotiation: data = mode, then 06h, then 07h
++        if self.selected && prev & 0x0F == 0x06 && new & 0x0F == 0x07 {
++            self.negotiated = true;
++        }
++        // termination
++        if new & 0x2F == 0x0E {
++            self.negotiated = false;
++        }
++
++        // --- the strobe, with SELECT IN asserted (bit 3): a CPP command,
++        // a select or a reset ---
++        if rise0 && new & 0x0F == 0x0D {
++            // the command byte is the last value written, after the magic
++            let n = self.hist.len();
++            if n >= 7 && self.hist[n - 7..n - 1] == IMM_MAGIC {
++                self.hist.clear();
++                self.cpp_command(data);
++                return;
++            }
++            if self.cpp_conn && !self.selected {
++                if data == 0x40 {
++                    self.reset_pulse();
++                }
++                else if data == (0x80 | (1u8 << self.id)) {
++                    self.selected = true;
++                    self.negotiated = false;
++                    self.stats.selects += 1;
++                    self.link.select();
++                }
++            }
++        }
++        // anything but the CPP's own idle values ends a magic run
++        if new & 0x0F != 0x0C && new & 0x0F != 0x0D {
++            self.hist.clear();
++        }
++
++        // --- a byte pair strobed in, with SELECT IN deasserted ---
++        if self.cpp_conn && self.selected && self.link.writable() {
++            if rise0 && new & 0x0F == 0x05 && (prev & 0x0F == 0x04 || prev & 0x0F == 0x00) {
++                self.put_byte(data);
++            }
++            else if fall0 && prev & 0x0F == 0x05 && new & 0x0F == 0x00 {
++                self.put_byte(data);
++            }
++        }
++    }
++
++    fn cpp_command(&mut self, b: u8) {
++        self.cpp_prev = self.cpp_conn;
++        match b {
++            // select device 0 (compatible, EPP-Winbond, EPP)
++            0xE0 | 0x20 | 0x28 => {
++                if !self.cpp_conn {
++                    self.stats.connects += 1;
++                    self.t_conn = self.now_us;
++                }
++                self.cpp_conn = true;
++            }
++            // deselect all
++            0x30..=0x3F => {
++                if self.cpp_conn {
++                    self.stats.disconnects += 1;
++                }
++                self.cpp_conn = false;
++                self.bus_free(false);
++            }
++            _ => {}
++        }
++    }
++}
++
++// --- the model's own tests: Linux's HOST sequences replayed against it -------
++//
++// Each host function below is ppa.c's or imm.c's register sequence, written
++// from the driver's behaviour, going through a real ParallelPort so the card's
++// own behaviour (latch, tri-state, raw control register) is in the loop.
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{devices::lpt_port::ParallelPort, tracelogger::TraceLogger};
++
++    struct Host {
++        p: ParallelPort,
++        ps2: bool,
++    }
++
++    impl Host {
++        fn new(proto: ZipProto, bidir: bool, ps2: bool, tag: &str) -> Host {
++            let mut p = ParallelPort::new(None, TraceLogger::None);
++            p.set_bidir(bidir);
++            let mut d = ZipDrive::new(proto, 6, "zip100");
++            let path = Self::make_image(tag, 0);
++            d.insert(&path).unwrap();
++            p.attach_zip(d);
++            Host { p, ps2 }
++        }
++
++        fn make_image(tag: &str, salt: u32) -> String {
++            let path = std::env::temp_dir().join(format!("os88zip-test-{}-{}.img", std::process::id(), tag));
++            let mut f = File::create(&path).unwrap();
++            f.set_len(ZIP100_SECTORS as u64 * 512).unwrap();
++            // sector n starts with n as 4 bytes, then a pattern
++            for lba in [0u32, 1, 2, 3, 100] {
++                let mut s = vec![0u8; 512];
++                s[..4].copy_from_slice(&(lba + salt).to_be_bytes());
++                for (i, b) in s.iter_mut().enumerate().skip(4) {
++                    *b = (i as u32 ^ lba) as u8;
++                }
++                f.seek(SeekFrom::Start(lba as u64 * 512)).unwrap();
++                f.write_all(&s).unwrap();
++            }
++            path.to_string_lossy().to_string()
++        }
++
++        fn zip(&mut self) -> &mut ZipDrive {
++            self.p.zip_mut().unwrap()
++        }
++
++        fn dtr(&mut self, v: u8) {
++            self.p.port_write(0x378, v)
++        }
++        fn ctr(&mut self, v: u8) {
++            self.p.port_write(0x37A, v)
++        }
++        fn str_(&mut self) -> u8 {
++            self.p.port_read(0x379)
++        }
++        fn rdtr(&mut self) -> u8 {
++            self.p.port_read(0x378)
++        }
++
++        // ---------------- VPI0 host (ppa.c) ----------------
++        fn ppa_c_pulse(&mut self, b: u8) {
++            self.dtr(b);
++            self.ctr(0x4);
++            self.ctr(0x6);
++            self.ctr(0x4);
++            self.ctr(0xC);
++        }
++        fn ppa_d_pulse(&mut self, b: u8) {
++            self.dtr(b);
++            self.ctr(0xC);
++            self.ctr(0xE);
++            self.ctr(0xC);
++            self.ctr(0x4);
++            self.ctr(0xC);
++        }
++        fn ppa_connect(&mut self) {
++            self.ppa_c_pulse(0);
++            self.ppa_c_pulse(0x3C);
++            self.ppa_c_pulse(0x20);
++            self.ppa_c_pulse(0x8F);
++        }
++        fn ppa_disconnect(&mut self) {
++            self.ppa_d_pulse(0);
++            self.ppa_d_pulse(0x3C);
++            self.ppa_d_pulse(0x20);
++            self.ppa_d_pulse(0x0F);
++        }
++        fn ppa_cable_ok(&mut self) -> bool {
++            self.ctr(0xE);
++            let a = self.str_() & 8 == 8;
++            self.ctr(0xC);
++            let b = self.str_() & 8 == 0;
++            a && b
++        }
++        fn ppa_select(&mut self, id: u8) -> bool {
++            if self.str_() & 0x40 != 0 {
++                return false;
++            }
++            self.dtr(1 << id);
++            self.ctr(0xE);
++            self.ctr(0xC);
++            self.dtr(0x80);
++            self.ctr(0x8);
++            self.str_() & 0x40 != 0
++        }
++        fn ppa_wait(&mut self) -> u8 {
++            let r = self.str_();
++            if r & 0xC0 != 0xC0 {
++                return 0;
++            }
++            r & 0xF0
++        }
++        fn ppa_out(&mut self, b: &[u8]) -> bool {
++            let r = self.ppa_wait();
++            if r & 0x50 != 0x40 {
++                return false;
++            }
++            for &x in b {
++                self.dtr(x);
++                self.ctr(0xE);
++                self.ctr(0xC);
++            }
++            true
++        }
++        fn ppa_in(&mut self, n: usize) -> Option<Vec<u8>> {
++            let r = self.ppa_wait();
++            if r & 0x50 != 0x50 {
++                return None;
++            }
++            let mut v = Vec::new();
++            if self.ps2 {
++                self.ctr(0x25);
++                for _ in 0..n {
++                    v.push(self.rdtr());
++                    self.ctr(0x27);
++                    self.ctr(0x25);
++                }
++                self.ctr(0x4);
++                self.ctr(0xC);
++            }
++            else {
++                for _ in 0..n {
++                    self.ctr(0x4);
++                    let h = self.str_() & 0xF0;
++                    self.ctr(0x6);
++                    v.push(h | ((self.str_() & 0xF0) >> 4));
++                }
++                self.ctr(0xC);
++            }
++            Some(v)
++        }
++        /// one whole command, ppa_engine's order
++        fn ppa_cmd(&mut self, cdb: &[u8], din: usize, dout: Option<&[u8]>) -> Option<(u8, Vec<u8>)> {
++            self.ppa_connect();
++            assert!(self.ppa_cable_ok());
++            assert!(self.ppa_select(6));
++            self.ctr(0xC);
++            assert!(self.str_() & 0x80 != 0);
++            for b in cdb {
++                assert!(self.ppa_out(&[*b]));
++            }
++            let mut data = Vec::new();
++            if let Some(d) = dout {
++                for ch in d.chunks(512) {
++                    self.ctr(0xC);
++                    assert!(self.ppa_out(ch));
++                }
++            }
++            else {
++                let mut left = din;
++                loop {
++                    self.ctr(0xC);
++                    let r = self.str_() & 0xF0;
++                    if r == 0xF0 {
++                        break;
++                    }
++                    let burst = if left >= 512 { 512 } else { 1 };
++                    assert!(left > 0, "device wants to send more than the host expected");
++                    data.extend(self.ppa_in(burst)?);
++                    left -= burst;
++                }
++            }
++            assert_eq!(self.ppa_wait(), 0xF0);
++            let st = self.ppa_in(1)?[0];
++            assert_eq!(self.ppa_wait(), 0xF0, "message byte");
++            let msg = self.ppa_in(1)?[0];
++            assert_eq!(msg, 0);
++            self.ppa_disconnect();
++            Some((st, data))
++        }
++        fn ppa_reset(&mut self) {
++            self.ppa_connect();
++            self.dtr(0x40);
++            self.ctr(0x8);
++            self.ctr(0xC);
++            self.ppa_disconnect();
++        }
++        fn ppa_probe(&mut self) -> bool {
++            // ppa_init + device_check
++            self.ppa_disconnect();
++            self.ppa_connect();
++            if !self.ppa_cable_ok() {
++                self.ppa_disconnect();
++                return false;
++            }
++            self.ppa_disconnect();
++            for id in 0..8 {
++                self.ppa_connect();
++                if !self.ppa_select(id) {
++                    self.ppa_disconnect();
++                    continue;
++                }
++                self.ctr(0xC);
++                for _ in 0..6 {
++                    if !self.ppa_out(&[0]) {
++                        return false;
++                    }
++                }
++                self.ctr(0xC);
++                let l = self.str_();
++                self.ppa_disconnect();
++                return l & 0xF0 == 0xF0;
++            }
++            false
++        }
++
++        // ---------------- VPI2 host (imm.c) ----------------
++        fn imm_cpp(&mut self, b: u8) -> i32 {
++            self.ctr(0xC);
++            self.dtr(0xAA);
++            self.dtr(0x55);
++            self.dtr(0x00);
++            self.dtr(0xFF);
++            let s1 = self.str_() & 0xB8;
++            self.dtr(0x87);
++            let s2 = self.str_() & 0xB8;
++            self.dtr(0x78);
++            let s3 = self.str_() & 0x38;
++            self.dtr(b);
++            self.ctr(0xC);
++            self.ctr(0xD);
++            self.ctr(0xC);
++            self.dtr(0xFF);
++            if s1 == 0xB8 && s2 == 0x18 && s3 == 0x30 {
++                1
++            }
++            else if s1 == 0xB8 && s2 == 0x18 && s3 == 0x38 {
++                0
++            }
++            else {
++                -1
++            }
++        }
++        fn imm_connect(&mut self) -> i32 {
++            self.imm_cpp(0xE0);
++            self.imm_cpp(0x30);
++            self.imm_cpp(0xE0)
++        }
++        fn imm_disconnect(&mut self) {
++            self.imm_cpp(0x30);
++        }
++        fn imm_select(&mut self, id: u8) -> bool {
++            self.ctr(0xC);
++            if self.str_() & 8 != 0 {
++                return false;
++            }
++            self.ctr(0x4);
++            self.dtr(0x80 | (1 << id));
++            self.ctr(0xC);
++            self.ctr(0xD);
++            let ok = self.str_() & 8 != 0;
++            self.ctr(0xC);
++            ok
++        }
++        fn imm_wait(&mut self) -> u8 {
++            self.ctr(0xC);
++            let r = self.str_();
++            self.ctr(0x4);
++            if r & 0x80 == 0 {
++                return 0;
++            }
++            r & 0xB8
++        }
++        fn imm_negotiate(&mut self) -> bool {
++            // true = data available
++            let mode = if self.ps2 { 1 } else { 0 };
++            self.ctr(0x4);
++            self.dtr(mode);
++            self.ctr(0x6);
++            let a = self.str_() & 0x20 != 0;
++            self.ctr(0x7);
++            self.ctr(0x6);
++            a
++        }
++        fn imm_out(&mut self, b: &[u8]) -> bool {
++            let r = self.imm_wait();
++            if r & 0x18 != 0x08 {
++                return false;
++            }
++            self.ctr(0x4);
++            for pair in b.chunks(2) {
++                self.dtr(pair[0]);
++                self.ctr(0x5);
++                self.dtr(pair[1]);
++                self.ctr(0x0);
++            }
++            self.ctr(0x4);
++            true
++        }
++        fn imm_in(&mut self, n: usize) -> Option<Vec<u8>> {
++            let r = self.imm_wait();
++            if r & 0x18 != 0x18 {
++                return None;
++            }
++            let mut v = Vec::new();
++            self.ctr(0x4);
++            for _ in 0..n {
++                if self.ps2 {
++                    self.ctr(0x26);
++                    v.push(self.rdtr());
++                    self.ctr(0x25);
++                }
++                else {
++                    self.ctr(0x6);
++                    let l = (self.str_() & 0xF0) >> 4;
++                    self.ctr(0x5);
++                    v.push((self.str_() & 0xF0) | l);
++                    self.ctr(0x4);
++                }
++            }
++            self.ctr(0xC);
++            Some(v)
++        }
++        fn imm_cmd(&mut self, cdb: &[u8], din: usize, dout: Option<&[u8]>) -> Option<(u8, Vec<u8>)> {
++            assert_eq!(self.imm_connect(), 1);
++            assert!(self.imm_select(6));
++            self.ctr(0xC);
++            assert!(self.str_() & 0x80 != 0);
++            for pair in cdb.chunks(2) {
++                assert!(self.imm_out(pair));
++            }
++            self.ctr(0xC);
++            let x = self.str_() & 0xB8;
++            let rd = x & 0x10 != 0;
++            let dp = x & 0x20 == 0;
++            if dp && rd {
++                assert!(self.imm_negotiate());
++            }
++            let mut data = Vec::new();
++            if dp {
++                if let Some(d) = dout {
++                    for ch in d.chunks(512) {
++                        assert!(self.imm_out(ch));
++                        self.ctr(0xC);
++                    }
++                }
++                else {
++                    let mut left = din;
++                    loop {
++                        self.ctr(0xC);
++                        let r = self.str_() & 0xB8;
++                        if r == 0xB8 {
++                            break;
++                        }
++                        assert!(r & 0x88 == 0x88);
++                        assert!(left > 0, "device wants to send more than the host expected");
++                        let burst = if left >= 512 { 512 } else { 1 };
++                        data.extend(self.imm_in(burst)?);
++                        left -= burst;
++                    }
++                }
++            }
++            if dp && rd {
++                self.ctr(0x4);
++                self.ctr(0xC);
++                self.ctr(0xE);
++                self.ctr(0x4);
++            }
++            assert_eq!(self.imm_wait(), 0xB8);
++            assert!(self.imm_negotiate());
++            let st = self.imm_in(1)?[0];
++            assert_eq!(self.imm_wait(), 0xB8);
++            let msg = self.imm_in(1)?[0];
++            assert_eq!(msg, 0);
++            self.ctr(0x4);
++            self.ctr(0xC);
++            self.ctr(0xE);
++            self.ctr(0x4);
++            self.imm_disconnect();
++            Some((st, data))
++        }
++        fn imm_reset(&mut self) {
++            assert_eq!(self.imm_connect(), 1);
++            self.ctr(0x4);
++            self.dtr(0x40);
++            self.ctr(0xC);
++            self.ctr(0xD);
++            self.ctr(0xC);
++            self.ctr(0x4);
++            self.imm_disconnect();
++        }
++
++        fn cmd(&mut self, vpi2: bool, cdb: &[u8], din: usize, dout: Option<&[u8]>) -> (u8, Vec<u8>) {
++            let r = if vpi2 { self.imm_cmd(cdb, din, dout) } else { self.ppa_cmd(cdb, din, dout) };
++            r.expect("transport failed")
++        }
++        fn reset(&mut self, vpi2: bool) {
++            if vpi2 {
++                self.imm_reset()
++            }
++            else {
++                self.ppa_reset()
++            }
++        }
++    }
++
++    fn read10(lba: u32, n: u16) -> [u8; 10] {
++        let l = lba.to_be_bytes();
++        [0x28, 0, l[0], l[1], l[2], l[3], 0, (n >> 8) as u8, n as u8, 0]
++    }
++    fn write10(lba: u32, n: u16) -> [u8; 10] {
++        let mut c = read10(lba, n);
++        c[0] = 0x2A;
++        c
++    }
++
++    /// The whole host story, once per (protocol, mode): the attach's probe,
++    /// TEST UNIT READY, the unit attention a new disk owes, INQUIRY, READ
++    /// CAPACITY, READ(10), WRITE(10) and a read back, write protect, eject.
++    fn story(vpi2: bool, bidir: bool, ps2: bool, tag: &str) {
++        let proto = if vpi2 { ZipProto::Vpi2 } else { ZipProto::Vpi0 };
++        let mut h = Host::new(proto, bidir, ps2, tag);
++
++        // probe (and the reset pulse that ends it)
++        if vpi2 {
++            assert_eq!(h.imm_connect(), 1);
++            h.imm_reset();
++            h.imm_disconnect();
++        }
++        else {
++            assert!(h.ppa_probe());
++            h.ppa_reset();
++        }
++        assert_eq!(h.zip().stats.resets, 1);
++        assert!(!h.zip().selected);
++
++        // the reset left a unit attention: the first command reports it
++        let (st, _) = h.cmd(vpi2, &[0, 0, 0, 0, 0, 0], 0, None);
++        assert_eq!(st, ST_CHECK);
++        let (st, d) = h.cmd(vpi2, &[3, 0, 0, 0, 18, 0], 18, None);
++        assert_eq!(st, ST_GOOD);
++        assert_eq!((d[2], d[12]), (SK_UNIT_ATTN, 0x29));
++        let (st, _) = h.cmd(vpi2, &[0, 0, 0, 0, 0, 0], 0, None);
++        assert_eq!(st, ST_GOOD);
++
++        // INQUIRY
++        let (st, d) = h.cmd(vpi2, &[0x12, 0, 0, 0, 36, 0], 36, None);
++        assert_eq!(st, ST_GOOD);
++        assert_eq!(&d[8..16], b"IOMEGA  ");
++        assert_eq!(&d[16..23], b"ZIP 100");
++
++        // READ CAPACITY
++        let (_, d) = h.cmd(vpi2, &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8, None);
++        assert_eq!(u32::from_be_bytes([d[0], d[1], d[2], d[3]]), ZIP100_SECTORS - 1);
++        assert_eq!(u32::from_be_bytes([d[4], d[5], d[6], d[7]]), 512);
++
++        // MODE SENSE: not write-protected
++        let (_, d) = h.cmd(vpi2, &[0x1A, 0, 0x3F, 0, 12, 0], 12, None);
++        assert_eq!(d[2] & 0x80, 0);
++
++        // READ(10) of three sectors
++        let (st, d) = h.cmd(vpi2, &read10(1, 3), 3 * 512, None);
++        assert_eq!(st, ST_GOOD);
++        assert_eq!(d.len(), 1536);
++        for (i, lba) in [1u32, 2, 3].iter().enumerate() {
++            assert_eq!(&d[i * 512..i * 512 + 4], &lba.to_be_bytes());
++            assert_eq!(d[i * 512 + 77], (77u32 ^ lba) as u8);
++        }
++
++        // a READ past the end is ILLEGAL REQUEST
++        let (st, _) = h.cmd(vpi2, &read10(ZIP100_SECTORS - 1, 2), 0, None);
++        assert_eq!(st, ST_CHECK);
++        let (_, d) = h.cmd(vpi2, &[3, 0, 0, 0, 18, 0], 18, None);
++        assert_eq!((d[2], d[12]), (SK_ILLEGAL, 0x21));
++
++        // WRITE(10) of two sectors, read back both through the protocol
++        // and from the host's file
++        let mut w = vec![0u8; 1024];
++        for (i, b) in w.iter_mut().enumerate() {
++            *b = (i * 7 + 3) as u8;
++        }
++        let (st, _) = h.cmd(vpi2, &write10(50, 2), 0, Some(&w));
++        assert_eq!(st, ST_GOOD);
++        let (_, d) = h.cmd(vpi2, &read10(50, 2), 1024, None);
++        assert_eq!(d, w);
++        let path = h.zip().scsi.path().to_string();
++        let mut f = File::open(&path).unwrap();
++        f.seek(SeekFrom::Start(50 * 512)).unwrap();
++        let mut back = vec![0u8; 1024];
++        f.read_exact(&mut back).unwrap();
++        assert_eq!(back, w);
++
++        // a 127-sector read (the driver's biggest burst) matches the file
++        let (_, d) = h.cmd(vpi2, &read10(0, 127), 127 * 512, None);
++        assert_eq!(&d[..4], &0u32.to_be_bytes());
++        assert_eq!(&d[100 * 512..100 * 512 + 4], &100u32.to_be_bytes());
++
++        // write protect: a write is DATA PROTECT, a read still works
++        h.zip().set_wp(true);
++        let (_, d) = h.cmd(vpi2, &[0x1A, 0, 0x3F, 0, 12, 0], 12, None);
++        assert_eq!(d[2] & 0x80, 0x80);
++        let (st, _) = h.cmd(vpi2, &write10(50, 1), 0, None);
++        assert_eq!(st, ST_CHECK);
++        let (_, d) = h.cmd(vpi2, &[3, 0, 0, 0, 18, 0], 18, None);
++        assert_eq!((d[2], d[12]), (SK_DATA_PROT, 0x27));
++        h.zip().set_wp(false);
++
++        // eject with START STOP UNIT (LoEj): then NOT READY, no medium
++        let (st, _) = h.cmd(vpi2, &[0x1B, 0, 0, 0, 2, 0], 0, None);
++        assert_eq!(st, ST_GOOD);
++        let (st, _) = h.cmd(vpi2, &[0, 0, 0, 0, 0, 0], 0, None);
++        assert_eq!(st, ST_CHECK);
++        let (_, d) = h.cmd(vpi2, &[3, 0, 0, 0, 18, 0], 18, None);
++        assert_eq!((d[2], d[12]), (SK_NOT_READY, 0x3A));
++        // INQUIRY still answers
++        let (st, d) = h.cmd(vpi2, &[0x12, 0, 0, 0, 36, 0], 36, None);
++        assert_eq!((st, &d[8..14]), (ST_GOOD, &b"IOMEGA"[..]));
++
++        // a new disk is a unit attention, then reads ITS data
++        let p2 = Host::make_image(&format!("{}-b", tag), 1000);
++        h.zip().insert(&p2).unwrap();
++        let (st, _) = h.cmd(vpi2, &read10(2, 1), 0, None);
++        assert_eq!(st, ST_CHECK);
++        let (_, d) = h.cmd(vpi2, &[3, 0, 0, 0, 18, 0], 18, None);
++        assert_eq!((d[2], d[12]), (SK_UNIT_ATTN, 0x28));
++        let (st, d) = h.cmd(vpi2, &read10(2, 1), 512, None);
++        assert_eq!(st, ST_GOOD);
++        assert_eq!(&d[..4], &1002u32.to_be_bytes());
++
++        // the mode really used
++        let s = h.zip().stats.clone();
++        assert_eq!(s.violations, 0, "the host did something the drive has no answer for");
++        if ps2 {
++            assert!(s.ps2_bytes > 0 && s.nibble_bytes == 0, "{:?}", s);
++        }
++        else {
++            assert!(s.nibble_bytes > 0 && s.ps2_bytes == 0, "{:?}", s);
++        }
++        let _ = std::fs::remove_file(&path);
++        let _ = std::fs::remove_file(&p2);
++    }
++
++    #[test]
++    fn vpi0_nibble_output_only_port() {
++        story(false, false, false, "p0n");
++    }
++    #[test]
++    fn vpi0_nibble_bidirectional_port() {
++        story(false, true, false, "p0nb");
++    }
++    #[test]
++    fn vpi0_ps2() {
++        story(false, true, true, "p0p");
++    }
++    #[test]
++    fn vpi2_nibble_output_only_port() {
++        story(true, false, false, "p2n");
++    }
++    #[test]
++    fn vpi2_nibble_bidirectional_port() {
++        story(true, true, false, "p2nb");
++    }
++    #[test]
++    fn vpi2_ps2() {
++        story(true, true, true, "p2p");
++    }
++
++    #[test]
++    fn each_protocol_ignores_the_other() {
++        // a VPI2 probe on a VPI0 drive, and the reverse, finds nothing
++        let mut h = Host::new(ZipProto::Vpi0, false, false, "x0");
++        assert_eq!(h.imm_connect(), -1);
++        assert_eq!(h.zip().stats.connects, 0);
++        let mut h = Host::new(ZipProto::Vpi2, false, false, "x2");
++        h.ppa_connect();
++        assert!(!h.ppa_cable_ok());
++        assert_eq!(h.zip().stats.connects, 0);
++    }
++
++    #[test]
++    fn a_wrong_target_id_does_not_select() {
++        let mut h = Host::new(ZipProto::Vpi0, false, false, "id0");
++        h.ppa_connect();
++        assert!(!h.ppa_select(5));
++        assert!(h.ppa_select(6));
++        let mut h = Host::new(ZipProto::Vpi2, false, false, "id2");
++        assert_eq!(h.imm_connect(), 1);
++        assert!(!h.imm_select(5));
++        assert!(h.imm_select(6));
++    }
++
++    #[test]
++    fn the_latch_is_read_back_on_an_output_only_card() {
++        // what the core's bidirectional test sees: an XT card gives back
++        // what was written, direction bit or not; a tri-state card does not
++        let mut h = Host::new(ZipProto::Vpi0, false, false, "bd0");
++        h.ctr(0x20);
++        h.dtr(0x55);
++        assert_eq!(h.rdtr(), 0x55);
++        h.dtr(0xAA);
++        assert_eq!(h.rdtr(), 0xAA);
++        let mut h = Host::new(ZipProto::Vpi0, true, false, "bd1");
++        h.ctr(0x20);
++        h.dtr(0x55);
++        assert_ne!(h.rdtr(), 0x55);
++        h.ctr(0x00);
++        assert_eq!(h.rdtr(), 0x55);
++    }
++}
+diff --git a/crates/marty_core/src/machine_config.rs b/crates/marty_core/src/machine_config.rs
+index 225feab..4f236d3 100644
+--- a/crates/marty_core/src/machine_config.rs
++++ b/crates/marty_core/src/machine_config.rs
+@@ -250,6 +250,23 @@ pub struct ParallelControllerConfig {
+ #[derive(Clone, Debug, Deserialize)]
+ pub struct ParallelPortConfig {
+     pub io_base: u32,
++    /// os8088 patch 18: a bidirectional (PS/2-style) card: control bit 5
++    /// tri-states the data lines. Missing = an XT card, output-only.
++    #[serde(default)]
++    pub bidir: bool,
++}
++
++/// os8088 patch 18: an Iomega Zip drive on the parallel port
++/// (devices/zip.rs, SPEC.md 138.8). The host image is $OS88_ZIPIMG, which
++/// tools/os88marty.py sets per instance; `zip_insert` swaps it.
++#[derive(Clone, Debug, Deserialize)]
++pub struct ZipConfig {
++    /// "vpi0" (the Zip 100, PPA3) or "vpi2" (the Zip Plus / 250, MatchMaker)
++    pub protocol: String,
++    /// the SCSI target ID (6)
++    pub id: Option<u8>,
++    /// "zip100" (default), "zip100plus" or "zip250": the INQUIRY product
++    pub model: Option<String>,
+ }
+ 
+ #[derive(Clone, Debug, Deserialize)]
+@@ -353,6 +370,7 @@ pub struct MachineConfiguration {
+     pub memory: MemoryConfig,
+     pub ems: Option<EmsMemoryConfig>,
+     pub picomem: Option<PicoMemConfig>,
++    pub zip: Option<ZipConfig>,
+     pub keyboard: Option<KeyboardConfig>,
+     pub serial_mouse: Option<SerialMouseConfig>,
+     pub video: Vec<VideoCardConfig>,

@@ -5802,6 +5802,28 @@ cdromtest: $(BUILD)/cdromtest.img $(BUILD)/cdromsim.img $(BUILD)/cdfix.iso
 	@echo "cdromtest: build/cdromtest.img - CDROM.DRV wanted; build/cdfix.iso the disc"
 	@echo "              Run: python3 tests/cdrom.py"
 
+# ZIPIMG - SPEC.md 138.8's QA disks: Iomega Zip disk images written on the HOST
+# by tools/os88zip.py, which is also what reads the guest's writes back out.
+# Five, each its own target so a row can name the one it opens in `wants=`:
+# zip100.img (IBM format: an MBR whose ONLY partition is in entry 4, FAT16, with
+# README.TXT, HELLO.TXT, DOCS/NOTE.TXT and the 200,000-byte BIG200.BIN),
+# zip100b.img (a second disk with other files, for the insert test),
+# zip100blank.img (formatted and empty, for the save test), zip100super.img
+# (a superfloppy: the BPB at sector 0, no partition table) and zip250.img (the
+# Zip 250, 489,532 sectors). All are SPARSE (under 1 MB of each 100 MB on the
+# host) and byte-identical from build to build. MartyPC's Zip drive reads and
+# writes the file in place (patches/18-zip-lpt.patch), so a row copies one
+# first (os88zip.py clone keeps the holes) and never opens the original.
+ZIPIMGS := zip100.img zip100b.img zip100blank.img zip100super.img zip250.img
+$(BUILD)/zip/%.img: tools/os88zip.py tools/os88disk.py
+	@mkdir -p $(BUILD)/zip
+	python3 tools/os88zip.py qa $(BUILD)/zip --only $*.img
+#> [Gate disks] zipimg :: the Zip drive's QA disks (IBM format, superfloppy, Zip 250), sparse, in build/zip/
+.PHONY: zipimg
+zipimg: $(addprefix $(BUILD)/zip/,$(ZIPIMGS))
+	@echo "zipimg: build/zip/{$(ZIPIMGS)} - read back with tools/os88zip.py"
+	@echo "              Run: python3 tests/zipmodel.py"
+
 # CDAUDIOIMG - SPEC.md 119.7's machine to LOOK at, because 86Box cannot be
 # driven from this host: build/cdaudio.cue is an audio CD of three generated
 # tones (tools/os88cdiso.py audio), and build/cdaudiotest.img is the gate disk
