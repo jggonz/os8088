@@ -38044,7 +38044,8 @@ drive the machine does not have is an ordinary failed mount. Rows 2 and up are
 registered by a block-serving driver through `osapi_vol_add` (§20.3) and
 dropped when it unloads, which `drv_release` does **before** freeing the
 driver's claims: a mounted volume whose transport has been freed is a read
-into whatever claims that memory next.
+into whatever claims that memory next. A Disk window showing a dropped volume
+is closed with it (§22.29), so the letter's next open lists what is there now.
 
 #### 18.7.1 What the letters mean
 
