@@ -630,6 +630,8 @@ qb_frame:
 
 ; qb_keys - IN1 (the coin, the starts) and IN4 (the joystick), active high
 qb_keys:
+    call ar_joyd                    ; the stick's JOYD_* (ARCADE-SPEC 15)
+    mov dl, al
     mov bl, QB_IN1REST
     mov al, [ar_pbits]
     test al, AR_COIN
@@ -655,11 +657,22 @@ qb_keys:
     or bh, ah
     jmp .k
 .done:
+    mov al, dl                      ; the stick, turned the same 45 degrees:
+    and al, 15                      ;   one way as the arrow does, a diagonal
+    mov ah, 0                       ;   as the keypad's corner it points at
+    mov si, ax
+    or bh, [qb_joymap+si]
     mov es, [qb_gseg]
     mov byte [es:0x5800], QB_DSW
     mov [es:0x5801], bl
     mov [es:0x5804], bh
     ret
+
+qb_joymap:                          ; by JOYD_* (left 1, right 2, up 4, down 8)
+    db 0x00, 0x02, 0x01, 0x00       ; -, L, R, LR
+    db 0x04, 0x02, 0x04, 0x04       ; U, LU, RU, LRU
+    db 0x08, 0x08, 0x01, 0x08       ; D, LD, RD, LRD
+    db 0x00, 0x02, 0x01, 0x00       ; UD, LUD, RUD, all
 
 qb_keymap:                          ; scancode, IN4 bit. The stick is turned
     db KSC_RIGHT, 0x01              ;   45 degrees: MAME's Right is down and

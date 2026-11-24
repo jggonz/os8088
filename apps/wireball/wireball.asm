@@ -11,6 +11,7 @@
 
 WB_ROWS equ 20
 WB_PH equ 4
+WB_JSLEW equ 4                  ; the stick's slew: quarter rows per physics step
 WB_PMAX equ (WB_ROWS-WB_PH)*4
 WB_YMAX equ WB_ROWS*4-2
 WB_TIMEOUT equ 55
@@ -68,6 +69,14 @@ wb_oncmd:                       ; Game menu: serial (0), practice (1)
 wb_launch:
     mov [wb_practice], al
     mov byte [wb_abon], 0
+    call joy_find                ; BEFORE the bracket (SPEC.md 53.7, 109.7)
+    mov al, 0
+    jc .nostick
+    inc al
+.nostick:
+    mov [wb_joyon], al
+    mov word [wb_jy], 0
+    mov byte [wb_jact], 0
     call wv_fontload
     mov byte [wv_fast], 1
     mov word [wv_clock], 0
@@ -132,6 +141,7 @@ wb_main:
     call wb_service
     call wb_schedule
 .keys:
+    call wb_joy
     call wb_keys
     cmp byte [wb_quit], 0
     jne .leave
@@ -238,6 +248,7 @@ wb_a6: db 'Jorge Gonzalez',0
 %include "wireball/wbgame.inc"
 %include "wireball/wbsound.inc"
 %include "wireball/wbvideo.inc"
+%include "os88joy.inc"
 
 ; No worker, no absolute segment into our own region, no IRQ vector.
 %assign WB_BSS 0
@@ -301,6 +312,10 @@ WB_VAR wb_fracx,1            ; quarter-tick remainders, 0..3
 WB_VAR wb_fracy,1
 WB_VAR wb_returns,1          ; saturates at 16 returns
 WB_VAR wb_padold,1
+WB_VAR wb_joyon,1
+WB_VAR wb_jact,1
+WB_VAR wb_jtgt,1
+WB_VAR wb_jy,2
 WB_VAR wb_lspin,1
 WB_VAR wb_rspin,1
 WB_VAR wb_spinage,1

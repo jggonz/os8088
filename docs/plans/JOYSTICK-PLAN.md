@@ -25,8 +25,8 @@ Status: ` ` not started, `B` built on its branch, `I` integrated into
 
 | | story | owner | done means |
 |---|---|---|---|
-| [ ] | **J1 - the driver and its ABI** (SPEC 137.1-137.5). `DRVC_JOY` = 11 in `apps/os88api.inc` and `kernel/driver.inc` (`DRVC_MAX` 11 on driver kernels); the `drv_tab` row (bit 13, title, `DRVM_IMG_JOY`, the catalog entry in `drivers/catalog.toml`); `drivers/joy/joy.asm` - attach/probe/detach, the timed sample of 137.3, calibration, dead zone, directions, presses, the five verbs, the blob; `drivers/joy/joypkg.inc`, `apps/os88joy.inc`, the `os88.h` binding. `JOYSTICK.DRV` on every driver kernel's system disks | `make`, `make mega`, kern_emu, kernsize on all three with no rung crossed, `abilock` updated; the ABI files committed FIRST (wave 2 starts from that commit); a boot that ticks the row on QEMU and shows `No joystick connected` semantics through `JOYV_INFO` |
-| [ ] | **J2 - live and wide driver pages** (SPEC 31.9.4). CX/BX/SI on page calls in both faces; `DSV_CPTICK` delivered about 9 Hz to the selected driver page; `OS88_DRV_CPWIDE` and the wide face hosting such a page over the whole page area | builds on all three driver kernels and kern_small unchanged; every existing driver page (HDD, network, RAM disk, CD-ROM, HTTP, EMS, sound) looks and acts as before on both faces; resident cost measured, no rung crossed |
+| [I] | **J1 - the driver and its ABI** (SPEC 137.1-137.5). `DRVC_JOY` = 11 in `apps/os88api.inc` and `kernel/driver.inc` (`DRVC_MAX` 11 on driver kernels); the `drv_tab` row (bit 13, title, `DRVM_IMG_JOY`, the catalog entry in `drivers/catalog.toml`); `drivers/joy/joy.asm` - attach/probe/detach, the timed sample of 137.3, calibration, dead zone, directions, presses, the five verbs, the blob; `drivers/joy/joypkg.inc`, `apps/os88joy.inc`, the `os88.h` binding. `JOYSTICK.DRV` on every driver kernel's system disks | `make`, `make mega`, kern_emu, kernsize on all three with no rung crossed, `abilock` updated; the ABI files committed FIRST (wave 2 starts from that commit); a boot that ticks the row on QEMU and shows `No joystick connected` semantics through `JOYV_INFO` |
+| [I] | **J2 - live and wide driver pages** (SPEC 31.9.4). CX/BX/SI on page calls in both faces; `DSV_CPTICK` delivered about 9 Hz to the selected driver page; `OS88_DRV_CPWIDE` and the wide face hosting such a page over the whole page area | builds on all three driver kernels and kern_small unchanged; every existing driver page (HDD, network, RAM disk, CD-ROM, HTTP, EMS, sound) looks and acts as before on both faces; resident cost measured, no rung crossed |
 | [I] | **J3 - the joystick icons** (SPEC 135.6). The 16x16 and 32x32 icons from `docs/joystick/` into `kernel/cpwart/` (the 16x16 sheet gains a third row, cell 32; the 32x32 sheet cell 12), `CWI16_JOY` = 32 / `CWI32_JOY` = 12 in `kernel/cpwfmt.inc`, `tools/cpwdat.py`, `t_cpwdat.py`; `DRVC_JOY` mapped to them where the wide face picks a driver page's icon; `CPWIDE.DAT` still under 16,384 | `make`, `t_cpwdat` green, the size of `CPWIDE.DAT` recorded |
 | [I] | **J4 - the instrument** (SPEC 137.7). MartyPC patch: a game port in the os8088 machine configurations and a debug-server verb setting both sticks and four buttons; `tools/os88marty.py` gains `joy(...)`; docs/MARTYPC-DEBUG.md and docs/TESTING.md say so | `make marty` builds; a scripted session moves a stick and `inb(0x201)` timing shows it |
 
@@ -36,9 +36,9 @@ Status: ` ` not started, `B` built on its branch, `I` integrated into
 |---|---|---|---|
 | [ ] | **J5 - the Joystick page** (SPEC 137.6), compact and wide, to the mockups: live view, type, three-step calibration, dead zone, invert, swap, reset, status | a look on QEMU VGA (wide), EGA and CGA (compact), and on MartyPC with a stick moved |
 | [ ] | **J6 - the emulators**: C64 control ports, Apple II paddles and buttons | builds, keys still work, a stick drives them on MartyPC |
-| [ ] | **J7 - analog paddles**: WireBall and Arkanoid | builds, keys still work, the paddle follows the stick |
-| [ ] | **J8 - digital sticks**: ARCADE and 1942 | builds, keys still work |
-| [ ] | **J9 - the rows**: a gate package and `tests/suite.py` rows driving J4's instrument through J1's verbs | the rows registered; run once in the final pass |
+| [I] | **J7 - analog paddles**: WireBall and Arkanoid | builds, keys still work, the paddle follows the stick |
+| [I] | **J8 - digital sticks**: ARCADE and 1942 | builds, keys still work |
+| [I] | **J9 - the rows**: a gate package and `tests/suite.py` rows driving J4's instrument through J1's verbs | the rows registered; run once in the final pass |
 
 ## Deferred, and why
 
@@ -55,4 +55,11 @@ size, a sample's cost on MartyPC's XT.
 
 ## QA
 
-The one QA run's defect list goes here.
+The one QA run's defect list goes here. Found before it, by J9's rows
+(`rows-report.md`), and carried into the fix round:
+
+| # | seen | expected | where | status |
+|---|---|---|---|---|
+| Q1 | an UNCALIBRATED stick reaches about -108..+92 of +-127: MartyPC's 0-ohm count carries a fixed ~95 us latch overhead, and auto-centre assumes a minimum of 0 | full travel near +-127 before the user calibrates, or the page telling them to calibrate | driver, SPEC 137.3 | open |
+| Q2 | a verb costs 1.45-2.9 ms (door, cooking and two `pit_now`s on top of the sample), against "~1.2 ms a read" in SPEC 137.3/137.12 and the J7/J8 frame-budget notes | the figures in SPEC and the adopters' notes are the measured ones | SPEC 137.3, 137.12, 109.7, 44.13, 101.7, ARCADE-SPEC 15 | open |
+| Q3 | WireBall's ~1.2 ms (really 1.5-2.9 ms) read may swallow a rate-hook period, so its motion clock runs a few percent slow while a stick answers (gamesa-report.md) | motion steps unaffected, or the read halved to every second frame | apps/wireball, SPEC 109.7 | open |

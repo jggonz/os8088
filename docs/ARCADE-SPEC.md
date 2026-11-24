@@ -1625,3 +1625,27 @@ the claim as it was. `tests/arcmove.py` (soak) moves them on MartyPC's XT
 and plays on: 11 moves over Q\*bert and Pac-Man, each board at its rate
 after, red with `qb_gmv` a bare `ret`.
 
+
+## 15. The digital stick (SPEC.md 137.8, `ar_joyd`)
+
+A joystick ADDS the cabinet's stick to the keys and never replaces them.
+`ar_joyinit` asks `joy_find` once at ARCADE's entry (SPEC.md 137.4: no driver
+is CF = 1, and every path below then reads 0, exactly the keys-only
+behaviour); `ar_joyd` takes ONE `joy_read` of stick A per frame, at the head
+of `pm_keys` and `qb_keys`, the routines that read the arrows. A read costs
+about 1.2 ms on the XT with interrupts off (SPEC.md 137.3), inside a frame
+that is 16.5 ms at the cabinet's rate. A driver ticked but no stick plugged
+reads CF = 1 and costs the call only.
+
+| board | the stick's `JOYD_*` becomes |
+|---|---|
+| Pac-Man (`pm_joymap`) | IN0 bits 0-3 (up, left, right, down; active low) - the very bits the arrows clear. A diagonal clears both its bits, as two held arrows do; the board's own 4-way logic chooses |
+| Q\*bert (`qb_joymap`) | IN4's four bits (active high), the stick turned 45 degrees as the arrows already are (MAME's Right is down-right, Left up-left, Up up-right, Down down-left). A single direction is its arrow's bit; a diagonal is ONE bit, the keypad corner it points at (right+down = 0x01, left+up = 0x02, right+up = 0x04, left+down = 0x08); opposite directions cancel |
+
+**Buttons: none.** Neither cabinet has an action button, so none is invented.
+Coin and start stay on the keys (5, 1, 2): no button is obviously the coin,
+and a stray press on a stick must not spend a credit. Space Invaders and the
+other 8080 boards are untouched (their fire/move keys are the board's, not
+this story's). kern_mega: the same source builds into the `PKG_MEGA` arm (the
+calls are `OSAPI_DRV_CALL`, which the arm already uses for the sound).
+Measured: `arcade.bin` 40,824 -> 41,013 bytes (+189).

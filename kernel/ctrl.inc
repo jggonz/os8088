@@ -899,8 +899,10 @@ cp_tfull: db 0
 ; the byte safe to keep across a switch.
 cp_vsel:  db 0xFF
 %ifdef KERN_BIG
-; The page the resident tick gate passes (cp_tick_due_x): Date/Time's, and the
-; wide Display page's while its Test... counts down (SPEC.md 135.9.4)
+; The page the resident tick gate passes (cp_tick_due_x): Date/Time's, the
+; wide Display page's while its Test... counts down (SPEC.md 135.9.4), and a
+; DRIVER's page record while that page publishes DSV_CPTICK (31.9.4) - which
+; ui_task's clock step also reads as "tick at 9 Hz, not 1" (cp_tickset)
 cp_tickp: db CP_ITIME
 %endif
 
@@ -1069,7 +1071,8 @@ section .modu                   ; ...and the PANEL from here on: the stubs below
 modc_e_flush:                           ; a stub still, because shutdown calls
 %ifdef KERN_BIG                         ; the body NEAR as well. The wide face
             call cp_wclose              ; goes with the panel (SPEC.md 135.2) -
-%endif                                  ; FIRST, so a Test... running reverts
+            mov byte [cp_tickp], CP_ITIME ; (and no driver page ticks, 31.9.4)
+%endif                                 ; FIRST, so a Test... running reverts
             call cp_flush_close_x       ; before SYSTEM.CFG is written (135.9.3)
             retf
 ;
@@ -1436,7 +1439,8 @@ cpg_hpaint:
     call kentm_bp
     call cp_origin
     call cp_page
-    jmp kretm_bp
+    call cp_dwide               ; CF = 1: a wide page, which laid its own
+    jmp kretm_bp                ; ground - the wide face lays none (135.3.1)
 
 ; --- the Drivers page's ops (SPEC.md 135.4, 135.8): AL = a drv_tab row ------
 cpg_drvon:                      ; load it, if it is down
@@ -1534,6 +1538,15 @@ modc_e_onkey:
 %endif
 cp_onkey_x:                     ; (CPG_HKEY enters here, past the forward)
     call kentm_bp                ; KENT: push ax..bp
+%ifdef KERN_BIG                 ; the origin FIRST: a driver's key carries the
+    push ax                     ; pane's DI/DX as well (SPEC.md 31.9.4)
+    mov bx, si
+    call cp_origin
+    add di, CP_RX
+    pop ax
+    cmp byte [cp_sel], CP_IKEY
+    jne .driver
+%else
     cmp byte [cp_sel], CP_IKEY
     jne .driver
     push ax                     ; cp_origin spends AX: preserve the typed word
@@ -1541,6 +1554,7 @@ cp_onkey_x:                     ; (CPG_HKEY enters here, past the forward)
     call cp_origin
     add di, CP_RX
     pop ax
+%endif
     call cp_key_key
     jmp short .out
 .driver:
@@ -1902,8 +1916,11 @@ cp_origin:
     je .c                       ; 135.3): on the wide one the "content" every
     add di, CPW_HX              ; compact page and edge computes from is the
     add bp, CPW_HY              ; HOSTED origin, so `add di, CP_RX` lands on
-.c:                             ; the hosted pane and the probe, the arm, the
-%endif                          ; tick and the key all follow it unchanged
+    call cp_dwide               ; the hosted pane and the probe, the arm, the
+    jnc .c                      ; tick and the key all follow it unchanged -
+    sub di, CPW_HX + CP_RX - CPW_PX ; and on a WIDE driver page (135.3.1) it
+.c:                             ; lands on the page area's own left edge,
+%endif                          ; CPW_PX, so every edge follows THAT instead
     ret
 
 %ifdef KERN_BIG
@@ -2371,6 +2388,9 @@ cp_drv_name:
 ; -----------------------------------------------------------------------------
 cp_item_paint:
     call kentm_bp                ; KENT: push ax..bp
+%ifdef KERN_BIG
+    call cp_tickset             ; the gate ticks a driver page that asks (31.9.4)
+%endif
     mov ax, DSV_CPPAINT
     call cp_drv_ev
     jnc .done                   ; a driver's page (or one that just went)
@@ -2445,6 +2465,9 @@ cp_drv_ev:
     jc .no                      ; a static page, or a driver that went away
     mov bx, dx                  ; BX = the pane-relative y...
     mov dx, bp                  ; ...DX the pane top, CX already the x
+%ifdef KERN_BIG
+    call cp_drv_sz              ; ...or, for a paint or a tick, CX/BX = the
+%endif                          ; pane's SIZE (SPEC.md 31.9.4)
     push es
     push si
     mov si, di                  ; SI = pane left, banked past drv_cls_svc
@@ -2463,12 +2486,155 @@ cp_drv_ev:
     mov di, si
     or bp, bp
     jz .yes
+%ifdef KERN_BIG
+    call cp_drv_win             ; SI = the panel's window, on every call (31.9.4)
+%endif
     call cp_drvcall
 .yes:
     clc
 .no:
 .out:
     jmp kretm_bp
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_drv_win - SI = the Control Panel's window (0: no panel); every other
+;              register kept, AL (the dispatcher's CLASS) above all
+; cp_drv_sz  - a driver page call's SIZE (SPEC.md 31.9.4)
+;   in:  SI = the DSV_* cell. out: for DSV_CPPAINT and DSV_CPTICK, CX = the
+;        pane's width and BX = its height - the compact pane, which is also
+;        the HOSTED one, or the wide face's whole page area for a wide page
+;        (cp_dwide); for any other cell nothing changed
+; -----------------------------------------------------------------------------
+cp_drv_win:
+    push ax
+    push di
+    xor si, si
+    CPXC cp_live                ; DI = the panel's record (spends AL)
+    jc .r
+    mov si, [di+I_WIN]
+.r:
+    pop di
+    pop ax
+    ret
+
+cp_drv_sz:
+    cmp si, DSV_CPPAINT
+    je .sz
+    cmp si, DSV_CPTICK
+    jne .r
+.sz:
+    mov cx, CP_CW - CP_RX       ; 222 x 132: the compact pane from DI, and the
+    mov bx, CP_CH               ; hosted one (cp_origin moves only its origin)
+    call cp_dwide
+    jnc .r
+    push si                     ; a wide page: to the content's right edge,
+    call cp_drv_win             ; and down to the status line's rule (135.3.1)
+    mov cx, [si+W_W]
+    sub cx, 2 + CPW_PX
+    mov bx, [si+W_H]
+    sub bx, TITLE_H + 1 + CPW_STH + 1 + CPW_BY
+    pop si
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_dhdr - a driver class's image HEADER (SPEC.md 51.1), read in place
+; in:  AL = a class (1..DRVC_MAX). out: CF = 0 and ES:BX = the header;
+;      CF = 1 no driver. Keeps every other register
+;
+; Through the class's dispatch pointer, which names PKG_DISP in the image -
+; DRV_HMA_ORG + PKG_DISP for a driver in the HMA - so the header is that
+; pointer less PKG_DISP whichever it is (hiber.inc's OS88_DRV_WAKES read)
+; -----------------------------------------------------------------------------
+cp_dhdr:
+    push ax
+    cbw                         ; AL = the class, 1..DRVC_MAX
+    xchg bx, ax
+    shl bx, 1
+    shl bx, 1
+    les bx, [bx + drv_fptr - 4]
+    sub bx, PKG_DISP
+    mov ax, es
+    cmp ax, 1                   ; CF = 1 iff the segment is 0: none
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_dwide - CF = 1: the wide face is up and the SELECTED page is a driver's
+;            whose header says OS88_DRV_CPWIDE (SPEC.md 31.9.4, 135.3.1).
+;            Keeps every register
+; cp_dtick - CF = 0: record AL is a driver's page that publishes DSV_CPTICK -
+;            a cell past DSV_FLOOR, so read only after the header's +15
+;            length says the table holds it (51.2). DRVC_SOUND's table is
+;            the kernel's DSV_SIZE copy, so its page (it has none) cannot
+;            tick. Keeps every register
+; -----------------------------------------------------------------------------
+cp_dwide:
+    push ax
+    push bx
+    push es
+    cmp byte [cs:cp_wide], 0
+    je .no
+    mov al, [cp_sel]
+    call cp_drv_item            ; AL = the class; CF = 1 a static page
+    jc .no
+    call cp_dhdr
+    jc .no
+    test byte [es:bx + DRV_H_WAKES], DRV_CPW_BIT
+    jz .no
+    stc
+    jmp short .r
+.no:
+    clc
+.r:
+    pop es
+    pop bx
+    pop ax
+    ret
+
+cp_dtick:
+    push ax
+    push bx
+    push di
+    push es
+    call cp_drv_item            ; AL = the class; CF = 1 a static page
+    jc .r
+    cmp al, DRVC_SOUND + 1      ; CF = 1: the sound class
+    jc .r
+    call cp_dhdr
+    jc .r
+    mov ah, [es:bx + DRV_H_DSV]
+    and ah, 0x3F
+    cmp ah, DSV_CPTICK + 2      ; CF = 1: a table that ends before the cell
+    jc .r
+    call cp_clssvc              ; ES:DI = the table, in place
+    jc .r
+    cmp word [es:di + DSV_CPTICK], 1   ; CF = 1 iff 0: not published
+.r:
+    pop es
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; cp_tickset - [cp_tickp] follows the page being painted (SPEC.md 31.9.4): a
+; driver page with a tick names its record, and any other page gives the gate
+; back to Date/Time - unless a Display Test holds it (135.9.4). Keeps all
+cp_tickset:
+    push ax
+    mov al, [cp_sel]
+    call cp_dtick
+    jnc .set
+    mov al, CP_ITIME
+    cmp byte [cp_tickp], CP_IVID
+    je .r
+.set:
+    mov [cp_tickp], al
+.r:
+    pop ax
+    ret
+%endif
 
 ; (cp_drv_gone_x was here. It is RESIDENT now, above the .modc switch, because
 ; drv_shutdown calls it after cp_flush_close has dropped this image - SPEC.md
@@ -3076,13 +3242,17 @@ cp_page:
     push si
     push di
 
+%ifdef KERN_BIG
+    call cp_dwide               ; a WIDE driver page lays its own ground over
+    jc .lay                     ; the whole page area (SPEC.md 135.3.1)
+%endif
                                 ; erase the pane, divider column excluded
     lea ax, [di+CP_DIVX + 1]
     mov bx, bp
     lea cx, [di+CP_CW - 1]
     lea dx, [bp+CP_CH - 1]
     call cp_wfill
-
+.lay:
     add di, CP_RX               ; DI = pane left, BP = pane top
     call cp_item_paint
 
@@ -5525,7 +5695,29 @@ modc_e_tick:                    ; CPE_TICK, entered FAR (see kretf_bp)
 %endif
 cp_tick_x:
     call kentm_bp                ; KENT: push ax..bp
-
+%ifdef KERN_BIG
+    mov al, [cp_sel]            ; A DRIVER'S LIVE PAGE (SPEC.md 31.9.4)
+    cmp al, CP_ITEMS
+    jb .clock
+    test byte [ui_lastt], 1     ; on every SECOND system tick, ~9 Hz: the
+    jnz .out                    ; resident gate passes all 18.2 of them (the
+                                ; parity there was 7 more bytes, and kern_emu's
+                                ; rung had 16 left), and an odd one ends here
+    call cp_dtick               ; its DSV_CPTICK, asked again under the lock:
+    jc .out                     ; the page may have changed since the gate
+    CPXC cp_live                ; DI = the panel; CF = 1 it has gone
+    jc .out
+    mov bx, [di+I_WIN]
+    mov bp, wm_clip_set         ; THE PANEL'S CLIP, not wm_obscured's refusal:
+    call KERNEL_SEG:cw_mem_disp ; a live view keeps moving under a window that
+    jc .out                     ; overlaps it. CF = 1 hidden, or a saver
+    call cp_origin
+    add di, CP_RX               ; DI = pane left, BP = pane top
+    mov ax, DSV_CPTICK
+    call cp_drv_ev              ; CX/BX the size, SI the window (cp_drv_sz)
+    jmp short .out
+.clock:
+%endif
     cmp byte [cp_sel], CP_ITIME
     jne .out
     mov al, KIND_CTRL

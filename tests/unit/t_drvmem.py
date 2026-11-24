@@ -104,6 +104,8 @@ ROWS = [
     ("PCI Ethernet", "DRVM_PCIETH", "DRVM_IMG_PCIETH", "pciether.drv"),
     # SPEC.md 9.15's PC1 mouse: another DRVC_POINT row after all optional rows
     ("PC1 Mouse", "DRVM_PC1", "DRVM_IMG_PC1", "pc1mouse.drv"),
+    # SPEC.md 137's game port: DRVC_JOY, last on every big build
+    ("Joystick", "DRVM_JOY", "DRVM_IMG_JOY", "joystick.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)

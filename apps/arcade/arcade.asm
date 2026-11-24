@@ -200,6 +200,7 @@ ar_entry:
     mov [ar_homedrv], bl            ;   ARCADE.DAT, and to come back to
     mov [ar_homecl], dx             ;   after the chooser has moved us
     call ar_crcinit
+    call ar_joyinit                 ; the stick, once (ARCADE-SPEC 15)
     call ar_placesload
     call af_init                    ; the face: its theme, layout and size
     call af_look                    ;   (ARCADE-SPEC 11) - and no game read:
@@ -2422,10 +2423,49 @@ TOASTSTR ar_s_nofsx, 'Arcade: no full screen'
 TOASTSTR ar_s_nomode, 'Arcade: no screen mode'
 TOASTSTR ar_s_miss, 'Arcade: no code at ????'
 
+; -----------------------------------------------------------------------------
+; THE STICK (ARCADE-SPEC 15; SPEC.md 137.8). A joystick ADDS the cabinet's
+; stick to the arrow keys and never replaces them.
+; ar_joyinit - ask once at the entry whether a DRVC_JOY driver is attached
+; ar_joyd    - out AL = stick A's JOYD_* (0: no driver, not answering, centred)
+;              ONE sample per call (about 1.2 ms on the XT); the board's key
+;              routine calls it once a frame. Preserves every other register
+; -----------------------------------------------------------------------------
+ar_joyinit:
+    push ax
+    push cx
+    push dx
+    mov byte [ar_joy], 0
+    call joy_find
+    jc .r
+    mov byte [ar_joy], 1
+.r:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+ar_joyd:
+    cmp byte [ar_joy], 0
+    je .none
+    push bx
+    push cx
+    xor al, al
+    call joy_read
+    mov al, cl
+    pop cx
+    pop bx
+    jnc .r
+.none:
+    xor al, al
+.r:
+    ret
+
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %define OS88UI_ABDISMISS
 %include "os88ui.inc"
+%include "os88joy.inc"
 
 ; =============================================================================
 ; bss: the parts standard's first, then ours
@@ -2667,6 +2707,7 @@ AR_VAR ar_cwait, 1
 AR_VAR ar_warb, 1
 AR_VAR ar_hz, 2                     ; the pitch sounding now
 AR_VAR ar_pbits, 1                  ; typed coin/start bits being held
+AR_VAR ar_joy, 1                    ; a JOYSTICK.DRV is attached (ARCADE-SPEC 15)
 AR_VAR ar_pleft, 1                  ;   ...and for how many more frames
 AR_VAR ar_fsi, FSI_SIZE
 AR_VAR ar_bx, 2                     ; the 8080 board's wiring (X_*)

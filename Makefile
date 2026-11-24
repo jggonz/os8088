@@ -3642,6 +3642,13 @@ DRIVERS += $(BUILD)/usbmouse.drv
 # It shares DRVC_POINT with USBMOUSE.DRV, so the two rows are alternatives;
 # attach's class fence refuses a second publisher. It is optional and unticked.
 DRIVERS += $(BUILD)/pc1mouse.drv
+# ...and SPEC.md 137's JOYSTICK.DRV, the game port: a drv_tab row with
+# SYSTEM.CFG bit 13, not wanted by default (the boot's sniff ticks it as the
+# machine's default when a stick answers, SPEC.md 137.2). kern_big and
+# kern_mega take $(DRIVERS); $(EMUDRIVERS) filters it back out (kern_emu has
+# no joystick, SPEC.md 137.1) and kern_small's $(SMALLDRIVERS) is a
+# restatement that never held it: no driver layer there
+DRIVERS += $(BUILD)/joystick.drv
 # ...and SPEC.md 107's EMS.DRV, a LIM EMS board's page registers: a drv_tab
 # row with SYSTEM.CFG bit 7, not wanted by default (its probe writes ports),
 # so a disk that carries it costs a machine with no board one directory slot
@@ -3745,7 +3752,9 @@ endif
 # RECURSIVE for $(DRIVERS)' own reason: $(KMODS) inside it reads $(KMODDIR),
 # which the emu image rule overrides per target so the on-demand kernel
 # modules come out of the emu kernel and not the shipped one.
-EMUDRIVERS = $(DRIVERS) $(BUILD)/vmmouse.drv
+# ...LESS JOYSTICK.DRV (SPEC.md 137.1): kern_emu has no row for it - the
+# owner's decision, the virtual-machine kernel and no VM emulates a game port
+EMUDRIVERS = $(filter-out $(BUILD)/joystick.drv,$(DRIVERS)) $(BUILD)/vmmouse.drv
 
 # ...and where that build goes. UP HERE WITH $(EMUDRIVERS) rather than down
 # with `make emu`, where $(SMALLDIR) sits beside `make small`, because the
@@ -4990,6 +4999,16 @@ $(BUILD)/pc1slow/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc
 
 $(BUILD)/pc1slow/pc1mouse.drv: $(BUILD)/pc1slow/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/pc1slow/pc1mouse.bin -o $@
+
+# JOYSTICK.DRV - the game port (SPEC.md 137). `-I drivers/joy/` for joypkg.inc
+# and the page's joyui.inc (J5), which is a dependency once it exists
+JOYUIINC := $(wildcard drivers/joy/joyui.inc)
+$(BUILD)/joystick.bin: drivers/joy/joy.asm drivers/joy/joypkg.inc $(JOYUIINC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/joy/ -I apps/ -o $@ $<
+	@echo "joystick: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/joystick.drv: $(BUILD)/joystick.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/joystick.bin -o $@
 
 # EMS.DRV - expanded memory on a LIM EMS board (SPEC.md 107)
 $(BUILD)/ems.bin: drivers/ems/ems.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
@@ -6890,6 +6909,29 @@ $(BUILD)/drvcall.img: $(BUILD)/drvcall.o88 tools/os88disk.py
 
 $(BUILD)/drvcall360.img: $(BUILD)/drvcall.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/drvcall.o88
+
+# JOYGATE: the gate for JOYSTICK.DRV's package door (SPEC.md 137.4, J9). One click
+# runs joy_find/joy_read/joy_state/JOYV_RAW through apps/os88joy.inc and leaves
+# every answer in the package's own image; tests/joystick.py sets the sticks
+# with Marty.joy() on a *_joy machine and reads them back. 360KB as well as
+# 1.44MB: the machine is a 5150.
+#   make joygatetest && python3 tests/joystick.py
+.PHONY: joygatetest
+joygatetest: $(BUILD)/joygate.img $(BUILD)/joygate360.img
+
+$(BUILD)/joygate.bin: tests/joygate/joygate.asm apps/os88api.inc apps/os88joy.inc \
+                      apps/os88pit.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/joygate/joygate.asm
+	@echo "joygate: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/joygate.o88: $(BUILD)/joygate.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/joygate.bin -o $@
+
+$(BUILD)/joygate.img: $(BUILD)/joygate.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/joygate.o88
+
+$(BUILD)/joygate360.img: $(BUILD)/joygate.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/joygate.o88
 
 # SOCKTEST: the gate for the SOCKET verbs (SPEC.md 62.11). It fetches a page over the parallel cable
 # through NET.DRV's package door and reports what came back. Its far end is
@@ -9844,7 +9886,7 @@ pxsgen:
 	rm -f $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
 	$(MAKE) $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
 
-$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc apps/os88ui.inc apps/os88joy.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -o $@ apps/arkanoid/arkanoid.asm
 	@echo "arkanoid: $(call FILESIZE,$@) bytes"
 
@@ -12631,7 +12673,7 @@ $(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcsfx.py $@
 
-ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
+ARCADE_SRC := apps/arcade/arcade.asm apps/os88joy.inc apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
               apps/arcade/arcimp.inc apps/os88inflate.inc apps/os88data.inc \
               apps/arcade/arcface.inc apps/arcade/arcopt.inc \
               apps/arcade/arc6502.inc apps/arcade/arcqbs.inc \
@@ -21619,7 +21661,7 @@ $(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
 	@test -f $@ || python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
 $(BUILD)/1942front.inc: tools/1942front.py tools/os88lz.py apps/1942/art/splash.json apps/1942/art/sprites.json | $(BUILD)
 	python3 tools/1942front.py -o $(BUILD)
-$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/motion.inc apps/1942/audio.inc apps/1942/pcm.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/motion.inc apps/1942/audio.inc apps/1942/pcm.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/os88joy.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 # EVERY PART IS OP_COMP | OP_LAZY, packed lz4 by os88pkg.py (SPEC.md 101.2),
 # so one file serves every geometry - and the 360KB disk no longer leaves the
@@ -22323,7 +22365,7 @@ $(BUILD)/wirerena360.img: $(BUILD)/wirerena.o88 tools/os88disk.py
 wireball-pair:
 	python3 tools/wireball-pair.py
 wireball: $(BUILD)/wireball.o88
-$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbvideo.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbvideo.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc apps/os88joy.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireball.lst -o $@ $<
 $(BUILD)/wireball.o88: $(BUILD)/wireball.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $< -o $@

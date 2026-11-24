@@ -12,7 +12,7 @@
 ;       %include "os88joy.inc"       ; at the END, beside os88ui.inc
 ;       ...
 ;       call joy_find                ; ONCE, at start
-;       jc   .keys_only              ; no driver: kern_small, an unticked row
+;       jc   .keys_only              ; no driver: kern_small, kern_emu, unticked
 ;       ...
 ;       xor  al, al                  ; stick A
 ;       call joy_read                ; where you read your keys
@@ -40,7 +40,8 @@
 ; -----------------------------------------------------------------------------
 ; joy_find - is a joystick driver attached?
 ; out: CF=1 no (OSAPI_DRV_CALL's refusal: no DRVC_JOY driver published -
-;      every kern_small, and a machine whose row is unticked)
+;      every kern_small and kern_emu (SPEC.md 137.1), and a machine whose row is
+;      unticked)
 ;      CF=0 yes, and JOYV_INFO's answer: AL = the axes answering (JOYA_*),
 ;      AH = the type (JOYT_*), CL = buttons the type has, CH = its sticks,
 ;      DX = the driver's version. "Yes" with AL = 0 is a driver with nothing

@@ -140,6 +140,7 @@ n_popall:                           ; RESTORE, spelled out so the stack
 
 n_exclusive:
     mov byte [n_infs], 1
+    call n_joyfind                  ; the stick, once (SPEC.md 101.7)
     ; Drain/release the launcher key before the mode switch masks IRQ1.
 .release:
     mov al, KSC_ENTER
@@ -320,15 +321,58 @@ n_msgresume: db 'P TO RESUME',0
 %include "campaign.inc"
 %include "motion.inc"
 %include "scroll.inc"
+; -----------------------------------------------------------------------------
+; THE STICK (SPEC.md 101.7, 137.8): ADDS 8-way flight (stick A), fire (its
+; button 1) and the roll (button 2) to the keys, which all keep working.
+; n_joyfind - once per flight: is a DRVC_JOY driver attached?
+; n_joyread - once per frame: [n_jd] = JOYD_*, [n_jb] = buttons held (both 0
+;             with no driver or no answer). Preserves every register
+; -----------------------------------------------------------------------------
+n_joyfind:
+    push ax
+    push cx
+    push dx
+    mov byte [n_jok], 0
+    call joy_find
+    jc .r
+    mov byte [n_jok], 1
+.r:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+n_joyread:
+    push ax
+    push bx
+    push cx
+    mov word [n_jd], 0              ; (n_jd and n_jb: adjacent bytes)
+    cmp byte [n_jok], 0
+    je .r
+    xor al, al
+    call joy_read
+    jc .r
+    mov [n_jd], cl
+    mov [n_jb], bl
+.r:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
+%include "os88joy.inc"
 %assign NBSS OP_BSS                 ; the parts standard's bss comes first
 %macro VAR 2
     %1 equ os88_image_end + NBSS
     %assign NBSS NBSS + %2
 %endmacro
 VAR n_abon,1
+VAR n_jd,1                          ; the stick: JOYD_* (SPEC.md 101.7)
+VAR n_jb,1                          ;   ...its buttons held (adjacent: n_jd)
+VAR n_jok,1                         ;   ...a driver is attached
 VAR n_frontstatic,1
 VAR n_frontready,2
 VAR n_frontband,2

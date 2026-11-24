@@ -1134,7 +1134,14 @@ ui_task:
                                 ; is about
     call clk_tick               ; AL: bit0 = a second passed, bit1 = the bar
     mov bl, al                  ; text changed - and ZF = (AL = 0) already,
-    jz .idle                    ; clk_tick's last ALU op being on AL
+%ifdef KERN_BIG                 ; clk_tick's last ALU op being on AL
+    jnz .clk_sec                ; ...and EVERY tick while [cp_tickp] names a
+    cmp byte [cp_tickp], CP_ITEMS ; DRIVER's page record, which it does only
+    jb .idle                    ; while that page publishes DSV_CPTICK (SPEC.md
+.clk_sec:                       ; 31.9.4): CTRL.DRV halves it to ~9 Hz. Any
+%else                           ; other desktop pays this one compare. AL = 0
+    jz .idle                    ; here, so the bar is not touched
+%endif
     call wm_fs_vis              ; fullscreen (SPEC.md 11.2): the bar and any
     jc .idle                    ; Date/Time page are covered - time is kept,
                                 ; nothing is drawn. The predicate, 39.17.1

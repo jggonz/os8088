@@ -152,9 +152,13 @@ n_update:
     je .roll
     dec word [n_roll]
 .roll:
+    call n_joyread                    ; the stick, once a frame (SPEC 101.7)
     mov al, 2dh                       ; X, edge triggered
     call OSAPI_KEY_DOWN
-    jnc .xup
+    jc .xdown
+    test byte [n_jb], 2               ; ...or the stick's button 2
+    jz .xup
+.xdown:
     cmp byte [n_xheld], 0
     jne .move
     mov byte [n_xheld], 1
@@ -174,7 +178,10 @@ n_update:
     mov word [n_bank], n_playerart
     mov al, KSC_LEFT
     call OSAPI_KEY_DOWN
-    jnc .right
+    jc .jleft
+    test byte [n_jd], JOYD_LEFT
+    jz .right
+.jleft:
     cmp word [n_px], 3
     jb .right
     sub word [n_px], 3
@@ -182,7 +189,10 @@ n_update:
 .right:
     mov al, KSC_RIGHT
     call OSAPI_KEY_DOWN
-    jnc .up
+    jc .jright
+    test byte [n_jd], JOYD_RIGHT
+    jz .up
+.jright:
     cmp word [n_px], 229
     ja .up
     add word [n_px], 3
@@ -190,14 +200,20 @@ n_update:
 .up:
     mov al, KSC_UP
     call OSAPI_KEY_DOWN
-    jnc .down
+    jc .jup
+    test byte [n_jd], JOYD_UP
+    jz .down
+.jup:
     cmp word [n_py], 27
     jb .down
     sub word [n_py], 3
 .down:
     mov al, KSC_DOWN
     call OSAPI_KEY_DOWN
-    jnc .fire
+    jc .jdown
+    test byte [n_jd], JOYD_DOWN
+    jz .fire
+.jdown:
     cmp word [n_py], 213
     ja .fire
     add word [n_py], 3
@@ -212,7 +228,9 @@ n_update:
     jc .shoot
     mov al, 2ch                      ; Z
     call OSAPI_KEY_DOWN
-    jnc .spawn
+    jc .shoot
+    test byte [n_jb], 1               ; the stick's button 1
+    jz .spawn
 .shoot:
     mov word [n_fire], 5
     mov cx,[n_px]
