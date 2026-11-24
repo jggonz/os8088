@@ -1,4 +1,4 @@
-# Joystick page mockups (SPEC.md 136.6)
+# Joystick page mockups (SPEC.md 137.6)
 
 The design reference for the Joystick Control Panel page, generated on
 2026-11-23 with Codex CLI 0.170.0's built-in image generation from
@@ -25,4 +25,4 @@ only; the icons' background the #FF00FF transparent key).
 | `joy-icon-16.png`, `joy-icon-32.png` | the page-list and header-strip icons (copied into `kernel/cpwart/`'s sheets) |
 
 They are a design, not a screenshot: where the built page differs, SPEC.md
-136.6 says why.
+137.6 says why.
