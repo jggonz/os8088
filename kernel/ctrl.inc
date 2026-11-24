@@ -706,6 +706,10 @@ CPV_MSTEP equ 74                ; ...and its radio pitch, so the hit test is
 CPV_CAPY  equ 122               ; caption row, LAST as it is on every page -
                                 ; which is why the label went above it rather
                                 ; than below (the caption was 96, then 112)
+CPV_P1Y   equ CPV_CAPY - CP_PLDY ; PC1 radios replace the caption (31.10.5)
+CPV_P1X0  equ CP_PGX
+CPV_P1X1  equ 90
+CPV_P1HIT equ CPV_P1X1 - 4
 %if CPV_CAPY + 8 > CP_CH
 %error "ctrl: the Display page's caption runs past the pane (SPEC.md 31.1.4)"
 %endif
@@ -734,6 +738,9 @@ CPV_BB2   equ CPV_BTNY + CPV_BTNH + 3
 ; label is not a control and its x carries no radio.
 CPV_MB1   equ CPV_MLY + 8
 CPV_MB2   equ CPV_MY + CP_GW + 3
+%if CPV_P1Y + CP_GW > CP_CH || CPV_P1Y - 2 < CPV_MY + CP_GW
+%error "ctrl: the PC1 row must fit below the desktop-extension controls"
+%endif
 %if CPV_MB1 <= CPV_BB2
 %error "ctrl: the Display page's desktop band overlaps the button's"
 %endif
@@ -2006,8 +2013,11 @@ cp_vid_ctls:
     call cp_vid_btn             ; Activate...
 %ifdef KERN_BIG
     call cp_vid_fc              ; ...Force Color's glyph (SPEC.md 31.10.4)...
+    call cp_vid_mode            ; ...and the three arrangement radios
+    jmp cp_pc1_glyphs
+%else
+    jmp cp_vid_mode
 %endif
-    jmp cp_vid_mode             ; ...and the three arrangement radios
 %ifdef OS88_THEME
 cp_thm_ctls:
     call cp_thm_radios          ; the whole group: a radio glyph is one
@@ -5041,11 +5051,51 @@ cp_vid_paint:
     call cp_vid_btn
 %endif
 
+%ifdef KERN_BIG
+    call cp_pc1_probe
+    jc .caption
+    call cp_blbl
+    dw cp_s_p150, CPV_P1X0 + 18, CPV_CAPY
+    call cp_blbl
+    dw cp_s_p160, CPV_P1X1 + 18, CPV_CAPY
+    jmp short .done
+.caption:
+%endif
     call cp_blbl                ; ...and the caption, LAST on the page as it
                                 ; is on every other one
     dw cp_s_vcap, CP_PMX, CPV_CAPY
-
+.done:
     jmp kretm_si
+
+%ifdef KERN_BIG
+%include "pc1video.inc"
+    PC1_VIDEO cp_pc1
+
+; Only the glyph cells are redrawn on a press/release or choice change.
+cp_pc1_glyphs:
+    call kentm_si
+    call cp_pc1_probe
+    jc .out
+    lea cx, [di+CPV_P1X0]
+    lea dx, [bp+CPV_P1Y]
+    mov bh, 6
+    cmp byte [drv_cfg+CFG_PC1], 60
+    jne .fifty
+    mov bl, 60
+    jmp short .first
+.fifty:
+    mov bl, 50                  ; no override: documented BIOS default
+.first:
+    cmp bl, 50
+    call cp_rad
+    lea cx, [di+CPV_P1X1]
+    lea dx, [bp+CPV_P1Y]
+    mov bh, 7
+    cmp byte [drv_cfg+CFG_PC1], 60
+    call cp_rad
+.out:
+    jmp kretm_si
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_vid_set - SPEC.md 31.10's Activate: put the desktop on adapter AL
@@ -5117,6 +5167,40 @@ cp_vgc_tog:
 cp_vid_click:
     call kentm_si
 
+%ifdef KERN_BIG
+    cmp dx, CPV_P1Y - 2
+    jl .normal
+    cmp dx, CPV_P1Y + CP_GW - 1
+    jg .normal
+    call cp_pc1_probe
+    jc .normal
+    cmp cx, CP_PGX
+    jl .pdone
+    cmp cx, CP_PRGT
+    jg .pdone
+    mov al, 6
+    cmp cx, CPV_P1HIT
+    jl .pid
+    inc al
+.pid:
+    call cp_ctl
+    jc .pdone
+    cmp al, 6
+    mov al, 50
+    je .papply
+    mov al, 60
+.papply:
+    cmp al, [drv_cfg+CFG_PC1]
+    je .pdone
+    call cp_pc1_apply
+    jc .pdone
+    mov [drv_cfg+CFG_PC1], al
+    call cp_wdset
+    call cp_pc1_glyphs
+.pdone:
+    jmp kretm_si
+.normal:
+%endif
     cmp dx, CPV_BB1             ; --- the Activate button ---
     jl .rows
     cmp dx, CPV_BB2
@@ -8238,6 +8322,8 @@ CPS cp_s_vfc,   'Force Color'   ; SPEC.md 31.10.4
 CPS cp_s_vcap,  'Switches now, and is kept'
 
 %ifdef KERN_BIG
+CPS cp_s_p150,  '50 Hz'
+CPS cp_s_p160,  '60 Hz (PC1)'
 CPS cp_s_vdesk, 'Desktop Extension Mode:'
 CPV_DESKN   equ $ - cp_s_vdesk - 1   ; ...measured rather than counted, so the
                                      ; guard below cannot go stale behind an

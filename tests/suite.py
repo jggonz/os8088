@@ -1597,6 +1597,19 @@ FAST = [
         "stops being obvious. docs/plans/HEAP-UNPIN-PLAN.md 12 question 4. "
         "SOAK and not fast: it can only fire when a SECOND driver gains a "
         "service task, which is not a build-to-build event"),
+    Row("pc1video", "soak", py("tests/unit/t_pc1video.py"), 0.1,
+        "SPEC.md 31.10.5: execute the production PC1 refresh macro with "
+        "SS != DS and intercepted I/O: exact 50/60 Hz writes, IF restored, "
+        "registers kept, CPU/ROM/V40 refusal before any write, missing and "
+        "invalid preference refusal; includes a wrong-frequency mutation",
+        needs=("nasm", "unicorn")),
+    Row("pc1refresh", "soak", py("tests/pc1refresh.py", "--shots", "build/pc1-evidence"), 10.0,
+        "SPEC.md 31.10.5: compact CGA Display controls 60/50/60, deferred P1 "
+        "record write and reboot round trip. A synthetic identity stub ONLY "
+        "in the loaded panel exposes the face on a non-PC1 emulator; the "
+        "unpatched reboot preserves the choice but hides the controls. "
+        "pc1video independently executes the real hardware probe",
+        needs=("marty",), wants=("build/os8088-360.img",)),
     Row("pc1mouse", "soak", py("tests/unit/t_pc1mouse.py"), 0.1,
         "PC1MOUSE.DRV's button polls use AL for a keyboard scancode while AX "
         "holds the sampled horizontal delta. Bank AX around both queries or "
