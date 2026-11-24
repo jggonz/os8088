@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "a8f72a915b39c66209a9e4ebd7f3ff2809b98c8e3943c31058e8970f4af37b99",
+  "fingerprint": "47b3c232a10a75acb01e2fdb830a508ce99ddfdc26e48165df827fdef2a93ece",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "78d9a6aeaf42b14a7e9ff44e3a9493639ab52ecd4166769ac38ceda37300db9a",
+  "fingerprint": "d67e7b132e81ee18f8ab7015ec30dc4d2dc64944195d8cc63795f17e9d6aded6",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2491,6 +2491,20 @@
    "guard": "VX_ABI_VER",
    "reason": "VXV_INFO (0x44): additive verb for the wide Display page, like VXV_PM; an image or kernel from before it cannot be broken by it, so VX_ABI_VER stays 6",
    "to": 6
+  },
+  {
+   "fingerprint": "d67e7b132e81ee18f8ab7015ec30dc4d2dc64944195d8cc63795f17e9d6aded6",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "DRVC_ZIP = 12 and the ZIPV_/ZIPS_/ZIPP_/ZIPM_ constants appended (SPEC.md 138): nothing built before stops running, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "47b3c232a10a75acb01e2fdb830a508ce99ddfdc26e48165df827fdef2a93ece",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "DRVC_ZIP = 12 and the ZIPV_/ZIPS_/ZIPP_/ZIPM_ constants appended (SPEC.md 138): nothing built before stops running, no bump",
+   "to": 14
   }
  ]
 }

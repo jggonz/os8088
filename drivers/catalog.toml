@@ -146,3 +146,12 @@ description = [
   "Realtek RTL8139 PCI network cards with a",
   "TCP/IP stack. Needs a PCI bus and a 386.",
 ]
+
+["ZIP.DRV"]
+category = "STOR"
+icon = "C_STOR"
+name = "Iomega Zip Drive"
+description = [
+  "Read and write Zip disks as a drive.",
+  "Needs a parallel Zip 100, Zip Plus or 250.",
+]

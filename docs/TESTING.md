@@ -937,6 +937,20 @@ probe correctly finds nothing; a driver that failed to attach opens the
 Control Panel on its Drivers page. On MartyPC, `MARTYPC_WAV=<prefix>` writes
 one wav per source in the format `sndcheck.py` reads.
 
+### The Zip drive on the parallel port (SPEC.md 138.8)
+
+MartyPC only. Patch 18 puts a VPI0 or VPI2 Zip drive on its LPT card over a
+host image file (`make zipimg` builds the disks, `tools/os88zip.py` reads them
+back): both port modes (nibble on an XT's output-only card, PS/2 on a
+`bidir` card), UNIT ATTENTION / NOT READY / DATA PROTECT, eject, insert and
+write-protect from the host, and `zip_stats` counters including the guest
+microseconds a READ or WRITE command took. **No other emulator has one**: QEMU
+and 86Box have no Zip on a parallel port, so a Zip row is a MartyPC row and
+`OS88_EMU=86box` is not an option. `tests/zipmodel.py` drives the drive with
+no guest at all - the way to tell a model bug from a driver bug.
+Recipes: `launch(machine, zip=PATH)` (give it a scratch COPY, the drive writes
+the file), `m.zip_eject()`, `m.zip_insert(p)`, `m.zip_wp(True)`, `m.zip_stats()`.
+
 ### The PicoMEM, as its own firmware
 
 A PicoMEM is an ISA card built round a Raspberry Pi Pico (SPEC.md 34.10), and

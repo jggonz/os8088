@@ -1285,6 +1285,17 @@ cyl`, `_herc` the reverse — because a row on a 13,731 µs quantum boundary
 falls whichever side the guest's turnaround puts it. Quote the **class**, not
 the machine.
 
+### The Zip machines (SPEC.md 138.8)
+
+`os8088_5150_cga_zip0` (VPI0, output-only card), `_zip2` (VPI2), `_zip250`
+(a Zip 250), `_zip0_bidir` and `_zip2_bidir` (a bidirectional card, so PS/2
+byte mode). Pass the disk with `launch(..., zip=PATH)` - a scratch copy, the
+file is written in place - and `zip_wp=True` for a protected one. The
+debug-server verbs are `zip_stats` (counters; `reset`), `zip_eject`,
+`zip_insert` (`path`) and `zip_wp` (`on`), and `os88marty.py` has the same as
+`zip-stats`, `zip-eject`, `zip-insert`, `zip-wp`. Read the host file only on
+a PAUSED machine, or after the eject: a multi-sector WRITE can be half done.
+
 ### The list
 
 `tools/martypc/configs/os8088_machines.toml` is appended to MartyPC's own

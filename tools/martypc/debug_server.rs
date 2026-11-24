@@ -773,6 +773,10 @@ impl DebugServer {
             "status" => status(machine, exec),
             "disk" => disk_stats(machine, &req),
             "midi" => midi_log(machine, &req),
+            "zip_stats" => zip_stats(machine, &req),
+            "zip_eject" => zip_eject(machine),
+            "zip_insert" => zip_insert(machine, &req),
+            "zip_wp" => zip_wp(machine, &req),
             "regs" => regs(machine),
             "setreg" => setreg(machine, &req),
             "read" => read_mem(machine, &req),
@@ -1057,6 +1061,105 @@ fn state_name(s: ExecutionState) -> &'static str {
         ExecutionState::StepOverHit => "stepover",
         ExecutionState::Running => "running",
         ExecutionState::Halted => "halted",
+    }
+}
+
+/// `zip_stats`: what the Zip drive on the parallel port (devices/zip.rs,
+/// SPEC.md 138.8) has been asked to do - commands by opcode, sectors moved,
+/// bytes moved through the status lines (`nibble_bytes`) and through the data
+/// lines (`ps2_bytes`), the guest microseconds READ and WRITE commands took
+/// (`read_us`, `write_us`, over `read_cmds` and `write_cmds`), connects, selects, resets and `violations` (the host
+/// did something the hardware has no answer for) - and its state: the medium,
+/// the write-protect switch, whether a unit attention is waiting. `reset:
+/// true` zeroes the counters so a region of a session can be bracketed.
+fn zip_stats(machine: &mut Machine, req: &Value) -> Value {
+    let clear = req.get("reset").and_then(Value::as_bool).unwrap_or(false);
+    match machine.bus_mut().zip_mut() {
+        Some(z) => {
+            let s = z.stats.clone();
+            let ops: serde_json::Map<String, Value> = s
+                .by_opcode
+                .iter()
+                .map(|(k, v)| (format!("{:02x}", k), json!(v)))
+                .collect();
+            let v = json!({
+                "ok": true,
+                "medium": z.scsi.has_medium(),
+                "path": z.scsi.path(),
+                "sectors": z.scsi.sectors(),
+                "wp": z.scsi.wp,
+                "connects": s.connects,
+                "disconnects": s.disconnects,
+                "selects": s.selects,
+                "resets": s.resets,
+                "commands": s.commands,
+                "check_conds": s.check_conds,
+                "sectors_read": s.sectors_read,
+                "sectors_written": s.sectors_written,
+                "bytes_to_host": s.bytes_to_host,
+                "bytes_from_host": s.bytes_from_host,
+                "nibble_bytes": s.nibble_bytes,
+                "ps2_bytes": s.ps2_bytes,
+                "violations": s.violations,
+                "ejects": s.ejects,
+                "inserts": s.inserts,
+                "read_us": s.read_us,
+                "write_us": s.write_us,
+                "read_cmds": s.read_cmds,
+                "write_cmds": s.write_cmds,
+                "by_opcode": ops,
+                "cdbs": s.cdbs,
+            });
+            if clear {
+                z.stats = Default::default();
+            }
+            v
+        }
+        None => err("no Zip drive in this machine"),
+    }
+}
+
+/// `zip_eject`: take the disk out (the host file is left as it is). The
+/// guest sees NOT READY, medium not present, on its next command.
+fn zip_eject(machine: &mut Machine) -> Value {
+    match machine.bus_mut().zip_mut() {
+        Some(z) => {
+            z.eject();
+            json!({"ok": true})
+        }
+        None => err("no Zip drive in this machine"),
+    }
+}
+
+/// `zip_insert`: put the host image `path` in the drive. The guest's next
+/// command gets a UNIT ATTENTION (the medium may have changed).
+fn zip_insert(machine: &mut Machine, req: &Value) -> Value {
+    let path = match req.get("path").and_then(Value::as_str) {
+        Some(p) => p.to_string(),
+        None => return err("zip_insert needs a path"),
+    };
+    match machine.bus_mut().zip_mut() {
+        Some(z) => match z.insert(&path) {
+            Ok(()) => json!({"ok": true, "sectors": z.scsi.sectors()}),
+            Err(e) => err(&e),
+        },
+        None => err("no Zip drive in this machine"),
+    }
+}
+
+/// `zip_wp`: the write-protect switch, `on` true or false (or 1 / 0).
+fn zip_wp(machine: &mut Machine, req: &Value) -> Value {
+    let on = match req.get("on") {
+        Some(Value::Bool(b)) => *b,
+        Some(v) => v.as_i64().map(|n| n != 0).unwrap_or(false),
+        None => return err("zip_wp needs on: true|false"),
+    };
+    match machine.bus_mut().zip_mut() {
+        Some(z) => {
+            z.set_wp(on);
+            json!({"ok": true, "wp": on})
+        }
+        None => err("no Zip drive in this machine"),
     }
 }
 

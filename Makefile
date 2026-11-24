@@ -3673,6 +3673,12 @@ DRIVERS += $(BUILD)/vesa.drv
 # ($(SYS360OMITDRV)): no XT has a PCI bus. kern_small filters it back out
 # ($(SMALLDRIVERS) is a restatement that never held it)
 DRIVERS += $(BUILD)/pciether.drv
+# ZIP.DRV - SPEC.md 138's Iomega Zip drive on a parallel port. A drv_tab row
+# with SYSTEM.CFG bit 14, not wanted by default (attach writes the connect
+# sequence to a printer port). On every driver kernel's system disks, the
+# 360KB one included: the XT, nibble mode on its output-only port, is the
+# machine the drive was made for. kern_small's $(SMALLDRIVERS) never held it.
+DRIVERS += $(BUILD)/zip.drv
 # CPWIDE.DAT - the wide Control Panel's icons and driver catalog (SPEC.md
 # 135.6, 135.7): a DATA file beside CTRL.DRV, built by tools/cpwdat.py. It is
 # kern_big / kern_emu / kern_mega's alone - kern_small has no wide panel - and
@@ -3745,7 +3751,9 @@ endif
 # RECURSIVE for $(DRIVERS)' own reason: $(KMODS) inside it reads $(KMODDIR),
 # which the emu image rule overrides per target so the on-demand kernel
 # modules come out of the emu kernel and not the shipped one.
-EMUDRIVERS = $(DRIVERS) $(BUILD)/vmmouse.drv
+# ZIP.DRV is filtered out: kern_emu has no Zip row (SPEC.md 138, the owner's
+# decision - no emulator kern_emu targets has a parallel-port Zip)
+EMUDRIVERS = $(filter-out $(BUILD)/zip.drv,$(DRIVERS)) $(BUILD)/vmmouse.drv
 
 # ...and where that build goes. UP HERE WITH $(EMUDRIVERS) rather than down
 # with `make emu`, where $(SMALLDIR) sits beside `make small`, because the
@@ -5012,6 +5020,26 @@ $(BUILD)/cdrom.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 $(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/cdrom.bin -o $@
 
+# ZIP.DRV - SPEC.md 138: an Iomega Zip drive on the parallel port, the
+# Zip 100 (VPI0, zipppa.inc) and the Zip Plus / Zip 250 (VPI2, zipimm.inc),
+# behind one transport contract (ziptrans.inc). A block class: the kernel's
+# FAT driver reads the disk and this serves sectors. zip.asm holds the image
+# to its budget (ZIP_IMG_MAX, bss included) and fails the assembly past it.
+ZIP_SRC := drivers/zip/zip.asm drivers/zip/ziptrans.inc \
+           drivers/zip/zipppa.inc drivers/zip/zipimm.inc \
+           drivers/zip/zipscsi.inc drivers/zip/zipvol.inc \
+           drivers/zip/zipcp.inc drivers/zip/zippkg.inc
+$(BUILD)/zip.bin: $(ZIP_SRC) drivers/os88drv.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/zip/ -I drivers/ -I apps/ -o $@ $<
+	@echo "zip: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/zip.drv: $(BUILD)/zip.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/zip.bin -o $@
+
+#> [Build] zipdrv :: ZIP.DRV alone (SPEC.md 138), the Iomega Zip drive on a parallel port
+.PHONY: zipdrv
+zipdrv: $(BUILD)/zip.drv
+
 # HTTPFS.DRV - SPEC.md 122: a read-only volume served over HTTP, through the
 # socket verbs ETHER.DRV and the cable answer (drivers/net/netpkg.inc).
 # Its Control Panel page is HTTPPAGE.DRV, RAMPAGE.DRV's shape (SPEC.md 122.5):
@@ -5801,6 +5829,28 @@ $(BUILD)/cdromsim.img: $(BUILD)/cdromtest.img $(BUILD)/cdromsim/CDROM.DRV tools/
 cdromtest: $(BUILD)/cdromtest.img $(BUILD)/cdromsim.img $(BUILD)/cdfix.iso
 	@echo "cdromtest: build/cdromtest.img - CDROM.DRV wanted; build/cdfix.iso the disc"
 	@echo "              Run: python3 tests/cdrom.py"
+
+# ZIPIMG - SPEC.md 138.8's QA disks: Iomega Zip disk images written on the HOST
+# by tools/os88zip.py, which is also what reads the guest's writes back out.
+# Five, each its own target so a row can name the one it opens in `wants=`:
+# zip100.img (IBM format: an MBR whose ONLY partition is in entry 4, FAT16, with
+# README.TXT, HELLO.TXT, DOCS/NOTE.TXT and the 200,000-byte BIG200.BIN),
+# zip100b.img (a second disk with other files, for the insert test),
+# zip100blank.img (formatted and empty, for the save test), zip100super.img
+# (a superfloppy: the BPB at sector 0, no partition table) and zip250.img (the
+# Zip 250, 489,532 sectors). All are SPARSE (under 1 MB of each 100 MB on the
+# host) and byte-identical from build to build. MartyPC's Zip drive reads and
+# writes the file in place (patches/18-zip-lpt.patch), so a row copies one
+# first (os88zip.py clone keeps the holes) and never opens the original.
+ZIPIMGS := zip100.img zip100b.img zip100blank.img zip100super.img zip250.img
+$(BUILD)/zip/%.img: tools/os88zip.py tools/os88disk.py
+	@mkdir -p $(BUILD)/zip
+	python3 tools/os88zip.py qa $(BUILD)/zip --only $*.img
+#> [Gate disks] zipimg :: the Zip drive's QA disks (IBM format, superfloppy, Zip 250), sparse, in build/zip/
+.PHONY: zipimg
+zipimg: $(addprefix $(BUILD)/zip/,$(ZIPIMGS))
+	@echo "zipimg: build/zip/{$(ZIPIMGS)} - read back with tools/os88zip.py"
+	@echo "              Run: python3 tests/zipmodel.py"
 
 # CDAUDIOIMG - SPEC.md 119.7's machine to LOOK at, because 86Box cannot be
 # driven from this host: build/cdaudio.cue is an audio CD of three generated

@@ -38044,7 +38044,8 @@ drive the machine does not have is an ordinary failed mount. Rows 2 and up are
 registered by a block-serving driver through `osapi_vol_add` (§20.3) and
 dropped when it unloads, which `drv_release` does **before** freeing the
 driver's claims: a mounted volume whose transport has been freed is a read
-into whatever claims that memory next.
+into whatever claims that memory next. A Disk window showing a dropped volume
+is closed with it (§22.29), so the letter's next open lists what is there now.
 
 #### 18.7.1 What the letters mean
 
@@ -39265,6 +39266,85 @@ Four things hold it up:
   exactly the shape "this is not the disk you think it is" arrives in.
   `dsk_bpb_bank_zap` preserves `AX` and the flags because it is called at the
   *top* of both mutators, where `AL` is an argument.
+
+
+### 18.9.2.1 …and a mount that hears a driver's 06h starts again (`OS88_ZIP`)
+
+A Zip disk (§138) is a **removable** medium on a `DVK_DRV` row, and the
+row's `[dsk_vflop]` is 0, so its head is banked as a fixed disk's is. That
+is deliberate (§138.1): the drive *says* when its disk changed, with 06h on
+the driver arm, and that answer is the whole of its media test. But the
+bank means a mount after a swap **reads no LBA 0**. Its first transfer is
+the FAT window's load (step 2), and that is the transfer the drive answers
+06h. Before this rule, `dsk_fat_window` then did what it does for any FAT1
+failure. It read FAT2 at the banked head's LBA, the driver learned the new
+disk on that read (§138.4), and the read succeeded. The 06h had been
+swallowed, and the mount finished on the OLD head over the NEW disk. Field
+case QA-6: a 250 MB disk swapped by hand for a 96 MB one listed `0 files`
+and 238.74 MB free. That was the 250's geometry reading the 96's FAT as
+empty. Putting the 250 back then failed at LBA 0, because the 06h zapped
+the bank and the mount after it had no bank to use.
+
+The same swallow is in `.cwd_lost` (step 2a). It reads a FAT sector outside
+a reused window and takes any failure as "the directory is gone". That
+case is worse, because the mount then opens the write gate on the old FAT.
+
+**The rule: a driver's 06h inside a mount restarts that mount from the
+top of its state, once per 06h.** Three pieces, all behind `OS88_ZIP`:
+
+1. **The driver arm tags it** (`dsk_xfer`, `.drverr`). A 06h that finds the
+   gate ALREADY shut (`shr` → CF = 0) is not a mounted volume's: the
+   transfer is inside a mount, or on a volume nobody has validated. So
+   `[dsk_ioerr]` gets **0C6h** instead of 06h. No int 13h status is 0C6h,
+   and the BIOS arm never writes it. That matters, because the BIOS arm
+   RETRIES a 06h inside a mount and leaves 06h in `[dsk_ioerr]` when the
+   retry succeeds (BR-16). A floppy's first read after every swap does
+   exactly that, and it must not cost the floppy a second mount. A 06h
+   that shuts an open gate keeps 06h, as before.
+2. **Every mount clears `[dsk_ioerr]`** with its other first stores, so a
+   tag left by an earlier transfer cannot restart this mount.
+3. **`.cwd_ok` restarts it**: the end of step 2 (FAT window and current
+   directory), which catches both swallows, jumps to the first store of the
+   mount, which empties the FAT window (`dskw_refat`) and re-runs step 1.
+   The 06h went through `dsk_xfer`'s `.fail`, which forgets every bank
+   (§18.9.2), so step 1 **reads LBA 0**, and the driver, which learned the
+   new disk on the swallowing read, hands back the new disk's head.
+
+**It terminates because 06h is an event, not a state.** §138.1 binds a
+driver to answer 06h only for a medium it HAD, and ZIP.DRV answers it
+once per change (§138.4). Each restart therefore needs a disk changed by
+hand while a mount runs. No counter is kept. A driver that answered 06h
+forever would loop a mount, and that is a defect of the driver against
+§138.1.
+
+What it does not do:
+
+- **A quiet mount that reuses a banked FAT window does no I/O at all**
+  (§18.8.1), so it cannot hear the 06h. The next file operation hears it.
+  On a mounted volume that 06h shuts the gate (§138.1) and fails the
+  operation. The operation after it remounts and finds no bank. That was
+  already the design, and nothing here changes it.
+- **A 06h on the LBA 0 read itself is not restarted.** That needs a disk
+  swapped by hand while the bank is already forgotten (an unrelated I/O
+  error forgot it); the mount fails through `.jfail` and the next open
+  mounts the new disk. A restart there as well did not fit kern_mega's
+  `.cold` (7 bytes left).
+- **A 06h heard after `.cwd_ok`** fails the mount through `.jfail`, and the
+  next open mounts the new disk, *unless* a listing step swallows it (the icon harvest's
+  peeks do). That needs a disk swapped by hand during the listing. The
+  floppy has had the same race since BR-16.
+- **The folder is kept** (`[dsk_keepcwd]`) and is re-validated on the new
+  disk by step 2a, as a floppy swap's is (§19.2). A folder cluster that is
+  live on the new disk is listed. That is the floppy's behaviour too.
+
+**What it cost** (kernsize, against §22.29's head): **kern_big +8**
+(163 bytes left before its rung, was 171), **kern_mega `.cold` +6** (1 byte
+left, was 7: that rung is now full), paid partly by `dsk_vol_drop_drv_x`
+dropping a kind test `dsk_vol_del` makes itself (-11, under `OS88_ZIP`).
+**kern_emu and kern_small: 0**, byte for byte - every line is behind
+`OS88_ZIP`. Hot routines keep their measured parity (`t_hotpar`).
+Seen: the `zipdrive-z250` arm's hand swap both ways on MartyPC, each disk
+listing its own files and its own free space.
 
 
 ### 18.9.3 …and a floppy needs the CALLER to say so — the batch bracket
@@ -59880,6 +59960,67 @@ is now the one bar the cell is on. **kern_big -6 bytes of `.text`**, measured:
 the cell's three words (`AM_COUNT` is a word either way, and the title's
 string stays for `menu_loc_set`); kern_small unchanged, the cell having been
 `KERN_BIG`'s alone.
+
+### 22.29 A Disk window whose volume is dropped closes
+
+**The rule: when `dsk_vol_del` (§18.7) frees a volume's row, every Disk
+window showing that volume is closed, on the next UI pass.** Before it, the
+window stayed up with its cache (§22.1's binding rule: paints read the
+window's own cache) and kept its `FS_DRV`, so it went on listing a disk that
+was no longer there - and when a driver added a volume again at the SAME
+index, as `ZIP.DRV`'s Eject does (`OSAPI_VOL_DEL`, START STOP UNIT,
+`OSAPI_VOL_ADD`, §138.7), `fm_choose` found that window "already showing"
+the letter and fronted it: opening D: after the next disk went in showed the
+FIRST disk's files (docs/plans/ZIP-PLAN.md, QA-1). The RAM disk's unmount,
+the CD-ROM's detach, a hard-disk partition unmounted from its page, a driver
+unticked and a desktop zone's Unmount Image all took the same path.
+
+**Close, not re-list.** §22.8's `FS_DIRTY` debt would re-list the window
+when it is next looked at, but a re-list needs a volume: after a RAM disk's
+unmount the row is FREE and the window would sit on a drive that does not
+exist, and after a Zip eject the row is the next disk's - which is a new
+window's business, opened by the user who put it in. A window goes when its
+volume goes, the way a driver's windows go with the driver (§51.8).
+
+**Deferred, through §75.2's close request.** `dsk_vol_del` is reached from a
+driver's page click with the gfx lock held (§51.8: `osapi_vol_add`/`del` post
+rather than repaint), from `drv_release` inside `app_close_win`'s panel
+branch, from DISKOPS.DRV's unmount and from the hibernate's sweep -
+contexts in which `app_close_win` (lock, UI task, a repaint) cannot run.
+`wm_close_req` is the deferral the kernel already has: one bit a window slot
+in `[wm_clreq]`, spent by `ui_task`'s `.chk_close` step with nothing on the
+stack, and `wm_destroy` clears a slot's bit, so a window that died first
+cannot have its slot's next tenant closed. `dsk_vol_del` (`.cold`) walks the
+Disk windows with files.inc's `fmv_ifirst`/`fmv_inext` and posts one request
+for each whose `FS_DRV` is the volume, reaching `.text`'s `wm_close_req`
+through the rare door (`KDOOR`, §20.3.4) on the index it already has as
+`OSAPI_WM_CLOSE`, so `rd_tab` gains no word. The walk is written INTO
+`dsk_vol_del`, its one caller, rather than called: 26 bytes is an even
+shift for `dsk_next_clus_x` after it, where a routine in files.inc and a
+three-byte call moved that hot routine by an odd one (`t_hotpar`). It is in
+the `.free` arm only - the give-back arm hands a taken boot row back to the
+BIOS (§52.1.1) and the volume stays.
+
+- **The Standard File chooser is a `KIND_FILES` instance (§38.1) and is
+  closed like any other.** §38.1.1's gate is self-validating: a chooser taken
+  down by anything else is ended by `fdlg_reap` as a Cancel in the next pass.
+- **Disk > Unmount Image keeps its window** (§18.101.5): it sends the acting
+  window to the root of the HOST, so `clo_unmntw` (DISKOPS.DRV) parks that
+  window's `FS_DRV` at `0xFF` as it reads the volume out of it - no volume is
+  `0xFF`, so the walk passes it by, and `fm_mount`'s `fmv_load` writes the
+  host's index back on every path that reaches the verb. The desktop zone's
+  Unmount Image has no acting window, and every window on the image closes.
+- **A volume dropped and added back is still dropped.** The hibernate's sweep
+  (§87.4) detaches the classes it does not keep - `DRVC_DISK` and `DRVC_FILE`
+  are kept - so a Zip, CD-ROM or Web drive window is closed across a
+  hibernate, and the disk in that drive may well have changed while the
+  machine was off. A failed DOS hand-off's unwind reloads drivers that
+  `drv_shutdown_x` had dropped, and their windows are closed the same way.
+- **kern_small** has no driver-backed volume (`OS88_DRIVERS` is kern_big's)
+  and no `OS88_IMG`, so it assembles none of this and is byte-identical.
+  **kern_emu** is held byte-identical too (`%ifndef KERN_EMU`): its rung had
+  16 bytes and this is 26, so its RAM disk, CD-ROM and images keep the stale
+  window until the owner decides to spend them there.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
@@ -259854,3 +259995,673 @@ CGA opens compact and a hosted-code refactor (the Drivers page's toggle)
 behaves as before; a VGA system disk without `CPWIDE.DRV` opens compact
 silently. Not looked at: Hercules and EGA (compact by the predicate), the
 two VESA sizes between, and any real-hardware or MartyPC timing.
+
+## 138. ZIP.DRV — an Iomega Zip drive on the parallel port (`drivers/zip/`)
+
+The owner's brief (2026-11-23): *"Add Iomega Zip drive Parallel port driver so
+that we can read and write iomega zip disks through parallel ports. Use
+existing drivers for Linux or other operating systems to see how it is
+built."* The plan is `docs/plans/ZIP-PLAN.md`; the build diary is
+`docs/HOW-ZIP-WAS-BUILT.md`.
+
+| | |
+|---|---|
+| what | `ZIP.DRV`, a driver of a NEW block class `DRVC_ZIP` = 12 (11 is `DRVC_JOY`'s, the joystick driver's, reserved by PR #410). The Zip disk is a **removable** FAT12/FAT16 volume on the next free letter from D: (§18.7.4), read and written through the kernel's own FAT driver - the driver serves sectors (`DSV_BLK`, §51.8), never files |
+| drives | the parallel **Zip 100** (Iomega's PPA3, "VPI0" - Linux `drivers/scsi/ppa.c`) and the parallel **Zip Plus** and **Zip 250** (the MatchMaker, "VPI2" - Linux `drivers/scsi/imm.c`). One drive, on LPT1, LPT2 or LPT3 |
+| port modes | **nibble** (4-bit reads through the status lines: every port, the XT's included) and **PS/2 byte** (8-bit reads on a bidirectional port). EPP and ECP are not done (§138.11) |
+| where | `kern_big` and `kern_mega` (`OS88_ZIP`, `kernel/kernel.asm`). **Not `kern_emu`**, by the owner's decision (§138.1): no emulator that kernel targets has a parallel-port Zip, and its rung had 16 bytes left - so it assembles byte for byte as before. `kern_small` has no driver layer (§51.0), and so no Zip drive |
+| reference | Linux's `ppa.c` and `imm.c` (GPL-2.0, Grant Guenther, David Campbell, Tim Waugh), read for the PROTOCOL: the register sequences and status semantics below are facts about Iomega's hardware, cited from them. No line of either is translated; the driver is written from §138.2's description |
+| cost | resident: the class, the row, its title (§138.1, measured, **no rung crossed**). The image is a heap claim only while the row is ticked (§138.9) |
+| instrument | MartyPC with an emulated Zip drive on its LPT card (§138.8) - the SHIPPED driver, unmodified, on a 4.77 MHz XT. No emulator in this tree modelled one before |
+
+### 138.1 What the kernel carries
+
+Every byte below is behind **`OS88_ZIP`**, which `kernel/kernel.asm`
+defines for `kern_big` and `kern_mega`.
+
+**`kern_emu` has no Zip drive, by the owner's decision (2026-11-24).** No
+emulator that kernel targets models a Zip drive on a parallel port, and its
+rung had 16 bytes left, which this section would have crossed. So `kern_emu`
+has no row, no class slot and no per-class growth. Its whole image, modules
+and boot blob included, assembles **byte for byte** as it did before
+(`tools/os88rdiff.py kernel <base> . -D KERN_EMU -D KERN_BIG`, `cmp`).
+`ZIP.DRV` is not put on its disks. A SYSTEM.CFG carried from `kern_big` to
+`kern_emu` loses its `ZP` record at `kern_emu`'s next save, because an
+unknown key is dropped (§51.5 rule 1). `kern_small` has no driver layer
+(§51.0) and is also unchanged.
+
+- **A class, `DRVC_ZIP` = 12** (`apps/os88api.inc`, mirrored in
+  `kernel/driver.inc`), appended. `DRVC_MAX` goes 10 → 12. Class 11 is
+  `DRVC_JOY`'s, held for the joystick PR #410. Its slot
+  (`drv_fptr11`/`drv_fseg11`, a `drv_owner` word and a `drv_svct` word)
+  exists because `drv_cls_fp` indexes the run contiguously. Nothing
+  publishes it, so every class walk passes over it the way it passes over
+  `DRVC_RETIRED3`. **No copy of the service table**: since kernel size pass
+  19 every class but sound is read in place through its segment, and
+  `dsk_xfer` reads `DSV_BLK` that way through `[drv_blkcls]` (§51.2.1). A
+  block class needs nothing more than a file class does.
+- **A block class, which `dsk_vol_add` already understood.** Its kind
+  derivation closes the file-class range at `DRVC_HTTP` (`ja .kindpub`), so
+  class 12 gets `DVK_DRV`. Its letter search starts at index 3 for every
+  class but `DRVC_DISK`, so the Zip disk is D: or later and C: stays the
+  hard disk's (§18.7.4). Neither needed code. This section first said "it
+  derives `DVK_FILE` for every class from `DRVC_FILE2` up", which was wrong
+  about the tree: the range has been closed since §18.101.
+- **Removable**: `dsk_vol_fixed_x` answers AL = 0 for a row whose
+  `DV_CLASS` is `DRVC_ZIP`. So `OSAPI_VOL_KIND` says `VK_REMOVABLE` /
+  `VT_DRIVER`, the desktop draws the removable icon, DOS's IOCTL 08h says
+  removable (§96.22.2), a `WSQF_KEEP` hold on it ends with its callback, and
+  `hb_pick` never chooses it for a hibernation. The test is on the CLASS
+  and **not in `dsk_vol_rmv`**. That routine's other two callers
+  (`disk_mount_x`'s floppy banking and `dsk_media_ok`) would then
+  re-validate the medium at every mount and every quiet hop, which is an
+  extra sector read over a nibble port each time. The Zip drive *says* when
+  its disk changed, so that is its whole media test (next item). One
+  consequence: a mounted image (§18.101) whose host is a Zip volume answers
+  `fixed`, because `dsk_vol_rmv` judges the host by its kind. Its transfers
+  still go through the host's `DSV_BLK`, so a swap under it still fails at
+  the 06h gate below.
+- **Media changed, on the driver arm** (`dsk_xfer`, `.drverr`). A `DSV_BLK`
+  that answers CF = 1 with AL = 06h now does `shr byte [dsk_mntok], 1`,
+  which is BR-16's gate (§18.9.1). If the volume was mounted, the gate
+  shuts and the next operation remounts. The transfer fails unretried, as
+  every driver failure always has. Before this change the arm stored the
+  status and failed, but left the gate open, so the next operation trusted
+  the old disk's FAT window on the new disk. **One difference from the BIOS
+  arm**: the BIOS arm RETRIES a 06h inside a mount, and the driver arm
+  retries nothing. So a driver answers 06h only for a medium it HAD.
+  ZIP.DRV does exactly that (§138.4). A UNIT ATTENTION while its medium is
+  unknown (after attach, after an eject) is ridden out by learning the
+  medium, and the first mount after a disk goes in sees no 06h. A 06h that
+  arrives INSIDE a mount (a disk swapped by hand, the head banked) restarts
+  that mount so it reads sector 0 (§18.9.2.1).
+- **`OSAPI_VOL_DEL` already writes back, and nothing was added.** Between
+  operations, the only dirty state the kernel can hold for a volume is a
+  held `WRITE_SEQ` stream: its banked FAT edits, its link and its directory
+  entry (§18.4.9, §18.8.5). `dsk_vol_del` commits that first (`dws_commit`,
+  at its head under `DSK_STREAM`) while the driver still serves the volume.
+  Every other FAT and directory edit is flushed by the operation that made
+  it (`dskw_flush_x`, FAT then entry, §18.4). The window of a volume the
+  mount has left is flushed by `dsk_fatw_park` on the way out. So
+  `ZIPV_EJECT`'s `OSAPI_VOL_DEL` (§138.7) runs with nothing dirty, apart
+  from the hold it commits itself. File operations are UI-task only (§20.6),
+  so a package's eject cannot land inside one.
+- **A row, `ZIP.DRV`, "Zip Drive"** (`zip_row`), LAST, after
+  `PC1MOUSE.DRV`. SYSTEM.CFG bit **14** (`drv_cfgbit`; 13 is held for
+  JOYSTICK.DRV). Not wanted by default: attach writes the connect sequence
+  to a printer port. `DRVM_IMG_ZIP` = 13 half-KB, which is §138.9's
+  6,656-byte ceiling and is re-set to the built image at integration
+  (`t_drvmem`). `DRVM_ZIP` is the image alone: ZIP.DRV claims nothing.
+  `DQ_MAXREC` stays 13: kern_big has 13 rows now, and kern_emu still 13.
+- **A port pin, key `ZP`** (`CFG_ZPIN`, appended after `CFG_KL`;
+  `DRV_PBLOB_SZ`, §51.9.2's encoding). Its blob-map entry is the one AFTER
+  the four leading rows' entries, not in row order. `drv_blob_of`
+  renumbers row `DRV_MAX - 1` onto it, and an assertion holds the Zip row
+  last. Filler entries for the rows between would have cost three bytes
+  each.
+- **DOS and hibernate keep it** (`hbm_sweep`'s skip list and `HB_KEEPSET`,
+  still the same set): a DOS program may be reading and writing the Zip
+  disk, and the driver holds no IRQ and no DMA channel. `1 << 12` is 0 in
+  the CH a caller names classes with, so no `OSAPI_DRV_SUSPEND` caller can
+  name it, which matches the CD-ROM and the RAM disk.
+- **The catalog** (`drivers/catalog.toml`): `STOR`, `C_STOR`, "Iomega Zip
+  Drive". The wide Control Panel's header for the Zip drive's own page uses
+  the hard-disk art (`cpw_recicon`), with no new art.
+
+**What it cost, measured** (`tools/kernsize.py`, against the tree before
+it): **+65 resident** on `kern_big` and on `kern_mega`.
+
+- **`.text` +35:** the two class slots 8, the row 16, `'ZIP.DRV'` 8, the
+  blob-map entry 3.
+- **`.bss` +9:** the class arrays 8, the pin 1.
+- **`.cold` +21:**
+  - the 06h gate, 8 bytes and even, so it keeps the hot loop's parity;
+  - the removable test, 7;
+  - `drv_blob_of` +5;
+  - a never-executed parity byte after `dsk_vol_fixed_x`, so `dsk_next_clus_x`
+    and the rest behind keep their measured parity (`t_hotpar`).
+
+Rung headroom, before → after:
+
+| kernel | rung | left before → after |
+|---|---|---|
+| kern_big | kernel | 262 → 197 |
+| kern_mega | image | 210 → 166 |
+| kern_mega | `.cold` | 54 → 33 |
+
+Neither crosses. `kern_emu` and `kern_small` are 0. The boot blob and
+CTRL.DRV carry the title, the `ZP` key and the bit: `.boot2` +10 on
+`kern_big` and +20 on `kern_mega`, none of it resident.
+
+Two folds were found and measured on the way and are **not** in this
+section: `osapi_vol_fence`'s class walk is `drv_pub_seg`'s written out a
+second time (−22 net if it called `drv_pub_seg`), and `dsk_vol_drop_drv_x`
+repeats `dsk_vol_del`'s kind test (−11). They were withdrawn when the owner
+took `kern_emu` out, because shared code that shrank would have changed
+`kern_emu`. Either one is still there to take for the next feature that
+needs the bytes.
+
+### 138.2 The wire: two protocols, one transport contract
+
+`drivers/zip/ziptrans.inc` is the contract, and this section is its
+rationale. The core (`zip.asm`) knows SCSI; a transport knows how to move a
+CDB, data and a status byte across the parallel port and nothing else. Both
+transports export `_probe`, `_cmd` and `_reset` with identical registers, and
+attach copies the one that probed into `zt_vec`. Attach tries VPI0 first,
+then VPI2, on each candidate port.
+
+**Bidirectional is the core's question, asked once**: set the control
+register's DIRECTION bit (20h), write 55h and then AAh to the data latch and
+read each back. A port that returns what was written is NOT tri-stating
+(output-only, every XT card), and gets `ZIPM_NIBBLE`; a port that returns
+something else gets `ZIPM_PS2`. The latch and the control register are put
+back as they were found, DIRECTION clear, before any transport runs - so a
+port with a printer on it and no drive is left exactly as it was. The core
+declares the shared state (`zt_base`, `zt_mode`, `zt_id`, `zt_vec`) in its
+zero-at-load block and the transports only read and write it.
+
+**Timeouts are time** (ziptrans.inc): a wait past a millisecond reads the
+BIOS tick; a count alone is sized wrong on every machine but one.
+
+**Speed on the XT**: a nibble read is two `out`s and two `in`s a byte, and
+is the whole cost of a read on the target machine. The transports' inner
+loops are unrolled for it and their cycle cost is written in §138.2.1/2 and
+measured in §138.9.
+
+#### 138.2.1 VPI0 — the Zip 100 (`drivers/zip/zipppa.inc`)
+
+The Zip 100's PPA3 interface. Facts below are Iomega's hardware, read from
+Linux `ppa.c` (named by function) and written fresh in `zipppa.inc`. Port
+registers are `ZT_DATA`/`ZT_STAT`/`ZT_CTRL` of `[zt_base]` (ziptrans.inc);
+every control value below is the byte written to `ZT_CTRL`.
+
+**Connect and disconnect** (`ppa_c_pulse`, `ppa_d_pulse`, `ppa_connect`,
+`ppa_disconnect`). Each is four data bytes, each followed by a control
+sequence. Connect: data 00h, 3Ch, 20h, 8Fh, each with control 04h, 06h, 04h,
+0Ch. Disconnect: data 00h, 3Ch, 20h, 0Fh, each with control 0Ch, 0Eh, 0Ch,
+04h, 0Ch. Both end with control 0Ch, which is the port's idle (printer) state;
+a failed probe therefore leaves a daisy-chained printer working. (8Fh is the
+non-EPP connect; EPP's 0CFh is not used - §138.11.)
+
+**Cable check** (`ppa_engine` phase 1, `ppa_init`). Connected: control 0Eh must
+make status bit 3 read **1**, control 0Ch must make it read **0**; either
+miss is "no drive". Linux retries for a second because the port may be
+contended; here the check is made three times, 1 ms apart, then `ZTE_NOCONN`.
+
+**Select** (`ppa_select`). Wait for status bit 6 to drop (a previous target
+off the bus); data = 1 << id, control 0Eh, 0Ch; data 80h ("not the
+initiator"), control 08h; wait for status bit 6 to rise. Either wait missing
+is `ZTE_NOSEL`. Waits are 1-2 BIOS ticks (Linux: 5000 us of spin).
+
+**`ppa_wait` and the phases.** The drive is ready when status bits 7 and 6 are
+both set; `status & F0h` then names the phase: **C0h** it wants a data byte,
+**D0h** it has one for the host, **E0h** it wants a command byte, **F0h** it
+has the status (then the message) byte. Command bytes need `status & 50h` =
+40h, bytes in need 50h. Before the CDB the wait is `ZT_TMO_TICKS`; after it
+(data, status) it is `PPA_LONG` = 255 ticks (~14 s) - a Zip waking from sleep
+takes ~10 s and Linux's engine never gives up on the data phase (it
+reschedules every tick); the SCSI core's own timeout is the real bound there.
+
+**One command** (`ppa_cmd`; `ppa_engine` phases 1-6). Connect + cable check;
+select `[zt_id]`; control 0Ch; for each CDB byte: wait, require E0h's bit
+pattern, data byte, control 0Eh, 0Ch (`ppa_byte_out`). Then the data phases:
+wait; **F0h** ends them; C0h is a burst out and D0h a burst in (the direction
+must match BH or `ZTE_PHASE`); a drive that wants data with nothing left in CX
+is `ZTE_PHASE` too (the buffer is never overrun); anything else is
+`ZTE_PHASE`. A burst is **512 bytes** when the opcode is READ/WRITE(6 or 10)
+(08h 0Ah 28h 2Ah) and 512 remain, **one byte** otherwise (`ppa_completion`:
+`fast`), the phase being re-read between bursts. Then the status byte (`&
+3Eh`, as `STATUS_MASK`), then the message byte if the drive is still in F0h
+within one tick (it is read and dropped), then disconnect. CX returns the
+bytes moved; the port is disconnected on every exit.
+
+**Byte transfer** (`ppa_byte_out`, `ppa_nibble_in`, `ppa_byte_in`). *Out*:
+data, control 0Eh, control 0Ch. *Nibble in* (any port): control 04h and read
+status bits 7-4 (the high nibble), control 06h and read them again (the low
+nibble); byte = high | low >> 4; control 0Ch when done. *PS/2 in*: control
+25h once (bit 5 turns the data lines round), then per byte read the data port,
+control 27h, control 25h; at the end control 04h, 0Ch.
+
+**Reset** (`ppa_reset_pulse`, `ppa_reset`). Connect; data 40h, control 08h,
+~30 us, control 0Ch; ~1 ms; disconnect; ~1 ms. Delays are port reads (~1 us
+each on an ISA port, so a 486 does not shorten them 100-fold); only the 1 ms
+settle on an 8088 is ~8 ms, which is harmless.
+
+**Probe** (`device_check`). `[zt_id]` is walked 0..7 running TEST UNIT READY
+through `ppa_cmd`: `ZTE_NOSEL` means try the next ID, any other error ends the
+search; the first ID that answers (with any status - a fresh drive says CHECK
+CONDITION) is the drive. With `ZIPM_PS2` asked for, a 36-byte INQUIRY then
+runs in PS/2 mode and must read `IOMEGA` at offset 8, else `[zt_mode]`
+drops to `ZIPM_NIBBLE` (never raised). The probe ends with a reset pulse
+(Linux does the same) and the port disconnected. The reset makes the drive
+report UNIT ATTENTION on its next command (§138.3 handles it).
+
+**Cycles, per data byte, 8088 at 4.77 MHz.** Estimated from the instruction
+timings and the 4.34-clock-per-instruction-byte fetch floor (PERFORMANCE.md
+Part 2), *not yet measured*: the I/O instructions add bus wait states the
+table does not carry. The `loop` (17 clocks) is paid once per PAIR of bytes.
+
+| path | EU clocks | code bytes | per byte | 512-byte burst |
+|---|---|---|---|---|
+| out | 54 + 8 | 13 | ~62-70 clocks = 13-15 us | 7-8 ms |
+| PS/2 in | 51 + 8 | 12 | ~60-65 clocks = 13 us | ~6.5 ms |
+| nibble in | 92 + 9 | 22 | ~100-110 clocks = 21-23 us | 11-12 ms |
+
+The nibble path is the whole speed of a read on the XT: ~45 KB/s before the
+drive's own per-burst phase wait and the core's command overhead, which §138.9
+measures. Code + constants: 904 bytes of the 1,024 allowed (`zipppa.inc`, no
+bss).
+
+#### 138.2.2 VPI2 — the Zip Plus and Zip 250 (`drivers/zip/zipimm.inc`)
+
+The MatchMaker is the Zip Plus's (and 250's) embedded SCSI host adapter. Every
+register fact below is read from Linux `imm.c`/`imm.h` (function in
+parentheses) and is Iomega's wire, not code of ours. `ctrl`, `stat`, `data` are
+`[zt_base]`+2, +1, +0; the status register is read RAW (no bit inverted - unlike
+`ppa.c`), and a "phase" is `stat & B8h`.
+
+**Connect** (`imm_cpp`, `imm_connect`). The Command Packet Protocol: ctrl 0Ch;
+data AAh, 55h, 00h, FFh, 87h, 78h, each held >= 7 us; `s1` = stat&B8h after FFh,
+`s2` = stat&B8h after 87h, `s3` = stat&38h after 78h; then the command byte on
+data, ctrl 0Ch, 0Dh, 0Ch (strobe), data FFh. The signature is connected when
+(s1,s2,s3) = (B8h,18h,30h), disconnected when (B8h,18h,38h), else no drive.
+Command bytes: 30h deselect all, E0h select device 0 in compatible mode. A
+connect is E0h, 30h, E0h and must answer "connected" (`imm_connect`);
+`ZTE_NOCONN` otherwise. Every exit sends 30h.
+
+**Select** (`imm_select`). ctrl 0Ch and wait for stat bit 3 clear (bus free;
+500 reads), ctrl 04h, data = 80h | 1<<id, ctrl 0Ch then 0Dh, wait for stat bit 3
+SET (the drive latched the bus; 500 reads), ctrl 0Ch. No latch is
+`ZTE_NOSEL`. The two 500-read spins are the only counts: sub-millisecond on a
+486's port, ~4 ms on the XT, and the drive answers in microseconds.
+
+**Phase wait** (`imm_wait`). ctrl 0Ch, poll stat bit 7 (REQ), ctrl 04h, return
+stat&B8h. Meanings: **88h** drive wants data, **98h** drive sends data, **A8h**
+wants command bytes, **B8h** status/message follows; bit 4 is I/O (set = drive
+to host), bit 5 is /C-D (set = not data), bit 3 is /BSY (must be set). The wait
+is ticks (`ZT_TMO_TICKS`), not a count; `ZTE_TIMEOUT` on expiry.
+
+**One command** (`imm_cmd`, after `imm_engine`/`imm_completion`): connect;
+select `[zt_id]`; the CDB two bytes per wait, each wait required to read
+(r&18h) = 08h (listening); wait; if bit 5 is clear there is a data phase, and a
+read is negotiated once (below); the data in bursts of 512 bytes (else 1 byte in,
+2 out, which is `imm_completion`'s `bulk`/`IMM_BURST_SIZE` rule for the seven
+commands: only READ/WRITE exceed 512), each burst preceded by a wait whose phase
+must be 98h (in) or 88h (out) - anything else, or a drive wanting more than
+CX, is `ZTE_PHASE`; on B8h: after an IN data phase the **end sequence** ctrl
+04h, 0Ch, 0Eh, 04h; wait B8h; negotiate; read the status byte; wait (two ticks)
+for an optional message byte and read it; the end sequence again; deselect.
+The drive ending the data phase early is a status byte and a short CX, not an
+error.
+
+**Negotiation** (`imm_negotiate`, IEEE 1284). ctrl 04h; data 00h (nibble) or
+01h (PS/2 byte), held >= 100 us; ctrl 06h; stat bit 5 SET means data is
+available; ctrl 07h, 06h. Bit 5 clear fails the command (`ZTE_PHASE`). It is
+done before every read data phase and before the status byte.
+
+**Moving bytes.** *Out* (`imm_byte_out`): ctrl 04h; per pair, data b0, ctrl 05h,
+data b1, ctrl 00h; ctrl 04h. *Nibble in* (`imm_nibble_in`): ctrl 04h; per byte
+ctrl 06h, read stat bits 7-4 = the LOW nibble, ctrl 05h, read stat bits 7-4 =
+the HIGH nibble, ctrl 04h; ctrl 0Ch at the end. *PS/2 in* (`imm_byte_in`):
+ctrl 04h; per byte ctrl 26h, read data, ctrl 25h; ctrl 0Ch at the end.
+
+**Probe** (`imm_init`, `device_check`). Connect (silence on the wire ends the
+probe: no drive of this protocol); the bus reset pulse (`imm_reset_pulse`: ctrl
+04h, data 40h, ctrl 0Ch, 0Dh, >= 50 us, ctrl 0Ch, 04h) with a settle of at
+least one tick before and after the deselect; then TEST UNIT READY on IDs 0..7
+until one is selected (any status byte, CHECK CONDITION included, counts as
+found). On PS/2 mode a 16-byte INQUIRY must read "IOMEGA" at offset 8; if it
+fails the bus is reset and `[zt_mode]` is lowered to nibble. The reset pulse
+also leaves the drive in UNIT ATTENTION (`imm_reset` is the same sequence).
+
+**Delays.** `imm_cpp`'s `udelay()`s are protocol MINIMUMS ("1 us - infinite",
+"7 us - infinite"), so each is met by reading the status port that many times:
+an ISA port read is >= ~1 us on every machine and ~5 us in the loop on a
+4.77 MHz XT (a 10 us delay is ~50 us there, costing ~2 ms a command in all).
+The 100 us of negotiation and the 50 us of the reset pulse likewise. The settle
+delays of a millisecond are two tick edges (>= 55 ms), taken only by probe and
+reset.
+
+**Inner-loop cost** (8088 cycles, the 4-cycle/byte fetch floor in brackets; the
+`in`/`out` DX forms count 8 each, I/O wait states not included):
+
+| loop | per | instructions | cycles | fetch floor | speed at 4.77 MHz |
+|---|---|---|---|---|---|
+| nibble in | byte | 17, 25 bytes | 104 (+9 loop, unrolled x2) | 100 | ~42 KB/s |
+| PS/2 in | byte | 8, 12 bytes | 51 (+9) | 48 | ~79 KB/s |
+| out | pair | 14, 23 bytes | 101 (incl. loop) | 92 | ~85 KB/s |
+
+The nibble loop is dominated by `shr al,cl` (24 cycles) for the low nibble; a
+256-byte table would save 17 cycles and cost the driver a fifth of its budget.
+Port I/O adds about one wait state per `in`/`out` on a real card.
+
+**Not done / uncertain.** EPP (the mode byte, `epp_reset`, the `outsb`/`insb`
+forms) is not written (§138.11). The status byte is returned raw (Linux masks it
+with `STATUS_MASK`, defined outside the two files read).
+
+### 138.3 The SCSI layer
+
+*(Owner: core. `drivers/zip/zipscsi.inc`.)* Seven commands: TEST UNIT READY
+(00h), REQUEST SENSE (03h), INQUIRY (12h - the vendor field, bytes 8..13,
+must read `IOMEGA`), MODE SENSE(6) (1Ah, page 3Fh, 12 bytes - the header's
+device-specific byte, bit 7, is write protect), START STOP UNIT (1Bh, byte 4
+= 02h: LoEj, eject), READ CAPACITY(10) (25h) and READ(10)/WRITE(10)
+(28h/2Ah). `zs_cmd` runs one through `zt_vec` and answers in the int 13h
+status bytes `DSV_BLK` speaks (§51.8). A CHECK CONDITION is followed by
+REQUEST SENSE - from a CDB and into a buffer of its own, so the caller's
+command can be sent again - and the sense key becomes the status in AL:
+
+| sense key | AL | means |
+|---|---|---|
+| 1 RECOVERED ERROR | - | done: CF = 0 |
+| 2 NOT READY | AAh | no disk; ASC 04h ("becoming ready") is waited out first |
+| 3 MEDIUM ERROR | 10h | unreadable sector |
+| 5 ILLEGAL REQUEST | 01h | a driver bug - an LBA past the end, a bad CDB |
+| 6 UNIT ATTENTION | 06h | the disk was changed (or the drive reset) |
+| 7 DATA PROTECT | 03h | write-protected |
+| 0, 4, 8..15, any other status | 20h | |
+| transport: `ZTE_TIMEOUT`, or BUSY / spin-up past the wait | 80h | the drive stopped answering |
+| transport: `ZTE_NOCONN`, `ZTE_NOSEL`, `ZTE_PHASE` | 20h | |
+
+**The waits are time.** BUSY (status 08h) and NOT READY with ASC 04h are
+waited out a system tick at a time (`OSAPI_GET_TICKS`, `atapi.inc`'s reason:
+no segment register is pointed anywhere) up to `ZS_WAIT` = 182 ticks, ~10 s -
+a Zip spins up in about three - with a poll count under each tick for a
+machine whose tick is not running. A transport error sets the drive's state
+to `ZIPS_NODRIVE`, and `ZTE_TIMEOUT` or `ZTE_PHASE` is followed by the
+transport's `_reset`, as `ppa.c` and `imm.c` reset on the same two.
+
+**What the answers say about the disk is recorded where they are seen**, in
+`zs_cmd`, not by whoever asked: a UNIT ATTENTION, or NOT READY that is not
+spin-up, while the volume knows the medium (§138.4's `ZM_KNOWN`) moves it to
+`ZM_CHANGED` - so a disk swap that the PAGE or the DOOR happened to see first
+still reaches the kernel as 06h on its next transfer.
+
+**`zs_query`** is the drive's state, asked by the volume, the page and
+`ZIPV_INFO` alike: TEST UNIT READY riding out up to four UNIT ATTENTIONs (a
+drive just powered on reports its reset and then the disk, one per command),
+READ CAPACITY - a block length other than 512 reads as no disk - and MODE
+SENSE, whose refusal is taken as writable (the write is then the test). Out:
+`zp_cap` (sectors) and `zp_st` (`ZIPS_*`).
+
+One `DSV_BLK` call is split into commands of at most `ZV_RUN` = 32 sectors
+(16KB), each through a buffer **normalised** first (`zv_bnorm`, `cd_bnorm`'s
+rule: the offset folded under 128 in whole 8-paragraph granules, so 16KB
+never wraps the offset; under kern_mega's protected mode an LDT selector is
+left unfolded and its offset walks, the kernel handing one over with the
+whole transfer inside its 64KB). `DSV_CAPS` sets `BLKCAP_SEL` (§51.8.1): the
+transports load the segment into ES and walk only DI. A command that moved
+less than it was asked for with GOOD status is 20h.
+
+### 138.4 The volume
+
+*(Owner: core. `drivers/zip/zipvol.inc`.)* **`DRVV_READY` registers ONE
+volume**, whether or not a disk is in the drive - an empty drive is a zone
+with nothing to mount, as an empty A: is - with `OSAPI_VOL_ADD` CX = 0
+(unknown length, §18.7.5: a Zip 100 is 196,608 sectors) and the label `Zip`.
+It is READY and not ATTACH because the volume slots' fence is closed until
+attach has returned and the class is published (§51.2.2) - `CDROM.DRV`'s
+shape. A refusal is quiet: the page and the door still answer.
+
+The medium is learned **lazily**, on the first READ after attach or after
+the disk changed: `zs_query`, then sector 0 **read into the caller's own
+buffer**, which the read is about to overwrite anyway - so the image carries
+no 512-byte sector buffer. Sector 0 is then:
+
+1. a FAT boot sector - a jump (EBh or E9h), 512 bytes per sector at +0Bh and
+   one or two FATs at +10h - is a **superfloppy**: base 0, length = the
+   capacity. The FAT count is the one test added to "a jump and 512": an MBR
+   whose code opens with a jump has random bytes where a BPB would be;
+2. else an MBR (55AAh): the FIRST entry, in order 1..4, of type 01h, 04h,
+   06h or 0Eh with a non-zero length. An IBM-formatted Zip disk has its FAT16
+   partition in **entry 4**, which is why the scan cannot stop at entry 1;
+3. else the transfer answers AAh: not a disk os8088 can read.
+
+The partition's 32-bit length fences every transfer, with status 04h, as
+`HDD.DRV`'s `HDV_LEN` does (§18.7.5); a handle other than 0 is 04h too.
+
+**Three states, `zp_med`**, and a WRITE never learns:
+
+| state | a READ | a WRITE |
+|---|---|---|
+| `ZM_UNKNOWN` (attach, eject, after reporting a change) | learns, then reads | 06h: the kernel remounts - a read - first |
+| `ZM_KNOWN` | reads | 03h at once if `zp_st` is `ZIPS_WP`; else writes |
+| `ZM_CHANGED` (§138.3: a change seen while known) | 06h, and `ZM_UNKNOWN` | the same |
+
+A UNIT ATTENTION in the middle of a transfer is reported as 06h then and
+there, and leaves `ZM_UNKNOWN`. A NOT READY in one (the disk pulled out) is
+AAh and leaves `ZM_CHANGED`, so the disk put back - or another - is answered
+06h before a sector of it is served under the old FAT. `DSV_GEOM` (AL = 2)
+is CF = 1: no ROM reaches this disk, so the resume stub has nothing to be
+told (§51.8, §87.5).
+
+### 138.5 Which port
+
+*(Owner: core.)* The `ZP` pin (§51.9.2, `OS88_PIN`): Auto searches the BIOS's
+own LPT table (0040:0008h, three words, a zero ending it - 0040h being an
+identity selector under kern_mega, the read is the same on every kernel), Off
+looks nowhere, anything else is that port alone (378h is pin BCh, 278h 3Ch,
+3BCh DEh). On each candidate `zip_try` asks the bidirectional question once
+(§138.2), probes VPI0 then VPI2, copies the transport that answered into
+`zt_vec` and requires INQUIRY's `IOMEGA`. Attach refuses with `DRVE_HW` when
+no port has a drive, leaving every port disconnected (the transports'
+contract for a failed probe, and the bidirectional test's own restore of the
+latch and the control register); `DRVE_TWICE` when it is already attached.
+
+### 138.6 The page
+
+*(Owner: core. `drivers/zip/zipcp.inc`, `drivers/net/netui.inc`'s shape.)* A
+Control Panel page, `DSV_CPNAME` "Zip Drive" - the header's own name field,
+as `HDD.DRV`'s page title is:
+
+```
+Zip Drive
+Port  0378
+Mode  VPI0 nibble          VPI2 PS/2 ...
+Disk  96 MB                No drive / No disk / 239 MB
+      Write-protected      (only when it is)
+[ Eject ]                  greyed with no disk (§47)
+```
+
+The drive is **asked at every paint** (`zs_query`, three short commands), so
+the page says what is in the drive now and not what the volume last learned -
+and a change it sees on the way is handed to the volume (§138.3). A megabyte
+is 2,048 sectors: a Zip 100 says 96, a Zip 250 239. Every label is one
+`font_run` (§6.1); the two lines that change with the disk clear only their
+tail (§31.9.3), so a repaint after Eject writes each pixel once. Eject is
+`os88ui_btn` through the panel's press / drag / release cells (§13.8.4): the
+press arms, the release fires, sliding off cancels, and a press on the
+greyed button is no press. **Eject's rect is pane-relative (2, 74)-(65, 89)**,
+64 x 16, its middle (34, 82) - `ZC_BX`/`ZC_BY`/`ZC_BW`/`ZC_BH`, the one
+definition the draw and the hit test both read. The value column is at x = 40, so the longest
+line, 'Write-protected', ends at 160 of the pane's 221. Looked at on a 1bpp
+adapter before it is called done (§39.4); the wide face hosts it unchanged
+(§135.3).
+
+### 138.7 The package door
+
+*(Owner: core. `drivers/zip/zippkg.inc`.)* `OSAPI_DRV_CALL` with BH =
+`DRVC_ZIP` and BL = a verb (`apps/os88api.inc`); UI task only, both - each
+talks to the drive and may wait out a spin-up:
+
+```
+ZIPV_INFO   out CF = 0, AL = ZIPS_* (asked now: zs_query), AH = ZIPP_* |
+            ZIPM_* << 4, CX:BX = the medium's sectors (0 = none), DX = the port
+ZIPV_EJECT  out CF = 0 ejected; CF = 1 and AL = an int 13h status
+any other   CF = 1, nothing done
+```
+
+Eject is `OSAPI_VOL_DEL` first (which writes back, §138.1), then START STOP
+UNIT with LoEj riding out one UNIT ATTENTION, then `OSAPI_VOL_ADD` again
+whatever the drive said - the empty drive's zone comes back, and the next
+disk is learned by the next read (`ZM_UNKNOWN`). The page's button is the
+same routine.
+
+### 138.8 The instrument — a Zip drive in MartyPC
+
+*(Owner: marty.)* `tools/martypc/patches/18-zip-lpt.patch` puts a Zip drive on
+MartyPC's LPT card: `devices/zip.rs`, a VPI0 or VPI2 device model and a SCSI
+direct-access target over a HOST image file, written from the drive's side of
+the same Linux sources (`ppa.c`, `imm.c`), by a different agent than wrote
+either transport - so the two halves are two readings of one protocol, not
+one reading checked against itself.
+
+**It is synchronous.** The guest's `in`/`out` to the LPT registers call the
+model in the same I/O cycle - no thread, no poll, no queue - so the drive can
+never be "late", and a guest that violates the protocol is COUNTED
+(`violations`) and answered with what the drive would do (nothing) instead of
+being corrected.
+
+*The model.*
+
+| | VPI0 (PPA3) | VPI2 (MatchMaker) |
+|---|---|---|
+| attach | AUTOFEED rising with SELECT IN low, data 00,3C,20,8F/CF | the CPP magic AA 55 00 FF 87 78 on the data lines with ctrl 0Ch, then a command byte on a strobe (E0/28 selects device 0, 30 deselects) |
+| detach | AUTOFEED rising with SELECT IN high, data 00,3C,20,0F | CPP 30, or the disconnect sequence |
+| select | a pulse of `1<<id`, then data 80 with ctrl 08h; **reset** is data 40 with ctrl 08h | data `80\|(1<<id)`, strobe, status bit 3 |
+| phases (status) | E0 command, C0 data-out, D0 data-in, F0 status/message | A8, 88, 98, B8; idle connected 70, disconnected 78 |
+| nibble in | ctrl 04h = high, 06h = low; the byte is consumed leaving 06h | ctrl 06h = low, 05h = high; consumed 05h to 04h |
+| PS/2 in | ctrl 25h, read, 27h/25h; consumed on AUTOFEED rising | ctrl 26h reads, 25h consumes |
+| byte out | data, ctrl 0Eh, 0Ch | pairs: ctrl 05h latches the first byte, 00h the second |
+
+The SCSI target answers TEST UNIT READY, REQUEST SENSE, INQUIRY (`IOMEGA`,
+`ZIP 100` / `ZIP 250`), MODE SENSE(6) (write-protect in the header),
+START STOP UNIT (LoEj ejects), READ CAPACITY, READ(6/10) and WRITE(6/10).
+UNIT ATTENTION 29h follows power-on and a bus reset, 28h a new medium; no
+medium is NOT READY 3Ah, a protected disk is DATA PROTECT 27h on a write, an
+LBA past the end is ILLEGAL REQUEST 21h. Two ports are modelled: an
+**output-only** XT card reads its data latch back even with the direction
+bit set, a **bidirectional** card (`bidir = true`) lets the drive drive the
+lines in PS/2 mode and reads 0FFh when nothing does - which is what makes
+`ZIPM_PS2` reachable and what makes `ps2-0`/`ps2-2` rows different from the
+nibble ones. The Zip's image is opened read/write and every WRITE reaches
+the host file before the command's status does, so the host can read it back
+after a flush (`tests/zipdrive.py` does, paused).
+
+One inference is labelled as one: `imm.c`'s status-3 quirk (the IMM answers a
+status read taken between two strobes with the previous command's value) is
+modelled as `cpp_prev` from the Linux comments, with no hardware to confirm
+it.
+
+*Configuration.* A machine says `[machine.zip]` with `protocol` (`vpi0` or
+`vpi2`), optional `id` and `model` (`zip100`, `zip250`), and its LPT entry
+`bidir = true` for a PS/2-capable port. Five machines ship in
+`tools/martypc/configs/os8088_machines.toml`: `os8088_5150_cga_zip0`,
+`_zip2`, `_zip250`, `_zip0_bidir`, `_zip2_bidir`. A host image comes from
+`OS88_ZIPIMG` (`os88marty.launch(..., zip=PATH)`: the file itself, **not a
+copy** - the row hands it a scratch copy), `OS88_ZIPWP=1` starts protected.
+
+*Debug-server verbs and their `Marty` helpers.*
+
+| verb | helper | does |
+|---|---|---|
+| `zip_stats` (`reset`) | `m.zip_stats(reset=False)` | `commands`, `by_opcode` (hex-keyed), `sectors_read/written`, `nibble_bytes`, `ps2_bytes`, `connects`, `disconnects`, `resets`, `ejects`, `inserts`, `violations`, `read_us`/`write_us` with `read_cmds`/`write_cmds` (GUEST microseconds from connect to message byte), `medium`, `path`, `sectors`, `wp` |
+| `zip_eject` | `m.zip_eject()` | the user's hand: the disk is gone, the next command is NOT READY |
+| `zip_insert` (`path`) | `m.zip_insert(path)` | a disk in: UNIT ATTENTION 28h |
+| `zip_wp` (`on`) | `m.zip_wp(True)` | the write-protect tab |
+
+and `python3 tools/os88marty.py zip-stats|zip-eject|zip-insert PATH|zip-wp 0|1`.
+
+*Disk images* are `tools/os88zip.py` (`mk`, `ls`, `get`, `put`, `mkdir`,
+`check`, `info`, `clone`, `qa`): the IBM layout (196,608 sectors, an MBR whose
+ONLY partition is **entry 4**, type 06, active, start 32, FAT16, hidden = 32),
+a **superfloppy** (BPB at sector 0), and a **Zip 250** (489,532 sectors).
+Images are sparse and deterministic; `make zipimg` writes the QA set to
+`build/zip/` (`zip100.img`, `zip100b.img`, `zip100blank.img`,
+`zip100super.img`, `zip250.img`). `open_image` reads either kind and takes the
+first FAT partition entry 1..4, so the driver is tested on a disk whose
+partition is NOT where a lazy reader looks. Its fsck was checked against
+macOS's `fsck_msdos` and a real mount.
+
+*What the instrument cannot say.* It models the protocol and a drive's
+answers, not Iomega's timing: a MartyPC sector time is the **transport's**
+cost on a 4.77 MHz XT and a lower bound on a real drive (spin-up, seek and the
+drive's own firmware are not in it). No EPP, ECP, daisy chain or second drive
+(138.11). 86Box and QEMU have no Zip on a parallel port at all.
+
+### 138.9 What it costs
+
+**Resident** (kernsize, against the branch's base): **kern_big +65** and
+**kern_mega +65** for the class (§138.1: two publication slots, the
+`drv_tab` row, the `ZP` pin, the 06h gate and the removable test), plus
+**+26** on both for §22.29's window close (a kernel fix the Zip's Eject
+exposed, not Zip code). No rung crossed: kern_big has 171 bytes left before
+its next, kern_mega's `.cold` 7. **kern_emu and kern_small: 0**, byte for
+byte (§138's where line).
+
+**The image, final**: `build/zip.bin` is **4,628 bytes, bss included**, 3,939
+on the disk (LZ4). The claim is its 512-byte granules, **10** of them, 5,120
+bytes (`DRVM_IMG_ZIP`), only while the row is ticked; nothing else is claimed.
+The transports' shares are §138.2.1's (`zipppa.inc`, 904) and §138.2.2's
+(`zipimm.inc`, 1,203); the core's breakdown follows.
+
+**A sector, measured** (the `zipspeed-*` rows, 2026-11-24): MartyPC's 4.77 MHz
+5150 and patch 18's drive, the shipped driver doing a user's Edit > Copy of a
+200,000-byte file off the Zip and a 120,001-byte one onto it. The time is the
+guest's, CONNECT to the last message byte of each READ(10)/WRITE(10): what the
+PORT costs, from below - the model has no seek, rotation or drive buffer, so a
+real drive can only add to it.
+
+| arm | read, ms a sector | read 64 KB | write, ms a sector | write 64 KB |
+|---|---:|---:|---:|---:|
+| VPI0 nibble (XT output-only card) | 16.85 | 2.16 s, 29.7 KB/s | 10.35 | 1.32 s, 48.3 KB/s |
+| VPI2 nibble | 18.73 | 2.40 s, 26.7 KB/s | 8.20 | 1.05 s, 61.0 KB/s |
+| VPI0 PS/2 (bidirectional) | 10.23 | 1.31 s, 48.9 KB/s | 10.35 | 1.32 s, 48.3 KB/s |
+| VPI2 PS/2 | 10.45 | 1.34 s, 47.8 KB/s | 8.19 | 1.05 s, 61.0 KB/s |
+
+Nibble reads are the XT's case and cost most: two status reads and a shift a
+byte. Writes go out a byte at a time in every mode, so the mode does not move
+them; VPI2's are faster than VPI0's because the MatchMaker takes a burst with
+one handshake a pair (§138.2.2). The §138.2.1/§138.2.2 cycle estimates were
+written before any of this ran; these replace them as the figures to quote.
+
+**The image at Z2** (core's half, measured on `zip/core` with the two transports
+still stubs - 14 bytes between them - so the transports' own shares are
+§138.2.1's and §138.2.2's to add). `build/zip.bin` is **2,539 bytes, bss
+included**, 2,310 on the disk (LZ4, 112 trailing zero bytes off the file):
+
+| part | bytes |
+|---|---:|
+| header, service table, label | 72 |
+| entry, attach (pin, LPT table, bidirectional test, probe order), ready, detach, `os88_pin` | 327 |
+| `zipscsi.inc` - `zs_cmd`, sense, waits, INQUIRY, `zs_query` | 463 |
+| `zipvol.inc` - `DSV_BLK`, the fence, chunks, `zv_bnorm`, `zv_learn` | 516 |
+| `zipcp.inc` - the page | 620 |
+| `zippkg.inc` - `ZIPV_INFO`, `ZIPV_EJECT` | 100 |
+| `os88ui.inc` - the standard button, its hit test and the arm (NET.DRV's defines) | 299 |
+| state (one initialised byte, then `OS88_STATE`'s zeros) | 128 |
+| the stub transports | 14 |
+
+Against the fan-out's budget - 6,656 all in, of which core, page and door
+4,352 - the core's half is **2,525**; `zip.asm` fails the assembly past
+`ZIP_IMG_MAX` = 6,656. No 512-byte sector buffer: sector 0 is read into the
+caller's own buffer (§138.4). The claim is the image's 512-byte granules
+(§51.1.2), and nothing else is claimed - no DMA, no IRQ, no vector.
+
+### 138.10 The rows
+
+*(Owner: marty, for the instrument's rows; the driver's own host rows are the
+core's.)* All are **soak**: `tests/tierlock.txt` closes fast and full to rows
+the owner approved. Written before `ZIP.DRV` existed, so the instrument rows
+are measured and the guest rows are **not yet run** (their `why` says so);
+the final pass measures `secs`.
+
+| row | proves | needs |
+|---|---|---|
+| `zipimg` | `tools/os88zip.py` and its fsck, with a second independent reader (`tests/unit/t_zipimg.py`) | nothing |
+| `zipmodel` | the drive with NO guest: five paused machines, a Python `ppa.c`/`imm.c` host over `inb`/`outb`, both port modes, every SCSI command above, eject/insert/protect, the stats | MartyPC |
+| `zipdrive-vpi0` `-vpi2` `-z250` `-ps2-0` `-ps2-2` `-super` | ZIP-PLAN claims 1-5, 7, 8: tick on the Drivers page (one zone, the page's mode and size), root and folder listing against `os88zip`, a file opened, copies both ways compared on the host (200 KB on `vpi0` and `ps2-2`), Eject from the page and the next disk mounting with ITS files, a pulled-and-replaced disk, a protected disk (lists, refuses a write with a toast naming protection, host bytes unchanged), `violations` 0, and the port mode that ran | MartyPC, `ZIP.DRV`, `make zipimg` |
+| `zipnone-cga` `-herc` | claim 6: no drive on the port refuses (`DRVE_HW`, `No drive`), no zone, nothing hangs, the LPT control register left at x0Ch | MartyPC, `ZIP.DRV` |
+| `zipspeed-vpi0` `-vpi2` `-ps2-0` `-ps2-2` | claim 9: the guest cost of a sector read and write, off the model's clock, to `build/zipspeed-<arm>.txt` | MartyPC, `ZIP.DRV` |
+
+Two things are not pinned and the rows FAIL on them rather than skip:
+`tests/zipq.py` `PAGE_EJECT` (the Eject button's position, from
+`drivers/zip/zipcp.inc`) and the exact toast on a protected write (matched on
+the word `protect`). VGA and EGA legs of claim 6 are QEMU's, by hand in Z6.
+
+### 138.11 Not done
+
+- **EPP and ECP**: faster on a 386's port, and no emulator here models an EPP
+  port with a Zip behind it, so none of it could be seen working.
+- **More than one drive**, or a drive and a second device daisy-chained.
+- **Booting from a Zip disk**, **formatting** one, and the Jaz.

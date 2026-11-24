@@ -1531,5 +1531,13 @@
   "stamped": "38069791",
   "strings": "952a5583ac539493",
   "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
+ },
+ "ZIP_DRV": {
+  "sources": [
+   "drivers/zip"
+  ],
+  "stamped": "90c7a8bec",
+  "strings": "7be26c3fa60742f5",
+  "why": "written from the QA run on MartyPC (SPEC 138, ZIP-PLAN QA): tick, page, copies, eject, protect, no drive"
  }
 }

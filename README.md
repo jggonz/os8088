@@ -472,6 +472,11 @@ live media (`make live`) carries the games and applications too.
   the modem is usually on stays free — **and a PS/2 mouse** on machines that
   have somewhere to put one. Serial first, then PS/2; nothing is configured.
 - **Sound** — PC speaker, AdLib/OPL2, and Sound Blaster.
+- **Iomega Zip drives on the printer port** — the parallel Zip 100, Zip Plus
+  and Zip 250, read and written as a drive on the desktop (`ZIP.DRV`, ticked
+  on the Control Panel's Drivers page). Any printer port works, the IBM PC's
+  output-only one included: an XT reads a disk four bits at a time through
+  the status lines, and a bidirectional port is used a byte at a time.
 - **8086 real mode throughout**, so everything from a 4.77MHz IBM PC/XT to a
   Pentium runs the same image.
 

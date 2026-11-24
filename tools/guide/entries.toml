@@ -281,6 +281,13 @@ summary = "Reads CD-ROM discs in an IDE CD-ROM drive as a drive on the desktop, 
 short = "CD-ROM discs and audio CDs"
 needs = "A 286 or better with an IDE (ATAPI) CD-ROM drive"
 
+["ZIP.DRV"]
+title = "Zip drive"
+kind = "driver"
+summary = "Reads and writes Iomega Zip disks in a Zip 100, Zip Plus or Zip 250 drive on the printer port, as a drive on the desktop."
+short = "Iomega Zip disks on the printer port"
+needs = "A parallel-port Iomega Zip drive"
+
 ["HTTPFS.DRV"]
 title = "HTTP drive"
 kind = "driver"

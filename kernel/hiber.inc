@@ -2368,6 +2368,8 @@ hbm_hfree:
 ; extra class (DL) is 96.23.6.
 ; DRVC_EMS is a board's memory with packages holding pages of it (107.6).
 ; DRVC_CD is a read-only volume a DOS program may be reading (119.1).
+; DRVC_ZIP is a volume a DOS program may be reading AND writing, on a printer
+; port with no IRQ and no DMA a program could want (138.1; OS88_ZIP's alone).
 ;
 ; ...AND THE CALLER MAY HAVE ASKED FOR ONE OF THEM ANYWAY (SPEC.md 51.11.4).
 ; [cs:hbm_spm] is the slot's BL, bit 1<<class: a set bit does not ADD a class
@@ -2406,6 +2408,13 @@ hbm_sweep:
     cmp al, DRVC_CD
     je .asked                   ; the CD-ROM: a volume DOS may be reading, and
                                 ; no IRQ or DMA a program could want (119.1)
+%ifdef OS88_ZIP
+    cmp al, DRVC_ZIP
+    je .asked                   ; the Zip drive: the CD-ROM's reasons, and its
+                                ; FAT window and mount stay coherent with the
+                                ; disk a program wrote (138.1). 1 << 12 is 0
+                                ; in CH, so no caller can name it either
+%endif
     cmp al, DRVC_EMS
     je .asked                   ; the EMS board: memory with holders, and a
                                 ; fresh attach would sign every page and remap

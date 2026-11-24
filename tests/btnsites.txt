@@ -116,6 +116,7 @@
 2 drivers/httpfs/httppage.asm        # Mount and Unmount, release-fired through
                                    # the panel's probe as etherui.inc's are
 1 drivers/net/netui.inc
+1 drivers/zip/zipcp.inc
 1 drivers/ramdisk/page.inc
 1 drivers/saver/svcfg.inc
 1 drivers/thmpal/thmpal.asm        # the Color Theme window (SPEC.md 76.14.14) -

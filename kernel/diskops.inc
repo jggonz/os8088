@@ -3082,7 +3082,18 @@ clo_mntdlg:
 ; -----------------------------------------------------------------------------
 clo_unmntw:
     mov di, [fm_vp]
+%ifdef KERN_EMU
     mov al, [di+FS_DRV]         ; ...and falls into clo_unmnt
+%else
+    mov al, 0xFF                ; ...and falls into clo_unmnt, the window
+    xchg al, [di+FS_DRV]        ; PARKED on no volume: dsk_vol_del
+                                ; closes every Disk window on the
+                                ; image, and this one is going to the HOST
+                                ; (fm_c_unmnt's fm_mount, whose fmv_load
+                                ; writes FS_DRV back on every path that gets
+                                ; here - a refusal below still returns CF = 0
+                                ; into it). SPEC.md 22.29
+%endif
 clo_unmnt:
     push bp
     push es

@@ -2742,3 +2742,249 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
+
+# THE ZIP DRIVE MACHINES (SPEC.md 138.8, patches/18-zip-lpt.patch): an Iomega
+# Zip drive on the LPT card at 378h, over a HOST image file. The image is
+# $OS88_ZIPIMG, which os88marty.launch(zip=...) sets per instance; with none
+# the drive is empty (NOT READY, medium not present) until the debug server's
+# `zip_insert` puts one in. Every register answer is given in the same I/O
+# cycle - there is no timing model, so a number measured here is a guest
+# CYCLE count and nothing about the drive's own speed.
+#
+#   os8088_5150_cga_zip0       VPI0 (Zip 100, PPA3), an XT's OUTPUT-ONLY card:
+#                              nibble reads are the only way in
+#   os8088_5150_cga_zip2       VPI2 (Zip Plus, MatchMaker), output-only card
+#   os8088_5150_cga_zip250     VPI2, INQUIRY says ZIP 250 (489,532 sectors)
+#   os8088_5150_cga_zip0_bidir VPI0 on a BIDIRECTIONAL card: control bit 5
+#                              tri-states the data latch, so PS/2 byte reads work
+#   os8088_5150_cga_zip2_bidir VPI2 on a bidirectional card
+#
+# GLaBIOS, 360KB drives, CGA, the serial mouse - the cable machine's shape
+# (os8088_5150_cga_lpt), so the same disks boot it.
+
+# os8088_xt_vga_zip0 - SPEC.md 138's Zip drive (VPI0) on the VGA XT: the
+# colour face of the Zip page and the desktop zone (MartyPC models no EGA),
+# for the QA run's looks and the PR's pictures. Patch 18's drive, as on the
+# CGA _zip machines; OS88_ZIPIMG / launch(zip=) names the image.
+[[machine]]
+name = "os8088_xt_vga_zip0"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = false
+
+    [machine.zip]
+    protocol = "vpi0"
+
+# os8088_5150_herc_zip0 - the same Zip drive (VPI0) on a Hercules 5150: the
+# 1bpp face of the Zip page and the zone at 720x348, for the QA run's looks
+# and the PR's pictures (os8088_5150_herc_covox_720_gla is the no-drive leg).
+[[machine]]
+name = "os8088_5150_herc_zip0"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = false
+
+    [machine.zip]
+    protocol = "vpi0"
+
+[[machine]]
+name = "os8088_5150_cga_zip0"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = false
+
+    [machine.zip]
+    protocol = "vpi0"
+
+[[machine]]
+name = "os8088_5150_cga_zip2"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = false
+
+    [machine.zip]
+    protocol = "vpi2"
+
+[[machine]]
+name = "os8088_5150_cga_zip250"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = false
+
+    [machine.zip]
+    protocol = "vpi2"
+    model = "zip250"
+
+[[machine]]
+name = "os8088_5150_cga_zip0_bidir"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = true
+
+    [machine.zip]
+    protocol = "vpi0"
+
+[[machine]]
+name = "os8088_5150_cga_zip2_bidir"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.parallel]]
+    bus_type = "ISA"
+    type = "Standard"
+        [[machine.parallel.port]]
+        io_base = 0x378
+        bidir = true
+
+    [machine.zip]
+    protocol = "vpi2"
+
