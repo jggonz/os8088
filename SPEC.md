@@ -74536,7 +74536,7 @@ byte at all.
 #### 31.9.4 A driver page that is live, and one that is wide
 
 **Pinned by `docs/plans/JOYSTICK-PLAN.md` story J2; shipped when it is
-ticked.** Two things a driver page could not do before §136's Joystick page
+ticked.** Two things a driver page could not do before §137's Joystick page
 needed both: redraw itself while nobody clicks (a live test view), and use
 the wide face's whole page area (§135.3 hosts every driver page at 229×132).
 
@@ -259898,7 +259898,7 @@ behaves as before; a VGA system disk without `CPWIDE.DRV` opens compact
 silently. Not looked at: Hercules and EGA (compact by the predicate), the
 two VESA sizes between, and any real-hardware or MartyPC timing.
 
-## 136. JOYSTICK.DRV - the game port, one driver for every game (`drivers/joy/`, `apps/os88joy.inc`)
+## 137. JOYSTICK.DRV - the game port, one driver for every game (`drivers/joy/`, `apps/os88joy.inc`)
 
 **Status: the plan is `docs/plans/JOYSTICK-PLAN.md`; each story there says
 whether a subsection below is pinned only or shipped.** Until a story is
@@ -259926,24 +259926,24 @@ them:
 | Windows 3.1 `IBMJOY.DRV` and the Joystick applet | the user calibrates ONCE, in the system's control panel, by moving the stick to its corners and centre and pressing a button, and a live Test view shows the result; programs ask a driver for positions (`joyGetPos`) and capabilities (`joyGetDevCaps`) instead of touching the port |
 | OS/2 `GAMEDD.SYS` | the driver owns the calibration and dead zone and keeps them across boots; a reader gets button PRESSES since its last read, not only button levels, so a short tap between two reads is not lost |
 
-### 136.1 What it is, in one table
+### 137.1 What it is, in one table
 
 | | |
 |---|---|
 | what | `JOYSTICK.DRV`, a driver of a NEW class `DRVC_JOY` = 11, appended (a class number is ABI, §51.2) - `DRVC_MAX` 10 → 11 on the driver kernels. A `drv_tab` row appended after `PC1MOUSE.DRV`, `SYSTEM.CFG` bit 13, title `Joystick`, catalog category Input (§135.7) |
 | where | **`kern_big`, `kern_emu` and `kern_mega`** - the kernels with a driver layer (§51.0). `kern_small` has none: `OSAPI_DRV_CALL` refuses `DRVC_JOY` by range there, `joy_find` answers CF = 1, and every adopter falls back to its keys. kern_mega runs the same driver (port I/O and PIT channel 0 are the same there); a refusal there would be a gap to close, not a design |
 | the hardware | the IBM Game Control Adapter at port 201h and every clone of it: four one-shots (X1, Y1, X2, Y2 - bits 0-3, 1 while timing) fired by any write, four buttons (bits 4-7, 0 = pressed) |
-| what a package gets | `OSAPI_DRV_CALL` verbs (§136.4), found through `apps/os88joy.inc` (`joy_find`), and the C binding in `apps/cc/os88.h` - **no kernel slot**: a package reaches the joystick through a DRIVER, exactly as it reaches the network (§72) |
-| set up | ONCE, on the driver's own Control Panel page (§31.9), compact and wide (§136.6): controller type, calibration, dead zone, invert, swap, and a live test view. Kept in `SYSTEM.CFG` as the driver's settings blob (§51.9, §136.5) |
-| cost | resident: the class, the row, its name and the settings blob - **no rung crossed on any kernel** (measured per wave in the plan, §136.9). The driver image is a heap claim only while it is ticked |
+| what a package gets | `OSAPI_DRV_CALL` verbs (§137.4), found through `apps/os88joy.inc` (`joy_find`), and the C binding in `apps/cc/os88.h` - **no kernel slot**: a package reaches the joystick through a DRIVER, exactly as it reaches the network (§72) |
+| set up | ONCE, on the driver's own Control Panel page (§31.9), compact and wide (§137.6): controller type, calibration, dead zone, invert, swap, and a live test view. Kept in `SYSTEM.CFG` as the driver's settings blob (§51.9, §137.5) |
+| cost | resident: the class, the row, its name and the settings blob - **no rung crossed on any kernel** (measured per wave in the plan, §137.9). The driver image is a heap claim only while it is ticked |
 
-### 136.2 Loading, and what "no hardware" means here
+### 137.2 Loading, and what "no hardware" means here
 
 **A missing game port and a game port with nothing plugged in read the same**:
 port 201h floats to FFh on a machine with no adapter, and an adapter with no
 stick answers 1 on every axis bit forever (an open potentiometer never
 charges). So the attach does NOT refuse for want of a stick. It probes once
-(one sample, §136.3) and records which axes answered; the page says
+(one sample, §137.3) and records which axes answered; the page says
 `No joystick connected` and offers to look again, because a stick is plugged
 in while the machine runs far more often than a card is. The attach refuses
 (`DRVE_HW`) only where port I/O to 201h is not the game port's to make - none
@@ -259953,7 +259953,7 @@ on the three kernels today.
 ask the hardware once and tick the row when a stick answers; otherwise the
 user ticks it on the Drivers page, and a default never nags.
 
-### 136.3 One sample
+### 137.3 One sample
 
 A SAMPLE is one firing of the one-shots and the timing of their fall:
 
@@ -259979,7 +259979,7 @@ otherwise**: there is no worker and no tick hook, so a machine with the
 driver ticked and no game running pays nothing but the image.
 
 **Calibration** maps each axis's raw count through three points - minimum,
-centre, maximum, captured on the page (§136.6) - to a signed position
+centre, maximum, captured on the page (§137.6) - to a signed position
 -127..+127, piecewise linear on each side of the centre, with a dead zone of
 `dz` percent of each half (default 8) answering 0, clamped at the ends.
 Before any calibration the driver uses the first sample's raw count as the
@@ -259989,11 +259989,11 @@ centre and ±(centre) as the span, so an uncalibrated stick is usable.
 as four bits (`JOYD_LEFT` 1, `JOYD_RIGHT` 2, `JOYD_UP` 4, `JOYD_DOWN` 8).
 
 **Presses** are kept per button: a button whose level went 0 → 1 between two
-samples counts one press; a READ (§136.4) answers the presses since the
+samples counts one press; a READ (§137.4) answers the presses since the
 previous read and clears them. One count is shared by every reader - the
 GAMEDD shape, and enough for the one game in front.
 
-### 136.4 The package ABI (`drivers/joy/joypkg.inc`, `apps/os88joy.inc`)
+### 137.4 The package ABI (`drivers/joy/joypkg.inc`, `apps/os88joy.inc`)
 
 `OSAPI_DRV_CALL` with BH = `DRVC_JOY`, BL = a verb. ES is the CALLER'S
 segment (§20.11), so a buffer is in the package's own image (§77.10). Every
@@ -260025,7 +260025,7 @@ game that wants "stick or arrows" asks one thing. **`apps/cc/os88.h`**:
 `os88_joy_find()`, `os88_joy_read(stick, rec)` and `os88_joy_state(rec)`
 with `rec` a `static` record (§73: never the address of an automatic).
 
-### 136.5 The settings (`SYSTEM.CFG`, the driver's blob)
+### 137.5 The settings (`SYSTEM.CFG`, the driver's blob)
 
 The driver's own settings blob (§51.9; a second claimant is a second key, not
 a bigger blob - §51.9.1), versioned by its first byte: the version, the
@@ -260036,7 +260036,7 @@ it is held to 24 bytes or less - the calibration may be stored at reduced
 precision. Written only through `OSAPI_DRV_CFG`, so it reaches the disk at
 the Control Panel's close like every setting (§31.8).
 
-### 136.6 The Joystick page (compact and wide)
+### 137.6 The Joystick page (compact and wide)
 
 The driver publishes a Control Panel page (§31.9) named `Joystick`. Its
 design reference is the Codex mockups in `docs/joystick/` with their prompt,
@@ -260056,10 +260056,10 @@ the dead zone (0-30 %); Invert Y and Swap A/B; Reset calibration; and says
 whether each stick is answering. The details are the page's story in the
 plan.
 
-### 136.7 Testing it without a joystick
+### 137.7 Testing it without a joystick
 
 **QEMU has no game port**; port 201h reads FFh there, which is exactly the
-"nothing plugged in" case of §136.2 - enough to look at the page on every
+"nothing plugged in" case of §137.2 - enough to look at the page on every
 adapter QEMU drives. **MartyPC has one** (`devices/game_port.rs`): a game
 port in the os8088 machine configurations and a debug-server verb that sets
 both sticks' positions and the four buttons are the instrument
@@ -260067,7 +260067,7 @@ both sticks' positions and the four buttons are the instrument
 package sees. 86Box emulates the period sticks too but cannot be driven
 headless (docs/86BOX.md).
 
-### 136.8 Who reads it
+### 137.8 Who reads it
 
 Each adopter asks `joy_find` once, reads the stick where it reads its keys,
 and keeps its keys working - a joystick ADDS a control, it never replaces one:
@@ -260080,7 +260080,7 @@ and keeps its keys working - a joystick ADDS a control, it never replaces one:
 | WireBall, Arkanoid | the paddle, ANALOG: the stick's X as a position |
 | 1942 | 8-way flight and fire |
 
-### 136.9 Cost, measured
+### 137.9 Cost, measured
 
 Measured per wave and written into the plan; the table here is filled when
 the last wave lands.

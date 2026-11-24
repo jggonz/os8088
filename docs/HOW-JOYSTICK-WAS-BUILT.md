@@ -1,6 +1,6 @@
 # How the joystick driver was built
 
-A diary kept while `JOYSTICK.DRV` (SPEC.md 136) was built, for later reuse.
+A diary kept while `JOYSTICK.DRV` (SPEC.md 137) was built, for later reuse.
 Observations and intentions are kept apart; what was tested is named.
 
 ## 2026-11-23 - the brief, and what the tree already had
