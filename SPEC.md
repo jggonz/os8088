@@ -260204,11 +260204,11 @@ Measured on J1's branch against its base:
 
 | | |
 |---|---|
-| `JOYSTICK.DRV` | JOYSIZE |
-| kern_big | KBIG |
-| kern_emu | KEMU |
-| kern_mega | KMEGA |
-| kern_small | KSMALL |
+| `JOYSTICK.DRV` | 1,571-byte image, 1,408 bytes on disk (lz4); a 2 KB claim while ticked, nothing else claimed. The 360KB system disk 680 → 683 of 706 clusters |
+| kern_big | **+67 resident** (`.text` +33, `.bss` +24, `.cold` +10), plus `.ovl` +28 (the sniff) and `.boot2` +9 (the title); the rung 262 → 195 left - **no rung crossed** |
+| kern_emu | the same +67 - and its base had **16** bytes left in its rung, so it crosses: 95,232 → 95,744, still 5,120 under `KERN_BUDGET`. An owner decision (the plan's J1 row) |
+| kern_mega | `.text` +33, `.bss` +24, `.cold` +10 (above 1MB): image rung 210 → 153 left, `.cold` 54 → 44 - **no rung crossed**, resident footprint unchanged at 61,952 |
+| kern_small | unchanged - byte-identical but the build number: no driver layer, no row, no blob |
 
 The resident bytes are the class's publication slot (`drv_fptr11`/`drv_fseg11`,
 4 of `.text`; `drv_owner` and `drv_svct`, 4 of `.bss`), the row (16), the
