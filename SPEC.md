@@ -259854,3 +259854,192 @@ CGA opens compact and a hosted-code refactor (the Drivers page's toggle)
 behaves as before; a VGA system disk without `CPWIDE.DRV` opens compact
 silently. Not looked at: Hercules and EGA (compact by the predicate), the
 two VESA sizes between, and any real-hardware or MartyPC timing.
+
+## 136. Desktop wallpaper - a tiled picture as the desktop's ground (`WALL.DRV`, `kernel/wall*.inc`, `*.WAL`)
+
+**Status: the plan is `docs/plans/WALLPAPER-PLAN.md`; each story there says
+whether a subsection below is pinned only or shipped.** Until a story is
+ticked, what its subsection describes is a design, not a fact about the
+kernel.
+
+**Premise.** Windows 3.1 had wallpaper and OS/2 a background bitmap: a small
+picture repeated edge to edge behind every window. The owner's brief
+(2026-11-23):
+
+> add Desktop wallpaper (Windows 3.1 wallpaper, OS/2's background bitmap). It
+> would only be acceptable if it redraws just the uncovered areas, a tiled
+> 4bpp picture plus a 1bpp version. Otherwise it becomes the full-screen
+> repaint that PERFORMANCE.md Part 5 counts as a regression. Use codex image
+> gen cli to generate the design for the vga/vesa control panel and for the
+> regular control panel.
+
+The design reference is four Control Panel mockups and six tile designs made
+with Codex's image generation, kept with their prompts as source
+(`docs/wallpaper/`, `kernel/wallart/`).
+
+### 136.1 What it is, in one table
+
+| | |
+|---|---|
+| what | a third kind of desktop GROUND beside §26's dither and §76's solid colour: a TILE, whose pixel at virtual-desktop (x, y) is `tile[y mod H][x mod W]`. Turned on, it replaces the theme's ground everywhere the ground is laid and nowhere else; the theme still owns every piece of chrome |
+| the rule that makes it acceptable | **it is laid by `thm_desk` and by nothing else** (§76.2). Every ground site already goes through `thm_desk` with a rect `wm_dmg_gray` has cut to what is really uncovered (§11.91), so a wallpaper redraws exactly the pixels the dither would have, in the same number of calls. Because the phase is a function of the ABSOLUTE (virtual-desktop) position, laying it in fragments is pixel-identical to laying it whole - the property §76.2 relies on for the dither. **No path may lay a wallpaper over more than the rect it was handed**: that would be the full repaint PERFORMANCE.md Part 5 rows 1225-1229 count as a regression |
+| two pictures | every `.WAL` file carries BOTH a 4bpp tile (the 16 EGA/VGA palette indices) for planar and packed displays and a 1bpp tile for CGA and Hercules (§39). Neither is derived from the other at run time. The host converter (§136.3) derives a 1bpp tile only when the source has none, and says so |
+| where | **`kern_big`, `kern_emu` and `kern_mega`.** `kern_small` has no theme (§76.13), no `thm_desk` of its own and reads no `SYSTEM.CFG`, so it has no wallpaper: no Control Panel row, nothing assembled, `CTRL.DRV` byte-identical |
+| how it loads | `WALL.DRV`, an on-demand module (§2.8, `MOD_WALL`), carries the renderers and the tile. It is HELD while a wallpaper is shown - a module whose code runs on every ground repaint cannot be dropped between them - and dropped when wallpaper is turned off. That hold is a row in `tests/moddrop.txt` with this section as its reason, the precedent being §11.103.10's `DESK.DRV` |
+| resident cost | the module row, its name and `mod_fpt` word, its slot, the door `thm_desk` branches to, and the clipped-primitive frame of §136.5 - **budget 128 bytes of `.text` + `.bss` on each of kern_big, kern_emu and kern_mega, and no rung crossed on any kernel** (CLAUDE.md, the owner's zero-resident rule). Measured per wave in the plan |
+| refusal | a refusal is the theme's own ground, silently at boot and toasted from the Control Panel: `WALL.DRV` or the `.WAL` missing or malformed, the heap unable to fund the module, `kern_small` |
+
+### 136.2 The `.WAL` file
+
+Little-endian, version 1. All of it is read into the module's claim; nothing
+in it is trusted (§19: every byte read off a disk is hostile).
+
+| offset | size | field |
+|---|---|---|
+| 0 | 4 | `'WALP'` |
+| 4 | 1 | version, 1 |
+| 5 | 1 | flags, 0 (a reader refuses any set bit) |
+| 6 | 1 | `cw`, the colour tile's width in pixels: 8, 16, 32 or 64 |
+| 7 | 1 | `ch`, its height: 1..64 |
+| 8 | 1 | `mw`, the mono tile's width: 8, 16, 32 or 64 |
+| 9 | 1 | `mh`, its height: 1..64 |
+| 10 | 8 | the display name, ASCII 20h..7Eh, space padded ("Bricks  ") |
+| 18 | 2 | 0, reserved |
+| 20 | `ch` x `cw`/2 | the colour tile, row-major, PACKED 4bpp: two pixels a byte, the high nibble leftmost, each a palette index 0..15 |
+| ... | `mh` x `mw`/8 | the mono tile, row-major, bit 7 leftmost, **1 = a LIT (white) pixel** - the framebuffer's own sense, as `OSAPI_GFX_BLIT1`'s band (§5.4.2) |
+
+The largest file is 20 + 2,048 + 512 = 2,580 bytes. A reader refuses a file
+whose length is not exactly the header's sum. Widths are powers of two so a
+renderer's column phase is an AND; heights are not, because a mono screen's
+tall pixels want a squat tile (the built-ins' mono tiles are 64x32).
+
+On a disk a `.WAL` is packed like every other data file (§20.13.5) and read
+through the kernel's transparent expansion; the active copy the Control Panel
+writes (§136.4) is written unpacked, and the reader takes either.
+
+### 136.3 The tiles and their converter (`tools/os88wall.py`, `kernel/wallart/`)
+
+The six built-in designs - Bricks, Weave, Circuit, Floppies, Waves, Stone -
+are Codex image generations kept as source in `kernel/wallart/` with the
+exact prompt (`kernel/wallart/PROMPT.md`), each a colour PNG (64x64 logical
+pixels, drawn 8x enlarged) and a mono PNG (64x32 logical). `make` turns them
+into `build/wall/*.WAL` with `tools/os88wall.py`, deterministic and offline:
+no generation service is reached by the build (CLAUDE.md, *Treat artwork as
+source*).
+
+The converter samples each 8x8 block's centre, maps it to the nearest of the
+16 palette entries, and REFUSES a block that is not one flat colour or a
+palette distance it cannot explain, rather than quantising quietly. It
+derives a mono tile (luminance, ordered dither, height halved) only when no
+mono source is given, and prints that it did. Its `--check` re-reads a `.WAL`
+and verifies every field of §136.2; `tests/unit/t_wall.py` is the fast-tier
+row that runs it over every shipped file.
+
+The built-ins ship in `SYSTEM\WALLPAPR\` on every system disk of the three
+kernels (§136.10 has the 360KB disk's numbers).
+
+### 136.4 Turning it on, remembering it, and boot
+
+- **The active wallpaper is one file**, `SYSTEM\APPDATA\DESKWALL.WAL`, and
+  one byte, `SYSTEM.CFG`'s `'WP'` record (0 = none, 1 = shown), mapped like
+  `'TP'` (§76.14.14) so its reader and writer live in the boot overlay and
+  `CTRL.DRV` and cost no resident byte beyond the one `drv_cfg` byte.
+- **Choosing one** in the Control Panel loads the chosen `.WAL` through
+  `WALL.DRV`, writes it to `DESKWALL.WAL` (one file, written when chosen, so
+  boot never needs to know which file it came from), sets `'WP'` = 1 (owed at
+  the panel's close, §31.8), and asks `cp_repost` for the one full repaint a
+  ground change is (the theme change's, PERFORMANCE.md Part 5 row 1229's
+  path). **None** unhooks, drops the module, sets `'WP'` = 0 and repaints.
+- **Boot**: after `SYSTEM.CFG` is read and the theme applied, `'WP'` = 1
+  loads `WALL.DRV` and `DESKWALL.WAL`; any refusal leaves the theme's ground
+  and the boot continues without a word.
+- **A video switch** (`vid_switch`, §39) re-applies it as it re-applies the
+  theme: the module picks the renderer for each display's depth again.
+- The Control Panel reaches all of this through ONE gate, **`CPG_WALL` (30)**
+  in `CTRL.DRV`'s table (§135.4): AL = 0 shown-state query (out AL = 0/1,
+  SI = the live display name, staged), AL = 1 choose (SI = a NUL path in the
+  kernel segment, staged), AL = 2 none. `CPG_N` becomes 31.
+
+### 136.5 The kernel side - the door and the clipped primitive
+
+`thm_desk` (§76.2) gains a third arm: while a wallpaper is hooked it lays the
+rect with `gfx_wall`, a CLIPPED primitive built from the same frame as
+`gfx_fill_gray` - `GFXCLIP_ARM` / `GFXCLIP` / `GFXDISP` (§5, `vga12.inc`) - so
+the clip region of §11.3 and the per-display cut of §39.14 are honoured by
+the code that already honours them. Its raw body is a far call through a
+door into `WALL.DRV` (WIN95.DRV's `thv` shape, §76.14.2), handed each visible
+piece in DISPLAY-LOCAL inclusive coordinates; the module adds the display's
+`VID_CTX_VX` / `VID_CTX_VY` back to phase the tile on the VIRTUAL desktop, so
+two displays show one continuous wallpaper. `OSAPI_GFX_DESK` (slot 0x021C) is
+`thm_desk` and needs no change: the Sticky Apps' ground follows for free.
+
+`[gfx_color]` keeps §11.103.9's promise (the theme's ground colour is left
+there) whichever arm ran.
+
+**The sites that assumed the ground was a dither or a colour**, all four
+found by the scouting pass and each owned by a story:
+
+1. `desk_bpat` (`desk.inc`) composes the icon column's ground into
+   `ico_band`; under a wallpaper it answers CF = 1, so icons take Color's
+   path (ground, then the masked picture) and `desk_zones_r_x` stops cutting
+   the zones out of the damage region.
+2. `desk_zones_r_x` uses that CF as its gate - covered by 1.
+3. The Theme page's cards (`cpt_rect`, §135.11) draw a THEME's ground in
+   miniature; they are not the desktop and keep the theme's.
+4. Desk Clock's `dk_gsample` (§110.14) rebuilds the ground under its
+   transparent corners from two screen samples; under a wallpaper it lays
+   them with `OSAPI_GFX_DESK` instead.
+
+kern_mega: the door is converted by `mega_mods_fix` with `thv` (§76.14.1's
+treatment), and the module's selectors are the mechanism's own.
+
+### 136.6 The renderers (`WALL.DRV`)
+
+One per depth, chosen per display by its kind, each writing only inside the
+piece it is handed:
+
+| depth | display | how |
+|---|---|---|
+| planar 4bpp | VGA 640x480, EGA 640x350 | the colour tile converted at load to four bit planes; each piece written plane by plane under the Map Mask, the two ragged edge bytes under the Bit Mask with the latches loaded, the column phase an AND because `cw` is a power of two. **The cost per byte does not depend on the picture**: a busy tile costs what a plain one does, unlike `OSAPI_GFX_BLIT4`'s cost per run (§5.4.1.3) |
+| 1bpp | CGA 640x200, Hercules 720x348 | the mono tile, through §32's row addressing; one store per byte, as `sw_fill_gray` |
+| packed | VESA (§120), 8 and 16 bpp | the colour tile expanded through the display's palette into one row, laid through the VESA driver's existing row path - no `VX_ABI_VER` change unless §136.10 records why one was unavoidable |
+
+### 136.7 The wide Control Panel's Wallpaper page (`kernel/cpw_wal.inc`)
+
+Pinned by the mockups `docs/wallpaper/wall-wide-vga-640x480.png` and
+`wall-wide-vesa-1024x768.png`: a Wallpaper row in the sidebar's APPEARANCE
+group, a gallery of thumbnail cards (None first, then every `.WAL` in
+`SYSTEM\WALLPAPR\`), a preview, the selected file's line, **Browse...** (the
+Standard File dialog, `*.WAL`) and **Apply**. A card acts on the press but
+only SELECTS: it moves the ring and redraws the preview and the file line.
+**Apply** commits it through `CPG_WALL` - the one disk write and the one full
+repaint a ground change costs, never one per click. The page's story owns
+this subsection's detail and its measured cost.
+
+### 136.8 The compact Control Panel's Wallpaper page (`kernel/ctrl.inc`)
+
+Pinned by `docs/wallpaper/wall-compact-ega-640x350.png` and
+`wall-compact-cga-640x200.png`: a Wallpaper row in §31's list, radio rows
+for None and each built-in (the list scrolls, §31.1.5), a framed preview of
+the selected tile at the display's depth, and **Browse...** in the pane's
+bottom-right corner. A radio acts on the press, as the Theme page's do
+(§76.4, §13.8.3): it redraws the two glyphs and the preview, then commits
+through `CPG_WALL`; a press on the live row draws nothing. The page's story
+owns this subsection's detail.
+
+### 136.9 Packages
+
+Desk Clock (§110.14) - see §136.5 item 4. Every other package lays the
+ground through `OSAPI_GFX_DESK` or not at all.
+
+### 136.10 Cost, measured
+
+Filled in by the final pass: resident bytes per kernel, `WALL.DRV`'s size and
+claim, the system disks' cluster counts, `gfxbench`'s wallpaper row against
+`GFX_FILL_GRAY` on the emulated XT, and PERFORMANCE.md Part 5's rows
+1225-1229 and 1370 re-measured with a wallpaper shown.
+
+### 136.11 Testing
+
+Filled in as rows land: `t_wall` (fast), the rows each story names, and the
+QA pass's list (docs/plans/WALLPAPER-PLAN.md).
