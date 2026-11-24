@@ -755,8 +755,12 @@ cpw_recicon:
     mov bx, (CWI32_HDD << 8) | CWI16_HDD
 .nd:
     cmp al, DRVC_NET
-    jne .have
+    jne .nn
     mov bx, (CWI32_NET << 8) | CWI16_NET
+.nn:
+    cmp al, 11                  ; DRVC_JOY (SPEC.md 136; the literal until os88api.inc has it)
+    jne .have
+    mov bx, (CWI32_JOY << 8) | CWI16_JOY
 .have:
     xchg ax, bx
     pop bx

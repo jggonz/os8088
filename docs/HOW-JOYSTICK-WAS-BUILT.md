@@ -31,3 +31,19 @@ Decisions taken at the start:
 - **Two new page abilities for every driver** (SPEC.md 31.9.4): a live tick
   and a wide layout, because the Windows 3.1 applet's Test view is live and
   the wide Control Panel hosted driver pages at 229x132.
+
+## 2026-11-23 - J3, the icons (agent `art`)
+
+Codex's two icons (16x16, 32x32) were already clean: seven colours, all of them
+palette entries or the key, so they went into the sheets unedited. The 16x16
+sheet grew a third row (256x48, joystick at cell 32, the other fifteen cells
+key colour) and the 32x32 sheet a thirteenth cell (416x32). The converter used
+to demand that a sheet's cell count equal `CWI16_N` exactly, which a 48-cell
+sheet would break; it now derives the grid from N (16 across at most) and
+checks the sheet's size against it, so `CWI16_N` stays 33 rather than paying
+2,400 bytes for fifteen empty cells (48 cells would have taken `CPWIDE.DAT` to
+17,842, over the 16,384 ceiling). Measured: `CPWIDE.DAT` 14,642 -> 15,442
+bytes unpacked (+800 = 160 + 640), 5,290 -> 5,544 packed. The wide face maps
+`DRVC_JOY` (11, a literal until core's `os88api.inc` lands) to them in
+`cpw_recicon`. Looked at: both icons decoded back from `build/cpwide.dat` and
+zoomed; not yet seen in the running panel (no driver row exists on this branch).

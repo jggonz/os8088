@@ -64,7 +64,8 @@ CWI16_C_UNK  equ 28
 CWI16_OK     equ 29
 CWI16_ERR    equ 30
 CWI16_WARN   equ 31
-CWI16_N      equ 32
+CWI16_JOY    equ 32            ; the joystick (row 2, col 0; SPEC.md 135.6)
+CWI16_N      equ 33
 
 ; 32x32 indices = cells of kernel/cpwart/cp-icons-32.png
 CWI32_SCHED  equ 0
@@ -79,7 +80,8 @@ CWI32_DOCK   equ 8
 CWI32_HDD    equ 9
 CWI32_NET    equ 10
 CWI32_GEAR   equ 11
-CWI32_N      equ 12
+CWI32_JOY    equ 12            ; the joystick (cell 12 of the single row)
+CWI32_N      equ 13
 
 ; ---- the driver catalog (SPEC.md 135.7) -------------------------------------
 CWD_CAT_SZ   equ 64            ; one fixed record per driver FILE

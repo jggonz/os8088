@@ -113,8 +113,10 @@ def main():
                           (cpwdat.SHEET32, 32, f["CWI32_N"])):
         (w, h), bad = sheet_problems(path, cell)
         rel = os.path.relpath(path, ROOT)
-        eq((w // cell) * (h // cell), n, "%s has %d cells of %dx%d"
-           % (rel, n, cell, cell), why_fmt)
+        gcols, grows = cpwdat.sheet_grid(n)
+        eq((w, h), (gcols * cell, grows * cell), "%s is the %d-cell grid of "
+           "%dx%d (%dx%d)" % (rel, n, cell, cell, gcols * cell, grows * cell),
+           why_fmt)
         check(not bad, "%s uses only palette colours and the key (%d bad)"
               % (rel, len(bad)),
               "the converter maps a pixel to a palette index by EXACT match; "
