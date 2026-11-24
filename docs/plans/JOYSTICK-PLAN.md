@@ -34,7 +34,7 @@ Status: ` ` not started, `B` built on its branch, `I` integrated into
 
 | | story | owner | done means |
 |---|---|---|---|
-| [B] | **J5 - the Joystick page** (SPEC 137.6), compact and wide, to the mockups: live view, type, three-step calibration, dead zone, invert, swap, reset, status | a look on QEMU VGA (wide), EGA and CGA (compact), and on MartyPC with a stick moved |
+| [I] | **J5 - the Joystick page** (SPEC 137.6), compact and wide, to the mockups: live view, type, three-step calibration, dead zone, invert, swap, reset, status | a look on QEMU VGA (wide), EGA and CGA (compact), and on MartyPC with a stick moved |
 | [ ] | **J6 - the emulators**: C64 control ports, Apple II paddles and buttons | builds, keys still work, a stick drives them on MartyPC |
 | [I] | **J7 - analog paddles**: WireBall and Arkanoid | builds, keys still work, the paddle follows the stick |
 | [I] | **J8 - digital sticks**: ARCADE and 1942 | builds, keys still work |
@@ -63,3 +63,6 @@ The one QA run's defect list goes here. Found before it, by J9's rows
 | Q1 | an UNCALIBRATED stick reaches about -108..+92 of +-127: MartyPC's 0-ohm count carries a fixed ~95 us latch overhead, and auto-centre assumes a minimum of 0 | full travel near +-127 before the user calibrates, or the page telling them to calibrate | driver, SPEC 137.3 | open |
 | Q2 | a verb costs 1.45-2.9 ms (door, cooking and two `pit_now`s on top of the sample), against "~1.2 ms a read" in SPEC 137.3/137.12 and the J7/J8 frame-budget notes | the figures in SPEC and the adopters' notes are the measured ones | SPEC 137.3, 137.12, 109.7, 44.13, 101.7, ARCADE-SPEC 15 | open |
 | Q3 | WireBall's ~1.2 ms (really 1.5-2.9 ms) read may swallow a rate-hook period, so its motion clock runs a few percent slow while a stick answers (gamesa-report.md) | motion steps unaffected, or the read halved to every second frame | apps/wireball, SPEC 109.7 | open |
+| Q4 | the wide face's header strip under the Joystick page says `Settings this driver publishes.` (every driver page's generic line) | the page's own line, `Calibrate and test the game port joystick.` (the mockup) | wide face, page-shots/page.png | open |
+| Q5 | after a full calibration, full right reads +119 and not +127: the X maximum was captured while Y sat at its stop (1,475), the same X stop with Y centred counts 1,440 - crosstalk between the axes in the sample or in MartyPC's model (page-report.md) | +127 at each stop whatever the other axis does | driver sample or instrument | open |
+| Q6 | JOYSTICK.DRV's claim while ticked is 10,760 bytes (8,256 on disk) against the brief's "9 KB with the page" | accepted by the lead: it is heap only while ticked, no resident byte; an overlay for the calibration view (~3 KB) is the remedy if the owner wants it | page | accepted |
