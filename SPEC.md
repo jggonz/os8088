@@ -259931,8 +259931,87 @@ measured in §138.9.
 
 #### 138.2.1 VPI0 — the Zip 100 (`drivers/zip/zipppa.inc`)
 
-*(Owner: ppa. The protocol facts, from Linux ppa.c, and the cycle estimate
-of the inner loops.)*
+The Zip 100's PPA3 interface. Facts below are Iomega's hardware, read from
+Linux `ppa.c` (named by function) and written fresh in `zipppa.inc`. Port
+registers are `ZT_DATA`/`ZT_STAT`/`ZT_CTRL` of `[zt_base]` (ziptrans.inc);
+every control value below is the byte written to `ZT_CTRL`.
+
+**Connect and disconnect** (`ppa_c_pulse`, `ppa_d_pulse`, `ppa_connect`,
+`ppa_disconnect`). Each is four data bytes, each followed by a control
+sequence. Connect: data 00h, 3Ch, 20h, 8Fh, each with control 04h, 06h, 04h,
+0Ch. Disconnect: data 00h, 3Ch, 20h, 0Fh, each with control 0Ch, 0Eh, 0Ch,
+04h, 0Ch. Both end with control 0Ch, which is the port's idle (printer) state;
+a failed probe therefore leaves a daisy-chained printer working. (8Fh is the
+non-EPP connect; EPP's 0CFh is not used - §138.11.)
+
+**Cable check** (`ppa_engine` phase 1, `ppa_init`). Connected: control 0Eh must
+make status bit 3 read **1**, control 0Ch must make it read **0**; either
+miss is "no drive". Linux retries for a second because the port may be
+contended; here the check is made three times, 1 ms apart, then `ZTE_NOCONN`.
+
+**Select** (`ppa_select`). Wait for status bit 6 to drop (a previous target
+off the bus); data = 1 << id, control 0Eh, 0Ch; data 80h ("not the
+initiator"), control 08h; wait for status bit 6 to rise. Either wait missing
+is `ZTE_NOSEL`. Waits are 1-2 BIOS ticks (Linux: 5000 us of spin).
+
+**`ppa_wait` and the phases.** The drive is ready when status bits 7 and 6 are
+both set; `status & F0h` then names the phase: **C0h** it wants a data byte,
+**D0h** it has one for the host, **E0h** it wants a command byte, **F0h** it
+has the status (then the message) byte. Command bytes need `status & 50h` =
+40h, bytes in need 50h. Before the CDB the wait is `ZT_TMO_TICKS`; after it
+(data, status) it is `PPA_LONG` = 255 ticks (~14 s) - a Zip waking from sleep
+takes ~10 s and Linux's engine never gives up on the data phase (it
+reschedules every tick); the SCSI core's own timeout is the real bound there.
+
+**One command** (`ppa_cmd`; `ppa_engine` phases 1-6). Connect + cable check;
+select `[zt_id]`; control 0Ch; for each CDB byte: wait, require E0h's bit
+pattern, data byte, control 0Eh, 0Ch (`ppa_byte_out`). Then the data phases:
+wait; **F0h** ends them; C0h is a burst out and D0h a burst in (the direction
+must match BH or `ZTE_PHASE`); a drive that wants data with nothing left in CX
+is `ZTE_PHASE` too (the buffer is never overrun); anything else is
+`ZTE_PHASE`. A burst is **512 bytes** when the opcode is READ/WRITE(6 or 10)
+(08h 0Ah 28h 2Ah) and 512 remain, **one byte** otherwise (`ppa_completion`:
+`fast`), the phase being re-read between bursts. Then the status byte (`&
+3Eh`, as `STATUS_MASK`), then the message byte if the drive is still in F0h
+within one tick (it is read and dropped), then disconnect. CX returns the
+bytes moved; the port is disconnected on every exit.
+
+**Byte transfer** (`ppa_byte_out`, `ppa_nibble_in`, `ppa_byte_in`). *Out*:
+data, control 0Eh, control 0Ch. *Nibble in* (any port): control 04h and read
+status bits 7-4 (the high nibble), control 06h and read them again (the low
+nibble); byte = high | low >> 4; control 0Ch when done. *PS/2 in*: control
+25h once (bit 5 turns the data lines round), then per byte read the data port,
+control 27h, control 25h; at the end control 04h, 0Ch.
+
+**Reset** (`ppa_reset_pulse`, `ppa_reset`). Connect; data 40h, control 08h,
+~30 us, control 0Ch; ~1 ms; disconnect; ~1 ms. Delays are port reads (~1 us
+each on an ISA port, so a 486 does not shorten them 100-fold); only the 1 ms
+settle on an 8088 is ~8 ms, which is harmless.
+
+**Probe** (`device_check`). `[zt_id]` is walked 0..7 running TEST UNIT READY
+through `ppa_cmd`: `ZTE_NOSEL` means try the next ID, any other error ends the
+search; the first ID that answers (with any status - a fresh drive says CHECK
+CONDITION) is the drive. With `ZIPM_PS2` asked for, a 36-byte INQUIRY then
+runs in PS/2 mode and must read `IOMEGA` at offset 8, else `[zt_mode]`
+drops to `ZIPM_NIBBLE` (never raised). The probe ends with a reset pulse
+(Linux does the same) and the port disconnected. The reset makes the drive
+report UNIT ATTENTION on its next command (§138.3 handles it).
+
+**Cycles, per data byte, 8088 at 4.77 MHz.** Estimated from the instruction
+timings and the 4.34-clock-per-instruction-byte fetch floor (PERFORMANCE.md
+Part 2), *not yet measured*: the I/O instructions add bus wait states the
+table does not carry. The `loop` (17 clocks) is paid once per PAIR of bytes.
+
+| path | EU clocks | code bytes | per byte | 512-byte burst |
+|---|---|---|---|---|
+| out | 54 + 8 | 13 | ~62-70 clocks = 13-15 us | 7-8 ms |
+| PS/2 in | 51 + 8 | 12 | ~60-65 clocks = 13 us | ~6.5 ms |
+| nibble in | 92 + 9 | 22 | ~100-110 clocks = 21-23 us | 11-12 ms |
+
+The nibble path is the whole speed of a read on the XT: ~45 KB/s before the
+drive's own per-burst phase wait and the core's command overhead, which §138.9
+measures. Code + constants: 904 bytes of the 1,024 allowed (`zipppa.inc`, no
+bss).
 
 #### 138.2.2 VPI2 — the Zip Plus and Zip 250 (`drivers/zip/zipimm.inc`)
 
