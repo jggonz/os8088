@@ -1636,7 +1636,13 @@ dsk_xfer:
     mov [dsk_cylmax], ax
 %if %isdef(KERN_MEGA) && %isdef(FPG_OPS)
     jmp .sector                 ; (the driver arm's bar, below, pushed it past
-%else                           ; a short jump on kern_mega alone)
+%elifdef OS88_ZIP               ; a short jump on kern_mega alone)
+    jmp .sector                 ; ...and kern_big's too, once the arm's 0C6h
+    nop                         ; tag (SPEC.md 18.9.2.1) took it past 127:
+                                ; the never-executed pad keeps .sector's loop
+                                ; and dsk_runcap at their measured parity
+                                ; (t_hotpar) - near +1, the tag +4, this +1
+%else
     jmp short .sector
 %endif
 .jbadvol:
@@ -1731,19 +1737,28 @@ dsk_xfer:
 %else
     jnc .success
 %endif
-    mov [dsk_ioerr], al         ; the driver reports int 13h's status byte,
 %ifdef OS88_ZIP
-    cmp al, 0x06                ; ...and MEDIA CHANGED shuts the mount gate
-    jne .jfail                  ; exactly as BR-16 does on the BIOS arm
-    shr byte [dsk_mntok], 1     ; (SPEC.md 18.9.1, 138.1): ZIP.DRV answers it
-                                ; for a SCSI UNIT ATTENTION - a Zip disk was
-                                ; swapped - and without this the next
-                                ; operation wrote the new disk with the old
-                                ; one's FAT. Unretried, like every driver
-                                ; failure: the next operation remounts. Eight
-                                ; bytes, EVEN, so the routines behind keep
-                                ; their measured parity (t_hotpar)
+    cmp al, 0x06                ; MEDIA CHANGED shuts the mount gate exactly
+    jne .drvst                  ; as BR-16 does on the BIOS arm (SPEC.md
+    shr byte [dsk_mntok], 1     ; 18.9.1, 138.1): ZIP.DRV answers it for a
+    jc .drvst                   ; SCSI UNIT ATTENTION - a Zip disk was swapped
+    or al, 0xC0                 ; - and without it the next operation wrote
+.drvst:                         ; the new disk with the old one's FAT.
+                                ; Unretried, like every driver failure: the
+                                ; next operation remounts. ...AND A 06h THAT
+                                ; FINDS THE GATE ALREADY SHUT is inside a
+                                ; mount, and is stored as 0C6h, which no int
+                                ; 13h status is and the BIOS arm never writes
+                                ; (it retries ITS 06h and leaves 06h): the
+                                ; mount's .cwd_ok reads it and starts the
+                                ; mount again, because a banked head took no
+                                ; LBA 0 and dsk_fat_window's FAT2 read had
+                                ; swallowed the swap (SPEC.md 18.9.2.1).
+                                ; Twelve bytes where it was eight, EVEN, so
+                                ; the routines behind keep their measured
+                                ; parity (t_hotpar)
 %endif
+    mov [dsk_ioerr], al         ; the driver reports int 13h's status byte
 %endif                          ; (.jbadvol falls into .jfail on kern_small)
 .jfail:                         ; ...AND the two range refusals in .sector, at
     jmp .fail                   ; two bytes each rather than the five NASM
@@ -3872,12 +3887,22 @@ dsk_vol_drop_drv_x:
 .next:
     mov bl, al
     call dsk_vol_slot_x           ; BX = the row; AX is untouched by it
-    jc .skip
+%ifndef OS88_ZIP
+    jc .skip                    ; (never taken: AL < DVOL_MAX in this loop)
     mov ah, [bx+DV_KIND]        ; either kind of driver row (dsk_vol_del's
     dec ah                      ; reasoning, and the same range test): a
     cmp ah, DVK_FILE - DVK_DRV  ; DRVC_FILE driver detaching has to take its
     ja .skip                    ; REDIRECTED volume with it, or the desktop
                                 ; keeps a zone whose transport has been freed
+%endif                          ; ...a test dsk_vol_del makes ITSELF, which
+                                ; is why OS88_ZIP leaves it there, and the
+                                ; `jc` above refuses only an index >= DVOL_MAX,
+                                ; which the loop never makes (SPEC.md 18.9.2.1
+                                ; spent the eleven bytes). A BIOS row's class
+                                ; is 0 and drv_release passes a real one; a
+                                ; FREE row that still carries this class goes
+                                ; to dsk_vol_del's own refusal (one bank zap
+                                ; more, and dws_commit asking [dws_hold])
     cmp [bx+DV_CLASS], cl       ; ...and is it THIS driver's?
     jne .skip
     call dsk_vol_del            ; takes AL, which is still the index
@@ -4387,8 +4412,14 @@ disk_mount_x:
     ; reasons. The stores are ordered by what AX has to hold; each keeps the
     ; comment that says why it is set. No FAT window state survives a mount:
     ; its three words are dskw_refat's, called below rather than spelled again.
+%ifdef OS88_ZIP
+.zremount:                      ; ...and where a driver's 06h inside this
+%endif                          ; mount starts it again (SPEC.md 18.9.2.1)
     xor ax, ax
     mov [disk_nfiles], ax       ; stays 0 unless the mount fully succeeds
+%ifdef OS88_ZIP
+    mov [dsk_ioerr], al         ; ...and no tag from an EARLIER transfer may
+%endif                          ; restart it: only this mount's 0C6h (18.9.2.1)
 %ifdef OS88_FAT32
     mov [dsk_fattype], al       ; no FAT32 arm runs for a volume whose BPB
                                 ; was never read (a redirected one, a torn
@@ -4601,6 +4632,22 @@ disk_mount_x:
     mov [dsk_cwd+2], ax
 %endif
 .cwd_ok:
+%ifdef OS88_ZIP
+    ; --- 2c. ...and the VOLUME was the disk the head describes (18.9.2.1) ---
+    ; A banked head reads no LBA 0, so step 2's FAT load is the first transfer
+    ; a swapped Zip disk answers, with 06h - and dsk_fat_window's FAT2 read,
+    ; or a window fault under .cwd_lost, took that as a bad sector and read
+    ; on: the driver had learned the new disk by then, the read worked, and
+    ; the mount finished on the OLD disk's head (QA-6: 0 files, the wrong
+    ; free space). dsk_xfer tagged that 06h 0C6h; start again, now reading
+    ; LBA 0, because its .fail forgot every bank. (Ten bytes, EVEN with the
+    ; arm's six and the store's three less dsk_vol_drop_drv_x's eleven, so
+    ; dsk_next_clus_x keeps its measured parity - t_hotpar)
+    cmp byte [dsk_ioerr], 0xC6
+    jne .cwd_same
+    jmp .zremount
+.cwd_same:
+%endif
 
     ; --- 2b. a QUIET mount stops here (SPEC.md 18.9) -------------------------
     ; Everything above is the VOLUME - the BPB, the geometry, the FAT window
