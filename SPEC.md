@@ -95689,6 +95689,32 @@ pass leaves binding:
   `call ark_beep` or `call ark_fire` and then its own `ret`, it jumps
   instead, and `ark_fire` saves nothing either. The worker's static stack
   chain is 50 bytes, from 64; it keeps `OS88_STACK_192`.
+### 44.13 The analog paddle (JOYSTICK.DRV, §137)
+
+A joystick ADDS a control (§137.8). `ark_entry` asks `joy_find` once and keeps
+the answer in `[ark_joy]`; with no driver (every kern_small, an unticked row)
+the game is exactly what it was. With one, `ark_do_paddle` makes ONE
+`joy_read` of stick A a frame, in the worker, where it already asks
+`OSAPI_KEY_DOWN` - a read costs about 1.2 ms on the XT (§137.3) against a
+frame of ~55 ms at 18 fps, about 2%.
+
+- **Stick A's X is an ABSOLUTE position**: -127..+127 maps linearly over the
+  paddle's travel (rail to rail less the paddle's width, so an Expand
+  changes the scale and not the reach). It does not push the key state
+  machine of §44.2; it stands that machine down (`[ark_pspd]`, `[ark_pkeep]`
+  and `[ark_pdn]` zero) so the arrows are free again.
+- **Last one moved wins.** Only a change of X of 2 or more counts as the stick
+  moving; a stick resting off centre leaves the paddle to the arrows, and an
+  arrow held after the stick moved takes the paddle back on the next frame.
+- **`[ark_pvel]` is the pixels the paddle really moved**, so the sideways kick
+  of §44.4 (clamped to -2..+2 pixels) is the stick's own motion, however far
+  it jumped.
+- **Button 1 is Space**: a press since the last frame sets `[ark_launch]`, so
+  it serves the parked ball and fires the laser; a serve with no key latched
+  goes straight up.
+- Cost: +211 bytes of image (5,659 to 5,870) and 3 of bss (§44.12's pass is
+  otherwise untouched).
+
 
 ## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
 
@@ -229683,6 +229709,33 @@ variable keeps its parity too.
   and **27 bytes** of net image + bss over the pass's start (the routine
   and two 16-byte tables, after the bss the cache sharing above returned).
   Both were put to the owner and approved. -740 file bytes.
+### 109.7 The analog paddle (JOYSTICK.DRV, §137)
+
+`wb_launch` asks `joy_find` ONCE, before `OSAPI_FSX_RUN` (a driver verb that
+reads no disk is legal inside the bracket, §53.7, but the question is asked
+outside it). With no driver the game is what it was.
+
+- **One read per presented frame, in the foreground loop** (`wb_joy`, before
+  `wb_keys`), never in the rate hook (§53.2.2: no kernel calls there). On a
+  kern_small-style text fallback with no presented frame it reads on the OS
+  tick instead. A read is about 1.2 ms with interrupts off (§137.3), so at
+  Set 160's 46-59 frames/s it spends 6-7% of the frame; it is bounded by
+  `JOY_TMO` (2.3 ms) below an 8250's 4.17 ms byte, so no serial byte is lost.
+  The rate hook can lose up to one 1.7 ms period (a pending IRQ latches once)
+  per read; the motion clock counts hook periods, so motion can run a few
+  percent slow with a stick answering, and not at all without one.
+- **Stick A's Y is an absolute position** over 0..`WB_PMAX` quarter rows, kept
+  as a TARGET (`wb_jtgt`). The physics step moves the existing paddle byte
+  toward it by at most `WB_JSLEW` (4) quarter rows, in `wb_controls` beside
+  the keys: the same state, extents and fractional ball as the keys use, so
+  collisions and the serial link (§109.2) learn nothing new. The paddle's
+  `spin` is that step, clamped to +-2 (a key gives +-1).
+- **Last one moved wins.** A stick change of 2 or more arms the target
+  (`wb_jact`); any paddle key clears it. A resting stick never fights the keys.
+- Only the local paddle is the stick's: the second paddle is the peer or the
+  AI.
+- Cost: +240 bytes of image (37,417 to 37,657), 5 of bss.
+
 
 ## 110. Sticky Apps (`STIKAPPS\`, `apps/os88stik.inc`)
 
