@@ -28,7 +28,7 @@
 ; cheap enough to ask at start and forget. joy_read and joy_state each take
 ; ONE sample: the port's one-shots timed by the PIT with interrupts off for
 ; as long as the expected axes take to fall, bounded by JOY_TMO (~2.3 ms,
-; SPEC.md 137.3). Once a frame is the intended rate; a sample is never taken
+; SPEC.md 137.3); a whole verb is 1.5-2.9 ms on the XT (SPEC.md 137.12). Once a frame is the intended rate; a sample is never taken
 ; behind your back, so an idle machine with the driver ticked pays nothing.
 ;
 ; A worker may call every verb here: none touches a file or takes a lock.

@@ -252,7 +252,7 @@ static void a2_kbd_poll(void)
     a2_btn[1] = os88_key_down(KSC_F2) ? 1 : 0;
 
     /* ...AND THE HARDWARE STICK (6.7), ORed in: ONE os88_joy_state sample a
-     * wake (about 1.2 ms on the XT, SPEC.md 137.3), only when a driver was
+     * wake (1.5-2.9 ms on the XT, SPEC.md 137.12), only when a driver was
      * found at start (a2_jhw). Stick A's X/Y are PDL0/PDL1, stick B's are
      * PDL2/PDL3, each -127..+127 mapped to 0..255 with 0 = CENTRE (127); an
      * axis that is not answering reads 0 in the record, which is centre. */

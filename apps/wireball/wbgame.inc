@@ -79,17 +79,19 @@ wb_keys:
 .out:
     ret
 
-; wb_joy - ONE stick read per presented frame (SPEC.md 109.7), in the loop and
-; never in the rate hook. Stick A's Y is an absolute paddle position; it only
+; wb_joy - ONE stick read per OS TICK (18.2 Hz), in the loop and never in the
+; rate hook (SPEC.md 109.7). Stick A's Y is an absolute paddle position; it only
 ; takes the paddle when it MOVED (>= 2 of 127), so a resting stick never fights
-; the keys. clobbers AX, BX, CL, DX
+; the keys. The read holds interrupts off for 1.5-2.9 ms on the XT (SPEC.md
+; 137.12), longer than one 1.72 ms rate period, and fsx_rtick COUNTS IRQ0s
+; (sch_rpend), so a window that spans two arrivals loses one: gating the read
+; to the tick bounds that to 18 periods a second, never 50. clobbers AX, BX, CL, DX
 wb_joy:
     cmp byte [wb_joyon], 0
     je .out
-    cmp byte [wv_fast], 0        ; the text fallback has no presented frame:
-    jne .read                    ; read on its tick instead
-    cmp byte [wv_legacytick], 0
+    cmp byte [wb_joytick], 0
     je .out
+    mov byte [wb_joytick], 0
 .read:
     xor al, al
     call joy_read
@@ -118,6 +120,7 @@ wb_joy:
 
 wb_tick:
     mov byte [wv_legacytick], 1
+    mov byte [wb_joytick], 1
     call wb_sound_tick
     mov al, 0x32                 ; release re-arms the M toggle
     call OSAPI_KEY_DOWN

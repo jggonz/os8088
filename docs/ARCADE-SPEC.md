@@ -1633,8 +1633,9 @@ A joystick ADDS the cabinet's stick to the keys and never replaces them.
 is CF = 1, and every path below then reads 0, exactly the keys-only
 behaviour); `ar_joyd` takes ONE `joy_read` of stick A per frame, at the head
 of `pm_keys` and `qb_keys`, the routines that read the arrows. A read costs
-about 1.2 ms on the XT with interrupts off (SPEC.md 137.3), inside a frame
-that is 16.5 ms at the cabinet's rate. A driver ticked but no stick plugged
+1.5-2.9 ms on the XT with interrupts off (SPEC.md 137.12, the `joystick`
+row), against a frame that is 16.5 ms at the cabinet's rate - 9-18% of it, the
+measured cost of one read a frame. A driver ticked but no stick plugged
 reads CF = 1 and costs the call only.
 
 | board | the stick's `JOYD_*` becomes |

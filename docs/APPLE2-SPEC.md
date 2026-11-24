@@ -1357,8 +1357,8 @@ stay exactly what they were:
 - **Asked once, read once a wake.** `os88_joy_find()` runs in `os88_main`
   beside arming the key map (6.4); with no driver (-1: kern_small, an unticked
   row) nothing is read and `a2_pdl_val` stays at centre. `os88_joy_state()`
-  - ONE sample of the whole port, about 1.2 ms on the XT with interrupts off
-  (SPEC.md 137.3) - runs in `a2_kbd_poll`, the §6.3 once-a-wake level pass,
+  - ONE sample of the whole port, 1.5-2.9 ms on the XT with interrupts off
+  (SPEC.md 137.12) - runs in `a2_kbd_poll`, the §6.3 once-a-wake level pass,
   never per emulated instruction or per `$C064` read. The paddles therefore
   hold the value of the wake's sample for the whole slice, which is finer than
   a game reads them.

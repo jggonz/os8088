@@ -340,6 +340,7 @@ WB_VAR wv_fast,1
 WB_VAR wv_clock,2
 WB_VAR wv_last,2
 WB_VAR wv_legacytick,1
+WB_VAR wb_joytick,1
 WB_VAR wv_legacyframes,1
 WV_BSS
 WB_VAR wb_marked,1

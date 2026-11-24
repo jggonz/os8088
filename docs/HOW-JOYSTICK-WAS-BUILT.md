@@ -339,3 +339,22 @@ joystick indicators drawn after stick A was held right with button 1; Apple II
 at its prompt, taking typed keys slowly at 61% cpu). The paddle VALUE was not
 read back in the guest; the host harnesses a2uitest/c64uitest cover the maps.
 The earlier "window did not open" was host load, not a regression.
+
+## 2026-11-24 - Fix round, Q2 and Q3 (agent `fixdoc`)
+
+Q2: the `joystick` row measured a verb at 1.45 ms with nothing answering, 1.7
+ms for a fast stick and 2.9 ms for a 100 kOhm one (STATE 2.84 ms); the "~1.2 ms
+a read" and "cooking ~0.4 ms" in SPEC 137.3, 109.7, 44.13, 101.7, ARCADE-SPEC
+15, C64-SPEC 8.1, APPLE2-SPEC 6.x and the packages' comments were estimates from
+the spec and are now the measured 1.5-2.9 ms, with the row as the source. The
+adopters' frame sentences were rechecked: Arkanoid 3-5% of a 55 ms frame, ARCADE
+9-18% of a 16.5 ms frame, a two-stick C64 wake 3-5.8 ms. Q3 was a real defect,
+found by reading the code and not by a run: `fsx_rtick` counts IRQ0 entries
+(`sch_rpend`) and `wb_ratehook` adds that count to the motion clock, the 8259
+latches one pending IRQ0, and a 2.9 ms window spans two 1.72 ms arrivals, so a
+read per frame lost about 0.7 periods a read (~6% slow with a slow stick). A
+clock to credit it from does not exist in the bracket (`pit_now` is forbidden
+there), so WireBall now reads once per OS tick (`wb_joytick`): at most 18
+periods a second, 3.1% worst case. The 8250 is safe (a 2.9 ms window against a
+4.17 ms byte). Tested: host build only; no emulator run, so the loss figures are
+derived, not measured.

@@ -95757,8 +95757,8 @@ A joystick ADDS a control (§137.8). `ark_entry` asks `joy_find` once and keeps
 the answer in `[ark_joy]`; with no driver (every kern_small, an unticked row)
 the game is exactly what it was. With one, `ark_do_paddle` makes ONE
 `joy_read` of stick A a frame, in the worker, where it already asks
-`OSAPI_KEY_DOWN` - a read costs about 1.2 ms on the XT (§137.3) against a
-frame of ~55 ms at 18 fps, about 2%.
+`OSAPI_KEY_DOWN` - a read costs 1.5-2.9 ms on the XT (§137.12, the `joystick`
+row: 2.9 for a 100 kΩ stick) against a frame of ~55 ms at 18 fps, 3-5%.
 
 - **Stick A's X is an ABSOLUTE position**: -127..+127 maps linearly over the
   paddle's travel (rail to rail less the paddle's width, so an Expand
@@ -220037,8 +220037,8 @@ leaves its own `1942\` folder for `GAMES\`: one file needs no folder.
 A joystick ADDS a control to the keys. `n_joyfind` asks `joy_find` once as
 the flight starts (no driver: CF = 1, `n_jok` 0, and every read below is 0 -
 the keys alone, as before). `n_joyread` takes ONE `joy_read` of stick A per
-frame, at the head of the player's input in `game.inc` (about 1.2 ms on the XT
-with interrupts off, §137.3. Stick A's direction
+frame, at the head of the player's input in `game.inc` (1.5-2.9 ms on the XT
+with interrupts off, §137.12: 1.7 for a fast stick. Stick A's direction
 (`JOYD_*`, 8-way as four bits) moves the plane exactly as the arrow keys do,
 including the banking art; **button 1 fires** (as Space/Z, with the same
 5-frame repeat) and **button 2 rolls** (as X, edge triggered through the same
@@ -229790,15 +229790,30 @@ variable keeps its parity too.
 reads no disk is legal inside the bracket, §53.7, but the question is asked
 outside it). With no driver the game is what it was.
 
-- **One read per presented frame, in the foreground loop** (`wb_joy`, before
-  `wb_keys`), never in the rate hook (§53.2.2: no kernel calls there). On a
-  kern_small-style text fallback with no presented frame it reads on the OS
-  tick instead. A read is about 1.2 ms with interrupts off (§137.3), so at
-  Set 160's 46-59 frames/s it spends 6-7% of the frame; it is bounded by
-  `JOY_TMO` (2.3 ms) below an 8250's 4.17 ms byte, so no serial byte is lost.
-  The rate hook can lose up to one 1.7 ms period (a pending IRQ latches once)
-  per read; the motion clock counts hook periods, so motion can run a few
-  percent slow with a stick answering, and not at all without one.
+- **One read per OS TICK (18.2 Hz), in the foreground loop** (`wb_joy`, before
+  `wb_keys`, armed by `wb_tick` through `wb_joytick`), never in the rate hook
+  (§53.2.2: no kernel calls there) and not once per presented frame. A read is
+  1.5-2.9 ms on the XT with interrupts off (§137.12, the `joystick` row; 1.7
+  for a fast stick, 2.9 for a 100 kΩ one), so once a tick it spends 3-5% of a
+  second, against 8-13% of the 17-22 ms frame had it been one a frame.
+  **Why the tick, and not the frame (Q3):** `fsx_rtick` COUNTS IRQ0 entries
+  (`sch_rpend`, kernel/fsx.inc) and hands the hook that count, and
+  `wb_ratehook` adds it to `wv_clock` (`add [wv_clock], ax`); it never
+  consults the PIT, because `pit_now` is forbidden in a RATE bracket. The 8259
+  latches ONE pending IRQ0, so a window with interrupts off that spans two
+  1.72 ms arrivals (any read over one period, so a slow stick) loses one - and
+  `sch_racc` loses its share of a tick with it. Derived from that code, not
+  measured: a 2.9 ms window spans two arrivals about two times in three, so a
+  read per frame (46-59 a second) would have run motion ~6% slow with a slow
+  stick; a read per tick loses at most 18 periods of 582 a second (3.1% worst
+  case, ~2% for a 100 kΩ stick, ~0 for a fast one) and none without a stick.
+  Crediting the loss from a clock was rejected: there is no clock inside the
+  bracket that does not count the same IRQs.
+  **The 8250 (§53.2.2) loses nothing:** a byte lands every 4.17 ms at 2400
+  baud and the hook polls every 1.72 ms; a byte arriving just after a poll and
+  just before a window waits for the window's end, at most ~2.9 ms plus the
+  hook's latency, under the next byte's arrival. On a kern_small-style text
+  fallback with no presented frame it reads on the same tick.
 - **Stick A's Y is an absolute position** over 0..`WB_PMAX` quarter rows, kept
   as a TARGET (`wb_jtgt`). The physics step moves the existing paddle byte
   toward it by at most `WB_JSLEW` (4) quarter rows, in `wb_controls` beside
@@ -260172,8 +260187,12 @@ otherwise**: there is no worker and no tick hook, so a machine with the
 driver ticked and no game running pays nothing but the image. Every verb's
 sample AND the cooking that follows it run with interrupts off (EMS's
 discipline, §107.1), so a package's worker and its UI task asking at once
-cannot tear the state record; cooking is ~0.4 ms on the XT (four `mul`/`div`
-pairs), so the longest window is ~2.7 ms, at a timeout.
+cannot tear the state record. MEASURED on the XT (§137.12, the `joystick`
+row): a verb is 1.45 ms with nothing answering, 1.7 ms for a fast stick and
+2.9 ms for a 100 kΩ one (STATE 2.84 ms) - the sample, the package door, the
+cooking (four `mul`/`div` pairs) and two `pit_now` latches, not the ~0.4 ms
+the cooking alone was first estimated at - so the longest window is ~2.9 ms,
+still under the 4.17 ms byte.
 
 **Calibration** maps each PORT axis's raw count through three points -
 minimum, centre, maximum, captured on the page (§137.6) - to a signed
