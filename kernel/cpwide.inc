@@ -758,7 +758,7 @@ cpw_recicon:
     jne .nn
     mov bx, (CWI32_NET << 8) | CWI16_NET
 .nn:
-    cmp al, 11                  ; DRVC_JOY (SPEC.md 136; the literal until os88api.inc has it)
+    cmp al, 11                  ; DRVC_JOY (SPEC.md 137; the literal until os88api.inc has it)
     jne .have
     mov bx, (CWI32_JOY << 8) | CWI16_JOY
 .have:
