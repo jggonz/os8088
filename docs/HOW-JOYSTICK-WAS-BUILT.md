@@ -184,3 +184,35 @@ action button to give. Measured: `arcade.bin` +189 bytes, `1942.bin` +180
 (`make arcade 1942` against a pristine build). A read costs ~1.2 ms on the XT
 by SPEC 137.3 (a number from the spec, not yet measured here: no driver on this
 base). Tested so far: both assemble; looked at in QEMU with keys (no stick).
+
+## 2026-11-24 - J9, the rows (agent `rows`)
+
+Two rows and a gate package. `tests/joygate/` is a package that includes
+`apps/os88joy.inc` and, on a click, runs one probe (`joy_find`, two
+`joy_read`s of stick A, one of B, `JOYV_RAW`, `joy_state`, the first read and
+the state timed with `pit_now`) and leaves every answer in a fixed block in its
+own image, which the row reads back; a command word the row writes first picks
+`OSAPI_DRV_USE` and `JOYV_PROBE`. The `joystick` soak row drives it with
+`Marty.joy()` on two boots: a `_joy` machine (the boot sniff has ticked the
+driver by itself, and the row asserts that) and the standard 5150 with no game
+port (refused before the attach, attaches and says no stick after - the
+refusal control for the first leg). The `joycal` row runs the driver's own
+`joy_prep`/`joy_calpos`/`joy_dir` under unicorn on 1,190 calibration points
+against a Python statement of SPEC 137.3 that shares no code with them.
+
+What the instrument found that the spec did not say. **An uncalibrated stick
+does not reach 127**: every raw count carries a fixed latch overhead
+(MartyPC: 113 counts, 95 us, at 0 ohm; the 0-to-100K span is the model's 1,316
+vs 1,313), and the auto-centre assumes MIN 0 / MAX 2 x centre, so full travel
+answers -108 left/up and +92/+89 right/down. The row asserts the honest
+number uncalibrated (past 85, right sign, right direction bit) and +-127 once
+the calibration is written the way the page will (`joy_cal`'s MIN/CEN/MAX
+from the measured stops). **A read costs more than 137.3 says**: with no stick
+at all a read is 1,735 units (1.45 ms) and a fast stick's 2,058 (1.7 ms), so
+the door plus the cooking is about 1.7 ms on a 4.77 MHz machine, not 0.4; a
+slow (100K) stick reads in 3,497 units (2.9 ms). The row's bound is one
+2400-baud byte (4.17 ms), which still holds. Timing noise: a timer tick in
+the door adds a ~700 us task switch to one read in a few, so the row takes
+the least of three. The `joycal` and `joystick` rows were broken on purpose
+(the `neg al` of the left/up half of `joy_calpos` poked to nops, the
+`--break` flag of each): 456 of 1,190 points and nine assertions went red.

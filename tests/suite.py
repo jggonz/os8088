@@ -13699,6 +13699,28 @@ SOAK = [
         "stage A)",
         needs=("marty",), serial=True,
         wants=("build/drvcall.img", "build/drvcall360.img")),
+    Row("joystick", "soak", py("tests/joystick.py"), 25.0,
+        "SPEC.md 137.2-137.4: JOYSTICK.DRV through a package's door, on "
+        "MartyPC's game port (Marty.joy(), SPEC.md 137.7). Leg 1, a machine "
+        "with a port: the boot sniff ticked it, INFO, centre 0 and the dead "
+        "zone, every deflection's sign and direction bit uncalibrated and "
+        "+-127 calibrated, raw counts against the 25.2us + 0.011us/ohm "
+        "model, a press counted once, stick B refused on a 2-button type, "
+        "a read timed by the fall and under one 2400-baud byte. Leg 2, a "
+        "5150 with NO port: refused before the attach, attaches and says no "
+        "stick after. tests/joygate/ is the package; --break pokes the "
+        "driver's left/up sign and the row must go red",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/joygate360.img", "build/os8088-360.img")),
+    Row("joycal", "soak", py("tests/unit/t_joycal.py"), 0.5,
+        "SPEC.md 137.3's calibration arithmetic: the driver's own joy_prep, "
+        "joy_calpos and joy_dir assembled and run under unicorn on 1,190 "
+        "calibrations x counts x dead zones against a Python statement of "
+        "the spec that shares no code with them, plus JOY_TMO against the "
+        "physics (covers a 100 kohm stick, under a 2400-baud byte). "
+        "Host-only; the `joystick` row is the same arithmetic on a clock. "
+        "--break takes the sign off the low half and the row must go red",
+        needs=("nasm",)),
     Row("drvscroll", "soak", py("tests/drvscroll.py"), 30.0,
         "SPEC.md 31.1.2: scrolling the Drivers list draws the LIST once, not"
         "thrice.",
