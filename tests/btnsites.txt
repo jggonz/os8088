@@ -115,6 +115,9 @@
 1 drivers/hdd/tool.inc
 2 drivers/httpfs/httppage.asm        # Mount and Unmount, release-fired through
                                    # the panel's probe as etherui.inc's are
+1 drivers/joy/joyui.inc          # the Joystick page (SPEC.md 137.6): one staged
+                                   # record per button, arm on the press, fire on
+                                   # the release (joyui_click / joyui_up)
 1 drivers/net/netui.inc
 1 drivers/ramdisk/page.inc
 1 drivers/saver/svcfg.inc

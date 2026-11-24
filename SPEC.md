@@ -260278,23 +260278,226 @@ untouched on a machine whose row is unticked.
 
 ### 137.6 The Joystick page (compact and wide)
 
-The driver publishes a Control Panel page (§31.9) named `Joystick`. Its
-design reference is the Codex mockups in `docs/joystick/` with their prompt,
-kept as source (CLAUDE.md, *Treat artwork as source*): the wide face at
-640×480 and 800×600, a calibration step, and the compact face on EGA and
-CGA. The page is LIVE: it uses §31.9.4's tick to redraw only the stick dot,
-the numbers and the lamps that changed. On the wide face it lays itself out
-over the whole page area (§31.9.4's wide bit) and has the 32×32 joystick icon
-in the header strip and the 16×16 in the list (`CWI16_JOY`, `CWI32_JOY`,
-§135.6).
+**Shipped by `docs/plans/JOYSTICK-PLAN.md` story J5**, in
+`drivers/joy/joyui.inc`, assembled into `JOYSTICK.DRV` (`%define JOY_UI` in
+`joy.asm`, §137.11). The driver publishes a Control Panel page (§31.9) named
+`Joystick`, declares `OS88_DRV_CPWIDE` and a `DSV_MAX` service table so the
+page is both WIDE and LIVE (§31.9.4). Its design reference is the Codex
+mockups in `docs/joystick/` with their prompt, kept as source (CLAUDE.md,
+*Treat artwork as source*): the wide face at 640×480 and 800×600, a
+calibration step, and the compact face on EGA and CGA. Where the built page
+departs from them, §137.6.2 and §137.6.3 say so and why.
 
 What the page does, on both faces: shows stick A (and B, or the throttle,
 rudder and hat for the flight types) live; chooses the controller type;
 CALIBRATES in three steps drawn inside the page (upper left + a button, lower
-right + a button, centre + a button - Windows 3.1's order), with Cancel; sets
-the dead zone (0-30 %); Invert Y and Swap A/B; Reset calibration; and says
-whether each stick is answering. The details are the page's story in the
-plan.
+right + a button, centre + a button - Windows 3.1's order), with Cancel and
+Back; sets the dead zone (0-30 %); Invert Y and Swap A/B; Reset calibration;
+and says on a status line whether each stick is answering, whether it is
+calibrated, and how long a read takes, MEASURED.
+
+The cells: `DSV_CPNAME` `joyui_name`, `DSV_CPPAINT` `joyui_paint`,
+`DSV_CPCLICK` `joyui_click` (the press: arm and draw held), `DSV_CPUP`
+`joyui_up` (the release: act), `DSV_CPDRAG` `joyui_drag` (the held look
+follows the pointer), `DSV_CPKEY` `joyui_key` (Enter, Space and Esc while
+calibrating, §137.6.5), `DSV_CPCLOSE` `joyui_close` and `DSV_CPTICK`
+`joyui_tick`. The buttons are §13.8.4's release-fired gesture through
+`os88ui_arm`/`os88ui_fire`/`os88ui_armed`, drawn by `os88ui_btn` from one
+staged record (`tests/btnsites.txt`).
+
+#### 137.6.1 One engine, four layouts
+
+The page is a list of WIDGETS - a 12-byte record each: a type, an argument,
+a pane-relative rect, and the word the glass is SHOWING. A layout is a table
+of 10-byte descriptors (compact or wide, test view or calibrating) whose x,
+y, width and height may be ANCHORED: the top four bits of a coordinate name
+one of sixteen numbers derived once per paint from the pane's size (CX/BX,
+§31.9.4) - its width and height, their half, the stick box's side, the lower
+groups' top, the three-fifths split - and the low twelve a signed offset from
+it. Anchor 0 is zero, so a plain small number is itself. Nothing assumes 640
+pixels: the 493×330 page area at 640×480 and the larger one of the VESA
+panel (looked at in 1024×768) come out of the same table, and the compact face is the 222×132 pane on every
+adapter. `jui_layout` picks the table from the width (300 px or more is the
+wide face) and the calibration step.
+
+Every widget type has a STATE proc (the state as one word) and a DRAW proc.
+A paint lays the whole pane's ground once (a wide page owns every pixel of
+its area, §135.3.1) and draws every widget; anything later - a tick, a
+click, a key - asks every widget its state and draws only the widgets whose
+word moved. A control held down is part of its state, so the press, the
+drag off and on, and the release draw through the same pass.
+
+The widgets that depend on the controller type - the wide face's stick B
+group, the compact face's B line - are the list's TAIL. A type change
+re-emits only the tail, lays the white ground of its rect once and draws it
+whole; the radios and lamps it changes redraw themselves through their state.
+
+#### 137.6.2 The wide face
+
+From the mockup: a `STICK A` group with the box, `X`/`Y` calibrated and raw
+and lamps 1-2; a `STICK B` group (stick B's box on the two-stick type; the
+throttle and rudder bars and their raw counts on the flight types; the hat
+on the CH and ThrustMaster types; otherwise "Not used by this controller
+type", or on the four-button type "Buttons 3 and 4 belong to stick A") with
+lamps 3-4; a `CONTROLLER` group of six radios; a `SETTINGS` group (dead zone
+`-` `8%` `+`, Invert Y axis, Swap sticks A and B); `Calibrate...` and `Reset`
+at the bottom right; and the status line. Groups are a black frame with a
+light grey caption strip.
+
+**Where it departs from the mockup, and why.** (1) The header strip's line
+under the title is the wide face's generic driver line ("Settings this driver
+publishes."): the header is CPWIDE.DRV's (§135.3) and a per-driver
+description is not part of the driver page ABI. (2) The status line is the
+last row of the PAGE AREA, not the window's status bar, which is CPWIDE.DRV's
+own (free memory and drivers loaded) - the page draws only inside its area.
+(3) The hat is a 3×3 grid of lamps, not the mockup's octagon, and the bars
+carry no tick marks: each is one masked record or one fill. (4) A stick that
+is not answering shows "Not connected" in its box (where the box is at least
+112 px) with no crosshair, as the mockup's stick B does.
+
+#### 137.6.3 The compact face
+
+The 222×132 pane, 27 cells by 16 rows, every label inside 27 cells:
+
+```
+Joystick
+[box]  X  +34 raw  412
+       Y  -12 raw  291
+       B  +12  -34          (the type's line: B, T/R, Hat)
+       (1 (2 (3 (4         lamps
+Type: 2-button stick   [>]
+Dead zone [-]  8% [+]
+[ ] Invert Y   [ ] Swap A/B
+[Calibrate...] [Reset]
+Stick A found        1.5ms
+```
+
+Departures from the EGA/CGA mockups: Invert Y and Swap are check boxes (the
+mockup's single `A/B` button could not say which of two flags it sets), and
+there is a `Reset` button; the type is a cycle button `>` as drawn. The box is
+48 px, too small for "Not connected" - a stick not answering leaves it empty
+and the status line says so.
+
+#### 137.6.4 The live view - what a tick draws
+
+`joyui_tick` runs about nine times a second (§31.9.4) with the panel's clip
+armed. It takes ONE timed sample (§137.6.6) and draws only what moved:
+
+- **the dot** (4×4, blue; black on 1bpp). The old dot is erased by drawing
+  what was UNDER it: the crosshair and the dashed dead-zone square are
+  composed for the old dot's four rows into one 16-wide `OSAPI_ICON_DRAW`
+  record (pen: white ground, line colour), whose MASK leaves out the new
+  dot's pixels; then the new dot is one fill. No pixel is written twice
+  (CLAUDE.md performance rule 2). The dashes are lit where
+  `((x + y) & 2) == 0` in box coordinates, one rule for the full draw
+  (`jui_dash`) and for the composer (`jui_lines`), so a dash the dot passed
+  over comes back exactly.
+- **a number** - one opaque `font_run` of its fixed field, right-aligned and
+  space-padded, only when its value changed.
+- **a lamp** - one masked 8×8 record, disc and ring in one pass (green lit,
+  grey out, outline only when the type has no such button).
+- **a bar** - one fill of only the rows between the old level and the new.
+- **the hat** - the lamp that went out and the one that lit.
+
+On the XT this is two calls and ~2 ms for a moved dot, ~4 ms for a changed
+number (four or five cells at ~0.9 ms) and one call per lamp - against the
+~70 calls of a whole repaint. A box redraws whole only when its stick starts
+or stops answering, or the dead zone or a reset moved its square.
+
+#### 137.6.5 Calibration
+
+`Calibrate...` (greyed while no axis of the type answers - a fact, §47)
+replaces the page with the calibration layout: a banner (white on blue) saying
+the step, the stick A box showing the RAW position of the port axes behind
+stick A (2,048 counts full scale), a table with one row per port axis the
+type uses - `X1` `Y1` `X2` `Y2`: the raw count now, the least and the most
+seen since the calibration began - the progress row (`1 Upper left`,
+`2 Lower right`, `3 Centre`: ticked once done, highlighted while current,
+greyed while to come; the compact face says the step in its banner only),
+`Cancel` and `Back` (greyed on step 1).
+
+A step is CONFIRMED by a stick button going down, edge-detected in the tick
+against the previous sample's buttons (a button already held when the
+calibration starts is not a confirm), or by Enter or Space; Esc cancels.
+Every sample of the calibration widens the captured range of every port axis
+that answered. Confirming step 3 finishes:
+
+1. `joy_apply` first - `joy_cal` back to the blob's, so a runtime centre an
+   uncalibrated axis took from its first sample is not saved as if calibrated;
+2. for each port axis of the type that answered: the centre is the sample at
+   the confirm - except the flight types' THROTTLE (Y2, Y1 under Swap), which
+   has no rest position and takes the middle of its travel; a side moved less
+   than 16 counts (`JUI_CALMIN`) keeps the driver's own default (MIN 0, MAX
+   twice the centre, §137.3); `JCAL_MIN`/`CEN`/`MAX` written and `joy_prep`;
+3. `joy_save` (the calibration into the blob, `OSAPI_DRV_CFG`).
+
+`Cancel` (and the panel's close, `joyui_close`) drops the calibration: nothing
+of it reached `joy_cal`. `Reset` (greyed while no axis of the type is
+calibrated) is `joy_reset` and the blob written.
+
+#### 137.6.6 The status line, and the measured read time
+
+The words, first match wins: no axis of the type answering - "No joystick
+connected - looking once a second" (the driver's own re-probe, §137.10); an
+axis of the type missing - "Stick A found, stick B not connected" (and the
+mirror), "Stick A found, no throttle or rudder", "Stick A found, no hat"; an
+axis of the type without a calibration in the blob - "Not calibrated - press
+Calibrate..." (D5: an uncalibrated stick reaches only ~85% of its travel,
+`tests/joystick.py`); otherwise "Stick A found", "Sticks A and B found",
+"Stick, throttle and rudder found", "Stick A and hat found". The compact face
+has a shorter word for each (at most 21 cells).
+
+Right of it, "1.5 ms a read" (compact "1.5ms"): the cost of the page's own
+`joy_take` - the sample and the cooking - MEASURED by latching PIT channel 0
+(`joy_pit`) before and after it with interrupts off throughout, so the
+difference is exact under 55 ms, converted at 1,193.18 counts a ms and shown
+to a tenth. It is republished at most once a second (every ninth tick), so
+the field does not flicker with the stick's position, and it is blank while
+nothing answers. It does not include the package door (a game's `joy_read`
+costs more, §137.12).
+
+#### 137.6.7 The settings and the blob
+
+The type, the flags and the dead zone are edited in `joy_blob` in place,
+`joy_apply` re-derives the driver's facts, and the blob goes to the kernel
+through `OSAPI_DRV_CFG` AS IT STANDS (`jui_cfgw`) - not through `joy_save`,
+which would also copy the runtime centres of an uncalibrated stick into the
+blob as a calibration. SYSTEM.CFG gets it at the panel's close (§31.8). A
+type change and a Swap call `joy_probe`, so axes the old type never waited for
+are looked at again. The dead zone steps by 1 % between 0 and 30.
+
+The page reads, besides §137.11's list, `joy_tax` (the type's port axes),
+`joy_tnb` (its buttons), `joy_llive` (the answering axes after Swap) and
+calls `joy_pit` to time the read; it changes no line of the sample or verb
+code.
+
+#### 137.6.8 Three adapters
+
+Colour or 1bpp is asked of the display the panel is on (`OSAPI_WM_DISPLAY`,
+DH below 4 is 1bpp). On 1bpp the lines, dot and bars are black, a caption
+strip and the calibration banner are white on black, a lamp is black when
+lit and an outlined disc when not, and a greyed label is the pen's
+checkerboard (§47, §39.4). Every layout is laid out from the pane's size, so
+EGA, CGA and Hercules get the compact face and VGA/VESA the wide one.
+
+#### 137.6.9 Cost, measured (J5)
+
+Measured on this build (J5), not estimated:
+
+| what | cost |
+|---|---|
+| `JOYSTICK.DRV` on the floppy (lz4, §20.13.5) | 8,256 bytes (J1's driver without the page: under 2KB) |
+| the image, so the heap claim while the driver is up | 10,760 bytes = 22 sectors (`DRVM_IMG_JOY` 22, was 4); the Drivers page says ~11K. Nothing resident: the kernel's only change is that constant |
+| the page's state (the widget list, 48 widgets of 12 bytes; the calibration's ranges; the dot's erase record) | ~800 bytes, zero-filled inside the image (a driver ships its bss, §51) |
+| one live read (the page's `joy_take`, PIT-timed) | 1.1-2.3 ms on MartyPC's 4.77 MHz XT, a 2-button stick centred to full travel (`jui_sample`'s own measurement, shown on the page) |
+| a tick that moved the dot | 2 calls (one masked record, one fill) plus ~0.9 ms per changed digit cell |
+| a tick that changed nothing | no drawing call |
+
+**The 9KB budget** of the plan (J5) is met by the FILE and not by the image.
+If the image is what binds, the calibration layout and its strings (about
+3KB) are the part to move to an overlay the way HDDTOOL does (§2.8's test:
+the page is only ever opened from the panel, off the system disk) - not done,
+because the claim is only paid while the joystick driver is ticked.
 
 ### 137.7 Testing it without a joystick
 

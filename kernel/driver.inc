@@ -1769,7 +1769,7 @@ DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 512)
 DRVM_IMG_USBM equ 3             ; ceil(build/usbmouse.drv / 512)
 DRVM_IMG_PC1 equ 1              ; ceil(build/pc1mouse.drv / 512)
-DRVM_IMG_JOY equ 4              ; ceil(build/joystick.drv / 512)
+DRVM_IMG_JOY equ 22             ; ceil(build/joystick.drv / 512) - the page (J5) included
 DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 17              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)

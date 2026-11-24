@@ -263,3 +263,59 @@ ticked once a second after leaving the live page.
 On the compact face (`VIDEO=cga`, 1bpp) the same driver - its wide bit
 ignored there - was painted with 222x132 and ticked about 9 times a second,
 and the RAM disk page looked as before.
+
+## 2026-11-24 - J5, the Joystick page (agent `page`)
+
+The page is the first driver page that is both live and wide, and the mockups
+give it two quite different faces, so the first decision was not to write two
+pages. `drivers/joy/joyui.inc` is a small widget engine: a layout is a table
+of 10-byte descriptors whose coordinates can be ANCHORED to sixteen numbers
+derived from the pane's size (its width, its half, the stick box's side, the
+lower groups' top), and every widget has a state proc that answers one word
+and a draw proc. A paint draws everything once; a tick, a click or a key asks
+every widget its word and draws only those that changed. The compact face,
+the wide face at 640x480 and at 800x600, and both calibration views are four
+tables over one engine.
+
+The live view had to cost nothing when nothing moves and very little when
+something does. The dot is the interesting part: erasing it means putting
+back whatever was under it, which is a crosshair and a dashed dead-zone
+square. The page composes those four rows into one 16-wide masked icon
+record, with the NEW dot's pixels left out of the mask, so a moved dot is two
+calls and no pixel is written twice. The dashes follow one rule
+(`((x + y) & 2) == 0`), used both by the full draw and by the composer, so a
+dash the dot crossed comes back exactly.
+
+Three things the first boots taught. `OS88_DRV_CPWIDE` is read by
+`os88drv.inc` as it is INCLUDED: defined after the include, the header said
+compact and the wide panel hosted the page in a 222x132 pane in the corner of
+a 495x330 area. A widget-list pointer kept in DI across a call that spends DI
+made the calibration table's rows write over the dead zone (8% became 16%,
+22%, 11% in three steps of one calibration) - visible only because the
+MartyPC look walked a whole calibration. And MartyPC's joystick machines boot
+the 360KB system disk, which omits `CPWIDE.DRV` (SPEC 135.2), so they only
+ever show the compact face; the wide calibration was looked at on a scratch
+1.44MB VGA XT with the game port, written under `build/` and deleted after.
+
+Calibration follows D5's finding that an uncalibrated stick reaches only
+~85% of its travel: the status line says "Not calibrated - press
+Calibrate..." until the blob holds a calibration, and the three steps (upper
+left, lower right, centre, each confirmed by a stick button's edge or Enter)
+take the captured range of every port axis the type uses. Finishing puts
+`joy_cal` back to the blob's first, so an uncalibrated axis's runtime centre is
+never saved as a calibration, and the throttle, which has no rest position,
+takes the middle of its travel. The read time on the status line is the
+page's own `joy_take`, latched on PIT channel 0 around it, republished once a
+second.
+
+Observed, not intended: on MartyPC's 4.77 MHz XT a read costs 1.1-2.3 ms,
+and after calibration full deflection reads -127 left/up and +119 right. The
++119 is not the page's: the captured maximum (1,475) was taken with both axes
+at their stops at once, and the same X stop with Y centred reads 1,440 on
+MartyPC's model. Looked at: QEMU VGA wide and VESA wide at 1024x768 (no stick: "Not connected", type
+radios, dead zone, Invert), QEMU EGA and CGA compact (the type cycle, 1bpp
+greying), MartyPC CGA 5150 and VGA XT compact and the scratch 1.44MB VGA XT
+wide (a stick moved, button lamp, a calibration walked through to +-127, the
+flight type's throttle and rudder bars). `JOYSTICK.DRV` is 8,256 bytes on the
+disk and a 10,760-byte claim while it is ticked.
+
