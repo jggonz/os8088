@@ -15,8 +15,11 @@ shares no code with the assembly:
   * dead zone = floor(half * dz / 100), each side of the centre;
   * beyond it, floor(127 * (distance - dz) / (half - dz)), clamped at 127;
     inside it 0; JOY_NONE is 0; low side negative (left and up);
-  * an UNcalibrated axis takes its first count as the centre, MIN 0 and MAX
-    twice it, and answers 0 (the next count is then measured against that);
+  * an UNcalibrated axis takes its first count as the centre, MIN = the count
+    of a 0 ohm stick (JOY_RAW0) and MAX = twice the centre less that - the
+    span symmetric about it - and answers 0 (the next count is then measured
+    against that); a centre at or under JOY_RAW0 is not a stick and gets 0 to
+    twice it;
   * an end on the wrong side of the centre is pulled to it (joy_prep);
   * a direction bit is |position| >= JOY_HALF, 8-way, + = right / down;
 
@@ -175,16 +178,39 @@ def main():
                                            " (clobbered %s)" % kept if kept else ""))
 
     # --- an UNcalibrated axis centres on its first count ----------------------
-    setcal(0, 0, 0, 8)                       # CEN = 0: not calibrated
-    al, _ = call("joy_calpos", {UC_X86_REG_AX: 600, UC_X86_REG_SI: sym["joy_cal"]})
-    check(al & 255 == 0 and rd(JCAL["CEN"]) == 600 and rd(JCAL["MIN"]) == 0
-          and rd(JCAL["MAX"]) == 1200,
-          "an uncalibrated axis did not take 600 as its centre, MIN 0, MAX 1200 "
-          "(CEN %d MIN %d MAX %d)" % (rd(JCAL["CEN"]), rd(JCAL["MIN"]), rd(JCAL["MAX"])))
-    al, _ = call("joy_calpos", {UC_X86_REG_AX: 1200, UC_X86_REG_SI: sym["joy_cal"]})
-    check(al & 255 == model_pos(1200, 0, 600, 1200, 8),
-          "after auto-centring, 1200 answers %d, not %d" % (al & 255,
-                                                           model_pos(1200, 0, 600, 1200, 8)))
+    raw0 = equ("drivers/joy/joypkg.inc", "JOY_RAW0")
+    for first in (600, 720, raw0 + 1, raw0, raw0 - 10, 30):
+        setcal(0, 0, 0, 8)                   # CEN = 0: not calibrated
+        al, _ = call("joy_calpos", {UC_X86_REG_AX: first,
+                                    UC_X86_REG_SI: sym["joy_cal"]})
+        if first > raw0:
+            mn, mx = raw0, 2 * first - raw0
+        else:
+            mn, mx = 0, 2 * first
+        check(al & 255 == 0 and rd(JCAL["CEN"]) == first and
+              rd(JCAL["MIN"]) == mn and rd(JCAL["MAX"]) == mx,
+              "an uncalibrated axis did not take %d as its centre, MIN %d, MAX "
+              "%d (CEN %d MIN %d MAX %d)" % (first, mn, mx, rd(JCAL["CEN"]),
+                                             rd(JCAL["MIN"]), rd(JCAL["MAX"])))
+        for raw in (mn, mx, (mn + first) // 2, first + 50, mx + 100):
+            al, _ = call("joy_calpos", {UC_X86_REG_AX: raw,
+                                        UC_X86_REG_SI: sym["joy_cal"]})
+            got = al & 255
+            got = got - 256 if got > 127 else got
+            want = model_pos(raw, mn, first, mx, 8)
+            check(got == want, "after auto-centring on %d, %d answers %d, not %d"
+                  % (first, raw, got, want))
+    # a typical stick: centred at 720 (a 50K pot), its stops at 64 and 1376
+    # (the model's 0 and 100K ohm): both reach the ends
+    setcal(0, 0, 0, 8)
+    call("joy_calpos", {UC_X86_REG_AX: 720, UC_X86_REG_SI: sym["joy_cal"]})
+    for raw, want in ((1376, 127), (64, -127)):
+        al, _ = call("joy_calpos", {UC_X86_REG_AX: raw,
+                                    UC_X86_REG_SI: sym["joy_cal"]})
+        got = al & 255
+        got = got - 256 if got > 127 else got
+        check(got == want, "an uncalibrated stick centred at 720: its stop at "
+              "%d answers %d, not %d" % (raw, got, want))
     setcal(0, 0, 0, 8)
     al, _ = call("joy_calpos", {UC_X86_REG_AX: NONE, UC_X86_REG_SI: sym["joy_cal"]})
     check(al & 255 == 0 and rd(JCAL["CEN"]) == 0,

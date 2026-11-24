@@ -16,10 +16,11 @@ LEG 1, a machine WITH a game port and a stick centred:
     answers CF=0 before anything attaches it; OSAPI_DRV_USE is idempotent.
  2. INFO: all four pots answering, type 2B, two buttons, one stick.
  3. Centre answers 0 with no direction bit; the dead zone holds 4% to 0.
- 4. UNCALIBRATED (SPEC.md 137.3: the first sample is the centre, MIN 0, MAX
-    twice it) every deflection has the right sign, direction bit and a
-    magnitude past 85 - the count carries a fixed latch overhead the
-    uncalibrated span does not know of, so full travel is NOT 127 here.
+ 4. UNCALIBRATED (SPEC.md 137.3: the first sample is the centre, MIN
+    JOY_RAW0, MAX twice the centre less that) every deflection has the right
+    sign, direction bit and a magnitude past 118 of 127 - the span is
+    symmetric about the centre and starts at a 0 ohm stick's count, so a
+    stick reaches its ends before it is calibrated (QA Q1: it was -108..+92).
  5. CALIBRATED the way the page does it (the driver's joy_cal written from
     the measured counts at rest and at both stops), full deflection answers
     +-127 on both axes, + is right and down, half travel about half, and the
@@ -197,9 +198,9 @@ def main():
             o = sb(f["a1_ax"] >> (8 if ax == "x" else 0))
             say("uncalibrated %-5s: %4d (other %d) dir=%d"
                 % (name, v, o, f["a1_cx"] & 255))
-            check(sign * v >= 85 and abs(v) <= 127,
+            check(sign * v >= 118 and abs(v) <= 127,
                   "uncalibrated full %s answered %d, expected past %d"
-                  % (name, v, 85 * sign))
+                  % (name, v, 118 * sign))
             check(o == 0, "full %s moved the other axis to %d" % (name, o))
             check(f["a1_cx"] & 255 == bit, "full %s answered direction %d, "
                   "expected %d" % (name, f["a1_cx"] & 255, bit))

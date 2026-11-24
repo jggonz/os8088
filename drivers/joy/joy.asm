@@ -348,6 +348,28 @@ joy_save:
 ; THE SAMPLE (SPEC.md 137.3)
 ; =============================================================================
 
+; JOY_TICK - BP += the PIT counts since the last latch (DI), which becomes
+; this one (the latch is read at once, with no `jmp $+2` between the ports:
+; the 8253 on an XT needs none and every microsecond here is blind to the
+; port). A difference past JOY_TSTEP is a RELOAD under a fast divisor (the
+; header), never time, and counts as the previous block did. Spends AL, CX
+%macro JOY_TICK 0
+    xor al, al
+    out 0x43, al                ; latch counter 0: a READ command, so the
+    in al, 0x40                 ; system tick itself is undisturbed
+    mov cl, al
+    in al, 0x40
+    mov ch, al                  ; CX = now
+    xchg cx, di                 ; DI = now, CX = before
+    sub cx, di                  ; down-counting: before - now (mod 65536 is
+    cmp cx, JOY_TSTEP           ; exact across the scheduler's own reload)
+    jb %%ok
+    mov cx, [joy_tlast]
+%%ok:
+    mov [joy_tlast], cx
+    add bp, cx
+%endmacro
+
 ; -----------------------------------------------------------------------------
 ; joy_sample - fire the one-shots and time the fall of the axes asked for
 ; in:  AH = the axes to wait for (JOYA_* bits; 0 = none, the buttons only)
@@ -362,6 +384,7 @@ joy_sample:
     push cx
     push dx
     push si
+    push di
     push bp
     mov bx, JOY_NONE
     mov [joy_raw], bx
@@ -373,46 +396,93 @@ joy_sample:
     mov bh, bl                  ; BH = asked for
     mov dx, JOY_PORT
     mov word [joy_tlast], JOY_TBLK
+    mov si, joy_ev              ; SI = where the next fall is recorded
     xor bp, bp                  ; BP = elapsed, PIT counts since the fire
     pushf
     cli
-    call joy_pit
-    mov [joy_tprev], ax
-    out dx, al                  ; FIRE: any write starts all four one-shots
     test bl, bl
-    jz .done                    ; nothing to wait for: the buttons alone
+    jz .fire                    ; nothing to wait for: the buttons alone
+    xor al, al
+    out 0x43, al                ; latch counter 0 ... and FIRE on the very
+.fire:                          ; next instruction, so the clock's zero is the
+    out dx, al                  ; fire (any write starts all four one-shots)
+    test bl, bl
+    jz .done
+    in al, 0x40                 ; the latched count, read AFTER the fire (the
+    mov cl, al                  ; first read is ~9 us late, a one-shot takes
+    in al, 0x40                 ; 25 us at the least)
+    mov ch, al
+    mov di, cx                  ; DI = the last latch (down-counting)
 .blk:
-%rep 4
+    in al, dx                   ; THE FIRST READ of a block comes after the
+    and al, bl                  ; clock's time, in which the port is not
+    cmp al, bl                  ; looked at, so a fall seen here happened
+    jne .fell0                  ; somewhere in that time AND this read: .fell0
+%rep JOY_NRD - 1                ; puts it in the middle
     in al, dx                   ; ONE READ: 7 bytes, ~6 us on the XT - the
-    and al, bl                  ; resolution of a fall, since the clock is
-    cmp al, bl                  ; latched right after it is seen
-    jne .fell
-%endrep
-    call joy_tick
+    and al, bl                  ; resolution of a fall. The reads of a block
+    cmp al, bl                  ; run with nothing between them, because a
+    jne .fell                   ; fall that lands in the time the clock takes
+%endrep                         ; is seen late (SPEC.md 137.3: that gap is
+    JOY_TICK                    ; blind, so it is kept short and rare)
     cmp bp, JOY_TMO
     jb .blk
     jmp short .done             ; timed out: what is still timing stays
                                 ; JOY_NONE
+.fell0:                         ; FIRST READ OF A BLOCK (above): the clock's
+    mov ah, al                  ; time is blind, so say it fell in the middle
+    call joy_tick               ; of it (a fall is only RECORDED here, and
+    mov cx, bp                  ; sorted to its axis at .done: the work
+    sub cx, JOY_GAPHALF         ; between two looks is time another axis may
+    jmp short .fe               ; fall in and be seen late, SPEC.md 137.3)
 .fell:
-    mov ah, al                  ; AH = still timing
-    call joy_tick               ; BP = when (joy_tick spends AL only)
-    xchg ah, bl                 ; BL = still timing, AH = was timing...
-    xor ah, bl                  ; ...AH = fell since the last look
+    mov ah, al                  ; AH = what is still timing, as seen
+    call joy_tick               ; BP = when (joy_tick spends AL, CX)
+    mov cx, bp
+.fe:
+    in al, dx                   ; at once, a second look: whatever fell while
+    and al, bl                  ; the clock was read fell after the latch
+    mov [si], cx                ; event: when, and what is still timing
+    mov [si+2], ah
+    add si, 3
+    cmp al, ah
+    je .nx
+    mov cx, bp
+    add cx, JOY_TICKHALF        ; ...by half the clock's time
+    mov [si], cx
+    mov [si+2], al
+    add si, 3
+.nx:
+    mov bl, al                  ; BL = still timing
+    test bl, bl
+    jz .done                    ; every axis asked for has fallen
+    cmp bp, JOY_TMO
+    jb .blk
+.done:
+    mov bp, si                  ; BP = the end of the events
+    mov di, joy_ev
+    mov al, bh                  ; AL = what was timing before the first
+.ev:
+    cmp di, bp
+    jae .evd
+    mov cx, [di]                ; this event's count...
+    mov ah, al
+    mov al, [di+2]
+    xor ah, al                  ; ...and the axes that fell in it
     mov si, joy_raw
 .st:
     shr ah, 1
     jnc .ns
-    mov [si], bp                ; this axis's count
+    mov [si], cx
 .ns:
     inc si
     inc si
     or ah, ah
     jnz .st
-    or bl, bl
-    jz .done                    ; every axis asked for has fallen
-    cmp bp, JOY_TMO
-    jb .blk
-.done:
+    add di, 3
+    jmp short .ev
+.evd:
+    mov dx, JOY_PORT
     in al, dx                   ; the buttons, from the last read
     popf
     not al
@@ -424,6 +494,7 @@ joy_sample:
     not al
     and al, bh                  ; ...AL = asked for and not still timing
     pop bp
+    pop di
     pop si
     pop dx
     pop cx
@@ -443,24 +514,9 @@ joy_pit:
     xchg al, ah
     ret
 
-; joy_tick - BP += the PIT counts since the last latch, which becomes this
-; one. A difference past JOY_TSTEP is a RELOAD under a fast divisor (the
-; header), never time, and counts as the previous block did. Spends AL only
+; joy_tick - JOY_TICK as a near call (the fall path). Spends AL, CX
 joy_tick:
-    push ax
-    push cx
-    call joy_pit
-    mov cx, [joy_tprev]
-    mov [joy_tprev], ax
-    sub cx, ax                  ; down-counting: prev - now (mod 65536 is
-    cmp cx, JOY_TSTEP           ; exact across the scheduler's own reload)
-    jb .ok
-    mov cx, [joy_tlast]
-.ok:
-    mov [joy_tlast], cx
-    add bp, cx
-    pop cx
-    pop ax
+    JOY_TICK
     ret
 
 ; -----------------------------------------------------------------------------
@@ -685,7 +741,8 @@ joy_cook:
 ; in:  SI -> the axis's joy_cal entry, AX = the raw count
 ; out: AL = the position, -127..127 (0 inside the dead zone, clamped at the
 ;      ends; 0 for JOY_NONE). An axis with no centre yet takes THIS count as
-;      it, MIN 0 and MAX twice it, and answers 0 (SPEC.md 137.3)
+;      it, MIN JOY_RAW0 and MAX twice it less that, and answers 0 (SPEC.md
+;      137.3)
 ; Every other register kept (AH spent)
 ; -----------------------------------------------------------------------------
 joy_calpos:
@@ -715,8 +772,17 @@ joy_calpos:
     or ax, ax
     jz .zero
     mov [si+JCAL_CEN], ax
+    mov cx, JOY_RAW0            ; the count at 0 ohm - a stick cannot fall
+    cmp ax, cx                  ; sooner - and the same distance below twice
+    jbe .abase                  ; the centre (a centre this low is not a
+    mov [si+JCAL_MIN], cx       ; stick: the old span, 0 to twice it)
+    shl ax, 1
+    sub ax, cx
+    jmp short .amax
+.abase:
     mov word [si+JCAL_MIN], 0
     shl ax, 1
+.amax:
     mov [si+JCAL_MAX], ax
     call joy_prep
 .zero:
@@ -976,8 +1042,8 @@ joy_tns:    db 0                ; the type's sticks (INFO's CH)
 joy_bprev:  db 0                ; the last cooked buttons, for the presses
 joy_press:  db 0                ; presses not yet read, logical bits 0-3
             db 0
-joy_tprev:  dw 0                ; the last PIT latch (joy_tick)
-joy_tlast:  dw 0                ; ...and the last block's length
+joy_ev:     times 12 db 0      ; a sample's falls: count word, what is still timing
+joy_tlast:  dw 0                ; the last block's length (joy_tick)
 joy_ptick:  dw 0                ; the tick of the last probe
 %ifdef JOY_UI
     JOYUI_STATE                 ; the page's own (joyui.inc)

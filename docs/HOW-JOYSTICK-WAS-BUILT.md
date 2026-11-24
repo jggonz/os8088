@@ -339,3 +339,30 @@ joystick indicators drawn after stick A was held right with button 1; Apple II
 at its prompt, taking typed keys slowly at 61% cpu). The paddle VALUE was not
 read back in the guest; the host harnesses a2uitest/c64uitest cover the maps.
 The earlier "window did not open" was host load, not a regression.
+
+**2026-11-24, fix round: the corner reading (Q5) and the uncalibrated span
+(Q1).** Q5 looked like crosstalk between the axes and the first suspect was
+MartyPC's game-port model. It is not the model: `game_port.rs` advances every
+one-shot per instruction, so an axis falls at `25.2us + 0.011us * R` whatever
+the others do. It was the driver's own looking. A sample read the port four
+times, then spent ~50 counts latching the clock and summing, so a fall that
+landed in that time was seen at the next block, up to a block (~80 counts)
+late, and the fall handler (the bit-sorting loop) was a second such time:
+X's count moved by 90 counts depending on where Y fell. Stepping Y over
+0..100K ohms with X held showed it directly (X at 100K read 1,429..1,475
+before). Now a block is 12 reads, a fall is only RECORDED in the loop (its
+count and what is still timing), the axes are sorted after the window, a
+second look is taken at once after every latch, and a fall first seen after
+the clock's time is put in the middle of it. Measured on MartyPC over 101
+resistances with both axes moving: sigma 21 with a tail to +141 counts before,
+sigma 12 and +-25 after (X at 100K: 1,349..1,397, and 1,367..1,377 for most Y).
+That is the floor of this design - the clock's ~40 us is still blind; the
+next step would be to defer the sum and interleave the latch's port accesses
+with reads, at the price of a three-way entry into the fall handler (pending
+latch). Not done: ~25 counts is 2% of the travel. Q1 was arithmetic: the
+fixed ~64 counts at 0 ohm (30 of the 558's, 34 of our loop) were not in the
+auto-centre's MIN 0 / MAX 2c; it is now MIN `JOY_RAW0`, MAX 2c - `JOY_RAW0`,
+and an uncalibrated stick reads -127, +127, -127, +127 at its four stops
+(was -108..+92). JOYSTICK.DRV 10,792 -> 10,993 bytes. Tested: MartyPC
+`os8088_5150_cga_gla_joy`, three scratch runs of the gate package (the sweeps
+above); `tests/unit/t_joycal.py` (host). `tests/joystick.py` (soak) not run.
