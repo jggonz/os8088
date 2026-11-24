@@ -74,3 +74,19 @@ cycles - 1,312 per 25K (275us), and 0 to 100K was 1,099.6us against the model's
 ones. Buttons 1 and 3 read 0xA0 on 201h, none 0xF0. One loop iteration is 41
 cycles (8.6us), the resolution. Not tested: the verb's error on a machine with no game
 port, kern_small, and 86Box.
+
+## 2026-11-23 - J3, the icons (agent `art`)
+
+Codex's two icons (16x16, 32x32) were already clean: seven colours, all of them
+palette entries or the key, so they went into the sheets unedited. The 16x16
+sheet grew a third row (256x48, joystick at cell 32, the other fifteen cells
+key colour) and the 32x32 sheet a thirteenth cell (416x32). The converter used
+to demand that a sheet's cell count equal `CWI16_N` exactly, which a 48-cell
+sheet would break; it now derives the grid from N (16 across at most) and
+checks the sheet's size against it, so `CWI16_N` stays 33 rather than paying
+2,400 bytes for fifteen empty cells (48 cells would have taken `CPWIDE.DAT` to
+17,842, over the 16,384 ceiling). Measured: `CPWIDE.DAT` 14,642 -> 15,442
+bytes unpacked (+800 = 160 + 640), 5,290 -> 5,544 packed. The wide face maps
+`DRVC_JOY` (11, a literal until core's `os88api.inc` lands) to them in
+`cpw_recicon`. Looked at: both icons decoded back from `build/cpwide.dat` and
+zoomed; not yet seen in the running panel (no driver row exists on this branch).

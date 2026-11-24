@@ -3,8 +3,9 @@
 
     python3 tools/cpwdat.py [-o build/cpwide.dat] [--fmt lz4|lzb] [--check]
 
-Reads kernel/cpwart/cp-icons-16.png (256x32: thirty-two 16x16 cells, row-major,
-16 across and 2 down) and cp-icons-32.png (384x32: twelve 32x32 cells), drivers/catalog.toml, and writes
+Reads kernel/cpwart/cp-icons-16.png (256x48: 16 cells across, 3 down, the first
+CWI16_N of them used, row-major) and cp-icons-32.png (416x32: thirteen 32x32
+cells in one row), drivers/catalog.toml, and writes
 the file SPEC.md 135.6 / 135.7 describe. Deterministic: same inputs, same
 bytes. Every number it uses - offsets, sizes, counts, record layout, category
 and icon indices - is PARSED out of kernel/cpwfmt.inc, the file the wide
@@ -90,15 +91,22 @@ def check_layout(f):
 
 
 # ---- icon sheets -------------------------------------------------------------
+def sheet_grid(count):
+    """(columns, rows) of a sheet holding COUNT cells: at most 16 across, the
+    last row may be part empty (its spare cells must be the key)."""
+    cols = min(count, 16)
+    return cols, -(-count // cols)
+
+
 def _cells(path, cell, count, fmt):
     from PIL import Image
     im = Image.open(path).convert("RGB")
     w, h = im.size
-    if w % cell or h % cell or (w // cell) * (h // cell) != count:
+    cols, rows = sheet_grid(count)
+    if (w, h) != (cols * cell, rows * cell):
         raise CpwError(f"{os.path.relpath(path, ROOT)}: is {w}x{h}, "
-                       f"cpwfmt.inc wants {count} cells of {cell}x{cell} "
-                       f"(wrong cell count)")
-    cols = w // cell
+                       f"cpwfmt.inc wants {count} cells of {cell}x{cell}: "
+                       f"{cols * cell}x{rows * cell} (wrong cell count)")
     px = im.load()
     rev = {c: i for i, c in enumerate(PALETTE)}
     name = os.path.relpath(path, ROOT)

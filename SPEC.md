@@ -259133,7 +259133,7 @@ laid out.
 Icons: each static record has a 16×16 and a 32×32 out of `CPWIDE.DAT`
 (`cpw_rtab`, in record order, checked at assembly against `CP_ITEMS`); a
 driver page's is its class's - `DRVC_DISK` the disk, `DRVC_NET` the
-network, any other the gear.
+network, `DRVC_JOY` the joystick (§135.6), any other the gear.
 
 **Redraw only what changed** (PERFORMANCE.md rule 1). A click on a list row
 redraws the row losing the bar, the row gaining it (each one fill, one blit,
@@ -259336,8 +259336,8 @@ Built by `tools/cpwdat.py` from `kernel/cpwart/*.png` and
 ```
 
 **Exact layout.** The header is 16 bytes (`CWD_HDR`); then, back to back, the
-32 16×16 icons at `off16` (= 16; 5,120 bytes), the 12 32×32 icons at `off32`
-(= 5,136; 7,680 bytes), the catalog at `offcat` (= 12,816; `ncat` × 64 bytes)
+33 16×16 icons at `off16` (= 16; 5,280 bytes), the 13 32×32 icons at `off32`
+(= 5,296; 8,320 bytes), the catalog at `offcat` (= 13,616; `ncat` × 64 bytes)
 and the description strings at `offstr` (NUL-terminated, in catalog order, line
 1 before line 2). Every offset in the file is from the file's start. A 16×16
 icon's mask is 16 words, one a row, bit 15 the leftmost pixel; a 32×32's is 32
@@ -259356,6 +259356,8 @@ build error (`tools/cpwdat.py` names the file, cell and pixel).
 default; `make PKGZ=` ships it plain). The ceiling is 16,384 unpacked
 (`CPWIDE.DAT` is read into one heap claim); each new driver adds 64 bytes and its
 description strings, so the file has room for about a dozen more entries.
+**With the joystick icons (2026-11-23): 15,442 bytes unpacked** (icons 13,600,
++800) - **5,544 packed**; 942 bytes under the ceiling, about nine entries.
 
 **It is on the disk like a driver.** `CPWIDE.DAT` rides `$(DRIVERS)`, so it is
 on every kern_big, kern_emu and kern_mega system disk - the 1.44MB, 720KB and
@@ -259393,6 +259395,14 @@ disk, Network, generic driver). `kernel/cpwfmt.inc` carries the offsets,
 sizes and index `equ`s (`CWD_*`, `CWI16_*`, `CWI32_*`, `CWC_*`) that the
 module assembles with; `tools/cpwdat.py` refuses to write a file that
 disagrees with it.
+
+**The joystick icons (J3, 2026-11-23).** `CWI16_JOY` = 32 is cell 0 of a third
+row of `cp-icons-16.png` (256×48; cells 33-47 are the key colour and unused) and
+`CWI32_JOY` = 12 is the thirteenth cell of `cp-icons-32.png` (416×32), both
+drawn by Codex from `docs/joystick/MOCKUP-PROMPT.md` and converted like the rest.
+`CWI16_N` is 33 and `CWI32_N` 13: the converter reads the first N cells of a
+sheet, and the sheet's size is exactly the grid of 16 across (at most) that N
+needs. The wide face's class-to-icon pick (§135.3) maps `DRVC_JOY` (11) to them.
 
 ### 135.7 The driver catalog - what a driver IS, outside the kernel
 
