@@ -879,7 +879,8 @@ CFG_THMC    equ CFG_THMS + 1    ; 5 bytes: the Color row's colours a preset
                                 ; restores a preset with the loop that restores
                                 ; everything else and no table of presets
 CFG_KL      equ CFG_THMC + 5    ; staged keyboard ID, not a live-state copy
-CFG_NB      equ CFG_KL + 1      ; one new record byte (SPEC.md 31.16, 9.16.4)
+CFG_PC1     equ CFG_KL + 1      ; 0 BIOS default, 50/60 Hz (SPEC.md 31.10.5)
+CFG_NB      equ CFG_PC1 + 1
 %if DRV_PBLOB_SZ != 1
   %error "driver: ctrl.inc's cp_ppin finds the sound row's pin ONE byte under the Ethernet row's"
 %endif
@@ -1040,7 +1041,9 @@ DRV_CFG_MAPN equ 8
                                 ; 'DK' precedent, word for word)
     dw 'KL'                     ; Keyboard Layout: explicit map or BIOS default
     db 1, 1, CFG_KL
-CFG_NKEY    equ 16              ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
+    dw 'P1'                     ; PC1 refresh override, carried on other PCs
+    db 1, 1, CFG_PC1
+CFG_NKEY    equ 17              ; ...and 'DK' (DOCK_OPT is kern_big's); 'VC'
                                 ; went into 'VM' (CFG_VGCB)
 %else
     dw 'TP'                     ; same key, same reason, on kern_small too -
@@ -5370,6 +5373,9 @@ ovc_buf:    resb ((CFG_FBUF + 511) / 512) * 512
 B3SECT
 CFG_SHARED ovc
 CFG_BOOT   ovc
+%ifdef KERN_BIG
+    PC1_VIDEO bpc1
+%endif
                                 ; (the name's staging is `.boot3`'s
                                 ; cfx_cfgname on every kernel that reads one)
 
@@ -5914,6 +5920,19 @@ drv_boot_x:
     call bvs_disp_init          ; (the boot's own, KSW_SECT, kernel.asm:
 %endif                          ; `.boot3` with this since wave 4, so NEAR)
 .load:
+%ifdef KERN_BIG
+    call bpc1_probe
+    jc .nopc1
+    ; A PC1 has a real display setting even with one adapter (31.10.5).
+    test byte [cp_hide], 1 << CP_IVID
+    jz .pc1visible
+    and byte [cp_hide], ~(1 << CP_IVID) & 0xFF
+    inc byte [cp_nst]
+.pc1visible:
+    mov al, [drv_cfg+CFG_PC1]
+    call bpc1_apply              ; missing/invalid record makes no write
+.nopc1:
+%endif
     ; --- HOW MANY are we about to read? (SPEC.md 15.6) -----------------------
     ; The status line names an ordinal out of a total, so the total has to be
     ; known before the first one is read. It is a walk of the same two tests

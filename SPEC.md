@@ -74782,6 +74782,55 @@ The caption — "Switches now, and is kept" — is true of the tick; the un-tick
 is the one exception, §39.30 says why, and it is not spent a line of a page
 that has none to spare.
 
+#### 31.10.5 PC1 refresh rate — 50 Hz / 60 Hz (PC1)
+
+On an identified Olivetti Prodest PC1 only, the compact Display page replaces
+its bottom caption with two radio controls, **50 Hz** and **60 Hz (PC1)**.
+They occupy pane y=120..131, with glyphs at x=4 and x=90 and control IDs 6/7.
+The adapter and desktop-extension controls retain their existing positions.
+The page remains available even if the PC1 has only one detected adapter.
+Other machines retain the original caption and have no refresh-rate control.
+
+The user choice applies immediately and is saved on panel close (§31.8).
+`SYSTEM.CFG` key `P1`, version 1, one byte, stages `CFG_PC1`: 0 means no
+override, 50 and 60 select the corresponding frequency; other values are
+ignored. A missing record leaves the BIOS configuration alone. The boot
+applies a valid saved override after the adapter/desktop setup, before the
+desktop paint. Carrying the configuration to another machine never writes
+PC1 video ports. The no-override UI shows the BIOS PC1 default, 50 Hz; it is
+not a hardware readback and cannot discover a utility run before os8088.
+
+`kernel/pc1video.inc` is shared source for the temporary boot code and
+`CTRL.DRV`, not a resident driver. Its probe requires CPU_8086 and the PC1
+ROM identity at F000:FFFD (FE44h, FE49h or FE4Ah, §9.15) before reading the
+V40 configuration ports: FFFBh must return C0h and FFF8h D0h, as in the
+supplied CRT.COM. A protected-mode kern_mega refuses before loading a real
+ROM segment. Probe outputs CF (clear means PC1), preserving registers.
+Apply takes AL=50/60, preserves registers and refuses unsupported values or
+machines without writing ports. It selects Yamaha V6355D register 65h by
+writing 65h to DDh and then writes 89h (50 Hz) or 81h (60 Hz) to DEh in one
+pushf/cli/popf transaction. These registers are write-only: no read/modify/
+write is attempted. The whole byte is the documented PC1 200-line,
+dynamic-VRAM, CGA-monitor, mouse configuration, differing only in bit 3.
+
+Reference: John Elliott's PC1 and V6355D descriptions at
+https://www.seasip.info/VintagePC/prodestpc1.html and
+https://www.seasip.info/VintagePC/v6355d.html. The supplied 100-byte CRT.COM
+(SHA256 e634d34ba7ca474d168c239ca60aff55e0cb2919d606d3e4630178bcf267598b)
+confirms the 60 Hz transaction; the owner confirmed it works on composite.
+89h is the documented BIOS 50 Hz value, not a disassembly of PERITEL.COM.
+The BIOS initializes these extended registers once (0040:008A bit 1), so
+ordinary BIOS mode changes do not require a permanent mode-set hook.
+The owner verified the os8088 implementation on the real PC1 with composite
+output: selecting 60 Hz, returning to 50 Hz and persistence at boot all work
+correctly. This is a functional field report, not an instrumented frequency
+measurement. Fullscreen/DOS transitions and mouse coexistence have not been
+reported separately.
+
+This setting ships on kern_big/kern_emu. kern_small has no SYSTEM.CFG reader
+(§51.0), so it has no persistent PC1 control; kern_mega cannot run on the V40
+and never exposes the control. No package or driver ABI changes.
+
 ### 31.13 Dock page — where the strip stands, and whether it hides
 
 `Dock` is the seventh static row in `cp_items`, **last**, so no record index

@@ -17,6 +17,15 @@ below were read off the tool at the last bless.
 
 ## The rules — THREE sentences, THREE quantities (and kern_mega's own)
 
+PC1 refresh selection (SPEC.md 31.10.5) adds one staged byte to `drv_cfg`
+on the big/emu/mega builds. Its executable code is shared source expanded in
+the temporary boot overlay and on-demand `CTRL.DRV`; no resident driver,
+interrupt hook or heap claim is introduced. Against f2318e0f, measured with
+NASM 2.16.01 and `tools/kernsize.py --json -DKERN_BIG`, `.bss` grows from
+4,972 to 4,973 bytes, `.boot3` from 7,904 to 8,048, and `.text`/`.cold` are
+unchanged. The rounded resident footprint remains 95,232 bytes. The exact
+four-kernel budgets pass; the 128 KB small kernel has no new settings byte.
+
 | | rule | guard |
 |---|---|---|
 | 1 | **`kern_big` fully RESIDES in 100KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 100,864, plus `tests/kernresident.py` |
