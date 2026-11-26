@@ -74821,8 +74821,11 @@ confirms the 60 Hz transaction; the owner confirmed it works on composite.
 89h is the documented BIOS 50 Hz value, not a disassembly of PERITEL.COM.
 The BIOS initializes these extended registers once (0040:008A bit 1), so
 ordinary BIOS mode changes do not require a permanent mode-set hook.
-Physical frequency, 50 Hz restoration, fullscreen/DOS transitions and mouse
-coexistence still require PC1 field verification.
+The owner verified the os8088 implementation on the real PC1 with composite
+output: selecting 60 Hz, returning to 50 Hz and persistence at boot all work
+correctly. This is a functional field report, not an instrumented frequency
+measurement. Fullscreen/DOS transitions and mouse coexistence have not been
+reported separately.
 
 This setting ships on kern_big/kern_emu. kern_small has no SYSTEM.CFG reader
 (§51.0), so it has no persistent PC1 control; kern_mega cannot run on the V40

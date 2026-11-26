@@ -9,8 +9,9 @@ Contract: SPEC.md 31.10.5. Work branch: `feat/pc1-refresh-rate`.
 - [x] Apply immediately and remember on close, then restore at boot.
 - [x] Build all system geometries and check other kernels refuse cleanly.
 - [x] Check the actual compact CGA UI and configuration round trip.
-- [ ] On the owner's PC1: verify both frequencies, reboot persistence,
-      fullscreen/DOS return and mouse coexistence.
+- [x] On the owner's real PC1: verify 60 Hz activation, 50 Hz restoration
+      and persistence at boot (composite output).
+- [ ] Report fullscreen/DOS return and mouse coexistence separately.
 
 ## Build diary
 
@@ -65,7 +66,17 @@ Field image: `build/pc1mouse720-ref.img` from `make pc1mousetest`, the existing
 720 KB PC1 disk with the mouse enabled and **no refresh override preselected**.
 Alternatively use `build/os8088-720.img` and enable the mouse as usual.
 
-## PC1 field check (pending)
+## PC1 field check
+
+The owner (`hufon/os8088`) tested the os8088 implementation on the **real
+Olivetti Prodest PC1**, using the composite setup identified during intake,
+and reported: “activation 60Hz et désactivation (50Hz) fonctionnent
+parfaitement. Persistance au boot aussi.” Both switch directions and boot
+persistence are therefore field-validated. No instrumented frequency
+measurement or separate fullscreen/DOS/mouse result was supplied.
+
+Original field recipe (steps 3–5's frequency/persistence behavior confirmed;
+input coexistence and step 6 remain separately unreported):
 
 1. Boot the 720 KB image using the same composite setup that ran CRT.COM.
 2. Open Control Panel > Display. Confirm 50 Hz / 60 Hz (PC1) is present.
@@ -75,5 +86,5 @@ Alternatively use `build/os8088-720.img` and enable the mouse as usual.
 6. Enter/leave a fullscreen application and DOS, confirming the same refresh
    and mouse behavior after returning. Record any picture or colour change.
 
-Only the owner's already-reported DOS CRT.COM test is physical PC1 evidence
-so far. The six checks above remain open for the os8088 implementation.
+The software screenshots remain synthetic-identity emulator captures. The
+physical validation above is the owner's functional report, not those images.
